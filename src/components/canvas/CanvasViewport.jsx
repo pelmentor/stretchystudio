@@ -44,6 +44,29 @@ function findNearestVertex(vertices, x, y, radius) {
   return best;
 }
 
+/** Check if point (px, py) is inside triangle (v0, v1, v2) */
+function isPointInTriangle(px, py, v0, v1, v2) {
+  const d1 = (px - v1.x) * (v0.y - v1.y) - (v0.x - v1.x) * (py - v1.y);
+  const d2 = (px - v2.x) * (v1.y - v2.y) - (v1.x - v2.x) * (py - v2.y);
+  const d3 = (px - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (py - v0.y);
+
+  const has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+  const has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+  return !(has_neg && has_pos);
+}
+
+/** Check if point (lx, ly) is inside any triangle of the mesh */
+function isPointInMesh(lx, ly, mesh) {
+  if (!mesh?.vertices || !mesh?.triangles) return false;
+  const vs = mesh.vertices;
+  const ts = mesh.triangles;
+  for (let i = 0; i < ts.length; i++) {
+    if (isPointInTriangle(lx, ly, vs[ts[i][0]], vs[ts[i][1]], vs[ts[i][2]])) return true;
+  }
+  return false;
+}
+
 /** Generate a short unique id */
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -391,6 +414,11 @@ export default function CanvasViewport({ remeshRef }) {
     // Compute world matrices once for picking
     const worldMatrices = computeWorldMatrices(proj.nodes);
 
+    // Get parts sorted by draw order descending (front to back) for correct hit testing
+    const sortedParts = proj.nodes
+      .filter(n => n.type === 'part')
+      .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
+
     // ── add_vertex tool ──────────────────────────────────────────────────
     if (toolMode === 'add_vertex') {
       const sel = editor.selection;
@@ -419,8 +447,8 @@ export default function CanvasViewport({ remeshRef }) {
 
     // ── remove_vertex tool ───────────────────────────────────────────────
     if (toolMode === 'remove_vertex') {
-      for (const node of [...proj.nodes].reverse()) {
-        if (node.type !== 'part' || !node.mesh) continue;
+      for (const node of sortedParts) {
+        if (!node.mesh) continue;
         const wm  = worldMatrices.get(node.id) ?? mat3Identity();
         const iwm = mat3Inverse(wm);
         const [lx, ly] = worldToLocal(worldX, worldY, iwm);
@@ -442,12 +470,14 @@ export default function CanvasViewport({ remeshRef }) {
       return;
     }
 
-    // ── select tool: vertex drag ─────────────────────────────────────────
-    for (const node of [...proj.nodes].reverse()) {
-      if (node.type !== 'part' || !node.mesh) continue;
+    // ── select tool: vertex drag and part selection ──────────────────────
+    for (const node of sortedParts) {
+      if (!node.mesh) continue;
       const wm  = worldMatrices.get(node.id) ?? mat3Identity();
       const iwm = mat3Inverse(wm);
       const [lx, ly] = worldToLocal(worldX, worldY, iwm);
+      
+      // Check vertex hit first (priority for dragging)
       const idx = findNearestVertex(node.mesh.vertices, lx, ly, 14 / view.zoom);
       if (idx >= 0) {
         dragRef.current = {
@@ -464,9 +494,15 @@ export default function CanvasViewport({ remeshRef }) {
         canvas.style.cursor = 'grabbing';
         return;
       }
+
+      // Check mesh hit (select part if clicking on its body)
+      if (isPointInMesh(lx, ly, node.mesh)) {
+        setSelection([node.id]);
+        return;
+      }
     }
     setSelection([]);
-  }, [setSelection, updateProject]);
+  }, [setSelection, updateProject, setView]);
 
   const onPointerMove = useCallback((e) => {
     const canvas = canvasRef.current;
