@@ -68,6 +68,33 @@ function isPointInMesh(lx, ly, mesh) {
   return false;
 }
 
+/** Sample alpha (0-255) at integer pixel coords from an ImageData. Returns 0 if out-of-bounds. */
+function sampleAlpha(imageData, lx, ly) {
+  const ix = Math.floor(lx), iy = Math.floor(ly);
+  if (ix < 0 || iy < 0 || ix >= imageData.width || iy >= imageData.height) return 0;
+  return imageData.data[(iy * imageData.width + ix) * 4 + 3];
+}
+
+/** Compute the bounding box of opaque pixels in an ImageData. Returns {minX, minY, maxX, maxY} or null if fully transparent. */
+function computeImageBounds(imageData, alphaThreshold = 10) {
+  let minX = imageData.width, minY = imageData.height;
+  let maxX = -1, maxY = -1;
+
+  for (let y = 0; y < imageData.height; y++) {
+    for (let x = 0; x < imageData.width; x++) {
+      const alpha = imageData.data[(y * imageData.width + x) * 4 + 3];
+      if (alpha > alphaThreshold) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  return minX <= maxX ? { minX, minY, maxX, maxY } : null;
+}
+
 /** Generate a short unique id */
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -80,15 +107,16 @@ function basename(filename) {
    Component
 ────────────────────────────────────────────────────────────────────────── */
 
-export default function CanvasViewport({ remeshRef }) {
-  const canvasRef     = useRef(null);
-  const sceneRef      = useRef(null);
-  const rafRef        = useRef(null);
-  const workersRef    = useRef(new Map());  // Map<partId, Worker> for concurrent mesh generation
-  const dragRef       = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
-  const panRef        = useRef(null);   // { startX, startY, panX0, panY0 }
-  const isDirtyRef    = useRef(true);
-  const pendingPsdRef = useRef(null);   // { psdW, psdH, layers, partIds } while org modal is open
+export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
+  const canvasRef        = useRef(null);
+  const sceneRef         = useRef(null);
+  const rafRef           = useRef(null);
+  const workersRef       = useRef(new Map());  // Map<partId, Worker> for concurrent mesh generation
+  const imageDataMapRef  = useRef(new Map()); // Map<partId, ImageData> for alpha-based picking
+  const dragRef          = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
+  const panRef           = useRef(null);   // { startX, startY, panX0, panY0 }
+  const isDirtyRef       = useRef(true);
+  const pendingPsdRef    = useRef(null);   // { psdW, psdH, layers, partIds } while org modal is open
 
   const [psdOrgModal, setPsdOrgModal] = useState(false);
 
@@ -214,6 +242,27 @@ export default function CanvasViewport({ remeshRef }) {
 
   useEffect(() => { if (remeshRef) remeshRef.current = remeshPart; }, [remeshRef, remeshPart]);
 
+  /* ── Delete mesh for a part ──────────────────────────────────────────────── */
+  const deleteMeshForPart = useCallback((partId) => {
+    const node = projectRef.current.nodes.find(n => n.id === partId);
+    if (!node) return;
+
+    // Reset GPU to quad fallback
+    const scene = sceneRef.current;
+    if (scene && node.imageWidth && node.imageHeight) {
+      scene.parts.uploadQuadFallback(partId, node.imageWidth, node.imageHeight);
+      isDirtyRef.current = true;
+    }
+
+    // Clear mesh from project store
+    updateProject((p) => {
+      const n = p.nodes.find(x => x.id === partId);
+      if (n) n.mesh = null;
+    });
+  }, [updateProject]);
+
+  useEffect(() => { if (deleteMeshRef) deleteMeshRef.current = deleteMeshForPart; }, [deleteMeshRef, deleteMeshForPart]);
+
   /* ── PNG import helper ───────────────────────────────────────────────── */
   const importPng = useCallback((file) => {
     const url = URL.createObjectURL(file);
@@ -226,7 +275,11 @@ export default function CanvasViewport({ remeshRef }) {
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, img.width, img.height);
 
-      const { meshDefaults } = editorRef.current;
+      // Store imageData for alpha-based picking
+      imageDataMapRef.current.set(partId, imageData);
+
+      // Compute bounding box from opaque pixels
+      const imageBounds = computeImageBounds(imageData);
 
       updateProject((proj, ver) => {
         proj.canvas.width  = img.width;
@@ -241,25 +294,28 @@ export default function CanvasViewport({ remeshRef }) {
           opacity:    1,
           visible:    true,
           clip_mask:  null,
-          transform:  DEFAULT_TRANSFORM(),
+          transform:  { ...DEFAULT_TRANSFORM(), pivotX: img.width / 2, pivotY: img.height / 2 },
           meshOpts:   null,
           mesh:       null,
+          imageWidth: img.width,
+          imageHeight: img.height,
+          imageBounds: imageBounds || { minX: 0, minY: 0, maxX: img.width, maxY: img.height },
         });
         ver.textureVersion++;
       });
 
       const scene = sceneRef.current;
-      if (scene) { scene.parts.uploadTexture(partId, img); isDirtyRef.current = true; }
-
-      dispatchMeshWorker(partId, imageData, meshDefaults);
+      if (scene) {
+        scene.parts.uploadTexture(partId, img);
+        scene.parts.uploadQuadFallback(partId, img.width, img.height);
+        isDirtyRef.current = true;
+      }
     };
     img.src = url;
-  }, [updateProject, dispatchMeshWorker]);
+  }, [updateProject]);
 
   /* ── PSD import: finalize (shared by both organized and flat paths) ─────── */
   const finalizePsdImport = useCallback((psdW, psdH, layers, partIds, organize) => {
-    const { meshDefaults } = editorRef.current;
-
     // If organizing, compute group defs + per-layer draw_order / parent
     let groupDefs = [];
     let assignments = null;
@@ -297,6 +353,12 @@ export default function CanvasViewport({ remeshRef }) {
         ctx.drawImage(tmp, layer.x, layer.y);
         const fullImageData = ctx.getImageData(0, 0, psdW, psdH);
 
+        // Store imageData synchronously for alpha-based picking
+        imageDataMapRef.current.set(partId, fullImageData);
+
+        // Compute bounding box from opaque pixels
+        const imageBounds = computeImageBounds(fullImageData);
+
         off.toBlob((blob) => {
           const url = URL.createObjectURL(blob);
           updateProject((p2) => {
@@ -306,13 +368,13 @@ export default function CanvasViewport({ remeshRef }) {
           const img2 = new Image();
           img2.onload = () => {
             const scene = sceneRef.current;
-            if (scene) { scene.parts.uploadTexture(partId, img2); isDirtyRef.current = true; }
+            if (scene) {
+              scene.parts.uploadTexture(partId, img2);
+              scene.parts.uploadQuadFallback(partId, psdW, psdH);
+              isDirtyRef.current = true;
+            }
           };
           img2.src = url;
-          dispatchMeshWorker(partId, fullImageData, {
-            ...meshDefaults,
-            gridSpacing: Math.max(20, meshDefaults.gridSpacing - 10),
-          });
         }, 'image/png');
 
         const assignment = assignments?.get(i);
@@ -326,15 +388,18 @@ export default function CanvasViewport({ remeshRef }) {
           opacity:    layer.opacity,
           visible:    layer.visible,
           clip_mask:  null,
-          transform:  DEFAULT_TRANSFORM(),
+          transform:  { ...DEFAULT_TRANSFORM(), pivotX: psdW / 2, pivotY: psdH / 2 },
           meshOpts:   null,
           mesh:       null,
+          imageWidth: psdW,
+          imageHeight: psdH,
+          imageBounds: imageBounds || { minX: 0, minY: 0, maxX: psdW, maxY: psdH },
         });
       });
 
       ver.textureVersion++;
     });
-  }, [updateProject, dispatchMeshWorker]);
+  }, [updateProject]);
 
   /* ── PSD import helper ───────────────────────────────────────────────── */
   const importPsdFile = useCallback((file) => {
@@ -503,31 +568,33 @@ export default function CanvasViewport({ remeshRef }) {
 
     // ── select tool: vertex drag and part selection ──────────────────────
     for (const node of sortedParts) {
-      if (!node.mesh) continue;
       const wm  = worldMatrices.get(node.id) ?? mat3Identity();
       const iwm = mat3Inverse(wm);
       const [lx, ly] = worldToLocal(worldX, worldY, iwm);
-      
-      // Check vertex hit first (priority for dragging)
-      const idx = findNearestVertex(node.mesh.vertices, lx, ly, 14 / view.zoom);
-      if (idx >= 0) {
-        dragRef.current = {
-          partId:       node.id,
-          vertexIndex:  idx,
-          startWorldX:  worldX,
-          startWorldY:  worldY,
-          startLocalX:  node.mesh.vertices[idx].x,
-          startLocalY:  node.mesh.vertices[idx].y,
-          iwm,
-        };
-        setSelection([node.id]);
-        canvas.setPointerCapture(e.pointerId);
-        canvas.style.cursor = 'grabbing';
-        return;
+
+      // Check vertex hit first if mesh exists (priority for dragging)
+      if (node.mesh) {
+        const idx = findNearestVertex(node.mesh.vertices, lx, ly, 14 / view.zoom);
+        if (idx >= 0) {
+          dragRef.current = {
+            partId:       node.id,
+            vertexIndex:  idx,
+            startWorldX:  worldX,
+            startWorldY:  worldY,
+            startLocalX:  node.mesh.vertices[idx].x,
+            startLocalY:  node.mesh.vertices[idx].y,
+            iwm,
+          };
+          setSelection([node.id]);
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'grabbing';
+          return;
+        }
       }
 
-      // Check mesh hit (select part if clicking on its body)
-      if (isPointInMesh(lx, ly, node.mesh)) {
+      // Alpha-based selection (works with or without mesh)
+      const imgData = imageDataMapRef.current.get(node.id);
+      if (imgData && sampleAlpha(imgData, lx, ly) > 10) {
         setSelection([node.id]);
         return;
       }

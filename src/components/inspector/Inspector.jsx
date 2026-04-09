@@ -320,7 +320,7 @@ function TransformPanel({ node }) {
 
 /* ── Mesh settings ────────────────────────────────────────────────────────── */
 
-function MeshPanel({ node, onRemesh }) {
+function MeshPanel({ node, onRemesh, onDeleteMesh }) {
   const meshDefaults    = useEditorStore(s => s.meshDefaults);
   const setMeshDefaults = useEditorStore(s => s.setMeshDefaults);
   const updateProject   = useProjectStore(s => s.updateProject);
@@ -348,8 +348,16 @@ function MeshPanel({ node, onRemesh }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <SectionTitle>Mesh Generation</SectionTitle>
-        {!node.meshOpts && (
+        <SectionTitle>Mesh</SectionTitle>
+        {node.mesh && (
+          <button
+            onClick={() => onDeleteMesh(node.id)}
+            className="text-[10px] text-destructive/70 hover:text-destructive underline-offset-2 hover:underline"
+          >
+            delete
+          </button>
+        )}
+        {!node.mesh && !node.meshOpts && (
           <button
             onClick={enablePerPart}
             className="text-[10px] text-primary underline-offset-2 hover:underline"
@@ -358,6 +366,12 @@ function MeshPanel({ node, onRemesh }) {
           </button>
         )}
       </div>
+
+      {!node.mesh && (
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          No mesh. Generate one to enable vertex editing and mesh warp animation.
+        </p>
+      )}
 
       <SliderRow
         label="Alpha Threshold"
@@ -400,7 +414,7 @@ function MeshPanel({ node, onRemesh }) {
         className="w-full h-7 text-xs mt-1"
         onClick={() => onRemesh(node.id, opts)}
       >
-        Remesh
+        {node.mesh ? 'Remesh' : 'Generate Mesh'}
       </Button>
     </div>
   );
@@ -408,7 +422,7 @@ function MeshPanel({ node, onRemesh }) {
 
 /* ── Root Inspector ───────────────────────────────────────────────────────── */
 
-export function Inspector({ onRemesh }) {
+export function Inspector({ onRemesh, onDeleteMesh }) {
   const selection  = useEditorStore(s => s.selection);
   const nodes      = useProjectStore(s => s.project.nodes);
 
@@ -429,7 +443,7 @@ export function Inspector({ onRemesh }) {
           {selectedNode.type === 'part' && (
             <>
               <Separator />
-              <MeshPanel node={selectedNode} onRemesh={onRemesh} />
+              <MeshPanel node={selectedNode} onRemesh={onRemesh} onDeleteMesh={onDeleteMesh} />
             </>
           )}
         </>

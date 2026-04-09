@@ -75,12 +75,23 @@ export function GizmoOverlay() {
   }
 
   function traverse(node) {
-    if (node.type === 'part' && node.mesh?.vertices) {
-      const nwm = worldMap.get(node.id) ?? mat3Identity();
-      for (const v of node.mesh.vertices) {
-         const wx = nwm[0] * v.x + nwm[3] * v.y + nwm[6];
-         const wy = nwm[1] * v.x + nwm[4] * v.y + nwm[7];
-         pushPoint(wx, wy);
+    if (node.type === 'part') {
+      if (node.mesh?.vertices) {
+        // Use mesh vertices for bounding box
+        const nwm = worldMap.get(node.id) ?? mat3Identity();
+        for (const v of node.mesh.vertices) {
+          const wx = nwm[0] * v.x + nwm[3] * v.y + nwm[6];
+          const wy = nwm[1] * v.x + nwm[4] * v.y + nwm[7];
+          pushPoint(wx, wy);
+        }
+      } else if (node.imageBounds) {
+        // Fallback: use opaque pixel bounds for mesh-less parts
+        const nwm = worldMap.get(node.id) ?? mat3Identity();
+        const { minX, minY, maxX, maxY } = node.imageBounds;
+        const corners = [[minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY]];
+        for (const [vx, vy] of corners) {
+          pushPoint(nwm[0]*vx + nwm[3]*vy + nwm[6], nwm[1]*vx + nwm[4]*vy + nwm[7]);
+        }
       }
     }
     const children = nodes.filter(c => c.parent === node.id);

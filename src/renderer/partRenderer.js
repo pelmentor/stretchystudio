@@ -164,6 +164,23 @@ export class PartRenderer {
     state.texture = tex;
   }
 
+  /**
+   * Upload a simple 2-triangle quad as the GPU mesh for a part.
+   * Used when no actual mesh exists, so the full texture rect renders correctly.
+   * @param {string} partId
+   * @param {number} w - image width in pixels (local space)
+   * @param {number} h - image height in pixels (local space)
+   */
+  uploadQuadFallback(partId, w, h) {
+    const vertices = [
+      { x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h },
+    ];
+    const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+    const triangles = [[0, 1, 2], [0, 2, 3]];
+    // Don't set edgeIndices for fallback quad — no wireframe visualization for mesh-less parts
+    this.uploadMesh(partId, { vertices, uvs, triangles, edgeIndices: [] });
+  }
+
   // ── Draw ──────────────────────────────────────────────────────────────────
 
   /**

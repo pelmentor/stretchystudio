@@ -15,9 +15,14 @@ export default function EditorLayout() {
    * without needing to lift state up or use context.
    */
   const remeshRef = useRef(null);
+  const deleteMeshRef = useRef(null);
 
   const handleRemesh = useCallback((partId, opts) => {
     remeshRef.current?.(partId, opts);
+  }, []);
+
+  const handleDeleteMesh = useCallback((partId) => {
+    deleteMeshRef.current?.(partId);
   }, []);
 
   return (
@@ -50,7 +55,7 @@ export default function EditorLayout() {
           <ResizablePanel defaultSize={62}>
             <ResizablePanelGroup direction="vertical">
               <ResizablePanel defaultSize={85}>
-                <CanvasViewport remeshRef={remeshRef} />
+                <CanvasViewport remeshRef={remeshRef} deleteMeshRef={deleteMeshRef} />
               </ResizablePanel>
               <ResizableHandle />
               <ResizablePanel defaultSize={15} minSize={8} collapsible>
@@ -74,7 +79,7 @@ export default function EditorLayout() {
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Inspector</h2>
               </div>
               <div className="flex-1 overflow-hidden">
-                <Inspector onRemesh={handleRemesh} />
+                <Inspector onRemesh={handleRemesh} onDeleteMesh={handleDeleteMesh} />
               </div>
             </div>
           </ResizablePanel>
