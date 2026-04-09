@@ -48,18 +48,55 @@ export function interpolateTrack(keyframes, timeMs) {
 }
 
 /**
+ * Interpolate an array of {x,y} vertex positions between two keyframes.
+ * Both keyframe values must have the same vertex count.
+ */
+function interpolateMeshVerts(keyframes, timeMs) {
+  if (!keyframes || keyframes.length === 0) return undefined;
+  if (timeMs <= keyframes[0].time) return keyframes[0].value;
+  if (timeMs >= keyframes[keyframes.length - 1].time) return keyframes[keyframes.length - 1].value;
+
+  let lo = 0;
+  let hi = keyframes.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (keyframes[mid + 1].time <= timeMs) lo = mid + 1;
+    else hi = mid;
+  }
+
+  const kA = keyframes[lo];
+  const kB = keyframes[lo + 1];
+  const t  = (timeMs - kA.time) / (kB.time - kA.time);
+  const te = kB.easing === 'ease' ? easeInOut(t) : t;
+
+  return kA.value.map((vA, i) => {
+    const vB = kB.value[i];
+    if (!vB) return { x: vA.x, y: vA.y };
+    return { x: vA.x + (vB.x - vA.x) * te, y: vA.y + (vB.y - vA.y) * te };
+  });
+}
+
+/**
  * Compute pose overrides for all tracks in an animation at the given time.
  *
  * @param {Object|null} animation  - single animation object (project.animations[i])
  * @param {number}      timeMs     - current playhead position in milliseconds
- * @returns {Map<string, Object>}  nodeId → { x?, y?, rotation?, scaleX?, scaleY?, hSkew?, opacity? }
+ * @returns {Map<string, Object>}  nodeId → {
+ *   x?, y?, rotation?, scaleX?, scaleY?, hSkew?, opacity?,
+ *   mesh_verts?: [{x,y},...]
+ * }
  */
 export function computePoseOverrides(animation, timeMs) {
   const overrides = new Map();
   if (!animation) return overrides;
 
   for (const track of animation.tracks) {
-    const value = interpolateTrack(track.keyframes, timeMs);
+    let value;
+    if (track.property === 'mesh_verts') {
+      value = interpolateMeshVerts(track.keyframes, timeMs);
+    } else {
+      value = interpolateTrack(track.keyframes, timeMs);
+    }
     if (value === undefined) continue;
 
     if (!overrides.has(track.nodeId)) overrides.set(track.nodeId, {});

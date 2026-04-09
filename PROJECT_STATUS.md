@@ -306,6 +306,37 @@ World matrices computed each frame from node tree + pose overrides. No caching i
 
 ---
 
+## 8b. M4 Animation Bugs Fixed
+
+### Issue: Brush Deform & Layer Selection Fail on Animated Nodes
+**Root Cause:** In `CanvasViewport.onPointerDown`, world matrices were computed from `proj.nodes` (raw stored transforms) instead of the effective transforms (keyframe interpolation + draft pose overlays). This made `iwm` (inverse world matrix) wrong for any node with animation applied, breaking:
+1. **Brush hit-testing:** Brush couldn't select/deform vertices on animated meshes
+2. **Layer selection:** Couldn't click on parts that had been moved by keyframes (had to click original position)
+3. **Vertex picking:** Single-vertex drag wouldn't register on animated nodes
+
+**Fix:** Build `effectiveNodes` at the start of `onPointerDown` by merging animation overrides (keyframe values + draft pose) into the base node transforms. Compute `worldMatrices` and `sortedParts` from `effectiveNodes` instead of raw `proj.nodes`. This ensures:
+- `iwm` converts mouse coords to the correct local space (where the visuals actually are)
+- Vertex picking uses effective vertex positions (draft mesh_verts → keyframe mesh_verts → base mesh)
+- Layer alpha-based selection hits the animated bounding box
+
+**Code Location:** `src/components/canvas/CanvasViewport.jsx`, lines ~668–693 (effectiveNodes construction) and lines ~820–845 (vertex picking).
+
+### Issue: Mesh Deform Keyframes Baked Base Mesh
+**Root Cause:** Brush drag always called `updateProject`, writing deformed vertices directly into `node.mesh.vertices` (the base mesh) regardless of animation mode. Pressing K then captured the already-modified base, not a keyframe delta.
+
+**Fix:** In animation mode + deform sub-mode, brush drag writes to `animRef.current.setDraftPose(partId, { mesh_verts })` instead of calling `updateProject`. Draft pose is overlaid on top of keyframe values during render and picking. When K is pressed, the effective verts (draft → keyframe → base) are read and inserted as a keyframe. `clearDraftPoseForNode` then reverts visual to the keyframe value. Scrubbing or stopping clears all drafts.
+
+**Code Location:** `src/components/canvas/CanvasViewport.jsx`, lines ~876–885 (brush drag reroute).
+
+### Issue: Group Hierarchy Keyframes Applied Globally
+**Root Cause:** When a parent group had a keyframe at frame 1, and a child had its own keyframe at frame 12, the child's initial position (frame 0–11) would snap to match the parent keyframe instead of inheriting smoothly. This was because rest pose wasn't being captured.
+
+**Fix:** Add `captureRestPose(nodes)` call when entering animation mode (M4 future work). Store unmodified node transforms in `animationStore.restPose`. When inserting the first keyframe for a track beyond `startFrame`, auto-insert the rest-pose value at `startFrame`. This ensures interpolation from frame 0 works correctly with group hierarchy — children inherit their base position until their own keyframes kick in.
+
+**Code Location:** `src/renderer/animationEngine.js` (rest pose logic), `src/store/animationStore.js` (captureRestPose action), `src/components/canvas/CanvasViewport.jsx` (K handler, lines ~297–303).
+
+---
+
 ## 9. Testing Checklist
 
 ✅ PNG import → single layer renders without mesh (quad fallback)  

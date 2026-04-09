@@ -108,7 +108,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
   const panRef           = useRef(null);   // { startX, startY, panX0, panY0 }
   const isDirtyRef       = useRef(true);
   const pendingPsdRef    = useRef(null);   // { psdW, psdH, layers, partIds } while org modal is open
-  const brushCircleRef   = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
+  const brushCircleRef      = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
+  const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
 
   const [psdOrgModal, setPsdOrgModal] = useState(false);
 
@@ -178,6 +179,31 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
         }
 
         sceneRef.current.draw(projectRef.current, editorRef.current, isDarkRef.current, poseOverrides);
+
+        // Upload interpolated mesh vertices for parts with mesh_verts overrides,
+        // and restore base mesh for parts whose override was removed since last frame.
+        const newMeshOverridden = new Set();
+        if (poseOverrides) {
+          for (const [nodeId, ov] of poseOverrides) {
+            if (!ov.mesh_verts) continue;
+            newMeshOverridden.add(nodeId);
+            const node = projectRef.current.nodes.find(n => n.id === nodeId);
+            if (node?.mesh) {
+              sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(node.mesh.uvs));
+            }
+          }
+        }
+        for (const nodeId of meshOverriddenParts.current) {
+          if (!newMeshOverridden.has(nodeId)) {
+            // Override removed — restore base mesh from projectStore
+            const node = projectRef.current.nodes.find(n => n.id === nodeId);
+            if (node?.mesh) {
+              sceneRef.current.parts.uploadPositions(nodeId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
+            }
+          }
+        }
+        meshOverriddenParts.current = newMeshOverridden;
+
         isDirtyRef.current = false;
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -277,6 +303,29 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
             }
 
             upsertKeyframe(track.keyframes, currentTimeMs, value, 'linear');
+          }
+
+          // ── mesh_verts keyframe (deform mode) ───────────────────────────
+          if (node.type === 'part' && node.mesh) {
+            // Read verts: draft (staged deform) > current keyframe verts > base mesh
+            const meshVerts = draft?.mesh_verts
+              ?? kfValues?.mesh_verts
+              ?? node.mesh.vertices.map(v => ({ x: v.x, y: v.y }));
+
+            let meshTrack = animation.tracks.find(t => t.nodeId === nodeId && t.property === 'mesh_verts');
+            const isNewMeshTrack = !meshTrack;
+            if (!meshTrack) {
+              meshTrack = { nodeId, property: 'mesh_verts', keyframes: [] };
+              animation.tracks.push(meshTrack);
+            }
+
+            // Auto-insert base-mesh keyframe at startFrame if this is the first keyframe
+            if (isNewMeshTrack && currentTimeMs > startMs) {
+              const baseVerts = node.mesh.vertices.map(v => ({ x: v.x, y: v.y }));
+              upsertKeyframe(meshTrack.keyframes, startMs, baseVerts, 'linear');
+            }
+
+            upsertKeyframe(meshTrack.keyframes, currentTimeMs, meshVerts, 'linear');
           }
         }
       });
@@ -619,11 +668,33 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
     const proj = projectRef.current;
 
-    // Compute world matrices once for picking
-    const worldMatrices = computeWorldMatrices(proj.nodes);
+    // Build effective nodes: apply animation pose overrides so world matrices
+    // and vertex positions match what is visually displayed on the canvas.
+    const animNow    = animRef.current;
+    const isAnimMode = editorRef.current.editorMode === 'animation';
+    const activeAnim = isAnimMode
+      ? (proj.animations.find(a => a.id === animNow.activeAnimationId) ?? null)
+      : null;
+    const kfOverrides = isAnimMode ? computePoseOverrides(activeAnim, animNow.currentTime) : null;
+    const ANIM_TRANSFORM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew'];
+
+    const effectiveNodes = (isAnimMode && (kfOverrides?.size || animNow.draftPose.size))
+      ? proj.nodes.map(node => {
+          const kfOv = kfOverrides?.get(node.id);
+          const drOv = animNow.draftPose.get(node.id);
+          if (!kfOv && !drOv) return node;
+          const tr = { ...node.transform };
+          if (kfOv) { for (const k of ANIM_TRANSFORM_KEYS) { if (kfOv[k] !== undefined) tr[k] = kfOv[k]; } }
+          if (drOv) { for (const k of ANIM_TRANSFORM_KEYS) { if (drOv[k] !== undefined) tr[k] = drOv[k]; } }
+          return { ...node, transform: tr, opacity: drOv?.opacity ?? kfOv?.opacity ?? node.opacity };
+        })
+      : proj.nodes;
+
+    // Compute world matrices once for picking — from effective (animated) transforms
+    const worldMatrices = computeWorldMatrices(effectiveNodes);
 
     // Get parts sorted by draw order descending (front to back) for correct hit testing
-    const sortedParts = proj.nodes
+    const sortedParts = effectiveNodes
       .filter(n => n.type === 'part')
       .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
@@ -632,7 +703,7 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     const { meshEditMode, toolMode } = editorRef.current;
     const currentSelection = editorRef.current.selection ?? [];
     if (meshEditMode && currentSelection.length > 0) {
-      const selNode = proj.nodes.find(n => n.id === currentSelection[0] && n.type === 'part' && n.mesh);
+      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && n.type === 'part' && n.mesh);
       if (selNode) {
         const wm  = worldMatrices.get(selNode.id) ?? mat3Identity();
         const iwm = mat3Inverse(wm);
@@ -706,15 +777,22 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
           // Default select tool in deform mode: brush-based multi-vertex drag
           const { brushSize, brushHardness, meshSubMode } = editorRef.current;
           const worldRadius = brushSize / view.zoom;
-          const verts = selNode.mesh.vertices;
+
+          // Use the effective (pose-overridden) vertex positions so the brush
+          // hits where the mesh is visually displayed, not the base mesh.
+          const effectiveVerts =
+            animNow.draftPose.get(selNode.id)?.mesh_verts
+            ?? kfOverrides?.get(selNode.id)?.mesh_verts
+            ?? selNode.mesh.vertices;
+
           const affected = [];
-          for (let i = 0; i < verts.length; i++) {
-            const dx = verts[i].x - lx, dy = verts[i].y - ly;
+          for (let i = 0; i < effectiveVerts.length; i++) {
+            const dx = effectiveVerts[i].x - lx, dy = effectiveVerts[i].y - ly;
             const dist = Math.sqrt(dx * dx + dy * dy);
             const w = meshSubMode === 'deform'
               ? brushWeight(dist, worldRadius, brushHardness)
               : (dist <= 14 / view.zoom ? 1 : 0); // adjust: exact vertex pick
-            if (w > 0) affected.push({ index: i, startX: verts[i].x, startY: verts[i].y, weight: w });
+            if (w > 0) affected.push({ index: i, startX: effectiveVerts[i].x, startY: effectiveVerts[i].y, weight: w });
           }
           if (affected.length > 0 || meshSubMode === 'deform') {
             dragRef.current = {
@@ -722,8 +800,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
               partId:        selNode.id,
               startWorldX:   worldX,
               startWorldY:   worldY,
-              // Snapshot of all vertex positions at drag start (used each frame)
-              verticesSnap:  verts.map(v => ({ ...v })),
+              // Snapshot of effective vertex positions at drag start
+              verticesSnap:  effectiveVerts.map(v => ({ ...v })),
               allUvs:        new Float32Array(selNode.mesh.uvs),
               imageWidth:    selNode.imageWidth,
               imageHeight:   selNode.imageHeight,
@@ -746,15 +824,19 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
 
       // Check vertex hit first if mesh exists (priority for dragging)
       if (node.mesh) {
-        const idx = findNearestVertex(node.mesh.vertices, lx, ly, 14 / view.zoom);
+        const nodeEffVerts =
+          animNow.draftPose.get(node.id)?.mesh_verts
+          ?? kfOverrides?.get(node.id)?.mesh_verts
+          ?? node.mesh.vertices;
+        const idx = findNearestVertex(nodeEffVerts, lx, ly, 14 / view.zoom);
         if (idx >= 0) {
           dragRef.current = {
             partId:       node.id,
             vertexIndex:  idx,
             startWorldX:  worldX,
             startWorldY:  worldY,
-            startLocalX:  node.mesh.vertices[idx].x,
-            startLocalY:  node.mesh.vertices[idx].y,
+            startLocalX:  nodeEffVerts[idx].x,
+            startLocalY:  nodeEffVerts[idx].y,
             imageWidth:   node.imageWidth,
             imageHeight:  node.imageHeight,
             iwm,
@@ -850,7 +932,14 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       sceneRef.current?.parts.uploadPositions(partId, newVerts, allUvs);
       isDirtyRef.current = true;
 
-      // Persist — adjust mode also updates UVs to track position
+      // In animation mode + deform: store to draftPose — don't bake into base mesh.
+      // The user will press K to commit as a keyframe.
+      if (editorRef.current.editorMode === 'animation' && meshSubMode === 'deform') {
+        animRef.current.setDraftPose(partId, { mesh_verts: newVerts.map(v => ({ x: v.x, y: v.y })) });
+        return;
+      }
+
+      // Staging mode (or adjust sub-mode): persist directly to the base mesh
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === partId);
         if (!node?.mesh) return;
