@@ -215,12 +215,12 @@ function TransformPanel({ node }) {
     updateProject((proj) => {
       const n = proj.nodes.find(x => x.id === node.id);
       if (!n) return;
-      if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+      if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
       n.transform[field] = value;
     });
   }, [node.id, updateProject]);
 
-  const t = node.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+  const t = node.transform ?? { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
 
   return (
     <div className="space-y-1.5">
@@ -244,6 +244,11 @@ function TransformPanel({ node }) {
       {/* Rotation */}
       <Row label="Rotation °">
         <NumericInput value={t.rotation ?? 0} onChange={v => setTransformField('rotation', v)} step={0.5} precision={1} />
+      </Row>
+
+      {/* Skew */}
+      <Row label="Skew H °">
+        <NumericInput value={t.hSkew ?? 0} onChange={v => setTransformField('hSkew', v)} step={0.5} precision={1} />
       </Row>
 
       {/* Scale */}
@@ -283,7 +288,7 @@ function TransformPanel({ node }) {
         className="w-full h-6 text-[10px] mt-1"
         onClick={() => updateProject((proj) => {
           const n = proj.nodes.find(x => x.id === node.id);
-          if (n) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+          if (n) n.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
         })}
       >
         Reset Transform
@@ -299,8 +304,6 @@ function MeshPanel({ node, onRemesh, onDeleteMesh }) {
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const meshDefaults = useEditorStore(s => s.meshDefaults);
   const setMeshDefaults = useEditorStore(s => s.setMeshDefaults);
-  const toolMode = useEditorStore(s => s.toolMode);
-  const setToolMode = useEditorStore(s => s.setToolMode);
   const updateProject = useProjectStore(s => s.updateProject);
 
   const handleDeleteMesh = () => {
@@ -328,46 +331,11 @@ function MeshPanel({ node, onRemesh, onDeleteMesh }) {
     });
   }, [node.id, meshDefaults, updateProject]);
 
-  // Reset tool mode when node changes or mesh is deleted
-  useEffect(() => {
-    if (toolMode !== 'select') {
-      setToolMode('select');
-    }
-  }, [node.id, node.mesh, setToolMode]);
-
-  const toggleVertexTool = (mode) => {
-    setToolMode(toolMode === mode ? 'select' : mode);
-  };
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <SectionTitle>Mesh</SectionTitle>
         <div className="flex items-center gap-1">
-          {node.mesh && (
-            <>
-              <button
-                onClick={() => toggleVertexTool('add_vertex')}
-                className={`text-[10px] px-2 py-1 rounded border ${toolMode === 'add_vertex'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-border hover:border-foreground/20'
-                  }`}
-                title="Add vertex mode"
-              >
-                + V
-              </button>
-              <button
-                onClick={() => toggleVertexTool('remove_vertex')}
-                className={`text-[10px] px-2 py-1 rounded border ${toolMode === 'remove_vertex'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-border hover:border-foreground/20'
-                  }`}
-                title="Remove vertex mode"
-              >
-                − V
-              </button>
-            </>
-          )}
           {node.mesh && (
             <Button
               size="sm"

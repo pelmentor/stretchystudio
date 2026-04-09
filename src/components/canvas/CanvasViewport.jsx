@@ -7,7 +7,6 @@ import { importPsd } from '@/io/psd';
 import { detectCharacterFormat, organizeCharacterLayers, matchTag } from '@/io/psdOrganizer';
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
-import { retriangulate } from '@/mesh/generate';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Helpers
@@ -469,9 +468,7 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
   /* ── Pointer events ──────────────────────────────────────────────────── */
   const onPointerDown = useCallback((e) => {
     const canvas = canvasRef.current;
-    // Read directly from store to always get latest values (avoids stale closure)
-    const editor = useEditorStore.getState();
-    const { view, toolMode } = editor;
+    const { view } = editorRef.current;
 
     // Middle mouse (1) or right mouse (2) or alt+left → pan / zoom
     if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
@@ -512,99 +509,6 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     const sortedParts = proj.nodes
       .filter(n => n.type === 'part')
       .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
-
-    // ── add_vertex tool ──────────────────────────────────────────────────
-    if (toolMode === 'add_vertex') {
-      const sel = editor.selection;
-      if (sel.length === 0) return;
-      const partId = sel[0];
-      const node = proj.nodes.find(n => n.id === partId);
-      if (!node?.mesh) return;
-
-      // Convert world click to part's local space
-      const wm  = worldMatrices.get(partId) ?? mat3Identity();
-      const iwm = mat3Inverse(wm);
-      const [lx, ly] = worldToLocal(worldX, worldY, iwm);
-
-      // Add vertex to project
-      const w = proj.canvas.width || 1;
-      const h = proj.canvas.height || 1;
-      updateProject((p) => {
-        const n = p.nodes.find(x => x.id === partId);
-        if (!n?.mesh) return;
-        const newVert = { x: lx, y: ly, restX: lx, restY: ly };
-        n.mesh.vertices.push(newVert);
-        n.mesh.uvs.push(lx / w, ly / h);
-
-        // Re-triangulate to connect the new vertex
-        const result = retriangulate(n.mesh.vertices, new Float32Array(n.mesh.uvs), n.mesh.edgeIndices);
-        n.mesh.triangles = result.triangles;
-      });
-
-      const scene = sceneRef.current;
-      if (scene) {
-        const updated = projectRef.current.nodes.find(n => n.id === partId);
-        if (updated?.mesh) {
-          scene.parts.uploadMesh(partId, {
-            vertices: updated.mesh.vertices,
-            uvs: new Float32Array(updated.mesh.uvs),
-            triangles: updated.mesh.triangles,
-            edgeIndices: updated.mesh.edgeIndices,
-          });
-          isDirtyRef.current = true;
-        }
-      }
-
-      return;
-    }
-
-    // ── remove_vertex tool ───────────────────────────────────────────────
-    if (toolMode === 'remove_vertex') {
-      for (const node of sortedParts) {
-        if (!node.mesh) continue;
-        const wm  = worldMatrices.get(node.id) ?? mat3Identity();
-        const iwm = mat3Inverse(wm);
-        const [lx, ly] = worldToLocal(worldX, worldY, iwm);
-        const idx = findNearestVertex(node.mesh.vertices, lx, ly, 14 / view.zoom);
-        if (idx >= 0) {
-          // Remove the vertex and adjust edge indices
-          const newEdgeIndices = new Set(
-            Array.from(node.mesh.edgeIndices || [])
-              .filter(e => e !== idx)
-              .map(e => e > idx ? e - 1 : e)
-          );
-
-          updateProject((p) => {
-            const n = p.nodes.find(x => x.id === node.id);
-            if (!n?.mesh) return;
-            n.mesh.vertices.splice(idx, 1);
-            n.mesh.uvs.splice(idx * 2, 2);
-            n.mesh.edgeIndices = newEdgeIndices;
-
-            // Re-triangulate to heal the hole
-            const result = retriangulate(n.mesh.vertices, new Float32Array(n.mesh.uvs), newEdgeIndices);
-            n.mesh.triangles = result.triangles;
-          });
-
-          const scene = sceneRef.current;
-          if (scene) {
-            const updated = projectRef.current.nodes.find(n => n.id === node.id);
-            if (updated?.mesh) {
-              scene.parts.uploadMesh(node.id, {
-                vertices: updated.mesh.vertices,
-                uvs: new Float32Array(updated.mesh.uvs),
-                triangles: updated.mesh.triangles,
-                edgeIndices: updated.mesh.edgeIndices,
-              });
-              isDirtyRef.current = true;
-            }
-          }
-
-          return;
-        }
-      }
-      return;
-    }
 
     // ── select tool: vertex drag and part selection ──────────────────────
     for (const node of sortedParts) {
@@ -719,12 +623,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     }
   }, []);
 
-  /* ── Cursor style based on tool mode ─────────────────────────────────── */
-  const toolCursor = {
-    select:        'crosshair',
-    add_vertex:    'cell',
-    remove_vertex: 'not-allowed',
-  }[editorState.toolMode] ?? 'crosshair';
+  /* ── Cursor style ────────────────────────────────────────────────────── */
+  const toolCursor = 'crosshair';
 
   return (
     <div
@@ -758,18 +658,6 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
         </div>
       )}
 
-      {/* Tool mode badge */}
-      {editorState.toolMode !== 'select' && (
-        <div className="absolute top-2 left-2 pointer-events-none">
-          <span className={`text-xs font-mono px-2 py-0.5 rounded border ${
-            editorState.toolMode === 'add_vertex'
-              ? 'bg-green-900/80 text-green-300 border-green-600'
-              : 'bg-red-900/80 text-red-300 border-red-600'
-          }`}>
-            {editorState.toolMode === 'add_vertex' ? '+ ADD VERTEX' : '− REMOVE VERTEX'}
-          </span>
-        </div>
-      )}
 
       {/* PSD auto-organize modal */}
       {psdOrgModal && (() => {
@@ -787,8 +675,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
                 <h3 className="text-sm font-semibold text-foreground mb-1">Auto-organize layers?</h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   {matchCount} of {layers.length} layers match character part names
-                  (face, back hair, topwear…). Organize into{' '}
-                  <span className="text-foreground font-medium">Head / Body / Extras</span> groups
+                  (face, back hair, topwear…). Organize into a hierarchical{' '}
+                  <span className="text-foreground font-medium">Body / Upperbody / Head</span> structure
                   with correct render order?
                 </p>
               </div>

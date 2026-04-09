@@ -6,6 +6,7 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 export const DEFAULT_TRANSFORM = () => ({
   x: 0, y: 0,
   rotation: 0,
+  hSkew: 0,
   scaleX: 1, scaleY: 1,
   pivotX: 0, pivotY: 0,
 });
@@ -28,7 +29,7 @@ export const useProjectStore = create((set) => ({
         opacity:    number (0–1),
         visible:    boolean,
         clip_mask:  string | null,
-        transform:  { x, y, rotation, scaleX, scaleY, pivotX, pivotY },
+        transform:  { x, y, rotation, hSkew, scaleX, scaleY, pivotX, pivotY },
         meshOpts:   { alphaThreshold, smoothPasses, gridSpacing, edgePadding, numEdgePoints } | null,
         mesh:       { vertices, uvs, triangles, edgeIndices } | null,
       }
@@ -41,7 +42,7 @@ export const useProjectStore = create((set) => ({
         parent:     string | null,
         opacity:    number (0–1),
         visible:    boolean,
-        transform:  { x, y, rotation, scaleX, scaleY, pivotX, pivotY },
+        transform:  { x, y, rotation, hSkew, scaleX, scaleY, pivotX, pivotY },
         // NO draw_order — groups are never drawn directly.
         // Render order is determined solely by part.draw_order values.
       }

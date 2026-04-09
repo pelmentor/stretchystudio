@@ -29,41 +29,42 @@ const DRAW_ORDER_LIST = [
 
 // tag → group path (outermost → innermost)
 const TAG_TO_GROUPS = {
-  'back hair':  ['head'],
-  'front hair': ['head'],
-  'headwear':   ['head'],
-  'face':       ['head'],
-  'irides':     ['head', 'eyes'],
-  'eyebrow':    ['head', 'eyes'],
-  'eyewhite':   ['head', 'eyes'],
-  'eyelash':    ['head', 'eyes'],
-  'eyewear':    ['head', 'eyes'],
-  'ears':       ['head'],
-  'earwear':    ['head'],
-  'nose':       ['head'],
-  'mouth':      ['head'],
-  'neck':       ['body'],
-  'neckwear':   ['body'],
-  'topwear':    ['body'],
-  'handwear':   ['body'],
+  'back hair':  ['body', 'upperbody', 'head'],
+  'front hair': ['body', 'upperbody', 'head'],
+  'headwear':   ['body', 'upperbody', 'head'],
+  'face':       ['body', 'upperbody', 'head'],
+  'irides':     ['body', 'upperbody', 'head', 'eyes'],
+  'eyebrow':    ['body', 'upperbody', 'head', 'eyes'],
+  'eyewhite':   ['body', 'upperbody', 'head', 'eyes'],
+  'eyelash':    ['body', 'upperbody', 'head', 'eyes'],
+  'eyewear':    ['body', 'upperbody', 'head', 'eyes'],
+  'ears':       ['body', 'upperbody', 'head'],
+  'earwear':    ['body', 'upperbody', 'head'],
+  'nose':       ['body', 'upperbody', 'head'],
+  'mouth':      ['body', 'upperbody', 'head'],
+  'neck':       ['body', 'upperbody'],
+  'neckwear':   ['body', 'upperbody'],
+  'topwear':    ['body', 'upperbody'],
+  'handwear':   ['body', 'upperbody'],
   'bottomwear': ['body'],
   'legwear':    ['body'],
   'footwear':   ['body'],
-  'tail':       ['extras'],
-  'wings':      ['extras'],
-  'objects':    ['extras'],
+  'tail':       ['body', 'extras'],
+  'wings':      ['body', 'extras'],
+  'objects':    ['body', 'extras'],
 };
 
 // Parent group for each group name (null = root)
 const GROUP_PARENT = {
-  eyes:   'head',
-  head:   null,
-  body:   null,
-  extras: null,
+  eyes:      'head',
+  head:      'upperbody',
+  upperbody: 'body',
+  extras:    'body',
+  body:      null,
 };
 
 // Creation order — parents before children
-const GROUP_CREATE_ORDER = ['head', 'body', 'extras', 'eyes'];
+const GROUP_CREATE_ORDER = ['body', 'upperbody', 'head', 'extras', 'eyes'];
 
 /** Returns the matched tag for a layer name, or null. */
 export function matchTag(name) {

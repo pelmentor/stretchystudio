@@ -67,6 +67,7 @@ export function makeLocalMatrix(t) {
   const {
     x = 0, y = 0,
     rotation = 0,
+    hSkew = 0,
     scaleX = 1, scaleY = 1,
     pivotX = 0, pivotY = 0,
   } = t ?? {};
@@ -75,16 +76,24 @@ export function makeLocalMatrix(t) {
   const c = Math.cos(θ);
   const s = Math.sin(θ);
 
+  const α = -hSkew * (Math.PI / 180);
+  const tanA = Math.tan(α);
+
+  const m0 = scaleX * c;
+  const m1 = scaleX * s;
+  const m3 = scaleY * (c * tanA - s);
+  const m4 = scaleY * (s * tanA + c);
+
   return new Float32Array([
-     scaleX * c,                                                      // [0]
-     scaleX * s,                                                      // [1]
-     0,                                                               // [2]
-    -scaleY * s,                                                      // [3]
-     scaleY * c,                                                      // [4]
-     0,                                                               // [5]
-    (x + pivotX) - scaleX * pivotX * c + scaleY * pivotY * s,       // [6]
-    (y + pivotY) - scaleX * pivotX * s - scaleY * pivotY * c,       // [7]
-     1,                                                               // [8]
+     m0,                                        // [0]
+     m1,                                        // [1]
+     0,                                         // [2]
+     m3,                                        // [3]
+     m4,                                        // [4]
+     0,                                         // [5]
+    (x + pivotX) - m0 * pivotX - m3 * pivotY,   // [6]
+    (y + pivotY) - m1 * pivotX - m4 * pivotY,   // [7]
+     1,                                         // [8]
   ]);
 }
 

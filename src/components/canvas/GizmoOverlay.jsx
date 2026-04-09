@@ -190,13 +190,20 @@ export function GizmoOverlay() {
       const node = proj.nodes.find(n => n.id === selectedNode.id);
       if (!node?.transform) return;
       const t = node.transform;
-      const θ = (t.rotation ?? 0) * (Math.PI / 180);
+      const { rotation = 0, hSkew = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+      const θ = rotation * (Math.PI / 180);
       const c = Math.cos(θ), s = Math.sin(θ);
-      const sX = t.scaleX ?? 1, sY = t.scaleY ?? 1;
+      const α = -hSkew * (Math.PI / 180);
+      const tanA = Math.tan(α);
+
+      const m0 = sX * c;
+      const m1 = sX * s;
+      const m3 = sY * (c * tanA - s);
+      const m4 = sY * (s * tanA + c);
 
       // Adjust x,y to counter-act the pivot move
-      t.x += dLx * (sX * c - 1) - dLy * (sY * s);
-      t.y += dLx * (sX * s) + dLy * (sY * c - 1);
+      t.x += dLx * (m0 - 1) + dLy * m3;
+      t.y += dLx * m1 + dLy * (m4 - 1);
       t.pivotX = cx;
       t.pivotY = cy;
     });
@@ -213,7 +220,7 @@ export function GizmoOverlay() {
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === drag.nodeId);
         if (!node) return;
-        if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+        if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
         node.transform.x = drag.startX + dx;
         node.transform.y = drag.startY + dy;
       });
@@ -233,7 +240,7 @@ export function GizmoOverlay() {
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === drag.nodeId);
         if (!node) return;
-        if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+        if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
         node.transform.rotation = drag.startRotation + delta;
       });
       return;
@@ -253,16 +260,23 @@ export function GizmoOverlay() {
         const node = proj.nodes.find(n => n.id === drag.nodeId);
         if (!node?.transform) return;
         const t = node.transform;
-        const θ = (t.rotation ?? 0) * (Math.PI / 180);
+        const { rotation = 0, hSkew = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+        const θ = rotation * (Math.PI / 180);
         const c = Math.cos(θ), s = Math.sin(θ);
-        const sX = t.scaleX ?? 1, sY = t.scaleY ?? 1;
+        const α = -hSkew * (Math.PI / 180);
+        const tanA = Math.tan(α);
+
+        const m0 = sX * c;
+        const m1 = sX * s;
+        const m3 = sY * (c * tanA - s);
+        const m4 = sY * (s * tanA + c);
 
         t.pivotX = drag.startPivotX + dLx;
         t.pivotY = drag.startPivotY + dLy;
         // x' = x - (Tx(newPivot) - Tx(oldPivot))
         // This keeps world position stable while moving pivot
-        t.x = drag.startX + dLx * (sX * c - 1) - dLy * (sY * s);
-        t.y = drag.startY + dLx * (sX * s) + dLy * (sY * c - 1);
+        t.x = drag.startX + dLx * (m0 - 1) + dLy * m3;
+        t.y = drag.startY + dLx * m1 + dLy * (m4 - 1);
       });
     }
   }
