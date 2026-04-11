@@ -6,7 +6,13 @@ import { useAnimationStore } from '@/store/animationStore';
 import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
-import { detectCharacterFormat, organizeCharacterLayers, matchTag } from '@/io/psdOrganizer';
+import {
+  detectCharacterFormat, matchTag,
+  analyzeGroups, buildArmatureNodes,
+  loadDWPoseSession, runDWPose, clearDWPoseSession,
+  DWPOSE_URL,
+} from '@/io/armatureOrganizer';
+import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
@@ -111,13 +117,19 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
   const brushCircleRef      = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
   const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
 
-  const [psdOrgModal, setPsdOrgModal] = useState(false);
+  // Armature rig modal state
+  const [rigModal, setRigModal]             = useState(false);
+  const [rigStatus, setRigStatus]           = useState('');  // user-visible progress
+  const [rigLoading, setRigLoading]         = useState(false);
+  const onnxSessionRef                      = useRef(null);  // cached across imports
 
   const project        = useProjectStore(s => s.project);
   const updateProject  = useProjectStore(s => s.updateProject);
   const editorState    = useEditorStore();
-  const setBrush       = useEditorStore(s => s.setBrush);
-  const setEditorMode  = useEditorStore(s => s.setEditorMode);
+  const setBrush             = useEditorStore(s => s.setBrush);
+  const setEditorMode        = useEditorStore(s => s.setEditorMode);
+  const setShowSkeleton      = useEditorStore(s => s.setShowSkeleton);
+  const setSkeletonEditMode  = useEditorStore(s => s.setSkeletonEditMode);
   const { setSelection, setView } = editorState;
   const { themeMode, osTheme } = useTheme();
 
@@ -476,24 +488,15 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     img.src = url;
   }, [updateProject]);
 
-  /* ── PSD import: finalize (shared by both organized and flat paths) ─────── */
-  const finalizePsdImport = useCallback((psdW, psdH, layers, partIds, organize) => {
-    // If organizing, compute group defs + per-layer draw_order / parent
-    let groupDefs = [];
-    let assignments = null;
+  /* ── PSD import: finalize (shared by all import paths) ──────────────────── */
+  const finalizePsdImport = useCallback((psdW, psdH, layers, partIds, groupDefs, assignments) => {
     const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
     const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
 
-    if (organize) {
-      const result = organizeCharacterLayers(layers, uid);
-      groupDefs = result.groupDefs;
-      assignments = result.assignments;
-
-      // Auto-expand all new groups and switch to Groups tab
-      if (groupDefs.length > 0) {
-        setExpandedGroups(groupDefs.map(g => g.id));
-        setActiveLayerTab('groups');
-      }
+    // Auto-expand all new groups and switch to Groups tab
+    if (groupDefs.length > 0) {
+      setExpandedGroups(groupDefs.map(g => g.id));
+      setActiveLayerTab('groups');
     }
 
     updateProject((proj, ver) => {
@@ -509,7 +512,12 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
           parent:    g.parentId,
           opacity:   1,
           visible:   true,
-          transform: DEFAULT_TRANSFORM(),
+          boneRole:  g.boneRole ?? null,
+          transform: {
+            ...DEFAULT_TRANSFORM(),
+            pivotX: g.pivotX ?? 0,
+            pivotY: g.pivotY ?? 0,
+          },
         });
       }
 
@@ -551,18 +559,19 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
         const assignment = assignments?.get(i);
         proj.textures.push({ id: partId, source: '' });
         proj.nodes.push({
-          id:         partId,
-          type:       'part',
-          name:       layer.name,
-          parent:     assignment?.parentGroupId ?? null,
-          draw_order: assignment?.drawOrder ?? (layers.length - 1 - i),
-          opacity:    layer.opacity,
-          visible:    layer.visible,
-          clip_mask:  null,
-          transform:  { ...DEFAULT_TRANSFORM(), pivotX: psdW / 2, pivotY: psdH / 2 },
-          meshOpts:   null,
-          mesh:       null,
-          imageWidth: psdW,
+          id:          partId,
+          type:        'part',
+          name:        layer.name,
+          parent:      assignment?.parentGroupId ?? null,
+          draw_order:  assignment?.drawOrder ?? (layers.length - 1 - i),
+          opacity:     layer.opacity,
+          visible:     layer.visible,
+          clip_mask:   null,
+          irisClipOf:  assignment?.irisClipOf ?? null,
+          transform:   { ...DEFAULT_TRANSFORM(), pivotX: psdW / 2, pivotY: psdH / 2 },
+          meshOpts:    null,
+          mesh:        null,
+          imageWidth:  psdW,
           imageHeight: psdH,
           imageBounds: imageBounds || { minX: 0, minY: 0, maxX: psdW, maxY: psdH },
         });
@@ -571,6 +580,41 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       ver.textureVersion++;
     });
   }, [updateProject]);
+
+  /* ── Armature import: run DWPose then build rig ────────────────────────── */
+  const runArmatureRig = useCallback(async (onnxPayload) => {
+    const { psdW, psdH, layers, partIds } = pendingPsdRef.current;
+    setRigLoading(true);
+    try {
+      setRigStatus('Loading ONNX model…');
+      const session = await loadDWPoseSession(onnxPayload);
+      onnxSessionRef.current = session;
+
+      const layerMap = {};
+      layers.forEach(l => {
+        const key = l.name.toLowerCase().trim();
+        layerMap[key] = l;
+      });
+      const groups = analyzeGroups(layerMap);
+
+      const skeleton = await runDWPose(layers, psdW, psdH, session, setRigStatus);
+
+      setRigStatus('Building rig…');
+      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, layers, partIds, uid);
+
+      setRigModal(false);
+      pendingPsdRef.current = null;
+      finalizePsdImport(psdW, psdH, layers, partIds, groupDefs, assignments);
+      // Show skeleton overlay after rig
+      useEditorStore.getState().setShowSkeleton(true);
+    } catch (err) {
+      console.error('[AutoRig]', err);
+      setRigStatus(`Error: ${err.message}`);
+      clearDWPoseSession();
+    } finally {
+      setRigLoading(false);
+    }
+  }, [finalizePsdImport]);
 
   /* ── PSD import helper ───────────────────────────────────────────────── */
   const importPsdFile = useCallback((file) => {
@@ -585,10 +629,12 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       const partIds = layers.map(() => uid());
 
       if (detectCharacterFormat(layers)) {
+        // See-through character detected → offer armature rig
         pendingPsdRef.current = { psdW, psdH, layers, partIds };
-        setPsdOrgModal(true);
+        setRigStatus('');
+        setRigModal(true);
       } else {
-        finalizePsdImport(psdW, psdH, layers, partIds, false);
+        finalizePsdImport(psdW, psdH, layers, partIds, [], null);
       }
     });
   }, [finalizePsdImport]);
@@ -1059,6 +1105,43 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       {/* Transform gizmo SVG overlay */}
       <GizmoOverlay />
 
+      {/* Armature skeleton overlay (staging mode, when rig exists) */}
+      <SkeletonOverlay
+        view={editorState.view}
+        editorMode={editorState.editorMode}
+        showSkeleton={editorState.showSkeleton}
+        skeletonEditMode={editorState.skeletonEditMode}
+      />
+
+      {/* Skeleton toolbar — shown in staging mode when rig is present */}
+      {editorState.editorMode === 'staging' &&
+       project.nodes.some(n => n.type === 'group' && n.boneRole) && (
+        <div className="absolute top-2 right-2 z-10 flex gap-1">
+          <button
+            onClick={() => setShowSkeleton(!editorState.showSkeleton)}
+            className={[
+              'px-2 py-1 text-[10px] rounded border transition-colors',
+              editorState.showSkeleton
+                ? 'bg-primary/20 border-primary/50 text-primary'
+                : 'bg-card border-border text-muted-foreground hover:text-foreground',
+            ].join(' ')}
+          >
+            {editorState.showSkeleton ? 'Hide Skeleton' : 'Show Skeleton'}
+          </button>
+          <button
+            onClick={() => setSkeletonEditMode(!editorState.skeletonEditMode)}
+            className={[
+              'px-2 py-1 text-[10px] rounded border transition-colors',
+              editorState.skeletonEditMode
+                ? 'bg-yellow-500/20 border-yellow-500/60 text-yellow-400'
+                : 'bg-card border-border text-muted-foreground hover:text-foreground',
+            ].join(' ')}
+          >
+            {editorState.skeletonEditMode ? 'Done Editing' : 'Edit Joints'}
+          </button>
+        </div>
+      )}
+
       {/* Editor mode toggle — top-left */}
       <div className="absolute top-2 left-2 z-10 flex rounded overflow-hidden border border-border shadow-sm text-[11px] font-medium">
         <button
@@ -1104,39 +1187,79 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       )}
 
 
-      {/* PSD auto-organize modal */}
-      {psdOrgModal && (() => {
-        const { psdW, psdH, layers, partIds } = pendingPsdRef.current;
+      {/* Auto-rig modal — shown for see-through PSDs */}
+      {rigModal && pendingPsdRef.current && (() => {
+        const { layers } = pendingPsdRef.current;
         const matchCount = layers.filter(l => matchTag(l.name) !== null).length;
-        const dismiss = (organize) => {
-          setPsdOrgModal(false);
+        const dismissFlat = () => {
+          setRigModal(false);
+          const { psdW, psdH, layers: ls, partIds } = pendingPsdRef.current;
           pendingPsdRef.current = null;
-          finalizePsdImport(psdW, psdH, layers, partIds, organize);
+          finalizePsdImport(psdW, psdH, ls, partIds, [], null);
         };
         return (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
             <div className="bg-popover border border-border rounded-lg shadow-2xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4">
               <div>
-                <h3 className="text-sm font-semibold text-foreground mb-1">Auto-organize layers?</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Auto-rig character?</h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  {matchCount} of {layers.length} layers match character part names
-                  (face, back hair, topwear…). Organize into a hierarchical{' '}
-                  <span className="text-foreground font-medium">Body / Upperbody / Head</span> structure
-                  with correct render order?
+                  {matchCount} of {layers.length} layers match see-through part names.
+                  DWPose will detect joint positions and create a bone hierarchy
+                  ready for animation.
                 </p>
               </div>
-              <div className="flex gap-2 justify-end">
+
+              {/* ONNX source buttons */}
+              <div className="flex flex-col gap-2">
+                <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Load DWPose model</div>
+                <div className="flex gap-2">
+                  {/* Local .onnx file */}
+                  <label className={[
+                    'flex-1 text-center px-3 py-1.5 text-xs rounded border cursor-pointer transition-colors',
+                    rigLoading
+                      ? 'opacity-40 pointer-events-none border-border text-muted-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted',
+                  ].join(' ')}>
+                    Load .onnx file
+                    <input
+                      type="file" accept=".onnx" className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        runArmatureRig(await f.arrayBuffer());
+                      }}
+                    />
+                  </label>
+
+                  {/* Download from HuggingFace */}
+                  <button
+                    disabled={rigLoading}
+                    className="flex-1 px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-40"
+                    onClick={() => runArmatureRig(DWPOSE_URL)}
+                  >
+                    {rigLoading ? 'Working…' : 'Download (~50 MB)'}
+                  </button>
+                </div>
+
+                {/* Status */}
+                {rigStatus && (
+                  <p className={[
+                    'text-[11px] px-1',
+                    rigStatus.startsWith('Error') ? 'text-red-400' : 'text-muted-foreground',
+                  ].join(' ')}>
+                    {rigStatus}
+                  </p>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end border-t border-border pt-3">
                 <button
-                  className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  onClick={() => dismiss(false)}
+                  disabled={rigLoading}
+                  className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                  onClick={dismissFlat}
                 >
-                  Import as-is
-                </button>
-                <button
-                  className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
-                  onClick={() => dismiss(true)}
-                >
-                  Organize
+                  Import without rigging
                 </button>
               </div>
             </div>

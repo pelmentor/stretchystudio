@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>See-through PSD Rigger</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: -apple-system, system-ui, sans-serif;
+  display: flex; height: 100vh; background: #1a1a1a; color: #ddd; font-size: 13px;
+}
+#sidebar {
+  width: 340px; padding: 12px; overflow-y: auto; background: #222;
+  border-right: 1px solid #333; flex-shrink: 0;
+}
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#toolbar {
+  padding: 8px 12px; background: #262626; border-bottom: 1px solid #333;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+#canvasWrap {
+  flex: 1; overflow: auto; display: flex; align-items: center;
+  justify-content: center; background: #0a0a0a; padding: 20px;
+}
+#viewCanvas {
+  background: repeating-conic-gradient(#222 0 25%, #1a1a1a 0 50%) 50% / 24px 24px;
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  box-shadow: 0 0 30px rgba(0,0,0,0.8);
+}
+button {
+  background: #333; color: #ddd; border: 1px solid #555;
+  padding: 5px 10px; cursor: pointer; border-radius: 3px;
+  font-size: 12px; margin: 2px 0;
+}
+button:hover:not(:disabled) { background: #444; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.active { background: #2a6; border-color: #3c8; color: #fff; }
+button.primary { background: #3b5; border-color: #4c6; color: #fff; }
+button.primary:hover { background: #4c6; }
+input[type=file] { font-size: 11px; max-width: 100%; color: #bbb; }
+input[type=text] {
+  background: #1a1a1a; color: #ddd; border: 1px solid #444;
+  padding: 4px; width: 100%; font-size: 11px; border-radius: 2px;
+}
+.section { margin-bottom: 14px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+.section h3 {
+  margin: 0 0 8px 0; font-size: 11px; color: #888;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.layer-row {
+  font-size: 11px; padding: 2px 6px; display: flex;
+  justify-content: space-between; border-radius: 2px;
+}
+.layer-row.present { color: #8c8; }
+.layer-row.merged { color: #fa4; }
+.layer-row.missing { color: #555; font-style: italic; }
+.layer-row .tag { font-size: 10px; opacity: 0.6; }
+.bone-ctrl { margin-bottom: 10px; }
+.bone-ctrl label {
+  font-size: 11px; display: flex; justify-content: space-between; margin-bottom: 2px;
+}
+.bone-ctrl input[type=range] { width: 100%; accent-color: #3c8; }
+.bone-ctrl.locked label { color: #fa4; }
+.bone-ctrl.locked label::after { content: '  ⚠ locked'; font-size: 10px; opacity: 0.8; }
+.status { font-size: 11px; color: #888; padding: 4px 0; }
+.warn { color: #fa4; }
+.err { color: #f66; }
+.ok { color: #8c8; }
+  hr { border: 0; border-top: 1px solid #333; margin: 8px 0; }
+  details summary { cursor: pointer; font-size: 11px; color: #aaa; padding: 2px 0; }
+  
+  /* Trackpad styling */
+  .trackpad {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background: #111;
+    border: 1px solid #444;
+    border-radius: 4px;
+    position: relative;
+    cursor: crosshair;
+    overflow: hidden;
+    margin-top: 5px;
+  }
+  .trackpad::before, .trackpad::after {
+    content: '';
+    position: absolute;
+    background: rgba(255,255,255,0.05);
+  }
+  .trackpad::before { top: 50%; left: 0; width: 100%; height: 1px; }
+  .trackpad::after { left: 50%; top: 0; width: 1px; height: 100%; }
+  
+  .trackpad-handle {
+    width: 12px;
+    height: 12px;
+    background: #3c8;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    box-shadow: 0 0 10px rgba(51, 204, 136, 0.5);
+  }
+  
+  /* Prevent accidental text selection while dragging sliders */
+  #sidebar { user-select: none; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="section">
+    <h3>1. Input PSD</h3>
+    <input type="file" id="psdFile" accept=".psd">
+    <div id="fileStatus" class="status">No file loaded</div>
+  </div>
+
+  <div class="section">
+    <h3>2. Layers Detected</h3>
+    <div id="layerList"><span class="status">—</span></div>
+  </div>
+
+  <div class="section">
+    <h3>3. Skeleton</h3>
+    <button id="autoRig">Auto-rig from bounds</button>
+    <details>
+      <summary>DWPose (ONNX) auto-detect</summary>
+      <div style="margin-top:6px">
+        <button id="onnxUrlBtn">Fetch from HuggingFace</button>
+        <button id="onnxFileBtn">Load local .onnx</button>
+        <input type="file" id="onnxFile" accept=".onnx" style="display:none">
+        <div class="status" style="font-size:10px">
+          Runs whole-body pose detection on the composited character.
+        </div>
+      </div>
+    </details>
+    <button id="skeletonEdit">Edit joints (drag)</button>
+    <div id="rigStatus" class="status"></div>
+  </div>
+
+  <div class="section">
+    <h3>4. Pose</h3>
+    <div id="boneControls"><span class="status">Load a PSD first.</span></div>
+  </div>
+
+  <div class="section">
+    <h3>5. Iris Offset</h3>
+    <div style="display: flex; justify-content: space-between; font-size: 10px; color: #888; margin-bottom: 4px;">
+      <span>X: <span id="irisXVal" style="color: #ddd;">0</span></span>
+      <span>Y: <span id="irisYVal" style="color: #ddd;">0</span></span>
+    </div>
+    <div class="trackpad" id="irisTrackpad" style="touch-action: none;">
+      <div class="trackpad-handle" id="irisHandle" style="left: 50%; top: 50%;"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <button id="resetPose">Reset pose</button>
+    <button id="exportPNG" class="primary">Export PNG</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="toolbar">
+    <button id="toggleSkel" class="active">Show skeleton</button>
+    <button id="togglePivots">Show pivots</button>
+    <span class="status" id="mainStatus">Load a See-through PSD to begin.</span>
+  </div>
+  <div id="canvasWrap">
+    <canvas id="viewCanvas" width="800" height="1000"></canvas>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ag-psd/dist/bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/ort.min.js"></script>
+<script>
+/* =========================================================================
+   See-through PSD Rigger
+   - Parses a PSD produced by See-through (23-layer V3 spec)
+   - Infers a DWPose-style skeleton either from layer bounding boxes or by
+     running a DWPose ONNX model on the composited character
+   - Rigs each semantic layer to a hierarchical bone: torso / head /
+     leftArm / rightArm (or bothArms if merged) / leftLeg / rightLeg
+     (or bothLegs if merged) / hips-root
+   - Arms/legs are currently single-pivot rigid transforms (the mesh is one
+     rigid piece — no elbow yet). Elbow/knee stub bones are defined as
+     children so future mesh-deformation passes can hook in without
+     rewriting the hierarchy.
+   - Handles missing and merged parts gracefully by locking or disabling
+     the corresponding bones.
+   - Irides get a small XY offset applied inside the head's local space so
+     the eyes can "look around" slightly.
+   ========================================================================= */
+
+const canvas = document.getElementById('viewCanvas');
+const ctx = canvas.getContext('2d');
+const offCanvas = document.createElement('canvas');
+const offCtx = offCanvas.getContext('2d');
+
+const state = {
+  psd: null,
+  layerMap: {},      // normalized name -> layer object
+  layerList: [],     // flattened, bottom->top draw order
+  skeleton: null,    // keypoints in image space
+  bones: null,       // bone hierarchy with transforms
+  groups: null,      // per-body-part detection status
+  irisOffset: { x: 0, y: 0 },
+  showSkeleton: true,
+  showPivots: false,
+  editMode: false,
+  dragJoint: null,
+  onnxSession: null,
+};
+
+/* ---------- Known tag sets ---------- */
+
+// Layers that should follow the head bone. Includes V3 granular eye/ear
+// sub-layers AND the V1/V2 collapsed forms so we work for older exports too.
+const HEAD_TAGS = new Set([
+  'face', 'front hair', 'back hair', 'hair', 'headwear',
+  'nose', 'mouth',
+  'eyewhite', 'eyewhite-l', 'eyewhite-r',
+  'irides', 'irides-l', 'irides-r',
+  'eyelash', 'eyelash-l', 'eyelash-r',
+  'eyebrow', 'eyebrow-l', 'eyebrow-r',
+  'eyewear', 'ears', 'ears-l', 'ears-r', 'earwear',
+  'neck', 'neckwear',
+  'eyes', 'eyel', 'eyer', // V1/V2 baked split
+]);
+
+// Layers that get the iris "look around" offset on top of head transform.
+const IRIS_TAGS = new Set([
+  'irides', 'irides-l', 'irides-r',
+  'eyes', 'eyel', 'eyer',
+]);
+
+// Full list of known V3 tags — used for the "layers detected" sidebar.
+const ALL_KNOWN_TAGS = [
+  'front hair', 'back hair', 'headwear', 'face', 'nose', 'mouth',
+  'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear',
+  'ears', 'earwear', 'neck', 'neckwear',
+  'topwear',
+  'handwear', 'handwear-l', 'handwear-r',
+  'bottomwear',
+  'legwear', 'legwear-l', 'legwear-r',
+  'footwear', 'footwear-l', 'footwear-r',
+  'tail', 'wings', 'objects',
+];
+
+/* ---------- PSD loading ---------- */
+
+document.getElementById('psdFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fileStatus = document.getElementById('fileStatus');
+  fileStatus.textContent = `Loading ${file.name}…`;
+  try {
+    const buf = await file.arrayBuffer();
+    const psd = agPsd.readPsd(buf, {
+      skipCompositeImageData: true,
+      skipThumbnail: true,
+    });
+    state.psd = psd;
+    canvas.width = psd.width;
+    canvas.height = psd.height;
+    offCanvas.width = psd.width;
+    offCanvas.height = psd.height;
+    flattenLayers(psd);
+    analyzeGroups();
+    estimateSkeletonFromBounds();
+    buildBones();
+    buildBoneControls();
+    renderLayerList();
+    fileStatus.innerHTML = `<span class="ok">Loaded ${psd.width}×${psd.height} · ${state.layerList.length} layers</span>`;
+    document.getElementById('mainStatus').textContent =
+      'Skeleton auto-estimated from bounding boxes. Click "Edit joints" to fine-tune, then pose.';
+    render();
+  } catch (err) {
+    console.error(err);
+    fileStatus.innerHTML = `<span class="err">Error: ${err.message}</span>`;
+  }
+});
+
+function flattenLayers(psd) {
+  state.layerMap = {};
+  state.layerList = [];
+  function walk(children) {
+    for (const c of children) {
+      if (c.hidden) continue;
+      if (c.children) {
+        walk(c.children);
+      } else if (c.canvas && c.name) {
+        const key = c.name.trim().toLowerCase();
+        c._key = key;
+        state.layerMap[key] = c;
+        state.layerList.push(c);
+      }
+    }
+  }
+  walk(psd.children || []);
+  // ag-psd returns children in the order they appear in the file (bottom-up),
+  // so we preserve the list to ensure correct back-to-front compositing.
+}
+
+function analyzeGroups() {
+  const m = state.layerMap;
+  const has = (n) => !!m[n];
+  function splitState(base) {
+    const l = has(base + '-l');
+    const r = has(base + '-r');
+    if (l && r) return 'split';
+    if (l || r) return 'partial';
+    if (has(base)) return 'merged';
+    return 'missing';
+  }
+  state.groups = {
+    head: has('face') || has('front hair') || has('back hair') || has('headwear'),
+    torso: has('topwear'),
+    hips: has('bottomwear'),
+    arms: splitState('handwear'),
+    legs: splitState('legwear'),
+    feet: splitState('footwear'),
+  };
+}
+
+function renderLayerList() {
+  const el = document.getElementById('layerList');
+  const m = state.layerMap;
+  const lines = [];
+
+  // Individual tag presence
+  for (const tag of ALL_KNOWN_TAGS) {
+    if (m[tag]) {
+      lines.push(`<div class="layer-row present">${tag} <span class="tag">✓</span></div>`);
+    }
+  }
+  lines.push('<hr>');
+  // Group summary
+  const g = state.groups;
+  function grp(name, label) {
+    const s = g[name];
+    if (s === 'split') return `<div class="layer-row present">${label}: split L/R ✓</div>`;
+    if (s === 'merged') return `<div class="layer-row merged">${label}: merged — locked together</div>`;
+    if (s === 'partial') return `<div class="layer-row warn">${label}: partial (one side only)</div>`;
+    return `<div class="layer-row missing">${label}: missing</div>`;
+  }
+  lines.push(grp('arms', 'arms'));
+  lines.push(grp('legs', 'legs'));
+  lines.push(grp('feet', 'feet'));
+  el.innerHTML = lines.join('');
+}
+
+/* ---------- Bounding-box helpers ---------- */
+
+function getBbox(name) {
+  const l = state.layerMap[name];
+  if (!l || !l.canvas) return null;
+  return {
+    x: l.left, y: l.top,
+    x2: l.right, y2: l.bottom,
+    w: l.right - l.left,
+    h: l.bottom - l.top,
+    cx: (l.left + l.right) / 2,
+    cy: (l.top + l.bottom) / 2,
+  };
+}
+
+function firstBbox(names) {
+  for (const n of names) {
+    const b = getBbox(n);
+    if (b) return b;
+  }
+  return null;
+}
+
+/* ---------- Skeleton estimation from layer bounds ----------
+   Uses the spatial footprint of each semantic layer to place DWPose-style
+   keypoints. This is a rough guess; the user can drag joints afterward.
+------------------------------------------------------------ */
+
+function estimateSkeletonFromBounds() {
+  const kp = {};
+  const face = getBbox('face') || firstBbox(['front hair', 'headwear']);
+  const topwear = getBbox('topwear');
+  const bottomwear = getBbox('bottomwear');
+
+  if (face) {
+    kp.nose = { x: face.cx, y: face.cy + face.h * 0.08 };
+    kp.lEye = { x: face.cx - face.w * 0.18, y: face.cy - face.h * 0.05 };
+    kp.rEye = { x: face.cx + face.w * 0.18, y: face.cy - face.h * 0.05 };
+    kp.lEar = { x: face.x + face.w * 0.05, y: face.cy };
+    kp.rEar = { x: face.x2 - face.w * 0.05, y: face.cy };
+  }
+
+  if (topwear) {
+    kp.neck = { x: topwear.cx, y: topwear.y + topwear.h * 0.03 };
+    kp.lShoulder = { x: topwear.x + topwear.w * 0.15, y: topwear.y + topwear.h * 0.12 };
+    kp.rShoulder = { x: topwear.x + topwear.w * 0.85, y: topwear.y + topwear.h * 0.12 };
+    kp.spine = { x: topwear.cx, y: topwear.cy };
+    kp.lHip = { x: topwear.x + topwear.w * 0.30, y: topwear.y2 - topwear.h * 0.02 };
+    kp.rHip = { x: topwear.x + topwear.w * 0.70, y: topwear.y2 - topwear.h * 0.02 };
+    kp.pelvis = { x: topwear.cx, y: topwear.y2 };
+  } else if (bottomwear) {
+    kp.pelvis = { x: bottomwear.cx, y: bottomwear.y };
+    kp.lHip = { x: bottomwear.x + bottomwear.w * 0.3, y: bottomwear.y };
+    kp.rHip = { x: bottomwear.x + bottomwear.w * 0.7, y: bottomwear.y };
+    kp.spine = { x: bottomwear.cx, y: bottomwear.y - bottomwear.h * 0.1 };
+    kp.neck = { x: bottomwear.cx, y: bottomwear.y - bottomwear.h * 0.3 };
+    kp.lShoulder = { x: bottomwear.cx - bottomwear.w * 0.3, y: bottomwear.y - bottomwear.h * 0.25 };
+    kp.rShoulder = { x: bottomwear.cx + bottomwear.w * 0.3, y: bottomwear.y - bottomwear.h * 0.25 };
+  }
+
+  // Arms — use handwear layer(s) if present
+  const handL = getBbox('handwear-l');
+  const handR = getBbox('handwear-r');
+  const hand = getBbox('handwear');
+  if (handL) kp.lWrist = { x: handL.cx, y: handL.y2 - handL.h * 0.1 };
+  if (handR) kp.rWrist = { x: handR.cx, y: handR.y2 - handR.h * 0.1 };
+  if (hand && !handL && !handR) {
+    kp.lWrist = { x: hand.x + hand.w * 0.15, y: hand.y2 - hand.h * 0.05 };
+    kp.rWrist = { x: hand.x + hand.w * 0.85, y: hand.y2 - hand.h * 0.05 };
+  }
+  // Elbow midpoints — placeholder for future forearm deformation
+  if (kp.lShoulder && kp.lWrist) {
+    kp.lElbow = { x: (kp.lShoulder.x + kp.lWrist.x) / 2, y: (kp.lShoulder.y + kp.lWrist.y) / 2 };
+  }
+  if (kp.rShoulder && kp.rWrist) {
+    kp.rElbow = { x: (kp.rShoulder.x + kp.rWrist.x) / 2, y: (kp.rShoulder.y + kp.rWrist.y) / 2 };
+  }
+
+  // Legs — use legwear/footwear bounds
+  const legL = getBbox('legwear-l');
+  const legR = getBbox('legwear-r');
+  const leg = getBbox('legwear');
+  const footL = getBbox('footwear-l');
+  const footR = getBbox('footwear-r');
+  const foot = getBbox('footwear');
+  if (legL) {
+    kp.lKnee = { x: legL.cx, y: legL.cy };
+    kp.lAnkle = { x: legL.cx, y: legL.y2 };
+  }
+  if (legR) {
+    kp.rKnee = { x: legR.cx, y: legR.cy };
+    kp.rAnkle = { x: legR.cx, y: legR.y2 };
+  }
+  if (leg && !legL && !legR) {
+    kp.lKnee = { x: leg.x + leg.w * 0.3, y: leg.cy };
+    kp.rKnee = { x: leg.x + leg.w * 0.7, y: leg.cy };
+    kp.lAnkle = { x: leg.x + leg.w * 0.3, y: leg.y2 };
+    kp.rAnkle = { x: leg.x + leg.w * 0.7, y: leg.y2 };
+  }
+  if (footL) kp.lFoot = { x: footL.cx, y: footL.cy };
+  if (footR) kp.rFoot = { x: footR.cx, y: footR.cy };
+  if (foot && !footL && !footR) {
+    kp.lFoot = { x: foot.x + foot.w * 0.3, y: foot.cy };
+    kp.rFoot = { x: foot.x + foot.w * 0.7, y: foot.cy };
+  }
+
+  // Fill in anything still missing with canvas-center fallbacks so no bone
+  // ends up with a null pivot.
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const fallbackKeys = [
+    'nose', 'neck', 'spine', 'pelvis',
+    'lShoulder', 'rShoulder', 'lElbow', 'rElbow', 'lWrist', 'rWrist',
+    'lHip', 'rHip', 'lKnee', 'rKnee', 'lAnkle', 'rAnkle',
+  ];
+  for (const k of fallbackKeys) {
+    if (!kp[k]) kp[k] = { x: cx, y: cy };
+  }
+  state.skeleton = kp;
+}
+
+/* ---------- Bone hierarchy ----------
+   Each bone has:
+     parent    — parent bone name or null (root)
+     pivot     — rotation center in image space
+     rot       — rotation in degrees (user controlled)
+     tx, ty    — translation offset applied in parent space
+   World matrix = parentWorld * translate(tx,ty) * T(pivot) * R(rot) * T(-pivot)
+------------------------------------------------------------- */
+
+function buildBones() {
+  const kp = state.skeleton;
+  const prev = state.bones || {};
+  state.bones = {};
+
+  function B(name, parent, pivot) {
+    const old = prev[name];
+    state.bones[name] = {
+      name, parent,
+      pivot: { x: pivot.x, y: pivot.y },
+      rot: old ? old.rot : 0,
+      tx: old ? old.tx : 0,
+      ty: old ? old.ty : 0,
+    };
+  }
+
+  const shoulderMid = {
+    x: (kp.lShoulder.x + kp.rShoulder.x) / 2,
+    y: (kp.lShoulder.y + kp.rShoulder.y) / 2,
+  };
+  const hipMid = {
+    x: (kp.lHip.x + kp.rHip.x) / 2,
+    y: (kp.lHip.y + kp.rHip.y) / 2,
+  };
+
+  B('root', null, kp.pelvis);
+  B('torso', 'root', kp.pelvis);
+  B('head', 'torso', kp.neck);
+
+  // Arm bones — all three are always defined so mapping works regardless
+  // of which set the user poses. buildBoneControls() exposes only the
+  // ones that are meaningful for the detected layers.
+  B('leftArm', 'torso', kp.lShoulder);
+  B('rightArm', 'torso', kp.rShoulder);
+  B('bothArms', 'torso', shoulderMid);
+
+  B('leftLeg', 'root', kp.lHip);
+  B('rightLeg', 'root', kp.rHip);
+  B('bothLegs', 'root', hipMid);
+
+  // Stub child bones — currently unused because arms/legs are rigid meshes,
+  // but defining them now means future forearm / shin mesh deformation can
+  // drop in without restructuring the hierarchy.
+  B('leftElbow', 'leftArm', kp.lElbow || kp.lShoulder);
+  B('rightElbow', 'rightArm', kp.rElbow || kp.rShoulder);
+  B('leftKnee', 'leftLeg', kp.lKnee || kp.lHip);
+  B('rightKnee', 'rightLeg', kp.rKnee || kp.rHip);
+}
+
+function computeWorldMatrix(boneName) {
+  const b = state.bones[boneName];
+  if (!b) return new DOMMatrix();
+  let m = new DOMMatrix();
+  m = m.translate(b.tx, b.ty);
+  m = m.translate(b.pivot.x, b.pivot.y);
+  m = m.rotate(b.rot);
+  m = m.translate(-b.pivot.x, -b.pivot.y);
+  if (b.parent) {
+    return computeWorldMatrix(b.parent).multiply(m);
+  }
+  return m;
+}
+
+// Layer -> bone name routing. Takes the current group state into account
+// so a merged handwear layer goes to bothArms while split variants go to
+// their respective side bones.
+function boneForLayer(name) {
+  if (HEAD_TAGS.has(name)) return 'head';
+  if (name === 'topwear') return 'torso';
+  if (name === 'neckwear') return 'torso';
+  if (name === 'handwear-l') return 'leftArm';
+  if (name === 'handwear-r') return 'rightArm';
+  if (name === 'handwear') return 'bothArms';
+  if (name === 'legwear-l' || name === 'footwear-l') return 'leftLeg';
+  if (name === 'legwear-r' || name === 'footwear-r') return 'rightLeg';
+  if (name === 'legwear' || name === 'footwear') return 'bothLegs';
+  if (name === 'bottomwear') return 'root';
+  // tail / wings / objects / unknowns ride the root for now.
+  return 'root';
+}
+
+function getEyewhiteLayer(irisName) {
+  const mapping = {
+    'irides': 'eyewhite',
+    'irides-l': 'eyewhite-l',
+    'irides-r': 'eyewhite-r',
+    'eyes': 'eyewhite',
+    'eyel': 'eyewhite-l',
+    'eyer': 'eyewhite-r'
+  };
+  const target = mapping[irisName];
+  return target ? state.layerMap[target] : null;
+}
+
+/* ---------- Pose control sliders ---------- */
+
+function buildBoneControls() {
+  const el = document.getElementById('boneControls');
+  const ctrls = [];
+
+  ctrls.push({ bone: 'root',  prop: 'tx',  label: 'Global X',   min: -300, max: 300, step: 1 });
+  ctrls.push({ bone: 'root',  prop: 'ty',  label: 'Global Y',   min: -300, max: 300, step: 1 });
+  ctrls.push({ bone: 'torso', prop: 'rot', label: 'Torso rotation' });
+  ctrls.push({ bone: 'head',  prop: 'rot', label: 'Head rotation' });
+
+  if (state.groups.arms === 'split') {
+    ctrls.push({ bone: 'leftArm',  prop: 'rot', label: 'Left arm rotation'  });
+    ctrls.push({ bone: 'rightArm', prop: 'rot', label: 'Right arm rotation' });
+  } else if (state.groups.arms === 'merged') {
+    ctrls.push({ bone: 'bothArms', prop: 'rot', label: 'Arms (merged)', locked: true });
+  } else if (state.groups.arms === 'partial') {
+    if (state.layerMap['handwear-l']) ctrls.push({ bone: 'leftArm',  prop: 'rot', label: 'Left arm rotation' });
+    if (state.layerMap['handwear-r']) ctrls.push({ bone: 'rightArm', prop: 'rot', label: 'Right arm rotation' });
+  }
+
+  if (state.groups.legs === 'split') {
+    ctrls.push({ bone: 'leftLeg',  prop: 'rot', label: 'Left leg rotation'  });
+    ctrls.push({ bone: 'rightLeg', prop: 'rot', label: 'Right leg rotation' });
+  } else if (state.groups.legs === 'merged') {
+    ctrls.push({ bone: 'bothLegs', prop: 'rot', label: 'Legs (merged)', locked: true });
+  } else if (state.groups.legs === 'partial') {
+    if (state.layerMap['legwear-l']) ctrls.push({ bone: 'leftLeg',  prop: 'rot', label: 'Left leg rotation' });
+    if (state.layerMap['legwear-r']) ctrls.push({ bone: 'rightLeg', prop: 'rot', label: 'Right leg rotation' });
+  }
+
+  el.innerHTML = '';
+  for (const c of ctrls) {
+    const min = c.min ?? -120;
+    const max = c.max ?? 120;
+    const step = c.step ?? 1;
+    const b = state.bones[c.bone];
+    const val = b ? b[c.prop] : 0;
+    const unit = c.prop === 'rot' ? '°' : '';
+    const div = document.createElement('div');
+    div.className = 'bone-ctrl' + (c.locked ? ' locked' : '');
+    div.innerHTML = `
+      <label>
+        <span>${c.label}</span>
+        <span id="val_${c.bone}_${c.prop}">${val}${unit}</span>
+      </label>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+             data-bone="${c.bone}" data-prop="${c.prop}">
+    `;
+    el.appendChild(div);
+  }
+
+  el.querySelectorAll('input[type=range]').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      const bone = state.bones[inp.dataset.bone];
+      if (!bone) return;
+      const v = parseFloat(inp.value);
+      bone[inp.dataset.prop] = v;
+      const valEl = document.getElementById(`val_${inp.dataset.bone}_${inp.dataset.prop}`);
+      if (valEl) valEl.textContent = inp.dataset.prop === 'rot' ? `${v}°` : v;
+      render();
+    });
+  });
+}
+
+/* ---------- Iris controls (2D Trackpad) ---------- */
+
+(function initIrisTrackpad() {
+  const pad = document.getElementById('irisTrackpad');
+  const handle = document.getElementById('irisHandle');
+  const xVal = document.getElementById('irisXVal');
+  const yVal = document.getElementById('irisYVal');
+
+  const RANGE = 20; // Matches the previous slider min/max
+
+  function updateFromEvent(e) {
+    const rect = pad.getBoundingClientRect();
+    let x = (e.clientX - rect.left) / rect.width;
+    let y = (e.clientY - rect.top) / rect.height;
+    
+    // Clamp 0-1
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+
+    // Map to -RANGE to RANGE
+    const rx = (x * 2 - 1) * RANGE;
+    const ry = (y * 2 - 1) * RANGE;
+
+    state.irisOffset.x = rx;
+    state.irisOffset.y = ry;
+
+    updateUI();
+    render();
+  }
+
+  function updateUI() {
+    const rx = state.irisOffset.x || 0;
+    const ry = state.irisOffset.y || 0;
+    
+    // Map back to % for handle position
+    const px = ((rx / RANGE) + 1) / 2 * 100;
+    const py = ((ry / RANGE) + 1) / 2 * 100;
+
+    handle.style.left = `${px}%`;
+    handle.style.top = `${py}%`;
+    xVal.textContent = rx.toFixed(1);
+    yVal.textContent = ry.toFixed(1);
+  }
+
+  pad.addEventListener('pointerdown', (e) => {
+    pad.setPointerCapture(e.pointerId);
+    updateFromEvent(e);
+    // Prevent browser default drag behaviors
+    e.preventDefault();
+  });
+
+  pad.addEventListener('pointermove', (e) => {
+    if (pad.hasPointerCapture(e.pointerId)) {
+      updateFromEvent(e);
+    }
+  });
+
+  pad.addEventListener('pointerup', (e) => {
+    pad.releasePointerCapture(e.pointerId);
+  });
+
+  // Expose updateUI globally for resetPose
+  window.updateIrisUI = updateUI;
+})();
+
+/* ---------- Rendering ---------- */
+
+function render() {
+  if (!state.psd) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (const layer of state.layerList) {
+    const name = layer._key;
+    const bn = boneForLayer(name);
+    const m = computeWorldMatrix(bn);
+
+    // If it's an iris and we have a matching eyewhite, perform clipping
+    if (IRIS_TAGS.has(name)) {
+      const ew = getEyewhiteLayer(name);
+      if (ew) {
+        // Draw to offscreen buffer for bitmask clipping
+        offCtx.setTransform(1, 0, 0, 1, 0, 0);
+        offCtx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+        offCtx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+        
+        // 1. Draw eyewhite as the destination
+        offCtx.drawImage(ew.canvas, ew.left, ew.top);
+        
+        // 2. Set composite to only keep parts of the next draw that overlap the eyewhite
+        offCtx.globalCompositeOperation = 'source-in';
+        offCtx.translate(state.irisOffset.x, state.irisOffset.y);
+        offCtx.drawImage(layer.canvas, layer.left, layer.top);
+        offCtx.globalCompositeOperation = 'source-over';
+        
+        // 3. Composite resulted clipped iris onto main canvas
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(offCanvas, 0, 0);
+        ctx.restore();
+        continue;
+      }
+    }
+
+    ctx.save();
+    ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    if (IRIS_TAGS.has(name)) {
+      ctx.translate(state.irisOffset.x, state.irisOffset.y);
+    }
+    try {
+      ctx.drawImage(layer.canvas, layer.left, layer.top);
+    } catch (e) {
+      console.warn('Failed to draw layer', name, e);
+    }
+    ctx.restore();
+  }
+
+  if (state.showSkeleton && state.skeleton) drawSkeleton();
+  if (state.showPivots && state.bones) drawPivots();
+}
+
+function drawSkeleton() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const kp = state.skeleton;
+  const lines = [
+    ['lShoulder', 'rShoulder'],
+    ['lShoulder', 'lHip'], ['rShoulder', 'rHip'], ['lHip', 'rHip'],
+    ['lShoulder', 'lElbow'], ['lElbow', 'lWrist'],
+    ['rShoulder', 'rElbow'], ['rElbow', 'rWrist'],
+    ['lHip', 'lKnee'], ['lKnee', 'lAnkle'],
+    ['rHip', 'rKnee'], ['rKnee', 'rAnkle'],
+    ['neck', 'nose'], ['spine', 'neck'], ['pelvis', 'spine'],
+  ];
+  ctx.strokeStyle = 'rgba(0,255,170,0.75)';
+  ctx.lineWidth = 3;
+  for (const [a, b] of lines) {
+    if (kp[a] && kp[b]) {
+      ctx.beginPath();
+      ctx.moveTo(kp[a].x, kp[a].y);
+      ctx.lineTo(kp[b].x, kp[b].y);
+      ctx.stroke();
+    }
+  }
+  ctx.fillStyle = state.editMode ? '#ffee55' : '#ff5555';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  for (const name in kp) {
+    ctx.beginPath();
+    ctx.arc(kp[name].x, kp[name].y, state.editMode ? 7 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function drawPivots() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = 'rgba(255,128,0,0.9)';
+  for (const name in state.bones) {
+    const b = state.bones[name];
+    ctx.beginPath();
+    ctx.arc(b.pivot.x, b.pivot.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* ---------- Toolbar actions ---------- */
+
+document.getElementById('toggleSkel').addEventListener('click', (e) => {
+  state.showSkeleton = !state.showSkeleton;
+  e.target.classList.toggle('active', state.showSkeleton);
+  render();
+});
+document.getElementById('togglePivots').addEventListener('click', (e) => {
+  state.showPivots = !state.showPivots;
+  e.target.classList.toggle('active', state.showPivots);
+  render();
+});
+document.getElementById('autoRig').addEventListener('click', () => {
+  if (!state.psd) return;
+  estimateSkeletonFromBounds();
+  buildBones();
+  buildBoneControls();
+  render();
+});
+document.getElementById('resetPose').addEventListener('click', () => {
+  if (!state.bones) return;
+  for (const b of Object.values(state.bones)) { b.rot = 0; b.tx = 0; b.ty = 0; }
+  state.irisOffset = { x: 0, y: 0 };
+  if (window.updateIrisUI) window.updateIrisUI();
+  buildBoneControls();
+  render();
+});
+document.getElementById('exportPNG').addEventListener('click', () => {
+  if (!state.psd) return;
+  const prev = { skel: state.showSkeleton, piv: state.showPivots };
+  state.showSkeleton = false;
+  state.showPivots = false;
+  render();
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'rigged_pose.png';
+    a.click();
+    URL.revokeObjectURL(url);
+    state.showSkeleton = prev.skel;
+    state.showPivots = prev.piv;
+    render();
+  });
+});
+document.getElementById('skeletonEdit').addEventListener('click', (e) => {
+  state.editMode = !state.editMode;
+  e.target.classList.toggle('active', state.editMode);
+  document.getElementById('mainStatus').textContent = state.editMode
+    ? 'Edit mode: drag joints to reposition. Bone rotations are preserved.'
+    : 'Pose mode.';
+  render();
+});
+
+/* ---------- Joint drag editing ---------- */
+
+function canvasCoords(evt) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (evt.clientX - r.left) * (canvas.width / r.width),
+    y: (evt.clientY - r.top) * (canvas.height / r.height),
+  };
+}
+canvas.addEventListener('mousedown', (e) => {
+  if (!state.editMode || !state.skeleton) return;
+  const p = canvasCoords(e);
+  let closest = null;
+  let bestDist = Infinity;
+  const hitRadius = Math.max(canvas.width, canvas.height) * 0.03;
+  for (const name in state.skeleton) {
+    const k = state.skeleton[name];
+    const d = Math.hypot(k.x - p.x, k.y - p.y);
+    if (d < bestDist && d < hitRadius) {
+      bestDist = d;
+      closest = name;
+    }
+  }
+  state.dragJoint = closest;
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (!state.dragJoint) return;
+  const p = canvasCoords(e);
+  state.skeleton[state.dragJoint] = { x: p.x, y: p.y };
+  buildBones(); // rotations preserved thanks to prev lookup
+  render();
+});
+window.addEventListener('mouseup', () => {
+  if (state.dragJoint) {
+    state.dragJoint = null;
+    render();
+  }
+});
+
+/* ---------- DWPose ONNX auto-detect ---------- */
+
+const DWPOSE_URL = 'https://huggingface.co/yzd-v/DWPose/resolve/main/dw-ll_ucoco_384.onnx';
+
+document.getElementById('onnxUrlBtn').addEventListener('click', async () => {
+  if (!state.psd) { setRigStatus('Load a PSD first.', 'err'); return; }
+  try {
+    setRigStatus('Downloading DWPose (~50MB)…');
+    await loadOnnxSession(DWPOSE_URL);
+    await runAndApplyDWPose();
+  } catch (err) {
+    console.error(err);
+    setRigStatus(err.message, 'err');
+  }
+});
+document.getElementById('onnxFileBtn').addEventListener('click', () => {
+  document.getElementById('onnxFile').click();
+});
+document.getElementById('onnxFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f || !state.psd) return;
+  try {
+    setRigStatus('Loading local ONNX…');
+    const buf = await f.arrayBuffer();
+    await loadOnnxSession(buf);
+    await runAndApplyDWPose();
+  } catch (err) {
+    console.error(err);
+    setRigStatus(err.message, 'err');
+  }
+});
+
+function setRigStatus(msg, cls = '') {
+  const el = document.getElementById('rigStatus');
+  el.innerHTML = cls ? `<span class="${cls}">${msg}</span>` : msg;
+}
+
+async function loadOnnxSession(payload) {
+  if (state.onnxSession) return;
+  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/';
+  state.onnxSession = await ort.InferenceSession.create(payload, {
+    executionProviders: ['wasm'],
+  });
+}
+
+async function runAndApplyDWPose() {
+  setRigStatus('Running DWPose inference…');
+  const kps = await runDWPose();
+  applyDWPoseKeypoints(kps);
+  buildBones();
+  buildBoneControls();
+  render();
+  setRigStatus(`DWPose applied (${kps.length} keypoints).`, 'ok');
+}
+
+async function runDWPose() {
+  const TARGET_W = 288;
+  const TARGET_H = 384;
+
+  // Composite the PSD with identity transforms so DWPose sees the
+  // rest-pose character (no skeleton overlay).
+  const tmp = document.createElement('canvas');
+  tmp.width = canvas.width;
+  tmp.height = canvas.height;
+  const tctx = tmp.getContext('2d');
+  tctx.fillStyle = '#000';
+  tctx.fillRect(0, 0, tmp.width, tmp.height);
+  for (const layer of state.layerList) {
+    try { tctx.drawImage(layer.canvas, layer.left, layer.top); } catch (e) {}
+  }
+
+  // Letterbox to model input size
+  const origW = tmp.width;
+  const origH = tmp.height;
+  const scale = Math.min(TARGET_W / origW, TARGET_H / origH);
+  const newW = origW * scale;
+  const newH = origH * scale;
+  const padX = (TARGET_W - newW) / 2;
+  const padY = (TARGET_H - newH) / 2;
+  const proc = document.createElement('canvas');
+  proc.width = TARGET_W;
+  proc.height = TARGET_H;
+  const pctx = proc.getContext('2d');
+  pctx.fillStyle = '#000';
+  pctx.fillRect(0, 0, TARGET_W, TARGET_H);
+  pctx.drawImage(tmp, padX, padY, newW, newH);
+
+  const imgData = pctx.getImageData(0, 0, TARGET_W, TARGET_H).data;
+  const mean = [123.675, 116.28, 103.53];
+  const std = [58.395, 57.12, 57.375];
+  const f32 = new Float32Array(3 * TARGET_H * TARGET_W);
+  const planeSize = TARGET_H * TARGET_W;
+  for (let i = 0; i < planeSize; i++) {
+    f32[i]                = (imgData[i * 4]     - mean[0]) / std[0];
+    f32[planeSize + i]    = (imgData[i * 4 + 1] - mean[1]) / std[1];
+    f32[2 * planeSize + i]= (imgData[i * 4 + 2] - mean[2]) / std[2];
+  }
+  const tensor = new ort.Tensor('float32', f32, [1, 3, TARGET_H, TARGET_W]);
+  const feeds = {};
+  feeds[state.onnxSession.inputNames[0]] = tensor;
+  const results = await state.onnxSession.run(feeds);
+
+  // Find simcc_x / simcc_y by shape — match the reference impl's approach
+  // since key names can vary between DWPose exports.
+  let simcc_x = null;
+  let simcc_y = null;
+  for (const key in results) {
+    const t = results[key];
+    if (t.dims && t.dims.length === 3) {
+      if (t.dims[2] === 576) simcc_x = t.data;
+      else if (t.dims[2] === 768) simcc_y = t.data;
+    }
+  }
+  if (!simcc_x || !simcc_y) {
+    throw new Error('Unexpected DWPose output — no simcc_x/simcc_y found.');
+  }
+
+  const nKp = 133;
+  const xBins = 576;
+  const yBins = 768;
+  const kps = [];
+  for (let i = 0; i < nKp; i++) {
+    let mx = -Infinity, mxI = 0;
+    for (let j = 0; j < xBins; j++) {
+      const v = simcc_x[i * xBins + j];
+      if (v > mx) { mx = v; mxI = j; }
+    }
+    let my = -Infinity, myI = 0;
+    for (let j = 0; j < yBins; j++) {
+      const v = simcc_y[i * yBins + j];
+      if (v > my) { my = v; myI = j; }
+    }
+    const xModel = mxI / 2.0;
+    const yModel = myI / 2.0;
+    kps.push({
+      x: (xModel - padX) / scale,
+      y: (yModel - padY) / scale,
+      conf: Math.min(mx, my),
+    });
+  }
+  return kps;
+}
+
+// Maps DWPose body keypoints (COCO ordering) to our skeleton dict.
+function applyDWPoseKeypoints(kps) {
+  const kp = state.skeleton || {};
+  kp.nose       = kps[0];
+  kp.lEye       = kps[1];
+  kp.rEye       = kps[2];
+  kp.lEar       = kps[3];
+  kp.rEar       = kps[4];
+  kp.lShoulder  = kps[5];
+  kp.rShoulder  = kps[6];
+  kp.lElbow     = kps[7];
+  kp.rElbow     = kps[8];
+  kp.lWrist     = kps[9];
+  kp.rWrist     = kps[10];
+  kp.lHip       = kps[11];
+  kp.rHip       = kps[12];
+  kp.lKnee      = kps[13];
+  kp.rKnee      = kps[14];
+  kp.lAnkle     = kps[15];
+  kp.rAnkle     = kps[16];
+  kp.neck       = {
+    x: (kp.lShoulder.x + kp.rShoulder.x) / 2,
+    y: (kp.lShoulder.y + kp.rShoulder.y) / 2,
+  };
+  kp.pelvis = {
+    x: (kp.lHip.x + kp.rHip.x) / 2,
+    y: (kp.lHip.y + kp.rHip.y) / 2,
+  };
+  kp.spine = {
+    x: (kp.neck.x + kp.pelvis.x) / 2,
+    y: (kp.neck.y + kp.pelvis.y) / 2,
+  };
+  state.skeleton = kp;
+}
+</script>
+</body>
+</html>

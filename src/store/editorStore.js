@@ -42,6 +42,12 @@ export const useEditorStore = create((set) => ({
   /** Editor mode: 'staging' = M3 workflow, 'animation' = timeline/keyframing active */
   editorMode: 'staging',
 
+  /** Whether the armature skeleton overlay is visible (staging mode only) */
+  showSkeleton: true,
+
+  /** When true, skeleton joints are draggable to reposition bone pivots */
+  skeletonEditMode: false,
+
   /** When true, only the selected meshed part is interactable; other layers are dimmed */
   meshEditMode: false,
 
@@ -75,6 +81,8 @@ export const useEditorStore = create((set) => ({
   setMeshDefaults:      (partial)  => set((state) => ({ meshDefaults: { ...state.meshDefaults, ...partial } })),
   setActiveLayerTab:    (tab)      => set({ activeLayerTab: tab }),
   setEditorMode:        (mode)     => set({ editorMode: mode }),
+  setShowSkeleton:      (on)       => set({ showSkeleton: on }),
+  setSkeletonEditMode:  (on)       => set({ skeletonEditMode: on }),
   toggleGroupExpand:    (id)       => set((s) => {
     const next = new Set(s.expandedGroups);
     if (next.has(id)) next.delete(id);

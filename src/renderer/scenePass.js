@@ -124,6 +124,8 @@ export class ScenePass {
       const uMvp     = this.meshUniforms('u_mvp');
       const uTexture = this.meshUniforms('u_texture');
       const uOpacity = this.meshUniforms('u_opacity');
+      const uHasMask = this.meshUniforms('u_hasMask');
+      const uMask    = this.meshUniforms('u_mask');
 
       for (const part of parts) {
         if (part.visible === false) continue;
@@ -135,12 +137,36 @@ export class ScenePass {
         const effectiveOpacity = meshEditMode && !selectionSet.has(part.id)
           ? baseOpacity * 0.5
           : baseOpacity;
+
+        // Iris clipping: if this part has an irisClipOf reference, bind the
+        // eyewhite texture as a second sampler so the fragment shader masks
+        // the iris to the eyewhite's alpha channel.
+        const maskTexture = part.irisClipOf
+          ? this.partRenderer.getTexture(part.irisClipOf)
+          : null;
+
+        if (maskTexture) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+          gl.uniform1i(uMask, 1);
+          gl.uniform1i(uHasMask, 1);
+        } else {
+          gl.uniform1i(uHasMask, 0);
+        }
+
         this.partRenderer.drawPart(
           part.id,
           partMvp,
           effectiveOpacity,
           uMvp, uTexture, uOpacity
         );
+
+        if (maskTexture) {
+          // Clean up mask binding
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE0);
+        }
       }
     }
 

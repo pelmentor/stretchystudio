@@ -58,15 +58,16 @@ const GROUP_CREATE_ORDER = ['body', 'upperbody', 'lowerbody', 'head', 'extras', 
 /** Returns the matched tag for a layer name, or null. */
 export function matchTag(name) {
   const lower = name.toLowerCase().trim();
+  // Exact match first — prevents 'handwear' from matching 'handwear-l', etc.
+  for (const tag of KNOWN_TAGS) {
+    if (lower === tag) return tag;
+  }
   for (const tag of KNOWN_TAGS) {
     if (
-      lower === tag ||
       lower.startsWith(tag + '-') ||
       lower.startsWith(tag + ' ') ||
       lower.startsWith(tag + '_')
-    ) {
-      return tag;
-    }
+    ) return tag;
   }
   return null;
 }
