@@ -187,4 +187,17 @@ export const useAnimationStore = create((set, get) => ({
       endFrame:          Math.round(((anim.duration ?? 2000) / 1000) * (anim.fps ?? 24)),
     });
   },
+
+  /** Reset playback state to default */
+  resetPlayback: () => set({
+    activeAnimationId: null,
+    currentTime:       0,
+    isPlaying:         false,
+    _lastTimestamp:    null,
+    restPose:          new Map(),
+    draftPose:         new Map(),
+    startFrame:        0,
+    endFrame:          48,
+    fps:               24,
+  }),
 }));

@@ -11,6 +11,16 @@ import {
 } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import PsdImportWizard from '@/components/canvas/PsdImportWizard';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
@@ -117,11 +127,14 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
   // PSD import wizard state
   const [wizardStep, setWizardStep]         = useState(null);  // null | 'choose' | 'dwpose' | 'adjust'
   const [wizardPsd, setWizardPsd]           = useState(null);  // { psdW, psdH, layers, partIds }
+  const [confirmWipeOpen, setConfirmWipeOpen] = useState(false);
+  const [pendingPsdFile, setPendingPsdFile]   = useState(null);
   const preImportSnapshotRef                = useRef(null);  // project snapshot before finalizePsdImport
   const onnxSessionRef                      = useRef(null);  // cached ONNX session across imports
 
   const project        = useProjectStore(s => s.project);
   const updateProject  = useProjectStore(s => s.updateProject);
+  const resetProject   = useProjectStore(s => s.resetProject);
   const editorState    = useEditorStore();
   const setBrush             = useEditorStore(s => s.setBrush);
   const setEditorMode        = useEditorStore(s => s.setEditorMode);
@@ -685,7 +698,7 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
   }, []);
 
   /* ── PSD import helper ───────────────────────────────────────────────── */
-  const importPsdFile = useCallback((file) => {
+  const processPsdFile = useCallback((file) => {
     file.arrayBuffer().then((buffer) => {
       let parsed;
       try { parsed = importPsd(buffer); }
@@ -705,6 +718,26 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       }
     });
   }, [finalizePsdImport]);
+
+  const importPsdFile = useCallback((file) => {
+    const proj = projectRef.current;
+    if (proj.nodes.length > 0) {
+      setPendingPsdFile(file);
+      setConfirmWipeOpen(true);
+    } else {
+      processPsdFile(file);
+    }
+  }, [processPsdFile]);
+
+  const handleConfirmWipe = useCallback(() => {
+    if (pendingPsdFile) {
+      resetProject();
+      animRef.current.resetPlayback();
+      processPsdFile(pendingPsdFile);
+      setPendingPsdFile(null);
+    }
+    setConfirmWipeOpen(false);
+  }, [pendingPsdFile, processPsdFile, resetProject]);
 
   /* ── Drag-and-drop ───────────────────────────────────────────────────── */
   const onDrop = useCallback((e) => {
@@ -1239,9 +1272,29 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
           onFinalize={handleWizardFinalize}
           onSkip={handleWizardSkip}
           onComplete={handleWizardComplete}
-          onBack={handleWizardBack}
+           onBack={handleWizardBack}
         />
       )}
+
+      {/* Wipe project confirmation */}
+      <AlertDialog open={confirmWipeOpen} onOpenChange={setConfirmWipeOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Wipe current project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Importing a new PSD will permanently delete all existing layers, 
+              meshes, and animations in your current project. This action 
+              cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmWipe} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Wipe & Import
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

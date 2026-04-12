@@ -111,4 +111,17 @@ export const useProjectStore = create((set) => ({
   deleteAnimation: (id) => set(produce((state) => {
     state.project.animations = state.project.animations.filter(a => a.id !== id);
   })),
+
+  /** Reset project to empty state */
+  resetProject: () => set(produce((state) => {
+    state.project.canvas   = { width: 800, height: 600 };
+    state.project.textures = [];
+    state.project.nodes    = [];
+    state.project.parameters = [];
+    state.project.physics_groups = [];
+    state.project.animations = [];
+    state.versionControl.geometryVersion++;
+    state.versionControl.transformVersion++;
+    state.versionControl.textureVersion++;
+  })),
 }));
