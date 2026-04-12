@@ -163,14 +163,33 @@ Project
 
 ---
 
-### ✅ M5 — Armature Auto-Rig & Skeleton Animation (Completed 2026-04-11)
+### ✅ M5 — Armature Auto-Rig & Skeleton Animation (Completed 2026-04-12)
  
- **Goal:** Enable rigging of see-through PSD characters for vtuber-style animation via DWPose skeleton detection.
+ **Goal:** Enable rigging of see-through PSD characters for vtuber-style animation via both heuristic and AI-powered skeleton detection.
+
+ - **PSD Import Wizard** (Added 2026-04-12):
+   - **3-Step Flow**: Choose rigging method → Load/estimate skeleton → Adjust joints on canvas before finalizing
+   - **Step 1 (Choose)**: User selects:
+     - *Rig manually*: Fast heuristic skeleton from layer bounding boxes (no download)
+     - *Rig with DWPose*: High-accuracy AI pose detection (~50MB model)
+     - *Skip rigging*: Import flat, no skeleton
+   - **Step 2 (Load/Estimate)**: 
+     - Manual path: Instantly estimates skeleton via `estimateSkeletonFromBounds()`
+     - DWPose path: Shows model status, upload .onnx or download from HuggingFace
+   - **Step 3 (Adjust)**: Full-canvas joint adjustment with floating toolbar
+     - Draggable yellow joint circles to reposition skeleton
+     - Back button: Reverts project snapshot, returns to choose step (at any time before Finish)
+     - Finish button: Commits the rig and closes wizard
+
+ - **Heuristic Skeleton Estimation** (`src/io/armatureOrganizer.js`, new `estimateSkeletonFromBounds`):
+   - Maps layer bounding boxes to keypoints: head from `face`/`front hair` bounds, shoulders from `topwear`, arms/legs interpolated
+   - Falls back to sensible defaults if layers are missing
+   - Zero external dependencies; runs instantly on import
 
  - **DWPose ONNX Integration** (`src/io/armatureOrganizer.js`):
    - Load and cache DWPose session (dw-ll_ucoco_384.onnx) from HuggingFace CDN
    - 133-keypoint pose detection with SimCC output format
-  - Keypoint mapping to character skeleton: neck, waist, shoulder midpoint, and limb joints (elbows/knees).
+   - Keypoint mapping to character skeleton: neck, waist, shoulder midpoint, and limb joints (elbows/knees)
 
 - **Limb Bending & Vertex Skinning** (Added 2026-04-12):
   - **Axis-Aware Weighting**: Vertices in limb layers (arms/legs) are automatically assigned weights by projecting them onto the shoulder-elbow or hip-knee axis. 
@@ -194,13 +213,20 @@ Project
      - Dedicated 80x80px square trackpad for the `eyes` bone
      - Positioned -120px above the head to maintain clear view of expressions
  
- **Exit Criteria Met:** Import see-through PSD → click "Auto-Rig" → DWPose loads → bones appear on canvas → drag arcs in staging to pose → switch to animation mode → drag arcs + press K to keyframe → scrub timeline → character animates with bone rotations and smooth limb bending.
-
+ **Exit Criteria Met:** 
+ - Import see-through PSD → 3-step import wizard appears
+ - **Manual path**: Choose "Rig manually" → skeleton instantly estimated → adjust joints on canvas → Finish
+ - **DWPose path**: Choose "Rig with DWPose" → download/upload model → DWPose runs → adjust joints → Finish
+ - **Back anytime**: From adjust step, click Back → project reverts to pre-rig state, wizard reopens at choose step
+ - **Animation**: Switch to animation mode → drag arcs + press K to keyframe → scrub timeline → character animates with bone rotations and smooth limb bending
 
 **Key Design Decisions:**
 - Bones ARE group nodes (no new structure), pivots ARE joint positions (no extra fields)
+- Heuristic rigging requires no external dependencies; useful when network is unavailable
 - Single ONNX session cached module-level to avoid re-download
 - World matrices recomputed in SkeletonOverlay each frame to handle animation state correctly
+- Project snapshots enable Back functionality: snapshot saved before finalizePsdImport, restored on Back button
+- Floating toolbar (not modal) for adjust step keeps canvas live and interactive during joint fine-tuning
 
 ---
 
@@ -276,13 +302,13 @@ World matrices computed each frame from node tree + pose overrides. No caching i
 
 | Metric | Value |
 |--------|-------|
-| **Status** | M5 Armature Auto-Rig Complete; M6 Spritesheet Export in design phase |
-| **Files Modified/Created** | 20+ |
-| **Line Count** (core) | ~4200 (renderer + store + UI + animation + armature) |
+| **Status** | M5 Complete (Armature Auto-Rig + 3-Step Import Wizard); M6 Spritesheet Export in design phase |
+| **Files Modified/Created** | 23+ (latest: PsdImportWizard.jsx + armatureOrganizer.js + CanvasViewport.jsx) |
+| **Line Count** (core) | ~4600 (renderer + store + UI + animation + armature + wizard) |
 | **Bundle Size** | 1.08 MB minified, 327 KB gzipped (includes onnxruntime-web WASM) |
-| **Performance** | 60 fps with rigged character + animation timeline; DWPose inference ~200ms per import |
+| **Performance** | 60 fps with rigged character + animation timeline; DWPose inference ~200ms; manual rig instant |
 | **Main Dependencies** | ag-psd (~120 KB), onnxruntime-web (~25 MB WASM), WebGL2 |
-| **Import Speed** | ~2–3 sec with DWPose inference; mesh-less parts render immediately |
+| **Import Speed** | Manual rig: instant (~0ms); DWPose rig: ~2–3 sec with inference; mesh-less parts render immediately |
 
 ---
 
