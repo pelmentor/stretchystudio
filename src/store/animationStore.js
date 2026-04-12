@@ -18,6 +18,9 @@ export const useAnimationStore = create((set, get) => ({
   /** Loop playback between startFrame and endFrame */
   loop: true,
 
+  /** Loop keyframes: interpolate from last keyframe to first keyframe up to endFrame */
+  loopKeyframes: false,
+
   /** FPS for this clip (also stored on animation object, but mirrored here for transport controls) */
   fps: 24,
 
@@ -77,6 +80,7 @@ export const useAnimationStore = create((set, get) => ({
   setFps:        (fps)   => set({ fps: Math.max(1, Math.round(fps)) }),
   setSpeed:      (speed) => set({ speed: Math.max(0, Math.min(4, speed)) }),
   setLoop:       (loop)  => set({ loop }),
+  setLoopKeyframes: (loop) => set({ loopKeyframes: loop }),
 
   setStartFrame: (f) => set((s) => ({
     startFrame: Math.max(0, Math.round(f)),

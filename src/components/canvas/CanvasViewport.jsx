@@ -174,7 +174,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
         let poseOverrides = null;
         if (editorRef.current.editorMode === 'animation') {
           // Base: keyframe-interpolated values
-          poseOverrides = computePoseOverrides(activeAnim, anim.currentTime);
+          const endMs = (anim.endFrame / anim.fps) * 1000;
+          poseOverrides = computePoseOverrides(activeAnim, anim.currentTime, anim.loopKeyframes, endMs);
           // Overlay: draftPose (uncommitted drag) takes priority
           if (anim.draftPose.size > 0) {
             poseOverrides = new Map(poseOverrides);
@@ -298,7 +299,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       // Pre-compute effective values for each selected node:
       // draftPose (drag) > current keyframe > node.transform
       const activeAnimObj = proj.animations.find(a => a.id === animId) ?? null;
-      const keyframeOverrides = computePoseOverrides(activeAnimObj, currentTimeMs);
+      const endMs = (anim.endFrame / anim.fps) * 1000;
+      const keyframeOverrides = computePoseOverrides(activeAnimObj, currentTimeMs, anim.loopKeyframes, endMs);
 
       updateProject((p) => {
         const animation = p.animations.find(a => a.id === animId);

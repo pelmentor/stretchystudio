@@ -547,13 +547,24 @@ export function TimelinePanel() {
           )}
         </TransportBtn>
 
-        {/* Loop */}
-        <TransportBtn onClick={() => anim.setLoop(!anim.loop)} active={anim.loop} title="Loop">
+        {/* Repeat */}
+        <TransportBtn onClick={() => anim.setLoop(!anim.loop)} active={anim.loop} title="Repeat">
           <svg width="12" height="10" viewBox="0 0 12 10" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M1 3h8a2 2 0 0 1 0 4H3"/>
             <polyline points="1,1 1,3 3,3"/>
           </svg>
         </TransportBtn>
+
+        {/* Loop Keyframes */}
+        <label className="flex items-center gap-1 ml-1 cursor-pointer" title="Interpolate from last keyframe to first keyframe when looping">
+          <input
+            type="checkbox"
+            checked={anim.loopKeyframes || false}
+            onChange={(e) => anim.setLoopKeyframes && anim.setLoopKeyframes(e.target.checked)}
+            className="w-3 h-3 accent-primary"
+          />
+          <span className="text-[10px] text-muted-foreground whitespace-nowrap">Loop Keyframe</span>
+        </label>
 
         <div className="w-px h-4 bg-border mx-1" />
 

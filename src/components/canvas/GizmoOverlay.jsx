@@ -38,6 +38,9 @@ export function GizmoOverlay() {
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
+  const animLoopKeyframes     = useAnimationStore(s => s.loopKeyframes);
+  const animFps               = useAnimationStore(s => s.fps);
+  const animEndFrame          = useAnimationStore(s => s.endFrame);
   const setDraftPose          = useAnimationStore(s => s.setDraftPose);
 
   // Keep live refs so event handlers always have fresh values without stale closures
@@ -56,7 +59,8 @@ export function GizmoOverlay() {
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
     const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
-    const overrides  = computePoseOverrides(activeAnim, animCurrentTime);
+    const endMs = (animEndFrame / animFps) * 1000;
+    const overrides  = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;
     if (!overrides.size && !hasDraft) return nodes;
     return nodes.map(node => {
@@ -72,7 +76,7 @@ export function GizmoOverlay() {
         opacity: dr?.opacity ?? ov?.opacity ?? node.opacity,
       };
     });
-  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Only show in select mode with exactly one selection
   const selectedNode = (toolMode === 'select' && selection.length === 1)

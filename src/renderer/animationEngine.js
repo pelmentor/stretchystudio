@@ -22,12 +22,22 @@ function easeInOut(t) {
  * Interpolate a single track's keyframes at the given time (ms).
  * Returns undefined if no keyframes.
  */
-export function interpolateTrack(keyframes, timeMs) {
+export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
   if (!keyframes || keyframes.length === 0) return undefined;
 
   // Clamp to edge values
   if (timeMs <= keyframes[0].time) return keyframes[0].value;
-  if (timeMs >= keyframes[keyframes.length - 1].time) return keyframes[keyframes.length - 1].value;
+  
+  if (timeMs >= keyframes[keyframes.length - 1].time) {
+    if (loopKeyframes && timeMs < endMs && keyframes.length > 0) {
+      const kLast = keyframes[keyframes.length - 1];
+      const kFirst = keyframes[0];
+      const t = (timeMs - kLast.time) / (endMs - kLast.time);
+      const te = kLast.easing === 'ease' ? easeInOut(t) : t;
+      return lerp(kLast.value, kFirst.value, te);
+    }
+    return keyframes[keyframes.length - 1].value;
+  }
 
   // Binary search for the surrounding pair
   let lo = 0;
@@ -51,10 +61,25 @@ export function interpolateTrack(keyframes, timeMs) {
  * Interpolate an array of {x,y} vertex positions between two keyframes.
  * Both keyframe values must have the same vertex count.
  */
-function interpolateMeshVerts(keyframes, timeMs) {
+function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
   if (!keyframes || keyframes.length === 0) return undefined;
   if (timeMs <= keyframes[0].time) return keyframes[0].value;
-  if (timeMs >= keyframes[keyframes.length - 1].time) return keyframes[keyframes.length - 1].value;
+  
+  if (timeMs >= keyframes[keyframes.length - 1].time) {
+    if (loopKeyframes && timeMs < endMs && keyframes.length > 0) {
+      const kLast = keyframes[keyframes.length - 1];
+      const kFirst = keyframes[0];
+      const t = (timeMs - kLast.time) / (endMs - kLast.time);
+      const te = kLast.easing === 'ease' ? easeInOut(t) : t;
+
+      return kLast.value.map((vA, i) => {
+        const vB = kFirst.value[i];
+        if (!vB) return { x: vA.x, y: vA.y };
+        return { x: vA.x + (vB.x - vA.x) * te, y: vA.y + (vB.y - vA.y) * te };
+      });
+    }
+    return keyframes[keyframes.length - 1].value;
+  }
 
   let lo = 0;
   let hi = keyframes.length - 2;
@@ -86,16 +111,16 @@ function interpolateMeshVerts(keyframes, timeMs) {
  *   mesh_verts?: [{x,y},...]
  * }
  */
-export function computePoseOverrides(animation, timeMs) {
+export function computePoseOverrides(animation, timeMs, loopKeyframes = false, endMs = 0) {
   const overrides = new Map();
   if (!animation) return overrides;
 
   for (const track of animation.tracks) {
     let value;
     if (track.property === 'mesh_verts') {
-      value = interpolateMeshVerts(track.keyframes, timeMs);
+      value = interpolateMeshVerts(track.keyframes, timeMs, loopKeyframes, endMs);
     } else {
-      value = interpolateTrack(track.keyframes, timeMs);
+      value = interpolateTrack(track.keyframes, timeMs, loopKeyframes, endMs);
     }
     if (value === undefined) continue;
 

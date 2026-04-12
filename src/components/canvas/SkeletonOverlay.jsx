@@ -69,6 +69,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
+  const animLoopKeyframes     = useAnimationStore(s => s.loopKeyframes);
+  const animFps               = useAnimationStore(s => s.fps);
+  const animEndFrame          = useAnimationStore(s => s.endFrame);
   const setDraftPose          = useAnimationStore(s => s.setDraftPose);
   const clearDraftPoseForNode = useAnimationStore(s => s.clearDraftPoseForNode);
 
@@ -107,7 +110,8 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
     const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
-    const overrides  = computePoseOverrides(activeAnim, animCurrentTime);
+    const endMs = (animEndFrame / animFps) * 1000;
+    const overrides  = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;
     if (!overrides.size && !hasDraft) return nodes;
     return nodes.map(node => {
@@ -119,7 +123,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (dr) for (const k of ANIM_KEYS) { if (dr[k] !== undefined) tr[k] = dr[k]; }
       return { ...node, transform: tr, opacity: dr?.opacity ?? ov?.opacity ?? node.opacity };
     });
-  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose]);
+  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
   const boneNodes = React.useMemo(() => {
     const map = {};
@@ -227,7 +231,8 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       const dependentParts = [];
       if (JSKinningRoles.has(node.boneRole)) {
         const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
-        const overrides = computePoseOverrides(activeAnim, animCurrentTime);
+        const endMs = (animEndFrame / animFps) * 1000;
+        const overrides = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
         for (const pt of effectiveNodes) {
           if (pt.type === 'part' && pt.mesh?.jointBoneId === node.id) {
             let startVerts = pt.mesh.vertices;
