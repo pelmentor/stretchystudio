@@ -697,6 +697,26 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     setWizardStep('choose');
   }, []);
 
+  /* ── Wizard: split merged arms into handwear-l / handwear-r ────────────── */
+  const handleWizardSplitArms = useCallback((mergedIndex, rightLayer, leftLayer) => {
+    setWizardPsd(prev => {
+      if (!prev) return prev;
+      const newLayers  = [...prev.layers];
+      const newPartIds = [...prev.partIds];
+
+      // Build replacement entries (filter out nulls in case only one side was found)
+      const replacements = [];
+      if (rightLayer) replacements.push({ layer: rightLayer, partId: uid() });
+      if (leftLayer)  replacements.push({ layer: leftLayer,  partId: uid() });
+
+      // Replace the merged layer at mergedIndex with the split layers
+      newLayers.splice(mergedIndex, 1, ...replacements.map(r => r.layer));
+      newPartIds.splice(mergedIndex, 1, ...replacements.map(r => r.partId));
+
+      return { ...prev, layers: newLayers, partIds: newPartIds };
+    });
+  }, []);
+
   /* ── PSD import helper ───────────────────────────────────────────────── */
   const processPsdFile = useCallback((file) => {
     file.arrayBuffer().then((buffer) => {
@@ -1272,7 +1292,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
           onFinalize={handleWizardFinalize}
           onSkip={handleWizardSkip}
           onComplete={handleWizardComplete}
-           onBack={handleWizardBack}
+          onBack={handleWizardBack}
+          onSplitArms={handleWizardSplitArms}
         />
       )}
 

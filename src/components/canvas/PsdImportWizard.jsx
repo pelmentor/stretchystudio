@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Circle } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Circle, Scissors } from 'lucide-react';
 import {
   loadDWPoseSession, runDWPose, buildArmatureNodes, analyzeGroups,
   matchTag, estimateSkeletonFromBounds, DWPOSE_URL, clearDWPoseSession,
   KNOWN_TAGS,
 } from '../../io/armatureOrganizer';
+import { splitLayerLR } from '../../io/splitLR';
 
 export default function PsdImportWizard({
   step,
@@ -15,11 +16,13 @@ export default function PsdImportWizard({
   onSkip,
   onComplete,
   onBack,
+  onSplitArms,  // (rightLayer, leftLayer) → void  — replaces merged handwear with two layers
 }) {
   const [rigStatus, setRigStatus] = useState('');
   const [rigLoading, setRigLoading] = useState(false);
   const [tagOverrides, setTagOverrides] = useState({});
   const [mappingExpanded, setMappingExpanded] = useState(false);
+  const [splitError, setSplitError] = useState('');
 
   const { psdW, psdH, layers, partIds } = pendingPsd || {};
 
@@ -39,6 +42,12 @@ export default function PsdImportWizard({
       })
     : [];
   const tooFew = matchCount < 4;
+
+  /* ── Detect merged arms (handwear present but no handwear-l or handwear-r) ── */
+  const hasHandwear  = effectiveLayers.some(l => matchTag(l.name) === 'handwear');
+  const hasHandwearL = effectiveLayers.some(l => matchTag(l.name) === 'handwear-l');
+  const hasHandwearR = effectiveLayers.some(l => matchTag(l.name) === 'handwear-r');
+  const armsMerged   = hasHandwear && !hasHandwearL && !hasHandwearR;
 
   /* ── Handle tag override dropdown change ────────────────────────────────── */
   const handleTagChange = useCallback((layerName, value) => {
@@ -110,6 +119,53 @@ export default function PsdImportWizard({
     }
   }, [effectiveLayers, psdW, psdH, partIds, onFinalize, onnxSessionRef]);
 
+  /* ── Handle arm split confirmation ─────────────────────────────────────── */
+  const handleConfirmSplit = useCallback(() => {
+    setSplitError('');
+    // Find the merged handwear layer (using effectiveLayers so overrides are respected)
+    const mergedIdx = effectiveLayers.findIndex(l => matchTag(l.name) === 'handwear');
+    if (mergedIdx === -1) {
+      onSetStep('choose');
+      return;
+    }
+
+    const mergedLayer = effectiveLayers[mergedIdx];
+    const result = splitLayerLR(mergedLayer, psdW, psdH);
+
+    if (!result.right && !result.left) {
+      setSplitError(
+        `Could not find two separate components in the handwear layer ` +
+        `(found ${result.componentCount} component${result.componentCount !== 1 ? 's' : ''}). ` +
+        `The layer may be a single connected shape — continuing without split.`
+      );
+      return;
+    }
+
+    // Build replacement layers
+    const rightLayer = result.right ? {
+      ...mergedLayer,
+      name:      'handwear-r',
+      imageData: result.right.imageData,
+      x:         result.right.x,
+      y:         result.right.y,
+      width:     result.right.width,
+      height:    result.right.height,
+    } : null;
+
+    const leftLayer = result.left ? {
+      ...mergedLayer,
+      name:      'handwear-l',
+      imageData: result.left.imageData,
+      x:         result.left.x,
+      y:         result.left.y,
+      width:     result.left.width,
+      height:    result.left.height,
+    } : null;
+
+    onSplitArms(mergedIdx, rightLayer, leftLayer);
+    onSetStep('choose');
+  }, [effectiveLayers, psdW, psdH, onSplitArms, onSetStep]);
+
   /* ── Step: Review layer mapping ─────────────────────────────────────── */
   if (step === 'review') {
     const layerMappings = layers
@@ -122,6 +178,15 @@ export default function PsdImportWizard({
 
     const hasWarnings = unmatchedLayers.length > 0;
     const allMatched = unmatchedLayers.length === 0;
+
+    // When user clicks Continue, check if arms are merged — if so, route to splitArms
+    const handleContinue = () => {
+      if (armsMerged) {
+        onSetStep('splitArms');
+      } else {
+        onSetStep('choose');
+      }
+    };
 
     return (
       <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
@@ -221,12 +286,80 @@ export default function PsdImportWizard({
               Skip rigging
             </button>
             <button
-              onClick={() => onSetStep('choose')}
+              onClick={handleContinue}
               className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
             >
               Continue →
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Step: Split Left / Right Arms ──────────────────────────────────────── */
+  if (step === 'splitArms') {
+    return (
+      <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
+        <div className="bg-popover border border-border rounded-lg shadow-2xl p-6 max-w-sm w-full mx-4 flex flex-col gap-5">
+
+          {/* Icon + heading */}
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex items-center justify-center w-9 h-9 rounded-full bg-primary/15 shrink-0">
+              <Scissors size={18} className="text-primary" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground leading-snug">
+                Split left &amp; right arms?
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                Your <span className="text-foreground font-medium">handwear</span> layer
+                has both arms merged into one. Splitting them into{' '}
+                <span className="text-foreground font-medium">handwear-l</span> and{' '}
+                <span className="text-foreground font-medium">handwear-r</span> lets you
+                independently control depth, transform, and deformation for each arm.
+              </p>
+              <p className="mt-1.5 text-xs text-primary/80 font-medium">
+                Recommended — works best when both gloves are visually separate.
+              </p>
+            </div>
+          </div>
+
+          {/* Error if split failed */}
+          {splitError && (
+            <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle size={13} className="text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-amber-300 leading-relaxed">{splitError}</p>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={handleConfirmSplit}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
+            >
+              <Scissors size={14} />
+              Split arms (recommended)
+            </button>
+            <button
+              onClick={() => onSetStep('choose')}
+              className="w-full px-4 py-2 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              Keep merged — continue without splitting
+            </button>
+          </div>
+
+          {/* Back */}
+          <div className="flex justify-start border-t border-border pt-3">
+            <button
+              className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              onClick={() => onSetStep('review')}
+            >
+              ← Back
+            </button>
+          </div>
+
         </div>
       </div>
     );
@@ -274,12 +407,12 @@ export default function PsdImportWizard({
             </button>
           </div>
 
-          {/* Back to review */}
+          {/* Back to review (or splitArms if arms were merged) */}
           <div className="flex justify-start border-t border-border pt-3">
             <button
               disabled={rigLoading}
               className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
-              onClick={() => onSetStep('review')}
+              onClick={() => onSetStep(armsMerged ? 'splitArms' : 'review')}
             >
               ← Back
             </button>
