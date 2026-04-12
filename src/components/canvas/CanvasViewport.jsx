@@ -847,6 +847,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef, saveRef, load
 
     if (e.button !== 0) return;
 
+    const proj = projectRef.current;
+
     // When skeleton is visible, we disable standard layer selection/dragging
     // to focus exclusively on bone interactions.
     // BUGFIX: If showSkeleton is true but NO armature exists (e.g. at start or skip rigging),
@@ -855,7 +857,6 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef, saveRef, load
     if (editorRef.current.showSkeleton && hasArmature) return;
 
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
-    const proj = projectRef.current;
 
     // Build effective nodes: apply animation pose overrides so world matrices
     // and vertex positions match what is visually displayed on the canvas.
