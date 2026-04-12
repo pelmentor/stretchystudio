@@ -60,7 +60,7 @@ src/
 Project
 ├── nodes: [
 │   { id, type: 'part' | 'group', name, parent, visible, opacity },
-│   { transform: {x, y, rotation, hSkew, scaleX, scaleY, pivotX, pivotY} },
+│   { transform: {x, y, rotation, scaleX, scaleY, pivotX, pivotY} },
 │   { draw_order (parts only) },
 │   { mesh, meshOpts (parts only) }
 │ ]
@@ -103,7 +103,7 @@ Project
 - **Matrix Math Library** (`src/renderer/transforms.js`): 3×3 affine math, world matrix composition
 - **Scene Graph**: Group nodes with transform inheritance, `reparentNode` action
 - **Transform Gizmo** (`GizmoOverlay.jsx`): Drag move handle (translate) + rotation arc handle on canvas
-- **Transform Inspector**: Numeric inputs for X, Y, Rotation (°), Horizontal Skew (HSkew), Scale (%), Pivot
+- **Transform Inspector**: Numeric inputs for X, Y, Rotation (°), Scale (%), Pivot
 - **Layer Panel Tabs**:
   - **Depth Tab**: Flat draw_order list with group-name chips, drag-to-reorder (squeeze behavior), right-click context menu
   - **Groups Tab**: Tree view, drag-to-reparent, collapsible groups with auto-expand on selection
@@ -373,7 +373,6 @@ World matrices computed each frame from node tree + pose overrides. No caching i
 ✅ Add/remove vertex → requires mesh; correct world-space picking on transformed parts  
 ✅ Vertex drag → moves in local space while tracking world motion  
 ✅ Gizmo bounding box → matches opaque pixels for mesh-less parts, mesh vertices for meshed parts  
-+ ✅ Horizontal Skew (HSkew) → correct shearing direction, separate inspector row, stable pivot calibration
 
 ---
 

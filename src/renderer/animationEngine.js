@@ -6,7 +6,7 @@
  *     tracks: [{ nodeId, property, keyframes: [{ time (ms), value, easing }] }] }
  *
  * Supported properties:
- *   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'hSkew' | 'opacity'
+ *   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity'
  */
 
 function lerp(a, b, t) {
@@ -107,7 +107,7 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
  * @param {Object|null} animation  - single animation object (project.animations[i])
  * @param {number}      timeMs     - current playhead position in milliseconds
  * @returns {Map<string, Object>}  nodeId → {
- *   x?, y?, rotation?, scaleX?, scaleY?, hSkew?, opacity?,
+ *   x?, y?, rotation?, scaleX?, scaleY?, opacity?,
  *   mesh_verts?: [{x,y},...]
  * }
  */
@@ -147,7 +147,7 @@ export function upsertKeyframe(keyframes, timeMs, value, easing = 'linear') {
 }
 
 /** All keyframeable transform properties (in display order) */
-export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew', 'opacity'];
+export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'opacity'];
 
 /** Human-readable labels */
 export const PROP_LABELS = {
@@ -156,7 +156,6 @@ export const PROP_LABELS = {
   rotation: 'Rotation',
   scaleX:   'Scale X',
   scaleY:   'Scale Y',
-  hSkew:    'H Skew',
   opacity:  'Opacity',
 };
 

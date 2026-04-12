@@ -53,7 +53,7 @@ export function GizmoOverlay() {
   useEffect(() => { editorModeRef.current = editorMode; }, [editorMode]);
   useEffect(() => { setDraftPoseRef.current = setDraftPose; }, [setDraftPose]);
 
-  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew'];
+  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 
   // Build effective nodes: keyframe overrides first, then draftPose on top.
   const effectiveNodes = useMemo(() => {
@@ -232,16 +232,14 @@ export function GizmoOverlay() {
       const node = proj.nodes.find(n => n.id === selectedNode.id);
       if (!node?.transform) return;
       const t = node.transform;
-      const { rotation = 0, hSkew = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+      const { rotation = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
       const θ = rotation * (Math.PI / 180);
       const c = Math.cos(θ), s = Math.sin(θ);
-      const α = -hSkew * (Math.PI / 180);
-      const tanA = Math.tan(α);
 
       const m0 = sX * c;
       const m1 = sX * s;
-      const m3 = sY * (c * tanA - s);
-      const m4 = sY * (s * tanA + c);
+      const m3 = -sY * s;
+      const m4 = sY * c;
 
       // Adjust x,y to counter-act the pivot move
       t.x += dLx * (m0 - 1) + dLy * m3;
@@ -266,7 +264,7 @@ export function GizmoOverlay() {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
           node.transform.x = drag.startX + dx;
           node.transform.y = drag.startY + dy;
         });
@@ -290,7 +288,7 @@ export function GizmoOverlay() {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
           node.transform.rotation = drag.startRotation + delta;
         });
       }
@@ -311,16 +309,14 @@ export function GizmoOverlay() {
         const node = proj.nodes.find(n => n.id === drag.nodeId);
         if (!node?.transform) return;
         const t = node.transform;
-        const { rotation = 0, hSkew = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+        const { rotation = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
         const θ = rotation * (Math.PI / 180);
         const c = Math.cos(θ), s = Math.sin(θ);
-        const α = -hSkew * (Math.PI / 180);
-        const tanA = Math.tan(α);
 
         const m0 = sX * c;
         const m1 = sX * s;
-        const m3 = sY * (c * tanA - s);
-        const m4 = sY * (s * tanA + c);
+        const m3 = -sY * s;
+        const m4 = sY * c;
 
         t.pivotX = drag.startPivotX + dLx;
         t.pivotY = drag.startPivotY + dLy;

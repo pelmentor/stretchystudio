@@ -176,12 +176,12 @@ function TransformPanel({ node, allNodes }) {
     updateProject((proj) => {
       const n = proj.nodes.find(x => x.id === node.id);
       if (!n) return;
-      if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+      if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
       n.transform[field] = value;
     });
   }, [node.id, updateProject]);
 
-  const t = node.transform ?? { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+  const t = node.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
 
   return (
     <div className="space-y-1.5">
@@ -207,10 +207,6 @@ function TransformPanel({ node, allNodes }) {
         <NumericInput value={t.rotation ?? 0} onChange={v => setTransformField('rotation', v)} step={0.5} precision={1} />
       </Row>
 
-      {/* Skew */}
-      <Row label="Skew H °">
-        <NumericInput value={t.hSkew ?? 0} onChange={v => setTransformField('hSkew', v)} step={0.5} precision={1} />
-      </Row>
 
       {/* Scale */}
       <div className="flex items-center gap-1 py-0.5">
@@ -249,7 +245,7 @@ function TransformPanel({ node, allNodes }) {
         className="w-full h-6 text-[10px] mt-1"
         onClick={() => updateProject((proj) => {
           const n = proj.nodes.find(x => x.id === node.id);
-          if (n) n.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+          if (n) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
         })}
       >
         Reset Transform

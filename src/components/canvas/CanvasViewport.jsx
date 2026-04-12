@@ -861,7 +861,7 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
       ? (proj.animations.find(a => a.id === animNow.activeAnimationId) ?? null)
       : null;
     const kfOverrides = isAnimMode ? computePoseOverrides(activeAnim, animNow.currentTime) : null;
-    const ANIM_TRANSFORM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew'];
+    const ANIM_TRANSFORM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 
     const effectiveNodes = (isAnimMode && (kfOverrides?.size || animNow.draftPose.size))
       ? proj.nodes.map(node => {

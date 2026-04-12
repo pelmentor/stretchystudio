@@ -106,7 +106,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   }, [selection, nodes, toast]);
 
   // Compute effective nodes (animation overrides + draft pose)
-  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew'];
+  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
     const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
@@ -199,7 +199,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
          updateProject((proj) => {
            const pn = proj.nodes.find(n => n.id === nodeId);
            if (!pn) return;
-           if (!pn.transform) pn.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+           if (!pn.transform) pn.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
            pn.transform.x = newX;
            pn.transform.y = newY;
          });
@@ -312,7 +312,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
           node.transform.rotation = drag.startRotation + delta;
         });
       }
@@ -369,7 +369,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
          updateProject((proj) => {
            const pn = proj.nodes.find(n => n.id === drag.nodeId);
            if (!pn) return;
-           if (!pn.transform) pn.transform = { x: 0, y: 0, rotation: 0, hSkew: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+           if (!pn.transform) pn.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
            pn.transform.x = newX;
            pn.transform.y = newY;
          });

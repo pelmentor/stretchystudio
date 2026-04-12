@@ -40,7 +40,7 @@ export const useAnimationStore = create((set, get) => ({
    * startFrame when a node is first keyframed at a later time, so that
    * interpolation from frame 0 stays correct.
    *
-   * Map<nodeId, { x, y, rotation, scaleX, scaleY, hSkew, pivotX, pivotY, opacity }>
+   * Map<nodeId, { x, y, rotation, scaleX, scaleY, pivotX, pivotY, opacity }>
    */
   restPose: new Map(),
 
@@ -49,7 +49,7 @@ export const useAnimationStore = create((set, get) => ({
    * These sit on TOP of keyframe values so the user can freely stage a new
    * pose before pressing K to commit it.  Cleared when seeking or stopping.
    *
-   * Map<nodeId, { x?, y?, rotation?, scaleX?, scaleY?, hSkew?, opacity? }>
+   * Map<nodeId, { x?, y?, rotation?, scaleX?, scaleY?, opacity? }>
    */
   draftPose: new Map(),
 
@@ -71,7 +71,6 @@ export const useAnimationStore = create((set, get) => ({
         rotation: t.rotation ?? 0,
         scaleX:   t.scaleX   ?? 1,
         scaleY:   t.scaleY   ?? 1,
-        hSkew:    t.hSkew    ?? 0,
         opacity:  n.opacity  ?? 1,
       });
     }

@@ -33,7 +33,7 @@ Unlike traditional bone-based systems, Stretchy Studio focuses on a **timeline-f
 - **Alpha-Based Selection**: Pixel-perfect selection that works instantly on both textured quads and complex meshes.
 
 ### 🎬 Professional Timeline
-- **AE-Style Workflow**: Familiar keyframing system for transforms (X, Y, Rotation, Scale, Skew) and Mesh Vertices.
+- **AE-Style Workflow**: Familiar keyframing system for transforms (X, Y, Rotation, Scale) and Mesh Vertices.
 - **Multi-Clip Management**: Create multiple animation sequences (e.g., *Idle*, *Walk*, *Attack*) within a single project.
 - **Direct Vertex Keyframing**: "Warp" your illustrations by animating individual mesh vertices for organic motion.
 - **Smooth Interpolation**: High-performance rendering loop with real-time pose blending.

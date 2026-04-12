@@ -82,7 +82,7 @@ export class ScenePass {
    * @param {Object}  project       - projectStore.project
    * @param {Object}  editor        - editorStore state
    * @param {boolean} isDark        - whether current theme is dark
-   * @param {Map}     poseOverrides - optional Map<nodeId, {x?,y?,rotation?,scaleX?,scaleY?,hSkew?,opacity?}>
+   * @param {Map}     poseOverrides - optional Map<nodeId, {x?,y?,rotation?,scaleX?,scaleY?,opacity?}>
    *                                  from animationStore; applied on top of stored transforms
    */
   draw(project, editor, isDark = true, poseOverrides = null) {
@@ -121,7 +121,7 @@ export class ScenePass {
           const ov = poseOverrides.get(node.id);
           if (!ov) return node;
           const transformOv = { ...node.transform };
-          for (const k of ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'hSkew']) {
+          for (const k of ['x', 'y', 'rotation', 'scaleX', 'scaleY']) {
             if (ov[k] !== undefined) transformOv[k] = ov[k];
           }
           return {
