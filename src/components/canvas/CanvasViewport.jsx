@@ -11,7 +11,6 @@ import {
 } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import PsdImportWizard from '@/components/canvas/PsdImportWizard';
-import { HelpIcon } from '@/components/ui/help-icon';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,8 +25,6 @@ import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/tran
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
-import { Download, Upload } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Helpers
@@ -116,7 +113,7 @@ function basename(filename) {
    Component
 ────────────────────────────────────────────────────────────────────────── */
 
-export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
+export default function CanvasViewport({ remeshRef, deleteMeshRef, saveRef, loadRef }) {
   const canvasRef        = useRef(null);
   const sceneRef         = useRef(null);
   const rafRef           = useRef(null);
@@ -1215,6 +1212,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     }
   }, []);
 
+  useEffect(() => { if (saveRef) saveRef.current = handleSave; }, [saveRef, handleSave]);
+
   const handleLoad = useCallback(async () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -1272,6 +1271,8 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
     input.click();
   }, []);
 
+  useEffect(() => { if (loadRef) loadRef.current = handleLoad; }, [loadRef, handleLoad]);
+
   /* ── Cursor style ────────────────────────────────────────────────────── */
   const toolCursor = 'crosshair';
 
@@ -1319,59 +1320,6 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef }) {
         skeletonEditMode={editorState.skeletonEditMode}
       />
 
-      {/* Editor mode toggle — top-left */}
-      <div className="absolute top-2 left-2 z-10 flex rounded overflow-hidden border border-border shadow-sm text-[11px] font-medium">
-        <button
-          onClick={() => setEditorMode('staging')}
-          className={[
-            'px-2.5 py-1 transition-colors flex items-center gap-1.5',
-            editorState.editorMode !== 'animation'
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-card text-muted-foreground hover:text-foreground hover:bg-muted',
-          ].join(' ')}
-        >
-          <span>Staging</span>
-          <HelpIcon tip="In Staging mode, you set the base layout, mesh structure, and joint positions of your character." className={editorState.editorMode !== 'animation' ? 'text-primary-foreground/60 hover:text-primary-foreground/80' : ''} />
-        </button>
-        <button
-          onClick={() => {
-            setEditorMode('animation');
-            // Snapshot rest pose so auto-base keyframes work correctly
-            animRef.current.captureRestPose(projectRef.current.nodes);
-          }}
-          className={[
-            'px-2.5 py-1 transition-colors border-l border-border flex items-center gap-1.5',
-            editorState.editorMode === 'animation'
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-card text-muted-foreground hover:text-foreground hover:bg-muted',
-          ].join(' ')}
-        >
-          <span>Animation</span>
-          <HelpIcon tip="In Animation mode, you create keyframes on the timeline to bring your character to life." className={editorState.editorMode === 'animation' ? 'text-primary-foreground/60 hover:text-primary-foreground/80' : ''} />
-        </button>
-      </div>
-
-      {/* Save/Load buttons — top-left, next to mode toggle */}
-      <div className="absolute top-2 left-[165px] z-10 flex gap-1">
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-7 w-7 bg-card"
-          onClick={handleSave}
-          title="Save project (.stretch)"
-        >
-          <Download className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-7 w-7 bg-card"
-          onClick={handleLoad}
-          title="Load project (.stretch)"
-        >
-          <Upload className="h-3.5 w-3.5" />
-        </Button>
-      </div>
 
       {/* Drop hint overlay */}
       {project.nodes.length === 0 && (

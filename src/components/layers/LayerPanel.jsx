@@ -1,7 +1,7 @@
 /**
  * LayerPanel — left sidebar with two tabs:
  *
- * Depth tab (default):
+ * DRAW ORDER tab (default):
  *   Flat list of part nodes sorted by draw_order descending (same as before).
  *   Shows a group-name chip badge when a part is parented.
  *   Right-click context menu: "Move into group" / "Remove from group".
@@ -34,19 +34,6 @@ function GroupIcon() {
   );
 }
 
-function EyeIcon({ open }) {
-  return open ? (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M1 6c1.5-3 8.5-3 10 0-1.5 3-8.5 3-10 0z"/>
-      <circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/>
-    </svg>
-  ) : (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M1 6c1.5-3 8.5-3 10 0"/>
-      <line x1="2" y1="2" x2="10" y2="10"/>
-    </svg>
-  );
-}
 
 function ChevronIcon({ open }) {
   return (
@@ -57,7 +44,7 @@ function ChevronIcon({ open }) {
   );
 }
 
-/* ── Depth Tab ────────────────────────────────────────────────────────────── */
+/* ── DRAW ORDER Tab ──────────────────────────────────────────────────────── */
 
 function DepthTabRow({ node, parentGroup, isSelected, onSelect, onToggleVisible, onOpenCtxMenu, onDragStart, onDragOver, onDrop, isDragOver }) {
   return (
@@ -100,16 +87,6 @@ function DepthTabRow({ node, parentGroup, isSelected, onSelect, onToggleVisible,
         </button>
       )}
 
-      {/* Visibility toggle */}
-      <button
-        className={`shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-muted-foreground/20 transition-colors ${
-          node.visible === false ? 'text-muted-foreground/40' : 'text-muted-foreground'
-        }`}
-        onClick={(e) => { e.stopPropagation(); onToggleVisible(node.id); }}
-        title="Toggle visibility"
-      >
-        <EyeIcon open={node.visible !== false} />
-      </button>
     </div>
   );
 }
@@ -164,16 +141,6 @@ function GroupsTreeRow({
         {node.name || node.id}
       </span>
 
-      {/* Visibility */}
-      <button
-        className={`shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-muted-foreground/20 transition-colors ${
-          node.visible === false ? 'text-muted-foreground/40' : 'text-muted-foreground'
-        }`}
-        onClick={(e) => { e.stopPropagation(); onToggleVisible(node.id); }}
-        title="Toggle visibility"
-      >
-        <EyeIcon open={node.visible !== false} />
-      </button>
     </div>
   );
 }
@@ -344,19 +311,18 @@ export function LayerPanel() {
             }`}
             onClick={() => setActiveLayerTab(tab)}
           >
-            {tab === 'depth' ? 'Depth' : 'Groups'}
+            {tab === 'depth' ? 'DRAW ORDER' : 'Groups'}
           </button>
         ))}
       </div>
 
-      {/* ── DEPTH TAB ──────────────────────────────────────────────────── */}
+      {/* ── DRAW ORDER TAB ────────────────────────────────────────────────── */}
       {activeLayerTab === 'depth' && (
         <>
           {/* Column headers */}
           <div className="flex items-center px-2 py-1 border-b text-[10px] text-muted-foreground font-medium shrink-0">
             <span className="w-3 mr-1" />
             <span className="flex-1">Layer</span>
-            <span className="w-5 text-center">👁</span>
             <span className="text-[10px] text-muted-foreground/50 ml-auto">Drag to reorder</span>
           </div>
 

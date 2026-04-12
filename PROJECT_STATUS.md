@@ -44,7 +44,7 @@ src/
       CanvasViewport.jsx   # Viewport + drag-drop, PSD auto-org modal
       GizmoOverlay.jsx     # [M3] Transform gizmo (move + rotate handles)
     layers/
-      LayerPanel.jsx       # [M3] Depth & Groups tabs, drag-to-reparent
+      LayerPanel.jsx       # [M3] DRAW ORDER & Groups tabs, drag-to-reparent
     inspector/
       Inspector.jsx        # [M3] Transform panel + mesh settings
     timeline/              # [M4] TrackRows, Keyframes, Playhead
@@ -95,7 +95,7 @@ Project
 - **Per-Part Mesh Override**: Each layer can have custom mesh settings
 - **Viewport Navigation**: Zoom-toward-cursor, Alt+drag pan, smooth controls
 - **Manual Mesh Editing**: Add/remove vertex tools (no auto-retriangulation until remesh)
-- **Layer Panel v1**: Names, visibility toggle, draw-order reorder buttons
+- **Layer Panel v1**: Names, draw-order reorder buttons
 - **Visibility Overlays**: Global toggles for image, wireframe, vertices, edge outline
 - **Inspector Panel**: Overlay toggles, tool mode buttons, mesh settings, per-part opacity
 
@@ -105,7 +105,7 @@ Project
 - **Transform Gizmo** (`GizmoOverlay.jsx`): Drag move handle (translate) + rotation arc handle on canvas
 - **Transform Inspector**: Numeric inputs for X, Y, Rotation (°), Scale (%), Pivot
 - **Layer Panel Tabs**:
-  - **Depth Tab**: Flat draw_order list with group-name chips, drag-to-reorder (squeeze behavior), right-click context menu
+  - **DRAW ORDER Tab**: Flat draw_order list with group-name chips, drag-to-reorder (squeeze behavior), right-click context menu
   - **Groups Tab**: Tree view, drag-to-reparent, collapsible groups with auto-expand on selection
 - **PSD Auto-Organizer** (`psdOrganizer.js`):
   - **Character Format Detection**: Triggers if ≥4 layer names match a library of 23 recognized character tags (e.g., brow, iris, neckwear, topwear, footwear).
@@ -421,9 +421,9 @@ World matrices computed each frame from node tree + pose overrides. No caching i
 ✅ Group creation → new group node with default transform  
 ✅ Transform gizmo → drag move/rotate handles; bounding box crops to opaque pixels  
 ✅ Inspector numeric inputs → live canvas updates  
-✅ Depth tab drag → reorder by draw_order (squeeze behavior)  
+✅ DRAW ORDER tab drag → reorder by draw_order (squeeze behavior)  
 ✅ Groups tab drag → reparent (only mutates parent)  
-✅ Visibility toggle → per-node show/hide  
+✅ Visibility toggle → per-node show/hide (Inspector only)  
 ✅ Layer selection → alpha-based picking (works without mesh)  
 ✅ Generate Mesh button → creates mesh, button changes to "Remesh"  
 ✅ Delete Mesh button → removes mesh, reverts to quad fallback  

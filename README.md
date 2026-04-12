@@ -64,7 +64,7 @@ src/
 ├── app/layout/          # 4-zone UI layout (Canvas, Layers, Inspector, Timeline)
 ├── components/
 │   ├── canvas/          # WebGL Viewport, Gizmos, and Picking logic
-│   ├── layers/          # Hierarchical depth and grouping management
+│   ├── layers/          # Hierarchical draw order and grouping management
 │   ├── inspector/       # Node properties and mesh generation controls
 │   └── timeline/        # Playhead, Keyframe tracks, and Animation CRUD
 ├── renderer/
