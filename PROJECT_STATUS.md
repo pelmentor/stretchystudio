@@ -287,24 +287,9 @@ See `docs/save_load_implementation.md` for complete schema, error handling, and 
 
 ---
 
-### M7 — Physics
-
-**Goal:** Spring physics for secondary motion (hair, cloth).
-
-**What to build:**
-- **Physics Group**: Ordered chain of groups/parts with gravity, stiffness, damping, wind
-- **Verlet Integrator**: Runs on rAF alongside playback, applies offsets on top of animated pose
-- **Physics Inspector**: Add/remove chain nodes, tweak parameters
-- **Play Modes**:
-  - Preview (P key): animation + live physics
-  - Bake: writes physics results as keyframes (destructive, undoable)
-
-**Exit Criteria:** Attach physics to hair → Press Play → hair jiggles with gravity.
-
----
-
-### M8 — Spritesheet Export (Deferred Post-M7)
-- **GIF**: `gif.js` worker (MIT, popular)
+### M7 — Spritesheet Export
+- **GIF**: `gif.js` worker
+- Zipped transparent frames (PNG/WEBP)
 - **WebM**: MediaRecorder API on canvas stream
 - Builds on frame renderer from M6
 

@@ -10,6 +10,8 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { useEditorStore } from '@/store/editorStore';
 import { useProjectStore } from '@/store/projectStore';
+import { useAnimationStore } from '@/store/animationStore';
+import { computePoseOverrides } from '@/renderer/animationEngine';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
@@ -113,17 +115,25 @@ function NodeDetails({ node }) {
   const updateProject = useProjectStore(s => s.updateProject);
 
   const setOpacity = useCallback((v) => {
-    updateProject((proj) => {
-      const n = proj.nodes.find(x => x.id === node.id);
-      if (n) n.opacity = v;
-    });
+    if (useEditorStore.getState().editorMode === 'animation') {
+      useAnimationStore.getState().setDraftPose(node.id, { opacity: v });
+    } else {
+      updateProject((proj) => {
+        const n = proj.nodes.find(x => x.id === node.id);
+        if (n) n.opacity = v;
+      });
+    }
   }, [node.id, updateProject]);
 
   const setVisible = useCallback((checked) => {
-    updateProject((proj) => {
-      const n = proj.nodes.find(x => x.id === node.id);
-      if (n) n.visible = checked;
-    });
+    if (useEditorStore.getState().editorMode === 'animation') {
+      useAnimationStore.getState().setDraftPose(node.id, { visible: checked });
+    } else {
+      updateProject((proj) => {
+        const n = proj.nodes.find(x => x.id === node.id);
+        if (n) n.visible = checked;
+      });
+    }
   }, [node.id, updateProject]);
 
   return (
@@ -157,12 +167,16 @@ function TransformPanel({ node, allNodes }) {
   const updateProject = useProjectStore(s => s.updateProject);
 
   const setTransformField = useCallback((field, value) => {
-    updateProject((proj) => {
-      const n = proj.nodes.find(x => x.id === node.id);
-      if (!n) return;
-      if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-      n.transform[field] = value;
-    });
+    if (useEditorStore.getState().editorMode === 'animation') {
+      useAnimationStore.getState().setDraftPose(node.id, { [field]: value });
+    } else {
+      updateProject((proj) => {
+        const n = proj.nodes.find(x => x.id === node.id);
+        if (!n) return;
+        if (!n.transform) n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+        n.transform[field] = value;
+      });
+    }
   }, [node.id, updateProject]);
 
   const t = node.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
@@ -499,21 +513,54 @@ function MeshPanel({ node, onRemesh, onDeleteMesh }) {
 
 export function Inspector({ onRemesh, onDeleteMesh }) {
   const selection = useEditorStore(s => s.selection);
+  const editorMode = useEditorStore(s => s.editorMode);
   const nodes = useProjectStore(s => s.project.nodes);
+  const animations = useProjectStore(s => s.project.animations);
+  
+  const activeAnimationId = useAnimationStore(s => s.activeAnimationId);
+  const currentTime = useAnimationStore(s => s.currentTime);
+  const draftPose = useAnimationStore(s => s.draftPose);
+  const loopKeyframes = useAnimationStore(s => s.loopKeyframes);
+  const fps = useAnimationStore(s => s.fps);
+  const endFrame = useAnimationStore(s => s.endFrame);
 
-  const selectedNode = nodes.find(n => n.id === selection[0]) ?? null;
+  const effectiveNode = React.useMemo(() => {
+    const baseNode = nodes.find(n => n.id === selection[0]);
+    if (!baseNode) return null;
+    if (editorMode !== 'animation') return baseNode;
+
+    const activeAnim = animations.find(a => a.id === activeAnimationId) ?? null;
+    const endMs = (endFrame / fps) * 1000;
+    const overrides = computePoseOverrides(activeAnim, currentTime, loopKeyframes, endMs);
+    
+    const kfOv = overrides.get(baseNode.id);
+    const drOv = draftPose.get(baseNode.id);
+    if (!kfOv && !drOv) return baseNode;
+
+    const tr = { ...baseNode.transform };
+    const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+    if (kfOv) { for (const k of ANIM_KEYS) { if (kfOv[k] !== undefined) tr[k] = kfOv[k]; } }
+    if (drOv) { for (const k of ANIM_KEYS) { if (drOv[k] !== undefined) tr[k] = drOv[k]; } }
+
+    return {
+      ...baseNode,
+      transform: tr,
+      opacity: drOv?.opacity ?? kfOv?.opacity ?? baseNode.opacity,
+      visible: drOv?.visible ?? kfOv?.visible ?? baseNode.visible,
+    };
+  }, [selection, nodes, editorMode, animations, activeAnimationId, currentTime, draftPose, loopKeyframes, fps, endFrame]);
 
   return (
     <div className="flex flex-col gap-4 p-3 h-full overflow-y-auto">
-      {selectedNode ? (
+      {effectiveNode ? (
         <>
-          <NodeDetails node={selectedNode} />
+          <NodeDetails node={effectiveNode} />
           <Separator />
-          <TransformPanel node={selectedNode} allNodes={nodes} />
-          {selectedNode.type === 'part' && (
+          <TransformPanel node={effectiveNode} allNodes={nodes} />
+          {effectiveNode.type === 'part' && (
             <>
               <Separator />
-              <MeshPanel node={selectedNode} onRemesh={onRemesh} onDeleteMesh={onDeleteMesh} />
+              <MeshPanel node={effectiveNode} onRemesh={onRemesh} onDeleteMesh={onDeleteMesh} />
             </>
           )}
         </>

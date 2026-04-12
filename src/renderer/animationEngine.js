@@ -54,6 +54,11 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
   // easing is on the destination keyframe
   const te = kB.easing === 'ease' ? easeInOut(t) : t;
 
+  if (typeof kA.value === 'boolean') {
+    // Discrete step interpolation for boolean properties like 'visible'
+    return kA.value;
+  }
+
   return lerp(kA.value, kB.value, te);
 }
 
@@ -147,7 +152,7 @@ export function upsertKeyframe(keyframes, timeMs, value, easing = 'linear') {
 }
 
 /** All keyframeable transform properties (in display order) */
-export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'opacity'];
+export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'opacity', 'visible'];
 
 /** Human-readable labels */
 export const PROP_LABELS = {
@@ -157,6 +162,7 @@ export const PROP_LABELS = {
   scaleX:   'Scale X',
   scaleY:   'Scale Y',
   opacity:  'Opacity',
+  visible:  'Visible',
 };
 
 /**
@@ -165,5 +171,6 @@ export const PROP_LABELS = {
  */
 export function getNodePropertyValue(node, property) {
   if (property === 'opacity') return node.opacity ?? 1;
+  if (property === 'visible') return node.visible ?? true;
   return node.transform?.[property] ?? 0;
 }

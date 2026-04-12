@@ -103,7 +103,8 @@ export class ScenePass {
     gl.clear(gl.STENCIL_BUFFER_BIT);
     
     const { zoom, panX, panY } = editor.view;
-    this.bgRenderer.draw(zoom, panX, panY, canvas.width, canvas.height, isDark);
+    const canvasArea = project?.canvas ?? null;
+    this.bgRenderer.draw(zoom, panX, panY, canvas.width, canvas.height, isDark, canvasArea);
 
     if (!project || project.nodes.length === 0) return;
 
@@ -128,6 +129,7 @@ export class ScenePass {
             ...node,
             transform: transformOv,
             opacity: ov.opacity !== undefined ? ov.opacity : node.opacity,
+            visible: ov.visible !== undefined ? ov.visible : node.visible,
           };
         })
       : project.nodes;

@@ -872,7 +872,12 @@ export default function CanvasViewport({ remeshRef, deleteMeshRef, saveRef, load
           const tr = { ...node.transform };
           if (kfOv) { for (const k of ANIM_TRANSFORM_KEYS) { if (kfOv[k] !== undefined) tr[k] = kfOv[k]; } }
           if (drOv) { for (const k of ANIM_TRANSFORM_KEYS) { if (drOv[k] !== undefined) tr[k] = drOv[k]; } }
-          return { ...node, transform: tr, opacity: drOv?.opacity ?? kfOv?.opacity ?? node.opacity };
+          return {
+            ...node,
+            transform: tr,
+            opacity: drOv?.opacity ?? kfOv?.opacity ?? node.opacity,
+            visible: drOv?.visible ?? kfOv?.visible ?? node.visible,
+          };
         })
       : proj.nodes;
 

@@ -11,7 +11,7 @@ import { Inspector } from '@/components/inspector/Inspector';
 import { TimelinePanel } from '@/components/timeline/TimelinePanel';
 import { AnimationListPanel } from '@/components/animation/AnimationListPanel';
 import { ArmaturePanel } from '@/components/armature/ArmaturePanel';
-import { Download, Upload, Palette, Sun, Moon } from 'lucide-react';
+import { Download, Upload, Palette, Sun, Moon, FileCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HelpIcon } from '@/components/ui/help-icon';
 import { useProjectStore } from '@/store/projectStore';
@@ -23,6 +23,9 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { makeLocalMatrix } from '@/renderer/transforms';
 
 
 export default function EditorLayout() {
@@ -48,6 +51,12 @@ export default function EditorLayout() {
   const project = useProjectStore(s => s.project);
   const captureRestPose = useAnimationStore(s => s.captureRestPose);
 
+  // Canvas properties
+  const canvas = useProjectStore(s => s.project.canvas);
+  const updateCanvas = useProjectStore(s => s.updateCanvas);
+  const nodes = useProjectStore(s => s.project.nodes);
+  const animations = useProjectStore(s => s.project.animations);
+
   const saveRef = useRef(null);
   const loadRef = useRef(null);
 
@@ -71,6 +80,72 @@ export default function EditorLayout() {
     };
     openThemeModal(config);
   };
+
+  // Compute bounding box of all parts across all animation keyframes + rest pose
+  const computeFitBounds = useCallback(() => {
+    const partNodes = nodes.filter(n => n.type === 'part');
+    if (partNodes.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    for (const part of partNodes) {
+      const w = part.imageWidth ?? 0;
+      const h = part.imageHeight ?? 0;
+      if (!w || !h) continue;
+
+      const corners = [[0, 0], [w, 0], [w, h], [0, h]];
+      const transformsToEval = [{ ...part.transform }];
+
+      // Collect all keyframe snapshots across all clips for this part
+      for (const anim of animations) {
+        const tracksByProp = {};
+        for (const track of (anim.tracks ?? [])) {
+          if (track.nodeId !== part.id) continue;
+          if (['x', 'y', 'rotation', 'scaleX', 'scaleY'].includes(track.property)) {
+            tracksByProp[track.property] = track.keyframes;
+          }
+        }
+        if (Object.keys(tracksByProp).length === 0) continue;
+
+        const times = new Set();
+        for (const kfs of Object.values(tracksByProp)) {
+          for (const kf of kfs) times.add(kf.time);
+        }
+
+        for (const t of times) {
+          const snap = { ...part.transform };
+          for (const [prop, kfs] of Object.entries(tracksByProp)) {
+            const kf = kfs.find(k => k.time === t) ?? kfs[0];
+            if (kf) snap[prop] = kf.value;
+          }
+          transformsToEval.push(snap);
+        }
+      }
+
+      // Evaluate corners through each transform
+      for (const xf of transformsToEval) {
+        const m = makeLocalMatrix(xf);
+        for (const [lx, ly] of corners) {
+          const wx = m[0] * lx + m[3] * ly + m[6];
+          const wy = m[1] * lx + m[4] * ly + m[7];
+          if (wx < minX) minX = wx;
+          if (wy < minY) minY = wy;
+          if (wx > maxX) maxX = wx;
+          if (wy > maxY) maxY = wy;
+        }
+      }
+    }
+
+    if (!isFinite(minX)) return null;
+
+    const PAD = 20;
+    return {
+      x: Math.floor(minX - PAD),
+      y: Math.floor(minY - PAD),
+      width: Math.ceil(maxX - minX + PAD * 2),
+      height: Math.ceil(maxY - minY + PAD * 2),
+    };
+  }, [nodes, animations]);
 
   return (
     <div className="flex h-screen w-full flex-col bg-background text-foreground overflow-hidden">
@@ -99,6 +174,114 @@ export default function EditorLayout() {
             >
               <Upload className="h-4 w-4" />
             </Button>
+
+            {/* Canvas Properties Popover */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-full w-9 rounded-none border-l hover:bg-muted"
+                  title="Canvas Properties"
+                >
+                  <FileCog className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-4 space-y-3 shadow-2xl border-border/60">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Canvas Properties
+                </p>
+
+                {/* Width / Height row */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Width</Label>
+                    <Input
+                      type="number"
+                      className="h-7 text-xs"
+                      value={canvas.width}
+                      min={1}
+                      onChange={e => updateCanvas({ width: Math.max(1, Number(e.target.value)) })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Height</Label>
+                    <Input
+                      type="number"
+                      className="h-7 text-xs"
+                      value={canvas.height}
+                      min={1}
+                      onChange={e => updateCanvas({ height: Math.max(1, Number(e.target.value)) })}
+                    />
+                  </div>
+                </div>
+
+                {/* X / Y offset row */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">X Offset</Label>
+                    <Input
+                      type="number"
+                      className="h-7 text-xs"
+                      value={canvas.x ?? 0}
+                      onChange={e => updateCanvas({ x: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Y Offset</Label>
+                    <Input
+                      type="number"
+                      className="h-7 text-xs"
+                      value={canvas.y ?? 0}
+                      onChange={e => updateCanvas({ y: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+
+                {/* Background Color row */}
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="canvas-bg-enable"
+                    checked={canvas.bgEnabled ?? false}
+                    onCheckedChange={checked => updateCanvas({ bgEnabled: !!checked })}
+                  />
+                  <Label htmlFor="canvas-bg-enable" className="text-xs cursor-pointer">
+                    Background Color
+                  </Label>
+                </div>
+
+                {/* Color picker — only visible when bgEnabled */}
+                {canvas.bgEnabled && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={canvas.bgColor ?? '#ffffff'}
+                      className="h-7 w-8 rounded border border-input cursor-pointer p-0.5 bg-background"
+                      onChange={e => updateCanvas({ bgColor: e.target.value })}
+                    />
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {canvas.bgColor ?? '#ffffff'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Separator */}
+                <div className="border-t border-border/50" />
+
+                {/* Fit button */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs h-7"
+                  onClick={() => {
+                    const bounds = computeFitBounds();
+                    if (bounds) updateCanvas(bounds);
+                  }}
+                >
+                  Fit to minimum animation area
+                </Button>
+              </PopoverContent>
+            </Popover>
 
             <Popover>
               <PopoverTrigger asChild>
@@ -177,7 +360,7 @@ export default function EditorLayout() {
             className={[
               'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5',
               !isAnimationMode
-                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/10'
+                ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
                 : 'text-muted-foreground hover:text-foreground'
             ].join(' ')}
           >
@@ -192,7 +375,7 @@ export default function EditorLayout() {
             className={[
               'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5 ml-0.5',
               isAnimationMode
-                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/10'
+                ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
                 : 'text-muted-foreground hover:text-foreground'
             ].join(' ')}
           >

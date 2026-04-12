@@ -14,7 +14,7 @@ export const DEFAULT_TRANSFORM = () => ({
 export const useProjectStore = create((set) => ({
   project: {
     version: "0.1",
-    canvas: { width: 800, height: 600 },
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' },
     textures: [],     // { id, source (data URI or Blob URL) }
     nodes: [],        // flat array — see node schemas below
     /*
@@ -113,7 +113,7 @@ export const useProjectStore = create((set) => ({
 
   /** Reset project to empty state */
   resetProject: () => set(produce((state) => {
-    state.project.canvas   = { width: 800, height: 600 };
+    state.project.canvas   = { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' };
     state.project.textures = [];
     state.project.nodes    = [];
     state.project.parameters = [];
@@ -127,7 +127,10 @@ export const useProjectStore = create((set) => ({
   /** Load a deserialized project from file */
   loadProject: (projectData) => set(produce((state) => {
     state.project.version = projectData.version;
-    state.project.canvas = projectData.canvas;
+    state.project.canvas = {
+      width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
+      ...projectData.canvas,
+    };
     state.project.textures = projectData.textures;
     state.project.nodes = projectData.nodes;
     state.project.animations = projectData.animations ?? [];
@@ -136,5 +139,10 @@ export const useProjectStore = create((set) => ({
     state.versionControl.geometryVersion++;
     state.versionControl.transformVersion++;
     state.versionControl.textureVersion++;
+  })),
+
+  /** Update canvas properties */
+  updateCanvas: (partial) => set(produce((state) => {
+    Object.assign(state.project.canvas, partial);
   })),
 }));
