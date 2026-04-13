@@ -9,7 +9,26 @@
  *   4. Routing each semantic layer to its parent bone group
  */
 
-import * as ort from 'onnxruntime-web';
+
+// Lazy-loaded onnxruntime-web
+let _ortPromise = null;
+
+async function _ensureOrt() {
+  if (_ortPromise) return _ortPromise;
+  
+  _ortPromise = (async () => {
+    const module = await import('onnxruntime-web');
+    // Support both namespace and default export styles depending on bundler behavior
+    const instance = module.env ? module : (module.default || module);
+    
+    // Point wasm runtime at CDN to avoid bundling the large .wasm files
+    instance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
+    return instance;
+  })();
+  
+  return _ortPromise;
+}
+
 
 /* ─── Tag sets ──────────────────────────────────────────────────────────────── */
 
@@ -233,9 +252,8 @@ let _cachedSession = null;
  * Reuses the cached session if already loaded.
  */
 export async function loadDWPoseSession(payload) {
+  const ort = await _ensureOrt();
   if (_cachedSession) return _cachedSession;
-  // Point wasm runtime at CDN to avoid bundling the large .wasm files
-  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
   _cachedSession = await ort.InferenceSession.create(payload, {
     executionProviders: ['wasm'],
   });
@@ -256,6 +274,7 @@ export function clearDWPoseSession() { _cachedSession = null; }
  * @returns {Object} Named keypoints dict ({ nose, neck, lShoulder, … })
  */
 export async function runDWPose(layers, psdW, psdH, onnxSession, onStatus) {
+  const ort = await _ensureOrt();
   const TARGET_W = 288;
   const TARGET_H = 384;
 

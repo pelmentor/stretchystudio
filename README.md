@@ -96,3 +96,9 @@ Open `http://localhost:5173` to view the app locally.
 ## 💬 Community & Support
 
 Join our [Discord](https://discord.com/invite/zB6TrHTwAb) to share your animations, get help, or suggest new features!
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
