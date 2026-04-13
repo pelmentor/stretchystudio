@@ -83,6 +83,23 @@ export function ExportModal({ open, onClose, captureRef }) {
         animStore.activeAnimationId
       );
 
+      if (type === 'spine') {
+        const { exportToSpine } = await import('@/io/exportSpine');
+        const zipBlob = await exportToSpine({
+          project,
+          onProgress: label => setProgress(p => p ? { ...p, label } : { current: 1, total: 1, label })
+        });
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'spine_export.zip';
+        a.click();
+        URL.revokeObjectURL(url);
+        setProgress(null);
+        setIsExporting(false);
+        return;
+      }
+
       if (animsToExport.length === 0) {
         setProgress(null);
         setIsExporting(false);
@@ -192,6 +209,7 @@ export function ExportModal({ open, onClose, captureRef }) {
     onClose,
   ]);
 
+  const isSpine = type === 'spine';
   const showFpsInput = type === 'sequence';
   const showFrameInput = type === 'single_frame';
   const hasFolderSupport = 'showDirectoryPicker' in window;
@@ -244,22 +262,25 @@ export function ExportModal({ open, onClose, captureRef }) {
                 <SelectContent>
                   <SelectItem value="sequence">Sequence</SelectItem>
                   <SelectItem value="single_frame">Single Frame</SelectItem>
+                  <SelectItem value="spine">Spine (4.0+)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Format</Label>
-              <Select value={format} onValueChange={setFormat} disabled={isExporting}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="png">PNG</SelectItem>
-                  <SelectItem value="webp">WEBP</SelectItem>
-                  <SelectItem value="jpg">JPG</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {!isSpine && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Format</Label>
+                <Select value={format} onValueChange={setFormat} disabled={isExporting}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="png">PNG</SelectItem>
+                    <SelectItem value="webp">WEBP</SelectItem>
+                    <SelectItem value="jpg">JPG</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
           <Separator />
@@ -337,8 +358,20 @@ export function ExportModal({ open, onClose, captureRef }) {
 
           <Separator />
 
+          {isSpine && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground bg-accent/20 p-3 rounded-md border border-accent/20 space-y-1.5">
+              <p className="font-semibold text-foreground/90">How to import to Spine:</p>
+              <ol className="list-decimal list-inside space-y-1 ml-0.5">
+                <li>Unzip the exported <strong>.zip</strong> file</li>
+                <li>In Spine, go to <strong>Spine menu &gt; Import Data...</strong></li>
+                <li>Select the <strong>.json</strong> file from the unzipped folder</li>
+              </ol>
+            </div>
+          )}
+
           {/* Section 3: Image area, scale, BG */}
-          <div className="space-y-3">
+          {!isSpine && (
+            <div className="space-y-3">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">
                 Image Contains
@@ -412,11 +445,12 @@ export function ExportModal({ open, onClose, captureRef }) {
               </div>
             )}
           </div>
+        )}
 
-          <Separator />
+        <Separator />
 
           {/* Section 4: Export destination */}
-          {type !== 'single_frame' && (
+          {!isSpine && type !== 'single_frame' && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Export to</Label>
               <RadioGroup
