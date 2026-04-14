@@ -1,6 +1,8 @@
 # .moc3 Binary Format Documentation
 
-> **Status**: Validated — our JS moc3writer generates .moc3 files that pass `csmHasMocConsistency` and render correctly in Cubism Viewer 5.0 (confirmed 2026-04-14).
+> **Status**: Validated — JS moc3writer generates .moc3 files that pass `csmHasMocConsistency` and render in Cubism Viewer 5.0 + Ren'Py.
+>
+> See also: [ARCHITECTURE.md](ARCHITECTURE.md) (keyform bindings, data mapping, design decisions) | [README.md](README.md) (index)
 
 Each field includes a source tag:
 - `[ref]` — observed in Hiyori reference file

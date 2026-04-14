@@ -1,8 +1,8 @@
 # .cmo3 Format — Cubism Editor 5.0 Project File
 
-> **Goal**: Export .cmo3 files so users can continue editing in Cubism Editor 5.0.
-> **Status**: Format fully reverse-engineered from Hiyori reference. Writer not started.
-> **Target**: Cubism Editor 5.0 only (`C:\Program Files\Live2D Cubism 5.0\`).
+> **Status**: JS cmo3writer generates .cmo3 files that open in Cubism Editor 5.0 with textures, draw order, and part hierarchy.
+>
+> See also: [ARCHITECTURE.md](ARCHITECTURE.md) (texture pipeline, part hierarchy, design decisions) | [README.md](README.md) (index)
 
 ---
 

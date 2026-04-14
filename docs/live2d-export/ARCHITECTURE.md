@@ -1,0 +1,156 @@
+# Live2D Export — Architecture & Design
+
+Design decisions, data mapping, and keyform binding system.
+
+---
+
+## Architecture Decisions
+
+### ADR-001: Export module location
+All Live2D export code in `src/io/live2d/`. Follows existing `src/io/` convention.
+
+### ADR-002: JSON first, binary last
+JSON formats (.model3.json, .cdi3.json, .motion3.json) implemented before .moc3 binary. JSON is inspectable and validates data mapping before binary serialization.
+
+### ADR-003: Reference-driven development
+Every feature starts by RE'ing the Hiyori reference export, then replicating. Never invent from scratch. Reference: `reference/live2d-sample/Hiyori/`.
+
+### ADR-004: .moc3 version V4.00
+Generate V4.00 (version=3). Matches Hiyori reference, required for `quad_transforms` SOT[101]. Compatible with Cubism SDK 4.0+ (Ren'Py 8.5 ships SDK 5.x).
+
+### ADR-005: Vertex baking (no deformers)
+MVP exports rest-pose vertices only. Stretchy Studio's bone system doesn't map 1:1 to Live2D parameters+deformers. Users add deformers in Cubism Editor after importing .cmo3.
+
+### ADR-006: py-moc3 as format reference
+`Ludentes/py-moc3` is authoritative for .moc3 binary layout. Verified read+write implementation with correct section ordering.
+
+### ADR-007: Atlas packing — MaxRects BSSF + auto-upscale
+Crop parts to opaque bounds, binary-search for max uniform scale factor, pack with MaxRects Best Short Side Fit.
+
+### ADR-008: Single-PSD texture pattern (.cmo3)
+Session 4 discovery: Cubism Editor requires ONE CLayeredImage with N CLayers inside one CLayerGroup. N separate CLayeredImages = geometry visible but NO textures. See [CMO3_FORMAT.md](CMO3_FORMAT.md) for details.
+
+### ADR-009: Part hierarchy mapping (.cmo3)
+Session 5: Stretchy Studio groups map to CPartSource with nested parent-child relationships. Root Part → CPartGuid children (groups) → CDrawableGuid children (meshes). Meshes without a group go directly under Root Part.
+
+---
+
+## Data Mapping: Stretchy Studio to Live2D
+
+### Part (with mesh) to ArtMesh
+
+| Stretchy Studio | .moc3 field | Notes |
+|-----------------|-------------|-------|
+| `node.id` | `art_mesh.ids` | Generated as `ArtMesh0`, `ArtMesh1`, etc. |
+| `node.name` | `.cdi3.json` display name | Human-readable |
+| `mesh.vertices.length` | `art_mesh.position_index_counts` | Rendering vertex count (misleading name!) |
+| `mesh.triangles.length * 3` | `art_mesh.vertex_counts` | Flat index count (misleading name!) |
+| `mesh.vertices` | `keyform_position.xys` | Normalized: `(px - origin) / PPU` |
+| `mesh.uvs` | `uv.xys` | Remapped from PSD-space to atlas-space |
+| `mesh.triangles` (flat) | `position_index.indices` | Int16 triangle indices |
+| `node.opacity` | `art_mesh_keyform.opacities` | Float 0-1 |
+| `node.parent` | `art_mesh.parent_part_indices` | Index into parts array |
+| Texture atlas | `art_mesh.texture_indices` | Atlas sheet index |
+| — | `art_mesh.drawable_flags` | Always 4 (Hiyori pattern) |
+
+### Group to Part (visibility group)
+
+| Stretchy Studio | .moc3 / .cmo3 field | Notes |
+|-----------------|---------------------|-------|
+| `node.id` | Part ID | 64-byte string in .moc3, CPartId in .cmo3 |
+| `node.name` | `.cdi3.json` display name | |
+| `node.parent` | Parent part index / parentGuid | Nested hierarchy |
+
+### Animations to .motion3.json
+
+| Stretchy Studio | .motion3.json | Notes |
+|-----------------|---------------|-------|
+| `animation.duration` | `Meta.Duration` | Convert ms to seconds |
+| `animation.fps` | `Meta.Fps` | Direct |
+| Track keyframes | `Curves[].Segments` | Segment encoding: 0=linear, 1=bezier, 2=stepped |
+
+### Files per Runtime Export
+
+| File | Required | Content |
+|------|----------|---------|
+| `*.model3.json` | Yes | Manifest referencing all files |
+| `*.moc3` | Yes | Binary model data |
+| `*.png` (atlas) | Yes | Packed textures |
+| `*.cdi3.json` | Optional | Display info (names) |
+| `*.motion3.json` | Optional | Animations |
+
+---
+
+## Keyform Binding System
+
+Every visible ArtMesh MUST have a keyform binding (or a parent deformer that has one). Without bindings, Cubism SDK loads the model but does not apply vertex positions.
+
+### Binding Chain (.moc3)
+
+```
+ArtMesh[i]
+  → keyform_binding_band_indices[i] → band_idx
+    → band.begin_indices[band_idx] → bind_start
+    → band.counts[band_idx] → bind_count
+      → binding_index.indices[bind_start..+bind_count] → binding_idx
+        → binding.keys_begin[binding_idx] → key_start
+        → binding.keys_counts[binding_idx] → key_count
+          → keys.values[key_start..+key_count] → parameter values
+```
+
+### Critical Rules
+
+1. **keys_count == keyform_count**: For a mesh with N keyforms and a binding with K keys, K must equal N.
+
+2. **Parts use null bands (count=0)**: Parts never have direct parameter bindings. Sharing a non-null band between Part and ArtMesh crashes the SDK.
+
+3. **Band separation**: ArtMesh bands at indices 0..M-1, Part bands at M..M+P-1 (all count=0).
+
+4. **SDK validator quirk**: `begin < total` checked even when `count=0`. Null band begin must be `0` (not `N`). Mask begin must be `0` with `DRAWABLE_MASKS >= 1` (dummy entry).
+
+### Minimum Binding for Static Models
+
+Per ArtMesh: 1 band (count=1) → 1 binding_index → 1 binding (keys_count=1) → 1 key at parameter default value.
+
+### Coordinate System
+
+- `keyform_position.xys`: Normalized to PPU: `position = (pixel - origin) / ppu`
+- Ren'Py shader: `gl_Position = a_position.xy * u_live2d_ppu`
+
+---
+
+## .cmo3 Texture Pipeline
+
+```
+CLayeredImage (one "PSD")
+  └─ CLayerGroup (root)
+      └─ CLayer per mesh
+          └─ CImageResource (canvas-sized PNG)
+
+CTextureManager
+  └─ _rawImages: [LayeredImageWrapper → CLayeredImage]
+  └─ _modelImageGroups: [CModelImageGroup]
+      └─ _modelImages: [CModelImage per mesh]
+          └─ ModelImageFilterSet (CLayerSelector → CLayerFilter)
+              └─ CLayerSelectorMap → specific CLayer
+```
+
+Each CModelImage's filter env selects which CLayer to render via CLayerSelectorMap, keyed by the shared CLayeredImageGuid.
+
+---
+
+## .cmo3 Part Hierarchy
+
+Hiyori pattern (27 parts):
+
+```
+Root Part (__RootPart__)
+  └─ _childGuids: CPartGuid refs (child groups)
+      └─ Each child CPartSource:
+          ├─ parentGuid → parent's CPartGuid
+          └─ _childGuids: mix of CDeformerGuid + CDrawableGuid
+```
+
+`_childGuids` can contain: CPartGuid (sub-groups), CDeformerGuid (deformers), CDrawableGuid (meshes).
+
+Stretchy Studio mapping: group nodes → CPartSource. Ungrouped meshes → Root Part._childGuids directly.
