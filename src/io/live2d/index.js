@@ -16,4 +16,4 @@ export { generateCdi3Json } from './cdi3json.js';
 export { generateMotion3Json } from './motion3json.js';
 export { generateMoc3 } from './moc3writer.js';
 export { packTextureAtlas } from './textureAtlas.js';
-export { exportLive2D } from './exporter.js';
+export { exportLive2D, exportLive2DProject } from './exporter.js';

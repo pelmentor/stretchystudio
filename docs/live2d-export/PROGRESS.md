@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Phase 1 — Model LOADS AND RENDERS (Session 2 breakthrough)
+## Current Status: Phase 2 .cmo3 — Opens in Cubism Editor WITHOUT "recovered" (Session 3)
 
 ---
 
@@ -76,18 +76,73 @@ Other fixes applied:
 - [x] Also found last bug: SOT[101] must be non-zero for V3.03+ (quad_transforms entry)
 - Test harness: `docs/live2d-export/test_swapped.py`
 
-### Next steps for Session 3:
+### Session 3: .cmo3 Project Export — Opens Without "recovered" (2026-04-14)
+
+**Goal**: Generate .cmo3 that opens in Cubism Editor 5.0 without "recovered" status.
+
+**Approach**: Java decompile of `Live2D_Cubism.jar` + log analysis + reference-first.
+
+Full texture pipeline implemented:
+- [x] CLayeredImage → CLayerGroup → CLayer (fake PSD hierarchy)
+- [x] CModelImage with filter env (CLayerSelector → CLayerFilter graph)
+- [x] ModelImageFilterSet with well-known StaticFilterDefGuid UUIDs
+- [x] CModelImageGroup in CTextureManager._modelImageGroups
+- [x] isTextureInputModelImageMode=true, TextureState=MODEL_IMAGE
+- [x] CCachedImageManager with cached image data
+- [x] CMeshGeneratorExtension with MeshGenerateSetting
+
+Deserialization fixes (found via Java decompile + log):
+- [x] LayeredImageWrapper for _rawImages (ClassCastException)
+- [x] CPartSource as shared object with self-reference
+- [x] CDeformerGuid ROOT UUID: `71fae776-e218-4aee-873e-78e8ac0cb48a` (hardcoded constant)
+- [x] CPartSource._childGuids must include CDrawableGuid references
+- [x] CModelSource version 4 (avoids missing rootParameterGroup, modelOptions, gameMotionSet)
+- [x] CAffecterSourceSet required (checkNotNull in deserialize)
+- [x] CBlend_Normal must have ACBlend/displayName content
+
+**Result**: `test_pipeline.cmo3` opens in Cubism Editor 5.0.00 — clean log, no errors,
+mesh "ArtMesh0" shown without "(recovered)", canvas visible with white texture.
+
+### Session 4: Multi-Mesh + JS Port (2026-04-14)
+
+**Critical discovery**: Multi-mesh requires ONE CLayeredImage (PSD) with N CLayers,
+NOT N separate CLayeredImages. Reference confirmed: untitled_with_mesh has 1 CLayeredImage,
+1 CLayerGroup with 20 children CLayers.
+
+- [x] Multi-mesh Python prototype (3 colored meshes — red, green, blue)
+- [x] Single-PSD-with-N-layers pattern confirmed working in Cubism Editor 5.0
+- [x] CAFF packer ported to JavaScript (caffPacker.js)
+- [x] cmo3 generator ported to JavaScript (cmo3writer.js)
+- [x] Export UI: "Live2D Project" option in ExportModal.jsx
+- [x] exporter.js: exportLive2DProject() with canvas-sized textures
+- [x] JS cmo3writer uses single-PSD pattern (1 CLayeredImage, N CLayers)
+- [x] Draw order from project.draw_order property
+- [x] **Real Stretchy Studio project exports to .cmo3 and opens in Cubism Editor 5.0 with textures** ✓
 - [ ] Test in Ren'Py (D:/renpy-8.5.0-sdk/live2dtest/)
-- [ ] Test motion playback (Animation_1.motion3.json)
-- [ ] Test with multiple texture atlases
-- [ ] Begin Phase 2: multiple parameters, draw order, part hierarchy
+- [ ] Test motion playback
 
-## Phase 2: Full Static Export
+### Session 5: Part Hierarchy + Parameters (2026-04-14)
 
-- [ ] Multiple ArtMeshes with correct draw order
-- [ ] Part hierarchy (group → Part mapping)
-- [ ] Multiple texture atlases
-- [ ] All standard parameters
+Hiyori .cmo3 RE: Root Part → CPartGuid children (groups) → CDrawableGuid children (meshes).
+Each group has parentGuid → parent group. _childGuids can mix CPartGuid + CDrawableGuid.
+
+- [x] RE'd Hiyori part hierarchy: nested CPartSource with CPartGuid/CDrawableGuid children
+- [x] RE'd Hiyori parameters: 70 CParameterSource entries (ParamAngleX/Y/Z, etc.)
+- [x] RE'd Hiyori deformers: CWarpDeformerSource + CRotationDeformerSource (not implemented yet)
+- [x] Part hierarchy: Stretchy Studio groups → CPartSource with proper nesting
+- [x] makePartSource() helper with full boilerplate (KeyformGridSource, CPartForm, self-ref)
+- [x] Meshes assigned to parent group's _childGuids (or root if ungrouped)
+- [x] All project.parameters exported as CParameterSource (+ always ParamOpacity)
+- [x] **Confirmed working in Cubism Editor 5.0** — parts panel shows group hierarchy ✓
+
+## Phase 2: Full Static Export — COMPLETE (Session 5)
+
+- [x] .cmo3 project file opens in Cubism Editor 5.0
+- [x] Multiple ArtMeshes with correct draw order
+- [x] Real texture data from Stretchy Studio (canvas-sized PNGs, single-PSD pattern)
+- [x] JS pipeline: ExportModal → exportLive2DProject → generateCmo3 → packCaff → .cmo3
+- [x] Part hierarchy (group → CPartSource mapping)
+- [x] All project parameters exported
 - [ ] Full `.cdi3.json` with parameter groups
 
 ## Phase 3: Animation Export

@@ -28,7 +28,7 @@ import {
   computeAnalyticalBounds,
   resolveAnimations,
 } from '@/io/exportAnimation';
-import { exportLive2D } from '@/io/live2d';
+import { exportLive2D, exportLive2DProject } from '@/io/live2d';
 
 export function ExportModal({ open, onClose, captureRef }) {
   // Form state
@@ -48,6 +48,7 @@ export function ExportModal({ open, onClose, captureRef }) {
   // Progress state
   const [progress, setProgress] = useState(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   // Store access
   const project = useProjectStore(s => s.project);
@@ -65,6 +66,7 @@ export function ExportModal({ open, onClose, captureRef }) {
 
   const handleLive2DExport = useCallback(async () => {
     setIsExporting(true);
+    setExportError(null);
     setProgress({ current: 0, total: 1, label: 'Loading textures...' });
 
     try {
@@ -81,34 +83,52 @@ export function ExportModal({ open, onClose, captureRef }) {
       }
 
       const name = modelName.trim() || 'model';
-      const blob = await exportLive2D(project, images, {
-        modelName: name,
-        atlasSize,
-        exportMotions: true,
-        onProgress: (msg) =>
-          setProgress(p => (p ? { ...p, label: msg } : null)),
-      });
 
-      // Download the ZIP
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${name}_live2d.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (type === 'live2d_project') {
+        // .cmo3 project export (editable in Cubism Editor)
+        const blob = await exportLive2DProject(project, images, {
+          modelName: name,
+          onProgress: (msg) =>
+            setProgress(p => (p ? { ...p, label: msg } : null)),
+        });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${name}.cmo3`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        // .moc3 runtime export (ZIP with atlas)
+        const blob = await exportLive2D(project, images, {
+          modelName: name,
+          atlasSize,
+          exportMotions: true,
+          onProgress: (msg) =>
+            setProgress(p => (p ? { ...p, label: msg } : null)),
+        });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${name}_live2d.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
 
       setProgress(null);
       setIsExporting(false);
       onClose();
     } catch (err) {
       console.error('[Live2D Export] Failed:', err);
+      setExportError(err.message || 'Export failed');
       setProgress(null);
       setIsExporting(false);
     }
-  }, [project, modelName, atlasSize, onClose]);
+  }, [project, modelName, atlasSize, type, onClose]);
 
   const handleExport = useCallback(async () => {
-    if (type === 'live2d') {
+    if (type === 'live2d' || type === 'live2d_project') {
       return handleLive2DExport();
     }
 
@@ -218,6 +238,7 @@ export function ExportModal({ open, onClose, captureRef }) {
       onClose();
     } catch (err) {
       console.error('[Export] Failed:', err);
+      setExportError(err.message || 'Export failed');
       setProgress(null);
       setIsExporting(false);
     }
@@ -239,7 +260,7 @@ export function ExportModal({ open, onClose, captureRef }) {
     handleLive2DExport,
   ]);
 
-  const isLive2D = type === 'live2d';
+  const isLive2D = type === 'live2d' || type === 'live2d_project';
   const showFpsInput = type === 'sequence';
   const showFrameInput = type === 'single_frame';
   const hasFolderSupport = 'showDirectoryPicker' in window;
@@ -259,14 +280,15 @@ export function ExportModal({ open, onClose, captureRef }) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Type</Label>
-              <Select value={type} onValueChange={setType} disabled={isExporting}>
+              <Select value={type} onValueChange={v => { setType(v); setExportError(null); }} disabled={isExporting}>
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="sequence">Sequence</SelectItem>
                   <SelectItem value="single_frame">Single Frame</SelectItem>
-                  <SelectItem value="live2d">Live2D</SelectItem>
+                  <SelectItem value="live2d">Live2D Runtime</SelectItem>
+                  <SelectItem value="live2d_project">Live2D Project</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -302,6 +324,7 @@ export function ExportModal({ open, onClose, captureRef }) {
                     placeholder="model"
                   />
                 </div>
+                {type !== 'live2d_project' && (
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground">Atlas Size</Label>
                   <Select value={String(atlasSize)} onValueChange={v => setAtlasSize(Number(v))} disabled={isExporting}>
@@ -315,8 +338,13 @@ export function ExportModal({ open, onClose, captureRef }) {
                     </SelectContent>
                   </Select>
                 </div>
+                )}
                 <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
-                  <span className="font-medium">Live2D Cubism V4.00</span> — runtime format for Ren'Py, game engines, and apps using Cubism SDK 4.0+. Not editable in Cubism Editor.
+                  {type === 'live2d_project' ? (
+                    <><span className="font-medium">Live2D Cubism .cmo3</span> — project file editable in Cubism Editor 5.0. Each mesh gets its own texture.</>
+                  ) : (
+                    <><span className="font-medium">Live2D Cubism V4.00</span> — runtime format for Ren'Py, game engines, and apps using Cubism SDK 4.0+. Not editable in Cubism Editor.</>
+                  )}
                 </div>
               </div>
             </>
@@ -504,6 +532,13 @@ export function ExportModal({ open, onClose, captureRef }) {
             </RadioGroup>
           </div>
           </>)}
+
+          {/* Error display */}
+          {exportError && (
+            <div className="text-xs text-red-600 dark:text-red-400 px-2 py-1.5 rounded bg-red-50 dark:bg-red-900/20">
+              <span className="font-medium">Export failed:</span> {exportError}
+            </div>
+          )}
 
           {/* Progress bar */}
           {progress && (

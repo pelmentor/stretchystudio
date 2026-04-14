@@ -37,3 +37,9 @@ reference/
 
 # Claude Code local state
 .claude/
+
+# Project files (binary, large)
+*.psd
+*.stretch
+*.cmo3
+__pycache__/

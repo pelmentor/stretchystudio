@@ -13,6 +13,7 @@ import { generateCdi3Json } from './cdi3json.js';
 import { generateMotion3Json } from './motion3json.js';
 import { generateMoc3 } from './moc3writer.js';
 import { packTextureAtlas } from './textureAtlas.js';
+import { generateCmo3 } from './cmo3writer.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -116,6 +117,170 @@ export async function exportLive2D(project, images, opts = {}) {
   // --- Step 6: Package ZIP ---
   onProgress('Creating ZIP...');
   return zip.generateAsync({ type: 'blob' });
+}
+
+/**
+ * Export a Stretchy Studio project as a .cmo3 (Cubism Editor project file).
+ *
+ * Unlike the runtime export (.moc3 + atlas), the project export gives each
+ * mesh its own texture PNG inside a CAFF archive, so the model can be further
+ * edited in Cubism Editor 5.0.
+ *
+ * @param {object} project - projectStore.project snapshot
+ * @param {Map<string, HTMLImageElement>} images - Loaded texture images
+ * @param {object} opts
+ * @param {string} [opts.modelName='model']
+ * @param {function} [opts.onProgress]
+ * @returns {Promise<Blob>} .cmo3 blob ready for download
+ */
+export async function exportLive2DProject(project, images, opts = {}) {
+  const {
+    modelName = 'model',
+    onProgress = () => {},
+  } = opts;
+
+  const canvasW = project.canvas?.width ?? 800;
+  const canvasH = project.canvas?.height ?? 600;
+
+  // Collect visible parts with meshes
+  const meshParts = project.nodes.filter(n =>
+    n.type === 'part' && n.mesh && n.visible !== false
+  );
+
+  onProgress(`Preparing ${meshParts.length} meshes...`);
+
+  // Collect groups (for part hierarchy in .cmo3)
+  const groups = project.nodes.filter(n => n.type === 'group');
+
+  const meshes = [];
+  for (let i = 0; i < meshParts.length; i++) {
+    const part = meshParts[i];
+    const mesh = part.mesh;
+    const meshName = part.name || `ArtMesh${i}`;
+
+    // Find image for this part
+    const texId = part.textureId ?? part.id;
+    const img = images.get(texId) ?? images.get(part.id);
+    if (!img) continue;
+
+    const fullW = img.naturalWidth || img.width;
+    const fullH = img.naturalHeight || img.height;
+    if (fullW === 0 || fullH === 0) continue;
+
+    onProgress(`Encoding texture ${i + 1}/${meshParts.length}...`);
+
+    // For .cmo3: render full canvas-sized PNG (CLayeredImage covers entire canvas)
+    const pngData = await renderPartToCanvasPng(img, fullW, fullH, canvasW, canvasH);
+
+    // Flatten vertices: Array<{x,y}> → [x0,y0, x1,y1, ...]
+    const vertices = [];
+    for (const v of mesh.vertices) {
+      vertices.push(v.x, v.y);
+    }
+
+    // Flatten triangles: Array<[i,j,k]> → [i0,j0,k0, ...]
+    const triangles = [];
+    for (const tri of mesh.triangles) {
+      triangles.push(tri[0], tri[1], tri[2]);
+    }
+
+    // UVs — vertex positions normalized to canvas dimensions
+    const uvs = [];
+    for (const v of mesh.vertices) {
+      let u = Math.max(0, Math.min(1, v.x / canvasW));
+      let vv = Math.max(0, Math.min(1, v.y / canvasH));
+      uvs.push(u, vv);
+    }
+
+    meshes.push({
+      name: meshName,
+      partId: part.id,
+      parentGroupId: part.parent ?? null,
+      drawOrder: part.draw_order ?? i,
+      vertices,
+      triangles,
+      uvs,
+      pngData,
+      texWidth: canvasW,
+      texHeight: canvasH,
+    });
+  }
+
+  if (meshes.length === 0) {
+    throw new Error('No visible parts with meshes found for export');
+  }
+
+  onProgress(`Generating .cmo3 (${meshes.length} meshes)...`);
+
+  const cmo3Data = await generateCmo3({
+    canvasW,
+    canvasH,
+    meshes,
+    groups,
+    parameters: project.parameters ?? [],
+    modelName,
+  });
+
+  return new Blob([cmo3Data], { type: 'application/octet-stream' });
+}
+
+/**
+ * Render a part's full texture onto a canvas-sized PNG.
+ * For .cmo3, each layer covers the full canvas (like a PSD layer).
+ */
+async function renderPartToCanvasPng(img, srcW, srcH, canvasW, canvasH) {
+  const canvas = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(canvasW, canvasH)
+    : document.createElement('canvas');
+  if (!(canvas instanceof OffscreenCanvas)) {
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+  }
+  const ctx = canvas.getContext('2d');
+  // Draw the source image at its natural size (top-left aligned)
+  ctx.drawImage(img, 0, 0, srcW, srcH);
+
+  let blob;
+  if (canvas instanceof OffscreenCanvas) {
+    blob = await canvas.convertToBlob({ type: 'image/png' });
+  } else {
+    blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  }
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+/**
+ * Render a part's texture to PNG bytes (cropped to imageBounds).
+ */
+async function renderPartToPng(img, part, fullW, fullH) {
+  const bounds = part.imageBounds;
+  let cropX, cropY, cropW, cropH;
+  if (bounds && bounds.maxX > bounds.minX && bounds.maxY > bounds.minY) {
+    cropX = Math.max(0, Math.floor(bounds.minX) - 1);
+    cropY = Math.max(0, Math.floor(bounds.minY) - 1);
+    cropW = Math.min(fullW - cropX, Math.ceil(bounds.maxX - bounds.minX) + 2);
+    cropH = Math.min(fullH - cropY, Math.ceil(bounds.maxY - bounds.minY) + 2);
+  } else {
+    cropX = 0; cropY = 0; cropW = fullW; cropH = fullH;
+  }
+
+  const canvas = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(cropW, cropH)
+    : document.createElement('canvas');
+  if (!(canvas instanceof OffscreenCanvas)) {
+    canvas.width = cropW;
+    canvas.height = cropH;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  let blob;
+  if (canvas instanceof OffscreenCanvas) {
+    blob = await canvas.convertToBlob({ type: 'image/png' });
+  } else {
+    blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  }
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /**
