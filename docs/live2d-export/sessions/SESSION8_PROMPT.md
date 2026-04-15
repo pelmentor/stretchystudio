@@ -49,11 +49,14 @@
 
 ## Текущее состояние экспорта
 
-Экспорт сейчас — **статический манекен со скелетом**:
+Экспорт сейчас — **posable puppet** (не статический манекен):
 - ✅ Мешы, текстуры, hierarchy, draw order
 - ✅ Rotation deformers на каждую группу, auto-parented
+- ✅ Деформеры **уже controllable** — можно кликать на контроллеры и вращать в Editor
 - ✅ Параметры проекта экспортированы
-- ❌ Деформеры НЕ привязаны к параметрам (нет KeyformBindingSource)
+- ❌ Деформеры НЕ привязаны к параметрам (нет parameter slider → deformer binding)
+  - Прямое вращение через контроллеры работает
+  - Но для анимации в Editor нужны parameter bindings (keyframe на timeline = parameter value)
 - ❌ Анимации НЕ экспортированы в .cmo3
 - ❌ Нет warp deformers
 - ❌ Нет physics/pose/expressions
