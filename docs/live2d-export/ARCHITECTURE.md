@@ -223,3 +223,80 @@ const localY = canvasY - dfWorldOrigin.y;
 - Live2D parent-child docs: https://docs.live2d.com/en/cubism-editor-manual/system-of-parent-child-relation/
 - Hiyori reference: `reference/live2d-sample/Hiyori/cmo3_extracted/main.xml`
 - SS transforms: `src/renderer/transforms.js` (makeLocalMatrix, computeWorldMatrices)
+
+---
+
+## Warp Deformers (Session 9 Findings)
+
+### Hiyori Warp Deformer Pattern
+
+All 50 warp deformers in Hiyori use 5×5 grids (36 control points × 2 = 72 floats). Key observations:
+
+- **Coordinate space depends on parent**: under a warp deformer → 0-1 normalized; under a rotation deformer → pixel offsets from parent origin
+- **CWarpDeformerBezierExtension**: 2 per deformer (editLevel 2 and 3), can skip for MVP
+- **Same KeyformBindingSource pattern** as rotation deformers (circular ref with KeyformGridSource)
+
+### SS → Warp Deformer Mapping
+
+For meshes with `mesh_verts` animation tracks (vertex deformation keyframes):
+
+1. Create CWarpDeformerSource (3×3 grid = 16 control points) parented under mesh's rotation deformer
+2. Re-parent mesh to warp deformer (warp sits between rotation deformer and mesh)
+3. Grid positions computed via IDW (inverse distance weighting) from vertex deltas
+4. Parameter `ParamDeform_MeshName` with range [0, N-1] drives keyform selection
+5. motion3.json maps time → keyframe index via linear curve
+
+**Note**: This feature is dormant — SS vertex deformation keyframes require specific workflow (animation mode + mesh edit + deform sub-mode + brush drag). Normal limb animations use group rotation tracks.
+
+---
+
+## .can3 Animation Format (Session 9 RE)
+
+### Container
+Same CAFF archive as .cmo3 — single `main.xml`, XOR obfuscated, ZIP compressed. Existing `caffPacker.js` works.
+
+### XML Structure
+```
+root
+  shared/
+    CSceneSource (one per animation clip)
+    CMvTrack_Group_Source (root track per scene)
+    CMvTrack_Live2DModel_Source (model track per scene)
+    CMvAttrF (parameter animation attributes — Bezier keyframes)
+    CMvAttrPt (xy position attribute)
+    CMvEffect_Live2DParameter (contains all param attributes)
+    CMvEffect_Live2DPartsVisible (part visibility)
+    CMvEffect_VisualDefault (track-level transforms: xy, scale, rotate, opacity)
+    CResourceManager → CResource_Linked_Model (links to .cmo3 file)
+    CAnimation (root animation container)
+  main/
+    CAnimation xs.ref="..." (reference to shared CAnimation)
+```
+
+### Keyframe Format (CBezierPt)
+```xml
+<CBezierPt>
+  <CSeqPt xs.n="anchor">
+    <i xs.n="pos">6</i>          <!-- frame number -->
+    <d xs.n="doubleValue">-8.0</d> <!-- parameter value -->
+  </CSeqPt>
+  <CBezierCtrlPt xs.n="next">     <!-- right bezier handle -->
+    <f xs.n="posF">8.333</f>      <!-- frame (float) -->
+    <d xs.n="doubleValue">-8.0</d>
+  </CBezierCtrlPt>
+  <CBezierCtrlPt xs.n="prev">     <!-- left bezier handle -->
+    <f xs.n="posF">4.0</f>
+    <d xs.n="doubleValue">-8.0</d>
+  </CBezierCtrlPt>
+</CBezierPt>
+```
+
+### Critical Discoveries
+1. **CFixedSequence ≠ ACValueSequence**: CFixedSequence only has `<d xs.n="value">`, NOT curMin/keyPts2/etc.
+2. **CAnimation must be shared**: main section just references it via xs.ref
+3. **CMvEffect_VisualDefault requires attributes**: empty attrList causes NPE — needs xy, scalex, scaley, rotate, opacity
+4. **Parameter IDs prefixed**: `live2dParam_ParamRotation_*` in can3, not bare `ParamRotation_*`
+5. **Frame-based positions**: keyframes use integer frame numbers, not milliseconds
+
+### Blocking Issues
+The Java/Kotlin deserializer in Cubism Editor 5.0 has custom `deserialize()` methods that expect specific field patterns beyond what the XML schema suggests. The VisualDefault and parameter attribute initialization cascade failures need deeper RE — likely need to decompile `CMvEffect_VisualDefault.class` to understand what `deserialize()` expects.

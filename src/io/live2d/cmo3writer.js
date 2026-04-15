@@ -23,6 +23,7 @@
 
 import { packCaff, COMPRESS_RAW, COMPRESS_FAST } from './caffPacker.js';
 import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
+import { XmlBuilder, uuid } from './xmlbuilder.js';
 
 // ---------- Processing instructions ----------
 
@@ -49,6 +50,8 @@ const IMPORT_PIS = [
   'com.live2d.cubism.doc.model.deformer.CDeformerSourceSet',
   'com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerForm',
   'com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerSource',
+  'com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerForm',
+  'com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerSource',
   'com.live2d.cubism.doc.model.drawable.ACDrawableForm',
   'com.live2d.cubism.doc.model.drawable.ACDrawableSource',
   'com.live2d.cubism.doc.model.drawable.CDrawableSourceSet',
@@ -160,98 +163,7 @@ const FILTER_DEF_LAYER_FILTER = '4083cd1f-40ba-4eda-8400-379019d55ed8';
 // CDeformerGuid.ROOT — hardcoded in Editor, compared by UUID equality
 const DEFORMER_ROOT_UUID = '71fae776-e218-4aee-873e-78e8ac0cb48a';
 
-// ---------- XML builder helpers ----------
-
-function uuid() {
-  return crypto.randomUUID();
-}
-
-class XmlBuilder {
-  constructor() {
-    this._shared = [];
-    this._nextId = 0;
-  }
-
-  /** Create an element (not shared). */
-  el(tag, attrs = {}) {
-    return { tag, attrs: { ...attrs }, children: [] };
-  }
-
-  /** Allocate a shared object — gets xs.id and xs.idx. */
-  shared(tag, attrs = {}) {
-    const xid = `#${this._nextId++}`;
-    const node = {
-      tag,
-      attrs: { ...attrs, 'xs.id': xid, 'xs.idx': String(this._shared.length) },
-      children: [],
-    };
-    this._shared.push(node);
-    return [node, xid];
-  }
-
-  /** Reference to a shared object. */
-  ref(tag, xid, attrs = {}) {
-    return { tag, attrs: { ...attrs, 'xs.ref': xid }, children: [] };
-  }
-
-  /** Append child element to parent; return child. */
-  sub(parent, tag, attrs = {}) {
-    const child = this.el(tag, attrs);
-    parent.children.push(child);
-    return child;
-  }
-
-  /** Append a reference as child. */
-  subRef(parent, tag, xid, attrs = {}) {
-    const child = this.ref(tag, xid, attrs);
-    parent.children.push(child);
-    return child;
-  }
-
-  /** Serialize to XML string. */
-  serialize(root) {
-    const lines = [];
-    lines.push('<?xml version="1.0" encoding="UTF-8"?>');
-    for (const [name, ver] of VERSION_PIS) {
-      lines.push(`<?version ${name}:${ver}?>`);
-    }
-    for (const imp of IMPORT_PIS) {
-      lines.push(`<?import ${imp}?>`);
-    }
-    lines.push(this._nodeToXml(root));
-    return lines.join('\n');
-  }
-
-  _nodeToXml(node) {
-    const parts = [`<${node.tag}`];
-    for (const [k, v] of Object.entries(node.attrs)) {
-      parts.push(` ${this._escAttrName(k)}="${this._escXml(String(v))}"`);
-    }
-    if (node.children.length === 0 && node.text == null) {
-      parts.push('/>');
-      return parts.join('');
-    }
-    parts.push('>');
-    if (node.text != null) {
-      parts.push(this._escXml(String(node.text)));
-    }
-    for (const child of node.children) {
-      parts.push(this._nodeToXml(child));
-    }
-    parts.push(`</${node.tag}>`);
-    return parts.join('');
-  }
-
-  _escAttrName(name) {
-    // xs.n, xs.id etc — dots are valid in XML attribute names
-    return name;
-  }
-
-  _escXml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-  }
-}
+// XmlBuilder + uuid imported from ./xmlbuilder.js
 
 // ---------- Texture PNG helpers ----------
 
@@ -470,6 +382,7 @@ export async function generateCmo3(input) {
   const {
     canvasW, canvasH, meshes,
     groups = [], parameters = [],
+    animations = [],
     modelName = 'StretchyStudio Export',
   } = input;
   const x = new XmlBuilder();
@@ -1056,7 +969,7 @@ export async function generateCmo3(input) {
   }
 
   const groupDeformerGuids = new Map(); // groupId → pidDeformerGuid
-  const allDeformerSources = []; // pidDeformerSource for CDeformerSourceSet
+  const allDeformerSources = []; // {pid, tag} for CDeformerSourceSet
   // Exported: groupId → parameter ID string (for animation export)
   const deformerParamMap = new Map(); // groupId → { paramId, min, max }
 
@@ -1156,7 +1069,7 @@ export async function generateCmo3(input) {
 
     // CRotationDeformerSource
     const [rotDf, pidRotDf] = x.shared('CRotationDeformerSource');
-    allDeformerSources.push(pidRotDf);
+    allDeformerSources.push({ pid: pidRotDf, tag: 'CRotationDeformerSource' });
 
     const acdfs = x.sub(rotDf, 'ACDeformerSource', { 'xs.n': 'super' });
     const acpcs = x.sub(acdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
@@ -1239,6 +1152,249 @@ export async function generateCmo3(input) {
     const partSource = groupParts.has(g.id) ? groupParts.get(g.id) : rootPart;
     partSource.childGuidsNode.children.push(x.ref('CDeformerGuid', dfGuid));
     partSource.childGuidsNode.attrs.count = String(partSource.childGuidsNode.children.length);
+  }
+
+  // ==================================================================
+  // 3b. CWarpDeformerSource (per mesh with mesh_verts animation)
+  // ==================================================================
+
+  // Extract mesh_verts tracks: partId → keyframes[{time, value:[{x,y},...]}]
+  const meshVertsMap = new Map();
+  for (const anim of animations) {
+    for (const track of (anim.tracks ?? [])) {
+      if (track.property === 'mesh_verts' && track.keyframes?.length >= 2) {
+        // Use first animation that has mesh_verts for this part
+        if (!meshVertsMap.has(track.nodeId)) {
+          meshVertsMap.set(track.nodeId, track.keyframes);
+        }
+      }
+    }
+  }
+
+  const WARP_COL = 3;
+  const WARP_ROW = 3;
+  const WARP_GRID_POINTS = (WARP_COL + 1) * (WARP_ROW + 1); // 16
+  const meshWarpDeformerGuids = new Map(); // partId → pidWarpDfGuid
+
+  for (const pm of perMesh) {
+    const partId = meshes[pm.mi].partId;
+    const keyframes = meshVertsMap.get(partId);
+    if (!keyframes) continue;
+
+    const meshParentGroup = meshes[pm.mi].parentGroupId;
+    const sanitizedMeshName = (pm.meshName || partId).replace(/[^a-zA-Z0-9_]/g, '_');
+    const numKf = keyframes.length;
+
+    // Rest-pose vertices in deformer-local space (same as mesh keyform positions)
+    const canvasVerts = pm.vertices; // canvas space
+    const dfOrigin = meshParentGroup && deformerWorldOrigins.has(meshParentGroup)
+      ? deformerWorldOrigins.get(meshParentGroup)
+      : null;
+    const restVerts = dfOrigin
+      ? canvasVerts.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y))
+      : [...canvasVerts];
+
+    // Compute bounding box of rest vertices (deformer-local space)
+    const numVerts = restVerts.length / 2;
+    let bboxMinX = Infinity, bboxMinY = Infinity, bboxMaxX = -Infinity, bboxMaxY = -Infinity;
+    for (let i = 0; i < numVerts; i++) {
+      const vx = restVerts[i * 2], vy = restVerts[i * 2 + 1];
+      if (vx < bboxMinX) bboxMinX = vx; if (vy < bboxMinY) bboxMinY = vy;
+      if (vx > bboxMaxX) bboxMaxX = vx; if (vy > bboxMaxY) bboxMaxY = vy;
+    }
+    // Pad bbox by 10%
+    const padX = (bboxMaxX - bboxMinX) * 0.1 || 10;
+    const padY = (bboxMaxY - bboxMinY) * 0.1 || 10;
+    bboxMinX -= padX; bboxMinY -= padY; bboxMaxX += padX; bboxMaxY += padY;
+    const bboxW = bboxMaxX - bboxMinX;
+    const bboxH = bboxMaxY - bboxMinY;
+
+    // Build rest grid: regular (col+1)×(row+1) grid over padded bbox
+    const gridW = WARP_COL + 1;
+    const gridH = WARP_ROW + 1;
+    const restGrid = new Float64Array(WARP_GRID_POINTS * 2);
+    for (let r = 0; r < gridH; r++) {
+      for (let c = 0; c < gridW; c++) {
+        const idx = (r * gridW + c) * 2;
+        restGrid[idx] = bboxMinX + c * bboxW / WARP_COL;
+        restGrid[idx + 1] = bboxMinY + r * bboxH / WARP_ROW;
+      }
+    }
+
+    // Compute grid positions for each keyframe using IDW
+    const gridKeyforms = []; // array of Float64Array(WARP_GRID_POINTS * 2)
+
+    for (const kf of keyframes) {
+      // Convert keyframe vertex positions to deformer-local space
+      const kfLocalVerts = new Float64Array(numVerts * 2);
+      for (let i = 0; i < numVerts; i++) {
+        const v = kf.value[i];
+        if (!v) { kfLocalVerts[i * 2] = restVerts[i * 2]; kfLocalVerts[i * 2 + 1] = restVerts[i * 2 + 1]; continue; }
+        kfLocalVerts[i * 2] = v.x - (dfOrigin ? dfOrigin.x : 0);
+        kfLocalVerts[i * 2 + 1] = v.y - (dfOrigin ? dfOrigin.y : 0);
+      }
+
+      // Vertex deltas from rest
+      const deltas = new Float64Array(numVerts * 2);
+      for (let i = 0; i < numVerts * 2; i++) {
+        deltas[i] = kfLocalVerts[i] - restVerts[i];
+      }
+
+      // IDW: propagate vertex deltas to grid control points
+      const gridPositions = new Float64Array(WARP_GRID_POINTS * 2);
+      const epsilon = 1e-6;
+
+      for (let gi = 0; gi < WARP_GRID_POINTS; gi++) {
+        const gx = restGrid[gi * 2];
+        const gy = restGrid[gi * 2 + 1];
+        let sumWx = 0, sumWy = 0, sumW = 0;
+        for (let vi = 0; vi < numVerts; vi++) {
+          const dx = gx - restVerts[vi * 2];
+          const dy = gy - restVerts[vi * 2 + 1];
+          const distSq = dx * dx + dy * dy + epsilon;
+          const w = 1 / distSq;
+          sumWx += w * deltas[vi * 2];
+          sumWy += w * deltas[vi * 2 + 1];
+          sumW += w;
+        }
+        gridPositions[gi * 2] = gx + sumWx / sumW;
+        gridPositions[gi * 2 + 1] = gy + sumWy / sumW;
+      }
+
+      gridKeyforms.push(gridPositions);
+    }
+
+    // --- Create CWarpDeformerSource XML ---
+
+    // Warp deformer GUID
+    const [, pidWarpDfGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: `Warp_${sanitizedMeshName}` });
+    meshWarpDeformerGuids.set(partId, pidWarpDfGuid);
+
+    // Form GUIDs (one per keyframe)
+    const warpFormGuids = [];
+    for (let ki = 0; ki < numKf; ki++) {
+      const [, pidWarpForm] = x.shared('CFormGuid', { uuid: uuid(), note: `WarpForm_${sanitizedMeshName}_${ki}` });
+      warpFormGuids.push(pidWarpForm);
+    }
+
+    // Parameter: ParamDeform_MeshName, range [0, numKf-1]
+    const warpParamId = `ParamDeform_${sanitizedMeshName}`;
+    const [, pidWarpParam] = x.shared('CParameterGuid', { uuid: uuid(), note: warpParamId });
+    paramDefs.push({
+      pid: pidWarpParam, id: warpParamId, name: `Deform ${pm.meshName}`,
+      min: 0, max: numKf - 1, defaultVal: 0,
+      decimalPlaces: 1,
+    });
+    deformerParamMap.set(partId, {
+      paramId: warpParamId, type: 'warp', min: 0, max: numKf - 1,
+      keyframeTimes: keyframes.map(kf => kf.time),
+    });
+
+    // CoordType for this warp deformer
+    const [coordWarp, pidCoordWarp] = x.shared('CoordType');
+    x.sub(coordWarp, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
+
+    // KeyformBindingSource — links warp to its parameter
+    const [warpKfBinding, pidWarpKfBinding] = x.shared('KeyformBindingSource');
+
+    // KeyformGridSource (numKf keyforms, 1 parameter binding)
+    const [warpKfg, pidWarpKfg] = x.shared('KeyformGridSource');
+    const warpKfogList = x.sub(warpKfg, 'array_list', { 'xs.n': 'keyformsOnGrid', count: String(numKf) });
+
+    for (let ki = 0; ki < numKf; ki++) {
+      const kog = x.sub(warpKfogList, 'KeyformOnGrid');
+      const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+      const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+      const kon = x.sub(kop, 'KeyOnParameter');
+      x.subRef(kon, 'KeyformBindingSource', pidWarpKfBinding, { 'xs.n': 'binding' });
+      x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(ki);
+      x.subRef(kog, 'CFormGuid', warpFormGuids[ki], { 'xs.n': 'keyformGuid' });
+    }
+
+    const warpKfbList = x.sub(warpKfg, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+    x.subRef(warpKfbList, 'KeyformBindingSource', pidWarpKfBinding);
+
+    // Fill KeyformBindingSource
+    x.subRef(warpKfBinding, 'KeyformGridSource', pidWarpKfg, { 'xs.n': '_gridSource' });
+    x.subRef(warpKfBinding, 'CParameterGuid', pidWarpParam, { 'xs.n': 'parameterGuid' });
+    const warpKeysArr = x.sub(warpKfBinding, 'array_list', { 'xs.n': 'keys', count: String(numKf) });
+    for (let ki = 0; ki < numKf; ki++) {
+      x.sub(warpKeysArr, 'f').text = ki.toFixed(1);
+    }
+    x.sub(warpKfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+    x.sub(warpKfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+    x.sub(warpKfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+    x.sub(warpKfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+    x.sub(warpKfBinding, 's', { 'xs.n': 'description' }).text = warpParamId;
+
+    // Parent deformer: group's rotation deformer or ROOT
+    const warpParentDfGuid = meshParentGroup && groupDeformerGuids.has(meshParentGroup)
+      ? groupDeformerGuids.get(meshParentGroup) : pidDeformerRoot;
+
+    // Parent part: same as the mesh's parent part
+    const warpParentPartGuid = meshParentGroup && groupPartGuids.has(meshParentGroup)
+      ? groupPartGuids.get(meshParentGroup) : pidPartGuid;
+
+    // CWarpDeformerSource
+    const [warpDf, pidWarpDf] = x.shared('CWarpDeformerSource');
+    allDeformerSources.push({ pid: pidWarpDf, tag: 'CWarpDeformerSource' });
+
+    const warpAcdfs = x.sub(warpDf, 'ACDeformerSource', { 'xs.n': 'super' });
+    const warpAcpcs = x.sub(warpAcdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
+    x.sub(warpAcpcs, 's', { 'xs.n': 'localName' }).text = `${pm.meshName} Warp`;
+    x.sub(warpAcpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
+    x.sub(warpAcpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
+    x.subRef(warpAcpcs, 'CPartGuid', warpParentPartGuid, { 'xs.n': 'parentGuid' });
+    x.subRef(warpAcpcs, 'KeyformGridSource', pidWarpKfg, { 'xs.n': 'keyformGridSource' });
+    const warpMft = x.sub(warpAcpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
+    x.sub(warpMft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
+    const warpBwc = x.sub(warpMft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
+    x.sub(warpBwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
+    x.sub(warpAcpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
+    x.sub(warpAcpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
+    x.sub(warpAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
+    x.subRef(warpAcdfs, 'CDeformerGuid', pidWarpDfGuid, { 'xs.n': 'guid' });
+    x.sub(warpAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: `Warp_${sanitizedMeshName}` });
+    x.subRef(warpAcdfs, 'CDeformerGuid', warpParentDfGuid, { 'xs.n': 'targetDeformerGuid' });
+
+    // Warp-specific fields
+    x.sub(warpDf, 'i', { 'xs.n': 'col' }).text = String(WARP_COL);
+    x.sub(warpDf, 'i', { 'xs.n': 'row' }).text = String(WARP_ROW);
+    x.sub(warpDf, 'b', { 'xs.n': 'isQuadTransform' }).text = 'false';
+
+    // Keyforms: one CWarpDeformerForm per animation keyframe
+    const warpKfsList = x.sub(warpDf, 'carray_list', { 'xs.n': 'keyforms', count: String(numKf) });
+
+    for (let ki = 0; ki < numKf; ki++) {
+      const wdf = x.sub(warpKfsList, 'CWarpDeformerForm');
+      const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
+      const wdfAcf = x.sub(wdfAdf, 'ACForm', { 'xs.n': 'super' });
+      x.subRef(wdfAcf, 'CFormGuid', warpFormGuids[ki], { 'xs.n': 'guid' });
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
+      x.subRef(wdfAcf, 'CWarpDeformerSource', pidWarpDf, { 'xs.n': '_source' });
+      x.sub(wdfAcf, 'null', { 'xs.n': 'name' });
+      x.sub(wdfAcf, 's', { 'xs.n': 'notes' }).text = '';
+      x.sub(wdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
+      x.sub(wdfAdf, 'CFloatColor', {
+        'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
+      });
+      x.sub(wdfAdf, 'CFloatColor', {
+        'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
+      });
+      x.subRef(wdfAdf, 'CoordType', pidCoordWarp, { 'xs.n': 'coordType' });
+
+      // Grid positions for this keyframe
+      const posArr = gridKeyforms[ki];
+      x.sub(wdf, 'float-array', {
+        'xs.n': 'positions', count: String(WARP_GRID_POINTS * 2),
+      }).text = Array.from(posArr).map(v => v.toFixed(1)).join(' ');
+    }
+
+    // Add warp deformer guid to parent part's _childGuids
+    const warpPartSource = groupParts.has(meshParentGroup) ? groupParts.get(meshParentGroup) : rootPart;
+    warpPartSource.childGuidsNode.children.push(x.ref('CDeformerGuid', pidWarpDfGuid));
+    warpPartSource.childGuidsNode.attrs.count = String(warpPartSource.childGuidsNode.children.length);
   }
 
   // ==================================================================
@@ -1355,9 +1511,12 @@ export async function generateCmo3(input) {
 
     x.sub(ds, 'CDrawableId', { 'xs.n': 'id', idstr: pm.meshId });
     x.subRef(ds, 'CDrawableGuid', pm.pidDrawable, { 'xs.n': 'guid' });
-    // targetDeformerGuid: parent group's deformer (vertices are in deformer-local space)
-    const meshDfGuid = meshParentGroup && groupDeformerGuids.has(meshParentGroup)
-      ? groupDeformerGuids.get(meshParentGroup) : pidDeformerRoot;
+    // targetDeformerGuid: warp deformer (if mesh has vertex animation) or rotation deformer or ROOT
+    const partId = meshes[pm.mi].partId;
+    const meshDfGuid = meshWarpDeformerGuids.has(partId)
+      ? meshWarpDeformerGuids.get(partId)
+      : (meshParentGroup && groupDeformerGuids.has(meshParentGroup)
+        ? groupDeformerGuids.get(meshParentGroup) : pidDeformerRoot);
     x.subRef(ds, 'CDeformerGuid', meshDfGuid, { 'xs.n': 'targetDeformerGuid' });
     x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '0' });
     x.sub(ds, 'b', { 'xs.n': 'invertClippingMask' }).text = 'false';
@@ -1572,8 +1731,8 @@ export async function generateCmo3(input) {
   const deformerSources = x.sub(deformerSet, 'carray_list', {
     'xs.n': '_sources', count: String(allDeformerSources.length),
   });
-  for (const pid of allDeformerSources) {
-    x.subRef(deformerSources, 'CRotationDeformerSource', pid);
+  for (const ds of allDeformerSources) {
+    x.subRef(deformerSources, ds.tag, ds.pid);
   }
 
   // Affecter source set (empty — required)
@@ -1610,7 +1769,7 @@ export async function generateCmo3(input) {
   // 7. SERIALIZE + PACK INTO CAFF
   // ==================================================================
 
-  const xmlStr = x.serialize(root);
+  const xmlStr = x.serialize(root, VERSION_PIS, IMPORT_PIS);
   const xmlBytes = new TextEncoder().encode(xmlStr);
 
   // Build CAFF file list: PNG textures + main.xml

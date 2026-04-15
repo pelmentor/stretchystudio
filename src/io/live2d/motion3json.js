@@ -44,8 +44,31 @@ export function generateMotion3Json(animation, opts = {}) {
   let totalPointCount = 0;
 
   for (const track of (animation.tracks ?? [])) {
-    // Skip mesh_verts — these are handled by moc3 keyforms, not motion curves
-    if (track.property === 'mesh_verts') continue;
+    // mesh_verts tracks → parameter curve driving warp deformer keyform index
+    if (track.property === 'mesh_verts') {
+      const key = `${track.nodeId}.mesh_verts`;
+      if (!parameterMap.has(key)) continue;
+      const paramId = parameterMap.get(key);
+      const kfs = track.keyframes;
+      if (!kfs || kfs.length < 2) continue;
+
+      // Convert time-based keyframes to index-based segments:
+      // keyframe[0] at its time → value 0, keyframe[1] at its time → value 1, etc.
+      const indexKeyframes = kfs.map((kf, idx) => ({
+        time: kf.time,
+        value: idx,
+        easing: kf.easing ?? 'linear',
+      }));
+      const segments = encodeKeyframesToSegments(indexKeyframes, durationSec);
+      if (segments.length === 0) continue;
+
+      const segInfo = countSegmentsAndPoints(segments);
+      totalSegmentCount += segInfo.segments;
+      totalPointCount += segInfo.points;
+
+      curves.push({ Target: 'Parameter', Id: paramId, Segments: segments });
+      continue;
+    }
 
     // Determine the Live2D target and ID for this track
     const mapping = resolveTrackMapping(track, parameterMap);

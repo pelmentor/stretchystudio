@@ -101,7 +101,9 @@ export function ExportModal({ open, onClose, captureRef }) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${name}.cmo3`;
+        // If project has animations, export is a ZIP with .cmo3 + .can3
+        const hasAnims = project.animations?.length > 0;
+        a.download = hasAnims ? `${name}_live2d.zip` : `${name}.cmo3`;
         a.click();
         URL.revokeObjectURL(url);
       } else {

@@ -9,7 +9,7 @@ Export Stretchy Studio projects to Live2D Cubism format — both runtime (.moc3)
 | Phase 1 | .moc3 runtime export | **Complete** |
 | Phase 2 | .cmo3 project export | **Complete** |
 | Phase 2+ | Rotation deformers + auto-parenting + parameter bindings | **Complete** |
-| Phase 3 | Animation / warp deformers | In progress |
+| Phase 3 | Animation (.can3) + warp deformers | In progress |
 | Phase 4 | Physics / pose / expressions | Not started |
 
 See [PROGRESS.md](PROGRESS.md) for detailed milestone tracking.
@@ -34,7 +34,9 @@ All export code is in `src/io/live2d/`:
 |------|---------|
 | `exporter.js` | Main orchestrator: `exportLive2D()` (runtime) + `exportLive2DProject()` (.cmo3) |
 | `moc3writer.js` | .moc3 binary writer (100+ sections, V4.00) |
-| `cmo3writer.js` | .cmo3 XML generator (textures, parts, params, filter graph) |
+| `cmo3writer.js` | .cmo3 XML generator (textures, parts, params, deformers, warp deformers) |
+| `can3writer.js` | .can3 XML generator (animation scenes, parameter keyframes) — WIP |
+| `xmlbuilder.js` | Shared XML builder for .cmo3 and .can3 generators |
 | `caffPacker.js` | CAFF archive packer (XOR obfuscation, ZIP compression) |
 | `model3json.js` | .model3.json manifest generator |
 | `cdi3json.js` | .cdi3.json display info generator |

@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Phase 2 Complete + Parameter Bindings (Session 8, 2026-04-15)
+## Current Status: Phase 3 In Progress — .can3 Animation Export (Session 9, 2026-04-15)
 
 ---
 
@@ -74,11 +74,26 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 
 ## Phase 3: Animation Export -- IN PROGRESS
 
+### Session 9: .can3 animation + warp deformers + XmlBuilder refactor
+- [x] RE: Hiyori warp deformer structure (50 deformers, all 5×5 grids, IDW for vertex→grid mapping)
+- [x] RE: Animations stored in .can3 (separate CAFF archive), NOT embedded in .cmo3
+- [x] RE: .can3 format fully mapped (CAnimation → CSceneSource → CMvTrack_Live2DModel_Source → CMvAttrF with CBezierPt keyframes)
+- [x] XmlBuilder extracted to shared module (`xmlbuilder.js`) for reuse across cmo3/can3 writers
+- [x] Warp deformer generation in cmo3writer (CWarpDeformerSource, 3×3 grid, IDW, ParamDeform_*)
+- [x] mesh_verts tracks wired to warp parameters in motion3json + exporter
+- [x] can3writer.js — .can3 generator (CAnimation, CSceneSource, parameter keyframes)
+- [x] Export pipeline: project export now produces ZIP with .cmo3 + .can3 when animations exist
+- [ ] **BLOCKED**: .can3 deserialization errors in Cubism Editor 5.0 (see CAN3_ISSUES below)
 - [x] .motion3.json generator exists (runtime export)
 - [x] Parameters from animation tracks (rotation → ParamRotation_GroupName)
 - [ ] Verify .motion3.json works with Ren'Py playback
-- [ ] Animation embedding in .cmo3
-- [ ] Warp deformers for mesh vertex animations
+
+### .can3 Known Issues (Session 9)
+1. **CMvEffect_VisualDefault.deserialize NPE** — custom Java deserializer expects internal fields we don't emit. Need deeper RE of what VisualDefault requires beyond attrList/attrMap.
+2. **ICMvAttr.getTrack lateinit** — parameter CMvAttrF `track` back-reference not initializing correctly in Cubism Editor's Kotlin deserializer.
+3. **CMvEffect_Live2DParameter.addAttr NPE** — cascading from VisualDefault failure; the model track can't resetModel_exe.
+4. **CFixedSequence ≠ ACValueSequence** — FIXED: CFixedSequence only has `value`, not ACValueSequence fields (curMin, keyPts2, etc.)
+5. **CAnimation must be shared** — FIXED: main section references shared CAnimation (not inline).
 
 ## Phase 4: Advanced Features -- NOT STARTED
 
@@ -99,5 +114,6 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 
 ## Key Risks
 
-1. **Warp deformers**: SS mesh vertex animations need to map to Live2D CWarpDeformerSource grid keyforms. Non-trivial topology conversion.
+1. **.can3 deserialization**: Cubism Editor's Java/Kotlin deserializer is strict — custom deserialize() methods expect specific field patterns. Need to RE VisualDefault and parameter attribute initialization more carefully.
 2. **Cubism SDK validation**: SDK rejects .moc3 if any cross-reference is wrong. Mitigated by ctypes test harness + reference comparison.
+3. **cmo3 "recover targetDeformer" warnings**: All parts show `recover targetDeformer: deformer=null` — non-critical (model renders) but should be investigated.
