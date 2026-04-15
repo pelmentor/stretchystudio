@@ -10,10 +10,19 @@
  *   CLayeredImage → CLayer → CModelImage (filter env) → CImageResource
  *   → CTextureInputExtension → CArtMeshSource (TextureState=MODEL_IMAGE)
  *
+ * COORDINATE SPACE TRAPS (see ARCHITECTURE.md for full details):
+ *   1. meshSrc>positions + GEditableMesh2>point = CANVAS space (texture mapping)
+ *      keyform>CArtMeshForm>positions = DEFORMER-LOCAL space (rendering)
+ *      Setting both to deformer-local → invisible textures (empty mesh fill).
+ *   2. CRotationDeformerForm originX/Y = PARENT deformer's local space, not canvas.
+ *   3. Canvas-space vertices + deformer parenting → scattered character.
+ *      Must transform: vertex_local = vertex_canvas - deformer_world_origin.
+ *
  * @module io/live2d/cmo3writer
  */
 
 import { packCaff, COMPRESS_RAW, COMPRESS_FAST } from './caffPacker.js';
+import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 
 // ---------- Processing instructions ----------
 
@@ -982,7 +991,69 @@ export async function generateCmo3(input) {
   // 3b. ROTATION DEFORMERS (one per group with transform data)
   // ==================================================================
   // Each group node → CRotationDeformerSource. Deformer chain follows group hierarchy.
-  // Meshes reference their parent group's deformer via targetDeformerGuid.
+  // Meshes are auto-parented to their group's deformer with vertex space conversion.
+
+  // --- Compute world-space pivot positions for all groups ---
+  // Used for: (a) deformer origins, (b) mesh vertex → deformer-local transform
+  const groupMap = new Map(groups.map(g => [g.id, g]));
+  const groupWorldMatrices = new Map();
+
+  function resolveGroupWorld(groupId) {
+    if (groupWorldMatrices.has(groupId)) return groupWorldMatrices.get(groupId);
+    const g = groupMap.get(groupId);
+    if (!g) return new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+    const local = makeLocalMatrix(g.transform);
+    const world = (g.parent && groupMap.has(g.parent))
+      ? mat3Mul(resolveGroupWorld(g.parent), local)
+      : local;
+    groupWorldMatrices.set(groupId, world);
+    return world;
+  }
+  for (const g of groups) resolveGroupWorld(g.id);
+
+  // Compute canvas-space (world) pivot position for each group's deformer origin
+  const deformerWorldOrigins = new Map(); // groupId → { x, y }
+  for (const g of groups) {
+    const wm = groupWorldMatrices.get(g.id);
+    const t = g.transform || {};
+    const px = t.pivotX ?? 0, py = t.pivotY ?? 0;
+    // Pivot in world space: worldMatrix × [pivotX, pivotY, 1]
+    // For identity transform: pivot maps to (x + pivotX, y + pivotY) in parent space
+    const worldPivotX = wm[0] * px + wm[3] * py + wm[6];
+    const worldPivotY = wm[1] * px + wm[4] * py + wm[7];
+
+    const hasPivot = px !== 0 || py !== 0;
+    if (hasPivot) {
+      deformerWorldOrigins.set(g.id, { x: worldPivotX, y: worldPivotY });
+    } else {
+      // Fallback: center of descendant meshes bounding box
+      const descendantIds = new Set([g.id]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const g2 of groups) {
+          if (!descendantIds.has(g2.id) && g2.parent && descendantIds.has(g2.parent)) {
+            descendantIds.add(g2.id);
+            changed = true;
+          }
+        }
+      }
+      const descMeshes = meshes.filter(m => m.parentGroupId && descendantIds.has(m.parentGroupId));
+      if (descMeshes.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const gm of descMeshes) {
+          for (let vi = 0; vi < gm.vertices.length; vi += 2) {
+            const vx = gm.vertices[vi], vy = gm.vertices[vi + 1];
+            if (vx < minX) minX = vx; if (vy < minY) minY = vy;
+            if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy;
+          }
+        }
+        deformerWorldOrigins.set(g.id, { x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
+      } else {
+        deformerWorldOrigins.set(g.id, { x: canvasW / 2, y: canvasH / 2 });
+      }
+    }
+  }
 
   const groupDeformerGuids = new Map(); // groupId → pidDeformerGuid
   const allDeformerSources = []; // pidDeformerSource for CDeformerSourceSet
@@ -1042,44 +1113,15 @@ export async function generateCmo3(input) {
 
     x.sub(rotDf, 'b', { 'xs.n': 'useBoneUi_testImpl' }).text = 'true';
 
-    // Single keyform: rest pose (angle=0 because vertex positions are already in canvas space)
-    // Origin priority: SS group pivot (if set) → center of descendant meshes → canvas center
-    const hasPivot = (t.pivotX || t.pivotY) && (t.pivotX !== 0 || t.pivotY !== 0);
-    let originX, originY;
-    if (hasPivot) {
-      originX = (t.x ?? 0) + (t.pivotX ?? 0);
-      originY = (t.y ?? 0) + (t.pivotY ?? 0);
-    } else {
-      // Collect ALL descendant group IDs (recursive)
-      const descendantIds = new Set([g.id]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const g2 of groups) {
-          if (!descendantIds.has(g2.id) && g2.parent && descendantIds.has(g2.parent)) {
-            descendantIds.add(g2.id);
-            changed = true;
-          }
-        }
-      }
-      // Find all meshes belonging to this group or any descendant
-      const descMeshes = meshes.filter(m => m.parentGroupId && descendantIds.has(m.parentGroupId));
-      if (descMeshes.length > 0) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const gm of descMeshes) {
-          for (let vi = 0; vi < gm.vertices.length; vi += 2) {
-            const vx = gm.vertices[vi], vy = gm.vertices[vi + 1];
-            if (vx < minX) minX = vx; if (vy < minY) minY = vy;
-            if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy;
-          }
-        }
-        originX = (minX + maxX) / 2;
-        originY = (minY + maxY) / 2;
-      } else {
-        originX = canvasW / 2;
-        originY = canvasH / 2;
-      }
-    }
+    // TRAP: Deformer origins are in PARENT DEFORMER's local space, NOT canvas space.
+    // Hiyori Rotation22: originX=-0.44, originY=-718.2 (relative to parent Rotation21).
+    // If you use canvas-space origins, controllers will appear far from the character.
+    const worldOrigin = deformerWorldOrigins.get(g.id);
+    const parentWorldOrigin = g.parent && deformerWorldOrigins.has(g.parent)
+      ? deformerWorldOrigins.get(g.parent)
+      : { x: 0, y: 0 }; // ROOT = canvas origin (0,0)
+    const originX = worldOrigin.x - parentWorldOrigin.x;
+    const originY = worldOrigin.y - parentWorldOrigin.y;
     const angle = 0;
 
     const kfsDf = x.sub(rotDf, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
@@ -1136,10 +1178,23 @@ export async function generateCmo3(input) {
     // Set _owner on CTextureInputExtension
     x.subRef(pm.tieSup, 'CArtMeshSource', pidMesh, { 'xs.n': '_owner' });
 
-    const verts = pm.vertices;
+    const canvasVerts = pm.vertices; // original canvas-space positions
     const tris = pm.triangles;
     const uvs = pm.uvs;
-    const numVerts = verts.length / 2;
+    const numVerts = canvasVerts.length / 2;
+
+    // TRAP: .cmo3 has TWO position arrays per mesh in different coordinate spaces!
+    //   - meshSrc > positions + GEditableMesh2 > point → CANVAS pixel space (texture mapping)
+    //   - keyform > CArtMeshForm > positions → DEFORMER-LOCAL space (rendering)
+    // Setting both to the same space breaks either textures (empty fill) or deformation (scatter).
+    // See ARCHITECTURE.md "Dual-Position System" for details.
+    const meshParentGroup = meshes[pm.mi].parentGroupId;
+    const dfOrigin = meshParentGroup && deformerWorldOrigins.has(meshParentGroup)
+      ? deformerWorldOrigins.get(meshParentGroup)
+      : null;
+    const verts = dfOrigin
+      ? canvasVerts.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y))
+      : canvasVerts;
 
     const ds = x.sub(meshSrc, 'ACDrawableSource', { 'xs.n': 'super' });
     const pc = x.sub(ds, 'ACParameterControllableSource', { 'xs.n': 'super' });
@@ -1147,9 +1202,8 @@ export async function generateCmo3(input) {
     x.sub(pc, 'b', { 'xs.n': 'isVisible' }).text = 'true';
     x.sub(pc, 'b', { 'xs.n': 'isLocked' }).text = 'false';
     // parentGuid: the group this mesh belongs to, or root if ungrouped
-    const meshParentGroupId = meshes[pm.mi].parentGroupId;
-    const meshParentPid = meshParentGroupId && groupPartGuids.has(meshParentGroupId)
-      ? groupPartGuids.get(meshParentGroupId) : pidPartGuid;
+    const meshParentPid = meshParentGroup && groupPartGuids.has(meshParentGroup)
+      ? groupPartGuids.get(meshParentGroup) : pidPartGuid;
     x.subRef(pc, 'CPartGuid', meshParentPid, { 'xs.n': 'parentGuid' });
     x.subRef(pc, 'KeyformGridSource', pm.pidKfgMesh, { 'xs.n': 'keyformGridSource' });
     const morph = x.sub(pc, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
@@ -1189,8 +1243,9 @@ export async function generateCmo3(input) {
       nextPointUid: String(numVerts),
       useDelaunayTriangulation: 'true',
     });
-    x.sub(em, 'float-array', { 'xs.n': 'point', count: String(verts.length) }).text =
-      verts.map(v => v.toFixed(1)).join(' ');
+    // Editable mesh points in canvas space (for texture baking)
+    x.sub(em, 'float-array', { 'xs.n': 'point', count: String(canvasVerts.length) }).text =
+      canvasVerts.map(v => v.toFixed(1)).join(' ');
     x.sub(em, 'byte-array', { 'xs.n': 'pointPriority', count: String(numVerts) }).text =
       Array(numVerts).fill('20').join(' ');
     x.sub(em, 'short-array', { 'xs.n': 'edge', count: String(edges.length) }).text =
@@ -1224,9 +1279,10 @@ export async function generateCmo3(input) {
 
     x.sub(ds, 'CDrawableId', { 'xs.n': 'id', idstr: pm.meshId });
     x.subRef(ds, 'CDrawableGuid', pm.pidDrawable, { 'xs.n': 'guid' });
-    // targetDeformerGuid: ROOT for now (mesh vertices are in canvas space).
-    // Users assign meshes to deformers manually in Cubism Editor.
-    x.subRef(ds, 'CDeformerGuid', pidDeformerRoot, { 'xs.n': 'targetDeformerGuid' });
+    // targetDeformerGuid: parent group's deformer (vertices are in deformer-local space)
+    const meshDfGuid = meshParentGroup && groupDeformerGuids.has(meshParentGroup)
+      ? groupDeformerGuids.get(meshParentGroup) : pidDeformerRoot;
+    x.subRef(ds, 'CDeformerGuid', meshDfGuid, { 'xs.n': 'targetDeformerGuid' });
     x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '0' });
     x.sub(ds, 'b', { 'xs.n': 'invertClippingMask' }).text = 'false';
 
@@ -1254,12 +1310,13 @@ export async function generateCmo3(input) {
       'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
     });
     x.subRef(adf, 'CoordType', pidCoord, { 'xs.n': 'coordType' });
+    // Keyform positions — in parent deformer's local space
     x.sub(artForm, 'float-array', { 'xs.n': 'positions', count: String(verts.length) }).text =
       verts.map(v => v.toFixed(1)).join(' ');
 
-    // Pixel-space positions
-    x.sub(meshSrc, 'float-array', { 'xs.n': 'positions', count: String(verts.length) }).text =
-      verts.map(v => v.toFixed(1)).join(' ');
+    // Base pixel-space positions — in CANVAS space (used for texture mapping)
+    x.sub(meshSrc, 'float-array', { 'xs.n': 'positions', count: String(canvasVerts.length) }).text =
+      canvasVerts.map(v => v.toFixed(1)).join(' ');
 
     // UVs
     x.sub(meshSrc, 'float-array', { 'xs.n': 'uvs', count: String(uvs.length) }).text =

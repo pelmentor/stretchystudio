@@ -18,8 +18,8 @@ Every feature starts by RE'ing the Hiyori reference export, then replicating. Ne
 ### ADR-004: .moc3 version V4.00
 Generate V4.00 (version=3). Matches Hiyori reference, required for `quad_transforms` SOT[101]. Compatible with Cubism SDK 4.0+ (Ren'Py 8.5 ships SDK 5.x).
 
-### ADR-005: Vertex baking (no deformers)
-MVP exports rest-pose vertices only. Stretchy Studio's bone system doesn't map 1:1 to Live2D parameters+deformers. Users add deformers in Cubism Editor after importing .cmo3.
+### ADR-005: Rotation deformers with auto-parenting (Session 6-7)
+~~MVP exports rest-pose vertices only.~~ As of Session 7, rotation deformers are exported per group with meshes auto-parented. Deformer origins use SS pivot positions (or descendant mesh bounding box center as fallback). Warp deformers and animation-driven parameters remain future work.
 
 ### ADR-006: py-moc3 as format reference
 `Ludentes/py-moc3` is authoritative for .moc3 binary layout. Verified read+write implementation with correct section ordering.
@@ -154,3 +154,69 @@ Root Part (__RootPart__)
 `_childGuids` can contain: CPartGuid (sub-groups), CDeformerGuid (deformers), CDrawableGuid (meshes).
 
 Stretchy Studio mapping: group nodes → CPartSource. Ungrouped meshes → Root Part._childGuids directly.
+
+---
+
+## Coordinate Spaces & Deformer Parenting (Session 6-7 Findings)
+
+### The Dual-Position System (CRITICAL TRAP)
+
+Each CArtMeshSource in .cmo3 has **two separate position arrays**:
+
+| Array | Coordinate Space | Purpose |
+|-------|-----------------|---------|
+| `CArtMeshSource > positions` | **Canvas pixel space** | Texture mapping, base reference |
+| `CArtMeshForm > positions` (in keyforms) | **Parent deformer's local space** | Rendering, deformation |
+| `GEditableMesh2 > point` | **Canvas pixel space** | Editing, texture baking |
+
+**TRAP**: Setting all three to the same space breaks either textures (if all deformer-local) or deformation (if all canvas). Discovered in Session 7 after empty-texture debugging.
+
+Evidence from Hiyori ArtMesh102 (parented to Rotation22):
+- `meshSrc > positions`: `1184.7, 2314.2, ...` (canvas pixel coords, 2976x4175 canvas)
+- `keyform > positions`: `109.9, 39.9, ...` (deformer-local, small relative values)
+
+### Deformer Origin Coordinate Chain
+
+Each CRotationDeformerForm's `originX/originY` is in its **parent deformer's local space**, not canvas space. For nested deformers:
+
+```
+Canvas origin (0, 0)
+  └─ Deformer A: origin = (500, 300) in canvas space
+      └─ Deformer B: origin = (100, -50) in A's local space
+          └─ Mesh: vertices in B's local space
+              vertex_local = vertex_canvas - B_world_origin
+              B_world_origin = A_origin + B_local_origin = (600, 250)
+```
+
+### Computing World-Space Pivot from SS Transform
+
+SS group transform: `T(x+pivotX, y+pivotY) × R(rotation) × S(scaleX, scaleY) × T(-pivotX, -pivotY)`
+
+The pivot point (rotation center) always maps to `(x + pivotX, y + pivotY)` in parent space, regardless of rotation/scale. In world space:
+
+```javascript
+const worldMatrix = computeWorldMatrices(groups); // from transforms.js
+const pivotWorld = worldMatrix × [pivotX, pivotY, 1];
+```
+
+### Auto-Parenting Transform
+
+To parent a mesh to its group's deformer (rest pose, angle=0, scale=1):
+
+```javascript
+// 1. Compute deformer world origin (canvas space)
+const dfWorldOrigin = deformerWorldOrigins.get(parentGroupId);
+
+// 2. Keyform positions: canvas → deformer-local
+const localX = canvasX - dfWorldOrigin.x;
+const localY = canvasY - dfWorldOrigin.y;
+
+// 3. Base positions + editable mesh: keep in canvas space (for textures)
+// 4. UVs: keep as computed from canvas positions (texture mapping)
+```
+
+### Key Reference
+
+- Live2D parent-child docs: https://docs.live2d.com/en/cubism-editor-manual/system-of-parent-child-relation/
+- Hiyori reference: `reference/live2d-sample/Hiyori/cmo3_extracted/main.xml`
+- SS transforms: `src/renderer/transforms.js` (makeLocalMatrix, computeWorldMatrices)

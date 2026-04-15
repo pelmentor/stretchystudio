@@ -8,7 +8,8 @@ Export Stretchy Studio projects to Live2D Cubism format — both runtime (.moc3)
 |-------|-------------|--------|
 | Phase 1 | .moc3 runtime export | **Complete** |
 | Phase 2 | .cmo3 project export | **Complete** |
-| Phase 3 | Animation / deformers | Not started |
+| Phase 2+ | Rotation deformers + auto-parenting | **Complete** |
+| Phase 3 | Animation / warp deformers | Not started |
 | Phase 4 | Physics / pose / expressions | Not started |
 
 See [PROGRESS.md](PROGRESS.md) for detailed milestone tracking.
@@ -94,6 +95,9 @@ Session-specific docs (RE logs, session prompts) are in [sessions/](sessions/).
 3. **Deformer root UUID**: `71fae776-e218-4aee-873e-78e8ac0cb48a` (hardcoded in Cubism Editor)
 4. **SDK validator quirk**: `begin < total` checked even when `count=0` — use dummy entries
 5. **SOT padding**: 64 bytes at EOF required for zero-count sections
+6. **Dual-position trap**: .cmo3 meshes have TWO position arrays — `meshSrc > positions` (canvas pixels, for textures) and `keyform > positions` (deformer-local, for rendering). Setting both to deformer-local = invisible textures.
+7. **Deformer origins are parent-relative**: CRotationDeformerForm originX/Y are in the PARENT deformer's local space, not canvas space. Nested deformers compound.
+8. **Child coords in parent local space**: Live2D interprets child vertex positions relative to parent deformer's local coordinate system. Auto-parenting requires `vertex_local = vertex_canvas - deformer_world_origin`.
 
 ## Troubleshooting
 
@@ -106,3 +110,6 @@ Session-specific docs (RE logs, session prompts) are in [sessions/](sessions/).
 | `csmGetDrawableRenderOrders` missing | Cubism SDK 5-r.5 | Downgrade to 5-r.1 through 5-r.4 |
 | Wrong draw order in .cmo3 | Using array index | Use `part.draw_order` from project |
 | ERROR invalid ID in Cubism Editor | Special chars in CDrawableId | Sanitize to `ArtMesh0`, `ArtMesh1`, etc. |
+| Mesh wireframe visible, no texture fill | `meshSrc > positions` in deformer-local space | Must keep base positions in canvas pixel space (see gotcha #6) |
+| Character scattered across canvas | Mesh parented to deformer but vertices in canvas space | Transform vertices: `local = canvas - deformerWorldOrigin` |
+| Deformer controllers in wrong place | Origin computed in canvas space, not parent-relative | Subtract parent deformer's world origin from this deformer's world origin |

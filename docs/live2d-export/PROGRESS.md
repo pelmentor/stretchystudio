@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Phase 2 Complete (Session 5, 2026-04-14)
+## Current Status: Phase 2 Complete + Deformers (Session 7, 2026-04-15)
 
 ---
 
@@ -48,12 +48,29 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 - [x] Error handling: failures shown in UI
 - [x] **Confirmed in Cubism Editor 5.0** -- parts panel shows group hierarchy
 
+### Session 6: Rotation deformers + upstream merge
+- [x] Rotation deformers: one CRotationDeformerSource per group
+- [x] Origin fallback: SS pivot → descendant mesh bounding box center → canvas center
+- [x] Deformer chain follows group hierarchy (parent group → parent deformer)
+- [x] Meshes under ROOT (canvas-space) — auto-parenting deferred
+- [x] Critical finding: Live2D child positions in PARENT'S LOCAL coord space
+- [x] Upstream merge (Spine export, anim curves, UI improvements)
+- [x] Docs reorganized (README, ARCHITECTURE, archived sessions)
+
+### Session 7: Auto-parenting + coordinate transforms
+- [x] World-space pivot computation (using `makeLocalMatrix` / `mat3Mul` chain)
+- [x] Deformer origins now in parent-relative local coords (matching Hiyori pattern)
+- [x] Meshes auto-parented to their group's deformer (not ROOT)
+- [x] Dual-position system: keyform positions in deformer-local, base positions in canvas space
+- [x] **Confirmed in Cubism Editor 5.0** — rotation controllers move limbs correctly
+
 ## Phase 3: Animation Export -- NOT STARTED
 
 - [x] .motion3.json generator exists (runtime export)
+- [ ] Parameters from animation tracks (rotation → ParamRotation_GroupName)
 - [ ] Verify .motion3.json works with Ren'Py playback
-- [ ] Animation embedding in .cmo3 (if needed)
-- [ ] Deformer export (warp/rotation) -- requires SS to add deformer concept
+- [ ] Animation embedding in .cmo3
+- [ ] Warp deformers for mesh vertex animations
 
 ## Phase 4: Advanced Features -- NOT STARTED
 
@@ -74,5 +91,5 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 
 ## Key Risks
 
-1. **Bone → Parameter mapping**: Stretchy Studio bones don't map 1:1 to Live2D deformers. Current approach: vertex baking (static pose only).
+1. **Warp deformers**: SS mesh vertex animations need to map to Live2D CWarpDeformerSource grid keyforms. Non-trivial topology conversion.
 2. **Cubism SDK validation**: SDK rejects .moc3 if any cross-reference is wrong. Mitigated by ctypes test harness + reference comparison.

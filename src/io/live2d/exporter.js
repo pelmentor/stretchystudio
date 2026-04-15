@@ -191,7 +191,10 @@ export async function exportLive2DProject(project, images, opts = {}) {
       triangles.push(tri[0], tri[1], tri[2]);
     }
 
-    // UVs — vertex positions normalized to canvas dimensions
+    // UVs — vertex positions normalized to canvas dimensions.
+    // TRAP: These UVs are computed from CANVAS-SPACE positions and must stay that way.
+    // cmo3writer.js transforms keyform positions to deformer-local space separately.
+    // Recomputing UVs from deformer-local positions would break texture mapping.
     const uvs = [];
     for (const v of mesh.vertices) {
       let u = Math.max(0, Math.min(1, v.x / canvasW));
