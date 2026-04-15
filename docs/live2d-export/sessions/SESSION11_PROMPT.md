@@ -78,6 +78,24 @@ Alternative: Don't create rotation deformers for nodes that are bones (have join
 - `src/io/live2d/motion3json.js` — .motion3.json
 - `src/components/export/ExportModal.jsx` — UI
 
+## BUG: Texture loss on deformed vertices (Session 10 finding)
+
+When the user rotates an elbow in SS before exporting, vertex `x/y` positions get permanently committed (SkeletonOverlay onPointerUp). But UVs and the texture are based on the ORIGINAL rest positions. After export:
+- Non-deformed vertices (weight=0): position matches UV → texture visible
+- Deformed vertices (weight>0): position moved, UV still at original → texture gone
+
+**Fix**: In `exporter.js` lines 200-220, use `v.restX ?? v.x` and `v.restY ?? v.y` for both base positions and UV computation. This ensures the exported mesh is always at rest pose with correct texture mapping. The baked keyforms (above) will handle posing via parameters.
+
+```javascript
+// Instead of: vertices.push(v.x, v.y)
+vertices.push(v.restX ?? v.x, v.restY ?? v.y);
+
+// Instead of: let u = v.x / canvasW
+let u = (v.restX ?? v.x) / canvasW;
+```
+
+This should be done BEFORE the baked keyforms work — it's a prerequisite.
+
 ## Reference
 - Hiyori .cmo3 extracted: `reference/live2d-sample/Hiyori/cmo3_extracted/main.xml`
 - Hiyori .can3 extracted: `reference/live2d-sample/Hiyori/hiyori_pro_t04_extracted/main.xml`
