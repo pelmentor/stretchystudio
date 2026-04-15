@@ -135,6 +135,15 @@ src/
 5. **Export**: (Coming Soon) Export as a packed spritesheet or PNG sequence.
 
 ### Rigged Character (See-Through PSD)
+Stretchy Studio is highly optimized for the [**See-Through**](https://github.com/shitagaki-lab/see-through) pipeline ([Paper](https://arxiv.org/abs/2602.03749)). It transforms a single anime illustration into a layered PSD, which Stretchy Studio can then auto-rig.
+
+#### How to get decomposed PSDs
+- **Recommended**: [Free Hugging Face Demo](https://huggingface.co/spaces/24yearsold/see-through-demo) (Quickest)
+- **Advanced**: [See-through Repository](https://github.com/shitagaki-lab/see-through) or [Windows WebUI](https://github.com/BeamManP/see-through-webui)
+
+> [!NOTE]
+> **Style Compatibility**: See-Through is specifically trained on **anime/VTuber** styles. Realistic styles may not decompose correctly.
+
 1. **Import & Rig**: Drag a see-through PSD character → 3-step wizard opens:
    - Choose rigging method: *Rig manually* (instant heuristic) or *Rig with DWPose* (AI-powered)
    - Adjust joint positions on canvas if needed

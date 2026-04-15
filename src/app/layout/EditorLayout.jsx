@@ -1,4 +1,5 @@
 import React, { useRef, useCallback } from 'react';
+import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
 import {
   ResizableHandle,
@@ -15,7 +16,12 @@ import { ExportModal } from '@/components/export/ExportModal';
 import { PreferencesModal } from '@/components/preferences/PreferencesModal';
 import { Save, FolderOpen, FilePlus, Palette, Sun, Moon, SquareChartGantt, Download, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { HelpIcon } from '@/components/ui/help-icon';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useTheme, AVAILABLE_FONTS } from '@/contexts/ThemeProvider';
@@ -382,35 +388,50 @@ export default function EditorLayout() {
         </div>
 
         {/* Center Toggle */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center bg-muted/30 rounded-lg p-0.5 border border-border/40">
-          <button
-            onClick={() => setEditorMode('staging')}
-            className={[
-              'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5',
-              !isAnimationMode
-                ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
-                : 'text-muted-foreground hover:text-foreground'
-            ].join(' ')}
-          >
-            Staging
-            <HelpIcon tip="In Staging mode, you set the base layout, mesh structure, and joint positions." className="opacity-40 hover:opacity-100" />
-          </button>
-          <button
-            onClick={() => {
-              setEditorMode('animation');
-              captureRestPose(project.nodes);
-            }}
-            className={[
-              'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5 ml-0.5',
-              isAnimationMode
-                ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
-                : 'text-muted-foreground hover:text-foreground'
-            ].join(' ')}
-          >
-            Animation
-            <HelpIcon tip="In Animation mode, you create keyframes on the timeline." className="opacity-40 hover:opacity-100" />
-          </button>
-        </div>
+        <TooltipProvider delayDuration={400}>
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center bg-muted/30 rounded-lg p-0.5 border border-border/40">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setEditorMode('staging')}
+                  className={cn(
+                    'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5',
+                    !isAnimationMode
+                      ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  Staging
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                In Staging mode, you set the base layout, mesh structure, and joint positions.
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    setEditorMode('animation');
+                    captureRestPose(project.nodes);
+                  }}
+                  className={cn(
+                    'px-3 py-1 rounded-md text-[13px] font-semibold transition-all flex items-center gap-1.5 ml-0.5',
+                    isAnimationMode
+                      ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/20'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  Animation
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                In Animation mode, you create keyframes on the timeline.
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
 
         <div className="flex-1" />
         <span className="text-xs text-muted-foreground hidden sm:block">Scroll to zoom · Alt+drag to pan</span>
