@@ -196,6 +196,8 @@ export async function generateCan3(input) {
       x.sub(optParams, 'i', { 'xs.n': 'KEY_ATTR_FADE_OUT' }).text = '-1';
       x.sub(optParams, 'i', { 'xs.n': 'KEY_ATTR_FADE_IN' }).text = '-1';
       x.sub(optParams, 's', { 'xs.n': 'KEY_PARAM_ID' }).text = `live2dParam:${info.paramId}`;
+      // track back-reference (REQUIRED in every ICMvAttr — fixes lateinit error)
+      x.subRef(attrSup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
 
       // Keyframe data
       if (track && track.keyframes?.length > 0) {
@@ -226,19 +228,21 @@ export async function generateCan3(input) {
     for (const pid of paramAttrPids) {
       x.subRef(peAttrList, 'CMvAttrF', pid);
     }
-    // attrMap (hash_map: CAttrId → CMvAttrF)
-    const peAttrMap = x.sub(paramEffect, 'hash_map', {
+    // attrMap (hash_map: CAttrId → CMvAttrF) — INSIDE ICMvEffect super (Hiyori pattern)
+    const peAttrMap = x.sub(peSuper, 'hash_map', {
       'xs.n': 'attrMap', count: String(paramAttrPids.length),
     });
     let paramIdx = 0;
     for (const [, info] of deformerParamMap) {
       const entry = x.sub(peAttrMap, 'entry');
-      x.sub(entry, 'CAttrId', { idstr: `live2dParam_${info.paramId}` });
-      x.subRef(entry, 'CMvAttrF', paramAttrPids[paramIdx]);
+      x.sub(entry, 'CAttrId', { 'xs.n': 'key', idstr: `live2dParam_${info.paramId}` });
+      x.subRef(entry, 'CMvAttrF', paramAttrPids[paramIdx], { 'xs.n': 'value' });
       paramIdx++;
     }
-    // parameterGroups (empty for MVP)
-    x.sub(paramEffect, 'carray_list', { 'xs.n': 'parameterGroups', count: '0' });
+    // track back-reference (REQUIRED — last child of ICMvEffect)
+    x.subRef(peSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+    // parameterGroupList (empty for MVP — Hiyori uses this name, not "parameterGroups")
+    x.sub(paramEffect, 'carray_list', { 'xs.n': 'parameterGroupList', count: '0' });
 
     // CMvEffect_Live2DPartsVisible (empty for MVP)
     const [partsEffect, pidPartsEffect] = x.shared('CMvEffect_Live2DPartsVisible');
@@ -247,13 +251,15 @@ export async function generateCan3(input) {
     x.sub(pveSuper, 'b', { 'xs.n': 'isActive' }).text = 'true';
     x.sub(pveSuper, 'b', { 'xs.n': 'canDelete' }).text = 'false';
     x.sub(pveSuper, 'array', { 'xs.n': 'attrList', count: '0', type: 'ICMvAttr' });
-    x.sub(partsEffect, 'hash_map', { 'xs.n': 'attrMap', count: '0' });
+    x.sub(pveSuper, 'hash_map', { 'xs.n': 'attrMap', count: '0' });
+    // track back-reference (REQUIRED — last child of ICMvEffect)
+    x.subRef(pveSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
 
-    // CMvEffect_VisualDefault — must contain basic track transform attributes
-    // (xy position, scaleX, scaleY, rotation, opacity — Hiyori has 9, we emit the critical ones)
+    // CMvEffect_VisualDefault — all 9 track transform attributes (matching Hiyori pattern)
+    // Hiyori: xy, scalex, scaley, rotate, shear, anchor, opacity, frameStep, artPathWidth
 
-    // Helper: create a fixed-value CMvAttrF for a track attribute
-    const makeTrackAttrF = (idstr, name, baseValue, value) => {
+    // Helper: create a CMvAttrF with CMutableSequence (Hiyori uses this even for constants)
+    const makeTrackAttrF = (idstr, name, baseValue, rangeMin, rangeMax) => {
       const [attr, pid] = x.shared('CMvAttrF');
       const sup = x.sub(attr, 'ICMvAttr', { 'xs.n': 'super' });
       x.sub(sup, 'b', { 'xs.n': 'isShyMode' }).text = 'false';
@@ -265,52 +271,116 @@ export async function generateCan3(input) {
       x.subRef(sup, 'AdaptType', pidAdaptRel, { 'xs.n': 'adaptType' });
       x.sub(sup, 'hash_map', { 'xs.n': 'optionParam', count: '0', keyType: 'string' });
       x.subRef(sup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
-      // CFixedSequence — simple constant value (NOT a subclass of ACValueSequence)
-      const seq = x.sub(attr, 'CFixedSequence', { 'xs.n': 'valueData' });
-      x.sub(seq, 'd', { 'xs.n': 'value' }).text = String(value);
-      x.sub(attr, 'd', { 'xs.n': 'rangeMin' }).text = '-Infinity';
-      x.sub(attr, 'd', { 'xs.n': 'rangeMax' }).text = 'Infinity';
+      // CMutableSequence with count=0 (Hiyori pattern for non-animated transform attrs)
+      const seq = x.sub(attr, 'CMutableSequence', { 'xs.n': 'valueData' });
+      const acvs = x.sub(seq, 'ACValueSequence', { 'xs.n': 'super' });
+      x.sub(acvs, 'd', { 'xs.n': 'curMin' }).text = String(rangeMin);
+      x.sub(acvs, 'd', { 'xs.n': 'curMax' }).text = String(rangeMax);
+      x.sub(acvs, 'i', { 'xs.n': 'posStart' }).text = '0';
+      x.sub(acvs, 'int-array', { 'xs.n': 'keyPts2', count: '0' });
+      x.sub(acvs, 'i', { 'xs.n': 'keyMin' }).text = '0';
+      x.sub(acvs, 'i', { 'xs.n': 'keyMax' }).text = '0';
+      x.sub(acvs, 'd', { 'xs.n': 'lastValue' }).text = String(baseValue);
+      x.sub(acvs, 'i', { 'xs.n': 'lastPos' }).text = '0';
+      x.subRef(acvs, 'CMvAttrF', pid, { 'xs.n': 'attr' });
+      x.sub(acvs, 'd', { 'xs.n': 'baseValue' }).text = String(baseValue);
+      x.sub(seq, 'array', { 'xs.n': 'points', count: '0', type: 'CBezierPt' });
+      x.sub(seq, 'carray_list', { 'xs.n': 'curveTypes', count: '0' });
+      x.sub(attr, 'd', { 'xs.n': 'rangeMin' }).text = String(rangeMin);
+      x.sub(attr, 'd', { 'xs.n': 'rangeMax' }).text = String(rangeMax);
       x.sub(attr, 'b', { 'xs.n': 'isRepeat' }).text = 'false';
       x.sub(attr, 'd', { 'xs.n': 'repeatMin' }).text = '-1.7976931348623157E308';
       x.sub(attr, 'd', { 'xs.n': 'repeatMax' }).text = '1.7976931348623157E308';
       x.sub(attr, 'null', { 'xs.n': 'linked_keyFormsForObject' });
-      return [pid, idstr];
+      return pid;
     };
 
-    // xy position as CMvAttrPt
-    const [xyAttr, pidXyAttr] = x.shared('CMvAttrPt');
-    const xySup = x.sub(xyAttr, 'ICMvAttr', { 'xs.n': 'super' });
-    x.sub(xySup, 'b', { 'xs.n': 'isShyMode' }).text = 'false';
-    x.sub(xySup, 'b', { 'xs.n': 'isFreezeMode' }).text = 'false';
-    x.sub(xySup, 'CAttrId', { 'xs.n': 'id', idstr: 'xy' });
-    x.sub(xySup, 's', { 'xs.n': 'name' }).text = 'Position';
-    x.sub(xySup, 'null', { 'xs.n': 'guid' });
-    x.sub(xySup, 'b', { 'xs.n': 'isActive' }).text = 'true';
-    x.subRef(xySup, 'AdaptType', pidAdaptRel, { 'xs.n': 'adaptType' });
-    x.sub(xySup, 'hash_map', { 'xs.n': 'optionParam', count: '0', keyType: 'string' });
-    x.subRef(xySup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
-    const xySeq = x.sub(xyAttr, 'CXY_TNSSequence', { 'xs.n': 'valueDataXY' });
-    const xyPts = x.sub(xySeq, 'array', { 'xs.n': 'points', count: '1', type: 'CPtTNS' });
-    const xyPt = x.sub(xyPts, 'CPtTNS');
-    const xyGv = x.sub(xyPt, 'GVector2', { 'xs.n': 'super' });
-    x.sub(xyGv, 'f', { 'xs.n': 'x' }).text = String(canvasW / 2);
-    x.sub(xyGv, 'f', { 'xs.n': 'y' }).text = String(canvasH / 2);
-    x.sub(xyPt, 'b', { 'xs.n': 'isCorner' }).text = 'false';
-    const xyVal = x.sub(xyPt, 'GVector2', { 'xs.n': 'value' });
-    x.sub(xyVal, 'f', { 'xs.n': 'x' }).text = String(canvasW / 2);
-    x.sub(xyVal, 'f', { 'xs.n': 'y' }).text = String(canvasH / 2);
-    x.sub(xyPt, 'i', { 'xs.n': 'pos' }).text = '0';
-    const xyBase = x.sub(xySeq, 'GVector2', { 'xs.n': 'basePt' });
-    x.sub(xyBase, 'f', { 'xs.n': 'x' }).text = '0.0';
-    x.sub(xyBase, 'f', { 'xs.n': 'y' }).text = '0.0';
-    x.subRef(xySeq, 'CMvAttrPt', pidXyAttr, { 'xs.n': 'attr' });
+    // Helper: create a CMvAttrPt with CXY_TNSSequence (for xy and anchor)
+    const makeTrackAttrPt = (idstr, name, ptX, ptY) => {
+      const [attr, pid] = x.shared('CMvAttrPt');
+      const sup = x.sub(attr, 'ICMvAttr', { 'xs.n': 'super' });
+      x.sub(sup, 'b', { 'xs.n': 'isShyMode' }).text = 'false';
+      x.sub(sup, 'b', { 'xs.n': 'isFreezeMode' }).text = 'false';
+      x.sub(sup, 'CAttrId', { 'xs.n': 'id', idstr });
+      x.sub(sup, 's', { 'xs.n': 'name' }).text = name;
+      x.sub(sup, 'null', { 'xs.n': 'guid' });
+      x.sub(sup, 'b', { 'xs.n': 'isActive' }).text = 'true';
+      x.subRef(sup, 'AdaptType', pidAdaptRel, { 'xs.n': 'adaptType' });
+      x.sub(sup, 'hash_map', { 'xs.n': 'optionParam', count: '0', keyType: 'string' });
+      x.subRef(sup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+      const seq = x.sub(attr, 'CXY_TNSSequence', { 'xs.n': 'valueDataXY' });
+      const pts = x.sub(seq, 'array', { 'xs.n': 'points', count: '1', type: 'CPtTNS' });
+      const pt = x.sub(pts, 'CPtTNS');
+      const gv = x.sub(pt, 'GVector2', { 'xs.n': 'super' });
+      x.sub(gv, 'f', { 'xs.n': 'x' }).text = String(ptX);
+      x.sub(gv, 'f', { 'xs.n': 'y' }).text = String(ptY);
+      x.sub(pt, 'b', { 'xs.n': 'isCorner' }).text = 'false';
+      const val = x.sub(pt, 'GVector2', { 'xs.n': 'value' });
+      x.sub(val, 'f', { 'xs.n': 'x' }).text = String(ptX);
+      x.sub(val, 'f', { 'xs.n': 'y' }).text = String(ptY);
+      x.sub(pt, 'i', { 'xs.n': 'pos' }).text = '0';
+      const basePt = x.sub(seq, 'GVector2', { 'xs.n': 'basePt' });
+      x.sub(basePt, 'f', { 'xs.n': 'x' }).text = '0.0';
+      x.sub(basePt, 'f', { 'xs.n': 'y' }).text = '0.0';
+      x.subRef(seq, 'CMvAttrPt', pid, { 'xs.n': 'attr' });
+      return pid;
+    };
 
-    // Basic transform attributes (matching Hiyori pattern)
-    const trackAttrs = [
-      makeTrackAttrF('scalex', 'Scale X', 100.0, 100.0),
-      makeTrackAttrF('scaley', 'Scale Y', 100.0, 100.0),
-      makeTrackAttrF('rotate', 'Rotation', 0.0, 0.0),
-      makeTrackAttrF('opacity', 'Opacity', 100.0, 100.0),
+    // Helper: create a CMvAttrI with CIntSequence (for frameStep)
+    const makeTrackAttrI = (idstr, name, baseValue, rangeMin, rangeMax) => {
+      const [attr, pid] = x.shared('CMvAttrI');
+      const sup = x.sub(attr, 'ICMvAttr', { 'xs.n': 'super' });
+      x.sub(sup, 'b', { 'xs.n': 'isShyMode' }).text = 'false';
+      x.sub(sup, 'b', { 'xs.n': 'isFreezeMode' }).text = 'false';
+      x.sub(sup, 'CAttrId', { 'xs.n': 'id', idstr });
+      x.sub(sup, 's', { 'xs.n': 'name' }).text = name;
+      x.sub(sup, 'null', { 'xs.n': 'guid' });
+      x.sub(sup, 'b', { 'xs.n': 'isActive' }).text = 'true';
+      x.subRef(sup, 'AdaptType', pidAdaptRel, { 'xs.n': 'adaptType' });
+      x.sub(sup, 'hash_map', { 'xs.n': 'optionParam', count: '0', keyType: 'string' });
+      x.subRef(sup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+      // CIntSequence (Hiyori pattern for frameStep)
+      const seq = x.sub(attr, 'CIntSequence', { 'xs.n': 'valueData' });
+      const acvs = x.sub(seq, 'ACValueSequence', { 'xs.n': 'super' });
+      x.sub(acvs, 'd', { 'xs.n': 'curMin' }).text = '0.0';
+      x.sub(acvs, 'd', { 'xs.n': 'curMax' }).text = '0.0';
+      x.sub(acvs, 'i', { 'xs.n': 'posStart' }).text = '0';
+      x.sub(acvs, 'int-array', { 'xs.n': 'keyPts2', count: '0' });
+      x.sub(acvs, 'i', { 'xs.n': 'keyMin' }).text = '2147483647';
+      x.sub(acvs, 'i', { 'xs.n': 'keyMax' }).text = '-2147483648';
+      x.sub(acvs, 'd', { 'xs.n': 'lastValue' }).text = 'NaN';
+      x.sub(acvs, 'i', { 'xs.n': 'lastPos' }).text = '-1';
+      x.subRef(acvs, 'CMvAttrI', pid, { 'xs.n': 'attr' });
+      x.sub(acvs, 'd', { 'xs.n': 'baseValue' }).text = String(baseValue);
+      x.sub(seq, 'array', { 'xs.n': 'points', count: '0', type: 'CSeqPt' });
+      x.sub(attr, 'i', { 'xs.n': 'rangeMin' }).text = String(rangeMin);
+      x.sub(attr, 'i', { 'xs.n': 'rangeMax' }).text = String(rangeMax);
+      return pid;
+    };
+
+    // All 9 VisualDefault attributes (matching Hiyori exactly)
+    const pidXyAttr = makeTrackAttrPt('xy', 'Position', canvasW / 2, canvasH / 2);
+    const pidScaleX = makeTrackAttrF('scalex', 'Scale X', 100.0, -Infinity, Infinity);
+    const pidScaleY = makeTrackAttrF('scaley', 'Scale Y', 100.0, -Infinity, Infinity);
+    const pidRotate = makeTrackAttrF('rotate', 'Rotation', 0.0, -Infinity, Infinity);
+    const pidShear = makeTrackAttrF('shear', 'Shear', 0.0, -Infinity, Infinity);
+    const pidAnchorAttr = makeTrackAttrPt('anchor', 'Anchor', canvasW / 2, canvasH / 2);
+    const pidOpacity = makeTrackAttrF('opacity', 'Opacity', 100.0, 0.0, 100.0);
+    const pidFrameStep = makeTrackAttrI('frameStep', 'Frame Step', 1.0, 0, 100);
+    const pidArtPathWidth = makeTrackAttrF('artPathWidth', 'Art Path Width', 100.0,
+      -1.7976931348623157E308, 1.7976931348623157E308);
+
+    // All attr pids in order (Hiyori attrList order: xy, scalex, scaley, rotate, shear, anchor, opacity, frameStep, artPathWidth)
+    const veAttrPids = [
+      { pid: pidXyAttr, idstr: 'xy', type: 'CMvAttrPt' },
+      { pid: pidScaleX, idstr: 'scalex', type: 'CMvAttrF' },
+      { pid: pidScaleY, idstr: 'scaley', type: 'CMvAttrF' },
+      { pid: pidRotate, idstr: 'rotate', type: 'CMvAttrF' },
+      { pid: pidShear, idstr: 'shear', type: 'CMvAttrF' },
+      { pid: pidAnchorAttr, idstr: 'anchor', type: 'CMvAttrPt' },
+      { pid: pidOpacity, idstr: 'opacity', type: 'CMvAttrF' },
+      { pid: pidFrameStep, idstr: 'frameStep', type: 'CMvAttrI' },
+      { pid: pidArtPathWidth, idstr: 'artPathWidth', type: 'CMvAttrF' },
     ];
 
     const [visualEffect, pidVisualEffect] = x.shared('CMvEffect_VisualDefault');
@@ -318,39 +388,59 @@ export async function generateCan3(input) {
     x.subRef(veSuper, 'CEffectId', pidEffIdVisual, { 'xs.n': 'id' });
     x.sub(veSuper, 'b', { 'xs.n': 'isActive' }).text = 'true';
     x.sub(veSuper, 'b', { 'xs.n': 'canDelete' }).text = 'false';
+    // attrList (all 9 attrs)
     const veAttrList = x.sub(veSuper, 'array', {
-      'xs.n': 'attrList', count: String(1 + trackAttrs.length), type: 'ICMvAttr',
+      'xs.n': 'attrList', count: '9', type: 'ICMvAttr',
     });
-    x.subRef(veAttrList, 'CMvAttrPt', pidXyAttr);
-    for (const [pid] of trackAttrs) x.subRef(veAttrList, 'CMvAttrF', pid);
-    // attrMap
-    const veAttrMap = x.sub(visualEffect, 'hash_map', {
-      'xs.n': 'attrMap', count: String(1 + trackAttrs.length),
-    });
-    const xyEntry = x.sub(veAttrMap, 'entry');
-    x.sub(xyEntry, 'CAttrId', { xs_n: 'key', idstr: 'xy' });
-    x.subRef(xyEntry, 'CMvAttrPt', pidXyAttr, { 'xs.n': 'value' });
-    for (const [pid, idstr] of trackAttrs) {
+    for (const a of veAttrPids) x.subRef(veAttrList, a.type, a.pid);
+    // attrMap — INSIDE ICMvEffect super (Hiyori pattern)
+    const veAttrMap = x.sub(veSuper, 'hash_map', { 'xs.n': 'attrMap', count: '9' });
+    for (const a of veAttrPids) {
       const e = x.sub(veAttrMap, 'entry');
-      x.sub(e, 'CAttrId', { idstr });
-      x.subRef(e, 'CMvAttrF', pid, { 'xs.n': 'value' });
+      x.sub(e, 'CAttrId', { 'xs.n': 'key', idstr: a.idstr });
+      x.subRef(e, a.type, a.pid, { 'xs.n': 'value' });
     }
+    // track back-reference (REQUIRED — last child of ICMvEffect)
+    x.subRef(veSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+    // Named attribute fields — CMvEffect_VisualDefault.deserialize() expects these!
+    x.subRef(visualEffect, 'CMvAttrPt', pidXyAttr, { 'xs.n': 'attrXY' });
+    x.subRef(visualEffect, 'CMvAttrF', pidScaleX, { 'xs.n': 'attrScaleX' });
+    x.subRef(visualEffect, 'CMvAttrF', pidScaleY, { 'xs.n': 'attrScaleY' });
+    x.subRef(visualEffect, 'CMvAttrF', pidRotate, { 'xs.n': 'attrRotate' });
+    x.subRef(visualEffect, 'CMvAttrPt', pidAnchorAttr, { 'xs.n': 'attrAnchorXY' });
+    x.subRef(visualEffect, 'CMvAttrF', pidShear, { 'xs.n': 'attrShear' });
+    x.subRef(visualEffect, 'CMvAttrF', pidOpacity, { 'xs.n': 'attrOpacity' });
+    x.subRef(visualEffect, 'CMvAttrI', pidFrameStep, { 'xs.n': 'attrFrameStep' });
+    x.subRef(visualEffect, 'CMvAttrF', pidArtPathWidth, { 'xs.n': 'attrArtPathWidth' });
 
-    // CMvEffect_EyeBlink (empty stub)
+    // CMvEffect_EyeBlink (empty stub with required fields — Hiyori pattern)
     const [eyeBlinkEffect, pidEyeBlink] = x.shared('CMvEffect_EyeBlink');
     const ebSuper = x.sub(eyeBlinkEffect, 'ICMvEffect', { 'xs.n': 'super' });
     x.sub(ebSuper, 'CEffectId', { 'xs.n': 'id', idstr: 'eyeBlink' });
     x.sub(ebSuper, 'b', { 'xs.n': 'isActive' }).text = 'false';
-    x.sub(ebSuper, 'b', { 'xs.n': 'canDelete' }).text = 'false';
+    x.sub(ebSuper, 'b', { 'xs.n': 'canDelete' }).text = 'true';
     x.sub(ebSuper, 'array', { 'xs.n': 'attrList', count: '0', type: 'ICMvAttr' });
+    x.sub(ebSuper, 'hash_map', { 'xs.n': 'attrMap', count: '0' });
+    x.subRef(ebSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+    // EyeBlink-specific fields (Hiyori pattern)
+    x.sub(eyeBlinkEffect, 'carray_list', { 'xs.n': 'effectParameterAttrIds', count: '0' });
+    x.sub(eyeBlinkEffect, 'b', { 'xs.n': 'invert' }).text = 'false';
+    x.sub(eyeBlinkEffect, 'b', { 'xs.n': 'relative' }).text = 'true';
 
-    // CMvEffect_LipSync (empty stub)
+    // CMvEffect_LipSync (empty stub with required fields — Hiyori pattern)
     const [lipSyncEffect, pidLipSync] = x.shared('CMvEffect_LipSync');
     const lsSuper = x.sub(lipSyncEffect, 'ICMvEffect', { 'xs.n': 'super' });
     x.sub(lsSuper, 'CEffectId', { 'xs.n': 'id', idstr: 'lipSync' });
     x.sub(lsSuper, 'b', { 'xs.n': 'isActive' }).text = 'false';
-    x.sub(lsSuper, 'b', { 'xs.n': 'canDelete' }).text = 'false';
+    x.sub(lsSuper, 'b', { 'xs.n': 'canDelete' }).text = 'true';
     x.sub(lsSuper, 'array', { 'xs.n': 'attrList', count: '0', type: 'ICMvAttr' });
+    x.sub(lsSuper, 'hash_map', { 'xs.n': 'attrMap', count: '0' });
+    x.subRef(lsSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
+    // LipSync-specific fields (Hiyori pattern)
+    x.sub(lipSyncEffect, 'carray_list', { 'xs.n': 'effectParameterAttrIds', count: '0' });
+    x.sub(lipSyncEffect, 'null', { 'xs.n': 'syncTrackGuid' });
+    x.sub(lipSyncEffect, 'b', { 'xs.n': 'isInvert' }).text = 'false';
+    x.sub(lipSyncEffect, 'b', { 'xs.n': 'isRelative' }).text = 'true';
 
     // CMvTrack_Group_Source (Root track)
     const [rootTrack, pidRootTrack] = x.shared('CMvTrack_Group_Source');

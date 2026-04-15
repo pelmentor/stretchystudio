@@ -294,9 +294,49 @@ root
 ### Critical Discoveries
 1. **CFixedSequence ≠ ACValueSequence**: CFixedSequence only has `<d xs.n="value">`, NOT curMin/keyPts2/etc.
 2. **CAnimation must be shared**: main section just references it via xs.ref
-3. **CMvEffect_VisualDefault requires attributes**: empty attrList causes NPE — needs xy, scalex, scaley, rotate, opacity
-4. **Parameter IDs prefixed**: `live2dParam_ParamRotation_*` in can3, not bare `ParamRotation_*`
-5. **Frame-based positions**: keyframes use integer frame numbers, not milliseconds
+3. **Parameter IDs prefixed**: `live2dParam_ParamRotation_*` in can3, not bare `ParamRotation_*`
+4. **Frame-based positions**: keyframes use integer frame numbers, not milliseconds
 
-### Blocking Issues
-The Java/Kotlin deserializer in Cubism Editor 5.0 has custom `deserialize()` methods that expect specific field patterns beyond what the XML schema suggests. The VisualDefault and parameter attribute initialization cascade failures need deeper RE — likely need to decompile `CMvEffect_VisualDefault.class` to understand what `deserialize()` expects.
+### .can3 Deserialization Rules (Session 10 — all RESOLVED)
+
+These rules were discovered by node-by-node diff with Hiyori's .can3 after three cascading NPEs:
+
+**Rule 1: Every ICMvAttr and ICMvEffect needs `track` back-reference**
+
+The Kotlin classes have a `lateinit var track` property. The XML deserializer sets it from `<CMvTrack_Live2DModel_Source xs.n="track" xs.ref="..." />` which must be the **last child** of every `ICMvAttr > super` and `ICMvEffect > super` block. Without it → `UninitializedPropertyAccessException`.
+
+**Rule 2: CMvEffect_VisualDefault has 9 named fields**
+
+After the `ICMvEffect` super block, the Java class expects these specific named attribute references as direct children:
+```xml
+<CMvAttrPt xs.n="attrXY" xs.ref="..." />
+<CMvAttrF xs.n="attrScaleX" xs.ref="..." />
+<CMvAttrF xs.n="attrScaleY" xs.ref="..." />
+<CMvAttrF xs.n="attrRotate" xs.ref="..." />
+<CMvAttrPt xs.n="attrAnchorXY" xs.ref="..." />
+<CMvAttrF xs.n="attrShear" xs.ref="..." />
+<CMvAttrF xs.n="attrOpacity" xs.ref="..." />
+<CMvAttrI xs.n="attrFrameStep" xs.ref="..." />
+<CMvAttrF xs.n="attrArtPathWidth" xs.ref="..." />
+```
+Without these → NPE in `CMvEffect_VisualDefault.deserialize()`.
+
+**Rule 3: `attrMap` belongs inside ICMvEffect super**
+
+The `<hash_map xs.n="attrMap">` must be a child of `ICMvEffect > super`, not a direct child of the effect element. Each entry needs `xs.n="key"` on CAttrId and `xs.n="value"` on the attribute ref.
+
+**Rule 4: VisualDefault attrs use CMutableSequence**
+
+Even for constant (non-animated) transform attributes, Hiyori uses `CMutableSequence` with `count="0"` points — not `CFixedSequence`. The full ACValueSequence super block is required (curMin, curMax, posStart, keyPts2, keyMin, keyMax, lastValue, lastPos, attr back-ref, baseValue).
+
+**Rule 5: Effect-specific fields after ICMvEffect**
+
+Each effect type has its own fields after the generic ICMvEffect super:
+- **EyeBlink**: `effectParameterAttrIds` (carray_list), `invert` (bool), `relative` (bool)
+- **LipSync**: `effectParameterAttrIds` (carray_list), `syncTrackGuid` (null), `isInvert` (bool), `isRelative` (bool)
+- **Live2DParameter**: `parameterGroupList` (carray_list of CMvParameter_Group) — NOT "parameterGroups"
+- **PartsVisible**: no extra fields needed
+
+**Rule 6: Parts use "NOT INITIALIZED" deformer GUID**
+
+CPartSource's `targetDeformerGuid` must point to `uuid="00000000-0000-0000-0000-000000000000"` (note="NOT INITIALIZED"), not the ROOT deformer GUID. Using the ROOT GUID causes "recover targetDeformer: deformer=null" warnings.

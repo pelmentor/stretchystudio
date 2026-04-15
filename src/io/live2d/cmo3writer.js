@@ -432,6 +432,12 @@ export async function generateCmo3(input) {
     uuid: DEFORMER_ROOT_UUID, note: 'ROOT',
   });
 
+  // CDeformerGuid "NOT INITIALIZED" — used for parts' targetDeformerGuid (Hiyori pattern)
+  // Parts don't belong to any deformer, so they get a null-like GUID
+  const [, pidDeformerNull] = x.shared('CDeformerGuid', {
+    uuid: '00000000-0000-0000-0000-000000000000', note: 'NOT INITIALIZED',
+  });
+
   // CoordType
   const [coordType, pidCoord] = x.shared('CoordType');
   x.sub(coordType, 's', { 'xs.n': 'coordName' }).text = 'DeformerLocal';
@@ -818,7 +824,7 @@ export async function generateCmo3(input) {
     x.sub(ps, 'CColor', { 'xs.n': 'partsEditColor' });
     // _childGuids placeholder — caller fills this
     const cg = x.sub(ps, 'carray_list', { 'xs.n': '_childGuids', count: '0' });
-    x.subRef(ps, 'CDeformerGuid', pidDeformerRoot, { 'xs.n': 'targetDeformerGuid' });
+    x.subRef(ps, 'CDeformerGuid', pidDeformerNull, { 'xs.n': 'targetDeformerGuid' });
     const kfl = x.sub(ps, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
     const pf = x.sub(kfl, 'CPartForm');
     const acf = x.sub(pf, 'ACForm', { 'xs.n': 'super' });

@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Phase 3 In Progress — .can3 Animation Export (Session 9, 2026-04-15)
+## Current Status: Phase 3 COMPLETE — .can3 Animation Export (Session 10, 2026-04-15)
 
 ---
 
@@ -72,7 +72,7 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 - [x] exporter.js builds parameterMap and passes to generateMotion3Json
 - [x] **Confirmed in Cubism Editor 5.0** — parameter sliders control deformer rotation
 
-## Phase 3: Animation Export -- IN PROGRESS
+## Phase 3: Animation Export -- COMPLETE
 
 ### Session 9: .can3 animation + warp deformers + XmlBuilder refactor
 - [x] RE: Hiyori warp deformer structure (50 deformers, all 5×5 grids, IDW for vertex→grid mapping)
@@ -83,37 +83,46 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 - [x] mesh_verts tracks wired to warp parameters in motion3json + exporter
 - [x] can3writer.js — .can3 generator (CAnimation, CSceneSource, parameter keyframes)
 - [x] Export pipeline: project export now produces ZIP with .cmo3 + .can3 when animations exist
-- [ ] **BLOCKED**: .can3 deserialization errors in Cubism Editor 5.0 (see CAN3_ISSUES below)
 - [x] .motion3.json generator exists (runtime export)
 - [x] Parameters from animation tracks (rotation → ParamRotation_GroupName)
+
+### Session 10: .can3 deserialization fixes + .cmo3 targetDeformer fix
+- [x] Fix: `track` back-reference added to ALL ICMvEffect super blocks and ICMvAttr super blocks
+- [x] Fix: CMvEffect_VisualDefault named fields (attrXY, attrScaleX, attrScaleY, attrRotate, attrAnchorXY, attrShear, attrOpacity, attrFrameStep, attrArtPathWidth)
+- [x] Fix: Missing 4 attributes (shear, anchor CMvAttrPt, frameStep CMvAttrI, artPathWidth CMvAttrF)
+- [x] Fix: attrMap placed inside ICMvEffect super (not on effect element)
+- [x] Fix: EyeBlink/LipSync effect-specific fields (effectParameterAttrIds, invert, relative, syncTrackGuid)
+- [x] Fix: parameterGroups → parameterGroupList for Live2DParameter effect
+- [x] Fix: VisualDefault attrs use CMutableSequence with count=0 (matching Hiyori pattern)
+- [x] Fix: Parts use "NOT INITIALIZED" GUID for targetDeformerGuid (was ROOT deformer GUID)
+- [x] **Confirmed in Cubism Editor 5.0** — .can3 loads, model renders, animation plays on timeline
+
+## Phase 4: Future Work -- NOT STARTED
+
+### Runtime enhancements
+- [ ] .physics3.json generator (hair/clothing physics simulation)
+- [ ] .pose3.json generator (part visibility toggle groups — e.g. outfit swaps)
+- [ ] .exp3.json generator (facial expressions as parameter presets)
 - [ ] Verify .motion3.json works with Ren'Py playback
 
-### .can3 Known Issues (Session 9)
-1. **CMvEffect_VisualDefault.deserialize NPE** — custom Java deserializer expects internal fields we don't emit. Need deeper RE of what VisualDefault requires beyond attrList/attrMap.
-2. **ICMvAttr.getTrack lateinit** — parameter CMvAttrF `track` back-reference not initializing correctly in Cubism Editor's Kotlin deserializer.
-3. **CMvEffect_Live2DParameter.addAttr NPE** — cascading from VisualDefault failure; the model track can't resetModel_exe.
-4. **CFixedSequence ≠ ACValueSequence** — FIXED: CFixedSequence only has `value`, not ACValueSequence fields (curMin, keyPts2, etc.)
-5. **CAnimation must be shared** — FIXED: main section references shared CAnimation (not inline).
-
-## Phase 4: Advanced Features -- NOT STARTED
-
-- [ ] .physics3.json generator
-- [ ] .pose3.json generator (part visibility groups)
-- [ ] .exp3.json generator (expressions)
-- [ ] Multi-parameter keyform interpolation
-
-## Phase 5: Polish -- PARTIAL
-
-- [x] UI integration (ExportModal with Runtime + Project options)
-- [x] Error handling (failures shown in UI)
-- [x] Progress reporting (mesh count in messages)
-- [ ] Export validation (check for missing textures, empty meshes)
+### Project enhancements
+- [ ] Multi-parameter keyform interpolation (2D parameter grids)
+- [ ] Warp deformer animation (when SS supports mesh_verts keyframes)
 - [ ] Full .cdi3.json with parameter groups
+- [ ] Export validation (check for missing textures, empty meshes)
 
 ---
 
-## Key Risks
+## Key Findings (for future reference)
 
-1. **.can3 deserialization**: Cubism Editor's Java/Kotlin deserializer is strict — custom deserialize() methods expect specific field patterns. Need to RE VisualDefault and parameter attribute initialization more carefully.
-2. **Cubism SDK validation**: SDK rejects .moc3 if any cross-reference is wrong. Mitigated by ctypes test harness + reference comparison.
-3. **cmo3 "recover targetDeformer" warnings**: All parts show `recover targetDeformer: deformer=null` — non-critical (model renders) but should be investigated.
+1. **ICMvEffect and ICMvAttr both require `track` back-reference**: Every effect's ICMvEffect super and every attribute's ICMvAttr super must have `<CMvTrack_Live2DModel_Source xs.n="track" xs.ref="..." />` as the last child. Without this, Kotlin `lateinit` properties fail.
+
+2. **CMvEffect_VisualDefault has named fields**: The Java class has specific instance variables (`attrXY`, `attrScaleX`, `attrScaleY`, `attrRotate`, `attrAnchorXY`, `attrShear`, `attrOpacity`, `attrFrameStep`, `attrArtPathWidth`) that must appear as direct children after the ICMvEffect super block.
+
+3. **attrMap belongs inside ICMvEffect super**: Not as a direct child of the effect element.
+
+4. **Parts use "NOT INITIALIZED" deformer GUID**: `uuid="00000000-0000-0000-0000-000000000000"` for targetDeformerGuid, not the ROOT deformer GUID.
+
+5. **CFixedSequence is NOT ACValueSequence**: Only has `<d xs.n="value">`, no curMin/keyPts2/etc.
+
+6. **CAnimation must be shared**: Main section references it via xs.ref, not inline.

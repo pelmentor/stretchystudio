@@ -9,7 +9,7 @@ Export Stretchy Studio projects to Live2D Cubism format — both runtime (.moc3)
 | Phase 1 | .moc3 runtime export | **Complete** |
 | Phase 2 | .cmo3 project export | **Complete** |
 | Phase 2+ | Rotation deformers + auto-parenting + parameter bindings | **Complete** |
-| Phase 3 | Animation (.can3) + warp deformers | In progress |
+| Phase 3 | Animation (.can3) + warp deformers | **Complete** |
 | Phase 4 | Physics / pose / expressions | Not started |
 
 See [PROGRESS.md](PROGRESS.md) for detailed milestone tracking.
@@ -115,3 +115,5 @@ Session-specific docs (RE logs, session prompts) are in [sessions/](sessions/).
 | Mesh wireframe visible, no texture fill | `meshSrc > positions` in deformer-local space | Must keep base positions in canvas pixel space (see gotcha #6) |
 | Character scattered across canvas | Mesh parented to deformer but vertices in canvas space | Transform vertices: `local = canvas - deformerWorldOrigin` |
 | Deformer controllers in wrong place | Origin computed in canvas space, not parent-relative | Subtract parent deformer's world origin from this deformer's world origin |
+| .can3 blank / NPE on load | Missing `track` back-refs or named VisualDefault fields | See ARCHITECTURE.md ".can3 Deserialization Rules" |
+| "recover targetDeformer" warnings | Parts use ROOT deformer GUID | Use "NOT INITIALIZED" GUID (all zeros) for part targetDeformerGuid |
