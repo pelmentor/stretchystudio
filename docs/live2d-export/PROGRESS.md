@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Standard Rig Parameters + Warp RE — Session 12 (2026-04-16)
+## Current Status: Warp Deformers Working — Session 13 (2026-04-16)
 
 ---
 
@@ -126,9 +126,20 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 - [x] **KEY FINDING**: Warp local space = always 0..1 (`GRectF(0,0,1,1)` in transformCanvasToLocal)
 - [x] Warp grid positions = parent deformer space; mesh keyform positions = 0..1 warp local
 - [x] Documented in WARP_DEFORMERS.md
-- [ ] Determine ROOT space for warp grid positions (test model needed)
-- [ ] Implement single warp deformer (topwear) with correct coordinates
 - [ ] Extend to all face/body parts per TAG_DEFORMER_SPEC
+
+### Session 13: Warp deformers working (2026-04-16)
+- [x] ROOT warp grid space determined from Hiyori "Body Warp Z" — **canvas pixel space, CoordType "Canvas"**
+- [x] Child warp grid space confirmed — parent's 0..1 space, CoordType "DeformerLocal"
+- [x] Mesh keyforms under warp — always 0..1 warp-local, CoordType "DeformerLocal"
+- [x] Single topwear warp deformer implemented (3×3 grid, ROOT parent, section 3c in cmo3writer)
+- [x] **Precision bug found & fixed**: 0..1 keyform positions need toFixed(6), not toFixed(1) — toFixed(1) caused "chewed" texture
+- [x] **Confirmed in Cubism Editor 5.0** — topwear visible, textured, grid draggable, deforms correctly
+- [x] WARP_DEFORMERS.md updated with ROOT space resolution + precision trap
+- [x] SESSION14_PROMPT.md written — extend warps to limbs, head, face
+- [ ] Extend to all body/limb parts (Phase 1)
+- [ ] Extend to all face/head parts with per-part grid sizes (Phase 2)
+- [ ] Build deformer hierarchy: Body Z → Body Y → Breath → Face Z → per-part (Phase 3)
 
 ## Phase 4: Future Work
 

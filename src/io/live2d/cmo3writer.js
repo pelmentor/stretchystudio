@@ -1541,6 +1541,166 @@ export async function generateCmo3(input) {
   }
 
   // ==================================================================
+  // 3c. Standard-rig warp deformers (generateRig)
+  // ==================================================================
+  // When generateRig is enabled, create a ROOT-level warp deformer for each mesh
+  // that matches a supported tag.  The warp grid covers the mesh's canvas-space
+  // bounding box (with 10 % padding) and the mesh's keyform positions are converted
+  // to 0..1 warp-local space.
+  //
+  // Coordinate system (reverse-engineered from Hiyori, confirmed Session 13):
+  //   ROOT-level warp grid → canvas pixel space, CoordType "Canvas"
+  //   Mesh keyforms under warp → 0..1 normalized, CoordType "DeformerLocal"
+
+  const RIG_WARP_COL = 3;
+  const RIG_WARP_ROW = 3;
+  const RIG_WARP_GRID_PTS = (RIG_WARP_COL + 1) * (RIG_WARP_ROW + 1); // 16
+
+  // Tags that get a standard-rig warp deformer (start small — just topwear)
+  const RIG_WARP_TAGS = new Set(['topwear']);
+
+  // partId → { gridMinX, gridMinY, gridW, gridH } for 0..1 conversion in section 4
+  const rigWarpBbox = new Map();
+
+  if (generateRig) {
+    for (const pm of perMesh) {
+      const m = meshes[pm.mi];
+      if (!RIG_WARP_TAGS.has(m.tag)) continue;
+      // Skip meshes that already have a mesh_verts warp deformer
+      if (meshWarpDeformerGuids.has(m.partId)) continue;
+
+      const partId = m.partId;
+      const canvasVerts = pm.vertices; // canvas-space flat array [x0,y0,x1,y1,...]
+      const numVerts = canvasVerts.length / 2;
+      const sanitizedName = (pm.meshName || partId).replace(/[^a-zA-Z0-9_]/g, '_');
+
+      // Bounding box of mesh vertices in canvas space
+      let bxMin = Infinity, byMin = Infinity, bxMax = -Infinity, byMax = -Infinity;
+      for (let i = 0; i < numVerts; i++) {
+        const vx = canvasVerts[i * 2], vy = canvasVerts[i * 2 + 1];
+        if (vx < bxMin) bxMin = vx; if (vy < byMin) byMin = vy;
+        if (vx > bxMax) bxMax = vx; if (vy > byMax) byMax = vy;
+      }
+      const padX = (bxMax - bxMin) * 0.1 || 10;
+      const padY = (byMax - byMin) * 0.1 || 10;
+      bxMin -= padX; byMin -= padY; bxMax += padX; byMax += padY;
+      const bW = bxMax - bxMin;
+      const bH = byMax - byMin;
+
+      rigWarpBbox.set(partId, { gridMinX: bxMin, gridMinY: byMin, gridW: bW, gridH: bH });
+
+      // Regular grid in canvas pixel space (rest pose)
+      const gW = RIG_WARP_COL + 1;
+      const gH = RIG_WARP_ROW + 1;
+      const restGrid = new Float64Array(RIG_WARP_GRID_PTS * 2);
+      for (let r = 0; r < gH; r++) {
+        for (let c = 0; c < gW; c++) {
+          const idx = (r * gW + c) * 2;
+          restGrid[idx]     = bxMin + c * bW / RIG_WARP_COL;
+          restGrid[idx + 1] = byMin + r * bH / RIG_WARP_ROW;
+        }
+      }
+
+      // GUIDs
+      const [, pidRigWarpGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: `RigWarp_${sanitizedName}` });
+      meshWarpDeformerGuids.set(partId, pidRigWarpGuid);
+
+      const [, pidRigWarpForm] = x.shared('CFormGuid', { uuid: uuid(), note: `RigWarpForm_${sanitizedName}` });
+
+      // CoordType "Canvas" for ROOT-level warp grid
+      const [coordRigWarp, pidCoordRigWarp] = x.shared('CoordType');
+      x.sub(coordRigWarp, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
+
+      // KeyformBindingSource + KeyformGridSource (single rest keyform, bound to ParamOpacity
+      // as a no-op — every deformer needs at least one binding in Cubism Editor)
+      const [rigWarpKfb, pidRigWarpKfb] = x.shared('KeyformBindingSource');
+      const [rigWarpKfg, pidRigWarpKfg] = x.shared('KeyformGridSource');
+
+      const rigKfogList = x.sub(rigWarpKfg, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '1' });
+      const kog = x.sub(rigKfogList, 'KeyformOnGrid');
+      const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+      const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+      const kon = x.sub(kop, 'KeyOnParameter');
+      x.subRef(kon, 'KeyformBindingSource', pidRigWarpKfb, { 'xs.n': 'binding' });
+      x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = '0';
+      x.subRef(kog, 'CFormGuid', pidRigWarpForm, { 'xs.n': 'keyformGuid' });
+
+      const rigKfbList = x.sub(rigWarpKfg, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+      x.subRef(rigKfbList, 'KeyformBindingSource', pidRigWarpKfb);
+
+      x.subRef(rigWarpKfb, 'KeyformGridSource', pidRigWarpKfg, { 'xs.n': '_gridSource' });
+      x.subRef(rigWarpKfb, 'CParameterGuid', pidParamOpacity, { 'xs.n': 'parameterGuid' });
+      const rigKeysArr = x.sub(rigWarpKfb, 'array_list', { 'xs.n': 'keys', count: '1' });
+      x.sub(rigKeysArr, 'f').text = '1.0';
+      x.sub(rigWarpKfb, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+      x.sub(rigWarpKfb, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+      x.sub(rigWarpKfb, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+      x.sub(rigWarpKfb, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+      x.sub(rigWarpKfb, 's', { 'xs.n': 'description' }).text = 'ParamOpacity';
+
+      // Parent part for the warp deformer
+      const meshParentGroup = m.parentGroupId;
+      const rigWarpPartGuid = meshParentGroup && groupPartGuids.has(meshParentGroup)
+        ? groupPartGuids.get(meshParentGroup) : pidPartGuid;
+
+      // CWarpDeformerSource — parent is ROOT (canvas pixel space)
+      const [rigWarpDf, pidRigWarpDf] = x.shared('CWarpDeformerSource');
+      allDeformerSources.push({ pid: pidRigWarpDf, tag: 'CWarpDeformerSource' });
+
+      const rwAcdfs = x.sub(rigWarpDf, 'ACDeformerSource', { 'xs.n': 'super' });
+      const rwAcpcs = x.sub(rwAcdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
+      x.sub(rwAcpcs, 's', { 'xs.n': 'localName' }).text = `${pm.meshName} Warp`;
+      x.sub(rwAcpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
+      x.sub(rwAcpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
+      x.subRef(rwAcpcs, 'CPartGuid', rigWarpPartGuid, { 'xs.n': 'parentGuid' });
+      x.subRef(rwAcpcs, 'KeyformGridSource', pidRigWarpKfg, { 'xs.n': 'keyformGridSource' });
+      const rwMft = x.sub(rwAcpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
+      x.sub(rwMft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
+      const rwBwc = x.sub(rwMft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
+      x.sub(rwBwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
+      x.sub(rwAcpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
+      x.sub(rwAcpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
+      x.sub(rwAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
+      x.subRef(rwAcdfs, 'CDeformerGuid', pidRigWarpGuid, { 'xs.n': 'guid' });
+      x.sub(rwAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: `RigWarp_${sanitizedName}` });
+      x.subRef(rwAcdfs, 'CDeformerGuid', pidDeformerRoot, { 'xs.n': 'targetDeformerGuid' });
+
+      x.sub(rigWarpDf, 'i', { 'xs.n': 'col' }).text = String(RIG_WARP_COL);
+      x.sub(rigWarpDf, 'i', { 'xs.n': 'row' }).text = String(RIG_WARP_ROW);
+      x.sub(rigWarpDf, 'b', { 'xs.n': 'isQuadTransform' }).text = 'false';
+
+      // Single rest-pose keyform
+      const rigKfsList = x.sub(rigWarpDf, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
+      const wdf = x.sub(rigKfsList, 'CWarpDeformerForm');
+      const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
+      const wdfAcf = x.sub(wdfAdf, 'ACForm', { 'xs.n': 'super' });
+      x.subRef(wdfAcf, 'CFormGuid', pidRigWarpForm, { 'xs.n': 'guid' });
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
+      x.subRef(wdfAcf, 'CWarpDeformerSource', pidRigWarpDf, { 'xs.n': '_source' });
+      x.sub(wdfAcf, 'null', { 'xs.n': 'name' });
+      x.sub(wdfAcf, 's', { 'xs.n': 'notes' }).text = '';
+      x.sub(wdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
+      x.sub(wdfAdf, 'CFloatColor', {
+        'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
+      });
+      x.sub(wdfAdf, 'CFloatColor', {
+        'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
+      });
+      x.subRef(wdfAdf, 'CoordType', pidCoordRigWarp, { 'xs.n': 'coordType' });
+
+      x.sub(wdf, 'float-array', {
+        'xs.n': 'positions', count: String(RIG_WARP_GRID_PTS * 2),
+      }).text = Array.from(restGrid).map(v => v.toFixed(1)).join(' ');
+
+      // Register warp in parent part's _childGuids
+      const rigWarpPartSrc = groupParts.has(meshParentGroup) ? groupParts.get(meshParentGroup) : rootPart;
+      rigWarpPartSrc.childGuidsNode.children.push(x.ref('CDeformerGuid', pidRigWarpGuid));
+      rigWarpPartSrc.childGuidsNode.attrs.count = String(rigWarpPartSrc.childGuidsNode.children.length);
+    }
+  }
+
+  // ==================================================================
   // 4. CArtMeshSource (per mesh)
   // ==================================================================
 
@@ -1587,9 +1747,24 @@ export async function generateCmo3(input) {
     const dfOrigin = dfOwner && deformerWorldOrigins.has(dfOwner)
       ? deformerWorldOrigins.get(dfOwner)
       : null;
-    const verts = dfOrigin
-      ? canvasVerts.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y))
-      : canvasVerts;
+
+    // When mesh is under a rig warp deformer, keyform positions must be 0..1 warp-local.
+    // Otherwise, standard deformer-local (canvas minus deformer world origin).
+    const partId = meshes[pm.mi].partId;
+    const rwBox = rigWarpBbox.get(partId);
+    let verts;
+    if (rwBox) {
+      // 0..1 warp-local: (canvasPos - gridMin) / gridSize
+      verts = canvasVerts.map((v, i) =>
+        i % 2 === 0
+          ? (v - rwBox.gridMinX) / rwBox.gridW
+          : (v - rwBox.gridMinY) / rwBox.gridH
+      );
+    } else if (dfOrigin) {
+      verts = canvasVerts.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y));
+    } else {
+      verts = canvasVerts;
+    }
 
     const ds = x.sub(meshSrc, 'ACDrawableSource', { 'xs.n': 'super' });
     const pc = x.sub(ds, 'ACParameterControllableSource', { 'xs.n': 'super' });
@@ -1677,7 +1852,6 @@ export async function generateCmo3(input) {
     // targetDeformerGuid: warp > deformer > ROOT
     // For baked keyform meshes: parent to ARM deformer (bone's parent), not bone deformer.
     // For non-baked: jointBone's deformer > parent group's deformer > ROOT.
-    const partId = meshes[pm.mi].partId;
     const meshJointBoneId = meshes[pm.mi].jointBoneId;
     let meshDfGuid;
     if (meshWarpDeformerGuids.has(partId)) {
@@ -1724,8 +1898,11 @@ export async function generateCmo3(input) {
         'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
       });
       x.subRef(adf, 'CoordType', pidCoord, { 'xs.n': 'coordType' });
+      // Warp-local positions are 0..1 and need high precision (Hiyori uses ~8 digits).
+      // Deformer-local positions are pixels where 1dp suffices, but extra precision is harmless.
+      const posPrecision = rwBox ? 6 : 1;
       x.sub(artForm, 'float-array', { 'xs.n': 'positions', count: String(positions.length) }).text =
-        positions.map(v => v.toFixed(1)).join(' ');
+        positions.map(v => v.toFixed(posPrecision)).join(' ');
     };
 
     if (pm.hasBakedKeyforms) {

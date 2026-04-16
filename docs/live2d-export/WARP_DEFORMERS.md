@@ -137,13 +137,37 @@ Hiyori uses a shared CoordType for both (xs.ref="#1186").
 From the `transformDeformer_testImpl` bytecode: `CoordType.Companion.c()` is used
 to set the CoordType on deformed forms, which suggests a specific enum value.
 
-## TODO: Determine ROOT Space
+## ROOT Space — RESOLVED (Session 13)
 
-Need to verify: when a warp deformer's parent is ROOT, what coordinate space
-are the grid positions in? Options:
-1. Canvas pixel space (positions like 200..700)
-2. Normalized canvas space (0..1)
-3. Some other convention
+**Answer: Canvas pixel space.** CoordType = "Canvas".
 
-Check by: creating a model in Cubism Editor with a warp deformer at ROOT level
-and inspecting the exported .cmo3 XML.
+Determined by analyzing Hiyori's "Body Warp Z" (Warp1), which targets ROOT directly:
+- 5×5 grid (6×6 = 36 control points)
+- Grid positions: X range 394..2581, Y range -37..3028 (canvas is 2976×4175)
+- CoordType: xs.ref="#3545" → `coordName = "Canvas"`
+- Rest-pose grid is a perfectly regular rectangle in canvas pixel space
+
+By contrast, child warps (e.g. "Collar Front Warp" under intermediate deformer):
+- CoordType: xs.ref="#1186" → `coordName = "DeformerLocal"`
+- Grid positions: 0..1 range (parent deformer's local space)
+
+### Summary table
+
+| Warp parent | Grid positions | CoordType | Mesh keyform positions |
+|-------------|---------------|-----------|----------------------|
+| ROOT        | Canvas pixels | "Canvas"  | 0..1 warp-local      |
+| Deformer    | Parent's 0..1 | "DeformerLocal" | 0..1 warp-local |
+
+Mesh keyform positions are ALWAYS 0..1 warp-local, regardless of the warp's parent.
+Mesh keyform CoordType is ALWAYS "DeformerLocal".
+
+### Precision trap
+
+Mesh keyform positions in 0..1 range require high precision (6+ decimal places).
+Using `toFixed(1)` rounds 0.354 → 0.4 (13% error), causing "chewed" texture distortion.
+Hiyori uses ~8 significant digits for keyform positions.
+
+### Confirmed working (Session 13)
+
+Topwear warp deformer at ROOT, 3×3 grid, canvas pixel positions, mesh keyforms
+in 0..1 with toFixed(6). Opens in Cubism Editor, texture correct, grid draggable.
