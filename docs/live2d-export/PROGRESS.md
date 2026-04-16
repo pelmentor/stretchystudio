@@ -1,6 +1,6 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Warp Deformers Working — Session 13 (2026-04-16)
+## Current Status: Body Warp Hierarchy In Progress — Session 14 (2026-04-16)
 
 ---
 
@@ -137,9 +137,24 @@ Key bugs fixed: field name swap (vertex_counts/position_index_counts), keyform b
 - [x] **Confirmed in Cubism Editor 5.0** — topwear visible, textured, grid draggable, deforms correctly
 - [x] WARP_DEFORMERS.md updated with ROOT space resolution + precision trap
 - [x] SESSION14_PROMPT.md written — extend warps to limbs, head, face
-- [ ] Extend to all body/limb parts (Phase 1)
-- [ ] Extend to all face/head parts with per-part grid sizes (Phase 2)
-- [ ] Build deformer hierarchy: Body Z → Body Y → Breath → Face Z → per-part (Phase 3)
+- [x] Extend to all body/limb parts (Phase 1) — **37 tags** in RIG_WARP_TAGS Map
+- [x] Extend to all face/head parts with per-part grid sizes (Phase 2) — per-tag col×row from TEMPLATES.md
+- [x] **Confirmed in Cubism Editor 5.0** — all parts have warp deformers, grid draggable
+
+### Session 14: Body Warp hierarchy + parameter bindings (2026-04-16)
+- [x] RIG_WARP_TAGS converted from Set to Map with per-tag {col, row} grid sizes
+- [x] Baked-keyform meshes (arms/legs) skipped from per-part warps
+- [x] ParamBreath working on body parts — confirmed chest-rise effect in Cubism Editor
+- [x] ParamBodyAngleX working — lean effect on body parts confirmed
+- [x] **KEY LEARNING**: per-part body/breath bindings cause tearing (each part shifts independently)
+- [x] **KEY LEARNING**: Hiyori uses ONE structural Body Warp wrapping everything, not per-part bindings
+- [x] Structural Body Warp created (section 3d): 5×5 grid, full canvas, ParamBodyAngleX × ParamBreath
+- [x] Per-part warp grids converted to Body Warp 0..1 space, CoordType "DeformerLocal"
+- [x] Rotation deformer origin storage for re-parenting (rotDeformerOriginNodes)
+- [ ] **BUG**: per-part warp targetDeformerGuid patch not finding nested nodes — parts squished to top-left
+- [ ] **BUG**: arms not moving (hasBakedKeyforms skip + rotation deformer re-parenting needs work)
+- [ ] Fix re-parenting: collect target nodes in array instead of nested traversal
+- [ ] Verify entire character moves as one unit under Body Warp
 
 ## Phase 4: Future Work
 
