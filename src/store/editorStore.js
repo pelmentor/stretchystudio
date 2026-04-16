@@ -71,6 +71,9 @@ export const useEditorStore = create((set) => ({
   /** The ID of the blend shape currently being edited (null if not in edit mode) */
   activeBlendShapeId: null,
 
+  /** Current step in the PSD import wizard: null | 'review' | 'reorder' | 'adjust' | 'dwpose' */
+  wizardStep: null,
+
   setSelection: (nodeIds) => set((state) => ({
     selection: nodeIds,
     // Exit mesh edit mode if selection changes to a different node or clears
@@ -91,6 +94,7 @@ export const useEditorStore = create((set) => ({
         ? state.activeBlendShapeId
         : null,
   })),
+  setWizardStep:         (step)     => set({ wizardStep: step }),
   setMeshEditMode:      (on)       => set({ meshEditMode: on, toolMode: 'select' }),
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'select' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),

@@ -148,7 +148,8 @@ export default function CanvasViewport({
   const fileInputRef = useRef(null);
 
   // PSD import wizard state
-  const [wizardStep, setWizardStep] = useState(null);  // null | 'choose' | 'dwpose' | 'adjust'
+  const wizardStep = useEditorStore(s => s.wizardStep);
+  const setWizardStep = useEditorStore(s => s.setWizardStep);
   const [wizardPsd, setWizardPsd] = useState(null);  // { psdW, psdH, layers, partIds }
   const [confirmWipeOpen, setConfirmWipeOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
@@ -196,6 +197,20 @@ export default function CanvasViewport({
     });
     isDirtyRef.current = true;
   }, [setView]);
+
+  // Auto-center view when entering the reorder or adjust steps
+  useEffect(() => {
+    if (wizardStep === 'reorder' || wizardStep === 'adjust') {
+      const { psdW, psdH } = wizardPsd || {};
+      if (psdW && psdH) {
+        // Wait a tick for sidebars to appear/animate before centering
+        const timer = setTimeout(() => {
+          centerView(psdW, psdH);
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [wizardStep, wizardPsd, centerView]);
 
   // Center view on initial mount
   useEffect(() => {
@@ -802,13 +817,71 @@ export default function CanvasViewport({
   const handleWizardFinalize = useCallback((groupDefs, assignments, meshAllParts) => {
     const { psdW, psdH, layers, partIds } = wizardPsd;
     // Snapshot project state before modifying (supports Back from adjust step)
-    preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
+    // Only snapshot if we don't already have one (e.g. from an earlier rig attempt)
+    if (!preImportSnapshotRef.current) {
+      preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
+    }
     finalizePsdImport(psdW, psdH, layers, partIds, groupDefs, assignments);
     meshAllPartsRef.current = meshAllParts;
     useEditorStore.getState().setShowSkeleton(true);
     useEditorStore.getState().setSkeletonEditMode(true);
     setWizardStep('adjust');
   }, [wizardPsd, finalizePsdImport]);
+
+  /* ── Wizard: enter reorder stage (finalize without rig) ────────────────── */
+  const handleWizardReorder = useCallback(() => {
+    const { psdW, psdH, layers, partIds } = wizardPsd;
+    if (!preImportSnapshotRef.current) {
+      preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
+    }
+    finalizePsdImport(psdW, psdH, layers, partIds, [], null);
+    setWizardStep('reorder');
+  }, [wizardPsd, finalizePsdImport]);
+
+  /* ── Wizard: apply rig to existing part nodes ──────────────────────────── */
+  const handleWizardApplyRig = useCallback((groupDefs, assignments, meshAllParts) => {
+    updateProject((proj) => {
+      // 1. Create group nodes first
+      for (const g of groupDefs) {
+        proj.nodes.push({
+          id: g.id,
+          type: 'group',
+          name: g.name,
+          parent: g.parentId,
+          opacity: 1,
+          visible: true,
+          boneRole: g.boneRole ?? null,
+          transform: {
+            ...DEFAULT_TRANSFORM(),
+            pivotX: g.pivotX ?? 0,
+            pivotY: g.pivotY ?? 0,
+          },
+        });
+      }
+
+      // 2. Update existing part nodes with new parents and draw orders
+      assignments.forEach((assign, index) => {
+        const partId = wizardPsd.partIds[index];
+        const node = proj.nodes.find(n => n.id === partId);
+        if (node) {
+          node.parent = assign.parentGroupId;
+          node.draw_order = assign.drawOrder;
+        }
+      });
+    });
+
+    const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
+    const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
+    if (groupDefs.length > 0) {
+      setExpandedGroups(groupDefs.map(g => g.id));
+      setActiveLayerTab('groups');
+    }
+
+    meshAllPartsRef.current = meshAllParts;
+    useEditorStore.getState().setShowSkeleton(true);
+    useEditorStore.getState().setSkeletonEditMode(true);
+    setWizardStep('adjust');
+  }, [wizardPsd, updateProject]);
 
   /* ── Wizard: skip rigging (called by PsdImportWizard) ──────────────────── */
   const handleWizardSkip = useCallback((meshAllParts) => {
@@ -843,7 +916,7 @@ export default function CanvasViewport({
     }
     useEditorStore.getState().setSkeletonEditMode(false);
     useEditorStore.getState().setShowSkeleton(false);
-    setWizardStep('choose');
+    setWizardStep('review');
   }, []);
 
 
@@ -1765,6 +1838,8 @@ export default function CanvasViewport({
           onComplete={handleWizardComplete}
           onBack={handleWizardBack}
           onSplitArms={handleWizardSplitArms}
+          onReorder={handleWizardReorder}
+          onApplyRig={handleWizardApplyRig}
         />
       )}
 
