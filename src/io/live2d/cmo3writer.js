@@ -1784,11 +1784,13 @@ export async function generateCmo3(input) {
         const pos = new Float64Array(grid);
         if (k === 0) return pos;
         for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1); // 0=roots(top), 1=tips(bottom)
+          const frac = r / (gH - 1);          // 0=roots(top), 1=tips(bottom)
+          const swayW = frac * frac * frac;    // cubic gradient — roots nearly static, tips full swing (matches Hiyori)
+          const curlW = frac * frac * frac;
           for (let c = 0; c < gW; c++) {
             const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.10 * gxS * frac;            // X sway
-            pos[idx + 1] += k * 0.02 * gyS * frac * frac;     // Y curl (quadratic)
+            pos[idx]     += k * 0.12 * gxS * swayW;   // X sway (tips-dominant)
+            pos[idx + 1] += k * 0.03 * gyS * curlW;   // Y curl (tips-dominant)
           }
         }
         return pos;
@@ -1801,10 +1803,12 @@ export async function generateCmo3(input) {
         if (k === 0) return pos;
         for (let r = 0; r < gH; r++) {
           const frac = r / (gH - 1);
+          const swayW = frac * frac * frac;
+          const curlW = frac * frac * frac;
           for (let c = 0; c < gW; c++) {
             const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.08 * gxS * frac;
-            pos[idx + 1] += k * 0.015 * gyS * frac * frac;
+            pos[idx]     += k * 0.10 * gxS * swayW;
+            pos[idx + 1] += k * 0.025 * gyS * curlW;
           }
         }
         return pos;
