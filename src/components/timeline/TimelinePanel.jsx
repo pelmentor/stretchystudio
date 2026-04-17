@@ -1220,7 +1220,15 @@ export function TimelinePanel() {
           label="End"
           value={endFrame}
           min={startFrame + 1}
-          onChange={(v) => anim.setEndFrame(v)}
+          onChange={(v) => {
+            anim.setEndFrame(v);
+            if (animation) {
+              update((p) => {
+                const a = p.animations.find(x => x.id === animation.id);
+                if (a) a.duration = (v / (a.fps ?? 24)) * 1000;
+              });
+            }
+          }}
           tip="The last frame of the animation loop."
         />
 
@@ -1231,7 +1239,23 @@ export function TimelinePanel() {
           value={fps}
           min={1}
           max={120}
-          onChange={(v) => anim.setFps(v)}
+          onChange={(v) => {
+            anim.setFps(v);
+            if (animation) {
+              update((p) => {
+                const a = p.animations.find(x => x.id === animation.id);
+                if (a) {
+                  const oldFps = a.fps ?? 24;
+                  a.fps = v;
+                  // Update duration so total frames (duration/1000 * fps) stays somewhat consistent?
+                  // Or should duration in ms be the source of truth?
+                  // In this app, typically the user thinks in frames, so if they change FPS 
+                  // but keep the same number of frames, the duration in ms must change.
+                  a.duration = (endFrame / v) * 1000;
+                }
+              });
+            }
+          }}
           tip="Frames per second — determines playback granularity."
         />
 

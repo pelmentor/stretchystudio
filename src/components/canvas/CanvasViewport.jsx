@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { retriangulate } from '@/mesh/generate';
+import { applyPuppetWarp } from '@/mesh/puppetWarp';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
 
@@ -309,6 +310,34 @@ export default function CanvasViewport({
           if (!existing.mesh_verts) poseOverrides.set(node.id, { ...existing, mesh_verts: blendedVerts });
         }
 
+        // Apply puppet warp — deform mesh using MLS-rigid based on pin positions
+        for (const node of projectRef.current.nodes) {
+          if (node.type !== 'part' || !node.mesh || !node.puppetWarp?.enabled || !node.puppetWarp.pins.length) continue;
+
+          const draft = anim.draftPose.get(node.id);
+          const kfOv = poseOverrides?.get(node.id);
+
+          // Effective pins: draft > keyframe > base
+          // Keyframe values only store {id, x, y} — merge restX/restY from base pins
+          const basePins = node.puppetWarp.pins;
+          const rawPins = draft?.puppet_pins ?? kfOv?.puppet_pins ?? null;
+          const effectivePins = rawPins
+            ? rawPins.map(p => {
+                const base = basePins.find(b => b.id === p.id);
+                return { restX: base?.restX ?? p.x, restY: base?.restY ?? p.y, x: p.x, y: p.y };
+              })
+            : basePins;
+          if (!effectivePins.length) continue;
+
+          // Input vertices: already blended (from blend shapes above) or base mesh
+          const inputVerts = (kfOv?.mesh_verts ?? node.mesh.vertices).map(v => ({ x: v.x ?? v.restX, y: v.y ?? v.restY }));
+          const warpedVerts = applyPuppetWarp(inputVerts, effectivePins);
+
+          if (!poseOverrides) poseOverrides = new Map();
+          const existing = poseOverrides.get(node.id) ?? {};
+          poseOverrides.set(node.id, { ...existing, mesh_verts: warpedVerts });
+        }
+
         sceneRef.current.draw(projectRef.current, editorRef.current, isDarkRef.current, poseOverrides);
 
 
@@ -504,6 +533,32 @@ export default function CanvasViewport({
               }
 
               upsertKeyframe(track.keyframes, currentTimeMs, value, 'linear');
+            }
+          }
+
+          // ── puppet_pins keyframe (puppet warp deformation) ──────────────────
+          if (node.type === 'part' && node.puppetWarp?.enabled) {
+            const hasPinDraft = draft?.puppet_pins !== undefined;
+            let pinTrack = animation.tracks.find(t => t.nodeId === nodeId && t.property === 'puppet_pins');
+
+            if (hasPinDraft || pinTrack) {
+              const pinValue = draft?.puppet_pins
+                ?? kfValues?.puppet_pins
+                ?? node.puppetWarp.pins.map(p => ({ id: p.id, x: p.x, y: p.y }));
+
+              const isNewPinTrack = !pinTrack;
+              if (!pinTrack) {
+                pinTrack = { nodeId, property: 'puppet_pins', keyframes: [] };
+                animation.tracks.push(pinTrack);
+
+                // Auto-insert rest-pose pin keyframe at startFrame
+                if (currentTimeMs > startMs) {
+                  const restPins = node.puppetWarp.pins.map(p => ({ id: p.id, x: p.restX, y: p.restY }));
+                  upsertKeyframe(pinTrack.keyframes, startMs, restPins, 'linear');
+                }
+              }
+
+              upsertKeyframe(pinTrack.keyframes, currentTimeMs, pinValue, 'linear');
             }
           }
         }
@@ -1638,6 +1693,7 @@ export default function CanvasViewport({
     exportWidth, exportHeight,
     format = 'png', quality = 0.92,
     cropOffset = null,
+    loopKeyframes = false,
   }) => {
     const canvas = canvasRef.current;
     const scene = sceneRef.current;
@@ -1672,7 +1728,70 @@ export default function CanvasViewport({
     let poseOverrides = null;
     if (animId) {
       const anim = exportProject.animations.find(a => a.id === animId);
-      if (anim) poseOverrides = computePoseOverrides(anim, timeMs, false, anim.duration ?? 0);
+      if (anim) {
+        poseOverrides = computePoseOverrides(anim, timeMs, loopKeyframes, anim.duration ?? 0);
+
+        // Compute mesh deformations (blend shapes + puppet warp) for export frame
+        for (const node of exportProject.nodes) {
+          if (node.type !== 'part' || !node.mesh) continue;
+
+          let currentMeshVerts = null;
+
+          // 1. Blend shapes
+          if (node.blendShapes?.length) {
+            const influences = node.blendShapes.map(shape => {
+              const prop = `blendShape:${shape.id}`;
+              return poseOverrides.get(node.id)?.[prop] ?? node.blendShapeValues?.[shape.id] ?? 0;
+            });
+            if (influences.some(v => v !== 0)) {
+              currentMeshVerts = node.mesh.vertices.map((v, i) => {
+                let bx = v.restX, by = v.restY;
+                for (let j = 0; j < node.blendShapes.length; j++) {
+                  const d = node.blendShapes[j].deltas[i];
+                  if (d) { bx += d.dx * influences[j]; by += d.dy * influences[j]; }
+                }
+                return { x: bx, y: by };
+              });
+            }
+          }
+
+          // 2. Puppet warp (applied on top of blended vertices if they exist)
+          if (node.puppetWarp?.enabled && node.puppetWarp.pins.length) {
+            const kfOv = poseOverrides.get(node.id);
+            const basePins = node.puppetWarp.pins;
+            const rawPins = kfOv?.puppet_pins ?? null;
+            const effectivePins = rawPins
+              ? rawPins.map(p => {
+                const base = basePins.find(b => b.id === p.id);
+                return { restX: base?.restX ?? p.x, restY: base?.restY ?? p.y, x: p.x, y: p.y };
+              })
+              : basePins;
+
+            if (effectivePins.length) {
+              const inputVerts = (currentMeshVerts ?? node.mesh.vertices).map(v => ({ x: v.x ?? v.restX, y: v.y ?? v.restY }));
+              currentMeshVerts = applyPuppetWarp(inputVerts, effectivePins);
+            }
+          }
+
+          if (currentMeshVerts) {
+            const existing = poseOverrides.get(node.id) ?? {};
+            poseOverrides.set(node.id, { ...existing, mesh_verts: currentMeshVerts });
+          }
+        }
+      }
+    }
+
+    // Upload deformed mesh vertices to GPU before rendering
+    const exportMeshOverridden = [];
+    if (poseOverrides) {
+      for (const [nodeId, ov] of poseOverrides) {
+        if (!ov.mesh_verts) continue;
+        const node = exportProject.nodes.find(n => n.id === nodeId);
+        if (node?.mesh) {
+          scene.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(node.mesh.uvs));
+          exportMeshOverridden.push(nodeId);
+        }
+      }
     }
 
     // Render with export flags
@@ -1694,6 +1813,14 @@ export default function CanvasViewport({
       dataUrl = off.toDataURL(mimeType, quality);
     } else {
       dataUrl = canvas.toDataURL(mimeType, quality);
+    }
+
+    // Restore original mesh positions after capture is complete
+    for (const nodeId of exportMeshOverridden) {
+      const node = exportProject.nodes.find(n => n.id === nodeId);
+      if (node?.mesh) {
+        scene.parts.uploadPositions(nodeId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
+      }
     }
 
     // Mark dirty for rAF to restore canvas size via resize guard

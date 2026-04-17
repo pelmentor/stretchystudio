@@ -229,6 +229,7 @@ export function ExportModal({ open, onClose, captureRef }) {
           format,
           quality: 0.92,
           cropOffset,
+          loopKeyframes: animStore.loopKeyframes,
         });
 
         if (dataUrl) {
