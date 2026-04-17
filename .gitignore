@@ -23,3 +23,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment
+.env
+.env.*
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Reference materials (proprietary Live2D assets)
+reference/
+
+# Live2D export session prompts (development artifacts, not user-facing)
+docs/live2d-export/sessions/
+
+# Claude Code local state
+.claude/
+
+# Project files (binary, large)
+*.psd
+*.stretch
+*.cmo3
+__pycache__/
+
+# Local dev scripts (platform-specific)
+_start.bat

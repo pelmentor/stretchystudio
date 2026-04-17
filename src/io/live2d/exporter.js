@@ -14,6 +14,7 @@ import { generateMoc3 } from './moc3writer.js';
 import { packTextureAtlas } from './textureAtlas.js';
 import { generateCmo3 } from './cmo3writer.js';
 import { generateCan3 } from './can3writer.js';
+import { matchTag } from '../armatureOrganizer.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -147,20 +148,22 @@ export async function exportLive2D(project, images, opts = {}) {
  * @param {Map<string, HTMLImageElement>} images - Loaded texture images
  * @param {object} opts
  * @param {string} [opts.modelName='model']
+ * @param {boolean} [opts.generateRig=false] - Generate standard Live2D rig (warp deformers, standard params)
  * @param {function} [opts.onProgress]
  * @returns {Promise<Blob>} .cmo3 blob ready for download
  */
 export async function exportLive2DProject(project, images, opts = {}) {
   const {
     modelName = 'model',
+    generateRig = false,
     onProgress = () => {},
   } = opts;
 
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
 
-  // Collect visible parts with meshes
-  // CRITICAL: Sort by draw_order (descending) to maintain correct depth ordering
+  // Collect visible parts with meshes.
+  // Sort by draw_order (descending) to maintain correct depth ordering (upstream fix).
   const meshParts = project.nodes
     .filter(n =>
       n.type === 'part' && n.mesh && n.visible !== false
@@ -174,6 +177,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     id: g.id,
     name: g.name ?? g.id,
     parent: g.parent ?? null,
+    boneRole: g.boneRole ?? null,
     transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
   }));
 
@@ -239,6 +243,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
 
     meshes.push({
       name: meshName,
+      tag: matchTag(meshName),
       partId: part.id,
       parentGroupId: part.parent ?? null,
       jointBoneId,
@@ -275,6 +280,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     parameters: project.parameters ?? [],
     animations: project.animations ?? [],
     modelName,
+    generateRig,
   });
 
   // Generate .can3 animation file if there are animations with deformer parameters

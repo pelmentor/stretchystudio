@@ -68,6 +68,11 @@ export async function saveProject(project) {
         ...n.mesh,
         uvs: Array.from(n.mesh.uvs),
         edgeIndices: Array.from(n.mesh.edgeIndices),
+        // Explicitly preserve skinning data (boneWeights + jointBoneId).
+        // The spread should already copy them, but immer proxies can sometimes
+        // omit dynamically-added properties — be explicit to be safe.
+        ...(n.mesh.boneWeights ? { boneWeights: Array.from(n.mesh.boneWeights) } : {}),
+        ...(n.mesh.jointBoneId ? { jointBoneId: n.mesh.jointBoneId } : {}),
       };
     }
     return n;
@@ -128,6 +133,7 @@ export async function loadProject(file) {
     if (node.mesh) {
       node.mesh.uvs = new Float32Array(node.mesh.uvs);
       // edgeIndices stays as Array — partRenderer handles both Array and Set
+
     }
     // Default blend shapes fields for forward-compat with old files
     if (node.blendShapes === undefined) node.blendShapes = [];

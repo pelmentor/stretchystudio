@@ -20,6 +20,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
@@ -45,6 +46,7 @@ export function ExportModal({ open, onClose, captureRef }) {
   const [exportDest, setExportDest] = useState('zip');
   const [modelName, setModelName] = useState('model');
   const [atlasSize, setAtlasSize] = useState(2048);
+  const [generateRig, setGenerateRig] = useState(true);
 
   // Progress state
   const [progress, setProgress] = useState(null);
@@ -54,6 +56,21 @@ export function ExportModal({ open, onClose, captureRef }) {
   // Store access
   const project = useProjectStore(s => s.project);
   const animStore = useAnimationStore();
+
+  // Sync defaults when modal opens
+  useEffect(() => {
+    if (!open) return;
+    if (project.animations.length === 0) {
+      setAnimTarget('staging');
+    } else if (animTarget === 'current' && !animStore.activeAnimationId) {
+      // If no active anim, just keep it on what it determines or staging if empty
+    }
+    const activeAnim = project.animations.find(a => a.id === animStore.activeAnimationId);
+    setExportFps(activeAnim?.fps ?? animStore.fps ?? 24);
+    const hasBg = project.canvas.bgEnabled;
+    setBgMode(hasBg ? 'custom' : 'transparent');
+    setBgColor(project.canvas.bgColor ?? '#ffffff');
+  }, [open, project, animStore, animTarget]);
 
   const handleLive2DExport = useCallback(async () => {
     setIsExporting(true);
@@ -79,6 +96,7 @@ export function ExportModal({ open, onClose, captureRef }) {
         // .cmo3 project export (editable in Cubism Editor)
         const blob = await exportLive2DProject(project, images, {
           modelName: name,
+          generateRig,
           onProgress: (msg) =>
             setProgress(p => (p ? { ...p, label: msg } : null)),
         });
@@ -118,22 +136,7 @@ export function ExportModal({ open, onClose, captureRef }) {
       setProgress(null);
       setIsExporting(false);
     }
-  }, [project, modelName, atlasSize, type, onClose]);
-
-  // Sync defaults when modal opens
-  useEffect(() => {
-    if (!open) return;
-    if (project.animations.length === 0) {
-      setAnimTarget('staging');
-    } else if (animTarget === 'current' && !animStore.activeAnimationId) {
-      // If no active anim, just keep it on what it determines or staging if empty
-    }
-    const activeAnim = project.animations.find(a => a.id === animStore.activeAnimationId);
-    setExportFps(activeAnim?.fps ?? animStore.fps ?? 24);
-    const hasBg = project.canvas.bgEnabled;
-    setBgMode(hasBg ? 'custom' : 'transparent');
-    setBgColor(project.canvas.bgColor ?? '#ffffff');
-  }, [open, project, animStore, animTarget]);
+  }, [project, modelName, atlasSize, type, generateRig, onClose]);
 
   const handleExport = useCallback(async () => {
     if (type === 'live2d' || type === 'live2d_project') {
@@ -229,7 +232,6 @@ export function ExportModal({ open, onClose, captureRef }) {
           format,
           quality: 0.92,
           cropOffset,
-          loopKeyframes: animStore.loopKeyframes,
         });
 
         if (dataUrl) {
@@ -263,6 +265,7 @@ export function ExportModal({ open, onClose, captureRef }) {
       setIsExporting(false);
     } catch (err) {
       console.error('[Export] Failed:', err);
+      setExportError(err.message || 'Export failed');
       setProgress(null);
       setIsExporting(false);
     }
@@ -338,9 +341,9 @@ export function ExportModal({ open, onClose, captureRef }) {
                 <SelectContent>
                   <SelectItem value="sequence">Sequence</SelectItem>
                   <SelectItem value="single_frame">Single Frame</SelectItem>
-                  <SelectItem value="spine">Spine (4.0+)</SelectItem>
+                  <SelectItem value="live2d">Live2D Runtime</SelectItem>
                   <SelectItem value="live2d_project">Live2D Project</SelectItem>
-                  {/* <SelectItem value="live2d">Live2D Runtime</SelectItem> disabled due to lacking most features */}
+                  <SelectItem value="spine">Spine (4.0+)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -377,250 +380,259 @@ export function ExportModal({ open, onClose, captureRef }) {
                   />
                 </div>
                 {type !== 'live2d_project' && (
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Atlas Size</Label>
-                    <Select value={String(atlasSize)} onValueChange={v => setAtlasSize(Number(v))} disabled={isExporting}>
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1024">1024</SelectItem>
-                        <SelectItem value="2048">2048</SelectItem>
-                        <SelectItem value="4096">4096</SelectItem>
-                      </SelectContent>
-                    </Select>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Atlas Size</Label>
+                  <Select value={String(atlasSize)} onValueChange={v => setAtlasSize(Number(v))} disabled={isExporting}>
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1024">1024</SelectItem>
+                      <SelectItem value="2048">2048</SelectItem>
+                      <SelectItem value="4096">4096</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                )}
+                {type === 'live2d_project' && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="generateRig"
+                      checked={generateRig}
+                      onCheckedChange={setGenerateRig}
+                      disabled={isExporting}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="generateRig" className="text-xs cursor-pointer leading-relaxed">
+                      Generate standard Live2D rig
+                      <span className="block text-muted-foreground font-normal">
+                        Adds warp deformers, standard parameters (ParamAngleX/Y/Z, ParamBody, etc.), and face-part deformer hierarchy
+                      </span>
+                    </Label>
                   </div>
                 )}
-                {type === 'live2d_project' ? (
-                  <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
-                    <span className="font-medium">Live2D Cubism .cmo3</span> — project file editable in Cubism Editor 5.0. Each mesh gets its own texture. Full support for groups, rotation, mesh deformation, and animations.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
-                      <span className="font-medium">Live2D Cubism V4.00</span> — runtime format for Ren'Py, game engines, and apps using Cubism SDK 4.0+. Not editable in Cubism Editor.
-                    </div>
-                    <div className="text-xs text-amber-600 dark:text-amber-500 px-2 py-1.5 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                      <span className="font-medium">⚠ Limited feature support:</span> Opacity animation only. Rotation/deformation animation requires .cmo3 project export.
-                    </div>
-                  </div>
-                )}
-
+                <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
+                  {type === 'live2d_project' ? (
+                    <><span className="font-medium">Live2D Cubism .cmo3</span> — project file editable in Cubism Editor 5.0. Each mesh gets its own texture.</>
+                  ) : (
+                    <><span className="font-medium">Live2D Cubism V4.00</span> — runtime format for Ren'Py, game engines, and apps using Cubism SDK 4.0+. Not editable in Cubism Editor.</>
+                  )}
+                </div>
               </div>
             </>
           )}
 
           {!isLive2D && <Separator />}
 
-          {/* Section 2: Animation target + timing */}
+          {/* Sections 2-4: frame export options (hidden for Live2D) */}
           {!isLive2D && (<>
-            <div className="space-y-3">
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Animation</Label>
+              <Select value={animTarget} onValueChange={setAnimTarget} disabled={isExporting}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="staging">Staging</SelectItem>
+                  {project.animations.length > 0 && <SelectItem value="current">Current</SelectItem>}
+                  {project.animations.map(a => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  ))}
+                  {project.animations.length > 1 && (
+                    <SelectItem value="all">All</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {showFpsInput && (
               <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Animation</Label>
-                <Select value={animTarget} onValueChange={setAnimTarget} disabled={isExporting}>
-                  <SelectTrigger className="h-8 text-xs">
+                <Label className="text-xs text-muted-foreground">FPS</Label>
+                <Input
+                  type="number"
+                  className="h-8 text-xs"
+                  value={exportFps}
+                  min={1}
+                  max={120}
+                  onChange={e =>
+                    setExportFps(Math.max(1, Number(e.target.value)))
+                  }
+                  disabled={isExporting}
+                />
+              </div>
+            )}
+
+            {showFrameInput && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Frame</Label>
+                <div className="flex items-center gap-3">
+                  <Slider
+                    value={[frameIndex]}
+                    min={0}
+                    max={maxFrameIndex}
+                    step={1}
+                    onValueChange={([v]) => setFrameIndex(v)}
+                    disabled={isExporting || !hasFrames}
+                    className="flex-1"
+                  />
+                  <Input
+                    type="number"
+                    className="h-8 text-xs w-20"
+                    value={frameIndex}
+                    min={0}
+                    max={maxFrameIndex}
+                    onChange={e =>
+                      setFrameIndex(
+                        Math.min(maxFrameIndex, Math.max(0, Number(e.target.value)))
+                      )
+                    }
+                    disabled={isExporting || !hasFrames}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Separator />
+
+          {isSpine && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground bg-accent/20 p-3 rounded-md border border-accent/20 space-y-1.5">
+              <p className="font-semibold text-foreground/90">How to import to Spine:</p>
+              <ol className="list-decimal list-inside space-y-1 ml-0.5">
+                <li>Unzip the exported <strong>.zip</strong> file</li>
+                <li>In Spine, go to <strong>Spine menu &gt; Import Data...</strong></li>
+                <li>Select the <strong>.json</strong> file from the unzipped folder</li>
+              </ol>
+            </div>
+          )}
+
+          {/* Section 3: Image area, scale, BG */}
+          {!isSpine && (
+            <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                Image Contains
+              </Label>
+              <Select
+                value={imageContains}
+                onValueChange={setImageContains}
+                disabled={isExporting}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="canvas_area">Canvas area</SelectItem>
+                  <SelectItem value="min_image_area">Min image area</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                Output Scale (%)
+              </Label>
+              <Input
+                type="number"
+                className="h-8 text-xs"
+                value={outputScale}
+                min={1}
+                max={400}
+                onChange={e =>
+                  setOutputScale(Math.max(1, Number(e.target.value)))
+                }
+                disabled={isExporting}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                Background
+              </Label>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={bgMode}
+                  onValueChange={setBgMode}
+                  disabled={isExporting}
+                >
+                  <SelectTrigger className="h-8 text-xs flex-1">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="staging">Staging</SelectItem>
-                    {project.animations.length > 0 && <SelectItem value="current">Current</SelectItem>}
-                    {project.animations.map(a => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.name}
-                      </SelectItem>
-                    ))}
-                    {project.animations.length > 1 && (
-                      <SelectItem value="all">All</SelectItem>
-                    )}
+                    <SelectItem value="transparent">Transparent</SelectItem>
+                    <SelectItem value="custom">Custom color</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-
-              {showFpsInput && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">FPS</Label>
-                  <Input
-                    type="number"
-                    className="h-8 text-xs"
-                    value={exportFps}
-                    min={1}
-                    max={120}
-                    onChange={e =>
-                      setExportFps(Math.max(1, Number(e.target.value)))
-                    }
+                {bgMode === 'custom' && (
+                  <input
+                    type="color"
+                    value={bgColor}
+                    className="h-8 w-10 rounded border border-input cursor-pointer p-0.5 bg-background"
+                    onChange={e => setBgColor(e.target.value)}
                     disabled={isExporting}
                   />
-                </div>
-              )}
-
-              {showFrameInput && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Frame</Label>
-                  <div className="flex items-center gap-3">
-                    <Slider
-                      value={[frameIndex]}
-                      min={0}
-                      max={maxFrameIndex}
-                      step={1}
-                      onValueChange={([v]) => setFrameIndex(v)}
-                      disabled={isExporting || !hasFrames}
-                      className="flex-1"
-                    />
-                    <Input
-                      type="number"
-                      className="h-8 text-xs w-20"
-                      value={frameIndex}
-                      min={0}
-                      max={maxFrameIndex}
-                      onChange={e =>
-                        setFrameIndex(
-                          Math.min(maxFrameIndex, Math.max(0, Number(e.target.value)))
-                        )
-                      }
-                      disabled={isExporting || !hasFrames}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
-            {isSpine && (
-              <div className="text-[11px] leading-relaxed text-muted-foreground bg-accent/20 p-3 rounded-md border border-accent/20 space-y-1.5">
-                <p className="font-semibold text-foreground/90">How to import to Spine:</p>
-                <ol className="list-decimal list-inside space-y-1 ml-0.5">
-                  <li>Unzip the exported <strong>.zip</strong> file</li>
-                  <li>In Spine, go to <strong>Spine menu &gt; Import Data...</strong></li>
-                  <li>Select the <strong>.json</strong> file from the unzipped folder</li>
-                </ol>
-              </div>
-            )}
-
-            {/* Section 3: Image area, scale, BG */}
-            {!isSpine && (
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">
-                    Image Contains
-                  </Label>
-                  <Select
-                    value={imageContains}
-                    onValueChange={setImageContains}
-                    disabled={isExporting}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="canvas_area">Canvas area</SelectItem>
-                      <SelectItem value="min_image_area">Min image area</SelectItem>
-                      <SelectItem value="custom">Custom</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">
-                    Output Scale (%)
-                  </Label>
-                  <Input
-                    type="number"
-                    className="h-8 text-xs"
-                    value={outputScale}
-                    min={1}
-                    max={400}
-                    onChange={e =>
-                      setOutputScale(Math.max(1, Number(e.target.value)))
-                    }
-                    disabled={isExporting}
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">
-                    Background
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={bgMode}
-                      onValueChange={setBgMode}
-                      disabled={isExporting}
-                    >
-                      <SelectTrigger className="h-8 text-xs flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="transparent">Transparent</SelectItem>
-                        <SelectItem value="custom">Custom color</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {bgMode === 'custom' && (
-                      <input
-                        type="color"
-                        value={bgColor}
-                        className="h-8 w-10 rounded border border-input cursor-pointer p-0.5 bg-background"
-                        onChange={e => setBgColor(e.target.value)}
-                        disabled={isExporting}
-                      />
-                    )}
-                  </div>
-                </div>
-
-                {showJpgWarning && (
-                  <div className="text-xs text-yellow-600 dark:text-yellow-500 px-2 py-1 rounded bg-yellow-50 dark:bg-yellow-900/20">
-                    JPG doesn&apos;t support transparency — pixels will be black.
-                  </div>
                 )}
               </div>
-            )}
+            </div>
 
-            <Separator />
-
-            {/* Section 4: Export destination */}
-            {!isSpine && type !== 'single_frame' && (
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">Export to</Label>
-                <RadioGroup
-                  value={exportDest}
-                  onValueChange={setExportDest}
-                  disabled={isExporting}
-                  className="flex gap-4"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <RadioGroupItem value="zip" id="dest-zip" disabled={isExporting} />
-                    <Label
-                      htmlFor="dest-zip"
-                      className="text-xs cursor-pointer"
-                    >
-                      ZIP file
-                    </Label>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <RadioGroupItem
-                      value="folder"
-                      id="dest-folder"
-                      disabled={!hasFolderSupport || isExporting}
-                    />
-                    <Label
-                      htmlFor="dest-folder"
-                      className={cn(
-                        'text-xs cursor-pointer',
-                        (!hasFolderSupport || isExporting) &&
-                        'opacity-40 cursor-not-allowed'
-                      )}
-                    >
-                      Folder
-                      {!hasFolderSupport && (
-                        <span className="ml-1 text-muted-foreground">
-                          (not supported)
-                        </span>
-                      )}
-                    </Label>
-                  </div>
-                </RadioGroup>
+            {showJpgWarning && (
+              <div className="text-xs text-yellow-600 dark:text-yellow-500 px-2 py-1 rounded bg-yellow-50 dark:bg-yellow-900/20">
+                JPG doesn&apos;t support transparency — pixels will be black.
               </div>
             )}
+          </div>
+        )}
+
+        <Separator />
+
+          {/* Section 4: Export destination */}
+          {!isSpine && type !== 'single_frame' && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Export to</Label>
+              <RadioGroup
+                value={exportDest}
+                onValueChange={setExportDest}
+                disabled={isExporting}
+                className="flex gap-4"
+              >
+                <div className="flex items-center gap-1.5">
+                  <RadioGroupItem value="zip" id="dest-zip" disabled={isExporting} />
+                  <Label
+                    htmlFor="dest-zip"
+                    className="text-xs cursor-pointer"
+                  >
+                    ZIP file
+                  </Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <RadioGroupItem
+                    value="folder"
+                    id="dest-folder"
+                    disabled={!hasFolderSupport || isExporting}
+                  />
+                  <Label
+                    htmlFor="dest-folder"
+                    className={cn(
+                      'text-xs cursor-pointer',
+                      (!hasFolderSupport || isExporting) &&
+                        'opacity-40 cursor-not-allowed'
+                    )}
+                  >
+                    Folder
+                    {!hasFolderSupport && (
+                      <span className="ml-1 text-muted-foreground">
+                        (not supported)
+                      </span>
+                    )}
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+          )}
           </>)}
 
           {/* Error display */}

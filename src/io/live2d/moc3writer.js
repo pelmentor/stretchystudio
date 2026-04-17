@@ -335,8 +335,8 @@ function buildSectionData(input) {
   // Always have at least one root part
   const partNodes = groups.length > 0 ? groups : [{ id: 'PartRoot', name: 'Root', parent: null, opacity: 1, visible: true }];
 
-  // Collect art meshes (parts with meshes → Live2D ArtMeshes)
-  // CRITICAL: Sort by draw_order (descending) to maintain correct depth ordering
+  // Collect art meshes (parts with meshes → Live2D ArtMeshes).
+  // Sort by draw_order (descending) to maintain correct depth ordering (upstream fix).
   const meshParts = project.nodes
     .filter(n =>
       n.type === 'part' && n.mesh && n.visible !== false && regions.has(n.id)
