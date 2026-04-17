@@ -315,6 +315,57 @@ Passing Body-X-nested-0..1 values (~0.5) through a rotation deformer collapses t
 
 ## Phase 4: Future Work
 
+### Expose rig tuning knobs in the export modal (product direction note)
+
+The current `generateRig` flag is binary: "use our Hiyori-pattern rig" vs "don't".
+The procedural rig has several hand-tuned magnitudes baked into `cmo3writer.js`
+as constants — users can't adjust them without code.
+
+**Candidates for exposure:**
+- `FP_BOW_X_FRAC` / `FP_BOW_Y_FRAC` — face parallax bow magnitude (face curvature
+  under AngleX/Y)
+- `FP_PERSP_X_FRAC` / `FP_PERSP_Y_FRAC` — asymmetric perspective add-on
+- `FP_CROSS_Y_FRAC` / `FP_CROSS_X_FRAC` — tilt-while-turning cross-axis shift
+- `NECK_TILT_FRAC` — how much the upper neck follows head tilt (0.08 default)
+- `faceUnionBbox` / `neckUnionBbox` padding (default 10%) — affects rig warp
+  footprint
+- Face Rotation keyform angle range (default ±10° for ±30° param) — less/more
+  dramatic head tilt
+
+**UX sketch**: under the `generateRig` Checkbox, an expandable "Tuning"
+disclosure with sliders for 3-5 most impactful knobs.  Presets: "subtle" /
+"default" / "dramatic" as quick starting points.
+
+**Why it's worth considering**: the rig quality is "good template, not
+hand-sculpted per character" (Hiyori's proportions don't fit every character).
+Letting users tune without touching code widens the range of characters that
+get a decent export out-of-the-box.  Middle-ground alternative to the much
+larger project of putting procedural deformers inside SS's editor itself
+(which would make SS more Live2D-specific and hurt Spine export).
+
+**Scope**: 2-3 hours of UI work + threading the values through
+`exportLive2DProject → generateCmo3` options.  No new deformer logic needed —
+the knobs already exist in code, just need to be parameterized.
+
+### Procedural rig as first-class SS scene nodes (larger product decision)
+
+A further step — if MangoLion decides SS should support Live2D-style warp
+deformers and rotation deformers as editable scene primitives with live preview
+— is **much bigger**.  It would require SS's editor to:
+
+- Add `CWarpDeformerSource`-equivalent scene nodes (grid + bilinear interp)
+- Add rotation deformer nodes with pivot + angle keyforms
+- Parameter-binding UI for "this deformer reacts to ParamAngleZ with these
+  keyforms"
+- Live canvas preview of warped mesh output
+
+**Tradeoff**: makes SS into a Live2D-like editor.  Spine export would not
+benefit (Spine uses bones + weights, not warp deformers).  This is a fork of
+SS's product identity — worth a conversation with upstream before starting.
+
+Not on our current roadmap.  Documenting here as the *other* direction the
+rig-tuning question could go.
+
 ### Multi-bone calf/knee controllers for merged legs (USER REQUEST)
 
 When a PSD has a single `legwear` layer (no `-l`/`-r` split), SS creates one `bothLegs` group with no knee bones. The user wants `leftKnee`/`rightKnee` bones as children of `bothLegs`, so that one monolithic leg mesh gets weight-based knee bending — same as how a monolithic arm mesh already gets elbow bending.
