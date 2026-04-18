@@ -374,6 +374,66 @@ function crc32Buf(data) {
  */
 
 /**
+ * P12 (Apr 2026): extract a layer's bottom contour directly from its PNG alpha.
+ * Used by the eye-closure parabola fit to find the TRUE drawn bottom edge of the
+ * eyewhite, bypassing SS mesh triangulation artifacts (bin-max on dense interior
+ * vertices can pick INSIDE instead of the edge, flipping the closure direction).
+ *
+ * For each X column within [xMinCanvas, xMaxCanvas], scans from the bottom of
+ * the canvas upward until it finds a pixel with alpha > threshold. That pixel's
+ * (x, y) is the bottom edge sample. Returns an array of [x, y] pairs in canvas
+ * coordinates, or null if decode fails / no opaque pixels found.
+ *
+ * @param {Uint8Array} pngData - Canvas-sized PNG bytes (alpha channel marks the layer)
+ * @param {number} xMinCanvas
+ * @param {number} xMaxCanvas
+ * @returns {Promise<Array<[number, number]> | null>}
+ */
+async function extractBottomContourFromLayerPng(pngData, xMinCanvas, xMaxCanvas) {
+  if (!pngData || !pngData.length) return null;
+  if (typeof Image === 'undefined' || typeof URL === 'undefined') return null;
+  try {
+    const blob = new Blob([pngData], { type: 'image/png' });
+    const url = URL.createObjectURL(blob);
+    let img;
+    try {
+      img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = (e) => reject(e);
+        el.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    const canvas = (typeof OffscreenCanvas !== 'undefined')
+      ? new OffscreenCanvas(img.width, img.height)
+      : Object.assign(document.createElement('canvas'), {
+          width: img.width, height: img.height,
+        });
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, img.width, img.height).data;
+    const ALPHA_THRESHOLD = 16;
+    const xStart = Math.max(0, Math.floor(xMinCanvas));
+    const xEnd   = Math.min(img.width - 1, Math.ceil(xMaxCanvas));
+    const contour = [];
+    for (let x = xStart; x <= xEnd; x++) {
+      for (let y = img.height - 1; y >= 0; y--) {
+        if (data[(y * img.width + x) * 4 + 3] > ALPHA_THRESHOLD) {
+          contour.push([x, y]);
+          break;
+        }
+      }
+    }
+    return contour.length >= 3 ? contour : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Generate a .cmo3 file (CAFF archive containing main.xml + PNG textures).
  *
  * @param {Cmo3Input} input
@@ -659,17 +719,17 @@ export async function generateCmo3(input) {
   const eyeUnionBboxPerSide = new Map();
   for (const side of ['l', 'r']) {
     // Primary: fit parabola to eyewhite's lower edge. Fallback: eyelash's lower edge.
-    let sourceVerts = null;
+    let sourceMesh = null;
     let sourceTag = null;
     for (const m of meshes) {
       if (m.tag === `eyewhite-${side}` && m.vertices && m.vertices.length >= 6) {
-        sourceVerts = m.vertices; sourceTag = 'eyewhite'; break;
+        sourceMesh = m; sourceTag = 'eyewhite'; break;
       }
     }
-    if (!sourceVerts) {
+    if (!sourceMesh) {
       for (const m of meshes) {
         if (m.tag === `eyelash-${side}` && m.vertices && m.vertices.length >= 6) {
-          sourceVerts = m.vertices; sourceTag = 'eyelash-fallback'; break;
+          sourceMesh = m; sourceTag = 'eyelash-fallback'; break;
         }
       }
     }
@@ -688,7 +748,8 @@ export async function generateCmo3(input) {
       }
       break;
     }
-    if (!sourceVerts) continue;
+    if (!sourceMesh) continue;
+    const sourceVerts = sourceMesh.vertices;
     // Sort by X
     const nv = sourceVerts.length / 2;
     const pairs = new Array(nv);
@@ -697,19 +758,37 @@ export async function generateCmo3(input) {
     const xMin = pairs[0][0];
     const xMax = pairs[pairs.length - 1][0];
     if (xMax - xMin < 1) continue;
-    // X-uniform bins: max-Y per bin (bottom contour samples)
-    const binW = (xMax - xMin) / EYE_CLOSURE_BIN_COUNT;
-    const samples = [];
-    for (let b = 0; b < EYE_CLOSURE_BIN_COUNT; b++) {
-      const bxLo = xMin + b * binW;
-      const bxHi = b === EYE_CLOSURE_BIN_COUNT - 1 ? xMax + 1 : xMin + (b + 1) * binW;
-      let maxY = -Infinity, sumX = 0, count = 0;
-      for (const p of pairs) {
-        if (p[0] < bxLo || p[0] >= bxHi) continue;
-        if (p[1] > maxY) maxY = p[1];
-        sumX += p[0]; count++;
+
+    // P12 (Apr 2026): extract bottom contour from the LAYER'S PNG ALPHA, not
+    // from mesh vertices. SS mesh triangulation varies per character (dense
+    // interior, sparse edges) — bin-max on mesh verts picks interior vertices
+    // in dense-middle bins, producing wrong-direction parabolas (∩ hill instead
+    // of ∪ bowl). PSD alpha scan gives the TRUE drawn bottom edge per X column.
+    // Robust across any SS triangulation. Fall back to mesh bin-max if decode fails.
+    let samples = null;
+    let sampleSource = 'mesh-bin-max';
+    if (sourceMesh.pngData) {
+      const contour = await extractBottomContourFromLayerPng(sourceMesh.pngData, xMin, xMax);
+      if (contour && contour.length >= 5) {
+        samples = contour;
+        sampleSource = sourceTag + '-png-alpha';
       }
-      if (count > 0) samples.push([sumX / count, maxY]);
+    }
+    if (!samples) {
+      // Fallback: X-uniform bin-max on mesh vertices
+      const binW = (xMax - xMin) / EYE_CLOSURE_BIN_COUNT;
+      samples = [];
+      for (let b = 0; b < EYE_CLOSURE_BIN_COUNT; b++) {
+        const bxLo = xMin + b * binW;
+        const bxHi = b === EYE_CLOSURE_BIN_COUNT - 1 ? xMax + 1 : xMin + (b + 1) * binW;
+        let maxY = -Infinity, sumX = 0, count = 0;
+        for (const p of pairs) {
+          if (p[0] < bxLo || p[0] >= bxHi) continue;
+          if (p[1] > maxY) maxY = p[1];
+          sumX += p[0]; count++;
+        }
+        if (count > 0) samples.push([sumX / count, maxY]);
+      }
     }
     if (samples.length < 3) continue;
     // Flip for eyelash fallback: eyelash's lower edge is the UPPER eye opening
@@ -747,7 +826,7 @@ export async function generateCmo3(input) {
     eyewhiteCurvePerSide.set(side, {
       a: ac, b: bc, c,
       xMid, xScale,
-      sourceTag,
+      sourceTag, sampleSource,
       xMin, xMax, sampleCount: samples.length,
     });
     // Union bbox across eyelash + eyewhite + iris for this side (P11)
