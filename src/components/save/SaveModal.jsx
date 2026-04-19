@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { saveProject } from '@/io/projectFile';
 import { saveToDb } from '@/io/projectDb';
+import { useProjectStore } from '@/store/projectStore';
 import { Loader2, Download, Library, AlertTriangle } from 'lucide-react';
 import { ProjectGallery } from '@/components/load/ProjectGallery';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -60,6 +61,7 @@ export function SaveModal({
         a.download = `${nameToUse.trim()}.stretch`;
         a.click();
         URL.revokeObjectURL(url);
+        useProjectStore.getState().setHasUnsavedChanges(false);
         onOpenChange(false);
       } else {
         const thumbnail = captureRef.current?.() || '';
@@ -70,6 +72,7 @@ export function SaveModal({
           thumbnail
         );
         onSavedToDb(savedId, nameToUse.trim());
+        useProjectStore.getState().setHasUnsavedChanges(false);
         onOpenChange(false);
       }
     } catch (err) {

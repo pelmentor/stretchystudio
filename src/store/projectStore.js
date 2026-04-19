@@ -84,21 +84,29 @@ export const useProjectStore = create((set) => ({
     textureVersion: 0,
   },
 
+  hasUnsavedChanges: false,
+
   // ── Actions ────────────────────────────────────────────────────────────────
 
   /** Generic immer recipe — use for all undoable project edits.
    *  Auto-snapshots before mutation unless { skipHistory: true } is passed. */
   updateProject: (recipe, { skipHistory = false } = {}) => set((state) => {
+    let hasUnsavedChanges = state.hasUnsavedChanges;
     if (!skipHistory && !isBatching()) {
       pushSnapshot(state.project);
+      hasUnsavedChanges = true;
     }
     return produce((state) => {
+      state.hasUnsavedChanges = hasUnsavedChanges;
       recipe(state.project, state.versionControl);
     })(state);
   }),
 
+  setHasUnsavedChanges: (val) => set({ hasUnsavedChanges: val }),
+
   /** Create a new empty group node */
   createGroup: (name) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     state.project.nodes.push({
       id:        uid(),
       type:      'group',
@@ -116,6 +124,7 @@ export const useProjectStore = create((set) => ({
    * Never touches draw_order.
    */
   reparentNode: (nodeId, newParentId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (node) node.parent = newParentId ?? null;
     state.versionControl.transformVersion++;
@@ -124,6 +133,7 @@ export const useProjectStore = create((set) => ({
    * Animation CRUD
    */
   createAnimation: (name) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const id = uid();
     state.project.animations.push({
       id,
@@ -136,16 +146,19 @@ export const useProjectStore = create((set) => ({
   })),
 
   renameAnimation: (id, newName) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const anim = state.project.animations.find(a => a.id === id);
     if (anim) anim.name = newName;
   })),
 
   deleteAnimation: (id) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     state.project.animations = state.project.animations.filter(a => a.id !== id);
   })),
 
   /** Create a new blend shape on a part node */
   createBlendShape: (nodeId, name) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node || !node.mesh) return;
     const id = uid();
@@ -159,6 +172,7 @@ export const useProjectStore = create((set) => ({
 
   /** Delete a blend shape from a part node */
   deleteBlendShape: (nodeId, shapeId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node) return;
     if (node.blendShapes) {
@@ -172,6 +186,7 @@ export const useProjectStore = create((set) => ({
 
   /** Set the influence value of a blend shape in staging mode */
   setBlendShapeValue: (nodeId, shapeId, value) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (node && node.blendShapeValues) {
       node.blendShapeValues[shapeId] = Math.max(0, Math.min(1, value));
@@ -181,6 +196,7 @@ export const useProjectStore = create((set) => ({
 
   /** Update the deltas of a blend shape (used by edit mode brush) */
   updateBlendShapeDeltas: (nodeId, shapeId, deltas) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node) return;
     const shape = node.blendShapes?.find(s => s.id === shapeId);
@@ -203,6 +219,7 @@ export const useProjectStore = create((set) => ({
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
+      state.hasUnsavedChanges = false;
     }));
   },
 
@@ -230,16 +247,19 @@ export const useProjectStore = create((set) => ({
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
+      state.hasUnsavedChanges = false;
     }));
   },
 
   /** Update canvas properties */
   updateCanvas: (partial) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     Object.assign(state.project.canvas, partial);
   })),
 
   /** Enable or disable puppet warp on a part node */
   setPuppetWarpEnabled: (nodeId, enabled) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node) return;
     if (enabled && !node.puppetWarp) {
@@ -252,6 +272,7 @@ export const useProjectStore = create((set) => ({
 
   /** Add a pin at image-space rest position */
   addPuppetPin: (nodeId, restX, restY) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node?.puppetWarp) return;
     node.puppetWarp.pins.push({
@@ -264,6 +285,7 @@ export const useProjectStore = create((set) => ({
 
   /** Remove a pin by id */
   removePuppetPin: (nodeId, pinId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     if (!node?.puppetWarp) return;
     node.puppetWarp.pins = node.puppetWarp.pins.filter(p => p.id !== pinId);
@@ -272,6 +294,7 @@ export const useProjectStore = create((set) => ({
 
   /** Move a pin's current position (staging mode — bakes directly into node) */
   setPuppetPinPosition: (nodeId, pinId, x, y) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
     const pin = node?.puppetWarp?.pins?.find(p => p.id === pinId);
     if (!pin) return;
@@ -287,6 +310,7 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
 
     return produce(state, (draft) => {
+      draft.hasUnsavedChanges = true;
       const proj = draft.project;
       const idsToMap = new Map(); // oldId -> newId
 
@@ -364,6 +388,7 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
 
     return produce(state, (draft) => {
+      draft.hasUnsavedChanges = true;
       const proj = draft.project;
       const idsToDelete = new Set();
 

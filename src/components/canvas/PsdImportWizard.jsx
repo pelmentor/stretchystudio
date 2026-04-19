@@ -172,7 +172,7 @@ export default function PsdImportWizard({
         return `grp-${Math.random().toString(36).substr(2, 9)}`;
       });
 
-      if (step === 'reorder') {
+      if (step === 'reorder' || step === 'dwpose' || step === 'adjust') {
         onApplyRig(groupDefs, assignments, meshAllParts);
       } else {
         onFinalize(groupDefs, assignments, meshAllParts);
