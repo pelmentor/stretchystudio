@@ -74,6 +74,7 @@ export default function EditorLayout() {
   const wizardStep = useEditorStore(s => s.wizardStep);
   const project = useProjectStore(s => s.project);
   const updateProject = useProjectStore(s => s.updateProject);
+  const hasUnsavedChanges = useProjectStore(s => s.hasUnsavedChanges);
   const captureRestPose = useAnimationStore(s => s.captureRestPose);
 
   // Canvas properties
@@ -107,6 +108,32 @@ export default function EditorLayout() {
     fontFamily, setFontFamily,
     fontSize, setFontSize,
   } = useTheme();
+  
+  // Warn before closing tab if there are unsaved changes
+  React.useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges) {
+        // Modern approach for Chrome/Edge/Firefox
+        e.preventDefault();
+        // Required by Chrome
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Fallback for some Chromium versions
+    if (hasUnsavedChanges) {
+      window.onbeforeunload = () => "";
+    } else {
+      window.onbeforeunload = null;
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.onbeforeunload = null;
+    };
+  }, [hasUnsavedChanges]);
 
   // Compute bounding box of all parts across all animation keyframes + rest pose
   const computeFitBounds = useCallback(() => {
