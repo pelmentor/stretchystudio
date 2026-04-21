@@ -220,9 +220,12 @@ export async function generateCmo3(input) {
       { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0 },
       { id: 'ParamHairSide',   name: 'Hair Side',     min: -1,  max: 1,  def: 0 },
       { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0 },
-      // Physics-driven clothing. Warp bindings on matching tags (bottomwear)
-      // live in TAG_PARAM_BINDINGS; physics rules live in cmo3/physics.js.
+      // Physics-driven clothing. Warp bindings on matching tags
+      // (bottomwear / topwear / legwear) live in TAG_PARAM_BINDINGS;
+      // physics rules live in cmo3/physics.js.
       { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0 },
+      { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0 },
+      { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0 },
     ];
     for (const sp of standardParams) {
       if (paramDefs.find(p => p.id === sp.id)) continue;
@@ -1772,6 +1775,8 @@ export async function generateCmo3(input) {
   const pidParamHairFront  = paramDefs.find(p => p.id === 'ParamHairFront')?.pid;
   const pidParamHairBack   = paramDefs.find(p => p.id === 'ParamHairBack')?.pid;
   const pidParamSkirt      = paramDefs.find(p => p.id === 'ParamSkirt')?.pid;
+  const pidParamShirt      = paramDefs.find(p => p.id === 'ParamShirt')?.pid;
+  const pidParamPants      = paramDefs.find(p => p.id === 'ParamPants')?.pid;
   // Face parallax (Session 19) — drive Face Rotation (AngleZ) + 7 face parallax warps (AngleX × AngleY).
   const pidParamAngleX     = paramDefs.find(p => p.id === 'ParamAngleX')?.pid;
   const pidParamAngleY     = paramDefs.find(p => p.id === 'ParamAngleY')?.pid;
@@ -1838,6 +1843,51 @@ export async function generateCmo3(input) {
             const idx = (r * gW + c) * 2;
             pos[idx]     += k * 0.06 * gxS * swayW;
             pos[idx + 1] += k * 0.02 * gyS * curlW;
+          }
+        }
+        return pos;
+      },
+    }],
+    // ── Shirt hem sway (topwear bottom edge) ──
+    // Magnitude ~4% X / 1% Y — fitted tops have narrower fabric movement than
+    // skirts. Top rows (shoulders / arms) stay pinned so sleeves don't get
+    // dragged along; only the hem flexes. Requires PSD splitting for proper
+    // sleeve physics; this gives a subtle hem flap that reads as alive.
+    ['topwear', {
+      bindings: [{ pid: pidParamShirt, keys: [-1, 0, 1], desc: 'ParamShirt' }],
+      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
+        const pos = new Float64Array(grid);
+        if (k === 0) return pos;
+        for (let r = 0; r < gH; r++) {
+          const frac = r / (gH - 1);          // 0=shoulders(top), 1=hem(bottom)
+          const swayW = frac * frac * frac;
+          const curlW = frac * frac * frac;
+          for (let c = 0; c < gW; c++) {
+            const idx = (r * gW + c) * 2;
+            pos[idx]     += k * 0.04 * gxS * swayW;
+            pos[idx + 1] += k * 0.01 * gyS * curlW;
+          }
+        }
+        return pos;
+      },
+    }],
+    // ── Pants hem sway (legwear bottom edge) ──
+    // Even smaller magnitude (~2.5% X / 0.6% Y) since pants are typically
+    // fitted at ankles. For flared pants / long dresses the physics pendulum
+    // output scale amplifies the visible motion via phase lag.
+    ['legwear', {
+      bindings: [{ pid: pidParamPants, keys: [-1, 0, 1], desc: 'ParamPants' }],
+      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
+        const pos = new Float64Array(grid);
+        if (k === 0) return pos;
+        for (let r = 0; r < gH; r++) {
+          const frac = r / (gH - 1);          // 0=waist(top), 1=ankles(bottom)
+          const swayW = frac * frac * frac;
+          const curlW = frac * frac * frac;
+          for (let c = 0; c < gW; c++) {
+            const idx = (r * gW + c) * 2;
+            pos[idx]     += k * 0.025 * gxS * swayW;
+            pos[idx + 1] += k * 0.006 * gyS * curlW;
           }
         }
         return pos;

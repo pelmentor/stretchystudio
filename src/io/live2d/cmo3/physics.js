@@ -144,6 +144,57 @@ export const PHYSICS_RULES = [
       angleMin: -10, angleDef: 0, angleMax: 10,
     },
   },
+
+  // ── Shirt hem sway: topwear bottom edge flutters with body lean ──
+  // Warp binding: TAG_PARAM_BINDINGS['topwear']. Shorter pendulum (y=6) +
+  // medium delay (0.7) than skirt — fitted shirts snap back faster than
+  // flowing skirts. Useful fallback when the character's topwear is a single
+  // mesh covering torso+sleeves (common; PSD split for proper sleeve physics
+  // is a separate infra task).
+  {
+    id: 'PhysicsSetting4',
+    name: 'Shirt',
+    outputParamId: 'ParamShirt',
+    outputScale: 1.0,
+    requireTag: 'topwear',
+    inputs: [
+      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
+      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
+    ],
+    vertices: [
+      { x: 0, y: 0, mobility: 1.0, delay: 1.0, acceleration: 1.0, radius: 0 },
+      { x: 0, y: 6, mobility: 0.9, delay: 0.7, acceleration: 1.5, radius: 6 },
+    ],
+    normalization: {
+      posMin: -10, posDef: 0, posMax: 10,
+      angleMin: -10, angleDef: 0, angleMax: 10,
+    },
+  },
+
+  // ── Pants hem sway: legwear bottom edge flutters with body lean ──
+  // Warp binding: TAG_PARAM_BINDINGS['legwear']. Longer pendulum (y=12) +
+  // faster delay (0.5) — heavier fabric, less snappy. Output scale 0.8 caps
+  // the max swing to match pants' real-world tight-at-ankle behavior; flared
+  // / wide-leg designs can be bumped upward per-character if needed.
+  {
+    id: 'PhysicsSetting5',
+    name: 'Pants',
+    outputParamId: 'ParamPants',
+    outputScale: 0.8,
+    requireTag: 'legwear',
+    inputs: [
+      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
+      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
+    ],
+    vertices: [
+      { x: 0, y: 0,  mobility: 1.0,  delay: 1.0, acceleration: 1.0, radius: 0 },
+      { x: 0, y: 12, mobility: 0.85, delay: 0.5, acceleration: 1.5, radius: 12 },
+    ],
+    normalization: {
+      posMin: -10, posDef: 0, posMax: 10,
+      angleMin: -10, angleDef: 0, angleMax: 10,
+    },
+  },
 ];
 
 /**
