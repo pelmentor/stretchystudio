@@ -101,6 +101,10 @@ export async function generateCmo3(input) {
     // Physics: emits CPhysicsSettingsSourceSet (hair/skirt pendulums). Off by
     // default when generateRig is off — physics references rig-only params.
     generatePhysics = generateRig,
+    // Optional set/array of category names to SUPPRESS in the physics
+    // emission, e.g. ['hair'] for a buzz-cut character where hair
+    // pendulums look wrong. Unknown categories are ignored.
+    physicsDisabledCategories = null,
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -226,6 +230,7 @@ export async function generateCmo3(input) {
       { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0 },
       { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0 },
       { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0 },
+      { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0 },
     ];
     for (const sp of standardParams) {
       if (paramDefs.find(p => p.id === sp.id)) continue;
@@ -1777,6 +1782,7 @@ export async function generateCmo3(input) {
   const pidParamSkirt      = paramDefs.find(p => p.id === 'ParamSkirt')?.pid;
   const pidParamShirt      = paramDefs.find(p => p.id === 'ParamShirt')?.pid;
   const pidParamPants      = paramDefs.find(p => p.id === 'ParamPants')?.pid;
+  const pidParamBust       = paramDefs.find(p => p.id === 'ParamBust')?.pid;
   // Face parallax (Session 19) — drive Face Rotation (AngleZ) + 7 face parallax warps (AngleX × AngleY).
   const pidParamAngleX     = paramDefs.find(p => p.id === 'ParamAngleX')?.pid;
   const pidParamAngleY     = paramDefs.find(p => p.id === 'ParamAngleY')?.pid;
@@ -1789,19 +1795,25 @@ export async function generateCmo3(input) {
   const TAG_PARAM_BINDINGS = new Map([
     // ── Hair: tips-swing (Hiyori: Move Hair Front/Back Warp, 1D, 3kf) ──
     // Top row (roots) pinned, bottom row (tips) sways X, slight Y curl.
+    // Hair sway magnitude scales by MIN(gxS, gyS) — the smaller of the mesh's
+    // two dimensions. For long hair (gyS >= gxS), this equals the classic
+    // gxS-based scale. For buzz-cut / short hair (gyS << gxS), magnitude
+    // collapses proportionally — fixes shelby's "skull chunks floating"
+    // artifact where a flat+wide hair mesh got full width-scale swing.
     ['front hair', {
       bindings: [{ pid: pidParamHairFront, keys: [-1, 0, 1], desc: 'ParamHairFront' }],
       shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
         const pos = new Float64Array(grid);
         if (k === 0) return pos;
+        const scale = Math.min(gxS, gyS);
         for (let r = 0; r < gH; r++) {
           const frac = r / (gH - 1);          // 0=roots(top), 1=tips(bottom)
           const swayW = frac * frac * frac;    // cubic gradient — roots nearly static, tips full swing (matches Hiyori)
           const curlW = frac * frac * frac;
           for (let c = 0; c < gW; c++) {
             const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.12 * gxS * swayW;   // X sway (tips-dominant)
-            pos[idx + 1] += k * 0.03 * gyS * curlW;   // Y curl (tips-dominant)
+            pos[idx]     += k * 0.12 * scale * swayW;   // X sway (tips-dominant)
+            pos[idx + 1] += k * 0.03 * scale * curlW;   // Y curl (tips-dominant)
           }
         }
         return pos;
@@ -1812,14 +1824,15 @@ export async function generateCmo3(input) {
       shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
         const pos = new Float64Array(grid);
         if (k === 0) return pos;
+        const scale = Math.min(gxS, gyS);
         for (let r = 0; r < gH; r++) {
           const frac = r / (gH - 1);
           const swayW = frac * frac * frac;
           const curlW = frac * frac * frac;
           for (let c = 0; c < gW; c++) {
             const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.10 * gxS * swayW;
-            pos[idx + 1] += k * 0.025 * gyS * curlW;
+            pos[idx]     += k * 0.10 * scale * swayW;
+            pos[idx + 1] += k * 0.025 * scale * curlW;
           }
         }
         return pos;
@@ -1854,23 +1867,41 @@ export async function generateCmo3(input) {
         return pos;
       },
     }],
-    // topwear uses a QUADRATIC (frac^2) gradient — milder than the other
-    // clothing tags' frac^4 — so that the middle rows (where sleeves and
-    // sleeve cuffs live on a hoodie/jacket) still get ~25% of the hem's
-    // amplitude. This lets sleeves visibly swing along with the hem instead
-    // of staying pinned to the shoulders. Safe because clothing Y is
-    // already zero — no vertical motion can expose hidden layers
-    // regardless of how much X the mid-rows pick up.
+    // topwear carries TWO independent motions: shirt sway (sleeves + hem in
+    // X) and bust wobble (Y bulge at chest). 2 param bindings → 3×3 = 9
+    // keyforms.
+    //
+    // ParamShirt: frac² row gradient → sleeves mid-row get ~0.25×, hem full.
+    // X-only — Y would lift the hem and expose legwear underneath (see
+    // `feedback_clothing_physics_no_y.md`).
+    //
+    // ParamBust: Y wobble strictly on the INTERIOR of the grid (triangular
+    // falloff centered at rFrac=0.5, cFrac=0.5). Shoulders (row 0) and hem
+    // (row last) stay pinned, so no layer exposure — unlike hem Y-lift, an
+    // internal bulge just stretches the topwear texture locally.
     ['topwear', {
-      bindings: [{ pid: pidParamShirt, keys: [-1, 0, 1], desc: 'ParamShirt' }],
-      shiftFn: (grid, gW, gH, [k], gxS) => {
+      bindings: [
+        { pid: pidParamShirt, keys: [-1, 0, 1], desc: 'ParamShirt' },
+        { pid: pidParamBust,  keys: [-1, 0, 1], desc: 'ParamBust'  },
+      ],
+      shiftFn: (grid, gW, gH, [kShirt, kBust], gxS, gyS) => {
         const pos = new Float64Array(grid);
-        if (k === 0) return pos;
+        if (kShirt === 0 && kBust === 0) return pos;
         for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1);          // 0=shoulders(top), 1=hem(bottom)
-          const swayW = frac * frac;           // quadratic: sleeves mid-row get ~0.25x
+          const rFrac = r / (gH - 1);           // 0=shoulders, 1=hem
+          const shirtSwayW = rFrac * rFrac;     // quadratic
+          // Bust row weight: triangular peak at rFrac=0.5, zero at edges.
+          const bustRowW = Math.max(0, 1 - Math.abs(rFrac - 0.5) * 2);
           for (let c = 0; c < gW; c++) {
-            pos[(r * gW + c) * 2] += k * 0.02 * gxS * swayW;
+            const cFrac = c / (gW - 1);
+            // Bust col weight: triangular peak at center col, zero at sides.
+            const bustColW = Math.max(0, 1 - Math.abs(cFrac - 0.5) * 2);
+            const bustW = bustRowW * bustColW;
+            const idx = (r * gW + c) * 2;
+            // ParamShirt → X sway
+            if (kShirt !== 0) pos[idx] += kShirt * 0.02 * gxS * shirtSwayW;
+            // ParamBust → Y wobble (negative Y = "up" in canvas space)
+            if (kBust !== 0)  pos[idx + 1] += -kBust * 0.012 * gyS * bustW;
           }
         }
         return pos;
@@ -3893,8 +3924,12 @@ export async function generateCmo3(input) {
   // rootPart ref). Rules self-skip when their output param or required tag
   // is absent, so turning off generateRig cleanly zeroes the set.
   if (generatePhysics) {
+    const disabledSet = physicsDisabledCategories
+      ? new Set(physicsDisabledCategories)
+      : null;
     emitPhysicsSettings(x, {
       parent: model, paramDefs, meshes, rigDebugLog,
+      disabledCategories: disabledSet,
     });
   }
 

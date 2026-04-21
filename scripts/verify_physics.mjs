@@ -30,9 +30,11 @@ const paramDefs = [
   { pid: 'pid-skirt',      id: 'ParamSkirt' },
   { pid: 'pid-shirt',      id: 'ParamShirt' },
   { pid: 'pid-pants',      id: 'ParamPants' },
+  { pid: 'pid-bust',       id: 'ParamBust' },
   { pid: 'pid-angle-x',    id: 'ParamAngleX' },
   { pid: 'pid-angle-z',    id: 'ParamAngleZ' },
   { pid: 'pid-body-x',     id: 'ParamBodyAngleX' },
+  { pid: 'pid-body-y',     id: 'ParamBodyAngleY' },
   { pid: 'pid-body-z',     id: 'ParamBodyAngleZ' },
 ];
 const meshes = [
@@ -44,13 +46,13 @@ const res = emitPhysicsSettings(x1, {
   parent: root, paramDefs, meshes, rigDebugLog,
 });
 
-assert(res.emittedCount === 5, 'emitted 5 rules (hair front/back, skirt, shirt, pants)');
+assert(res.emittedCount === 6, 'emitted 6 rules (hair front/back, skirt, shirt, pants, bust)');
 assert(res.skipped.length === 0, 'no skipped rules when all tags + params present');
 assert(rigDebugLog.physics !== undefined, 'rigDebugLog.physics populated');
 
 const xml1 = x1.serialize(root);
 assert(xml1.includes('<CPhysicsSettingsSourceSet'), 'root has CPhysicsSettingsSourceSet');
-assert(xml1.includes('_sourceCubismPhysics" count="5"'), '_sourceCubismPhysics count="5"');
+assert(xml1.includes('_sourceCubismPhysics" count="6"'), '_sourceCubismPhysics count="6"');
 for (const r of PHYSICS_RULES) {
   assert(xml1.includes(`idstr="${r.id}"`), `${r.id} (${r.name}) emitted`);
   assert(xml1.includes(`<s xs.n="name">${r.name}</s>`), `name "${r.name}" emitted`);
@@ -63,7 +65,7 @@ assert(xml1.includes('<null xs.n="settingFPS"'), 'settingFPS null placeholder');
 // Hiyori shape: each setting has inputs > outputs > vertices > normalization
 // Split on the leaf tag (with trailing `>`), NOT the container "SourceSet"
 const settingBlocks = xml1.split('<CPhysicsSettingsSource>').slice(1);
-assert(settingBlocks.length === 5, `exactly 5 CPhysicsSettingsSource blocks (got ${settingBlocks.length})`);
+assert(settingBlocks.length === 6, `exactly 6 CPhysicsSettingsSource blocks (got ${settingBlocks.length})`);
 for (const b of settingBlocks) {
   assert(b.includes('xs.n="inputs"'), 'has inputs array');
   assert(b.includes('xs.n="outputs" count="1"'), 'has outputs count=1');
@@ -74,12 +76,12 @@ for (const b of settingBlocks) {
 
 // Output vertex index 1 (tip of 2-vertex pendulum)
 const vertexIdxMatches = xml1.match(/<i xs\.n="vertexIndex">(\d+)<\/i>/g) || [];
-assert(vertexIdxMatches.length === 5 && vertexIdxMatches.every(m => m.includes('>1<')),
-  '5 outputs all target vertex index 1 (tip)');
+assert(vertexIdxMatches.length === 6 && vertexIdxMatches.every(m => m.includes('>1<')),
+  '6 outputs all target vertex index 1 (tip)');
 
-// CPhysicsVertex count: 2 per rule × 5 rules = 10
+// CPhysicsVertex count: 2 per rule × 6 rules = 12
 const vxDecl = xml1.match(/<CPhysicsVertex>/g) || [];
-assert(vxDecl.length === 10, `10 CPhysicsVertex declarations (got ${vxDecl.length})`);
+assert(vxDecl.length === 12, `12 CPhysicsVertex declarations (got ${vxDecl.length})`);
 
 // ────────────────── TEST 2: skipping when output param absent ──────────────────
 console.log('\n[test2] Rules skip when output param is missing');
@@ -97,7 +99,7 @@ const res2 = emitPhysicsSettings(x2, {
   meshes: [{ tag: 'front hair' }, { tag: 'back hair' }, { tag: 'bottomwear' }],
 });
 assert(res2.emittedCount === 0, 'no rules emitted without output params');
-assert(res2.skipped.length === 5, `all 5 rules skipped (got ${res2.skipped.length})`);
+assert(res2.skipped.length === 6, `all 6 rules skipped (got ${res2.skipped.length})`);
 assert(res2.skipped.every(s => s.reason.startsWith('missing output param')),
   'skip reasons are "missing output param …"');
 
@@ -156,10 +158,10 @@ const out = await generateCmo3({
 });
 assert(out.cmo3 instanceof Uint8Array && out.cmo3.byteLength > 1000,
   `generateCmo3 returned a sensible .cmo3 (${out.cmo3.byteLength} bytes)`);
-// 5 rules emitted: Hair Front/Back + Skirt (bottomwear) + Shirt (topwear) + Pants (legwear)
-assert(out.rigDebugLog?.physics?.emittedCount === 5,
-  `rigDebugLog.physics.emittedCount = 5 (got ${out.rigDebugLog?.physics?.emittedCount})`);
-for (const id of ['PhysicsSetting1', 'PhysicsSetting2', 'PhysicsSetting3', 'PhysicsSetting4', 'PhysicsSetting5']) {
+// 6 rules emitted: Hair Front/Back + Skirt (bottomwear) + Shirt + Bust (topwear) + Pants (legwear)
+assert(out.rigDebugLog?.physics?.emittedCount === 6,
+  `rigDebugLog.physics.emittedCount = 6 (got ${out.rigDebugLog?.physics?.emittedCount})`);
+for (const id of ['PhysicsSetting1', 'PhysicsSetting2', 'PhysicsSetting3', 'PhysicsSetting4', 'PhysicsSetting5', 'PhysicsSetting6']) {
   assert(out.rigDebugLog.physics.emittedIds.includes(id),
     `${id} present in rigDebugLog`);
 }

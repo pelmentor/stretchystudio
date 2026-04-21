@@ -48,6 +48,13 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
   const [atlasSize, setAtlasSize] = useState(2048);
   const [generateRig, setGenerateRig] = useState(true);
   const [generatePhysics, setGeneratePhysics] = useState(true);
+  // Per-category toggles (on = category emitted, off = all rules in that
+  // category skipped). Use case: characters like shelby with a buzz cut
+  // still have `front hair` / `back hair` tags, so the requireTag auto-skip
+  // doesn't catch them — user has to manually opt out of hair physics.
+  const [physicsHair, setPhysicsHair] = useState(true);
+  const [physicsClothing, setPhysicsClothing] = useState(true);
+  const [physicsBust, setPhysicsBust] = useState(true);
   // Track whether user has explicitly edited the model-name field. While
   // untouched, the field auto-syncs to the current project's name on every
   // open — so loading a new project and then exporting shows the right default.
@@ -114,10 +121,16 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
 
       if (type === 'live2d_project') {
         // .cmo3 project export (editable in Cubism Editor)
+        const physicsDisabledCategories = [
+          !physicsHair && 'hair',
+          !physicsClothing && 'clothing',
+          !physicsBust && 'bust',
+        ].filter(Boolean);
         const blob = await exportLive2DProject(project, images, {
           modelName: name,
           generateRig,
           generatePhysics,
+          physicsDisabledCategories,
           onProgress: (msg) =>
             setProgress(p => (p ? { ...p, label: msg } : null)),
         });
@@ -159,7 +172,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
       setProgress(null);
       setIsExporting(false);
     }
-  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, onClose]);
+  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, physicsHair, physicsClothing, physicsBust, onClose]);
 
   const handleExport = useCallback(async () => {
     if (type === 'live2d' || type === 'live2d_project') {
@@ -444,23 +457,61 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
                   </div>
                 )}
                 {type === 'live2d_project' && generateRig && (
-                  <div className="flex items-start gap-2">
-                    <Checkbox
-                      id="generatePhysics"
-                      checked={generatePhysics}
-                      onCheckedChange={setGeneratePhysics}
-                      disabled={isExporting}
-                      className="mt-0.5"
-                    />
-                    <Label htmlFor="generatePhysics" className="text-xs cursor-pointer leading-relaxed">
-                      Generate physics (hair + clothing swing)
-                      <span className="block text-muted-foreground font-normal">
-                        Adds pendulum simulations for <code>front hair</code>, <code>back hair</code>, <code>topwear</code>,{' '}
-                        <code>bottomwear</code>, <code>legwear</code>. Rules auto-skip when the matching tag isn&apos;t present,
-                        so short-haired / bare-armed characters drop unused rules automatically.
-                      </span>
-                    </Label>
-                  </div>
+                  <>
+                    <div className="flex items-start gap-2">
+                      <Checkbox
+                        id="generatePhysics"
+                        checked={generatePhysics}
+                        onCheckedChange={setGeneratePhysics}
+                        disabled={isExporting}
+                        className="mt-0.5"
+                      />
+                      <Label htmlFor="generatePhysics" className="text-xs cursor-pointer leading-relaxed">
+                        Generate physics (hair + clothing swing, bust wobble)
+                        <span className="block text-muted-foreground font-normal">
+                          Adds pendulum simulations. Rules auto-skip when the matching tag isn&apos;t present,
+                          so bare-armed / skirtless characters drop unused rules on their own.
+                        </span>
+                      </Label>
+                    </div>
+                    {generatePhysics && (
+                      <div className="ml-6 space-y-1 border-l-2 border-muted pl-3">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="physicsHair"
+                            checked={physicsHair}
+                            onCheckedChange={setPhysicsHair}
+                            disabled={isExporting}
+                          />
+                          <Label htmlFor="physicsHair" className="text-xs cursor-pointer">
+                            Hair (front / back). <span className="text-muted-foreground">Turn off for buzz-cut / short-hair characters.</span>
+                          </Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="physicsClothing"
+                            checked={physicsClothing}
+                            onCheckedChange={setPhysicsClothing}
+                            disabled={isExporting}
+                          />
+                          <Label htmlFor="physicsClothing" className="text-xs cursor-pointer">
+                            Clothing (shirt hem + sleeves, skirt, pants).
+                          </Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="physicsBust"
+                            checked={physicsBust}
+                            onCheckedChange={setPhysicsBust}
+                            disabled={isExporting}
+                          />
+                          <Label htmlFor="physicsBust" className="text-xs cursor-pointer">
+                            Bust wobble. <span className="text-muted-foreground">Turn off for male / flat-chest characters.</span>
+                          </Label>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
                 <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
                   {type === 'live2d_project' ? (

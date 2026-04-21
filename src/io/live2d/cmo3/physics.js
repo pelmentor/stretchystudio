@@ -64,6 +64,7 @@ function f(n) {
  * @property {string} outputParamId - Destination parameter ID
  * @property {number} outputScale   - Max angle (degrees) produced at full swing
  * @property {string|null} requireTag - Skip rule if no mesh has this tag (null = always emit)
+ * @property {'hair'|'clothing'|'bust'} category - UI-level group for enable toggles
  * @property {PhysicsInputSpec[]} inputs
  * @property {PhysicsVertexSpec[]} vertices - typically 2 (root + tip)
  * @property {{posMin:number,posMax:number,posDef:number,angleMin:number,angleMax:number,angleDef:number}} normalization
@@ -80,6 +81,7 @@ export const PHYSICS_RULES = [
     outputParamId: 'ParamHairFront',
     outputScale: 1.522,
     requireTag: 'front hair',
+    category: 'hair',
     inputs: [
       { paramId: 'ParamAngleX',     type: 'SRC_TO_X',       weight: 60 },
       { paramId: 'ParamAngleZ',     type: 'SRC_TO_G_ANGLE', weight: 60 },
@@ -105,6 +107,7 @@ export const PHYSICS_RULES = [
     outputParamId: 'ParamHairBack',
     outputScale: 2.061,
     requireTag: 'back hair',
+    category: 'hair',
     inputs: [
       { paramId: 'ParamAngleX',     type: 'SRC_TO_X',       weight: 60 },
       { paramId: 'ParamAngleZ',     type: 'SRC_TO_G_ANGLE', weight: 60 },
@@ -131,6 +134,7 @@ export const PHYSICS_RULES = [
     outputParamId: 'ParamSkirt',
     outputScale: 1.434,
     requireTag: 'bottomwear',
+    category: 'clothing',
     inputs: [
       { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
       { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
@@ -157,6 +161,7 @@ export const PHYSICS_RULES = [
     outputParamId: 'ParamShirt',
     outputScale: 1.0,
     requireTag: 'topwear',
+    category: 'clothing',
     inputs: [
       { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
       { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
@@ -182,6 +187,7 @@ export const PHYSICS_RULES = [
     outputParamId: 'ParamPants',
     outputScale: 0.8,
     requireTag: 'legwear',
+    category: 'clothing',
     inputs: [
       { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
       { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
@@ -189,6 +195,34 @@ export const PHYSICS_RULES = [
     vertices: [
       { x: 0, y: 0,  mobility: 1.0,  delay: 1.0, acceleration: 1.0, radius: 0 },
       { x: 0, y: 12, mobility: 0.85, delay: 0.5, acceleration: 1.5, radius: 12 },
+    ],
+    normalization: {
+      posMin: -10, posDef: 0, posMax: 10,
+      angleMin: -10, angleDef: 0, angleMax: 10,
+    },
+  },
+
+  // ── Bust wobble: chest area bulges up/down when body tilts ──
+  // Warp binding: TAG_PARAM_BINDINGS['topwear'] (second entry in bindings[]).
+  // Short pendulum (y=3) + low delay (0.4) + high accel (2.0) = snappy
+  // jiggle response classic to anime bust physics. The warp itself only
+  // shifts the mid-row / center-column region so shoulders and hem stay
+  // pinned — no layer-exposure risk.
+  {
+    id: 'PhysicsSetting6',
+    name: 'Bust',
+    outputParamId: 'ParamBust',
+    outputScale: 1.0,
+    requireTag: 'topwear',
+    category: 'bust',
+    inputs: [
+      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
+      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
+      { paramId: 'ParamBodyAngleY', type: 'SRC_TO_X',       weight: 100 },
+    ],
+    vertices: [
+      { x: 0, y: 0, mobility: 1.0,  delay: 1.0, acceleration: 1.0, radius: 0 },
+      { x: 0, y: 3, mobility: 0.95, delay: 0.4, acceleration: 2.0, radius: 3 },
     ],
     normalization: {
       posMin: -10, posDef: 0, posMax: 10,
@@ -206,9 +240,12 @@ export const PHYSICS_RULES = [
  * @param {Array<{pid:string,id:string}>} ctx.paramDefs - From generateCmo3
  * @param {Iterable<{tag:string|null}>} ctx.meshes      - For requireTag gating
  * @param {Object|null} [ctx.rigDebugLog]               - Optional diagnostic sink
+ * @param {Set<string>|null} [ctx.disabledCategories]   - Category names to skip (e.g. new Set(['hair']))
  * @returns {{emittedCount:number, skipped:Array<{id:string,reason:string}>}}
  */
-export function emitPhysicsSettings(x, { parent, paramDefs, meshes, rigDebugLog = null }) {
+export function emitPhysicsSettings(x, {
+  parent, paramDefs, meshes, rigDebugLog = null, disabledCategories = null,
+}) {
   const pidByParamId = new Map();
   for (const p of paramDefs) pidByParamId.set(p.id, p.pid);
 
@@ -220,6 +257,10 @@ export function emitPhysicsSettings(x, { parent, paramDefs, meshes, rigDebugLog 
   const rulesToEmit = [];
   const skipped = [];
   for (const rule of PHYSICS_RULES) {
+    if (disabledCategories && rule.category && disabledCategories.has(rule.category)) {
+      skipped.push({ id: rule.id, reason: `category '${rule.category}' disabled in UI` });
+      continue;
+    }
     const outputPid = pidByParamId.get(rule.outputParamId);
     if (!outputPid) {
       skipped.push({ id: rule.id, reason: `missing output param ${rule.outputParamId}` });

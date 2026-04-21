@@ -150,6 +150,7 @@ export async function exportLive2D(project, images, opts = {}) {
  * @param {string} [opts.modelName='model']
  * @param {boolean} [opts.generateRig=false] - Generate standard Live2D rig (warp deformers, standard params)
  * @param {boolean} [opts.generatePhysics] - Emit CPhysicsSettingsSourceSet (hair + clothing pendulums). Defaults to `generateRig`.
+ * @param {string[]} [opts.physicsDisabledCategories] - Category names to SUPPRESS (e.g. ['hair'] for buzz-cut characters).
  * @param {function} [opts.onProgress]
  * @returns {Promise<Blob>} .cmo3 blob ready for download
  */
@@ -158,6 +159,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     modelName = 'model',
     generateRig = false,
     generatePhysics = generateRig,
+    physicsDisabledCategories = null,
     onProgress = () => {},
   } = opts;
 
@@ -284,6 +286,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     modelName,
     generateRig,
     generatePhysics,
+    physicsDisabledCategories,
   });
 
   // Generate .can3 animation file if there are animations with deformer parameters
