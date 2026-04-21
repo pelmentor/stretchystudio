@@ -24,312 +24,23 @@
 import { packCaff, COMPRESS_RAW, COMPRESS_FAST } from './caffPacker.js';
 import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 import { XmlBuilder, uuid } from './xmlbuilder.js';
-
-// ---------- Processing instructions ----------
-
-const VERSION_PIS = [
-  ['CArtMeshSource', '4'],
-  ['CRotationDeformerForm', '1'],
-  ['KeyformGridSource', '1'],
-  ['CParameterGroup', '4'],
-  ['SerializeFormatVersion', '2'],
-  ['CModelSource', '4'], // v4 avoids rootParameterGroup/modelOptions/gameMotionSet NPEs
-  ['CFloatColor', '1'],
-  ['CLabelColor', '0'],
-  ['CModelImage', '3'],
-];
-
-const IMPORT_PIS = [
-  'com.live2d.cubism.doc.model.ACForm',
-  'com.live2d.cubism.doc.model.ACParameterControllableSource',
-  'com.live2d.cubism.doc.model.CModelInfo',
-  'com.live2d.cubism.doc.model.CModelSource',
-  'com.live2d.cubism.doc.model.affecter.CAffecterSourceSet',
-  'com.live2d.cubism.doc.model.deformer.ACDeformerForm',
-  'com.live2d.cubism.doc.model.deformer.ACDeformerSource',
-  'com.live2d.cubism.doc.model.deformer.CDeformerSourceSet',
-  'com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerForm',
-  'com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerSource',
-  'com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerForm',
-  'com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerSource',
-  'com.live2d.cubism.doc.model.drawable.ACDrawableForm',
-  'com.live2d.cubism.doc.model.drawable.ACDrawableSource',
-  'com.live2d.cubism.doc.model.drawable.CDrawableSourceSet',
-  'com.live2d.cubism.doc.model.drawable.ColorComposition',
-  'com.live2d.cubism.doc.model.drawable.TextureState',
-  'com.live2d.cubism.doc.model.drawable.artMesh.CArtMeshForm',
-  'com.live2d.cubism.doc.model.drawable.artMesh.CArtMeshSource',
-  'com.live2d.cubism.doc.model.extension.ACExtension',
-  'com.live2d.cubism.doc.model.extension.editableMesh.CEditableMeshExtension',
-  'com.live2d.cubism.doc.model.extension.meshGenerator.CMeshGeneratorExtension',
-  'com.live2d.cubism.doc.model.extension.meshGenerator.MeshGenerateSetting',
-  'com.live2d.cubism.doc.model.extension.textureInput.ACTextureInput',
-  'com.live2d.cubism.doc.model.extension.textureInput.CTextureInputExtension',
-  'com.live2d.cubism.doc.model.extension.textureInput.CTextureInput_ModelImage',
-  'com.live2d.cubism.doc.model.extension.textureInput.inputFilter.CLayerInputData',
-  'com.live2d.cubism.doc.model.extension.textureInput.inputFilter.CLayerSelectorMap',
-  'com.live2d.cubism.doc.model.extension.textureInput.inputFilter.ModelImageFilterEnv',
-  'com.live2d.cubism.doc.model.extension.textureInput.inputFilter.ModelImageFilterSet',
-  'com.live2d.cubism.doc.model.id.CDeformerId',
-  'com.live2d.cubism.doc.model.id.CDrawableId',
-  'com.live2d.cubism.doc.model.id.CParameterId',
-  'com.live2d.cubism.doc.model.id.CPartId',
-  'com.live2d.cubism.doc.model.interpolator.InterpolationType',
-  'com.live2d.cubism.doc.model.interpolator.KeyOnParameter',
-  'com.live2d.cubism.doc.model.interpolator.KeyformBindingSource',
-  'com.live2d.cubism.doc.model.interpolator.KeyformGridAccessKey',
-  'com.live2d.cubism.doc.model.interpolator.KeyformGridSource',
-  'com.live2d.cubism.doc.model.interpolator.KeyformOnGrid',
-  'com.live2d.cubism.doc.model.interpolator.extendedInterpolation.ExtendedInterpolationType',
-  'com.live2d.cubism.doc.model.morphTarget.KeyFormMorphTargetSet',
-  'com.live2d.cubism.doc.model.morphTarget.MorphTargetBlendWeightConstraintSet',
-  'com.live2d.cubism.doc.model.options.edition.EditorEdition',
-  'com.live2d.cubism.doc.model.param.CParameterSource',
-  'com.live2d.cubism.doc.model.param.CParameterSource$Type',
-  'com.live2d.cubism.doc.model.param.CParameterSourceSet',
-  'com.live2d.cubism.doc.model.param.group.CParameterGroup',
-  'com.live2d.cubism.doc.model.param.group.CParameterGroupSet',
-  'com.live2d.cubism.doc.model.parts.CPartForm',
-  'com.live2d.cubism.doc.model.parts.CPartSource',
-  'com.live2d.cubism.doc.model.parts.CPartSourceSet',
-  'com.live2d.cubism.doc.model.texture.CTextureManager',
-  'com.live2d.cubism.doc.model.texture.LayeredImageWrapper',
-  'com.live2d.cubism.doc.model.texture.TextureImageGroup',
-  'com.live2d.cubism.doc.model.texture.modelImage.CModelImage',
-  'com.live2d.cubism.doc.model.texture.modelImage.CModelImageGroup',
-  'com.live2d.cubism.doc.resources.ACImageLayer',
-  'com.live2d.cubism.doc.resources.ACLayerEntry',
-  'com.live2d.cubism.doc.resources.ACLayerGroup',
-  'com.live2d.cubism.doc.resources.CLayer',
-  'com.live2d.cubism.doc.resources.CLayerGroup',
-  'com.live2d.cubism.doc.resources.CLayerIdentifier',
-  'com.live2d.cubism.doc.resources.CLayeredImage',
-  'com.live2d.cubism.doc.resources.LayerSet',
-  'com.live2d.doc.CoordType',
-  'com.live2d.graphics.CImageCanvas',
-  'com.live2d.graphics.CImageResource',
-  'com.live2d.graphics.CWritableImage',
-  'com.live2d.graphics.cachedImage.CCachedImage',
-  'com.live2d.graphics.cachedImage.CCachedImageManager',
-  'com.live2d.graphics.cachedImage.CachedImageType',
-  'com.live2d.graphics.filter.AValueConnector',
-  'com.live2d.graphics.filter.FilterEnv',
-  'com.live2d.graphics.filter.FilterEnv$EnvValueSet',
-  'com.live2d.graphics.filter.FilterSet',
-  'com.live2d.graphics.filter.FilterSet$EnvConnection',
-  'com.live2d.graphics.filter.FilterValue',
-  'com.live2d.graphics.filter.concreteConnector.EnvValueConnector',
-  'com.live2d.graphics.filter.concreteConnector.FilterOutputValueConnector',
-  'com.live2d.graphics.filter.filterInstance.FilterInstance',
-  'com.live2d.graphics.filter.id.FilterInstanceId',
-  'com.live2d.graphics.filter.id.FilterValueId',
-  'com.live2d.graphics.psd.blend.ACBlend',
-  'com.live2d.graphics.psd.blend.CBlend_Normal',
-  'com.live2d.graphics3d.editableMesh.GEditableMesh2',
-  'com.live2d.graphics3d.texture.Anisotropy',
-  'com.live2d.graphics3d.texture.GTexture',
-  'com.live2d.graphics3d.texture.GTexture$FilterMode',
-  'com.live2d.graphics3d.texture.GTexture2D',
-  'com.live2d.graphics3d.texture.MagFilter',
-  'com.live2d.graphics3d.texture.MinFilter',
-  'com.live2d.graphics3d.texture.WrapMode',
-  'com.live2d.graphics3d.type.GVector2',
-  'com.live2d.type.CAffine',
-  'com.live2d.type.CColor',
-  'com.live2d.type.CDeformerGuid',
-  'com.live2d.type.CDrawableGuid',
-  'com.live2d.type.CExtensionGuid',
-  'com.live2d.type.CFloatColor',
-  'com.live2d.type.CFormGuid',
-  'com.live2d.type.CImageIcon',
-  'com.live2d.type.CLayerGuid',
-  'com.live2d.type.CLayeredImageGuid',
-  'com.live2d.type.CModelGuid',
-  'com.live2d.type.CModelImageGuid',
-  'com.live2d.type.CParameterGroupGuid',
-  'com.live2d.type.CParameterGuid',
-  'com.live2d.type.CPartGuid',
-  'com.live2d.type.CPoint',
-  'com.live2d.type.CRect',
-  'com.live2d.type.CSize',
-  'com.live2d.type.GEditableMeshGuid',
-  'com.live2d.type.GTextureGuid',
-  'com.live2d.type.StaticFilterDefGuid',
-];
-
-// Well-known UUIDs for built-in filter types (from Cubism Editor 5.0 Java decompile)
-const FILTER_DEF_LAYER_SELECTOR = '5e9fe1ea-0ec3-4d68-a5fa-018fc7abe301';
-const FILTER_DEF_LAYER_FILTER = '4083cd1f-40ba-4eda-8400-379019d55ed8';
-// CDeformerGuid.ROOT — hardcoded in Editor, compared by UUID equality
-const DEFORMER_ROOT_UUID = '71fae776-e218-4aee-873e-78e8ac0cb48a';
-
-// XmlBuilder + uuid imported from ./xmlbuilder.js
-
-// ---------- Texture PNG helpers ----------
-
-/**
- * Convert an HTMLImageElement or OffscreenCanvas to a PNG Uint8Array.
- * @param {HTMLImageElement} img
- * @param {number} w
- * @param {number} h
- * @returns {Promise<Uint8Array>}
- */
-async function imageToPng(img, w, h) {
-  const canvas = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(w, h)
-    : document.createElement('canvas');
-  if (!(canvas instanceof OffscreenCanvas)) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0, w, h);
-  let blob;
-  if (canvas instanceof OffscreenCanvas) {
-    blob = await canvas.convertToBlob({ type: 'image/png' });
-  } else {
-    blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-  }
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
-/**
- * Create a minimal white PNG (fallback).
- * @param {number} w
- * @param {number} h
- * @returns {Uint8Array}
- */
-function makeMinimalPng(w, h) {
-  // Use canvas API for simplicity
-  const canvas = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(w, h)
-    : document.createElement('canvas');
-  if (!(canvas instanceof OffscreenCanvas)) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, w, h);
-  // Synchronous fallback: build a very small PNG manually
-  // Actually we can't do sync blob. Build raw PNG.
-  return buildRawPng(w, h);
-}
-
-/** Build a raw white RGBA PNG from scratch (no canvas needed). */
-function buildRawPng(w, h) {
-  // PNG = signature + IHDR + IDAT + IEND
-  const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-
-  function makeChunk(type, data) {
-    const len = data.length;
-    const buf = new Uint8Array(4 + type.length + data.length + 4);
-    const dv = new DataView(buf.buffer);
-    dv.setUint32(0, len, false);
-    buf.set(type, 4);
-    buf.set(data, 4 + type.length);
-    // CRC over type+data
-    const crcData = buf.subarray(4, 4 + type.length + data.length);
-    const crc = crc32Buf(crcData);
-    dv.setUint32(4 + type.length + data.length, crc, false);
-    return buf;
-  }
-
-  // IHDR
-  const ihdrData = new Uint8Array(13);
-  const ihdrDv = new DataView(ihdrData.buffer);
-  ihdrDv.setUint32(0, w, false);
-  ihdrDv.setUint32(4, h, false);
-  ihdrData[8] = 8;  // bit depth
-  ihdrData[9] = 6;  // color type RGBA
-  ihdrData[10] = 0; // compression
-  ihdrData[11] = 0; // filter
-  ihdrData[12] = 0; // interlace
-  const ihdr = makeChunk(new Uint8Array([73, 72, 68, 82]), ihdrData);
-
-  // IDAT — white opaque pixels, filter byte 0 per row
-  const rawRow = new Uint8Array(1 + w * 4);
-  rawRow[0] = 0; // filter none
-  for (let x = 0; x < w; x++) {
-    rawRow[1 + x * 4 + 0] = 255;
-    rawRow[1 + x * 4 + 1] = 255;
-    rawRow[1 + x * 4 + 2] = 255;
-    rawRow[1 + x * 4 + 3] = 255;
-  }
-  const rawData = new Uint8Array(rawRow.length * h);
-  for (let y = 0; y < h; y++) rawData.set(rawRow, y * rawRow.length);
-
-  // Deflate using CompressionStream is async — use uncompressed deflate blocks instead
-  const deflated = deflateUncompressed(rawData);
-  const idat = makeChunk(new Uint8Array([73, 68, 65, 84]), deflated);
-
-  const iend = makeChunk(new Uint8Array([73, 69, 78, 68]), new Uint8Array(0));
-
-  const total = signature.length + ihdr.length + idat.length + iend.length;
-  const png = new Uint8Array(total);
-  let off = 0;
-  png.set(signature, off); off += signature.length;
-  png.set(ihdr, off); off += ihdr.length;
-  png.set(idat, off); off += idat.length;
-  png.set(iend, off);
-  return png;
-}
-
-/** Wrap raw data in uncompressed deflate blocks (zlib stream). */
-function deflateUncompressed(data) {
-  // zlib header: CMF=0x78, FLG=0x01
-  const maxBlock = 65535;
-  const numBlocks = Math.ceil(data.length / maxBlock) || 1;
-  const outSize = 2 + numBlocks * 5 + data.length + 4; // header + blocks + adler32
-  const out = new Uint8Array(outSize);
-  let pos = 0;
-  out[pos++] = 0x78; // CMF
-  out[pos++] = 0x01; // FLG
-  let remaining = data.length;
-  let srcOff = 0;
-  while (remaining > 0 || srcOff === 0) {
-    const blockLen = Math.min(remaining, maxBlock);
-    const isLast = remaining <= maxBlock;
-    out[pos++] = isLast ? 1 : 0; // BFINAL
-    out[pos++] = blockLen & 0xFF;
-    out[pos++] = (blockLen >> 8) & 0xFF;
-    out[pos++] = (~blockLen) & 0xFF;
-    out[pos++] = ((~blockLen) >> 8) & 0xFF;
-    out.set(data.subarray(srcOff, srcOff + blockLen), pos);
-    pos += blockLen;
-    srcOff += blockLen;
-    remaining -= blockLen;
-    if (blockLen === 0) break;
-  }
-  // Adler-32
-  let a = 1, b = 0;
-  for (let i = 0; i < data.length; i++) {
-    a = (a + data[i]) % 65521;
-    b = (b + a) % 65521;
-  }
-  const adler = ((b << 16) | a) >>> 0;
-  out[pos++] = (adler >> 24) & 0xFF;
-  out[pos++] = (adler >> 16) & 0xFF;
-  out[pos++] = (adler >> 8) & 0xFF;
-  out[pos++] = adler & 0xFF;
-  return out.subarray(0, pos);
-}
-
-const CRC_TABLE_PNG = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-
-function crc32Buf(data) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < data.length; i++) crc = (crc >>> 8) ^ CRC_TABLE_PNG[(crc ^ data[i]) & 0xFF];
-  return (crc ^ 0xFFFFFFFF) >>> 0;
-}
+import { analyzeBody } from './bodyAnalyzer.js';
+import {
+  VERSION_PIS,
+  IMPORT_PIS,
+  FILTER_DEF_LAYER_SELECTOR,
+  FILTER_DEF_LAYER_FILTER,
+  DEFORMER_ROOT_UUID,
+} from './cmo3/constants.js';
+import { buildRawPng, extractBottomContourFromLayerPng } from './cmo3/pngHelpers.js';
+import {
+  makeUniformGrid,
+  emitKfBinding,
+  emitSingleParamKfGrid,
+  emitStructuralWarp,
+} from './cmo3/deformerEmit.js';
+import { emitNeckWarp, emitFaceRotation } from './cmo3/bodyRig.js';
+import { emitFaceParallax } from './cmo3/faceParallax.js';
 
 // ---------- Main generator ----------
 
@@ -374,66 +85,6 @@ function crc32Buf(data) {
  */
 
 /**
- * P12 (Apr 2026): extract a layer's bottom contour directly from its PNG alpha.
- * Used by the eye-closure parabola fit to find the TRUE drawn bottom edge of the
- * eyewhite, bypassing SS mesh triangulation artifacts (bin-max on dense interior
- * vertices can pick INSIDE instead of the edge, flipping the closure direction).
- *
- * For each X column within [xMinCanvas, xMaxCanvas], scans from the bottom of
- * the canvas upward until it finds a pixel with alpha > threshold. That pixel's
- * (x, y) is the bottom edge sample. Returns an array of [x, y] pairs in canvas
- * coordinates, or null if decode fails / no opaque pixels found.
- *
- * @param {Uint8Array} pngData - Canvas-sized PNG bytes (alpha channel marks the layer)
- * @param {number} xMinCanvas
- * @param {number} xMaxCanvas
- * @returns {Promise<Array<[number, number]> | null>}
- */
-async function extractBottomContourFromLayerPng(pngData, xMinCanvas, xMaxCanvas) {
-  if (!pngData || !pngData.length) return null;
-  if (typeof Image === 'undefined' || typeof URL === 'undefined') return null;
-  try {
-    const blob = new Blob([pngData], { type: 'image/png' });
-    const url = URL.createObjectURL(blob);
-    let img;
-    try {
-      img = await new Promise((resolve, reject) => {
-        const el = new Image();
-        el.onload = () => resolve(el);
-        el.onerror = (e) => reject(e);
-        el.src = url;
-      });
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    const canvas = (typeof OffscreenCanvas !== 'undefined')
-      ? new OffscreenCanvas(img.width, img.height)
-      : Object.assign(document.createElement('canvas'), {
-          width: img.width, height: img.height,
-        });
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, img.width, img.height).data;
-    const ALPHA_THRESHOLD = 16;
-    const xStart = Math.max(0, Math.floor(xMinCanvas));
-    const xEnd   = Math.min(img.width - 1, Math.ceil(xMaxCanvas));
-    const contour = [];
-    for (let x = xStart; x <= xEnd; x++) {
-      for (let y = img.height - 1; y >= 0; y--) {
-        if (data[(y * img.width + x) * 4 + 3] > ALPHA_THRESHOLD) {
-          contour.push([x, y]);
-          break;
-        }
-      }
-    }
-    return contour.length >= 3 ? contour : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Generate a .cmo3 file (CAFF archive containing main.xml + PNG textures).
  *
  * @param {Cmo3Input} input
@@ -458,6 +109,7 @@ export async function generateCmo3(input) {
     canvas: { W: canvasW, H: canvasH },
     meshSummary: [],
     tagCoverage: null,
+    body: null,
     faceUnion: null,
     facePivot: null,
     neckUnion: null,
@@ -494,6 +146,25 @@ export async function generateCmo3(input) {
       if (m.tag) tags.add(m.tag); else taglessCount++;
     }
     rigDebugLog.tagCoverage = { present: [...tags].sort(), taglessCount };
+  }
+
+  // Body silhouette analysis — measurement pass (Step 1).
+  // Run whenever rigging is requested. Consumed by body-warp code (Step 2) to
+  // anchor feet-pin and spine pivot to actual geometry. rigDebugLog.body gets a
+  // copy for inspection when debug is on.
+  let bodyAnalysis = null;
+  if (generateRig) {
+    try {
+      bodyAnalysis = await analyzeBody(canvasW, canvasH, meshes);
+    } catch (e) {
+      bodyAnalysis = { skipped: 'error', error: String(e && e.message || e) };
+    }
+    if (rigDebugLog) {
+      rigDebugLog.body = bodyAnalysis;
+      if (bodyAnalysis && bodyAnalysis.skipped === 'error') {
+        rigDebugLog.warnings.push(`bodyAnalyzer threw: ${bodyAnalysis.error}`);
+      }
+    }
   }
 
   const x = new XmlBuilder();
@@ -702,6 +373,10 @@ export async function generateCmo3(input) {
   // not from hand-tuned style presets.
   const pidParamEyeLOpenEarly = paramDefs.find(p => p.id === 'ParamEyeLOpen')?.pid;
   const pidParamEyeROpenEarly = paramDefs.find(p => p.id === 'ParamEyeROpen')?.pid;
+  // Session 28: per-vertex CArtMeshForm shapekeys on the neck mesh bound to
+  // ParamAngleX (3 keyforms at −30/0/+30). Fixes the seam visibility at the
+  // top corners when the head yaws — without deforming the rest of the neck.
+  const pidParamAngleXEarly = paramDefs.find(p => p.id === 'ParamAngleX')?.pid;
   // Unified across styles (Apr 2026): the parabola-fit closure derives the curve
   // from the character's OWN eyewhite geometry, so the same constants work for
   // anime and western. Strip thickness at 6% of lash height gives a clean thin
@@ -1102,12 +777,18 @@ export async function generateCmo3(input) {
       : closureSide === 'r' ? pidParamEyeROpenEarly : null;
     const hasEyelidClosure = !hasBakedKeyforms && closureSide !== null
       && !!closureParamPid && eyelashBandCanvas.has(closureSide);
+    // Session 28: neck-corner shapekey on ParamAngleX (3 keyforms, −30/0/+30).
+    // Only applies to the skin-neck mesh when the rig is being generated and
+    // the standard head-yaw parameter exists.
+    const hasNeckCornerShapekeys = !hasBakedKeyforms && !hasEyelidClosure
+      && generateRig && m.tag === 'neck' && !!pidParamAngleXEarly;
     const [kfBinding, pidKfb] = x.shared('KeyformBindingSource');
     const [kfGridMesh, pidKfgMesh] = x.shared('KeyformGridSource');
 
     // Extra form GUIDs for baked keyforms (min/max angles) or closure (closed keyform)
     let pidFormClosed = null;
     let bakedFormGuids = null;
+    let neckCornerFormGuids = null; // [pidForm_-30, pidForm_+30]; 0 reuses pidFormMesh
 
     if (hasBakedKeyforms) {
       // Multiple keyforms to reduce linear interpolation shrinkage
@@ -1151,12 +832,14 @@ export async function generateCmo3(input) {
       x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = boneParam.paramId;
     } else if (hasEyelidClosure) {
       // 2 keyforms: closed (k=0), open (k=1, rest). Bound to ParamEye{L,R}Open by side.
+      // The mask-artmesh fix for the Cubism warning lives at the WARP level
+      // (see TAG_PARAM_BINDINGS entries for eyewhite-l/-r), not at the mesh
+      // level, so this branch stays simple.
       const [, _pidFormClosed] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_closed` });
       pidFormClosed = _pidFormClosed;
       const closureParamId = closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
 
       const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '2' });
-      // keyIndex 0 → closed
       const kog0 = x.sub(kfog, 'KeyformOnGrid');
       const ak0 = x.sub(kog0, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
       const kop0 = x.sub(ak0, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
@@ -1164,7 +847,6 @@ export async function generateCmo3(input) {
       x.subRef(kon0, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
       x.sub(kon0, 'i', { 'xs.n': 'keyIndex' }).text = '0';
       x.subRef(kog0, 'CFormGuid', pidFormClosed, { 'xs.n': 'keyformGuid' });
-      // keyIndex 1 → open (rest)
       const kog1 = x.sub(kfog, 'KeyformOnGrid');
       const ak1 = x.sub(kog1, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
       const kop1 = x.sub(ak1, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
@@ -1186,6 +868,39 @@ export async function generateCmo3(input) {
       x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
       x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
       x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = closureParamId;
+    } else if (hasNeckCornerShapekeys) {
+      // 3 keyforms on ParamAngleX: −30 (keyIndex 0), 0 rest (1), +30 (2).
+      // Top-corner-only shapekey to eliminate seam visibility under head yaw.
+      const [, pidFormNeg] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_neck_angleX_neg30` });
+      const [, pidFormPos] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_neck_angleX_pos30` });
+      neckCornerFormGuids = [pidFormNeg, pidFormPos];
+
+      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '3' });
+      const angleXForms = [pidFormNeg, pidFormMesh, pidFormPos];
+      for (let i = 0; i < 3; i++) {
+        const kog = x.sub(kfog, 'KeyformOnGrid');
+        const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+        const kon = x.sub(kop, 'KeyOnParameter');
+        x.subRef(kon, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
+        x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(i);
+        x.subRef(kog, 'CFormGuid', angleXForms[i], { 'xs.n': 'keyformGuid' });
+      }
+
+      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+      x.subRef(kb, 'KeyformBindingSource', pidKfb);
+
+      x.subRef(kfBinding, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
+      x.subRef(kfBinding, 'CParameterGuid', pidParamAngleXEarly, { 'xs.n': 'parameterGuid' });
+      const keys = x.sub(kfBinding, 'array_list', { 'xs.n': 'keys', count: '3' });
+      x.sub(keys, 'f').text = '-30.0';
+      x.sub(keys, 'f').text = '0.0';
+      x.sub(keys, 'f').text = '30.0';
+      x.sub(kfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+      x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+      x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = 'ParamAngleX';
     } else {
       // Standard single keyform bound to ParamOpacity
       const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '1' });
@@ -1213,11 +928,13 @@ export async function generateCmo3(input) {
     perMesh.push({
       mi, meshName, meshId, pngPath, drawOrder: m.drawOrder ?? (500 + mi),
       pidDrawable, pidFormMesh, bakedFormGuids, pidFormClosed,
+      neckCornerFormGuids,
       pidMiGuid, pidTexGuid, pidExtMesh, pidExtTex, pidEmesh,
       pidImg, pidLayer,
       pidFset, pidTex2d, pidTie, pidTimi,
       pidKfb, pidKfgMesh,
       tieSup, hasBakedKeyforms, hasEyelidClosure, closureSide,
+      hasNeckCornerShapekeys,
       vertices: m.vertices,
       triangles: m.triangles,
       uvs: m.uvs,
@@ -1498,8 +1215,13 @@ export async function generateCmo3(input) {
 
   // Hiyori doesn't have rotation deformers for torso or eyes.
   // Torso body lean is done via Body X Warp (section 3d). Eyes via warp/parallax.
-  // Skipping these makes neck/arms fall through to ROOT → re-parented to Breath.
-  const SKIP_ROTATION_ROLES = new Set(['torso', 'eyes']);
+  // Also skip 'neck' — creating a rotation deformer for neck places its origin
+  // at a drawn-pivot (often undefined in SS) or bbox-center fallback, neither of
+  // which is anatomically at the neck-base. When parent Body X Warp bows, the
+  // neck mesh rotates around this wrong pivot and appears to "tear off" from
+  // the shoulders. Letting neck fall through to NeckWarp → Body X Warp directly
+  // yields clean warp-grid deformation aligned with shoulders.
+  const SKIP_ROTATION_ROLES = new Set(['torso', 'eyes', 'neck']);
 
   for (const g of groups) {
     // Skip bone nodes — they get baked mesh keyforms, not rotation deformers
@@ -2177,6 +1899,26 @@ export async function generateCmo3(input) {
         return pos;
       },
     }],
+    // Session 28: eyewhite-l / eyewhite-r are CLIP MASKS for irides-l/-r.
+    // Cubism Editor warns if a mask's rig deformers don't have keyforms
+    // matching the clipped child's parameter extremes. Give the eyewhite
+    // rig warp IDENTITY keyforms on ParamEyeBallX × ParamEyeBallY so the
+    // mask has defined positions across the iris's full gaze range (with
+    // zero actual displacement — the white doesn't follow the iris).
+    ['eyewhite-l', {
+      bindings: [
+        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
+        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
+      ],
+      shiftFn: (grid) => new Float64Array(grid), // identity
+    }],
+    ['eyewhite-r', {
+      bindings: [
+        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
+        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
+      ],
+      shiftFn: (grid) => new Float64Array(grid), // identity
+    }],
     ['eyewhite', {
       bindings: [{ pid: pidParamEyeLOpen, keys: [0, 1], desc: 'ParamEyeLOpen' }],
       shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
@@ -2233,19 +1975,6 @@ export async function generateCmo3(input) {
   // Each entry: { node, faceGroupKey or null } — face-parallax tags route to their
   // FaceParallax warp; others route to Body X.
   const rigWarpTargetNodesToReparent = [];
-
-  // Helper: emit one KeyformBindingSource with LINEAR interpolation
-  const emitKfBinding = (kfbNode, pidKfg, pidParam, keys, description) => {
-    x.subRef(kfbNode, 'KeyformGridSource', pidKfg, { 'xs.n': '_gridSource' });
-    x.subRef(kfbNode, 'CParameterGuid', pidParam, { 'xs.n': 'parameterGuid' });
-    const keysArr = x.sub(kfbNode, 'array_list', { 'xs.n': 'keys', count: String(keys.length) });
-    for (const k of keys) x.sub(keysArr, 'f').text = String(k);
-    x.sub(kfbNode, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
-    x.sub(kfbNode, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
-    x.sub(kfbNode, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
-    x.sub(kfbNode, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
-    x.sub(kfbNode, 's', { 'xs.n': 'description' }).text = description;
-  };
 
   // Structural warp chain parameters (used in both 3c and 3d).
   // Body Warp Z must encompass ALL character parts. Compute from mesh bounding box
@@ -2365,18 +2094,58 @@ export async function generateCmo3(input) {
   const facePivotCx = faceMeshBbox
     ? (faceMeshBbox.minX + faceMeshBbox.maxX) / 2
     : (faceUnionBbox ? (faceUnionBbox.minX + faceUnionBbox.maxX) / 2 : null);
-  const facePivotCy = faceMeshBbox
+  const facePivotCy_chin = faceMeshBbox
     ? faceMeshBbox.maxY
     : (faceUnionBbox ? faceUnionBbox.maxY : null);
+
+  // D2: Face Rotation origin calibration via measured anatomy.
+  // Rotating AngleZ (head tilt) around chin makes the hair and top of head
+  // swing widely while chin stays put — natural for side-drawn cartoons but
+  // reads weirdly on realistic art because viewer expects the whole head +
+  // neck to pivot around the neck base (where neck meets torso).
+  //
+  // Heuristic:
+  //   - Normal case (topwear starts BELOW chin): topwear.minY IS the neck
+  //     base (e.g., shirt collar). Use it.
+  //   - Hood/high-collar case (topwear overlaps face above chin): estimate
+  //     neck base as chin + 10% of face height.
+  //
+  // Safeguard: if the candidate pivot is within THRESHOLD px of chin-based
+  // pivot, keep chin (preserves characters that already look good — waifu).
+  const FACE_PIVOT_DELTA_THRESHOLD = 15;
+  let facePivotCy = facePivotCy_chin;
+  let facePivotCySource = faceMeshBbox ? 'face_mesh_bottom' : 'face_union_max_y_fallback';
+  let facePivotCandidate = null;
+  if (faceMeshBbox && bodyAnalysis && bodyAnalysis.topwearBbox) {
+    const chin = faceMeshBbox.maxY;
+    const topwearTop = bodyAnalysis.topwearBbox.minY;
+    const faceH = faceMeshBbox.maxY - faceMeshBbox.minY;
+    if (topwearTop > chin) {
+      facePivotCandidate = topwearTop;
+    } else if (faceH > 0) {
+      facePivotCandidate = chin + faceH * 0.10;
+    }
+    if (facePivotCandidate !== null &&
+        Math.abs(facePivotCandidate - facePivotCy_chin) >= FACE_PIVOT_DELTA_THRESHOLD) {
+      facePivotCy = facePivotCandidate;
+      facePivotCySource = topwearTop > chin
+        ? 'measured_neck_base_via_topwear_minY'
+        : 'chin_plus_face_height_offset_hood_case';
+    }
+  }
+
   if (rigDebugLog && (faceMeshBbox || faceUnionBbox)) {
     rigDebugLog.facePivot = {
       cx: facePivotCx,
       cy: facePivotCy,
-      anchorSource: faceMeshBbox ? 'face_mesh_bottom' : 'face_union_max_y_fallback',
+      cy_chin_baseline: facePivotCy_chin,
+      cy_measured_candidate: facePivotCandidate,
+      cy_delta_from_chin: facePivotCandidate !== null ? facePivotCandidate - facePivotCy_chin : null,
+      anchorSource: facePivotCySource,
       faceMeshBbox: faceMeshBbox ?? null,
-      note: faceMeshBbox
-        ? 'chin anchor = face mesh bottom + X-center (Phase-0 fix, Apr 2026)'
-        : 'fallback: no face-tagged mesh found; using face union bbox bottom-center',
+      note: 'D2 neck-base calibration: prefers measured topwear.minY (normal collar) '
+          + 'or chin+10% face-height (hood case). Falls back to chin if candidate is '
+          + 'within 15px of chin (e.g., waifu) so existing anime tuning is preserved.',
     };
   }
 
@@ -2771,7 +2540,7 @@ export async function generateCmo3(input) {
         });
         for (const kfb of kfbs) {
           x.subRef(kfbList, 'KeyformBindingSource', kfb.pidKfb);
-          emitKfBinding(kfb.kfb, pidKfg, kfb.pid, kfb.keys.map(k => k + '.0'), kfb.desc);
+          emitKfBinding(x, kfb.kfb, pidKfg, kfb.pid, kfb.keys.map(k => k + '.0'), kfb.desc);
         }
       } else {
         // No standard binding — single rest keyform, no-op ParamOpacity
@@ -2791,7 +2560,7 @@ export async function generateCmo3(input) {
         x.subRef(kog, 'CFormGuid', pidRigWarpForm, { 'xs.n': 'keyformGuid' });
         const kfbList = x.sub(rigWarpKfg, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
         x.subRef(kfbList, 'KeyformBindingSource', pidRigWarpKfb);
-        emitKfBinding(rigWarpKfb, pidRigWarpKfg, pidParamOpacity, ['1.0'], 'ParamOpacity');
+        emitKfBinding(x, rigWarpKfb, pidRigWarpKfg, pidParamOpacity, ['1.0'], 'ParamOpacity');
       }
 
       // Parent part
@@ -2889,104 +2658,9 @@ export async function generateCmo3(input) {
 
   const LEG_ROLES = new Set(['leftLeg', 'rightLeg', 'bothLegs', 'leftKnee', 'rightKnee']);
 
-  // Helper: emit a complete CWarpDeformerSource with keyforms
-  const emitStructuralWarp = (name, idstr, col, row, pidWarpGuid, pidTargetGuid,
-    pidKfg, pidWarpCoordType, formGuids, gridPositions) => {
-    const [warpDf, pidWarpDf] = x.shared('CWarpDeformerSource');
-    allDeformerSources.push({ pid: pidWarpDf, tag: 'CWarpDeformerSource' });
-
-    const acdfs = x.sub(warpDf, 'ACDeformerSource', { 'xs.n': 'super' });
-    const acpcs = x.sub(acdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
-    x.sub(acpcs, 's', { 'xs.n': 'localName' }).text = name;
-    x.sub(acpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
-    x.sub(acpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
-    x.subRef(acpcs, 'CPartGuid', pidPartGuid, { 'xs.n': 'parentGuid' });
-    x.subRef(acpcs, 'KeyformGridSource', pidKfg, { 'xs.n': 'keyformGridSource' });
-    const mft = x.sub(acpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
-    x.sub(mft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
-    const bwc = x.sub(mft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
-    x.sub(bwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
-    x.sub(acpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
-    x.sub(acpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
-    x.sub(acpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
-    x.subRef(acdfs, 'CDeformerGuid', pidWarpGuid, { 'xs.n': 'guid' });
-    x.sub(acdfs, 'CDeformerId', { 'xs.n': 'id', idstr });
-    x.subRef(acdfs, 'CDeformerGuid', pidTargetGuid, { 'xs.n': 'targetDeformerGuid' });
-
-    x.sub(warpDf, 'i', { 'xs.n': 'col' }).text = String(col);
-    x.sub(warpDf, 'i', { 'xs.n': 'row' }).text = String(row);
-    x.sub(warpDf, 'b', { 'xs.n': 'isQuadTransform' }).text = 'false';
-
-    const numKf = formGuids.length;
-    const gridPts = (col + 1) * (row + 1);
-    const kfsList = x.sub(warpDf, 'carray_list', { 'xs.n': 'keyforms', count: String(numKf) });
-    for (let i = 0; i < numKf; i++) {
-      const wdf = x.sub(kfsList, 'CWarpDeformerForm');
-      const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
-      const wdfAcf = x.sub(wdfAdf, 'ACForm', { 'xs.n': 'super' });
-      x.subRef(wdfAcf, 'CFormGuid', formGuids[i], { 'xs.n': 'guid' });
-      x.sub(wdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
-      x.sub(wdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
-      x.subRef(wdfAcf, 'CWarpDeformerSource', pidWarpDf, { 'xs.n': '_source' });
-      x.sub(wdfAcf, 'null', { 'xs.n': 'name' });
-      x.sub(wdfAcf, 's', { 'xs.n': 'notes' }).text = '';
-      x.sub(wdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
-      x.sub(wdfAdf, 'CFloatColor', {
-        'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
-      });
-      x.sub(wdfAdf, 'CFloatColor', {
-        'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
-      });
-      x.subRef(wdfAdf, 'CoordType', pidWarpCoordType, { 'xs.n': 'coordType' });
-      x.sub(wdf, 'float-array', {
-        'xs.n': 'positions', count: String(gridPts * 2),
-      }).text = Array.from(gridPositions[i]).map(v => v.toFixed(6)).join(' ');
-    }
-
-    // Register in root part's _childGuids
-    rootPart.childGuidsNode.children.push(x.ref('CDeformerGuid', pidWarpGuid));
-    rootPart.childGuidsNode.attrs.count = String(rootPart.childGuidsNode.children.length);
-
-    return pidWarpDf;
-  };
-
-  // Helper: emit single-param keyform binding + grid (3 keyforms for -10/0/+10, or 2 for 0/1)
-  const emitSingleParamKfGrid = (pidParam, keys, description) => {
-    const [kfb, pidKfb] = x.shared('KeyformBindingSource');
-    const [kfg, pidKfg] = x.shared('KeyformGridSource');
-    const formGuids = [];
-
-    const kfogList = x.sub(kfg, 'array_list', { 'xs.n': 'keyformsOnGrid', count: String(keys.length) });
-    for (let i = 0; i < keys.length; i++) {
-      const [, pidForm] = x.shared('CFormGuid', { uuid: uuid(), note: `${description}_k${keys[i]}` });
-      formGuids.push(pidForm);
-      const kog = x.sub(kfogList, 'KeyformOnGrid');
-      const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-      const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
-      const kon = x.sub(kop, 'KeyOnParameter');
-      x.subRef(kon, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
-      x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(i);
-      x.subRef(kog, 'CFormGuid', pidForm, { 'xs.n': 'keyformGuid' });
-    }
-    const kfbList = x.sub(kfg, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
-    x.subRef(kfbList, 'KeyformBindingSource', pidKfb);
-    emitKfBinding(kfb, pidKfg, pidParam, keys.map(k => k + '.0'), description);
-
-    return { pidKfg, formGuids };
-  };
-
-  // Helper: generate uniform grid in given range with margin
-  const makeUniformGrid = (col, row, minVal, maxVal) => {
-    const gW = col + 1, gH = row + 1;
-    const grid = new Float64Array(gW * gH * 2);
-    for (let r = 0; r < gH; r++) {
-      for (let c = 0; c < gW; c++) {
-        grid[(r * gW + c) * 2]     = minVal + c * (maxVal - minVal) / col;
-        grid[(r * gW + c) * 2 + 1] = minVal + r * (maxVal - minVal) / row;
-      }
-    }
-    return grid;
-  };
+  // Shared context for extracted emitStructuralWarp — passes in mutable collections
+  // and pid references that the helper writes into.
+  const emitCtx = { allDeformerSources, pidPartGuid, rootPart };
 
   if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
     const SC = 5; // structural warp grid size (5×5 like Hiyori)
@@ -3016,19 +2690,123 @@ export async function generateCmo3(input) {
     // This creates a 3D rotation effect — columns further from lean direction shift more.
     const bzKeys = [-10, 0, 10];
     const { pidKfg: pidBzKfg, formGuids: bzFormGuids } =
-      emitSingleParamKfGrid(pidParamBodyAngleZ, bzKeys, 'ParamBodyAngleZ');
+      emitSingleParamKfGrid(x, pidParamBodyAngleZ, bzKeys, 'ParamBodyAngleZ');
 
     // Body Z: rotation around the HIP pivot point.
-    // - Hip is at ~60% from top (row 3 on 6-row grid)
+    // - Hip is at the measured widest-torso Y (or topwear.maxY when split garments)
     // - Upper body arcs left/right proportional to distance from hip
     // - Head LAGS slightly behind shoulders (trails the lean)
     // - Legs below hip: barely move, feet completely static
     // - Y shifts create 3D depth (lean side drops, far side rises)
-    const HIP_FRAC = 0.45; // belly pivot at 45% from top
+    //
+    // Step 2A: HIP_FRAC and FEET_FRAC are now derived from measured anatomy
+    // (bodyAnalysis) when available. Fallback to Hiyori-tuned defaults when
+    // analysis is unavailable. FEET_MARGIN_RF pulls the pin up slightly so
+    // rows near but not exactly at the feet Y are also clamped (avoids
+    // residual tug from rows that land just above feetY in grid space).
+    const HIP_FRAC_DEFAULT  = 0.45;
+    const FEET_FRAC_DEFAULT = 0.75;
+    const FEET_MARGIN_RF    = 0.05;
 
-    // Leg fade: below hip, movement fades to zero.
-    // Last row always 0 (feet pinned). Upper legs move slightly.
-    const FEET_FRAC = 0.75; // below this = completely static (lower legs + feet)
+    let HIP_FRAC  = HIP_FRAC_DEFAULT;
+    let FEET_FRAC = FEET_FRAC_DEFAULT;
+    let bodyFracSource = 'defaults';
+    if (bodyAnalysis && bodyAnalysis.anchors && BZ_H > 0) {
+      const { hipY, feetY, shoulderY } = bodyAnalysis.anchors;
+      const hipRf  = (hipY  !== null && hipY  !== undefined) ? (hipY  - BZ_MIN_Y) / BZ_H : null;
+      const feetRf = (feetY !== null && feetY !== undefined) ? (feetY - BZ_MIN_Y) / BZ_H : null;
+      const shoulderRf = (shoulderY !== null && shoulderY !== undefined) ? (shoulderY - BZ_MIN_Y) / BZ_H : null;
+      // Feet: accepted in a wide plausible range — feetY is robust (bottom of fullMask).
+      // Upper-bounded at FEET_FRAC_DEFAULT so measurement NEVER relaxes the pin
+      // (prevents regression where measured feetRf=0.92 made row rf=0.8 fade
+      // into motion when default 0.75 pinned it cleanly).
+      if (feetRf !== null && feetRf > 0.6 && feetRf <= 1.05) {
+        const measuredFeet = Math.max(HIP_FRAC + 0.05, Math.min(1.0, feetRf - FEET_MARGIN_RF));
+        FEET_FRAC = Math.min(FEET_FRAC_DEFAULT, measuredFeet);
+        bodyFracSource = 'measured-feet';
+      }
+      // Hip: narrower plausibility band. widestCoreY can land on shoulders for
+      // wide-shoulder / narrow-waist characters (shelby case) — reject if so.
+      // Plausible anatomical hip sits at ~0.40–0.62 of grid span.
+      if (hipRf !== null && hipRf >= 0.35 && hipRf <= 0.65 &&
+          feetRf !== null && feetRf > hipRf + 0.1) {
+        HIP_FRAC = hipRf;
+        FEET_FRAC = Math.max(HIP_FRAC + 0.05, FEET_FRAC);
+        bodyFracSource = bodyFracSource === 'measured-feet' ? 'measured-both' : 'measured-hip';
+      } else if (shoulderRf !== null && feetRf !== null &&
+                 shoulderRf < feetRf - 0.15) {
+        // Fallback when widestCoreY is unreliable (shoulders-dominant characters
+        // like shelby): use the anatomical mid-body between shoulder and feet
+        // as hip estimate. Gives a grid-space hip that lets the fade zone cover
+        // ~20% of grid (hip to feet) instead of the 30% default, so the visible
+        // lower torso gets meaningful rotation motion instead of static fade.
+        const midBodyRf = (shoulderRf + feetRf) / 2;
+        if (midBodyRf >= 0.4 && midBodyRf <= 0.7) {
+          HIP_FRAC = midBodyRf;
+          FEET_FRAC = Math.max(HIP_FRAC + 0.05, FEET_FRAC);
+          bodyFracSource = bodyFracSource === 'measured-feet'
+            ? 'measured-feet-plus-shoulder-feet-midbody'
+            : 'shoulder-feet-midbody';
+        }
+      }
+    }
+
+    // Step 2B: per-grid-row spine pivot in bow math.
+    // Measured spineX(y) curve from bodyAnalysis.widthProfile lets us shift the
+    // bow peak to land on the character's anatomical spine at each vertical row
+    // instead of the bbox X center.
+    //
+    // Critical robustness fix: widthProfile samples with very small coreWidth
+    // (e.g., between-legs dress hem remnants) produce wildly unreliable spineX
+    // estimates. Girl's last profile sample had spineX=852 (coreWidth=60) while
+    // the body axis was really ~990-1026 — using that sample yielded cfShifts
+    // of -0.20 in lower rows, visibly tearing the lower body apart at body-X/Z.
+    //
+    // Filter: only use samples with coreWidth >= 30% of maxCoreWidth (robust
+    // cross-sections). Above the robust range → no shift (head/shoulder region).
+    // Below the robust range → clamp to the last robust sample's spineX.
+    const SPINE_MIN_WIDTH_FRAC = 0.30;
+    const robustSpineSamples = (() => {
+      const a = bodyAnalysis;
+      if (!a || !a.widthProfile || !a.widthStats) return [];
+      const minW = a.widthStats.maxCoreWidth * SPINE_MIN_WIDTH_FRAC;
+      return a.widthProfile.filter(p => p.coreWidth >= minW && p.spineX != null);
+    })();
+    const spineCfShift = (r) => {
+      if (BZ_W <= 0 || robustSpineSamples.length < 2) return 0;
+      const canvasY = BZ_MIN_Y + r * BZ_H / SC;
+      const bboxCenterX = BZ_MIN_X + BZ_W / 2;
+      const first = robustSpineSamples[0];
+      const last = robustSpineSamples[robustSpineSamples.length - 1];
+      // Above robust range (head/shoulders) — no pivot shift (head is typically centered).
+      if (canvasY <= first.y) return 0;
+      // Below robust range (feet) — clamp to last robust sample's spineX.
+      if (canvasY >= last.y) return (last.spineX - bboxCenterX) / BZ_W;
+      // Find bracketing robust samples.
+      for (let i = 0; i < robustSpineSamples.length - 1; i++) {
+        const p0 = robustSpineSamples[i];
+        const p1 = robustSpineSamples[i + 1];
+        if (p0.y <= canvasY && canvasY <= p1.y) {
+          const f = (canvasY - p0.y) / (p1.y - p0.y);
+          const spineX = p0.spineX * (1 - f) + p1.spineX * f;
+          return (spineX - bboxCenterX) / BZ_W;
+        }
+      }
+      return 0;
+    };
+    // Precompute per-row cf shifts (used by all three body warps).
+    const spineCfShifts = new Float64Array(scGH);
+    for (let r = 0; r < scGH; r++) spineCfShifts[r] = spineCfShift(r);
+    if (rigDebugLog) {
+      rigDebugLog.bodyFracSource = bodyFracSource;
+      rigDebugLog.bodyFrac = { HIP_FRAC, FEET_FRAC };
+      rigDebugLog.spineCfShifts = {
+        source: bodyAnalysis && bodyAnalysis.widthProfile ? 'measured-widthProfile' : 'none',
+        perRow: Array.from(spineCfShifts).map(v => +v.toFixed(4)),
+        note: 'cf shift per grid row: 0 = bow centered on bbox, positive = spine drifts right of bbox, negative = left',
+      };
+    }
+
     const bodyMoveFactor = (rf) => {
       if (rf <= HIP_FRAC) return 1.0;
       if (rf >= FEET_FRAC) return 0.0; // lower legs + feet: completely static
@@ -3048,25 +2826,45 @@ export async function generateCmo3(input) {
             const rf = r / (scGH - 1); // 0=top, 1=bottom
             const cf = c / (scGW - 1); // 0=left, 1=right
 
-            // Progressive curve from hip: spine bends, not rigid rotation.
-            // Uses sine curve so the lean accelerates smoothly from hip to head.
+            // Progressive curve from hip to upper body.
+            // Previously used a sine curve that ACCELERATES (head at t=0.97, shoulder
+            // at t=0.40) — physically correct for pendulum rotation but visually
+            // breaks the neck-torso connection on realistic art because head moves
+            // 2.4× the shoulders. Replace with linear+cap: gentle ramp from hip
+            // that caps at 0.5 across most of the upper body, so head and shoulders
+            // move as a near-rigid unit (ratio ~1.2×). Upper body reads as ONE
+            // coherent block leaning, not a whipping head on a shoulder base.
             const distAboveHip = Math.max(0, HIP_FRAC - rf) / HIP_FRAC; // 0 at hip, 1 at top
             const legFade = bodyMoveFactor(rf);
-            // Spine curve: sine gives natural S-bend (slow start at hip, fast at shoulders)
-            const spineCurve = Math.sin(distAboveHip * Math.PI / 2); // 0 at hip, 1 at head
-            let t = rf <= HIP_FRAC ? 0.08 + spineCurve * 0.92 : legFade * 0.25;
+            const UPPER_BODY_T_CAP = 0.5;     // head/shoulders cap at this amplitude
+            const UPPER_BODY_SLOPE = 1.5;      // how fast t rises from hip
+            let t = rf <= HIP_FRAC
+              ? Math.min(UPPER_BODY_T_CAP, 0.08 + UPPER_BODY_SLOPE * distAboveHip)
+              : legFade * 0.25;
 
             // Body bowing: center columns shift WITH lean, edges shift opposite
-            // (same principle as Body X — creates 3D curvature illusion)
-            const bowFactor = 1.5 * Math.sin(Math.PI * cf) - 0.5; // +1 center, -0.5 edges
-            pos[idx] += sign * 0.05 * t * bowFactor * BZ_W;
+            // (same principle as Body X — creates 3D curvature illusion).
+            // Step 2B: shift cf so the peak lands on the measured spine, not
+            // the bbox center, eliminating asymmetric pull on off-center
+            // characters (girl lower body drifts +65px right vs bbox).
+            //
+            // Bow amplitude reduced from 0.05 → 0.035 because the direction was
+            // correct (right arm trails behind when body turns right) but the
+            // magnitude was too strong on realistic art, causing arms to swing
+            // visibly too far. At ±10, peak bow shift at shoulder = 0.035 × t ×
+            // 0.55 × BZ_W ≈ 15px for girl's BZ_W=730, down from 22px.
+            const cfS = cf - spineCfShifts[r];
+            const bowFactor = 1.5 * Math.sin(Math.PI * cfS) - 0.5; // +1 at spine, -0.5 at edges
+            pos[idx] += sign * 0.035 * t * bowFactor * BZ_W;
 
-            // Plus a uniform lean component (whole body shifts, not just bows)
+            // Plus a uniform lean component (whole body shifts, not just bows).
+            // Also reduced for the same reason: 0.02+0.015 → 0.015+0.01.
             const perspCf = sign < 0 ? cf : (1 - cf);
-            pos[idx] += sign * (0.02 + 0.015 * perspCf) * t * BZ_W;
+            pos[idx] += sign * (0.015 + 0.01 * perspCf) * t * BZ_W;
 
-            // Y: lean side drops, far side rises — 3D depth
-            const yShift = -sign * 0.025 * (0.5 - cf) * t;
+            // Y: lean side drops, far side rises — 3D depth. Measured spine
+            // midpoint replaces fixed 0.5 so vertical kick aligns with spine.
+            const yShift = -sign * 0.025 * (0.5 - cfS) * t;
             pos[idx + 1] += yShift * BZ_H;
           }
         }
@@ -3074,7 +2872,8 @@ export async function generateCmo3(input) {
       bzGridPositions.push(pos);
     }
 
-    emitStructuralWarp('Body Warp Z', 'BodyWarpZ', SC, SC, pidBodyZGuid, pidDeformerRoot,
+    emitStructuralWarp(x, emitCtx,
+      'Body Warp Z', 'BodyWarpZ', SC, SC, pidBodyZGuid, pidDeformerRoot,
       pidBzKfg, pidCoordBWZ, bzFormGuids, bzGridPositions);
 
     // ── Body Warp Y — DeformerLocal 0..1, targets Body Warp Z ──
@@ -3084,7 +2883,7 @@ export async function generateCmo3(input) {
     const byRestGrid = makeUniformGrid(SC, SC, BY_MIN, BY_MAX);
     const byKeys = [-10, 0, 10];
     const { pidKfg: pidByKfg, formGuids: byFormGuids } =
-      emitSingleParamKfGrid(pidParamBodyAngleY, byKeys, 'ParamBodyAngleY');
+      emitSingleParamKfGrid(x, pidParamBodyAngleY, byKeys, 'ParamBodyAngleY');
 
     // Hiyori Body Y pattern: vertical compression/stretch with 3D curvature.
     // - Top row and edge columns PINNED
@@ -3104,8 +2903,10 @@ export async function generateCmo3(input) {
             if (r === 0) continue; // top row pinned
             const cf = c / (scGW - 1);
             const rf = r / (scGH - 1);
-            // Column bell: center columns shift most (body curvature)
-            const colBell = Math.sin(Math.PI * cf);
+            // Column bell: center columns shift most (body curvature).
+            // Spine-centered: peak lands on measured spine, not bbox center.
+            const cfS = cf - spineCfShifts[r];
+            const colBell = Math.sin(Math.PI * cfS);
             // Row factor: torso peaks, legs fade to static
             const rowPeak = Math.sin(Math.PI * rf * 0.7); // peaks at torso
             const legFade = bodyMoveFactor(rf); // fades legs
@@ -3121,7 +2922,8 @@ export async function generateCmo3(input) {
       byGridPositions.push(pos);
     }
 
-    emitStructuralWarp('Body Warp Y', 'BodyWarpY', SC, SC, pidBodyYGuid, pidBodyZGuid,
+    emitStructuralWarp(x, emitCtx,
+      'Body Warp Y', 'BodyWarpY', SC, SC, pidBodyYGuid, pidBodyZGuid,
       pidByKfg, pidCoord, byFormGuids, byGridPositions);
 
     // ── Breath Warp — DeformerLocal 0..1, targets Body Warp Y ──
@@ -3131,7 +2933,7 @@ export async function generateCmo3(input) {
     const brRestGrid = makeUniformGrid(SC, SC, BR_MIN, BR_MAX);
     const brKeys = [0, 1];
     const { pidKfg: pidBrKfg, formGuids: brFormGuids } =
-      emitSingleParamKfGrid(pidParamBreath, brKeys, 'ParamBreath');
+      emitSingleParamKfGrid(x, pidParamBreath, brKeys, 'ParamBreath');
 
     const brGridPositions = [];
     for (const k of brKeys) {
@@ -3162,7 +2964,8 @@ export async function generateCmo3(input) {
       brGridPositions.push(pos);
     }
 
-    emitStructuralWarp('Breath', 'BreathWarp', SC, SC, pidBreathGuid, pidBodyYGuid,
+    emitStructuralWarp(x, emitCtx,
+      'Breath', 'BreathWarp', SC, SC, pidBreathGuid, pidBodyYGuid,
       pidBrKfg, pidCoord, brFormGuids, brGridPositions);
 
     // ── Body X Warp — 4th structural layer, child of Breath ──
@@ -3181,7 +2984,7 @@ export async function generateCmo3(input) {
 
       const bxKeys = [-10, 0, 10];
       const { pidKfg: pidBxKfg, formGuids: bxFormGuids } =
-        emitSingleParamKfGrid(pidParamBodyAngleX, bxKeys, 'ParamBodyAngleX');
+        emitSingleParamKfGrid(x, pidParamBodyAngleX, bxKeys, 'ParamBodyAngleX');
 
       // Hiyori Body X pattern: body BOWING effect, not uniform lean.
       // Center columns shift WITH lean direction, edge columns shift OPPOSITE.
@@ -3196,8 +2999,14 @@ export async function generateCmo3(input) {
               const idx = (r * bxGW + c) * 2;
               const cf = c / (bxGW - 1); // column fraction 0..1
               const rf = r / (bxGH - 1); // row fraction 0..1
-              // Bow factor: +1 at center, -0.5 at edges (body bends)
-              const bowFactor = 1.5 * Math.sin(Math.PI * cf) - 0.5;
+              // Bow factor: +1 at spine, -0.5 at edges (body bends around spine).
+              // Body X grid is at a different scale from Body Z (within Breath's
+              // 0.10–0.90 local range) but shares vertical row mapping; use the
+              // same cf shift scaled by the Breath-to-BodyX factor so the peak
+              // lands on the measured spine.
+              const bxCfFactor = 1 / (bxMaxV - bxMinV); // ≈ 1.25 for 0.80 span
+              const cfS = cf - spineCfShifts[r] * bxCfFactor;
+              const bowFactor = 1.5 * Math.sin(Math.PI * cfS) - 0.5;
               // Row amplitude: peaks at torso, legs fade to zero
               const torsoPeak = Math.sin(Math.PI * rf * 0.7); // peaks at upper-mid body
               const legFade = bodyMoveFactor(rf); // legs static
@@ -3209,94 +3018,22 @@ export async function generateCmo3(input) {
         bxGridPositions.push(pos);
       }
 
-      emitStructuralWarp('Body X Warp', 'BodyXWarp', bxCol, bxRow,
+      emitStructuralWarp(x, emitCtx,
+        'Body X Warp', 'BodyXWarp', bxCol, bxRow,
         pidBodyXGuid, pidBreathGuid, pidBxKfg, pidCoord, bxFormGuids, bxGridPositions);
     }
 
     // ==================================================================
     // 3d.1 Neck Warp (Session 20: neck follows head tilt)
     // ==================================================================
-    // Hiyori has a dedicated "Neck Warp" (CWarpDeformerSource, 6×6 grid, 3 keyforms)
-    // that applies a Y-gradient to the neck area — bottom row pinned at shoulders,
-    // top row shifts to follow whatever parameter drives the head pose. In Hiyori
-    // the binding is PARAM_BODY_ANGLE_X (body lean); we bind to ParamAngleZ so the
-    // neck bends in sync with Face Rotation's head tilt.
-    //
-    // Chain: Body X → NeckWarp → neck/neckwear rig warps → neck meshes
-    // Grid scale: Body X 0..1 (DeformerLocal; parent is a warp).
-    let pidNeckWarpGuid = null;
-    if (pidParamAngleZ && neckUnionBbox && pidBodyXGuid) {
-      const nwCol = 5, nwRow = 5;               // 6×6 control points
-      const nwGW = nwCol + 1, nwGH = nwRow + 1;
-      const nwGridPts = nwGW * nwGH;
-
-      // --- Structural chain integration: target NeckWarp to GroupRotation_neck if possible ---
-      const neckGroupRotPid = neckGroupId && groupDeformerGuids.get(neckGroupId);
-      const neckGroupPivot = neckGroupId && deformerWorldOrigins.get(neckGroupId);
-      const isUnderRotation = !!neckGroupRotPid;
-
-      // Rest grid: pixel offsets if under rotation, 0..1 if under structural warp (Body X)
-      const nwRestGrid = new Float64Array(nwGridPts * 2);
-      for (let r = 0; r < nwGH; r++) {
-        for (let c = 0; c < nwGW; c++) {
-          const idx = (r * nwGW + c) * 2;
-          const cx = neckUnionBbox.minX + c * neckUnionBbox.W / nwCol;
-          const cy = neckUnionBbox.minY + r * neckUnionBbox.H / nwRow;
-          if (isUnderRotation) {
-            nwRestGrid[idx]     = cx - neckGroupPivot.x;
-            nwRestGrid[idx + 1] = cy - neckGroupPivot.y;
-          } else {
-            nwRestGrid[idx]     = canvasToBodyXX(cx);
-            nwRestGrid[idx + 1] = canvasToBodyXY(cy);
-          }
-        }
-      }
-      // Span for shift calculation: should use pixel span if parent is rotation
-      const nwSpanX = isUnderRotation
-        ? neckUnionBbox.W
-        : nwRestGrid[(nwGW - 1) * 2] - nwRestGrid[0];
-
-      // 3 keyforms on ParamAngleZ: -30, 0, +30.
-      // At ±30, top row shifts in X by NECK_TILT_FRAC * nwSpanX_bx.
-      // Row gradient: sin(π·(1 - rf) / 2) — 1 at top row, 0 at bottom row.
-      const NECK_TILT_FRAC = 0.08;
-      if (rigDebugLog) {
-        rigDebugLog.neckWarp = {
-          NECK_TILT_FRAC,
-          gridCols: nwCol + 1, gridRows: nwRow + 1,
-          spanX: nwSpanX,
-          maxShiftX: NECK_TILT_FRAC * nwSpanX,
-          parentDeformer: isUnderRotation ? 'GroupRotation_neck' : 'Body X Warp',
-          note: `top row shift at ParamAngleZ = +30 in ${isUnderRotation ? 'pixel' : '0..1'} space`,
-        };
-      }
-      const nwKeys = [-30, 0, 30];
-      const nwGridPositions = [];
-      for (const k of nwKeys) {
-        const pos = new Float64Array(nwRestGrid);
-        if (k !== 0) {
-          const sign = k / 30;
-          for (let r = 0; r < nwGH; r++) {
-            const rf = r / (nwGH - 1);
-            const gradient = Math.sin(Math.PI * (1 - rf) / 2);
-            if (gradient === 0) continue;
-            for (let c = 0; c < nwGW; c++) {
-              const idx = (r * nwGW + c) * 2;
-              pos[idx] += sign * NECK_TILT_FRAC * gradient * nwSpanX;
-            }
-          }
-        }
-        nwGridPositions.push(pos);
-      }
-
-      const [, pidNwGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'NeckWarp' });
-      pidNeckWarpGuid = pidNwGuid;
-      const { pidKfg: pidNwKfg, formGuids: nwFormGuids } =
-        emitSingleParamKfGrid(pidParamAngleZ, nwKeys, 'ParamAngleZ_Neck');
-      const nwTarget = neckGroupRotPid || pidBodyXGuid;
-      emitStructuralWarp('Neck Warp', 'NeckWarp', nwCol, nwRow,
-        pidNwGuid, nwTarget, pidNwKfg, pidCoord, nwFormGuids, nwGridPositions);
-    }
+    // See `cmo3/bodyRig.js` emitNeckWarp for details. Chain:
+    //   Body X → NeckWarp → neck/neckwear rig warps → neck meshes
+    const pidNeckWarpGuid = emitNeckWarp(x, {
+      pidParamAngleZ, neckUnionBbox, pidBodyXGuid,
+      neckGroupId, groupDeformerGuids, deformerWorldOrigins,
+      canvasToBodyXX, canvasToBodyXY,
+      pidCoord, rigDebugLog, emitCtx,
+    });
 
     // ==================================================================
     // 3d.2 Face Rotation + Face Parallax Warp (Sessions 19–20)
@@ -3320,425 +3057,28 @@ export async function generateCmo3(input) {
     const faceParallaxGuids = new Map(); // groupKey → pidCDeformerGuid
     if (pidParamAngleZ && facePivotCx !== null && faceUnionBbox && pidBodyXGuid) {
       // ── Face Rotation (CRotationDeformerSource) ──
-      // ParamAngleZ range is standard ±30; Hiyori caps actual rotation at ±10° even
-      // when param is pushed to its limits. 3 keyforms: param -30/0/+30 → angle -10/0/+10.
-      const [, pidFaceRotGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'FaceRotation' });
-      const faceRotParamKeys = [-30, 0, 30];    // ParamAngleZ keyform values
-      const faceRotAngles    = [-10, 0, 10];    // corresponding rotation angles (Hiyori)
-      // --- Structural chain integration: target FaceRotation to GroupRotation_head if possible ---
-      const headGroupRotPid = headGroupId && groupDeformerGuids.get(headGroupId);
-      const headGroupPivot = headGroupId && deformerWorldOrigins.get(headGroupId);
-      const isUnderRotation = !!headGroupRotPid;
-
-      const { pidKfg: pidFaceRotKfg, formGuids: faceRotFormGuids } =
-        emitSingleParamKfGrid(pidParamAngleZ, faceRotParamKeys, 'ParamAngleZ');
-
-      const pivotX = isUnderRotation
-        ? facePivotCx - headGroupPivot.x
-        : canvasToBodyXX(facePivotCx);
-      const pivotY = isUnderRotation
-        ? facePivotCy - headGroupPivot.y
-        : canvasToBodyXY(facePivotCy);
-
-      const [faceRotDf, pidFaceRotDf] = x.shared('CRotationDeformerSource');
-      allDeformerSources.push({ pid: pidFaceRotDf, tag: 'CRotationDeformerSource' });
-      const frAcdfs = x.sub(faceRotDf, 'ACDeformerSource', { 'xs.n': 'super' });
-      const frAcpcs = x.sub(frAcdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
-      x.sub(frAcpcs, 's', { 'xs.n': 'localName' }).text = 'Face Rotation';
-      x.sub(frAcpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
-      x.sub(frAcpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
-      x.subRef(frAcpcs, 'CPartGuid', pidPartGuid, { 'xs.n': 'parentGuid' });
-      x.subRef(frAcpcs, 'KeyformGridSource', pidFaceRotKfg, { 'xs.n': 'keyformGridSource' });
-      const frMft = x.sub(frAcpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
-      x.sub(frMft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
-      const frBwc = x.sub(frMft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
-      x.sub(frBwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
-      x.sub(frAcpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
-      x.sub(frAcpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
-      x.sub(frAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
-      x.subRef(frAcdfs, 'CDeformerGuid', pidFaceRotGuid, { 'xs.n': 'guid' });
-      x.sub(frAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: 'FaceRotation' });
-      const frTarget = headGroupRotPid || pidBodyXGuid;
-      x.subRef(frAcdfs, 'CDeformerGuid', frTarget, { 'xs.n': 'targetDeformerGuid' });
-      x.sub(faceRotDf, 'b', { 'xs.n': 'useBoneUi_testImpl' }).text = 'true';
-
-      const frKfsList = x.sub(faceRotDf, 'carray_list', {
-        'xs.n': 'keyforms', count: String(faceRotParamKeys.length),
+      // See `cmo3/bodyRig.js` emitFaceRotation — 3 keyforms on ParamAngleZ,
+      // pivot at chin, rotation capped at ±10°. FaceParallax reparents to it.
+      const pidFaceRotGuid = emitFaceRotation(x, {
+        pidParamAngleZ, facePivotCx, facePivotCy, pidBodyXGuid,
+        headGroupId, groupDeformerGuids, deformerWorldOrigins,
+        canvasToBodyXX, canvasToBodyXY,
+        allDeformerSources, pidPartGuid, pidCoord, rootPart,
       });
-      for (let i = 0; i < faceRotParamKeys.length; i++) {
-        const rdf = x.sub(frKfsList, 'CRotationDeformerForm', {
-          angle: faceRotAngles[i].toFixed(1),
-          originX: pivotX.toFixed(6),
-          originY: pivotY.toFixed(6),
-          scale: '1.0',
-          isReflectX: 'false',
-          isReflectY: 'false',
-        });
-        const rdfAdf = x.sub(rdf, 'ACDeformerForm', { 'xs.n': 'super' });
-        const rdfAcf = x.sub(rdfAdf, 'ACForm', { 'xs.n': 'super' });
-        x.subRef(rdfAcf, 'CFormGuid', faceRotFormGuids[i], { 'xs.n': 'guid' });
-        x.sub(rdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
-        x.sub(rdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
-        x.subRef(rdfAcf, 'CRotationDeformerSource', pidFaceRotDf, { 'xs.n': '_source' });
-        x.sub(rdfAcf, 'null', { 'xs.n': 'name' });
-        x.sub(rdfAcf, 's', { 'xs.n': 'notes' }).text = '';
-        x.sub(rdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
-        x.sub(rdfAdf, 'CFloatColor', {
-          'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
-        });
-        x.sub(rdfAdf, 'CFloatColor', {
-          'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
-        });
-        x.subRef(rdfAdf, 'CoordType', pidCoord, { 'xs.n': 'coordType' });
-      }
-      // Match existing rotation-deformer field order (UI metadata).
-      x.sub(faceRotDf, 'f', { 'xs.n': 'handleLengthOnCanvas' }).text = '200.0';
-      x.sub(faceRotDf, 'f', { 'xs.n': 'circleRadiusOnCanvas' }).text = '100.0';
-      x.sub(faceRotDf, 'f', { 'xs.n': 'baseAngle' }).text = '0.0';
-      rootPart.childGuidsNode.children.push(x.ref('CDeformerGuid', pidFaceRotGuid));
-      rootPart.childGuidsNode.attrs.count = String(rootPart.childGuidsNode.children.length);
 
-      // ── FaceParallax warps (7 groups, 6×6 grid, 9kf on AngleX × AngleY) ──
-      const fpCol = 5, fpRow = 5; // 6×6 control points (matches Hiyori)
-      const fpGW = fpCol + 1, fpGH = fpRow + 1;
-      const fpGridPts = fpGW * fpGH;
-      // Hiyori keyform order: Y-fast (AngleY inner, AngleX outer).
-      // Binding array order: AngleY first, AngleX second.
-      const fpAngleKeys = [-30, 0, 30];
-      const fpKeyCombos = []; // [angleX, angleY] in storage order
-      for (let xi = 0; xi < 3; xi++) {
-        for (let yi = 0; yi < 3; yi++) {
-          fpKeyCombos.push([fpAngleKeys[xi], fpAngleKeys[yi]]);
-        }
-      }
-
-      if (pidParamAngleX && pidParamAngleY) {
-        // SINGLE FaceParallax warp over the whole face union bbox.
-        // Follows Session 15 Body X pattern: uniform rest grid in parent's 0..1 space,
-        // keyforms apply a parametric BOW deformation that varies with (cf, rf) grid
-        // position. All face meshes are children of this one warp via their rig warps.
-
-        // Rest grid in "Face Rotation's local frame" = canvas-pixel OFFSETS from the
-        // face rotation pivot.  Evidence (Hiyori 50+ rotation deformers):
-        //   - Rotation deformer children see parent's local frame as canvas-pixel
-        //     offsets from parent's own pivot, NOT 0..1 of any warp domain.
-        //   - CoordType "DeformerLocal" means "parent's local frame" (whatever it is),
-        //     not literally 0..1.
-        //   - Hiyori FaceParallax grids are pixel-offset values like (-60..292, -435..-45)
-        //     relative to Face Rotation's canvas pivot, not 0..1.
-        // Using Body X 0..1 values here (Session 19 attempts) collapsed the face to
-        // canvas ~(0,0) because Cubism interpreted 0..1 values as pixel offsets of < 1 px.
-        const fpRestLocal = new Float64Array(fpGridPts * 2);
-        for (let r = 0; r < fpGH; r++) {
-          for (let c = 0; c < fpGW; c++) {
-            const idx = (r * fpGW + c) * 2;
-            fpRestLocal[idx]     = (faceUnionBbox.minX + c * faceUnionBbox.W / fpCol) - facePivotCx;
-            fpRestLocal[idx + 1] = (faceUnionBbox.minY + r * faceUnionBbox.H / fpRow) - facePivotCy;
-          }
-        }
-        // Span for scaling bow magnitudes — canvas-pixel width/height of face bbox.
-        const fpSpanX_bx = faceUnionBbox.W;
-        const fpSpanY_bx = faceUnionBbox.H;
-
-        // ── P8 (Apr 2026): Depth-weighted ellipsoidal face parallax ──
-        // Replaces parametric bow/persp/cross-axis with 3D rotation of a virtual
-        // hemisphere centered on the face. Each grid point gets a Z proportional
-        // to distance from face center (ellipsoidal falloff). At ±30° param, we
-        // rotate the (u, v, z) point around the Y/X axes and project back to 2D.
-        //
-        // Natural behaviors that emerge from the geometry (not hand-tuned):
-        //   - Center of face shifts most (high Z), edges shift least (Z≈0)
-        //   - Perspective foreshortening (far side slightly less visible)
-        //   - Asymmetric shifts on asymmetric rest poses (tilted heads handled correctly)
-        //
-        // Tunables:
-        //   FP_DEPTH_K         — depth magnitude (0 = flat, 1 = full hemisphere)
-        //   FP_MAX_ANGLE_X/Y   — virtual head rotation at ParamAngle = ±30
-        //
-        // Rotation center = face mesh center (anatomical face). Fallback to union.
-        const faceMeshCxLocal = faceMeshBbox
-          ? (faceMeshBbox.minX + faceMeshBbox.maxX) / 2
-          : facePivotCx;
-        const faceMeshCyLocal = faceMeshBbox
-          ? (faceMeshBbox.minY + faceMeshBbox.maxY) / 2
-          : (faceUnionBbox.minY + faceUnionBbox.maxY) / 2;
-        const fpRadiusX = faceMeshBbox
-          ? (faceMeshBbox.maxX - faceMeshBbox.minX) / 2
-          : fpSpanX_bx / 2;
-        const fpRadiusY = faceMeshBbox
-          ? (faceMeshBbox.maxY - faceMeshBbox.minY) / 2
-          : fpSpanY_bx / 2;
-        const FP_DEPTH_K         = 0.80;  // Z at face center (fully forward)
-        const FP_EDGE_DEPTH_K    = 0.30;  // Z at face edges (was 0 → edges had no shift)
-        const FP_MAX_ANGLE_X_DEG = 15;
-        const FP_MAX_ANGLE_Y_DEG = 12;
-
-        // Protected regions: tagged meshes that should rigidly translate (not stretch)
-        // during parallax. Grid points inside/near these regions get blended toward
-        // the rigid shift at the region's center instead of their own position's shift.
-        // Value is 0..1: 0 = no protection (full parallax), 1 = fully rigid at center.
-        const FP_PROTECTION_STRENGTH = 1.0; // global multiplier on all protection values
-        const PROTECTION_PER_TAG = {
-          'eyelash':     0.95, 'eyelash-l':  0.95, 'eyelash-r':  0.95,
-          'eyewhite':    0.95, 'eyewhite-l': 0.95, 'eyewhite-r': 0.95,
-          'irides':      1.00, 'irides-l':   1.00, 'irides-r':   1.00,
-          'eyebrow':     0.50, 'eyebrow-l':  0.50, 'eyebrow-r':  0.50,
-          'mouth':       0.30,
-          'nose':        0.30,
-        };
-        // Extra falloff buffer around each region (in normalized u/v units).
-        // Larger = smoother transition to natural parallax.
-        const FP_PROTECTION_FALLOFF_BUFFER = 0.12;
-        // Build protected regions array with bbox, center (u,v,z), falloff extents.
-        const protectedRegions = [];
-        for (const m of meshes) {
-          const basePro = PROTECTION_PER_TAG[m.tag];
-          if (basePro == null) continue;
-          const v = m.vertices;
-          if (!v || v.length < 2) continue;
-          let rMinX = Infinity, rMinY = Infinity, rMaxX = -Infinity, rMaxY = -Infinity;
-          for (let i = 0; i < v.length; i += 2) {
-            if (v[i]     < rMinX) rMinX = v[i];
-            if (v[i]     > rMaxX) rMaxX = v[i];
-            if (v[i + 1] < rMinY) rMinY = v[i + 1];
-            if (v[i + 1] > rMaxY) rMaxY = v[i + 1];
-          }
-          if (rMaxX <= rMinX || rMaxY <= rMinY) continue;
-          const rcx = (rMinX + rMaxX) / 2;
-          const rcy = (rMinY + rMaxY) / 2;
-          const ru = fpRadiusX > 0 ? (rcx - faceMeshCxLocal) / fpRadiusX : 0;
-          const rv = fpRadiusY > 0 ? (rcy - faceMeshCyLocal) / fpRadiusY : 0;
-          const ruu = ru * ru;
-          const rDome = ruu < 1 ? Math.sqrt(1 - ruu) : 0; // cylindrical along V (match grid z)
-          const rz = FP_EDGE_DEPTH_K + (FP_DEPTH_K - FP_EDGE_DEPTH_K) * rDome;
-          const halfU = fpRadiusX > 0 ? (rMaxX - rMinX) / (2 * fpRadiusX) : 0.05;
-          const halfV = fpRadiusY > 0 ? (rMaxY - rMinY) / (2 * fpRadiusY) : 0.05;
-          protectedRegions.push({
-            tag: m.tag,
-            protection: basePro * FP_PROTECTION_STRENGTH,
-            u: ru, v: rv, z: rz,
-            falloffU: halfU + FP_PROTECTION_FALLOFF_BUFFER,
-            falloffV: halfV + FP_PROTECTION_FALLOFF_BUFFER,
-          });
-        }
-
-        // Precompute (u, v, z) per grid point. Z uses a CYLINDRICAL dome along V
-        // (varies with u only, flat along v). This gives:
-        //   - Yaw (AngleX): natural perspective — edges have lower Z so shift less
-        //   - Pitch (AngleY): clean vertical translation — all v positions at same u
-        //     have same Z → no vertical compression weirdness
-        // Previously used ellipsoidal (varies with both u and v), which caused pitch
-        // to compress face vertically and stretch eyes.
-        const fpUVZ = new Float64Array(fpGridPts * 3);
-        for (let r = 0; r < fpGH; r++) {
-          for (let c = 0; c < fpGW; c++) {
-            const gi = r * fpGW + c;
-            const canvasGx = faceUnionBbox.minX + c * faceUnionBbox.W / fpCol;
-            const canvasGy = faceUnionBbox.minY + r * faceUnionBbox.H / fpRow;
-            const u = fpRadiusX > 0 ? (canvasGx - faceMeshCxLocal) / fpRadiusX : 0;
-            const v = fpRadiusY > 0 ? (canvasGy - faceMeshCyLocal) / fpRadiusY : 0;
-            const uu = u * u;
-            const dome = uu < 1 ? Math.sqrt(1 - uu) : 0;  // cylindrical along V
-            const z = FP_EDGE_DEPTH_K + (FP_DEPTH_K - FP_EDGE_DEPTH_K) * dome;
-            fpUVZ[gi * 3]     = u;
-            fpUVZ[gi * 3 + 1] = v;
-            fpUVZ[gi * 3 + 2] = z;
-          }
-        }
-
-        if (rigDebugLog) {
-          // Peak shift: at center (u=0, v=0, z=FP_DEPTH_K), rotation by θ gives u' = z·sin θ.
-          const peakThetaX = FP_MAX_ANGLE_X_DEG * Math.PI / 180;
-          const peakThetaY = FP_MAX_ANGLE_Y_DEG * Math.PI / 180;
-          const peakX = FP_DEPTH_K * Math.sin(peakThetaX) * fpRadiusX;
-          const peakY = FP_DEPTH_K * Math.sin(peakThetaY) * fpRadiusY;
-          rigDebugLog.faceParallax = {
-            algorithm: 'depth-weighted-cylindrical + protected-regions (P10)',
-            gridCols: fpGW, gridRows: fpGH,
-            spanX_canvasPx: fpSpanX_bx, spanY_canvasPx: fpSpanY_bx,
-            faceMeshCenter: { cx: faceMeshCxLocal, cy: faceMeshCyLocal },
-            fpRadius: { x: fpRadiusX, y: fpRadiusY },
-            constants: {
-              FP_DEPTH_K,
-              FP_EDGE_DEPTH_K,
-              FP_MAX_ANGLE_X_DEG,
-              FP_MAX_ANGLE_Y_DEG,
-              FP_PROTECTION_STRENGTH,
-              FP_PROTECTION_FALLOFF_BUFFER,
-            },
-            peakShifts_canvasPx: {
-              angleX_plus30_center: peakX,
-              angleY_plus30_center: peakY,
-            },
-            protectedRegions: protectedRegions.map(r => ({
-              tag: r.tag,
-              protection: r.protection,
-              centerUVZ: { u: r.u, v: r.v, z: r.z },
-              falloff: { u: r.falloffU, v: r.falloffV },
-            })),
-            note: 'Grid point Z from ellipsoidal falloff + per-region protection blend. Protected regions (eyes, brows, mouth, nose) rigidly translate via their center-shift; skin/hair/ears get full depth parallax. FaceParallax grid in canvas-px offsets from facePivot.',
-          };
-        }
-        const fpGridPositions = [];
-        const fpFormGuids = [];
-        for (const [ax, ay] of fpKeyCombos) {
-          const thetaX = (ax / 30) * FP_MAX_ANGLE_X_DEG * Math.PI / 180;
-          const thetaY = (ay / 30) * FP_MAX_ANGLE_Y_DEG * Math.PI / 180;
-          const cosX = Math.cos(thetaX), sinX = Math.sin(thetaX);
-          const cosY = Math.cos(thetaY), sinY = Math.sin(thetaY);
-          const pos = new Float64Array(fpRestLocal);
-          if (ax !== 0 || ay !== 0) {
-            // Pre-compute per-region rigid shifts (one per protected region) for this keyform.
-            const regionShifts = protectedRegions.map(r => {
-              const rUy = r.u * cosX + r.z * sinX;
-              const rZy = -r.u * sinX + r.z * cosX;
-              const rVp = r.v * cosY - rZy * sinY;
-              return { shiftU: rUy - r.u, shiftV: rVp - r.v };
-            });
-            for (let gi = 0; gi < fpGridPts; gi++) {
-              const u = fpUVZ[gi * 3];
-              const v = fpUVZ[gi * 3 + 1];
-              const z = fpUVZ[gi * 3 + 2];
-              // Natural shift (full depth parallax)
-              const uY = u * cosX + z * sinX;
-              const zY = -u * sinX + z * cosX;
-              const vP = v * cosY - zY * sinY;
-              const natShiftU = uY - u;
-              const natShiftV = vP - v;
-              // Sum weighted rigid shifts from protected regions.
-              let totalWeight = 0;
-              let rigidShiftU = 0;
-              let rigidShiftV = 0;
-              for (let ri = 0; ri < protectedRegions.length; ri++) {
-                const r = protectedRegions[ri];
-                const du = (u - r.u) / r.falloffU;
-                const dv = (v - r.v) / r.falloffV;
-                const distSq = du * du + dv * dv;
-                if (distSq >= 1) continue; // outside falloff
-                const proximity = 1 - distSq; // smooth parabolic falloff
-                const w = r.protection * proximity;
-                totalWeight += w;
-                rigidShiftU += w * regionShifts[ri].shiftU;
-                rigidShiftV += w * regionShifts[ri].shiftV;
-              }
-              // Blend: more weight → closer to rigid; clamp effective protection to 1
-              const effP = Math.min(1, totalWeight);
-              let finalShiftU, finalShiftV;
-              if (totalWeight > 0) {
-                const avgRigidU = rigidShiftU / totalWeight;
-                const avgRigidV = rigidShiftV / totalWeight;
-                finalShiftU = natShiftU * (1 - effP) + avgRigidU * effP;
-                finalShiftV = natShiftV * (1 - effP) + avgRigidV * effP;
-              } else {
-                finalShiftU = natShiftU;
-                finalShiftV = natShiftV;
-              }
-              pos[gi * 2]     += finalShiftU * fpRadiusX;
-              pos[gi * 2 + 1] += finalShiftV * fpRadiusY;
-            }
-          }
-          fpGridPositions.push(pos);
-          const [, pidForm] = x.shared('CFormGuid', {
-            uuid: uuid(), note: `FaceParallax_ax${ax}_ay${ay}`,
-          });
-          fpFormGuids.push(pidForm);
-        }
-
-        // Emit the single FaceParallax deformer (CWarpDeformerSource) targeting Body X.
-        const [, pidFpGuid] = x.shared('CDeformerGuid', {
-          uuid: uuid(), note: 'FaceParallax',
-        });
-        faceParallaxGuids.set('__all__', pidFpGuid);
-
-        // KeyformBindings — AngleY first, AngleX second (Hiyori convention).
-        const [fpKfbY, pidFpKfbY] = x.shared('KeyformBindingSource');
-        const [fpKfbX, pidFpKfbX] = x.shared('KeyformBindingSource');
-        const [fpKfg, pidFpKfg]   = x.shared('KeyformGridSource');
-        const fpKfogList = x.sub(fpKfg, 'array_list', {
-          'xs.n': 'keyformsOnGrid', count: String(fpKeyCombos.length),
-        });
-        for (let ki = 0; ki < fpKeyCombos.length; ki++) {
-          const ax = fpKeyCombos[ki][0], ay = fpKeyCombos[ki][1];
-          const xi = fpAngleKeys.indexOf(ax);
-          const yi = fpAngleKeys.indexOf(ay);
-          const kog = x.sub(fpKfogList, 'KeyformOnGrid');
-          const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-          const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '2' });
-          const konY = x.sub(kop, 'KeyOnParameter');
-          x.subRef(konY, 'KeyformBindingSource', pidFpKfbY, { 'xs.n': 'binding' });
-          x.sub(konY, 'i', { 'xs.n': 'keyIndex' }).text = String(yi);
-          const konX = x.sub(kop, 'KeyOnParameter');
-          x.subRef(konX, 'KeyformBindingSource', pidFpKfbX, { 'xs.n': 'binding' });
-          x.sub(konX, 'i', { 'xs.n': 'keyIndex' }).text = String(xi);
-          x.subRef(kog, 'CFormGuid', fpFormGuids[ki], { 'xs.n': 'keyformGuid' });
-        }
-        const fpKfbList = x.sub(fpKfg, 'array_list', { 'xs.n': 'keyformBindings', count: '2' });
-        x.subRef(fpKfbList, 'KeyformBindingSource', pidFpKfbY);
-        x.subRef(fpKfbList, 'KeyformBindingSource', pidFpKfbX);
-        emitKfBinding(fpKfbY, pidFpKfg, pidParamAngleY,
-          fpAngleKeys.map(k => k + '.0'), 'ParamAngleY');
-        emitKfBinding(fpKfbX, pidFpKfg, pidParamAngleX,
-          fpAngleKeys.map(k => k + '.0'), 'ParamAngleX');
-
-        // Emit the CWarpDeformerSource
-        const [fpDf, pidFpDf] = x.shared('CWarpDeformerSource');
-        allDeformerSources.push({ pid: pidFpDf, tag: 'CWarpDeformerSource' });
-        const fpAcdfs = x.sub(fpDf, 'ACDeformerSource', { 'xs.n': 'super' });
-        const fpAcpcs = x.sub(fpAcdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
-        x.sub(fpAcpcs, 's', { 'xs.n': 'localName' }).text = 'FaceParallax';
-        x.sub(fpAcpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
-        x.sub(fpAcpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
-        x.subRef(fpAcpcs, 'CPartGuid', pidPartGuid, { 'xs.n': 'parentGuid' });
-        x.subRef(fpAcpcs, 'KeyformGridSource', pidFpKfg, { 'xs.n': 'keyformGridSource' });
-        const fpMft = x.sub(fpAcpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
-        x.sub(fpMft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
-        const fpBwc = x.sub(fpMft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
-        x.sub(fpBwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
-        x.sub(fpAcpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
-        x.sub(fpAcpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
-        x.sub(fpAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
-        x.subRef(fpAcdfs, 'CDeformerGuid', pidFpGuid, { 'xs.n': 'guid' });
-        x.sub(fpAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: 'FaceParallax' });
-        // FaceParallax targets Face Rotation → Body X.  Coord scales:
-        //   - Face Rotation pivot:  in Body X 0..1  (its parent is a warp)
-        //   - FaceParallax grid:    in canvas-pixel OFFSETS from Face Rotation's pivot
-        //                           (its parent is a rotation deformer — see WARP_DEFORMERS.md
-        //                           "Rotation Deformer Local Frame" for the evidence).
-        // At rest (ParamAngleZ=0) Face Rotation is identity, so the chain is transparent.
-        // At ±30 (mapped to ±10° rotation) Face Rotation rotates FaceParallax's grid
-        // around the face pivot, producing head tilt for all face rig warp descendants.
-        x.subRef(fpAcdfs, 'CDeformerGuid', pidFaceRotGuid, { 'xs.n': 'targetDeformerGuid' });
-        x.sub(fpDf, 'i', { 'xs.n': 'col' }).text = String(fpCol);
-        x.sub(fpDf, 'i', { 'xs.n': 'row' }).text = String(fpRow);
-        x.sub(fpDf, 'b', { 'xs.n': 'isQuadTransform' }).text = 'false';
-        const fpKfsList = x.sub(fpDf, 'carray_list', {
-          'xs.n': 'keyforms', count: String(fpKeyCombos.length),
-        });
-        for (let ki = 0; ki < fpKeyCombos.length; ki++) {
-          const wdf = x.sub(fpKfsList, 'CWarpDeformerForm');
-          const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
-          const wdfAcf = x.sub(wdfAdf, 'ACForm', { 'xs.n': 'super' });
-          x.subRef(wdfAcf, 'CFormGuid', fpFormGuids[ki], { 'xs.n': 'guid' });
-          x.sub(wdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
-          x.sub(wdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
-          x.subRef(wdfAcf, 'CWarpDeformerSource', pidFpDf, { 'xs.n': '_source' });
-          x.sub(wdfAcf, 'null', { 'xs.n': 'name' });
-          x.sub(wdfAcf, 's', { 'xs.n': 'notes' }).text = '';
-          x.sub(wdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
-          x.sub(wdfAdf, 'CFloatColor', {
-            'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
-          });
-          x.sub(wdfAdf, 'CFloatColor', {
-            'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0',
-          });
-          x.subRef(wdfAdf, 'CoordType', pidCoord, { 'xs.n': 'coordType' });
-          x.sub(wdf, 'float-array', {
-            'xs.n': 'positions', count: String(fpGridPts * 2),
-          }).text = Array.from(fpGridPositions[ki]).map(v => v.toFixed(6)).join(' ');
-        }
-        rootPart.childGuidsNode.children.push(x.ref('CDeformerGuid', pidFpGuid));
-        rootPart.childGuidsNode.attrs.count = String(rootPart.childGuidsNode.children.length);
-      }
+      // ── FaceParallax warp (6×6 grid, 9kf on AngleX × AngleY) ──
+      // See `cmo3/faceParallax.js` emitFaceParallax — contains protected
+      // region build (A.3 pairing, A.6b cell expansion), 3D rotation math
+      // with #3 eye-parallax amp + #5 far-eye squash, and the deformer emit.
+      const pidFpGuid = emitFaceParallax(x, {
+        pidParamAngleX, pidParamAngleY, pidFaceRotGuid,
+        faceUnionBbox, facePivotCx, facePivotCy, faceMeshBbox,
+        meshes,
+        allDeformerSources, rootPart,
+        pidPartGuid, pidCoord,
+        rigDebugLog,
+      });
+      if (pidFpGuid) faceParallaxGuids.set('__all__', pidFpGuid);
     }
 
     // ── Re-parent: rotation deformers targeting ROOT → Body X Warp ──
@@ -3808,6 +3148,24 @@ export async function generateCmo3(input) {
   // ==================================================================
 
   const meshSrcIds = []; // pidMesh for each mesh
+
+  // Clipping-mask resolution: certain tagged meshes should be masked by others
+  // at render time (iris inside eyewhite, iris-highlight inside iris, etc.).
+  // Build tag → pidDrawable lookup and CLIP_RULES map of what-is-masked-by-what.
+  // When a mesh's tag is in CLIP_RULES keys, its drawable references the mask's
+  // CDrawableGuid in clipGuidList — Cubism handles occlusion natively.
+  const tagToPidDrawable = new Map();
+  for (let i = 0; i < perMesh.length; i++) {
+    const tag = meshes[perMesh[i].mi].tag;
+    if (tag && !tagToPidDrawable.has(tag)) {
+      tagToPidDrawable.set(tag, perMesh[i].pidDrawable);
+    }
+  }
+  const CLIP_RULES = {
+    'irides':    'eyewhite',
+    'irides-l':  'eyewhite-l',
+    'irides-r':  'eyewhite-r',
+  };
 
   for (const pm of perMesh) {
     const [meshSrc, pidMesh] = x.shared('CArtMeshSource');
@@ -3973,7 +3331,16 @@ export async function generateCmo3(input) {
       meshDfGuid = pidDeformerRoot;
     }
     x.subRef(ds, 'CDeformerGuid', meshDfGuid, { 'xs.n': 'targetDeformerGuid' });
-    x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '0' });
+    // Clipping-mask: iris masked by eyewhite, etc. See CLIP_RULES above.
+    const meshTag = meshes[pm.mi].tag;
+    const maskTag = meshTag ? CLIP_RULES[meshTag] : null;
+    const maskPid = maskTag ? tagToPidDrawable.get(maskTag) : null;
+    if (maskPid) {
+      const clipList = x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '1' });
+      x.subRef(clipList, 'CDrawableGuid', maskPid);
+    } else {
+      x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '0' });
+    }
     x.sub(ds, 'b', { 'xs.n': 'invertClippingMask' }).text = 'false';
 
     // Triangle indices
@@ -3982,7 +3349,7 @@ export async function generateCmo3(input) {
 
     // Keyforms — baked bone-weight keyforms or single rest-pose keyform
     // Helper to emit one CArtMeshForm
-    const emitArtMeshForm = (kfList, formGuidPid, positions) => {
+    const emitArtMeshForm = (kfList, formGuidPid, positions, opacity = 1.0) => {
       const artForm = x.sub(kfList, 'CArtMeshForm');
       const adf = x.sub(artForm, 'ACDrawableForm', { 'xs.n': 'super' });
       const acf = x.sub(adf, 'ACForm', { 'xs.n': 'super' });
@@ -3993,7 +3360,7 @@ export async function generateCmo3(input) {
       x.sub(acf, 'null', { 'xs.n': 'name' });
       x.sub(acf, 's', { 'xs.n': 'notes' }).text = '';
       x.sub(adf, 'i', { 'xs.n': 'drawOrder' }).text = String(pm.drawOrder);
-      x.sub(adf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
+      x.sub(adf, 'f', { 'xs.n': 'opacity' }).text = opacity.toFixed(2);
       x.sub(adf, 'CFloatColor', {
         'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0',
       });
@@ -4146,6 +3513,78 @@ export async function generateCmo3(input) {
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
       emitArtMeshForm(kfList, pm.pidFormClosed, closedVerts); // keyIndex 0: closed
       emitArtMeshForm(kfList, pm.pidFormMesh, verts);         // keyIndex 1: open/rest
+    } else if (pm.hasNeckCornerShapekeys) {
+      // 3 keyforms on ParamAngleX: −30 (keyIndex 0), 0 rest (1), +30 (2).
+      // Each vertex gets a "cornerness" weight — product of an X-edge factor
+      // (1 at left/right edge, 0 at horizontal center) × a top-edge factor
+      // (1 at top, 0 at mid/bottom). Peaks at the two top corners, zero
+      // elsewhere. Bottom row stays pinned at the shoulders; middle of the
+      // top edge stays aligned with the neck center; only the corner region
+      // follows the head horizontally.
+      //
+      // Shift at ±30: `sign * NECK_CORNER_TILT_FRAC * neckW * cornerness`
+      // in canvas pixels, then converted into the same space as `verts`
+      // (warp-local 0..1 if rwBox, else deformer-local offsets, else canvas).
+      const NECK_CORNER_TILT_FRAC = 0.05;
+      // Plateau thresholds on normalized distance from center-X / bottom-Y
+      // (both range 0..1, peak=1 at corners). A vertex at d ≥ plateau gets
+      // full-strength shift; below plateau the shift falls via smoothstep
+      // (S-curve, zero derivative at both endpoints → no visible "stroke"
+      // at the zone boundary). HIGHER plateau value → NARROWER full-strength
+      // zone (the vertex must be closer to a corner to hit the plateau).
+      const NECK_X_PLATEAU = 0.7; // outer ≤15% from each side at full shift
+      const NECK_Y_PLATEAU = 0.7; // top ≤30% at full shift (then smooth fade)
+      const smoothstep = (t) => t * t * (3 - 2 * t); // 0..1, flat at both ends
+      let nMinX = Infinity, nMinY = Infinity, nMaxX = -Infinity, nMaxY = -Infinity;
+      for (let i = 0; i < numVerts; i++) {
+        const vx = canvasVerts[i * 2];
+        const vy = canvasVerts[i * 2 + 1];
+        if (vx < nMinX) nMinX = vx;
+        if (vx > nMaxX) nMaxX = vx;
+        if (vy < nMinY) nMinY = vy;
+        if (vy > nMaxY) nMaxY = vy;
+      }
+      const nW = nMaxX - nMinX;
+      const nH = nMaxY - nMinY;
+      const shiftedCanvas = (sign) => {
+        const out = new Array(canvasVerts.length);
+        for (let i = 0; i < numVerts; i++) {
+          const vx = canvasVerts[i * 2];
+          const vy = canvasVerts[i * 2 + 1];
+          const relX = nW > 0 ? (vx - nMinX) / nW : 0.5;
+          const relY = nH > 0 ? (vy - nMinY) / nH : 0.5;
+          // dX: distance from center X, 0..1 (1 at edges)
+          // dY: distance from bottom, 0..1 (1 at top)
+          const dX = Math.abs(2 * relX - 1);
+          const dY = Math.max(0, 1 - relY);
+          // Plateau at ≥threshold, smoothstep fade below it
+          const tx = dX >= NECK_X_PLATEAU ? 1 : dX / NECK_X_PLATEAU;
+          const ty = dY >= NECK_Y_PLATEAU ? 1 : dY / NECK_Y_PLATEAU;
+          const cornerness = smoothstep(tx) * smoothstep(ty);
+          out[i * 2]     = vx + sign * NECK_CORNER_TILT_FRAC * nW * cornerness;
+          out[i * 2 + 1] = vy;
+        }
+        return out;
+      };
+      const toLocal = (canvasArr) => {
+        if (rwBox) {
+          return canvasArr.map((v, i) =>
+            i % 2 === 0
+              ? (v - rwBox.gridMinX) / rwBox.gridW
+              : (v - rwBox.gridMinY) / rwBox.gridH
+          );
+        }
+        if (dfOrigin) {
+          return canvasArr.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y));
+        }
+        return canvasArr;
+      };
+      const negVerts = toLocal(shiftedCanvas(-1));
+      const posVerts = toLocal(shiftedCanvas(+1));
+      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '3' });
+      emitArtMeshForm(kfList, pm.neckCornerFormGuids[0], negVerts); // −30
+      emitArtMeshForm(kfList, pm.pidFormMesh, verts);                //   0 (rest)
+      emitArtMeshForm(kfList, pm.neckCornerFormGuids[1], posVerts); // +30
     } else {
       // Single keyform at rest position
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
