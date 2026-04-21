@@ -3840,10 +3840,14 @@ export async function generateCmo3(input) {
     x.subRef(pgChildList, 'CParameterGuid', pd.pid);
   }
   x.subRef(rootPgNode, 'CParameterGroupId', pidRootPgId, { 'xs.n': 'id' });
-  const rootPgLbl = x.sub(rootPgNode, 'CLabelColor', {
-    'xs.n': 'labelColor', customizedColorInt: '-1',
-  });
-  x.sub(rootPgLbl, 'CLabelColorType', { 'xs.n': 'labelType', v: 'UNDEFINED' });
+  // visibilityColor* fields at fileFormatVersion 402030000 (Cubism 4.2).
+  // A `<CLabelColor>` sub-element here is the Cubism 5.0 (500000005+)
+  // pattern — emitting it at 402030000 fails the parser silently and the
+  // whole project loads blank. Match Hiyori's exact shape instead.
+  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorRed' }).text = '1.0';
+  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorGreen' }).text = '1.0';
+  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorBlue' }).text = '1.0';
+  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorAlpha' }).text = '1.0';
 
   const root = x.el('root', { fileFormatVersion: '402030000' });
 
