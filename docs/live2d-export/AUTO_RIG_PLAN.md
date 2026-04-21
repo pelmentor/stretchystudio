@@ -276,6 +276,145 @@ as numeric tables, not bundled assets, so legally safe).
   passes, our P0–P12 auto-rig logic intact (30+ identifier matches
   verified via grep).
 
+- **Session 23 (Apr 2026)** — deep face-parallax iteration +
+  cross-style auto-rig (see `SESSION_23_FINDINGS.md` for detail).
+  Shipped: See-Through depth PSD integration, geometric EDT
+  fallback with plausibility check, iris clipping mask
+  (`irides` masked by `eyewhite`), body-parallax improvements
+  (shoulder-feet midbody hip fallback for wide-shouldered
+  characters, head t-cap, neck rotation deformer skip, bow
+  amplitude reduction, spine outlier filter), super-group for
+  eye sub-meshes (iris+eyewhite+eyelash as one protected unit),
+  inner-bbox full protection + outer fade, Export UX polish
+  (modelName auto-fill from project, reset-on-project-change,
+  widened dialog). Plus research Round 2 (Sýkora 2010 Sparse
+  Depth Inequalities, Monster Mash 2020, Depth Anything V2 —
+  notes in `research/NOTES.md`).
+
+  Key diagnosis: geometric EDT parallax "perfect" result on girl
+  (western with drawn head-tilt) was an accidental alignment
+  between algorithm asymmetry and art asymmetry — doesn't
+  transfer to symmetric art (shelby → goblinification under
+  AMP=3.0). Conclusion: no single algorithm serves both symmetric
+  (front-facing) and asymmetric (drawn-tilt) rest poses. Session
+  24 plan = `tiltedNeck` UI toggle + input-level pre-symmetrization
+  (force-symmetric face bbox, mirror-averaged depth sampling,
+  symmetric protected region positions) for front-facing default
+  + raw asymmetric for tiltedNeck. Then Phase B = Poisson
+  inflation replaces EDT (Ink-and-Ray); Phase C = Laplace
+  inter-region smoothing (Sýkora 2010).
+
+- **Session 24 (Apr 2026)** — ATTEMPTED architectural pivot, REVERTED.
+  Hypothesis from reverse-engineering a 175-frame tutorial recording:
+  "reference rig uses RotationDeformer keyed to ParamAngleX (±12°
+  chin-pivot swing) PLUS WarpDeformer, and our exporter was missing
+  the rotation part." Implemented it; user tested; result was **head
+  severed from neck, rigidly pivoting around chin** — cartoon head-on-
+  a-stick. Fundamental reason: a 2D RotationDeformer in Live2D rotates
+  only around the canvas Z-axis = that's a lean/tilt, mathematically
+  impossible to produce a left-right head yaw with it. The entire
+  head-turn illusion in Live2D rigs is carried by WARP GRID SHAPEKEYS
+  (keyform control-point displacements) — no rotation deformer is
+  layered on top. Frame 142's "green rotation arc" I saw was just the
+  warp deformer's convex-hull outline in its deformed state, not a
+  separate rotation deformer.
+
+  cmo3writer.js fully reverted to pre-Session-24 state.
+  Session 23 Phase A (warp-only + pre-symmetrization + `tiltedNeck`
+  toggle) is back on the critical path. See SESSION_24_FINDINGS.md §0
+  for the post-mortem.
+
+- **Session 25 (Apr 2026)** — shipped Phase A items A.1–A.4 in the
+  warp-only architecture (all gated on `!tiltedNeck`):
+  - **A.1**: `fpRadiusX` forced symmetric via max(halfLeft, halfRight)
+    so u=±1 land at equal canvas distances from face center.
+  - **A.2**: depth sampled at both `canvasGx` and its mirror across
+    `faceMeshCxLocal`, averaged — kills L/R noise in EDT hemispheres
+    and See-Through depth PSDs.
+  - **A.3**: post-process `protectedRegions` to pair `foo-l`/`foo-r`
+    by forcing equal `|u|`, averaged `v`/`z`/half-extents/falloffs.
+  - **A.4**: `FP_DEPTH_AMP` bumped from 1.6 (default) → 3.0 globally;
+    safe after A.1–A.3 because the noise that caused Session 23
+    goblinification is gone at the input level.
+
+  A.5 (UI toggle for `tiltedNeck`) still pending. Until A.5 ships
+  everyone uses the symmetrized path. See SESSION_25_FINDINGS.md.
+
+- **Session 26 (Apr 2026)** — closed out the "stroke-face" asymmetry,
+  shipped two 3D effects, and removed depth PSD + `tiltedNeck`
+  entirely after cross-character testing:
+  - **A.6**: inner full-protection zone switched from inscribed ellipse
+    (covered only ~78% of bbox) to RECTANGLE (Chebyshev). Eye-corner
+    mesh vertices now get full rigid protection. Necessary but not
+    sufficient.
+  - **A.6b** (the fix that worked): warp grid is sparse (6×6), and
+    eye region halfU ≈ 0.1 is much smaller than one cell (≈0.3–0.5 u).
+    Small regions left grid corners around their mesh vertices OUTSIDE
+    the rigid zone, so bilinear interp pulled position-dependent natural
+    shifts → L/R asymmetry on drawn art. Expanded every region's
+    halfU/halfV by one `cellU`/`cellV` post-A.3. Mesh-scale `meshHalfU/V`
+    stashed on regions for tightly-scoped effects like #5.
+  - **#3 eye parallax amp**: `regionShifts[ri].shiftU *= 1.3` for
+    `eye-l` / `eye-r` — eyes "pop" on the face's convex dome.
+  - **#5 far-eye squash**: grid-level (not ART_MESH keyforms).
+    Post-process in `computeFpKeyform` shifts grid points on the far
+    eye's OUTER side toward the eye center, scoped to `meshHalfU/V`
+    (pre-A.6b bbox) so compression stays local. Condition
+    `r.u * sinX < 0` identifies far eye. Reads as perspective
+    foreshortening.
+  - **Failed ear-tuck experiment (Session 25d)**: `shiftU *= 3.0` for
+    ears compounded with A.6b's wide rigid zones → whole side of face
+    dragged with the ear (25% face compression, neck exposed). Reverted.
+    Lesson: amplifying shifts in high-protection regions that have
+    been A.6b-expanded drags adjacent meshes. Keep amps ≤ 1.5×.
+  - **`tiltedNeck` removed**: after shipping A.5 as a checkbox + flag,
+    testing showed the default path (A.6b + #3 + #5 + AMP=3.0 + A.1–A.3
+    symmetrization) works on all three test characters (shelby front,
+    girl 3/4, waifu anime). The `tiltedNeck=true` fallback was dead
+    code. Removed entirely from ExportModal + exporter + cmo3writer
+    (~80 lines).
+  - **Depth PSD removed**: user tested waifu (the most likely
+    beneficiary, being the only anime character with a Marigold-derived
+    depth PSD) and got BETTER results without it. Only consumer was
+    face parallax `fpZAt`; body parallax never used depth. Deleted
+    `src/io/depthPsd.js` + `src/io/geometricDepth.js` (≈480 lines)
+    and their usages in cmo3writer (`effectiveDepth`, `sampleDepthSigned`,
+    `computeGeometricDepth`, `isDepthPsdPlausible`). `fpZAt` is now a
+    pure cylindrical dome.
+  - **Net**: cmo3writer 5028 → 4983 lines (many blocks simplified);
+    ExportModal 776 → 711 lines; two modules deleted. See
+    SESSION_26_FINDINGS.md.
+
+- **Session 27 (2026-04-21) — cmo3writer refactor (pure structural).**
+  4983 → 3700 LoC (−25.7%). Split into five modules under
+  `src/io/live2d/cmo3/` (constants, pngHelpers, deformerEmit, bodyRig,
+  faceParallax). No behavior changes; end-to-end smoke test passes on
+  `generateRig=true` with 14-mesh tagged character. Byte-equivalence
+  vs. Session 26 baseline confirmed by user via browser export.
+  See `SESSION_27_FINDINGS.md`.
+
+- **Session 28 (2026-04-22) — two feature fixes on the refactored base.**
+  - **Neck-corner shapekey on ParamAngleX**. Per-vertex `CArtMeshForm`
+    at −30/0/+30 on the `neck` mesh. Shift formula:
+    `cornerness = smoothstep(tx) · smoothstep(ty)` where
+    `tx / ty` are plateau-thresholded edge distances.
+    Final constants: `NECK_CORNER_TILT_FRAC = 0.05`,
+    `NECK_X_PLATEAU = 0.7`, `NECK_Y_PLATEAU = 0.7`. Five tuning rounds
+    (POW-based falloff tried first, abandoned because POW<1 has vertical
+    tangent at zero → visible "stroke" on the boundary; smoothstep +
+    plateau gives a soft S-curve with zero derivative at both ends).
+    Fixes the head-to-neck seam that appeared under head yaw.
+  - **Eyewhite mask warp-level identity keyforms**. `eyewhite-l/-r`
+    rig warp gains a 3×3 binding on ParamEyeBallX × ParamEyeBallY with
+    an identity `shiftFn` (no displacement). Structurally mirrors the
+    iris's rig-warp binding. Silences Cubism Editor's "Mask Artmeshes
+    have problems" warning. A first attempt at mesh-level keyforms
+    (18 `KeyformOnGrid` entries on the eyewhite ArtMesh) emitted
+    plausible XML but failed to silence the warning — Cubism validates
+    keyform presence at the deformer-chain level, so the fix must live
+    on the warp parallel to the clipped child's warp.
+  See `SESSION_28_FINDINGS.md`.
+
 ## Future directions (not scheduled)
 
 ### Eye-axis-aligned closure arcs (for drawn-in head tilts)

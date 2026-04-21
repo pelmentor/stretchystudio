@@ -1,6 +1,15 @@
 # Live2D Export — Progress Tracker
 
-## Current Status: Face chain complete — parallax + AngleZ head tilt working (Session 20, 2026-04-17)
+> **Phase 1–2 historical milestone tracker.** For current (Phase 3+) work,
+> see [AUTO_RIG_PLAN.md](AUTO_RIG_PLAN.md) and the `SESSION_NN_FINDINGS.md`
+> files in this directory. This document is frozen after Session 20; newer
+> sessions (21–27: P8–P12 auto-rig, Session 25/26 FaceParallax symmetry
+> fixes, Session 27 cmo3writer refactor) are tracked in AUTO_RIG_PLAN's
+> Evidence log.
+
+## Status at end of Phase 2 (Session 20, 2026-04-17)
+
+Face chain complete — parallax + AngleZ head tilt working.
 
 ---
 

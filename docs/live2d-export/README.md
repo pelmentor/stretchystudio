@@ -38,7 +38,13 @@ All export code is in `src/io/live2d/`:
 |------|---------|
 | `exporter.js` | Main orchestrator: `exportLive2D()` (runtime) + `exportLive2DProject()` (project) |
 | `moc3writer.js` | .moc3 binary writer (V4.00, 100+ sections) |
-| `cmo3writer.js` | .cmo3 XML generator (textures, parts, params, deformers, baked keyforms) |
+| `cmo3writer.js` | .cmo3 XML orchestrator (textures, parts, per-mesh rig warps, CArtMeshSource, main.xml assembly) |
+| `cmo3/constants.js` | VERSION_PIS, IMPORT_PIS, filter / deformer-root UUIDs |
+| `cmo3/pngHelpers.js` | Raw PNG synthesis + P12 alpha-bottom contour extraction |
+| `cmo3/deformerEmit.js` | Shared warp/keyform emit helpers (structural warps, KeyformBindings, uniform grids) |
+| `cmo3/bodyRig.js` | `emitNeckWarp` + `emitFaceRotation` |
+| `cmo3/faceParallax.js` | `emitFaceParallax` — protected regions, A.3/A.6b, `computeFpKeyform`, eye amp (#3), far-eye squash (#5), symmetrizeKeyform |
+| `bodyAnalyzer.js` | Torso/head bbox analysis driving body-warp grid |
 | `can3writer.js` | .can3 XML generator (animation scenes, parameter keyframes) |
 | `xmlbuilder.js` | Shared XML builder for .cmo3 and .can3 generators |
 | `caffPacker.js` | CAFF archive packer (XOR obfuscation, ZIP compression) |
@@ -53,12 +59,16 @@ UI integration: `src/components/export/ExportModal.jsx`
 
 | Document | Contents |
 |----------|----------|
-| [PROGRESS.md](PROGRESS.md) | Milestone tracker — what's done, what's next |
+| [AUTO_RIG_PLAN.md](AUTO_RIG_PLAN.md) | **Live roadmap** — per-phase evidence log for the auto-rig pipeline; authoritative source for current work |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design decisions, data mapping, keyform binding system |
 | [MOC3_FORMAT.md](MOC3_FORMAT.md) | .moc3 binary format reference |
 | [CMO3_FORMAT.md](CMO3_FORMAT.md) | .cmo3 format reference (CAFF container, XML schema) |
 | [TEMPLATES.md](TEMPLATES.md) | Live2D templates, 3D parallax, standard params — research & feasibility |
 | [WARP_DEFORMERS.md](WARP_DEFORMERS.md) | Warp deformer coordinate system — reverse-engineered from Cubism Editor bytecode |
+| [PROGRESS.md](PROGRESS.md) | Phase 1/2 milestone tracker (historical; superseded by AUTO_RIG_PLAN.md for Phase 3+) |
+| `SESSION_NN_FINDINGS.md` | Per-session post-mortems (Session 23–current): root causes, bug lessons, decision trails |
+| [research/](research/) | Study notes on papers that informed the 2D→pseudo-3D parallax approach |
+| [head-angle-x-technique/](head-angle-x-technique/) | RE notes on Hiyori's AngleX technique (contains a post-mortem of a rejected RotationDeformer interpretation) |
 
 ## Data Mapping
 
