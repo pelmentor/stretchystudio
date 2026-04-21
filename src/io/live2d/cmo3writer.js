@@ -263,16 +263,6 @@ export async function generateCmo3(input) {
     }
   }
 
-  // Shared CParameterId per paramDef — needed so CRandomPoseSetting can
-  // reference params by xs.ref (Cubism's "Setting…" dialog in Animation mode
-  // shows an empty list if these refs are missing; the inline-only
-  // `<CParameterId xs.n="id" idstr="…"/>` pattern satisfies CParameterSource
-  // but not the random-pose array_list). Each paramDef gets a `pidId` field.
-  for (const pd of paramDefs) {
-    const [, pidId] = x.shared('CParameterId', { idstr: pd.id });
-    pd.pidId = pidId;
-  }
-
   // Root part GUID
   const [, pidPartGuid] = x.shared('CPartGuid', { uuid: uuid(), note: '__RootPart__' });
 
@@ -3826,6 +3816,17 @@ export async function generateCmo3(input) {
   // that Cubism's Random Pose Setting dialog uses to key its group tree. Without
   // it + labelColor, the dialog renders blank because it can't resolve the
   // group's display identity.
+  // Shared CParameterId per paramDef. MUST run AFTER all `paramDefs.push`
+  // sites (there are late ones around the rig/generateRig blocks); if we
+  // assign `pidId` too early, any paramDef pushed later has `pd.pidId =
+  // undefined`, which the ref-emit turns into `xs.ref="undefined"` — at
+  // load Cubism reports `CParameterId / ref id [undefined] : object not
+  // found` and fabricates `__NotInitialized__` placeholders per source.
+  for (const pd of paramDefs) {
+    const [, pidId] = x.shared('CParameterId', { idstr: pd.id });
+    pd.pidId = pidId;
+  }
+
   // Root Parameter Group entity (v14 required) — mirrors Hiyori's root
   // group at fileFormatVersion 402030000. Shape is:
   //   name, description, folderIsOpened, guid, parentGroupGuid (null),
