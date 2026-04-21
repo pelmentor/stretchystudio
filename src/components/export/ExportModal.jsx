@@ -32,7 +32,7 @@ import {
 } from '@/io/exportAnimation';
 import { exportLive2D, exportLive2DProject } from '@/io/live2d';
 
-export function ExportModal({ open, onClose, captureRef }) {
+export function ExportModal({ open, onClose, captureRef, projectName, projectId }) {
   // Form state
   const [type, setType] = useState('sequence');
   const [format, setFormat] = useState('png');
@@ -47,6 +47,10 @@ export function ExportModal({ open, onClose, captureRef }) {
   const [modelName, setModelName] = useState('model');
   const [atlasSize, setAtlasSize] = useState(2048);
   const [generateRig, setGenerateRig] = useState(true);
+  // Track whether user has explicitly edited the model-name field. While
+  // untouched, the field auto-syncs to the current project's name on every
+  // open — so loading a new project and then exporting shows the right default.
+  const [modelNameTouched, setModelNameTouched] = useState(false);
 
   // Progress state
   const [progress, setProgress] = useState(null);
@@ -70,7 +74,22 @@ export function ExportModal({ open, onClose, captureRef }) {
     const hasBg = project.canvas.bgEnabled;
     setBgMode(hasBg ? 'custom' : 'transparent');
     setBgColor(project.canvas.bgColor ?? '#ffffff');
-  }, [open, project, animStore, animTarget]);
+    // Default model name to the loaded project name (sanitized for filename
+    // safety). Only applies while the user hasn't manually edited the field.
+    if (!modelNameTouched) {
+      const candidate = (projectName || '').trim();
+      const sanitized = candidate
+        ? candidate.replace(/[\\/:*?"<>|]/g, '').trim() || 'model'
+        : 'model';
+      setModelName(sanitized);
+    }
+  }, [open, project, animStore, animTarget, projectName, modelNameTouched]);
+
+  // Reset manual-edit tracker when a new project loads so its name gets
+  // auto-applied the next time the modal opens.
+  useEffect(() => {
+    setModelNameTouched(false);
+  }, [projectId]);
 
   const handleLive2DExport = useCallback(async () => {
     setIsExporting(true);
@@ -326,7 +345,7 @@ export function ExportModal({ open, onClose, captureRef }) {
     <Dialog open={open} onOpenChange={v => {
       if (!v && !isExporting) onClose();
     }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Export</DialogTitle>
         </DialogHeader>
@@ -382,7 +401,10 @@ export function ExportModal({ open, onClose, captureRef }) {
                   <Input
                     className="h-8 text-xs"
                     value={modelName}
-                    onChange={e => setModelName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, '_'))}
+                    onChange={e => {
+                      setModelName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, '_'));
+                      setModelNameTouched(true);
+                    }}
                     disabled={isExporting}
                     placeholder="model"
                   />

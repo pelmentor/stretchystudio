@@ -52,9 +52,16 @@ _start.bat
 
 # Export artifacts (SS dev testing output, not source)
 *.rig.log.json
-*_live2d.zip
+*_live2d*.zip
 girl.png
 waifu.png
 shelby.png
 *.blend
 *.blend1
+
+# Reference media — videos / extracted frames / stray downloads (too large,
+# often proprietary Hiyori/commercial Live2D samples).
+*.mp4
+*.jfif
+frames/
+frames */

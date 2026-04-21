@@ -578,6 +578,8 @@ export default function EditorLayout() {
         open={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
         captureRef={exportCaptureRef}
+        projectName={currentDbProjectName}
+        projectId={currentDbProjectId}
       />
 
       <PreferencesModal
