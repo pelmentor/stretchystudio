@@ -31,6 +31,7 @@ import {
   FILTER_DEF_LAYER_SELECTOR,
   FILTER_DEF_LAYER_FILTER,
   DEFORMER_ROOT_UUID,
+  PARAM_GROUP_ROOT_UUID,
 } from './cmo3/constants.js';
 import { buildRawPng, extractBottomContourFromLayerPng } from './cmo3/pngHelpers.js';
 import {
@@ -181,7 +182,15 @@ export async function generateCmo3(input) {
   // 1. GLOBAL SHARED OBJECTS (used by all meshes)
   // ==================================================================
 
-  const [, pidParamGroupGuid] = x.shared('CParameterGroupGuid', { uuid: uuid(), note: 'root_group' });
+  // Root parameter group uses the well-known ROOT_GROUP UUID hardcoded in
+  // CParameterGroupGuid.Companion.b() in the Editor Java. The Random Pose
+  // Setting dialog searches parameterGroupSet.getGroups() for the group
+  // whose guid equals this constant; a random UUID makes the dialog render
+  // empty (f_0.a(cModelSource) early-returns at line ~438). Name "root_group"
+  // stays as a debug label — Hiyori uses "Root Parameter Group".
+  const [, pidParamGroupGuid] = x.shared('CParameterGroupGuid', {
+    uuid: PARAM_GROUP_ROOT_UUID, note: 'Root Parameter Group',
+  });
   const [, pidModelGuid] = x.shared('CModelGuid', { uuid: uuid(), note: 'model' });
 
   // Build parameter GUIDs — always include ParamOpacity, plus all project parameters
@@ -3827,10 +3836,57 @@ export async function generateCmo3(input) {
     pd.pidId = pidId;
   }
 
+  // Parameter sub-groups — mirror Hiyori's 12-category tree so the Random
+  // Pose Setting dialog has folders to render. Without sub-groups the dialog
+  // sees only the root and shows nothing (it renders parameters nested under
+  // folders, not a flat root list).
+  //
+  // Each paramDef gets categorized by its id (face / eye / hair / clothing /
+  // bone / custom …). Only categories with ≥1 param get a sub-group. Root's
+  // `_childGuids` lists sub-group guids (not param guids directly) and each
+  // CParameterSource.parentGroupGuid points at its sub-group.
+  const CATEGORY_DEFS = [
+    { key: 'face',     name: 'Face',     idstr: 'ParamGroupFace' },
+    { key: 'eye',      name: 'Eye',      idstr: 'ParamGroupEyes' },
+    { key: 'eyeball',  name: 'Eyeball',  idstr: 'ParamGroupEyeballs' },
+    { key: 'brow',     name: 'Brow',     idstr: 'ParamGroupBrows' },
+    { key: 'mouth',    name: 'Mouth',    idstr: 'ParamGroupMouth' },
+    { key: 'body',     name: 'Body',     idstr: 'ParamGroupBody' },
+    { key: 'hair',     name: 'Hair',     idstr: 'ParamGroupHair' },
+    { key: 'clothing', name: 'Clothing', idstr: 'ParamGroupClothing' },
+    { key: 'bone',     name: 'Bone',     idstr: 'ParamGroupBone' },
+    { key: 'custom',   name: 'Custom',   idstr: 'ParamGroupCustom' },
+  ];
+  function categorizeParam(id) {
+    if (!id) return 'custom';
+    if (/^ParamAngle[XYZ]$/.test(id) || id === 'ParamCheek') return 'face';
+    if (/^ParamEye[LR](Open|Smile)$/.test(id)) return 'eye';
+    if (/^ParamEyeBall[XY]$/.test(id)) return 'eyeball';
+    if (/^ParamBrow/.test(id)) return 'brow';
+    if (/^ParamMouth/.test(id)) return 'mouth';
+    if (/^ParamBodyAngle[XYZ]$/.test(id) || id === 'ParamBreath') return 'body';
+    if (/^ParamHair/.test(id)) return 'hair';
+    if (id === 'ParamSkirt' || id === 'ParamShirt' || id === 'ParamPants' || id === 'ParamBust') return 'clothing';
+    if (/^ParamRotation_/.test(id)) return 'bone';
+    return 'custom';
+  }
+  for (const pd of paramDefs) pd.category = categorizeParam(pd.id);
+  const paramsByCategory = new Map();
+  for (const cd of CATEGORY_DEFS) paramsByCategory.set(cd.key, []);
+  for (const pd of paramDefs) paramsByCategory.get(pd.category).push(pd);
+  const activeCategories = CATEGORY_DEFS.filter(cd => paramsByCategory.get(cd.key).length > 0);
+  for (const cd of activeCategories) {
+    const [, pidGuid] = x.shared('CParameterGroupGuid', { uuid: uuid(), note: cd.key });
+    const [, pidId] = x.shared('CParameterGroupId', { idstr: cd.idstr });
+    cd.pidGuid = pidGuid;
+    cd.pidId = pidId;
+  }
+  const categoryByKey = new Map(activeCategories.map(cd => [cd.key, cd]));
+
   // Root Parameter Group entity (v14 required) — mirrors Hiyori's root
   // group at fileFormatVersion 402030000. Shape is:
   //   name, description, folderIsOpened, guid, parentGroupGuid (null),
-  //   _childGuids (flat — CParameterGuid refs for all params),
+  //   _childGuids (CParameterGroupGuid refs to each sub-group),
   //   id (CParameterGroupId ref), visibilityColor* (four 1.0 floats).
   //
   // Previous blank-load failure was ClassNotFoundException: CParameterGroupId
@@ -3845,10 +3901,10 @@ export async function generateCmo3(input) {
   x.subRef(rootPgNode, 'CParameterGroupGuid', pidParamGroupGuid, { 'xs.n': 'guid' });
   x.sub(rootPgNode, 'null', { 'xs.n': 'parentGroupGuid' });
   const pgChildList = x.sub(rootPgNode, 'carray_list', {
-    'xs.n': '_childGuids', count: String(paramDefs.length),
+    'xs.n': '_childGuids', count: String(activeCategories.length),
   });
-  for (const pd of paramDefs) {
-    x.subRef(pgChildList, 'CParameterGuid', pd.pid);
+  for (const cd of activeCategories) {
+    x.subRef(pgChildList, 'CParameterGroupGuid', cd.pidGuid);
   }
   x.subRef(rootPgNode, 'CParameterGroupId', pidRootPgId, { 'xs.n': 'id' });
   x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorRed' }).text = '1.0';
@@ -3897,7 +3953,8 @@ export async function generateCmo3(input) {
     x.sub(ps, 's', { 'xs.n': 'name' }).text = pd.name;
     x.sub(ps, 's', { 'xs.n': 'description' }).text = '';
     x.sub(ps, 'b', { 'xs.n': 'combined' }).text = 'false';
-    x.subRef(ps, 'CParameterGroupGuid', pidParamGroupGuid, { 'xs.n': 'parentGroupGuid' });
+    const subCat = categoryByKey.get(pd.category);
+    x.subRef(ps, 'CParameterGroupGuid', subCat.pidGuid, { 'xs.n': 'parentGroupGuid' });
   }
 
   // Texture manager
@@ -3968,14 +4025,39 @@ export async function generateCmo3(input) {
   // Root part ref
   x.subRef(model, 'CPartSource', rootPart.pid, { 'xs.n': 'rootPart' });
 
-  // ── Parameter group set — refs the root group entity created above ──
-  // v14 CModelSource requires a `rootParameterGroup` pointer to a real
-  // CParameterGroup entity; that entity is created+populated in section 6's
-  // preamble (right before the shared section is flushed). Here we just emit
-  // the refs.
+  // ── Parameter group set — root entity ref + one inline CParameterGroup per
+  // active sub-group (mirrors Hiyori t11's 13-group layout: root + 12 subs).
+  // Each sub-group:
+  //   name, description, folderIsOpened=false, guid (its own CParameterGroupGuid),
+  //   parentGroupGuid (ref → root's CParameterGroupGuid), _childGuids (CParameterGuid
+  //   refs for its member params), id (CParameterGroupId ref), visibilityColor*.
+  // Without this the Random Pose Setting dialog renders blank (it walks the
+  // group tree, not the flat parameter list).
   const pgSet = x.sub(model, 'CParameterGroupSet', { 'xs.n': 'parameterGroupSet' });
-  const pgGroups = x.sub(pgSet, 'carray_list', { 'xs.n': '_groups', count: '1' });
+  const pgGroups = x.sub(pgSet, 'carray_list', {
+    'xs.n': '_groups', count: String(1 + activeCategories.length),
+  });
   x.subRef(pgGroups, 'CParameterGroup', pidRootPgEntity);
+  for (const cd of activeCategories) {
+    const subGroup = x.sub(pgGroups, 'CParameterGroup');
+    x.sub(subGroup, 's', { 'xs.n': 'name' }).text = cd.name;
+    x.sub(subGroup, 's', { 'xs.n': 'description' });
+    x.sub(subGroup, 'b', { 'xs.n': 'folderIsOpened' }).text = 'false';
+    x.subRef(subGroup, 'CParameterGroupGuid', cd.pidGuid, { 'xs.n': 'guid' });
+    x.subRef(subGroup, 'CParameterGroupGuid', pidParamGroupGuid, { 'xs.n': 'parentGroupGuid' });
+    const members = paramsByCategory.get(cd.key);
+    const subChildList = x.sub(subGroup, 'carray_list', {
+      'xs.n': '_childGuids', count: String(members.length),
+    });
+    for (const pd of members) {
+      x.subRef(subChildList, 'CParameterGuid', pd.pid);
+    }
+    x.subRef(subGroup, 'CParameterGroupId', cd.pidId, { 'xs.n': 'id' });
+    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorRed' }).text = '1.0';
+    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorGreen' }).text = '0.95686275';
+    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorBlue' }).text = '0.76862746';
+    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorAlpha' }).text = '1.0';
+  }
 
   // v14 required: rootParameterGroup pointer (entity ref, not guid ref)
   x.subRef(model, 'CParameterGroup', pidRootPgEntity, { 'xs.n': 'rootParameterGroup' });
@@ -4052,18 +4134,24 @@ export async function generateCmo3(input) {
     const entry = x.sub(rpVals, 'CRandomPoseParamData');
     x.sub(entry, 'b', { 'xs.n': 'isEnable' }).text = 'true';
   }
-  // Groups: a flat hierarchy with just the root group. Without at least one
-  // entry here, Cubism's dialog fails to render the param tree (even though
-  // parameters.keys is populated).
+  // Groups: root + every active sub-group. The dialog walks this list to
+  // render expandable folders; a flat hierarchy (root only) renders blank
+  // because it has no sub-folders to populate.
+  const rpGroupCount = 1 + activeCategories.length;
   const rpGroupKeys = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'groups.keys', count: '1',
+    'xs.n': 'groups.keys', count: String(rpGroupCount),
   });
   x.subRef(rpGroupKeys, 'CParameterGroupId', pidRootPgId);
+  for (const cd of activeCategories) {
+    x.subRef(rpGroupKeys, 'CParameterGroupId', cd.pidId);
+  }
   const rpGroupVals = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'groups.values', count: '1',
+    'xs.n': 'groups.values', count: String(rpGroupCount),
   });
-  const rpGroupData = x.sub(rpGroupVals, 'CRandomPoseGroupData');
-  x.sub(rpGroupData, 'b', { 'xs.n': 'isExpand' }).text = 'true';
+  for (let i = 0; i < rpGroupCount; i++) {
+    const rpGroupData = x.sub(rpGroupVals, 'CRandomPoseGroupData');
+    x.sub(rpGroupData, 'b', { 'xs.n': 'isExpand' }).text = 'true';
+  }
   x.sub(randomPose, 'i', { 'xs.n': 'currentIndex' }).text = '0';
 
   // ==================================================================

@@ -170,3 +170,11 @@ export const FILTER_DEF_LAYER_SELECTOR = '5e9fe1ea-0ec3-4d68-a5fa-018fc7abe301';
 export const FILTER_DEF_LAYER_FILTER = '4083cd1f-40ba-4eda-8400-379019d55ed8';
 // CDeformerGuid.ROOT — hardcoded in Editor, compared by UUID equality
 export const DEFORMER_ROOT_UUID = '71fae776-e218-4aee-873e-78e8ac0cb48a';
+
+// CParameterGroupGuid.ROOT_GROUP — well-known UUID for the root parameter
+// group. Found via Java decompile: new UUID(-1585707974788428574L,
+// -4720816411997149077L) in CParameterGroupGuid.Companion.b(). The Random
+// Pose Setting dialog opens by searching `parameterGroupSet.getGroups()`
+// for a group whose `guid` equals this constant; if not found, the dialog
+// renders empty. Hiyori uses exactly this UUID (see reference t11 main.xml).
+export const PARAM_GROUP_ROOT_UUID = 'e9fe6eff-953b-4ce2-be7c-4a7c3913686b';
