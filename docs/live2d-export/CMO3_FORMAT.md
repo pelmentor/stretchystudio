@@ -436,6 +436,68 @@ Defined inside `<main>` → `CParameterSourceSet`, NOT in `<shared>`.
 </CParameterSource>
 ```
 
+## Well-Known UUIDs
+
+Several entities in a `.cmo3` must use a SPECIFIC hardcoded UUID because
+the Editor compares them by value against a `Companion` constant. A
+random UUID here is silently accepted at load time but disables the
+feature that checks for it.
+
+| Constant                   | UUID                                     | Enforced by                                                                      |
+|----------------------------|------------------------------------------|----------------------------------------------------------------------------------|
+| `DEFORMER_ROOT_UUID`       | `71fae776-e218-4aee-873e-78e8ac0cb48a`   | `CDeformerGuid.Companion` — root-deformer lookups throughout the rig pipeline    |
+| `PARAM_GROUP_ROOT_UUID`    | `e9fe6eff-953b-4ce2-be7c-4a7c3913686b`   | `CParameterGroupGuid.Companion.b()` — **Random Pose Setting dialog** (see below) |
+| `FILTER_DEF_LAYER_SELECTOR`| `5e9fe1ea-0ec3-4d68-a5fa-018fc7abe301`   | `StaticFilterDefGuid` — built-in layer-selector filter                           |
+| `FILTER_DEF_LAYER_FILTER`  | `4083cd1f-40ba-4eda-8400-379019d55ed8`   | `StaticFilterDefGuid` — built-in layer filter                                    |
+
+All four live in `src/io/live2d/cmo3/constants.js`.
+
+### Why `PARAM_GROUP_ROOT_UUID` matters (Session 30)
+
+The dialog controller `f_0.a(CModelSource)` in
+`com/live2d/cubism/view/palette/parameter/dialog/` does:
+
+```java
+for (CParameterGroup cpg : cModelSource.getParameterGroupSet().getGroups()) {
+    if (!Intrinsics.areEqual(cpg.getGuid(), CParameterGroupGuid.Companion.b())) continue;
+    buildDialogFrom(cpg);
+    return;
+}
+// fall through → empty panel
+```
+
+The `.Companion.b()` accessor returns a pre-built
+`CParameterGroupGuid(new UUID(-1585707974788428574L, -4720816411997149077L))`,
+i.e. UUID `e9fe6eff-953b-4ce2-be7c-4a7c3913686b` (Kotlin Java interop —
+negative longs are the signed representation of the 64-bit UUID halves).
+Hiyori's t11 reference uses exactly that UUID in its root
+`CParameterGroupGuid` entity.
+
+## Parameter Group Tree (for Random Pose dialog)
+
+The dialog walks `CParameterGroup.getChildren()` recursively, rendering
+each `CParameterGroup` child as a folder row and each `CParameterSource`
+child as a checkbox row. A flat root with all params as direct children
+(no sub-groups) does NOT crash, but produces a completely blank panel.
+
+Hiyori's tree has:
+
+- Root `CParameterGroup` — guid = `PARAM_GROUP_ROOT_UUID`,
+  `_childGuids` = 12 `CParameterGroupGuid` refs (the sub-groups).
+- 12 sub-groups: Face, Eye, Eyeball, Brow, Mouth, Body, Arm, Move,
+  Move Hair ×4. Each has:
+  - Own `CParameterGroupGuid` (fresh UUID — only the root is pinned).
+  - `parentGroupGuid` → root's guid.
+  - `_childGuids` = `CParameterGuid` refs for member params.
+  - Visibility color `(1.0, 0.957, 0.769, 1.0)` (cream).
+- Each `CParameterSource.parentGroupGuid` points at its sub-group, NOT
+  at the root.
+
+Our exporter categorizes params by id with `categorizeParam()` (face /
+eye / eyeball / brow / mouth / body / hair / clothing / bone / custom)
+and emits one sub-group per active category. See
+`src/io/live2d/cmo3writer.js` around the `CATEGORY_DEFS` block.
+
 ## Prior Art
 
 - **D2Evil** (UlyssesWu): `reference/D2Evil/` — C# CAFF reader/writer. Lincubator (moc3→cmo3) closed-source.
