@@ -31,6 +31,9 @@ const paramDefs = [
   { pid: 'pid-shirt',      id: 'ParamShirt' },
   { pid: 'pid-pants',      id: 'ParamPants' },
   { pid: 'pid-bust',       id: 'ParamBust' },
+  // Arm sway drives the existing elbow bone rotation deformers.
+  { pid: 'pid-rot-lelbow', id: 'ParamRotation_leftElbow'  },
+  { pid: 'pid-rot-relbow', id: 'ParamRotation_rightElbow' },
   { pid: 'pid-angle-x',    id: 'ParamAngleX' },
   { pid: 'pid-angle-z',    id: 'ParamAngleZ' },
   { pid: 'pid-body-x',     id: 'ParamBodyAngleX' },
@@ -39,20 +42,25 @@ const paramDefs = [
 ];
 const meshes = [
   { tag: 'front hair' }, { tag: 'back hair' }, { tag: 'bottomwear' },
-  { tag: 'topwear' }, { tag: 'legwear' },
+  { tag: 'topwear' }, { tag: 'legwear' }, { tag: 'handwear' },
+];
+const groups = [
+  { id: 'g-lelbow', name: 'leftElbow',  boneRole: 'leftElbow'  },
+  { id: 'g-relbow', name: 'rightElbow', boneRole: 'rightElbow' },
 ];
 const rigDebugLog = {};
 const res = emitPhysicsSettings(x1, {
-  parent: root, paramDefs, meshes, rigDebugLog,
+  parent: root, paramDefs, meshes, groups, rigDebugLog,
 });
 
-assert(res.emittedCount === 6, 'emitted 6 rules (hair front/back, skirt, shirt, pants, bust)');
+assert(res.emittedCount === 7,
+  `emitted 7 rules (hair front/back, skirt, shirt, pants, bust, arm snake) — got ${res.emittedCount}`);
 assert(res.skipped.length === 0, 'no skipped rules when all tags + params present');
 assert(rigDebugLog.physics !== undefined, 'rigDebugLog.physics populated');
 
 const xml1 = x1.serialize(root);
 assert(xml1.includes('<CPhysicsSettingsSourceSet'), 'root has CPhysicsSettingsSourceSet');
-assert(xml1.includes('_sourceCubismPhysics" count="6"'), '_sourceCubismPhysics count="6"');
+assert(xml1.includes('_sourceCubismPhysics" count="7"'), '_sourceCubismPhysics count="7"');
 for (const r of PHYSICS_RULES) {
   assert(xml1.includes(`idstr="${r.id}"`), `${r.id} (${r.name}) emitted`);
   assert(xml1.includes(`<s xs.n="name">${r.name}</s>`), `name "${r.name}" emitted`);
@@ -65,23 +73,36 @@ assert(xml1.includes('<null xs.n="settingFPS"'), 'settingFPS null placeholder');
 // Hiyori shape: each setting has inputs > outputs > vertices > normalization
 // Split on the leaf tag (with trailing `>`), NOT the container "SourceSet"
 const settingBlocks = xml1.split('<CPhysicsSettingsSource>').slice(1);
-assert(settingBlocks.length === 6, `exactly 6 CPhysicsSettingsSource blocks (got ${settingBlocks.length})`);
+assert(settingBlocks.length === 7, `exactly 7 CPhysicsSettingsSource blocks (got ${settingBlocks.length})`);
 for (const b of settingBlocks) {
   assert(b.includes('xs.n="inputs"'), 'has inputs array');
-  assert(b.includes('xs.n="outputs" count="1"'), 'has outputs count=1');
+  assert(b.includes('xs.n="outputs"'), 'has outputs array');
   assert(b.includes('xs.n="vertices"'), 'has vertices array');
   assert(b.includes('normalizedPositionValueMax'), 'has position normalization');
   assert(b.includes('normalizedAngleValueMax'), 'has angle normalization');
 }
 
-// Output vertex index 1 (tip of 2-vertex pendulum)
-const vertexIdxMatches = xml1.match(/<i xs\.n="vertexIndex">(\d+)<\/i>/g) || [];
-assert(vertexIdxMatches.length === 6 && vertexIdxMatches.every(m => m.includes('>1<')),
-  '6 outputs all target vertex index 1 (tip)');
+// Arm sway rule has 2 outputs (leftElbow + rightElbow) on a 3-vertex short
+// pendulum. Remaining 6 legacy rules are 2-vertex, single-output at v1.
+const armBlockIdx = settingBlocks.findIndex(b => b.includes('idstr="PhysicsSetting_ArmSnake"'));
+assert(armBlockIdx >= 0, 'arm sway setting present');
+const armBlock = settingBlocks[armBlockIdx];
+assert(armBlock.includes('xs.n="outputs" count="2"'), 'arm sway has outputs count=2');
+assert(armBlock.includes('note="out_PhysicsSetting_ArmSnake_ParamRotation_leftElbow"'),
+  'arm sway drives ParamRotation_leftElbow');
+assert(armBlock.includes('note="out_PhysicsSetting_ArmSnake_ParamRotation_rightElbow"'),
+  'arm sway drives ParamRotation_rightElbow');
 
-// CPhysicsVertex count: 2 per rule × 6 rules = 12
+// Legacy rules: 6 of them × 1 output each, all targeting vertex 1.
+const legacyOutputs = settingBlocks
+  .filter((_, i) => i !== armBlockIdx)
+  .flatMap(b => b.match(/<i xs\.n="vertexIndex">\d+<\/i>/g) || []);
+assert(legacyOutputs.length === 6 && legacyOutputs.every(m => m.includes('>1<')),
+  '6 legacy outputs all target vertex index 1');
+
+// CPhysicsVertex count: 2 per legacy rule × 6 + 3 for arm sway = 15
 const vxDecl = xml1.match(/<CPhysicsVertex>/g) || [];
-assert(vxDecl.length === 12, `12 CPhysicsVertex declarations (got ${vxDecl.length})`);
+assert(vxDecl.length === 15, `15 CPhysicsVertex declarations (got ${vxDecl.length})`);
 
 // ────────────────── TEST 2: skipping when output param absent ──────────────────
 console.log('\n[test2] Rules skip when output param is missing');
@@ -94,12 +115,21 @@ const res2 = emitPhysicsSettings(x2, {
     { pid: 'p-z',  id: 'ParamAngleZ' },
     { pid: 'p-bx', id: 'ParamBodyAngleX' },
     { pid: 'p-bz', id: 'ParamBodyAngleZ' },
-    // NO ParamHairFront / ParamHairBack / ParamSkirt
+    { pid: 'p-by', id: 'ParamBodyAngleY' },
+    // NO output params at all — not even ParamRotation_leftElbow etc.
   ],
-  meshes: [{ tag: 'front hair' }, { tag: 'back hair' }, { tag: 'bottomwear' }],
+  meshes: [
+    { tag: 'front hair' }, { tag: 'back hair' }, { tag: 'bottomwear' },
+    { tag: 'topwear' }, { tag: 'legwear' }, { tag: 'handwear' },
+  ],
+  groups: [
+    { id: 'g-le', name: 'leftElbow',  boneRole: 'leftElbow'  },
+    { id: 'g-re', name: 'rightElbow', boneRole: 'rightElbow' },
+  ],
 });
 assert(res2.emittedCount === 0, 'no rules emitted without output params');
-assert(res2.skipped.length === 6, `all 6 rules skipped (got ${res2.skipped.length})`);
+assert(res2.skipped.length === PHYSICS_RULES.length,
+  `all ${PHYSICS_RULES.length} rules skipped (got ${res2.skipped.length})`);
 assert(res2.skipped.every(s => s.reason.startsWith('missing output param')),
   'skip reasons are "missing output param …"');
 
@@ -111,8 +141,10 @@ const res3 = emitPhysicsSettings(x3, {
   parent: root3, paramDefs, meshes: [{ tag: 'face' }, { tag: 'neck' }],
 });
 assert(res3.emittedCount === 0, 'no rules when no required tags present');
-assert(res3.skipped.every(s => s.reason.startsWith('no mesh with tag')),
-  'skip reasons are "no mesh with tag …"');
+assert(res3.skipped.every(s =>
+    s.reason.startsWith('no mesh with tag')
+    || s.reason.startsWith('no mesh with any of tags')),
+  'skip reasons reference missing tags (requireTag or requireAnyTag)');
 
 // ────────────────── TEST 4: full generateCmo3 integration ──────────────────
 console.log('\n[test4] Full generateCmo3 smoke: physics path runs end-to-end');
@@ -150,18 +182,25 @@ const fullMeshes = [
 
 const fullMeshesPlus = [
   ...fullMeshes,
-  mkMesh('Legwear', 'legwear', 500, 1200, 300, 200),
+  mkMesh('Legwear',   'legwear',  500, 1200, 300, 200),
+  mkMesh('HandwearL', 'handwear-l', 380, 950, 80, 80),
+  mkMesh('HandwearR', 'handwear-r', 620, 950, 80, 80),
+];
+const fullGroups = [
+  { id: 'g-root', name: 'root',       parent: null,      pivotX: 500, pivotY: 1000, boneRole: 'root' },
+  { id: 'g-le',   name: 'leftElbow',  parent: 'g-root',  pivotX: 380, pivotY: 870,  boneRole: 'leftElbow' },
+  { id: 'g-re',   name: 'rightElbow', parent: 'g-root',  pivotX: 620, pivotY: 870,  boneRole: 'rightElbow' },
 ];
 const out = await generateCmo3({
-  canvasW: 1000, canvasH: 1500, meshes: fullMeshesPlus, groups: [],
+  canvasW: 1000, canvasH: 1500, meshes: fullMeshesPlus, groups: fullGroups,
   modelName: 'PhysicsTest', generateRig: true,
 });
 assert(out.cmo3 instanceof Uint8Array && out.cmo3.byteLength > 1000,
   `generateCmo3 returned a sensible .cmo3 (${out.cmo3.byteLength} bytes)`);
-// 6 rules emitted: Hair Front/Back + Skirt (bottomwear) + Shirt + Bust (topwear) + Pants (legwear)
-assert(out.rigDebugLog?.physics?.emittedCount === 6,
-  `rigDebugLog.physics.emittedCount = 6 (got ${out.rigDebugLog?.physics?.emittedCount})`);
-for (const id of ['PhysicsSetting1', 'PhysicsSetting2', 'PhysicsSetting3', 'PhysicsSetting4', 'PhysicsSetting5', 'PhysicsSetting6']) {
+// 7 rules emitted: legacy 6 (Hair Front/Back + Skirt + Shirt + Pants + Bust) + Arm Snake
+assert(out.rigDebugLog?.physics?.emittedCount === 7,
+  `rigDebugLog.physics.emittedCount = 7 (got ${out.rigDebugLog?.physics?.emittedCount})`);
+for (const id of ['PhysicsSetting1', 'PhysicsSetting2', 'PhysicsSetting3', 'PhysicsSetting4', 'PhysicsSetting5', 'PhysicsSetting6', 'PhysicsSetting_ArmSnake']) {
   assert(out.rigDebugLog.physics.emittedIds.includes(id),
     `${id} present in rigDebugLog`);
 }

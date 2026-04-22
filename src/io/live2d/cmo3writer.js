@@ -240,6 +240,9 @@ export async function generateCmo3(input) {
       { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0 },
       { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0 },
       { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0 },
+      // Arm sway: no dedicated param. Physics drives the existing
+      // `ParamRotation_leftElbow` / `ParamRotation_rightElbow` bone rotation
+      // params directly (see cmo3/physics.js PhysicsSetting_ArmSnake).
     ];
     for (const sp of standardParams) {
       if (paramDefs.find(p => p.id === sp.id)) continue;
@@ -1888,6 +1891,8 @@ export async function generateCmo3(input) {
     // falloff centered at rFrac=0.5, cFrac=0.5). Shoulders (row 0) and hem
     // (row last) stay pinned, so no layer exposure — unlike hem Y-lift, an
     // internal bulge just stretches the topwear texture locally.
+    // topwear — Shirt + Bust only (2 bindings × 3 keys = 9 keyforms).
+    // Arm sway lives on handwear; topwear stays torso-only.
     ['topwear', {
       bindings: [
         { pid: pidParamShirt, keys: [-1, 0, 1], desc: 'ParamShirt' },
@@ -1897,20 +1902,16 @@ export async function generateCmo3(input) {
         const pos = new Float64Array(grid);
         if (kShirt === 0 && kBust === 0) return pos;
         for (let r = 0; r < gH; r++) {
-          const rFrac = r / (gH - 1);           // 0=shoulders, 1=hem
-          const shirtSwayW = rFrac * rFrac;     // quadratic
-          // Bust row weight: triangular peak at rFrac=0.5, zero at edges.
+          const rFrac = r / (gH - 1);
+          const shirtSwayW = rFrac * rFrac;
           const bustRowW = Math.max(0, 1 - Math.abs(rFrac - 0.5) * 2);
           for (let c = 0; c < gW; c++) {
             const cFrac = c / (gW - 1);
-            // Bust col weight: triangular peak at center col, zero at sides.
             const bustColW = Math.max(0, 1 - Math.abs(cFrac - 0.5) * 2);
             const bustW = bustRowW * bustColW;
             const idx = (r * gW + c) * 2;
-            // ParamShirt → X sway
-            if (kShirt !== 0) pos[idx] += kShirt * 0.02 * gxS * shirtSwayW;
-            // ParamBust → Y wobble (negative Y = "up" in canvas space)
-            if (kBust !== 0)  pos[idx + 1] += -kBust * 0.012 * gyS * bustW;
+            if (kShirt !== 0) pos[idx]     += kShirt * 0.02  * gxS * shirtSwayW;
+            if (kBust  !== 0) pos[idx + 1] += -kBust * 0.012 * gyS * bustW;
           }
         }
         return pos;
@@ -1931,6 +1932,10 @@ export async function generateCmo3(input) {
         return pos;
       },
     }],
+    // Handwear has no rigWarp binding. Arm sway happens via physics driving
+    // the existing ParamRotation_leftElbow / ParamRotation_rightElbow bone
+    // rotation deformers — see cmo3/physics.js PhysicsSetting_ArmSnake.
+    // Bone-baked keyforms handle pose; physics handles sway on top.
     // ── Brows: uniform Y translate (Hiyori: Brow L/R Position, ~0.085/unit) ──
     // BrowY +1 = raise = negative Y shift (up in canvas space).
     ['eyebrow', {
@@ -2484,7 +2489,7 @@ export async function generateCmo3(input) {
       const warpSpec = RIG_WARP_TAGS.get(m.tag);
       if (!warpSpec) continue;
       if (meshWarpDeformerGuids.has(m.partId)) continue;
-      if (pm.hasBakedKeyforms) continue; // arms/legs: move via rotation deformer → Breath chain
+      if (pm.hasBakedKeyforms) continue; // arms/legs/hands: bone-baked pose only → no rigWarp; physics drives the bone rotation deformers directly
 
       const { col: warpCol, row: warpRow } = warpSpec;
       const warpGridPts = (warpCol + 1) * (warpRow + 1);
@@ -2596,7 +2601,6 @@ export async function generateCmo3(input) {
         const ctx = findEyeCtx(m.tag, bCx, bCy);
         if (ctx) meshCtx = { curvePoints: ctx.curvePoints };
       }
-
       // ── Per-part warp binding: standard param or no-op ParamOpacity (Session 16) ──
       const tagBinding = TAG_PARAM_BINDINGS.get(m.tag);
       const hasBinding = !!(tagBinding && tagBinding.bindings.every(b => b.pid));
@@ -2605,22 +2609,33 @@ export async function generateCmo3(input) {
       if (hasBinding) {
         const { bindings } = tagBinding;
         const numBindings = bindings.length;
-        // Generate all key index/value combinations (binding 0 = inner/fast, 1 = outer/slow)
-        const keyCombos = []; // [[idx0, idx1], ...] for KeyOnParameter keyIndex
-        rigWarpKeyValues = []; // [[val0, val1], ...] for shiftFn
-        if (numBindings === 1) {
-          for (let i = 0; i < bindings[0].keys.length; i++) {
-            keyCombos.push([i]);
-            rigWarpKeyValues.push([bindings[0].keys[i]]);
+        // Generate all key index/value combinations across N bindings via
+        // a cartesian product. Emission order matches Cubism's column-
+        // major expectation (binding[0] = fastest axis).
+        //   bindings[0] = [-1, 0, 1], bindings[1] = [-1, 0, 1], bindings[2] = [-1, 0, 1]
+        //   → (0,0,0), (1,0,0), (2,0,0), (0,1,0), (1,1,0), …
+        const keyCombos = [];       // [[idx0, idx1, …], …] for KeyOnParameter keyIndex
+        rigWarpKeyValues = [];      // [[val0, val1, …], …] for shiftFn
+        const idxBuf = new Array(numBindings);
+        const valBuf = new Array(numBindings);
+        const cartesian = (dim) => {
+          if (dim === numBindings) {
+            keyCombos.push(idxBuf.slice());
+            rigWarpKeyValues.push(valBuf.slice());
+            return;
           }
-        } else {
-          for (let j = 0; j < bindings[1].keys.length; j++) {
-            for (let i = 0; i < bindings[0].keys.length; i++) {
-              keyCombos.push([i, j]);
-              rigWarpKeyValues.push([bindings[0].keys[i], bindings[1].keys[j]]);
-            }
+          // Recurse from inner (dim=0) to outer (dim=numBindings-1) — so
+          // outer bindings vary slowest in the emitted sequence. Match the
+          // original hardcoded 2D order: `for j of b[1]` outside `for i of b[0]`.
+          const inv = numBindings - 1 - dim;
+          const b = bindings[inv];
+          for (let i = 0; i < b.keys.length; i++) {
+            idxBuf[inv] = i;
+            valBuf[inv] = b.keys[i];
+            cartesian(dim + 1);
           }
-        }
+        };
+        cartesian(0);
         const totalKf = keyCombos.length;
         rigWarpFormGuids = [];
 
@@ -3497,13 +3512,28 @@ export async function generateCmo3(input) {
     if (pm.hasBakedKeyforms) {
       // Keyforms to prevent interpolation shrinkage
       // Compute baked vertex positions by rotating each vertex around the elbow pivot
-      // by angle × boneWeight. All positions in ARM deformer-local space.
+      // by angle × boneWeight. Positions match `verts` coord space — that's
+      // warp-local 0..1 when mesh is under a rigWarp (RIG_WARP_OVERRIDE_BAKED
+      // case for handwear), otherwise deformer-local pixels. The pivot must
+      // live in the SAME space or rotation math explodes.
+      //
+      // Anisotropy matters in warp-local 0..1: x and y scales differ per mesh
+      // (rwBox.gridW vs rwBox.gridH). A degree of rotation should look
+      // visually like a degree → pre-scale the radial vector by pxPerX/pxPerY
+      // (body→canvas units per mesh), rotate, unscale.
       const weights = pm.boneWeights;
       const pivotCanvasX = pm.jointPivotX ?? 0;
       const pivotCanvasY = pm.jointPivotY ?? 0;
-      // Elbow pivot in deformer-local space
-      const pivotLocalX = dfOrigin ? (pivotCanvasX - dfOrigin.x) : pivotCanvasX;
-      const pivotLocalY = dfOrigin ? (pivotCanvasY - dfOrigin.y) : pivotCanvasY;
+      let pivotLocalX, pivotLocalY, scaleX = 1, scaleY = 1;
+      if (rwBox) {
+        pivotLocalX = (pivotCanvasX - rwBox.gridMinX) / rwBox.gridW;
+        pivotLocalY = (pivotCanvasY - rwBox.gridMinY) / rwBox.gridH;
+        scaleX = rwBox.gridW;  // 1 warp-local x unit == gridW canvas pixels
+        scaleY = rwBox.gridH;
+      } else {
+        pivotLocalX = dfOrigin ? (pivotCanvasX - dfOrigin.x) : pivotCanvasX;
+        pivotLocalY = dfOrigin ? (pivotCanvasY - dfOrigin.y) : pivotCanvasY;
+      }
 
       const computeBakedPositions = (angleDeg) => {
         const positions = new Array(verts.length);
@@ -3512,12 +3542,15 @@ export async function generateCmo3(input) {
           const localY = verts[i * 2 + 1];
           const w = weights[i] ?? 0;
           const rad = angleDeg * w * Math.PI / 180;
-          const dx = localX - pivotLocalX;
-          const dy = localY - pivotLocalY;
+          // Scale radial offset to canvas pixels → rotate → unscale. For
+          // non-rwBox (pixel space) scaleX = scaleY = 1 so this collapses to
+          // the standard rotation.
+          const dx = (localX - pivotLocalX) * scaleX;
+          const dy = (localY - pivotLocalY) * scaleY;
           const cos = Math.cos(rad);
           const sin = Math.sin(rad);
-          positions[i * 2] = pivotLocalX + dx * cos - dy * sin;
-          positions[i * 2 + 1] = pivotLocalY + dx * sin + dy * cos;
+          positions[i * 2]     = pivotLocalX + (dx * cos - dy * sin) / scaleX;
+          positions[i * 2 + 1] = pivotLocalY + (dx * sin + dy * cos) / scaleY;
         }
         return positions;
       };
@@ -3865,6 +3898,7 @@ export async function generateCmo3(input) {
     if (/^ParamBrow/.test(id)) return 'brow';
     if (/^ParamMouth/.test(id)) return 'mouth';
     if (/^ParamBodyAngle[XYZ]$/.test(id) || id === 'ParamBreath') return 'body';
+    if (/^Param(Shoulder|Elbow|Wrist)Sway/.test(id)) return 'body';
     if (/^ParamHair/.test(id)) return 'hair';
     if (id === 'ParamSkirt' || id === 'ParamShirt' || id === 'ParamPants' || id === 'ParamBust') return 'clothing';
     if (/^ParamRotation_/.test(id)) return 'bone';
@@ -4014,10 +4048,12 @@ export async function generateCmo3(input) {
   // is absent, so turning off generateRig cleanly zeroes the set.
   if (generatePhysics) {
     const disabledSet = physicsDisabledCategories
-      ? new Set(physicsDisabledCategories)
+      ? (physicsDisabledCategories instanceof Set
+          ? physicsDisabledCategories
+          : new Set(physicsDisabledCategories))
       : null;
     emitPhysicsSettings(x, {
-      parent: model, paramDefs, meshes, rigDebugLog,
+      parent: model, paramDefs, meshes, groups, rigDebugLog,
       disabledCategories: disabledSet,
     });
   }

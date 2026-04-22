@@ -55,6 +55,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
   const [physicsHair, setPhysicsHair] = useState(true);
   const [physicsClothing, setPhysicsClothing] = useState(true);
   const [physicsBust, setPhysicsBust] = useState(true);
+  const [physicsArms, setPhysicsArms] = useState(true);
   // Track whether user has explicitly edited the model-name field. While
   // untouched, the field auto-syncs to the current project's name on every
   // open — so loading a new project and then exporting shows the right default.
@@ -125,6 +126,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
           !physicsHair && 'hair',
           !physicsClothing && 'clothing',
           !physicsBust && 'bust',
+          !physicsArms && 'arms',
         ].filter(Boolean);
         const blob = await exportLive2DProject(project, images, {
           modelName: name,
@@ -172,7 +174,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
       setProgress(null);
       setIsExporting(false);
     }
-  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, physicsHair, physicsClothing, physicsBust, onClose]);
+  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, physicsHair, physicsClothing, physicsBust, physicsArms, onClose]);
 
   const handleExport = useCallback(async () => {
     if (type === 'live2d' || type === 'live2d_project') {
@@ -507,6 +509,17 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
                           />
                           <Label htmlFor="physicsBust" className="text-xs cursor-pointer">
                             Bust wobble. <span className="text-muted-foreground">Turn off for male / flat-chest characters.</span>
+                          </Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="physicsArms"
+                            checked={physicsArms}
+                            onCheckedChange={setPhysicsArms}
+                            disabled={isExporting}
+                          />
+                          <Label htmlFor="physicsArms" className="text-xs cursor-pointer">
+                            Arm sway (forearm lags body roll/tilt).
                           </Label>
                         </div>
                       </div>

@@ -58,17 +58,88 @@ function f(n) {
  */
 
 /**
+ * @typedef {Object} PhysicsOutputSpec
+ * @property {string} paramId      - Destination parameter ID
+ * @property {number} vertexIndex  - Which pendulum vertex drives this output
+ *                                   (1..N-1; later = more lag)
+ * @property {number} scale        - Max angle (degrees) at full swing.
+ *                                   For outputs that drive a CRotationDeformer's
+ *                                   angle param (ParamRotation_*) this is
+ *                                   literally the max rotation in degrees.
+ *                                   For outputs into a ±1 sway param clamp on ±1.
+ * @property {boolean} [isReverse] - Mirror the output sign. Used for
+ *                                   symmetric cross-body outputs (e.g. right arm
+ *                                   mirrored from left arm's pendulum tap).
+ */
+
+/**
+ * @typedef {Object} PhysicsBoneOutputSpec
+ * @property {string} boneRole     - Group `boneRole` (e.g. 'leftElbow'); emitter
+ *                                   resolves to the group's auto-generated
+ *                                   `ParamRotation_<sanitizedGroupName>` param.
+ * @property {number} vertexIndex
+ * @property {number} scale        - Degrees at full pendulum swing.
+ * @property {boolean} [isReverse]
+ */
+
+/**
  * @typedef {Object} PhysicsRule
  * @property {string} id        - Editor ID (e.g. "PhysicsSetting1")
  * @property {string} name      - Human-readable name
- * @property {string} outputParamId - Destination parameter ID
- * @property {number} outputScale   - Max angle (degrees) produced at full swing
- * @property {string|null} requireTag - Skip rule if no mesh has this tag (null = always emit)
- * @property {'hair'|'clothing'|'bust'} category - UI-level group for enable toggles
+ * @property {string} [outputParamId]  - Legacy single-output: destination param ID.
+ *                                       Ignored when `outputs` is present.
+ * @property {number} [outputScale]    - Legacy single-output: max angle at full swing
+ * @property {PhysicsOutputSpec[]} [outputs] - Multi-output: one pendulum drives
+ *                                             multiple params at different vertex
+ *                                             indices (snake-chain cascade).
+ *                                             Takes precedence over outputParamId.
+ * @property {string|null} [requireTag] - Skip rule if no mesh has this tag (null = always emit). Takes precedence over requireAnyTag.
+ * @property {string[]|null} [requireAnyTag] - Skip rule unless ≥1 of these tags is present.
+ * @property {'hair'|'clothing'|'bust'|'arms'} category - UI-level group for enable toggles
  * @property {PhysicsInputSpec[]} inputs
- * @property {PhysicsVertexSpec[]} vertices - typically 2 (root + tip)
+ * @property {PhysicsVertexSpec[]} vertices - typically 2 (root + tip); longer for snake chains
  * @property {{posMin:number,posMax:number,posDef:number,angleMin:number,angleMax:number,angleDef:number}} normalization
  */
+
+/**
+ * Resolve a rule to its list of `{paramId, vertexIndex, scale, isReverse}` outputs.
+ * `boneOutputs` are resolved against the `groups` list (looked up by boneRole) —
+ * each becomes an output into that group's `ParamRotation_<name>` param.
+ */
+function ruleOutputs(rule, groups) {
+  const out = [];
+  if (rule.outputs && rule.outputs.length > 0) {
+    for (const o of rule.outputs) {
+      out.push({ paramId: o.paramId, vertexIndex: o.vertexIndex, scale: o.scale, isReverse: !!o.isReverse });
+    }
+  } else if (rule.outputParamId) {
+    // Legacy single-output: tap the pendulum tip at the configured outputScale.
+    out.push({
+      paramId: rule.outputParamId,
+      vertexIndex: rule.vertices.length - 1,
+      scale: rule.outputScale,
+      isReverse: false,
+    });
+  }
+  if (rule.boneOutputs && rule.boneOutputs.length > 0 && Array.isArray(groups)) {
+    const byRole = new Map();
+    for (const g of groups) {
+      if (g && g.boneRole) byRole.set(g.boneRole, g);
+    }
+    for (const b of rule.boneOutputs) {
+      const g = byRole.get(b.boneRole);
+      if (!g) continue; // bone absent on this character — silently skip
+      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      out.push({
+        paramId: `ParamRotation_${sanitized}`,
+        vertexIndex: b.vertexIndex,
+        scale: b.scale,
+        isReverse: !!b.isReverse,
+      });
+    }
+  }
+  return out;
+}
 
 /** @type {PhysicsRule[]} */
 export const PHYSICS_RULES = [
@@ -229,6 +300,61 @@ export const PHYSICS_RULES = [
       angleMin: -10, angleDef: 0, angleMax: 10,
     },
   },
+
+  // ── Arm sway: elbow-driven pendulum on body tilt/roll ──
+  //
+  // Physics taps the EXISTING bone rotation deformers directly on both arms
+  // (`ParamRotation_leftElbow` / `ParamRotation_rightElbow`). No rigWarp, no
+  // shiftFn, no synthetic sway param — Cubism rotates the forearm subtree
+  // around each bone's canonical pivot when the param moves, exactly the
+  // way pose animation uses these deformers.
+  //
+  // Why elbow and not shoulder: shoulder rotation moves the entire arm
+  // including the attachment point, which reads as the body itself shifting.
+  // Elbow rotates only forearm + hand around the elbow pivot — correct
+  // inertial sway.
+  //
+  // Pendulum is SHORT (y=0..10, 3 verts) for in-phase response with body
+  // motion — a longer pendulum (Alexia's y=42) has a slow natural period
+  // that arrives AFTER the body settles, reading as "arm bouncing on still
+  // torso." Short+damped = in-phase, settles in ~0.3 s.
+  //
+  // scale=4° at full pendulum swing is ~13% slider travel on the ±30° rotation
+  // param → subtle inertial sway, reads as breath/life (user-confirmed
+  // "то, что надо" at scale=4). Right side uses isReverse=true so body roll
+  // sways both forearms in the same canvas direction.
+  //
+  // A true snake-whip (5 stacked rotation deformers per arm like Alexia's
+  // PS11/PS12 on ArtMesh135/136/165/166) was attempted and reverted — it
+  // would require mesh segmentation (splitting handwear into N sub-meshes,
+  // each bone-skinned to its own chain joint) to avoid the single-mesh
+  // "rigid rotation per joint" problem. Auto-segmenting without visible
+  // seams is substantial rigger work; single-elbow sway was kept as the
+  // robust baseline.
+  {
+    id: 'PhysicsSetting_ArmSnake',
+    name: 'Arm Sway',
+    requireAnyTag: ['handwear', 'handwear-l', 'handwear-r'],
+    category: 'arms',
+    inputs: [
+      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 50  },
+      { paramId: 'ParamBodyAngleY', type: 'SRC_TO_X',       weight: 50  },
+      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
+    ],
+    vertices: [
+      { x: 0, y: 0,  mobility: 1.00, delay: 1.0, acceleration: 1.0, radius: 0  },
+      { x: 0, y: 4,  mobility: 0.95, delay: 0.5, acceleration: 1.2, radius: 4  },
+      { x: 0, y: 10, mobility: 0.90, delay: 0.5, acceleration: 1.5, radius: 10 },
+    ],
+    boneOutputs: [
+      { boneRole: 'leftElbow',  vertexIndex: 2, scale: 4.0, isReverse: false },
+      { boneRole: 'rightElbow', vertexIndex: 2, scale: 4.0, isReverse: true  },
+    ],
+    normalization: {
+      posMin: -10, posDef: 0, posMax: 10,
+      angleMin: -10, angleDef: 0, angleMax: 10,
+    },
+  },
 ];
 
 /**
@@ -244,7 +370,7 @@ export const PHYSICS_RULES = [
  * @returns {{emittedCount:number, skipped:Array<{id:string,reason:string}>}}
  */
 export function emitPhysicsSettings(x, {
-  parent, paramDefs, meshes, rigDebugLog = null, disabledCategories = null,
+  parent, paramDefs, meshes, groups = [], rigDebugLog = null, disabledCategories = null,
 }) {
   const pidByParamId = new Map();
   for (const p of paramDefs) pidByParamId.set(p.id, p.pid);
@@ -261,9 +387,29 @@ export function emitPhysicsSettings(x, {
       skipped.push({ id: rule.id, reason: `category '${rule.category}' disabled in UI` });
       continue;
     }
-    const outputPid = pidByParamId.get(rule.outputParamId);
-    if (!outputPid) {
-      skipped.push({ id: rule.id, reason: `missing output param ${rule.outputParamId}` });
+    // Tag gating first — cheaper than output resolution and gives clearer
+    // skip reasons (a rule for which no tagged mesh exists shouldn't be
+    // reported as "missing output param" just because we also happen not
+    // to have its output params defined).
+    if (rule.requireTag && !tagsPresent.has(rule.requireTag)) {
+      skipped.push({ id: rule.id, reason: `no mesh with tag '${rule.requireTag}'` });
+      continue;
+    }
+    if (rule.requireAnyTag && !rule.requireAnyTag.some(t => tagsPresent.has(t))) {
+      skipped.push({
+        id: rule.id,
+        reason: `no mesh with any of tags [${rule.requireAnyTag.join(', ')}]`,
+      });
+      continue;
+    }
+    const outs = ruleOutputs(rule, groups);
+    if (outs.length === 0) {
+      skipped.push({ id: rule.id, reason: 'no resolvable outputs (no matching boneRoles + no paramId)' });
+      continue;
+    }
+    const missingOut = outs.find(o => !pidByParamId.has(o.paramId));
+    if (missingOut) {
+      skipped.push({ id: rule.id, reason: `missing output param ${missingOut.paramId}` });
       continue;
     }
     // All input parameters must exist — skip rules with dangling refs.
@@ -272,11 +418,7 @@ export function emitPhysicsSettings(x, {
       skipped.push({ id: rule.id, reason: `missing input param ${missingInput.paramId}` });
       continue;
     }
-    if (rule.requireTag && !tagsPresent.has(rule.requireTag)) {
-      skipped.push({ id: rule.id, reason: `no mesh with tag '${rule.requireTag}'` });
-      continue;
-    }
-    rulesToEmit.push({ rule, outputPid });
+    rulesToEmit.push({ rule });
   }
 
   const set = x.sub(parent, 'CPhysicsSettingsSourceSet', { 'xs.n': 'physicsSettingsSourceSet' });
@@ -284,8 +426,8 @@ export function emitPhysicsSettings(x, {
     'xs.n': '_sourceCubismPhysics', count: String(rulesToEmit.length),
   });
 
-  for (const { rule, outputPid } of rulesToEmit) {
-    emitOneSetting(x, list, rule, outputPid, pidByParamId);
+  for (const { rule } of rulesToEmit) {
+    emitOneSetting(x, list, rule, pidByParamId, groups);
   }
 
   // `selectedCubismPhysics` is the Editor's "current selection" state; Hiyori
@@ -310,7 +452,7 @@ export function emitPhysicsSettings(x, {
 }
 
 /** Emit a single CPhysicsSettingsSource node into `list`. */
-function emitOneSetting(x, list, rule, outputPid, pidByParamId) {
+function emitOneSetting(x, list, rule, pidByParamId, groups) {
   const src = x.sub(list, 'CPhysicsSettingsSource');
   x.sub(src, 's', { 'xs.n': 'name' }).text = rule.name;
   x.sub(src, 'CPhysicsSettingsGuid', {
@@ -337,24 +479,33 @@ function emitOneSetting(x, list, rule, outputPid, pidByParamId) {
     x.sub(inpNode, 'b', { 'xs.n': 'isReverse' }).text = inp.isReverse ? 'true' : 'false';
   }
 
-  // ── Outputs ── (always exactly one per Hiyori rule; format supports more)
-  const outputsNode = x.sub(src, 'carray_list', { 'xs.n': 'outputs', count: '1' });
-  const outNode = x.sub(outputsNode, 'CPhysicsOutput');
-  x.sub(outNode, 'CPhysicsDataGuid', {
-    'xs.n': 'guid', uuid: uuid(), note: `out_${rule.id}`,
+  // ── Outputs ──
+  // One pendulum can drive multiple destination params, each tapping a
+  // different vertex index and with its own scale. Alexia uses this for
+  // snake chains (PhysicsSetting9/10/11/12): vertex 1 drives the upper
+  // joint with a tiny scale, successive joints read later vertices with
+  // progressively larger scales, producing a lag-and-grow whip.
+  const outs = ruleOutputs(rule, groups);
+  const outputsNode = x.sub(src, 'carray_list', {
+    'xs.n': 'outputs', count: String(outs.length),
   });
-  x.subRef(outNode, 'CParameterGuid', outputPid, { 'xs.n': 'destination' });
-  // vertexIndex: which vertex in the pendulum chain drives the output. For a
-  // 2-vertex pendulum (root + tip), the tip (index 1) drives — the root is a
-  // fixed anchor. 3+ vertex chains would expose an intermediate vertex here.
-  x.sub(outNode, 'i', { 'xs.n': 'vertexIndex' }).text = String(rule.vertices.length - 1);
-  const outTs = x.sub(outNode, 'GVector2', { 'xs.n': 'translationScale' });
-  x.sub(outTs, 'f', { 'xs.n': 'x' }).text = '0.0';
-  x.sub(outTs, 'f', { 'xs.n': 'y' }).text = '0.0';
-  x.sub(outNode, 'f', { 'xs.n': 'angleScale' }).text = f(rule.outputScale);
-  x.sub(outNode, 'f', { 'xs.n': 'weight' }).text = '100.0';
-  x.sub(outNode, 'CPhysicsSourceType', { 'xs.n': 'type', v: 'SRC_TO_G_ANGLE' });
-  x.sub(outNode, 'b', { 'xs.n': 'isReverse' }).text = 'false';
+  for (let oi = 0; oi < outs.length; oi++) {
+    const o = outs[oi];
+    const outPid = pidByParamId.get(o.paramId);
+    const outNode = x.sub(outputsNode, 'CPhysicsOutput');
+    x.sub(outNode, 'CPhysicsDataGuid', {
+      'xs.n': 'guid', uuid: uuid(), note: `out_${rule.id}_${o.paramId}`,
+    });
+    x.subRef(outNode, 'CParameterGuid', outPid, { 'xs.n': 'destination' });
+    x.sub(outNode, 'i', { 'xs.n': 'vertexIndex' }).text = String(o.vertexIndex);
+    const outTs = x.sub(outNode, 'GVector2', { 'xs.n': 'translationScale' });
+    x.sub(outTs, 'f', { 'xs.n': 'x' }).text = '0.0';
+    x.sub(outTs, 'f', { 'xs.n': 'y' }).text = '0.0';
+    x.sub(outNode, 'f', { 'xs.n': 'angleScale' }).text = f(o.scale);
+    x.sub(outNode, 'f', { 'xs.n': 'weight' }).text = '100.0';
+    x.sub(outNode, 'CPhysicsSourceType', { 'xs.n': 'type', v: 'SRC_TO_G_ANGLE' });
+    x.sub(outNode, 'b', { 'xs.n': 'isReverse' }).text = o.isReverse ? 'true' : 'false';
+  }
 
   // ── Vertices (pendulum chain) ──
   const vxNode = x.sub(src, 'carray_list', {
