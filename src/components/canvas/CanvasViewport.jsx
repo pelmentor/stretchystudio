@@ -26,6 +26,7 @@ import { retriangulate } from '@/mesh/generate';
 import { applyPuppetWarp } from '@/mesh/puppetWarp';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
+import { normalizeVariants } from '@/io/variantNormalizer';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Helpers
@@ -914,6 +915,11 @@ export default function CanvasViewport({
         });
       });
 
+      // Single source of truth for .smile / .sad / .angry variants:
+      // pair them with their base, reparent to match, and renumber
+      // draw_order so each variant sits immediately on top of its base.
+      normalizeVariants(proj);
+
       ver.textureVersion++;
     });
 
@@ -1002,6 +1008,10 @@ export default function CanvasViewport({
           node.draw_order = assign.drawOrder;
         }
       });
+
+      // Rigging just rewrote parent + draw_order on every part; re-run
+      // variant normalization so pairs stay co-parented and stacked.
+      normalizeVariants(proj);
     });
 
     const setExpandedGroups = useEditorStore.getState().setExpandedGroups;

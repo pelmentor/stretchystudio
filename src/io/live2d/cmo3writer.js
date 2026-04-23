@@ -25,6 +25,7 @@ import { packCaff, COMPRESS_RAW, COMPRESS_FAST } from './caffPacker.js';
 import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
+import { variantParamId } from '../psdOrganizer.js';
 import {
   VERSION_PIS,
   IMPORT_PIS,
@@ -208,6 +209,28 @@ export async function generateCmo3(input) {
       pid, id: paramId, name: p.name ?? paramId,
       min: p.min ?? 0, max: p.max ?? 1, defaultVal: p.default ?? 0,
       decimalPlaces: 3,
+    });
+  }
+
+  // Auto-register one parameter per variant suffix actually used in this
+  // project (e.g. meshes with `foo.smile` → ParamSmile, `foo.sad` → ParamSad).
+  // Variant meshes pair with their base via shared tag — see extractVariant /
+  // VARIANT_SUFFIXES. Runs independently of `generateRig` since variants
+  // are content, not rig.
+  const usedVariantSuffixes = new Set();
+  for (const m of meshes) {
+    const suffix = m.variantSuffix ?? m.variantRole;
+    if (suffix) usedVariantSuffixes.add(suffix);
+  }
+  for (const suffix of usedVariantSuffixes) {
+    const paramId = variantParamId(suffix);
+    if (!paramId || paramDefs.find(p => p.id === paramId)) continue;
+    const [, pidSuffix] = x.shared('CParameterGuid', { uuid: uuid(), note: paramId });
+    paramDefs.push({
+      pid: pidSuffix,
+      id: paramId,
+      name: suffix.charAt(0).toUpperCase() + suffix.slice(1),
+      min: 0, max: 1, defaultVal: 0, decimalPlaces: 1,
     });
   }
 
@@ -400,6 +423,44 @@ export async function generateCmo3(input) {
   // not from hand-tuned style presets.
   const pidParamEyeLOpenEarly = paramDefs.find(p => p.id === 'ParamEyeLOpen')?.pid;
   const pidParamEyeROpenEarly = paramDefs.find(p => p.id === 'ParamEyeROpen')?.pid;
+  // Emotion variants: only the variant mesh gets the Param<Suffix> fade-in
+  // (0 → 1 opacity); the base stays at its default opacity=1 keyform. The
+  // specific parameter is chosen per-variant from its suffix (ParamSmile,
+  // ParamSad, ParamAngry, ...). Look up any param id we've emitted for a
+  // known suffix — all registered in the auto-register pass above.
+  const variantParamPidBySuffix = new Map(); // 'smile' → pid
+  for (const suffix of usedVariantSuffixes) {
+    const paramId = variantParamId(suffix);
+    const pid = paramDefs.find(p => p.id === paramId)?.pid;
+    if (pid) variantParamPidBySuffix.set(suffix, pid);
+  }
+  // Structural backdrop tags — base meshes with these tags stay at
+  // opacity=1 always (never fade on any Param<Suffix>). User rule
+  // (2026-04-23): face skin, ears, and hair shapes are the always-present
+  // substrate; variants layered on top, not replacements. Every OTHER
+  // base mesh with a paired variant fades smoothly 1→0 on the variant's
+  // param (see hasBaseFade).
+  const BACKDROP_TAGS_SET = new Set([
+    'face',
+    'ears', 'ears-l', 'ears-r',
+    'front hair', 'back hair',
+  ]);
+  // For base meshes (other than backdrops) that have at least one variant
+  // sibling, the base SMOOTHLY fades from opacity 1 at Param<Suffix>=0 to
+  // opacity 0 at Param<Suffix>=1. Linear crossfade over the full range.
+  // Works without midpoint translucency because the backdrops (face skin
+  // etc.) stay at opacity=1 and provide the substrate everything renders
+  // on top of — at no Param<Suffix> value does the viewer see through to
+  // the canvas background.
+  const variantSuffixesByBasePartId = new Map(); // basePartId → [suffixes]
+  for (const m of meshes) {
+    if (!m.variantOf) continue;
+    const suffix = m.variantSuffix ?? m.variantRole;
+    if (!suffix) continue;
+    const list = variantSuffixesByBasePartId.get(m.variantOf) ?? [];
+    if (!list.includes(suffix)) list.push(suffix);
+    variantSuffixesByBasePartId.set(m.variantOf, list);
+  }
   // Session 28: per-vertex CArtMeshForm shapekeys on the neck mesh bound to
   // ParamAngleX (3 keyforms at −30/0/+30). Fixes the seam visibility at the
   // top corners when the head yaws — without deforming the rest of the neck.
@@ -420,54 +481,25 @@ export async function generateCmo3(input) {
   // to lash bbox → gap between closed lash line and closed white/iris line.
   // Eye-part meshes get their rig warp bbox extended to this union.
   const eyeUnionBboxPerSide = new Map();
-  for (const side of ['l', 'r']) {
-    // Primary: fit parabola to eyewhite's lower edge. Fallback: eyelash's lower edge.
-    let sourceMesh = null;
-    let sourceTag = null;
-    for (const m of meshes) {
-      if (m.tag === `eyewhite-${side}` && m.vertices && m.vertices.length >= 6) {
-        sourceMesh = m; sourceTag = 'eyewhite'; break;
-      }
-    }
-    if (!sourceMesh) {
-      for (const m of meshes) {
-        if (m.tag === `eyelash-${side}` && m.vertices && m.vertices.length >= 6) {
-          sourceMesh = m; sourceTag = 'eyelash-fallback'; break;
-        }
-      }
-    }
-    // Always capture eyelash bbox for strip compression (separate from source choice)
-    for (const m of meshes) {
-      if (m.tag !== `eyelash-${side}` || !m.vertices) continue;
-      let lashMinY = Infinity, lashMaxY = -Infinity;
-      for (let i = 1; i < m.vertices.length; i += 2) {
-        if (m.vertices[i] < lashMinY) lashMinY = m.vertices[i];
-        if (m.vertices[i] > lashMaxY) lashMaxY = m.vertices[i];
-      }
-      if (lashMaxY > lashMinY) {
-        eyelashMeshBboxPerSide.set(side, {
-          minY: lashMinY, maxY: lashMaxY, H: lashMaxY - lashMinY,
-        });
-      }
-      break;
-    }
-    if (!sourceMesh) continue;
+
+  // Extracted helper: fit a parabola to the lower edge of `sourceMesh`.
+  // Same algorithm whether caller is base (eyewhite-{side}) or variant
+  // (eyewhite-{side}.{suffix}) — no sharing of the result curve between
+  // base and variants. Returns null on degenerate input.
+  async function fitParabolaFromLowerEdge(sourceMesh, sourceTag) {
+    if (!sourceMesh || !sourceMesh.vertices || sourceMesh.vertices.length < 6) return null;
     const sourceVerts = sourceMesh.vertices;
-    // Sort by X
     const nv = sourceVerts.length / 2;
     const pairs = new Array(nv);
     for (let i = 0; i < nv; i++) pairs[i] = [sourceVerts[i * 2], sourceVerts[i * 2 + 1]];
     pairs.sort((a, b) => a[0] - b[0]);
     const xMin = pairs[0][0];
     const xMax = pairs[pairs.length - 1][0];
-    if (xMax - xMin < 1) continue;
+    if (xMax - xMin < 1) return null;
 
-    // P12 (Apr 2026): extract bottom contour from the LAYER'S PNG ALPHA, not
-    // from mesh vertices. SS mesh triangulation varies per character (dense
-    // interior, sparse edges) — bin-max on mesh verts picks interior vertices
-    // in dense-middle bins, producing wrong-direction parabolas (∩ hill instead
-    // of ∪ bowl). PSD alpha scan gives the TRUE drawn bottom edge per X column.
-    // Robust across any SS triangulation. Fall back to mesh bin-max if decode fails.
+    // P12: extract bottom contour from the LAYER'S PNG ALPHA when available
+    // (true drawn bottom per X column). Fall back to mesh bin-max on the
+    // vertices themselves if no pngData or decode fails.
     let samples = null;
     let sampleSource = 'mesh-bin-max';
     if (sourceMesh.pngData) {
@@ -478,7 +510,6 @@ export async function generateCmo3(input) {
       }
     }
     if (!samples) {
-      // Fallback: X-uniform bin-max on mesh vertices
       const binW = (xMax - xMin) / EYE_CLOSURE_BIN_COUNT;
       samples = [];
       for (let b = 0; b < EYE_CLOSURE_BIN_COUNT; b++) {
@@ -493,10 +524,9 @@ export async function generateCmo3(input) {
         if (count > 0) samples.push([sumX / count, maxY]);
       }
     }
-    if (samples.length < 3) continue;
-    // Flip for eyelash fallback: eyelash's lower edge is the UPPER eye opening
-    // contour (lash is at TOP of eye), so flip it to approximate the lower-lid curve.
-    // For eyewhite, the lower edge IS the lower eyelid — no flip.
+    if (samples.length < 3) return null;
+    // Eyelash fallback: lash's lower edge is the UPPER eye opening, so flip
+    // it to approximate the lower-lid curve. For eyewhite it IS the lower lid.
     let fitSamples = samples;
     if (sourceTag === 'eyelash-fallback' && samples.length >= 2) {
       const [x0, y0] = samples[0];
@@ -507,7 +537,6 @@ export async function generateCmo3(input) {
         return [x, 2 * yLine - y];
       });
     }
-    // Fit parabola y = a·xn² + b·xn + c with xn = (x - xMid) / xScale
     const xMid = (xMin + xMax) / 2;
     const xScale = (xMax - xMin) / 2 || 1;
     let sX = 0, sY = 0, sX2 = 0, sX3 = 0, sX4 = 0, sXY = 0, sX2Y = 0;
@@ -522,19 +551,49 @@ export async function generateCmo3(input) {
     const det3 = (a11, a12, a13, a21, a22, a23, a31, a32, a33) =>
       a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31);
     const detM = det3(n, sX, sX2, sX, sX2, sX3, sX2, sX3, sX4);
-    if (Math.abs(detM) < 1e-9) continue;
+    if (Math.abs(detM) < 1e-9) return null;
     const c = det3(sY, sX, sX2, sXY, sX2, sX3, sX2Y, sX3, sX4) / detM;
     const bc = det3(n, sY, sX2, sX, sXY, sX3, sX2, sX2Y, sX4) / detM;
     const ac = det3(n, sX, sY, sX, sX2, sXY, sX2, sX3, sX2Y) / detM;
-    eyewhiteCurvePerSide.set(side, {
-      a: ac, b: bc, c,
-      xMid, xScale,
-      sourceTag, sampleSource,
-      xMin, xMax, sampleCount: samples.length,
-    });
-    // Union bbox across eyelash + eyewhite + iris for this side (P11)
+    return { a: ac, b: bc, c, xMid, xScale, sourceTag, sampleSource, xMin, xMax, sampleCount: samples.length };
+  }
+
+  const bboxFromVertsY = (verts) => {
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 1; i < verts.length; i += 2) {
+      if (verts[i] < minY) minY = verts[i];
+      if (verts[i] > maxY) maxY = verts[i];
+    }
+    return maxY > minY ? { minY, maxY, H: maxY - minY } : null;
+  };
+
+  for (const side of ['l', 'r']) {
+    // Primary: fit parabola to base eyewhite-{side}'s lower edge. Fallback: eyelash.
+    // Variant parabolas are fit separately below — NEVER shared with base.
+    let sourceMesh = meshes.find(m =>
+      m.tag === `eyewhite-${side}` && !m.variantOf && m.vertices && m.vertices.length >= 6
+    ) ?? null;
+    let sourceTag = sourceMesh ? 'eyewhite' : null;
+    if (!sourceMesh) {
+      sourceMesh = meshes.find(m =>
+        m.tag === `eyelash-${side}` && !m.variantOf && m.vertices && m.vertices.length >= 6
+      ) ?? null;
+      if (sourceMesh) sourceTag = 'eyelash-fallback';
+    }
+    // Always capture base eyelash bbox for strip compression (separate from source choice)
+    const baseLash = meshes.find(m => m.tag === `eyelash-${side}` && !m.variantOf && m.vertices) ?? null;
+    if (baseLash) {
+      const bb = bboxFromVertsY(baseLash.vertices);
+      if (bb) eyelashMeshBboxPerSide.set(side, bb);
+    }
+    if (!sourceMesh) continue;
+    const curve = await fitParabolaFromLowerEdge(sourceMesh, sourceTag);
+    if (!curve) continue;
+    eyewhiteCurvePerSide.set(side, curve);
+    // Union bbox across eyelash + eyewhite + iris for this side (P11) — base-side only
     let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity;
     for (const m of meshes) {
+      if (m.variantOf) continue;
       if (m.tag !== `eyelash-${side}` && m.tag !== `eyewhite-${side}` && m.tag !== `irides-${side}`) continue;
       const mv = m.vertices;
       if (!mv) continue;
@@ -546,9 +605,51 @@ export async function generateCmo3(input) {
       }
     }
     if (uMaxX > uMinX && uMaxY > uMinY) {
-      eyeUnionBboxPerSide.set(side, {
-        minX: uMinX, minY: uMinY, maxX: uMaxX, maxY: uMaxY,
-      });
+      eyeUnionBboxPerSide.set(side, { minX: uMinX, minY: uMinY, maxX: uMaxX, maxY: uMaxY });
+    }
+  }
+
+  // Variant parabolas — fit ONE curve per (side, suffix) group against the
+  // variant's OWN eyewhite-{side}.{suffix} lower edge. Lash/iris variants of
+  // the same group share this curve as their closure target (structural:
+  // all eye parts within a variant group must collapse to the same line).
+  // Base's `eyewhiteCurvePerSide` is NEVER used for variants.
+  const variantEyewhiteCurvePerSideAndSuffix = new Map(); // `${side}|${suffix}` → curve
+  // Variant lash bbox is computed per-mesh inside the CArtMeshForm branch
+  // (bboxFromVertsY on the variant's own verts) — no map needed.
+  for (const side of ['l', 'r']) {
+    const suffixesForSide = new Set();
+    for (const m of meshes) {
+      if (!m.variantOf || m.tag !== `eyewhite-${side}`) continue;
+      const sfx = m.variantSuffix ?? m.variantRole;
+      if (sfx) suffixesForSide.add(sfx);
+    }
+    // Also check if there's a variant lash/iris that exists WITHOUT a variant eyewhite
+    // — those suffix entries still need a parabola (fall back to variant lash).
+    for (const m of meshes) {
+      if (!m.variantOf || m.vertices == null) continue;
+      if (m.tag !== `eyelash-${side}` && m.tag !== `irides-${side}`) continue;
+      const sfx = m.variantSuffix ?? m.variantRole;
+      if (sfx) suffixesForSide.add(sfx);
+    }
+    for (const suffix of suffixesForSide) {
+      let variantSource = meshes.find(m =>
+        m.variantOf && m.tag === `eyewhite-${side}`
+        && (m.variantSuffix ?? m.variantRole) === suffix
+        && m.vertices && m.vertices.length >= 6
+      ) ?? null;
+      let variantSourceTag = variantSource ? 'eyewhite' : null;
+      if (!variantSource) {
+        variantSource = meshes.find(m =>
+          m.variantOf && m.tag === `eyelash-${side}`
+          && (m.variantSuffix ?? m.variantRole) === suffix
+          && m.vertices && m.vertices.length >= 6
+        ) ?? null;
+        if (variantSource) variantSourceTag = 'eyelash-fallback';
+      }
+      if (!variantSource) continue;
+      const vCurve = await fitParabolaFromLowerEdge(variantSource, variantSourceTag);
+      if (vCurve) variantEyewhiteCurvePerSideAndSuffix.set(`${side}|${suffix}`, vCurve);
     }
   }
   // Evaluate the fitted parabola at arbitrary canvas X (extrapolates naturally).
@@ -610,14 +711,62 @@ export async function generateCmo3(input) {
     return bandCurve[last][1];
   };
 
+  // Extracted helper: compute closed keyform vertices for an eye mesh.
+  // Same algorithm used by standalone `hasEyelidClosure` and the new 2D
+  // `hasEyeVariantCompound` branch — so base and variant share the code
+  // path but NEVER share the `curve` or `lashBbox` inputs (those come from
+  // base or variant's own parabola and own bbox).
+  const computeClosedVertsForMesh = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, rwBox, dfOrigin, shiftPx }) => {
+    const shift = shiftPx ?? 0;
+    const rwMinY = rwBox ? rwBox.gridMinY : null;
+    const rwMaxY = rwBox ? rwBox.gridMinY + rwBox.gridH : null;
+    const lashStripHalfPx = lashBbox ? lashBbox.H * EYE_CLOSURE_LASH_STRIP_FRAC : 0;
+    const closedCanvas = new Array(canvasVerts.length);
+    for (let i = 0; i < numVerts; i++) {
+      const vx = canvasVerts[i * 2];
+      const vy = canvasVerts[i * 2 + 1];
+      let bandY = evalClosureCurve(curve, vx);
+      if (bandY === null && bandCurveFallback) bandY = evalBandY(bandCurveFallback, vx);
+      closedCanvas[i * 2] = vx;
+      let closedY;
+      if (bandY === null) {
+        closedY = vy;
+      } else if (isEyelash && lashBbox) {
+        // Compress lash Y from its bbox into a thin strip centered on the band curve.
+        const relY = (vy - lashBbox.minY) / lashBbox.H;
+        closedY = bandY + (relY - 0.5) * 2 * lashStripHalfPx;
+      } else {
+        closedY = bandY;
+      }
+      if (rwMinY !== null) {
+        if (closedY < rwMinY) closedY = rwMinY;
+        if (closedY > rwMaxY) closedY = rwMaxY;
+      }
+      closedCanvas[i * 2 + 1] = closedY - shift;
+    }
+    // Convert to same coord space as `verts` (warp-local 0..1 if rwBox, else deformer-local)
+    if (rwBox) {
+      return closedCanvas.map((v, i) =>
+        i % 2 === 0
+          ? (v - rwBox.gridMinX) / rwBox.gridW
+          : (v - rwBox.gridMinY) / rwBox.gridH
+      );
+    }
+    if (dfOrigin) {
+      return closedCanvas.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y));
+    }
+    return closedCanvas;
+  };
+
   for (let mi = 0; mi < meshes.length; mi++) {
     const m = meshes[mi];
     const meshName = m.name;
     const meshId = `ArtMesh${mi}`;
 
-    // Per-mesh GUIDs
+    // Per-mesh GUIDs. `pidFormMesh` is allocated later (after the compound-
+    // variant gate is known) so meshes entering the 2D compound branch
+    // don't leave an orphaned CFormGuid in the shared catalog.
     const [, pidDrawable] = x.shared('CDrawableGuid', { uuid: uuid(), note: meshName });
-    const [, pidFormMesh] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_form` });
     const [, pidMiGuid] = x.shared('CModelImageGuid', { uuid: uuid(), note: `modelimg${mi}` });
     const [, pidTexGuid] = x.shared('GTextureGuid', { uuid: uuid(), note: `tex${mi}` });
     const [, pidExtMesh] = x.shared('CExtensionGuid', { uuid: uuid(), note: `mesh_ext${mi}` });
@@ -798,24 +947,103 @@ export async function generateCmo3(input) {
       'eyelash-l', 'eyewhite-l', 'irides-l',
       'eyelash-r', 'eyewhite-r', 'irides-r',
     ]);
+    // Session 36 (2026-04-23): 2D keyform grid for eye variants.
+    // Base and variant eye meshes both enter a compound branch
+    // (ParamEye{L,R}Open × Param<Suffix>) with 4 corners = 4 unique
+    // CFormGuids. No sharing: variant's closure geometry uses the
+    // variant's OWN parabola fit (`variantEyewhiteCurvePerSideAndSuffix`),
+    // never base's. Variant lash bbox comes from variant's own verts.
+    const isVariant = !!m.variantRole;
+    const variantSuffixForMesh = m.variantSuffix ?? m.variantRole ?? null;
+
+    // Closure side is now set for BOTH base and variant eye meshes
+    // (previously variants were carved out with `!isVariant`).
     const closureSide = EYE_CLOSURE_TAGS.has(m.tag)
       ? (m.tag.endsWith('-l') ? 'l' : 'r') : null;
     const closureParamPid = closureSide === 'l' ? pidParamEyeLOpenEarly
       : closureSide === 'r' ? pidParamEyeROpenEarly : null;
-    const hasEyelidClosure = !hasBakedKeyforms && closureSide !== null
-      && !!closureParamPid && eyelashBandCanvas.has(closureSide);
-    // Session 28: neck-corner shapekey on ParamAngleX (3 keyforms, −30/0/+30).
-    // Only applies to the skin-neck mesh when the rig is being generated and
-    // the standard head-yaw parameter exists.
-    const hasNeckCornerShapekeys = !hasBakedKeyforms && !hasEyelidClosure
+    const myClosureCurve = closureSide === null ? null
+      : isVariant
+        ? variantEyewhiteCurvePerSideAndSuffix.get(`${closureSide}|${variantSuffixForMesh}`) ?? null
+        : eyewhiteCurvePerSide.get(closureSide) ?? null;
+    const hasClosureData = myClosureCurve !== null && !!closureParamPid;
+
+    const pidParamForVariant = variantSuffixForMesh
+      ? variantParamPidBySuffix.get(variantSuffixForMesh) ?? null
+      : null;
+    const hasEmotionVariant = !hasBakedKeyforms && isVariant && !!pidParamForVariant;
+
+    const basePartVariantSuffixes = !isVariant
+      ? (variantSuffixesByBasePartId.get(m.partId) ?? [])
+      : [];
+    const baseFadeSuffix = basePartVariantSuffixes[0] ?? null;
+    const pidParamForBaseFade = baseFadeSuffix
+      ? variantParamPidBySuffix.get(baseFadeSuffix) ?? null
+      : null;
+    const BACKDROP_TAGS = BACKDROP_TAGS_SET;
+    const isBackdrop = BACKDROP_TAGS.has(m.tag);
+    const hasBaseFade = !isVariant && !hasBakedKeyforms && !!pidParamForBaseFade && !isBackdrop;
+
+    // Compound 2D gate: eye mesh with BOTH closure data AND a variant axis.
+    // Base eye: has a paired variant sibling → fade on Param<Suffix>.
+    // Variant eye: has its own Param<Suffix> → fade-in.
+    // Either way, the same 2D grid handles blink × variant simultaneously.
+    const hasEyeVariantCompound = !hasBakedKeyforms && hasClosureData
+      && ((isVariant && hasEmotionVariant) || (!isVariant && hasBaseFade));
+
+    // Standalone 1D branches — gated so compound wins when both could apply.
+    const hasEyelidClosure = !isVariant && !hasBakedKeyforms && hasClosureData
+      && !hasEyeVariantCompound;
+    const hasNeckCornerShapekeys = !isVariant && !hasBakedKeyforms && !hasEyelidClosure
+      && !hasEyeVariantCompound
       && generateRig && m.tag === 'neck' && !!pidParamAngleXEarly;
-    const [kfBinding, pidKfb] = x.shared('KeyformBindingSource');
+    const hasEmotionVariantOnly = hasEmotionVariant && !hasEyeVariantCompound;
+    const hasBaseFadeOnly       = hasBaseFade       && !hasEyeVariantCompound;
+
+    // `kfBinding` is the single KeyformBindingSource used by every 1D branch
+    // (closure / neck / emotion / base fade / default). Compound meshes use
+    // two *separate* bindings allocated inside their branch instead.
+    let kfBinding = null, pidKfb = null;
+    if (!hasEyeVariantCompound) {
+      [kfBinding, pidKfb] = x.shared('KeyformBindingSource');
+    }
     const [kfGridMesh, pidKfgMesh] = x.shared('KeyformGridSource');
 
-    // Extra form GUIDs for baked keyforms (min/max angles) or closure (closed keyform)
+    // Extra form GUIDs. Allocated per branch to avoid orphans.
     let pidFormClosed = null;
     let bakedFormGuids = null;
-    let neckCornerFormGuids = null; // [pidForm_-30, pidForm_+30]; 0 reuses pidFormMesh
+    let neckCornerFormGuids = null;
+    let pidFormVariant = null;
+    let pidFormBaseHidden = null;
+    // Compound's 4 corner guids (only when hasEyeVariantCompound). Each is
+    // UNIQUE — never reuses pidFormMesh / pidFormBaseHidden / pidFormVariant
+    // from the standalone branches. Names carry semantic meaning for logs.
+    let pidCornerOpenNeutral   = null;
+    let pidCornerClosedNeutral = null;
+    let pidCornerOpenVariant   = null;
+    let pidCornerClosedVariant = null;
+    // `pidFormMesh` is the standard rest-pose form. Only non-compound
+    // branches reference it — skip allocation for compound meshes to
+    // avoid orphans in the shared catalog.
+    let pidFormMesh = null;
+    if (!hasEyeVariantCompound) {
+      [, pidFormMesh] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_form` });
+    }
+    if (hasEyeVariantCompound) {
+      const sfx = isVariant ? variantSuffixForMesh : baseFadeSuffix;
+      [, pidCornerOpenNeutral]   = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_corner_open_neutral`   });
+      [, pidCornerClosedNeutral] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_corner_closed_neutral` });
+      [, pidCornerOpenVariant]   = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_corner_open_${sfx}`    });
+      [, pidCornerClosedVariant] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_corner_closed_${sfx}`  });
+    }
+    if (hasEmotionVariantOnly) {
+      const [, _pidFv] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_variant` });
+      pidFormVariant = _pidFv;
+    }
+    if (hasBaseFadeOnly) {
+      const [, _pidBh] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_base_hidden` });
+      pidFormBaseHidden = _pidBh;
+    }
 
     if (hasBakedKeyforms) {
       // Multiple keyforms to reduce linear interpolation shrinkage
@@ -928,6 +1156,140 @@ export async function generateCmo3(input) {
       x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
       x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
       x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = 'ParamAngleX';
+    } else if (hasEyeVariantCompound) {
+      // Session 36: 2D keyform grid for eye meshes that have both a blink
+      // axis (ParamEye{L,R}Open) AND a variant axis (Param<Suffix>).
+      // 4 corners on the (closure, variant) rectangle, each with its own
+      // unique CFormGuid and its own (positions, opacity) pair. Row-major
+      // over (closureKey, variantKey) — first binding varies fastest per
+      // the Hiyori reference convention.
+      //
+      // Base eye (isVariant=false): alpha=1 at variant=0, alpha=0 at variant=1.
+      //   Base's own parabola drives closedVerts; base's own lash bbox for
+      //   strip compression. At ParamSmile=1 the base is fully hidden.
+      // Variant eye (isVariant=true): alpha=0 at variant=0, alpha=1 at variant=1.
+      //   Variant's own parabola (from variantEyewhiteCurvePerSideAndSuffix)
+      //   drives closedVerts; variant's own lash bbox. At ParamSmile=0 the
+      //   variant is fully hidden. Blink works at every ParamSmile value.
+      const [kfBindingClosure, pidKfbClosure] = x.shared('KeyformBindingSource');
+      const [kfBindingVariant, pidKfbVariant] = x.shared('KeyformBindingSource');
+      const variantParamPid = isVariant ? pidParamForVariant : pidParamForBaseFade;
+      const sfxLocal        = isVariant ? variantSuffixForMesh : baseFadeSuffix;
+      const variantParamIdStr = variantParamId(sfxLocal);
+      const closureParamIdStr = closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
+
+      // Row-major over (closureKey, variantKey). Matches Hiyori's convention:
+      // first binding (closure) varies fastest, second (variant) slowest.
+      const cornersOrder = [
+        { ck: 0, vk: 0, pidForm: pidCornerClosedNeutral },
+        { ck: 1, vk: 0, pidForm: pidCornerOpenNeutral   },
+        { ck: 0, vk: 1, pidForm: pidCornerClosedVariant },
+        { ck: 1, vk: 1, pidForm: pidCornerOpenVariant   },
+      ];
+      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '4' });
+      for (const { ck, vk, pidForm } of cornersOrder) {
+        const kog = x.sub(kfog, 'KeyformOnGrid');
+        const ak  = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '2' });
+        const konA = x.sub(kop, 'KeyOnParameter');
+        x.subRef(konA, 'KeyformBindingSource', pidKfbClosure, { 'xs.n': 'binding' });
+        x.sub(konA, 'i', { 'xs.n': 'keyIndex' }).text = String(ck);
+        const konB = x.sub(kop, 'KeyOnParameter');
+        x.subRef(konB, 'KeyformBindingSource', pidKfbVariant, { 'xs.n': 'binding' });
+        x.sub(konB, 'i', { 'xs.n': 'keyIndex' }).text = String(vk);
+        x.subRef(kog, 'CFormGuid', pidForm, { 'xs.n': 'keyformGuid' });
+      }
+
+      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: '2' });
+      x.subRef(kb, 'KeyformBindingSource', pidKfbClosure);
+      x.subRef(kb, 'KeyformBindingSource', pidKfbVariant);
+
+      // Fill the two KeyformBindingSource nodes. They share the same
+      // _gridSource (our KeyformGridSource) but have independent params,
+      // keys, interpolation and description.
+      const fillBinding = (node, paramPid, keys, descriptionStr) => {
+        x.subRef(node, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
+        x.subRef(node, 'CParameterGuid', paramPid, { 'xs.n': 'parameterGuid' });
+        const keysEl = x.sub(node, 'array_list', { 'xs.n': 'keys', count: String(keys.length) });
+        for (const k of keys) x.sub(keysEl, 'f').text = k;
+        x.sub(node, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+        x.sub(node, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+        x.sub(node, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+        x.sub(node, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+        x.sub(node, 's', { 'xs.n': 'description' }).text = descriptionStr;
+      };
+      fillBinding(kfBindingClosure, closureParamPid, ['0.0', '1.0'], closureParamIdStr);
+      fillBinding(kfBindingVariant, variantParamPid, ['0.0', '1.0'], variantParamIdStr);
+    } else if (hasEmotionVariantOnly) {
+      // 2 keyforms on ParamSmile — simple 0→1 opacity fade for the variant.
+      //   keyIndex 0 at Smile=0  : pidFormMesh, opacity 0 (hidden)
+      //   keyIndex 1 at Smile=1  : pidFormVariant, opacity 1 (visible)
+      // The base mesh keeps its default opacity=1 single keyform and is
+      // always rendered underneath, so at any Smile value the base is
+      // fully visible and the variant layers on top with its current
+      // interpolated opacity.
+      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '2' });
+      const emitKog = (keyIndex, formPid) => {
+        const kog = x.sub(kfog, 'KeyformOnGrid');
+        const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+        const kon = x.sub(kop, 'KeyOnParameter');
+        x.subRef(kon, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
+        x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(keyIndex);
+        x.subRef(kog, 'CFormGuid', formPid, { 'xs.n': 'keyformGuid' });
+      };
+      emitKog(0, pidFormMesh);     // Smile=0 → hidden form
+      emitKog(1, pidFormVariant);  // Smile=1 → visible form
+
+      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+      x.subRef(kb, 'KeyformBindingSource', pidKfb);
+
+      const variantParamIdStr = variantParamId(variantSuffixForMesh);
+      x.subRef(kfBinding, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
+      x.subRef(kfBinding, 'CParameterGuid', pidParamForVariant, { 'xs.n': 'parameterGuid' });
+      const keys = x.sub(kfBinding, 'array_list', { 'xs.n': 'keys', count: '2' });
+      x.sub(keys, 'f').text = '0.0';
+      x.sub(keys, 'f').text = '1.0';
+      x.sub(kfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+      x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+      x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = variantParamIdStr;
+    } else if (hasBaseFadeOnly) {
+      // Base mesh with a variant sibling (and not the face-skin backdrop):
+      // 2 keyforms on Param<Suffix> — linear crossfade of the neutral
+      // mesh from opacity 1 at 0 to opacity 0 at 1. The face-skin backdrop
+      // stays at opacity=1 always, so the alpha composite is solid at
+      // every intermediate Param value — no see-through midpoint.
+      //   keyIndex 0 at Smile=0 : pidFormMesh,       opacity 1
+      //   keyIndex 1 at Smile=1 : pidFormBaseHidden, opacity 0
+      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '2' });
+      const emitBaseKog = (keyIndex, formPid) => {
+        const kog = x.sub(kfog, 'KeyformOnGrid');
+        const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+        const kon = x.sub(kop, 'KeyOnParameter');
+        x.subRef(kon, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
+        x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(keyIndex);
+        x.subRef(kog, 'CFormGuid', formPid, { 'xs.n': 'keyformGuid' });
+      };
+      emitBaseKog(0, pidFormMesh);
+      emitBaseKog(1, pidFormBaseHidden);
+
+      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+      x.subRef(kb, 'KeyformBindingSource', pidKfb);
+
+      const baseParamIdStr = variantParamId(baseFadeSuffix);
+      x.subRef(kfBinding, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
+      x.subRef(kfBinding, 'CParameterGuid', pidParamForBaseFade, { 'xs.n': 'parameterGuid' });
+      const keys = x.sub(kfBinding, 'array_list', { 'xs.n': 'keys', count: '2' });
+      x.sub(keys, 'f').text = '0.0';
+      x.sub(keys, 'f').text = '1.0';
+      x.sub(kfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+      x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+      x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+      x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = baseParamIdStr;
     } else {
       // Standard single keyform bound to ParamOpacity
       const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '1' });
@@ -955,13 +1317,22 @@ export async function generateCmo3(input) {
     perMesh.push({
       mi, meshName, meshId, pngPath, drawOrder: m.drawOrder ?? (500 + mi),
       pidDrawable, pidFormMesh, bakedFormGuids, pidFormClosed,
-      neckCornerFormGuids,
+      neckCornerFormGuids, pidFormVariant,
+      pidFormBaseHidden,
+      // Compound 2D corners (null for non-compound meshes)
+      pidCornerOpenNeutral, pidCornerClosedNeutral,
+      pidCornerOpenVariant, pidCornerClosedVariant,
+      hasEyeVariantCompound,
+      isVariant,
+      myClosureCurve,
       pidMiGuid, pidTexGuid, pidExtMesh, pidExtTex, pidEmesh,
       pidImg, pidLayer,
       pidFset, pidTex2d, pidTie, pidTimi,
       pidKfb, pidKfgMesh,
       tieSup, hasBakedKeyforms, hasEyelidClosure, closureSide,
       hasNeckCornerShapekeys,
+      hasEmotionVariantOnly, hasBaseFadeOnly,
+      variantRole: m.variantRole ?? null,
       vertices: m.vertices,
       triangles: m.triangles,
       uvs: m.uvs,
@@ -3285,14 +3656,30 @@ export async function generateCmo3(input) {
 
   // Clipping-mask resolution: certain tagged meshes should be masked by others
   // at render time (iris inside eyewhite, iris-highlight inside iris, etc.).
-  // Build tag → pidDrawable lookup and CLIP_RULES map of what-is-masked-by-what.
   // When a mesh's tag is in CLIP_RULES keys, its drawable references the mask's
   // CDrawableGuid in clipGuidList — Cubism handles occlusion natively.
-  const tagToPidDrawable = new Map();
-  for (let i = 0; i < perMesh.length; i++) {
-    const tag = meshes[perMesh[i].mi].tag;
-    if (tag && !tagToPidDrawable.has(tag)) {
-      tagToPidDrawable.set(tag, perMesh[i].pidDrawable);
+  //
+  // Variant-aware pairing (2026-04-23): variant iris (`irides-l.smile`)
+  // must be clipped by its OWN variant eyewhite (`eyewhite-l.smile`), NOT
+  // the base eyewhite. Reason: base eyewhite fades to α=0 at the variant's
+  // Param<Suffix>=1 endpoint (hasBaseFade / 2D compound), and Cubism uses
+  // the mask's alpha for clipping — so a base-eyewhite-clipped variant iris
+  // vanishes whenever its own param is high. Pair by (tag, suffix) first,
+  // fall back to base only when no suffix-matched mask exists.
+  const basePidByTag = new Map();              // tag → pid of non-variant mesh
+  const variantPidByTagAndSuffix = new Map();  // `${tag}|${suffix}` → pid
+  for (const pmEntry of perMesh) {
+    const mesh = meshes[pmEntry.mi];
+    const tag = mesh.tag;
+    if (!tag) continue;
+    const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
+    if (sfx) {
+      const key = `${tag}|${sfx}`;
+      if (!variantPidByTagAndSuffix.has(key)) {
+        variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
+      }
+    } else if (!basePidByTag.has(tag)) {
+      basePidByTag.set(tag, pmEntry.pidDrawable);
     }
   }
   const CLIP_RULES = {
@@ -3466,9 +3853,22 @@ export async function generateCmo3(input) {
     }
     x.subRef(ds, 'CDeformerGuid', meshDfGuid, { 'xs.n': 'targetDeformerGuid' });
     // Clipping-mask: iris masked by eyewhite, etc. See CLIP_RULES above.
+    // Variant-aware pairing: `irides-l.smile` is clipped by `eyewhite-l.smile`
+    // (variant mask of matching suffix), never by the base eyewhite that
+    // fades to α=0 at Smile=1. Fall back to base mask if no matching variant
+    // mask exists (e.g. user provided variant iris without variant eyewhite).
     const meshTag = meshes[pm.mi].tag;
+    const meshSfx = meshes[pm.mi].variantSuffix ?? meshes[pm.mi].variantRole ?? null;
     const maskTag = meshTag ? CLIP_RULES[meshTag] : null;
-    const maskPid = maskTag ? tagToPidDrawable.get(maskTag) : null;
+    let maskPid = null;
+    if (maskTag) {
+      if (meshSfx) {
+        maskPid = variantPidByTagAndSuffix.get(`${maskTag}|${meshSfx}`)
+               ?? basePidByTag.get(maskTag) ?? null;
+      } else {
+        maskPid = basePidByTag.get(maskTag) ?? null;
+      }
+    }
     if (maskPid) {
       const clipList = x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '1' });
       x.subRef(clipList, 'CDrawableGuid', maskPid);
@@ -3562,109 +3962,58 @@ export async function generateCmo3(input) {
         const positions = (ang === 0) ? verts : computeBakedPositions(ang);
         emitArtMeshForm(kfList, pidForm, positions);
       }
-    } else if (pm.hasEyelidClosure) {
-      // 2 keyforms: closed (k=0, parabola-collapsed) and open (k=1, rest).
-      // P7: closure curve = parabola fit to eyewhite's lower edge (per side).
-      // All eye meshes blend into the curve at their own X. No horizontal deformation.
-      // Parabola extrapolates naturally if a vertex X is outside the eyewhite fit range.
-      const curveParams = eyewhiteCurvePerSide.get(pm.closureSide);
-      const bandCanvas = eyelashBandCanvas.get(pm.closureSide); // sampled fallback
+    } else if (pm.hasEyelidClosure || pm.hasEyeVariantCompound) {
+      // Eye closure — shared geometry computation for standalone closure
+      // and compound 2D grid. `pm.myClosureCurve` is base's parabola for
+      // base meshes and variant's OWN parabola for variants (never shared).
+      // `eyelashMeshBboxPerSide` is the base lash bbox; for variants we
+      // compute bbox from the variant's own verts.
+      const meshTag = meshes[pm.mi].tag;
+      const isEyelash = meshTag === 'eyelash-l' || meshTag === 'eyelash-r';
+      const lashBbox = pm.isVariant
+        ? (isEyelash ? bboxFromVertsY(meshes[pm.mi].vertices) : null)
+        : eyelashMeshBboxPerSide.get(pm.closureSide);
+      const bandFallback = eyelashBandCanvas.get(pm.closureSide); // base-side sampled curve as fallback only
       const shiftPx = eyelashShiftCanvas.get(pm.closureSide) ?? 0;
-      const isEyelash = meshes[pm.mi].tag === 'eyelash-l' || meshes[pm.mi].tag === 'eyelash-r';
-      const closedCanvas = new Array(canvasVerts.length);
-      // P5 per-mesh clamp: keep closed Y inside rwBox → no warp-local extrapolation.
-      const rwMinY = rwBox ? rwBox.gridMinY : null;
-      const rwMaxY = rwBox ? rwBox.gridMinY + rwBox.gridH : null;
-      // P6 lash strip compression: instead of clamp-above-preserve-below
-      // (which masked the arc behind the flat preserved lash bottom), we
-      // compress ALL lash vertices into a thin strip centered on the band curve.
-      // Every lash vertex follows the arc → curve visibly renders.
-      // Iris/eyewhite still fully collapse to band (they hide behind lash strip).
-      const lashBbox = eyelashMeshBboxPerSide.get(pm.closureSide);
-      const lashStripHalfPx = lashBbox
-        ? lashBbox.H * EYE_CLOSURE_LASH_STRIP_FRAC
-        : 0;
-      for (let i = 0; i < numVerts; i++) {
-        const vx = canvasVerts[i * 2];
-        const vy = canvasVerts[i * 2 + 1];
-        // Primary: evaluate parabola at this vertex X (extrapolates naturally).
-        // Fallback: sampled curve (if parabola fit failed for some reason).
-        let bandY = evalClosureCurve(curveParams, vx);
-        if (bandY === null) bandY = evalBandY(bandCanvas, vx);
-        closedCanvas[i * 2] = vx;
-        let closedY;
-        if (bandY === null) {
-          closedY = vy;
-        } else if (isEyelash && lashBbox) {
-          // Scale lash Y from [lashMinY, lashMaxY] onto [bandY - half, bandY + half].
-          // Preserves lash's top-to-bottom vertex order so the curve is visibly
-          // rendered in the lash's thin strip (instead of hidden under a flat preserved bottom).
-          const relY = (vy - lashBbox.minY) / lashBbox.H; // 0 top → 1 bottom
-          closedY = bandY + (relY - 0.5) * 2 * lashStripHalfPx;
-        } else {
-          closedY = bandY; // eyewhite / iris: fully collapse to curve
-        }
-        if (rwMinY !== null) {
-          if (closedY < rwMinY) closedY = rwMinY;
-          if (closedY > rwMaxY) closedY = rwMaxY;
-        }
-        closedCanvas[i * 2 + 1] = closedY - shiftPx;
-      }
-      // Convert to same coord space as `verts` (warp-local 0..1 if rwBox, else deformer-local)
-      let closedVerts;
-      if (rwBox) {
-        closedVerts = closedCanvas.map((v, i) =>
-          i % 2 === 0
-            ? (v - rwBox.gridMinX) / rwBox.gridW
-            : (v - rwBox.gridMinY) / rwBox.gridH
-        );
-      } else if (dfOrigin) {
-        closedVerts = closedCanvas.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y));
-      } else {
-        closedVerts = closedCanvas;
-      }
-      // Path C diagnostic: capture sample vertex positions for eye parts so we can
-      // tell whether a rendering displacement comes from our closure algorithm or
-      // from the downstream deformer chain.
-      if (rigDebugLog && EYE_PART_TAGS && EYE_PART_TAGS.has(meshes[pm.mi].tag)) {
+      const closedVerts = computeClosedVertsForMesh({
+        curve: pm.myClosureCurve,
+        bandCurveFallback: pm.isVariant ? null : bandFallback,
+        isEyelash, lashBbox,
+        canvasVerts, numVerts,
+        rwBox, dfOrigin, shiftPx,
+      });
+      if (rigDebugLog && EYE_PART_TAGS && EYE_PART_TAGS.has(meshTag)) {
         if (!rigDebugLog.perVertexClosure) rigDebugLog.perVertexClosure = [];
-        const sampleIndices = numVerts > 0
-          ? [0, Math.floor(numVerts / 2), numVerts - 1]
-          : [];
-        const samples = sampleIndices.map(vi => {
-          const rX = canvasVerts[vi * 2];
-          const rY = canvasVerts[vi * 2 + 1];
-          const cX = closedCanvas[vi * 2];
-          const cY = closedCanvas[vi * 2 + 1];
-          return {
-            vertexIndex: vi,
-            restCanvasXY: [rX, rY],
-            closedCanvasXY: [cX, cY],
-            restWarpLocalXY: rwBox
-              ? [(rX - rwBox.gridMinX) / rwBox.gridW,
-                 (rY - rwBox.gridMinY) / rwBox.gridH]
-              : null,
-            closedWarpLocalXY: rwBox
-              ? [(cX - rwBox.gridMinX) / rwBox.gridW,
-                 (cY - rwBox.gridMinY) / rwBox.gridH]
-              : null,
-          };
-        });
+        const sampleIndices = numVerts > 0 ? [0, Math.floor(numVerts / 2), numVerts - 1] : [];
+        const samples = sampleIndices.map(vi => ({
+          vertexIndex: vi,
+          restCanvasXY: [canvasVerts[vi * 2], canvasVerts[vi * 2 + 1]],
+          closedLocalXY: [closedVerts[vi * 2], closedVerts[vi * 2 + 1]],
+        }));
         rigDebugLog.perVertexClosure.push({
-          tag: meshes[pm.mi].tag,
-          partId: pm.partId,
-          closureSide: pm.closureSide,
-          isEyelash,
-          rwBox: rwBox ?? null,
-          dfOrigin: dfOrigin ?? null,
-          rigWarpDebugInfo: rigWarpDebugInfo.get(pm.partId) ?? null,
-          totalVertexCount: numVerts,
-          samples,
+          tag: meshTag, partId: pm.partId, closureSide: pm.closureSide,
+          isEyelash, isVariant: pm.isVariant,
+          branch: pm.hasEyeVariantCompound ? 'compound-2d' : 'standalone-1d',
+          rwBox: rwBox ?? null, dfOrigin: dfOrigin ?? null,
+          totalVertexCount: numVerts, samples,
         });
       }
-      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
-      emitArtMeshForm(kfList, pm.pidFormClosed, closedVerts); // keyIndex 0: closed
-      emitArtMeshForm(kfList, pm.pidFormMesh, verts);         // keyIndex 1: open/rest
+      if (pm.hasEyeVariantCompound) {
+        // 4 corners: row-major (closure, variant) matching cornersOrder above.
+        // Base eye: alpha=1 at variant=0, 0 at variant=1. Variant eye: reverse.
+        const αN = pm.isVariant ? 0 : 1;
+        const αV = pm.isVariant ? 1 : 0;
+        const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '4' });
+        emitArtMeshForm(kfList, pm.pidCornerClosedNeutral, closedVerts, αN);
+        emitArtMeshForm(kfList, pm.pidCornerOpenNeutral,   verts,       αN);
+        emitArtMeshForm(kfList, pm.pidCornerClosedVariant, closedVerts, αV);
+        emitArtMeshForm(kfList, pm.pidCornerOpenVariant,   verts,       αV);
+      } else {
+        // Standalone 1D closure: 2 keyforms [closed, open].
+        const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
+        emitArtMeshForm(kfList, pm.pidFormClosed, closedVerts);
+        emitArtMeshForm(kfList, pm.pidFormMesh,   verts);
+      }
     } else if (pm.hasNeckCornerShapekeys) {
       // 3 keyforms on ParamAngleX: −30 (keyIndex 0), 0 rest (1), +30 (2).
       // Each vertex gets a "cornerness" weight — product of an X-edge factor
@@ -3737,6 +4086,24 @@ export async function generateCmo3(input) {
       emitArtMeshForm(kfList, pm.neckCornerFormGuids[0], negVerts); // −30
       emitArtMeshForm(kfList, pm.pidFormMesh, verts);                //   0 (rest)
       emitArtMeshForm(kfList, pm.neckCornerFormGuids[1], posVerts); // +30
+    } else if (pm.hasEmotionVariantOnly) {
+      // 2 forms matching 2 keyforms on ParamSmile — simple 0→1 opacity fade.
+      //   [0] Smile=0 : hidden (opacity 0) — variant fully transparent
+      //   [1] Smile=1 : visible (opacity 1) — variant fully covers base
+      // Base mesh is driven separately by `hasBaseFadeOnly` below (if it has
+      // this variant as a sibling) — stays at opacity 1 for essentially
+      // the whole range and snaps to 0 at Smile=1.
+      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
+      emitArtMeshForm(kfList, pm.pidFormMesh,    verts, 0.0); // keyIndex 0: hidden
+      emitArtMeshForm(kfList, pm.pidFormVariant, verts, 1.0); // keyIndex 1: visible
+    } else if (pm.hasBaseFadeOnly) {
+      // 2 forms matching the 2-keyform linear fade on Param<Suffix>:
+      //   [0] Smile=0 : opacity 1 (fully visible at rest)
+      //   [1] Smile=1 : opacity 0 (fully gone — variant has taken over)
+      // Same base geometry at both keyforms; only opacity differs.
+      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
+      emitArtMeshForm(kfList, pm.pidFormMesh,       verts, 1.0); // keyIndex 0
+      emitArtMeshForm(kfList, pm.pidFormBaseHidden, verts, 0.0); // keyIndex 1
     } else {
       // Single keyform at rest position
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '1' });

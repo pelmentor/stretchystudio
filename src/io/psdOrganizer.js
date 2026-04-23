@@ -14,6 +14,70 @@ export const KNOWN_TAGS = [
   'tail', 'wings', 'objects',
 ];
 
+/**
+ * Reference list of the emotion/state suffixes we've thought through —
+ * kept for documentation. Detection is *not* gated on this list: ANY
+ * `<base>.<suffix>` layer name where suffix is a reasonable identifier
+ * (alpha start, ≥3 chars) is treated as a variant. This lets users
+ * freely add outfit / seasonal / accessory variants (`topwear.summer`,
+ * `topwear-l.winter`, `face.beard`, …) without a code change.
+ *
+ * Pipeline for any detected variant:
+ *   - organizer groups the variant with its base by tag (suffix stripped)
+ *   - variantNormalizer pairs it with the base and normalizes parent +
+ *     draw_order
+ *   - cmo3writer auto-registers `Param<Suffix>` and emits the fade
+ */
+export const VARIANT_SUFFIXES = [
+  // emotions
+  'smile', 'sad', 'angry', 'surprised', 'blush', 'wink',
+  // outfit / seasonal (examples — not exhaustive)
+  'summer', 'winter', 'spring', 'fall', 'autumn',
+  'casual', 'formal',
+];
+
+/**
+ * Regex for the suffix portion after the last dot: letter/underscore start,
+ * alphanumeric+underscore body, minimum total length 3. Excludes `.l`, `.r`,
+ * `.1`, `.01`, `.v1` (too short / numeric prefix) and similar non-variant
+ * dotted patterns that might appear in layer names.
+ */
+const VARIANT_SUFFIX_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{2,}$/;
+
+/** Turn a variant suffix into the Live2D parameter id, e.g. `smile` → `ParamSmile`. */
+export function variantParamId(suffix) {
+  if (!suffix) return null;
+  return 'Param' + suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
+}
+
+/**
+ * Split a layer name into base + variant.
+ *   "mouth.smile"     → { baseName: "mouth",     variant: "smile" }
+ *   "topwear.summer"  → { baseName: "topwear",   variant: "summer" }
+ *   "topwear-l.winter"→ { baseName: "topwear-l", variant: "winter" }
+ *   "topwear"         → { baseName: "topwear",   variant: null }
+ *   "face.shadow"     → { baseName: "face",      variant: "shadow" }
+ *   "hair.2"          → { baseName: "hair.2",    variant: null }   // numeric
+ *   "foo.l"           → { baseName: "foo.l",     variant: null }   // too short
+ *
+ * Detection is structural (regex), not allowlist-based — any plausible
+ * variant suffix works. Case-insensitive on the suffix; preserves
+ * original base-name casing.
+ */
+export function extractVariant(name) {
+  const trimmed = (name ?? '').trim();
+  const lastDot = trimmed.lastIndexOf('.');
+  if (lastDot <= 0) return { baseName: trimmed, variant: null };
+  const candidate = trimmed.slice(lastDot + 1);
+  if (!VARIANT_SUFFIX_PATTERN.test(candidate)) {
+    return { baseName: trimmed, variant: null };
+  }
+  return {
+    baseName: trimmed.slice(0, lastDot),
+    variant: candidate.toLowerCase(),
+  };
+}
+
 
 // tag → group path (outermost → innermost)
 const TAG_TO_GROUPS = {
@@ -57,7 +121,9 @@ const GROUP_CREATE_ORDER = ['body', 'upperbody', 'lowerbody', 'head', 'extras', 
 
 /** Returns the matched tag for a layer name, or null. */
 export function matchTag(name) {
-  const lower = name.toLowerCase().trim();
+  // Variants pair with their base tag (e.g. "mouth.smile" → "mouth").
+  const { baseName } = extractVariant(name);
+  const lower = baseName.toLowerCase().trim();
   // Exact match first — prevents 'handwear' from matching 'handwear-l', etc.
   for (const tag of KNOWN_TAGS) {
     if (lower === tag) return tag;

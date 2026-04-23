@@ -9,6 +9,8 @@
  *   4. Routing each semantic layer to its parent bone group
  */
 
+import { extractVariant } from './psdOrganizer.js';
+
 
 // Lazy-loaded onnxruntime-web
 let _ortPromise = null;
@@ -75,7 +77,9 @@ export const IRIS_TAGS = new Set([
 
 /** Returns the canonical tag for a layer name, or null if unrecognised. */
 export function matchTag(name) {
-  const lower = name.toLowerCase().trim();
+  // Variants pair with their base tag (e.g. "mouth.smile" → "mouth").
+  const { baseName } = extractVariant(name);
+  const lower = baseName.toLowerCase().trim();
   // Exact match first — prevents 'handwear' from matching 'handwear-l', etc.
   for (const tag of KNOWN_TAGS) {
     if (lower === tag) return tag;

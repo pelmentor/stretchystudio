@@ -15,6 +15,7 @@ import { packTextureAtlas } from './textureAtlas.js';
 import { generateCmo3 } from './cmo3writer.js';
 import { generateCan3 } from './can3writer.js';
 import { matchTag } from '../armatureOrganizer.js';
+import { extractVariant } from '../psdOrganizer.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -245,9 +246,19 @@ export async function exportLive2DProject(project, images, opts = {}) {
       }
     }
 
+    // variantSuffix is the source of truth, written by variantNormalizer at
+    // import time. Fall back to the name-based detection for defensive
+    // reasons — an export on a project that skipped normalization will
+    // still behave sensibly.
+    const variantSuffix =
+      part.variantSuffix ?? extractVariant(meshName).variant ?? null;
+
     meshes.push({
       name: meshName,
       tag: matchTag(meshName),
+      variantRole: variantSuffix,    // kept for compat; same value as variantSuffix
+      variantSuffix,                 // new canonical field
+      variantOf: part.variantOf ?? null,
       partId: part.id,
       parentGroupId: part.parent ?? null,
       jointBoneId,
