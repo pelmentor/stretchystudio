@@ -36,6 +36,22 @@ Each rotation deformer gets a `ParamRotation_GroupName` parameter with range [-3
 ### ADR-010: Part hierarchy mapping (.cmo3)
 Session 5: Stretchy Studio groups map to CPartSource with nested parent-child relationships. Root Part → CPartGuid children (groups) → CDrawableGuid children (meshes). Meshes without a group go directly under Root Part.
 
+### ADR-011: Variant system — layer-name convention `<base>.<suffix>` (Sessions 35–36)
+Any PSD layer whose name matches `<base>.<suffix>` where `suffix ∈ /^[a-zA-Z_][a-zA-Z0-9_]{2,}$/` is treated as a variant of `<base>`. The variant normalizer (`src/io/variantNormalizer.js`) pairs them after PSD import, reparents the variant to the base's group, and writes `variantOf` + `variantSuffix` onto the variant part as the single source of truth. A `Param<Suffix>` (e.g. `ParamSmile`, `ParamWinter`) is auto-registered per suffix actually used.
+
+In the `.cmo3` keyform emit:
+- **Variant mesh** fades α 0→1 on `Param<Suffix>` (2-keyform linear).
+- **Non-backdrop base** with ≥1 variant sibling fades α 1→0 on the SAME param (linear crossfade).
+- **Backdrop tags** (`face`, `ears`, `ears-l/r`, `front hair`, `back hair` — `BACKDROP_TAGS_SET`) stay at α=1 always. They provide the opaque substrate that prevents midpoint translucency during the crossfade.
+- **Eye meshes** (both base and variant in `EYE_CLOSURE_TAGS`) use a 2D keyform grid `ParamEye{L,R}Open × Param<Suffix>` with 4 unique corner `CFormGuid` entries — both base and variant can blink AND fade simultaneously. Structure reference-verified against Hiyori's 3×3 `PARAM_BUST_Y × PARAM_BODY_ANGLE_X` grid (`main.xml` around id `#1253`).
+
+Clip masks are variant-aware: a variant iris is clipped by its variant eyewhite (of matching suffix); falls back to base eyewhite if no variant exists. Without this pairing, a variant iris clipped by a faded-out base eyewhite would disappear at `Param<Suffix>=1`.
+
+See `cmo3writer.js` around the `hasEyeVariantCompound` flag and the 4-corner keyform grid emit for the full 2D implementation.
+
+### ADR-012: Physics rules table (Session 29)
+Hair-front / hair-back / skirt physics emit as a `CPhysicsSettingsSourceSet` between `CPartSourceSet` and the `rootPart` ref. Rules live in `PHYSICS_RULES` (in `src/io/live2d/cmo3/physics.js`) and each rule self-skips if its output param or required tag is absent — adding new rules is safe without runtime errors on absent params. `generatePhysics` option defaults to `generateRig`.
+
 ---
 
 ## Data Mapping: Stretchy Studio to Live2D
@@ -306,8 +322,6 @@ mesh.skinBones = [
   { id: rightKneeId, weights: [0, 0, 0, 0, 0.5, 1.0, ...] },  // right-side verts only
 ]
 ```
-
-See `docs/live2d-export/sessions/SESSION12_PROMPT.md` for full implementation plan.
 
 ---
 

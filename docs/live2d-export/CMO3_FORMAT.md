@@ -306,6 +306,43 @@ Stores keyforms indexed by parameter values.
 </KeyformGridSource>
 ```
 
+#### 2D keyform grids (multi-parameter)
+
+A keyform grid can be driven by MORE than one parameter — `keyformBindings` holds N bindings and each `KeyformOnGrid` carries `count="N"` `KeyOnParameter` entries in its `accessKey`, one per binding. The total grid cell count is the Cartesian product of the bindings' key counts.
+
+Hiyori uses this for body/breast parallax (`PARAM_BUST_Y × PARAM_BODY_ANGLE_X`, 3×3 = 9 cells — see `main.xml` around `xs.id="#1253"`). Our exporter uses the same structure with a 2×2 grid for eye variant compound: `ParamEye{L,R}Open × Param<Suffix>`, 4 unique `CFormGuid` corners. See `cmo3writer.js` around the `hasEyeVariantCompound` branch.
+
+```xml
+<KeyformGridSource>
+  <array_list xs.n="keyformsOnGrid" count="4">
+    <!-- Row-major order: first binding varies FASTEST, second slowest. -->
+    <!-- Each corner has a unique CFormGuid (no sharing across cells). -->
+    <KeyformOnGrid>
+      <KeyformGridAccessKey xs.n="accessKey">
+        <array_list xs.n="_keyOnParameterList" count="2">
+          <KeyOnParameter>
+            <KeyformBindingSource xs.n="binding" xs.ref="#closureBinding"/>
+            <i xs.n="keyIndex">0</i>                     <!-- ParamEyeLOpen=0 (closed) -->
+          </KeyOnParameter>
+          <KeyOnParameter>
+            <KeyformBindingSource xs.n="binding" xs.ref="#variantBinding"/>
+            <i xs.n="keyIndex">0</i>                     <!-- ParamSmile=0 (neutral) -->
+          </KeyOnParameter>
+        </array_list>
+      </KeyformGridAccessKey>
+      <CFormGuid xs.n="keyformGuid" xs.ref="#cornerClosedNeutral"/>
+    </KeyformOnGrid>
+    <!-- Three more entries: (1,0), (0,1), (1,1) — each with its own CFormGuid -->
+  </array_list>
+  <array_list xs.n="keyformBindings" count="2">
+    <KeyformBindingSource xs.ref="#closureBinding"/>      <!-- keys [0.0, 1.0] -->
+    <KeyformBindingSource xs.ref="#variantBinding"/>      <!-- keys [0.0, 1.0] -->
+  </array_list>
+</KeyformGridSource>
+```
+
+Each `KeyformBindingSource` declares its own parameter, keys, interpolation, and description — independent of the other binding. Cubism bilinearly interpolates the geometry+opacity across the grid between param values.
+
 ### CTextureAtlas — Texture Atlas
 
 ```xml

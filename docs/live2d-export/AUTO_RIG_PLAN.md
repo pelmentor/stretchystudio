@@ -433,6 +433,53 @@ as numeric tables, not bundled assets, so legally safe).
   See `SESSION_29_FINDINGS.md`. Pending: user validation in Cubism
   Editor.
 
+- **Session 30 (2026-04-22) — Random Pose dialog fix.** Editor's
+  Random Pose feature silently rejected our exports (no sub-groups
+  visible). Root cause: Cubism Editor's `f_0.a` compares the root
+  `CParameterGroupGuid` **by value** against a well-known UUID
+  (`e9fe6eff-953b-4ce2-be7c-4a7c3913686b`) before walking the group
+  tree. Pinned our root group guid to that literal + emitted a full
+  sub-group tree; dialog now populates. Adding sub-groups alone
+  wasn't sufficient — the root guid value is load-bearing.
+  See `SESSION_30_FINDINGS.md` and
+  `memory/reference_cubism_jar_decompile.md`.
+
+- **Session 34 (2026-04-22) — arm physics (2-joint elbow sway).**
+  Physics rule taps existing
+  `ParamRotation_leftElbow` / `ParamRotation_rightElbow` on a short
+  pendulum (scale=4°). User-confirmed "то, что надо". An earlier
+  attempt at a true Alexia-style whip chain with per-segment delay
+  was reverted — the chain model needs mesh segmentation
+  (multi-bone skinning) which is out of scope for the current
+  auto-rig. Single-segment pendulum on the existing elbow rotation
+  is the shipped MVP.
+
+- **Session 35 (2026-04-23) — emotion / outfit / variant system
+  (non-eye features).** Generic variant pipeline on layer-name
+  convention `<base>.<suffix>`. Variant mesh gets a 2-keyform
+  0→1 opacity fade on `Param<Suffix>`; non-backdrop base fades
+  1→0 on the same param. `BACKDROP_TAGS_SET` (face / ears /
+  front+back hair) stay at α=1 to provide the opaque substrate
+  that prevents midpoint translucency during crossfade.
+  `variantNormalizer.js` pairs variants with bases by name and
+  restacks draw order so variant sits immediately above base.
+  See ADR-011 in `ARCHITECTURE.md`.
+
+- **Session 36 (2026-04-23) — eye variant 2D keyform grid.** Eye
+  meshes (`eyelash-l/r`, `eyewhite-l/r`, `irides-l/r`) get a
+  compound 2D keyform grid
+  (`ParamEye{L,R}Open × Param<Suffix>`) with 4 unique corner
+  `CFormGuid` entries so base AND variant can blink AND fade
+  simultaneously. XML shape reference-verified against Hiyori's
+  3×3 `PARAM_BUST_Y × PARAM_BODY_ANGLE_X` grid (`main.xml #1253`):
+  row-major with first binding varying fastest. Helper extraction:
+  `fitParabolaFromLowerEdge` and `computeClosedVertsForMesh`
+  shared by base and variant code paths but called with
+  independent inputs (variant's parabola fit on its OWN lower
+  edge, never base's). Also: variant-aware clip mask pairing —
+  variant iris clipped by its variant eyewhite, not the
+  faded-out base eyewhite. See ADR-011 + `feedback_no_sharing_eye_2d_grid.md`.
+
 ## Future directions (not scheduled)
 
 ### Eye-axis-aligned closure arcs (for drawn-in head tilts)

@@ -390,8 +390,8 @@ Current `cmo3writer.js` capabilities (updated after Session 16, 2026-04-17):
 | **ParamBrowAngle/Form**, **ParamEyeSmile** | ❌ Deferred |
 | **ParamHairSide** | ❌ Not applicable (Hiyori uses bone chains) |
 
-For implementation details see SESSION15_PROMPT.md (body), SESSION16_FINDINGS.md (face bindings),
-SESSION17_FINDINGS.md (mouth + eye closure pivot), PROGRESS.md (milestone tracker).
+For implementation details see `sessions/SESSION16_FINDINGS.md` (face bindings)
+and `sessions/SESSION17_FINDINGS.md` (mouth + eye closure pivot).
 
 ## Gap Analysis
 
