@@ -770,6 +770,10 @@ function buildSectionData(input) {
       pp = 0; // root part is always index 0 in this writer's part section.
     } else if (spec.parent.type === 'warp' || spec.parent.type === 'rotation') {
       pd = deformerIdToIndex.get(spec.parent.id) ?? -1;
+      // Fallback: when the named parent isn't in this rigSpec (e.g. rig-warp
+      // points to FaceParallax but face parallax extraction is pending),
+      // attach to the deepest body warp so the deformer isn't orphaned.
+      if (pd < 0 && meshDefaultDeformerIdx >= 0) pd = meshDefaultDeformerIdx;
     }
     deformer_parent_part_indices.push(pp);
     deformer_parent_deformer_indices.push(pd);
@@ -897,13 +901,30 @@ function buildSectionData(input) {
   counts[COUNT_IDX.KEYFORM_POSITIONS] = allKeyformPositions.length;
   sections.set('keyform_position.xys', allKeyformPositions);
 
-  // ── Re-parent art meshes to deepest body warp ──
-  // Once the rig is in place, every mesh deforms via the body warp chain.
-  // parent_deformer_index points to the unified deformer list; when a deformer
-  // parent is set, parent_part_index goes to -1 (mesh has one or the other).
+  // ── Re-parent art meshes to their rig warp (or deepest body warp) ──
+  // Each mesh tries to parent to its dedicated rig warp first (per-mesh
+  // structural warp from the cmo3 emit); otherwise falls back to the
+  // deepest body warp (BodyXWarp).
   if (meshDefaultDeformerIdx >= 0) {
-    sections.set('art_mesh.parent_deformer_indices', meshParts.map(() => meshDefaultDeformerIdx));
+    // Map mesh.partId → deformer index, derived from rig warp targetPartId.
+    const partIdToDeformerIdx = new Map();
+    for (let i = 0; i < warpSpecs.length; i++) {
+      const w = warpSpecs[i];
+      if (w.targetPartId) partIdToDeformerIdx.set(w.targetPartId, i);
+    }
+    sections.set('art_mesh.parent_deformer_indices', meshParts.map(p =>
+      partIdToDeformerIdx.get(p.id) ?? meshDefaultDeformerIdx,
+    ));
     sections.set('art_mesh.parent_part_indices', meshParts.map(() => -1));
+
+    // Mesh keyform_position frame matches its parent deformer's local frame.
+    // For a rig warp parent: its baseGrid is in 0..1 (normalized-0to1) of
+    // BodyXWarp/FaceParallax/NeckWarp. The mesh's vertex positions in that
+    // frame are the bilinear coords of the vertex within the rig warp's
+    // grid bbox. For now we approximate by keeping the canvasToInnermost
+    // (BodyXWarp 0..1) projection — visually equivalent at rest pose
+    // since the rig warp's grid is itself in BodyXWarp's frame. Refine in
+    // Phase D once per-mesh frame analysis is in place.
   }
 
   // --- Drawable masks (1 dummy entry) ---

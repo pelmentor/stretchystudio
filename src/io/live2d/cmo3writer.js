@@ -3089,11 +3089,46 @@ export async function generateCmo3(input) {
       const gxSpan = restGrid[warpCol * 2] - restGrid[0];
       const gySpan = restGrid[(warpRow * gW) * 2 + 1] - restGrid[1];
 
+      // Per-mesh rig warp spec for moc3 binary translator. Captures the
+      // SAME data the XML emission below produces, just in normalised form.
+      // Parent will be resolved at re-parenting time (face → FaceParallax,
+      // neck → NeckWarp, default → BodyXWarp).
+      const rigWarpSpec = {
+        id: `RigWarp_${sanitizedName}`,
+        name: `${pm.meshName} Warp`,
+        parent: { type: 'warp', id: 'BodyXWarp' }, // re-parenting may override
+        // moc3 translator uses this to set the mesh's parent_deformer_index
+        // to the rig warp instead of the deepest body warp. partId is the
+        // SS project node id; cmo3 path uses the same as the canonical
+        // mesh identity.
+        targetPartId: m.partId,
+        gridSize: { rows: warpRow, cols: warpCol },
+        baseGrid: new Float64Array(restGrid),
+        localFrame: 'normalized-0to1',
+        bindings: hasBinding
+          ? tagBinding.bindings.map(b => ({
+              parameterId: b.paramId ?? b.id ?? 'ParamOpacity',
+              keys: b.keys.slice(),
+              interpolation: 'LINEAR',
+            }))
+          : [{ parameterId: 'ParamOpacity', keys: [1], interpolation: 'LINEAR' }],
+        keyforms: [],
+        isVisible: true,
+        isLocked: false,
+        isQuadTransform: false,
+      };
+
       for (let ki = 0; ki < numKf; ki++) {
         // Generate grid positions: use shiftFn for bound params, rest for no-op
         const pos = (hasBinding && rigWarpKeyValues)
           ? tagBinding.shiftFn(restGrid, gW, gH, rigWarpKeyValues[ki], gxSpan, gySpan, meshCtx)
           : new Float64Array(restGrid);
+
+        rigWarpSpec.keyforms.push({
+          keyTuple: rigWarpKeyValues ? rigWarpKeyValues[ki].slice() : [1],
+          positions: new Float64Array(pos),
+          opacity: 1,
+        });
 
         const wdf = x.sub(rigKfsList, 'CWarpDeformerForm');
         const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
@@ -3124,7 +3159,18 @@ export async function generateCmo3(input) {
 
       // Store for re-parenting in section 3d. Face-parallax tags route to the single
       // FaceParallax warp; other tags route to Body X.
-      rigWarpTargetNodesToReparent.push({ node: rigWarpTargetNode, isFaceTag, isNeckTag });
+      rigWarpTargetNodesToReparent.push({
+        node: rigWarpTargetNode, isFaceTag, isNeckTag,
+        rigWarpSpecRef: rigWarpSpec, // for spec parent fix-up after reparent
+      });
+
+      // Tentative parent ahead of re-parenting; the re-parent block updates
+      // both the XML ref AND this spec's parent so moc3 sees the FINAL parent.
+      if (isFaceTag) rigWarpSpec.parent = { type: 'warp', id: 'FaceParallaxWarp' };
+      else if (isNeckTag) rigWarpSpec.parent = { type: 'warp', id: 'NeckWarp' };
+      else rigWarpSpec.parent = { type: 'warp', id: 'BodyXWarp' };
+
+      rigCollector.warpDeformers.push(rigWarpSpec);
     }
   }
 
