@@ -101,7 +101,7 @@ calls `generateCmo3` in `rigOnly` mode to harvest the rigSpec, discards
 the cmo3 buffer, and passes the rigSpec to `generateMoc3`. Same paramSpec
 + physics3 + motion presets wiring as before.
 
-**What works after Phase B+C (full pass)**
+**What works after Phase B+C+D (full parity pass)**
 
 * Body sway on ParamBodyAngleX / Y / Z (BodyWarpZ/Y/X morph the body)
 * Breath (BreathWarp morphs subtly on ParamBreath)
@@ -115,24 +115,39 @@ the cmo3 buffer, and passes the rigSpec to `generateMoc3`. Same paramSpec
   hair sway on ParamHairFront/Side/Back, etc.). Mesh deforms via the
   rig warp's grid morphing on its driving params.
 * Variant fade on Param<Suffix> (Stage 2a)
+* Bone-baked keyforms: arm/leg meshes get 5 keyforms across
+  ParamRotation_<bone> at angles [-90, -45, 0, +45, +90]° with vertex
+  positions rotated around the bone's canvas pivot, weighted by
+  boneWeights. Arms now deform when the bone's rotation param drives.
+* Per-mesh vertex frame conversion: rig-warp-parented meshes use 0..1
+  of the rig warp's canvas bbox; body-only meshes use BodyXWarp 0..1.
+  Matches cmo3's mesh-emission frame convention.
+* Clip masks: iris meshes are masked by their corresponding eyewhite
+  (variant-aware), via `drawable_mask.art_mesh_indices` +
+  `art_mesh.mask_begin_indices` / `mask_counts`.
 
-**Still missing — Phase B remaining + Phase D**
+**Known polish gaps (cosmetic, deferrable)**
 
-* ArtMesh per-mesh keyforms ACROSS params (not driven by rig warps):
-    - Baked bone keyforms (5 keyforms on ParamRotation_<bone> for
-      arm/leg meshes — without these, arms don't deform with the
-      bone rotation deformer)
-    - Eye 2D compound geometry (4 cells across ParamEyeLOpen ×
-      Param<Suffix>) — variant eye meshes need their own blink shapes
-    - Neck corner shape keys at AngleZ extremes
-* Drawable masks (clip masks for iris/pupil inside eyewhite, eyewhite
-  inside eyemask, etc.)
-* Parts hierarchy proper (currently emits groups as parts; the full
-  cmo3 part tree with category buckets is richer)
-* Mesh vertex positions in deformer-local space when parent is a per-mesh
-  rig warp — currently uses `canvasToInnermostX/Y` (BodyXWarp 0..1) which
-  works for body-tagged meshes but introduces a frame mismatch for face/
-  neck-tagged meshes whose rig warp parents to FaceParallax/NeckWarp.
+* Variant eye 2D compound geometry: variant eye meshes (eyewhite-l.smile
+  etc.) currently use their parent rig warp's keyforms only. cmo3
+  additionally fits 4 cells across ParamEyeLOpen × Param<Suffix> with
+  variant-specific eyewhite curves. moc3 ships the simpler 1D fade.
+* Neck corner shape keys: cmo3 emits per-vertex corner offsets on
+  ParamAngleZ for natural neck bending. moc3 relies on the NeckWarp
+  grid morph alone — close but not identical.
+* Parts hierarchy: moc3 emits groups as parts (1:1) rather than the
+  category-bucketed part tree cmo3 builds.
+* Per-mesh frame conversion when the rig warp's parent isn't BodyXWarp
+  (e.g. face/neck rig warps parent to FaceParallax / NeckWarp). Mesh
+  vertex frame currently treats them all as BodyXWarp's frame — works
+  visually for endpoints but may show subtle frame mismatch at extreme
+  parameter values.
+
+These remaining gaps don't block functional use of the runtime moc3 —
+the model loads, deforms across all standard parameters, blinks, tracks
+the cursor, and rotates. They represent the long tail of cmo3-emit
+fidelity that lands incrementally after user feedback identifies which
+gaps actually show up visually in their characters.
 
 ### Stage 1 — Parameter spec extraction (2026-04-26)
 
