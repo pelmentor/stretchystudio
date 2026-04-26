@@ -599,6 +599,114 @@ function buildSectionData(input) {
   counts[COUNT_IDX.WARP_DEFORMERS] = numWarpDeformers;
   counts[COUNT_IDX.ROTATION_DEFORMERS] = numRotationDeformers;
 
+  // ── Keyform binding system (deduplicated, matches cubism layout) ──
+  // Cubism uses heavy deduplication: each unique (paramId, keys) tuple
+  // becomes ONE binding shared across every band that uses it; objects
+  // sharing the same binding-set share the same band. This pass mirrors
+  // that — without it our band/binding counts come out 2× cubism's and
+  // the moc3 fails to load in the runtime.
+  //
+  // Pipeline:
+  //   1. Collect (paramId, keys) from every object → unique binding pool
+  //   2. For each object, look up its binding indices (deduped)
+  //   3. Group objects by their "binding profile" (canonical sorted list)
+  //      → each unique profile = one band
+  //   4. kfbi = expansion of bands' profiles (slot per binding-axis)
+  //   5. params own one slot per binding-using-this-param
+  //
+  /** @type {{paramId:string, keys:number[]}[]} */
+  const uniqueBindings = [];
+  const bindingHashToIdx = new Map();
+  const _bindHash = (pid, keys) => `${pid}|${keys.join(',')}`;
+  const _internBinding = (paramId, keys) => {
+    const h = _bindHash(paramId, keys);
+    if (bindingHashToIdx.has(h)) return bindingHashToIdx.get(h);
+    const idx = uniqueBindings.length;
+    uniqueBindings.push({ paramId, keys: keys.slice() });
+    bindingHashToIdx.set(h, idx);
+    return idx;
+  };
+
+  // Collect each object's binding indices.
+  // Objects are: art_meshes (in meshParts order), then deformers (in unified
+  // topo-sorted order — same as the deformer.* sections).
+  /** @type {number[][]} */
+  const meshObjectBindings = meshBindingPlan.map(plan =>
+    [_internBinding(plan.paramId, plan.keys)],
+  );
+  /** @type {number[][]} */
+  const deformerObjectBindings = allDeformerSpecs.map(spec =>
+    spec.bindings.map(b => _internBinding(b.parameterId, b.keys)),
+  );
+
+  // Group objects by canonical binding profile → unique bands.
+  // A "null" band (count=0) is reserved at index 0 — used by parts and
+  // any future objects without bindings (matches cubism's band[0]).
+  /** @type {{bindingIndices:number[]}[]} */
+  const bandPool = [{ bindingIndices: [] }]; // band 0 = null
+  const bandHashToIdx = new Map([['', 0]]);
+  const _profileHash = (idxs) => idxs.slice().sort((a, b) => a - b).join(',');
+  const _internBand = (bindingIndices) => {
+    if (bindingIndices.length === 0) return 0;
+    const h = _profileHash(bindingIndices);
+    if (bandHashToIdx.has(h)) return bandHashToIdx.get(h);
+    const idx = bandPool.length;
+    bandPool.push({ bindingIndices: bindingIndices.slice() });
+    bandHashToIdx.set(h, idx);
+    return idx;
+  };
+  const meshBandIndex = meshObjectBindings.map(b => _internBand(b));
+  const deformerBandIndex = deformerObjectBindings.map(b => _internBand(b));
+
+  // Per-binding key range — emit ONCE per unique binding.
+  const bindingKeysBegin = [];
+  const bindingKeysCount = [];
+  const flatKeys = [];
+  for (const b of uniqueBindings) {
+    bindingKeysBegin.push(flatKeys.length);
+    bindingKeysCount.push(b.keys.length);
+    for (const k of b.keys) flatKeys.push(k);
+  }
+
+  // Build keyform_binding_index by walking each band's binding indices.
+  // Each band's range in kfbi is contiguous; slots within a band match
+  // the band's binding-axis order.
+  const keyformBindingIndices = [];
+  const bandBegins = [];
+  const bandCounts = [];
+  for (const band of bandPool) {
+    bandBegins.push(keyformBindingIndices.length);
+    bandCounts.push(band.bindingIndices.length);
+    for (const bi of band.bindingIndices) keyformBindingIndices.push(bi);
+  }
+
+  // Per-parameter binding range: each active param owns ONE slot in kfbi
+  // (the first one referencing a binding that uses this param). Inactive
+  // params (no binding uses them) get begin=-1 (0xFFFFFFFF), count=0.
+  const paramKfbBegin = [];
+  const paramKfbCount = [];
+  for (const p of params) {
+    let foundSlot = -1;
+    for (let s = 0; s < keyformBindingIndices.length; s++) {
+      if (uniqueBindings[keyformBindingIndices[s]].paramId === p.id) {
+        foundSlot = s; break;
+      }
+    }
+    if (foundSlot >= 0) {
+      paramKfbBegin.push(foundSlot);
+      paramKfbCount.push(1);
+    } else {
+      paramKfbBegin.push(0xFFFFFFFF);
+      paramKfbCount.push(0);
+    }
+  }
+  sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
+  sections.set('parameter.keyform_binding_counts', paramKfbCount);
+
+  counts[COUNT_IDX.KEYFORM_BINDINGS] = uniqueBindings.length;
+  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = keyformBindingIndices.length;
+  counts[COUNT_IDX.KEYS] = flatKeys.length;
+
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)
   // DRAWABLE_MASKS count + section emit moved below — depends on
   // drawableMaskIndices populated during the iris→eyewhite scan.
@@ -701,113 +809,6 @@ function buildSectionData(input) {
   sections.set('parameter.repeats', paramList.map(p => p.repeat ?? false));
   sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 1));
 
-  // ── Keyform binding system (deduplicated, matches cubism layout) ──
-  // Cubism uses heavy deduplication: each unique (paramId, keys) tuple
-  // becomes ONE binding shared across every band that uses it; objects
-  // sharing the same binding-set share the same band. This pass mirrors
-  // that — without it our band/binding counts come out 2× cubism's and
-  // the moc3 fails to load in the runtime.
-  //
-  // Pipeline:
-  //   1. Collect (paramId, keys) from every object → unique binding pool
-  //   2. For each object, look up its binding indices (deduped)
-  //   3. Group objects by their "binding profile" (canonical sorted list)
-  //      → each unique profile = one band
-  //   4. kfbi = expansion of bands' profiles (slot per binding-axis)
-  //   5. params own one slot per binding-using-this-param
-  //
-  /** @type {{paramId:string, keys:number[]}[]} */
-  const uniqueBindings = [];
-  const bindingHashToIdx = new Map();
-  const _bindHash = (pid, keys) => `${pid}|${keys.join(',')}`;
-  const _internBinding = (paramId, keys) => {
-    const h = _bindHash(paramId, keys);
-    if (bindingHashToIdx.has(h)) return bindingHashToIdx.get(h);
-    const idx = uniqueBindings.length;
-    uniqueBindings.push({ paramId, keys: keys.slice() });
-    bindingHashToIdx.set(h, idx);
-    return idx;
-  };
-
-  // Collect each object's binding indices.
-  // Objects are: art_meshes (in meshParts order), then deformers (in unified
-  // topo-sorted order — same as the deformer.* sections).
-  /** @type {number[][]} */
-  const meshObjectBindings = meshBindingPlan.map(plan =>
-    [_internBinding(plan.paramId, plan.keys)],
-  );
-  /** @type {number[][]} */
-  const deformerObjectBindings = allDeformerSpecs.map(spec =>
-    spec.bindings.map(b => _internBinding(b.parameterId, b.keys)),
-  );
-
-  // Group objects by canonical binding profile → unique bands.
-  // A "null" band (count=0) is reserved at index 0 — used by parts and
-  // any future objects without bindings (matches cubism's band[0]).
-  /** @type {{bindingIndices:number[]}[]} */
-  const bandPool = [{ bindingIndices: [] }]; // band 0 = null
-  const bandHashToIdx = new Map([['', 0]]);
-  const _profileHash = (idxs) => idxs.slice().sort((a, b) => a - b).join(',');
-  const _internBand = (bindingIndices) => {
-    if (bindingIndices.length === 0) return 0;
-    const h = _profileHash(bindingIndices);
-    if (bandHashToIdx.has(h)) return bandHashToIdx.get(h);
-    const idx = bandPool.length;
-    bandPool.push({ bindingIndices: bindingIndices.slice() });
-    bandHashToIdx.set(h, idx);
-    return idx;
-  };
-  const meshBandIndex = meshObjectBindings.map(b => _internBand(b));
-  const deformerBandIndex = deformerObjectBindings.map(b => _internBand(b));
-
-  // Per-binding key range — emit ONCE per unique binding.
-  const bindingKeysBegin = [];
-  const bindingKeysCount = [];
-  const flatKeys = [];
-  for (const b of uniqueBindings) {
-    bindingKeysBegin.push(flatKeys.length);
-    bindingKeysCount.push(b.keys.length);
-    for (const k of b.keys) flatKeys.push(k);
-  }
-
-  // Build keyform_binding_index by walking each band's binding indices.
-  // Each band's range in kfbi is contiguous; slots within a band match
-  // the band's binding-axis order.
-  const keyformBindingIndices = [];
-  const bandBegins = [];
-  const bandCounts = [];
-  for (const band of bandPool) {
-    bandBegins.push(keyformBindingIndices.length);
-    bandCounts.push(band.bindingIndices.length);
-    for (const bi of band.bindingIndices) keyformBindingIndices.push(bi);
-  }
-
-  // Per-parameter binding range: each active param owns ONE slot in kfbi
-  // (the first one referencing a binding that uses this param). Inactive
-  // params (no binding uses them) get begin=-1 (0xFFFFFFFF), count=0.
-  const paramKfbBegin = [];
-  const paramKfbCount = [];
-  for (const p of paramList) {
-    let foundSlot = -1;
-    for (let s = 0; s < keyformBindingIndices.length; s++) {
-      if (uniqueBindings[keyformBindingIndices[s]].paramId === p.id) {
-        foundSlot = s; break;
-      }
-    }
-    if (foundSlot >= 0) {
-      paramKfbBegin.push(foundSlot);
-      paramKfbCount.push(1);
-    } else {
-      paramKfbBegin.push(0xFFFFFFFF);
-      paramKfbCount.push(0);
-    }
-  }
-  sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
-  sections.set('parameter.keyform_binding_counts', paramKfbCount);
-
-  counts[COUNT_IDX.KEYFORM_BINDINGS] = uniqueBindings.length;
-  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = keyformBindingIndices.length;
-  counts[COUNT_IDX.KEYS] = flatKeys.length;
 
   // --- Part Keyform sections ---
   // Draw orders: all 500.0 (Hiyori pattern — actual order via draw_order_group_object)
