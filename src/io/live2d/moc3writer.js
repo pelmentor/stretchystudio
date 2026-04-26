@@ -460,20 +460,45 @@ function buildSectionData(input) {
   counts[COUNT_IDX.POSITION_INDICES] = totalFlatIndices;
 
   // --- Per-mesh keyform/binding plan ---
-  // Three mutually-exclusive cases:
-  //   • Bone-weighted mesh (arms / legs / hands): 5 keyforms across
-  //     ParamRotation_<bone> at angles [-90, -45, 0, +45, +90] degrees.
-  //     Each keyform's vertex positions = rest rotated around the bone's
-  //     canvas pivot, weighted by boneWeights[i] per vertex. Mirrors
-  //     cmo3's baked-bone-keyform logic so arms actually rotate with the
-  //     bone in the runtime.
-  //   • Variant mesh (`foo.smile`): 2 keyforms on Param<Suffix> (opacity
-  //     0 at 0, recorded opacity at 1). Stage 2a fix.
-  //   • Other mesh: 1 keyform on ParamOpacity (rest pose at recorded
-  //     opacity).
+  //
+  // Mirrors cmo3writer's per-mesh keyform branches (around line 1005-3875).
+  // Order of checks matches cmo3writer:
+  //   1. Bone-baked (5 keyforms on ParamRotation_<bone>) — arms, legs.
+  //   2. Variant fade-in (2 keyforms on Param<Suffix>, opacity 0→recorded).
+  //   3. Base fade-out (2 keyforms on Param<Suffix>, opacity recorded→0)
+  //      for non-backdrop bases that have at least one variant sibling.
+  //   4. Default — 1 keyform on ParamOpacity[1.0] at recorded opacity.
+  //
+  // Verified by binary diff against cubism native export of shelby.cmo3:
+  //   ArtMesh10 (face = backdrop)            → 1 kf, ParamOpacity[1]
+  //   ArtMesh9  (face_smile = variant)       → 2 kf, ParamSmile[0,1]
+  //   ArtMesh18 (arm = bone-baked)           → 5 kf, ParamRotation_*Elbow
+  // Pre-fix moc3writer used uniform 2-kf-on-ParamOpacity[0,1] for every
+  // non-variant non-bone mesh; that diverges from cubism's pattern and
+  // (combined with how the runtime reads the binding) made face/ears/hair
+  // invisible at default ParamOpacity=1.
+  //
   // perVertexPositions (when present) drives art_mesh_keyform.keyform_position
-  // emission instead of the shared rest geometry, allowing arm rotation to
-  // deform meshes via per-keyform vertex offsets.
+  // emission instead of the shared rest geometry; only bone-baked sets it.
+  // Mesh-level eye closure (eyelash/eyewhite/irides 2 keyforms with closed
+  // vertex positions) is handled at the rig-warp layer in current SS, so
+  // this writer leaves those meshes at the default 1-keyform branch.
+  const BACKDROP_TAGS_SET_MOC3 = new Set([
+    'face',
+    'ears', 'ears-l', 'ears-r',
+    'front hair', 'back hair',
+  ]);
+  // Build base.partId → [variantSuffix] map for the base-fade-out branch.
+  const variantSuffixesByBasePartId = new Map();
+  for (const p of meshParts) {
+    if (!p.variantOf) continue;
+    const sfx = p.variantSuffix ?? p.variantRole ?? null;
+    if (!sfx) continue;
+    const list = variantSuffixesByBasePartId.get(p.variantOf) ?? [];
+    if (!list.includes(sfx)) list.push(sfx);
+    variantSuffixesByBasePartId.set(p.variantOf, list);
+  }
+
   const BONE_KEYFORM_ANGLES = [-90, -45, 0, 45, 90]; // matches paramSpec BAKED_BONE_ANGLES
   const meshBindingPlan = meshParts.map(part => {
     const mesh = part.mesh;
@@ -511,9 +536,10 @@ function buildSectionData(input) {
         perVertexPositions: perKeyformPositions,
       };
     }
-    const suffix = part.variantSuffix ?? null;
-    if (suffix) {
-      const pid = variantParamId(suffix);
+    // Variant mesh fade-in: opacity 0 at Param<Suffix>=0, recorded at =1.
+    const variantSuffix = part.variantSuffix ?? null;
+    if (variantSuffix) {
+      const pid = variantParamId(variantSuffix);
       if (pid) {
         return {
           paramId: pid,
@@ -523,17 +549,33 @@ function buildSectionData(input) {
         };
       }
     }
-    // Non-variant non-bone mesh: 2 keyforms on ParamOpacity at min (0)
-    // and max (1) with opacities [0, recorded]. Standard ParamOpacity fade
-    // semantics — at default ParamOpacity=1 the mesh shows at recorded
-    // opacity, at ParamOpacity=0 it fades out. Mixed 1-key / 2-key
-    // bindings on the same param produced an extra orphan slot in
-    // keyform_binding_index that the runtime read as a half-opacity
-    // overlay across the canvas; uniform 2-keyform avoids that.
+    // Base mesh with paired variant sibling — fade out 1→0 on the
+    // variant's param (so the variant takes over the layer). Backdrop
+    // tags (face, ears, front/back hair) skip this — they stay at
+    // opacity=1 always to provide the substrate every variant renders
+    // on top of (cmo3writer line ~942 `hasBaseFade && !isBackdrop`).
+    const tag = matchTag(part.name || part.id);
+    const isBackdrop = tag ? BACKDROP_TAGS_SET_MOC3.has(tag) : false;
+    const baseSuffixes = variantSuffixesByBasePartId.get(part.id);
+    const baseFadeSuffix = baseSuffixes && baseSuffixes.length > 0 ? baseSuffixes[0] : null;
+    if (baseFadeSuffix && !isBackdrop) {
+      const pid = variantParamId(baseFadeSuffix);
+      if (pid) {
+        return {
+          paramId: pid,
+          keys: [0, 1],
+          keyformOpacities: [part.opacity ?? 1, 0],
+          perVertexPositions: null,
+        };
+      }
+    }
+    // Default: 1 keyform on ParamOpacity[1.0] at recorded opacity.
+    // Matches cubism's "rest only" pattern (single CFormGuid bound to
+    // a no-op ParamOpacity[1] keyform-binding).
     return {
       paramId: 'ParamOpacity',
-      keys: [0, 1],
-      keyformOpacities: [0, part.opacity ?? 1],
+      keys: [1],
+      keyformOpacities: [part.opacity ?? 1],
       perVertexPositions: null,
     };
   });
@@ -651,6 +693,39 @@ function buildSectionData(input) {
     spec.bindings.map(b => _internBinding(b.parameterId, b.keys)),
   );
 
+  // ── Reorder uniqueBindings to be contiguous-by-param (cubism convention) ──
+  // `parameter.keyform_binding_begin_indices` is a BINDING index (into
+  // keyform_bindings[]), and the runtime reads `kfb_begin..kfb_begin+kfb_count`
+  // expecting all bindings for the same param to be consecutive. Verified by
+  // binary diff against cubism native: ParamAngleX@idx0 has kfb_begin=0,
+  // ParamAngleY@idx1 has kfb_begin=1, ..., ParamOpacity@idx29 has kfb_begin=25.
+  // Without this reordering, kfb_begin pointed at the wrong binding and the
+  // model loaded but rendered nothing (or rendered with the wrong param
+  // driving each binding).
+  const _paramOrder = new Map();
+  params.forEach((p, i) => _paramOrder.set(p.id, i));
+  const _sortedBindings = uniqueBindings
+    .map((b, oldIdx) => ({
+      b, oldIdx,
+      // Inactive params (no binding entry uses them) sort to the end —
+      // shouldn't happen in practice but keeps things deterministic.
+      pOrder: _paramOrder.get(b.paramId) ?? Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((a, b) => a.pOrder - b.pOrder || a.oldIdx - b.oldIdx);
+  const _oldToNewBinding = new Array(uniqueBindings.length);
+  for (let newIdx = 0; newIdx < _sortedBindings.length; newIdx++) {
+    _oldToNewBinding[_sortedBindings[newIdx].oldIdx] = newIdx;
+  }
+  uniqueBindings.length = 0;
+  for (const s of _sortedBindings) uniqueBindings.push(s.b);
+  // Remap each object's binding-index list to use the new ordering.
+  for (const arr of meshObjectBindings) {
+    for (let i = 0; i < arr.length; i++) arr[i] = _oldToNewBinding[arr[i]];
+  }
+  for (const arr of deformerObjectBindings) {
+    for (let i = 0; i < arr.length; i++) arr[i] = _oldToNewBinding[arr[i]];
+  }
+
   // Group objects by canonical binding profile → unique bands.
   // A "null" band (count=0) is reserved at index 0 — used by parts and
   // any future objects without bindings (matches cubism's band[0]).
@@ -692,23 +767,29 @@ function buildSectionData(input) {
     for (const bi of band.bindingIndices) keyformBindingIndices.push(bi);
   }
 
-  // Per-parameter binding range: each active param owns ONE slot in kfbi
-  // (the first one referencing a binding that uses this param). Inactive
-  // params (no binding uses them) get begin=-1 (0xFFFFFFFF), count=0.
+  // Per-parameter binding range — index INTO uniqueBindings[], not into kfbi.
+  // Verified vs cubism: ParamAngleX@params[0] has kfb_begin=0 and the binding
+  // at uniqueBindings[0] is ParamAngleX[-30,0,30]. Earlier code emitted a slot
+  // index in keyform_binding_indices[] here, which is a different array; the
+  // SDK then routed param values to the wrong binding and nothing animated.
+  // Reordering above guarantees a param's bindings are contiguous, so this
+  // is a single contiguous range.
   const paramKfbBegin = [];
   const paramKfbCount = [];
   for (const p of params) {
-    let foundSlot = -1;
-    for (let s = 0; s < keyformBindingIndices.length; s++) {
-      if (uniqueBindings[keyformBindingIndices[s]].paramId === p.id) {
-        foundSlot = s; break;
+    let begin = -1;
+    let count = 0;
+    for (let bi = 0; bi < uniqueBindings.length; bi++) {
+      if (uniqueBindings[bi].paramId === p.id) {
+        if (begin === -1) begin = bi;
+        count++;
       }
     }
-    if (foundSlot >= 0) {
-      paramKfbBegin.push(foundSlot);
-      paramKfbCount.push(1);
+    if (begin >= 0) {
+      paramKfbBegin.push(begin);
+      paramKfbCount.push(count);
     } else {
-      paramKfbBegin.push(0xFFFFFFFF);
+      paramKfbBegin.push(-1); // signed -1 — moc3 stores as 0xFFFFFFFF on the wire
       paramKfbCount.push(0);
     }
   }
