@@ -547,10 +547,37 @@ function buildSectionData(input) {
   const numWarpDeformers = warpSpecs.length;
   const numRotationDeformers = rotationSpecs.length;
   const numDeformers = numWarpDeformers + numRotationDeformers;
-  // Unified deformer order: warps first, rotations after. Index in this array
-  // = the deformer's index in the moc3 DEFORMERS section (and in the
-  // parent_deformer_indices references).
-  const allDeformerSpecs = [...warpSpecs, ...rotationSpecs];
+  // Unified deformer order: topo-sorted so each deformer's parent appears
+  // earlier in the array than the child. Cubism's runtime processes the
+  // deformer list in order; out-of-order parents would leave a child's
+  // transformation un-anchored when first encountered.
+  //
+  // Each entry remembers its `kind` (warp / rotation) and `srcIndex` (its
+  // position in the original warpSpecs / rotationSpecs array — used as
+  // `specific_index` so warp_deformer.* / rotation_deformer.* sections
+  // stay in their original natural order).
+  const _unsorted = [
+    ...warpSpecs.map((s, i) => ({ kind: 'warp', srcIndex: i, spec: s })),
+    ...rotationSpecs.map((s, i) => ({ kind: 'rotation', srcIndex: i, spec: s })),
+  ];
+  const _byId = new Map();
+  for (const e of _unsorted) _byId.set(e.spec.id, e);
+  const _ordered = [];
+  const _placed = new Set();
+  const _visit = (e) => {
+    if (_placed.has(e.spec.id)) return;
+    const p = e.spec.parent;
+    if (p && (p.type === 'warp' || p.type === 'rotation')) {
+      const parentEntry = _byId.get(p.id);
+      if (parentEntry) _visit(parentEntry);
+    }
+    _placed.add(e.spec.id);
+    _ordered.push(e);
+  };
+  for (const e of _unsorted) _visit(e);
+  const allDeformerSpecs = _ordered.map(e => e.spec);
+  const allDeformerKinds = _ordered.map(e => e.kind);
+  const allDeformerSrcIndices = _ordered.map(e => e.srcIndex);
   const deformerIdToIndex = new Map();
   for (let di = 0; di < allDeformerSpecs.length; di++) {
     deformerIdToIndex.set(allDeformerSpecs[di].id, di);
@@ -877,8 +904,6 @@ function buildSectionData(input) {
   const deformer_parent_deformer_indices = [];
   const deformer_types = [];
   const deformer_specific_indices = [];
-  let _warpIdx = 0;
-  let _rotIdx = 0;
   for (let d = 0; d < allDeformerSpecs.length; d++) {
     const spec = allDeformerSpecs[d];
     deformer_ids.push(spec.id);
@@ -897,13 +922,12 @@ function buildSectionData(input) {
     }
     deformer_parent_part_indices.push(pp);
     deformer_parent_deformer_indices.push(pd);
-    if (d < numWarpDeformers) {
-      deformer_types.push(0); // 0 = warp
-      deformer_specific_indices.push(_warpIdx++);
-    } else {
-      deformer_types.push(1); // 1 = rotation
-      deformer_specific_indices.push(_rotIdx++);
-    }
+    // Type + specific_index from the topo-sorted entries — keeps
+    // warp_deformer.* / rotation_deformer.* sections in their original
+    // natural order (creation order in rigSpec) while the umbrella
+    // section can be in a different (parent-before-child) order.
+    deformer_types.push(allDeformerKinds[d] === 'warp' ? 0 : 1);
+    deformer_specific_indices.push(allDeformerSrcIndices[d]);
   }
   sections.set('deformer.ids', deformer_ids);
   sections.set('deformer.keyform_binding_band_indices', deformer_band_indices);
