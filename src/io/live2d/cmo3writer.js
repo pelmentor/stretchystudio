@@ -29,6 +29,7 @@ import { variantParamId } from '../psdOrganizer.js';
 import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
 import { emptyRigSpec } from './rig/rigSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
+import { buildGroupRotationSpec } from './rig/rotationDeformers.js';
 import {
   VERSION_PIS,
   IMPORT_PIS,
@@ -1611,6 +1612,23 @@ export async function generateCmo3(input) {
     deformerParamMap.set(g.id, {
       paramId: rotParamId, min: DEFORMER_ANGLE_MIN, max: DEFORMER_ANGLE_MAX,
     });
+
+    // Mirror the group rotation spec into rigCollector. Initial parent is
+    // ROOT (re-parenting in section 3d will move it under Body X for non-leg
+    // groups). The rigCollector reflects the current parent at push time;
+    // a fix-up pass after re-parenting updates rigCollector to match.
+    const _gWorldOrigin = deformerWorldOrigins.get(g.id) ?? { x: 0, y: 0 };
+    const { spec: _grpRotSpec } = buildGroupRotationSpec({
+      id: `GroupRotation_${g.id}`,
+      name: g.name || g.id,
+      paramId: rotParamId,
+      pivotCanvas: { x: _gWorldOrigin.x, y: _gWorldOrigin.y },
+    });
+    // Initial parent override: if g has a parent group with a deformer, use it
+    if (g.parent && groupDeformerGuids.has(g.parent)) {
+      _grpRotSpec.parent = { type: 'rotation', id: `GroupRotation_${g.parent}` };
+    }
+    rigCollector.rotationDeformers.push(_grpRotSpec);
 
     // CoordType for this deformer (Canvas coordinates)
     const [coordDf, pidCoordDf] = x.shared('CoordType');
@@ -3237,6 +3255,10 @@ export async function generateCmo3(input) {
     // canvasToBodyXX/Y defined before section 3c.
     const pidReparentTarget = pidBodyXGuid || pidBreathGuid; // fallback if no Body X
 
+    // Fix-up rigCollector: keep parent references in sync with the XML
+    // re-parenting below. moc3 translator reads spec.parent at emission
+    // time, so the spec must reflect the FINAL parent (post-reparenting).
+    const rigReparentTargetId = pidBodyXGuid ? 'BodyXWarp' : 'BreathWarp';
     for (const [gid, targetNode] of rotDeformerTargetNodes) {
       const group = groupMap.get(gid);
       if (group && LEG_ROLES.has(group.boneRole)) continue;
@@ -3244,6 +3266,13 @@ export async function generateCmo3(input) {
       // Re-parent ROOT-targeting deformers to Body X (or Breath)
       if (targetNode.attrs['xs.ref'] === pidDeformerRoot) {
         targetNode.attrs['xs.ref'] = pidReparentTarget;
+        // Keep rigCollector in sync.
+        const rigSpec = rigCollector.rotationDeformers.find(
+          s => s.id === `GroupRotation_${gid}`,
+        );
+        if (rigSpec && rigSpec.parent.type === 'root') {
+          rigSpec.parent = { type: 'warp', id: rigReparentTargetId };
+        }
       }
 
       // Convert origin for ALL non-leg deformers using world position → correct space (pixels or 0..1)
