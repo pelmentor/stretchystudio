@@ -358,8 +358,11 @@ function buildSectionData(input) {
 
   // Collect parts (groups → Live2D Parts)
   const groups = project.nodes.filter(n => n.type === 'group');
-  // Always have at least one root part
-  const partNodes = groups.length > 0 ? groups : [{ id: 'PartRoot', name: 'Root', parent: null, opacity: 1, visible: true }];
+  // Cubism's runtime expects an explicit `__RootPart__` (parent=-1) at
+  // index 0 with all groups hanging off it. Without this top-level entry
+  // the part hierarchy is malformed and the SDK rejects the file.
+  const ROOT_PART = { id: '__RootPart__', name: 'Root', parent: null, opacity: 1, visible: true };
+  const partNodes = [ROOT_PART, ...groups];
 
   // Collect art meshes (parts with meshes → Live2D ArtMeshes).
   // Sort by draw_order (descending) to maintain correct depth ordering (upstream fix).
@@ -617,9 +620,10 @@ function buildSectionData(input) {
   sections.set('part.keyform_counts', partNodes.map(() => 1));
   sections.set('part.visibles', partNodes.map(p => p.visible !== false));
   sections.set('part.enables', partNodes.map(() => true));
-  sections.set('part.parent_part_indices', partNodes.map(p => {
+  sections.set('part.parent_part_indices', partNodes.map((p, i) => {
+    if (i === 0) return -1;                                        // __RootPart__
     if (p.parent && partIdMap.has(p.parent)) return partIdMap.get(p.parent);
-    return -1;
+    return 0;                                                       // group with no parent → root part
   }));
 
   // --- ArtMesh sections ---
@@ -922,10 +926,14 @@ function buildSectionData(input) {
     deformer_band_indices.push(deformerBandIndex[d]);
     deformer_visibles.push(spec.isVisible !== false);
     deformer_enables.push(true);
-    let pp = -1, pd = -1;
-    if (spec.parent.type === 'root' || spec.parent.type === 'part') {
-      pp = 0; // root part is always index 0 in this writer's part section.
-    } else if (spec.parent.type === 'warp' || spec.parent.type === 'rotation') {
+    // Cubism's runtime expects parent_part_index >= 0 for every deformer
+    // (used for the drawing-tree organisation, separate from the
+    // transformation-chain parent_deformer_index). Default to 0 (root
+    // part) when no specific group ownership is encoded; warp/rotation
+    // parent fills parent_deformer_index in addition.
+    let pp = 0;
+    let pd = -1;
+    if (spec.parent.type === 'warp' || spec.parent.type === 'rotation') {
       pd = deformerIdToIndex.get(spec.parent.id) ?? -1;
       // Fallback: when the named parent isn't in this rigSpec (e.g. rig-warp
       // points to FaceParallax but face parallax extraction is pending),
