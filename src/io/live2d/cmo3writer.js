@@ -3107,7 +3107,9 @@ export async function generateCmo3(input) {
         localFrame: 'normalized-0to1',
         bindings: hasBinding
           ? tagBinding.bindings.map(b => ({
-              parameterId: b.paramId ?? b.id ?? 'ParamOpacity',
+              // TAG_PARAM_BINDINGS stores the param id as `desc`; `pid` is
+              // the XML reference (only useful inside cmo3 emission).
+              parameterId: b.desc ?? 'ParamOpacity',
               keys: b.keys.slice(),
               interpolation: 'LINEAR',
             }))
