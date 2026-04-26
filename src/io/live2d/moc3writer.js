@@ -872,10 +872,32 @@ function buildSectionData(input) {
       if (w.targetPartId && w.canvasBbox) rigWarpByPartId.set(w.targetPartId, w);
     }
   }
+  // Resolve a mesh's owning group rotation deformer (for pivot-relative
+  // frame). Mirrors the parent_deformer_indices logic so frames match
+  // their parent.
+  const _groupRotationPivot = (part) => {
+    const jointBoneId = part.mesh?.jointBoneId;
+    if (jointBoneId && part.mesh?.boneWeights) {
+      const boneGroup = groups.find(g => g.id === jointBoneId);
+      const armGroupId = boneGroup?.parent;
+      if (armGroupId) {
+        const armGroup = groups.find(g => g.id === armGroupId);
+        if (armGroup?.transform) return { x: armGroup.transform.pivotX ?? 0, y: armGroup.transform.pivotY ?? 0 };
+      }
+    }
+    if (part.parent) {
+      const ownGroup = groups.find(g => g.id === part.parent);
+      if (ownGroup?.transform && rigSpec?.rotationDeformers?.some(r => r.id === `GroupRotation_${part.parent}`)) {
+        return { x: ownGroup.transform.pivotX ?? 0, y: ownGroup.transform.pivotY ?? 0 };
+      }
+    }
+    return null;
+  };
   const allKeyformPositions = [];
   for (const part of meshParts) {
     if (!part.mesh?.vertices) continue;
     const rigWarp = rigWarpByPartId.get(part.id);
+    const rotPivot = !rigWarp ? _groupRotationPivot(part) : null;
     for (const vert of part.mesh.vertices) {
       if (rigWarp) {
         // 0..1 of rig warp's canvas bbox (matches cmo3 deformer-local for
@@ -883,6 +905,11 @@ function buildSectionData(input) {
         const bb = rigWarp.canvasBbox;
         allKeyformPositions.push((vert.x - bb.minX) / bb.W);
         allKeyformPositions.push((vert.y - bb.minY) / bb.H);
+      } else if (rotPivot) {
+        // Pivot-relative: canvas pixel offsets from parent rotation's pivot,
+        // PPU-normalised for the moc3 shader convention.
+        allKeyformPositions.push((vert.x - rotPivot.x) / ppu);
+        allKeyformPositions.push((vert.y - rotPivot.y) / ppu);
       } else if (useDeformerFrame) {
         allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
         allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
@@ -1111,15 +1138,49 @@ function buildSectionData(input) {
   // independent of the deformer chain that handles transformation. cmo3
   // sets meshSrc.parentGuid the same way regardless of any deformer parent.
   if (meshDefaultDeformerIdx >= 0) {
-    // Map mesh.partId → deformer index, derived from rig warp targetPartId.
+    // Map mesh.partId → UNIFIED deformer index (post-topo-sort).
+    // art_mesh.parent_deformer_indices references the umbrella deformer.*
+    // array — using warpSpecs's natural index here pointed meshes at the
+    // wrong deformer entirely (severe misrendering with arms swapped, body
+    // collapsed). Resolving via deformerIdToIndex keeps the topo-sorted
+    // order honoured.
     const partIdToDeformerIdx = new Map();
-    for (let i = 0; i < warpSpecs.length; i++) {
-      const w = warpSpecs[i];
-      if (w.targetPartId) partIdToDeformerIdx.set(w.targetPartId, i);
+    for (const w of warpSpecs) {
+      if (!w.targetPartId) continue;
+      const ui = deformerIdToIndex.get(w.id);
+      if (ui != null) partIdToDeformerIdx.set(w.targetPartId, ui);
     }
-    sections.set('art_mesh.parent_deformer_indices', meshParts.map(p =>
-      partIdToDeformerIdx.get(p.id) ?? meshDefaultDeformerIdx,
-    ));
+    // Map groupId → group rotation deformer's UNIFIED index. Bone-baked
+    // meshes (arms / legs) parent to their bone's parent group's rotation
+    // deformer (matches cmo3's `dfOwner = boneGroup.parent`); non-rig-warp
+    // meshes parent to their own group's rotation deformer when one exists.
+    const groupIdToRotIdx = new Map();
+    for (const r of rotationSpecs) {
+      if (!r.id?.startsWith('GroupRotation_')) continue;
+      const gid = r.id.substring('GroupRotation_'.length);
+      const ui = deformerIdToIndex.get(r.id);
+      if (ui != null) groupIdToRotIdx.set(gid, ui);
+    }
+    sections.set('art_mesh.parent_deformer_indices', meshParts.map(p => {
+      // 1. Mesh has its own rig warp → parent to it.
+      const fromRigWarp = partIdToDeformerIdx.get(p.id);
+      if (fromRigWarp != null) return fromRigWarp;
+      // 2. Bone-baked mesh → bone's parent group's rotation deformer.
+      const jointBoneId = p.mesh?.jointBoneId;
+      if (jointBoneId && p.mesh?.boneWeights) {
+        const boneGroup = groups.find(g => g.id === jointBoneId);
+        const armGroupId = boneGroup?.parent;
+        if (armGroupId && groupIdToRotIdx.has(armGroupId)) {
+          return groupIdToRotIdx.get(armGroupId);
+        }
+      }
+      // 3. Mesh's own group's rotation deformer.
+      if (p.parent && groupIdToRotIdx.has(p.parent)) {
+        return groupIdToRotIdx.get(p.parent);
+      }
+      // 4. Fallback: deepest body warp (root of the chain).
+      return meshDefaultDeformerIdx;
+    }));
     // Re-emit parent_part_indices to overwrite an earlier set; mesh keeps
     // its group as part parent.
     sections.set('art_mesh.parent_part_indices', meshParts.map(p => {
