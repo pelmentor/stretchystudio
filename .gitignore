@@ -55,9 +55,15 @@ _start.bat
 *_live2d*.zip
 girl.png
 waifu.png
-shelby.png
+shelby*.png
+shelby*.can3
+*.can3
 *.blend
 *.blend1
+
+# Local test export folders (user-side scratch space, not source)
+New Folder/
+New Folder_*/
 
 # Reference media — videos / extracted frames / stray downloads (too large,
 # often proprietary Hiyori/commercial Live2D samples).
