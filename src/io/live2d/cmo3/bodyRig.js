@@ -14,6 +14,7 @@
 
 import { uuid } from '../xmlbuilder.js';
 import { emitSingleParamKfGrid, emitStructuralWarp } from './deformerEmit.js';
+import { buildNeckWarpSpec } from '../rig/warpDeformers.js';
 
 /**
  * Emit the Neck Warp (CWarpDeformerSource, 6×6 grid, 3 keyforms on
@@ -49,76 +50,40 @@ export function emitNeckWarp(x, ctx) {
 
   if (!(pidParamAngleZ && neckUnionBbox && pidBodyXGuid)) return null;
 
-  const nwCol = 5, nwRow = 5;               // 6×6 control points
-  const nwGW = nwCol + 1, nwGH = nwRow + 1;
-  const nwGridPts = nwGW * nwGH;
-
-  // --- Structural chain integration: target NeckWarp to GroupRotation_neck if possible ---
+  // ── Structural chain integration ──
+  // When the neck group has its own rotation deformer (pre-emitted in the
+  // group-rotation pass), the warp parents to it and works in pivot-relative
+  // pixels. Otherwise it parents to the Body X Warp in normalised 0..1 space.
   const neckGroupRotPid = neckGroupId && groupDeformerGuids.get(neckGroupId);
   const neckGroupPivot = neckGroupId && deformerWorldOrigins.get(neckGroupId);
-  const isUnderRotation = !!neckGroupRotPid;
 
-  // Rest grid: pixel offsets if under rotation, 0..1 if under structural warp (Body X)
-  const nwRestGrid = new Float64Array(nwGridPts * 2);
-  for (let r = 0; r < nwGH; r++) {
-    for (let c = 0; c < nwGW; c++) {
-      const idx = (r * nwGW + c) * 2;
-      const cx = neckUnionBbox.minX + c * neckUnionBbox.W / nwCol;
-      const cy = neckUnionBbox.minY + r * neckUnionBbox.H / nwRow;
-      if (isUnderRotation) {
-        nwRestGrid[idx]     = cx - neckGroupPivot.x;
-        nwRestGrid[idx + 1] = cy - neckGroupPivot.y;
-      } else {
-        nwRestGrid[idx]     = canvasToBodyXX(cx);
-        nwRestGrid[idx + 1] = canvasToBodyXY(cy);
-      }
-    }
-  }
-  // Span for shift calculation: should use pixel span if parent is rotation
-  const nwSpanX = isUnderRotation
-    ? neckUnionBbox.W
-    : nwRestGrid[(nwGW - 1) * 2] - nwRestGrid[0];
+  // Build the data spec via the shared rig builder. moc3writer will consume
+  // the same builder once the binary translator lands.
+  const { spec, debug } = buildNeckWarpSpec({
+    neckUnionBbox,
+    parentType: neckGroupRotPid ? 'rotation' : 'warp',
+    // The id is unused on the cmo3 side (we use the XML pid). Pass a stable
+    // string so the spec is internally consistent for future moc3 lookup.
+    parentDeformerId: neckGroupRotPid ? `GroupRotation_${neckGroupId}` : 'BodyXWarp',
+    parentPivotCanvas: neckGroupRotPid ? neckGroupPivot : null,
+    canvasToBodyXX, canvasToBodyXY,
+  });
 
-  // 3 keyforms on ParamAngleZ: -30, 0, +30.
-  // At ±30, top row shifts in X by NECK_TILT_FRAC * nwSpanX_bx.
-  // Row gradient: sin(π·(1 - rf) / 2) — 1 at top row, 0 at bottom row.
-  const NECK_TILT_FRAC = 0.08;
-  if (rigDebugLog) {
-    rigDebugLog.neckWarp = {
-      NECK_TILT_FRAC,
-      gridCols: nwCol + 1, gridRows: nwRow + 1,
-      spanX: nwSpanX,
-      maxShiftX: NECK_TILT_FRAC * nwSpanX,
-      parentDeformer: isUnderRotation ? 'GroupRotation_neck' : 'Body X Warp',
-      note: `top row shift at ParamAngleZ = +30 in ${isUnderRotation ? 'pixel' : '0..1'} space`,
-    };
-  }
-  const nwKeys = [-30, 0, 30];
-  const nwGridPositions = [];
-  for (const k of nwKeys) {
-    const pos = new Float64Array(nwRestGrid);
-    if (k !== 0) {
-      const sign = k / 30;
-      for (let r = 0; r < nwGH; r++) {
-        const rf = r / (nwGH - 1);
-        const gradient = Math.sin(Math.PI * (1 - rf) / 2);
-        if (gradient === 0) continue;
-        for (let c = 0; c < nwGW; c++) {
-          const idx = (r * nwGW + c) * 2;
-          pos[idx] += sign * NECK_TILT_FRAC * gradient * nwSpanX;
-        }
-      }
-    }
-    nwGridPositions.push(pos);
-  }
+  if (rigDebugLog) rigDebugLog.neckWarp = debug;
 
+  // ── XML emission from the spec ──
   const [, pidNwGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'NeckWarp' });
-  const { pidKfg: pidNwKfg, formGuids: nwFormGuids } =
-    emitSingleParamKfGrid(x, pidParamAngleZ, nwKeys, 'ParamAngleZ_Neck');
+  const angleZBinding = spec.bindings[0];
+  const { pidKfg: pidNwKfg, formGuids: nwFormGuids } = emitSingleParamKfGrid(
+    x, pidParamAngleZ, angleZBinding.keys, 'ParamAngleZ_Neck',
+  );
+  const gridPositions = spec.keyforms.map(kf => kf.positions);
   const nwTarget = neckGroupRotPid || pidBodyXGuid;
-  emitStructuralWarp(x, emitCtx,
-    'Neck Warp', 'NeckWarp', nwCol, nwRow,
-    pidNwGuid, nwTarget, pidNwKfg, pidCoord, nwFormGuids, nwGridPositions);
+  emitStructuralWarp(
+    x, emitCtx,
+    spec.name, spec.id, spec.gridSize.cols, spec.gridSize.rows,
+    pidNwGuid, nwTarget, pidNwKfg, pidCoord, nwFormGuids, gridPositions,
+  );
 
   return pidNwGuid;
 }
