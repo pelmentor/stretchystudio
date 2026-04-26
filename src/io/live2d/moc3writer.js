@@ -610,7 +610,9 @@ function buildSectionData(input) {
   // --- Part sections ---
   sections.set('part.ids', partNodes.map(p => p.id));
   // Parts use null bands (count=0) at indices after the mesh bands
-  sections.set('part.keyform_binding_band_indices', partNodes.map((_, j) => numArtMeshes + j));
+  // All parts use the null band (band 0, count=0) — parts only carry
+  // draw_order keyforms (1 per part), no parameter-driven bindings.
+  sections.set('part.keyform_binding_band_indices', partNodes.map(() => 0));
   sections.set('part.keyform_begin_indices', partNodes.map((_, i) => i));
   sections.set('part.keyform_counts', partNodes.map(() => 1));
   sections.set('part.visibles', partNodes.map(p => p.visible !== false));
@@ -623,7 +625,9 @@ function buildSectionData(input) {
   // --- ArtMesh sections ---
   sections.set('art_mesh.ids', meshParts.map((p, i) => `ArtMesh${i}`));
   // Each mesh gets its own binding band (band i → mesh i)
-  sections.set('art_mesh.keyform_binding_band_indices', meshParts.map((_, i) => i));
+  // Each mesh references its band — bands are deduped in `bandPool` so
+  // multiple meshes with identical (paramId, keys) share the same index.
+  sections.set('art_mesh.keyform_binding_band_indices', meshBandIndex);
   // Variable-length keyform layout — see meshBindingPlan above. Variant meshes
   // get 2 keyforms (opacity 0/1 across Param<Suffix>); others stay at 1.
   sections.set('art_mesh.keyform_begin_indices', meshKeyformBeginIndex);
@@ -693,79 +697,111 @@ function buildSectionData(input) {
   sections.set('parameter.repeats', paramList.map(p => p.repeat ?? false));
   sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 1));
 
-  // ── Unified keyform binding system (meshes + deformers) ──
-  // Each "binding" maps a parameter axis to a list of key values. The owner
-  // (mesh / deformer) declares one binding per axis; together the owner's
-  // bindings define the cross-product of keyform cells. ParamOpacity owns
-  // non-variant mesh bindings; Param<Suffix> owns variant mesh bindings;
-  // ParamBodyAngleX/Y/Z + ParamBreath own the body-warp deformer bindings;
-  // ParamAngleZ owns face rotation; etc.
-  /** @type {{paramId:string, keys:number[], ownerKind:string, ownerIdx:number, axisIdx:number}[]} */
-  const allBindings = [];
-  // Mesh bindings — same plan as before, just added to the unified list.
-  for (let m = 0; m < meshBindingPlan.length; m++) {
-    const plan = meshBindingPlan[m];
-    allBindings.push({
-      paramId: plan.paramId, keys: plan.keys,
-      ownerKind: 'mesh', ownerIdx: m, axisIdx: 0,
-    });
-  }
-  // Deformer bindings — one per axis per deformer (typical: 1 axis).
-  /** @type {{begin:number, count:number}[]} */
-  const deformerBindingRanges = [];
-  for (let d = 0; d < allDeformerSpecs.length; d++) {
-    const spec = allDeformerSpecs[d];
-    const begin = allBindings.length;
-    for (let a = 0; a < spec.bindings.length; a++) {
-      const b = spec.bindings[a];
-      allBindings.push({
-        paramId: b.parameterId, keys: b.keys,
-        ownerKind: d < numWarpDeformers ? 'warp' : 'rotation',
-        ownerIdx: d < numWarpDeformers ? d : d - numWarpDeformers,
-        axisIdx: a,
-      });
-    }
-    deformerBindingRanges.push({ begin, count: spec.bindings.length });
-  }
+  // ── Keyform binding system (deduplicated, matches cubism layout) ──
+  // Cubism uses heavy deduplication: each unique (paramId, keys) tuple
+  // becomes ONE binding shared across every band that uses it; objects
+  // sharing the same binding-set share the same band. This pass mirrors
+  // that — without it our band/binding counts come out 2× cubism's and
+  // the moc3 fails to load in the runtime.
+  //
+  // Pipeline:
+  //   1. Collect (paramId, keys) from every object → unique binding pool
+  //   2. For each object, look up its binding indices (deduped)
+  //   3. Group objects by their "binding profile" (canonical sorted list)
+  //      → each unique profile = one band
+  //   4. kfbi = expansion of bands' profiles (slot per binding-axis)
+  //   5. params own one slot per binding-using-this-param
+  //
+  /** @type {{paramId:string, keys:number[]}[]} */
+  const uniqueBindings = [];
+  const bindingHashToIdx = new Map();
+  const _bindHash = (pid, keys) => `${pid}|${keys.join(',')}`;
+  const _internBinding = (paramId, keys) => {
+    const h = _bindHash(paramId, keys);
+    if (bindingHashToIdx.has(h)) return bindingHashToIdx.get(h);
+    const idx = uniqueBindings.length;
+    uniqueBindings.push({ paramId, keys: keys.slice() });
+    bindingHashToIdx.set(h, idx);
+    return idx;
+  };
 
-  // Per-binding key range — flat keys array, one entry per param value.
+  // Collect each object's binding indices.
+  // Objects are: art_meshes (in meshParts order), then deformers (in unified
+  // topo-sorted order — same as the deformer.* sections).
+  /** @type {number[][]} */
+  const meshObjectBindings = meshBindingPlan.map(plan =>
+    [_internBinding(plan.paramId, plan.keys)],
+  );
+  /** @type {number[][]} */
+  const deformerObjectBindings = allDeformerSpecs.map(spec =>
+    spec.bindings.map(b => _internBinding(b.parameterId, b.keys)),
+  );
+
+  // Group objects by canonical binding profile → unique bands.
+  // A "null" band (count=0) is reserved at index 0 — used by parts and
+  // any future objects without bindings (matches cubism's band[0]).
+  /** @type {{bindingIndices:number[]}[]} */
+  const bandPool = [{ bindingIndices: [] }]; // band 0 = null
+  const bandHashToIdx = new Map([['', 0]]);
+  const _profileHash = (idxs) => idxs.slice().sort((a, b) => a - b).join(',');
+  const _internBand = (bindingIndices) => {
+    if (bindingIndices.length === 0) return 0;
+    const h = _profileHash(bindingIndices);
+    if (bandHashToIdx.has(h)) return bandHashToIdx.get(h);
+    const idx = bandPool.length;
+    bandPool.push({ bindingIndices: bindingIndices.slice() });
+    bandHashToIdx.set(h, idx);
+    return idx;
+  };
+  const meshBandIndex = meshObjectBindings.map(b => _internBand(b));
+  const deformerBandIndex = deformerObjectBindings.map(b => _internBand(b));
+
+  // Per-binding key range — emit ONCE per unique binding.
   const bindingKeysBegin = [];
   const bindingKeysCount = [];
   const flatKeys = [];
-  for (const b of allBindings) {
+  for (const b of uniqueBindings) {
     bindingKeysBegin.push(flatKeys.length);
     bindingKeysCount.push(b.keys.length);
     for (const k of b.keys) flatKeys.push(k);
   }
 
-  // Each parameter owns a contiguous range of slots in keyform_binding_index.
-  // Build that ordered slot list by walking paramList and emitting each param's
-  // bindings in order. Recorded `bindingToSlot[bi]` lets bands look up the
-  // slot offset for any binding when assigning their begin index.
-  const slotsByParam = new Map();
-  for (const p of paramList) slotsByParam.set(p.id, []);
-  for (let bi = 0; bi < allBindings.length; bi++) {
-    const pid = allBindings[bi].paramId;
-    if (!slotsByParam.has(pid)) slotsByParam.set(pid, []);
-    slotsByParam.get(pid).push(bi);
-  }
+  // Build keyform_binding_index by walking each band's binding indices.
+  // Each band's range in kfbi is contiguous; slots within a band match
+  // the band's binding-axis order.
   const keyformBindingIndices = [];
-  const bindingToSlot = new Array(allBindings.length).fill(0);
+  const bandBegins = [];
+  const bandCounts = [];
+  for (const band of bandPool) {
+    bandBegins.push(keyformBindingIndices.length);
+    bandCounts.push(band.bindingIndices.length);
+    for (const bi of band.bindingIndices) keyformBindingIndices.push(bi);
+  }
+
+  // Per-parameter binding range: each active param owns ONE slot in kfbi
+  // (the first one referencing a binding that uses this param). Inactive
+  // params (no binding uses them) get begin=-1 (0xFFFFFFFF), count=0.
   const paramKfbBegin = [];
   const paramKfbCount = [];
   for (const p of paramList) {
-    const myBindings = slotsByParam.get(p.id) ?? [];
-    paramKfbBegin.push(keyformBindingIndices.length);
-    paramKfbCount.push(myBindings.length);
-    for (const bi of myBindings) {
-      bindingToSlot[bi] = keyformBindingIndices.length;
-      keyformBindingIndices.push(bi);
+    let foundSlot = -1;
+    for (let s = 0; s < keyformBindingIndices.length; s++) {
+      if (uniqueBindings[keyformBindingIndices[s]].paramId === p.id) {
+        foundSlot = s; break;
+      }
+    }
+    if (foundSlot >= 0) {
+      paramKfbBegin.push(foundSlot);
+      paramKfbCount.push(1);
+    } else {
+      paramKfbBegin.push(0xFFFFFFFF);
+      paramKfbCount.push(0);
     }
   }
   sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
   sections.set('parameter.keyform_binding_counts', paramKfbCount);
 
-  counts[COUNT_IDX.KEYFORM_BINDINGS] = allBindings.length;
+  counts[COUNT_IDX.KEYFORM_BINDINGS] = uniqueBindings.length;
   counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = keyformBindingIndices.length;
   counts[COUNT_IDX.KEYS] = flatKeys.length;
 
@@ -853,37 +889,13 @@ function buildSectionData(input) {
   }
   sections.set('keyform_position.xys', allKeyformPositions);
 
-  // ── Bands (one per mesh, one per part, one per deformer) ──
-  // Mesh / deformer bands point to their first binding's slot in
-  // keyform_binding_index. Part bands are null (count=0).
-  const numBands = numArtMeshes + numParts + numDeformers;
-  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = numBands;
-  const bandBegins = [];
-  const bandCounts = [];
-  // Mesh bands: binding bi == mesh bi (first numArtMeshes entries in allBindings)
-  for (let m = 0; m < numArtMeshes; m++) {
-    bandBegins.push(bindingToSlot[m]);
-    bandCounts.push(1);
-  }
-  // Part bands (null)
-  for (let p = 0; p < numParts; p++) {
-    bandBegins.push(0);
-    bandCounts.push(0);
-  }
-  // Deformer bands — point to the first binding for each deformer
-  for (let d = 0; d < allDeformerSpecs.length; d++) {
-    const range = deformerBindingRanges[d];
-    if (range.count === 0) {
-      bandBegins.push(0);
-      bandCounts.push(0);
-    } else {
-      bandBegins.push(bindingToSlot[range.begin]);
-      bandCounts.push(range.count);
-    }
-  }
+  // ── Emit deduplicated keyform_binding_band sections ──
+  // bandPool's begins/counts already cover EVERY unique band; objects
+  // (mesh / part / deformer) reference their band by index via the
+  // *.keyform_binding_band_indices sections below.
+  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = bandPool.length;
   sections.set('keyform_binding_band.begin_indices', bandBegins);
   sections.set('keyform_binding_band.counts', bandCounts);
-
   sections.set('keyform_binding_index.indices', keyformBindingIndices);
   sections.set('keyform_binding.keys_begin_indices', bindingKeysBegin);
   sections.set('keyform_binding.keys_counts', bindingKeysCount);
@@ -893,7 +905,6 @@ function buildSectionData(input) {
   // Deformer sections (Stage 2b binary translator)
   // ──────────────────────────────────────────────────────────────────
   // Deformer band indices follow mesh + part bands.
-  const deformerBandOffset = numArtMeshes + numParts;
 
   // ── Umbrella deformer section ──
   const deformer_ids = [];
@@ -907,7 +918,8 @@ function buildSectionData(input) {
   for (let d = 0; d < allDeformerSpecs.length; d++) {
     const spec = allDeformerSpecs[d];
     deformer_ids.push(spec.id);
-    deformer_band_indices.push(deformerBandOffset + d);
+    // Deduped band index — deformers with the same binding profile share.
+    deformer_band_indices.push(deformerBandIndex[d]);
     deformer_visibles.push(spec.isVisible !== false);
     deformer_enables.push(true);
     let pp = -1, pd = -1;
@@ -955,7 +967,10 @@ function buildSectionData(input) {
   for (let i = 0; i < warpSpecs.length; i++) {
     const w = warpSpecs[i];
     const gridPts = (w.gridSize.cols + 1) * (w.gridSize.rows + 1);
-    warp_kf_band_indices.push(deformerBandOffset + i);
+    // Same band as the umbrella deformer entry — look up via the unified
+    // index then read deformerBandIndex.
+    const _uidx = deformerIdToIndex.get(w.id) ?? 0;
+    warp_kf_band_indices.push(deformerBandIndex[_uidx] ?? 0);
     warp_kf_begin_indices.push(_totalWarpKeyforms);
     warp_kf_counts.push(w.keyforms.length);
     warp_vertex_counts.push(gridPts);
@@ -1013,7 +1028,8 @@ function buildSectionData(input) {
   let _totalRotKeyforms = 0;
   for (let i = 0; i < rotationSpecs.length; i++) {
     const r = rotationSpecs[i];
-    rot_kf_band_indices.push(deformerBandOffset + numWarpDeformers + i);
+    const _uidx = deformerIdToIndex.get(r.id) ?? 0;
+    rot_kf_band_indices.push(deformerBandIndex[_uidx] ?? 0);
     rot_kf_begin_indices.push(_totalRotKeyforms);
     rot_kf_counts.push(r.keyforms.length);
     rot_base_angles.push(r.baseAngle ?? 0);
