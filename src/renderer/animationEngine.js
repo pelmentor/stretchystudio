@@ -172,8 +172,6 @@ export function computePoseOverrides(animation, timeMs, loopKeyframes = false, e
     let value;
     if (track.property === 'mesh_verts') {
       value = interpolateMeshVerts(track.keyframes, timeMs, loopKeyframes, endMs);
-    } else if (track.property === 'puppet_pins') {
-      continue; // puppet warp removed — skip legacy tracks
     } else {
       value = interpolateTrack(track.keyframes, timeMs, loopKeyframes, endMs);
     }

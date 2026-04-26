@@ -236,7 +236,11 @@ export const useProjectStore = create((set) => ({
         if (node.blendShapeValues === undefined) node.blendShapeValues = {};
       }
       state.project.nodes = nodes;
-      state.project.animations = projectData.animations ?? [];
+      const animations = projectData.animations ?? [];
+      for (const anim of animations) {
+        anim.tracks = (anim.tracks ?? []).filter(t => t.property !== 'puppet_pins');
+      }
+      state.project.animations = animations;
       state.project.parameters = projectData.parameters ?? [];
       state.project.physics_groups = projectData.physics_groups ?? [];
       state.versionControl.geometryVersion++;

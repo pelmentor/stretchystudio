@@ -293,13 +293,13 @@ const onDragEnd = useCallback(() => {
 import { beginBatch, endBatch } from '@/store/undoHistory';
 ```
 
-**Puppet pin drag pattern**:
+**Drag pattern**:
 ```javascript
-const onPointerDown = useCallback((e, nodeId, pinIndex) => {
+const onPointerDown = useCallback((e, nodeId) => {
   if (editorModeRef.current === 'staging') {
     beginBatch(useProjectStore.getState().project);
   }
-  dragRef.current = { nodeId, pinIndex, startX: e.clientX, ... };
+  dragRef.current = { nodeId, startX: e.clientX, ... };
   
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
@@ -308,7 +308,7 @@ const onPointerDown = useCallback((e, nodeId, pinIndex) => {
 const onPointerMove = useCallback((e) => {
   const delta = e.clientX - dragRef.current.startX;
   updateProject((proj) => {
-    proj.nodes[nodeId].puppetPins[pinIndex].x += delta;
+    proj.nodes[nodeId].transform.x += delta;
   }, { skipHistory: true });  // ← skipHistory: true
 }, []);
 
@@ -320,7 +320,6 @@ const onPointerUp = useCallback(() => {
 ```
 
 **Applies to**:
-- Puppet pin repositioning
 - Bone rotation drags (trackpad rotate, arc handle rotation)
 - Bone position drags (skeletal rig)
 
@@ -383,14 +382,14 @@ const handleBarDrag = (e) => {
 
 ## Problems Encountered and Fixed
 
-### Problem 1: Puppet Pin Undo Glitch (GPU Buffer Lag)
+### Problem 1: Mesh Undo Glitch (GPU Buffer Lag)
 
-**Symptom**: After undoing a puppet pin drag, the app flickered between the undoed state (pin back to original position, no mesh deformation) and the deformed state (pin dragged, mesh warped) when the user selected or deselected the layer.
+**Symptom**: After undoing a mesh deformation (blend shape drag, bone rotation), the app flickered between the undone state (mesh back to original) and the deformed state when the user selected or deselected the layer.
 
 **Root Cause**: One-frame lag in GPU buffer synchronization.
 
 The flow was:
-1. User undoes puppet pin drag → project state reverted (pin position and mesh UVs back to original)
+1. User undoes deformation → project state reverted (mesh UVs back to original)
 2. `sceneRef.current.draw()` called with reverted project
 3. Draw command uses the **previous frame's GPU mesh vertices** (still deformed)
 4. **After** draw completes, `sceneRef.current.parts.uploadPositions()` is called
@@ -419,20 +418,11 @@ sceneRef.current.draw(...);
 
 **Effect**: GPU buffer is synchronized within the same frame as the draw call. No one-frame lag, no flickering on undo.
 
-**Comment added at the fix location**:
-```javascript
-// Upload deformed mesh positions BEFORE draw, not after.
-// Otherwise there's a one-frame lag: draw uses old GPU buffer, then new positions upload.
-// This caused puppet pin undo to flicker (showing deformed mesh for one frame).
-sceneRef.current.parts.uploadPositions();
-sceneRef.current.draw(...);
-```
-
 ---
 
-### Problem 2: Texture Invisibility After Puppet Pin Undo
+### Problem 2: Texture Invisibility After Mesh Undo
 
-**Symptom**: When undoing a puppet pin movement, the entire layer became invisible (no texture visible, only vertices and skeleton visible). When saving and reloading the project, no textures loaded at all — all layers were invisible except the skeleton overlay.
+**Symptom**: When undoing a mesh deformation, the entire layer became invisible (no texture visible, only vertices and skeleton visible). When saving and reloading the project, no textures loaded at all — all layers were invisible except the skeleton overlay.
 
 **Root Cause**: Typed array corruption during snapshot serialization.
 
@@ -507,7 +497,6 @@ export function redo(currentProject, applyFn) {
 | Transform (x, y, rotation, scale, pivot) — NumericInput | Yes | Auto-snapshot per commit (on blur/Enter) |
 | Opacity, blend shape influence sliders | Yes | Batched per gesture |
 | Add/delete blend shape | Yes | Auto-snapshot |
-| Add/remove puppet pin | Yes | Auto-snapshot |
 | Gizmo drag (position, rotation, scale) | Yes | Batched per gesture |
 | Skeleton bone drag | Yes | Batched per gesture |
 | Keyframe add/delete | Yes | Auto-snapshot |
@@ -576,8 +565,8 @@ const redoCount = useUndoHistoryStore?.((state) => state.redoCount);
 - [x] Keyframe batching: Drag keyframe in timeline — Ctrl+Z restores to pre-drag frame
 - [x] Stack limit: Make 55 changes — verify only 50 in history (oldest dropped)
 - [x] Load clears history: Load project → Ctrl+Z does nothing (history cleared)
-- [x] Puppet pin undo: Drag puppet pin, undo → pin position and mesh deformation both revert (no flickering)
-- [x] Texture preservation: After puppet pin undo, textures remain visible and correct
+- [x] Mesh deform undo: Drag bone/blend shape, undo → mesh deformation reverts (no flickering)
+- [x] Texture preservation: After mesh undo, textures remain visible and correct
 
 ---
 
@@ -739,7 +728,7 @@ With `skipHistory: true`, the undo application itself doesn't snapshot, preservi
 | useUndoRedo.js | Rewritten | Use undoHistory module, keyboard handler for Ctrl+Z/Y | ~50 |
 | Inspector.jsx | Modified | Import beginBatch/endBatch, wrap SliderRow with batching | ~5 |
 | GizmoOverlay.jsx | Modified | Import beginBatch/endBatch, batch drag operations | ~10 |
-| SkeletonOverlay.jsx | Modified | Import beginBatch/endBatch, batch puppet pin drags | ~10 |
+| SkeletonOverlay.jsx | Modified | Import beginBatch/endBatch, batch bone rotation/position drags | ~10 |
 | TimelinePanel.jsx | Modified | Import beginBatch/endBatch, batch keyframe and audio drags | ~15 |
 | CanvasViewport.jsx | Modified | Reorder GPU mesh upload before draw (fix GPU buffer lag) | 1 |
 

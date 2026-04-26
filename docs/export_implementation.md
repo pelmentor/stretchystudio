@@ -120,7 +120,7 @@ draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false,
 - Resizes canvas to export dimensions
 - Builds mock editor with zoom=1, no overlays
 - Computes pose at specific animation time via `computePoseOverrides()`
-- **New**: Manually computes blend shape and puppet warp mesh deformations for the export frame
+- **New**: Manually computes blend shape mesh deformations for the export frame
 - **New**: Uploads deformed mesh vertices to GPU via `uploadPositions()` before rendering
 - Calls `scenePass.draw(exportProject, exportEditor, isDarkRef.current, poseOverrides, { skipResize: true, exportMode: true })`
 - Composites background color if needed
@@ -407,12 +407,12 @@ console.log('[Export] Bounds:', computeAnalyticalBounds(project));
 
 ### Mesh-Deformed Joint Export (2026-04-16)
 
-**Problem**: Exported PNG frames don't match what's displayed on the app. Specifically, mesh-deformed joints (blend shapes and puppet warp) don't show up correctly in exports.
+**Problem**: Exported PNG frames don't match what's displayed on the app. Specifically, mesh-deformed joints (blend shapes) don't show up correctly in exports.
 
 **Root Cause**: When playing animations on the webpage, the code calls `sceneRef.current.parts.uploadPositions()` to upload deformed mesh vertices to the GPU before rendering. However, this step was completely missing in the export frame capture function, and the deformation logic itself was only being run in the main `tick()` loop.
 
 **Solution**: Added complete mesh vertex upload and restore logic to `captureExportFrame()`:
-1.  Manually compute blend shapes and puppet warp deformations for the specific frame time.
+1.  Manually compute blend shape deformations for the specific frame time.
 2.  Upload deformed mesh vertices to GPU before calling `scene.draw()`.
 3.  Restore original mesh positions after the frame capture is complete.
 

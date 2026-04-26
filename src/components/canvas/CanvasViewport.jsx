@@ -1762,7 +1762,7 @@ export default function CanvasViewport({
       if (anim) {
         poseOverrides = computePoseOverrides(anim, timeMs, loopKeyframes, anim.duration ?? 0);
 
-        // Compute mesh deformations (blend shapes + puppet warp) for export frame
+        // Compute mesh deformations (blend shapes) for export frame
         for (const node of exportProject.nodes) {
           if (node.type !== 'part' || !node.mesh) continue;
 
