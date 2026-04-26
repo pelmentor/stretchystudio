@@ -914,16 +914,17 @@ function buildSectionData(input) {
     const rotPivot = !rigWarp ? _groupRotationPivot(part) : null;
     for (const vert of part.mesh.vertices) {
       if (rigWarp) {
-        // 0..1 of rig warp's canvas bbox (matches cmo3 deformer-local for
-        // rig-warp-parented meshes — see cmo3writer line ~3497-3503).
+        // 0..1 of rig warp's canvas bbox (verified vs cubism native: face
+        // mesh values like 0.3250, 0.7987 — exactly this range).
         const bb = rigWarp.canvasBbox;
         allKeyformPositions.push((vert.x - bb.minX) / bb.W);
         allKeyformPositions.push((vert.y - bb.minY) / bb.H);
       } else if (rotPivot) {
-        // Pivot-relative: canvas pixel offsets from parent rotation's pivot,
-        // PPU-normalised for the moc3 shader convention.
-        allKeyformPositions.push((vert.x - rotPivot.x) / ppu);
-        allKeyformPositions.push((vert.y - rotPivot.y) / ppu);
+        // RAW canvas-pixel offsets from parent rotation's pivot. Cubism
+        // stores arm mesh values like (-38.9, -88.4) directly, NOT
+        // PPU-normalised (the earlier `/ppu` made arms 800× too small).
+        allKeyformPositions.push(vert.x - rotPivot.x);
+        allKeyformPositions.push(vert.y - rotPivot.y);
       } else if (useDeformerFrame) {
         allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
         allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
@@ -1034,10 +1035,15 @@ function buildSectionData(input) {
       // keyform_position.xys array (mesh code does the same — each XY pair
       // takes 2 floats and offsets accumulate by vertCount * 2).
       warp_kf_pos_begin_indices.push(allKeyformPositions.length);
-      // Translate positions to moc3 convention:
-      //   - canvas-px frame  → normalize by PPU (same as mesh vertex coords)
-      //   - normalized-0to1  → store as-is
-      //   - pivot-relative   → canvas-px-from-pivot, normalize by PPU
+      // Translate positions to moc3 convention. Verified by binary diff
+      // against the cubism native export:
+      //   - canvas-px frame  → centred + PPU-normalised (mesh-vertex
+      //     convention; e.g. BodyWarpZ rest grid lands at ±0.3 range)
+      //   - pivot-relative   → RAW canvas pixels (offsets from parent
+      //     rotation pivot; cubism stores ~±150 px values directly, NOT
+      //     normalised — earlier `/ppu` made face parallax 800× too
+      //     small and the face vanished off-canvas)
+      //   - normalized-0to1  → store as-is (already in parent's frame)
       for (let pi = 0; pi < kf.positions.length; pi += 2) {
         const lx = kf.positions[pi];
         const ly = kf.positions[pi + 1];
@@ -1045,8 +1051,8 @@ function buildSectionData(input) {
           allKeyformPositions.push((lx - originX) / ppu);
           allKeyformPositions.push((ly - originY) / ppu);
         } else if (w.localFrame === 'pivot-relative') {
-          allKeyformPositions.push(lx / ppu);
-          allKeyformPositions.push(ly / ppu);
+          allKeyformPositions.push(lx);
+          allKeyformPositions.push(ly);
         } else {
           allKeyformPositions.push(lx);
           allKeyformPositions.push(ly);
@@ -1130,8 +1136,8 @@ function buildSectionData(input) {
         allKeyformPositions.push((vx - bb.minX) / bb.W);
         allKeyformPositions.push((vy - bb.minY) / bb.H);
       } else if (rotPivot) {
-        allKeyformPositions.push((vx - rotPivot.x) / ppu);
-        allKeyformPositions.push((vy - rotPivot.y) / ppu);
+        allKeyformPositions.push(vx - rotPivot.x);
+        allKeyformPositions.push(vy - rotPivot.y);
       } else if (useDeformerFrame) {
         allKeyformPositions.push(rigSpec.canvasToInnermostX(vx));
         allKeyformPositions.push(rigSpec.canvasToInnermostY(vy));
