@@ -1171,6 +1171,19 @@ function buildSectionData(input) {
   const rot_kf_scales = [];
   const rot_kf_reflect_xs = [];
   const rot_kf_reflect_ys = [];
+  // rotation_deformer_keyform.scales is the FRAME CONVERSION FACTOR from
+  // child's pivot-relative (canvas-px) offsets to the parent's frame units.
+  // Verified by binary diff against cubism's native shelby.moc3:
+  //   - Parent type 'warp'      → scale = 1 / canvasMaxDim  (~5.58e-4 for 1792 canvas)
+  //   - Parent type 'rotation'  → scale = 1.0
+  //   - Parent type 'root'      → scale = 1.0 (root frame is already canvas-px)
+  // cmo3 always emits scale="1.0" in XML; Cubism Editor patches this on
+  // moc3 compile based on parent type. Without it, the rotation's rotated
+  // child positions stay in canvas-pixel magnitudes when they should be
+  // 0..1 of the parent warp — chains like
+  // face → RigWarp_face → FaceParallax → FaceRotation → Rotation_head → BodyXWarp
+  // produce results 1792× too large (face / head / arms render off-canvas).
+  const _canvasMaxDim = Math.max(canvasW, canvasH);
   let _totalRotKeyforms = 0;
   for (let i = 0; i < rotationSpecs.length; i++) {
     const r = rotationSpecs[i];
@@ -1180,12 +1193,15 @@ function buildSectionData(input) {
     rot_kf_counts.push(r.keyforms.length);
     rot_base_angles.push(r.baseAngle ?? 0);
     _totalRotKeyforms += r.keyforms.length;
+    const scaleFactor = r.parent?.type === 'warp'
+      ? 1 / _canvasMaxDim
+      : 1.0; // 'rotation' or 'root' parent — child frame already matches
     for (const kf of r.keyforms) {
       rot_kf_opacities.push(kf.opacity ?? 1);
       rot_kf_angles.push(kf.angle);
       rot_kf_origin_xs.push(kf.originX);
       rot_kf_origin_ys.push(kf.originY);
-      rot_kf_scales.push(kf.scale ?? 1);
+      rot_kf_scales.push(scaleFactor);
       rot_kf_reflect_xs.push(kf.reflectX ?? false);
       rot_kf_reflect_ys.push(kf.reflectY ?? false);
     }
