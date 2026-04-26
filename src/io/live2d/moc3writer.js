@@ -442,17 +442,57 @@ function buildSectionData(input) {
   counts[COUNT_IDX.POSITION_INDICES] = totalFlatIndices;
 
   // --- Per-mesh keyform/binding plan ---
-  // Each mesh has one binding owned by exactly one parameter:
-  //   • Variant mesh (`foo.smile`) → bound to Param<Suffix> with keys [0, 1].
-  //     Two keyforms: opacity 0 at suffix=0, opacity 1 at suffix=1. Without
-  //     this, runtime sees only the variant's single static keyform and the
-  //     overlay covers the base permanently ("always smiling" bug).
-  //   • Other mesh → bound to ParamOpacity with key [1]. Single keyform at
-  //     the recorded opacity (matches the pre-Stage-2a behaviour).
-  //
-  // True variant-aware base fade-out (1→0 on Param<Suffix>) and warp/rotation
-  // deformer keyforms are still future Stage 2 work.
+  // Three mutually-exclusive cases:
+  //   • Bone-weighted mesh (arms / legs / hands): 5 keyforms across
+  //     ParamRotation_<bone> at angles [-90, -45, 0, +45, +90] degrees.
+  //     Each keyform's vertex positions = rest rotated around the bone's
+  //     canvas pivot, weighted by boneWeights[i] per vertex. Mirrors
+  //     cmo3's baked-bone-keyform logic so arms actually rotate with the
+  //     bone in the runtime.
+  //   • Variant mesh (`foo.smile`): 2 keyforms on Param<Suffix> (opacity
+  //     0 at 0, recorded opacity at 1). Stage 2a fix.
+  //   • Other mesh: 1 keyform on ParamOpacity (rest pose at recorded
+  //     opacity).
+  // perVertexPositions (when present) drives art_mesh_keyform.keyform_position
+  // emission instead of the shared rest geometry, allowing arm rotation to
+  // deform meshes via per-keyform vertex offsets.
+  const BONE_KEYFORM_ANGLES = [-90, -45, 0, 45, 90]; // matches paramSpec BAKED_BONE_ANGLES
   const meshBindingPlan = meshParts.map(part => {
+    const mesh = part.mesh;
+    const boneWeights = mesh?.boneWeights ?? null;
+    const jointBoneId = mesh?.jointBoneId ?? null;
+    if (boneWeights && jointBoneId) {
+      // Bone-baked keyforms.
+      const boneGroup = groups.find(g => g.id === jointBoneId);
+      const sanitizedBoneName = (boneGroup?.name ?? jointBoneId).replace(/[^a-zA-Z0-9_]/g, '_');
+      const pivotX = boneGroup?.transform?.pivotX ?? 0;
+      const pivotY = boneGroup?.transform?.pivotY ?? 0;
+      const verts = mesh.vertices;
+      const perKeyformPositions = BONE_KEYFORM_ANGLES.map(angleDeg => {
+        const rad = angleDeg * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const out = new Float32Array(verts.length * 2);
+        for (let i = 0; i < verts.length; i++) {
+          const v = verts[i];
+          const w = boneWeights[i] ?? 0;
+          // Rotate (vx - pivotX, vy - pivotY) by angle, weighted blend
+          // back into rest position. Matches cmo3 baked-keyform math.
+          const dx = v.x - pivotX;
+          const dy = v.y - pivotY;
+          const rx = pivotX + dx * cos - dy * sin;
+          const ry = pivotY + dx * sin + dy * cos;
+          out[i * 2]     = v.x * (1 - w) + rx * w;
+          out[i * 2 + 1] = v.y * (1 - w) + ry * w;
+        }
+        return out;
+      });
+      return {
+        paramId: `ParamRotation_${sanitizedBoneName}`,
+        keys: BONE_KEYFORM_ANGLES.slice(),
+        keyformOpacities: BONE_KEYFORM_ANGLES.map(() => part.opacity ?? 1),
+        perVertexPositions: perKeyformPositions,
+      };
+    }
     const suffix = part.variantSuffix ?? null;
     if (suffix) {
       const pid = variantParamId(suffix);
@@ -461,6 +501,7 @@ function buildSectionData(input) {
           paramId: pid,
           keys: [0, 1],
           keyformOpacities: [0, part.opacity ?? 1],
+          perVertexPositions: null,
         };
       }
     }
@@ -468,6 +509,7 @@ function buildSectionData(input) {
       paramId: 'ParamOpacity',
       keys: [1],
       keyformOpacities: [part.opacity ?? 1],
+      perVertexPositions: null,
     };
   });
 
@@ -655,34 +697,49 @@ function buildSectionData(input) {
   sections.set('part_keyform.draw_orders', partNodes.map(() => 500.0));
 
   // --- ArtMesh Keyform sections ---
-  // Flat across all keyforms — per-mesh keyform count is variable. All
-  // keyforms for a given mesh share the same vertex data (only opacity
-  // varies for now), so each keyform points to the mesh's single position
-  // begin index — no duplicate keyform_position storage needed.
+  // Flat across all keyforms — per-mesh keyform count is variable.
+  //   - Variant fade / single-keyform: keyforms share the mesh's REST
+  //     vertex data (one position_begin per mesh).
+  //   - Bone-baked: each angle keyform has its OWN rotated vertex
+  //     positions. The position_begin is patched after warp keyforms
+  //     extend keyform_position section (see bone keyform pass below).
   const flatOpacities = [];
   const flatDrawOrders = [];
   const flatKeyformPosBegin = [];
+  /** @type {{flatIndex:number, partIndex:number, positions:Float32Array}[]} */
+  const bonePerKeyformAppends = [];
   for (let m = 0; m < meshBindingPlan.length; m++) {
-    const ops = meshBindingPlan[m].keyformOpacities;
-    const posBegin = meshInfos[m].keyformPositionBeginIndex;
-    for (const op of ops) {
-      flatOpacities.push(op);
+    const plan = meshBindingPlan[m];
+    const restPosBegin = meshInfos[m].keyformPositionBeginIndex;
+    for (let ki = 0; ki < plan.keyformOpacities.length; ki++) {
+      flatOpacities.push(plan.keyformOpacities[ki]);
       flatDrawOrders.push(500.0);
-      flatKeyformPosBegin.push(posBegin);
+      if (plan.perVertexPositions && plan.perVertexPositions[ki]) {
+        // Sentinel — patched after warp keyforms append their grid data.
+        flatKeyformPosBegin.push(-1);
+        bonePerKeyformAppends.push({
+          flatIndex: flatKeyformPosBegin.length - 1,
+          partIndex: m,
+          positions: plan.perVertexPositions[ki],
+        });
+      } else {
+        flatKeyformPosBegin.push(restPosBegin);
+      }
     }
   }
   sections.set('art_mesh_keyform.opacities', flatOpacities);
   sections.set('art_mesh_keyform.draw_orders', flatDrawOrders);
-  sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
+  // keyform_position_begin_indices written after sentinels resolved.
 
   // --- Keyform positions (vertex coordinates) ---
-  // Frame depends on the mesh's parent:
-  //   - No deformer parent (legacy mode): canvas-px-normalised by PPU. The
-  //     SDK shader multiplies by PPU to recover pixel positions.
-  //   - Parented to BodyXWarp (rigSpec mode): vertex positions live in
-  //     BodyXWarp's 0..1 local frame, where canvas → 0..1 conversion
-  //     traverses the BZ → BY → Breath → BX chain (`canvasToBodyXX/Y`).
-  //     The deformer chain's grid morphs apply on top via bilinear interp.
+  // Frame matches the mesh's PARENT deformer's local frame. Three cases:
+  //   - No deformer parent (legacy):       canvas-px-normalised by PPU.
+  //   - Per-mesh rig warp parent:          0..1 of the rig warp's canvas
+  //                                        bbox (matches cmo3 mesh
+  //                                        emission convention at line
+  //                                        ~3497-3503).
+  //   - Body warp chain (BodyXWarp) parent (no rig warp): BX 0..1 via
+  //                                        the canvasToBodyXX/Y chain.
   // TRAPDOOR: canvasW/canvasH are declared at top of buildSectionData().
   // The `canvas` object is declared BELOW — never reference it here.
   // See docs/live2d-export/DECISIONS.md — this caused two identical crashes.
@@ -690,17 +747,30 @@ function buildSectionData(input) {
   const originX = canvasW / 2;
   const originY = canvasH / 2;
   const useDeformerFrame = !!(rigSpec && rigSpec.canvasToInnermostX && meshDefaultDeformerIdx >= 0);
+  // Map partId → rig warp spec for per-mesh frame conversion.
+  const rigWarpByPartId = new Map();
+  if (rigSpec) {
+    for (const w of warpSpecs) {
+      if (w.targetPartId && w.canvasBbox) rigWarpByPartId.set(w.targetPartId, w);
+    }
+  }
   const allKeyformPositions = [];
   for (const part of meshParts) {
-    if (part.mesh?.vertices) {
-      for (const vert of part.mesh.vertices) {
-        if (useDeformerFrame) {
-          allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
-          allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
-        } else {
-          allKeyformPositions.push((vert.x - originX) / ppu);
-          allKeyformPositions.push((vert.y - originY) / ppu);
-        }
+    if (!part.mesh?.vertices) continue;
+    const rigWarp = rigWarpByPartId.get(part.id);
+    for (const vert of part.mesh.vertices) {
+      if (rigWarp) {
+        // 0..1 of rig warp's canvas bbox (matches cmo3 deformer-local for
+        // rig-warp-parented meshes — see cmo3writer line ~3497-3503).
+        const bb = rigWarp.canvasBbox;
+        allKeyformPositions.push((vert.x - bb.minX) / bb.W);
+        allKeyformPositions.push((vert.y - bb.minY) / bb.H);
+      } else if (useDeformerFrame) {
+        allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
+        allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
+      } else {
+        allKeyformPositions.push((vert.x - originX) / ppu);
+        allKeyformPositions.push((vert.y - originY) / ppu);
       }
     }
   }
@@ -897,7 +967,38 @@ function buildSectionData(input) {
   sections.set('rotation_deformer_keyform.reflect_xs', rot_kf_reflect_xs);
   sections.set('rotation_deformer_keyform.reflect_ys', rot_kf_reflect_ys);
 
-  // ── Update keyform_position count + section (extended with warp grids) ──
+  // ── Append bone-baked keyform vertex data, then patch sentinels ──
+  // Bone-baked meshes contributed sentinel (-1) entries in
+  // flatKeyformPosBegin; resolve them by appending each angle's rotated
+  // positions and recording the float-offset where they land.
+  for (const append of bonePerKeyformAppends) {
+    const partIdx = append.partIndex;
+    const part = meshParts[partIdx];
+    const rigWarp = rigWarpByPartId.get(part.id);
+    const offset = allKeyformPositions.length;
+    flatKeyformPosBegin[append.flatIndex] = offset;
+    // Convert to the same frame as rest-pose vertex positions for this
+    // mesh (so deformer chain interpretation stays consistent).
+    for (let i = 0; i < append.positions.length; i += 2) {
+      const vx = append.positions[i];
+      const vy = append.positions[i + 1];
+      if (rigWarp) {
+        const bb = rigWarp.canvasBbox;
+        allKeyformPositions.push((vx - bb.minX) / bb.W);
+        allKeyformPositions.push((vy - bb.minY) / bb.H);
+      } else if (useDeformerFrame) {
+        allKeyformPositions.push(rigSpec.canvasToInnermostX(vx));
+        allKeyformPositions.push(rigSpec.canvasToInnermostY(vy));
+      } else {
+        allKeyformPositions.push((vx - originX) / ppu);
+        allKeyformPositions.push((vy - originY) / ppu);
+      }
+    }
+  }
+  sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
+
+  // ── Update keyform_position count + section (extended with warp grids
+  // and bone keyforms) ──
   counts[COUNT_IDX.KEYFORM_POSITIONS] = allKeyformPositions.length;
   sections.set('keyform_position.xys', allKeyformPositions);
 

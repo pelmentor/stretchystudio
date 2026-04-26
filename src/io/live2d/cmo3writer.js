@@ -3102,6 +3102,11 @@ export async function generateCmo3(input) {
         // SS project node id; cmo3 path uses the same as the canonical
         // mesh identity.
         targetPartId: m.partId,
+        // Canvas-pixel bounding box of this rig warp's grid. moc3 uses
+        // this to convert mesh vertex canvas positions to 0..1 of the
+        // grid's canvas extent (the convention cmo3 art-mesh emission
+        // uses for rig-warp-parented meshes — see lines ~3497-3503).
+        canvasBbox: { minX: bxMin, minY: byMin, W: bW, H: bH },
         gridSize: { rows: warpRow, cols: warpCol },
         baseGrid: new Float64Array(restGrid),
         localFrame: 'normalized-0to1',
