@@ -201,6 +201,61 @@ for (i = 0; i < n; i++) {
 | V3.03+ quad | must be 0 or 1 | [re] |
 | SOT entries | all version-required entries must be non-zero and < file_size | [empirical] |
 
+## Compile-time semantics (cmo3 → moc3)
+
+> **The cmo3 XML doesn't directly carry every moc3 binary value.** Cubism Editor patches several fields on compile based on context (parent type, parameter ordering, etc.). Generating .moc3 directly without these transforms produces files that load but render incorrectly.
+>
+> Verified by byte-diffing a Cubism Editor "Export For Runtime" against our direct .moc3 emission for the same `.cmo3`. See `scripts/moc3_inspect.py`, `moc3_inspect_rot.py`, `moc3_inspect_warp.py`, `moc3_inspect_mesh.py` for the dumpers used to find these.
+
+### `rotation_deformer_keyform.scales` — frame conversion factor `[empirical]`
+
+The cmo3 XML always stores `scale="1.0"` on every `CRotationDeformerForm`. Cubism Editor patches this on .moc3 compile based on the rotation's parent:
+
+| Parent type | scale value | Why |
+|-------------|-------------|-----|
+| Warp deformer (e.g. BodyXWarp) | `1 / canvasMaxDim` (~5.58e-4 for 1792 canvas) | Child sees pivot-relative canvas-pixel offsets; parent expects 0..1; this scales pixels→0..1 |
+| Rotation deformer | `1.0` | Both child and parent are pivot-relative pixels; identity |
+| Root | `1.0` | Root frame is canvas-px, child frame matches |
+
+`scale = 1.0` everywhere makes rotation-under-warp transitions blow up by `canvasMaxDim×` — children render far off-canvas. This was the root cause of "head/face/arms missing while body renders" in our pre-2026-04-26 runtime moc3.
+
+### `parameter.keyform_binding_begin_indices` — indexes `keyform_bindings`, not `keyform_binding_indices` `[empirical]`
+
+The name reads "begin index in keyform_binding_index" but the field is actually a **binding index** into `keyform_bindings[]` (the deduped binding pool), with `kfb_count` consecutive bindings following.
+
+**Implication**: bindings must be ordered such that all bindings for the same param are **contiguous**, in the same order as the `parameters[]` array. Cubism's compiler does this — the unique-binding pool ends up ordered by owning param. Skipping reordering means `kfb_begin` points to the wrong binding, the SDK routes param values to the wrong target, and nothing animates.
+
+In Cubism's Hiyori shelby export, every active param has `kfb_count = 1` (one binding per param). Inactive params (no objects use them, e.g. ParamMouthForm when there's no mouth shape system) get `kfb_begin = -1, kfb_count = 0`.
+
+### Per-mesh keyform plan must match cubism's branches `[empirical]`
+
+cmo3writer's `CArtMeshSource` emit has 6 mutually-exclusive branches (`hasBakedKeyforms` / `hasEyeVariantCompound` / `hasEyelidClosure` / `hasNeckCornerShapekeys` / `hasEmotionVariantOnly` / `hasBaseFadeOnly` / default). The runtime moc3 must mirror them; ad-hoc fallbacks like "uniform 2-keyform on `ParamOpacity[0,1]` for everything" don't work because Cubism's runtime treats `ParamOpacity` keyform interactions specially (combined with the param's `default=1.0`, mixed-key bindings produce orphan slots that render as half-canvas overlays).
+
+Verified mapping for shelby (cubism native moc3 → matching mesh-binding-plan emit):
+
+| Mesh class | kf_n | Param + keys | Per-keyform vertex positions |
+|------------|------|--------------|------------------------------|
+| Default (face, ears, hair, neck, body, clothing) | 1 | `ParamOpacity[1.0]` | rest only |
+| Variant fade-in (`face.smile`) | 2 | `Param<Suffix>[0,1]` | rest, rest (only opacity differs) |
+| Base with variant sibling (non-backdrop) | 2 | `Param<Suffix>[0,1]` | rest, rest (opacity 1→0) |
+| Eye closure (eyelash/eyewhite/irides per side) | 2 | `ParamEye{L,R}Open[0,1]` | closed canvas verts, rest |
+| Bone-baked (arms/legs) | 5 | `ParamRotation_<bone>[-90,-45,0,45,90]` | per-angle rotated verts |
+
+Eye closure in particular doubles as a fix for the "Assign Clipping of ArtMeshes have keyform problems" load-time warning: clip-mask source meshes (eyewhite_l/r, masking irides) need keyforms at the same param min/max as the masked mesh, otherwise Cubism flags them.
+
+### Binary-diff workflow
+
+When a runtime moc3 loads but renders incorrectly, the fastest path to root cause is:
+
+1. Open the .cmo3 in Cubism Editor and "File → Export For Runtime" — produces a reference .moc3 that's known-good.
+2. Run our writer on the same project → reference and ours side by side.
+3. `python3 scripts/moc3_inspect.py <path>` for top-level structure (counts, parts, deformers, parameters, art meshes, bindings, bands).
+4. `python3 scripts/moc3_inspect_rot.py <path>` for rotation deformer keyform values labelled by deformer id.
+5. `python3 scripts/moc3_inspect_warp.py <path> [name-filter]` for warp grid keyform positions.
+6. `python3 scripts/moc3_inspect_mesh.py <path> [parent-deformer-filter]` for art-mesh keyform vertex bboxes.
+
+Any field that diverges between the dumps is suspect. Group-by-parent-type before assuming a single fix — e.g. "all rotations under warps differ but rotations under rotations match" pointed straight at the `scales` field.
+
 ## py-moc3 Tool Reference
 
 **Install**: `pip install py-moc3` (Python, zero dependencies)

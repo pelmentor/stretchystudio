@@ -149,6 +149,58 @@ the cursor, and rotates. They represent the long tail of cmo3-emit
 fidelity that lands incrementally after user feedback identifies which
 gaps actually show up visually in their characters.
 
+### Binary-diff parity pass — shipped 2026-04-26
+
+After Phase B+C+D landed, the runtime moc3 loaded but rendered with several
+visual defects: face/head/arms missing, no eye blink, "Assign Clipping of
+ArtMeshes have keyform problems" warning on load. Resolved via byte-level
+comparison against Cubism Editor's "Export For Runtime" output on the same
+.cmo3 (the reference moc3 sits at `New Folder_cubism/shelby.moc3` in the dev
+worktree). Three Cubism-Editor-compile-time field semantics weren't being
+replicated by direct moc3 emission — see [MOC3_FORMAT.md → Compile-time
+semantics](MOC3_FORMAT.md#compile-time-semantics-cmo3--moc3) for details.
+
+Concretely fixed in this pass:
+
+* **`rotation_deformer_keyform.scales` = `1 / canvasMaxDim` when the rotation's
+  parent is a warp; `1.0` when the parent is another rotation.** The cmo3
+  XML always carries `scale="1.0"`. Cubism Editor patches the value on
+  compile based on parent type. Without the patch, every rotation→warp
+  transition (GroupRotation_head → BodyXWarp, GroupRotation_<arm> →
+  BodyXWarp, etc.) blew up child positions by 1792× — head/face/arms
+  rendered far off-canvas. Fix in `moc3writer.js` rotation-keyform emit.
+* **`parameter.keyform_binding_begin_indices` indexes `keyform_bindings`,
+  not `keyform_binding_indices`.** And bindings must be ordered such that
+  all bindings for the same param are contiguous (so the runtime can read
+  `[begin, begin+count)` consecutively). moc3writer now sorts the unique-
+  binding pool by owning param order before emitting.
+* **Per-mesh keyform plan must mirror cmo3's branches.** Default meshes
+  emit 1 keyform on `ParamOpacity[1.0]`, not 2 on `ParamOpacity[0,1]`.
+  Variant base meshes (non-backdrop) emit 2 keyforms with opacity 1→0
+  on `Param<Suffix>`. Eye-closure meshes (eyelash/eyewhite/irides per
+  side) emit 2 keyforms on `ParamEye{L,R}Open[0,1]` with closed-eye
+  vertex positions at key=0 and rest at key=1. Cubism's runtime is
+  picky about ParamOpacity keyform layouts; uniform 2-key on `[0,1]`
+  produced orphan slots and half-canvas overlay artefacts.
+* **Mesh-level eye closure shared between writers.** Split
+  `computeClosedVertsForMesh` in cmo3writer into a canvas-frame helper
+  (`computeClosedCanvasVerts`) plus a local-frame wrapper. cmo3's
+  per-mesh loop pushes `{closureSide, closedCanvasVerts}` into
+  `rigCollector.eyeClosure` (per partId) BEFORE the rigOnly short-circuit
+  fires, so moc3writer can read the canvas-frame closed verts and
+  convert to its own per-mesh frame. Resolves both the missing blink
+  animation and the "ArtMesh4/7 have no keyforms at maximum/minimum"
+  load-time warning (eyewhite_l/r now share the [0,1] keyform range
+  the irides clip against).
+
+Inspector scripts in `scripts/`:
+`moc3_inspect.py` (counts + parts + deformers + parameters + art meshes
++ bindings + bands), `moc3_inspect_rot.py` (rotation keyforms labelled
+by deformer id), `moc3_inspect_warp.py` (warp grid keyforms), and
+`moc3_inspect_mesh.py` (art-mesh keyform position bboxes). Run on any
+`.moc3` to dump structure; diff against Cubism's reference output to
+localize divergences.
+
 ### Stage 1 — Parameter spec extraction (2026-04-26)
 
 `src/io/live2d/rig/paramSpec.js` is the single source of truth for the
