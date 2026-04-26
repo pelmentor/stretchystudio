@@ -523,64 +523,20 @@ function buildSectionData(input) {
         };
       }
     }
-    // Non-variant non-bone mesh: 1 keyform on ParamOpacity at recorded
-    // opacity (matches cubism's pattern for the majority of meshes —
-    // kfcnt=1 with 1 binding). Clip-mask meshes get a 2-keyform variant
-    // below — Cubism's validator requires keyforms at min AND max for
-    // any mesh used as a drawable mask. Computed in the second pass
-    // after we know which meshes are referenced as masks.
+    // Non-variant non-bone mesh: 2 keyforms on ParamOpacity at min (0)
+    // and max (1) with opacities [0, recorded]. Standard ParamOpacity fade
+    // semantics — at default ParamOpacity=1 the mesh shows at recorded
+    // opacity, at ParamOpacity=0 it fades out. Mixed 1-key / 2-key
+    // bindings on the same param produced an extra orphan slot in
+    // keyform_binding_index that the runtime read as a half-opacity
+    // overlay across the canvas; uniform 2-keyform avoids that.
     return {
       paramId: 'ParamOpacity',
-      keys: [1],
-      keyformOpacities: [part.opacity ?? 1],
+      keys: [0, 1],
+      keyformOpacities: [0, part.opacity ?? 1],
       perVertexPositions: null,
     };
   });
-
-  // ── Pass 2: upgrade clip-mask meshes to 2-keyform bindings ──
-  // Cubism warns ("Assign Clipping of Artmeshes have keyform problems")
-  // when a mesh used as a clip mask has no keyforms at the min and max
-  // of the params affecting it. We bind those meshes to ParamOpacity at
-  // [0, 1] (its min and max), with opacities [0, recorded] — proper
-  // ParamOpacity fade behaviour for masks plus satisfies the validator.
-  // Detected by scanning iris→eyewhite CLIP_RULES the same way the
-  // drawable_mask section will (further below).
-  const _clipMaskMeshIndices = new Set();
-  const _basePidByTag = new Map();
-  const _variantPidByTagAndSuffix = new Map();
-  for (let mi = 0; mi < meshParts.length; mi++) {
-    const part = meshParts[mi];
-    const tag = matchTag(part.name || part.id);
-    if (!tag) continue;
-    const sfx = part.variantSuffix ?? null;
-    if (sfx) {
-      const key = `${tag}|${sfx}`;
-      if (!_variantPidByTagAndSuffix.has(key)) _variantPidByTagAndSuffix.set(key, mi);
-    } else if (!_basePidByTag.has(tag)) {
-      _basePidByTag.set(tag, mi);
-    }
-  }
-  for (let mi = 0; mi < meshParts.length; mi++) {
-    const part = meshParts[mi];
-    const tag = matchTag(part.name || part.id);
-    if (!tag) continue;
-    const maskTag = CLIP_RULES[tag];
-    if (!maskTag) continue;
-    const sfx = part.variantSuffix ?? null;
-    let maskIdx = sfx ? _variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) : null;
-    if (maskIdx == null) maskIdx = _basePidByTag.get(maskTag);
-    if (maskIdx == null) continue;
-    _clipMaskMeshIndices.add(maskIdx);
-  }
-  for (const mi of _clipMaskMeshIndices) {
-    const plan = meshBindingPlan[mi];
-    // Skip variant / bone meshes — they already have multi-keyform bindings.
-    if (plan.paramId !== 'ParamOpacity') continue;
-    if (plan.perVertexPositions) continue;
-    const opacity = plan.keyformOpacities[0] ?? 1;
-    plan.keys = [0, 1];
-    plan.keyformOpacities = [0, opacity];
-  }
 
   // Flatten per-mesh keyform offsets (used by art_mesh.keyform_begin_indices /
   // _counts). The per-binding key range is computed later in the unified
