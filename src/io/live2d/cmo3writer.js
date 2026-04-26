@@ -3298,6 +3298,7 @@ export async function generateCmo3(input) {
         allDeformerSources, rootPart,
         pidPartGuid, pidCoord,
         rigDebugLog,
+        rigCollector,
       });
       if (pidFpGuid) faceParallaxGuids.set('__all__', pidFpGuid);
     }

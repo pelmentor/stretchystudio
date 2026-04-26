@@ -633,6 +633,36 @@ export function emitFaceParallax(x, ctx) {
     fpFormGuids.push(pidForm);
   }
 
+  // Mirror the face parallax data into rigCollector for the moc3 binary
+  // translator. Cross-product layout matches Hiyori convention: AngleY
+  // varies fastest (inner), AngleX outer.
+  if (ctx.rigCollector) {
+    /** @type {import('../rig/rigSpec.js').WarpDeformerSpec} */
+    const fpSpec = {
+      id: 'FaceParallaxWarp',
+      name: 'Face Parallax',
+      // Parent is Face Rotation (rotation deformer) — keyform positions are
+      // in pivot-relative canvas-pixel offsets from face rotation's pivot.
+      parent: { type: 'rotation', id: 'FaceRotation' },
+      gridSize: { rows: fpRow, cols: fpCol },
+      baseGrid: new Float64Array(fpRestLocal),
+      localFrame: 'pivot-relative',
+      bindings: [
+        { parameterId: 'ParamAngleY', keys: fpAngleKeys.slice(), interpolation: 'LINEAR' },
+        { parameterId: 'ParamAngleX', keys: fpAngleKeys.slice(), interpolation: 'LINEAR' },
+      ],
+      keyforms: fpKeyCombos.map(([ax, ay], i) => ({
+        keyTuple: [ay, ax], // AngleY first to match binding order above
+        positions: new Float64Array(fpGridPositions[i]),
+        opacity: 1,
+      })),
+      isVisible: true,
+      isLocked: false,
+      isQuadTransform: false,
+    };
+    ctx.rigCollector.warpDeformers.push(fpSpec);
+  }
+
   // Emit the single FaceParallax deformer (CWarpDeformerSource) targeting Body X.
   const [, pidFpGuid] = x.shared('CDeformerGuid', {
     uuid: uuid(), note: 'FaceParallax',
