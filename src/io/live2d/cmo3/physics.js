@@ -275,25 +275,28 @@ export const PHYSICS_RULES = [
 
   // ── Bust wobble: chest area bulges up/down when body tilts ──
   // Warp binding: TAG_PARAM_BINDINGS['topwear'] (second entry in bindings[]).
-  // Short pendulum (y=3) + low delay (0.4) + high accel (2.0) = snappy
-  // jiggle response classic to anime bust physics. The warp itself only
-  // shifts the mid-row / center-column region so shoulders and hem stay
-  // pinned — no layer-exposure risk.
+  // Short pendulum + moderate delay/accel = gentle wobble. Earlier tuning
+  // (outputScale 1.0, delay 0.4, accel 2.0) snapped ParamBust 0→±1 abruptly
+  // when the body turned — instead of jiggling, the bust hard-cut to its
+  // extreme then back.
+  //
+  // Lowered outputScale to 0.4 caps the visible deformation; raised delay
+  // to 0.7 + cut accel to 1.2 prevents over-shoot.
   {
     id: 'PhysicsSetting6',
     name: 'Bust',
     outputParamId: 'ParamBust',
-    outputScale: 1.0,
+    outputScale: 0.4,
     requireTag: 'topwear',
     category: 'bust',
     inputs: [
-      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 100 },
-      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 },
-      { paramId: 'ParamBodyAngleY', type: 'SRC_TO_X',       weight: 100 },
+      { paramId: 'ParamBodyAngleX', type: 'SRC_TO_X',       weight: 60 },
+      { paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 60 },
+      { paramId: 'ParamBodyAngleY', type: 'SRC_TO_X',       weight: 60 },
     ],
     vertices: [
       { x: 0, y: 0, mobility: 1.0,  delay: 1.0, acceleration: 1.0, radius: 0 },
-      { x: 0, y: 3, mobility: 0.95, delay: 0.4, acceleration: 2.0, radius: 3 },
+      { x: 0, y: 3, mobility: 0.95, delay: 0.7, acceleration: 1.2, radius: 3 },
     ],
     normalization: {
       posMin: -10, posDef: 0, posMax: 10,
