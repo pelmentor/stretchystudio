@@ -523,10 +523,16 @@ function buildSectionData(input) {
         };
       }
     }
+    // Non-variant non-bone mesh: 2 keyforms on ParamOpacity at min (0) and
+    // max (1), with opacities matching — gives standard ParamOpacity fade
+    // behaviour AND satisfies Cubism's "clip-mask meshes need keyforms at
+    // min/max" validator (warning otherwise: "Assign Clipping of Artmeshes
+    // have keyform problems"). The previous single-keyform-only setup
+    // tripped that warning whenever the mesh was used as a drawable mask.
     return {
       paramId: 'ParamOpacity',
-      keys: [1],
-      keyformOpacities: [part.opacity ?? 1],
+      keys: [0, 1],
+      keyformOpacities: [0, part.opacity ?? 1],
       perVertexPositions: null,
     };
   });
