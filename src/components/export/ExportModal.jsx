@@ -56,6 +56,19 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
   const [physicsClothing, setPhysicsClothing] = useState(true);
   const [physicsBust, setPhysicsBust] = useState(true);
   const [physicsArms, setPhysicsArms] = useState(true);
+  // Procedural motion synthesis (cmo3 project export) — bundles selected
+  // motions into .can3 (editable in Cubism Editor's Animation workspace) and
+  // alongside as runtime .motion3.json files. Each motion has independent
+  // enabled/personality/duration settings. See src/io/live2d/idle/builder.js.
+  const [motionConfigs, setMotionConfigs] = useState({
+    idle:            { enabled: false, personality: 'calm',    duration: 8 },
+    listening:       { enabled: false, personality: 'calm',    duration: 6 },
+    talkingIdle:     { enabled: false, personality: 'calm',    duration: 8 },
+    embarrassedHold: { enabled: false, personality: 'nervous', duration: 4 },
+  });
+  const updateMotionConfig = useCallback((preset, patch) => {
+    setMotionConfigs(prev => ({ ...prev, [preset]: { ...prev[preset], ...patch } }));
+  }, []);
   // Track whether user has explicitly edited the model-name field. While
   // untouched, the field auto-syncs to the current project's name on every
   // open — so loading a new project and then exporting shows the right default.
@@ -120,19 +133,31 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
 
       const name = modelName.trim() || 'model';
 
+      // Common: derive physics disabled categories + motion preset list from
+      // the UI state. Both export paths (project + runtime) consume the same
+      // shapes.
+      const physicsDisabledCategories = [
+        !physicsHair && 'hair',
+        !physicsClothing && 'clothing',
+        !physicsBust && 'bust',
+        !physicsArms && 'arms',
+      ].filter(Boolean);
+      const motionPresets = Object.entries(motionConfigs)
+        .filter(([, cfg]) => cfg.enabled)
+        .map(([preset, cfg]) => ({
+          preset,
+          personality: cfg.personality,
+          durationSec: cfg.duration,
+        }));
+
       if (type === 'live2d_project') {
         // .cmo3 project export (editable in Cubism Editor)
-        const physicsDisabledCategories = [
-          !physicsHair && 'hair',
-          !physicsClothing && 'clothing',
-          !physicsBust && 'bust',
-          !physicsArms && 'arms',
-        ].filter(Boolean);
         const blob = await exportLive2DProject(project, images, {
           modelName: name,
           generateRig,
           generatePhysics,
           physicsDisabledCategories,
+          motionPresets,
           onProgress: (msg) =>
             setProgress(p => (p ? { ...p, label: msg } : null)),
         });
@@ -148,11 +173,14 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        // .moc3 runtime export (ZIP with atlas)
+        // .moc3 runtime export (ZIP — Ren'Py / SDK ready, no Cubism Editor required)
         const blob = await exportLive2D(project, images, {
           modelName: name,
           atlasSize,
           exportMotions: true,
+          generatePhysics,
+          physicsDisabledCategories,
+          motionPresets,
           onProgress: (msg) =>
             setProgress(p => (p ? { ...p, label: msg } : null)),
         });
@@ -174,7 +202,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
       setProgress(null);
       setIsExporting(false);
     }
-  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, physicsHair, physicsClothing, physicsBust, physicsArms, onClose]);
+  }, [project, modelName, atlasSize, type, generateRig, generatePhysics, physicsHair, physicsClothing, physicsBust, physicsArms, motionConfigs, onClose]);
 
   const handleExport = useCallback(async () => {
     if (type === 'live2d' || type === 'live2d_project') {
@@ -408,9 +436,9 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
               <Separator />
               <div className="space-y-3">
                 {type === 'live2d' && (
-                  <div className="text-[11px] text-amber-600 dark:text-amber-400 px-3 py-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200/50 dark:border-amber-800/40">
-                    <span className="font-bold block mb-0.5">⚠️ Testing Only</span>
-                    The Runtime option is for debugging. It cannot be loaded into Cubism Editor and does not support animations. Use <strong>Live2D Project</strong> for production.
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-300 px-3 py-2 rounded bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200/50 dark:border-emerald-800/40">
+                    <span className="font-bold block mb-0.5">Production runtime</span>
+                    Outputs <code>.moc3</code> + <code>model3.json</code> + <code>physics3.json</code> + <code>cdi3.json</code> + textures + selected procedural motions in one zip — load <code>model3.json</code> in Ren&apos;Py / Cubism SDK directly. No Cubism Editor round-trip required.
                   </div>
                 )}
                 <div className="space-y-1">
@@ -458,7 +486,9 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
                     </Label>
                   </div>
                 )}
-                {type === 'live2d_project' && generateRig && (
+                {/* Physics options: shown for runtime always, and for project-export when rig is on
+                    (project export wraps physics inside the cmo3 only when rig is generated). */}
+                {(type === 'live2d' || (type === 'live2d_project' && generateRig)) && (
                   <>
                     <div className="flex items-start gap-2">
                       <Checkbox
@@ -526,11 +556,149 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
                     )}
                   </>
                 )}
+                {(type === 'live2d_project' || type === 'live2d') && (() => {
+                  const motionRows = [
+                    { id: 'idle',            label: 'Idle',         badge: 'loop', desc: 'Default rest — head wander, breath, blinks' },
+                    { id: 'listening',       label: 'Listening',    badge: 'loop', desc: 'Attentive pose with periodic acknowledgement nods' },
+                    { id: 'talkingIdle',     label: 'Talking idle', badge: 'loop', desc: 'Speech-rhythm mouth + emphasis tilts and brow raises' },
+                    { id: 'embarrassedHold', label: 'Embarrassed',  badge: 'hold', desc: 'Sustained shy pose — head down, eyes away, blush' },
+                  ];
+                  const enabledCount = motionRows.filter(r => motionConfigs[r.id]?.enabled).length;
+                  const setAll = (val) => {
+                    setMotionConfigs(prev => {
+                      const out = { ...prev };
+                      for (const r of motionRows) out[r.id] = { ...prev[r.id], enabled: val };
+                      return out;
+                    });
+                  };
+                  return (
+                    <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-2.5">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-medium">
+                          Procedural animations
+                          <span className="text-muted-foreground font-normal ml-1">
+                            ({enabledCount} of {motionRows.length} enabled)
+                          </span>
+                        </Label>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setAll(true)}
+                            disabled={isExporting}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-muted/60 hover:bg-muted text-muted-foreground"
+                          >
+                            All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAll(false)}
+                            disabled={isExporting}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-muted/60 hover:bg-muted text-muted-foreground"
+                          >
+                            None
+                          </button>
+                        </div>
+                      </div>
+                      {/* Stable layout: every row shows the same controls (checkbox, label,
+                          personality, duration). Disabled rows fade — no expand/collapse, no
+                          layout shift. Column header keeps the alignment self-documenting. */}
+                      <div className="grid grid-cols-[auto_1fr_8rem_8rem] gap-2 px-2 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                        <span />
+                        <span>Motion</span>
+                        <span>Personality</span>
+                        <span>Loop duration</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {motionRows.map(row => {
+                          const cfg = motionConfigs[row.id];
+                          const checkboxId = `motion_${row.id}`;
+                          return (
+                            <div
+                              key={row.id}
+                              className={cn(
+                                "rounded px-2 py-1.5 transition-colors",
+                                cfg.enabled
+                                  ? "bg-background/80 ring-1 ring-border/40"
+                                  : "opacity-60"
+                              )}
+                            >
+                              <div className="grid grid-cols-[auto_1fr_8rem_8rem] items-start gap-2">
+                                <Checkbox
+                                  id={checkboxId}
+                                  checked={cfg.enabled}
+                                  onCheckedChange={v => updateMotionConfig(row.id, { enabled: !!v })}
+                                  disabled={isExporting}
+                                  className="mt-0.5"
+                                />
+                                <Label htmlFor={checkboxId} className="text-xs cursor-pointer leading-tight">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="font-medium">{row.label}</span>
+                                    <span className={cn(
+                                      "text-[9px] px-1 py-px rounded font-normal uppercase tracking-wide",
+                                      row.badge === 'loop'
+                                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                    )}>
+                                      {row.badge}
+                                    </span>
+                                  </span>
+                                  <span className="block text-[11px] text-muted-foreground font-normal mt-0.5">
+                                    {row.desc}
+                                  </span>
+                                </Label>
+                                <Select
+                                  value={cfg.personality}
+                                  onValueChange={v => updateMotionConfig(row.id, { personality: v })}
+                                  disabled={isExporting || !cfg.enabled}
+                                >
+                                  <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="calm">Calm</SelectItem>
+                                    <SelectItem value="energetic">Energetic</SelectItem>
+                                    <SelectItem value="tired">Tired</SelectItem>
+                                    <SelectItem value="nervous">Nervous</SelectItem>
+                                    <SelectItem value="confident">Confident</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <Select
+                                  value={String(cfg.duration)}
+                                  onValueChange={v => updateMotionConfig(row.id, { duration: Number(v) })}
+                                  disabled={isExporting || !cfg.enabled}
+                                >
+                                  <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="4">4 sec</SelectItem>
+                                    <SelectItem value="6">6 sec</SelectItem>
+                                    <SelectItem value="8">8 sec</SelectItem>
+                                    <SelectItem value="12">12 sec</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Always rendered to keep layout stable; visibility hidden when nothing selected. */}
+                      <p
+                        className={cn(
+                          "text-[10px] text-muted-foreground italic leading-relaxed",
+                          enabledCount === 0 && "invisible"
+                        )}
+                      >
+                        Each enabled motion becomes its own scene in the .can3 — editable in Cubism Editor before you export runtime files.
+                      </p>
+                    </div>
+                  );
+                })()}
                 <div className="text-xs text-muted-foreground px-2 py-1.5 rounded bg-muted/50">
                   {type === 'live2d_project' ? (
                     <><span className="font-medium">Live2D Cubism .cmo3</span> — project file editable in Cubism Editor 5.0. Each mesh gets its own texture.</>
                   ) : (
-                    <><span className="font-medium">Live2D Cubism V4.00</span> — runtime format (SDK 4.0). Experimental: no animation support and not editable in Cubism Editor.</>
+                    <><span className="font-medium">Live2D Cubism V4 runtime</span> — SDK 4.0 / Ren&apos;Py / Web SDK ready. Includes moc3, model3.json, physics3.json, cdi3.json, textures, and selected procedural motions registered in model3 for auto-load.</>
                   )}
                 </div>
               </div>

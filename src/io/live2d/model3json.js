@@ -14,7 +14,13 @@
  * @property {string}   modelName       - Base name for generated files (e.g. "character")
  * @property {string[]} textureFiles    - Relative paths to texture atlas PNGs
  * @property {string}   [textureDir]    - Subdirectory for textures (e.g. "character.2048")
- * @property {string[]} [motionFiles]   - Relative paths to .motion3.json files
+ * @property {string[]} [motionFiles]   - Relative paths to .motion3.json files. All files
+ *                                         lumped under the `"Idle"` motion group. Pass
+ *                                         `motionsByGroup` instead for per-group control.
+ * @property {Object<string, Array<{File:string}|string>>} [motionsByGroup]
+ *                                       Motion files grouped explicitly:
+ *                                       `{Idle: ["motion/idle.motion3.json"], Tap: [...]}`.
+ *                                       Takes precedence over `motionFiles` when both supplied.
  * @property {string}   [physicsFile]   - Relative path to .physics3.json
  * @property {string}   [poseFile]      - Relative path to .pose3.json
  * @property {string}   [displayInfoFile] - Relative path to .cdi3.json
@@ -33,6 +39,7 @@ export function generateModel3Json(opts) {
     modelName,
     textureFiles,
     motionFiles = [],
+    motionsByGroup = null,
     physicsFile = null,
     poseFile = null,
     displayInfoFile = null,
@@ -59,9 +66,10 @@ export function generateModel3Json(opts) {
     model.FileReferences.DisplayInfo = displayInfoFile;
   }
 
-  // Motion groups — group by name prefix or put all under "Idle"
-  if (motionFiles.length > 0) {
-    model.FileReferences.Motions = buildMotionGroups(motionFiles);
+  // Motion groups — explicit map wins; fall back to legacy "everything under Idle".
+  const motionsBlock = buildMotionsBlock(motionsByGroup, motionFiles);
+  if (motionsBlock) {
+    model.FileReferences.Motions = motionsBlock;
   }
 
   // Groups (LipSync, EyeBlink parameter bindings)
@@ -88,23 +96,24 @@ export function generateModel3Json(opts) {
 }
 
 /**
- * Organize motion files into groups.
+ * Build the `Motions` object for `FileReferences`. Returns `null` when no
+ * motions are supplied (caller skips the field entirely).
  *
- * If motion file names contain a group prefix (e.g. "idle_wave.motion3.json"),
- * they are grouped by that prefix. Otherwise all go under "Idle".
- *
- * @param {string[]} motionFiles
- * @returns {Object<string, {File: string}[]>}
+ * Accepts entries in either `{File: "..."}` shape or bare strings (auto-wrapped).
  */
-function buildMotionGroups(motionFiles) {
-  const groups = {};
-
-  for (const file of motionFiles) {
-    // Default group is "Idle"
-    const groupName = 'Idle';
-    if (!groups[groupName]) groups[groupName] = [];
-    groups[groupName].push({ File: file });
+function buildMotionsBlock(motionsByGroup, legacyMotionFiles) {
+  if (motionsByGroup && Object.keys(motionsByGroup).length > 0) {
+    const out = {};
+    for (const [groupName, entries] of Object.entries(motionsByGroup)) {
+      if (!entries || entries.length === 0) continue;
+      out[groupName] = entries.map(e => (typeof e === 'string' ? { File: e } : e));
+    }
+    return Object.keys(out).length > 0 ? out : null;
   }
 
-  return groups;
+  if (legacyMotionFiles && legacyMotionFiles.length > 0) {
+    return { Idle: legacyMotionFiles.map(f => ({ File: f })) };
+  }
+
+  return null;
 }

@@ -26,6 +26,7 @@ import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
 import { variantParamId } from '../psdOrganizer.js';
+import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
 import {
   VERSION_PIS,
   IMPORT_PIS,
@@ -194,107 +195,50 @@ export async function generateCmo3(input) {
   });
   const [, pidModelGuid] = x.shared('CModelGuid', { uuid: uuid(), note: 'model' });
 
-  // Build parameter GUIDs — always include ParamOpacity, plus all project parameters
-  const paramDefs = [];
-  // ParamOpacity is always required (keyform bindings reference it)
-  const [, pidParamOpacity] = x.shared('CParameterGuid', { uuid: uuid(), note: 'ParamOpacity' });
-  paramDefs.push({
-    pid: pidParamOpacity, id: 'ParamOpacity', name: 'Opacity',
-    min: 0, max: 1, defaultVal: 1, decimalPlaces: 1,
+  // Build the canonical parameter list via the shared spec builder. Single
+  // source of truth shared with moc3writer (runtime path) and any future
+  // .cdi3 / .physics3 callers — keeps the rig consistent across exports.
+  // See `src/io/live2d/rig/paramSpec.js`.
+  const paramSpecs = buildParameterSpec({
+    baseParameters: parameters,
+    meshes,
+    groups,
+    generateRig,
   });
-  for (const p of parameters) {
-    const paramId = p.id ?? `Param${paramDefs.length}`;
-    const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: paramId });
-    paramDefs.push({
-      pid, id: paramId, name: p.name ?? paramId,
-      min: p.min ?? 0, max: p.max ?? 1, defaultVal: p.default ?? 0,
-      decimalPlaces: 3,
-    });
-  }
 
-  // Auto-register one parameter per variant suffix actually used in this
-  // project (e.g. meshes with `foo.smile` → ParamSmile, `foo.sad` → ParamSad).
-  // Variant meshes pair with their base via shared tag — see extractVariant /
-  // VARIANT_SUFFIXES. Runs independently of `generateRig` since variants
-  // are content, not rig.
-  const usedVariantSuffixes = new Set();
-  for (const m of meshes) {
-    const suffix = m.variantSuffix ?? m.variantRole;
-    if (suffix) usedVariantSuffixes.add(suffix);
-  }
-  for (const suffix of usedVariantSuffixes) {
-    const paramId = variantParamId(suffix);
-    if (!paramId || paramDefs.find(p => p.id === paramId)) continue;
-    const [, pidSuffix] = x.shared('CParameterGuid', { uuid: uuid(), note: paramId });
-    paramDefs.push({
-      pid: pidSuffix,
-      id: paramId,
-      name: suffix.charAt(0).toUpperCase() + suffix.slice(1),
-      min: 0, max: 1, defaultVal: 0, decimalPlaces: 1,
-    });
-  }
+  // Materialise paramDefs by attaching the cmo3-specific XML pid to each spec.
+  // The legacy `defaultVal` field name is preserved (the rest of this file —
+  // most notably the parameter XML emission near line 4350 — reads `defaultVal`).
+  const paramDefs = paramSpecs.map(spec => {
+    const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: spec.id });
+    return {
+      pid,
+      id: spec.id,
+      name: spec.name,
+      min: spec.min,
+      max: spec.max,
+      defaultVal: spec.default,
+      decimalPlaces: spec.decimalPlaces,
+      role: spec.role,
+    };
+  });
 
-  // Standard Live2D parameters (when generateRig is enabled).
-  // These use SDK-standard IDs so face tracking apps (VTube Studio) recognize them.
-  if (generateRig) {
-    const standardParams = [
-      { id: 'ParamAngleX',     name: 'Angle X',      min: -30, max: 30,  def: 0 },
-      { id: 'ParamAngleY',     name: 'Angle Y',      min: -30, max: 30,  def: 0 },
-      { id: 'ParamAngleZ',     name: 'Angle Z',      min: -30, max: 30,  def: 0 },
-      { id: 'ParamBodyAngleX', name: 'Body Angle X',  min: -10, max: 10, def: 0 },
-      { id: 'ParamBodyAngleY', name: 'Body Angle Y',  min: -10, max: 10, def: 0 },
-      { id: 'ParamBodyAngleZ', name: 'Body Angle Z',  min: -10, max: 10, def: 0 },
-      { id: 'ParamBreath',     name: 'Breath',        min: 0,   max: 1,  def: 0 },
-      { id: 'ParamEyeLOpen',   name: 'Eye L Open',    min: 0,   max: 1,  def: 1 },
-      { id: 'ParamEyeROpen',   name: 'Eye R Open',    min: 0,   max: 1,  def: 1 },
-      { id: 'ParamEyeBallX',   name: 'Eyeball X',     min: -1,  max: 1,  def: 0 },
-      { id: 'ParamEyeBallY',   name: 'Eyeball Y',     min: -1,  max: 1,  def: 0 },
-      { id: 'ParamBrowLY',     name: 'Brow L Y',      min: -1,  max: 1,  def: 0 },
-      { id: 'ParamBrowRY',     name: 'Brow R Y',      min: -1,  max: 1,  def: 0 },
-      { id: 'ParamMouthForm',  name: 'Mouth Form',    min: -1,  max: 1,  def: 0 },
-      { id: 'ParamMouthOpenY', name: 'Mouth Open',    min: 0,   max: 1,  def: 0 },
-      { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0 },
-      { id: 'ParamHairSide',   name: 'Hair Side',     min: -1,  max: 1,  def: 0 },
-      { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0 },
-      // Physics-driven clothing. Warp bindings on matching tags
-      // (bottomwear / topwear / legwear) live in TAG_PARAM_BINDINGS;
-      // physics rules live in cmo3/physics.js.
-      { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0 },
-      { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0 },
-      { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0 },
-      { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0 },
-      // Arm sway: no dedicated param. Physics drives the existing
-      // `ParamRotation_leftElbow` / `ParamRotation_rightElbow` bone rotation
-      // params directly (see cmo3/physics.js PhysicsSetting_ArmSnake).
-    ];
-    for (const sp of standardParams) {
-      if (paramDefs.find(p => p.id === sp.id)) continue;
-      const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: sp.id });
-      paramDefs.push({
-        pid, id: sp.id, name: sp.name,
-        min: sp.min, max: sp.max, defaultVal: sp.def, decimalPlaces: 1,
-      });
-    }
-  }
-
-  // Pre-create rotation parameters for bone nodes (needed by baked keyform meshes).
-  // These are groups referenced as jointBoneId by meshes with boneWeights.
-  // Created here (before per-mesh loop) so KeyformBindingSource can reference them.
-  const BAKED_ANGLES = [-90, -45, 0, 45, 90];
+  // Convenience handles used downstream (keyform bindings, deformer hookup).
+  // ParamOpacity is always present (always at index 0 — see paramSpec.js).
+  const pidParamOpacity = paramDefs[0].pid;
+  // Alias for the keyform-emission loops below — they iterate the angle array
+  // directly to write 5 baked-pose CFormGuids per bone-driven mesh.
+  const BAKED_ANGLES = BAKED_BONE_ANGLES;
   const BAKED_ANGLE_MIN = BAKED_ANGLES[0];
   const BAKED_ANGLE_MAX = BAKED_ANGLES[BAKED_ANGLES.length - 1];
   const boneParamGuids = new Map(); // jointBoneId → { pidParam, paramId }
-  for (const m of meshes) {
-    if (m.jointBoneId && m.boneWeights && !boneParamGuids.has(m.jointBoneId)) {
-      const boneGroup = groups.find(g => g.id === m.jointBoneId);
-      const boneName = (boneGroup?.name || m.jointBoneId).replace(/[^a-zA-Z0-9_]/g, '_');
-      const paramId = `ParamRotation_${boneName}`;
-      const [, pidParam] = x.shared('CParameterGuid', { uuid: uuid(), note: paramId });
-      boneParamGuids.set(m.jointBoneId, { pidParam, paramId });
-      paramDefs.push({
-        pid: pidParam, id: paramId, name: `Rotation ${boneGroup?.name || m.jointBoneId}`,
-        min: BAKED_ANGLE_MIN, max: BAKED_ANGLE_MAX, defaultVal: 0, decimalPlaces: 1,
-      });
+  for (const pd of paramDefs) {
+    if (pd.role !== 'bone') continue;
+    // Recover the source jointBoneId from the spec — paramSpec.js attaches it
+    // to each bone-role entry. Fall back to id-based lookup for safety.
+    const spec = paramSpecs.find(s => s.id === pd.id);
+    if (spec?.boneId) {
+      boneParamGuids.set(spec.boneId, { pidParam: pd.pid, paramId: pd.id });
     }
   }
 
@@ -429,10 +373,10 @@ export async function generateCmo3(input) {
   // ParamSad, ParamAngry, ...). Look up any param id we've emitted for a
   // known suffix — all registered in the auto-register pass above.
   const variantParamPidBySuffix = new Map(); // 'smile' → pid
-  for (const suffix of usedVariantSuffixes) {
-    const paramId = variantParamId(suffix);
-    const pid = paramDefs.find(p => p.id === paramId)?.pid;
-    if (pid) variantParamPidBySuffix.set(suffix, pid);
+  for (const spec of paramSpecs) {
+    if (spec.role !== 'variant' || !spec.variantSuffix) continue;
+    const pid = paramDefs.find(p => p.id === spec.id)?.pid;
+    if (pid) variantParamPidBySuffix.set(spec.variantSuffix, pid);
   }
   // Structural backdrop tags — base meshes with these tags stay at
   // opacity=1 always (never fade on any Param<Suffix>). User rule

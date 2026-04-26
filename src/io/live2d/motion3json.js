@@ -44,6 +44,20 @@ export function generateMotion3Json(animation, opts = {}) {
   let totalPointCount = 0;
 
   for (const track of (animation.tracks ?? [])) {
+    // Parameter tracks (paramId set) — first-class Live2D parameter animation,
+    // emitted directly without going through the SS node→param mapping. Used
+    // by the idle generator and any AI-driven motion that targets standard
+    // Live2D parameters (ParamAngleX, ParamBreath, etc.) by ID.
+    if (track.paramId) {
+      const segments = encodeKeyframesToSegments(track.keyframes ?? [], durationSec);
+      if (segments.length === 0) continue;
+      const segInfo = countSegmentsAndPoints(segments);
+      totalSegmentCount += segInfo.segments;
+      totalPointCount += segInfo.points;
+      curves.push({ Target: 'Parameter', Id: track.paramId, Segments: segments });
+      continue;
+    }
+
     // mesh_verts tracks → parameter curve driving warp deformer keyform index
     if (track.property === 'mesh_verts') {
       const key = `${track.nodeId}.mesh_verts`;
@@ -207,7 +221,7 @@ function easingToSegmentType(easing = 'linear') {
  * @param {number[]} segments
  * @returns {{ segments: number, points: number }}
  */
-function countSegmentsAndPoints(segments) {
+export function countSegmentsAndPoints(segments) {
   if (segments.length < 2) return { segments: 0, points: 0 };
 
   let segCount = 0;

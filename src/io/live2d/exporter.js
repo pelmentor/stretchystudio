@@ -10,18 +10,27 @@
 import { generateModel3Json } from './model3json.js';
 import { generateCdi3Json } from './cdi3json.js';
 import { generateMotion3Json } from './motion3json.js';
+import { generatePhysics3Json } from './physics3json.js';
 import { generateMoc3 } from './moc3writer.js';
 import { packTextureAtlas } from './textureAtlas.js';
 import { generateCmo3 } from './cmo3writer.js';
 import { generateCan3 } from './can3writer.js';
+import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
+import { buildParameterSpec } from './rig/paramSpec.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
 /**
  * @typedef {Object} ExportOptions
- * @property {string}  modelName   - Base name (e.g. "character")
- * @property {number}  [atlasSize=2048] - Texture atlas size
- * @property {boolean} [exportMotions=true] - Whether to include .motion3.json files
+ * @property {string}   modelName   - Base name (e.g. "character")
+ * @property {number}   [atlasSize=2048] - Texture atlas size
+ * @property {boolean}  [exportMotions=true] - Whether to include .motion3.json files from project.animations
+ * @property {boolean}  [generatePhysics=true] - Emit `physics3.json` from PHYSICS_RULES
+ * @property {string[]} [physicsDisabledCategories=null] - Category names to suppress (`'hair'`, `'clothing'`, `'bust'`, `'arms'`)
+ * @property {Array<string | {preset:string, personality?:string, durationSec?:number, seed?:number}>} [motionPresets]
+ *                    Procedural motion presets to synthesise as `.motion3.json` files and register
+ *                    in `model3.json`'s `Motions` block. Each preset becomes its own group named
+ *                    after the preset's label (e.g. `Idle`, `Listening`, `TalkingIdle`, `EmbarrassedHold`).
  * @property {function} [onProgress] - Progress callback (message: string)
  */
 
@@ -38,11 +47,35 @@ export async function exportLive2D(project, images, opts = {}) {
     modelName = 'model',
     atlasSize = 2048,
     exportMotions = true,
+    generatePhysics = true,
+    physicsDisabledCategories = null,
+    motionPresets = [],
     onProgress = () => {},
   } = opts;
 
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
+
+  // --- Step 0: Build the canonical parameter spec ---
+  // Single source of truth shared with cmo3writer and moc3writer. All
+  // downstream consumers (cdi3, physics3, motion presets, model3 SDK groups)
+  // pull from this list — replaces the empty `project.parameters ?? []`
+  // reads that left the runtime model with no rig at all.
+  const meshNodesForSpec = project.nodes.filter(n =>
+    n.type === 'part' && n.mesh && n.visible !== false
+  );
+  const groupNodesForSpec = project.nodes.filter(n => n.type === 'group');
+  const paramSpec = buildParameterSpec({
+    baseParameters: project.parameters ?? [],
+    meshes: meshNodesForSpec.map(n => ({
+      variantSuffix: n.variantSuffix ?? null,
+      variantRole: n.variantRole ?? null,
+      jointBoneId: n.mesh?.jointBoneId ?? null,
+      boneWeights: n.mesh?.boneWeights ?? null,
+    })),
+    groups: groupNodesForSpec,
+    generateRig: true,
+  });
 
   // --- Step 1: Pack textures ---
   onProgress('Packing texture atlas...');
@@ -61,11 +94,15 @@ export async function exportLive2D(project, images, opts = {}) {
 
   // --- Step 2: Generate .moc3 ---
   onProgress('Generating .moc3 binary...');
+  // generateRig:true emits the SDK-standard parameter list (ParamAngleX/Y/Z,
+  // EyeBlink, MouthOpen, …) plus auto-detected variant + bone params via the
+  // shared paramSpec builder. Same source of truth cmo3writer uses.
   const moc3Buffer = generateMoc3({
     project,
     regions,
     atlasSize,
     numAtlases: atlases.length,
+    generateRig: true,
   });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
@@ -108,10 +145,10 @@ export async function exportLive2D(project, images, opts = {}) {
   );
 
   const cdi3 = generateCdi3Json({
-    parameters: (project.parameters ?? []).map(p => ({
+    parameters: paramSpec.map(p => ({
       id: p.id,
-      name: p.name ?? p.id,
-      groupId: p.groupId,
+      name: p.name,
+      groupId: undefined,
     })),
     parts: groups.map(g => ({
       id: g.id,
@@ -122,13 +159,102 @@ export async function exportLive2D(project, images, opts = {}) {
   const cdi3File = `${modelName}.cdi3.json`;
   zip.file(cdi3File, JSON.stringify(cdi3, null, '\t'));
 
+  // --- Step 4.5: Generate .physics3.json ---
+  // Built from the same PHYSICS_RULES source-of-truth that the cmo3 emitter uses,
+  // so disabledCategories / requireTag gating stays in step across both export
+  // paths. Skipped (not zipped) if no rules survive gating, or if user opted out.
+  let physicsFile = null;
+  if (generatePhysics) {
+    onProgress('Generating physics...');
+    const disabledSet = physicsDisabledCategories
+      ? new Set(physicsDisabledCategories)
+      : null;
+    const physics3 = generatePhysics3Json({
+      paramDefs: paramSpec,
+      meshes: meshParts.map(p => ({ tag: matchTag(p.name || p.id) })),
+      groups,
+      disabledCategories: disabledSet,
+    });
+    if (physics3.PhysicsSettings.length > 0) {
+      physicsFile = `${modelName}.physics3.json`;
+      zip.file(physicsFile, JSON.stringify(physics3, null, '\t'));
+    } else {
+      console.warn('[exportLive2D] physics3 has 0 settings, skipping');
+    }
+  }
+
+  // --- Step 4.6: Procedural motion presets ---
+  // Each enabled preset (idle/listening/talkingIdle/embarrassedHold) is
+  // synthesised directly to runtime motion3.json. No Cubism Editor round-trip
+  // required — Ren'Py / Cubism SDK loads model3.json and finds them via the
+  // Motions block.
+  /** @type {Object<string, Array<{File:string}>>} */
+  const motionsByGroup = {};
+  if (motionFiles.length > 0) {
+    motionsByGroup.Idle = motionFiles.map(f => ({ File: f }));
+  }
+  if (Array.isArray(motionPresets) && motionPresets.length > 0) {
+    onProgress('Synthesising procedural motions...');
+    const paramIds = paramSpec.map(p => p.id);
+    const motionFolder = zip.folder('motion');
+    for (const entry of motionPresets) {
+      const cfg = typeof entry === 'string' ? { preset: entry } : (entry ?? {});
+      const preset = cfg.preset;
+      if (!preset || !PRESETS[preset]) {
+        console.warn(`[exportLive2D] unknown motion preset '${preset}', skipping`);
+        continue;
+      }
+      try {
+        const result = buildMotion3({
+          preset,
+          paramIds,
+          physicsOutputIds: new Set(),
+          durationSec: cfg.durationSec ?? 8,
+          fps: 30,
+          personality: cfg.personality ?? 'calm',
+          seed: cfg.seed ?? 1,
+        });
+        if (result.validationErrors.length > 0) {
+          console.warn(`[exportLive2D] ${preset}: validation errors, skipping:`, result.validationErrors);
+          continue;
+        }
+        if (result.animatedIds.length === 0) {
+          console.warn(`[exportLive2D] ${preset}: 0 curves, skipping`);
+          continue;
+        }
+        const slug = preset.replace(/([A-Z])/g, '_$1').toLowerCase();
+        const filename = `${modelName}_${slug}.motion3.json`;
+        motionFolder.file(filename, JSON.stringify(result.motion3, null, '\t'));
+        const groupName = PRESETS[preset].label.replace(/\s+/g, '');
+        if (!motionsByGroup[groupName]) motionsByGroup[groupName] = [];
+        motionsByGroup[groupName].push({ File: `motion/${filename}` });
+        // Keep resultToSsAnimation reachable for future bidirectional flows
+        // (e.g. wiring back into a .can3 if we ever bundle one alongside).
+        void resultToSsAnimation;
+      } catch (err) {
+        console.warn(`[exportLive2D] ${preset}: synthesis failed:`, err.message);
+      }
+    }
+  }
+
   // --- Step 5: Generate .model3.json ---
+  // Auto-discover LipSync / EyeBlink groups from the canonical paramSpec so
+  // SDK mouth-sync features work out of the box.
+  const paramIdSet = new Set(paramSpec.map(p => p.id));
+  const sdkGroups = {};
+  if (paramIdSet.has('ParamMouthOpenY')) sdkGroups.LipSync = ['ParamMouthOpenY'];
+  const blinkParams = ['ParamEyeLOpen', 'ParamEyeROpen'].filter(id => paramIdSet.has(id));
+  if (blinkParams.length > 0) sdkGroups.EyeBlink = blinkParams;
+
   onProgress('Generating model manifest...');
   const model3 = generateModel3Json({
     modelName,
     textureFiles,
-    motionFiles,
+    motionsByGroup: Object.keys(motionsByGroup).length > 0 ? motionsByGroup : null,
+    motionFiles: Object.keys(motionsByGroup).length > 0 ? [] : motionFiles,  // fallback
+    physicsFile,
     displayInfoFile: cdi3File,
+    groups: sdkGroups,
   });
 
   zip.file(`${modelName}.model3.json`, JSON.stringify(model3, null, '\t'));
@@ -152,6 +278,15 @@ export async function exportLive2D(project, images, opts = {}) {
  * @param {boolean} [opts.generateRig=false] - Generate standard Live2D rig (warp deformers, standard params)
  * @param {boolean} [opts.generatePhysics] - Emit CPhysicsSettingsSourceSet (hair + clothing pendulums). Defaults to `generateRig`.
  * @param {string[]} [opts.physicsDisabledCategories] - Category names to SUPPRESS (e.g. ['hair'] for buzz-cut characters).
+ * @param {Array<string | {preset:string, personality?:string, durationSec?:number, seed?:number}>} [opts.motionPresets]
+ *                   Motions to synthesise into the bundled `.can3` as editable scenes for Cubism Editor.
+ *                   Each entry is either a bare preset name (uses default personality/duration) or an object
+ *                   with per-motion overrides `{preset, personality, durationSec, seed}`. Once the user
+ *                   re-exports the project from Cubism Editor (File → Export → For Runtime), Cubism produces
+ *                   the `.motion3.json` files itself from the .can3 scenes — so we don't ship runtime
+ *                   motion files alongside the cmo3 (they would be stale the moment the user tweaks a scene).
+ *                   Valid preset names: `idle`, `listening`, `talkingIdle`, `embarrassedHold`.
+ *                   Empty/omitted = no motions synthesised.
  * @param {function} [opts.onProgress]
  * @returns {Promise<Blob>} .cmo3 blob ready for download
  */
@@ -161,6 +296,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     generateRig = false,
     generatePhysics = generateRig,
     physicsDisabledCategories = null,
+    motionPresets = [],
     onProgress = () => {},
   } = opts;
 
@@ -300,12 +436,69 @@ export async function exportLive2DProject(project, images, opts = {}) {
     physicsDisabledCategories,
   });
 
-  // Generate .can3 animation file if there are animations with deformer parameters
-  const animations = project.animations ?? [];
+  // --- Motion synthesis (optional) ---
+  // Each requested preset becomes a parameter-track SS animation appended to
+  // `animations`. Flowing through generateCan3 emits a .can3 scene with bezier
+  // keyframes on each Standard Parameter, directly editable in Cubism Editor
+  // (open .cmo3 → Animation workspace → File → Open the .can3 → pick scene
+  // from list). The user then re-exports runtime files from Editor, which
+  // produces the .motion3.json files from the (possibly tweaked) scenes —
+  // so we deliberately don't ship runtime motion3 here.
+  //
+  // Presets currently available: idle, listening, talkingIdle, embarrassedHold.
+  let animations = project.animations ?? [];
+  if (Array.isArray(motionPresets) && motionPresets.length > 0) {
+    // Use the same paramSpec the cmo3 writer just built — `project.parameters`
+    // is empty for fresh PSD imports, so motion presets used to silently skip
+    // every preset (no params to target).
+    const paramIds = buildParameterSpec({
+      baseParameters: project.parameters ?? [],
+      meshes,
+      groups,
+      generateRig,
+    }).map(p => p.id);
+    for (const entry of motionPresets) {
+      // Normalise both shapes: bare string OR object with overrides.
+      const cfg = typeof entry === 'string' ? { preset: entry } : (entry ?? {});
+      const preset = cfg.preset;
+      if (!preset || !PRESETS[preset]) {
+        console.warn(`[exportLive2DProject] unknown motion preset '${preset}', skipping`);
+        continue;
+      }
+      const personality = cfg.personality ?? 'calm';
+      const durationSec = cfg.durationSec ?? 8;
+      const seed = cfg.seed ?? 1;
+      onProgress(`Synthesising ${PRESETS[preset].label} motion...`);
+      try {
+        const result = buildMotion3({
+          preset,
+          paramIds,
+          physicsOutputIds: new Set(),
+          durationSec,
+          fps: 30,
+          personality,
+          seed,
+        });
+        if (result.validationErrors.length > 0) {
+          console.warn(`[exportLive2DProject] ${preset}: validation errors, skipping:`, result.validationErrors);
+          continue;
+        }
+        if (result.animatedIds.length === 0) {
+          console.warn(`[exportLive2DProject] ${preset}: 0 curves (no Standard Parameters present), skipping`);
+          continue;
+        }
+        const { animation } = resultToSsAnimation(result);
+        animations = [...animations, animation];
+      } catch (err) {
+        console.warn(`[exportLive2DProject] ${preset}: synthesis failed:`, err.message);
+      }
+    }
+  }
+
   const hasAnimations = animations.length > 0 && deformerParamMap.size > 0;
   const hasRigDebug = !!rigDebugLog;
 
-  // Bundle into ZIP if we have animations OR a rig debug log (Phase 0 diagnostic).
+  // Bundle into ZIP when we have animations OR rig debug log.
   if (hasAnimations || hasRigDebug) {
     const cmo3FileName = `${modelName}.cmo3`;
     const { default: JSZip } = await import('jszip');

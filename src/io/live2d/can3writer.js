@@ -101,9 +101,20 @@ const IMPORT_PIS = [
 /**
  * Generate a .can3 animation archive.
  *
+ * Tracks may take two shapes:
+ *   - Node-property track: `{nodeId, property: 'rotation', keyframes}` — the
+ *     historical SS form. Maps to a Live2D parameter via the
+ *     `deformerParamMap` (groupId → {paramId, min, max, rest?}).
+ *   - Parameter track:     `{paramId, min?, max?, rest?, keyframes}` — first-class
+ *     Live2D parameter animation, used by the idle generator and any future
+ *     AI-driven motion. No `deformerParamMap` entry required.
+ *
+ * Both shapes coexist in the same animation; the writer collects the union
+ * of paramIds across all sources and emits one CMvAttrF per param per scene.
+ *
  * @param {object} input
  * @param {object[]} input.animations - SS animations [{name, duration, fps, tracks}]
- * @param {Map<string, {paramId, min, max}>} input.deformerParamMap - groupId → param info
+ * @param {Map<string, {paramId, min, max, rest?}>} input.deformerParamMap - groupId → param info
  * @param {string} input.cmo3FileName - Linked .cmo3 filename (e.g. "model.cmo3")
  * @param {number} input.canvasW
  * @param {number} input.canvasH
@@ -138,13 +149,41 @@ export async function generateCan3(input) {
   // Resource GUID (links to .cmo3 model)
   const [, pidResourceGuid] = x.shared('CResourceGuid', { uuid: uuid(), note: cmo3FileName });
 
-  // Parameter GUIDs — one per deformer parameter
-  const paramGuids = new Map(); // paramId → pidGuid
-  for (const [, info] of deformerParamMap) {
-    if (!paramGuids.has(info.paramId)) {
-      const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: info.paramId });
-      paramGuids.set(info.paramId, pid);
+  // Build the unified set of paramInfo entries: rotation deformer params
+  // (from deformerParamMap) plus parameter tracks' paramIds (from any anim).
+  // Order is stable: deformer entries first (existing convention), then any
+  // additional param-track-only ids in insertion order.
+  /** @type {Array<{paramId:string, min:number, max:number, rest:number, sourceGroupId?:string}>} */
+  const paramInfoList = [];
+  const seenParamIds = new Set();
+
+  for (const [groupId, info] of deformerParamMap) {
+    if (seenParamIds.has(info.paramId)) continue;
+    seenParamIds.add(info.paramId);
+    paramInfoList.push({
+      paramId: info.paramId,
+      min: info.min, max: info.max, rest: info.rest ?? 0,
+      sourceGroupId: groupId,
+    });
+  }
+  for (const anim of animations) {
+    for (const t of (anim.tracks ?? [])) {
+      if (!t.paramId || seenParamIds.has(t.paramId)) continue;
+      seenParamIds.add(t.paramId);
+      paramInfoList.push({
+        paramId: t.paramId,
+        min: t.min ?? -1,
+        max: t.max ?? 1,
+        rest: t.rest ?? 0,
+      });
     }
+  }
+
+  // Parameter GUIDs — one per unique paramId across all sources.
+  const paramGuids = new Map(); // paramId → pidGuid
+  for (const info of paramInfoList) {
+    const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: info.paramId });
+    paramGuids.set(info.paramId, pid);
   }
 
   // Build all scenes
@@ -170,17 +209,30 @@ export async function generateCan3(input) {
     // Build CMvAttrF for each animated parameter
     const paramAttrPids = []; // pidAttrF for each parameter
 
-    // Collect all rotation tracks for this animation
-    const rotationTracks = new Map(); // groupId → track
+    // Index this scene's tracks by both addressing modes:
+    //   - rotation tracks indexed by nodeId (for deformer-param matching)
+    //   - parameter tracks indexed by paramId
+    const rotationTracksByNodeId = new Map();
+    const paramTracksByParamId = new Map();
     for (const track of (anim.tracks ?? [])) {
-      if (track.property === 'rotation' && deformerParamMap.has(track.nodeId)) {
-        rotationTracks.set(track.nodeId, track);
+      if (track.paramId) {
+        if (!paramTracksByParamId.has(track.paramId)) {
+          paramTracksByParamId.set(track.paramId, track);
+        }
+      } else if (track.property === 'rotation' && deformerParamMap.has(track.nodeId)) {
+        rotationTracksByNodeId.set(track.nodeId, track);
       }
     }
 
-    // Create CMvAttrF for each deformer parameter (even if no keyframes — Editor expects all)
-    for (const [groupId, info] of deformerParamMap) {
-      const track = rotationTracks.get(groupId);
+    // Emit one CMvAttrF per unique param. Editor expects every animated
+    // parameter to be listed — params without keyframes pin at their rest
+    // value via a CFixedSequence.
+    for (const info of paramInfoList) {
+      // Match either by sourceGroupId (rotation track) or by paramId.
+      const track = info.sourceGroupId
+        ? (rotationTracksByNodeId.get(info.sourceGroupId) ?? paramTracksByParamId.get(info.paramId) ?? null)
+        : (paramTracksByParamId.get(info.paramId) ?? null);
+
       const [attrF, pidAttrF] = x.shared('CMvAttrF');
       paramAttrPids.push(pidAttrF);
 
@@ -204,8 +256,20 @@ export async function generateCan3(input) {
         const kfs = [...track.keyframes].sort((a, b) => a.time - b.time);
         emitMutableSequence(x, attrF, pidAttrF, kfs, fps, info.min, info.max);
       } else {
-        // No keyframes — emit fixed value at 0 (rest)
-        emitFixedSequence(x, attrF, pidAttrF, 0);
+        // No keyframes for this param in this scene — emit a single-keyframe
+        // CMutableSequence pinned at the parameter's rest value.
+        //
+        // We deliberately don't use CFixedSequence here even though it's
+        // semantically what we want: Cubism Editor 5.0's "Export motion file"
+        // command crashes with ClassCastException casting CFixedSequence to
+        // CMutableSequence. Single-keyframe CMutableSequence is the safe
+        // alternative — Editor renders it identically (flat hold) AND can
+        // export it as motion3.json.
+        emitMutableSequence(
+          x, attrF, pidAttrF,
+          [{ time: 0, value: info.rest, easing: 'linear' }],
+          fps, info.min, info.max,
+        );
       }
 
       x.sub(attrF, 'd', { 'xs.n': 'rangeMin' }).text = String(info.min);
@@ -229,15 +293,16 @@ export async function generateCan3(input) {
       x.subRef(peAttrList, 'CMvAttrF', pid);
     }
     // attrMap (hash_map: CAttrId → CMvAttrF) — INSIDE ICMvEffect super (Hiyori pattern)
+    // Iterates the same paramInfoList in the same order as the CMvAttrF
+    // emission above, so paramAttrPids[i] corresponds to paramInfoList[i].
     const peAttrMap = x.sub(peSuper, 'hash_map', {
       'xs.n': 'attrMap', count: String(paramAttrPids.length),
     });
-    let paramIdx = 0;
-    for (const [, info] of deformerParamMap) {
+    for (let i = 0; i < paramInfoList.length; i++) {
+      const info = paramInfoList[i];
       const entry = x.sub(peAttrMap, 'entry');
       x.sub(entry, 'CAttrId', { 'xs.n': 'key', idstr: `live2dParam_${info.paramId}` });
-      x.subRef(entry, 'CMvAttrF', paramAttrPids[paramIdx], { 'xs.n': 'value' });
-      paramIdx++;
+      x.subRef(entry, 'CMvAttrF', paramAttrPids[i], { 'xs.n': 'value' });
     }
     // track back-reference (REQUIRED — last child of ICMvEffect)
     x.subRef(peSuper, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
@@ -555,7 +620,12 @@ export async function generateCan3(input) {
     x.sub(movieInfo, 'i', { 'xs.n': 'duration' }).text = String(durationFrames);
     x.sub(movieInfo, 'd', { 'xs.n': 'fps' }).text = String(fps) + '.0';
     x.sub(movieInfo, 'i', { 'xs.n': 'workspaceStart' }).text = '0';
-    x.sub(movieInfo, 'i', { 'xs.n': 'workspaceEnd' }).text = String(durationFrames - 1);
+    // workspaceEnd = durationFrames (not -1) so that loop-closure keyframes
+    // at exact `duration` time fall INSIDE the workspace. Previously
+    // workspaceEnd=durationFrames-1 made Cubism Editor warn "Keyframes have
+    // been set outside the range of the motion data export" and silently
+    // drop the loop-closing keyframe.
+    x.sub(movieInfo, 'i', { 'xs.n': 'workspaceEnd' }).text = String(durationFrames);
     x.sub(movieInfo, 'CColor', { 'xs.n': 'background' });
     x.sub(movieInfo, 'i', { 'xs.n': 'fadeInMSec' }).text = '-1';
     x.sub(movieInfo, 'i', { 'xs.n': 'fadeOutMSec' }).text = '-1';
@@ -780,11 +850,8 @@ function emitMutableSequence(x, parent, pidAttr, keyframes, fps, rangeMin, range
   }
 }
 
-/**
- * Emit a CFixedSequence (single constant value, no keyframes).
- * CFixedSequence is NOT a subclass of ACValueSequence — it only has a value field.
- */
-function emitFixedSequence(x, parent, pidAttr, value) {
-  const seq = x.sub(parent, 'CFixedSequence', { 'xs.n': 'valueData' });
-  x.sub(seq, 'd', { 'xs.n': 'value' }).text = String(value);
-}
+// emitFixedSequence (CFixedSequence) was removed — Cubism Editor 5.0's
+// "Export motion file" command crashes on it (ClassCastException to
+// CMutableSequence). All untracked params now emit a single-keyframe
+// CMutableSequence at the rest value, which Editor handles for both
+// playback and export.
