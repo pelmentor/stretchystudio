@@ -673,10 +673,12 @@ export async function generateCmo3(input) {
   // `hasEyeVariantCompound` branch — so base and variant share the code
   // path but NEVER share the `curve` or `lashBbox` inputs (those come from
   // base or variant's own parabola and own bbox).
-  const computeClosedVertsForMesh = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, rwBox, dfOrigin, shiftPx }) => {
+  // Canvas-frame-only closure compute. Shared with moc3writer via the
+  // rigCollector — that writer needs canvas-space verts to convert to its
+  // own per-mesh frame (rig-warp 0..1 / pivot-relative px / etc.) which
+  // depends on the parent_deformer chain at moc3 emission time.
+  const computeClosedCanvasVerts = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, shiftPx }) => {
     const shift = shiftPx ?? 0;
-    const rwMinY = rwBox ? rwBox.gridMinY : null;
-    const rwMaxY = rwBox ? rwBox.gridMinY + rwBox.gridH : null;
     const lashStripHalfPx = lashBbox ? lashBbox.H * EYE_CLOSURE_LASH_STRIP_FRAC : 0;
     const closedCanvas = new Array(canvasVerts.length);
     for (let i = 0; i < numVerts; i++) {
@@ -689,20 +691,33 @@ export async function generateCmo3(input) {
       if (bandY === null) {
         closedY = vy;
       } else if (isEyelash && lashBbox) {
-        // Compress lash Y from its bbox into a thin strip centered on the band curve.
         const relY = (vy - lashBbox.minY) / lashBbox.H;
         closedY = bandY + (relY - 0.5) * 2 * lashStripHalfPx;
       } else {
         closedY = bandY;
       }
-      if (rwMinY !== null) {
-        if (closedY < rwMinY) closedY = rwMinY;
-        if (closedY > rwMaxY) closedY = rwMaxY;
-      }
       closedCanvas[i * 2 + 1] = closedY - shift;
     }
-    // Convert to same coord space as `verts` (warp-local 0..1 if rwBox, else deformer-local)
+    return closedCanvas;
+  };
+
+  // Wrapper used by the cmo3 mesh emit (XML side): runs the canvas-space
+  // compute, applies rwBox clamp + frame conversion to whatever space `verts`
+  // lives in (warp-local 0..1 if rwBox, deformer-local px if dfOrigin, else
+  // canvas).
+  const computeClosedVertsForMesh = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, rwBox, dfOrigin, shiftPx }) => {
+    const closedCanvas = computeClosedCanvasVerts({
+      curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, shiftPx,
+    });
     if (rwBox) {
+      const rwMinY = rwBox.gridMinY;
+      const rwMaxY = rwBox.gridMinY + rwBox.gridH;
+      // Clamp Y inside the rig warp's grid bbox (legacy behaviour — out-of-bbox
+      // closure points cause wraparound when the warp rebases to 0..1).
+      for (let i = 1; i < closedCanvas.length; i += 2) {
+        if (closedCanvas[i] < rwMinY) closedCanvas[i] = rwMinY;
+        if (closedCanvas[i] > rwMaxY) closedCanvas[i] = rwMaxY;
+      }
       return closedCanvas.map((v, i) =>
         i % 2 === 0
           ? (v - rwBox.gridMinX) / rwBox.gridW
@@ -1271,6 +1286,39 @@ export async function generateCmo3(input) {
       x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = 'ParamOpacity';
     }
 
+    // Mesh-level eye closure: pre-compute closed canvas verts inside the
+    // perMesh loop so they're available BEFORE the rigOnly short-circuit
+    // (which fires before section 4's XML emit). moc3writer needs these
+    // to emit 2 keyforms on ParamEye{L,R}Open with the closed-eye geometry;
+    // without them the runtime model has no blink animation at all.
+    let closedCanvasVerts = null;
+    if (hasClosureData && (hasEyelidClosure || hasEyeVariantCompound)) {
+      const isEyelash = m.tag === 'eyelash-l' || m.tag === 'eyelash-r';
+      const lashBboxForCompute = isVariant
+        ? (isEyelash ? bboxFromVertsY(m.vertices) : null)
+        : eyelashMeshBboxPerSide.get(closureSide);
+      const bandFallback = isVariant ? null : eyelashBandCanvas.get(closureSide);
+      const shiftPx = eyelashShiftCanvas.get(closureSide) ?? 0;
+      closedCanvasVerts = computeClosedCanvasVerts({
+        curve: myClosureCurve,
+        bandCurveFallback: bandFallback,
+        isEyelash,
+        lashBbox: lashBboxForCompute,
+        canvasVerts: m.vertices,
+        numVerts: m.vertices.length / 2,
+        shiftPx,
+      });
+      if (rigCollector) {
+        rigCollector.eyeClosure ??= new Map();
+        rigCollector.eyeClosure.set(m.partId, {
+          closureSide,
+          isVariant,
+          variantSuffix: variantSuffixForMesh,
+          closedCanvasVerts,
+        });
+      }
+    }
+
     perMesh.push({
       mi, meshName, meshId, pngPath, drawOrder: m.drawOrder ?? (500 + mi),
       pidDrawable, pidFormMesh, bakedFormGuids, pidFormClosed,
@@ -1296,6 +1344,7 @@ export async function generateCmo3(input) {
       boneWeights: m.boneWeights,
       jointPivotX: m.jointPivotX,
       jointPivotY: m.jointPivotY,
+      closedCanvasVerts, // shared with moc3 via rigCollector.eyeClosure
     });
   }
 

@@ -536,6 +536,39 @@ function buildSectionData(input) {
         perVertexPositions: perKeyformPositions,
       };
     }
+    // Mesh-level eye closure: shared with cmo3writer via rigSpec.eyeClosure.
+    // For eyelash / eyewhite / irides on each side, emit 2 keyforms on
+    // ParamEye{L,R}Open with closed-eye vertex positions at key=0 and rest
+    // positions at key=1. The closure curve fit + lash-strip compression
+    // happen in cmo3writer (parabola fit on the eyewhite's lower edge);
+    // here we read closed canvas verts and let the regular per-mesh frame
+    // conversion (rig-warp 0..1 / pivot-relative) translate to mesh-local.
+    // Without this the eye meshes default to 1-keyform-on-ParamOpacity[1]
+    // and the model can't blink (also: clip-mask validation fires because
+    // eyewhite_l/r are clip sources for irides without keyforms at the
+    // referenced param min/max).
+    const eyeClosureMap = rigSpec?.eyeClosure ?? null;
+    const eyeClosure = eyeClosureMap ? eyeClosureMap.get(part.id) : null;
+    if (eyeClosure && eyeClosure.closureSide && !part.variantSuffix) {
+      const closureParam = eyeClosure.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
+      // Build per-keyform vertex arrays: [closed (key=0), rest (key=1)].
+      const verts = mesh.vertices;
+      const restPositions = new Float32Array(verts.length * 2);
+      const closedPositions = new Float32Array(verts.length * 2);
+      const closedCanvas = eyeClosure.closedCanvasVerts;
+      for (let i = 0; i < verts.length; i++) {
+        restPositions[i * 2]     = verts[i].x;
+        restPositions[i * 2 + 1] = verts[i].y;
+        closedPositions[i * 2]     = closedCanvas[i * 2];
+        closedPositions[i * 2 + 1] = closedCanvas[i * 2 + 1];
+      }
+      return {
+        paramId: closureParam,
+        keys: [0, 1],
+        keyformOpacities: [part.opacity ?? 1, part.opacity ?? 1],
+        perVertexPositions: [closedPositions, restPositions],
+      };
+    }
     // Variant mesh fade-in: opacity 0 at Param<Suffix>=0, recorded at =1.
     const variantSuffix = part.variantSuffix ?? null;
     if (variantSuffix) {
@@ -1219,10 +1252,14 @@ function buildSectionData(input) {
   sections.set('rotation_deformer_keyform.reflect_xs', rot_kf_reflect_xs);
   sections.set('rotation_deformer_keyform.reflect_ys', rot_kf_reflect_ys);
 
-  // ── Append bone-baked keyform vertex data, then patch sentinels ──
-  // Bone-baked meshes contributed sentinel (-1) entries in
-  // flatKeyformPosBegin; resolve them by appending each angle's rotated
-  // positions and recording the float-offset where they land.
+  // ── Append per-keyform vertex data, then patch sentinels ──
+  // Any mesh keyform with a non-null `perVertexPositions` entry contributed
+  // a sentinel (-1) to flatKeyformPosBegin earlier. Two cases use this path:
+  //   - Bone-baked meshes: 5 angle keyforms with rotated vertex positions.
+  //   - Mesh-level eye closure: 2 keyforms (closed at key=0, rest at key=1)
+  //     with closed-eye canvas verts from rigSpec.eyeClosure.
+  // Both share the same per-mesh frame conversion (rig-warp 0..1 /
+  // pivot-relative px / canvas-PPU), driven by the part's parent_deformer.
   for (const append of bonePerKeyformAppends) {
     const partIdx = append.partIndex;
     const part = meshParts[partIdx];
