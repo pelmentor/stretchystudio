@@ -3274,12 +3274,14 @@ export async function generateCmo3(input) {
       // Re-parent ROOT-targeting deformers to Body X (or Breath)
       if (targetNode.attrs['xs.ref'] === pidDeformerRoot) {
         targetNode.attrs['xs.ref'] = pidReparentTarget;
-        // Keep rigCollector in sync.
-        const rigSpec = rigCollector.rotationDeformers.find(
+        // Keep rigCollector parent ref in sync — pivot conversion happens
+        // in the unified loop below (both ROOT→warp and parent-rotation
+        // cases need their own conversion math).
+        const rigSpecD = rigCollector.rotationDeformers.find(
           s => s.id === `GroupRotation_${gid}`,
         );
-        if (rigSpec && rigSpec.parent.type === 'root') {
-          rigSpec.parent = { type: 'warp', id: rigReparentTargetId };
+        if (rigSpecD && rigSpecD.parent.type === 'root') {
+          rigSpecD.parent = { type: 'warp', id: rigReparentTargetId };
         }
       }
 
@@ -3311,6 +3313,18 @@ export async function generateCmo3(input) {
         // Patch shared CoordType: Canvas → DeformerLocal (origins adapted to parent space)
         const coordTextNode = originData.coordNode.children.find(c => c.attrs?.['xs.n'] === 'coordName');
         if (coordTextNode) coordTextNode.text = 'DeformerLocal';
+
+        // Mirror the converted pivot into rigCollector so moc3 binary emits
+        // the same value. All keyforms of the spec share the same pivot.
+        const rigSpecConv = rigCollector.rotationDeformers.find(
+          s => s.id === `GroupRotation_${gid}`,
+        );
+        if (rigSpecConv) {
+          for (const kf of rigSpecConv.keyforms) {
+            kf.originX = ox;
+            kf.originY = oy;
+          }
+        }
       }
     }
 
