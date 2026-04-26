@@ -101,31 +101,38 @@ calls `generateCmo3` in `rigOnly` mode to harvest the rigSpec, discards
 the cmo3 buffer, and passes the rigSpec to `generateMoc3`. Same paramSpec
 + physics3 + motion presets wiring as before.
 
-**What works after Phase B+C**
+**What works after Phase B+C (full pass)**
 
 * Body sway on ParamBodyAngleX / Y / Z (BodyWarpZ/Y/X morph the body)
 * Breath (BreathWarp morphs subtly on ParamBreath)
 * Head tilt on ParamAngleZ (FaceRotation rotation deformer)
+* Head turn on ParamAngleX / Y (FaceParallax warp under FaceRotation)
+* Neck follow (NeckWarp on ParamAngleZ)
 * Group rotations (head, neck, arms, …) on ParamRotation_<group>
-* Variant fade on Param<Suffix> (Stage 2a still in place)
+* Per-mesh rig warps: tag-specific 5×5 warp per face/neck/body-region mesh
+  with cross-product keyforms on TAG_PARAM_BINDINGS axes (eye closure on
+  ParamEyeLOpen, mouth shape on ParamMouthOpenY, brow Y on ParamBrowL/RY,
+  hair sway on ParamHairFront/Side/Back, etc.). Mesh deforms via the
+  rig warp's grid morphing on its driving params.
+* Variant fade on Param<Suffix> (Stage 2a)
 
 **Still missing — Phase B remaining + Phase D**
 
-* Per-mesh structural warps (rig warps): each face/neck/body-region mesh
-  gets its own 5×5 warp grid for fine local deformation. Currently meshes
-  parent directly to BodyXWarp without an intermediate per-mesh warp.
-  Without this, mesh-specific micro-adjustments don't apply.
-* Face parallax warp: single warp covering face area, drives eye/brow/
-  mouth tracking on ParamAngleX/Y. Without this, eyes don't follow the
-  cursor's X/Y position.
-* ArtMesh keyforms across params: cross-product keyforms for eye blink
-  (ParamEyeLOpen × Param<Suffix>), mouth open (ParamMouthOpenY), brow
-  shapes (ParamBrowL/RY), etc. The mesh's vertex POSITIONS can vary per
-  param value. Without this, eye blink and mouth open don't deform the
-  mesh in moc3.
-* Drawable masks (clip masks for iris/pupil inside eyewhite, etc.).
-* Parts hierarchy (currently emits groups as parts, not the full part
-  tree from cmo3).
+* ArtMesh per-mesh keyforms ACROSS params (not driven by rig warps):
+    - Baked bone keyforms (5 keyforms on ParamRotation_<bone> for
+      arm/leg meshes — without these, arms don't deform with the
+      bone rotation deformer)
+    - Eye 2D compound geometry (4 cells across ParamEyeLOpen ×
+      Param<Suffix>) — variant eye meshes need their own blink shapes
+    - Neck corner shape keys at AngleZ extremes
+* Drawable masks (clip masks for iris/pupil inside eyewhite, eyewhite
+  inside eyemask, etc.)
+* Parts hierarchy proper (currently emits groups as parts; the full
+  cmo3 part tree with category buckets is richer)
+* Mesh vertex positions in deformer-local space when parent is a per-mesh
+  rig warp — currently uses `canvasToInnermostX/Y` (BodyXWarp 0..1) which
+  works for body-tagged meshes but introduces a frame mismatch for face/
+  neck-tagged meshes whose rig warp parents to FaceParallax/NeckWarp.
 
 ### Stage 1 — Parameter spec extraction (2026-04-26)
 
