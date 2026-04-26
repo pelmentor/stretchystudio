@@ -263,6 +263,15 @@
  * @property {RotationDeformerSpec[]} rotationDeformers
  * @property {ArtMeshSpec[]} artMeshes
  * @property {{w:number, h:number}} canvas
+ * @property {((cx:number)=>number)|null} [canvasToInnermostX]
+ *   When the body warp chain is built, this is the canvas-px → innermost-warp
+ *   (BodyXWarp) 0..1 normaliser. moc3writer uses it to project mesh vertex
+ *   positions into the parent deformer's frame so deformations layer
+ *   correctly in the runtime.
+ * @property {((cy:number)=>number)|null} [canvasToInnermostY]
+ * @property {string|null} [innermostBodyWarpId]
+ *   ID of the innermost body warp (typically `'BodyXWarp'`). Mesh
+ *   `parent_deformer_index` defaults to this in moc3.
  * @property {Object} [debug]              - Optional rig debug log; mirrors the
  *                                            existing `rigDebugLog` shape so
  *                                            cmo3writer can keep emitting it
@@ -287,6 +296,9 @@ export function emptyRigSpec(canvas) {
     rotationDeformers: [],
     artMeshes: [],
     canvas,
+    canvasToInnermostX: null,
+    canvasToInnermostY: null,
+    innermostBodyWarpId: null,
     debug: null,
   };
 }

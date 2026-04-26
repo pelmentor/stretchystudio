@@ -675,23 +675,32 @@ function buildSectionData(input) {
   sections.set('art_mesh_keyform.draw_orders', flatDrawOrders);
   sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
 
-  // --- Keyform positions (vertex coordinates in normalized model space) ---
-  // Cubism SDK returns positions to Ren'Py which then multiplies by PPU in the shader:
-  //   gl_Position = a_position.xy * u_live2d_ppu
-  // So positions must be stored NORMALIZED: (pixelPos - origin) / PPU
-  // This way position * PPU reconstructs pixel-space coordinates.
+  // --- Keyform positions (vertex coordinates) ---
+  // Frame depends on the mesh's parent:
+  //   - No deformer parent (legacy mode): canvas-px-normalised by PPU. The
+  //     SDK shader multiplies by PPU to recover pixel positions.
+  //   - Parented to BodyXWarp (rigSpec mode): vertex positions live in
+  //     BodyXWarp's 0..1 local frame, where canvas → 0..1 conversion
+  //     traverses the BZ → BY → Breath → BX chain (`canvasToBodyXX/Y`).
+  //     The deformer chain's grid morphs apply on top via bilinear interp.
   // TRAPDOOR: canvasW/canvasH are declared at top of buildSectionData().
   // The `canvas` object is declared BELOW — never reference it here.
   // See docs/live2d-export/DECISIONS.md — this caused two identical crashes.
   const ppu = Math.max(canvasW, canvasH);
   const originX = canvasW / 2;
   const originY = canvasH / 2;
+  const useDeformerFrame = !!(rigSpec && rigSpec.canvasToInnermostX && meshDefaultDeformerIdx >= 0);
   const allKeyformPositions = [];
   for (const part of meshParts) {
     if (part.mesh?.vertices) {
       for (const vert of part.mesh.vertices) {
-        allKeyformPositions.push((vert.x - originX) / ppu);
-        allKeyformPositions.push((vert.y - originY) / ppu);
+        if (useDeformerFrame) {
+          allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
+          allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
+        } else {
+          allKeyformPositions.push((vert.x - originX) / ppu);
+          allKeyformPositions.push((vert.y - originY) / ppu);
+        }
       }
     }
   }

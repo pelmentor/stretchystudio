@@ -2468,6 +2468,14 @@ export async function generateCmo3(input) {
   // bodyWarp.js since the spec-driven emission consumes them directly.
   const canvasToBodyXX = _bodyChain.canvasToBodyXX;
   const canvasToBodyXY = _bodyChain.canvasToBodyXY;
+  // Stash the normaliser on rigCollector so moc3writer can project mesh
+  // vertex positions into BodyXWarp's local frame when emitting the binary.
+  rigCollector.canvasToInnermostX = canvasToBodyXX;
+  rigCollector.canvasToInnermostY = canvasToBodyXY;
+  rigCollector.innermostBodyWarpId =
+    _bodyChain.specs.find(s => s.id === 'BodyXWarp')?.id
+    ?? _bodyChain.specs.find(s => s.id === 'BreathWarp')?.id
+    ?? null;
   if (rigDebugLog) {
     rigDebugLog.bodyFracSource = _bodyChain.debug.bodyFracSource;
     rigDebugLog.bodyFrac = {
