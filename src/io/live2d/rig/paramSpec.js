@@ -190,6 +190,31 @@ export function buildParameterSpec(input = {}) {
     });
   }
 
+  // 6. Group rotation params — `ParamRotation_<groupName>` for every non-bone
+  // group that gets a rotation deformer. cmo3writer's deferred deformer pass
+  // (see line ~1605) skips bones (they get baked keyforms instead) and a
+  // few roles handled by warps; the rest emit a rotation deformer driven
+  // by this param. Mirrored here so moc3writer's bindings can resolve the
+  // param ids without referencing a missing entry.
+  if (generateRig) {
+    const SKIP_ROTATION_ROLES = new Set(['torso', 'eyes', 'neck']);
+    for (const g of groups) {
+      if (!g?.id) continue;
+      if (seenBones.has(g.id)) continue;       // bones got bone params above
+      if (g.boneRole && SKIP_ROTATION_ROLES.has(g.boneRole)) continue;
+      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      const id = `ParamRotation_${sanitized}`;
+      push({
+        id,
+        name: `Rotation ${g.name ?? g.id}`,
+        min: -30, max: 30, default: 0,
+        decimalPlaces: 1, repeat: false,
+        role: 'rotation_deformer',
+        groupId: g.id,
+      });
+    }
+  }
+
   return out;
 }
 
