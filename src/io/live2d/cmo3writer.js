@@ -27,6 +27,7 @@ import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
 import { variantParamId } from '../psdOrganizer.js';
 import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
+import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import {
   VERSION_PIS,
   IMPORT_PIS,
@@ -37,7 +38,6 @@ import {
 } from './cmo3/constants.js';
 import { buildRawPng, extractBottomContourFromLayerPng } from './cmo3/pngHelpers.js';
 import {
-  makeUniformGrid,
   emitKfBinding,
   emitSingleParamKfGrid,
   emitStructuralWarp,
@@ -2094,7 +2094,8 @@ export async function generateCmo3(input) {
 
   // Look up standard parameter PIDs (created by generateRig standardParams above)
   const pidParamBreath = paramDefs.find(p => p.id === 'ParamBreath')?.pid;
-  const pidParamBodyAngleX = paramDefs.find(p => p.id === 'ParamBodyAngleX')?.pid;
+  // ParamBodyAngleX presence is checked inline at the body chain call site
+  // (buildBodyWarpChain's hasParamBodyAngleX flag), so no local pid var here.
   const pidParamBodyAngleY = paramDefs.find(p => p.id === 'ParamBodyAngleY')?.pid;
   const pidParamBodyAngleZ = paramDefs.find(p => p.id === 'ParamBodyAngleZ')?.pid;
   const pidParamEyeBallX   = paramDefs.find(p => p.id === 'ParamEyeBallX')?.pid;
@@ -2415,44 +2416,40 @@ export async function generateCmo3(input) {
   // FaceParallax warp; others route to Body X.
   const rigWarpTargetNodesToReparent = [];
 
-  // Structural warp chain parameters (used in both 3c and 3d).
-  // Body Warp Z must encompass ALL character parts. Compute from mesh bounding box
-  // with ~10% padding (Hiyori uses ~13% margin, but character may fill different area).
-  let allMinX = Infinity, allMinY = Infinity, allMaxX = -Infinity, allMaxY = -Infinity;
-  for (const pm of perMesh) {
-    const v = pm.vertices;
-    for (let i = 0; i < v.length; i += 2) {
-      if (v[i] < allMinX) allMinX = v[i]; if (v[i] > allMaxX) allMaxX = v[i];
-      if (v[i + 1] < allMinY) allMinY = v[i + 1]; if (v[i + 1] > allMaxY) allMaxY = v[i + 1];
-    }
+  // ── Body warp chain — single source of truth ──
+  // buildBodyWarpChain is shared with moc3writer (Phase C). It returns:
+  //   - specs: 4 WarpDeformerSpec (BZ, BY, Breath, BX) used by both writers
+  //   - canvasToBodyXX/Y: canvas-px → BX 0..1 normaliser used by per-part warps
+  //   - layout: BZ_MIN_X, BZ_W, BY_MIN, … geometry constants
+  //   - debug: HIP_FRAC, FEET_FRAC, spineCfShifts (preserved in rigDebugLog).
+  // The legacy inline math (~50 LOC) used to live here and was duplicated
+  // in the body-warp emission block; the spec consolidates both into one
+  // canonical computation.
+  const _bodyChain = buildBodyWarpChain({
+    perMesh,
+    canvasW,
+    canvasH,
+    bodyAnalysis,
+    hasParamBodyAngleX: !!paramDefs.find(p => p.id === 'ParamBodyAngleX')?.pid,
+  });
+  // canvasToBodyXX/Y are used by face parallax, neck warp, and per-part rig
+  // warp grids when they rebase canvas coords into Body X 0..1 space. The
+  // numeric layout constants (BZ_*, BY_*, BR_*, BX_*) now live only inside
+  // bodyWarp.js since the spec-driven emission consumes them directly.
+  const canvasToBodyXX = _bodyChain.canvasToBodyXX;
+  const canvasToBodyXY = _bodyChain.canvasToBodyXY;
+  if (rigDebugLog) {
+    rigDebugLog.bodyFracSource = _bodyChain.debug.bodyFracSource;
+    rigDebugLog.bodyFrac = {
+      HIP_FRAC: _bodyChain.debug.HIP_FRAC,
+      FEET_FRAC: _bodyChain.debug.FEET_FRAC,
+    };
+    rigDebugLog.spineCfShifts = {
+      source: bodyAnalysis && bodyAnalysis.widthProfile ? 'measured-widthProfile' : 'none',
+      perRow: _bodyChain.debug.spineCfShifts,
+      note: 'cf shift per grid row: 0 = bow centered on bbox, positive = spine drifts right of bbox, negative = left',
+    };
   }
-  const charW = allMaxX - allMinX || canvasW;
-  const charH = allMaxY - allMinY || canvasH;
-  const padFrac = 0.10; // 10% padding around character
-  const BZ_MIN_X = allMinX - charW * padFrac;
-  const BZ_MAX_X = allMaxX + charW * padFrac;
-  const BZ_MIN_Y = allMinY - charH * padFrac;
-  const BZ_MAX_Y = allMaxY + charH * padFrac;
-  const BZ_W = BZ_MAX_X - BZ_MIN_X, BZ_H = BZ_MAX_Y - BZ_MIN_Y;
-  const BY_MARGIN = 0.065, BY_MIN = BY_MARGIN, BY_MAX = 1 - BY_MARGIN;
-  const BR_MARGIN = 0.055, BR_MIN = BR_MARGIN, BR_MAX = 1 - BR_MARGIN;
-  // Body X Warp is 4th layer: Body Z → Body Y → Breath → Body X → children
-  // Grid range in Breath space (Hiyori: X 0.13-0.87, Y 0.18-0.97)
-  const BX_MIN = 0.10, BX_MAX = 0.90;
-
-  // Convert canvas pixel position to Body X Warp's 0..1 space (through 4-chain)
-  const canvasToBodyXX = (cx) => {
-    const bzL = (cx - BZ_MIN_X) / BZ_W;
-    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
-    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
-    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
-  };
-  const canvasToBodyXY = (cy) => {
-    const bzL = (cy - BZ_MIN_Y) / BZ_H;
-    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
-    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
-    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
-  };
 
   // ── Face parallax pre-pass (Session 19, single-warp Body-X-style) ──
   // Compute the union canvas bbox of ALL face-tagged meshes. This bbox defines the single
@@ -3111,367 +3108,55 @@ export async function generateCmo3(input) {
   // and pid references that the helper writes into.
   const emitCtx = { allDeformerSources, pidPartGuid, rootPart };
 
+  // Only Breath + Body X are referenced after the chain emits (re-parenting
+  // target). BZ + BY pids are produced by the loop but not consumed externally.
+  let pidBreathGuid = null;
+  let pidBodyXGuid = null;
   if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
-    const SC = 5; // structural warp grid size (5×5 like Hiyori)
-    const scGW = SC + 1, scGH = SC + 1;
-    const scGridPts = scGW * scGH; // 36
-
-    // ── Body Warp Z — Canvas coords, targets ROOT ──
-    // Hiyori: X 395–2581 (13%–87%), Y -38–3029 (-1%–73%) on 2976×4175
-    // Grid bounds from BZ_MIN_X/Y, BZ_W/H constants defined above section 3c.
-
-    const bzRestGrid = new Float64Array(scGridPts * 2);
-    for (let r = 0; r < scGH; r++) {
-      for (let c = 0; c < scGW; c++) {
-        bzRestGrid[(r * scGW + c) * 2]     = BZ_MIN_X + c * BZ_W / SC;
-        bzRestGrid[(r * scGW + c) * 2 + 1] = BZ_MIN_Y + r * BZ_H / SC;
-      }
-    }
-
-    const [, pidBodyZGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'BodyWarpZ' });
-    const [coordBWZ, pidCoordBWZ] = x.shared('CoordType');
-    x.sub(coordBWZ, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
-
-    // Keyforms: -10, 0, +10 on ParamBodyAngleZ
-    // Hiyori: bottom row pinned, top rows shift with perspective (non-uniform columns).
-    // At -10: top-left ΔX=-148, top-right ΔX=-252 (shear). ΔY: left +136, right -60.
-    // At +10: top-left ΔX=+244, top-right ΔX=+80. ΔY: left -32, right +188.
-    // This creates a 3D rotation effect — columns further from lean direction shift more.
-    const bzKeys = [-10, 0, 10];
-    const { pidKfg: pidBzKfg, formGuids: bzFormGuids } =
-      emitSingleParamKfGrid(x, pidParamBodyAngleZ, bzKeys, 'ParamBodyAngleZ');
-
-    // Body Z: rotation around the HIP pivot point.
-    // - Hip is at the measured widest-torso Y (or topwear.maxY when split garments)
-    // - Upper body arcs left/right proportional to distance from hip
-    // - Head LAGS slightly behind shoulders (trails the lean)
-    // - Legs below hip: barely move, feet completely static
-    // - Y shifts create 3D depth (lean side drops, far side rises)
+    // Body warp chain emission — translates the 4 WarpDeformerSpec entries
+    // returned by buildBodyWarpChain (called near line 2420) into XML via
+    // emitStructuralWarp + emitSingleParamKfGrid. The math/coordinate logic
+    // lives in rig/bodyWarp.js — this block is pure XML translation.
     //
-    // Step 2A: HIP_FRAC and FEET_FRAC are now derived from measured anatomy
-    // (bodyAnalysis) when available. Fallback to Hiyori-tuned defaults when
-    // analysis is unavailable. FEET_MARGIN_RF pulls the pin up slightly so
-    // rows near but not exactly at the feet Y are also clamped (avoids
-    // residual tug from rows that land just above feetY in grid space).
-    const HIP_FRAC_DEFAULT  = 0.45;
-    const FEET_FRAC_DEFAULT = 0.75;
-    const FEET_MARGIN_RF    = 0.05;
+    // Per-spec parameter pid lookup keeps the spec format-agnostic
+    // (parameterId is a string; cmo3 needs the XML pid for KeyformBindingSource).
+    const _bodyParamPid = (paramId) => paramDefs.find(p => p.id === paramId)?.pid;
+    const _bodyDeformerPids = new Map(); // spec.id → its CDeformerGuid pid
+    const [_coordBWZ, pidCoordBWZ] = x.shared('CoordType');
+    x.sub(_coordBWZ, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
 
-    let HIP_FRAC  = HIP_FRAC_DEFAULT;
-    let FEET_FRAC = FEET_FRAC_DEFAULT;
-    let bodyFracSource = 'defaults';
-    if (bodyAnalysis && bodyAnalysis.anchors && BZ_H > 0) {
-      const { hipY, feetY, shoulderY } = bodyAnalysis.anchors;
-      const hipRf  = (hipY  !== null && hipY  !== undefined) ? (hipY  - BZ_MIN_Y) / BZ_H : null;
-      const feetRf = (feetY !== null && feetY !== undefined) ? (feetY - BZ_MIN_Y) / BZ_H : null;
-      const shoulderRf = (shoulderY !== null && shoulderY !== undefined) ? (shoulderY - BZ_MIN_Y) / BZ_H : null;
-      // Feet: accepted in a wide plausible range — feetY is robust (bottom of fullMask).
-      // Upper-bounded at FEET_FRAC_DEFAULT so measurement NEVER relaxes the pin
-      // (prevents regression where measured feetRf=0.92 made row rf=0.8 fade
-      // into motion when default 0.75 pinned it cleanly).
-      if (feetRf !== null && feetRf > 0.6 && feetRf <= 1.05) {
-        const measuredFeet = Math.max(HIP_FRAC + 0.05, Math.min(1.0, feetRf - FEET_MARGIN_RF));
-        FEET_FRAC = Math.min(FEET_FRAC_DEFAULT, measuredFeet);
-        bodyFracSource = 'measured-feet';
-      }
-      // Hip: narrower plausibility band. widestCoreY can land on shoulders for
-      // wide-shoulder / narrow-waist characters (shelby case) — reject if so.
-      // Plausible anatomical hip sits at ~0.40–0.62 of grid span.
-      if (hipRf !== null && hipRf >= 0.35 && hipRf <= 0.65 &&
-          feetRf !== null && feetRf > hipRf + 0.1) {
-        HIP_FRAC = hipRf;
-        FEET_FRAC = Math.max(HIP_FRAC + 0.05, FEET_FRAC);
-        bodyFracSource = bodyFracSource === 'measured-feet' ? 'measured-both' : 'measured-hip';
-      } else if (shoulderRf !== null && feetRf !== null &&
-                 shoulderRf < feetRf - 0.15) {
-        // Fallback when widestCoreY is unreliable (shoulders-dominant characters
-        // like shelby): use the anatomical mid-body between shoulder and feet
-        // as hip estimate. Gives a grid-space hip that lets the fade zone cover
-        // ~20% of grid (hip to feet) instead of the 30% default, so the visible
-        // lower torso gets meaningful rotation motion instead of static fade.
-        const midBodyRf = (shoulderRf + feetRf) / 2;
-        if (midBodyRf >= 0.4 && midBodyRf <= 0.7) {
-          HIP_FRAC = midBodyRf;
-          FEET_FRAC = Math.max(HIP_FRAC + 0.05, FEET_FRAC);
-          bodyFracSource = bodyFracSource === 'measured-feet'
-            ? 'measured-feet-plus-shoulder-feet-midbody'
-            : 'shoulder-feet-midbody';
-        }
-      }
+    for (const spec of _bodyChain.specs) {
+      const [, pid] = x.shared('CDeformerGuid', { uuid: uuid(), note: spec.id });
+      _bodyDeformerPids.set(spec.id, pid);
+
+      // BZ uses canvas coords; rest of chain uses the standard DeformerLocal pidCoord.
+      const coordPid = spec.localFrame === 'canvas-px' ? pidCoordBWZ : pidCoord;
+
+      // Resolve parent pid: ROOT → pidDeformerRoot, warp → previously-emitted spec pid.
+      const parentPid = spec.parent.type === 'root'
+        ? pidDeformerRoot
+        : _bodyDeformerPids.get(spec.parent.id);
+
+      const binding = spec.bindings[0];
+      const paramPid = _bodyParamPid(binding.parameterId);
+      const { pidKfg, formGuids } = emitSingleParamKfGrid(
+        x, paramPid, binding.keys, binding.parameterId,
+      );
+      const positions = spec.keyforms.map(k => k.positions);
+      emitStructuralWarp(
+        x, emitCtx,
+        spec.name, spec.id, spec.gridSize.cols, spec.gridSize.rows,
+        pid, parentPid, pidKfg, coordPid, formGuids, positions,
+      );
     }
+    pidBreathGuid = _bodyDeformerPids.get('BreathWarp') ?? null;
+    pidBodyXGuid = _bodyDeformerPids.get('BodyXWarp') ?? null;
+  }
 
-    // Step 2B: per-grid-row spine pivot in bow math.
-    // Measured spineX(y) curve from bodyAnalysis.widthProfile lets us shift the
-    // bow peak to land on the character's anatomical spine at each vertical row
-    // instead of the bbox X center.
-    //
-    // Critical robustness fix: widthProfile samples with very small coreWidth
-    // (e.g., between-legs dress hem remnants) produce wildly unreliable spineX
-    // estimates. Girl's last profile sample had spineX=852 (coreWidth=60) while
-    // the body axis was really ~990-1026 — using that sample yielded cfShifts
-    // of -0.20 in lower rows, visibly tearing the lower body apart at body-X/Z.
-    //
-    // Filter: only use samples with coreWidth >= 30% of maxCoreWidth (robust
-    // cross-sections). Above the robust range → no shift (head/shoulder region).
-    // Below the robust range → clamp to the last robust sample's spineX.
-    const SPINE_MIN_WIDTH_FRAC = 0.30;
-    const robustSpineSamples = (() => {
-      const a = bodyAnalysis;
-      if (!a || !a.widthProfile || !a.widthStats) return [];
-      const minW = a.widthStats.maxCoreWidth * SPINE_MIN_WIDTH_FRAC;
-      return a.widthProfile.filter(p => p.coreWidth >= minW && p.spineX != null);
-    })();
-    const spineCfShift = (r) => {
-      if (BZ_W <= 0 || robustSpineSamples.length < 2) return 0;
-      const canvasY = BZ_MIN_Y + r * BZ_H / SC;
-      const bboxCenterX = BZ_MIN_X + BZ_W / 2;
-      const first = robustSpineSamples[0];
-      const last = robustSpineSamples[robustSpineSamples.length - 1];
-      // Above robust range (head/shoulders) — no pivot shift (head is typically centered).
-      if (canvasY <= first.y) return 0;
-      // Below robust range (feet) — clamp to last robust sample's spineX.
-      if (canvasY >= last.y) return (last.spineX - bboxCenterX) / BZ_W;
-      // Find bracketing robust samples.
-      for (let i = 0; i < robustSpineSamples.length - 1; i++) {
-        const p0 = robustSpineSamples[i];
-        const p1 = robustSpineSamples[i + 1];
-        if (p0.y <= canvasY && canvasY <= p1.y) {
-          const f = (canvasY - p0.y) / (p1.y - p0.y);
-          const spineX = p0.spineX * (1 - f) + p1.spineX * f;
-          return (spineX - bboxCenterX) / BZ_W;
-        }
-      }
-      return 0;
-    };
-    // Precompute per-row cf shifts (used by all three body warps).
-    const spineCfShifts = new Float64Array(scGH);
-    for (let r = 0; r < scGH; r++) spineCfShifts[r] = spineCfShift(r);
-    if (rigDebugLog) {
-      rigDebugLog.bodyFracSource = bodyFracSource;
-      rigDebugLog.bodyFrac = { HIP_FRAC, FEET_FRAC };
-      rigDebugLog.spineCfShifts = {
-        source: bodyAnalysis && bodyAnalysis.widthProfile ? 'measured-widthProfile' : 'none',
-        perRow: Array.from(spineCfShifts).map(v => +v.toFixed(4)),
-        note: 'cf shift per grid row: 0 = bow centered on bbox, positive = spine drifts right of bbox, negative = left',
-      };
-    }
-
-    const bodyMoveFactor = (rf) => {
-      if (rf <= HIP_FRAC) return 1.0;
-      if (rf >= FEET_FRAC) return 0.0; // lower legs + feet: completely static
-      // Upper legs: linear fade from hip to FEET_FRAC
-      const legT = (rf - HIP_FRAC) / (FEET_FRAC - HIP_FRAC); // 0 at hip, 1 at knee
-      return (1 - legT) * 0.3; // upper legs move at most 30% of hip
-    };
-
-    const bzGridPositions = [];
-    for (const k of bzKeys) {
-      const pos = new Float64Array(bzRestGrid);
-      if (k !== 0) {
-        const sign = k / 10; // -1 or +1
-        for (let r = 0; r < scGH; r++) {
-          for (let c = 0; c < scGW; c++) {
-            const idx = (r * scGW + c) * 2;
-            const rf = r / (scGH - 1); // 0=top, 1=bottom
-            const cf = c / (scGW - 1); // 0=left, 1=right
-
-            // Progressive curve from hip to upper body.
-            // Previously used a sine curve that ACCELERATES (head at t=0.97, shoulder
-            // at t=0.40) — physically correct for pendulum rotation but visually
-            // breaks the neck-torso connection on realistic art because head moves
-            // 2.4× the shoulders. Replace with linear+cap: gentle ramp from hip
-            // that caps at 0.5 across most of the upper body, so head and shoulders
-            // move as a near-rigid unit (ratio ~1.2×). Upper body reads as ONE
-            // coherent block leaning, not a whipping head on a shoulder base.
-            const distAboveHip = Math.max(0, HIP_FRAC - rf) / HIP_FRAC; // 0 at hip, 1 at top
-            const legFade = bodyMoveFactor(rf);
-            const UPPER_BODY_T_CAP = 0.5;     // head/shoulders cap at this amplitude
-            const UPPER_BODY_SLOPE = 1.5;      // how fast t rises from hip
-            let t = rf <= HIP_FRAC
-              ? Math.min(UPPER_BODY_T_CAP, 0.08 + UPPER_BODY_SLOPE * distAboveHip)
-              : legFade * 0.25;
-
-            // Body bowing: center columns shift WITH lean, edges shift opposite
-            // (same principle as Body X — creates 3D curvature illusion).
-            // Step 2B: shift cf so the peak lands on the measured spine, not
-            // the bbox center, eliminating asymmetric pull on off-center
-            // characters (girl lower body drifts +65px right vs bbox).
-            //
-            // Bow amplitude reduced from 0.05 → 0.035 because the direction was
-            // correct (right arm trails behind when body turns right) but the
-            // magnitude was too strong on realistic art, causing arms to swing
-            // visibly too far. At ±10, peak bow shift at shoulder = 0.035 × t ×
-            // 0.55 × BZ_W ≈ 15px for girl's BZ_W=730, down from 22px.
-            const cfS = cf - spineCfShifts[r];
-            const bowFactor = 1.5 * Math.sin(Math.PI * cfS) - 0.5; // +1 at spine, -0.5 at edges
-            pos[idx] += sign * 0.035 * t * bowFactor * BZ_W;
-
-            // Plus a uniform lean component (whole body shifts, not just bows).
-            // Also reduced for the same reason: 0.02+0.015 → 0.015+0.01.
-            const perspCf = sign < 0 ? cf : (1 - cf);
-            pos[idx] += sign * (0.015 + 0.01 * perspCf) * t * BZ_W;
-
-            // Y: lean side drops, far side rises — 3D depth. Measured spine
-            // midpoint replaces fixed 0.5 so vertical kick aligns with spine.
-            const yShift = -sign * 0.025 * (0.5 - cfS) * t;
-            pos[idx + 1] += yShift * BZ_H;
-          }
-        }
-      }
-      bzGridPositions.push(pos);
-    }
-
-    emitStructuralWarp(x, emitCtx,
-      'Body Warp Z', 'BodyWarpZ', SC, SC, pidBodyZGuid, pidDeformerRoot,
-      pidBzKfg, pidCoordBWZ, bzFormGuids, bzGridPositions);
-
-    // ── Body Warp Y — DeformerLocal 0..1, targets Body Warp Z ──
-    // Hiyori: uniform grid 0.065–0.935 (6.5% margin), very subtle Y shifts (~0.005–0.01)
-    const [, pidBodyYGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'BodyWarpY' });
-
-    const byRestGrid = makeUniformGrid(SC, SC, BY_MIN, BY_MAX);
-    const byKeys = [-10, 0, 10];
-    const { pidKfg: pidByKfg, formGuids: byFormGuids } =
-      emitSingleParamKfGrid(x, pidParamBodyAngleY, byKeys, 'ParamBodyAngleY');
-
-    // Hiyori Body Y pattern: vertical compression/stretch with 3D curvature.
-    // - Top row and edge columns PINNED
-    // - Center columns shift most (bell curve) — body bows forward/back
-    // - Torso+head moves, legs fade to static (same bodyMoveFactor as Z)
-    // - At -10: body compresses down (Y increases), max ~0.013 at center
-    // - At +10: body stretches up (Y decreases), max ~0.008 at center
-    const byGridPositions = [];
-    for (const k of byKeys) {
-      const pos = new Float64Array(byRestGrid);
-      if (k !== 0) {
-        const sign = k / 10;
-        for (let r = 0; r < scGH; r++) {
-          for (let c = 0; c < scGW; c++) {
-            const idx = (r * scGW + c) * 2;
-            if (c === 0 || c === scGW - 1) continue; // edge cols pinned
-            if (r === 0) continue; // top row pinned
-            const cf = c / (scGW - 1);
-            const rf = r / (scGH - 1);
-            // Column bell: center columns shift most (body curvature).
-            // Spine-centered: peak lands on measured spine, not bbox center.
-            const cfS = cf - spineCfShifts[r];
-            const colBell = Math.sin(Math.PI * cfS);
-            // Row factor: torso peaks, legs fade to static
-            const rowPeak = Math.sin(Math.PI * rf * 0.7); // peaks at torso
-            const legFade = bodyMoveFactor(rf); // fades legs
-            const rowFactor = rowPeak * legFade;
-            // Y shift: compress at -10, stretch at +10
-            const yMag = sign < 0 ? 0.013 : 0.008;
-            pos[idx + 1] += -sign * yMag * colBell * rowFactor;
-            // X shift: tiny horizontal bow
-            pos[idx] += sign * 0.003 * colBell * rowFactor;
-          }
-        }
-      }
-      byGridPositions.push(pos);
-    }
-
-    emitStructuralWarp(x, emitCtx,
-      'Body Warp Y', 'BodyWarpY', SC, SC, pidBodyYGuid, pidBodyZGuid,
-      pidByKfg, pidCoord, byFormGuids, byGridPositions);
-
-    // ── Breath Warp — DeformerLocal 0..1, targets Body Warp Y ──
-    // Hiyori: uniform grid 0.055–0.945 (5.5% margin), VERY subtle shifts (~0.001–0.002)
-    const [, pidBreathGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'BreathWarp' });
-
-    const brRestGrid = makeUniformGrid(SC, SC, BR_MIN, BR_MAX);
-    const brKeys = [0, 1];
-    const { pidKfg: pidBrKfg, formGuids: brFormGuids } =
-      emitSingleParamKfGrid(x, pidParamBreath, brKeys, 'ParamBreath');
-
-    const brGridPositions = [];
-    for (const k of brKeys) {
-      const pos = new Float64Array(brRestGrid);
-      if (k === 1) {
-        // Breath exhale: rows 1-2 compress inward (Y shifts up), row 3 minimal, rest pinned
-        for (let r = 0; r < scGH; r++) {
-          for (let c = 0; c < scGW; c++) {
-            const idx = (r * scGW + c) * 2;
-            // Edge columns stay pinned
-            if (c === 0 || c === scGW - 1) continue;
-            // Row 0 (top edge) and rows 4-5 (bottom): no change
-            if (r === 0 || r >= scGH - 2) continue;
-            // Chest compression: rows 1-3 shift Y upward.
-            // Hiyori values (0.001–0.002) are for a 4175px canvas — scale up for visibility.
-            let dy = 0;
-            if (r === 1) dy = -0.012;
-            else if (r === 2) dy = -0.015;
-            else if (r === 3) dy = -0.005;
-            // X: center columns move inward slightly
-            const cx = (c - scGW / 2 + 0.5) / (scGW / 2); // -1 to +1
-            const dx = -cx * 0.008;
-            pos[idx]     += dx;
-            pos[idx + 1] += dy;
-          }
-        }
-      }
-      brGridPositions.push(pos);
-    }
-
-    emitStructuralWarp(x, emitCtx,
-      'Breath', 'BreathWarp', SC, SC, pidBreathGuid, pidBodyYGuid,
-      pidBrKfg, pidCoord, brFormGuids, brGridPositions);
-
-    // ── Body X Warp — 4th structural layer, child of Breath ──
-    // Hiyori: Body X Warp (#3560), 5×5 grid, targets Breath, ParamBodyAngleX (-10..+10)
-    // All per-part warps and rotation deformers target Body X (not Breath).
-    let pidBodyXGuid = null;
-    if (pidParamBodyAngleX) {
-      const bxCol = 5, bxRow = 5;
-      const bxGW = bxCol + 1, bxGH = bxRow + 1;
-      [, pidBodyXGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'BodyXWarp' });
-
-      // Grid in Breath's 0..1 space, covering roughly the body area
-      // Hiyori Body X grid: ~0.14..0.90 X, ~0.18..0.82 Y (body area within Breath)
-      const bxMinV = 0.10, bxMaxV = 0.90;
-      const bxRestGrid = makeUniformGrid(bxCol, bxRow, bxMinV, bxMaxV);
-
-      const bxKeys = [-10, 0, 10];
-      const { pidKfg: pidBxKfg, formGuids: bxFormGuids } =
-        emitSingleParamKfGrid(x, pidParamBodyAngleX, bxKeys, 'ParamBodyAngleX');
-
-      // Hiyori Body X pattern: body BOWING effect, not uniform lean.
-      // Center columns shift WITH lean direction, edge columns shift OPPOSITE.
-      // Lower legs static, upper legs barely move (same hip pivot as Body Z).
-      const bxGridPositions = [];
-      for (const k of bxKeys) {
-        const pos = new Float64Array(bxRestGrid);
-        if (k !== 0) {
-          const sign = k / 10;
-          for (let r = 0; r < bxGH; r++) {
-            for (let c = 0; c < bxGW; c++) {
-              const idx = (r * bxGW + c) * 2;
-              const cf = c / (bxGW - 1); // column fraction 0..1
-              const rf = r / (bxGH - 1); // row fraction 0..1
-              // Bow factor: +1 at spine, -0.5 at edges (body bends around spine).
-              // Body X grid is at a different scale from Body Z (within Breath's
-              // 0.10–0.90 local range) but shares vertical row mapping; use the
-              // same cf shift scaled by the Breath-to-BodyX factor so the peak
-              // lands on the measured spine.
-              const bxCfFactor = 1 / (bxMaxV - bxMinV); // ≈ 1.25 for 0.80 span
-              const cfS = cf - spineCfShifts[r] * bxCfFactor;
-              const bowFactor = 1.5 * Math.sin(Math.PI * cfS) - 0.5;
-              // Row amplitude: peaks at torso, legs fade to zero
-              const torsoPeak = Math.sin(Math.PI * rf * 0.7); // peaks at upper-mid body
-              const legFade = bodyMoveFactor(rf); // legs static
-              const rowAmp = (0.02 + 0.03 * torsoPeak) * legFade;
-              pos[idx] += sign * rowAmp * bowFactor;
-            }
-          }
-        }
-        bxGridPositions.push(pos);
-      }
-
-      emitStructuralWarp(x, emitCtx,
-        'Body X Warp', 'BodyXWarp', bxCol, bxRow,
-        pidBodyXGuid, pidBreathGuid, pidBxKfg, pidCoord, bxFormGuids, bxGridPositions);
-    }
-
+  // Neck warp + face rotation + face parallax + re-parenting pass run only
+  // when the body warp chain emitted (they parent under Body X). Kept inside
+  // the same outer guard the original block used.
+  if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
     // ==================================================================
     // 3d.1 Neck Warp (Session 20: neck follows head tilt)
     // ==================================================================

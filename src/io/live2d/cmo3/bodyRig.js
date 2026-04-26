@@ -15,6 +15,7 @@
 import { uuid } from '../xmlbuilder.js';
 import { emitSingleParamKfGrid, emitStructuralWarp } from './deformerEmit.js';
 import { buildNeckWarpSpec } from '../rig/warpDeformers.js';
+import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
 
 /**
  * Emit the Neck Warp (CWarpDeformerSource, 6×6 grid, 3 keyforms on
@@ -122,25 +123,26 @@ export function emitFaceRotation(x, ctx) {
   } = ctx;
 
   // ── Face Rotation (CRotationDeformerSource) ──
-  // ParamAngleZ range is standard ±30; Hiyori caps actual rotation at ±10° even
-  // when param is pushed to its limits. 3 keyforms: param -30/0/+30 → angle -10/0/+10.
-  const [, pidFaceRotGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'FaceRotation' });
-  const faceRotParamKeys = [-30, 0, 30];    // ParamAngleZ keyform values
-  const faceRotAngles    = [-10, 0, 10];    // corresponding rotation angles (Hiyori)
-  // --- Structural chain integration: target FaceRotation to GroupRotation_head if possible ---
+  // Build the spec via shared rig builder; XML emission uses the spec data.
   const headGroupRotPid = headGroupId && groupDeformerGuids.get(headGroupId);
   const headGroupPivot = headGroupId && deformerWorldOrigins.get(headGroupId);
-  const isUnderRotation = !!headGroupRotPid;
+  const { spec: faceRotSpec } = buildFaceRotationSpec({
+    facePivotCanvasX: facePivotCx,
+    facePivotCanvasY: facePivotCy,
+    parentType: headGroupRotPid ? 'rotation' : 'warp',
+    parentDeformerId: headGroupRotPid ? `GroupRotation_${headGroupId}` : 'BodyXWarp',
+    parentPivotCanvas: headGroupRotPid ? headGroupPivot : null,
+    canvasToBodyXX, canvasToBodyXY,
+  });
+  const faceRotParamKeys = faceRotSpec.bindings[0].keys;
+  const faceRotAngles    = faceRotSpec.keyforms.map(k => k.angle);
 
+  const [, pidFaceRotGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'FaceRotation' });
   const { pidKfg: pidFaceRotKfg, formGuids: faceRotFormGuids } =
     emitSingleParamKfGrid(x, pidParamAngleZ, faceRotParamKeys, 'ParamAngleZ');
 
-  const pivotX = isUnderRotation
-    ? facePivotCx - headGroupPivot.x
-    : canvasToBodyXX(facePivotCx);
-  const pivotY = isUnderRotation
-    ? facePivotCy - headGroupPivot.y
-    : canvasToBodyXY(facePivotCy);
+  const pivotX = faceRotSpec.keyforms[0].originX;
+  const pivotY = faceRotSpec.keyforms[0].originY;
 
   const [faceRotDf, pidFaceRotDf] = x.shared('CRotationDeformerSource');
   allDeformerSources.push({ pid: pidFaceRotDf, tag: 'CRotationDeformerSource' });
