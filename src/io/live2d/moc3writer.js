@@ -475,6 +475,18 @@ function buildSectionData(input) {
   // emission instead of the shared rest geometry, allowing arm rotation to
   // deform meshes via per-keyform vertex offsets.
   const BONE_KEYFORM_ANGLES = [-90, -45, 0, 45, 90]; // matches paramSpec BAKED_BONE_ANGLES
+  // Mesh → its rig warp (per-mesh structural warp), if any. Each mesh's
+  // keyform binding inherits the rig warp's primary binding so the mesh
+  // has min/max keyforms across the param that drives its rig warp —
+  // matches cubism's pattern (e.g. eyewhite mesh has 2 keyforms on
+  // ParamEyeLOpen [0, 1], same as RigWarp_eyewhite_l) and satisfies the
+  // clip-mask validator naturally without a synthetic ParamOpacity binding.
+  const _rigWarpByMeshPartId = new Map();
+  if (rigSpec) {
+    for (const w of rigSpec.warpDeformers) {
+      if (w.targetPartId) _rigWarpByMeshPartId.set(w.targetPartId, w);
+    }
+  }
   const meshBindingPlan = meshParts.map(part => {
     const mesh = part.mesh;
     const boneWeights = mesh?.boneWeights ?? null;
@@ -523,16 +535,34 @@ function buildSectionData(input) {
         };
       }
     }
-    // Non-variant non-bone mesh: 2 keyforms on ParamOpacity at min (0) and
-    // max (1), with opacities matching — gives standard ParamOpacity fade
-    // behaviour AND satisfies Cubism's "clip-mask meshes need keyforms at
-    // min/max" validator (warning otherwise: "Assign Clipping of Artmeshes
-    // have keyform problems"). The previous single-keyform-only setup
-    // tripped that warning whenever the mesh was used as a drawable mask.
+    // Non-variant non-bone mesh: inherit the mesh's rig warp's primary
+    // binding (same param, same keys) so the mesh has min/max keyforms
+    // across the param driving its rig warp. Mirrors cubism's pattern
+    // exactly — eyewhite_l mesh gets 2 keyforms on ParamEyeLOpen [0, 1]
+    // matching RigWarp_eyewhite_l. This also satisfies Cubism's
+    // clip-mask validator (warning otherwise: 'Assign Clipping of
+    // Artmeshes have keyform problems') without a synthetic ParamOpacity
+    // workaround. Vertex positions stay constant across the keyforms —
+    // the rig warp does the actual deformation; the mesh's binding is
+    // the contract that says 'I respond to this param'.
+    const rigWarp = _rigWarpByMeshPartId.get(part.id);
+    if (rigWarp && rigWarp.bindings && rigWarp.bindings.length > 0) {
+      const primary = rigWarp.bindings[0];
+      const opacity = part.opacity ?? 1;
+      return {
+        paramId: primary.parameterId,
+        keys: primary.keys.slice(),
+        keyformOpacities: primary.keys.map(() => opacity),
+        perVertexPositions: null,
+      };
+    }
+    // Mesh with no rig warp: single ParamOpacity keyform at recorded
+    // opacity. Used for static meshes that don't participate in any
+    // tag-driven deformation system.
     return {
       paramId: 'ParamOpacity',
-      keys: [0, 1],
-      keyformOpacities: [0, part.opacity ?? 1],
+      keys: [1],
+      keyformOpacities: [part.opacity ?? 1],
       perVertexPositions: null,
     };
   });
