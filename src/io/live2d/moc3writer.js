@@ -1056,6 +1056,11 @@ function buildSectionData(input) {
   // Each mesh tries to parent to its dedicated rig warp first (per-mesh
   // structural warp from the cmo3 emit); otherwise falls back to the
   // deepest body warp (BodyXWarp).
+  //
+  // parent_part_indices STAYS at the mesh's group/root part — Cubism uses
+  // it for the drawing-tree hierarchy (visibility, draw-order organisation),
+  // independent of the deformer chain that handles transformation. cmo3
+  // sets meshSrc.parentGuid the same way regardless of any deformer parent.
   if (meshDefaultDeformerIdx >= 0) {
     // Map mesh.partId → deformer index, derived from rig warp targetPartId.
     const partIdToDeformerIdx = new Map();
@@ -1066,7 +1071,12 @@ function buildSectionData(input) {
     sections.set('art_mesh.parent_deformer_indices', meshParts.map(p =>
       partIdToDeformerIdx.get(p.id) ?? meshDefaultDeformerIdx,
     ));
-    sections.set('art_mesh.parent_part_indices', meshParts.map(() => -1));
+    // Re-emit parent_part_indices to overwrite an earlier set; mesh keeps
+    // its group as part parent.
+    sections.set('art_mesh.parent_part_indices', meshParts.map(p => {
+      if (p.parent && partIdMap.has(p.parent)) return partIdMap.get(p.parent);
+      return 0;
+    }));
 
     // Mesh keyform_position frame matches its parent deformer's local frame.
     // For a rig warp parent: its baseGrid is in 0..1 (normalized-0to1) of
@@ -1211,12 +1221,16 @@ export function generateMoc3(input) {
   }
 
   // V3.03+ additional section: quad_transforms (Bool32 per warp deformer).
-  // For V4.00, this is section 100 → SOT[101]. Even with 0 warp deformers,
-  // the SDK requires this SOT entry to be a valid (non-zero) offset.
+  // For V4.00, this is section 100 → SOT[101]. SDK requires the SOT entry
+  // be a valid (non-zero) offset. With warp deformers present, the SDK
+  // ALSO reads N×4 bytes of bool32 data at the offset; without that data
+  // it parses garbage and fails the load. Each entry mirrors the warp's
+  // `isQuadTransform` flag (false for all our warps — matches Hiyori).
   if (version >= MOC_VERSION.V3_03) {
     body.padTo(ALIGN);
     sotEntries.push(DEFAULT_OFFSET + body.pos);
-    // quad_transforms: count = WARP_DEFORMERS (0 for our models), no data written
+    const numWarps = counts[COUNT_IDX.WARP_DEFORMERS];
+    for (let i = 0; i < numWarps; i++) body.writeI32(0); // false
   }
 
   // Phase 2: Assemble header + SOT + padding + body
