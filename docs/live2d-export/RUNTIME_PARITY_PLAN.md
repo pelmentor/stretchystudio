@@ -33,6 +33,100 @@ no body sway.
 
 ## Already shipped
 
+### Phase B + C — RigSpec data layer + moc3 binary translator (2026-04-26)
+
+The runtime moc3 export now ships with a working rig. `cmo3writer` runs in
+`rigOnly` mode to harvest the shared `RigSpec`; `moc3writer` translates
+that spec into binary deformer sections.
+
+**rig/ modules**
+
+* `rig/rigSpec.js` — JSDoc types for `WarpDeformerSpec`,
+  `RotationDeformerSpec`, `ArtMeshSpec`, `PartSpec`, `KeyformBindingSpec`,
+  the three keyform variants. Documents the local-frame contract.
+  Provides `emptyRigSpec(canvas)` factory and `findDeformer/findPart`
+  helpers. `RigSpec` carries `canvasToInnermostX/Y` so writers can
+  project canvas-px positions into the deepest body warp's 0..1 frame.
+* `rig/warpDeformers.js` — `buildNeckWarpSpec`. Pure data; the cmo3
+  emit helper consumes it and emits XML.
+* `rig/rotationDeformers.js` — `buildFaceRotationSpec`,
+  `buildGroupRotationSpec`. Same pattern.
+* `rig/bodyWarp.js` — `buildBodyWarpChain` produces the four
+  `WarpDeformerSpec` entries for BZ → BY → Breath → BX, plus
+  `canvasToBodyXX/Y` normaliser and the body-anatomy debug log
+  (HIP_FRAC, FEET_FRAC, spineCfShifts).
+
+**cmo3writer changes**
+
+* Imports the rig builders. Calls `buildBodyWarpChain` near line 2419,
+  replacing ~50 LOC of inline bbox/anchor/spine math.
+* The body warp emission block (~360 LOC of inline math + XML) is now a
+  spec-driven translator loop; the math lives in `bodyWarp.js`.
+* `emitNeckWarp`, `emitFaceRotation` consume specs from the rig builders
+  and translate to XML via existing `emitSingleParamKfGrid` +
+  `emitStructuralWarp` helpers.
+* The deferred group-rotation block (lines ~1605–1758) also pushes a
+  `RotationDeformerSpec` per group into `rigCollector`. The re-parenting
+  pass updates both the XML refs AND the rigCollector entries so the
+  spec reflects the FINAL parent (post re-parenting). Pivot conversion
+  (canvas → BodyXWarp 0..1 OR canvas-px-from-parent-pivot) is mirrored
+  back into the spec's keyforms.
+* `generateCmo3` accepts a `rigOnly: true` flag that short-circuits
+  before XML / CAFF emission and returns just the rigSpec. Used by the
+  runtime path.
+
+**moc3writer changes**
+
+* Accepts `rigSpec` in input. When provided, emits:
+  * `deformer.*` (umbrella section: ids, parents, types, specific_indices)
+  * `warp_deformer.*` + `warp_deformer_keyform.*`
+  * `rotation_deformer.*` + `rotation_deformer_keyform.*`
+* Unified keyform binding system: art-mesh bindings (variant fade,
+  ParamOpacity) and deformer bindings (ParamBodyAngleX/Y/Z, ParamBreath,
+  ParamAngleZ, ParamRotation_*) coexist in one ordered list. Each
+  parameter owns a contiguous range in `keyform_binding_index`.
+* Mesh vertex positions go through `rigSpec.canvasToInnermostX/Y` —
+  the BZ → BY → Breath → BX chain — so they live in BodyXWarp's 0..1
+  local frame, matching the parent-deformer-local convention.
+* Art meshes get `parent_deformer_index = BodyXWarp` (innermost body
+  warp) and `parent_part_index = -1`.
+* Warp keyform positions stored per `WarpDeformerSpec.localFrame`:
+  `canvas-px` → normalised by PPU; `normalized-0to1` → as-is;
+  `pivot-relative` → divided by PPU.
+
+**exporter.js changes**
+
+`exportLive2D` builds mesh data via `buildMeshesForRig` (no PNG render),
+calls `generateCmo3` in `rigOnly` mode to harvest the rigSpec, discards
+the cmo3 buffer, and passes the rigSpec to `generateMoc3`. Same paramSpec
++ physics3 + motion presets wiring as before.
+
+**What works after Phase B+C**
+
+* Body sway on ParamBodyAngleX / Y / Z (BodyWarpZ/Y/X morph the body)
+* Breath (BreathWarp morphs subtly on ParamBreath)
+* Head tilt on ParamAngleZ (FaceRotation rotation deformer)
+* Group rotations (head, neck, arms, …) on ParamRotation_<group>
+* Variant fade on Param<Suffix> (Stage 2a still in place)
+
+**Still missing — Phase B remaining + Phase D**
+
+* Per-mesh structural warps (rig warps): each face/neck/body-region mesh
+  gets its own 5×5 warp grid for fine local deformation. Currently meshes
+  parent directly to BodyXWarp without an intermediate per-mesh warp.
+  Without this, mesh-specific micro-adjustments don't apply.
+* Face parallax warp: single warp covering face area, drives eye/brow/
+  mouth tracking on ParamAngleX/Y. Without this, eyes don't follow the
+  cursor's X/Y position.
+* ArtMesh keyforms across params: cross-product keyforms for eye blink
+  (ParamEyeLOpen × Param<Suffix>), mouth open (ParamMouthOpenY), brow
+  shapes (ParamBrowL/RY), etc. The mesh's vertex POSITIONS can vary per
+  param value. Without this, eye blink and mouth open don't deform the
+  mesh in moc3.
+* Drawable masks (clip masks for iris/pupil inside eyewhite, etc.).
+* Parts hierarchy (currently emits groups as parts, not the full part
+  tree from cmo3).
+
 ### Stage 1 — Parameter spec extraction (2026-04-26)
 
 `src/io/live2d/rig/paramSpec.js` is the single source of truth for the
