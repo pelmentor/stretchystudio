@@ -325,6 +325,10 @@ class BinaryWriter {
  * @property {boolean} [generateRig=true] - Emit the 22 SDK-standard parameters
  *   (ParamAngleX/Y/Z, EyeBlink, MouthOpen, …). Defaults to true for runtime
  *   exports — face-tracking apps and motion presets need them.
+ * @property {import('./rig/rigSpec.js').RigSpec} [rigSpec=null]
+ *   Shared rig data (warp + rotation deformers, art-mesh keyforms, parts).
+ *   When provided, the writer emits the full deformer infrastructure;
+ *   without it, the moc3 ships without deformers (legacy mesh-only mode).
  */
 
 /**
@@ -334,7 +338,7 @@ class BinaryWriter {
  * @returns {{ sections: Map<string, any[]>, counts: number[], canvas: object }}
  */
 function buildSectionData(input) {
-  const { project, regions, atlasSize, numAtlases, generateRig = true } = input;
+  const { project, regions, atlasSize, numAtlases, generateRig = true, rigSpec = null } = input;
 
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
@@ -467,31 +471,51 @@ function buildSectionData(input) {
     };
   });
 
-  // Flatten counts: keyforms (variable per mesh), keys (variable per binding).
+  // Flatten per-mesh keyform offsets (used by art_mesh.keyform_begin_indices /
+  // _counts). The per-binding key range is computed later in the unified
+  // keyform binding system, where mesh + deformer bindings live in one list.
   let totalArtMeshKeyforms = 0;
-  let totalKeys = 0;
   const meshKeyformBeginIndex = [];
   const meshKeyformCount = [];
-  const bindingKeysBegin = [];
-  const bindingKeysCount = [];
   for (const plan of meshBindingPlan) {
     meshKeyformBeginIndex.push(totalArtMeshKeyforms);
     meshKeyformCount.push(plan.keyformOpacities.length);
-    bindingKeysBegin.push(totalKeys);
-    bindingKeysCount.push(plan.keys.length);
     totalArtMeshKeyforms += plan.keyformOpacities.length;
-    totalKeys += plan.keys.length;
   }
 
   counts[COUNT_IDX.ART_MESH_KEYFORMS] = totalArtMeshKeyforms;
 
-  // Keyform bindings: 1 binding per mesh, null bands for parts.
-  // SDK validator requires begin < total even when count=0, so we need real bindings.
-  const numBands = numArtMeshes + numParts;
-  counts[COUNT_IDX.KEYFORM_BINDINGS] = numArtMeshes;
-  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = numBands;
-  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = numArtMeshes;
-  counts[COUNT_IDX.KEYS] = totalKeys;
+  // ── Deformer rig (Stage 2b) — warp + rotation deformers from rigSpec ──
+  // Both writers share buildBodyWarpChain / buildFaceRotationSpec / etc. to
+  // produce the rigSpec; this writer translates the spec into the moc3
+  // deformer / warp_deformer / rotation_deformer / *_keyform / keyform_position
+  // sections. Without rigSpec the moc3 ships without deformers (legacy mode).
+  const warpSpecs = rigSpec ? rigSpec.warpDeformers : [];
+  const rotationSpecs = rigSpec ? rigSpec.rotationDeformers : [];
+  const numWarpDeformers = warpSpecs.length;
+  const numRotationDeformers = rotationSpecs.length;
+  const numDeformers = numWarpDeformers + numRotationDeformers;
+  // Unified deformer order: warps first, rotations after. Index in this array
+  // = the deformer's index in the moc3 DEFORMERS section (and in the
+  // parent_deformer_indices references).
+  const allDeformerSpecs = [...warpSpecs, ...rotationSpecs];
+  const deformerIdToIndex = new Map();
+  for (let di = 0; di < allDeformerSpecs.length; di++) {
+    deformerIdToIndex.set(allDeformerSpecs[di].id, di);
+  }
+  // The deepest body warp — meshes parent to it when no per-mesh deformer
+  // (face parallax / rig warp) supersedes. Falls back through the chain.
+  const meshDefaultDeformerIdx = (
+    deformerIdToIndex.get('BodyXWarp') ??
+    deformerIdToIndex.get('BreathWarp') ??
+    deformerIdToIndex.get('BodyWarpY') ??
+    deformerIdToIndex.get('BodyWarpZ') ??
+    -1
+  );
+
+  counts[COUNT_IDX.DEFORMERS] = numDeformers;
+  counts[COUNT_IDX.WARP_DEFORMERS] = numWarpDeformers;
+  counts[COUNT_IDX.ROTATION_DEFORMERS] = numRotationDeformers;
 
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)
   counts[COUNT_IDX.DRAWABLE_MASKS] = 1;
@@ -550,33 +574,81 @@ function buildSectionData(input) {
   sections.set('parameter.repeats', paramList.map(p => p.repeat ?? false));
   sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 1));
 
-  // Each parameter owns a contiguous range of `keyform_binding_index` slots,
-  // listing the mesh bindings driven by that param. We bucket meshes by their
-  // owning paramId, then walk paramList to build the ordered slot array — so
-  // ParamOpacity (always param 0) gets non-variant meshes, ParamSmile gets
-  // `.smile` variants, ParamSad gets `.sad`, etc.
-  const meshIndicesByParam = new Map();
+  // ── Unified keyform binding system (meshes + deformers) ──
+  // Each "binding" maps a parameter axis to a list of key values. The owner
+  // (mesh / deformer) declares one binding per axis; together the owner's
+  // bindings define the cross-product of keyform cells. ParamOpacity owns
+  // non-variant mesh bindings; Param<Suffix> owns variant mesh bindings;
+  // ParamBodyAngleX/Y/Z + ParamBreath own the body-warp deformer bindings;
+  // ParamAngleZ owns face rotation; etc.
+  /** @type {{paramId:string, keys:number[], ownerKind:string, ownerIdx:number, axisIdx:number}[]} */
+  const allBindings = [];
+  // Mesh bindings — same plan as before, just added to the unified list.
   for (let m = 0; m < meshBindingPlan.length; m++) {
-    const pid = meshBindingPlan[m].paramId;
-    if (!meshIndicesByParam.has(pid)) meshIndicesByParam.set(pid, []);
-    meshIndicesByParam.get(pid).push(m);
+    const plan = meshBindingPlan[m];
+    allBindings.push({
+      paramId: plan.paramId, keys: plan.keys,
+      ownerKind: 'mesh', ownerIdx: m, axisIdx: 0,
+    });
+  }
+  // Deformer bindings — one per axis per deformer (typical: 1 axis).
+  /** @type {{begin:number, count:number}[]} */
+  const deformerBindingRanges = [];
+  for (let d = 0; d < allDeformerSpecs.length; d++) {
+    const spec = allDeformerSpecs[d];
+    const begin = allBindings.length;
+    for (let a = 0; a < spec.bindings.length; a++) {
+      const b = spec.bindings[a];
+      allBindings.push({
+        paramId: b.parameterId, keys: b.keys,
+        ownerKind: d < numWarpDeformers ? 'warp' : 'rotation',
+        ownerIdx: d < numWarpDeformers ? d : d - numWarpDeformers,
+        axisIdx: a,
+      });
+    }
+    deformerBindingRanges.push({ begin, count: spec.bindings.length });
+  }
+
+  // Per-binding key range — flat keys array, one entry per param value.
+  const bindingKeysBegin = [];
+  const bindingKeysCount = [];
+  const flatKeys = [];
+  for (const b of allBindings) {
+    bindingKeysBegin.push(flatKeys.length);
+    bindingKeysCount.push(b.keys.length);
+    for (const k of b.keys) flatKeys.push(k);
+  }
+
+  // Each parameter owns a contiguous range of slots in keyform_binding_index.
+  // Build that ordered slot list by walking paramList and emitting each param's
+  // bindings in order. Recorded `bindingToSlot[bi]` lets bands look up the
+  // slot offset for any binding when assigning their begin index.
+  const slotsByParam = new Map();
+  for (const p of paramList) slotsByParam.set(p.id, []);
+  for (let bi = 0; bi < allBindings.length; bi++) {
+    const pid = allBindings[bi].paramId;
+    if (!slotsByParam.has(pid)) slotsByParam.set(pid, []);
+    slotsByParam.get(pid).push(bi);
   }
   const keyformBindingIndices = [];
-  const meshSlotInKBI = new Array(meshBindingPlan.length).fill(0);
+  const bindingToSlot = new Array(allBindings.length).fill(0);
   const paramKfbBegin = [];
   const paramKfbCount = [];
   for (const p of paramList) {
-    const meshIdxs = meshIndicesByParam.get(p.id) ?? [];
+    const myBindings = slotsByParam.get(p.id) ?? [];
     paramKfbBegin.push(keyformBindingIndices.length);
-    paramKfbCount.push(meshIdxs.length);
-    for (const m of meshIdxs) {
-      meshSlotInKBI[m] = keyformBindingIndices.length;
-      // The binding-index slot points to mesh m's binding (binding[m]).
-      keyformBindingIndices.push(m);
+    paramKfbCount.push(myBindings.length);
+    for (const bi of myBindings) {
+      bindingToSlot[bi] = keyformBindingIndices.length;
+      keyformBindingIndices.push(bi);
     }
   }
   sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
   sections.set('parameter.keyform_binding_counts', paramKfbCount);
+
+  counts[COUNT_IDX.KEYFORM_BINDINGS] = allBindings.length;
+  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = keyformBindingIndices.length;
+  counts[COUNT_IDX.KEYS] = flatKeys.length;
 
   // --- Part Keyform sections ---
   // Draw orders: all 500.0 (Hiyori pattern — actual order via draw_order_group_object)
@@ -625,41 +697,205 @@ function buildSectionData(input) {
   }
   sections.set('keyform_position.xys', allKeyformPositions);
 
-  // --- Keyform binding system ---
-  // Each mesh has 1 binding owned by its planned param (see meshBindingPlan).
-  // Mesh band points to the mesh's slot in keyform_binding_index — that slot
-  // sits inside the owning param's contiguous range (built above).
-  // Parts get null bands (count=0, begin=0). SDK validator requires
-  // begin < total even when count=0.
+  // ── Bands (one per mesh, one per part, one per deformer) ──
+  // Mesh / deformer bands point to their first binding's slot in
+  // keyform_binding_index. Part bands are null (count=0).
+  const numBands = numArtMeshes + numParts + numDeformers;
+  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = numBands;
   const bandBegins = [];
   const bandCounts = [];
-  for (let i = 0; i < numArtMeshes; i++) {
-    bandBegins.push(meshSlotInKBI[i]);
+  // Mesh bands: binding bi == mesh bi (first numArtMeshes entries in allBindings)
+  for (let m = 0; m < numArtMeshes; m++) {
+    bandBegins.push(bindingToSlot[m]);
     bandCounts.push(1);
   }
-  for (let i = 0; i < numParts; i++) {
-    bandBegins.push(0); // must be < numArtMeshes (total binding indices)
+  // Part bands (null)
+  for (let p = 0; p < numParts; p++) {
+    bandBegins.push(0);
     bandCounts.push(0);
+  }
+  // Deformer bands — point to the first binding for each deformer
+  for (let d = 0; d < allDeformerSpecs.length; d++) {
+    const range = deformerBindingRanges[d];
+    if (range.count === 0) {
+      bandBegins.push(0);
+      bandCounts.push(0);
+    } else {
+      bandBegins.push(bindingToSlot[range.begin]);
+      bandCounts.push(range.count);
+    }
   }
   sections.set('keyform_binding_band.begin_indices', bandBegins);
   sections.set('keyform_binding_band.counts', bandCounts);
 
-  // Binding indices: ordered by owning parameter (built into
-  // `keyformBindingIndices` above). Slot j → binding[keyformBindingIndices[j]].
   sections.set('keyform_binding_index.indices', keyformBindingIndices);
-
-  // Bindings: keys range per binding (variable — variant meshes have 2 keys,
-  // others have 1).
   sections.set('keyform_binding.keys_begin_indices', bindingKeysBegin);
   sections.set('keyform_binding.keys_counts', bindingKeysCount);
-
-  // Keys: flat array of param values at which keyforms exist. Variant meshes
-  // contribute [0, 1] on Param<Suffix>; others contribute [1] on ParamOpacity.
-  const flatKeys = [];
-  for (const plan of meshBindingPlan) {
-    for (const k of plan.keys) flatKeys.push(k);
-  }
   sections.set('keys.values', flatKeys);
+
+  // ──────────────────────────────────────────────────────────────────
+  // Deformer sections (Stage 2b binary translator)
+  // ──────────────────────────────────────────────────────────────────
+  // Deformer band indices follow mesh + part bands.
+  const deformerBandOffset = numArtMeshes + numParts;
+
+  // ── Umbrella deformer section ──
+  const deformer_ids = [];
+  const deformer_band_indices = [];
+  const deformer_visibles = [];
+  const deformer_enables = [];
+  const deformer_parent_part_indices = [];
+  const deformer_parent_deformer_indices = [];
+  const deformer_types = [];
+  const deformer_specific_indices = [];
+  let _warpIdx = 0;
+  let _rotIdx = 0;
+  for (let d = 0; d < allDeformerSpecs.length; d++) {
+    const spec = allDeformerSpecs[d];
+    deformer_ids.push(spec.id);
+    deformer_band_indices.push(deformerBandOffset + d);
+    deformer_visibles.push(spec.isVisible !== false);
+    deformer_enables.push(true);
+    let pp = -1, pd = -1;
+    if (spec.parent.type === 'root' || spec.parent.type === 'part') {
+      pp = 0; // root part is always index 0 in this writer's part section.
+    } else if (spec.parent.type === 'warp' || spec.parent.type === 'rotation') {
+      pd = deformerIdToIndex.get(spec.parent.id) ?? -1;
+    }
+    deformer_parent_part_indices.push(pp);
+    deformer_parent_deformer_indices.push(pd);
+    if (d < numWarpDeformers) {
+      deformer_types.push(0); // 0 = warp
+      deformer_specific_indices.push(_warpIdx++);
+    } else {
+      deformer_types.push(1); // 1 = rotation
+      deformer_specific_indices.push(_rotIdx++);
+    }
+  }
+  sections.set('deformer.ids', deformer_ids);
+  sections.set('deformer.keyform_binding_band_indices', deformer_band_indices);
+  sections.set('deformer.visibles', deformer_visibles);
+  sections.set('deformer.enables', deformer_enables);
+  sections.set('deformer.parent_part_indices', deformer_parent_part_indices);
+  sections.set('deformer.parent_deformer_indices', deformer_parent_deformer_indices);
+  sections.set('deformer.types', deformer_types);
+  sections.set('deformer.specific_indices', deformer_specific_indices);
+
+  // ── Warp deformers + their keyforms ──
+  // Each warp keyform contributes (cols+1)*(rows+1)*2 floats to keyform_position.
+  // Position semantics depend on localFrame: canvas-px frame → normalized by
+  // PPU (same convention as mesh vertex positions). normalized-0to1 frame →
+  // stored as-is (already in parent's local frame).
+  const warp_kf_band_indices = [];
+  const warp_kf_begin_indices = [];
+  const warp_kf_counts = [];
+  const warp_vertex_counts = [];
+  const warp_rows = [];
+  const warp_cols = [];
+  const warp_kf_opacities = [];
+  const warp_kf_pos_begin_indices = [];
+  let _totalWarpKeyforms = 0;
+  for (let i = 0; i < warpSpecs.length; i++) {
+    const w = warpSpecs[i];
+    const gridPts = (w.gridSize.cols + 1) * (w.gridSize.rows + 1);
+    warp_kf_band_indices.push(deformerBandOffset + i);
+    warp_kf_begin_indices.push(_totalWarpKeyforms);
+    warp_kf_counts.push(w.keyforms.length);
+    warp_vertex_counts.push(gridPts);
+    warp_rows.push(w.gridSize.rows);
+    warp_cols.push(w.gridSize.cols);
+    _totalWarpKeyforms += w.keyforms.length;
+    for (const kf of w.keyforms) {
+      warp_kf_opacities.push(kf.opacity ?? 1);
+      // keyform_position_begin_indices is the FLOAT offset into the
+      // keyform_position.xys array (mesh code does the same — each XY pair
+      // takes 2 floats and offsets accumulate by vertCount * 2).
+      warp_kf_pos_begin_indices.push(allKeyformPositions.length);
+      // Translate positions to moc3 convention:
+      //   - canvas-px frame  → normalize by PPU (same as mesh vertex coords)
+      //   - normalized-0to1  → store as-is
+      //   - pivot-relative   → canvas-px-from-pivot, normalize by PPU
+      for (let pi = 0; pi < kf.positions.length; pi += 2) {
+        const lx = kf.positions[pi];
+        const ly = kf.positions[pi + 1];
+        if (w.localFrame === 'canvas-px') {
+          allKeyformPositions.push((lx - originX) / ppu);
+          allKeyformPositions.push((ly - originY) / ppu);
+        } else if (w.localFrame === 'pivot-relative') {
+          allKeyformPositions.push(lx / ppu);
+          allKeyformPositions.push(ly / ppu);
+        } else {
+          allKeyformPositions.push(lx);
+          allKeyformPositions.push(ly);
+        }
+      }
+    }
+  }
+  counts[COUNT_IDX.WARP_DEFORMER_KEYFORMS] = _totalWarpKeyforms;
+  sections.set('warp_deformer.keyform_binding_band_indices', warp_kf_band_indices);
+  sections.set('warp_deformer.keyform_begin_indices', warp_kf_begin_indices);
+  sections.set('warp_deformer.keyform_counts', warp_kf_counts);
+  sections.set('warp_deformer.vertex_counts', warp_vertex_counts);
+  sections.set('warp_deformer.rows', warp_rows);
+  sections.set('warp_deformer.cols', warp_cols);
+  sections.set('warp_deformer_keyform.opacities', warp_kf_opacities);
+  sections.set('warp_deformer_keyform.keyform_position_begin_indices', warp_kf_pos_begin_indices);
+
+  // ── Rotation deformers + their keyforms ──
+  const rot_kf_band_indices = [];
+  const rot_kf_begin_indices = [];
+  const rot_kf_counts = [];
+  const rot_base_angles = [];
+  const rot_kf_opacities = [];
+  const rot_kf_angles = [];
+  const rot_kf_origin_xs = [];
+  const rot_kf_origin_ys = [];
+  const rot_kf_scales = [];
+  const rot_kf_reflect_xs = [];
+  const rot_kf_reflect_ys = [];
+  let _totalRotKeyforms = 0;
+  for (let i = 0; i < rotationSpecs.length; i++) {
+    const r = rotationSpecs[i];
+    rot_kf_band_indices.push(deformerBandOffset + numWarpDeformers + i);
+    rot_kf_begin_indices.push(_totalRotKeyforms);
+    rot_kf_counts.push(r.keyforms.length);
+    rot_base_angles.push(r.baseAngle ?? 0);
+    _totalRotKeyforms += r.keyforms.length;
+    for (const kf of r.keyforms) {
+      rot_kf_opacities.push(kf.opacity ?? 1);
+      rot_kf_angles.push(kf.angle);
+      rot_kf_origin_xs.push(kf.originX);
+      rot_kf_origin_ys.push(kf.originY);
+      rot_kf_scales.push(kf.scale ?? 1);
+      rot_kf_reflect_xs.push(kf.reflectX ?? false);
+      rot_kf_reflect_ys.push(kf.reflectY ?? false);
+    }
+  }
+  counts[COUNT_IDX.ROTATION_DEFORMER_KEYFORMS] = _totalRotKeyforms;
+  sections.set('rotation_deformer.keyform_binding_band_indices', rot_kf_band_indices);
+  sections.set('rotation_deformer.keyform_begin_indices', rot_kf_begin_indices);
+  sections.set('rotation_deformer.keyform_counts', rot_kf_counts);
+  sections.set('rotation_deformer.base_angles', rot_base_angles);
+  sections.set('rotation_deformer_keyform.opacities', rot_kf_opacities);
+  sections.set('rotation_deformer_keyform.angles', rot_kf_angles);
+  sections.set('rotation_deformer_keyform.origin_xs', rot_kf_origin_xs);
+  sections.set('rotation_deformer_keyform.origin_ys', rot_kf_origin_ys);
+  sections.set('rotation_deformer_keyform.scales', rot_kf_scales);
+  sections.set('rotation_deformer_keyform.reflect_xs', rot_kf_reflect_xs);
+  sections.set('rotation_deformer_keyform.reflect_ys', rot_kf_reflect_ys);
+
+  // ── Update keyform_position count + section (extended with warp grids) ──
+  counts[COUNT_IDX.KEYFORM_POSITIONS] = allKeyformPositions.length;
+  sections.set('keyform_position.xys', allKeyformPositions);
+
+  // ── Re-parent art meshes to deepest body warp ──
+  // Once the rig is in place, every mesh deforms via the body warp chain.
+  // parent_deformer_index points to the unified deformer list; when a deformer
+  // parent is set, parent_part_index goes to -1 (mesh has one or the other).
+  if (meshDefaultDeformerIdx >= 0) {
+    sections.set('art_mesh.parent_deformer_indices', meshParts.map(() => meshDefaultDeformerIdx));
+    sections.set('art_mesh.parent_part_indices', meshParts.map(() => -1));
+  }
 
   // --- Drawable masks (1 dummy entry) ---
   sections.set('drawable_mask.art_mesh_indices', [-1]);

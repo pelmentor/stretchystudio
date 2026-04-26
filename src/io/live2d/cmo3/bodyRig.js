@@ -71,6 +71,7 @@ export function emitNeckWarp(x, ctx) {
   });
 
   if (rigDebugLog) rigDebugLog.neckWarp = debug;
+  if (ctx.rigCollector) ctx.rigCollector.warpDeformers.push(spec);
 
   // ── XML emission from the spec ──
   const [, pidNwGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: 'NeckWarp' });
@@ -134,6 +135,7 @@ export function emitFaceRotation(x, ctx) {
     parentPivotCanvas: headGroupRotPid ? headGroupPivot : null,
     canvasToBodyXX, canvasToBodyXY,
   });
+  if (ctx.rigCollector) ctx.rigCollector.rotationDeformers.push(faceRotSpec);
   const faceRotParamKeys = faceRotSpec.bindings[0].keys;
   const faceRotAngles    = faceRotSpec.keyforms.map(k => k.angle);
 

@@ -27,6 +27,7 @@ import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
 import { variantParamId } from '../psdOrganizer.js';
 import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
+import { emptyRigSpec } from './rig/rigSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import {
   VERSION_PIS,
@@ -108,6 +109,10 @@ export async function generateCmo3(input) {
     // emission, e.g. ['hair'] for a buzz-cut character where hair
     // pendulums look wrong. Unknown categories are ignored.
     physicsDisabledCategories = null,
+    // Rig-only mode skips XML serialization + PNG/CAFF packing. The runtime
+    // path uses this to extract the shared RigSpec without paying for cmo3
+    // emission. Returns `{rigSpec, deformerParamMap}` only.
+    rigOnly = false,
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -179,6 +184,13 @@ export async function generateCmo3(input) {
   }
 
   const x = new XmlBuilder();
+
+  // ── RigSpec collector ──
+  // Single source of truth for every rig element emitted below. Both this
+  // writer and moc3writer consume the resulting RigSpec — cmo3 translates
+  // it to XML, moc3 translates it to binary. Collector is built up as each
+  // emit* helper runs; final value is returned alongside the cmo3 buffer.
+  const rigCollector = emptyRigSpec({ w: canvasW, h: canvasH });
 
   // ==================================================================
   // 1. GLOBAL SHARED OBJECTS (used by all meshes)
@@ -3126,6 +3138,7 @@ export async function generateCmo3(input) {
     x.sub(_coordBWZ, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
 
     for (const spec of _bodyChain.specs) {
+      rigCollector.warpDeformers.push(spec);
       const [, pid] = x.shared('CDeformerGuid', { uuid: uuid(), note: spec.id });
       _bodyDeformerPids.set(spec.id, pid);
 
@@ -3167,6 +3180,7 @@ export async function generateCmo3(input) {
       neckGroupId, groupDeformerGuids, deformerWorldOrigins,
       canvasToBodyXX, canvasToBodyXY,
       pidCoord, rigDebugLog, emitCtx,
+      rigCollector,
     });
 
     // ==================================================================
@@ -3198,6 +3212,7 @@ export async function generateCmo3(input) {
         headGroupId, groupDeformerGuids, deformerWorldOrigins,
         canvasToBodyXX, canvasToBodyXY,
         allDeformerSources, pidPartGuid, pidCoord, rootPart,
+        rigCollector,
       });
 
       // ── FaceParallax warp (6×6 grid, 9kf on AngleX × AngleY) ──
@@ -3275,6 +3290,21 @@ export async function generateCmo3(input) {
         node.attrs['xs.ref'] = pidReparentTarget;
       }
     }
+  }
+
+  // ── rigOnly short-circuit ──
+  // Runtime path (`exportLive2D`) calls generateCmo3 in rigOnly mode just to
+  // harvest the RigSpec — it doesn't need the cmo3 buffer or CAFF packing.
+  // Returns after the body warp chain + neck warp + face rotation specs are
+  // populated. Per-mesh structural warps and face parallax are still inline
+  // (Phase B continues) and won't be in the rigSpec yet.
+  if (rigOnly) {
+    return {
+      cmo3: null,
+      deformerParamMap,
+      rigDebugLog,
+      rigSpec: rigCollector,
+    };
   }
 
   // ==================================================================
@@ -4223,5 +4253,5 @@ export async function generateCmo3(input) {
   });
 
   const cmo3 = await packCaff(caffFiles, 42);
-  return { cmo3, deformerParamMap, rigDebugLog };
+  return { cmo3, deformerParamMap, rigDebugLog, rigSpec: rigCollector };
 }

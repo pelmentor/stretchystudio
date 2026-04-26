@@ -92,17 +92,55 @@ export async function exportLive2D(project, images, opts = {}) {
     textureFiles.push(`${textureDir}/${filename}`);
   }
 
-  // --- Step 2: Generate .moc3 ---
+  // --- Step 2: Build RigSpec via cmo3writer (rigOnly mode) ---
+  // The runtime path uses cmo3writer as the rig generator (Phase C interim
+  // architecture). cmo3writer in rigOnly mode short-circuits before XML /
+  // CAFF emission and returns the RigSpec containing the body warp chain
+  // (BZ/BY/Breath/BX), neck warp, and face rotation. moc3writer translates
+  // that spec into binary deformer sections so the runtime model actually
+  // responds to ParamBodyAngleX/Y/Z, ParamBreath, and ParamAngleZ.
+  onProgress('Building rig spec...');
+  const meshesForRig = await buildMeshesForRig(project, images);
+  const groupsForRig = project.nodes.filter(n => n.type === 'group').map(g => ({
+    id: g.id,
+    name: g.name ?? g.id,
+    parent: g.parent ?? null,
+    boneRole: g.boneRole ?? null,
+    transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
+  }));
+  let rigSpec = null;
+  try {
+    const rigResult = await generateCmo3({
+      canvasW: project.canvas?.width ?? 800,
+      canvasH: project.canvas?.height ?? 600,
+      meshes: meshesForRig,
+      groups: groupsForRig,
+      parameters: project.parameters ?? [],
+      animations: [],
+      modelName,
+      generateRig: true,
+      generatePhysics: false,
+      physicsDisabledCategories,
+      rigOnly: true,
+    });
+    rigSpec = rigResult.rigSpec;
+  } catch (err) {
+    console.warn('[exportLive2D] rigSpec build failed; runtime moc3 will ship without deformers:', err);
+  }
+
+  // --- Step 3: Generate .moc3 ---
   onProgress('Generating .moc3 binary...');
   // generateRig:true emits the SDK-standard parameter list (ParamAngleX/Y/Z,
   // EyeBlink, MouthOpen, …) plus auto-detected variant + bone params via the
-  // shared paramSpec builder. Same source of truth cmo3writer uses.
+  // shared paramSpec builder. rigSpec carries the warp + rotation deformers
+  // and their keyforms — without it, moc3 ships mesh-only (legacy mode).
   const moc3Buffer = generateMoc3({
     project,
     regions,
     atlasSize,
     numAtlases: atlases.length,
     generateRig: true,
+    rigSpec,
   });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
@@ -521,6 +559,79 @@ export async function exportLive2DProject(project, images, opts = {}) {
   }
 
   return new Blob([cmo3], { type: 'application/octet-stream' });
+}
+
+/**
+ * Build the mesh array `generateCmo3` expects, but WITHOUT PNG rendering.
+ * Used by the runtime export path (`exportLive2D`) when invoking cmo3writer
+ * in rigOnly mode — that mode short-circuits before the CAFF packing step
+ * so per-mesh PNGs are never read. We pass empty pngData placeholders.
+ *
+ * The rig builders (body warp chain, neck warp, face rotation, …) only need
+ * vertices, triangles, tags, jointBoneId, boneWeights, variantSuffix — none
+ * of the texture data.
+ *
+ * @param {object} project
+ * @param {Map<string, HTMLImageElement>} _images  unused; kept for parity with the cmo3 path
+ * @returns {Promise<Array<object>>}
+ */
+async function buildMeshesForRig(project, _images) {
+  const canvasW = project.canvas?.width ?? 800;
+  const canvasH = project.canvas?.height ?? 600;
+  const meshParts = project.nodes
+    .filter(n => n.type === 'part' && n.mesh && n.visible !== false)
+    .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
+  const meshes = [];
+  for (let i = 0; i < meshParts.length; i++) {
+    const part = meshParts[i];
+    const mesh = part.mesh;
+    const meshName = part.name || `ArtMesh${i}`;
+    // Flatten vertices using rest positions (same convention as exportLive2DProject).
+    const vertices = [];
+    for (const v of mesh.vertices) vertices.push(v.restX ?? v.x, v.restY ?? v.y);
+    const triangles = [];
+    for (const tri of mesh.triangles) triangles.push(tri[0], tri[1], tri[2]);
+    const uvs = [];
+    for (const v of mesh.vertices) {
+      const u = Math.max(0, Math.min(1, (v.restX ?? v.x) / canvasW));
+      const vv = Math.max(0, Math.min(1, (v.restY ?? v.y) / canvasH));
+      uvs.push(u, vv);
+    }
+    const boneWeights = mesh.boneWeights ?? null;
+    const jointBoneId = mesh.jointBoneId ?? null;
+    let jointPivotX = null, jointPivotY = null;
+    if (jointBoneId && boneWeights) {
+      const jointBone = project.nodes.find(n => n.id === jointBoneId);
+      if (jointBone?.transform) {
+        jointPivotX = jointBone.transform.pivotX ?? 0;
+        jointPivotY = jointBone.transform.pivotY ?? 0;
+      }
+    }
+    const variantSuffix =
+      part.variantSuffix ?? extractVariant(meshName).variant ?? null;
+    meshes.push({
+      name: meshName,
+      tag: matchTag(meshName),
+      variantRole: variantSuffix,
+      variantSuffix,
+      variantOf: part.variantOf ?? null,
+      partId: part.id,
+      parentGroupId: part.parent ?? null,
+      jointBoneId,
+      boneWeights,
+      jointPivotX,
+      jointPivotY,
+      drawOrder: part.draw_order ?? i,
+      vertices,
+      triangles,
+      uvs,
+      // pngData omitted — rigOnly mode never reads it.
+      pngData: new Uint8Array(0),
+      texWidth: canvasW,
+      texHeight: canvasH,
+    });
+  }
+  return meshes;
 }
 
 /**
