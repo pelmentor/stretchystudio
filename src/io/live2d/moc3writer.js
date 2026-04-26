@@ -441,7 +441,12 @@ function buildSectionData(input) {
 
     totalUVs += renderVertCount * 2;
     totalFlatIndices += flatIndexCount;
-    totalKeyformPositions += renderVertCount * 2;
+    // Cubism aligns each keyform's position block to a 16-float boundary
+    // (pad with zeros). Must mirror it here — pos_begin offsets must hit
+    // 16-aligned values or the runtime reads adjacent keyform data
+    // incorrectly. e.g. 36 control pts × 2 floats = 72 → padded to 80.
+    const _padded = Math.ceil((renderVertCount * 2) / 16) * 16;
+    totalKeyformPositions += _padded;
 
     return info;
   });
@@ -893,6 +898,15 @@ function buildSectionData(input) {
     }
     return null;
   };
+  // 16-float padding: Cubism stores each keyform's vertex block aligned
+  // to 16 floats; pos_begin offsets must land on 16-aligned indices or the
+  // runtime reads adjacent keyforms incorrectly. Verified by binary diff
+  // against cubism native export: 36-pt keyforms occupy 80 floats (72 +
+  // 8 zero pad), 16-pt occupy 32 (already aligned), 9-pt occupy 32 (18
+  // + 14 zero pad), etc.
+  const _padTo16 = (arr) => {
+    while (arr.length % 16 !== 0) arr.push(0);
+  };
   const allKeyformPositions = [];
   for (const part of meshParts) {
     if (!part.mesh?.vertices) continue;
@@ -918,6 +932,7 @@ function buildSectionData(input) {
         allKeyformPositions.push((vert.y - originY) / ppu);
       }
     }
+    _padTo16(allKeyformPositions);
   }
   sections.set('keyform_position.xys', allKeyformPositions);
 
@@ -1037,6 +1052,7 @@ function buildSectionData(input) {
           allKeyformPositions.push(ly);
         }
       }
+      _padTo16(allKeyformPositions);
     }
   }
   counts[COUNT_IDX.WARP_DEFORMER_KEYFORMS] = _totalWarpKeyforms;
@@ -1101,6 +1117,7 @@ function buildSectionData(input) {
     const partIdx = append.partIndex;
     const part = meshParts[partIdx];
     const rigWarp = rigWarpByPartId.get(part.id);
+    const rotPivot = !rigWarp ? _groupRotationPivot(part) : null;
     const offset = allKeyformPositions.length;
     flatKeyformPosBegin[append.flatIndex] = offset;
     // Convert to the same frame as rest-pose vertex positions for this
@@ -1112,6 +1129,9 @@ function buildSectionData(input) {
         const bb = rigWarp.canvasBbox;
         allKeyformPositions.push((vx - bb.minX) / bb.W);
         allKeyformPositions.push((vy - bb.minY) / bb.H);
+      } else if (rotPivot) {
+        allKeyformPositions.push((vx - rotPivot.x) / ppu);
+        allKeyformPositions.push((vy - rotPivot.y) / ppu);
       } else if (useDeformerFrame) {
         allKeyformPositions.push(rigSpec.canvasToInnermostX(vx));
         allKeyformPositions.push(rigSpec.canvasToInnermostY(vy));
@@ -1120,6 +1140,7 @@ function buildSectionData(input) {
         allKeyformPositions.push((vy - originY) / ppu);
       }
     }
+    _padTo16(allKeyformPositions);
   }
   sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
 
