@@ -26,6 +26,16 @@
  */
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { variantParamId } from '../psdOrganizer.js';
+import { matchTag } from '../armatureOrganizer.js';
+
+// Clip mask rules — mirrors `CLIP_RULES` in cmo3writer. iris meshes get
+// occluded by the corresponding eyewhite (variant-aware: variant iris
+// masked by variant eyewhite).
+const CLIP_RULES = {
+  'irides':    'eyewhite',
+  'irides-l':  'eyewhite-l',
+  'irides-r':  'eyewhite-r',
+};
 
 // Source: [ref][py-moc3] — format constants from reference file + py-moc3
 const MAGIC = [0x4D, 0x4F, 0x43, 0x33]; // "MOC3"
@@ -560,6 +570,10 @@ function buildSectionData(input) {
   counts[COUNT_IDX.ROTATION_DEFORMERS] = numRotationDeformers;
 
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)
+  // DRAWABLE_MASKS count + section emit moved below — depends on
+  // drawableMaskIndices populated during the iris→eyewhite scan.
+  // (Kept as 1 here so any earlier validation that runs before that block
+  // still sees a non-zero count; overwritten below.)
   counts[COUNT_IDX.DRAWABLE_MASKS] = 1;
 
   // Draw order groups: 1 root group
@@ -601,8 +615,44 @@ function buildSectionData(input) {
   sections.set('art_mesh.uv_begin_indices', meshInfos.map(m => m.uvBeginIndex));
   sections.set('art_mesh.position_index_begin_indices', meshInfos.map(m => m.positionIndexBeginIndex));
   sections.set('art_mesh.vertex_counts', meshInfos.map(m => m.flatIndexCount));
-  sections.set('art_mesh.mask_begin_indices', meshParts.map(() => 0)); // valid index (not -1)
-  sections.set('art_mesh.mask_counts', meshParts.map(() => 0));
+  // ── Clip masks (drawable_mask) ──
+  // CLIP_RULES says iris meshes are masked by their corresponding eyewhite.
+  // Variant-aware: variant iris masked by variant eyewhite (same suffix);
+  // base iris masked by base eyewhite. Without this the iris extends past
+  // the eyewhite at extreme cursor positions.
+  const basePidByTag = new Map();
+  const variantPidByTagAndSuffix = new Map();
+  for (let mi = 0; mi < meshParts.length; mi++) {
+    const part = meshParts[mi];
+    const tag = matchTag(part.name || part.id);
+    if (!tag) continue;
+    const sfx = part.variantSuffix ?? null;
+    if (sfx) {
+      const key = `${tag}|${sfx}`;
+      if (!variantPidByTagAndSuffix.has(key)) variantPidByTagAndSuffix.set(key, mi);
+    } else if (!basePidByTag.has(tag)) {
+      basePidByTag.set(tag, mi);
+    }
+  }
+  const drawableMaskIndices = [];
+  const meshMaskBegin = new Array(meshParts.length).fill(0);
+  const meshMaskCount = new Array(meshParts.length).fill(0);
+  for (let mi = 0; mi < meshParts.length; mi++) {
+    const part = meshParts[mi];
+    const tag = matchTag(part.name || part.id);
+    if (!tag) continue;
+    const maskTag = CLIP_RULES[tag];
+    if (!maskTag) continue;
+    const sfx = part.variantSuffix ?? null;
+    let maskIdx = sfx ? variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) : null;
+    if (maskIdx == null) maskIdx = basePidByTag.get(maskTag);
+    if (maskIdx == null) continue;
+    meshMaskBegin[mi] = drawableMaskIndices.length;
+    meshMaskCount[mi] = 1;
+    drawableMaskIndices.push(maskIdx);
+  }
+  sections.set('art_mesh.mask_begin_indices', meshMaskBegin);
+  sections.set('art_mesh.mask_counts', meshMaskCount);
 
   // --- Parameter sections ---
   // `params` came from buildParameterSpec — fields are {id, name, min, max,
@@ -1029,7 +1079,15 @@ function buildSectionData(input) {
   }
 
   // --- Drawable masks (1 dummy entry) ---
-  sections.set('drawable_mask.art_mesh_indices', [-1]);
+  // Replace the dummy entry with the populated clip mask list (if any).
+  // SDK validator rejects total=0 with begin<total checks, so when no
+  // clips are present we fall back to a single -1 entry.
+  if (drawableMaskIndices.length > 0) {
+    counts[COUNT_IDX.DRAWABLE_MASKS] = drawableMaskIndices.length;
+    sections.set('drawable_mask.art_mesh_indices', drawableMaskIndices);
+  } else {
+    sections.set('drawable_mask.art_mesh_indices', [-1]);
+  }
 
   // --- UV data ---
   const allUVs = [];
