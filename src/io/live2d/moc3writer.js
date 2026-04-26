@@ -15,8 +15,17 @@
  *
  * Reference: py-moc3 _core.py (Ludentes/py-moc3) — verified read+write
  *
+ * Parameter list comes from `rig/paramSpec.js` — same source of truth
+ * cmo3writer uses, so the runtime moc3 ships with the SDK-standard rig
+ * (ParamAngleX/Y/Z, EyeLOpen/ROpen, ParamMouthOpenY, variant params, …).
+ * NOTE: deformer + keyform parity with cmo3writer is still future work
+ * (Stage 2). Without warp/rotation deformers, the params exist but only
+ * ParamOpacity actually deforms anything in the runtime model.
+ *
  * @module io/live2d/moc3writer
  */
+import { buildParameterSpec } from './rig/paramSpec.js';
+import { variantParamId } from '../psdOrganizer.js';
 
 // Source: [ref][py-moc3] — format constants from reference file + py-moc3
 const MAGIC = [0x4D, 0x4F, 0x43, 0x33]; // "MOC3"
@@ -313,6 +322,9 @@ class BinaryWriter {
  * @property {Map<string, import('./textureAtlas.js').PackedRegion>} regions - Atlas regions
  * @property {number}  atlasSize    - Atlas dimension
  * @property {number}  numAtlases   - Number of texture atlas sheets
+ * @property {boolean} [generateRig=true] - Emit the 22 SDK-standard parameters
+ *   (ParamAngleX/Y/Z, EyeBlink, MouthOpen, …). Defaults to true for runtime
+ *   exports — face-tracking apps and motion presets need them.
  */
 
 /**
@@ -322,7 +334,7 @@ class BinaryWriter {
  * @returns {{ sections: Map<string, any[]>, counts: number[], canvas: object }}
  */
 function buildSectionData(input) {
-  const { project, regions, atlasSize, numAtlases } = input;
+  const { project, regions, atlasSize, numAtlases, generateRig = true } = input;
 
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
@@ -343,8 +355,26 @@ function buildSectionData(input) {
     )
     .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
-  // Collect parameters
-  const params = project.parameters ?? [];
+  // Build parameter list via the shared spec (same source of truth cmo3writer
+  // uses). Used to live as `project.parameters ?? []` here, which evaluated
+  // to empty for fresh PSD imports — leaving the runtime moc3 with only
+  // ParamOpacity and breaking cursor tracking / blink / variant fades.
+  //
+  // paramSpec expects mesh-shaped objects with bone/variant fields hoisted
+  // to the top level (matching cmo3writer's pre-mapped meshes). Raw project
+  // nodes nest those under `node.mesh.*`, so we adapt here before the call.
+  const meshesForSpec = meshParts.map(n => ({
+    variantSuffix: n.variantSuffix ?? null,
+    variantRole: n.variantRole ?? null,
+    jointBoneId: n.mesh?.jointBoneId ?? null,
+    boneWeights: n.mesh?.boneWeights ?? null,
+  }));
+  const params = buildParameterSpec({
+    baseParameters: project.parameters ?? [],
+    meshes: meshesForSpec,
+    groups,
+    generateRig,
+  });
 
   // Build Part ID → index map
   const partIdMap = new Map();
@@ -353,8 +383,10 @@ function buildSectionData(input) {
   // --- Counts ---
   const numParts = partNodes.length;
   const numArtMeshes = meshParts.length;
-  const numParams = params.length > 0 ? params.length : 1; // At least 1 parameter (ParamOpacity)
-  const numArtMeshKeyforms = numArtMeshes; // 1 keyform per mesh (default pose)
+  // buildParameterSpec always returns at least ParamOpacity (no empty list).
+  const numParams = params.length;
+  // ART_MESH_KEYFORMS count is set later from `totalArtMeshKeyforms` once the
+  // per-mesh plan is built (variant meshes have 2 keyforms, others 1).
   const numPartKeyforms = numParts;
 
   // Compute UV and vertex counts
@@ -401,10 +433,57 @@ function buildSectionData(input) {
   counts[COUNT_IDX.ART_MESHES] = numArtMeshes;
   counts[COUNT_IDX.PARAMETERS] = numParams;
   counts[COUNT_IDX.PART_KEYFORMS] = numPartKeyforms;
-  counts[COUNT_IDX.ART_MESH_KEYFORMS] = numArtMeshKeyforms;
   counts[COUNT_IDX.KEYFORM_POSITIONS] = totalKeyformPositions;
   counts[COUNT_IDX.UVS] = totalUVs;
   counts[COUNT_IDX.POSITION_INDICES] = totalFlatIndices;
+
+  // --- Per-mesh keyform/binding plan ---
+  // Each mesh has one binding owned by exactly one parameter:
+  //   • Variant mesh (`foo.smile`) → bound to Param<Suffix> with keys [0, 1].
+  //     Two keyforms: opacity 0 at suffix=0, opacity 1 at suffix=1. Without
+  //     this, runtime sees only the variant's single static keyform and the
+  //     overlay covers the base permanently ("always smiling" bug).
+  //   • Other mesh → bound to ParamOpacity with key [1]. Single keyform at
+  //     the recorded opacity (matches the pre-Stage-2a behaviour).
+  //
+  // True variant-aware base fade-out (1→0 on Param<Suffix>) and warp/rotation
+  // deformer keyforms are still future Stage 2 work.
+  const meshBindingPlan = meshParts.map(part => {
+    const suffix = part.variantSuffix ?? null;
+    if (suffix) {
+      const pid = variantParamId(suffix);
+      if (pid) {
+        return {
+          paramId: pid,
+          keys: [0, 1],
+          keyformOpacities: [0, part.opacity ?? 1],
+        };
+      }
+    }
+    return {
+      paramId: 'ParamOpacity',
+      keys: [1],
+      keyformOpacities: [part.opacity ?? 1],
+    };
+  });
+
+  // Flatten counts: keyforms (variable per mesh), keys (variable per binding).
+  let totalArtMeshKeyforms = 0;
+  let totalKeys = 0;
+  const meshKeyformBeginIndex = [];
+  const meshKeyformCount = [];
+  const bindingKeysBegin = [];
+  const bindingKeysCount = [];
+  for (const plan of meshBindingPlan) {
+    meshKeyformBeginIndex.push(totalArtMeshKeyforms);
+    meshKeyformCount.push(plan.keyformOpacities.length);
+    bindingKeysBegin.push(totalKeys);
+    bindingKeysCount.push(plan.keys.length);
+    totalArtMeshKeyforms += plan.keyformOpacities.length;
+    totalKeys += plan.keys.length;
+  }
+
+  counts[COUNT_IDX.ART_MESH_KEYFORMS] = totalArtMeshKeyforms;
 
   // Keyform bindings: 1 binding per mesh, null bands for parts.
   // SDK validator requires begin < total even when count=0, so we need real bindings.
@@ -412,7 +491,7 @@ function buildSectionData(input) {
   counts[COUNT_IDX.KEYFORM_BINDINGS] = numArtMeshes;
   counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = numBands;
   counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = numArtMeshes;
-  counts[COUNT_IDX.KEYS] = numArtMeshes;
+  counts[COUNT_IDX.KEYS] = totalKeys;
 
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)
   counts[COUNT_IDX.DRAWABLE_MASKS] = 1;
@@ -438,8 +517,10 @@ function buildSectionData(input) {
   sections.set('art_mesh.ids', meshParts.map((p, i) => `ArtMesh${i}`));
   // Each mesh gets its own binding band (band i → mesh i)
   sections.set('art_mesh.keyform_binding_band_indices', meshParts.map((_, i) => i));
-  sections.set('art_mesh.keyform_begin_indices', meshParts.map((_, i) => i));
-  sections.set('art_mesh.keyform_counts', meshParts.map(() => 1));
+  // Variable-length keyform layout — see meshBindingPlan above. Variant meshes
+  // get 2 keyforms (opacity 0/1 across Param<Suffix>); others stay at 1.
+  sections.set('art_mesh.keyform_begin_indices', meshKeyformBeginIndex);
+  sections.set('art_mesh.keyform_counts', meshKeyformCount);
   sections.set('art_mesh.visibles', meshParts.map(p => p.visible !== false));
   sections.set('art_mesh.enables', meshParts.map(() => true));
   sections.set('art_mesh.parent_part_indices', meshParts.map(p => {
@@ -458,28 +539,69 @@ function buildSectionData(input) {
   sections.set('art_mesh.mask_counts', meshParts.map(() => 0));
 
   // --- Parameter sections ---
-  const paramList = params.length > 0
-    ? params
-    : [{ id: 'ParamOpacity', min: 0, max: 1, default: 1 }];
+  // `params` came from buildParameterSpec — fields are {id, name, min, max,
+  // default, decimalPlaces, repeat, role, …}.
+  const paramList = params;
 
   sections.set('parameter.ids', paramList.map(p => p.id));
-  sections.set('parameter.max_values', paramList.map(p => p.max ?? 1));
-  sections.set('parameter.min_values', paramList.map(p => p.min ?? 0));
-  sections.set('parameter.default_values', paramList.map(p => p.default ?? 0));
-  sections.set('parameter.repeats', paramList.map(() => false));
-  sections.set('parameter.decimal_places', paramList.map(() => 1));
-  // First parameter owns all mesh bindings
-  sections.set('parameter.keyform_binding_begin_indices', paramList.map((_, i) => i === 0 ? 0 : 0));
-  sections.set('parameter.keyform_binding_counts', paramList.map((_, i) => i === 0 ? numArtMeshes : 0));
+  sections.set('parameter.max_values', paramList.map(p => p.max));
+  sections.set('parameter.min_values', paramList.map(p => p.min));
+  sections.set('parameter.default_values', paramList.map(p => p.default));
+  sections.set('parameter.repeats', paramList.map(p => p.repeat ?? false));
+  sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 1));
+
+  // Each parameter owns a contiguous range of `keyform_binding_index` slots,
+  // listing the mesh bindings driven by that param. We bucket meshes by their
+  // owning paramId, then walk paramList to build the ordered slot array — so
+  // ParamOpacity (always param 0) gets non-variant meshes, ParamSmile gets
+  // `.smile` variants, ParamSad gets `.sad`, etc.
+  const meshIndicesByParam = new Map();
+  for (let m = 0; m < meshBindingPlan.length; m++) {
+    const pid = meshBindingPlan[m].paramId;
+    if (!meshIndicesByParam.has(pid)) meshIndicesByParam.set(pid, []);
+    meshIndicesByParam.get(pid).push(m);
+  }
+  const keyformBindingIndices = [];
+  const meshSlotInKBI = new Array(meshBindingPlan.length).fill(0);
+  const paramKfbBegin = [];
+  const paramKfbCount = [];
+  for (const p of paramList) {
+    const meshIdxs = meshIndicesByParam.get(p.id) ?? [];
+    paramKfbBegin.push(keyformBindingIndices.length);
+    paramKfbCount.push(meshIdxs.length);
+    for (const m of meshIdxs) {
+      meshSlotInKBI[m] = keyformBindingIndices.length;
+      // The binding-index slot points to mesh m's binding (binding[m]).
+      keyformBindingIndices.push(m);
+    }
+  }
+  sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
+  sections.set('parameter.keyform_binding_counts', paramKfbCount);
 
   // --- Part Keyform sections ---
   // Draw orders: all 500.0 (Hiyori pattern — actual order via draw_order_group_object)
   sections.set('part_keyform.draw_orders', partNodes.map(() => 500.0));
 
   // --- ArtMesh Keyform sections ---
-  sections.set('art_mesh_keyform.opacities', meshParts.map(p => p.opacity ?? 1));
-  sections.set('art_mesh_keyform.draw_orders', meshParts.map(() => 500.0));
-  sections.set('art_mesh_keyform.keyform_position_begin_indices', meshInfos.map(m => m.keyformPositionBeginIndex));
+  // Flat across all keyforms — per-mesh keyform count is variable. All
+  // keyforms for a given mesh share the same vertex data (only opacity
+  // varies for now), so each keyform points to the mesh's single position
+  // begin index — no duplicate keyform_position storage needed.
+  const flatOpacities = [];
+  const flatDrawOrders = [];
+  const flatKeyformPosBegin = [];
+  for (let m = 0; m < meshBindingPlan.length; m++) {
+    const ops = meshBindingPlan[m].keyformOpacities;
+    const posBegin = meshInfos[m].keyformPositionBeginIndex;
+    for (const op of ops) {
+      flatOpacities.push(op);
+      flatDrawOrders.push(500.0);
+      flatKeyformPosBegin.push(posBegin);
+    }
+  }
+  sections.set('art_mesh_keyform.opacities', flatOpacities);
+  sections.set('art_mesh_keyform.draw_orders', flatDrawOrders);
+  sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
 
   // --- Keyform positions (vertex coordinates in normalized model space) ---
   // Cubism SDK returns positions to Ren'Py which then multiplies by PPU in the shader:
@@ -504,16 +626,17 @@ function buildSectionData(input) {
   sections.set('keyform_position.xys', allKeyformPositions);
 
   // --- Keyform binding system ---
-  // Each mesh gets 1 binding. Parts get null bands (count=0, begin=0).
-  // SDK validator requires begin < total even when count=0.
+  // Each mesh has 1 binding owned by its planned param (see meshBindingPlan).
+  // Mesh band points to the mesh's slot in keyform_binding_index — that slot
+  // sits inside the owning param's contiguous range (built above).
+  // Parts get null bands (count=0, begin=0). SDK validator requires
+  // begin < total even when count=0.
   const bandBegins = [];
   const bandCounts = [];
-  // Mesh bands: band i has count=1, begin=i
   for (let i = 0; i < numArtMeshes; i++) {
-    bandBegins.push(i);
+    bandBegins.push(meshSlotInKBI[i]);
     bandCounts.push(1);
   }
-  // Part bands: null bands (count=0, begin=0 so begin < total)
   for (let i = 0; i < numParts; i++) {
     bandBegins.push(0); // must be < numArtMeshes (total binding indices)
     bandCounts.push(0);
@@ -521,20 +644,22 @@ function buildSectionData(input) {
   sections.set('keyform_binding_band.begin_indices', bandBegins);
   sections.set('keyform_binding_band.counts', bandCounts);
 
-  // Binding indices: direct mapping (index i → binding i)
-  sections.set('keyform_binding_index.indices',
-    Array.from({ length: numArtMeshes }, (_, i) => i));
+  // Binding indices: ordered by owning parameter (built into
+  // `keyformBindingIndices` above). Slot j → binding[keyformBindingIndices[j]].
+  sections.set('keyform_binding_index.indices', keyformBindingIndices);
 
-  // Bindings: each has 1 key at parameter default value
-  sections.set('keyform_binding.keys_begin_indices',
-    Array.from({ length: numArtMeshes }, (_, i) => i));
-  sections.set('keyform_binding.keys_counts',
-    Array.from({ length: numArtMeshes }, () => 1));
+  // Bindings: keys range per binding (variable — variant meshes have 2 keys,
+  // others have 1).
+  sections.set('keyform_binding.keys_begin_indices', bindingKeysBegin);
+  sections.set('keyform_binding.keys_counts', bindingKeysCount);
 
-  // Keys: all at first parameter's default value
-  const paramDefault = paramList[0]?.default ?? 0;
-  sections.set('keys.values',
-    Array.from({ length: numArtMeshes }, () => paramDefault));
+  // Keys: flat array of param values at which keyforms exist. Variant meshes
+  // contribute [0, 1] on Param<Suffix>; others contribute [1] on ParamOpacity.
+  const flatKeys = [];
+  for (const plan of meshBindingPlan) {
+    for (const k of plan.keys) flatKeys.push(k);
+  }
+  sections.set('keys.values', flatKeys);
 
   // --- Drawable masks (1 dummy entry) ---
   sections.set('drawable_mask.art_mesh_indices', [-1]);
