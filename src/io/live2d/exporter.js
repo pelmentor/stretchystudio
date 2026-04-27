@@ -19,6 +19,7 @@ import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { resolvePhysicsRules } from './rig/physicsConfig.js';
+import { resolveBoneConfig } from './rig/boneConfig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -67,6 +68,7 @@ export async function exportLive2D(project, images, opts = {}) {
     n.type === 'part' && n.mesh && n.visible !== false
   );
   const groupNodesForSpec = project.nodes.filter(n => n.type === 'group');
+  const boneConfigResolved = resolveBoneConfig(project);
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -77,6 +79,7 @@ export async function exportLive2D(project, images, opts = {}) {
     })),
     groups: groupNodesForSpec,
     generateRig: true,
+    bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
   });
 
   // --- Step 1: Pack textures ---
@@ -126,6 +129,7 @@ export async function exportLive2D(project, images, opts = {}) {
       physicsDisabledCategories,
       rigOnly: true,
       maskConfigs,
+      bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -145,6 +149,7 @@ export async function exportLive2D(project, images, opts = {}) {
     numAtlases: atlases.length,
     generateRig: true,
     rigSpec,
+    bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
   });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
@@ -478,6 +483,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     physicsDisabledCategories,
     maskConfigs: resolveMaskConfigs(project),
     physicsRules: resolvePhysicsRules(project),
+    bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
   });
 
   // --- Motion synthesis (optional) ---

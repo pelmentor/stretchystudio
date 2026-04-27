@@ -63,13 +63,12 @@ const STANDARD_PARAMS = [
 ];
 
 /**
- * Bone rotation params (`ParamRotation_<boneName>`) cover ±90°. The five
- * baked sample angles (-90/-45/0/45/90) live in cmo3writer as `BAKED_ANGLES`.
- * Keeping these constants here so moc3writer doesn't have to import from cmo3.
+ * Bone rotation params (`ParamRotation_<boneName>`) cover the angle range
+ * specified by `project.boneConfig.bakedKeyformAngles` (Stage 7). Default
+ * is `[-90, -45, 0, 45, 90]` — exported for back-compat callers that
+ * don't pass boneConfig yet.
  */
 export const BAKED_BONE_ANGLES = [-90, -45, 0, 45, 90];
-const BONE_PARAM_MIN = BAKED_BONE_ANGLES[0];
-const BONE_PARAM_MAX = BAKED_BONE_ANGLES[BAKED_BONE_ANGLES.length - 1];
 
 /**
  * @typedef {Object} BuildParamSpecInput
@@ -154,6 +153,7 @@ export function buildParameterSpec(input = {}) {
     meshes = [],
     groups = [],
     generateRig = false,
+    bakedKeyformAngles = BAKED_BONE_ANGLES,
   } = input;
 
   /** @type {ParamSpec[]} */
@@ -224,7 +224,9 @@ export function buildParameterSpec(input = {}) {
     push({
       id,
       name: `Rotation ${boneGroup?.name ?? m.jointBoneId}`,
-      min: BONE_PARAM_MIN, max: BONE_PARAM_MAX, default: 0,
+      min: bakedKeyformAngles[0],
+      max: bakedKeyformAngles[bakedKeyformAngles.length - 1],
+      default: 0,
       decimalPlaces: 1, repeat: false,
       role: 'bone',
       boneId: m.jointBoneId,

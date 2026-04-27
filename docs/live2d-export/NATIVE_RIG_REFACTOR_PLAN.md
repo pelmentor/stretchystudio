@@ -15,7 +15,7 @@ Living tracker. Update on every stage transition.
 | 4 | Face parallax | not started |
 | 5 | Variant fade rules + eye closure config | not started |
 | 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
-| 7 | Bone config | not started |
+| 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
 | 8 | Rotation deformers (keyforms) | not started |
 | 9 | Tag warp bindings (keyforms — biggest stage) | not started |
 | 10 | Body warp chain (keyforms) | not started |
@@ -762,12 +762,24 @@ required if user adds a new boneRole group post-seed.
 
 #### Stage 7 — Bone config
 
-Baked keyform angle set ([-90, -45, 0, 45, 90]°), physics-output bone
-list, baked keyform parameters per bone.
+**Status: shipped.**
 
-**Files:** bone keyform generation in `cmo3writer.js`,
-`rotationDeformers.js`.
-**Risk:** low — small surface, mostly numeric.
+* `src/io/live2d/rig/boneConfig.js` — `DEFAULT_BAKED_KEYFORM_ANGLES`
+  (frozen `[-90,-45,0,45,90]`), `buildBoneConfigFromProject` (returns
+  mutable copy of defaults; reserved for future per-bone overrides),
+  `resolveBoneConfig` (populated→use, else build), `seedBoneConfig`.
+* Schema bumped to v4 with migration adding `project.boneConfig` (null
+  default; resolver provides defaults when null).
+* `paramSpec.js`, `cmo3writer.js`, `moc3writer.js` all take
+  `bakedKeyformAngles` from input. Bone-rotation param min/max derived
+  from this set; bone-baked keyform emission iterates this set.
+  Previously hardcoded as `BAKED_BONE_ANGLES` in paramSpec + duplicated
+  inline literal in moc3writer — now a single source of truth.
+* `useProjectStore.seedBoneConfig` action.
+* 18 tests cover the resolver branching, destructive seed, custom and
+  asymmetric angle sets, frozen-default protection, and round-trip.
+* Re-seed required if user changes the angle set after bone-baked mesh
+  keyforms have been emitted (cross-cutting "ID stability" invariant).
 
 ---
 

@@ -5,6 +5,7 @@ import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigration
 import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
 import { seedMaskConfigs as seedMaskConfigsFn } from '@/io/live2d/rig/maskConfigs';
 import { seedPhysicsRules as seedPhysicsRulesFn } from '@/io/live2d/rig/physicsConfig';
+import { seedBoneConfig as seedBoneConfigFn } from '@/io/live2d/rig/boneConfig';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -82,6 +83,7 @@ export const useProjectStore = create((set) => ({
     animations: [],
     maskConfigs: [],
     physicsRules: [],
+    boneConfig: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -225,6 +227,7 @@ export const useProjectStore = create((set) => ({
       state.project.animations = [];
       state.project.maskConfigs = [];
       state.project.physicsRules = [];
+      state.project.boneConfig = null;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -249,6 +252,7 @@ export const useProjectStore = create((set) => ({
       state.project.physics_groups = projectData.physics_groups;
       state.project.maskConfigs = projectData.maskConfigs;
       state.project.physicsRules = projectData.physicsRules;
+      state.project.boneConfig = projectData.boneConfig;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -295,6 +299,18 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedPhysicsRulesFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.boneConfig` from defaults (Stage 7). Currently sets
+   * `bakedKeyformAngles` to [-90, -45, 0, 45, 90]. Destructive.
+   */
+  seedBoneConfig: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedBoneConfigFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

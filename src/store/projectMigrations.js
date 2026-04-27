@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -68,6 +68,17 @@ const MIGRATIONS = {
   // Populated means the seeder has frozen rules into project state.
   3: (project) => {
     if (!Array.isArray(project.physicsRules)) project.physicsRules = [];
+    return project;
+  },
+
+  // v4 — Stage 7: project.boneConfig.bakedKeyformAngles is the native
+  // rig field for the bone rotation keyform angle set (default
+  // [-90, -45, 0, 45, 90]). null/missing → resolver returns defaults.
+  // Once populated, writers use the project-specific angle set.
+  4: (project) => {
+    if (project.boneConfig === undefined || project.boneConfig === null) {
+      project.boneConfig = null;
+    }
     return project;
   },
 };

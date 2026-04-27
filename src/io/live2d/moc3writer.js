@@ -340,7 +340,10 @@ class BinaryWriter {
  * @returns {{ sections: Map<string, any[]>, counts: number[], canvas: object }}
  */
 function buildSectionData(input) {
-  const { project, regions, atlasSize, numAtlases, generateRig = true, rigSpec = null } = input;
+  const {
+    project, regions, atlasSize, numAtlases, generateRig = true, rigSpec = null,
+    bakedKeyformAngles = [-90, -45, 0, 45, 90],
+  } = input;
 
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
@@ -383,6 +386,7 @@ function buildSectionData(input) {
     meshes: meshesForSpec,
     groups,
     generateRig,
+    bakedKeyformAngles,
   });
 
   // Build Part ID → index map
@@ -491,7 +495,9 @@ function buildSectionData(input) {
     variantSuffixesByBasePartId.set(p.variantOf, list);
   }
 
-  const BONE_KEYFORM_ANGLES = [-90, -45, 0, 45, 90]; // matches paramSpec BAKED_BONE_ANGLES
+  // Stage 7: angles come from project.boneConfig (resolved by caller),
+  // default [-90, -45, 0, 45, 90].
+  const BONE_KEYFORM_ANGLES = bakedKeyformAngles;
   const meshBindingPlan = meshParts.map(part => {
     const mesh = part.mesh;
     const boneWeights = mesh?.boneWeights ?? null;

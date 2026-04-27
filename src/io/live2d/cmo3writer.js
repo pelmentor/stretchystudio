@@ -124,6 +124,10 @@ export async function generateCmo3(input) {
     // are expected to pass DEFAULT_PHYSICS_RULES via resolvePhysicsRules
     // (which builds with boneOutputs resolution against project.nodes).
     physicsRules = null,
+    // Bone config (Stage 7). Drives the `BAKED_ANGLES` array used for
+    // bone-rotation keyform emission. When absent, falls back to
+    // BAKED_BONE_ANGLES from paramSpec (= [-90, -45, 0, 45, 90]).
+    bakedKeyformAngles = BAKED_BONE_ANGLES,
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -227,6 +231,7 @@ export async function generateCmo3(input) {
     meshes,
     groups,
     generateRig,
+    bakedKeyformAngles,
   });
 
   // Materialise paramDefs by attaching the cmo3-specific XML pid to each spec.
@@ -249,9 +254,9 @@ export async function generateCmo3(input) {
   // Convenience handles used downstream (keyform bindings, deformer hookup).
   // ParamOpacity is always present (always at index 0 — see paramSpec.js).
   const pidParamOpacity = paramDefs[0].pid;
-  // Alias for the keyform-emission loops below — they iterate the angle array
-  // directly to write 5 baked-pose CFormGuids per bone-driven mesh.
-  const BAKED_ANGLES = BAKED_BONE_ANGLES;
+  // Stage 7: angles come from project.boneConfig (resolved by caller),
+  // falling back to BAKED_BONE_ANGLES.
+  const BAKED_ANGLES = bakedKeyformAngles;
   const BAKED_ANGLE_MIN = BAKED_ANGLES[0];
   const BAKED_ANGLE_MAX = BAKED_ANGLES[BAKED_ANGLES.length - 1];
   const boneParamGuids = new Map(); // jointBoneId → { pidParam, paramId }

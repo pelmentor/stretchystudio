@@ -159,12 +159,30 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v3 lacks boneConfig. v4 migration adds it (as null).
+  const p = { schemaVersion: 3, physicsRules: [{ id: 'r' }] };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v3→current: schemaVersion bumped');
+  assert(p.boneConfig === null, 'v3→current: boneConfig added as null (resolver provides defaults)');
+  assertEq(p.physicsRules, [{ id: 'r' }], 'v3→current: existing physicsRules preserved');
+}
+
+{
+  // Pre-existing boneConfig preserved through migrations.
+  const cfg = { bakedKeyformAngles: [-30, 0, 30] };
+  const p = { schemaVersion: 3, boneConfig: cfg };
+  migrateProject(p);
+  assert(p.boneConfig === cfg, 'v3→current: existing boneConfig preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v0→current: walked all migrations');
   assertEq(p.maskConfigs, [], 'v0→current: maskConfigs added');
   assertEq(p.physicsRules, [], 'v0→current: physicsRules added');
+  assert(p.boneConfig === null, 'v0→current: boneConfig added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 
