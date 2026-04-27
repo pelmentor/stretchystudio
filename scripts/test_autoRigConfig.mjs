@@ -81,6 +81,21 @@ function assertClose(actual, expected, eps, name) {
   // neckWarp
   assertEq(DEFAULT_AUTO_RIG_CONFIG.neckWarp.tiltFrac, 0.08, 'neckWarp.tiltFrac');
 
+  // tagWarpMagnitudes (Stage 9a) — every default matches the pre-9a literal.
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.hairFrontXSway,    0.12,  'tagWarpMagnitudes.hairFrontXSway');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.hairFrontYCurl,    0.03,  'tagWarpMagnitudes.hairFrontYCurl');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.hairBackXSway,     0.10,  'tagWarpMagnitudes.hairBackXSway');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.hairBackYCurl,     0.025, 'tagWarpMagnitudes.hairBackYCurl');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.bottomwearXSway,   0.04,  'tagWarpMagnitudes.bottomwearXSway');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.legwearXSway,      0.008, 'tagWarpMagnitudes.legwearXSway');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.topwearShirtXSway, 0.02,  'tagWarpMagnitudes.topwearShirtXSway');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.topwearBustY,      0.012, 'tagWarpMagnitudes.topwearBustY');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.eyebrowY,          0.15,  'tagWarpMagnitudes.eyebrowY');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.eyeConvergeYFrac,  0.80,  'tagWarpMagnitudes.eyeConvergeYFrac');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.iridesGazeX,       0.09,  'tagWarpMagnitudes.iridesGazeX');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.iridesGazeY,       0.075, 'tagWarpMagnitudes.iridesGazeY');
+  assertEq(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes.mouthYStretch,     0.35,  'tagWarpMagnitudes.mouthYStretch');
+
   // Frozen invariant — all sub-objects deep frozen.
   assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG), 'top-level frozen');
   assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG.bodyWarp), 'bodyWarp frozen');
@@ -90,6 +105,7 @@ function assertClose(actual, expected, eps, name) {
   assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG.faceParallax.superGroups), 'superGroups frozen');
   assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG.faceParallax.superGroups['eye-l']), 'superGroups.eye-l frozen');
   assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG.neckWarp), 'neckWarp frozen');
+  assert(Object.isFrozen(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes), 'tagWarpMagnitudes frozen');
 }
 
 // --- buildAutoRigConfigFromProject: returns mutable deep copy ---
@@ -218,6 +234,84 @@ function assertClose(actual, expected, eps, name) {
   const project = { autoRigConfig: { neckWarp: { tiltFrac: 'wrong' } } };
   const cfg = resolveAutoRigConfig(project);
   assertEq(cfg.neckWarp.tiltFrac, 0.08, 'malformed neckWarp → DEFAULT');
+}
+
+// --- tagWarpMagnitudes (Stage 9a) per-section fallback ---
+
+{
+  // Section absent → DEFAULT for that section only.
+  const project = {
+    autoRigConfig: {
+      bodyWarp: buildAutoRigConfigFromProject({}).bodyWarp,
+      // tagWarpMagnitudes not set
+    },
+  };
+  const cfg = resolveAutoRigConfig(project);
+  assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'missing tagWarpMagnitudes → DEFAULT');
+  assertEq(cfg.tagWarpMagnitudes.mouthYStretch,  0.35, 'missing tagWarpMagnitudes → DEFAULT');
+}
+
+{
+  // Custom magnitudes are preserved as-is.
+  const userMags = {
+    ...buildAutoRigConfigFromProject({}).tagWarpMagnitudes,
+    hairFrontXSway: 0.20,
+    mouthYStretch: 0.50,
+  };
+  const project = { autoRigConfig: { tagWarpMagnitudes: userMags } };
+  const cfg = resolveAutoRigConfig(project);
+  assert(cfg.tagWarpMagnitudes === userMags, 'user tagWarpMagnitudes returned by reference');
+  assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.20, 'custom hairFrontXSway preserved');
+  assertEq(cfg.tagWarpMagnitudes.mouthYStretch,  0.50, 'custom mouthYStretch preserved');
+}
+
+{
+  // Malformed (one field missing) → whole section falls back. Other sections
+  // stay user-tuned (per-section fallback).
+  const userBody = {
+    canvasPadFrac: 0.20, hipFracDefault: 0.50, feetFracDefault: 0.80,
+    feetMarginRf: 0.07, bxRange: { min: 0.05, max: 0.95 },
+    byMargin: 0.07, breathMargin: 0.06,
+    upperBodyTCap: 0.6, upperBodySlope: 2.0,
+  };
+  const incompleteMags = {
+    hairFrontXSway: 0.20,
+    // most other fields missing
+  };
+  const project = {
+    autoRigConfig: {
+      bodyWarp: userBody,
+      tagWarpMagnitudes: incompleteMags,
+    },
+  };
+  const cfg = resolveAutoRigConfig(project);
+  assert(cfg.bodyWarp === userBody, 'good bodyWarp preserved');
+  assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'incomplete tagWarpMagnitudes → DEFAULT');
+  assertEq(cfg.tagWarpMagnitudes.mouthYStretch,  0.35, 'incomplete tagWarpMagnitudes → DEFAULT');
+}
+
+{
+  // Non-finite value in tagWarpMagnitudes → DEFAULT.
+  const bad = {
+    ...buildAutoRigConfigFromProject({}).tagWarpMagnitudes,
+    eyebrowY: 'not a number',
+  };
+  const project = { autoRigConfig: { tagWarpMagnitudes: bad } };
+  const cfg = resolveAutoRigConfig(project);
+  assertEq(cfg.tagWarpMagnitudes.eyebrowY, 0.15, 'non-finite eyebrowY → DEFAULT (full section fallback)');
+  assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'sibling magnitudes also reset by section fallback');
+}
+
+{
+  // Forward-compat: extra unknown fields tolerated.
+  const futureMags = {
+    ...buildAutoRigConfigFromProject({}).tagWarpMagnitudes,
+    unknownFutureField: 99,
+  };
+  const project = { autoRigConfig: { tagWarpMagnitudes: futureMags } };
+  const cfg = resolveAutoRigConfig(project);
+  assert(cfg.tagWarpMagnitudes === futureMags, 'unknown field tolerated');
+  assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'known fields still used');
 }
 
 // --- seedAutoRigConfig: writes + destructive ---

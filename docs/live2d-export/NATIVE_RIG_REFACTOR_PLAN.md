@@ -17,7 +17,8 @@ Living tracker. Update on every stage transition.
 | 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
 | 8 | Rotation deformers (config) | **shipped** — `src/io/live2d/rig/rotationDeformerConfig.js` (`DEFAULT_ROTATION_DEFORMER_CONFIG` bundles `skipRotationRoles` + `paramAngleRange` + `groupRotation`/`faceRotation` paramKey→angle mappings). Schema v6. cmo3writer keyform emission generalised from 3-keyform to N-keyform; paramSpec consumes skipRoles + range; bodyRig threads faceRotation paramKeys/angles. Pivots stay computed live (no snapshot). 49 tests, `npm run test:rotationDeformerConfig`. |
-| 9 | Tag warp bindings (keyforms — biggest stage) | not started |
+| 9a | Tag warp bindings — module + magnitude lift | **shipped** — `src/io/live2d/rig/tagWarpBindings.js` (`buildTagWarpBindingRules(magnitudes)` + `buildTagBindingMap(paramPids, magnitudes)`). The 290-LOC inline `TAG_PARAM_BINDINGS` Map in `cmo3writer.js` (front hair, back hair, bottomwear, topwear, legwear, eyebrow×3, irides×3, eyewhite×3, eyelash, mouth — 16 tags total) extracted into a pure module. Magnitudes (~13 numeric constants — hair sway, clothing sway, brow Y, iris gaze, eye-converge frac, mouth stretch) lifted into `autoRigConfig.tagWarpMagnitudes`; per-character override now requires no code edits. Defaults bit-for-bit identical to pre-9a literals (verified by inline-reference tests). 182 tests in `scripts/test_tagWarpBindings.mjs`, 26 new in `test_autoRigConfig.mjs`. **No keyform baking yet** — keyforms still computed at export time; that's Stage 9b. |
+| 9b | Tag warp bindings — per-mesh keyform baking | not started — Stage 9b will bake `shiftFn` outputs to per-mesh stored keyforms in `project.rigWarps[partId]`, eliminating the procedural closure from the runtime path. Foundation in place via 9a. |
 | 10 | Body warp chain (keyforms) | **shipped (v1)** — `src/io/live2d/rig/bodyWarpStore.js` (`serializeBodyWarpChain` / `deserializeBodyWarpChain` / `resolveBodyWarp` / `seedBodyWarpChain` / `clearBodyWarp`) + `makeBodyWarpNormalizers(layout)` exported from `bodyWarp.js` so the deserializer rebuilds `canvasToBodyXX/Y` closures from the stored layout. Schema v9. cmo3writer accepts `bodyWarpChain` ctx arg — populated → use stored chain verbatim; null → run `buildBodyWarpChain` heuristic. exporter threads `resolveBodyWarp(project)` through both `generateCmo3` calls. Float64Array → number[] for baseGrid + per-keyform positions; closures rebuilt at deserialize time from the layout block. 3- vs 4-spec chains both round-trip (no-BX legacy support). v1 ships **without** signatureHash staleness detection — PSD reimport with re-meshed body silhouette silently produces stale exports. 131 tests, `npm run test:bodyWarp`. |
 | 11 | Final cleanup (remove generator branches) | not started |
 
@@ -974,24 +975,61 @@ deformer fields if anyone ever needs them).
 `src/store/projectStore.js`, `src/io/projectFile.js`,
 `src/store/projectMigrations.js`.
 
-#### Stage 9 — Tag warp bindings (the big one)
+#### Stage 9 — Tag warp bindings (split: 9a shipped, 9b not started)
 
-20+ tag entries in
-[TAG_PARAM_BINDINGS](../../src/io/live2d/cmo3writer.js#L2202) (front
-hair, back hair, topwear, brows, irides, mouth, etc.). Seeder invokes
-`shiftFn` per tag, bakes vertex deltas into stored keyforms.
+##### Stage 9a — Module + magnitude lift (**shipped**)
 
-* `project.tagWarpBindings[]` schema = list of `{deformerId, paramId,
-  keyforms: [{paramValue, vertexDeltas: Float32Array}]}`.
-* `shiftFn` lives only in the seeder. Disappears from the runtime path
-  after seed.
-* Per-tag re-seed surface: pick a tag, change `autoRigConfig.tagWarpMagnitudes[tag]`,
-  click "Re-seed `<tag>`".
+Lifted the 290-LOC inline `TAG_PARAM_BINDINGS` Map out of
+`cmo3writer.js` into a pure module
+[`rig/tagWarpBindings.js`](../../src/io/live2d/rig/tagWarpBindings.js).
+The procedural `shiftFn` closures stay closures (still computed at
+export time) — what changed is *where they live* and *how they read
+their magnitudes*:
 
-**Files:** big surface across `cmo3writer.js` (TAG_PARAM_BINDINGS map),
-`moc3writer.js`.
-**Risk:** highest. Most likely site for float drift; do per-tag
-substages (one tag at a time) if needed.
+* `buildTagWarpBindingRules(magnitudes)` returns the Map
+  `tag → {bindings, shiftFn}`. The `shiftFn`s read every numeric
+  magnitude (hair X-sway, hem sway, brow translate, eye converge
+  fraction, iris gaze, mouth stretch — ~13 in total) from the
+  `magnitudes` arg instead of inline literals.
+* `buildTagBindingMap(paramPids, magnitudes)` wraps the rule set with
+  the writer's expected legacy shape: each binding gains a `pid`
+  field looked up from a `paramId → pid` map (writer's gate
+  `bindings.every(b => b.pid)` cleanly drops bindings whose param
+  isn't registered).
+* `autoRigConfig.tagWarpMagnitudes` is the new knob surface —
+  per-character override without forking shared code. Defaults are
+  bit-for-bit identical to the pre-9a literals; equivalence verified
+  by reference-table tests in `scripts/test_tagWarpBindings.mjs`.
+* `cmo3writer.js` now imports `buildTagBindingMap` and threads in
+  `autoRigConfig?.tagWarpMagnitudes`.
+
+**Tests:** 182 in `test_tagWarpBindings.mjs` (rule shape, PID wiring,
+default equivalence per-tag, rest keyforms, magnitude linearity,
+determinism, default-magnitude-table) + 26 in `test_autoRigConfig.mjs`
+(per-section fallback for tagWarpMagnitudes).
+
+**Files:** `rig/tagWarpBindings.js` (new), `rig/autoRigConfig.js`
+(added section + clone/validator), `cmo3writer.js` (290-LOC inline
+block replaced by 26-LOC import-and-consume), `scripts/test_*` (×2).
+
+##### Stage 9b — Per-mesh keyform baking (not started)
+
+* `project.rigWarps[partId]` = serialized `WarpDeformerSpec` per mesh,
+  with baked vertex-delta keyforms. Seeder iterates meshes, invokes
+  `shiftFn` once per (mesh, keyform-tuple), stores the resulting grid.
+* `shiftFn` then lives only in the seeder. The cmo3 emission loop
+  reads stored keyforms verbatim, no procedural compute.
+* Same v1 staleness footgun as Stages 4 + 10: PSD reimport invalidates
+  stored deltas. signatureHash tracking deferred.
+
+**Files:** big surface across `cmo3writer.js` rig-warp emission loop
+(L2890+), `moc3writer.js` (rigWarpSpec already produced — verify
+no impedance mismatch).
+
+**Risk:** highest of remaining stages. Per-mesh storage explodes
+spec count to ~40-100 entries depending on character; round-trip
+tests need to cover all tag patterns. Per-tag substages (one tag
+at a time) remain an option if float drift surfaces.
 
 #### Stage 10 — Body warp chain (**shipped v1**)
 

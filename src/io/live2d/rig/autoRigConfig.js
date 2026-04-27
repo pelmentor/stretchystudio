@@ -22,10 +22,13 @@
  *   - `neckWarp` — `NECK_TILT_FRAC` from `rig/warpDeformers.js`
  *     `buildNeckWarpSpec` (top-row shift fraction at ParamAngleZ=±30).
  *
- * Stages 4 (face parallax keyforms), 9 (tag warp bindings), and 10 (body
- * warp chain) will lift further tunables when they ship — `tagWarp.*`,
- * additional bodyWarp shape parameters, etc. The shape here leaves room
- * for those without forcing a schema bump for each.
+ *   - `tagWarpMagnitudes` (Stage 9a) — every numeric magnitude that lives
+ *     inside the procedural `shiftFn` closures of `rig/tagWarpBindings.js`
+ *     `TAG_PARAM_BINDINGS_RULES` (hair sway, clothing sway, brow translate,
+ *     iris gaze, mouth open stretch, eye-converge fraction). Stage 9b
+ *     (per-mesh keyform baking) will read magnitudes via this section,
+ *     then bake them into `project.rigWarps[partId]`; until then they're
+ *     consumed at export time by the same closures.
  *
  * **Resolution semantics (per-section).** Each top-level section
  * (`bodyWarp`, `faceParallax`, `neckWarp`) validates as a unit. If a
@@ -80,6 +83,35 @@ export const DEFAULT_AUTO_RIG_CONFIG = Object.freeze({
   }),
   neckWarp: Object.freeze({
     tiltFrac: 0.08,
+  }),
+  // Stage 9a — magnitudes for the procedural per-tag rig warps. Each entry
+  // is the literal value lifted from the inline shiftFn closures in
+  // cmo3writer.js's TAG_PARAM_BINDINGS map. Defaults are bit-for-bit
+  // identical to today's hardcoded constants. See `rig/tagWarpBindings.js`
+  // for the shiftFns that consume these.
+  tagWarpMagnitudes: Object.freeze({
+    // Hair: tips-swing (cubic frac gradient). X dominates, Y curl is small.
+    hairFrontXSway: 0.12,
+    hairFrontYCurl: 0.03,
+    hairBackXSway:  0.10,
+    hairBackYCurl:  0.025,
+    // Clothing: hem sway (frac^4 — even steeper than hair so middle rows
+    // barely move). X-only — Y exposes layer underneath.
+    bottomwearXSway: 0.04,
+    legwearXSway:    0.008,
+    // Topwear: shirt sway (frac²) + bust wobble (interior triangular falloff).
+    topwearShirtXSway: 0.02,
+    topwearBustY:      0.012,
+    // Brows: uniform Y translate (BrowY +1 = up = -Y in canvas).
+    eyebrowY: 0.15,
+    // Eye open/close: collapse all three layers to lower-eyelid line at
+    // 80% of the mesh's Y span.
+    eyeConvergeYFrac: 0.80,
+    // Iris gaze: uniform translate of the whole grid by EyeBallX/Y * gxS/gyS.
+    iridesGazeX: 0.09,
+    iridesGazeY: 0.075,
+    // Mouth open: Y-stretch from top pivot, quadratic frac gradient.
+    mouthYStretch: 0.35,
   }),
 });
 
@@ -159,6 +191,10 @@ function cloneNeckWarp(src) {
   return { tiltFrac: src.tiltFrac };
 }
 
+function cloneTagWarpMagnitudes(src) {
+  return { ...src };
+}
+
 /**
  * Build a mutable deep copy of the defaults. No project-level inputs
  * today; reserved for future per-character overrides (e.g. chibi with
@@ -170,9 +206,10 @@ function cloneNeckWarp(src) {
  */
 export function buildAutoRigConfigFromProject(_project) {
   return {
-    bodyWarp:     cloneBodyWarp(DEFAULT_AUTO_RIG_CONFIG.bodyWarp),
-    faceParallax: cloneFaceParallax(DEFAULT_AUTO_RIG_CONFIG.faceParallax),
-    neckWarp:     cloneNeckWarp(DEFAULT_AUTO_RIG_CONFIG.neckWarp),
+    bodyWarp:          cloneBodyWarp(DEFAULT_AUTO_RIG_CONFIG.bodyWarp),
+    faceParallax:      cloneFaceParallax(DEFAULT_AUTO_RIG_CONFIG.faceParallax),
+    neckWarp:          cloneNeckWarp(DEFAULT_AUTO_RIG_CONFIG.neckWarp),
+    tagWarpMagnitudes: cloneTagWarpMagnitudes(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes),
   };
 }
 
@@ -220,6 +257,17 @@ function isWellFormedNeckWarp(s) {
   return s && isFiniteNumber(s.tiltFrac);
 }
 
+function isWellFormedTagWarpMagnitudes(s) {
+  if (!s || typeof s !== 'object') return false;
+  // Every key in DEFAULT must be present and finite. Extra keys are tolerated
+  // (forward-compatible — future tags can add entries without breaking older
+  // saves).
+  for (const k of Object.keys(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes)) {
+    if (!isFiniteNumber(s[k])) return false;
+  }
+  return true;
+}
+
 /**
  * Resolve the autoRigConfig the seeder/writers should use. Per-section
  * fallback: each of `bodyWarp` / `faceParallax` / `neckWarp` is validated
@@ -241,6 +289,9 @@ export function resolveAutoRigConfig(project) {
     neckWarp: isWellFormedNeckWarp(cfg?.neckWarp)
       ? cfg.neckWarp
       : cloneNeckWarp(DEFAULT_AUTO_RIG_CONFIG.neckWarp),
+    tagWarpMagnitudes: isWellFormedTagWarpMagnitudes(cfg?.tagWarpMagnitudes)
+      ? cfg.tagWarpMagnitudes
+      : cloneTagWarpMagnitudes(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes),
   };
 }
 

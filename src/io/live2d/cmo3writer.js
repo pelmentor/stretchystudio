@@ -30,6 +30,7 @@ import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
 import { emptyRigSpec } from './rig/rigSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildGroupRotationSpec } from './rig/rotationDeformers.js';
+import { buildTagBindingMap } from './rig/tagWarpBindings.js';
 import {
   VERSION_PIS,
   IMPORT_PIS,
@@ -2287,300 +2288,30 @@ export async function generateCmo3(input) {
   const pidParamAngleY     = paramDefs.find(p => p.id === 'ParamAngleY')?.pid;
   const pidParamAngleZ     = paramDefs.find(p => p.id === 'ParamAngleZ')?.pid;
 
-  // ── Per-part warp parameter bindings (Session 16) ──
-  // Each entry: bindings (param specs) + shiftFn (procedural grid generation).
-  // shiftFn(restGrid, gW, gH, keyVals[], gxSpan, gySpan) → shifted Float64Array.
-  // Patterns reverse-engineered from Hiyori — see SESSION16_FINDINGS.md.
-  const TAG_PARAM_BINDINGS = new Map([
-    // ── Hair: tips-swing (Hiyori: Move Hair Front/Back Warp, 1D, 3kf) ──
-    // Top row (roots) pinned, bottom row (tips) sways X, slight Y curl.
-    // Hair sway magnitude scales by MIN(gxS, gyS) — the smaller of the mesh's
-    // two dimensions. For long hair (gyS >= gxS), this equals the classic
-    // gxS-based scale. For buzz-cut / short hair (gyS << gxS), magnitude
-    // collapses proportionally — fixes shelby's "skull chunks floating"
-    // artifact where a flat+wide hair mesh got full width-scale swing.
-    ['front hair', {
-      bindings: [{ pid: pidParamHairFront, keys: [-1, 0, 1], desc: 'ParamHairFront' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        const scale = Math.min(gxS, gyS);
-        for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1);          // 0=roots(top), 1=tips(bottom)
-          const swayW = frac * frac * frac;    // cubic gradient — roots nearly static, tips full swing (matches Hiyori)
-          const curlW = frac * frac * frac;
-          for (let c = 0; c < gW; c++) {
-            const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.12 * scale * swayW;   // X sway (tips-dominant)
-            pos[idx + 1] += k * 0.03 * scale * curlW;   // Y curl (tips-dominant)
-          }
-        }
-        return pos;
-      },
-    }],
-    ['back hair', {
-      bindings: [{ pid: pidParamHairBack, keys: [-1, 0, 1], desc: 'ParamHairBack' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        const scale = Math.min(gxS, gyS);
-        for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1);
-          const swayW = frac * frac * frac;
-          const curlW = frac * frac * frac;
-          for (let c = 0; c < gW; c++) {
-            const idx = (r * gW + c) * 2;
-            pos[idx]     += k * 0.10 * scale * swayW;
-            pos[idx + 1] += k * 0.025 * scale * curlW;
-          }
-        }
-        return pos;
-      },
-    }],
-    // ── Clothing hem sway (bottomwear / topwear / legwear) ──
-    // KEY CONSTRAINT: clothing layers stack over body / legwear / other
-    // garments. ANY Y-motion at the hem lifts the fabric and exposes the
-    // layer underneath — on girl this showed the legwear's top edge peeking
-    // through the hoodie hem after physics simulated. So:
-    //   Y curl = 0 for all clothing (hair keeps its Y curl because hair is
-    //            rendered on top of everything; no stacking issue).
-    //   X sway kept small, dominated by the very bottom row via frac^4
-    //   gradient (steeper than hair's frac^3 — middle rows barely move).
-    //
-    // The physics pendulum's phase lag sells the motion even at tiny
-    // geometry shifts. Per-character tuning can bump `outputScale` in
-    // PHYSICS_RULES if a specific design (flared skirt, loose tunic) needs
-    // wider visible swing.
-    ['bottomwear', {
-      bindings: [{ pid: pidParamSkirt, keys: [-1, 0, 1], desc: 'ParamSkirt' }],
-      shiftFn: (grid, gW, gH, [k], gxS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1);          // 0=waist(top), 1=hem(bottom)
-          const swayW = frac * frac * frac * frac;
-          for (let c = 0; c < gW; c++) {
-            pos[(r * gW + c) * 2] += k * 0.04 * gxS * swayW;
-          }
-        }
-        return pos;
-      },
-    }],
-    // topwear carries TWO independent motions: shirt sway (sleeves + hem in
-    // X) and bust wobble (Y bulge at chest). 2 param bindings → 3×3 = 9
-    // keyforms.
-    //
-    // ParamShirt: frac² row gradient → sleeves mid-row get ~0.25×, hem full.
-    // X-only — Y would lift the hem and expose legwear underneath (see
-    // `feedback_clothing_physics_no_y.md`).
-    //
-    // ParamBust: Y wobble strictly on the INTERIOR of the grid (triangular
-    // falloff centered at rFrac=0.5, cFrac=0.5). Shoulders (row 0) and hem
-    // (row last) stay pinned, so no layer exposure — unlike hem Y-lift, an
-    // internal bulge just stretches the topwear texture locally.
-    // topwear — Shirt + Bust only (2 bindings × 3 keys = 9 keyforms).
-    // Arm sway lives on handwear; topwear stays torso-only.
-    ['topwear', {
-      bindings: [
-        { pid: pidParamShirt, keys: [-1, 0, 1], desc: 'ParamShirt' },
-        { pid: pidParamBust,  keys: [-1, 0, 1], desc: 'ParamBust'  },
-      ],
-      shiftFn: (grid, gW, gH, [kShirt, kBust], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (kShirt === 0 && kBust === 0) return pos;
-        for (let r = 0; r < gH; r++) {
-          const rFrac = r / (gH - 1);
-          const shirtSwayW = rFrac * rFrac;
-          const bustRowW = Math.max(0, 1 - Math.abs(rFrac - 0.5) * 2);
-          for (let c = 0; c < gW; c++) {
-            const cFrac = c / (gW - 1);
-            const bustColW = Math.max(0, 1 - Math.abs(cFrac - 0.5) * 2);
-            const bustW = bustRowW * bustColW;
-            const idx = (r * gW + c) * 2;
-            if (kShirt !== 0) pos[idx]     += kShirt * 0.02  * gxS * shirtSwayW;
-            if (kBust  !== 0) pos[idx + 1] += -kBust * 0.012 * gyS * bustW;
-          }
-        }
-        return pos;
-      },
-    }],
-    ['legwear', {
-      bindings: [{ pid: pidParamPants, keys: [-1, 0, 1], desc: 'ParamPants' }],
-      shiftFn: (grid, gW, gH, [k], gxS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        for (let r = 0; r < gH; r++) {
-          const frac = r / (gH - 1);          // 0=waist(top), 1=ankles(bottom)
-          const swayW = frac * frac * frac * frac;
-          for (let c = 0; c < gW; c++) {
-            pos[(r * gW + c) * 2] += k * 0.008 * gxS * swayW;
-          }
-        }
-        return pos;
-      },
-    }],
-    // Handwear has no rigWarp binding. Arm sway happens via physics driving
-    // the existing ParamRotation_leftElbow / ParamRotation_rightElbow bone
-    // rotation deformers — see cmo3/physics.js PhysicsSetting_ArmSnake.
-    // Bone-baked keyforms handle pose; physics handles sway on top.
-    // ── Brows: uniform Y translate (Hiyori: Brow L/R Position, ~0.085/unit) ──
-    // BrowY +1 = raise = negative Y shift (up in canvas space).
-    ['eyebrow', {
-      bindings: [{ pid: pidParamBrowLY, keys: [-1, 0, 1], desc: 'ParamBrowLY' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        for (let i = 1; i < pos.length; i += 2) pos[i] += -k * 0.15 * gyS;
-        return pos;
-      },
-    }],
-    ['eyebrow-l', {
-      bindings: [{ pid: pidParamBrowLY, keys: [-1, 0, 1], desc: 'ParamBrowLY' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        for (let i = 1; i < pos.length; i += 2) pos[i] += -k * 0.15 * gyS;
-        return pos;
-      },
-    }],
-    ['eyebrow-r', {
-      bindings: [{ pid: pidParamBrowRY, keys: [-1, 0, 1], desc: 'ParamBrowRY' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        for (let i = 1; i < pos.length; i += 2) pos[i] += -k * 0.15 * gyS;
-        return pos;
-      },
-    }],
-    // ── Eye open/close — SS-adapted approach (Session 16) ──
-    // SS mesh structure differs from Hiyori: eyelash is thin (not wide eyelid),
-    // so curtain-drop doesn't work. Instead: ALL three eye parts (eyelash, eyewhite,
-    // iris) collapse together to the SAME "closed eye line" at the lower eyelid position.
-    //
-    // Strategy: compress all three toward Y at 80% of their respective grid heights.
-    // All parts flatten to thin lines at the same relative position → reads as closed eye.
-    // EyeBallX/Y on iris deferred — requires nested warp layer (iris now uses EyeOpen).
-    ['irides', {
-      bindings: [{ pid: pidParamEyeLOpen, keys: [0, 1], desc: 'ParamEyeLOpen' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 1) return pos;
-        const convergY = grid[1] + gyS * 0.80; // lower eyelid line
-        const factor = k; // iris flattens near-zero
-        for (let i = 1; i < pos.length; i += 2) {
-          pos[i] = convergY + (grid[i] - convergY) * factor;
-        }
-        return pos;
-      },
-    }],
-    // ── Iris gaze (Session 18): ParamEyeBallX × ParamEyeBallY uniform translation ──
-    // Closure lives at mesh level (CArtMeshForm, Session 17). Gaze lives here on the
-    // warp — 9 keyforms, pure uniform shift of the whole grid. When iris is closed,
-    // translation is hidden behind the lash; when open, iris follows look direction.
-    // Magnitudes from Hiyori reference: ~9% X, ~7.5% Y of grid span.
-    ['irides-l', {
-      bindings: [
-        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
-        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
-      ],
-      shiftFn: (grid, gW, gH, [kX, kY], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        const dx = kX * gxS * 0.09;
-        const dy = -kY * gyS * 0.075;
-        for (let i = 0; i < pos.length; i += 2) {
-          pos[i]     += dx;
-          pos[i + 1] += dy;
-        }
-        return pos;
-      },
-    }],
-    ['irides-r', {
-      bindings: [
-        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
-        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
-      ],
-      shiftFn: (grid, gW, gH, [kX, kY], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        const dx = kX * gxS * 0.09;
-        const dy = -kY * gyS * 0.075;
-        for (let i = 0; i < pos.length; i += 2) {
-          pos[i]     += dx;
-          pos[i + 1] += dy;
-        }
-        return pos;
-      },
-    }],
-    // Session 28: eyewhite-l / eyewhite-r are CLIP MASKS for irides-l/-r.
-    // Cubism Editor warns if a mask's rig deformers don't have keyforms
-    // matching the clipped child's parameter extremes. Give the eyewhite
-    // rig warp IDENTITY keyforms on ParamEyeBallX × ParamEyeBallY so the
-    // mask has defined positions across the iris's full gaze range (with
-    // zero actual displacement — the white doesn't follow the iris).
-    ['eyewhite-l', {
-      bindings: [
-        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
-        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
-      ],
-      shiftFn: (grid) => new Float64Array(grid), // identity
-    }],
-    ['eyewhite-r', {
-      bindings: [
-        { pid: pidParamEyeBallX, keys: [-1, 0, 1], desc: 'ParamEyeBallX' },
-        { pid: pidParamEyeBallY, keys: [-1, 0, 1], desc: 'ParamEyeBallY' },
-      ],
-      shiftFn: (grid) => new Float64Array(grid), // identity
-    }],
-    ['eyewhite', {
-      bindings: [{ pid: pidParamEyeLOpen, keys: [0, 1], desc: 'ParamEyeLOpen' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 1) return pos;
-        const convergY = grid[1] + gyS * 0.80;
-        const factor = k;
-        for (let i = 1; i < pos.length; i += 2) {
-          pos[i] = convergY + (grid[i] - convergY) * factor;
-        }
-        return pos;
-      },
-    }],
-    // eyewhite-l, eyewhite-r: handled via per-vertex CArtMeshForm keyforms (Session 17)
-    ['eyelash', {
-      bindings: [{ pid: pidParamEyeLOpen, keys: [0, 1], desc: 'ParamEyeLOpen' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 1) return pos;
-        const convergY = grid[1] + gyS * 0.80;
-        const factor = k; // eyelash slightly thicker line than iris
-        for (let i = 1; i < pos.length; i += 2) {
-          pos[i] = convergY + (grid[i] - convergY) * factor;
-        }
-        return pos;
-      },
-    }],
-    // eyelash-l, eyelash-r: handled via per-vertex CArtMeshForm keyforms (Session 17)
-    // RigWarps for these tags are passthroughs — meshes deform themselves via ParamEye{L,R}Open.
-    // ── Mouth open: Y-stretch from top pivot (Session 17) ──
-    // Closed = rest. Open = top row pinned, rows below stretch down quadratically
-    // (natural jaw-drop acceleration). Hiyori uses per-vertex CArtMeshForm keyforms
-    // per mouth sub-mesh; SS has one `mouth` tag → one warp, so we approximate via
-    // procedural grid deformation.
-    ['mouth', {
-      bindings: [{ pid: pidParamMouthOpenY, keys: [0, 1], desc: 'ParamMouthOpenY' }],
-      shiftFn: (grid, gW, gH, [k], gxS, gyS) => {
-        const pos = new Float64Array(grid);
-        if (k === 0) return pos;
-        const maxStretch = gyS * 0.35;
-        for (let r = 0; r < gH; r++) {
-          const rFrac = r / (gH - 1);
-          const dy = k * maxStretch * rFrac * rFrac;
-          for (let c = 0; c < gW; c++) {
-            pos[(r * gW + c) * 2 + 1] += dy;
-          }
-        }
-        return pos;
-      },
-    }],
-  ]);
+  // ── Per-part warp parameter bindings (Stage 9a) ──
+  // The TAG_PARAM_BINDINGS rule set (rules + procedural shiftFns) lives
+  // in `rig/tagWarpBindings.js`. `buildTagBindingMap(paramPids, magnitudes)`
+  // returns the same shape today expects: `tag → { bindings: [{pid, keys,
+  // desc}], shiftFn }`. Magnitudes flow through `autoRigConfig.tagWarpMagnitudes`
+  // — the user can override per-character without forking shared code.
+  const _paramPidByName = {
+    ParamHairFront:   pidParamHairFront,
+    ParamHairBack:    pidParamHairBack,
+    ParamSkirt:       pidParamSkirt,
+    ParamShirt:       pidParamShirt,
+    ParamPants:       pidParamPants,
+    ParamBust:        pidParamBust,
+    ParamBrowLY:      pidParamBrowLY,
+    ParamBrowRY:      pidParamBrowRY,
+    ParamMouthOpenY:  pidParamMouthOpenY,
+    ParamEyeLOpen:    pidParamEyeLOpen,
+    ParamEyeBallX:    pidParamEyeBallX,
+    ParamEyeBallY:    pidParamEyeBallY,
+  };
+  const TAG_PARAM_BINDINGS = buildTagBindingMap(
+    _paramPidByName,
+    autoRigConfig?.tagWarpMagnitudes,
+  );
 
   // Collect per-part warp target nodes for re-parenting in section 3d.
   // Each entry: { node, faceGroupKey or null } — face-parallax tags route to their
