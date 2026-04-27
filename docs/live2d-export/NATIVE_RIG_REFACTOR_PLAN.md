@@ -34,7 +34,7 @@ demand" rather than speculatively.
 | R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | **shipped 2026-04-28** |
 | R1 | RigSpec session cache (`useRigSpecStore`) | **shipped 2026-04-28** |
 | R2 | `cellSelect` — N-binding cross-product cell + lerp weights | **shipped 2026-04-28** |
-| R3 | `warpEval` — bilinear FFD + `frameConvert` | not started |
+| R3 | `warpEval` — bilinear FFD + `frameConvert` | **shipped 2026-04-28** |
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | not started |
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | not started |
 | R6 | Chain composition + first visible demo | not started |
@@ -1372,6 +1372,48 @@ non-uniform spacing, weights-sum invariant, first-fastest invariant.
 All pass.
 
 **Tag:** `native-rig-render-stage-R2-complete`.
+
+### v2 Stage R3 — `warpEval` + `frameConvert` (shipped 2026-04-28)
+
+Two pure modules driving warp deformer evaluation.
+
+**`warpEval.js`** — Two functions:
+
+* `evalWarpGrid(spec, cellInfo)` — Blend the per-keyform position
+  arrays by `cellInfo.weights` and return the currently-active deformed
+  control-point grid. Output is in the spec's `localFrame` (still
+  needs `frameConvert` to map back to canvas).
+* `bilinearFFD(grid, gridSize, u, v, out?)` — Apply the warp's grid
+  as a free-form deformation to a single point in the warp's
+  normalised `[0..1] × [0..1]` domain. Optional output buffer to
+  avoid heap churn in tight loops.
+
+**`frameConvert.js`** — `canvasToLocal(canvasPos, localFrame, ctx?)`
++ `localToCanvas(localPos, localFrame, ctx?)`. Three frames:
+
+* `'canvas-px'` — identity. Parent is ROOT.
+* `'normalized-0to1'` — `(cx, cy) ↔ (u, v)` against the parent warp's
+  REST `gridBox = {minX, minY, W, H}`. Caller threads the actual
+  deformed grid via `bilinearFFD` after un-normalising.
+* `'pivot-relative'` — subtract pivot then unrotate by parent's
+  current angle (forward); rotate by parent angle then add pivot
+  (inverse). Round-trip to FP precision verified.
+
+**Tests:** 41 cases covering single/multi-keyform blends, weight-zero
+skip (no NaN), null/empty spec → null, FFD identity at corners, FFD
+center / edge midpoint, FFD out-of-domain clamp, FFD output buffer
+reuse, 2×2 grid (3×3 control points), and frameConvert: canvas-px
+identity, normalized round-trip + corners + zero-extent gridBox +
+missing-context throw, pivot-relative no-rotation / 90° / arbitrary
+angle round-trip, unknown-frame throw, plus an integration test that
+chains `evalWarpGrid → bilinearFFD`.
+
+**Files:** `src/io/live2d/runtime/evaluator/warpEval.js` (new),
+`src/io/live2d/runtime/evaluator/frameConvert.js` (new),
+`scripts/test_warpEval.mjs` (new), `package.json` (test wired into
+`npm test`). 1177 tests pass total.
+
+**Tag:** `native-rig-render-stage-R3-complete`.
 
 ## Rollback strategy
 
