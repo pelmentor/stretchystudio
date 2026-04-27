@@ -4,6 +4,7 @@ import { pushSnapshot, isBatching, clearHistory } from '@/store/undoHistory';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
 import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
 import { seedMaskConfigs as seedMaskConfigsFn } from '@/io/live2d/rig/maskConfigs';
+import { seedPhysicsRules as seedPhysicsRulesFn } from '@/io/live2d/rig/physicsConfig';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -80,6 +81,7 @@ export const useProjectStore = create((set) => ({
     physics_groups: [],
     animations: [],
     maskConfigs: [],
+    physicsRules: [],
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -222,6 +224,7 @@ export const useProjectStore = create((set) => ({
       state.project.physics_groups = [];
       state.project.animations = [];
       state.project.maskConfigs = [];
+      state.project.physicsRules = [];
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -245,6 +248,7 @@ export const useProjectStore = create((set) => ({
       state.project.parameters = projectData.parameters;
       state.project.physics_groups = projectData.physics_groups;
       state.project.maskConfigs = projectData.maskConfigs;
+      state.project.physicsRules = projectData.physicsRules;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -278,6 +282,19 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedMaskConfigsFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.physicsRules` from DEFAULT_PHYSICS_RULES (Stage 6).
+   * boneOutputs are resolved against the project's groups (boneRole
+   * lookup) and flattened into outputs[]. Destructive.
+   */
+  seedPhysicsRules: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedPhysicsRulesFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

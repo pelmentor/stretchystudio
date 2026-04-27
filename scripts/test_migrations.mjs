@@ -130,32 +130,42 @@ function assertThrows(fn, name) {
   assertEq(before, after, 'current-version file passes through unchanged');
 }
 
-// ---- v1 → v2: maskConfigs default ----
+// ---- v1 → v2 → v3: incremental migrations ----
 
 {
-  // A save at v1 (e.g. just after Stage 0.5 shipped, before Stage 3) lacks
-  // maskConfigs. v2 migration adds an empty array.
+  // A save at v1 lacks maskConfigs (added by v2) and physicsRules (added by v3).
   const p = { schemaVersion: 1, canvas: { width: 800, height: 600 }, nodes: [] };
   migrateProject(p);
-  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v1→v2: schemaVersion bumped');
-  assertEq(p.maskConfigs, [], 'v1→v2: maskConfigs added empty');
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v1→current: schemaVersion bumped');
+  assertEq(p.maskConfigs, [], 'v1→current: maskConfigs added empty');
+  assertEq(p.physicsRules, [], 'v1→current: physicsRules added empty');
 }
 
 {
-  // Pre-existing maskConfigs preserved through v1→v2.
-  const existing = [{ maskedMeshId: 'a', maskMeshIds: ['b'] }];
-  const p = { schemaVersion: 1, maskConfigs: existing };
+  // A save at v2 lacks physicsRules. v3 migration adds it.
+  const p = { schemaVersion: 2, maskConfigs: [{ maskedMeshId: 'a', maskMeshIds: ['b'] }] };
   migrateProject(p);
-  assertEq(p.maskConfigs, existing, 'v1→v2: existing maskConfigs preserved');
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v2→current: schemaVersion bumped');
+  assertEq(p.physicsRules, [], 'v2→current: physicsRules added');
+  assertEq(p.maskConfigs.length, 1, 'v2→current: existing maskConfigs preserved');
 }
 
 {
-  // v0 (no schemaVersion) goes through v1 → v2 in sequence.
+  // Pre-existing physicsRules preserved.
+  const existing = [{ id: 'CustomRule', inputs: [], outputs: [], vertices: [] }];
+  const p = { schemaVersion: 2, physicsRules: existing };
+  migrateProject(p);
+  assertEq(p.physicsRules, existing, 'v2→current: existing physicsRules preserved');
+}
+
+{
+  // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
-  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v0→v2: walked all migrations');
-  assertEq(p.maskConfigs, [], 'v0→v2: maskConfigs added');
-  assert(Array.isArray(p.parameters), 'v0→v2: v1 fields still added');
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v0→current: walked all migrations');
+  assertEq(p.maskConfigs, [], 'v0→current: maskConfigs added');
+  assertEq(p.physicsRules, [], 'v0→current: physicsRules added');
+  assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 
 // ---- Future version: throws ----

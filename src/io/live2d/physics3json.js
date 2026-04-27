@@ -1,15 +1,15 @@
 /**
- * Generate a `.physics3.json` runtime physics file from the same `PHYSICS_RULES`
- * source-of-truth that the cmo3 emitter uses. Keeps both export paths in sync
- * — any tuning to a rule in `cmo3/physics.js` is automatically reflected in
- * the runtime JSON output.
+ * Generate a `.physics3.json` runtime physics file from pre-resolved rules.
+ *
+ * Stage 6 (native rig): rules come pre-resolved from
+ * `rig/physicsConfig.js:resolvePhysicsRules` — boneOutputs already
+ * flattened into `outputs[]`, so this writer no longer needs to
+ * re-implement boneOutputs resolution.
  *
  * Reference shape: `reference/live2d-sample/Hiyori/runtime/hiyori_pro_t11.physics3.json`
  *
  * @module io/live2d/physics3json
  */
-
-import { PHYSICS_RULES } from './cmo3/physics.js';
 
 /**
  * Map SS rule input type → physics3.json input type tag.
@@ -24,51 +24,6 @@ const INPUT_TYPE_MAP = {
   SRC_TO_G_ANGLE: 'Angle',
 };
 
-/**
- * Resolve a rule's outputs against the project's groups (for `boneOutputs` that
- * target auto-generated `ParamRotation_<groupName>` params). Mirrors
- * `ruleOutputs` in cmo3/physics.js — duplicated here to avoid coupling, but the
- * logic must stay in step.
- */
-function resolveRuleOutputs(rule, groups) {
-  const out = [];
-  if (rule.outputs && rule.outputs.length > 0) {
-    for (const o of rule.outputs) {
-      out.push({
-        paramId: o.paramId,
-        vertexIndex: o.vertexIndex,
-        scale: o.scale,
-        isReverse: !!o.isReverse,
-      });
-    }
-  } else if (rule.outputParamId) {
-    out.push({
-      paramId: rule.outputParamId,
-      vertexIndex: rule.vertices.length - 1,
-      scale: rule.outputScale,
-      isReverse: false,
-    });
-  }
-  if (rule.boneOutputs && rule.boneOutputs.length > 0 && Array.isArray(groups)) {
-    const byRole = new Map();
-    for (const g of groups) {
-      if (g && g.boneRole) byRole.set(g.boneRole, g);
-    }
-    for (const b of rule.boneOutputs) {
-      const g = byRole.get(b.boneRole);
-      if (!g) continue;
-      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
-      out.push({
-        paramId: `ParamRotation_${sanitized}`,
-        vertexIndex: b.vertexIndex,
-        scale: b.scale,
-        isReverse: !!b.isReverse,
-      });
-    }
-  }
-  return out;
-}
-
 
 /**
  * @typedef {Object} GeneratePhysics3Opts
@@ -77,8 +32,9 @@ function resolveRuleOutputs(rule, groups) {
  *   params don't exist (matches cmo3/physics.js' silent-skip behaviour).
  * @property {Array<{tag?:string}>} [meshes]
  *   Visible meshes — used to gate rules with `requireTag` / `requireAnyTag`.
- * @property {Array<{id:string, name?:string, boneRole?:string}>} [groups]
- *   Project groups — used for resolving `boneOutputs` (e.g. arms physics).
+ * @property {Array<object>} rules
+ *   Pre-resolved physics rules (boneOutputs already flattened into outputs[]).
+ *   Compute via `rig/physicsConfig.js:resolvePhysicsRules(project)`.
  * @property {Set<string>} [disabledCategories]
  *   UI-level categories to suppress (e.g. {'hair', 'bust'}).
  */
@@ -96,7 +52,7 @@ export function generatePhysics3Json(opts = {}) {
   const {
     paramDefs = [],
     meshes = [],
-    groups = [],
+    rules = [],
     disabledCategories = null,
   } = opts;
 
@@ -114,7 +70,7 @@ export function generatePhysics3Json(opts = {}) {
   const settings = [];
   const dictionary = [];
 
-  for (const rule of PHYSICS_RULES) {
+  for (const rule of rules) {
     // Category gate (UI-level disable)
     if (disabledCategories && rule.category && disabledCategories.has(rule.category)) {
       continue;
@@ -123,8 +79,8 @@ export function generatePhysics3Json(opts = {}) {
     if (rule.requireTag && !tagsPresent.has(rule.requireTag)) continue;
     if (rule.requireAnyTag && !rule.requireAnyTag.some(t => tagsPresent.has(t))) continue;
 
-    // Resolve outputs against groups (boneOutputs need group lookup)
-    const outputs = resolveRuleOutputs(rule, groups);
+    // Stage 6: outputs[] is pre-resolved by physicsConfig (no boneOutputs lookup here).
+    const outputs = rule.outputs ?? [];
     if (outputs.length === 0) continue;
 
     // Drop rules with missing param refs (input or output) — matches

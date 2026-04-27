@@ -14,7 +14,7 @@ Living tracker. Update on every stage transition.
 | 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
 | 4 | Face parallax | not started |
 | 5 | Variant fade rules + eye closure config | not started |
-| 6 | Physics rules | not started |
+| 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
 | 7 | Bone config | not started |
 | 8 | Rotation deformers (keyforms) | not started |
 | 9 | Tag warp bindings (keyforms — biggest stage) | not started |
@@ -736,14 +736,29 @@ notes. Verify against `feedback_variant_plateau_ramp` and
 
 #### Stage 6 — Physics rules
 
-8 hardcoded rules in
-[physics.js:145-361](../../src/io/live2d/cmo3/physics.js#L145-L361).
-Tag-gating moves to seed time; export reads `project.physicsRules[]`
-verbatim.
+**Status: shipped.**
 
-**Files:** `src/io/live2d/cmo3/physics.js`, `physics3json.js`.
-**Risk:** medium — large schema slice but already structured (matches
-`physics3.json` shape closely).
+* `src/io/live2d/rig/physicsConfig.js` — `DEFAULT_PHYSICS_RULES` (re-exported
+  from `cmo3/physics.js` as the seed source), `buildPhysicsRulesFromProject`
+  (resolves `boneOutputs` against project groups, flattens into `outputs[]`),
+  `resolvePhysicsRules` (populated→use, else build), `seedPhysicsRules`
+  (destructive write).
+* Schema bumped to v3 with migration adding `project.physicsRules[]`.
+* `cmo3/physics.js`'s `emitPhysicsSettings` now takes pre-resolved
+  `rules` from ctx (no more local `ruleOutputs` helper); per-mesh tag /
+  paramDef gating remains because it depends on export-time state.
+* `physics3json.js` similarly refactored — `resolveRuleOutputs` deleted,
+  consumes `rules` from opts.
+* Caller in `exporter.js` computes via `resolvePhysicsRules(project)` and
+  passes to both writers.
+* `useProjectStore.seedPhysicsRules` action.
+* 83 unit tests cover boneOutput resolution, equivalence (seeded ==
+  generator), round-trip, structural fields, populated-vs-empty
+  resolution, destructiveness.
+
+Note: tag/param gating stays in writers (depends on export-time
+tagsPresent / paramDefs which the resolver doesn't see). Re-seed
+required if user adds a new boneRole group post-seed.
 
 #### Stage 7 — Bone config
 

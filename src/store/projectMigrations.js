@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -58,6 +58,16 @@ const MIGRATIONS = {
   // means the seeder has frozen the pairings on this project.
   2: (project) => {
     if (!Array.isArray(project.maskConfigs)) project.maskConfigs = [];
+    return project;
+  },
+
+  // v3 — Stage 6: project.physicsRules is the native rig field for
+  // physics simulations (hair sway, clothing, bust, arm pendulum).
+  // Defaults to empty; empty means the export pipeline runs today's
+  // hardcoded DEFAULT_PHYSICS_RULES with boneOutputs resolution.
+  // Populated means the seeder has frozen rules into project state.
+  3: (project) => {
+    if (!Array.isArray(project.physicsRules)) project.physicsRules = [];
     return project;
   },
 };

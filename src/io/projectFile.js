@@ -89,6 +89,7 @@ export async function saveProject(project) {
     parameters: project.parameters ?? [],
     physics_groups: project.physics_groups ?? [],
     maskConfigs: project.maskConfigs ?? [],
+    physicsRules: project.physicsRules ?? [],
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

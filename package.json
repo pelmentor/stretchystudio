@@ -13,7 +13,8 @@
     "test:migrations": "node scripts/test_migrations.mjs",
     "test:paramSpec": "node scripts/test_paramSpec.mjs",
     "test:maskConfigs": "node scripts/test_maskConfigs.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs"
+    "test:physicsConfig": "node scripts/test_physicsConfig.mjs",
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

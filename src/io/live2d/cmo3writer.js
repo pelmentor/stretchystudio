@@ -119,6 +119,11 @@ export async function generateCmo3(input) {
     // any, this writer falls back to its inline heuristic — which matches
     // `rig/maskConfigs.js:buildMaskConfigsFromProject` semantically.
     maskConfigs = [],
+    // Pre-resolved physics rules (Stage 6 of native rig refactor).
+    // boneOutputs already flattened into outputs[]. If absent, callers
+    // are expected to pass DEFAULT_PHYSICS_RULES via resolvePhysicsRules
+    // (which builds with boneOutputs resolution against project.nodes).
+    physicsRules = null,
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -4255,7 +4260,7 @@ export async function generateCmo3(input) {
           : new Set(physicsDisabledCategories))
       : null;
     emitPhysicsSettings(x, {
-      parent: model, paramDefs, meshes, groups, rigDebugLog,
+      parent: model, paramDefs, meshes, rules: physicsRules ?? [], rigDebugLog,
       disabledCategories: disabledSet,
     });
   }

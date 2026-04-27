@@ -101,45 +101,10 @@ function f(n) {
  * @property {{posMin:number,posMax:number,posDef:number,angleMin:number,angleMax:number,angleDef:number}} normalization
  */
 
-/**
- * Resolve a rule to its list of `{paramId, vertexIndex, scale, isReverse}` outputs.
- * `boneOutputs` are resolved against the `groups` list (looked up by boneRole) —
- * each becomes an output into that group's `ParamRotation_<name>` param.
- */
-function ruleOutputs(rule, groups) {
-  const out = [];
-  if (rule.outputs && rule.outputs.length > 0) {
-    for (const o of rule.outputs) {
-      out.push({ paramId: o.paramId, vertexIndex: o.vertexIndex, scale: o.scale, isReverse: !!o.isReverse });
-    }
-  } else if (rule.outputParamId) {
-    // Legacy single-output: tap the pendulum tip at the configured outputScale.
-    out.push({
-      paramId: rule.outputParamId,
-      vertexIndex: rule.vertices.length - 1,
-      scale: rule.outputScale,
-      isReverse: false,
-    });
-  }
-  if (rule.boneOutputs && rule.boneOutputs.length > 0 && Array.isArray(groups)) {
-    const byRole = new Map();
-    for (const g of groups) {
-      if (g && g.boneRole) byRole.set(g.boneRole, g);
-    }
-    for (const b of rule.boneOutputs) {
-      const g = byRole.get(b.boneRole);
-      if (!g) continue; // bone absent on this character — silently skip
-      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
-      out.push({
-        paramId: `ParamRotation_${sanitized}`,
-        vertexIndex: b.vertexIndex,
-        scale: b.scale,
-        isReverse: !!b.isReverse,
-      });
-    }
-  }
-  return out;
-}
+// boneOutput resolution moved to rig/physicsConfig.js (Stage 6 of native
+// rig refactor). The seeder runs that once and stores the flat outputs[]
+// in project.physicsRules, so writers no longer need to resolve at
+// emission time.
 
 /** @type {PhysicsRule[]} */
 export const PHYSICS_RULES = [
@@ -363,17 +328,23 @@ export const PHYSICS_RULES = [
 /**
  * Emit a `CPhysicsSettingsSourceSet` into `parent`.
  *
+ * Stage 6 (native rig): rules come **pre-resolved** with `outputs[]`
+ * flat. Callers compute via `rig/physicsConfig.js:resolvePhysicsRules`
+ * (populated → use, else build from DEFAULT_PHYSICS_RULES) and pass the
+ * result here. boneOutputs no longer resolved at emission time.
+ *
  * @param {import('../xmlbuilder.js').XmlBuilder} x
  * @param {Object} ctx
  * @param {Object} ctx.parent          - XML node to append the set to (usually `model`)
  * @param {Array<{pid:string,id:string}>} ctx.paramDefs - From generateCmo3
  * @param {Iterable<{tag:string|null}>} ctx.meshes      - For requireTag gating
+ * @param {Array<object>} ctx.rules    - Resolved physics rules
  * @param {Object|null} [ctx.rigDebugLog]               - Optional diagnostic sink
  * @param {Set<string>|null} [ctx.disabledCategories]   - Category names to skip (e.g. new Set(['hair']))
  * @returns {{emittedCount:number, skipped:Array<{id:string,reason:string}>}}
  */
 export function emitPhysicsSettings(x, {
-  parent, paramDefs, meshes, groups = [], rigDebugLog = null, disabledCategories = null,
+  parent, paramDefs, meshes, rules, rigDebugLog = null, disabledCategories = null,
 }) {
   const pidByParamId = new Map();
   for (const p of paramDefs) pidByParamId.set(p.id, p.pid);
@@ -385,15 +356,12 @@ export function emitPhysicsSettings(x, {
 
   const rulesToEmit = [];
   const skipped = [];
-  for (const rule of PHYSICS_RULES) {
+  for (const rule of rules) {
     if (disabledCategories && rule.category && disabledCategories.has(rule.category)) {
       skipped.push({ id: rule.id, reason: `category '${rule.category}' disabled in UI` });
       continue;
     }
-    // Tag gating first — cheaper than output resolution and gives clearer
-    // skip reasons (a rule for which no tagged mesh exists shouldn't be
-    // reported as "missing output param" just because we also happen not
-    // to have its output params defined).
+    // Tag gating first — cheaper than output check.
     if (rule.requireTag && !tagsPresent.has(rule.requireTag)) {
       skipped.push({ id: rule.id, reason: `no mesh with tag '${rule.requireTag}'` });
       continue;
@@ -405,9 +373,9 @@ export function emitPhysicsSettings(x, {
       });
       continue;
     }
-    const outs = ruleOutputs(rule, groups);
+    const outs = rule.outputs ?? [];
     if (outs.length === 0) {
-      skipped.push({ id: rule.id, reason: 'no resolvable outputs (no matching boneRoles + no paramId)' });
+      skipped.push({ id: rule.id, reason: 'no resolvable outputs' });
       continue;
     }
     const missingOut = outs.find(o => !pidByParamId.has(o.paramId));
@@ -415,7 +383,6 @@ export function emitPhysicsSettings(x, {
       skipped.push({ id: rule.id, reason: `missing output param ${missingOut.paramId}` });
       continue;
     }
-    // All input parameters must exist — skip rules with dangling refs.
     const missingInput = rule.inputs.find(inp => !pidByParamId.has(inp.paramId));
     if (missingInput) {
       skipped.push({ id: rule.id, reason: `missing input param ${missingInput.paramId}` });
@@ -430,7 +397,7 @@ export function emitPhysicsSettings(x, {
   });
 
   for (const { rule } of rulesToEmit) {
-    emitOneSetting(x, list, rule, pidByParamId, groups);
+    emitOneSetting(x, list, rule, pidByParamId);
   }
 
   // `selectedCubismPhysics` is the Editor's "current selection" state; Hiyori
@@ -455,7 +422,7 @@ export function emitPhysicsSettings(x, {
 }
 
 /** Emit a single CPhysicsSettingsSource node into `list`. */
-function emitOneSetting(x, list, rule, pidByParamId, groups) {
+function emitOneSetting(x, list, rule, pidByParamId) {
   const src = x.sub(list, 'CPhysicsSettingsSource');
   x.sub(src, 's', { 'xs.n': 'name' }).text = rule.name;
   x.sub(src, 'CPhysicsSettingsGuid', {
@@ -488,7 +455,9 @@ function emitOneSetting(x, list, rule, pidByParamId, groups) {
   // snake chains (PhysicsSetting9/10/11/12): vertex 1 drives the upper
   // joint with a tiny scale, successive joints read later vertices with
   // progressively larger scales, producing a lag-and-grow whip.
-  const outs = ruleOutputs(rule, groups);
+  // Stage 6: outputs are pre-resolved by rig/physicsConfig.js — boneOutputs
+  // already flattened into rule.outputs[] at seed time.
+  const outs = rule.outputs ?? [];
   const outputsNode = x.sub(src, 'carray_list', {
     'xs.n': 'outputs', count: String(outs.length),
   });

@@ -18,6 +18,7 @@ import { generateCan3 } from './can3writer.js';
 import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
+import { resolvePhysicsRules } from './rig/physicsConfig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -213,7 +214,7 @@ export async function exportLive2D(project, images, opts = {}) {
     const physics3 = generatePhysics3Json({
       paramDefs: paramSpec,
       meshes: meshParts.map(p => ({ tag: matchTag(p.name || p.id) })),
-      groups,
+      rules: resolvePhysicsRules(project),
       disabledCategories: disabledSet,
     });
     if (physics3.PhysicsSettings.length > 0) {
@@ -476,6 +477,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     generatePhysics,
     physicsDisabledCategories,
     maskConfigs: resolveMaskConfigs(project),
+    physicsRules: resolvePhysicsRules(project),
   });
 
   // --- Motion synthesis (optional) ---
