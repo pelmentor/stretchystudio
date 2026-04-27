@@ -14,6 +14,10 @@ import {
   seedFaceParallax as seedFaceParallaxFn,
   clearFaceParallax as clearFaceParallaxFn,
 } from '@/io/live2d/rig/faceParallaxStore';
+import {
+  seedBodyWarpChain as seedBodyWarpChainFn,
+  clearBodyWarp as clearBodyWarpFn,
+} from '@/io/live2d/rig/bodyWarpStore';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -97,6 +101,7 @@ export const useProjectStore = create((set) => ({
     rotationDeformerConfig: null,
     autoRigConfig: null,
     faceParallax: null,
+    bodyWarp: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -409,6 +414,33 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       clearFaceParallaxFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.bodyWarp` from a pre-computed chain (Stage 10).
+   * Caller is responsible for producing the chain — typically via
+   * `buildBodyWarpChain(...)` with current mesh / canvas / body-anatomy
+   * inputs. Destructive: overwrites prior storage.
+   */
+  seedBodyWarp: (chain) => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedBodyWarpChainFn(draft.project, chain);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Clear `project.bodyWarp` to revert to the heuristic generator
+   * path. Use after PSD reimport invalidates stored vertex deltas
+   * or body silhouette anchors.
+   */
+  clearBodyWarp: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      clearBodyWarpFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

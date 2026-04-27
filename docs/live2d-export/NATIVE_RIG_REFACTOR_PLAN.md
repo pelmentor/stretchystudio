@@ -18,7 +18,7 @@ Living tracker. Update on every stage transition.
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
 | 8 | Rotation deformers (config) | **shipped** — `src/io/live2d/rig/rotationDeformerConfig.js` (`DEFAULT_ROTATION_DEFORMER_CONFIG` bundles `skipRotationRoles` + `paramAngleRange` + `groupRotation`/`faceRotation` paramKey→angle mappings). Schema v6. cmo3writer keyform emission generalised from 3-keyform to N-keyform; paramSpec consumes skipRoles + range; bodyRig threads faceRotation paramKeys/angles. Pivots stay computed live (no snapshot). 49 tests, `npm run test:rotationDeformerConfig`. |
 | 9 | Tag warp bindings (keyforms — biggest stage) | not started |
-| 10 | Body warp chain (keyforms) | not started |
+| 10 | Body warp chain (keyforms) | **shipped (v1)** — `src/io/live2d/rig/bodyWarpStore.js` (`serializeBodyWarpChain` / `deserializeBodyWarpChain` / `resolveBodyWarp` / `seedBodyWarpChain` / `clearBodyWarp`) + `makeBodyWarpNormalizers(layout)` exported from `bodyWarp.js` so the deserializer rebuilds `canvasToBodyXX/Y` closures from the stored layout. Schema v9. cmo3writer accepts `bodyWarpChain` ctx arg — populated → use stored chain verbatim; null → run `buildBodyWarpChain` heuristic. exporter threads `resolveBodyWarp(project)` through both `generateCmo3` calls. Float64Array → number[] for baseGrid + per-keyform positions; closures rebuilt at deserialize time from the layout block. 3- vs 4-spec chains both round-trip (no-BX legacy support). v1 ships **without** signatureHash staleness detection — PSD reimport with re-meshed body silhouette silently produces stale exports. 131 tests, `npm run test:bodyWarp`. |
 | 11 | Final cleanup (remove generator branches) | not started |
 
 Cross-ref: see [`RUNTIME_PARITY_PLAN.md`](RUNTIME_PARITY_PLAN.md) — that
@@ -993,18 +993,47 @@ hair, back hair, topwear, brows, irides, mouth, etc.). Seeder invokes
 **Risk:** highest. Most likely site for float drift; do per-tag
 substages (one tag at a time) if needed.
 
-#### Stage 10 — Body warp chain
+#### Stage 10 — Body warp chain (**shipped v1**)
 
 4-warp BZ → BY → Breath → BX chain in
 [bodyWarp.js](../../src/io/live2d/rig/bodyWarp.js).
 
-* `project.bodyWarp` = chain of `WarpDeformerSpec` with baked keyforms.
-* `canvasToBodyXX/Y` normalisers stored as serialisable helpers (or
-  pure functions of canvas size + body anatomy frozen at seed time).
+* `project.bodyWarp` = serialized chain — `{specs, layout, hasParamBodyAngleX, debug}`.
+  `specs[]` carries the per-warp `WarpDeformerSpec` (3 entries when
+  ParamBodyAngleX is absent, 4 otherwise) with `Float64Array` baseGrid +
+  per-keyform `positions` re-encoded as `number[]` for JSON survival.
+* `layout` carries the BZ_*/BY_*/BR_*/BX_* normaliser constants;
+  `canvasToBodyXX/Y` closures are rebuilt at deserialize time via
+  [`makeBodyWarpNormalizers(layout)`](../../src/io/live2d/rig/bodyWarp.js)
+  (also used by `buildBodyWarpChain` itself, single source of truth).
+* `debug` snapshots `HIP_FRAC` / `FEET_FRAC` / `bodyFracSource` /
+  `spineCfShifts` so `rigDebugLog` reads the same whether the chain
+  came from heuristic or storage.
+* Reader fork: `cmo3writer` accepts a `bodyWarpChain` input — populated
+  → use stored chain verbatim; null → run today's heuristic. `exporter`
+  threads `resolveBodyWarp(project)` through both `generateCmo3` calls
+  (rigOnly + full).
+* Coexistence: matches the pattern from Stages 4 / 6 / 7 / 8 / 2 / 3.
+  Empty `project.bodyWarp` runs the heuristic exactly as before — no
+  byte-for-byte regression risk on existing `.stretch` files.
 
-**Files:** `bodyWarp.js`, both writers.
-**Risk:** medium-high — float drift, body anatomy depends on `bodyAnalyzer`
-which inspects mesh geometry; seed-time freeze is essential.
+**v1 caveat (deferred):** No `signatureHash` staleness detection. PSD
+reimport with re-meshed body silhouette / new bodyAnalyzer anchors
+silently produces stale exports — user must `clearBodyWarp` manually.
+Same trade-off Stage 4 v1 made. Full signature tracking deferred.
+
+**Tests:** 131 in `scripts/test_bodyWarp.mjs` (`npm run test:bodyWarp`).
+Covers chain shape contract, no-BX path, determinism, rest keyform
+identity, normaliser equivalence, layout/closure reconstruction,
+serialize/deserialize round-trip at 1e-15, JSON survival,
+malformed input rejection, store action destructiveness, and the
+"stored chain bypasses heuristic" invariant.
+
+**Files:** `rig/bodyWarp.js` (added `makeBodyWarpNormalizers` export +
+inline use), new `rig/bodyWarpStore.js`, `cmo3writer.js` (added
+`bodyWarpChain` ctx arg + reader fork), `exporter.js` (threads
+`resolveBodyWarp`), `projectMigrations.js` (v8 → v9), `projectStore.js`
+(initial state + `seedBodyWarp` / `clearBodyWarp` actions).
 
 ---
 

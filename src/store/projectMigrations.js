@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -134,6 +134,21 @@ const MIGRATIONS = {
   8: (project) => {
     if (project.faceParallax === undefined || project.faceParallax === null) {
       project.faceParallax = null;
+    }
+    return project;
+  },
+
+  // v9 — Stage 10: project.bodyWarp is the serialized body warp chain
+  // — array of 3 (no BX) or 4 (with BX) WarpDeformerSpec entries plus
+  // the layout block (BZ_*, BY_*, BR_*, BX_*) and bodyFracSource debug.
+  // null/missing → resolver returns null and the cmo3 writer falls back
+  // to its inline buildBodyWarpChain heuristic (today's path).
+  // Populated → cmo3 writer skips the heuristic and serializes the
+  // stored chain verbatim, reconstructing canvasToBodyXX/Y closures
+  // from the stored layout via makeBodyWarpNormalizers.
+  9: (project) => {
+    if (project.bodyWarp === undefined || project.bodyWarp === null) {
+      project.bodyWarp = null;
     }
     return project;
   },

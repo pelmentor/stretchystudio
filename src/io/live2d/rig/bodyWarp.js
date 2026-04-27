@@ -23,6 +23,40 @@ import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
 const SC = 5;          // 5×5 cells = 6×6 control points
 
 /**
+ * Construct the canvas → BX 0..1 normaliser pair from a body warp layout.
+ * Same math as the inline closures inside `buildBodyWarpChain` — extracted
+ * so the deserializer (Stage 10 storage path) can reconstruct identical
+ * closures from a serialized layout block.
+ *
+ * @param {{
+ *   BZ_MIN_X:number, BZ_MIN_Y:number, BZ_W:number, BZ_H:number,
+ *   BY_MIN:number, BY_MAX:number,
+ *   BR_MIN:number, BR_MAX:number,
+ *   BX_MIN:number, BX_MAX:number,
+ * }} layout
+ * @returns {{canvasToBodyXX:(cx:number)=>number, canvasToBodyXY:(cy:number)=>number}}
+ */
+export function makeBodyWarpNormalizers(layout) {
+  const {
+    BZ_MIN_X, BZ_MIN_Y, BZ_W, BZ_H,
+    BY_MIN, BY_MAX, BR_MIN, BR_MAX, BX_MIN, BX_MAX,
+  } = layout;
+  const canvasToBodyXX = (cx) => {
+    const bzL = (cx - BZ_MIN_X) / BZ_W;
+    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
+    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
+    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
+  };
+  const canvasToBodyXY = (cy) => {
+    const bzL = (cy - BZ_MIN_Y) / BZ_H;
+    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
+    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
+    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
+  };
+  return { canvasToBodyXX, canvasToBodyXY };
+}
+
+/**
  * @typedef {Object} BodyWarpChainInput
  * @property {Array<{vertices:number[]|Float32Array}>} perMesh
  *   All visible meshes (with vertices in canvas px). Used to compute the BZ
@@ -100,19 +134,14 @@ export function buildBodyWarpChain(input) {
   const BR_MIN = BR_MARGIN;
   const BR_MAX = 1 - BR_MARGIN;
 
-  // 4-step normaliser: canvas → BZ → BY → Breath → BX
-  const canvasToBodyXX = (cx) => {
-    const bzL = (cx - BZ_MIN_X) / BZ_W;
-    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
-    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
-    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
+  // 4-step normaliser: canvas → BZ → BY → Breath → BX. Math lives in the
+  // shared helper so the storage path (Stage 10) can rebuild identical
+  // closures from a serialized layout.
+  const _layoutForNormalizer = {
+    BZ_MIN_X, BZ_MIN_Y, BZ_W, BZ_H,
+    BY_MIN, BY_MAX, BR_MIN, BR_MAX, BX_MIN, BX_MAX,
   };
-  const canvasToBodyXY = (cy) => {
-    const bzL = (cy - BZ_MIN_Y) / BZ_H;
-    const byL = (bzL - BY_MIN) / (BY_MAX - BY_MIN);
-    const brL = (byL - BR_MIN) / (BR_MAX - BR_MIN);
-    return (brL - BX_MIN) / (BX_MAX - BX_MIN);
-  };
+  const { canvasToBodyXX, canvasToBodyXY } = makeBodyWarpNormalizers(_layoutForNormalizer);
 
   const scGW = SC + 1, scGH = SC + 1;
   const scGridPts = scGW * scGH;

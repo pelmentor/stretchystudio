@@ -275,6 +275,42 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v8 lacks bodyWarp. v9 migration adds it as null.
+  const p = { schemaVersion: 8 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v8→current: schemaVersion bumped');
+  assert(p.bodyWarp === null, 'v8→current: bodyWarp added as null');
+}
+
+{
+  // Pre-existing bodyWarp preserved (Stage 10 stores serialized chain).
+  const bw = {
+    specs: [
+      {
+        id: 'BodyWarpZ', name: 'Body Warp Z',
+        parent: { type: 'root', id: null },
+        gridSize: { rows: 5, cols: 5 },
+        baseGrid: new Array(72).fill(0),
+        localFrame: 'canvas-px',
+        bindings: [{ parameterId: 'ParamBodyAngleZ', keys: [-10, 0, 10], interpolation: 'LINEAR' }],
+        keyforms: [{ keyTuple: [-10], positions: new Array(72).fill(0), opacity: 1 }],
+        isVisible: true, isLocked: false, isQuadTransform: false,
+      },
+    ],
+    layout: {
+      BZ_MIN_X: 0, BZ_MIN_Y: 0, BZ_W: 800, BZ_H: 600,
+      BY_MIN: 0.065, BY_MAX: 0.935, BR_MIN: 0.055, BR_MAX: 0.945,
+      BX_MIN: 0.10, BX_MAX: 0.90,
+    },
+    hasParamBodyAngleX: false,
+    debug: { HIP_FRAC: 0.45, FEET_FRAC: 0.75, bodyFracSource: 'defaults', spineCfShifts: [] },
+  };
+  const p = { schemaVersion: 8, bodyWarp: bw };
+  migrateProject(p);
+  assert(p.bodyWarp === bw, 'v8→current: existing bodyWarp preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -287,6 +323,7 @@ function assertThrows(fn, name) {
   assert(p.rotationDeformerConfig === null, 'v0→current: rotationDeformerConfig added as null');
   assert(p.autoRigConfig === null, 'v0→current: autoRigConfig added as null');
   assert(p.faceParallax === null, 'v0→current: faceParallax added as null');
+  assert(p.bodyWarp === null, 'v0→current: bodyWarp added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

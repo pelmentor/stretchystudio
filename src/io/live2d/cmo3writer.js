@@ -154,6 +154,13 @@ export async function generateCmo3(input) {
     // runs as the spec source. See `rig/faceParallaxStore.js`
     // resolveFaceParallax.
     faceParallaxSpec = null,
+    // Pre-resolved body warp chain (Stage 10). When populated, the cmo3
+    // emitter skips the inline `buildBodyWarpChain` heuristic and uses
+    // the stored chain's specs + layout (canvasToBodyXX/Y closures
+    // rebuilt from the layout via `makeBodyWarpNormalizers`). When null,
+    // today's heuristic runs as the chain source. See
+    // `rig/bodyWarpStore.js` resolveBodyWarp.
+    bodyWarpChain = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -2589,7 +2596,11 @@ export async function generateCmo3(input) {
   // The legacy inline math (~50 LOC) used to live here and was duplicated
   // in the body-warp emission block; the spec consolidates both into one
   // canonical computation.
-  const _bodyChain = buildBodyWarpChain({
+  // Stage 10: prefer the pre-resolved chain from `project.bodyWarp` when
+  // populated; otherwise fall back to the inline heuristic. The shape is
+  // identical (specs + layout + canvasToBodyXX/Y + debug) so downstream
+  // consumers don't branch.
+  const _bodyChain = bodyWarpChain ?? buildBodyWarpChain({
     perMesh,
     canvasW,
     canvasH,
