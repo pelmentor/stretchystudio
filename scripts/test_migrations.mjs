@@ -130,6 +130,34 @@ function assertThrows(fn, name) {
   assertEq(before, after, 'current-version file passes through unchanged');
 }
 
+// ---- v1 → v2: maskConfigs default ----
+
+{
+  // A save at v1 (e.g. just after Stage 0.5 shipped, before Stage 3) lacks
+  // maskConfigs. v2 migration adds an empty array.
+  const p = { schemaVersion: 1, canvas: { width: 800, height: 600 }, nodes: [] };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v1→v2: schemaVersion bumped');
+  assertEq(p.maskConfigs, [], 'v1→v2: maskConfigs added empty');
+}
+
+{
+  // Pre-existing maskConfigs preserved through v1→v2.
+  const existing = [{ maskedMeshId: 'a', maskMeshIds: ['b'] }];
+  const p = { schemaVersion: 1, maskConfigs: existing };
+  migrateProject(p);
+  assertEq(p.maskConfigs, existing, 'v1→v2: existing maskConfigs preserved');
+}
+
+{
+  // v0 (no schemaVersion) goes through v1 → v2 in sequence.
+  const p = {};
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v0→v2: walked all migrations');
+  assertEq(p.maskConfigs, [], 'v0→v2: maskConfigs added');
+  assert(Array.isArray(p.parameters), 'v0→v2: v1 fields still added');
+}
+
 // ---- Future version: throws ----
 
 {

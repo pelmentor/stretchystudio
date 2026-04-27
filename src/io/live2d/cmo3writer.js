@@ -114,6 +114,11 @@ export async function generateCmo3(input) {
     // path uses this to extract the shared RigSpec without paying for cmo3
     // emission. Returns `{rigSpec, deformerParamMap}` only.
     rigOnly = false,
+    // Pre-resolved mask pairings (Stage 3 of native rig refactor). Each
+    // entry is `{maskedMeshId, maskMeshIds}`. If the caller doesn't pass
+    // any, this writer falls back to its inline heuristic — which matches
+    // `rig/maskConfigs.js:buildMaskConfigsFromProject` semantically.
+    maskConfigs = [],
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -3477,29 +3482,59 @@ export async function generateCmo3(input) {
   // the base eyewhite. Reason: base eyewhite fades to α=0 at the variant's
   // Param<Suffix>=1 endpoint (hasBaseFade / 2D compound), and Cubism uses
   // the mask's alpha for clipping — so a base-eyewhite-clipped variant iris
-  // vanishes whenever its own param is high. Pair by (tag, suffix) first,
-  // fall back to base only when no suffix-matched mask exists.
-  const basePidByTag = new Map();              // tag → pid of non-variant mesh
-  const variantPidByTagAndSuffix = new Map();  // `${tag}|${suffix}` → pid
+  // vanishes whenever its own param is high.
+  //
+  // Stage 3 (native rig): pairings come from `maskConfigs` when the caller
+  // passed any (post-seed path), else from the inline heuristic below
+  // (matches the algorithm in rig/maskConfigs.js exactly). Either way we
+  // resolve to `pidByPartId` for the per-mesh emission loop.
+  const pidByPartId = new Map();
   for (const pmEntry of perMesh) {
-    const mesh = meshes[pmEntry.mi];
-    const tag = mesh.tag;
-    if (!tag) continue;
-    const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
-    if (sfx) {
-      const key = `${tag}|${sfx}`;
-      if (!variantPidByTagAndSuffix.has(key)) {
-        variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
+    pidByPartId.set(meshes[pmEntry.mi].partId, pmEntry.pidDrawable);
+  }
+
+  const maskPidByMaskedPartId = new Map();
+  if (maskConfigs.length > 0) {
+    for (const pair of maskConfigs) {
+      const masks = (pair.maskMeshIds ?? [])
+        .map(id => pidByPartId.get(id))
+        .filter(pid => pid != null);
+      if (masks.length > 0) {
+        // cmo3 currently emits a single clip ref per mesh — first wins.
+        maskPidByMaskedPartId.set(pair.maskedMeshId, masks[0]);
       }
-    } else if (!basePidByTag.has(tag)) {
-      basePidByTag.set(tag, pmEntry.pidDrawable);
+    }
+  } else {
+    // Fallback heuristic — kept for projects that haven't been seeded.
+    // Mirrors rig/maskConfigs.js:buildMaskConfigsFromProject.
+    const CLIP_RULES = { irides: 'eyewhite', 'irides-l': 'eyewhite-l', 'irides-r': 'eyewhite-r' };
+    const basePidByTag = new Map();
+    const variantPidByTagAndSuffix = new Map();
+    for (const pmEntry of perMesh) {
+      const mesh = meshes[pmEntry.mi];
+      const tag = mesh.tag;
+      if (!tag) continue;
+      const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
+      if (sfx) {
+        const key = `${tag}|${sfx}`;
+        if (!variantPidByTagAndSuffix.has(key)) variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
+      } else if (!basePidByTag.has(tag)) {
+        basePidByTag.set(tag, pmEntry.pidDrawable);
+      }
+    }
+    for (const pmEntry of perMesh) {
+      const mesh = meshes[pmEntry.mi];
+      const tag = mesh.tag;
+      if (!tag) continue;
+      const maskTag = CLIP_RULES[tag];
+      if (!maskTag) continue;
+      const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
+      const pid = sfx
+        ? (variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePidByTag.get(maskTag) ?? null)
+        : (basePidByTag.get(maskTag) ?? null);
+      if (pid) maskPidByMaskedPartId.set(mesh.partId, pid);
     }
   }
-  const CLIP_RULES = {
-    'irides':    'eyewhite',
-    'irides-l':  'eyewhite-l',
-    'irides-r':  'eyewhite-r',
-  };
 
   for (const pm of perMesh) {
     const [meshSrc, pidMesh] = x.shared('CArtMeshSource');
@@ -3665,23 +3700,10 @@ export async function generateCmo3(input) {
       meshDfGuid = pidDeformerRoot;
     }
     x.subRef(ds, 'CDeformerGuid', meshDfGuid, { 'xs.n': 'targetDeformerGuid' });
-    // Clipping-mask: iris masked by eyewhite, etc. See CLIP_RULES above.
-    // Variant-aware pairing: `irides-l.smile` is clipped by `eyewhite-l.smile`
-    // (variant mask of matching suffix), never by the base eyewhite that
-    // fades to α=0 at Smile=1. Fall back to base mask if no matching variant
-    // mask exists (e.g. user provided variant iris without variant eyewhite).
-    const meshTag = meshes[pm.mi].tag;
-    const meshSfx = meshes[pm.mi].variantSuffix ?? meshes[pm.mi].variantRole ?? null;
-    const maskTag = meshTag ? CLIP_RULES[meshTag] : null;
-    let maskPid = null;
-    if (maskTag) {
-      if (meshSfx) {
-        maskPid = variantPidByTagAndSuffix.get(`${maskTag}|${meshSfx}`)
-               ?? basePidByTag.get(maskTag) ?? null;
-      } else {
-        maskPid = basePidByTag.get(maskTag) ?? null;
-      }
-    }
+    // Clipping-mask reference. Pairings were resolved above from either
+    // `maskConfigs` (Stage 3 seeded path) or the inline heuristic
+    // (legacy path), so this loop is just a lookup by partId.
+    const maskPid = maskPidByMaskedPartId.get(meshes[pm.mi].partId) ?? null;
     if (maskPid) {
       const clipList = x.sub(ds, 'carray_list', { 'xs.n': 'clipGuidList', count: '1' });
       x.subRef(clipList, 'CDrawableGuid', maskPid);

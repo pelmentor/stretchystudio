@@ -11,7 +11,7 @@ Living tracker. Update on every stage transition.
 | 1a | Parameters — native rig fork + seeder + equivalence tests | **shipped** — `paramSpec.js` fork, `seedParameters()`, `useProjectStore.seedParameters` action, 21 tests, `npm run test:paramSpec`. UI deferred to 1b. |
 | 1b | Parameters UI panel + delete protection | not started |
 | 2 | autoRigConfig (seeder tuning surface) | not started |
-| 3 | Mask configs | not started |
+| 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
 | 4 | Face parallax | not started |
 | 5 | Variant fade rules + eye closure config | not started |
 | 6 | Physics rules | not started |
@@ -694,12 +694,24 @@ defining defaults.
 
 #### Stage 3 — Mask configs
 
-Currently `node.clip_mask` carries clip references on individual meshes,
-but **iris↔eyewhite variant-aware pairing** is heuristic in code. Lift
-to `project.maskConfigs[]`.
+**Status: shipped.**
 
-**Files:** mask emission in `cmo3writer.js` + `moc3writer.js`.
-**Risk:** medium-low — well-isolated, small surface.
+* `src/io/live2d/rig/maskConfigs.js` — single home for `CLIP_RULES` (was
+  duplicated in moc3writer + cmo3writer) + `buildMaskConfigsFromProject`
+  (heuristic) + `resolveMaskConfigs` (populated→use, else heuristic) +
+  `seedMaskConfigs(project)` (destructive, writes to
+  `project.maskConfigs`).
+* `project.maskConfigs[]` schema added; v1→v2 migration adds an empty
+  default.
+* `moc3writer` and `cmo3writer` now consume mask pairs via
+  `resolveMaskConfigs(project)` (caller-side) — writers translate mesh
+  IDs to their internal references (mesh index in moc3,
+  `pidDrawable` in cmo3).
+* `useProjectStore.seedMaskConfigs` action exposed.
+* 25 unit tests cover the heuristic (variant pairing, fallback,
+  invisible-mesh skipping, ordering), `resolveMaskConfigs` populated-vs-
+  empty branching, seeder destructiveness, equivalence (seeded path ==
+  generator path), and JSON round-trip.
 
 #### Stage 4 — Face parallax
 

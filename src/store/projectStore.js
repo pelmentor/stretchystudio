@@ -3,6 +3,7 @@ import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from '@/store/undoHistory';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
 import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
+import { seedMaskConfigs as seedMaskConfigsFn } from '@/io/live2d/rig/maskConfigs';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -78,6 +79,7 @@ export const useProjectStore = create((set) => ({
     parameters: [],
     physics_groups: [],
     animations: [],
+    maskConfigs: [],
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -219,6 +221,7 @@ export const useProjectStore = create((set) => ({
       state.project.parameters = [];
       state.project.physics_groups = [];
       state.project.animations = [];
+      state.project.maskConfigs = [];
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -241,6 +244,7 @@ export const useProjectStore = create((set) => ({
       state.project.animations = projectData.animations;
       state.project.parameters = projectData.parameters;
       state.project.physics_groups = projectData.physics_groups;
+      state.project.maskConfigs = projectData.maskConfigs;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -261,6 +265,19 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedParametersFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.maskConfigs` from the auto-rig heuristic (Stage 3).
+   * Iris↔eyewhite pairings (variant-aware) are baked into project state.
+   * Destructive: overwrites whatever was there.
+   */
+  seedMaskConfigs: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedMaskConfigsFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

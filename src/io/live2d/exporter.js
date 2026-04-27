@@ -17,6 +17,7 @@ import { generateCmo3 } from './cmo3writer.js';
 import { generateCan3 } from './can3writer.js';
 import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
 import { buildParameterSpec } from './rig/paramSpec.js';
+import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -109,6 +110,7 @@ export async function exportLive2D(project, images, opts = {}) {
     transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
   }));
   let rigSpec = null;
+  const maskConfigs = resolveMaskConfigs(project);
   try {
     const rigResult = await generateCmo3({
       canvasW: project.canvas?.width ?? 800,
@@ -122,6 +124,7 @@ export async function exportLive2D(project, images, opts = {}) {
       generatePhysics: false,
       physicsDisabledCategories,
       rigOnly: true,
+      maskConfigs,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -472,6 +475,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     generateRig,
     generatePhysics,
     physicsDisabledCategories,
+    maskConfigs: resolveMaskConfigs(project),
   });
 
   // --- Motion synthesis (optional) ---

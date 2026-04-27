@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -49,6 +49,15 @@ const MIGRATIONS = {
       if (!Array.isArray(anim.tracks)) anim.tracks = [];
     }
 
+    return project;
+  },
+
+  // v2 — Stage 3: project.maskConfigs is the native rig field for clip
+  // mask pairings (iris↔eyewhite, variant-aware). Defaults to empty;
+  // empty means the export pipeline runs today's heuristic. Populated
+  // means the seeder has frozen the pairings on this project.
+  2: (project) => {
+    if (!Array.isArray(project.maskConfigs)) project.maskConfigs = [];
     return project;
   },
 };

@@ -12,7 +12,8 @@
     "test:diff-harness": "node scripts/native-rig-diff/test_canonicalize.mjs && node scripts/native-rig-diff/test_diff.mjs",
     "test:migrations": "node scripts/test_migrations.mjs",
     "test:paramSpec": "node scripts/test_paramSpec.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec"
+    "test:maskConfigs": "node scripts/test_maskConfigs.mjs",
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

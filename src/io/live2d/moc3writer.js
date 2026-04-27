@@ -27,15 +27,7 @@
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { variantParamId } from '../psdOrganizer.js';
 import { matchTag } from '../armatureOrganizer.js';
-
-// Clip mask rules — mirrors `CLIP_RULES` in cmo3writer. iris meshes get
-// occluded by the corresponding eyewhite (variant-aware: variant iris
-// masked by variant eyewhite).
-const CLIP_RULES = {
-  'irides':    'eyewhite',
-  'irides-l':  'eyewhite-l',
-  'irides-r':  'eyewhite-r',
-};
+import { resolveMaskConfigs } from './rig/maskConfigs.js';
 
 // Source: [ref][py-moc3] — format constants from reference file + py-moc3
 const MAGIC = [0x4D, 0x4F, 0x43, 0x33]; // "MOC3"
@@ -885,40 +877,32 @@ function buildSectionData(input) {
   sections.set('art_mesh.position_index_begin_indices', meshInfos.map(m => m.positionIndexBeginIndex));
   sections.set('art_mesh.vertex_counts', meshInfos.map(m => m.flatIndexCount));
   // ── Clip masks (drawable_mask) ──
-  // CLIP_RULES says iris meshes are masked by their corresponding eyewhite.
-  // Variant-aware: variant iris masked by variant eyewhite (same suffix);
-  // base iris masked by base eyewhite. Without this the iris extends past
-  // the eyewhite at extreme cursor positions.
-  const basePidByTag = new Map();
-  const variantPidByTagAndSuffix = new Map();
+  // Pairings come from the native rig field `project.maskConfigs` if
+  // populated (Stage 3 seeded path), else from the heuristic in
+  // `rig/maskConfigs.js` (today's path — iris↔eyewhite, variant-aware).
+  // Cubism applies the mask's alpha for clipping, so variant iris must
+  // pair with variant eyewhite (matching suffix) to avoid vanishing
+  // when its Param<Suffix>=1 fades the base eyewhite.
+  const meshIndexById = new Map();
   for (let mi = 0; mi < meshParts.length; mi++) {
-    const part = meshParts[mi];
-    const tag = matchTag(part.name || part.id);
-    if (!tag) continue;
-    const sfx = part.variantSuffix ?? null;
-    if (sfx) {
-      const key = `${tag}|${sfx}`;
-      if (!variantPidByTagAndSuffix.has(key)) variantPidByTagAndSuffix.set(key, mi);
-    } else if (!basePidByTag.has(tag)) {
-      basePidByTag.set(tag, mi);
-    }
+    meshIndexById.set(meshParts[mi].id, mi);
   }
+  const maskPairs = resolveMaskConfigs(project);
   const drawableMaskIndices = [];
   const meshMaskBegin = new Array(meshParts.length).fill(0);
   const meshMaskCount = new Array(meshParts.length).fill(0);
-  for (let mi = 0; mi < meshParts.length; mi++) {
-    const part = meshParts[mi];
-    const tag = matchTag(part.name || part.id);
-    if (!tag) continue;
-    const maskTag = CLIP_RULES[tag];
-    if (!maskTag) continue;
-    const sfx = part.variantSuffix ?? null;
-    let maskIdx = sfx ? variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) : null;
-    if (maskIdx == null) maskIdx = basePidByTag.get(maskTag);
-    if (maskIdx == null) continue;
+  for (const pair of maskPairs) {
+    const mi = meshIndexById.get(pair.maskedMeshId);
+    if (mi == null) continue;
+    const resolvedMaskIndices = [];
+    for (const maskMeshId of pair.maskMeshIds ?? []) {
+      const maskIdx = meshIndexById.get(maskMeshId);
+      if (maskIdx != null) resolvedMaskIndices.push(maskIdx);
+    }
+    if (resolvedMaskIndices.length === 0) continue;
     meshMaskBegin[mi] = drawableMaskIndices.length;
-    meshMaskCount[mi] = 1;
-    drawableMaskIndices.push(maskIdx);
+    meshMaskCount[mi] = resolvedMaskIndices.length;
+    for (const idx of resolvedMaskIndices) drawableMaskIndices.push(idx);
   }
   sections.set('art_mesh.mask_begin_indices', meshMaskBegin);
   sections.set('art_mesh.mask_counts', meshMaskCount);

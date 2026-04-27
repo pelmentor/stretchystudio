@@ -88,6 +88,7 @@ export async function saveProject(project) {
     animations: serializedAnimations,
     parameters: project.parameters ?? [],
     physics_groups: project.physics_groups ?? [],
+    maskConfigs: project.maskConfigs ?? [],
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));
