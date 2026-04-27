@@ -128,7 +128,30 @@ export async function generateCmo3(input) {
     // bone-rotation keyform emission. When absent, falls back to
     // BAKED_BONE_ANGLES from paramSpec (= [-90, -45, 0, 45, 90]).
     bakedKeyformAngles = BAKED_BONE_ANGLES,
+    // Variant fade rules (Stage 5). `backdropTags` lists tags that NEVER
+    // fade as variant bases — face / ears / front+back hair stay at α=1.
+    // When absent, falls back to DEFAULT_BACKDROP_TAGS from
+    // rig/variantFadeRules.js.
+    variantFadeRules = null,
+    // Eye closure config (Stage 5). `closureTags`, `lashStripFrac`,
+    // `binCount`. When absent, falls back to defaults from
+    // rig/eyeClosureConfig.js.
+    eyeClosureConfig = null,
   } = input;
+
+  // Resolve Stage 5 configs to flat constants used inline below.
+  const _BACKDROP_TAGS_LIST = (variantFadeRules && Array.isArray(variantFadeRules.backdropTags)
+    && variantFadeRules.backdropTags.length > 0)
+    ? variantFadeRules.backdropTags
+    : ['face', 'ears', 'ears-l', 'ears-r', 'front hair', 'back hair'];
+  const _EYE_CLOSURE_TAGS_LIST = (eyeClosureConfig && Array.isArray(eyeClosureConfig.closureTags)
+    && eyeClosureConfig.closureTags.length > 0)
+    ? eyeClosureConfig.closureTags
+    : ['eyelash-l', 'eyewhite-l', 'irides-l', 'eyelash-r', 'eyewhite-r', 'irides-r'];
+  const _EYE_CLOSURE_LASH_STRIP_FRAC = Number.isFinite(eyeClosureConfig?.lashStripFrac)
+    ? eyeClosureConfig.lashStripFrac : 0.06;
+  const _EYE_CLOSURE_BIN_COUNT = Number.isFinite(eyeClosureConfig?.binCount) && eyeClosureConfig.binCount > 0
+    ? eyeClosureConfig.binCount : 6;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
   // Emitted as `{modelName}.rig.log.json` alongside the .cmo3 in the export zip.
@@ -411,12 +434,9 @@ export async function generateCmo3(input) {
   // (2026-04-23): face skin, ears, and hair shapes are the always-present
   // substrate; variants layered on top, not replacements. Every OTHER
   // base mesh with a paired variant fades smoothly 1→0 on the variant's
-  // param (see hasBaseFade).
-  const BACKDROP_TAGS_SET = new Set([
-    'face',
-    'ears', 'ears-l', 'ears-r',
-    'front hair', 'back hair',
-  ]);
+  // param (see hasBaseFade). Stage 5: backdrop list resolved from
+  // `project.variantFadeRules` via the input arg above.
+  const BACKDROP_TAGS_SET = new Set(_BACKDROP_TAGS_LIST);
   // For base meshes (other than backdrops) that have at least one variant
   // sibling, the base SMOOTHLY fades from opacity 1 at Param<Suffix>=0 to
   // opacity 0 at Param<Suffix>=1. Linear crossfade over the full range.
@@ -441,8 +461,10 @@ export async function generateCmo3(input) {
   // from the character's OWN eyewhite geometry, so the same constants work for
   // anime and western. Strip thickness at 6% of lash height gives a clean thin
   // closed-eye line; scales naturally with lash height across character sizes.
-  const EYE_CLOSURE_LASH_STRIP_FRAC = 0.06;
-  const EYE_CLOSURE_BIN_COUNT       = 6;  // X-uniform bins for lower-edge extraction
+  // Stage 5: both constants resolved from `project.eyeClosureConfig` via the
+  // input arg above.
+  const EYE_CLOSURE_LASH_STRIP_FRAC = _EYE_CLOSURE_LASH_STRIP_FRAC;
+  const EYE_CLOSURE_BIN_COUNT       = _EYE_CLOSURE_BIN_COUNT;  // X-uniform bins for lower-edge extraction
   // Per-side parabola fit: {a, b, c, xMid, xScale} in CANVAS space. Evaluates to y.
   const eyewhiteCurvePerSide = new Map();
   const eyelashMeshBboxPerSide = new Map(); // still needed for lash-strip compression
@@ -930,10 +952,9 @@ export async function generateCmo3(input) {
     // Session 17: per-eye closure via per-vertex CArtMeshForm keyforms.
     // Eyelash/eyewhite/irides (both sides) all collapse to their side's eyelash band.
     // Bypasses warp-grid coarseness — bottom contour truly stays static.
-    const EYE_CLOSURE_TAGS = new Set([
-      'eyelash-l', 'eyewhite-l', 'irides-l',
-      'eyelash-r', 'eyewhite-r', 'irides-r',
-    ]);
+    // Stage 5: closureTags resolved from `project.eyeClosureConfig` via the
+    // input arg above.
+    const EYE_CLOSURE_TAGS = new Set(_EYE_CLOSURE_TAGS_LIST);
     // Session 36 (2026-04-23): 2D keyform grid for eye variants.
     // Base and variant eye meshes both enter a compound branch
     // (ParamEye{L,R}Open × Param<Suffix>) with 4 corners = 4 unique

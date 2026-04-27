@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -78,6 +78,22 @@ const MIGRATIONS = {
   4: (project) => {
     if (project.boneConfig === undefined || project.boneConfig === null) {
       project.boneConfig = null;
+    }
+    return project;
+  },
+
+  // v5 — Stage 5: project.variantFadeRules + project.eyeClosureConfig.
+  //   - variantFadeRules.backdropTags: tags exempt from base-fade when a
+  //     variant sibling exists (face / ears / front+back hair).
+  //   - eyeClosureConfig: tags + lashStripFrac + binCount that drive the
+  //     parabola-fit closure system on eyelash/eyewhite/irides.
+  // null/missing → resolvers return defaults.
+  5: (project) => {
+    if (project.variantFadeRules === undefined || project.variantFadeRules === null) {
+      project.variantFadeRules = null;
+    }
+    if (project.eyeClosureConfig === undefined || project.eyeClosureConfig === null) {
+      project.eyeClosureConfig = null;
     }
     return project;
   },

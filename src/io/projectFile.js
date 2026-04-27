@@ -91,6 +91,8 @@ export async function saveProject(project) {
     maskConfigs: project.maskConfigs ?? [],
     physicsRules: project.physicsRules ?? [],
     boneConfig: project.boneConfig ?? null,
+    variantFadeRules: project.variantFadeRules ?? null,
+    eyeClosureConfig: project.eyeClosureConfig ?? null,
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

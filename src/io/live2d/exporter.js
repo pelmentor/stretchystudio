@@ -20,6 +20,8 @@ import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { resolvePhysicsRules } from './rig/physicsConfig.js';
 import { resolveBoneConfig } from './rig/boneConfig.js';
+import { resolveVariantFadeRules } from './rig/variantFadeRules.js';
+import { resolveEyeClosureConfig } from './rig/eyeClosureConfig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -115,6 +117,8 @@ export async function exportLive2D(project, images, opts = {}) {
   }));
   let rigSpec = null;
   const maskConfigs = resolveMaskConfigs(project);
+  const variantFadeRulesResolved = resolveVariantFadeRules(project);
+  const eyeClosureConfigResolved = resolveEyeClosureConfig(project);
   try {
     const rigResult = await generateCmo3({
       canvasW: project.canvas?.width ?? 800,
@@ -130,6 +134,8 @@ export async function exportLive2D(project, images, opts = {}) {
       rigOnly: true,
       maskConfigs,
       bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
+      variantFadeRules: variantFadeRulesResolved,
+      eyeClosureConfig: eyeClosureConfigResolved,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -150,6 +156,7 @@ export async function exportLive2D(project, images, opts = {}) {
     generateRig: true,
     rigSpec,
     bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
+    variantFadeRules: variantFadeRulesResolved,
   });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
@@ -484,6 +491,8 @@ export async function exportLive2DProject(project, images, opts = {}) {
     maskConfigs: resolveMaskConfigs(project),
     physicsRules: resolvePhysicsRules(project),
     bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
+    variantFadeRules: resolveVariantFadeRules(project),
+    eyeClosureConfig: resolveEyeClosureConfig(project),
   });
 
   // --- Motion synthesis (optional) ---

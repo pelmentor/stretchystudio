@@ -13,7 +13,7 @@ Living tracker. Update on every stage transition.
 | 2 | autoRigConfig (seeder tuning surface) | not started |
 | 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
 | 4 | Face parallax | not started |
-| 5 | Variant fade rules + eye closure config | not started |
+| 5 | Variant fade rules + eye closure config | **shipped** — `src/io/live2d/rig/variantFadeRules.js` (`DEFAULT_BACKDROP_TAGS` + `seedVariantFadeRules` + `resolveVariantFadeRules`) and `src/io/live2d/rig/eyeClosureConfig.js` (`DEFAULT_EYE_CLOSURE_TAGS` + `DEFAULT_LASH_STRIP_FRAC` + `DEFAULT_BIN_COUNT` + `seedEyeClosureConfig` + `resolveEyeClosureConfig`). Schema v5. Both writers fork on the resolved configs (cmo3 reads both, moc3 reads variantFadeRules — eye closure keyforms come from rigSpec.eyeClosure built in cmo3). 52 tests, `npm run test:variantFadeRules` + `npm run test:eyeClosureConfig`. |
 | 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
 | 8 | Rotation deformers (keyforms) | not started |
@@ -725,14 +725,45 @@ warp+rotation specs into `project.faceParallax`.
 
 #### Stage 5 — Variant fade rules + eye closure config
 
-Tag-gated heuristics (`BACKDROP_TAGS_SET`, `EYE_CLOSURE_TAGS`,
-`EYE_CLOSURE_LASH_STRIP_FRAC`) become explicit project config.
+**Status: shipped.**
 
-**Files:** variant fade emission across `cmo3writer.js`; eye closure
-extraction.
-**Risk:** medium — touches the variant system covered by several memory
-notes. Verify against `feedback_variant_plateau_ramp` and
-`feedback_no_sharing_eye_2d_grid` invariants.
+Tag-gated heuristics (`BACKDROP_TAGS_SET`, `EYE_CLOSURE_TAGS`,
+`EYE_CLOSURE_LASH_STRIP_FRAC`, `EYE_CLOSURE_BIN_COUNT`) become explicit
+project config.
+
+* `src/io/live2d/rig/variantFadeRules.js` — `DEFAULT_BACKDROP_TAGS` (the
+  canonical Hiyori-style list), `buildVariantFadeRulesFromProject`,
+  `resolveVariantFadeRules`, `seedVariantFadeRules`.
+* `src/io/live2d/rig/eyeClosureConfig.js` — `DEFAULT_EYE_CLOSURE_TAGS`,
+  `DEFAULT_LASH_STRIP_FRAC = 0.06`, `DEFAULT_BIN_COUNT = 6`, builder /
+  resolver / seeder.
+* Schema bumped to v5 with migration adding `project.variantFadeRules`
+  and `project.eyeClosureConfig` (both default null; resolvers provide
+  defaults when null).
+* `cmo3writer.js` consumes both via input args (`variantFadeRules`,
+  `eyeClosureConfig`); inline `BACKDROP_TAGS_SET` / `EYE_CLOSURE_TAGS` /
+  `EYE_CLOSURE_LASH_STRIP_FRAC` / `EYE_CLOSURE_BIN_COUNT` constants now
+  derive from the resolved configs.
+* `moc3writer.js` consumes `variantFadeRules` via input arg; the
+  duplicated `BACKDROP_TAGS_SET_MOC3` is now sourced from the resolved
+  config. (Eye closure keyforms still flow through `rigSpec.eyeClosure`
+  built in cmo3writer — no separate moc3 path needed.)
+* `useProjectStore.seedVariantFadeRules` + `seedEyeClosureConfig`
+  actions wrap the seeders with history snapshot + unsaved-changes flag.
+* 52 unit tests across `scripts/test_variantFadeRules.mjs` (19) +
+  `scripts/test_eyeClosureConfig.mjs` (33) covering DEFAULT contract,
+  build-returns-mutable-copy, populated-vs-empty resolution branching,
+  destructive seed semantics, equivalence (seeded == generator), and
+  round-trip serialization.
+* End-to-end equivalence test extended to verify both subsystems compose
+  correctly with the rest of the seeded path.
+
+Verified against memory invariants:
+  - `feedback_variant_plateau_ramp` — backdrop list matches the rule's
+    "face / ears / front+back hair never fade" canon.
+  - `feedback_no_sharing_eye_2d_grid` — no shared closure curve in the
+    config; per-variant fits remain in cmo3writer (the config only
+    surfaces the tunable constants, not derived geometry).
 
 #### Stage 6 — Physics rules
 

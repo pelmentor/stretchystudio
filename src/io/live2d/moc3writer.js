@@ -343,7 +343,17 @@ function buildSectionData(input) {
   const {
     project, regions, atlasSize, numAtlases, generateRig = true, rigSpec = null,
     bakedKeyformAngles = [-90, -45, 0, 45, 90],
+    // Stage 5: variant fade rules (`backdropTags` exempt from base-fade).
+    // When absent, falls back to the canonical Hiyori-style backdrop set.
+    variantFadeRules = null,
   } = input;
+
+  // Resolve Stage 5 backdrop list to a flat array used inline below.
+  const _BACKDROP_TAGS_LIST_MOC3 = (variantFadeRules
+    && Array.isArray(variantFadeRules.backdropTags)
+    && variantFadeRules.backdropTags.length > 0)
+    ? variantFadeRules.backdropTags
+    : ['face', 'ears', 'ears-l', 'ears-r', 'front hair', 'back hair'];
 
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
@@ -479,11 +489,9 @@ function buildSectionData(input) {
   // Mesh-level eye closure (eyelash/eyewhite/irides 2 keyforms with closed
   // vertex positions) is handled at the rig-warp layer in current SS, so
   // this writer leaves those meshes at the default 1-keyform branch.
-  const BACKDROP_TAGS_SET_MOC3 = new Set([
-    'face',
-    'ears', 'ears-l', 'ears-r',
-    'front hair', 'back hair',
-  ]);
+  // Stage 5: backdrop list resolved from `project.variantFadeRules` via
+  // the input arg above. Single source of truth across cmo3 + moc3.
+  const BACKDROP_TAGS_SET_MOC3 = new Set(_BACKDROP_TAGS_LIST_MOC3);
   // Build base.partId → [variantSuffix] map for the base-fade-out branch.
   const variantSuffixesByBasePartId = new Map();
   for (const p of meshParts) {

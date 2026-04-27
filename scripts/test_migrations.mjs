@@ -176,6 +176,26 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v4 lacks variantFadeRules + eyeClosureConfig. v5 migration
+  // adds them as null (resolvers provide defaults).
+  const p = { schemaVersion: 4, boneConfig: null };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v4→current: schemaVersion bumped');
+  assert(p.variantFadeRules === null, 'v4→current: variantFadeRules added as null');
+  assert(p.eyeClosureConfig === null, 'v4→current: eyeClosureConfig added as null');
+}
+
+{
+  // Pre-existing variantFadeRules + eyeClosureConfig preserved.
+  const fade = { backdropTags: ['face', 'ears', 'helmet'] };
+  const eye = { closureTags: ['eyelash-l', 'eyelash-r'], lashStripFrac: 0.08, binCount: 4 };
+  const p = { schemaVersion: 4, variantFadeRules: fade, eyeClosureConfig: eye };
+  migrateProject(p);
+  assert(p.variantFadeRules === fade, 'v4→current: existing variantFadeRules preserved');
+  assert(p.eyeClosureConfig === eye, 'v4→current: existing eyeClosureConfig preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -183,6 +203,8 @@ function assertThrows(fn, name) {
   assertEq(p.maskConfigs, [], 'v0→current: maskConfigs added');
   assertEq(p.physicsRules, [], 'v0→current: physicsRules added');
   assert(p.boneConfig === null, 'v0→current: boneConfig added as null');
+  assert(p.variantFadeRules === null, 'v0→current: variantFadeRules added as null');
+  assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

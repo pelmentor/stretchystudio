@@ -12,6 +12,14 @@ import { buildParameterSpec, seedParameters } from '../src/io/live2d/rig/paramSp
 import { resolveMaskConfigs, seedMaskConfigs } from '../src/io/live2d/rig/maskConfigs.js';
 import { resolvePhysicsRules, seedPhysicsRules } from '../src/io/live2d/rig/physicsConfig.js';
 import { resolveBoneConfig, seedBoneConfig } from '../src/io/live2d/rig/boneConfig.js';
+import {
+  resolveVariantFadeRules,
+  seedVariantFadeRules,
+} from '../src/io/live2d/rig/variantFadeRules.js';
+import {
+  resolveEyeClosureConfig,
+  seedEyeClosureConfig,
+} from '../src/io/live2d/rig/eyeClosureConfig.js';
 import { generatePhysics3Json } from '../src/io/live2d/physics3json.js';
 import { generateCdi3Json } from '../src/io/live2d/cdi3json.js';
 import { migrateProject } from '../src/store/projectMigrations.js';
@@ -149,8 +157,10 @@ function computeOutputs(project) {
   });
 
   const maskConfigs = resolveMaskConfigs(project);
+  const variantFadeRules = resolveVariantFadeRules(project);
+  const eyeClosureConfig = resolveEyeClosureConfig(project);
 
-  return { paramSpec, physics3, cdi3, maskConfigs };
+  return { paramSpec, physics3, cdi3, maskConfigs, variantFadeRules, eyeClosureConfig };
 }
 
 // --- Run the test ---
@@ -163,6 +173,8 @@ seedParameters(projectB);
 seedMaskConfigs(projectB);
 seedPhysicsRules(projectB);
 seedBoneConfig(projectB);
+seedVariantFadeRules(projectB);
+seedEyeClosureConfig(projectB);
 const seededOutputs = computeOutputs(projectB);
 
 // --- Sanity checks: outputs are non-trivial ---
@@ -177,6 +189,8 @@ assertEq(seededOutputs.paramSpec, generatorOutputs.paramSpec, 'paramSpec equival
 assertEq(seededOutputs.physics3, generatorOutputs.physics3, 'physics3.json equivalent');
 assertEq(seededOutputs.cdi3, generatorOutputs.cdi3, 'cdi3.json equivalent');
 assertEq(seededOutputs.maskConfigs, generatorOutputs.maskConfigs, 'maskConfigs equivalent');
+assertEq(seededOutputs.variantFadeRules, generatorOutputs.variantFadeRules, 'variantFadeRules equivalent');
+assertEq(seededOutputs.eyeClosureConfig, generatorOutputs.eyeClosureConfig, 'eyeClosureConfig equivalent');
 
 // --- Detailed inventory checks (catches silent test passes) ---
 
@@ -203,6 +217,8 @@ const seededSerialized = JSON.stringify({
   maskConfigs: projectB.maskConfigs,
   physicsRules: projectB.physicsRules,
   boneConfig: projectB.boneConfig,
+  variantFadeRules: projectB.variantFadeRules,
+  eyeClosureConfig: projectB.eyeClosureConfig,
 });
 const reloaded = JSON.parse(seededSerialized);
 const projectC = buildSyntheticProject();
@@ -210,12 +226,16 @@ projectC.parameters = reloaded.parameters;
 projectC.maskConfigs = reloaded.maskConfigs;
 projectC.physicsRules = reloaded.physicsRules;
 projectC.boneConfig = reloaded.boneConfig;
+projectC.variantFadeRules = reloaded.variantFadeRules;
+projectC.eyeClosureConfig = reloaded.eyeClosureConfig;
 
 const reloadedOutputs = computeOutputs(projectC);
 assertEq(reloadedOutputs.paramSpec, generatorOutputs.paramSpec, 'ROUND-TRIP: paramSpec via JSON');
 assertEq(reloadedOutputs.physics3, generatorOutputs.physics3, 'ROUND-TRIP: physics3 via JSON');
 assertEq(reloadedOutputs.cdi3, generatorOutputs.cdi3, 'ROUND-TRIP: cdi3 via JSON');
 assertEq(reloadedOutputs.maskConfigs, generatorOutputs.maskConfigs, 'ROUND-TRIP: maskConfigs via JSON');
+assertEq(reloadedOutputs.variantFadeRules, generatorOutputs.variantFadeRules, 'ROUND-TRIP: variantFadeRules via JSON');
+assertEq(reloadedOutputs.eyeClosureConfig, generatorOutputs.eyeClosureConfig, 'ROUND-TRIP: eyeClosureConfig via JSON');
 
 // --- Summary ---
 

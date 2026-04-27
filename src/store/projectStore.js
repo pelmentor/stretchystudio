@@ -6,6 +6,8 @@ import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
 import { seedMaskConfigs as seedMaskConfigsFn } from '@/io/live2d/rig/maskConfigs';
 import { seedPhysicsRules as seedPhysicsRulesFn } from '@/io/live2d/rig/physicsConfig';
 import { seedBoneConfig as seedBoneConfigFn } from '@/io/live2d/rig/boneConfig';
+import { seedVariantFadeRules as seedVariantFadeRulesFn } from '@/io/live2d/rig/variantFadeRules';
+import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '@/io/live2d/rig/eyeClosureConfig';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -84,6 +86,8 @@ export const useProjectStore = create((set) => ({
     maskConfigs: [],
     physicsRules: [],
     boneConfig: null,
+    variantFadeRules: null,
+    eyeClosureConfig: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -228,6 +232,8 @@ export const useProjectStore = create((set) => ({
       state.project.maskConfigs = [];
       state.project.physicsRules = [];
       state.project.boneConfig = null;
+      state.project.variantFadeRules = null;
+      state.project.eyeClosureConfig = null;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -253,6 +259,8 @@ export const useProjectStore = create((set) => ({
       state.project.maskConfigs = projectData.maskConfigs;
       state.project.physicsRules = projectData.physicsRules;
       state.project.boneConfig = projectData.boneConfig;
+      state.project.variantFadeRules = projectData.variantFadeRules;
+      state.project.eyeClosureConfig = projectData.eyeClosureConfig;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -311,6 +319,32 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedBoneConfigFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.variantFadeRules` from defaults (Stage 5). Currently
+   * sets `backdropTags` to the canonical Hiyori-style list (face, ears,
+   * front+back hair). Destructive.
+   */
+  seedVariantFadeRules: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedVariantFadeRulesFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.eyeClosureConfig` from defaults (Stage 5). Currently
+   * sets per-side eyelash/eyewhite/irides closureTags + lashStripFrac=0.06
+   * + binCount=6. Destructive.
+   */
+  seedEyeClosureConfig: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedEyeClosureConfigFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),
