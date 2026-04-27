@@ -33,7 +33,7 @@ demand" rather than speculatively.
 | --- | --- | --- |
 | R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | **shipped 2026-04-28** |
 | R1 | RigSpec session cache (`useRigSpecStore`) | **shipped 2026-04-28** |
-| R2 | `cellSelect` — N-binding cross-product cell + lerp weights | not started |
+| R2 | `cellSelect` — N-binding cross-product cell + lerp weights | **shipped 2026-04-28** |
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | not started |
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | not started |
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | not started |
@@ -1336,6 +1336,42 @@ present and populated with `id`, `bindings`, `keyforms` arrays. All
 `src/components/parameters/ParametersPanel.jsx`,
 `scripts/test_initRig.mjs`. **Tag:**
 `native-rig-render-stage-R1-complete`.
+
+### v2 Stage R2 — `cellSelect` (shipped 2026-04-28)
+
+First evaluator math module. Pure JS. Takes a host's `bindings` array
+and a flat `paramValues` map; returns `{indices, weights}` for the
+2^N (or product, with single-key bindings) corner cells of the
+cross-product keyform grid plus the multilinear blend weights.
+
+**Cell selection** — for each binding, finds the segment
+`(keys[j], keys[j+1])` containing the current param value and the
+lerp `t ∈ [0, 1]`. Edge handling: out-of-range values clamp to nearest
+endpoint (`t=0` or `t=1`); single-key bindings collapse to one corner
+with weight 1 (degenerate "no parameter axis" case); missing
+paramValue defaults to 0.
+
+**Layout convention** — first binding varies fastest in both the
+output array and the keyform array index. Verified against Hiyori's
+.cmo3 (cmo3writer.js cornersOrder L1257) and the moc3 keyform
+binding-index packing.
+
+**Weights** — multilinear: corner with binding-pos vector
+`(c_0, …, c_{N-1})` has weight `∏_n (c_n ? t_n : 1−t_n)`. Sum to 1
+(within FP rounding) — verified with a 100-sample random sweep test.
+
+**Files:** `src/io/live2d/runtime/evaluator/cellSelect.js` (new
+directory tree per v2 plan layout), `scripts/test_cellSelect.mjs`,
+`package.json` (test script wired into `npm test`).
+
+**Tests:** 39 cases — zero/null/undefined bindings, 1D 2-key, 1D 3-key
+(BAKED_ANGLES style), 1D 5-key (wider bone-bake range), 2D 2×2 (eye
+compound), 2D 2×3 asymmetric, 3D 2×2×2, exact-key handling, clamping,
+single-key degeneracy, single-key + 2-key combined, missing param,
+non-uniform spacing, weights-sum invariant, first-fastest invariant.
+All pass.
+
+**Tag:** `native-rig-render-stage-R2-complete`.
 
 ## Rollback strategy
 
