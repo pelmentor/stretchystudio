@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -120,6 +120,20 @@ const MIGRATIONS = {
   7: (project) => {
     if (project.autoRigConfig === undefined || project.autoRigConfig === null) {
       project.autoRigConfig = null;
+    }
+    return project;
+  },
+
+  // v8 — Stage 4: project.faceParallax is the serialized FaceParallax
+  // warp deformer spec — id, parent, gridSize, baseGrid (flat number[]),
+  // bindings, keyforms (each with positions as flat number[]), opacity.
+  // null/missing → resolver returns null and the cmo3 writer falls back
+  // to its inline buildFaceParallaxSpec heuristic (today's path).
+  // Populated → cmo3 writer skips the heuristic and serializes the
+  // stored spec verbatim.
+  8: (project) => {
+    if (project.faceParallax === undefined || project.faceParallax === null) {
+      project.faceParallax = null;
     }
     return project;
   },

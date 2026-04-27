@@ -249,6 +249,32 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v7 lacks faceParallax. v8 migration adds it as null.
+  const p = { schemaVersion: 7 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v7→current: schemaVersion bumped');
+  assert(p.faceParallax === null, 'v7→current: faceParallax added as null');
+}
+
+{
+  // Pre-existing faceParallax preserved (Stage 4 stores serialized warp specs).
+  const fp = {
+    id: 'FaceParallaxWarp',
+    name: 'Face Parallax',
+    parent: { type: 'rotation', id: 'FaceRotation' },
+    gridSize: { rows: 5, cols: 5 },
+    baseGrid: new Array(72).fill(0),
+    localFrame: 'pivot-relative',
+    bindings: [],
+    keyforms: [{ keyTuple: [0, 0], positions: new Array(72).fill(0), opacity: 1 }],
+    isVisible: true, isLocked: false, isQuadTransform: false,
+  };
+  const p = { schemaVersion: 7, faceParallax: fp };
+  migrateProject(p);
+  assert(p.faceParallax === fp, 'v7→current: existing faceParallax preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -260,6 +286,7 @@ function assertThrows(fn, name) {
   assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');
   assert(p.rotationDeformerConfig === null, 'v0→current: rotationDeformerConfig added as null');
   assert(p.autoRigConfig === null, 'v0→current: autoRigConfig added as null');
+  assert(p.faceParallax === null, 'v0→current: faceParallax added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

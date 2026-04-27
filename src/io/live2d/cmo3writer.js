@@ -148,6 +148,12 @@ export async function generateCmo3(input) {
     // When absent, each generator falls back to DEFAULT_AUTO_RIG_CONFIG
     // for that section. See `rig/autoRigConfig.js`.
     autoRigConfig = null,
+    // Pre-resolved FaceParallax warp spec (Stage 4). When populated, the
+    // cmo3 emitter skips the inline heuristic and serializes the stored
+    // spec verbatim. When null, today's `buildFaceParallaxSpec` heuristic
+    // runs as the spec source. See `rig/faceParallaxStore.js`
+    // resolveFaceParallax.
+    faceParallaxSpec = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -3439,6 +3445,7 @@ export async function generateCmo3(input) {
         rigDebugLog,
         rigCollector,
         autoRigFaceParallax: autoRigConfig?.faceParallax,
+        preComputedSpec: faceParallaxSpec,
       });
       if (pidFpGuid) faceParallaxGuids.set('__all__', pidFpGuid);
     }

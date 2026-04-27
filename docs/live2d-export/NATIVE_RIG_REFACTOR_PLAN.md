@@ -12,7 +12,7 @@ Living tracker. Update on every stage transition.
 | 1b | Parameters UI panel + delete protection | not started |
 | 2 | autoRigConfig (seeder tuning surface) | **shipped** — `src/io/live2d/rig/autoRigConfig.js` (`DEFAULT_AUTO_RIG_CONFIG` bundles `bodyWarp` + `faceParallax` + `neckWarp` sections). Schema v7. Per-section fallback (each section validates independently — malformed bodyWarp leaves user faceParallax intact). bodyWarp.js / cmo3/faceParallax.js / rig/warpDeformers.js all read tunables from input args with `DEFAULT_AUTO_RIG_CONFIG.<section>` fallback; cmo3writer + bodyRig thread the resolved config through. Lifts: HIP/FEET fracs + canvas pad + BX/BY/Breath margins + upper-body shape + FP depth/angle/protection coefficients + protectionPerTag map + superGroups + eye/squash amps + NECK_TILT_FRAC. Defaults match existing literals bit-for-bit. 83 tests, `npm run test:autoRigConfig`. |
 | 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
-| 4 | Face parallax | not started |
+| 4 | Face parallax | **shipped** — `src/io/live2d/rig/faceParallaxBuilder.js` (`buildFaceParallaxSpec`, ~520 LOC of compute extracted from `cmo3/faceParallax.js`) + `src/io/live2d/rig/faceParallaxStore.js` (`serializeFaceParallaxSpec` / `deserializeFaceParallaxSpec` / `resolveFaceParallax` / `seedFaceParallax` / `clearFaceParallax`). Schema v8. `emitFaceParallax` accepts `preComputedSpec` ctx arg — populated → serialize stored spec verbatim; null → run `buildFaceParallaxSpec` heuristic. cmo3writer + exporter thread `faceParallaxSpec` resolved from project. Float64Array fields serialize via plain-array storage (`baseGrid`, `keyforms[i].positions`). Stage 4 v1 ships **without** signatureHash staleness detection — re-import-after-seed is a documented footgun. 154 tests, `npm run test:faceParallax`. |
 | 5 | Variant fade rules + eye closure config | **shipped** — `src/io/live2d/rig/variantFadeRules.js` (`DEFAULT_BACKDROP_TAGS` + `seedVariantFadeRules` + `resolveVariantFadeRules`) and `src/io/live2d/rig/eyeClosureConfig.js` (`DEFAULT_EYE_CLOSURE_TAGS` + `DEFAULT_LASH_STRIP_FRAC` + `DEFAULT_BIN_COUNT` + `seedEyeClosureConfig` + `resolveEyeClosureConfig`). Schema v5. Both writers fork on the resolved configs (cmo3 reads both, moc3 reads variantFadeRules — eye closure keyforms come from rigSpec.eyeClosure built in cmo3). 52 tests, `npm run test:variantFadeRules` + `npm run test:eyeClosureConfig`. |
 | 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
@@ -767,13 +767,60 @@ chain keyform output (Stage 10).
 
 #### Stage 4 — Face parallax
 
-Numeric face-parallax tuning (`FP_DEPTH_K`, `FP_MAX_ANGLE_X_DEG`,
-`FP_MAX_ANGLE_Y_DEG`, face pivot override). After Stage 2, most of these
-values *already* live in `autoRigConfig`. This stage moves the resulting
-warp+rotation specs into `project.faceParallax`.
+**Status: shipped (v1, no staleness detection).**
 
-**Files:** `src/io/live2d/cmo3/faceParallax.js`, `cmo3writer.js`.
-**Risk:** medium-low.
+Stage 4 is the first **keyform-bearing** stage (Milestone C). The
+FaceParallax warp deformer's 6×6 grid × 9 keyforms (~720 floats) now
+serialize into `project.faceParallax` and replay on subsequent exports.
+
+* `src/io/live2d/rig/faceParallaxBuilder.js` (new) — extracted ~520 LOC
+  of pure compute from `cmo3/faceParallax.js` `emitFaceParallax`.
+  Exports `buildFaceParallaxSpec({meshes, faceUnionBbox, facePivotCx,
+  facePivotCy, faceMeshBbox, autoRigFaceParallax})` returning `{spec,
+  debug}`. The full algorithm — depth-weighted ellipsoidal rotation,
+  protected-region build (super-groups + per-mesh, A.3 L/R pairing,
+  A.6b grid-cell expansion), eye parallax amp, far-eye squash, ax=0
+  horizontal symmetrisation — lives here. No XML / no PIDs / no UUIDs.
+* `src/io/live2d/rig/faceParallaxStore.js` (new) — serialize/deserialize
+  helpers (Float64Array ↔ plain `number[]` since typed arrays don't
+  survive JSON round-trip), `resolveFaceParallax(project)`,
+  `seedFaceParallax(project, spec)`, `clearFaceParallax(project)`.
+  Lenient deserializer (defaults missing fields) but rejects fundamentally
+  malformed input (no keyforms / no baseGrid).
+* `cmo3/faceParallax.js` (`emitFaceParallax`) — refactored to ~225 LOC:
+  if `ctx.preComputedSpec` provided, use it directly; else call
+  `buildFaceParallaxSpec(...)` to produce a fresh spec. XML emission
+  consumes `spec.baseGrid` and `spec.keyforms[i].positions` regardless
+  of source. rigCollector still receives the spec.
+* Schema bumped to v8 with migration adding `project.faceParallax`
+  (default null; resolver returns null → cmo3 falls back to heuristic).
+* `cmo3writer` + `exporter` thread `faceParallaxSpec = resolveFaceParallax(project)`.
+* `useProjectStore.seedFaceParallax(spec)` action; `clearFaceParallax()`
+  action for reverting. The seeder takes a pre-computed spec because
+  `buildFaceParallaxSpec` needs caller-derived bbox/pivot inputs that
+  the export pipeline computes; future "Initialize Rig" UI button
+  (Stage 1b territory) packages build+seed.
+* 154 unit tests cover spec shape (id, parent, gridSize, baseGrid,
+  bindings, keyforms), pivot-relative rest grid, rest keyform == baseGrid,
+  determinism, ax≠0 keyform divergence at center, ax=0 L/R symmetry,
+  protected region count + values, custom config propagation, faceMesh
+  fallback, serialize/deserialize round-trip (1e-15 precision), null/
+  malformed handling, lenient defaults, store action destructiveness,
+  full JSON.stringify→parse round-trip.
+
+**Out of scope (Stage 4 v1):** mesh signature tracking. If user reimports
+PSD with re-meshed face-tagged meshes, stored vertex deltas silently
+become stale (cross-cutting "ID stability" invariant calls for
+`signatureHash`). User must `clearFaceParallax` manually after reimport.
+Documented as known footgun; full signature tracking deferred to a
+later cleanup stage.
+
+**Files:** `src/io/live2d/rig/faceParallaxBuilder.js` (new),
+`src/io/live2d/rig/faceParallaxStore.js` (new),
+`src/io/live2d/cmo3/faceParallax.js`, `src/io/live2d/cmo3writer.js`,
+`src/io/live2d/exporter.js`, `src/store/projectStore.js`,
+`src/store/projectMigrations.js`, `scripts/test_faceParallax.mjs` (new),
+`scripts/test_migrations.mjs`, `package.json`.
 
 #### Stage 5 — Variant fade rules + eye closure config
 

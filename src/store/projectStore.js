@@ -10,6 +10,10 @@ import { seedVariantFadeRules as seedVariantFadeRulesFn } from '@/io/live2d/rig/
 import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '@/io/live2d/rig/eyeClosureConfig';
 import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '@/io/live2d/rig/rotationDeformerConfig';
 import { seedAutoRigConfig as seedAutoRigConfigFn } from '@/io/live2d/rig/autoRigConfig';
+import {
+  seedFaceParallax as seedFaceParallaxFn,
+  clearFaceParallax as clearFaceParallaxFn,
+} from '@/io/live2d/rig/faceParallaxStore';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -92,6 +96,7 @@ export const useProjectStore = create((set) => ({
     eyeClosureConfig: null,
     rotationDeformerConfig: null,
     autoRigConfig: null,
+    faceParallax: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -378,6 +383,32 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedAutoRigConfigFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.faceParallax` from a pre-computed spec (Stage 4).
+   * Caller is responsible for producing the spec — typically via
+   * `buildFaceParallaxSpec(...)` with current mesh / bbox / pivot
+   * inputs. Destructive: overwrites prior storage.
+   */
+  seedFaceParallax: (spec) => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedFaceParallaxFn(draft.project, spec);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Clear `project.faceParallax` to revert to the heuristic generator
+   * path. Use after PSD reimport invalidates stored vertex deltas.
+   */
+  clearFaceParallax: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      clearFaceParallaxFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),
