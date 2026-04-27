@@ -36,7 +36,7 @@ demand" rather than speculatively.
 | R2 | `cellSelect` — N-binding cross-product cell + lerp weights | **shipped 2026-04-28** |
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | **shipped 2026-04-28** |
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | **shipped 2026-04-28** |
-| R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | not started |
+| R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | **shipped 2026-04-28** |
 | R6 | Chain composition + first visible demo | not started |
 | R7 | Mask system generalization (stencil) | not started |
 | R8 | Full param scrubber UI | not started |
@@ -1457,6 +1457,45 @@ of 0° and 90°). All pass; total suite at 1218.
 **Files:** `src/io/live2d/runtime/evaluator/rotationEval.js` (new),
 `scripts/test_rotationEval.mjs` (new), `package.json`. **Tag:**
 `native-rig-render-stage-R4-complete`.
+
+### v2 Stage R5 — `artMeshEval` (shipped 2026-04-28)
+
+Pure JS module that blends an art mesh's per-keyform vertex grids,
+opacities and drawOrders into a single resolved state. Same shape as
+`evalWarpGrid` but for variable-length per-mesh vertex arrays —
+returns a fresh `Float32Array` (typed to match the storage).
+
+**Opacity** lerps directly (scalar weighted average — covers eye
+fade, variant cross-fade, base fade-out, compound 2D αN/αV). Random
+sweep test verifies opacity stays in `[0, 1]` for valid weight
+inputs.
+
+**drawOrder** is *sticky* — taken from the heaviest-weighted keyform
+rather than blended. Cubism's runtime treats drawOrder as discrete
+per-keyform, so a continuous blend would produce visible Z-flicker.
+Fallback chain: keyform `drawOrder` → spec `drawOrder` → `500`.
+
+**Length mismatch** in keyform vertex arrays causes the offending
+entry to be skipped (defensive — the rig builder should never emit
+this, but a stale rigSpec after a remesh could). Reference length is
+the first weighted keyform.
+
+**Defensive fallback** for zero total weight: copy the first keyform
+verbatim. Output is always a fresh `Float32Array` — no aliasing of
+input keyform buffers.
+
+**Tests:** 32 cases — single keyform identity, 2-keyform 50/50
+blend (eye-blink shape), variant fade (verts unchanged + opacity
+ramps), 4-keyform 2D compound (eye blink × variant), default
+1-keyform `ParamOpacity[1.0]` plan, drawOrder heaviest wins,
+drawOrder fallback chain (keyform → spec → 500), null/empty/no-
+keyforms → null, length mismatch skip, zero-weight fallback,
+no-aliasing of input buffers, random sweep opacity in `[0, 1]`. All
+pass; total suite at 1250.
+
+**Files:** `src/io/live2d/runtime/evaluator/artMeshEval.js` (new),
+`scripts/test_artMeshEval.mjs` (new), `package.json`. **Tag:**
+`native-rig-render-stage-R5-complete`.
 
 ## Rollback strategy
 
