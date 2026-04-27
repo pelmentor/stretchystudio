@@ -3,6 +3,7 @@ import { useEditorStore } from '@/store/editorStore';
 import { useTheme } from '@/contexts/ThemeProvider';
 import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
+import { useParamValuesStore } from '@/store/paramValuesStore';
 import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
@@ -174,6 +175,12 @@ export default function CanvasViewport({
   const animRef = useRef(animStore);
   animRef.current = animStore;
 
+  // R0 — live param values from the rig evaluator (drives the test slider).
+  // Consumed by the tick directly via ref; effect below marks dirty on change.
+  const paramValues = useParamValuesStore(s => s.values);
+  const paramValuesRef = useRef(paramValues);
+  paramValuesRef.current = paramValues;
+
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
   const projectRef = useRef(project);
@@ -186,6 +193,7 @@ export default function CanvasViewport({
   isDarkRef.current = isDark;
 
   useEffect(() => { isDirtyRef.current = true; }, [project, isDark]);
+  useEffect(() => { isDirtyRef.current = true; }, [paramValues]);
   
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {
@@ -393,6 +401,26 @@ export default function CanvasViewport({
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
           poseOverrides.set(node.id, { ...existing, mesh_verts: warpedVerts });
+        }
+
+        // R0 — Native rig render plumbing smoke test. One hardcoded param
+        // (`__test_translate_x`) translates every selected mesh along X by
+        // the slider value. Real evaluator (R3-R5) will replace this branch.
+        {
+          const testTx = paramValuesRef.current['__test_translate_x'];
+          if (typeof testTx === 'number' && testTx !== 0) {
+            const sel = editorRef.current.selection ?? [];
+            for (const nodeId of sel) {
+              const node = projectRef.current.nodes.find(n => n.id === nodeId);
+              if (!node || node.type !== 'part' || !node.mesh) continue;
+              const kfOv = poseOverrides?.get(nodeId);
+              const inputVerts = (kfOv?.mesh_verts ?? node.mesh.vertices)
+                .map(v => ({ x: (v.x ?? v.restX) + testTx, y: v.y ?? v.restY }));
+              if (!poseOverrides) poseOverrides = new Map();
+              const existing = poseOverrides.get(nodeId) ?? {};
+              poseOverrides.set(nodeId, { ...existing, mesh_verts: inputVerts });
+            }
+          }
         }
 
         // Upload mesh vertex overrides BEFORE drawing so the GPU buffers are

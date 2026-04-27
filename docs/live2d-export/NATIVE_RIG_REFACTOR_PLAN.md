@@ -31,7 +31,7 @@ demand" rather than speculatively.
 
 | v2 Stage | Description | Status |
 | --- | --- | --- |
-| R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | not started |
+| R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | **shipped 2026-04-28** |
 | R1 | RigSpec session cache (`useRigSpecStore`) | not started |
 | R2 | `cellSelect` — N-binding cross-product cell + lerp weights | not started |
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | not started |
@@ -1222,6 +1222,51 @@ cmo3writer (rigSpec harvest) → moc3writer`.
 **Tests:** all 1092 tests across 16 suites still green; no new tests
 added (refactor, not feature). **Build/lint:** zero new errors. Tag:
 `native-rig-stage-11-complete`.
+
+### v2 Stage R0 — Plumbing smoke test (shipped 2026-04-28)
+
+First v2 milestone. Wires the live param-value pipeline from a UI slider
+through a dirty-tagged React state effect and into the WebGL render
+tick — all without any evaluator. Proves the data path works before R2-R5
+math lands.
+
+**`paramValuesStore.js` (new).** Zustand slice. Plain object `values`
+(not Map — Zustand needs new references for re-renders, the
+`{...prev, [id]: v}` pattern is idiomatic). Three actions:
+`setParamValue(id, v)`, `setMany(updates)`, `resetToDefaults(parameters)`
+(seeds `values[p.id] = p.default` for each parameter spec). Distinct
+from `project.parameters` (persisted *spec*) and from animation
+keyframes (which write into `draftPose` / channels) — this store is the
+*current dial position* of every runnable param.
+
+**`CanvasViewport.jsx` — paramValues subscription.** Imports the store,
+mirrors values into `paramValuesRef.current` synchronously on render
+(same pattern as `editorRef`/`projectRef`/`animRef`), and adds a
+`useEffect(() => { isDirtyRef.current = true; }, [paramValues])`
+alongside the existing project/theme dirty effect.
+
+**`CanvasViewport.jsx` — R0 hook in tick.** Inserted after the puppet
+warp branch (line ~404) and before the GPU upload loop (line ~426).
+Reads `paramValuesRef.current['__test_translate_x']`; for each currently
+selected mesh part, composes onto any existing `kfOv.mesh_verts` (or
+falls back to base mesh) and translates X by the slider value. Writes
+back to `poseOverrides`. Real evaluator (R2-R5) will replace this branch
+with a chain composition reading the cached `rigSpec`.
+
+**`ParametersPanel.jsx` — test slider UI.** Imports `Slider` (already
+shadcn-shipped) + the store. Renders inside the existing `expanded`
+block: dashed-bordered card showing `__test_translate_x: NN px` label
+with a `[-100, +100]` step-1 slider. Live updates the store, triggers
+the dirty effect, viewport renders the next frame.
+
+**Verification:** `npm run build` clean (3.6s, no new warnings). UI
+smoke test left to user — open ParametersPanel → expand → select a
+meshed part → drag the test slider → mesh slides horizontally.
+
+**Files:** `src/store/paramValuesStore.js` (new),
+`src/components/canvas/CanvasViewport.jsx`,
+`src/components/parameters/ParametersPanel.jsx`. **Tag:**
+`native-rig-render-stage-R0-complete`.
 
 ## Rollback strategy
 

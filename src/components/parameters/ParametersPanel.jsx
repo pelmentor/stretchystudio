@@ -1,7 +1,9 @@
 import React from 'react';
 import { useProjectStore } from '@/store/projectStore';
+import { useParamValuesStore } from '@/store/paramValuesStore';
 import { initializeRigFromProject } from '@/io/live2d/rig/initRig';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
 import { Wand2, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   AlertDialog,
@@ -29,6 +31,10 @@ export function ParametersPanel() {
   const project = useProjectStore(s => s.project);
   const seedAllRig = useProjectStore(s => s.seedAllRig);
   const clearRigKeyforms = useProjectStore(s => s.clearRigKeyforms);
+
+  // R0 — test slider for the native rig render evaluator pipeline.
+  const testTx = useParamValuesStore(s => s.values['__test_translate_x'] ?? 0);
+  const setParamValue = useParamValuesStore(s => s.setParamValue);
 
   const [expanded, setExpanded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -129,7 +135,24 @@ export function ParametersPanel() {
         </div>
 
         {expanded && (
-          <div className="border-t border-border/40 pt-2 mt-1">
+          <div className="border-t border-border/40 pt-2 mt-1 flex flex-col gap-2">
+            <div className="flex flex-col gap-1 px-1.5 py-1 rounded bg-muted/20 border border-dashed border-border/40">
+              <div className="flex items-center justify-between text-[10px] font-mono">
+                <span className="text-muted-foreground">__test_translate_x</span>
+                <span className="text-foreground">{testTx.toFixed(0)} px</span>
+              </div>
+              <Slider
+                min={-100}
+                max={100}
+                step={1}
+                value={[testTx]}
+                onValueChange={([v]) => setParamValue('__test_translate_x', v)}
+              />
+              <p className="text-[9px] text-muted-foreground/70 italic">
+                R0 plumbing — translates the selected mesh on X.
+              </p>
+            </div>
+
             {params.length === 0 ? (
               <p className="text-[11px] text-muted-foreground italic">
                 No parameters yet. Click &ldquo;Initialize Rig&rdquo; to generate the standard set.
