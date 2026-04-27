@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from '@/store/undoHistory';
+import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -34,6 +35,7 @@ export const DEFAULT_TRANSFORM = () => ({
 export const useProjectStore = create((set) => ({
   project: {
     version: "0.1",
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' },
     textures: [],     // { id, source (data URI or Blob URL) }
     nodes: [],        // flat array — see node schemas below
@@ -225,25 +227,19 @@ export const useProjectStore = create((set) => ({
 
   /** Load a deserialized project from file */
   loadProject: (projectData) => {
+    // Idempotent — the file loader (projectFile.loadProject) has already
+    // migrated, but call again here to defend against direct callers.
+    migrateProject(projectData);
     clearHistory();
     return set(produce((state) => {
       state.project.version = projectData.version;
-      state.project.canvas = {
-        width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
-        ...projectData.canvas,
-      };
+      state.project.schemaVersion = projectData.schemaVersion;
+      state.project.canvas = projectData.canvas;
       state.project.textures = projectData.textures;
-      // Ensure blend shapes fields exist on all nodes (forward-compat with old files)
-      const nodes = projectData.nodes ?? [];
-      for (const node of nodes) {
-        if (node.blendShapes === undefined) node.blendShapes = [];
-        if (node.blendShapeValues === undefined) node.blendShapeValues = {};
-        if (node.puppetWarp === undefined) node.puppetWarp = null;
-      }
-      state.project.nodes = nodes;
-      state.project.animations = projectData.animations ?? [];
-      state.project.parameters = projectData.parameters ?? [];
-      state.project.physics_groups = projectData.physics_groups ?? [];
+      state.project.nodes = projectData.nodes;
+      state.project.animations = projectData.animations;
+      state.project.parameters = projectData.parameters;
+      state.project.physics_groups = projectData.physics_groups;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;

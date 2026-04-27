@@ -9,7 +9,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:diff-harness": "node scripts/native-rig-diff/test_canonicalize.mjs && node scripts/native-rig-diff/test_diff.mjs"
+    "test:diff-harness": "node scripts/native-rig-diff/test_canonicalize.mjs && node scripts/native-rig-diff/test_diff.mjs",
+    "test:migrations": "node scripts/test_migrations.mjs",
+    "test": "npm run test:diff-harness && npm run test:migrations"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

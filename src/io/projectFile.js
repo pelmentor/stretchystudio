@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
 
 /**
  * Serialize the current project to a .stretch ZIP file.
@@ -80,6 +81,7 @@ export async function saveProject(project) {
 
   const projectJson = {
     version: project.version,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     canvas: project.canvas,
     textures: serializedTextures,
     nodes: serializedNodes,
@@ -102,6 +104,12 @@ export async function loadProject(file) {
 
   const projectJsonStr = await zip.file('project.json').async('string');
   const project = JSON.parse(projectJsonStr);
+
+  // Apply schema migrations before any consumer sees this project.
+  // This replaces the scattered forward-compat field defaults that used
+  // to live in this function and in projectStore.loadProject — they're
+  // now centralised in projectMigrations.js (the v1 migration).
+  migrateProject(project);
 
   // Restore textures: load PNGs from zip → create blob URLs + Image elements
   const images = new Map();
@@ -128,21 +136,17 @@ export async function loadProject(file) {
     }
   }
 
-  // Restore mesh typed data and ensure blend shapes exist (forward-compat with old files)
+  // Restore mesh typed data. Field defaults (blendShapes, blendShapeValues,
+  // puppetWarp, audioTracks) are now handled by migrateProject above.
   for (const node of project.nodes) {
     if (node.mesh) {
       node.mesh.uvs = new Float32Array(node.mesh.uvs);
       // edgeIndices stays as Array — partRenderer handles both Array and Set
-
     }
-    // Default blend shapes fields for forward-compat with old files
-    if (node.blendShapes === undefined) node.blendShapes = [];
-    if (node.blendShapeValues === undefined) node.blendShapeValues = {};
   }
 
   // Restore audio tracks: load from zip → create blob URLs
-  for (const anim of project.animations ?? []) {
-    if (!anim.audioTracks) anim.audioTracks = [];
+  for (const anim of project.animations) {
     for (const track of anim.audioTracks) {
       if (track.source) {
         try {

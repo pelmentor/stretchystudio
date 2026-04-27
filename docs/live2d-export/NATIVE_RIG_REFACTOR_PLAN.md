@@ -7,7 +7,7 @@ Living tracker. Update on every stage transition.
 | Stage | Description | Status |
 | --- | --- | --- |
 | 0 | Diff harness foundation (canonicalizer + structural diff) | **shipped** — `scripts/native-rig-diff/`, 34 unit tests, `npm run test:diff-harness` |
-| 0.5 | Schema versioning + migration scaffold | not started |
+| 0.5 | Schema versioning + migration scaffold | **shipped** — `src/store/projectMigrations.js`, 25 unit tests, `npm run test:migrations` |
 | 1 | Parameters + parameter groups | not started |
 | 2 | autoRigConfig (seeder tuning surface) | not started |
 | 3 | Mask configs | not started |
@@ -609,16 +609,18 @@ See "The diff harness" section above for the full design rationale.
 
 #### Stage 0.5 — Schema versioning + migration scaffold
 
-Prerequisite for Stage 1. See "Cross-cutting invariants → Schema
-versioning" above.
+**Status: shipped.**
 
-* Add `project.schemaVersion` field (current = 1).
-* Add `loadProject()` migration runner; identity migration for v1.
-* `.stretch` save writes the current version unconditionally.
-
-**Files:** `src/store/projectStore.js`, new
-`src/store/projectMigrations.js`. **Risk:** low — pure plumbing, no
-behaviour change. Migration table empty at first.
+* `src/store/projectMigrations.js` — `migrateProject()` runner +
+  `CURRENT_SCHEMA_VERSION = 1`. v1 migration is the consolidated
+  forward-compat patcher that previously lived inline in
+  `projectFile.loadProject` and `projectStore.loadProject`.
+* `src/io/projectFile.js` — `loadProject` migrates after JSON.parse;
+  `saveProject` writes `schemaVersion: CURRENT_SCHEMA_VERSION`.
+* `src/store/projectStore.js` — `loadProject` calls `migrateProject`
+  defensively (idempotent); initial state carries `schemaVersion`.
+* 25 unit tests in `scripts/test_migrations.mjs`. Future-version files
+  rejected with a clear error.
 
 #### Stage 1 — Parameters + parameter groups
 
