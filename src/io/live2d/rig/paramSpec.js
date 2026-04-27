@@ -73,29 +73,78 @@ const BONE_PARAM_MAX = BAKED_BONE_ANGLES[BAKED_BONE_ANGLES.length - 1];
 
 /**
  * @typedef {Object} BuildParamSpecInput
- * @property {Array<{id?:string, name?:string, min?:number, max?:number, default?:number}>} [baseParameters]
- *   Parameters loaded from a saved project file (`project.parameters`). Usually empty for
- *   freshly-imported PSDs — the rig is generated rather than persisted.
+ * @property {ParamSpec[]} [baseParameters]
+ *   Parameters loaded from a saved project file (`project.parameters`).
+ *   Two modes:
+ *     - Empty array: today's generator path. The builder synthesizes
+ *       opacity + variants + (when `generateRig`) standard 22 + bone +
+ *       group rotation params from `meshes`/`groups`.
+ *     - Non-empty array: native rig path. The builder treats the entries
+ *       as the canonical spec — no synthesis. Order is preserved as-is.
+ *       ParamOpacity is prepended if missing; otherwise the array is
+ *       authoritative.
+ *   Items with a partial shape (no `role`, no `decimalPlaces`) are still
+ *   accepted in the empty-array fallback — defaults are filled.
  * @property {Array<{variantSuffix?:string|null, variantRole?:string|null, jointBoneId?:string|null, boneWeights?:any}>} [meshes]
  *   Visible art meshes from the project. Used to discover variant suffixes (smile/sad/...) and
- *   bone-driven meshes that need a `ParamRotation_<bone>`.
+ *   bone-driven meshes that need a `ParamRotation_<bone>`. Ignored on the native rig path.
  * @property {Array<{id:string, name?:string}>} [groups]
- *   Group/part nodes — used to look up display names for bone params.
+ *   Group/part nodes — used to look up display names for bone params. Ignored on the native rig path.
  * @property {boolean} [generateRig=false]
  *   When true, emit the 22 SDK-standard params (ParamAngleX/Y/Z, ParamEyeL/ROpen, ...).
+ *   Only applies on the generator path; the native rig path returns
+ *   baseParameters verbatim regardless.
  */
+
+/**
+ * The ParamOpacity entry is always emitted at index 0. Mesh keyform
+ * bindings reference it.
+ */
+const PARAM_OPACITY = Object.freeze({
+  id: 'ParamOpacity',
+  name: 'Opacity',
+  min: 0, max: 1, default: 1, decimalPlaces: 1, repeat: false,
+  role: 'opacity',
+});
+
+/**
+ * Normalise a parameter loaded from `project.parameters` into a full
+ * ParamSpec. Fills sensible defaults for fields that may be absent on
+ * legacy partial-shape entries.
+ */
+function normaliseStoredParameter(p) {
+  const out = {
+    id: p.id,
+    name: p.name ?? p.id,
+    min: p.min ?? 0,
+    max: p.max ?? 1,
+    default: p.default ?? 0,
+    decimalPlaces: p.decimalPlaces ?? 3,
+    repeat: p.repeat ?? false,
+    role: p.role ?? 'project',
+  };
+  if (p.boneId) out.boneId = p.boneId;
+  if (p.variantSuffix) out.variantSuffix = p.variantSuffix;
+  if (p.groupId) out.groupId = p.groupId;
+  return out;
+}
 
 /**
  * Build the canonical parameter list for a project.
  *
  * @param {BuildParamSpecInput} input
- * @returns {ParamSpec[]} Ordered list of parameter specs. Order matches the
- *   layout cmo3writer used pre-refactor:
+ * @returns {ParamSpec[]} Ordered list of parameter specs.
+ *
+ *   Generator path (baseParameters empty):
  *     1. ParamOpacity (always)
- *     2. project.parameters (saved-file params, if any)
- *     3. Variant params (one per used suffix)
- *     4. Standard Live2D params (when generateRig)
- *     5. Bone rotation params (one per jointBoneId)
+ *     2. Variant params (one per used suffix)
+ *     3. Standard Live2D params (when generateRig)
+ *     4. Bone rotation params (one per jointBoneId)
+ *     5. Group rotation params (when generateRig)
+ *
+ *   Native rig path (baseParameters non-empty):
+ *     1. ParamOpacity (prepended if not in baseParameters)
+ *     2. baseParameters in their stored order, normalised
  *
  *   The list is deduplicated by `id` — later entries with a duplicate id are skipped.
  */
@@ -116,28 +165,20 @@ export function buildParameterSpec(input = {}) {
     out.push(spec);
   };
 
-  // 1. ParamOpacity — always present. Required by mesh keyform bindings.
-  push({
-    id: 'ParamOpacity',
-    name: 'Opacity',
-    min: 0, max: 1, default: 1, decimalPlaces: 1, repeat: false,
-    role: 'opacity',
-  });
-
-  // 2. Project parameters — params loaded from a saved .ss project file.
-  for (const p of baseParameters) {
-    if (!p?.id) continue;
-    push({
-      id: p.id,
-      name: p.name ?? p.id,
-      min: p.min ?? 0,
-      max: p.max ?? 1,
-      default: p.default ?? 0,
-      decimalPlaces: 3,
-      repeat: false,
-      role: 'project',
-    });
+  // Native rig path: baseParameters is authoritative. Skip all synthesis.
+  // This is the post-Stage-1 path — `seedParameters()` populated the
+  // project's parameter list once, so we just emit it verbatim.
+  if (baseParameters.length > 0) {
+    push({ ...PARAM_OPACITY });
+    for (const p of baseParameters) {
+      if (!p?.id) continue;
+      push(normaliseStoredParameter(p));
+    }
+    return out;
   }
+
+  // Generator path: synthesise from PSD tags + heuristics.
+  push({ ...PARAM_OPACITY });
 
   // 3. Variant params — one per `.suffix` actually used by a mesh.
   // Variant base/overlay meshes pair on shared tag (see variantNormalizer).
@@ -229,4 +270,46 @@ export function indexParamSpec(specs) {
   const m = new Map();
   for (const s of specs) m.set(s.id, s);
   return m;
+}
+
+/**
+ * Seed `project.parameters` from the auto-rig generator. After this runs,
+ * the project owns its parameter list — exports become deterministic for
+ * this subsystem, and the user can edit the list (Stage 1+ UI).
+ *
+ * Destructive: overwrites the existing `project.parameters`. The plan's
+ * "Seeder semantics" section is the contract — caller is responsible for
+ * any confirmation prompt before calling.
+ *
+ * Idempotent in the sense that calling twice with the same project state
+ * produces the same result. Different from re-seeding after the user has
+ * tweaked the list — that's destructive (intentional).
+ *
+ * @param {object} project - the live project object (mutated)
+ * @returns {ParamSpec[]} the seeded list (also written to project.parameters)
+ */
+export function seedParameters(project) {
+  const meshNodes = (project.nodes ?? []).filter(
+    (n) => n.type === 'part' && n.mesh && n.visible !== false
+  );
+  const groupNodes = (project.nodes ?? []).filter((n) => n.type === 'group');
+
+  // Run the generator with empty baseParameters — forces synthesis of the
+  // full standard + variant + bone + rotation list. Then store the result
+  // verbatim. After this, future `buildParameterSpec({ baseParameters: project.parameters })`
+  // calls take the native rig path and return the seed unchanged.
+  const spec = buildParameterSpec({
+    baseParameters: [],
+    meshes: meshNodes.map((n) => ({
+      variantSuffix: n.variantSuffix ?? null,
+      variantRole: n.variantRole ?? null,
+      jointBoneId: n.mesh?.jointBoneId ?? null,
+      boneWeights: n.mesh?.boneWeights ?? null,
+    })),
+    groups: groupNodes,
+    generateRig: true,
+  });
+
+  project.parameters = spec;
+  return spec;
 }

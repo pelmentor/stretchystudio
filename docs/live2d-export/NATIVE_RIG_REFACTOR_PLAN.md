@@ -8,7 +8,8 @@ Living tracker. Update on every stage transition.
 | --- | --- | --- |
 | 0 | Diff harness foundation (canonicalizer + structural diff) | **shipped** — `scripts/native-rig-diff/`, 34 unit tests, `npm run test:diff-harness` |
 | 0.5 | Schema versioning + migration scaffold | **shipped** — `src/store/projectMigrations.js`, 25 unit tests, `npm run test:migrations` |
-| 1 | Parameters + parameter groups | not started |
+| 1a | Parameters — native rig fork + seeder + equivalence tests | **shipped** — `paramSpec.js` fork, `seedParameters()`, `useProjectStore.seedParameters` action, 21 tests, `npm run test:paramSpec`. UI deferred to 1b. |
+| 1b | Parameters UI panel + delete protection | not started |
 | 2 | autoRigConfig (seeder tuning surface) | not started |
 | 3 | Mask configs | not started |
 | 4 | Face parallax | not started |
@@ -622,30 +623,53 @@ See "The diff harness" section above for the full design rationale.
 * 25 unit tests in `scripts/test_migrations.mjs`. Future-version files
   rejected with a clear error.
 
-#### Stage 1 — Parameters + parameter groups
+#### Stage 1a — Parameters: native rig fork + seeder + equivalence tests
 
-`project.parameters[]` already exists in the schema
-([projectStore.js:35-89](../../src/store/projectStore.js#L35-L89)) but is
-unused by the exporter.
+**Status: shipped.**
 
-* Wire `buildParameterSpec()`
-  ([paramSpec.js:102](../../src/io/live2d/rig/paramSpec.js#L102)).
-* Add `project.parameterGroups` for LipSync / EyeBlink / palette ordering
-  (currently auto-discovered by tag scan).
-* Add minimal Parameters panel.
-* Add "Re-seed parameters" action.
-* **Parameter delete protection** (per "Cross-cutting invariants → ID
-  stability"). Standard params (22 baked-in IDs) cannot be deleted via
-  UI. Custom params (variant, bone-rotation) prompt with a list of
-  referencing animation tracks + physics rules before deletion.
-* **Open question to resolve at kickoff:** confirm dormant
-  `project.parameters` schema matches the `paramSpec` shape produced by
-  `buildParameterSpec()`. If divergent, add a paramSpec → parameters
-  adapter at the seeder.
+Audit at kickoff resolved the open question: `project.parameters[]` was
+in the schema but never populated (no UI, no code path writes to it
+beyond initialisation). Exporter read `project.parameters` and prepended
+its entries (legacy partial shape, role='project' hardcoded). Stage 1a
+extends this without breaking anything.
+
+* `paramSpec.js` `buildParameterSpec` now has a **native rig fork**:
+  when `baseParameters` is non-empty, it skips all generators and emits
+  `[ParamOpacity, ...baseParameters]` verbatim (deduped, opacity
+  prepended only if missing). When empty, today's generator path runs.
+* `paramSpec.js` exports `seedParameters(project)` that runs the
+  generator once and stores the full spec in `project.parameters`.
+* Storage shape extended to full ParamSpec: `role`, `decimalPlaces`,
+  `repeat`, optional `boneId`/`variantSuffix`/`groupId` are preserved.
+  Legacy partial-shape entries get sensible defaults.
+* `useProjectStore.seedParameters` action wraps the function with
+  history snapshot + unsaved-changes flag.
+* 21 unit tests (`scripts/test_paramSpec.mjs`) cover the equivalence
+  invariant (after seed, native path output == generator path output),
+  round-trip serialisation, opacity prepending, order preservation,
+  legacy partial-shape compat, and seed determinism.
 
 **Files:** `src/io/live2d/rig/paramSpec.js`, `src/store/projectStore.js`,
-new `src/components/parameters/ParametersPanel.jsx`.
-**Risk:** low — flat data, schema already partially exists.
+`scripts/test_paramSpec.mjs`, `package.json` (npm script).
+
+#### Stage 1b — Parameters UI + delete protection
+
+Stage 1 was originally bundled with UI work. Splitting it out — the data
+layer (1a) is what unblocks downstream stages; the UI is independent.
+
+* Minimal Parameters panel (read-only list with name/min/max/default).
+* "Re-seed parameters" button + confirmation dialog when seeded data
+  exists.
+* `project.parameterGroups` for LipSync / EyeBlink / palette ordering
+  (currently auto-discovered by tag scan in cdi3 emission).
+* **Delete protection** (per "Cross-cutting invariants → ID stability").
+  Standard params (22 baked-in IDs) cannot be deleted via UI. Custom
+  params (variant, bone-rotation, project-added) prompt with a list of
+  referencing animation tracks + physics rules before deletion.
+
+**Files:** new `src/components/parameters/ParametersPanel.jsx`,
+integration into `EditorLayout`. **Risk:** low — UI work, no data-layer
+risk now that 1a is in.
 
 #### Stage 2 — autoRigConfig (seeder tuning surface)
 

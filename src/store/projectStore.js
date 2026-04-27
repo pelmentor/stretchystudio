@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from '@/store/undoHistory';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
+import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -246,6 +247,23 @@ export const useProjectStore = create((set) => ({
       state.hasUnsavedChanges = false;
     }));
   },
+
+  /**
+   * Seed `project.parameters` from the auto-rig generator (Stage 1).
+   * Destructive: overwrites whatever was there. The seeder runs the
+   * generator path of `buildParameterSpec` and stores its full output,
+   * after which the export pipeline takes the native rig path for
+   * parameters (no synthesis).
+   *
+   * Snapshots history so the user can undo.
+   */
+  seedParameters: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedParametersFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
 
   /** Update canvas properties */
   updateCanvas: (partial) => set(produce((state) => {
