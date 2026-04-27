@@ -35,7 +35,7 @@ demand" rather than speculatively.
 | R1 | RigSpec session cache (`useRigSpecStore`) | **shipped 2026-04-28** |
 | R2 | `cellSelect` — N-binding cross-product cell + lerp weights | **shipped 2026-04-28** |
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | **shipped 2026-04-28** |
-| R4 | `rotationEval` — angle/origin/scale interp + mat3 | not started |
+| R4 | `rotationEval` — angle/origin/scale interp + mat3 | **shipped 2026-04-28** |
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | not started |
 | R6 | Chain composition + first visible demo | not started |
 | R7 | Mask system generalization (stencil) | not started |
@@ -1414,6 +1414,49 @@ chains `evalWarpGrid → bilinearFFD`.
 `npm test`). 1177 tests pass total.
 
 **Tag:** `native-rig-render-stage-R3-complete`.
+
+### v2 Stage R4 — `rotationEval` (shipped 2026-04-28)
+
+Pure JS module covering rotation deformer evaluation + 3×3 affine
+matrix composition.
+
+**`evalRotation(spec, cellInfo)`** blends a rotation deformer's
+keyforms into `{angleDeg, originX, originY, scale, reflectX, reflectY,
+opacity}`. Numeric fields lerp linearly by `cellInfo.weights`; the
+two booleans (`reflectX`, `reflectY`) are taken from the
+heaviest-weighted keyform — in practice they're invariant across a
+single deformer's keyforms anyway. Defensive fallback: zero-weight
+cellInfo returns the spec's first keyform unchanged. Empty / null
+spec returns `null`.
+
+**`buildRotationMat3(state)`** composes the 3×3 row-major affine
+matrix `parentPos = origin + R(angle) · S(scale) · Reflect · pivotRel`.
+Returned as a flat 9-element `Float64Array`
+`[a, b, c, d, e, f, 0, 0, 1]` for cheap matrix multiply.
+
+**`applyMat3ToPoint(m, x, y, out?)`** and
+**`mat3Multiply(a, b, out?)`** — small helpers so callers don't pull
+in a full mat3 library; both accept optional output buffers for
+alloc-free composition. R6 (chain composition) will use them
+heavily.
+
+**Angle blending** stays linear — for the typical Cubism
+[-30, 0, 30] et al. ranges that's exact. Wrap-around lerp deferred
+until any rig actually uses a range crossing ±180°.
+
+**Tests:** 41 cases — single keyform identity, missing-fields
+defaults, 50/50 blend (angle / origin / scale / opacity midpoints),
+reflect heaviest-wins, empty/null spec, zero-weight defensive
+fallback, identity matrix, pure translation, 90° around origin /
+around (10, 20), pure scale, reflectX/Y, combined transform,
+mat3Multiply identity / chained-rotation composition / out param,
+applyMat3ToPoint out param, plus an integration test
+(evalRotation → buildRotationMat3 → applyMat3ToPoint at 50/50 blend
+of 0° and 90°). All pass; total suite at 1218.
+
+**Files:** `src/io/live2d/runtime/evaluator/rotationEval.js` (new),
+`scripts/test_rotationEval.mjs` (new), `package.json`. **Tag:**
+`native-rig-render-stage-R4-complete`.
 
 ## Rollback strategy
 
