@@ -93,6 +93,7 @@ export async function saveProject(project) {
     boneConfig: project.boneConfig ?? null,
     variantFadeRules: project.variantFadeRules ?? null,
     eyeClosureConfig: project.eyeClosureConfig ?? null,
+    rotationDeformerConfig: project.rotationDeformerConfig ?? null,
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

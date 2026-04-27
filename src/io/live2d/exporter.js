@@ -22,6 +22,7 @@ import { resolvePhysicsRules } from './rig/physicsConfig.js';
 import { resolveBoneConfig } from './rig/boneConfig.js';
 import { resolveVariantFadeRules } from './rig/variantFadeRules.js';
 import { resolveEyeClosureConfig } from './rig/eyeClosureConfig.js';
+import { resolveRotationDeformerConfig } from './rig/rotationDeformerConfig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -71,6 +72,7 @@ export async function exportLive2D(project, images, opts = {}) {
   );
   const groupNodesForSpec = project.nodes.filter(n => n.type === 'group');
   const boneConfigResolved = resolveBoneConfig(project);
+  const rotationDeformerConfigResolved = resolveRotationDeformerConfig(project);
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -82,6 +84,7 @@ export async function exportLive2D(project, images, opts = {}) {
     groups: groupNodesForSpec,
     generateRig: true,
     bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
+    rotationDeformerConfig: rotationDeformerConfigResolved,
   });
 
   // --- Step 1: Pack textures ---
@@ -136,6 +139,7 @@ export async function exportLive2D(project, images, opts = {}) {
       bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
       variantFadeRules: variantFadeRulesResolved,
       eyeClosureConfig: eyeClosureConfigResolved,
+      rotationDeformerConfig: rotationDeformerConfigResolved,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -157,6 +161,7 @@ export async function exportLive2D(project, images, opts = {}) {
     rigSpec,
     bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
     variantFadeRules: variantFadeRulesResolved,
+    rotationDeformerConfig: rotationDeformerConfigResolved,
   });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
@@ -493,6 +498,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
     variantFadeRules: resolveVariantFadeRules(project),
     eyeClosureConfig: resolveEyeClosureConfig(project),
+    rotationDeformerConfig: resolveRotationDeformerConfig(project),
   });
 
   // --- Motion synthesis (optional) ---

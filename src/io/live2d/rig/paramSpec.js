@@ -154,7 +154,20 @@ export function buildParameterSpec(input = {}) {
     groups = [],
     generateRig = false,
     bakedKeyformAngles = BAKED_BONE_ANGLES,
+    // Stage 8: rotation deformer config (skipRotationRoles + paramAngleRange).
+    // When absent, falls back to today's hardcoded constants.
+    rotationDeformerConfig = null,
   } = input;
+
+  // Resolve Stage 8 constants used in the group-rotation pass below.
+  const _SKIP_ROT_ROLES = (rotationDeformerConfig
+    && Array.isArray(rotationDeformerConfig.skipRotationRoles))
+    ? rotationDeformerConfig.skipRotationRoles
+    : ['torso', 'eyes', 'neck'];
+  const _ROT_PARAM_MIN = Number.isFinite(rotationDeformerConfig?.paramAngleRange?.min)
+    ? rotationDeformerConfig.paramAngleRange.min : -30;
+  const _ROT_PARAM_MAX = Number.isFinite(rotationDeformerConfig?.paramAngleRange?.max)
+    ? rotationDeformerConfig.paramAngleRange.max : 30;
 
   /** @type {ParamSpec[]} */
   const out = [];
@@ -240,7 +253,7 @@ export function buildParameterSpec(input = {}) {
   // by this param. Mirrored here so moc3writer's bindings can resolve the
   // param ids without referencing a missing entry.
   if (generateRig) {
-    const SKIP_ROTATION_ROLES = new Set(['torso', 'eyes', 'neck']);
+    const SKIP_ROTATION_ROLES = new Set(_SKIP_ROT_ROLES);
     for (const g of groups) {
       if (!g?.id) continue;
       if (seenBones.has(g.id)) continue;       // bones got bone params above
@@ -250,7 +263,7 @@ export function buildParameterSpec(input = {}) {
       push({
         id,
         name: `Rotation ${g.name ?? g.id}`,
-        min: -30, max: 30, default: 0,
+        min: _ROT_PARAM_MIN, max: _ROT_PARAM_MAX, default: 0,
         decimalPlaces: 1, repeat: false,
         role: 'rotation_deformer',
         groupId: g.id,

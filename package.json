@@ -17,8 +17,9 @@
     "test:boneConfig": "node scripts/test_boneConfig.mjs",
     "test:variantFadeRules": "node scripts/test_variantFadeRules.mjs",
     "test:eyeClosureConfig": "node scripts/test_eyeClosureConfig.mjs",
+    "test:rotationDeformerConfig": "node scripts/test_rotationDeformerConfig.mjs",
     "test:e2e": "node scripts/test_e2e_equivalence.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:e2e"
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:e2e"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

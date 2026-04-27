@@ -8,6 +8,7 @@ import { seedPhysicsRules as seedPhysicsRulesFn } from '@/io/live2d/rig/physicsC
 import { seedBoneConfig as seedBoneConfigFn } from '@/io/live2d/rig/boneConfig';
 import { seedVariantFadeRules as seedVariantFadeRulesFn } from '@/io/live2d/rig/variantFadeRules';
 import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '@/io/live2d/rig/eyeClosureConfig';
+import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '@/io/live2d/rig/rotationDeformerConfig';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -88,6 +89,7 @@ export const useProjectStore = create((set) => ({
     boneConfig: null,
     variantFadeRules: null,
     eyeClosureConfig: null,
+    rotationDeformerConfig: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -234,6 +236,7 @@ export const useProjectStore = create((set) => ({
       state.project.boneConfig = null;
       state.project.variantFadeRules = null;
       state.project.eyeClosureConfig = null;
+      state.project.rotationDeformerConfig = null;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -261,6 +264,7 @@ export const useProjectStore = create((set) => ({
       state.project.boneConfig = projectData.boneConfig;
       state.project.variantFadeRules = projectData.variantFadeRules;
       state.project.eyeClosureConfig = projectData.eyeClosureConfig;
+      state.project.rotationDeformerConfig = projectData.rotationDeformerConfig;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -345,6 +349,19 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedEyeClosureConfigFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.rotationDeformerConfig` from defaults (Stage 8). Sets
+   * `skipRotationRoles=['torso','eyes','neck']`, `paramAngleRange=±30`,
+   * `groupRotation` 1:1 ±30, `faceRotation` ±10° on ±30 keys. Destructive.
+   */
+  seedRotationDeformerConfig: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedRotationDeformerConfigFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

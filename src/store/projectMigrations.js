@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -94,6 +94,20 @@ const MIGRATIONS = {
     }
     if (project.eyeClosureConfig === undefined || project.eyeClosureConfig === null) {
       project.eyeClosureConfig = null;
+    }
+    return project;
+  },
+
+  // v6 — Stage 8: project.rotationDeformerConfig bundles the four
+  // rotation-deformer auto-rig constants:
+  //   - skipRotationRoles (boneRoles handled by warps, not rotation deformers)
+  //   - paramAngleRange (ParamRotation_<group> min/max, default ±30)
+  //   - groupRotation.{paramKeys, angles} (default 1:1 ±30)
+  //   - faceRotation.{paramKeys, angles} (default ±10° angles for ±30 keys)
+  // null/missing → resolver returns defaults.
+  6: (project) => {
+    if (project.rotationDeformerConfig === undefined || project.rotationDeformerConfig === null) {
+      project.rotationDeformerConfig = null;
     }
     return project;
   },

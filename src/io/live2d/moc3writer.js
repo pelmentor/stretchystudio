@@ -346,6 +346,9 @@ function buildSectionData(input) {
     // Stage 5: variant fade rules (`backdropTags` exempt from base-fade).
     // When absent, falls back to the canonical Hiyori-style backdrop set.
     variantFadeRules = null,
+    // Stage 8: rotation deformer config — paramSpec consumes
+    // skipRotationRoles + paramAngleRange. Pass-through.
+    rotationDeformerConfig = null,
   } = input;
 
   // Resolve Stage 5 backdrop list to a flat array used inline below.
@@ -397,6 +400,7 @@ function buildSectionData(input) {
     groups,
     generateRig,
     bakedKeyformAngles,
+    rotationDeformerConfig,
   });
 
   // Build Part ID → index map

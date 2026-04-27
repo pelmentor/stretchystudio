@@ -7,7 +7,7 @@
 
 /**
  * Face Rotation deformer — head tilts on Z (ParamAngleZ). Pivot lives at
- * the chin in canvas space; the rotation magnitude is capped at ±10° even
+ * the chin in canvas space; the rotation magnitude defaults to ±10° even
  * when the param is pushed to its full ±30 range (mirrors Hiyori).
  *
  * Chain integration: when the head group has its own rotation deformer
@@ -24,6 +24,9 @@
  *   Required when parentType==='rotation'.
  * @param {(cx:number)=>number} input.canvasToBodyXX
  * @param {(cy:number)=>number} input.canvasToBodyXY
+ * @param {number[]} [input.paramKeys] - Stage 8: ParamAngleZ keys (default [-30,0,30])
+ * @param {number[]} [input.angles] - Stage 8: actual rotation angles per key
+ *   (default [-10,0,10] — Hiyori ±10° cap). Must be same length as paramKeys.
  * @returns {{spec: import('./rigSpec.js').RotationDeformerSpec}}
  */
 export function buildFaceRotationSpec(input) {
@@ -32,7 +35,16 @@ export function buildFaceRotationSpec(input) {
     parentType, parentDeformerId,
     parentPivotCanvas = null,
     canvasToBodyXX, canvasToBodyXY,
+    paramKeys = [-30, 0, 30],
+    angles    = [-10, 0, 10],
   } = input;
+
+  if (paramKeys.length !== angles.length) {
+    throw new Error(
+      `[buildFaceRotationSpec] paramKeys (${paramKeys.length}) and angles `
+      + `(${angles.length}) must have the same length`,
+    );
+  }
 
   const isUnderRotation = parentType === 'rotation';
   if (isUnderRotation && !parentPivotCanvas) {
@@ -47,11 +59,6 @@ export function buildFaceRotationSpec(input) {
   const pivotY = isUnderRotation
     ? facePivotCanvasY - parentPivotCanvas.y
     : canvasToBodyXY(facePivotCanvasY);
-
-  // Param keys vs deformer rotation angles. ParamAngleZ ranges ±30; we
-  // cap actual rotation at ±10° to keep proportions believable.
-  const paramKeys = [-30, 0, 30];
-  const angles    = [-10, 0, 10];
 
   /** @type {import('./rigSpec.js').RotationDeformerSpec} */
   const spec = {
@@ -86,9 +93,11 @@ export function buildFaceRotationSpec(input) {
 
 /**
  * Group Rotation deformer — one per non-bone, non-skipped group. Drives
- * `ParamRotation_<sanitized-group-name>` over its standard ±30 range mapped
- * to ±30° rotation. Parented to ROOT (deferred re-parenting attaches them
- * under the body warp chain after the chain emits).
+ * `ParamRotation_<sanitized-group-name>` over its standard param range
+ * mapped to deformer rotation angles. Default mapping is 1:1 ±30° — for
+ * a ±30 param value, deformer rotates ±30°. Parented to ROOT (deferred
+ * re-parenting attaches them under the body warp chain after the chain
+ * emits).
  *
  * @param {Object} input
  * @param {string} input.id      RigSpec id, e.g. "GroupRotation_neck"
@@ -97,14 +106,25 @@ export function buildFaceRotationSpec(input) {
  * @param {{x:number, y:number}} input.pivotCanvas
  *   Pivot point in canvas pixels. Translator converts to parent's local
  *   frame at emission time.
+ * @param {number[]} [input.paramKeys] - Stage 8: param value keyform stops
+ *   (default [-30,0,30]).
+ * @param {number[]} [input.angles] - Stage 8: deformer rotation angle per
+ *   key (default [-30,0,30] — 1:1 mapping). Must match paramKeys length.
  * @returns {{spec: import('./rigSpec.js').RotationDeformerSpec}}
  */
 export function buildGroupRotationSpec(input) {
-  const { id, name, paramId, pivotCanvas } = input;
+  const {
+    id, name, paramId, pivotCanvas,
+    paramKeys = [-30, 0, 30],
+    angles    = [-30, 0, 30],
+  } = input;
 
-  // Group rotations follow Hiyori's convention: ±30° mapping for ±30 param.
-  const paramKeys = [-30, 0, 30];
-  const angles    = [-30, 0, 30];
+  if (paramKeys.length !== angles.length) {
+    throw new Error(
+      `[buildGroupRotationSpec] paramKeys (${paramKeys.length}) and angles `
+      + `(${angles.length}) must have the same length`,
+    );
+  }
 
   /** @type {import('./rigSpec.js').RotationDeformerSpec} */
   const spec = {

@@ -196,6 +196,27 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v5 lacks rotationDeformerConfig. v6 migration adds it as null.
+  const p = { schemaVersion: 5 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v5→current: schemaVersion bumped');
+  assert(p.rotationDeformerConfig === null, 'v5→current: rotationDeformerConfig added as null');
+}
+
+{
+  // Pre-existing rotationDeformerConfig preserved.
+  const cfg = {
+    skipRotationRoles: ['torso'],
+    paramAngleRange: { min: -45, max: 45 },
+    groupRotation: { paramKeys: [-30, 0, 30], angles: [-45, 0, 45] },
+    faceRotation: { paramKeys: [-30, 0, 30], angles: [-15, 0, 15] },
+  };
+  const p = { schemaVersion: 5, rotationDeformerConfig: cfg };
+  migrateProject(p);
+  assert(p.rotationDeformerConfig === cfg, 'v5→current: existing rotationDeformerConfig preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -205,6 +226,7 @@ function assertThrows(fn, name) {
   assert(p.boneConfig === null, 'v0→current: boneConfig added as null');
   assert(p.variantFadeRules === null, 'v0→current: variantFadeRules added as null');
   assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');
+  assert(p.rotationDeformerConfig === null, 'v0→current: rotationDeformerConfig added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

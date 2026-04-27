@@ -121,6 +121,10 @@ export function emitFaceRotation(x, ctx) {
     headGroupId, groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     allDeformerSources, pidPartGuid, pidCoord, rootPart,
+    // Stage 8: paramKeys + angles for face rotation. Default mirrors
+    // Hiyori's ±10° cap on ±30 ParamAngleZ.
+    faceRotationParamKeys = [-30, 0, 30],
+    faceRotationAngles    = [-10, 0, 10],
   } = ctx;
 
   // ── Face Rotation (CRotationDeformerSource) ──
@@ -134,6 +138,8 @@ export function emitFaceRotation(x, ctx) {
     parentDeformerId: headGroupRotPid ? `GroupRotation_${headGroupId}` : 'BodyXWarp',
     parentPivotCanvas: headGroupRotPid ? headGroupPivot : null,
     canvasToBodyXX, canvasToBodyXY,
+    paramKeys: faceRotationParamKeys,
+    angles:    faceRotationAngles,
   });
   if (ctx.rigCollector) ctx.rigCollector.rotationDeformers.push(faceRotSpec);
   const faceRotParamKeys = faceRotSpec.bindings[0].keys;

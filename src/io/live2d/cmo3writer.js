@@ -137,6 +137,11 @@ export async function generateCmo3(input) {
     // `binCount`. When absent, falls back to defaults from
     // rig/eyeClosureConfig.js.
     eyeClosureConfig = null,
+    // Rotation deformer config (Stage 8). Bundles skipRotationRoles +
+    // paramAngleRange + groupRotation/faceRotation paramKey→angle
+    // mappings. When absent, falls back to defaults from
+    // rig/rotationDeformerConfig.js.
+    rotationDeformerConfig = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -152,6 +157,38 @@ export async function generateCmo3(input) {
     ? eyeClosureConfig.lashStripFrac : 0.06;
   const _EYE_CLOSURE_BIN_COUNT = Number.isFinite(eyeClosureConfig?.binCount) && eyeClosureConfig.binCount > 0
     ? eyeClosureConfig.binCount : 6;
+
+  // Stage 8: rotation deformer config — skip roles + param range + paramKey/
+  // angle mappings. Each falls back to today's hardcoded value when the
+  // corresponding sub-field is missing or malformed.
+  const _ROT_SKIP_ROLES = (rotationDeformerConfig
+    && Array.isArray(rotationDeformerConfig.skipRotationRoles))
+    ? rotationDeformerConfig.skipRotationRoles
+    : ['torso', 'eyes', 'neck'];
+  const _ROT_PARAM_RANGE_MIN = Number.isFinite(rotationDeformerConfig?.paramAngleRange?.min)
+    ? rotationDeformerConfig.paramAngleRange.min : -30;
+  const _ROT_PARAM_RANGE_MAX = Number.isFinite(rotationDeformerConfig?.paramAngleRange?.max)
+    ? rotationDeformerConfig.paramAngleRange.max : 30;
+  const _ROT_GROUP_PARAM_KEYS = (rotationDeformerConfig?.groupRotation
+    && Array.isArray(rotationDeformerConfig.groupRotation.paramKeys)
+    && rotationDeformerConfig.groupRotation.paramKeys.length > 0)
+    ? rotationDeformerConfig.groupRotation.paramKeys
+    : [-30, 0, 30];
+  const _ROT_GROUP_ANGLES = (rotationDeformerConfig?.groupRotation
+    && Array.isArray(rotationDeformerConfig.groupRotation.angles)
+    && rotationDeformerConfig.groupRotation.angles.length === _ROT_GROUP_PARAM_KEYS.length)
+    ? rotationDeformerConfig.groupRotation.angles
+    : [-30, 0, 30];
+  const _ROT_FACE_PARAM_KEYS = (rotationDeformerConfig?.faceRotation
+    && Array.isArray(rotationDeformerConfig.faceRotation.paramKeys)
+    && rotationDeformerConfig.faceRotation.paramKeys.length > 0)
+    ? rotationDeformerConfig.faceRotation.paramKeys
+    : [-30, 0, 30];
+  const _ROT_FACE_ANGLES = (rotationDeformerConfig?.faceRotation
+    && Array.isArray(rotationDeformerConfig.faceRotation.angles)
+    && rotationDeformerConfig.faceRotation.angles.length === _ROT_FACE_PARAM_KEYS.length)
+    ? rotationDeformerConfig.faceRotation.angles
+    : [-10, 0, 10];
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
   // Emitted as `{modelName}.rig.log.json` alongside the .cmo3 in the export zip.
@@ -255,6 +292,7 @@ export async function generateCmo3(input) {
     groups,
     generateRig,
     bakedKeyformAngles,
+    rotationDeformerConfig,
   });
 
   // Materialise paramDefs by attaching the cmo3-specific XML pid to each spec.
@@ -1640,9 +1678,10 @@ export async function generateCmo3(input) {
   // Exported: groupId → parameter ID string (for animation export)
   const deformerParamMap = new Map(); // groupId → { paramId, min, max }
 
-  // Default rotation range for generic parameter bindings (Approach B from Session 8 prompt)
-  const DEFORMER_ANGLE_MIN = -30;
-  const DEFORMER_ANGLE_MAX = 30;
+  // Default rotation range for generic parameter bindings (Approach B from
+  // Session 8 prompt). Stage 8: resolved from project.rotationDeformerConfig.
+  const DEFORMER_ANGLE_MIN = _ROT_PARAM_RANGE_MIN;
+  const DEFORMER_ANGLE_MAX = _ROT_PARAM_RANGE_MAX;
 
   // Bone nodes get baked keyforms on their meshes instead of rotation deformers.
   // Their parameters were already created in the pre-creation step above.
@@ -1661,7 +1700,8 @@ export async function generateCmo3(input) {
   // neck mesh rotates around this wrong pivot and appears to "tear off" from
   // the shoulders. Letting neck fall through to NeckWarp → Body X Warp directly
   // yields clean warp-grid deformation aligned with shoulders.
-  const SKIP_ROTATION_ROLES = new Set(['torso', 'eyes', 'neck']);
+  // Stage 8: skip set resolved from project.rotationDeformerConfig.
+  const SKIP_ROTATION_ROLES = new Set(_ROT_SKIP_ROLES);
 
   for (const g of groups) {
     // Skip bone nodes — they get baked mesh keyforms, not rotation deformers
@@ -1674,10 +1714,19 @@ export async function generateCmo3(input) {
     const [, pidDfGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: `Rot_${g.name || g.id}` });
     groupDeformerGuids.set(g.id, pidDfGuid);
 
-    // 3 keyforms: angle at min, angle at default (0), angle at max
-    const [, pidDfFormMin] = x.shared('CFormGuid', { uuid: uuid(), note: `RotForm_${g.name}_min` });
-    const [, pidDfFormDef] = x.shared('CFormGuid', { uuid: uuid(), note: `RotForm_${g.name}_def` });
-    const [, pidDfFormMax] = x.shared('CFormGuid', { uuid: uuid(), note: `RotForm_${g.name}_max` });
+    // Stage 8: keyform count = paramKeys length (default 3 = min/def/max).
+    // Allocate one CFormGuid per key.
+    const _GROUP_PARAM_KEYS = _ROT_GROUP_PARAM_KEYS;
+    const _GROUP_ANGLES     = _ROT_GROUP_ANGLES;
+    const _GROUP_KF_COUNT   = _GROUP_PARAM_KEYS.length;
+    const groupFormGuidPids = [];
+    for (let kfi = 0; kfi < _GROUP_KF_COUNT; kfi++) {
+      const [, pidForm] = x.shared('CFormGuid', {
+        uuid: uuid(),
+        note: `RotForm_${g.name}_${_GROUP_PARAM_KEYS[kfi]}`,
+      });
+      groupFormGuidPids.push(pidForm);
+    }
 
     // Parameter for this deformer: ParamRotation_GroupName
     // Guard: bone params are pre-created above — skip if ID already exists
@@ -1708,6 +1757,8 @@ export async function generateCmo3(input) {
       name: g.name || g.id,
       paramId: rotParamId,
       pivotCanvas: { x: _gWorldOrigin.x, y: _gWorldOrigin.y },
+      paramKeys: _GROUP_PARAM_KEYS,
+      angles:    _GROUP_ANGLES,
     });
     // Initial parent override: if g has a parent group with a deformer, use it
     if (g.parent && groupDeformerGuids.has(g.parent)) {
@@ -1722,36 +1773,20 @@ export async function generateCmo3(input) {
     // KeyformBindingSource — links this deformer to its rotation parameter
     const [kfBinding, pidKfBinding] = x.shared('KeyformBindingSource');
 
-    // KeyformGridSource (3 keyforms, 1 parameter binding)
+    // KeyformGridSource (one keyform per paramKey, 1 parameter binding)
     const [kfgDf, pidKfgDf] = x.shared('KeyformGridSource');
-    const kfogDf = x.sub(kfgDf, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '3' });
-
-    // KeyformOnGrid[0] — angle at min
-    const kog0 = x.sub(kfogDf, 'KeyformOnGrid');
-    const ak0 = x.sub(kog0, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-    const kop0 = x.sub(ak0, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
-    const kon0 = x.sub(kop0, 'KeyOnParameter');
-    x.subRef(kon0, 'KeyformBindingSource', pidKfBinding, { 'xs.n': 'binding' });
-    x.sub(kon0, 'i', { 'xs.n': 'keyIndex' }).text = '0';
-    x.subRef(kog0, 'CFormGuid', pidDfFormMin, { 'xs.n': 'keyformGuid' });
-
-    // KeyformOnGrid[1] — angle at default (0)
-    const kog1 = x.sub(kfogDf, 'KeyformOnGrid');
-    const ak1 = x.sub(kog1, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-    const kop1 = x.sub(ak1, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
-    const kon1 = x.sub(kop1, 'KeyOnParameter');
-    x.subRef(kon1, 'KeyformBindingSource', pidKfBinding, { 'xs.n': 'binding' });
-    x.sub(kon1, 'i', { 'xs.n': 'keyIndex' }).text = '1';
-    x.subRef(kog1, 'CFormGuid', pidDfFormDef, { 'xs.n': 'keyformGuid' });
-
-    // KeyformOnGrid[2] — angle at max
-    const kog2 = x.sub(kfogDf, 'KeyformOnGrid');
-    const ak2 = x.sub(kog2, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-    const kop2 = x.sub(ak2, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
-    const kon2 = x.sub(kop2, 'KeyOnParameter');
-    x.subRef(kon2, 'KeyformBindingSource', pidKfBinding, { 'xs.n': 'binding' });
-    x.sub(kon2, 'i', { 'xs.n': 'keyIndex' }).text = '2';
-    x.subRef(kog2, 'CFormGuid', pidDfFormMax, { 'xs.n': 'keyformGuid' });
+    const kfogDf = x.sub(kfgDf, 'array_list', {
+      'xs.n': 'keyformsOnGrid', count: String(_GROUP_KF_COUNT),
+    });
+    for (let kfi = 0; kfi < _GROUP_KF_COUNT; kfi++) {
+      const kog = x.sub(kfogDf, 'KeyformOnGrid');
+      const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+      const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+      const kon = x.sub(kop, 'KeyOnParameter');
+      x.subRef(kon, 'KeyformBindingSource', pidKfBinding, { 'xs.n': 'binding' });
+      x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(kfi);
+      x.subRef(kog, 'CFormGuid', groupFormGuidPids[kfi], { 'xs.n': 'keyformGuid' });
+    }
 
     // keyformBindings list
     const kfbList = x.sub(kfgDf, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
@@ -1761,11 +1796,11 @@ export async function generateCmo3(input) {
     x.subRef(kfBinding, 'KeyformGridSource', pidKfgDf, { 'xs.n': '_gridSource' });
     x.subRef(kfBinding, 'CParameterGuid', pidRotParam, { 'xs.n': 'parameterGuid' });
     const keysArr = x.sub(kfBinding, 'array_list', {
-      'xs.n': 'keys', count: '3',
+      'xs.n': 'keys', count: String(_GROUP_KF_COUNT),
     });
-    x.sub(keysArr, 'f').text = String(DEFORMER_ANGLE_MIN) + '.0';
-    x.sub(keysArr, 'f').text = '0.0';
-    x.sub(keysArr, 'f').text = String(DEFORMER_ANGLE_MAX) + '.0';
+    for (const k of _GROUP_PARAM_KEYS) {
+      x.sub(keysArr, 'f').text = `${k}.0`;
+    }
     x.sub(kfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
     x.sub(kfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
     x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
@@ -1817,10 +1852,12 @@ export async function generateCmo3(input) {
     const originX = worldOrigin.x - parentWorldOrigin.x;
     const originY = worldOrigin.y - parentWorldOrigin.y;
 
-    // 3 keyforms: min angle, default (0), max angle
+    // N keyforms — one per paramKey (default 3: min/def/max).
     // All share the same origin (origin changes are rare — Hiyori does it for some deformers
     // but for generic export, keeping origin constant across keyforms is correct)
-    const kfsDf = x.sub(rotDf, 'carray_list', { 'xs.n': 'keyforms', count: '3' });
+    const kfsDf = x.sub(rotDf, 'carray_list', {
+      'xs.n': 'keyforms', count: String(_GROUP_KF_COUNT),
+    });
 
     // Helper to emit one CRotationDeformerForm
     const rotFormNodes = []; // stored for origin re-patching in section 3d
@@ -1852,9 +1889,9 @@ export async function generateCmo3(input) {
       x.subRef(adfSuper, 'CoordType', pidCoordDf, { 'xs.n': 'coordType' });
     };
 
-    emitRotForm(pidDfFormMin, DEFORMER_ANGLE_MIN);
-    emitRotForm(pidDfFormDef, 0);
-    emitRotForm(pidDfFormMax, DEFORMER_ANGLE_MAX);
+    for (let kfi = 0; kfi < _GROUP_KF_COUNT; kfi++) {
+      emitRotForm(groupFormGuidPids[kfi], _GROUP_ANGLES[kfi]);
+    }
     rotDeformerOriginNodes.set(g.id, { forms: rotFormNodes, ox: originX, oy: originY, wx: worldOrigin.x, wy: worldOrigin.y, coordNode: coordDf });
 
     x.sub(rotDf, 'f', { 'xs.n': 'handleLengthOnCanvas' }).text = '200.0';
@@ -3377,6 +3414,8 @@ export async function generateCmo3(input) {
         canvasToBodyXX, canvasToBodyXY,
         allDeformerSources, pidPartGuid, pidCoord, rootPart,
         rigCollector,
+        faceRotationParamKeys: _ROT_FACE_PARAM_KEYS,
+        faceRotationAngles:    _ROT_FACE_ANGLES,
       });
 
       // ── FaceParallax warp (6×6 grid, 9kf on AngleX × AngleY) ──

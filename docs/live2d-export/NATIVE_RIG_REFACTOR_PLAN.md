@@ -16,7 +16,7 @@ Living tracker. Update on every stage transition.
 | 5 | Variant fade rules + eye closure config | **shipped** — `src/io/live2d/rig/variantFadeRules.js` (`DEFAULT_BACKDROP_TAGS` + `seedVariantFadeRules` + `resolveVariantFadeRules`) and `src/io/live2d/rig/eyeClosureConfig.js` (`DEFAULT_EYE_CLOSURE_TAGS` + `DEFAULT_LASH_STRIP_FRAC` + `DEFAULT_BIN_COUNT` + `seedEyeClosureConfig` + `resolveEyeClosureConfig`). Schema v5. Both writers fork on the resolved configs (cmo3 reads both, moc3 reads variantFadeRules — eye closure keyforms come from rigSpec.eyeClosure built in cmo3). 52 tests, `npm run test:variantFadeRules` + `npm run test:eyeClosureConfig`. |
 | 6 | Physics rules | **shipped** — `src/io/live2d/rig/physicsConfig.js` (`DEFAULT_PHYSICS_RULES` + `seedPhysicsRules` + `resolvePhysicsRules`). Schema v3. Both `cmo3/physics.js` and `physics3json.js` refactored to consume pre-resolved rules (boneOutputs flattened at seed time). 83 tests, `npm run test:physicsConfig`. |
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
-| 8 | Rotation deformers (keyforms) | not started |
+| 8 | Rotation deformers (config) | **shipped** — `src/io/live2d/rig/rotationDeformerConfig.js` (`DEFAULT_ROTATION_DEFORMER_CONFIG` bundles `skipRotationRoles` + `paramAngleRange` + `groupRotation`/`faceRotation` paramKey→angle mappings). Schema v6. cmo3writer keyform emission generalised from 3-keyform to N-keyform; paramSpec consumes skipRoles + range; bodyRig threads faceRotation paramKeys/angles. Pivots stay computed live (no snapshot). 49 tests, `npm run test:rotationDeformerConfig`. |
 | 9 | Tag warp bindings (keyforms — biggest stage) | not started |
 | 10 | Body warp chain (keyforms) | not started |
 | 11 | Final cleanup (remove generator branches) | not started |
@@ -820,14 +820,60 @@ These store per-vertex deltas across N keyforms. The seeder runs
 `shiftFn` and bakes outputs (see "Architectural decision: precompile" in
 Goal). Diff harness needs float tolerance here.
 
-#### Stage 8 — Rotation deformers
+#### Stage 8 — Rotation deformers (config)
 
-Per-group rotation deformer keyforms ([rotationDeformers.js](../../src/io/live2d/rig/rotationDeformers.js))
-move into `project.rotationDeformers[]`. Already partially structured by
-`rigSpec`.
+**Status: shipped.**
 
-**Files:** `rig/rotationDeformers.js`, both writers.
-**Risk:** medium — float precision in keyform data.
+Pragmatic interpretation: rotation-deformer "keyforms" are just
+`(paramKey, angle)` tuples plus a live-computed pivot — there's no
+per-vertex delta data to stage as keyforms. Stage 8 lifts the four
+hardcoded constants that previously drove auto-rig output:
+
+* `src/io/live2d/rig/rotationDeformerConfig.js` —
+  `DEFAULT_ROTATION_DEFORMER_CONFIG` bundles:
+    - `skipRotationRoles` (boneRoles handled by warps, not rotation
+      deformers; default `['torso','eyes','neck']`).
+    - `paramAngleRange` (`ParamRotation_<group>` min/max; default ±30).
+    - `groupRotation.{paramKeys, angles}` (default 1:1 ±30).
+    - `faceRotation.{paramKeys, angles}` (default ±10° on ±30 keys —
+      Hiyori cap).
+  Plus builder / resolver / seeder following Stage 5/6/7 pattern.
+* Schema bumped to v6 with migration adding `project.rotationDeformerConfig`
+  (default null; resolver provides defaults when null).
+* `paramSpec.js` consumes `rotationDeformerConfig.skipRotationRoles` +
+  `paramAngleRange` to pick which groups get a `ParamRotation_*` and at
+  what range. Eliminates the duplicated `SKIP_ROTATION_ROLES` constant
+  that previously lived in both paramSpec and cmo3writer.
+* `cmo3writer.js` consumes the full config; rotation-deformer keyform
+  emission generalised from a hardcoded 3-keyform shape (min/def/max)
+  to **N-keyform** based on `groupRotation.paramKeys.length`. Defaults
+  (3 keyforms) match exact previous output bit-for-bit.
+* `cmo3/bodyRig.js` (`emitFaceRotation`) takes `faceRotationParamKeys`
+  + `faceRotationAngles` ctx args, threading through to
+  `buildFaceRotationSpec`.
+* `rig/rotationDeformers.js` `buildFaceRotationSpec` +
+  `buildGroupRotationSpec` accept `paramKeys` + `angles` input args
+  with default fallbacks; throw on length mismatch.
+* `moc3writer.js` accepts `rotationDeformerConfig` (pass-through to
+  paramSpec via `buildSectionData`).
+* `useProjectStore.seedRotationDeformerConfig` action.
+* 49 unit tests cover the DEFAULT contract, build-returns-mutable-copy,
+  populated/null/malformed resolution branching, destructive seed,
+  buildFaceRotationSpec / buildGroupRotationSpec param overrides + length-mismatch
+  throws, paramSpec consuming the config, JSON round-trip + custom values.
+
+Pivots stay computed live from `g.transform` at export time — re-seed
+not required when user moves a group; only the angle mapping is frozen.
+`scale=1.0` and `useBoneUiTestImpl=true` remain hardcoded in builders
+(would belong in a hypothetical Stage 8b that exposes more rotation
+deformer fields if anyone ever needs them).
+
+**Files:** `src/io/live2d/rig/rotationDeformerConfig.js` (new),
+`src/io/live2d/rig/rotationDeformers.js`, `src/io/live2d/rig/paramSpec.js`,
+`src/io/live2d/cmo3writer.js`, `src/io/live2d/cmo3/bodyRig.js`,
+`src/io/live2d/moc3writer.js`, `src/io/live2d/exporter.js`,
+`src/store/projectStore.js`, `src/io/projectFile.js`,
+`src/store/projectMigrations.js`.
 
 #### Stage 9 — Tag warp bindings (the big one)
 
