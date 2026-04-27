@@ -9,6 +9,7 @@ import { seedBoneConfig as seedBoneConfigFn } from '@/io/live2d/rig/boneConfig';
 import { seedVariantFadeRules as seedVariantFadeRulesFn } from '@/io/live2d/rig/variantFadeRules';
 import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '@/io/live2d/rig/eyeClosureConfig';
 import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '@/io/live2d/rig/rotationDeformerConfig';
+import { seedAutoRigConfig as seedAutoRigConfigFn } from '@/io/live2d/rig/autoRigConfig';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -90,6 +91,7 @@ export const useProjectStore = create((set) => ({
     variantFadeRules: null,
     eyeClosureConfig: null,
     rotationDeformerConfig: null,
+    autoRigConfig: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -362,6 +364,20 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       seedRotationDeformerConfigFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.autoRigConfig` from defaults (Stage 2). Three sections —
+   * bodyWarp (HIP/FEET fallbacks, BX/BY/Breath margins, upper-body shape),
+   * faceParallax (depth coefficients, protection per tag, eye/squash amps,
+   * super-groups), neckWarp (tilt fraction). Destructive.
+   */
+  seedAutoRigConfig: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedAutoRigConfigFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

@@ -142,6 +142,12 @@ export async function generateCmo3(input) {
     // mappings. When absent, falls back to defaults from
     // rig/rotationDeformerConfig.js.
     rotationDeformerConfig = null,
+    // autoRigConfig (Stage 2). Three sections: bodyWarp (HIP/FEET
+    // fallbacks, BX/BY/Breath margins, upper-body shape), faceParallax
+    // (depth, protection, eye/squash amps), neckWarp (tilt fraction).
+    // When absent, each generator falls back to DEFAULT_AUTO_RIG_CONFIG
+    // for that section. See `rig/autoRigConfig.js`.
+    autoRigConfig = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -2583,6 +2589,7 @@ export async function generateCmo3(input) {
     canvasH,
     bodyAnalysis,
     hasParamBodyAngleX: !!paramDefs.find(p => p.id === 'ParamBodyAngleX')?.pid,
+    autoRigBodyWarp: autoRigConfig?.bodyWarp,
   });
   // canvasToBodyXX/Y are used by face parallax, neck warp, and per-part rig
   // warp grids when they rebase canvas coords into Body X 0..1 space. The
@@ -3382,6 +3389,7 @@ export async function generateCmo3(input) {
       canvasToBodyXX, canvasToBodyXY,
       pidCoord, rigDebugLog, emitCtx,
       rigCollector,
+      autoRigNeckWarp: autoRigConfig?.neckWarp,
     });
 
     // ==================================================================
@@ -3430,6 +3438,7 @@ export async function generateCmo3(input) {
         pidPartGuid, pidCoord,
         rigDebugLog,
         rigCollector,
+        autoRigFaceParallax: autoRigConfig?.faceParallax,
       });
       if (pidFpGuid) faceParallaxGuids.set('__all__', pidFpGuid);
     }

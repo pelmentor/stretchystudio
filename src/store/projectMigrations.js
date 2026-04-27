@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -108,6 +108,18 @@ const MIGRATIONS = {
   6: (project) => {
     if (project.rotationDeformerConfig === undefined || project.rotationDeformerConfig === null) {
       project.rotationDeformerConfig = null;
+    }
+    return project;
+  },
+
+  // v7 — Stage 2: project.autoRigConfig is the seeder tuning surface.
+  // Three sections: bodyWarp (HIP/FEET fallbacks, BX/BY/Breath margins,
+  // upper-body shape), faceParallax (depth coefficients, protection
+  // per tag, super-groups, eye/squash amps), neckWarp (tilt fraction).
+  // null/missing → resolver returns defaults for each section.
+  7: (project) => {
+    if (project.autoRigConfig === undefined || project.autoRigConfig === null) {
+      project.autoRigConfig = null;
     }
     return project;
   },

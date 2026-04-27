@@ -18,12 +18,9 @@
  */
 
 import { makeUniformGrid } from '../cmo3/deformerEmit.js';
+import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
 
 const SC = 5;          // 5×5 cells = 6×6 control points
-const BX_MIN = 0.10;   // Body X grid range inside Breath's 0..1 frame
-const BX_MAX = 0.90;
-const BY_MARGIN = 0.065;
-const BR_MARGIN = 0.055;
 
 /**
  * @typedef {Object} BodyWarpChainInput
@@ -37,6 +34,10 @@ const BR_MARGIN = 0.055;
  * @property {boolean} [hasParamBodyAngleX=true]
  *   When false, BX is omitted from the chain (it's the only one gated by a
  *   conditional param presence in the legacy code).
+ * @property {import('./autoRigConfig.js').AutoRigBodyWarp} [autoRigBodyWarp]
+ *   Tunable defaults from `project.autoRigConfig.bodyWarp`. Falls back to
+ *   `DEFAULT_AUTO_RIG_CONFIG.bodyWarp` when omitted (preserves identical
+ *   behaviour for legacy callers).
  */
 
 /**
@@ -63,7 +64,15 @@ const BR_MARGIN = 0.055;
  * @returns {BodyWarpChainResult}
  */
 export function buildBodyWarpChain(input) {
-  const { perMesh, canvasW, canvasH, bodyAnalysis, hasParamBodyAngleX = true } = input;
+  const {
+    perMesh, canvasW, canvasH, bodyAnalysis, hasParamBodyAngleX = true,
+    autoRigBodyWarp = DEFAULT_AUTO_RIG_CONFIG.bodyWarp,
+  } = input;
+
+  const BX_MIN = autoRigBodyWarp.bxRange.min;
+  const BX_MAX = autoRigBodyWarp.bxRange.max;
+  const BY_MARGIN = autoRigBodyWarp.byMargin;
+  const BR_MARGIN = autoRigBodyWarp.breathMargin;
 
   // ── Canvas bbox for the BZ grid (~10% pad beyond character extent) ──
   let allMinX = Infinity, allMinY = Infinity, allMaxX = -Infinity, allMaxY = -Infinity;
@@ -79,7 +88,7 @@ export function buildBodyWarpChain(input) {
   }
   const charW = (allMaxX - allMinX) || canvasW;
   const charH = (allMaxY - allMinY) || canvasH;
-  const padFrac = 0.10;
+  const padFrac = autoRigBodyWarp.canvasPadFrac;
   const BZ_MIN_X = allMinX - charW * padFrac;
   const BZ_MAX_X = allMaxX + charW * padFrac;
   const BZ_MIN_Y = allMinY - charH * padFrac;
@@ -109,9 +118,9 @@ export function buildBodyWarpChain(input) {
   const scGridPts = scGW * scGH;
 
   // ── Hip / feet anchors derived from anatomy where available ──
-  const HIP_FRAC_DEFAULT  = 0.45;
-  const FEET_FRAC_DEFAULT = 0.75;
-  const FEET_MARGIN_RF    = 0.05;
+  const HIP_FRAC_DEFAULT  = autoRigBodyWarp.hipFracDefault;
+  const FEET_FRAC_DEFAULT = autoRigBodyWarp.feetFracDefault;
+  const FEET_MARGIN_RF    = autoRigBodyWarp.feetMarginRf;
   let HIP_FRAC = HIP_FRAC_DEFAULT;
   let FEET_FRAC = FEET_FRAC_DEFAULT;
   let bodyFracSource = 'defaults';
@@ -201,8 +210,8 @@ export function buildBodyWarpChain(input) {
         const cf = c / (scGW - 1);
         const distAboveHip = Math.max(0, HIP_FRAC - rf) / HIP_FRAC;
         const legFade = bodyMoveFactor(rf);
-        const UPPER_BODY_T_CAP = 0.5;
-        const UPPER_BODY_SLOPE = 1.5;
+        const UPPER_BODY_T_CAP = autoRigBodyWarp.upperBodyTCap;
+        const UPPER_BODY_SLOPE = autoRigBodyWarp.upperBodySlope;
         const t = rf <= HIP_FRAC
           ? Math.min(UPPER_BODY_T_CAP, 0.08 + UPPER_BODY_SLOPE * distAboveHip)
           : legFade * 0.25;

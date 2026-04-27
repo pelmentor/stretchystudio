@@ -13,6 +13,8 @@
  * @module io/live2d/rig/warpDeformers
  */
 
+import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
+
 /**
  * Build the Neck Warp spec — bends the neck area in sync with head tilt
  * (ParamAngleZ). Bottom row pins at shoulders, top row shifts horizontally
@@ -41,6 +43,9 @@
  * @param {(cy:number)=>number} input.canvasToBodyXY
  *   Canvas → Body X Warp local-Y normaliser. Required when
  *   `parentType === 'warp'`.
+ * @param {import('./autoRigConfig.js').AutoRigNeckWarp} [input.autoRigNeckWarp]
+ *   Tunable defaults from `project.autoRigConfig.neckWarp`. Falls back
+ *   to `DEFAULT_AUTO_RIG_CONFIG.neckWarp` when omitted.
  * @returns {{
  *   spec: import('./rigSpec.js').WarpDeformerSpec,
  *   debug: {
@@ -55,6 +60,7 @@ export function buildNeckWarpSpec(input) {
     neckUnionBbox, parentType, parentDeformerId,
     parentPivotCanvas = null,
     canvasToBodyXX, canvasToBodyXY,
+    autoRigNeckWarp = DEFAULT_AUTO_RIG_CONFIG.neckWarp,
   } = input;
 
   // 5×5 cells = 6×6 control points. Matches Hiyori's neck warp grid size.
@@ -99,7 +105,7 @@ export function buildNeckWarpSpec(input) {
   // 3 keyforms on ParamAngleZ at -30/0/+30. At ±30 the top row shifts in X
   // by NECK_TILT_FRAC * spanX. Row gradient sin(π·(1 - rf) / 2) is 1 at
   // top row and 0 at bottom row, so shoulders stay pinned.
-  const NECK_TILT_FRAC = 0.08;
+  const NECK_TILT_FRAC = autoRigNeckWarp.tiltFrac;
   const keys = [-30, 0, 30];
   const keyformPositions = keys.map(k => {
     const pos = new Float64Array(baseGrid);

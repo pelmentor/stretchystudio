@@ -23,6 +23,7 @@ import { resolveBoneConfig } from './rig/boneConfig.js';
 import { resolveVariantFadeRules } from './rig/variantFadeRules.js';
 import { resolveEyeClosureConfig } from './rig/eyeClosureConfig.js';
 import { resolveRotationDeformerConfig } from './rig/rotationDeformerConfig.js';
+import { resolveAutoRigConfig } from './rig/autoRigConfig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -73,6 +74,7 @@ export async function exportLive2D(project, images, opts = {}) {
   const groupNodesForSpec = project.nodes.filter(n => n.type === 'group');
   const boneConfigResolved = resolveBoneConfig(project);
   const rotationDeformerConfigResolved = resolveRotationDeformerConfig(project);
+  const autoRigConfigResolved = resolveAutoRigConfig(project);
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -140,6 +142,7 @@ export async function exportLive2D(project, images, opts = {}) {
       variantFadeRules: variantFadeRulesResolved,
       eyeClosureConfig: eyeClosureConfigResolved,
       rotationDeformerConfig: rotationDeformerConfigResolved,
+      autoRigConfig: autoRigConfigResolved,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -499,6 +502,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     variantFadeRules: resolveVariantFadeRules(project),
     eyeClosureConfig: resolveEyeClosureConfig(project),
     rotationDeformerConfig: resolveRotationDeformerConfig(project),
+    autoRigConfig: resolveAutoRigConfig(project),
   });
 
   // --- Motion synthesis (optional) ---

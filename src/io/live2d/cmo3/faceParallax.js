@@ -20,6 +20,7 @@
 
 import { uuid } from '../xmlbuilder.js';
 import { emitKfBinding } from './deformerEmit.js';
+import { DEFAULT_AUTO_RIG_CONFIG } from '../rig/autoRigConfig.js';
 
 /**
  * Emit the FaceParallax warp. Returns `pidFpGuid` (so face rig warps can
@@ -41,6 +42,9 @@ import { emitKfBinding } from './deformerEmit.js';
  * @param {string} ctx.pidPartGuid
  * @param {string} ctx.pidCoord
  * @param {Object|null} ctx.rigDebugLog
+ * @param {import('../rig/autoRigConfig.js').AutoRigFaceParallax} [ctx.autoRigFaceParallax]
+ *   Tunable defaults from `project.autoRigConfig.faceParallax`. Falls back
+ *   to `DEFAULT_AUTO_RIG_CONFIG.faceParallax` when omitted.
  * @returns {string|null} pidFpGuid
  */
 export function emitFaceParallax(x, ctx) {
@@ -52,6 +56,7 @@ export function emitFaceParallax(x, ctx) {
     allDeformerSources, rootPart,
     pidPartGuid, pidCoord,
     rigDebugLog,
+    autoRigFaceParallax = DEFAULT_AUTO_RIG_CONFIG.faceParallax,
   } = ctx;
 
   // ── FaceParallax warps (7 groups, 6×6 grid, 9kf on AngleX × AngleY) ──
@@ -142,23 +147,23 @@ export function emitFaceParallax(x, ctx) {
     fpRadiusX = fpSpanX_bx / 2;
     fpRadiusY = fpSpanY_bx / 2;
   }
-  const FP_DEPTH_K         = 0.80;  // Z at face center (cylindrical fallback)
-  const FP_EDGE_DEPTH_K    = 0.30;  // Z at face edges (cylindrical fallback)
-  const FP_MAX_ANGLE_X_DEG = 15;
+  const FP_DEPTH_K         = autoRigFaceParallax.depthK;
+  const FP_EDGE_DEPTH_K    = autoRigFaceParallax.edgeDepthK;
+  const FP_MAX_ANGLE_X_DEG = autoRigFaceParallax.maxAngleXDeg;
   // Session 25b: reduced 12° → 8° because user reported "goblin" on
   // shelby at AngleY=±30 — the combination of AMP=3.0 (from A.4) and
   // 12° virtual rotation around the X-axis produced too-aggressive
   // vertical compression (forehead stretched, chin receded). AngleX
   // stays at 15° because horizontal swing needs more amplitude to
   // read as a head turn.
-  const FP_MAX_ANGLE_Y_DEG = 8;
+  const FP_MAX_ANGLE_Y_DEG = autoRigFaceParallax.maxAngleYDeg;
 
   // Cylindrical dome depth model. Depth-PSD driven per-pixel Z was
   // evaluated in Sessions 20–25 but found to add noise without clear
   // wins across character types (see session cleanup). The dome is a
   // simple u-driven hemisphere and is always symmetric — the default
   // and only path now.
-  const FP_DEPTH_AMP = 3.0;
+  const FP_DEPTH_AMP = autoRigFaceParallax.depthAmp;
   const fpZAt = (_canvasGx, _canvasGy, u) => {
     const uu = u * u;
     const dome = uu < 1 ? Math.sqrt(1 - uu) : 0;
@@ -169,27 +174,11 @@ export function emitFaceParallax(x, ctx) {
   // during parallax. Grid points inside/near these regions get blended toward
   // the rigid shift at the region's center instead of their own position's shift.
   // Value is 0..1: 0 = no protection (full parallax), 1 = fully rigid at center.
-  const FP_PROTECTION_STRENGTH = 1.0; // global multiplier on all protection values
-  const PROTECTION_PER_TAG = {
-    // Fully rigid — features that should translate as a unit, never deform,
-    // under head rotation. Bumped from 0.95 to 1.00 so eye sub-meshes don't
-    // drift apart at extreme angles (fixes per-feature "stretch-to-goblin"
-    // on realistic art when geometric depth drives protection).
-    'eyelash':     1.00, 'eyelash-l':  1.00, 'eyelash-r':  1.00,
-    'eyewhite':    1.00, 'eyewhite-l': 1.00, 'eyewhite-r': 1.00,
-    'irides':      1.00, 'irides-l':   1.00, 'irides-r':   1.00,
-    // Ears and eyebrows also translate rigidly. Previously unprotected
-    // (ears) or half-protected (eyebrow 0.50), which left them free to
-    // bend under the grid's bow → user-reported "too strong" deformation.
-    'ears':        0.90, 'ears-l':     0.90, 'ears-r':     0.90,
-    'eyebrow':     0.80, 'eyebrow-l':  0.80, 'eyebrow-r':  0.80,
-    // Nose and mouth partial — these SHOULD flex slightly with face curvature.
-    'mouth':       0.30,
-    'nose':        0.30,
-  };
+  const FP_PROTECTION_STRENGTH = autoRigFaceParallax.protectionStrength;
+  const PROTECTION_PER_TAG = autoRigFaceParallax.protectionPerTag;
   // Extra falloff buffer around each region (in normalized u/v units).
   // Larger = smoother transition to natural parallax.
-  const FP_PROTECTION_FALLOFF_BUFFER = 0.12;
+  const FP_PROTECTION_FALLOFF_BUFFER = autoRigFaceParallax.protectionFalloffBuffer;
 
   // Super-groups: meshes that should behave as ONE protected region.
   // Eye sub-meshes (eyelash + eyewhite + irides) share a single anchor
@@ -198,10 +187,7 @@ export function emitFaceParallax(x, ctx) {
   // (ru, rv, rz); slight coordinate differences between 3 sub-meshes
   // produced averaging artifacts where left and right eyes received
   // inconsistent rigid shifts (left drifts while right stays).
-  const SUPER_GROUPS = {
-    'eye-l': ['eyelash-l', 'eyewhite-l', 'irides-l'],
-    'eye-r': ['eyelash-r', 'eyewhite-r', 'irides-r'],
-  };
+  const SUPER_GROUPS = autoRigFaceParallax.superGroups;
   const meshByTag = new Map();
   for (const m of meshes) {
     if (m.tag) meshByTag.set(m.tag, m);
@@ -458,7 +444,7 @@ export function emitFaceParallax(x, ctx) {
     // substantial shiftU (~0.19 u ≈ 39px for fpRadiusX=200 at θ=15°).
     // A mild 1.3× amp on that shiftU makes the eyes "pop" slightly more
     // than the surrounding skin, selling the 3D curvature of the face.
-    const EYE_PARALLAX_AMP_X = 1.3;
+    const EYE_PARALLAX_AMP_X = autoRigFaceParallax.eyeParallaxAmpX;
     for (let ri = 0; ri < protectedRegions.length; ri++) {
       const t = protectedRegions[ri].tag;
       if (t === 'eye-l' || t === 'eye-r') {
@@ -544,7 +530,7 @@ export function emitFaceParallax(x, ctx) {
     // from thetaX's sign (because +thetaX rotates +z face surface in +u
     // direction, so the -u side recedes into the "back" of the head).
     if (Math.abs(sinX) > 1e-6) {
-      const FAR_EYE_SQUASH_AMP = 0.18; // peak inward shift per |sinX|=1
+      const FAR_EYE_SQUASH_AMP = autoRigFaceParallax.farEyeSquashAmp; // peak inward shift per |sinX|=1
       for (let ri = 0; ri < protectedRegions.length; ri++) {
         const r = protectedRegions[ri];
         if (r.tag !== 'eye-l' && r.tag !== 'eye-r') continue;

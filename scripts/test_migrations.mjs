@@ -217,6 +217,38 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v6 lacks autoRigConfig. v7 migration adds it as null.
+  const p = { schemaVersion: 6 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v6→current: schemaVersion bumped');
+  assert(p.autoRigConfig === null, 'v6→current: autoRigConfig added as null');
+}
+
+{
+  // Pre-existing autoRigConfig preserved.
+  const cfg = {
+    bodyWarp: {
+      canvasPadFrac: 0.15, hipFracDefault: 0.5, feetFracDefault: 0.8,
+      feetMarginRf: 0.06, bxRange: { min: 0.10, max: 0.90 },
+      byMargin: 0.07, breathMargin: 0.06,
+      upperBodyTCap: 0.55, upperBodySlope: 1.6,
+    },
+    faceParallax: {
+      depthK: 0.85, edgeDepthK: 0.30,
+      maxAngleXDeg: 18, maxAngleYDeg: 10,
+      depthAmp: 3.0, eyeParallaxAmpX: 1.4, farEyeSquashAmp: 0.20,
+      protectionStrength: 1.0, protectionFalloffBuffer: 0.12,
+      protectionPerTag: { mouth: 0.4 },
+      superGroups: { 'eye-l': ['eyelash-l'] },
+    },
+    neckWarp: { tiltFrac: 0.10 },
+  };
+  const p = { schemaVersion: 6, autoRigConfig: cfg };
+  migrateProject(p);
+  assert(p.autoRigConfig === cfg, 'v6→current: existing autoRigConfig preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -227,6 +259,7 @@ function assertThrows(fn, name) {
   assert(p.variantFadeRules === null, 'v0→current: variantFadeRules added as null');
   assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');
   assert(p.rotationDeformerConfig === null, 'v0→current: rotationDeformerConfig added as null');
+  assert(p.autoRigConfig === null, 'v0→current: autoRigConfig added as null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

@@ -47,6 +47,7 @@ export function emitNeckWarp(x, ctx) {
     neckGroupId, groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     pidCoord, rigDebugLog, emitCtx,
+    autoRigNeckWarp,
   } = ctx;
 
   if (!(pidParamAngleZ && neckUnionBbox && pidBodyXGuid)) return null;
@@ -68,6 +69,7 @@ export function emitNeckWarp(x, ctx) {
     parentDeformerId: neckGroupRotPid ? `GroupRotation_${neckGroupId}` : 'BodyXWarp',
     parentPivotCanvas: neckGroupRotPid ? neckGroupPivot : null,
     canvasToBodyXX, canvasToBodyXY,
+    autoRigNeckWarp,
   });
 
   if (rigDebugLog) rigDebugLog.neckWarp = debug;

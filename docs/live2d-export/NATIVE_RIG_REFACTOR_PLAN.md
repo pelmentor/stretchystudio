@@ -10,7 +10,7 @@ Living tracker. Update on every stage transition.
 | 0.5 | Schema versioning + migration scaffold | **shipped** — `src/store/projectMigrations.js`, 25 unit tests, `npm run test:migrations` |
 | 1a | Parameters — native rig fork + seeder + equivalence tests | **shipped** — `paramSpec.js` fork, `seedParameters()`, `useProjectStore.seedParameters` action, 21 tests, `npm run test:paramSpec`. UI deferred to 1b. |
 | 1b | Parameters UI panel + delete protection | not started |
-| 2 | autoRigConfig (seeder tuning surface) | not started |
+| 2 | autoRigConfig (seeder tuning surface) | **shipped** — `src/io/live2d/rig/autoRigConfig.js` (`DEFAULT_AUTO_RIG_CONFIG` bundles `bodyWarp` + `faceParallax` + `neckWarp` sections). Schema v7. Per-section fallback (each section validates independently — malformed bodyWarp leaves user faceParallax intact). bodyWarp.js / cmo3/faceParallax.js / rig/warpDeformers.js all read tunables from input args with `DEFAULT_AUTO_RIG_CONFIG.<section>` fallback; cmo3writer + bodyRig thread the resolved config through. Lifts: HIP/FEET fracs + canvas pad + BX/BY/Breath margins + upper-body shape + FP depth/angle/protection coefficients + protectionPerTag map + superGroups + eye/squash amps + NECK_TILT_FRAC. Defaults match existing literals bit-for-bit. 83 tests, `npm run test:autoRigConfig`. |
 | 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
 | 4 | Face parallax | not started |
 | 5 | Variant fade rules + eye closure config | **shipped** — `src/io/live2d/rig/variantFadeRules.js` (`DEFAULT_BACKDROP_TAGS` + `seedVariantFadeRules` + `resolveVariantFadeRules`) and `src/io/live2d/rig/eyeClosureConfig.js` (`DEFAULT_EYE_CLOSURE_TAGS` + `DEFAULT_LASH_STRIP_FRAC` + `DEFAULT_BIN_COUNT` + `seedEyeClosureConfig` + `resolveEyeClosureConfig`). Schema v5. Both writers fork on the resolved configs (cmo3 reads both, moc3 reads variantFadeRules — eye closure keyforms come from rigSpec.eyeClosure built in cmo3). 52 tests, `npm run test:variantFadeRules` + `npm run test:eyeClosureConfig`. |
@@ -673,20 +673,72 @@ risk now that 1a is in.
 
 #### Stage 2 — autoRigConfig (seeder tuning surface)
 
-Centralise scattered magic constants (`HIP_FRAC`, `FEET_FRAC`, `FP_DEPTH_K`,
-`NECK_TILT_FRAC`, per-tag warp magnitudes, etc.) into one project-level
-field that the seeder reads. Generator code switches from inline literals
-to `autoRigConfig.bodyWarp.hipFrac` etc.
+**Status: shipped.**
 
-This stage is **schema + plumbing only** — no behaviour change. It
-unblocks the per-character tuning that motivates Stage 4 and Stage 6.
-Default values match today's hardcoded literals; diff harness must stay
-green with no edits to the config.
+Centralises scattered magic constants from three subsystems into one
+project-level config that the seeder/writers read. Pure plumbing — no
+behaviour change; defaults match the existing hardcoded literals
+bit-for-bit.
 
-**Files:** scattered (`bodyWarp.js`, `faceParallax.js`, `cmo3writer.js`
-TAG_PARAM_BINDINGS, etc.); a new `src/io/live2d/rig/autoRigConfig.js`
-defining defaults.
-**Risk:** low-medium — purely mechanical refactor, large surface.
+* `src/io/live2d/rig/autoRigConfig.js` — `DEFAULT_AUTO_RIG_CONFIG`
+  bundles three sections:
+    - `bodyWarp` — `canvasPadFrac` (0.10), `hipFracDefault` (0.45),
+      `feetFracDefault` (0.75), `feetMarginRf` (0.05), `bxRange`
+      (0.10..0.90), `byMargin` (0.065), `breathMargin` (0.055),
+      `upperBodyTCap` (0.5), `upperBodySlope` (1.5). Anatomy-measured
+      `HIP_FRAC` / `FEET_FRAC` continue to override the defaults via
+      `bodyAnalyzer` — config only seeds the fallbacks.
+    - `faceParallax` — `depthK` (0.80), `edgeDepthK` (0.30),
+      `maxAngleXDeg` (15), `maxAngleYDeg` (8), `depthAmp` (3.0),
+      `eyeParallaxAmpX` (1.3), `farEyeSquashAmp` (0.18),
+      `protectionStrength` (1.0), `protectionFalloffBuffer` (0.12),
+      `protectionPerTag` (eyelash/eyewhite/irides=1.00, ears=0.90,
+      eyebrow=0.80, mouth/nose=0.30), `superGroups`
+      (`eye-l`/`eye-r` → eyelash+eyewhite+irides per side).
+    - `neckWarp` — `tiltFrac` (0.08).
+  Plus builder / resolver / seeder following Stage 5/6/7/8 pattern.
+* Schema bumped to v7 with migration adding `project.autoRigConfig`
+  (default null; resolver provides defaults when null).
+* `rig/bodyWarp.js` `buildBodyWarpChain` takes `autoRigBodyWarp` input
+  arg with `DEFAULT_AUTO_RIG_CONFIG.bodyWarp` fallback. Local `BX_MIN`,
+  `BX_MAX`, `BY_MARGIN`, `BR_MARGIN`, `padFrac`, `HIP_FRAC_DEFAULT`,
+  `FEET_FRAC_DEFAULT`, `FEET_MARGIN_RF`, `UPPER_BODY_T_CAP`,
+  `UPPER_BODY_SLOPE` all sourced from the config.
+* `cmo3/faceParallax.js` `emitFaceParallax` takes `autoRigFaceParallax`
+  ctx arg. The 9 numeric coefficients + `PROTECTION_PER_TAG` +
+  `SUPER_GROUPS` all come from the config; `EYE_PARALLAX_AMP_X` and
+  `FAR_EYE_SQUASH_AMP` (inside `computeFpKeyform`) likewise.
+* `rig/warpDeformers.js` `buildNeckWarpSpec` takes `autoRigNeckWarp`
+  input arg. `NECK_TILT_FRAC` sourced from the config; debug log
+  reflects the actual value used.
+* `cmo3writer.js` accepts `autoRigConfig` as input and threads each
+  section into the right call (`bodyWarp`, `faceParallax`, `neckWarp`).
+  `cmo3/bodyRig.js` `emitNeckWarp` takes `autoRigNeckWarp` ctx arg.
+* `useProjectStore.seedAutoRigConfig` action.
+* **Resolution semantics: per-section fallback.** Unlike Stages 7/8
+  (whole-config fallback), `resolveAutoRigConfig` validates each of
+  `bodyWarp` / `faceParallax` / `neckWarp` independently. If one
+  section is malformed, only that section falls back to defaults; the
+  other sections are kept as-is. Reason: this is a multi-section
+  config that downstream stages (4, 9, 10) will keep adding to —
+  invalidating an entire user config because one new field went wrong
+  is too harsh.
+* 83 unit tests cover the DEFAULT contract (every legacy literal),
+  build-returns-mutable-deep-copy, per-section fallback (good +
+  malformed sections coexist), destructive seed, JSON round-trip,
+  `buildBodyWarpChain` + `buildNeckWarpSpec` consuming custom config
+  values, and equivalence (default literals == seeded autoRigBodyWarp).
+
+**Out of scope (deferred to other stages):** TAG_PARAM_BINDINGS shiftFn
+magnitudes (Stage 9 — they're entangled with the keyform precompile,
+not just constants), face parallax keyform output (Stage 4), body warp
+chain keyform output (Stage 10).
+
+**Files:** `src/io/live2d/rig/autoRigConfig.js` (new),
+`src/io/live2d/rig/bodyWarp.js`, `src/io/live2d/cmo3/faceParallax.js`,
+`src/io/live2d/rig/warpDeformers.js`, `src/io/live2d/cmo3writer.js`,
+`src/io/live2d/cmo3/bodyRig.js`, `src/io/live2d/exporter.js`,
+`src/store/projectStore.js`, `src/store/projectMigrations.js`.
 
 ---
 
