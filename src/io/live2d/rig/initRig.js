@@ -96,6 +96,12 @@ export function harvestSeedFromRigSpec(rigSpec) {
  * Does NOT mutate `project`. Caller hands the result to the project
  * store's `seedAllRig` action (or individual seeders) to commit.
  *
+ * **v2 R1.** Also returns the full `rigSpec` so the editor can cache it
+ * (in `useRigSpecStore`) for the live evaluator. The seeder consumer
+ * keeps using the harvest fields and ignores `rigSpec`; the runtime
+ * cache uses `rigSpec` and ignores the harvest fields. Same one-shot
+ * `generateCmo3 rigOnly` invocation drives both.
+ *
  * @param {object} project
  * @param {Map<string, HTMLImageElement>} [images=new Map()]  unused but
  *   forwarded to `buildMeshesForRig` for parity with the export path
@@ -103,6 +109,7 @@ export function harvestSeedFromRigSpec(rigSpec) {
  *   faceParallaxSpec: object|null,
  *   bodyWarpChain: object|null,
  *   rigWarps: Map<string, object>,
+ *   rigSpec: object|null,
  *   debug: object|null,
  * }>}
  */
@@ -146,6 +153,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     faceParallaxSpec,
     bodyWarpChain,
     rigWarps,
+    rigSpec: result.rigSpec ?? null,
     debug: result.rigDebugLog ?? null,
   };
 }

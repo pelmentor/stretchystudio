@@ -1447,6 +1447,11 @@ export async function generateCmo3(input) {
       jointPivotX: m.jointPivotX,
       jointPivotY: m.jointPivotY,
       closedCanvasVerts, // shared with moc3 via rigCollector.eyeClosure
+      // v2 R1.b — captured here so the per-mesh emit loop can populate
+      // rigCollector.artMeshes without recomputing variant pairing.
+      variantSuffixForMesh,
+      baseFadeSuffix,
+      partId: m.partId,
     });
   }
 
@@ -3326,21 +3331,6 @@ export async function generateCmo3(input) {
     }
   }
 
-  // ── rigOnly short-circuit ──
-  // Runtime path (`exportLive2D`) calls generateCmo3 in rigOnly mode just to
-  // harvest the RigSpec — it doesn't need the cmo3 buffer or CAFF packing.
-  // Returns after the body warp chain + neck warp + face rotation specs are
-  // populated. Per-mesh structural warps and face parallax are still inline
-  // (Phase B continues) and won't be in the rigSpec yet.
-  if (rigOnly) {
-    return {
-      cmo3: null,
-      deformerParamMap,
-      rigDebugLog,
-      rigSpec: rigCollector,
-    };
-  }
-
   // ==================================================================
   // 4. CArtMeshSource (per mesh)
   // ==================================================================
@@ -3591,6 +3581,27 @@ export async function generateCmo3(input) {
     x.sub(meshSrc, 'int-array', { 'xs.n': 'indices', count: String(tris.length) }).text =
       tris.join(' ');
 
+    // v2 R1.b — Capture art-mesh spec for the rigSpec session cache.
+    // Each branch below populates `artBindings` + `artKeyforms`; one push
+    // at the end of the keyform section feeds rigCollector.artMeshes.
+    // Positions written here mirror the deformer-local positions emitted
+    // to XML (warp-local 0..1 if rwBox, else pivot-relative px if dfOrigin,
+    // else canvas px).
+    const artBindings = [];
+    const artKeyforms = [];
+    let artLocalFrame = rwBox ? 'normalized-0to1'
+      : (dfOrigin ? 'pivot-relative' : 'canvas-px');
+    let artParent;
+    if (rwBox) {
+      artParent = { type: 'warp', id: `RigWarp_${pm.partId}` };
+    } else if (jointBoneId && deformerWorldOrigins.has(jointBoneId)) {
+      artParent = { type: 'rotation', id: jointBoneId };
+    } else if (dfOwner) {
+      artParent = { type: 'warp', id: dfOwner };
+    } else {
+      artParent = { type: 'root', id: null };
+    }
+
     // Keyforms — baked bone-weight keyforms or single rest-pose keyform
     // Helper to emit one CArtMeshForm
     const emitArtMeshForm = (kfList, formGuidPid, positions, opacity = 1.0) => {
@@ -3666,11 +3677,26 @@ export async function generateCmo3(input) {
       };
 
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: String(BAKED_ANGLES.length) });
+      const _bonePm = boneParamGuids.get(jointBoneId);
+      if (_bonePm) {
+        artBindings.push({
+          parameterId: _bonePm.paramId,
+          keys: BAKED_ANGLES.slice(),
+          interpolation: 'LINEAR',
+        });
+      }
       for (let i = 0; i < BAKED_ANGLES.length; i++) {
         const ang = BAKED_ANGLES[i];
         const pidForm = pm.bakedFormGuids[i];
         const positions = (ang === 0) ? verts : computeBakedPositions(ang);
         emitArtMeshForm(kfList, pidForm, positions);
+        if (_bonePm) {
+          artKeyforms.push({
+            keyTuple: [ang],
+            vertexPositions: new Float32Array(positions),
+            opacity: 1.0,
+          });
+        }
       }
     } else if (pm.hasEyelidClosure || pm.hasEyeVariantCompound) {
       // Eye closure — shared geometry computation for standalone closure
@@ -3718,11 +3744,28 @@ export async function generateCmo3(input) {
         emitArtMeshForm(kfList, pm.pidCornerOpenNeutral,   verts,       αN);
         emitArtMeshForm(kfList, pm.pidCornerClosedVariant, closedVerts, αV);
         emitArtMeshForm(kfList, pm.pidCornerOpenVariant,   verts,       αV);
+
+        const closureParamIdStr = pm.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
+        const sfxLocal = pm.isVariant ? pm.variantSuffixForMesh : pm.baseFadeSuffix;
+        const variantParamIdStr = sfxLocal ? variantParamId(sfxLocal) : null;
+        if (variantParamIdStr) {
+          artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+          artBindings.push({ parameterId: variantParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+          artKeyforms.push({ keyTuple: [0, 0], vertexPositions: new Float32Array(closedVerts), opacity: αN });
+          artKeyforms.push({ keyTuple: [1, 0], vertexPositions: new Float32Array(verts),       opacity: αN });
+          artKeyforms.push({ keyTuple: [0, 1], vertexPositions: new Float32Array(closedVerts), opacity: αV });
+          artKeyforms.push({ keyTuple: [1, 1], vertexPositions: new Float32Array(verts),       opacity: αV });
+        }
       } else {
         // Standalone 1D closure: 2 keyforms [closed, open].
         const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
         emitArtMeshForm(kfList, pm.pidFormClosed, closedVerts);
         emitArtMeshForm(kfList, pm.pidFormMesh,   verts);
+
+        const closureParamIdStr = pm.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
+        artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(closedVerts), opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts),       opacity: 1.0 });
       }
     } else if (pm.hasNeckCornerShapekeys) {
       // 3 keyforms on ParamAngleX: −30 (keyIndex 0), 0 rest (1), +30 (2).
@@ -3796,6 +3839,11 @@ export async function generateCmo3(input) {
       emitArtMeshForm(kfList, pm.neckCornerFormGuids[0], negVerts); // −30
       emitArtMeshForm(kfList, pm.pidFormMesh, verts);                //   0 (rest)
       emitArtMeshForm(kfList, pm.neckCornerFormGuids[1], posVerts); // +30
+
+      artBindings.push({ parameterId: 'ParamAngleX', keys: [-30, 0, 30], interpolation: 'LINEAR' });
+      artKeyforms.push({ keyTuple: [-30], vertexPositions: new Float32Array(negVerts), opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [0],   vertexPositions: new Float32Array(verts),    opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [30],  vertexPositions: new Float32Array(posVerts), opacity: 1.0 });
     } else if (pm.hasEmotionVariantOnly) {
       // 2 forms matching 2 keyforms on ParamSmile — simple 0→1 opacity fade.
       //   [0] Smile=0 : hidden (opacity 0) — variant fully transparent
@@ -3806,6 +3854,13 @@ export async function generateCmo3(input) {
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
       emitArtMeshForm(kfList, pm.pidFormMesh,    verts, 0.0); // keyIndex 0: hidden
       emitArtMeshForm(kfList, pm.pidFormVariant, verts, 1.0); // keyIndex 1: visible
+
+      const sfx = pm.variantSuffixForMesh;
+      if (sfx) {
+        artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(verts), opacity: 0.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts), opacity: 1.0 });
+      }
     } else if (pm.hasBaseFadeOnly) {
       // 2 forms matching the 2-keyform linear fade on Param<Suffix>:
       //   [0] Smile=0 : opacity 1 (fully visible at rest)
@@ -3814,10 +3869,43 @@ export async function generateCmo3(input) {
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
       emitArtMeshForm(kfList, pm.pidFormMesh,       verts, 1.0); // keyIndex 0
       emitArtMeshForm(kfList, pm.pidFormBaseHidden, verts, 0.0); // keyIndex 1
+
+      const sfx = pm.baseFadeSuffix;
+      if (sfx) {
+        artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(verts), opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts), opacity: 0.0 });
+      }
     } else {
       // Single keyform at rest position
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
       emitArtMeshForm(kfList, pm.pidFormMesh, verts);
+
+      // Default: 1-keyform plan on ParamOpacity[1.0] — mirrors moc3writer's
+      // per-mesh default (`meshBindingPlan` line ~624).
+      artBindings.push({ parameterId: 'ParamOpacity', keys: [1.0], interpolation: 'LINEAR' });
+      artKeyforms.push({ keyTuple: [1.0], vertexPositions: new Float32Array(verts), opacity: 1.0 });
+    }
+
+    // v2 R1.b — push the captured spec into the rigCollector so the editor
+    // RigSpec cache (`useRigSpecStore`) sees art-mesh keyforms in the same
+    // run that already produces warpDeformers + rotationDeformers.
+    if (rigCollector) {
+      rigCollector.artMeshes.push({
+        id: pm.partId,
+        name: pm.meshName,
+        parent: artParent,
+        verticesCanvas: new Float32Array(canvasVerts),
+        triangles: new Uint16Array(tris),
+        uvs: new Float32Array(uvs),
+        variantSuffix: meshes[pm.mi].variantSuffix ?? meshes[pm.mi].variantRole ?? null,
+        textureId: pm.partId,
+        bindings: artBindings,
+        keyforms: artKeyforms,
+        drawOrder: pm.drawOrder,
+        localFrame: artLocalFrame,
+        isVisible: true,
+      });
     }
 
     // Base pixel-space positions — in CANVAS space (used for texture mapping)
@@ -3832,6 +3920,22 @@ export async function generateCmo3(input) {
     x.sub(meshSrc, 'b', { 'xs.n': 'culling' }).text = 'false';
     x.sub(meshSrc, 'TextureState', { 'xs.n': 'textureState', v: 'MODEL_IMAGE' });
     x.sub(meshSrc, 's', { 'xs.n': 'userData' }).text = '';
+  }
+
+  // ── rigOnly short-circuit ──
+  // Runtime path (`exportLive2D`) and v2 R1 (`useRigSpecStore.buildRigSpec`)
+  // call generateCmo3 in rigOnly mode just to harvest the RigSpec — neither
+  // needs the cmo3 buffer or CAFF packing. Moved here (post-Section 4) so
+  // `rigCollector.artMeshes` is populated by the per-mesh loop before
+  // returning. Section 4's XML emission is wasted work in this mode but
+  // it's only a one-shot Initialize-Rig click, not a hot path.
+  if (rigOnly) {
+    return {
+      cmo3: null,
+      deformerParamMap,
+      rigDebugLog,
+      rigSpec: rigCollector,
+    };
   }
 
   // ==================================================================

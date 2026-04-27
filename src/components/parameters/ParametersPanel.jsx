@@ -1,6 +1,7 @@
 import React from 'react';
 import { useProjectStore } from '@/store/projectStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
+import { useRigSpecStore } from '@/store/rigSpecStore';
 import { initializeRigFromProject } from '@/io/live2d/rig/initRig';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -53,6 +54,16 @@ export function ParametersPanel() {
     try {
       const harvest = await initializeRigFromProject(project);
       seedAllRig(harvest);
+      // v2 R1 — also cache the full rigSpec for the live evaluator. Same
+      // harvest result; we bypass `useRigSpecStore.buildRigSpec` because
+      // it would re-run the full rig generator a second time.
+      useRigSpecStore.setState({
+        rigSpec: harvest.rigSpec ?? null,
+        isBuilding: false,
+        lastBuiltGeometryVersion:
+          useProjectStore.getState().versionControl?.geometryVersion ?? 0,
+        error: null,
+      });
       const summary = [];
       if (harvest.faceParallaxSpec) summary.push('face parallax');
       if (harvest.bodyWarpChain) summary.push('body warp chain');
@@ -214,7 +225,13 @@ export function ParametersPanel() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => { setConfirmClear(false); clearRigKeyforms(); }}
+              onClick={() => {
+                setConfirmClear(false);
+                clearRigKeyforms();
+                // v2 R1 — drop the cache so a future evaluator rebuild
+                // picks up the cleared (heuristic-only) state.
+                useRigSpecStore.getState().invalidate();
+              }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Clear keyforms

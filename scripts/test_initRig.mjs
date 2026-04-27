@@ -8,7 +8,7 @@
 // covered indirectly by test_e2e_equivalence.mjs and the export integration
 // tests. Here we exercise the filter logic in isolation.
 
-import { harvestSeedFromRigSpec } from '../src/io/live2d/rig/initRig.js';
+import { harvestSeedFromRigSpec, initializeRigFromProject } from '../src/io/live2d/rig/initRig.js';
 
 let passed = 0;
 let failed = 0;
@@ -258,6 +258,68 @@ function makeNeckWarpSpec() {
   assertEq(result.bodyWarpChain, null, 'missing rigCollector.bodyWarpChain → null');
   // body chain spec still suppressed from per-mesh map by id filter
   assertEq(result.rigWarps.size, 1, 'body chain spec suppressed by id even without chain stash');
+}
+
+// ── v2 R1 — API surface: initializeRigFromProject returns rigSpec ──
+{
+  // Minimal synthetic project that survives generateCmo3 rigOnly without
+  // crashing. A single rectangular meshed part is enough — rig generators
+  // tolerate the absence of variants/bones/face tags by returning empty
+  // sub-arrays rather than throwing.
+  const project = {
+    schemaVersion: 10,
+    canvas: { width: 800, height: 600 },
+    textures: [],
+    nodes: [{
+      id: 'part-A',
+      type: 'part',
+      name: 'PartA',
+      visible: true,
+      tag: null,
+      mesh: {
+        vertices: [
+          { restX: 100, restY: 100, x: 100, y: 100 },
+          { restX: 300, restY: 100, x: 300, y: 100 },
+          { restX: 300, restY: 300, x: 300, y: 300 },
+          { restX: 100, restY: 300, x: 100, y: 300 },
+        ],
+        triangles: [[0, 1, 2], [0, 2, 3]],
+        uvs: [[0, 0], [1, 0], [1, 1], [0, 1]],
+      },
+      draw_order: 500,
+    }],
+    parameters: [],
+  };
+
+  let result = null;
+  try {
+    result = await initializeRigFromProject(project);
+  } catch (err) {
+    failed++;
+    console.error('FAIL: initializeRigFromProject threw:', err?.message ?? err);
+  }
+
+  if (result) {
+    assert('rigSpec' in result, 'API: initializeRigFromProject result has rigSpec field');
+    assert(result.rigSpec !== undefined, 'API: rigSpec is not undefined (null is acceptable)');
+    if (result.rigSpec) {
+      assert(Array.isArray(result.rigSpec.warpDeformers), 'rigSpec.warpDeformers is array');
+      assert(Array.isArray(result.rigSpec.rotationDeformers), 'rigSpec.rotationDeformers is array');
+      assert(Array.isArray(result.rigSpec.artMeshes), 'rigSpec.artMeshes is array (R1.b)');
+      // The single mesh must have made it into artMeshes.
+      assert(
+        result.rigSpec.artMeshes.length >= 1,
+        'rigSpec.artMeshes contains at least the one fixture mesh',
+      );
+      const am0 = result.rigSpec.artMeshes[0];
+      if (am0) {
+        assert(typeof am0.id === 'string' && am0.id.length > 0, 'artMesh has string id');
+        assert(am0.id === 'part-A', 'artMesh.id matches partId');
+        assert(Array.isArray(am0.bindings), 'artMesh.bindings is array');
+        assert(Array.isArray(am0.keyforms), 'artMesh.keyforms is array');
+      }
+    }
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

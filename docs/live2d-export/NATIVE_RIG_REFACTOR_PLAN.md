@@ -32,7 +32,7 @@ demand" rather than speculatively.
 | v2 Stage | Description | Status |
 | --- | --- | --- |
 | R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | **shipped 2026-04-28** |
-| R1 | RigSpec session cache (`useRigSpecStore`) | not started |
+| R1 | RigSpec session cache (`useRigSpecStore`) | **shipped 2026-04-28** |
 | R2 | `cellSelect` — N-binding cross-product cell + lerp weights | not started |
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | not started |
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | not started |
@@ -1267,6 +1267,75 @@ meshed part → drag the test slider → mesh slides horizontally.
 `src/components/canvas/CanvasViewport.jsx`,
 `src/components/parameters/ParametersPanel.jsx`. **Tag:**
 `native-rig-render-stage-R0-complete`.
+
+### v2 Stage R1 — RigSpec session cache (shipped 2026-04-28)
+
+Three sub-tasks shipped per the v2-plan double-check note. All four
+gaps the doc flagged (initRig API, artMesh push, blendShape comp, R9
+risk) — R1 closes the first two. R6 will close blendShape.
+
+**(a) `initRig.js` — extended API.** `initializeRigFromProject` now
+also returns `result.rigSpec` (was discarded at L144 in the original
+v1 implementation). Same one-shot `generateCmo3 rigOnly` invocation
+drives both the seeder harvest fields (faceParallaxSpec / bodyWarpChain
+/ rigWarps) and the runtime cache. Existing callers (ParametersPanel
+"Initialize Rig", exporter Stage 11 fallback) ignore the new field —
+purely additive. JSDoc updated; new `rigSpec: object|null` documented.
+
+**(b) `cmo3writer.js` — `rigCollector.artMeshes` populated.** The
+per-mesh emit loop (Section 4, ~L3414-3938) now captures an
+`ArtMeshSpec` per mesh alongside the existing XML emission. Each spec
+carries `id (partId)`, `name`, best-effort `parent` ref, `verticesCanvas`,
+`triangles`, `uvs`, `variantSuffix`, `textureId`, `bindings`, `keyforms`,
+`drawOrder`, `localFrame`, `isVisible`. All six existing keyform
+branches contribute the right shape:
+
+* `hasBakedKeyforms` — N keyforms on the bone's
+  `ParamRotation_<bone>` param, positions match XML (warp-local
+  0..1 if rwBox, else pivot-relative px).
+* `hasEyeVariantCompound` — 2D grid: 2 bindings (closure × variant
+  suffix), 4 row-major keyforms with αN/αV opacity flip.
+* `hasEyelidClosure` — 2 keyforms on `ParamEye{L,R}Open`.
+* `hasNeckCornerShapekeys` — 3 keyforms on `ParamAngleX [-30, 0, 30]`.
+* `hasEmotionVariantOnly` — 2 keyforms on `Param<Suffix>` opacity 0→1.
+* `hasBaseFadeOnly` — 2 keyforms on `Param<Suffix>` opacity 1→0.
+* default — 1-keyform plan on `ParamOpacity[1.0]` (mirrors moc3writer
+  default `meshBindingPlan` at L624).
+
+The `rigOnly` short-circuit moved from before-Section-4 (~L3340) to
+after-Section-4 (~L3940) so the per-mesh loop runs and populates
+`rigCollector.artMeshes`. Section 4 XML emission is wasted work in
+rigOnly mode (~50ms on Hiyori-sized rigs) but Initialize-Rig is a
+one-shot user click, not a hot path. Sections 5/6/7 (CModelImageGroup
++ CAFF packing) still skip cleanly as before.
+
+**(c) `useRigSpecStore` Zustand slice (new file).** State:
+`{ rigSpec, isBuilding, error, lastBuiltGeometryVersion }`. Actions:
+`buildRigSpec()` (single-flight async — calls `initializeRigFromProject`
+and caches `result.rigSpec`) and `invalidate()` (drops cache).
+Auto-invalidation: a one-time `useProjectStore.subscribe` at module
+load watches `versionControl.geometryVersion` — bumps caused by mesh
+edits / retriangulate / PSD reimport / blend shape / puppet pin
+edits drop the cache so the next read kicks a rebuild. Tag changes
+don't bump geometry but normally accompany an Initialize-Rig click.
+
+**ParametersPanel hook.** "Initialize Rig" already has the harvest
+result in hand — `runInit` now also calls `useRigSpecStore.setState`
+to seed the cache directly (avoids re-running the rig generator).
+"Clear keyforms" calls `useRigSpecStore.invalidate()` so a future
+evaluator rebuild picks up the cleared state.
+
+**Verification:** `test_initRig.mjs` extended with API-shape smoke
+test (synthetic 1-mesh project) — asserts `rigSpec.artMeshes` is
+present and populated with `id`, `bindings`, `keyforms` arrays. All
+1097 tests pass (1092 prior + 5 new). Build green.
+
+**Files:** `src/io/live2d/rig/initRig.js`,
+`src/io/live2d/cmo3writer.js`,
+`src/store/rigSpecStore.js` (new),
+`src/components/parameters/ParametersPanel.jsx`,
+`scripts/test_initRig.mjs`. **Tag:**
+`native-rig-render-stage-R1-complete`.
 
 ## Rollback strategy
 
