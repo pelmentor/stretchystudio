@@ -228,6 +228,32 @@ Fixes "always smiling": at ParamSmile=0 the variant is invisible and only the
 base shows. Endpoints at 0 and 1 are correct; midpoint is still translucent
 (base stays opaque) — proper fix is base-fade, which lands with Stage 2b.
 
+### Native rig path is now canonical (Stage 11 — 2026-04-27)
+
+After the [native rig refactor](NATIVE_RIG_REFACTOR_PLAN.md) landed (Stages
+0/0.5/1a/1b/2/3/4/5/6/7/8/9a/9b/10), Stage 11 cleanup demoted the inline
+heuristic generators in `cmo3writer.js` from "default path" to "fallback
+reachable only via the seeder."
+
+* `exporter.js` runs `resolveAllKeyformSpecs(project, images)` at the top of
+  both `exportLive2D` and `exportLive2DProject`. When `project.faceParallax /
+  bodyWarp / rigWarps` are empty (model never went through "Initialize Rig"
+  in the UI), the helper triggers a one-shot `initializeRigFromProject`
+  harvest *in memory* — does NOT mutate `project`. When any field is
+  populated, the helper respects partial seeding (null fields stay null).
+* `cmo3writer.js` keeps its `?? heuristic` branches as a safety net for the
+  seeder's `rigOnly` mode. Outside `rigOnly`, each branch firing emits a
+  `console.warn` flagging that the exporter bypassed Stage 11 — a visible
+  regression detector for future callers.
+* `rigOnly` mode itself stays — `initRig.js` still uses it to harvest a
+  fresh rigSpec from the heuristic builders. Stage 11's plan-bullet 2
+  ("garbage-collect `rigOnly` if no longer used") doesn't apply because the
+  seeder remains a live consumer.
+
+The runtime export now has one canonical data flow: `project state →
+resolveAllKeyformSpecs → cmo3writer (rigSpec harvest) → moc3writer`.
+Generator code reachable only via the seeder, as Stage 11 mandated.
+
 ## Still broken — what Stage 2b/2c must fix
 
 * No warp deformers in moc3. ParamAngleX/Y/Z, ParamBodyAngleX/Y/Z animate but

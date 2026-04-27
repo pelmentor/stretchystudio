@@ -9,7 +9,7 @@ Living tracker. Update on every stage transition.
 | 0 | Diff harness foundation (canonicalizer + structural diff) | **shipped** — `scripts/native-rig-diff/`, 34 unit tests, `npm run test:diff-harness` |
 | 0.5 | Schema versioning + migration scaffold | **shipped** — `src/store/projectMigrations.js`, 25 unit tests, `npm run test:migrations` |
 | 1a | Parameters — native rig fork + seeder + equivalence tests | **shipped** — `paramSpec.js` fork, `seedParameters()`, `useProjectStore.seedParameters` action, 21 tests, `npm run test:paramSpec`. UI deferred to 1b. |
-| 1b | Parameters UI panel + delete protection | not started |
+| 1b | Parameters UI panel + delete protection | **shipped (v1)** — `src/components/parameters/ParametersPanel.jsx` slotted in `EditorLayout.jsx`. Collapsible read-only list of `project.parameters` with `name [min, max] · default`. Three-cell baked-vs-inline status row (face / body / per-mesh). "Initialize Rig" button (`Wand2`) calls `initializeRigFromProject` → `seedAllRig`; "Clear" (`Trash2`) calls `clearRigKeyforms`. Both confirm via `AlertDialog` when seed exists. `seedAllRig(harvest)` orchestrator in `projectStore.js` does single-snapshot fan-out across all 9 seeders + 3 clearXxx. `loadProject` / `resetProject` bug-fix: `autoRigConfig` / `faceParallax` / `bodyWarp` / `rigWarps` were silently dropped on `.stretch` reload — restored. `harvestSeedFromRigSpec` (pure filter) extracted from `initRig.js` for unit testing. 35 tests, `npm run test:initRig`. v1 deferred: param-group UI (LipSync/EyeBlink palette ordering), per-param min/max/default editing, delete protection on 22 standard IDs with track-reference display. |
 | 2 | autoRigConfig (seeder tuning surface) | **shipped** — `src/io/live2d/rig/autoRigConfig.js` (`DEFAULT_AUTO_RIG_CONFIG` bundles `bodyWarp` + `faceParallax` + `neckWarp` sections). Schema v7. Per-section fallback (each section validates independently — malformed bodyWarp leaves user faceParallax intact). bodyWarp.js / cmo3/faceParallax.js / rig/warpDeformers.js all read tunables from input args with `DEFAULT_AUTO_RIG_CONFIG.<section>` fallback; cmo3writer + bodyRig thread the resolved config through. Lifts: HIP/FEET fracs + canvas pad + BX/BY/Breath margins + upper-body shape + FP depth/angle/protection coefficients + protectionPerTag map + superGroups + eye/squash amps + NECK_TILT_FRAC. Defaults match existing literals bit-for-bit. 83 tests, `npm run test:autoRigConfig`. |
 | 3 | Mask configs | **shipped** — `src/io/live2d/rig/maskConfigs.js` (`CLIP_RULES` + `seedMaskConfigs` + `resolveMaskConfigs`), schema bumped to v2 with migration, both writers fork on `maskConfigs` arg, 25 tests, `npm run test:maskConfigs`. |
 | 4 | Face parallax | **shipped** — `src/io/live2d/rig/faceParallaxBuilder.js` (`buildFaceParallaxSpec`, ~520 LOC of compute extracted from `cmo3/faceParallax.js`) + `src/io/live2d/rig/faceParallaxStore.js` (`serializeFaceParallaxSpec` / `deserializeFaceParallaxSpec` / `resolveFaceParallax` / `seedFaceParallax` / `clearFaceParallax`). Schema v8. `emitFaceParallax` accepts `preComputedSpec` ctx arg — populated → serialize stored spec verbatim; null → run `buildFaceParallaxSpec` heuristic. cmo3writer + exporter thread `faceParallaxSpec` resolved from project. Float64Array fields serialize via plain-array storage (`baseGrid`, `keyforms[i].positions`). Stage 4 v1 ships **without** signatureHash staleness detection — re-import-after-seed is a documented footgun. 154 tests, `npm run test:faceParallax`. |
@@ -20,7 +20,7 @@ Living tracker. Update on every stage transition.
 | 9a | Tag warp bindings — module + magnitude lift | **shipped** — `src/io/live2d/rig/tagWarpBindings.js` (`buildTagWarpBindingRules(magnitudes)` + `buildTagBindingMap(paramPids, magnitudes)`). The 290-LOC inline `TAG_PARAM_BINDINGS` Map in `cmo3writer.js` (front hair, back hair, bottomwear, topwear, legwear, eyebrow×3, irides×3, eyewhite×3, eyelash, mouth — 16 tags total) extracted into a pure module. Magnitudes (~13 numeric constants — hair sway, clothing sway, brow Y, iris gaze, eye-converge frac, mouth stretch) lifted into `autoRigConfig.tagWarpMagnitudes`; per-character override now requires no code edits. Defaults bit-for-bit identical to pre-9a literals (verified by inline-reference tests). 182 tests in `scripts/test_tagWarpBindings.mjs`, 26 new in `test_autoRigConfig.mjs`. **No keyform baking yet** — keyforms still computed at export time; that's Stage 9b. |
 | 9b | Tag warp bindings — per-mesh keyform baking | **shipped (v1)** — `src/io/live2d/rig/rigWarpsStore.js` (`serializeRigWarps` / `deserializeRigWarps` / `resolveRigWarps` / `seedRigWarps` / `clearRigWarps`). Schema v10. `project.rigWarps` is a `{[partId]: storedSpec}` map (Float64Array baseGrid + per-keyform positions → number[]). cmo3writer accepts `rigWarps` ctx arg as a `Map<partId, spec>`; per-mesh emission loop validates stored spec shape (numKf + per-keyform position length) and replaces the procedural `shiftFn` invocation with stored positions when valid. Misses fall through to inline path — preserves today's heuristic for unseeded meshes. exporter threads `resolveRigWarps(project)` through both `generateCmo3` calls. **No bake-flow yet** — the seeder action exists but no UI calls it; v1 ships the read-side. v1 staleness footgun (PSD reimport requires `clearRigWarps`) — same as Stages 4 + 10. 104 tests, `npm run test:rigWarps`, +3 v10 migration tests. |
 | 10 | Body warp chain (keyforms) | **shipped (v1)** — `src/io/live2d/rig/bodyWarpStore.js` (`serializeBodyWarpChain` / `deserializeBodyWarpChain` / `resolveBodyWarp` / `seedBodyWarpChain` / `clearBodyWarp`) + `makeBodyWarpNormalizers(layout)` exported from `bodyWarp.js` so the deserializer rebuilds `canvasToBodyXX/Y` closures from the stored layout. Schema v9. cmo3writer accepts `bodyWarpChain` ctx arg — populated → use stored chain verbatim; null → run `buildBodyWarpChain` heuristic. exporter threads `resolveBodyWarp(project)` through both `generateCmo3` calls. Float64Array → number[] for baseGrid + per-keyform positions; closures rebuilt at deserialize time from the layout block. 3- vs 4-spec chains both round-trip (no-BX legacy support). v1 ships **without** signatureHash staleness detection — PSD reimport with re-meshed body silhouette silently produces stale exports. 131 tests, `npm run test:bodyWarp`. |
-| 11 | Final cleanup (remove generator branches) | not started |
+| 11 | Final cleanup (remove generator branches) | **shipped 2026-04-27** — `exporter.js` `resolveAllKeyformSpecs(project, images)` helper at top of both `exportLive2D` and `exportLive2DProject`: respects explicit seeding, falls back to one-shot `initializeRigFromProject` harvest when state is fully empty (in-memory only — does NOT mutate project). Partial seeding respected. `cmo3writer.js` keeps `?? heuristic` branches as safety net for the seeder's `rigOnly` mode but emits `console.warn` when fallback fires outside `rigOnly` — visible regression detector. `rigOnly` mode preserved (still used by `initRig`); plan-bullet 2 ("garbage-collect rigOnly if no longer used") doesn't apply. `RUNTIME_PARITY_PLAN.md` updated with "Native rig path is now canonical" subsection. All 1092 tests green, 0 new lint errors, build green. |
 
 Cross-ref: see [`RUNTIME_PARITY_PLAN.md`](RUNTIME_PARITY_PLAN.md) — that
 work shipped the `rigSpec` contract this refactor leans on.
@@ -1158,15 +1158,49 @@ inline use), new `rig/bodyWarpStore.js`, `cmo3writer.js` (added
 
 ---
 
-### Stage 11 — Final cleanup (post-migration)
+### Stage 11 — Final cleanup (shipped 2026-04-27)
 
-* Remove the generator branches from the export orchestrator. Generator
-  code reachable only via the seeder.
-* Garbage-collect `rigOnly=true` mode from `cmo3writer` if no longer used.
-* Update `RUNTIME_PARITY_PLAN.md` to mark the native path as canonical.
+The plan was: remove the generator branches from the export orchestrator;
+generator code reachable only via the seeder. Concretely shipped:
 
-**Files:** `exporter.js`, `cmo3writer.js`. **Risk:** none if all earlier
-stages green.
+**`exporter.js` — `resolveAllKeyformSpecs(project, images)` helper.** New
+private async function called at the top of both `exportLive2D` and
+`exportLive2DProject`. Resolves the three keyform-bearing specs from
+`project.faceParallax / bodyWarp / rigWarps` when populated; falls back to
+a single `initializeRigFromProject` harvest when **all three** are empty.
+The helper does NOT mutate `project` — the harvest is in-memory only, so
+explicit "Initialize Rig" UI seeding remains the canonical user flow.
+Partial seeding is respected: if at least one field is populated, the rest
+stay `null` on the assumption the user explicitly cleared them (e.g. a
+model with no face meshes legitimately has `project.faceParallax === null`).
+
+**`cmo3writer.js` — fallback warn-guards.** The existing `?? heuristic`
+branches stay in place (they're still used by the seeder via `rigOnly`
+mode). Outside `rigOnly`, each branch now emits a `console.warn` flagging
+that the exporter bypassed Stage 11 — a visible regression detector for
+future callers. Three guard sites:
+
+* `bodyWarpChain ?? buildBodyWarpChain(...)` (line ~2350)
+* `rigWarps` empty-or-null check at top of section 3 emit
+* `faceParallaxSpec` null check before `emitFaceParallax` call
+
+**`rigOnly` mode is preserved.** The original Stage 11 plan-bullet 2
+("garbage-collect `rigOnly` if no longer used") doesn't apply because
+`initRig.js`'s `initializeRigFromProject` still uses `rigOnly` mode to
+harvest a fresh rigSpec from the heuristic builders. Removing it would
+require porting the rig-harvest flow into a separate `rig/buildRig.js`
+module — a ~500 LOC extraction deferred to a future Stage 12 if/when the
+need arises.
+
+**`RUNTIME_PARITY_PLAN.md`** updated with a "Native rig path is now
+canonical" subsection in the "Already shipped" block, documenting the
+single canonical data flow: `project state → resolveAllKeyformSpecs →
+cmo3writer (rigSpec harvest) → moc3writer`.
+
+**Files:** `exporter.js`, `cmo3writer.js`, `RUNTIME_PARITY_PLAN.md`.
+**Tests:** all 1092 tests across 16 suites still green; no new tests
+added (refactor, not feature). **Build/lint:** zero new errors. Tag:
+`native-rig-stage-11-complete`.
 
 ## Rollback strategy
 

@@ -2339,6 +2339,16 @@ export async function generateCmo3(input) {
   // populated; otherwise fall back to the inline heuristic. The shape is
   // identical (specs + layout + canvasToBodyXX/Y + debug) so downstream
   // consumers don't branch.
+  //
+  // Stage 11 invariant: outside `rigOnly` mode the heuristic should never
+  // fire — exporter.js's `resolveAllKeyformSpecs` runs the seeder first.
+  // A live warning makes it visible if a future caller bypasses that path.
+  if (!bodyWarpChain && !rigOnly) {
+    console.warn('[cmo3writer] bodyWarpChain heuristic firing outside rigOnly mode — exporter likely bypassed Stage 11 auto-harvest');
+  }
+  if ((!rigWarps || (rigWarps.size ?? 0) === 0) && !rigOnly) {
+    console.warn('[cmo3writer] per-mesh rigWarps map empty outside rigOnly mode — shiftFn fallbacks may fire (see Stage 11 auto-harvest)');
+  }
   const _bodyChain = bodyWarpChain ?? buildBodyWarpChain({
     perMesh,
     canvasW,
@@ -3209,6 +3219,12 @@ export async function generateCmo3(input) {
       // See `cmo3/faceParallax.js` emitFaceParallax — contains protected
       // region build (A.3 pairing, A.6b cell expansion), 3D rotation math
       // with #3 eye-parallax amp + #5 far-eye squash, and the deformer emit.
+      //
+      // Stage 11 invariant: same as the body-warp guard above — outside
+      // `rigOnly` the spec should always be pre-resolved.
+      if (!faceParallaxSpec && !rigOnly) {
+        console.warn('[cmo3writer] faceParallax heuristic firing outside rigOnly mode — exporter likely bypassed Stage 11 auto-harvest');
+      }
       const pidFpGuid = emitFaceParallax(x, {
         pidParamAngleX, pidParamAngleY, pidFaceRotGuid,
         faceUnionBbox, facePivotCx, facePivotCy, faceMeshBbox,

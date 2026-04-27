@@ -27,6 +27,7 @@ import { resolveAutoRigConfig } from './rig/autoRigConfig.js';
 import { resolveFaceParallax } from './rig/faceParallaxStore.js';
 import { resolveBodyWarp } from './rig/bodyWarpStore.js';
 import { resolveRigWarps } from './rig/rigWarpsStore.js';
+import { initializeRigFromProject } from './rig/initRig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -78,9 +79,16 @@ export async function exportLive2D(project, images, opts = {}) {
   const boneConfigResolved = resolveBoneConfig(project);
   const rotationDeformerConfigResolved = resolveRotationDeformerConfig(project);
   const autoRigConfigResolved = resolveAutoRigConfig(project);
-  const faceParallaxSpecResolved = resolveFaceParallax(project);
-  const bodyWarpChainResolved = resolveBodyWarp(project);
-  const rigWarpsResolved = resolveRigWarps(project);
+  // Stage 11: keyform-bearing specs come either from explicit user seeding
+  // (Initialize Rig button → project.faceParallax/bodyWarp/rigWarps) or from
+  // an in-memory harvest via the seeder path. Either way, the heuristic
+  // generators inside cmo3writer fire only via initRig — never directly
+  // from this export path.
+  const {
+    faceParallaxSpec: faceParallaxSpecResolved,
+    bodyWarpChain: bodyWarpChainResolved,
+    rigWarps: rigWarpsResolved,
+  } = await resolveAllKeyformSpecs(project, images);
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -494,6 +502,15 @@ export async function exportLive2DProject(project, images, opts = {}) {
 
   onProgress(`Generating .cmo3 (${meshes.length} meshes)...`);
 
+  // Stage 11: same auto-harvest pattern as the runtime path. Keyform-bearing
+  // specs come from explicit seeding when present, otherwise an in-memory
+  // initRig harvest. cmo3writer's heuristic fallbacks now only fire from the
+  // seeder's `rigOnly` mode — never from this export path.
+  const {
+    faceParallaxSpec: faceParallaxSpecResolved,
+    bodyWarpChain: bodyWarpChainResolved,
+    rigWarps: rigWarpsResolved,
+  } = await resolveAllKeyformSpecs(project, images);
   const { cmo3, deformerParamMap, rigDebugLog } = await generateCmo3({
     canvasW,
     canvasH,
@@ -512,9 +529,9 @@ export async function exportLive2DProject(project, images, opts = {}) {
     eyeClosureConfig: resolveEyeClosureConfig(project),
     rotationDeformerConfig: resolveRotationDeformerConfig(project),
     autoRigConfig: resolveAutoRigConfig(project),
-    faceParallaxSpec: resolveFaceParallax(project),
-    bodyWarpChain: resolveBodyWarp(project),
-    rigWarps: resolveRigWarps(project),
+    faceParallaxSpec: faceParallaxSpecResolved,
+    bodyWarpChain: bodyWarpChainResolved,
+    rigWarps: rigWarpsResolved,
   });
 
   // --- Motion synthesis (optional) ---
@@ -602,6 +619,53 @@ export async function exportLive2DProject(project, images, opts = {}) {
   }
 
   return new Blob([cmo3], { type: 'application/octet-stream' });
+}
+
+/**
+ * Stage 11 — resolve the three keyform-bearing rig specs to populated values.
+ *
+ * Pulls from `project.faceParallax` / `project.bodyWarp` / `project.rigWarps`
+ * when populated (the user clicked "Initialize Rig" or loaded a `.stretch`
+ * file with seeded state). When **all three** are unpopulated, runs
+ * `initializeRigFromProject` once to harvest fresh specs in memory — this
+ * keeps export self-sufficient for projects that never went through the
+ * seeder UI, but routes through the seeder code path so cmo3writer's inline
+ * heuristics are reachable only via `rigOnly` mode (Stage 11 invariant).
+ *
+ * Partial seeding is respected: when at least one field is populated, the
+ * remaining null fields are kept null on the assumption the user explicitly
+ * cleared them (e.g. a model with no face meshes legitimately has
+ * `project.faceParallax === null`).
+ *
+ * Does NOT mutate `project`. Caller takes the returned values and passes
+ * them to `generateCmo3`.
+ *
+ * @param {object} project
+ * @param {Map<string, HTMLImageElement>} images
+ * @returns {Promise<{
+ *   faceParallaxSpec: object|null,
+ *   bodyWarpChain: object|null,
+ *   rigWarps: Map<string, object>,
+ * }>}
+ */
+async function resolveAllKeyformSpecs(project, images) {
+  let faceParallaxSpec = resolveFaceParallax(project);
+  let bodyWarpChain = resolveBodyWarp(project);
+  let rigWarps = resolveRigWarps(project);
+
+  const anySeeded =
+    faceParallaxSpec !== null
+    || bodyWarpChain !== null
+    || rigWarps.size > 0;
+
+  if (!anySeeded) {
+    const harvest = await initializeRigFromProject(project, images);
+    faceParallaxSpec = harvest.faceParallaxSpec;
+    bodyWarpChain = harvest.bodyWarpChain;
+    rigWarps = harvest.rigWarps;
+  }
+
+  return { faceParallaxSpec, bodyWarpChain, rigWarps };
 }
 
 /**
