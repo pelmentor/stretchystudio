@@ -37,7 +37,7 @@ demand" rather than speculatively.
 | R3 | `warpEval` — bilinear FFD + `frameConvert` | **shipped 2026-04-28** |
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | **shipped 2026-04-28** |
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | **shipped 2026-04-28** |
-| R6 | Chain composition + first visible demo | not started |
+| R6 | Chain composition + first visible demo | **shipped 2026-04-28** |
 | R7 | Mask system generalization (stencil) | not started |
 | R8 | Full param scrubber UI | not started |
 | R9 | Physics tick (Cubism pendulum) | not started |
@@ -1496,6 +1496,78 @@ pass; total suite at 1250.
 **Files:** `src/io/live2d/runtime/evaluator/artMeshEval.js` (new),
 `scripts/test_artMeshEval.mjs` (new), `package.json`. **Tag:**
 `native-rig-render-stage-R5-complete`.
+
+### v2 Stage R6 — Chain composition + first visible demo (shipped 2026-04-28)
+
+**The integration moment.** R2-R5 produced no visible output
+individually; R6 wires them into a single driver and replaces R0's
+hardcoded translation in CanvasViewport with a real rigSpec-driven
+evaluator.
+
+**`chainEval.js` — `evalRig(rigSpec, paramValues)`.** Top-level
+entry. Iterates every art mesh, builds a per-evaluation
+`DeformerStateCache`, walks each mesh's parent chain
+(warp → rotation → root), composes deformer transforms and produces
+final canvas-px vertex positions. Each frame returns
+`{id, vertexPositions: Float32Array, opacity, drawOrder}`.
+
+The chain walker dispatches per parent type — warps apply
+`bilinearFFD(grid, gridSize, u, v)`, rotation deformers apply
+`buildRotationMat3 → applyMat3ToPoint`. Output of one step is in the
+next parent's input domain by the rigSpec localFrame contract, so
+composition is a clean foreach.
+
+A safety counter (32 hops) terminates malformed parent cycles
+defensively. Unknown parent IDs are treated as ROOT (best-effort
+fail-graceful).
+
+**Cmo3writer artParent ID fix.** R1's parent-ID guess
+`RigWarp_${pm.partId}` was wrong — the actual rigWarp emission uses
+`RigWarp_${sanitizedName}` where sanitizedName replaces non-alnum
+chars with underscores. Updated artParent computation to match the
+sanitiser used at L2755 so chain walks resolve cleanly.
+
+**CanvasViewport tick integration.** New rigSpec subscription
+(`useRigSpecStore`) + dirty-tag effect. The R0 hardcoded test
+translation block is removed. Inserted between draftPose application
+and the blendShape loop: when a rigSpec is cached, runs `evalRig`
+and seeds `poseOverrides.mesh_verts` for each art mesh. Existing
+animation/draft overrides win — rig eval is the *base* layer
+underneath user explicit edits.
+
+**BlendShape composition refactor (per double-check fix #3).** The
+blendShape loop previously read `v.restX, v.restY` always —
+overwriting any prior `mesh_verts`. Refactored to read
+`kfOv?.mesh_verts ?? node.mesh.vertices` like puppetWarp does. Now
+blend deltas compose ON TOP of the rig-evaluated base, matching
+Cubism's runtime composition order (rig → blend → puppet).
+
+**ParametersPanel demo slider.** The R0 `__test_translate_x` slider
+is replaced with a `ParamAngleX` slider [-30°, +30°] — a real Cubism
+parameter wired into neck-corner shapekeys, face rotation, and body
+warps via the auto-rig output. Drag → head turns end-to-end.
+
+**Tests.** 23 chainEval cases: empty rigSpec → [], root-parented
+identity, single warp parent (bilinear FFD), warp parent with
+deformed grid (P=0/0.5/1 sweep), single rotation parent (mat3 at
+0° / +90° / -90°), multi-mesh parent cache, unknown parent → root
+fallback, two-deep chain (rotation under warp composes correctly),
+output not aliased to keyform buffer, cycle guard. Total suite at
+1273.
+
+**Files:** `src/io/live2d/runtime/evaluator/chainEval.js` (new),
+`scripts/test_chainEval.mjs` (new),
+`src/components/canvas/CanvasViewport.jsx` (rigSpec subscription +
+evalRig hook + blendShape refactor + R0-block removal),
+`src/components/parameters/ParametersPanel.jsx` (slider rebind),
+`src/io/live2d/cmo3writer.js` (artParent ID sanitiser fix),
+`package.json` (test wired into `npm test`). **Tag:**
+`native-rig-render-stage-R6-complete`.
+
+**Browser smoke test left to user.** Open Hiyori, click
+"Initialize Rig" in ParametersPanel, expand the panel, drag the
+ParamAngleX slider — model should turn its head end-to-end. No dev
+server auto-launch (per saved feedback).
 
 ## Rollback strategy
 

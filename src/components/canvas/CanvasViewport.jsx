@@ -4,6 +4,8 @@ import { useTheme } from '@/contexts/ThemeProvider';
 import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
+import { useRigSpecStore } from '@/store/rigSpecStore';
+import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
 import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
@@ -181,6 +183,13 @@ export default function CanvasViewport({
   const paramValuesRef = useRef(paramValues);
   paramValuesRef.current = paramValues;
 
+  // R6 — rigSpec session cache (built by ParametersPanel "Initialize Rig").
+  // When non-null, the tick runs the full evaluator chain instead of
+  // R0's hardcoded test translation.
+  const rigSpec = useRigSpecStore(s => s.rigSpec);
+  const rigSpecRef = useRef(rigSpec);
+  rigSpecRef.current = rigSpec;
+
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
   const projectRef = useRef(project);
@@ -194,6 +203,7 @@ export default function CanvasViewport({
 
   useEffect(() => { isDirtyRef.current = true; }, [project, isDark]);
   useEffect(() => { isDirtyRef.current = true; }, [paramValues]);
+  useEffect(() => { isDirtyRef.current = true; }, [rigSpec]);
   
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {
@@ -340,7 +350,39 @@ export default function CanvasViewport({
           }
         }
 
-        // Apply blend shapes — compute blended vertex positions for nodes with active influences
+        // R6 — Native rig evaluation. When a rigSpec is cached, walk every
+        // art mesh's parent chain (warp/rotation deformers) under current
+        // paramValues and produce final canvas-px vertex positions. The
+        // result feeds poseOverrides.mesh_verts so subsequent passes
+        // (blendShape, puppet warp) compose ON TOP rather than starting
+        // from rest. Skipped entirely when rigSpec is null (user hasn't
+        // clicked Initialize Rig yet, or just clicked Clear).
+        const _rigSpec = rigSpecRef.current;
+        if (_rigSpec && Array.isArray(_rigSpec.artMeshes) && _rigSpec.artMeshes.length > 0) {
+          const frames = evalRig(_rigSpec, paramValuesRef.current);
+          for (const f of frames) {
+            const node = projectRef.current.nodes.find(n => n.id === f.id);
+            if (!node?.mesh) continue;
+            // Convert flat Float32Array [x,y, ...] → Array<{x, y}> for the
+            // existing GPU upload pipeline.
+            const verts = new Array(f.vertexPositions.length / 2);
+            for (let i = 0; i < verts.length; i++) {
+              verts[i] = { x: f.vertexPositions[i * 2], y: f.vertexPositions[i * 2 + 1] };
+            }
+            if (!poseOverrides) poseOverrides = new Map();
+            const existing = poseOverrides.get(f.id) ?? {};
+            // Don't overwrite an animation/draft override that's already there;
+            // those are the user's explicit edit. Rig eval is the default base.
+            if (!existing.mesh_verts) poseOverrides.set(f.id, { ...existing, mesh_verts: verts });
+          }
+        }
+
+        // Apply blend shapes — compute blended vertex positions for nodes with active influences.
+        // Composition note (R6 fix): start from any existing `mesh_verts`
+        // (rig eval / draft / animation) and add blend deltas on top.
+        // Previously this loop always started from `v.restX, v.restY` and
+        // overwrote any prior mesh_verts — that's wrong once rig eval is
+        // active because it reverts the rig deformation.
         const ed = editorRef.current;
         for (const node of projectRef.current.nodes) {
           if (node.type !== 'part' || !node.mesh || !node.blendShapes?.length) continue;
@@ -361,8 +403,11 @@ export default function CanvasViewport({
           });
           if (!hasInfluence) continue;
 
-          const blendedVerts = node.mesh.vertices.map((v, i) => {
-            let bx = v.restX, by = v.restY;
+          // Read current verts (rig-eval / draft / etc.) or fall back to rest.
+          const baseVerts = kfOv?.mesh_verts ?? node.mesh.vertices;
+          const blendedVerts = baseVerts.map((v, i) => {
+            let bx = v.x ?? v.restX;
+            let by = v.y ?? v.restY;
             for (let j = 0; j < node.blendShapes.length; j++) {
               const d = node.blendShapes[j].deltas[i];
               if (d) { bx += d.dx * influences[j]; by += d.dy * influences[j]; }
@@ -372,7 +417,7 @@ export default function CanvasViewport({
 
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
-          if (!existing.mesh_verts) poseOverrides.set(node.id, { ...existing, mesh_verts: blendedVerts });
+          poseOverrides.set(node.id, { ...existing, mesh_verts: blendedVerts });
         }
 
         // Apply puppet warp — deform mesh using MLS-rigid based on pin positions
@@ -401,26 +446,6 @@ export default function CanvasViewport({
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
           poseOverrides.set(node.id, { ...existing, mesh_verts: warpedVerts });
-        }
-
-        // R0 — Native rig render plumbing smoke test. One hardcoded param
-        // (`__test_translate_x`) translates every selected mesh along X by
-        // the slider value. Real evaluator (R3-R5) will replace this branch.
-        {
-          const testTx = paramValuesRef.current['__test_translate_x'];
-          if (typeof testTx === 'number' && testTx !== 0) {
-            const sel = editorRef.current.selection ?? [];
-            for (const nodeId of sel) {
-              const node = projectRef.current.nodes.find(n => n.id === nodeId);
-              if (!node || node.type !== 'part' || !node.mesh) continue;
-              const kfOv = poseOverrides?.get(nodeId);
-              const inputVerts = (kfOv?.mesh_verts ?? node.mesh.vertices)
-                .map(v => ({ x: (v.x ?? v.restX) + testTx, y: v.y ?? v.restY }));
-              if (!poseOverrides) poseOverrides = new Map();
-              const existing = poseOverrides.get(nodeId) ?? {};
-              poseOverrides.set(nodeId, { ...existing, mesh_verts: inputVerts });
-            }
-          }
         }
 
         // Upload mesh vertex overrides BEFORE drawing so the GPU buffers are

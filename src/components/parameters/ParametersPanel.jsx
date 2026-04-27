@@ -33,8 +33,11 @@ export function ParametersPanel() {
   const seedAllRig = useProjectStore(s => s.seedAllRig);
   const clearRigKeyforms = useProjectStore(s => s.clearRigKeyforms);
 
-  // R0 — test slider for the native rig render evaluator pipeline.
-  const testTx = useParamValuesStore(s => s.values['__test_translate_x'] ?? 0);
+  // R6 — driving slider for the native rig render evaluator. ParamAngleX
+  // is bound by neck-corner shapekeys, face rotation deformer, body warps
+  // and other auto-rig output, so dragging it deforms the head-and-body
+  // chain end-to-end. R8 will replace this with a full param scrubber.
+  const angleX = useParamValuesStore(s => s.values['ParamAngleX'] ?? 0);
   const setParamValue = useParamValuesStore(s => s.setParamValue);
 
   const [expanded, setExpanded] = React.useState(false);
@@ -149,18 +152,18 @@ export function ParametersPanel() {
           <div className="border-t border-border/40 pt-2 mt-1 flex flex-col gap-2">
             <div className="flex flex-col gap-1 px-1.5 py-1 rounded bg-muted/20 border border-dashed border-border/40">
               <div className="flex items-center justify-between text-[10px] font-mono">
-                <span className="text-muted-foreground">__test_translate_x</span>
-                <span className="text-foreground">{testTx.toFixed(0)} px</span>
+                <span className="text-muted-foreground">ParamAngleX</span>
+                <span className="text-foreground">{angleX.toFixed(0)}°</span>
               </div>
               <Slider
-                min={-100}
-                max={100}
+                min={-30}
+                max={30}
                 step={1}
-                value={[testTx]}
-                onValueChange={([v]) => setParamValue('__test_translate_x', v)}
+                value={[angleX]}
+                onValueChange={([v]) => setParamValue('ParamAngleX', v)}
               />
               <p className="text-[9px] text-muted-foreground/70 italic">
-                R0 plumbing — translates the selected mesh on X.
+                R6 demo — drives the rig evaluator (head turn).
               </p>
             </div>
 

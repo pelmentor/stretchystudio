@@ -3591,9 +3591,13 @@ export async function generateCmo3(input) {
     const artKeyforms = [];
     let artLocalFrame = rwBox ? 'normalized-0to1'
       : (dfOrigin ? 'pivot-relative' : 'canvas-px');
+    // The rig-warp emission block (~L2755) sanitises the mesh name to derive
+    // its CDeformerId — match the same transform here so artMesh.parent.id
+    // resolves into rigSpec.warpDeformers via lookup.
+    const _artSanitizedName = (pm.meshName || pm.partId).replace(/[^a-zA-Z0-9_]/g, '_');
     let artParent;
     if (rwBox) {
-      artParent = { type: 'warp', id: `RigWarp_${pm.partId}` };
+      artParent = { type: 'warp', id: `RigWarp_${_artSanitizedName}` };
     } else if (jointBoneId && deformerWorldOrigins.has(jointBoneId)) {
       artParent = { type: 'rotation', id: jointBoneId };
     } else if (dfOwner) {
