@@ -311,6 +311,40 @@ function assertThrows(fn, name) {
 }
 
 {
+  // A save at v9 lacks rigWarps. v10 migration adds it as {}.
+  const p = { schemaVersion: 9 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v9→current: schemaVersion bumped');
+  assertEq(p.rigWarps, {}, 'v9→current: rigWarps added as empty object');
+}
+
+{
+  // Pre-existing rigWarps preserved (Stage 9b stores per-mesh keyform map).
+  const rw = {
+    'part-A': {
+      id: 'RigWarp_part_A',
+      name: 'part-A Warp',
+      parent: { type: 'warp', id: 'BodyXWarp' },
+      targetPartId: 'part-A',
+      canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 },
+      gridSize: { rows: 2, cols: 2 },
+      baseGrid: new Array(18).fill(0),
+      localFrame: 'normalized-0to1',
+      bindings: [{ parameterId: 'ParamHairFront', keys: [-1, 0, 1], interpolation: 'LINEAR' }],
+      keyforms: [
+        { keyTuple: [-1], positions: new Array(18).fill(0), opacity: 1 },
+        { keyTuple: [0],  positions: new Array(18).fill(0), opacity: 1 },
+        { keyTuple: [1],  positions: new Array(18).fill(0), opacity: 1 },
+      ],
+      isVisible: true, isLocked: false, isQuadTransform: false,
+    },
+  };
+  const p = { schemaVersion: 9, rigWarps: rw };
+  migrateProject(p);
+  assert(p.rigWarps === rw, 'v9→current: existing rigWarps preserved');
+}
+
+{
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};
   migrateProject(p);
@@ -324,6 +358,7 @@ function assertThrows(fn, name) {
   assert(p.autoRigConfig === null, 'v0→current: autoRigConfig added as null');
   assert(p.faceParallax === null, 'v0→current: faceParallax added as null');
   assert(p.bodyWarp === null, 'v0→current: bodyWarp added as null');
+  assertEq(p.rigWarps, {}, 'v0→current: rigWarps added as {}');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

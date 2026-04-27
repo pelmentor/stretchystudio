@@ -26,6 +26,7 @@ import { resolveRotationDeformerConfig } from './rig/rotationDeformerConfig.js';
 import { resolveAutoRigConfig } from './rig/autoRigConfig.js';
 import { resolveFaceParallax } from './rig/faceParallaxStore.js';
 import { resolveBodyWarp } from './rig/bodyWarpStore.js';
+import { resolveRigWarps } from './rig/rigWarpsStore.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 
@@ -79,6 +80,7 @@ export async function exportLive2D(project, images, opts = {}) {
   const autoRigConfigResolved = resolveAutoRigConfig(project);
   const faceParallaxSpecResolved = resolveFaceParallax(project);
   const bodyWarpChainResolved = resolveBodyWarp(project);
+  const rigWarpsResolved = resolveRigWarps(project);
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -149,6 +151,7 @@ export async function exportLive2D(project, images, opts = {}) {
       autoRigConfig: autoRigConfigResolved,
       faceParallaxSpec: faceParallaxSpecResolved,
       bodyWarpChain: bodyWarpChainResolved,
+      rigWarps: rigWarpsResolved,
     });
     rigSpec = rigResult.rigSpec;
   } catch (err) {
@@ -511,6 +514,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     autoRigConfig: resolveAutoRigConfig(project),
     faceParallaxSpec: resolveFaceParallax(project),
     bodyWarpChain: resolveBodyWarp(project),
+    rigWarps: resolveRigWarps(project),
   });
 
   // --- Motion synthesis (optional) ---

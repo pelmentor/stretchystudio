@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -149,6 +149,22 @@ const MIGRATIONS = {
   9: (project) => {
     if (project.bodyWarp === undefined || project.bodyWarp === null) {
       project.bodyWarp = null;
+    }
+    return project;
+  },
+
+  // v10 — Stage 9b: project.rigWarps is the per-mesh rig warp keyform
+  // store, keyed by partId. Each entry is a serialized WarpDeformerSpec
+  // (id, parent, targetPartId, canvasBbox, gridSize, baseGrid as flat
+  // number[], bindings, keyforms with positions as flat number[], opacity,
+  // isVisible, isLocked, isQuadTransform). Empty {} means the cmo3 writer
+  // runs today's inline shiftFn invocation per (mesh, keyform tuple).
+  // Populated entries replace the shiftFn invocation with stored
+  // positions — same v1 staleness footgun as Stages 4 and 10 (PSD reimport
+  // with re-meshed silhouette requires `clearRigWarps`).
+  10: (project) => {
+    if (project.rigWarps === undefined || project.rigWarps === null) {
+      project.rigWarps = {};
     }
     return project;
   },

@@ -22,8 +22,9 @@
     "test:faceParallax": "node scripts/test_faceParallax.mjs",
     "test:bodyWarp": "node scripts/test_bodyWarp.mjs",
     "test:tagWarpBindings": "node scripts/test_tagWarpBindings.mjs",
+    "test:rigWarps": "node scripts/test_rigWarps.mjs",
     "test:e2e": "node scripts/test_e2e_equivalence.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:e2e"
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:rigWarps && npm run test:e2e"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

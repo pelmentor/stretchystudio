@@ -18,6 +18,10 @@ import {
   seedBodyWarpChain as seedBodyWarpChainFn,
   clearBodyWarp as clearBodyWarpFn,
 } from '@/io/live2d/rig/bodyWarpStore';
+import {
+  seedRigWarps as seedRigWarpsFn,
+  clearRigWarps as clearRigWarpsFn,
+} from '@/io/live2d/rig/rigWarpsStore';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -102,6 +106,7 @@ export const useProjectStore = create((set) => ({
     autoRigConfig: null,
     faceParallax: null,
     bodyWarp: null,
+    rigWarps: {},
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -441,6 +446,34 @@ export const useProjectStore = create((set) => ({
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       clearBodyWarpFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Seed `project.rigWarps` from a pre-computed `partId → spec` map
+   * (or iterable of specs with `targetPartId`) — Stage 9b. Caller is
+   * typically a rig-init flow that runs `generateCmo3` once and
+   * harvests `rigSpec.warpDeformers` filtered to per-mesh entries.
+   * Destructive: overwrites the entire stored map.
+   */
+  seedRigWarps: (rigWarps) => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      seedRigWarpsFn(draft.project, rigWarps);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Clear `project.rigWarps` to revert to the heuristic shiftFn
+   * path. Use after PSD reimport invalidates stored per-vertex
+   * deltas or any binding-axis change.
+   */
+  clearRigWarps: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      clearRigWarpsFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
   }),

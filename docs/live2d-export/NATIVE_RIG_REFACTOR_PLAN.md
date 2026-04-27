@@ -18,7 +18,7 @@ Living tracker. Update on every stage transition.
 | 7 | Bone config | **shipped** — `src/io/live2d/rig/boneConfig.js` (`bakedKeyformAngles` per project, default `[-90,-45,0,45,90]`). Schema v4. paramSpec / cmo3writer / moc3writer all consume via `bakedKeyformAngles` arg. Eliminates the duplicated literal in moc3writer. 18 tests. |
 | 8 | Rotation deformers (config) | **shipped** — `src/io/live2d/rig/rotationDeformerConfig.js` (`DEFAULT_ROTATION_DEFORMER_CONFIG` bundles `skipRotationRoles` + `paramAngleRange` + `groupRotation`/`faceRotation` paramKey→angle mappings). Schema v6. cmo3writer keyform emission generalised from 3-keyform to N-keyform; paramSpec consumes skipRoles + range; bodyRig threads faceRotation paramKeys/angles. Pivots stay computed live (no snapshot). 49 tests, `npm run test:rotationDeformerConfig`. |
 | 9a | Tag warp bindings — module + magnitude lift | **shipped** — `src/io/live2d/rig/tagWarpBindings.js` (`buildTagWarpBindingRules(magnitudes)` + `buildTagBindingMap(paramPids, magnitudes)`). The 290-LOC inline `TAG_PARAM_BINDINGS` Map in `cmo3writer.js` (front hair, back hair, bottomwear, topwear, legwear, eyebrow×3, irides×3, eyewhite×3, eyelash, mouth — 16 tags total) extracted into a pure module. Magnitudes (~13 numeric constants — hair sway, clothing sway, brow Y, iris gaze, eye-converge frac, mouth stretch) lifted into `autoRigConfig.tagWarpMagnitudes`; per-character override now requires no code edits. Defaults bit-for-bit identical to pre-9a literals (verified by inline-reference tests). 182 tests in `scripts/test_tagWarpBindings.mjs`, 26 new in `test_autoRigConfig.mjs`. **No keyform baking yet** — keyforms still computed at export time; that's Stage 9b. |
-| 9b | Tag warp bindings — per-mesh keyform baking | not started — Stage 9b will bake `shiftFn` outputs to per-mesh stored keyforms in `project.rigWarps[partId]`, eliminating the procedural closure from the runtime path. Foundation in place via 9a. |
+| 9b | Tag warp bindings — per-mesh keyform baking | **shipped (v1)** — `src/io/live2d/rig/rigWarpsStore.js` (`serializeRigWarps` / `deserializeRigWarps` / `resolveRigWarps` / `seedRigWarps` / `clearRigWarps`). Schema v10. `project.rigWarps` is a `{[partId]: storedSpec}` map (Float64Array baseGrid + per-keyform positions → number[]). cmo3writer accepts `rigWarps` ctx arg as a `Map<partId, spec>`; per-mesh emission loop validates stored spec shape (numKf + per-keyform position length) and replaces the procedural `shiftFn` invocation with stored positions when valid. Misses fall through to inline path — preserves today's heuristic for unseeded meshes. exporter threads `resolveRigWarps(project)` through both `generateCmo3` calls. **No bake-flow yet** — the seeder action exists but no UI calls it; v1 ships the read-side. v1 staleness footgun (PSD reimport requires `clearRigWarps`) — same as Stages 4 + 10. 104 tests, `npm run test:rigWarps`, +3 v10 migration tests. |
 | 10 | Body warp chain (keyforms) | **shipped (v1)** — `src/io/live2d/rig/bodyWarpStore.js` (`serializeBodyWarpChain` / `deserializeBodyWarpChain` / `resolveBodyWarp` / `seedBodyWarpChain` / `clearBodyWarp`) + `makeBodyWarpNormalizers(layout)` exported from `bodyWarp.js` so the deserializer rebuilds `canvasToBodyXX/Y` closures from the stored layout. Schema v9. cmo3writer accepts `bodyWarpChain` ctx arg — populated → use stored chain verbatim; null → run `buildBodyWarpChain` heuristic. exporter threads `resolveBodyWarp(project)` through both `generateCmo3` calls. Float64Array → number[] for baseGrid + per-keyform positions; closures rebuilt at deserialize time from the layout block. 3- vs 4-spec chains both round-trip (no-BX legacy support). v1 ships **without** signatureHash staleness detection — PSD reimport with re-meshed body silhouette silently produces stale exports. 131 tests, `npm run test:bodyWarp`. |
 | 11 | Final cleanup (remove generator branches) | not started |
 
@@ -1012,24 +1012,56 @@ determinism, default-magnitude-table) + 26 in `test_autoRigConfig.mjs`
 (added section + clone/validator), `cmo3writer.js` (290-LOC inline
 block replaced by 26-LOC import-and-consume), `scripts/test_*` (×2).
 
-##### Stage 9b — Per-mesh keyform baking (not started)
+##### Stage 9b — Per-mesh keyform baking (**shipped v1**)
 
-* `project.rigWarps[partId]` = serialized `WarpDeformerSpec` per mesh,
-  with baked vertex-delta keyforms. Seeder iterates meshes, invokes
-  `shiftFn` once per (mesh, keyform-tuple), stores the resulting grid.
-* `shiftFn` then lives only in the seeder. The cmo3 emission loop
-  reads stored keyforms verbatim, no procedural compute.
-* Same v1 staleness footgun as Stages 4 + 10: PSD reimport invalidates
-  stored deltas. signatureHash tracking deferred.
+* `project.rigWarps` = `{[partId]: serializedRigWarpSpec}`. Each entry
+  mirrors the `rigWarpSpec` produced inside `cmo3writer.js`'s per-mesh
+  emission loop (`id` / `name` / `parent` / `targetPartId` / `canvasBbox`
+  / `gridSize` / `baseGrid` / `localFrame` / `bindings` / `keyforms` /
+  visibility flags). Float64Array → number[] for JSON survival,
+  same shape as Stages 4 + 10.
+* Reader fork: `cmo3writer` accepts a `rigWarps` input — a
+  `Map<partId, spec>`. Per-mesh emission validates stored spec shape
+  (numKf cardinality + per-keyform position length matches the
+  cartesian-product expected shape). On match, the procedural
+  `shiftFn` invocation is replaced by `new Float64Array(spec.keyforms[ki].positions)`.
+  On miss / shape-mismatch, the inline shiftFn path runs (no behavioural
+  change). `exporter` threads `resolveRigWarps(project)` through both
+  `generateCmo3` calls (rigOnly + full).
+* Coexistence: empty `project.rigWarps` runs every mesh through the
+  heuristic exactly as before — zero byte-for-byte regression risk on
+  existing saves. Per-mesh granularity means partial seeding works
+  too (some meshes baked, others heuristic).
+* `shiftFn` STILL lives in `tagWarpBindings.js` for the heuristic /
+  bake side. The eventual seeder action will invoke it once per
+  (mesh, keyform-tuple) and store the result; v1 ships only the
+  read side, so the seeder bake-flow remains unwired (caller can
+  populate `project.rigWarps` from any source — typically by running
+  `generateCmo3` once and harvesting `rigSpec.warpDeformers` filtered
+  to entries with `targetPartId`).
 
-**Files:** big surface across `cmo3writer.js` rig-warp emission loop
-(L2890+), `moc3writer.js` (rigWarpSpec already produced — verify
-no impedance mismatch).
+**v1 caveat (deferred):** No `signatureHash` staleness detection. PSD
+reimport with re-meshed silhouette / different vertex count silently
+produces stale exports — user must `clearRigWarps` manually. The
+shape-validity guard (numKf + position length) catches obvious
+re-mesh cases automatically and falls back to heuristic; subtler
+mismatches (same shape, different vertex topology) slip through.
+Same trade-off Stages 4 + 10 v1 made.
 
-**Risk:** highest of remaining stages. Per-mesh storage explodes
-spec count to ~40-100 entries depending on character; round-trip
-tests need to cover all tag patterns. Per-tag substages (one tag
-at a time) remain an option if float drift surfaces.
+**Tests:** 104 in `scripts/test_rigWarps.mjs` (`npm run test:rigWarps`)
++ 3 v10 migration tests in `test_migrations.mjs`. Covers serialize
+shape contract, drop-without-targetPartId, JSON survival, exact
+1e-15 round-trip on baseGrid + per-keyform positions, malformed
+input rejection, store action destructiveness, multi-binding
+(cartesian product) shape preservation, reader-fork validity-guard
+behaviour on stale-grid-size / stale-keyform-count entries, and
+"stored entries bypass heuristic" invariant.
+
+**Files:** new `rig/rigWarpsStore.js`, `cmo3writer.js` (added
+`rigWarps` ctx arg + reader fork in per-keyform position emission
+loop), `exporter.js` (threads `resolveRigWarps`),
+`projectMigrations.js` (v9 → v10), `projectStore.js` (initial state
+`rigWarps: {}` + `seedRigWarps` / `clearRigWarps` actions).
 
 #### Stage 10 — Body warp chain (**shipped v1**)
 

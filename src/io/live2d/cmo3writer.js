@@ -162,6 +162,14 @@ export async function generateCmo3(input) {
     // today's heuristic runs as the chain source. See
     // `rig/bodyWarpStore.js` resolveBodyWarp.
     bodyWarpChain = null,
+    // Pre-resolved per-mesh rig warps (Stage 9b). `partId → spec` map.
+    // For each mesh whose `partId` is in the map and whose stored
+    // keyform count matches the cartesian-product `numKf`, the writer
+    // uses the stored `keyforms[ki].positions` verbatim — skipping the
+    // procedural shiftFn invocation. Misses (absent partId or count
+    // mismatch) fall through to the inline shiftFn path. See
+    // `rig/rigWarpsStore.js` resolveRigWarps.
+    rigWarps = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -3002,11 +3010,29 @@ export async function generateCmo3(input) {
         isQuadTransform: false,
       };
 
+      // Stage 9b: resolve stored per-mesh keyforms. If a record exists for
+      // this partId AND its keyform count + per-keyform position length
+      // match the cartesian-product expected shape, the stored positions
+      // replace the procedural shiftFn invocation below. On any shape
+      // mismatch (e.g. a save where the mesh was re-meshed since seed)
+      // we fall back to the inline path — same behaviour as no record.
+      const _storedRigWarp = rigWarps?.get?.(m.partId) ?? null;
+      const _useStoredRigWarp = !!(_storedRigWarp
+        && Array.isArray(_storedRigWarp.keyforms)
+        && _storedRigWarp.keyforms.length === numKf
+        && _storedRigWarp.keyforms.every(k =>
+          k && k.positions && k.positions.length === warpGridPts * 2));
+
       for (let ki = 0; ki < numKf; ki++) {
-        // Generate grid positions: use shiftFn for bound params, rest for no-op
-        const pos = (hasBinding && rigWarpKeyValues)
-          ? tagBinding.shiftFn(restGrid, gW, gH, rigWarpKeyValues[ki], gxSpan, gySpan, meshCtx)
-          : new Float64Array(restGrid);
+        // Generate grid positions: stored (Stage 9b) > shiftFn for bound
+        // params > rest grid for no-op. Stored case still emits via the
+        // same XML path below — Stage 9b is reader-only, the writer
+        // shape is unchanged.
+        const pos = _useStoredRigWarp
+          ? new Float64Array(_storedRigWarp.keyforms[ki].positions)
+          : (hasBinding && rigWarpKeyValues)
+            ? tagBinding.shiftFn(restGrid, gW, gH, rigWarpKeyValues[ki], gxSpan, gySpan, meshCtx)
+            : new Float64Array(restGrid);
 
         rigWarpSpec.keyforms.push({
           keyTuple: rigWarpKeyValues ? rigWarpKeyValues[ki].slice() : [1],
