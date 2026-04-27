@@ -15,7 +15,8 @@
     "test:maskConfigs": "node scripts/test_maskConfigs.mjs",
     "test:physicsConfig": "node scripts/test_physicsConfig.mjs",
     "test:boneConfig": "node scripts/test_boneConfig.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig"
+    "test:e2e": "node scripts/test_e2e_equivalence.mjs",
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:e2e"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",
