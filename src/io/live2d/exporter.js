@@ -618,7 +618,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
  * @param {Map<string, HTMLImageElement>} _images  unused; kept for parity with the cmo3 path
  * @returns {Promise<Array<object>>}
  */
-async function buildMeshesForRig(project, _images) {
+export async function buildMeshesForRig(project, _images) {
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
   const meshParts = project.nodes

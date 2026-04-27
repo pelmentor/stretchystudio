@@ -299,6 +299,7 @@ export function emptyRigSpec(canvas) {
     canvasToInnermostX: null,
     canvasToInnermostY: null,
     innermostBodyWarpId: null,
+    bodyWarpChain: null,
     debug: null,
   };
 }

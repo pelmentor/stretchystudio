@@ -2361,6 +2361,11 @@ export async function generateCmo3(input) {
     _bodyChain.specs.find(s => s.id === 'BodyXWarp')?.id
     ?? _bodyChain.specs.find(s => s.id === 'BreathWarp')?.id
     ?? null;
+  // Stage 1b harvest: stash the full chain object (specs + layout + debug
+  // + closures) so callers running rigOnly mode can seed `project.bodyWarp`
+  // without re-running buildBodyWarpChain themselves. The closures aren't
+  // serializable but seedBodyWarpChain serializes from the chain anyway.
+  rigCollector.bodyWarpChain = _bodyChain;
   if (rigDebugLog) {
     rigDebugLog.bodyFracSource = _bodyChain.debug.bodyFracSource;
     rigDebugLog.bodyFrac = {

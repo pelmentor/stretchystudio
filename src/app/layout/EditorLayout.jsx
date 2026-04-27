@@ -13,6 +13,7 @@ import { Inspector } from '@/components/inspector/Inspector';
 import { TimelinePanel } from '@/components/timeline/TimelinePanel';
 import { AnimationListPanel } from '@/components/animation/AnimationListPanel';
 import { ArmaturePanel } from '@/components/armature/ArmaturePanel';
+import { ParametersPanel } from '@/components/parameters/ParametersPanel';
 import { ExportModal } from '@/components/export/ExportModal';
 import { PreferencesModal } from '@/components/preferences/PreferencesModal';
 import { Save, FolderOpen, FilePlus, Palette, Sun, Moon, SquareChartGantt, Download, Settings2, Undo2, Redo2 } from 'lucide-react';
@@ -576,6 +577,7 @@ export default function EditorLayout() {
                   <ResizablePanel defaultSize={isAnimationMode ? 75 : 100} minSize={30}>
                     <div className="flex h-full flex-col border-l overflow-hidden">
                       <ArmaturePanel />
+                      <ParametersPanel />
                       <div className="px-3 py-2 border-b shrink-0 flex items-center justify-between">
                         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Inspector</h2>
                       </div>

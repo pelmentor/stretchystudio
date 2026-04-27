@@ -653,24 +653,75 @@ extends this without breaking anything.
 **Files:** `src/io/live2d/rig/paramSpec.js`, `src/store/projectStore.js`,
 `scripts/test_paramSpec.mjs`, `package.json` (npm script).
 
-#### Stage 1b — Parameters UI + delete protection
+#### Stage 1b — Parameters UI + Initialize-Rig orchestrator
+
+**Status: shipped (v1).**
 
 Stage 1 was originally bundled with UI work. Splitting it out — the data
-layer (1a) is what unblocks downstream stages; the UI is independent.
+layer (1a) is what unblocks downstream stages; the UI is the entry point
+for the seeders shipped in stages 1a / 3 / 5–10.
 
-* Minimal Parameters panel (read-only list with name/min/max/default).
-* "Re-seed parameters" button + confirmation dialog when seeded data
-  exists.
+* `src/components/parameters/ParametersPanel.jsx` — Parameters panel
+  slotted into the right sidebar between `ArmaturePanel` and `Inspector`.
+  Read-only collapsed list of `project.parameters` with name + range +
+  default. Three-cell status row at the top showing whether
+  `faceParallax` / `bodyWarp` / `rigWarps` are baked-vs-inline.
+* "Initialize Rig" button — runs
+  `initializeRigFromProject(project, images)` and pushes the harvest
+  through `useProjectStore.seedAllRig(harvest)`. Confirmation dialog
+  fires if any keyform-bearing field is already populated.
+* "Clear Rig Keyforms" button — calls `clearRigKeyforms` (drops
+  faceParallax / bodyWarp / rigWarps; configs left intact). Confirmation
+  dialog gated on the same any-baked predicate.
+* `src/io/live2d/rig/initRig.js` — the orchestrator. Runs `generateCmo3`
+  in `rigOnly` mode against the live project state (with the keyform-
+  bearing inputs explicitly set to `null` so heuristics fire) and
+  harvests via the pure `harvestSeedFromRigSpec(rigSpec)` helper.
+  Filter logic: `id === 'FaceParallaxWarp'` → faceParallax;
+  `id ∈ {BZ/BY/Breath/BX} ∪ {NeckWarp}` → suppressed (chain comes from
+  `rigSpec.bodyWarpChain` stash); `targetPartId != null` → rigWarps map.
+* `cmo3writer.js` stashes `_bodyChain` on `rigCollector.bodyWarpChain`
+  so the harvester gets the full chain (specs + layout + debug +
+  closures) without rerunning `buildBodyWarpChain` itself.
+* `useProjectStore.seedAllRig(harvest)` — single-snapshot orchestrator
+  that fans out to every seeder (parameters / mask / physics / bone /
+  variantFade / eyeClosure / rotationDeformer / autoRig) and then the
+  three keyform stores. When the harvest produces null for one of the
+  keyform-bearing fields the matching `clearXxx` runs instead — keeps
+  state consistent.
+* `useProjectStore.clearRigKeyforms()` — drops the three keyform stores
+  in one snapshot.
+* `loadProject` action bug-fix: previously dropped `autoRigConfig`,
+  `faceParallax`, `bodyWarp`, `rigWarps` when restoring a `.stretch`,
+  silently regenerating them from heuristics. Now restored verbatim.
+* `resetProject` mirrors the same field set.
+* 35 unit tests cover `harvestSeedFromRigSpec` filter logic — null /
+  empty inputs, face parallax extraction, body warp suppression, neck
+  warp suppression, per-mesh rigWarps map keyed by `targetPartId`,
+  duplicate-partId last-wins, mixed-everything together, malformed
+  entry tolerance, order independence, missing chain stash. The async
+  `initializeRigFromProject` end-to-end is covered indirectly by
+  test_e2e_equivalence and the export integration paths.
+
+**Out of scope (deferred):**
 * `project.parameterGroups` for LipSync / EyeBlink / palette ordering
-  (currently auto-discovered by tag scan in cdi3 emission).
-* **Delete protection** (per "Cross-cutting invariants → ID stability").
-  Standard params (22 baked-in IDs) cannot be deleted via UI. Custom
+  (today auto-discovered by tag scan in cdi3 emission — works but isn't
+  user-editable).
+* Delete protection (per "Cross-cutting invariants → ID stability").
+  Standard params (22 baked-in IDs) cannot be deleted via UI; custom
   params (variant, bone-rotation, project-added) prompt with a list of
-  referencing animation tracks + physics rules before deletion.
+  referencing animation tracks + physics rules. Stage 1b v1 makes the
+  parameters list read-only so deletion isn't even reachable yet.
+* Per-parameter min/max/default editing.
 
 **Files:** new `src/components/parameters/ParametersPanel.jsx`,
-integration into `EditorLayout`. **Risk:** low — UI work, no data-layer
-risk now that 1a is in.
+new `src/io/live2d/rig/initRig.js`, new `scripts/test_initRig.mjs`,
+modified `src/io/live2d/cmo3writer.js` (rigCollector.bodyWarpChain stash),
+modified `src/io/live2d/rig/rigSpec.js` (emptyRigSpec adds
+bodyWarpChain field), modified `src/io/live2d/exporter.js` (export
+buildMeshesForRig), modified `src/store/projectStore.js` (seedAllRig +
+clearRigKeyforms actions, loadProject + resetProject field fixes),
+modified `src/app/layout/EditorLayout.jsx` (ParametersPanel slot).
 
 #### Stage 2 — autoRigConfig (seeder tuning surface)
 

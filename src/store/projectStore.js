@@ -254,6 +254,10 @@ export const useProjectStore = create((set) => ({
       state.project.variantFadeRules = null;
       state.project.eyeClosureConfig = null;
       state.project.rotationDeformerConfig = null;
+      state.project.autoRigConfig = null;
+      state.project.faceParallax = null;
+      state.project.bodyWarp = null;
+      state.project.rigWarps = {};
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -282,6 +286,13 @@ export const useProjectStore = create((set) => ({
       state.project.variantFadeRules = projectData.variantFadeRules;
       state.project.eyeClosureConfig = projectData.eyeClosureConfig;
       state.project.rotationDeformerConfig = projectData.rotationDeformerConfig;
+      // Stage 1b: previously-dropped fields. Loading a `.stretch` saved
+      // after a rig init would silently lose its keyform stores; the
+      // generator path then re-fired on every export, masking the loss.
+      state.project.autoRigConfig = projectData.autoRigConfig ?? null;
+      state.project.faceParallax = projectData.faceParallax ?? null;
+      state.project.bodyWarp = projectData.bodyWarp ?? null;
+      state.project.rigWarps = projectData.rigWarps ?? {};
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -473,6 +484,75 @@ export const useProjectStore = create((set) => ({
   clearRigWarps: () => set((state) => {
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
+      clearRigWarpsFn(draft.project);
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Stage 1b — orchestrator that seeds every native-rig store from a
+   * single harvest pass. Caller (UI: ParametersPanel "Initialize Rig"
+   * button) supplies the harvest result from
+   * `initializeRigFromProject(project, images)`. Single snapshot covers
+   * all writes so undo reverts the whole init in one step.
+   *
+   * Existing seeded data is overwritten — the harvest already ran the
+   * heuristics with `null` keyform-bearing inputs, so the result reflects
+   * the current mesh geometry.
+   *
+   * @param {{
+   *   faceParallaxSpec: object|null,
+   *   bodyWarpChain: object|null,
+   *   rigWarps: Map<string,object>,
+   * }} harvest
+   */
+  seedAllRig: (harvest) => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      const proj = draft.project;
+      // Config-only seeders (no keyforms). All idempotent.
+      seedParametersFn(proj);
+      seedMaskConfigsFn(proj);
+      seedPhysicsRulesFn(proj);
+      seedBoneConfigFn(proj);
+      seedVariantFadeRulesFn(proj);
+      seedEyeClosureConfigFn(proj);
+      seedRotationDeformerConfigFn(proj);
+      seedAutoRigConfigFn(proj);
+      // Keyform-bearing seeders. Each only fires when the harvester
+      // actually produced a value — buildBodyWarpChain returns null for
+      // models without ParamBodyAngleZ/Y, faceParallax is null when no
+      // face-tagged meshes exist, etc.
+      if (harvest?.faceParallaxSpec) {
+        seedFaceParallaxFn(proj, harvest.faceParallaxSpec);
+      } else {
+        clearFaceParallaxFn(proj);
+      }
+      if (harvest?.bodyWarpChain) {
+        seedBodyWarpChainFn(proj, harvest.bodyWarpChain);
+      } else {
+        clearBodyWarpFn(proj);
+      }
+      if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
+        seedRigWarpsFn(proj, harvest.rigWarps);
+      } else {
+        clearRigWarpsFn(proj);
+      }
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Stage 1b — clear all keyform-bearing stores (faceParallax,
+   * bodyWarp, rigWarps) so the export pipeline falls back to the
+   * inline heuristics. Config-only seeded fields (parameters, masks,
+   * physics rules, etc.) are left intact.
+   */
+  clearRigKeyforms: () => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      clearFaceParallaxFn(draft.project);
+      clearBodyWarpFn(draft.project);
       clearRigWarpsFn(draft.project);
       draft.hasUnsavedChanges = true;
     });
