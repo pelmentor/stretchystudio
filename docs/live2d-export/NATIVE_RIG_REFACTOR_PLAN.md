@@ -22,6 +22,27 @@ Living tracker. Update on every stage transition.
 | 10 | Body warp chain (keyforms) | **shipped (v1)** — `src/io/live2d/rig/bodyWarpStore.js` (`serializeBodyWarpChain` / `deserializeBodyWarpChain` / `resolveBodyWarp` / `seedBodyWarpChain` / `clearBodyWarp`) + `makeBodyWarpNormalizers(layout)` exported from `bodyWarp.js` so the deserializer rebuilds `canvasToBodyXX/Y` closures from the stored layout. Schema v9. cmo3writer accepts `bodyWarpChain` ctx arg — populated → use stored chain verbatim; null → run `buildBodyWarpChain` heuristic. exporter threads `resolveBodyWarp(project)` through both `generateCmo3` calls. Float64Array → number[] for baseGrid + per-keyform positions; closures rebuilt at deserialize time from the layout block. 3- vs 4-spec chains both round-trip (no-BX legacy support). v1 ships **without** signatureHash staleness detection — PSD reimport with re-meshed body silhouette silently produces stale exports. 131 tests, `npm run test:bodyWarp`. |
 | 11 | Final cleanup (remove generator branches) | **shipped 2026-04-27** — `exporter.js` `resolveAllKeyformSpecs(project, images)` helper at top of both `exportLive2D` and `exportLive2DProject`: respects explicit seeding, falls back to one-shot `initializeRigFromProject` harvest when state is fully empty (in-memory only — does NOT mutate project). Partial seeding respected. `cmo3writer.js` keeps `?? heuristic` branches as safety net for the seeder's `rigOnly` mode but emits `console.warn` when fallback fires outside `rigOnly` — visible regression detector. `rigOnly` mode preserved (still used by `initRig`); plan-bullet 2 ("garbage-collect rigOnly if no longer used") doesn't apply. `RUNTIME_PARITY_PLAN.md` updated with "Native rig path is now canonical" subsection. All 1092 tests green, 0 new lint errors, build green. |
 
+**v1 → v2 transition.** v1 (data layer) shipped 2026-04-27 with all 15
+stages (0/0.5/1a/1b/2/3/4/5/6/7/8/9a/9b/10/11) at schema v10. v2 plan
+authored 2026-04-28 — see [v2 — Native Render Pipeline](#v2--native-render-pipeline)
+section below. v1 edit-UI gap acknowledged (read-only ParametersPanel +
+0 of 11 seeded subsystems have edit UI); deferred to "build under v2
+demand" rather than speculatively.
+
+| v2 Stage | Description | Status |
+| --- | --- | --- |
+| R0 | Plumbing smoke test (paramValues store + dirty-tag + minimal slider) | not started |
+| R1 | RigSpec session cache (`useRigSpecStore`) | not started |
+| R2 | `cellSelect` — N-binding cross-product cell + lerp weights | not started |
+| R3 | `warpEval` — bilinear FFD + `frameConvert` | not started |
+| R4 | `rotationEval` — angle/origin/scale interp + mat3 | not started |
+| R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | not started |
+| R6 | Chain composition + first visible demo | not started |
+| R7 | Mask system generalization (stencil) | not started |
+| R8 | Full param scrubber UI | not started |
+| R9 | Physics tick (Cubism pendulum) | not started |
+| R10 | Performance hardening | not started |
+
 Cross-ref: see [`RUNTIME_PARITY_PLAN.md`](RUNTIME_PARITY_PLAN.md) — that
 work shipped the `rigSpec` contract this refactor leans on.
 
@@ -1253,3 +1274,314 @@ These are excluded from the refactor:
    its exact current shape? Need to confirm it matches the generator's
    `paramSpec` output before wiring (Stage 1 prerequisite — investigate
    at Stage 1 kickoff).
+
+---
+
+# v2 — Native Render Pipeline
+
+> **Status:** v2 planning kicked off 2026-04-28 (post v1 stage 11 ship).
+> Pre-render rollback anchor: tag `pre-native-rig-render` on the
+> commit that follows this section's authoring.
+
+## Goal (one-liner)
+
+The SS viewport renders **Cubism-equivalent live preview**: meshes
+deform in real time as the user drags parameter sliders (head turn, body
+sway, blink, breath, mouth shape, variant fade, hair sway, …) — driven
+by the **same RigSpec** the export pipeline already produces.
+
+**Acceptance criterion.** Side-by-side: SS viewport on the left, Cubism
+Viewer loading the same project's exported `.moc3` on the right. Drag
+the same parameters in both. Visual motion matches to the naked eye on a
+reference rig (Hiyori). No pixel-perfect requirement, no automated diff
+harness in v2 v1.
+
+## Non-goals
+
+* **Not a Cubism Editor clone.** No timeline editing, no motion
+  authoring, no physics field drag-edit, no in-viewport keyform painting.
+* **Not a drop-in replacement for Cubism Viewer in production QA.**
+  Naked-eye parity is enough; pixel-diff isn't a v2 requirement.
+* **Not v3 (live mesh editing with deformation feedback).** v3 = "I edit
+  a vertex and immediately see how it deforms across all keyforms." v2
+  ends one step before that — meshes are read-only inputs to the
+  evaluator.
+* **No WebGPU.** WebGL2 stack stays. The existing `partRenderer.js`
+  `uploadPositions(partId, verts, uvs)` already does per-frame vertex
+  buffer updates (used by blendShapes + puppetWarp); v2 plugs into the
+  same path.
+* **Not migrating to a worker thread.** Schemas are worker-transferable
+  (plain JSON RigSpec, plain object paramValues), but v2 keeps the
+  evaluator on main thread. Move later if profiler demands it.
+
+## Architectural anchor — RigSpec is still the contract
+
+The export pipeline today produces a `RigSpec` object via
+`generateCmo3({...rigOnly:true})`. That object captures *every* deformer
+keyform, art-mesh keyform, parent chain, parameter binding the writers
+need. **v2's evaluator consumes the same RigSpec.** No new data model.
+
+The de-risking logic is symmetric to v1's "writers are byte-stable"
+property:
+
+```
+        RigSpec
+       /        \
+      v          v
+  cmo3writer    v2 evaluator (NEW)
+  moc3writer
+  physics3json
+```
+
+If the writers (already byte-equivalent to Cubism Editor's compile per
+[RUNTIME_PARITY_PLAN.md](RUNTIME_PARITY_PLAN.md)) and the evaluator
+both consume the same spec, divergence is structurally bounded to "the
+evaluator misinterprets a field." Visual parity against Cubism Viewer
+catches that.
+
+## RigSpec acquisition — cache in session, do NOT persist
+
+### The gap discovered during v2 planning
+
+v1 persisted only **warp deformer keyforms** (`project.faceParallax`
+[Stage 4], `project.bodyWarp` [Stage 10], `project.rigWarps` [Stage 9b]).
+Three other categories remained as generator output, recomputed inside
+[`cmo3writer.js`](../../src/io/live2d/cmo3writer.js) every export:
+
+* **Rotation deformer keyforms.** Group rotations + face rotation,
+  built in the deferred rotation block (line ~1640).
+* **Art-mesh keyforms.** Eye closure, neck corner shapekeys,
+  bone-baked rotation, variant fade, base fade — all decided by the
+  `hasBakedKeyforms` / `hasEyelidClosure` / `hasNeckCornerShapekeys` /
+  `hasBaseFade` / `hasEyeVariantCompound` branches at lines 1017–1071,
+  with vertex deltas computed inline at lines 3414–3835.
+* **Parts hierarchy + draw order.** Computed every export from
+  `project.nodes` + groupings.
+
+So v2 **cannot** read a complete RigSpec from `project.*` alone.
+
+### Decision — cache, not persist (Path B)
+
+Three paths considered:
+
+* **A. Persist the gap.** Add v1 stages for rotation deformer +
+  art-mesh keyforms + parts hierarchy persistence before v2 ships
+  evaluators. ~3 new v1 stages of work, plus all the staleness +
+  signatureHash footguns those bring.
+* **B. Cache RigSpec in editor session, not persisted.** New
+  `useRigSpecStore` Zustand slice holding `{ rigSpec | null }`. Built
+  once via `initializeRigFromProject(...)` (the existing seeder path
+  already produces a full RigSpec) on project load + on explicit
+  invalidation events (PSD reimport, mesh edit, tag change). Eval
+  reads from the cache. No persistence model change. **Chosen.**
+* **C. Path B now, persist later** if staleness becomes painful.
+
+Path B keeps v1's "persist what user might edit" symmetric: if the user
+doesn't edit rotation deformers in v1, there's no reason to round-trip
+them through `.stretch`. The auto-rig is the source of truth for those
+fields, and re-running the seeder is cheap (one-shot rigOnly export
+takes <1s on Hiyori-sized rigs in the dev env).
+
+**Implication.** v2 R1 ships the cache before any evaluator stage —
+without it, no evaluator has data to read.
+
+## Architecture (concrete file layout)
+
+```
+src/io/live2d/runtime/             ← NEW; cohesive with rig/ + rigSpec.js
+  evaluator/
+    cellSelect.js                  ← N-binding cross-product cell + lerp weights
+    warpEval.js                    ← bilinear FFD on warp grids
+    rotationEval.js                ← rotation deformer → 3×3 mat at param values
+    artMeshEval.js                 ← art-mesh keyform interp (verts + opacity + drawOrder)
+    frameConvert.js                ← canvas ↔ deformer-local (forward + inverse)
+    chainEval.js                   ← walk parent chain, compose all deformers
+  evalLoop.js                      ← top-level driver: rigSpec + paramValues → Map<partId, deformedVerts>
+  physicsTick.js                   ← Cubism pendulum integrator (Stage R9)
+
+src/store/
+  paramValuesStore.js              ← NEW; plain object {paramValues: {[id]:number}}
+  rigSpecStore.js                  ← NEW; cached rigSpec + invalidation actions
+
+src/components/parameters/
+  ParametersPanel.jsx              ← extend (currently read-only) with sliders
+
+src/components/canvas/CanvasViewport.jsx
+  ← insert evalLoop call between line 396 and line 403
+  ← add useEffect dirty-tag on paramValues + rigSpec store subscriptions
+
+src/renderer/scenePass.js          ← R7: generalize hardcoded iris/eyewhite stencil
+
+scripts/
+  test_cellSelect.mjs              ← R2
+  test_warpEval.mjs                ← R3
+  test_rotationEval.mjs            ← R4
+  test_artMeshEval.mjs             ← R5
+  test_chainEval.mjs               ← R6
+  test_physicsTick.mjs             ← R9
+```
+
+`runtime/` lives **inside** `io/live2d/` rather than as a sibling
+`src/runtime/` directory because the evaluator is part of the Live2D
+toolchain (consumes RigSpec types defined in `io/live2d/rig/rigSpec.js`,
+mirrors the math the writers translate to disk). The renderer
+(`src/renderer/`) is the consumer of the evaluator output, not part of
+it.
+
+## paramValues data shape
+
+```js
+useParamValuesStore = create(set => ({
+  paramValues: {},                    // {[paramId]: number}, plain object for cheap immutable ops
+  setParamValue: (id, val) => set(s => ({
+    paramValues: { ...s.paramValues, [id]: val }
+  })),
+  resetToDefaults: (paramSpecList) => set({
+    paramValues: Object.fromEntries(paramSpecList.map(p => [p.id, p.default]))
+  }),
+  setMany: (entries) => set(s => ({ paramValues: { ...s.paramValues, ...entries } })),
+}));
+```
+
+**Plain object, not `Map`.** Zustand uses immutable references for
+change detection; `{...obj, [id]: val}` is the idiomatic pattern.
+
+**Volatile session state, not persisted.** Behaves like
+`editor.view.zoom` — resets to defaults on project load. Auto-init from
+`project.parameters[i].default` when rigSpec is built.
+
+**Default values come from `project.parameters[i].default`** (Cubism
+SDK convention). `useRigSpecStore` build action triggers
+`useParamValuesStore.resetToDefaults` after `initRig` completes, so the
+viewport always shows the rest pose unless the user moved a slider.
+
+## Stages
+
+Restructured by **dependency**, not by subsystem. Math stages (R2–R5)
+are pure JS with unit tests but no visible demo individually — the
+viewport doesn't move until R6 chains them together. R0–R1 are infra.
+
+| Stage | Goal | Files | Demo on completion | Risk |
+| --- | --- | --- | --- | --- |
+| **R0** | Plumbing smoke test. paramValues store + dirty-tag + minimal slider in ParametersPanel + integration with CanvasViewport tick. Hardcoded "slider value × 50 → translate one selected mesh." Proves wiring without any evaluator. | `paramValuesStore.js`, `CanvasViewport.jsx`, `ParametersPanel.jsx` | Drag the dummy slider, watch one mesh slide horizontally. | Low — pure plumbing. |
+| **R1** | RigSpec session cache. `useRigSpecStore` + `buildRigSpec(project)` action wrapping `initializeRigFromProject`. Auto-build on project load. Invalidate on mesh edit / tag change / PSD reimport. | `rigSpecStore.js`, `projectStore.js` (invalidation hooks) | DevTools: `useRigSpecStore.getState().rigSpec` returns a populated RigSpec after project load. | Low — wraps existing initRig. |
+| **R2** | `cellSelect(bindings, paramValues) → {indices[2^N], weights[2^N]}`. Pure JS, comprehensive unit tests for 1D/2D/3D bindings, edge cases (param at exact key, param outside range, single-keyform deformer). | `runtime/evaluator/cellSelect.js`, `scripts/test_cellSelect.mjs` | Tests pass; nothing visible. | Low — pure math. |
+| **R3** | `warpEval(spec, cellInfo) → deformedGrid` (bilinear FFD on warp grid baseGrid + N-cell lerp). Plus `frameConvert.js`: forward (`canvasToLocal`) and inverse (`localToCanvas`) for `'canvas-px'`/`'normalized-0to1'`/`'pivot-relative'` localFrame. | `runtime/evaluator/warpEval.js`, `runtime/evaluator/frameConvert.js`, `scripts/test_warpEval.mjs` | Tests pass; nothing visible. | Medium — frame conversion has 3 cases per spec; pivot semantics in rotation→warp transitions need careful spec. |
+| **R4** | `rotationEval(spec, cellInfo) → mat3` — interp angle/origin/scale across cells, compose `T(origin) × R(angle) × S(scale) × T(-origin)`. | `runtime/evaluator/rotationEval.js`, `scripts/test_rotationEval.mjs` | Tests pass; nothing visible. | Low-Medium — math is small. |
+| **R5** | `artMeshEval(spec, cellInfo) → {vertexOffsets, opacity, drawOrder}` — N-cell lerp on per-keyform vertex offset arrays + scalar opacity + scalar drawOrder. | `runtime/evaluator/artMeshEval.js`, `scripts/test_artMeshEval.mjs` | Tests pass; nothing visible. | Low — pattern mirrors blendShapes loop in CanvasViewport.jsx:336. |
+| **R6** | **Chain composition + first visible demo.** `chainEval.js`: walk a mesh's parent chain (BodyZ → BodyY → Breath → BodyX → optional FaceParallax → optional FaceRotation → optional rigWarp → mesh), apply each deformer in turn, output canvas verts. `evalLoop.js`: top-level driver running per-frame in CanvasViewport tick. ParametersPanel scrubber for ~5 standard params (ParamAngleX/Y/Z, ParamBodyAngleX/Y/Z, ParamEyeLOpen, ParamEyeROpen, ParamMouthOpenY). Hook into existing `poseOverrides.mesh_verts` upload path. **Side-by-side visual gate against Cubism Viewer on Hiyori.** | `runtime/evaluator/chainEval.js`, `runtime/evalLoop.js`, `CanvasViewport.jsx`, `ParametersPanel.jsx` | Drag ParamAngleX in SS — face turns. Drag ParamBodyAngleX — body sways. Blink works. Visual match against Cubism Viewer to the naked eye. | **HIGH** — the dependency graph all converges here. Frame-conversion edge cases surface. |
+| **R7** | Mask system generalization. Replace hardcoded iris/eyewhite stencil in `scenePass.js` with `Map<partId, stencilValue>` allocated from `maskConfigs`. 8-bit stencil = up to 255 mask groups. | `scenePass.js` | Custom mask configs in `maskConfigs` (e.g. headwear masking back-hair) work without code changes. | Low — ~50 LOC change, isolated to renderer. |
+| **R8** | Full param scrubber UI. Extend ParametersPanel: slider per param organised by group (LipSync/EyeBlink/Body/Face/Variant/Bone), keyboard shortcuts, "Reset to default", group collapse/expand. Variant slider triggers visible variant fade. | `ParametersPanel.jsx`, possibly extracted into a multi-file UI module | Polished param-control UX. | Low — UI work over already-functional eval. |
+| **R9** | Physics tick — Cubism pendulum integrator. From scratch (no writer-side reference). Inputs: `physicsRules` from `useRigSpecStore`. Output: writes back into `useParamValuesStore` for downstream params (hair sway, clothing, arm physics). Driven by main eval loop with fixed-dt integration. | `runtime/physicsTick.js`, `evalLoop.js` | Hair/clothes auto-sway under body motion, no direct user input. | **HIGH** — Cubism physics semantics not fully public. Iterative tuning against Alexia.physics3.json + visual comparison required. |
+| **R10** | Performance. Profile, then targeted wins: dirty-flag eval (skip if no param changed), bbox cull (skip evaluators whose meshes are off-screen), mat3 reuse, Float32Array pooling. If main thread still saturated, port `warpEval` to vertex shader (GPU-side bilinear FFD). | `evalLoop.js`, possibly new `runtime/glEvaluator.js` | 60 fps stable on Hiyori-sized rig with all params animating. | Med — premature-opt trap; measure before optimising. |
+
+## Milestones
+
+* **Milestone D — Visible viewport (R0–R6).** First moment v2 is
+  user-facing. Face turns, body sways, blink works. The single biggest
+  user-visible win in the entire native rig refactor.
+* **Milestone E — Full rig (R7–R8).** Masks generalised, full param
+  scrubber. After E, "Cubism Viewer not needed for live preview" is
+  true for static-pose work.
+* **Milestone F — Physics + perf (R9–R10).** Hair/clothes auto-sway,
+  60fps target. Production-grade.
+
+## Risks (the real ones)
+
+1. **Frame conversion correctness in chain composition (R6).** Three
+   `localFrame` types (`canvas-px` / `normalized-0to1` / `pivot-relative`)
+   with non-trivial transitions (rotation→warp must convert
+   pivot-relative offsets to normalized-0to1 of the warp grid). Writer
+   side already handles this — see [reference_cubism_deformer_local_frames](memory)
+   note. **Mitigation:** dedicated `frameConvert.js` module in R3, unit
+   tests for every transition pair, side-by-side visual diff in R6.
+2. **Physics fidelity (R9).** Cubism's exact pendulum integration
+   constants (delay decay, accel multiplier, normalisation) are not
+   publicly documented in detail. **Mitigation:** R9 is the LAST stage
+   on purpose — Milestones D + E ship without physics, so v2's user
+   value is real before R9 risks. Iterate against
+   [reference_alexia_arm_physics](memory) transcription + visual
+   comparison.
+3. **Performance under heavy rigs.** 50+ meshes × N keyforms × M params
+   × per-frame eval on main thread. Naive estimate: 10–50ms per frame
+   on Hiyori-sized rig. **Mitigation:** R10 first measures, then
+   optimises in priority order: dirty-flag → bbox cull → typed-array
+   pool → vertex-shader port. The shader port unblocks even pathological
+   rigs.
+4. **No automated parity harness.** Regressions in evaluator math could
+   slip past visual side-by-side review. **Mitigation:** post-Milestone
+   D, ship a numeric snapshot harness — store `{rigId, paramValues, expectedVerts}`
+   fixtures, evaluator runs against them, JSON diff in CI. Optional
+   stretch: parallel-run cubism-web SDK as ground truth oracle.
+5. **rigSpec staleness in cache.** PSD reimport / mesh edit silently
+   invalidates cached rigSpec. **Mitigation:** R1 wires invalidation
+   hooks into the relevant projectStore actions. Worst case is a stale
+   render until next user-triggered "Rebuild rig" — not a correctness
+   bug, just a visible-staleness UX bug.
+
+## Reference parity strategy
+
+* **R0–R5: unit tests.** Pure-math stages are testable in isolation
+  with hand-crafted fixtures (single-keyform warp at known param
+  values, etc.). No reference rig needed.
+* **R6: visual side-by-side gate.** SS viewport on the left, Cubism
+  Viewer with same exported `.moc3` on the right. Drag matching
+  parameters, watch motion. Pass = naked-eye match. Fail = math bug,
+  iterate. This is the gate that lets R6 ship.
+* **R7–R10: visual side-by-side per stage.** Cubism Viewer remains the
+  ground truth. Add the numeric harness at any point if visual gates
+  miss too much.
+
+This is honest scope. v2 v1 ships **without** an automated parity
+harness against Cubism. Auto-harness is a stretch goal *for v2 v2*.
+
+## Per-stage protocol
+
+Same shape as v1 stages but acceptance changed from "diff harness
+green" to "visual side-by-side green":
+
+1. **Spec.** Define inputs/outputs of the new module/component.
+2. **Pure unit tests.** Math is testable without DOM/GL.
+3. **Integration.** Wire into evalLoop + dirty-tag.
+4. **Visual smoke test.** Side-by-side against Cubism Viewer on
+   Hiyori for any stage that produces visible output (R0, R6, R7, R8,
+   R9). Math-only stages (R1–R5) skip this.
+5. **Doc.** Update this section's stage table with status + concise
+   summary.
+6. **Tag.** `native-rig-render-stage-RN-complete`.
+
+A stage is **not done** until all six are green. Don't ship math
+modules without their unit tests; don't ship visible stages without
+side-by-side gating.
+
+## Estimated scope
+
+* **Milestone D (R0–R6):** 5–7 sessions. Highest payoff, highest math
+  risk concentrated in R6 (frame conversion).
+* **Milestone E (R7–R8):** 2–3 sessions.
+* **Milestone F (R9–R10):** 3–5 sessions (R9 is a black box; could be
+  longer).
+
+**Total: 10–15 sessions** for full v2. Comparable to v1's 15-stage
+arc. Roughly 2–3 months of focused autonomous work.
+
+## Open questions for R0/R1 kickoff
+
+1. **`useParamValuesStore` location.** New top-level store vs slice in
+   `useEditorStore`. **Decided:** new top-level store (cleaner
+   separation, auto-init triggers from rigSpec, scrubber UI is its
+   primary consumer).
+2. **rigSpec rebuild triggers.** Which projectStore actions invalidate?
+   **Decided for R1:** mesh edit (vertex move, retriangulate),
+   `applyRig` wizard, PSD reimport, "Initialize Rig" button click.
+   Conservatively over-invalidate at first; tighten if rebuild becomes
+   a perf issue.
+3. **Eval frequency.** Run on every rAF or only when paramValues /
+   rigSpec dirty? **Decided:** dirty-gated (matches existing rAF tick
+   pattern in CanvasViewport). If no param moves, no eval, no upload.
+4. **Editor mode integration.** Always-on (staging + animation modes)
+   or new "preview" mode? **Decided:** always-on. With paramValues all
+   at default, evaluator output ≈ rest pose, so existing render path
+   handles the no-op case naturally. Animation mode's keyframe-driven
+   `poseOverrides` and v2's evaluator output coexist (animation drives
+   transforms, evaluator drives mesh_verts — orthogonal axes).
