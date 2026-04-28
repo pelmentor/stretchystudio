@@ -42,6 +42,7 @@ import {
   basename,
   computeSmartMeshOpts,
 } from '@/components/canvas/viewport/helpers';
+import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -1838,124 +1839,21 @@ export default function CanvasViewport({
   }, [thumbCaptureRef, captureStaging]);
 
   /* ── Export frame capture ────────────────────────────────────────────── */
-  const captureExportFrame = useCallback(({
-    animId, timeMs, bgEnabled, bgColor,
-    exportWidth, exportHeight,
-    format = 'png', quality = 0.92,
-    cropOffset = null,
-    loopKeyframes = false,
-  }) => {
+  const captureExportFrame = useCallback((opts) => {
     const canvas = canvasRef.current;
     const scene = sceneRef.current;
     if (!canvas || !scene) return null;
-
-    // Set canvas to export dimensions
-    canvas.width = exportWidth;
-    canvas.height = exportHeight;
-
-    // Mock editor: 1:1 pixel space, no overlays
-    const panX = cropOffset ? -cropOffset.x : 0;
-    const panY = cropOffset ? -cropOffset.y : 0;
-    const exportEditor = {
-      ...editorRef.current,
-      view: { zoom: 1, panX, panY },
-      selection: [],
-      meshEditMode: false,
-      overlays: {
-        showImage: true, showWireframe: false,
-        showVertices: false, showEdgeOutline: false,
-        irisClipping: editorRef.current.overlays?.irisClipping ?? true,
+    const dataUrl = captureExportFrameImpl(
+      {
+        canvas,
+        scene,
+        editor: editorRef.current,
+        project: projectRef.current,
+        isDark: isDarkRef.current,
       },
-    };
-
-    // Export project with overridden bg (always render transparent, composite later)
-    const exportProject = {
-      ...projectRef.current,
-      canvas: { ...projectRef.current.canvas, bgEnabled: false },
-    };
-
-    // Compute pose at timeMs
-    let poseOverrides = null;
-    if (animId) {
-      const anim = exportProject.animations.find(a => a.id === animId);
-      if (anim) {
-        poseOverrides = computePoseOverrides(anim, timeMs, loopKeyframes, anim.duration ?? 0);
-
-        // Compute mesh deformations (blend shapes + puppet warp) for export frame
-        for (const node of exportProject.nodes) {
-          if (node.type !== 'part' || !node.mesh) continue;
-
-          let currentMeshVerts = null;
-
-          // 1. Blend shapes
-          if (node.blendShapes?.length) {
-            const influences = node.blendShapes.map(shape => {
-              const prop = `blendShape:${shape.id}`;
-              return poseOverrides.get(node.id)?.[prop] ?? node.blendShapeValues?.[shape.id] ?? 0;
-            });
-            if (influences.some(v => v !== 0)) {
-              currentMeshVerts = node.mesh.vertices.map((v, i) => {
-                let bx = v.restX, by = v.restY;
-                for (let j = 0; j < node.blendShapes.length; j++) {
-                  const d = node.blendShapes[j].deltas[i];
-                  if (d) { bx += d.dx * influences[j]; by += d.dy * influences[j]; }
-                }
-                return { x: bx, y: by };
-              });
-            }
-          }
-
-          if (currentMeshVerts) {
-            const existing = poseOverrides.get(node.id) ?? {};
-            poseOverrides.set(node.id, { ...existing, mesh_verts: currentMeshVerts });
-          }
-        }
-      }
-    }
-
-    // Upload deformed mesh vertices to GPU before rendering
-    const exportMeshOverridden = [];
-    if (poseOverrides) {
-      for (const [nodeId, ov] of poseOverrides) {
-        if (!ov.mesh_verts) continue;
-        const node = exportProject.nodes.find(n => n.id === nodeId);
-        if (node?.mesh) {
-          scene.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(node.mesh.uvs));
-          exportMeshOverridden.push(nodeId);
-        }
-      }
-    }
-
-    // Render with export flags
-    scene.draw(exportProject, exportEditor, isDarkRef.current, poseOverrides, {
-      skipResize: true,
-      exportMode: true,
-    });
-
-    // Composite bg color if needed, otherwise capture transparent
-    const mimeType = format === 'jpg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
-    let dataUrl;
-    if (bgEnabled && bgColor) {
-      const off = document.createElement('canvas');
-      off.width = exportWidth; off.height = exportHeight;
-      const ctx2d = off.getContext('2d');
-      ctx2d.fillStyle = bgColor;
-      ctx2d.fillRect(0, 0, exportWidth, exportHeight);
-      ctx2d.drawImage(canvas, 0, 0);
-      dataUrl = off.toDataURL(mimeType, quality);
-    } else {
-      dataUrl = canvas.toDataURL(mimeType, quality);
-    }
-
-    // Restore original mesh positions after capture is complete
-    for (const nodeId of exportMeshOverridden) {
-      const node = exportProject.nodes.find(n => n.id === nodeId);
-      if (node?.mesh) {
-        scene.parts.uploadPositions(nodeId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
-      }
-    }
-
-    // Mark dirty for rAF to restore canvas size via resize guard
+      opts,
+    );
+    // Mark dirty so rAF restores the live canvas size on the next tick.
     isDirtyRef.current = true;
     return dataUrl;
   }, []);
