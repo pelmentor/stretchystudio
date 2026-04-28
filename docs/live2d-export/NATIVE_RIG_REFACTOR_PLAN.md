@@ -39,7 +39,7 @@ demand" rather than speculatively.
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | **shipped 2026-04-28** |
 | R6 | Chain composition + first visible demo | **shipped 2026-04-28** |
 | R7 | Mask system generalization (stencil) | not started |
-| R8 | Full param scrubber UI | not started |
+| R8 | Full param scrubber UI | **shipped 2026-04-28** |
 | R9 | Physics tick (Cubism pendulum) | not started |
 | R10 | Performance hardening | not started |
 
@@ -1568,6 +1568,48 @@ evalRig hook + blendShape refactor + R0-block removal),
 "Initialize Rig" in ParametersPanel, expand the panel, drag the
 ParamAngleX slider — model should turn its head end-to-end. No dev
 server auto-launch (per saved feedback).
+
+### v2 Stage R8 — Full param scrubber UI (shipped 2026-04-28)
+
+R6 demoed live deform via a single hardcoded `ParamAngleX` slider.
+R8 generalises that to one slider per parameter in the rig spec, so
+the user can drive every axis the auto-rig generated (head/body
+angles, eye open/close, mouth, variant fades, bone rotations, …).
+
+Implemented entirely in
+[`ParametersPanel.jsx`](../../src/components/parameters/ParametersPanel.jsx).
+The single demo slider in the expanded section is replaced with a
+scrollable list (`max-h-96`) of `ParamSliderRow` rows — one per
+`project.parameters` entry. Each row reads its live dial position
+from `useParamValuesStore.values[id]`, falling back to
+`param.default ?? 0` when unset, and writes back through
+`setParamValue` on every change. The CanvasViewport tick consumes the
+same store via `paramValuesRef` + `evalRig`, so dragging deforms the
+mesh in the same frame.
+
+Step is adaptive: integer-step (`1`) for ranges ≥ 5
+(`ParamAngleX [-30, 30]`-style axes), `0.01` for sub-5 ranges
+(`ParamEyeLOpen [0, 1]`-style toggles). Display precision tracks the
+step so a 0..1 slider shows `0.50` not `1`.
+
+A "reset to defaults" link in the header re-seeds every slider via
+`resetToDefaults(params)`. The same call also fires automatically on
+"Initialize Rig" success — the user expects a fresh-baked rig to
+start from canonical defaults rather than whatever stale values were
+left over from a previous project.
+
+**No new tests.** Pure UI surfacing of an already-tested store. Test
+suite stays at 1273 passing.
+
+**Files:** `src/components/parameters/ParametersPanel.jsx` (new
+`ParamSliderRow` subcomponent + replaced expanded section + seed call
+in `runInit`),
+`docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` (R8 row +
+shipped subsection). **Tag:** `native-rig-render-stage-R8-complete`.
+
+**Browser smoke test left to user.** Open Hiyori, click
+"Initialize Rig", expand panel — every parameter now has its own
+slider. Drag any of them, watch the live deform.
 
 ## Rollback strategy
 

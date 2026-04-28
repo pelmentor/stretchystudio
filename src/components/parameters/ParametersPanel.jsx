@@ -5,7 +5,7 @@ import { useRigSpecStore } from '@/store/rigSpecStore';
 import { initializeRigFromProject } from '@/io/live2d/rig/initRig';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Wand2, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Wand2, Trash2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,26 +19,23 @@ import {
 import { toast } from 'sonner';
 
 /**
- * Stage 1b — Parameters panel. Read-only summary of `project.parameters`
- * plus the two rig-init actions: "Initialize Rig" (runs harvester +
- * seedAllRig) and "Clear Rig Keyforms" (drops faceParallax / bodyWarp /
- * rigWarps so the export pipeline falls back to inline heuristics).
+ * Parameters panel — rig actions plus live param scrubber.
  *
- * Confirmation dialogs gate both actions when seeded data already exists,
- * since both are destructive (init re-bakes against current geometry,
- * clear discards stored keyforms).
+ * Top section: "Initialize Rig" (runs harvester + seedAllRig + caches the
+ * rigSpec for the v2 evaluator) and "Clear Rig Keyforms" (drops faceParallax
+ * / bodyWarp / rigWarps so the export pipeline falls back to inline
+ * heuristics). Confirmation dialogs gate both when seeded data already
+ * exists since both are destructive.
+ *
+ * Expanded section (R8): one slider per `project.parameters` entry. Sliders
+ * read/write `paramValuesStore`; the CanvasViewport tick consumes the same
+ * store via `evalRig`, so dragging deforms the mesh in real time. A "reset
+ * to defaults" action restores every dial to its parameter spec default.
  */
 export function ParametersPanel() {
   const project = useProjectStore(s => s.project);
   const seedAllRig = useProjectStore(s => s.seedAllRig);
   const clearRigKeyforms = useProjectStore(s => s.clearRigKeyforms);
-
-  // R6 — driving slider for the native rig render evaluator. ParamAngleX
-  // is bound by neck-corner shapekeys, face rotation deformer, body warps
-  // and other auto-rig output, so dragging it deforms the head-and-body
-  // chain end-to-end. R8 will replace this with a full param scrubber.
-  const angleX = useParamValuesStore(s => s.values['ParamAngleX'] ?? 0);
-  const setParamValue = useParamValuesStore(s => s.setParamValue);
 
   const [expanded, setExpanded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -67,6 +64,14 @@ export function ParametersPanel() {
           useProjectStore.getState().versionControl?.geometryVersion ?? 0,
         error: null,
       });
+      // R8 — seed live param values from the freshly baked param spec so
+      // the scrubber sliders start at their canonical defaults rather than
+      // whatever stale values were left over from a prior project. Initialize
+      // is intentionally destructive, so clobbering existing dial positions
+      // is the right call here.
+      const paramsAfterSeed =
+        harvest.rigSpec?.parameters ?? useProjectStore.getState().project.parameters ?? [];
+      useParamValuesStore.getState().resetToDefaults(paramsAfterSeed);
       const summary = [];
       if (harvest.faceParallaxSpec) summary.push('face parallax');
       if (harvest.bodyWarpChain) summary.push('body warp chain');
@@ -150,43 +155,29 @@ export function ParametersPanel() {
 
         {expanded && (
           <div className="border-t border-border/40 pt-2 mt-1 flex flex-col gap-2">
-            <div className="flex flex-col gap-1 px-1.5 py-1 rounded bg-muted/20 border border-dashed border-border/40">
-              <div className="flex items-center justify-between text-[10px] font-mono">
-                <span className="text-muted-foreground">ParamAngleX</span>
-                <span className="text-foreground">{angleX.toFixed(0)}°</span>
-              </div>
-              <Slider
-                min={-30}
-                max={30}
-                step={1}
-                value={[angleX]}
-                onValueChange={([v]) => setParamValue('ParamAngleX', v)}
-              />
-              <p className="text-[9px] text-muted-foreground/70 italic">
-                R6 demo — drives the rig evaluator (head turn).
-              </p>
-            </div>
-
             {params.length === 0 ? (
               <p className="text-[11px] text-muted-foreground italic">
                 No parameters yet. Click &ldquo;Initialize Rig&rdquo; to generate the standard set.
               </p>
             ) : (
-              <ul className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
-                {params.map(p => (
-                  <li
-                    key={p.id}
-                    className="flex items-center justify-between gap-2 text-[11px] px-1.5 py-1 rounded hover:bg-muted/40 transition-colors"
+              <>
+                <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground px-1">
+                  <span>{params.length} params · live preview</span>
+                  <button
+                    className="flex items-center gap-1 hover:text-foreground transition-colors"
+                    onClick={() => useParamValuesStore.getState().resetToDefaults(params)}
+                    title="Reset every slider back to its parameter's default value."
                   >
-                    <span className="truncate font-medium" title={p.id}>
-                      {p.name || p.id}
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground shrink-0">
-                      [{p.min}, {p.max}] · {p.default}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                    <RotateCcw size={10} />
+                    reset to defaults
+                  </button>
+                </div>
+                <ul className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+                  {params.map(p => (
+                    <ParamSliderRow key={p.id} param={p} />
+                  ))}
+                </ul>
+              </>
             )}
           </div>
         )}
@@ -243,5 +234,47 @@ export function ParametersPanel() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/**
+ * R8 — single-row slider for one rig parameter. Reads the live dial position
+ * from `paramValuesStore`, falls back to `param.default` when unset (handles
+ * "open project, then expand panel before any drag has happened"), and writes
+ * back through `setParamValue` on every change. The CanvasViewport tick reads
+ * the same store via its `paramValuesRef`, so dragging here drives evalRig
+ * → mesh deform within the same frame.
+ *
+ * Step is adaptive: integer-step for wide ranges (typical Cubism axes like
+ * ParamAngleX [-30, 30]), 0.01 for sub-5 ranges (open/close params [0, 1]).
+ * The displayed value precision tracks the step so 0.50 doesn't render as 1
+ * on a 0..1 slider.
+ */
+function ParamSliderRow({ param }) {
+  const value = useParamValuesStore(s => s.values[param.id] ?? param.default ?? 0);
+  const setParamValue = useParamValuesStore(s => s.setParamValue);
+  const range = (param.max ?? 0) - (param.min ?? 0);
+  const step = range >= 5 ? 1 : 0.01;
+  const fmt = step >= 1 ? Number(value).toFixed(0) : Number(value).toFixed(2);
+
+  return (
+    <li className="flex flex-col gap-1 px-1.5 py-1 rounded hover:bg-muted/40 transition-colors">
+      <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+        <span className="truncate font-medium" title={param.id}>
+          {param.name || param.id}
+        </span>
+        <span className="text-muted-foreground shrink-0 tabular-nums">
+          {fmt}
+          <span className="text-muted-foreground/50 ml-1">[{param.min}, {param.max}]</span>
+        </span>
+      </div>
+      <Slider
+        min={param.min}
+        max={param.max}
+        step={step}
+        value={[value]}
+        onValueChange={([v]) => setParamValue(param.id, v)}
+      />
+    </li>
   );
 }
