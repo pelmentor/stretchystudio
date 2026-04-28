@@ -1,0 +1,44 @@
+/**
+ * v3 Phase 0A — Editor type → component map.
+ *
+ * Decouples `useUIV3Store.workspaces[].areas[].editorType` (a string
+ * enum) from the actual React component rendered by an Area. Lets us
+ * add new editor types in one place without touching the shell, and
+ * gives the area-header dropdown a single source of truth.
+ *
+ * Intentionally small at this stage — Phase 1+ replaces the stub
+ * components with real implementations and adds new entries here
+ * (Sequencer, Driver Editor, Mask Editor, …).
+ *
+ * @module v3/shell/editorRegistry
+ */
+
+import {
+  OutlinerEditor,
+  PropertiesEditor,
+  ParametersEditor,
+  TimelineEditor,
+  ViewportEditor,
+} from '../editors/stubs.jsx';
+
+/**
+ * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
+ *
+ * @typedef {Object} EditorEntry
+ * @property {string} label                — shown in the header dropdown
+ * @property {React.ComponentType} component
+ */
+
+/** @type {Record<EditorType, EditorEntry>} */
+export const EDITOR_REGISTRY = {
+  viewport:   { label: 'Viewport',   component: ViewportEditor },
+  outliner:   { label: 'Outliner',   component: OutlinerEditor },
+  properties: { label: 'Properties', component: PropertiesEditor },
+  parameters: { label: 'Parameters', component: ParametersEditor },
+  timeline:   { label: 'Timeline',   component: TimelineEditor },
+};
+
+/** Stable ordered list for header dropdowns. */
+export const EDITOR_TYPES = /** @type {EditorType[]} */ (
+  Object.keys(EDITOR_REGISTRY)
+);

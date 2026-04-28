@@ -8,17 +8,19 @@ import { useEffect, useRef } from 'react';
 import { useProjectStore } from '@/store/projectStore';
 import { undo, redo } from '@/store/undoHistory';
 
-export function useUndoRedo() {
+export function useUndoRedo({ enabled = true } = {}) {
   const updateProject = useProjectStore(s => s.updateProject);
   const projectRef    = useRef(null);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     return useProjectStore.subscribe((state) => {
       projectRef.current = state.project;
     });
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const handler = (e) => {
       const isZ = e.key === 'z' || e.key === 'Z';
       const isY = e.key === 'y' || e.key === 'Y';
@@ -47,5 +49,5 @@ export function useUndoRedo() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [updateProject]);
+  }, [updateProject, enabled]);
 }
