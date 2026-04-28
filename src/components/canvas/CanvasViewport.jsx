@@ -41,6 +41,11 @@ import {
   computeSmartMeshOpts,
 } from '@/components/canvas/viewport/helpers';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
+import {
+  childBoneRoleFor,
+  computeSkinWeights,
+  computeMeshCentroid,
+} from '@/components/canvas/viewport/meshPostProcess';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -717,57 +722,24 @@ export default function CanvasViewport({
 
           node.mesh = { vertices, uvs: Array.from(uvs), triangles, edgeIndices };
 
-          // Compute skin weights if this part belongs to a limb
+          // Compute skin weights if this part belongs to a limb.
           const parentGroup = proj.nodes.find(n => n.id === node.parent);
-          if (parentGroup && parentGroup.boneRole) {
-            const roleMap = {
-              'leftArm': 'leftElbow', 'rightArm': 'rightElbow',
-              'leftLeg': 'leftKnee', 'rightLeg': 'rightKnee'
-            };
-            const childRole = roleMap[parentGroup.boneRole];
-            if (childRole) {
-              const jointBone = proj.nodes.find(n => n.parent === parentGroup.id && n.boneRole === childRole);
-              if (jointBone) {
-                const jx = jointBone.transform.pivotX;
-                const jy = jointBone.transform.pivotY;
-
-                // Build a direction vector from the shoulder (parentGroup pivot) → elbow (jointBone pivot).
-                // Projecting vertices onto this axis gives correct weights regardless of arm orientation.
-                const sx = parentGroup.transform.pivotX;
-                const sy = parentGroup.transform.pivotY;
-                const axDx = jx - sx;
-                const axDy = jy - sy;
-                const axLen = Math.sqrt(axDx * axDx + axDy * axDy) || 1;
-                const axX = axDx / axLen;
-                const axY = axDy / axLen;
-
-                // Blend zone: 40px centred on the elbow pivot along the arm axis
-                const blend = 40;
-                node.mesh.boneWeights = vertices.map(v => {
-                  // Signed distance of vertex past the elbow pivot (along arm axis)
-                  const proj2 = (v.x - jx) * axX + (v.y - jy) * axY;
-                  // proj2 < 0 → upper arm (rigid to shoulder), > 0 → lower arm (follows elbow)
-                  const w = proj2 / blend + 0.5;
-                  return Math.max(0, Math.min(1, w));
-                });
-                node.mesh.jointBoneId = jointBone.id;
-                console.log(`[Skinning] ${node.name} → ${childRole} (${vertices.length} verts, pivot ${jx.toFixed(0)},${jy.toFixed(0)})`);
-              }
+          const childRole = childBoneRoleFor(parentGroup?.boneRole);
+          if (childRole && parentGroup) {
+            const jointBone = proj.nodes.find(n => n.parent === parentGroup.id && n.boneRole === childRole);
+            if (jointBone) {
+              node.mesh.boneWeights = computeSkinWeights(vertices, parentGroup, jointBone);
+              node.mesh.jointBoneId = jointBone.id;
+              console.log(`[Skinning] ${node.name} → ${childRole} (${vertices.length} verts)`);
             }
           }
 
-          // If the pivot is at the default (0,0), auto-center it to the mesh bounds
+          // If the pivot is at the default (0,0), auto-center to the mesh bounds.
           if (node.transform && node.transform.pivotX === 0 && node.transform.pivotY === 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const v of vertices) {
-              if (v.x < minX) minX = v.x;
-              if (v.x > maxX) maxX = v.x;
-              if (v.y < minY) minY = v.y;
-              if (v.y > maxY) maxY = v.y;
-            }
-            if (minX !== Infinity) {
-              node.transform.pivotX = (minX + maxX) / 2;
-              node.transform.pivotY = (minY + maxY) / 2;
+            const c = computeMeshCentroid(vertices);
+            if (c) {
+              node.transform.pivotX = c.cx;
+              node.transform.pivotY = c.cy;
             }
           }
         }
