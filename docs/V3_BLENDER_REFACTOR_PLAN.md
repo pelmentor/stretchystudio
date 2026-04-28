@@ -461,7 +461,7 @@ v3 rollback при необходимости.
 
 ---
 
-### PHASE 0 — Foundation (8-10 weeks) **[STATUS: 0A/B/D/F.1/F.2/G shipped 2026-04-28; 0C/E + 0F remaining slices pending]**
+### PHASE 0 — Foundation (8-10 weeks) **[STATUS: most substages shipped 2026-04-28; 0C + 0E + projectStore split pending]**
 
 Substage status:
 
@@ -469,12 +469,18 @@ Substage status:
 |----------|--------|--------|-------|
 | 0A — Shell + workspace + editor type system | ✅ shipped | `a35a9b7` | Behind `?ui=v3`; 4-area 2×2 layout; 5 workspaces; editor stubs; ErrorBoundary; operator dispatcher with Ctrl+1..5. Phase 1 fills editors. |
 | 0B — Service layer (Pillar F) | ✅ shipped | `0192d88` | RigService / ExportService / ImportService / PersistenceService façades with pure preflight functions. |
-| 0C — Coord-space type wrappers (Pillar C) | ⏳ pending | — | Phase 1 dependency for Viewport coord-debugger. |
+| 0C — Coord-space type wrappers (Pillar C) | ⏳ pending | — | Touches eval pipeline; needs browser verification before landing. |
 | 0D — Type checking (Pillar G) | ✅ shipped | `a3658b3` | `tsc --noEmit` runs in `npm test`. Per-file opt-in via `// @ts-check` (14 new files locked in); legacy code untouched until refactored. |
 | 0E — Vitest migration (Pillar H) | ⏳ pending | — | UI tests need jsdom; .mjs scripts can stay. |
-| 0F.1 — Pure helpers extraction | ✅ shipped | `1380fc6` | 8 utility functions out of CanvasViewport into `viewport/helpers.js` (-116 LOC). 44 unit tests. |
+| 0F.1 — Pure helpers extraction | ✅ shipped | `1380fc6` | 8 utility functions out of CanvasViewport into `viewport/helpers.js` (-116 LOC). |
 | 0F.2 — Export-frame capture extraction | ✅ shipped | `ee49cb5` | `viewport/captureExportFrame.js` (-102 LOC). |
-| 0F.N — Remaining slices (wizard handlers, pointer events, mesh worker, projectStore split) | ⏳ pending | — | Each its own commit; CanvasViewport currently 2025 LOC (was 2243). |
+| 0F.3 — Mesh post-process (skin weights + centroid) | ✅ shipped | `17480f0` | `viewport/meshPostProcess.js` (-31 LOC, 25 tests). |
+| 0F.4 — `zoomAroundCursor` helper | ✅ shipped | `775c4b2` | Added to `viewport/helpers.js`; onWheel collapsed to 3 lines. |
+| 0F.5 — File→importer routing dispatch | ✅ shipped | `db29668` | `viewport/fileRouting.js`; deduped onDrop + handleFileChange. |
+| 0F.6 — Top-level ErrorBoundary in v2 (Pillar K) | ✅ shipped | `cf6aed4` | `components/ErrorBoundary.jsx` shared between v2 + v3. |
+| 0F.7 — Time / frame math helpers | ✅ shipped | `59bbaa4` | `lib/timeMath.js` (clamp / msToFrame / frameToMs); 27 tests. |
+| 0F.8 — Undo memory budget + `undoStats()` (Pillar M) | ✅ shipped | `06aff32` | Soft 50 MB byte cap + observability. Full Immer-patches refactor still future. |
+| 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport is now 1981 LOC (was 2243, -262). |
 | 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
 | 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
 | 0G.3 — exhaustive-deps disables (Pillar D) | ✅ shipped | `454cbba` | All 4 disables removed; pre-existing missing-deps in those files fixed too. |
