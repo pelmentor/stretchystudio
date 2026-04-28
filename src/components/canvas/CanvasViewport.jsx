@@ -49,6 +49,7 @@ import {
 } from '@/components/canvas/viewport/meshPostProcess';
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
+import { applySplits } from '@/components/canvas/viewport/applySplits';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -1079,24 +1080,9 @@ export default function CanvasViewport({
 
   /* ── Wizard: split merged parts into left/right ────────────── */
   const handleWizardSplitParts = useCallback((splits) => {
-    setWizardPsd(prev => {
-      if (!prev) return prev;
-      const newLayers = [...prev.layers];
-      const newPartIds = [...prev.partIds];
-
-      const sortedSplits = [...splits].sort((a, b) => b.mergedIdx - a.mergedIdx);
-
-      for (const { mergedIdx, rightLayer, leftLayer } of sortedSplits) {
-        const replacements = [];
-        if (rightLayer) replacements.push({ layer: rightLayer, partId: uid() });
-        if (leftLayer) replacements.push({ layer: leftLayer, partId: uid() });
-        
-        newLayers.splice(mergedIdx, 1, ...replacements.map(r => r.layer));
-        newPartIds.splice(mergedIdx, 1, ...replacements.map(r => r.partId));
-      }
-
-      return { ...prev, layers: newLayers, partIds: newPartIds };
-    });
+    setWizardPsd(prev => prev
+      ? { ...prev, ...applySplits(prev.layers, prev.partIds, splits, uid) }
+      : prev);
   }, []);
 
   const handleWizardUpdatePsd = useCallback((updates) => {
