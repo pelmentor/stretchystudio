@@ -1,6 +1,6 @@
-import React from 'react';
 import EditorLayout from '@/app/layout/EditorLayout';
 import { Toaster } from '@/components/ui/toaster';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { AppShell as V3AppShell } from '@/v3/shell/AppShell';
 
@@ -39,9 +39,14 @@ function App() {
     );
   }
 
+  // v2 shell — top-level ErrorBoundary (Pillar K) catches render
+  // errors that previously took the whole app down. v3 has its own
+  // boundary inside AppShell.
   return (
     <>
-      <EditorLayout />
+      <ErrorBoundary label="Stretchy Studio">
+        <EditorLayout />
+      </ErrorBoundary>
       <Toaster />
     </>
   );
