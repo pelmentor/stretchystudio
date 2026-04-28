@@ -204,6 +204,14 @@ export default function CanvasViewport({
   const physicsParamSpecsRef = useRef(null);         // memoised paramSpecs map
   const lastPhysicsTimestampRef = useRef(0);         // last rAF timestamp physics consumed
 
+  // R10 — evalRig memoization. The chain evaluator is cheap (~0.1
+  // ms/frame on a Hiyori-scale rig) but it's still wasted work when
+  // nothing's moving (camera pan, overlay toggle, animation tick that
+  // didn't actually advance, …). When the (rigSpec, paramValues)
+  // pair is identity-stable since the last evalRig call, reuse the
+  // cached frames and skip the recompute.
+  const lastEvalCacheRef = useRef({ rigSpec: null, paramValues: null, frames: null });
+
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
   const projectRef = useRef(project);
@@ -439,8 +447,19 @@ export default function CanvasViewport({
         const _rigSpec = rigSpecRef.current;
         if (_rigSpec && Array.isArray(_rigSpec.artMeshes) && _rigSpec.artMeshes.length > 0) {
           // valuesForEval == post-physics working copy when physics ran
-          // this frame, otherwise the unchanged store snapshot.
-          const frames = evalRig(_rigSpec, valuesForEval);
+          // this frame, otherwise the unchanged store snapshot. The
+          // memoization below is identity-keyed: physics' working copy
+          // is a fresh `{...}` each frame so it always misses (correct
+          // — outputs changed); the static snapshot reuses the same
+          // store object until setParamValue/setMany fires.
+          const cache = lastEvalCacheRef.current;
+          let frames;
+          if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null) {
+            frames = cache.frames;
+          } else {
+            frames = evalRig(_rigSpec, valuesForEval);
+            lastEvalCacheRef.current = { rigSpec: _rigSpec, paramValues: valuesForEval, frames };
+          }
           for (const f of frames) {
             const node = projectRef.current.nodes.find(n => n.id === f.id);
             if (!node?.mesh) continue;

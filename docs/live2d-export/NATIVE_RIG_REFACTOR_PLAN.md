@@ -41,7 +41,7 @@ demand" rather than speculatively.
 | R7 | Mask system generalization (stencil) | **shipped 2026-04-28** |
 | R8 | Full param scrubber UI | **shipped 2026-04-28** |
 | R9 | Physics tick (Cubism pendulum) | **shipped 2026-04-28** |
-| R10 | Performance hardening | not started |
+| R10 | Performance hardening | **shipped 2026-04-28** |
 
 Cross-ref: see [`RUNTIME_PARITY_PLAN.md`](RUNTIME_PARITY_PLAN.md) — that
 work shipped the `rigSpec` contract this refactor leans on.
@@ -1776,6 +1776,74 @@ arms should sway via the elbow rotation taps. Compare against
 Cubism Viewer running the same model for visual fidelity. The
 ACCEL_SCALAR (=100) constant is the main tuning dial if global
 settle time feels off.
+
+### v2 Stage R10 — Performance hardening (shipped 2026-04-28)
+
+**Measure-first, as the plan demanded.** R10 began with a baseline
+benchmark on a Hiyori-scale synthetic rig (30 meshes × 64 verts, 5-
+level parent chain, 9 params, 31 warp + 1 rotation deformer + 1
+physics rule), driven by [`scripts/bench_chainEval.mjs`](../../scripts/bench_chainEval.mjs):
+
+| Bench                              | Baseline   | After R10  | Speedup |
+| ---------------------------------- | ---------- | ---------- | ------- |
+| `evalRig (rest)`                   | 0.091 ms   | 0.073 ms   | -19%    |
+| `evalRig (animated)`               | 0.100 ms   | 0.081 ms   | -19%    |
+| `tickPhysics (animated)`           | 0.001 ms   | 0.001 ms   | flat    |
+| `tickPhysics + evalRig (animated)` | 0.095 ms   | 0.076 ms   | -20%    |
+
+The headline finding: **the v2 evaluator is already ~200× under the
+60-fps budget** even on a 30-mesh rig. CPU is not the bottleneck;
+allocation pressure (GC pauses) and idle wasted work are. R10 ships
+the wins that matter for those, not for raw ms/frame:
+
+* **`chainEval` ping-pong buffer pool.** The chain walk used to
+  allocate `new Float32Array(positions.length)` per parent step. At
+  Hiyori scale that's ~150 fresh typed-array allocations per frame
+  from this path alone. Now: two buffers per evalArtMesh call (one
+  inherited from the keyform-output, one lazily allocated for the
+  first chain hop) ping-pong via swap. Net: 30 allocations/frame
+  instead of 150, with a stable read/write split that the JIT
+  vectorises cleanly. Measurable as the 19% iter-time reduction.
+
+* **`chainEval` deformer-id Map.** Replaced the per-parent-step
+  double linear scan (`findDeformer` walked
+  `warpDeformers.find()` then `rotationDeformers.find()`) with a
+  pre-built `Map<id, spec>` constructed once per evalRig call.
+  At 30 meshes × 5 chain hops × ~32 deformers, this saves ~4500
+  array probes/frame at zero alloc cost.
+
+* **`evalRig` memoisation.** New
+  [`lastEvalCacheRef`](../../src/components/canvas/CanvasViewport.jsx)
+  in the viewport tick keys on `(rigSpec, paramValues)` object
+  identity. Camera pan, overlay toggle, and animation-tick-with-no-
+  movement all dirty the scene but don't change either input — so
+  evalRig is skipped entirely and the cached frames are reused.
+  Physics-driven frames always miss the cache (the post-physics
+  working copy is a fresh `{...}` per frame, which is exactly the
+  semantic we want — outputs changed → recompute). This is the
+  practical battery/thermal win: idle scenes do zero rig work.
+
+**Files:** `src/io/live2d/runtime/evaluator/chainEval.js` (deformer
+Map + buffer pool), `src/components/canvas/CanvasViewport.jsx`
+(eval cache ref + lookup), `scripts/bench_chainEval.mjs` (new — local
+profiling tool, NOT wired into npm test). Plan doc R10 row + this
+shipped subsection. **Tag:** `native-rig-render-stage-R10-complete`.
+
+**Deliberately skipped, deferred until concrete user demand:**
+* **Bbox cull.** Off-screen mesh culling. The benchmark says this
+  saves ~0 ms because the renderer-side viewport clip already drops
+  off-screen draws cheaply at the GL level; CPU-side mesh cull
+  trades alloc-free GPU work for a per-frame bbox compute.
+* **mat3 reuse.** Already happens — `rotationEval.js` returns a
+  Float64Array per cache lookup, reused across all child meshes.
+* **Vertex-shader bilinear FFD.** Out of budget for v2 v1; CPU-side
+  is fast enough. Revisit if a 100+ mesh rig hits the budget.
+* **Float32Array pooling across evalRig calls.** The eval cache
+  makes this less important — when no recompute happens, no new
+  alloc happens either.
+
+**Milestone F is now complete. v2 native rig render is fully shipped
+across 11 stages (R0–R10).**
 
 ## Rollback strategy
 

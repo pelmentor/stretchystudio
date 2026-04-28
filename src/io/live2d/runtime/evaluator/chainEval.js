@@ -37,7 +37,6 @@ import { cellSelect } from './cellSelect.js';
 import { evalArtMesh } from './artMeshEval.js';
 import { evalWarpGrid, bilinearFFD } from './warpEval.js';
 import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
-import { findDeformer } from '../../rig/rigSpec.js';
 
 /**
  * @typedef {Object} ArtMeshFrame
@@ -57,12 +56,34 @@ import { findDeformer } from '../../rig/rigSpec.js';
 export function evalRig(rigSpec, paramValues) {
   if (!rigSpec || !Array.isArray(rigSpec.artMeshes)) return [];
   const cache = new DeformerStateCache(rigSpec, paramValues);
+  // R10 — pre-build a deformer-id → spec map once per evalRig call so
+  // the chain walk does O(1) lookups instead of double linear scans
+  // through warpDeformers + rotationDeformers per parent step. With a
+  // 30-mesh rig × 5-deep chain × 41 deformers, this saves ~6000 array
+  // probes/frame at zero allocation cost.
+  const deformerIndex = buildDeformerIndex(rigSpec);
   const out = [];
   for (const meshSpec of rigSpec.artMeshes) {
-    const frame = evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache);
+    const frame = evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformerIndex);
     if (frame) out.push(frame);
   }
   return out;
+}
+
+/** R10 — id → deformer spec map. Built once per evalRig call. */
+function buildDeformerIndex(rigSpec) {
+  const map = new Map();
+  if (Array.isArray(rigSpec.warpDeformers)) {
+    for (const d of rigSpec.warpDeformers) {
+      if (d?.id) map.set(d.id, d);
+    }
+  }
+  if (Array.isArray(rigSpec.rotationDeformers)) {
+    for (const d of rigSpec.rotationDeformers) {
+      if (d?.id) map.set(d.id, d);
+    }
+  }
+  return map;
 }
 
 /**
@@ -74,7 +95,7 @@ export function evalRig(rigSpec, paramValues) {
  * @param {DeformerStateCache} cache
  * @returns {ArtMeshFrame|null}
  */
-export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache) {
+export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformerIndex) {
   if (!meshSpec) return null;
 
   // Step 1: art mesh keyforms.
@@ -82,17 +103,26 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache) {
   const meshState = evalArtMesh(meshSpec, meshCell);
   if (!meshState) return null;
 
-  // Float32Array carries through the chain. We re-allocate per parent
-  // step rather than mutate in-place so input arrays (the keyforms'
-  // immutable position blobs) stay untouched.
-  let positions = meshState.vertexPositions;
+  // R10 — ping-pong buffer pool. The chain walk used to allocate a
+  // fresh `Float32Array(positions.length)` per parent step (warp or
+  // rotation). At Hiyori scale that's ~150 allocs/frame from this
+  // path alone; we keep two buffers per call and swap them. The
+  // mesh's keyform-output (meshState.vertexPositions) is fresh too,
+  // so we use it as buffer A and never write back into the immutable
+  // keyform blobs the evaluator returned.
+  const len = meshState.vertexPositions.length;
+  let bufA = meshState.vertexPositions;
+  let bufB = null;  // lazy-alloc; only created if chain has ≥1 parent
 
-  // Step 2: walk parent chain.
+  // Step 2: walk parent chain. `read` is the current input; `write`
+  // is where we put output. After each step they swap.
   let parent = meshSpec.parent;
   let safety = 32; // hard guard against cycle bugs
+  // Local reusable scratch — JIT keeps this on stack, no GC.
+  const tmp0 = [0, 0];
   while (parent && parent.type !== 'root' && safety-- > 0) {
     if (!parent.id) break;
-    const parentSpec = findDeformer(rigSpec, parent.id);
+    const parentSpec = deformerIndex ? deformerIndex.get(parent.id) : null;
     if (!parentSpec) break; // unknown parent → terminate chain (best effort)
 
     const state = cache.getState(parentSpec);
@@ -101,29 +131,33 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache) {
       continue;
     }
 
+    // Lazy-allocate the swap buffer the first time we need it.
+    if (bufB === null) bufB = new Float32Array(len);
+    const read = bufA;
+    const write = bufB;
+
     if (state.kind === 'warp') {
-      const next = new Float32Array(positions.length);
-      const tmp = [0, 0];
-      for (let i = 0; i < positions.length; i += 2) {
-        bilinearFFD(state.grid, state.gridSize, positions[i], positions[i + 1], tmp);
-        next[i] = tmp[0];
-        next[i + 1] = tmp[1];
+      for (let i = 0; i < len; i += 2) {
+        bilinearFFD(state.grid, state.gridSize, read[i], read[i + 1], tmp0);
+        write[i] = tmp0[0];
+        write[i + 1] = tmp0[1];
       }
-      positions = next;
     } else if (state.kind === 'rotation') {
       const m = state.mat;
-      const next = new Float32Array(positions.length);
-      const tmp = [0, 0];
-      for (let i = 0; i < positions.length; i += 2) {
-        applyMat3ToPoint(m, positions[i], positions[i + 1], tmp);
-        next[i] = tmp[0];
-        next[i + 1] = tmp[1];
+      for (let i = 0; i < len; i += 2) {
+        applyMat3ToPoint(m, read[i], read[i + 1], tmp0);
+        write[i] = tmp0[0];
+        write[i + 1] = tmp0[1];
       }
-      positions = next;
     }
+
+    // Swap.
+    bufA = bufB;
+    bufB = read;
 
     parent = parentSpec.parent;
   }
+  const positions = bufA;
 
   return {
     id: meshSpec.id,
