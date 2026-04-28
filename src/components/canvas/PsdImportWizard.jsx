@@ -8,6 +8,7 @@ import {
 import { splitLayerLR } from '../../io/splitLR';
 import { HelpIcon } from '../ui/help-icon';
 import { useToast } from '../../hooks/use-toast';
+import { uid } from '@/lib/ids';
 
 export default function PsdImportWizard({
   step,
@@ -147,9 +148,7 @@ export default function PsdImportWizard({
       const groups = analyzeGroups(layerMap);
 
       const skeleton = estimateSkeletonFromBounds(effectiveLayers, psdW, psdH);
-      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => {
-        return `grp-${Math.random().toString(36).substr(2, 9)}`;
-      });
+      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`);
 
       if (step === 'reorder') {
         onApplyRig(groupDefs, assignments, meshAllParts);
@@ -182,9 +181,7 @@ export default function PsdImportWizard({
       const skeleton = await runDWPose(effectiveLayers, psdW, psdH, session, setRigStatus);
 
       setRigStatus('Building rig…');
-      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => {
-        return `grp-${Math.random().toString(36).substr(2, 9)}`;
-      });
+      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`);
 
       if (step === 'reorder' || step === 'dwpose' || step === 'adjust') {
         onApplyRig(groupDefs, assignments, meshAllParts);

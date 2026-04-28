@@ -22,8 +22,7 @@ import {
   seedRigWarps as seedRigWarpsFn,
   clearRigWarps as clearRigWarpsFn,
 } from '@/io/live2d/rig/rigWarpsStore';
-
-function uid() { return Math.random().toString(36).slice(2, 9); }
+import { uid } from '@/lib/ids';
 
 /**
  * Deep clone an object, preserving TypedArrays.

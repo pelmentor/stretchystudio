@@ -4,6 +4,7 @@
  * Logic to export the Stretchy Studio project to Spine 4.0 JSON format.
  */
 import { computeWorldMatrices } from '@/renderer/transforms';
+import { uid } from '@/lib/ids';
 
 /**
  * Main entry point for Spine export.
@@ -100,7 +101,7 @@ function buildSpineJson(project) {
   // ── 1. Skeleton info ──────────────────────────────────────────────────────
   const skeleton = {
     spine: "4.0",
-    hash: Math.random().toString(36).slice(2),
+    hash: uid(),
     name: "Exported Skeleton",
     width: canvasW,
     height: canvasH,

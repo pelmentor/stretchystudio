@@ -22,6 +22,7 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { uid } from '@/lib/ids';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Constants
@@ -35,8 +36,6 @@ const TRACK_PAD = 16;   // px — padding inside track area so edge frames don't
 /* ──────────────────────────────────────────────────────────────────────────
    Small helpers
 ────────────────────────────────────────────────────────────────────────── */
-
-function uid() { return Math.random().toString(36).slice(2, 9); }
 
 /** Clamp a number to [min, max] */
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }

@@ -1,6 +1,18 @@
+import { uidLong } from '@/lib/ids';
+
 const DB_NAME = 'stretchystudio-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'projects';
+
+/**
+ * Generate a project record ID. Phase 0G (Pillar P): replaces the
+ * old `Math.random().toString(36).slice(2, 9)` which gave only ~36
+ * bits of entropy and could collide once a user accumulated a few
+ * hundred projects.  We use full 32-char hex here (versus the 12-char
+ * `uid()` used for in-app IDs) because project IDs are persisted to
+ * IndexedDB and may someday be shared / used as URL slugs.
+ */
+const newProjectId = uidLong;
 
 /**
  * Open the IndexedDB database.
@@ -52,7 +64,7 @@ export async function listProjects() {
  */
 export async function saveToDb(id, name, blob, thumbnail) {
   const db = await openDb();
-  const currentId = id || Math.random().toString(36).slice(2, 9);
+  const currentId = id || newProjectId();
   const updatedAt = Date.now();
 
   const record = {
@@ -147,7 +159,7 @@ export async function duplicateProject(id) {
       if (!record) return reject(new Error('Project not found'));
       const newRecord = {
         ...record,
-        id: Math.random().toString(36).slice(2, 9),
+        id: newProjectId(),
         name: `${record.name} (Copy)`,
         updatedAt: Date.now(),
       };

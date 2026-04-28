@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { assertPartId } from '@/lib/partId';
+import { uid } from '@/lib/ids';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -110,9 +111,6 @@ function computeImageBounds(imageData, alphaThreshold = 10) {
 
   return minX <= maxX ? { minX, minY, maxX, maxY } : null;
 }
-
-/** Generate a short unique id */
-function uid() { return Math.random().toString(36).slice(2, 9); }
 
 /** Strip extension from a filename */
 function basename(filename) {
