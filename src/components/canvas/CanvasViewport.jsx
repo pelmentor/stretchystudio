@@ -47,6 +47,7 @@ import {
   computeSkinWeights,
   computeMeshCentroid,
 } from '@/components/canvas/viewport/meshPostProcess';
+import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -1253,16 +1254,11 @@ export default function CanvasViewport({
   /* ── Drag-and-drop ───────────────────────────────────────────────────── */
   const onDrop = useCallback((e) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-
-    if (file.name.toLowerCase().endsWith('.stretch')) {
-      importStretchFile(file);
-    } else if (file.name.toLowerCase().endsWith('.psd')) {
-      importPsdFile(file);
-    } else if (file.type.startsWith('image/')) {
-      importPng(file);
-    }
+    routeImport(e.dataTransfer.files[0], {
+      importStretch: importStretchFile,
+      importPsd: importPsdFile,
+      importPng,
+    });
   }, [importPng, importPsdFile, importStretchFile]);
 
   const onDragOver = useCallback((e) => { e.preventDefault(); }, []);
@@ -1736,18 +1732,12 @@ export default function CanvasViewport({
   }, []);
 
   const handleFileChange = useCallback((e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.name.toLowerCase().endsWith('.stretch')) {
-      importStretchFile(file);
-    } else if (file.name.toLowerCase().endsWith('.psd')) {
-      importPsdFile(file);
-    } else if (file.type.startsWith('image/')) {
-      importPng(file);
-    }
-
-    // Clear input so same file can be uploaded again if needed
+    routeImport(e.target.files?.[0], {
+      importStretch: importStretchFile,
+      importPsd: importPsdFile,
+      importPng,
+    });
+    // Clear input so same file can be uploaded again if needed.
     e.target.value = '';
   }, [importStretchFile, importPsdFile, importPng]);
 
