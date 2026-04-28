@@ -461,7 +461,7 @@ v3 rollback при необходимости.
 
 ---
 
-### PHASE 0 — Foundation (8-10 weeks) **[STATUS: 0A + 0B + 0G shipped 2026-04-28; 0C/D/E/F pending]**
+### PHASE 0 — Foundation (8-10 weeks) **[STATUS: 0A/B/D/F.1/F.2/G shipped 2026-04-28; 0C/E + 0F remaining slices pending]**
 
 Substage status:
 
@@ -470,9 +470,11 @@ Substage status:
 | 0A — Shell + workspace + editor type system | ✅ shipped | `a35a9b7` | Behind `?ui=v3`; 4-area 2×2 layout; 5 workspaces; editor stubs; ErrorBoundary; operator dispatcher with Ctrl+1..5. Phase 1 fills editors. |
 | 0B — Service layer (Pillar F) | ✅ shipped | `0192d88` | RigService / ExportService / ImportService / PersistenceService façades with pure preflight functions. |
 | 0C — Coord-space type wrappers (Pillar C) | ⏳ pending | — | Phase 1 dependency for Viewport coord-debugger. |
-| 0D — Type checking (Pillar G) | ⏳ pending | — | `tsc --checkJs --noEmit` in CI. |
+| 0D — Type checking (Pillar G) | ✅ shipped | `a3658b3` | `tsc --noEmit` runs in `npm test`. Per-file opt-in via `// @ts-check` (14 new files locked in); legacy code untouched until refactored. |
 | 0E — Vitest migration (Pillar H) | ⏳ pending | — | UI tests need jsdom; .mjs scripts can stay. |
-| 0F — God-class split (Pillar A + J) | ⏳ pending | — | Riskiest; needs browser verification. |
+| 0F.1 — Pure helpers extraction | ✅ shipped | `1380fc6` | 8 utility functions out of CanvasViewport into `viewport/helpers.js` (-116 LOC). 44 unit tests. |
+| 0F.2 — Export-frame capture extraction | ✅ shipped | `ee49cb5` | `viewport/captureExportFrame.js` (-102 LOC). |
+| 0F.N — Remaining slices (wizard handlers, pointer events, mesh worker, projectStore split) | ⏳ pending | — | Each its own commit; CanvasViewport currently 2025 LOC (was 2243). |
 | 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
 | 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
 | 0G.3 — exhaustive-deps disables (Pillar D) | ✅ shipped | `454cbba` | All 4 disables removed; pre-existing missing-deps in those files fixed too. |
