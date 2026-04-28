@@ -444,6 +444,19 @@ export default function CanvasViewport({
         // (blendShape, puppet warp) compose ON TOP rather than starting
         // from rest. Skipped entirely when rigSpec is null (user hasn't
         // clicked Initialize Rig yet, or just clicked Clear).
+        //
+        // -1B fix: evalRig output is in canvas-px (absolute), but
+        // scenePass normally applies `worldMatrix(part)` at draw time
+        // (part's PSD-derived translation/rotation/scale). For
+        // rig-driven verts that's a double transform — arms fly off,
+        // pieces shrink. We collect the set of parts that are rig-only
+        // and pass it down so scenePass uses identity matrix for them.
+        // Parts that subsequently get blend-shape or puppet-warp output
+        // composed on top get removed from the set (their final verts
+        // mix part-local deltas in, so worldMatrix application is the
+        // closest-correct behavior; mixed-mode composition is a Phase 0
+        // coord-space refactor concern, not -1B scope).
+        const rigDrivenParts = new Set();
         const _rigSpec = rigSpecRef.current;
         if (_rigSpec && Array.isArray(_rigSpec.artMeshes) && _rigSpec.artMeshes.length > 0) {
           // valuesForEval == post-physics working copy when physics ran
@@ -473,7 +486,10 @@ export default function CanvasViewport({
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;
             // those are the user's explicit edit. Rig eval is the default base.
-            if (!existing.mesh_verts) poseOverrides.set(f.id, { ...existing, mesh_verts: verts });
+            if (!existing.mesh_verts) {
+              poseOverrides.set(f.id, { ...existing, mesh_verts: verts });
+              rigDrivenParts.add(f.id);
+            }
           }
         }
 
@@ -518,6 +534,10 @@ export default function CanvasViewport({
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
           poseOverrides.set(node.id, { ...existing, mesh_verts: blendedVerts });
+          // -1B: blend overwrote rig-eval output → final verts now
+          // include part-local deltas, so worldMatrix application is
+          // the right call. Drop from rigDrivenParts.
+          rigDrivenParts.delete(node.id);
         }
 
         // Apply puppet warp — deform mesh using MLS-rigid based on pin positions
@@ -546,6 +566,9 @@ export default function CanvasViewport({
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
           poseOverrides.set(node.id, { ...existing, mesh_verts: warpedVerts });
+          // -1B: same as blend — puppet wrote part-local deltas on top
+          // of whatever was there. Final verts no longer pure rig.
+          rigDrivenParts.delete(node.id);
         }
 
         // Upload mesh vertex overrides BEFORE drawing so the GPU buffers are
@@ -575,7 +598,7 @@ export default function CanvasViewport({
         }
         meshOverriddenParts.current = newMeshOverridden;
 
-        sceneRef.current.draw(projectRef.current, editorRef.current, isDarkRef.current, poseOverrides);
+        sceneRef.current.draw(projectRef.current, editorRef.current, isDarkRef.current, poseOverrides, { rigDrivenParts });
 
         isDirtyRef.current = false;
       }

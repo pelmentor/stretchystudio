@@ -71,8 +71,18 @@ export class ScenePass {
    * @param {boolean} isDark        - whether current theme is dark
    * @param {Map}     poseOverrides - optional Map<nodeId, {x?,y?,rotation?,scaleX?,scaleY?,opacity?}>
    *                                  from animationStore; applied on top of stored transforms
+   * @param {Object}  [opts]
+   * @param {boolean} [opts.skipResize=false]
+   * @param {boolean} [opts.exportMode=false]
+   * @param {Set<string>|null} [opts.rigDrivenParts=null]
+   *   v2 R6 / v3 -1B: parts whose mesh_verts came from `evalRig` are
+   *   already in canvas-px (absolute). For those parts, applying the
+   *   per-part `worldMatrix` on top would double-transform — translate
+   *   by the PSD layer offset twice. When this set contains a part id,
+   *   draw uses `camera` directly (no worldMatrix multiplication).
+   *   Empty/null = legacy behavior (every part gets its worldMatrix).
    */
-  draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false } = {}) {
+  draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false, rigDrivenParts = null } = {}) {
     const { gl } = this;
     const { canvas } = gl;
 
@@ -173,7 +183,10 @@ export class ScenePass {
         const readStencils = stencilState.stencilsByMaskedMeshId.get(part.id);
 
         const worldMatrix = worldMatrices.get(part.id);
-        const partMvp     = worldMatrix ? mat3Mul(camera, worldMatrix) : camera;
+        const isRigDriven = rigDrivenParts?.has(part.id);
+        const partMvp     = isRigDriven
+          ? camera
+          : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
 
         const baseOpacity = opMap.get(part.id) ?? 1;
         const effectiveOpacity = meshEditMode && !selectionSet.has(part.id)
@@ -216,7 +229,10 @@ export class ScenePass {
         const isSelected = selectionSet.has(part.id);
 
         const worldMatrix = worldMatrices.get(part.id);
-        const partMvp     = worldMatrix ? mat3Mul(camera, worldMatrix) : camera;
+        const isRigDriven = rigDrivenParts?.has(part.id);
+        const partMvp     = isRigDriven
+          ? camera
+          : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
 
         gl.uniform1i(this.uIsPointLoc, 0); // not a point
 
