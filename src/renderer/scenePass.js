@@ -13,23 +13,8 @@ import { MESH_VERT, MESH_FRAG, WIRE_VERT, WIRE_FRAG } from './shaders/mesh.js';
 import { PartRenderer } from './partRenderer.js';
 import { BackgroundRenderer } from './backgroundRenderer.js';
 import { computeWorldMatrices, computeEffectiveProps, mat3Mul } from './transforms.js';
-import { matchTag } from '../io/psdOrganizer.js';
-
-/**
- * Returns stencil info for iris/eyewhite clipping.
- * Match irides to eyewhites by side suffixes (-l, -r, etc).
- */
-function getIrisStencilInfo(name) {
-  const tag = matchTag(name);
-  if (tag !== 'irides' && tag !== 'eyewhite') return null;
-
-  const lower = name.toLowerCase();
-  let sideId = 1; // Default/Center
-  if (lower.includes('-l') || lower.includes('_l') || lower.includes(' l') || lower.endsWith(' l')) sideId = 2;
-  else if (lower.includes('-r') || lower.includes('_r') || lower.includes(' r') || lower.endsWith(' r')) sideId = 3;
-  
-  return { type: tag, id: sideId };
-}
+import { resolveMaskConfigs } from '../io/live2d/rig/maskConfigs.js';
+import { allocateMaskStencils } from './maskStencil.js';
 
 /**
  * Build the camera MVP: maps image-pixel world coords → NDC.
@@ -155,6 +140,18 @@ export class ScenePass {
       .filter(n => n.type === 'part')
       .sort((a, b) => a.draw_order - b.draw_order);
 
+    // ── Stencil mask state ────────────────────────────────────────────────
+    // R7 — generalised mask system. Each unique mask mesh referenced by
+    // any clip pair gets a 1-based stencil ID; masked meshes test against
+    // that ID. Replaces the old `getIrisStencilInfo(name)` heuristic that
+    // relied on hardcoded "irides" / "eyewhite" tag names + side suffix
+    // parsing. `overlays.irisClipping` is preserved as the master toggle
+    // (the option's user-facing label still says "iris clipping" but it
+    // now governs all clip-mask pairs).
+    const stencilState = overlays.irisClipping !== false
+      ? allocateMaskStencils(resolveMaskConfigs(project))
+      : { stencilByMaskMeshId: new Map(), stencilsByMaskedMeshId: new Map(), overflow: 0 };
+
     // ── Textured mesh pass ────────────────────────────────────────────────
     if (overlays.showImage !== false) {
       gl.useProgram(this.meshProgram);
@@ -165,24 +162,15 @@ export class ScenePass {
       for (const part of parts) {
         if (!visMap.get(part.id)) continue;
 
-        // ── Stencil Clipping (Iris → Eyewhite) ──
-        const sInfo = overlays.irisClipping !== false ? getIrisStencilInfo(part.name) : null;
-        if (sInfo) {
-          gl.enable(gl.STENCIL_TEST);
-          if (sInfo.type === 'eyewhite') {
-            // Eyewhite acts as a mask: always pass, and replace stencil value with our side ID
-            gl.stencilFunc(gl.ALWAYS, sInfo.id, 0xFF);
-            gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
-            gl.stencilMask(0xFF);
-          } else {
-            // Iris is clipped: only draw where stencil matches our side ID
-            gl.stencilFunc(gl.EQUAL, sInfo.id, 0xFF);
-            gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-            gl.stencilMask(0x00);
-          }
-        } else {
-          gl.disable(gl.STENCIL_TEST);
-        }
+        // ── Stencil clipping ──
+        // Three cases:
+        //   1. Mesh is a *mask* — write its allocated stencil ID, use REPLACE.
+        //   2. Mesh is *masked* — test stencil against its target IDs.
+        //      Multi-mask uses one draw call per target (today's data is
+        //      single-mask, so this collapses to one call).
+        //   3. Neither — disable the stencil test for this mesh.
+        const writeStencil = stencilState.stencilByMaskMeshId.get(part.id);
+        const readStencils = stencilState.stencilsByMaskedMeshId.get(part.id);
 
         const worldMatrix = worldMatrices.get(part.id);
         const partMvp     = worldMatrix ? mat3Mul(camera, worldMatrix) : camera;
@@ -192,12 +180,24 @@ export class ScenePass {
           ? baseOpacity * 0.5
           : baseOpacity;
 
-        this.partRenderer.drawPart(
-          part.id,
-          partMvp,
-          effectiveOpacity,
-          uMvp, uTexture, uOpacity
-        );
+        if (writeStencil != null) {
+          gl.enable(gl.STENCIL_TEST);
+          gl.stencilFunc(gl.ALWAYS, writeStencil, 0xFF);
+          gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+          gl.stencilMask(0xFF);
+          this.partRenderer.drawPart(part.id, partMvp, effectiveOpacity, uMvp, uTexture, uOpacity);
+        } else if (readStencils && readStencils.length > 0) {
+          gl.enable(gl.STENCIL_TEST);
+          gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+          gl.stencilMask(0x00);
+          for (const s of readStencils) {
+            gl.stencilFunc(gl.EQUAL, s, 0xFF);
+            this.partRenderer.drawPart(part.id, partMvp, effectiveOpacity, uMvp, uTexture, uOpacity);
+          }
+        } else {
+          gl.disable(gl.STENCIL_TEST);
+          this.partRenderer.drawPart(part.id, partMvp, effectiveOpacity, uMvp, uTexture, uOpacity);
+        }
       }
       gl.disable(gl.STENCIL_TEST);
     }

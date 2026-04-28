@@ -3359,6 +3359,12 @@ export async function generateCmo3(input) {
   }
 
   const maskPidByMaskedPartId = new Map();
+  // R7 (native rig render) — partId-keyed mirror so the rigSpec push below
+  // can populate `artMesh.maskMeshIds` for runtime/scenePass consumption.
+  // Carries ALL maskMeshIds verbatim (not just the first) — cmo3 emission
+  // still collapses to one clip ref via maskPidByMaskedPartId, but the
+  // rigSpec contract preserves full multi-mask sets for future fidelity.
+  const maskMeshIdsByPartId = new Map();
   if (maskConfigs.length > 0) {
     for (const pair of maskConfigs) {
       const masks = (pair.maskMeshIds ?? [])
@@ -3368,6 +3374,9 @@ export async function generateCmo3(input) {
         // cmo3 currently emits a single clip ref per mesh — first wins.
         maskPidByMaskedPartId.set(pair.maskedMeshId, masks[0]);
       }
+      if (Array.isArray(pair.maskMeshIds) && pair.maskMeshIds.length > 0) {
+        maskMeshIdsByPartId.set(pair.maskedMeshId, [...pair.maskMeshIds]);
+      }
     }
   } else {
     // Fallback heuristic — kept for projects that haven't been seeded.
@@ -3375,6 +3384,8 @@ export async function generateCmo3(input) {
     const CLIP_RULES = { irides: 'eyewhite', 'irides-l': 'eyewhite-l', 'irides-r': 'eyewhite-r' };
     const basePidByTag = new Map();
     const variantPidByTagAndSuffix = new Map();
+    const basePartIdByTag = new Map();
+    const variantPartIdByTagAndSuffix = new Map();
     for (const pmEntry of perMesh) {
       const mesh = meshes[pmEntry.mi];
       const tag = mesh.tag;
@@ -3382,9 +3393,13 @@ export async function generateCmo3(input) {
       const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
       if (sfx) {
         const key = `${tag}|${sfx}`;
-        if (!variantPidByTagAndSuffix.has(key)) variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
+        if (!variantPidByTagAndSuffix.has(key)) {
+          variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
+          variantPartIdByTagAndSuffix.set(key, mesh.partId);
+        }
       } else if (!basePidByTag.has(tag)) {
         basePidByTag.set(tag, pmEntry.pidDrawable);
+        basePartIdByTag.set(tag, mesh.partId);
       }
     }
     for (const pmEntry of perMesh) {
@@ -3398,6 +3413,10 @@ export async function generateCmo3(input) {
         ? (variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePidByTag.get(maskTag) ?? null)
         : (basePidByTag.get(maskTag) ?? null);
       if (pid) maskPidByMaskedPartId.set(mesh.partId, pid);
+      const maskPartId = sfx
+        ? (variantPartIdByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePartIdByTag.get(maskTag) ?? null)
+        : (basePartIdByTag.get(maskTag) ?? null);
+      if (maskPartId) maskMeshIdsByPartId.set(mesh.partId, [maskPartId]);
     }
   }
 
@@ -3909,6 +3928,10 @@ export async function generateCmo3(input) {
         drawOrder: pm.drawOrder,
         localFrame: artLocalFrame,
         isVisible: true,
+        // R7 — populated when this mesh is the *masked* side of a clip pair.
+        // Empty array when no mask applies. scenePass + future moc3 runtime
+        // can iterate without a presence check.
+        maskMeshIds: maskMeshIdsByPartId.get(pm.partId) ?? [],
       });
     }
 

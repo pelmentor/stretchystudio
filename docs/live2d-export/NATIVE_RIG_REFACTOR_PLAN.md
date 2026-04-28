@@ -38,7 +38,7 @@ demand" rather than speculatively.
 | R4 | `rotationEval` — angle/origin/scale interp + mat3 | **shipped 2026-04-28** |
 | R5 | `artMeshEval` — keyform interp (verts + opacity + drawOrder) | **shipped 2026-04-28** |
 | R6 | Chain composition + first visible demo | **shipped 2026-04-28** |
-| R7 | Mask system generalization (stencil) | not started |
+| R7 | Mask system generalization (stencil) | **shipped 2026-04-28** |
 | R8 | Full param scrubber UI | **shipped 2026-04-28** |
 | R9 | Physics tick (Cubism pendulum) | not started |
 | R10 | Performance hardening | not started |
@@ -1610,6 +1610,68 @@ shipped subsection). **Tag:** `native-rig-render-stage-R8-complete`.
 **Browser smoke test left to user.** Open Hiyori, click
 "Initialize Rig", expand panel — every parameter now has its own
 slider. Drag any of them, watch the live deform.
+
+### v2 Stage R7 — Mask system generalization (shipped 2026-04-28)
+
+The pre-R7 stencil pass in
+[`scenePass.js`](../../src/renderer/scenePass.js) hardcoded the
+iris/eyewhite pairing: `getIrisStencilInfo(name)` parsed the part
+name for `irides`/`eyewhite` tags + a `-l`/`-r` side suffix and
+returned a side ID 1/2/3. Anything outside that vocabulary couldn't
+clip — custom mask configs (e.g. headwear masking back-hair) were
+silently ignored.
+
+R7 swaps that for a project-driven, tag-agnostic stencil allocator:
+
+**`renderer/maskStencil.js` — `allocateMaskStencils(maskConfigs)`.**
+Pure-JS function. Takes the project's
+`[{maskedMeshId, maskMeshIds[]}]` list and returns
+`{stencilByMaskMeshId, stencilsByMaskedMeshId, overflow}`. Each
+unique mask mesh in any pair gets a 1-based stencil ID (1..255 fits
+the 8-bit stencil buffer; overflow counted but not fatal). Stable
+order: first-encounter assignment, sorted output for masked-mesh
+stencil sets. Multi-mask supported: a masked mesh referenced by
+multiple pairs (or one pair with multi-element `maskMeshIds`) gets
+the union of stencil values, drawn one call per value.
+
+**`scenePass.js` integration.** `getIrisStencilInfo` deleted along
+with the `matchTag` import. Per-frame `allocateMaskStencils` runs
+against `resolveMaskConfigs(project)` (resolves to seeded data when
+present, else the same heuristic the cmo3 fallback uses). Per-mesh
+loop now branches three ways instead of two: write-stencil (mesh is
+a mask), read-stencil (mesh is masked, draw once per stencil value),
+or stencil-disabled. The `overlays.irisClipping` master toggle is
+preserved for backwards UI compatibility.
+
+**`cmo3writer.js` rigSpec push extended.** Alongside the existing
+`maskPidByMaskedPartId` (used for cmo3 emission, single-clip-ref),
+a new `maskMeshIdsByPartId: Map<partId, partId[]>` carries the full
+mask set verbatim. The `rigCollector.artMeshes.push` at line ~3898
+now also writes `maskMeshIds: maskMeshIdsByPartId.get(pm.partId) ??
+[]`, so `rigSpec.artMeshes[i].maskMeshIds` is finally populated for
+runtime/moc3 fidelity. Both maskConfigs (seeded) and heuristic
+(unseeded) paths populate the partId map.
+
+**Tests.** 22 maskStencil cases covering empty input, dedup,
+multi-mask, overflow at boundary, determinism across calls, bad
+input within pairs (non-string maskedMeshId, null entries),
+input-order independence in stencil ID assignment. Wired into
+`npm test`. Suite at 1295 passing (+22 from R6).
+
+**Files:** `src/renderer/maskStencil.js` (new, 105 LOC),
+`scripts/test_maskStencil.mjs` (new, 22 cases),
+`src/renderer/scenePass.js` (heuristic deleted, allocator wired),
+`src/io/live2d/cmo3writer.js` (`maskMeshIdsByPartId` map +
+rigSpec push extended), `package.json` (test wired into `npm test`),
+`docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` (R7 row + this
+shipped subsection). **Tag:**
+`native-rig-render-stage-R7-complete`.
+
+**Browser smoke test left to user.** Open Hiyori, init rig, confirm
+iris clipping still works on left and right eyes (no regression vs
+old hardcoded path). Then add a custom mask config in
+`project.maskConfigs` (e.g., back-hair clipped by headwear) — the
+stencil allocator picks it up without code changes.
 
 ## Rollback strategy
 
