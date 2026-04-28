@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0B — ExportService (Pillar F).
+ * v3 Phase 0B - ExportService (Pillar F).
  *
  * Façade for shipping the project to external formats. Wraps the
  * existing exporters (cmo3 / moc3 / cdi3 / motion3 / physics3 / Spine)
@@ -12,7 +14,7 @@
  *   - normalises errors (every export reports `{ok, blob, error?}`).
  *
  * The progress-event mechanism is a minimal pub/sub scoped to one
- * export call — no global event bus.
+ * export call - no global event bus.
  *
  * @module services/ExportService
  */
@@ -27,8 +29,8 @@ import {
  * @typedef {('cmo3'|'live2d-runtime'|'live2d-full')} ExportFormat
  *
  * @typedef {Object} ExportProgress
- * @property {number} pct           — 0..1
- * @property {string} message       — human-readable stage label
+ * @property {number} pct           - 0..1
+ * @property {string} message       - human-readable stage label
  *
  * @typedef {Object} ExportResult
  * @property {boolean} ok
@@ -40,7 +42,7 @@ import {
  * @property {ExportFormat} format
  * @property {Map<string, HTMLImageElement>} [images]
  * @property {(ev: ExportProgress) => void} [onProgress]
- * @property {Object} [extra]                    — passed through to the writer
+ * @property {Object} [extra]                    - passed through to the writer
  */
 
 /**
@@ -67,7 +69,7 @@ export function preflightExportFor(project, format) {
 
 /**
  * Cheap pre-flight before kicking off an export. Same shape as
- * RigService.preflightBuildRig — returns reasons rather than
+ * RigService.preflightBuildRig - returns reasons rather than
  * throwing so the UI can list them.
  *
  * @param {ExportFormat} format
@@ -83,7 +85,7 @@ function isSupportedFormat(f) {
 }
 
 /**
- * Run the export. Resolves with `{ok, blob?, error?}` — does not throw.
+ * Run the export. Resolves with `{ok, blob?, error?}` - does not throw.
  *
  * @param {ExportOptions} opts
  * @returns {Promise<ExportResult>}

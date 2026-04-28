@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0B — PersistenceService (Pillar F + Pillar Q).
+ * v3 Phase 0B - PersistenceService (Pillar F + Pillar Q).
  *
  * Thin façade over `projectFile.js` (.stretch ZIP I/O) +
  * `projectDb.js` (IndexedDB record store).
@@ -67,11 +69,11 @@ export function listSavedProjects() {
 }
 
 /**
- * @param {string|null} id        — null/undefined → create new
+ * @param {string|null} id        - null/undefined → create new
  * @param {string} name
- * @param {Blob} blob             — typically from `serializeProject`
- * @param {string} thumbnail      — data URL preview
- * @returns {Promise<string>}     — the saved record id
+ * @param {Blob} blob             - typically from `serializeProject`
+ * @param {string} thumbnail      - data URL preview
+ * @returns {Promise<string>}     - the saved record id
  */
 export function saveProjectRecord(id, name, blob, thumbnail) {
   return saveToDb(id, name, blob, thumbnail);

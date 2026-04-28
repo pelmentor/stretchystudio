@@ -1,11 +1,13 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — UI shell state.
+ * v3 Phase 0A - UI shell state.
  *
  * Mirrors Blender's "screen" + "area" + "workspace" structure. Each
  * workspace presents a different area-tree preset; switching workspaces
  * doesn't lose per-workspace state. (Plan §2 Layer 1-3 + §3.)
  *
- * For now the area tree is flat — four fixed areas tiled 2×2 — so the
+ * For now the area tree is flat - four fixed areas tiled 2×2 - so the
  * type can be a simple `{[areaId]: editorType}` map. The recursive
  * split-tree representation lands when split / drag-tab gestures arrive
  * (Phase 1+); the API exposed here doesn't change at that point, which
@@ -27,32 +29,44 @@ import { create } from 'zustand';
  *   Editor types registered for v3. Phase 1 expands the set.
  *
  * @typedef {Object} AreaSlot
- * @property {string} id              — stable across re-render
- * @property {EditorType} editorType  — what this area renders
+ * @property {string} id              - stable across re-render
+ * @property {EditorType} editorType  - what this area renders
  *
  * @typedef {Object} WorkspacePreset
- * @property {AreaSlot[]} areas       — current order is TL, TR, BL, BR
+ * @property {AreaSlot[]} areas       - current order is TL, TR, BL, BR
  *   (will become a split-tree in Phase 1; consumers should index by id)
  */
 
-/** Initial 2×2 layout used as the default for every workspace. */
-const DEFAULT_AREAS = () => [
-  { id: 'tl', editorType: /** @type {const} */ ('viewport') },
-  { id: 'tr', editorType: /** @type {const} */ ('outliner') },
-  { id: 'bl', editorType: /** @type {const} */ ('parameters') },
-  { id: 'br', editorType: /** @type {const} */ ('properties') },
-];
+/**
+ * Helper that narrows a literal string to `EditorType` so JSDoc type
+ * inference picks up the constraint without each call site repeating
+ * the cast.
+ * @param {EditorType} t
+ * @returns {EditorType}
+ */
+const e = (t) => t;
 
-/** Per-workspace area presets. Each workspace owns its own area state. */
+/** Initial 2×2 layout used as the default for every workspace. */
+const DEFAULT_AREAS = () => /** @type {AreaSlot[]} */ ([
+  { id: 'tl', editorType: e('viewport') },
+  { id: 'tr', editorType: e('outliner') },
+  { id: 'bl', editorType: e('parameters') },
+  { id: 'br', editorType: e('properties') },
+]);
+
+/**
+ * Per-workspace area presets. Each workspace owns its own area state.
+ * @returns {Record<WorkspaceId, WorkspacePreset>}
+ */
 const initialWorkspaces = () => ({
   layout:    { areas: DEFAULT_AREAS() },
   modeling:  { areas: DEFAULT_AREAS() },
   rigging:   { areas: DEFAULT_AREAS() },
   animation: { areas: [
-    { id: 'tl', editorType: 'viewport' },
-    { id: 'tr', editorType: 'outliner' },
-    { id: 'bl', editorType: 'timeline' },
-    { id: 'br', editorType: 'properties' },
+    { id: 'tl', editorType: e('viewport') },
+    { id: 'tr', editorType: e('outliner') },
+    { id: 'bl', editorType: e('timeline') },
+    { id: 'br', editorType: e('properties') },
   ] },
   pose:      { areas: DEFAULT_AREAS() },
 });

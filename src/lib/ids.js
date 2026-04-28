@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0G — Shared ID generators (Pillar P).
+ * v3 Phase 0G - Shared ID generators (Pillar P).
  *
  * Replaces the five duplicate `function uid() { return
  * Math.random().toString(36).slice(2, 9); }` definitions scattered
@@ -14,12 +16,12 @@
  *
  * Browsers since 2022 ship `crypto.randomUUID()` (HTTPS / localhost
  * only).  We strip the dashes for URL-friendliness and slice to a
- * manageable length — 12 chars of hex = ~48 bits, comfortable for
+ * manageable length - 12 chars of hex = ~48 bits, comfortable for
  * project-scope IDs and still short enough to be readable.
  *
  * Use `uid()` for node / keyframe / track / project record IDs.
  * Use `uidLong()` (full 32-char hex) when you want maximum entropy
- * — currently nothing in the app needs it but the helper is here
+ * - currently nothing in the app needs it but the helper is here
  * for future cryptographic uses.
  *
  * @module lib/ids

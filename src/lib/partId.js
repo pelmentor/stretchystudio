@@ -1,21 +1,23 @@
+// @ts-check
+
 /**
- * v3 Phase -1D — Canonical part-identifier convention.
+ * v3 Phase -1D - Canonical part-identifier convention.
  *
  * Background. Stretchy Studio uses three almost-but-not-quite identifiers
  * for parts that historically got conflated:
  *
- *   - `node.id` — primary key in `projectStore.project.nodes`. Created
+ *   - `node.id` - primary key in `projectStore.project.nodes`. Created
  *     by `nanoid` / `uid()` at PSD import time, immutable for the
  *     lifetime of the part.
- *   - `partId` — name used on mesh records (`meshes[i].partId`),
+ *   - `partId` - name used on mesh records (`meshes[i].partId`),
  *     `ArtMeshSpec.id` in rigSpec, frames returned by `evalRig`. **It
  *     is the same string as `node.id`.** Different field name, same
  *     value.
- *   - `sanitizedName` — _derived_ identifier built by
+ *   - `sanitizedName` - _derived_ identifier built by
  *     `(node.name || node.id).replace(/[^a-zA-Z0-9_]/g, '_')`. Used by
  *     `cmo3writer` to construct stable text-keyed deformer / parameter
  *     IDs that Cubism Editor will display (e.g. `RigWarp_Body_Front`,
- *     `ParamRotation_LeftArm`). **NOT a primary key** — collisions are
+ *     `ParamRotation_LeftArm`). **NOT a primary key** - collisions are
  *     possible if two nodes share a name. Treated as a string of XML
  *     content, not as a referenceable handle.
  *
@@ -23,13 +25,13 @@
  * `node.id == partId == sanitizedName` and silently dropped frames
  * when an ID lookup found nothing. The native rig pipeline made this
  * visible (chainEval keys frames by `meshSpec.id` = `partId` and
- * downstream code matches `node.id` — they MUST match).
+ * downstream code matches `node.id` - they MUST match).
  *
  * This module gives a single place to:
  *
  *   1. Document the typedef (`PartId` = `string & {__brand:'PartId'}`).
  *      Until we migrate to TypeScript (Phase 0D), the brand is a JSDoc
- *      annotation only — no runtime structural distinction.
+ *      annotation only - no runtime structural distinction.
  *   2. Provide runtime guards that catch the bug class loudly: empty
  *      strings, `null` / `undefined` / non-strings sneaking in, and
  *      cross-conversion mismatches.
@@ -44,7 +46,7 @@
 /**
  * Branded string alias for SS canonical part IDs. Same shape as
  * `node.id`, `meshes[i].partId`, and `ArtMeshSpec.id`. Brand only
- * exists in JSDoc / TS — at runtime it's just a string.
+ * exists in JSDoc / TS - at runtime it's just a string.
  *
  * @typedef {string & { readonly __brand: 'PartId' }} PartId
  */
@@ -54,11 +56,11 @@
  * string. Use at boundaries where an external system might hand us a
  * malformed ID (project file load, mesh worker results, third-party
  * import). Inside trusted internal code, prefer the cheaper `assert`
- * statement style — every guard adds a function call.
+ * statement style - every guard adds a function call.
  *
  * @param {unknown} value
- * @param {string} [label='partId'] — used in the error message
- * @returns {PartId} — `value` cast to `PartId` (same string, branded)
+ * @param {string} [label='partId'] - used in the error message
+ * @returns {PartId} - `value` cast to `PartId` (same string, branded)
  * @throws {TypeError} if `value` is missing, not a string, or empty
  */
 export function assertPartId(value, label = 'partId') {
@@ -78,11 +80,11 @@ export function assertPartId(value, label = 'partId') {
  * two layers of the system hand us "the same" partId via different
  * paths (e.g. evalRig frame's `frame.id` vs. lookup target
  * `node.id`). If they diverge, the bug is almost always a sanitisation
- * leak — `sanitizedName` accidentally used as a primary key.
+ * leak - `sanitizedName` accidentally used as a primary key.
  *
  * @param {string} a
  * @param {string} b
- * @param {string} [context] — optional human label for the error message
+ * @param {string} [context] - optional human label for the error message
  * @throws {Error} if `a !== b`
  */
 export function assertSamePartId(a, b, context = '') {
@@ -97,11 +99,11 @@ export function assertSamePartId(a, b, context = '') {
  * the **one official transform** that produces `sanitizedName`; every
  * other place in the codebase that constructs Cubism IDs from names
  * should call this rather than re-implementing the regex. The output
- * is **not** a primary key — only use it as part of derived strings
+ * is **not** a primary key - only use it as part of derived strings
  * like `RigWarp_${sanitizedName}` or `ParamRotation_${sanitizedName}`.
  *
- * @param {string} name — node.name or fallback to node.id
- * @returns {string} — alphanumeric + underscore only
+ * @param {string} name - node.name or fallback to node.id
+ * @returns {string} - alphanumeric + underscore only
  */
 export function sanitisePartName(name) {
   if (typeof name !== 'string' || name.length === 0) return '_';

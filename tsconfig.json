@@ -1,0 +1,54 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+
+    // Per-file opt-in: files start with `// @ts-check` get checked.
+    // This lets new modules (src/services/, src/lib/, src/v3/) lock
+    // in their JSDoc types now, while the 2243-LOC CanvasViewport
+    // and other legacy code stay unchanged until they're refactored.
+    // Phase 0F+ migrates more files; Phase 1 flips this to true once
+    // the baseline is clean.
+    "checkJs": false,
+
+    "noEmit": true,
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Strictness — start lenient and tighten over time. Phase 0D
+    // ships the runner; Phase 0C will use it to enforce branded
+    // coord-space types. Phase 1+ flips strict to true substage by
+    // substage as files migrate to .ts.
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": false,
+    "noFallthroughCasesInSwitch": false,
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "types": ["vite/client"]
+  },
+  "include": [
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

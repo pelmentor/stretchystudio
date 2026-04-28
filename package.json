@@ -9,6 +9,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "test:diff-harness": "node scripts/native-rig-diff/test_canonicalize.mjs && node scripts/native-rig-diff/test_diff.mjs",
     "test:migrations": "node scripts/test/test_migrations.mjs",
     "test:paramSpec": "node scripts/test/test_paramSpec.mjs",
@@ -39,7 +40,7 @@
     "test:v3Operators": "node scripts/test/test_v3Operators.mjs",
     "test:services": "node scripts/test/test_services.mjs",
     "test:viewportHelpers": "node scripts/test/test_viewportHelpers.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:rigWarps && npm run test:initRig && npm run test:cellSelect && npm run test:warpEval && npm run test:rotationEval && npm run test:artMeshEval && npm run test:chainEval && npm run test:maskStencil && npm run test:physicsTick && npm run test:e2e && npm run test:partId && npm run test:ids && npm run test:uiV3Store && npm run test:selectionStore && npm run test:v3Operators && npm run test:services && npm run test:viewportHelpers"
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:rigWarps && npm run test:initRig && npm run test:cellSelect && npm run test:warpEval && npm run test:rotationEval && npm run test:artMeshEval && npm run test:chainEval && npm run test:maskStencil && npm run test:physicsTick && npm run test:e2e && npm run test:partId && npm run test:ids && npm run test:uiV3Store && npm run test:selectionStore && npm run test:v3Operators && npm run test:services && npm run test:viewportHelpers && npm run typecheck"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",
@@ -117,6 +118,7 @@
     "globals": "^15.9.0",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.9",
+    "typescript": "^5.9.3",
     "vite": "^5.4.0"
   }
 }

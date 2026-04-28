@@ -1,12 +1,14 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — Editor type → component map.
+ * v3 Phase 0A - Editor type → component map.
  *
  * Decouples `useUIV3Store.workspaces[].areas[].editorType` (a string
  * enum) from the actual React component rendered by an Area. Lets us
  * add new editor types in one place without touching the shell, and
  * gives the area-header dropdown a single source of truth.
  *
- * Intentionally small at this stage — Phase 1+ replaces the stub
+ * Intentionally small at this stage - Phase 1+ replaces the stub
  * components with real implementations and adds new entries here
  * (Sequencer, Driver Editor, Mask Editor, …).
  *
@@ -25,7 +27,7 @@ import {
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
  *
  * @typedef {Object} EditorEntry
- * @property {string} label                — shown in the header dropdown
+ * @property {string} label                - shown in the header dropdown
  * @property {React.ComponentType} component
  */
 

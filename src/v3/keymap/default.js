@@ -1,9 +1,11 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — Default key bindings.
+ * v3 Phase 0A - Default key bindings.
  *
  * Maps `KeyboardEvent.code` chords to operator ids. We use `.code`
  * (physical key) rather than `.key` (layout-dependent character) so
- * bindings survive layout switches — Working Note #3 in the V3 plan.
+ * bindings survive layout switches - Working Note #3 in the V3 plan.
  *
  * Format: `chord` → `operatorId`
  *   chord syntax: `[Mod+][Mod+]Code`
@@ -19,7 +21,7 @@
 
 /** @type {Record<string, string>} */
 export const DEFAULT_KEYMAP = {
-  // Workspace switches — Ctrl+1..5 (not just digits, so keymap doesn't
+  // Workspace switches - Ctrl+1..5 (not just digits, so keymap doesn't
   // collide with future editor ops bound to bare digits).
   'Ctrl+Digit1': 'workspace.set.layout',
   'Ctrl+Digit2': 'workspace.set.modeling',
@@ -27,7 +29,7 @@ export const DEFAULT_KEYMAP = {
   'Ctrl+Digit4': 'workspace.set.pose',
   'Ctrl+Digit5': 'workspace.set.animation',
 
-  // Layout reset — uncommon enough that Ctrl+Shift+Backspace is fine.
+  // Layout reset - uncommon enough that Ctrl+Shift+Backspace is fine.
   'Ctrl+Shift+Backspace': 'workspace.reset',
 };
 

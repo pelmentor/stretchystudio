@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0B — ImportService (Pillar F).
+ * v3 Phase 0B - ImportService (Pillar F).
  *
  * Façade for ingesting external file formats into a project. Phase 0
  * ships only the .stretch project loader (delegated to
@@ -23,8 +25,8 @@ import { deserializeProject } from './PersistenceService.js';
  * @typedef {Object} ImportResult
  * @property {boolean} ok
  * @property {ImportFormat} format
- * @property {object} [project]            — when format='stretch'
- * @property {object} [psdPayload]         — when format='psd' (Phase 1)
+ * @property {object} [project]            - when format='stretch'
+ * @property {object} [psdPayload]         - when format='psd' (Phase 1)
  * @property {string} [error]
  */
 
@@ -46,7 +48,7 @@ export function detectImportFormat(file) {
 }
 
 /**
- * Import a file. Resolves with a discriminated union — caller switches
+ * Import a file. Resolves with a discriminated union - caller switches
  * on `result.format` to find which payload field was filled.
  *
  * Phase 0 supports only `.stretch`; the others return `ok:false` with

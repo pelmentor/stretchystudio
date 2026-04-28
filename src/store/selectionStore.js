@@ -1,13 +1,15 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — Universal selection model.
+ * v3 Phase 0A - Universal selection model.
  *
  * Plan §5: every selectable thing in the app is identified by a
  * `{type, id}` tuple. The current v2 `editorStore.selection: string[]`
  * only addresses parts; v3 needs to select parameters, deformers,
- * keyframes, physics rules, mask configs, etc. — same shape, same API.
+ * keyframes, physics rules, mask configs, etc. - same shape, same API.
  *
  * Selection ordering matters: the LAST entry is the "active" one
- * (Blender convention — gizmos / properties panel pivot off the
+ * (Blender convention - gizmos / properties panel pivot off the
  * active item, multi-edit mutations target every selected item).
  *
  * Modifier semantics for `select(item, modifier)`:
@@ -18,7 +20,7 @@
  *   - 'extend'  → range-select (caller resolves the range against
  *                  outliner ordering and passes the resulting array)
  *
- * Stores stay storage-only — operator system is what binds keymap
+ * Stores stay storage-only - operator system is what binds keymap
  * (shift/ctrl/click) to these modifiers (Phase 0A operatorStore).
  *
  * @module store/selectionStore
@@ -38,7 +40,7 @@ import { create } from 'zustand';
 const sameRef = (a, b) => a.type === b.type && a.id === b.id;
 
 export const useSelectionStore = create((set, get) => ({
-  /** @type {SelectableRef[]} — last entry is "active" */
+  /** @type {SelectableRef[]} - last entry is "active" */
   items: [],
 
   /** Active = last selected. Returns null when empty. */

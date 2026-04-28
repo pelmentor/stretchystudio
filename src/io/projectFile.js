@@ -102,8 +102,8 @@ export async function saveProject(project) {
 
 /**
  * Deserialize a .stretch ZIP file.
- * @param {File} file — the .stretch file from file input
- * @returns {Promise<{ project: object, images: Map<string, HTMLImageElement> }>}
+ * @param {Blob|File} file - the .stretch blob from file input or fetch
+ * @returns {Promise<object>}
  */
 export async function loadProject(file) {
   const zip = await JSZip.loadAsync(file);

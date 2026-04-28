@@ -1,9 +1,11 @@
+// @ts-check
+
 /**
- * v3 Phase 0F — Viewport pure helpers (extracted from CanvasViewport.jsx).
+ * v3 Phase 0F - Viewport pure helpers (extracted from CanvasViewport.jsx).
  *
  * Eight unit-testable utility functions previously buried inside the
  * 2243-LOC CanvasViewport component. None of them touch React, refs,
- * stores, or WebGL — they're parameterised by the data they need.
+ * stores, or WebGL - they're parameterised by the data they need.
  *
  * Plan §3 calls for a `src/components/canvas/viewport/` subdirectory
  * that the rest of the god-class split lands under (Shell.jsx,
@@ -38,7 +40,7 @@ export function clientToCanvasSpace(canvas, clientX, clientY, view) {
  *
  * @param {number} worldX
  * @param {number} worldY
- * @param {Float32Array|number[]} inverseWorldMatrix — column-major 3×3
+ * @param {Float32Array|number[]} inverseWorldMatrix - column-major 3×3
  * @returns {[number, number]}
  */
 export function worldToLocal(worldX, worldY, inverseWorldMatrix) {
@@ -84,7 +86,7 @@ export function findNearestVertex(vertices, x, y, radius) {
  *
  * @param {number} dist
  * @param {number} radius
- * @param {number} hardness — 0..1
+ * @param {number} hardness - 0..1
  * @returns {number} 0..1
  */
 export function brushWeight(dist, radius, hardness) {

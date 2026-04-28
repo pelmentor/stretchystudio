@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0B — RigService (Pillar F).
+ * v3 Phase 0B - RigService (Pillar F).
  *
  * Thin façade over `useRigSpecStore` + `initializeRigFromProject`.
  * Editors / operators talk to the service rather than reaching into
@@ -7,12 +9,12 @@
  *
  *   1. Pre-flight checks (project has parts, has a canvas, etc.) live
  *      in one place rather than duplicated at every call site.
- *   2. Progress / error events have a single emit point — Phase 1's
+ *   2. Progress / error events have a single emit point - Phase 1's
  *      "Build Rig" toast / progress bar listens here.
  *   3. The store can change shape (rigSpecStore → rigStore + cache
  *      separation, etc.) without rippling out to editors.
  *
- * The service is a stateless module — it does not own state itself.
+ * The service is a stateless module - it does not own state itself.
  * State lives in `useRigSpecStore`; the service is just verbs on top.
  *
  * @module services/RigService
@@ -29,7 +31,7 @@ import { useProjectStore } from '../store/projectStore.js';
  *
  * @typedef {Object} PreflightResult
  * @property {boolean} ok
- * @property {string[]} reasons          — non-empty when ok=false
+ * @property {string[]} reasons          - non-empty when ok=false
  */
 
 /**

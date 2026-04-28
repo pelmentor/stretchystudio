@@ -1,5 +1,7 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — Operator registry.
+ * v3 Phase 0A - Operator registry.
  *
  * Plan §6: every user-triggerable action is defined as an operator —
  * a `{id, label, exec}` bundle (plus optional `pollContext`,
@@ -20,12 +22,12 @@ import { useUIV3Store } from '../../store/uiV3Store.js';
 
 /**
  * @typedef {Object} OperatorContext
- * @property {string|null} editorType  — the editor that triggered the op (null = shell)
+ * @property {string|null} editorType  - the editor that triggered the op (null = shell)
  *
  * @typedef {Object} OperatorDef
  * @property {string} id
  * @property {string} label
- * @property {(ctx: OperatorContext) => boolean} [available]  — gate (defaults to always)
+ * @property {(ctx: OperatorContext) => boolean} [available]  - gate (defaults to always)
  * @property {(ctx: OperatorContext) => void} exec
  */
 
@@ -48,7 +50,7 @@ export function getOperator(id) {
   return operators.get(id) ?? null;
 }
 
-/** All registered operators (snapshot — caller must not mutate). */
+/** All registered operators (snapshot - caller must not mutate). */
 export function listOperators() {
   return [...operators.values()];
 }

@@ -1,11 +1,13 @@
+// @ts-check
+
 /**
- * v3 Phase 0A — Keymap → operator dispatcher.
+ * v3 Phase 0A - Keymap → operator dispatcher.
  *
  * Mounts a single `keydown` listener on `window`, resolves the
  * `KeyboardEvent` to a chord (see `chordOf`), looks the chord up in
  * the active keymap, and invokes the corresponding operator.
  *
- * Designed to coexist with v2 — it ignores any event whose target is
+ * Designed to coexist with v2 - it ignores any event whose target is
  * inside an editable element (`input` / `textarea` / `[contenteditable]`)
  * because those should keep their native typing behaviour.
  *
@@ -58,7 +60,7 @@ export function mountOperatorDispatcher() {
     try {
       op.exec({ editorType: null });
     } catch (err) {
-      // Don't let an operator error kill the whole app — log + swallow.
+      // Don't let an operator error kill the whole app - log + swallow.
       // Real telemetry comes in Phase 0G.
       // eslint-disable-next-line no-console
       console.error(`[operator ${opId}] exec failed`, err);
