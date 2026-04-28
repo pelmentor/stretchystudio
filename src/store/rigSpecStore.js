@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { useProjectStore } from './projectStore';
-import { initializeRigFromProject } from '@/io/live2d/rig/initRig';
-import { resolvePhysicsRules } from '@/io/live2d/rig/physicsConfig';
+import { useProjectStore } from './projectStore.js';
+import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
+import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 
 /**
  * v2 R1 — RigSpec session cache.

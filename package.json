@@ -37,7 +37,8 @@
     "test:uiV3Store": "node scripts/test/test_uiV3Store.mjs",
     "test:selectionStore": "node scripts/test/test_selectionStore.mjs",
     "test:v3Operators": "node scripts/test/test_v3Operators.mjs",
-    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:rigWarps && npm run test:initRig && npm run test:cellSelect && npm run test:warpEval && npm run test:rotationEval && npm run test:artMeshEval && npm run test:chainEval && npm run test:maskStencil && npm run test:physicsTick && npm run test:e2e && npm run test:partId && npm run test:ids && npm run test:uiV3Store && npm run test:selectionStore && npm run test:v3Operators"
+    "test:services": "node scripts/test/test_services.mjs",
+    "test": "npm run test:diff-harness && npm run test:migrations && npm run test:paramSpec && npm run test:maskConfigs && npm run test:physicsConfig && npm run test:boneConfig && npm run test:variantFadeRules && npm run test:eyeClosureConfig && npm run test:rotationDeformerConfig && npm run test:autoRigConfig && npm run test:faceParallax && npm run test:bodyWarp && npm run test:tagWarpBindings && npm run test:rigWarps && npm run test:initRig && npm run test:cellSelect && npm run test:warpEval && npm run test:rotationEval && npm run test:artMeshEval && npm run test:chainEval && npm run test:maskStencil && npm run test:physicsTick && npm run test:e2e && npm run test:partId && npm run test:ids && npm run test:uiV3Store && npm run test:selectionStore && npm run test:v3Operators && npm run test:services"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",

@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
+import { CURRENT_SCHEMA_VERSION, migrateProject } from '../store/projectMigrations.js';
 
 /**
  * Serialize the current project to a .stretch ZIP file.

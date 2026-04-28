@@ -1,4 +1,4 @@
-import { uidLong } from '@/lib/ids';
+import { uidLong } from '../lib/ids.js';
 
 const DB_NAME = 'stretchystudio-db';
 const DB_VERSION = 1;

@@ -1,28 +1,28 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { pushSnapshot, isBatching, clearHistory } from '@/store/undoHistory';
-import { CURRENT_SCHEMA_VERSION, migrateProject } from '@/store/projectMigrations';
-import { seedParameters as seedParametersFn } from '@/io/live2d/rig/paramSpec';
-import { seedMaskConfigs as seedMaskConfigsFn } from '@/io/live2d/rig/maskConfigs';
-import { seedPhysicsRules as seedPhysicsRulesFn } from '@/io/live2d/rig/physicsConfig';
-import { seedBoneConfig as seedBoneConfigFn } from '@/io/live2d/rig/boneConfig';
-import { seedVariantFadeRules as seedVariantFadeRulesFn } from '@/io/live2d/rig/variantFadeRules';
-import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '@/io/live2d/rig/eyeClosureConfig';
-import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '@/io/live2d/rig/rotationDeformerConfig';
-import { seedAutoRigConfig as seedAutoRigConfigFn } from '@/io/live2d/rig/autoRigConfig';
+import { pushSnapshot, isBatching, clearHistory } from './undoHistory.js';
+import { CURRENT_SCHEMA_VERSION, migrateProject } from './projectMigrations.js';
+import { seedParameters as seedParametersFn } from '../io/live2d/rig/paramSpec.js';
+import { seedMaskConfigs as seedMaskConfigsFn } from '../io/live2d/rig/maskConfigs.js';
+import { seedPhysicsRules as seedPhysicsRulesFn } from '../io/live2d/rig/physicsConfig.js';
+import { seedBoneConfig as seedBoneConfigFn } from '../io/live2d/rig/boneConfig.js';
+import { seedVariantFadeRules as seedVariantFadeRulesFn } from '../io/live2d/rig/variantFadeRules.js';
+import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '../io/live2d/rig/eyeClosureConfig.js';
+import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '../io/live2d/rig/rotationDeformerConfig.js';
+import { seedAutoRigConfig as seedAutoRigConfigFn } from '../io/live2d/rig/autoRigConfig.js';
 import {
   seedFaceParallax as seedFaceParallaxFn,
   clearFaceParallax as clearFaceParallaxFn,
-} from '@/io/live2d/rig/faceParallaxStore';
+} from '../io/live2d/rig/faceParallaxStore.js';
 import {
   seedBodyWarpChain as seedBodyWarpChainFn,
   clearBodyWarp as clearBodyWarpFn,
-} from '@/io/live2d/rig/bodyWarpStore';
+} from '../io/live2d/rig/bodyWarpStore.js';
 import {
   seedRigWarps as seedRigWarpsFn,
   clearRigWarps as clearRigWarpsFn,
-} from '@/io/live2d/rig/rigWarpsStore';
-import { uid } from '@/lib/ids';
+} from '../io/live2d/rig/rigWarpsStore.js';
+import { uid } from '../lib/ids.js';
 
 /**
  * Deep clone an object, preserving TypedArrays.
