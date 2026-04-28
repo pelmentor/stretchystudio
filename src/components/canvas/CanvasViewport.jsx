@@ -195,6 +195,12 @@ const WARP_SPECS = [
     insideBoneRole: 'torso', paramSsId: 'ParamBodyAngleX', warpName: 'TopWearWarp',    warpType: 'body_angle_x' },
   { layerTags: ['bottomwear'],
     insideBoneRole: 'root',  paramSsId: 'ParamBodyAngleX', warpName: 'BottomWearWarp', warpType: 'body_angle_x' },
+
+  // ── Structural warp chain: each targets the previous warp ──
+  // Chain: BodyWarp (X) contains BreathWarp (Breath) contains BodyWarpY (Y) contains BodyWarpZ (Z)
+  { chainedUnderWarp: 'BodyWarp', paramSsId: 'ParamBreath',    warpName: 'BreathWarp',  warpType: 'breathing' },
+  { chainedUnderWarp: 'BreathWarp', paramSsId: 'ParamBodyAngleY', warpName: 'BodyWarpY',  warpType: 'body_angle_y' },
+  { chainedUnderWarp: 'BodyWarpY', paramSsId: 'ParamBodyAngleZ', warpName: 'BodyWarpZ',  warpType: 'body_angle_z' },
 ];
 
 /**
@@ -320,6 +326,28 @@ function buildWarpKeyframes(warpType, gridX, gridY, gridW, gridH, col, row, scal
     ];
   }
 
+  if (warpType === 'body_angle_z') {
+    // Body roll — tilting left (time=0) / tilting right (time=1000)
+    // Spine acts as rotation axis; shoulders rotate around spine, hips rotate less
+    const rightTilt = (cn, rn) => {
+      // Body bowing: center/spine shifts WITH tilt, edges shift opposite
+      const bowFactor = 1.5 * Math.sin(Math.PI * cn) - 0.5;
+      const dx = bowFactor * 0.035 * gridW * rn;
+      // Perspective: lean side rises, far side drops (3D depth)
+      const dy = -(cn - 0.5) * 0.025 * gridH * rn;
+      return { dx, dy };
+    };
+    const leftTilt = (cn, rn) => {
+      const d = rightTilt(1 - cn, rn);
+      return { dx: -d.dx, dy: d.dy };
+    };
+    return [
+      { time:    0, value: makeGrid(leftTilt) },
+      { time:  500, value: flat() },
+      { time: 1000, value: makeGrid(rightTilt) },
+    ];
+  }
+
   if (warpType === 'eye_open') {
     // Eyelid close: top row squishes toward center row
     // time=0 closed (param=0), time=1000 open (param=1, default)
@@ -358,6 +386,38 @@ function buildWarpKeyframes(warpType, gridX, gridY, gridW, gridH, col, row, scal
       { time:    0, value: makeGrid(leftSway) },
       { time:  500, value: flat() },
       { time: 1000, value: makeGrid(rightSway) },
+    ];
+  }
+
+  if (warpType === 'breathing') {
+    // Chest compression on inhale (parameter 0=exhale/flat, 1=inhale/compressed)
+    // Edge columns and top/bottom rows pinned; chest rows compress inward
+    const inhale = (cn, rn) => {
+      // Edge columns stay pinned
+      if (cn <= 0.05 || cn >= 0.95) return { dx: 0, dy: 0 };
+      // Top edge and bottom 2 rows: no change
+      if (rn <= 0.1 || rn >= 0.80) return { dx: 0, dy: 0 };
+
+      // Chest rows compress inward with row-specific amplitudes (matching Live2D export)
+      let dy = 0;
+      const rowInChest = (rn - 0.1) / 0.70;
+      if (rowInChest < 0.25) {        // Upper chest
+        dy = -0.10 * gridH;
+      } else if (rowInChest < 0.50) { // Peak compression
+        dy = -0.12 * gridH;
+      } else if (rowInChest < 0.75) { // Lower chest
+        dy = -0.06 * gridH;
+      }
+
+      // Horizontal squeeze: center columns move inward
+      const cx = (cn - 0.5) * 2;
+      const dx = -cx * 0.06 * gridW;
+
+      return { dx, dy };
+    };
+    return [
+      { time:    0, value: flat() },
+      { time: 1000, value: makeGrid(inhale) },
     ];
   }
 
@@ -1469,7 +1529,7 @@ export default function CanvasViewport({
           const gridX = bounds.minX - PAD, gridY = bounds.minY - PAD;
           const gridW = (bounds.maxX - bounds.minX) + 2 * PAD;
           const gridH = (bounds.maxY - bounds.minY) + 2 * PAD;
-          const col = 2, row = 2;
+          const col = 5, row = 5;
           const warpId = uid();
 
           proj.nodes.push({
@@ -1499,7 +1559,60 @@ export default function CanvasViewport({
           const tagSet = new Set(spec.layerTags);
           const targets = collectTaggedParts(searchRoot.id, tagSet);
           createWarp(spec, searchRoot, targets);
+        } else if (spec.chainedUnderWarp) {
+          // ── chain mode: create warp under another warp (structural chain) ──
+          const parentWarp = proj.nodes.find(n => n.type === 'warpDeformer' && n.name === spec.chainedUnderWarp);
+          if (!parentWarp) continue;
+
+          // Get all direct children of parent warp to compute bounds and reparent
+          const children = proj.nodes.filter(n => n.parent === parentWarp.id);
+
+          // Get all descendants of parent warp to compute bounds
+          const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+          collectBounds(proj, parentWarp.id, bounds);
+          if (bounds.minX === Infinity) {
+            bounds.minX = parentWarp.gridX;
+            bounds.minY = parentWarp.gridY;
+            bounds.maxX = parentWarp.gridX + parentWarp.gridW;
+            bounds.maxY = parentWarp.gridY + parentWarp.gridH;
+          }
+
+          const PAD = 8;
+          const gridX = bounds.minX - PAD, gridY = bounds.minY - PAD;
+          const gridW = (bounds.maxX - bounds.minX) + 2 * PAD;
+          const gridH = (bounds.maxY - bounds.minY) + 2 * PAD;
+          const col = 5, row = 5;
+          const warpId = uid();
+
+          proj.nodes.push({
+            id: warpId, type: 'warpDeformer', name: spec.warpName,
+            parent: parentWarp.id, transform: DEFAULT_TRANSFORM(),
+            visible: true, opacity: 1,
+            col, row, gridX, gridY, gridW, gridH,
+            parameterId: spec.paramSsId,
+            warpType: spec.warpType,
+          });
+
+          // Reparent all children of parent warp to this new warp (insert into chain)
+          for (const child of children) {
+            child.parent = warpId;
+          }
+
+          paramAnim.tracks.push({
+            nodeId: warpId, property: 'mesh_verts',
+            keyframes: buildWarpKeyframes(spec.warpType, gridX, gridY, gridW, gridH, col, row, 1),
+          });
+
+          if (!warpNodeIds[spec.paramSsId]) warpNodeIds[spec.paramSsId] = [];
+          warpNodeIds[spec.paramSsId].push(warpId);
         }
+      }
+
+      // Post-process: reparent BottomWearWarp into the warp chain so it's affected by all structural warps
+      const bodyWarpZ = proj.nodes.find(n => n.type === 'warpDeformer' && n.name === 'BodyWarpZ');
+      const bottomWearWarp = proj.nodes.find(n => n.type === 'warpDeformer' && n.name === 'BottomWearWarp');
+      if (bodyWarpZ && bottomWearWarp && bottomWearWarp.parent !== bodyWarpZ.id) {
+        bottomWearWarp.parent = bodyWarpZ.id;
       }
 
       // Create all standard Live2D parameters; wire bindings for warp-linked ones

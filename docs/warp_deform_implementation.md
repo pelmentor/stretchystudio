@@ -318,14 +318,35 @@ All standard Live2D parameters are now in `LIVE_RIG_PARAMS`:
 - **Hair** (3): `ParamHairFront/Side/Back`
 - **Global** (4): `ParamCheek`, `ParamHairFluffy`, `ParamBaseX/Y`
 
-#### Warp Deformers (13 total)
-- **Top-level groups** (3): `FaceWarp` (head), `BodyWarp` (torso), `NeckWarp` (neck)
-- **Nested in head** (6): `EyeLWarp`, `EyeRWarp`, `MouthWarp`, `EyebrowLWarp`, `EyebrowRWarp`, `HairFrontWarp`, `HairBackWarp`
-- **Nested in torso/root** (2): `TopWearWarp` (torso), `BottomWearWarp` (root)
+#### Warp Deformers (auto-generated)
+**Structural chain** (4 layers under torso, matching Live2D export):
+- `BodyWarp` (5×5 grid, ParamBodyAngleX) — wraps all torso children
+  - `BreathWarp` (5×5 grid, ParamBreath) — subtle chest compression
+    - `BodyWarpY` (5×5 grid, ParamBodyAngleY) — lean forward/back
+      - `BodyWarpZ` (5×5 grid, ParamBodyAngleZ) — body roll/tilt
+        - All descendants (arms, topwear, bottomwear, etc.)
 
-#### Warp Math Types (8 new + 2 existing = 10 total)
-- Existing: `face_angle_x`, `body_angle_x`
-- New: `neck_follow`, `face_angle_y`, `body_angle_y`, `eye_open`, `mouth_open`, `brow_y`, `hair_sway`
+**Anatomical parts** (under head and body groups):
+- **Head group**: `FaceWarp` (5×5 grid, ParamAngleX) with nested warps
+  - `EyeLWarp` (ParamEyeLOpen), `EyeRWarp` (ParamEyeROpen)
+  - `MouthWarp` (ParamMouthOpenY)
+  - `EyebrowLWarp` (ParamBrowLY), `EyebrowRWarp` (ParamBrowRY)
+  - `HairFrontWarp` (ParamHairFront), `HairBackWarp` (ParamHairBack)
+- **Neck group**: `NeckWarp` (5×5 grid, ParamAngleX)
+- **Clothing**: `TopWearWarp` (under BodyWarpZ), `BottomWearWarp` (auto-reparented to BodyWarpZ)
+
+#### Warp Math Types (11 total)
+- `face_angle_x` (2.5D head turn with parabolic X-shift and perspective Z-scaling)
+- `face_angle_y` (head pitch: up/down with asymmetric bow)
+- `body_angle_x` (shoulder lean with 3D perspective)
+- `body_angle_y` (torso pitch: lean forward/back)
+- `body_angle_z` (body roll: tilt left/right with spine as rotation axis)
+- `neck_follow` (neck shear following head tilt at reduced amplitude)
+- `eye_open` (eyelid closure with top row squish)
+- `mouth_open` (jaw drop: top/bottom row expansion)
+- `brow_y` (uniform vertical translation)
+- `hair_sway` (tip-biased horizontal sway)
+- `breathing` (chest compression on inhale with pinned edges and horizontal squeeze)
 
 #### Implementation Details
 
@@ -333,53 +354,68 @@ All standard Live2D parameters are now in `LIVE_RIG_PARAMS`:
 - All 41 parameters defined with correct min/max/default
 - Organized by semantic group (Face, Eye, Brow, Mouth, Body, Hair, Global)
 
-**`WARP_SPECS` array** (`CanvasViewport.jsx:158–185`):
-- **Two modes**: `boneRole` (wraps all children of a bone group) and `layerTags` (finds specific tagged parts within a subtree)
-- **boneRole mode** (3 specs): FaceWarp, BodyWarp, NeckWarp — wraps entire group contents
-- **layerTags mode** (10 specs): Eye, mouth, eyebrow, hair, topwear, bottomwear warps — targets tagged parts within a parent
+**`WARP_SPECS` array** (`CanvasViewport.jsx:171–204`):
+- **Three modes**: `boneRole`, `layerTags`, and `chainedUnderWarp`
+- **boneRole mode** (3 specs, 5×5 grids): FaceWarp, BodyWarp, NeckWarp — wraps entire group contents
+- **layerTags mode**: Eye, mouth, eyebrow, hair, topwear, bottomwear warps — targets tagged parts within a parent
+- **chainedUnderWarp mode** (3 specs, 5×5 grids): BreathWarp, BodyWarpY, BodyWarpZ — creates structural warp chain
+  - Each targets the previous warp as parent
+  - Reparents all children of parent warp (inserting into hierarchy)
+  - Matches Live2D export structural deformer chain
 - Each spec carries `warpType` for `buildWarpKeyframes` lookup
-- Multiple specs can bind to the same `paramSsId` (e.g., both EyeLWarp and EyeRWarp → `ParamEyeLOpen`)
+- Grid size: 5×5 for structural/anatomical parts, 2×2 for fine-detail parts
 
-**`buildWarpKeyframes` function** (`CanvasViewport.jsx:142–361`):
-- 10 warp type cases: `face_angle_x`, `body_angle_x`, `neck_follow`, `face_angle_y`, `body_angle_y`, `eye_open`, `mouth_open`, `brow_y`, `hair_sway`
+**`buildWarpKeyframes` function** (`CanvasViewport.jsx:206–415`):
+- 11 warp type cases with complete math for each deformation type
 - Each type returns 2–3 keyframes (time→grid deformation mapping)
 - Math uses normalized row/column coordinates (0..1) and `scale` parameter for amplitude control
+- **breathing warp** (new): chest compression with pinned edges, row-specific amplitudes, horizontal squeeze
+- **body_angle_z** (new): body roll with bow factor and 3D depth via sine curve
 
-**`autoGenerateWarpDeformers` function** (`CanvasViewport.jsx:1327–1415`):
-- Refactored to support both `boneRole` and `layerTags` modes
-- **boneRole**: Wraps all direct children of the bone group (existing behavior)
-- **layerTags**: Recursively finds parts matching tags within a subtree, creates warp as child of innermost group/warp
-- Stores `warpType` on the node for later lookup during strength adjustments
-- Multiple warp nodes per parameter each get a separate binding entry
+**`autoGenerateWarpDeformers` function** (`CanvasViewport.jsx:1403–1620`):
+- Supports three modes: `boneRole`, `layerTags`, and `chainedUnderWarp`
+- **boneRole mode**: Wraps all direct children of the bone group, 5×5 grid
+- **layerTags mode**: Recursively finds parts matching tags within a subtree, creates warp as child
+- **chainedUnderWarp mode**: Creates warp as child of specified parent warp, reparents all parent's children
+  - Inserts new warp into hierarchy, building structural chain
+  - Computes bounds from parent warp's descendants
+  - Stores `warpType` on node for strength adjustment lookups
+- Post-processing: reparents BottomWearWarp into BodyWarpZ so it's affected by entire warp chain
 - Calls `collectBounds` and `collectTaggedParts` utilities for tree traversal
+- Creates "Parameters" animation clip if not present, adds mesh_verts tracks with keyframes
 
 **`handleWarpStrength` function** (`CanvasViewport.jsx:1417–1438`):
 - Now handles multiple warp nodes per parameter
 - Uses `warpNode.warpType` (fallback to WARP_SPECS lookup) to rebuild keyframes at new scale
 
-#### Known Gaps — Parameters Without Warp Specs (32 of 41)
+#### Fully Implemented Parameters (12 of 41 with auto-generated warp deformers)
 
-While all 41 parameters are now defined and can be created, only **9 parameters have active warp deformers**:
-- ✅ `ParamAngleX` (FaceWarp, NeckWarp)
-- ✅ `ParamBodyAngleX` (BodyWarp)
-- ✅ `ParamEyeLOpen`, `ParamEyeROpen` (EyeLWarp, EyeRWarp)
-- ✅ `ParamMouthOpenY` (MouthWarp)
-- ✅ `ParamBrowLY`, `ParamBrowRY` (EyebrowLWarp, EyebrowRWarp)
-- ✅ `ParamHairFront/Side/Back` (HairFrontWarp, HairBackWarp)
+✅ **Structural warps:**
+- `ParamBodyAngleX` (BodyWarp) — shoulder/torso lean
+- `ParamBreath` (BreathWarp) — chest compression
+- `ParamBodyAngleY` (BodyWarpY) — torso pitch (lean forward/back)
+- `ParamBodyAngleZ` (BodyWarpZ) — body roll (tilt left/right)
 
-**Missing warp specs** (32 parameters need warp deformers):
-- **Face rotation**: `ParamAngleY` (pitch), `ParamAngleZ` (roll)
-- **Eyes** (8): `ParamEyeLSmile`, `ParamEyeRSmile`, `ParamEyeBallX/Y`, `ParamEyeBallForm`, `ParamTear`
-- **Brows** (6): `ParamBrowLX`, `ParamBrowRX`, `ParamBrowLAngle`, `ParamBrowRAngle`, `ParamBrowLForm`, `ParamBrowRForm`
-- **Mouth** (1): `ParamMouthForm`
-- **Body rotation** (2): `ParamBodyAngleY`, `ParamBodyAngleZ`
-- **Arms & Breath** (10): `ParamBreath`, `ParamArmLA/RA`, `ParamArmLB/RB`, `ParamHandL/R`, `ParamShoulderY`
-- **Bust** (2): `ParamBustX/Y`
-- **Global** (4): `ParamCheek`, `ParamHairFluffy`, `ParamBaseX/Y`
+✅ **Anatomical warps:**
+- `ParamAngleX` (FaceWarp, NeckWarp) — head turn with 2.5D perspective
+- `ParamEyeLOpen`, `ParamEyeROpen` (EyeLWarp, EyeRWarp) — eyelid opening
+- `ParamMouthOpenY` (MouthWarp) — mouth opening
+- `ParamBrowLY`, `ParamBrowRY` (EyebrowLWarp, EyebrowRWarp) — brow vertical movement
+- `ParamHairFront`, `ParamHairBack` (HairFrontWarp, HairBackWarp) — hair sway
 
-To complete the rig, each missing parameter needs:
-1. A new `WARP_SPECS` entry with `layerTags` targeting the relevant character parts
-2. A corresponding `buildWarpKeyframes` warp type (e.g., `eye_gaze`, `eye_smile`, `bust_wobble`, etc.)
+#### Missing Warp Deformers (29 of 41 parameters)
+
+Parameters defined but without auto-generated warps (can be created manually):
+- **Face rotation**: `ParamAngleY` (pitch), `ParamAngleZ` (roll) — have warp math but no specs
+- **Eyes** (8): ParamEyeLSmile, ParamEyeRSmile, ParamEyeBallX/Y/Form, ParamTear
+- **Brows** (6): ParamBrowLX, ParamBrowRX, ParamBrowLAngle, ParamBrowRAngle, ParamBrowLForm, ParamBrowRForm
+- **Mouth** (1): ParamMouthForm
+- **Arms** (6): ParamArmLA/RA, ParamArmLB/RB, ParamHandL/R
+- **Other** (8): ParamShoulderY, ParamBustX/Y, ParamCheek, ParamHairFluffy, ParamBaseX/Y
+
+To complete auto-generation for remaining parameters:
+1. Add `WARP_SPECS` entries with `layerTags` targeting relevant parts
+2. Implement corresponding `buildWarpKeyframes` warp types (warp math can be prototyped in preview, then applied)
 
 ---
 
