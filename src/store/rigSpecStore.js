@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore';
 import { initializeRigFromProject } from '@/io/live2d/rig/initRig';
+import { resolvePhysicsRules } from '@/io/live2d/rig/physicsConfig';
 
 /**
  * v2 R1 — RigSpec session cache.
@@ -39,12 +40,22 @@ export const useRigSpecStore = create((set, get) => ({
       const project = useProjectStore.getState().project;
       const harvest = await initializeRigFromProject(project);
       const v = useProjectStore.getState().versionControl?.geometryVersion ?? 0;
+      // R9 — attach resolved physics rules so the runtime tick can
+      // drive sway outputs without re-reading project state every
+      // frame. initializeRigFromProject doesn't populate this itself
+      // (physics rules live alongside the rig but aren't part of the
+      // generator output); we resolve here from the post-seed project.
+      let rigSpec = harvest.rigSpec ?? null;
+      if (rigSpec) {
+        const postSeedProject = useProjectStore.getState().project;
+        rigSpec = { ...rigSpec, physicsRules: resolvePhysicsRules(postSeedProject) };
+      }
       set({
-        rigSpec: harvest.rigSpec ?? null,
+        rigSpec,
         isBuilding: false,
         lastBuiltGeometryVersion: v,
       });
-      return harvest.rigSpec ?? null;
+      return rigSpec;
     } catch (err) {
       console.error('[rigSpecStore] buildRigSpec failed:', err);
       set({ isBuilding: false, error: err?.message ?? String(err) });

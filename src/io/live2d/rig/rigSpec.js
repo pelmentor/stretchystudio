@@ -262,6 +262,11 @@
  * @property {WarpDeformerSpec[]} warpDeformers
  * @property {RotationDeformerSpec[]} rotationDeformers
  * @property {ArtMeshSpec[]} artMeshes
+ * @property {Array<object>} [physicsRules] - Resolved physics rules
+ *   (R9). Populated by `rigSpecStore.buildRigSpec` via
+ *   `resolvePhysicsRules(project)` so the runtime evaluator can drive
+ *   pendulum-style sway params (hair, clothing, bust, arm) without
+ *   re-resolving from project on every tick.
  * @property {{w:number, h:number}} canvas
  * @property {((cx:number)=>number)|null} [canvasToInnermostX]
  *   When the body warp chain is built, this is the canvas-px → innermost-warp
@@ -295,6 +300,7 @@ export function emptyRigSpec(canvas) {
     warpDeformers: [],
     rotationDeformers: [],
     artMeshes: [],
+    physicsRules: [],
     canvas,
     canvasToInnermostX: null,
     canvasToInnermostY: null,

@@ -40,7 +40,7 @@ demand" rather than speculatively.
 | R6 | Chain composition + first visible demo | **shipped 2026-04-28** |
 | R7 | Mask system generalization (stencil) | **shipped 2026-04-28** |
 | R8 | Full param scrubber UI | **shipped 2026-04-28** |
-| R9 | Physics tick (Cubism pendulum) | not started |
+| R9 | Physics tick (Cubism pendulum) | **shipped 2026-04-28** |
 | R10 | Performance hardening | not started |
 
 Cross-ref: see [`RUNTIME_PARITY_PLAN.md`](RUNTIME_PARITY_PLAN.md) — that
@@ -1672,6 +1672,110 @@ iris clipping still works on left and right eyes (no regression vs
 old hardcoded path). Then add a custom mask config in
 `project.maskConfigs` (e.g., back-hair clipped by headwear) — the
 stencil allocator picks it up without code changes.
+
+### v2 Stage R9 — Physics tick (shipped 2026-04-28)
+
+Hair / clothing / bust / arm sway is now driven live in the SS
+viewport. Before R9, `physicsRules` were a serializer-only construct:
+emitted into `.cmo3` (and downstream `.physics3.json`), but inert in
+SS itself — the user only saw pendulum motion in Cubism Viewer after
+export. R9 ports the Cubism-style pendulum integrator into the
+runtime so the viewport mirrors what the model will look like in
+production.
+
+**The integrator** lives in
+[`src/io/live2d/runtime/physicsTick.js`](../../src/io/live2d/runtime/physicsTick.js):
+
+* `createPhysicsState(rules)` allocates per-rule particle chains —
+  one particle per `rule.vertices[]`, anchored at the rest layout
+  hanging straight down.
+* `tickPhysics(state, rules, paramValues, paramSpecs, dtSeconds)`
+  steps each rule's chain forward via fixed-dt verlet integration
+  (1/60 s substeps with a real-time accumulator + `MAX_SUBSTEPS=6`
+  spiral-of-death cap), then writes outputs back into `paramValues`.
+* `buildParamSpecs(parameters)` is a tiny helper for the React layer
+  to project `project.parameters` / `rigSpec.parameters` into a
+  `Map<id, {min,max,default}>`.
+
+**The integration model:**
+
+   1. Aggregate inputs: each rule's `inputs[]` are normalised to ±1
+      using the param's spec range (asymmetric ranges handled via
+      separate negative/positive half-spans), summed by type
+      (`SRC_TO_X`, `SRC_TO_Y`, `SRC_TO_G_ANGLE`) weighted by
+      `weight / total-weight-of-same-type`, then scaled into the
+      rule's `normalization.{posMin..posMax, angleMin..angleMax}`
+      box. Result is the chain's drive vector + drive angle.
+   2. Step: anchor particle (vertex 0) tracks the input translation
+      directly; subsequent particles run a verlet step
+      `pos*2 - lastPos + force*dt²` toward the rotated-gravity target
+      hanging from their parent at `radius`, damped by
+      `(1-delay) * mobility`, then rod-constrained back to exactly
+      `radius` from parent (hard length lock — no accumulating drift).
+   3. Output: each `output[]` reads its `vertexIndex`-th particle's
+      angle (atan2 of the rod direction relative to chain rest =
+      "down"), normalises by `normalization.angleMax` so a steady-
+      state input at the box edge produces ±1, multiplies by
+      `output.scale` (the destination param's natural unit), flips
+      sign if `isReverse`, and clamps to the destination param's
+      spec range.
+
+**Tick integration** lives in
+[`src/components/canvas/CanvasViewport.jsx`](../../src/components/canvas/CanvasViewport.jsx)
+inside the existing rAF tick. Per frame:
+
+* If the cached `rigSpec.physicsRules` is non-empty, compute real dt
+  from the rAF timestamp (clamped to `[0..0.5s]` so debugger pauses
+  don't trigger massive catch-ups), advance the chain, and diff the
+  working copy against the prior store snapshot. Only changed output
+  params are pushed back via `setMany` — the prevailing pattern is
+  "physics is mostly idle, occasional output shifts." Inline
+  `isDirtyRef.current = true` keeps the redraw running this frame
+  rather than waiting for the next React render of paramValues.
+* The post-physics value snapshot is passed directly to `evalRig`
+  for the same frame, so the chain evaluator sees the pendulum-
+  driven output param values immediately (no one-frame lag between
+  sway and rig deformation).
+* Physics state is rebuilt whenever the `rigSpec` object reference
+  changes (Initialize Rig click, geometry-edit invalidation), keyed
+  on identity to avoid every-frame re-allocation. Param specs are
+  cached alongside.
+
+**RigSpec contract** carries the resolved physics rules now:
+`rigSpecStore.buildRigSpec` runs `resolvePhysicsRules(project)`
+post-seed and attaches the result to the cached spec. Re-resolving
+on every tick was the alternative — by attaching once, the runtime
+sees a stable input that updates only on Initialize Rig.
+
+**Tests** at [`scripts/test_physicsTick.mjs`](../../scripts/test_physicsTick.mjs)
+(44 cases): integrator state allocation, asymmetric param
+normalisation, weighted-input aggregation by type, isReverse on
+inputs and outputs, rest-state stability (no NaN, no drift after
+600 substeps of oscillating input), settle behaviour from drive,
+lag (one frame produces a tiny output, not steady state), monotone
+progress over a half-second window, frame independence (60 substeps
+of 1/60 s == 30 substeps of 2/60 s to numerical equivalence),
+output clamping, snake-chain multi-output. `npm run test:physicsTick`.
+
+**Files:** `src/io/live2d/runtime/physicsTick.js` (new, 230 LOC),
+`scripts/test_physicsTick.mjs` (new, 44 cases),
+`src/io/live2d/rig/rigSpec.js` (`physicsRules` field added to
+typedef + `emptyRigSpec`),
+`src/store/rigSpecStore.js` (post-seed `resolvePhysicsRules` attach),
+`src/components/canvas/CanvasViewport.jsx` (physics block + state
+refs + `valuesForEval` plumbing into `evalRig`),
+`package.json` (test wired into `npm test`),
+`docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` (R9 row + this
+shipped subsection). **Tag:**
+`native-rig-render-stage-R9-complete`.
+
+**Browser smoke test left to user.** Open Hiyori, init rig, drag
+ParamBodyAngleZ — front and back hair should sway with lag, settle
+when held, swing the other way when released. Drag ParamBodyAngleY —
+arms should sway via the elbow rotation taps. Compare against
+Cubism Viewer running the same model for visual fidelity. The
+ACCEL_SCALAR (=100) constant is the main tuning dial if global
+settle time feels off.
 
 ## Rollback strategy
 

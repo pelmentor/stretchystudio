@@ -6,6 +6,11 @@ import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
+import {
+  createPhysicsState,
+  tickPhysics,
+  buildParamSpecs,
+} from '@/io/live2d/runtime/physicsTick';
 import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
@@ -190,6 +195,15 @@ export default function CanvasViewport({
   const rigSpecRef = useRef(rigSpec);
   rigSpecRef.current = rigSpec;
 
+  // R9 — pendulum physics state. Recreated whenever the rigSpec
+  // changes (auto-invalidated by rigSpecStore on geometry edits).
+  // `physicsStateRef.current` is null when there's no rigSpec or when
+  // `rigSpec.physicsRules` is empty.
+  const physicsStateRef = useRef(null);
+  const physicsRigSpecRef = useRef(null);            // rigSpec object ref the state was built against
+  const physicsParamSpecsRef = useRef(null);         // memoised paramSpecs map
+  const lastPhysicsTimestampRef = useRef(0);         // last rAF timestamp physics consumed
+
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
   const projectRef = useRef(project);
@@ -317,6 +331,71 @@ export default function CanvasViewport({
       const moved = animRef.current.tick(timestamp);
       if (moved) isDirtyRef.current = true;
 
+      // R9 — Physics tick. When the cached rigSpec carries pendulum
+      // rules, integrate one or more fixed-dt substeps and merge the
+      // outputs into the param values that drive the chain evaluator
+      // for THIS frame. Outputs are also pushed back to the store via
+      // setMany so the param-scrubber UI shows the live-driven values
+      // and downstream effects mark the next frame dirty.
+      //
+      // Returns the value snapshot evalRig should consume — either the
+      // post-physics working copy (when physics ran) or the unchanged
+      // store snapshot (otherwise).
+      let valuesForEval = paramValuesRef.current;
+      const _rigSpecForPhysics = rigSpecRef.current;
+      const physicsRules = _rigSpecForPhysics?.physicsRules;
+      if (Array.isArray(physicsRules) && physicsRules.length > 0) {
+        // Rebuild state when the rigSpec object identity changes (a new
+        // build via Initialize Rig, or geometry-edit invalidation). The
+        // paramSpecs cache piggybacks on the same key.
+        if (physicsRigSpecRef.current !== _rigSpecForPhysics) {
+          physicsStateRef.current = createPhysicsState(physicsRules);
+          physicsParamSpecsRef.current = buildParamSpecs(
+            _rigSpecForPhysics.parameters?.length
+              ? _rigSpecForPhysics.parameters
+              : projectRef.current.parameters,
+          );
+          physicsRigSpecRef.current = _rigSpecForPhysics;
+          lastPhysicsTimestampRef.current = timestamp;
+        }
+        const lastTs = lastPhysicsTimestampRef.current || timestamp;
+        const dtSec = Math.min(0.5, Math.max(0, (timestamp - lastTs) / 1000));
+        lastPhysicsTimestampRef.current = timestamp;
+
+        const working = { ...paramValuesRef.current };
+        const r = tickPhysics(
+          physicsStateRef.current,
+          physicsRules,
+          working,
+          physicsParamSpecsRef.current,
+          dtSec,
+        );
+        if (r.outputsChanged > 0) {
+          // Diff the working copy against the snapshot to find which
+          // physics outputs actually changed. Only push those (cheaper
+          // than blasting every output every frame, and avoids
+          // touching unrelated keys).
+          const updates = {};
+          for (const rule of physicsRules) {
+            for (const out of rule.outputs ?? []) {
+              if (!out?.paramId) continue;
+              if (working[out.paramId] !== paramValuesRef.current[out.paramId]) {
+                updates[out.paramId] = working[out.paramId];
+              }
+            }
+          }
+          if (Object.keys(updates).length > 0) {
+            useParamValuesStore.getState().setMany(updates);
+            isDirtyRef.current = true;
+            valuesForEval = working;
+          }
+        }
+      } else {
+        // Reset state so the next rigSpec carrying rules starts clean.
+        physicsRigSpecRef.current = null;
+        physicsStateRef.current = null;
+      }
+
       if (isDirtyRef.current && sceneRef.current) {
         // Compute pose overrides from current animation state
         const anim = animRef.current;
@@ -359,7 +438,9 @@ export default function CanvasViewport({
         // clicked Initialize Rig yet, or just clicked Clear).
         const _rigSpec = rigSpecRef.current;
         if (_rigSpec && Array.isArray(_rigSpec.artMeshes) && _rigSpec.artMeshes.length > 0) {
-          const frames = evalRig(_rigSpec, paramValuesRef.current);
+          // valuesForEval == post-physics working copy when physics ran
+          // this frame, otherwise the unchanged store snapshot.
+          const frames = evalRig(_rigSpec, valuesForEval);
           for (const f of frames) {
             const node = projectRef.current.nodes.find(n => n.id === f.id);
             if (!node?.mesh) continue;
