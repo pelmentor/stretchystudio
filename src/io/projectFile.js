@@ -143,7 +143,7 @@ export async function loadProject(file) {
   }
 
   // Restore mesh typed data. Field defaults (blendShapes, blendShapeValues,
-  // puppetWarp, audioTracks) are now handled by migrateProject above.
+  // audioTracks) are now handled by migrateProject above.
   for (const node of project.nodes) {
     if (node.mesh) {
       node.mesh.uvs = new Float32Array(node.mesh.uvs);

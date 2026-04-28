@@ -57,7 +57,7 @@ function assertThrows(fn, name) {
 
 {
   // Per-node defaults applied (mimics an old save where nodes lacked
-  // blendShapes / blendShapeValues / puppetWarp).
+  // blendShapes / blendShapeValues).
   const p = {
     nodes: [
       { id: 'a', type: 'part', mesh: { vertices: [], uvs: [], triangles: [] } },
@@ -67,8 +67,31 @@ function assertThrows(fn, name) {
   migrateProject(p);
   assertEq(p.nodes[0].blendShapes, [], 'node 0: blendShapes default');
   assertEq(p.nodes[0].blendShapeValues, {}, 'node 0: blendShapeValues default');
-  assert(p.nodes[0].puppetWarp === null, 'node 0: puppetWarp null default');
   assertEq(p.nodes[1].blendShapes, [], 'node 1: blendShapes default');
+}
+
+{
+  // v11: legacy puppetWarp / puppet_pins tracks are stripped.
+  const p = {
+    schemaVersion: 10,
+    nodes: [
+      { id: 'a', type: 'part', puppetWarp: { enabled: true, pins: [{ id: 'p1', restX: 0, restY: 0, x: 5, y: 5 }] } },
+      { id: 'b', type: 'group' },
+    ],
+    animations: [
+      {
+        id: 'anim1',
+        tracks: [
+          { nodeId: 'a', property: 'puppet_pins', keyframes: [] },
+          { nodeId: 'a', property: 'x', keyframes: [] },
+        ],
+      },
+    ],
+  };
+  migrateProject(p);
+  assert(!('puppetWarp' in p.nodes[0]), 'v11: node puppetWarp deleted');
+  assertEq(p.animations[0].tracks.length, 1, 'v11: puppet_pins track removed');
+  assertEq(p.animations[0].tracks[0].property, 'x', 'v11: non-puppet track preserved');
 }
 
 {

@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -41,7 +41,6 @@ const MIGRATIONS = {
     for (const node of project.nodes) {
       if (node.blendShapes === undefined) node.blendShapes = [];
       if (node.blendShapeValues === undefined) node.blendShapeValues = {};
-      if (node.puppetWarp === undefined) node.puppetWarp = null;
     }
 
     for (const anim of project.animations) {
@@ -165,6 +164,25 @@ const MIGRATIONS = {
   10: (project) => {
     if (project.rigWarps === undefined || project.rigWarps === null) {
       project.rigWarps = {};
+    }
+    return project;
+  },
+
+  // v11 — Phase -1C: puppet warp removed. The IDW-based mesh deformer
+  // (`src/mesh/puppetWarp.js`) and its UI surface (Inspector pin pad,
+  // SkeletonOverlay pin handles, animation `puppet_pins` track) are
+  // gone — the native rig (warp + rotation deformers) covers the same
+  // ground in a Cubism-faithful way. Strip `puppetWarp` from any node
+  // that still carries it, and drop `puppet_pins` tracks from
+  // animations. Old saves load cleanly; pins are silently dropped.
+  11: (project) => {
+    for (const node of project.nodes ?? []) {
+      if ('puppetWarp' in node) delete node.puppetWarp;
+    }
+    for (const anim of project.animations ?? []) {
+      if (Array.isArray(anim.tracks)) {
+        anim.tracks = anim.tracks.filter(t => t.property !== 'puppet_pins');
+      }
     }
     return project;
   },
