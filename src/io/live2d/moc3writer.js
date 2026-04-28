@@ -28,6 +28,7 @@ import { buildParameterSpec } from './rig/paramSpec.js';
 import { variantParamId } from '../psdOrganizer.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
+import { sanitisePartName } from '../../lib/partId.js';
 
 // Source: [ref][py-moc3] — format constants from reference file + py-moc3
 const MAGIC = [0x4D, 0x4F, 0x43, 0x33]; // "MOC3"
@@ -517,7 +518,7 @@ function buildSectionData(input) {
     if (boneWeights && jointBoneId) {
       // Bone-baked keyforms.
       const boneGroup = groups.find(g => g.id === jointBoneId);
-      const sanitizedBoneName = (boneGroup?.name ?? jointBoneId).replace(/[^a-zA-Z0-9_]/g, '_');
+      const sanitizedBoneName = sanitisePartName(boneGroup?.name ?? jointBoneId);
       const pivotX = boneGroup?.transform?.pivotX ?? 0;
       const pivotY = boneGroup?.transform?.pivotY ?? 0;
       const verts = mesh.vertices;

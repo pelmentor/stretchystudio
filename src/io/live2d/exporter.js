@@ -19,6 +19,7 @@ import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { resolvePhysicsRules } from './rig/physicsConfig.js';
+import { sanitisePartName } from '../../lib/partId.js';
 import { resolveBoneConfig } from './rig/boneConfig.js';
 import { resolveVariantFadeRules } from './rig/variantFadeRules.js';
 import { resolveEyeClosureConfig } from './rig/eyeClosureConfig.js';
@@ -192,13 +193,13 @@ export async function exportLive2D(project, images, opts = {}) {
   const parameterMap = new Map();
   const allGroups = project.nodes.filter(n => n.type === 'group');
   for (const g of allGroups) {
-    const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+    const sanitized = sanitisePartName(g.name || g.id);
     parameterMap.set(`${g.id}.rotation`, `ParamRotation_${sanitized}`);
   }
   // Warp deformer parameters for mesh_verts tracks
   const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && n.mesh);
   for (const p of meshPartsWithMesh) {
-    const sanitized = (p.name || p.id).replace(/[^a-zA-Z0-9_]/g, '_');
+    const sanitized = sanitisePartName(p.name || p.id);
     parameterMap.set(`${p.id}.mesh_verts`, `ParamDeform_${sanitized}`);
   }
 

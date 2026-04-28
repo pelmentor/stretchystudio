@@ -30,6 +30,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
+import { assertPartId } from '@/lib/partId';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -203,6 +204,12 @@ export default function CanvasViewport({
   const physicsParamSpecsRef = useRef(null);         // memoised paramSpecs map
   const lastPhysicsTimestampRef = useRef(0);         // last rAF timestamp physics consumed
 
+  // Phase -1D — set of partIds that evalRig produced but no node
+  // matched. Used to dedupe console warnings (only log once per ID
+  // per session). Cleared on rigSpec change so a fresh init is loud
+  // again.
+  const missingFrameIds = useRef(new Set());
+
   // R10 — evalRig memoization. The chain evaluator is cheap (~0.1
   // ms/frame on a Hiyori-scale rig) but it's still wasted work when
   // nothing's moving (camera pan, overlay toggle, animation tick that
@@ -224,7 +231,13 @@ export default function CanvasViewport({
 
   useEffect(() => { isDirtyRef.current = true; }, [project, isDark]);
   useEffect(() => { isDirtyRef.current = true; }, [paramValues]);
-  useEffect(() => { isDirtyRef.current = true; }, [rigSpec]);
+  useEffect(() => {
+    isDirtyRef.current = true;
+    // Phase -1D: reset the missing-frame warning dedupe so a fresh
+    // Initialize Rig (or rigSpec replacement) re-surfaces any partId
+    // mismatches.
+    missingFrameIds.current.clear();
+  }, [rigSpec]);
   
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {
@@ -473,8 +486,20 @@ export default function CanvasViewport({
             lastEvalCacheRef.current = { rigSpec: _rigSpec, paramValues: valuesForEval, frames };
           }
           for (const f of frames) {
+            assertPartId(f.id, 'evalRig frame.id');
             const node = projectRef.current.nodes.find(n => n.id === f.id);
-            if (!node?.mesh) continue;
+            if (!node?.mesh) {
+              // Phase -1D: log once per missing partId in dev so the
+              // crisis class (frame.id ≠ any node.id) stops being
+              // silent. Production builds skip without noise.
+              if (import.meta.env?.DEV && !missingFrameIds.current.has(f.id)) {
+                missingFrameIds.current.add(f.id);
+                console.warn(
+                  `[evalRig] frame partId ${JSON.stringify(f.id)} has no matching node — frame dropped`,
+                );
+              }
+              continue;
+            }
             // Convert flat Float32Array [x,y, ...] → Array<{x, y}> for the
             // existing GPU upload pipeline.
             const verts = new Array(f.vertexPositions.length / 2);

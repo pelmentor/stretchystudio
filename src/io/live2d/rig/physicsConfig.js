@@ -24,6 +24,7 @@
  */
 
 import { PHYSICS_RULES } from '../cmo3/physics.js';
+import { sanitisePartName } from '../../../lib/partId.js';
 
 /**
  * Re-export of the baseline rules. Stored as the seed source. New rules
@@ -71,7 +72,7 @@ function resolveRuleOutputs(rule, groups) {
     for (const b of rule.boneOutputs) {
       const g = byRole.get(b.boneRole);
       if (!g) continue;
-      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      const sanitized = sanitisePartName(g.name || g.id);
       out.push({
         paramId: `ParamRotation_${sanitized}`,
         vertexIndex: b.vertexIndex,

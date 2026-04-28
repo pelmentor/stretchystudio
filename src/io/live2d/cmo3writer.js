@@ -48,6 +48,7 @@ import {
 import { emitNeckWarp, emitFaceRotation } from './cmo3/bodyRig.js';
 import { emitFaceParallax } from './cmo3/faceParallax.js';
 import { emitPhysicsSettings } from './cmo3/physics.js';
+import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
 
@@ -1576,7 +1577,7 @@ export async function generateCmo3(input) {
     // Determine parent: if group.parent exists and has a CPartGuid, use it; else use root
     const parentPid = g.parent && groupPartGuids.has(g.parent)
       ? groupPartGuids.get(g.parent) : pidPartGuid;
-    const sanitizedId = `Part_${(g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_')}`;
+    const sanitizedId = `Part_${sanitisePartName(g.name || g.id)}`;
     const gp = makePartSource(g.name || g.id, sanitizedId, gpid, parentPid);
     groupParts.set(g.id, gp);
     allPartSources.push(gp);
@@ -1763,7 +1764,7 @@ export async function generateCmo3(input) {
 
     // Parameter for this deformer: ParamRotation_GroupName
     // Guard: bone params are pre-created above — skip if ID already exists
-    const sanitizedName = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+    const sanitizedName = sanitisePartName(g.name || g.id);
     const rotParamId = `ParamRotation_${sanitizedName}`;
     const existingParam = paramDefs.find(p => p.id === rotParamId);
     const pidRotParam = existingParam
@@ -1970,7 +1971,7 @@ export async function generateCmo3(input) {
     if (!keyframes) continue;
 
     const meshParentGroup = meshes[pm.mi].parentGroupId;
-    const sanitizedMeshName = (pm.meshName || partId).replace(/[^a-zA-Z0-9_]/g, '_');
+    const sanitizedMeshName = sanitisePartName(pm.meshName || partId);
     const numKf = keyframes.length;
 
     // Rest-pose vertices in deformer-local space (same as mesh keyform positions)
@@ -2752,7 +2753,7 @@ export async function generateCmo3(input) {
       const partId = m.partId;
       const canvasVerts = pm.vertices;
       const numVerts = canvasVerts.length / 2;
-      const sanitizedName = (pm.meshName || partId).replace(/[^a-zA-Z0-9_]/g, '_');
+      const sanitizedName = sanitisePartName(pm.meshName || partId);
 
       // Bounding box in canvas space — use FULL extent so every mesh vertex stays
       // inside the warp grid (0..1 space). Percentile-filtered bbox caused outlier
@@ -3613,7 +3614,7 @@ export async function generateCmo3(input) {
     // The rig-warp emission block (~L2755) sanitises the mesh name to derive
     // its CDeformerId — match the same transform here so artMesh.parent.id
     // resolves into rigSpec.warpDeformers via lookup.
-    const _artSanitizedName = (pm.meshName || pm.partId).replace(/[^a-zA-Z0-9_]/g, '_');
+    const _artSanitizedName = sanitisePartName(pm.meshName || pm.partId);
     let artParent;
     if (rwBox) {
       artParent = { type: 'warp', id: `RigWarp_${_artSanitizedName}` };

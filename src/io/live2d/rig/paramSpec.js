@@ -13,6 +13,7 @@
  * @module io/live2d/rig/paramSpec
  */
 import { variantParamId } from '../../psdOrganizer.js';
+import { sanitisePartName } from '../../../lib/partId.js';
 
 /**
  * @typedef {Object} ParamSpec
@@ -232,7 +233,7 @@ export function buildParameterSpec(input = {}) {
     if (!m?.jointBoneId || !m?.boneWeights || seenBones.has(m.jointBoneId)) continue;
     seenBones.add(m.jointBoneId);
     const boneGroup = groups.find(g => g.id === m.jointBoneId);
-    const boneName = (boneGroup?.name || m.jointBoneId).replace(/[^a-zA-Z0-9_]/g, '_');
+    const boneName = sanitisePartName(boneGroup?.name || m.jointBoneId);
     const id = `ParamRotation_${boneName}`;
     push({
       id,
@@ -258,7 +259,7 @@ export function buildParameterSpec(input = {}) {
       if (!g?.id) continue;
       if (seenBones.has(g.id)) continue;       // bones got bone params above
       if (g.boneRole && SKIP_ROTATION_ROLES.has(g.boneRole)) continue;
-      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      const sanitized = sanitisePartName(g.name || g.id);
       const id = `ParamRotation_${sanitized}`;
       push({
         id,
