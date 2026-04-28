@@ -2959,8 +2959,6 @@ export async function generateCmo3(input) {
         ? groupPartGuids.get(meshParentGroup) : pidPartGuid;
 
       // All per-part warps target ROOT, re-parented to Breath in section 3d.
-      // TODO: route face warps through head rotation deformer (Hiyori pattern)
-      // once coordinate space issue with warps-under-rotation-deformers is resolved.
 
       // CWarpDeformerSource — grid in Breath 0..1 space
       const [rigWarpDf, pidRigWarpDf] = x.shared('CWarpDeformerSource');
