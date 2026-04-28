@@ -23,6 +23,7 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { uid } from '@/lib/ids';
+import { clamp, msToFrame, frameToMs } from '@/lib/timeMath';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Constants
@@ -37,14 +38,6 @@ const TRACK_PAD = 16;   // px — padding inside track area so edge frames don't
    Small helpers
 ────────────────────────────────────────────────────────────────────────── */
 
-/** Clamp a number to [min, max] */
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-/** Frame number from time (ms) */
-function msToFrame(ms, fps) { return Math.round((ms / 1000) * Math.max(1, fps)); }
-
-/** Time (ms) from frame number */
-function frameToMs(frame, fps) { return (frame / Math.max(1, fps)) * 1000; }
 
 /* ──────────────────────────────────────────────────────────────────────────
    Transport button (play/pause/stop/loop icons)
