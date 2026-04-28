@@ -356,7 +356,10 @@ per user (Phase 3+, persisted to localStorage).
 > migrate piece-by-piece, switching killswitch default to new shell
 > when Phase 3 lands. Old shell deleted in Phase 6.
 
-### PHASE -1 — Pre-v3 Stability (2-3 weeks) **[STATUS: expanded 2026-04-28 with -1D + -1E]**
+### PHASE -1 — Pre-v3 Stability (2-3 weeks) **[STATUS: ✅ SHIPPED 2026-04-28]**
+
+All five substages landed, tag `pre-v3-refactor` set on commit
+`8b8520e`. Test surface grew 1344 → 1378.
 
 **Goal:** Стабилизировать существующее перед началом v3. Без этого мы
 строим на сломанном фундаменте (v2 viewport не работает после
@@ -458,7 +461,21 @@ v3 rollback при необходимости.
 
 ---
 
-### PHASE 0 — Foundation (8-10 weeks) **[STATUS: expanded 2026-04-28 with pillars]**
+### PHASE 0 — Foundation (8-10 weeks) **[STATUS: 0A + 0B + 0G shipped 2026-04-28; 0C/D/E/F pending]**
+
+Substage status:
+
+| Substage | Status | Commit | Notes |
+|----------|--------|--------|-------|
+| 0A — Shell + workspace + editor type system | ✅ shipped | `a35a9b7` | Behind `?ui=v3`; 4-area 2×2 layout; 5 workspaces; editor stubs; ErrorBoundary; operator dispatcher with Ctrl+1..5. Phase 1 fills editors. |
+| 0B — Service layer (Pillar F) | ✅ shipped | `0192d88` | RigService / ExportService / ImportService / PersistenceService façades with pure preflight functions. |
+| 0C — Coord-space type wrappers (Pillar C) | ⏳ pending | — | Phase 1 dependency for Viewport coord-debugger. |
+| 0D — Type checking (Pillar G) | ⏳ pending | — | `tsc --checkJs --noEmit` in CI. |
+| 0E — Vitest migration (Pillar H) | ⏳ pending | — | UI tests need jsdom; .mjs scripts can stay. |
+| 0F — God-class split (Pillar A + J) | ⏳ pending | — | Riskiest; needs browser verification. |
+| 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
+| 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
+| 0G.3 — exhaustive-deps disables (Pillar D) | ✅ shipped | `454cbba` | All 4 disables removed; pre-existing missing-deps in those files fixed too. |
 
 **Goal:** Empty new shell that runs alongside old + foundational
 infrastructure (service layer, types, error handling, undo, tooling).
