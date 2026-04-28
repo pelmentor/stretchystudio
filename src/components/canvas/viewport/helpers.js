@@ -158,6 +158,31 @@ export function basename(filename) {
 }
 
 /**
+ * Compute a zoom-around-cursor view update from a wheel event.
+ *
+ *   - deltaY < 0 -> zoom in by 1.1x
+ *   - deltaY > 0 -> zoom out by 1/1.1
+ *   - clamped to [0.05, 20]
+ *   - the world point under the cursor stays under the cursor
+ *
+ * Pure: same inputs always produce the same view.
+ *
+ * @param {{zoom: number, panX: number, panY: number}} view
+ * @param {number} deltaY            - wheel scroll delta
+ * @param {number} cursorX           - canvas-relative cursor X
+ * @param {number} cursorY           - canvas-relative cursor Y
+ * @returns {{zoom: number, panX: number, panY: number}}
+ */
+export function zoomAroundCursor(view, deltaY, cursorX, cursorY) {
+  const factor = deltaY < 0 ? 1.1 : 1 / 1.1;
+  const newZoom = Math.max(0.05, Math.min(20, view.zoom * factor));
+  const ratio = newZoom / view.zoom;
+  const newPanX = cursorX - (cursorX - view.panX) * ratio;
+  const newPanY = cursorY - (cursorY - view.panY) * ratio;
+  return { zoom: newZoom, panX: newPanX, panY: newPanY };
+}
+
+/**
  * Pick reasonable mesh-generation defaults for a part based on its
  * pixel-space bounding box. Larger surfaces get coarser grids and
  * more edge points; transparent parts get a fixed fallback.

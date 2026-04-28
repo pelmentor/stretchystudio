@@ -14,6 +14,7 @@ import {
   computeImageBounds,
   basename,
   computeSmartMeshOpts,
+  zoomAroundCursor,
 } from '../../src/components/canvas/viewport/helpers.js';
 
 let passed = 0;
@@ -182,6 +183,40 @@ assert(basename('.hidden') === '', 'basename: dotfile becomes empty');
   const med   = computeSmartMeshOpts({ minX: 0, minY: 0, maxX: 500, maxY: 500 });
   assert(med.gridSpacing >= small.gridSpacing, 'gridSpacing monotonic in area');
   assert(med.numEdgePoints >= small.numEdgePoints, 'numEdgePoints monotonic in area');
+}
+
+// ── zoomAroundCursor ────────────────────────────────────────────────
+
+{
+  // Zoom in: cursor at world (50, 50) when view is identity
+  const v0 = { zoom: 1, panX: 0, panY: 0 };
+  const inResult = zoomAroundCursor(v0, -1, 50, 50);
+  assert(near(inResult.zoom, 1.1), 'zoom in: zoom = 1.1');
+  // World point under cursor: world = (cursor - pan) / zoom = (50, 50)
+  // After zoom: world = (50 - newPanX) / 1.1 should still be 50
+  assert(near((50 - inResult.panX) / inResult.zoom, 50), 'zoom in: cursor world point fixed (x)');
+  assert(near((50 - inResult.panY) / inResult.zoom, 50), 'zoom in: cursor world point fixed (y)');
+
+  // Zoom out
+  const outResult = zoomAroundCursor(v0, 1, 50, 50);
+  assert(near(outResult.zoom, 1 / 1.1), 'zoom out: zoom = 1/1.1');
+  assert(near((50 - outResult.panX) / outResult.zoom, 50), 'zoom out: cursor world point fixed (x)');
+
+  // Clamping at max
+  const max = zoomAroundCursor({ zoom: 20, panX: 0, panY: 0 }, -1, 0, 0);
+  assert(max.zoom === 20, 'zoom clamped at 20');
+
+  // Clamping at min
+  const min = zoomAroundCursor({ zoom: 0.05, panX: 0, panY: 0 }, 1, 0, 0);
+  assert(min.zoom === 0.05, 'zoom clamped at 0.05');
+
+  // Zoom around a different cursor moves pan correctly
+  const v1 = { zoom: 2, panX: 100, panY: 50 };
+  const cursor = zoomAroundCursor(v1, -1, 200, 100);
+  // World point under cursor before: ((200 - 100) / 2, (100 - 50) / 2) = (50, 25)
+  // After zoom, world point under same cursor should be the same
+  assert(near((200 - cursor.panX) / cursor.zoom, 50), 'zoom: world X fixed at cursor');
+  assert(near((100 - cursor.panY) / cursor.zoom, 25), 'zoom: world Y fixed at cursor');
 }
 
 console.log(`viewportHelpers: ${passed} passed, ${failed} failed`);

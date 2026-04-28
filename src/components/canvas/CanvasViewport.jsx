@@ -39,6 +39,7 @@ import {
   computeImageBounds,
   basename,
   computeSmartMeshOpts,
+  zoomAroundCursor,
 } from '@/components/canvas/viewport/helpers';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
@@ -1272,18 +1273,14 @@ export default function CanvasViewport({
   const onWheel = useCallback((e) => {
     e.preventDefault();
     const canvas = canvasRef.current;
-    const { view } = editorRef.current;
     const rect = canvas.getBoundingClientRect();
-
-    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    const newZoom = Math.max(0.05, Math.min(20, view.zoom * factor));
-
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const newPanX = mx - (mx - view.panX) * (newZoom / view.zoom);
-    const newPanY = my - (my - view.panY) * (newZoom / view.zoom);
-
-    setView({ zoom: newZoom, panX: newPanX, panY: newPanY });
+    const next = zoomAroundCursor(
+      editorRef.current.view,
+      e.deltaY,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
+    setView(next);
     isDirtyRef.current = true;
   }, [setView]);
 
