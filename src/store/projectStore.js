@@ -51,7 +51,28 @@ export const DEFAULT_TRANSFORM = () => ({
 });
 
 // Project store (The .stretch model, undoable)
-export const useProjectStore = create((set) => ({
+export const useProjectStore = create((set) => {
+  // Helper that lifts a `(project, ...args) => void` mutator function
+  // into a zustand action with the standard ritual:
+  //   1. Snapshot the pre-mutation project for undo (unless mid-batch).
+  //   2. Run the function under immer's `produce` so its mutations
+  //      are structurally shared.
+  //   3. Mark hasUnsavedChanges.
+  //
+  // The 14 seed/clear actions below used to inline this 4-line ritual;
+  // 56 LOC of cargo-cult plus 14 places to forget the snapshot guard.
+  // Now there's one place. (Phase 0F.9 / Pillar A.)
+  /** @param {(project: any, ...args: any[]) => void} fn */
+  const projectMutator = (fn) => (/** @type {any[]} */ ...args) =>
+    set((state) => {
+      if (!isBatching()) pushSnapshot(state.project);
+      return produce(state, (draft) => {
+        fn(draft.project, ...args);
+        draft.hasUnsavedChanges = true;
+      });
+    });
+
+  return {
   project: {
     version: "0.1",
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -304,90 +325,48 @@ export const useProjectStore = create((set) => ({
    *
    * Snapshots history so the user can undo.
    */
-  seedParameters: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedParametersFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedParameters:             projectMutator(seedParametersFn),
 
   /**
    * Seed `project.maskConfigs` from the auto-rig heuristic (Stage 3).
    * Iris↔eyewhite pairings (variant-aware) are baked into project state.
    * Destructive: overwrites whatever was there.
    */
-  seedMaskConfigs: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedMaskConfigsFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedMaskConfigs:            projectMutator(seedMaskConfigsFn),
 
   /**
    * Seed `project.physicsRules` from DEFAULT_PHYSICS_RULES (Stage 6).
    * boneOutputs are resolved against the project's groups (boneRole
    * lookup) and flattened into outputs[]. Destructive.
    */
-  seedPhysicsRules: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedPhysicsRulesFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedPhysicsRules:           projectMutator(seedPhysicsRulesFn),
 
   /**
    * Seed `project.boneConfig` from defaults (Stage 7). Currently sets
    * `bakedKeyformAngles` to [-90, -45, 0, 45, 90]. Destructive.
    */
-  seedBoneConfig: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedBoneConfigFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedBoneConfig:             projectMutator(seedBoneConfigFn),
 
   /**
    * Seed `project.variantFadeRules` from defaults (Stage 5). Currently
    * sets `backdropTags` to the canonical Hiyori-style list (face, ears,
    * front+back hair). Destructive.
    */
-  seedVariantFadeRules: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedVariantFadeRulesFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedVariantFadeRules:       projectMutator(seedVariantFadeRulesFn),
 
   /**
    * Seed `project.eyeClosureConfig` from defaults (Stage 5). Currently
    * sets per-side eyelash/eyewhite/irides closureTags + lashStripFrac=0.06
    * + binCount=6. Destructive.
    */
-  seedEyeClosureConfig: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedEyeClosureConfigFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedEyeClosureConfig:       projectMutator(seedEyeClosureConfigFn),
 
   /**
    * Seed `project.rotationDeformerConfig` from defaults (Stage 8). Sets
    * `skipRotationRoles=['torso','eyes','neck']`, `paramAngleRange=±30`,
    * `groupRotation` 1:1 ±30, `faceRotation` ±10° on ±30 keys. Destructive.
    */
-  seedRotationDeformerConfig: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedRotationDeformerConfigFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedRotationDeformerConfig: projectMutator(seedRotationDeformerConfigFn),
 
   /**
    * Seed `project.autoRigConfig` from defaults (Stage 2). Three sections —
@@ -395,13 +374,7 @@ export const useProjectStore = create((set) => ({
    * faceParallax (depth coefficients, protection per tag, eye/squash amps,
    * super-groups), neckWarp (tilt fraction). Destructive.
    */
-  seedAutoRigConfig: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedAutoRigConfigFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedAutoRigConfig:          projectMutator(seedAutoRigConfigFn),
 
   /**
    * Seed `project.faceParallax` from a pre-computed spec (Stage 4).
@@ -409,25 +382,13 @@ export const useProjectStore = create((set) => ({
    * `buildFaceParallaxSpec(...)` with current mesh / bbox / pivot
    * inputs. Destructive: overwrites prior storage.
    */
-  seedFaceParallax: (spec) => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedFaceParallaxFn(draft.project, spec);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedFaceParallax:           projectMutator(seedFaceParallaxFn),
 
   /**
    * Clear `project.faceParallax` to revert to the heuristic generator
    * path. Use after PSD reimport invalidates stored vertex deltas.
    */
-  clearFaceParallax: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      clearFaceParallaxFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  clearFaceParallax:          projectMutator(clearFaceParallaxFn),
 
   /**
    * Seed `project.bodyWarp` from a pre-computed chain (Stage 10).
@@ -435,26 +396,14 @@ export const useProjectStore = create((set) => ({
    * `buildBodyWarpChain(...)` with current mesh / canvas / body-anatomy
    * inputs. Destructive: overwrites prior storage.
    */
-  seedBodyWarp: (chain) => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedBodyWarpChainFn(draft.project, chain);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedBodyWarp:               projectMutator(seedBodyWarpChainFn),
 
   /**
    * Clear `project.bodyWarp` to revert to the heuristic generator
    * path. Use after PSD reimport invalidates stored vertex deltas
    * or body silhouette anchors.
    */
-  clearBodyWarp: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      clearBodyWarpFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  clearBodyWarp:              projectMutator(clearBodyWarpFn),
 
   /**
    * Seed `project.rigWarps` from a pre-computed `partId → spec` map
@@ -463,26 +412,14 @@ export const useProjectStore = create((set) => ({
    * harvests `rigSpec.warpDeformers` filtered to per-mesh entries.
    * Destructive: overwrites the entire stored map.
    */
-  seedRigWarps: (rigWarps) => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      seedRigWarpsFn(draft.project, rigWarps);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  seedRigWarps:               projectMutator(seedRigWarpsFn),
 
   /**
    * Clear `project.rigWarps` to revert to the heuristic shiftFn
    * path. Use after PSD reimport invalidates stored per-vertex
    * deltas or any binding-axis change.
    */
-  clearRigWarps: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      clearRigWarpsFn(draft.project);
-      draft.hasUnsavedChanges = true;
-    });
-  }),
+  clearRigWarps:              projectMutator(clearRigWarpsFn),
 
   /**
    * Stage 1b — orchestrator that seeds every native-rig store from a
@@ -683,4 +620,5 @@ export const useProjectStore = create((set) => ({
       draft.versionControl.geometryVersion++;
     });
   }),
-}));
+  };
+});
