@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Shared ErrorBoundary used by both the v2 EditorLayout root and the
  * v3 AppShell + each Area inside it (Pillar K + Pillar S).

@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * v3 Phase 0A — Splittable area layout (2×2 fixed for now).
  *

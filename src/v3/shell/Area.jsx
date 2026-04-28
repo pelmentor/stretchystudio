@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * v3 Phase 0A — Single area host.
  *
