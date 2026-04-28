@@ -32,107 +32,20 @@ import {
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { assertPartId } from '@/lib/partId';
 import { uid } from '@/lib/ids';
+import {
+  clientToCanvasSpace,
+  worldToLocal,
+  findNearestVertex,
+  brushWeight,
+  sampleAlpha,
+  computeImageBounds,
+  basename,
+  computeSmartMeshOpts,
+} from '@/components/canvas/viewport/helpers';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
 import { normalizeVariants } from '@/io/variantNormalizer';
-
-/* ──────────────────────────────────────────────────────────────────────────
-   Helpers
-────────────────────────────────────────────────────────────────────────── */
-
-/** Convert client coords → canvas-element-relative world coords (image/mesh pixel space) */
-function clientToCanvasSpace(canvas, clientX, clientY, view) {
-  const rect = canvas.getBoundingClientRect();
-  const cx = (clientX - rect.left) / view.zoom - view.panX / view.zoom;
-  const cy = (clientY - rect.top) / view.zoom - view.panY / view.zoom;
-  return [cx, cy];
-}
-
-/**
- * Convert a world-space point to a part's local object space using its inverse world matrix.
- * This ensures vertex picking works correctly for rotated/scaled/translated parts.
- */
-function worldToLocal(worldX, worldY, inverseWorldMatrix) {
-  const m = inverseWorldMatrix;
-  return [
-    m[0] * worldX + m[3] * worldY + m[6],
-    m[1] * worldX + m[4] * worldY + m[7],
-  ];
-}
-
-/** Find the vertex index closest to (x, y) within `radius`. Returns -1 if none. */
-function findNearestVertex(vertices, x, y, radius) {
-  const r2 = radius * radius;
-  let best = -1, bestD = r2;
-  for (let i = 0; i < vertices.length; i++) {
-    const dx = vertices[i].x - x;
-    const dy = vertices[i].y - y;
-    const d = dx * dx + dy * dy;
-    if (d < bestD) { best = i; bestD = d; }
-  }
-  return best;
-}
-
-/**
- * Brush falloff weight. t = dist/radius (0=center, 1=edge).
- * hardness=1 → uniform weight=1; hardness=0 → smooth cosine falloff.
- */
-function brushWeight(dist, radius, hardness) {
-  const t = dist / radius;
-  if (t >= 1) return 0;
-  const soft = 0.5 * (1 + Math.cos(Math.PI * t));
-  return hardness + (1 - hardness) * soft;
-}
-
-/** Sample alpha (0-255) at integer pixel coords from an ImageData. Returns 0 if out-of-bounds. */
-function sampleAlpha(imageData, lx, ly) {
-  const ix = Math.floor(lx), iy = Math.floor(ly);
-  if (ix < 0 || iy < 0 || ix >= imageData.width || iy >= imageData.height) return 0;
-  return imageData.data[(iy * imageData.width + ix) * 4 + 3];
-}
-
-/** Compute the bounding box of opaque pixels in an ImageData. Returns {minX, minY, maxX, maxY} or null if fully transparent. */
-function computeImageBounds(imageData, alphaThreshold = 10) {
-  let minX = imageData.width, minY = imageData.height;
-  let maxX = -1, maxY = -1;
-
-  for (let y = 0; y < imageData.height; y++) {
-    for (let x = 0; x < imageData.width; x++) {
-      const alpha = imageData.data[(y * imageData.width + x) * 4 + 3];
-      if (alpha > alphaThreshold) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-
-  return minX <= maxX ? { minX, minY, maxX, maxY } : null;
-}
-
-/** Strip extension from a filename */
-function basename(filename) {
-  return filename.replace(/\.[^.]+$/, '');
-}
-
-/** Compute smart mesh options based on part surface area */
-function computeSmartMeshOpts(imageBounds) {
-  if (!imageBounds) {
-    return { alphaThreshold: 5, smoothPasses: 0, gridSpacing: 30, edgePadding: 8, numEdgePoints: 80 };
-  }
-  const w = imageBounds.maxX - imageBounds.minX;
-  const h = imageBounds.maxY - imageBounds.minY;
-  const sqrtArea = Math.sqrt(w * h);
-  return {
-    alphaThreshold: 5,
-    smoothPasses: 0,
-    gridSpacing: Math.max(6, Math.min(80, Math.round(sqrtArea * 0.08))),
-    edgePadding: 8,
-    numEdgePoints: Math.max(12, Math.min(300, Math.round(sqrtArea * 0.4))),
-  };
-}
 
 /* ──────────────────────────────────────────────────────────────────────────
    Component
