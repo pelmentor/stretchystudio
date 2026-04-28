@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { useEditorStore } from '@/store/editorStore';
 import { useTheme } from '@/contexts/ThemeProvider';
 import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
@@ -14,9 +14,7 @@ import {
 import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
-import {
-  detectCharacterFormat, matchTag,
-} from '@/io/armatureOrganizer';
+import { detectCharacterFormat } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import PsdImportWizard from '@/components/canvas/PsdImportWizard';
 import {
@@ -86,7 +84,6 @@ export default function CanvasViewport({
   const resetProject = useProjectStore(s => s.resetProject);
   const editorState = useEditorStore();
   const setBrush = useEditorStore(s => s.setBrush);
-  const setEditorMode = useEditorStore(s => s.setEditorMode);
   const { setSelection, setView } = editorState;
   const { themeMode, osTheme } = useTheme();
 
