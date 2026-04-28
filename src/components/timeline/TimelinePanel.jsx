@@ -155,7 +155,7 @@ function useAudioSync(animation, animStore) {
         .then(buf => { buffersRef.current.set(track.id, buf); })
         .catch(e => console.error(`Audio decode error (${track.id}):`, e));
     }
-  }, [trackSourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trackSourceKey]);
 
   // ── 2. Stop helper ─────────────────────────────────────────────────────
   const stopAll = useCallback(() => {
@@ -723,12 +723,17 @@ export function TimelinePanel() {
   /* ── Auto-select animation when one exists ───────────────────────────── */
   useEffect(() => {
     if (!anim.activeAnimationId && proj.animations.length > 0) {
-      anim.setActiveAnimationId(proj.animations[0].id);
+      // Pull setters via getState() so they don't need to appear in
+      // the dep array (zustand setters are reference-stable but
+      // exhaustive-deps can't infer that, and adding `anim` would
+      // re-run on every store change).
+      const { setActiveAnimationId, setFps, setEndFrame } = useAnimationStore.getState();
       const a = proj.animations[0];
-      anim.setFps(a.fps ?? 24);
-      anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
+      setActiveAnimationId(a.id);
+      setFps(a.fps ?? 24);
+      setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
     }
-  }, [proj.animations, anim.activeAnimationId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [proj.animations, anim.activeAnimationId]);
 
   /* ── Create a default animation if none ─────────────────────────────── */
   const ensureAnimation = useCallback(() => {

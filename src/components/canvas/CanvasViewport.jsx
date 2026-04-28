@@ -602,7 +602,7 @@ export default function CanvasViewport({
       sceneRef.current?.destroy();
       sceneRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ── Mark dirty when editor view / overlays / selection changes ──────── */
   useEffect(() => { isDirtyRef.current = true; },
@@ -967,7 +967,7 @@ export default function CanvasViewport({
       }
     };
     img.src = url;
-  }, [updateProject]);
+  }, [updateProject, centerView]);
 
   /* ── PSD import: finalize (shared by all import paths) ──────────────────── */
   const finalizePsdImport = useCallback((psdW, psdH, layers, partIds, groupDefs, assignments) => {
@@ -1072,7 +1072,7 @@ export default function CanvasViewport({
   const handleWizardCancel = useCallback(() => {
     setWizardPsd(null);
     setWizardStep(null);
-  }, []);
+  }, [setWizardStep]);
 
   /* ── Wizard: finalize with rig (called by PsdImportWizard) ──────────────── */
   const handleWizardFinalize = useCallback((groupDefs, assignments, meshAllParts) => {
@@ -1087,7 +1087,7 @@ export default function CanvasViewport({
     useEditorStore.getState().setShowSkeleton(true);
     useEditorStore.getState().setSkeletonEditMode(true);
     setWizardStep('adjust');
-  }, [wizardPsd, finalizePsdImport]);
+  }, [wizardPsd, finalizePsdImport, setWizardStep]);
 
   /* ── Wizard: enter reorder stage (finalize without rig) ────────────────── */
   const handleWizardReorder = useCallback(() => {
@@ -1097,7 +1097,7 @@ export default function CanvasViewport({
     }
     finalizePsdImport(psdW, psdH, layers, partIds, [], null);
     setWizardStep('reorder');
-  }, [wizardPsd, finalizePsdImport]);
+  }, [wizardPsd, finalizePsdImport, setWizardStep]);
 
   /* ── Wizard: apply rig to existing part nodes ──────────────────────────── */
   const handleWizardApplyRig = useCallback((groupDefs, assignments, meshAllParts) => {
@@ -1167,7 +1167,7 @@ export default function CanvasViewport({
     useEditorStore.getState().setShowSkeleton(true);
     useEditorStore.getState().setSkeletonEditMode(true);
     setWizardStep('adjust');
-  }, [wizardPsd, updateProject]);
+  }, [wizardPsd, updateProject, setWizardStep]);
 
   /* ── Wizard: skip rigging (called by PsdImportWizard) ──────────────────── */
   const handleWizardSkip = useCallback((meshAllParts) => {
@@ -1180,7 +1180,7 @@ export default function CanvasViewport({
     }
     setWizardPsd(null);
     setWizardStep(null);
-  }, [wizardPsd, finalizePsdImport, autoMeshAllParts]);
+  }, [wizardPsd, finalizePsdImport, autoMeshAllParts, setWizardStep]);
 
   /* ── Wizard: complete (called by PsdImportWizard adjust step) ──────────── */
   const handleWizardComplete = useCallback((meshAllParts) => {
@@ -1192,7 +1192,7 @@ export default function CanvasViewport({
     setWizardPsd(null);
     useEditorStore.getState().setSkeletonEditMode(false);
     preImportSnapshotRef.current = null;
-  }, [autoMeshAllParts]);
+  }, [autoMeshAllParts, setWizardStep]);
 
   /* ── Wizard: back from adjust (revert to snapshot, reopen wizard) ──────── */
   const handleWizardBack = useCallback(() => {
@@ -1203,7 +1203,7 @@ export default function CanvasViewport({
     useEditorStore.getState().setSkeletonEditMode(false);
     useEditorStore.getState().setShowSkeleton(false);
     setWizardStep('review');
-  }, []);
+  }, [setWizardStep]);
 
 
   /* ── Wizard: split merged parts into left/right ────────────── */
@@ -1328,7 +1328,7 @@ export default function CanvasViewport({
         finalizePsdImport(psdW, psdH, layers, partIds, [], null);
       }
     });
-  }, [finalizePsdImport]);
+  }, [finalizePsdImport, setWizardStep]);
 
   const importPsdFile = useCallback((file) => {
     const proj = projectRef.current;
@@ -1672,7 +1672,7 @@ export default function CanvasViewport({
       }
     }
     setSelection([]);
-  }, [setSelection, updateProject, setView]);
+  }, [setSelection, updateProject]);
 
   const onPointerMove = useCallback((e) => {
     const canvas = canvasRef.current;

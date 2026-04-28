@@ -23,6 +23,9 @@ import { beginBatch, endBatch } from '@/store/undoHistory';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
+
+/** Transform fields the gizmo can write through to a node. */
+const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 const ROT_OFFSET_PX = 52; // screen-space distance from pivot to rotation handle
 
 export function GizmoOverlay() {
@@ -54,8 +57,6 @@ export function GizmoOverlay() {
   useEffect(() => { editorModeRef.current = editorMode; }, [editorMode]);
   useEffect(() => { setDraftPoseRef.current = setDraftPose; }, [setDraftPose]);
 
-  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
-
   // Build effective nodes: keyframe overrides first, then draftPose on top.
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
@@ -77,7 +78,7 @@ export function GizmoOverlay() {
         opacity: dr?.opacity ?? ov?.opacity ?? node.opacity,
       };
     });
-  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
   // Only show in select mode with exactly one selection
   const selectedNode = (toolMode === 'select' && selection.length === 1)
