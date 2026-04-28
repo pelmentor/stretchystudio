@@ -70,19 +70,30 @@ export async function exportLive2D(project, images, opts = {}) {
 
   // --- Step 3: Generate .motion3.json files ---
   // Build parameterMap: maps SS track keys to Live2D parameter IDs.
-  // groupId.rotation → ParamRotation_GroupName (rotation deformers)
-  // partId.mesh_verts → ParamDeform_MeshName (warp deformers)
+  // If the project has native parameters with bindings, use them directly.
+  // Otherwise fall back to the heuristic (group names → ParamRotation_*, mesh names → ParamDeform_*).
   const parameterMap = new Map();
-  const allGroups = project.nodes.filter(n => n.type === 'group');
-  for (const g of allGroups) {
-    const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
-    parameterMap.set(`${g.id}.rotation`, `ParamRotation_${sanitized}`);
-  }
-  // Warp deformer parameters for mesh_verts tracks
-  const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && n.mesh);
-  for (const p of meshPartsWithMesh) {
-    const sanitized = (p.name || p.id).replace(/[^a-zA-Z0-9_]/g, '_');
-    parameterMap.set(`${p.id}.mesh_verts`, `ParamDeform_${sanitized}`);
+  const nativeParams = project.parameters ?? [];
+  const hasNativeBindings = nativeParams.some(p => p.bindings?.length > 0);
+
+  if (hasNativeBindings) {
+    for (const param of nativeParams) {
+      for (const b of (param.bindings ?? [])) {
+        parameterMap.set(`${b.nodeId}.${b.property}`, param.id);
+      }
+    }
+  } else {
+    // Heuristic fallback for projects without native parameter bindings
+    const allGroups = project.nodes.filter(n => n.type === 'group');
+    for (const g of allGroups) {
+      const sanitized = (g.name || g.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      parameterMap.set(`${g.id}.rotation`, `ParamRotation_${sanitized}`);
+    }
+    const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && n.mesh);
+    for (const p of meshPartsWithMesh) {
+      const sanitized = (p.name || p.id).replace(/[^a-zA-Z0-9_]/g, '_');
+      parameterMap.set(`${p.id}.mesh_verts`, `ParamDeform_${sanitized}`);
+    }
   }
 
   const motionFiles = [];
@@ -245,11 +256,25 @@ export async function exportLive2DProject(project, images, opts = {}) {
       }
     }
 
+    // Walk up the ancestor chain to find the nearest warpDeformer ancestor (if any).
+    // This handles meshes nested inside groups that are children of a warpDeformer.
+    let ancestorWarpDeformer = null;
+    let cursor = part.parent ? project.nodes.find(n => n.id === part.parent) : null;
+    while (cursor) {
+      if (cursor.type === 'warpDeformer') { ancestorWarpDeformer = cursor; break; }
+      if (!cursor.parent) break;
+      cursor = project.nodes.find(n => n.id === cursor.parent) ?? null;
+    }
+    const warpDeformerParentId = ancestorWarpDeformer?.id ?? null;
+    const warpDeformerParameterId = ancestorWarpDeformer?.parameterId ?? null;
+
     meshes.push({
       name: meshName,
       tag: matchTag(meshName),
       partId: part.id,
       parentGroupId: part.parent ?? null,
+      warpDeformerParentId,
+      warpDeformerParameterId,
       jointBoneId,
       boneWeights,
       jointPivotX,
@@ -276,17 +301,21 @@ export async function exportLive2DProject(project, images, opts = {}) {
 
   onProgress(`Generating .cmo3 (${meshes.length} meshes)...`);
 
+  const warpDeformerNodes = project.nodes.filter(n => n.type === 'warpDeformer');
+
   const { cmo3, deformerParamMap, rigDebugLog } = await generateCmo3({
     canvasW,
     canvasH,
     meshes,
     groups,
+    warpDeformerNodes,
     parameters: project.parameters ?? [],
     animations: project.animations ?? [],
     modelName,
     generateRig,
     generatePhysics,
     physicsDisabledCategories,
+    physicsRules: project.physicsRules ?? [],
   });
 
   // Generate .can3 animation file if there are animations with deformer parameters

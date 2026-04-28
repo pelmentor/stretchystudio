@@ -43,6 +43,18 @@ function GroupIcon() {
 }
 
 
+function WarpDeformerIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="1" y="1" width="10" height="10" rx="1" />
+      <line x1="4" y1="1" x2="4" y2="11" />
+      <line x1="8" y1="1" x2="8" y2="11" />
+      <line x1="1" y1="4" x2="11" y2="4" />
+      <line x1="1" y1="8" x2="11" y2="8" />
+    </svg>
+  );
+}
+
 function ChevronIcon({ open }) {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"
@@ -140,8 +152,8 @@ function GroupsTreeRow({
       onDragLeave={() => onDragOver(null)}
       onDrop={(e) => { e.preventDefault(); onDrop(node.id); }}
     >
-      {/* Expand/collapse chevron for groups */}
-      {node.type === 'group' ? (
+      {/* Expand/collapse chevron for groups and warpDeformers */}
+      {(node.type === 'group' || node.type === 'warpDeformer') ? (
         <button
           className="shrink-0 w-3 h-3 flex items-center justify-center text-muted-foreground hover:text-foreground"
           onClick={(e) => { e.stopPropagation(); onToggleExpand(node.id); }}
@@ -154,7 +166,9 @@ function GroupsTreeRow({
 
       {/* Type icon */}
       <span className="shrink-0 w-3 h-3 text-muted-foreground flex items-center">
-        {node.type === 'group' ? <GroupIcon /> : <PartIcon />}
+        {node.type === 'group' ? <GroupIcon />
+          : node.type === 'warpDeformer' ? <WarpDeformerIcon />
+          : <PartIcon />}
       </span>
 
       {/* Name */}
@@ -166,7 +180,7 @@ function GroupsTreeRow({
       <button
         className={`shrink-0 w-5 h-5 flex items-center justify-center rounded-sm hover:bg-foreground/10 transition-colors ${isVisible ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/40'}`}
         onClick={(e) => { e.stopPropagation(); onToggleVisible(node.id); }}
-        title={isVisible ? (node.type === 'group' ? "Hide group" : "Hide layer") : (node.type === 'group' ? "Show group" : "Show layer")}
+        title={isVisible ? (node.type === 'part' ? "Hide layer" : "Hide group") : (node.type === 'part' ? "Show layer" : "Show group")}
       >
         {isVisible ? <Eye size={20} /> : <EyeOff size={20} />}
       </button>
@@ -181,6 +195,7 @@ export function LayerPanel() {
   const nodes = useProjectStore(s => s.project.nodes);
   const updateProject = useProjectStore(s => s.updateProject);
   const createGroup = useProjectStore(s => s.createGroup);
+  const createWarpDeformer = useProjectStore(s => s.createWarpDeformer);
   const reparentNode = useProjectStore(s => s.reparentNode);
   const duplicateNode = useProjectStore(s => s.duplicateNode);
   const deleteNode = useProjectStore(s => s.deleteNode);
@@ -278,8 +293,8 @@ export function LayerPanel() {
 
     const target = nodes.find(n => n.id === targetId);
 
-    // Only allow dropping onto a group node, or onto a part (reparent to part's parent)
-    if (target?.type === 'group') {
+    // Allow dropping onto a group/warpDeformer, or onto a part (reparent to part's parent)
+    if (target?.type === 'group' || target?.type === 'warpDeformer') {
       reparentNode(sourceId, targetId);
       expandGroup(targetId);
     } else if (target?.type === 'part') {
@@ -302,14 +317,15 @@ export function LayerPanel() {
 
     function walk(parentId, depth) {
       const children = childMap[parentId] ?? [];
-      // Groups first, then parts
+      const isGroupLike = n => n.type === 'group' || n.type === 'warpDeformer';
+      // Groups + warpDeformers first, then parts
       const sorted = [
-        ...children.filter(n => n.type === 'group').sort((a, b) => a.name.localeCompare(b.name)),
+        ...children.filter(isGroupLike).sort((a, b) => a.name.localeCompare(b.name)),
         ...children.filter(n => n.type === 'part').sort((a, b) => b.draw_order - a.draw_order),
       ];
       for (const n of sorted) {
         rows.push({ node: n, depth });
-        if (n.type === 'group' && expanded.has(n.id)) {
+        if (isGroupLike(n) && expanded.has(n.id)) {
           walk(n.id, depth + 1);
         }
       }
@@ -322,7 +338,7 @@ export function LayerPanel() {
   // ── Derived ───────────────────────────────────────────────────────────
 
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
-  const groups = nodes.filter(n => n.type === 'group');
+  const groups = nodes.filter(n => n.type === 'group' || n.type === 'warpDeformer');
   const depthRows = [...nodes]
     .filter(n => n.type === 'part')
     .sort((a, b) => b.draw_order - a.draw_order);
@@ -441,11 +457,16 @@ export function LayerPanel() {
           <div className="flex items-center gap-1 px-2 py-1 border-b shrink-0">
             <button
               className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              onClick={() => {
-                createGroup('Group');
-              }}
+              onClick={() => createGroup('Group')}
             >
-              + New Group
+              + Group
+            </button>
+            <button
+              className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              onClick={() => createWarpDeformer()}
+              title="Create a warp deformer node (deforms child meshes via a lattice grid)"
+            >
+              + Warp
             </button>
             <span className="text-[10px] text-muted-foreground/50 ml-auto">Drag to reparent</span>
           </div>

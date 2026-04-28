@@ -20,6 +20,7 @@ import { useAnimationStore } from '@/store/animationStore';
 import { computePoseOverrides } from '@/renderer/animationEngine';
 import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/transforms';
 import { beginBatch, endBatch } from '@/store/undoHistory';
+import { WarpLatticeOverlay } from './WarpLatticeOverlay';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
@@ -85,6 +86,18 @@ export function GizmoOverlay() {
     : null;
 
   if (!selectedNode) return null;
+
+  // ── Warp deformer: render lattice overlay instead of regular gizmo ──────
+  if (selectedNode.type === 'warpDeformer') {
+    return (
+      <svg
+        className="absolute inset-0 w-full h-full overflow-visible"
+        style={{ pointerEvents: 'none' }}
+      >
+        <WarpLatticeOverlay wdNode={selectedNode} view={view} />
+      </svg>
+    );
+  }
 
   // ── Compute gizmo screen position ──────────────────────────────────────
   const { zoom, panX, panY } = view;

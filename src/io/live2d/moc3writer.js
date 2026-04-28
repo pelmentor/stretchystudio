@@ -346,6 +346,61 @@ function buildSectionData(input) {
   // Collect parameters
   const params = project.parameters ?? [];
 
+  const paramList = params.length > 0
+    ? params
+    : [{ id: 'ParamOpacity', min: 0, max: 1, default: 1 }];
+
+  // --- Warp deformer analysis (needs paramList) ---
+  const wdNodes = (project.nodes ?? []).filter(n => n.type === 'warpDeformer');
+  const wdVertsMap = new Map(); // wdId → keyframes from mesh_verts tracks
+  for (const anim of (project.animations ?? [])) {
+    for (const track of (anim.tracks ?? [])) {
+      if (track.property === 'mesh_verts' && track.keyframes?.length >= 1
+          && !wdVertsMap.has(track.nodeId)
+          && wdNodes.some(n => n.id === track.nodeId)) {
+        wdVertsMap.set(track.nodeId, track.keyframes);
+      }
+    }
+  }
+  const wdInfo = wdNodes.map((wd, wdIdx) => {
+    const col = wd.col ?? 2;
+    const row = wd.row ?? 2;
+    const gridPts = (col + 1) * (row + 1);
+    const kfs = wdVertsMap.get(wd.id) ?? [];
+    const numKf = Math.max(1, kfs.length);
+    const param = wd.parameterId ? paramList.find(p => p.id === wd.parameterId) : null;
+    const paramIdx = param ? paramList.indexOf(param) : -1;
+    return { wd, col, row, gridPts, kfs, numKf, param, paramIdx, wdIdx };
+  });
+  const numWarpDeformers = wdInfo.length;
+  const totalWarpKfs = wdInfo.reduce((s, d) => s + d.numKf, 0);
+  const totalWarpGridXYs = wdInfo.reduce((s, d) => s + d.numKf * d.gridPts * 2, 0);
+
+  // Bound warp deformers sorted by paramIdx so each parameter owns a contiguous binding range
+  const sortedBoundWd = wdInfo
+    .filter(d => d.param !== null)
+    .sort((a, b) => a.paramIdx - b.paramIdx);
+  const numBoundWd = sortedBoundWd.length;
+  const wdBindingPosMap = new Map(); // wdIdx → position in sortedBoundWd
+  for (let j = 0; j < sortedBoundWd.length; j++) {
+    wdBindingPosMap.set(sortedBoundWd[j].wdIdx, j);
+  }
+  const totalBoundWarpKfs = sortedBoundWd.reduce((s, d) => s + d.numKf, 0);
+
+  // Ancestry walk: mesh part → nearest warp deformer ancestor
+  const meshWdIndexMap = new Map(); // partId → wdIdx
+  for (const part of meshParts) {
+    let cur = part.parent ? project.nodes.find(n => n.id === part.parent) : null;
+    while (cur) {
+      if (cur.type === 'warpDeformer') {
+        const wdIdx = wdNodes.findIndex(n => n.id === cur.id);
+        if (wdIdx >= 0) meshWdIndexMap.set(part.id, wdIdx);
+        break;
+      }
+      cur = cur.parent ? (project.nodes.find(n => n.id === cur.parent) ?? null) : null;
+    }
+  }
+
   // Build Part ID → index map
   const partIdMap = new Map();
   partNodes.forEach((p, i) => partIdMap.set(p.id, i));
@@ -398,21 +453,28 @@ function buildSectionData(input) {
   });
 
   counts[COUNT_IDX.PARTS] = numParts;
+  counts[COUNT_IDX.DEFORMERS] = numWarpDeformers;
+  counts[COUNT_IDX.WARP_DEFORMERS] = numWarpDeformers;
   counts[COUNT_IDX.ART_MESHES] = numArtMeshes;
   counts[COUNT_IDX.PARAMETERS] = numParams;
   counts[COUNT_IDX.PART_KEYFORMS] = numPartKeyforms;
+  counts[COUNT_IDX.WARP_DEFORMER_KEYFORMS] = totalWarpKfs;
   counts[COUNT_IDX.ART_MESH_KEYFORMS] = numArtMeshKeyforms;
-  counts[COUNT_IDX.KEYFORM_POSITIONS] = totalKeyformPositions;
+  // Keyform positions: art mesh verts + warp deformer grid points
+  counts[COUNT_IDX.KEYFORM_POSITIONS] = totalKeyformPositions + totalWarpGridXYs;
   counts[COUNT_IDX.UVS] = totalUVs;
   counts[COUNT_IDX.POSITION_INDICES] = totalFlatIndices;
 
-  // Keyform bindings: 1 binding per mesh, null bands for parts.
-  // SDK validator requires begin < total even when count=0, so we need real bindings.
-  const numBands = numArtMeshes + numParts;
-  counts[COUNT_IDX.KEYFORM_BINDINGS] = numArtMeshes;
+  // Binding system:
+  //   Bands 0..M-1            : mesh bands (1 binding each)
+  //   Bands M..M+P-1          : part null bands
+  //   Bands M+P..M+P+W-1      : deformer null bands (deformer-level props, unused)
+  //   Bands M+P+W..M+P+2W-1   : warp deformer real bands (grid keyform driver)
+  const numBands = numArtMeshes + numParts + numWarpDeformers * 2;
+  counts[COUNT_IDX.KEYFORM_BINDINGS] = numArtMeshes + numBoundWd;
   counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = numBands;
-  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = numArtMeshes;
-  counts[COUNT_IDX.KEYS] = numArtMeshes;
+  counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = numArtMeshes + numBoundWd;
+  counts[COUNT_IDX.KEYS] = numArtMeshes + totalBoundWarpKfs;
 
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)
   counts[COUNT_IDX.DRAWABLE_MASKS] = 1;
@@ -446,7 +508,9 @@ function buildSectionData(input) {
     if (p.parent && partIdMap.has(p.parent)) return partIdMap.get(p.parent);
     return 0; // default to first part
   }));
-  sections.set('art_mesh.parent_deformer_indices', meshParts.map(() => -1)); // no deformers for MVP
+  sections.set('art_mesh.parent_deformer_indices', meshParts.map(p =>
+    meshWdIndexMap.has(p.id) ? meshWdIndexMap.get(p.id) : -1
+  ));
   sections.set('art_mesh.texture_indices', meshParts.map(p => regions.get(p.id)?.atlasIndex ?? 0));
   sections.set('art_mesh.drawable_flags', meshParts.map(() => 4)); // flag 4 like Hiyori
   // COUNTERINTUITIVE: position_index_counts = render vertex count, vertex_counts = flat index count
@@ -458,19 +522,14 @@ function buildSectionData(input) {
   sections.set('art_mesh.mask_counts', meshParts.map(() => 0));
 
   // --- Parameter sections ---
-  const paramList = params.length > 0
-    ? params
-    : [{ id: 'ParamOpacity', min: 0, max: 1, default: 1 }];
-
   sections.set('parameter.ids', paramList.map(p => p.id));
   sections.set('parameter.max_values', paramList.map(p => p.max ?? 1));
   sections.set('parameter.min_values', paramList.map(p => p.min ?? 0));
   sections.set('parameter.default_values', paramList.map(p => p.default ?? 0));
   sections.set('parameter.repeats', paramList.map(() => false));
   sections.set('parameter.decimal_places', paramList.map(() => 1));
-  // First parameter owns all mesh bindings
-  sections.set('parameter.keyform_binding_begin_indices', paramList.map((_, i) => i === 0 ? 0 : 0));
-  sections.set('parameter.keyform_binding_counts', paramList.map((_, i) => i === 0 ? numArtMeshes : 0));
+  // parameter.keyform_binding_begin_indices and parameter.keyform_binding_counts are set
+  // after the warp deformer sections below, where parameter → binding ownership is resolved.
 
   // --- Part Keyform sections ---
   // Draw orders: all 500.0 (Hiyori pattern — actual order via draw_order_group_object)
@@ -501,40 +560,99 @@ function buildSectionData(input) {
       }
     }
   }
+
+  // Warp deformer grid positions — appended after art mesh keyform positions.
+  // Stored in PPU-normalized space (same as art mesh vertices).
+  // Grid point order: row-major (row outer, col inner) matching WarpLatticeOverlay.
+  const wdKfPosBegins = []; // flat index per warp-deformer keyform → begin offset in allKeyformPositions
+  for (const { wd, col, row, gridPts, kfs, numKf } of wdInfo) {
+    const gx = wd.gridX ?? 0;
+    const gy = wd.gridY ?? 0;
+    const gw = wd.gridW ?? canvasW;
+    const gh = wd.gridH ?? canvasH;
+    for (let ki = 0; ki < numKf; ki++) {
+      wdKfPosBegins.push(allKeyformPositions.length);
+      if (ki < kfs.length) {
+        // Use authored keyframe positions
+        for (let j = 0; j < gridPts; j++) {
+          const pt = kfs[ki].value?.[j];
+          if (pt) {
+            allKeyformPositions.push((pt.x - originX) / ppu, (pt.y - originY) / ppu);
+          } else {
+            const c = j % (col + 1), r = Math.floor(j / (col + 1));
+            allKeyformPositions.push(
+              (gx + (col > 0 ? c * gw / col : 0) - originX) / ppu,
+              (gy + (row > 0 ? r * gh / row : 0) - originY) / ppu,
+            );
+          }
+        }
+      } else {
+        // Identity (rest) grid
+        for (let r = 0; r <= row; r++) {
+          for (let c = 0; c <= col; c++) {
+            allKeyformPositions.push(
+              (gx + (col > 0 ? c * gw / col : 0) - originX) / ppu,
+              (gy + (row > 0 ? r * gh / row : 0) - originY) / ppu,
+            );
+          }
+        }
+      }
+    }
+  }
   sections.set('keyform_position.xys', allKeyformPositions);
 
   // --- Keyform binding system ---
-  // Each mesh gets 1 binding. Parts get null bands (count=0, begin=0).
-  // SDK validator requires begin < total even when count=0.
+  // Band layout:
+  //   0..M-1        : mesh bands (1 real binding each)
+  //   M..M+P-1      : part null bands
+  //   M+P..M+P+W-1  : deformer null bands (deformer-level keyforms, unused)
+  //   M+P+W..M+P+2W-1: warp deformer real bands (grid keyform driver via parameter)
   const bandBegins = [];
   const bandCounts = [];
-  // Mesh bands: band i has count=1, begin=i
-  for (let i = 0; i < numArtMeshes; i++) {
-    bandBegins.push(i);
-    bandCounts.push(1);
-  }
-  // Part bands: null bands (count=0, begin=0 so begin < total)
-  for (let i = 0; i < numParts; i++) {
-    bandBegins.push(0); // must be < numArtMeshes (total binding indices)
-    bandCounts.push(0);
+  for (let i = 0; i < numArtMeshes; i++) { bandBegins.push(i); bandCounts.push(1); }
+  for (let i = 0; i < numParts; i++) { bandBegins.push(0); bandCounts.push(0); }
+  for (let i = 0; i < numWarpDeformers; i++) { bandBegins.push(0); bandCounts.push(0); } // deformer null
+  for (let k = 0; k < numWarpDeformers; k++) {
+    const bindPos = wdBindingPosMap.get(k); // position in sortedBoundWd, or undefined
+    if (bindPos !== undefined) {
+      bandBegins.push(numArtMeshes + bindPos); // points to binding M+bindPos
+      bandCounts.push(1);
+    } else {
+      bandBegins.push(0); // unbound — null band
+      bandCounts.push(0);
+    }
   }
   sections.set('keyform_binding_band.begin_indices', bandBegins);
   sections.set('keyform_binding_band.counts', bandCounts);
 
-  // Binding indices: direct mapping (index i → binding i)
-  sections.set('keyform_binding_index.indices',
-    Array.from({ length: numArtMeshes }, (_, i) => i));
+  // Binding indices: mesh bindings 0..M-1, then warp deformer bindings M..M+W_bound-1
+  const bindingIndices = Array.from({ length: numArtMeshes }, (_, i) => i);
+  for (let j = 0; j < numBoundWd; j++) bindingIndices.push(numArtMeshes + j);
+  sections.set('keyform_binding_index.indices', bindingIndices);
 
-  // Bindings: each has 1 key at parameter default value
-  sections.set('keyform_binding.keys_begin_indices',
-    Array.from({ length: numArtMeshes }, (_, i) => i));
-  sections.set('keyform_binding.keys_counts',
-    Array.from({ length: numArtMeshes }, () => 1));
+  // Bindings: mesh bindings (1 key each) + warp deformer bindings (N keys each)
+  const keysBeginIndices = Array.from({ length: numArtMeshes }, (_, i) => i);
+  const keysCounts = Array.from({ length: numArtMeshes }, () => 1);
+  let warpKeyCursor = numArtMeshes;
+  for (const d of sortedBoundWd) {
+    keysBeginIndices.push(warpKeyCursor);
+    keysCounts.push(d.numKf);
+    warpKeyCursor += d.numKf;
+  }
+  sections.set('keyform_binding.keys_begin_indices', keysBeginIndices);
+  sections.set('keyform_binding.keys_counts', keysCounts);
 
-  // Keys: all at first parameter's default value
+  // Keys: art mesh keys (at first param default), then warp deformer keys (evenly spaced param range)
   const paramDefault = paramList[0]?.default ?? 0;
-  sections.set('keys.values',
-    Array.from({ length: numArtMeshes }, () => paramDefault));
+  const keyValues = Array.from({ length: numArtMeshes }, () => paramDefault);
+  for (const d of sortedBoundWd) {
+    const pMin = d.param.min ?? 0;
+    const pMax = d.param.max ?? 1;
+    for (let ki = 0; ki < d.numKf; ki++) {
+      keyValues.push(d.numKf > 1 ? pMin + ki * (pMax - pMin) / (d.numKf - 1) : (d.param.default ?? pMin));
+    }
+  }
+  sections.set('keys.values', keyValues);
 
   // --- Drawable masks (1 dummy entry) ---
   sections.set('drawable_mask.art_mesh_indices', [-1]);
@@ -591,6 +709,81 @@ function buildSectionData(input) {
   sections.set('draw_order_group_object.indices',
     meshParts.map((_, i) => numArtMeshes - 1 - i));
   sections.set('draw_order_group_object.group_indices', meshParts.map(() => -1)); // -1 like Hiyori
+
+  // --- Deformer sections (all warp deformers; no rotation deformers for now) ---
+  if (numWarpDeformers > 0) {
+    sections.set('deformer.ids', wdNodes.map(n => n.id));
+
+    // Deformer-level null bands: M+P+k
+    sections.set('deformer.keyform_binding_band_indices',
+      wdNodes.map((_, k) => numArtMeshes + numParts + k));
+
+    sections.set('deformer.visibles', wdNodes.map(n => n.visible !== false));
+    sections.set('deformer.enables', wdNodes.map(() => true));
+
+    // Parent part: walk up from warp deformer's parent to find nearest group
+    sections.set('deformer.parent_part_indices', wdNodes.map(wd => {
+      let cur = wd.parent ? project.nodes.find(n => n.id === wd.parent) : null;
+      while (cur) {
+        if (cur.type === 'group' && partIdMap.has(cur.id)) return partIdMap.get(cur.id);
+        cur = cur.parent ? (project.nodes.find(n => n.id === cur.parent) ?? null) : null;
+      }
+      return 0;
+    }));
+
+    // All warp deformers are root-level deformers (no nested deformer hierarchy for now)
+    sections.set('deformer.parent_deformer_indices', wdNodes.map(() => -1));
+
+    // type 0 = warp deformer, specific_index = position in warp_deformer table
+    sections.set('deformer.types', wdNodes.map(() => 0));
+    sections.set('deformer.specific_indices', wdNodes.map((_, k) => k));
+
+    // --- Warp deformer sections ---
+    const wdKfBegins = [];
+    let wdKfCursor = 0;
+    for (const { numKf } of wdInfo) {
+      wdKfBegins.push(wdKfCursor);
+      wdKfCursor += numKf;
+    }
+    // Warp deformer real bands: M+P+W+k
+    sections.set('warp_deformer.keyform_binding_band_indices',
+      wdInfo.map((_, k) => numArtMeshes + numParts + numWarpDeformers + k));
+    sections.set('warp_deformer.keyform_begin_indices', wdKfBegins);
+    sections.set('warp_deformer.keyform_counts', wdInfo.map(d => d.numKf));
+    sections.set('warp_deformer.vertex_counts', wdInfo.map(d => d.gridPts));
+    sections.set('warp_deformer.rows', wdInfo.map(d => d.row));
+    sections.set('warp_deformer.cols', wdInfo.map(d => d.col));
+
+    // --- Warp deformer keyform sections ---
+    const wdKfOpacities = [];
+    const wdKfPosBeginsFlat = [];
+    let flatKfIdx = 0;
+    for (const { numKf } of wdInfo) {
+      for (let ki = 0; ki < numKf; ki++) {
+        wdKfOpacities.push(1.0);
+        wdKfPosBeginsFlat.push(wdKfPosBegins[flatKfIdx++]);
+      }
+    }
+    sections.set('warp_deformer_keyform.opacities', wdKfOpacities);
+    sections.set('warp_deformer_keyform.keyform_position_begin_indices', wdKfPosBeginsFlat);
+  }
+
+  // --- Parameter keyform binding ownership ---
+  // param[0] owns art mesh bindings [0..M-1].
+  // Each native parameter that drives a warp deformer owns its binding [M+j].
+  const paramBindingBegins = paramList.map(() => 0);
+  const paramBindingCounts = paramList.map(() => 0);
+  paramBindingCounts[0] = numArtMeshes; // param 0 owns all art mesh bindings
+  // Assign warp deformer bindings to their parameters (contiguous per param, ensured by sort)
+  for (let j = 0; j < sortedBoundWd.length; j++) {
+    const pIdx = sortedBoundWd[j].paramIdx;
+    if (pIdx >= 0 && pIdx < paramList.length) {
+      if (paramBindingCounts[pIdx] === 0) paramBindingBegins[pIdx] = numArtMeshes + j;
+      paramBindingCounts[pIdx]++;
+    }
+  }
+  sections.set('parameter.keyform_binding_begin_indices', paramBindingBegins);
+  sections.set('parameter.keyform_binding_counts', paramBindingCounts);
 
   // --- Canvas info ---
   // WARNING: `canvas` is declared late. All code above MUST use canvasW/canvasH
@@ -661,12 +854,12 @@ export function generateMoc3(input) {
   }
 
   // V3.03+ additional section: quad_transforms (Bool32 per warp deformer).
-  // For V4.00, this is section 100 → SOT[101]. Even with 0 warp deformers,
-  // the SDK requires this SOT entry to be a valid (non-zero) offset.
+  // false = bilinear interpolation (default). true = quad (affine patch).
   if (version >= MOC_VERSION.V3_03) {
     body.padTo(ALIGN);
     sotEntries.push(DEFAULT_OFFSET + body.pos);
-    // quad_transforms: count = WARP_DEFORMERS (0 for our models), no data written
+    const numWd = counts[COUNT_IDX.WARP_DEFORMERS];
+    for (let i = 0; i < numWd; i++) body.writeI32(0); // false — bilinear
   }
 
   // Phase 2: Assemble header + SOT + padding + body

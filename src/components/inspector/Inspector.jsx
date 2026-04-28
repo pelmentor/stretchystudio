@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { HelpIcon } from '@/components/ui/help-icon';
+import { WarpDeformerPanel } from '@/components/inspector/WarpDeformerPanel';
 import {
   Dialog,
   DialogContent,
@@ -861,6 +862,12 @@ export function Inspector({ onRemesh, onDeleteMesh }) {
                   <ShapeKeysPanel node={effectiveNode} />
                 </>
               )}
+            </>
+          )}
+          {effectiveNode.type === 'warpDeformer' && (
+            <>
+              <Separator />
+              <WarpDeformerPanel node={effectiveNode} />
             </>
           )}
         </>

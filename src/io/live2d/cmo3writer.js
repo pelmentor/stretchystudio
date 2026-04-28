@@ -96,6 +96,7 @@ export async function generateCmo3(input) {
   const {
     canvasW, canvasH, meshes,
     groups = [], parameters = [],
+    warpDeformerNodes = [],
     animations = [],
     modelName = 'StretchyStudio Export',
     generateRig = false,
@@ -106,6 +107,9 @@ export async function generateCmo3(input) {
     // emission, e.g. ['hair'] for a buzz-cut character where hair
     // pendulums look wrong. Unknown categories are ignored.
     physicsDisabledCategories = null,
+    // Native project physics rules (project.physicsRules[]). When non-empty,
+    // these override the hardcoded PHYSICS_RULES default in physics.js.
+    physicsRules = null,
   } = input;
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
@@ -1464,8 +1468,265 @@ export async function generateCmo3(input) {
   const WARP_GRID_POINTS = (WARP_COL + 1) * (WARP_ROW + 1); // 16
   const meshWarpDeformerGuids = new Map(); // partId → pidWarpDfGuid
 
+  // --- 3b.0: Native warp deformer groups ---
+  // When meshes carry warpDeformerParentId (set by exporter.js when a mesh's
+  // immediate parent is a native warpDeformer node), group them under ONE shared
+  // CWarpDeformerSource instead of per-mesh deformers.  The native parameter
+  // (warpDeformerParameterId) is used when available, otherwise an auto-generated
+  // ParamDeform_* is created as a fallback.
+
+  const nativeWarpGroups = new Map(); // warpDeformerParentId → [pm, ...]
+  for (const pm of perMesh) {
+    const m = meshes[pm.mi];
+    if (m.warpDeformerParentId) {
+      if (!nativeWarpGroups.has(m.warpDeformerParentId)) nativeWarpGroups.set(m.warpDeformerParentId, []);
+      nativeWarpGroups.get(m.warpDeformerParentId).push(pm);
+    }
+  }
+  const nativeWarpMeshPartIds = new Set();
+  for (const members of nativeWarpGroups.values()) {
+    for (const pm of members) nativeWarpMeshPartIds.add(meshes[pm.mi].partId);
+  }
+
+  for (const [wdNodeId, members] of nativeWarpGroups) {
+    const firstMesh = meshes[members[0].mi];
+    const warpParamId = firstMesh.warpDeformerParameterId;
+    const nativeParamDef = warpParamId ? paramDefs.find(p => p.id === warpParamId) : null;
+    const sanitizedGroupName = (wdNodeId || 'NativeWarp').replace(/[^a-zA-Z0-9_]/g, '_');
+
+    // Look up native warp deformer node for col/row/grid bounds authored in the editor
+    const nativeWdNode = warpDeformerNodes.find(n => n.id === wdNodeId);
+    const nwCol = nativeWdNode?.col ?? WARP_COL;
+    const nwRow = nativeWdNode?.row ?? WARP_ROW;
+    const nwGridPts = (nwCol + 1) * (nwRow + 1);
+
+    // Collect mesh_verts keyframes from child members (use the member with most keyframes)
+    let sharedKeyframes = null;
+    for (const pm of members) {
+      const kf = meshVertsMap.get(meshes[pm.mi].partId);
+      if (kf && kf.length >= 2 && (!sharedKeyframes || kf.length > sharedKeyframes.length)) {
+        sharedKeyframes = kf;
+      }
+    }
+    const numKf = sharedKeyframes ? sharedKeyframes.length : 2;
+
+    // Deformer-local origin (parent group's rotation deformer origin)
+    const meshParentGroup = firstMesh.parentGroupId;
+    const dfOrigin = meshParentGroup && deformerWorldOrigins.has(meshParentGroup)
+      ? deformerWorldOrigins.get(meshParentGroup) : null;
+
+    // Grid bounds: use native node's authored bounds if set, else compute from children
+    let bboxMinX, bboxMinY, bboxW, bboxH;
+    if (nativeWdNode?.gridW > 0) {
+      bboxMinX = (nativeWdNode.gridX ?? 0) - (dfOrigin ? dfOrigin.x : 0);
+      bboxMinY = (nativeWdNode.gridY ?? 0) - (dfOrigin ? dfOrigin.y : 0);
+      bboxW = nativeWdNode.gridW;
+      bboxH = nativeWdNode.gridH;
+    } else {
+      let bboxMaxX = -Infinity, bboxMaxY = -Infinity;
+      bboxMinX = Infinity; bboxMinY = Infinity;
+      for (const pm of members) {
+        const cv = pm.vertices;
+        for (let i = 0; i < cv.length; i += 2) {
+          const vx = cv[i] - (dfOrigin ? dfOrigin.x : 0);
+          const vy = cv[i + 1] - (dfOrigin ? dfOrigin.y : 0);
+          if (vx < bboxMinX) bboxMinX = vx; if (vy < bboxMinY) bboxMinY = vy;
+          if (vx > bboxMaxX) bboxMaxX = vx; if (vy > bboxMaxY) bboxMaxY = vy;
+        }
+      }
+      const nwPadX = (bboxMaxX - bboxMinX) * 0.1 || 10;
+      const nwPadY = (bboxMaxY - bboxMinY) * 0.1 || 10;
+      bboxMinX -= nwPadX; bboxMinY -= nwPadY; bboxMaxX += nwPadX; bboxMaxY += nwPadY;
+      bboxW = bboxMaxX - bboxMinX; bboxH = bboxMaxY - bboxMinY;
+    }
+
+    // Rest grid using native col/row dimensions
+    const nwRestGrid = new Float64Array(nwGridPts * 2);
+    for (let r = 0; r <= nwRow; r++) {
+      for (let c = 0; c <= nwCol; c++) {
+        const idx = (r * (nwCol + 1) + c) * 2;
+        nwRestGrid[idx] = bboxMinX + c * bboxW / nwCol;
+        nwRestGrid[idx + 1] = bboxMinY + r * bboxH / nwRow;
+      }
+    }
+
+    // Compute IDW grid keyforms from combined child vertices
+    const nwGridKeyforms = [];
+    for (let ki = 0; ki < numKf; ki++) {
+      const allRest = [], allDeltas = [];
+      for (const pm of members) {
+        const partId = meshes[pm.mi].partId;
+        const kf = meshVertsMap.get(partId);
+        const cv = pm.vertices;
+        const numV = cv.length / 2;
+        for (let vi = 0; vi < numV; vi++) {
+          const rx = cv[vi * 2] - (dfOrigin ? dfOrigin.x : 0);
+          const ry = cv[vi * 2 + 1] - (dfOrigin ? dfOrigin.y : 0);
+          allRest.push(rx, ry);
+          if (kf && ki < kf.length) {
+            const v = kf[ki].value[vi];
+            allDeltas.push(
+              (v ? v.x : cv[vi * 2]) - (dfOrigin ? dfOrigin.x : 0) - rx,
+              (v ? v.y : cv[vi * 2 + 1]) - (dfOrigin ? dfOrigin.y : 0) - ry,
+            );
+          } else {
+            allDeltas.push(0, 0);
+          }
+        }
+      }
+      const gridPos = new Float64Array(nwGridPts * 2);
+      const totalV = allRest.length / 2;
+      const eps = 1e-6;
+      for (let gi = 0; gi < nwGridPts; gi++) {
+        const gx = nwRestGrid[gi * 2], gy = nwRestGrid[gi * 2 + 1];
+        let sumWx = 0, sumWy = 0, sumW = 0;
+        for (let vi = 0; vi < totalV; vi++) {
+          const dx = gx - allRest[vi * 2], dy = gy - allRest[vi * 2 + 1];
+          const w = 1 / (dx * dx + dy * dy + eps);
+          sumWx += w * allDeltas[vi * 2]; sumWy += w * allDeltas[vi * 2 + 1]; sumW += w;
+        }
+        gridPos[gi * 2] = gx + sumWx / sumW;
+        gridPos[gi * 2 + 1] = gy + sumWy / sumW;
+      }
+      nwGridKeyforms.push(gridPos);
+    }
+
+    // Shared warp deformer GUID — register for all child meshes
+    const [, pidNativeWarpGuid] = x.shared('CDeformerGuid', { uuid: uuid(), note: `Warp_${sanitizedGroupName}` });
+    for (const pm of members) meshWarpDeformerGuids.set(meshes[pm.mi].partId, pidNativeWarpGuid);
+
+    // Form GUIDs (one per keyframe)
+    const nwFormGuids = [];
+    for (let ki = 0; ki < numKf; ki++) {
+      const [, pid] = x.shared('CFormGuid', { uuid: uuid(), note: `WarpForm_${sanitizedGroupName}_${ki}` });
+      nwFormGuids.push(pid);
+    }
+
+    // Parameter — use native if found in paramDefs, else auto-generate
+    let pidNativeWarpParam, finalNativeParamId;
+    if (nativeParamDef) {
+      pidNativeWarpParam = nativeParamDef.pid;
+      finalNativeParamId = nativeParamDef.id;
+    } else {
+      finalNativeParamId = `ParamDeform_${sanitizedGroupName}`;
+      const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: finalNativeParamId });
+      pidNativeWarpParam = pid;
+      paramDefs.push({
+        pid: pidNativeWarpParam, id: finalNativeParamId, name: `Deform ${wdNodeId}`,
+        min: 0, max: numKf - 1, defaultVal: 0, decimalPlaces: 1,
+      });
+    }
+    const nwParamMin = nativeParamDef?.min ?? 0;
+    const nwParamMax = nativeParamDef?.max ?? (numKf - 1);
+
+    // Register in deformerParamMap for .can3 animation generation
+    if (sharedKeyframes) {
+      for (const pm of members) {
+        deformerParamMap.set(meshes[pm.mi].partId, {
+          paramId: finalNativeParamId, type: 'warp',
+          min: nwParamMin, max: nwParamMax,
+          keyframeTimes: sharedKeyframes.map(kf => kf.time),
+        });
+      }
+    }
+
+    // CoordType
+    const [nwCoord, pidNwCoord] = x.shared('CoordType');
+    x.sub(nwCoord, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
+
+    // KeyformBindingSource
+    const [nwKfBinding, pidNwKfBinding] = x.shared('KeyformBindingSource');
+
+    // KeyformGridSource
+    const [nwKfg, pidNwKfg] = x.shared('KeyformGridSource');
+    const nwKfogList = x.sub(nwKfg, 'array_list', { 'xs.n': 'keyformsOnGrid', count: String(numKf) });
+    for (let ki = 0; ki < numKf; ki++) {
+      const kog = x.sub(nwKfogList, 'KeyformOnGrid');
+      const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
+      const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
+      const kon = x.sub(kop, 'KeyOnParameter');
+      x.subRef(kon, 'KeyformBindingSource', pidNwKfBinding, { 'xs.n': 'binding' });
+      x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(ki);
+      x.subRef(kog, 'CFormGuid', nwFormGuids[ki], { 'xs.n': 'keyformGuid' });
+    }
+    const nwKfbList = x.sub(nwKfg, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
+    x.subRef(nwKfbList, 'KeyformBindingSource', pidNwKfBinding);
+
+    x.subRef(nwKfBinding, 'KeyformGridSource', pidNwKfg, { 'xs.n': '_gridSource' });
+    x.subRef(nwKfBinding, 'CParameterGuid', pidNativeWarpParam, { 'xs.n': 'parameterGuid' });
+    const nwKeysArr = x.sub(nwKfBinding, 'array_list', { 'xs.n': 'keys', count: String(numKf) });
+    for (let ki = 0; ki < numKf; ki++) {
+      const paramVal = numKf > 1 ? nwParamMin + ki * (nwParamMax - nwParamMin) / (numKf - 1) : nwParamMin;
+      x.sub(nwKeysArr, 'f').text = paramVal.toFixed(1);
+    }
+    x.sub(nwKfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+    x.sub(nwKfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+    x.sub(nwKfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+    x.sub(nwKfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+    x.sub(nwKfBinding, 's', { 'xs.n': 'description' }).text = finalNativeParamId;
+
+    // Parent deformer and part
+    const nwParentDfGuid = meshParentGroup && groupDeformerGuids.has(meshParentGroup)
+      ? groupDeformerGuids.get(meshParentGroup) : pidDeformerRoot;
+    const nwParentPartGuid = meshParentGroup && groupPartGuids.has(meshParentGroup)
+      ? groupPartGuids.get(meshParentGroup) : pidPartGuid;
+
+    // CWarpDeformerSource
+    const [nwDf, pidNwDf] = x.shared('CWarpDeformerSource');
+    allDeformerSources.push({ pid: pidNwDf, tag: 'CWarpDeformerSource' });
+
+    const nwAcdfs = x.sub(nwDf, 'ACDeformerSource', { 'xs.n': 'super' });
+    const nwAcpcs = x.sub(nwAcdfs, 'ACParameterControllableSource', { 'xs.n': 'super' });
+    x.sub(nwAcpcs, 's', { 'xs.n': 'localName' }).text = nativeWdNode?.name ?? `${wdNodeId} Warp`;
+    x.sub(nwAcpcs, 'b', { 'xs.n': 'isVisible' }).text = 'true';
+    x.sub(nwAcpcs, 'b', { 'xs.n': 'isLocked' }).text = 'false';
+    x.subRef(nwAcpcs, 'CPartGuid', nwParentPartGuid, { 'xs.n': 'parentGuid' });
+    x.subRef(nwAcpcs, 'KeyformGridSource', pidNwKfg, { 'xs.n': 'keyformGridSource' });
+    const nwMft = x.sub(nwAcpcs, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
+    x.sub(nwMft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
+    const nwBwc = x.sub(nwMft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
+    x.sub(nwBwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
+    x.sub(nwAcpcs, 'carray_list', { 'xs.n': '_extensions', count: '0' });
+    x.sub(nwAcpcs, 'null', { 'xs.n': 'internalColor_direct_argb' });
+    x.sub(nwAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
+    x.subRef(nwAcdfs, 'CDeformerGuid', pidNativeWarpGuid, { 'xs.n': 'guid' });
+    x.sub(nwAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: `Warp_${sanitizedGroupName}` });
+    x.subRef(nwAcdfs, 'CDeformerGuid', nwParentDfGuid, { 'xs.n': 'targetDeformerGuid' });
+
+    x.sub(nwDf, 'i', { 'xs.n': 'col' }).text = String(nwCol);
+    x.sub(nwDf, 'i', { 'xs.n': 'row' }).text = String(nwRow);
+    x.sub(nwDf, 'b', { 'xs.n': 'isQuadTransform' }).text = 'false';
+
+    const nwKfsList = x.sub(nwDf, 'carray_list', { 'xs.n': 'keyforms', count: String(numKf) });
+    for (let ki = 0; ki < numKf; ki++) {
+      const wdf = x.sub(nwKfsList, 'CWarpDeformerForm');
+      const wdfAdf = x.sub(wdf, 'ACDeformerForm', { 'xs.n': 'super' });
+      const wdfAcf = x.sub(wdfAdf, 'ACForm', { 'xs.n': 'super' });
+      x.subRef(wdfAcf, 'CFormGuid', nwFormGuids[ki], { 'xs.n': 'guid' });
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
+      x.sub(wdfAcf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
+      x.subRef(wdfAcf, 'CWarpDeformerSource', pidNwDf, { 'xs.n': '_source' });
+      x.sub(wdfAcf, 'null', { 'xs.n': 'name' });
+      x.sub(wdfAcf, 's', { 'xs.n': 'notes' }).text = '';
+      x.sub(wdfAdf, 'f', { 'xs.n': 'opacity' }).text = '1.0';
+      x.sub(wdfAdf, 'CFloatColor', { 'xs.n': 'multiplyColor', red: '1.0', green: '1.0', blue: '1.0', alpha: '1.0' });
+      x.sub(wdfAdf, 'CFloatColor', { 'xs.n': 'screenColor', red: '0.0', green: '0.0', blue: '0.0', alpha: '1.0' });
+      x.subRef(wdfAdf, 'CoordType', pidNwCoord, { 'xs.n': 'coordType' });
+      const posArr = nwGridKeyforms[ki];
+      x.sub(wdf, 'float-array', { 'xs.n': 'positions', count: String(nwGridPts * 2) })
+        .text = Array.from(posArr).map(v => v.toFixed(1)).join(' ');
+    }
+
+    // Add to parent part's child GUIDs
+    const nwPartSource = meshParentGroup && groupParts.has(meshParentGroup)
+      ? groupParts.get(meshParentGroup) : rootPart;
+    nwPartSource.childGuidsNode.children.push(x.ref('CDeformerGuid', pidNativeWarpGuid));
+    nwPartSource.childGuidsNode.attrs.count = String(nwPartSource.childGuidsNode.children.length);
+  }
+
   for (const pm of perMesh) {
     const partId = meshes[pm.mi].partId;
+    if (nativeWarpMeshPartIds.has(partId)) continue; // handled by native warp group above
     const keyframes = meshVertsMap.get(partId);
     if (!keyframes) continue;
 
@@ -4055,6 +4316,7 @@ export async function generateCmo3(input) {
     emitPhysicsSettings(x, {
       parent: model, paramDefs, meshes, groups, rigDebugLog,
       disabledCategories: disabledSet,
+      rules: physicsRules?.length > 0 ? physicsRules : null,
     });
   }
 

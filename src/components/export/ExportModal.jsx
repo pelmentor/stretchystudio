@@ -31,6 +31,7 @@ import {
   resolveAnimations,
 } from '@/io/exportAnimation';
 import { exportLive2D, exportLive2DProject } from '@/io/live2d';
+import { PhysicsPanel } from '@/components/physics/PhysicsPanel';
 
 export function ExportModal({ open, onClose, captureRef, projectName, projectId }) {
   // Form state
@@ -56,6 +57,7 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
   const [physicsClothing, setPhysicsClothing] = useState(true);
   const [physicsBust, setPhysicsBust] = useState(true);
   const [physicsArms, setPhysicsArms] = useState(true);
+  const [showPhysicsRules, setShowPhysicsRules] = useState(false);
   // Track whether user has explicitly edited the model-name field. While
   // untouched, the field auto-syncs to the current project's name on every
   // open — so loading a new project and then exporting shows the right default.
@@ -522,6 +524,26 @@ export function ExportModal({ open, onClose, captureRef, projectName, projectId 
                             Arm sway (forearm lags body roll/tilt).
                           </Label>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Custom physics rules panel */}
+                    {generatePhysics && (
+                      <div className="ml-0">
+                        <button
+                          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => setShowPhysicsRules(v => !v)}
+                        >
+                          {showPhysicsRules ? '▾' : '▸'}
+                          {project.physicsRules?.length > 0
+                            ? <span>Custom physics rules <span className="text-primary">({project.physicsRules.length} rules)</span></span>
+                            : 'Configure physics rules…'}
+                        </button>
+                        {showPhysicsRules && (
+                          <div className="mt-2 ml-1 border rounded p-2.5 bg-muted/10">
+                            <PhysicsPanel />
+                          </div>
+                        )}
                       </div>
                     )}
                   </>

@@ -3,7 +3,8 @@ import { useEditorStore } from '@/store/editorStore';
 import { useTheme } from '@/contexts/ThemeProvider';
 import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
-import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
+import { computePoseOverrides, computeParameterDrivenOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
+import { useParameterStore } from '@/store/parameterStore';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
 import {
@@ -104,6 +105,116 @@ function computeImageBounds(imageData, alphaThreshold = 10) {
 /** Generate a short unique id */
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
+/** Standard Live2D parameter definitions used by the liverig wizard step */
+const LIVE_RIG_PARAMS = [
+  { id: 'ParamAngleX',     name: 'Angle X',      group: 'Face',    min: -30, max:  30, default: 0 },
+  { id: 'ParamAngleY',     name: 'Angle Y',      group: 'Face',    min: -30, max:  30, default: 0 },
+  { id: 'ParamAngleZ',     name: 'Angle Z',      group: 'Face',    min: -30, max:  30, default: 0 },
+  { id: 'ParamEyeLOpen',   name: 'Eye L Open',   group: 'Eye',     min:   0, max:   1, default: 1 },
+  { id: 'ParamEyeROpen',   name: 'Eye R Open',   group: 'Eye',     min:   0, max:   1, default: 1 },
+  { id: 'ParamEyeBallX',   name: 'Eyeball X',    group: 'Eyeball', min:  -1, max:   1, default: 0 },
+  { id: 'ParamEyeBallY',   name: 'Eyeball Y',    group: 'Eyeball', min:  -1, max:   1, default: 0 },
+  { id: 'ParamBrowLY',     name: 'Brow L Y',     group: 'Brow',    min:  -1, max:   1, default: 0 },
+  { id: 'ParamBrowRY',     name: 'Brow R Y',     group: 'Brow',    min:  -1, max:   1, default: 0 },
+  { id: 'ParamMouthForm',  name: 'Mouth Form',   group: 'Mouth',   min:  -1, max:   1, default: 0 },
+  { id: 'ParamMouthOpenY', name: 'Mouth Open',   group: 'Mouth',   min:   0, max:   1, default: 0 },
+  { id: 'ParamBodyAngleX', name: 'Body Angle X', group: 'Body',    min: -10, max:  10, default: 0 },
+  { id: 'ParamBodyAngleY', name: 'Body Angle Y', group: 'Body',    min: -10, max:  10, default: 0 },
+  { id: 'ParamBodyAngleZ', name: 'Body Angle Z', group: 'Body',    min: -10, max:  10, default: 0 },
+  { id: 'ParamBreath',     name: 'Breath',       group: 'Body',    min:   0, max:   1, default: 0 },
+  { id: 'ParamHairFront',  name: 'Hair Front',   group: 'Hair',    min:  -1, max:   1, default: 0 },
+  { id: 'ParamHairSide',   name: 'Hair Side',    group: 'Hair',    min:  -1, max:   1, default: 0 },
+  { id: 'ParamHairBack',   name: 'Hair Back',    group: 'Hair',    min:  -1, max:   1, default: 0 },
+];
+
+/** Warp deformers to auto-create: one per detectable bone role */
+const WARP_SPECS = [
+  { boneRole: 'head',  paramSsId: 'ParamAngleX',     warpName: 'FaceWarp', warpType: 'face_angle_x' },
+  { boneRole: 'torso', paramSsId: 'ParamBodyAngleX',  warpName: 'BodyWarp', warpType: 'body_angle_x' },
+];
+
+/**
+ * Build warp-deformer keyframes for a named deformation type.
+ * `scale` (0–1) controls amplitude so strength adjustments re-use this without
+ * re-authoring: scale=1 = 100% strength, scale=0.5 = 50%, etc.
+ * Returns [{time, value:[{x,y},...]}] matching the interpolateMeshVerts format.
+ */
+function buildWarpKeyframes(warpType, gridX, gridY, gridW, gridH, col, row, scale = 1) {
+  function makeGrid(deltaFn) {
+    const arr = [];
+    for (let r = 0; r <= row; r++) {
+      for (let c = 0; c <= col; c++) {
+        const bx = gridX + (col > 0 ? c * gridW / col : 0);
+        const by = gridY + (row > 0 ? r * gridH / row : 0);
+        const d = deltaFn(col > 0 ? c / col : 0, row > 0 ? r / row : 0);
+        arr.push({ x: bx + (d?.dx ?? 0) * scale, y: by + (d?.dy ?? 0) * scale });
+      }
+    }
+    return arr;
+  }
+  const flat = () => makeGrid(() => null);
+
+  if (warpType === 'face_angle_x') {
+    // 2.5D Perspective face turn
+    // time=1000 is turning screen right (+Angle X)
+    const rightTurn = (cn, rn) => {
+      // Parabolic horizontal shift: nose (center) protrudes right, far edge wraps inward
+      // cn=0 (near): dx=0.02, cn=0.5 (center): dx=0.15, cn=1.0 (far): dx=-0.05
+      const dx = (-0.66 * cn * cn + 0.59 * cn + 0.02) * gridW;
+      
+      // Perspective Z-scaling: near side gets slightly taller, far side gets shorter
+      const zScale = 1.0 + (0.5 - cn) * 0.1;
+      const dy = (rn - 0.5) * (zScale - 1) * gridH;
+      
+      return { dx, dy };
+    };
+
+    const leftTurn = (cn, rn) => {
+      // Mirror of right turn
+      const mirroredCn = 1 - cn;
+      const d = rightTurn(mirroredCn, rn);
+      return { dx: -d.dx, dy: d.dy };
+    };
+
+    return [
+      { time:    0, value: makeGrid(leftTurn) },
+      { time:  500, value: flat() },
+      { time: 1000, value: makeGrid(rightTurn) },
+    ];
+  }
+
+  if (warpType === 'body_angle_x') {
+    // 2.5D Perspective body turn
+    // time=1000 is turning screen right
+    const rightTurnBody = (cn, rn) => {
+      // Horizontal shear combined with perspective 
+      // Top moves more than bottom. Left shoulder (near) moves right, right shoulder (far) wraps inward
+      const topDxRatio = -0.4 * cn * cn + 0.32 * cn + 0.10;
+      const dx = topDxRatio * (1 - rn) * gridW;
+
+      // Perspective Z-scaling: near shoulder gets larger/lower, far shoulder lifts/shrinks
+      const zScale = 1.0 + (0.5 - cn) * 0.15;
+      const dy = (rn - 0.5) * (zScale - 1) * gridH;
+
+      return { dx, dy };
+    };
+
+    const leftTurnBody = (cn, rn) => {
+      const mirroredCn = 1 - cn;
+      const d = rightTurnBody(mirroredCn, rn);
+      return { dx: -d.dx, dy: d.dy };
+    };
+
+    return [
+      { time:    0, value: makeGrid(leftTurnBody) },
+      { time:  500, value: flat() },
+      { time: 1000, value: makeGrid(rightTurnBody) },
+    ];
+  }
+
+  return [{ time: 0, value: flat() }, { time: 1000, value: flat() }];
+}
+
 /** Strip extension from a filename */
 function basename(filename) {
   return filename.replace(/\.[^.]+$/, '');
@@ -161,6 +272,7 @@ export default function CanvasViewport({
   const project = useProjectStore(s => s.project);
   const versionControl = useProjectStore(s => s.versionControl);
   const updateProject = useProjectStore(s => s.updateProject);
+  const updateParameter = useProjectStore(s => s.updateParameter);
   const resetProject = useProjectStore(s => s.resetProject);
   const editorState = useEditorStore();
   const setBrush = useEditorStore(s => s.setBrush);
@@ -171,6 +283,10 @@ export default function CanvasViewport({
   const animStore = useAnimationStore();
   const animRef = useRef(animStore);
   animRef.current = animStore;
+
+  const paramStore = useParameterStore();
+  const paramRef = useRef(paramStore);
+  paramRef.current = paramStore;
 
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
@@ -184,6 +300,8 @@ export default function CanvasViewport({
   isDarkRef.current = isDark;
 
   useEffect(() => { isDirtyRef.current = true; }, [project, isDark]);
+  // Redraw whenever parameter sliders change
+  useEffect(() => { isDirtyRef.current = true; }, [paramStore.values]);
   
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {
@@ -318,6 +436,29 @@ export default function CanvasViewport({
           }
         }
 
+        // Parameter-driven overrides: apply where animation keyframes haven't already set a value.
+        // Works in both staging and animation mode — parameters are always-on interactive sliders.
+        {
+          const proj = projectRef.current;
+          if (proj.parameters?.length > 0) {
+            const paramOverrides = computeParameterDrivenOverrides(
+              proj.animations,
+              proj.parameters,
+              paramRef.current.values,
+            );
+            if (paramOverrides.size > 0) {
+              if (!poseOverrides) poseOverrides = new Map();
+              for (const [nodeId, ov] of paramOverrides) {
+                const existing = poseOverrides.get(nodeId) ?? {};
+                for (const [prop, val] of Object.entries(ov)) {
+                  if (!(prop in existing)) existing[prop] = val;
+                }
+                poseOverrides.set(nodeId, existing);
+              }
+            }
+          }
+        }
+
         // Always apply draftPose mesh_verts for GPU upload — this handles elbow/knee skinning
         // in staging mode where poseOverrides would otherwise be null.
         if (anim.draftPose.size > 0) {
@@ -363,6 +504,61 @@ export default function CanvasViewport({
           if (!poseOverrides) poseOverrides = new Map();
           const existing = poseOverrides.get(node.id) ?? {};
           if (!existing.mesh_verts) poseOverrides.set(node.id, { ...existing, mesh_verts: blendedVerts });
+        }
+
+        // Apply warp deformer nodes: bilinear grid deformation on child meshes.
+        // Runs after blend shapes so the warp sees the fully-blended vertex positions.
+        for (const wd of projectRef.current.nodes) {
+          if (wd.type !== 'warpDeformer') continue;
+          const wdOv = poseOverrides?.get(wd.id);
+          const gridPts = wdOv?.mesh_verts;
+          if (!gridPts?.length) continue; // no active grid deformation
+
+          const { col = 2, row = 2, gridX = 0, gridY = 0, gridW = 1, gridH = 1 } = wd;
+          const safeW = gridW || 1, safeH = gridH || 1;
+
+          // Recursively collect all descendant mesh parts, traversing through groups
+          // AND nested warpDeformers so parent warps always reach grandchild parts.
+          const collectDescendants = (parentId) => {
+            const result = [];
+            for (const n of projectRef.current.nodes) {
+              if (n.parent !== parentId) continue;
+              if (n.type === 'part' && n.mesh) result.push(n);
+              else if ((n.type === 'group' || n.type === 'warpDeformer') && n.visible !== false)
+                result.push(...collectDescendants(n.id));
+            }
+            return result;
+          };
+          const childParts = collectDescendants(wd.id);
+          for (const child of childParts) {
+            // Use REST vertices for UV parameterization so that accumulated deltas
+            // from parent warps don't corrupt the UV → grid mapping.
+            const restVerts = child.mesh.vertices;
+            const curVerts  = poseOverrides?.get(child.id)?.mesh_verts ?? restVerts;
+            const warped = restVerts.map((rv, vi) => {
+              const px = rv.x ?? rv.restX, py = rv.y ?? rv.restY;
+              const s  = Math.max(0, Math.min(1, (px - gridX) / safeW));
+              const t  = Math.max(0, Math.min(1, (py - gridY) / safeH));
+              const ci = Math.min(Math.floor(s * col), col - 1);
+              const ri = Math.min(Math.floor(t * row), row - 1);
+              const u  = s * col - ci;
+              const vv = t * row - ri;
+              const p00 = gridPts[ri * (col + 1) + ci];
+              const p10 = gridPts[ri * (col + 1) + ci + 1];
+              const p01 = gridPts[(ri + 1) * (col + 1) + ci];
+              const p11 = gridPts[(ri + 1) * (col + 1) + ci + 1];
+              if (!p00 || !p10 || !p01 || !p11) return { x: curVerts[vi].x ?? px, y: curVerts[vi].y ?? py };
+              // Bilinear target position driven by this warp's grid
+              const tx = (1-u)*(1-vv)*p00.x + u*(1-vv)*p10.x + (1-u)*vv*p01.x + u*vv*p11.x;
+              const ty = (1-u)*(1-vv)*p00.y + u*(1-vv)*p10.y + (1-u)*vv*p01.y + u*vv*p11.y;
+              // Accumulate delta on top of any previously-applied warp offsets
+              const cv = curVerts[vi];
+              return { x: (cv.x ?? px) + (tx - px), y: (cv.y ?? py) + (ty - py) };
+            });
+            if (!poseOverrides) poseOverrides = new Map();
+            const ex = poseOverrides.get(child.id) ?? {};
+            poseOverrides.set(child.id, { ...ex, mesh_verts: warped });
+          }
         }
 
         // Upload mesh vertex overrides BEFORE drawing so the GPU buffers are
@@ -888,8 +1084,27 @@ export default function CanvasViewport({
   }, [wizardPsd, finalizePsdImport]);
 
   /* ── Wizard: enter reorder stage (finalize without rig) ────────────────── */
-  const handleWizardReorder = useCallback(() => {
-    const { psdW, psdH, layers, partIds } = wizardPsd;
+  const handleWizardReorder = useCallback((splits) => {
+    let { psdW, psdH, layers, partIds } = wizardPsd;
+
+    if (splits && splits.length > 0) {
+      const newLayers = [...layers];
+      const newPartIds = [...partIds];
+      const sortedSplits = [...splits].sort((a, b) => b.mergedIdx - a.mergedIdx);
+
+      for (const { mergedIdx, rightLayer, leftLayer } of sortedSplits) {
+        const replacements = [];
+        if (rightLayer) replacements.push({ layer: rightLayer, partId: uid() });
+        if (leftLayer) replacements.push({ layer: leftLayer, partId: uid() });
+
+        newLayers.splice(mergedIdx, 1, ...replacements.map(r => r.layer));
+        newPartIds.splice(mergedIdx, 1, ...replacements.map(r => r.partId));
+      }
+      layers = newLayers;
+      partIds = newPartIds;
+      setWizardPsd({ psdW, psdH, layers, partIds });
+    }
+
     if (!preImportSnapshotRef.current) {
       preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
     }
@@ -964,8 +1179,26 @@ export default function CanvasViewport({
   }, [wizardPsd, updateProject]);
 
   /* ── Wizard: skip rigging (called by PsdImportWizard) ──────────────────── */
-  const handleWizardSkip = useCallback((meshAllParts) => {
-    const { psdW, psdH, layers, partIds } = wizardPsd;
+  const handleWizardSkip = useCallback((meshAllParts, splits) => {
+    let { psdW, psdH, layers, partIds } = wizardPsd;
+
+    if (splits && splits.length > 0) {
+      const newLayers = [...layers];
+      const newPartIds = [...partIds];
+      const sortedSplits = [...splits].sort((a, b) => b.mergedIdx - a.mergedIdx);
+
+      for (const { mergedIdx, rightLayer, leftLayer } of sortedSplits) {
+        const replacements = [];
+        if (rightLayer) replacements.push({ layer: rightLayer, partId: uid() });
+        if (leftLayer) replacements.push({ layer: leftLayer, partId: uid() });
+
+        newLayers.splice(mergedIdx, 1, ...replacements.map(r => r.layer));
+        newPartIds.splice(mergedIdx, 1, ...replacements.map(r => r.partId));
+      }
+      layers = newLayers;
+      partIds = newPartIds;
+    }
+
     finalizePsdImport(psdW, psdH, layers, partIds, [], null);
     if (meshAllParts) {
       // Auto-mesh will happen asynchronously as textures are uploaded
@@ -976,12 +1209,205 @@ export default function CanvasViewport({
     setWizardStep(null);
   }, [wizardPsd, finalizePsdImport, autoMeshAllParts]);
 
-  /* ── Wizard: complete (called by PsdImportWizard adjust step) ──────────── */
-  const handleWizardComplete = useCallback((meshAllParts) => {
-    if (meshAllParts ?? meshAllPartsRef.current) {
-      // Auto-mesh all unmeshed parts with smart sizing
-      autoMeshAllParts();
+  /* ── Wizard: auto-generate warp deformers + Live2D parameters ──────────── */
+  const autoGenerateWarpDeformers = useCallback(() => {
+    updateProject((proj) => {
+      // Ensure a "Parameters" animation clip exists
+      let paramAnim = proj.animations.find(a => a.name === 'Parameters');
+      if (!paramAnim) {
+        const animId = uid();
+        proj.animations.push({ id: animId, name: 'Parameters', duration: 2000, fps: 24, tracks: [], audioTracks: [] });
+        paramAnim = proj.animations[proj.animations.length - 1];
+      }
+
+      // Map canonical param ID → warp deformer node ID (for binding wires)
+      const warpNodeIds = {};
+
+      for (const spec of WARP_SPECS) {
+        const group = proj.nodes.find(n => n.type === 'group' && n.boneRole === spec.boneRole);
+        if (!group) continue;
+
+        const children = proj.nodes.filter(n => n.parent === group.id);
+        if (children.length === 0) continue;
+
+        // Collect imageBounds from ALL descendants (through groups and warpDeformers)
+        // so BodyWarp correctly encompasses the head area even though it's in a sub-group.
+        const collectBounds = (parentId) => {
+          for (const n of proj.nodes) {
+            if (n.parent !== parentId) continue;
+            if (n.imageBounds) {
+              minX = Math.min(minX, n.imageBounds.minX);
+              minY = Math.min(minY, n.imageBounds.minY);
+              maxX = Math.max(maxX, n.imageBounds.maxX);
+              maxY = Math.max(maxY, n.imageBounds.maxY);
+            }
+            if (n.type === 'group' || n.type === 'warpDeformer') collectBounds(n.id);
+          }
+        };
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        collectBounds(group.id);
+        if (minX === Infinity) {
+          minX = 0; minY = 0;
+          maxX = proj.canvas.width; maxY = proj.canvas.height;
+        }
+        const PAD = 20;
+        const gridX = minX - PAD, gridY = minY - PAD;
+        const gridW = (maxX - minX) + 2 * PAD, gridH = (maxY - minY) + 2 * PAD;
+        const col = 2, row = 2;
+
+        const warpId = uid();
+        warpNodeIds[spec.paramSsId] = warpId;
+
+        // Warp deformer node (child of group)
+        proj.nodes.push({
+          id: warpId, type: 'warpDeformer', name: spec.warpName,
+          parent: group.id, transform: DEFAULT_TRANSFORM(),
+          visible: true, opacity: 1,
+          col, row, gridX, gridY, gridW, gridH,
+          parameterId: spec.paramSsId,
+        });
+
+        // Reparent all direct children of group under the warp deformer
+        for (const child of children) child.parent = warpId;
+
+        // Keyframes with meaningful deformation (scale=1 = 100% strength)
+        paramAnim.tracks.push({
+          nodeId: warpId, property: 'mesh_verts',
+          keyframes: buildWarpKeyframes(spec.warpType, gridX, gridY, gridW, gridH, col, row, 1),
+        });
+      }
+
+      // Create all 18 standard Live2D parameters; wire bindings for warp-linked ones
+      for (const spec of LIVE_RIG_PARAMS) {
+        const paramId = spec.id; // canonical Live2D ID as the project parameter ID
+        const warpId = warpNodeIds[spec.id];
+        const bindings = warpId
+          ? [{ animationId: paramAnim.id, nodeId: warpId, property: 'mesh_verts' }]
+          : [];
+        proj.parameters.push({
+          id: paramId, name: spec.name,
+          min: spec.min, max: spec.max, default: spec.default,
+          bindings,
+        });
+      }
+    });
+  }, [updateProject]);
+
+  /* ── Wizard: adjust warp strength (slider drag) ─────────────────────────── */
+  const handleWarpStrength = useCallback((paramId, strength) => {
+    const baseDef = LIVE_RIG_PARAMS.find(p => p.id === paramId);
+    if (!baseDef) return;
+    const s = strength / 100;
+    const newMin = baseDef.min === 0 ? 0 : baseDef.min * s;
+    const newMax = baseDef.max * s;
+
+    // Persist the scaled range on the parameter
+    updateParameter(paramId, { min: newMin, max: newMax });
+
+    // Rebuild warp keyframes at the new scale (warp-linked params only)
+    const spec = WARP_SPECS.find(ws => ws.paramSsId === paramId);
+    if (spec) {
+      updateProject(proj => {
+        const warpNode = proj.nodes.find(n => n.type === 'warpDeformer' && n.parameterId === paramId);
+        if (!warpNode) return;
+        const paramAnim = proj.animations.find(a => a.name === 'Parameters');
+        if (!paramAnim) return;
+        const track = paramAnim.tracks.find(t => t.nodeId === warpNode.id && t.property === 'mesh_verts');
+        if (!track) return;
+        track.keyframes = buildWarpKeyframes(
+          spec.warpType, warpNode.gridX, warpNode.gridY, warpNode.gridW, warpNode.gridH,
+          warpNode.col, warpNode.row, s,
+        );
+      }, { skipHistory: true });
     }
+
+    // Drive parameterStore to max so the canvas shows the full deformation live
+    useParameterStore.getState().setParameterValue(paramId, newMax);
+  }, [updateParameter, updateProject]);
+
+  /* ── Wizard: create Idle animation clip with bone rotation + blink tracks ── */
+  const createIdleAnimation = useCallback(() => {
+    updateProject((proj) => {
+      if (proj.animations.find(a => a.name === 'Idle')) return;
+
+      const tracks = [];
+      const torso = proj.nodes.find(n => n.type === 'group' && n.boneRole === 'torso');
+      const head  = proj.nodes.find(n => n.type === 'group' && n.boneRole === 'head');
+
+      if (torso) {
+        tracks.push({
+          nodeId: torso.id, property: 'rotation',
+          keyframes: [
+            { time:    0, value: 0 },
+            { time: 1000, value: -3 },
+            { time: 2000, value: 0 },
+            { time: 3000, value: 3 },
+            { time: 4000, value: 0 },
+          ],
+        });
+      }
+      if (head) {
+        tracks.push({
+          nodeId: head.id, property: 'rotation',
+          keyframes: [
+            { time:    0, value:  0 },
+            { time: 1000, value:  1 },
+            { time: 2000, value:  0 },
+            { time: 3000, value: -1 },
+            { time: 4000, value:  0 },
+          ],
+        });
+      }
+
+      // Opacity blink on any part whose name starts with "eyelash" or "eyelid"
+      for (const node of proj.nodes) {
+        if (node.type !== 'part') continue;
+        if (!/^eyelash|^eyelid/i.test(node.name)) continue;
+        tracks.push({
+          nodeId: node.id, property: 'opacity',
+          keyframes: [
+            { time:    0, value: 1 },
+            { time: 3400, value: 1 },
+            { time: 3550, value: 0 },
+            { time: 3700, value: 1 },
+            { time: 4000, value: 1 },
+          ],
+        });
+      }
+
+      proj.animations.push({
+        id: uid(), name: 'Idle', duration: 4000, fps: 24,
+        tracks, audioTracks: [],
+      });
+    });
+  }, [updateProject]);
+
+  /* ── Wizard: enter liverig step (auto-generate then show param panel) ───── */
+  const handleWizardLiveRig = useCallback((meshAllParts) => {
+    meshAllPartsRef.current = meshAllParts;
+    autoGenerateWarpDeformers();
+    createIdleAnimation();
+    // Generate meshes now so warp deformers have geometry to deform during the preview
+    if (meshAllParts) autoMeshAllParts();
+    useEditorStore.getState().setSkeletonEditMode(false);
+    setWizardStep('liverig');
+    // Start idle playback after updateProject flushes (next tick)
+    setTimeout(() => {
+      const idleClip = useProjectStore.getState().project.animations.find(a => a.name === 'Idle');
+      if (idleClip) {
+        useAnimationStore.getState().switchAnimation(idleClip);
+        useAnimationStore.getState().play();
+      }
+    }, 0);
+  }, [autoGenerateWarpDeformers, createIdleAnimation, autoMeshAllParts]);
+
+  /* ── Wizard: complete (called by PsdImportWizard adjust/liverig step) ───── */
+  const handleWizardComplete = useCallback((meshAllParts) => {
+    useAnimationStore.getState().pause();
+    useParameterStore.getState().clearAll();
+    // autoMeshAllParts only meshes parts that don't yet have a mesh, so calling it
+    // here is safe even if liverig already triggered it (idempotent on already-meshed parts)
+    if (meshAllParts ?? meshAllPartsRef.current) autoMeshAllParts();
     setWizardStep(null);
     setWizardPsd(null);
     useEditorStore.getState().setSkeletonEditMode(false);
@@ -1000,27 +1426,6 @@ export default function CanvasViewport({
   }, []);
 
 
-  /* ── Wizard: split merged parts into left/right ────────────── */
-  const handleWizardSplitParts = useCallback((splits) => {
-    setWizardPsd(prev => {
-      if (!prev) return prev;
-      const newLayers = [...prev.layers];
-      const newPartIds = [...prev.partIds];
-
-      const sortedSplits = [...splits].sort((a, b) => b.mergedIdx - a.mergedIdx);
-
-      for (const { mergedIdx, rightLayer, leftLayer } of sortedSplits) {
-        const replacements = [];
-        if (rightLayer) replacements.push({ layer: rightLayer, partId: uid() });
-        if (leftLayer) replacements.push({ layer: leftLayer, partId: uid() });
-        
-        newLayers.splice(mergedIdx, 1, ...replacements.map(r => r.layer));
-        newPartIds.splice(mergedIdx, 1, ...replacements.map(r => r.partId));
-      }
-
-      return { ...prev, layers: newLayers, partIds: newPartIds };
-    });
-  }, []);
 
   const handleWizardUpdatePsd = useCallback((updates) => {
     setWizardPsd(prev => (prev ? { ...prev, ...updates } : prev));
@@ -1977,10 +2382,12 @@ export default function CanvasViewport({
           onCancel={handleWizardCancel}
           onComplete={handleWizardComplete}
           onBack={handleWizardBack}
-          onSplitParts={handleWizardSplitParts}
           onUpdatePsd={handleWizardUpdatePsd}
           onReorder={handleWizardReorder}
           onApplyRig={handleWizardApplyRig}
+          onLiveRig={handleWizardLiveRig}
+          liveRigParams={project.parameters}
+          onWarpStrength={handleWarpStrength}
         />
       )}
 

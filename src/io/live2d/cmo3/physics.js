@@ -371,6 +371,7 @@ export const PHYSICS_RULES = [
  */
 export function emitPhysicsSettings(x, {
   parent, paramDefs, meshes, groups = [], rigDebugLog = null, disabledCategories = null,
+  rules = null,
 }) {
   const pidByParamId = new Map();
   for (const p of paramDefs) pidByParamId.set(p.id, p.pid);
@@ -380,9 +381,11 @@ export function emitPhysicsSettings(x, {
     if (m && m.tag) tagsPresent.add(m.tag);
   }
 
+  const activeRules = (rules && rules.length > 0) ? rules : PHYSICS_RULES;
+
   const rulesToEmit = [];
   const skipped = [];
-  for (const rule of PHYSICS_RULES) {
+  for (const rule of activeRules) {
     if (disabledCategories && rule.category && disabledCategories.has(rule.category)) {
       skipped.push({ id: rule.id, reason: `category '${rule.category}' disabled in UI` });
       continue;

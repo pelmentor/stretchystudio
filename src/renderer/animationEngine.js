@@ -114,7 +114,7 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
  * Interpolate an array of {x,y} vertex positions between two keyframes.
  * Both keyframe values must have the same vertex count.
  */
-function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
+export function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
   if (!keyframes || keyframes.length === 0) return undefined;
   if (timeMs <= keyframes[0].time) return keyframes[0].value;
 
@@ -204,6 +204,50 @@ export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'opacit
 
 /** Prefix for blend shape influence track properties */
 export const BLEND_SHAPE_TRACK_PREFIX = 'blendShape:';
+
+/**
+ * Evaluate native parameter sliders against their bound animation tracks.
+ *
+ * Each parameter maps its current value (min…max) to a normalized position
+ * (0…1) along the bound track's keyframe range and evaluates the track there.
+ * The result is a poseOverrides-compatible Map that callers can merge with
+ * animation-keyframe overrides (animation wins on conflict).
+ *
+ * @param {Object[]} animations   - project.animations[]
+ * @param {Object[]} parameters   - project.parameters[]
+ * @param {Object}   paramValues  - { [paramId]: number } from parameterStore
+ * @returns {Map<string, Object>}  nodeId → { property: value, … }
+ */
+export function computeParameterDrivenOverrides(animations, parameters, paramValues) {
+  const overrides = new Map();
+  if (!parameters?.length) return overrides;
+
+  for (const param of parameters) {
+    const currentVal = paramValues[param.id] ?? param.default ?? 0;
+    for (const binding of (param.bindings ?? [])) {
+      const anim = animations?.find(a => a.id === binding.animationId);
+      if (!anim) continue;
+      const track = anim.tracks?.find(
+        t => t.nodeId === binding.nodeId && t.property === binding.property
+      );
+      if (!track?.keyframes?.length) continue;
+
+      const kfs = track.keyframes;
+      const range = param.max - param.min;
+      const t = range === 0 ? 0 : Math.max(0, Math.min(1, (currentVal - param.min) / range));
+      const timeMs = kfs[0].time + (kfs[kfs.length - 1].time - kfs[0].time) * t;
+
+      const value = track.property === 'mesh_verts'
+        ? interpolateMeshVerts(kfs, timeMs)
+        : interpolateTrack(kfs, timeMs);
+      if (value === undefined) continue;
+
+      if (!overrides.has(binding.nodeId)) overrides.set(binding.nodeId, {});
+      overrides.get(binding.nodeId)[track.property] = value;
+    }
+  }
+  return overrides;
+}
 
 /** Human-readable labels */
 export const PROP_LABELS = {
