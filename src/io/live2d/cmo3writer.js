@@ -3614,8 +3614,27 @@ export async function generateCmo3(input) {
     // resolves into rigSpec.warpDeformers via lookup.
     const _artSanitizedName = sanitisePartName(pm.meshName || pm.partId);
     let artParent;
+    // Tracks whether the bone-baked branch fell back to root because the
+    // arm group itself has no rotation deformer (e.g. shelby's leftArm
+    // is also a bone). When true the keyform emission below re-encodes
+    // pivot-relative verts back to canvas-px for the rigSpec only — XML
+    // emission keeps its own (separate) coord-space convention.
+    let bakedReencodeToCanvas = false;
     if (rwBox) {
       artParent = { type: 'warp', id: `RigWarp_${_artSanitizedName}` };
+    } else if (pm.hasBakedKeyforms) {
+      // Bone-baked meshes (arms/legs/hands): the bone group itself never
+      // gets a rotation deformer (skipped at ~L1742 because it lives in
+      // `boneParamGuids`). Mirror the XML fallback at ~L3576: parent to
+      // the arm group's `GroupRotation_<id>` deformer when present; else
+      // root with canvas-px verts (chainEval can't walk a missing parent).
+      if (dfOwner && groupDeformerGuids.has(dfOwner)) {
+        artParent = { type: 'rotation', id: `GroupRotation_${dfOwner}` };
+      } else {
+        artParent = { type: 'root', id: null };
+        artLocalFrame = 'canvas-px';
+        bakedReencodeToCanvas = !!dfOrigin;
+      }
     } else if (jointBoneId && deformerWorldOrigins.has(jointBoneId)) {
       artParent = { type: 'rotation', id: jointBoneId };
     } else if (dfOwner) {
@@ -3713,9 +3732,20 @@ export async function generateCmo3(input) {
         const positions = (ang === 0) ? verts : computeBakedPositions(ang);
         emitArtMeshForm(kfList, pidForm, positions);
         if (_bonePm) {
+          // rigSpec parent fell back to root (arm group has no deformer) →
+          // re-encode pivot-relative verts back to canvas-px for chainEval.
+          let rigPositions = positions;
+          if (bakedReencodeToCanvas) {
+            const reenc = new Array(positions.length);
+            for (let pi = 0; pi < positions.length; pi += 2) {
+              reenc[pi]     = positions[pi]     + dfOrigin.x;
+              reenc[pi + 1] = positions[pi + 1] + dfOrigin.y;
+            }
+            rigPositions = reenc;
+          }
           artKeyforms.push({
             keyTuple: [ang],
-            vertexPositions: new Float32Array(positions),
+            vertexPositions: new Float32Array(rigPositions),
             opacity: 1.0,
           });
         }
