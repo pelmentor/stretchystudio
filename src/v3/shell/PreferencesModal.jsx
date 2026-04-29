@@ -30,11 +30,12 @@ import { Slider } from '../../components/ui/slider.jsx';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../../components/ui/select.jsx';
-import { Sun, Moon, Monitor, Palette, Settings2, Keyboard } from 'lucide-react';
+import { Sun, Moon, Monitor, Palette, Settings2, Keyboard, Cpu } from 'lucide-react';
 import { useTheme, AVAILABLE_FONTS } from '../../contexts/ThemeProvider.jsx';
 import { lightThemePresets, darkThemePresets } from '../../lib/themePresets.js';
 import { useState } from 'react';
 import { KeymapModal } from './KeymapModal.jsx';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
 
 export function PreferencesModal({ open, onOpenChange }) {
   const {
@@ -45,6 +46,8 @@ export function PreferencesModal({ open, onOpenChange }) {
     fontSize, setFontSize,
   } = useTheme();
   const [keymapOpen, setKeymapOpen] = useState(false);
+  const mlEnabled = usePreferencesStore((s) => s.mlEnabled);
+  const setMlEnabled = usePreferencesStore((s) => s.setMlEnabled);
 
   const isDark =
     themeMode === 'dark' ||
@@ -146,6 +149,28 @@ export function PreferencesModal({ open, onOpenChange }) {
               <Keyboard size={14} />
               View shortcuts…
             </Button>
+          </Section>
+
+          <Section label="AI features">
+            <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mlEnabled}
+                onChange={(e) => setMlEnabled(e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 rounded border border-border"
+              />
+              <span className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Cpu size={12} className="text-muted-foreground" />
+                  Enable AI auto-rig (DWPose)
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-snug">
+                  Off hides the AI Auto-Rig button and avoids loading the
+                  ~15&nbsp;MB ONNX runtime + DWPose model. Manual rigging
+                  + heuristic skeleton estimation still work.
+                </span>
+              </span>
+            </label>
           </Section>
         </div>
       </DialogContent>

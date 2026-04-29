@@ -9,6 +9,7 @@ import { splitLayerLR } from '../../io/splitLR';
 import { HelpIcon } from '../ui/help-icon';
 import { useToast } from '../../hooks/use-toast';
 import { uid } from '@/lib/ids';
+import { usePreferencesStore } from '../../store/preferencesStore';
 
 export default function PsdImportWizard({
   step,
@@ -26,6 +27,7 @@ export default function PsdImportWizard({
   onUpdatePsd,
 }) {
   const { toast } = useToast();
+  const mlEnabled = usePreferencesStore((s) => s.mlEnabled);
   const [rigStatus, setRigStatus] = useState('');
   const [rigLoading, setRigLoading] = useState(false);
   const [tagOverrides, setTagOverrides] = useState({});
@@ -523,13 +525,15 @@ export default function PsdImportWizard({
           />
           <span>Mesh all parts</span>
         </label>
-        <button
-          onClick={() => onSetStep('dwpose')}
-          className="px-2 py-1 text-xs rounded border border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1.5"
-        >
-          <Scissors size={12} />
-          AI Auto-Rig (DWPose)
-        </button>
+        {mlEnabled ? (
+          <button
+            onClick={() => onSetStep('dwpose')}
+            className="px-2 py-1 text-xs rounded border border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1.5"
+          >
+            <Scissors size={12} />
+            AI Auto-Rig (DWPose)
+          </button>
+        ) : null}
         <button
           onClick={onBack}
           className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
