@@ -76,11 +76,22 @@ export class ScenePass {
    * @param {boolean} [opts.exportMode=false]
    * @param {Set<string>|null} [opts.rigDrivenParts=null]
    *   v2 R6 / v3 -1B: parts whose mesh_verts came from `evalRig` are
-   *   already in canvas-px (absolute). For those parts, applying the
-   *   per-part `worldMatrix` on top would double-transform — translate
-   *   by the PSD layer offset twice. When this set contains a part id,
-   *   draw uses `camera` directly (no worldMatrix multiplication).
-   *   Empty/null = legacy behavior (every part gets its worldMatrix).
+   *   already in canvas-px (absolute) — chainEval composes the entire
+   *   parent chain to root, with the rotation→warp boundary scale fix
+   *   from chainEval.js (Phase 1E commit `c07751b`) producing canonical
+   *   canvas-px output. For those parts, applying the per-part
+   *   `worldMatrix` on top would double-transform.
+   *
+   *   Specifically: when the user drags a SkeletonOverlay rotation arc,
+   *   the same gesture writes BOTH `node.transform.rotation` AND the
+   *   bone rotation parameter. evalRig's chain applies the rotation via
+   *   the deformer; `worldMatrix` would apply it again via the
+   *   transform. Skip-worldMatrix for rig-driven parts prevents the
+   *   double rotation.
+   *
+   *   When this set contains a part id, draw uses `camera` directly
+   *   (no worldMatrix multiplication). Empty/null = legacy behavior
+   *   (every part gets its worldMatrix).
    */
   draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false, rigDrivenParts = null } = {}) {
     const { gl } = this;
