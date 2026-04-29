@@ -23,6 +23,7 @@ import { ParametersEditor } from '../editors/parameters/ParametersEditor.jsx';
 import { AnimationsEditor } from '../editors/animations/AnimationsEditor.jsx';
 import { PerformanceEditor } from '../editors/performance/PerformanceEditor.jsx';
 import { DopesheetEditor } from '../editors/dopesheet/DopesheetEditor.jsx';
+import { FCurveEditor } from '../editors/fcurve/FCurveEditor.jsx';
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
@@ -42,6 +43,7 @@ export const EDITOR_REGISTRY = {
   animations: { label: 'Animations', component: AnimationsEditor },
   performance: { label: 'Performance', component: PerformanceEditor },
   dopesheet:   { label: 'Dopesheet', component: DopesheetEditor },
+  fcurve:      { label: 'F-curve', component: FCurveEditor },
 };
 
 /** Stable ordered list for header dropdowns. */

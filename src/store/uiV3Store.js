@@ -29,7 +29,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -110,7 +110,7 @@ const ANIMATION_AREAS = () => [
   buildArea('leftTop',    [e('outliner'), e('parameters')]),
   buildArea('leftBottom', [e('animations'), e('properties')]),
   buildArea('center',     [e('viewport')]),
-  buildArea('timeline',   [e('timeline'), e('dopesheet')]),
+  buildArea('timeline',   [e('timeline'), e('dopesheet'), e('fcurve')]),
 ];
 
 /**
