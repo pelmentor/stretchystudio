@@ -16,7 +16,7 @@ import { ArmaturePanel } from '@/components/armature/ArmaturePanel';
 import { ParametersPanel } from '@/components/parameters/ParametersPanel';
 import { ExportModal } from '@/components/export/ExportModal';
 import { PreferencesModal } from '@/components/preferences/PreferencesModal';
-import { Save, FolderOpen, FilePlus, Palette, Sun, Moon, SquareChartGantt, Download, Settings2, Undo2, Redo2 } from 'lucide-react';
+import { Save, FolderOpen, FilePlus, SquareChartGantt, Download, Settings2, Undo2, Redo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -26,12 +26,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
-import { useTheme, AVAILABLE_FONTS } from '@/contexts/ThemeProvider';
-import { lightThemePresets, darkThemePresets } from '@/lib/themePresets';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -39,7 +34,6 @@ import { makeLocalMatrix } from '@/renderer/transforms';
 import { SaveModal } from '@/components/save/SaveModal';
 import { LoadModal } from '@/components/load/LoadModal';
 import { saveToDb } from '@/io/projectDb';
-import { saveProject } from '@/io/projectFile';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -102,14 +96,6 @@ export default function EditorLayout() {
   const [confirmWipe, setConfirmWipe] = React.useState({ open: false, type: null, data: null });
   const [confirmStore, setConfirmStore] = React.useState({ open: false, file: null });
 
-  const {
-    themeMode, setThemeMode,
-    openThemeModal,
-    setLightTheme, setDarkTheme,
-    fontFamily, setFontFamily,
-    fontSize, setFontSize,
-  } = useTheme();
-  
   // Warn before closing tab if there are unsaved changes
   React.useEffect(() => {
     const handleBeforeUnload = (e) => {
