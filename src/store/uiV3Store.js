@@ -1,18 +1,25 @@
 // @ts-check
 
 /**
- * v3 Phase 0A - UI shell state.
+ * v3 Phase 0A / 1A.UX — UI shell state with tabs-per-area.
  *
- * Mirrors Blender's "screen" + "area" + "workspace" structure. Each
- * workspace presents a different area-tree preset; switching workspaces
- * doesn't lose per-workspace state. (Plan §2 Layer 1-3 + §3.)
+ * Mirrors Blender's "screen" + "area" + "workspace" structure plus
+ * Blender-style "tabs inside an area" so multiple editors can share
+ * one panel with a tab strip on top (OPNsense-style; the user
+ * specifically asked for Outliner + Parameters as tabs in a left
+ * sidebar). Plan §2 Layer 1-3 + §3.
  *
- * For now the area tree is flat - four fixed areas tiled 2×2 - so the
- * type can be a simple `{[areaId]: editorType}` map. The recursive
- * split-tree representation lands when split / drag-tab gestures arrive
- * (Phase 1+); the API exposed here doesn't change at that point, which
- * is why callers should always go through `useUIV3Store` actions
- * rather than reading raw shape.
+ * Data shape:
+ *
+ *   workspaces[wsId].areas: AreaSlot[]
+ *   AreaSlot      = { id, tabs: EditorTab[], activeTabId }
+ *   EditorTab     = { id, editorType }
+ *
+ * Why tabs (vs swap-in-place dropdown that 0A shipped): the dropdown
+ * paradigm makes sense when one area shows one editor and the user
+ * occasionally swaps; once you stack two editors that you switch
+ * between minute-to-minute (Outliner ↔ Parameters during rig setup),
+ * tabs cost zero clicks and one extra row of chrome.
  *
  * @module store/uiV3Store
  */
@@ -21,53 +28,87 @@ import { create } from 'zustand';
 
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
- *   The five top-level workspace presets. Plan §2 Layer 5 settled on
- *   Layout / Mesh / Rig / Pose / Animate; here we use the noun forms
- *   (Modeling = Mesh) to stay closer to Blender's vocabulary.
  *
  * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline')} EditorType
- *   Editor types registered for v3. Phase 1 expands the set.
+ *
+ * @typedef {Object} EditorTab
+ * @property {string}     id          - stable across re-render
+ * @property {EditorType} editorType
  *
  * @typedef {Object} AreaSlot
- * @property {string} id              - stable across re-render
- * @property {EditorType} editorType  - what this area renders
+ * @property {string}      id          - stable across re-render
+ * @property {EditorTab[]} tabs
+ * @property {string}      activeTabId - id of the currently visible tab; falls back to tabs[0].id
  *
  * @typedef {Object} WorkspacePreset
- * @property {AreaSlot[]} areas       - current order is TL, TR, BL, BR
- *   (will become a split-tree in Phase 1; consumers should index by id)
+ * @property {AreaSlot[]} areas
  */
 
+/** Narrow a literal to EditorType for JSDoc inference. */
+const e = (/** @type {EditorType} */ t) => t;
+
+let _nextId = 1;
+const tid = () => `t${_nextId++}`;
+
+/** Build an area with a single-tab default. */
+function singleTabArea(/** @type {string} */ id, /** @type {EditorType} */ editorType) {
+  return /** @type {AreaSlot} */ ({
+    id,
+    tabs: [{ id: tid(), editorType }],
+    activeTabId: '_synthesized', // overwritten below; kept distinct so empty-area never wins lookups
+  });
+}
+
+/** Build an area with several stacked tabs; first tab is active. */
+function multiTabArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorTypes) {
+  const tabs = editorTypes.map((et) => ({ id: tid(), editorType: et }));
+  return /** @type {AreaSlot} */ ({
+    id,
+    tabs,
+    activeTabId: tabs[0]?.id ?? '_synthesized',
+  });
+}
+
+// Patch the activeTabId on single-tab helper now that we have the real id.
+function buildArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorTypes) {
+  if (!Array.isArray(editorTypes) || editorTypes.length === 0) {
+    throw new Error(`buildArea(${id}): at least one editor type required`);
+  }
+  const a = multiTabArea(id, editorTypes);
+  return a;
+}
+
 /**
- * Helper that narrows a literal string to `EditorType` so JSDoc type
- * inference picks up the constraint without each call site repeating
- * the cast.
- * @param {EditorType} t
- * @returns {EditorType}
+ * Default 3-column layout: Left tabs (Outliner + Parameters) | Center (Viewport) | Right (Properties).
+ * @returns {AreaSlot[]}
  */
-const e = (t) => t;
-
-/** Initial 2×2 layout used as the default for every workspace. */
-const DEFAULT_AREAS = () => /** @type {AreaSlot[]} */ ([
-  { id: 'tl', editorType: e('viewport') },
-  { id: 'tr', editorType: e('outliner') },
-  { id: 'bl', editorType: e('parameters') },
-  { id: 'br', editorType: e('properties') },
-]);
+const DEFAULT_AREAS = () => [
+  buildArea('left',   [e('outliner'), e('parameters')]),
+  buildArea('center', [e('viewport')]),
+  buildArea('right',  [e('properties')]),
+];
 
 /**
- * Per-workspace area presets. Each workspace owns its own area state.
+ * Animation workspace adds a Timeline area below the center.
+ * Layout: Left | Center+TimelineBelow | Right.
+ * @returns {AreaSlot[]}
+ */
+const ANIMATION_AREAS = () => [
+  buildArea('left',     [e('outliner'), e('parameters')]),
+  buildArea('center',   [e('viewport')]),
+  buildArea('timeline', [e('timeline')]),
+  buildArea('right',    [e('properties')]),
+];
+
+/**
+ * Per-workspace presets.
  * @returns {Record<WorkspaceId, WorkspacePreset>}
  */
 const initialWorkspaces = () => ({
   layout:    { areas: DEFAULT_AREAS() },
   modeling:  { areas: DEFAULT_AREAS() },
   rigging:   { areas: DEFAULT_AREAS() },
-  animation: { areas: [
-    { id: 'tl', editorType: e('viewport') },
-    { id: 'tr', editorType: e('outliner') },
-    { id: 'bl', editorType: e('timeline') },
-    { id: 'br', editorType: e('properties') },
-  ] },
+  animation: { areas: ANIMATION_AREAS() },
   pose:      { areas: DEFAULT_AREAS() },
 });
 
@@ -78,30 +119,88 @@ export const useUIV3Store = create((set) => ({
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),
 
-  /** Switch the active workspace. Per-workspace area state is preserved. */
+  /** Switch active workspace; per-workspace area state is preserved. */
   setWorkspace: (id) => set({ activeWorkspace: id }),
 
   /**
-   * Replace the editor in a specific area for the active workspace.
+   * Set which tab is active inside an area.
+   * @param {string} areaId
+   * @param {string} tabId
+   */
+  setAreaActiveTab: (areaId, tabId) =>
+    set((state) => updateActiveWorkspace(state, (ws) => ({
+      ...ws,
+      areas: ws.areas.map((a) => {
+        if (a.id !== areaId) return a;
+        if (!a.tabs.some((t) => t.id === tabId)) return a;
+        return { ...a, activeTabId: tabId };
+      }),
+    }))),
+
+  /**
+   * Swap the active tab's editor type. Compatibility shim so the
+   * existing area-header dropdown (and any Phase 0A test code) keeps
+   * working — semantically "change what this area shows" still maps
+   * to "change the foreground tab's type".
+   *
    * @param {string} areaId
    * @param {EditorType} editorType
    */
   setAreaEditor: (areaId, editorType) =>
-    set((state) => {
-      const ws = state.workspaces[state.activeWorkspace];
-      if (!ws) return state;
-      const next = ws.areas.map((a) =>
-        a.id === areaId ? { ...a, editorType } : a,
-      );
-      return {
-        workspaces: {
-          ...state.workspaces,
-          [state.activeWorkspace]: { ...ws, areas: next },
-        },
-      };
-    }),
+    set((state) => updateActiveWorkspace(state, (ws) => ({
+      ...ws,
+      areas: ws.areas.map((a) => {
+        if (a.id !== areaId) return a;
+        return {
+          ...a,
+          tabs: a.tabs.map((t) =>
+            t.id === a.activeTabId ? { ...t, editorType } : t,
+          ),
+        };
+      }),
+    }))),
 
-  /** Reset the active workspace to its defaults. */
+  /**
+   * Add a new tab to an area; new tab becomes active.
+   * @param {string} areaId
+   * @param {EditorType} editorType
+   */
+  addTab: (areaId, editorType) =>
+    set((state) => updateActiveWorkspace(state, (ws) => ({
+      ...ws,
+      areas: ws.areas.map((a) => {
+        if (a.id !== areaId) return a;
+        const newTab = { id: tid(), editorType };
+        return { ...a, tabs: [...a.tabs, newTab], activeTabId: newTab.id };
+      }),
+    }))),
+
+  /**
+   * Remove a tab. If the active one is removed, activate its left
+   * neighbour (or the new first tab). No-op when removing the last
+   * remaining tab — areas don't go empty.
+   * @param {string} areaId
+   * @param {string} tabId
+   */
+  removeTab: (areaId, tabId) =>
+    set((state) => updateActiveWorkspace(state, (ws) => ({
+      ...ws,
+      areas: ws.areas.map((a) => {
+        if (a.id !== areaId) return a;
+        if (a.tabs.length <= 1) return a;
+        const idx = a.tabs.findIndex((t) => t.id === tabId);
+        if (idx < 0) return a;
+        const tabs = a.tabs.filter((_, i) => i !== idx);
+        let activeTabId = a.activeTabId;
+        if (a.activeTabId === tabId) {
+          const fallback = tabs[Math.max(0, idx - 1)] ?? tabs[0];
+          activeTabId = fallback.id;
+        }
+        return { ...a, tabs, activeTabId };
+      }),
+    }))),
+
+  /** Reset the active workspace's area state to its default preset. */
   resetWorkspace: () =>
     set((state) => ({
       workspaces: {
@@ -110,3 +209,23 @@ export const useUIV3Store = create((set) => ({
       },
     })),
 }));
+
+/** Internal helper — produce a new state with the active workspace mutated. */
+function updateActiveWorkspace(state, fn) {
+  const ws = state.workspaces[state.activeWorkspace];
+  if (!ws) return state;
+  return {
+    workspaces: { ...state.workspaces, [state.activeWorkspace]: fn(ws) },
+  };
+}
+
+/**
+ * Convenience selector — find the current active tab in an area.
+ *
+ * @param {AreaSlot} area
+ * @returns {EditorTab|null}
+ */
+export function getActiveTab(area) {
+  if (!area || !Array.isArray(area.tabs) || area.tabs.length === 0) return null;
+  return area.tabs.find((t) => t.id === area.activeTabId) ?? area.tabs[0];
+}

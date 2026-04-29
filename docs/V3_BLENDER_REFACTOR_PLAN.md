@@ -1225,7 +1225,104 @@ Keyform Browser, F-panel redo widget, Mask/Variant/Physics modes
 > stuff that doesn't fit elsewhere yet. Promote to proper sections
 > when patterns emerge.
 
-### 2026-04-29 — v2 regression triage during shelby smoke test
+### 2026-04-29 — Round-2 shelby smoke test (Coord-Space Debugger live)
+
+User loaded shelby.psd in `?ui=v3`, ran Initialize Rig, observed:
+
+**Coord-Space Debugger HUD reading.** 18 clean / 2 broken. The two
+broken chains are `handwear-l` and `handwear-r` (gloves). Most parts
+have CLEAN chains terminating at root (canvas-px output).
+
+**Visible symptoms.**
+- Face / head meshes are missing entirely (gone or off-canvas).
+- Both arms float to the LEFT of the body, stacked together at
+  what looks like canvas (~200, ~400) — a fixed shift, not random.
+- Body (jacket) renders roughly at the correct canvas position.
+- ParamAngleX/Y/Z (head + body angle) move the body. Head-angle
+  slider triggers some movement in the head region. Other
+  parameters (arm rotations, etc.) don't visibly do anything.
+
+**Cubism Editor log (separate concern).** Loading the exported
+.cmo3 in Cubism Editor shows "Parameter mismatch" — distinct from
+the runtime symptom. Likely export-side (parameter list inconsistent
+between rigSpec / project / motion3 / etc.).
+
+**Hypotheses retired.**
+- ❌ "All flying parts have broken chains." Refuted: only handwear
+  is broken, but face / arms also fly. Most are clean canvas-px
+  output yet still mispositioned.
+- ❌ "Phase -1B fix opt-out is wrong-shaped because of broken
+  chains." The broken-chain count is small; this is not the main
+  driver.
+
+**Active hypothesis.** Either:
+1. The keyform vertex positions emitted by `cmo3writer` for arms
+   are incorrect because joint pivots couldn't be adjusted (the
+   wizard joint-click bug — see Bug A above). Default-pivot arms
+   produce keyforms encoding pivot-relative offsets relative to
+   (0,0). Identity rotation deformer at angle=0 should still
+   reproduce canvas-px… but if the keyforms themselves were
+   already wrong the chain output is wrong.
+2. The runtime evalRig output IS canvas-px (matches the HUD's
+   diagnosis) but the renderer's `worldMatrix` is genuinely
+   non-identity for arm parts — there's a parent group transform
+   we missed because group transforms aren't all pure-pivot.
+   Skipping `worldMatrix` for rigDriven parts then drops a
+   meaningful translation.
+3. Arms aren't in `rigSpec.artMeshes` at all — they fall through
+   to the v2 worldMatrix-only path while body parts are rigDriven.
+   In that case the body shifts (deformer drift at "rest" param
+   values) but arms don't, so the visual gap between them grows.
+
+**Plan to nail it down.** Phase 1C.2 — extend Coord-Space Debugger
+HUD row click to `console.log(part diagnostic dump)`: rest mesh
+bbox, evalRig output bbox, worldMatrix, parent chain. With three
+flying parts named, the actual bug becomes obvious in one
+console-spelunk session.
+
+---
+
+### 2026-04-29 — UX refactor: left-side tabbed sidebar (Outliner + Parameters)
+
+User asked for the Outliner + Parameters editors to live as tabs in
+a left sidebar (rather than separate quadrants in the 2×2 layout)
+with tab styling that's clearly distinguishable for the active vs
+inactive state — OPNsense-style with the active tab visually
+"raised" and merging into the panel body.
+
+**Refactor scope.**
+
+1. **Data model — tabs per area.** `AreaSlot` becomes
+   `{id, tabs: EditorTab[], activeTabId}`. Each `EditorTab` is
+   `{id, editorType}`. The shell's existing per-area editor swap
+   becomes "swap the active tab's editorType"; new actions
+   `setAreaActiveTab` / `addTab` / `removeTab` ride on top.
+2. **Layout — 3 columns.** Default workspace switches from 2×2
+   (TL viewport / TR outliner / BL parameters / BR properties)
+   to L | C | R:
+     - Left: tabs (Outliner | Parameters)
+     - Center: viewport
+     - Right: properties
+   Animation workspace gets Timeline as a horizontal split below
+   center.
+3. **AreaTabBar.jsx** replaces `EditorHeader.jsx`. Renders one
+   chip per tab; the editor-type "swap" dropdown moves into a
+   `+` menu since with tabs the swap-in-place use case is rare.
+4. **OPNsense styling** — active tab has a light-card background,
+   a colored top accent (primary), borders connecting into the
+   panel body below. Inactive tabs sit on the muted strip with
+   muted text.
+5. **Migration.** v3 just shipped 2 days ago; users may have
+   workspace state in `localStorage` (react-resizable-panels
+   autoSaveId) referencing the 2×2 panel layout. The split-tree
+   structure is owned by react-resizable-panels and reset on
+   workspace-key change is harmless. The areas[] shape lives in
+   uiV3Store which currently has no persistence — fresh shape
+   on every load.
+
+**Out of scope (follow-up).** Drag-tab between areas, tab close
+buttons, "+" menu to add a new tab, persisting workspace state
+to disk. Phase 1+ ergonomics; not needed for the visible win.
 
 User loaded `shelby.psd` to verify Phase -1B coord fix + post-refactor
 v2 paths. Three bugs surfaced; all three deferred (not fixed) on the

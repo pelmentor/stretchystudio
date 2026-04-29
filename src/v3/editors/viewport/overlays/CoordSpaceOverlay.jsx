@@ -32,10 +32,14 @@
 import { useMemo, useState } from 'react';
 import { useRigSpecStore } from '../../../../store/rigSpecStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
+import { useProjectStore } from '../../../../store/projectStore.js';
+import { useParamValuesStore } from '../../../../store/paramValuesStore.js';
 import {
   diagnoseRigChains,
   summarizeDiagnoses,
 } from '../../../../io/live2d/runtime/evaluator/chainDiagnose.js';
+import { evalRig } from '../../../../io/live2d/runtime/evaluator/chainEval.js';
+import { computeWorldMatrices } from '../../../../renderer/transforms.js';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 const FRAME_COLORS = {
@@ -110,6 +114,7 @@ export function CoordSpaceOverlay() {
               d={d}
               isActive={activeId === d.partId}
               onSelect={(modifier) => select({ type: 'part', id: d.partId }, modifier)}
+              onDiagnose={() => dumpPartDiagnostic(d, rigSpec)}
             />
           ))}
         </div>
@@ -119,19 +124,102 @@ export function CoordSpaceOverlay() {
 }
 
 /**
+ * On user-request (alt-click on a row), dump everything we know
+ * about a part's pipeline to the console: rest mesh bbox, evalRig
+ * output bbox, the worldMatrix the renderer would use, the chain
+ * walk path. Output is structured so the user can copy-paste back.
+ *
+ * @param {import('../../../../io/live2d/runtime/evaluator/chainDiagnose.js').ChainDiagnosis} d
+ * @param {any} rigSpec
+ */
+function dumpPartDiagnostic(d, rigSpec) {
+  if (typeof console === 'undefined') return;
+  try {
+    const project = useProjectStore.getState().project;
+    const paramValues = useParamValuesStore.getState().values;
+
+    const node = project.nodes.find((n) => n.id === d.partId) ?? null;
+    const mesh = node?.mesh ?? null;
+    const restBbox = mesh ? bboxOfVerts(mesh.vertices) : null;
+
+    // evalRig output for this part. Cheap to run for one frame —
+    // the user explicitly opted into the diagnostic.
+    const frames = rigSpec ? evalRig(rigSpec, paramValues) : [];
+    const frame = frames.find((f) => f.id === d.partId) ?? null;
+    const rigBbox = frame ? bboxOfFlat(frame.vertexPositions) : null;
+
+    const worldMap = computeWorldMatrices(project.nodes);
+    const wm = worldMap.get(d.partId) ?? null;
+    const wmIsIdentity = wm && wm[0] === 1 && wm[1] === 0 && wm[3] === 0 && wm[4] === 1
+      && wm[6] === 0 && wm[7] === 0;
+
+    console.groupCollapsed(`[CoordSpaceOverlay] ${d.partId} — ${d.terminationKind} / ${d.finalFrame}`);
+    console.log('chain:', d.chainPath);
+    console.log('node?', !!node, 'mesh?', !!mesh, 'verts:', mesh?.vertices?.length ?? 0);
+    console.log('rest bbox (mesh.vertices):', restBbox);
+    console.log('evalRig output bbox:', rigBbox);
+    if (restBbox && rigBbox) {
+      console.log('Δ centroid:', {
+        dx: rigBbox.cx - restBbox.cx,
+        dy: rigBbox.cy - restBbox.cy,
+      });
+    }
+    console.log('worldMatrix:', wm ? Array.from(wm) : null,
+      wmIsIdentity ? '(identity)' : '(NON-identity — would shift renderer)');
+    console.log('part.transform:', node?.transform);
+    console.log('part.parent:', node?.parent);
+    console.log('parent group transform:', node?.parent
+      ? project.nodes.find((g) => g.id === node.parent)?.transform
+      : null);
+    console.groupEnd();
+  } catch (err) {
+    console.error('[CoordSpaceOverlay] diagnostic dump failed:', err);
+  }
+}
+
+function bboxOfVerts(verts) {
+  if (!Array.isArray(verts) || verts.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const v of verts) {
+    const x = v?.x ?? v?.restX ?? 0;
+    const y = v?.y ?? v?.restY ?? 0;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+function bboxOfFlat(arr) {
+  if (!arr || arr.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < arr.length; i += 2) {
+    const x = arr[i], y = arr[i + 1];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/**
  * @param {{
  *   d: import('../../../../io/live2d/runtime/evaluator/chainDiagnose.js').ChainDiagnosis,
  *   isActive: boolean,
  *   onSelect: (m: 'replace'|'add'|'toggle') => void,
+ *   onDiagnose: () => void,
  * }} props
  */
-function DiagnosisRow({ d, isActive, onSelect }) {
+function DiagnosisRow({ d, isActive, onSelect, onDiagnose }) {
   const frameColor = FRAME_COLORS[d.finalFrame] ?? 'text-muted-foreground';
   const termLabel = TERM_LABELS[d.terminationKind] ?? d.terminationKind;
   const isClean = d.terminationKind === 'root';
-  const tooltip = d.chainPath.length > 0
+  const tooltip = (d.chainPath.length > 0
     ? `chain: ${d.chainPath.map((s) => `${s.kind}:${s.id}`).join(' → ')} → ${d.terminationKind}`
-    : `chain: (${d.terminationKind})`;
+    : `chain: (${d.terminationKind})`)
+    + '\nclick: select · alt-click: dump diagnostic to console';
   return (
     <button
       type="button"
@@ -143,6 +231,11 @@ function DiagnosisRow({ d, isActive, onSelect }) {
       }
       title={tooltip}
       onClick={(e) => {
+        if (e.altKey) {
+          e.preventDefault();
+          onDiagnose();
+          return;
+        }
         /** @type {'replace'|'add'|'toggle'} */
         let modifier = 'replace';
         if (e.shiftKey) modifier = 'add';
