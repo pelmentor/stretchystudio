@@ -423,8 +423,8 @@ export const useProjectStore = create((set) => {
 
   /**
    * Stage 1b — orchestrator that seeds every native-rig store from a
-   * single harvest pass. Caller (UI: ParametersPanel "Initialize Rig"
-   * button) supplies the harvest result from
+   * single harvest pass. Caller (UI: v3 ParametersEditor "Initialize Rig"
+   * button → RigService.initializeRig) supplies the harvest result from
    * `initializeRigFromProject(project, images)`. Single snapshot covers
    * all writes so undo reverts the whole init in one step.
    *

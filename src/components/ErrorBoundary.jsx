@@ -1,17 +1,17 @@
 // @ts-check
 
 /**
- * Shared ErrorBoundary used by both the v2 EditorLayout root and the
- * v3 AppShell + each Area inside it (Pillar K + Pillar S).
- *
- * Before this, v2 had zero error boundaries: any thrown render error
- * killed the entire app and the user lost in-progress edits. Now a
- * boundary at the v2 root catches it and surfaces a recoverable
- * panel; v3 wraps each editor Area so one broken editor doesn't
- * cascade to the rest of the workspace.
+ * Shared ErrorBoundary — wraps the v3 AppShell root and each Area
+ * inside it (Pillar K + Pillar S).
  *
  * Class component because the React error-boundary contract still
- * requires `getDerivedStateFromError` / `componentDidCatch`.
+ * requires `getDerivedStateFromError` / `componentDidCatch`. Per-area
+ * boundaries (one per Area inside AreaTree) keep a thrown render
+ * error from one editor scoped — the rest of the workspace stays up.
+ *
+ * Originally introduced for v2 (which had no error boundaries at all)
+ * and re-used unchanged when v3 picked up the AppShell. v2 was retired
+ * 2026-04-29; the component name stays for the v3-internal callers.
  *
  * @module components/ErrorBoundary
  */

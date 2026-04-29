@@ -89,10 +89,9 @@ function registerBuiltins() {
     exec: () => useUIV3Store.getState().resetWorkspace(),
   });
 
-  // Undo / redo. v2 wires via useUndoRedo hook (App.jsx); v3 routes
-  // through the operator dispatcher so the same Ctrl+Z chord can be
-  // captured by modal operators (drag, lasso) when they own the
-  // global modifier surface.
+  // Undo / redo. Wires through the operator dispatcher so future
+  // modal operators (drag, lasso) can transparently capture the same
+  // Ctrl+Z chord when they own the global modifier surface.
   registerOperator({
     id: 'app.undo',
     label: 'Undo',

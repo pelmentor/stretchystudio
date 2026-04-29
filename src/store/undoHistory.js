@@ -2,8 +2,9 @@
  * undoHistory - pure JS module for snapshot-based undo/redo.
  *
  * No React or Zustand imports - stays free of circular dependencies.
- * projectStore imports pushSnapshot/isBatching/clearHistory from here.
- * useUndoRedo imports undo/redo from here.
+ * projectStore imports pushSnapshot/isBatching/clearHistory from here;
+ * the v3 operator registry imports undo/redo for the app.undo / app.redo
+ * operators (Ctrl+Z / Ctrl+Shift+Z bindings).
  *
  * v3 Phase 0F.8 (Pillar M): added byte-budget cap on top of the
  * count cap. The full Immer-patches rewrite is still future work

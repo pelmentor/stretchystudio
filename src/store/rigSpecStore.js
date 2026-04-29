@@ -14,8 +14,9 @@ import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
  * parameters) needed for live render. Volatile — never persisted.
  *
  * Lifecycle:
- *   1. ParametersPanel "Initialize Rig" calls `buildRigSpec()` after
- *      seeding (one-shot; harvest + cache built from same generator run).
+ *   1. RigService.initializeRig (driven by v3 ParametersEditor's
+ *      "Initialize Rig" button) seeds the project AND populates this
+ *      cache from the same harvest pass — single one-shot.
  *   2. CanvasViewport reads `rigSpec` per frame via the evaluator (R6).
  *   3. Project mesh edits bump `versionControl.geometryVersion` — the
  *      auto-subscribe below marks the cache stale (`rigSpec → null`).

@@ -106,7 +106,7 @@ export default function CanvasViewport({
   const paramValuesRef = useRef(paramValues);
   paramValuesRef.current = paramValues;
 
-  // R6 — rigSpec session cache (built by ParametersPanel "Initialize Rig").
+  // R6 — rigSpec session cache (built by v3 ParametersEditor's "Initialize Rig" button).
   // When non-null, the tick runs the full evaluator chain instead of
   // R0's hardcoded test translation.
   const rigSpec = useRigSpecStore(s => s.rigSpec);

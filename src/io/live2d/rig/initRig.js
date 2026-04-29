@@ -18,7 +18,7 @@
  *      rigCollector by cmo3writer so we can hand it directly to
  *      `seedBodyWarpChain` without re-running `buildBodyWarpChain`.
  *
- * Caller (UI: ParametersPanel "Initialize Rig" button) drains the result
+ * Caller (UI: v3 ParametersEditor "Initialize Rig" button → RigService.initializeRig) drains the result
  * into the project store via the seeder actions exposed on
  * `useProjectStore`. Failures during harvest leave seeders untouched —
  * the caller decides whether to seed partial results (e.g., when one
