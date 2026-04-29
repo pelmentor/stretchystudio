@@ -28,6 +28,8 @@
 import { useEffect, useRef } from 'react';
 import CanvasViewport from '../../../components/canvas/CanvasViewport.jsx';
 import { CoordSpaceOverlay } from './overlays/CoordSpaceOverlay.jsx';
+import { WarpDeformerOverlay } from './overlays/WarpDeformerOverlay.jsx';
+import { RotationDeformerOverlay } from './overlays/RotationDeformerOverlay.jsx';
 import { useCaptureStore } from '../../../store/captureStore.js';
 
 export function ViewportEditor() {
@@ -72,6 +74,8 @@ export function ViewportEditor() {
         thumbCaptureRef={thumbCaptureRef}
       />
       <CoordSpaceOverlay />
+      <WarpDeformerOverlay />
+      <RotationDeformerOverlay />
     </div>
   );
 }
