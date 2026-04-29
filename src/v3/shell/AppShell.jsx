@@ -25,6 +25,9 @@ import { AreaTree } from './AreaTree.jsx';
 import { SaveModal } from './SaveModal.jsx';
 import { LoadModal } from './LoadModal.jsx';
 import { ExportModal } from './ExportModal.jsx';
+import { CommandPalette } from './CommandPalette.jsx';
+import { HelpModal } from './HelpModal.jsx';
+import { ModalTransformOverlay } from './ModalTransformOverlay.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
@@ -42,6 +45,9 @@ export function AppShell() {
         <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
         <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />
         <ExportModal />
+        <CommandPalette />
+        <HelpModal />
+        <ModalTransformOverlay />
       </div>
     </ErrorBoundary>
   );

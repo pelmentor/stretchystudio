@@ -22,9 +22,12 @@ import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
-import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
+import { undo, redo, undoCount, redoCount, beginBatch } from '../../store/undoHistory.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { useExportModalStore } from '../../store/exportModalStore.js';
+import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
+import { useHelpModalStore } from '../../store/helpModalStore.js';
+import { useModalTransformStore } from '../../store/modalTransformStore.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -276,6 +279,106 @@ function registerBuiltins() {
     label: 'Open Project',
     exec: () => useLibraryDialogStore.getState().openLoad(),
   });
+
+  // Phase 3E — F3 command palette. Wakes up the cmdk-backed search
+  // dialog mounted at the AppShell level. The dialog itself runs
+  // the picked operator on Enter/click, so this op is just a toggle
+  // entry point for the keymap.
+  registerOperator({
+    id: 'app.commandPalette',
+    label: 'Operator Search…',
+    exec: () => useCommandPaletteStore.getState().toggle(),
+  });
+
+  // Phase 4E — F1 help / quick reference modal.
+  registerOperator({
+    id: 'app.help',
+    label: 'Help / Quick Reference',
+    exec: () => useHelpModalStore.getState().toggle(),
+  });
+
+  // Phase 2H — Modal G/R/S transform operators. Each captures the
+  // selection's current transforms and hands off to
+  // ModalTransformOverlay which owns mouse + key handling until
+  // commit/cancel. Available only when at least one part / group is
+  // selected.
+  function beginModalTransform(/** @type {'translate'|'rotate'|'scale'} */ kind) {
+    const items = useSelectionStore.getState().items;
+    const targetIds = items
+      .filter((it) => it.type === 'part' || it.type === 'group')
+      .map((it) => it.id);
+    if (targetIds.length === 0) return;
+
+    const project = useProjectStore.getState().project;
+    /** @type {Map<string, any>} */
+    const original = new Map();
+    let pivotX = 0, pivotY = 0;
+    for (const id of targetIds) {
+      const node = project.nodes.find((n) => n.id === id);
+      if (!node?.transform) continue;
+      original.set(id, { ...node.transform });
+      pivotX += node.transform.x ?? 0;
+      pivotY += node.transform.y ?? 0;
+    }
+    if (original.size === 0) return;
+    pivotX /= original.size;
+    pivotY /= original.size;
+
+    // Open an undo batch so a single Ctrl+Z undoes the whole modal
+    // session; ModalTransformOverlay closes the batch on commit /
+    // cancel. Mid-modal mousemove writes still hit projectStore but
+    // are silenced by isBatching().
+    beginBatch(project);
+
+    // Activation point: cursor position at the time of the keystroke.
+    // The dispatcher doesn't surface the cursor, so we use the last
+    // mousemove via a window-level cache. Falling back to (0,0) keeps
+    // math sane until the user moves the mouse.
+    const startMouse = lastMousePos();
+
+    useModalTransformStore.getState().begin({
+      kind,
+      startMouse,
+      pivotCanvas: { x: pivotX, y: pivotY },
+      original,
+    });
+  }
+
+  registerOperator({
+    id: 'transform.translate',
+    label: 'Grab / Move (G)',
+    available: () => useSelectionStore.getState().items.some(
+      (it) => it.type === 'part' || it.type === 'group',
+    ),
+    exec: () => beginModalTransform('translate'),
+  });
+  registerOperator({
+    id: 'transform.rotate',
+    label: 'Rotate (R)',
+    available: () => useSelectionStore.getState().items.some(
+      (it) => it.type === 'part' || it.type === 'group',
+    ),
+    exec: () => beginModalTransform('rotate'),
+  });
+  registerOperator({
+    id: 'transform.scale',
+    label: 'Scale (S)',
+    available: () => useSelectionStore.getState().items.some(
+      (it) => it.type === 'part' || it.type === 'group',
+    ),
+    exec: () => beginModalTransform('scale'),
+  });
+}
+
+/** @type {{x:number, y:number}} */
+let _lastMouse = { x: 0, y: 0 };
+if (typeof window !== 'undefined') {
+  window.addEventListener('mousemove', (e) => {
+    _lastMouse = { x: e.clientX, y: e.clientY };
+  }, { capture: true, passive: true });
+}
+function lastMousePos() {
+  return { ..._lastMouse };
 }
 
 /**

@@ -73,6 +73,23 @@ export const DEFAULT_KEYMAP = {
   // selected" / "frame the selection" gesture.
   'Period':         'view.frameSelected',
   'NumpadDecimal':  'view.frameSelected',
+
+  // F3 — operator search palette. Blender's standard "what was that
+  // operator called again" shortcut. cmdk dialog handles its own
+  // input focus + Esc-to-close, so we don't need a second binding
+  // for the close path.
+  'F3': 'app.commandPalette',
+
+  // F1 — quick reference modal. Browser leaves F1 alone outside
+  // dev-tools-bound contexts, and the dispatcher preventDefault's
+  // before any browser default fires.
+  'F1': 'app.help',
+
+  // Phase 2H — modal G/R/S transforms. Bare letter chords on
+  // selection. The modal overlay captures mouse + key from there.
+  'KeyG': 'transform.translate',
+  'KeyR': 'transform.rotate',
+  'KeyS': 'transform.scale',
 };
 
 /**
