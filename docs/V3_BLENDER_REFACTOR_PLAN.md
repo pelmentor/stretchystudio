@@ -1506,13 +1506,14 @@ for that polish round.
 
 ### 2026-04-29 — Phase first-cut sweep #5 (autonomous)
 
-User said *"Продолжай"* after compact. One more first cut:
+User said *"Продолжай"* after compact. Two more first cuts:
 
 | Phase | Deliverable |
 |-------|-------------|
-| 5 | Physics3 round-trip (import). `src/io/live2d/physics3jsonImport.js` reverse-parses a `.physics3.json` file (Version 3) into the resolved-rule shape `physicsRules` expects. Drops fields physics3 doesn't carry (`requireTag`, `requireAnyTag`, `category`) — imported rules emit unconditionally and group under `category: 'imported'`. PhysicsTab gains an "Import .physics3.json" file picker + "Reset" button, so users can replace `project.physicsRules` with the JSON's contents (undoable via `updateProject`) or re-seed from defaults. Status banner reports rule count + first 4 warnings (skipped settings, unknown input types). Click-through editor / per-rule editing surface deferred to next sweep. |
+| 5 | Physics3 round-trip (import). `src/io/live2d/physics3jsonImport.js` reverse-parses a `.physics3.json` file (Version 3) into the resolved-rule shape `physicsRules` expects. Drops fields physics3 doesn't carry (`requireTag`, `requireAnyTag`, `category`) — imported rules emit unconditionally and group under `category: 'imported'`. PhysicsTab gains an "Import .physics3.json" file picker + "Reset" button, so users can replace `project.physicsRules` with the JSON's contents (undoable via `updateProject`) or re-seed from defaults. Status banner reports rule count + first 4 warnings (skipped settings, unknown input types). Click-through editor / per-rule editing surface deferred. |
+| 5 | Multi-motion timeline switcher. TimelineEditor's transport bar trades the read-only animation-name span for a real `<select>` listing every clip in `project.animations`; switching syncs `activeAnimationId` + fps/endFrame/seek to 0 so the user can A/B between motions without manual fiddling. The `+ New` button now always creates a fresh clip (was: returned the existing one). Motion3.json reverse-import (segments → keyframes) and motion blending deferred. |
 
-**Phase coverage after sweep #5:** Phase 5 physics import shipped. Remaining entirely-pending: 4A parity harness, Phase 5 motion timeline scrubbing / asset hot-reload / Live2D `.cmo3` round-trip / touch+pen refactor / onnxruntime opt-in, Phase 6 god-class breakup.
+**Phase coverage after sweep #5:** Phase 5 physics import + multi-motion switching shipped. Remaining entirely-pending: 4A parity harness, Phase 5 `.motion3.json` reverse-parser / `.cmo3` round-trip / asset hot-reload / touch+pen refactor / onnxruntime opt-in, Phase 6 god-class breakup.
 
 ---
 

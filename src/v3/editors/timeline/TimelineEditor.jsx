@@ -758,6 +758,27 @@ export function TimelineEditor() {
     return id;
   }, [proj.animations, update, anim]);
 
+  /* ── Create a fresh animation regardless of existing ones ───────────── */
+  const createAnimation = useCallback(() => {
+    const id = uid();
+    const n = proj.animations.length + 1;
+    update((p) => {
+      p.animations.push({
+        id,
+        name: `Animation ${n}`,
+        duration: 2000,
+        fps: 24,
+        tracks: [],
+        audioTracks: [],
+      });
+    });
+    anim.setActiveAnimationId(id);
+    anim.setFps(24);
+    anim.setEndFrame(48);
+    anim.seekFrame(0);
+    return id;
+  }, [proj.animations.length, update, anim]);
+
   // Audio sync hook
   useAudioSync(animation, anim);
 
@@ -1419,22 +1440,46 @@ export function TimelineEditor() {
 
         <span className="flex-1" />
 
-        {/* Animation name / selector */}
-        {animation && (
-          <span className="text-[10px] text-muted-foreground truncate max-w-[100px]" title={animation.name}>
-            {animation.name}
-          </span>
-        )}
-
-        {/* New animation */}
-        {!hasAnimation && (
-          <button
-            onClick={ensureAnimation}
-            className="text-[10px] px-2 py-0.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+        {/* Animation switcher — dropdown when ≥1 animation exists, lets user
+            A/B between motions for multi-motion preview. */}
+        {hasAnimation ? (
+          <select
+            value={anim.activeAnimationId ?? ''}
+            onChange={(e) => {
+              const id = e.target.value;
+              const a = proj.animations.find((x) => x.id === id);
+              anim.setActiveAnimationId(id);
+              if (a) {
+                const f = a.fps ?? 24;
+                anim.setFps(f);
+                anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
+                anim.seekFrame(0);
+              }
+            }}
+            className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
+            title="Active animation — switch to preview a different motion."
           >
-            + New Animation
-          </button>
-        )}
+            {proj.animations.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name ?? a.id}
+              </option>
+            ))}
+          </select>
+        ) : null}
+
+        {/* New animation — always creates a fresh clip; existing ones remain
+            available via the switcher above. */}
+        <button
+          onClick={hasAnimation ? createAnimation : ensureAnimation}
+          className={
+            hasAnimation
+              ? 'text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors'
+              : 'text-[10px] px-2 py-0.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors'
+          }
+          title="Create a new empty animation clip"
+        >
+          + New
+        </button>
 
         {/* K key hint */}
         <span className="text-[10px] text-muted-foreground border border-border/40 px-1 py-0.5 font-mono" title="Press K to keyframe selected nodes">
