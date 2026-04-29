@@ -160,6 +160,56 @@ function registerBuiltins() {
     exec: () => useSelectionStore.getState().clear(),
   });
 
+  // Delete the active selection. Only operates on project nodes
+  // (parts + groups); deformer / parameter delete needs Phase 2 / 5
+  // editor support to keep references coherent. After delete,
+  // selection clears so the empty Properties pane signals the action
+  // succeeded.
+  registerOperator({
+    id: 'selection.delete',
+    label: 'Delete Selection',
+    available: () => {
+      const items = useSelectionStore.getState().items;
+      return items.some((it) => it.type === 'part' || it.type === 'group');
+    },
+    exec: () => {
+      const items = useSelectionStore.getState().items;
+      const targetIds = items
+        .filter((it) => it.type === 'part' || it.type === 'group')
+        .map((it) => it.id);
+      if (targetIds.length === 0) return;
+      // Delete in a single immer batch by chaining deleteNode calls;
+      // each call independently snapshots for undo. For multi-select
+      // we accept N undo entries because group of N is rare.
+      const deleteNode = useProjectStore.getState().deleteNode;
+      for (const id of targetIds) deleteNode(id);
+      useSelectionStore.getState().clear();
+    },
+  });
+
+  // Toggle visibility on the active selection's project nodes.
+  registerOperator({
+    id: 'selection.toggleVisibility',
+    label: 'Toggle Visibility',
+    available: () => {
+      const items = useSelectionStore.getState().items;
+      return items.some((it) => it.type === 'part' || it.type === 'group');
+    },
+    exec: () => {
+      const items = useSelectionStore.getState().items;
+      const targetIds = items
+        .filter((it) => it.type === 'part' || it.type === 'group')
+        .map((it) => it.id);
+      if (targetIds.length === 0) return;
+      useProjectStore.getState().updateProject((proj) => {
+        for (const id of targetIds) {
+          const n = proj.nodes.find((nn) => nn.id === id);
+          if (n) n.visible = n.visible === false ? true : false;
+        }
+      });
+    },
+  });
+
   // file.new — clear the current project to its empty initial state.
   // Wraps `projectStore.resetProject` so the same code path that
   // initializes the store at first load runs here. Selection is

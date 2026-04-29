@@ -58,6 +58,16 @@ export const DEFAULT_KEYMAP = {
 
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
+
+  // Delete selected project nodes. Both Delete and Backspace are
+  // common muscle memory; bind both. (Backspace alone fires inside
+  // editable inputs anyway, but the dispatcher's editable-target
+  // check guards that case.)
+  'Delete':    'selection.delete',
+  'Backspace': 'selection.delete',
+
+  // Toggle visibility on selection. Bare H — Blender muscle memory.
+  'KeyH': 'selection.toggleVisibility',
 };
 
 /**
