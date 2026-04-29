@@ -29,7 +29,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -100,13 +100,15 @@ const DEFAULT_AREAS = () => [
 ];
 
 /**
- * Animation workspace adds a Timeline area below the center.
- * Layout: Left split | Center + TimelineBelow.
+ * Animation workspace adds a Timeline area below the center and an
+ * Animations list tab next to Properties so the user can browse /
+ * create / switch animations without leaving the workspace.
+ *
  * @returns {AreaSlot[]}
  */
 const ANIMATION_AREAS = () => [
   buildArea('leftTop',    [e('outliner'), e('parameters')]),
-  buildArea('leftBottom', [e('properties')]),
+  buildArea('leftBottom', [e('animations'), e('properties')]),
   buildArea('center',     [e('viewport')]),
   buildArea('timeline',   [e('timeline')]),
 ];
