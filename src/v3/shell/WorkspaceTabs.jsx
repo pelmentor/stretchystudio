@@ -1,26 +1,44 @@
-// @ts-check
-
 /**
- * v3 Phase 0A — Top workspace switcher.
+ * v3 Phase 0A — Top workspace switcher + integrated toolbar.
  *
- * Tabs along the top of the shell. Each tab corresponds to a workspace
- * preset (Layout / Modeling / Rigging / Pose / Animation). Clicking a
- * tab swaps the AreaTree to that workspace's saved layout.
+ * Tabs along the top of the shell select the active workspace
+ * preset (Layout / Modeling / Rigging / Pose / Animation). Right
+ * side hosts a toolbar restored from upstream's EditorLayout header
+ * (2026-04-29 user feedback: keep the upstream button suite, merge
+ * our v3 additions in):
  *
- * Plain buttons styled as tabs — no Radix Tabs primitive because
- * keyboard navigation here is going to be governed by the operator
- * dispatcher (Phase 0A.4) once the keymap exists, so we avoid baking
- * Radix's tab-keyboard semantics in.
+ *   File group:  New · Open file · Save file · Library Open · Library Save · Export
+ *   Canvas:      Canvas Properties popover
+ *   History:     Undo · Redo
+ *   Settings:    Preferences
+ *
+ * "New" guards the project with an AlertDialog when there are
+ * existing nodes — same pattern as upstream — so an accidental
+ * click doesn't blow away in-progress work.
  *
  * @module v3/shell/WorkspaceTabs
  */
 
-import { Save, FolderOpen, Undo2, Redo2, Download, Library } from 'lucide-react';
+import { useState } from 'react';
+import {
+  Save, FolderOpen, Undo2, Redo2, Download, Library, FilePlus, Settings2,
+} from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { getOperator } from '../operators/registry.js';
+import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
+import { PreferencesModal } from './PreferencesModal.jsx';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../components/ui/alert-dialog.jsx';
 
-/** @type {Array<{id: import('../../store/uiV3Store.js').WorkspaceId, label: string}>} */
 const TABS = [
   { id: 'layout',    label: 'Layout' },
   { id: 'modeling',  label: 'Modeling' },
@@ -32,8 +50,11 @@ const TABS = [
 export function WorkspaceTabs() {
   const active = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace = useUIV3Store((s) => s.setWorkspace);
-  // Subscribe to hasUnsavedChanges so the save button reflects state.
   const dirty = useProjectStore((s) => s.hasUnsavedChanges);
+  const nodeCount = useProjectStore((s) => s.project?.nodes?.length ?? 0);
+
+  const [confirmNew, setConfirmNew] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
 
   function runOp(id) {
     const op = getOperator(id);
@@ -46,11 +67,13 @@ export function WorkspaceTabs() {
     }
   }
 
+  function handleNewClick() {
+    if (nodeCount > 0) setConfirmNew(true);
+    else runOp('file.new');
+  }
+
   return (
     <div className="relative flex items-end pl-2 pr-1 h-9 bg-muted/40 select-none">
-      {/* Bottom seam: same OPNsense convention used by AreaTabBar +
-          Properties tab strip. Active tab merges into the panel below
-          via -mb-px + border-b-0; inactive tabs sit on this line. */}
       <div className="absolute left-0 right-0 bottom-0 h-px bg-border pointer-events-none" />
 
       <span className="text-xs font-semibold mr-3 mb-2 text-muted-foreground self-end">v3</span>
@@ -75,9 +98,6 @@ export function WorkspaceTabs() {
                     'hover:bg-muted/60 hover:text-foreground')
               }
             >
-              {/* Active workspace top accent — primary stripe matches
-                  AreaTabBar + Properties strip so the visual language
-                  is consistent across all three tab levels. */}
               {on ? (
                 <span
                   aria-hidden
@@ -90,16 +110,10 @@ export function WorkspaceTabs() {
         })}
       </div>
 
-      {/* Toolbar — sits on the bottom seam, no tab-look so it doesn't
-          compete visually with the workspace tabs. */}
       <div className="ml-auto mb-1 flex items-center gap-0.5">
-        <ToolbarButton title="Undo (Ctrl+Z)" onClick={() => runOp('app.undo')}>
-          <Undo2 size={14} />
+        <ToolbarButton title="New project (Ctrl+N)" onClick={handleNewClick}>
+          <FilePlus size={14} />
         </ToolbarButton>
-        <ToolbarButton title="Redo (Ctrl+Shift+Z)" onClick={() => runOp('app.redo')}>
-          <Redo2 size={14} />
-        </ToolbarButton>
-        <span className="w-px h-4 bg-border mx-1" aria-hidden />
         <ToolbarButton
           title="Open project (.stretch) — Ctrl+O"
           onClick={() => runOp('file.load')}
@@ -134,7 +148,41 @@ export function WorkspaceTabs() {
         >
           <Download size={14} />
         </ToolbarButton>
+        <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <CanvasPropertiesPopover />
+        <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <ToolbarButton title="Undo (Ctrl+Z)" onClick={() => runOp('app.undo')}>
+          <Undo2 size={14} />
+        </ToolbarButton>
+        <ToolbarButton title="Redo (Ctrl+Shift+Z)" onClick={() => runOp('app.redo')}>
+          <Redo2 size={14} />
+        </ToolbarButton>
+        <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <ToolbarButton title="Preferences" onClick={() => setPrefsOpen(true)}>
+          <Settings2 size={14} />
+        </ToolbarButton>
       </div>
+
+      <PreferencesModal open={prefsOpen} onOpenChange={setPrefsOpen} />
+
+      <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard the current project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {dirty
+                ? 'There are unsaved changes. They will be lost. Save first via Ctrl+S or "Save to library", or proceed and start fresh.'
+                : 'The current project will be cleared from the workspace. This does not affect saved files or library records.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => runOp('file.new')}>
+              Start new
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
