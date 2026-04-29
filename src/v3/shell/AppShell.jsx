@@ -27,6 +27,7 @@ import { LoadModal } from './LoadModal.jsx';
 import { ExportModal } from './ExportModal.jsx';
 import { CommandPalette } from './CommandPalette.jsx';
 import { HelpModal } from './HelpModal.jsx';
+import { Cmo3InspectModal } from './Cmo3InspectModal.jsx';
 import { ModalTransformOverlay } from './ModalTransformOverlay.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
@@ -47,6 +48,7 @@ export function AppShell() {
         <ExportModal />
         <CommandPalette />
         <HelpModal />
+        <Cmo3InspectModal />
         <ModalTransformOverlay />
       </div>
     </ErrorBoundary>

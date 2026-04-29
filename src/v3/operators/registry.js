@@ -28,6 +28,7 @@ import { useExportModalStore } from '../../store/exportModalStore.js';
 import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
+import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -278,6 +279,16 @@ function registerBuiltins() {
     id: 'file.load',
     label: 'Open Project',
     exec: () => useLibraryDialogStore.getState().openLoad(),
+  });
+
+  // Phase 5 — opens the Cmo3 inspector modal. Read-only first cut of the
+  // round-trip work: reverse-parses the CAFF container + scans main.xml
+  // for canvas / parameter / part / texture metadata. Full project ingest
+  // (vertex arrays, deformer chains, keyforms) is a follow-on sweep.
+  registerOperator({
+    id: 'file.inspectCmo3',
+    label: 'Inspect .cmo3 file…',
+    exec: () => useCmo3InspectStore.getState().openInspect(),
   });
 
   // Phase 3E — F3 command palette. Wakes up the cmdk-backed search
