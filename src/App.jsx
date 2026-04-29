@@ -6,20 +6,22 @@ import { AppShell as V3AppShell } from '@/v3/shell/AppShell';
 
 /**
  * Read the active UI version from the URL.
- *   ?ui=v3 → new Blender-style shell (Phase 0A WIP)
- *   default / ?ui=v2 → existing v2 shell
+ *   default / ?ui=v3 → Blender-style shell (current).
+ *   ?ui=v2          → legacy escape hatch for the v2-only flows that
+ *                     haven't migrated yet (advanced ExportModal,
+ *                     SaveModal/library, mesh paint, v2 TimelinePanel).
+ *                     See V3 plan §16 "v2 retirement roadmap".
  *
- * Killswitch lives at the top of the app rather than in a router so
- * v3 work stays a single conditional rather than threading a new prop
- * through dozens of components.
+ * Default flipped 2026-04-29 once v3 covered the full Initialize Rig →
+ * scrub → save → export round-trip in shelby smoke testing.
  */
 function readUiVersion() {
-  if (typeof window === 'undefined') return 'v2';
+  if (typeof window === 'undefined') return 'v3';
   try {
     const v = new URLSearchParams(window.location.search).get('ui');
-    return v === 'v3' ? 'v3' : 'v2';
+    return v === 'v2' ? 'v2' : 'v3';
   } catch {
-    return 'v2';
+    return 'v3';
   }
 }
 
