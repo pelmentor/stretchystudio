@@ -1,7 +1,8 @@
 // @ts-check
 
 /**
- * v3 Phase 0A — Root shell rendered when `?ui=v3` is set.
+ * v3 Phase 0A — Root shell. Mounted unconditionally by `App.jsx`
+ * since v2 retirement (commit `15f75e3`, 2026-04-29).
  *
  * Owns:
  *   - WorkspaceTabs along the top

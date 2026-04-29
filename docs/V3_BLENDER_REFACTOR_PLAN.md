@@ -481,7 +481,7 @@ v3 rollback при необходимости.
 
 ---
 
-### PHASE 0 — Foundation (8-10 weeks) **[STATUS: most substages shipped 2026-04-28; 0C + 0E + projectStore split pending]**
+### PHASE 0 — Foundation (8-10 weeks) **[STATUS: most substages shipped 2026-04-28; 0C partial, 0E + projectStore split pending]**
 
 Substage status:
 
@@ -489,7 +489,7 @@ Substage status:
 |----------|--------|--------|-------|
 | 0A — Shell + workspace + editor type system | ✅ shipped | `a35a9b7` | Behind `?ui=v3`; 4-area 2×2 layout; 5 workspaces; editor stubs; ErrorBoundary; operator dispatcher with Ctrl+1..5. Phase 1 fills editors. |
 | 0B — Service layer (Pillar F) | ✅ shipped | `0192d88` | RigService / ExportService / ImportService / PersistenceService façades with pure preflight functions. |
-| 0C — Coord-space type wrappers (Pillar C) | ⏳ pending | — | Touches eval pipeline; needs browser verification before landing. |
+| 0C — Coord-space type wrappers (Pillar C) | ⚠️ partial | — | TaggedBuffer wrappers + 34 tests shipped (round-2). Integration into evalRig pipeline still pending. |
 | 0D — Type checking (Pillar G) | ✅ shipped | `a3658b3` | `tsc --noEmit` runs in `npm test`. Per-file opt-in via `// @ts-check` (14 new files locked in); legacy code untouched until refactored. |
 | 0E — Vitest migration (Pillar H) | ⏳ pending | — | UI tests need jsdom; .mjs scripts can stay. |
 | 0F.1 — Pure helpers extraction | ✅ shipped | `1380fc6` | 8 utility functions out of CanvasViewport into `viewport/helpers.js` (-116 LOC). |
@@ -504,7 +504,7 @@ Substage status:
 | 0F.11 — Rig group BFS cleanup helper | ✅ shipped | `eecaf00` | `viewport/rigGroupCleanup.js`; 16 tests for ancestor walks. |
 | 0F.12 — PSD split-parts applier | ✅ shipped | `8d75afe` | `viewport/applySplits.js`; 15 tests. |
 | 0F.13–0F.40 — Test coverage backfill | ✅ shipped | various | Locked down 28 critical pure modules with ~1043 tests: transforms, animationEngine, psdOrganizer, variantNormalizer, paramValuesStore, editorStore, frameConvert, animationStore, rigSpec, faceParallaxStore, rigWarpsStore, bodyWarpStore, xmlbuilder, mesh/sample, armatureOrganizer, idle/motionLib, rotationDeformers, warpDeformers, cmo3/pngHelpers, idle/builder, motion3json, io/exportAnimation, idle/paramDefaults, cdi3json, model3json, physics3json, cmo3/PHYSICS_RULES, lib/themePresets (surfaced upstream gap: discord-light missing `secondary` color, documented in KNOWN_GAPS). |
-| 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport is now 1953 LOC (was 2243, -290). |
+| 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport sits at ~2029 LOC after 1F sprint additions (was 2243 pre-extraction). |
 | 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
 | 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
 | 0G.3 — exhaustive-deps disables (Pillar D) | ✅ shipped | `454cbba` | All 4 disables removed; pre-existing missing-deps in those files fixed too. |
@@ -525,13 +525,13 @@ infrastructure (service layer, types, error handling, undo, tooling).
 
 **New core modules:**
 
-- `src/v3/shell/AppShell.jsx` — root component conditional on `?ui=v3`
+- `src/v3/shell/AppShell.jsx` — root component (default UI since v2 retirement, 2026-04-29)
 - `src/v3/shell/WorkspaceTabs.jsx` — top tabs
-  (Layout/Modeling/Rigging/Animation)
+  (Layout/Modeling/Rigging/Animation) — round-4 OPNsense-style tab strip
 - `src/v3/shell/AreaTree.jsx` — recursive split layout (uses
   react-resizable-panels)
 - `src/v3/shell/Area.jsx` — single area, hosts an editor
-- `src/v3/shell/EditorHeader.jsx` — selector dropdown + actions
+- `src/v3/shell/AreaTabBar.jsx` — per-area tab strip (round-4 tabs-per-area model; replaced EditorHeader)
 - `src/v3/shell/editorRegistry.js` — type → component map
 - `src/v3/shell/ErrorBoundary.jsx` — Pillar S, wraps each editor area
 - `src/v3/operators/registry.js` — operator definitions
@@ -618,7 +618,7 @@ ambiguity:
 
 ---
 
-### PHASE 1 — Core Editors (5-7 weeks) **[STATUS: 4-of-5 first cuts shipped 2026-04-29]**
+### PHASE 1 — Core Editors (5-7 weeks) **[STATUS: 4-of-5 first cuts shipped 2026-04-29; 1F pipeline-stability sprint shipped 2026-04-29]**
 
 Substage status:
 
@@ -750,6 +750,69 @@ Will choose root cause based on debugger output.
 
 **Phase 1 deliverables:** ~80 new files, ~12000 LOC. Tag
 `v3-phase-1-complete`. R6 coord bug fixed.
+
+---
+
+### PHASE 1F — Pipeline Stability Sprint (2026-04-29) **[STATUS: shipped]**
+
+Unplanned hardening pass that landed between the Phase 1 first cuts and
+Phase 2 work. The shelby.psd smoke test surfaced multiple coord-pipeline
+bugs at the seams between the new Coord-Space Debugger (1C.1), the
+extended Viewport (1C.0), and the live param scrubber (1D / R9 physics).
+Each substage was a focused fix with diagnostic-first methodology rather
+than a planned editor cut.
+
+| Substage | Status | Commit | Notes |
+|----------|--------|--------|-------|
+| 1F.1 SkeletonOverlay pointer-events | ✅ shipped | `bae1ef2` | SVG parent had `pointerEvents:'none'`; child joint `<circle>` and iris `<rect>` were not overriding. Fix: set `pointerEvents:'visiblePainted'` on each. Restored joint click + iris trackpad in v3 viewport. |
+| 1F.4 bone-baked artParent in rigSpec | ✅ shipped | `942bc30` | Arms chained to `rotation:<jointBoneId>` deformers that the boneParamGuids skip path never created → 18 broken chains in chainDiagnose HUD. Fix mirrors XML fallback: parent to `GroupRotation_<armGroup>` if it has a deformer, else root with canvas-px re-encoded keyforms. shelby went from 18/2 to 20/0 broken-chain count. |
+| 1F.5 chainEval anisotropic warp-parent scale | ✅ shipped | `2cf81c0` | Phase 1E's `1/canvasMaxDim` was guessed from Cubism shelby.moc3 binary diff but only matches Hiyori's body-warp-spans-canvas geometry. For shelby the actual `canvasToInnermostX/Y` slope is ~5× larger → face/arms shrunk toward body axis. Fix: read slope from `rigSpec.canvasToInnermostX/Y` (already exposed by cmo3writer) at evalRig start; apply anisotropic per-axis via new `buildRotationMat3Aniso` helper. Falls back to 1/cmd when canvasToInnermost is null (synthetic test rigSpecs). User confirmed: "Работает, персонаж ПОЛНЫЙ". |
+| 1F.6 Live Preview / Edit-mode separation | ✅ shipped | `d875f72` | New `livePreviewActive` flag in editorStore. Edit mode (default): physics tick + breath + cursor look gated off; sliders are the only writers to paramValuesStore — they don't dance during editing. Live Preview mode: physics runs, ParamBreath auto-cycles at Cubism's ~3.345s standard, LMB-drag drives ParamAngleX/Y/Z (±30°). Toggle button + status text in ParametersEditor header. Snapshot/restore around the session preserves slider values. |
+
+**Why this sprint exists:** Phase 1's first cuts were architecturally
+correct but the integrated viewport had four orthogonal pipeline bugs
+that only show up on a real PSD with arms + non-square canvas. Without
+this hardening pass, Phase 2 would have been built on a viewport where
+arms fly off / face vanishes / sliders bounce, masking real Phase 2 bugs.
+
+**Methodology:** Coord-Space Debugger (1C.1) was the load-bearing tool —
+each fix started with `dump` table inspection, not source diving. 1F.4
+and 1F.5 were diagnosed entirely from HUD output before touching a file.
+
+**Follow-ups deferred to later sprints:**
+- 1F.2 Initialize Rig options dialog (skip-hair / skip-physics / etc.)
+- 1F.7 Residual param-bouncing diagnosis if any reports come in
+
+---
+
+### PHASE 1G — Basic Save/Load (IndexedDB) **[STATUS: planned]**
+
+**Why:** v2 retirement (commit `15f75e3`, 2026-04-29) deleted
+`LoadModal` / `SaveModal` / `ProjectGallery` (IndexedDB-backed in-app
+project save/load). User flagged the gap same day — saving a project
+to disk is fine but the in-app library is gone. Phase 5 has the
+gallery with thumbnails on the roadmap but that's months out; basic
+save/load is a small surface we can ship now.
+
+**Scope:** Minimum viable IndexedDB persistence — no thumbnails, no
+gallery UI. Just "save current project under a name" / "list saved
+projects" / "load by id". Phase 5 supersedes this with the full
+gallery + thumbnails + per-project metadata.
+
+**Files:**
+- `src/io/projectDB.js` — IndexedDB layer: `saveToDB(name, project)`,
+  `loadFromDB(id)`, `listProjects()`, `deleteFromDB(id)`. One
+  object store, key = uid, value = `{ id, name, savedAt, project }`.
+- `src/services/PersistenceService.js` — extend with
+  `saveToLibrary` / `loadFromLibrary` / `listLibrary` over projectDB.
+- `src/v3/operators/registry.js` — `file.saveToLibrary` (prompts for
+  name) + `file.loadFromLibrary` (modal picker list) +
+  `file.deleteFromLibrary`.
+- UI entries in `WorkspaceTabs` toolbar (no Ctrl+S binding —
+  Ctrl+S stays file-export-to-disk).
+
+**Deliverables:** ~5 new files, ~400 LOC. Restores the in-app
+save/load surface that v2 had.
 
 ---
 
@@ -1721,16 +1784,16 @@ from character geometry, not hardcoded Hiyori values".
 - Default tag set остаётся (humanoid archetype) but extensible
 - Per-character override через project templates
 
-### S — No ErrorBoundary
+### S — No ErrorBoundary **[STATUS: ✅ shipped 0F.6 / commit `cf6aed4`]**
 
-`grep ErrorBoundary` returns 0 files. Single React error tears down
-the whole app. На rich UI (10+ panels v3) это disaster.
+Originally: `grep ErrorBoundary` returned 0 files. Single React error tore
+down the whole app. На rich UI (10+ panels v3) — disaster.
 
-**Refactor Phase 0:**
-- Wrap each editor area в `<ErrorBoundary>`
-- Crash UI: "This editor crashed. Restart it." с button reset
-- Captured error logged to Performance Profiler editor
-- Critical for v3 stability с 10+ editor types
+Resolved in Phase 0F.6: `src/components/ErrorBoundary.jsx` shared
+between v2 and v3. v3 wraps each `Area` editor in its own boundary so
+a single editor crash shows a recoverable "This editor crashed. Restart
+it." UI without taking down the rest of the workspace. Captured-error →
+Performance Profiler logging is a Phase 4B follow-up.
 
 ### T — No i18n
 
@@ -1823,7 +1886,7 @@ Two-step retirement:
 
 - **Step 1** (commit `44a4d40`) — default UI flipped from v2 to v3.
   `?ui=v2` stayed as legacy escape hatch.
-- **Step 2** (commit pending) — full v2 deletion. `App.jsx` now
+- **Step 2** (commit `15f75e3`, 2026-04-29) — full v2 deletion. `App.jsx` now
   unconditionally renders `<V3AppShell />`; `readUiVersion` and the
   `?ui=v2` branch are gone.
 
@@ -1864,7 +1927,8 @@ chunk; CSS 108 → 98 kB. typecheck + 72/72 test files green.
 | Feature | When | Phase target |
 |---------|------|--------------|
 | Advanced export dialog (atlas size, motion presets, per-physics-category toggles, model name) | required for production exports beyond defaults | Phase 5 — `file.export` gains a dialog operator |
-| Save-to-library (IndexedDB record + thumbnail + named projects) | required for project library workflow | Phase 5 — `file.save_to_library` operator + LoadModal v3 equivalent |
+| Basic save/load (IndexedDB, named projects, no thumbnails) | required to restore the in-app library workflow lost at retirement | Phase 1G — `file.saveToLibrary` / `file.loadFromLibrary` operators (see PHASE 1G section above) |
+| Save-to-library + gallery (IndexedDB record + thumbnail + named projects + visual browser) | full library workflow with visual picker | Phase 5 — `file.save_to_library` operator with thumbnail capture + LoadModal/ProjectGallery v3 equivalent |
 | Wizard joint adjust (drag bone pivots) — already broken at v2 deletion | replaces broken v2 click | Phase 1A++ — `layout.move_bone_pivot` operator with viewport gizmo |
 | Mesh paint mode (brush-based vertex / blend-shape deltas) | advanced rigging — niche workflow | Phase 2C — BlendShape paint editor |
 | Animation Timeline panel (keyframe edit UI) | required for animation editing | Phase 3 — v3 `TimelineEditor` (currently stub) |
