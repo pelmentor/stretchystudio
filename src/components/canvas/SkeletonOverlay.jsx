@@ -398,9 +398,22 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     // Commit skinning draft pose on drag end
     if (drag?.type === 'rotate' && drag.dependentParts?.length > 0) {
       if (!drag.isAnimMode) {
-        // Staging mode: commit deformed verts into the base mesh so the
-        // next drag starts from the correct deformed position,
-        // then clear the draft so the GPU upload restores from base mesh.
+        // Staging mode commit: write the deformed verts into the part's
+        // base mesh so the next drag starts from the new pose AND the
+        // saved project reflects the user's edit.
+        //
+        // 2026-04-29 fix: the draft pose is intentionally LEFT in place
+        // (was previously cleared on release). Clearing it caused a
+        // one-frame "rest pose" flash because the rig evaluator runs
+        // every frame and — when no draft override is present —
+        // overwrites poseOverrides.mesh_verts with rigSpec-baked rest
+        // verts (rigSpec.artMeshes is not re-baked by a single bone-skin
+        // commit). Leaving the draft means CanvasViewport's tick keeps
+        // the new verts in poseOverrides, chainEval respects them, and
+        // the visual stays continuous across release. Re-running
+        // Initialize Rig later rebuilds rigSpec from the committed
+        // mesh.vertices and resets paramValues; the lingering draft is
+        // safe because its mesh_verts match the new rest.
         for (const dep of drag.dependentParts) {
           const latestVerts = useAnimationStore.getState().draftPose.get(dep.partId)?.mesh_verts;
           if (latestVerts) {
@@ -409,7 +422,6 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
               if (pt?.mesh) pt.mesh.vertices = latestVerts.map(v => ({ ...v }));
             });
           }
-          clearDraftPoseForNodeRef.current(dep.partId);
         }
       }
       // Animation mode: leave draft pose in place — user commits with K key
