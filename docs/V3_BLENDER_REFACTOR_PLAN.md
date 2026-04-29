@@ -863,7 +863,7 @@ Immer overlay) and Pillar Z (move `animationEngine.js` from
 | 3A.1 Param keyframe plumbing | ✅ shipped | `93aa1e4` | `track.paramId` was already supported by motion3json + can3writer exporters but engine / viewport / UI didn't drive it. 4-file plumbing landed: `animationEngine.js` adds `computeParamOverrides` + `setParamKeyframeAt`; `CanvasViewport` merges param overrides into `valuesForEval` before chainEval; `ParamRow` auto-keyframes in animation mode + autoKeyframe; TimelineEditor displays param rows on top of node rows. |
 | 3B Dopesheet Editor | ✅ shipped (first cut) | sweep #2 | `DopesheetEditor.jsx` registered as `dopesheet` editor type, paired with Timeline tab in the Animation workspace. One row per track (param + node) with a tick per keyframe + a ruler. Click a tick or anywhere on the timeline to seek. Read-only: editing still happens through Timeline / auto-keyframe. |
 | 3C Keyform Graph Editor | ⏳ pending | — | Rig keyform interpolation curves (LINEAR / BEZIER), drag bezier handles, per-deformer view. |
-| 3D Animation F-curve Editor | ⏳ pending | — | Animation track curves over TIME (motion3): BEZIER / STEP / CONSTANT. Multi-curve overlay for simultaneous view of multiple parameters. |
+| 3D Animation F-curve Editor | ✅ shipped (read-only first cut) | sweep #3 | `FCurveEditor.jsx` plots one track's value-over-time curve via live `interpolateTrack()`, picks track from selection (parameter / part / group). 240 sample points, keyframe diamonds + playhead + click-to-seek. Read-only first cut; drag-handle bezier editing deferred. |
 | 3E F3 Operator Search Palette | ✅ shipped | sweep #2 | `CommandPalette.jsx` cmdk dialog. F3 toggles. Recent group (5 entries, persisted via `commandPaletteStore` + localStorage), All operators group with chord hints. Greyed when `op.available()` returns false. |
 | 3F Modal operator polish | ✅ shipped (first cut, see 2H) | sweep #2 | Axis constrain (X/Y) + Shift snap shipped via 2H modal G/R/S. Numeric typed input + grid-snap operator-side deferred. ParamRow's right-click / double-click → reset-to-default (commit `76fa3e0`) covers the parameter-side reset gesture. |
 | AnimationsEditor (new editor type) | ✅ shipped | `1264e27` | Bonus deliverable not in original plan. Lists every animation with create / inline rename / delete (with confirm) / click-to-switch. Active row highlighted, duration shown in seconds. Animation workspace's leftBottom area pairs it with Properties as tabs. |
@@ -907,18 +907,19 @@ Migration safety (Pillar K alongside):
 fontsource / app. Lazy-load editors (each editor type = own chunk).
 Bundle budget: main chunk < 500 KB gzip.
 
-#### 4H — PWA hygiene (Pillar Y)
+#### 4H — PWA hygiene (Pillar Y) **[STATUS: manifest + meta shipped sweep #3; SW caching deferred]**
 
-Audit PWA manifest + SW configuration:
-- Offline shell: editors load cached, project data из IndexedDB
-- Install prompt UI
-- "New version available, reload" notification
+- ✅ `public/manifest.webmanifest` — name / short_name / description / start_url / display: standalone / theme_color / icons. Browsers (Chrome / Edge / Safari) recognise the app as installable.
+- ✅ `<link rel="manifest">` + `theme-color` + Apple-specific meta in `index.html`.
+- ⏳ Service-worker caching for offline shell: deferred — hand-rolled SW lifecycle without a tested integration risks shipping stale assets. Future pass adopts vite-plugin-pwa.
+- ⏳ Install prompt UI / "new version available" notification: deferred until SW lands.
 
-#### 4I — Theme audit (Pillar L)
+#### 4I — Theme audit (Pillar L) **[STATUS: overlay + sparkline pass shipped sweep #3]**
 
-Audit все components, replace hardcoded colors с CSS variables.
-`themePresets.js` остаётся как data, consumed единообразно через
-theme system.
+- ✅ `WarpDeformerOverlay`, `RotationDeformerOverlay`, `PerformanceEditor` sparkline: replaced `rgb(...)` literals with `currentColor` / Tailwind utility classes (`text-amber-400`, `text-sky-400`, `stroke-slate-900/85`, `stroke-muted-foreground/25`). SVG fill / stroke now flow through Tailwind so theme presets re-skin overlays without rewriting rgb literals.
+- ⏳ Full sweep across every component for hardcoded colors deferred — Timeline shadow / glow effects (`shadow-[0_0_15px_rgba(var(--primary)...)]`) already use CSS variables, but a complete `themePresets.js` audit is its own pass.
+
+`themePresets.js` остаётся как data, consumed единообразно через theme system.
 
 #### 4J — i18n infrastructure (Pillar T)
 
@@ -1494,6 +1495,20 @@ each phase was scoped to; full polish (standalone editors, modal
 operator suites, parity harness, bundle splitting, PWA, i18n)
 remains for the second pass. Tags `v3-phase-N-complete` reserved
 for that polish round.
+
+---
+
+### 2026-04-29 — Phase first-cut sweep #3 (autonomous)
+
+After sweep #2 the user said *"Продолжаем"*. Three more first cuts:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 3D | Animation F-curve editor. `FCurveEditor.jsx` registered as `fcurve` editor type, paired in the Animation workspace's timeline area alongside Timeline + Dopesheet. Plots one selected track's value-over-time curve via `interpolateTrack()` on 240 samples; keyframe diamonds overlay; click-to-seek on canvas + on diamond. Read-only first cut. |
+| 4I | Theme audit (overlays + sparkline). Replaced `rgb(...)` literals in WarpDeformerOverlay / RotationDeformerOverlay / PerformanceEditor sparkline with `currentColor` + Tailwind utility classes so SVG colours participate in dark mode + theme-preset overrides. |
+| 4H | PWA manifest + meta. `public/manifest.webmanifest` + `<link rel="manifest">` + `theme-color` + Apple-specific meta in `index.html`. Browsers can install the app as standalone. SW caching + install-prompt UI deferred. |
+
+**Phase coverage after sweep #3:** Phase 3 (3A/A.1/B/D/E/F-lite shipped, only 3C Keyform Graph remains); Phase 4 (4B/C/D/E/F/G/H-lite/I-lite shipped, only 4A parity + 4J i18n remain — and 4H/4I have follow-ups).
 
 ---
 
