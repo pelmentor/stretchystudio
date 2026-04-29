@@ -16,12 +16,12 @@
  */
 
 import {
-  PropertiesEditor,
   ParametersEditor,
   TimelineEditor,
 } from '../editors/stubs.jsx';
 import { OutlinerEditor } from '../editors/outliner/OutlinerEditor.jsx';
 import { ViewportEditor } from '../editors/viewport/ViewportEditor.jsx';
+import { PropertiesEditor } from '../editors/properties/PropertiesEditor.jsx';
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
