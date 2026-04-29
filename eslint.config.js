@@ -29,6 +29,11 @@ export default [
       ...react.configs['jsx-runtime'].rules,
       ...reactHooks.configs.recommended.rules,
       'react/jsx-no-target-blank': 'off',
+      // The codebase is migrating to TypeScript-checked JSDoc via per-file
+      // `// @ts-check` (Phase 0D). prop-types would be parallel-track noise:
+      // 583 lint errors on a codebase that has zero runtime prop-types
+      // imports and no intent to add them. Off.
+      'react/prop-types': 'off',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },
