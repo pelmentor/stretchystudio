@@ -475,7 +475,18 @@ export default function CanvasViewport({
             // Don't overwrite an animation/draft override that's already there;
             // those are the user's explicit edit. Rig eval is the default base.
             if (!existing.mesh_verts) {
-              poseOverrides.set(f.id, { ...existing, mesh_verts: verts });
+              const update = { ...existing, mesh_verts: verts };
+              // Variant fade fix (2026-04-29): chainEval returns a per-mesh
+              // opacity from cellSelect-blended keyforms (variant fade-in,
+              // base crossfade-out, etc). Without writing it to poseOverrides
+              // the renderer falls back to `node.opacity = 1`, so the variant
+              // mesh is permanently visible at full opacity regardless of
+              // Param<Suffix>. Honor existing.opacity if a draft/keyframe
+              // already set it.
+              if (existing.opacity === undefined && typeof f.opacity === 'number') {
+                update.opacity = f.opacity;
+              }
+              poseOverrides.set(f.id, update);
               rigDrivenParts.add(f.id);
             }
           }
