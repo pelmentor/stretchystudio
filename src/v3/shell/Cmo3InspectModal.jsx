@@ -31,6 +31,7 @@ import { inspectCmo3 } from '../../io/live2d/cmo3Inspect.js';
 import { importCmo3 } from '../../io/live2d/cmo3Import.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
+import { useRigSpecStore } from '../../store/rigSpecStore.js';
 
 export function Cmo3InspectModal() {
   const open = useCmo3InspectStore((s) => s.open);
@@ -69,7 +70,19 @@ export function Cmo3InspectModal() {
     try {
       const { project, warnings, stats } = await importCmo3(bytes);
       useProjectStore.getState().loadProject(project);
-      const summary = `Imported ${stats.parts} parts, ${stats.groups} groups, ${stats.textures} textures, ${stats.parameters} parameters` +
+
+      // Auto-build the rigSpec so the v3 viewport picks up parameter
+      // bindings immediately — without this the user would see a static
+      // reference scene and have to click Initialize Rig themselves to
+      // get param-driven deformations. Imported projects already carry
+      // rigWarps + boneRoles + maskConfigs + variants, so the writer's
+      // rigOnly path produces the rigSpec without prompting.
+      const rigSpec = await useRigSpecStore.getState().buildRigSpec();
+      const rigSummary = rigSpec
+        ? ` · rig: ${rigSpec.warpDeformers?.length ?? 0} warps, ${rigSpec.rotationDeformers?.length ?? 0} rotations, ${rigSpec.artMeshes?.length ?? 0} art meshes`
+        : ' · rigSpec build failed (see console)';
+
+      const summary = `Imported ${stats.parts} parts, ${stats.groups} groups, ${stats.textures} textures, ${stats.parameters} parameters${rigSummary}` +
         (warnings.length > 0 ? ` (${warnings.length} warning${warnings.length === 1 ? '' : 's'})` : '');
       // Use the inspector-store's message channel to surface it. Closes
       // the modal after a brief moment so the user sees the loaded scene.

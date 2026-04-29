@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #19 (autonomous)
+
+Sweep #18 finished the data side; sweep #19 closes the UX gap. The "Import as new project" button in `Cmo3InspectModal.jsx` was loading the project but NOT building the rigSpec — users saw a static reference scene and had to click Initialize Rig themselves to get param-driven deformations. With imported projects now carrying rigWarps + boneRoles + maskConfigs + variants, the rig is fully buildable post-import; the modal should just trigger that itself.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` import auto-builds rigSpec. `Cmo3InspectModal.jsx`'s `handleImportAsProject` calls `useRigSpecStore.getState().buildRigSpec()` after `loadProject`, and folds the result into the success summary (`Imported X parts, Y groups … · rig: N warps, M rotations, K art meshes`). When buildRigSpec fails the message includes "rigSpec build failed (see console)" instead. End-to-end verified against `shelby.cmo3` via `verify_full_import_to_rigspec.mjs`: 26 warpDeformers (4 body chain + NeckWarp + FaceParallaxWarp + 18 per-mesh rigWarps + 2 inline-emitted for handwear-l/r), 9 rotationDeformers (FaceRotation + 8 GroupRotation_<projectGroupId>), 20 artMeshes (matches part count). The path is the same one the writer's auto-rig pipeline takes during `Initialize Rig` — the import just pre-runs it so the v3 viewport gets a working rig immediately. |
+
+**Phase coverage after sweep #19:** the .cmo3 round-trip pipeline is now end-to-end self-driving — drop a `.cmo3`, click Import, see param-driven deformations in the v3 viewport without further button presses. Pending pieces on this line: physics rules (cmo3-embedded path; shelby has none, so this is a "when we hit a model that needs it" follow-up), bone-baked angles (per-mesh CWarpDeformerForm + ParamRotation_<role> binding decode; shelby's auto-rig doesn't bake bone keyforms by default). Other entirely-pending items: 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #18 (autonomous)
 
 Sweep #17 finished masks; sweep #18 wires up variants. Imported parts whose name carries a `.suffix` (`face.smile`, `topwear.winter`, etc.) need `variantOf` + `variantSuffix` populated so the writer's variant fade logic on re-export crossfades them against their base — name-suffix detection isn't enough by itself.
