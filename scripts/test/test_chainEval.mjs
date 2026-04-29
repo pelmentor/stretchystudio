@@ -236,10 +236,20 @@ const f64 = (xs) => new Float64Array(xs);
     'unknown parent: positions unchanged (treated as root)');
 }
 
-// ── Two-deep chain: rotation under warp ──
+// ── Two-deep chain: rotation under warp (canonical pivot-relative-canvas-px) ──
 {
+  // Canonical convention from cmo3writer + moc3writer:
+  //   - Mesh keyform positions are CANVAS-PX offsets from the rotation's
+  //     pivot (not 0..1 of the warp's domain). The rotation matrix
+  //     multiplies its linear part by `1 / canvasMaxDim` when its parent
+  //     is a warp, converting those pixel offsets into the warp's
+  //     normalized 0..1 input. Origin stays in normalized.
+  //
+  //   moc3writer.js:1213 emits `rotation_deformer_keyform.scales = 1/canvasMaxDim`
+  //   for warp-parented rotations; chainEval mirrors that here.
   const restGrid = f64([0, 0, 100, 0, 0, 100, 100, 100]);
   const rigSpec = {
+    canvas: { w: 100, h: 100 }, // canvasMaxDim = 100 → scale = 0.01
     warpDeformers: [{
       id: 'OuterW',
       parent: { type: 'root', id: null },
@@ -256,7 +266,7 @@ const f64 = (xs) => new Float64Array(xs);
       keyforms: [{
         keyTuple: [],
         angle: 0,
-        originX: 0.5, // pivot in OuterW's domain (0..1) — i.e. canvas (50, 50)
+        originX: 0.5, // pivot in OuterW's normalized domain
         originY: 0.5,
         scale: 1,
         opacity: 1,
@@ -265,9 +275,97 @@ const f64 = (xs) => new Float64Array(xs);
     artMeshes: [{
       id: 'mesh',
       parent: { type: 'rotation', id: 'R' },
-      // The mesh's positions are in pivot-relative offsets *within* R's frame.
-      // R's frame is OuterW's domain (0..1). So a "0.1 offset" from origin (0.5, 0.5)
-      // would map to OuterW's input (0.6, 0.5), then bilinearFFD → canvas (60, 50).
+      // 10 px to the right of pivot, in canvas-px scale (matches cmo3writer
+      // convention `verts = canvasVerts - dfOrigin`).
+      localFrame: 'pivot-relative',
+      bindings: [],
+      keyforms: [{ keyTuple: [], vertexPositions: f32([10, 0]), opacity: 1 }],
+      drawOrder: 500,
+    }],
+  };
+  const frame = evalRig(rigSpec, {})[0];
+  // Step 1: artMesh positions = (10, 0) [pivot-relative canvas-px]
+  // Step 2: R at angle=0 with parent=warp → matrix = scale(0.01) + origin(0.5, 0.5):
+  //         (10, 0) → (10*0.01 + 0.5, 0*0.01 + 0.5) = (0.6, 0.5) [normalized]
+  // Step 3: bilinearFFD(restGrid, 1×1, 0.6, 0.5) → (60, 50) canvas-px
+  assert(arrEq(frame.vertexPositions, [60, 50], 1e-5),
+    'two-deep chain: rotation→warp applies 1/canvasMaxDim scale');
+}
+
+// ── Regression: rotation under warp WITHOUT canvasMaxDim scaling = wrong ──
+{
+  // Confirms the bug fix: same chain as above but without the canvas
+  // dim, the scale defaults to 1 (no conversion) → output stays in
+  // pixel magnitudes that the warp interprets as 0..1 → ~corner clamp.
+  // We verify the FIXED behavior diverges from the unscaled case.
+  const restGrid = f64([0, 0, 1000, 0, 0, 1000, 1000, 1000]); // 1000-px canvas
+  const rigSpec = {
+    canvas: { w: 1000, h: 1000 }, // canvasMaxDim = 1000
+    warpDeformers: [{
+      id: 'OuterW',
+      parent: { type: 'root', id: null },
+      gridSize: { rows: 1, cols: 1 },
+      baseGrid: restGrid,
+      localFrame: 'canvas-px',
+      bindings: [],
+      keyforms: [{ keyTuple: [], positions: restGrid, opacity: 1 }],
+    }],
+    rotationDeformers: [{
+      id: 'R',
+      parent: { type: 'warp', id: 'OuterW' },
+      bindings: [],
+      keyforms: [{
+        keyTuple: [],
+        angle: 0,
+        originX: 0.4,  // pivot at (400, 400) canvas in normalized
+        originY: 0.4,
+        scale: 1,
+        opacity: 1,
+      }],
+    }],
+    artMeshes: [{
+      id: 'mesh',
+      parent: { type: 'rotation', id: 'R' },
+      localFrame: 'pivot-relative',
+      bindings: [],
+      // 100 px right + 50 px up of the pivot (canvas-px offsets).
+      keyforms: [{ keyTuple: [], vertexPositions: f32([100, -50]), opacity: 1 }],
+      drawOrder: 500,
+    }],
+  };
+  const frame = evalRig(rigSpec, {})[0];
+  // Step 1: (100, -50) pivot-relative-px
+  // Step 2: scale 0.001 → (0.1, -0.05); + origin (0.4, 0.4) → (0.5, 0.35)
+  // Step 3: bilinearFFD on 1000-px restGrid at (0.5, 0.35) → (500, 350)
+  assert(arrEq(frame.vertexPositions, [500, 350], 1e-3),
+    'regression: rotation→warp scale converts canvas-px → normalized');
+}
+
+// ── No canvas in spec: fallback scale=1 (legacy behavior preserved) ──
+{
+  const restGrid = f64([0, 0, 100, 0, 0, 100, 100, 100]);
+  const rigSpec = {
+    // no canvas field — older fixtures
+    warpDeformers: [{
+      id: 'OuterW',
+      parent: { type: 'root', id: null },
+      gridSize: { rows: 1, cols: 1 },
+      baseGrid: restGrid,
+      localFrame: 'canvas-px',
+      bindings: [],
+      keyforms: [{ keyTuple: [], positions: restGrid, opacity: 1 }],
+    }],
+    rotationDeformers: [{
+      id: 'R',
+      parent: { type: 'warp', id: 'OuterW' },
+      bindings: [],
+      keyforms: [{
+        keyTuple: [], angle: 0, originX: 0.5, originY: 0.5, scale: 1, opacity: 1,
+      }],
+    }],
+    artMeshes: [{
+      id: 'mesh',
+      parent: { type: 'rotation', id: 'R' },
       localFrame: 'pivot-relative',
       bindings: [],
       keyforms: [{ keyTuple: [], vertexPositions: f32([0.1, 0]), opacity: 1 }],
@@ -275,12 +373,10 @@ const f64 = (xs) => new Float64Array(xs);
     }],
   };
   const frame = evalRig(rigSpec, {})[0];
-  // Step 1: artMesh positions = (0.1, 0) [pivot-relative in R's frame]
-  // Step 2: Rotation R at angle=0 → mat3 = identity * S(1) + translation (0.5, 0.5).
-  //         (0.1, 0) → (0.6, 0.5) [normalized in OuterW's domain]
-  // Step 3: bilinearFFD(restGrid, 0.6, 0.5) → (60, 50) canvas-px
+  // canvasMaxDim falls back to 1 → scale 1 → input passes through.
+  // (0.1, 0) + (0.5, 0.5) = (0.6, 0.5) → bilinear → (60, 50)
   assert(arrEq(frame.vertexPositions, [60, 50], 1e-5),
-    'two-deep chain: rotation under warp composes correctly');
+    'no-canvas fallback: scale=1 keeps legacy behavior');
 }
 
 // ── Output is fresh Float32Array (no aliasing of keyform buffer) ──

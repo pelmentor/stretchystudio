@@ -173,12 +173,36 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
  * tagged union — `{kind:'warp', grid, gridSize}` or
  * `{kind:'rotation', mat}` — so the chain walker can dispatch with a
  * single switch.
+ *
+ * **Pixel→normalised conversion at warp boundaries.** When a rotation
+ * deformer's parent is a warp, its child verts arrive in pivot-relative
+ * canvas pixels (offsets from the rotation's pivot in canvas-px scale)
+ * but the warp's bilinearFFD expects 0..1 of its grid bbox. The .moc3
+ * binary file carries this conversion in
+ * `rotation_deformer_keyform.scales = 1 / canvasMaxDim` for warp-parented
+ * rotations (see `moc3writer.js:1210` + the binary diff vs Cubism's
+ * shelby.moc3 baseline).
+ *
+ * The .cmo3 XML always emits scale=1.0 — the conversion is not in the
+ * spec the evaluator reads. Without this scaling the rotation matrix
+ * produces canvas-px output that the next-step warp interprets as
+ * 0..1 → values way outside [0,1] → bilinearFFD clamps / extrapolates
+ * → meshes render at canvas extremes (the v2 R6 "arms fly off" symptom).
+ *
+ * Fix: when constructing the rotation state, look at `spec.parent.type`
+ * and bake `1 / canvasMaxDim` into the matrix's linear part. Origin
+ * stays untouched — it's already in the parent warp's normalised
+ * 0..1 frame (cmo3writer line ~3290 converts it during re-parenting).
  */
 class DeformerStateCache {
   constructor(rigSpec, paramValues) {
     this._rigSpec = rigSpec;
     this._paramValues = paramValues ?? {};
     this._byId = new Map();
+    // Cache the canvas-px → warp-normalised scale once per call.
+    const w = rigSpec?.canvas?.w ?? 0;
+    const h = rigSpec?.canvas?.h ?? 0;
+    this._canvasMaxDim = Math.max(w, h) || 1;
   }
 
   getState(spec) {
@@ -196,7 +220,18 @@ class DeformerStateCache {
         if (grid) state = { kind: 'warp', grid, gridSize: spec.gridSize };
       } else if (first && (typeof first.angle === 'number' || typeof first.originX === 'number')) {
         const r = evalRotation(spec, cell);
-        if (r) state = { kind: 'rotation', mat: buildRotationMat3(r) };
+        if (r) {
+          // Apply the parent-frame conversion — see class doc above.
+          const parentFrameScale = spec.parent?.type === 'warp'
+            ? 1 / this._canvasMaxDim
+            : 1;
+          // Compose: outerScale × R × innerScale-and-reflect on the linear
+          // part; origin is left in the parent's frame.
+          const rState = parentFrameScale === 1
+            ? r
+            : { ...r, scale: (r.scale ?? 1) * parentFrameScale };
+          state = { kind: 'rotation', mat: buildRotationMat3(rState) };
+        }
       }
     }
     this._byId.set(spec.id, state);
