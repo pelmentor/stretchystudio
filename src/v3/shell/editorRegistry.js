@@ -21,6 +21,7 @@ import { ViewportEditor } from '../editors/viewport/ViewportEditor.jsx';
 import { PropertiesEditor } from '../editors/properties/PropertiesEditor.jsx';
 import { ParametersEditor } from '../editors/parameters/ParametersEditor.jsx';
 import { AnimationsEditor } from '../editors/animations/AnimationsEditor.jsx';
+import { PerformanceEditor } from '../editors/performance/PerformanceEditor.jsx';
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
@@ -38,6 +39,7 @@ export const EDITOR_REGISTRY = {
   parameters: { label: 'Parameters', component: ParametersEditor },
   timeline:   { label: 'Timeline',   component: TimelineEditor },
   animations: { label: 'Animations', component: AnimationsEditor },
+  performance: { label: 'Performance', component: PerformanceEditor },
 };
 
 /** Stable ordered list for header dropdowns. */

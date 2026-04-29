@@ -29,7 +29,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
