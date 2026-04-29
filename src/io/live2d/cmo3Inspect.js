@@ -30,6 +30,8 @@
  */
 
 import { unpackCaff } from './caffUnpacker.js';
+import { parseCmo3Xml } from './cmo3XmlParser.js';
+import { extractScene } from './cmo3PartExtract.js';
 
 /**
  * @typedef {Object} ParamMetadata
@@ -42,6 +44,8 @@ import { unpackCaff } from './caffUnpacker.js';
  */
 
 /**
+ * @typedef {import('./cmo3PartExtract.js').ExtractedScene} ExtractedScene
+ *
  * @typedef {Object} Cmo3Metadata
  * @property {string|null} modelName
  * @property {number|null} canvasW
@@ -53,7 +57,15 @@ import { unpackCaff } from './caffUnpacker.js';
  * @property {number} textureCount               CModelImage occurrences
  * @property {ParamMetadata[]} parameters
  * @property {string[]} pngFiles                 file names of the PNG entries embedded in the CAFF
+ * @property {ExtractedScene|null} scene         Phase-9 deliverable: parts / groups / textures structurally decoded
  * @property {string[]} warnings
+ */
+
+/**
+ * @typedef {Object} InspectOptions
+ * @property {boolean} [extractScene=true]   set false to skip the XStream parse
+ *                                           + tree walk for callers that only
+ *                                           need header counts (cheaper).
  */
 
 /**
@@ -173,6 +185,20 @@ function countTag(xml, tag) {
 }
 
 /**
+ * Count only concrete shared-object definitions of a tag (those with
+ * `xs.id="#NNN"`). Filters out `xs.ref` back-references, which the
+ * naive `countTag` would conflate. Used for accurate part / group /
+ * texture counts.
+ *
+ * @param {string} xml
+ * @param {string} tag
+ */
+function countDefinitions(xml, tag) {
+  const re = new RegExp(`<${tag}\\s+[^>]*?xs\\.id="`, 'g');
+  return (xml.match(re) ?? []).length;
+}
+
+/**
  * Inspect a `.cmo3` byte buffer.
  *
  * Resolves the CAFF container, finds `main.xml`, and returns a structured
@@ -186,9 +212,11 @@ function countTag(xml, tag) {
  * snapshot.
  *
  * @param {Uint8Array | ArrayBuffer} bytes
+ * @param {InspectOptions} [opts]
  * @returns {Promise<Cmo3Metadata>}
  */
-export async function inspectCmo3(bytes) {
+export async function inspectCmo3(bytes, opts = {}) {
+  const { extractScene: doExtractScene = true } = opts;
   const archive = await unpackCaff(bytes);
   const xmlEntry = archive.files.find((f) => f.path === 'main.xml');
   if (!xmlEntry) {
@@ -221,14 +249,35 @@ export async function inspectCmo3(bytes) {
     }
   }
 
-  const partCount = countTag(xml, 'CArtMeshSource');
-  const groupCount = countTag(xml, 'CPartSource');
+  // The naive `<Tag` count over-reports for elements that also appear as
+  // `xs.ref` back-references (e.g. CArtMeshSource _owner pointers). Count
+  // only the concrete definitions: `<Tag …xs.id="…"…>` opens. The scene
+  // extractor uses the same gate, so partCount here matches scene.parts
+  // when extraction succeeds.
+  const partCount = countDefinitions(xml, 'CArtMeshSource');
+  const groupCount = countDefinitions(xml, 'CPartSource');
   const parameterCount = parameters.length;
-  const textureCount = countTag(xml, 'CModelImage');
+  // CModelImage entries are nested inside CModelImageGroup without their
+  // own xs.id, so count GTexture2D definitions instead — those are 1-to-1
+  // with what parts reference via `<GTexture2D xs.n="texture" xs.ref="…"/>`.
+  const textureCount = countDefinitions(xml, 'GTexture2D');
 
   const pngFiles = archive.files
     .filter((f) => f.path.toLowerCase().endsWith('.png'))
     .map((f) => f.path);
+
+  /** @type {ExtractedScene|null} */
+  let scene = null;
+  if (doExtractScene) {
+    try {
+      const parsed = parseCmo3Xml(xml);
+      scene = extractScene(parsed);
+      for (const w of scene.warnings) warnings.push(`scene: ${w}`);
+    } catch (err) {
+      warnings.push(`scene extraction failed: ${(err instanceof Error) ? err.message : String(err)}`);
+      scene = null;
+    }
+  }
 
   return {
     modelName,
@@ -241,6 +290,7 @@ export async function inspectCmo3(bytes) {
     textureCount,
     parameters,
     pngFiles,
+    scene,
     warnings,
   };
 }

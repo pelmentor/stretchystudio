@@ -45,6 +45,25 @@ for (const p of meta.parameters) {
     `[${p.min}..${p.max}] default=${p.default} type=${p.type}`
   );
 }
+if (meta.scene) {
+  console.log('');
+  console.log(`[scene] parts=${meta.scene.parts.length}  groups=${meta.scene.groups.length}  textures=${meta.scene.textures.length}`);
+  console.log('  first 8 parts:');
+  for (const p of meta.scene.parts.slice(0, 8)) {
+    const verts = p.positions.length / 2;
+    const tris = p.indices.length / 3;
+    console.log(`    ${p.drawableIdStr.padEnd(10)} ${p.name.padEnd(18)} verts=${String(verts).padStart(3)} tris=${String(tris).padStart(3)}  texRef=${p.textureRef ?? '-'}  parent=${p.parentGuidRef ?? '-'}`);
+  }
+  console.log('  groups:');
+  for (const g of meta.scene.groups.slice(0, 8)) {
+    console.log(`    ${g.name.padEnd(20)} parent=${g.parentGuidRef ?? '(root)'}`);
+  }
+  console.log('  textures:');
+  for (const t of meta.scene.textures.slice(0, 6)) {
+    console.log(`    ${t.xsId ?? '-'}  imageFileBuf_${t.imageFileIndex ?? '?'}  filePath=${t.filePath ?? '-'}`);
+  }
+}
+
 if (meta.warnings.length > 0) {
   console.log('');
   console.log('  warnings:');

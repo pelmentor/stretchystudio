@@ -169,16 +169,75 @@ export function Cmo3InspectModal() {
               </table>
             </div>
 
-            {result.pngFiles.length > 0 ? (
-              <div className="mt-4">
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-                  Embedded textures ({result.pngFiles.length})
-                </p>
-                <ul className="text-xs font-mono text-muted-foreground space-y-0.5">
-                  {result.pngFiles.map((p) => (<li key={p}>{p}</li>))}
-                </ul>
-              </div>
-            ) : null}
+            {result.scene ? (
+              <>
+                <div className="mt-4">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                    Parts ({result.scene.parts.length})
+                  </p>
+                  <table className="w-full text-xs font-mono">
+                    <thead>
+                      <tr className="text-left text-muted-foreground border-b">
+                        <th className="font-normal py-1 pr-2">drawableId</th>
+                        <th className="font-normal pr-2">name</th>
+                        <th className="font-normal pr-2 text-right">verts</th>
+                        <th className="font-normal pr-2 text-right">tris</th>
+                        <th className="font-normal pr-2">texture</th>
+                        <th className="font-normal pr-2">parent</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.scene.parts.map((p) => (
+                        <tr key={p.xsId} className="border-b border-border/30">
+                          <td className="py-0.5 pr-2">{p.drawableIdStr}</td>
+                          <td className="pr-2 truncate max-w-[12em]">{p.name}</td>
+                          <td className="pr-2 text-right">{p.positions.length / 2}</td>
+                          <td className="pr-2 text-right">{p.indices.length / 3}</td>
+                          <td className="pr-2 text-muted-foreground">{textureLabelFor(p.textureRef, result.scene)}</td>
+                          <td className="pr-2 text-muted-foreground">{groupLabelFor(p.parentGuidRef, result.scene)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                      Groups ({result.scene.groups.length})
+                    </p>
+                    <ul className="text-xs font-mono text-muted-foreground space-y-0.5">
+                      {result.scene.groups.map((g) => (
+                        <li key={g.xsId}>{g.name || '(unnamed)'}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                      Embedded textures ({result.scene.textures.length})
+                    </p>
+                    <ul className="text-xs font-mono text-muted-foreground space-y-0.5">
+                      {result.scene.textures.map((t) => (
+                        <li key={t.xsId}>
+                          {t.filePath ?? '(unresolved)'} {t.width > 0 ? `(${t.width}×${t.height})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </>
+            ) : (
+              result.pngFiles.length > 0 ? (
+                <div className="mt-4">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                    Embedded PNGs ({result.pngFiles.length})
+                  </p>
+                  <ul className="text-xs font-mono text-muted-foreground space-y-0.5">
+                    {result.pngFiles.map((p) => (<li key={p}>{p}</li>))}
+                  </ul>
+                </div>
+              ) : null
+            )}
           </ScrollArea>
         ) : null}
 
@@ -190,6 +249,22 @@ export function Cmo3InspectModal() {
       </DialogContent>
     </Dialog>
   );
+}
+
+function textureLabelFor(ref, scene) {
+  if (!ref || !scene) return '-';
+  const tex = scene.textures.find((t) => t.xsId === ref);
+  if (!tex) return ref;
+  if (tex.imageFileIndex !== null) return `tex${tex.imageFileIndex} (${tex.name})`;
+  return tex.name || ref;
+}
+
+function groupLabelFor(ref, scene) {
+  if (!ref || !scene) return '-';
+  // Parts reference groups by the group's own CPartGuid xs.ref, not by
+  // the CPartSource's xs.id, so join through guidRef.
+  const grp = scene.groups.find((g) => g.guidRef === ref || g.xsId === ref);
+  return grp ? (grp.name || ref) : ref;
 }
 
 function Field({ label, value }) {
