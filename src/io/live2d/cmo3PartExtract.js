@@ -85,10 +85,38 @@ import {
  */
 
 /**
+ * @typedef {'warp'|'rotation'} DeformerKind
+ *
+ * @typedef {Object} ExtractedDeformerKeyform
+ * @property {Float32Array|null} positions  warp grid positions for this keyform; null on rotation deformers
+ * @property {number|null} angle            rotation deformers only
+ * @property {number|null} originX          rotation deformers only — in canvas-normalised 0..1
+ * @property {number|null} originY          rotation deformers only — in canvas-normalised 0..1
+ * @property {number|null} scale            rotation deformers only
+ *
+ * @typedef {Object} ExtractedDeformer
+ * @property {DeformerKind} kind
+ * @property {string|null} xsId
+ * @property {string} idStr                CDeformerId.idstr (e.g. "RigWarp_irides_l", "Rotation_root")
+ * @property {string} name                 ACParameterControllableSource.localName
+ * @property {string|null} ownGuidRef      this deformer's own CDeformerGuid xs.ref
+ * @property {string|null} parentPartGuidRef CPartGuid xs.ref — visual hierarchy parent (a group)
+ * @property {string|null} parentDeformerGuidRef CDeformerGuid xs.ref — rig-chain parent deformer
+ * @property {string|null} keyformGridSourceRef
+ * @property {number} cols                 grid column count (warps only; 0 for rotation)
+ * @property {number} rows                 grid row count (warps only; 0 for rotation)
+ * @property {boolean} isQuadTransform     warps only
+ * @property {boolean} useBoneUi           rotation deformers only
+ * @property {Float32Array|null} positions warp deformers' top-level base grid (canvas-normalised 0..1)
+ * @property {ExtractedDeformerKeyform[]} keyforms
+ */
+
+/**
  * @typedef {Object} ExtractedScene
  * @property {ExtractedPart[]} parts
  * @property {ExtractedGroup[]} groups
  * @property {ExtractedTexture[]} textures
+ * @property {ExtractedDeformer[]} deformers
  * @property {string[]} warnings
  */
 
@@ -351,6 +379,89 @@ function extractTexture(tex, idPool) {
 }
 
 /**
+ * Walk a CWarpDeformerSource or CRotationDeformerSource and synthesise an
+ * ExtractedDeformer. Both share the ACDeformerSource > ACParameterControl…
+ * super-chain, so the wrapper-walking code is common; only the per-form
+ * decode differs.
+ *
+ * @param {XElement} def
+ * @param {DeformerKind} kind
+ * @returns {ExtractedDeformer}
+ */
+function extractDeformer(def, kind) {
+  const xsId = def.attrs['xs.id'] ?? null;
+
+  const acDeformer = findField(def, 'super');
+  if (!acDeformer || acDeformer.tag !== 'ACDeformerSource') {
+    throw new Error(`extractDeformer: ${xsId} missing ACDeformerSource super`);
+  }
+  const paramCtrl = findField(acDeformer, 'super');
+  if (!paramCtrl) {
+    throw new Error(`extractDeformer: ${xsId} missing ACParameterControllableSource super`);
+  }
+
+  const parentPart = findField(paramCtrl, 'parentGuid');
+  const ownGuid = findField(acDeformer, 'guid');
+  const idEl = findField(acDeformer, 'id');
+  const targetDeformer = findField(acDeformer, 'targetDeformerGuid');
+  const kfGrid = findField(paramCtrl, 'keyformGridSource');
+
+  // Warp-specific fields (cols / rows / isQuadTransform / top-level positions)
+  let cols = 0, rows = 0, isQuadTransform = false;
+  let positions = null;
+  let useBoneUi = false;
+  if (kind === 'warp') {
+    cols = readNumberField(def, 'col', 0);
+    rows = readNumberField(def, 'row', 0);
+    isQuadTransform = readBoolField(def, 'isQuadTransform', false);
+    const posEl = findField(def, 'positions');
+    if (posEl) positions = Float32Array.from(readSizedArray(posEl));
+  } else {
+    useBoneUi = readBoolField(def, 'useBoneUi_testImpl', false);
+  }
+
+  // Per-keyform decode
+  /** @type {ExtractedDeformerKeyform[]} */
+  const keyforms = [];
+  const kfList = findField(def, 'keyforms');
+  if (kfList) {
+    const formTag = kind === 'warp' ? 'CWarpDeformerForm' : 'CRotationDeformerForm';
+    for (const c of kfList.children) {
+      if (typeof c === 'string' || c.tag !== formTag) continue;
+      if (kind === 'warp') {
+        const posEl = findField(c, 'positions');
+        keyforms.push({
+          positions: posEl ? Float32Array.from(readSizedArray(posEl)) : null,
+          angle: null, originX: null, originY: null, scale: null,
+        });
+      } else {
+        keyforms.push({
+          positions: null,
+          angle: c.attrs.angle !== undefined ? Number(c.attrs.angle) : null,
+          originX: c.attrs.originX !== undefined ? Number(c.attrs.originX) : null,
+          originY: c.attrs.originY !== undefined ? Number(c.attrs.originY) : null,
+          scale: c.attrs.scale !== undefined ? Number(c.attrs.scale) : null,
+        });
+      }
+    }
+  }
+
+  return {
+    kind,
+    xsId,
+    idStr: idEl?.attrs.idstr ?? '',
+    name: readStringField(paramCtrl, 'localName') ?? '',
+    ownGuidRef: ownGuid?.attrs['xs.ref'] ?? null,
+    parentPartGuidRef: parentPart?.attrs['xs.ref'] ?? null,
+    parentDeformerGuidRef: targetDeformer?.attrs['xs.ref'] ?? null,
+    keyformGridSourceRef: kfGrid?.attrs['xs.ref'] ?? null,
+    cols, rows, isQuadTransform, useBoneUi,
+    positions,
+    keyforms,
+  };
+}
+
+/**
  * Extract every part / group / texture from a parsed cmo3 main.xml.
  *
  * Non-fatal issues are pushed to `warnings[]` instead of throwing, so a
@@ -399,5 +510,24 @@ export function extractScene(parsed) {
     }
   }
 
-  return { parts, groups, textures, warnings };
+  /** @type {ExtractedDeformer[]} */
+  const deformers = [];
+  for (const def of findAllByTag(root, 'CWarpDeformerSource')) {
+    if (!def.attrs['xs.id']) continue;
+    try {
+      deformers.push(extractDeformer(def, 'warp'));
+    } catch (err) {
+      warnings.push(`extractDeformer(warp) failed for ${def.attrs['xs.id']}: ${(err instanceof Error) ? err.message : String(err)}`);
+    }
+  }
+  for (const def of findAllByTag(root, 'CRotationDeformerSource')) {
+    if (!def.attrs['xs.id']) continue;
+    try {
+      deformers.push(extractDeformer(def, 'rotation'));
+    } catch (err) {
+      warnings.push(`extractDeformer(rotation) failed for ${def.attrs['xs.id']}: ${(err instanceof Error) ? err.message : String(err)}`);
+    }
+  }
+
+  return { parts, groups, textures, deformers, warnings };
 }

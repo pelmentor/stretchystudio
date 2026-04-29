@@ -46,8 +46,10 @@ for (const p of meta.parameters) {
   );
 }
 if (meta.scene) {
+  const warps = meta.scene.deformers.filter((d) => d.kind === 'warp').length;
+  const rots = meta.scene.deformers.filter((d) => d.kind === 'rotation').length;
   console.log('');
-  console.log(`[scene] parts=${meta.scene.parts.length}  groups=${meta.scene.groups.length}  textures=${meta.scene.textures.length}`);
+  console.log(`[scene] parts=${meta.scene.parts.length}  groups=${meta.scene.groups.length}  textures=${meta.scene.textures.length}  warps=${warps}  rotations=${rots}`);
   console.log('  first 8 parts:');
   for (const p of meta.scene.parts.slice(0, 8)) {
     const verts = p.positions.length / 2;
@@ -61,6 +63,11 @@ if (meta.scene) {
   console.log('  textures:');
   for (const t of meta.scene.textures.slice(0, 6)) {
     console.log(`    ${t.xsId ?? '-'}  imageFileBuf_${t.imageFileIndex ?? '?'}  filePath=${t.filePath ?? '-'}`);
+  }
+  console.log('  first 8 deformers:');
+  for (const d of meta.scene.deformers.slice(0, 8)) {
+    const grid = d.kind === 'warp' ? `${d.cols}×${d.rows}` : 'rotation';
+    console.log(`    ${d.kind.padEnd(8)} ${d.idStr.padEnd(28)} ${d.name.padEnd(22)} ${grid}  kf=${d.keyforms.length}  parentDef=${d.parentDeformerGuidRef ?? '-'}`);
   }
 }
 

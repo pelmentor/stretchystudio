@@ -173,6 +173,18 @@ export function Cmo3InspectModal() {
               <Field label="Groups (CPart)" value={String(result.groupCount)} />
               <Field label="Textures" value={String(result.textureCount)} />
               <Field label="PNGs in archive" value={String(result.pngFiles.length)} />
+              {result.scene ? (
+                <>
+                  <Field
+                    label="Warp deformers"
+                    value={String(result.scene.deformers.filter((d) => d.kind === 'warp').length)}
+                  />
+                  <Field
+                    label="Rotation deformers"
+                    value={String(result.scene.deformers.filter((d) => d.kind === 'rotation').length)}
+                  />
+                </>
+              ) : null}
             </div>
 
             {result.warnings.length > 0 ? (
