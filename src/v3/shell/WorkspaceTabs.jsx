@@ -30,16 +30,7 @@ import { useEditorStore } from '../../store/editorStore.js';
 import { getOperator } from '../operators/registry.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '../../components/ui/alert-dialog.jsx';
+import { NewProjectDialog } from './NewProjectDialog.jsx';
 
 const TABS = [
   { id: 'layout',    label: 'Layout' },
@@ -70,8 +61,14 @@ export function WorkspaceTabs() {
   }
 
   function handleNewClick() {
-    if (nodeCount > 0) setConfirmNew(true);
-    else runOp('file.new');
+    // Phase 5 — always open the template picker. The dialog itself
+    // shows a dirty-state warning when nodeCount > 0; users with an
+    // empty workspace just see the templates and pick one. The old
+    // "skip dialog when project is empty" shortcut hid the templates
+    // from anyone starting fresh, which is exactly when they're most
+    // useful.
+    setConfirmNew(true);
+    void nodeCount;
   }
 
   return (
@@ -166,25 +163,7 @@ export function WorkspaceTabs() {
       </div>
 
       <PreferencesModal open={prefsOpen} onOpenChange={setPrefsOpen} />
-
-      <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard the current project?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {dirty
-                ? 'There are unsaved changes. They will be lost. Save first via Ctrl+S or "Save to library", or proceed and start fresh.'
-                : 'The current project will be cleared from the workspace. This does not affect saved files or library records.'}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => runOp('file.new')}>
-              Start new
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <NewProjectDialog open={confirmNew} onOpenChange={setConfirmNew} />
     </div>
   );
 }
