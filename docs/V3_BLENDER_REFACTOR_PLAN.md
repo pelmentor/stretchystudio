@@ -474,13 +474,17 @@ Substage status:
 | 0E — Vitest migration (Pillar H) | ⏳ pending | — | UI tests need jsdom; .mjs scripts can stay. |
 | 0F.1 — Pure helpers extraction | ✅ shipped | `1380fc6` | 8 utility functions out of CanvasViewport into `viewport/helpers.js` (-116 LOC). |
 | 0F.2 — Export-frame capture extraction | ✅ shipped | `ee49cb5` | `viewport/captureExportFrame.js` (-102 LOC). |
-| 0F.3 — Mesh post-process (skin weights + centroid) | ✅ shipped | `17480f0` | `viewport/meshPostProcess.js` (-31 LOC, 25 tests). |
 | 0F.4 — `zoomAroundCursor` helper | ✅ shipped | `775c4b2` | Added to `viewport/helpers.js`; onWheel collapsed to 3 lines. |
 | 0F.5 — File→importer routing dispatch | ✅ shipped | `db29668` | `viewport/fileRouting.js`; deduped onDrop + handleFileChange. |
 | 0F.6 — Top-level ErrorBoundary in v2 (Pillar K) | ✅ shipped | `cf6aed4` | `components/ErrorBoundary.jsx` shared between v2 + v3. |
 | 0F.7 — Time / frame math helpers | ✅ shipped | `59bbaa4` | `lib/timeMath.js` (clamp / msToFrame / frameToMs); 27 tests. |
 | 0F.8 — Undo memory budget + `undoStats()` (Pillar M) | ✅ shipped | `06aff32` | Soft 50 MB byte cap + observability. Full Immer-patches refactor still future. |
-| 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport is now 1981 LOC (was 2243, -262). |
+| 0F.9 — projectStore seeders DRY'd via `projectMutator` | ✅ shipped | `bc9334e` | 14 actions collapsed to 1-liners; -62 LOC in projectStore.js. |
+| 0F.10 — Pillar Q: serializer purity test | ✅ shipped | `57a1bc8` | `test_serializerPurity.mjs` locks in saveProject "no input mutation" contract. |
+| 0F.11 — Rig group BFS cleanup helper | ✅ shipped | `eecaf00` | `viewport/rigGroupCleanup.js`; 16 tests for ancestor walks. |
+| 0F.12 — PSD split-parts applier | ✅ shipped | `8d75afe` | `viewport/applySplits.js`; 15 tests. |
+| 0F.13–0F.28 — Test coverage backfill | ✅ shipped | various | Locked down 16 critical pure modules with ~570 tests: transforms, animationEngine, psdOrganizer, variantNormalizer, paramValuesStore, editorStore, frameConvert, animationStore, rigSpec, faceParallaxStore, rigWarpsStore, bodyWarpStore, xmlbuilder, mesh/sample, armatureOrganizer, idle/motionLib. |
+| 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport is now 1953 LOC (was 2243, -290). |
 | 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
 | 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
 | 0G.3 — exhaustive-deps disables (Pillar D) | ✅ shipped | `454cbba` | All 4 disables removed; pre-existing missing-deps in those files fixed too. |
