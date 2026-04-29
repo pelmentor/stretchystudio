@@ -20,6 +20,7 @@
 
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
+import { useSelectionStore } from '../../store/selectionStore.js';
 import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
 import {
   serializeProject,
@@ -144,6 +145,32 @@ function registerBuiltins() {
       } catch (err) {
         if (typeof console !== 'undefined') console.error('[file.save] failed:', err);
       }
+    },
+  });
+
+  // Selection: deselect-all. Esc is the universal Blender gesture
+  // for "drop everything." Implemented as a no-op when nothing is
+  // selected so the keystroke doesn't shadow the dispatcher's
+  // editable-target check noisily.
+  registerOperator({
+    id: 'selection.clear',
+    label: 'Deselect All',
+    available: () => useSelectionStore.getState().items.length > 0,
+    exec: () => useSelectionStore.getState().clear(),
+  });
+
+  // file.new — clear the current project to its empty initial state.
+  // Wraps `projectStore.resetProject` so the same code path that
+  // initializes the store at first load runs here. Selection is
+  // dropped; live param values are reset.
+  registerOperator({
+    id: 'file.new',
+    label: 'New Project',
+    exec: () => {
+      // reset rigSpec cache + paramValues so a stale rig from a prior
+      // session doesn't render against the empty project.
+      useSelectionStore.getState().clear();
+      useProjectStore.getState().resetProject();
     },
   });
 

@@ -118,5 +118,29 @@ assertThrows(
   assert(DEFAULT_KEYMAP['Ctrl+KeyY'] === 'app.redo', 'Ctrl+Y → redo (windows)');
 }
 
+// ── selection.clear / file.new bindings + behavior ─────────────────
+
+{
+  assert(DEFAULT_KEYMAP['Escape'] === 'selection.clear', 'Esc → selection.clear');
+  assert(DEFAULT_KEYMAP['Ctrl+KeyN'] === 'file.new', 'Ctrl+N → file.new');
+
+  const op = getOperator('selection.clear');
+  assert(op !== null, 'selection.clear registered');
+
+  // Empty selection → unavailable
+  const { useSelectionStore } = await import('../../src/store/selectionStore.js');
+  useSelectionStore.getState().clear();
+  assert(op.available({ editorType: null }) === false,
+    'selection.clear unavailable when empty');
+
+  useSelectionStore.getState().select({ type: 'part', id: 'p1' });
+  assert(op.available({ editorType: null }) === true,
+    'selection.clear available after select');
+
+  op.exec({ editorType: null });
+  assert(useSelectionStore.getState().items.length === 0,
+    'selection.clear empties the store');
+}
+
 console.log(`v3Operators: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

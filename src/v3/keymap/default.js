@@ -49,6 +49,12 @@ export const DEFAULT_KEYMAP = {
   'Meta+KeyS': 'file.save',
   'Ctrl+KeyO': 'file.load',
   'Meta+KeyO': 'file.load',
+
+  'Ctrl+KeyN': 'file.new',
+  'Meta+KeyN': 'file.new',
+
+  // Selection: drop everything. Bare Esc — same as Blender.
+  'Escape': 'selection.clear',
 };
 
 /**
