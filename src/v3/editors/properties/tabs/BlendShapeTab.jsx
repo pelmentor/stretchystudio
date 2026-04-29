@@ -18,7 +18,8 @@
  */
 
 import { useProjectStore } from '../../../../store/projectStore.js';
-import { Plus, Trash2, Sparkles } from 'lucide-react';
+import { useEditorStore } from '../../../../store/editorStore.js';
+import { Plus, Trash2, Sparkles, Brush, Square } from 'lucide-react';
 import { TextField } from '../fields/TextField.jsx';
 import { NumberField } from '../fields/NumberField.jsx';
 
@@ -52,6 +53,20 @@ export function BlendShapeTab({ nodeId }) {
 
   const shapes = node.blendShapes ?? [];
   const values = node.blendShapeValues ?? {};
+
+  const paintMode = useEditorStore((s) => s.blendShapeEditMode);
+  const activeShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  const brushSize = useEditorStore((s) => s.brushSize);
+  const brushHardness = useEditorStore((s) => s.brushHardness);
+  const setBrush = useEditorStore((s) => s.setBrush);
+
+  /** @param {string|null} shapeId */
+  function armForPaint(shapeId) {
+    useEditorStore.setState({
+      blendShapeEditMode: !!shapeId,
+      activeBlendShapeId: shapeId,
+    });
+  }
 
   function renameShape(shapeId, newName) {
     updateProject((proj) => {
@@ -88,25 +103,78 @@ export function BlendShapeTab({ nodeId }) {
                 key={shape.id}
                 shape={shape}
                 value={values[shape.id] ?? 0}
+                armed={paintMode && activeShapeId === shape.id}
                 onRename={(name) => renameShape(shape.id, name)}
                 onSetValue={(v) => setBlendShapeValue(nodeId, shape.id, v)}
                 onDelete={() => deleteBlendShape(nodeId, shape.id)}
+                onArm={() => armForPaint(
+                  paintMode && activeShapeId === shape.id ? null : shape.id,
+                )}
               />
             ))}
           </div>
         )}
       </Section>
+
+      {paintMode ? (
+        <Section label="Paint brush" icon={<Brush size={11} />}>
+          <NumberField
+            label="Size"
+            value={brushSize}
+            step={5}
+            min={5}
+            max={300}
+            precision={0}
+            onCommit={(v) => setBrush({ brushSize: v })}
+          />
+          <NumberField
+            label="Hardness"
+            value={brushHardness}
+            step={0.05}
+            min={0}
+            max={1}
+            precision={2}
+            onCommit={(v) => setBrush({ brushHardness: v })}
+          />
+          <p className="text-[10px] text-muted-foreground leading-snug px-0.5">
+            Drag in the viewport to push vertex deltas onto the armed
+            blend shape. Use [ / ] to nudge brush size.
+          </p>
+        </Section>
+      ) : null}
     </div>
   );
 }
 
-function ShapeRow({ shape, value, onRename, onSetValue, onDelete }) {
+function ShapeRow({ shape, value, armed, onRename, onSetValue, onDelete, onArm }) {
   return (
-    <div className="flex flex-col gap-1 p-1.5 rounded bg-card/30 border border-border/60">
+    <div
+      className={
+        'flex flex-col gap-1 p-1.5 rounded border ' +
+        (armed
+          ? 'bg-primary/10 border-primary/60'
+          : 'bg-card/30 border-border/60')
+      }
+    >
       <div className="flex items-center gap-1">
         <div className="flex-1 min-w-0">
           <TextField label="Name" value={shape.name ?? ''} onCommit={onRename} />
         </div>
+        <button
+          type="button"
+          className={
+            'h-6 w-6 inline-flex items-center justify-center rounded transition-colors ' +
+            (armed
+              ? 'text-primary bg-primary/15'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40')
+          }
+          onClick={onArm}
+          title={armed ? 'Stop painting' : 'Paint deltas onto this shape'}
+          aria-label={armed ? 'Stop painting' : 'Paint deltas'}
+          aria-pressed={armed}
+        >
+          {armed ? <Square size={11} /> : <Brush size={11} />}
+        </button>
         <button
           type="button"
           className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
