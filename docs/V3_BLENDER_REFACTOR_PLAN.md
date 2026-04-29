@@ -372,17 +372,27 @@ Initialize Rig — coord-space bug). Также удаляем dead code что�
 сохранить наш код. Per `feedback_push_target` memory: push в `origin`
 (pelmentor), не в upstream.
 
-#### -1B — v2 R6 coord-space bug fix (3-5 days) **[STATUS: ⚠️ ATTEMPTED, INCOMPLETE — DEFERRED TO PHASE 1E]**
+#### -1B — v2 R6 coord-space bug fix (3-5 days) **[STATUS: ✅ COMPLETE — paired with Phase 1E]**
 
-Initial fix landed in commit `2397d54` (rigDrivenParts Set passed to
-scenePass; rig-driven parts skip worldMatrix multiply). User
-verification on `shelby.psd` 2026-04-29 showed the fix is NOT
-sufficient — face still disappears, arms still fly off. See Working
-Note "2026-04-29 — v2 regression triage" for the diagnostic clue
-from rotation arc handles. Real fix requires the Coord-Space
-Debugger overlay (Phase 1C) to identify which frame the broken
-verts actually arrive in. Phase 0C TaggedBuffer wrappers come first
-so the overlay can render frame tags reliably.
+Two-part fix:
+
+- **Part 1** (commit `2397d54`): `rigDrivenParts` Set passed to scenePass;
+  rig-driven parts skip `worldMatrix(part)` multiplication. Necessary
+  to avoid DOUBLE rotation when the user drags a SkeletonOverlay
+  rotation arc — the arc writes both `node.transform.rotation` AND
+  the bone rotation parameter, and evalRig + worldMatrix would each
+  apply the rotation if both ran on rig-driven parts.
+
+- **Part 2** (commit `c07751b`, Phase 1E): chainEval applies
+  `1/canvasMaxDim` scale at every rotation→warp boundary. moc3
+  binary carries this conversion; cmo3 XML doesn't; the runtime
+  evaluator was missing it. See Phase 1E table row + the
+  Working Note "2026-04-29 — Round-2 shelby smoke test (Coord-Space
+  Debugger live)" for full diagnostic trail.
+
+Part 1 alone could not fix the symptom because the unit mismatch
+inside the chain produced wrong canvas-px output regardless of how
+the renderer handled it downstream.
 
 **Symptom:** После Initialize Rig меши улетают / исчезают (см. user
 screenshots 2026-04-28).
@@ -622,7 +632,7 @@ Substage status:
 | 1C.0 Viewport — first cut | ✅ shipped | `fa60044` | Thin wrapper that mounts existing v2 CanvasViewport with stable refs. |
 | 1C.1 Coord-Space Debugger overlay | ✅ shipped | `52c2f3b` | `chainDiagnose.js` pure walker + HUD. Per-art-mesh diagnosis: terminationKind (root/unknown_parent/no_parent/cycle_or_deep) + finalFrame (canvas-px/normalized-0to1/pivot-relative/unknown). Auto-mounts in v3 viewport, top-right. Issues banner in destructive color when broken chains present. Unblocks Phase 1E. 38 tests. |
 | 1D Parameters — first cut | ✅ shipped | `4b01b4c` | groupBuilder + ParamRow + ParametersEditor. Groups: Opacity / Standard / Variants / Bones / Groups / Project. Adaptive step (range ≥5 → step 1, sub-5 → 0.01). Reset to defaults. 23 groupBuilder tests. |
-| 1E Coord-space bug fix | ⏳ next | — | Now diagnosable via 1C.1 HUD. Pending shelby smoke test confirming exactly which meshes have broken chains and which deformer parents are missing. |
+| 1E Coord-space bug fix | ✅ shipped | `c07751b` | Root cause was NOT broken chains (HUD showed 18/2-broken; only handwear). The 16 "clean" chains had correct termination but WRONG INTERNAL UNITS at the rotation→warp boundary. moc3 binary file emits `rotation_deformer_keyform.scales = 1/canvasMaxDim` for warp-parented rotations (moc3writer.js:1210); cmo3 XML always writes scale=1.0 so the runtime evaluator never saw the conversion. Fix: `DeformerStateCache.getState` now multiplies the rotation's scale by `1/canvasMaxDim` when `spec.parent.type === 'warp'`. Read canvasMaxDim once per evalRig call from `rigSpec.canvas`. |
 | Aux: Initialize Rig in v3 | ✅ shipped | `6b65475` | RigService.initializeRig() bundles harvest + seedAllRig + rigSpec cache + paramValues reset. Wired to button in v3 ParametersEditor (empty-state + header). |
 | Aux: app.undo / app.redo | ✅ shipped | `433715c` | Operators + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z bindings (Meta variants for macOS). |
 | Aux: file.save / file.load | ✅ shipped | `6be37f7` | Operators + Ctrl+S / Ctrl+O bindings. Global toolbar in WorkspaceTabs with Undo / Redo / Open / Save buttons. Save button shows dirty dot. |
@@ -1255,30 +1265,35 @@ between rigSpec / project / motion3 / etc.).
   chains." The broken-chain count is small; this is not the main
   driver.
 
-**Active hypothesis.** Either:
-1. The keyform vertex positions emitted by `cmo3writer` for arms
-   are incorrect because joint pivots couldn't be adjusted (the
-   wizard joint-click bug — see Bug A above). Default-pivot arms
-   produce keyforms encoding pivot-relative offsets relative to
-   (0,0). Identity rotation deformer at angle=0 should still
-   reproduce canvas-px… but if the keyforms themselves were
-   already wrong the chain output is wrong.
-2. The runtime evalRig output IS canvas-px (matches the HUD's
-   diagnosis) but the renderer's `worldMatrix` is genuinely
-   non-identity for arm parts — there's a parent group transform
-   we missed because group transforms aren't all pure-pivot.
-   Skipping `worldMatrix` for rigDriven parts then drops a
-   meaningful translation.
-3. Arms aren't in `rigSpec.artMeshes` at all — they fall through
-   to the v2 worldMatrix-only path while body parts are rigDriven.
-   In that case the body shifts (deformer drift at "rest" param
-   values) but arms don't, so the visual gap between them grows.
+**Active hypothesis (RESOLVED 2026-04-29 commit `c07751b`).** None of
+the three above. Real cause: rotation→warp boundary unit conversion.
+moc3 binary emits `rotation_deformer_keyform.scales = 1/canvasMaxDim`
+for warp-parented rotations (moc3writer.js:1210, verified by binary
+diff against Cubism's shelby.moc3 baseline). cmo3 XML always writes
+scale=1.0; the runtime evaluator (chainEval) reads from cmo3-shape
+spec → never applied the conversion → rotation matrix at angle=0
+emits canvas-px-magnitude positions that the next-step warp's
+bilinearFFD interprets as 0..1 input → off-the-grid clamp →
+canvas-extreme rendering. The chain diagnose's "clean / canvas-px"
+verdict was correct about termination but didn't validate unit
+consistency across boundaries (a useful observation for Phase 2 —
+when full Coord-Space Debugger ships with overlay tinting, it
+should also surface unit-mismatch warnings inline).
 
-**Plan to nail it down.** Phase 1C.2 — extend Coord-Space Debugger
-HUD row click to `console.log(part diagnostic dump)`: rest mesh
-bbox, evalRig output bbox, worldMatrix, parent chain. With three
-flying parts named, the actual bug becomes obvious in one
-console-spelunk session.
+Body parts hit warps directly (no rotation→warp hop) — they
+worked. Arm + face chains had `mesh → rotation → rotation → warp`
+or `mesh → rotation → warp`; the rotation→warp hop is exactly the
+unit-mismatched boundary. ParamAngleX/Y/Z worked because BodyXWarp
+(driven by them) sits at the root level — its OUTPUT is canvas-px,
+no rotation hop needed. ParamRotation_<bone> didn't visibly do
+anything because the broken-unit output got clamped to canvas
+extremes regardless of input rotation.
+
+Fix added the `1/canvasMaxDim` scale to `DeformerStateCache.getState`
+when `spec.parent.type === 'warp'`. Read once per evalRig call from
+`rigSpec.canvas`. e2e equivalence + chainEval tests still green;
+two new chainEval tests lock the regression in (canonical
+canvas-px pivot-relative input → expected scaled+offset output).
 
 ---
 
