@@ -20,7 +20,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
-import { tabsFor } from './tabRegistry.js';
+import { tabsFor } from './tabRegistry.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
