@@ -821,7 +821,7 @@ save/load surface that v2 had.
 
 ---
 
-### PHASE 2 — Live2D-specific Editors (8-10 weeks) **[STATUS: first cuts shipped 2026-04-29 — display-only overlays + paint arming + mask CRUD; full editing deferred]**
+### PHASE 2 — Live2D-specific Editors (8-10 weeks) **[STATUS: first cuts shipped 2026-04-29 — display-only overlays + paint arming + mask CRUD + 2H modal G/R/S; standalone Keyform/Physics/Variant editors deferred]**
 
 **Goal:** Native editing of warps/rotations/keyforms/physics/masks/
 variants.
@@ -835,7 +835,7 @@ variants.
 | 2E Physics Editor | ⚠️ folded | — | PhysicsTab (Phase 1B) lists matching physics rules with their inputs / vertex chain / output paramIds — read-only first cut. Full editor with `ChainOverlay` / `ParticleTable` / `Input/OutputDropZone` is deferred. |
 | 2F Mask Editor | ✅ shipped (CRUD) | `76fa3e0` | MaskTab gains add/remove via dropdown picker + per-chip × button. Mutates `project.maskConfigs` (creating new entries when none yet exist for the part) and cleans up the legacy `node.mesh.maskMeshIds` reference on delete. Phase 2F first cut wrapped into the existing 1B tab rather than a separate editor. |
 | 2G Variant Manager | ⚠️ folded | — | VariantTab (Phase 1B) shows variant child + base relationships read-only with click-to-jump. Standalone variant manager (multi-select pairing UI, suffix bulk-rename, "promote to base") is deferred. |
-| 2H Modal operators G/R/S full set | ⏳ pending | — | Numeric typed input, axis constrain (X/Y/Z keys), snapping. Not started. |
+| 2H Modal operators G/R/S | ✅ shipped (first cut) | sweep #2 | `ModalTransformOverlay.jsx` + `modalTransformStore.js`. Bare G/R/S keys begin a Blender-style modal transform on the selected nodes. Mouse-drag commits live deltas. X/Y axis-constrain toggles; Shift snaps (10 px / 15° / 0.1×). Click / Enter commit, Esc / right-click cancel + revert. Single undo entry per modal session via `beginBatch` / `endBatch`. Numeric typed input deferred to a later polish pass. |
 
 **Why most editors landed as overlays / Properties tabs rather than dedicated editors:** The user's directive on 2026-04-29 was "skip tests, complete all phase first cuts, then fix bugs." First cuts shipped as either display overlays mounted on ViewportEditor or as edit actions wrapped into the existing Phase 1B Properties tabs. Full standalone editors with their own modal operator sets, ghost previews, X-symmetry tools, particle drop-zones etc. need a separate sweep that's tracked as Phase 2 polish rather than first-cut. Tag `v3-phase-2-complete` will be claimed only after that polish lands.
 
@@ -861,24 +861,27 @@ Immer overlay) and Pillar Z (move `animationEngine.js` from
 |----------|--------|--------|-------|
 | 3A Timeline Editor | ✅ shipped | `0379c7d` | Restored upstream `TimelinePanel` verbatim into `v3/editors/timeline/TimelineEditor.jsx`, then extended with `rowKey` discriminator so param tracks (`{paramId, keyframes}`) render alongside node tracks (`{nodeId, property, keyframes}`). Drag / copy / paste / easing / audio sync, box-select with `param:`/`node:` prefix routing. |
 | 3A.1 Param keyframe plumbing | ✅ shipped | `93aa1e4` | `track.paramId` was already supported by motion3json + can3writer exporters but engine / viewport / UI didn't drive it. 4-file plumbing landed: `animationEngine.js` adds `computeParamOverrides` + `setParamKeyframeAt`; `CanvasViewport` merges param overrides into `valuesForEval` before chainEval; `ParamRow` auto-keyframes in animation mode + autoKeyframe; TimelineEditor displays param rows on top of node rows. |
-| 3B Dopesheet Editor | ⏳ pending | — | Sibling to Timeline focused on per-track keyframe density without scrubber. |
+| 3B Dopesheet Editor | ✅ shipped (first cut) | sweep #2 | `DopesheetEditor.jsx` registered as `dopesheet` editor type, paired with Timeline tab in the Animation workspace. One row per track (param + node) with a tick per keyframe + a ruler. Click a tick or anywhere on the timeline to seek. Read-only: editing still happens through Timeline / auto-keyframe. |
 | 3C Keyform Graph Editor | ⏳ pending | — | Rig keyform interpolation curves (LINEAR / BEZIER), drag bezier handles, per-deformer view. |
 | 3D Animation F-curve Editor | ⏳ pending | — | Animation track curves over TIME (motion3): BEZIER / STEP / CONSTANT. Multi-curve overlay for simultaneous view of multiple parameters. |
-| 3E F3 Operator Search Palette | ⏳ pending | — | `cmdk` fuzzy search, recent operators, last-used. |
-| 3F Modal operator polish | ⏳ pending (lite shipped) | — | Axis constraints (X/Y keys), snap-to-grid, precise typed numeric input. ParamRow's right-click / double-click → reset-to-default (commit `76fa3e0`) is the only modal-op polish landed so far. |
+| 3E F3 Operator Search Palette | ✅ shipped | sweep #2 | `CommandPalette.jsx` cmdk dialog. F3 toggles. Recent group (5 entries, persisted via `commandPaletteStore` + localStorage), All operators group with chord hints. Greyed when `op.available()` returns false. |
+| 3F Modal operator polish | ✅ shipped (first cut, see 2H) | sweep #2 | Axis constrain (X/Y) + Shift snap shipped via 2H modal G/R/S. Numeric typed input + grid-snap operator-side deferred. ParamRow's right-click / double-click → reset-to-default (commit `76fa3e0`) covers the parameter-side reset gesture. |
 | AnimationsEditor (new editor type) | ✅ shipped | `1264e27` | Bonus deliverable not in original plan. Lists every animation with create / inline rename / delete (with confirm) / click-to-switch. Active row highlighted, duration shown in seconds. Animation workspace's leftBottom area pairs it with Properties as tabs. |
 
-**Phase 3 deliverables:** Tag `v3-phase-3-complete` reserved for the full graph editor + F-curve editor + dopesheet sweep. Animation editing is functional via Timeline first cut + AnimationsEditor + auto-keyframe param row, but not "production-ready" in the curve-shaping sense.
+**Phase 3 deliverables:** Tag `v3-phase-3-complete` reserved for the full graph editor + F-curve editor sweep. As of sweep #2 (2026-04-29) Phase 3 has 3A + 3A.1 + 3B + 3E + 3F-lite shipped — only 3C (Keyform Graph) and 3D (Animation F-curve) remain.
 
 ---
 
-### PHASE 4 — Reference Parity + Polish (7-9 weeks) **[STATUS: 4B + 4C + 4D-lite shipped 2026-04-29; parity harness + bundle split pending]**
+### PHASE 4 — Reference Parity + Polish (7-9 weeks) **[STATUS: 4B + 4C + 4D + 4E-lite + 4F + 4G shipped; 4A parity harness + 4H PWA + 4I theme audit + 4J i18n pending]**
 
 | Substage | Status | Commit | Notes |
 |----------|--------|--------|-------|
 | 4B Performance Profiler editor | ✅ shipped (first cut) | `c7e78ba` | `PerformanceEditor` registered as `performance` editor type. Live FPS sampler via rAF, last-second avg frame ms, 30s sparkline. Project / mesh / rig stats: node / part / group / texture / animation / parameter / mask / physics counts; total verts + tris + heaviest part by vertex count; warp / rotation / art-mesh counts; last-built rigSpec geometry version. The FPS counter samples browser repaint rather than the rig evaluator itself — a real GPU profiler is deferred until CanvasViewport exposes per-pass GL query timings. |
 | 4C Preferences editor | ✅ shipped | `9dab70e` (initial) + `2fee609` (Keymap) | `PreferencesModal` exposes theme mode (light / dark / system), preset picker (existing ThemeProvider modal), font family Select, font size Slider. The Cubism-compat preset is deferred to Phase 4I (theme audit) when hardcoded color sweeps land. |
 | 4D Keymap viewer | ✅ shipped (read-only) | `2fee609` | `KeymapModal` opened from Preferences "View shortcuts…" button. Lists every chord → operator binding from `DEFAULT_KEYMAP` with the operator's user-facing label, prettified chord display (`KeyA → A`, `Period → .`, `Meta → ⌘`, etc.) and a free-text filter. Editing the keymap is deferred until per-user keymap persistence lands (would need localStorage round-trip + chord-conflict detection). |
+| 4E Help / Onboarding | ✅ shipped (first cut) | sweep #2 | F1 → `HelpModal.jsx` quick-reference. Workspace overview + common chord cheat-sheet + "View all shortcuts…" link to KeymapModal. Static content; per-editor context help deferred until editor surfaces stop changing weekly. |
+| 4F Export validation | ✅ shipped | sweep #2 | `validateProjectForExport()` pure checker (`io/exportValidation.js`) wired into ExportModal. Errors block export by default (override checkbox), warnings inline. Click-to-jump on issues with `nodeId`. Codes: `NO_PARTS`, `PART_NO_MESH`, `PART_NO_TRIS`, `PART_UV_LENGTH`, `PART_NO_TEXTURE`, `ORPHAN_PARENT`, `MASK_TARGET_MISSING`, `MASK_MESH_MISSING`, `VARIANT_BASE_MISSING`, `PARAM_BAD_RANGE`, `NO_PARAMETERS`, `TEXTURE_MISSING`, `ANIM_EMPTY`. |
+| 4G Bundle splitting | ✅ shipped | sweep #2 | `vite.config.js` `manualChunks`: vendor-react / vendor-radix / vendor-lucide / vendor-cmdk / vendor-state / vendor-onnxruntime / vendor-fontsource / vendor catch-all. Index chunk dropped from 1.3 MB / 395 KB gzip to 601 KB / 173 KB gzip with vendor cached separately across deploys. |
 | 4A Reference parity harness | ⏳ pending | — | Side-by-side viewer with Hiyori, numeric snapshot fixtures via cubism-web SDK oracle. Not started. |
 
 #### 4E — Help system + Onboarding
@@ -1491,6 +1494,37 @@ each phase was scoped to; full polish (standalone editors, modal
 operator suites, parity harness, bundle splitting, PWA, i18n)
 remains for the second pass. Tags `v3-phase-N-complete` reserved
 for that polish round.
+
+---
+
+### 2026-04-29 — Phase first-cut sweep #2 (autonomous)
+
+Continuation of the previous day's "skip tests, complete all phases"
+directive. Six new first cuts shipped after the user said *"Лучше
+фазы продолжить"*:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 4G | `vite.config.js` `manualChunks`: vendor-react / vendor-radix / vendor-lucide / vendor-cmdk / vendor-state / vendor-onnxruntime / vendor-fontsource / vendor catch-all. Index chunk dropped from 1.3 MB / 395 KB gzip to 601 KB / 173 KB gzip. |
+| 3E | F3 operator search palette. `commandPaletteStore` (zustand + localStorage recents) + `CommandPalette.jsx` cmdk dialog. Ranks fuzzy by label + id, recents group, chord hints. |
+| 4F | Pre-export validation. `validateProjectForExport()` pure checker (`io/exportValidation.js`) wired into ExportModal. Errors block (override checkbox), warnings inline, click-to-jump on `nodeId`. |
+| 4E | F1 help / quick-reference. `helpModalStore` + `HelpModal.jsx` static workspace overview + chord cheat-sheet + link to KeymapModal. Per-editor context help deferred. |
+| 3B | Dopesheet editor. `DopesheetEditor.jsx` registered as `dopesheet` editor type, paired with Timeline tab in the Animation workspace. One row per track with ticks per keyframe + ruler, click-to-seek. Read-only. |
+| 2H | Modal G/R/S transforms. `modalTransformStore` + `ModalTransformOverlay.jsx`. Bare G/R/S begin a Blender-style modal: mouse-drag deltas, X/Y axis constrain, Shift snap (10 px / 15° / 0.1×), click/Enter commit, Esc/right-click revert. Single undo entry via `beginBatch`/`endBatch`. |
+
+**Phase 6 god-class breakup (cmo3writer / moc3writer) deferred:**
+`cmo3writer.js` is a single 4468-LOC `async function generateCmo3`
+closure — the entire body operates on shared lexical scope. A
+correct extraction needs careful inject-pattern + dependency-graph
+work without breaking the parity export shipped on 2026-04-26. Too
+risky for an autonomous first cut; tag remains parked on Phase 6.
+
+**Phase coverage after sweep #2:**
+- Phase 2: 2A, 2B, 2C, 2F, 2H shipped first cuts. 2D/2E/2G folded into 1B Properties tabs. Standalone editors deferred.
+- Phase 3: 3A, 3A.1, 3B, 3E, 3F-lite shipped. 3C (Keyform Graph) + 3D (F-curve) pending.
+- Phase 4: 4B, 4C, 4D, 4E, 4F, 4G shipped. 4A parity + 4H PWA + 4I theme audit + 4J i18n pending.
+- Phase 5: SaveModal+gallery + ExportModal shipped. Physics import / round-trip / templates / touch / onnx pending.
+- Phase 6: keymap viewer shipped. God-class breakup + Python README + dead code round 2 + docs + perf audit pending.
 
 ---
 
