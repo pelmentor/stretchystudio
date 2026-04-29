@@ -17,7 +17,7 @@
  * @module v3/shell/ExportModal
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -29,11 +29,16 @@ import {
 import { Button } from '../../components/ui/button.jsx';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group.jsx';
 import { Label } from '../../components/ui/label.jsx';
-import { Loader2, Download, Box, FileArchive, Layers } from 'lucide-react';
+import {
+  Loader2, Download, Box, FileArchive, Layers,
+  AlertTriangle, AlertCircle, CheckCircle2,
+} from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
+import { useSelectionStore } from '../../store/selectionStore.js';
 import { useExportModalStore } from '../../store/exportModalStore.js';
 import { runExport } from '../../services/ExportService.js';
 import { loadProjectTextures } from '../../io/imageHelpers.js';
+import { validateProjectForExport } from '../../io/exportValidation.js';
 
 const FORMAT_OPTIONS = [
   {
@@ -63,14 +68,26 @@ const FORMAT_OPTIONS = [
 export function ExportModal() {
   const open = useExportModalStore((s) => s.open);
   const close = useExportModalStore((s) => s.close);
+  // Subscribing to the project ensures validation re-runs as the
+  // user fixes issues without closing/reopening the modal — the
+  // hasUnsavedChanges flag flips on every edit so this is essentially
+  // free.
+  const project = useProjectStore((s) => s.project);
   const [format, setFormat] = useState('live2d-full');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(/** @type {string|null} */ (null));
+  const [overrideErrors, setOverrideErrors] = useState(false);
+
+  const validation = useMemo(
+    () => (open ? validateProjectForExport(project) : { errors: [], warnings: [] }),
+    [open, project],
+  );
 
   useEffect(() => {
     if (!open) return;
     setBusy(false);
     setError(null);
+    setOverrideErrors(false);
   }, [open]);
 
   async function handleExport() {
@@ -150,6 +167,12 @@ export function ExportModal() {
           })}
         </RadioGroup>
 
+        <ValidationPanel
+          result={validation}
+          override={overrideErrors}
+          onOverrideChange={setOverrideErrors}
+        />
+
         {error ? (
           <div className="text-xs text-destructive border border-destructive/30 rounded p-2 bg-destructive/5">
             {error}
@@ -158,12 +181,93 @@ export function ExportModal() {
 
         <DialogFooter>
           <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
-          <Button onClick={handleExport} disabled={busy}>
+          <Button
+            onClick={handleExport}
+            disabled={busy || (validation.errors.length > 0 && !overrideErrors)}
+          >
             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Export
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Phase 4F preflight panel. Mounted between the format radio and
+ * the action footer. The "Export anyway" checkbox is hidden when
+ * there are no errors (warnings never block).
+ *
+ * Click on an issue with a `nodeId` selects that node so the user
+ * jumps straight to it after closing the modal.
+ *
+ * @param {{
+ *   result: { errors: any[], warnings: any[] },
+ *   override: boolean,
+ *   onOverrideChange: (b: boolean) => void
+ * }} props
+ */
+function ValidationPanel({ result, override, onOverrideChange }) {
+  const { errors, warnings } = result;
+  const select = useSelectionStore((s) => s.select);
+
+  if (errors.length === 0 && warnings.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-500 border border-emerald-500/30 rounded p-2 bg-emerald-500/5">
+        <CheckCircle2 size={14} />
+        Project looks ready to export.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+      {errors.map((iss, i) => (
+        <IssueRow key={`e${i}`} issue={iss} onJump={(id) => select({ type: 'part', id }, 'replace')} />
+      ))}
+      {warnings.map((iss, i) => (
+        <IssueRow key={`w${i}`} issue={iss} onJump={(id) => select({ type: 'part', id }, 'replace')} />
+      ))}
+
+      {errors.length > 0 ? (
+        <Label className="flex items-center gap-2 text-xs cursor-pointer mt-1 select-none">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 accent-destructive"
+            checked={override}
+            onChange={(e) => onOverrideChange(e.target.checked)}
+          />
+          Export anyway — I know what I'm doing.
+        </Label>
+      ) : null}
+    </div>
+  );
+}
+
+function IssueRow({ issue, onJump }) {
+  const isError = issue.level === 'error';
+  const Icon = isError ? AlertCircle : AlertTriangle;
+  const tone = isError
+    ? 'text-destructive border-destructive/30 bg-destructive/5'
+    : 'text-amber-700 dark:text-amber-500 border-amber-500/30 bg-amber-500/5';
+  return (
+    <button
+      type="button"
+      onClick={() => issue.nodeId && onJump(issue.nodeId)}
+      disabled={!issue.nodeId}
+      className={
+        'flex items-start gap-2 text-xs border rounded p-2 text-left transition-colors ' +
+        tone +
+        (issue.nodeId ? ' hover:bg-opacity-100 cursor-pointer' : ' cursor-default')
+      }
+      title={issue.nodeId ? 'Click to select the offending node' : undefined}
+    >
+      <Icon size={14} className="shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <div>{issue.message}</div>
+        <div className="text-[10px] opacity-60 font-mono mt-0.5">{issue.code}</div>
+      </div>
+    </button>
   );
 }
