@@ -616,9 +616,13 @@ Substage status:
 |----------|--------|--------|-------|
 | 1A Outliner — first cut | ✅ shipped | `3e2911a` | Hierarchy display only. treeBuilder + TreeNode + OutlinerEditor. Sort PSD-style (top of list = top of canvas). Click select / shift-add / ctrl-toggle. Visibility toggle. 47 treeBuilder tests. Drag-reparent / search / display-mode switcher / context menu / isolate-mode are scoped follow-ups. |
 | 1B Properties — first cut | ✅ shipped | `33a2915` | ObjectTab only (always-present fallback): name, visibility, opacity, transform (x/y/rot/scaleX/Y), pivot (X/Y), part-only draw_order + read-only vert/tri counts. NumberField + TextField field components with edit-and-commit semantics so each keystroke doesn't snapshot undo. 9+ Phase 1B tabs remaining (Mesh / BlendShape / Deformer / Keyforms / Bindings / Parameter / PhysicsRule / Mask / Variant / Common). |
-| 1C Viewport — first cut | ✅ shipped | `fa60044` | Thin wrapper that mounts existing v2 CanvasViewport with stable refs. Phase 1C extensions (header, shading modes, Coord-Space Debugger, lattice/rotation/physics overlays, HUD) are scoped follow-ups. |
-| 1D Parameters — first cut | ✅ shipped | `4b01b4c` | groupBuilder + ParamRow + ParametersEditor. Groups: Opacity / Standard / Variants / Bones / Groups / Project. Adaptive step (range ≥5 → step 1, sub-5 → 0.01). Reset to defaults. Initialize Rig still v2-only (becomes `rig.initialize` operator in Phase 5). 23 groupBuilder tests. |
-| 1E Coord-space bug fix | ⏳ deferred | — | Gated on Phase 1C Coord-Space Debugger overlay. See Working Note "2026-04-29 — v2 regression triage". |
+| 1C.0 Viewport — first cut | ✅ shipped | `fa60044` | Thin wrapper that mounts existing v2 CanvasViewport with stable refs. |
+| 1C.1 Coord-Space Debugger overlay | ✅ shipped | `52c2f3b` | `chainDiagnose.js` pure walker + HUD. Per-art-mesh diagnosis: terminationKind (root/unknown_parent/no_parent/cycle_or_deep) + finalFrame (canvas-px/normalized-0to1/pivot-relative/unknown). Auto-mounts in v3 viewport, top-right. Issues banner in destructive color when broken chains present. Unblocks Phase 1E. 38 tests. |
+| 1D Parameters — first cut | ✅ shipped | `4b01b4c` | groupBuilder + ParamRow + ParametersEditor. Groups: Opacity / Standard / Variants / Bones / Groups / Project. Adaptive step (range ≥5 → step 1, sub-5 → 0.01). Reset to defaults. 23 groupBuilder tests. |
+| 1E Coord-space bug fix | ⏳ next | — | Now diagnosable via 1C.1 HUD. Pending shelby smoke test confirming exactly which meshes have broken chains and which deformer parents are missing. |
+| Aux: Initialize Rig in v3 | ✅ shipped | `6b65475` | RigService.initializeRig() bundles harvest + seedAllRig + rigSpec cache + paramValues reset. Wired to button in v3 ParametersEditor (empty-state + header). |
+| Aux: app.undo / app.redo | ✅ shipped | `433715c` | Operators + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z bindings (Meta variants for macOS). |
+| Aux: file.save / file.load | ✅ shipped | `6be37f7` | Operators + Ctrl+S / Ctrl+O bindings. Global toolbar in WorkspaceTabs with Undo / Redo / Open / Save buttons. Save button shows dirty dot. |
 
 **Goal:** Outliner + Properties + extended Viewport + Parameters all
 functional.
