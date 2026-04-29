@@ -1817,48 +1817,70 @@ keyframe interpolation. Это **animation domain**, не renderer.
 
 ---
 
-## 16. v2 retirement roadmap **[STATUS: default flipped 2026-04-29]**
+## 16. v2 retirement **[STATUS: ✅ EXECUTED 2026-04-29]**
 
-Default UI flipped from v2 to v3 once v3 covered the full Initialize
-Rig → scrub → save → export round-trip in shelby smoke testing.
-`?ui=v2` stays as a legacy escape hatch for the v2-only flows that
-haven't migrated yet. v2 code is still in the bundle; deletion happens
-when each v2-only flow has a v3 replacement.
+Two-step retirement:
 
-### v2-only flows (must migrate before v2 deletion)
+- **Step 1** (commit `44a4d40`) — default UI flipped from v2 to v3.
+  `?ui=v2` stayed as legacy escape hatch.
+- **Step 2** (commit pending) — full v2 deletion. `App.jsx` now
+  unconditionally renders `<V3AppShell />`; `readUiVersion` and the
+  `?ui=v2` branch are gone.
 
-| Flow | v2 source | v3 replacement | Phase |
-|------|-----------|----------------|-------|
-| Advanced export dialog (atlas size, motion presets, per-physics-category toggles, model name) | `components/export/ExportModal.jsx` | `file.export` operator + dialog operator | Phase 5 |
-| Save-to-library (IndexedDB record, thumbnail, name) | `components/save/SaveModal.jsx` | `file.save_to_library` operator + dialog | Phase 5 |
-| Wizard joint adjust (drag bone pivots) | `components/canvas/PsdImportWizard.jsx` step 3 + `components/canvas/SkeletonOverlay.jsx` joint drag | `layout.move_bone_pivot` operator (Plan §1A Working Note 5.2) | Phase 1A++ |
-| Mesh paint mode (brush-based vertex / blend-shape deltas) | `components/canvas/CanvasViewport.jsx` mesh edit mode + brush | Phase 2C BlendShape paint editor | Phase 2C |
-| Animation Timeline panel (keyframe edit UI) | `components/timeline/TimelinePanel.jsx` | v3 `TimelineEditor` (currently stub) | Phase 3 |
-| Random Pose dialog | `components/parameters/...` | Phase 5 dialog operator | Phase 5 |
+### Files deleted in Step 2
 
-### Already migrated (no v2-only feature gap)
+```
+src/app/layout/EditorLayout.jsx                (v2 root shell)
+src/components/animation/AnimationListPanel.jsx
+src/components/armature/ArmaturePanel.jsx
+src/components/export/ExportModal.jsx
+src/components/inspector/Inspector.jsx
+src/components/layers/LayerPanel.jsx
+src/components/load/LoadModal.jsx
+src/components/load/ProjectGallery.jsx
+src/components/parameters/ParametersPanel.jsx
+src/components/preferences/PreferencesModal.jsx
+src/components/save/SaveModal.jsx
+src/components/timeline/TimelinePanel.jsx
+src/hooks/useUndoRedo.js                       (v2 keyboard handler)
+src/app/                                       (now empty)
+```
 
-- Inspector → v3 Properties + tab strip
-- LayerPanel → v3 Outliner (hierarchy + rig modes + search + ↑↓ nav)
+Bundle dropped 1359 → 1099 kB (−260 kB / −19%) on minified main
+chunk; CSS 108 → 98 kB. typecheck + 72/72 test files green.
+
+### Already covered in v3 at deletion time
+
+- Inspector → v3 Properties + internal tab strip (Object / Deformer / Parameter / BlendShapes)
+- LayerPanel → v3 Outliner (hierarchy + rig modes + search + ↑↓ keyboard nav)
 - Parameters panel → v3 ParametersEditor (groups + click-to-select + Initialize Rig button)
-- v2 keyboard handler (Ctrl+Z/Y) → v3 operator dispatcher (app.undo / app.redo)
-- v2 ExportModal "Save to file" path → v3 `file.export` (no advanced options yet)
+- v2 keyboard handler (Ctrl+Z/Y) → v3 operator dispatcher (app.undo / app.redo) + the rest of the operator set
+- v2 ExportModal "Save to file" path → v3 `file.export` (basic only — see follow-ups below)
+- v2 SaveModal "Save to file" path → v3 `file.save`
+- v2 main toolbar Undo/Redo/Save/Open → v3 WorkspaceTabs toolbar buttons
 
-### v2 code-paths still shared
+### Follow-ups (features lost at v2 deletion, scheduled for v3 migration)
 
-- `CanvasViewport.jsx` is wrapped by v3 ViewportEditor (still the rig pipeline carrier; not v2-only).
-- `chainEval.js` / `scenePass.js` / `partRenderer.js` / `transforms.js` — all shared runtime, no UI version coupling.
-- `projectStore.js` / `editorStore.js` / etc. — shared state, both UIs read/write the same project.
+| Feature | When | Phase target |
+|---------|------|--------------|
+| Advanced export dialog (atlas size, motion presets, per-physics-category toggles, model name) | required for production exports beyond defaults | Phase 5 — `file.export` gains a dialog operator |
+| Save-to-library (IndexedDB record + thumbnail + named projects) | required for project library workflow | Phase 5 — `file.save_to_library` operator + LoadModal v3 equivalent |
+| Wizard joint adjust (drag bone pivots) — already broken at v2 deletion | replaces broken v2 click | Phase 1A++ — `layout.move_bone_pivot` operator with viewport gizmo |
+| Mesh paint mode (brush-based vertex / blend-shape deltas) | advanced rigging — niche workflow | Phase 2C — BlendShape paint editor |
+| Animation Timeline panel (keyframe edit UI) | required for animation editing | Phase 3 — v3 `TimelineEditor` (currently stub) |
+| Random Pose dialog | niche | Phase 5 — dialog operator |
+| Preferences modal (theme, font, etc.) | UX polish | Phase 4 — settings dialog operator |
+| ProjectGallery (v2 visual library browser) | bundles with Save-to-library | Phase 5 |
 
-### Deletion checklist (when all flows migrated)
+### v2 code-paths still shared (NOT deleted)
 
-1. Delete `src/app/layout/EditorLayout.jsx` + every component imported only by it (LayerPanel, Inspector, TimelinePanel, ExportModal, SaveModal, PhoneLayout if still around).
-2. Delete `src/hooks/useUndoRedo.js` (v3 dispatcher takes over).
-3. Drop `readUiVersion()` from `src/App.jsx`; render `<V3AppShell />` unconditionally.
-4. Drop tests / fixtures that exercise v2-only flows.
-5. Documentation pass: search for "v2" across docs, scrub stale references.
+- `CanvasViewport.jsx` — rig pipeline carrier; wrapped by v3 ViewportEditor.
+- `SkeletonOverlay.jsx`, `PsdImportWizard.jsx`, `GizmoOverlay.jsx` — overlay components rendered inside CanvasViewport.
+- `chainEval.js` / `scenePass.js` / `partRenderer.js` / `transforms.js` — shared runtime, no UI version coupling.
+- `projectStore.js` / `editorStore.js` / `paramValuesStore.js` / `rigSpecStore.js` / `animationStore.js` / `selectionStore.js` / `uiV3Store.js` / `operatorStore.js` / `undoHistory.js` — shared state.
+- `services/RigService.js` / `ExportService.js` / `ImportService.js` / `PersistenceService.js` — shared façades.
 
-Estimated cleanup: 1 week solo once all migrations are done. Folds into Phase 6 cleanup.
+These are the v3-bones; nothing v2-specific lingers in them.
 
 ---
 

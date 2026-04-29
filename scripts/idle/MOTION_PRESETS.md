@@ -111,7 +111,8 @@ Each generated motion is validated before being written. Failure aborts that mot
 1. Define `MY_PRESET_PARAMS` in [`paramDefaults.js`](../../src/io/live2d/idle/paramDefaults.js) — pick `kind` + tuning per Standard Parameter
 2. Add an entry to the `PRESETS` registry: `{ params, label, description, cycleType }`
 3. Add a CLI alias in `KEBAB_TO_PRESET` and `PRESET_TO_KEBAB` in [`generate_idle_motion.mjs`](generate_idle_motion.mjs)
-4. Add a UI row in `motionRows` in [`ExportModal.jsx`](../../src/components/export/ExportModal.jsx)
+4. Surface the new preset in the v3 export operator (Phase 5; the
+   v2 ExportModal where this row used to live was retired 2026-04-29)
 
 That's it — the builder dispatcher picks it up automatically. No changes to `can3writer.js` / `motion3json.js` / `exporter.js` needed.
 
