@@ -28,6 +28,9 @@ import { DeformerTab } from './tabs/DeformerTab.jsx';
 import { ParameterTab } from './tabs/ParameterTab.jsx';
 import { BlendShapeTab } from './tabs/BlendShapeTab.jsx';
 import { VariantTab } from './tabs/VariantTab.jsx';
+import { MeshTab } from './tabs/MeshTab.jsx';
+import { MaskTab } from './tabs/MaskTab.jsx';
+import { PhysicsTab } from './tabs/PhysicsTab.jsx';
 
 /**
  * @typedef {Object} TabContext
@@ -50,6 +53,16 @@ export const PROPERTIES_TABS = [
     render: ({ active }) => <ObjectTab nodeId={active.id} />,
   },
   {
+    id: 'mesh',
+    label: 'Mesh',
+    applies: ({ active, project }) => {
+      if (active.type !== 'part') return false;
+      const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
+      return !!node?.mesh;
+    },
+    render: ({ active }) => <MeshTab nodeId={active.id} />,
+  },
+  {
     id: 'blendShapes',
     label: 'Blend Shapes',
     applies: ({ active, project }) => {
@@ -58,6 +71,24 @@ export const PROPERTIES_TABS = [
       return !!node?.mesh; // tab is available for any meshed part — even with 0 shapes the user adds via the tab
     },
     render: ({ active }) => <BlendShapeTab nodeId={active.id} />,
+  },
+  {
+    id: 'mask',
+    label: 'Mask',
+    applies: ({ active }) => active.type === 'part',
+    render: ({ active }) => <MaskTab nodeId={active.id} />,
+  },
+  {
+    id: 'physics',
+    label: 'Physics',
+    // Show on groups that have a boneRole (those are the ones the
+    // physics resolver targets — hair joint, sleeve elbow, etc.).
+    applies: ({ active, project }) => {
+      if (active.type !== 'group') return false;
+      const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
+      return !!node?.boneRole;
+    },
+    render: ({ active }) => <PhysicsTab nodeId={active.id} />,
   },
   {
     id: 'deformer',

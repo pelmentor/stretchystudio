@@ -44,14 +44,20 @@ export function ViewportEditor() {
   const exportCaptureRef = useRef(null);
   const thumbCaptureRef = useRef(null);
 
-  // Phase 5 — publish the thumbnail capture fn into a small store so
-  // SaveModal (mounted at AppShell level) can ask the viewport for a
-  // snapshot without prop-drilling. Re-publishing each render is cheap
-  // (zustand bails on identity equality) and the cleanup clears the
-  // closure when this editor unmounts.
+  // Phase 5 — publish viewport ref-bridges (thumbnail capture, remesh)
+  // into a small store so editors mounted at the AppShell level
+  // (SaveModal, Properties → MeshTab) can drive viewport-owned
+  // imperatives without prop-drilling. Re-publishing each render is
+  // cheap (zustand bails on identity equality) and the cleanup clears
+  // the closures when this editor unmounts so a stale GL context is
+  // never reused.
   useEffect(() => {
     useCaptureStore.getState().setCaptureThumbnail(() => thumbCaptureRef.current?.() ?? null);
-    return () => useCaptureStore.getState().setCaptureThumbnail(null);
+    useCaptureStore.getState().setRemeshPart((partId, opts) => remeshRef.current?.(partId, opts));
+    return () => {
+      useCaptureStore.getState().setCaptureThumbnail(null);
+      useCaptureStore.getState().setRemeshPart(null);
+    };
   }, []);
 
   return (

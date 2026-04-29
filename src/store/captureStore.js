@@ -24,10 +24,19 @@ import { create } from 'zustand';
  *   Returns a data URL (typically image/webp) sized for the gallery
  *   card. Null when no viewport is mounted yet.
  * @property {(fn: (() => string|null)|null) => void} setCaptureThumbnail
+ *
+ * @property {((partId:string, opts?:any) => void)|null} remeshPart
+ *   Re-runs the mesh worker for the given part using `opts` (defaults
+ *   to the per-node `meshDensity`).  Published by the active viewport
+ *   so non-viewport editors (Properties → MeshTab) can drive
+ *   regeneration without prop-drilling.
+ * @property {(fn: ((partId:string, opts?:any) => void)|null) => void} setRemeshPart
  */
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<CaptureStore>>} */
 export const useCaptureStore = create((set) => ({
   captureThumbnail: null,
   setCaptureThumbnail: (fn) => set({ captureThumbnail: fn }),
+  remeshPart: null,
+  setRemeshPart: (fn) => set({ remeshPart: fn }),
 }));
