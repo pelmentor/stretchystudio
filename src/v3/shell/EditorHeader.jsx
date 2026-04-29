@@ -11,7 +11,6 @@
  * @module v3/shell/EditorHeader
  */
 
-import React from 'react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { EDITOR_REGISTRY, EDITOR_TYPES } from './editorRegistry.js';
 

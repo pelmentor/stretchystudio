@@ -17,7 +17,7 @@
  * @module v3/shell/AppShell
  */
 
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { WorkspaceTabs } from './WorkspaceTabs.jsx';
 import { AreaTree } from './AreaTree.jsx';

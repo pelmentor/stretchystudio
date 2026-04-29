@@ -15,7 +15,6 @@
  * @module v3/editors/stubs
  */
 
-import React from 'react';
 
 function makeStub(label) {
   function Stub() {

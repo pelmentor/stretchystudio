@@ -11,7 +11,7 @@
  *   Drag-and-drop to reparent (only mutates node.parent, never draw_order).
  *   "New Group" button in the toolbar.
  */
-import React, { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { Eye, EyeOff, Copy, Trash2, FolderPlus, LogOut } from 'lucide-react';
 import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';

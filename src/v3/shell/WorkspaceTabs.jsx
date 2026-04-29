@@ -15,7 +15,6 @@
  * @module v3/shell/WorkspaceTabs
  */
 
-import React from 'react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 
 /** @type {Array<{id: import('../../store/uiV3Store.js').WorkspaceId, label: string}>} */

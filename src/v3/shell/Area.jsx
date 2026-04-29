@@ -15,7 +15,6 @@
  * @module v3/shell/Area
  */
 
-import React from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { EditorHeader } from './EditorHeader.jsx';
 import { EDITOR_REGISTRY } from './editorRegistry.js';

@@ -13,7 +13,7 @@
  *    screenX = worldX * zoom + panX
  *    screenY = worldY * zoom + panY
  */
-import React, { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo } from 'react';
 import { useEditorStore } from '@/store/editorStore';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';

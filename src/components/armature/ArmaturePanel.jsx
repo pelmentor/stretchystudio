@@ -1,4 +1,3 @@
-import React from 'react';
 import { useEditorStore } from '@/store/editorStore';
 import { useProjectStore } from '@/store/projectStore';
 import { Eye, EyeOff, Edit3, Check, Scissors } from 'lucide-react';

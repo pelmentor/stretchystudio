@@ -16,7 +16,6 @@
  * @module v3/shell/AreaTree
  */
 
-import React from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { Area } from './Area.jsx';
