@@ -21,6 +21,10 @@
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
+import {
+  serializeProject,
+  deserializeProject,
+} from '../../services/PersistenceService.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -113,6 +117,61 @@ function registerBuiltins() {
           Object.assign(proj, snapshot);
         }, { skipHistory: true });
       });
+    },
+  });
+
+  // File save / load. Phase 5 will replace the trivial "browser
+  // download" save with the SaveModal flow (project-library record,
+  // thumbnail capture, name field). Until then this keeps v3 unblocked
+  // for round-trip testing.
+  registerOperator({
+    id: 'file.save',
+    label: 'Save Project (.stretch)',
+    exec: async () => {
+      try {
+        const project = useProjectStore.getState().project;
+        const blob = await serializeProject(project);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `project-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.stretch`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke after a tick so Safari has time to start the download.
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+        useProjectStore.setState({ hasUnsavedChanges: false });
+      } catch (err) {
+        if (typeof console !== 'undefined') console.error('[file.save] failed:', err);
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'file.load',
+    label: 'Load Project (.stretch)',
+    exec: () => {
+      // Programmatic file picker: must run in a user-gesture call
+      // stack to be allowed. The operator dispatcher fires from a
+      // keydown listener, which qualifies. Toolbar buttons that call
+      // this operator also qualify (button click is a user gesture).
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.stretch,.zip';
+      input.style.display = 'none';
+      input.onchange = async (e) => {
+        const file = /** @type {HTMLInputElement} */ (e.target).files?.[0];
+        document.body.removeChild(input);
+        if (!file) return;
+        try {
+          const data = await deserializeProject(file);
+          useProjectStore.getState().loadProject(data);
+        } catch (err) {
+          if (typeof console !== 'undefined') console.error('[file.load] failed:', err);
+        }
+      };
+      document.body.appendChild(input);
+      input.click();
     },
   });
 }

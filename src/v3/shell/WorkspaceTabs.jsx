@@ -15,7 +15,10 @@
  * @module v3/shell/WorkspaceTabs
  */
 
+import { Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
+import { useProjectStore } from '../../store/projectStore.js';
+import { getOperator } from '../operators/registry.js';
 
 /** @type {Array<{id: import('../../store/uiV3Store.js').WorkspaceId, label: string}>} */
 const TABS = [
@@ -29,6 +32,19 @@ const TABS = [
 export function WorkspaceTabs() {
   const active = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace = useUIV3Store((s) => s.setWorkspace);
+  // Subscribe to hasUnsavedChanges so the save button reflects state.
+  const dirty = useProjectStore((s) => s.hasUnsavedChanges);
+
+  function runOp(id) {
+    const op = getOperator(id);
+    if (!op) return;
+    if (op.available && !op.available({ editorType: null })) return;
+    try {
+      op.exec({ editorType: null });
+    } catch (err) {
+      if (typeof console !== 'undefined') console.error(`[op ${id}] failed:`, err);
+    }
+  }
 
   return (
     <div className="flex items-center gap-0 px-2 h-9 border-b border-border bg-muted/40 select-none">
@@ -52,6 +68,42 @@ export function WorkspaceTabs() {
           </button>
         );
       })}
+
+      <div className="ml-auto flex items-center gap-0.5">
+        <ToolbarButton title="Undo (Ctrl+Z)" onClick={() => runOp('app.undo')}>
+          <Undo2 size={14} />
+        </ToolbarButton>
+        <ToolbarButton title="Redo (Ctrl+Shift+Z)" onClick={() => runOp('app.redo')}>
+          <Redo2 size={14} />
+        </ToolbarButton>
+        <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <ToolbarButton
+          title="Open project (.stretch) — Ctrl+O"
+          onClick={() => runOp('file.load')}
+        >
+          <FolderOpen size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          title="Save project (.stretch) — Ctrl+S"
+          onClick={() => runOp('file.save')}
+        >
+          <Save size={14} />
+          {dirty ? <span className="ml-0.5 text-primary">·</span> : null}
+        </ToolbarButton>
+      </div>
     </div>
+  );
+}
+
+function ToolbarButton({ title, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="h-7 px-2 inline-flex items-center text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-sm transition-colors"
+    >
+      {children}
+    </button>
   );
 }

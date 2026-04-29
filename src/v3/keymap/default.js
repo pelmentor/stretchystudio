@@ -42,6 +42,13 @@ export const DEFAULT_KEYMAP = {
   'Meta+Shift+KeyZ': 'app.redo',
   'Ctrl+KeyY': 'app.redo',
   'Meta+KeyY': 'app.redo',
+
+  // File save / load. Browser may pre-empt Ctrl+S as "save page" — the
+  // dispatcher calls preventDefault before exec runs so we win.
+  'Ctrl+KeyS': 'file.save',
+  'Meta+KeyS': 'file.save',
+  'Ctrl+KeyO': 'file.load',
+  'Meta+KeyO': 'file.load',
 };
 
 /**
