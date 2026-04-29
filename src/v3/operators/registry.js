@@ -21,6 +21,7 @@
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
+import { useEditorStore } from '../../store/editorStore.js';
 import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
 import {
   serializeProject,
@@ -187,6 +188,54 @@ function registerBuiltins() {
     },
   });
 
+  // Frame-to-selected: center the viewport on the active selection's
+  // mesh bounding box at current zoom. Period (.) is the Blender
+  // muscle memory binding. Walks selectionStore → projectStore for
+  // the part's mesh.vertices; we use the rest mesh rather than rig-
+  // evaluated verts because:
+  //   - the rest bbox stays stable across param scrubbing;
+  //   - reading rig-evaluated verts would couple the operator to the
+  //     viewport's per-frame scratch buffers.
+  // Selecting a group has no centroid; we fall back to walking the
+  // group's descendant parts and union their bboxes.
+  registerOperator({
+    id: 'view.frameSelected',
+    label: 'Frame Selected',
+    available: () => {
+      const items = useSelectionStore.getState().items;
+      return items.some((it) => it.type === 'part' || it.type === 'group');
+    },
+    exec: () => {
+      const items = useSelectionStore.getState().items;
+      const target = items.findLast?.((it) => it.type === 'part' || it.type === 'group')
+        ?? findLastFrameTarget(items);
+      if (!target) return;
+      const project = useProjectStore.getState().project;
+      const bbox = computeNodeBbox(project, target.id);
+      if (!bbox) return;
+
+      // canvas dimensions: query the DOM rather than thread a viewport
+      // ref through the operator system. The v3 shell only mounts one
+      // CanvasViewport at a time so the first canvas wins.
+      const canvas = typeof document !== 'undefined'
+        ? /** @type {HTMLCanvasElement|null} */ (document.querySelector('canvas'))
+        : null;
+      if (!canvas) return;
+      const vw = canvas.clientWidth;
+      const vh = canvas.clientHeight;
+      if (vw === 0 || vh === 0) return;
+
+      const cx = (bbox.minX + bbox.maxX) / 2;
+      const cy = (bbox.minY + bbox.maxY) / 2;
+      const editor = useEditorStore.getState();
+      const zoom = editor.view.zoom;
+      editor.setView({
+        panX: vw / 2 - cx * zoom,
+        panY: vh / 2 - cy * zoom,
+      });
+    },
+  });
+
   // Toggle visibility on the active selection's project nodes.
   registerOperator({
     id: 'selection.toggleVisibility',
@@ -323,6 +372,63 @@ function registerBuiltins() {
       input.click();
     },
   });
+}
+
+/**
+ * Compute the rest-mesh bounding box for a node id. For parts:
+ * union of mesh.vertices. For groups: union of every descendant
+ * part's bbox. Returns null when the node has no geometry to
+ * frame against.
+ */
+function computeNodeBbox(project, nodeId) {
+  const node = project?.nodes?.find((n) => n.id === nodeId);
+  if (!node) return null;
+  /** @type {{minX:number, minY:number, maxX:number, maxY:number}} */
+  const bbox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+
+  function unionPartVerts(part) {
+    const verts = part?.mesh?.vertices;
+    if (!Array.isArray(verts)) return;
+    for (const v of verts) {
+      const x = v?.x ?? v?.restX ?? 0;
+      const y = v?.y ?? v?.restY ?? 0;
+      if (x < bbox.minX) bbox.minX = x;
+      if (y < bbox.minY) bbox.minY = y;
+      if (x > bbox.maxX) bbox.maxX = x;
+      if (y > bbox.maxY) bbox.maxY = y;
+    }
+  }
+
+  if (node.type === 'part') {
+    unionPartVerts(node);
+  } else {
+    // Walk descendants depth-first to find every part under this group.
+    const stack = [node.id];
+    const seen = new Set();
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const c of project.nodes) {
+        if (c.parent === id) {
+          if (c.type === 'part') unionPartVerts(c);
+          else stack.push(c.id);
+        }
+      }
+    }
+  }
+
+  if (bbox.minX === Infinity) return null;
+  return bbox;
+}
+
+/** findLast polyfill for environments without Array.prototype.findLast. */
+function findLastFrameTarget(items) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.type === 'part' || it.type === 'group') return it;
+  }
+  return null;
 }
 
 registerBuiltins();

@@ -68,6 +68,11 @@ export const DEFAULT_KEYMAP = {
 
   // Toggle visibility on selection. Bare H — Blender muscle memory.
   'KeyH': 'selection.toggleVisibility',
+
+  // Frame-to-selected. Period (NumpadDecimal too) — Blender's "view
+  // selected" / "frame the selection" gesture.
+  'Period':         'view.frameSelected',
+  'NumpadDecimal':  'view.frameSelected',
 };
 
 /**
