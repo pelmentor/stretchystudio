@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #12 (autonomous)
+
+Sweep #11 ended at structural deformer extraction (warp + rotation definitions + keyform position arrays, but no parameter mapping). Sweep #12 closes that gap by extracting the binding graph that says "keyform index N corresponds to ParamX=v0, ParamY=v1, …".
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` keyform binding graph extraction. `cmo3PartExtract.js` gains two more record types and walks every `<KeyformBindingSource xs.id="…">` and `<KeyformGridSource xs.id="…">`. Per `ExtractedKeyformBinding`: `xsId`, `gridSourceRef` (back-pointer to its grid), `parameterGuidRef` (which CParameterGuid drives this binding), `keys[]` (parameter values at each keyform index, e.g. `[-1, 0, 1]` for a 3-key axis), `description` (the parameter id-string the writer stamped, e.g. `"ParamEyeBallX"`), `interpolationType`. Per `ExtractedKeyformGrid`: `xsId` and an `entries[]` array — one per cell of the deformer's keyform grid. Each entry carries `keyformGuidRef` (the CFormGuid xs.ref that matches the deformer keyform's own guid) plus an `accessKey[]` of `{bindingRef, keyIndex}` tuples that locate this cell along each parameter axis. Verifier cross-checks the linkage end-to-end: RigWarp_irides_l → grid #563 → 9 cells → cell 0 access (ParamEyeBallX keyIndex=0 → paramVal=-1, ParamEyeBallY keyIndex=0 → paramVal=-1) → keyformGuid #564 (matches the deformer's first keyform's CFormGuid). Inspector modal shows "Keyform bindings" + "Keyform grids" counts in the metadata grid. **Honest scope cut:** ExtractedDeformer + ExtractedKeyformBinding + ExtractedKeyformGrid → `project.rigWarps[partId]` synthesis is NOT in this sweep. The translator needs to map deformer keyform position arrays into the SS rigWarps schema (which uses a different layout: per-binding keyform tuples vs Cubism's flat cartesian-product list); that's its own sweep. |
+
+**Phase coverage after sweep #12:** the .cmo3 round-trip now decodes everything structurally needed to drive a rig: deformer hierarchy (own guid + parent deformer ref + parent part-group ref), warp grids (cols, rows, base + per-keyform positions), rotation deformers (angle/origin/scale per keyform), and the binding graph that maps keyform indices to (parameter, value) tuples. The next sweep on this line synthesises that graph into SS's `project.rigWarps[partId]` so imported models actually deform when params change.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #11 (autonomous)
 
 Sweep #10 closed the static-reference import path. Sweep #11 starts the rig-decode line: structural extraction of the deformer graph (CWarpDeformerSource + CRotationDeformerSource) so subsequent sweeps can synthesise SS rigWarps + groupRotation from real data instead of regenerating defaults.

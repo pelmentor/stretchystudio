@@ -85,6 +85,43 @@ import {
  */
 
 /**
+ * @typedef {Object} ExtractedKeyformBinding
+ *
+ * One parameter's contribution to a deformer's keyform grid: the values
+ * (`keys`) at which keyforms are defined for this parameter, plus the
+ * GUID that links this binding back to its owning grid.
+ *
+ * @property {string|null} xsId
+ * @property {string|null} gridSourceRef       xs.ref → ExtractedKeyformGrid.xsId
+ * @property {string|null} parameterGuidRef    xs.ref to a CParameterGuid (resolves to CParameterId.idstr)
+ * @property {number[]} keys                   parameter values at each keyform index
+ * @property {string} description              ParamID string the writer stamped on the binding
+ * @property {string} interpolationType        e.g. "LINEAR"
+ */
+
+/**
+ * @typedef {Object} ExtractedKeyformGridEntry
+ *
+ * One cell of a deformer's keyform grid: which CFormGuid carries the
+ * keyform data, plus the (binding, keyIndex) tuples that locate this
+ * cell along each parameter axis.
+ *
+ * @property {string|null} keyformGuidRef      xs.ref → CFormGuid (matches CWarpDeformerForm/CArtMeshForm guid)
+ * @property {Array<{bindingRef:string|null, keyIndex:number}>} accessKey
+ */
+
+/**
+ * @typedef {Object} ExtractedKeyformGrid
+ *
+ * A deformer's complete keyform grid: list of access-keyed cells. The
+ * size is the cartesian product of binding lengths (e.g. ParamEyeBallX
+ * 3 keys × ParamEyeBallY 3 keys = 9 cells).
+ *
+ * @property {string|null} xsId
+ * @property {ExtractedKeyformGridEntry[]} entries
+ */
+
+/**
  * @typedef {'warp'|'rotation'} DeformerKind
  *
  * @typedef {Object} ExtractedDeformerKeyform
@@ -117,6 +154,8 @@ import {
  * @property {ExtractedGroup[]} groups
  * @property {ExtractedTexture[]} textures
  * @property {ExtractedDeformer[]} deformers
+ * @property {ExtractedKeyformBinding[]} keyformBindings
+ * @property {ExtractedKeyformGrid[]} keyformGrids
  * @property {string[]} warnings
  */
 
@@ -462,6 +501,80 @@ function extractDeformer(def, kind) {
 }
 
 /**
+ * Walk a `<KeyformBindingSource xs.id="…">` and pull the
+ * (parameter, keys[]) pairing it represents.
+ *
+ * @param {XElement} bind
+ * @returns {ExtractedKeyformBinding}
+ */
+function extractKeyformBinding(bind) {
+  const grid = findField(bind, '_gridSource');
+  const param = findField(bind, 'parameterGuid');
+  const keysEl = findField(bind, 'keys');
+  /** @type {number[]} */
+  const keys = [];
+  if (keysEl) {
+    for (const c of keysEl.children) {
+      if (typeof c === 'string' || c.tag !== 'f') continue;
+      const v = Number(elementText(c).trim());
+      if (Number.isFinite(v)) keys.push(v);
+    }
+  }
+  const interpEl = findField(bind, 'interpolationType');
+  return {
+    xsId: bind.attrs['xs.id'] ?? null,
+    gridSourceRef: grid?.attrs['xs.ref'] ?? null,
+    parameterGuidRef: param?.attrs['xs.ref'] ?? null,
+    keys,
+    description: readStringField(bind, 'description') ?? '',
+    interpolationType: interpEl?.attrs.v ?? 'LINEAR',
+  };
+}
+
+/**
+ * Walk a `<KeyformGridSource xs.id="…">` and decode its access-keyed cells.
+ *
+ * @param {XElement} grid
+ * @returns {ExtractedKeyformGrid}
+ */
+function extractKeyformGrid(grid) {
+  const list = findField(grid, 'keyformsOnGrid');
+  /** @type {ExtractedKeyformGridEntry[]} */
+  const entries = [];
+  if (list) {
+    for (const cell of list.children) {
+      if (typeof cell === 'string' || cell.tag !== 'KeyformOnGrid') continue;
+      const access = findField(cell, 'accessKey');
+      /** @type {Array<{bindingRef: string|null, keyIndex: number}>} */
+      const accessKey = [];
+      if (access) {
+        const paramList = findField(access, '_keyOnParameterList');
+        if (paramList) {
+          for (const kp of paramList.children) {
+            if (typeof kp === 'string' || kp.tag !== 'KeyOnParameter') continue;
+            const bindRef = findField(kp, 'binding');
+            const ki = readNumberField(kp, 'keyIndex', 0);
+            accessKey.push({
+              bindingRef: bindRef?.attrs['xs.ref'] ?? null,
+              keyIndex: ki,
+            });
+          }
+        }
+      }
+      const kfGuid = findField(cell, 'keyformGuid');
+      entries.push({
+        keyformGuidRef: kfGuid?.attrs['xs.ref'] ?? null,
+        accessKey,
+      });
+    }
+  }
+  return {
+    xsId: grid.attrs['xs.id'] ?? null,
+    entries,
+  };
+}
+
+/**
  * Extract every part / group / texture from a parsed cmo3 main.xml.
  *
  * Non-fatal issues are pushed to `warnings[]` instead of throwing, so a
@@ -529,5 +642,27 @@ export function extractScene(parsed) {
     }
   }
 
-  return { parts, groups, textures, deformers, warnings };
+  /** @type {ExtractedKeyformBinding[]} */
+  const keyformBindings = [];
+  for (const bind of findAllByTag(root, 'KeyformBindingSource')) {
+    if (!bind.attrs['xs.id']) continue;
+    try {
+      keyformBindings.push(extractKeyformBinding(bind));
+    } catch (err) {
+      warnings.push(`extractKeyformBinding failed for ${bind.attrs['xs.id']}: ${(err instanceof Error) ? err.message : String(err)}`);
+    }
+  }
+
+  /** @type {ExtractedKeyformGrid[]} */
+  const keyformGrids = [];
+  for (const grid of findAllByTag(root, 'KeyformGridSource')) {
+    if (!grid.attrs['xs.id']) continue;
+    try {
+      keyformGrids.push(extractKeyformGrid(grid));
+    } catch (err) {
+      warnings.push(`extractKeyformGrid failed for ${grid.attrs['xs.id']}: ${(err instanceof Error) ? err.message : String(err)}`);
+    }
+  }
+
+  return { parts, groups, textures, deformers, keyformBindings, keyformGrids, warnings };
 }

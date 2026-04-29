@@ -183,6 +183,14 @@ export function Cmo3InspectModal() {
                     label="Rotation deformers"
                     value={String(result.scene.deformers.filter((d) => d.kind === 'rotation').length)}
                   />
+                  <Field
+                    label="Keyform bindings"
+                    value={String(result.scene.keyformBindings.length)}
+                  />
+                  <Field
+                    label="Keyform grids"
+                    value={String(result.scene.keyformGrids.length)}
+                  />
                 </>
               ) : null}
             </div>

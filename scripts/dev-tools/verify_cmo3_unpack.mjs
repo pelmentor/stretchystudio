@@ -49,7 +49,7 @@ if (meta.scene) {
   const warps = meta.scene.deformers.filter((d) => d.kind === 'warp').length;
   const rots = meta.scene.deformers.filter((d) => d.kind === 'rotation').length;
   console.log('');
-  console.log(`[scene] parts=${meta.scene.parts.length}  groups=${meta.scene.groups.length}  textures=${meta.scene.textures.length}  warps=${warps}  rotations=${rots}`);
+  console.log(`[scene] parts=${meta.scene.parts.length}  groups=${meta.scene.groups.length}  textures=${meta.scene.textures.length}  warps=${warps}  rotations=${rots}  bindings=${meta.scene.keyformBindings.length}  grids=${meta.scene.keyformGrids.length}`);
   console.log('  first 8 parts:');
   for (const p of meta.scene.parts.slice(0, 8)) {
     const verts = p.positions.length / 2;
@@ -68,6 +68,26 @@ if (meta.scene) {
   for (const d of meta.scene.deformers.slice(0, 8)) {
     const grid = d.kind === 'warp' ? `${d.cols}×${d.rows}` : 'rotation';
     console.log(`    ${d.kind.padEnd(8)} ${d.idStr.padEnd(28)} ${d.name.padEnd(22)} ${grid}  kf=${d.keyforms.length}  parentDef=${d.parentDeformerGuidRef ?? '-'}`);
+  }
+  console.log('  first 6 keyform bindings:');
+  for (const b of meta.scene.keyformBindings.slice(0, 6)) {
+    console.log(`    ${b.xsId ?? '-'}  ${b.description.padEnd(20)} keys=[${b.keys.join(', ')}]  interp=${b.interpolationType}`);
+  }
+  // Cross-check: link the first deformer to its grid + bindings.
+  if (meta.scene.deformers.length > 0) {
+    const d0 = meta.scene.deformers[0];
+    const grid = meta.scene.keyformGrids.find((g) => g.xsId === d0.keyformGridSourceRef);
+    console.log('');
+    console.log(`[link sample] ${d0.idStr} grid=${d0.keyformGridSourceRef} cells=${grid?.entries.length ?? 0}`);
+    if (grid && grid.entries.length > 0) {
+      const cell0 = grid.entries[0];
+      console.log(`  cell 0 access:`);
+      for (const ak of cell0.accessKey) {
+        const bind = meta.scene.keyformBindings.find((b) => b.xsId === ak.bindingRef);
+        console.log(`    ${bind?.description ?? '?'} keyIndex=${ak.keyIndex}  paramVal=${bind ? bind.keys[ak.keyIndex] : '?'}`);
+      }
+      console.log(`  cell 0 keyformGuid=${cell0.keyformGuidRef}`);
+    }
   }
 }
 
