@@ -31,6 +31,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRigSpecStore } from '../../../../store/rigSpecStore.js';
+import { useSelectionStore } from '../../../../store/selectionStore.js';
 import {
   diagnoseRigChains,
   summarizeDiagnoses,
@@ -53,6 +54,14 @@ const TERM_LABELS = {
 
 export function CoordSpaceOverlay() {
   const rigSpec = useRigSpecStore((s) => s.rigSpec);
+  const select = useSelectionStore((s) => s.select);
+  const activeId = useSelectionStore((s) => {
+    const items = s.items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'part') return items[i].id;
+    }
+    return null;
+  });
   const [expanded, setExpanded] = useState(false);
 
   const diags = useMemo(() => diagnoseRigChains(rigSpec), [rigSpec]);
@@ -96,7 +105,12 @@ export function CoordSpaceOverlay() {
       {compact ? null : (
         <div className="border-t border-border/60 px-2 py-1 max-h-72 overflow-auto flex flex-col gap-0.5">
           {diags.map((d) => (
-            <DiagnosisRow key={d.partId} d={d} />
+            <DiagnosisRow
+              key={d.partId}
+              d={d}
+              isActive={activeId === d.partId}
+              onSelect={(modifier) => select({ type: 'part', id: d.partId }, modifier)}
+            />
           ))}
         </div>
       )}
@@ -105,9 +119,13 @@ export function CoordSpaceOverlay() {
 }
 
 /**
- * @param {{d: import('../../../../io/live2d/runtime/evaluator/chainDiagnose.js').ChainDiagnosis}} props
+ * @param {{
+ *   d: import('../../../../io/live2d/runtime/evaluator/chainDiagnose.js').ChainDiagnosis,
+ *   isActive: boolean,
+ *   onSelect: (m: 'replace'|'add'|'toggle') => void,
+ * }} props
  */
-function DiagnosisRow({ d }) {
+function DiagnosisRow({ d, isActive, onSelect }) {
   const frameColor = FRAME_COLORS[d.finalFrame] ?? 'text-muted-foreground';
   const termLabel = TERM_LABELS[d.terminationKind] ?? d.terminationKind;
   const isClean = d.terminationKind === 'root';
@@ -115,9 +133,22 @@ function DiagnosisRow({ d }) {
     ? `chain: ${d.chainPath.map((s) => `${s.kind}:${s.id}`).join(' → ')} → ${d.terminationKind}`
     : `chain: (${d.terminationKind})`;
   return (
-    <div
-      className={'flex items-center gap-1.5 font-mono text-[10px] ' + (isClean ? 'opacity-60' : '')}
+    <button
+      type="button"
+      className={
+        'flex items-center gap-1.5 font-mono text-[10px] text-left rounded px-1 transition-colors ' +
+        (isActive
+          ? 'bg-primary/30 text-foreground'
+          : (isClean ? 'opacity-60 hover:bg-muted/40' : 'hover:bg-muted/40'))
+      }
       title={tooltip}
+      onClick={(e) => {
+        /** @type {'replace'|'add'|'toggle'} */
+        let modifier = 'replace';
+        if (e.shiftKey) modifier = 'add';
+        else if (e.ctrlKey || e.metaKey) modifier = 'toggle';
+        onSelect(modifier);
+      }}
     >
       <span className={'w-3 inline-flex justify-center ' + frameColor}>
         {isClean ? '·' : '!'}
@@ -125,6 +156,6 @@ function DiagnosisRow({ d }) {
       <span className="truncate flex-1" title={d.partId}>{d.partId}</span>
       <span className={frameColor + ' shrink-0'}>{d.finalFrame}</span>
       <span className="text-muted-foreground shrink-0">{termLabel}</span>
-    </div>
+    </button>
   );
 }
