@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #17 (autonomous)
+
+Sweep #16 finished the deformer chain; sweep #17 starts the non-rig data sweep with masks. Imported cmo3 models had no clipping at all — irides drew over eyewhite, etc. — because `project.maskConfigs[]` was hard-wired to `[]`.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` mask config synthesis. `cmo3PartExtract.js`'s `ExtractedPart` gains `ownDrawableGuidRef` (the CDrawableGuid xs.ref attached to each part's `ACDrawableSource`), pulled from `<CDrawableGuid xs.n="guid" xs.ref="…"/>`. Without this the importer can't join clip refs back to parts: another part's `clipGuidList` entries point at THIS xs.ref, not the part's xs.id. `cmo3Import.js` builds a `drawableGuidToNodeId` map alongside `partGuidToNodeId` during the part loop, then walks every part's `clipMaskRefs[]` to populate `project.maskConfigs[]` with `{maskedMeshId, maskMeshIds[]}` pairs (matches the `MaskConfig` shape from `rig/maskConfigs.js`). Multi-mask sources warn (writer collapses to first on re-export), unresolved refs warn. Verified against `shelby.cmo3`: 2 mask configs synthesised — `irides-l ← eyewhite-l`, `irides-r ← eyewhite-r` — exactly matching the writer's `CLIP_RULES` table that the auto-rig path produces. 0 mask-pass warnings. |
+
+**Phase coverage after sweep #17:** the .cmo3 round-trip pipeline now decodes the full structural + rig + clipping data the writer needs. Pending pieces on this line: variants (encoded via conditional keyform bindings — partly already covered by sweep #13's binding decode, but not yet wired through `variantNormalizer`), physics rules (`CPhysicsSettingsSource` decode + `physicsRules[]` population), bone-baked angles (`boneConfig.bakedKeyformAngles` from the per-mesh CWarpDeformerForm + ParamRotation_<role> binding combo). Other entirely-pending items: 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #16 (autonomous)
 
 Sweep #15 fixed rotation deformers; sweep #16 fixes the other half of the runtime-evaluator gap: every imported leaf rigWarp had `parent: { type: 'warp', id: 'BodyXWarp' }` hard-wired (the writer's reparent step on re-export overwrites this anyway, but evalRig at runtime walks the stored value, so face / eye / brow / hair region rigWarps were traversing the wrong chain in the v3 viewport).

@@ -689,10 +689,16 @@ export async function importCmo3(bytes) {
   // the parts loop.
   /** @type {Map<string, string>} */
   const partGuidToNodeId = new Map();
+  // Track each part's own CDrawableGuid xs.ref → SS node id. Other parts'
+  // `clipMaskRefs` entries point at THIS xs.ref (not the part's xs.id),
+  // so building maskConfigs needs this resolver.
+  /** @type {Map<string, string>} */
+  const drawableGuidToNodeId = new Map();
 
   for (const part of scene.parts) {
     const nodeId = uid();
     if (part.xsId) partGuidToNodeId.set(part.xsId, nodeId);
+    if (part.ownDrawableGuidRef) drawableGuidToNodeId.set(part.ownDrawableGuidRef, nodeId);
     const parent = part.parentGuidRef ? (guidToNodeId.get(part.parentGuidRef) ?? null) : null;
     if (part.parentGuidRef && parent === null) {
       warnings.push(`part ${part.drawableIdStr} (${part.name}) has unresolved parent ${part.parentGuidRef}`);
@@ -752,6 +758,36 @@ export async function importCmo3(bytes) {
   );
   for (const w of rotationWarnings) warnings.push(`rotation: ${w}`);
 
+  // Sweep #17: synthesise project.maskConfigs[] from each part's
+  // clipGuidList. Cubism stores clip refs as CDrawableGuid xs.refs (each
+  // part has its own CDrawableGuid; another part's clipGuidList contains
+  // refs to those). SS's MaskConfig schema is per-masked-mesh, with one
+  // mask-mesh-id array (writer collapses to first entry on re-export, so
+  // multi-mask cmo3 sources warn). Without this, imported models lose
+  // all clipping — irides bleed past the eyewhite, etc.
+  /** @type {Array<{maskedMeshId:string, maskMeshIds:string[]}>} */
+  const maskConfigs = [];
+  for (const part of scene.parts) {
+    if (!part.clipMaskRefs.length) continue;
+    const maskedNodeId = part.xsId ? partGuidToNodeId.get(part.xsId) : null;
+    if (!maskedNodeId) continue;
+    /** @type {string[]} */
+    const maskNodeIds = [];
+    for (const ref of part.clipMaskRefs) {
+      const id = drawableGuidToNodeId.get(ref);
+      if (id) maskNodeIds.push(id);
+      else warnings.push(`mask: part ${part.drawableIdStr} (${part.name}) clipRef ${ref} doesn't resolve to any part's CDrawableGuid`);
+    }
+    if (maskNodeIds.length === 0) continue;
+    if (maskNodeIds.length > 1) {
+      warnings.push(`mask: part ${part.drawableIdStr} has ${maskNodeIds.length} clip masks; writer keeps the first only`);
+    }
+    maskConfigs.push({
+      maskedMeshId: maskedNodeId,
+      maskMeshIds: maskNodeIds,
+    });
+  }
+
   // Synthesise SS-shaped parameter list from the inspected metadata.
   // `role` defaults to 'standard'; ParamOpacity gets 'opacity' so the
   // parameter editor groups it the way the auto-rig pipeline expects.
@@ -781,7 +817,7 @@ export async function importCmo3(bytes) {
     parameters,
     physics_groups: [],
     animations: [],
-    maskConfigs: [],
+    maskConfigs,
     physicsRules: [],
     boneConfig: null,
     variantFadeRules: null,

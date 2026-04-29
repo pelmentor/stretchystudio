@@ -50,6 +50,10 @@ import {
  * @property {string} name                CParameterControllableSource.localName
  * @property {string|null} parentGuidRef  xs.ref pointing at the owning CPartSource's guid
  * @property {string|null} deformerGuidRef xs.ref pointing at the parent deformer
+ * @property {string|null} ownDrawableGuidRef  this part's own CDrawableGuid xs.ref —
+ *                                             clipMaskRefs from OTHER parts point here
+ *                                             when this part acts as their mask. Joining
+ *                                             clip refs back to parts requires this.
  * @property {string[]} clipMaskRefs      xs.ref of every entry in clipGuidList
  * @property {boolean} invertClippingMask
  * @property {boolean} isVisible
@@ -268,6 +272,13 @@ function extractPart(mesh, warnings) {
   const deformerGuid = findField(drawSrc, 'targetDeformerGuid');
   const deformerGuidRef = deformerGuid?.attrs['xs.ref'] ?? null;
 
+  // Own CDrawableGuid (lives on ACDrawableSource as `<CDrawableGuid xs.n="guid"
+  // xs.ref="#NN"/>`). Other parts' `clipGuidList` entries point at THIS xs.ref
+  // when they want this part to mask them. Without storing it the importer
+  // can't join clip refs back to the masking part.
+  const ownDrawableGuid = findField(drawSrc, 'guid');
+  const ownDrawableGuidRef = ownDrawableGuid?.attrs['xs.ref'] ?? null;
+
   const clipList = findField(drawSrc, 'clipGuidList');
   /** @type {string[]} */
   const clipMaskRefs = [];
@@ -326,6 +337,7 @@ function extractPart(mesh, warnings) {
     name: readStringField(paramCtrl, 'localName') ?? drawableIdStr,
     parentGuidRef,
     deformerGuidRef,
+    ownDrawableGuidRef,
     clipMaskRefs,
     invertClippingMask,
     isVisible,
