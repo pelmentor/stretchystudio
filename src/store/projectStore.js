@@ -134,6 +134,19 @@ export const useProjectStore = create((set) => {
 
   hasUnsavedChanges: false,
 
+  /**
+   * Phase 1G — id of the IndexedDB library record this project was last
+   * loaded from / saved to. When non-null, the next "Save to Library"
+   * overwrites that record instead of creating a new one. Cleared on
+   * `file.new` and on `loadProject`-from-disk so a fresh project starts
+   * unlinked from the library. Library save sets it to the new record's
+   * id; library load sets it to the loaded record's id.
+   *
+   * @type {string|null}
+   */
+  currentLibraryId: null,
+  setCurrentLibraryId: (/** @type {string|null} */ id) => set({ currentLibraryId: id }),
+
   // ── Actions ────────────────────────────────────────────────────────────────
 
   /** Generic immer recipe — use for all undoable project edits.
@@ -278,6 +291,9 @@ export const useProjectStore = create((set) => {
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
       state.hasUnsavedChanges = false;
+      // Phase 1G — fresh project unlinks from any library record so the
+      // next save creates a new record rather than overwriting one.
+      state.currentLibraryId = null;
     }));
   },
 
@@ -309,6 +325,10 @@ export const useProjectStore = create((set) => {
       state.project.faceParallax = projectData.faceParallax ?? null;
       state.project.bodyWarp = projectData.bodyWarp ?? null;
       state.project.rigWarps = projectData.rigWarps ?? {};
+      // Phase 1G — disk-loaded projects start unlinked from any library
+      // record. The library-load operator sets `currentLibraryId` itself
+      // after this call so a "save" goes back to the correct record.
+      state.currentLibraryId = null;
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;

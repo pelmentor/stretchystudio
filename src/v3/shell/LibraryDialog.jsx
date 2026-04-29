@@ -64,9 +64,32 @@ function defaultName() {
 }
 
 function SavePanel({ onDone }) {
+  // Look up the linked library record (if any) once on mount so the
+  // dialog can pre-fill the name field with whatever the project was
+  // last saved as. The fetch is async; until it resolves we show the
+  // timestamp default.
+  const linkedId = useProjectStore.getState().currentLibraryId;
   const [name, setName] = useState(defaultName);
+  const [linkedName, setLinkedName] = useState(/** @type {string|null} */ (null));
+  // saveAsNew=true forces a fresh record even when linkedId is set.
+  // Defaults to false so re-saves of a loaded/saved-from-library
+  // project overwrite — that's the Ctrl+S muscle-memory expectation.
+  const [saveAsNew, setSaveAsNew] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(/** @type {string|null} */ (null));
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!linkedId) return undefined;
+    loadProjectRecord(linkedId).then((rec) => {
+      if (cancelled || !rec) return;
+      setLinkedName(rec.name ?? null);
+      setName(rec.name ?? defaultName());
+    }).catch(() => {/* ignore — empty linkedName means "act as new" */});
+    return () => { cancelled = true; };
+  }, [linkedId]);
+
+  const overwriteMode = !!linkedId && !saveAsNew;
 
   async function handleSave() {
     const trimmed = name.trim();
@@ -79,9 +102,12 @@ function SavePanel({ onDone }) {
     try {
       const project = useProjectStore.getState().project;
       const blob = await serializeProject(project);
-      // Empty thumbnail string — Phase 5 will capture canvas frames.
-      await saveProjectRecord(null, trimmed, blob, '');
-      useProjectStore.setState({ hasUnsavedChanges: false });
+      // Pass `linkedId` when overwriting so projectDb.put updates the
+      // existing record; pass null for "save as new" to create a fresh
+      // record. Thumbnail empty until Phase 5.
+      const targetId = overwriteMode ? linkedId : null;
+      const newId = await saveProjectRecord(targetId, trimmed, blob, '');
+      useProjectStore.setState({ hasUnsavedChanges: false, currentLibraryId: newId });
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -113,6 +139,21 @@ function SavePanel({ onDone }) {
             }
           }}
         />
+        {linkedId ? (
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground mt-1">
+            <input
+              type="checkbox"
+              checked={saveAsNew}
+              onChange={(e) => setSaveAsNew(e.target.checked)}
+            />
+            Save as new copy
+            {linkedName ? (
+              <span className="text-muted-foreground/70">
+                (otherwise overwrites &ldquo;{linkedName}&rdquo;)
+              </span>
+            ) : null}
+          </label>
+        ) : null}
         {error ? (
           <span className="text-xs text-destructive mt-1">{error}</span>
         ) : null}
@@ -122,7 +163,7 @@ function SavePanel({ onDone }) {
           Cancel
         </Button>
         <Button type="button" onClick={handleSave} disabled={busy}>
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? 'Saving…' : overwriteMode ? 'Overwrite' : 'Save'}
         </Button>
       </DialogFooter>
     </>
@@ -165,7 +206,10 @@ function LoadPanel({ onDone }) {
         throw new Error('Record has no blob');
       }
       const { project } = await deserializeProject(record.blob);
+      // loadProject clears currentLibraryId; set it AFTER so subsequent
+      // saves overwrite this record (the Ctrl+S muscle-memory).
       useProjectStore.getState().loadProject(project);
+      useProjectStore.setState({ currentLibraryId: id });
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
