@@ -15,7 +15,7 @@
  * @module v3/shell/editorRegistry
  */
 
-import { TimelineEditor } from '../editors/stubs.jsx';
+import { TimelineEditor } from '../editors/timeline/TimelineEditor.jsx';
 import { OutlinerEditor } from '../editors/outliner/OutlinerEditor.jsx';
 import { ViewportEditor } from '../editors/viewport/ViewportEditor.jsx';
 import { PropertiesEditor } from '../editors/properties/PropertiesEditor.jsx';
