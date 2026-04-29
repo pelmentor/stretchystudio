@@ -14,7 +14,11 @@
  * @module v3/editors/outliner/TreeNode
  */
 
-import { ChevronRight, ChevronDown, Folder, Image as ImageIcon, Eye, EyeOff } from 'lucide-react';
+import {
+  ChevronRight, ChevronDown,
+  Folder, Image as ImageIcon, Eye, EyeOff,
+  Box, RotateCw,
+} from 'lucide-react';
 
 const INDENT_PX = 14;
 
@@ -40,7 +44,10 @@ export function TreeNode({
   onToggleVisibility,
 }) {
   const hasChildren = node.children.length > 0;
-  const Icon = node.type === 'group' ? Folder : ImageIcon;
+  const Icon =
+    node.type === 'group' ? Folder
+    : node.type === 'deformer' ? (node.deformerKind === 'rotation' ? RotateCw : Box)
+    : ImageIcon;
   const VisIcon = node.visible === false ? EyeOff : Eye;
 
   function handleClick(e) {

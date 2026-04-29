@@ -79,13 +79,13 @@ function fixtureNodes() {
 // ── Display mode validation ─────────────────────────────────────────
 
 assertThrows(
-  () => buildOutlinerTree(fixtureNodes(), { mode: 'rig' }),
-  'mode rig throws — not implemented yet',
+  () => buildOutlinerTree(fixtureNodes(), { mode: 'param' }),
+  'mode param throws — not implemented yet',
 );
 
 assertThrows(
-  () => buildOutlinerTree(fixtureNodes(), { mode: 'param' }),
-  'mode param throws — not implemented yet',
+  () => buildOutlinerTree(fixtureNodes(), { mode: 'anim' }),
+  'mode anim throws — not implemented yet',
 );
 
 assertThrows(
@@ -97,6 +97,111 @@ assertThrows(
 {
   const roots = buildOutlinerTree(fixtureNodes(), { mode: 'hierarchy' });
   assert(roots.length === 3, 'explicit hierarchy mode');
+}
+
+// ── Rig mode ────────────────────────────────────────────────────────
+
+{
+  // Empty / null rigSpec
+  assert(buildOutlinerTree(null, { mode: 'rig' }).length === 0,
+    'rig mode: null rigSpec → empty');
+  assert(buildOutlinerTree({}, { mode: 'rig' }).length === 0,
+    'rig mode: empty rigSpec → empty');
+}
+
+{
+  // Simple rig: BodyXWarp at root → FaceRotation under it → mesh under FaceRotation
+  const rigSpec = {
+    warpDeformers: [{ id: 'BodyXWarp', name: 'Body X', parent: { type: 'root' } }],
+    rotationDeformers: [{
+      id: 'FaceRotation',
+      name: 'Face Rotation',
+      parent: { type: 'warp', id: 'BodyXWarp' },
+    }],
+    artMeshes: [{ id: 'mesh:head', parent: { type: 'rotation', id: 'FaceRotation' } }],
+  };
+  const roots = buildOutlinerTree(rigSpec, { mode: 'rig' });
+  assert(roots.length === 1, 'rig mode: one root');
+  assert(roots[0].id === 'BodyXWarp', 'rig mode: BodyXWarp at root');
+  assert(roots[0].type === 'deformer', 'rig mode: deformer type');
+  assert(roots[0].deformerKind === 'warp', 'rig mode: warp kind');
+  assert(roots[0].children.length === 1, 'rig mode: BodyXWarp has 1 child');
+  const fr = roots[0].children[0];
+  assert(fr.id === 'FaceRotation', 'rig mode: FaceRotation under BodyXWarp');
+  assert(fr.deformerKind === 'rotation', 'rig mode: rotation kind');
+  assert(fr.children.length === 1 && fr.children[0].type === 'artmesh',
+    'rig mode: artmesh leaf under rotation');
+  assert(fr.children[0].id === 'mesh:head', 'rig mode: artmesh id preserved');
+}
+
+{
+  // Multiple roots — two top-level warps, no parent
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'A', parent: { type: 'root' } },
+      { id: 'B', parent: { type: 'root' } },
+    ],
+  };
+  const roots = buildOutlinerTree(rigSpec, { mode: 'rig' });
+  assert(roots.length === 2, 'rig mode: two roots');
+}
+
+{
+  // Dangling parent — deformer points to non-existent parent → reparented to root
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'orphan', parent: { type: 'warp', id: 'missing' } },
+    ],
+  };
+  const roots = buildOutlinerTree(rigSpec, { mode: 'rig' });
+  assert(roots.length === 1, 'rig mode: dangling parent reparents');
+  assert(roots[0].id === 'orphan', 'rig mode: orphan at root');
+  assert(roots[0].parent === null, 'rig mode: orphan parent null');
+}
+
+{
+  // Mixed warps + rotations with art meshes nesting
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'breath', parent: { type: 'root' } },
+      { id: 'bodyX',  parent: { type: 'warp', id: 'breath' } },
+    ],
+    rotationDeformers: [
+      { id: 'rotNeck', parent: { type: 'warp', id: 'bodyX' } },
+    ],
+    artMeshes: [
+      { id: 'mesh:torso', parent: { type: 'warp', id: 'bodyX' } },
+      { id: 'mesh:neck',  parent: { type: 'rotation', id: 'rotNeck' } },
+    ],
+  };
+  const roots = buildOutlinerTree(rigSpec, { mode: 'rig' });
+  assert(roots.length === 1 && roots[0].id === 'breath', 'rig mode: breath at root');
+  const bodyX = roots[0].children.find(c => c.id === 'bodyX');
+  assert(bodyX, 'rig mode: bodyX under breath');
+  assert(bodyX.children.length === 2, 'rig mode: bodyX has 2 children (rotNeck + mesh:torso)');
+  const rotNeck = bodyX.children.find(c => c.id === 'rotNeck');
+  assert(rotNeck.children.length === 1 && rotNeck.children[0].id === 'mesh:neck',
+    'rig mode: mesh:neck under rotNeck');
+}
+
+{
+  // Cycle detection: A.parent=B, B.parent=A — both end up at root after fallback,
+  // and neither recurses infinitely.
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'A', parent: { type: 'warp', id: 'B' } },
+      { id: 'B', parent: { type: 'warp', id: 'A' } },
+    ],
+  };
+  // The function can be called without hanging.
+  const roots = buildOutlinerTree(rigSpec, { mode: 'rig' });
+  // Both A and B point at each other; neither's parent resolves to root,
+  // so they're NOT both roots — only one ends up reachable.
+  // We don't assert exact shape, just that the call returns and finds at
+  // least one of them.
+  const ids = [];
+  walkOutlinerTree(roots, (n) => ids.push(n.id));
+  assert(ids.includes('A') || ids.includes('B'), 'rig mode: cycle terminates');
 }
 
 // ── Visibility flag ─────────────────────────────────────────────────

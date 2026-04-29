@@ -3,9 +3,9 @@
 /**
  * v3 Phase 1A — Outliner editor.
  *
- * First concrete v3 editor: a hierarchy view of the project's parts
- * and groups, sorted PSD-style (top of list = top of canvas), with
- * expand/collapse and click-to-select wired to selectionStore.
+ * Hierarchy / rig display modes wired to selectionStore + a search
+ * filter that hides any row whose name doesn't match (parents are
+ * kept when a descendant matches so the user keeps context).
  *
  * Why a separate editor (vs. reusing v2 LayerPanel): v2 panel
  * couples drag-reordering with depth editing and lives inside the
@@ -13,80 +13,112 @@
  * shares one selection model with Properties / Viewport / Parameters
  * (Plan §5). Same data, different interaction surface.
  *
- * What's intentionally absent from this first cut: drag-reparent,
- * search/filter input, display-mode switcher (rig/param/anim),
- * context menu, multi-select range with shift, isolate-mode. Each
- * is a small follow-up — the structure here doesn't lock any of
- * them out.
+ * Display modes:
+ *   - hierarchy → project.nodes (parts + groups)
+ *   - rig       → rigSpec deformers + art meshes (after Initialize Rig)
+ *
+ * Param + anim modes are intentionally absent: ParametersEditor
+ * already covers param scrubbing, and Timeline (anim) is Phase 3.
  *
  * @module v3/editors/outliner/OutlinerEditor
  */
 
 import { useState, useMemo, useCallback } from 'react';
+import { Search, X } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
+import { filterOutlinerTree } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
+
+const MODES = /** @type {const} */ ([
+  { id: 'hierarchy', label: 'Hierarchy' },
+  { id: 'rig',       label: 'Rig' },
+]);
 
 export function OutlinerEditor() {
   const nodes = useProjectStore((s) => s.project.nodes);
   const updateProject = useProjectStore((s) => s.updateProject);
+  const rigSpec = useRigSpecStore((s) => s.rigSpec);
 
   const items = useSelectionStore((s) => s.items);
   const select = useSelectionStore((s) => s.select);
 
-  // Local UI state — expand/collapse is per-area volatile, not part
-  // of the saved project (Plan §9.4: workspace layout persists,
-  // session selection + expand state do not).
+  /** @type {[import('./treeBuilder.js').OutlinerDisplayMode, Function]} */
+  const [mode, setMode] = useState(/** @type {any} */ ('hierarchy'));
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
+  const [query, setQuery] = useState('');
 
-  const roots = useMemo(() => buildOutlinerTree(nodes), [nodes]);
+  const roots = useMemo(() => {
+    if (mode === 'rig') return buildOutlinerTree(rigSpec, { mode: 'rig' });
+    return buildOutlinerTree(nodes, { mode: 'hierarchy' });
+  }, [mode, nodes, rigSpec]);
 
-  // Selection lookup — convert {type:'part'|'group', id} entries to
-  // a set keyed by id. Outliner only deals with parts/groups; other
-  // selectable types (parameter, deformer, ...) are filtered out.
+  // Apply search filter — `q.length > 0` shrinks the visible tree to
+  // matching rows + their ancestors. Empty query → unfiltered.
+  const filteredRoots = useMemo(
+    () => (query.trim() ? filterOutlinerTree(roots, query.trim()) : roots),
+    [roots, query],
+  );
+
+  // Selection lookup — selectionStore items can be any type; we
+  // surface the ones whose type matches the current display mode's
+  // node types so a selected deformer stays highlighted in rig mode
+  // and ditto a selected part in hierarchy mode.
   const selectedIds = useMemo(() => {
     const s = new Set();
     for (const it of items) {
-      if (it.type === 'part' || it.type === 'group') s.add(it.id);
+      if (mode === 'rig') {
+        if (it.type === 'deformer' || it.type === 'part') s.add(it.id);
+      } else {
+        if (it.type === 'part' || it.type === 'group') s.add(it.id);
+      }
     }
     return s;
-  }, [items]);
+  }, [items, mode]);
 
   const activeId = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      if (it.type === 'part' || it.type === 'group') return it.id;
+      if (mode === 'rig' && (it.type === 'deformer' || it.type === 'part')) return it.id;
+      if (mode !== 'rig' && (it.type === 'part' || it.type === 'group')) return it.id;
     }
     return null;
-  }, [items]);
+  }, [items, mode]);
 
-  // Flatten the tree into a row list, skipping subtrees of collapsed
-  // groups. Recomputing per render is fine — typical rigs are
-  // < 200 nodes and walkOutlinerTree is O(n).
   const rows = useMemo(() => {
     /** @type {Array<{node: import('./treeBuilder.js').OutlinerNode, depth: number}>} */
     const out = [];
     walkOutlinerTree(
-      roots,
+      filteredRoots,
       (node, depth) => out.push({ node, depth }),
       (node) => !collapsed.has(node.id),
     );
     return out;
-  }, [roots, collapsed]);
+  }, [filteredRoots, collapsed]);
 
   const onSelect = useCallback(
     /** @param {string} id @param {'replace'|'add'|'toggle'} modifier */
     (id, modifier) => {
-      const node = nodes.find((n) => n.id === id);
-      if (!node) return;
-      const ref = /** @type {{type:'part'|'group', id:string}} */ ({
-        type: node.type === 'group' ? 'group' : 'part',
-        id,
+      // Resolve type from the tree node — different display modes map
+      // to different selectionStore types. Art-mesh leaves in rig mode
+      // dispatch as 'part' (they're parts of the project, just shown
+      // under their deformer in rig mode).
+      let type = /** @type {import('../../../store/selectionStore.js').SelectableType} */ ('part');
+      /** @type {import('./treeBuilder.js').OutlinerNode|null} */
+      let found = null;
+      walkOutlinerTree(filteredRoots, (n) => {
+        if (!found && n.id === id) found = n;
       });
-      select(ref, modifier);
+      if (!found) return;
+      const ft = /** @type {import('./treeBuilder.js').OutlinerNode} */ (found).type;
+      if (ft === 'part' || ft === 'artmesh') type = 'part';
+      else if (ft === 'group') type = 'group';
+      else if (ft === 'deformer') type = 'deformer';
+      select({ type, id }, modifier);
     },
-    [nodes, select],
+    [filteredRoots, select],
   );
 
   const onToggleExpand = useCallback((id) => {
@@ -100,6 +132,8 @@ export function OutlinerEditor() {
 
   const onToggleVisibility = useCallback(
     (id) => {
+      // Visibility only makes sense for project nodes (parts/groups).
+      // Deformer rows have no visibility flag in the project model.
       updateProject((proj) => {
         const n = proj.nodes.find((nn) => nn.id === id);
         if (n) n.visible = n.visible === false ? true : false;
@@ -108,33 +142,108 @@ export function OutlinerEditor() {
     [updateProject],
   );
 
-  if (rows.length === 0) {
-    return (
-      <div className="h-full w-full flex items-center justify-center text-xs text-muted-foreground select-none">
-        <span>No layers — import a PSD to begin.</span>
-      </div>
-    );
-  }
-
   return (
-    <div
-      role="tree"
-      aria-label="Outliner"
-      className="h-full w-full overflow-auto py-1 text-xs"
-    >
-      {rows.map(({ node, depth }) => (
-        <TreeNode
-          key={node.id}
-          node={node}
-          depth={depth}
-          expanded={!collapsed.has(node.id)}
-          selected={selectedIds.has(node.id)}
-          active={activeId === node.id}
-          onSelect={onSelect}
-          onToggleExpand={onToggleExpand}
-          onToggleVisibility={onToggleVisibility}
+    <div className="h-full w-full flex flex-col text-xs">
+      <Header
+        mode={mode}
+        onModeChange={setMode}
+        query={query}
+        onQueryChange={setQuery}
+        rigAvailable={!!rigSpec}
+      />
+      {rows.length === 0 ? (
+        <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasQuery={!!query.trim()} />
+      ) : (
+        <div role="tree" aria-label="Outliner" className="flex-1 min-h-0 overflow-auto py-1">
+          {rows.map(({ node, depth }) => (
+            <TreeNode
+              key={node.id}
+              node={node}
+              depth={depth}
+              expanded={!collapsed.has(node.id)}
+              selected={selectedIds.has(node.id)}
+              active={activeId === node.id}
+              onSelect={onSelect}
+              onToggleExpand={onToggleExpand}
+              // Visibility toggle only meaningful on project nodes.
+              onToggleVisibility={
+                node.type === 'part' || node.type === 'group'
+                  ? onToggleVisibility
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Header({ mode, onModeChange, query, onQueryChange, rigAvailable }) {
+  return (
+    <div className="border-b border-border bg-muted/20 flex flex-col">
+      <div className="flex items-center gap-0.5 px-1 pt-1">
+        {MODES.map((m) => {
+          const on = m.id === mode;
+          const disabled = m.id === 'rig' && !rigAvailable;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onModeChange(m.id)}
+              title={
+                disabled
+                  ? 'Rig mode requires a built rigSpec — run Initialize Rig first.'
+                  : m.label
+              }
+              className={
+                'px-2 h-6 text-[11px] rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ' +
+                (on
+                  ? 'bg-background text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50')
+              }
+              aria-pressed={on}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center px-2 py-1 gap-1.5">
+        <Search size={11} className="text-muted-foreground shrink-0" />
+        <input
+          type="text"
+          value={query}
+          placeholder="Search…"
+          onChange={(e) => onQueryChange(e.target.value)}
+          className="flex-1 h-6 px-1 bg-transparent border-0 text-[11px] focus:outline-none"
         />
-      ))}
+        {query ? (
+          <button
+            type="button"
+            onClick={() => onQueryChange('')}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="clear search"
+          >
+            <X size={11} />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ mode, hasNodes, hasRigSpec, hasQuery }) {
+  let msg = '';
+  if (hasQuery) msg = 'No matches.';
+  else if (mode === 'rig' && !hasRigSpec) msg = 'No rig built — click Initialize Rig in Parameters.';
+  else if (mode === 'rig') msg = 'Rig is empty.';
+  else if (!hasNodes) msg = 'No layers — import a PSD to begin.';
+  else msg = 'Empty.';
+  return (
+    <div className="h-full w-full flex items-center justify-center text-muted-foreground select-none">
+      <span>{msg}</span>
     </div>
   );
 }
