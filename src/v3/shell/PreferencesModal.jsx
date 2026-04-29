@@ -30,9 +30,11 @@ import { Slider } from '../../components/ui/slider.jsx';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../../components/ui/select.jsx';
-import { Sun, Moon, Monitor, Palette, Settings2 } from 'lucide-react';
+import { Sun, Moon, Monitor, Palette, Settings2, Keyboard } from 'lucide-react';
 import { useTheme, AVAILABLE_FONTS } from '../../contexts/ThemeProvider.jsx';
 import { lightThemePresets, darkThemePresets } from '../../lib/themePresets.js';
+import { useState } from 'react';
+import { KeymapModal } from './KeymapModal.jsx';
 
 export function PreferencesModal({ open, onOpenChange }) {
   const {
@@ -42,6 +44,7 @@ export function PreferencesModal({ open, onOpenChange }) {
     fontFamily, setFontFamily,
     fontSize, setFontSize,
   } = useTheme();
+  const [keymapOpen, setKeymapOpen] = useState(false);
 
   const isDark =
     themeMode === 'dark' ||
@@ -131,8 +134,22 @@ export function PreferencesModal({ open, onOpenChange }) {
               onValueChange={(v) => setFontSize(v[0])}
             />
           </Section>
+
+          <Section label="Keyboard">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full justify-start gap-2"
+              onClick={() => setKeymapOpen(true)}
+            >
+              <Keyboard size={14} />
+              View shortcuts…
+            </Button>
+          </Section>
         </div>
       </DialogContent>
+      <KeymapModal open={keymapOpen} onOpenChange={setKeymapOpen} />
     </Dialog>
   );
 }
