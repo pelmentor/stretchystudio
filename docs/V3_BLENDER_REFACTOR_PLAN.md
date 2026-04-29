@@ -942,13 +942,13 @@ implementation; call sites stay the same.
 |---------|--------|--------|-------|
 | **Save Modal + Project Gallery + thumbnails** | ✅ shipped | `2be491b` | `SaveModal` (tabbed: Save to Library / Download File) + `ProjectGallery` (thumbnail grid, per-card duplicate/download/delete, inline rename) + `LoadModal` (gallery + Import Project tile). Replaces the placeholder `LibraryDialog`. Thumbnail capture goes through new `captureStore` that ViewportEditor publishes on mount; the modals pull from it without prop-drilling. Toolbar Save/Library and Open/Library buttons collapsed into single Save and Open buttons that drive the modals. |
 | **Export options modal** | ✅ shipped | `d24b166` | `ExportModal` surfaces the three formats `ExportService` supports — Live2D Runtime+AutoRig (default), Live2D Runtime without rig, and editable Cubism `.cmo3`. Each option has a description so the user picks deliberately rather than relying on muscle memory. The `file.export` operator now just opens the modal; the modal owns runExport, the texture-loading step, and the download trigger. New `exportModalStore`. |
-| Physics Editor — Cubism import | ⏳ pending | — | Read `.physics3.json` existing file → populate Physics Editor (round-trip) |
-| Motion timeline scrubbing | ⏳ pending | — | Multi-motion preview, blending |
-| Live2D round-trip .cmo3 import | ⏳ pending | — | Read exported .cmo3 back into SS for verification + post-Cubism-edit recovery |
+| Physics Editor — Cubism import | ✅ shipped (first cut) | sweep #5 | `io/live2d/physics3jsonImport.js` reverse-parses `.physics3.json` v3 back into the resolved `physicsRules` shape; `PhysicsTab` exposes an Import button that swaps the in-project rules in place + shows a warning banner for skipped settings (missing inputs/outputs, vertex count <2, unknown source/destination paths). Round-trip from SS-exported physics3 is identity-on-numeric-fields; tag/category default to `imported`. |
+| Motion timeline scrubbing | ✅ shipped (first cut) | sweep #5 | TimelineEditor now switches between multiple `project.animations[]` via a `<select>` (active id stored in `animationStore`). New `+ New` button creates a fresh blank animation; `+ Import` loads `.motion3.json`. `io/live2d/motion3jsonImport.js` collapses bezier segments to their end-points (control points dropped — SS animation engine doesn't ingest per-segment cubic handles). Real cross-fade blending deferred. |
+| Live2D round-trip .cmo3 import | ⏳ pending | — | Read exported .cmo3 back into SS for verification + post-Cubism-edit recovery. Heavy reverse-parser of the 4468-LOC `cmo3writer.js` output — multi-sweep effort. |
 | Asset library + project templates (Pillar R) | ✅ shipped (templates first cut) | sweep #4 | `v3/templates/projectTemplates.js` registry — id / name / description / `apply(project)` mutator per template. New Project flow now opens `NewProjectDialog` with template radio + dirty-state warning. Initial templates: Empty / Square 1024 / Portrait HD / Landscape FHD — each tweaks canvas dimensions + name. Saved deformer / physics / variant configs + starter rigs deferred. Configurable tag set per project deferred. |
-| Asset hot-reload | ⏳ pending | — | PNG changes on disk → live update in SS viewport |
-| Touch / pen refactor | ⏳ pending | — | 44pt hit targets, pen pressure for warp lattice editing, pinch+pan gestures, adaptive layout |
-| onnxruntime-web optional (Pillar O) | ⏳ pending | — | Move ML inference (DWPose) to opt-in plugin. Default PSD import without ML (heuristic-only). 25 MB WASM downloads only on user-triggered "Auto-detect joints". |
+| Asset hot-reload | ✅ shipped (first cut) | sweep #6 | `io/assetHotReload.js` uses `showDirectoryPicker` (Chromium-only) + 1.5 s `lastModified` polling to swap `project.textures[].source` blob URLs in place via `updateProject(..., {skipHistory:true})`. Old blob URLs revoked after a 5 s grace so in-flight `Image` decodes don't break. Toolbar Link/Unlink button + `assetHotReloadStore` Zustand store. PSD layer name → file basename matching (case-insensitive); unmatched files reported in status. |
+| Touch / pen refactor | ✅ shipped (first cut) | sweep #7 | Multi-pointer pinch+pan gesture in `CanvasViewport`: `activePointersRef` Map tracks every pointer down; when 2 touch pointers land simultaneously and no vertex/brush drag is in flight, `gestureRef` enters `pinch` mode with zoom-around-startMidpoint + two-finger pan superimposed. `onPointerCancel` wired so OS touch interruption (notification, system swipe) cleanly exits the gesture. `pointer-coarse:` Tailwind variant bumps v3 toolbar buttons + workspace tabs to ~44 px hit targets on touch primary-input devices. **Deferred:** pen pressure for warp lattice editing — needs incremental brush integration (current brush is start-snapshot + delta, not stroke-cumulative); pulling pressure into that math is its own sweep. |
+| onnxruntime-web optional (Pillar O) | ✅ shipped (first cut) | sweep #6 | `vendor-onnxruntime` already split into its own chunk via `manualChunks` (4G); the chunk is now also dynamically `import()`-ed only when `pickAutoRig()` runs (already shipped pre-sweep) AND a new user-visible toggle gates the AI Auto-Rig button entirely. `preferencesStore.mlEnabled` (localStorage `v3.prefs.mlEnabled`, default `true`) drives both `PsdImportWizard` (button hidden when off) and `PreferencesModal` → AI features section. With the toggle off, the ONNX chunk is never fetched — heuristic-only rigging stays. |
 
 ---
 
@@ -1501,6 +1501,20 @@ each phase was scoped to; full polish (standalone editors, modal
 operator suites, parity harness, bundle splitting, PWA, i18n)
 remains for the second pass. Tags `v3-phase-N-complete` reserved
 for that polish round.
+
+---
+
+### 2026-04-29 — Phase first-cut sweep #7 (autonomous)
+
+User said *"Хватит спрашивать! ... Продолжай автономно ... принимай лучшие решения без костылей"* after sweep #6 — durable directive against asking permission between sweeps and against shipping stub-shaped first cuts. Sweep #7 picks the next-most-tractable Phase 5 item that can be done honestly in one sweep:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | Touch + pen refactor — multi-pointer pinch-zoom + two-finger pan + coarse-pointer hit targets. `CanvasViewport.jsx` grows two new refs (`activePointersRef` Map of every pointer down, `gestureRef` for in-flight gesture state) without disturbing the existing single-pointer `panRef` / `dragRef` flows. When the second touch pointer lands and no vertex/brush drag is active, the handler aborts any started panRef, computes the pair's distance + midpoint, and enters `pinch` mode; subsequent moves apply zoom-around-startMidpoint plus the midpoint's translation since gesture start, so users can pinch-and-slide naturally. `onPointerCancel` is wired to clean up if iOS / Android interrupts the touches mid-gesture. Hit targets bumped to ~44 px on coarse-pointer devices via Tailwind's `pointer-coarse:` variant on the WorkspaceTabs container, the workspace tab buttons, and `ToolbarButton`. **Honest scope cut:** pen pressure for warp lattice editing is *not* shipped — the brush deform path is start-snapshot + delta (not stroke-cumulative), and threading `e.pressure` through it stably needs a brush-engine refactor that's larger than this sweep. The plan row records that as deferred rather than shipping a stub-shaped pressure plumb-without-consumer. |
+
+Also corrected the Phase 5 status table: **Physics Editor — Cubism import**, **Motion timeline scrubbing**, **Asset hot-reload**, and **onnxruntime opt-in** were all shipped in earlier sweeps but the table still showed them ⏳ pending. They're now ✅ with their commit-trail filled in.
+
+**Phase coverage after sweep #7:** Phase 5 has only `.cmo3` round-trip remaining (heavy reverse-parser of the 4468-LOC writer — multi-sweep effort). Other entirely-pending items: 4A parity harness (needs Cubism SDK adoption — environment-dependent, not pure code) + Phase 6 god-class breakup (needs 4A's parity harness as a safety net per "no crutches" — won't be done as ad-hoc extraction).
 
 ---
 

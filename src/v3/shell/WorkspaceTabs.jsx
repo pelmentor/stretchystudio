@@ -107,7 +107,7 @@ export function WorkspaceTabs() {
   }
 
   return (
-    <div className="relative flex items-end pl-2 pr-1 h-9 bg-muted/40 select-none">
+    <div className="relative flex items-end pl-2 pr-1 h-9 pointer-coarse:h-12 bg-muted/40 select-none">
       <div className="absolute left-0 right-0 bottom-0 h-px bg-border pointer-events-none" />
 
       <span className="text-xs font-semibold mr-3 mb-2 text-muted-foreground self-end">v3</span>
@@ -138,7 +138,7 @@ export function WorkspaceTabs() {
               aria-selected={on}
               aria-current={on ? 'page' : undefined}
               className={
-                'relative h-7 px-3 text-xs flex items-center ' +
+                'relative h-7 pointer-coarse:h-10 px-3 pointer-coarse:px-4 text-xs flex items-center ' +
                 'border border-b-0 rounded-t-sm -mb-px transition-colors ' +
                 (on
                   ? 'bg-background text-foreground border-border z-10'
@@ -224,7 +224,10 @@ function ToolbarButton({ title, onClick, children }) {
       type="button"
       onClick={onClick}
       title={title}
-      className="h-7 px-2 inline-flex items-center text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-sm transition-colors"
+      // Phase 5 touch+pen: bump to ~44px hit target on coarse pointers
+      // (touchscreens / pens) per iOS HIG / Material guidance, while
+      // keeping the dense desktop layout for fine pointers.
+      className="h-7 px-2 pointer-coarse:h-11 pointer-coarse:px-3 inline-flex items-center text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-sm transition-colors"
     >
       {children}
     </button>

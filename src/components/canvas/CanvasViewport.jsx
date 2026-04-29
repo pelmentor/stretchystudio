@@ -72,6 +72,11 @@ export default function CanvasViewport({
   const imageDataMapRef = useRef(new Map()); // Map<partId, ImageData> for alpha-based picking
   const dragRef = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
   const panRef = useRef(null);   // { startX, startY, panX0, panY0 }
+  // Phase 5 touch+pen — multi-pointer tracking. activePointersRef holds every
+  // pointer currently down (mouse / touch / pen) so we can detect 2-finger
+  // pinch. gestureRef is non-null only while a multi-touch gesture is running.
+  const activePointersRef = useRef(new Map());  // Map<pointerId, {x,y,type}>
+  const gestureRef = useRef(null);  // { mode:'pinch', startDist, startMidX, startMidY, panX0, panY0, zoom0 }
   const isDirtyRef = useRef(true);
   const brushCircleRef = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
   const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
@@ -1355,6 +1360,42 @@ export default function CanvasViewport({
     const canvas = canvasRef.current;
     const { view } = editorRef.current;
 
+    // Phase 5 touch+pen — track every pointer that lands on the canvas.
+    // When two touch pointers are active simultaneously, switch into a
+    // pinch+pan gesture and bail before the single-pointer code runs. We
+    // refuse to enter pinch while a vertex/brush drag is in flight to
+    // avoid corrupting in-progress mesh edits.
+    activePointersRef.current.set(e.pointerId, {
+      x: e.clientX, y: e.clientY, type: e.pointerType,
+    });
+    const pts = [...activePointersRef.current.values()];
+    if (
+      pts.length >= 2 &&
+      !dragRef.current &&
+      pts.slice(0, 2).every((p) => p.type === 'touch')
+    ) {
+      // Cancel any in-flight panRef from the first finger so it doesn't
+      // also try to pan; gestureRef takes over.
+      if (panRef.current) {
+        panRef.current = null;
+      }
+      const a = pts[0];
+      const b = pts[1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      gestureRef.current = {
+        mode: 'pinch',
+        startDist: Math.max(1, Math.hypot(dx, dy)),
+        startMidX: (a.x + b.x) / 2,
+        startMidY: (a.y + b.y) / 2,
+        panX0: view.panX,
+        panY0: view.panY,
+        zoom0: view.zoom,
+      };
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+
     // Middle mouse (1) or right mouse (2) or alt+left → pan / zoom
     if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
       if (e.ctrlKey) {
@@ -1625,6 +1666,48 @@ export default function CanvasViewport({
     const canvas = canvasRef.current;
     const { view } = editorRef.current;
 
+    // Phase 5 touch+pen — keep the active-pointer map fresh for in-flight
+    // gestures. Reading the very latest screen positions for both fingers
+    // each frame is what makes pinch-zoom feel anchored to the touch points.
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, {
+        x: e.clientX, y: e.clientY, type: e.pointerType,
+      });
+    }
+    if (gestureRef.current && gestureRef.current.mode === 'pinch') {
+      const pts = [...activePointersRef.current.values()];
+      if (pts.length < 2) {
+        // One finger lifted before pointerup fired (or pointercancel raced).
+        // Wait for the up handler to drop us out of pinch mode.
+      } else {
+        const a = pts[0];
+        const b = pts[1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        const g = gestureRef.current;
+        const factor = dist / g.startDist;
+        const newZoom = Math.max(0.05, Math.min(20, g.zoom0 * factor));
+
+        // Zoom around the gesture's starting midpoint so the content under
+        // the centre of the two fingers stays put, then translate the view
+        // by however far the midpoint has slid since gesture start (the
+        // two-finger pan component).
+        const rect = canvas.getBoundingClientRect();
+        const ax = g.startMidX - rect.left;
+        const ay = g.startMidY - rect.top;
+        const newPanX = ax - (ax - g.panX0) * (newZoom / g.zoom0)
+          + (midX - g.startMidX);
+        const newPanY = ay - (ay - g.panY0) * (newZoom / g.zoom0)
+          + (midY - g.startMidY);
+        setView({ zoom: newZoom, panX: newPanX, panY: newPanY });
+        isDirtyRef.current = true;
+        return;
+      }
+    }
+
     // Phase 1F.6 — Live Preview cursor look update.
     if (lookRef.current.active) {
       lookRef.current.clientX = e.clientX;
@@ -1789,7 +1872,20 @@ export default function CanvasViewport({
 
   const onPointerUp = useCallback((e) => {
     const canvas = canvasRef.current;
-    canvas.releasePointerCapture(e.pointerId);
+    // Phase 5 touch+pen — drop this pointer from the active map. setPointer-
+    // Capture was never called for touch pointers in the gesture path, so
+    // releasePointerCapture would throw NotFoundError on those. Guard it.
+    activePointersRef.current.delete(e.pointerId);
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* not captured */ }
+
+    // If a pinch gesture was active and we're now down to <2 fingers, end
+    // the gesture cleanly. The remaining finger (if any) will not start a
+    // new single-pointer drag — the user has to lift fully and re-touch.
+    if (gestureRef.current && activePointersRef.current.size < 2) {
+      gestureRef.current = null;
+      canvas.style.cursor = '';
+      return;
+    }
 
     // Phase 1F.6 — End cursor look. The next tick will see active=false
     // and stop pushing ParamAngleX/Y/Z; the head freezes at its last
@@ -1924,6 +2020,7 @@ export default function CanvasViewport({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onMouseLeave={() => brushCircleRef.current?.setAttribute('visibility', 'hidden')}
       />
 
