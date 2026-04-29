@@ -242,9 +242,11 @@ function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
     if (!warp) {
       const rot = rotationByOwnGuid.get(part.deformerGuidRef);
       if (rot) {
-        warnings.push(
-          `part ${part.drawableIdStr} (${part.name}) is parented to rotation deformer ${rot.idStr} — needs CRotationDeformerSource → groupRotation synthesis (deferred to a follow-on sweep)`,
-        );
+        // Parts whose deformer parent is a rotation (not a warp) don't
+        // get a stored rigWarp — the writer's per-mesh inline path
+        // generates one on re-export, parented to the group's
+        // GroupRotation_<role> deformer (whose pivot/role we set in
+        // applyRotationDeformersToGroups). No warning needed.
       } else {
         warnings.push(
           `part ${part.drawableIdStr} (${part.name}) deformer ref ${part.deformerGuidRef} resolves to neither a warp nor a rotation deformer`,
@@ -407,6 +409,158 @@ function buildGuidToNodeIdMap(groups) {
 }
 
 /**
+ * The boneRoles the auto-rig writer recognises. Mirror of the
+ * `CREATE_ORDER` list in `armatureOrganizer.js` — kept in sync so the
+ * importer doesn't drift behind new role additions on the auto-rig side.
+ *
+ * Group names that match one of these (case-sensitive, exact) are mapped
+ * straight onto `node.boneRole`. Names that don't match leave `boneRole`
+ * unset — the writer's fallback (rotate-everything-not-skipped) takes
+ * over there, which is no worse than the pre-import baseline.
+ */
+const KNOWN_BONE_ROLES = new Set([
+  'root', 'torso', 'neck', 'head', 'face', 'eyes',
+  'leftArm', 'rightArm', 'leftElbow', 'rightElbow', 'bothArms',
+  'leftLeg', 'rightLeg', 'leftKnee', 'rightKnee', 'bothLegs',
+]);
+
+/**
+ * Mirror cmo3 rotation deformers onto their owning groups so the writer's
+ * auto-rig path produces equivalent rotations on re-export. Two channels:
+ *
+ *   1. **boneRole.** When a group's name matches a known role, set
+ *      `boneRole = name` so the writer recognises it (and its skip set
+ *      filters out torso/eyes/neck → those go through warps instead).
+ *
+ *   2. **Pivot.** When a rotation deformer's parent is canvas-normalised
+ *      (ROOT or a top-level body warp), translate the rest keyform's
+ *      `originX/Y` (0..1) into canvas-px and stash it on
+ *      `group.transform.pivotX/Y`. The writer's `deformerWorldOrigins`
+ *      pass picks this up — `worldMatrix × [pivotX, pivotY, 1]` falls
+ *      through identity when the group has no other transform set, so
+ *      world pivot equals the stored canvas-px value.
+ *
+ * For rotation deformers chained under another rotation (e.g. FaceRotation
+ * under Rotation_head), the cmo3 stores `originY` in pixel-OFFSET form
+ * relative to the parent rotation's pivot, NOT canvas-normalised. We skip
+ * pivot translation in that case and let the writer fall back to its
+ * bbox-of-descendant-meshes heuristic — accurate enough for re-emission
+ * without inheriting the parent-frame offset arithmetic the writer's
+ * section-3d re-parenting path is responsible for.
+ *
+ * @param {import('./cmo3PartExtract.js').ExtractedScene} scene
+ * @param {any[]} nodes               mutated in-place — group nodes get
+ *                                    `boneRole` + `transform.pivotX/Y`
+ * @param {Map<string, string>} guidToNodeId  group.guidRef → SS node id
+ * @param {number} canvasW
+ * @param {number} canvasH
+ * @returns {string[]}                warnings
+ */
+function applyRotationDeformersToGroups(scene, nodes, guidToNodeId, canvasW, canvasH) {
+  /** @type {string[]} */
+  const warnings = [];
+
+  // Pass 1: set boneRole on every group whose name matches a known role.
+  // Catches the typical case where the cmo3's group structure was authored
+  // by SS's auto-rig (so names ARE roles) and the cmo3 elected NOT to emit
+  // a rotation deformer (e.g. torso → BodyXWarp instead). Without this,
+  // torso/eyes/neck would re-emit rotations on re-export — wrong.
+  for (const node of nodes) {
+    if (node.type !== 'group') continue;
+    if (KNOWN_BONE_ROLES.has(node.name)) {
+      node.boneRole = node.name;
+    }
+  }
+
+  // Pass 2: for each rotation deformer, find the owning group and copy
+  // the rest pivot in canvas-px when the parent allows the simple
+  // normalised-0..1 → canvas-px translation.
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
+  const deformerByGuid = new Map();
+  for (const d of scene.deformers) {
+    if (d.ownGuidRef) deformerByGuid.set(d.ownGuidRef, d);
+  }
+
+  for (const def of scene.deformers) {
+    if (def.kind !== 'rotation') continue;
+    if (!def.parentPartGuidRef) {
+      warnings.push(`rotation ${def.idStr} has no parentPartGuidRef — owner group can't be resolved`);
+      continue;
+    }
+    const ownerGroup = scene.groups.find((g) => g.guidRef === def.parentPartGuidRef);
+    if (!ownerGroup) {
+      warnings.push(`rotation ${def.idStr}: no group with guidRef=${def.parentPartGuidRef}`);
+      continue;
+    }
+    const nodeId = ownerGroup.guidRef ? guidToNodeId.get(ownerGroup.guidRef) : null;
+    if (!nodeId) {
+      warnings.push(`rotation ${def.idStr}: group ${ownerGroup.name} has no node id assignment`);
+      continue;
+    }
+    const node = nodes.find((n) => n.id === nodeId && n.type === 'group');
+    if (!node) {
+      warnings.push(`rotation ${def.idStr}: SS node ${nodeId} not found`);
+      continue;
+    }
+
+    // boneRole from deformer.name if it matches a known role — covers
+    // the case where the group was renamed but the deformer's localName
+    // still carries the original role tag.
+    if (KNOWN_BONE_ROLES.has(def.name) && !node.boneRole) {
+      node.boneRole = def.name;
+    }
+
+    // Pivot translation — only safe for parents whose frame is the
+    // canvas's normalised 0..1 box (ROOT and top-level warps like
+    // BodyXWarp). Chained rotations carry pixel-offsets from the parent
+    // pivot, which we'd need the parent's resolved canvas pivot to
+    // un-translate; that's the writer's section-3d responsibility on
+    // re-export, so we skip here.
+    let parentIsRotation = false;
+    if (def.parentDeformerGuidRef) {
+      const parent = deformerByGuid.get(def.parentDeformerGuidRef);
+      if (parent && parent.kind === 'rotation') parentIsRotation = true;
+    }
+    if (parentIsRotation) {
+      // No pivot stash — writer will use bbox-of-descendant-meshes fallback.
+      continue;
+    }
+
+    // Pick the rest keyform: the one whose angle is closest to 0. Origin
+    // is constant across keyforms in the writer's emission (same
+    // `originX/Y` across all 3 forms — see cmo3writer ~1898), but the
+    // closest-to-zero pick stays robust if a future authoring tool
+    // animated the pivot.
+    let restIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < def.keyforms.length; i++) {
+      const a = Math.abs(def.keyforms[i].angle ?? 0);
+      if (a < bestDist) { bestDist = a; restIdx = i; }
+    }
+    const kf = def.keyforms[restIdx];
+    if (!kf || kf.originX == null || kf.originY == null) {
+      warnings.push(`rotation ${def.idStr}: rest keyform ${restIdx} has no origin`);
+      continue;
+    }
+
+    // Sanity guard against the (0, 0) sentinel some authoring paths emit
+    // for "use the default" — those would map a group's pivot to the
+    // canvas origin, far from any actual descendant mesh. Fall through
+    // to the writer's bbox fallback in that case.
+    if (kf.originX === 0 && kf.originY === 0) {
+      warnings.push(`rotation ${def.idStr}: keyform origin (0, 0) treated as unset — bbox fallback will engage`);
+      continue;
+    }
+
+    if (!node.transform) node.transform = DEFAULT_TRANSFORM();
+    node.transform.pivotX = kf.originX * canvasW;
+    node.transform.pivotY = kf.originY * canvasH;
+  }
+
+  return warnings;
+}
+
+/**
  * Synthesise a complete SS project from a parsed cmo3.
  *
  * The output is `loadProject`-ready: every field the project store
@@ -532,6 +686,19 @@ export async function importCmo3(bytes) {
     scene, partGuidToNodeId, canvasW ?? 1024, canvasH ?? 1024,
   );
   for (const w of rigWarnings) warnings.push(`rigWarp: ${w}`);
+
+  // Sweep #15: mirror cmo3 rotation deformers onto their owning groups so
+  // the writer's auto-rig path produces equivalent rotations on re-export.
+  // Sets `node.boneRole` per known-role match and `transform.pivotX/Y`
+  // per rotation deformer rest origin (canvas-normalised → canvas-px).
+  // Parts whose deformerGuidRef pointed at a rotation deformer (e.g.
+  // handwear-l/r → Rotation_leftArm/rightArm) lose their `rigWarp:`
+  // warning from sweep #14: the writer's per-mesh inline path now picks
+  // up the parent group's GroupRotation_<role> deformer at re-export.
+  const rotationWarnings = applyRotationDeformersToGroups(
+    scene, nodes, guidToNodeId, canvasW ?? 1024, canvasH ?? 1024,
+  );
+  for (const w of rotationWarnings) warnings.push(`rotation: ${w}`);
 
   // Synthesise SS-shaped parameter list from the inspected metadata.
   // `role` defaults to 'standard'; ParamOpacity gets 'opacity' so the
