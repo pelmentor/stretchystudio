@@ -483,7 +483,7 @@ Substage status:
 | 0F.10 — Pillar Q: serializer purity test | ✅ shipped | `57a1bc8` | `test_serializerPurity.mjs` locks in saveProject "no input mutation" contract. |
 | 0F.11 — Rig group BFS cleanup helper | ✅ shipped | `eecaf00` | `viewport/rigGroupCleanup.js`; 16 tests for ancestor walks. |
 | 0F.12 — PSD split-parts applier | ✅ shipped | `8d75afe` | `viewport/applySplits.js`; 15 tests. |
-| 0F.13–0F.28 — Test coverage backfill | ✅ shipped | various | Locked down 16 critical pure modules with ~570 tests: transforms, animationEngine, psdOrganizer, variantNormalizer, paramValuesStore, editorStore, frameConvert, animationStore, rigSpec, faceParallaxStore, rigWarpsStore, bodyWarpStore, xmlbuilder, mesh/sample, armatureOrganizer, idle/motionLib. |
+| 0F.13–0F.32 — Test coverage backfill | ✅ shipped | various | Locked down 20 critical pure modules with ~750 tests: transforms, animationEngine, psdOrganizer, variantNormalizer, paramValuesStore, editorStore, frameConvert, animationStore, rigSpec, faceParallaxStore, rigWarpsStore, bodyWarpStore, xmlbuilder, mesh/sample, armatureOrganizer, idle/motionLib, rotationDeformers, warpDeformers, cmo3/pngHelpers, idle/builder. |
 | 0F.N — Pointer events + wizard handlers + projectStore split | ⏳ pending | — | Each is large + coupled; needs browser eyes. CanvasViewport is now 1953 LOC (was 2243, -290). |
 | 0G.1 — ID consolidation (Pillar P) | ✅ shipped | `fb651bf` | `lib/ids.js` with `uid()` + `uidLong()`; 7 `Math.random` ID sites consolidated. |
 | 0G.2 — `scripts/` reorg (Pillar V) | ✅ shipped | `5ad5d2d` | `test/`, `bench/`, `dev-tools/` subdirs. |
