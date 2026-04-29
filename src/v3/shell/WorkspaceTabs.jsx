@@ -23,11 +23,14 @@
 import { useState } from 'react';
 import {
   Save, FolderOpen, Undo2, Redo2, Download, FilePlus, Settings2,
+  Link2, Unlink,
 } from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
+import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { getOperator } from '../operators/registry.js';
+import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
 import { NewProjectDialog } from './NewProjectDialog.jsx';
@@ -45,6 +48,7 @@ export function WorkspaceTabs() {
   const setWorkspace = useUIV3Store((s) => s.setWorkspace);
   const dirty = useProjectStore((s) => s.hasUnsavedChanges);
   const nodeCount = useProjectStore((s) => s.project?.nodes?.length ?? 0);
+  const hotReloadStatus = useAssetHotReloadStore((s) => s.status);
 
   const [confirmNew, setConfirmNew] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
@@ -57,6 +61,37 @@ export function WorkspaceTabs() {
       op.exec({ editorType: null });
     } catch (err) {
       if (typeof console !== 'undefined') console.error(`[op ${id}] failed:`, err);
+    }
+  }
+
+  async function handleHotReloadClick() {
+    const store = useAssetHotReloadStore.getState();
+    if (store.handle) {
+      store.stop();
+      return;
+    }
+    if (!hotReloadSupported()) {
+      window.alert('Asset hot-reload requires a Chromium-based browser (Chrome / Edge / Brave / Arc).');
+      return;
+    }
+    store.setPending(true);
+    try {
+      const projectStore = useProjectStore.getState();
+      const handle = await pickFolderAndWatch({
+        getProject: () => useProjectStore.getState().project,
+        updateProject: (recipe) => projectStore.updateProject(recipe, { skipHistory: true }),
+        onChange: () => useAssetHotReloadStore.getState().bumpLastEvent(),
+        onStatus: (msg) => useAssetHotReloadStore.getState().setMessage(msg),
+      });
+      store.setHandle(handle);
+    } catch (err) {
+      // The picker rejects with AbortError when the user cancels — silent
+      // is the right UX there.
+      if (err && err.name !== 'AbortError') {
+        store.setMessage(`Hot reload failed: ${(err && err.message) || err}`);
+      }
+    } finally {
+      useAssetHotReloadStore.getState().setPending(false);
     }
   }
 
@@ -157,6 +192,21 @@ export function WorkspaceTabs() {
           <Redo2 size={14} />
         </ToolbarButton>
         <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <ToolbarButton
+          title={
+            hotReloadStatus.folderName
+              ? `Hot reload — watching "${hotReloadStatus.folderName}" (${hotReloadStatus.watchedCount} file${hotReloadStatus.watchedCount === 1 ? '' : 's'}). Click to stop.`
+              : 'Hot reload — pick a folder of PNGs that match part names; the canvas re-renders when any file changes on disk.'
+          }
+          onClick={handleHotReloadClick}
+        >
+          {hotReloadStatus.folderName ? <Unlink size={14} /> : <Link2 size={14} />}
+          {hotReloadStatus.folderName ? (
+            <span className="ml-1 text-[10px] tabular-nums text-primary">
+              {hotReloadStatus.watchedCount}
+            </span>
+          ) : null}
+        </ToolbarButton>
         <ToolbarButton title="Preferences" onClick={() => setPrefsOpen(true)}>
           <Settings2 size={14} />
         </ToolbarButton>

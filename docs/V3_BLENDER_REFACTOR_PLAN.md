@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #6 (autonomous)
+
+User said *"Continue"* after sweep #5. One more first cut:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | Asset hot-reload via the File System Access API. `src/io/assetHotReload.js` opens a directory picker, lists every PNG, matches each to a part by `node.name` (case-insensitive, ignoring extension), and polls for `lastModified` changes every 1.5s. On change it pushes a fresh `URL.createObjectURL(file)` into `project.textures[].source` (with `skipHistory: true` so live edits don't pollute undo); the existing CanvasViewport texture-sync loop notices the URL change and re-uploads to the GPU. Old blob URLs are revoked after a 5s grace so any in-flight `Image()` decode finishes first. `assetHotReloadStore` (zustand, non-persisted) holds the active watcher; WorkspaceTabs gains a Link/Unlink toolbar button with file count + tooltip. Chromium-only (`showDirectoryPicker` gate); other browsers see a single alert and no button regression. The watcher does not survive page reload — re-link after refresh. |
+
+**Phase coverage after sweep #6:** Asset hot-reload shipped. Remaining entirely-pending: 4A parity harness, Phase 5 `.cmo3` round-trip / touch+pen refactor / onnxruntime opt-in toggle, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #5 (autonomous)
 
 User said *"Продолжай"* after compact. Three more first cuts:
