@@ -862,7 +862,7 @@ Immer overlay) and Pillar Z (move `animationEngine.js` from
 | 3A Timeline Editor | ✅ shipped | `0379c7d` | Restored upstream `TimelinePanel` verbatim into `v3/editors/timeline/TimelineEditor.jsx`, then extended with `rowKey` discriminator so param tracks (`{paramId, keyframes}`) render alongside node tracks (`{nodeId, property, keyframes}`). Drag / copy / paste / easing / audio sync, box-select with `param:`/`node:` prefix routing. |
 | 3A.1 Param keyframe plumbing | ✅ shipped | `93aa1e4` | `track.paramId` was already supported by motion3json + can3writer exporters but engine / viewport / UI didn't drive it. 4-file plumbing landed: `animationEngine.js` adds `computeParamOverrides` + `setParamKeyframeAt`; `CanvasViewport` merges param overrides into `valuesForEval` before chainEval; `ParamRow` auto-keyframes in animation mode + autoKeyframe; TimelineEditor displays param rows on top of node rows. |
 | 3B Dopesheet Editor | ✅ shipped (first cut) | sweep #2 | `DopesheetEditor.jsx` registered as `dopesheet` editor type, paired with Timeline tab in the Animation workspace. One row per track (param + node) with a tick per keyframe + a ruler. Click a tick or anywhere on the timeline to seek. Read-only: editing still happens through Timeline / auto-keyframe. |
-| 3C Keyform Graph Editor | ⏳ pending | — | Rig keyform interpolation curves (LINEAR / BEZIER), drag bezier handles, per-deformer view. |
+| 3C Keyform Graph Editor | ✅ shipped (read-only first cut) | sweep #4 | `KeyformGraphEditor.jsx` registered as `keyformGraph` editor type. Picks the active part's `project.rigWarps[partId]`, walks the FIRST binding's `keys[]` and plots scalar magnitude (`mean(‖position − baseGrid‖)` per keyform whose `keyTuple[0]` matches and other slots are 0) vs paramValue. Read-only first cut; per-binding tabs + 2D heatmap + drag-handle bezier handles deferred. |
 | 3D Animation F-curve Editor | ✅ shipped (read-only first cut) | sweep #3 | `FCurveEditor.jsx` plots one track's value-over-time curve via live `interpolateTrack()`, picks track from selection (parameter / part / group). 240 sample points, keyframe diamonds + playhead + click-to-seek. Read-only first cut; drag-handle bezier editing deferred. |
 | 3E F3 Operator Search Palette | ✅ shipped | sweep #2 | `CommandPalette.jsx` cmdk dialog. F3 toggles. Recent group (5 entries, persisted via `commandPaletteStore` + localStorage), All operators group with chord hints. Greyed when `op.available()` returns false. |
 | 3F Modal operator polish | ✅ shipped (first cut, see 2H) | sweep #2 | Axis constrain (X/Y) + Shift snap shipped via 2H modal G/R/S. Numeric typed input + grid-snap operator-side deferred. ParamRow's right-click / double-click → reset-to-default (commit `76fa3e0`) covers the parameter-side reset gesture. |
@@ -921,11 +921,18 @@ Bundle budget: main chunk < 500 KB gzip.
 
 `themePresets.js` остаётся как data, consumed единообразно через theme system.
 
-#### 4J — i18n infrastructure (Pillar T)
+#### 4J — i18n infrastructure (Pillar T) **[STATUS: scaffold + RU locale shipped sweep #4]**
 
-String extraction infrastructure (`react-intl` или similar). All new
-v3 UI uses extracted strings (`t('...')` pattern). Russian locale
-shipped if время позволяет — иначе deferred to v4.
+- ✅ `src/i18n/index.js` — `t()` / `useT()` lookup with `en` default + `ru` registered. zustand store carries `locale` + `dictionaries`. Missing keys fall back through ru → en → raw key so a non-translated string is visible during dev rather than blank.
+- ✅ `CommandPalette.jsx` wraps placeholder / empty / heading strings via `useT()` — proof of concept that the wrapping pattern doesn't add visible cost.
+- ⏳ Per-locale switcher in Preferences modal — deferred (would also need to localStorage-persist the choice).
+- ⏳ Wrap-the-rest sweep across remaining v3 components — mechanical follow-up.
+
+react-intl was considered but dropped: 60+ KB gzip is heavy for a
+pure key→string lookup, and plural / date formatting isn't on the
+immediate roadmap (every UI string today is a literal sentence).
+When complex formatting becomes a requirement we swap the `t()`
+implementation; call sites stay the same.
 
 ---
 
@@ -938,7 +945,7 @@ shipped if время позволяет — иначе deferred to v4.
 | Physics Editor — Cubism import | ⏳ pending | — | Read `.physics3.json` existing file → populate Physics Editor (round-trip) |
 | Motion timeline scrubbing | ⏳ pending | — | Multi-motion preview, blending |
 | Live2D round-trip .cmo3 import | ⏳ pending | — | Read exported .cmo3 back into SS for verification + post-Cubism-edit recovery |
-| Asset library + project templates (Pillar R) | ⏳ pending | — | Saved deformer / physics / variant configs + starter rigs. Configurable tag set per project (replaces hardcoded `KNOWN_TAGS`). |
+| Asset library + project templates (Pillar R) | ✅ shipped (templates first cut) | sweep #4 | `v3/templates/projectTemplates.js` registry — id / name / description / `apply(project)` mutator per template. New Project flow now opens `NewProjectDialog` with template radio + dirty-state warning. Initial templates: Empty / Square 1024 / Portrait HD / Landscape FHD — each tweaks canvas dimensions + name. Saved deformer / physics / variant configs + starter rigs deferred. Configurable tag set per project deferred. |
 | Asset hot-reload | ⏳ pending | — | PNG changes on disk → live update in SS viewport |
 | Touch / pen refactor | ⏳ pending | — | 44pt hit targets, pen pressure for warp lattice editing, pinch+pan gestures, adaptive layout |
 | onnxruntime-web optional (Pillar O) | ⏳ pending | — | Move ML inference (DWPose) to opt-in plugin. Default PSD import without ML (heuristic-only). 25 MB WASM downloads only on user-triggered "Auto-detect joints". |
@@ -955,8 +962,7 @@ shipped if время позволяет — иначе deferred to v4.
     masks,variants,boneBaking}.js`
   - `moc3writer.js` (1572 LOC) → `moc3/{header,parameters,parts,
     deformers,artMeshes,keyforms,physics}.js`
-- Python tooling README (Pillar W) — `scripts/dev-tools/python/
-  README.md` documenting purpose / install / usage
+- ✅ Python tooling README (Pillar W) shipped sweep #4 — `scripts/dev-tools/README.md` documents the five moc3 inspectors + depth-PSD analyzer + body verifier (purpose, install, invocation).
 - Final dead code audit (round 2)
 - Documentation pass: full user manual + dev guide
 - Performance audit — re-bench v2 evaluator under v3 shell
@@ -1495,6 +1501,21 @@ each phase was scoped to; full polish (standalone editors, modal
 operator suites, parity harness, bundle splitting, PWA, i18n)
 remains for the second pass. Tags `v3-phase-N-complete` reserved
 for that polish round.
+
+---
+
+### 2026-04-29 — Phase first-cut sweep #4 (autonomous)
+
+User said *"Не нужен — продолжаю"*. Four more first cuts:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 4J | i18n scaffold — `src/i18n/index.js` `t()` / `useT()` lookup with `en` default + `ru` registered. CommandPalette wired as proof of concept. Per-locale Preferences switcher + remaining-component sweep deferred. |
+| 3C | Keyform Graph editor read-only first cut. `KeyformGraphEditor.jsx` plots scalar magnitude (mean ‖position − baseGrid‖) per keyform vs paramValue along the first binding. Polish (per-binding tabs, 2D heatmap, drag-handle bezier) deferred. |
+| 5 | Project templates in New flow. `v3/templates/projectTemplates.js` registry + `NewProjectDialog.jsx` replace the AlertDialog confirm. Templates: Empty / Square 1024 / Portrait HD / Landscape FHD. Asset library + saved deformer/physics/variant configs + configurable tag set deferred. |
+| 6 | Python dev-tooling README. `scripts/dev-tools/README.md` documents the five moc3 inspectors (inspect / mesh / rot / warp) + depth-PSD analyzer + body verifier. |
+
+**Phase coverage after sweep #4:** Only 4A (Reference parity harness), Phase 5 advanced features (physics import / round-trip / asset hot-reload / touch refactor / onnx optional), and Phase 6 god-class breakup remain entirely pending. Every other phase has at least a first cut on master.
 
 ---
 
