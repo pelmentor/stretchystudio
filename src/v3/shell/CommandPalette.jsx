@@ -26,6 +26,7 @@ import { useMemo } from 'react';
 import { listOperators, getOperator } from '../operators/registry.js';
 import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { DEFAULT_KEYMAP } from '../keymap/default.js';
+import { useT } from '../../i18n/index.js';
 import * as CommandImpl from '../../components/ui/command.jsx';
 
 // shadcn cmdk wrappers are forwardRefs without exported JSDoc — tsc
@@ -80,6 +81,14 @@ export function CommandPalette() {
   const close   = useCommandPaletteStore((s) => s.close);
   const recents = useCommandPaletteStore((s) => s.recents);
   const markUsed = useCommandPaletteStore((s) => s.markUsed);
+  // Phase 4J — i18n: every user-facing string in this component
+  // routes through the t() lookup. Default English dictionary lives
+  // in src/i18n/index.js; future translators register additional
+  // locales via registerDictionary().
+  const tPlaceholder = useT('palette.placeholder');
+  const tEmpty       = useT('palette.empty');
+  const tRecent      = useT('palette.group.recent');
+  const tAll         = useT('palette.group.all');
 
   // Listing operators returns a snapshot, not a subscription, so we
   // re-derive only when the modal opens. Operators don't get
@@ -110,12 +119,12 @@ export function CommandPalette() {
   // onOpenChange fires on Esc + scrim click + the X button.
   return (
     <CommandDialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <CommandInput placeholder="Search operators…" autoFocus />
+      <CommandInput placeholder={tPlaceholder} autoFocus />
       <CommandList>
-        <CommandEmpty>No operator matches.</CommandEmpty>
+        <CommandEmpty>{tEmpty}</CommandEmpty>
 
         {recents.length > 0 ? (
-          <CommandGroup heading="Recent">
+          <CommandGroup heading={tRecent}>
             {recents
               .map((id) => allOps.find((o) => o.id === id))
               .filter(Boolean)
@@ -130,7 +139,7 @@ export function CommandPalette() {
           </CommandGroup>
         ) : null}
 
-        <CommandGroup heading="All operators">
+        <CommandGroup heading={tAll}>
           {allOps.map((op) => (
             <PaletteItem
               key={op.id}
