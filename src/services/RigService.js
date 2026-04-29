@@ -22,6 +22,9 @@
 
 import { useRigSpecStore } from '../store/rigSpecStore.js';
 import { useProjectStore } from '../store/projectStore.js';
+import { useParamValuesStore } from '../store/paramValuesStore.js';
+import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
+import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 
 /**
  * @typedef {Object} BuildRigResult
@@ -85,6 +88,64 @@ export async function buildRig() {
     return { ok: false, error, rigSpec: null };
   }
   return { ok: true, rigSpec };
+}
+
+/**
+ * Full "Initialize Rig" flow used by v3 ParametersEditor (and the
+ * future `rig.initialize` operator). Distinct from `buildRig()` —
+ * `buildRig` only computes + caches the rigSpec; `initializeRig`
+ * additionally seeds the persisted keyform stores
+ * (faceParallax / bodyWarp / rigWarps / configs) into projectStore
+ * AND resets paramValues to fresh defaults. This is the destructive,
+ * user-visible "make this PSD into a rig" action.
+ *
+ * Mirrors the v2 ParametersPanel runInit logic so behaviour stays
+ * identical across shells. Eventually elevates to a Phase 5 operator
+ * with confirm-modal gating; v3 first cut just wraps the same calls.
+ *
+ * @returns {Promise<BuildRigResult>}
+ */
+export async function initializeRig() {
+  const pre = preflightBuildRig();
+  if (!pre.ok) {
+    return { ok: false, error: pre.reasons.join('; '), rigSpec: null };
+  }
+  try {
+    const project = useProjectStore.getState().project;
+    const harvest = await initializeRigFromProject(project);
+
+    // Persist all rig outputs into projectStore.
+    useProjectStore.getState().seedAllRig(harvest);
+
+    // Cache the rigSpec for the live evaluator. Bypass buildRigSpec()
+    // because it would re-run the harvest a second time. Also attach
+    // physicsRules — same post-seed read the store does internally.
+    let rigSpec = harvest.rigSpec ?? null;
+    if (rigSpec) {
+      const postSeedProject = useProjectStore.getState().project;
+      rigSpec = { ...rigSpec, physicsRules: resolvePhysicsRules(postSeedProject) };
+    }
+    useRigSpecStore.setState({
+      rigSpec,
+      isBuilding: false,
+      lastBuiltGeometryVersion:
+        useProjectStore.getState().versionControl?.geometryVersion ?? 0,
+      error: null,
+    });
+
+    // Seed live param values from the freshly baked param spec —
+    // sliders start at canonical defaults rather than stale dial
+    // positions from a prior project.
+    const paramsAfterSeed =
+      harvest.rigSpec?.parameters ?? useProjectStore.getState().project.parameters ?? [];
+    useParamValuesStore.getState().resetToDefaults(paramsAfterSeed);
+
+    return { ok: true, rigSpec };
+  } catch (err) {
+    const error = /** @type {any} */ (err)?.message ?? String(err);
+    if (typeof console !== 'undefined') console.error('[RigService] initializeRig failed:', err);
+    return { ok: false, error, rigSpec: null };
+  }
 }
 
 /** Drop the cached rigSpec; next read re-builds. */

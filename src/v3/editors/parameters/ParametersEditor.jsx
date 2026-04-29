@@ -18,9 +18,10 @@
  */
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Wand2 } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
+import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
 
@@ -30,15 +31,38 @@ export function ParametersEditor() {
 
   // Collapse state per group key — local to the editor, not persisted.
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(/** @type {string|null} */ (null));
+
+  async function runInit() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await initializeRig();
+    setBusy(false);
+    if (!res.ok) setError(res.error ?? 'rig init failed');
+  }
 
   if (params.length === 0) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center text-xs text-muted-foreground select-none gap-2 p-3">
+      <div className="h-full w-full flex flex-col items-center justify-center text-xs text-muted-foreground select-none gap-3 p-3">
         <span>No parameters yet.</span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={runInit}
+          className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1.5 text-xs font-semibold"
+        >
+          <Wand2 size={12} />
+          {busy ? 'Initializing…' : 'Initialize Rig'}
+        </button>
         <span className="text-[10px] text-muted-foreground/70 text-center max-w-xs">
-          Run Initialize Rig (in the v2 Parameters panel for now) to seed the
-          standard set, or add custom parameters from a saved project.
+          Runs the rig generators against current geometry and seeds the
+          standard parameter set + warp / rotation deformers.
         </span>
+        {error ? (
+          <span className="text-[10px] text-destructive max-w-xs text-center">{error}</span>
+        ) : null}
       </div>
     );
   }
@@ -56,16 +80,33 @@ export function ParametersEditor() {
     <div className="h-full w-full flex flex-col">
       <div className="px-2 py-1.5 border-b border-border bg-muted/20 flex items-center justify-between text-[10px] font-mono text-muted-foreground">
         <span>{params.length} params · live preview</span>
-        <button
-          type="button"
-          className="flex items-center gap-1 hover:text-foreground transition-colors"
-          onClick={() => useParamValuesStore.getState().resetToDefaults(params)}
-          title="Reset every slider back to its parameter's default value."
-        >
-          <RotateCcw size={10} />
-          reset to defaults
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            disabled={busy}
+            className="flex items-center gap-1 hover:text-foreground transition-colors disabled:opacity-50"
+            onClick={runInit}
+            title="Re-run rig generators and reseed parameters / keyforms."
+          >
+            <Wand2 size={10} />
+            {busy ? 'Initializing…' : 'Initialize Rig'}
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-1 hover:text-foreground transition-colors"
+            onClick={() => useParamValuesStore.getState().resetToDefaults(params)}
+            title="Reset every slider back to its parameter's default value."
+          >
+            <RotateCcw size={10} />
+            reset
+          </button>
+        </div>
       </div>
+      {error ? (
+        <div className="px-2 py-1 border-b border-destructive/40 text-[10px] text-destructive bg-destructive/10">
+          {error}
+        </div>
+      ) : null}
 
       <div className="flex-1 min-h-0 overflow-auto">
         {groups.map((g) => {
