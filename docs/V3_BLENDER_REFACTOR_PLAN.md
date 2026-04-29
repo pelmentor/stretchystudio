@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #18 (autonomous)
+
+Sweep #17 finished masks; sweep #18 wires up variants. Imported parts whose name carries a `.suffix` (`face.smile`, `topwear.winter`, etc.) need `variantOf` + `variantSuffix` populated so the writer's variant fade logic on re-export crossfades them against their base — name-suffix detection isn't enough by itself.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` variant pairing. Imports now call `normalizeVariants({nodes})` from `io/variantNormalizer.js` after the part loop. The normaliser pairs every variant part with its base sibling (case-insensitive name match), sets `variantOf` + `variantSuffix`, reparents the variant to its base's parent, and renumbers `draw_order` across all parts so each variant sits immediately above its base. Orphan variants (no matching base) emit warnings + render as plain layers. The same module is what `psdOrganizer` + `RigService.applyWizardRig` already use, so the post-import shape matches what every other import path produces. Verified against `shelby.cmo3`: 1 variant paired (`face.smile` → `variantOf=face, suffix=smile, draw_order=10`). 0 variant-pass warnings. The pre-existing `topwear копия` part doesn't trigger variant detection (Cyrillic + space don't match the suffix regex) — correct, since it's a Cubism Editor "Duplicate" copy, not a variant. |
+
+**Phase coverage after sweep #18:** the .cmo3 round-trip pipeline now decodes structural + rig + clipping + variants. Pending pieces on this line: physics rules (`CPhysicsSettingsSource` decode + `physicsRules[]` population — physics3.json already has its own import path via `physics3Reverse.js`, but cmo3-embedded physics is a separate code-path), bone-baked angles (`boneConfig.bakedKeyformAngles` from per-mesh `CWarpDeformerForm` + `ParamRotation_<role>` binding combo). Other entirely-pending items: 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #17 (autonomous)
 
 Sweep #16 finished the deformer chain; sweep #17 starts the non-rig data sweep with masks. Imported cmo3 models had no clipping at all — irides drew over eyewhite, etc. — because `project.maskConfigs[]` was hard-wired to `[]`.

@@ -40,6 +40,7 @@ import { parseCmo3Xml } from './cmo3XmlParser.js';
 import { extractScene } from './cmo3PartExtract.js';
 import { CURRENT_SCHEMA_VERSION } from '../../store/projectMigrations.js';
 import { uid } from '../../lib/ids.js';
+import { normalizeVariants } from '../variantNormalizer.js';
 
 /**
  * @typedef {import('./cmo3Inspect.js').ParamMetadata} ParamMetadata
@@ -757,6 +758,21 @@ export async function importCmo3(bytes) {
     scene, nodes, guidToNodeId, canvasW ?? 1024, canvasH ?? 1024,
   );
   for (const w of rotationWarnings) warnings.push(`rotation: ${w}`);
+
+  // Sweep #18: variant pairing. Imported parts whose name carries a
+  // `.suffix` (e.g. `face.smile`, `topwear.winter`) get paired with their
+  // base sibling via the canonical `variantNormalizer`. The normaliser
+  // sets `variantOf` + `variantSuffix`, reparents the variant to its
+  // base's parent, and renumbers `draw_order` so each variant sits
+  // immediately above its base. Without this, the variant param wouldn't
+  // crossfade between the two on re-export — the writer's variant fade
+  // logic keys off `variantOf`/`variantSuffix`, not name suffix detection.
+  const variantResult = normalizeVariants({ nodes });
+  if (variantResult.orphans.length > 0) {
+    for (const orphan of variantResult.orphans) {
+      warnings.push(`variant: orphan "${orphan.name}" — no base sibling found, will render as plain layer`);
+    }
+  }
 
   // Sweep #17: synthesise project.maskConfigs[] from each part's
   // clipGuidList. Cubism stores clip refs as CDrawableGuid xs.refs (each
