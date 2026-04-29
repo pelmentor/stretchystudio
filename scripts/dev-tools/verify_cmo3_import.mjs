@@ -65,6 +65,21 @@ for (const param of project.parameters.slice(0, 6)) {
   console.log(`  ${param.id.padEnd(18)} role=${param.role.padEnd(10)} [${param.min}..${param.max}] default=${param.default}`);
 }
 
+const rigWarpEntries = Object.entries(project.rigWarps);
+if (rigWarpEntries.length > 0) {
+  console.log('');
+  console.log(`[rigWarps] ${rigWarpEntries.length} entries`);
+  const [firstId, firstSpec] = rigWarpEntries[0];
+  const part = parts.find((p) => p.id === firstId);
+  console.log(`  sample: ${firstSpec.id} → ${part?.name ?? '(missing)'}`);
+  console.log(`    gridSize=${firstSpec.gridSize.cols}×${firstSpec.gridSize.rows}  keyforms=${firstSpec.keyforms.length}  bindings=${firstSpec.bindings.length}`);
+  console.log(`    canvasBbox=${JSON.stringify(firstSpec.canvasBbox)}`);
+  for (const b of firstSpec.bindings) {
+    console.log(`    binding: ${b.parameterId} keys=[${b.keys.join(', ')}]`);
+  }
+  console.log(`    keyform[0] keyTuple=[${firstSpec.keyforms[0].keyTuple.join(', ')}]`);
+}
+
 if (warnings.length > 0) {
   console.log('');
   console.log('[warnings]');

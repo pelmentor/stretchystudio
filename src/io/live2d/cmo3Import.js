@@ -161,6 +161,219 @@ function partToMesh(part) {
 }
 
 /**
+ * Synthesise per-mesh rig warp specs from the extracted deformer + binding
+ * + grid graph. Mirrors what `cmo3writer.js`'s per-mesh emission loop
+ * produces inline, so a re-export of the imported project would round-
+ * trip cleanly through the writer's stored-rigWarps fast path.
+ *
+ * Coverage (sweep #13 honest scope):
+ *
+ *   - Warp deformers whose own CDeformerGuid xs.ref is referenced by
+ *     exactly one `ExtractedPart.deformerGuidRef` get a full rigWarpSpec
+ *     keyed by that part's SS node id.
+ *   - Warps with no mesh child (intermediate / chained warps under
+ *     FaceParallax / NeckWarp / BodyXWarp) are SKIPPED — they need a
+ *     deformer-tree synthesis pass that doesn't exist yet.
+ *   - Rotation deformers are SKIPPED here — they map to SS's
+ *     groupRotation system, which is its own follow-on sweep.
+ *
+ * `gridSize` is the cell count (`cols × rows`); `baseGrid` is
+ * `(cols+1) × (rows+1)` control-point pairs — same convention the writer
+ * uses. Positions are returned in canvas-pixel space (cmo3 stores
+ * `0..1`-normalised; the writer's stored-rigWarps fast path expects
+ * pixel space).
+ *
+ * @param {import('./cmo3PartExtract.js').ExtractedScene} scene
+ * @param {Map<string, string>} partGuidToNodeId   ExtractedPart.xsId → SS node id
+ * @param {number} canvasW
+ * @param {number} canvasH
+ * @returns {{ rigWarps: Record<string, any>, warnings: string[] }}
+ */
+function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
+  /** @type {string[]} */
+  const warnings = [];
+  /** @type {Record<string, any>} */
+  const rigWarps = {};
+
+  // Map warp.ownGuidRef → warp record so part.deformerGuidRef lookups are O(1)
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
+  const warpByOwnGuid = new Map();
+  for (const d of scene.deformers) {
+    if (d.kind !== 'warp') continue;
+    if (d.ownGuidRef) warpByOwnGuid.set(d.ownGuidRef, d);
+  }
+
+  // Map binding xsId → record so grid cell access keys can resolve param
+  // values without re-walking the scene.
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedKeyformBinding>} */
+  const bindingsById = new Map();
+  for (const b of scene.keyformBindings) {
+    if (b.xsId) bindingsById.set(b.xsId, b);
+  }
+
+  // Map grid xsId → record for warp.keyformGridSourceRef → grid lookup.
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedKeyformGrid>} */
+  const gridsById = new Map();
+  for (const g of scene.keyformGrids) {
+    if (g.xsId) gridsById.set(g.xsId, g);
+  }
+
+  // Map binding.gridSourceRef → list of bindings that fan into that grid.
+  // The order of bindings here is the parameter-axis order; later we use
+  // each binding's index to lookup keyTuple values in cell access keys.
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedKeyformBinding[]>} */
+  const bindingsByGrid = new Map();
+  for (const b of scene.keyformBindings) {
+    if (!b.gridSourceRef) continue;
+    let arr = bindingsByGrid.get(b.gridSourceRef);
+    if (!arr) { arr = []; bindingsByGrid.set(b.gridSourceRef, arr); }
+    arr.push(b);
+  }
+
+  for (const part of scene.parts) {
+    if (!part.deformerGuidRef) continue;
+    const warp = warpByOwnGuid.get(part.deformerGuidRef);
+    if (!warp) continue;  // part isn't directly under a warp deformer (e.g. parented to a rotation)
+
+    const partNodeId = partGuidToNodeId.get(part.xsId ?? '');
+    if (!partNodeId) {
+      warnings.push(`rigWarp build: part ${part.drawableIdStr} has no node id assignment`);
+      continue;
+    }
+
+    // Resolve bindings for the warp's grid (parameter-axis order).
+    const grid = warp.keyformGridSourceRef ? gridsById.get(warp.keyformGridSourceRef) : null;
+    const gridBindings = warp.keyformGridSourceRef
+      ? (bindingsByGrid.get(warp.keyformGridSourceRef) ?? [])
+      : [];
+
+    /** @type {{parameterId:string, keys:number[], interpolation:string}[]} */
+    const bindings = gridBindings.map((b) => ({
+      parameterId: b.description || 'ParamOpacity',
+      keys: b.keys.slice(),
+      interpolation: b.interpolationType || 'LINEAR',
+    }));
+    if (bindings.length === 0) {
+      // Untagged mesh — writer emits a single ParamOpacity binding
+      bindings.push({ parameterId: 'ParamOpacity', keys: [1], interpolation: 'LINEAR' });
+    }
+
+    // CWarpDeformerSource doesn't carry a top-level base positions array
+    // — only the keyforms have positions. The "rest grid" is the keyform
+    // whose access-key values are all closest to 0 (i.e. each parameter
+    // sits at its default). For binding keys like [-1, 0, 1], that's
+    // index 1; for [0, 1], index 0. We pick the cell minimising
+    // sum-of-squares param distance from 0.
+    if (!grid || grid.entries.length === 0 || !warp.keyforms.length) {
+      warnings.push(`rigWarp build: warp ${warp.idStr} has no keyforms / grid`);
+      continue;
+    }
+    let restCellIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < grid.entries.length; i++) {
+      const cell = grid.entries[i];
+      let dist = 0;
+      for (const b of gridBindings) {
+        const ak = cell.accessKey.find((k) => k.bindingRef === b.xsId);
+        const val = ak ? (b.keys[ak.keyIndex] ?? 0) : 0;
+        dist += val * val;
+      }
+      if (dist < bestDist) {
+        bestDist = dist;
+        restCellIdx = i;
+      }
+    }
+    const restPositions = warp.keyforms[restCellIdx]?.positions;
+    if (!restPositions || restPositions.length === 0) {
+      warnings.push(`rigWarp build: warp ${warp.idStr} rest cell ${restCellIdx} has no positions`);
+      continue;
+    }
+    const baseGrid = new Array(restPositions.length);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < restPositions.length; i += 2) {
+      const px = restPositions[i] * canvasW;
+      const py = restPositions[i + 1] * canvasH;
+      baseGrid[i] = px;
+      baseGrid[i + 1] = py;
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+
+    /** @type {{keyTuple:number[], positions:number[], opacity:number}[]} */
+    const keyforms = [];
+
+    if (grid && grid.entries.length === warp.keyforms.length) {
+      // Cartesian-product index match: cell N corresponds to deformer
+      // keyform N. Build keyTuple by walking each cell's accessKey in
+      // parameter-axis order (gridBindings order).
+      for (let i = 0; i < grid.entries.length; i++) {
+        const cell = grid.entries[i];
+        const kfPositions = warp.keyforms[i].positions;
+        if (!kfPositions) {
+          warnings.push(`rigWarp build: warp ${warp.idStr} keyform ${i} missing positions`);
+          continue;
+        }
+        // Position pixels = normalised × canvas dim (interleaved x/y)
+        const positions = new Array(kfPositions.length);
+        for (let j = 0; j < kfPositions.length; j += 2) {
+          positions[j] = kfPositions[j] * canvasW;
+          positions[j + 1] = kfPositions[j + 1] * canvasH;
+        }
+        // Build keyTuple in the binding-order the writer expects. The
+        // cell's accessKey may be in a different order; reorder it.
+        const keyTuple = [];
+        for (const b of gridBindings) {
+          const ak = cell.accessKey.find((k) => k.bindingRef === b.xsId);
+          if (!ak || !Number.isFinite(b.keys[ak.keyIndex])) {
+            keyTuple.push(0);
+          } else {
+            keyTuple.push(b.keys[ak.keyIndex]);
+          }
+        }
+        keyforms.push({ keyTuple, positions, opacity: 1 });
+      }
+    } else {
+      // No grid (untagged) or count mismatch: emit one rest keyform that
+      // mirrors baseGrid. Writer produces this same shape for the
+      // ParamOpacity-only fallback.
+      keyforms.push({
+        keyTuple: bindings[0]?.keys.slice() ?? [1],
+        positions: baseGrid.slice(),
+        opacity: 1,
+      });
+    }
+
+    rigWarps[partNodeId] = {
+      id: warp.idStr || `RigWarp_${part.name}`,
+      name: warp.name || `${part.name} Warp`,
+      // Parent type is conservatively 'warp' (matches the writer's
+      // default). Identifying the actual chained parent (FaceParallax /
+      // NeckWarp / BodyXWarp) needs deformer-tree synthesis — deferred.
+      parent: { type: 'warp', id: 'BodyXWarp' },
+      targetPartId: partNodeId,
+      canvasBbox: {
+        minX,
+        minY,
+        W: maxX - minX,
+        H: maxY - minY,
+      },
+      gridSize: { rows: warp.rows, cols: warp.cols },
+      baseGrid,
+      localFrame: 'normalized-0to1',
+      bindings,
+      keyforms,
+      isVisible: true,
+      isLocked: false,
+      isQuadTransform: warp.isQuadTransform,
+    };
+  }
+
+  return { rigWarps, warnings };
+}
+
+/**
  * Map every `ExtractedGroup.guidRef` to a freshly-generated SS node id.
  * Parts use guid xs.refs to point at their parent group, so we need the
  * intermediary index to translate those into SS node parent links.
@@ -247,8 +460,15 @@ export async function importCmo3(bytes) {
   /** @type {any[]} */
   const textures = [];
 
+  // Track ExtractedPart.xsId → SS node id so the rig-warps synthesiser
+  // can resolve parts to their freshly-generated ids without re-walking
+  // the parts loop.
+  /** @type {Map<string, string>} */
+  const partGuidToNodeId = new Map();
+
   for (const part of scene.parts) {
     const nodeId = uid();
+    if (part.xsId) partGuidToNodeId.set(part.xsId, nodeId);
     const parent = part.parentGuidRef ? (guidToNodeId.get(part.parentGuidRef) ?? null) : null;
     if (part.parentGuidRef && parent === null) {
       warnings.push(`part ${part.drawableIdStr} (${part.name}) has unresolved parent ${part.parentGuidRef}`);
@@ -284,6 +504,16 @@ export async function importCmo3(bytes) {
       blendShapeValues: {},
     });
   }
+
+  // Sweep #13: synthesise per-mesh rig warp specs from the deformer +
+  // binding + grid graph. Sets `project.rigWarps[partId]` so imported
+  // models get their cmo3 rig back end-to-end (for the simple case
+  // where each warp directly parents one mesh — chained warps and
+  // rotation deformers are deferred).
+  const { rigWarps, warnings: rigWarnings } = buildRigWarpsFromScene(
+    scene, partGuidToNodeId, canvasW ?? 1024, canvasH ?? 1024,
+  );
+  for (const w of rigWarnings) warnings.push(`rigWarp: ${w}`);
 
   // Synthesise SS-shaped parameter list from the inspected metadata.
   // `role` defaults to 'standard'; ParamOpacity gets 'opacity' so the
@@ -323,7 +553,7 @@ export async function importCmo3(bytes) {
     autoRigConfig: null,
     faceParallax: null,
     bodyWarp: null,
-    rigWarps: {},
+    rigWarps,
     // Stash the cmo3's own model name so callers can use it for the
     // library record / window title without re-parsing the file.
     _importedFromCmo3: { modelName, canvasW: canvasW ?? null, canvasH: canvasH ?? null },
@@ -337,6 +567,7 @@ export async function importCmo3(bytes) {
       groups: scene.groups.length,
       textures: textures.length,
       parameters: parameters.length,
+      rigWarps: Object.keys(rigWarps).length,
     },
   };
 }

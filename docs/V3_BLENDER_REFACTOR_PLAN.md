@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #13 (autonomous)
+
+Sweeps #8–#12 built up everything needed structurally. Sweep #13 turns it into a working rig: imported `.cmo3` projects get their warp deformers translated into SS's `project.rigWarps[partId]` schema, so model parameters actually drive deformations after import.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` rigWarp synthesis. New `buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH)` in `cmo3Import.js` walks the extracted deformer + binding + grid graph and emits one `StoredRigWarpSpec` per part that's directly parented to a warp deformer. Mirrors the writer's per-mesh emission shape exactly (id, name, parent, targetPartId, canvasBbox, gridSize, baseGrid, localFrame, bindings, keyforms, isVisible, isLocked, isQuadTransform) so a re-export hits the writer's `_storedRigWarp`-based fast path without any structural diff. Bindings carry the parameter-id strings + key arrays + interpolation type the cmo3 had. Keyforms are reordered into the writer's binding-axis order (the cmo3's `accessKey` list isn't necessarily in binding order). Base grid is derived from the keyform whose access key resolves to all-zero parameter values (the rest pose); positions are converted from cmo3's normalised 0..1 to canvas-pixel space. Verified against `shelby.cmo3`: 18/20 parts get a rigWarp (the missing 2 are parts under chained / rotation deformers — see scope cut). Sample: `RigWarp_irides_l` synthesised with 3×3 grid, 9 keyforms, bindings `[ParamEyeBallX keys [-1, 0, 1], ParamEyeBallY keys [-1, 0, 1]]`, canvasBbox W=375.3 × H=116.1 px (sized to the actual irides region), keyform[0] keyTuple [-1, -1] matching the writer's cartesian-product ordering. **Honest scope cut:** parts whose `deformerGuidRef` resolves to an intermediate / chained warp or to a CRotationDeformerSource (rotation deformer) are skipped — chained-deformer synthesis needs a deformer-tree walker and `parent: {type, id}` resolution that maps cmo3 parents to SS's named warps (FaceParallaxWarp / NeckWarp / BodyXWarp + the rotation tree). That's the next sweep on this line. |
+
+**Phase coverage after sweep #13:** the .cmo3 round-trip pipeline can now load a `.cmo3` from Cubism Editor and end up with a working SS project where model parameters drive deformations on the simple-warp-direct-parent parts (face / eye / brow / hair regions in the typical Live2D model). Pending pieces: rotation deformers → groupRotation, chained warps (FaceParallax / NeckWarp / BodyXWarp parent resolution), variants, masks, physics rules, bone-baked angles. Other entirely-pending items remain: 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #12 (autonomous)
 
 Sweep #11 ended at structural deformer extraction (warp + rotation definitions + keyform position arrays, but no parameter mapping). Sweep #12 closes that gap by extracting the binding graph that says "keyform index N corresponds to ParamX=v0, ParamY=v1, …".
