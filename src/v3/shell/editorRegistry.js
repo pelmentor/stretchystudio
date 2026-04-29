@@ -15,13 +15,11 @@
  * @module v3/shell/editorRegistry
  */
 
-import {
-  ParametersEditor,
-  TimelineEditor,
-} from '../editors/stubs.jsx';
+import { TimelineEditor } from '../editors/stubs.jsx';
 import { OutlinerEditor } from '../editors/outliner/OutlinerEditor.jsx';
 import { ViewportEditor } from '../editors/viewport/ViewportEditor.jsx';
 import { PropertiesEditor } from '../editors/properties/PropertiesEditor.jsx';
+import { ParametersEditor } from '../editors/parameters/ParametersEditor.jsx';
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType

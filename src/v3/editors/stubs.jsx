@@ -30,5 +30,4 @@ function makeStub(label) {
   return Stub;
 }
 
-export const ParametersEditor = makeStub('Parameters');
-export const TimelineEditor   = makeStub('Timeline');
+export const TimelineEditor = makeStub('Timeline');
