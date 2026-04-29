@@ -122,6 +122,15 @@ export default function CanvasViewport({
   const physicsParamSpecsRef = useRef(null);         // memoised paramSpecs map
   const lastPhysicsTimestampRef = useRef(0);         // last rAF timestamp physics consumed
 
+  // Phase 1F.6 — Live Preview drivers (physics + breath + cursor).
+  // breathPhase advances ~2π / 3.345s while livePreviewActive is on,
+  // mapped to ParamBreath ∈ [0,1] via 0.5 + 0.5*sin.
+  const breathPhaseRef = useRef(0);
+  // Cursor look state: LMB-drag in live-preview mode drives ParamAngleX/Y/Z.
+  // `active` is set on pointerdown (no modifiers, no skeleton/wizard mode);
+  // `clientX/Y` track the latest cursor position for the next tick to read.
+  const lookRef = useRef({ active: false, clientX: 0, clientY: 0 });
+
   // Phase -1D — set of partIds that evalRig produced but no node
   // matched. Used to dedupe console warnings (only log once per ID
   // per session). Cleared on rigSpec change so a fresh init is loud
@@ -269,69 +278,106 @@ export default function CanvasViewport({
       const moved = animRef.current.tick(timestamp);
       if (moved) isDirtyRef.current = true;
 
-      // R9 — Physics tick. When the cached rigSpec carries pendulum
-      // rules, integrate one or more fixed-dt substeps and merge the
-      // outputs into the param values that drive the chain evaluator
-      // for THIS frame. Outputs are also pushed back to the store via
-      // setMany so the param-scrubber UI shows the live-driven values
-      // and downstream effects mark the next frame dirty.
-      //
-      // Returns the value snapshot evalRig should consume — either the
-      // post-physics working copy (when physics ran) or the unchanged
-      // store snapshot (otherwise).
+      // Phase 1F.6 — Live Preview drivers gate. Physics, breath, and
+      // cursor head-tracking all run only when livePreviewActive is on;
+      // edit mode keeps params static at their slider values so the user
+      // can scrub without the dial bouncing under them. The toggle in
+      // ParametersEditor handles snapshot/restore around the session.
       let valuesForEval = paramValuesRef.current;
       const _rigSpecForPhysics = rigSpecRef.current;
       const physicsRules = _rigSpecForPhysics?.physicsRules;
-      if (Array.isArray(physicsRules) && physicsRules.length > 0) {
-        // Rebuild state when the rigSpec object identity changes (a new
-        // build via Initialize Rig, or geometry-edit invalidation). The
-        // paramSpecs cache piggybacks on the same key.
-        if (physicsRigSpecRef.current !== _rigSpecForPhysics) {
-          physicsStateRef.current = createPhysicsState(physicsRules);
-          physicsParamSpecsRef.current = buildParamSpecs(
-            _rigSpecForPhysics.parameters?.length
-              ? _rigSpecForPhysics.parameters
-              : projectRef.current.parameters,
-          );
-          physicsRigSpecRef.current = _rigSpecForPhysics;
-          lastPhysicsTimestampRef.current = timestamp;
-        }
-        const lastTs = lastPhysicsTimestampRef.current || timestamp;
-        const dtSec = Math.min(0.5, Math.max(0, (timestamp - lastTs) / 1000));
-        lastPhysicsTimestampRef.current = timestamp;
+      const livePreview = !!editorRef.current.livePreviewActive;
 
-        const working = { ...paramValuesRef.current };
-        const r = tickPhysics(
-          physicsStateRef.current,
-          physicsRules,
-          working,
-          physicsParamSpecsRef.current,
-          dtSec,
-        );
-        if (r.outputsChanged > 0) {
-          // Diff the working copy against the snapshot to find which
-          // physics outputs actually changed. Only push those (cheaper
-          // than blasting every output every frame, and avoids
-          // touching unrelated keys).
-          const updates = {};
-          for (const rule of physicsRules) {
-            for (const out of rule.outputs ?? []) {
-              if (!out?.paramId) continue;
-              if (working[out.paramId] !== paramValuesRef.current[out.paramId]) {
-                updates[out.paramId] = working[out.paramId];
+      if (livePreview) {
+        const updates = {};
+
+        // Breath — auto-cycle ParamBreath at Cubism's ~3.345s standard
+        // period. Phase advances by dt; offset 0.5, amplitude 0.5 so
+        // the curve sits in [0,1]. Free-runs across toggles for a
+        // natural rhythm; reset to 0 if you want a "just toggled"
+        // feel — current behaviour matches Cubism Viewer (continuous).
+        if (lastPhysicsTimestampRef.current !== 0) {
+          const dtBreath = Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000));
+          breathPhaseRef.current += dtBreath * (2 * Math.PI / 3.345);
+        }
+        const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
+        updates.ParamBreath = breathV;
+
+        // Cursor look — when LMB is held over the canvas, map cursor
+        // position to ParamAngleX/Y/Z (head looks at cursor). Range
+        // matches Cubism standard (±30°); Z mirrors X for a natural
+        // tilt as the head turns sideways.
+        if (lookRef.current.active && canvasRef.current) {
+          const rect = canvasRef.current.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const nx = ((lookRef.current.clientX - rect.left) / rect.width) * 2 - 1;
+            const ny = ((lookRef.current.clientY - rect.top) / rect.height) * 2 - 1;
+            const cx = Math.max(-1, Math.min(1, nx));
+            const cy = Math.max(-1, Math.min(1, ny));
+            updates.ParamAngleX = cx * 30;
+            updates.ParamAngleY = -cy * 30; // cursor up → look up
+            updates.ParamAngleZ = cx * 30;
+          }
+        }
+
+        // Physics — rebuild state on rigSpec identity change, then
+        // integrate one tick and queue outputs that actually moved.
+        if (Array.isArray(physicsRules) && physicsRules.length > 0) {
+          if (physicsRigSpecRef.current !== _rigSpecForPhysics) {
+            physicsStateRef.current = createPhysicsState(physicsRules);
+            physicsParamSpecsRef.current = buildParamSpecs(
+              _rigSpecForPhysics.parameters?.length
+                ? _rigSpecForPhysics.parameters
+                : projectRef.current.parameters,
+            );
+            physicsRigSpecRef.current = _rigSpecForPhysics;
+            lastPhysicsTimestampRef.current = timestamp;
+          }
+          const lastTs = lastPhysicsTimestampRef.current || timestamp;
+          const dtSec = Math.min(0.5, Math.max(0, (timestamp - lastTs) / 1000));
+
+          // Apply breath/look updates onto the working copy BEFORE
+          // physics runs so pendulum rules see the live driver values
+          // (e.g. body sway can react to head-turn).
+          const working = { ...paramValuesRef.current, ...updates };
+          const r = tickPhysics(
+            physicsStateRef.current,
+            physicsRules,
+            working,
+            physicsParamSpecsRef.current,
+            dtSec,
+          );
+          if (r.outputsChanged > 0) {
+            for (const rule of physicsRules) {
+              for (const out of rule.outputs ?? []) {
+                if (!out?.paramId) continue;
+                if (working[out.paramId] !== paramValuesRef.current[out.paramId]) {
+                  updates[out.paramId] = working[out.paramId];
+                }
               }
             }
           }
-          if (Object.keys(updates).length > 0) {
-            useParamValuesStore.getState().setMany(updates);
-            isDirtyRef.current = true;
-            valuesForEval = working;
-          }
+          valuesForEval = working;
+        } else {
+          // No physics rules — just merge the breath/look updates into
+          // the eval snapshot for this frame.
+          valuesForEval = { ...paramValuesRef.current, ...updates };
+          physicsRigSpecRef.current = null;
+          physicsStateRef.current = null;
+        }
+
+        lastPhysicsTimestampRef.current = timestamp;
+
+        if (Object.keys(updates).length > 0) {
+          useParamValuesStore.getState().setMany(updates);
+          isDirtyRef.current = true;
         }
       } else {
-        // Reset state so the next rigSpec carrying rules starts clean.
+        // Edit mode — reset physics state + clock so a future toggle
+        // back to live preview starts clean (no accumulated dt jump).
         physicsRigSpecRef.current = null;
         physicsStateRef.current = null;
+        lastPhysicsTimestampRef.current = 0;
       }
 
       if (isDirtyRef.current && sceneRef.current) {
@@ -1297,6 +1343,18 @@ export default function CanvasViewport({
 
     if (e.button !== 0) return;
 
+    // Phase 1F.6 — In Live Preview, LMB-drag hijacks the canvas to drive
+    // ParamAngleX/Y/Z. The tick reads `lookRef.current.clientX/Y` each
+    // frame and pushes head-look values into paramValuesStore. Toggle
+    // off live preview to return to edit-mode picking.
+    if (editorRef.current.livePreviewActive && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      lookRef.current = { active: true, clientX: e.clientX, clientY: e.clientY };
+      canvas.setPointerCapture(e.pointerId);
+      canvas.style.cursor = 'grab';
+      isDirtyRef.current = true;
+      return;
+    }
+
     const proj = projectRef.current;
 
     // When skeleton is visible, we disable standard layer selection/dragging
@@ -1526,6 +1584,14 @@ export default function CanvasViewport({
     const canvas = canvasRef.current;
     const { view } = editorRef.current;
 
+    // Phase 1F.6 — Live Preview cursor look update.
+    if (lookRef.current.active) {
+      lookRef.current.clientX = e.clientX;
+      lookRef.current.clientY = e.clientY;
+      isDirtyRef.current = true;
+      return;
+    }
+
     // Pan or Zoom
     if (panRef.current) {
       const dx = e.clientX - panRef.current.startX;
@@ -1683,6 +1749,16 @@ export default function CanvasViewport({
   const onPointerUp = useCallback((e) => {
     const canvas = canvasRef.current;
     canvas.releasePointerCapture(e.pointerId);
+
+    // Phase 1F.6 — End cursor look. The next tick will see active=false
+    // and stop pushing ParamAngleX/Y/Z; the head freezes at its last
+    // value (physics damping then carries it back to rest naturally
+    // when those rules exist).
+    if (lookRef.current.active) {
+      lookRef.current.active = false;
+      canvas.style.cursor = '';
+      return;
+    }
 
     if (panRef.current) {
       panRef.current = null;
