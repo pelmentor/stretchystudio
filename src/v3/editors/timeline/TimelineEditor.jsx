@@ -4,7 +4,8 @@ import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { cn } from '@/lib/utils';
-import { Disc, RotateCcw, Repeat, SkipBack, SkipForward, Copy, Clipboard, Trash2, Music, X, Settings } from 'lucide-react';
+import { Disc, RotateCcw, Repeat, SkipBack, SkipForward, Copy, Clipboard, Trash2, Music, X, Settings, Upload } from 'lucide-react';
+import { parseMotion3Json } from '@/io/live2d/motion3jsonImport';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -697,6 +698,7 @@ export function TimelineEditor() {
 
   const trackAreaRef = useRef(null);
   const rulerRef = useRef(null);
+  const motionFileRef = useRef(null);
 
   // State for selection and clipboard
   const [selectedKeyframes, setSelectedKeyframes] = useState(new Set()); // Set of "nodeId:timeMs"
@@ -757,6 +759,44 @@ export function TimelineEditor() {
     anim.setEndFrame(48);
     return id;
   }, [proj.animations, update, anim]);
+
+  /* ── Import .motion3.json as a new animation clip ───────────────────── */
+  const importMotionFile = useCallback((file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => {
+      window.alert(`Could not read ${file.name}.`);
+    };
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '');
+        // Default the clip name to the file's basename so the switcher
+        // dropdown shows something recognisable instead of "Imported motion".
+        const baseName = file.name.replace(/\.motion3\.json$/i, '').replace(/\.json$/i, '');
+        const { animation, warnings } = parseMotion3Json(text, { uid, name: baseName });
+        update((p) => {
+          p.animations.push(animation);
+        });
+        anim.setActiveAnimationId(animation.id);
+        anim.setFps(animation.fps);
+        anim.setEndFrame(Math.round((animation.duration / 1000) * animation.fps));
+        anim.seekFrame(0);
+        if (warnings.length > 0) {
+          // Soft fail: surface decode warnings so the user knows we dropped
+          // something, but still let the import succeed.
+          window.alert(
+            `Imported "${animation.name}" with ${animation.tracks.length} track(s).\n` +
+            `${warnings.length} warning(s):\n` +
+            warnings.slice(0, 6).join('\n') +
+            (warnings.length > 6 ? `\n…+${warnings.length - 6} more` : '')
+          );
+        }
+      } catch (err) {
+        window.alert(`Import failed: ${(err && err.message) || err}`);
+      }
+    };
+    reader.readAsText(file);
+  }, [update, anim]);
 
   /* ── Create a fresh animation regardless of existing ones ───────────── */
   const createAnimation = useCallback(() => {
@@ -1480,6 +1520,27 @@ export function TimelineEditor() {
         >
           + New
         </button>
+
+        {/* Import .motion3.json — adds the file as a new clip and switches
+            the timeline to it. Warnings surfaced via alert. */}
+        <button
+          onClick={() => motionFileRef.current?.click()}
+          className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors inline-flex items-center gap-1"
+          title="Import a .motion3.json file as a new animation clip"
+        >
+          <Upload size={10} /> Import
+        </button>
+        <input
+          ref={motionFileRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) importMotionFile(f);
+            e.target.value = '';
+          }}
+          className="hidden"
+        />
 
         {/* K key hint */}
         <span className="text-[10px] text-muted-foreground border border-border/40 px-1 py-0.5 font-mono" title="Press K to keyframe selected nodes">

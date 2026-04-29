@@ -1506,14 +1506,15 @@ for that polish round.
 
 ### 2026-04-29 — Phase first-cut sweep #5 (autonomous)
 
-User said *"Продолжай"* after compact. Two more first cuts:
+User said *"Продолжай"* after compact. Three more first cuts:
 
 | Phase | Deliverable |
 |-------|-------------|
 | 5 | Physics3 round-trip (import). `src/io/live2d/physics3jsonImport.js` reverse-parses a `.physics3.json` file (Version 3) into the resolved-rule shape `physicsRules` expects. Drops fields physics3 doesn't carry (`requireTag`, `requireAnyTag`, `category`) — imported rules emit unconditionally and group under `category: 'imported'`. PhysicsTab gains an "Import .physics3.json" file picker + "Reset" button, so users can replace `project.physicsRules` with the JSON's contents (undoable via `updateProject`) or re-seed from defaults. Status banner reports rule count + first 4 warnings (skipped settings, unknown input types). Click-through editor / per-rule editing surface deferred. |
-| 5 | Multi-motion timeline switcher. TimelineEditor's transport bar trades the read-only animation-name span for a real `<select>` listing every clip in `project.animations`; switching syncs `activeAnimationId` + fps/endFrame/seek to 0 so the user can A/B between motions without manual fiddling. The `+ New` button now always creates a fresh clip (was: returned the existing one). Motion3.json reverse-import (segments → keyframes) and motion blending deferred. |
+| 5 | Multi-motion timeline switcher. TimelineEditor's transport bar trades the read-only animation-name span for a real `<select>` listing every clip in `project.animations`; switching syncs `activeAnimationId` + fps/endFrame/seek to 0 so the user can A/B between motions without manual fiddling. The `+ New` button now always creates a fresh clip (was: returned the existing one). |
+| 5 | Motion3.json reverse-parser + import button. `src/io/live2d/motion3jsonImport.js` decodes a `.motion3.json` Version-3 segment array back into SS keyframes (linear / stepped / inverse-stepped passed through; bezier collapses to `easing: 'ease-both'` end-point — control points dropped because the engine doesn't ingest per-segment cubic handles). Curves with `Target='Parameter'` become param tracks, `'PartOpacity'` become node-opacity tracks, `'Model'` is skipped with a warning. Timeline transport bar gains a `+ Import` button next to `+ New` that pushes the parsed clip into `project.animations` and switches to it. Motion blending still deferred. |
 
-**Phase coverage after sweep #5:** Phase 5 physics import + multi-motion switching shipped. Remaining entirely-pending: 4A parity harness, Phase 5 `.motion3.json` reverse-parser / `.cmo3` round-trip / asset hot-reload / touch+pen refactor / onnxruntime opt-in, Phase 6 god-class breakup.
+**Phase coverage after sweep #5:** Phase 5 physics import + multi-motion switcher + motion3 reverse-parser shipped. Remaining entirely-pending: 4A parity harness, Phase 5 `.cmo3` round-trip / asset hot-reload / touch+pen refactor / onnxruntime opt-in, Phase 6 god-class breakup.
 
 ---
 
