@@ -15,6 +15,7 @@
  */
 
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
+import { useSelectionStore } from '../../../store/selectionStore.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 
 // slider.jsx is a forwardRef without JSDoc, so tsc can't see its
@@ -30,6 +31,16 @@ const Slider = /** @type {any} */ (SliderImpl);
 export function ParamRow({ param }) {
   const value = useParamValuesStore((s) => s.values[param.id] ?? param.default ?? 0);
   const setParamValue = useParamValuesStore((s) => s.setParamValue);
+  const select = useSelectionStore((s) => s.select);
+  // Treat the active selection's id as "selected" for this row.
+  const activeId = useSelectionStore((s) => {
+    const items = s.items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'parameter') return items[i].id;
+    }
+    return null;
+  });
+  const selected = activeId === param.id;
 
   const min = param.min ?? 0;
   const max = param.max ?? 1;
@@ -38,7 +49,24 @@ export function ParamRow({ param }) {
   const fmt  = step >= 1 ? Number(value).toFixed(0) : Number(value).toFixed(2);
 
   return (
-    <div className="flex flex-col gap-1 px-2 py-1 rounded hover:bg-muted/30 transition-colors">
+    <div
+      className={
+        'flex flex-col gap-1 px-2 py-1 rounded transition-colors cursor-default ' +
+        (selected ? 'bg-primary/15' : 'hover:bg-muted/30')
+      }
+      // Click anywhere on the row (except the slider thumb itself) → select.
+      onClick={(e) => {
+        // Skip clicks on the Radix slider thumb / track so dragging
+        // doesn't fight selection.
+        const target = /** @type {HTMLElement} */ (e.target);
+        if (target.closest('[role="slider"], [data-orientation]')) return;
+        /** @type {'replace'|'add'|'toggle'} */
+        let modifier = 'replace';
+        if (e.shiftKey) modifier = 'add';
+        else if (e.ctrlKey || e.metaKey) modifier = 'toggle';
+        select({ type: 'parameter', id: param.id }, modifier);
+      }}
+    >
       <div className="flex items-center justify-between gap-2 text-[11px]">
         <span className="truncate font-medium" title={param.id}>
           {param.name || param.id}

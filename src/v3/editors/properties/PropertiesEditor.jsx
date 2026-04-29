@@ -20,6 +20,7 @@
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { ObjectTab } from './tabs/ObjectTab.jsx';
 import { DeformerTab } from './tabs/DeformerTab.jsx';
+import { ParameterTab } from './tabs/ParameterTab.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
@@ -51,6 +52,8 @@ export function PropertiesEditor() {
           <ObjectTab nodeId={active.id} />
         ) : active.type === 'deformer' ? (
           <DeformerTab deformerId={active.id} />
+        ) : active.type === 'parameter' ? (
+          <ParameterTab parameterId={active.id} />
         ) : (
           <div className="p-3 text-xs text-muted-foreground">
             Properties for type{' '}
