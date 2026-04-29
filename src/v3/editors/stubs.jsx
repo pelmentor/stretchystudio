@@ -33,9 +33,3 @@ function makeStub(label) {
 export const PropertiesEditor = makeStub('Properties');
 export const ParametersEditor = makeStub('Parameters');
 export const TimelineEditor   = makeStub('Timeline');
-
-/**
- * Viewport stub. Phase 1 wraps existing CanvasViewport here — for now
- * it's just a placeholder so the shell renders something visible.
- */
-export const ViewportEditor = makeStub('Viewport');
