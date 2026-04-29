@@ -15,7 +15,7 @@
  * @module v3/shell/WorkspaceTabs
  */
 
-import { Save, FolderOpen, Undo2, Redo2, Download } from 'lucide-react';
+import { Save, FolderOpen, Undo2, Redo2, Download, Library } from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { getOperator } from '../operators/registry.js';
@@ -112,6 +112,20 @@ export function WorkspaceTabs() {
         >
           <Save size={14} />
           {dirty ? <span className="ml-0.5 text-primary">·</span> : null}
+        </ToolbarButton>
+        <span className="w-px h-4 bg-border mx-1" aria-hidden />
+        <ToolbarButton
+          title="Open from library (IndexedDB)"
+          onClick={() => runOp('file.loadFromLibrary')}
+        >
+          <Library size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          title="Save to library (IndexedDB)"
+          onClick={() => runOp('file.saveToLibrary')}
+        >
+          <Library size={14} />
+          <span className="ml-0.5 text-[10px] leading-none">+</span>
         </ToolbarButton>
         <span className="w-px h-4 bg-border mx-1" aria-hidden />
         <ToolbarButton

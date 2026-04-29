@@ -22,6 +22,7 @@ import { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { WorkspaceTabs } from './WorkspaceTabs.jsx';
 import { AreaTree } from './AreaTree.jsx';
+import { LibraryDialog } from './LibraryDialog.jsx';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
 export function AppShell() {
@@ -32,6 +33,7 @@ export function AppShell() {
       <div className="flex flex-col h-screen w-screen bg-background text-foreground">
         <WorkspaceTabs />
         <AreaTree />
+        <LibraryDialog />
       </div>
     </ErrorBoundary>
   );

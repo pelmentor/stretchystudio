@@ -28,6 +28,7 @@ import {
   deserializeProject,
 } from '../../services/PersistenceService.js';
 import { runExport } from '../../services/ExportService.js';
+import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -361,8 +362,12 @@ function registerBuiltins() {
         document.body.removeChild(input);
         if (!file) return;
         try {
-          const data = await deserializeProject(file);
-          useProjectStore.getState().loadProject(data);
+          // deserializeProject returns { project, images }; loadProject
+          // expects the bare project (the textures' source URLs are
+          // already blob: URLs after deserialization, so the canvas
+          // texture-sync effect picks them up on its own).
+          const { project } = await deserializeProject(file);
+          useProjectStore.getState().loadProject(project);
         } catch (err) {
           if (typeof console !== 'undefined') console.error('[file.load] failed:', err);
         }
@@ -370,6 +375,27 @@ function registerBuiltins() {
       document.body.appendChild(input);
       input.click();
     },
+  });
+
+  // file.saveToLibrary / file.loadFromLibrary — Phase 1G basic
+  // IndexedDB save/load. Restores the in-app library workflow lost
+  // at v2 retirement (commit 15f75e3). The operators just open the
+  // shared LibraryDialog; the dialog owns naming + picker UI and
+  // calls PersistenceService directly.
+  //
+  // Phase 5 will add thumbnails + the visual gallery; this minimal
+  // surface is enough to "save current project under a name" and
+  // "pick a saved project to load."
+  registerOperator({
+    id: 'file.saveToLibrary',
+    label: 'Save to Library',
+    exec: () => useLibraryDialogStore.getState().openSave(),
+  });
+
+  registerOperator({
+    id: 'file.loadFromLibrary',
+    label: 'Open from Library',
+    exec: () => useLibraryDialogStore.getState().openLoad(),
   });
 }
 
