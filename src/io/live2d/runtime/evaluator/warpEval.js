@@ -76,15 +76,24 @@ export function bilinearFFD(grid, gridSize, u, v, out) {
   const nCols = cols + 1;
 
   // Map u/v to cell index + fractional. u in [0..1] → fu_total in [0..cols].
-  let fu_total = u * cols;
-  let fv_total = v * rows;
-  if (fu_total < 0) fu_total = 0;
-  if (fv_total < 0) fv_total = 0;
-  if (fu_total > cols) fu_total = cols;
-  if (fv_total > rows) fv_total = rows;
+  // **Don't clamp fu_total / fv_total — extrapolate.** When the chain hands
+  // us coordinates outside [0,1] (e.g. face pivot whose y projects below
+  // BodyXWarp's range via canvasToBodyXY → negative), the Cubism runtime
+  // extrapolates linearly using the edge cell's slope; clamping collapses
+  // every off-grid point to the boundary, which is what made shelby's
+  // face render as a tiny rectangle at the canvas top after Phase 1E
+  // landed (off-grid v collapsed entire face to row 0).
+  //
+  // The clamp on `i, j` (cell indices) stays — those still need to address
+  // a valid 2×2 patch of grid points. fu, fv are allowed to go outside
+  // [0,1] so the bilinear weights act as a linear extrapolator.
+  const fu_total = u * cols;
+  const fv_total = v * rows;
 
   let i = Math.floor(fu_total);
   let j = Math.floor(fv_total);
+  if (i < 0) i = 0;
+  if (j < 0) j = 0;
   if (i >= cols) i = cols - 1;
   if (j >= rows) j = rows - 1;
   const fu = fu_total - i;

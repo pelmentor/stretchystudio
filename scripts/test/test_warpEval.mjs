@@ -92,12 +92,30 @@ function arrEq(a, b, eps = 1e-9) {
   assert(arrEq(bilinearFFD(grid, gs, 0.5, 0), [5, 0]), 'midpoint bottom edge');
 }
 
-// ── bilinearFFD: clamp out-of-domain ──
+// ── bilinearFFD: linear extrapolation outside [0,1] ──
+//
+// Cubism's runtime extrapolates linearly when the chain hands the warp
+// a coord outside its grid (e.g. face pivot whose y projects below
+// BodyXWarp's range). Clamping collapses every off-grid point to the
+// boundary — it broke shelby's face after Phase 1E landed because the
+// face pivot mapped to v ≈ -0.043 of BodyXWarp's input.
 {
   const grid = new Float64Array([0, 0, 10, 0, 0, 20, 10, 20]);
   const gs = { rows: 1, cols: 1 };
-  assert(arrEq(bilinearFFD(grid, gs, -5, -5), [0, 0]), 'clamp below-min');
-  assert(arrEq(bilinearFFD(grid, gs, 5, 5), [10, 20]), 'clamp above-max');
+  // u=-0.5 → x = 0 + (-0.5) * (10 - 0) = -5
+  assert(arrEq(bilinearFFD(grid, gs, -0.5, 0), [-5, 0]),
+    'extrapolate below-min: linear continuation, not clamped');
+  // u=1.5 → x = 0 + 1.5 * 10 = 15
+  assert(arrEq(bilinearFFD(grid, gs, 1.5, 0), [15, 0]),
+    'extrapolate above-max: linear continuation, not clamped');
+  // Both axes off-grid simultaneously
+  assert(arrEq(bilinearFFD(grid, gs, -0.1, -0.1), [-1, -2]),
+    'extrapolate both axes below-min');
+  assert(arrEq(bilinearFFD(grid, gs, 1.1, 1.1), [11, 22]),
+    'extrapolate both axes above-max');
+  // Identity behavior at exact corners is preserved.
+  assert(arrEq(bilinearFFD(grid, gs, 0, 0), [0, 0]), 'corner (0,0) identity');
+  assert(arrEq(bilinearFFD(grid, gs, 1, 1), [10, 20]), 'corner (1,1) identity');
 }
 
 // ── bilinearFFD: 2×2 grid (3×3 control points) ──

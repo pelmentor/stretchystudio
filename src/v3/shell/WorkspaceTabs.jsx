@@ -47,29 +47,52 @@ export function WorkspaceTabs() {
   }
 
   return (
-    <div className="flex items-center gap-0 px-2 h-9 border-b border-border bg-muted/40 select-none">
-      <span className="text-xs font-semibold mr-3 text-muted-foreground">v3</span>
-      {TABS.map((tab) => {
-        const on = tab.id === active;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setWorkspace(tab.id)}
-            className={
-              'px-3 h-7 text-xs rounded-sm transition-colors ' +
-              (on
-                ? 'bg-background text-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-background/50')
-            }
-            aria-current={on ? 'page' : undefined}
-          >
-            {tab.label}
-          </button>
-        );
-      })}
+    <div className="relative flex items-end pl-2 pr-1 h-9 bg-muted/40 select-none">
+      {/* Bottom seam: same OPNsense convention used by AreaTabBar +
+          Properties tab strip. Active tab merges into the panel below
+          via -mb-px + border-b-0; inactive tabs sit on this line. */}
+      <div className="absolute left-0 right-0 bottom-0 h-px bg-border pointer-events-none" />
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <span className="text-xs font-semibold mr-3 mb-2 text-muted-foreground self-end">v3</span>
+
+      <div className="flex items-end gap-0">
+        {TABS.map((tab) => {
+          const on = tab.id === active;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setWorkspace(tab.id)}
+              role="tab"
+              aria-selected={on}
+              aria-current={on ? 'page' : undefined}
+              className={
+                'relative h-7 px-3 text-xs flex items-center ' +
+                'border border-b-0 rounded-t-sm -mb-px transition-colors ' +
+                (on
+                  ? 'bg-background text-foreground border-border z-10'
+                  : 'bg-muted/30 text-muted-foreground border-transparent ' +
+                    'hover:bg-muted/60 hover:text-foreground')
+              }
+            >
+              {/* Active workspace top accent — primary stripe matches
+                  AreaTabBar + Properties strip so the visual language
+                  is consistent across all three tab levels. */}
+              {on ? (
+                <span
+                  aria-hidden
+                  className="absolute left-0 right-0 top-0 h-0.5 bg-primary rounded-t-sm"
+                />
+              ) : null}
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Toolbar — sits on the bottom seam, no tab-look so it doesn't
+          compete visually with the workspace tabs. */}
+      <div className="ml-auto mb-1 flex items-center gap-0.5">
         <ToolbarButton title="Undo (Ctrl+Z)" onClick={() => runOp('app.undo')}>
           <Undo2 size={14} />
         </ToolbarButton>
