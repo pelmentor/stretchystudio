@@ -79,25 +79,36 @@ function buildArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorT
 }
 
 /**
- * Default 3-column layout: Left tabs (Outliner + Parameters) | Center (Viewport) | Right (Properties).
+ * Default layout (2026-04-29 — user feedback "no right column"):
+ *
+ *   Left column (vertical split)        Center column
+ *   ────────────────────────             ──────────────
+ *   leftTop:    Outliner + Parameters    center:   Viewport
+ *   leftBottom: Properties
+ *
+ * Properties moved out of the right column and into the bottom of
+ * the left column; right column is gone, viewport gets the full
+ * remaining width. AreaTree.jsx renders the left column as a
+ * vertical PanelGroup with the two halves.
+ *
  * @returns {AreaSlot[]}
  */
 const DEFAULT_AREAS = () => [
-  buildArea('left',   [e('outliner'), e('parameters')]),
-  buildArea('center', [e('viewport')]),
-  buildArea('right',  [e('properties')]),
+  buildArea('leftTop',    [e('outliner'), e('parameters')]),
+  buildArea('leftBottom', [e('properties')]),
+  buildArea('center',     [e('viewport')]),
 ];
 
 /**
  * Animation workspace adds a Timeline area below the center.
- * Layout: Left | Center+TimelineBelow | Right.
+ * Layout: Left split | Center + TimelineBelow.
  * @returns {AreaSlot[]}
  */
 const ANIMATION_AREAS = () => [
-  buildArea('left',     [e('outliner'), e('parameters')]),
-  buildArea('center',   [e('viewport')]),
-  buildArea('timeline', [e('timeline')]),
-  buildArea('right',    [e('properties')]),
+  buildArea('leftTop',    [e('outliner'), e('parameters')]),
+  buildArea('leftBottom', [e('properties')]),
+  buildArea('center',     [e('viewport')]),
+  buildArea('timeline',   [e('timeline')]),
 ];
 
 /**
