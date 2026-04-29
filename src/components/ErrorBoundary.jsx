@@ -31,7 +31,6 @@ export class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     if (typeof console !== 'undefined') {
-      // eslint-disable-next-line no-console
       console.error('[ErrorBoundary]', this.props.label ?? 'unknown area', error, info);
     }
   }

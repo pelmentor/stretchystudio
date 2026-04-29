@@ -151,7 +151,6 @@ export function normalizeVariants(project) {
   }
 
   if (orphans.length > 0) {
-    // eslint-disable-next-line no-console
     console.warn(
       `[variantNormalizer] ${orphans.length} orphan variant(s) (no matching base):`,
       orphans.map(o => o.name),

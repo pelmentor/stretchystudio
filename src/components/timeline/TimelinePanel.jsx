@@ -152,7 +152,10 @@ function useAudioSync(animation, animStore) {
 
   // ── 2. Stop helper ─────────────────────────────────────────────────────
   const stopAll = useCallback(() => {
-    sourcesRef.current.forEach(src => { try { src.stop(); } catch (_) {} });
+    sourcesRef.current.forEach(src => {
+      // Some sources may already have stopped (e.g. autoended); ignore.
+      try { src.stop(); } catch { /* already stopped */ }
+    });
     sourcesRef.current.clear();
   }, []);
 

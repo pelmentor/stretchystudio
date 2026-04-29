@@ -62,7 +62,6 @@ export function mountOperatorDispatcher() {
     } catch (err) {
       // Don't let an operator error kill the whole app - log + swallow.
       // Real telemetry comes in Phase 0G.
-      // eslint-disable-next-line no-console
       console.error(`[operator ${opId}] exec failed`, err);
     }
   }

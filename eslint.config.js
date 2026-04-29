@@ -34,6 +34,10 @@ export default [
       // 583 lint errors on a codebase that has zero runtime prop-types
       // imports and no intent to add them. Off.
       'react/prop-types': 'off',
+      // Modern React renders bare apostrophes / quotes in JSX text fine.
+      // The rule defends against pathologically truncated tags
+      // ("<p>he said "hi") which our writers don't produce. Off.
+      'react/no-unescaped-entities': 'off',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },
