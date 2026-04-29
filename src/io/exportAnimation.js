@@ -1,4 +1,4 @@
-import { computeWorldMatrices, computeEffectiveProps } from '@/renderer/transforms';
+import { computeWorldMatrices, computeEffectiveProps } from '../renderer/transforms.js';
 
 /**
  * Compute frame specifications for export based on type, animations, and timing.
