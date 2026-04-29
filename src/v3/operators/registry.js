@@ -23,10 +23,6 @@ import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
-import {
-  serializeProject,
-  deserializeProject,
-} from '../../services/PersistenceService.js';
 import { runExport } from '../../services/ExportService.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 
@@ -123,31 +119,13 @@ function registerBuiltins() {
     },
   });
 
-  // File save / load. Phase 5 will replace the trivial "browser
-  // download" save with the SaveModal flow (project-library record,
-  // thumbnail capture, name field). Until then this keeps v3 unblocked
-  // for round-trip testing.
+  // File save. Phase 5 — opens the Save modal (gallery + library +
+  // download tab + thumbnail). The modal handles `.stretch` download
+  // and library overwrite paths; this operator just wakes it up.
   registerOperator({
     id: 'file.save',
-    label: 'Save Project (.stretch)',
-    exec: async () => {
-      try {
-        const project = useProjectStore.getState().project;
-        const blob = await serializeProject(project);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `project-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.stretch`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        // Revoke after a tick so Safari has time to start the download.
-        setTimeout(() => URL.revokeObjectURL(url), 1500);
-        useProjectStore.setState({ hasUnsavedChanges: false });
-      } catch (err) {
-        if (typeof console !== 'undefined') console.error('[file.save] failed:', err);
-      }
-    },
+    label: 'Save Project',
+    exec: () => useLibraryDialogStore.getState().openSave(),
   });
 
   // Selection: deselect-all. Esc is the universal Blender gesture
@@ -345,56 +323,13 @@ function registerBuiltins() {
     },
   });
 
+  // File load. Phase 5 — opens the Load modal (gallery + import-file
+  // tile). Selecting a card calls `loadProject` and sets
+  // `currentLibraryId`; selecting "Import Project" runs the file
+  // picker for `.stretch`.
   registerOperator({
     id: 'file.load',
-    label: 'Load Project (.stretch)',
-    exec: () => {
-      // Programmatic file picker: must run in a user-gesture call
-      // stack to be allowed. The operator dispatcher fires from a
-      // keydown listener, which qualifies. Toolbar buttons that call
-      // this operator also qualify (button click is a user gesture).
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.stretch,.zip';
-      input.style.display = 'none';
-      input.onchange = async (e) => {
-        const file = /** @type {HTMLInputElement} */ (e.target).files?.[0];
-        document.body.removeChild(input);
-        if (!file) return;
-        try {
-          // deserializeProject returns { project, images }; loadProject
-          // expects the bare project (the textures' source URLs are
-          // already blob: URLs after deserialization, so the canvas
-          // texture-sync effect picks them up on its own).
-          const { project } = await deserializeProject(file);
-          useProjectStore.getState().loadProject(project);
-        } catch (err) {
-          if (typeof console !== 'undefined') console.error('[file.load] failed:', err);
-        }
-      };
-      document.body.appendChild(input);
-      input.click();
-    },
-  });
-
-  // file.saveToLibrary / file.loadFromLibrary — Phase 1G basic
-  // IndexedDB save/load. Restores the in-app library workflow lost
-  // at v2 retirement (commit 15f75e3). The operators just open the
-  // shared LibraryDialog; the dialog owns naming + picker UI and
-  // calls PersistenceService directly.
-  //
-  // Phase 5 will add thumbnails + the visual gallery; this minimal
-  // surface is enough to "save current project under a name" and
-  // "pick a saved project to load."
-  registerOperator({
-    id: 'file.saveToLibrary',
-    label: 'Save to Library',
-    exec: () => useLibraryDialogStore.getState().openSave(),
-  });
-
-  registerOperator({
-    id: 'file.loadFromLibrary',
-    label: 'Open from Library',
+    label: 'Open Project',
     exec: () => useLibraryDialogStore.getState().openLoad(),
   });
 }

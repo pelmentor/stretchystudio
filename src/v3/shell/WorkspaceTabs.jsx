@@ -4,10 +4,11 @@
  * Tabs along the top of the shell select the active workspace
  * preset (Layout / Modeling / Rigging / Pose / Animation). Right
  * side hosts a toolbar restored from upstream's EditorLayout header
- * (2026-04-29 user feedback: keep the upstream button suite, merge
- * our v3 additions in):
+ * (Phase 5 update: collapsed Save/Library and Open/Library into
+ * single Save and Open buttons that drive the new SaveModal /
+ * LoadModal — the modals own the library-vs-download choice now):
  *
- *   File group:  New · Open file · Save file · Library Open · Library Save · Export
+ *   File group:  New · Open · Save · Export
  *   Canvas:      Canvas Properties popover
  *   History:     Undo · Redo
  *   Settings:    Preferences
@@ -21,7 +22,7 @@
 
 import { useState } from 'react';
 import {
-  Save, FolderOpen, Undo2, Redo2, Download, Library, FilePlus, Settings2,
+  Save, FolderOpen, Undo2, Redo2, Download, FilePlus, Settings2,
 } from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
@@ -115,31 +116,17 @@ export function WorkspaceTabs() {
           <FilePlus size={14} />
         </ToolbarButton>
         <ToolbarButton
-          title="Open project (.stretch) — Ctrl+O"
+          title="Open project — Ctrl+O"
           onClick={() => runOp('file.load')}
         >
           <FolderOpen size={14} />
         </ToolbarButton>
         <ToolbarButton
-          title="Save project (.stretch) — Ctrl+S"
+          title="Save project — Ctrl+S"
           onClick={() => runOp('file.save')}
         >
           <Save size={14} />
           {dirty ? <span className="ml-0.5 text-primary">·</span> : null}
-        </ToolbarButton>
-        <span className="w-px h-4 bg-border mx-1" aria-hidden />
-        <ToolbarButton
-          title="Open from library (IndexedDB)"
-          onClick={() => runOp('file.loadFromLibrary')}
-        >
-          <Library size={14} />
-        </ToolbarButton>
-        <ToolbarButton
-          title="Save to library (IndexedDB)"
-          onClick={() => runOp('file.saveToLibrary')}
-        >
-          <Library size={14} />
-          <span className="ml-0.5 text-[10px] leading-none">+</span>
         </ToolbarButton>
         <span className="w-px h-4 bg-border mx-1" aria-hidden />
         <ToolbarButton

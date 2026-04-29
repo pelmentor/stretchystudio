@@ -22,18 +22,24 @@ import { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { WorkspaceTabs } from './WorkspaceTabs.jsx';
 import { AreaTree } from './AreaTree.jsx';
-import { LibraryDialog } from './LibraryDialog.jsx';
+import { SaveModal } from './SaveModal.jsx';
+import { LoadModal } from './LoadModal.jsx';
+import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
 export function AppShell() {
   useEffect(() => mountOperatorDispatcher(), []);
+
+  const mode  = useLibraryDialogStore((s) => s.mode);
+  const close = useLibraryDialogStore((s) => s.close);
 
   return (
     <ErrorBoundary label="AppShell">
       <div className="flex flex-col h-screen w-screen bg-background text-foreground">
         <WorkspaceTabs />
         <AreaTree />
-        <LibraryDialog />
+        <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
+        <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />
       </div>
     </ErrorBoundary>
   );

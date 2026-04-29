@@ -25,9 +25,10 @@
  * @module v3/editors/viewport/ViewportEditor
  */
 
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import CanvasViewport from '../../../components/canvas/CanvasViewport.jsx';
 import { CoordSpaceOverlay } from './overlays/CoordSpaceOverlay.jsx';
+import { useCaptureStore } from '../../../store/captureStore.js';
 
 export function ViewportEditor() {
   // Imperative-handle refs CanvasViewport populates so external code
@@ -42,6 +43,16 @@ export function ViewportEditor() {
   const resetRef = useRef(null);
   const exportCaptureRef = useRef(null);
   const thumbCaptureRef = useRef(null);
+
+  // Phase 5 — publish the thumbnail capture fn into a small store so
+  // SaveModal (mounted at AppShell level) can ask the viewport for a
+  // snapshot without prop-drilling. Re-publishing each render is cheap
+  // (zustand bails on identity equality) and the cleanup clears the
+  // closure when this editor unmounts.
+  useEffect(() => {
+    useCaptureStore.getState().setCaptureThumbnail(() => thumbCaptureRef.current?.() ?? null);
+    return () => useCaptureStore.getState().setCaptureThumbnail(null);
+  }, []);
 
   return (
     <div className="h-full w-full relative">
