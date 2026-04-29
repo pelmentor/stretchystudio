@@ -52,6 +52,13 @@ export function ParamRow({ param }) {
   const step = range >= 5 ? 1 : 0.01;
   const fmt  = step >= 1 ? Number(value).toFixed(0) : Number(value).toFixed(2);
 
+  /** Reset this param to its default value. Used by both the
+   *  right-click context menu and the readout double-click. */
+  function resetToDefault() {
+    const def = typeof param.default === 'number' ? param.default : 0;
+    setParamValue(param.id, def);
+  }
+
   return (
     <div
       className={
@@ -70,6 +77,22 @@ export function ParamRow({ param }) {
         else if (e.ctrlKey || e.metaKey) modifier = 'toggle';
         select({ type: 'parameter', id: param.id }, modifier);
       }}
+      // Right-click → reset to default. Bypasses the browser's
+      // default context menu so the user gets one-action reset
+      // without leaving the keyboard / mouse.
+      onContextMenu={(e) => {
+        e.preventDefault();
+        resetToDefault();
+      }}
+      // Double-click on the row also resets — the readout area
+      // catches its own double-click below for the same gesture
+      // when the slider would otherwise eat the event.
+      onDoubleClick={(e) => {
+        const target = /** @type {HTMLElement} */ (e.target);
+        if (target.closest('[role="slider"], [data-orientation]')) return;
+        resetToDefault();
+      }}
+      title="Right-click or double-click to reset to default"
     >
       <div className="flex items-center justify-between gap-2 text-[11px]">
         <span className="truncate font-medium" title={param.id}>

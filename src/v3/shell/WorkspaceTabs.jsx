@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
+import { useEditorStore } from '../../store/editorStore.js';
 import { getOperator } from '../operators/registry.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
@@ -86,7 +87,21 @@ export function WorkspaceTabs() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setWorkspace(tab.id)}
+              onClick={() => {
+                setWorkspace(tab.id);
+                // Animation workspace flips editorMode so the
+                // CanvasViewport tick pulls keyframe overrides + the
+                // timeline subscription kicks in. Pose workspace
+                // shares 'animation' mode for the same reason — pose
+                // is essentially a single-keyframe animation. Other
+                // workspaces revert to staging so vertex / param
+                // editing happens on the static rest pose.
+                const setEditorMode = useEditorStore.getState().setEditorMode;
+                if (typeof setEditorMode === 'function') {
+                  const animWs = tab.id === 'animation' || tab.id === 'pose';
+                  setEditorMode(animWs ? 'animation' : 'staging');
+                }
+              }}
               role="tab"
               aria-selected={on}
               aria-current={on ? 'page' : undefined}

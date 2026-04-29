@@ -21,6 +21,8 @@ import { useState } from 'react';
 import { Plus, Pencil, Trash2, Check, X, Film } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
+import { useUIV3Store } from '../../../store/uiV3Store.js';
+import { useEditorStore } from '../../../store/editorStore.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
 
 // shadcn/ui alert-dialog parts are forwardRefs without exported
@@ -88,7 +90,20 @@ export function AnimationsEditor() {
           <button
             type="button"
             className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
-            onClick={() => createAnimation()}
+            onClick={() => {
+              // After creating, the new animation lands at the end of
+              // project.animations. Pick it up from the freshly-read
+              // store and dispatch switchAnimation so playback +
+              // timeline focus on it. Also force the Animation
+              // workspace + editorMode so the user actually sees the
+              // timeline they just made.
+              createAnimation();
+              const list = useProjectStore.getState().project.animations ?? [];
+              const created = list[list.length - 1];
+              if (created) switchAnimation(created);
+              useUIV3Store.getState().setWorkspace('animation');
+              useEditorStore.getState().setEditorMode?.('animation');
+            }}
             title="Create new animation"
             aria-label="Create new animation"
           >
