@@ -27,6 +27,7 @@
 
 import { useRef } from 'react';
 import CanvasViewport from '../../../components/canvas/CanvasViewport.jsx';
+import { CoordSpaceOverlay } from './overlays/CoordSpaceOverlay.jsx';
 
 export function ViewportEditor() {
   // Imperative-handle refs CanvasViewport populates so external code
@@ -53,6 +54,7 @@ export function ViewportEditor() {
         exportCaptureRef={exportCaptureRef}
         thumbCaptureRef={thumbCaptureRef}
       />
+      <CoordSpaceOverlay />
     </div>
   );
 }
