@@ -221,10 +221,11 @@ Existing CanvasViewport gets:
 
 ### 4.7 Other Editors
 
-| Editor | Purpose | Phase |
-|--------|---------|-------|
-| **Preferences** | Theme, keymap, viewport options, performance | 4 |
-| **Performance Profiler** | Live frame breakdown, allocation graph, GC pauses | 4 |
+| Editor | Purpose | Phase | Status |
+|--------|---------|-------|--------|
+| **Preferences** | Theme, keymap, viewport options, performance | 4 | ✅ shipped (`9dab70e` + `2fee609`) — modal + KeymapModal viewer |
+| **Performance Profiler** | Live frame breakdown, allocation graph, GC pauses | 4 | ✅ shipped first cut (`c7e78ba`) — FPS sampler + project / mesh / rig stats |
+| **Animations** (list panel) | Browse / create / rename / delete project animations | 3 | ✅ shipped (`1264e27`) — paired with Properties as tabs in Animation workspace |
 
 PNG atlas inspection — handled через **Texture** sub-tab в Properties
 Editor для part'ы, не отдельный editor. JSON debugging — DevTools или
@@ -618,7 +619,7 @@ ambiguity:
 
 ---
 
-### PHASE 1 — Core Editors (5-7 weeks) **[STATUS: 4-of-5 first cuts shipped 2026-04-29; 1F pipeline-stability sprint shipped 2026-04-29]**
+### PHASE 1 — Core Editors (5-7 weeks) **[STATUS: ✅ first cuts complete 2026-04-29 — 5/5 editors real; 1B 8/10 tabs shipped; 1F sprint shipped]**
 
 Substage status:
 
@@ -640,6 +641,10 @@ Substage status:
 | Aux: file.save / file.load | ✅ shipped | `6be37f7` | Operators + Ctrl+S / Ctrl+O bindings. Global toolbar in WorkspaceTabs with Undo / Redo / Open / Save buttons. Save button shows dirty dot. |
 | Aux: selection.clear / file.new | ✅ shipped | `d28abbd` | Esc → drop selection; Ctrl+N / Meta+N → reset project. |
 | Aux: file.export | ✅ shipped | `b2ee3a4` | Ctrl+E / Meta+E + toolbar Download button. Defaults to live2d-full (cmo3 + rig + physics + motions) so the user gets the editable Cubism Editor round-trip without going to v2's ExportModal. Phase 5 surfaces format choice / atlas size / per-physics toggles. |
+| 1B Properties tab strip + VariantTab | ✅ shipped | `534731a` | Read-only inspector for variant relationships. Variant child shows base part + suffix + `Param<Suffix>` + canonical fade rule (variant 0→1, base 1→0 unless backdrop). Variant base lists children + backdrop status. tabRegistry tests bumped 16 → 22. |
+| 1B Properties · MeshTab / MaskTab / PhysicsTab | ✅ shipped | `6c3c39d` | MeshTab: vertex/triangle counts, UV bbox, gridSpacing input + Regenerate Mesh action (drives the existing mesh worker via captureStore.remeshPart bridge). MaskTab: read-only "masked by" / "masks for" lists with click-to-select chips. PhysicsTab: lists physics rules whose outputs target the selected group's `ParamRotation_<sanitised>`. DeformerTab already covers Bindings + Keyforms inline so those stay folded into the deformer view. 8/10 of the original 1B-tab list now real (Object / Mesh / BlendShape / Mask / Physics / Deformer / Parameter / Variant); KeyformsTab + BindingsTab folded into DeformerTab; CommonTab pending bulk multi-select work. |
+| 1B Properties · MaskTab edit (add/remove) | ✅ shipped | `76fa3e0` | Adds dropdown picker + per-chip × button so the user can wire / unwire mask relationships from the same surface that displays them. Phase 2F first-cut wrapped into Phase 1B's Mask tab. |
+| 1B Mesh remesh bridge | ✅ shipped | `6c3c39d` | New `captureStore` (Phase 5 originally; reused here) carries a `remeshPart(partId, opts)` ref published by ViewportEditor. MeshTab calls it with `gridSpacing` opts, mirroring the v2 `computeSmartMeshOpts` shape so the existing mesh worker accepts the call unchanged. |
 
 **Goal:** Outliner + Properties + extended Viewport + Parameters all
 functional.
@@ -785,7 +790,7 @@ and 1F.5 were diagnosed entirely from HUD output before touching a file.
 
 ---
 
-### PHASE 1G — Basic Save/Load (IndexedDB) **[STATUS: planned]**
+### PHASE 1G — Basic Save/Load (IndexedDB) **[STATUS: ✅ shipped 2026-04-29 (`00437ef`); SUPERSEDED by Phase 5 SaveModal+gallery (`2be491b`)]**
 
 **Why:** v2 retirement (commit `15f75e3`, 2026-04-29) deleted
 `LoadModal` / `SaveModal` / `ProjectGallery` (IndexedDB-backed in-app
@@ -816,127 +821,65 @@ save/load surface that v2 had.
 
 ---
 
-### PHASE 2 — Live2D-specific Editors (8-10 weeks)
+### PHASE 2 — Live2D-specific Editors (8-10 weeks) **[STATUS: first cuts shipped 2026-04-29 — display-only overlays + paint arming + mask CRUD; full editing deferred]**
 
 **Goal:** Native editing of warps/rotations/keyforms/physics/masks/
 variants.
 
-#### 2A — Warp Deformer Editor (2 weeks)
+| Substage | Status | Commit | Notes |
+|----------|--------|--------|-------|
+| 2A Warp Deformer Editor — overlay | ✅ shipped (display) | `d730ff1` | `WarpDeformerOverlay.jsx` SVG over-canvas. Projects warp `keyforms[0].positions` through editorStore.view (zoom + pan) and renders grid lines + control points in cyan. Only handles `localFrame === 'canvas-px'` warps (top-level Body / Face / Breath chain); nested `normalized-0to1` warps show a hint banner — they need parent-grid resolution that's deferred until 2A drag-edit lands. Read-only first cut; drag-to-edit folds into 2C Keyform Editor. |
+| 2B Rotation Deformer Editor — overlay | ✅ shipped (display) | `d730ff1` | `RotationDeformerOverlay.jsx` — pivot dot + circle-radius dashed ring + amber angle handle. Same canvas-px-only restriction as warp overlay; pivot-relative children show the same hint banner. Display-only first cut. |
+| 2C BlendShape Paint Editor | ✅ shipped | `bb7421c` | The v2 viewport already paints blend shape deltas when `editorStore.blendShapeEditMode + activeBlendShapeId` are set; v3 just needed UI. Each shape row in BlendShapeTab now has a Brush toggle button; armed shape highlights in primary color and a Brush Settings section exposes size + hardness sliders. Drag-in-viewport paint works end-to-end through existing v2 brush logic — no new viewport code. |
+| 2D Keyform Editor | ⚠️ folded | — | DeformerTab inline keyform list (Phase 1B) covers the read surface. Standalone keyform browser with cross-product cell preview + diff viewer (`SparseGrid` + `CellPreview` + `diffViewer`) is deferred — mutating keyforms requires writing to the `project.rigWarps` / `bodyWarp` / `faceParallax` / etc. stores then invalidating rigSpec, which is a deeper schema refactor than fits a first-cut. |
+| 2E Physics Editor | ⚠️ folded | — | PhysicsTab (Phase 1B) lists matching physics rules with their inputs / vertex chain / output paramIds — read-only first cut. Full editor with `ChainOverlay` / `ParticleTable` / `Input/OutputDropZone` is deferred. |
+| 2F Mask Editor | ✅ shipped (CRUD) | `76fa3e0` | MaskTab gains add/remove via dropdown picker + per-chip × button. Mutates `project.maskConfigs` (creating new entries when none yet exist for the part) and cleans up the legacy `node.mesh.maskMeshIds` reference on delete. Phase 2F first cut wrapped into the existing 1B tab rather than a separate editor. |
+| 2G Variant Manager | ⚠️ folded | — | VariantTab (Phase 1B) shows variant child + base relationships read-only with click-to-jump. Standalone variant manager (multi-select pairing UI, suffix bulk-rename, "promote to base") is deferred. |
+| 2H Modal operators G/R/S full set | ⏳ pending | — | Numeric typed input, axis constrain (X/Y/Z keys), snapping. Not started. |
 
-**Files:**
+**Why most editors landed as overlays / Properties tabs rather than dedicated editors:** The user's directive on 2026-04-29 was "skip tests, complete all phase first cuts, then fix bugs." First cuts shipped as either display overlays mounted on ViewportEditor or as edit actions wrapped into the existing Phase 1B Properties tabs. Full standalone editors with their own modal operator sets, ghost previews, X-symmetry tools, particle drop-zones etc. need a separate sweep that's tracked as Phase 2 polish rather than first-cut. Tag `v3-phase-2-complete` will be claimed only after that polish lands.
 
-- `src/v3/editors/rig/WarpDeformerEditor.jsx`
-- `src/v3/editors/rig/lattice/LatticeOverlay.jsx`
-- `src/v3/editors/rig/lattice/ControlPoint.jsx`
-- `src/v3/editors/rig/lattice/ghostKeyforms.js`
-- `src/v3/editors/rig/lattice/symmetry.js` — X-mirror
+**Files actually shipped (Phase 2 first cuts):**
+- `src/v3/editors/viewport/overlays/WarpDeformerOverlay.jsx`
+- `src/v3/editors/viewport/overlays/RotationDeformerOverlay.jsx`
+- `src/v3/editors/properties/tabs/BlendShapeTab.jsx` (Brush toggle UI added)
+- `src/v3/editors/properties/tabs/MaskTab.jsx` (add/remove CRUD added)
 
-**Operators:**
-
-- `rig.warp.move_cp`, `rig.warp.subdivide`, `rig.warp.mirror`,
-  `rig.warp.reset_grid`, `rig.warp.insert_keyform`,
-  `rig.warp.delete_keyform`
-
-#### 2B — Rotation Deformer Editor (1 week)
-
-#### 2C — Keyform Browser (1.5 weeks)
-
-**Files:**
-
-- `src/v3/editors/keyforms/KeyformBrowser.jsx`
-- `src/v3/editors/keyforms/SparseGrid.jsx`
-- `src/v3/editors/keyforms/CellPreview.jsx` — mini-viewport per cell
-- `src/v3/editors/keyforms/diffViewer.jsx` — numeric diff between
-  two keyforms
-
-#### 2D — Physics Editor (2 weeks)
-
-**Files:**
-
-- `src/v3/editors/physics/PhysicsEditor.jsx`
-- `src/v3/editors/physics/ChainOverlay.jsx`
-- `src/v3/editors/physics/ParticleTable.jsx`
-- `src/v3/editors/physics/InputDropZone.jsx`
-- `src/v3/editors/physics/OutputDropZone.jsx`
-
-#### 2E — Mask Editor (1 week)
-
-#### 2F — Variant Manager (1.5 weeks)
-
-#### 2G — Modal operators full set (1 week)
-
-G/R/S equivalents working in all modes. Numeric typed input, axis
-constrain (X/Y/Z keys), snapping.
-
-**Phase 2 deliverables:** ~120 new files, ~18000 LOC. Tag
-`v3-phase-2-complete`. Cubism Editor больше не нужен для рукотворного
-редактирования рига.
+**Phase 2 deliverables (final target):** ~120 new files, ~18000 LOC. Tag
+`v3-phase-2-complete` reserved for the full standalone-editor sweep.
 
 ---
 
-### PHASE 3 — Animation + Operator Polish (5-6 weeks) **[STATUS: pillar E + Z added 2026-04-28]**
+### PHASE 3 — Animation + Operator Polish (5-6 weeks) **[STATUS: 3A+3F-lite shipped 2026-04-29; graph + dopesheet + F3 palette pending]**
 
 Includes Pillar E (animation model unification — single
 `animationStore` owns persisted keyframes + transient draft via
 Immer overlay) and Pillar Z (move `animationEngine.js` from
 `renderer/` to `src/animation/{engine,interpolators,evaluator,curves}`).
 
-#### 3A — Timeline Editor (1 week)
+| Substage | Status | Commit | Notes |
+|----------|--------|--------|-------|
+| 3A Timeline Editor | ✅ shipped | `0379c7d` | Restored upstream `TimelinePanel` verbatim into `v3/editors/timeline/TimelineEditor.jsx`, then extended with `rowKey` discriminator so param tracks (`{paramId, keyframes}`) render alongside node tracks (`{nodeId, property, keyframes}`). Drag / copy / paste / easing / audio sync, box-select with `param:`/`node:` prefix routing. |
+| 3A.1 Param keyframe plumbing | ✅ shipped | `93aa1e4` | `track.paramId` was already supported by motion3json + can3writer exporters but engine / viewport / UI didn't drive it. 4-file plumbing landed: `animationEngine.js` adds `computeParamOverrides` + `setParamKeyframeAt`; `CanvasViewport` merges param overrides into `valuesForEval` before chainEval; `ParamRow` auto-keyframes in animation mode + autoKeyframe; TimelineEditor displays param rows on top of node rows. |
+| 3B Dopesheet Editor | ⏳ pending | — | Sibling to Timeline focused on per-track keyframe density without scrubber. |
+| 3C Keyform Graph Editor | ⏳ pending | — | Rig keyform interpolation curves (LINEAR / BEZIER), drag bezier handles, per-deformer view. |
+| 3D Animation F-curve Editor | ⏳ pending | — | Animation track curves over TIME (motion3): BEZIER / STEP / CONSTANT. Multi-curve overlay for simultaneous view of multiple parameters. |
+| 3E F3 Operator Search Palette | ⏳ pending | — | `cmdk` fuzzy search, recent operators, last-used. |
+| 3F Modal operator polish | ⏳ pending (lite shipped) | — | Axis constraints (X/Y keys), snap-to-grid, precise typed numeric input. ParamRow's right-click / double-click → reset-to-default (commit `76fa3e0`) is the only modal-op polish landed so far. |
+| AnimationsEditor (new editor type) | ✅ shipped | `1264e27` | Bonus deliverable not in original plan. Lists every animation with create / inline rename / delete (with confirm) / click-to-switch. Active row highlighted, duration shown in seconds. Animation workspace's leftBottom area pairs it with Properties as tabs. |
 
-#### 3B — Dopesheet Editor (1.5 weeks)
-
-#### 3C — Keyform Graph Editor (1 week)
-
-Rig keyform interpolation curves: LINEAR / BEZIER. Drag bezier
-handles. Per-deformer view.
-
-#### 3D — Animation F-curve Editor (1 week)
-
-Animation track curves across TIME (motion3): BEZIER / STEP /
-CONSTANT. Multi-curve overlay для одновременного просмотра
-нескольких параметров.
-
-#### 3E — F3 Operator Search Palette (0.5 weeks)
-
-`cmdk` package, fuzzy search, recent operators, last-used.
-
-#### 3F — Modal operator polish (1 week)
-
-Axis constraints (X/Y keys), snap-to-grid, precise typed numeric
-input.
-
-**Phase 3 deliverables:** Tag `v3-phase-3-complete`. Animation
-production-ready.
+**Phase 3 deliverables:** Tag `v3-phase-3-complete` reserved for the full graph editor + F-curve editor + dopesheet sweep. Animation editing is functional via Timeline first cut + AnimationsEditor + auto-keyframe param row, but not "production-ready" in the curve-shaping sense.
 
 ---
 
-### PHASE 4 — Reference Parity + Polish (7-9 weeks) **[STATUS: trimmed editors + pillars K/L/T/X/Y added 2026-04-28]**
+### PHASE 4 — Reference Parity + Polish (7-9 weeks) **[STATUS: 4B + 4C + 4D-lite shipped 2026-04-29; parity harness + bundle split pending]**
 
-#### 4A — Reference parity harness (mandatory)
-
-Side-by-side viewer testing protocol with Hiyori. Numeric snapshot
-harness:
-- Fixtures: `scripts/parity-fixtures/{rigId}_{paramSetId}.json` —
-  `{paramValues, expectedDeformedVerts}` produced from cubism-web SDK
-  как oracle.
-- evalRig runs against fixtures in CI; fail if divergence > ε per
-  vertex.
-- Reference rig: Hiyori (canonical). Optional: Alexia, custom rigs.
-
-#### 4B — Performance Profiler editor
-
-Live UI поверх existing bench scripts. Frame breakdown chart, per-mesh
-eval time, allocation graph, GC pauses, memory pressure. Editor type
-`PerformanceEditor` registered.
-
-#### 4C — Theme system + Preferences editor
-
-CSS variables, three presets (Dark / Light / Cubism-compat),
-per-section override UI.
-
-#### 4D — Custom keymap UI
-
-Edit bindings, conflict detection, persistence to localStorage.
+| Substage | Status | Commit | Notes |
+|----------|--------|--------|-------|
+| 4B Performance Profiler editor | ✅ shipped (first cut) | `c7e78ba` | `PerformanceEditor` registered as `performance` editor type. Live FPS sampler via rAF, last-second avg frame ms, 30s sparkline. Project / mesh / rig stats: node / part / group / texture / animation / parameter / mask / physics counts; total verts + tris + heaviest part by vertex count; warp / rotation / art-mesh counts; last-built rigSpec geometry version. The FPS counter samples browser repaint rather than the rig evaluator itself — a real GPU profiler is deferred until CanvasViewport exposes per-pass GL query timings. |
+| 4C Preferences editor | ✅ shipped | `9dab70e` (initial) + `2fee609` (Keymap) | `PreferencesModal` exposes theme mode (light / dark / system), preset picker (existing ThemeProvider modal), font family Select, font size Slider. The Cubism-compat preset is deferred to Phase 4I (theme audit) when hardcoded color sweeps land. |
+| 4D Keymap viewer | ✅ shipped (read-only) | `2fee609` | `KeymapModal` opened from Preferences "View shortcuts…" button. Lists every chord → operator binding from `DEFAULT_KEYMAP` with the operator's user-facing label, prettified chord display (`KeyA → A`, `Period → .`, `Meta → ⌘`, etc.) and a free-text filter. Editing the keymap is deferred until per-user keymap persistence lands (would need localStorage round-trip + chord-conflict detection). |
+| 4A Reference parity harness | ⏳ pending | — | Side-by-side viewer with Hiyori, numeric snapshot fixtures via cubism-web SDK oracle. Not started. |
 
 #### 4E — Help system + Onboarding
 
@@ -982,21 +925,23 @@ shipped if время позволяет — иначе deferred to v4.
 
 ---
 
-### PHASE 5 — Advanced (5-6 weeks) **[STATUS: pillars O + R added 2026-04-28]**
+### PHASE 5 — Advanced (5-6 weeks) **[STATUS: Save/Load gallery + Export modal shipped 2026-04-29; rest pending]**
 
-| Feature | Description |
-|---------|-------------|
-| **Physics Editor — Cubism import** | Read .physics3.json existing file → populate Physics Editor (round-trip) |
-| **Motion timeline scrubbing** | Multi-motion preview, blending |
-| **Live2D round-trip .cmo3 import** | Read exported .cmo3 back into SS for verification + post-Cubism-edit recovery |
-| **Asset library + project templates** (Pillar R) | Saved deformer / physics / variant configs + starter rigs. Configurable tag set per project (replaces hardcoded `KNOWN_TAGS`). |
-| **Asset hot-reload** | PNG changes на disk → live update в SS viewport |
-| **Touch / pen refactor** | 44pt hit targets, pen pressure для warp lattice editing, pinch+pan жесты, adaptive layout |
-| **onnxruntime-web optional** (Pillar O) | Move ML inference (DWPose) to opt-in plugin. Default PSD import без ML (heuristic-only). 25 MB WASM downloads только при user-triggered "Auto-detect joints". |
+| Feature | Status | Commit | Notes |
+|---------|--------|--------|-------|
+| **Save Modal + Project Gallery + thumbnails** | ✅ shipped | `2be491b` | `SaveModal` (tabbed: Save to Library / Download File) + `ProjectGallery` (thumbnail grid, per-card duplicate/download/delete, inline rename) + `LoadModal` (gallery + Import Project tile). Replaces the placeholder `LibraryDialog`. Thumbnail capture goes through new `captureStore` that ViewportEditor publishes on mount; the modals pull from it without prop-drilling. Toolbar Save/Library and Open/Library buttons collapsed into single Save and Open buttons that drive the modals. |
+| **Export options modal** | ✅ shipped | `d24b166` | `ExportModal` surfaces the three formats `ExportService` supports — Live2D Runtime+AutoRig (default), Live2D Runtime without rig, and editable Cubism `.cmo3`. Each option has a description so the user picks deliberately rather than relying on muscle memory. The `file.export` operator now just opens the modal; the modal owns runExport, the texture-loading step, and the download trigger. New `exportModalStore`. |
+| Physics Editor — Cubism import | ⏳ pending | — | Read `.physics3.json` existing file → populate Physics Editor (round-trip) |
+| Motion timeline scrubbing | ⏳ pending | — | Multi-motion preview, blending |
+| Live2D round-trip .cmo3 import | ⏳ pending | — | Read exported .cmo3 back into SS for verification + post-Cubism-edit recovery |
+| Asset library + project templates (Pillar R) | ⏳ pending | — | Saved deformer / physics / variant configs + starter rigs. Configurable tag set per project (replaces hardcoded `KNOWN_TAGS`). |
+| Asset hot-reload | ⏳ pending | — | PNG changes on disk → live update in SS viewport |
+| Touch / pen refactor | ⏳ pending | — | 44pt hit targets, pen pressure for warp lattice editing, pinch+pan gestures, adaptive layout |
+| onnxruntime-web optional (Pillar O) | ⏳ pending | — | Move ML inference (DWPose) to opt-in plugin. Default PSD import without ML (heuristic-only). 25 MB WASM downloads only on user-triggered "Auto-detect joints". |
 
 ---
 
-### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: writers split + scripts org added 2026-04-28]**
+### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: keymap viewer first cut shipped 2026-04-29 (`2fee609`); writers split + cleanup pending]**
 
 - Remove old shell entirely
 - Remove `?ui=v3` killswitch (now default)
@@ -1480,6 +1425,75 @@ B does.
 
 ---
 
+### 2026-04-29 — Phase 2-6 first-cut sweep (autonomous)
+
+Following user directive "забить на тесты, завершить все фазы из
+главного плана и затем уже исправлять баги какие найдем"
+(2026-04-29, screenshots session). Eleven commits landed in a
+single autonomous run: every phase from 1B through 6 now has at
+least a first cut on master.
+
+| Commit | Phase | Deliverable |
+|--------|-------|-------------|
+| `2be491b` | 5 | upstream-style Save/Load modals + ProjectGallery + thumbnail capture via `captureStore` |
+| `6c3c39d` | 1B | Mesh / Mask / Physics Properties tabs |
+| `d730ff1` | 2A+2B | Warp + Rotation Deformer overlays (display-only) |
+| `bb7421c` | 2C | BlendShape paint arming via Properties tab (v2 viewport already paints) |
+| `1264e27` | 3 | AnimationsEditor as new editor type |
+| `c7e78ba` | 4 | PerformanceEditor (FPS sampler + project / mesh / rig stats) |
+| `d24b166` | 5 | ExportModal with format radio |
+| `2fee609` | 6 | KeymapModal opened from Preferences |
+| `76fa3e0` | 2D-2G | Mask CRUD; ParamRow right-click reset; workspace tab → editorMode wiring |
+
+**Trade-offs accepted.** First cuts ship as either display-only
+overlays or as edit actions wrapped into existing Properties tabs
+rather than dedicated editors with full modal operator sets.
+- **Phase 2A/2B** — overlays render the lattice / pivot but
+  drag-to-edit folds into Phase 2C (Keyform Editor) which is still
+  pending.
+- **Phase 2D/2E/2G** — Keyform Editor / Physics Editor / Variant
+  Manager remain folded into the Phase 1B read-only tabs;
+  standalone editors require deeper schema work to mutate
+  `project.rigWarps` / `physicsRules` / `variantOf` then
+  invalidate rigSpec correctly.
+- **Phase 4** — Performance editor's FPS counter samples browser
+  repaint, not GL frame time. Real GPU profiler needs
+  CanvasViewport to expose per-pass query timings.
+- **Phase 6** — Keymap viewer is read-only. Editing requires
+  per-user persistence + chord-conflict detection.
+
+**Bug fixes folded into the same sweep:**
+- ParamRow right-click / double-click resets the param to its
+  declared default — addresses user's "no quick reset" feedback.
+- Workspace tab clicks set `editorMode='animation'` for Animation
+  + Pose workspaces, `'staging'` otherwise. Fixes "no timeline
+  visible after creating an animation."
+- AnimationsEditor's `+` button now also switches to the Animation
+  workspace and dispatches `switchAnimation` so the new animation
+  immediately opens with a timeline.
+
+**Bugs deferred** (explicit user instruction "затем уже исправлять
+баги какие найдем"):
+- Eye init parabola broken (ParamEyeLOpen=1 but eyes visually
+  closed); clicking slider helps.
+- Phantom skirt param — by design (SDK STANDARD_PARAMS includes
+  ParamSkirt regardless of mesh tags). Filtering is a UX decision
+  that needs user input; not a bug per se.
+- Body angle X/Y/Z visual divergence from Cubism Editor.
+- Live preview ignores previously-rotated arm (frozen-arm).
+- Animation tab character invisible (separate from new-animation
+  timeline visibility, which is fixed).
+- Performance lag on elbow rotation in animation mode.
+- Most bone controllers don't move attached body parts.
+
+**What "Phase N complete" means now.** First cuts unlock the surface
+each phase was scoped to; full polish (standalone editors, modal
+operator suites, parity harness, bundle splitting, PWA, i18n)
+remains for the second pass. Tags `v3-phase-N-complete` reserved
+for that polish round.
+
+---
+
 ### 2026-04-28 — Plan double-check audit
 
 #### Architectural gaps fixed during audit
@@ -1924,17 +1938,20 @@ chunk; CSS 108 → 98 kB. typecheck + 72/72 test files green.
 
 ### Follow-ups (features lost at v2 deletion, scheduled for v3 migration)
 
-| Feature | When | Phase target |
-|---------|------|--------------|
-| Advanced export dialog (atlas size, motion presets, per-physics-category toggles, model name) | required for production exports beyond defaults | Phase 5 — `file.export` gains a dialog operator |
-| Basic save/load (IndexedDB, named projects, no thumbnails) | required to restore the in-app library workflow lost at retirement | Phase 1G — `file.saveToLibrary` / `file.loadFromLibrary` operators (see PHASE 1G section above) |
-| Save-to-library + gallery (IndexedDB record + thumbnail + named projects + visual browser) | full library workflow with visual picker | Phase 5 — `file.save_to_library` operator with thumbnail capture + LoadModal/ProjectGallery v3 equivalent |
-| Wizard joint adjust (drag bone pivots) — already broken at v2 deletion | replaces broken v2 click | Phase 1A++ — `layout.move_bone_pivot` operator with viewport gizmo |
-| Mesh paint mode (brush-based vertex / blend-shape deltas) | advanced rigging — niche workflow | Phase 2C — BlendShape paint editor |
-| Animation Timeline panel (keyframe edit UI) | required for animation editing | Phase 3 — v3 `TimelineEditor` (currently stub) |
-| Random Pose dialog | niche | Phase 5 — dialog operator |
-| Preferences modal (theme, font, etc.) | UX polish | Phase 4 — settings dialog operator |
-| ProjectGallery (v2 visual library browser) | bundles with Save-to-library | Phase 5 |
+| Feature | Status | Commit | Notes |
+|---------|--------|--------|-------|
+| Advanced export dialog | ✅ shipped | `d24b166` | `ExportModal` with three-format radio. Atlas size / motion preset / per-physics-category toggles still pending — those need ExportService extension. |
+| Basic save/load (IndexedDB, named projects, no thumbnails) | ✅ shipped | `00437ef` | Phase 1G placeholder dialog. |
+| Save-to-library + gallery (IndexedDB record + thumbnail + named projects + visual browser) | ✅ shipped | `2be491b` | Replaces the Phase 1G placeholder. `SaveModal` + `LoadModal` + `ProjectGallery` + thumbnail capture via `captureStore`. |
+| Wizard joint adjust (drag bone pivots) — already broken at v2 deletion | ⏳ pending | — | Phase 1A++ — `layout.move_bone_pivot` operator with viewport gizmo |
+| Mesh paint mode (brush-based vertex / blend-shape deltas) | ✅ shipped (blend-shape arming) | `bb7421c` | The v2 viewport already paints when `editorStore.blendShapeEditMode + activeBlendShapeId` are set; v3 added the arming UI in BlendShapeTab. Mesh-vertex paint mode beyond blend-shape deltas still pending. |
+| Animation Timeline panel (keyframe edit UI) | ✅ shipped | `0379c7d` + `93aa1e4` | Restored upstream TimelinePanel with param-track plumbing; auto-keyframe in animation mode wires through ParamRow. |
+| Random Pose dialog | ⏳ pending | — | Phase 5 niche dialog operator |
+| Preferences modal (theme, font, etc.) | ✅ shipped | `9dab70e` + `2fee609` | Theme mode + preset picker + font + Keymap viewer button. |
+| ProjectGallery (v2 visual library browser) | ✅ shipped | `2be491b` | Bundled with Save-to-library above. |
+| Performance / Profiler editor | ✅ shipped (first cut) | `c7e78ba` | New deliverable beyond v2 retirement list — surfaces FPS + project / mesh / rig stats. |
+| Keymap viewer | ✅ shipped (read-only) | `2fee609` | Opens from Preferences. Editing deferred until per-user persistence lands. |
+| AnimationsEditor (animation list panel) | ✅ shipped | `1264e27` | Beyond v2 parity — Animation workspace's leftBottom area pairs it with Properties as tabs. |
 
 ### v2 code-paths still shared (NOT deleted)
 
