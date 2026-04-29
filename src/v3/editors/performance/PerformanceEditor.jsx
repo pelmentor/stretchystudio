@@ -159,9 +159,12 @@ function Sparkline({ values }) {
     .join(' ');
   return (
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="bg-muted/10 rounded border border-border/40">
+      {/* 60-fps reference line + sparkline. Phase 4I theme audit:
+          colors via Tailwind classes (text-muted-foreground / sky-400)
+          so they participate in dark-mode + theme overrides. */}
       <line x1={0} y1={height - (60 / max) * (height - 4) - 2} x2={width} y2={height - (60 / max) * (height - 4) - 2}
-        stroke="rgb(148 163 184 / 0.25)" strokeDasharray="2 2" strokeWidth="1" />
-      <path d={path} fill="none" stroke="rgb(56 189 248)" strokeWidth="1.5" />
+        className="stroke-muted-foreground/25" strokeDasharray="2 2" strokeWidth="1" />
+      <path d={path} fill="none" className="stroke-sky-400" strokeWidth="1.5" />
     </svg>
   );
 }

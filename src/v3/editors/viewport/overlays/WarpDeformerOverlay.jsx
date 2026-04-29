@@ -107,12 +107,17 @@ export function WarpDeformerOverlay() {
       style={{ width: '100%', height: '100%' }}
       aria-hidden="true"
     >
-      <g>
+      {/* Phase 4I theme audit: route stroke / fill through
+          `currentColor` so Tailwind utility classes drive the palette
+          and dark-mode / theme presets can re-skin without rewriting
+          rgb literals. */}
+      <g className="text-sky-400">
         {lines.map((l, i) => (
           <line
             key={i}
             x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-            stroke="rgb(56 189 248 / 0.6)"
+            stroke="currentColor"
+            strokeOpacity={0.6}
             strokeWidth={1}
           />
         ))}
@@ -122,8 +127,9 @@ export function WarpDeformerOverlay() {
             cx={p.x}
             cy={p.y}
             r={3}
-            fill="rgb(56 189 248 / 0.9)"
-            stroke="rgb(15 23 42 / 0.8)"
+            fill="currentColor"
+            fillOpacity={0.9}
+            className="stroke-slate-900/80"
             strokeWidth={1}
           />
         ))}
@@ -132,7 +138,7 @@ export function WarpDeformerOverlay() {
         x={projected[0].x + 6}
         y={projected[0].y - 6}
         fontSize={10}
-        fill="rgb(56 189 248)"
+        className="fill-sky-400"
         style={{ fontFamily: 'monospace' }}
       >
         {warp.name ?? warp.id} ({cols}×{rows})

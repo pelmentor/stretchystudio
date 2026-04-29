@@ -82,27 +82,40 @@ export function RotationDeformerOverlay() {
       style={{ width: '100%', height: '100%' }}
       aria-hidden="true"
     >
-      <g>
+      {/* Two nested groups so we can route SVG fill/stroke through
+          Tailwind text-color utilities (`currentColor`) — the outer
+          group is the slate stroke for outline, the inner group is
+          the amber fill / handle. Phase 4I theme audit: this lets
+          a future preset re-skin overlays without editing each rgb
+          literal. */}
+      <g className="text-amber-400">
         <circle
           cx={px} cy={py} r={radius}
           fill="none"
-          stroke="rgb(251 191 36 / 0.6)"
+          stroke="currentColor"
+          strokeOpacity={0.6}
           strokeDasharray="4 4"
           strokeWidth={1}
         />
         <line
           x1={px} y1={py} x2={hx} y2={hy}
-          stroke="rgb(251 191 36 / 0.9)"
+          stroke="currentColor"
+          strokeOpacity={0.9}
           strokeWidth={2}
         />
         <circle cx={px} cy={py} r={4}
-          fill="rgb(251 191 36)" stroke="rgb(15 23 42 / 0.85)" strokeWidth={1.5} />
+          fill="currentColor"
+          className="text-amber-400 stroke-slate-900/85"
+          strokeWidth={1.5} />
         <circle cx={hx} cy={hy} r={3}
-          fill="rgb(251 191 36 / 0.9)" stroke="rgb(15 23 42 / 0.85)" strokeWidth={1} />
+          fill="currentColor"
+          fillOpacity={0.9}
+          className="text-amber-400 stroke-slate-900/85"
+          strokeWidth={1} />
         <text
           x={px + 8} y={py - 8}
           fontSize={10}
-          fill="rgb(251 191 36)"
+          fill="currentColor"
           style={{ fontFamily: 'monospace' }}
         >
           {rot.name ?? rot.id}  {angle.toFixed(1)}°
