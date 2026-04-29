@@ -30,6 +30,17 @@ console.log('');
 console.log(`importCmo3 stats: ${JSON.stringify(result.stats)}`);
 const rigWarpKeys = Object.keys(result.project.rigWarps);
 console.log(`rigWarp keys: ${rigWarpKeys.length} entries: ${rigWarpKeys.slice(0, 4).join(', ')}`);
+
+console.log('');
+console.log('parts WITHOUT a rigWarp:');
+const partsList = result.project.nodes.filter((n) => n.type === 'part');
+for (const p of partsList) {
+  if (!result.project.rigWarps[p.id]) {
+    const part = scene.parts.find((sp) => sp.name === p.name);
+    console.log(`  ${p.name.padEnd(20)}  deformerGuidRef=${part?.deformerGuidRef ?? '-'}`);
+  }
+}
+
 if (result.warnings.length > 0) {
   console.log('warnings:');
   for (const w of result.warnings.slice(0, 8)) console.log(`  - ${w}`);

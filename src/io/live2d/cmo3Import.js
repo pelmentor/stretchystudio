@@ -198,9 +198,15 @@ function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
   // Map warp.ownGuidRef → warp record so part.deformerGuidRef lookups are O(1)
   /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
   const warpByOwnGuid = new Map();
+  // Parallel map for rotation deformers — currently unused for synthesis
+  // (no per-mesh SS storage equivalent), but lets us emit specific
+  // warnings instead of silently skipping parts.
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
+  const rotationByOwnGuid = new Map();
   for (const d of scene.deformers) {
-    if (d.kind !== 'warp') continue;
-    if (d.ownGuidRef) warpByOwnGuid.set(d.ownGuidRef, d);
+    if (!d.ownGuidRef) continue;
+    if (d.kind === 'warp') warpByOwnGuid.set(d.ownGuidRef, d);
+    else if (d.kind === 'rotation') rotationByOwnGuid.set(d.ownGuidRef, d);
   }
 
   // Map binding xsId → record so grid cell access keys can resolve param
@@ -233,7 +239,19 @@ function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
   for (const part of scene.parts) {
     if (!part.deformerGuidRef) continue;
     const warp = warpByOwnGuid.get(part.deformerGuidRef);
-    if (!warp) continue;  // part isn't directly under a warp deformer (e.g. parented to a rotation)
+    if (!warp) {
+      const rot = rotationByOwnGuid.get(part.deformerGuidRef);
+      if (rot) {
+        warnings.push(
+          `part ${part.drawableIdStr} (${part.name}) is parented to rotation deformer ${rot.idStr} — needs CRotationDeformerSource → groupRotation synthesis (deferred to a follow-on sweep)`,
+        );
+      } else {
+        warnings.push(
+          `part ${part.drawableIdStr} (${part.name}) deformer ref ${part.deformerGuidRef} resolves to neither a warp nor a rotation deformer`,
+        );
+      }
+      continue;
+    }
 
     const partNodeId = partGuidToNodeId.get(part.xsId ?? '');
     if (!partNodeId) {
