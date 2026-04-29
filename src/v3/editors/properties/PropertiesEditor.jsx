@@ -19,6 +19,7 @@
 
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { ObjectTab } from './tabs/ObjectTab.jsx';
+import { DeformerTab } from './tabs/DeformerTab.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
@@ -48,6 +49,8 @@ export function PropertiesEditor() {
       <div className="flex-1 min-h-0 overflow-hidden">
         {active.type === 'part' || active.type === 'group' ? (
           <ObjectTab nodeId={active.id} />
+        ) : active.type === 'deformer' ? (
+          <DeformerTab deformerId={active.id} />
         ) : (
           <div className="p-3 text-xs text-muted-foreground">
             Properties for type{' '}
