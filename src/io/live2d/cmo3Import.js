@@ -203,10 +203,58 @@ function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
   // warnings instead of silently skipping parts.
   /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
   const rotationByOwnGuid = new Map();
+  // Unified by-guid map for chain walking (warps + rotations both can be
+  // a leaf rigWarp's ancestor on the way to the named structural warp).
+  /** @type {Map<string, import('./cmo3PartExtract.js').ExtractedDeformer>} */
+  const deformerByOwnGuid = new Map();
   for (const d of scene.deformers) {
     if (!d.ownGuidRef) continue;
+    deformerByOwnGuid.set(d.ownGuidRef, d);
     if (d.kind === 'warp') warpByOwnGuid.set(d.ownGuidRef, d);
     else if (d.kind === 'rotation') rotationByOwnGuid.set(d.ownGuidRef, d);
+  }
+
+  /**
+   * Walk a warp's parent-deformer chain in cmo3 space and resolve to the
+   * SS-side parent the runtime evaluator expects. The leaf rigWarps the
+   * writer emits always parent to one of three named structural warps —
+   * `FaceParallaxWarp`, `NeckWarp`, or `BodyXWarp` — so we look for the
+   * nearest named cmo3 ancestor and translate.
+   *
+   *   cmo3 "FaceParallax" → SS "FaceParallaxWarp"
+   *   cmo3 "NeckWarp"     → SS "NeckWarp"
+   *   cmo3 "BodyXWarp"    → SS "BodyXWarp"
+   *
+   * Falls through any intermediate warps (BodyWarpZ/Y, BreathWarp,
+   * FaceRotation, Rotation_*) until it hits one of the three. Without
+   * this, every imported leaf rigWarp defaulted to BodyXWarp — wrong for
+   * the face/eye/brow/hair region (they belong under FaceParallaxWarp,
+   * which in turn parents to FaceRotation/Rotation_head). evalRig
+   * traversed the wrong chain → vertices ended up in canvas-px land
+   * instead of FaceParallax-normalised.
+   *
+   * @param {import('./cmo3PartExtract.js').ExtractedDeformer} startWarp
+   * @returns {{type:'warp', id:string}}
+   */
+  function resolveRigWarpParent(startWarp) {
+    const NAMED_MAP = {
+      FaceParallax: 'FaceParallaxWarp',
+      NeckWarp:     'NeckWarp',
+      BodyXWarp:    'BodyXWarp',
+    };
+    let cur = startWarp;
+    let safety = 16;
+    while (cur && cur.parentDeformerGuidRef && safety-- > 0) {
+      const parent = deformerByOwnGuid.get(cur.parentDeformerGuidRef);
+      if (!parent) break;
+      if (parent.kind === 'warp' && NAMED_MAP[parent.idStr]) {
+        return { type: 'warp', id: NAMED_MAP[parent.idStr] };
+      }
+      cur = parent;
+    }
+    // No named ancestor found — conservative fallback (matches writer's
+    // default reparent target for non-face / non-neck regions).
+    return { type: 'warp', id: 'BodyXWarp' };
   }
 
   // Map binding xsId → record so grid cell access keys can resolve param
@@ -368,10 +416,14 @@ function buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH) {
     rigWarps[partNodeId] = {
       id: warp.idStr || `RigWarp_${part.name}`,
       name: warp.name || `${part.name} Warp`,
-      // Parent type is conservatively 'warp' (matches the writer's
-      // default). Identifying the actual chained parent (FaceParallax /
-      // NeckWarp / BodyXWarp) needs deformer-tree synthesis — deferred.
-      parent: { type: 'warp', id: 'BodyXWarp' },
+      // Resolved against the cmo3's actual deformer chain so evalRig
+      // walks the right ancestors at runtime. Map: cmo3 "FaceParallax"
+      // → SS "FaceParallaxWarp", cmo3 "NeckWarp" → SS "NeckWarp", cmo3
+      // "BodyXWarp" → SS "BodyXWarp". The writer's section-3d reparent
+      // step on re-export overwrites this with the same tag-based
+      // routing anyway, so storing the runtime-correct value here costs
+      // nothing on round-trip.
+      parent: resolveRigWarpParent(warp),
       targetPartId: partNodeId,
       canvasBbox: {
         minX,

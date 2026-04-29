@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #16 (autonomous)
+
+Sweep #15 fixed rotation deformers; sweep #16 fixes the other half of the runtime-evaluator gap: every imported leaf rigWarp had `parent: { type: 'warp', id: 'BodyXWarp' }` hard-wired (the writer's reparent step on re-export overwrites this anyway, but evalRig at runtime walks the stored value, so face / eye / brow / hair region rigWarps were traversing the wrong chain in the v3 viewport).
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` chained-warp parent resolution. New `resolveRigWarpParent(startWarp)` inside `buildRigWarpsFromScene` walks each warp's `parentDeformerGuidRef` chain through the unified `deformerByOwnGuid` map (warps + rotations both indexed) and stops at the nearest cmo3 ancestor whose `idStr` matches one of the three named structural warps the writer emits leaf rigWarps under. Translation table: cmo3 `"FaceParallax"` → SS `"FaceParallaxWarp"`, cmo3 `"NeckWarp"` → SS `"NeckWarp"`, cmo3 `"BodyXWarp"` → SS `"BodyXWarp"`. The walk falls through intermediate warps (`BodyWarpZ` / `BodyWarpY` / `BreathWarp`) and intermediate rotations (`FaceRotation` / `Rotation_head`) — those are structural / chain nodes the auto-rig regenerates, not leaf-rigWarp parents — until it reaches a named ancestor. Falls back to `BodyXWarp` if no match (matches writer's default for non-tagged regions). Verified against `shelby.cmo3`: 18/18 rigWarps classified correctly — 14 face-region warps (`irides_l/r`, `eyebrow_l/r`, `eyewhite_l/r`, `eyelash_l/r`, `front_hair`, `back_hair`, `face`, `face_smile`, `ears_l/r`) → `FaceParallaxWarp`; 1 neck warp (`RigWarp_neck`) → `NeckWarp`; 3 body warps (`topwear`, `topwear______` (variant), `legwear`) → `BodyXWarp`. **Honest scope cut:** rotation-parented rigWarps still need an explicit owner-group lookup so the parent could be `{type: 'rotation', id: GroupRotation_<projectGroupId>}`. Today they fall through to the BodyXWarp default; the writer's per-mesh inline path on re-export still wires them under the right rotation deformer (because the parent-group's `boneRole` was set in sweep #15), but evalRig in the v3 viewport walks the warp chain not the rotation chain for those parts pre-export. Fixing that is its own sweep — needs the rigWarp's part to know its owning group's rotation deformer id, which is a write-side convention not a read-side primary. |
+
+**Phase coverage after sweep #16:** the .cmo3 round-trip pipeline now decodes every per-mesh deformer relationship needed for evalRig to walk the chain correctly on import — face / neck / body region warps all parent to the right structural warp. Pending pieces on this line: rotation-parented rigWarps (the writer's per-mesh inline path on re-export wires them correctly, but pre-export evalRig in v3 viewport doesn't yet), variants (encoded via conditional keyform bindings), masks (`maskConfigs`), physics rules, bone-baked angles. Other entirely-pending items: 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #15 (autonomous)
 
 Sweep #14 left two `.cmo3` parts (handwear-l/r in shelby) without a stored rigWarp because their `deformerGuidRef` resolves to a `CRotationDeformerSource` rather than a warp. Sweep #15 closes that gap by mirroring the cmo3's rotation deformers onto the importer's group nodes: `boneRole` + `transform.pivotX/Y` get populated so the writer's auto-rig path produces equivalent rotation deformers on re-export — and the per-mesh inline emission picks up `GroupRotation_<role>` as the parent for warp-less parts.
