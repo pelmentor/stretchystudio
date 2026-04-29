@@ -53,6 +53,9 @@ export const DEFAULT_KEYMAP = {
   'Ctrl+KeyN': 'file.new',
   'Meta+KeyN': 'file.new',
 
+  'Ctrl+KeyE': 'file.export',
+  'Meta+KeyE': 'file.export',
+
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 };

@@ -26,6 +26,7 @@ import {
   serializeProject,
   deserializeProject,
 } from '../../services/PersistenceService.js';
+import { runExport } from '../../services/ExportService.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -171,6 +172,77 @@ function registerBuiltins() {
       // session doesn't render against the empty project.
       useSelectionStore.getState().clear();
       useProjectStore.getState().resetProject();
+    },
+  });
+
+  // Load textures from a project's texture entries into HTMLImageElements.
+  // Mirrors the v2 ExportModal pattern. Helper exists here rather than in
+  // ExportService because services should stay browser-DOM-free where
+  // possible (PersistenceService loads zip blobs, but exports require
+  // images on the actual <img> code path).
+  /** @returns {Promise<Map<string, HTMLImageElement>>} */
+  async function loadProjectTextures(project) {
+    /** @type {Map<string, HTMLImageElement>} */
+    const images = new Map();
+    for (const tex of project?.textures ?? []) {
+      if (!tex?.source) continue;
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => { images.set(tex.id, img); resolve(undefined); };
+        img.onerror = (err) => reject(err);
+        img.src = tex.source;
+      });
+    }
+    return images;
+  }
+
+  /** Trigger a download from a Blob. */
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  // Export the model. Default format is 'live2d-full' (cmo3 + rig +
+  // physics + motions, the most useful for round-trip in Cubism
+  // Editor). Phase 5 will surface the format choice (cmo3 vs runtime
+  // moc3 zip) through a proper export dialog; for now Ctrl+E gives
+  // the user the editable cmo3 path which is what they want during
+  // iteration.
+  registerOperator({
+    id: 'file.export',
+    label: 'Export Live2D',
+    available: () => {
+      const partCount = (useProjectStore.getState().project.nodes ?? [])
+        .filter((n) => n?.type === 'part').length;
+      return partCount > 0;
+    },
+    exec: async () => {
+      try {
+        const project = useProjectStore.getState().project;
+        const images = await loadProjectTextures(project);
+        const res = await runExport({
+          format: 'live2d-full',
+          images,
+          extra: { generateRig: true },
+        });
+        if (!res.ok || !res.blob) {
+          if (typeof console !== 'undefined') console.error('[file.export] failed:', res.error);
+          return;
+        }
+        const baseName = (project.name || 'model').trim() || 'model';
+        const isZip = res.blob.type === 'application/zip'
+          || res.blob.type === 'application/x-zip-compressed';
+        const ext = isZip ? '_live2d.zip' : '.cmo3';
+        downloadBlob(res.blob, baseName + ext);
+      } catch (err) {
+        if (typeof console !== 'undefined') console.error('[file.export] threw:', err);
+      }
     },
   });
 
