@@ -38,11 +38,6 @@ const ARC_COLOUR = 'rgba(251,191,36,0.55)';
 const ARC_ACTIVE = 'rgba(251,191,36,0.95)';
 const ARC_STROKE_W = 5;
 
-/** Convert image-space coords → SVG/CSS coords */
-function toScreen(x, y, zoom, panX, panY) {
-  return [x * zoom + panX, y * zoom + panY];
-}
-
 /** Convert SVG/CSS coords → image-space */
 function toImage(cssX, cssY, zoom, panX, panY) {
   return [(cssX - panX) / zoom, (cssY - panY) / zoom];
@@ -67,8 +62,6 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
-  const blendShapeEditMode = useEditorStore(s => s.blendShapeEditMode);
-  const activeBlendShapeId = useEditorStore(s => s.activeBlendShapeId);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
@@ -144,7 +137,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   /* ── Pointer handlers — defined unconditionally (Rules of Hooks) ── */
 
-  const onPointerDown = useCallback((e, nodeId, dragType = 'joint', pinId = null) => {
+  const onPointerDown = useCallback((e, nodeId, dragType = 'joint') => {
     if (e.button !== 0) return; // Only handle left-click; middle/right pass through
 
     e.stopPropagation();
