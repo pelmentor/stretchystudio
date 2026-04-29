@@ -475,7 +475,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       <circle key={role}
         cx={cx} cy={cy} r={radius}
         fill={fill} stroke="#000" strokeWidth={1.5}
-        style={{ cursor: skeletonEditMode ? 'grab' : 'pointer' }}
+        style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
         onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
         onClick={() => !skeletonEditMode && setSelection([node.id])}
       />
@@ -552,7 +552,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
           <rect
              x={tpx - half} y={tpy - half} width={TP_SIZE} height={TP_SIZE} rx={8}
              fill="rgba(20,20,20,0.75)" stroke="rgba(255,255,255,0.2)" strokeWidth={1}
-             style={{ cursor: 'crosshair' }}
+             style={{ cursor: 'crosshair', pointerEvents: 'visiblePainted' }}
              onPointerDown={(e) => onPointerDown(e, node.id, 'trackpad')}
           />
           <line x1={tpx} y1={tpy - half} x2={tpx} y2={tpy + half} stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="2 2" pointerEvents="none" />
