@@ -11,7 +11,7 @@ import {
   tickPhysics,
   buildParamSpecs,
 } from '@/io/live2d/runtime/physicsTick';
-import { computePoseOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
+import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
 import { detectCharacterFormat } from '@/io/armatureOrganizer';
@@ -287,6 +287,36 @@ export default function CanvasViewport({
       const _rigSpecForPhysics = rigSpecRef.current;
       const physicsRules = _rigSpecForPhysics?.physicsRules;
       const livePreview = !!editorRef.current.livePreviewActive;
+
+      // Animation mode — overlay parameter keyforms from the timeline
+      // BEFORE live-preview drivers run. computeParamOverrides walks
+      // tracks where `paramId` is set (Live2D parameter curves —
+      // motion3json + can3writer already export these); the result is
+      // merged into the working values so chainEval sees the animated
+      // dial position. We also push the merged values into
+      // paramValuesStore so the ParametersEditor sliders track playback.
+      if (editorRef.current.editorMode === 'animation') {
+        const _anim = animRef.current;
+        const _proj = projectRef.current;
+        const _activeAnim = _proj.animations.find((a) => a.id === _anim.activeAnimationId) ?? null;
+        if (_activeAnim) {
+          const _endMs = (_anim.endFrame / _anim.fps) * 1000;
+          const paramOv = computeParamOverrides(_activeAnim, _anim.currentTime, _anim.loopKeyframes, _endMs);
+          if (paramOv.size > 0) {
+            const merged = { ...valuesForEval };
+            const updates = {};
+            for (const [paramId, val] of paramOv) {
+              if (merged[paramId] !== val) updates[paramId] = val;
+              merged[paramId] = val;
+            }
+            valuesForEval = merged;
+            if (Object.keys(updates).length > 0) {
+              useParamValuesStore.getState().setMany(updates);
+              isDirtyRef.current = true;
+            }
+          }
+        }
+      }
 
       if (livePreview) {
         const updates = {};

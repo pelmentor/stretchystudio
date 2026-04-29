@@ -157,6 +157,12 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
 /**
  * Compute pose overrides for all tracks in an animation at the given time.
  *
+ * Walks node-targeted tracks only — tracks carrying `paramId` (Live2D
+ * parameter curves consumed by motion3json + can3writer + chainEval)
+ * are handled separately by `computeParamOverrides`. Existing callers
+ * (CanvasViewport / SkeletonOverlay / GizmoOverlay) consume only node
+ * overrides so this split keeps them working unchanged.
+ *
  * @param {Object|null} animation  - single animation object (project.animations[i])
  * @param {number}      timeMs     - current playhead position in milliseconds
  * @returns {Map<string, Object>}  nodeId → {
@@ -169,6 +175,9 @@ export function computePoseOverrides(animation, timeMs, loopKeyframes = false, e
   if (!animation) return overrides;
 
   for (const track of animation.tracks) {
+    // Skip parameter tracks — those go through computeParamOverrides.
+    if (track.paramId) continue;
+
     let value;
     if (track.property === 'mesh_verts') {
       value = interpolateMeshVerts(track.keyframes, timeMs, loopKeyframes, endMs);
@@ -179,6 +188,36 @@ export function computePoseOverrides(animation, timeMs, loopKeyframes = false, e
 
     if (!overrides.has(track.nodeId)) overrides.set(track.nodeId, {});
     overrides.get(track.nodeId)[track.property] = value;
+  }
+
+  return overrides;
+}
+
+/**
+ * Compute Live2D parameter value overrides at the given time. Mirrors
+ * `computePoseOverrides` but for tracks with `track.paramId` set.
+ *
+ * The CanvasViewport tick merges this map into `valuesForEval` BEFORE
+ * chainEval runs, so the rig evaluator sees the animated parameter
+ * values rather than the slider-set defaults. Live preview drivers
+ * (breath, cursor look, physics) write on top of this so user-played
+ * animations can still co-exist with physics jitter.
+ *
+ * @param {Object|null} animation
+ * @param {number}      timeMs
+ * @param {boolean}     loopKeyframes
+ * @param {number}      endMs
+ * @returns {Map<string, number>}  paramId → value
+ */
+export function computeParamOverrides(animation, timeMs, loopKeyframes = false, endMs = 0) {
+  const overrides = new Map();
+  if (!animation) return overrides;
+
+  for (const track of animation.tracks) {
+    if (!track.paramId) continue;
+    const v = interpolateTrack(track.keyframes, timeMs, loopKeyframes, endMs);
+    if (v === undefined) continue;
+    overrides.set(track.paramId, v);
   }
 
   return overrides;
@@ -229,4 +268,28 @@ export function getNodePropertyValue(node, property) {
     return node.blendShapeValues?.[shapeId] ?? 0;
   }
   return node.transform?.[property] ?? 0;
+}
+
+/**
+ * Insert/update a parameter keyframe at the given time.  Finds the
+ * existing param track in `animation.tracks` (by `paramId`), creates
+ * one if missing, and upserts a keyframe at `timeMs`. Mutates the
+ * animation in place — callers wrap in `updateProject` to snapshot
+ * undo.
+ *
+ * @param {Object} animation - mutable animation object
+ * @param {string} paramId
+ * @param {number} timeMs
+ * @param {number} value
+ * @param {string} [easing='ease-both']
+ */
+export function setParamKeyframeAt(animation, paramId, timeMs, value, easing = 'ease-both') {
+  if (!animation || !paramId) return;
+  if (!Array.isArray(animation.tracks)) animation.tracks = [];
+  let track = animation.tracks.find((t) => t.paramId === paramId);
+  if (!track) {
+    track = { paramId, keyframes: [] };
+    animation.tracks.push(track);
+  }
+  upsertKeyframe(track.keyframes, timeMs, value, easing);
 }

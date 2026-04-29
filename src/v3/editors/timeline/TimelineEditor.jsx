@@ -801,10 +801,16 @@ export function TimelineEditor() {
   }, [xToFrame, anim, startFrame, endFrame]);
 
   // Keyframe clicking & dragging
-  const onKeyframePointerDown = useCallback((e, nodeId, timeMs) => {
+  // 2026-04-29: `rowKey` (`node:<id>` | `param:<id>`) replaces the
+  // legacy `nodeId` argument so param-track keyframes can be selected,
+  // dragged, copy/pasted and deleted through the same code path. The
+  // selection ID is `${rowKey}:${timeMs}`; the drag context's
+  // origKeyframes carries the rowKey so the find-track step inside
+  // handleMove can dispatch on `paramId` vs `nodeId+property`.
+  const onKeyframePointerDown = useCallback((e, rowKey, timeMs) => {
     e.stopPropagation();
 
-    const id = `${nodeId}:${timeMs}`;
+    const id = `${rowKey}:${timeMs}`;
     let newSel = new Set(selectedKeyframes);
 
     // Shift click toggles selection
@@ -821,13 +827,17 @@ export function TimelineEditor() {
       }
     }
 
-    // Prepare drag context
+    // Prepare drag context — store enough info to re-find each track.
     const orig = [];
     if (animation) {
       for (const track of animation.tracks) {
+        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
         for (const kf of track.keyframes) {
-          if (newSel.has(`${track.nodeId}:${kf.time}`)) {
-            orig.push({ trackNodeId: track.nodeId, prop: track.property, origTimeMs: kf.time });
+          if (newSel.has(`${trackRowKey}:${kf.time}`)) {
+            orig.push(track.paramId
+              ? { rowKey: trackRowKey, paramId: track.paramId, origTimeMs: kf.time }
+              : { rowKey: trackRowKey, trackNodeId: track.nodeId, prop: track.property, origTimeMs: kf.time }
+            );
           }
         }
       }
@@ -850,13 +860,15 @@ export function TimelineEditor() {
           const a = p.animations.find(x => x.id === anim.activeAnimationId);
           if (!a) return;
           for (const item of dragCtx.current.origKeyframes) {
-            const track = a.tracks.find(t => t.nodeId === item.trackNodeId && t.property === item.prop);
+            const track = item.paramId
+              ? a.tracks.find(t => t.paramId === item.paramId)
+              : a.tracks.find(t => t.nodeId === item.trackNodeId && t.property === item.prop);
             if (track) {
               const kf = track.keyframes.find(k => k.time === item.origTimeMs);
               if (kf) {
                 const newFrame = Math.max(0, msToFrame(item.origTimeMs, fps) + dragFrameDelta);
                 kf.time = frameToMs(newFrame, fps);
-                nextSel.add(`${item.trackNodeId}:${kf.time}`);
+                nextSel.add(`${item.rowKey}:${kf.time}`);
               }
             }
           }
@@ -950,18 +962,25 @@ export function TimelineEditor() {
           if (prevBox && prevBox.w > 5 && prevBox.h > 5) {
             let newSel = new Set(e.shiftKey ? selectedKeyframes : []);
 
-            const trackRows = Array.from(new Map(
-              animation.tracks.map(t => [t.nodeId, t])
-            ).keys());
+            // Iterate the same row order as the visible UI
+            // (param rows then node rows) so selection-box geometry
+            // matches what the user sees.
+            const orderedRowKeys = [];
+            const seen = new Set();
+            for (const t of animation.tracks) {
+              const k = t.paramId ? `param:${t.paramId}` : `node:${t.nodeId}`;
+              if (!seen.has(k)) { seen.add(k); orderedRowKeys.push(k); }
+            }
 
-            for (let rIndex = 0; rIndex < trackRows.length; rIndex++) {
-              const nodeId = trackRows[rIndex];
+            for (let rIndex = 0; rIndex < orderedRowKeys.length; rIndex++) {
+              const rowKey = orderedRowKeys[rIndex];
               const rowY = RULER_H + (rIndex * ROW_H);
 
-              // If row intersects box Y
               if (rowY + ROW_H > prevBox.y && rowY < prevBox.y + prevBox.h) {
-                const tracksForNode = animation.tracks.filter(t => t.nodeId === nodeId);
-                const times = [...new Set(tracksForNode.flatMap(t => t.keyframes.map(k => k.time)))];
+                const tracksForRow = rowKey.startsWith('param:')
+                  ? animation.tracks.filter(t => `param:${t.paramId}` === rowKey)
+                  : animation.tracks.filter(t => `node:${t.nodeId}` === rowKey);
+                const times = [...new Set(tracksForRow.flatMap(t => t.keyframes.map(k => k.time)))];
 
                 for (const timeMs of times) {
                   const frame = msToFrame(timeMs, fps);
@@ -970,9 +989,8 @@ export function TimelineEditor() {
                     const trackW = rulerRef.current?.getBoundingClientRect().width - 2 * TRACK_PAD;
                     if (trackW) {
                       const kfX = TRACK_PAD + (frac * trackW);
-                      // Intersect X
                       if (kfX > prevBox.x && kfX < prevBox.x + prevBox.w) {
-                        newSel.add(`${nodeId}:${timeMs}`);
+                        newSel.add(`${rowKey}:${timeMs}`);
                       }
                     }
                   }
@@ -992,11 +1010,22 @@ export function TimelineEditor() {
   }, [animation, startFrame, endFrame, totalFrames, fps, selectedKeyframes, xToFrame, anim]);
 
   /* ── Clipboard Actions ──────────────────────────────────────────────── */
-  const copyKeyframe = useCallback((nodeId, timeMs) => {
+  // Copy now keyed by rowKey rather than nodeId. Param-row clipboard
+  // captures the parameter's value at that time (single property);
+  // node-row clipboard captures all properties at that time as before.
+  const copyKeyframe = useCallback((rowKey, timeMs) => {
     if (!animation) return;
+    if (rowKey.startsWith('param:')) {
+      const paramId = rowKey.slice('param:'.length);
+      const track = animation.tracks.find(t => t.paramId === paramId);
+      const kf = track?.keyframes.find(k => k.time === timeMs);
+      if (!kf) return;
+      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.easing ?? 'linear' });
+      return;
+    }
+    const nodeId = rowKey.slice('node:'.length);
     const props = {};
     let easing = 'linear';
-
     for (const track of animation.tracks) {
       if (track.nodeId !== nodeId) continue;
       const kf = track.keyframes.find(k => k.time === timeMs);
@@ -1005,29 +1034,45 @@ export function TimelineEditor() {
         easing = kf.easing ?? 'linear';
       }
     }
-
     if (Object.keys(props).length > 0) {
-      setClipboard({ properties: props, easing });
+      setClipboard({ kind: 'node', properties: props, easing });
     }
   }, [animation]);
 
   const pasteKeyframes = useCallback(() => {
-    if (!clipboard || !animation || sel.length === 0) return;
+    if (!clipboard || !animation) return;
 
     update((p) => {
       const a = p.animations.find(x => x.id === anim.activeAnimationId);
       if (!a) return;
-
       const timeMs = anim.currentTime;
 
+      if (clipboard.kind === 'param') {
+        let track = a.tracks.find(t => t.paramId === clipboard.paramId);
+        if (!track) {
+          track = { paramId: clipboard.paramId, keyframes: [] };
+          a.tracks.push(track);
+        }
+        const existingIdx = track.keyframes.findIndex(kf => kf.time === timeMs);
+        if (existingIdx >= 0) {
+          track.keyframes[existingIdx].value = clipboard.value;
+          track.keyframes[existingIdx].easing = clipboard.easing;
+        } else {
+          track.keyframes.push({ time: timeMs, value: clipboard.value, easing: clipboard.easing });
+          track.keyframes.sort((a, b) => a.time - b.time);
+        }
+        return;
+      }
+
+      // Legacy node-property clipboard targets selected nodes.
+      if (sel.length === 0) return;
       for (const nodeId of sel) {
-        for (const [prop, value] of Object.entries(clipboard.properties)) {
+        for (const [prop, value] of Object.entries(clipboard.properties ?? {})) {
           let track = a.tracks.find(t => t.nodeId === nodeId && t.property === prop);
           if (!track) {
             track = { nodeId, property: prop, keyframes: [] };
             a.tracks.push(track);
           }
-
           const existingIdx = track.keyframes.findIndex(kf => kf.time === timeMs);
           if (existingIdx >= 0) {
             track.keyframes[existingIdx].value = value;
@@ -1049,7 +1094,8 @@ export function TimelineEditor() {
       const a = p.animations.find(x => x.id === anim.activeAnimationId);
       if (!a) return;
       for (const track of a.tracks) {
-        track.keyframes = track.keyframes.filter(kf => !selectedKeyframes.has(`${track.nodeId}:${kf.time}`));
+        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
+        track.keyframes = track.keyframes.filter(kf => !selectedKeyframes.has(`${trackRowKey}:${kf.time}`));
       }
       a.tracks = a.tracks.filter(t => t.keyframes.length > 0);
     });
@@ -1067,10 +1113,14 @@ export function TimelineEditor() {
       } else if (e.ctrlKey || e.metaKey) {
         if (e.key === 'c') {
           if (selectedKeyframes.size > 0) {
-            // Copy the "first" one in selection
+            // Copy the "first" one in selection. Selection IDs are
+            // `node:<id>:<time>` or `param:<id>:<time>` — split on the
+            // last `:` to keep the kind prefix intact.
             const first = selectedKeyframes.values().next().value;
-            const [nodeId, timeMsStr] = first.split(':');
-            copyKeyframe(nodeId, parseFloat(timeMsStr));
+            const lastColon = first.lastIndexOf(':');
+            const rowKey = first.slice(0, lastColon);
+            const timeMsStr = first.slice(lastColon + 1);
+            copyKeyframe(rowKey, parseFloat(timeMsStr));
           }
         } else if (e.key === 'v') {
           pasteKeyframes();
@@ -1083,32 +1133,38 @@ export function TimelineEditor() {
 
 
   /* ── Context Menu Actions ────────────────────────────────────────── */
-  const setEasingAt = useCallback((nodeId, timeMs, easingType) => {
-    const targetId = `${nodeId}:${timeMs}`;
+  const setEasingAt = useCallback((rowKey, timeMs, easingType) => {
+    const targetId = `${rowKey}:${timeMs}`;
     const applyTo = selectedKeyframes.has(targetId) ? selectedKeyframes : new Set([targetId]);
     update((p) => {
       const a = p.animations.find(x => x.id === anim.activeAnimationId);
       if (!a) return;
       for (const track of a.tracks) {
+        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
         for (const kf of track.keyframes) {
-          if (applyTo.has(`${track.nodeId}:${kf.time}`)) {
-             kf.easing = easingType;
+          if (applyTo.has(`${trackRowKey}:${kf.time}`)) {
+            kf.easing = easingType;
           }
         }
       }
     });
   }, [selectedKeyframes, anim.activeAnimationId, update]);
 
-  const removeKeyframeAt = useCallback((nodeId, timeMs) => {
-    const targetId = `${nodeId}:${timeMs}`;
+  const removeKeyframeAt = useCallback((rowKey, timeMs) => {
+    const targetId = `${rowKey}:${timeMs}`;
     if (selectedKeyframes.has(targetId)) {
       deleteSelectedKeyframes();
     } else {
       update((p) => {
         const a = p.animations.find(x => x.id === anim.activeAnimationId);
         if (!a) return;
+        const wantParam = rowKey.startsWith('param:');
+        const targetId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
         for (const track of a.tracks) {
-          if (track.nodeId !== nodeId) continue;
+          const matches = wantParam
+            ? track.paramId === targetId
+            : track.nodeId === targetId;
+          if (!matches) continue;
           track.keyframes = track.keyframes.filter(kf => kf.time !== timeMs);
         }
         a.tracks = a.tracks.filter(t => t.keyframes.length > 0);
@@ -1117,41 +1173,60 @@ export function TimelineEditor() {
   }, [selectedKeyframes, deleteSelectedKeyframes, anim.activeAnimationId, update]);
 
   /* ── Build track rows ────────────────────────────────────────────────── */
-  // Group tracks by nodeId, show one row per node that has any keyframe.
+  // 2026-04-29: rows include both NODE-targeted tracks (legacy
+  // x/y/rotation/scaleX/scaleY/opacity/mesh_verts/blendShape) and
+  // PARAM-targeted tracks (track.paramId set — Live2D parameter
+  // animation, the v3 main goal). Each row carries `rowKey`
+  // (`node:<id>` or `param:<id>`) and `kind` (`'node'|'param'`); all
+  // downstream handlers dispatch on these so a single drag-select
+  // machinery covers both.
   const trackRows = useMemo(() => {
     if (!animation) return [];
     const nodeMap = new Map(proj.nodes.map(n => [n.id, n]));
+    const paramMap = new Map((proj.parameters ?? []).map((p) => [p.id, p]));
     const byNode = new Map();
+    const byParam = new Map();
 
     for (const track of animation.tracks) {
-      if (!byNode.has(track.nodeId)) byNode.set(track.nodeId, []);
-      byNode.get(track.nodeId).push(track);
+      if (track.paramId) {
+        if (!byParam.has(track.paramId)) byParam.set(track.paramId, []);
+        byParam.get(track.paramId).push(track);
+      } else {
+        if (!byNode.has(track.nodeId)) byNode.set(track.nodeId, []);
+        byNode.get(track.nodeId).push(track);
+      }
     }
 
-    return Array.from(byNode.entries())
-      .map(([nodeId, tracks]) => {
-        const times = [...new Set(tracks.flatMap(t => t.keyframes.map(kf => kf.time)))].sort((a, b) => a - b);
-        
-        const easingByTime = {};
-        for (const time of times) {
-          for (const t of tracks) {
-             const kf = t.keyframes.find(k => k.time === time);
-             if (kf) { 
-               easingByTime[time] = kf.easing || 'ease-both'; 
-               break; 
-             }
-          }
+    function buildRow(rowKey, kind, name, tracks) {
+      const times = [...new Set(tracks.flatMap(t => t.keyframes.map(kf => kf.time)))].sort((a, b) => a - b);
+      const easingByTime = {};
+      for (const time of times) {
+        for (const t of tracks) {
+          const kf = t.keyframes.find(k => k.time === time);
+          if (kf) { easingByTime[time] = kf.easing || 'ease-both'; break; }
         }
+      }
+      return { rowKey, kind, name, tracks, times, easingByTime };
+    }
 
-        return {
-          nodeId,
-          name: nodeMap.get(nodeId)?.name ?? nodeId,
-          tracks,
-          times,
-          easingByTime
-        };
-      });
-  }, [animation, proj.nodes]);
+    const nodeRows = Array.from(byNode.entries()).map(
+      ([nodeId, tracks]) => buildRow(
+        `node:${nodeId}`, 'node',
+        nodeMap.get(nodeId)?.name ?? nodeId,
+        tracks,
+      ),
+    );
+    const paramRows = Array.from(byParam.entries()).map(
+      ([paramId, tracks]) => buildRow(
+        `param:${paramId}`, 'param',
+        paramMap.get(paramId)?.name ?? paramId,
+        tracks,
+      ),
+    );
+    // Param rows above node rows so the rig animation surface is
+    // visually emphasised when a project uses both.
+    return [...paramRows, ...nodeRows];
+  }, [animation, proj.nodes, proj.parameters]);
 
   /* ── Transport ───────────────────────────────────────────────────────── */
   const togglePlay = useCallback(() => {
@@ -1443,10 +1518,14 @@ export function TimelineEditor() {
             {/* Track rows */}
             {trackRows.map((row, ri) => (
               <div
-                key={row.nodeId}
+                key={row.rowKey}
                 className={[
                   'flex border-b border-border/30 relative text-[11px]',
-                  sel.includes(row.nodeId) ? 'bg-primary/5' : 'hover:bg-muted/20',
+                  // Highlight when the underlying node/parameter is selected
+                  // in the editor selection (Outliner / ParamRow click).
+                  row.kind === 'node' && sel.includes(row.rowKey.slice('node:'.length))
+                    ? 'bg-primary/5'
+                    : 'hover:bg-muted/20',
                 ].join(' ')}
                 style={{ height: ROW_H }}
               >
@@ -1529,14 +1608,14 @@ export function TimelineEditor() {
                       if (frac < 0 || frac > 1) return null;
 
                       const isAtPlayhead = frame === currentFrame;
-                      const isSelected = selectedKeyframes.has(`${row.nodeId}:${timeMs}`);
+                      const isSelected = selectedKeyframes.has(`${row.rowKey}:${timeMs}`);
 
                       return (
                         <ContextMenu key={timeMs}>
                           <ContextMenuTrigger>
                             <div
                               title={`Frame ${frame} — click to select, drag to move`}
-                              onPointerDown={(e) => onKeyframePointerDown(e, row.nodeId, timeMs)}
+                              onPointerDown={(e) => onKeyframePointerDown(e, row.rowKey, timeMs)}
                               className={[
                                 'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 cursor-ew-resize',
                                 'rotate-45 border transition-colors z-20 keyframe-diamond',
@@ -1549,7 +1628,7 @@ export function TimelineEditor() {
                             />
                           </ContextMenuTrigger>
                           <ContextMenuContent>
-                            <ContextMenuItem onSelect={() => copyKeyframe(row.nodeId, timeMs)}>
+                            <ContextMenuItem onSelect={() => copyKeyframe(row.rowKey, timeMs)}>
                               <Copy className="w-3 h-3 mr-2 opacity-70" />
                               Copy
                             </ContextMenuItem>
@@ -1558,28 +1637,28 @@ export function TimelineEditor() {
                               Paste
                             </ContextMenuItem>
                             <ContextMenuSeparator />
-                            <ContextMenuItem onSelect={() => setEasingAt(row.nodeId, timeMs, 'linear')}>
+                            <ContextMenuItem onSelect={() => setEasingAt(row.rowKey, timeMs, 'linear')}>
                               <CurveIcon type="linear" className="mr-2 opacity-70" />
                               Linear
                             </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setEasingAt(row.nodeId, timeMs, 'ease-both')}>
+                            <ContextMenuItem onSelect={() => setEasingAt(row.rowKey, timeMs, 'ease-both')}>
                               <CurveIcon type="ease-both" className="mr-2 opacity-70" />
                               Ease Both
                             </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setEasingAt(row.nodeId, timeMs, 'ease-in')}>
+                            <ContextMenuItem onSelect={() => setEasingAt(row.rowKey, timeMs, 'ease-in')}>
                               <CurveIcon type="ease-in" className="mr-2 opacity-70" />
                               Ease In
                             </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setEasingAt(row.nodeId, timeMs, 'ease-out')}>
+                            <ContextMenuItem onSelect={() => setEasingAt(row.rowKey, timeMs, 'ease-out')}>
                               <CurveIcon type="ease-out" className="mr-2 opacity-70" />
                               Ease Out
                             </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setEasingAt(row.nodeId, timeMs, 'stepped')}>
+                            <ContextMenuItem onSelect={() => setEasingAt(row.rowKey, timeMs, 'stepped')}>
                               <CurveIcon type="stepped" className="mr-2 opacity-70" />
                               Stepped
                             </ContextMenuItem>
                             <ContextMenuSeparator />
-                            <ContextMenuItem className="text-destructive" onSelect={() => removeKeyframeAt(row.nodeId, timeMs)}>
+                            <ContextMenuItem className="text-destructive" onSelect={() => removeKeyframeAt(row.rowKey, timeMs)}>
                               <Trash2 className="w-3 h-3 mr-2 opacity-70" />
                               Remove
                             </ContextMenuItem>

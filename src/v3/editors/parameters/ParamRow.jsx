@@ -16,6 +16,10 @@
 
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import { useEditorStore } from '../../../store/editorStore.js';
+import { useAnimationStore } from '../../../store/animationStore.js';
+import { useProjectStore } from '../../../store/projectStore.js';
+import { setParamKeyframeAt } from '../../../renderer/animationEngine.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 
 // slider.jsx is a forwardRef without JSDoc, so tsc can't see its
@@ -83,7 +87,23 @@ export function ParamRow({ param }) {
         max={max}
         step={step}
         value={[value]}
-        onValueChange={([v]) => setParamValue(param.id, v)}
+        onValueChange={([v]) => {
+          setParamValue(param.id, v);
+          // Auto-keyframe in animation mode: write a keyframe on the
+          // parameter track at the current playhead time. The
+          // animation tick reads `paramId` tracks via
+          // `computeParamOverrides` and feeds them into chainEval.
+          const ed = useEditorStore.getState();
+          if (ed.editorMode !== 'animation' || !ed.autoKeyframe) return;
+          const an = useAnimationStore.getState();
+          const proj = useProjectStore.getState().project;
+          const activeAnim = proj.animations.find((a) => a.id === an.activeAnimationId);
+          if (!activeAnim) return;
+          useProjectStore.getState().updateProject((p) => {
+            const a = p.animations.find((aa) => aa.id === activeAnim.id);
+            if (a) setParamKeyframeAt(a, param.id, an.currentTime, v, 'ease-both');
+          });
+        }}
       />
     </div>
   );
