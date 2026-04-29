@@ -84,27 +84,37 @@ export function CoordSpaceOverlay() {
         (hasIssues ? 'border-destructive/60 bg-destructive/10' : 'border-border bg-card/85')
       }
     >
-      <button
-        type="button"
-        className="w-full flex items-center gap-1.5 px-2 py-1 hover:bg-muted/30 transition-colors"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        {hasIssues ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <span className="font-mono">
-          chains: <span className="text-emerald-400">{summary.clean}</span>
-          {' / '}
-          <span className={summary.broken > 0 ? 'text-destructive font-semibold' : 'text-muted-foreground'}>
-            {summary.broken} broken
+      <div className="w-full flex items-center gap-1.5 px-2 py-1 hover:bg-muted/30 transition-colors">
+        <button
+          type="button"
+          className="flex items-center gap-1.5 flex-1 text-left"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+        >
+          {hasIssues ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          <span className="font-mono">
+            chains: <span className="text-emerald-400">{summary.clean}</span>
+            {' / '}
+            <span className={summary.broken > 0 ? 'text-destructive font-semibold' : 'text-muted-foreground'}>
+              {summary.broken} broken
+            </span>
+            {summary.cycle > 0 ? (
+              <span className="text-amber-400"> · {summary.cycle} cycle</span>
+            ) : null}
+            {summary.noParent > 0 ? (
+              <span className="text-muted-foreground"> · {summary.noParent} no-parent</span>
+            ) : null}
           </span>
-          {summary.cycle > 0 ? (
-            <span className="text-amber-400"> · {summary.cycle} cycle</span>
-          ) : null}
-          {summary.noParent > 0 ? (
-            <span className="text-muted-foreground"> · {summary.noParent} no-parent</span>
-          ) : null}
-        </span>
-      </button>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); dumpAllDiagnostics(diags, rigSpec); }}
+          className="text-[10px] text-muted-foreground hover:text-foreground px-1 font-mono shrink-0"
+          title="Dump every part's diagnostic to console (rest bbox / rig bbox / Δ centroid / worldMatrix)"
+        >
+          dump
+        </button>
+      </div>
 
       {compact ? null : (
         <div className="border-t border-border/60 px-2 py-1 max-h-72 overflow-auto flex flex-col gap-0.5">
@@ -189,6 +199,50 @@ function bboxOfVerts(verts) {
     if (y > maxY) maxY = y;
   }
   return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/**
+ * Compact one-line-per-part dump of every diagnosis. Designed to be
+ * copy-pastable from devtools console as a single block — each row
+ * shows id / term / frame / rest bbox center / rig bbox center / Δ.
+ *
+ * @param {import('../../../../io/live2d/runtime/evaluator/chainDiagnose.js').ChainDiagnosis[]} diags
+ * @param {any} rigSpec
+ */
+function dumpAllDiagnostics(diags, rigSpec) {
+  if (typeof console === 'undefined') return;
+  try {
+    const project = useProjectStore.getState().project;
+    const paramValues = useParamValuesStore.getState().values;
+    const frames = rigSpec ? evalRig(rigSpec, paramValues) : [];
+    const framesById = new Map(frames.map((f) => [f.id, f]));
+
+    /** @type {Array<Record<string, any>>} */
+    const rows = [];
+    for (const d of diags) {
+      const node = project.nodes.find((n) => n.id === d.partId);
+      const rest = node?.mesh ? bboxOfVerts(node.mesh.vertices) : null;
+      const rig = framesById.get(d.partId)
+        ? bboxOfFlat(framesById.get(d.partId).vertexPositions)
+        : null;
+      rows.push({
+        id: d.partId,
+        term: d.terminationKind,
+        frame: d.finalFrame,
+        chain: d.chainPath.map((s) => `${s.kind}:${s.id}`).join('→') || '-',
+        rest: rest ? `${rest.cx.toFixed(0)},${rest.cy.toFixed(0)}` : '-',
+        rig: rig ? `${rig.cx.toFixed(0)},${rig.cy.toFixed(0)}` : '-',
+        dx: rest && rig ? Math.round(rig.cx - rest.cx) : null,
+        dy: rest && rig ? Math.round(rig.cy - rest.cy) : null,
+      });
+    }
+    console.groupCollapsed(`[CoordSpaceOverlay] dump ${rows.length} parts`);
+    if (typeof console.table === 'function') console.table(rows);
+    else console.log(rows);
+    console.groupEnd();
+  } catch (err) {
+    console.error('[CoordSpaceOverlay] dump failed:', err);
+  }
 }
 
 function bboxOfFlat(arr) {
