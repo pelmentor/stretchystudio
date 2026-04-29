@@ -142,6 +142,54 @@ export function OutlinerEditor() {
     [updateProject],
   );
 
+  // ↑/↓ moves active row, ←/→ collapse/expand. Scoped to the
+  // Outliner DOM tree via tabIndex + onKeyDown so the global
+  // operator dispatcher doesn't fight us — these chords are
+  // outliner-local, not workspace operators.
+  const onTreeKeyDown = useCallback(
+    (e) => {
+      if (rows.length === 0) return;
+      const idx = rows.findIndex((r) => r.node.id === activeId);
+      const cur = rows[idx]?.node;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = rows[Math.min(idx < 0 ? 0 : idx + 1, rows.length - 1)]?.node;
+        if (next) onSelect(next.id, 'replace');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = rows[Math.max(idx < 0 ? 0 : idx - 1, 0)]?.node;
+        if (prev) onSelect(prev.id, 'replace');
+      } else if (e.key === 'ArrowLeft' && cur) {
+        e.preventDefault();
+        if (cur.children.length > 0 && !collapsed.has(cur.id)) {
+          // Collapse current.
+          setCollapsed((prev) => {
+            const next = new Set(prev);
+            next.add(cur.id);
+            return next;
+          });
+        } else if (cur.parent) {
+          // Already a leaf or already collapsed → jump to parent.
+          onSelect(cur.parent, 'replace');
+        }
+      } else if (e.key === 'ArrowRight' && cur) {
+        e.preventDefault();
+        if (cur.children.length > 0 && collapsed.has(cur.id)) {
+          // Expand current.
+          setCollapsed((prev) => {
+            const next = new Set(prev);
+            next.delete(cur.id);
+            return next;
+          });
+        } else if (cur.children.length > 0) {
+          // Already expanded → jump to first child.
+          onSelect(cur.children[0].id, 'replace');
+        }
+      }
+    },
+    [rows, activeId, collapsed, onSelect],
+  );
+
   return (
     <div className="h-full w-full flex flex-col text-xs">
       <Header
@@ -154,7 +202,13 @@ export function OutlinerEditor() {
       {rows.length === 0 ? (
         <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasQuery={!!query.trim()} />
       ) : (
-        <div role="tree" aria-label="Outliner" className="flex-1 min-h-0 overflow-auto py-1">
+        <div
+          role="tree"
+          aria-label="Outliner"
+          tabIndex={0}
+          onKeyDown={onTreeKeyDown}
+          className="flex-1 min-h-0 overflow-auto py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
+        >
           {rows.map(({ node, depth }) => (
             <TreeNode
               key={node.id}
