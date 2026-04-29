@@ -761,7 +761,8 @@ export const discordLightPreset = {
     'primary': '235 86% 65%', // Official Discord Blurple (#5865F2). Your HSL was 235 85.6% 67.3%.
     'primary-foreground': '0 0% 100%', // White text on Blurple.
 
-    'secondary-foreground': '0 0% 0%', // Black text. Note: Contrast with your secondary (L=65.1) is ~3.45:1, which is below WCAG AA for normal text. Consider a lighter secondary or white foreground if this is for text backgrounds.
+    'secondary': '220 13% 88%', // Light gray fitting the 220-hue palette (matches `card` family); ~10:1 contrast against black secondary-foreground (WCAG AAA).
+    'secondary-foreground': '0 0% 0%', // Black text on the light-gray secondary.
 
     // Muted Elements
     'muted': '0 0% 91%', // A light gray for muted backgrounds (e.g., Material-Discord --main-alt light: hsl(0,0%,91%))

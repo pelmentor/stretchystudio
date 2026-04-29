@@ -42,20 +42,13 @@ const REQUIRED_KEYS = [
   'chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5',
 ];
 
-// Known gaps in upstream presets, surfaced by running this test
-// for the first time. Each entry is `<presetId>:<key>` — those
-// keys are accepted as missing so CI doesn't block on a pre-
-// existing data omission. When upstream fills a gap, the entry
-// here can be deleted (the test will then catch any future
-// regression on the same key).
-const KNOWN_GAPS = new Set([
-  // discord-light is missing `secondary` in upstream's data; CSS
-  // fallback keeps the UI from breaking outright but it's a real
-  // gap. The colors[] dictionary was authored by upstream Nguyen
-  // Phan and should NOT be modified in this fork - documenting it
-  // here is the responsible alternative.
-  'discord-light:secondary',
-]);
+// Registry slot for accepted missing keys. Empty today — the
+// discord-light:secondary gap that originally lived here was
+// filled by adding the missing color directly. Future test runs
+// surface fresh gaps; add `<presetId>:<key>` entries here if a
+// fix isn't immediate.
+/** @type {Set<string>} */
+const KNOWN_GAPS = new Set();
 
 function validatePreset(preset, label) {
   if (typeof preset.id !== 'string' || preset.id.length === 0) {
