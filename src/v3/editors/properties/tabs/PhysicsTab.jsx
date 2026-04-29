@@ -17,9 +17,11 @@
  * @module v3/editors/properties/tabs/PhysicsTab
  */
 
-import { Wind } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Wind, Upload, RotateCcw } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { resolvePhysicsRules } from '../../../../io/live2d/rig/physicsConfig.js';
+import { parsePhysics3Json } from '../../../../io/live2d/physics3jsonImport.js';
 
 /**
  * @param {Object} props
@@ -34,6 +36,48 @@ export function PhysicsTab({ nodeId }) {
         Selected item is no longer in the project.
       </div>
     );
+  }
+  return <PhysicsTabBody node={node} />;
+}
+
+function PhysicsTabBody({ node }) {
+  const project = useProjectStore((s) => s.project);
+  const updateProject = useProjectStore((s) => s.updateProject);
+  const seedPhysicsRules = useProjectStore((s) => s.seedPhysicsRules);
+  const fileRef = useRef(null);
+  const [status, setStatus] = useState(null);
+  const stored = Array.isArray(project.physicsRules) ? project.physicsRules : [];
+
+  function handleFile(e) {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => setStatus({ kind: 'error', text: 'Could not read file.' });
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '');
+        const { rules, warnings } = parsePhysics3Json(text);
+        updateProject((p) => {
+          p.physicsRules = rules;
+        });
+        setStatus({
+          kind: warnings.length ? 'warn' : 'ok',
+          text: `Imported ${rules.length} rule(s) from ${file.name}.${
+            warnings.length ? ` ${warnings.length} warning(s).` : ''
+          }`,
+          warnings,
+        });
+      } catch (err) {
+        setStatus({ kind: 'error', text: String((err && err.message) || err) });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+
+  function handleReset() {
+    seedPhysicsRules();
+    setStatus({ kind: 'ok', text: 'Reset to default rules.' });
   }
 
   const rules = resolvePhysicsRules(project) ?? [];
@@ -58,8 +102,59 @@ export function PhysicsTab({ nodeId }) {
           <span className="text-xs font-mono text-foreground">{node.boneRole ?? '—'}</span>
         </Row>
         <Row label="Rules">
-          <span className="text-xs text-foreground tabular-nums">{matched.length}</span>
+          <span className="text-xs text-foreground tabular-nums">
+            {matched.length} matched / {stored.length || rules.length} total
+          </span>
         </Row>
+        <div className="flex items-center gap-1 pt-1">
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-foreground hover:bg-muted/50 transition-colors"
+            title="Replace project physics rules with rules read from a .physics3.json file"
+          >
+            <Upload size={11} /> Import .physics3.json
+          </button>
+          <button
+            type="button"
+            onClick={handleReset}
+            className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+            title="Re-seed project.physicsRules from the auto-rig defaults"
+          >
+            <RotateCcw size={11} /> Reset
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleFile}
+            className="hidden"
+          />
+        </div>
+        {status ? (
+          <div
+            className={
+              'mt-1 text-[10px] leading-snug rounded px-1.5 py-1 border ' +
+              (status.kind === 'error'
+                ? 'border-destructive/40 bg-destructive/5 text-destructive'
+                : status.kind === 'warn'
+                ? 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-500'
+                : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400')
+            }
+          >
+            {status.text}
+            {status.warnings && status.warnings.length > 0 ? (
+              <ul className="mt-0.5 pl-3 list-disc">
+                {status.warnings.slice(0, 4).map((w, i) => (
+                  <li key={i} className="font-mono">{w}</li>
+                ))}
+                {status.warnings.length > 4 ? (
+                  <li>… +{status.warnings.length - 4} more</li>
+                ) : null}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </Section>
 
       {matched.length > 0 ? (

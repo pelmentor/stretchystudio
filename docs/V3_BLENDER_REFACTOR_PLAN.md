@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-29 — Phase first-cut sweep #5 (autonomous)
+
+User said *"Продолжай"* after compact. One more first cut:
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | Physics3 round-trip (import). `src/io/live2d/physics3jsonImport.js` reverse-parses a `.physics3.json` file (Version 3) into the resolved-rule shape `physicsRules` expects. Drops fields physics3 doesn't carry (`requireTag`, `requireAnyTag`, `category`) — imported rules emit unconditionally and group under `category: 'imported'`. PhysicsTab gains an "Import .physics3.json" file picker + "Reset" button, so users can replace `project.physicsRules` with the JSON's contents (undoable via `updateProject`) or re-seed from defaults. Status banner reports rule count + first 4 warnings (skipped settings, unknown input types). Click-through editor / per-rule editing surface deferred to next sweep. |
+
+**Phase coverage after sweep #5:** Phase 5 physics import shipped. Remaining entirely-pending: 4A parity harness, Phase 5 motion timeline scrubbing / asset hot-reload / Live2D `.cmo3` round-trip / touch+pen refactor / onnxruntime opt-in, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #4 (autonomous)
 
 User said *"Не нужен — продолжаю"*. Four more first cuts:
