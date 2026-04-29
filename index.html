@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
+
+    <!-- Phase 4H — PWA hygiene first cut: manifest + theme-color so
+         installable PWA shells (Chrome, Edge, Safari) recognise the
+         app and respect dark backgrounds. Service-worker caching is
+         deferred to a follow-up since hand-rolled SW lifecycle without
+         a tested integration risks shipping stale assets. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="application-name" content="Stretchy Studio" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Stretchy Studio" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
     <title>Stretchy Studio | Rig & Animate SOTA Character Models</title>
     <meta name="description" content="The fastest way to rig and animate 'See-Through' SOTA character models. Transform static layers into expressive, mesh-deformed animations with AI-powered auto-rigging." />
     <meta name="keywords" content="2D animation, mesh deformation, auto-rigging, SOTA models, See-Through, character rigging, DWPose, WebGL" />

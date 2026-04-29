@@ -1,0 +1,19 @@
+{
+  "name": "Stretchy Studio",
+  "short_name": "Stretchy",
+  "description": "Rig & animate SOTA character models — the fastest way to turn PSD layers into Live2D-ready rigged animations.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
