@@ -19,6 +19,8 @@
  */
 
 import { useUIV3Store } from '../../store/uiV3Store.js';
+import { useProjectStore } from '../../store/projectStore.js';
+import { undo, redo, undoCount, redoCount } from '../../store/undoHistory.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -78,6 +80,40 @@ function registerBuiltins() {
     id: 'workspace.reset',
     label: 'Reset active workspace layout',
     exec: () => useUIV3Store.getState().resetWorkspace(),
+  });
+
+  // Undo / redo. v2 wires via useUndoRedo hook (App.jsx); v3 routes
+  // through the operator dispatcher so the same Ctrl+Z chord can be
+  // captured by modal operators (drag, lasso) when they own the
+  // global modifier surface.
+  registerOperator({
+    id: 'app.undo',
+    label: 'Undo',
+    available: () => undoCount() > 0,
+    exec: () => {
+      const project = useProjectStore.getState().project;
+      const updateProject = useProjectStore.getState().updateProject;
+      undo(project, (snapshot) => {
+        updateProject((proj) => {
+          Object.assign(proj, snapshot);
+        }, { skipHistory: true });
+      });
+    },
+  });
+
+  registerOperator({
+    id: 'app.redo',
+    label: 'Redo',
+    available: () => redoCount() > 0,
+    exec: () => {
+      const project = useProjectStore.getState().project;
+      const updateProject = useProjectStore.getState().updateProject;
+      redo(project, (snapshot) => {
+        updateProject((proj) => {
+          Object.assign(proj, snapshot);
+        }, { skipHistory: true });
+      });
+    },
   });
 }
 

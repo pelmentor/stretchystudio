@@ -94,5 +94,29 @@ assertThrows(
   }
 }
 
+// ── undo / redo operators ──────────────────────────────────────────
+
+{
+  const undoOp = getOperator('app.undo');
+  const redoOp = getOperator('app.redo');
+  assert(undoOp !== null, 'app.undo registered');
+  assert(redoOp !== null, 'app.redo registered');
+
+  // available() honours the empty-history state
+  assert(undoOp.available({ editorType: null }) === false,
+    'app.undo unavailable on empty history');
+  assert(redoOp.available({ editorType: null }) === false,
+    'app.redo unavailable on empty history');
+}
+
+// ── undo / redo bindings present ───────────────────────────────────
+
+{
+  assert(DEFAULT_KEYMAP['Ctrl+KeyZ'] === 'app.undo', 'Ctrl+Z → undo');
+  assert(DEFAULT_KEYMAP['Meta+KeyZ'] === 'app.undo', 'Meta+Z → undo (mac)');
+  assert(DEFAULT_KEYMAP['Ctrl+Shift+KeyZ'] === 'app.redo', 'Ctrl+Shift+Z → redo');
+  assert(DEFAULT_KEYMAP['Ctrl+KeyY'] === 'app.redo', 'Ctrl+Y → redo (windows)');
+}
+
 console.log(`v3Operators: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

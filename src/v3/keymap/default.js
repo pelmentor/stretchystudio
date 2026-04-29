@@ -31,6 +31,17 @@ export const DEFAULT_KEYMAP = {
 
   // Layout reset - uncommon enough that Ctrl+Shift+Backspace is fine.
   'Ctrl+Shift+Backspace': 'workspace.reset',
+
+  // Undo / redo. Three chords because Ctrl+Y is muscle-memory for
+  // Windows users and Ctrl+Shift+Z for everyone else; both fire the
+  // same operator. Meta+ variants for macOS handled by the chord
+  // builder reading metaKey alongside ctrlKey.
+  'Ctrl+KeyZ': 'app.undo',
+  'Meta+KeyZ': 'app.undo',
+  'Ctrl+Shift+KeyZ': 'app.redo',
+  'Meta+Shift+KeyZ': 'app.redo',
+  'Ctrl+KeyY': 'app.redo',
+  'Meta+KeyY': 'app.redo',
 };
 
 /**
