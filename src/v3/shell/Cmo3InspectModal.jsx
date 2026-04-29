@@ -16,7 +16,7 @@
  * @module v3/shell/Cmo3InspectModal
  */
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -26,9 +26,11 @@ import {
 } from '../../components/ui/dialog.jsx';
 import { Button } from '../../components/ui/button.jsx';
 import { ScrollArea } from '../../components/ui/scroll-area.jsx';
-import { FileSearch, AlertTriangle, RotateCcw } from 'lucide-react';
+import { FileSearch, AlertTriangle, RotateCcw, Download } from 'lucide-react';
 import { inspectCmo3 } from '../../io/live2d/cmo3Inspect.js';
+import { importCmo3 } from '../../io/live2d/cmo3Import.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
+import { useProjectStore } from '../../store/projectStore.js';
 
 export function Cmo3InspectModal() {
   const open = useCmo3InspectStore((s) => s.open);
@@ -40,16 +42,43 @@ export function Cmo3InspectModal() {
   const reset = useCmo3InspectStore((s) => s.reset);
 
   const fileInputRef = useRef(/** @type {HTMLInputElement|null} */ (null));
+  // Stash the raw bytes from the most recent pick so the "Import as new
+  // project" button can re-run the parse without forcing the user to
+  // re-pick the file. Cleared on `reset`.
+  const lastBytesRef = useRef(/** @type {Uint8Array|null} */ (null));
+  const [importing, setImporting] = useState(false);
 
   async function handleFile(file) {
     const store = useCmo3InspectStore.getState();
     store.setPending(file.name);
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
+      lastBytesRef.current = buf;
       const meta = await inspectCmo3(buf);
       store.setResult(file.name, meta);
     } catch (err) {
+      lastBytesRef.current = null;
       store.setError(file.name, (err && err.message) || String(err));
+    }
+  }
+
+  async function handleImportAsProject() {
+    const bytes = lastBytesRef.current;
+    if (!bytes) return;
+    setImporting(true);
+    try {
+      const { project, warnings, stats } = await importCmo3(bytes);
+      useProjectStore.getState().loadProject(project);
+      const summary = `Imported ${stats.parts} parts, ${stats.groups} groups, ${stats.textures} textures, ${stats.parameters} parameters` +
+        (warnings.length > 0 ? ` (${warnings.length} warning${warnings.length === 1 ? '' : 's'})` : '');
+      // Use the inspector-store's message channel to surface it. Closes
+      // the modal after a brief moment so the user sees the loaded scene.
+      window.alert(summary);
+      close();
+    } catch (err) {
+      useCmo3InspectStore.getState().setError(fileName ?? '(unknown)', `import failed: ${(err instanceof Error) ? err.message : String(err)}`);
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -69,9 +98,10 @@ export function Cmo3InspectModal() {
             Inspect .cmo3
           </DialogTitle>
           <DialogDescription>
-            Reads a Cubism Editor project file and shows what's inside —
-            canvas, parameters, parts, textures. Read-only first cut: full
-            project ingest is a follow-on sweep.
+            Reads a Cubism Editor project file. Inspect-only first; the
+            Import button below loads the geometry / textures / parameters
+            as a new SS project. Deformer rig + keyforms + variants stay
+            in Cubism — those land in follow-on sweeps.
           </DialogDescription>
         </DialogHeader>
 
@@ -84,8 +114,25 @@ export function Cmo3InspectModal() {
           >
             Pick .cmo3 file…
           </Button>
+          {result && !error ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              disabled={importing}
+              onClick={handleImportAsProject}
+            >
+              <Download size={12} className="mr-1" />
+              {importing ? 'Importing…' : 'Import as new project'}
+            </Button>
+          ) : null}
           {result || error ? (
-            <Button type="button" variant="ghost" size="sm" onClick={reset}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => { lastBytesRef.current = null; reset(); }}
+            >
               <RotateCcw size={12} className="mr-1" /> Clear
             </Button>
           ) : null}
