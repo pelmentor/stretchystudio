@@ -32,6 +32,17 @@ const TABS = [
     id: 'parameter',
     applies: ({ active }) => active.type === 'parameter',
   },
+  {
+    id: 'variant',
+    applies: ({ active, project }) => {
+      if (active.type !== 'part') return false;
+      const nodes = project?.nodes ?? [];
+      const node = nodes.find((n) => n?.id === active.id);
+      if (!node) return false;
+      if (node.variantOf) return true;
+      return nodes.some((n) => n?.variantOf === active.id);
+    },
+  },
 ];
 
 function tabsFor(ctx) {
@@ -155,6 +166,62 @@ function assert(cond, name) {
   assert(JSON.stringify(a) === JSON.stringify(b), 'output order is stable');
   assert(JSON.stringify(a) === '["object","blendShapes"]',
     'canonical part order');
+}
+
+// ── Variant tab: shows on a variant child (variantOf set) ───────────
+
+{
+  const tabs = tabsFor({
+    active: { type: 'part', id: 'face_smile' },
+    project: {
+      nodes: [
+        { id: 'face',       type: 'part', mesh: { vertices: [] } },
+        { id: 'face_smile', type: 'part', mesh: { vertices: [] }, variantOf: 'face', variantSuffix: 'smile' },
+      ],
+    },
+  });
+  const ids = tabs.map((t) => t.id);
+  assert(ids.includes('variant'), 'variant child: Variant tab present');
+  assert(ids.includes('object'),     'variant child: Object tab present');
+  assert(ids.includes('blendShapes'), 'variant child: BlendShapes tab present (mesh)');
+}
+
+// ── Variant tab: shows on a base whose children point at it ─────────
+
+{
+  const tabs = tabsFor({
+    active: { type: 'part', id: 'face' },
+    project: {
+      nodes: [
+        { id: 'face',       type: 'part', mesh: { vertices: [] } },
+        { id: 'face_smile', type: 'part', variantOf: 'face', variantSuffix: 'smile' },
+      ],
+    },
+  });
+  assert(tabs.some((t) => t.id === 'variant'),
+    'variant base: Variant tab present');
+}
+
+// ── Variant tab: hidden on parts with no variant relationship ───────
+
+{
+  const tabs = tabsFor({
+    active: { type: 'part', id: 'p1' },
+    project: { nodes: [{ id: 'p1', type: 'part', mesh: { vertices: [] } }] },
+  });
+  assert(!tabs.some((t) => t.id === 'variant'),
+    'plain part: Variant tab absent');
+}
+
+// ── Variant tab: hidden when active is a deformer/parameter ─────────
+
+{
+  const tabs = tabsFor({
+    active: { type: 'parameter', id: 'ParamSmile' },
+    project: { nodes: [{ id: 'p1', type: 'part', variantOf: 'p2' }] },
+  });
+  assert(!tabs.some((t) => t.id === 'variant'),
+    'parameter selection: Variant tab not applied');
 }
 
 console.log(`propertiesTabRegistry: ${passed} passed, ${failed} failed`);

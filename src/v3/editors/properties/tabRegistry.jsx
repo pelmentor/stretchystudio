@@ -27,6 +27,7 @@ import { ObjectTab } from './tabs/ObjectTab.jsx';
 import { DeformerTab } from './tabs/DeformerTab.jsx';
 import { ParameterTab } from './tabs/ParameterTab.jsx';
 import { BlendShapeTab } from './tabs/BlendShapeTab.jsx';
+import { VariantTab } from './tabs/VariantTab.jsx';
 
 /**
  * @typedef {Object} TabContext
@@ -69,6 +70,22 @@ export const PROPERTIES_TABS = [
     label: 'Parameter',
     applies: ({ active }) => active.type === 'parameter',
     render: ({ active }) => <ParameterTab parameterId={active.id} />,
+  },
+  {
+    id: 'variant',
+    label: 'Variant',
+    // Show whenever the active part is a variant (`variantOf` set) OR
+    // is a base that has variants pointing at it. Hidden for parts
+    // with no variant relationship at all.
+    applies: ({ active, project }) => {
+      if (active.type !== 'part') return false;
+      const nodes = project?.nodes ?? [];
+      const node = nodes.find((n) => n?.id === active.id);
+      if (!node) return false;
+      if (node.variantOf) return true;
+      return nodes.some((n) => n?.variantOf === active.id);
+    },
+    render: ({ active }) => <VariantTab nodeId={active.id} />,
   },
 ];
 
