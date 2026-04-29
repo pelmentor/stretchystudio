@@ -24,6 +24,7 @@ import { WorkspaceTabs } from './WorkspaceTabs.jsx';
 import { AreaTree } from './AreaTree.jsx';
 import { SaveModal } from './SaveModal.jsx';
 import { LoadModal } from './LoadModal.jsx';
+import { ExportModal } from './ExportModal.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
@@ -40,6 +41,7 @@ export function AppShell() {
         <AreaTree />
         <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
         <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />
+        <ExportModal />
       </div>
     </ErrorBoundary>
   );
