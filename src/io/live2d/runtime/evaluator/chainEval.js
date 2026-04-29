@@ -199,10 +199,21 @@ class DeformerStateCache {
     this._rigSpec = rigSpec;
     this._paramValues = paramValues ?? {};
     this._byId = new Map();
-    // Cache the canvas-px → warp-normalised scale once per call.
+    // Cache the canvas-px → warp-input-frame slopes once per call.
+    // The reverse-engineered moc3 value `1/canvasMaxDim` only matches the
+    // Cubism convention when the warp parent's input frame happens to be
+    // `canvas/canvasMaxDim`-normalised (true for Hiyori where the body
+    // warp chain spans the canvas; FALSE for character rigs whose
+    // BodyXWarp covers a smaller extent — shelby's slope is ~5×
+    // larger). We pull the actual slope from `canvasToInnermostX/Y`,
+    // which encodes the chained BZ/BY/BR/BX normalisation slopes.
     const w = rigSpec?.canvas?.w ?? 0;
     const h = rigSpec?.canvas?.h ?? 0;
-    this._canvasMaxDim = Math.max(w, h) || 1;
+    const cmd = Math.max(w, h) || 1;
+    const cToX = rigSpec?.canvasToInnermostX;
+    const cToY = rigSpec?.canvasToInnermostY;
+    this._warpSlopeX = typeof cToX === 'function' ? (cToX(1) - cToX(0)) : 1 / cmd;
+    this._warpSlopeY = typeof cToY === 'function' ? (cToY(1) - cToY(0)) : 1 / cmd;
   }
 
   getState(spec) {
@@ -222,19 +233,54 @@ class DeformerStateCache {
         const r = evalRotation(spec, cell);
         if (r) {
           // Apply the parent-frame conversion — see class doc above.
-          const parentFrameScale = spec.parent?.type === 'warp'
-            ? 1 / this._canvasMaxDim
-            : 1;
-          // Compose: outerScale × R × innerScale-and-reflect on the linear
-          // part; origin is left in the parent's frame.
-          const rState = parentFrameScale === 1
-            ? r
-            : { ...r, scale: (r.scale ?? 1) * parentFrameScale };
-          state = { kind: 'rotation', mat: buildRotationMat3(rState) };
+          // For warp parents the scale must collapse pivot-relative canvas-
+          // pixels into the parent warp's INPUT frame, which is `0..1` of
+          // its grid bbox. Scale anisotropic to handle non-square bboxes.
+          // For rotation parents, the child's canvas-px stays canvas-px.
+          const isWarpParent = spec.parent?.type === 'warp';
+          const sx = isWarpParent ? this._warpSlopeX : 1;
+          const sy = isWarpParent ? this._warpSlopeY : 1;
+          state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
         }
       }
     }
     this._byId.set(spec.id, state);
     return state;
   }
+}
+
+/**
+ * Build a rotation matrix with anisotropic frame-conversion scale baked
+ * into the linear part. Equivalent to buildRotationMat3 but with separate
+ * X/Y scales applied AFTER the rotation/reflect (pre-multiplied diag).
+ *
+ * @param {{angleDeg:number, originX:number, originY:number, scale?:number,
+ *          reflectX?:boolean, reflectY?:boolean}} r
+ * @param {number} extraSx
+ * @param {number} extraSy
+ * @returns {Float64Array}
+ */
+function buildRotationMat3Aniso(r, extraSx, extraSy) {
+  if (extraSx === 1 && extraSy === 1) return buildRotationMat3(r);
+  const angleDeg = r?.angleDeg ?? 0;
+  const ox = r?.originX ?? 0;
+  const oy = r?.originY ?? 0;
+  const s = r?.scale ?? 1;
+  const rx = r?.reflectX ? -1 : 1;
+  const ry = r?.reflectY ? -1 : 1;
+  const rad = (angleDeg * Math.PI) / 180;
+  const cs = Math.cos(rad);
+  const sn = Math.sin(rad);
+  // Linear = diag(extraSx, extraSy) · R · diag(s*rx, s*ry).
+  // The frame-conversion scale wraps the OUTSIDE so origin (already in
+  // parent's frame) doesn't get scaled.
+  const a = extraSx * cs * s * rx;
+  const b = extraSx * (-sn) * s * ry;
+  const d = extraSy * sn * s * rx;
+  const e = extraSy * cs * s * ry;
+  const m = new Float64Array(9);
+  m[0] = a; m[1] = b; m[2] = ox;
+  m[3] = d; m[4] = e; m[5] = oy;
+  m[6] = 0; m[7] = 0; m[8] = 1;
+  return m;
 }
