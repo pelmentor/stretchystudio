@@ -952,20 +952,58 @@ implementation; call sites stay the same.
 
 ---
 
-### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: keymap viewer first cut shipped 2026-04-29 (`2fee609`); writers split + cleanup pending]**
+### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: cmo3writer breakup in progress (4468→4183 LOC, sweeps #24–#26 2026-04-30); keymap viewer first cut shipped 2026-04-29 (`2fee609`); moc3writer split + final cleanup pending]**
 
 - Remove old shell entirely
 - Remove `?ui=v3` killswitch (now default)
 - Remove old ParametersPanel, EditorLayout, etc.
 - **God-class breakup, round 2** (Pillar A continuation):
-  - `cmo3writer.js` (4439 LOC) → `cmo3/{parts,deformers,keyforms,
-    masks,variants,boneBaking}.js`
-  - `moc3writer.js` (1572 LOC) → `moc3/{header,parameters,parts,
-    deformers,artMeshes,keyforms,physics}.js`
+  - `cmo3writer.js` — **🟡 in progress** (4468 → 4183 LOC, −285,
+    −6.4%). 11 modules under `src/io/live2d/cmo3/`; the original
+    `{parts,deformers,keyforms,masks,variants,boneBaking}` target
+    didn't survive contact with the actual code, replaced by
+    cohesion-driven units shipped 2026-04-30:
+    - Pre-existing (sweeps prior to 2026-04-30): `constants.js`,
+      `bodyRig.js`, `deformerEmit.js`, `faceParallax.js`, `physics.js`
+      (509 LOC), `pngHelpers.js`.
+    - Sweep #24: `rigWarpTags.js` (per-tag warp grid sizes + face
+      parallax membership + neck warp tags); `paramCategories.js`
+      (Random Pose dialog taxonomy + classifier, 72 tests);
+      `groupWorldMatrices.js` (memoised parent-chain world matrices
+      + deformer origins, 18 tests).
+    - Sweep #25: `eyeClosureFit.js` (parabola fit on eyewhite/lash
+      lower edge, 27 tests; drops orphaned `extractBottomContour`
+      import from writer).
+    - Sweep #26: `eyeClosureApply.js` (apply curve to mesh — eval
+      + canvas-space compute + frame conversion, 35 tests). Unblocks
+      future `lashStripFrac`-driven A/B comparison without forking
+      writer code.
+    - **Pending**: section 2 (PSD layer emission, ~1000 LOC),
+      section 3 (Part hierarchy + rotation deformer emission, ~1000
+      LOC), section 3c (per-tag rig warp emission, ~316 LOC),
+      section 3d (body warp chain glue), section 4 (CArtMeshSource,
+      ~1100 LOC), section 6 (main.xml top-level assembly, ~430 LOC).
+      These are heavily XmlBuilder-closure-coupled — extraction
+      requires either passing the builder + shared pid maps as
+      parameters or a separate extraction style. Each is its own
+      sweep; ship one at a time with e2e_equivalence as the safety
+      net.
+  - `moc3writer.js` (1573 LOC) — **⏳ untouched**. Target shape per
+    the original plan: `moc3/{header,parameters,parts,deformers,
+    artMeshes,keyforms,physics}.js`. Each section is more
+    cohesively bounded than cmo3writer's (binary writer with
+    fixed-offset section emit) so likely a cleaner cut. Schedule
+    after cmo3writer round-3 sweeps complete.
 - ✅ Python tooling README (Pillar W) shipped sweep #4 — `scripts/dev-tools/README.md` documents the five moc3 inspectors + depth-PSD analyzer + body verifier (purpose, install, invocation).
 - Final dead code audit (round 2)
 - Documentation pass: full user manual + dev guide
 - Performance audit — re-bench v2 evaluator under v3 shell
+- **Surfaced during sweep #25 RCA** (orphan `GroupRotation_*`
+  deformers — see deferred-bugs section): the rig-warp ↔
+  rotation-deformer chain wiring needs a writer-level fix before
+  Phase 6 final tag. Touches the rig-warp grid coord-space
+  convention; needs Hiyori parity validation. Listed here so it
+  doesn't slip through to a "v3-shipped" tag with the bug intact.
 
 Final tag `v3-shipped` после Phase 6 зелёный.
 
@@ -1531,18 +1569,18 @@ for that polish round.
 
 ---
 
-### 2026-04-30 — Phase first-cut sweep #24 (autonomous, Phase 6 cmo3writer extractions)
+### 2026-04-30 — Phase first-cut sweeps #24 + #25 (autonomous, Phase 6 cmo3writer extractions)
 
-After sweep #23 closed the last deferred bug actionable from code, sweep #24 attacks Phase 6 — god-class breakup of `cmo3writer.js` (4468 LOC). The previous extraction pass (Sessions 19–28) carved out `cmo3/constants.js`, `bodyRig.js`, `deformerEmit.js`, `faceParallax.js`, `physics.js`, `pngHelpers.js`; the writer was left as one giant `generateCmo3` async function with sections 1-7 split only by comment dividers. Sweep #24 ships four cohesive sub-modules with tests, all behaviour-preserving (e2e_equivalence + rigSpec + warpDeformers + rigWarps stay 100% green).
+After sweep #23 closed the last deferred bug actionable from code, sweeps #24 + #25 attack Phase 6 — god-class breakup of `cmo3writer.js` (4468 LOC). The previous extraction pass (Sessions 19–28) carved out `cmo3/constants.js`, `bodyRig.js`, `deformerEmit.js`, `faceParallax.js`, `physics.js`, `pngHelpers.js`; the writer was left as one giant `generateCmo3` async function with sections 1-7 split only by comment dividers. Combined #24 + #25 ship four cohesive sub-modules with tests, all behaviour-preserving (e2e_equivalence + rigSpec + warpDeformers + rigWarps stay 100% green).
 
-| Phase | Deliverable |
-|-------|-------------|
-| 6 | `cmo3/rigWarpTags.js` — `RIG_WARP_TAGS` (per-tag warp grid sizes), `FACE_PARALLAX_TAGS` / `FACE_PARALLAX_DEPTH` (Session 19 unified-face-warp membership), `NECK_WARP_TAGS` (head-tilt followers). 80 LOC of pure data, no closures. |
-| 6 | `cmo3/paramCategories.js` — `CATEGORY_DEFS` (frozen 10-folder Random-Pose-dialog taxonomy) + `categorizeParam(id)` (regex/string-table classifier). New `test_paramCategories.mjs`: 72 tests covering every branch + falsy guards + L/R-suffix edge cases. |
-| 6 | `cmo3/groupWorldMatrices.js` — `computeGroupWorldMatrices(groups, meshes, canvasW, canvasH) → { groupWorldMatrices, deformerWorldOrigins }`. Memoised parent-chain traversal + pivot-fallback BFS. New `test_groupWorldMatrices.mjs`: 18 tests covering identity, propagation, pivot-transform, descendant-bbox fallback, canvas-centre fallback, orphan parents, memoisation. |
-| 6 | `cmo3/eyeClosureFit.js` — `fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts) → ParabolaCurve|null`. The lash-mirror + bin-max + PNG-alpha fallback parabola fitter. New `test_eyeClosureFit.mjs`: 27 tests covering degenerate input, flat-line fit, U-shape concavity, lower-edge extraction, PNG-source tracking, eyelash-fallback mirror, custom binCount. Also drops the now-orphaned `extractBottomContourFromLayerPng` import from the writer. |
+| Sweep | Phase | Deliverable |
+|-------|-------|-------------|
+| #24 | 6 | `cmo3/rigWarpTags.js` — `RIG_WARP_TAGS` (per-tag warp grid sizes), `FACE_PARALLAX_TAGS` / `FACE_PARALLAX_DEPTH` (Session 19 unified-face-warp membership), `NECK_WARP_TAGS` (head-tilt followers). 80 LOC of pure data, no closures. |
+| #24 | 6 | `cmo3/paramCategories.js` — `CATEGORY_DEFS` (frozen 10-folder Random-Pose-dialog taxonomy) + `categorizeParam(id)` (regex/string-table classifier). New `test_paramCategories.mjs`: 72 tests covering every branch + falsy guards + L/R-suffix edge cases. |
+| #24 | 6 | `cmo3/groupWorldMatrices.js` — `computeGroupWorldMatrices(groups, meshes, canvasW, canvasH) → { groupWorldMatrices, deformerWorldOrigins }`. Memoised parent-chain traversal + pivot-fallback BFS. New `test_groupWorldMatrices.mjs`: 18 tests covering identity, propagation, pivot-transform, descendant-bbox fallback, canvas-centre fallback, orphan parents, memoisation. |
+| #25 | 6 | `cmo3/eyeClosureFit.js` — `fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts) → ParabolaCurve|null`. The lash-mirror + bin-max + PNG-alpha fallback parabola fitter. New `test_eyeClosureFit.mjs`: 27 tests covering degenerate input, flat-line fit, U-shape concavity, lower-edge extraction, PNG-source tracking, eyelash-fallback mirror, custom binCount. Also drops the now-orphaned `extractBottomContourFromLayerPng` import from the writer. |
 
-**LOC delta for cmo3writer.js**: 4468 → 4255 (−213). Total module count under `src/io/live2d/cmo3/` grew 6 → 10. Combined sweep added 2 new modules + 134 new test assertions.
+**LOC delta for cmo3writer.js**: 4468 → 4255 (−213, post-#25). Total module count under `src/io/live2d/cmo3/` grew 6 → 10. Combined #24+#25: 4 new modules + 117 new test assertions (72 + 18 + 27).
 
 ---
 
