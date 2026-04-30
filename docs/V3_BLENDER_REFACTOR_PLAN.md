@@ -952,42 +952,56 @@ implementation; call sites stay the same.
 
 ---
 
-### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: cmo3writer breakup in progress (4468→4183 LOC, sweeps #24–#26 2026-04-30); keymap viewer first cut shipped 2026-04-29 (`2fee609`); moc3writer split + final cleanup pending]**
+### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: cmo3writer breakup deep into 18-module split (4468→3334 LOC, −25%, sweeps #24–#30 2026-04-30); keymap viewer first cut shipped 2026-04-29 (`2fee609`); moc3writer split + final cleanup pending]**
 
 - Remove old shell entirely
 - Remove `?ui=v3` killswitch (now default)
 - Remove old ParametersPanel, EditorLayout, etc.
 - **God-class breakup, round 2** (Pillar A continuation):
-  - `cmo3writer.js` — **🟡 in progress** (4468 → 4183 LOC, −285,
-    −6.4%). 11 modules under `src/io/live2d/cmo3/`; the original
+  - `cmo3writer.js` — **🟡 in progress** (4468 → 3334 LOC, −1134,
+    −25%). 18 modules under `src/io/live2d/cmo3/`. The original
     `{parts,deformers,keyforms,masks,variants,boneBaking}` target
-    didn't survive contact with the actual code, replaced by
-    cohesion-driven units shipped 2026-04-30:
-    - Pre-existing (sweeps prior to 2026-04-30): `constants.js`,
-      `bodyRig.js`, `deformerEmit.js`, `faceParallax.js`, `physics.js`
-      (509 LOC), `pngHelpers.js`.
-    - Sweep #24: `rigWarpTags.js` (per-tag warp grid sizes + face
-      parallax membership + neck warp tags); `paramCategories.js`
-      (Random Pose dialog taxonomy + classifier, 72 tests);
-      `groupWorldMatrices.js` (memoised parent-chain world matrices
-      + deformer origins, 18 tests).
-    - Sweep #25: `eyeClosureFit.js` (parabola fit on eyewhite/lash
-      lower edge, 27 tests; drops orphaned `extractBottomContour`
-      import from writer).
-    - Sweep #26: `eyeClosureApply.js` (apply curve to mesh — eval
-      + canvas-space compute + frame conversion, 35 tests). Unblocks
-      future `lashStripFrac`-driven A/B comparison without forking
-      writer code.
-    - **Pending**: section 2 (PSD layer emission, ~1000 LOC),
-      section 3 (Part hierarchy + rotation deformer emission, ~1000
-      LOC), section 3c (per-tag rig warp emission, ~316 LOC),
-      section 3d (body warp chain glue), section 4 (CArtMeshSource,
-      ~1100 LOC), section 6 (main.xml top-level assembly, ~430 LOC).
-      These are heavily XmlBuilder-closure-coupled — extraction
-      requires either passing the builder + shared pid maps as
-      parameters or a separate extraction style. Each is its own
-      sweep; ship one at a time with e2e_equivalence as the safety
-      net.
+    didn't survive contact with the actual code; replaced by
+    cohesion-driven units shipped across sweeps #24-#30 (2026-04-30):
+    - Pre-existing (Sessions 19-28): `constants.js`, `bodyRig.js`,
+      `deformerEmit.js`, `faceParallax.js`, `physics.js` (509 LOC),
+      `pngHelpers.js`.
+    - Sweep #24: `rigWarpTags.js`, `paramCategories.js` (72 tests),
+      `groupWorldMatrices.js` (18 tests).
+    - Sweep #25: `eyeClosureFit.js` (27 tests, drops orphaned
+      `extractBottomContour` import from writer).
+    - Sweep #26: `eyeClosureApply.js` (35 tests). Unblocks future
+      `lashStripFrac`-driven A/B comparison without forking writer.
+    - Sweep #27: `globalSetup.js` (Section 1, 250 LOC — bundle of all
+      shared pid setup: core GUIDs, paramDefs from paramSpec, group
+      part guids, 19 filter pids); `modelImageGroup.js` (Section 5);
+      `mainXmlBuilder.js` (Section 6, 313 LOC — full main.xml root +
+      CModelSource + parameter group set + Random Pose manager);
+      `caffPack.js` (Section 7).
+    - Sweep #28: `meshLayer.js` (per-mesh ModelImageFilterSet +
+      GTexture2D + CTextureInputExtension + Section 2b
+      `fillLayerGroupAndImage`).
+    - Sweep #29: `partHierarchy.js` (Section 3 — `makePartSource`
+      boilerplate + full Root/Group/Mesh _childGuids wiring).
+    - Sweep #30: `bodyChainEmit.js` (Section 3d head — translates
+      `buildBodyWarpChain` specs into XML); `lookupStandardParamPids`
+      added to globalSetup.js (collapses 21-line `paramDefs.find`
+      block into a single destructure).
+    - **Pending**: section 3b ROTATION DEFORMERS per group (~262
+      LOC, heavily coupled to deformerWorldOrigins + groupMap +
+      groupDeformerGuids + boneParamGuids + rigCollector — needs
+      careful interface design); section 3b CWarpDeformerSource
+      per-mesh-vert-anim track (~243 LOC, IDW math + per-keyframe
+      grid); section 3c per-tag rig warp emission (~850 LOC, the
+      biggest block left — TAG_PARAM_BINDINGS + per-mesh grid
+      construction + rebase under face-parallax/neck/body); section
+      3d.{1,2} structural follow-on (Neck Warp + Face Rotation +
+      Face Parallax orchestration, already calls extracted helpers
+      in `bodyRig.js` + `faceParallax.js`); section 4 CArtMeshSource
+      per mesh (~665 LOC, the biggest single per-mesh emission).
+      All are XmlBuilder-closure-coupled — extraction needs a
+      shared-context object pattern. Ship one at a time with
+      e2e_equivalence as the safety net.
   - `moc3writer.js` (1573 LOC) — **⏳ untouched**. Target shape per
     the original plan: `moc3/{header,parameters,parts,deformers,
     artMeshes,keyforms,physics}.js`. Each section is more
@@ -1594,6 +1608,23 @@ Sweep #25 ran a careful eye-closure-helper extraction; sweep #26 finishes the ey
 | Bug RCA | `docs/V3_BLENDER_REFACTOR_PLAN.md` deferred-bugs entry expanded with a 22-line root-cause analysis for "most bone controllers don't move attached body parts": cmo3writer emits `GroupRotation_<groupId>` rotation deformers that end up as **siblings** of `RigWarp_*` under `BodyXWarp` — never in the mesh's parent chain. Bone-baked meshes work (artParent explicitly hooks the deformer at line 3447–3448); tagged body meshes (topwear / hair / face parts) don't. Fix is non-trivial (rig-warp grid coord-space convention shift) and needs Hiyori parity validation; left for a session with browser eyes. |
 
 **LOC delta for cmo3writer.js**: 4255 → 4183 (−72). Cumulative since sweep #24: 4468 → 4183 (−285). Sweep #26 adds 1 new module + 35 test assertions. `cmo3/` directory now 11 files / ~2.1k LOC of the writer's logic.
+
+---
+
+### 2026-04-30 — Phase first-cut sweeps #27-#30 (autonomous, "разбить god class по максимуму")
+
+User directive: "Может стоит god class разбить по максимуму?". Four sweeps in series targeting the structural backbone of `cmo3writer.js` — sections 1, 5, 6, 7 first (the simpler bookends), then 2b + 3 + 3d-head + the standard-param-pid lookup.
+
+| Sweep | HEAD | Phase | Deliverable |
+|-------|------|-------|-------------|
+| #27 | `6e3f28d` | 6 | `cmo3/globalSetup.js` (Section 1, 250 LOC) — `setupGlobalSharedObjects(x, opts)` returns a 30-field bundle: core GUIDs (param-group root, model, part, blend, deformer ROOT/null, CoordType), param-derived state (paramSpecs → paramDefs with CParameterGuid pids, ParamOpacity handle, baked-angle bounds, boneParamGuids), groupPartGuids, plus 19 filter pids. `cmo3/modelImageGroup.js` (Section 5) — `emitModelImageGroup`. `cmo3/mainXmlBuilder.js` (Section 6, 313 LOC) — `buildMainXml(x, opts)` assembles the full <root>: CModelSource + canvas + parameters + textureManager + drawable/deformer/affecter/part source sets + optional physics + parameter group set + modelInfo + 3 preview icons + gameMotionSet + ModelViewerSetting + guides + version stamps + brushes + CRandomPoseSettingManager. `cmo3/caffPack.js` (Section 7) — `packCmo3` archives icons + per-mesh PNGs + main.xml. paramSpec.js typedef gained `bakedKeyformAngles` + `rotationDeformerConfig` fields. **LOC: 4183 → 3642 (−541, −13%).** |
+| #28 | `fa7c303` | 6 | `cmo3/meshLayer.js` — `emitMeshFilterGraph` (per-mesh ModelImageFilterSet + 2 FilterInstances + connectors), `emitMeshTexture` (GTexture2D + CTextureInputExtension + CTextureInput_ModelImage), `fillLayerGroupAndImage` (Section 2b — populates the shared CLayerGroup + CLayeredImage XML nodes). Per-mesh layer block in writer is now ~10 lines. **LOC: 3642 → 3496 (−146).** |
+| #29 | `cc47a3a` | 6 | `cmo3/partHierarchy.js` (Section 3) — `makePartSource(x, ...)` + `buildPartHierarchy(x, opts)`. Returns rootPart + allPartSources + groupParts. Caught one bug from sweep #28 (missed `pidTex2d` / `pidTimi` destructure in `emitMeshTexture` call site — perMesh entries needed them). **LOC: 3496 → 3378 (−118).** |
+| #30 | `03f5cb7` | 6 | `cmo3/bodyChainEmit.js` (Section 3d head) — `emitBodyWarpChain(x, opts)` translates the 4 WarpDeformerSpec entries from buildBodyWarpChain into XML; returns pidBreathGuid + pidBodyXGuid as re-parent targets. `lookupStandardParamPids(paramDefs)` added to globalSetup.js — collapses 21 lines of inline `paramDefs.find` calls into one destructure. **LOC: 3378 → 3334 (−44).** |
+
+**Cumulative cmo3writer.js LOC delta sweeps #24-#30**: 4468 → 3334 (−1134, −25%). 11 modules → 18 under `src/io/live2d/cmo3/`. All 70+ test suites stay green; e2e_equivalence + rigSpec + warpDeformers + rigWarps confirm zero behavioural shift in cmo3 output.
+
+**What's left in cmo3writer.js (3334 LOC)**: section 3b ROTATION DEFORMERS (~262 LOC), section 3b CWarpDeformerSource per-mesh-vert (~243 LOC, IDW math), section 3c per-tag rig warp emission (~850 LOC — biggest single block left), section 3d.{1,2} face/neck orchestration (already uses extracted helpers, just glue), section 4 CArtMeshSource per mesh (~665 LOC). All XmlBuilder-closure-coupled; future sweeps will need a shared-context object pattern (e.g. an `EmitContext` carrying `x`, rigCollector, deformerWorldOrigins, groupMap, etc.) or accept many parameters.
 
 ---
 
