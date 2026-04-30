@@ -36,6 +36,8 @@ import { buildMeshBindingPlan } from './moc3/meshBindingPlan.js';
 import { topoSortDeformers } from './moc3/deformerOrder.js';
 import { buildKeyformBindings } from './moc3/keyformBindings.js';
 import { emitKeyformAndDeformerSections } from './moc3/keyformAndDeformerSections.js';
+import { buildMeshDeformerParents } from './moc3/meshDeformerParent.js';
+import { buildUvAndIndices } from './moc3/uvAndIndices.js';
 
 
 // ---------------------------------------------------------------------------
@@ -409,78 +411,23 @@ function buildSectionData(input) {
   counts[COUNT_IDX.KEYFORM_POSITIONS] = kfd.allKeyformPositions.length;
   sections.set('keyform_position.xys', kfd.allKeyformPositions);
 
-  // ── Re-parent art meshes to their rig warp (or deepest body warp) ──
-  // Each mesh tries to parent to its dedicated rig warp first (per-mesh
-  // structural warp from the cmo3 emit); otherwise falls back to the
-  // deepest body warp (BodyXWarp).
-  //
+  // ── Re-parent art meshes to their rig warp / bone rot / body warp ──
+  // See moc3/meshDeformerParent.js for the cascade.
   // parent_part_indices STAYS at the mesh's group/root part — Cubism uses
   // it for the drawing-tree hierarchy (visibility, draw-order organisation),
-  // independent of the deformer chain that handles transformation. cmo3
-  // sets meshSrc.parentGuid the same way regardless of any deformer parent.
-  if (meshDefaultDeformerIdx >= 0) {
-    // Map mesh.partId → UNIFIED deformer index (post-topo-sort).
-    // art_mesh.parent_deformer_indices references the umbrella deformer.*
-    // array — using warpSpecs's natural index here pointed meshes at the
-    // wrong deformer entirely (severe misrendering with arms swapped, body
-    // collapsed). Resolving via deformerIdToIndex keeps the topo-sorted
-    // order honoured.
-    const partIdToDeformerIdx = new Map();
-    for (const w of warpSpecs) {
-      if (!w.targetPartId) continue;
-      const ui = deformerIdToIndex.get(w.id);
-      if (ui != null) partIdToDeformerIdx.set(w.targetPartId, ui);
-    }
-    // Map groupId → group rotation deformer's UNIFIED index. Bone-baked
-    // meshes (arms / legs) parent to their bone's parent group's rotation
-    // deformer (matches cmo3's `dfOwner = boneGroup.parent`); non-rig-warp
-    // meshes parent to their own group's rotation deformer when one exists.
-    const groupIdToRotIdx = new Map();
-    for (const r of rotationSpecs) {
-      if (!r.id?.startsWith('GroupRotation_')) continue;
-      const gid = r.id.substring('GroupRotation_'.length);
-      const ui = deformerIdToIndex.get(r.id);
-      if (ui != null) groupIdToRotIdx.set(gid, ui);
-    }
-    sections.set('art_mesh.parent_deformer_indices', meshParts.map(p => {
-      // 1. Mesh has its own rig warp → parent to it.
-      const fromRigWarp = partIdToDeformerIdx.get(p.id);
-      if (fromRigWarp != null) return fromRigWarp;
-      // 2. Bone-baked mesh → bone's parent group's rotation deformer.
-      const jointBoneId = p.mesh?.jointBoneId;
-      if (jointBoneId && p.mesh?.boneWeights) {
-        const boneGroup = groups.find(g => g.id === jointBoneId);
-        const armGroupId = boneGroup?.parent;
-        if (armGroupId && groupIdToRotIdx.has(armGroupId)) {
-          return groupIdToRotIdx.get(armGroupId);
-        }
-      }
-      // 3. Mesh's own group's rotation deformer.
-      if (p.parent && groupIdToRotIdx.has(p.parent)) {
-        return groupIdToRotIdx.get(p.parent);
-      }
-      // 4. Fallback: deepest body warp (root of the chain).
-      return meshDefaultDeformerIdx;
-    }));
-    // Re-emit parent_part_indices to overwrite an earlier set; mesh keeps
-    // its group as part parent.
-    sections.set('art_mesh.parent_part_indices', meshParts.map(p => {
-      if (p.parent && partIdMap.has(p.parent)) return partIdMap.get(p.parent);
-      return 0;
-    }));
-
-    // Mesh keyform_position frame matches its parent deformer's local frame.
-    // For a rig warp parent: its baseGrid is in 0..1 (normalized-0to1) of
-    // BodyXWarp/FaceParallax/NeckWarp. The mesh's vertex positions in that
-    // frame are the bilinear coords of the vertex within the rig warp's
-    // grid bbox. For now we approximate by keeping the canvasToInnermost
-    // (BodyXWarp 0..1) projection — visually equivalent at rest pose
-    // since the rig warp's grid is itself in BodyXWarp's frame. Refine in
-    // Phase D once per-mesh frame analysis is in place.
+  // independent of the deformer chain.
+  const reparent = buildMeshDeformerParents({
+    meshParts, groups,
+    warpSpecs, rotationSpecs,
+    deformerIdToIndex, meshDefaultDeformerIdx,
+    partIdMap,
+  });
+  if (reparent) {
+    sections.set('art_mesh.parent_deformer_indices', reparent.parentDeformerIndices);
+    sections.set('art_mesh.parent_part_indices', reparent.parentPartIndices);
   }
 
-  // --- Drawable masks (1 dummy entry) ---
-  // Replace the dummy entry with the populated clip mask list (if any).
+  // --- Drawable masks ---
   // SDK validator rejects total=0 with begin<total checks, so when no
   // clips are present we fall back to a single -1 entry.
   if (drawableMaskIndices.length > 0) {
@@ -490,58 +437,16 @@ function buildSectionData(input) {
     sections.set('drawable_mask.art_mesh_indices', [-1]);
   }
 
-  // --- UV data ---
-  const allUVs = [];
-  for (let mi = 0; mi < meshParts.length; mi++) {
-    const part = meshParts[mi];
-    const mesh = part.mesh;
-    const region = regions.get(part.id);
-    if (mesh.uvs && region) {
-      // Remap UVs from full-PSD space to atlas space.
-      // UV is normalized to full source image (0..1 over srcWidth × srcHeight).
-      // 1. Convert UV to source pixel: srcPx = uv * srcSize
-      // 2. Offset from crop origin: cropLocal = srcPx - cropOrigin
-      // 3. Scale to atlas region: atlasLocal = cropLocal / cropSize * regionSize
-      // 4. Add atlas position and normalize: finalUV = (regionPos + atlasLocal) / atlasSize
-      for (let i = 0; i < mesh.uvs.length; i += 2) {
-        const srcPxX = mesh.uvs[i] * region.srcWidth;
-        const srcPxY = mesh.uvs[i + 1] * region.srcHeight;
-        const localX = (srcPxX - region.srcX) / region.cropW * region.width;
-        const localY = (srcPxY - region.srcY) / region.cropH * region.height;
-        // Clamp to [0, 1] — mesh vertices can extend slightly outside crop
-        // due to 2px dilation in mesh generation (contour.js)
-        allUVs.push(Math.max(0, Math.min(1, (region.x + localX) / atlasSize)));
-        allUVs.push(Math.max(0, Math.min(1, (region.y + localY) / atlasSize)));
-      }
-    }
+  // --- UV remap + triangle indices + draw order groups ---
+  const uvData = buildUvAndIndices({ meshParts, regions, atlasSize });
+  sections.set('uv.xys', uvData.allUVs);
+  sections.set('position_index.indices', uvData.allIndices);
+  for (const [k, v] of Object.entries(uvData.drawOrderGroupSections)) {
+    sections.set(k, v);
   }
-  sections.set('uv.xys', allUVs);
-
-  // --- Position indices (triangle indices) ---
-  const allIndices = [];
-  for (const part of meshParts) {
-    if (part.mesh?.triangles) {
-      // triangles is Array<[i, j, k]> — flatten to flat index list
-      for (const tri of part.mesh.triangles) {
-        allIndices.push(tri[0], tri[1], tri[2]);
-      }
-    }
+  for (const [k, v] of Object.entries(uvData.drawOrderGroupObjectSections)) {
+    sections.set(k, v);
   }
-  sections.set('position_index.indices', allIndices);
-
-  // --- Draw order groups (Hiyori pattern) ---
-  sections.set('draw_order_group.object_begin_indices', [0]);
-  sections.set('draw_order_group.object_counts', [numArtMeshes]);
-  sections.set('draw_order_group.object_total_counts', [numArtMeshes]);
-  sections.set('draw_order_group.min_draw_orders', [1000]);
-  sections.set('draw_order_group.max_draw_orders', [200]);
-
-  // --- Draw order group objects ---
-  // Render order: reverse of draw_order (highest draw_order = rendered first = behind)
-  sections.set('draw_order_group_object.types', meshParts.map(() => 0)); // 0 = ArtMesh
-  sections.set('draw_order_group_object.indices',
-    meshParts.map((_, i) => numArtMeshes - 1 - i));
-  sections.set('draw_order_group_object.group_indices', meshParts.map(() => -1)); // -1 like Hiyori
 
   // --- Canvas info ---
   // WARNING: `canvas` is declared late. All code above MUST use canvasW/canvasH
