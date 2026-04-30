@@ -26,7 +26,6 @@ import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
 import { variantParamId } from '../psdOrganizer.js';
 import { BAKED_BONE_ANGLES } from './rig/paramSpec.js';
-import { emptyRigSpec } from './rig/rigSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildTagBindingMap } from './rig/tagWarpBindings.js';
 import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
@@ -54,6 +53,7 @@ import { emitMeshVertsWarpDeformers } from './cmo3/meshVertsWarp.js';
 import { emitRotationDeformers } from './cmo3/rotationDeformerEmit.js';
 import { emitStructuralChainAndReparent } from './cmo3/structuralChainEmit.js';
 import { resolveMaskPairings } from './cmo3/maskResolve.js';
+import { createEmitContext, attachGlobals } from './cmo3/emitContext.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -225,26 +225,41 @@ export async function generateCmo3(input) {
     ? rotationDeformerConfig.faceRotation.angles
     : [-10, 0, 10];
 
+  const x = new XmlBuilder();
+
+  // ── Shared emission context (sweep #41) ──
+  // Single bag of state that subsequent extraction sweeps (Section 2/3c/4)
+  // pass to every helper instead of long destructured arg lists. Built up
+  // incrementally — this call only seeds static input + accumulators;
+  // globals attach below after `setupGlobalSharedObjects` runs.
+  const ctx = createEmitContext({
+    x,
+    canvasW, canvasH, meshes,
+    groups, parameters, animations,
+    modelName, generateRig, rigOnly,
+    maskConfigs, physicsRules,
+    bakedKeyformAngles, autoRigConfig,
+    faceParallaxSpec, bodyWarpChain, rigWarps,
+  }, {
+    backdropTagsList: _BACKDROP_TAGS_LIST,
+    eyeClosureTagsList: _EYE_CLOSURE_TAGS_LIST,
+    eyeClosureLashStripFrac: _EYE_CLOSURE_LASH_STRIP_FRAC,
+    eyeClosureBinCount: _EYE_CLOSURE_BIN_COUNT,
+    rotSkipRoles: _ROT_SKIP_ROLES,
+    rotParamRangeMin: _ROT_PARAM_RANGE_MIN,
+    rotParamRangeMax: _ROT_PARAM_RANGE_MAX,
+    rotGroupParamKeys: _ROT_GROUP_PARAM_KEYS,
+    rotGroupAngles: _ROT_GROUP_ANGLES,
+    rotFaceParamKeys: _ROT_FACE_PARAM_KEYS,
+    rotFaceAngles: _ROT_FACE_ANGLES,
+  }, !!generateRig);
+
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
   // Emitted as `{modelName}.rig.log.json` alongside the .cmo3 in the export zip.
   // Pure capture — no behavior changes. See docs/live2d-export/AUTO_RIG_PLAN.md.
-  const rigDebugLog = generateRig ? {
-    version: 1,
-    timestamp: new Date().toISOString(),
-    modelName,
-    canvas: { W: canvasW, H: canvasH },
-    meshSummary: [],
-    tagCoverage: null,
-    body: null,
-    faceUnion: null,
-    facePivot: null,
-    neckUnion: null,
-    neckWarp: null,
-    faceParallax: null,
-    eyeClosureContexts: [],
-    params: {},
-    warnings: [],
-  } : null;
+  // ctx owns the canonical instance; this local is an alias kept until the
+  // extraction sweeps migrate every reference to `ctx.rigDebugLog`.
+  const rigDebugLog = ctx.rigDebugLog;
 
   if (rigDebugLog) {
     const tags = new Set();
@@ -293,14 +308,12 @@ export async function generateCmo3(input) {
     }
   }
 
-  const x = new XmlBuilder();
-
   // ── RigSpec collector ──
   // Single source of truth for every rig element emitted below. Both this
   // writer and moc3writer consume the resulting RigSpec — cmo3 translates
-  // it to XML, moc3 translates it to binary. Collector is built up as each
-  // emit* helper runs; final value is returned alongside the cmo3 buffer.
-  const rigCollector = emptyRigSpec({ w: canvasW, h: canvasH });
+  // it to XML, moc3 translates it to binary. Owned by `ctx` (sweep #41);
+  // local alias kept until extraction sweeps migrate references.
+  const rigCollector = ctx.rigCollector;
 
   // ==================================================================
   // 1. GLOBAL SHARED OBJECTS (used by all meshes)
@@ -311,6 +324,7 @@ export async function generateCmo3(input) {
     parameters, meshes, groups,
     generateRig, bakedKeyformAngles, rotationDeformerConfig,
   });
+  attachGlobals(ctx, _globals);
   const {
     pidParamGroupGuid, pidModelGuid, pidPartGuid,
     pidBlend,
