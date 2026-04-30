@@ -22,6 +22,7 @@ import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { listTemplates, getTemplate } from '../templates/projectTemplates.js';
 import { AlertTriangle, FilePlus } from 'lucide-react';
+import { useT } from '../../i18n/index.js';
 
 /** @type {Record<string, React.ComponentType<any>>} */
 const D = /** @type {any} */ (DialogImpl);
@@ -40,6 +41,13 @@ export function NewProjectDialog({ open, onOpenChange }) {
 
   const templates = listTemplates();
   const [pickedId, setPickedId] = useState('empty');
+  const labels = {
+    title:           useT('newProject.title'),
+    subtitle:        useT('newProject.subtitle'),
+    dirtyWarning:    useT('newProject.dirtyWarning'),
+    cancel:          useT('action.cancel'),
+    create:          useT('action.create'),
+  };
 
   // Reset selection when reopening so we don't carry stale state.
   useEffect(() => {
@@ -66,10 +74,10 @@ export function NewProjectDialog({ open, onOpenChange }) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FilePlus size={16} className="text-primary" />
-            New Project
+            {labels.title}
           </DialogTitle>
           <DialogDescription>
-            Pick a starting template. Each template tweaks canvas size and project name; everything else stays empty.
+            {labels.subtitle}
           </DialogDescription>
         </DialogHeader>
 
@@ -77,7 +85,7 @@ export function NewProjectDialog({ open, onOpenChange }) {
           <div className="flex items-start gap-2 p-2 rounded border border-amber-500/30 bg-amber-500/5 text-xs text-amber-700 dark:text-amber-500">
             <AlertTriangle size={14} className="shrink-0 mt-0.5" />
             <span>
-              The current project has unsaved changes. They will be lost. Save first via Ctrl+S or "Save to library" before proceeding.
+              {labels.dirtyWarning}
             </span>
           </div>
         ) : null}
@@ -105,8 +113,8 @@ export function NewProjectDialog({ open, onOpenChange }) {
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={applyAndClose}>Create</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>{labels.cancel}</Button>
+          <Button onClick={applyAndClose}>{labels.create}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

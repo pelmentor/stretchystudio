@@ -21,6 +21,7 @@ import {
 import { Input } from '../../components/ui/input.jsx';
 import { DEFAULT_KEYMAP } from '../keymap/default.js';
 import { getOperator } from '../operators/registry.js';
+import { useT } from '../../i18n/index.js';
 
 const MOD_LABELS = {
   Ctrl: 'Ctrl',
@@ -46,6 +47,14 @@ function prettyChord(chord) {
 
 export function KeymapModal({ open, onOpenChange }) {
   const [filter, setFilter] = useState('');
+  const labels = {
+    title:           useT('keymap.title'),
+    subtitle:        useT('keymap.subtitle'),
+    placeholder:     useT('keymap.filter.placeholder'),
+    empty:           useT('keymap.empty'),
+    colAction:       useT('keymap.col.action'),
+    colShortcut:     useT('keymap.col.shortcut'),
+  };
 
   const rows = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -67,9 +76,9 @@ export function KeymapModal({ open, onOpenChange }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl h-[70vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="p-6 pb-2 border-b">
-          <DialogTitle>Keyboard Shortcuts</DialogTitle>
+          <DialogTitle>{labels.title}</DialogTitle>
           <DialogDescription>
-            Default bindings. Customisation is deferred until per-user keymap persistence lands.
+            {labels.subtitle}
           </DialogDescription>
         </DialogHeader>
 
@@ -78,7 +87,7 @@ export function KeymapModal({ open, onOpenChange }) {
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter by action or chord…"
+            placeholder={labels.placeholder}
             className="h-9"
             autoFocus
           />
@@ -87,14 +96,14 @@ export function KeymapModal({ open, onOpenChange }) {
         <div className="flex-1 overflow-auto p-4">
           {rows.length === 0 ? (
             <div className="text-center text-xs text-muted-foreground italic p-6">
-              No shortcuts match "{filter}".
+              {labels.empty.replace('{filter}', filter)}
             </div>
           ) : (
             <table className="w-full text-xs">
               <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 <tr>
-                  <th className="text-left font-medium pb-2 px-2 w-1/2">Action</th>
-                  <th className="text-left font-medium pb-2 px-2">Shortcut</th>
+                  <th className="text-left font-medium pb-2 px-2 w-1/2">{labels.colAction}</th>
+                  <th className="text-left font-medium pb-2 px-2">{labels.colShortcut}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">

@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-30 — Phase first-cut sweep #22 (autonomous)
+
+Sweep #21 set up the locale switcher; sweep #22 continues the wrap-the-rest pass with `KeymapModal` (high-visibility, opens from Preferences) and `NewProjectDialog` (the first thing a user sees on Ctrl+N).
+
+| Phase | Deliverable |
+|-------|-------------|
+| 4J | `KeymapModal` + `NewProjectDialog` wrapped through `useT()`. KeymapModal: title, subtitle, filter placeholder, empty state ("No shortcuts match {filter}"), Action / Shortcut column headers. NewProjectDialog: title, subtitle, dirty-state warning, Cancel / Create button labels (Cancel + Create reuse existing `action.cancel` + `action.create` keys). EN + RU dictionaries each grew by 9 keys. Both modals now flip language live with the Preferences switcher. |
+
+**Phase coverage after sweep #22:** Phase 4J i18n covers Command Palette + Help modal + Export modal + Preferences modal + Keymap modal + NewProjectDialog. Remaining v3 components with hardcoded English: SaveModal, LoadModal, Cmo3InspectModal, properties / outliner / parameters / timeline / animations / performance editors. Each is a 30-min wrap; ship as needed when translators ask. Other entirely-pending items: Phase 4I theme audit, 4A parity harness, Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #21 (autonomous)
 
 Sweep #20 closed the cmo3 round-trip line; sweep #21 ships the two i18n follow-ups the plan flagged ⏳ since sweep #4 — locale persistence + Preferences switcher, and a wrap-the-rest pass on the Preferences modal itself (the natural starting point since the switcher is there).

@@ -84,6 +84,19 @@ const EN = {
   'action.create':                  'Create',
   'action.rename':                  'Rename',
 
+  // New project dialog
+  'newProject.title':               'New Project',
+  'newProject.subtitle':            'Pick a starting template. Each template tweaks canvas size and project name; everything else stays empty.',
+  'newProject.dirtyWarning':        'The current project has unsaved changes. They will be lost. Save first via Ctrl+S or "Save to library" before proceeding.',
+
+  // Keymap modal
+  'keymap.title':                   'Keyboard Shortcuts',
+  'keymap.subtitle':                'Default bindings. Customisation is deferred until per-user keymap persistence lands.',
+  'keymap.filter.placeholder':      'Filter by action or chord…',
+  'keymap.empty':                   'No shortcuts match "{filter}".',
+  'keymap.col.action':              'Action',
+  'keymap.col.shortcut':            'Shortcut',
+
   // Preferences modal
   'prefs.title':                    'Preferences',
   'prefs.subtitle':                 'Theme and typography. Saved per-browser via localStorage.',

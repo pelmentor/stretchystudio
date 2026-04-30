@@ -51,6 +51,19 @@ export const RU = {
   'action.create':                  'Создать',
   'action.rename':                  'Переименовать',
 
+  // New project dialog
+  'newProject.title':               'Новый проект',
+  'newProject.subtitle':            'Выберите начальный шаблон. Каждый меняет размер канваса и имя проекта; всё остальное остаётся пустым.',
+  'newProject.dirtyWarning':        'Текущий проект имеет несохранённые изменения. Они будут потеряны. Сначала сохраните через Ctrl+S или "Сохранить в библиотеку".',
+
+  // Keymap modal
+  'keymap.title':                   'Клавиатурные сочетания',
+  'keymap.subtitle':                'Сочетания по умолчанию. Кастомизация ждёт пер-юзер хранения keymap.',
+  'keymap.filter.placeholder':      'Фильтр по действию или сочетанию…',
+  'keymap.empty':                   'Ничего не соответствует "{filter}".',
+  'keymap.col.action':              'Действие',
+  'keymap.col.shortcut':            'Сочетание',
+
   // Preferences modal
   'prefs.title':                    'Настройки',
   'prefs.subtitle':                 'Тема и типографика. Сохраняются в localStorage браузера.',
