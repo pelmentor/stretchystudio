@@ -952,7 +952,7 @@ implementation; call sites stay the same.
 
 ---
 
-### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: cmo3writer breakup at 22-module split (4468→2634 LOC, −41%, sweeps #24–#33 2026-04-30); keymap viewer first cut shipped 2026-04-29 (`2fee609`); moc3writer split + Section 2/3c/4 per-mesh loops + final cleanup pending]**
+### PHASE 6 — Migration & Cleanup (4-5 weeks) **[STATUS: all non-UI god-class breakups shipped — cmo3writer (4468→1076, −76%), moc3writer (1573→476, −70%), can3writer (857→117, −86%), cmo3Import (884→315, −64%), cmo3PartExtract (680→264, −61%) across 48 helper modules; sweeps #24-#50 2026-04-29/30. UI splits (CanvasViewport, TimelineEditor, projectStore, themePresets) deferred — need browser-eyes verification]**
 
 - Remove old shell entirely
 - Remove `?ui=v3` killswitch (now default)
@@ -1697,11 +1697,11 @@ This is the same overview I gave the user before /compact, recorded here so futu
 |------|-----|-------|
 | `src/components/canvas/CanvasViewport.jsx` | 2167 | Plan 0F.N pointer events split; needs browser eyes for verification. |
 | `src/v3/editors/timeline/TimelineEditor.jsx` | 1831 | No split plan yet. |
-| `src/io/live2d/cmo3Import.js` | 884 | Reverse-direction of cmo3writer; same pattern. |
+| `src/io/live2d/cmo3Import.js` | ~~884~~ ✅ shipped sweep #49 (884 → 315, −64%) — cmo3Import/{headerExtract,rigWarpSynth,rotationDeformerSynth}.js. |
 | `src/lib/themePresets.js` | 860 | Largely a data dictionary — split into per-theme files. |
-| `src/io/live2d/can3writer.js` | 857 | Animation export — same writer pattern as moc3, applies the same split shape (`can3/{layout,sectionData,binarySerialize}.js`). |
+| `src/io/live2d/can3writer.js` | ~~857~~ ✅ shipped sweeps #45-#48 (857 → 117, −86%) — can3/{constants,keyframeSequence,trackAttrs,sceneEmit,finalize}.js. |
 | `src/io/live2d/exporter.js` | 800 | Public API surface; split by export target (cmo3 / moc3 / motion3). |
-| `src/io/live2d/cmo3PartExtract.js` | 680 | Reverse of writer; analogous breakdown. |
+| `src/io/live2d/cmo3PartExtract.js` | ~~680~~ ✅ shipped sweep #50 (680 → 264, −61%) — cmo3PartExtract/{xmlHelpers,drawableExtract,deformerExtract}.js. |
 | `src/store/projectStore.js` | 644 | Plan 0F.N split flagged. |
 
 **C. Plan-flagged non-split pending.**
@@ -1740,6 +1740,46 @@ Sweeps #41-#44 close out cmo3writer's three big inline loops by extracting them 
 **Combined Phase 6 god-class breakup status (post sweep #44 + import prune):** cmo3writer.js (4468 → 1076, −76%, 28 cmo3/ modules) + moc3writer.js (1573 → 476, −70%, 9 moc3/ modules) = **37 modules** total, **−4489 LOC** lifted from the two writers. cmo3writer is now a thin orchestrator over its helper modules.
 
 **Next-session pointer:** with cmo3 EmitContext shipped and the three big sections extracted, the highest-ROI remaining target is **can3writer.js (857 LOC)** — animation export with the same writer pattern as moc3, so the moc3 split shape (`can3/{layout,sectionData,binarySerialize}.js`) applies directly. After that: `cmo3Import.js` + `cmo3PartExtract.js` (reverse of writer; same module shape mirrored), then UI splits (CanvasViewport, TimelineEditor, projectStore) when browser-eyes verification is feasible.
+
+---
+
+### 2026-04-30 — Phase first-cut sweeps #45-#50 (autonomous, can3writer + cmo3Import + cmo3PartExtract splits)
+
+After sweep #44 closed cmo3writer's three big inline loops, sweeps #45-#50 finish the non-UI Phase 6 splits the plan flagged: can3writer.js (857 LOC), cmo3Import.js (884 LOC), and cmo3PartExtract.js (680 LOC). UI splits (CanvasViewport, TimelineEditor, projectStore) stay deferred — they need browser-eyes verification beyond what the test suite alone provides. All six sweeps behaviour-preserving (typecheck + 3150 tests stay 100% green between every commit).
+
+**can3writer.js (sweeps #45-#48): 857 → 117 LOC (−740, −86%) across 5 cohesion-driven modules.**
+
+The plan's literal "moc3 split shape" (`layout / sectionData / binarySerialize`) doesn't fit can3 — it's an XML emitter (like cmo3), not a fixed-offset binary writer. Cohesion-by-concern lands on:
+
+- **Sweep #45 — `can3/constants.js` + `can3/keyframeSequence.js` (146 LOC).** `VERSION_PIS` (7 entries) + `IMPORT_PIS` (67 entries) lift to constants.js. `emitMutableSequence(x, parent, pidAttr, keyframes, fps, _, _)` lifts to keyframeSequence.js — used by every paramAttrF in every scene + every static rest-pinned attr (CFixedSequence is banned because Cubism Editor 5.0's "Export motion file" command crashes on it). LOC: 857 → 698 (−159).
+
+- **Sweep #46 — `can3/trackAttrs.js` (127 LOC).** `buildTrackAttrFactories(x, pidAdaptRel, pidModelTrack)` returns `{ makeTrackAttrF, makeTrackAttrPt, makeTrackAttrI }` — the three CMvEffect_VisualDefault attr factories used 9× per scene. Hiyori shape: CMutableSequence-count=0 even for static attrs (frameStep / scaleX / etc.) since count=0 CFixedSequence kills the export. LOC: 698 → 601 (−97).
+
+- **Sweep #47 — `can3/sceneEmit.js` (376 LOC).** `emitAllScenes(x, animations, deps)` owns the entire `for (let si = 0; si < animations.length; si++)` body — the heaviest section in the writer. Per scene: paramAttrPids × paramInfoList → CMvEffect_Live2DParameter → PartsVisible → VisualDefault (9 transform attrs via track-attr factories) → EyeBlink + LipSync stubs → CMvTrack_Group_Source root → CMvTrack_Live2DModel_Source + 5-effect effectList → CSceneSource + movieInfo + `_animation` null-placeholder. Returns `{ sceneRefs, sceneGuids, sceneAnimPlaceholders }` for finalize. LOC: 601 → 238 (−363).
+
+- **Sweep #48 — `can3/finalize.js` (138 LOC).** `finalizeCan3(x, args)` does CResourceManager (linked .cmo3 + GUID maps) + shared CAnimation (with scene-blending playlist) + `_animation` null-placeholder patch-back + main.xml assembly (root + shared block + main ref) + CAFF pack. Owns the `VERSION_PIS / IMPORT_PIS` import so the writer no longer carries them. LOC: 238 → 117 (−121).
+
+**What's left in can3writer.js (117 LOC):** module docstring + `Cmo3Input` typedef-style JSDoc + `generateCan3` orchestrator that allocates the 6 shared pids (AdaptType + 3 CEffectIds + RootTrackGuid + ResourceGuid) + builds paramInfoList (deformerParamMap rotation params first, then param-track-only ids in insertion order) + builds paramGuids → calls emitAllScenes → calls finalizeCan3.
+
+**cmo3Import.js (sweep #49): 884 → 315 LOC (−569, −64%) across 3 helper modules.**
+
+- `cmo3Import/headerExtract.js` (74 LOC) — `readHeaderBits` (canvas dims + model name regex on main.xml) + `readParameters` (CParameterSource walker resolving CParameterId.idstr via xs.id pool). Both pure regex helpers; mirror cmo3Inspect's regex shape to stay in sync.
+- `cmo3Import/rigWarpSynth.js` (238 LOC) — `buildRigWarpsFromScene(scene, partGuidToNodeId, canvasW, canvasH)` (the sweep #13 body). Walks scene.deformers + scene.keyformBindings + scene.keyformGrids to synthesise `project.rigWarps[partId]`. Includes the nested `resolveRigWarpParent` walker (cmo3 deformer chain → SS structural warp resolver: cmo3 "FaceParallax" → SS "FaceParallaxWarp" etc., bottom-up walk falling through intermediate warps; without this, every imported leaf rigWarp defaulted to BodyXWarp).
+- `cmo3Import/rotationDeformerSynth.js` (157 LOC) — `applyRotationDeformersToGroups(scene, nodes, guidToNodeId, canvasW, canvasH)` (the sweep #15 body) + `KNOWN_BONE_ROLES` set + `buildGuidToNodeIdMap` utility + `DEFAULT_TRANSFORM` factory (shared with the importer entry point). `partToMesh` stays inline in the orchestrator — only ~20 LOC and only called from `importCmo3`.
+
+**What's left in cmo3Import.js (315 LOC):** typedefs (ImportResult, partial re-exports of ExtractedPart) + `partToMesh` private helper + `importCmo3` orchestrator that runs the linear pipeline (unpackCaff → parseCmo3Xml → extractScene → readHeaderBits/readParameters → group-node synthesis → part-node synthesis → buildRigWarpsFromScene → applyRotationDeformersToGroups → ParamRotation_* baked-angle detection → normalizeVariants → maskConfigs synthesis → parameters synthesis → project assembly).
+
+**cmo3PartExtract.js (sweep #50): 680 → 264 LOC (−416, −61%) across 3 helper modules.**
+
+- `cmo3PartExtract/xmlHelpers.js` (102 LOC) — `findAllByTag` walker + `readBoolField` / `readNumberField` / `readStringField` scalar readers + `readSizedArray` (count-validating array reader that throws on declared-vs-actual mismatch — catches truncated XML before downstream code starts misindexing).
+- `cmo3PartExtract/drawableExtract.js` (214 LOC) — `extractPart` (ACDrawableSource > ACParameterControl super-chain decode, positions/uvs/indices arrays, clip refs, draw_order from first keyform), `extractGroup` (CPartSource + CPartGuid resolution), `extractTexture` (GTexture2D → CImageResource → imageFileBuf path).
+- `cmo3PartExtract/deformerExtract.js` (178 LOC) — `extractDeformer` (warp + rotation, shared ACDeformerSource super-chain with per-form decode branch), `extractKeyformBinding` (parameter → keys[] pairing decode), `extractKeyformGrid` (access-keyed cell decode walking _keyOnParameterList).
+
+**What's left in cmo3PartExtract.js (264 LOC):** the seven public typedefs (ExtractedPart / ExtractedGroup / ExtractedTexture / ExtractedDeformer / ExtractedDeformerKeyform / ExtractedKeyformBinding / ExtractedKeyformGrid / ExtractedScene + the DeformerKind enum) — they're the public surface importers reference — plus the `extractScene` orchestrator: six `findAllByTag` + try/catch loops (parts / groups / textures / warp deformers / rotation deformers / bindings / grids).
+
+**Combined non-UI Phase 6 status (post sweep #50):** cmo3writer 4468 → 1076 (−76%) + moc3writer 1573 → 476 (−70%) + can3writer 857 → 117 (−86%) + cmo3Import 884 → 315 (−64%) + cmo3PartExtract 680 → 264 (−61%) = **−6214 LOC total** lifted from 5 god-classes into **48 helper modules** (28 cmo3/ + 9 moc3/ + 5 can3/ + 3 cmo3Import/ + 3 cmo3PartExtract/). Every god-class target on the Phase 6 ranked list is shipped except the 4 UI splits (CanvasViewport 2167, TimelineEditor 1831, projectStore 644, themePresets 860) — all flagged as needing browser-eyes verification beyond what the test suite covers, so deferred until live testing.
+
+**Next-session pointer:** UI-eyes splits (Plan 0F.N pointer-events split for CanvasViewport, TimelineEditor section split, projectStore split per Plan 0F entries) once the user has browser test results. Pre-existing deferred items unchanged: 0C TaggedBuffer integration into evalRig, 0E Vitest migration, 4A reference parity harness, orphan bone-controller bug fix.
 
 ---
 
