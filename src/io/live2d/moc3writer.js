@@ -25,16 +25,15 @@
  * @module io/live2d/moc3writer
  */
 import { buildParameterSpec } from './rig/paramSpec.js';
-import { variantParamId } from '../psdOrganizer.js';
-import { matchTag } from '../armatureOrganizer.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
-import { sanitisePartName } from '../../lib/partId.js';
 import {
   MAGIC, HEADER_SIZE, SOT_COUNT, COUNT_INFO_ENTRIES, COUNT_INFO_SIZE,
   CANVAS_INFO_SIZE, DEFAULT_OFFSET, ALIGN, RUNTIME_UNIT_SIZE,
   MOC_VERSION, COUNT_IDX, ELEM, SECTION_LAYOUT,
 } from './moc3/layout.js';
 import { BinaryWriter } from './moc3/binaryWriter.js';
+import { buildMeshBindingPlan } from './moc3/meshBindingPlan.js';
+import { topoSortDeformers } from './moc3/deformerOrder.js';
 
 
 // ---------------------------------------------------------------------------
@@ -193,170 +192,24 @@ function buildSectionData(input) {
   counts[COUNT_IDX.POSITION_INDICES] = totalFlatIndices;
 
   // --- Per-mesh keyform/binding plan ---
-  //
-  // Mirrors cmo3writer's per-mesh keyform branches (around line 1005-3875).
-  // Order of checks matches cmo3writer:
-  //   1. Bone-baked (5 keyforms on ParamRotation_<bone>) — arms, legs.
-  //   2. Variant fade-in (2 keyforms on Param<Suffix>, opacity 0→recorded).
-  //   3. Base fade-out (2 keyforms on Param<Suffix>, opacity recorded→0)
-  //      for non-backdrop bases that have at least one variant sibling.
-  //   4. Default — 1 keyform on ParamOpacity[1.0] at recorded opacity.
-  //
+  // See moc3/meshBindingPlan.js for the per-mesh branch order
+  // (bone-baked → eye closure → variant fade → base fade → default).
   // Verified by binary diff against cubism native export of shelby.cmo3:
   //   ArtMesh10 (face = backdrop)            → 1 kf, ParamOpacity[1]
   //   ArtMesh9  (face_smile = variant)       → 2 kf, ParamSmile[0,1]
   //   ArtMesh18 (arm = bone-baked)           → 5 kf, ParamRotation_*Elbow
-  // Pre-fix moc3writer used uniform 2-kf-on-ParamOpacity[0,1] for every
-  // non-variant non-bone mesh; that diverges from cubism's pattern and
-  // (combined with how the runtime reads the binding) made face/ears/hair
-  // invisible at default ParamOpacity=1.
-  //
-  // perVertexPositions (when present) drives art_mesh_keyform.keyform_position
-  // emission instead of the shared rest geometry; only bone-baked sets it.
-  // Mesh-level eye closure (eyelash/eyewhite/irides 2 keyforms with closed
-  // vertex positions) is handled at the rig-warp layer in current SS, so
-  // this writer leaves those meshes at the default 1-keyform branch.
-  // Stage 5: backdrop list resolved from `project.variantFadeRules` via
-  // the input arg above. Single source of truth across cmo3 + moc3.
   const BACKDROP_TAGS_SET_MOC3 = new Set(_BACKDROP_TAGS_LIST_MOC3);
-  // Build base.partId → [variantSuffix] map for the base-fade-out branch.
-  const variantSuffixesByBasePartId = new Map();
-  for (const p of meshParts) {
-    if (!p.variantOf) continue;
-    const sfx = p.variantSuffix ?? p.variantRole ?? null;
-    if (!sfx) continue;
-    const list = variantSuffixesByBasePartId.get(p.variantOf) ?? [];
-    if (!list.includes(sfx)) list.push(sfx);
-    variantSuffixesByBasePartId.set(p.variantOf, list);
-  }
-
-  // Stage 7: angles come from project.boneConfig (resolved by caller),
-  // default [-90, -45, 0, 45, 90].
-  const BONE_KEYFORM_ANGLES = bakedKeyformAngles;
-  const meshBindingPlan = meshParts.map(part => {
-    const mesh = part.mesh;
-    const boneWeights = mesh?.boneWeights ?? null;
-    const jointBoneId = mesh?.jointBoneId ?? null;
-    if (boneWeights && jointBoneId) {
-      // Bone-baked keyforms.
-      const boneGroup = groups.find(g => g.id === jointBoneId);
-      const sanitizedBoneName = sanitisePartName(boneGroup?.name ?? jointBoneId);
-      const pivotX = boneGroup?.transform?.pivotX ?? 0;
-      const pivotY = boneGroup?.transform?.pivotY ?? 0;
-      const verts = mesh.vertices;
-      const perKeyformPositions = BONE_KEYFORM_ANGLES.map(angleDeg => {
-        const rad = angleDeg * Math.PI / 180;
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        const out = new Float32Array(verts.length * 2);
-        for (let i = 0; i < verts.length; i++) {
-          const v = verts[i];
-          const w = boneWeights[i] ?? 0;
-          // Rotate (vx - pivotX, vy - pivotY) by angle, weighted blend
-          // back into rest position. Matches cmo3 baked-keyform math.
-          const dx = v.x - pivotX;
-          const dy = v.y - pivotY;
-          const rx = pivotX + dx * cos - dy * sin;
-          const ry = pivotY + dx * sin + dy * cos;
-          out[i * 2]     = v.x * (1 - w) + rx * w;
-          out[i * 2 + 1] = v.y * (1 - w) + ry * w;
-        }
-        return out;
-      });
-      return {
-        paramId: `ParamRotation_${sanitizedBoneName}`,
-        keys: BONE_KEYFORM_ANGLES.slice(),
-        keyformOpacities: BONE_KEYFORM_ANGLES.map(() => part.opacity ?? 1),
-        perVertexPositions: perKeyformPositions,
-      };
-    }
-    // Mesh-level eye closure: shared with cmo3writer via rigSpec.eyeClosure.
-    // For eyelash / eyewhite / irides on each side, emit 2 keyforms on
-    // ParamEye{L,R}Open with closed-eye vertex positions at key=0 and rest
-    // positions at key=1. The closure curve fit + lash-strip compression
-    // happen in cmo3writer (parabola fit on the eyewhite's lower edge);
-    // here we read closed canvas verts and let the regular per-mesh frame
-    // conversion (rig-warp 0..1 / pivot-relative) translate to mesh-local.
-    // Without this the eye meshes default to 1-keyform-on-ParamOpacity[1]
-    // and the model can't blink (also: clip-mask validation fires because
-    // eyewhite_l/r are clip sources for irides without keyforms at the
-    // referenced param min/max).
-    const eyeClosureMap = rigSpec?.eyeClosure ?? null;
-    const eyeClosure = eyeClosureMap ? eyeClosureMap.get(part.id) : null;
-    if (eyeClosure && eyeClosure.closureSide && !part.variantSuffix) {
-      const closureParam = eyeClosure.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
-      // Build per-keyform vertex arrays: [closed (key=0), rest (key=1)].
-      const verts = mesh.vertices;
-      const restPositions = new Float32Array(verts.length * 2);
-      const closedPositions = new Float32Array(verts.length * 2);
-      const closedCanvas = eyeClosure.closedCanvasVerts;
-      for (let i = 0; i < verts.length; i++) {
-        restPositions[i * 2]     = verts[i].x;
-        restPositions[i * 2 + 1] = verts[i].y;
-        closedPositions[i * 2]     = closedCanvas[i * 2];
-        closedPositions[i * 2 + 1] = closedCanvas[i * 2 + 1];
-      }
-      return {
-        paramId: closureParam,
-        keys: [0, 1],
-        keyformOpacities: [part.opacity ?? 1, part.opacity ?? 1],
-        perVertexPositions: [closedPositions, restPositions],
-      };
-    }
-    // Variant mesh fade-in: opacity 0 at Param<Suffix>=0, recorded at =1.
-    const variantSuffix = part.variantSuffix ?? null;
-    if (variantSuffix) {
-      const pid = variantParamId(variantSuffix);
-      if (pid) {
-        return {
-          paramId: pid,
-          keys: [0, 1],
-          keyformOpacities: [0, part.opacity ?? 1],
-          perVertexPositions: null,
-        };
-      }
-    }
-    // Base mesh with paired variant sibling — fade out 1→0 on the
-    // variant's param (so the variant takes over the layer). Backdrop
-    // tags (face, ears, front/back hair) skip this — they stay at
-    // opacity=1 always to provide the substrate every variant renders
-    // on top of (cmo3writer line ~942 `hasBaseFade && !isBackdrop`).
-    const tag = matchTag(part.name || part.id);
-    const isBackdrop = tag ? BACKDROP_TAGS_SET_MOC3.has(tag) : false;
-    const baseSuffixes = variantSuffixesByBasePartId.get(part.id);
-    const baseFadeSuffix = baseSuffixes && baseSuffixes.length > 0 ? baseSuffixes[0] : null;
-    if (baseFadeSuffix && !isBackdrop) {
-      const pid = variantParamId(baseFadeSuffix);
-      if (pid) {
-        return {
-          paramId: pid,
-          keys: [0, 1],
-          keyformOpacities: [part.opacity ?? 1, 0],
-          perVertexPositions: null,
-        };
-      }
-    }
-    // Default: 1 keyform on ParamOpacity[1.0] at recorded opacity.
-    // Matches cubism's "rest only" pattern (single CFormGuid bound to
-    // a no-op ParamOpacity[1] keyform-binding).
-    return {
-      paramId: 'ParamOpacity',
-      keys: [1],
-      keyformOpacities: [part.opacity ?? 1],
-      perVertexPositions: null,
-    };
+  const {
+    meshBindingPlan,
+    meshKeyformBeginIndex,
+    meshKeyformCount,
+    totalArtMeshKeyforms,
+  } = buildMeshBindingPlan({
+    meshParts, groups, rigSpec,
+    bakedKeyformAngles,
+    backdropTagsSet: BACKDROP_TAGS_SET_MOC3,
   });
 
-  // Flatten per-mesh keyform offsets (used by art_mesh.keyform_begin_indices /
-  // _counts). The per-binding key range is computed later in the unified
-  // keyform binding system, where mesh + deformer bindings live in one list.
-  let totalArtMeshKeyforms = 0;
-  const meshKeyformBeginIndex = [];
-  const meshKeyformCount = [];
-  for (const plan of meshBindingPlan) {
-    meshKeyformBeginIndex.push(totalArtMeshKeyforms);
-    meshKeyformCount.push(plan.keyformOpacities.length);
-    totalArtMeshKeyforms += plan.keyformOpacities.length;
-  }
 
   counts[COUNT_IDX.ART_MESH_KEYFORMS] = totalArtMeshKeyforms;
 
@@ -370,50 +223,13 @@ function buildSectionData(input) {
   const numWarpDeformers = warpSpecs.length;
   const numRotationDeformers = rotationSpecs.length;
   const numDeformers = numWarpDeformers + numRotationDeformers;
-  // Unified deformer order: topo-sorted so each deformer's parent appears
-  // earlier in the array than the child. Cubism's runtime processes the
-  // deformer list in order; out-of-order parents would leave a child's
-  // transformation un-anchored when first encountered.
-  //
-  // Each entry remembers its `kind` (warp / rotation) and `srcIndex` (its
-  // position in the original warpSpecs / rotationSpecs array — used as
-  // `specific_index` so warp_deformer.* / rotation_deformer.* sections
-  // stay in their original natural order).
-  const _unsorted = [
-    ...warpSpecs.map((s, i) => ({ kind: 'warp', srcIndex: i, spec: s })),
-    ...rotationSpecs.map((s, i) => ({ kind: 'rotation', srcIndex: i, spec: s })),
-  ];
-  const _byId = new Map();
-  for (const e of _unsorted) _byId.set(e.spec.id, e);
-  const _ordered = [];
-  const _placed = new Set();
-  const _visit = (e) => {
-    if (_placed.has(e.spec.id)) return;
-    const p = e.spec.parent;
-    if (p && (p.type === 'warp' || p.type === 'rotation')) {
-      const parentEntry = _byId.get(p.id);
-      if (parentEntry) _visit(parentEntry);
-    }
-    _placed.add(e.spec.id);
-    _ordered.push(e);
-  };
-  for (const e of _unsorted) _visit(e);
-  const allDeformerSpecs = _ordered.map(e => e.spec);
-  const allDeformerKinds = _ordered.map(e => e.kind);
-  const allDeformerSrcIndices = _ordered.map(e => e.srcIndex);
-  const deformerIdToIndex = new Map();
-  for (let di = 0; di < allDeformerSpecs.length; di++) {
-    deformerIdToIndex.set(allDeformerSpecs[di].id, di);
-  }
-  // The deepest body warp — meshes parent to it when no per-mesh deformer
-  // (face parallax / rig warp) supersedes. Falls back through the chain.
-  const meshDefaultDeformerIdx = (
-    deformerIdToIndex.get('BodyXWarp') ??
-    deformerIdToIndex.get('BreathWarp') ??
-    deformerIdToIndex.get('BodyWarpY') ??
-    deformerIdToIndex.get('BodyWarpZ') ??
-    -1
-  );
+  const {
+    allDeformerSpecs,
+    allDeformerKinds,
+    allDeformerSrcIndices,
+    deformerIdToIndex,
+    meshDefaultDeformerIdx,
+  } = topoSortDeformers({ warpSpecs, rotationSpecs });
 
   counts[COUNT_IDX.DEFORMERS] = numDeformers;
   counts[COUNT_IDX.WARP_DEFORMERS] = numWarpDeformers;
