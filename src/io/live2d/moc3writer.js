@@ -34,6 +34,8 @@ import {
 import { BinaryWriter } from './moc3/binaryWriter.js';
 import { buildMeshBindingPlan } from './moc3/meshBindingPlan.js';
 import { topoSortDeformers } from './moc3/deformerOrder.js';
+import { buildKeyformBindings } from './moc3/keyformBindings.js';
+import { emitKeyformAndDeformerSections } from './moc3/keyformAndDeformerSections.js';
 
 
 // ---------------------------------------------------------------------------
@@ -236,145 +238,23 @@ function buildSectionData(input) {
   counts[COUNT_IDX.ROTATION_DEFORMERS] = numRotationDeformers;
 
   // ── Keyform binding system (deduplicated, matches cubism layout) ──
-  // Cubism uses heavy deduplication: each unique (paramId, keys) tuple
-  // becomes ONE binding shared across every band that uses it; objects
-  // sharing the same binding-set share the same band. This pass mirrors
-  // that — without it our band/binding counts come out 2× cubism's and
-  // the moc3 fails to load in the runtime.
-  //
-  // Pipeline:
-  //   1. Collect (paramId, keys) from every object → unique binding pool
-  //   2. For each object, look up its binding indices (deduped)
-  //   3. Group objects by their "binding profile" (canonical sorted list)
-  //      → each unique profile = one band
-  //   4. kfbi = expansion of bands' profiles (slot per binding-axis)
-  //   5. params own one slot per binding-using-this-param
-  //
-  /** @type {{paramId:string, keys:number[]}[]} */
-  const uniqueBindings = [];
-  const bindingHashToIdx = new Map();
-  const _bindHash = (pid, keys) => `${pid}|${keys.join(',')}`;
-  const _internBinding = (paramId, keys) => {
-    const h = _bindHash(paramId, keys);
-    if (bindingHashToIdx.has(h)) return bindingHashToIdx.get(h);
-    const idx = uniqueBindings.length;
-    uniqueBindings.push({ paramId, keys: keys.slice() });
-    bindingHashToIdx.set(h, idx);
-    return idx;
-  };
-
-  // Collect each object's binding indices.
-  // Objects are: art_meshes (in meshParts order), then deformers (in unified
-  // topo-sorted order — same as the deformer.* sections).
-  /** @type {number[][]} */
-  const meshObjectBindings = meshBindingPlan.map(plan =>
-    [_internBinding(plan.paramId, plan.keys)],
-  );
-  /** @type {number[][]} */
-  const deformerObjectBindings = allDeformerSpecs.map(spec =>
-    spec.bindings.map(b => _internBinding(b.parameterId, b.keys)),
-  );
-
-  // ── Reorder uniqueBindings to be contiguous-by-param (cubism convention) ──
-  // `parameter.keyform_binding_begin_indices` is a BINDING index (into
-  // keyform_bindings[]), and the runtime reads `kfb_begin..kfb_begin+kfb_count`
-  // expecting all bindings for the same param to be consecutive. Verified by
-  // binary diff against cubism native: ParamAngleX@idx0 has kfb_begin=0,
-  // ParamAngleY@idx1 has kfb_begin=1, ..., ParamOpacity@idx29 has kfb_begin=25.
-  // Without this reordering, kfb_begin pointed at the wrong binding and the
-  // model loaded but rendered nothing (or rendered with the wrong param
-  // driving each binding).
-  const _paramOrder = new Map();
-  params.forEach((p, i) => _paramOrder.set(p.id, i));
-  const _sortedBindings = uniqueBindings
-    .map((b, oldIdx) => ({
-      b, oldIdx,
-      // Inactive params (no binding entry uses them) sort to the end —
-      // shouldn't happen in practice but keeps things deterministic.
-      pOrder: _paramOrder.get(b.paramId) ?? Number.MAX_SAFE_INTEGER,
-    }))
-    .sort((a, b) => a.pOrder - b.pOrder || a.oldIdx - b.oldIdx);
-  const _oldToNewBinding = new Array(uniqueBindings.length);
-  for (let newIdx = 0; newIdx < _sortedBindings.length; newIdx++) {
-    _oldToNewBinding[_sortedBindings[newIdx].oldIdx] = newIdx;
-  }
-  uniqueBindings.length = 0;
-  for (const s of _sortedBindings) uniqueBindings.push(s.b);
-  // Remap each object's binding-index list to use the new ordering.
-  for (const arr of meshObjectBindings) {
-    for (let i = 0; i < arr.length; i++) arr[i] = _oldToNewBinding[arr[i]];
-  }
-  for (const arr of deformerObjectBindings) {
-    for (let i = 0; i < arr.length; i++) arr[i] = _oldToNewBinding[arr[i]];
-  }
-
-  // Group objects by canonical binding profile → unique bands.
-  // A "null" band (count=0) is reserved at index 0 — used by parts and
-  // any future objects without bindings (matches cubism's band[0]).
-  /** @type {{bindingIndices:number[]}[]} */
-  const bandPool = [{ bindingIndices: [] }]; // band 0 = null
-  const bandHashToIdx = new Map([['', 0]]);
-  const _profileHash = (idxs) => idxs.slice().sort((a, b) => a - b).join(',');
-  const _internBand = (bindingIndices) => {
-    if (bindingIndices.length === 0) return 0;
-    const h = _profileHash(bindingIndices);
-    if (bandHashToIdx.has(h)) return bandHashToIdx.get(h);
-    const idx = bandPool.length;
-    bandPool.push({ bindingIndices: bindingIndices.slice() });
-    bandHashToIdx.set(h, idx);
-    return idx;
-  };
-  const meshBandIndex = meshObjectBindings.map(b => _internBand(b));
-  const deformerBandIndex = deformerObjectBindings.map(b => _internBand(b));
-
-  // Per-binding key range — emit ONCE per unique binding.
-  const bindingKeysBegin = [];
-  const bindingKeysCount = [];
-  const flatKeys = [];
-  for (const b of uniqueBindings) {
-    bindingKeysBegin.push(flatKeys.length);
-    bindingKeysCount.push(b.keys.length);
-    for (const k of b.keys) flatKeys.push(k);
-  }
-
-  // Build keyform_binding_index by walking each band's binding indices.
-  // Each band's range in kfbi is contiguous; slots within a band match
-  // the band's binding-axis order.
-  const keyformBindingIndices = [];
-  const bandBegins = [];
-  const bandCounts = [];
-  for (const band of bandPool) {
-    bandBegins.push(keyformBindingIndices.length);
-    bandCounts.push(band.bindingIndices.length);
-    for (const bi of band.bindingIndices) keyformBindingIndices.push(bi);
-  }
-
-  // Per-parameter binding range — index INTO uniqueBindings[], not into kfbi.
-  // Verified vs cubism: ParamAngleX@params[0] has kfb_begin=0 and the binding
-  // at uniqueBindings[0] is ParamAngleX[-30,0,30]. Earlier code emitted a slot
-  // index in keyform_binding_indices[] here, which is a different array; the
-  // SDK then routed param values to the wrong binding and nothing animated.
-  // Reordering above guarantees a param's bindings are contiguous, so this
-  // is a single contiguous range.
-  const paramKfbBegin = [];
-  const paramKfbCount = [];
-  for (const p of params) {
-    let begin = -1;
-    let count = 0;
-    for (let bi = 0; bi < uniqueBindings.length; bi++) {
-      if (uniqueBindings[bi].paramId === p.id) {
-        if (begin === -1) begin = bi;
-        count++;
-      }
-    }
-    if (begin >= 0) {
-      paramKfbBegin.push(begin);
-      paramKfbCount.push(count);
-    } else {
-      paramKfbBegin.push(-1); // signed -1 — moc3 stores as 0xFFFFFFFF on the wire
-      paramKfbCount.push(0);
-    }
-  }
+  // See moc3/keyformBindings.js for the full pipeline (dedup pool +
+  // contiguous-by-param reorder + band interning + kfbi expansion +
+  // per-param ranges). Without dedup the moc3 fails to load (band/
+  // binding counts come out 2× cubism's).
+  const {
+    uniqueBindings,
+    meshBandIndex,
+    deformerBandIndex,
+    bandBegins,
+    bandCounts,
+    keyformBindingIndices,
+    bindingKeysBegin,
+    bindingKeysCount,
+    flatKeys,
+    paramKfbBegin,
+    paramKfbCount,
+  } = buildKeyformBindings({ meshBindingPlan, allDeformerSpecs, params });
   sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
   sections.set('parameter.keyform_binding_counts', paramKfbCount);
 
@@ -481,361 +361,53 @@ function buildSectionData(input) {
   // Draw orders: all 500.0 (Hiyori pattern — actual order via draw_order_group_object)
   sections.set('part_keyform.draw_orders', partNodes.map(() => 500.0));
 
-  // --- ArtMesh Keyform sections ---
-  // Flat across all keyforms — per-mesh keyform count is variable.
-  //   - Variant fade / single-keyform: keyforms share the mesh's REST
-  //     vertex data (one position_begin per mesh).
-  //   - Bone-baked: each angle keyform has its OWN rotated vertex
-  //     positions. The position_begin is patched after warp keyforms
-  //     extend keyform_position section (see bone keyform pass below).
-  const flatOpacities = [];
-  const flatDrawOrders = [];
-  const flatKeyformPosBegin = [];
-  /** @type {{flatIndex:number, partIndex:number, positions:Float32Array}[]} */
-  const bonePerKeyformAppends = [];
-  for (let m = 0; m < meshBindingPlan.length; m++) {
-    const plan = meshBindingPlan[m];
-    const restPosBegin = meshInfos[m].keyformPositionBeginIndex;
-    for (let ki = 0; ki < plan.keyformOpacities.length; ki++) {
-      flatOpacities.push(plan.keyformOpacities[ki]);
-      flatDrawOrders.push(500.0);
-      if (plan.perVertexPositions && plan.perVertexPositions[ki]) {
-        // Sentinel — patched after warp keyforms append their grid data.
-        flatKeyformPosBegin.push(-1);
-        bonePerKeyformAppends.push({
-          flatIndex: flatKeyformPosBegin.length - 1,
-          partIndex: m,
-          positions: plan.perVertexPositions[ki],
-        });
-      } else {
-        flatKeyformPosBegin.push(restPosBegin);
-      }
-    }
-  }
-  sections.set('art_mesh_keyform.opacities', flatOpacities);
-  sections.set('art_mesh_keyform.draw_orders', flatDrawOrders);
-  // keyform_position_begin_indices written after sentinels resolved.
-
-  // --- Keyform positions (vertex coordinates) ---
-  // Frame matches the mesh's PARENT deformer's local frame. Three cases:
-  //   - No deformer parent (legacy):       canvas-px-normalised by PPU.
-  //   - Per-mesh rig warp parent:          0..1 of the rig warp's canvas
-  //                                        bbox (matches cmo3 mesh
-  //                                        emission convention at line
-  //                                        ~3497-3503).
-  //   - Body warp chain (BodyXWarp) parent (no rig warp): BX 0..1 via
-  //                                        the canvasToBodyXX/Y chain.
-  // TRAPDOOR: canvasW/canvasH are declared at top of buildSectionData().
-  // The `canvas` object is declared BELOW — never reference it here.
-  // See docs/live2d-export/DECISIONS.md — this caused two identical crashes.
-  const ppu = Math.max(canvasW, canvasH);
-  const originX = canvasW / 2;
-  const originY = canvasH / 2;
-  const useDeformerFrame = !!(rigSpec && rigSpec.canvasToInnermostX && meshDefaultDeformerIdx >= 0);
-  // Map partId → rig warp spec for per-mesh frame conversion.
-  const rigWarpByPartId = new Map();
-  if (rigSpec) {
-    for (const w of warpSpecs) {
-      if (w.targetPartId && w.canvasBbox) rigWarpByPartId.set(w.targetPartId, w);
-    }
-  }
-  // Resolve a mesh's owning group rotation deformer (for pivot-relative
-  // frame). Mirrors the parent_deformer_indices logic so frames match
-  // their parent.
-  const _groupRotationPivot = (part) => {
-    const jointBoneId = part.mesh?.jointBoneId;
-    if (jointBoneId && part.mesh?.boneWeights) {
-      const boneGroup = groups.find(g => g.id === jointBoneId);
-      const armGroupId = boneGroup?.parent;
-      if (armGroupId) {
-        const armGroup = groups.find(g => g.id === armGroupId);
-        if (armGroup?.transform) return { x: armGroup.transform.pivotX ?? 0, y: armGroup.transform.pivotY ?? 0 };
-      }
-    }
-    if (part.parent) {
-      const ownGroup = groups.find(g => g.id === part.parent);
-      if (ownGroup?.transform && rigSpec?.rotationDeformers?.some(r => r.id === `GroupRotation_${part.parent}`)) {
-        return { x: ownGroup.transform.pivotX ?? 0, y: ownGroup.transform.pivotY ?? 0 };
-      }
-    }
-    return null;
-  };
-  // 16-float padding: Cubism stores each keyform's vertex block aligned
-  // to 16 floats; pos_begin offsets must land on 16-aligned indices or the
-  // runtime reads adjacent keyforms incorrectly. Verified by binary diff
-  // against cubism native export: 36-pt keyforms occupy 80 floats (72 +
-  // 8 zero pad), 16-pt occupy 32 (already aligned), 9-pt occupy 32 (18
-  // + 14 zero pad), etc.
-  const _padTo16 = (arr) => {
-    while (arr.length % 16 !== 0) arr.push(0);
-  };
-  const allKeyformPositions = [];
-  for (const part of meshParts) {
-    if (!part.mesh?.vertices) continue;
-    const rigWarp = rigWarpByPartId.get(part.id);
-    const rotPivot = !rigWarp ? _groupRotationPivot(part) : null;
-    for (const vert of part.mesh.vertices) {
-      if (rigWarp) {
-        // 0..1 of rig warp's canvas bbox (verified vs cubism native: face
-        // mesh values like 0.3250, 0.7987 — exactly this range).
-        const bb = rigWarp.canvasBbox;
-        allKeyformPositions.push((vert.x - bb.minX) / bb.W);
-        allKeyformPositions.push((vert.y - bb.minY) / bb.H);
-      } else if (rotPivot) {
-        // RAW canvas-pixel offsets from parent rotation's pivot. Cubism
-        // stores arm mesh values like (-38.9, -88.4) directly, NOT
-        // PPU-normalised (the earlier `/ppu` made arms 800× too small).
-        allKeyformPositions.push(vert.x - rotPivot.x);
-        allKeyformPositions.push(vert.y - rotPivot.y);
-      } else if (useDeformerFrame) {
-        allKeyformPositions.push(rigSpec.canvasToInnermostX(vert.x));
-        allKeyformPositions.push(rigSpec.canvasToInnermostY(vert.y));
-      } else {
-        allKeyformPositions.push((vert.x - originX) / ppu);
-        allKeyformPositions.push((vert.y - originY) / ppu);
-      }
-    }
-    _padTo16(allKeyformPositions);
-  }
-  sections.set('keyform_position.xys', allKeyformPositions);
-
-  // ── Emit deduplicated keyform_binding_band sections ──
-  // bandPool's begins/counts already cover EVERY unique band; objects
-  // (mesh / part / deformer) reference their band by index via the
-  // *.keyform_binding_band_indices sections below.
-  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = bandPool.length;
-  sections.set('keyform_binding_band.begin_indices', bandBegins);
-  sections.set('keyform_binding_band.counts', bandCounts);
-  sections.set('keyform_binding_index.indices', keyformBindingIndices);
-  sections.set('keyform_binding.keys_begin_indices', bindingKeysBegin);
-  sections.set('keyform_binding.keys_counts', bindingKeysCount);
-  sections.set('keys.values', flatKeys);
-
-  // ──────────────────────────────────────────────────────────────────
-  // Deformer sections (Stage 2b binary translator)
-  // ──────────────────────────────────────────────────────────────────
-  // Deformer band indices follow mesh + part bands.
-
-  // ── Umbrella deformer section ──
-  const deformer_ids = [];
-  const deformer_band_indices = [];
-  const deformer_visibles = [];
-  const deformer_enables = [];
-  const deformer_parent_part_indices = [];
-  const deformer_parent_deformer_indices = [];
-  const deformer_types = [];
-  const deformer_specific_indices = [];
-  for (let d = 0; d < allDeformerSpecs.length; d++) {
-    const spec = allDeformerSpecs[d];
-    deformer_ids.push(spec.id);
-    // Deduped band index — deformers with the same binding profile share.
-    deformer_band_indices.push(deformerBandIndex[d]);
-    deformer_visibles.push(spec.isVisible !== false);
-    deformer_enables.push(true);
-    // Cubism's runtime expects parent_part_index >= 0 for every deformer
-    // (used for the drawing-tree organisation, separate from the
-    // transformation-chain parent_deformer_index). Default to 0 (root
-    // part) when no specific group ownership is encoded; warp/rotation
-    // parent fills parent_deformer_index in addition.
-    let pp = 0;
-    let pd = -1;
-    if (spec.parent.type === 'warp' || spec.parent.type === 'rotation') {
-      pd = deformerIdToIndex.get(spec.parent.id) ?? -1;
-      // Fallback: when the named parent isn't in this rigSpec (e.g. rig-warp
-      // points to FaceParallax but face parallax extraction is pending),
-      // attach to the deepest body warp so the deformer isn't orphaned.
-      if (pd < 0 && meshDefaultDeformerIdx >= 0) pd = meshDefaultDeformerIdx;
-    }
-    deformer_parent_part_indices.push(pp);
-    deformer_parent_deformer_indices.push(pd);
-    // Type + specific_index from the topo-sorted entries — keeps
-    // warp_deformer.* / rotation_deformer.* sections in their original
-    // natural order (creation order in rigSpec) while the umbrella
-    // section can be in a different (parent-before-child) order.
-    deformer_types.push(allDeformerKinds[d] === 'warp' ? 0 : 1);
-    deformer_specific_indices.push(allDeformerSrcIndices[d]);
-  }
-  sections.set('deformer.ids', deformer_ids);
-  sections.set('deformer.keyform_binding_band_indices', deformer_band_indices);
-  sections.set('deformer.visibles', deformer_visibles);
-  sections.set('deformer.enables', deformer_enables);
-  sections.set('deformer.parent_part_indices', deformer_parent_part_indices);
-  sections.set('deformer.parent_deformer_indices', deformer_parent_deformer_indices);
-  sections.set('deformer.types', deformer_types);
-  sections.set('deformer.specific_indices', deformer_specific_indices);
-
-  // ── Warp deformers + their keyforms ──
-  // Each warp keyform contributes (cols+1)*(rows+1)*2 floats to keyform_position.
-  // Position semantics depend on localFrame: canvas-px frame → normalized by
-  // PPU (same convention as mesh vertex positions). normalized-0to1 frame →
-  // stored as-is (already in parent's local frame).
-  const warp_kf_band_indices = [];
-  const warp_kf_begin_indices = [];
-  const warp_kf_counts = [];
-  const warp_vertex_counts = [];
-  const warp_rows = [];
-  const warp_cols = [];
-  const warp_kf_opacities = [];
-  const warp_kf_pos_begin_indices = [];
-  let _totalWarpKeyforms = 0;
-  for (let i = 0; i < warpSpecs.length; i++) {
-    const w = warpSpecs[i];
-    const gridPts = (w.gridSize.cols + 1) * (w.gridSize.rows + 1);
-    // Same band as the umbrella deformer entry — look up via the unified
-    // index then read deformerBandIndex.
-    const _uidx = deformerIdToIndex.get(w.id) ?? 0;
-    warp_kf_band_indices.push(deformerBandIndex[_uidx] ?? 0);
-    warp_kf_begin_indices.push(_totalWarpKeyforms);
-    warp_kf_counts.push(w.keyforms.length);
-    warp_vertex_counts.push(gridPts);
-    warp_rows.push(w.gridSize.rows);
-    warp_cols.push(w.gridSize.cols);
-    _totalWarpKeyforms += w.keyforms.length;
-    for (const kf of w.keyforms) {
-      warp_kf_opacities.push(kf.opacity ?? 1);
-      // keyform_position_begin_indices is the FLOAT offset into the
-      // keyform_position.xys array (mesh code does the same — each XY pair
-      // takes 2 floats and offsets accumulate by vertCount * 2).
-      warp_kf_pos_begin_indices.push(allKeyformPositions.length);
-      // Translate positions to moc3 convention. Verified by binary diff
-      // against the cubism native export:
-      //   - canvas-px frame  → centred + PPU-normalised (mesh-vertex
-      //     convention; e.g. BodyWarpZ rest grid lands at ±0.3 range)
-      //   - pivot-relative   → RAW canvas pixels (offsets from parent
-      //     rotation pivot; cubism stores ~±150 px values directly, NOT
-      //     normalised — earlier `/ppu` made face parallax 800× too
-      //     small and the face vanished off-canvas)
-      //   - normalized-0to1  → store as-is (already in parent's frame)
-      for (let pi = 0; pi < kf.positions.length; pi += 2) {
-        const lx = kf.positions[pi];
-        const ly = kf.positions[pi + 1];
-        if (w.localFrame === 'canvas-px') {
-          allKeyformPositions.push((lx - originX) / ppu);
-          allKeyformPositions.push((ly - originY) / ppu);
-        } else if (w.localFrame === 'pivot-relative') {
-          allKeyformPositions.push(lx);
-          allKeyformPositions.push(ly);
-        } else {
-          allKeyformPositions.push(lx);
-          allKeyformPositions.push(ly);
-        }
-      }
-      _padTo16(allKeyformPositions);
-    }
-  }
-  counts[COUNT_IDX.WARP_DEFORMER_KEYFORMS] = _totalWarpKeyforms;
-  sections.set('warp_deformer.keyform_binding_band_indices', warp_kf_band_indices);
-  sections.set('warp_deformer.keyform_begin_indices', warp_kf_begin_indices);
-  sections.set('warp_deformer.keyform_counts', warp_kf_counts);
-  sections.set('warp_deformer.vertex_counts', warp_vertex_counts);
-  sections.set('warp_deformer.rows', warp_rows);
-  sections.set('warp_deformer.cols', warp_cols);
-  sections.set('warp_deformer_keyform.opacities', warp_kf_opacities);
-  sections.set('warp_deformer_keyform.keyform_position_begin_indices', warp_kf_pos_begin_indices);
-
-  // ── Rotation deformers + their keyforms ──
-  const rot_kf_band_indices = [];
-  const rot_kf_begin_indices = [];
-  const rot_kf_counts = [];
-  const rot_base_angles = [];
-  const rot_kf_opacities = [];
-  const rot_kf_angles = [];
-  const rot_kf_origin_xs = [];
-  const rot_kf_origin_ys = [];
-  const rot_kf_scales = [];
-  const rot_kf_reflect_xs = [];
-  const rot_kf_reflect_ys = [];
-  // rotation_deformer_keyform.scales is the FRAME CONVERSION FACTOR from
-  // child's pivot-relative (canvas-px) offsets to the parent's frame units.
-  // Verified by binary diff against cubism's native shelby.moc3:
-  //   - Parent type 'warp'      → scale = 1 / canvasMaxDim  (~5.58e-4 for 1792 canvas)
-  //   - Parent type 'rotation'  → scale = 1.0
-  //   - Parent type 'root'      → scale = 1.0 (root frame is already canvas-px)
-  // cmo3 always emits scale="1.0" in XML; Cubism Editor patches this on
-  // moc3 compile based on parent type. Without it, the rotation's rotated
-  // child positions stay in canvas-pixel magnitudes when they should be
-  // 0..1 of the parent warp — chains like
-  // face → RigWarp_face → FaceParallax → FaceRotation → Rotation_head → BodyXWarp
-  // produce results 1792× too large (face / head / arms render off-canvas).
-  const _canvasMaxDim = Math.max(canvasW, canvasH);
-  let _totalRotKeyforms = 0;
-  for (let i = 0; i < rotationSpecs.length; i++) {
-    const r = rotationSpecs[i];
-    const _uidx = deformerIdToIndex.get(r.id) ?? 0;
-    rot_kf_band_indices.push(deformerBandIndex[_uidx] ?? 0);
-    rot_kf_begin_indices.push(_totalRotKeyforms);
-    rot_kf_counts.push(r.keyforms.length);
-    rot_base_angles.push(r.baseAngle ?? 0);
-    _totalRotKeyforms += r.keyforms.length;
-    const scaleFactor = r.parent?.type === 'warp'
-      ? 1 / _canvasMaxDim
-      : 1.0; // 'rotation' or 'root' parent — child frame already matches
-    for (const kf of r.keyforms) {
-      rot_kf_opacities.push(kf.opacity ?? 1);
-      rot_kf_angles.push(kf.angle);
-      rot_kf_origin_xs.push(kf.originX);
-      rot_kf_origin_ys.push(kf.originY);
-      rot_kf_scales.push(scaleFactor);
-      rot_kf_reflect_xs.push(kf.reflectX ?? false);
-      rot_kf_reflect_ys.push(kf.reflectY ?? false);
-    }
-  }
-  counts[COUNT_IDX.ROTATION_DEFORMER_KEYFORMS] = _totalRotKeyforms;
-  sections.set('rotation_deformer.keyform_binding_band_indices', rot_kf_band_indices);
-  sections.set('rotation_deformer.keyform_begin_indices', rot_kf_begin_indices);
-  sections.set('rotation_deformer.keyform_counts', rot_kf_counts);
-  sections.set('rotation_deformer.base_angles', rot_base_angles);
-  sections.set('rotation_deformer_keyform.opacities', rot_kf_opacities);
-  sections.set('rotation_deformer_keyform.angles', rot_kf_angles);
-  sections.set('rotation_deformer_keyform.origin_xs', rot_kf_origin_xs);
-  sections.set('rotation_deformer_keyform.origin_ys', rot_kf_origin_ys);
-  sections.set('rotation_deformer_keyform.scales', rot_kf_scales);
-  sections.set('rotation_deformer_keyform.reflect_xs', rot_kf_reflect_xs);
-  sections.set('rotation_deformer_keyform.reflect_ys', rot_kf_reflect_ys);
-
-  // ── Append per-keyform vertex data, then patch sentinels ──
-  // Any mesh keyform with a non-null `perVertexPositions` entry contributed
-  // a sentinel (-1) to flatKeyformPosBegin earlier. Two cases use this path:
-  //   - Bone-baked meshes: 5 angle keyforms with rotated vertex positions.
-  //   - Mesh-level eye closure: 2 keyforms (closed at key=0, rest at key=1)
-  //     with closed-eye canvas verts from rigSpec.eyeClosure.
-  // Both share the same per-mesh frame conversion (rig-warp 0..1 /
-  // pivot-relative px / canvas-PPU), driven by the part's parent_deformer.
-  for (const append of bonePerKeyformAppends) {
-    const partIdx = append.partIndex;
-    const part = meshParts[partIdx];
-    const rigWarp = rigWarpByPartId.get(part.id);
-    const rotPivot = !rigWarp ? _groupRotationPivot(part) : null;
-    const offset = allKeyformPositions.length;
-    flatKeyformPosBegin[append.flatIndex] = offset;
-    // Convert to the same frame as rest-pose vertex positions for this
-    // mesh (so deformer chain interpretation stays consistent).
-    for (let i = 0; i < append.positions.length; i += 2) {
-      const vx = append.positions[i];
-      const vy = append.positions[i + 1];
-      if (rigWarp) {
-        const bb = rigWarp.canvasBbox;
-        allKeyformPositions.push((vx - bb.minX) / bb.W);
-        allKeyformPositions.push((vy - bb.minY) / bb.H);
-      } else if (rotPivot) {
-        allKeyformPositions.push(vx - rotPivot.x);
-        allKeyformPositions.push(vy - rotPivot.y);
-      } else if (useDeformerFrame) {
-        allKeyformPositions.push(rigSpec.canvasToInnermostX(vx));
-        allKeyformPositions.push(rigSpec.canvasToInnermostY(vy));
-      } else {
-        allKeyformPositions.push((vx - originX) / ppu);
-        allKeyformPositions.push((vy - originY) / ppu);
-      }
-    }
-    _padTo16(allKeyformPositions);
-  }
-  sections.set('art_mesh_keyform.keyform_position_begin_indices', flatKeyformPosBegin);
-
-  // ── Update keyform_position count + section (extended with warp grids
-  // and bone keyforms) ──
-  counts[COUNT_IDX.KEYFORM_POSITIONS] = allKeyformPositions.length;
-  sections.set('keyform_position.xys', allKeyformPositions);
+  // --- ArtMesh keyforms + deformer sections + keyform positions ---
+  // See moc3/keyformAndDeformerSections.js for the interleaved emit
+  // pipeline (mesh kf flatten → mesh kf positions → umbrella deformer.*
+  // → warp_deformer.* + grid append → rotation_deformer.* → bone kf
+  // sentinel patch). Single accumulator; cannot be cleanly subdivided.
+  const kfd = emitKeyformAndDeformerSections({
+    meshParts, meshBindingPlan, meshInfos,
+    rigSpec, warpSpecs, rotationSpecs,
+    allDeformerSpecs, allDeformerKinds, allDeformerSrcIndices,
+    deformerIdToIndex, deformerBandIndex, meshDefaultDeformerIdx,
+    groups,
+    canvasW, canvasH,
+  });
+  sections.set('art_mesh_keyform.opacities', kfd.flatOpacities);
+  sections.set('art_mesh_keyform.draw_orders', kfd.flatDrawOrders);
+  sections.set('art_mesh_keyform.keyform_position_begin_indices', kfd.flatKeyformPosBegin);
+  sections.set('deformer.ids', kfd.deformerIds);
+  sections.set('deformer.keyform_binding_band_indices', kfd.deformerBandIndices);
+  sections.set('deformer.visibles', kfd.deformerVisibles);
+  sections.set('deformer.enables', kfd.deformerEnables);
+  sections.set('deformer.parent_part_indices', kfd.deformerParentParts);
+  sections.set('deformer.parent_deformer_indices', kfd.deformerParentDeformers);
+  sections.set('deformer.types', kfd.deformerTypes);
+  sections.set('deformer.specific_indices', kfd.deformerSpecificIndices);
+  sections.set('warp_deformer.keyform_binding_band_indices', kfd.warpKfBandIndices);
+  sections.set('warp_deformer.keyform_begin_indices', kfd.warpKfBeginIndices);
+  sections.set('warp_deformer.keyform_counts', kfd.warpKfCounts);
+  sections.set('warp_deformer.vertex_counts', kfd.warpVertexCounts);
+  sections.set('warp_deformer.rows', kfd.warpRows);
+  sections.set('warp_deformer.cols', kfd.warpCols);
+  sections.set('warp_deformer_keyform.opacities', kfd.warpKfOpacities);
+  sections.set('warp_deformer_keyform.keyform_position_begin_indices', kfd.warpKfPosBeginIndices);
+  counts[COUNT_IDX.WARP_DEFORMER_KEYFORMS] = kfd.totalWarpKeyforms;
+  sections.set('rotation_deformer.keyform_binding_band_indices', kfd.rotKfBandIndices);
+  sections.set('rotation_deformer.keyform_begin_indices', kfd.rotKfBeginIndices);
+  sections.set('rotation_deformer.keyform_counts', kfd.rotKfCounts);
+  sections.set('rotation_deformer.base_angles', kfd.rotBaseAngles);
+  sections.set('rotation_deformer_keyform.opacities', kfd.rotKfOpacities);
+  sections.set('rotation_deformer_keyform.angles', kfd.rotKfAngles);
+  sections.set('rotation_deformer_keyform.origin_xs', kfd.rotKfOriginXs);
+  sections.set('rotation_deformer_keyform.origin_ys', kfd.rotKfOriginYs);
+  sections.set('rotation_deformer_keyform.scales', kfd.rotKfScales);
+  sections.set('rotation_deformer_keyform.reflect_xs', kfd.rotKfReflectXs);
+  sections.set('rotation_deformer_keyform.reflect_ys', kfd.rotKfReflectYs);
+  counts[COUNT_IDX.ROTATION_DEFORMER_KEYFORMS] = kfd.totalRotKeyforms;
+  counts[COUNT_IDX.KEYFORM_POSITIONS] = kfd.allKeyformPositions.length;
+  sections.set('keyform_position.xys', kfd.allKeyformPositions);
 
   // ── Re-parent art meshes to their rig warp (or deepest body warp) ──
   // Each mesh tries to parent to its dedicated rig warp first (per-mesh
