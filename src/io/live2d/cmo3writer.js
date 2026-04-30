@@ -48,6 +48,14 @@ import {
 import { emitNeckWarp, emitFaceRotation } from './cmo3/bodyRig.js';
 import { emitFaceParallax } from './cmo3/faceParallax.js';
 import { emitPhysicsSettings } from './cmo3/physics.js';
+import {
+  RIG_WARP_TAGS,
+  FACE_PARALLAX_TAGS,
+  FACE_PARALLAX_DEPTH,
+  NECK_WARP_TAGS,
+} from './cmo3/rigWarpTags.js';
+import { CATEGORY_DEFS, categorizeParam } from './cmo3/paramCategories.js';
+import { computeGroupWorldMatrices } from './cmo3/groupWorldMatrices.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -1634,8 +1642,8 @@ export async function generateCmo3(input) {
   // Meshes are auto-parented to their group's deformer with vertex space conversion.
 
   // --- Compute world-space pivot positions for all groups ---
-  // Used for: (a) deformer origins, (b) mesh vertex → deformer-local transform
-  const groupWorldMatrices = new Map();
+  // Used for: (a) deformer origins, (b) mesh vertex → deformer-local transform.
+  // Logic lives in `cmo3/groupWorldMatrices.js`; pure transform-math, no I/O.
   const groupMap = new Map(groups.map(g => [g.id, g]));
 
   // Identify head and neck groups for structural chain integration
@@ -1648,62 +1656,8 @@ export async function generateCmo3(input) {
     (g.name && g.name.toLowerCase() === 'neck')
   )?.id;
 
-  function resolveGroupWorld(groupId) {
-    if (groupWorldMatrices.has(groupId)) return groupWorldMatrices.get(groupId);
-    const g = groupMap.get(groupId);
-    if (!g) return new Float32Array([1,0,0, 0,1,0, 0,0,1]);
-    const local = makeLocalMatrix(g.transform);
-    const world = (g.parent && groupMap.has(g.parent))
-      ? mat3Mul(resolveGroupWorld(g.parent), local)
-      : local;
-    groupWorldMatrices.set(groupId, world);
-    return world;
-  }
-  for (const g of groups) resolveGroupWorld(g.id);
-
-  // Compute canvas-space (world) pivot position for each group's deformer origin
-  const deformerWorldOrigins = new Map(); // groupId → { x, y }
-  for (const g of groups) {
-    const wm = groupWorldMatrices.get(g.id);
-    const t = g.transform || {};
-    const px = t.pivotX ?? 0, py = t.pivotY ?? 0;
-    // Pivot in world space: worldMatrix × [pivotX, pivotY, 1]
-    // For identity transform: pivot maps to (x + pivotX, y + pivotY) in parent space
-    const worldPivotX = wm[0] * px + wm[3] * py + wm[6];
-    const worldPivotY = wm[1] * px + wm[4] * py + wm[7];
-
-    const hasPivot = px !== 0 || py !== 0;
-    if (hasPivot) {
-      deformerWorldOrigins.set(g.id, { x: worldPivotX, y: worldPivotY });
-    } else {
-      // Fallback: center of descendant meshes bounding box
-      const descendantIds = new Set([g.id]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const g2 of groups) {
-          if (!descendantIds.has(g2.id) && g2.parent && descendantIds.has(g2.parent)) {
-            descendantIds.add(g2.id);
-            changed = true;
-          }
-        }
-      }
-      const descMeshes = meshes.filter(m => m.parentGroupId && descendantIds.has(m.parentGroupId));
-      if (descMeshes.length > 0) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const gm of descMeshes) {
-          for (let vi = 0; vi < gm.vertices.length; vi += 2) {
-            const vx = gm.vertices[vi], vy = gm.vertices[vi + 1];
-            if (vx < minX) minX = vx; if (vy < minY) minY = vy;
-            if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy;
-          }
-        }
-        deformerWorldOrigins.set(g.id, { x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
-      } else {
-        deformerWorldOrigins.set(g.id, { x: canvasW / 2, y: canvasH / 2 });
-      }
-    }
-  }
+  const { groupWorldMatrices, deformerWorldOrigins } =
+    computeGroupWorldMatrices(groups, meshes, canvasW, canvasH);
 
   const groupDeformerGuids = new Map(); // groupId → pidDeformerGuid
   const rotDeformerTargetNodes = new Map(); // groupId → XML node (for re-parenting to Body Warp)
@@ -2198,77 +2152,10 @@ export async function generateCmo3(input) {
   //   ROOT-level warp grid → canvas pixel space, CoordType "Canvas"
   //   Mesh keyforms under warp → 0..1 normalized, CoordType "DeformerLocal"
 
-  // Per-tag warp grid sizes (col × row) from TEMPLATES.md Bezier Division Spec.
-  // Body/limb parts: 3×3 default. Face parts: per-part sizes for better control.
-  const RIG_WARP_TAGS = new Map([
-    // Body / limbs
-    ['topwear',     { col: 3, row: 3 }],
-    ['bottomwear',  { col: 3, row: 3 }],
-    ['handwear',    { col: 3, row: 3 }],
-    ['handwear-l',  { col: 3, row: 3 }],
-    ['handwear-r',  { col: 3, row: 3 }],
-    ['legwear',     { col: 3, row: 3 }],
-    ['legwear-l',   { col: 3, row: 3 }],
-    ['legwear-r',   { col: 3, row: 3 }],
-    ['footwear',    { col: 3, row: 3 }],
-    ['footwear-l',  { col: 3, row: 3 }],
-    ['footwear-r',  { col: 3, row: 3 }],
-    ['neck',        { col: 3, row: 3 }],
-    ['neckwear',    { col: 3, row: 3 }],
-    // Head / face
-    ['face',        { col: 2, row: 3 }],  // vertically long
-    ['front hair',  { col: 2, row: 2 }],  // short parts
-    ['back hair',   { col: 2, row: 3 }],  // vertically long
-    ['headwear',    { col: 2, row: 2 }],
-    ['eyebrow',     { col: 2, row: 2 }],
-    ['eyebrow-l',   { col: 2, row: 2 }],
-    ['eyebrow-r',   { col: 2, row: 2 }],
-    ['eyewhite',    { col: 3, row: 3 }],  // needs fine control
-    ['eyewhite-l',  { col: 3, row: 3 }],
-    ['eyewhite-r',  { col: 3, row: 3 }],
-    ['eyelash',     { col: 3, row: 3 }],
-    ['eyelash-l',   { col: 3, row: 3 }],
-    ['eyelash-r',   { col: 3, row: 3 }],
-    ['irides',      { col: 3, row: 3 }],
-    ['irides-l',    { col: 3, row: 3 }],
-    ['irides-r',    { col: 3, row: 3 }],
-    ['nose',        { col: 2, row: 2 }],  // small square
-    ['mouth',       { col: 3, row: 2 }],  // horizontally long
-    ['ears',        { col: 2, row: 2 }],
-    ['ears-l',      { col: 2, row: 2 }],
-    ['ears-r',      { col: 2, row: 2 }],
-    ['earwear',     { col: 2, row: 2 }],
-    ['eyewear',     { col: 3, row: 3 }],
-    ['tail',        { col: 2, row: 3 }],  // vertically long
-    ['wings',       { col: 3, row: 3 }],
-  ]);
-
-  // ── Face parallax (Session 19, Option B v2) ──
-  // SINGLE warp covers the entire face. All face-tagged meshes become children of this
-  // one warp (via their rig warps). The warp's grid deforms once under AngleX/Y, and
-  // every mesh inherits the deformation via bilinear interpolation. No boundaries, no
-  // independent per-part movement — the face rotates as one coherent surface.
-  //
-  // Semantically this matches the user's "Blender proportional-edit with smooth falloff"
-  // mental model: one deformation field applied continuously across the whole face.
-  const FACE_PARALLAX_TAGS = new Set([
-    'face', 'nose',
-    'eyebrow', 'eyebrow-l', 'eyebrow-r',
-    'front hair', 'back hair',
-    'eyewhite-l', 'irides-l', 'eyelash-l',
-    'eyewhite-r', 'irides-r', 'eyelash-r',
-    'mouth',
-    'ears-l', 'ears-r',
-  ]);
-  // Single depth for the unified face warp. Represents the face's overall protrusion
-  // from the rotation axis. Larger = bigger 3D-rotation effect. Spatial depth variation
-  // (per-region) can be added later for finer parallax between parts.
-  const FACE_PARALLAX_DEPTH = 0.5;
-
-  // Session 20: Neck warp tags — meshes that follow the head tilt with a Y-gradient
-  // (top row shifts, bottom row pinned at shoulders). Matches Hiyori's Neck Warp
-  // pattern. See section 3d.1 for the emission.
-  const NECK_WARP_TAGS = new Set(['neck', 'neckwear']);
+  // RIG_WARP_TAGS / FACE_PARALLAX_TAGS / FACE_PARALLAX_DEPTH / NECK_WARP_TAGS
+  // live in `cmo3/rigWarpTags.js`. The constants drive sections 3c (per-tag
+  // warp grid sizes), 3d.2 (face-parallax membership + depth) and 3d.1
+  // (neck-warp membership) below.
 
   // partId → { gridMinX, gridMinY, gridW, gridH } for 0..1 conversion in section 4
   const rigWarpBbox = new Map();
@@ -4106,41 +3993,12 @@ export async function generateCmo3(input) {
     pd.pidId = pidId;
   }
 
-  // Parameter sub-groups — mirror Hiyori's 12-category tree so the Random
+  // Parameter sub-groups — mirror Hiyori's 10-category tree so the Random
   // Pose Setting dialog has folders to render. Without sub-groups the dialog
   // sees only the root and shows nothing (it renders parameters nested under
-  // folders, not a flat root list).
-  //
-  // Each paramDef gets categorized by its id (face / eye / hair / clothing /
-  // bone / custom …). Only categories with ≥1 param get a sub-group. Root's
-  // `_childGuids` lists sub-group guids (not param guids directly) and each
-  // CParameterSource.parentGroupGuid points at its sub-group.
-  const CATEGORY_DEFS = [
-    { key: 'face',     name: 'Face',     idstr: 'ParamGroupFace' },
-    { key: 'eye',      name: 'Eye',      idstr: 'ParamGroupEyes' },
-    { key: 'eyeball',  name: 'Eyeball',  idstr: 'ParamGroupEyeballs' },
-    { key: 'brow',     name: 'Brow',     idstr: 'ParamGroupBrows' },
-    { key: 'mouth',    name: 'Mouth',    idstr: 'ParamGroupMouth' },
-    { key: 'body',     name: 'Body',     idstr: 'ParamGroupBody' },
-    { key: 'hair',     name: 'Hair',     idstr: 'ParamGroupHair' },
-    { key: 'clothing', name: 'Clothing', idstr: 'ParamGroupClothing' },
-    { key: 'bone',     name: 'Bone',     idstr: 'ParamGroupBone' },
-    { key: 'custom',   name: 'Custom',   idstr: 'ParamGroupCustom' },
-  ];
-  function categorizeParam(id) {
-    if (!id) return 'custom';
-    if (/^ParamAngle[XYZ]$/.test(id) || id === 'ParamCheek') return 'face';
-    if (/^ParamEye[LR](Open|Smile)$/.test(id)) return 'eye';
-    if (/^ParamEyeBall[XY]$/.test(id)) return 'eyeball';
-    if (/^ParamBrow/.test(id)) return 'brow';
-    if (/^ParamMouth/.test(id)) return 'mouth';
-    if (/^ParamBodyAngle[XYZ]$/.test(id) || id === 'ParamBreath') return 'body';
-    if (/^Param(Shoulder|Elbow|Wrist)Sway/.test(id)) return 'body';
-    if (/^ParamHair/.test(id)) return 'hair';
-    if (id === 'ParamSkirt' || id === 'ParamShirt' || id === 'ParamPants' || id === 'ParamBust') return 'clothing';
-    if (/^ParamRotation_/.test(id)) return 'bone';
-    return 'custom';
-  }
+  // folders, not a flat root list). Taxonomy + classifier live in
+  // `cmo3/paramCategories.js`. Only categories with ≥1 param emit a
+  // CParameterGroup; root's `_childGuids` lists those sub-group guids.
   for (const pd of paramDefs) pd.category = categorizeParam(pd.id);
   const paramsByCategory = new Map();
   for (const cd of CATEGORY_DEFS) paramsByCategory.set(cd.key, []);
