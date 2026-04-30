@@ -1500,6 +1500,28 @@ rather than dedicated editors with full modal operator sets.
   timeline visibility, which is fixed).
 - Performance lag on elbow rotation in animation mode.
 - Most bone controllers don't move attached body parts.
+  **Root cause traced sweep #25** (analysis-only — fix is risky without
+  browser eyes): for every non-bone non-skipped group, `cmo3writer.js`
+  emits a `GroupRotation_<groupId>` rotation deformer driven by
+  `ParamRotation_<sanitizedName>`. Bone-baked meshes (arms/legs/hands)
+  *do* parent to that deformer (line 3447–3448), so their bone
+  controllers work. Tagged body meshes (topwear / hair / skirt / face
+  parts) instead parent to their `RigWarp_<sanitizedName>`, which
+  re-parents straight to `BodyXWarp` / `FaceParallax` / `NeckWarp`
+  (line 3134–3146). The group's `GroupRotation_*` ends up as a
+  **sibling** of the rig warp under the body chain — never in the
+  mesh's parent chain — so dialing `ParamRotation_topwear` has no
+  visible effect. Same in the cmo3 file (Cubism Editor renders the
+  same chain) and in the runtime evaluator (`chainEval`'s parent walk
+  passes through the rig warp directly to BodyXWarp). The bone-baked
+  branch and rotation-deformer logic shipped by sweep #20 means the
+  group rotation deformers exist in `rigSpec.rotationDeformers` and
+  get translated to moc3, but they're orphaned controllers. Fix
+  requires either (a) re-parenting `RigWarp_X` under
+  `GroupRotation_X` instead of BodyXWarp — touches the rig-warp grid
+  coord-space convention (canvas vs 0..1 vs pivot-relative) — or (b)
+  injecting a synthesized rotation effect at the chain's BodyXWarp
+  ingress. Both need parity validation against Hiyori before landing.
 
 **What "Phase N complete" means now.** First cuts unlock the surface
 each phase was scoped to; full polish (standalone editors, modal
