@@ -53,6 +53,7 @@ import { buildPartHierarchy } from './cmo3/partHierarchy.js';
 import { emitMeshVertsWarpDeformers } from './cmo3/meshVertsWarp.js';
 import { emitRotationDeformers } from './cmo3/rotationDeformerEmit.js';
 import { emitStructuralChainAndReparent } from './cmo3/structuralChainEmit.js';
+import { resolveMaskPairings } from './cmo3/maskResolve.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -2011,75 +2012,13 @@ export async function generateCmo3(input) {
   // vanishes whenever its own param is high.
   //
   // Stage 3 (native rig): pairings come from `maskConfigs` when the caller
-  // passed any (post-seed path), else from the inline heuristic below
-  // (matches the algorithm in rig/maskConfigs.js exactly). Either way we
-  // resolve to `pidByPartId` for the per-mesh emission loop.
-  const pidByPartId = new Map();
-  for (const pmEntry of perMesh) {
-    pidByPartId.set(meshes[pmEntry.mi].partId, pmEntry.pidDrawable);
-  }
-
-  const maskPidByMaskedPartId = new Map();
-  // R7 (native rig render) — partId-keyed mirror so the rigSpec push below
-  // can populate `artMesh.maskMeshIds` for runtime/scenePass consumption.
-  // Carries ALL maskMeshIds verbatim (not just the first) — cmo3 emission
-  // still collapses to one clip ref via maskPidByMaskedPartId, but the
-  // rigSpec contract preserves full multi-mask sets for future fidelity.
-  const maskMeshIdsByPartId = new Map();
-  if (maskConfigs.length > 0) {
-    for (const pair of maskConfigs) {
-      const masks = (pair.maskMeshIds ?? [])
-        .map(id => pidByPartId.get(id))
-        .filter(pid => pid != null);
-      if (masks.length > 0) {
-        // cmo3 currently emits a single clip ref per mesh — first wins.
-        maskPidByMaskedPartId.set(pair.maskedMeshId, masks[0]);
-      }
-      if (Array.isArray(pair.maskMeshIds) && pair.maskMeshIds.length > 0) {
-        maskMeshIdsByPartId.set(pair.maskedMeshId, [...pair.maskMeshIds]);
-      }
-    }
-  } else {
-    // Fallback heuristic — kept for projects that haven't been seeded.
-    // Mirrors rig/maskConfigs.js:buildMaskConfigsFromProject.
-    const CLIP_RULES = { irides: 'eyewhite', 'irides-l': 'eyewhite-l', 'irides-r': 'eyewhite-r' };
-    const basePidByTag = new Map();
-    const variantPidByTagAndSuffix = new Map();
-    const basePartIdByTag = new Map();
-    const variantPartIdByTagAndSuffix = new Map();
-    for (const pmEntry of perMesh) {
-      const mesh = meshes[pmEntry.mi];
-      const tag = mesh.tag;
-      if (!tag) continue;
-      const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
-      if (sfx) {
-        const key = `${tag}|${sfx}`;
-        if (!variantPidByTagAndSuffix.has(key)) {
-          variantPidByTagAndSuffix.set(key, pmEntry.pidDrawable);
-          variantPartIdByTagAndSuffix.set(key, mesh.partId);
-        }
-      } else if (!basePidByTag.has(tag)) {
-        basePidByTag.set(tag, pmEntry.pidDrawable);
-        basePartIdByTag.set(tag, mesh.partId);
-      }
-    }
-    for (const pmEntry of perMesh) {
-      const mesh = meshes[pmEntry.mi];
-      const tag = mesh.tag;
-      if (!tag) continue;
-      const maskTag = CLIP_RULES[tag];
-      if (!maskTag) continue;
-      const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
-      const pid = sfx
-        ? (variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePidByTag.get(maskTag) ?? null)
-        : (basePidByTag.get(maskTag) ?? null);
-      if (pid) maskPidByMaskedPartId.set(mesh.partId, pid);
-      const maskPartId = sfx
-        ? (variantPartIdByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePartIdByTag.get(maskTag) ?? null)
-        : (basePartIdByTag.get(maskTag) ?? null);
-      if (maskPartId) maskMeshIdsByPartId.set(mesh.partId, [maskPartId]);
-    }
-  }
+  // passed any (post-seed path), else from the inline heuristic in
+  // `cmo3/maskResolve.js` (matches `rig/maskConfigs.js`). The
+  // partId-keyed mask list is preserved for rigSpec multi-mask
+  // fidelity; cmo3 emission collapses to one clip ref.
+  const { maskPidByMaskedPartId, maskMeshIdsByPartId } = resolveMaskPairings({
+    perMesh, meshes, maskConfigs,
+  });
 
   for (const pm of perMesh) {
     const [meshSrc, pidMesh] = x.shared('CArtMeshSource');
