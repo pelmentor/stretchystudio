@@ -1682,6 +1682,40 @@ After cmo3writer's #24-#33 reduction, sweeps #34-#40 attack the second god class
 
 **Combined Phase 6 god-class breakup status:** cmo3writer.js (4468 → 2634, −41%, 22 modules) + moc3writer.js (1573 → 476, −70%, 9 modules) = **31 modules** across `cmo3/` + `moc3/`, **−2931 LOC** lifted from the two writers. cmo3writer's three remaining per-mesh emission loops (Sections 2/3c/4 totaling ~2140 LOC) are the next major target — they all need a typed `EmitContext` object plumbed once before the loop bodies can be cleanly extracted.
 
+#### Remaining refactor targets (ranked by ROI, post sweep #40)
+
+This is the same overview I gave the user before /compact, recorded here so future sessions don't have to rediscover it.
+
+**A. cmo3writer.js per-mesh loops (highest ROI for cmo3 cleanup, ~2140 LOC).**
+- Section 2 per-mesh layer + keyform emission loop (~700 LOC) — variant fades / eyelid-closure compounds / base fades / neck-corner shapekeys / bone-baked keyforms; each branch differs.
+- Section 3c per-tag rig warp emission (~840 LOC, biggest single block left) — pre-passes (faceUnion/neckUnion bboxes, facePivot calibration, eye closure contexts, body-warp chain wire-up) + per-mesh `rigWarpBbox` build + grid emission.
+- Section 4 per-mesh CArtMeshSource emission loop (~600 LOC) — CArtMeshSource shell + GEditableMesh2 + dual-position vertex arrays + clip ref + extension list + keyforms.
+- All three need a typed `EmitContext` object plumbed once (rigCollector + ~25 pid maps + bbox/curve/origin lookups). Recommend: build the `EmitContext` typedef + helper-passing convention as sweep #41, then extract Section 2/3c/4 in #42-#44.
+
+**B. Other large files (split candidates, plan-flagged but not yet on the Phase 6 sweep list).**
+| File | LOC | Notes |
+|------|-----|-------|
+| `src/components/canvas/CanvasViewport.jsx` | 2167 | Plan 0F.N pointer events split; needs browser eyes for verification. |
+| `src/v3/editors/timeline/TimelineEditor.jsx` | 1831 | No split plan yet. |
+| `src/io/live2d/cmo3Import.js` | 884 | Reverse-direction of cmo3writer; same pattern. |
+| `src/lib/themePresets.js` | 860 | Largely a data dictionary — split into per-theme files. |
+| `src/io/live2d/can3writer.js` | 857 | Animation export — same writer pattern as moc3, applies the same split shape (`can3/{layout,sectionData,binarySerialize}.js`). |
+| `src/io/live2d/exporter.js` | 800 | Public API surface; split by export target (cmo3 / moc3 / motion3). |
+| `src/io/live2d/cmo3PartExtract.js` | 680 | Reverse of writer; analogous breakdown. |
+| `src/store/projectStore.js` | 644 | Plan 0F.N split flagged. |
+
+**C. Plan-flagged non-split pending.**
+- 0C TaggedBuffer integration into `evalRig` (perf tickets).
+- 0E Vitest migration (currently `node` test runners).
+- 4A Reference parity harness (env-dependent — needs Cubism SDK adoption).
+- Orphan bone-controller bug fix — RCA done in sweep #26 deferred-bugs entry; needs coord-space convention shift + Hiyori parity validation. Listed under Phase 6 to-do so `v3-shipped` doesn't ship with the bug intact.
+
+**Recommended next-session order:**
+1. cmo3 EmitContext + Section 2/3c/4 extractions (sweeps #41-#44).
+2. can3writer split mirroring moc3 shape (cleanest cuts, well-understood pattern).
+3. cmo3Import + cmo3PartExtract (analogous to writer extractions, lower ROI but symmetric).
+4. UI splits (CanvasViewport, TimelineEditor, projectStore) — needs browser-eyes follow-up since UI behaviour changes can't be verified by the current test suite alone.
+
 ---
 
 ### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
