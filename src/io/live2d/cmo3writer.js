@@ -21,33 +21,20 @@
  * @module io/live2d/cmo3writer
  */
 
-import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
-import { variantParamId } from '../psdOrganizer.js';
 import { BAKED_BONE_ANGLES } from './rig/paramSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildTagBindingMap } from './rig/tagWarpBindings.js';
 import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
-import { emitKfBinding } from './cmo3/deformerEmit.js';
-import {
-  RIG_WARP_TAGS,
-  FACE_PARALLAX_TAGS,
-  FACE_PARALLAX_DEPTH,
-  NECK_WARP_TAGS,
-} from './cmo3/rigWarpTags.js';
-import { CATEGORY_DEFS, categorizeParam } from './cmo3/paramCategories.js';
+import { FACE_PARALLAX_TAGS, NECK_WARP_TAGS } from './cmo3/rigWarpTags.js';
 import { fitParabolaFromLowerEdge } from './cmo3/eyeClosureFit.js';
-import {
-  evalClosureCurve,
-  computeClosedCanvasVerts,
-  computeClosedVertsForMesh,
-} from './cmo3/eyeClosureApply.js';
+import { evalClosureCurve } from './cmo3/eyeClosureApply.js';
 import { setupGlobalSharedObjects, lookupStandardParamPids } from './cmo3/globalSetup.js';
 import { emitModelImageGroup } from './cmo3/modelImageGroup.js';
 import { packCmo3 } from './cmo3/caffPack.js';
 import { buildMainXml } from './cmo3/mainXmlBuilder.js';
-import { emitMeshFilterGraph, emitMeshTexture, fillLayerGroupAndImage } from './cmo3/meshLayer.js';
+import { fillLayerGroupAndImage } from './cmo3/meshLayer.js';
 import { buildPartHierarchy } from './cmo3/partHierarchy.js';
 import { emitMeshVertsWarpDeformers } from './cmo3/meshVertsWarp.js';
 import { emitRotationDeformers } from './cmo3/rotationDeformerEmit.js';
