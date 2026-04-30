@@ -26,18 +26,14 @@
  */
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
-import {
-  MAGIC, HEADER_SIZE, SOT_COUNT, COUNT_INFO_ENTRIES, COUNT_INFO_SIZE,
-  CANVAS_INFO_SIZE, DEFAULT_OFFSET, ALIGN, RUNTIME_UNIT_SIZE,
-  MOC_VERSION, COUNT_IDX, ELEM, SECTION_LAYOUT,
-} from './moc3/layout.js';
-import { BinaryWriter } from './moc3/binaryWriter.js';
+import { COUNT_INFO_ENTRIES, COUNT_IDX } from './moc3/layout.js';
 import { buildMeshBindingPlan } from './moc3/meshBindingPlan.js';
 import { topoSortDeformers } from './moc3/deformerOrder.js';
 import { buildKeyformBindings } from './moc3/keyformBindings.js';
 import { emitKeyformAndDeformerSections } from './moc3/keyformAndDeformerSections.js';
 import { buildMeshDeformerParents } from './moc3/meshDeformerParent.js';
 import { buildUvAndIndices } from './moc3/uvAndIndices.js';
+import { serializeMoc3 } from './moc3/binarySerialize.js';
 
 
 // ---------------------------------------------------------------------------
@@ -476,113 +472,5 @@ function buildSectionData(input) {
  * @returns {ArrayBuffer}
  */
 export function generateMoc3(input) {
-  const { sections, counts, canvas } = buildSectionData(input);
-
-  // V4.00 matches Hiyori reference — confirmed working with Ren'Py 8.5 Cubism SDK
-  const version = MOC_VERSION.V4_00;
-
-  // Phase 1: Write body sections, record offsets
-  const body = new BinaryWriter();
-  const sotEntries = [];
-
-  // SOT[0] — Count Info
-  sotEntries.push(DEFAULT_OFFSET + body.pos);
-  for (const c of counts) body.writeI32(c);
-  // Pad to COUNT_INFO_SIZE
-  body.fill(COUNT_INFO_SIZE - counts.length * 4);
-
-  // SOT[1] — Canvas Info
-  sotEntries.push(DEFAULT_OFFSET + body.pos);
-  body.writeF32(canvas.pixelsPerUnit);
-  body.writeF32(canvas.originX);
-  body.writeF32(canvas.originY);
-  body.writeF32(canvas.canvasWidth);
-  body.writeF32(canvas.canvasHeight);
-  body.writeU8(canvas.canvasFlag);
-  body.fill(CANVAS_INFO_SIZE - (5 * 4 + 1));
-
-  // SOT[2..] — Body sections
-  for (const [name, elemType, countIdx, alignment] of SECTION_LAYOUT) {
-    // Align if needed
-    if (alignment > 0) body.padTo(alignment);
-
-    sotEntries.push(DEFAULT_OFFSET + body.pos);
-
-    const data = sections.get(name) ?? [];
-    const count = elemType === ELEM.RUNTIME
-      ? (countIdx >= 0 ? counts[countIdx] : 0)
-      : data.length;
-
-    writeSection(body, elemType, data, count);
-  }
-
-  // V3.03+ additional section: quad_transforms (Bool32 per warp deformer).
-  // For V4.00, this is section 100 → SOT[101]. SDK requires the SOT entry
-  // be a valid (non-zero) offset. With warp deformers present, the SDK
-  // ALSO reads N×4 bytes of bool32 data at the offset; without that data
-  // it parses garbage and fails the load. Each entry mirrors the warp's
-  // `isQuadTransform` flag (false for all our warps — matches Hiyori).
-  if (version >= MOC_VERSION.V3_03) {
-    body.padTo(ALIGN);
-    sotEntries.push(DEFAULT_OFFSET + body.pos);
-    const numWarps = counts[COUNT_IDX.WARP_DEFORMERS];
-    for (let i = 0; i < numWarps; i++) body.writeI32(0); // false
-  }
-
-  // Phase 2: Assemble header + SOT + padding + body
-  const out = new BinaryWriter();
-
-  // Header (64 bytes)
-  out.writeU8(MAGIC[0]); out.writeU8(MAGIC[1]); out.writeU8(MAGIC[2]); out.writeU8(MAGIC[3]);
-  out.writeU8(version);  // version
-  out.writeU8(0);        // endian flag (0 = LE)
-  out.fill(HEADER_SIZE - 6); // padding
-
-  // SOT (160 x uint32) — fill remaining with the last valid offset (not 0!)
-  // SDK validates that SOT entries for the current version are non-zero valid offsets.
-  const lastValidOffset = sotEntries[sotEntries.length - 1] || DEFAULT_OFFSET;
-  while (sotEntries.length < SOT_COUNT) sotEntries.push(lastValidOffset);
-  out.writeU32Array(sotEntries.slice(0, SOT_COUNT));
-
-  // Pad to DEFAULT_OFFSET
-  out.fill(DEFAULT_OFFSET - out.pos);
-
-  // Append body
-  const bodyBuf = body.toArrayBuffer();
-  const bodyBytes = new Uint8Array(bodyBuf);
-  for (const b of bodyBytes) out.writeU8(b);
-
-  // Final 64-byte alignment.
-  // All SOT entries now point to valid offsets (filled with lastValidOffset above).
-  // SDK requires SOT offsets <= file_size, so we pad to ensure the file extends
-  // past the last referenced offset.
-  out.padTo(ALIGN);
-
-  return out.toArrayBuffer();
-}
-
-/**
- * Write a single section's data.
- *
- * @param {BinaryWriter} w
- * @param {object} elemType - One of the ELEM constants
- * @param {any[]} data
- * @param {number} count
- */
-function writeSection(w, elemType, data, count) {
-  if (elemType === ELEM.RUNTIME) {
-    w.fill(count * RUNTIME_UNIT_SIZE);
-  } else if (elemType === ELEM.I32) {
-    w.writeI32Array(data);
-  } else if (elemType === ELEM.F32) {
-    w.writeF32Array(data);
-  } else if (elemType === ELEM.I16) {
-    w.writeI16Array(data);
-  } else if (elemType === ELEM.U8) {
-    w.writeU8Array(data);
-  } else if (elemType === ELEM.BOOL) {
-    w.writeBoolArray(data);
-  } else if (elemType === ELEM.STR64) {
-    w.writeStringArray(data);
-  }
+  return serializeMoc3(buildSectionData(input));
 }
