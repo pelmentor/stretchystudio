@@ -31,11 +31,7 @@ import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildGroupRotationSpec } from './rig/rotationDeformers.js';
 import { buildTagBindingMap } from './rig/tagWarpBindings.js';
 import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
-import {
-  emitKfBinding,
-  emitSingleParamKfGrid,
-  emitStructuralWarp,
-} from './cmo3/deformerEmit.js';
+import { emitKfBinding } from './cmo3/deformerEmit.js';
 import { emitNeckWarp, emitFaceRotation } from './cmo3/bodyRig.js';
 import { emitFaceParallax } from './cmo3/faceParallax.js';
 import { emitPhysicsSettings } from './cmo3/physics.js';
@@ -53,12 +49,13 @@ import {
   computeClosedCanvasVerts,
   computeClosedVertsForMesh,
 } from './cmo3/eyeClosureApply.js';
-import { setupGlobalSharedObjects } from './cmo3/globalSetup.js';
+import { setupGlobalSharedObjects, lookupStandardParamPids } from './cmo3/globalSetup.js';
 import { emitModelImageGroup } from './cmo3/modelImageGroup.js';
 import { packCmo3 } from './cmo3/caffPack.js';
 import { buildMainXml } from './cmo3/mainXmlBuilder.js';
 import { emitMeshFilterGraph, emitMeshTexture, fillLayerGroupAndImage } from './cmo3/meshLayer.js';
 import { buildPartHierarchy } from './cmo3/partHierarchy.js';
+import { emitBodyWarpChain } from './cmo3/bodyChainEmit.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -1623,29 +1620,21 @@ export async function generateCmo3(input) {
   // we expect, which tells us if a rendering displacement is algorithmic or chain-level.
   const rigWarpDebugInfo = new Map();
 
-  // Look up standard parameter PIDs (created by generateRig standardParams above)
-  const pidParamBreath = paramDefs.find(p => p.id === 'ParamBreath')?.pid;
+  // 19 standard SDK parameter pids (Breath, BodyAngleY/Z, EyeBall*, Brow*Y,
+  // MouthOpenY, Eye*Open, Hair*, Skirt/Shirt/Pants/Bust, Angle{X,Y,Z}).
   // ParamBodyAngleX presence is checked inline at the body chain call site
-  // (buildBodyWarpChain's hasParamBodyAngleX flag), so no local pid var here.
-  const pidParamBodyAngleY = paramDefs.find(p => p.id === 'ParamBodyAngleY')?.pid;
-  const pidParamBodyAngleZ = paramDefs.find(p => p.id === 'ParamBodyAngleZ')?.pid;
-  const pidParamEyeBallX   = paramDefs.find(p => p.id === 'ParamEyeBallX')?.pid;
-  const pidParamEyeBallY   = paramDefs.find(p => p.id === 'ParamEyeBallY')?.pid;
-  const pidParamBrowLY     = paramDefs.find(p => p.id === 'ParamBrowLY')?.pid;
-  const pidParamBrowRY     = paramDefs.find(p => p.id === 'ParamBrowRY')?.pid;
-  const pidParamMouthOpenY = paramDefs.find(p => p.id === 'ParamMouthOpenY')?.pid;
-  const pidParamEyeLOpen   = paramDefs.find(p => p.id === 'ParamEyeLOpen')?.pid;
-  const pidParamEyeROpen   = paramDefs.find(p => p.id === 'ParamEyeROpen')?.pid;
-  const pidParamHairFront  = paramDefs.find(p => p.id === 'ParamHairFront')?.pid;
-  const pidParamHairBack   = paramDefs.find(p => p.id === 'ParamHairBack')?.pid;
-  const pidParamSkirt      = paramDefs.find(p => p.id === 'ParamSkirt')?.pid;
-  const pidParamShirt      = paramDefs.find(p => p.id === 'ParamShirt')?.pid;
-  const pidParamPants      = paramDefs.find(p => p.id === 'ParamPants')?.pid;
-  const pidParamBust       = paramDefs.find(p => p.id === 'ParamBust')?.pid;
-  // Face parallax (Session 19) — drive Face Rotation (AngleZ) + 7 face parallax warps (AngleX × AngleY).
-  const pidParamAngleX     = paramDefs.find(p => p.id === 'ParamAngleX')?.pid;
-  const pidParamAngleY     = paramDefs.find(p => p.id === 'ParamAngleY')?.pid;
-  const pidParamAngleZ     = paramDefs.find(p => p.id === 'ParamAngleZ')?.pid;
+  // (buildBodyWarpChain's hasParamBodyAngleX flag), so no local pid var.
+  const {
+    pidParamBreath,
+    pidParamBodyAngleY, pidParamBodyAngleZ,
+    pidParamEyeBallX, pidParamEyeBallY,
+    pidParamBrowLY, pidParamBrowRY,
+    pidParamMouthOpenY,
+    pidParamEyeLOpen, pidParamEyeROpen,
+    pidParamHairFront, pidParamHairBack,
+    pidParamSkirt, pidParamShirt, pidParamPants, pidParamBust,
+    pidParamAngleX, pidParamAngleY, pidParamAngleZ,
+  } = lookupStandardParamPids(paramDefs);
 
   // ── Per-part warp parameter bindings (Stage 9a) ──
   // The TAG_PARAM_BINDINGS rule set (rules + procedural shiftFns) lives
@@ -2471,45 +2460,12 @@ export async function generateCmo3(input) {
   let pidBreathGuid = null;
   let pidBodyXGuid = null;
   if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
-    // Body warp chain emission — translates the 4 WarpDeformerSpec entries
-    // returned by buildBodyWarpChain (called near line 2420) into XML via
-    // emitStructuralWarp + emitSingleParamKfGrid. The math/coordinate logic
-    // lives in rig/bodyWarp.js — this block is pure XML translation.
-    //
-    // Per-spec parameter pid lookup keeps the spec format-agnostic
-    // (parameterId is a string; cmo3 needs the XML pid for KeyformBindingSource).
-    const _bodyParamPid = (paramId) => paramDefs.find(p => p.id === paramId)?.pid;
-    const _bodyDeformerPids = new Map(); // spec.id → its CDeformerGuid pid
-    const [_coordBWZ, pidCoordBWZ] = x.shared('CoordType');
-    x.sub(_coordBWZ, 's', { 'xs.n': 'coordName' }).text = 'Canvas';
-
-    for (const spec of _bodyChain.specs) {
-      rigCollector.warpDeformers.push(spec);
-      const [, pid] = x.shared('CDeformerGuid', { uuid: uuid(), note: spec.id });
-      _bodyDeformerPids.set(spec.id, pid);
-
-      // BZ uses canvas coords; rest of chain uses the standard DeformerLocal pidCoord.
-      const coordPid = spec.localFrame === 'canvas-px' ? pidCoordBWZ : pidCoord;
-
-      // Resolve parent pid: ROOT → pidDeformerRoot, warp → previously-emitted spec pid.
-      const parentPid = spec.parent.type === 'root'
-        ? pidDeformerRoot
-        : _bodyDeformerPids.get(spec.parent.id);
-
-      const binding = spec.bindings[0];
-      const paramPid = _bodyParamPid(binding.parameterId);
-      const { pidKfg, formGuids } = emitSingleParamKfGrid(
-        x, paramPid, binding.keys, binding.parameterId,
-      );
-      const positions = spec.keyforms.map(k => k.positions);
-      emitStructuralWarp(
-        x, emitCtx,
-        spec.name, spec.id, spec.gridSize.cols, spec.gridSize.rows,
-        pid, parentPid, pidKfg, coordPid, formGuids, positions,
-      );
-    }
-    pidBreathGuid = _bodyDeformerPids.get('BreathWarp') ?? null;
-    pidBodyXGuid = _bodyDeformerPids.get('BodyXWarp') ?? null;
+    // Body warp chain XML emission lives in `cmo3/bodyChainEmit.js`.
+    ({ pidBreathGuid, pidBodyXGuid } = emitBodyWarpChain(x, {
+      bodyChain: _bodyChain, paramDefs,
+      rigCollectorWarpDeformers: rigCollector.warpDeformers,
+      pidDeformerRoot, pidCoord, emitCtx,
+    }));
   }
 
   // Neck warp + face rotation + face parallax + re-parenting pass run only

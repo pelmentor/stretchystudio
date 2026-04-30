@@ -248,3 +248,45 @@ export function setupGlobalSharedObjects(x, opts) {
     filterValueIds, filterValues,
   };
 }
+
+/**
+ * Look up standard SDK parameter pids from the materialised paramDefs.
+ *
+ * The 17 well-known params (ParamBreath, ParamBodyAngle{X,Y,Z},
+ * ParamEyeBall{X,Y}, ParamBrow{L,R}Y, ParamMouthOpenY,
+ * ParamEye{L,R}Open, ParamHair{Front,Back}, Param{Skirt,Shirt,Pants,Bust},
+ * ParamAngle{X,Y,Z}) are referenced by ID across multiple emission
+ * sections; this helper resolves them all in one pass instead of 17
+ * separate `paramDefs.find` calls inline.
+ *
+ * Each pid is `undefined` when the param isn't in `paramDefs` —
+ * callers downstream guard with `?` chaining or `if (pid)` so missing
+ * params (e.g. ParamBust on non-female rigs) cleanly skip emission.
+ *
+ * @param {Array<{id:string, pid:string|number}>} paramDefs
+ * @returns {Record<string, string|number|undefined>}
+ */
+export function lookupStandardParamPids(paramDefs) {
+  const find = (id) => paramDefs.find(p => p.id === id)?.pid;
+  return {
+    pidParamBreath:     find('ParamBreath'),
+    pidParamBodyAngleY: find('ParamBodyAngleY'),
+    pidParamBodyAngleZ: find('ParamBodyAngleZ'),
+    pidParamEyeBallX:   find('ParamEyeBallX'),
+    pidParamEyeBallY:   find('ParamEyeBallY'),
+    pidParamBrowLY:     find('ParamBrowLY'),
+    pidParamBrowRY:     find('ParamBrowRY'),
+    pidParamMouthOpenY: find('ParamMouthOpenY'),
+    pidParamEyeLOpen:   find('ParamEyeLOpen'),
+    pidParamEyeROpen:   find('ParamEyeROpen'),
+    pidParamHairFront:  find('ParamHairFront'),
+    pidParamHairBack:   find('ParamHairBack'),
+    pidParamSkirt:      find('ParamSkirt'),
+    pidParamShirt:      find('ParamShirt'),
+    pidParamPants:      find('ParamPants'),
+    pidParamBust:       find('ParamBust'),
+    pidParamAngleX:     find('ParamAngleX'),
+    pidParamAngleY:     find('ParamAngleY'),
+    pidParamAngleZ:     find('ParamAngleZ'),
+  };
+}
