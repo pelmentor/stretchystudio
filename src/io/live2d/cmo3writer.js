@@ -57,6 +57,11 @@ import {
 import { CATEGORY_DEFS, categorizeParam } from './cmo3/paramCategories.js';
 import { computeGroupWorldMatrices } from './cmo3/groupWorldMatrices.js';
 import { fitParabolaFromLowerEdge } from './cmo3/eyeClosureFit.js';
+import {
+  evalClosureCurve,
+  computeClosedCanvasVerts,
+  computeClosedVertsForMesh,
+} from './cmo3/eyeClosureApply.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -650,12 +655,8 @@ export async function generateCmo3(input) {
       if (vCurve) variantEyewhiteCurvePerSideAndSuffix.set(`${side}|${suffix}`, vCurve);
     }
   }
-  // Evaluate the fitted parabola at arbitrary canvas X (extrapolates naturally).
-  const evalClosureCurve = (params, px) => {
-    if (!params) return null;
-    const xn = (px - params.xMid) / params.xScale;
-    return params.a * xn * xn + params.b * xn + params.c;
-  };
+  // evalClosureCurve / evalBandY / computeClosedCanvasVerts /
+  // computeClosedVertsForMesh live in `cmo3/eyeClosureApply.js`.
   // Back-compat shim: eyelashBandCanvas/eyelashShiftCanvas are used by the closure
   // emission loop and by pm.hasEyelidClosure detection. We keep them populated as
   // sampled curve points so the hasEyelidClosure check still works.
@@ -695,81 +696,6 @@ export async function generateCmo3(input) {
       } : null,
     };
   }
-  const evalBandY = (bandCurve, px) => {
-    if (!bandCurve || bandCurve.length < 2) return null;
-    if (px <= bandCurve[0][0]) return bandCurve[0][1];
-    const last = bandCurve.length - 1;
-    if (px >= bandCurve[last][0]) return bandCurve[last][1];
-    for (let j = 0; j < last; j++) {
-      if (px >= bandCurve[j][0] && px <= bandCurve[j + 1][0]) {
-        const t = (px - bandCurve[j][0]) / (bandCurve[j + 1][0] - bandCurve[j][0]);
-        return bandCurve[j][1] + t * (bandCurve[j + 1][1] - bandCurve[j][1]);
-      }
-    }
-    return bandCurve[last][1];
-  };
-
-  // Extracted helper: compute closed keyform vertices for an eye mesh.
-  // Same algorithm used by standalone `hasEyelidClosure` and the new 2D
-  // `hasEyeVariantCompound` branch — so base and variant share the code
-  // path but NEVER share the `curve` or `lashBbox` inputs (those come from
-  // base or variant's own parabola and own bbox).
-  // Canvas-frame-only closure compute. Shared with moc3writer via the
-  // rigCollector — that writer needs canvas-space verts to convert to its
-  // own per-mesh frame (rig-warp 0..1 / pivot-relative px / etc.) which
-  // depends on the parent_deformer chain at moc3 emission time.
-  const computeClosedCanvasVerts = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, shiftPx }) => {
-    const shift = shiftPx ?? 0;
-    const lashStripHalfPx = lashBbox ? lashBbox.H * EYE_CLOSURE_LASH_STRIP_FRAC : 0;
-    const closedCanvas = new Array(canvasVerts.length);
-    for (let i = 0; i < numVerts; i++) {
-      const vx = canvasVerts[i * 2];
-      const vy = canvasVerts[i * 2 + 1];
-      let bandY = evalClosureCurve(curve, vx);
-      if (bandY === null && bandCurveFallback) bandY = evalBandY(bandCurveFallback, vx);
-      closedCanvas[i * 2] = vx;
-      let closedY;
-      if (bandY === null) {
-        closedY = vy;
-      } else if (isEyelash && lashBbox) {
-        const relY = (vy - lashBbox.minY) / lashBbox.H;
-        closedY = bandY + (relY - 0.5) * 2 * lashStripHalfPx;
-      } else {
-        closedY = bandY;
-      }
-      closedCanvas[i * 2 + 1] = closedY - shift;
-    }
-    return closedCanvas;
-  };
-
-  // Wrapper used by the cmo3 mesh emit (XML side): runs the canvas-space
-  // compute, applies rwBox clamp + frame conversion to whatever space `verts`
-  // lives in (warp-local 0..1 if rwBox, deformer-local px if dfOrigin, else
-  // canvas).
-  const computeClosedVertsForMesh = ({ curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, rwBox, dfOrigin, shiftPx }) => {
-    const closedCanvas = computeClosedCanvasVerts({
-      curve, bandCurveFallback, isEyelash, lashBbox, canvasVerts, numVerts, shiftPx,
-    });
-    if (rwBox) {
-      const rwMinY = rwBox.gridMinY;
-      const rwMaxY = rwBox.gridMinY + rwBox.gridH;
-      // Clamp Y inside the rig warp's grid bbox (legacy behaviour — out-of-bbox
-      // closure points cause wraparound when the warp rebases to 0..1).
-      for (let i = 1; i < closedCanvas.length; i += 2) {
-        if (closedCanvas[i] < rwMinY) closedCanvas[i] = rwMinY;
-        if (closedCanvas[i] > rwMaxY) closedCanvas[i] = rwMaxY;
-      }
-      return closedCanvas.map((v, i) =>
-        i % 2 === 0
-          ? (v - rwBox.gridMinX) / rwBox.gridW
-          : (v - rwBox.gridMinY) / rwBox.gridH
-      );
-    }
-    if (dfOrigin) {
-      return closedCanvas.map((v, i) => v - (i % 2 === 0 ? dfOrigin.x : dfOrigin.y));
-    }
-    return closedCanvas;
-  };
 
   for (let mi = 0; mi < meshes.length; mi++) {
     const m = meshes[mi];
@@ -1347,6 +1273,7 @@ export async function generateCmo3(input) {
         canvasVerts: m.vertices,
         numVerts: m.vertices.length / 2,
         shiftPx,
+        lashStripFrac: EYE_CLOSURE_LASH_STRIP_FRAC,
       });
       if (rigCollector) {
         rigCollector.eyeClosure ??= new Map();
@@ -3585,6 +3512,7 @@ export async function generateCmo3(input) {
         isEyelash, lashBbox,
         canvasVerts, numVerts,
         rwBox, dfOrigin, shiftPx,
+        lashStripFrac: EYE_CLOSURE_LASH_STRIP_FRAC,
       });
       if (rigDebugLog && EYE_PART_TAGS && EYE_PART_TAGS.has(meshTag)) {
         if (!rigDebugLog.perVertexClosure) rigDebugLog.perVertexClosure = [];

@@ -1546,6 +1546,19 @@ After sweep #23 closed the last deferred bug actionable from code, sweep #24 att
 
 ---
 
+### 2026-04-30 — Phase first-cut sweep #26 (autonomous, more cmo3writer extractions)
+
+Sweep #25 ran a careful eye-closure-helper extraction; sweep #26 finishes the eye-closure subsystem and documents the orphan-bone-controllers RCA.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 6 | `cmo3/eyeClosureApply.js` — `evalClosureCurve`, `evalBandY`, `computeClosedCanvasVerts`, `computeClosedVertsForMesh`. Companion to sweep #25's `eyeClosureFit.js`: the fit module produces a `ParabolaCurve`, this module applies that curve to a target mesh's vertices to compute the closed-eye keyform. `lashStripFrac` becomes a parameter (default 0.06) so the fn no longer references the writer's `EYE_CLOSURE_LASH_STRIP_FRAC` closure constant; the two callers in cmo3writer pass it explicitly. New `test_eyeClosureApply.mjs`: 35 tests covering all branches — null curve / fallback band / eyelash strip math / shiftPx / rwBox normalization + Y clamp / dfOrigin pivot-relative / canvas passthrough. |
+| Bug RCA | `docs/V3_BLENDER_REFACTOR_PLAN.md` deferred-bugs entry expanded with a 22-line root-cause analysis for "most bone controllers don't move attached body parts": cmo3writer emits `GroupRotation_<groupId>` rotation deformers that end up as **siblings** of `RigWarp_*` under `BodyXWarp` — never in the mesh's parent chain. Bone-baked meshes work (artParent explicitly hooks the deformer at line 3447–3448); tagged body meshes (topwear / hair / face parts) don't. Fix is non-trivial (rig-warp grid coord-space convention shift) and needs Hiyori parity validation; left for a session with browser eyes. |
+
+**LOC delta for cmo3writer.js**: 4255 → 4183 (−72). Cumulative since sweep #24: 4468 → 4183 (−285). Sweep #26 adds 1 new module + 35 test assertions. `cmo3/` directory now 11 files / ~2.1k LOC of the writer's logic.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
 
 After 22 sweeps shipping new surface, sweep #23 turns to the deferred-bugs list at the bottom of this doc. The "eye init parabola broken" entry was reproducible: a freshly-loaded project (or imported `.cmo3`) renders with closed eyes even though `ParamEyeLOpen.default === 1` — clicking the slider opens them. Root cause traced to `paramValues` being empty post-load: `chainEval` read `undefined` for every binding → `cellSelect` treated as 0 → params with non-zero defaults rendered at 0.
