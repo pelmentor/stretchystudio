@@ -44,6 +44,9 @@ import { buildFaceParallaxSpec } from '../rig/faceParallaxBuilder.js';
  * @param {string} ctx.pidPartGuid
  * @param {string} ctx.pidCoord
  * @param {Object|null} ctx.rigDebugLog
+ * @param {Object} [ctx.rigCollector]   When present, the resulting WarpDeformerSpec
+ *   gets pushed into `rigCollector.warpDeformers` so the moc3 binary
+ *   writer can re-emit it without regenerating from mesh state.
  * @param {import('../rig/autoRigConfig.js').AutoRigFaceParallax} [ctx.autoRigFaceParallax]
  *   Tunable defaults from `project.autoRigConfig.faceParallax`. Falls back
  *   to `DEFAULT_AUTO_RIG_CONFIG.faceParallax` when omitted.

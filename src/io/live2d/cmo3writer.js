@@ -31,9 +31,6 @@ import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildTagBindingMap } from './rig/tagWarpBindings.js';
 import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
 import { emitKfBinding } from './cmo3/deformerEmit.js';
-import { emitNeckWarp, emitFaceRotation } from './cmo3/bodyRig.js';
-import { emitFaceParallax } from './cmo3/faceParallax.js';
-import { emitPhysicsSettings } from './cmo3/physics.js';
 import {
   RIG_WARP_TAGS,
   FACE_PARALLAX_TAGS,
@@ -53,9 +50,9 @@ import { packCmo3 } from './cmo3/caffPack.js';
 import { buildMainXml } from './cmo3/mainXmlBuilder.js';
 import { emitMeshFilterGraph, emitMeshTexture, fillLayerGroupAndImage } from './cmo3/meshLayer.js';
 import { buildPartHierarchy } from './cmo3/partHierarchy.js';
-import { emitBodyWarpChain } from './cmo3/bodyChainEmit.js';
 import { emitMeshVertsWarpDeformers } from './cmo3/meshVertsWarp.js';
 import { emitRotationDeformers } from './cmo3/rotationDeformerEmit.js';
+import { emitStructuralChainAndReparent } from './cmo3/structuralChainEmit.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -1975,197 +1972,26 @@ export async function generateCmo3(input) {
   // ==================================================================
   // 3d. Structural Body Warp Chain (Hiyori pattern: 3 chained warps)
   // ==================================================================
-  // Hiyori uses THREE chained structural warps, each with a single parameter:
-  //   Body Warp Z (ParamBodyAngleZ, Canvas coords) → targets ROOT
-  //   Body Warp Y (ParamBodyAngleY, DeformerLocal) → targets Body Warp Z
-  //   Breath Warp (ParamBreath, DeformerLocal)      → targets Body Warp Y
-  // All per-part warps and rotation deformers target Breath (the innermost).
-  // Legs stay at ROOT — independent of body rotation.
-  //
-  // See WARP_DEFORMERS.md "Structural Warp Chain" for exact Hiyori values.
-
-  const LEG_ROLES = new Set(['leftLeg', 'rightLeg', 'bothLegs', 'leftKnee', 'rightKnee']);
-
-  // Shared context for extracted emitStructuralWarp — passes in mutable collections
-  // and pid references that the helper writes into.
-  const emitCtx = { allDeformerSources, pidPartGuid, rootPart };
-
-  // Only Breath + Body X are referenced after the chain emits (re-parenting
-  // target). BZ + BY pids are produced by the loop but not consumed externally.
-  let pidBreathGuid = null;
-  let pidBodyXGuid = null;
-  if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
-    // Body warp chain XML emission lives in `cmo3/bodyChainEmit.js`.
-    ({ pidBreathGuid, pidBodyXGuid } = emitBodyWarpChain(x, {
-      bodyChain: _bodyChain, paramDefs,
-      rigCollectorWarpDeformers: rigCollector.warpDeformers,
-      pidDeformerRoot, pidCoord, emitCtx,
-    }));
-  }
-
-  // Neck warp + face rotation + face parallax + re-parenting pass run only
-  // when the body warp chain emitted (they parent under Body X). Kept inside
-  // the same outer guard the original block used.
-  if (generateRig && pidParamBodyAngleZ && pidParamBodyAngleY && pidParamBreath) {
-    // ==================================================================
-    // 3d.1 Neck Warp (Session 20: neck follows head tilt)
-    // ==================================================================
-    // See `cmo3/bodyRig.js` emitNeckWarp for details. Chain:
-    //   Body X → NeckWarp → neck/neckwear rig warps → neck meshes
-    const pidNeckWarpGuid = emitNeckWarp(x, {
-      pidParamAngleZ, neckUnionBbox, pidBodyXGuid,
-      neckGroupId, groupDeformerGuids, deformerWorldOrigins,
-      canvasToBodyXX, canvasToBodyXY,
-      pidCoord, rigDebugLog, emitCtx,
-      rigCollector,
-      autoRigNeckWarp: autoRigConfig?.neckWarp,
-    });
-
-    // ==================================================================
-    // 3d.2 Face Rotation + Face Parallax Warp (Sessions 19–20)
-    // ==================================================================
-    // Chain:  Body X → Face Rotation (ParamAngleZ, 3kf, pivot=chin)
-    //                    └─ FaceParallax (single warp, 6×6 grid, 9kf on AngleX×AngleY)
-    //                             └─ RigWarp_<part>  (rebased into FaceParallax 0..1)
-    //
-    // Session 19 shipped the single FaceParallax warp but left Face Rotation orphaned.
-    // Session 20 diagnosed the coord-space: a rotation-deformer parent exposes a local
-    // frame of canvas-pixel offsets from its own pivot (NOT 0..1), so FaceParallax grid
-    // values must be `(canvas_pos - facePivotCx/Cy)`, not `canvasToBodyXX/Y(...)`.
-    // Face Rotation's pivot stays in Body X 0..1 because its own parent is a warp.
-    // See SESSION20_FINDINGS.md + WARP_DEFORMERS.md "Rotation Deformer Local Frame".
-    //
-    // FaceParallax deformation = Session 15 Body-X-pattern layered effects:
-    //   1. Base bow (sine profile, center > edges).
-    //   2. Asymmetric perspective (far side of rotation shifts more).
-    //   3. Cross-axis Y-on-AngleX + X-on-AngleY (tilt-while-turning cue).
-    //   4. Row/col fade (top/bottom/edge columns move less than middle).
-    const faceParallaxGuids = new Map(); // groupKey → pidCDeformerGuid
-    if (pidParamAngleZ && facePivotCx !== null && faceUnionBbox && pidBodyXGuid) {
-      // ── Face Rotation (CRotationDeformerSource) ──
-      // See `cmo3/bodyRig.js` emitFaceRotation — 3 keyforms on ParamAngleZ,
-      // pivot at chin, rotation capped at ±10°. FaceParallax reparents to it.
-      const pidFaceRotGuid = emitFaceRotation(x, {
-        pidParamAngleZ, facePivotCx, facePivotCy, pidBodyXGuid,
-        headGroupId, groupDeformerGuids, deformerWorldOrigins,
-        canvasToBodyXX, canvasToBodyXY,
-        allDeformerSources, pidPartGuid, pidCoord, rootPart,
-        rigCollector,
-        faceRotationParamKeys: _ROT_FACE_PARAM_KEYS,
-        faceRotationAngles:    _ROT_FACE_ANGLES,
-      });
-
-      // ── FaceParallax warp (6×6 grid, 9kf on AngleX × AngleY) ──
-      // See `cmo3/faceParallax.js` emitFaceParallax — contains protected
-      // region build (A.3 pairing, A.6b cell expansion), 3D rotation math
-      // with #3 eye-parallax amp + #5 far-eye squash, and the deformer emit.
-      //
-      // Stage 11 invariant: same as the body-warp guard above — outside
-      // `rigOnly` the spec should always be pre-resolved.
-      if (!faceParallaxSpec && !rigOnly) {
-        console.warn('[cmo3writer] faceParallax heuristic firing outside rigOnly mode — exporter likely bypassed Stage 11 auto-harvest');
-      }
-      const pidFpGuid = emitFaceParallax(x, {
-        pidParamAngleX, pidParamAngleY, pidFaceRotGuid,
-        faceUnionBbox, facePivotCx, facePivotCy, faceMeshBbox,
-        meshes,
-        allDeformerSources, rootPart,
-        pidPartGuid, pidCoord,
-        rigDebugLog,
-        rigCollector,
-        autoRigFaceParallax: autoRigConfig?.faceParallax,
-        preComputedSpec: faceParallaxSpec,
-      });
-      if (pidFpGuid) faceParallaxGuids.set('__all__', pidFpGuid);
-    }
-
-    // ── Re-parent: rotation deformers targeting ROOT → Body X Warp ──
-    // Body X is the innermost structural warp (4th layer). Everything targets it.
-    // Skip legs (they stay at ROOT).
-    // Convert ALL non-leg rotation deformer origins to Body X space using world positions.
-    // canvasToBodyXX/Y defined before section 3c.
-    const pidReparentTarget = pidBodyXGuid || pidBreathGuid; // fallback if no Body X
-
-    // Fix-up rigCollector: keep parent references in sync with the XML
-    // re-parenting below. moc3 translator reads spec.parent at emission
-    // time, so the spec must reflect the FINAL parent (post-reparenting).
-    const rigReparentTargetId = pidBodyXGuid ? 'BodyXWarp' : 'BreathWarp';
-    for (const [gid, targetNode] of rotDeformerTargetNodes) {
-      const group = groupMap.get(gid);
-      if (group && LEG_ROLES.has(group.boneRole)) continue;
-
-      // Re-parent ROOT-targeting deformers to Body X (or Breath)
-      if (targetNode.attrs['xs.ref'] === pidDeformerRoot) {
-        targetNode.attrs['xs.ref'] = pidReparentTarget;
-        // Keep rigCollector parent ref in sync — pivot conversion happens
-        // in the unified loop below (both ROOT→warp and parent-rotation
-        // cases need their own conversion math).
-        const rigSpecD = rigCollector.rotationDeformers.find(
-          s => s.id === `GroupRotation_${gid}`,
-        );
-        if (rigSpecD && rigSpecD.parent.type === 'root') {
-          rigSpecD.parent = { type: 'warp', id: rigReparentTargetId };
-        }
-      }
-
-      // Convert origin for ALL non-leg deformers using world position → correct space (pixels or 0..1)
-      const originData = rotDeformerOriginNodes.get(gid);
-      if (originData) {
-        const parentRef = targetNode.attrs['xs.ref'];
-        const pGroupId = group ? group.parent : null;
-        const isParentGroupRot = pGroupId && groupDeformerGuids.get(pGroupId) === parentRef;
-
-        let ox, oy;
-        if (isParentGroupRot) {
-          // Parent is another rotation deformer: use pixel offsets from parent's pivot
-          const parentPivot = deformerWorldOrigins.get(pGroupId) || { x: 0, y: 0 };
-          ox = originData.wx - parentPivot.x;
-          oy = originData.wy - parentPivot.y;
-        } else {
-          // Parent is a warp (Body X or NeckWarp etc): use 0..1 of Body X space (standard fallback)
-          ox = canvasToBodyXX(originData.wx);
-          oy = canvasToBodyXY(originData.wy);
-        }
-
-        const newOx = ox.toFixed(6);
-        const newOy = oy.toFixed(6);
-        for (const rdf of originData.forms) {
-          rdf.attrs.originX = newOx;
-          rdf.attrs.originY = newOy;
-        }
-        // Patch shared CoordType: Canvas → DeformerLocal (origins adapted to parent space)
-        const coordTextNode = originData.coordNode.children.find(c => c.attrs?.['xs.n'] === 'coordName');
-        if (coordTextNode) coordTextNode.text = 'DeformerLocal';
-
-        // Mirror the converted pivot into rigCollector so moc3 binary emits
-        // the same value. All keyforms of the spec share the same pivot.
-        const rigSpecConv = rigCollector.rotationDeformers.find(
-          s => s.id === `GroupRotation_${gid}`,
-        );
-        if (rigSpecConv) {
-          for (const kf of rigSpecConv.keyforms) {
-            kf.originX = ox;
-            kf.originY = oy;
-          }
-        }
-      }
-    }
-
-    // ── Re-parent: per-part rig warps → FaceParallax (face tag), NeckWarp (neck tag),
-    // or Body X (default).  Grids were rebased to the appropriate 0..1 domain in section 3c.
-    const pidFpUnified = faceParallaxGuids.get('__all__');
-    for (const entry of rigWarpTargetNodesToReparent) {
-      const { node, isFaceTag, isNeckTag } = entry;
-      if (isFaceTag && pidFpUnified) {
-        node.attrs['xs.ref'] = pidFpUnified;
-      } else if (isNeckTag && pidNeckWarpGuid) {
-        node.attrs['xs.ref'] = pidNeckWarpGuid;
-      } else {
-        node.attrs['xs.ref'] = pidReparentTarget;
-      }
-    }
-  }
-
+  // Logic in `cmo3/structuralChainEmit.js`. Emits Body Z/Y/Breath/X
+  // warp chain, then NeckWarp + Face Rotation + Face Parallax under
+  // Body X, then re-parents all rotation deformers + per-part rig
+  // warps into their final chain positions.
+  emitStructuralChainAndReparent(x, {
+    generateRig, rigOnly,
+    paramDefs, pidDeformerRoot, pidCoord, rigCollector, rigDebugLog,
+    autoRigConfig, faceParallaxSpec,
+    bodyChain: _bodyChain,
+    pidParamBodyAngleZ, pidParamBodyAngleY, pidParamBreath,
+    pidParamAngleX, pidParamAngleY, pidParamAngleZ,
+    neckUnionBbox, faceUnionBbox, faceMeshBbox, facePivotCx, facePivotCy,
+    headGroupId, neckGroupId, groupMap,
+    groupDeformerGuids, deformerWorldOrigins,
+    canvasToBodyXX, canvasToBodyXY,
+    rotFaceParamKeys: _ROT_FACE_PARAM_KEYS, rotFaceAngles: _ROT_FACE_ANGLES,
+    meshes, allDeformerSources, pidPartGuid, rootPart,
+    rotDeformerTargetNodes, rotDeformerOriginNodes,
+    rigWarpTargetNodesToReparent,
+  });
   // ==================================================================
   // 4. CArtMeshSource (per mesh)
   // ==================================================================
