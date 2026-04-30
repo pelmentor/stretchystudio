@@ -58,6 +58,7 @@ import { emitModelImageGroup } from './cmo3/modelImageGroup.js';
 import { packCmo3 } from './cmo3/caffPack.js';
 import { buildMainXml } from './cmo3/mainXmlBuilder.js';
 import { emitMeshFilterGraph, emitMeshTexture, fillLayerGroupAndImage } from './cmo3/meshLayer.js';
+import { buildPartHierarchy } from './cmo3/partHierarchy.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -622,7 +623,7 @@ export async function generateCmo3(input) {
       filterDefs: { pidFdefSel, pidFdefFlt },
       filterValueIds, filterValues,
     });
-    const { pidTie, tieSup } = emitMeshTexture(x, {
+    const { pidTex2d, pidTie, pidTimi, tieSup } = emitMeshTexture(x, {
       meshName, pidImg, pidTexGuid, pidExtTex, pidMiGuid,
     });
 
@@ -1085,131 +1086,12 @@ export async function generateCmo3(input) {
   // ==================================================================
   // 3. PART SOURCES (hierarchical: Root → Groups → Drawables)
   // ==================================================================
-  // Hiyori pattern: Root Part._childGuids → CPartGuid refs (child groups)
-  // Each group._childGuids → CDrawableGuid refs (meshes in that group)
-  // Meshes without a group parent go directly under Root Part.
-
-  /**
-   * Helper: create a CPartSource node with standard boilerplate.
-   * Returns [partSourceNode, pidPartSource].
-   */
-  function makePartSource(partName, partIdStr, partGuidPid, parentGuidPid) {
-    const [, pidForm] = x.shared('CFormGuid', { uuid: uuid(), note: `${partIdStr}_form` });
-
-    const [kfg, pidKfg] = x.shared('KeyformGridSource');
-    const kfogN = x.sub(kfg, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '1' });
-    const kogN = x.sub(kfogN, 'KeyformOnGrid');
-    const akN = x.sub(kogN, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-    x.sub(akN, 'array_list', { 'xs.n': '_keyOnParameterList', count: '0' });
-    x.subRef(kogN, 'CFormGuid', pidForm, { 'xs.n': 'keyformGuid' });
-    x.sub(kfg, 'array_list', { 'xs.n': 'keyformBindings', count: '0' });
-
-    const [ps, pidPs] = x.shared('CPartSource');
-    const ctrl = x.sub(ps, 'ACParameterControllableSource', { 'xs.n': 'super' });
-    x.sub(ctrl, 's', { 'xs.n': 'localName' }).text = partName;
-    x.sub(ctrl, 'b', { 'xs.n': 'isVisible' }).text = 'true';
-    x.sub(ctrl, 'b', { 'xs.n': 'isLocked' }).text = 'false';
-    if (parentGuidPid) {
-      x.subRef(ctrl, 'CPartGuid', parentGuidPid, { 'xs.n': 'parentGuid' });
-    } else {
-      x.sub(ctrl, 'null', { 'xs.n': 'parentGuid' });
-    }
-    x.subRef(ctrl, 'KeyformGridSource', pidKfg, { 'xs.n': 'keyformGridSource' });
-    const mft = x.sub(ctrl, 'KeyFormMorphTargetSet', { 'xs.n': 'keyformMorphTargetSet' });
-    x.sub(mft, 'carray_list', { 'xs.n': '_morphTargets', count: '0' });
-    const bwc = x.sub(mft, 'MorphTargetBlendWeightConstraintSet', { 'xs.n': 'blendWeightConstraintSet' });
-    x.sub(bwc, 'carray_list', { 'xs.n': '_constraints', count: '0' });
-    x.sub(ctrl, 'carray_list', { 'xs.n': '_extensions', count: '0' });
-    x.sub(ctrl, 'null', { 'xs.n': 'internalColor_direct_argb' });
-    x.subRef(ps, 'CPartGuid', partGuidPid, { 'xs.n': 'guid' });
-    x.sub(ps, 'CPartId', { 'xs.n': 'id', idstr: partIdStr });
-    x.sub(ps, 'b', { 'xs.n': 'enableDrawOrderGroup' }).text = 'false';
-    x.sub(ps, 'i', { 'xs.n': 'defaultOrder_forEditor' }).text = '500';
-    x.sub(ps, 'b', { 'xs.n': 'isSketch' }).text = 'false';
-    x.sub(ps, 'CColor', { 'xs.n': 'partsEditColor' });
-    // _childGuids placeholder — caller fills this
-    const cg = x.sub(ps, 'carray_list', { 'xs.n': '_childGuids', count: '0' });
-    x.subRef(ps, 'CDeformerGuid', pidDeformerNull, { 'xs.n': 'targetDeformerGuid' });
-    const kfl = x.sub(ps, 'carray_list', { 'xs.n': 'keyforms', count: '1' });
-    const pf = x.sub(kfl, 'CPartForm');
-    const acf = x.sub(pf, 'ACForm', { 'xs.n': 'super' });
-    x.subRef(acf, 'CFormGuid', pidForm, { 'xs.n': 'guid' });
-    x.sub(acf, 'b', { 'xs.n': 'isAnimatedForm' }).text = 'false';
-    x.sub(acf, 'b', { 'xs.n': 'isLocalAnimatedForm' }).text = 'false';
-    x.subRef(acf, 'CPartSource', pidPs, { 'xs.n': '_source' }); // self-reference
-    x.sub(acf, 'null', { 'xs.n': 'name' });
-    x.sub(acf, 's', { 'xs.n': 'notes' }).text = '';
-    x.sub(pf, 'i', { 'xs.n': 'drawOrder' }).text = '500';
-
-    return { node: ps, pid: pidPs, childGuidsNode: cg };
-  }
-
-  // Build mesh→parentGroupId lookup and group→children lookup
-  const meshParentMap = new Map(); // meshIndex → groupId
-  for (let i = 0; i < perMesh.length; i++) {
-    meshParentMap.set(i, meshes[i].parentGroupId ?? null);
-  }
-
-  // Create Root Part
-  const rootPart = makePartSource('Root Part', '__RootPart__', pidPartGuid, null);
-  const allPartSources = [rootPart]; // collect for PartSourceSet
-
-  // Create group parts
-  const groupParts = new Map(); // groupId → { pid, childGuidsNode, ... }
-  for (const g of groups) {
-    const gpid = groupPartGuids.get(g.id);
-    // Determine parent: if group.parent exists and has a CPartGuid, use it; else use root
-    const parentPid = g.parent && groupPartGuids.has(g.parent)
-      ? groupPartGuids.get(g.parent) : pidPartGuid;
-    const sanitizedId = `Part_${sanitisePartName(g.name || g.id)}`;
-    const gp = makePartSource(g.name || g.id, sanitizedId, gpid, parentPid);
-    groupParts.set(g.id, gp);
-    allPartSources.push(gp);
-  }
-
-  // Fill _childGuids for each part
-  // Root Part children = top-level groups (parent == null) + orphan meshes
-  const rootChildren = [];
-  for (const g of groups) {
-    if (!g.parent || !groupPartGuids.has(g.parent)) {
-      rootChildren.push({ type: 'CPartGuid', pid: groupPartGuids.get(g.id) });
-    }
-  }
-  // Meshes: assign to their parent group, or root if no group
-  for (let i = 0; i < perMesh.length; i++) {
-    const parentId = meshParentMap.get(i);
-    const target = parentId && groupParts.has(parentId)
-      ? groupParts.get(parentId) : null;
-    if (target) {
-      // Add to group's _childGuids
-      target.childGuidsNode.children.push(
-        x.ref('CDrawableGuid', perMesh[i].pidDrawable)
-      );
-    } else {
-      // Add to root
-      rootChildren.push({ type: 'CDrawableGuid', pid: perMesh[i].pidDrawable });
-    }
-  }
-
-  // Sub-groups: groups whose parent is another group (not root)
-  for (const g of groups) {
-    if (g.parent && groupParts.has(g.parent)) {
-      const parentGp = groupParts.get(g.parent);
-      parentGp.childGuidsNode.children.push(
-        x.ref('CPartGuid', groupPartGuids.get(g.id))
-      );
-    }
-  }
-
-  // Write root children
-  for (const c of rootChildren) {
-    rootPart.childGuidsNode.children.push(x.ref(c.type, c.pid));
-  }
-
-  // Update count attrs on all _childGuids nodes
-  for (const ps of allPartSources) {
-    ps.childGuidsNode.attrs.count = String(ps.childGuidsNode.children.length);
-  }
+  // Logic in `cmo3/partHierarchy.js`. Returns rootPart + allPartSources
+  // + groupParts (the latter consumed by section 4 mesh routing).
+  const { rootPart, allPartSources, groupParts } = buildPartHierarchy(x, {
+    groups, meshes, perMesh,
+    pidPartGuid, groupPartGuids, pidDeformerNull,
+  });
 
   // ==================================================================
   // 3b. ROTATION DEFORMERS (one per group with transform data)
