@@ -759,6 +759,26 @@ export async function importCmo3(bytes) {
   );
   for (const w of rotationWarnings) warnings.push(`rotation: ${w}`);
 
+  // Sweep #20: detect bone-baked angle set from ParamRotation_<role>
+  // keyform bindings. The writer's auto-rig path bakes one keyform per
+  // angle in `boneConfig.bakedKeyformAngles` for every bone-weighted
+  // mesh (default `[-90, -45, 0, 45, 90]`). When the cmo3 was authored
+  // with a different range (chibi characters, custom rigs), reading it
+  // back lets re-export keep the same angle stops. We pick the longest
+  // unique sorted-ascending key list across all `ParamRotation_*`
+  // bindings — different bones share the set in standard rigs, and
+  // longest-wins handles edge cases where one bone has more samples.
+  /** @type {number[] | null} */
+  let detectedBakedAngles = null;
+  for (const b of scene.keyformBindings) {
+    if (!b.description.startsWith('ParamRotation_')) continue;
+    if (!Array.isArray(b.keys) || b.keys.length === 0) continue;
+    const sorted = [...b.keys].sort((x, y) => x - y);
+    if (!detectedBakedAngles || sorted.length > detectedBakedAngles.length) {
+      detectedBakedAngles = sorted;
+    }
+  }
+
   // Sweep #18: variant pairing. Imported parts whose name carries a
   // `.suffix` (e.g. `face.smile`, `topwear.winter`) get paired with their
   // base sibling via the canonical `variantNormalizer`. The normaliser
@@ -835,7 +855,9 @@ export async function importCmo3(bytes) {
     animations: [],
     maskConfigs,
     physicsRules: [],
-    boneConfig: null,
+    boneConfig: detectedBakedAngles
+      ? { bakedKeyformAngles: detectedBakedAngles }
+      : null,
     variantFadeRules: null,
     eyeClosureConfig: null,
     rotationDeformerConfig: null,

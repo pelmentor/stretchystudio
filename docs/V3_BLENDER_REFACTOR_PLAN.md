@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-30 — Phase first-cut sweep #20 (autonomous)
+
+Sweep #19 closed the cmo3 import UX loop; sweep #20 picks up the last data-side gap on the line: bone-baked angle detection. The writer's auto-rig path bakes one keyform per angle in `boneConfig.bakedKeyformAngles` (default `[-90,-45,0,45,90]`) for bone-weighted meshes. Models authored with a different range (chibi rigs, custom workflows) need that range read back so re-export keeps the same stops.
+
+| Phase | Deliverable |
+|-------|-------------|
+| 5 | `.cmo3` bone-baked angle detection. `cmo3Import.js` scans every `ExtractedKeyformBinding` whose `description` starts with `ParamRotation_` and picks the longest unique sorted-ascending key list across all of them — different bones share the set in standard rigs, longest-wins handles edge cases where one bone has more samples than others. The result lands on `project.boneConfig.bakedKeyformAngles`; null when no bone-baked bindings exist (writer falls back to default at re-export). Verified against `shelby.cmo3`: detected `[-90, -45, 0, 45, 90]` (matches `DEFAULT_BAKED_KEYFORM_ANGLES`, picked up from the legwear mesh's bone-baked keyforms). |
+
+**Phase coverage after sweep #20:** the .cmo3 round-trip line covers everything that's representable in the cmo3 XML and SS's project schema overlap. Cmo3-embedded physics (`CPhysicsSettingsSource`) is the last gap on this line — but SS exports physics to a separate `.physics3.json` not embedded XML, and Cubism-Editor-authored cmo3 files with embedded physics aren't in our test corpus. Deferring physics-from-cmo3 honestly until a model that needs it shows up; the existing physics3.json import path (sweep #5) covers the main case. Other entirely-pending items: 4A parity harness (env-dependent — Cubism SDK adoption), Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-29 — Phase first-cut sweep #19 (autonomous)
 
 Sweep #18 finished the data side; sweep #19 closes the UX gap. The "Import as new project" button in `Cmo3InspectModal.jsx` was loading the project but NOT building the rigSpec — users saw a static reference scene and had to click Initialize Rig themselves to get param-driven deformations. With imported projects now carrying rigWarps + boneRoles + maskConfigs + variants, the rig is fully buildable post-import; the modal should just trigger that itself.
