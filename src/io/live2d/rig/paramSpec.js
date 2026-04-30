@@ -94,6 +94,13 @@ export const BAKED_BONE_ANGLES = [-90, -45, 0, 45, 90];
  *   When true, emit the 22 SDK-standard params (ParamAngleX/Y/Z, ParamEyeL/ROpen, ...).
  *   Only applies on the generator path; the native rig path returns
  *   baseParameters verbatim regardless.
+ * @property {number[]} [bakedKeyformAngles]
+ *   Stage 7 — bone-rotation param min/max range (and writer's baked
+ *   keyform stops). Default `BAKED_BONE_ANGLES = [-90, -45, 0, 45, 90]`.
+ * @property {Object} [rotationDeformerConfig]
+ *   Stage 8 — paramAngleRange + groupRotation/faceRotation paramKeys
+ *   passed through to the writer's deformer emission. Builder reads
+ *   only `.paramAngleRange.{min,max}` for the group-rotation param spec.
  */
 
 /**

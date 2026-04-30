@@ -21,25 +21,16 @@
  * @module io/live2d/cmo3writer
  */
 
-import { packCaff, COMPRESS_RAW, COMPRESS_FAST } from './caffPacker.js';
 import { makeLocalMatrix, mat3Mul } from '../../renderer/transforms.js';
 import { XmlBuilder, uuid } from './xmlbuilder.js';
 import { analyzeBody } from './bodyAnalyzer.js';
 import { variantParamId } from '../psdOrganizer.js';
-import { buildParameterSpec, BAKED_BONE_ANGLES } from './rig/paramSpec.js';
+import { BAKED_BONE_ANGLES } from './rig/paramSpec.js';
 import { emptyRigSpec } from './rig/rigSpec.js';
 import { buildBodyWarpChain } from './rig/bodyWarp.js';
 import { buildGroupRotationSpec } from './rig/rotationDeformers.js';
 import { buildTagBindingMap } from './rig/tagWarpBindings.js';
-import {
-  VERSION_PIS,
-  IMPORT_PIS,
-  FILTER_DEF_LAYER_SELECTOR,
-  FILTER_DEF_LAYER_FILTER,
-  DEFORMER_ROOT_UUID,
-  PARAM_GROUP_ROOT_UUID,
-} from './cmo3/constants.js';
-import { buildRawPng } from './cmo3/pngHelpers.js';
+import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
 import {
   emitKfBinding,
   emitSingleParamKfGrid,
@@ -62,6 +53,10 @@ import {
   computeClosedCanvasVerts,
   computeClosedVertsForMesh,
 } from './cmo3/eyeClosureApply.js';
+import { setupGlobalSharedObjects } from './cmo3/globalSetup.js';
+import { emitModelImageGroup } from './cmo3/modelImageGroup.js';
+import { packCmo3 } from './cmo3/caffPack.js';
+import { buildMainXml } from './cmo3/mainXmlBuilder.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -313,162 +308,33 @@ export async function generateCmo3(input) {
   // ==================================================================
   // 1. GLOBAL SHARED OBJECTS (used by all meshes)
   // ==================================================================
-
-  // Root parameter group uses the well-known ROOT_GROUP UUID hardcoded in
-  // CParameterGroupGuid.Companion.b() in the Editor Java. The Random Pose
-  // Setting dialog searches parameterGroupSet.getGroups() for the group
-  // whose guid equals this constant; a random UUID makes the dialog render
-  // empty (f_0.a(cModelSource) early-returns at line ~438). Name "root_group"
-  // stays as a debug label — Hiyori uses "Root Parameter Group".
-  const [, pidParamGroupGuid] = x.shared('CParameterGroupGuid', {
-    uuid: PARAM_GROUP_ROOT_UUID, note: 'Root Parameter Group',
+  // Setup lives in `cmo3/globalSetup.js`. Returns a bundle of pids +
+  // shared XML element refs consumed by sections 2-6 below.
+  const _globals = setupGlobalSharedObjects(x, {
+    parameters, meshes, groups,
+    generateRig, bakedKeyformAngles, rotationDeformerConfig,
   });
-  const [, pidModelGuid] = x.shared('CModelGuid', { uuid: uuid(), note: 'model' });
-
-  // Build the canonical parameter list via the shared spec builder. Single
-  // source of truth shared with moc3writer (runtime path) and any future
-  // .cdi3 / .physics3 callers — keeps the rig consistent across exports.
-  // See `src/io/live2d/rig/paramSpec.js`.
-  const paramSpecs = buildParameterSpec({
-    baseParameters: parameters,
-    meshes,
-    groups,
-    generateRig,
-    bakedKeyformAngles,
-    rotationDeformerConfig,
-  });
-
-  // Materialise paramDefs by attaching the cmo3-specific XML pid to each spec.
-  // The legacy `defaultVal` field name is preserved (the rest of this file —
-  // most notably the parameter XML emission near line 4350 — reads `defaultVal`).
-  const paramDefs = paramSpecs.map(spec => {
-    const [, pid] = x.shared('CParameterGuid', { uuid: uuid(), note: spec.id });
-    return {
-      pid,
-      id: spec.id,
-      name: spec.name,
-      min: spec.min,
-      max: spec.max,
-      defaultVal: spec.default,
-      decimalPlaces: spec.decimalPlaces,
-      role: spec.role,
-    };
-  });
-
-  // Convenience handles used downstream (keyform bindings, deformer hookup).
-  // ParamOpacity is always present (always at index 0 — see paramSpec.js).
-  const pidParamOpacity = paramDefs[0].pid;
-  // Stage 7: angles come from project.boneConfig (resolved by caller),
-  // falling back to BAKED_BONE_ANGLES.
-  const BAKED_ANGLES = bakedKeyformAngles;
-  const BAKED_ANGLE_MIN = BAKED_ANGLES[0];
-  const BAKED_ANGLE_MAX = BAKED_ANGLES[BAKED_ANGLES.length - 1];
-  const boneParamGuids = new Map(); // jointBoneId → { pidParam, paramId }
-  for (const pd of paramDefs) {
-    if (pd.role !== 'bone') continue;
-    // Recover the source jointBoneId from the spec — paramSpec.js attaches it
-    // to each bone-role entry. Fall back to id-based lookup for safety.
-    const spec = paramSpecs.find(s => s.id === pd.id);
-    if (spec?.boneId) {
-      boneParamGuids.set(spec.boneId, { pidParam: pd.pid, paramId: pd.id });
-    }
-  }
-
-  // Root part GUID
-  const [, pidPartGuid] = x.shared('CPartGuid', { uuid: uuid(), note: '__RootPart__' });
-
-  // Group → CPartGuid mapping
-  const groupPartGuids = new Map(); // groupId → pidPartGuid
-  for (const g of groups) {
-    const [, gpid] = x.shared('CPartGuid', { uuid: uuid(), note: g.name || g.id });
-    groupPartGuids.set(g.id, gpid);
-  }
-
-  // CBlend_Normal (shared blend mode)
-  const [blendNormal, pidBlend] = x.shared('CBlend_Normal');
-  const abl = x.sub(blendNormal, 'ACBlend', { 'xs.n': 'super' });
-  x.sub(abl, 's', { 'xs.n': 'displayName' }).text = '\u901A\u5E38'; // 通常 (Normal)
-
-  // CDeformerGuid ROOT — MUST be this exact UUID
-  const [, pidDeformerRoot] = x.shared('CDeformerGuid', {
-    uuid: DEFORMER_ROOT_UUID, note: 'ROOT',
-  });
-
-  // CDeformerGuid "NOT INITIALIZED" — used for parts' targetDeformerGuid (Hiyori pattern)
-  // Parts don't belong to any deformer, so they get a null-like GUID
-  const [, pidDeformerNull] = x.shared('CDeformerGuid', {
-    uuid: '00000000-0000-0000-0000-000000000000', note: 'NOT INITIALIZED',
-  });
-
-  // CoordType
-  const [coordType, pidCoord] = x.shared('CoordType');
-  x.sub(coordType, 's', { 'xs.n': 'coordName' }).text = 'DeformerLocal';
-
-  // StaticFilterDefGuids
-  const [, pidFdefSel] = x.shared('StaticFilterDefGuid', {
-    uuid: FILTER_DEF_LAYER_SELECTOR, note: 'CLayerSelector',
-  });
-  const [, pidFdefFlt] = x.shared('StaticFilterDefGuid', {
-    uuid: FILTER_DEF_LAYER_FILTER, note: 'CLayerFilter',
-  });
-
-  // FilterValueIds (shared across all filter graphs)
-  const [, pidFvidIlfOutput] = x.shared('FilterValueId', { idstr: 'ilf_outputLayerData' });
-  const [, pidFvidMiLayer] = x.shared('FilterValueId', { idstr: 'mi_input_layerInputData' });
-  const [, pidFvidIlfInput] = x.shared('FilterValueId', { idstr: 'ilf_inputLayerData' });
-  const [, pidFvidMiGuid] = x.shared('FilterValueId', { idstr: 'mi_currentImageGuid' });
-  const [, pidFvidIlfGuid] = x.shared('FilterValueId', { idstr: 'ilf_currentImageGuid' });
-  const [, pidFvidMiOutImg] = x.shared('FilterValueId', { idstr: 'mi_output_image' });
-  const [, pidFvidMiOutXfm] = x.shared('FilterValueId', { idstr: 'mi_output_transform' });
-  const [, pidFvidIlfInLayer] = x.shared('FilterValueId', { idstr: 'ilf_inputLayer' });
-
-  // FilterValues (definitions — metadata for filter ports)
-  const [fvSelLayer, pidFvSel] = x.shared('FilterValue');
-  x.sub(fvSelLayer, 's', { 'xs.n': 'name' }).text = 'Select Layer';
-  x.subRef(fvSelLayer, 'FilterValueId', pidFvidIlfOutput, { 'xs.n': 'id' });
-  x.sub(fvSelLayer, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvImpLayer, pidFvImp] = x.shared('FilterValue');
-  x.sub(fvImpLayer, 's', { 'xs.n': 'name' }).text = 'Import Layer';
-  x.subRef(fvImpLayer, 'FilterValueId', pidFvidMiLayer, { 'xs.n': 'id' });
-  x.sub(fvImpLayer, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvImpSel, pidFvImpSel] = x.shared('FilterValue');
-  x.sub(fvImpSel, 's', { 'xs.n': 'name' }).text = 'Import Layer selection';
-  x.subRef(fvImpSel, 'FilterValueId', pidFvidIlfInput, { 'xs.n': 'id' });
-  x.sub(fvImpSel, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvCurGuid, pidFvCurGuid] = x.shared('FilterValue');
-  x.sub(fvCurGuid, 's', { 'xs.n': 'name' }).text = 'Current GUID';
-  x.subRef(fvCurGuid, 'FilterValueId', pidFvidMiGuid, { 'xs.n': 'id' });
-  x.sub(fvCurGuid, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvSelGuid, pidFvSelGuid] = x.shared('FilterValue');
-  x.sub(fvSelGuid, 's', { 'xs.n': 'name' }).text = 'GUID of Selected Source Image';
-  x.subRef(fvSelGuid, 'FilterValueId', pidFvidIlfGuid, { 'xs.n': 'id' });
-  x.sub(fvSelGuid, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvOutImg, pidFvOutImg] = x.shared('FilterValue');
-  x.sub(fvOutImg, 's', { 'xs.n': 'name' }).text = 'Output image';
-  x.subRef(fvOutImg, 'FilterValueId', pidFvidMiOutImg, { 'xs.n': 'id' });
-  x.sub(fvOutImg, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  // These two have INLINE FilterValueIds (not shared refs)
-  const [fvOutImgRes, pidFvOutImgRes] = x.shared('FilterValue');
-  x.sub(fvOutImgRes, 's', { 'xs.n': 'name' }).text = 'Output Image (Resource Format)';
-  x.sub(fvOutImgRes, 'FilterValueId', { 'xs.n': 'id', idstr: 'ilf_outputImageRes' });
-  x.sub(fvOutImgRes, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvOutXfm, pidFvOutXfm] = x.shared('FilterValue');
-  x.sub(fvOutXfm, 's', { 'xs.n': 'name' }).text = 'LayerToCanvas\u5909\u63DB'; // 変換
-  x.subRef(fvOutXfm, 'FilterValueId', pidFvidMiOutXfm, { 'xs.n': 'id' });
-  x.sub(fvOutXfm, 'null', { 'xs.n': 'defaultValueInitializer' });
-
-  const [fvOutXfm2, pidFvOutXfm2] = x.shared('FilterValue');
-  x.sub(fvOutXfm2, 's', { 'xs.n': 'name' }).text = 'LayerToCanvas\u5909\u63DB';
-  x.sub(fvOutXfm2, 'FilterValueId', { 'xs.n': 'id', idstr: 'ilf_outputTransform' });
-  x.sub(fvOutXfm2, 'null', { 'xs.n': 'defaultValueInitializer' });
-
+  const {
+    pidParamGroupGuid, pidModelGuid, pidPartGuid,
+    pidBlend,
+    pidDeformerRoot, pidDeformerNull,
+    pidCoord,
+    paramDefs, paramSpecs,
+    pidParamOpacity, bakedAngleMin: BAKED_ANGLE_MIN, bakedAngleMax: BAKED_ANGLE_MAX,
+    boneParamGuids,
+    groupPartGuids,
+    pidFdefSel, pidFdefFlt,
+    filterValueIds, filterValues,
+  } = _globals;
+  const BAKED_ANGLES = _globals.bakedAngles;
+  const {
+    pidFvidIlfOutput, pidFvidMiLayer, pidFvidIlfInput, pidFvidMiGuid,
+    pidFvidIlfGuid, pidFvidMiOutImg, pidFvidMiOutXfm, pidFvidIlfInLayer,
+  } = filterValueIds;
+  const {
+    pidFvSel, pidFvImp, pidFvImpSel, pidFvCurGuid, pidFvSelGuid,
+    pidFvOutImg, pidFvOutImgRes, pidFvOutXfm, pidFvOutXfm2,
+  } = filterValues;
   // ==================================================================
   // 2. SHARED PSD (one CLayeredImage with N layers)
   // ==================================================================
@@ -3741,407 +3607,27 @@ export async function generateCmo3(input) {
   // ==================================================================
   // 5. CModelImageGroup (contains inline CModelImage per mesh)
   // ==================================================================
-
-  const [imgGroup, pidImgGrp] = x.shared('CModelImageGroup');
-  x.sub(imgGroup, 's', { 'xs.n': 'memo' }).text = '';
-  x.sub(imgGroup, 's', { 'xs.n': 'groupName' }).text = 'stretchy_export';
-  const liGuids = x.sub(imgGroup, 'carray_list', {
-    'xs.n': '_linkedRawImageGuids', count: '1',
+  // Logic in `cmo3/modelImageGroup.js`. Returns the group's pid for
+  // CTextureManager wiring in section 6.
+  const { pidImgGrp } = emitModelImageGroup(x, {
+    perMesh, pidLiGuid,
+    pidFvidMiGuid, pidFvidMiLayer,
+    canvasW, canvasH,
   });
-  x.subRef(liGuids, 'CLayeredImageGuid', pidLiGuid);
-
-  const miList = x.sub(imgGroup, 'carray_list', {
-    'xs.n': '_modelImages', count: String(meshes.length),
-  });
-
-  for (const pm of perMesh) {
-    const mi = x.sub(miList, 'CModelImage', { modelImageVersion: '0' });
-    x.subRef(mi, 'CModelImageGuid', pm.pidMiGuid, { 'xs.n': 'guid' });
-    x.sub(mi, 's', { 'xs.n': 'name' }).text = pm.meshName;
-    x.subRef(mi, 'ModelImageFilterSet', pm.pidFset, { 'xs.n': 'inputFilter' });
-
-    // inputFilterEnv
-    const mife = x.sub(mi, 'ModelImageFilterEnv', { 'xs.n': 'inputFilterEnv' });
-    const fe = x.sub(mife, 'FilterEnv', { 'xs.n': 'super' });
-    x.sub(fe, 'null', { 'xs.n': 'parentEnv' });
-    const envMap = x.sub(fe, 'hash_map', { 'xs.n': 'envValues', count: '2' });
-    // mi_currentImageGuid → CLayeredImageGuid
-    const envE1 = x.sub(envMap, 'entry');
-    x.subRef(envE1, 'FilterValueId', pidFvidMiGuid, { 'xs.n': 'key' });
-    const evs1 = x.sub(envE1, 'EnvValueSet', { 'xs.n': 'value' });
-    x.subRef(evs1, 'FilterValueId', pidFvidMiGuid, { 'xs.n': 'id' });
-    x.subRef(evs1, 'CLayeredImageGuid', pidLiGuid, { 'xs.n': 'value' });
-    x.sub(evs1, 'l', { 'xs.n': 'updateTimeMs' }).text = '0';
-    // mi_input_layerInputData → CLayerSelectorMap
-    const envE2 = x.sub(envMap, 'entry');
-    x.subRef(envE2, 'FilterValueId', pidFvidMiLayer, { 'xs.n': 'key' });
-    const evs2 = x.sub(envE2, 'EnvValueSet', { 'xs.n': 'value' });
-    x.subRef(evs2, 'FilterValueId', pidFvidMiLayer, { 'xs.n': 'id' });
-    const lsm = x.sub(evs2, 'CLayerSelectorMap', { 'xs.n': 'value' });
-    const itli = x.sub(lsm, 'linked_map', { 'xs.n': '_imageToLayerInput', count: '1' });
-    const itliE = x.sub(itli, 'entry');
-    x.subRef(itliE, 'CLayeredImageGuid', pidLiGuid, { 'xs.n': 'key' });
-    const itliV = x.sub(itliE, 'array_list', { 'xs.n': 'value', count: '1' });
-    const lidData = x.sub(itliV, 'CLayerInputData');
-    x.subRef(lidData, 'CLayer', pm.pidLayer, { 'xs.n': 'layer' });
-    x.sub(lidData, 'CAffine', {
-      'xs.n': 'affine',
-      m00: '1.0', m01: '0.0', m02: '0.0', m10: '0.0', m11: '1.0', m12: '0.0',
-    });
-    x.sub(lidData, 'null', { 'xs.n': 'clippingOnTexturePx' });
-    x.sub(evs2, 'l', { 'xs.n': 'updateTimeMs' }).text = '0';
-
-    // _filteredImage
-    x.subRef(mi, 'CImageResource', pm.pidImg, { 'xs.n': '_filteredImage' });
-    x.sub(mi, 'null', { 'xs.n': 'icon16' });
-    x.sub(mi, 'CAffine', {
-      'xs.n': '_materialLocalToCanvasTransform',
-      m00: '1.0', m01: '0.0', m02: '0.0', m10: '0.0', m11: '1.0', m12: '0.0',
-    });
-    x.subRef(mi, 'CModelImageGroup', pidImgGrp, { 'xs.n': '_group' });
-    const miLrig = x.sub(mi, 'carray_list', { 'xs.n': 'linkedRawImageGuids', count: '1' });
-    x.subRef(miLrig, 'CLayeredImageGuid', pidLiGuid);
-
-    // CCachedImageManager
-    const cim = x.sub(mi, 'CCachedImageManager', { 'xs.n': 'cachedImageManager' });
-    x.sub(cim, 'CachedImageType', { 'xs.n': 'defaultCacheType', v: 'SCALE_1' });
-    x.subRef(cim, 'CImageResource', pm.pidImg, { 'xs.n': 'rawImage' });
-    const ciList = x.sub(cim, 'array_list', { 'xs.n': 'cachedImages', count: '1' });
-    const ci = x.sub(ciList, 'CCachedImage');
-    x.subRef(ci, 'CImageResource', pm.pidImg, { 'xs.n': '_cachedImageResource' });
-    x.sub(ci, 'b', { 'xs.n': 'isSharedImage' }).text = 'true';
-    x.sub(ci, 'CSize', { 'xs.n': 'rawImageSize', width: String(canvasW), height: String(canvasH) });
-    x.sub(ci, 'i', { 'xs.n': 'reductionRatio' }).text = '1';
-    x.sub(ci, 'i', { 'xs.n': 'mipmapLevel' }).text = '1';
-    x.sub(ci, 'b', { 'xs.n': 'hasMargin' }).text = 'false';
-    x.sub(ci, 'b', { 'xs.n': 'isCleaned' }).text = 'false';
-    x.sub(ci, 'CAffine', {
-      'xs.n': 'transformRawImageToCachedImage',
-      m00: '1.0', m01: '0.0', m02: '0.0', m10: '0.0', m11: '1.0', m12: '0.0',
-    });
-    x.sub(cim, 'i', { 'xs.n': 'requiredMipmapLevel' }).text = '1';
-
-    x.sub(mi, 's', { 'xs.n': 'memo' }).text = '';
-  }
 
   // ==================================================================
   // 6. BUILD main.xml
   // ==================================================================
-
-  // ── Root Parameter Group entity (v14 required) ──
-  // Must be created BEFORE the shared section is flushed so it gets included.
-  // Its `_childGuids` lists every parameter we've emitted — matches the
-  // "flat" hierarchy Cubism uses by default for new projects. The actual
-  // <CParameterGroup xs.n="rootParameterGroup" xs.ref="..."> reference is
-  // written later in the end-of-CModelSource block (section 6 tail).
-  //
-  // The CParameterGroupId is a separate ID type (alongside CParameterGroupGuid)
-  // that Cubism's Random Pose Setting dialog uses to key its group tree. Without
-  // it + labelColor, the dialog renders blank because it can't resolve the
-  // group's display identity.
-  // Shared CParameterId per paramDef. MUST run AFTER all `paramDefs.push`
-  // sites (there are late ones around the rig/generateRig blocks); if we
-  // assign `pidId` too early, any paramDef pushed later has `pd.pidId =
-  // undefined`, which the ref-emit turns into `xs.ref="undefined"` — at
-  // load Cubism reports `CParameterId / ref id [undefined] : object not
-  // found` and fabricates `__NotInitialized__` placeholders per source.
-  for (const pd of paramDefs) {
-    const [, pidId] = x.shared('CParameterId', { idstr: pd.id });
-    pd.pidId = pidId;
-  }
-
-  // Parameter sub-groups — mirror Hiyori's 10-category tree so the Random
-  // Pose Setting dialog has folders to render. Without sub-groups the dialog
-  // sees only the root and shows nothing (it renders parameters nested under
-  // folders, not a flat root list). Taxonomy + classifier live in
-  // `cmo3/paramCategories.js`. Only categories with ≥1 param emit a
-  // CParameterGroup; root's `_childGuids` lists those sub-group guids.
-  for (const pd of paramDefs) pd.category = categorizeParam(pd.id);
-  const paramsByCategory = new Map();
-  for (const cd of CATEGORY_DEFS) paramsByCategory.set(cd.key, []);
-  for (const pd of paramDefs) paramsByCategory.get(pd.category).push(pd);
-  const activeCategories = CATEGORY_DEFS.filter(cd => paramsByCategory.get(cd.key).length > 0);
-  for (const cd of activeCategories) {
-    const [, pidGuid] = x.shared('CParameterGroupGuid', { uuid: uuid(), note: cd.key });
-    const [, pidId] = x.shared('CParameterGroupId', { idstr: cd.idstr });
-    cd.pidGuid = pidGuid;
-    cd.pidId = pidId;
-  }
-  const categoryByKey = new Map(activeCategories.map(cd => [cd.key, cd]));
-
-  // Root Parameter Group entity (v14 required) — mirrors Hiyori's root
-  // group at fileFormatVersion 402030000. Shape is:
-  //   name, description, folderIsOpened, guid, parentGroupGuid (null),
-  //   _childGuids (CParameterGroupGuid refs to each sub-group),
-  //   id (CParameterGroupId ref), visibilityColor* (four 1.0 floats).
-  //
-  // Previous blank-load failure was ClassNotFoundException: CParameterGroupId
-  // — root cause was a missing IMPORT_PI (now in cmo3/constants.js). The
-  // `<CParameterGroupId>` and `<f visibilityColor*>` fields themselves are
-  // correct at this fileFormatVersion (Hiyori has both).
-  const [, pidRootPgId] = x.shared('CParameterGroupId', { idstr: 'ParamGroupRoot' });
-  const [rootPgNode, pidRootPgEntity] = x.shared('CParameterGroup');
-  x.sub(rootPgNode, 's', { 'xs.n': 'name' }).text = 'Root Parameter Group';
-  x.sub(rootPgNode, 's', { 'xs.n': 'description' });
-  x.sub(rootPgNode, 'b', { 'xs.n': 'folderIsOpened' }).text = 'false';
-  x.subRef(rootPgNode, 'CParameterGroupGuid', pidParamGroupGuid, { 'xs.n': 'guid' });
-  x.sub(rootPgNode, 'null', { 'xs.n': 'parentGroupGuid' });
-  const pgChildList = x.sub(rootPgNode, 'carray_list', {
-    'xs.n': '_childGuids', count: String(activeCategories.length),
+  // Logic in `cmo3/mainXmlBuilder.js`. Returns the populated <root>
+  // element ready for serialization in section 7.
+  const root = buildMainXml(x, {
+    paramDefs, pidParamGroupGuid, pidModelGuid, modelName,
+    canvasW, canvasH, pidLi, pidImgGrp,
+    meshes, meshSrcIds,
+    allDeformerSources,
+    allPartSources, rootPart,
+    generatePhysics, physicsRules, physicsDisabledCategories, rigDebugLog,
   });
-  for (const cd of activeCategories) {
-    x.subRef(pgChildList, 'CParameterGroupGuid', cd.pidGuid);
-  }
-  x.subRef(rootPgNode, 'CParameterGroupId', pidRootPgId, { 'xs.n': 'id' });
-  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorRed' }).text = '1.0';
-  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorGreen' }).text = '1.0';
-  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorBlue' }).text = '1.0';
-  x.sub(rootPgNode, 'f', { 'xs.n': 'visibilityColorAlpha' }).text = '1.0';
-
-  const root = x.el('root', { fileFormatVersion: '402030000' });
-
-  // Shared section
-  const sharedElem = x.sub(root, 'shared');
-  for (const obj of x._shared) {
-    sharedElem.children.push(obj);
-  }
-
-  // Main section
-  const mainElem = x.sub(root, 'main');
-  const model = x.sub(mainElem, 'CModelSource', { isDefaultKeyformLocked: 'true' });
-  x.subRef(model, 'CModelGuid', pidModelGuid, { 'xs.n': 'guid' });
-  x.sub(model, 's', { 'xs.n': 'name' }).text = modelName;
-  const edition = x.sub(model, 'EditorEdition', { 'xs.n': 'editorEdition' });
-  x.sub(edition, 'i', { 'xs.n': 'edition' }).text = '15';
-
-  // Canvas
-  const canvas = x.sub(model, 'CImageCanvas', { 'xs.n': 'canvas' });
-  x.sub(canvas, 'i', { 'xs.n': 'pixelWidth' }).text = String(canvasW);
-  x.sub(canvas, 'i', { 'xs.n': 'pixelHeight' }).text = String(canvasH);
-  x.sub(canvas, 'CColor', { 'xs.n': 'background' });
-
-  // Parameters — emit all from paramDefs (ParamOpacity + project parameters)
-  const paramSet = x.sub(model, 'CParameterSourceSet', { 'xs.n': 'parameterSourceSet' });
-  const paramSources = x.sub(paramSet, 'carray_list', {
-    'xs.n': '_sources', count: String(paramDefs.length),
-  });
-  for (const pd of paramDefs) {
-    const ps = x.sub(paramSources, 'CParameterSource');
-    x.sub(ps, 'i', { 'xs.n': 'decimalPlaces' }).text = String(pd.decimalPlaces);
-    x.subRef(ps, 'CParameterGuid', pd.pid, { 'xs.n': 'guid' });
-    x.sub(ps, 'f', { 'xs.n': 'snapEpsilon' }).text = '0.001';
-    x.sub(ps, 'f', { 'xs.n': 'minValue' }).text = String(pd.min);
-    x.sub(ps, 'f', { 'xs.n': 'maxValue' }).text = String(pd.max);
-    x.sub(ps, 'f', { 'xs.n': 'defaultValue' }).text = String(pd.defaultVal);
-    x.sub(ps, 'b', { 'xs.n': 'isRepeat' }).text = 'false';
-    x.subRef(ps, 'CParameterId', pd.pidId, { 'xs.n': 'id' });
-    x.sub(ps, 'Type', { 'xs.n': 'paramType', v: 'NORMAL' });
-    x.sub(ps, 's', { 'xs.n': 'name' }).text = pd.name;
-    x.sub(ps, 's', { 'xs.n': 'description' }).text = '';
-    x.sub(ps, 'b', { 'xs.n': 'combined' }).text = 'false';
-    const subCat = categoryByKey.get(pd.category);
-    x.subRef(ps, 'CParameterGroupGuid', subCat.pidGuid, { 'xs.n': 'parentGroupGuid' });
-  }
-
-  // Texture manager
-  const texMgr = x.sub(model, 'CTextureManager', { 'xs.n': 'textureManager' });
-  const texList = x.sub(texMgr, 'TextureImageGroup', { 'xs.n': 'textureList' });
-  x.sub(texList, 'carray_list', { 'xs.n': 'children', count: '0' });
-  // _rawImages: ONE LayeredImageWrapper wrapping the shared CLayeredImage
-  const ri = x.sub(texMgr, 'carray_list', { 'xs.n': '_rawImages', count: '1' });
-  const liw = x.sub(ri, 'LayeredImageWrapper');
-  x.subRef(liw, 'CLayeredImage', pidLi, { 'xs.n': 'image' });
-  x.sub(liw, 'l', { 'xs.n': 'importedTimeMSec' }).text = '0';
-  x.sub(liw, 'l', { 'xs.n': 'lastModifiedTimeMSec' }).text = '0';
-  x.sub(liw, 'b', { 'xs.n': 'isReplaced' }).text = 'false';
-  // _modelImageGroups
-  const mig = x.sub(texMgr, 'carray_list', { 'xs.n': '_modelImageGroups', count: '1' });
-  x.subRef(mig, 'CModelImageGroup', pidImgGrp);
-  x.sub(texMgr, 'carray_list', { 'xs.n': '_textureAtlases', count: '0' });
-  x.sub(texMgr, 'b', { 'xs.n': 'isTextureInputModelImageMode' }).text = 'true';
-  x.sub(texMgr, 'i', { 'xs.n': 'previewReductionRatio' }).text = '1';
-  x.sub(texMgr, 'carray_list', { 'xs.n': 'artPathBrushUsingLayeredImageIds', count: '0' });
-
-  // Drawable source set
-  x.sub(model, 'b', { 'xs.n': 'useLegacyDrawOrder__testImpl' }).text = 'false';
-  const drawSet = x.sub(model, 'CDrawableSourceSet', { 'xs.n': 'drawableSourceSet' });
-  const drawSources = x.sub(drawSet, 'carray_list', {
-    'xs.n': '_sources', count: String(meshes.length),
-  });
-  for (const pid of meshSrcIds) {
-    x.subRef(drawSources, 'CArtMeshSource', pid);
-  }
-
-  // Deformer source set
-  const deformerSet = x.sub(model, 'CDeformerSourceSet', { 'xs.n': 'deformerSourceSet' });
-  const deformerSources = x.sub(deformerSet, 'carray_list', {
-    'xs.n': '_sources', count: String(allDeformerSources.length),
-  });
-  for (const ds of allDeformerSources) {
-    x.subRef(deformerSources, ds.tag, ds.pid);
-  }
-
-  // Affecter source set (empty — required)
-  const affecterSet = x.sub(model, 'CAffecterSourceSet', { 'xs.n': 'affecterSourceSet' });
-  x.sub(affecterSet, 'carray_list', { 'xs.n': '_sources', count: '0' });
-
-  // Part source set — root + all group parts
-  const partSet = x.sub(model, 'CPartSourceSet', { 'xs.n': 'partSourceSet' });
-  const partSources = x.sub(partSet, 'carray_list', {
-    'xs.n': '_sources', count: String(allPartSources.length),
-  });
-  for (const ps of allPartSources) {
-    x.subRef(partSources, 'CPartSource', ps.pid);
-  }
-
-  // Physics settings — pendulum simulations driving hair/skirt params.
-  // Placement matches Hiyori's main.xml (between CPartSourceSet and the
-  // rootPart ref). Rules self-skip when their output param or required tag
-  // is absent, so turning off generateRig cleanly zeroes the set.
-  if (generatePhysics) {
-    const disabledSet = physicsDisabledCategories
-      ? (physicsDisabledCategories instanceof Set
-          ? physicsDisabledCategories
-          : new Set(physicsDisabledCategories))
-      : null;
-    emitPhysicsSettings(x, {
-      parent: model, paramDefs, meshes, rules: physicsRules ?? [], rigDebugLog,
-      disabledCategories: disabledSet,
-    });
-  }
-
-  // Root part ref
-  x.subRef(model, 'CPartSource', rootPart.pid, { 'xs.n': 'rootPart' });
-
-  // ── Parameter group set — root entity ref + one inline CParameterGroup per
-  // active sub-group (mirrors Hiyori t11's 13-group layout: root + 12 subs).
-  // Each sub-group:
-  //   name, description, folderIsOpened=false, guid (its own CParameterGroupGuid),
-  //   parentGroupGuid (ref → root's CParameterGroupGuid), _childGuids (CParameterGuid
-  //   refs for its member params), id (CParameterGroupId ref), visibilityColor*.
-  // Without this the Random Pose Setting dialog renders blank (it walks the
-  // group tree, not the flat parameter list).
-  const pgSet = x.sub(model, 'CParameterGroupSet', { 'xs.n': 'parameterGroupSet' });
-  const pgGroups = x.sub(pgSet, 'carray_list', {
-    'xs.n': '_groups', count: String(1 + activeCategories.length),
-  });
-  x.subRef(pgGroups, 'CParameterGroup', pidRootPgEntity);
-  for (const cd of activeCategories) {
-    const subGroup = x.sub(pgGroups, 'CParameterGroup');
-    x.sub(subGroup, 's', { 'xs.n': 'name' }).text = cd.name;
-    x.sub(subGroup, 's', { 'xs.n': 'description' });
-    x.sub(subGroup, 'b', { 'xs.n': 'folderIsOpened' }).text = 'false';
-    x.subRef(subGroup, 'CParameterGroupGuid', cd.pidGuid, { 'xs.n': 'guid' });
-    x.subRef(subGroup, 'CParameterGroupGuid', pidParamGroupGuid, { 'xs.n': 'parentGroupGuid' });
-    const members = paramsByCategory.get(cd.key);
-    const subChildList = x.sub(subGroup, 'carray_list', {
-      'xs.n': '_childGuids', count: String(members.length),
-    });
-    for (const pd of members) {
-      x.subRef(subChildList, 'CParameterGuid', pd.pid);
-    }
-    x.subRef(subGroup, 'CParameterGroupId', cd.pidId, { 'xs.n': 'id' });
-    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorRed' }).text = '1.0';
-    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorGreen' }).text = '0.95686275';
-    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorBlue' }).text = '0.76862746';
-    x.sub(subGroup, 'f', { 'xs.n': 'visibilityColorAlpha' }).text = '1.0';
-  }
-
-  // v14 required: rootParameterGroup pointer (entity ref, not guid ref)
-  x.subRef(model, 'CParameterGroup', pidRootPgEntity, { 'xs.n': 'rootParameterGroup' });
-
-  // ── Model info (with inner _effectParameterGroups required in v14) ──
-  const miInfo = x.sub(model, 'CModelInfo', { 'xs.n': 'modelInfo' });
-  x.sub(miInfo, 'f', { 'xs.n': 'pixelsPerUnit' }).text = '1.0';
-  const origin = x.sub(miInfo, 'CPoint', { 'xs.n': 'originInPixels' });
-  x.sub(origin, 'i', { 'xs.n': 'x' }).text = '0';
-  x.sub(origin, 'i', { 'xs.n': 'y' }).text = '0';
-  const epg = x.sub(miInfo, 'CEffectParameterGroups', { 'xs.n': '_effectParameterGroups' });
-  x.sub(epg, 'hash_map', { 'xs.n': '_parameterGroups', count: '0', keyType: 'string' });
-
-  // ── modelOptions (empty hash_map — we emit no legacy Cubism 2→3 mappings) ──
-  x.sub(model, 'hash_map', { 'xs.n': 'modelOptions', count: '0', keyType: 'string' });
-
-  // ── Preview icons (required by v14; contents are Editor UI thumbnails) ──
-  // We register 16×16 / 32×32 / 64×64 blank PNGs in the CAFF file list below
-  // and reference them by path here.
-  const iconSpecs = [
-    { field: '_icon64', size: 64, path: 'cmo3_icon_64.png' },
-    { field: '_icon32', size: 32, path: 'cmo3_icon_32.png' },
-    { field: '_icon16', size: 16, path: 'cmo3_icon_16.png' },
-  ];
-  for (const ic of iconSpecs) {
-    const iconNode = x.sub(model, 'CImageIcon', { 'xs.n': ic.field });
-    const img = x.sub(iconNode, 'CWritableImage', {
-      'xs.n': 'image', width: String(ic.size), height: String(ic.size), type: 'INT_ARGB',
-    });
-    x.sub(img, 'file', { 'xs.n': 'image', path: ic.path });
-  }
-
-  // ── gameMotionSet / ModelViewerSetting / CGuidesSetting (all empty stubs) ──
-  const gms = x.sub(model, 'CGameMotionSet', { 'xs.n': 'gameMotionSet' });
-  x.sub(gms, 'carray_list', { 'xs.n': 'gameMotions', count: '0' });
-  x.sub(gms, 'carray_list', { 'xs.n': 'gameMotionGroups', count: '0' });
-
-  const mvs = x.sub(model, 'ModelViewerSetting', { 'xs.n': 'modelViewerSetting' });
-  x.sub(mvs, 'array_list', { 'xs.n': 'trackCursorSettings', count: '0' });
-
-  const guides = x.sub(model, 'CGuidesSetting', { 'xs.n': 'guides' });
-  x.sub(guides, 'carray_list', { 'xs.n': 'guidesModeling', count: '0' });
-
-  x.sub(model, 'i', { 'xs.n': 'targetVersionNo' }).text = '3000';
-  x.sub(model, 'i', { 'xs.n': 'latestVersionOfLastModelerNo' }).text = '5000000';
-
-  const brushSet = x.sub(model, 'CArtPathBrushSetting', { 'xs.n': 'artPathBrushesSetting' });
-  x.sub(brushSet, 'carray_list', { 'xs.n': 'brushes', count: '0' });
-
-  // CRandomPoseSettingManager with ONE _settings entry listing every
-  // parameter. Empty _settings satisfied the parser but left Cubism's
-  // "Setting…" dialog (Animation mode → Playlist corner) blank, so users
-  // couldn't un-tick Opacity / bone-rotation params before running
-  // Random Pose. All params default to isEnable=true; groups array_lists
-  // stay empty (the flat param list is enough; the dialog groups visually
-  // by the CParameterSource's CParameterGroupGuid anyway).
-  const randomPose = x.sub(model, 'CRandomPoseSettingManager', { 'xs.n': 'randomPoseSetting' });
-  const rpSettings = x.sub(randomPose, 'array_list', { 'xs.n': '_settings', count: '1' });
-  const rpSetting = x.sub(rpSettings, 'CRandomPoseSetting');
-  const rpKeys = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'parameters.keys', count: String(paramDefs.length),
-  });
-  // Hiyori's pattern: parameters.keys uses INLINE CParameterId with idstr,
-  // not xs.ref to shared entries — the dialog populates from idstr directly.
-  // (groups.keys further down DOES use xs.ref — those two array_lists read
-  // through different code paths in Cubism.)
-  for (const pd of paramDefs) {
-    x.sub(rpKeys, 'CParameterId', { idstr: pd.id });
-  }
-  const rpVals = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'parameters.values', count: String(paramDefs.length),
-  });
-  for (let i = 0; i < paramDefs.length; i++) {
-    const entry = x.sub(rpVals, 'CRandomPoseParamData');
-    x.sub(entry, 'b', { 'xs.n': 'isEnable' }).text = 'true';
-  }
-  // Groups: root + every active sub-group. The dialog walks this list to
-  // render expandable folders; a flat hierarchy (root only) renders blank
-  // because it has no sub-folders to populate.
-  const rpGroupCount = 1 + activeCategories.length;
-  const rpGroupKeys = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'groups.keys', count: String(rpGroupCount),
-  });
-  x.subRef(rpGroupKeys, 'CParameterGroupId', pidRootPgId);
-  for (const cd of activeCategories) {
-    x.subRef(rpGroupKeys, 'CParameterGroupId', cd.pidId);
-  }
-  const rpGroupVals = x.sub(rpSetting, 'array_list', {
-    'xs.n': 'groups.values', count: String(rpGroupCount),
-  });
-  for (let i = 0; i < rpGroupCount; i++) {
-    const rpGroupData = x.sub(rpGroupVals, 'CRandomPoseGroupData');
-    x.sub(rpGroupData, 'b', { 'xs.n': 'isExpand' }).text = 'true';
-  }
-  x.sub(randomPose, 'i', { 'xs.n': 'currentIndex' }).text = '0';
-
   // ==================================================================
   // 7. SERIALIZE + PACK INTO CAFF
   // ==================================================================
@@ -4149,35 +3635,8 @@ export async function generateCmo3(input) {
   const xmlStr = x.serialize(root, VERSION_PIS, IMPORT_PIS);
   const xmlBytes = new TextEncoder().encode(xmlStr);
 
-  // Build CAFF file list: PNG textures + icons + main.xml
-  const caffFiles = [];
-  // v14 preview icons — referenced by CImageIcon fields in the XML above.
-  for (const sz of [64, 32, 16]) {
-    caffFiles.push({
-      path: `cmo3_icon_${sz}.png`,
-      content: buildRawPng(sz, sz),
-      tag: '',
-      obfuscated: true,
-      compress: COMPRESS_RAW,
-    });
-  }
-  for (const pm of perMesh) {
-    caffFiles.push({
-      path: pm.pngPath,
-      content: pm.mi < meshes.length ? meshes[pm.mi].pngData : buildRawPng(canvasW, canvasH),
-      tag: '',
-      obfuscated: true,
-      compress: COMPRESS_RAW,
-    });
-  }
-  caffFiles.push({
-    path: 'main.xml',
-    content: xmlBytes,
-    tag: 'main_xml',
-    obfuscated: true,
-    compress: COMPRESS_FAST,
+  const cmo3 = await packCmo3({
+    xmlBytes, perMesh, meshes, canvasW, canvasH,
   });
-
-  const cmo3 = await packCaff(caffFiles, 42);
   return { cmo3, deformerParamMap, rigDebugLog, rigSpec: rigCollector };
 }
