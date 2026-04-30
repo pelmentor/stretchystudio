@@ -1509,6 +1509,21 @@ for that polish round.
 
 ---
 
+### 2026-04-30 — Phase first-cut sweep #24 (autonomous, Phase 6 cmo3writer extractions)
+
+After sweep #23 closed the last deferred bug actionable from code, sweep #24 attacks Phase 6 — god-class breakup of `cmo3writer.js` (4468 LOC). The previous extraction pass (Sessions 19–28) carved out `cmo3/constants.js`, `bodyRig.js`, `deformerEmit.js`, `faceParallax.js`, `physics.js`, `pngHelpers.js`; the writer was left as one giant `generateCmo3` async function with sections 1-7 split only by comment dividers. Sweep #24 ships four cohesive sub-modules with tests, all behaviour-preserving (e2e_equivalence + rigSpec + warpDeformers + rigWarps stay 100% green).
+
+| Phase | Deliverable |
+|-------|-------------|
+| 6 | `cmo3/rigWarpTags.js` — `RIG_WARP_TAGS` (per-tag warp grid sizes), `FACE_PARALLAX_TAGS` / `FACE_PARALLAX_DEPTH` (Session 19 unified-face-warp membership), `NECK_WARP_TAGS` (head-tilt followers). 80 LOC of pure data, no closures. |
+| 6 | `cmo3/paramCategories.js` — `CATEGORY_DEFS` (frozen 10-folder Random-Pose-dialog taxonomy) + `categorizeParam(id)` (regex/string-table classifier). New `test_paramCategories.mjs`: 72 tests covering every branch + falsy guards + L/R-suffix edge cases. |
+| 6 | `cmo3/groupWorldMatrices.js` — `computeGroupWorldMatrices(groups, meshes, canvasW, canvasH) → { groupWorldMatrices, deformerWorldOrigins }`. Memoised parent-chain traversal + pivot-fallback BFS. New `test_groupWorldMatrices.mjs`: 18 tests covering identity, propagation, pivot-transform, descendant-bbox fallback, canvas-centre fallback, orphan parents, memoisation. |
+| 6 | `cmo3/eyeClosureFit.js` — `fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts) → ParabolaCurve|null`. The lash-mirror + bin-max + PNG-alpha fallback parabola fitter. New `test_eyeClosureFit.mjs`: 27 tests covering degenerate input, flat-line fit, U-shape concavity, lower-edge extraction, PNG-source tracking, eyelash-fallback mirror, custom binCount. Also drops the now-orphaned `extractBottomContourFromLayerPng` import from the writer. |
+
+**LOC delta for cmo3writer.js**: 4468 → 4255 (−213). Total module count under `src/io/live2d/cmo3/` grew 6 → 10. Combined sweep added 2 new modules + 134 new test assertions.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
 
 After 22 sweeps shipping new surface, sweep #23 turns to the deferred-bugs list at the bottom of this doc. The "eye init parabola broken" entry was reproducible: a freshly-loaded project (or imported `.cmo3`) renders with closed eyes even though `ParamEyeLOpen.default === 1` — clicking the slider opens them. Root cause traced to `paramValues` being empty post-load: `chainEval` read `undefined` for every binding → `cellSelect` treated as 0 → params with non-zero defaults rendered at 0.

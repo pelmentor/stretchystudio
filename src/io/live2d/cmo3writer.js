@@ -39,7 +39,7 @@ import {
   DEFORMER_ROOT_UUID,
   PARAM_GROUP_ROOT_UUID,
 } from './cmo3/constants.js';
-import { buildRawPng, extractBottomContourFromLayerPng } from './cmo3/pngHelpers.js';
+import { buildRawPng } from './cmo3/pngHelpers.js';
 import {
   emitKfBinding,
   emitSingleParamKfGrid,
@@ -56,6 +56,7 @@ import {
 } from './cmo3/rigWarpTags.js';
 import { CATEGORY_DEFS, categorizeParam } from './cmo3/paramCategories.js';
 import { computeGroupWorldMatrices } from './cmo3/groupWorldMatrices.js';
+import { fitParabolaFromLowerEdge } from './cmo3/eyeClosureFit.js';
 import { sanitisePartName } from '../../lib/partId.js';
 
 // ---------- Main generator ----------
@@ -551,81 +552,9 @@ export async function generateCmo3(input) {
   // Eye-part meshes get their rig warp bbox extended to this union.
   const eyeUnionBboxPerSide = new Map();
 
-  // Extracted helper: fit a parabola to the lower edge of `sourceMesh`.
+  // Parabola-fit eye-closure curve: shared helper in `cmo3/eyeClosureFit.js`.
   // Same algorithm whether caller is base (eyewhite-{side}) or variant
-  // (eyewhite-{side}.{suffix}) — no sharing of the result curve between
-  // base and variants. Returns null on degenerate input.
-  async function fitParabolaFromLowerEdge(sourceMesh, sourceTag) {
-    if (!sourceMesh || !sourceMesh.vertices || sourceMesh.vertices.length < 6) return null;
-    const sourceVerts = sourceMesh.vertices;
-    const nv = sourceVerts.length / 2;
-    const pairs = new Array(nv);
-    for (let i = 0; i < nv; i++) pairs[i] = [sourceVerts[i * 2], sourceVerts[i * 2 + 1]];
-    pairs.sort((a, b) => a[0] - b[0]);
-    const xMin = pairs[0][0];
-    const xMax = pairs[pairs.length - 1][0];
-    if (xMax - xMin < 1) return null;
-
-    // P12: extract bottom contour from the LAYER'S PNG ALPHA when available
-    // (true drawn bottom per X column). Fall back to mesh bin-max on the
-    // vertices themselves if no pngData or decode fails.
-    let samples = null;
-    let sampleSource = 'mesh-bin-max';
-    if (sourceMesh.pngData) {
-      const contour = await extractBottomContourFromLayerPng(sourceMesh.pngData, xMin, xMax);
-      if (contour && contour.length >= 5) {
-        samples = contour;
-        sampleSource = sourceTag + '-png-alpha';
-      }
-    }
-    if (!samples) {
-      const binW = (xMax - xMin) / EYE_CLOSURE_BIN_COUNT;
-      samples = [];
-      for (let b = 0; b < EYE_CLOSURE_BIN_COUNT; b++) {
-        const bxLo = xMin + b * binW;
-        const bxHi = b === EYE_CLOSURE_BIN_COUNT - 1 ? xMax + 1 : xMin + (b + 1) * binW;
-        let maxY = -Infinity, sumX = 0, count = 0;
-        for (const p of pairs) {
-          if (p[0] < bxLo || p[0] >= bxHi) continue;
-          if (p[1] > maxY) maxY = p[1];
-          sumX += p[0]; count++;
-        }
-        if (count > 0) samples.push([sumX / count, maxY]);
-      }
-    }
-    if (samples.length < 3) return null;
-    // Eyelash fallback: lash's lower edge is the UPPER eye opening, so flip
-    // it to approximate the lower-lid curve. For eyewhite it IS the lower lid.
-    let fitSamples = samples;
-    if (sourceTag === 'eyelash-fallback' && samples.length >= 2) {
-      const [x0, y0] = samples[0];
-      const [xN, yN] = samples[samples.length - 1];
-      const slope = (yN - y0) / Math.max(1e-6, xN - x0);
-      fitSamples = samples.map(([x, y]) => {
-        const yLine = y0 + slope * (x - x0);
-        return [x, 2 * yLine - y];
-      });
-    }
-    const xMid = (xMin + xMax) / 2;
-    const xScale = (xMax - xMin) / 2 || 1;
-    let sX = 0, sY = 0, sX2 = 0, sX3 = 0, sX4 = 0, sXY = 0, sX2Y = 0;
-    for (const [x, y] of fitSamples) {
-      const xn = (x - xMid) / xScale;
-      const xn2 = xn * xn;
-      sX += xn; sY += y;
-      sX2 += xn2; sX3 += xn2 * xn; sX4 += xn2 * xn2;
-      sXY += xn * y; sX2Y += xn2 * y;
-    }
-    const n = fitSamples.length;
-    const det3 = (a11, a12, a13, a21, a22, a23, a31, a32, a33) =>
-      a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31);
-    const detM = det3(n, sX, sX2, sX, sX2, sX3, sX2, sX3, sX4);
-    if (Math.abs(detM) < 1e-9) return null;
-    const c = det3(sY, sX, sX2, sXY, sX2, sX3, sX2Y, sX3, sX4) / detM;
-    const bc = det3(n, sY, sX2, sX, sXY, sX3, sX2, sX2Y, sX4) / detM;
-    const ac = det3(n, sX, sY, sX, sX2, sXY, sX2, sX3, sX2Y) / detM;
-    return { a: ac, b: bc, c, xMid, xScale, sourceTag, sampleSource, xMin, xMax, sampleCount: samples.length };
-  }
+  // (eyewhite-{side}.{suffix}) — no curve sharing between them.
 
   const bboxFromVertsY = (verts) => {
     let minY = Infinity, maxY = -Infinity;
@@ -656,7 +585,7 @@ export async function generateCmo3(input) {
       if (bb) eyelashMeshBboxPerSide.set(side, bb);
     }
     if (!sourceMesh) continue;
-    const curve = await fitParabolaFromLowerEdge(sourceMesh, sourceTag);
+    const curve = await fitParabolaFromLowerEdge(sourceMesh, sourceTag, { binCount: EYE_CLOSURE_BIN_COUNT });
     if (!curve) continue;
     eyewhiteCurvePerSide.set(side, curve);
     // Union bbox across eyelash + eyewhite + iris for this side (P11) — base-side only
@@ -717,7 +646,7 @@ export async function generateCmo3(input) {
         if (variantSource) variantSourceTag = 'eyelash-fallback';
       }
       if (!variantSource) continue;
-      const vCurve = await fitParabolaFromLowerEdge(variantSource, variantSourceTag);
+      const vCurve = await fitParabolaFromLowerEdge(variantSource, variantSourceTag, { binCount: EYE_CLOSURE_BIN_COUNT });
       if (vCurve) variantEyewhiteCurvePerSideAndSuffix.set(`${side}|${suffix}`, vCurve);
     }
   }
