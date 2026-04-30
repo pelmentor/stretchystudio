@@ -1660,6 +1660,30 @@ All three blocks use a deep cross-section of writer state (~25 pid maps + rigCol
 
 ---
 
+### 2026-04-30 — Phase first-cut sweeps #34-#40 (autonomous, moc3writer Phase 6 split)
+
+After cmo3writer's #24-#33 reduction, sweeps #34-#40 attack the second god class — `moc3writer.js` (1573 LOC). Cleaner cuts than cmo3 because moc3 is a binary writer with fixed-offset section emit (`buildSectionData` + `serializeMoc3`) rather than closure-coupled XML emission. Test discipline: full-suite baseline before each sweep + after each, e2e_equivalence stays green throughout.
+
+| Sweep | HEAD | Module(s) | LOC delta |
+|-------|------|-----------|-----------|
+| #34 | `ebaf449` | `moc3/layout.js` (231 LOC: MAGIC, HEADER_SIZE, COUNT_INFO_*, MOC_VERSION, COUNT_IDX (23 slots), ELEM types, full SECTION_LAYOUT). `moc3/binaryWriter.js` (87 LOC: BinaryWriter class with U8/I16/I32/U32/F32 + arrays, writeString fixed-field, writeRuntime, padTo, patchU32). | 1573 → 1295 (−278) |
+| #35 | `ee63372` | `moc3/meshBindingPlan.js` (197 LOC) — `buildMeshBindingPlan({ meshParts, groups, rigSpec, bakedKeyformAngles, backdropTagsSet })` returns `{ meshBindingPlan, meshKeyformBeginIndex, meshKeyformCount, totalArtMeshKeyforms }`. Owns the per-mesh keyform branch order: bone-baked rotation → mesh-level eye closure → variant fade-in → base fade-out (backdrop-skip) → default `ParamOpacity[1.0]`. Drops `variantParamId` / `matchTag` / `sanitisePartName` imports. | 1295 → 1111 (−184 with #36) |
+| #36 | `ee63372` | `moc3/deformerOrder.js` (96 LOC) — `topoSortDeformers({ warpSpecs, rotationSpecs })` returns `{ allDeformerSpecs, allDeformerKinds, allDeformerSrcIndices, deformerIdToIndex, meshDefaultDeformerIdx }`. Cubism's runtime processes the deformer list in array order, so the parent-before-child topo-sort is required correctness, not nicety. | (combined with #35) |
+| #37 | `595ce8a` | `moc3/keyformBindings.js` (197 LOC) — `buildKeyformBindings({ meshBindingPlan, allDeformerSpecs, params })` owns the dedup-pool → contiguous-by-param reorder → band intern → kfbi expansion → per-param range pipeline. Without this layout the moc3 fails to load (band/binding counts come out 2× cubism's). Bug fix: `counts[KEYFORM_BINDING_BANDS]` was reading `bandPool.length` which went out of scope after extraction → switched to `bandBegins.length` (same value). | 1111 → 990 (−121) |
+| #38 | `595ce8a` | `moc3/keyformAndDeformerSections.js` (320 LOC) — single-function helper for the entire interleaved emit pipeline (mesh kf flatten → mesh kf positions → umbrella `deformer.*` → `warp_deformer.*` + grid append → `rotation_deformer.*` + keyforms → bone kf sentinel patch). Single `allKeyformPositions` accumulator threads through all five passes; cannot be cleanly subdivided. Returns the full bundle (38 fields) for the caller to dispatch into the unified sections Map + counts array. | 990 → 683 (−307) |
+| #39 | `5eb27d4` | `moc3/meshDeformerParent.js` (92 LOC) — 4-step cascade (per-mesh rig warp → bone rotation → group rotation → deepest body warp). `moc3/uvAndIndices.js` (88 LOC) — PSD→atlas UV remap + flat triangle indices + Hiyori-pattern single-root draw-order group + objects. | 683 → 588 (−95) |
+| #40 | `79038dc` | `moc3/binarySerialize.js` (139 LOC) — `serializeMoc3({ sections, counts, canvas })` owns the entire two-phase binary writer (Phase 1 body emit + Phase 2 header/SOT/padding/body assembly + V3.03+ quad_transforms). `writeSection` dispatcher lives here. `generateMoc3` collapses to `return serializeMoc3(buildSectionData(input))`. | 588 → 476 (−112) |
+
+**Cumulative moc3writer.js LOC delta sweeps #34-#40**: 1573 → 476 (−1097, **−70%**). New `src/io/live2d/moc3/` directory with **9 modules** (~1.4k LOC of writer logic). All 70+ test suites stay green throughout.
+
+**Final inventory of `src/io/live2d/moc3/`** (9 files, ~1.4k LOC): binarySerialize, binaryWriter, deformerOrder, keyformAndDeformerSections, keyformBindings, layout, meshBindingPlan, meshDeformerParent, uvAndIndices.
+
+**What's left in moc3writer.js (476 LOC):** module docstring + `Moc3Input` typedef + `buildSectionData` orchestrator that destructures the input, builds counts/meshInfos/partNodes/meshIndexById, then calls the 8 helpers in sequence and emits part / art_mesh / parameter / clip-mask sections inline (small enough to leave). `generateMoc3` is now 1-liner. Healthy file at this size — further splitting would just be churn.
+
+**Combined Phase 6 god-class breakup status:** cmo3writer.js (4468 → 2634, −41%, 22 modules) + moc3writer.js (1573 → 476, −70%, 9 modules) = **31 modules** across `cmo3/` + `moc3/`, **−2931 LOC** lifted from the two writers. cmo3writer's three remaining per-mesh emission loops (Sections 2/3c/4 totaling ~2140 LOC) are the next major target — they all need a typed `EmitContext` object plumbed once before the loop bodies can be cleanly extracted.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
 
 After 22 sweeps shipping new surface, sweep #23 turns to the deferred-bugs list at the bottom of this doc. The "eye init parabola broken" entry was reproducible: a freshly-loaded project (or imported `.cmo3`) renders with closed eyes even though `ParamEyeLOpen.default === 1` — clicking the slider opens them. Root cause traced to `paramValues` being empty post-load: `chainEval` read `undefined` for every binding → `cellSelect` treated as 0 → params with non-zero defaults rendered at 0.
