@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore.js';
+import { useParamValuesStore } from './paramValuesStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 
@@ -50,6 +51,15 @@ export const useRigSpecStore = create((set, get) => ({
       if (rigSpec) {
         const postSeedProject = useProjectStore.getState().project;
         rigSpec = { ...rigSpec, physicsRules: resolvePhysicsRules(postSeedProject) };
+        // Ensure every spec'd parameter has SOME value in paramValues —
+        // otherwise the chain evaluator reads `undefined` for params
+        // with non-zero defaults (`ParamEyeLOpen=1`, etc.) and renders
+        // them at 0 (eyes closed on freshly-loaded projects). Doesn't
+        // overwrite existing values, so in-flight slider edits survive.
+        const params = rigSpec.parameters?.length
+          ? rigSpec.parameters
+          : (postSeedProject.parameters ?? []);
+        useParamValuesStore.getState().seedMissingDefaults(params);
       }
       set({
         rigSpec,

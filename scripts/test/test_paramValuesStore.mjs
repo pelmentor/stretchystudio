@@ -99,5 +99,59 @@ reset();
   assert(Object.keys(get().values).length === 0, 'reset: wipes everything');
 }
 
+// ── seedMissingDefaults ────────────────────────────────────────────
+
+{
+  reset();
+  // Empty store: every param's default lands.
+  get().seedMissingDefaults([
+    { id: 'ParamEyeLOpen', default: 1 },
+    { id: 'ParamAngleX',   default: 0 },
+    { id: 'ParamX' },                     // missing default → 0
+  ]);
+  assert(get().values.ParamEyeLOpen === 1,
+    'seedMissingDefaults: lands non-zero default on empty store');
+  assert(get().values.ParamAngleX === 0,
+    'seedMissingDefaults: lands zero default explicitly');
+  assert(get().values.ParamX === 0,
+    'seedMissingDefaults: missing default → 0');
+}
+
+{
+  reset();
+  // User-edited values survive — only missing keys get seeded.
+  get().setParamValue('ParamEyeLOpen', 0.3);
+  get().seedMissingDefaults([
+    { id: 'ParamEyeLOpen', default: 1 },
+    { id: 'ParamAngleX',   default: 0 },
+  ]);
+  assert(get().values.ParamEyeLOpen === 0.3,
+    'seedMissingDefaults: existing key NOT overwritten');
+  assert(get().values.ParamAngleX === 0,
+    'seedMissingDefaults: missing key seeded alongside existing');
+}
+
+{
+  reset();
+  // No-op when every param is already set: no fresh reference.
+  get().setMany({ A: 1, B: 2 });
+  const before = get().values;
+  get().seedMissingDefaults([{ id: 'A', default: 9 }, { id: 'B', default: 7 }]);
+  assert(get().values === before,
+    'seedMissingDefaults: no-op preserves reference');
+  assert(get().values.A === 1 && get().values.B === 2,
+    'seedMissingDefaults: no-op preserves values');
+}
+
+{
+  reset();
+  // null / undefined parameters → no-op
+  get().seedMissingDefaults(null);
+  assert(Object.keys(get().values).length === 0, 'seedMissingDefaults: null → empty');
+  get().setMany({ A: 1 });
+  get().seedMissingDefaults(undefined);
+  assert(get().values.A === 1, 'seedMissingDefaults: undefined → preserves');
+}
+
 console.log(`paramValuesStore: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

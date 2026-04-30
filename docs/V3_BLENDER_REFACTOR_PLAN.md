@@ -1484,8 +1484,13 @@ rather than dedicated editors with full modal operator sets.
 
 **Bugs deferred** (explicit user instruction "затем уже исправлять
 баги какие найдем"):
-- Eye init parabola broken (ParamEyeLOpen=1 but eyes visually
-  closed); clicking slider helps.
+- ✅ Eye init parabola broken (ParamEyeLOpen=1 but eyes visually
+  closed); clicking slider helps. **FIXED sweep #23** —
+  `paramValuesStore.seedMissingDefaults` runs at the end of every
+  `useRigSpecStore.buildRigSpec` so freshly-loaded / -imported
+  projects start with `ParamEyeLOpen=1` (and every other non-zero
+  default) in the values map. Without it, chainEval read `undefined`
+  → cellSelect treated as 0 → eyes shut.
 - Phantom skirt param — by design (SDK STANDARD_PARAMS includes
   ParamSkirt regardless of mesh tags). Filtering is a UX decision
   that needs user input; not a bug per se.
@@ -1501,6 +1506,16 @@ each phase was scoped to; full polish (standalone editors, modal
 operator suites, parity harness, bundle splitting, PWA, i18n)
 remains for the second pass. Tags `v3-phase-N-complete` reserved
 for that polish round.
+
+---
+
+### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
+
+After 22 sweeps shipping new surface, sweep #23 turns to the deferred-bugs list at the bottom of this doc. The "eye init parabola broken" entry was reproducible: a freshly-loaded project (or imported `.cmo3`) renders with closed eyes even though `ParamEyeLOpen.default === 1` — clicking the slider opens them. Root cause traced to `paramValues` being empty post-load: `chainEval` read `undefined` for every binding → `cellSelect` treated as 0 → params with non-zero defaults rendered at 0.
+
+| Phase | Deliverable |
+|-------|-------------|
+| Bug | `paramValuesStore.seedMissingDefaults(parameters)` action — walks the parameter spec list and writes `default ?? 0` for every entry NOT already in the values map. Crucially does NOT overwrite existing values (in-flight slider edits survive), and returns the same store reference when nothing changes (no spurious re-renders). `useRigSpecStore.buildRigSpec` calls it at the end of every successful build, mirroring what `RigService.initializeRig` already does for the explicit Initialize Rig path — but covers the cmo3-import auto-build path that didn't seed defaults. 9 new tests in `test_paramValuesStore.mjs` (18 → 27 passing). End-to-end: open a saved project or import a `.cmo3`, eyes are open from frame 1. |
 
 ---
 

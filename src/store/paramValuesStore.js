@@ -30,5 +30,32 @@ export const useParamValuesStore = create((set) => ({
     set({ values: next });
   },
 
+  /**
+   * Seed parameters that aren't yet in the values map with their
+   * canonical default. Does NOT overwrite existing entries — used by
+   * project-load + rig-build paths that need to ensure params have
+   * SOME value without clobbering user edits.
+   *
+   * Without this, a freshly-loaded project (or imported cmo3) leaves
+   * paramValues empty, and chainEval reads `undefined` for every
+   * binding → cellSelect treats undefined as 0 → params with default≠0
+   * (`ParamEyeLOpen=1`, `ParamEyeROpen=1`) render at 0 (eyes shut)
+   * until the user touches the slider.
+   *
+   * @param {Array<{id:string, default?:number}> | undefined} parameters
+   */
+  seedMissingDefaults: (parameters) =>
+    set(state => {
+      const merged = { ...state.values };
+      let dirty = false;
+      for (const p of parameters ?? []) {
+        if (!(p.id in merged)) {
+          merged[p.id] = p.default ?? 0;
+          dirty = true;
+        }
+      }
+      return dirty ? { values: merged } : state;
+    }),
+
   reset: () => set({ values: {} }),
 }));
