@@ -1718,6 +1718,31 @@ This is the same overview I gave the user before /compact, recorded here so futu
 
 ---
 
+### 2026-04-30 — Phase first-cut sweeps #41-#44 (autonomous, cmo3writer Phase 6 split, part 2)
+
+Sweeps #41-#44 close out cmo3writer's three big inline loops by extracting them through a shared `EmitContext` bag. Same shape as moc3 sweeps #34-#40: a typed handoff object + per-section emission helpers. All four sweeps behaviour-preserving (full test suite + typecheck stay 100% green between every commit).
+
+- **Sweep #41 — `cmo3/emitContext.js` (260 LOC).** The catalog typedef listing every field a per-section helper might read (static input → resolved Stage-5/Stage-8 fallbacks → globals → pre-pass results → emission accumulators) plus a `createEmitContext(input, configs, hasGenerateRig)` factory + `attachGlobals(ctx, _globals)` mirror. cmo3writer.js builds the context right after `XmlBuilder` is allocated; `rigCollector` + `rigDebugLog` move from inline allocations to ctx-owned instances with local aliases until extraction sweeps migrate every reference. Pure scaffolding sweep (cmo3writer −0 → +24 net) that unblocks the three big extractions below.
+
+- **Sweep #42 — `cmo3/meshLayerKeyform.js` (600 LOC, single-fn).** `emitAllMeshLayersAndKeyforms(ctx, prepass)` owns the entire `for (let mi = 0; mi < meshes.length; mi++)` body that was 511 LOC of inline state in cmo3writer.js: per-mesh GUID allocation, CImageResource + CLayer emit, filter graph + texture inputs (delegated to existing `meshLayer.js`), KeyformGridSource per-mesh with all six keyform branches (baked / closure / neck-corner / 2D compound / emotion-variant / base-fade / default), `closedCanvasVerts` cache for moc3 blink emission, and final `perMesh.push` + `layerRefs.push`. Caller passes a `prepass` bundle (eye-closure parabolas, variant pairing maps, PSD/layer pids). cmo3writer.js: 2634 → 2153 LOC (−481).
+
+- **Sweep #43 — `cmo3/eyeTags.js` + `cmo3/eyeContexts.js` + `cmo3/perPartRigWarps.js` (731 LOC across 3 files).** Three modules carve Section 3c out:
+  - `eyeTags.js` — shared `EYEWHITE_TAGS` / `EYELASH_TAGS` / `EYE_SOURCE_TAGS` / `EYE_PART_TAGS` sets used by Sections 3c and 4 (no duplication).
+  - `eyeContexts.js`'s `buildEyeContexts({ perMesh, meshes, generateRig, canvasToBodyXX, canvasToBodyXY, rigDebugLog })` runs the lower-edge X-bin → least-squares parabola fit → flip-when-eyelash → BodyX 0..1 projection pipeline; returns `{ eyeContexts, findEyeCtx }`. Pure pre-pass with no XML emission.
+  - `perPartRigWarps.js`'s `emitPerPartRigWarps(ctx, opts)` handles the `RIG_WARP_TAGS` loop: bbox + grid rebase per parent (face/neck/body), tag-binding cartesian-product keyforms (or no-op `ParamOpacity[1.0]`), Stage 9b stored-position passthrough, CWarpDeformerSource XML emission, parent-part registration, target-node stash for re-parenting, `rigCollector.warpDeformers` push.
+  
+  cmo3writer.js: 2153 → 1659 LOC (−494).
+
+- **Sweep #44 — `cmo3/artMeshSourceEmit.js` (690 LOC, single-fn).** `emitArtMeshSources(ctx, opts)` owns Section 4: per-mesh CArtMeshSource allocation, deformer parent resolution (rig warp / baked-keyform ARM group / jointBone or parent-group rotation deformer / ROOT), `verts` projection (warp-local 0..1 / pivot-relative px / canvas px), edit-mesh + texture-input + mesh-generator extension emit with full Cubism polygon-density preset, clip-guid resolve via `resolveMaskPairings` (now imported into the helper, not the writer), all six keyform branches (baked / closure-1D / closure-2D / neck-corner / variant / default), `rigCollector.artMeshes` mirror, base canvas-px positions + UVs. Returns `{ meshSrcIds }` for Section 5's CModelImageGroup. cmo3writer.js: 1659 → 1090 LOC (−569).
+
+**What's left in cmo3writer.js (1090 LOC):** the same module docstring + `Cmo3Input` typedef + `generateCmo3` that destructures input, runs all the pre-passes (body silhouette, body-warp chain, face-parallax + face-pivot, neck warp, eye closure parabolas), calls the 9 emit helpers in sequence (globalSetup → meshLayerKeyform → fillLayerGroupAndImage → partHierarchy → rotationDeformers → meshVertsWarp → eyeContexts → perPartRigWarps → structuralChainEmit → artMeshSourceEmit → modelImageGroup → mainXmlBuilder → caffPack), and a 12-LOC physics block in the rigOnly short-circuit. Most remaining LOC is the long input-arg destructure (Cmo3Input has 27 fields with default fallback logic for Stage 5/8 configs). Healthy file at this size.
+
+**Combined Phase 6 god-class breakup status (post sweep #44):** cmo3writer.js (4468 → 1090, −76%, 26 modules) + moc3writer.js (1573 → 476, −70%, 9 modules) = **35 modules** across `cmo3/` + `moc3/`, **−4475 LOC** lifted from the two writers. cmo3writer is now a thin orchestrator over its helper modules.
+
+**Next-session pointer:** with cmo3 EmitContext shipped and the three big sections extracted, the highest-ROI remaining target is **can3writer.js (857 LOC)** — animation export with the same writer pattern as moc3, so the moc3 split shape (`can3/{layout,sectionData,binarySerialize}.js`) applies directly. After that: `cmo3Import.js` + `cmo3PartExtract.js` (reverse of writer; same module shape mirrored), then UI splits (CanvasViewport, TimelineEditor, projectStore) when browser-eyes verification is feasible.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #23 (autonomous, deferred-bug fix)
 
 After 22 sweeps shipping new surface, sweep #23 turns to the deferred-bugs list at the bottom of this doc. The "eye init parabola broken" entry was reproducible: a freshly-loaded project (or imported `.cmo3`) renders with closed eyes even though `ParamEyeLOpen.default === 1` — clicking the slider opens them. Root cause traced to `paramValues` being empty post-load: `chainEval` read `undefined` for every binding → `cellSelect` treated as 0 → params with non-zero defaults rendered at 0.
