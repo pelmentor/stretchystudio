@@ -1504,6 +1504,18 @@ for that polish round.
 
 ---
 
+### 2026-04-30 — Phase first-cut sweep #21 (autonomous)
+
+Sweep #20 closed the cmo3 round-trip line; sweep #21 ships the two i18n follow-ups the plan flagged ⏳ since sweep #4 — locale persistence + Preferences switcher, and a wrap-the-rest pass on the Preferences modal itself (the natural starting point since the switcher is there).
+
+| Phase | Deliverable |
+|-------|-------------|
+| 4J | i18n persistence + locale switcher + Preferences wrap. `src/i18n/index.js` exports `AVAILABLE_LOCALES` + reads/writes `v3.prefs.locale` to localStorage on `setLocale`. The default loads from localStorage on store init (falls back to `'en'`). `PreferencesModal` gains a "Language" section under Keyboard with a Select tied to `useI18n.setLocale`, and every other label in the modal (`title`, `subtitle`, `themeMode`, all three mode button labels, color preset section header, font / font size / keyboard / shortcuts button / AI section + checkbox + note) goes through `useT()`. Per-locale switcher's stored choice survives reload. EN dictionary grew from 35 → 53 keys; RU dictionary mirror updated. `useT()` re-renders the modal when `setLocale` fires, so switching language flips every label live without close-and-reopen. |
+
+**Phase coverage after sweep #21:** Phase 5 cmo3 round-trip is end-to-end first-cut shipped. Phase 4J i18n has scaffold + first-cut wraps (Command Palette + Help modal + Export modal + Preferences modal) + persistent locale switcher. Pending pieces: Phase 4I theme audit sweep across remaining v3 components (mechanical), 4J wrap-the-rest sweep across remaining v3 components (mechanical), 4A parity harness (env-dependent — Cubism SDK), Phase 6 god-class breakup.
+
+---
+
 ### 2026-04-30 — Phase first-cut sweep #20 (autonomous)
 
 Sweep #19 closed the cmo3 import UX loop; sweep #20 picks up the last data-side gap on the line: bone-baked angle detection. The writer's auto-rig path bakes one keyform per angle in `boneConfig.bakedKeyformAngles` (default `[-90,-45,0,45,90]`) for bone-weighted meshes. Models authored with a different range (chibi rigs, custom workflows) need that range read back so re-export keeps the same stops.

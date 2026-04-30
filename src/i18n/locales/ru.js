@@ -50,4 +50,23 @@ export const RU = {
   'action.confirm':                 'Подтвердить',
   'action.create':                  'Создать',
   'action.rename':                  'Переименовать',
+
+  // Preferences modal
+  'prefs.title':                    'Настройки',
+  'prefs.subtitle':                 'Тема и типографика. Сохраняются в localStorage браузера.',
+  'prefs.themeMode':                'Тема',
+  'prefs.themeMode.light':          'Светлая',
+  'prefs.themeMode.dark':           'Тёмная',
+  'prefs.themeMode.system':         'Системная',
+  'prefs.colorPreset.dark':         'Цветовая схема (тёмная)',
+  'prefs.colorPreset.light':        'Цветовая схема (светлая)',
+  'prefs.colorPreset.pick':         'Выбрать…',
+  'prefs.font':                     'Шрифт',
+  'prefs.fontSize':                 'Размер шрифта',
+  'prefs.keyboard':                 'Клавиатура',
+  'prefs.viewShortcuts':            'Все сочетания…',
+  'prefs.language':                 'Язык',
+  'prefs.ai':                       'AI-функции',
+  'prefs.ai.enable':                'Включить AI-авториг (DWPose)',
+  'prefs.ai.note':                  'Выключение скрывает кнопку AI-авторига и не подгружает ~15 МБ ONNX runtime + DWPose. Ручной риг и эвристический скелет работают без него.',
 };

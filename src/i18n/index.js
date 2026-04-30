@@ -83,6 +83,25 @@ const EN = {
   'action.confirm':                 'Confirm',
   'action.create':                  'Create',
   'action.rename':                  'Rename',
+
+  // Preferences modal
+  'prefs.title':                    'Preferences',
+  'prefs.subtitle':                 'Theme and typography. Saved per-browser via localStorage.',
+  'prefs.themeMode':                'Theme mode',
+  'prefs.themeMode.light':          'Light',
+  'prefs.themeMode.dark':           'Dark',
+  'prefs.themeMode.system':         'System',
+  'prefs.colorPreset.dark':         'Color preset (dark)',
+  'prefs.colorPreset.light':        'Color preset (light)',
+  'prefs.colorPreset.pick':         'Pick preset…',
+  'prefs.font':                     'Font',
+  'prefs.fontSize':                 'Font size',
+  'prefs.keyboard':                 'Keyboard',
+  'prefs.viewShortcuts':            'View shortcuts…',
+  'prefs.language':                 'Language',
+  'prefs.ai':                       'AI features',
+  'prefs.ai.enable':                'Enable AI auto-rig (DWPose)',
+  'prefs.ai.note':                  'Off hides the AI Auto-Rig button and avoids loading the ~15 MB ONNX runtime + DWPose model. Manual rigging + heuristic skeleton estimation still work.',
 };
 
 // Eagerly register every shipped non-English locale so a user
@@ -91,14 +110,38 @@ const EN = {
 // per language is fine.
 import { RU } from './locales/ru.js';
 
+/** Locales that PreferencesModal exposes in its switcher. */
+export const AVAILABLE_LOCALES = Object.freeze([
+  { id: 'en', label: 'English' },
+  { id: 'ru', label: 'Русский' },
+]);
+
+const LOCALE_KEY = 'v3.prefs.locale';
+
+function loadLocale() {
+  if (typeof localStorage === 'undefined') return 'en';
+  try {
+    const raw = localStorage.getItem(LOCALE_KEY);
+    if (raw === 'en' || raw === 'ru') return raw;
+  } catch { /* ignore */ }
+  return 'en';
+}
+
+function saveLocale(locale) {
+  if (typeof localStorage === 'undefined') return;
+  try { localStorage.setItem(LOCALE_KEY, locale); } catch { /* ignore */ }
+}
+
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<I18nState>>} */
 export const useI18n = create((set) => ({
-  locale: 'en',
+  locale: loadLocale(),
   dictionaries: { en: EN, ru: RU },
 
-  setLocale: (locale) => set((state) => (
-    state.dictionaries[locale] ? { locale } : state
-  )),
+  setLocale: (locale) => set((state) => {
+    if (!state.dictionaries[locale]) return state;
+    saveLocale(locale);
+    return { locale };
+  }),
 
   registerDictionary: (locale, dict) => set((state) => ({
     dictionaries: {

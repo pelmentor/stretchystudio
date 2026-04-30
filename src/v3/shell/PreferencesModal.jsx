@@ -30,12 +30,13 @@ import { Slider } from '../../components/ui/slider.jsx';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../../components/ui/select.jsx';
-import { Sun, Moon, Monitor, Palette, Settings2, Keyboard, Cpu } from 'lucide-react';
+import { Sun, Moon, Monitor, Palette, Settings2, Keyboard, Cpu, Languages } from 'lucide-react';
 import { useTheme, AVAILABLE_FONTS } from '../../contexts/ThemeProvider.jsx';
 import { lightThemePresets, darkThemePresets } from '../../lib/themePresets.js';
 import { useState } from 'react';
 import { KeymapModal } from './KeymapModal.jsx';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { useI18n, AVAILABLE_LOCALES, useT } from '../../i18n/index.js';
 
 export function PreferencesModal({ open, onOpenChange }) {
   const {
@@ -48,6 +49,8 @@ export function PreferencesModal({ open, onOpenChange }) {
   const [keymapOpen, setKeymapOpen] = useState(false);
   const mlEnabled = usePreferencesStore((s) => s.mlEnabled);
   const setMlEnabled = usePreferencesStore((s) => s.setMlEnabled);
+  const locale = useI18n((s) => s.locale);
+  const setLocale = useI18n((s) => s.setLocale);
 
   const isDark =
     themeMode === 'dark' ||
@@ -63,44 +66,68 @@ export function PreferencesModal({ open, onOpenChange }) {
     );
   }
 
+  // Subscribe to locale so labels re-render when the user switches it.
+  // useT() encapsulates the subscribe; pulling labels through useT keeps
+  // them reactive without spreading a manual `useI18n((s) => s.locale)`
+  // across every line.
+  const labels = {
+    title:               useT('prefs.title'),
+    subtitle:            useT('prefs.subtitle'),
+    themeMode:           useT('prefs.themeMode'),
+    light:               useT('prefs.themeMode.light'),
+    dark:                useT('prefs.themeMode.dark'),
+    system:              useT('prefs.themeMode.system'),
+    presetDark:          useT('prefs.colorPreset.dark'),
+    presetLight:         useT('prefs.colorPreset.light'),
+    pickPreset:          useT('prefs.colorPreset.pick'),
+    font:                useT('prefs.font'),
+    fontSize:            useT('prefs.fontSize'),
+    keyboard:            useT('prefs.keyboard'),
+    viewShortcuts:       useT('prefs.viewShortcuts'),
+    language:            useT('prefs.language'),
+    ai:                  useT('prefs.ai'),
+    aiEnable:            useT('prefs.ai.enable'),
+    aiNote:              useT('prefs.ai.note'),
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Settings2 className="w-4 h-4 text-primary" />
-            Preferences
+            {labels.title}
           </DialogTitle>
           <DialogDescription>
-            Theme and typography. Saved per-browser via localStorage.
+            {labels.subtitle}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 mt-2">
-          <Section label="Theme mode">
+          <Section label={labels.themeMode}>
             <div className="flex gap-1">
               <ModeButton
                 active={themeMode === 'light'}
                 onClick={() => setThemeMode('light')}
                 icon={<Sun size={14} />}
-                label="Light"
+                label={labels.light}
               />
               <ModeButton
                 active={themeMode === 'dark'}
                 onClick={() => setThemeMode('dark')}
                 icon={<Moon size={14} />}
-                label="Dark"
+                label={labels.dark}
               />
               <ModeButton
                 active={themeMode === 'system'}
                 onClick={() => setThemeMode('system')}
                 icon={<Monitor size={14} />}
-                label="System"
+                label={labels.system}
               />
             </div>
           </Section>
 
-          <Section label={`Color preset (${isDark ? 'dark' : 'light'})`}>
+          <Section label={isDark ? labels.presetDark : labels.presetLight}>
             <Button
               type="button"
               variant="outline"
@@ -109,11 +136,11 @@ export function PreferencesModal({ open, onOpenChange }) {
               onClick={pickThemePreset}
             >
               <Palette size={14} />
-              Pick preset…
+              {labels.pickPreset}
             </Button>
           </Section>
 
-          <Section label="Font">
+          <Section label={labels.font}>
             <Select value={fontFamily} onValueChange={setFontFamily}>
               <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
@@ -128,7 +155,7 @@ export function PreferencesModal({ open, onOpenChange }) {
             </Select>
           </Section>
 
-          <Section label={`Font size — ${fontSize}px`}>
+          <Section label={`${labels.fontSize} — ${fontSize}px`}>
             <Slider
               min={11}
               max={20}
@@ -138,7 +165,7 @@ export function PreferencesModal({ open, onOpenChange }) {
             />
           </Section>
 
-          <Section label="Keyboard">
+          <Section label={labels.keyboard}>
             <Button
               type="button"
               variant="outline"
@@ -147,11 +174,31 @@ export function PreferencesModal({ open, onOpenChange }) {
               onClick={() => setKeymapOpen(true)}
             >
               <Keyboard size={14} />
-              View shortcuts…
+              {labels.viewShortcuts}
             </Button>
           </Section>
 
-          <Section label="AI features">
+          <Section label={labels.language}>
+            <Select value={locale} onValueChange={setLocale}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue>
+                  <span className="flex items-center gap-2">
+                    <Languages size={12} className="text-muted-foreground" />
+                    {AVAILABLE_LOCALES.find((l) => l.id === locale)?.label ?? locale}
+                  </span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {AVAILABLE_LOCALES.map((l) => (
+                  <SelectItem key={l.id} value={l.id} className="text-xs">
+                    {l.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Section>
+
+          <Section label={labels.ai}>
             <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
               <input
                 type="checkbox"
@@ -162,12 +209,10 @@ export function PreferencesModal({ open, onOpenChange }) {
               <span className="flex flex-col gap-0.5">
                 <span className="flex items-center gap-1.5">
                   <Cpu size={12} className="text-muted-foreground" />
-                  Enable AI auto-rig (DWPose)
+                  {labels.aiEnable}
                 </span>
                 <span className="text-[10px] text-muted-foreground leading-snug">
-                  Off hides the AI Auto-Rig button and avoids loading the
-                  ~15&nbsp;MB ONNX runtime + DWPose model. Manual rigging
-                  + heuristic skeleton estimation still work.
+                  {labels.aiNote}
                 </span>
               </span>
             </label>
