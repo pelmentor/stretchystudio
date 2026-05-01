@@ -10,6 +10,9 @@
  *     the panel layout preset AND the editor mode (Pose+Animation
  *     imply animation mode, others imply staging) — see Topbar.jsx
  *     for the rationale on collapsing those two axes.
+ *   - StaleRigBanner just below — surfaces GAP-012 detection
+ *     (PSD reimport / mesh re-mesh invalidates seeded rig data).
+ *     Hidden by default; renders only when divergence is real.
  *   - AreaTree in the rest of the viewport
  *   - Top-level ErrorBoundary as a last-resort net (the per-area
  *     boundaries inside Area.jsx catch the common case)
@@ -25,6 +28,7 @@
 import { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { Topbar } from './Topbar.jsx';
+import { StaleRigBanner } from './StaleRigBanner.jsx';
 import { AreaTree } from './AreaTree.jsx';
 import { SaveModal } from './SaveModal.jsx';
 import { LoadModal } from './LoadModal.jsx';
@@ -46,6 +50,7 @@ export function AppShell() {
     <ErrorBoundary label="AppShell">
       <div className="flex flex-col h-screen w-screen bg-background text-foreground">
         <Topbar />
+        <StaleRigBanner />
         <AreaTree />
         <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
         <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />

@@ -320,13 +320,16 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
 - Group renamed → physics output name dangles (Hole I-6).
 - Layer deleted → `bindings[].parameterId` for variants/bones may be orphan (Hole I-3).
 
-**Defence:** the re-import path should:
-1. Compute mesh signatures for all nodes; compare to `signatureHash` stored at seed time (Hole I-1).
-2. Diff the new node set vs the seeded covered set; identify uncovered new nodes.
-3. Surface a warning in UI: "PSD reimport changed N meshes (signatures mismatch); re-Init Rig recommended."
-4. Optionally: a "re-Init Rig (preserve customisations)" mode that re-runs heuristics for the changed parts only.
+**Defence shipped 2026-05-01 (Phase A — detection):**
 
-**Status today:** PSD reimport just updates `nodes`, no other system is told.
+1. ✅ Per-mesh signatures captured at seed (Hole I-1; module [src/io/meshSignature.js](../src/io/meshSignature.js)).
+2. ✅ Reactive validation — [src/v3/shell/StaleRigBanner.jsx](../src/v3/shell/StaleRigBanner.jsx) calls `validateProjectSignatures(project)` on every project mutation; gated by `hasStaleRigData(report)` (which ignores the `unseededNew` bucket — fresh-import-before-Init-Rig is normal). Uses `useMemo` keyed on the project reference; FNV-1a over a few hundred meshes is <1ms in profile.
+3. ✅ User surface — banner row mounts under Topbar (above AreaTree) when divergence is real. Yellow warning + summary count + Re-Init Rig button (calls `RigService.initializeRig` directly) + dismiss-for-this-session button. Auto-reappears when divergence count changes (e.g., a second reimport adds more stale meshes).
+4. ✅ Logs panel integration — every divergence emits one structured `logger.warn('staleRig', …, {stale: [...], missing: [...]})` so users can see per-part detail in the Logs editor.
+
+**Open (Phase B):** "Re-Init Rig (preserve customisations)" mode — re-derive only the changed meshes, leaving unchanged-mesh seeds intact. Out of scope for the umbrella detection fix; tracked under the broader rerig-flow gap (memory: `project_v3_rerig_flow_gap`).
+
+**Effective coverage today:** any PSD reimport that touches mesh geometry (vertex count, triangle count, UV positions, OR vertex order) raises the banner and emits per-mesh warnings. Layer rename / group rename (Holes I-4 / I-6) NOT detected by signature alone — handled separately by the local fixes scheduled for Step 4.
 
 ### Summary table
 
@@ -341,7 +344,7 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
 | I-7 autoRigConfig field drift | low | partial consumer defaults | none | none |
 | I-8 fresh-harvest aggressive | medium | works for common cases | none | none |
 | I-9 silent texture/audio errors | low | console.error | none | none |
-| I-10 PSD reimport no invalidation | high | none | none | none |
+| I-10 PSD reimport no invalidation | high | StaleRigBanner shipped 2026-05-01 (Phase A, detection) | reactive UI banner + per-mesh logger.warn | none (lossy; user re-Init Rig) |
 
 **Recommended ordering for Phase B+ (when prioritised):** I-10 first (it's the single user-facing umbrella for I-1, I-3, I-4, I-5, I-6 in a single workflow); I-1 second (signatureHash unlocks the I-10 detection); I-3 third (animation orphans are the next-most-common silent-export-corruption vector). I-7 / I-9 are quality-of-life. I-2 / I-8 wait until UI editors for the relevant fields exist.
 
@@ -374,3 +377,11 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
   keyforms are positionally indexed, so reordering vertices is itself
   an invalidating change a sorted hash would miss. Recorded in
   meshSignature.js JSDoc; living-doc note here for future readers.
+- **2026-05-01** — Hole I-10 detection consumer shipped:
+  [src/v3/shell/StaleRigBanner.jsx](../src/v3/shell/StaleRigBanner.jsx)
+  mounts under Topbar in AppShell. Reactive validation via `useMemo`;
+  gated by `hasStaleRigData` (ignores fresh-import unseededNew case).
+  Emits structured `logger.warn('staleRig', …)` so per-mesh detail
+  surfaces in the Logs editor. Re-Init Rig button calls
+  `RigService.initializeRig` directly (no operator id yet — operator
+  registration deferred to broader rerig-flow gap).

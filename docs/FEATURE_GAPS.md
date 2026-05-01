@@ -64,13 +64,15 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 **Why this is THE umbrella issue:** these five sub-failures share the same root — *the system has no way to know when seeded data has gone stale*. Fixing each individually patches symptoms; the fix is one shared mechanism.
 
-**Defence (Phase A — detection):**
+**Defence (Phase A — detection):** ✅ **SHIPPED 2026-05-01.**
 
-1. ✅ **SHIPPED 2026-05-01.** At seed time, compute and store a per-mesh fingerprint as a flat `project.meshSignatures: { [partId]: {vertexCount, triCount, uvHash} }`. Module [src/io/meshSignature.js](../src/io/meshSignature.js). Hooked in `projectStore.seedAllRig`; survives save/load via [`projectFile.js`](../src/io/projectFile.js) + schema migration v12. Tests: `test:meshSignature` (29 cases). **Divergence from original sketch:** flat top-level map, not per-subsystem; positional UV hash, not sorted (reordering is an invalidating change keyform.positions cares about).
-2. ⏳ **OPEN.** On project load AND on PSD reimport completion, call `validateProjectSignatures(project)` and emit warnings via `useLogsStore` for each `stale` / `missing` part. Function exists ([meshSignature.js#validateProjectSignatures](../src/io/meshSignature.js)) — needs callers.
-3. ⏳ **OPEN.** UI: when divergences exist, show a banner "PSD changes detected on N meshes; rig data may be stale. Re-Init Rig to refresh, or dismiss to keep current export." Likely lives in `<Topbar>` or a dedicated `<StaleRigBanner>`. Banner is gated by `hasStaleRigData(report)` (only `stale`+`missing` count; `unseededNew` is normal pre-Init-Rig state).
+1. ✅ Per-mesh fingerprint at seed time — flat `project.meshSignatures: { [partId]: {vertexCount, triCount, uvHash} }`. Module [src/io/meshSignature.js](../src/io/meshSignature.js). Hooked in `projectStore.seedAllRig`; survives save/load via [`projectFile.js`](../src/io/projectFile.js) + schema migration v12. Tests: `test:meshSignature` (29 cases). **Divergence from original sketch:** flat top-level map, not per-subsystem; positional UV hash, not sorted (reordering is an invalidating change keyform.positions cares about).
+2. ✅ Reactive validation — [src/v3/shell/StaleRigBanner.jsx](../src/v3/shell/StaleRigBanner.jsx) calls `validateProjectSignatures(project)` on every project mutation (memoized; <1ms for typical mesh counts). Emits one structured `logger.warn('staleRig', …, {stale, missing})` per change with divergence so the Logs editor shows per-part detail.
+3. ✅ UI banner — yellow row mounts in `<AppShell>` between Topbar and AreaTree when `hasStaleRigData(report)` is true. Summary count + Re-Init Rig (calls `RigService.initializeRig` directly) + dismiss-for-this-session. Auto-reappears when divergence count changes.
 
-This is **detection-only**. Don't auto-clear (lossy). User decides.
+**Detection-only by design.** No auto-clear (lossy). User decides.
+
+**Phase A coverage:** any PSD reimport that touches mesh geometry — vertex count, tri count, UV values, OR positional vertex order — raises the banner and emits per-mesh logs. NOT covered by signatures alone: layer rename (Hole I-4) and bone group rename (Holes I-5 / I-6); those need separate name-vs-id reference fixes (scheduled in Step 4 of the closure plan).
 
 **Defence (Phase B — selective re-derivation):** "Re-Init Rig (preserve customisations)" mode that re-runs the wizard for changed meshes only, leaving unchanged-mesh seeds intact. Out of scope for the umbrella fix.
 

@@ -131,6 +131,7 @@ export function signaturesEqual(a, b) {
  * @returns {Record<string, MeshSignature>}
  */
 export function computeProjectSignatures(project) {
+  /** @type {Record<string, MeshSignature>} */
   const out = {};
   if (!project || !Array.isArray(project.nodes)) return out;
   for (const node of project.nodes) {

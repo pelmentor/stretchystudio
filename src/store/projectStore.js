@@ -327,6 +327,10 @@ export const useProjectStore = create((set) => {
       state.project.faceParallax = projectData.faceParallax ?? null;
       state.project.bodyWarp = projectData.bodyWarp ?? null;
       state.project.rigWarps = projectData.rigWarps ?? {};
+      // GAP-012 step 2: meshSignatures captured at last seedAllRig.
+      // Load preserves them verbatim; the StaleRigBanner re-validates
+      // against current node geometry on every render.
+      state.project.meshSignatures = projectData.meshSignatures ?? {};
       // Phase 1G — disk-loaded projects start unlinked from any library
       // record. The library-load operator sets `currentLibraryId` itself
       // after this call so a "save" goes back to the correct record.
