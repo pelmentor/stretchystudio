@@ -23,6 +23,8 @@ import {
   clearRigWarps as clearRigWarpsFn,
 } from '../io/live2d/rig/rigWarpsStore.js';
 import { computeProjectSignatures } from '../io/meshSignature.js';
+import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
+import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
 
 /**
@@ -464,7 +466,8 @@ export const useProjectStore = create((set) => {
    *   rigWarps: Map<string,object>,
    * }} harvest
    */
-  seedAllRig: (harvest) => set((state) => {
+  seedAllRig: (harvest) => {
+    set((state) => {
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       const proj = draft.project;
@@ -505,7 +508,32 @@ export const useProjectStore = create((set) => {
       proj.meshSignatures = computeProjectSignatures(proj);
       draft.hasUnsavedChanges = true;
     });
-  }),
+    });
+    // GAP-013 / Hole I-3 — after seedAllRig (which re-runs seedParameters
+    // with current tag coverage and may drop tag-gated standard params
+    // when their tag isn't present anymore), enumerate references in
+    // animations/bindings/physicsRules that no longer resolve. Detection
+    // only — Logs panel shows the per-ref locations; remediation is the
+    // user's call (today: ignore; future Param Editor UI: orphan-cleanup
+    // dialog). Runs outside the immer `produce` because
+    // findOrphanReferences reads the post-seed project; the `set` above
+    // committed before this returns.
+    const orphans = findOrphanReferences(get().project);
+    const orphanIds = Object.keys(orphans);
+    if (orphanIds.length > 0) {
+      logger.warn(
+        'paramOrphans',
+        `${orphanIds.length} orphan parameter ref(s) after Init Rig: ${orphanIds.join(', ')}`,
+        Object.fromEntries(
+          orphanIds.map(id => [id, {
+            animationTracks: orphans[id].animationTracks.map(r => r.location),
+            bindings:        orphans[id].bindings.map(r => r.location),
+            physicsInputs:   orphans[id].physicsInputs.map(r => r.location),
+          }])
+        )
+      );
+    }
+  },
 
   /**
    * Stage 1b — clear all keyform-bearing stores (faceParallax,

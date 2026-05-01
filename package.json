@@ -48,6 +48,7 @@
     "test:serializerPurity": "node scripts/test/test_serializerPurity.mjs",
     "test:projectRoundTrip": "node scripts/test/test_projectRoundTrip.mjs",
     "test:meshSignature": "node scripts/test/test_meshSignature.mjs",
+    "test:paramReferences": "node scripts/test/test_paramReferences.mjs",
     "test:rigGroupCleanup": "node scripts/test/test_rigGroupCleanup.mjs",
     "test:applySplits": "node scripts/test/test_applySplits.mjs",
     "test:transforms": "node scripts/test/test_transforms.mjs",

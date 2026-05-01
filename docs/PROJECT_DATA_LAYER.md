@@ -235,13 +235,20 @@ The Phase A fix closes the round-trip gap — fields persist correctly. But the 
 
 ### Hole I-3 — Animation tracks reference parameters by ID, no orphan check
 
-**Severity:** medium. **Affects:** `project.animations[].tracks[]` (motion3.json output).
+**Severity:** medium. **Affects:** `project.animations[].tracks[]` (motion3.json output), `bindings[].parameterId` inside warp keyforms, `physicsRules[].inputs[].paramId`.
 
-**The problem:** Each animation track's `propPath` references a parameter by ID (e.g. `'ParamAngleX'`). If the parameter is removed (custom param deleted, or `paramSpec.requireTag` gating excludes it now that a tag is no longer present), the track becomes an orphan. Export emits the motion file with a property path that no parameter resolves — model3.json will reference a parameter that doesn't exist in moc3, and the runtime will warn or fail to load.
+**The problem:** Each animation track's `paramId` references a parameter by ID (e.g. `'ParamAngleX'`). If the parameter is removed (custom param deleted, or `paramSpec.requireTag` gating excludes it now that a tag is no longer present), the track becomes an orphan. Export emits the motion file with a property path that no parameter resolves — model3.json will reference a parameter that doesn't exist in moc3, and the runtime will warn or fail to load. Same applies to warp bindings and physics inputs.
 
-**Defence:** on parameter delete (UI action), enumerate references in animations + physics rules + bindings; prompt with a list, let the user confirm or migrate.
+**Defence shipped 2026-05-01 (Phase A — detection):** new module [src/io/live2d/rig/paramReferences.js](../src/io/live2d/rig/paramReferences.js) provides:
 
-**Status today:** no orphan detection, no UI guard. Re-Init Rig with different tag coverage (e.g. user deletes the `bottomwear` group → ParamSkirt no longer registered) silently breaks any animation track that referenced ParamSkirt.
+- `findReferences(project, paramId)` — locate every reference to a single id (animation tracks + warp bindings + physics inputs), returns `{ animationTracks, bindings, physicsInputs, total }` with human-readable `location` strings.
+- `findOrphanReferences(project)` — sweep the project for refs whose paramId doesn't resolve; returns `{ [orphanId]: ReferenceReport }`. Allowlists ParamOpacity + the 14 unconditional standard params + the `ParamRotation_*` prefix; tag-gated standard params (ParamSkirt, ParamHairFront, ParamShirt, etc.) ARE in the orphan-detection scope by design — that's the whole point.
+
+Hooked in `projectStore.seedAllRig` (post-seed): emits a single structured `logger.warn('paramOrphans', …, { [paramId]: locations })` per Init Rig with a non-zero orphan count. Surface visible in the Logs editor.
+
+**Test coverage:** `test:paramReferences` (27 cases) — all three categories, edge cases, allowlist correctness (tag-gated NOT allowlisted).
+
+**Open (Phase B):** UI delete-confirm dialog when a parameter editor exists. Today there's no UI surface for parameter delete, so the warn-only path is sufficient until the rerig-flow gap ships an editor (which also gates GAP-013 fully closing).
 
 ### Hole I-4 — Variant-suffix discovery is name-based, breaks on rename
 
@@ -337,7 +344,7 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
 |------|----------|---------------------|-----------|----------|
 | I-1 mesh signature hash | high | rigWarps validates `numKf` + signatureHash shipped 2026-05-01 (Phase A) | `validateProjectSignatures(project)` | none (lossy; user re-Init Rig) |
 | I-2 binding fingerprint | medium | none | none | none |
-| I-3 animation orphan params | medium | UI protection of standard params | none | none |
+| I-3 animation orphan params | medium | UI protection of standard params + paramReferences detection shipped 2026-05-01 (Phase A) | post-seedAllRig logger.warn('paramOrphans') | none (UI delete-confirm pending Param Editor UI) |
 | I-4 variant rename | medium | persistent `variantSuffix` | no rename detection | none |
 | I-5 bone weight orphan | medium | none | none | none |
 | I-6 physics output dangling | low | none | none | none |
@@ -385,3 +392,14 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
   surfaces in the Logs editor. Re-Init Rig button calls
   `RigService.initializeRig` directly (no operator id yet — operator
   registration deferred to broader rerig-flow gap).
+- **2026-05-01** — Hole I-3 detection shipped:
+  [src/io/live2d/rig/paramReferences.js](../src/io/live2d/rig/paramReferences.js)
+  enumerates references to a paramId across animation tracks + warp
+  bindings + physics inputs. Hooked in `projectStore.seedAllRig`
+  (post-seed): emits one `logger.warn('paramOrphans', …)` per Init
+  Rig with a non-zero orphan count. **Design choice:** tag-gated
+  standard params (ParamSkirt, ParamHairFront, etc.) ARE in the
+  orphan-detection scope — exactly the case Hole I-3 was about
+  (re-Init Rig with reduced tag coverage drops them). Only
+  unconditional standard params + ParamOpacity + ParamRotation_*
+  prefix are allowlisted.

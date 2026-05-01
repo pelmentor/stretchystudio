@@ -104,14 +104,16 @@ This work was already partially planned in [NATIVE_RIG_REFACTOR_PLAN.md → Cros
 
 The parameter disappears, but every reference to it stays in the project, silently producing zero motion / wrong export until someone notices.
 
-**Defence:** at parameter delete (UI action OR `seedParameters` filter dropping a tag-gated param), enumerate references in the three locations above; either (a) require user confirmation listing all references, OR (b) auto-clean dangling references after warning. Standard parameters (the 22 baked-in IDs registered unconditionally in `STANDARD_PARAMS`) are protected — UI shouldn't expose delete for them.
+**Defence (Phase A — detection):** ✅ **SHIPPED 2026-05-01.**
 
-**Files touched:**
-- New `src/io/live2d/rig/paramReferences.js` (enumerate references)
-- Wherever the UI surfaces parameter delete (TBD — currently no UI for this; happens implicitly via re-Init Rig)
-- `src/io/live2d/rig/paramSpec.js` `requireTag` filter site (warn before drop)
+1. ✅ [`src/io/live2d/rig/paramReferences.js`](../src/io/live2d/rig/paramReferences.js): `findReferences(project, paramId)` for a single id; `findOrphanReferences(project)` sweeps the whole project. Both return structured reports with `location` strings ("animation:anim1:track[3]", "rigWarps[hair-front]:bindings[0]", etc.) ready for UI rendering. Only the 14 unconditional standard params + `ParamOpacity` + `ParamRotation_*` prefix are allowlisted; tag-gated standard params (ParamSkirt, ParamHairFront, etc.) ARE in the orphan-detection scope by design — exactly the case I-3 cares about.
+2. ✅ Hooked in `projectStore.seedAllRig` (post-seed): emits `logger.warn('paramOrphans', …, { [orphanId]: locations })` per Init Rig with non-zero orphan count. Surface visible in the Logs editor.
 
-**Notes:** the bug is masked today because (a) the UI doesn't expose parameter delete, and (b) re-Init Rig with reduced tags is uncommon. But the moment we ship a "Edit parameters" UI editor (likely as part of `project_v3_rerig_flow_gap`), this becomes a daily problem. Prerequisite for safe parameter-editor UI.
+**Test coverage:** `test:paramReferences` (27 cases).
+
+**Phase B (deferred until UI editor exists):**
+
+UI delete-confirm dialog when a parameter editor surface lands. Today's UI doesn't expose parameter delete, so the warn-only path is sufficient — the bug only manifests via re-Init Rig with reduced tag coverage, where the post-seed warn already catches it. Prerequisite for safe parameter-editor UI; tracked under [`project_v3_rerig_flow_gap`](../README.md).
 
 ---
 
