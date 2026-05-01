@@ -84,6 +84,26 @@ export const DEFAULT_AUTO_RIG_CONFIG = Object.freeze({
   neckWarp: Object.freeze({
     tiltFrac: 0.08,
   }),
+  // GAP-008 — per-subsystem on/off flags. Each subsystem corresponds to
+  // a category of rig outputs that the user can opt out of. All true by
+  // default; setting one to false drops the matching warps + physics
+  // rules + parameters at harvest time (post-build filter in
+  // initRig.harvestSeedFromRigSpec). Survives save/load via the same
+  // schema-v7 path as the rest of autoRigConfig.
+  //
+  // Headline use case: short-hair characters (buzz cut, accessory hair)
+  // where the auto-detected hair rig produces unwanted sway. Set
+  // `hairRig: false` and re-Init Rig.
+  subsystems: Object.freeze({
+    faceRig:     true,   // FaceParallax warp + face rotation deformers + neck warp
+    eyeRig:      true,   // eye closure parabolas + iris gaze rigWarps + eyeball rotation
+    mouthRig:    true,   // mouth open/form rigWarps
+    hairRig:     true,   // hair sway rigWarps + hair physics rules
+    clothingRig: true,   // topwear/bottomwear/legwear sway rigWarps + clothing physics
+    bodyWarps:   true,   // body angle X/Y/Z warp chain + breath warp
+    armPhysics:  true,   // arm elbow pendulum physics rule
+  }),
+
   // Stage 9a — magnitudes for the procedural per-tag rig warps. Each entry
   // is the literal value lifted from the inline shiftFn closures in
   // cmo3writer.js's TAG_PARAM_BINDINGS map. Defaults are bit-for-bit
@@ -143,10 +163,22 @@ export const DEFAULT_AUTO_RIG_CONFIG = Object.freeze({
  * @typedef {Object} AutoRigNeckWarp
  * @property {number} tiltFrac
  *
+ * @typedef {Object} AutoRigSubsystems
+ *   GAP-008 — per-subsystem on/off flags. All true by default; setting
+ *   one to false drops the matching outputs at harvest time.
+ * @property {boolean} faceRig      FaceParallax + face rotations + neck warp
+ * @property {boolean} eyeRig       eye closure parabolas + iris + eyeball
+ * @property {boolean} mouthRig     mouth open/form rigWarps
+ * @property {boolean} hairRig      hair sway rigWarps + hair physics
+ * @property {boolean} clothingRig  topwear/bottomwear/legwear sway + physics
+ * @property {boolean} bodyWarps    body angle X/Y/Z + breath
+ * @property {boolean} armPhysics   arm elbow pendulum
+ *
  * @typedef {Object} AutoRigConfig
  * @property {AutoRigBodyWarp}     bodyWarp
  * @property {AutoRigFaceParallax} faceParallax
  * @property {AutoRigNeckWarp}     neckWarp
+ * @property {AutoRigSubsystems}   [subsystems]   GAP-008 — opt-out flags
  */
 
 function cloneBodyWarp(src) {
@@ -195,6 +227,10 @@ function cloneTagWarpMagnitudes(src) {
   return { ...src };
 }
 
+function cloneSubsystems(src) {
+  return { ...src };
+}
+
 /**
  * Build a mutable deep copy of the defaults. No project-level inputs
  * today; reserved for future per-character overrides (e.g. chibi with
@@ -210,6 +246,7 @@ export function buildAutoRigConfigFromProject(_project) {
     faceParallax:      cloneFaceParallax(DEFAULT_AUTO_RIG_CONFIG.faceParallax),
     neckWarp:          cloneNeckWarp(DEFAULT_AUTO_RIG_CONFIG.neckWarp),
     tagWarpMagnitudes: cloneTagWarpMagnitudes(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes),
+    subsystems:        cloneSubsystems(DEFAULT_AUTO_RIG_CONFIG.subsystems),
   };
 }
 
@@ -255,6 +292,13 @@ function isWellFormedFaceParallax(s) {
 
 function isWellFormedNeckWarp(s) {
   return s && isFiniteNumber(s.tiltFrac);
+}
+
+function isWellFormedSubsystems(s) {
+  // Lenient: just needs to be an object. Missing fields get default values
+  // via the spread-merge in resolveAutoRigConfig; non-boolean values become
+  // truthy/falsy as JS sees fit (defensive — UI shouldn't write non-bools).
+  return s && typeof s === 'object' && !Array.isArray(s);
 }
 
 function isWellFormedTagWarpMagnitudes(s) {
@@ -341,6 +385,9 @@ export function resolveAutoRigConfig(project) {
     tagWarpMagnitudes: isWellFormedTagWarpMagnitudes(cfg?.tagWarpMagnitudes)
       ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes, cfg.tagWarpMagnitudes)
       : cloneTagWarpMagnitudes(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes),
+    subsystems: isWellFormedSubsystems(cfg?.subsystems)
+      ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.subsystems, cfg.subsystems)
+      : cloneSubsystems(DEFAULT_AUTO_RIG_CONFIG.subsystems),
   };
 }
 

@@ -41,11 +41,62 @@ import { resolveVariantFadeRules } from './variantFadeRules.js';
 import { resolveEyeClosureConfig } from './eyeClosureConfig.js';
 import { resolveRotationDeformerConfig } from './rotationDeformerConfig.js';
 import { resolveAutoRigConfig } from './autoRigConfig.js';
+import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = new Set(['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp']);
 const NECK_WARP_ID = 'NeckWarp';
+
+/**
+ * GAP-008 — tag → owning subsystem map. A rigWarp's `targetPartId`
+ * resolves to a node, the node's name resolves via `matchTag` to a
+ * canonical tag, and that tag picks which subsystem owns the warp.
+ *
+ * Tags listed under one subsystem are dropped when that subsystem flag
+ * is `false`. Tags not listed pass through (unaffected by opt-out) —
+ * defensive for unknown / future tags so opt-out can't accidentally
+ * over-match.
+ */
+const TAG_TO_SUBSYSTEM = {
+  // hairRig
+  'front hair':     'hairRig',
+  'back hair':      'hairRig',
+  // clothingRig
+  'topwear':        'clothingRig',
+  'bottomwear':     'clothingRig',
+  'legwear':        'clothingRig',
+  // eyeRig
+  'eyewhite':       'eyeRig',
+  'eyewhite-l':     'eyeRig',
+  'eyewhite-r':     'eyeRig',
+  'eyelash':        'eyeRig',
+  'eyelash-l':      'eyeRig',
+  'eyelash-r':      'eyeRig',
+  'irides':         'eyeRig',
+  'irides-l':       'eyeRig',
+  'irides-r':       'eyeRig',
+  'eyebrow':        'eyeRig',
+  'eyebrow-l':      'eyeRig',
+  'eyebrow-r':      'eyeRig',
+  // mouthRig
+  'mouth':          'mouthRig',
+};
+
+/**
+ * GAP-008 — physics-rule name → owning subsystem prefix-mapping. Rules
+ * are named like `hair-front-1`, `clothing-skirt`, `arm-elbow-l`. The
+ * first dash-segment selects the subsystem.
+ */
+function physicsRuleSubsystem(ruleName) {
+  if (typeof ruleName !== 'string') return null;
+  if (ruleName.startsWith('hair-')) return 'hairRig';
+  if (ruleName.startsWith('clothing-') || ruleName.startsWith('skirt-')
+      || ruleName.startsWith('shirt-') || ruleName.startsWith('pants-')) return 'clothingRig';
+  if (ruleName.startsWith('arm-') || ruleName.includes('elbow')) return 'armPhysics';
+  if (ruleName.startsWith('breath')) return 'bodyWarps';
+  return null;
+}
 
 /**
  * Filter a populated `rigSpec` into the three seedable shapes:
@@ -58,36 +109,102 @@ const NECK_WARP_ID = 'NeckWarp';
  * Pure — exported so unit tests can exercise the filter logic without
  * spinning up the full export pipeline.
  *
+ * **GAP-008 subsystem opt-out:** when `subsystems` is provided, outputs
+ * matching disabled subsystems are dropped:
+ *   - `faceRig: false` → `faceParallaxSpec = null`
+ *   - `bodyWarps: false` → `bodyWarpChain = null`
+ *   - `hairRig`/`clothingRig`/`eyeRig`/`mouthRig: false` → `rigWarps`
+ *      filtered by `nodeId → tag → TAG_TO_SUBSYSTEM` lookup. `nodes`
+ *      param is required for this lookup; pass `project.nodes` from the
+ *      caller.
+ *
  * @param {object} rigSpec
+ * @param {{
+ *   subsystems?: import('./autoRigConfig.js').AutoRigSubsystems,
+ *   nodes?: Array<{id:string, name?:string}>,
+ * }} [opts]
  * @returns {{
  *   faceParallaxSpec: object|null,
  *   bodyWarpChain: object|null,
  *   rigWarps: Map<string, object>,
  * }}
  */
-export function harvestSeedFromRigSpec(rigSpec) {
+export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
   if (!rigSpec || !Array.isArray(rigSpec.warpDeformers)) {
     return { faceParallaxSpec: null, bodyWarpChain: null, rigWarps: new Map() };
   }
+
+  const subs = opts.subsystems ?? null;
+  // partId → tag map for the rigWarps filter. Built lazily, only when a
+  // subsystem flag actually requires us to look up tags.
+  const partIdToTag = subs && opts.nodes ? buildPartIdToTagMap(opts.nodes) : null;
 
   let faceParallaxSpec = null;
   const rigWarps = new Map();
   for (const spec of rigSpec.warpDeformers) {
     if (!spec) continue;
     if (spec.id === FACE_PARALLAX_WARP_ID) {
+      if (subs && subs.faceRig === false) continue;
       faceParallaxSpec = spec;
       continue;
     }
-    if (BODY_WARP_IDS.has(spec.id)) continue;
-    if (spec.id === NECK_WARP_ID) continue;
+    if (BODY_WARP_IDS.has(spec.id)) continue;        // collected via bodyWarpChain
+    if (spec.id === NECK_WARP_ID) continue;          // dropped (always part of body chain)
     if (typeof spec.targetPartId === 'string' && spec.targetPartId.length > 0) {
+      // GAP-008 — tag-based subsystem filter. Unknown tags pass through.
+      if (subs && partIdToTag) {
+        const tag = partIdToTag.get(spec.targetPartId);
+        const owningSubsystem = tag ? TAG_TO_SUBSYSTEM[tag] ?? null : null;
+        if (owningSubsystem && subs[owningSubsystem] === false) continue;
+      }
       rigWarps.set(spec.targetPartId, spec);
     }
   }
 
-  const bodyWarpChain = rigSpec.bodyWarpChain ?? null;
+  // GAP-008 — body warp chain opt-out.
+  const bodyWarpChain = (subs && subs.bodyWarps === false)
+    ? null
+    : (rigSpec.bodyWarpChain ?? null);
 
   return { faceParallaxSpec, bodyWarpChain, rigWarps };
+}
+
+/**
+ * Build a `partId → tag` map from project nodes, using `matchTag` on
+ * each node's name. Nodes without a recognised tag are omitted so the
+ * caller's lookup returns undefined → "no subsystem ownership" → pass
+ * through.
+ *
+ * @param {Array<{id:string, name?:string}>} nodes
+ * @returns {Map<string, string>}
+ */
+function buildPartIdToTagMap(nodes) {
+  const m = new Map();
+  for (const n of nodes) {
+    if (!n?.id) continue;
+    const tag = matchTag(n.name ?? '');
+    if (tag) m.set(n.id, tag);
+  }
+  return m;
+}
+
+/**
+ * Filter physics rules by subsystem opt-out flags. Rules whose name
+ * matches a disabled subsystem prefix are dropped. Used by Init Rig
+ * after seeding to prune `project.physicsRules` consistently with the
+ * dropped rigWarps.
+ *
+ * @param {Array<{name?:string}>} rules
+ * @param {import('./autoRigConfig.js').AutoRigSubsystems|null} subsystems
+ * @returns {Array<{name?:string}>}
+ */
+export function filterPhysicsRulesBySubsystems(rules, subsystems) {
+  if (!Array.isArray(rules) || !subsystems) return rules ?? [];
+  return rules.filter((rule) => {
+    const owning = physicsRuleSubsystem(rule?.name);
+    if (!owning) return true;
+    return subsystems[owning] !== false;
+  });
 }
 
 /**
@@ -162,9 +279,18 @@ export async function initializeRigFromProject(project, images = new Map()) {
     rigWarps: null,
   });
 
-  const { faceParallaxSpec, bodyWarpChain, rigWarps } = harvestSeedFromRigSpec(result.rigSpec);
+  const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
+  const { faceParallaxSpec, bodyWarpChain, rigWarps } = harvestSeedFromRigSpec(
+    result.rigSpec,
+    { subsystems, nodes: project.nodes ?? [] },
+  );
   const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   const rs = result.rigSpec;
+  // GAP-008 — log which subsystems are off so the user sees in the Logs
+  // panel that the opt-out worked end-to-end.
+  const disabled = subsystems
+    ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
+    : [];
   logger.info('rigInit', 'Init Rig harvest complete', {
     elapsedMs: Math.round(dt),
     warpDeformers: rs?.warpDeformers?.length ?? 0,
@@ -173,6 +299,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     faceParallax: faceParallaxSpec ? 'present' : 'missing',
     bodyWarpChain: bodyWarpChain ? 'present' : 'missing',
     rigWarpsByPartId: rigWarps?.size ?? 0,
+    disabledSubsystems: disabled.length > 0 ? disabled : undefined,
   });
   return {
     faceParallaxSpec,

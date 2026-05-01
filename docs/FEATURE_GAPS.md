@@ -309,9 +309,24 @@ Pick at implementation time.
 
 ### GAP-008 — No opt-out for "rig hair" in Initialize Rig
 
-- **Severity:** high
-- **Reported:** 2026-04-30
+- **Severity:** high · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 (data layer + filter logic; UI checkbox panel deferred)
 - **Affects:** Init Rig flow on characters where the auto-detected hair rig is unwanted (wrong shape, breaks down, or character intentionally has rigid hair)
+
+**Phase A — data layer + filter logic shipped.** New `project.autoRigConfig.subsystems` section with seven boolean flags (faceRig / eyeRig / mouthRig / hairRig / clothingRig / bodyWarps / armPhysics), all true by default. Setting any to `false` drops matching outputs at harvest time:
+
+- `faceRig: false` → FaceParallax warp dropped
+- `bodyWarps: false` → body warp chain dropped + `breath` physics rule dropped
+- `hairRig: false` → all `front hair` / `back hair` rigWarps dropped + all `hair-*` physics rules dropped
+- `clothingRig: false` → all `topwear`/`bottomwear`/`legwear` rigWarps dropped + clothing physics rules dropped
+- `eyeRig: false` → eye/eyelash/iris/eyebrow rigWarps dropped
+- `mouthRig: false` → mouth rigWarps dropped
+- `armPhysics: false` → `arm-*` / `*elbow*` physics rules dropped
+
+Wired in [`harvestSeedFromRigSpec`](../src/io/live2d/rig/initRig.js) (post-rigSpec filter using a `partId → tag` map built from `project.nodes` with `matchTag`) and [`seedPhysicsRules`](../src/io/live2d/rig/physicsConfig.js) (rule-name prefix filter). Persists via the existing autoRigConfig save/load path; resolveAutoRigConfig spread-merges partial subsystem configs (Hole I-7 mechanism applies).
+
+**Test coverage:** `test:subsystemsOptOut` (46 cases) — all 7 flags individually + combined, tag-to-subsystem map correctness, physics-rule prefix mapping, no-opts fallback (pre-GAP-008 behaviour preserved), seedPhysicsRules integration.
+
+**Phase B — UI checkbox panel.** Out of scope here. When the rerig-flow gap ships a "rig settings" panel, a 7-checkbox section bound to `project.autoRigConfig.subsystems` exposes the flags. The data-layer plumbing is done; the UI is the only missing piece.
 
 **Current state:** Initialize Rig auto-detects hair (front-hair / back-hair tags) and synthesises sway physics + warp deformers for them. There's no UI checkbox / option / config to skip the hair rig — even if the user wants every other rig output (face, body, eyes, mouth) but not hair, they get it anyway. The user has surfaced this multiple times: every Init Rig forces the hair rig, which is bad for short-hair / buzz-cut / accessory-hair characters where the auto-rig doesn't produce a useful result.
 

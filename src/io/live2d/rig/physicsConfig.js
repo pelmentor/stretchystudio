@@ -140,6 +140,28 @@ export function resolvePhysicsRules(project) {
  */
 export function seedPhysicsRules(project) {
   const rules = buildPhysicsRulesFromProject(project);
-  project.physicsRules = rules;
-  return rules;
+  // GAP-008 — drop rules belonging to opted-out subsystems (hairRig,
+  // clothingRig, armPhysics, bodyWarps→breath). Subsystem ownership is
+  // resolved by rule-name prefix in initRig.physicsRuleSubsystem; keep
+  // this in sync if rule names change.
+  const subs = project?.autoRigConfig?.subsystems ?? null;
+  const filtered = subs ? rules.filter((rule) => !ruleIsDisabled(rule, subs)) : rules;
+  project.physicsRules = filtered;
+  return filtered;
+}
+
+/** GAP-008 helper — kept here (not imported from initRig) to avoid a
+ * cycle: physicsConfig is imported by initRig, not the reverse. Same
+ * logic as initRig.physicsRuleSubsystem. */
+function ruleIsDisabled(rule, subs) {
+  const name = rule?.name;
+  if (typeof name !== 'string') return false;
+  if (subs.hairRig === false && name.startsWith('hair-')) return true;
+  if (subs.clothingRig === false && (
+    name.startsWith('clothing-') || name.startsWith('skirt-') ||
+    name.startsWith('shirt-') || name.startsWith('pants-')
+  )) return true;
+  if (subs.armPhysics === false && (name.startsWith('arm-') || name.includes('elbow'))) return true;
+  if (subs.bodyWarps === false && name.startsWith('breath')) return true;
+  return false;
 }
