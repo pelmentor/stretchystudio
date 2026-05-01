@@ -117,6 +117,20 @@ UI delete-confirm dialog when a parameter editor surface lands. Today's UI doesn
 
 ---
 
+### GAP-014 — No "Reset Transform" button in v3 Object properties tab
+
+- **Severity:** low (workflow papercut, ~10 manual zeros to recover from a bad transform)
+- **Reported:** 2026-05-02 (user-flagged: "Eще feature gap - нету кнопки reset transforms как в upstream")
+- **Affects:** any selected part/group whose transform got nudged into a bad state (drag, accidental keyframe, etc.) and the user wants to revert to identity (`x=0, y=0, rotation=0, scaleX=1, scaleY=1, pivotX=0, pivotY=0`)
+
+**Current state:** [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) renders Transform + Pivot sections with 7 numeric fields but no reset action. The user has to zero each field by hand. Upstream's [`Inspector.jsx:257-267`](../reference/stretchystudio-upstream-original/src/components/inspector/Inspector.jsx#L257) had a single "Reset Transform" button below the Pivot section that wrote `{x:0, y:0, rotation:0, scaleX:1, scaleY:1, pivotX:0, pivotY:0}` in one `updateProject` call.
+
+**Fix (cheap):** add a single button below the Pivot section in ObjectTab. ~6 lines. Goes through the existing `patch` helper so the change is undoable.
+
+**Notes:** Distinct from GAP-006 ("Reset to rest pose" — workspace-level button that reverts ALL pose values + paramValues). GAP-014 is per-node, one click; GAP-006 is whole-character. Both are useful and don't overlap.
+
+---
+
 ### GAP-001 — See-Through import wizard not v3-native
 
 - **Severity:** medium
