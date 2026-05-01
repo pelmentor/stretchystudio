@@ -163,23 +163,12 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ### GAP-003 — Root README is upstream verbatim, doesn't reflect v3
 
-- **Severity:** medium
-- **Reported:** 2026-04-30
+- **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** First-time user impression, project identity
 
-**Current state:** [README.md](../README.md) is byte-identical (modulo whitespace) to upstream's pristine README at `reference/stretchystudio-upstream-original/README.md`. It markets See-Through + DWPose + Spine export — true claims — but says nothing about our actual differentiators:
+**Fix:** [README.md](../README.md) rewritten to lead with the Cubism / Live2D pipeline as the differentiator (cmo3/moc3/can3 export, native rig in viewport, byte-faithful Cubism Core port) while keeping See-Through credit (the auto-rig genuinely uses See-Through layer-tag conventions). Project Structure section now reflects v3 layout (`src/v3/shell/`, `src/v3/editors/`, `src/io/live2d/`) instead of upstream's 4-zone shape. Cross-links to [docs/PROJECT_DATA_LAYER.md](PROJECT_DATA_LAYER.md), [docs/FEATURE_GAPS.md](FEATURE_GAPS.md), [docs/BUGS.md](BUGS.md), [docs/live2d-export/CUBISM_WARP_PORT.md](live2d-export/CUBISM_WARP_PORT.md), and the native rig refactor plan. Notes upstream's Spine/PNG paths still build (deferred surfacing tracked under GAP-005).
 
-- **Live2D `.cmo3` / `.moc3` export pipeline** — full reverse-engineered Cubism format support, verified byte-equivalent against Cubism Editor's output (memory: `project_runtime_export_parity.md`)
-- **Native rig refactor** — Blender-style workspace shell, area tabs, native rig evaluation in viewport (memory: `project_native_rig_refactor_plan.md`)
-- **Variant / shape-key system** — fade rules, multi-suffix variants, eye 2D keyform grids
-- **Cubism-aware physics** — pendulum hair sway, clothing physics, arm whip
-- **Idle motion generator** — auto-generates loop-safe `motion3.json` (memory: `project_idle_motion_generator.md`)
-- **Hot-reload PSD layers** — file-watcher refresh
-- **Project structure section** — claims `src/app/layout/` and `src/components/inspector/` which don't reflect our v3 layout (`src/v3/shell/`, `src/v3/editors/`)
-
-**What to do:** Rewrite README to lead with v3's actual capabilities and the Cubism/Live2D pipeline. Keep See-Through credit (the import path genuinely uses See-Through conventions) but reframe as "starts from See-Through-decomposed PSDs, ships as Cubism .cmo3 + native runtime".
-
-**Notes:** Cosmetic for engineering, important for anyone landing on the GitHub page.
+**Pre-fix state (for history):** [README.md](../README.md) was byte-identical (modulo whitespace) to upstream's pristine README at `reference/stretchystudio-upstream-original/README.md`. It marketed See-Through + DWPose + Spine export — true claims — but said nothing about our differentiators (Cubism pipeline, native rig refactor, variant system, Cubism physics, idle motion gen, hot-reload). Project Structure pointed at `src/app/layout/` and `src/components/inspector/` which were never v3 layout.
 
 ---
 
