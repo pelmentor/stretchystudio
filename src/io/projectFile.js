@@ -102,6 +102,10 @@ export async function saveProject(project) {
     faceParallax: project.faceParallax ?? null,
     bodyWarp: project.bodyWarp ?? null,
     rigWarps: project.rigWarps ?? {},
+    // GAP-012 Phase A — per-mesh fingerprint captured at seed time;
+    // load + reimport recompute and compare to detect stale keyforms.
+    // See docs/PROJECT_DATA_LAYER.md hole I-1 + src/io/meshSignature.js.
+    meshSignatures: project.meshSignatures ?? {},
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

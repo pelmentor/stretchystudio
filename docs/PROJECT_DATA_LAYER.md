@@ -215,9 +215,13 @@ The Phase A fix closes the round-trip gap — fields persist correctly. But the 
 
 **The problem:** warp keyforms (`keyform.positions`) are stored as flat per-vertex `[x0, y0, x1, y1, …]` arrays indexed positionally to `node.mesh.vertices`. If the user reimports a PSD with a re-meshed layer (different vertex count, different geometry density, repositioned silhouette), the indexes still line up structurally but **point at wrong vertices**. The export pipeline produces a moc3 that interpolates random vertices toward the original silhouette positions — visually catastrophic but silent.
 
-**Defence the refactor plan calls for** ([NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants → ID stability](live2d-export/NATIVE_RIG_REFACTOR_PLAN.md#id-stability-and-invalidation)): per-mesh `signatureHash = hash(vertexCount, triCount, sortedUVHashes)` stored at seed time. On load, recompute and compare; on divergence, log a warning. **Don't auto-clear** (lossy) — let the user explicitly re-Init Rig.
+**Defence shipped 2026-05-01 (Phase A — detection):** per-mesh `signatureHash = { vertexCount, triCount, uvHash }` stored at seed time as `project.meshSignatures[partId]`. Module: [src/io/meshSignature.js](../src/io/meshSignature.js) — FNV-1a 32 over canonicalised f32 UV bytes (positional, not sorted; vertex reorder is an invalidating change). Hooked into `seedAllRig` (writes signatures after harvest), serialized via `saveProject`'s `meshSignatures` field, schema migration v12 defaults legacy saves to `{}`. `validateProjectSignatures(project)` returns `{stale, missing, unseededNew, ok}` — detection only, no auto-clear (user decides via re-Init Rig).
 
-**Status today:** every seeded warp store explicitly notes "v1 ships without signatureHash" as a known footgun, deferred. Mitigation: rigWarps reader validates `keyforms.length` matches the cartesian-product `numKf`, falls back to inline shiftFn when they differ. faceParallax + bodyWarp don't even have that mitigation.
+**Open:** Phase B — the **consumer** of the validation report (Hole I-10 banner) still needs wiring; on its own the fingerprint is recorded but nothing reads it. See I-10 for the load-time + reimport-time hook.
+
+**Divergence from refactor plan:** plan said "sortedUVHashes". Shipped as positional UV hash because keyforms are positionally indexed; sorted hash would treat reorder-without-content-change as identical and miss real corruption. Decision recorded in [meshSignature.js JSDoc](../src/io/meshSignature.js).
+
+**Test coverage:** `test:meshSignature` (29 cases) — determinism, vertex count change, tri count change, UV value change, positional reorder detection, edge cases, validateProjectSignatures across all 4 buckets. `test:projectRoundTrip` (23 cases, +3 over Phase A) — meshSignatures survives save/load. `test:migrations` (73 cases, +3 over Phase A) — v12 migration default + idempotence.
 
 ### Hole I-2 — No keyform-binding fingerprint → stale param wiring
 
@@ -328,7 +332,7 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
 
 | Hole | Severity | Existing mitigation | Detection | Auto-fix |
 |------|----------|---------------------|-----------|----------|
-| I-1 mesh signature hash | high | rigWarps validates `numKf` | none | none |
+| I-1 mesh signature hash | high | rigWarps validates `numKf` + signatureHash shipped 2026-05-01 (Phase A) | `validateProjectSignatures(project)` | none (lossy; user re-Init Rig) |
 | I-2 binding fingerprint | medium | none | none | none |
 | I-3 animation orphan params | medium | UI protection of standard params | none | none |
 | I-4 variant rename | medium | persistent `variantSuffix` | no rename detection | none |
@@ -357,3 +361,16 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
   fields themselves; deeper integrity issues (signatureHash, orphan
   detection, PSD-reimport invalidation) catalogued in the "Integrity gaps
   and known footguns" section above and tracked under GAP-012 + GAP-013.
+- **2026-05-01** — Hole I-1 detection mechanism shipped: per-mesh
+  fingerprint (`vertexCount`, `triCount`, FNV-1a UV hash) captured at
+  seed time in `project.meshSignatures`. Module
+  [src/io/meshSignature.js](../src/io/meshSignature.js); seed hook in
+  `projectStore.seedAllRig`; serialization in `saveProject`; schema
+  v12 migration. Tests: `test:meshSignature` (29), `test:projectRoundTrip`
+  (23), `test:migrations` (73). Open: I-10 consumer side (banner,
+  reimport hook) — fingerprint is captured but nothing reads it yet.
+- **2026-05-01** — Design divergence on Hole I-1: plan called for
+  `sortedUVHashes`, shipped with **positional** UV hash. Reason: warp
+  keyforms are positionally indexed, so reordering vertices is itself
+  an invalidating change a sorted hash would miss. Recorded in
+  meshSignature.js JSDoc; living-doc note here for future readers.

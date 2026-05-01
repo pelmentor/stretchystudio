@@ -22,6 +22,7 @@ import {
   seedRigWarps as seedRigWarpsFn,
   clearRigWarps as clearRigWarpsFn,
 } from '../io/live2d/rig/rigWarpsStore.js';
+import { computeProjectSignatures } from '../io/meshSignature.js';
 import { uid } from '../lib/ids.js';
 
 /**
@@ -123,6 +124,7 @@ export const useProjectStore = create((set) => {
     faceParallax: null,
     bodyWarp: null,
     rigWarps: {},
+    meshSignatures: {},
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -490,6 +492,13 @@ export const useProjectStore = create((set) => {
       } else {
         clearRigWarpsFn(proj);
       }
+      // GAP-012 Phase A — capture per-mesh fingerprint at seed time so
+      // PSD reimport can detect when stored vertex-indexed keyforms have
+      // gone stale (mesh re-mesh changes vertex order/count, breaking
+      // positional indexing of `keyform.positions`). Detection only:
+      // `validateProjectSignatures(project)` returns the divergence
+      // report; consumer (UI banner) decides what to do.
+      proj.meshSignatures = computeProjectSignatures(proj);
       draft.hasUnsavedChanges = true;
     });
   }),

@@ -71,6 +71,22 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v12: meshSignatures map defaults to {} when missing.
+  const p = { schemaVersion: 11 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v11→current: schemaVersion bumped');
+  assertEq(p.meshSignatures, {}, 'v12: meshSignatures default empty {}');
+}
+
+{
+  // v12: existing meshSignatures map preserved on subsequent migrations.
+  const sigs = { partA: { vertexCount: 24, triCount: 30, uvHash: 12345 } };
+  const p = { schemaVersion: 12, meshSignatures: sigs };
+  migrateProject(p);
+  assertEq(p.meshSignatures, sigs, 'v12 idempotent: existing meshSignatures preserved');
+}
+
+{
   // v11: legacy puppetWarp / puppet_pins tracks are stripped.
   const p = {
     schemaVersion: 10,

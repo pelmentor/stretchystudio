@@ -64,11 +64,11 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 **Why this is THE umbrella issue:** these five sub-failures share the same root — *the system has no way to know when seeded data has gone stale*. Fixing each individually patches symptoms; the fix is one shared mechanism.
 
-**Defence (Phase A — detection, ~1-2 days):**
+**Defence (Phase A — detection):**
 
-1. At seed time, compute and store a `signatureHash` per seeded mesh (`hash(vertexCount, triCount, sortedUVHashes)`). One field per seeded subsystem: `project.faceParallax.meshSignatures`, `project.bodyWarp.meshSignatures`, `project.rigWarps[partId].meshSignature`.
-2. On project load AND on PSD reimport completion, recompute each mesh's signature, compare to stored. Log per-mesh divergences via the in-app Logs panel + count divergences in a single banner.
-3. UI: when divergences exist, show a banner "PSD changes detected on N meshes; rig data may be stale. Re-Init Rig to refresh, or dismiss to keep current export."
+1. ✅ **SHIPPED 2026-05-01.** At seed time, compute and store a per-mesh fingerprint as a flat `project.meshSignatures: { [partId]: {vertexCount, triCount, uvHash} }`. Module [src/io/meshSignature.js](../src/io/meshSignature.js). Hooked in `projectStore.seedAllRig`; survives save/load via [`projectFile.js`](../src/io/projectFile.js) + schema migration v12. Tests: `test:meshSignature` (29 cases). **Divergence from original sketch:** flat top-level map, not per-subsystem; positional UV hash, not sorted (reordering is an invalidating change keyform.positions cares about).
+2. ⏳ **OPEN.** On project load AND on PSD reimport completion, call `validateProjectSignatures(project)` and emit warnings via `useLogsStore` for each `stale` / `missing` part. Function exists ([meshSignature.js#validateProjectSignatures](../src/io/meshSignature.js)) — needs callers.
+3. ⏳ **OPEN.** UI: when divergences exist, show a banner "PSD changes detected on N meshes; rig data may be stale. Re-Init Rig to refresh, or dismiss to keep current export." Likely lives in `<Topbar>` or a dedicated `<StaleRigBanner>`. Banner is gated by `hasStaleRigData(report)` (only `stale`+`missing` count; `unseededNew` is normal pre-Init-Rig state).
 
 This is **detection-only**. Don't auto-clear (lossy). User decides.
 

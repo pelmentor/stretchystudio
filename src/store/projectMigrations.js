@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -183,6 +183,21 @@ const MIGRATIONS = {
       if (Array.isArray(anim.tracks)) {
         anim.tracks = anim.tracks.filter(t => t.property !== 'puppet_pins');
       }
+    }
+    return project;
+  },
+
+  // v12 — GAP-012 Phase A: project.meshSignatures captures a per-mesh
+  // fingerprint (vertexCount, triCount, FNV-1a hash of UV bytes) at
+  // seed time, recomputed at load + reimport. Detection-only — caller
+  // (UI banner) decides on remediation. Empty {} → no validation runs;
+  // populates on next seedAllRig. See docs/PROJECT_DATA_LAYER.md hole
+  // I-1 + src/io/meshSignature.js. Old saves come through with empty
+  // map; this is the "no Init Rig run yet OR pre-v12 build" case and
+  // matches the unseededNew code path in validateProjectSignatures.
+  12: (project) => {
+    if (!project.meshSignatures || typeof project.meshSignatures !== 'object') {
+      project.meshSignatures = {};
     }
     return project;
   },
