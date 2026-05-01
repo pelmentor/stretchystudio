@@ -656,10 +656,23 @@ async function resolveAllKeyformSpecs(project, images) {
   let bodyWarpChain = resolveBodyWarp(project);
   let rigWarps = resolveRigWarps(project);
 
-  const anySeeded =
-    faceParallaxSpec !== null
-    || bodyWarpChain !== null
-    || rigWarps.size > 0;
+  // Hole I-8 fix: explicit "Init Rig completed" marker beats inferring
+  // seeded state from the keyform-bearing fields. Old logic took
+  // `faceParallax !== null || bodyWarp !== null || rigWarps.size > 0`,
+  // which masked partially-seeded states (e.g. interrupted Init Rig
+  // that landed only autoRigConfig + some configs but no keyforms).
+  // The marker is set in `projectStore.seedAllRig` at the end of a
+  // successful seed; legacy projects without it fall through to the
+  // old heuristic so existing saves don't suddenly fresh-harvest on
+  // every export.
+  const seededByMarker = project.lastInitRigCompletedAt != null;
+  const seededByLegacyHeuristic =
+    !seededByMarker && (
+      faceParallaxSpec !== null
+      || bodyWarpChain !== null
+      || rigWarps.size > 0
+    );
+  const anySeeded = seededByMarker || seededByLegacyHeuristic;
 
   if (!anySeeded) {
     const harvest = await initializeRigFromProject(project, images);

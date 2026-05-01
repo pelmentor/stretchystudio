@@ -137,6 +137,7 @@ function makeFixtureProject() {
       'hair-front-mesh-id': { vertexCount: 24, triCount: 30, uvHash: 1234567890 },
       'face-mesh-id':       { vertexCount: 60, triCount: 80, uvHash: 987654321 },
     },
+    lastInitRigCompletedAt: '2026-05-01T18:00:00.000Z',
   };
 }
 
@@ -184,6 +185,10 @@ async function saveAndReload(project) {
   assert(deepEqual(reloaded.meshSignatures, original.meshSignatures),
     'meshSignatures deep-equals original (GAP-012)');
 
+  // ── lastInitRigCompletedAt (Hole I-8 — explicit seed marker) ──
+  assert(reloaded.lastInitRigCompletedAt === original.lastInitRigCompletedAt,
+    'lastInitRigCompletedAt survives round-trip (I-8)');
+
   // ── Empty/null handling — make sure loaded.field is sensible when original is null ──
   const empty = makeFixtureProject();
   empty.autoRigConfig = null;
@@ -191,12 +196,14 @@ async function saveAndReload(project) {
   empty.bodyWarp = null;
   empty.rigWarps = {};
   empty.meshSignatures = {};
+  empty.lastInitRigCompletedAt = null;
   const { project: emptyReloaded } = await saveAndReload(empty);
   assert(emptyReloaded.autoRigConfig === null, 'autoRigConfig stays null when not seeded');
   assert(emptyReloaded.faceParallax === null, 'faceParallax stays null when not seeded');
   assert(emptyReloaded.bodyWarp === null, 'bodyWarp stays null when not seeded');
   assert(deepEqual(emptyReloaded.rigWarps, {}), 'rigWarps stays {} when not seeded');
   assert(deepEqual(emptyReloaded.meshSignatures, {}), 'meshSignatures stays {} when not seeded');
+  assert(emptyReloaded.lastInitRigCompletedAt === null, 'lastInitRigCompletedAt stays null when not seeded');
 
   console.log(`projectRoundTrip: ${passed} passed, ${failed} failed`);
   if (failed > 0) {

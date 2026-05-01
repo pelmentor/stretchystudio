@@ -106,6 +106,10 @@ export async function saveProject(project) {
     // load + reimport recompute and compare to detect stale keyforms.
     // See docs/PROJECT_DATA_LAYER.md hole I-1 + src/io/meshSignature.js.
     meshSignatures: project.meshSignatures ?? {},
+    // Hole I-8: explicit "Init Rig completed at this time" marker.
+    // Replaces the exporter's old heuristic that inferred seeded state
+    // from `faceParallax/bodyWarp/rigWarps` field presence.
+    lastInitRigCompletedAt: project.lastInitRigCompletedAt ?? null,
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

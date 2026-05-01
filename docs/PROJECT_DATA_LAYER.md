@@ -259,19 +259,21 @@ Hooked in `projectStore.seedAllRig` (post-seed): emits a single structured `logg
 - If the user renames `face.smile` → `face_alt` after Init Rig, the persisted `variantSuffix='smile'` is stale. The export still emits the variant under ParamSmile, but the layer name in editor doesn't match — and the next re-Init Rig sees `face_alt` (no suffix) and creates orphan state.
 - New variant added by renaming an existing layer to `face.surprised` after Init Rig: `variantOf` not set, `variantSuffix` not set, layer never gets registered with ParamSurprised even though that param gets created.
 
-**Defence:** treat `variantOf/variantSuffix` as authoritative once set; UI layer rename suggests "this looks like a new variant — register it" or "this looks like the old variant pattern — keep the wiring". Re-Init Rig only re-discovers variants for nodes that don't already have these fields set.
+**Partial defence shipped 2026-05-01 (detection):** [`variantNormalizer.js`](../src/io/variantNormalizer.js) now emits a `logger.warn('variantNorm', …)` with `previousSuffix` / `previousBase` / `stillHidden` when a node was previously a variant and is now renamed-away. Combined with paramReferences orphan detection (Hole I-3) which catches the dangling ParamSmile binding, the user-visible failure mode is now logged not silent.
 
-**Status today:** `variantNormalizer.js` runs at PSD import + at each `handleWizardApplyRig`. It writes from name, ignoring existing `variantOf/variantSuffix`. Renames after Init Rig either silently break wiring or work depending on whether re-Init was clicked.
+**Open (Phase B):** UI layer-rename op should suggest "register as new variant" / "keep wiring" when the rename pattern matches a variant convention. Out of scope for the umbrella detection pass; tracked under `project_v3_rerig_flow_gap`.
+
+**Effective coverage today:** rename-detected-as-removal logs a warn so the user knows variantOf was cleared; if the layer was hidden by the variant pass it stays hidden until the user manually shows it. The "new layer renamed INTO a variant after seed" case is NOT logged — the normalizer only runs at PSD import + handleWizardApplyRig today, so a post-seed rename simply isn't observed unless the user re-runs Init Rig.
 
 ### Hole I-5 — Bone weight orphans when bone deleted/renamed
 
 **Severity:** medium. **Affects:** `node.mesh.boneWeights` + `node.mesh.jointBoneId`.
 
-**The problem:** `node.mesh.jointBoneId = 'leftElbow'` references a group node by name (or id?). If that bone group is renamed in the Outliner or deleted, the mesh skinning data dangles. Export's bone-rotation keyform emission either fails or produces a mesh deformed against a phantom bone.
+**The problem:** `node.mesh.jointBoneId = 'leftElbow'` references a group node by id. If that bone group is deleted, the mesh skinning data dangles. Export's bone-rotation keyform emission either fails or produces a mesh deformed against a phantom bone. (Rename works because the id is stable across name changes — only delete is the silent-corruption case.)
 
-**Defence:** when renaming/deleting a bone group, check `nodes[].mesh.jointBoneId` references; offer to update or unbind.
+**Defence shipped 2026-05-01 (Phase A — detection):** `projectStore.seedAllRig` now enumerates every part's `mesh.jointBoneId` and checks against the current set of group ids. Mismatches emit one structured `logger.warn('boneOrphans', …, { orphans: [{ partId, partName, jointBoneId }] })` per Init Rig. Detection only — UI bone-edit operators will gate the rename/delete in Phase B.
 
-**Status today:** no reference check on bone delete. Rename probably works since `groupId` is stable across renames.
+**Open (Phase B):** UI gate. When the bone-edit op surfaces, it should enumerate `nodes[].mesh.jointBoneId` references on delete and prompt the user to pick a replacement bone or unbind the meshes.
 
 ### Hole I-6 — Physics rule outputs reference group names
 
@@ -279,7 +281,9 @@ Hooked in `projectStore.seedAllRig` (post-seed): emits a single structured `logg
 
 **The problem:** `outputs: ['hair-front-1', 'hair-front-2']` are group names resolved to bone targets. Group rename breaks this silently — physics calls a bone that doesn't exist, just outputs no influence (silent zero motion).
 
-**Status today:** no reference check.
+**Defence shipped 2026-05-01 (Phase A — detection):** `projectStore.seedAllRig` now enumerates every `physicsRules[i].outputs[j]` and checks against the current set of group names + ids. Mismatches emit one structured `logger.warn('physicsOrphans', …, { orphans: [{ ruleIdx, ruleName, output, location }] })` per Init Rig. Resolution accepts both string outputs and `{bone, boneId}` shapes for forward-compat with potential schema migrations.
+
+**Open (Phase B):** UI gate on group rename — same shape as I-5 fix, surface when group-edit operators land.
 
 ### Hole I-7 — autoRigConfig defaults silently override user tunings
 
@@ -295,15 +299,13 @@ Hooked in `projectStore.seedAllRig` (post-seed): emits a single structured `logg
 
 **Severity:** medium. **Affects:** export for partial-coverage characters.
 
-**The problem:** [exporter.js:659](../src/io/live2d/exporter.js#L659) checks `anySeeded = faceParallax !== null || bodyWarp !== null || rigWarps.size > 0`. If at least ONE is seeded, the others are kept null on the assumption "the user explicitly cleared them" (e.g. character with no face).
+**The problem:** old [exporter.js#L659](../src/io/live2d/exporter.js#L659) check was `anySeeded = faceParallax !== null || bodyWarp !== null || rigWarps.size > 0`. If at least ONE was seeded, the others were kept null on the assumption "the user explicitly cleared them" (e.g. character with no face).
 
-But that's **also** what happens when the user did Init Rig successfully but only one of the three fields had a meaningful result for that character. Concrete: a face-only character → faceParallax populated, bodyWarp null (no body), rigWarps empty (no per-mesh structural warps). On export, `anySeeded = true`, no fresh harvest runs — correct.
+That's **also** what happens when the user did Init Rig successfully but only one of the three fields had a meaningful result for that character. Concrete: a face-only character → faceParallax populated, bodyWarp null (no body), rigWarps empty. `anySeeded = true`, no fresh harvest runs — correct. But: a face-only character whose Init Rig was interrupted, leaving partial state with only autoRigConfig seeded — `anySeeded = false`, fresh harvest fires and overwrites partial state.
 
-But: a face-only character whose Init Rig was interrupted, leaving partial state with only autoRigConfig seeded — `anySeeded = false` (autoRigConfig isn't checked), fresh harvest fires, overwrites whatever partial state existed. Effects depend on the specific failure mode.
+**Defence shipped 2026-05-01 (Phase A):** explicit `project.lastInitRigCompletedAt` ISO-timestamp marker, set at the end of `projectStore.seedAllRig`. Persisted via `saveProject` + schema migration v13 (legacy saves get null). Exporter's `resolveAllKeyformSpecs` first checks the marker, then falls back to the old heuristic if the marker is null — so projects rigged before this change continue to behave as before until the user re-runs Init Rig.
 
-**Defence:** more precise per-field staleness check, or replace `anySeeded` with explicit tracking (`project.lastInitRigCompletedAt`).
-
-**Status today:** the heuristic works for the common cases but masks edge bugs.
+**Status:** legacy heuristic still in place as a fallback for pre-v13 projects but tagged as "legacy" with a comment. Once enough time passes that all in-flight projects have re-init'd, the legacy fallback can be dropped.
 
 ### Hole I-9 — saveProject is async, `loadProject` reads via JSZip — both can fail silently in batch tools
 
@@ -345,11 +347,11 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
 | I-1 mesh signature hash | high | rigWarps validates `numKf` + signatureHash shipped 2026-05-01 (Phase A) | `validateProjectSignatures(project)` | none (lossy; user re-Init Rig) |
 | I-2 binding fingerprint | medium | none | none | none |
 | I-3 animation orphan params | medium | UI protection of standard params + paramReferences detection shipped 2026-05-01 (Phase A) | post-seedAllRig logger.warn('paramOrphans') | none (UI delete-confirm pending Param Editor UI) |
-| I-4 variant rename | medium | persistent `variantSuffix` | no rename detection | none |
-| I-5 bone weight orphan | medium | none | none | none |
-| I-6 physics output dangling | low | none | none | none |
+| I-4 variant rename | medium | persistent `variantSuffix` + variantNorm warn shipped 2026-05-01 | logger.warn on rename-detected-as-removal | none (UI rename op pending) |
+| I-5 bone weight orphan | medium | seedAllRig boneOrphans walk shipped 2026-05-01 | logger.warn('boneOrphans') | none (UI bone-edit op pending) |
+| I-6 physics output dangling | low | seedAllRig physicsOrphans walk shipped 2026-05-01 | logger.warn('physicsOrphans') | none (UI group-edit op pending) |
 | I-7 autoRigConfig field drift | low | partial consumer defaults | none | none |
-| I-8 fresh-harvest aggressive | medium | works for common cases | none | none |
+| I-8 fresh-harvest aggressive | medium | explicit lastInitRigCompletedAt marker shipped 2026-05-01 | exporter prefers marker over heuristic | n/a (precise check replaces heuristic) |
 | I-9 silent texture/audio errors | low | console.error | none | none |
 | I-10 PSD reimport no invalidation | high | StaleRigBanner shipped 2026-05-01 (Phase A, detection) | reactive UI banner + per-mesh logger.warn | none (lossy; user re-Init Rig) |
 
@@ -392,6 +394,16 @@ But: a face-only character whose Init Rig was interrupted, leaving partial state
   surfaces in the Logs editor. Re-Init Rig button calls
   `RigService.initializeRig` directly (no operator id yet — operator
   registration deferred to broader rerig-flow gap).
+- **2026-05-01** — Step 4 shipped: local fixes for I-4/I-5/I-6/I-8.
+  variantNormalizer logs rename-detected-as-removal cases;
+  seedAllRig walks `mesh.jointBoneId` (I-5) and `physicsRules.outputs`
+  (I-6) for orphans, emitting `logger.warn('boneOrphans')` /
+  `logger.warn('physicsOrphans')`; `project.lastInitRigCompletedAt`
+  (I-8) replaces the exporter's old "anySeeded" heuristic with an
+  explicit Init Rig completion marker. Schema v13 migrates legacy
+  saves to `lastInitRigCompletedAt: null` (exporter falls back to
+  legacy heuristic for them so existing projects don't lose seeded-
+  mode export until next re-Init Rig).
 - **2026-05-01** — Hole I-3 detection shipped:
   [src/io/live2d/rig/paramReferences.js](../src/io/live2d/rig/paramReferences.js)
   enumerates references to a paramId across animation tracks + warp

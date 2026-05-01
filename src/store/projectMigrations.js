@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -198,6 +198,20 @@ const MIGRATIONS = {
   12: (project) => {
     if (!project.meshSignatures || typeof project.meshSignatures !== 'object') {
       project.meshSignatures = {};
+    }
+    return project;
+  },
+
+  // v13 — Hole I-8: project.lastInitRigCompletedAt is the explicit
+  // "Init Rig completed at this time" marker. Replaces the exporter's
+  // old heuristic (`faceParallax/bodyWarp/rigWarps` presence). Legacy
+  // saves come through with null; exporter's seeded-state check falls
+  // through to the legacy heuristic when null, so existing rig data
+  // still triggers seeded-mode export until the user re-runs Init Rig
+  // (which sets the marker).
+  13: (project) => {
+    if (project.lastInitRigCompletedAt === undefined) {
+      project.lastInitRigCompletedAt = null;
     }
     return project;
   },

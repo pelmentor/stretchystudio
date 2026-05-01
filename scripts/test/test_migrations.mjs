@@ -87,6 +87,22 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v13: lastInitRigCompletedAt defaults to null when missing.
+  const p = { schemaVersion: 12 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v12→current: schemaVersion bumped');
+  assertEq(p.lastInitRigCompletedAt, null, 'v13: lastInitRigCompletedAt defaults to null');
+}
+
+{
+  // v13: existing lastInitRigCompletedAt preserved (idempotent).
+  const ts = '2026-05-01T17:42:00.000Z';
+  const p = { schemaVersion: 13, lastInitRigCompletedAt: ts };
+  migrateProject(p);
+  assertEq(p.lastInitRigCompletedAt, ts, 'v13 idempotent: existing timestamp preserved');
+}
+
+{
   // v11: legacy puppetWarp / puppet_pins tracks are stripped.
   const p = {
     schemaVersion: 10,

@@ -88,8 +88,23 @@ export function normalizeVariants(project) {
   for (const node of parts) {
     const { baseName, variant } = extractVariant(node.name ?? '');
     if (!variant) {
-      // Not a variant — make sure stale fields are cleared if this node
-      // used to be a variant and was renamed.
+      // Hole I-4 — node was previously a variant but was renamed away
+      // (e.g. `face.smile` → `face_alt`). Today's behaviour silently
+      // drops variantOf/variantSuffix; warn the user so they know to
+      // re-show the layer manually if they still want it visible
+      // (we set visible:false on detected variants, and a renamed-away
+      // variant keeps that hidden state with no UI cue).
+      const wasVariant = node.variantSuffix !== undefined || node.variantOf !== undefined;
+      if (wasVariant) {
+        logger.warn('variantNorm',
+          `"${node.name}" no longer matches a variant suffix — variantOf/variantSuffix cleared`,
+          {
+            previousSuffix: node.variantSuffix ?? null,
+            previousBase: node.variantOf ?? null,
+            stillHidden: node.visible === false,
+          }
+        );
+      }
       if (node.variantOf !== undefined) delete node.variantOf;
       if (node.variantSuffix !== undefined) delete node.variantSuffix;
       continue;

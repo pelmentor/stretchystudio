@@ -127,6 +127,7 @@ export const useProjectStore = create((set) => {
     bodyWarp: null,
     rigWarps: {},
     meshSignatures: {},
+    lastInitRigCompletedAt: null,
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -333,6 +334,10 @@ export const useProjectStore = create((set) => {
       // Load preserves them verbatim; the StaleRigBanner re-validates
       // against current node geometry on every render.
       state.project.meshSignatures = projectData.meshSignatures ?? {};
+      // Hole I-8: explicit Init Rig completion marker. Null on legacy
+      // saves; exporter's seeded-state check falls back to the old
+      // heuristic when the marker is missing.
+      state.project.lastInitRigCompletedAt = projectData.lastInitRigCompletedAt ?? null;
       // Phase 1G — disk-loaded projects start unlinked from any library
       // record. The library-load operator sets `currentLibraryId` itself
       // after this call so a "save" goes back to the correct record.
@@ -506,6 +511,10 @@ export const useProjectStore = create((set) => {
       // `validateProjectSignatures(project)` returns the divergence
       // report; consumer (UI banner) decides what to do.
       proj.meshSignatures = computeProjectSignatures(proj);
+      // Hole I-8: explicit completion marker beats heuristic-detection
+      // of partially-seeded state in exporter's resolveAllKeyformSpecs.
+      // ISO timestamp; readable in logs / debug if needed.
+      proj.lastInitRigCompletedAt = new Date().toISOString();
       draft.hasUnsavedChanges = true;
     });
     });
@@ -518,7 +527,8 @@ export const useProjectStore = create((set) => {
     // dialog). Runs outside the immer `produce` because
     // findOrphanReferences reads the post-seed project; the `set` above
     // committed before this returns.
-    const orphans = findOrphanReferences(get().project);
+    const postSeedProject = get().project;
+    const orphans = findOrphanReferences(postSeedProject);
     const orphanIds = Object.keys(orphans);
     if (orphanIds.length > 0) {
       logger.warn(
@@ -531,6 +541,57 @@ export const useProjectStore = create((set) => {
             physicsInputs:   orphans[id].physicsInputs.map(r => r.location),
           }])
         )
+      );
+    }
+    // Hole I-5: bone-reference orphans. `node.mesh.jointBoneId` is a
+    // node-id pointer to the bone group that owns the skinning; if the
+    // group was deleted/renamed, the rotation keyforms quietly emit
+    // against a phantom bone. Detection only — UI bone-edit operators
+    // will gate the rename/delete in Phase B.
+    const groupIds = new Set();
+    for (const n of postSeedProject.nodes ?? []) {
+      if (n?.type === 'group') groupIds.add(n.id);
+    }
+    const boneOrphans = [];
+    for (const n of postSeedProject.nodes ?? []) {
+      if (n?.type !== 'part' || !n.mesh?.jointBoneId) continue;
+      if (!groupIds.has(n.mesh.jointBoneId)) {
+        boneOrphans.push({ partId: n.id, partName: n.name, jointBoneId: n.mesh.jointBoneId });
+      }
+    }
+    if (boneOrphans.length > 0) {
+      logger.warn(
+        'boneOrphans',
+        `${boneOrphans.length} mesh skinning ref(s) point at missing bone group(s)`,
+        { orphans: boneOrphans }
+      );
+    }
+    // Hole I-6: physicsRules[].outputs reference bone group NAMES
+    // (resolved through `boneOutputs`, see physicsConfig). When the
+    // group renamed/deleted, output silently zeros. Cross-check rule
+    // outputs against current group names + ids; warn on miss.
+    const groupNames = new Set();
+    for (const n of postSeedProject.nodes ?? []) {
+      if (n?.type === 'group' && typeof n.name === 'string') groupNames.add(n.name);
+    }
+    const physicsOrphans = [];
+    for (let ri = 0; ri < (postSeedProject.physicsRules ?? []).length; ri++) {
+      const rule = postSeedProject.physicsRules[ri];
+      const outs = Array.isArray(rule?.outputs) ? rule.outputs : [];
+      for (let oi = 0; oi < outs.length; oi++) {
+        const out = outs[oi];
+        const target = typeof out === 'string' ? out : out?.bone ?? out?.boneId;
+        if (!target) continue;
+        if (!groupNames.has(target) && !groupIds.has(target)) {
+          physicsOrphans.push({ ruleIdx: ri, ruleName: rule?.name ?? null, output: target, location: `physicsRules[${ri}]:outputs[${oi}]` });
+        }
+      }
+    }
+    if (physicsOrphans.length > 0) {
+      logger.warn(
+        'physicsOrphans',
+        `${physicsOrphans.length} physics rule output(s) reference missing group(s)`,
+        { orphans: physicsOrphans }
       );
     }
   },
