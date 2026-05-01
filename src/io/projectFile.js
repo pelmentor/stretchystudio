@@ -94,6 +94,14 @@ export async function saveProject(project) {
     variantFadeRules: project.variantFadeRules ?? null,
     eyeClosureConfig: project.eyeClosureConfig ?? null,
     rotationDeformerConfig: project.rotationDeformerConfig ?? null,
+    // GAP-011 — these four were silently dropped from the saved JSON, so any
+    // user customisation that landed in them (Init Rig harvest, future warp
+    // editor, autoRigConfig opt-outs) was lost on save→load. See
+    // docs/PROJECT_DATA_LAYER.md (Tier 2).
+    autoRigConfig: project.autoRigConfig ?? null,
+    faceParallax: project.faceParallax ?? null,
+    bodyWarp: project.bodyWarp ?? null,
+    rigWarps: project.rigWarps ?? {},
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));
