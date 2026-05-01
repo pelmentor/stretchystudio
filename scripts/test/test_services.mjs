@@ -71,6 +71,7 @@ function assert(cond, name) {
   assert(preflightExportFor(ok, 'cmo3').ok, 'preflight cmo3: ok');
   assert(preflightExportFor(ok, 'live2d-runtime').ok, 'preflight live2d-runtime: ok');
   assert(preflightExportFor(ok, 'live2d-full').ok, 'preflight live2d-full: ok');
+  assert(preflightExportFor(ok, 'spine').ok, 'preflight spine: ok (GAP-005)');
 
   const bogus = preflightExportFor(ok, 'bogus');
   assert(bogus.ok === false, 'preflight bogus format: fail');

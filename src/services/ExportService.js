@@ -24,9 +24,10 @@ import {
   exportLive2D,
   exportLive2DProject,
 } from '../io/live2d/exporter.js';
+import { exportToSpine } from '../io/exportSpine.js';
 
 /**
- * @typedef {('cmo3'|'live2d-runtime'|'live2d-full')} ExportFormat
+ * @typedef {('cmo3'|'live2d-runtime'|'live2d-full'|'spine')} ExportFormat
  *
  * @typedef {Object} ExportProgress
  * @property {number} pct           - 0..1
@@ -81,7 +82,10 @@ export function preflightExport(format) {
 
 /** @param {string} f */
 function isSupportedFormat(f) {
-  return f === 'cmo3' || f === 'live2d-runtime' || f === 'live2d-full';
+  return f === 'cmo3'
+      || f === 'live2d-runtime'
+      || f === 'live2d-full'
+      || f === 'spine';   // GAP-005: Spine 4.0 JSON
 }
 
 /**
@@ -119,6 +123,10 @@ export async function runExport(opts) {
         generateRig: format === 'live2d-full',
         onProgress: wrapProgress,
       });
+    } else if (format === 'spine') {
+      // GAP-005 — Spine 4.0 JSON (skeleton.json + images zip).
+      // Inherited from upstream pre-v3; still works after the v3 refactor.
+      blob = await exportToSpine({ project, onProgress: wrapProgress });
     }
     emit(1, 'export complete');
     if (!blob) {

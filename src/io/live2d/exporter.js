@@ -64,6 +64,7 @@ export async function exportLive2D(project, images, opts = {}) {
     physicsDisabledCategories = null,
     motionPresets = [],
     onProgress = () => {},
+    forceRegenerate = false,  // GAP-009: ignore seeded rig, regenerate from PSD
   } = opts;
 
   const { default: JSZip } = await import('jszip');
@@ -90,7 +91,7 @@ export async function exportLive2D(project, images, opts = {}) {
     faceParallaxSpec: faceParallaxSpecResolved,
     bodyWarpChain: bodyWarpChainResolved,
     rigWarps: rigWarpsResolved,
-  } = await resolveAllKeyformSpecs(project, images);
+  } = await resolveAllKeyformSpecs(project, images, { forceRegenerate });
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
@@ -380,6 +381,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     physicsDisabledCategories = null,
     motionPresets = [],
     onProgress = () => {},
+    forceRegenerate = false,  // GAP-009: ignore seeded rig, regenerate from PSD
   } = opts;
 
   const canvasW = project.canvas?.width ?? 800;
@@ -513,7 +515,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     faceParallaxSpec: faceParallaxSpecResolved,
     bodyWarpChain: bodyWarpChainResolved,
     rigWarps: rigWarpsResolved,
-  } = await resolveAllKeyformSpecs(project, images);
+  } = await resolveAllKeyformSpecs(project, images, { forceRegenerate });
   const { cmo3, deformerParamMap, rigDebugLog } = await generateCmo3({
     canvasW,
     canvasH,
@@ -645,13 +647,31 @@ export async function exportLive2DProject(project, images, opts = {}) {
  *
  * @param {object} project
  * @param {Map<string, HTMLImageElement>} images
+ * @param {{forceRegenerate?: boolean}} [opts]
+ *   GAP-009 — when `forceRegenerate: true`, ignore any seeded values
+ *   and run a fresh `initializeRigFromProject` harvest. Equivalent to
+ *   the upstream pre-v3 cmo3writer path where there was no project-side
+ *   rig data layer; useful for clean baseline regeneration, sanity
+ *   checks, and recovering from a bad rig-edit state without re-running
+ *   Init Rig in the editor.
  * @returns {Promise<{
  *   faceParallaxSpec: object|null,
  *   bodyWarpChain: object|null,
  *   rigWarps: Map<string, object>,
  * }>}
  */
-async function resolveAllKeyformSpecs(project, images) {
+async function resolveAllKeyformSpecs(project, images, opts = {}) {
+  // GAP-009 — caller asks for fresh harvest regardless of seeded state.
+  // Skips the seeded-state checks below.
+  if (opts.forceRegenerate === true) {
+    const harvest = await initializeRigFromProject(project, images);
+    return {
+      faceParallaxSpec: harvest.faceParallaxSpec,
+      bodyWarpChain:    harvest.bodyWarpChain,
+      rigWarps:         harvest.rigWarps,
+    };
+  }
+
   let faceParallaxSpec = resolveFaceParallax(project);
   let bodyWarpChain = resolveBodyWarp(project);
   let rigWarps = resolveRigWarps(project);

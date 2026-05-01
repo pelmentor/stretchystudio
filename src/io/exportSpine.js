@@ -3,8 +3,8 @@
  * 
  * Logic to export the Stretchy Studio project to Spine 4.0 JSON format.
  */
-import { computeWorldMatrices } from '@/renderer/transforms';
-import { uid } from '@/lib/ids';
+import { computeWorldMatrices } from '../renderer/transforms.js';
+import { uid } from '../lib/ids.js';
 
 /**
  * Main entry point for Spine export.

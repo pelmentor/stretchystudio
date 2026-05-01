@@ -30,7 +30,7 @@ import { Button } from '../../components/ui/button.jsx';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group.jsx';
 import { Label } from '../../components/ui/label.jsx';
 import {
-  Loader2, Download, Box, FileArchive, Layers,
+  Loader2, Download, Box, FileArchive, Layers, Bone,
   AlertTriangle, AlertCircle, CheckCircle2,
 } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
@@ -48,6 +48,7 @@ const FORMAT_OPTIONS = [
       'Runtime zip with auto-generated warp/rotation deformers, physics, and idle motions. Best for testing in a viewer.',
     icon: Layers,
     extra: { generateRig: true },
+    supportsDataLayerPicker: true,
   },
   {
     id: 'live2d-runtime',
@@ -55,6 +56,7 @@ const FORMAT_OPTIONS = [
     blurb: 'moc3 + model3 + textures. Ships an existing rig as-is, no auto-generation.',
     icon: FileArchive,
     extra: { generateRig: false },
+    supportsDataLayerPicker: true,
   },
   {
     id: 'cmo3',
@@ -62,7 +64,37 @@ const FORMAT_OPTIONS = [
     blurb: 'Editable source file for Cubism Editor. Best for hand-tuning the rig.',
     icon: Box,
     extra: {},
+    supportsDataLayerPicker: true,
   },
+  {
+    id: 'spine',
+    title: 'Spine 4.0 (.json + textures)',
+    blurb: 'Skeleton JSON + per-part PNGs zip for Spine runtimes. Inherited from upstream — does not use the Cubism rig data layer.',
+    icon: Bone,
+    extra: {},
+    supportsDataLayerPicker: false,
+  },
+];
+
+/**
+ * GAP-009 — data-layer source. The radio buttons inside the modal let
+ * the user pick which inputs feed the Cubism writer:
+ *
+ *   - 'project'        — use seeded rig from Init Rig + UI customisations
+ *                        (the default; "use my edits")
+ *   - 'auto-regenerate' — ignore seeded rig, run a fresh harvest from
+ *                        PSD geometry. Equivalent to upstream pre-v3
+ *                        cmo3writer behaviour. Useful for: clean
+ *                        baseline regeneration, sanity-check exports,
+ *                        regression-testing heuristic changes, recovery
+ *                        from a bad rig-edit state.
+ *
+ * Translates to `extra.forceRegenerate = (dataLayer === 'auto-regenerate')`
+ * which exporter.js routes through resolveAllKeyformSpecs.
+ */
+const DATA_LAYER_OPTIONS = [
+  { id: 'project',         title: 'Project edits',          blurb: 'Use my customisations from the editor (seeded rig + manual tweaks).' },
+  { id: 'auto-regenerate', title: 'Regenerate from PSD',    blurb: 'Ignore seeded rig data, derive fresh from PSD geometry. Equivalent to upstream\'s cmo3 path.' },
 ];
 
 export function ExportModal() {
@@ -74,9 +106,13 @@ export function ExportModal() {
   // free.
   const project = useProjectStore((s) => s.project);
   const [format, setFormat] = useState('live2d-full');
+  const [dataLayer, setDataLayer] = useState('project');  // GAP-009
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(/** @type {string|null} */ (null));
   const [overrideErrors, setOverrideErrors] = useState(false);
+
+  const formatOpt = useMemo(() => FORMAT_OPTIONS.find((o) => o.id === format), [format]);
+  const showDataLayerPicker = formatOpt?.supportsDataLayerPicker === true;
 
   const validation = useMemo(
     () => (open ? validateProjectForExport(project) : { errors: [], warnings: [] }),
@@ -97,10 +133,14 @@ export function ExportModal() {
       const project = useProjectStore.getState().project;
       const images = await loadProjectTextures(project);
       const opt = FORMAT_OPTIONS.find((o) => o.id === format);
+      // GAP-009 — picker only applies when the format supports it.
+      const extra = opt?.supportsDataLayerPicker
+        ? { ...(opt?.extra ?? {}), forceRegenerate: dataLayer === 'auto-regenerate' }
+        : (opt?.extra ?? {});
       const res = await runExport({
         format,
         images,
-        extra: opt?.extra ?? {},
+        extra,
       });
       if (!res.ok || !res.blob) {
         setError(res.error ?? 'Export failed without an error message.');
@@ -110,7 +150,9 @@ export function ExportModal() {
       const baseName = (project.name || 'model').trim() || 'model';
       const isZip = res.blob.type === 'application/zip'
         || res.blob.type === 'application/x-zip-compressed';
-      const ext = isZip ? '_live2d.zip' : '.cmo3';
+      const ext = format === 'spine'
+        ? '_spine.zip'                                    // GAP-005 Spine target
+        : (isZip ? '_live2d.zip' : '.cmo3');
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
       a.href = url;
@@ -166,6 +208,37 @@ export function ExportModal() {
             );
           })}
         </RadioGroup>
+
+        {/* GAP-009 — data-layer picker. Only shown for Cubism formats
+            that thread `forceRegenerate` through resolveAllKeyformSpecs. */}
+        {showDataLayerPicker ? (
+          <div className="border border-border rounded p-2.5 mt-1">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">
+              Rig data source
+            </div>
+            <RadioGroup value={dataLayer} onValueChange={(v) => setDataLayer(v)} className="flex flex-col gap-1.5">
+              {DATA_LAYER_OPTIONS.map((opt) => {
+                const active = dataLayer === opt.id;
+                return (
+                  <Label
+                    key={opt.id}
+                    htmlFor={`datalayer-${opt.id}`}
+                    className={
+                      'flex items-start gap-2 p-2 rounded cursor-pointer transition-colors text-xs ' +
+                      (active ? 'bg-primary/5' : 'hover:bg-muted/30')
+                    }
+                  >
+                    <RadioGroupItem id={`datalayer-${opt.id}`} value={opt.id} className="mt-0.5" />
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-foreground">{opt.title}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">{opt.blurb}</div>
+                    </div>
+                  </Label>
+                );
+              })}
+            </RadioGroup>
+          </div>
+        ) : null}
 
         <ValidationPanel
           result={validation}

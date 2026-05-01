@@ -212,9 +212,16 @@ Distinct from [GAP-014](#gap-014--no-reset-transform-button-in-v3-object-propert
 
 ### GAP-005 — Export button regressed from multi-target to single-target
 
-- **Severity:** medium
-- **Reported:** 2026-04-30
+- **Severity:** medium · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 (Spine restored; PNG-sequence still deferred)
 - **Affects:** Export workflow
+
+**Phase A — Spine 4.0 path restored.** [`ExportService.runExport`](../src/services/ExportService.js) now accepts `format: 'spine'` which calls [`exportToSpine({project, onProgress})`](../src/io/exportSpine.js). The v3 [`ExportModal`](../src/v3/shell/ExportModal.jsx) lists Spine as a fourth option (Bone icon) alongside the three Cubism formats. Output filename: `<modelName>_spine.zip` (skeleton.json + per-part PNGs).
+
+Fixed `@/` aliased imports in [`exportSpine.js`](../src/io/exportSpine.js) → relative paths so the file is consumable from Node test harnesses (the alias is Vite-only).
+
+**Test coverage:** `test:services` extended by 1 case (`preflightExportFor(project, 'spine').ok === true`). End-to-end Spine export run-through is a manual smoke test (visual artefact validation lives outside our unit harness).
+
+**Phase B — PNG sequence path.** Still deferred. The frame-capture code from upstream isn't currently called from ExportService and would need its own orchestration (camera framing, frame stride, ZIP packing). Out of scope of GAP-005 Phase A; promoted to a future GAP entry only when actually needed.
 
 **Current state:** Upstream's export button surfaced multiple output targets (PNG sequence, Spine 4.0 JSON, etc.) — different formats for different downstream tools. v3's export button now drives a single Live2D `.cmo3` / `.moc3` / `.can3` pipeline. The other targets are still implemented in code (e.g. `src/io/exportSpine.js`, frame-capture code) but no longer reachable from the header.
 
@@ -272,9 +279,17 @@ Both surfaces share the same `rigSpec` and `paramValues`, so dragging a slider i
 
 ### GAP-009 — Export "Data Layer" picker: project data vs auto-regenerated
 
-- **Severity:** high (key differentiator — flagged "КРУТАЯ ФИЧА" by user)
-- **Reported:** 2026-04-30
-- **Affects:** Export flow (deferred — will be tackled together with GAP-005 Export targets restoration)
+- **Severity:** high (key differentiator — flagged "КРУТАЯ ФИЧА" by user) · **Reported:** 2026-04-30 · **SHIPPED:** 2026-05-02
+
+**Fix:** [`exporter.js#resolveAllKeyformSpecs`](../src/io/live2d/exporter.js) accepts a third `opts` arg with `forceRegenerate?: boolean`. When `true`, the function skips all seeded-state checks and runs a fresh `initializeRigFromProject` harvest unconditionally — equivalent to upstream pre-v3 cmo3writer behaviour where there was no project-side rig data layer. Threaded through `exportLive2D` and `exportLive2DProject` via a top-level `forceRegenerate` opt.
+
+[`ExportModal.jsx`](../src/v3/shell/ExportModal.jsx) renders a "Rig data source" radio (Project edits / Regenerate from PSD), shown only for Cubism formats (`supportsDataLayerPicker: true` in FORMAT_OPTIONS). Selection translates to `extra.forceRegenerate` in the runExport call. Default = "Project edits"; persists per-modal-session (resets on close, picked up next time as default).
+
+Use cases (matching the original gap brief):
+- "Use my edits" — ship customisations from Init Rig + UI tweaks (default)
+- "Regenerate from PSD" — clean baseline regeneration / sanity-check / regression-testing heuristic changes / recovery from a bad rig-edit state
+
+Spine target shows the modal but hides the picker (Spine doesn't use the Cubism rig data layer).
 
 **The idea:** every export should let the user pick which "data layer" feeds the writer:
 
