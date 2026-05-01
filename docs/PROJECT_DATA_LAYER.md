@@ -207,7 +207,11 @@ tooling, version control friendliness, regression testing.
 
 ## Integrity gaps and known footguns
 
-The Phase A fix closes the round-trip gap — fields persist correctly. But the **persisted data may still be wrong** because nothing in the system detects when the user-visible state diverges from the inputs that originally produced the seeded data. These are the "known footguns" already documented module-by-module across the codebase ([rigWarpsStore.js:35-43](../src/io/live2d/rig/rigWarpsStore.js#L35), [faceParallaxStore.js:22-30](../src/io/live2d/rig/faceParallaxStore.js#L22), [bodyWarpStore.js:23-30](../src/io/live2d/rig/bodyWarpStore.js#L23), [eyeClosureConfig.js:19-22](../src/io/live2d/rig/eyeClosureConfig.js#L19), [boneConfig.js:14-19](../src/io/live2d/rig/boneConfig.js#L14), [rotationDeformerConfig.js:26-30](../src/io/live2d/rig/rotationDeformerConfig.js#L26), and the cross-cutting "ID stability" section of [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants](live2d-export/NATIVE_RIG_REFACTOR_PLAN.md#cross-cutting-invariants)) — consolidated here for visibility.
+The Phase A fix closes the round-trip gap — fields persist correctly. The follow-up audit identified 10 deeper integrity holes (I-1 … I-10) where the **persisted data may still be wrong** because nothing in the system detects when the user-visible state diverges from the inputs that originally produced the seeded data.
+
+**Phase A status (2026-05-02):** all 10 holes have detection-side defences shipped. Phase B (UI gates / delete-confirm dialogs / interactive remediation) is deferred until the relevant UI surfaces (parameter editor, bone-edit operator, group-edit operator, layer-rename op) land — those gate Phase B more than the data-layer plumbing does. See "Steps 1–7 closure plan" in the decision log below.
+
+These are the "known footguns" originally documented module-by-module across the codebase ([rigWarpsStore.js:35-43](../src/io/live2d/rig/rigWarpsStore.js#L35), [faceParallaxStore.js:22-30](../src/io/live2d/rig/faceParallaxStore.js#L22), [bodyWarpStore.js:23-30](../src/io/live2d/rig/bodyWarpStore.js#L23), [eyeClosureConfig.js:19-22](../src/io/live2d/rig/eyeClosureConfig.js#L19), [boneConfig.js:14-19](../src/io/live2d/rig/boneConfig.js#L14), [rotationDeformerConfig.js:26-30](../src/io/live2d/rig/rotationDeformerConfig.js#L26), and the cross-cutting "ID stability" section of [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants](live2d-export/NATIVE_RIG_REFACTOR_PLAN.md#cross-cutting-invariants)) — consolidated here.
 
 ### Hole I-1 — No mesh signature hash → stale warp keyforms after PSD reimport
 
@@ -289,11 +293,13 @@ Hooked in `projectStore.seedAllRig` (post-seed): emits a single structured `logg
 
 **Severity:** low (but contributes to debugging confusion).
 
-**The problem:** [autoRigConfig.js](../src/io/live2d/rig/autoRigConfig.js) has a documented constraint: "any single tuning would invalidate every user override when one field changes". Today the resolver returns the full stored `autoRigConfig` if non-null, else returns full defaults. There's no per-field merge — so adding a new tunable in v8 of the config shape (e.g. a new `faceParallax.someNewKnob`) would be `undefined` on legacy seeded projects, and the resolver might pass `undefined` through to consumers.
+**The problem:** old `resolveAutoRigConfig` returned the full stored `autoRigConfig` if shape-valid, else full defaults. There was no per-field merge — adding a new tunable in v8 of the config shape (e.g. a new `faceParallax.someNewKnob`) would be `undefined` on legacy seeded projects, and the resolver passed `undefined` through to consumers.
 
-**Status today:** the migration system handles top-level field defaults (`v7: project.autoRigConfig = null`) but not per-section defaults inside a populated `autoRigConfig`. If a user seeds with v7 schema, then upgrades to a tool with a v8 `autoRigConfig` shape, their stored autoRigConfig may be missing fields that downstream code assumes. Today there's only one section schema in flight, so this hasn't bitten anyone yet.
+**Defence shipped 2026-05-01:** [`autoRigConfig.js#resolveAutoRigConfig`](../src/io/live2d/rig/autoRigConfig.js) now uses `mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.X, stored.X)` per section instead of pass-through. Semantics mirror `{ ...DEFAULTS, ...stored }` recursively: every default key gets a value, stored values override, **unknown future fields in stored are preserved** (forward-compat: a save from a future build with extra fields still loads cleanly). Resolver now returns a fresh object; caller can't accidentally mutate the stored config.
 
-**Defence:** consumer-side defaults via spread: `const cfg = { ...DEFAULTS, ...stored }`. Already done in some places, missing in others.
+**Test coverage:** test:autoRigConfig grew to 117 cases, +13 over pre-Step 7. New cases: per-field merge preserves user tunings, partial-section merge fills missing fields from defaults, resolver-output mutation doesn't bleed into stored config, future-unknown fields tolerated.
+
+**Status:** closed for this iteration. If a section adds a new required field that defaults can't safely supply (e.g. one that requires per-character calibration), explicit migration entries in `projectMigrations.js` are still the right tool.
 
 ### Hole I-8 — Fresh-harvest detection is too aggressive
 
@@ -350,7 +356,7 @@ That's **also** what happens when the user did Init Rig successfully but only on
 | I-4 variant rename | medium | persistent `variantSuffix` + variantNorm warn shipped 2026-05-01 | logger.warn on rename-detected-as-removal | none (UI rename op pending) |
 | I-5 bone weight orphan | medium | seedAllRig boneOrphans walk shipped 2026-05-01 | logger.warn('boneOrphans') | none (UI bone-edit op pending) |
 | I-6 physics output dangling | low | seedAllRig physicsOrphans walk shipped 2026-05-01 | logger.warn('physicsOrphans') | none (UI group-edit op pending) |
-| I-7 autoRigConfig field drift | low | partial consumer defaults | none | none |
+| I-7 autoRigConfig field drift | low | resolveAutoRigConfig spread-merge over defaults shipped 2026-05-01 | n/a (merge fills missing fields) | n/a |
 | I-8 fresh-harvest aggressive | medium | explicit lastInitRigCompletedAt marker shipped 2026-05-01 | exporter prefers marker over heuristic | n/a (precise check replaces heuristic) |
 | I-9 silent texture/audio errors | low | console.error + `{strict:true}` opt-in shipped 2026-05-01 | strict mode throws | n/a (caller picks mode) |
 | I-10 PSD reimport no invalidation | high | StaleRigBanner shipped 2026-05-01 (Phase A, detection) | reactive UI banner + per-mesh logger.warn | none (lossy; user re-Init Rig) |
@@ -394,6 +400,11 @@ That's **also** what happens when the user did Init Rig successfully but only on
   surfaces in the Logs editor. Re-Init Rig button calls
   `RigService.initializeRig` directly (no operator id yet — operator
   registration deferred to broader rerig-flow gap).
+- **2026-05-01** — Step 7 shipped: I-7 `mergeOverDefaults` in
+  resolveAutoRigConfig. Per-field spread merge instead of full-section
+  pass-through; future-unknown fields preserved (forward-compat);
+  resolver now returns fresh objects (caller can't mutate stored).
+  117 autoRigConfig tests (+13). Closes the original closure plan.
 - **2026-05-01** — Step 5 shipped: I-9 `{strict:true}` mode for
   saveProject/loadProject. Default behaviour unchanged (UI keeps
   lossy-tolerant save). Tests cover both paths.

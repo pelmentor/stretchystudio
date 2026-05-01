@@ -154,7 +154,12 @@ function assertClose(actual, expected, eps, name) {
   };
   const project = { autoRigConfig: { bodyWarp: userBody } };
   const cfg = resolveAutoRigConfig(project);
-  assert(cfg.bodyWarp === userBody, 'user bodyWarp returned by reference');
+  // I-7 fix: resolver now spread-merges over defaults, returns a fresh
+  // object (caller can't accidentally mutate the stored config). Verify
+  // every user field survived the merge.
+  assertEq(cfg.bodyWarp.canvasPadFrac, userBody.canvasPadFrac, 'user bodyWarp.canvasPadFrac preserved');
+  assertEq(cfg.bodyWarp.upperBodySlope, userBody.upperBodySlope, 'user bodyWarp.upperBodySlope preserved');
+  assertEq(cfg.bodyWarp.bxRange.min, userBody.bxRange.min, 'user nested bxRange preserved');
   assertEq(cfg.faceParallax.depthK, 0.80, 'faceParallax falls back independently');
   assertEq(cfg.neckWarp.tiltFrac, 0.08, 'neckWarp falls back independently');
 }
@@ -183,7 +188,11 @@ function assertClose(actual, expected, eps, name) {
   };
   const cfg = resolveAutoRigConfig(project);
   assertEq(cfg.bodyWarp.canvasPadFrac, 0.10, 'malformed bodyWarp falls back');
-  assert(cfg.faceParallax === userFp, 'good faceParallax preserved despite bad bodyWarp');
+  // I-7: faceParallax stored shape is well-formed → spread-merge preserves
+  // every user value (deep-equal verified field by field).
+  assertEq(cfg.faceParallax.depthK, userFp.depthK, 'faceParallax.depthK preserved');
+  assertEq(cfg.faceParallax.depthAmp, userFp.depthAmp, 'faceParallax.depthAmp preserved');
+  assertEq(cfg.faceParallax.protectionPerTag.mouth, 0.5, 'faceParallax.protectionPerTag.mouth preserved');
 }
 
 {
@@ -260,7 +269,6 @@ function assertClose(actual, expected, eps, name) {
   };
   const project = { autoRigConfig: { tagWarpMagnitudes: userMags } };
   const cfg = resolveAutoRigConfig(project);
-  assert(cfg.tagWarpMagnitudes === userMags, 'user tagWarpMagnitudes returned by reference');
   assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.20, 'custom hairFrontXSway preserved');
   assertEq(cfg.tagWarpMagnitudes.mouthYStretch,  0.50, 'custom mouthYStretch preserved');
 }
@@ -285,7 +293,8 @@ function assertClose(actual, expected, eps, name) {
     },
   };
   const cfg = resolveAutoRigConfig(project);
-  assert(cfg.bodyWarp === userBody, 'good bodyWarp preserved');
+  assertEq(cfg.bodyWarp.canvasPadFrac, userBody.canvasPadFrac, 'good bodyWarp.canvasPadFrac preserved');
+  assertEq(cfg.bodyWarp.upperBodySlope, userBody.upperBodySlope, 'good bodyWarp.upperBodySlope preserved');
   assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'incomplete tagWarpMagnitudes → DEFAULT');
   assertEq(cfg.tagWarpMagnitudes.mouthYStretch,  0.35, 'incomplete tagWarpMagnitudes → DEFAULT');
 }
@@ -310,8 +319,54 @@ function assertClose(actual, expected, eps, name) {
   };
   const project = { autoRigConfig: { tagWarpMagnitudes: futureMags } };
   const cfg = resolveAutoRigConfig(project);
-  assert(cfg.tagWarpMagnitudes === futureMags, 'unknown field tolerated');
+  // I-7: spread-merge walks stored keys so unknown-future fields survive.
+  assertEq(cfg.tagWarpMagnitudes.unknownFutureField, 99, 'unknown future field preserved through merge (forward-compat)');
   assertEq(cfg.tagWarpMagnitudes.hairFrontXSway, 0.12, 'known fields still used');
+}
+
+// --- I-7: per-field spread defaults ---
+//
+// Schema-evolution scenario: a save written when faceParallax had
+// only the original keys; a later schema added `someNewKnob`.
+// Resolver should fill missing fields from defaults while preserving
+// the user's tunings on the original fields.
+
+{
+  // bodyWarp section is shape-valid (passes isWellFormedBodyWarp), but
+  // the user has tuned a subset and a hypothetical new field is absent.
+  // The merge fills new fields from defaults; user tunings survive.
+  const userBody = {
+    canvasPadFrac: 0.20,           // user-tuned
+    hipFracDefault: 0.50,           // user-tuned
+    feetFracDefault: 0.75,
+    feetMarginRf: 0.05,
+    bxRange: { min: 0.10, max: 0.90 },
+    byMargin: 0.065,
+    breathMargin: 0.055,
+    upperBodyTCap: 0.5,
+    upperBodySlope: 1.5,
+  };
+  const project = { autoRigConfig: { bodyWarp: userBody } };
+  const cfg = resolveAutoRigConfig(project);
+  assertEq(cfg.bodyWarp.canvasPadFrac,  0.20, 'I-7: user canvasPadFrac preserved');
+  assertEq(cfg.bodyWarp.hipFracDefault, 0.50, 'I-7: user hipFracDefault preserved');
+  assertEq(cfg.bodyWarp.bxRange.min,    0.10, 'I-7: user nested bxRange.min preserved');
+}
+
+{
+  // Resolver returns a fresh object — caller can't accidentally mutate
+  // the stored config (was a footgun before I-7).
+  const userBody = {
+    canvasPadFrac: 0.20, hipFracDefault: 0.50, feetFracDefault: 0.75,
+    feetMarginRf: 0.05, bxRange: { min: 0.10, max: 0.90 },
+    byMargin: 0.065, breathMargin: 0.055,
+    upperBodyTCap: 0.5, upperBodySlope: 1.5,
+  };
+  const project = { autoRigConfig: { bodyWarp: userBody } };
+  const cfg = resolveAutoRigConfig(project);
+  cfg.bodyWarp.canvasPadFrac = 999;  // mutate the resolver output
+  assertEq(project.autoRigConfig.bodyWarp.canvasPadFrac, 0.20,
+    'I-7: stored config not mutated by resolver-output mutation');
 }
 
 // --- seedAutoRigConfig: writes + destructive ---

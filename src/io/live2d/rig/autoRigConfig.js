@@ -269,10 +269,59 @@ function isWellFormedTagWarpMagnitudes(s) {
 }
 
 /**
+ * Per-field merge of stored over defaults. Semantics mirror the
+ * `{ ...DEFAULTS, ...stored }` pattern recommended by the data-layer
+ * audit (Hole I-7): every default key gets a value, stored values
+ * override, unknown fields in stored are preserved (forward-compat
+ * with future schema versions). Recurses into nested objects.
+ *
+ * The case this exists to handle: schema adds a new field in v8
+ * (e.g. `autoRigConfig.faceParallax.someNewKnob`). A v7-seeded save
+ * doesn't have it. With `mergeOverDefaults`, the v8 default fills in
+ * for the missing field; the user's other tunings stay intact.
+ *
+ * @template {object} T
+ * @param {T} defaults
+ * @param {object|null|undefined} stored
+ * @returns {T}
+ */
+function mergeOverDefaults(defaults, stored) {
+  if (!stored || typeof stored !== 'object') return /** @type {T} */ (cloneDeep(defaults));
+  /** @type {Record<string, any>} */
+  const out = /** @type {any} */ (cloneDeep(defaults));
+  // Walk stored keys so unknown-future fields survive the merge.
+  for (const key of Object.keys(stored)) {
+    const sv = /** @type {any} */ (stored)[key];
+    if (sv === undefined) continue;
+    const dv = out[key];
+    if (typeof dv === 'object' && dv !== null && !Array.isArray(dv)
+        && typeof sv === 'object' && sv !== null && !Array.isArray(sv)) {
+      out[key] = mergeOverDefaults(dv, sv);
+    } else if (Array.isArray(sv)) {
+      // Stored arrays replace defaults wholesale.
+      out[key] = sv.slice();
+    } else {
+      out[key] = sv;
+    }
+  }
+  return /** @type {T} */ (out);
+}
+
+function cloneDeep(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(cloneDeep);
+  const out = {};
+  for (const k of Object.keys(obj)) out[k] = cloneDeep(obj[k]);
+  return out;
+}
+
+/**
  * Resolve the autoRigConfig the seeder/writers should use. Per-section
  * fallback: each of `bodyWarp` / `faceParallax` / `neckWarp` is validated
- * as a unit; a malformed (or missing) section falls back to defaults
- * for that section only, leaving the others as user-tuned.
+ * as a unit. A wholly malformed section falls back to defaults; a
+ * partially-populated section gets per-field spread-merge over defaults
+ * (Hole I-7) so a stored config saved at v7 of the section schema
+ * still works when downstream code expects a v8 field.
  *
  * @param {object} project
  * @returns {AutoRigConfig}
@@ -281,16 +330,16 @@ export function resolveAutoRigConfig(project) {
   const cfg = project?.autoRigConfig;
   return {
     bodyWarp: isWellFormedBodyWarp(cfg?.bodyWarp)
-      ? cfg.bodyWarp
+      ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.bodyWarp, cfg.bodyWarp)
       : cloneBodyWarp(DEFAULT_AUTO_RIG_CONFIG.bodyWarp),
     faceParallax: isWellFormedFaceParallax(cfg?.faceParallax)
-      ? cfg.faceParallax
+      ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.faceParallax, cfg.faceParallax)
       : cloneFaceParallax(DEFAULT_AUTO_RIG_CONFIG.faceParallax),
     neckWarp: isWellFormedNeckWarp(cfg?.neckWarp)
-      ? cfg.neckWarp
+      ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.neckWarp, cfg.neckWarp)
       : cloneNeckWarp(DEFAULT_AUTO_RIG_CONFIG.neckWarp),
     tagWarpMagnitudes: isWellFormedTagWarpMagnitudes(cfg?.tagWarpMagnitudes)
-      ? cfg.tagWarpMagnitudes
+      ? mergeOverDefaults(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes, cfg.tagWarpMagnitudes)
       : cloneTagWarpMagnitudes(DEFAULT_AUTO_RIG_CONFIG.tagWarpMagnitudes),
   };
 }
