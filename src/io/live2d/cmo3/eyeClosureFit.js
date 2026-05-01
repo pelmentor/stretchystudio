@@ -1,6 +1,7 @@
 // @ts-check
 
 import { extractBottomContourFromLayerPng } from './pngHelpers.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * Eye-closure parabola fit, lifted out of `cmo3writer.js`.
@@ -66,7 +67,13 @@ function det3(a11, a12, a13, a21, a22, a23, a31, a32, a33) {
 export async function fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts = {}) {
   const binCount = Number.isFinite(opts.binCount) && opts.binCount > 0 ? opts.binCount : 6;
 
-  if (!sourceMesh || !sourceMesh.vertices || sourceMesh.vertices.length < 6) return null;
+  if (!sourceMesh || !sourceMesh.vertices || sourceMesh.vertices.length < 6) {
+    logger.warn('eyeClosureFit', `skip ${sourceTag}: no vertices or < 6`, {
+      hasMesh: !!sourceMesh,
+      vertCount: sourceMesh?.vertices?.length ?? 0,
+    });
+    return null;
+  }
   const sourceVerts = sourceMesh.vertices;
   const nv = sourceVerts.length / 2;
   const pairs = new Array(nv);
@@ -79,12 +86,19 @@ export async function fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts = {})
   // PNG-alpha sampling first (P12); fall back to mesh bin-max.
   let samples = null;
   let sampleSource = 'mesh-bin-max';
-  if (sourceMesh.pngData) {
+  const hasPngData = !!sourceMesh.pngData && sourceMesh.pngData.length > 0;
+  if (hasPngData) {
     const contour = await extractBottomContourFromLayerPng(sourceMesh.pngData, xMin, xMax);
     if (contour && contour.length >= 5) {
       samples = contour;
       sampleSource = sourceTag + '-png-alpha';
+    } else {
+      logger.warn('eyeClosureFit', `${sourceTag}: PNG decode produced too-few samples`, {
+        contourLength: contour?.length ?? 0,
+      });
     }
+  } else {
+    logger.warn('eyeClosureFit', `${sourceTag}: no pngData attached — falling back to mesh bin-max`);
   }
   if (!samples) {
     const binW = (xMax - xMin) / binCount;
@@ -101,7 +115,13 @@ export async function fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts = {})
       if (count > 0) samples.push([sumX / count, maxY]);
     }
   }
-  if (samples.length < 3) return null;
+  if (samples.length < 3) {
+    logger.warn('eyeClosureFit', `${sourceTag}: too few samples for fit`, {
+      sampleCount: samples.length,
+      sampleSource,
+    });
+    return null;
+  }
 
   // Eyelash-fallback: mirror across the linear baseline because the
   // lash's lower edge approximates the upper opening, not the lower lid.
@@ -128,9 +148,16 @@ export async function fitParabolaFromLowerEdge(sourceMesh, sourceTag, opts = {})
   }
   const n = fitSamples.length;
   const detM = det3(n, sX, sX2, sX, sX2, sX3, sX2, sX3, sX4);
-  if (Math.abs(detM) < 1e-9) return null;
+  if (Math.abs(detM) < 1e-9) {
+    logger.warn('eyeClosureFit', `${sourceTag}: degenerate fit (detM≈0)`, { detM, sampleSource });
+    return null;
+  }
   const c = det3(sY, sX, sX2, sXY, sX2, sX3, sX2Y, sX3, sX4) / detM;
   const bc = det3(n, sY, sX2, sX, sXY, sX3, sX2, sX2Y, sX4) / detM;
   const ac = det3(n, sX, sY, sX, sX2, sXY, sX2, sX3, sX2Y) / detM;
-  return { a: ac, b: bc, c, xMid, xScale, sourceTag, sampleSource, xMin, xMax, sampleCount: samples.length };
+  const result = { a: ac, b: bc, c, xMid, xScale, sourceTag, sampleSource, xMin, xMax, sampleCount: samples.length };
+  logger.info('eyeClosureFit', `${sourceTag}: fit ok (${sampleSource})`, {
+    a: ac, b: bc, c, xMid, xScale, xMin, xMax, sampleCount: samples.length,
+  });
+  return result;
 }

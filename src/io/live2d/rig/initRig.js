@@ -41,6 +41,7 @@ import { resolveVariantFadeRules } from './variantFadeRules.js';
 import { resolveEyeClosureConfig } from './eyeClosureConfig.js';
 import { resolveRotationDeformerConfig } from './rotationDeformerConfig.js';
 import { resolveAutoRigConfig } from './autoRigConfig.js';
+import { logger } from '../../../lib/logger.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = new Set(['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp']);
@@ -114,6 +115,19 @@ export function harvestSeedFromRigSpec(rigSpec) {
  * }>}
  */
 export async function initializeRigFromProject(project, images = new Map()) {
+  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const partCount = (project.nodes ?? []).filter(n => n.type === 'part').length;
+  const groupCount = (project.nodes ?? []).filter(n => n.type === 'group').length;
+  const variantCount = (project.nodes ?? []).filter(n => n.type === 'part' && n.variantSuffix).length;
+  logger.info('rigInit', 'Init Rig started', {
+    parts: partCount,
+    groups: groupCount,
+    variants: variantCount,
+    params: project.parameters?.length ?? 0,
+    canvas: { w: project.canvas?.width, h: project.canvas?.height },
+    imagesAttached: images?.size ?? 0,
+  });
+
   const meshes = await buildMeshesForRig(project, images);
   const groups = (project.nodes ?? []).filter(n => n.type === 'group').map(g => ({
     id: g.id,
@@ -149,6 +163,17 @@ export async function initializeRigFromProject(project, images = new Map()) {
   });
 
   const { faceParallaxSpec, bodyWarpChain, rigWarps } = harvestSeedFromRigSpec(result.rigSpec);
+  const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+  const rs = result.rigSpec;
+  logger.info('rigInit', 'Init Rig harvest complete', {
+    elapsedMs: Math.round(dt),
+    warpDeformers: rs?.warpDeformers?.length ?? 0,
+    rotationDeformers: rs?.rotationDeformers?.length ?? 0,
+    artMeshes: rs?.artMeshes?.length ?? 0,
+    faceParallax: faceParallaxSpec ? 'present' : 'missing',
+    bodyWarpChain: bodyWarpChain ? 'present' : 'missing',
+    rigWarpsByPartId: rigWarps?.size ?? 0,
+  });
   return {
     faceParallaxSpec,
     bodyWarpChain,

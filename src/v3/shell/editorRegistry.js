@@ -25,6 +25,7 @@ import { PerformanceEditor } from '../editors/performance/PerformanceEditor.jsx'
 import { DopesheetEditor } from '../editors/dopesheet/DopesheetEditor.jsx';
 import { FCurveEditor } from '../editors/fcurve/FCurveEditor.jsx';
 import { KeyformGraphEditor } from '../editors/keyformGraph/KeyformGraphEditor.jsx';
+import { LogsEditor } from '../editors/logs/LogsEditor.jsx';
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
@@ -46,6 +47,7 @@ export const EDITOR_REGISTRY = {
   dopesheet:   { label: 'Dopesheet', component: DopesheetEditor },
   fcurve:      { label: 'F-curve', component: FCurveEditor },
   keyformGraph: { label: 'Keyform Graph', component: KeyformGraphEditor },
+  logs:        { label: 'Logs',      component: LogsEditor },
 };
 
 /** Stable ordered list for header dropdowns. */

@@ -5,6 +5,13 @@
  * `project.canvas`. Mirrors upstream's EditorLayout popover but uses
  * v3's projectStore (`updateCanvas` / `useProjectStore`).
  *
+ * Trigger is caller-supplied: pass a single React element as
+ * `children` and it becomes the PopoverTrigger (asChild). When no
+ * children are given, we fall back to the standalone toolbar-style
+ * icon button — that path is kept so existing callers keep working
+ * but new callers (e.g. Topbar's bordered file strip) can hand in a
+ * trigger styled to match their surrounding button group.
+ *
  * The "Fit to minimum animation area" button is intentionally omitted
  * for this first restore — it depended on per-frame mesh-bbox math
  * tied to v2's animation tick (computeFitBounds in upstream
@@ -23,21 +30,23 @@ import { Checkbox } from '../../components/ui/checkbox.jsx';
 import { SquareChartGantt } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 
-export function CanvasPropertiesPopover() {
+export function CanvasPropertiesPopover({ children }) {
   const canvas = useProjectStore((s) => s.project?.canvas ?? {});
   const updateCanvas = useProjectStore((s) => s.updateCanvas);
 
+  const trigger = children ?? (
+    <button
+      type="button"
+      title="Canvas Properties"
+      className="h-7 px-2 inline-flex items-center text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-sm transition-colors"
+    >
+      <SquareChartGantt size={14} />
+    </button>
+  );
+
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          title="Canvas Properties"
-          className="h-7 px-2 inline-flex items-center text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-sm transition-colors"
-        >
-          <SquareChartGantt size={14} />
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent className="w-64 p-4 space-y-3 shadow-2xl border-border/60">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Canvas Properties

@@ -25,6 +25,7 @@
  * @module io/live2d/moc3writer
  */
 import { buildParameterSpec } from './rig/paramSpec.js';
+import { matchTag } from '../armatureOrganizer.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { COUNT_INFO_ENTRIES, COUNT_IDX } from './moc3/layout.js';
 import { buildMeshBindingPlan } from './moc3/meshBindingPlan.js';
@@ -111,6 +112,7 @@ function buildSectionData(input) {
   // to the top level (matching cmo3writer's pre-mapped meshes). Raw project
   // nodes nest those under `node.mesh.*`, so we adapt here before the call.
   const meshesForSpec = meshParts.map(n => ({
+    tag: matchTag(n.name ?? ''),
     variantSuffix: n.variantSuffix ?? null,
     variantRole: n.variantRole ?? null,
     jointBoneId: n.mesh?.jointBoneId ?? null,

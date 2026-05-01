@@ -41,6 +41,7 @@
  */
 
 import { EYEWHITE_TAGS, EYE_SOURCE_TAGS } from './eyeTags.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * @param {Object} opts
@@ -168,6 +169,14 @@ export function buildEyeContexts(opts) {
       const bboxCenterY = canvasToBodyXY((lY + rY) / 2);
       eyeContexts.push({
         tag: m.tag, isEyewhite, curvePoints, bboxCenterX, bboxCenterY,
+      });
+      logger.info('eyeContexts', `Section 3c fit ${m.tag}`, {
+        isEyewhite,
+        parabola: { a, b, c, xMid, xScale },
+        meshBboxH: meshMaxY - meshMinY,
+        yOffsetCanvasPx: yOffset,
+        binCount: N_BINS,
+        sampleCount: lowerHalf.length,
       });
       if (rigDebugLog) {
         rigDebugLog.eyeClosureContexts.push({

@@ -31,6 +31,7 @@ import { resolveRigWarps } from './rig/rigWarpsStore.js';
 import { initializeRigFromProject } from './rig/initRig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
+import { EYE_SOURCE_TAGS } from './cmo3/eyeTags.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -93,6 +94,7 @@ export async function exportLive2D(project, images, opts = {}) {
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => ({
+      tag: matchTag(n.name ?? ''),
       variantSuffix: n.variantSuffix ?? null,
       variantRole: n.variantRole ?? null,
       jointBoneId: n.mesh?.jointBoneId ?? null,
@@ -670,20 +672,31 @@ async function resolveAllKeyformSpecs(project, images) {
 }
 
 /**
- * Build the mesh array `generateCmo3` expects, but WITHOUT PNG rendering.
- * Used by the runtime export path (`exportLive2D`) when invoking cmo3writer
- * in rigOnly mode — that mode short-circuits before the CAFF packing step
- * so per-mesh PNGs are never read. We pass empty pngData placeholders.
+ * Build the mesh array `generateCmo3` expects.
  *
- * The rig builders (body warp chain, neck warp, face rotation, …) only need
- * vertices, triangles, tags, jointBoneId, boneWeights, variantSuffix — none
- * of the texture data.
+ * Used by the runtime export path (`exportLive2D`) and the in-app rig-init
+ * flow (`initializeRigFromProject`) when invoking cmo3writer in rigOnly
+ * mode — that mode short-circuits before the CAFF packing step so per-mesh
+ * PNGs aren't strictly needed for output.
+ *
+ * **Exception (eye-source meshes).** The eye-closure parabola fit
+ * (`fitParabolaFromLowerEdge` in `cmo3/eyeClosureFit.js`) extracts the
+ * lower-eyelid contour from the layer's PNG alpha — that's the only path
+ * that produces a clean closure curve. To match upstream pre-v3 behaviour
+ * (where every mesh always had real PNG bytes), we render canvas-sized
+ * PNGs for `EYE_SOURCE_TAGS` (eyewhite-l/r, eyelash-l/r) even in rigOnly
+ * mode. Other meshes keep an empty placeholder so rig-init stays fast.
+ *
+ * The rig builders (body warp chain, neck warp, face rotation, …) only
+ * need vertices, triangles, tags, jointBoneId, boneWeights, variantSuffix.
  *
  * @param {object} project
- * @param {Map<string, HTMLImageElement>} _images  unused; kept for parity with the cmo3 path
+ * @param {Map<string, HTMLImageElement>} images  texture-id → decoded image;
+ *   only required for eye-source meshes. Empty Map keeps legacy "no PNG"
+ *   behaviour and silently skips the eye PNG render.
  * @returns {Promise<Array<object>>}
  */
-export async function buildMeshesForRig(project, _images) {
+export async function buildMeshesForRig(project, images) {
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
   const meshParts = project.nodes
@@ -717,9 +730,30 @@ export async function buildMeshesForRig(project, _images) {
     }
     const variantSuffix =
       part.variantSuffix ?? extractVariant(meshName).variant ?? null;
+
+    // Render canvas-sized PNG for eye-source meshes only — needed by
+    // `eyeClosureFit.fitParabolaFromLowerEdge` for the PNG-alpha lower
+    // contour extraction (matches upstream pre-v3 cmo3writer behaviour
+    // where every mesh always had real PNG bytes). Other meshes get an
+    // empty placeholder; rigOnly mode short-circuits before atlas pack
+    // so it never reads them.
+    const tag = matchTag(meshName);
+    let pngData = new Uint8Array(0);
+    if (EYE_SOURCE_TAGS.has(tag) && images && images.size > 0) {
+      const texId = part.textureId ?? part.id;
+      const img = images.get(texId) ?? images.get(part.id);
+      if (img) {
+        const fullW = img.naturalWidth || img.width;
+        const fullH = img.naturalHeight || img.height;
+        if (fullW > 0 && fullH > 0) {
+          pngData = await renderPartToCanvasPng(img, fullW, fullH, canvasW, canvasH);
+        }
+      }
+    }
+
     meshes.push({
       name: meshName,
-      tag: matchTag(meshName),
+      tag,
       variantRole: variantSuffix,
       variantSuffix,
       variantOf: part.variantOf ?? null,
@@ -733,8 +767,7 @@ export async function buildMeshesForRig(project, _images) {
       vertices,
       triangles,
       uvs,
-      // pngData omitted — rigOnly mode never reads it.
-      pngData: new Uint8Array(0),
+      pngData,
       texWidth: canvasW,
       texHeight: canvasH,
     });

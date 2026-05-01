@@ -1,5 +1,6 @@
 // @ts-check
 import { create } from 'zustand';
+import { logger } from '../lib/logger.js';
 
 /**
  * R0 (Native rig render v2) — live parameter values driving in-editor evaluation.
@@ -28,6 +29,13 @@ export const useParamValuesStore = create((set) => ({
       next[p.id] = p.default ?? 0;
     }
     set({ values: next });
+    logger.info('paramSeed', `resetToDefaults: ${Object.keys(next).length} param(s)`, {
+      // Light snapshot of non-zero defaults — those are the dial positions
+      // a fresh load needs to render correctly (eyes open, mouth shut, etc.).
+      nonZeroDefaults: Object.fromEntries(
+        Object.entries(next).filter(([, v]) => v !== 0),
+      ),
+    });
   },
 
   /**
@@ -47,14 +55,21 @@ export const useParamValuesStore = create((set) => ({
   seedMissingDefaults: (parameters) =>
     set(state => {
       const merged = { ...state.values };
-      let dirty = false;
+      const added = [];
       for (const p of parameters ?? []) {
         if (!(p.id in merged)) {
           merged[p.id] = p.default ?? 0;
-          dirty = true;
+          added.push(p.id);
         }
       }
-      return dirty ? { values: merged } : state;
+      if (added.length > 0) {
+        logger.info('paramSeed', `seedMissingDefaults: +${added.length} new`, {
+          added,
+          alreadyHad: Object.keys(state.values).length,
+        });
+        return { values: merged };
+      }
+      return state;
     }),
 
   reset: () => set({ values: {} }),

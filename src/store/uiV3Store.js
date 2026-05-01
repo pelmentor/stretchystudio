@@ -29,7 +29,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -79,37 +79,47 @@ function buildArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorT
 }
 
 /**
- * Default layout (2026-04-29 — user feedback "no right column"):
+ * Default layout (2026-04-30 — Logs panel added):
  *
- *   Left column (vertical split)        Center column
- *   ────────────────────────             ──────────────
- *   leftTop:    Outliner + Parameters    center:   Viewport
- *   leftBottom: Properties
+ *   Left column (vertical split)   Center           Right column (vertical split)
+ *   ────────────────────────────   ──────────────   ─────────────────────────────
+ *   leftTop:    Outliner           center:Viewport  rightTop:    Parameters
+ *   leftBottom: Logs                                rightBottom: Properties
  *
- * Properties moved out of the right column and into the bottom of
- * the left column; right column is gone, viewport gets the full
- * remaining width. AreaTree.jsx renders the left column as a
- * vertical PanelGroup with the two halves.
+ * Both side columns split horizontally. The Logs panel
+ * (leftBottom, ~1/3 height) surfaces structured pipeline output —
+ * eye-closure parabola fits, breath warp synth, mask allocator,
+ * etc. — so the user can debug native rig eval without bouncing
+ * through `.cmo3` export + JSON inspection.
+ *
+ * AreaTree.jsx renders left/center/right as a horizontal
+ * PanelGroup. Both side columns are vertical PanelGroups; the
+ * fallback is single-panel when only one half is defined.
  *
  * @returns {AreaSlot[]}
  */
 const DEFAULT_AREAS = () => [
-  buildArea('leftTop',    [e('outliner'), e('parameters')]),
-  buildArea('leftBottom', [e('properties')]),
-  buildArea('center',     [e('viewport')]),
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('leftBottom',  [e('logs')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('parameters')]),
+  buildArea('rightBottom', [e('properties')]),
 ];
 
 /**
  * Animation workspace adds a Timeline area below the center and an
- * Animations list tab next to Properties so the user can browse /
- * create / switch animations without leaving the workspace.
+ * Animations list tab alongside Properties (in rightBottom) so the
+ * user can browse / create / switch animations without leaving the
+ * workspace.
  *
  * @returns {AreaSlot[]}
  */
 const ANIMATION_AREAS = () => [
-  buildArea('leftTop',    [e('outliner'), e('parameters')]),
-  buildArea('leftBottom', [e('animations'), e('properties')]),
-  buildArea('center',     [e('viewport')]),
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('leftBottom',  [e('logs')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('parameters')]),
+  buildArea('rightBottom', [e('animations'), e('properties')]),
   buildArea('timeline',   [e('timeline'), e('dopesheet'), e('fcurve')]),
 ];
 

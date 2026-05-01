@@ -32,9 +32,20 @@ import { sanitisePartName } from '../../../lib/partId.js';
  */
 
 /**
- * 22 standard Live2D parameter ids that face-tracking apps (VTube Studio,
+ * Standard Live2D parameter ids that face-tracking apps (VTube Studio,
  * FaceForge, Cubism Viewer demo motions) recognize. Emitted only when
  * `generateRig: true` — matches the cmo3 auto-rig behaviour.
+ *
+ * Each entry may carry `requireTag`: a tag that some mesh in the project
+ * must have for the param to be emitted. Same gating pattern as physics
+ * rules (`cmo3/physics.js`). Without this, a character without (say) a
+ * skirt mesh still got `ParamSkirt` registered, polluting the parameter
+ * panel with dial positions that drive nothing — see the user report
+ * "ParamSkirt without a skirt layer in shelby" (2026-04-30).
+ *
+ * Core face/body params (Angle, BodyAngle, Eye, Brow, Mouth, Breath,
+ * EyeBall) are unconditional — every character has eyes/brows/mouth.
+ * Hair/clothing/bust accessories are gated.
  *
  * Source: cmo3writer.js (was inline at lines 240-269 before this refactor).
  */
@@ -54,13 +65,15 @@ const STANDARD_PARAMS = [
   { id: 'ParamBrowRY',     name: 'Brow R Y',      min: -1,  max: 1,  def: 0 },
   { id: 'ParamMouthForm',  name: 'Mouth Form',    min: -1,  max: 1,  def: 0 },
   { id: 'ParamMouthOpenY', name: 'Mouth Open',    min: 0,   max: 1,  def: 0 },
-  { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0 },
-  { id: 'ParamHairSide',   name: 'Hair Side',     min: -1,  max: 1,  def: 0 },
-  { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0 },
-  { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0 },
-  { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0 },
-  { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0 },
-  { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0 },
+  { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0, requireTag: 'front hair' },
+  { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0, requireTag: 'back hair'  },
+  { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0, requireTag: 'bottomwear' },
+  { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0, requireTag: 'topwear'    },
+  { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0, requireTag: 'legwear'    },
+  { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0, requireTag: 'topwear'    },
+  // ParamHairSide intentionally removed — declared in pre-refactor cmo3writer
+  // but no warp binding or physics rule ever consumed it, so it surfaced as a
+  // dead dial in the Parameters panel.
 ];
 
 /**
@@ -222,8 +235,18 @@ export function buildParameterSpec(input = {}) {
   }
 
   // 4. Standard Live2D params (only with generateRig).
+  // Per-param `requireTag` gating skips accessory params (hair, skirt,
+  // shirt, pants, bust) when no mesh in the project carries the source
+  // tag — same gating pattern physics rules already use (see
+  // `cmo3/physics.js`). Core face/body params (Angle, Eye, Brow, etc.)
+  // have no `requireTag` so they always emit.
   if (generateRig) {
+    const tagsPresent = new Set();
+    for (const m of meshes) {
+      if (m?.tag) tagsPresent.add(m.tag);
+    }
     for (const sp of STANDARD_PARAMS) {
+      if (sp.requireTag && !tagsPresent.has(sp.requireTag)) continue;
       push({
         id: sp.id, name: sp.name,
         min: sp.min, max: sp.max, default: sp.def,
@@ -324,6 +347,7 @@ export function seedParameters(project) {
   const spec = buildParameterSpec({
     baseParameters: [],
     meshes: meshNodes.map((n) => ({
+      tag: n.tag ?? null,
       variantSuffix: n.variantSuffix ?? null,
       variantRole: n.variantRole ?? null,
       jointBoneId: n.mesh?.jointBoneId ?? null,

@@ -138,6 +138,7 @@ function computeOutputs(project) {
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshes.map(n => ({
+      tag: n.tag,
       variantSuffix: n.variantSuffix,
       variantRole: n.variantRole,
       jointBoneId: n.mesh?.jointBoneId,

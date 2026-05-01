@@ -24,6 +24,7 @@
  */
 
 import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * @typedef {Object} FaceParallaxBuildInput
@@ -465,5 +466,20 @@ export function buildFaceParallaxSpec(input) {
     note: 'Grid point Z from ellipsoidal falloff + per-region protection blend. Protected regions (eyes, brows, mouth, nose) rigidly translate via their center-shift; skin/hair/ears get full depth parallax. FaceParallax grid in canvas-px offsets from facePivot.',
   };
 
+  logger.info('faceParallax', 'FaceParallax warp built', {
+    grid: `${fpGW}×${fpGH}`,
+    keyforms: spec.keyforms?.length ?? 0,
+    bindings: spec.bindings?.map(b => `${b.parameterId}[${b.keys.join(',')}]`).join(' × '),
+    facePivot: { cx: +facePivotCx.toFixed(1), cy: +facePivotCy.toFixed(1) },
+    faceUnionBbox: {
+      x: +faceUnionBbox.minX.toFixed(1),
+      y: +faceUnionBbox.minY.toFixed(1),
+      w: +faceUnionBbox.W.toFixed(1),
+      h: +faceUnionBbox.H.toFixed(1),
+    },
+    fpRadius: { x: +fpRadiusX.toFixed(1), y: +fpRadiusY.toFixed(1) },
+    peakShiftPx_at30deg: { x: +peakX.toFixed(1), y: +peakY.toFixed(1) },
+    protectedRegions: protectedRegions.length,
+  });
   return { spec, debug };
 }

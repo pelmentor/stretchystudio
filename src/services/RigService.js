@@ -25,6 +25,7 @@ import { useProjectStore } from '../store/projectStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
+import { loadProjectTextures } from '../io/imageHelpers.js';
 
 /**
  * @typedef {Object} BuildRigResult
@@ -112,7 +113,14 @@ export async function initializeRig() {
   }
   try {
     const project = useProjectStore.getState().project;
-    const harvest = await initializeRigFromProject(project);
+    // Load textures so eye-source meshes get real PNG bytes for the
+    // closure parabola fit. Failure here is non-fatal — rig init still
+    // works without PNGs, just falls back to mesh bin-max sampling.
+    let images = new Map();
+    try {
+      images = await loadProjectTextures(project);
+    } catch (_err) { /* textures missing — proceed without */ }
+    const harvest = await initializeRigFromProject(project, images);
 
     // Persist all rig outputs into projectStore.
     useProjectStore.getState().seedAllRig(harvest);
@@ -135,9 +143,17 @@ export async function initializeRig() {
 
     // Seed live param values from the freshly baked param spec —
     // sliders start at canonical defaults rather than stale dial
-    // positions from a prior project.
-    const paramsAfterSeed =
-      harvest.rigSpec?.parameters ?? useProjectStore.getState().project.parameters ?? [];
+    // positions from a prior project. `rigCollector.parameters` stays
+    // `[]` by design (params live in `project.parameters`), so check
+    // length explicitly — `?? project.parameters` would not fall back
+    // on a truthy empty array and would wipe paramValues entirely,
+    // leaving non-zero defaults like `ParamEyeLOpen=1` showing in the
+    // slider (via ParamRow's default fallback) but missing from the
+    // store, so the renderer reads `undefined` → 0 → eyes closed.
+    const rigParams = harvest.rigSpec?.parameters;
+    const paramsAfterSeed = (rigParams && rigParams.length > 0)
+      ? rigParams
+      : (useProjectStore.getState().project.parameters ?? []);
     useParamValuesStore.getState().resetToDefaults(paramsAfterSeed);
 
     return { ok: true, rigSpec };

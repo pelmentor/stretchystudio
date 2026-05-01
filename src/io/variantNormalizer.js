@@ -19,6 +19,7 @@
  */
 
 import { extractVariant } from './psdOrganizer.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * @typedef {Object} VariantPairing
@@ -106,11 +107,29 @@ export function normalizeVariants(project) {
     pairings.push({ variant: node, base, suffix: variant });
   }
 
-  // ── 2. Reparent variants to match base ───────────────────────────────────
-  for (const { variant, base } of pairings) {
-    if ((variant.parent ?? null) !== (base.parent ?? null)) {
+  // ── 2. Reparent + hide variants ──────────────────────────────────────────
+  // Variants are driven by `Param<Suffix>` opacity fade (0 → 1 on the
+  // suffix param, see `feedback_variant_plateau_ramp` memory). At rest
+  // pose (param=0) the variant should be invisible. The PSD's per-layer
+  // visibility flag tells us nothing useful — artists routinely paint
+  // variants visible while sketching the base, and the auto-rig should
+  // own the variant's display state. Force `visible = false` so the
+  // post-import scene shows the base alone, and the fade param drives
+  // the variant in.
+  for (const { variant, base, suffix } of pairings) {
+    const wasVisible = variant.visible !== false;
+    const wasReparented = (variant.parent ?? null) !== (base.parent ?? null);
+    if (wasReparented) {
       variant.parent = base.parent ?? null;
     }
+    variant.visible = false;
+    logger.info('variantNorm', `Layer "${variant.name}" got hidden automatically, considered a variant`, {
+      base: base.name,
+      suffix,
+      reparented: wasReparented,
+      wasVisibleInPsd: wasVisible,
+      driverParam: `Param${suffix.charAt(0).toUpperCase()}${suffix.slice(1)}`,
+    });
   }
 
   // ── 3. Assign fractional draw_order so variants land above their base,
@@ -151,10 +170,21 @@ export function normalizeVariants(project) {
   }
 
   if (orphans.length > 0) {
-    console.warn(
-      `[variantNormalizer] ${orphans.length} orphan variant(s) (no matching base):`,
-      orphans.map(o => o.name),
-    );
+    for (const o of orphans) {
+      logger.warn('variantNorm', `Orphan variant "${o.name}" — no matching base, will render as plain layer`, {
+        name: o.name,
+      });
+    }
+  }
+
+  if (pairings.length > 0) {
+    const bySuffix = {};
+    for (const p of pairings) {
+      bySuffix[p.suffix] = (bySuffix[p.suffix] ?? 0) + 1;
+    }
+    logger.info('variantNorm', `Variant pass complete: ${pairings.length} hidden, ${orphans.length} orphan(s)`, {
+      bySuffix,
+    });
   }
 
   return { pairings, orphans };

@@ -3,6 +3,7 @@ import { useProjectStore } from './projectStore.js';
 import { useParamValuesStore } from './paramValuesStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
+import { loadProjectTextures } from '../io/imageHelpers.js';
 
 /**
  * v2 R1 — RigSpec session cache.
@@ -40,7 +41,13 @@ export const useRigSpecStore = create((set, get) => ({
     set({ isBuilding: true, error: null });
     try {
       const project = useProjectStore.getState().project;
-      const harvest = await initializeRigFromProject(project);
+      // Load textures so eye-source meshes get real PNG bytes for the
+      // closure parabola fit. Non-fatal on failure.
+      let images = new Map();
+      try {
+        images = await loadProjectTextures(project);
+      } catch (_err) { /* proceed without */ }
+      const harvest = await initializeRigFromProject(project, images);
       const v = useProjectStore.getState().versionControl?.geometryVersion ?? 0;
       // R9 — attach resolved physics rules so the runtime tick can
       // drive sway outputs without re-reading project state every

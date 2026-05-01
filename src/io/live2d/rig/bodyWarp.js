@@ -19,6 +19,7 @@
 
 import { makeUniformGrid } from '../cmo3/deformerEmit.js';
 import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
+import { logger } from '../../../lib/logger.js';
 
 const SC = 5;          // 5×5 cells = 6×6 control points
 
@@ -390,6 +391,16 @@ export function buildBodyWarpChain(input) {
     specs.push(bxSpec);
   }
 
+  logger.info('bodyWarp', `chain built: ${specs.map(s => s.id).join(' → ')}`, {
+    bzBbox: { minX: +BZ_MIN_X.toFixed(1), minY: +BZ_MIN_Y.toFixed(1), w: +BZ_W.toFixed(1), h: +BZ_H.toFixed(1) },
+    HIP_FRAC: +HIP_FRAC.toFixed(3),
+    FEET_FRAC: +FEET_FRAC.toFixed(3),
+    bodyFracSource,
+    bxIncluded: hasParamBodyAngleX,
+    spineShiftsRange: spineCfShifts.length
+      ? [+Math.min(...spineCfShifts).toFixed(4), +Math.max(...spineCfShifts).toFixed(4)]
+      : null,
+  });
   return {
     specs,
     layout: { BZ_MIN_X, BZ_MIN_Y, BZ_W, BZ_H, BY_MIN, BY_MAX, BR_MIN, BR_MAX, BX_MIN, BX_MAX },

@@ -5,7 +5,11 @@
  * since v2 retirement (commit `15f75e3`, 2026-04-29).
  *
  * Owns:
- *   - WorkspaceTabs along the top
+ *   - Topbar (logo + file actions + 5-workspace pill + undo/redo +
+ *     Hot Reload + gesture hint). The workspace pill carries both
+ *     the panel layout preset AND the editor mode (Pose+Animation
+ *     imply animation mode, others imply staging) — see Topbar.jsx
+ *     for the rationale on collapsing those two axes.
  *   - AreaTree in the rest of the viewport
  *   - Top-level ErrorBoundary as a last-resort net (the per-area
  *     boundaries inside Area.jsx catch the common case)
@@ -20,7 +24,7 @@
 
 import { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
-import { WorkspaceTabs } from './WorkspaceTabs.jsx';
+import { Topbar } from './Topbar.jsx';
 import { AreaTree } from './AreaTree.jsx';
 import { SaveModal } from './SaveModal.jsx';
 import { LoadModal } from './LoadModal.jsx';
@@ -41,7 +45,7 @@ export function AppShell() {
   return (
     <ErrorBoundary label="AppShell">
       <div className="flex flex-col h-screen w-screen bg-background text-foreground">
-        <WorkspaceTabs />
+        <Topbar />
         <AreaTree />
         <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
         <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />

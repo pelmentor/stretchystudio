@@ -1,3 +1,5 @@
+import { logger } from '../../lib/logger.js';
+
 // bodyAnalyzer.js — Step 1 of body-parallax measure-first refactor.
 //
 // Pure measurement pass: decodes body-mesh PNG alphas, unions them into per-row
@@ -137,6 +139,12 @@ export async function analyzeBody(canvasW, canvasH, meshes) {
   }
 
   if (!coreTagsFound.length) {
+    logger.warn('bodyAnalyzer', 'No core (topwear/bottomwear) tagged meshes — body anatomy NOT measured', {
+      reason: 'no-core',
+      limbTagsFound,
+      warnings,
+      consequence: 'BodyWarpZ/Y/X + Breath fall back to default HIP_FRAC=0.45, FEET_FRAC=0.75 — accuracy reduced for upper-body-only or unusually-proportioned characters',
+    });
     return {
       skipped: 'no-core',
       coreTagsFound, limbTagsFound,
@@ -233,6 +241,17 @@ export async function analyzeBody(canvasW, canvasH, meshes) {
   }
 
   const uniq = (arr) => [...new Set(arr)];
+
+  logger.info('bodyAnalyzer', 'Body silhouette analyzed', {
+    coreTags: uniq(coreTagsFound),
+    limbTags: uniq(limbTagsFound),
+    anchorsCanvasY: { shoulderY: coreTopY, hipY, feetY: fullBottomY },
+    spineX: { atShoulder: centerAt(coreTopY), atHip: centerAt(hipY), overall: spineX_overall },
+    widthStats: {
+      maxCore: maxCoreWidth, shoulder: widthAt(coreTopY), hip: widthAt(hipY),
+    },
+    warnings: warnings.length ? warnings : undefined,
+  });
 
   return {
     coreTagsFound: uniq(coreTagsFound),
