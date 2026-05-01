@@ -313,9 +313,9 @@ That's **also** what happens when the user did Init Rig successfully but only on
 
 **The problem:** Both round-trip steps swallow per-texture/per-audio errors with `console.error` and continue ([projectFile.js:23](../src/io/projectFile.js#L23), [:142](../src/io/projectFile.js#L142)). For end-user save/load this is fine — losing one texture is recoverable. For automated test harnesses or CI, silent partial-save is a footgun.
 
-**Defence:** add `{ strict: true }` option that throws on first error.
+**Defence shipped 2026-05-01:** both `saveProject(project, opts)` and `loadProject(file, opts)` accept `{ strict?: boolean }`. Default false → existing back-compat console.error + continue. `strict: true` → throw on first per-asset failure, with a message identifying the caller and the failing asset id (`saveProject(strict): texture <id> fetch failed: ...`). Tests verify both paths.
 
-**Status today:** no strict mode. Tests work around this with no-texture fixtures.
+**Status:** end-user UI continues to use default mode (lossy save is recoverable; corrupting whole save would be worse). Batch / CI tooling should pass `{ strict: true }`.
 
 ### Hole I-10 — Re-import PSD doesn't re-derive what's stale
 
@@ -352,7 +352,7 @@ That's **also** what happens when the user did Init Rig successfully but only on
 | I-6 physics output dangling | low | seedAllRig physicsOrphans walk shipped 2026-05-01 | logger.warn('physicsOrphans') | none (UI group-edit op pending) |
 | I-7 autoRigConfig field drift | low | partial consumer defaults | none | none |
 | I-8 fresh-harvest aggressive | medium | explicit lastInitRigCompletedAt marker shipped 2026-05-01 | exporter prefers marker over heuristic | n/a (precise check replaces heuristic) |
-| I-9 silent texture/audio errors | low | console.error | none | none |
+| I-9 silent texture/audio errors | low | console.error + `{strict:true}` opt-in shipped 2026-05-01 | strict mode throws | n/a (caller picks mode) |
 | I-10 PSD reimport no invalidation | high | StaleRigBanner shipped 2026-05-01 (Phase A, detection) | reactive UI banner + per-mesh logger.warn | none (lossy; user re-Init Rig) |
 
 **Recommended ordering for Phase B+ (when prioritised):** I-10 first (it's the single user-facing umbrella for I-1, I-3, I-4, I-5, I-6 in a single workflow); I-1 second (signatureHash unlocks the I-10 detection); I-3 third (animation orphans are the next-most-common silent-export-corruption vector). I-7 / I-9 are quality-of-life. I-2 / I-8 wait until UI editors for the relevant fields exist.
@@ -394,6 +394,9 @@ That's **also** what happens when the user did Init Rig successfully but only on
   surfaces in the Logs editor. Re-Init Rig button calls
   `RigService.initializeRig` directly (no operator id yet — operator
   registration deferred to broader rerig-flow gap).
+- **2026-05-01** — Step 5 shipped: I-9 `{strict:true}` mode for
+  saveProject/loadProject. Default behaviour unchanged (UI keeps
+  lossy-tolerant save). Tests cover both paths.
 - **2026-05-01** — Step 4 shipped: local fixes for I-4/I-5/I-6/I-8.
   variantNormalizer logs rename-detected-as-removal cases;
   seedAllRig walks `mesh.jointBoneId` (I-5) and `physicsRules.outputs`

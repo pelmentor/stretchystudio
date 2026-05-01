@@ -3,10 +3,22 @@ import { CURRENT_SCHEMA_VERSION, migrateProject } from '../store/projectMigratio
 
 /**
  * Serialize the current project to a .stretch ZIP file.
+ *
+ * Default mode: per-asset failures (texture fetch, audio fetch) emit
+ * `console.error` and the save continues with an empty placeholder
+ * source. End-user save flow benefits from this — losing one texture
+ * shouldn't kill the whole save.
+ *
+ * Strict mode (`{ strict: true }`): the first per-asset failure
+ * throws. Right for automated harnesses / CI / batch tools where a
+ * silent partial-save is the actual problem.
+ *
  * @param {object} project — projectStore.project snapshot
+ * @param {{strict?: boolean}} [opts]
  * @returns {Promise<Blob>} ZIP blob ready for download
  */
-export async function saveProject(project) {
+export async function saveProject(project, opts = {}) {
+  const strict = opts.strict === true;
   const zip = new JSZip();
   const texturesFolder = zip.folder('textures');
   const audiosFolder = zip.folder('audios');
@@ -20,6 +32,7 @@ export async function saveProject(project) {
       texturesFolder.file(`${tex.id}.png`, blob);
       serializedTextures.push({ id: tex.id, source: `textures/${tex.id}.png` });
     } catch (err) {
+      if (strict) throw new Error(`saveProject(strict): texture ${tex.id} fetch failed: ${err?.message ?? err}`);
       console.error(`Failed to fetch texture ${tex.id}:`, err);
       serializedTextures.push({ id: tex.id, source: '' });
     }
@@ -54,6 +67,7 @@ export async function saveProject(project) {
           const ext = track.mimeType ? track.mimeType.split('/')[1] : 'wav';
           audiosFolder.file(`${track.id}.${ext}`, blob);
         } catch (err) {
+          if (strict) throw new Error(`saveProject(strict): audio ${track.id} fetch failed: ${err?.message ?? err}`);
           console.error(`Failed to fetch audio ${track.id}:`, err);
         }
         delete track._sourceBlob;
@@ -118,10 +132,21 @@ export async function saveProject(project) {
 
 /**
  * Deserialize a .stretch ZIP file.
+ *
+ * Default mode: per-asset load failures (texture decode, audio
+ * decode) emit `console.error` and the load continues with the
+ * other assets. End-user load benefits from this — one corrupt
+ * texture shouldn't kill the project open.
+ *
+ * Strict mode (`{ strict: true }`): the first per-asset failure
+ * throws. Right for automated harnesses / CI / batch tools.
+ *
  * @param {Blob|File} file - the .stretch blob from file input or fetch
+ * @param {{strict?: boolean}} [opts]
  * @returns {Promise<object>}
  */
-export async function loadProject(file) {
+export async function loadProject(file, opts = {}) {
+  const strict = opts.strict === true;
   const zip = await JSZip.loadAsync(file);
 
   const projectJsonStr = await zip.file('project.json').async('string');
@@ -154,6 +179,7 @@ export async function loadProject(file) {
 
       tex.source = blobUrl;
     } catch (err) {
+      if (strict) throw new Error(`loadProject(strict): texture ${tex.id} load failed: ${err?.message ?? err}`);
       console.error(`Failed to load texture ${tex.id}:`, err);
     }
   }
@@ -176,6 +202,7 @@ export async function loadProject(file) {
           track.sourceUrl = URL.createObjectURL(audioBlob);
           delete track.source;
         } catch (err) {
+          if (strict) throw new Error(`loadProject(strict): audio ${track.id} load failed: ${err?.message ?? err}`);
           console.error(`Failed to load audio ${track.id}:`, err);
           track.sourceUrl = null;
         }

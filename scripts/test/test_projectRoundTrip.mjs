@@ -205,6 +205,35 @@ async function saveAndReload(project) {
   assert(deepEqual(emptyReloaded.meshSignatures, {}), 'meshSignatures stays {} when not seeded');
   assert(emptyReloaded.lastInitRigCompletedAt === null, 'lastInitRigCompletedAt stays null when not seeded');
 
+  // ── Strict mode (Hole I-9) ─────────────────────────────────────────
+  // strict:true throws on first asset error instead of console.error +
+  // continue. We trigger a controlled failure by giving a texture
+  // entry an unfetchable source (file:// path that fetch rejects in
+  // Node) and asserting saveProject throws.
+  {
+    const p = makeFixtureProject();
+    p.textures = [{ id: 'broken-tex', source: 'file:///nope/does/not/exist.png' }];
+    let threw = false;
+    try {
+      await saveProject(p, { strict: true });
+    } catch (err) {
+      threw = true;
+      assert(/saveProject\(strict\)/.test(String(err?.message ?? err)),
+        'strict-mode error message identifies caller (I-9)');
+    }
+    assert(threw, 'saveProject({strict:true}) throws on unfetchable texture (I-9)');
+
+    // Default mode (no strict) on the same fixture should NOT throw —
+    // it falls back to placeholder source per current behaviour.
+    let defaultThrew = false;
+    try {
+      await saveProject(p); // no strict
+    } catch (err) {
+      defaultThrew = true;
+    }
+    assert(!defaultThrew, 'saveProject() default mode swallows asset errors (back-compat)');
+  }
+
   console.log(`projectRoundTrip: ${passed} passed, ${failed} failed`);
   if (failed > 0) {
     console.error('Failures:', failures);
