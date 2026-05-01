@@ -119,15 +119,13 @@ UI delete-confirm dialog when a parameter editor surface lands. Today's UI doesn
 
 ### GAP-014 — No "Reset Transform" button in v3 Object properties tab
 
-- **Severity:** low (workflow papercut, ~10 manual zeros to recover from a bad transform)
-- **Reported:** 2026-05-02 (user-flagged: "Eще feature gap - нету кнопки reset transforms как в upstream")
-- **Affects:** any selected part/group whose transform got nudged into a bad state (drag, accidental keyframe, etc.) and the user wants to revert to identity (`x=0, y=0, rotation=0, scaleX=1, scaleY=1, pivotX=0, pivotY=0`)
+- **Severity:** low · **Reported:** 2026-05-02 (user-flagged) · **Fixed:** 2026-05-02
 
-**Current state:** [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) renders Transform + Pivot sections with 7 numeric fields but no reset action. The user has to zero each field by hand. Upstream's [`Inspector.jsx:257-267`](../reference/stretchystudio-upstream-original/src/components/inspector/Inspector.jsx#L257) had a single "Reset Transform" button below the Pivot section that wrote `{x:0, y:0, rotation:0, scaleX:1, scaleY:1, pivotX:0, pivotY:0}` in one `updateProject` call.
+**Fix:** added below the Pivot section in [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx). One click writes the identity transform `{x:0, y:0, rotation:0, scaleX:1, scaleY:1, pivotX:0, pivotY:0}` via the existing `patch(updateProject)` helper, so the change is undoable.
 
-**Fix (cheap):** add a single button below the Pivot section in ObjectTab. ~6 lines. Goes through the existing `patch` helper so the change is undoable.
+Plain `<button>` rather than the `Button` component because the file has `// @ts-check` and `Button`'s `forwardRef` signature doesn't carry children types under tsc — keeps the component file warning-free. Visual styling matches the existing Visible/Hidden toggle in the same panel for consistency.
 
-**Notes:** Distinct from GAP-006 ("Reset to rest pose" — workspace-level button that reverts ALL pose values + paramValues). GAP-014 is per-node, one click; GAP-006 is whole-character. Both are useful and don't overlap.
+Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace) (Reset to Rest Pose — clears whole-character draft pose + paramValues, animation-mode only). GAP-014 is per-node; GAP-006 is whole-character. Both shipped together 2026-05-02.
 
 ---
 
@@ -209,27 +207,17 @@ UI delete-confirm dialog when a parameter editor surface lands. Today's UI doesn
 
 ### GAP-006 — No "Reset to rest pose" button in Pose workspace
 
-- **Severity:** medium
-- **Reported:** 2026-04-30
+- **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** Posing workflow
 
-**Current state:** When the user is posing a character in the Pose workspace (or anywhere they're applying transforms / param overrides on top of the rest pose), there's no button to **reset all live pose values back to the rest pose**. They have to manually re-zero every transformed bone / dragged vertex / nudged parameter to recover the neutral state.
+**Fix:** [`Topbar.jsx`](../src/v3/shell/Topbar.jsx) now renders a "Reset Pose" button (RotateCcw icon + label) in the right cluster, visible **only** when `editorMode === 'animation'` (Pose / Animation workspaces). One click does:
 
-**What "reset to rest" means in code:**
+1. `useAnimationStore.clearDraftPose()` — drops uncommitted pose edits.
+2. `useParamValuesStore.resetToDefaults(project.parameters)` — every dial back to its canonical default (eyes open, no rotation, mouth closed, etc.).
 
-- Clear all keyframe overrides for the current frame? Or revert pose draft state?
-- Restore `ParamAngleX/Y/Z` (and other rig params) to their default value?
-- Re-apply `captureRestPose(project.nodes)` snapshot as the visible state?
+Committed timeline keyframes are intentionally NOT touched — those are the user's authored content. The button is the "give me the live preview's rest visual back" action, not "delete my animation".
 
-The exact semantics depend on whether we're resetting *editor view* (back to the rest snapshot) or *project data* (revert pose-mode keyframe edits). Probably both, controlled by one button.
-
-**Where it should live:**
-
-- Topbar: a small "Reset Pose" button next to the workspace pill, visible only in Pose / Animation workspaces. **OR**
-- Pose workspace dedicated toolbar (would require a sub-toolbar concept that v3 doesn't have yet).
-- Topbar placement is the lower-friction choice.
-
-**Notes:** Naming candidate: "Reset to Rest" or "Clear Pose". User's quote (Russian): "нету кнопки чтобы когда позишь ресетнуть позинг на дефолт rest pose" — literally "there's no button to reset posing to default rest pose when posing".
+Distinct from [GAP-014](#gap-014--no-reset-transform-button-in-v3-object-properties-tab) (per-node Reset Transform inside ObjectTab). Both shipped together 2026-05-02.
 
 ---
 

@@ -31,7 +31,7 @@
 import { useState } from 'react';
 import {
   FilePlus, Save, FolderOpen, Download, Settings2,
-  SquareChartGantt, Undo2, Redo2, Link2, Unlink,
+  SquareChartGantt, Undo2, Redo2, Link2, Unlink, RotateCcw,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.jsx';
 import {
@@ -42,6 +42,7 @@ import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useAnimationStore } from '../../store/animationStore.js';
+import { useParamValuesStore } from '../../store/paramValuesStore.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
@@ -77,6 +78,8 @@ export function Topbar() {
   const activeWorkspace  = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace     = useUIV3Store((s) => s.setWorkspace);
   const captureRestPose  = useAnimationStore((s) => s.captureRestPose);
+  const clearDraftPose   = useAnimationStore((s) => s.clearDraftPose);
+  const resetParamValues = useParamValuesStore((s) => s.resetToDefaults);
   const hotReloadStatus  = useAssetHotReloadStore((s) => s.status);
 
   const [confirmNew, setConfirmNew] = useState(false);
@@ -110,6 +113,22 @@ export function Topbar() {
         captureRestPose(project.nodes);
       }
     }
+  }
+
+  /**
+   * GAP-006 — Reset to Rest Pose. Animation-mode only.
+   *
+   * Drops uncommitted draft pose edits and zeros every parameter value
+   * to its canonical default. Does NOT touch committed keyframes — the
+   * timeline survives. After this, the live preview shows the rest
+   * pose plus whatever the keyframes at the current time say.
+   *
+   * Distinct from GAP-014's per-node Reset Transform which resets ONE
+   * node's transform to identity.
+   */
+  function handleResetRestPose() {
+    clearDraftPose();
+    resetParamValues(project?.parameters ?? []);
   }
 
   async function handleHotReloadClick() {
@@ -270,10 +289,31 @@ export function Topbar() {
         </div>
       </TooltipProvider>
 
-      {/* Right: spacer + hot reload + gesture hint */}
+      {/* Right: spacer + reset-pose (animation mode) + hot reload + gesture hint */}
       <div className="flex-1" />
 
       <TooltipProvider delayDuration={400}>
+        {/* GAP-006 — visible only in Pose / Animation. Drops draft pose
+            edits + zeros paramValues to defaults; committed keyframes
+            untouched. */}
+        {editorMode === 'animation' ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="sm"
+                className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                onClick={handleResetRestPose}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span className="ml-1 text-[11px]">Reset Pose</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

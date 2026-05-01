@@ -18,7 +18,14 @@
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { TextField } from '../fields/TextField.jsx';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, RotateCcw } from 'lucide-react';
+
+/** Identity transform — `node.transform` value after Reset Transform. */
+const IDENTITY_TRANSFORM = Object.freeze({
+  x: 0, y: 0, rotation: 0,
+  scaleX: 1, scaleY: 1,
+  pivotX: 0, pivotY: 0,
+});
 
 /**
  * @param {Object} props
@@ -129,6 +136,19 @@ export function ObjectTab({ nodeId }) {
           step={1}
           onCommit={(v) => patch((n) => { (n.transform ??= {}).pivotY = v; })}
         />
+        {/* GAP-014 — single-click revert when transform got nudged into a
+            bad state. Plain <button> (matches the Visible/Hidden toggle
+            above) instead of the Button component so the file's
+            // @ts-check directive doesn't trip on Button's forwardRef
+            children inference. Goes through patch so it's undoable. */}
+        <button
+          type="button"
+          className="h-7 mt-1 px-2 text-[11px] rounded border border-border bg-muted/40 hover:bg-muted/60 flex items-center justify-center gap-1.5 text-foreground"
+          onClick={() => patch((n) => { n.transform = { ...IDENTITY_TRANSFORM }; })}
+        >
+          <RotateCcw size={11} />
+          <span>Reset Transform</span>
+        </button>
       </Section>
 
       {node.type === 'part' ? (
