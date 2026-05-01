@@ -35,7 +35,8 @@
 
 import { cellSelect } from './cellSelect.js';
 import { evalArtMesh } from './artMeshEval.js';
-import { evalWarpGrid, bilinearFFD } from './warpEval.js';
+import { evalWarpGrid } from './warpEval.js';
+import { evalWarpKernelCubism } from './cubismWarpEval.js';
 import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
 
 /**
@@ -137,11 +138,19 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
     const write = bufB;
 
     if (state.kind === 'warp') {
-      for (let i = 0; i < len; i += 2) {
-        bilinearFFD(state.grid, state.gridSize, read[i], read[i + 1], tmp0);
-        write[i] = tmp0[0];
-        write[i + 1] = tmp0[1];
-      }
+      // Phase 1 port of Cubism's WarpDeformer_TransformTarget. See
+      // src/io/live2d/runtime/evaluator/cubismWarpEval.js + the RE
+      // findings in docs/live2d-export/CUBISM_WARP_PORT.md.
+      //
+      // INSIDE [0,1)²: triangle-split bilinear (default) or 4-point
+      // bilinear if isQuadTransform=true.
+      // OUTSIDE: edge-gradient extrapolation (Cubism continues to
+      // displace OOB vertices, derived from the deformed grid's edge
+      // gradients; pre-port v3 froze them via a baseGrid fallback).
+      evalWarpKernelCubism(
+        state.grid, state.gridSize, state.isQuadTransform === true,
+        read, write, len >> 1,
+      );
     } else if (state.kind === 'rotation') {
       const m = state.mat;
       for (let i = 0; i < len; i += 2) {
@@ -228,7 +237,13 @@ class DeformerStateCache {
       const first = spec.keyforms[0];
       if (first?.positions) {
         const grid = evalWarpGrid(spec, cell);
-        if (grid) state = { kind: 'warp', grid, gridSize: spec.gridSize };
+        if (grid) state = {
+          kind: 'warp',
+          grid,
+          baseGrid: spec.baseGrid,
+          gridSize: spec.gridSize,
+          isQuadTransform: spec.isQuadTransform === true,
+        };
       } else if (first && (typeof first.angle === 'number' || typeof first.originX === 'number')) {
         const r = evalRotation(spec, cell);
         if (r) {

@@ -1,0 +1,29 @@
+[
+  { "name": "default", "params": {} },
+
+  { "name": "EyeBallX_pos", "params": { "ParamEyeBallX": 1.0 } },
+  { "name": "EyeBallX_neg", "params": { "ParamEyeBallX": -1.0 } },
+  { "name": "EyeBallY_pos", "params": { "ParamEyeBallY": 1.0 } },
+  { "name": "EyeBallY_neg", "params": { "ParamEyeBallY": -1.0 } },
+
+  { "name": "BodyAngleX_pos10", "params": { "ParamBodyAngleX": 10 } },
+  { "name": "BodyAngleX_pos5",  "params": { "ParamBodyAngleX": 5 } },
+  { "name": "BodyAngleX_neg5",  "params": { "ParamBodyAngleX": -5 } },
+  { "name": "BodyAngleX_neg10", "params": { "ParamBodyAngleX": -10 } },
+
+  { "name": "BodyAngleY_pos10", "params": { "ParamBodyAngleY": 10 } },
+  { "name": "BodyAngleY_neg10", "params": { "ParamBodyAngleY": -10 } },
+
+  { "name": "BodyAngleZ_pos10", "params": { "ParamBodyAngleZ": 10 } },
+  { "name": "BodyAngleZ_neg10", "params": { "ParamBodyAngleZ": -10 } },
+
+  { "name": "Breath_full", "params": { "ParamBreath": 1.0 } },
+  { "name": "Breath_half", "params": { "ParamBreath": 0.5 } },
+
+  { "name": "AngleX_pos30", "params": { "ParamAngleX": 30 } },
+  { "name": "AngleX_neg30", "params": { "ParamAngleX": -30 } },
+  { "name": "AngleY_pos30", "params": { "ParamAngleY": 30 } },
+  { "name": "AngleY_neg30", "params": { "ParamAngleY": -30 } },
+  { "name": "AngleZ_pos30", "params": { "ParamAngleZ": 30 } },
+  { "name": "AngleZ_neg30", "params": { "ParamAngleZ": -30 } }
+]

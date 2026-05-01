@@ -27,6 +27,7 @@
     "test:initRig": "node scripts/test/test_initRig.mjs",
     "test:cellSelect": "node scripts/test/test_cellSelect.mjs",
     "test:warpEval": "node scripts/test/test_warpEval.mjs",
+    "test:cubismWarpEval": "node scripts/test/test_cubismWarpEval.mjs",
     "test:rotationEval": "node scripts/test/test_rotationEval.mjs",
     "test:artMeshEval": "node scripts/test/test_artMeshEval.mjs",
     "test:chainEval": "node scripts/test/test_chainEval.mjs",
