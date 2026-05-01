@@ -37,7 +37,8 @@ import { cellSelect } from './cellSelect.js';
 import { evalArtMesh } from './artMeshEval.js';
 import { evalWarpGrid } from './warpEval.js';
 import { evalWarpKernelCubism } from './cubismWarpEval.js';
-import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
+import { evalRotation, applyMat3ToPoint } from './rotationEval.js';
+import { buildRotationMat3CubismAniso } from './cubismRotationEval.js';
 
 /**
  * @typedef {Object} ArtMeshFrame
@@ -247,15 +248,25 @@ class DeformerStateCache {
       } else if (first && (typeof first.angle === 'number' || typeof first.originX === 'number')) {
         const r = evalRotation(spec, cell);
         if (r) {
+          // Phase 2a port — Cubism's rotation kernel has a different
+          // linear part than v3's textbook rotation (BUG-003 root). Use
+          // buildRotationMat3CubismAniso which encodes the kernel formula
+          // (out.x = -sin·s·ry·px + cos·s·rx·py + ox, etc.) plus the
+          // anisotropic post-scale for the parent-frame conversion.
+          //
           // Apply the parent-frame conversion — see class doc above.
           // For warp parents the scale must collapse pivot-relative canvas-
           // pixels into the parent warp's INPUT frame, which is `0..1` of
           // its grid bbox. Scale anisotropic to handle non-square bboxes.
           // For rotation parents, the child's canvas-px stays canvas-px.
+          //
+          // Phase 2b will replace the slope-based extraSx/Sy with a
+          // finite-difference Jacobian probe of the parent eval, exactly
+          // as RotationDeformer_Setup does in the DLL.
           const isWarpParent = spec.parent?.type === 'warp';
           const sx = isWarpParent ? this._warpSlopeX : 1;
           const sy = isWarpParent ? this._warpSlopeY : 1;
-          state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+          state = { kind: 'rotation', mat: buildRotationMat3CubismAniso(r, sx, sy) };
         }
       }
     }
@@ -264,38 +275,8 @@ class DeformerStateCache {
   }
 }
 
-/**
- * Build a rotation matrix with anisotropic frame-conversion scale baked
- * into the linear part. Equivalent to buildRotationMat3 but with separate
- * X/Y scales applied AFTER the rotation/reflect (pre-multiplied diag).
- *
- * @param {{angleDeg:number, originX:number, originY:number, scale?:number,
- *          reflectX?:boolean, reflectY?:boolean}} r
- * @param {number} extraSx
- * @param {number} extraSy
- * @returns {Float64Array}
- */
-function buildRotationMat3Aniso(r, extraSx, extraSy) {
-  if (extraSx === 1 && extraSy === 1) return buildRotationMat3(r);
-  const angleDeg = r?.angleDeg ?? 0;
-  const ox = r?.originX ?? 0;
-  const oy = r?.originY ?? 0;
-  const s = r?.scale ?? 1;
-  const rx = r?.reflectX ? -1 : 1;
-  const ry = r?.reflectY ? -1 : 1;
-  const rad = (angleDeg * Math.PI) / 180;
-  const cs = Math.cos(rad);
-  const sn = Math.sin(rad);
-  // Linear = diag(extraSx, extraSy) · R · diag(s*rx, s*ry).
-  // The frame-conversion scale wraps the OUTSIDE so origin (already in
-  // parent's frame) doesn't get scaled.
-  const a = extraSx * cs * s * rx;
-  const b = extraSx * (-sn) * s * ry;
-  const d = extraSy * sn * s * rx;
-  const e = extraSy * cs * s * ry;
-  const m = new Float64Array(9);
-  m[0] = a; m[1] = b; m[2] = ox;
-  m[3] = d; m[4] = e; m[5] = oy;
-  m[6] = 0; m[7] = 0; m[8] = 1;
-  return m;
-}
+// (Phase 2a) — local `buildRotationMat3Aniso` removed; the rotation
+// state's matrix is now built by `buildRotationMat3CubismAniso` from
+// cubismRotationEval.js. The Cubism kernel's linear part differs from
+// v3's textbook rotation by a 90° offset (BUG-003 root); see
+// cubismRotationEval.js docstring + docs/live2d-export/CUBISM_WARP_PORT.md.

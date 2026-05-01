@@ -92,24 +92,28 @@ What we don't know yet:
 
 ---
 
-### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism (likely subset of BUG-006 fix)
+### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
 
-- **Severity:** high
-- **Reported:** 2026-04-30
+- **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed + Phase 2a ship:** 2026-05-02
 - **Affects:** Body angle + head angle parameter rigging in in-app native rig eval
 
-**Current state (post BUG-006 fix, 2026-04-30):** the warp-extrapolation fix in [chainEval.js](../src/io/live2d/runtime/evaluator/chainEval.js) is the same root cause that was driving the breath squash — vertices outside any warp's `[0, 1]` grid bbox were getting linearly extrapolated *deformed* grid values, propagating deformation past the bbox in the direction of the gradient. Every body/face angle warp inherits this fix automatically.
+**Root cause (confirmed via IDA Pro disassembly of `RotationDeformer_TransformTarget` at `0x7fff2b24c950`, 2026-05-02):** v3's hand-written `buildRotationMat3` used a textbook 2D rotation matrix; Cubism's actual kernel applies a different linear transform — equivalent to `R_textbook(θ + 90°)·diag(rx, ry)`. The two formulas:
 
-**Verify after fix:** scrub `ParamBodyAngleX/Y/Z` and `ParamAngleX/Y/Z` on shelby_neutral_ok.psd post-Init-Rig. If still wrong, this becomes a separate bug — but the most likely "garbage" symptoms (head leaking with body lean, asymmetric pull at high angles, mesh tearing at warp boundaries) are all extrapolation-induced and should be gone.
+```
+v3 textbook:    out.x = cos·s·rX·px + (-sin·s·rY)·py + originX
+                out.y = sin·s·rX·px + ( cos·s·rY)·py + originY
 
-**If issues remain after retesting:** specific divergence types to capture (TODO from user):
-- wrong magnitude (too strong / too weak)
-- wrong direction
-- wrong pivot
-- jittery / no movement at all
-- which axis is most off
+Cubism actual:  out.x = (-sin·s·rY)·px + (cos·s·rX)·py + originX
+                out.y = ( cos·s·rY)·px + (sin·s·rX)·py + originY
+```
 
-**Open until user re-verifies post-fix.** Don't pre-emptively start digging into pivot / chain ordering / keyform amplitude — extrapolation was the obvious shared bug, see if more remains first.
+For a body-angle deformer at θ=±10° (Cubism's typical range), v3 produced near-identity behaviour while Cubism produces near-90°-rotated behaviour. The user-visible symptom "body angle X/Y/Z don't match Cubism" was exactly this 90° offset.
+
+**Phase 2a fix (2026-05-02):** [`src/io/live2d/runtime/evaluator/cubismRotationEval.js`](../src/io/live2d/runtime/evaluator/cubismRotationEval.js) byte-faithful port of the kernel; `chainEval.js` switched to `buildRotationMat3CubismAniso`. Tests: `test:cubismRotationEval` (57 cases including a "BUG-003 canary" that asserts the new formula diverges from v3's textbook for non-trivial inputs); `test:chainEval` updated (6 cases re-asserted to Cubism semantics).
+
+**Open Phase 2b:** the `_warpSlopeX/Y` closed-form approximation for warp-parented rotation deformers (`canvasToInnermostX/Y` slope) still approximates the parent warp's local Jacobian instead of probing it via finite-difference like Cubism does. For shelby's smaller body-warp bbox this is ~5× off. Visual scrub on shelby will determine whether residual divergence justifies Phase 2b before that ships.
+
+**Verify on shelby:** scrub `ParamBodyAngleX/Y/Z` and `ParamAngleX/Y/Z`. With Phase 2a the kernel matches Cubism's; remaining divergence is pure chain-composition (Phase 2b territory).
 
 ---
 
