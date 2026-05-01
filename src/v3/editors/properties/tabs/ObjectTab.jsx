@@ -18,6 +18,7 @@
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { TextField } from '../fields/TextField.jsx';
+import { logger } from '../../../../lib/logger.js';
 import { Eye, EyeOff, RotateCcw } from 'lucide-react';
 
 /** Identity transform — `node.transform` value after Reset Transform. */
@@ -83,7 +84,19 @@ export function ObjectTab({ nodeId }) {
           min={0}
           max={1}
           precision={2}
-          onCommit={(v) => patch((n) => { n.opacity = v; })}
+          onCommit={(v) => {
+            // BUG-005 instrumentation — user reports the slider has no
+            // visible effect. Log every commit so we can confirm the
+            // store mutation fires; renderer-side logging in
+            // scenePass + animationEngine confirms the read path.
+            logger.debug('opacityCommit', `${node.type} ${node.id} → ${v}`, {
+              nodeId: node.id,
+              nodeType: node.type,
+              previousOpacity: opacity,
+              nextOpacity: v,
+            });
+            patch((n) => { n.opacity = v; });
+          }}
         />
       </Section>
 

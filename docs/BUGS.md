@@ -81,12 +81,11 @@ What we don't know yet:
 **Next steps:**
 
 1. Get a precise repro from the user — exact tab/workspace sequence
-2. Add console instrumentation:
-   - Log `editorMode`, `activeWorkspace`, `view.{zoom,panX,panY}` before/after switch
-   - Log node count the renderer is iterating over
-   - Confirm webgl context identity (`canvas.getContext('webgl2') === prevContext`)
-   - Check if the Viewport area's DOM node is being replaced (key change) vs re-rendered
-3. Don't guess-fix. Per project rule (`feedback_verify_not_theorize.md`): instrument first, then fix the root cause.
+2. ✅ **Instrumentation shipped 2026-05-02** (per memory `feedback_verify_not_theorize.md`):
+   - [`Topbar.handleWorkspaceClick`](../src/v3/shell/Topbar.jsx) emits `logger.debug('workspaceSwitch', …, {previousWorkspace, nextWorkspace, previousMode, nextMode, modeWillChange})` on every workspace pill click
+   - [`Area.useEffect`](../src/v3/shell/Area.jsx) emits `logger.debug('areaTab', …, {areaId, previousTabId, nextTabId, editorType, remount})` on every tab transition. Detects the ErrorBoundary `key` flip that fully unmounts the editor body
+   - [`CanvasViewport`](../src/components/canvas/CanvasViewport.jsx) `WebGL init` useEffect logs `logger.debug('viewportGL', 'WebGL2 context initialised', …)` on mount and `'WebGL2 context destroyed'` on cleanup. Direct evidence of GL context cycling
+3. **Repro flow:** open the v3 Logs editor (left-bottom area), perform the disappear repro, scroll back through `workspaceSwitch` → `areaTab` → `viewportGL` event sequence. The pattern should immediately distinguish (a) Viewport unmount-remount loses GPU uploads (b) workspace mode flip vs (c) view transform reset.
 
 **Notes:** Memory entry mirrors this — `memory/project_v3_tab_switch_disappears.md`.
 
@@ -173,9 +172,15 @@ End state: armature shows posed bones (rotated joints, moved pivots) over a mesh
 
 **Next steps:**
 
-1. Find the Opacity input in `src/v3/editors/properties/` — confirm what field it writes to.
-2. Grep the renderer for that field (e.g. `node.opacity`, `n.opacity`, `partOpacity`) — if no read exists, the input is dead-code-writing.
-3. Compare to upstream pre-v3: did `node.opacity` use to flow into the renderer? If so, find the lost wiring.
+1. ✅ **Audit shipped 2026-05-02:**
+   - [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) Opacity input writes `node.opacity` via `patch((n) => { n.opacity = v; })` — the standard updateProject flow.
+   - Renderer reads node.opacity in 4 places: [`scenePass.js:149`](../src/renderer/scenePass.js#L149) (`opacity: ov.opacity !== undefined ? ov.opacity : node.opacity`), [`transforms.js:143-146`](../src/renderer/transforms.js#L143) (`computeEffectiveProps` parent-chain multiplication into `opMap`), [`CanvasViewport.jsx:1472`](../src/components/canvas/CanvasViewport.jsx#L1472) (`opacity: drOv?.opacity ?? kfOv?.opacity ?? node.opacity`), and similarly in `GizmoOverlay.jsx` / `SkeletonOverlay.jsx`.
+   - The chain looks intact: `ObjectTab.write → store mutation → effective opMap → render call`.
+2. ✅ **Instrumentation shipped 2026-05-02:** [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) logs `logger.debug('opacityCommit', …, {nodeId, nodeType, previousOpacity, nextOpacity})` on every commit. If the Logs panel shows the commit firing but visual stays unchanged → render-side issue. If the commit doesn't fire → UI binding broken.
+3. Possible remaining suspects (verify post-instrumentation repro):
+   - Animation-mode draftPose / keyframe override winning over `node.opacity`. Check if user's repro is happening in Pose / Animation workspace.
+   - `versionControl` not bumped on opacity write. CanvasViewport.jsx:165 dirty-keys on `[project, isDark]` reference; immer should produce a new project ref. If not, opacity writes don't trigger redraw.
+   - Selector memoization: zustand subscribe() may shallow-compare and miss the change.
 
 ---
 

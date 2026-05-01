@@ -30,6 +30,7 @@ import {
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '@/renderer/transforms';
 import { assertPartId } from '@/lib/partId';
 import { uid } from '@/lib/ids';
+import { logger } from '@/lib/logger';
 import {
   clientToCanvasSpace,
   worldToLocal,
@@ -277,6 +278,19 @@ export default function CanvasViewport({
       console.error('[CanvasViewport] ScenePass init failed:', err);
       return;
     }
+
+    // BUG-001 instrumentation — log GL context init + cleanup so the
+    // recurring "character disappears on workspace switch" report can
+    // be traced. Every Viewport mount creates a new GL context (the
+    // previous one's textures + scene state are gone); the disappear
+    // symptom is consistent with this when we don't re-upload after
+    // workspace re-mount. The Logs panel will show whether mount fires
+    // on the disappear repro.
+    logger.debug('viewportGL', 'WebGL2 context initialised', {
+      contextLost: gl.isContextLost?.() ?? false,
+      glVersion: gl.getParameter(gl.VERSION),
+      glRenderer: gl.getParameter(gl.RENDERER),
+    });
 
     const tick = (timestamp) => {
       // Advance animation playback and mark dirty if time moved
@@ -610,6 +624,13 @@ export default function CanvasViewport({
     rafRef.current = requestAnimationFrame(tick);
 
     return () => {
+      // BUG-001 instrumentation — when the Viewport area re-mounts on
+      // workspace/tab switch, we lose every GPU upload. Log so the
+      // disappear-on-switch repro shows whether teardown is firing
+      // adjacent to the user's switch.
+      logger.debug('viewportGL', 'WebGL2 context destroyed (cleanup)', {
+        scene: !!sceneRef.current,
+      });
       cancelAnimationFrame(rafRef.current);
       sceneRef.current?.destroy();
       sceneRef.current = null;

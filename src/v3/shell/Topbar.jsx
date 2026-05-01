@@ -44,6 +44,7 @@ import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useAnimationStore } from '../../store/animationStore.js';
 import { useParamValuesStore } from '../../store/paramValuesStore.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
+import { logger } from '../../lib/logger.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
@@ -106,6 +107,22 @@ export function Topbar() {
    * @param {WorkspaceTab} tab
    */
   function handleWorkspaceClick(tab) {
+    // BUG-001 instrumentation — workspace switch is the recurring
+    // "character disappears" trigger. Log the transition so the Logs
+    // panel captures sequence + mode change for diagnosis.
+    const prevWorkspace = activeWorkspace;
+    const prevMode = editorMode;
+    logger.debug('workspaceSwitch',
+      `${prevWorkspace ?? '(none)'} → ${tab.id}`,
+      {
+        previousWorkspace: prevWorkspace,
+        nextWorkspace: tab.id,
+        previousMode: prevMode,
+        nextMode: tab.mode,
+        modeWillChange: tab.mode !== prevMode,
+      },
+    );
+
     setWorkspace(tab.id);
     if (tab.mode !== editorMode) {
       setEditorMode(tab.mode);
