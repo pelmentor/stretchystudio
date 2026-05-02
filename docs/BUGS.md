@@ -164,30 +164,32 @@ No cached rigSpec → `CanvasViewport`'s tick loop's `_rigSpec = rigSpecRef.curr
 
 ### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
 
-- **Severity:** high · **Reported:** 2026-04-30 · **Phase 2a attempted + reverted:** 2026-05-02
+- **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed via raw asm:** 2026-05-02 · **Fix in progress (Phase 2b)**
 - **Affects:** Body angle + head angle parameter rigging in in-app native rig eval
 
-**History.** A "byte-faithful Phase 2a port" of `RotationDeformer_TransformTarget` from IDA `0x7fff2b24c950` was shipped and reverted on the same day. The port's kernel:
+**Root cause confirmed (raw asm read 2026-05-02):**
+
+The rotation kernel itself is **already correct** in v3. Reading the full raw asm of `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` (`xmm5/xmm6/xmm7/xmm8` register tracking) reveals:
 
 ```
-out.x = (-sin·s·rY)·px + (cos·s·rX)·py + originX
-out.y = ( cos·s·rY)·px + (sin·s·rX)·py + originY
+out.x = px·(cos·s·rX) + py·(-sin·s·rY) + originX
+out.y = px·(sin·s·rX) + py·( cos·s·rY) + originY
 ```
 
-…produced `(out.x = py + ox, out.y = px + oy)` at θ=0 — a structural x↔y swap at neutral angle. That is mathematically inconsistent with how Cubism Editor displays models upright at default params, so the disassembly was misread. See [BUG-011](#bug-011) for the regression details.
+That's textbook 2D rotation with `diag(rX, rY)` post-scale — exactly what `buildRotationMat3Aniso` already produces. **The earlier Phase 2a "kernel divergence" was a register-tracking misread of the asm**, not a real divergence.
 
-After the revert, BUG-003's original symptom (body angle / face angle don't match Cubism Viewer) is back. Possible roots, in priority order:
+The actual divergence is in **Setup**, which v3 doesn't have. `RotationDeformer_Setup` at IDA `0x7fff2b24dee0` does an FD Jacobian probe of the parent eval EVERY FRAME (parameter-dependent), then bakes:
+- `originX/Y` ← canvas-final pivot (computed via `parent.TransformTarget(pivot)`)
+- `angle` ← `angle - probed_parent_local_rotation`
+- `scale` ← `keyform.scale × parent.compounded_scale`
 
-1. **The actual kernel may be exactly textbook**, and BUG-003 was always pure chain-composition (Phase 2b territory — `_warpSlopeX/Y` slope approximation diverges from Cubism's FD Jacobian probe by ~5× for shelby's smaller body warp).
-2. **The kernel may have a non-90° structural difference** that the misread Phase 2a happened to mask. Re-RE pass needed.
+So at eval time, the rotation's frame is fully canvas-final-compensated. v3's chainEval doesn't do this — it uses `_warpSlopeX/Y = canvasToInnermostX/Y` (closed-form bbox slope, REST-state) as a stand-in for the scale piece, and ignores the parent's local rotation entirely.
 
-**What's NOT to do for the redo:**
+For body-angle params: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated. Cubism's Setup picks up that local rotation when probing the head-rotation deformer's pivot. v3's chainEval doesn't — it assumes the warp's frame is rest-state. **That's the divergence.**
 
-- Do not infer the formula from Hex-Rays pseudocode alone — that's where the swap-confusion came from.
-- Do not assert "the kernel is X" via unit tests against the supposed disassembly. Verify against the **Cubism Web SDK oracle** (Phase 0 harness in `scripts/cubism_oracle/`) — that's the canonical pass criterion.
-- Mathematical sanity check: any candidate kernel MUST reduce to identity at θ=0 with default scale=1, no reflect, origin=0.
+**Fix path:** Phase 2b in [`docs/live2d-export/CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02). Implement the FD Jacobian probe in `chainEval.js`'s `DeformerStateCache.getState` for warp-parented rotation deformers. Verify via oracle diff harness (cmo3 → rigSpec → evalRig vs Cubism oracle) BEFORE shipping (per `feedback_oracle_before_unit_tests.md`).
 
-**Status:** ⏳ Open. Pending re-RE pass (read raw asm at IDA `0x7fff2b24c950`, NOT pseudocode; cross-verify with oracle output).
+**Status:** ⏳ In progress. Root cause settled; implementation + oracle harness next.
 
 ---
 

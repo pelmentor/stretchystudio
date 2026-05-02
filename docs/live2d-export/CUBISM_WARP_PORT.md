@@ -165,40 +165,87 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 ---
 
-### 🔴 Phase 2 — Port rotation deformer eval
+### 🟢 Phase 2 — Rotation deformer eval (raw-asm-verified 2026-05-02)
 
-**Phase 2a — Per-vertex eval kernel — ❌ REVERTED 2026-05-02 (same day as ship).**
+**Phase 2a — Kernel verification (no port needed) — ✅ COMPLETE 2026-05-02.**
 
-The "byte-faithful port" produced a kernel that at θ=0 returned `(out.x = py + ox, out.y = px + oy)` — i.e. a structural x↔y SWAP at neutral angle. A correct rotation deformer at neutral must be the identity around its origin (`out = (px + ox, py + oy)`); anything else corrupts every rotation-deformer-driven mesh in the rig at default param values.
+The full raw asm of `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` reads:
 
-User shelby test (logs captured in [BUGS.md → BUG-011](../BUGS.md#bug-011)):
-- Character rendered at rest pose forever after Init Rig
-- Live preview (breath, cursor head-tracking) had no visible effect on rotation-deformer-driven parts (face Angle X/Y/Z)
-- Bone-controller-driven elbow rotation worked because SkeletonOverlay updates `node.transform` directly, bypassing evalRig
+```
+out.x = px·(cos·s·rX) + py·(-sin·s·rY) + originX
+out.y = px·(sin·s·rX) + py·( cos·s·rY) + originY
+```
 
-The IDA disassembly was misread. The actual Cubism `RotationDeformer_TransformTarget` is the textbook formula (it has to be — Cubism Editor displays models upright at neutral, which would be impossible with a 90°-offset kernel). What the disassembly probably showed was either operands in registers swapped during JIT, or a transposed convention in a struct read.
+This is **exactly textbook 2D rotation** with `diag(rX, rY)` post-scale — the same formula `buildRotationMat3Aniso` already implements in [`rotationEval.js`](../../src/io/live2d/runtime/evaluator/rotationEval.js). At θ=0 the linear part is identity; output = input + origin. **v3's rotation kernel matches Cubism byte-for-byte.**
 
-**Reverted in `chainEval.js`:** `buildRotationMat3CubismAniso` → restored the local `buildRotationMat3Aniso` (textbook formula, anisotropic post-scale unchanged). [`cubismRotationEval.js`](../../src/io/live2d/runtime/evaluator/cubismRotationEval.js) and `test:cubismRotationEval` retained as historical record of the bad port — DO NOT IMPORT FROM CHAINEVAL until a re-RE pass confirms the actual kernel.
+The earlier "Phase 2a port" (commit `0f512d0`, reverted same day) was a misread of the asm: `xmm5/xmm6/xmm7/xmm8` register tracking confused which `mulss` corresponded to `px·cos*s*rX` vs `py·(-sin)*s*rY`. The actual matrix coefficients per-register:
 
-**Phase 2a status:** 🔴 Reverted. Re-do requires:
-1. Re-disassemble `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` carefully — read the asm directly, not Hex-Rays pseudocode (which was likely wrong).
-2. Verify the kernel via Cubism Web SDK oracle (Phase 0 harness in `scripts/cubism_oracle/`) — feed a single rotation deformer through `csmGetDrawableVertexPositions` at θ=0 and θ=±30°; compare to the JS port's output. THIS is the canonical pass criterion, not unit tests against the supposed disassembly formula.
-3. Mathematical sanity: any candidate kernel MUST reduce to identity at θ=0 with default scale=1, no reflect, origin=0.
+| reg | value | usage at vertex loop |
+|-----|-------|----------------------|
+| `xmm5` | `-sin·s·rY` | `xmm1 *= xmm5` after `xmm1 = py` → `xmm1 = py · (-sin·s·rY)` |
+| `xmm6` | `sin·s·rX`  | `xmm2 *= xmm6` after `xmm2 = px` → `xmm2 = px · (sin·s·rX)` |
+| `xmm7` | `cos·s·rY`  | `xmm3 *= xmm7` after `xmm3 = py` → `xmm3 = py · (cos·s·rY)` |
+| `xmm8` | `cos·s·rX`  | `xmm0 *= xmm8` after `xmm0 = px` → `xmm0 = px · (cos·s·rX)` |
 
-**Pre-Phase 2a-redo data shipped 2026-05-02:** [`scripts/cubism_oracle/analyze_param_sensitivity.py`](../../scripts/cubism_oracle/analyze_param_sensitivity.py) computes per-drawable max + mean displacement vs the rest baseline, across all 21 pinned shelby snapshots. First-run output reveals:
+Sums: `out_x = (px·cos·s·rX) + (py·-sin·s·rY) + originX`; `out_y = (px·sin·s·rX) + (py·cos·s·rY) + originY`. Textbook.
 
-- `ParamBodyAngleZ` produces ~30 px displacements with `mean ≈ max` for top movers — **rigid rotation pattern** (all verts in the chain move ~uniformly around a far pivot). That's a clean signal of the rotation kernel's contribution.
-- `ParamBodyAngleX` has `mean << max` (e.g. ArtMesh14: mean=6.15, max=21.03) — **warp pattern** (per-vertex displacement varies by grid position). That's the warp-deformer kernel + chain composition combined.
+[`cubismRotationEval.js`](../../src/io/live2d/runtime/evaluator/cubismRotationEval.js) is no longer needed and is retained only as historical record. Production path uses `buildRotationMat3Aniso` from `rotationEval.js`.
 
-So when Phase 2a redo arrives, the verification target for the rotation kernel formula has hard numbers to hit (per-drawable per-param expected displacements within float32 noise of the Cubism oracle).
+**Phase 2b — Finite-difference Jacobian Setup port — 🔴 ROOT CAUSE OF BUG-003.**
 
-**Phase 2b — Finite-difference Jacobian Setup port — ⏳ Blocked on Phase 2a redo.**
+The asm of `RotationDeformer_Setup` at IDA `0x7fff2b24dee0` reveals Cubism's Setup mechanism (runs every frame, parameter-dependent):
 
-The `_warpSlopeX/Y = canvasToInnermostX/Y` slope approximation in chainEval still drives warp-parented rotation deformers' parent-frame conversion. Cubism actually does finite-difference Jacobian probing of the parent eval (2-3 parent.eval calls per rotation deformer per frame, 10-iteration retry with shrinking δ on degenerate cases — see Phase 0 RE at line 430-454).
+1. For each rotation deformer with a warp parent:
+   - Probe `parent.TransformTarget(pivot)` → canvas-final pivot
+   - Probe `parent.TransformTarget(pivot + (0, ε))` → response point  
+   - Delta = response − canvas-pivot. If `|delta| ≈ 0` (degenerate at this point), shrink ε ×0.5 and retry up to 10 iterations. If delta in +Y direction is zero, also try -Y direction.
+   - `probedAngle = angle_between((0, ε), delta)` — the parent's local rotation at the pivot
+   - `probedScale = |delta| / ε` — the parent's local isotropic scale at the pivot
+2. **Bakes** into per-deformer state arrays:
+   - `model[228h][i] ← canvasPivotX` (the rotation's `originX` is now in canvas-final frame)
+   - `model[230h][i] ← canvasPivotY`
+   - `model[238h][i] -= probedAngle` (deformer's angle adjusted for parent's local rotation)
+   - `model[218h][i] ← keyformScaleX × parentCompoundedScaleX` (model[278h] tracks compounded chain scale)
+   - `model[220h][i] ← keyformScaleY × parentCompoundedScaleY`
 
-The slope approximation is exact when the parent's eval has a constant Jacobian (uniform-bbox warp), but for shelby's smaller body warp the slope is ~5× off — that's likely BUG-003's residual after kernel correctness. Phase 2b ports `RotationDeformer_Setup` to replace the slope-baked aniso scale with a true Jacobian probe.
+So **at eval time, the rotation kernel reads `originX/Y/scale/angle` that have ALREADY been adjusted for the parent chain's local rotation + scale at the pivot**. v3's `_warpSlopeX/Y = canvasToInnermostX/Y` is a closed-form approximation of just the scale piece, AND it uses the warp's REST grid — not the warp's CURRENT (parameter-deformed) grid.
 
-**Phase 2b status:** ⏳ Blocked. Cannot start until Phase 2a kernel is verified correct against the oracle.
+For body-angle-driven head/face deformations: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated. Cubism's Setup picks up that local rotation in the head-rotation deformer's pivot probe. v3's chainEval doesn't — it assumes the warp's frame conversion is rest-state. **That's BUG-003 in one sentence.**
+
+`WarpDeformer_Setup` (IDA `0x7fff2b24e410`) is similar but simpler: calls `parent.TransformTarget(grid)` IN-PLACE so the warp's grid gets lifted from "parent's child-frame" to "parent's parent-frame" each frame. Topological-order deformer iteration means by the time a warp's Setup runs, its parent's grid is already in canvas-root, so this single call promotes the warp's grid to canvas-root too.
+
+**Phase 2b plan (autonomous-doable):**
+
+In v3's [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) `DeformerStateCache.getState`, when constructing the rotation state for a warp-parented rotation deformer:
+
+```js
+// Replace the closed-form approximation:
+//   const sx = isWarpParent ? this._warpSlopeX : 1;
+//   const sy = isWarpParent ? this._warpSlopeY : 1;
+
+// With FD Jacobian probe:
+const [cpX, cpY]   = evalParentChain(spec.parent, [r.originX, r.originY]);
+const [pX1, pY1]   = evalParentChain(spec.parent, [r.originX, r.originY + EPS]);
+const dx = pX1 - cpX, dy = pY1 - cpY;
+const probedScale  = Math.hypot(dx, dy) / EPS;
+const probedAngle  = Math.atan2(dx, dy); // angle of probe response from +Y
+state = { kind: 'rotation', mat: buildRotationMat3CanvasFinal({
+  ...r,
+  angleDeg: r.angleDeg - probedAngle * 180 / Math.PI,
+  originX: cpX,                    // canvas-final pivot
+  originY: cpY,
+  scale: r.scale * probedScale,
+}) };
+// At eval time, this rotation produces canvas-final output directly,
+// so NO further chain walk is needed for verts already in this rotation's
+// child frame — they go straight to canvas-px.
+```
+
+Then the chain walk for an artmesh under such a rotation simplifies: artmesh.verts → rotation.TransformTarget → canvas-px (no further traversal needed, since rotation now outputs canvas-final).
+
+**Verification via oracle (per memory `feedback_oracle_before_unit_tests.md`):** before shipping, build the v3 evalRig vs oracle diff harness using shelby.cmo3 (cmo3Import → rigSpec → evalRig) and assert per-drawable max-diff drops below 1px across all 21 fixtures. That's the canonical pass criterion.
+
+**Phase 2b status:** 🔴 Code design complete, needs harness + verification before ship.
 
 ---
 
