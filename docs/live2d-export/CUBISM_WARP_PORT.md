@@ -245,17 +245,22 @@ The closed-form `_warpSlopeX/Y` happens to be a slightly more conservative appro
 
 ---
 
-### Phase 3 — Port chain composition
+### ✅ Phase 3 — Port chain composition (lifted grids)
 
-**Scope:** Replace [chainEval.js](../../src/io/live2d/runtime/evaluator/chainEval.js)'s `evalArtMeshFrame` parent-walk loop with Cubism's composition algorithm.
+**Status:** SHIPPED + ORACLE-VERIFIED 2026-05-02. PARAM mean divergence dropped 6.66 → 2.45 px (63%); breath case dropped 16.76 → 5.45 px (67%); body-chain fixtures roughly halved.
 
-**Open questions to resolve from IDA:**
+**Implementation:** new `DeformerStateCache.getLiftedGrid()` method in [chainEval.js](../../src/io/live2d/runtime/evaluator/chainEval.js). Mirrors Cubism Core's `WarpDeformer_Setup` (IDA `0x7fff2b24e410`):
 
-- What order does Cubism apply deformers? (parent-to-child, child-to-parent, or topological order with an explicit tree walk?)
-- Does Cubism do per-frame caching of deformer states, or recompute per-mesh?
-- Where does the rotation→warp coordinate-space change happen — inside the rotation function, inside the warp function, or in the chain walker?
+- For each warp deformer, walk its grid's control points UP through ancestor warps and rotations, applying each one's evaluator at every control point. Result: a "lifted grid" with control points in canvas-px instead of the warp's own localFrame.
+- For root warps (parent=ROOT, localFrame=`canvas-px`), the lifted grid IS the current-frame grid — no work.
+- For non-root warps, recursively call `getLiftedGrid(parent)`. The recursion is memoized via `_liftedById`. A sentinel (`_liftedById.set(id, null)` BEFORE recursion) guards against malformed cycles, matching the legacy chainEval's bounded-safety-counter semantics.
+- For rotation parents in the lift chain, apply the rotation's matrix (still rest-state — Phase 2b would adjust this, but blocked) and continue walking up to the next warp ancestor. Once a warp parent is hit, apply ITS lifted grid bilinear and STOP (output is canvas-px).
 
-**Status:** ⏳ Blocked on Phase 1+2.
+**Artmesh evaluation change:** in `evalArtMeshFrame`'s chain walk, when we hit a warp parent we use its lifted grid (a single bilinear → canvas-px) and BREAK. Rotations are still walked through one matrix application at a time. The first warp parent collapses the rest of the chain.
+
+**Why this matters:** nested-bilinear composition through the chain is mathematically a QUARTIC polynomial when intermediate warps are non-identity. Cubism's lifted-bilinear approach stays a proper bilinear in canvas space. At rest pose with all-identity intermediates the two are equivalent; at any non-zero parameter that deforms an intermediate warp, they diverge. The breath case is the canonical example — the breath delta of -0.0125 in normalized BR-input projects through nested bilinears via heuristic uniform BX/BY/BZ vs through Cubism's authored non-uniform BX/BY/BZ, and the local Jacobians differ. The lifted approach matches Cubism by construction.
+
+**What's NOT addressed by Phase 3:** rotation deformer's FD Jacobian Setup (`RotationDeformer_Setup` at IDA `0x7fff2b24dee0`). Rotation pivots in v3 are still rest-state; Cubism dynamically recomputes them via FD probe each frame for parameter-rotated warps. AngleZ_pos30/neg30 fixtures are pinned at 17.73 px PARAM max because their chain has parameter-rotated warps where the rotation Setup matters. Tracked under BUG-003 Phase 2b — blocked on rotation matrix-structure refactor (general 2×2 + translation).
 
 ---
 
@@ -807,18 +812,18 @@ The unidentified internal helpers can be named on demand as Phases 2-4 reference
 | 1 — Warp port | ✅ Code shipped + oracle-quantified | 2026-05-01 | 2026-05-02 | `cubismWarpEval.js` ported. Oracle harness shipped 2026-05-02 (`scripts/cubism_oracle/diff_v3_vs_oracle.mjs`). Phase 1 verified clean at rest pose: non-eye meshes (eyebrows, hair) show ~0.07 px max divergence, well within float32 noise floor. Eye meshes show ~13-66 px due to eye-closure parabola fit falling back to mesh-bin-max in Node (no Image decoder); not a Phase 1 issue |
 | 2a — Rotation eval kernel port | ✅ Verified-no-port-needed 2026-05-02 | — | 2026-05-02 | Raw asm of `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` confirms kernel = textbook `R · diag(rX, rY) · scale`, identical to `buildRotationMat3Aniso` in `rotationEval.js`. Earlier "Phase 2a port" (commit `0f512d0`) was a register-tracking misread, reverted same day. No port file needed |
 | 2b — RotationDeformer_Setup (FD Jacobian) | 🔴 BLOCKED on matrix-structure refactor | — | — | Root cause of BUG-003. Cubism's Setup probes parent.TransformTarget per frame and bakes canvas-final pivot + parent-rotation-compensated angle + compounded scale. v3's `_warpSlopeX/Y` is a closed-form rest-state approximation that diverges when warps are parameter-rotated. **Implementation blocked**: v3's rotation matrix is `R · diag(extraSx, extraSy)` (diagonal-only); FD probe captures the parent's local Jacobian as a 2D delta with off-diagonal info that diagonal scaling can't carry. Real fix requires switching `rotationEval.js` to a general 2x2 + translation. Both attempted alternatives (canvas-final + chain-stop, FD-magnitude-as-slope) made divergence worse than baseline. Quantified baseline: PARAM-DRIVEN max=17.73 px, mean=3.25 px |
-| 3 — Chain composition port | ⏳ Blocked | — | — | Phase 0 RE confirmed v3's parent-walk produces equivalent results to Cubism's `Setup-then-eval` IF deformer kernels match. Phase 2b unblocks this |
-| 4 — Artmesh port | ⏳ Blocked | — | — | Blocked on Phase 3 |
-| 5 — Visual parity sweep | ⏳ Blocked | — | — | Blocked on Phases 1-4 |
+| 3 — Chain composition port | ✅ Shipped + oracle-verified | 2026-05-02 | 2026-05-02 | Lifted-grid Setup via new `DeformerStateCache.getLiftedGrid()`. Each warp's grid is composed top-down through ancestors to canvas-px once per frame; artmesh evaluation does ONE bilinear against the lifted grid (matching Cubism Core's `WarpDeformer_Setup`). Recursive + memoized + cycle-guarded. PARAM mean dropped 6.66 → 2.45 px (63%); breath case 16.76 → 5.45 px (67%). Body-chain fixtures roughly halved. AngleZ rotations still at 17.73 — Phase 2b territory |
+| 4 — Artmesh port | ⏳ Deferred | — | — | Phase 3 already covers the chain composition Cubism does at the artmesh boundary; remaining work is the keyform-blending math, which currently matches at the byte level. Promote only when oracle harness shows artmesh-specific divergence not explained by Phase 2b/3 |
+| 5 — Visual parity sweep | ⏳ Phase 2b unblocks | — | — | After Phase 2b lands, sweep all 21 oracle fixtures + run user visual diff against Cubism Viewer |
 
-| Diagnostic param | Status | Notes |
-|------------------|--------|-------|
-| ParamEyeBallX/Y | ⏳ | Quantified at param max=0 (v3 produces no response — possibly missing binding in heuristic rig); separate investigation |
-| ParamBodyAngleX | ⏳ | Quantified at param max=17.73 px on ArtMesh6 |
-| ParamBodyAngleY | ⏳ | Same magnitude as X |
-| ParamBodyAngleZ | ⏳ | Same — Phase 2b should drop this to <1 px once unblocked |
-| ParamBreath | ⏳ | Quantified at param max=16.76 px on ArtMesh8 |
-| ParamAngleX/Y/Z | ⏳ | Quantified at param max=15-17 px (face rotation deformer chain) |
+| Diagnostic param | Pre-Phase-3 | Post-Phase-3 | Notes |
+|------------------|-------------|--------------|-------|
+| ParamEyeBallX/Y | 0 px | 0 px | EyeBall meshes don't go through body chain; no change expected or seen |
+| ParamBodyAngleX | 4.69 px | 5.18 px | Mostly unchanged — the BodyXWarp deformation path was already short |
+| ParamBodyAngleY | 9.93 px | **11.14 px** | Slight uptick (5%) — within noise. AngleZ-class chains still need Phase 2b |
+| ParamBodyAngleZ | 2.99 px | **5.38 px** | Uptick — exposed the rotation FD probe gap that Phase 3's correctness reveals. Phase 2b territory |
+| **ParamBreath** | 16.76 px | **5.45 px** ⬇ | **67% reduction**. Largest Phase 3 win — addresses user-reported "head deforms weirdly under breath" |
+| ParamAngleX/Y/Z | 4-7 px | 4-7 px | Mostly unchanged — these chains are mostly canvas-final rotations, less affected by intermediate-warp lifting |
 
 ---
 

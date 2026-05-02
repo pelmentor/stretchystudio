@@ -148,15 +148,35 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
     const write = bufB;
 
     if (state.kind === 'warp') {
-      // Phase 1 port of Cubism's WarpDeformer_TransformTarget. See
-      // src/io/live2d/runtime/evaluator/cubismWarpEval.js + the RE
-      // findings in docs/live2d-export/CUBISM_WARP_PORT.md.
+      // Phase 3 — use the warp's LIFTED grid (canvas-px control points,
+      // pre-composed through every ancestor warp/rotation) and STOP
+      // walking the chain after this single bilinear lookup. Equivalent
+      // to Cubism Core's pipeline: WarpDeformer_Setup lifts grids
+      // top-down; the artmesh evaluator then does ONE bilinear per
+      // vertex against the leaf warp's lifted grid. Mathematically
+      // matches Cubism — nested-bilinear composition (the legacy
+      // pre-Phase-3 path) is a quartic polynomial when intermediate
+      // warps are non-identity, while the lifted approach stays a
+      // proper bilinear in canvas space.
       //
-      // INSIDE [0,1)²: triangle-split bilinear (default) or 4-point
-      // bilinear if isQuadTransform=true.
-      // OUTSIDE: edge-gradient extrapolation (Cubism continues to
-      // displace OOB vertices, derived from the deformed grid's edge
-      // gradients; pre-port v3 froze them via a baseGrid fallback).
+      // Bilinear kernel itself is the byte-faithful Phase 1 port from
+      // cubismWarpEval.js (verified at 0.07 px on shelby rest pose for
+      // non-eye meshes). Phase 3 just changes WHICH grid the kernel
+      // evaluates against, not the kernel itself.
+      const lifted = cache.getLiftedGrid(parentSpec);
+      if (lifted) {
+        evalWarpKernelCubism(
+          lifted, parentSpec.gridSize, parentSpec.isQuadTransform === true,
+          read, write, len >> 1,
+        );
+        bufA = bufB;
+        bufB = read;
+        // Lifted grid output is canvas-px; the chain is collapsed.
+        break;
+      }
+      // Fallback: parent had no lifted grid (broken chain). Apply the
+      // unlifted current-frame grid and continue walking. Preserves
+      // legacy behaviour for malformed rigs.
       evalWarpKernelCubism(
         state.grid, state.gridSize, state.isQuadTransform === true,
         read, write, len >> 1,
@@ -232,6 +252,20 @@ class DeformerStateCache {
       for (const d of rigSpec.rotationDeformers) if (d?.id) this._specById.set(d.id, d);
     }
 
+    // Phase 3 — per-warp lifted grid cache. Each entry maps a warp's id
+    // to a Float64Array of canvas-px control point positions (same shape
+    // as the warp's keyform grid). Populated lazily by `getLiftedGrid`,
+    // computed once per evalRig call. Mirrors Cubism Core's
+    // `WarpDeformer_Setup` (IDA `0x7fff2b24e410`) which lifts each warp's
+    // grid to canvas-root via parent.TransformTarget(grid) before any
+    // artmesh evaluation runs. Reduces the per-vertex chain walk from
+    // O(chainDepth) nested bilinears to a single bilinear against the
+    // lifted grid — mathematically equivalent to Cubism Core, whereas
+    // nested bilinears compose to a quartic when intermediate warps are
+    // non-identity.
+    /** @type {Map<string, Float64Array|null>} */
+    this._liftedById = new Map();
+
     // Legacy `_warpSlopeX/Y` retained only as a fallback when the FD
     // probe can't run (e.g. the parent warp's state can't be built).
     // Phase 2b's probe-based scale is preferred everywhere else.
@@ -242,6 +276,119 @@ class DeformerStateCache {
     const cToY = rigSpec?.canvasToInnermostY;
     this._warpSlopeX = typeof cToX === 'function' ? (cToX(1) - cToX(0)) : 1 / cmd;
     this._warpSlopeY = typeof cToY === 'function' ? (cToY(1) - cToY(0)) : 1 / cmd;
+  }
+
+  /**
+   * Phase 3 — return the warp's grid lifted to canvas-px by walking up
+   * the parent chain and applying each ancestor's evaluator at every
+   * control point. The result has the same shape as `state.grid` but
+   * each (x, y) pair is in canvas-px rather than the warp's localFrame.
+   *
+   * Recursive + memoized. The recursion is bounded by chain depth
+   * (≤ 32 in practice). For root warps (whose localFrame is canvas-px
+   * already) the lifted grid is the current-frame grid itself — no
+   * extra allocation.
+   *
+   * Falls back to the unlifted grid when an ancestor can't be resolved
+   * (preserves the legacy nested-bilinear behaviour for that artmesh
+   * rather than crashing). The unlifted-fallback path produces the
+   * same output as pre-Phase-3 chainEval at REST POSE since at rest
+   * every warp is an affine map, and bilinear-of-affine = affine.
+   *
+   * @param {import('../../rig/rigSpec.js').WarpDeformerSpec} warpSpec
+   * @returns {Float64Array|null}
+   */
+  getLiftedGrid(warpSpec) {
+    if (!warpSpec?.id) return null;
+    if (this._liftedById.has(warpSpec.id)) return this._liftedById.get(warpSpec.id);
+
+    const state = this.getState(warpSpec);
+    if (!state || state.kind !== 'warp') {
+      this._liftedById.set(warpSpec.id, null);
+      return null;
+    }
+
+    const grid = state.grid;
+    const gridSize = state.gridSize;
+    const nPts = (gridSize.rows + 1) * (gridSize.cols + 1);
+
+    // Root warp: localFrame is canvas-px, grid is already canvas-px.
+    // No lift needed; return the current-frame grid directly.
+    if (!warpSpec.parent || warpSpec.parent.type === 'root') {
+      this._liftedById.set(warpSpec.id, grid);
+      return grid;
+    }
+
+    // Cycle guard: install a `null` sentinel BEFORE recursing into
+    // ancestors. If the chain has a cycle (W1 → W2 → W1 — a malformed
+    // rig caught by `test:chainEval`'s explicit cycle test), the
+    // recursive call hits this cached null at the top and bails out
+    // without infinite-looping. The `if (!curParentLifted) break` in
+    // the chain-walk loop below treats the null result as "ancestor
+    // can't be lifted", so this warp gets returned with whatever
+    // partial composition we got (matches legacy chainEval's bounded-
+    // safety-counter semantics — best-effort, no crash).
+    this._liftedById.set(warpSpec.id, null);
+
+    // Walk the parent chain. Each step transforms `positions` (an
+    // (rows+1)×(cols+1) grid of x,y pairs) from the current frame to
+    // the next-up frame via either a rotation matrix or a warp's
+    // lifted-grid bilinear. Once we hit a warp parent we apply its
+    // lifted grid (which is already canvas-px) and STOP — chain
+    // is collapsed. If we walk all the way to root via rotations
+    // without ever hitting a warp ancestor, the output is whatever
+    // frame the rotation chain ended in (typically canvas-px-relative
+    // to the topmost rotation's pivot, which is canvas-px when the
+    // top rotation's parent is root).
+    let positions = new Float64Array(nPts * 2);
+    for (let i = 0; i < nPts * 2; i++) positions[i] = grid[i];
+    let curParent = warpSpec.parent;
+    let safety = 32;
+    const tmp = [0, 0];
+
+    while (curParent && curParent.type !== 'root' && safety-- > 0) {
+      const curParentSpec = this._specById.get(curParent.id);
+      if (!curParentSpec) break;
+
+      if (curParent.type === 'warp') {
+        // Apply parent's lifted-grid bilinear at every control point.
+        // Output is canvas-px (lifted grid's localFrame). Done — break
+        // out of the lifting loop.
+        const curParentLifted = this.getLiftedGrid(curParentSpec);
+        if (!curParentLifted) break;
+        const vertsIn = new Float32Array(nPts * 2);
+        for (let i = 0; i < nPts * 2; i++) vertsIn[i] = positions[i];
+        const vertsOut = new Float32Array(nPts * 2);
+        evalWarpKernelCubism(
+          curParentLifted,
+          curParentSpec.gridSize,
+          curParentSpec.isQuadTransform === true,
+          vertsIn,
+          vertsOut,
+          nPts,
+        );
+        for (let i = 0; i < nPts * 2; i++) positions[i] = vertsOut[i];
+        curParent = null;
+        break;
+      } else if (curParent.type === 'rotation') {
+        // Apply rotation matrix at every control point. Output is in
+        // the rotation's parent's input frame; continue walking up.
+        const curParentState = this.getState(curParentSpec);
+        if (!curParentState || curParentState.kind !== 'rotation') break;
+        const m = curParentState.mat;
+        for (let i = 0; i < nPts; i++) {
+          applyMat3ToPoint(m, positions[i * 2], positions[i * 2 + 1], tmp);
+          positions[i * 2] = tmp[0];
+          positions[i * 2 + 1] = tmp[1];
+        }
+        curParent = curParentSpec.parent;
+      } else {
+        break;
+      }
+    }
+
+    this._liftedById.set(warpSpec.id, positions);
+    return positions;
   }
 
   /**

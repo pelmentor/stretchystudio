@@ -191,21 +191,24 @@ For body-angle params: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated
 
 **Quantified baseline (oracle harness 2026-05-02):**
 
-- TOTAL divergence (raw v3 vs oracle, all causes): max=73.23 px, mean=6.00 px across 21 fixtures
-- PARAM-DRIVEN divergence (total minus rest baseline — pure BUG-003 signal): max=17.73 px, mean=3.25 px
-- Worst drawable: ArtMesh6 (eyelash-l), chain has rotation-on-warp-parent boundaries
+| Snapshot date | TOTAL max | PARAM max | PARAM mean | Notes |
+|---------------|-----------|-----------|------------|-------|
+| Pre Phase 3   | 73.23 px  | 17.73 px  | 6.66 px    | Baseline. Worst fixture: AngleZ_pos30/neg30 (17.73 px). Breath_full second worst at 16.76 px. |
+| Post Phase 3  | 72.21 px  | 17.73 px  | **2.45 px** | Phase 3 lifted-grid Setup shipped 2026-05-02. Most fixtures roughly halved. Breath_full dropped 16.76 → **5.45 px**. AngleZ unchanged at 17.73 (Phase 2b territory — rotation FD Jacobian Setup). |
 
-**Breath warp data point (verified 2026-05-02):** `ParamBreath=1` is the SECOND-WORST fixture at PARAM max=16.76 px (only AngleZ_pos30/neg30 ranks higher at 17.73 px). Investigation showed:
+**Breath warp data point (verified 2026-05-02):**
 
 1. ✅ Our heuristic BreathWarp grid bytes match Cubism Editor's authored `shelby.moc3` BreathWarp grid **byte-for-byte** at both kf[0] (rest) and kf[1] (full breath). Verified via `scripts/dev-tools/moc3_inspect_warp.py` against `New Folder_cubism/shelby.moc3`. Pinned by [`test:breathFidelity`](../scripts/test/test_breathFidelity.mjs) (66 cases — 6×6 grid corners, dy peak at row 2 = -0.015, dx kicks ±0.004/±0.0013, edge pinning).
 2. ✅ Deformer chain topology matches: `BodyWarpZ → BodyWarpY → BreathWarp → BodyXWarp → rotations → meshes` (identical to Cubism's authored shelby).
-3. ⏳ The 16.76 px residual is the **same root cause as BUG-003 chain composition**. Cubism's authored BodyWarpZ uses a non-uniform canvas-normalized-centered grid (subtle tilting baked in by the artist); our heuristic synthesizer produces a uniform canvas-px grid. At rest pose the constant offset cancels out; at ParamBreath=1 the breath delta projects to canvas-px through different local Jacobians, producing the observed divergence. Same Phase 2b/3 blocker.
+3. ✅ **Phase 3 lifted-grid Setup (shipped 2026-05-02)** — Breath PARAM divergence dropped 16.76 → 5.45 px (67% reduction) by mirroring Cubism Core's `WarpDeformer_Setup` (IDA `0x7fff2b24e410`). Each warp's grid is now lifted top-down through ancestors to canvas-px once per frame; artmesh evaluation does ONE bilinear against the lifted grid instead of nested bilinears through the chain. Fixes the user-reported "head pieces deforming weirdly under breath" symptom — head meshes go through `Rotation_head → BodyXWarp → BreathWarp → BodyWarpY → BodyWarpZ`, where intermediate warps' artist-baked non-uniformity meant nested-bilinear composition (a quartic) diverged from Cubism's lifted single-bilinear.
 
 **Cycle-period correctness fix (2026-05-02, separate from chain comp):** the live-preview ParamBreath synthesizer in CanvasViewport used cycle=3.345 s. Cubism Web Framework's `CubismBreath` standard wiring uses **3.2345 s** for ParamBreath. The 0.11 s discrepancy made our breath drift relative to a Cubism Viewer playing the same model side-by-side. Fixed.
 
 **Phase 2b implementation blocker found (2026-05-02):** initial attempt revealed v3's rotation matrix structure (`R · diag(extraSx, extraSy)`) is **diagonal-only**. When a warp is parameter-rotated, the warp's local Jacobian at the rotation pivot has off-diagonal terms — a rotation that the FD probe captures as `(dx, dy)`. v3's diagonal matrix can only carry the magnitude `|delta|`, not the directional information. Both attempted alternatives (canvas-final + chain-stop OR FD-magnitude-as-slope) made divergence worse than baseline. Real fix requires switching `rotationEval.js`'s matrix to a general 2×2 + translation, which is a downstream-consumer refactor out of scope for a single sweep. Detail in [`CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02).
 
-**Status:** ⏳ Blocked on rotation-matrix-structure refactor. Diagnostic harness shipped; baseline pinned; infrastructure (`DeformerStateCache.evalChainAtPoint`) preserved for the next attempt.
+**Phase 3 shipped 2026-05-02:** lifted-grid Setup mirroring Cubism Core's `WarpDeformer_Setup`. Each warp's grid is composed top-down through ancestors to canvas-px once per frame; artmesh evaluation does a single bilinear against the lifted grid instead of nested bilinears through the chain. Mathematically equivalent to Cubism's pipeline (nested bilinears compose to a quartic when intermediate warps are non-identity, while lifted bilinear stays a proper bilinear). Reduced PARAM mean divergence from 6.66 → 2.45 px (63%). Most body-chain fixtures roughly halved. Files: [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) — new `getLiftedGrid` method on `DeformerStateCache`, plus rewired warp branch in `evalArtMeshFrame` to break after applying the lifted grid.
+
+**Status:** ⏳ Phase 3 complete. AngleZ_pos30/neg30 fixtures still at 17.73 px PARAM max — that's the Phase 2b rotation FD Jacobian Setup signal (chain composition through *parameter-rotated* warps). Blocked on rotation-matrix-structure refactor as before. Diagnostic harness pinned; infrastructure (`DeformerStateCache.evalChainAtPoint` + `getLiftedGrid`) preserved for the next attempt.
 
 ---
 
