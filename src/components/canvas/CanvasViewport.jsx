@@ -233,6 +233,25 @@ export default function CanvasViewport({
     // mismatches.
     missingFrameIds.current.clear();
   }, [rigSpec]);
+
+  // BUG-020 — flip the dirty bit on every CSS-box change so the next
+  // rAF tick re-runs `scenePass.draw`, which re-syncs `canvas.width`
+  // / `canvas.height` to the new client size. Without this the
+  // drawingbuffer stays at the previous size and the browser stretches
+  // the bitmap to fit the new CSS box → visible aspect distortion
+  // during a panel-resize drag (`react-resizable-panels` resizes the
+  // wrapper but never tells us). Also covers DPR changes when the
+  // window crosses between monitors with different scaling — the
+  // resulting client-size delta surfaces the same way.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      isDirtyRef.current = true;
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
   
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {

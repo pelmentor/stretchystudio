@@ -97,12 +97,36 @@ export class ScenePass {
     const { gl } = this;
     const { canvas } = gl;
 
-    // Resize if needed (skipped during export to preserve export dimensions)
+    // Sync the WebGL drawingbuffer to the canvas's CSS box, scaled by
+    // devicePixelRatio so HiDPI displays render at physical resolution
+    // instead of being upscaled by the browser. Skipped during export
+    // (captureExportFrame writes its own pixel-accurate dimensions and
+    // pan/zoom in those units).
+    //
+    // `logicalW`/`logicalH` are CSS px — used for projection math and
+    // the background grid, since `editor.view.{zoom, panX, panY}` are
+    // stored in CSS px and need to compose with a CSS-px camera. The
+    // drawingbuffer (`canvas.width/.height`) stays physical px so the
+    // GL viewport hits every device pixel.
+    let logicalW, logicalH;
     if (!skipResize) {
-      if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
-        canvas.width  = canvas.clientWidth;
-        canvas.height = canvas.clientHeight;
+      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+      const cw = canvas.clientWidth || canvas.width;
+      const ch = canvas.clientHeight || canvas.height;
+      const targetW = Math.max(1, Math.round(cw * dpr));
+      const targetH = Math.max(1, Math.round(ch * dpr));
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
       }
+      logicalW = cw;
+      logicalH = ch;
+    } else {
+      // Export path: panX/panY/zoom are already in canvas-px-of-output
+      // (matching the export resolution), so the camera and bg grid use
+      // canvas.width/.height directly.
+      logicalW = canvas.width;
+      logicalH = canvas.height;
     }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -121,12 +145,12 @@ export class ScenePass {
     const { zoom, panX, panY } = editor.view;
     const canvasArea = project?.canvas ?? null;
     if (!exportMode) {
-      this.bgRenderer.draw(zoom, panX, panY, canvas.width, canvas.height, isDark, canvasArea);
+      this.bgRenderer.draw(zoom, panX, panY, logicalW, logicalH, isDark, canvasArea);
     }
 
     if (!project || project.nodes.length === 0) return;
 
-    const camera = buildCameraMatrix(canvas.width, canvas.height, zoom, panX, panY);
+    const camera = buildCameraMatrix(logicalW, logicalH, zoom, panX, panY);
 
     const viewLayers   = editor.viewLayers ?? {};
     const selectionSet = new Set(editor.selection ?? []);

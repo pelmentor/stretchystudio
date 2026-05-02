@@ -30,16 +30,20 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   assert(Array.isArray(tools) && tools.length > 0, `${modeKey}: non-empty list`);
   for (const t of tools) {
     assert(typeof t.id === 'string' && t.id.length > 0, `${modeKey}.${t.id}: id`);
-    assert(t.kind === 'tool' || t.kind === 'operator', `${modeKey}.${t.id}: kind`);
+    assert(t.kind === 'tool' || t.kind === 'operator' || t.kind === 'toggle',
+      `${modeKey}.${t.id}: kind ∈ {tool,operator,toggle}`);
     assert(typeof t.label === 'string' && t.label.length > 0, `${modeKey}.${t.id}: label`);
     assert(typeof t.icon === 'function' || typeof t.icon === 'object',
       `${modeKey}.${t.id}: icon component`);
     if (t.kind === 'tool') {
       assert(typeof t.toolModeId === 'string' && t.toolModeId.length > 0,
         `${modeKey}.${t.id}: toolModeId required for kind=tool`);
-    } else {
+    } else if (t.kind === 'operator') {
       assert(typeof t.operatorId === 'string' && t.operatorId.length > 0,
         `${modeKey}.${t.id}: operatorId required for kind=operator`);
+    } else {
+      assert(typeof t.toggleId === 'string' && t.toggleId.length > 0,
+        `${modeKey}.${t.id}: toggleId required for kind=toggle`);
     }
   }
 }
@@ -76,7 +80,8 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   assert(ops.includes('transform.scale'),     'object includes transform.scale');
 }
 
-// ── Mesh: brush is default (first); add/remove vertex are tools ────
+// ── Mesh: brush is default (first); add/remove vertex are tools;
+//        proportional-edit is a toggle (orthogonal to the active tool) ─
 
 {
   const mesh = TOOLS_BY_MODE.mesh;
@@ -84,6 +89,9 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   const tids = mesh.filter((t) => t.kind === 'tool').map((t) => t.toolModeId);
   assert(tids.includes('add_vertex'),    'mesh includes add_vertex');
   assert(tids.includes('remove_vertex'), 'mesh includes remove_vertex');
+  const toggles = mesh.filter((t) => t.kind === 'toggle').map((t) => t.toggleId);
+  assert(toggles.includes('proportionalEdit'),
+    'mesh includes proportionalEdit toggle');
 }
 
 // ── Skeleton: only joint_drag is exposed (one tool) ────────────────

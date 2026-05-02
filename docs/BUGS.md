@@ -18,7 +18,8 @@ Each entry is short and self-contained — anyone reading should be able to pick
 |--------|---------|
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
-| ⏳ Open | BUG-003 (Phase 3 lifted-grid composition shipped — PARAM mean dropped 6.66 → 2.45 px / 63% reduction; breath case 16.76 → 5.45 px / 67%; AngleZ peak still 17.73 px pending Phase 2b rotation FD Jacobian Setup, blocked on rotation matrix-structure refactor), BUG-020 (canvas distorts when resizing area panels — aspect ratio not refreshed dynamically), BUG-021 (proportional-edit enabled-state not surfaced in canvas toolbar) |
+| ⏳ Open | BUG-003 (Phase 3 lifted-grid composition shipped — PARAM mean dropped 6.66 → 2.45 px / 63% reduction; breath case 16.76 → 5.45 px / 67%; AngleZ peak still 17.73 px pending Phase 2b rotation FD Jacobian Setup, blocked on rotation matrix-structure refactor) |
+| Recently fixed | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 
@@ -63,53 +64,6 @@ Common test inputs + references used across pipeline bugs (BUG-002, BUG-003, any
 ---
 
 ## Open
-
-### BUG-021 — Proportional-edit enabled-state not surfaced in the canvas toolbar
-
-- **Severity:** low (feature works, but its on/off state is invisible without opening the preferences popover) · **Reported:** 2026-05-02
-
-**Repro (user, 2026-05-02):**
-
-1. Enter Mesh Edit Mode on a part.
-2. Toggle proportional editing on (`O` key, or via wherever the existing toggle lives).
-3. **Expectation:** the canvas toolbar (left T-panel) shows a clear active-state indicator for "proportional edit" — a button that lights up when the mode is on, dim/inactive when off, click-to-toggle. Same convention the rest of the toolbar buttons use.
-4. **Today:** there is NO toolbar entry for proportional editing. State is only visible via the influence-radius circle that draws during a drag, plus whichever preferences/popover surface owns the toggle. New users have no way to discover it.
-
-**Where it should land.** In [`canvasToolbar/tools.js`](../src/v3/shell/canvasToolbar/tools.js)'s `mesh` table, add a sticky-toggle entry that reads/writes `preferencesStore.proportionalEdit.enabled` (NOT `editorStore.toolMode` — proportional edit is **orthogonal** to the brush/add/remove tool, same way Blender's `O` toggle stacks on top of any active tool). The toolbar button kind needs a third variant `'toggle'` alongside the existing `'tool'` (sticky) and `'operator'` (momentary). Tooltip should display the `O` hotkey + falloff cycling via `Shift+O` so the discovery surface is complete.
-
-Cycling between falloff curves (Smooth / Sphere / Root / Sharp / Linear / Constant / Random) — secondary, can be a hover sub-menu in a later sweep. First cut: just the on/off indicator.
-
-**Related.** Plan §"Anti-crutch checklist" in [TOOLBAR_PLAN.md](TOOLBAR_PLAN.md) — every toolbar entry must wire to a real handler, no phantom buttons. Proportional edit already has a real handler (`getOrBuildAdjacency` + `computeProportionalWeights` chain in CanvasViewport's brush path); the toolbar surface is what's missing.
-
----
-
-### BUG-020 — Canvas viewport distorts when adjusting area panel sizes (aspect ratio not refreshed)
-
-- **Severity:** medium (character pieces stretch / squash visibly during pane resize; settles only on next idle frame or user gesture) · **Reported:** 2026-05-02
-
-**Repro (user, 2026-05-02):**
-
-1. Open the editor with a character loaded.
-2. Drag any of the area panel handles (left column / right column / center / timeline divider) to resize.
-3. **Symptom:** the character inside the canvas viewport stretches or squashes for the duration of the drag — the canvas's aspect ratio isn't recomputed against its new client size on every frame, so the WebGL viewport stays mapped to the OLD aspect, distorting every part. Releases / settles to correct only after the resize ends (sometimes only after another mouse interaction).
-
-**Suspects (not verified yet — needs code-side audit):**
-
-1. **No `ResizeObserver` on the canvas element.** [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) likely sizes the WebGL framebuffer once on mount via `gl.viewport(0, 0, w, h)` and never re-runs the size sync until something triggers a redraw with stale dimensions. `react-resizable-panels` resizes the wrapper `<div>` but doesn't notify the canvas; React renders the canvas tag without resetting its `width`/`height` attributes so the GL drawingbuffer stays at the original resolution.
-2. **Canvas style vs attribute mismatch.** If the canvas uses CSS `width: 100%; height: 100%` while the underlying `width=`/`height=` attributes are fixed, the GPU draws at the original resolution and the browser stretches the resulting bitmap to the new CSS box → visible distortion. The fix is to write the new pixel size into the canvas attributes on every resize tick.
-3. **DPR not re-multiplied on resize.** Even if size is observed, `devicePixelRatio` correction needs to re-apply or the canvas renders at the wrong physical resolution after the drag.
-
-**Where to look first.**
-
-- [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — find the canvas-size sync block. Mostly likely a one-shot effect on `useEffect(..., [])` instead of a `ResizeObserver` keyed to `canvasRef.current`.
-- [`AreaTree.jsx`](../src/v3/shell/AreaTree.jsx) and `react-resizable-panels` — confirm that resize events bubble, and that the panel wrapper actually changes its rendered box during the drag (not just at end-of-drag).
-- WebGL viewport reset: `gl.viewport(0, 0, canvas.width, canvas.height)` should run before each draw if the size changed since last draw, OR a `ResizeObserver` callback should set `isDirtyRef.current = true` + write the new attribute sizes.
-
-**Why it's user-visible during the drag specifically.** The renderer's tick loop is running (`isDirtyRef` ticks every frame regardless), so the user gets continuous re-draws — but each draw uses the stale framebuffer extent. Result is a smooth "live distortion" feedback rather than a single flicker.
-
-**Likely fix shape.** Mount a `ResizeObserver` in `CanvasViewport` keyed to the canvas element; on every entry, write `canvas.width = clientWidth * dpr; canvas.height = clientHeight * dpr; isDirtyRef.current = true`. The renderer's existing draw call already reads `canvas.width / .height` for `gl.viewport`, so the attribute write is enough — no scenePass-side change should be needed.
-
----
 
 ### ✅ BUG-019 — Wireframe overlay toggle never makes anything visible
 
@@ -572,6 +526,54 @@ Sister bugs **BUG-008** + **BUG-010** share this root cause and same fix.
 ---
 
 ## Fixed
+
+### ✅ BUG-021 — Proportional-edit enabled-state not surfaced in the canvas toolbar
+
+- **Severity:** low · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Symptom:** the bare-`O` keymap toggles `preferencesStore.proportionalEdit.enabled`, but no UI surface reflected the state. The user only knew it was on when the influence-radius ring drew during a drag — and only inside Mesh Edit.
+
+**Fix.** New third button kind `'toggle'` in [`canvasToolbar/tools.js`](../src/v3/shell/canvasToolbar/tools.js), orthogonal to the existing `'tool'` (sticky, mutually-exclusive within mode) and `'operator'` (momentary) kinds. Toggle entries declare a `toggleId` that the toolbar resolves through a small `TOGGLES` registry in [`CanvasToolbar.jsx`](../src/v3/shell/CanvasToolbar.jsx); each registry entry is `{ isActive(ctx), toggle() }`.
+
+The mesh tool list now ends with a "Proportional Edit" toggle entry (`Circle` icon, `O` hotkey hint, full Shift+O / Alt+O / Ctrl+[/] secondary keys in the tooltip). The toolbar subscribes to `preferencesStore.proportionalEdit?.enabled` so the button highlights immediately when the bare-`O` keymap flips the flag — no separate notification path needed.
+
+**Files touched:**
+- [src/v3/shell/canvasToolbar/tools.js](../src/v3/shell/canvasToolbar/tools.js) — added `kind: 'toggle'` + `toggleId` field; mesh list gains a proportional-edit entry.
+- [src/v3/shell/CanvasToolbar.jsx](../src/v3/shell/CanvasToolbar.jsx) — `TOGGLES` registry + `usePreferencesStore` subscription + active-state branch in the render loop.
+- [scripts/test/test_canvasToolbar.mjs](../scripts/test/test_canvasToolbar.mjs) — extended shape assertions for the new kind; mesh-list test ensures `proportionalEdit` toggle is present (83/83).
+
+**Lesson.** The third button kind lands cheaply once you accept that not every toolbar slot belongs in the `editorStore.toolMode` mutually-exclusive bucket. Blender mixes sticky tools and orthogonal toggles in the same strip; SS now does too.
+
+---
+
+### ✅ BUG-020 — Canvas viewport distorts when adjusting area panel sizes (aspect ratio not refreshed)
+
+- **Severity:** medium · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Symptom:** dragging any panel divider in `react-resizable-panels` made the character stretch / squash for the duration of the drag. Released → settled to correct on the next interaction, but the live preview during the drag was wrong.
+
+**Root cause:** [`scenePass.draw`](../src/renderer/scenePass.js) DID re-sync `canvas.width/.height` to `clientWidth/.clientHeight` per frame — but only when called. The CanvasViewport rAF tick gates that call on `isDirtyRef.current`. Nothing in the React tree flipped `isDirtyRef = true` when `react-resizable-panels` resized the wrapper `<div>`, so:
+
+1. CSS box of the canvas element changed → `clientWidth` changed.
+2. `isDirtyRef` was still `false` (no store write, no animation tick reason).
+3. `draw()` didn't fire → `canvas.width` (the WebGL drawingbuffer extent) stayed at the previous size.
+4. Browser stretched the old-resolution bitmap to fill the new CSS box → live distortion until the next mouse-move triggered a redraw.
+
+**Fix shape (two parts, both shipped):**
+
+1. [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) mounts a `ResizeObserver` on the canvas element. On every entry → flips `isDirtyRef.current = true`. The next rAF tick sees the dirty bit, calls `scenePass.draw`, and the existing resize block re-syncs the drawingbuffer.
+
+2. [`scenePass.draw`](../src/renderer/scenePass.js) drawingbuffer sync now multiplies by `devicePixelRatio` so the canvas renders at physical resolution on HiDPI displays (was rendering at logical-px and being upscaled by the browser → blurry on 2× monitors). The camera matrix and background grid still consume CSS-px dimensions (`logicalW/H`) since `editor.view.{zoom, panX, panY}` are stored in CSS px and need to compose with a CSS-px camera. The GL viewport uses physical px (`canvas.width/.height`).
+
+`gl.viewport(0, 0, canvas.width, canvas.height)` now hits every device pixel; `buildCameraMatrix(logicalW, logicalH, ...)` keeps the projection consistent with the CSS-px input axes. Export path (`captureExportFrame`) is unaffected — it runs with `skipResize: true` and pan/zoom in export-px units, which `logicalW = canvas.width` already covers.
+
+**Files touched:**
+- [src/components/canvas/CanvasViewport.jsx](../src/components/canvas/CanvasViewport.jsx) — `ResizeObserver` effect (~14 LOC).
+- [src/renderer/scenePass.js](../src/renderer/scenePass.js) — DPR-aware drawingbuffer sync + `logicalW/H` separation between viewport (physical) and camera/bg (CSS).
+
+**Lesson.** A self-resizing renderer needs to be told the source-of-truth size has changed; otherwise the rAF gate masks the staleness as long as nothing else triggers a redraw. `ResizeObserver` on the actual canvas element (not the wrapper) is the cleanest signal — survives panel-resize drags, window resizes, and DPR-changing monitor switches in one binding.
+
+---
 
 ### ✅ BUG-006 — Breath warp squashes the whole head (and body angle / face angle leaked too)
 

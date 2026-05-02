@@ -38,16 +38,29 @@ import {
   MinusCircle,
   Bone,
   Sparkles,
+  Circle,
 } from 'lucide-react';
 
 /**
  * @typedef {('select' | 'add_vertex' | 'remove_vertex' | 'brush' | 'joint_drag')} ToolModeId
  *
+ * Three button kinds:
+ *   - `tool`     — sticky, writes to `editorStore.toolMode`. Mutually
+ *                   exclusive within the mode list.
+ *   - `operator` — momentary, fires a v3 registry operator on click.
+ *                   Active state never sticks.
+ *   - `toggle`   — sticky boolean orthogonal to the active tool.
+ *                   `toggleId` names the preference slot the toolbar
+ *                   reads/writes (see `CanvasToolbar`'s switch). Used
+ *                   for state that stacks on top of any tool, e.g.
+ *                   Blender's proportional-edit `O` mode.
+ *
  * @typedef {Object} ToolEntry
  * @property {string}                          id        - unique within the mode list
- * @property {'tool'|'operator'}               kind
+ * @property {'tool'|'operator'|'toggle'}      kind
  * @property {ToolModeId | string}             [toolModeId] - for kind='tool'
  * @property {string}                          [operatorId] - for kind='operator'
+ * @property {string}                          [toggleId]   - for kind='toggle'
  * @property {string}                          label
  * @property {React.ComponentType<any>}        icon
  * @property {string}                          [hotkey]   - display only
@@ -121,6 +134,16 @@ export const TOOLS_BY_MODE = {
       label: 'Remove Vertex',
       icon: MinusCircle,
       hint: 'Click to remove the nearest vertex',
+    },
+    {
+      id: 'proportionalEdit',
+      kind: 'toggle',
+      toggleId: 'proportionalEdit',
+      label: 'Proportional Edit',
+      icon: Circle,
+      hotkey: 'O',
+      hint: 'Drag pulls neighbours along (Shift+O cycles falloff curve, Alt+O toggles connected-only, Ctrl+[/] resize radius)',
+      divider: true,
     },
   ],
 

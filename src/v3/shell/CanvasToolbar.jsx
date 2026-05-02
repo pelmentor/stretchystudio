@@ -28,8 +28,29 @@
  */
 
 import { useEditorStore } from '../../store/editorStore.js';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
 import { getOperator } from '../operators/registry.js';
 import { toolsFor } from './canvasToolbar/tools.js';
+
+/**
+ * Toggle registry. Maps a `toggleId` (declared by `kind: 'toggle'`
+ * tool entries in `tools.js`) to its read/write hooks. Each entry is
+ * resolved at button-render time using the current store snapshot
+ * passed in by the toolbar.
+ *
+ * Adding a new toggle: bind another `toggleId` here and ensure the
+ * toolbar component subscribes to the relevant store slice so the
+ * button re-renders when the underlying preference flips.
+ */
+const TOGGLES = {
+  proportionalEdit: {
+    isActive: ({ peEnabled }) => !!peEnabled,
+    toggle: () => {
+      const cur = usePreferencesStore.getState().proportionalEdit ?? {};
+      usePreferencesStore.getState().setProportionalEdit({ enabled: !cur.enabled });
+    },
+  },
+};
 
 function ToolButton({ entry, active, onClick, disabled }) {
   const Icon = entry.icon;
@@ -65,6 +86,12 @@ export function CanvasToolbar() {
   const toolMode = useEditorStore((s) => s.toolMode);
   const setToolMode = useEditorStore((s) => s.setToolMode);
 
+  // Subscribe to preference slices that any `kind: 'toggle'` entry
+  // reads. The selector returns a primitive so Zustand's default
+  // shallow check correctly skips re-renders when the flag is stable.
+  const peEnabled = usePreferencesStore((s) => s.proportionalEdit?.enabled ?? false);
+  const toggleCtx = { peEnabled };
+
   const tools = toolsFor(editMode);
   if (!tools || tools.length === 0) return null;
 
@@ -84,6 +111,19 @@ export function CanvasToolbar() {
       } catch (err) {
         console.error(`[CanvasToolbar] operator ${entry.operatorId} failed`, err);
       }
+      return;
+    }
+    if (entry.kind === 'toggle' && entry.toggleId) {
+      const t = TOGGLES[entry.toggleId];
+      if (!t) {
+        console.warn(`[CanvasToolbar] no handler for toggle "${entry.toggleId}"`);
+        return;
+      }
+      try {
+        t.toggle();
+      } catch (err) {
+        console.error(`[CanvasToolbar] toggle ${entry.toggleId} failed`, err);
+      }
     }
   }
 
@@ -96,10 +136,16 @@ export function CanvasToolbar() {
       aria-label="Canvas toolbar"
     >
       {tools.map((entry) => {
-        const active = entry.kind === 'tool' && entry.toolModeId === toolMode;
+        let active = false;
+        if (entry.kind === 'tool') {
+          active = entry.toolModeId === toolMode;
+        } else if (entry.kind === 'toggle' && entry.toggleId) {
+          const t = TOGGLES[entry.toggleId];
+          active = t ? !!t.isActive(toggleCtx) : false;
+        }
         // Disable operator buttons whose operator isn't available
         // (e.g. transform.translate when nothing is selected). Tool
-        // buttons are always clickable.
+        // and toggle buttons are always clickable.
         let disabled = false;
         if (entry.kind === 'operator' && entry.operatorId) {
           const op = getOperator(entry.operatorId);
