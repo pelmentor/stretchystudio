@@ -36,34 +36,31 @@ When animations exist, exports a ZIP containing both `.cmo3` (model) and `.can3`
 
 ## Code Structure
 
-All export code is in `src/io/live2d/`:
+All export code is in `src/io/live2d/`. Top-level entry points + orchestrator (`cmo3writer.js`, `moc3writer.js`, `can3writer.js`) are thin after sweeps #24–#50; the real work lives in helper modules under `cmo3/`, `can3/`, and `rig/` (data layer) + `runtime/` (in-app evaluator).
 
-| File | Purpose |
-|------|---------|
+| File / dir | Purpose |
+|------------|---------|
 | `exporter.js` | Main orchestrator: `exportLive2D()` (runtime) + `exportLive2DProject()` (project) |
-| `moc3writer.js` | .moc3 binary writer (V4.00, 100+ sections) |
-| `cmo3writer.js` | .cmo3 XML orchestrator (textures, parts, per-mesh rig warps, CArtMeshSource, main.xml assembly) |
-| `cmo3/constants.js` | VERSION_PIS, IMPORT_PIS, filter / deformer-root UUIDs |
-| `cmo3/pngHelpers.js` | Raw PNG synthesis + P12 alpha-bottom contour extraction |
-| `cmo3/deformerEmit.js` | Shared warp/keyform emit helpers (structural warps, KeyformBindings, uniform grids) |
-| `cmo3/bodyRig.js` | `emitNeckWarp` + `emitFaceRotation` |
-| `cmo3/faceParallax.js` | `emitFaceParallax` — protected regions, A.3/A.6b, `computeFpKeyform`, eye amp (#3), far-eye squash (#5), symmetrizeKeyform |
+| `moc3writer.js` | .moc3 binary writer (V4.00, 100+ sections; reduced ~70% via sweep splits — most logic in `moc3/*` helpers) |
+| `cmo3writer.js` | .cmo3 XML orchestrator (reduced ~76%; helpers in `cmo3/*`) |
+| `cmo3/*` | ~30 helper modules: `mainXmlBuilder.js`, `perPartRigWarps.js`, `artMeshSourceEmit.js`, `caffPack.js`, `bodyChainEmit.js`, `meshLayer.js`, `meshLayerKeyform.js`, `eyeContexts.js` / `eyeClosureFit.js` / `eyeClosureApply.js` / `eyeTags.js` (eye pipeline), `globalSetup.js`, `groupWorldMatrices.js`, `maskResolve.js`, `paramCategories.js`, `partHierarchy.js`, `physics.js`, `rigWarpTags.js`, `rotationDeformerEmit.js`, `structuralChainEmit.js`, `meshVertsWarp.js`, `modelImageGroup.js`, `pngHelpers.js`, `deformerEmit.js`, `bodyRig.js`, `faceParallax.js`, `constants.js`, `emitContext.js` |
+| `can3writer.js` | .can3 XML orchestrator (reduced ~86%; helpers in `can3/*`: `keyframeSequence.js`, `trackAttrs.js`, `sceneEmit.js`, `finalize.js`, `constants.js`) |
 | `bodyAnalyzer.js` | Torso/head bbox analysis driving body-warp grid |
-| `can3writer.js` | .can3 XML generator (animation scenes, parameter keyframes) |
+| `rig/*` | Native rig data layer (v1 + v2 SHIPPED) — `rigSpec.js`, `paramSpec.js`, `bodyWarp.js`, `faceParallaxBuilder.js`, `tagWarpBindings.js`, `rigWarpsStore.js`, `bodyWarpStore.js`, `faceParallaxStore.js`, `rotationDeformerConfig.js`, `physicsConfig.js`, `boneConfig.js`, `maskConfigs.js`, `eyeClosureConfig.js`, `variantFadeRules.js`, `autoRigConfig.js`, `initRig.js` |
+| `runtime/evaluator/*` | In-app native rig evaluator (v2 R0–R10 SHIPPED) — `chainEval.js`, `cubismWarpEval.js` (port; BUG-014-fixed), `warpEval.js`, `rotationEval.js`, `cubismRotationEval.js` (historical, unused), `artMeshEval.js`, `cellSelect.js` |
+| `runtime/physicsTick.js` | Cubism pendulum physics |
 | `xmlbuilder.js` | Shared XML builder for .cmo3 and .can3 generators |
 | `caffPacker.js` | CAFF archive packer (XOR obfuscation, ZIP compression) |
-| `model3json.js` | .model3.json manifest generator |
-| `cdi3json.js` | .cdi3.json display info generator |
-| `motion3json.js` | .motion3.json animation generator |
+| `model3json.js` / `cdi3json.js` / `motion3json.js` / `physics3json.js` | Runtime JSON generators |
 | `textureAtlas.js` | MaxRects BSSF atlas packer with auto-upscale |
 
-UI integration: `src/components/export/ExportModal.jsx`
+UI integration is now under the v3 shell — Export modal lives in `src/store/exportModalStore.js` + the file's `file.export` operator opens it; the modal component itself is mounted at AppShell level.
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [AUTO_RIG_PLAN.md](AUTO_RIG_PLAN.md) | **Live roadmap** — per-phase evidence log for the auto-rig pipeline; authoritative source for current work |
+| [AUTO_RIG_PLAN.md](AUTO_RIG_PLAN.md) | ARCHIVED 2026-05-02 — historical post-Session-20 design analysis. Current auto-rig direction lives in [CUBISM_WARP_PORT.md](CUBISM_WARP_PORT.md) + [BUGS.md](../BUGS.md) + memory notes |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design decisions, data mapping, keyform binding system |
 | [MOC3_FORMAT.md](MOC3_FORMAT.md) | .moc3 binary format reference (incl. compile-time field semantics that aren't in cmo3 XML) |
 | [RUNTIME_PARITY_PLAN.md](RUNTIME_PARITY_PLAN.md) | Status of `.moc3` direct emission vs Cubism Editor's "Export For Runtime" — what's at parity, what's still cosmetic-gap |
@@ -73,7 +70,7 @@ UI integration: `src/components/export/ExportModal.jsx`
 | `SESSION_NN_FINDINGS.md` | Per-session post-mortems (Session 23–current): root causes, bug lessons, decision trails |
 | [research/](research/) | Study notes on papers that informed the 2D→pseudo-3D parallax approach |
 | [head-angle-x-technique/](head-angle-x-technique/) | RE notes on Hiyori's AngleX technique (contains a post-mortem of a rejected RotationDeformer interpretation) |
-| `../../scripts/moc3_inspect*.py` | Section-by-section moc3 dumpers (top-level / rotation / warp / mesh) used to diff against Cubism's "Export For Runtime" output when chasing rendering bugs |
+| `../../scripts/dev-tools/moc3_inspect*.py` | Section-by-section moc3 dumpers (top-level / rotation / warp / mesh) used to diff against Cubism's "Export For Runtime" output when chasing rendering bugs |
 
 ## Data Mapping
 

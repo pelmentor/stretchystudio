@@ -27,22 +27,24 @@ Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve cust
 
 - **Severity:** medium · **Reported:** 2026-05-02 · **Phase A SHIPPED:** 2026-05-02
 
+> **Post-rework note (2026-05-02 same day):** the workspace rework that landed later the same day **deleted `src/v3/shell/workspaceViewportPolicy.js` + `test_workspaceViewportPolicy.mjs`** entirely. Workspaces are now layout-only — they no longer filter `viewLayers` at consumption time. Every consumer (`scenePass`, `CanvasViewport`, `CanvasArea`, `ViewLayersPopover`) now reads `editorStore.viewLayers` directly. The single-`viewLayers`-map outcome of GAP-016 survived; only the policy filter went away. Lines below referencing the policy module are historical.
+
 **Phase A — fix.** New [`src/v3/shell/ViewLayersPopover.jsx`](../src/v3/shell/ViewLayersPopover.jsx) — single popover in the viewport's top-right toolbar (left of the Reset Pose button) lists every overlay/visualization toggle grouped by Mesh / Rig / Edit, plus three preset buttons (Clean / Modeling / Diagnostics).
 
-State source of truth is now `editorStore.viewLayers` — one map replacing the prior split between `editorStore.overlays.*` (display flags) and the standalone `editorStore.showSkeleton` boolean. Two new layers (`warpGrids`, `rotationPivots`) gate the WarpDeformerOverlay and RotationDeformerOverlay in [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx) — previously rendered unconditionally in edit mode. Edit-mode flags (`meshEditMode`, `skeletonEditMode`, `blendShapeEditMode`) stay separate because they're behavioural, not display.
+State source of truth is now `editorStore.viewLayers` — one map replacing the prior split between `editorStore.overlays.*` (display flags) and the standalone `editorStore.showSkeleton` boolean. Two new layers (`warpGrids`, `rotationPivots`) gate the WarpDeformerOverlay and RotationDeformerOverlay in [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx) — previously rendered unconditionally in edit mode. The prior `meshEditMode/skeletonEditMode/blendShapeEditMode` triple was later collapsed into the single `editorStore.editMode` slot (workspace rework, same day).
 
-Workspace policy ([`workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js)) filters `viewLayers` at consumption time instead of mutating it — flipping back to a permissive workspace restores the user's prior toggles automatically. `setViewLayers({skeleton:false})` also drops the user out of skeleton-edit mode (matches prior `setShowSkeleton(false)` behaviour).
+Originally `workspaceViewportPolicy.js` filtered `viewLayers` at consumption time so workspaces could suppress mesh/rig overlays. The workspace rework deleted that module — workspaces are layout-only now (Blender pattern); every viewer reads `editorStore.viewLayers` directly. `setViewLayers({skeleton:false})` still drops the user out of skeleton-edit mode (matches prior `setShowSkeleton(false)` behaviour).
 
 **Migration touched:**
 - New: [`ViewLayersPopover.jsx`](../src/v3/shell/ViewLayersPopover.jsx)
 - [`editorStore.js`](../src/store/editorStore.js) — `overlays` + `showSkeleton` collapsed into `viewLayers` map; `setOverlays` + `setShowSkeleton` replaced by `setViewLayers`
-- [`workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js) — accepts `viewLayers`, returns `{viewLayers, meshEditMode}`
+- ~~`workspaceViewportPolicy.js`~~ — initially refactored to accept `viewLayers`, then **deleted entirely** in the workspace rework later the same day
 - [`scenePass.js`](../src/renderer/scenePass.js) — reads `editor.viewLayers.{image,wireframe,vertices,edgeOutline,irisClipping}`
 - [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — reads `editorState.viewLayers.skeleton`; wizard handlers call `setViewLayers({skeleton:…})`
 - [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx) — gates WarpDeformerOverlay on `viewLayers.warpGrids`, RotationDeformerOverlay on `viewLayers.rotationPivots`, mounts the popover (edit Viewport only)
 - [`captureExportFrame.js`](../src/components/canvas/viewport/captureExportFrame.js) — mock-editor uses the new shape (every layer except `image` + `irisClipping` stripped for clean frame export)
 
-**Test coverage:** `test:workspaceViewportPolicy` 57/57, `test:editorStore` 42/42, `test:livePreviewWiring` 36/36, full `npm test` suite green. `npx tsc --noEmit` clean.
+**Test coverage at GAP-016 ship time:** `test:workspaceViewportPolicy` 57/57, `test:editorStore` 42/42, `test:livePreviewWiring` 36/36. The first of those was deleted alongside the policy module hours later; the latter two are still green at higher case counts (`test:editorStore` 61/61, `test:livePreviewWiring` 24/24 as of 2026-05-02 evening). Full `npm test` suite green; `npx tsc --noEmit` clean.
 
 **Phase B SHIPPED 2026-05-02 (named user presets):**
 - New [`preferencesStore.viewLayerPresets`](../src/store/preferencesStore.js): `Record<string, ViewLayers>`, persisted to localStorage as `v3.prefs.viewLayerPresets`. Setters: `setViewLayerPreset(name, layers)` (overwrite-on-conflict, empty-name no-op) and `deleteViewLayerPreset(name)`.

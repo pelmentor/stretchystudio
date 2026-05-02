@@ -103,6 +103,8 @@ Executing.
 
 ## Browser-test checklist (post-execution)
 
+> The empty `[ ]` checkboxes below are intentional — they were never marked off in the original ship. Reading them as "unverified" is misleading: the user verified the behaviour in-app on 2026-05-02 ("ModePill works", "Tab works", etc.) and the contract is locked by automated tests (`test_uiV3Store` 47/47 walks editMode + editorMode persistence across every workspace pair; `test_v3Operators` 63/63 covers `mode.editToggle` toast paths; `test_EditorModeService` 11/11). Treat the list as the **acceptance script** the rework was designed against, not as outstanding TODOs.
+
 - [ ] Topbar shows 3 workspace pills (Edit / Pose / Animation)
 - [ ] Old saved project with `activeWorkspace: 'modeling'` loads into Edit workspace cleanly
 - [ ] Mode pill visible top-left of canvas in Edit workspace
@@ -114,3 +116,15 @@ Executing.
 - [ ] Pose workspace: same behaviour, timeline hidden, animation editorMode active
 - [ ] Animation workspace: same behaviour, timeline visible
 - [ ] Layers popover no longer has the Edit Mode section; only visualization toggles
+
+## Post-ship addendum (same day, 2026-05-02)
+
+Same-day work that landed under the workspace-rework umbrella but isn't tracked above:
+- BUG-019 wireframe rendering fix (separate edge-pair `wireIbo` in `partRenderer`).
+- ModePill `Lock Object Modes` checkbox in footer (preference moved out of ViewLayersPopover).
+- `EditorModeService` wraps `setEditorMode` so `captureRestPose` fires on staging→animation transition regardless of caller (Topbar pill, AnimationsEditor "create animation").
+- Topbar Setup⇄Animate pill made independent of workspace switches — three axes (`activeWorkspace` / `editorMode` / `editMode`) now genuinely orthogonal.
+
+Adjacent same-day plans, separately tracked:
+- [CLICK_TO_SELECT_PLAN.md](CLICK_TO_SELECT_PLAN.md) — SHIPPED (triangle hit-test against rig frames).
+- [TOOLBAR_PLAN.md](TOOLBAR_PLAN.md) — SHIPPED (Blender T-panel canvas toolbar).

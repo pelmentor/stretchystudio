@@ -1,14 +1,23 @@
 # Stretchy Studio v3 — Blender-style Full UX Refactor Plan
 
-> **Status:** Living document. Authored 2026-04-28. Will be edited as work
-> progresses, decisions land, and unknowns resolve. Mark sections with
-> `**[STATUS: …]**` when locked in or rejected.
+> **Status:** ARCHIVED 2026-05-02 — historical reference only. Phases 0–6 + sweeps #1–#50 shipped (god-class splits) + workspace rework + edit-mode refactor + click-to-select + canvas toolbar + ModePill all landed. Body below is the original 2026-04-28 plan and is no longer kept in sync with the code.
 >
-> **Anchor commit:** TBD — record the `pre-v3-refactor` tag here
-> once created (after Phase -1 ships).
+> **Successor docs (current):**
+> - [V3_WORKSPACES.md](V3_WORKSPACES.md) — live workspace / editMode / toolbar / click-to-select contract
+> - [BUGS.md](BUGS.md) / [FEATURE_GAPS.md](FEATURE_GAPS.md) — running task lists
+> - [WORKSPACE_MODE_REWORK_PLAN.md](WORKSPACE_MODE_REWORK_PLAN.md) — 5→3 workspace collapse + single-slot `editorStore.editMode` decision record
+> - [CLICK_TO_SELECT_PLAN.md](CLICK_TO_SELECT_PLAN.md) / [TOOLBAR_PLAN.md](TOOLBAR_PLAN.md) — both SHIPPED 2026-05-02
+> - Memory entries under `~/.claude/projects/.../memory/` for per-sweep details
 >
-> **Branch strategy:** Long-lived `v3` branch off `master`. Killswitch
-> `?ui=v3` URL flag toggles new shell. Old shell untouched until Phase 6.
+> **Known stale references in the body below** (don't rely on them):
+> - "5 workspaces (Layout / Modeling / Rigging / Pose / Animation)" — actually 3 (Edit / Pose / Animation) since 2026-05-02. `Ctrl+Digit1..3` not 1..5.
+> - `src/v3/shell/WorkspaceTabs.jsx` — file deleted; replaced by [`Topbar.jsx`](../src/v3/shell/Topbar.jsx).
+> - `src/v3/shell/workspaceViewportPolicy.js` + `test_workspaceViewportPolicy.mjs` — both deleted; workspaces are layout-only.
+> - `editorStore.blendShapeEditMode` / `meshEditMode` / `skeletonEditMode` flags — collapsed into single `editorStore.editMode` slot.
+> - `src/store/undoStore.js` — actual file is [`src/store/undoHistory.js`](../src/store/undoHistory.js).
+> - Test file paths in prose — actual location is `scripts/test/test_*.mjs` (the `test:*` package.json script names are still correct).
+>
+> Below this banner is the **original plan body**, preserved verbatim as historical context for sweep ordering, design-decision rationale, and bug post-mortems.
 
 ---
 

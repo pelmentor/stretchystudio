@@ -1,5 +1,7 @@
 # 🧬 Stretchy Studio
 
+> **STALE 2026-05-02.** Marketing/onboarding copy, frozen at the M5 timeline-first era. Project structure / mode-system / feature claims below describe pre-v3 state. For the current shape (3 workspaces, single-slot edit mode, ModePill, canvas toolbar, click-to-select, native rig evaluator) start with [V3_WORKSPACES.md](V3_WORKSPACES.md), [PROJECT_DATA_LAYER.md](PROJECT_DATA_LAYER.md), and [live2d-export/README.md](live2d-export/README.md).
+
 **Stretchy Studio** is a high-performance 2D animation tool designed for illustrators and animators. It streamlines the workflow from static 2D artwork (PSD/PNG) to fully realized, mesh-deformable animations and spritesheets.
 
 Unlike traditional bone-based systems, Stretchy Studio focuses on a **timeline-first, direct-deformation workflow** reminiscent of After Effects, providing a lower learning curve while maintaining professional-grade flexibility.

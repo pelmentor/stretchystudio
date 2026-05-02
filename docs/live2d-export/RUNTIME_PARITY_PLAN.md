@@ -1,5 +1,11 @@
 # Runtime export parity plan
 
+> **ARCHIVED 2026-05-02** — full parity shipped 2026-04-26 via the binary-diff parity pass against Cubism Editor's "Export For Runtime" output. The "Already shipped" sections below remain accurate; the **"Still broken"**, **"Phased rollout (A/B/C/D)"**, and **"Open questions"** sections at the bottom of this file are stale — they predate the parity pass and describe work that has since landed. Don't action items from those sections.
+>
+> Inspector script paths in this doc point at `scripts/moc3_inspect*.py`; the actual location is `scripts/dev-tools/moc3_inspect*.py`.
+>
+> Current parity status: model loads, deforms (warp + rotation + variant fade + 2D eye compound + clip masks), blinks, tracks cursor, no warnings. Memory note: `project_runtime_export_parity.md`. Open numerical residuals (Cubism warp port Phase 2b / BUG-003 AngleZ peak) are tracked in [CUBISM_WARP_PORT.md](CUBISM_WARP_PORT.md).
+
 ## Goal
 
 Make `exportLive2D` (the runtime path that produces `.moc3` + `.model3.json` +

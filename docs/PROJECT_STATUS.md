@@ -1,5 +1,14 @@
 # Stretchy Studio — Project Overview & Status
 
+> **ARCHIVED 2026-05-02** — frozen at the M6 timeline-first design (2026-04-12). The project pivoted to a Live2D-first pipeline shortly after this snapshot, then refactored the entire shell along Blender-style v3 architecture. This file is preserved as the historical record of the timeline-export milestone path. **It does NOT reflect what shipped after 2026-04-12** — the parameter / warp-deformer / 2D-keyform / Cubism Editor parity / native runtime evaluator / 3-workspace shell / single-slot edit mode / canvas toolbar / click-to-select / etc. all landed since.
+>
+> Current status is distributed across:
+> - [V3_WORKSPACES.md](V3_WORKSPACES.md) — live workspace + editMode + toolbar + click-to-select contract
+> - [BUGS.md](BUGS.md) / [FEATURE_GAPS.md](FEATURE_GAPS.md) — running task lists (status snapshot at top of each)
+> - [PROJECT_DATA_LAYER.md](PROJECT_DATA_LAYER.md) — 10 integrity-hole detection-side
+> - [live2d-export/CUBISM_WARP_PORT.md](live2d-export/CUBISM_WARP_PORT.md) — runtime kernel-port progress (Phase 0/1/2a/3 shipped; 2b blocked)
+> - Memory entries under `~/.claude/projects/.../memory/` for per-sweep history.
+
 **Last Updated:** 2026-04-12 · **Current Phase:** M6 Save/Load Project · **Next Phase:** M7 Spritesheet Export
 
 ---

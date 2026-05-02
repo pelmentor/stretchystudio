@@ -2,6 +2,19 @@
 
 ## Status
 
+> **ARCHIVED 2026-05-02** — both v1 (15 stages, ending 2026-04-27) and v2 (11 stages, ending 2026-04-28) fully shipped. Final test count 1339+ at schema v10. The body below is preserved verbatim as the historical decision record + per-stage shipping log. Subsequent stale-claim notes:
+>
+> - **`src/components/parameters/ParametersPanel.jsx` (Stage 1b) is gone** — replaced by `src/v3/editors/parameters/ParametersEditor.jsx` + `ParamRow.jsx` after the v3 shell migration.
+> - **`src/app/layout/EditorLayout.jsx` is gone** — v3 AppShell + AreaTree replaced it.
+> - Test paths in prose use `scripts/test_*.mjs`; actual location is `scripts/test/test_*.mjs`. The `npm run test:*` script names are still valid.
+> - "Open questions remaining" (~L1888) and "Two structural gaps R1 must close" (~L2009) describe work that R0/R1 already closed at ship time.
+> - Risk language in the v2 stage table (HIGH/Med severity at ~L2134) was scoped to pre-ship planning; both v1 and v2 are merged and stable.
+>
+> Living-status docs that have replaced this one for current work:
+> - [CUBISM_WARP_PORT.md](CUBISM_WARP_PORT.md) — kernel-port progress (Phase 0/1/2a/3 shipped; 2b blocked on rotation-matrix-structure refactor)
+> - [BUGS.md](../BUGS.md) — current open / fixed bugs
+> - [V3_WORKSPACES.md](../V3_WORKSPACES.md) — workspace + editMode + toolbar contract
+
 Living tracker. Update on every stage transition.
 
 | Stage | Description | Status |

@@ -205,7 +205,7 @@ for (i = 0; i < n; i++) {
 
 > **The cmo3 XML doesn't directly carry every moc3 binary value.** Cubism Editor patches several fields on compile based on context (parent type, parameter ordering, etc.). Generating .moc3 directly without these transforms produces files that load but render incorrectly.
 >
-> Verified by byte-diffing a Cubism Editor "Export For Runtime" against our direct .moc3 emission for the same `.cmo3`. See `scripts/moc3_inspect.py`, `moc3_inspect_rot.py`, `moc3_inspect_warp.py`, `moc3_inspect_mesh.py` for the dumpers used to find these.
+> Verified by byte-diffing a Cubism Editor "Export For Runtime" against our direct .moc3 emission for the same `.cmo3`. See `scripts/dev-tools/moc3_inspect.py`, `moc3_inspect_rot.py`, `moc3_inspect_warp.py`, `moc3_inspect_mesh.py` for the dumpers used to find these.
 
 ### `rotation_deformer_keyform.scales` — frame conversion factor `[empirical]`
 
@@ -249,10 +249,10 @@ When a runtime moc3 loads but renders incorrectly, the fastest path to root caus
 
 1. Open the .cmo3 in Cubism Editor and "File → Export For Runtime" — produces a reference .moc3 that's known-good.
 2. Run our writer on the same project → reference and ours side by side.
-3. `python3 scripts/moc3_inspect.py <path>` for top-level structure (counts, parts, deformers, parameters, art meshes, bindings, bands).
-4. `python3 scripts/moc3_inspect_rot.py <path>` for rotation deformer keyform values labelled by deformer id.
-5. `python3 scripts/moc3_inspect_warp.py <path> [name-filter]` for warp grid keyform positions.
-6. `python3 scripts/moc3_inspect_mesh.py <path> [parent-deformer-filter]` for art-mesh keyform vertex bboxes.
+3. `python3 scripts/dev-tools/moc3_inspect.py <path>` for top-level structure (counts, parts, deformers, parameters, art meshes, bindings, bands).
+4. `python3 scripts/dev-tools/moc3_inspect_rot.py <path>` for rotation deformer keyform values labelled by deformer id.
+5. `python3 scripts/dev-tools/moc3_inspect_warp.py <path> [name-filter]` for warp grid keyform positions.
+6. `python3 scripts/dev-tools/moc3_inspect_mesh.py <path> [parent-deformer-filter]` for art-mesh keyform vertex bboxes.
 
 Any field that diverges between the dumps is suspect. Group-by-parent-type before assuming a single fix — e.g. "all rotations under warps differ but rotations under rotations match" pointed straight at the `scales` field.
 

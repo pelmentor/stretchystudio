@@ -48,7 +48,7 @@ User decision **2026-04-30**: stop incremental patches; do a port. No crutches.
 | **moc3 binary spec** | moc3ingbird community RE (memory: `reference_moc3_resources.md`) | Layout cross-check |
 | **Cubism Web Framework** | github.com/Live2D/CubismWebFramework | Wrappers / calling conventions, NOT eval (eval lives in closed core) |
 | **Existing v3 evaluator** | [src/io/live2d/runtime/evaluator/](../../src/io/live2d/runtime/evaluator/) | What's being replaced |
-| **moc3 inspectors** | [scripts/moc3_inspect*.py](../../scripts/) | Verifying our exported moc3 vs reference at byte level |
+| **moc3 inspectors** | [scripts/dev-tools/moc3_inspect*.py](../../scripts/dev-tools/) | Verifying our exported moc3 vs reference at byte level |
 
 **Hiyori is intentionally excluded** from this work — user already validated
 moc3 byte-parity against Hiyori (memory: `project_runtime_export_parity.md`),
@@ -101,11 +101,11 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 **Tasks:**
 
-- [ ] **Oracle harness** at `scripts/cubism_oracle/`:
+- [x] **Oracle harness** at `scripts/cubism_oracle/`:
   - Pull Cubism Web SDK's `Live2DCubismCore.js` into the project (or reference via local path — no npm dep)
   - Write a Node/browser script: load `New Folder_cubism\shelby.moc3` → set params from a fixture table → dump `csmGetDrawableVertexPositions` per drawable → write `.json` snapshot per param value
   - This is the ground truth for every subsequent phase's "is this port correct" check
-- [ ] Locate Cubism Core binary. Targets in priority order:
+- [x] Locate Cubism Core binary. Targets in priority order:
   1. **Cubism SDK for Native 5** at `C:\Live2D Cubism 5.0 SDK for Native\Core\dll\windows\x86_64\Live2DCubismCore.dll` (or wherever user installed) — public DLL, public header `Live2DCubismCore.h` gives struct layouts and signatures, IDA handles cleanly
   2. **Cubism Web SDK** `.wasm` — `Live2DCubismCore.wasm`. Often a *better* RE target than the DLL because:
      - Typed function signatures survive stripping (WASM keeps types in the binary)
@@ -113,13 +113,13 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
      - Smaller code surface — `wabt`/`wasm2wat` produces readable text
      - If DLL is too messy, fall back to WASM
   3. **Cubism Editor binary** — last resort; the editor likely statically links or dynamically loads its own copy of the core, so it's the same algorithm but harder to isolate from editor surrounding code
-- [ ] Open chosen binary in IDA. Anchor the graph from public exports (`csmGetVersion`, `csmInitializeAmountOfMemory`, `csmReviveMocInPlace`, `csmGetSizeofModel`, `csmInitializeModelInPlace`, `csmUpdateModel`, `csmGetDrawableVertexPositions`).
-- [ ] Identify the **inner per-deformer math functions** — these are what we port, NOT `csmUpdateModel` (we already have our own chain orchestrator):
+- [x] Open chosen binary in IDA. Anchor the graph from public exports (`csmGetVersion`, `csmInitializeAmountOfMemory`, `csmReviveMocInPlace`, `csmGetSizeofModel`, `csmInitializeModelInPlace`, `csmUpdateModel`, `csmGetDrawableVertexPositions`).
+- [x] Identify the **inner per-deformer math functions** — these are what we port, NOT `csmUpdateModel` (we already have our own chain orchestrator):
   - Warp deformer apply (per-vertex bilinear math + boundary handling)
   - Rotation deformer apply (per-vertex matrix math + parent-frame conversion)
   - Mesh keyform interpolation (per-vertex blend across keyform tuple)
   - Parameter blend → cell weights (cellSelect equivalent)
-- [ ] Map struct layouts using public `Live2DCubismCore.h` as starting point — that header gives us `csmModel`, `csmModelInfo`, drawable arrays, parameter arrays. The internal `csmDeformer` / `csmKeyform` structs are private but moc3ingbird community spec (memory `reference_moc3_resources.md`) covers the binary layout.
+- [x] Map struct layouts using public `Live2DCubismCore.h` as starting point — that header gives us `csmModel`, `csmModelInfo`, drawable arrays, parameter arrays. The internal `csmDeformer` / `csmKeyform` structs are private but moc3ingbird community spec (memory `reference_moc3_resources.md`) covers the binary layout.
 
 **Output of Phase 0:**
 
@@ -138,17 +138,17 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 **Tasks:**
 
-- [ ] Pull IDA pseudocode of the warp-deformer apply function. Capture:
+- [x] Pull IDA pseudocode of the warp-deformer apply function. Capture:
   - Input arguments (deformer index, parent vertex array, output vertex array, parameter values)
   - Local variables / loops
   - Cell index calculation (the equivalent of our `i = floor(u * cols)`)
   - Boundary handling (clamp / extrapolate / cutoff — answer the question my BUG-006 fix guessed at)
   - Bilinear weight formula (is it the simple `(1-u)(1-v)` form? or are weights cached per cell?)
   - Whether keyform blending happens in the same function (single pass) or pre-computed (the deformed grid is read pre-blended)
-- [ ] Translate to JS — direct line-by-line from the pseudocode, no "improvements"
-- [ ] Wire into `chainEval`: replace the `state.kind === 'warp'` branch (lines 139-167)
-- [ ] Run oracle harness with the diagnostic params; numeric diff `(cubism vertex - v3 vertex)` should be < ~0.01 px max
-- [ ] Pin the verified port with regression test fixtures (Phase 0's snapshots become locked-in baselines)
+- [x] Translate to JS — direct line-by-line from the pseudocode, no "improvements"
+- [x] Wire into `chainEval`: replace the `state.kind === 'warp'` branch (lines 139-167)
+- [x] Run oracle harness with the diagnostic params; numeric diff `(cubism vertex - v3 vertex)` should be < ~0.01 px max
+- [x] Pin the verified port with regression test fixtures (Phase 0's snapshots become locked-in baselines)
 
 **Notes for the porter:**
 
@@ -161,7 +161,7 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 - Cubism may use SSE/AVX. JS has no SIMD by default — port semantically (write the scalar version of what SIMD did), accept the perf hit (eval is per-frame on small mesh counts; scalar JS is fast enough)
 - The "outside-bbox" question may turn out to be neither "extrapolate" nor "cutoff" — could be a smooth attenuation, or a specific weight clamp, or the question may not even arise (Cubism might never let an out-of-bbox vertex reach the warp because it pre-rejects in the chain walk)
 
-**Status:** ⏳ Blocked on Phase 0.
+**Status:** ✅ Done 2026-05-01 — kernel ported byte-faithfully via [`cubismWarpEval.js`](../../src/io/live2d/runtime/evaluator/cubismWarpEval.js); `chainEval`'s warp branch swaps to `evalWarpKernelCubism`. Verified against the oracle harness; BUG-014 (bottom-band virtual-cell inversion) caught + fixed in the same kernel 2026-05-02.
 
 ---
 
@@ -273,7 +273,7 @@ The closed-form `_warpSlopeX/Y` happens to be a slightly more conservative appro
 - How does Cubism compose 1D vs 2D keyform grids (the cross-product cellSelect output)?
 - Are mesh keyforms in parent-deformer-local space already (matching our convention) or in some normalised intermediate?
 
-**Status:** ⏳ Blocked on Phase 1+2+3.
+**Status:** ⏳ Blocked on Phase 2b. Phase 1 and Phase 3 shipped; rotation FD-Jacobian Setup (Phase 2b) is the last upstream dependency.
 
 ---
 
@@ -288,7 +288,7 @@ The closed-form `_warpSlopeX/Y` happens to be a slightly more conservative appro
 - BUG-003 (Body Angle X/Y/Z), BUG-006 follow-up (residual warp issues), and any new bugs filed during Phases 1-4 all closed
 - Visual sanity check: side-by-side Cubism Viewer + v3 (Live Preview, GAP-010) on shelby, no obvious deviation across param scrubs
 
-**Status:** ⏳ Blocked on Phases 1-4.
+**Status:** ⏳ Blocked on Phase 2b + Phase 4 (artmesh eval port). Numeric harness + Phase 1 + Phase 3 results have already retired Phase 1's BUG-006 follow-ups; remaining residual is the BUG-003 AngleZ peak (17.73 px) tracked in Phase 2b.
 
 ---
 

@@ -15,9 +15,11 @@ the data-layer holes being closed.
 
 ## Status snapshot (2026-05-02)
 
-All 10 integrity holes have detection-side defences shipped (Phase A). Phase B
-follow-ups (UI delete-confirm, "preserve customisations" re-init, parameter
-editor surfaces) gate on the broader `project_v3_rerig_flow_gap` UI work.
+9 of 10 integrity holes have detection-side defences shipped (Phase A); I-2
+(binding param schema fingerprint) deferred — needs the parameter editor UI
+surface. Phase B follow-ups (UI delete-confirm, "preserve customisations"
+re-init, parameter editor surfaces) gate on the broader
+`project_v3_rerig_flow_gap` UI work.
 
 | Hole | Status | What ships |
 |------|--------|------------|

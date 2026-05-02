@@ -1,5 +1,9 @@
 # Auto-Rig Plan (post-Session 20)
 
+> **ARCHIVED 2026-05-02** — phases below have been substantially superseded by 2026-04 work: P0–P12 + A.1–A.6b auto-rig improvements, Sessions 23–36 export pipeline maturation, the native rig data refactor (v1: 15 stages + v2: 11 stages, schema v10), and the Cubism warp eval port (Phase 0/1/2a/3 shipped). The phase status column ("deferred" / "uncertain" for phases 1, 2, 4, 5, 6, 7) does NOT reflect what shipped. Line numbers in this doc that point inside `cmo3writer.js` are also stale — sweeps #24–#50 (commits `4e8ad18`, `c89a840`, `a46a1a7`, `b457053`, `19e9699`) split that file into ~30 helper modules under `src/io/live2d/cmo3/*` and `src/io/live2d/rig/*`.
+>
+> Use [CUBISM_WARP_PORT.md](CUBISM_WARP_PORT.md), [BUGS.md](../BUGS.md), and the per-character feedback memories (`feedback_clothing_physics_no_y.md`, `feedback_hair_scale_by_min_dim.md`, etc.) for current auto-rig direction. The body below is preserved as the historical post-Session-20 design analysis (the "30-vs-43-constants" audit + Hiyori-vs-waifu measurement that motivated the rebuild).
+
 ## Problem
 
 Auto-rig flag (`generateRig`) produces good results on Hiyori-like proportions
