@@ -304,17 +304,33 @@ export function evalWarpKernelCubism(grid, gridSize, isQuadTransform, vertsIn, v
       blx = tlx; bly = tly; brx = trx; bry = try_;
       tlx = sx0; tly = sy0; trx = sx1; try_ = sy1;
     } else if (vClass === 1 && uClass === 0) {
-      // Bottom band (0 < u < 1, v ≥ 1). Real cells on bottom row (v=1).
-      const blIdx = (vDivs * stride + uMidCell) * 2;
-      const brIdx = blIdx + 2;
-      blx = grid[blIdx]; bly = grid[blIdx + 1];
-      brx = grid[brIdx]; bry = grid[brIdx + 1];
+      // Bottom band (0 < u < 1, v ≥ 1).
+      // Cubism Core layout (verified vs IDA decompile of
+      // WarpDeformer_TransformTarget @ 0x7fff2b24d784):
+      //   - virtual TL/TR = REAL grid bottom row (boundary at v=1)
+      //   - virtual BL/BR = EXTRAPOLATED at v=3 (far below)
+      //   - dv = (v - 1) / 2  → v_in=1 → dv=0 (top of virtual cell = real,
+      //     boundary continuity); v_in=3 → dv=1 (bottom = extrap, far).
+      //
+      // Pre-fix this branch had the layout INVERTED (TL/TR=extrap,
+      // BL/BR=real) without the compensating top↔bottom swap that the
+      // top-band branch applies. The result was that vertices with
+      // v just past 1 (e.g. legwear at v=1.087) read the FAR-EXTRAP
+      // corners instead of the boundary, producing massive amplification
+      // — visible as "legwear stretched 2.5× canvas height below canvas
+      // after Init Rig" on shelby and the man-character (BUG-014). Phase
+      // 3 lifted-grid composition cascaded the bug through the body warp
+      // chain, multiplying the effect.
+      const blRowIdx = (vDivs * stride + uMidCell) * 2;
+      const brRowIdx = blRowIdx + 2;
+      tlx = grid[blRowIdx];     tly = grid[blRowIdx + 1];     // real BL of grid → virtual TL
+      trx = grid[brRowIdx];     try_ = grid[brRowIdx + 1];    // real BR of grid → virtual TR
       const uCellLeft = uMidCell / uDivs;
       const uCellRight = (uMidCell + 1) / uDivs;
       farFieldXY(cache, uCellLeft, 3.0, tmpA);
       farFieldXY(cache, uCellRight, 3.0, tmpB);
-      tlx = tmpA[0]; tly = tmpA[1];
-      trx = tmpB[0]; try_ = tmpB[1];
+      blx = tmpA[0]; bly = tmpA[1];                            // extrap at v=3 → virtual BL
+      brx = tmpB[0]; bry = tmpB[1];                            // extrap at v=3 → virtual BR
       du = u * uDivs - uMidCell;
       dv = (v - 1.0) / 2.0;          // v ∈ [1, 3] → dv ∈ [0, 1]
     } else if (uClass === -1 && vClass === 0) {

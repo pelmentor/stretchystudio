@@ -1,29 +1,17 @@
 /**
  * v3 — top header bar.
  *
- * Single-row layout modeled on upstream's EditorLayout header so
- * users land in a familiar visual language: bold "Stretchy Studio"
- * + boxed version badge on the left, a single bordered strip of
- * file actions (New / Save / Open / Export / Canvas Properties /
- * Settings), a centered workspace pill flanked by Undo/Redo, our
- * Hot Reload pill (ours-only), and the right-side gesture hint.
+ * Single-row layout: left → bold "Stretchy Studio" + version badge
+ * + file action strip (New / Save / Open / Export / Canvas Props /
+ * Settings); center → workspace pills (Edit / Pose / Animation),
+ * Setup⇄Animate pill, Undo / Redo, Hot Reload pill; right → gesture
+ * hints + Reset Pose.
  *
- * The center pill carries the 5 v3 workspace presets — Layout /
- * Modeling / Rigging / Pose / Animation. Each preset is a panel
- * arrangement consumed by AreaTree (see `uiV3Store.workspaces`),
- * AND it implies an editor mode: Pose+Animation switch the editor
- * to `'animation'` (timeline keyframes record, rest pose is
- * preserved); the other three switch to `'staging'` (edits modify
- * the rest pose / rig directly). The implicit coupling matches the
- * panel layouts themselves — Modeling/Rigging don't expose a
- * timeline, so being "in animation mode while in Modeling" had no
- * observable effect; the previous independent Staging/Animation
- * pill was theoretical UX with no real workflow behind it.
- *
- * `captureRestPose` fires only on the *transition* into animation
- * mode (clicking Pose or Animation while in a staging workspace),
- * so re-clicking the active workspace doesn't re-snapshot the rest
- * pose.
+ * Workspace pills are PURELY layout — clicking them changes which
+ * panels are visible and nothing else. Setup⇄Animate (the
+ * `editorMode` axis) is its own pill; the Blender-style edit slot
+ * (`editMode`: mesh / skeleton / blendShape) lives on the canvas
+ * Mode pill. All three axes are independent.
  *
  * @module v3/shell/Topbar
  */
@@ -31,7 +19,7 @@
 import { useState } from 'react';
 import {
   FilePlus, Save, FolderOpen, Download, Settings2,
-  SquareChartGantt, Undo2, Redo2, Link2, Unlink, RotateCcw,
+  SquareChartGantt, Undo2, Redo2, Link2, Unlink,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.jsx';
 import {
@@ -41,31 +29,26 @@ import { cn } from '../../lib/utils.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { useUIV3Store } from '../../store/uiV3Store.js';
-import { useAnimationStore } from '../../store/animationStore.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { logger } from '../../lib/logger.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
-import { resetPoseDraft, resetToRestPose } from '../../services/PoseService.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
 import { NewProjectDialog } from './NewProjectDialog.jsx';
+import { setEditorMode as serviceSetEditorMode } from '../../services/EditorModeService.js';
 
-/** @typedef {{ id: string, label: string, mode: 'staging'|'animation', tip: string }} WorkspaceTab */
+/** @typedef {{ id: string, label: string, tip: string }} WorkspaceTab */
 
 /** @type {WorkspaceTab[]} */
 const WORKSPACES = [
-  { id: 'layout',    label: 'Layout',    mode: 'staging',
-    tip: 'Layout — arrange panels and inspect scene structure. Edits target the rest pose.' },
-  { id: 'modeling',  label: 'Modeling',  mode: 'staging',
-    tip: 'Modeling — edit mesh geometry and topology. Edits target the rest pose.' },
-  { id: 'rigging',   label: 'Rigging',   mode: 'staging',
-    tip: 'Rigging — set up bones, deformers, and parameter rigs. Edits target the rest pose.' },
-  { id: 'pose',      label: 'Pose',      mode: 'animation',
-    tip: 'Pose — pose the rig at a single keyframe. Edits become timeline keyframes; rest pose is preserved.' },
-  { id: 'animation', label: 'Animation', mode: 'animation',
-    tip: 'Animation — author full timelines. Edits become timeline keyframes; rest pose is preserved.' },
+  { id: 'edit',      label: 'Edit',
+    tip: 'Edit — panels for setup work: Outliner, Logs, Parameters, Properties.' },
+  { id: 'pose',      label: 'Pose',
+    tip: 'Pose — same panels as Edit; named for posing workflow.' },
+  { id: 'animation', label: 'Animation',
+    tip: 'Animation — adds a timeline area at the bottom for keyframing.' },
 ];
 
 export function Topbar() {
@@ -75,10 +58,8 @@ export function Topbar() {
   // changes the project reference also changes and we re-render.
   const project          = useProjectStore((s) => s.project);
   const editorMode       = useEditorStore((s) => s.editorMode);
-  const setEditorMode    = useEditorStore((s) => s.setEditorMode);
   const activeWorkspace  = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace     = useUIV3Store((s) => s.setWorkspace);
-  const captureRestPose  = useAnimationStore((s) => s.captureRestPose);
   const hotReloadStatus  = useAssetHotReloadStore((s) => s.status);
 
   const [confirmNew, setConfirmNew] = useState(false);
@@ -99,54 +80,30 @@ export function Topbar() {
   }
 
   /**
-   * Switch workspace + sync editorMode. captureRestPose only fires on
-   * the staging→animation transition so repeated clicks on the
-   * already-active animation-side workspace don't re-snapshot.
+   * Switch workspace. ONLY layout — no mode side-effects.
+   *
+   * Blender contract (user 2026-05-02): workspaces are layout-only.
+   * NOTHING in editorStore changes when a workspace pill is clicked.
+   * `editMode`, `editorMode`, `selection`, and `activeBlendShapeId`
+   * all persist verbatim. The Setup/Animate (`editorMode`) axis has
+   * its own pill (handled by `setEditorMode` from EditorModeService);
+   * the Blender-style `editMode` axis has the canvas Mode pill.
+   *
    * @param {WorkspaceTab} tab
    */
   function handleWorkspaceClick(tab) {
     // BUG-001 instrumentation — workspace switch is the recurring
     // "character disappears" trigger. Log the transition so the Logs
-    // panel captures sequence + mode change for diagnosis.
-    const prevWorkspace = activeWorkspace;
-    const prevMode = editorMode;
+    // panel captures sequence for diagnosis.
     logger.debug('workspaceSwitch',
-      `${prevWorkspace ?? '(none)'} → ${tab.id}`,
+      `${activeWorkspace ?? '(none)'} → ${tab.id}`,
       {
-        previousWorkspace: prevWorkspace,
+        previousWorkspace: activeWorkspace,
         nextWorkspace: tab.id,
-        previousMode: prevMode,
-        nextMode: tab.mode,
-        modeWillChange: tab.mode !== prevMode,
       },
     );
 
     setWorkspace(tab.id);
-    if (tab.mode !== editorMode) {
-      setEditorMode(tab.mode);
-      if (tab.mode === 'animation' && project?.nodes && typeof captureRestPose === 'function') {
-        captureRestPose(project.nodes);
-      }
-    }
-  }
-
-  /**
-   * GAP-006 — Reset to Rest Pose. Visible in EVERY workspace. Behaviour
-   * depends on mode (see PoseService.js for the canonical semantics):
-   *
-   *   - Animation mode → `resetPoseDraft()` (clear draftPose + paramValues)
-   *   - Staging mode    → `resetToRestPose()` (above + bone-group transforms)
-   *
-   * Distinct from GAP-014's per-node Reset Transform which resets ONE
-   * arbitrary node's transform.
-   */
-  function handleResetRestPose() {
-    if (editorMode === 'animation') resetPoseDraft();
-    else resetToRestPose();
-    logger.debug('resetPose', `Reset Pose triggered (mode=${editorMode})`, {
-      editorMode,
-      paramsReset: project?.parameters?.length ?? 0,
-    });
   }
 
   async function handleHotReloadClick() {
@@ -277,6 +234,43 @@ export function Topbar() {
 
           <div className="w-px h-4 bg-border/40 mx-2" />
 
+          {/* Setup/Animate (editorMode) toggle. Independent of workspace
+              — clicking a workspace pill no longer changes editorMode.
+              The user explicitly picks Setup vs Animate here. Going
+              from Setup→Animate captures the current rest pose so
+              keyframes don't bake the in-flight pose into rest. */}
+          {(/** @type {const} */ (['staging', 'animation'])).map((m, i) => {
+            const on = editorMode === m;
+            const label = m === 'staging' ? 'Setup' : 'Animate';
+            const tip = m === 'staging'
+              ? 'Setup — edits modify the rest pose / project structure directly.'
+              : 'Animate — edits become timeline keyframes; rest pose is preserved.';
+            return (
+              <Tooltip key={m}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => serviceSetEditorMode(m)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[12px] font-medium transition-all flex items-center',
+                      i > 0 && 'ml-0.5',
+                      on
+                        ? 'bg-primary/80 text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{tip}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+
+          <div className="w-px h-4 bg-border/40 mx-2" />
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -307,32 +301,11 @@ export function Topbar() {
         </div>
       </TooltipProvider>
 
-      {/* Right: spacer + reset-pose (animation mode) + hot reload + gesture hint */}
+      {/* Right: spacer + hot reload + gesture hint
+          (Reset Pose moved to viewport's top-right corner — see CanvasViewport.jsx) */}
       <div className="flex-1" />
 
       <TooltipProvider delayDuration={400}>
-        {/* GAP-006 — Reset Pose visible in EVERY workspace. Behaviour
-            depends on mode: animation = clear draft + paramValues only
-            (keyframes survive); staging = also reset every bone-group's
-            node.transform.rotation/translate/scale to identity. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost" size="sm"
-              className="h-7 px-2 text-muted-foreground hover:text-foreground"
-              onClick={handleResetRestPose}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="ml-1 text-[11px]">Reset Pose</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {editorMode === 'animation'
-              ? 'Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.'
-              : 'Reset to rest pose — zeros every bone-group rotation/translation/scale (preserving pivots) and resets parameters to defaults. Per-part transforms are preserved; use Properties → Reset Transform for those.'}
-          </TooltipContent>
-        </Tooltip>
-
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

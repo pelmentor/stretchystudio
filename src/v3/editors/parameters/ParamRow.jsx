@@ -21,11 +21,18 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { setParamKeyframeAt } from '../../../renderer/animationEngine.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
+import { logger } from '../../../lib/logger.js';
+
+// BUG-015 instrumentation — only the BodyAngle params get logged so the
+// Logs panel stays uncluttered. paramSet (in paramValuesStore) NOT firing
+// during a livePreview drag pinned the bug to the slider→store boundary;
+// these two probes split that boundary in two.
+const TRACED_PARAMS = new Set(['ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ']);
 
 // slider.jsx is a forwardRef without JSDoc, so tsc can't see its
 // passthrough props. Cast to a permissive type — runtime stays the
 // same Radix Slider.
-/** @type {React.ComponentType<{min:number,max:number,step:number,value:number[],onValueChange:(v:number[])=>void}>} */
+/** @type {React.ComponentType<{min:number,max:number,step:number,value:number[],onValueChange:(v:number[])=>void,onPointerDown?:(e:React.PointerEvent)=>void}>} */
 const Slider = /** @type {any} */ (SliderImpl);
 
 /**
@@ -110,7 +117,13 @@ export function ParamRow({ param }) {
         max={max}
         step={step}
         value={[value]}
+        onPointerDown={TRACED_PARAMS.has(param.id) ? () => {
+          logger.debug('paramRow', `${param.id} pointerDown`, { id: param.id, currentValue: value });
+        } : undefined}
         onValueChange={([v]) => {
+          if (TRACED_PARAMS.has(param.id)) {
+            logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
+          }
           setParamValue(param.id, v);
           // Auto-keyframe in animation mode: write a keyframe on the
           // parameter track at the current playhead time. The

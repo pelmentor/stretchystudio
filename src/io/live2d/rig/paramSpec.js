@@ -12,7 +12,7 @@
  *
  * @module io/live2d/rig/paramSpec
  */
-import { variantParamId } from '../../psdOrganizer.js';
+import { variantParamId, matchTag } from '../../psdOrganizer.js';
 import { sanitisePartName } from '../../../lib/partId.js';
 
 /**
@@ -344,10 +344,20 @@ export function seedParameters(project) {
   // full standard + variant + bone + rotation list. Then store the result
   // verbatim. After this, future `buildParameterSpec({ baseParameters: project.parameters })`
   // calls take the native rig path and return the seed unchanged.
+  //
+  // BUG-018 — real-world wizard-imported projects never write `n.tag` onto
+  // the node; every other consumer (exporter.js, moc3writer.js, physics3
+  // generator) derives the tag from `matchTag(node.name)`. Reading `n.tag`
+  // alone returned undefined and `tagsPresent` ended up empty, silently
+  // dropping every `requireTag`-gated standard param (ParamHairFront,
+  // ParamHairBack, ParamShirt, ParamBust, ParamPants) — they showed up in
+  // `paramOrphans` because tagWarpBindings still referenced them despite
+  // project.parameters never registering them. Test fixtures DO set
+  // `n.tag` explicitly, so prefer it when present.
   const spec = buildParameterSpec({
     baseParameters: [],
     meshes: meshNodes.map((n) => ({
-      tag: n.tag ?? null,
+      tag: n.tag ?? matchTag(n.name ?? ''),
       variantSuffix: n.variantSuffix ?? null,
       variantRole: n.variantRole ?? null,
       jointBoneId: n.mesh?.jointBoneId ?? null,

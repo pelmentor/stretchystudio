@@ -16,8 +16,8 @@ Each entry is short and self-contained — anyone reading should be able to pick
 
 | Status | Entries |
 |--------|---------|
-| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy) |
-| 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider) |
+| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
+| 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
 | ⏳ Open | BUG-003 (Phase 3 lifted-grid composition shipped — PARAM mean dropped 6.66 → 2.45 px / 63% reduction; breath case 16.76 → 5.45 px / 67%; AngleZ peak still 17.73 px pending Phase 2b rotation FD Jacobian Setup, blocked on rotation matrix-structure refactor) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
@@ -43,23 +43,172 @@ Mirrors `feedback_exact_port.md` in user memory.
 
 Common test inputs + references used across pipeline bugs (BUG-002, BUG-003, anything export-related). Keep paths absolute — these aren't checked into the repo.
 
-| Role | Path |
-|------|------|
-| **Test PSD** (input) | `D:\Projects\Programming\stretchystudio\shelby_neutral_ok.psd` |
-| **Expected `.cmo3` reference** | `D:\Projects\Programming\stretchystudio\shelby.cmo3` |
-| **Expected runtime bundle** (model3 / moc3 / textures, post-"Export For Runtime") | `D:\Projects\Programming\stretchystudio\New Folder_cubism\` |
+| Role | Path | Source |
+|------|------|--------|
+| **Test PSD** (input) | `D:\Projects\Programming\stretchystudio\shelby_neutral_ok.psd` | Artist-authored PSD |
+| **Known-good `.cmo3` reference** | `D:\Projects\Programming\stretchystudio\shelby.cmo3` | **SS v0.2 export** (pre-v3, working) |
+| **Cubism Editor runtime bundle** (model3 / moc3 / textures) | `D:\Projects\Programming\stretchystudio\New Folder_cubism\` | Cubism Editor's "Export For Runtime" output |
+
+**`shelby.cmo3` is SS v0.2's export of the same PSD** — pre-Blender-refactor codebase that produced a working .cmo3 per user (2026-05-02: "там в проекте cmo3 всё отлично"). It's the **regression reference**: when v3's export diverges from desired behaviour (BUG-003 BodyAngle mismatch, legwear stretch after Init Rig, etc.), diff the v3 .cmo3 output against this file to see what working output looks like. v0.2's source is at `reference/stretchystudio-upstream-original/` if upstream-side RE is needed.
+
+**`New Folder_cubism\` is Cubism Editor's runtime export** — used by the oracle harness (`scripts/cubism_oracle/`) as the byte-faithful Cubism Core reference for kernel ports (Phase 1 / Phase 2 / Phase 3 of the warp evaluator port).
 
 **How to use these for any pipeline bug:**
 
 1. Drop `shelby_neutral_ok.psd` into the editor → run the wizard → export `.cmo3`
-2. Diff against `shelby.cmo3` (XML structure, deformer chains, keyform values) using the inspectors
-3. For runtime parity, also load both in Cubism Viewer and scrub the same params
-
-The reference `shelby.cmo3` and runtime files were produced by Cubism Editor directly, so any divergence in our export is on us, not the reference.
+2. Diff v3 output against `shelby.cmo3` (SS v0.2's output) to find the **regression** — XML structure, deformer chains, keyform values via inspectors
+3. For runtime parity, load both v3 and Cubism's `New Folder_cubism\` bundle in Cubism Viewer and scrub the same params; the oracle harness handles the binary diff
+4. Three-way comparison if needed: v0.2 .cmo3 (regression-free path) ↔ v3 .cmo3 (current) ↔ Cubism runtime bundle (byte-truth)
 
 ---
 
 ## Open
+
+### ✅ BUG-019 — Wireframe overlay toggle never makes anything visible
+
+- **Severity:** medium (mesh-edit mode UX broken — user can't see what they're editing) · **Reported:** 2026-05-02 (user-flagged) · **Fixed:** 2026-05-02
+
+**Repro:** in Modeling or Rigging workspace, open the Layers popover, tick "Wireframe" — nothing appears in the viewport. Same with "Vertices" alongside the wireframe. Inverting the workspace policy gates is irrelevant; the rendering itself is broken.
+
+**Root cause:** [`partRenderer.drawWireframe`](../src/renderer/partRenderer.js#L235) was structurally wrong:
+
+```js
+gl.drawElements(gl.LINES, state.indexCount, gl.UNSIGNED_SHORT, 0);
+```
+
+`state.indexCount` indexes the **triangle** IBO (n_triangles × 3 indices, used by the textured pass for `gl.TRIANGLES`). Re-interpreting that as `gl.LINES` consumes indices in pairs — so for triangles `[a,b,c, d,e,f, g,h,i, ...]` you get line segments `(a→b), (c→d), (e→f), (g→h), ...` which are neither triangle edges nor anything coherent. At most resolutions the segments are individually too short / sparse / incoherent to read as a wireframe; the user sees nothing.
+
+**Fix:** `partRenderer.uploadMesh` now builds a separate `state.wireIbo` containing line-segment pairs for every unique triangle edge (3 pairs per triangle, deduped via a `Set` keyed by min/max vertex pair so each interior edge is drawn once). `drawWireframe` swaps to `state.wireIbo` before the draw call and restores `state.ibo` after, mirroring the pattern `drawEdgeOutline` already used for the boundary loop. Approximately 30 LOC: edge-pair build at upload, new GPU buffer + count fields on per-part state, swap-and-restore in drawWireframe, cleanup in destroyPart.
+
+Discovered while planning the edit-mode refactor (single `editMode` slot replacing the prior triple). The user's question "the layers button is not actually making anything visible" was structurally a separate bug from the edit-mode consolidation but in scope of the same sweep — without visible wireframe, mesh-edit mode is meaningless.
+
+---
+
+### ✅ BUG-017 — Character disappears forever on layout↔animation workspace switch
+
+- **Severity:** high (entire model invisible until reload — recurring with the BUG-001 family) · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Repro (user, 2026-05-02 logs):**
+
+1. Init Rig on the man-character.
+2. Click the Animation workspace pill in the topbar.
+3. **Symptom:** character vanishes. Switching back to Layout doesn't restore it. Reload required.
+
+**Smoking gun in the logs:**
+
+```
+17:12:47.535 workspaceSwitch — layout → animation
+17:12:47.548 viewportGL — WebGL2 context destroyed (cleanup)
+17:12:47.564 viewportGL — WebGL2 context initialised
+17:12:47.565 areaTab — center: (none) → t21 (editorType=viewport, remount=false)
+```
+
+The `center` Area says `remount=false` (BUG-001's ErrorBoundary key fix is still working), but `WebGL2 context destroyed (cleanup)` fires anyway — meaning CanvasViewport's parent JSX tree changes shape across the switch, so React reconciliation tears down the subtree even though the leaf component's key is stable.
+
+**Root cause:** [`AreaTree.jsx`](../src/v3/shell/AreaTree.jsx) rendered the `centerColumn` differently per workspace:
+
+- **Layout** (no timeline): `centerColumn = <Area area={center} />` — bare Area
+- **Animation** (timeline present): `centerColumn = <PanelGroup><Panel><Area /></Panel><handle><Panel><Area timeline /></Panel></PanelGroup>` — wrapped
+
+Switching workspaces moved the center `<Area>` from the bare position to inside `<PanelGroup>` → `<Panel>`. React saw different element types at the same depth, **unmounted the old subtree (taking CanvasArea + CanvasViewport with it)**, and mounted a fresh tree. WebGL context destroyed, every texture upload lost — model invisible until the user re-triggers an upload (which never happens unless they remesh/reload).
+
+**Fix:** `centerColumn` now ALWAYS wraps in a vertical `PanelGroup`, with the timeline Panel rendered conditionally as a sibling. The center Panel (and its `<Area>` child) sits at the SAME depth in EVERY workspace, so React reconciliation preserves the mount across timeline-presence flips. WebGL context survives, texture uploads survive, no character disappear.
+
+**Files touched:**
+- [src/v3/shell/AreaTree.jsx](../src/v3/shell/AreaTree.jsx) — centerColumn restructured (always PanelGroup vertical; timeline section is a conditional sibling)
+
+**Lesson:** workspace switches that change which areas exist (e.g. animation adds `timeline`) tempt conditional `<X>` vs `<Y>` JSX shapes at the same depth. React reconciler treats this as element-type change → full subtree remount. **Stable mount across workspace switches requires identical JSX skeleton — branch on which children to render INSIDE a stable wrapper, not on which wrapper to use.** BUG-001 fixed the leaf-key half of this; BUG-017 fixes the parent-tree half.
+
+---
+
+### ✅ BUG-016 — Iris controller (trackpad above head) doesn't move eyes after Init Rig
+
+- **Severity:** medium (eye-look pose authoring blocked post-Init-Rig) · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Repro (user, 2026-05-02):**
+
+1. PSD wizard → Init Rig.
+2. Try dragging the "Iris Offset" trackpad in the SkeletonOverlay (the small dark pad above the head with a knob).
+3. **Symptom:** "iris controller stops moving eyes after init rig". Pre-Init-Rig the eyes visibly translate when the knob moves; post-Init-Rig nothing happens.
+
+**Root cause:** [`SkeletonOverlay.jsx`](../src/components/canvas/SkeletonOverlay.jsx) trackpad handlers wrote to `node.transform.x/y` of the eyes bone group. Pre-Init-Rig the renderer falls back to `mesh.vertices` projected through `computeWorldMatrices`, so the group transform visibly translates the eye children. Post-Init-Rig the renderer uses `evalRig` output (canvas-px vertex positions from the rigSpec chain), which doesn't compose `node.transform.x/y` of bone groups — that path isn't part of Cubism's deformation model. The trackpad's writes were strictly invisible to the rendered output.
+
+This was the same shape as v0.2 (which had no rigSpec, so worldMatrix path was always active and the trackpad worked). v3's introduction of evalRig broke the assumption.
+
+**Fix (Cubism-matching):** the trackpad now writes to **`ParamEyeBallX` / `ParamEyeBallY`** (range ±1, mapped from the trackpad's ±40 px) in addition to `node.transform.x/y`. The auto-rig pipeline ([`tagWarpBindings.js`](../src/io/live2d/rig/tagWarpBindings.js#L213) iris gaze block) builds iris-translation keyforms bound to `ParamEyeBallX × ParamEyeBallY`, so writing those params drives the rig's iris translation through evalRig — which is exactly how Cubism authors iris movement. The simultaneous `node.transform` write keeps the pre-Init-Rig fallback path working without regression.
+
+The knob's rendered position now reads from `ParamEyeBallX/Y` when a rigSpec is present, falling back to `node.transform` otherwise. Pre-Init-Rig the trackpad behaves like v0.2; post-Init-Rig it drives the rig the Cubism way.
+
+**Files touched:**
+- [src/components/canvas/SkeletonOverlay.jsx](../src/components/canvas/SkeletonOverlay.jsx) — trackpad onPointerDown + onPointerMove now also call `useParamValuesStore.setMany({ ParamEyeBallX, ParamEyeBallY })`; knob position reads ParamEyeBall when rigSpec present
+
+**Lesson:** v3's evalRig is the single source of truth for rigged-part vertex positions. UI controllers that historically wrote to `node.transform` of bone groups (a v0.2-era worldMatrix-path mechanism) need a parallel write to whatever **parameter** the rig pipeline binds for that controller's intent. The right Cubism-side wire is the one auto-rigged from `tagWarpBindings.js` — that's the contract.
+
+---
+
+### ✅ BUG-018 — Front-hair / shirt / pants pieces frozen in rest pose (5 tag-gated standard params dropped during seedParameters)
+
+- **Severity:** medium · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02 · `seedParameters` now derives the tag from `matchTag(n.name)` when `n.tag` is absent on the project node ([paramSpec.js:347-360](../src/io/live2d/rig/paramSpec.js#L347-L360))
+
+**Original framing was wrong.** The instrumentation added to [perPartRigWarps.js](../src/io/live2d/cmo3/perPartRigWarps.js) on the man-character repro showed `RigWarp_front_hair` IS emitted (partId `0d5ab07c1be3`) and DOES appear in the `chainEvalLift` summary. `rigWarpsByPartId: 17` matches the 17 emitted warps. The rig warp was never missing.
+
+**Actual smoking gun** — the `paramOrphans` warning:
+
+```jsonc
+"ParamHairFront": { "bindings": ["rigWarps[0d5ab07c1be3]:bindings[0]"], "animationTracks": [], "physicsInputs": [] }
+```
+
+Five standard params (`ParamHairFront`, `ParamHairBack`, `ParamShirt`, `ParamBust`, `ParamPants`) were referenced by tagWarpBindings' rig-warp keyforms but **never registered in `project.parameters[]`**. Without a parameter spec there's no slider in the Parameters panel and no value source — chainEval reads `0` for them every frame, so the bound rig warps stay locked at their middle keyform. User-visible symptom: hair / shirt / pants pieces appear frozen.
+
+**Root cause.** In [paramSpec.js#seedParameters](../src/io/live2d/rig/paramSpec.js#L337), the meshes mapping read `tag: n.tag ?? null` from the project node. Real-world wizard-imported nodes never store `n.tag` — every other consumer (exporter.js:99, moc3writer.js:115, physics3 generator at exporter.js:258, the rig-harvest path that builds the meshes-with-tags array for cmo3writer) derives it via `matchTag(node.name)`. The `requireTag` gate in `buildParameterSpec` therefore saw `tagsPresent = ∅` even when the project clearly contained `front hair`/`back hair`/`topwear`/`legwear` parts, and silently dropped every gated standard param. Test fixtures DO write `n.tag` directly, which is why the regression never surfaced in unit tests.
+
+**Fix.** [paramSpec.js:347-360](../src/io/live2d/rig/paramSpec.js#L347-L360) — `tag: n.tag ?? matchTag(n.name ?? '')`. Preserves test-fixture compatibility while making real-world projects route tags through the same canonical detector every export path uses.
+
+**Verification.** `npm run test:paramSpec` (21/21), `node scripts/test/test_e2e_equivalence.mjs` (27/27), `npm run test:subsystemsOptOut` (46/46). User repro on the man-character PSD pending — expected outcome: 23 → 28 params seeded post-Init-Rig, `paramOrphans` warning empty, hair / shirt / pants pieces become draggable via the new sliders.
+
+**Lesson.** When 5 distinct symptoms (hair, hair, shirt, bust, pants) all converge on the same `paramOrphans` warning, the bug is upstream of any single subsystem — almost certainly the parameter registry itself, not the consumers that reference it.
+
+---
+
+### 🔬 BUG-015 — BodyAngle X/Y/Z sliders unresponsive in Live Preview tab
+
+- **Severity:** high (advertised pose params don't drive the rig in the user-visible mode) · **Reported:** 2026-05-02 · **Status:** open, needs instrumented repro
+
+**Repro (user, 2026-05-02 — same session as BUG-014 verification):**
+
+1. Drop PSD → wizard → Init Rig (legwear stretch fixed by BUG-014).
+2. Switch the `center` area tab to **Live Preview**.
+3. Open Parameters editor in `rightTop`. Drag the ParamBodyAngleX / ParamBodyAngleY / ParamBodyAngleZ sliders.
+4. **Symptom:** "слайдеры стоят на месте" — sliders don't move when dragged, OR they move but the rendered character does not visibly tilt.
+
+**What we already know:**
+
+- `[bodyWarp] chain built` synthesis log on the user's character showed reasonable peak shifts: `paramBodyAngleZ_at_plus10.peakShiftPx: 29.46`, `paramBodyAngleY_at_plus10: 11.18`, `paramBodyAngleX_at_plus10: 27.24`. So the rigSpec encodes intended movement.
+- `bodyAnalyzer` measurement worked (`bodyFracSource: "measured-feet-plus-shoulder-feet-midbody"`); body warp anchors are anatomically correct.
+- BUG-014's bottom-band kernel fix unblocked legwear (user-confirmed). Body Angle still doesn't work.
+- **2026-05-02 17:24:31 → 17:24:42 repro window:** instrumentation `paramSet` log was added to `paramValuesStore.setParamValue` for every BodyAngle write; `evalRigBodyAngle` log throttled at 1s tracks what evalRig actually consumes. User dragged the BodyAngle sliders during this 11-second window in livePreview tab. **The Logs panel showed NO `paramSet` events.** That eliminates eval / rendering hypotheses and pins the bug at **slider → store**: the drag never reached `setParamValue`. Either the Radix Slider is not registering `onValueChange`, or the ParamRow is unmounted/disabled when the user dragged.
+
+**Updated hypothesis space (post-2026-05-02-repro):**
+
+1. **Radix Slider controlled-value reset** — `<Slider value={[value]}>` creates a fresh array literal every parent render. If the parent re-renders during a drag (e.g. because something else updates `paramValuesStore`), Radix may interpret the new prop as an external value-change and reset its internal drag state. Live preview drivers call `setMany({ ParamBreath, ParamAngleX/Y/Z, ParamEyeBallX/Y, ... })` every frame, which mutates `useParamValuesStore.values` (new object identity each call). ParamRow's selector is `s.values[id]` (per-param) so it shouldn't re-render unless its own param changes — but a parent further up (ParametersEditor or the Area host) might be subscribing more broadly.
+2. **Pointer capture stolen** — the LivePreview canvas mounts CanvasViewport with `previewMode=true`. Cursor look gates on LMB-over-canvas. Maybe the canvas's pointer handlers capture the pointer when LMB-down fires anywhere in the document, including over the rightTop area's slider. Result: the slider's `onPointerDown` never fires because the canvas already grabbed the pointer.
+3. **ParamRow unmount during drag** — slider + parent re-render at high frequency (60Hz) caused by something else; mid-drag re-render replaces the `<Slider>` instance, killing its drag state.
+
+**Instrumentation shipped 2026-05-02 (post-compact):**
+
+- `paramRow` debug log on ParamRow's `onPointerDown` AND `onValueChange` for the three BodyAngle params ([ParamRow.jsx:113-130](../src/v3/editors/parameters/ParamRow.jsx#L113-L130)). Splits the slider→store boundary in two: pointerDown without onValueChange = Radix isn't producing value events; onValueChange without paramSet = different problem at the setParamValue call.
+- `lookRef cursor-look engaged` / `released` debug log on every cursor-look toggle ([CanvasViewport.jsx](../src/components/canvas/CanvasViewport.jsx)). Confirms whether the Live Preview canvas is stealing pointer events when the user reaches for a slider.
+
+**Post-instrumentation repro (2026-05-02 17:49):** Logs panel showed cursor-look events (`lookRef cursor-look engaged` clientX=1257) but **zero `paramRow` events** — the user did not actually drag a BodyAngle slider in this run. Need a fresh repro that explicitly drags a BodyAngle slider in livePreview tab to surface which boundary fails.
+
+**Decision tree once user repros with a slider drag:**
+- `paramRow pointerDown` then `onValueChange` then `paramSet` → all three layers OK; bug downstream of the store (e.g., evalRig not reading / chainEval not propagating).
+- `pointerDown` but no `onValueChange` → Radix isn't producing value events (mid-gesture interruption).
+- No `pointerDown` at all → slider never received the event. Cross-check `lookRef cursor-look engaged` timestamp against the drag attempt to confirm/refute pointer-capture theft.
+
+**Related:** depends on BUG-014's fix landing (it has). Phase 2b for rotation deformer is a separate concern (AngleZ keyform divergence, not slider responsiveness).
+
+---
 
 ### ✅ BUG-001 — Character disappears when switching workspaces / area tabs
 
@@ -159,6 +308,86 @@ No cached rigSpec → `CanvasViewport`'s tick loop's `_rigSpec = rigSpecRef.curr
 **Doc:** [`docs/V3_WORKSPACES.md`](V3_WORKSPACES.md) — workspace × concern matrix, policy semantics, Reset Pose semantics by mode, wizard cleanup contract, "adding a new workspace" checklist.
 
 **Adjacent improvement (same commit):** Reset Pose ungated from animation mode. In staging mode (Layout / Modeling / Rigging) it now also resets every bone-tagged group's `node.transform.{rotation, x, y, scaleX, scaleY}` to identity (pivots preserved — those define WHERE the bone is, not the pose). User flow that motivated this: rotate bone controllers in Layout to inspect, want to revert. Per-part transforms (non-bone) stay untouched; for those the user has Properties → Reset Transform (GAP-014).
+
+---
+
+### ✅ BUG-013 — Wizard character vanishes forever when toggling Viewport ↔ Live Preview mid-import
+
+- **Severity:** high (data loss — in-flight PSD import is unrecoverable until reload) · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Repro (user, 2026-05-02):**
+
+1. Drop a PSD into the editor — wizard opens, character preview visible.
+2. While the wizard is on `review` / `reorder` / `adjust` / `dwpose`, click the **Live Preview** tab on the center area's header.
+3. Click back to the **Viewport** tab.
+4. **Symptom:** wizard is gone; canvas is empty; the imported character cannot be recovered without reloading the page.
+
+**Root cause:** the original GAP-010 shape registered TWO distinct editor types (`viewport` → `ViewportEditor`, `livePreview` → `LivePreviewEditor`), each rendered through `editorRegistry.js` by `Area.jsx`. Switching the active tab in the center area swapped the rendered component, which **unmounted the entire `<CanvasViewport>` instance** and its subtree:
+
+- `useState(wizardPsd)` (the parsed PSD bytes the wizard preview displays) — local state, lost on unmount.
+- `useRef`s — `onnxSessionRef`, `preImportSnapshotRef`, `meshAllPartsRef`, the wizard handlers' callback closures — all reset.
+- WebGL2 context destroyed on the canvas teardown (visible in logs as back-to-back `WebGL2 context destroyed (cleanup)` / `WebGL2 context initialised`); texture uploads, ScenePass, mesh buffers re-uploaded from scratch.
+
+When the user clicked back to Viewport, a fresh `<CanvasViewport>` mounted with `wizardPsd = null`. `wizardStep` (in editorStore) was still `'review'`, but the wizard render gate `!previewMode && wizardStep && wizardPsd` evaluated false, so PsdImportWizard never re-rendered. The PSD bytes were nowhere — gone with the unmounted component.
+
+**Fix (2026-05-02):** introduced a single shared canvas host [`<CanvasArea>`](../src/v3/shell/CanvasArea.jsx) that backs BOTH canvas tabs. [`Area.jsx`](../src/v3/shell/Area.jsx) detects the canvas tab types (`viewport`, `livePreview`) and short-circuits the editor registry, rendering CanvasArea directly under a shared ErrorBoundary key `${area.id}:canvas`. Toggling between the two tabs now only changes the `mode` prop on a stable CanvasArea, which flips `previewMode` on the same `<CanvasViewport>` instance. The canvas never unmounts during the toggle — WebGL2 context, texture uploads, wizardPsd, ONNX session, snapshot refs all survive.
+
+The dead `ViewportEditor.jsx` and `LivePreviewEditor.jsx` components were deleted; their logic moved into CanvasArea (overlays gated on `mode === 'viewport'`, "live preview" badge gated on `mode === 'livePreview'`, captureStore wiring lives unconditionally). Registry entries for both canvas types now carry `component: null` — the label is still consumed by AreaTabBar, only the component slot is unused.
+
+**Files touched:**
+- New [src/v3/shell/CanvasArea.jsx](../src/v3/shell/CanvasArea.jsx) — single host for both canvas tabs
+- [src/v3/shell/Area.jsx](../src/v3/shell/Area.jsx) — canvas-tab short-circuit + shared ErrorBoundary key
+- [src/v3/shell/editorRegistry.js](../src/v3/shell/editorRegistry.js) — `viewport`/`livePreview` entries with `component: null`
+- Deleted: `src/v3/editors/viewport/ViewportEditor.jsx`, `src/v3/editors/livePreview/LivePreviewEditor.jsx`
+
+**Tests:** [`test:livePreviewWiring`](../scripts/test/test_livePreviewWiring.mjs) (36 cases) covers the workspace contract + tab-swap path. The "no canvas remount" property is implicit in the architecture (Area.jsx routes both canvas types through the same CanvasArea); a future test could mount a real React tree and assert WebGL context lifetime, but the routing logic is small enough that the contract is reviewable directly.
+
+**Lesson:** when two tabs render conceptually-the-same surface in different modes, share the host component and toggle a prop. Distinct components per mode means React unmounts on every toggle, and any non-store state goes with it. Generalises beyond canvas — any "two views of one resource" UI hits this trap.
+
+---
+
+### ✅ BUG-014 — Legwear stretched 2.5× canvas below canvas after Init Rig; Body Angle X/Y/Z unresponsive
+
+- **Severity:** high (Init Rig produces visibly broken model; affects every character with body geometry slightly past canvas) · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02 (kernel port byte-faithful from IDA)
+
+**Repro (user, 2026-05-02 — man-character + shelby PSDs):**
+
+1. Drop PSD → run wizard → Init Rig.
+2. **Symptom A (legwear stretch):** legwear/pants render extending ~1.5× canvas height BELOW canvas, while everything inside canvas looks correct. UV-clamped triangles stretch the bottom row of texture along the off-canvas mesh extent.
+3. **Symptom B (Body Angle dead):** moving ParamBodyAngleX/Y/Z slider in Live Preview — torso/head do not visibly tilt. The synthesis log shows reasonable shift magnitudes (e.g. `paramBodyAngleZ_at_plus10.peakShiftPx: 29.46`), but visible body movement is far smaller than expected.
+
+**Lift summary log (the smoking gun):**
+
+```jsonc
+"RigWarp_legwear": { "x": [548, 1241], "y": [1170, 4163] }   // canvas H = 1792
+"BodyXWarp":       { "x": [555, 1235], "y": [229.8, 1561.2] } // body-X in canvas: visible body
+```
+
+`RigWarp_legwear` extends to canvas-y=4163 — 2371 px below canvas — while its parent `BodyXWarp` covers the visible body (canvas-y=229..1561). Linear projection through the chain canvas→BodyZ→BodyY→Breath→BX gives bottom-y ≈ 3306, not 4163: a +860 px (26 %) amplification poisoning the lift.
+
+**Root cause (verified via IDA decompile of `WarpDeformer_TransformTarget @ 0x7fff2b24cc40`):** the **bottom band** of the OUTSIDE-region branch in [src/io/live2d/runtime/evaluator/cubismWarpEval.js](../src/io/live2d/runtime/evaluator/cubismWarpEval.js) had the virtual cell layout inverted relative to Cubism Core. Cubism's IDA layout for v_in ∈ [1, 3]:
+
+| Virtual cell position | Cubism Core (IDA) | v3 port (pre-fix) |
+|-----------------------|-------------------|-------------------|
+| TL (du=0, dv=0)       | REAL grid bottom row (boundary at v=1) | EXTRAP at v=3 (far below) |
+| TR (du=1, dv=0)       | REAL grid bottom row | EXTRAP at v=3 |
+| BL (du=0, dv=1)       | EXTRAP at v=3 | REAL grid bottom row |
+| BR (du=1, dv=1)       | EXTRAP at v=3 | REAL grid bottom row |
+
+With `dv = (v - 1) / 2`, v_in=1 (boundary) → dv=0 → reads TL/TR. Cubism reads REAL grid (boundary continuity). v3 read EXTRAP-at-far-v=3 — broke continuity and amplified extrapolation through the body warp chain (Phase 3 lifted-grid composition multiplied the error per nested warp).
+
+Why other bands were correct: the **top band** explicitly applies a top↔bottom swap (lines 297-305) so the same structural layout matches Cubism. Bottom band omitted the swap. Left/right bands and corner zones use a min/max-based virtual cell construction that derives the layout from coordinate signs and stayed correct.
+
+**Why Body Angle felt dead:** Phase 3 lifts every warp's grid through the chain. The bottom-band kernel ran on every cascade boundary where a child warp's grid corners landed past v=1 of its parent. For the body chain (BodyXWarp → BreathWarp → BodyWarpY → BodyWarpZ), grid corners corresponding to legs/feet routinely cross v=1 in their parent's local space, so the cascade composition was distorted at the bottom of the model. The torso section ALSO inherits some distortion from this (cascades pull on the shared composition), so visible BodyAngle motion shrinks far below the synthesis-intent peak shift.
+
+**Fix:** byte-faithful port of the IDA bottom-band layout (commit shipped 2026-05-02). REAL grid now lands on virtual TL/TR (boundary continuity at v=1), EXTRAP at virtual BL/BR (far at v=3). No JS-side clamping / clipping / mesh-bbox intervention — kernel matches Cubism Core directly.
+
+**Files touched:**
+- [src/io/live2d/runtime/evaluator/cubismWarpEval.js](../src/io/live2d/runtime/evaluator/cubismWarpEval.js) — bottom-band branch swap (~12 LOC)
+
+**Tests:** existing `breathFidelity` (66 cases) + `eyeClosureApply` (35 cases) + `chainDiagnose` (38 cases) all green. The bug specifically affected the bottom-band region which the existing tests don't directly exercise — adding a synthetic OOB-vertex test against the oracle harness is a follow-up so future kernel changes catch band-layout regressions.
+
+**Lesson:** when porting a foreign kernel byte-faithfully, **every band / branch must be IDA-verified independently** — a structurally correct top-band port doesn't imply the bottom band, and the asymmetry between the two (top requires swap, bottom does not) is exactly the kind of detail that gets dropped when reading pseudocode top-down. The oracle harness verifies INSIDE-region paths well; OUTSIDE-region needs targeted vertex placements past each band's boundary to surface this class of bug.
 
 ---
 

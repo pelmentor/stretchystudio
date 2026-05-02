@@ -17,8 +17,16 @@ import { logger } from '../lib/logger.js';
 export const useParamValuesStore = create((set) => ({
   values: {},
 
-  setParamValue: (id, value) =>
-    set(state => ({ values: { ...state.values, [id]: value } })),
+  setParamValue: (id, value) => {
+    // BUG-015 instrumentation — surface BodyAngle slider writes so we can
+    // confirm the slider→store path is hot when the user drags in
+    // Live Preview. Throttled at the call site (one log per change is
+    // fine — a drag emits ~5-15 onValueChange events / sec).
+    if (id === 'ParamBodyAngleX' || id === 'ParamBodyAngleY' || id === 'ParamBodyAngleZ') {
+      logger.debug('paramSet', `${id} → ${value}`, { id, value });
+    }
+    set(state => ({ values: { ...state.values, [id]: value } }));
+  },
 
   setMany: (updates) =>
     set(state => ({ values: { ...state.values, ...updates } })),

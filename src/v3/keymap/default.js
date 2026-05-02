@@ -21,13 +21,11 @@
 
 /** @type {Record<string, string>} */
 export const DEFAULT_KEYMAP = {
-  // Workspace switches - Ctrl+1..5 (not just digits, so keymap doesn't
-  // collide with future editor ops bound to bare digits).
-  'Ctrl+Digit1': 'workspace.set.layout',
-  'Ctrl+Digit2': 'workspace.set.modeling',
-  'Ctrl+Digit3': 'workspace.set.rigging',
-  'Ctrl+Digit4': 'workspace.set.pose',
-  'Ctrl+Digit5': 'workspace.set.animation',
+  // Workspace switches - Ctrl+1..3 (collapsed from 5 to 3 workspaces
+  // 2026-05-02; Layout / Modeling / Rigging merged into 'edit').
+  'Ctrl+Digit1': 'workspace.set.edit',
+  'Ctrl+Digit2': 'workspace.set.pose',
+  'Ctrl+Digit3': 'workspace.set.animation',
 
   // Layout reset - uncommon enough that Ctrl+Shift+Backspace is fine.
   'Ctrl+Shift+Backspace': 'workspace.reset',
@@ -90,6 +88,13 @@ export const DEFAULT_KEYMAP = {
   'KeyG': 'transform.translate',
   'KeyR': 'transform.rotate',
   'KeyS': 'transform.scale',
+
+  // Edit-mode refactor — Tab toggles into a contextual edit mode based
+  // on the active selection's type (Blender pattern). Meshed part →
+  // mesh edit. Bone-role group → skeleton edit. Already in edit mode
+  // → exit. BlendShape edit is entered from BlendShapeTab where the
+  // user picks which shape to paint.
+  'Tab': 'mode.editToggle',
 };
 
 /**

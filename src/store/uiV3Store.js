@@ -27,7 +27,17 @@
 import { create } from 'zustand';
 
 /**
- * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
+ * @typedef {('edit'|'pose'|'animation')} WorkspaceId
+ *  Workspaces are layout-only: which editors are visible + the
+ *  default `editorMode` (staging vs animation). They DO NOT gate
+ *  edit modes — `editorStore.editMode` is independent of workspace.
+ *
+ *  - **edit** (staging, no timeline) — setup work: PSD import,
+ *    meshes, bones, weights, rig.
+ *  - **pose** (animation, no timeline) — quick posing without
+ *    keyframing.
+ *  - **animation** (animation, timeline visible) — full keyframing.
+ *
  *
  * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview')} EditorType
  *
@@ -79,29 +89,30 @@ function buildArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorT
 }
 
 /**
- * Default layout (2026-04-30 — Logs panel added):
+ * Default layout (2026-05-02 — Live Preview is a SECOND TAB in the
+ * center area, not a side-by-side panel. Per direct user direction:
+ * the preview is essentially a copy of the viewport surface; the user
+ * clicks the tab to the right of "Viewport" and the same canvas swaps
+ * into live mode (physics + breath + cursor look running). One canvas,
+ * two tabs — no split.):
  *
- *   Left column (vertical split)   Center           Right column (vertical split)
- *   ────────────────────────────   ──────────────   ─────────────────────────────
- *   leftTop:    Outliner           center:Viewport  rightTop:    Parameters
- *   leftBottom: Logs                                rightBottom: Properties
+ *   Left column                Center                       Right column
+ *   ─────────────────────────  ──────────────────────────   ───────────────────────────
+ *   leftTop:    Outliner       tabs: [Viewport,             rightTop:    Parameters
+ *   leftBottom: Logs                  Live Preview]         rightBottom: Properties
  *
- * Both side columns split horizontally. The Logs panel
- * (leftBottom, ~1/3 height) surfaces structured pipeline output —
- * eye-closure parabola fits, breath warp synth, mask allocator,
- * etc. — so the user can debug native rig eval without bouncing
- * through `.cmo3` export + JSON inspection.
+ * Drivers are bound to LivePreviewEditor's mount lifetime — switching
+ * the center tab back to Viewport unmounts the live editor and stops
+ * drivers cleanly.
  *
- * AreaTree.jsx renders left/center/right as a horizontal
- * PanelGroup. Both side columns are vertical PanelGroups; the
- * fallback is single-panel when only one half is defined.
+ * AreaTree.jsx renders left/center/right as a horizontal PanelGroup.
  *
  * @returns {AreaSlot[]}
  */
 const DEFAULT_AREAS = () => [
   buildArea('leftTop',     [e('outliner')]),
   buildArea('leftBottom',  [e('logs')]),
-  buildArea('center',      [e('viewport')]),
+  buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
   buildArea('rightBottom', [e('properties')]),
 ];
@@ -110,59 +121,48 @@ const DEFAULT_AREAS = () => [
  * Animation workspace adds a Timeline area below the center and an
  * Animations list tab alongside Properties (in rightBottom) so the
  * user can browse / create / switch animations without leaving the
- * workspace.
- *
- * GAP-010 — Animation workspace also gets a `centerRight` Live Preview
- * surface so the user can watch the rig play through with physics +
- * breath + cursor look running, while still scrubbing the editing
- * Viewport on the left. Drivers are bound to mount lifetime, so the
- * Live Preview tab MUST be the visible one in `centerRight` for them
- * to run — switching that tab to anything else stops drivers cleanly.
+ * workspace. Inherits the [Viewport, Live Preview] center tabs from
+ * DEFAULT_AREAS.
  *
  * @returns {AreaSlot[]}
  */
 const ANIMATION_AREAS = () => [
   buildArea('leftTop',     [e('outliner')]),
   buildArea('leftBottom',  [e('logs')]),
-  buildArea('center',      [e('viewport')]),
-  buildArea('centerRight', [e('livePreview')]),
+  buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
   buildArea('rightBottom', [e('animations'), e('properties')]),
-  buildArea('timeline',   [e('timeline'), e('dopesheet'), e('fcurve')]),
+  buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve')]),
 ];
 
 /**
- * Pose workspace mirrors the default left/right columns, plus a
- * `centerRight` Live Preview surface (same reasoning as the animation
- * preset — pose-tweaking benefits from watching the rig sway under
- * physics + breath alongside the static editing canvas).
+ * Pose workspace = DEFAULT_AREAS today. Kept as a separate factory
+ * so future per-workspace divergence (e.g. a pose-specific tab) doesn't
+ * have to retro-fit a branch.
  *
  * @returns {AreaSlot[]}
  */
-const POSE_AREAS = () => [
-  buildArea('leftTop',     [e('outliner')]),
-  buildArea('leftBottom',  [e('logs')]),
-  buildArea('center',      [e('viewport')]),
-  buildArea('centerRight', [e('livePreview')]),
-  buildArea('rightTop',    [e('parameters')]),
-  buildArea('rightBottom', [e('properties')]),
-];
+const POSE_AREAS = () => DEFAULT_AREAS();
 
 /**
- * Per-workspace presets.
+ * Per-workspace presets. Three workspaces — `edit` / `pose` /
+ * `animation`. The previous five-workspace shape (Layout / Modeling /
+ * Rigging / Pose / Animation) collapsed 2026-05-02: Layout / Modeling /
+ * Rigging were structurally identical (same DEFAULT_AREAS, same
+ * editorMode='staging') and only differed via a workspace-policy gate
+ * that has been deleted. False distinction removed.
+ *
  * @returns {Record<WorkspaceId, WorkspacePreset>}
  */
 const initialWorkspaces = () => ({
-  layout:    { areas: DEFAULT_AREAS() },
-  modeling:  { areas: DEFAULT_AREAS() },
-  rigging:   { areas: DEFAULT_AREAS() },
-  animation: { areas: ANIMATION_AREAS() },
+  edit:      { areas: DEFAULT_AREAS() },
   pose:      { areas: POSE_AREAS() },
+  animation: { areas: ANIMATION_AREAS() },
 });
 
 export const useUIV3Store = create((set) => ({
   /** @type {WorkspaceId} */
-  activeWorkspace: 'layout',
+  activeWorkspace: 'edit',
 
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),

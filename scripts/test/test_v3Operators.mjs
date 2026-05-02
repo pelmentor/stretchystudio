@@ -25,7 +25,7 @@ function assertThrows(fn, name) {
 // ── registry: built-ins exist ───────────────────────────────────────
 
 {
-  for (const ws of ['layout', 'modeling', 'rigging', 'pose', 'animation']) {
+  for (const ws of ['edit', 'pose', 'animation']) {
     const op = getOperator(`workspace.set.${ws}`);
     assert(op !== null, `built-in workspace.set.${ws} registered`);
     assert(op.label.includes(ws), `built-in workspace.set.${ws} label OK`);
@@ -51,22 +51,22 @@ assertThrows(
 
 {
   const all = listOperators();
-  assert(all.length >= 6, 'listOperators returns ≥ 6 (5 workspaces + reset)');
+  assert(all.length >= 4, 'listOperators returns ≥ 4 (3 workspaces + reset)');
   assert(all.every(o => typeof o.exec === 'function'), 'all ops have exec()');
 }
 
 // ── operator exec actually mutates store ────────────────────────────
 
 {
-  useUIV3Store.getState().setWorkspace('layout');
+  useUIV3Store.getState().setWorkspace('edit');
   const before = useUIV3Store.getState().activeWorkspace;
-  assert(before === 'layout', 'pre-exec: layout');
+  assert(before === 'edit', 'pre-exec: edit');
 
-  getOperator('workspace.set.rigging').exec({ editorType: null });
-  assert(useUIV3Store.getState().activeWorkspace === 'rigging', 'exec: switched to rigging');
+  getOperator('workspace.set.animation').exec({ editorType: null });
+  assert(useUIV3Store.getState().activeWorkspace === 'animation', 'exec: switched to animation');
 
-  getOperator('workspace.set.layout').exec({ editorType: null });
-  assert(useUIV3Store.getState().activeWorkspace === 'layout', 'exec: back to layout');
+  getOperator('workspace.set.edit').exec({ editorType: null });
+  assert(useUIV3Store.getState().activeWorkspace === 'edit', 'exec: back to edit');
 }
 
 // ── keymap: chord builder ───────────────────────────────────────────

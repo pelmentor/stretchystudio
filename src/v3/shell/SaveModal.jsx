@@ -8,7 +8,7 @@
  * when the Download tab is active).
  *
  * Thumbnail capture comes from `useCaptureStore`, which the active
- * `ViewportEditor` publishes on mount. If no viewport is mounted yet
+ * `<CanvasArea>` publishes on mount. If no viewport is mounted yet
  * (e.g. fresh session, no project), the thumbnail is left empty —
  * gallery cards fall back to the FileArchive icon.
  *

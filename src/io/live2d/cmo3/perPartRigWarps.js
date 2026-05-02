@@ -49,6 +49,7 @@ import { sanitisePartName } from '../../../lib/partId.js';
 import { emitKfBinding } from './deformerEmit.js';
 import { RIG_WARP_TAGS, FACE_PARALLAX_TAGS, NECK_WARP_TAGS } from './rigWarpTags.js';
 import { EYE_PART_TAGS } from './eyeTags.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * Emit one CWarpDeformerSource per mesh whose tag matches RIG_WARP_TAGS,
@@ -99,14 +100,49 @@ export function emitPerPartRigWarps(ctx, opts) {
     allDeformerSources,
   } = opts;
 
-  if (!generateRig) return;
+  if (!generateRig) {
+    logger.debug('perPartRigWarps', 'generateRig=false — skipping all per-part warps');
+    return;
+  }
+
+  // BUG-018 instrumentation — surface every reason a mesh is skipped, plus
+  // every emit, so the user can confirm exactly which path the front-hair
+  // mesh takes when its RigWarp goes missing post-Init-Rig. Filtered logging
+  // would have to know the tag spelling (`'front hair'` vs `'front_hair'`
+  // vs something else); unfiltered is noisy but unambiguous.
+  let skipped_noTag = 0, skipped_alreadyEmitted = 0, skipped_baked = 0, emitted = 0;
 
   for (const pm of perMesh) {
     const m = meshes[pm.mi];
     const warpSpec = RIG_WARP_TAGS.get(m.tag);
-    if (!warpSpec) continue;
-    if (meshWarpDeformerGuids.has(m.partId)) continue;
-    if (pm.hasBakedKeyforms) continue; // arms/legs/hands: bone-baked pose only → no rigWarp; physics drives the bone rotation deformers directly
+    if (!warpSpec) {
+      skipped_noTag += 1;
+      logger.debug('perPartRigWarps.skip', `tag '${m.tag}' not in RIG_WARP_TAGS`, {
+        partId: m.partId, meshName: pm.meshName, tag: m.tag,
+        variantOf: m.variantOf ?? null, variantSuffix: m.variantSuffix ?? null,
+      });
+      continue;
+    }
+    if (meshWarpDeformerGuids.has(m.partId)) {
+      skipped_alreadyEmitted += 1;
+      logger.debug('perPartRigWarps.skip', `partId already has rigWarp guid`, {
+        partId: m.partId, meshName: pm.meshName, tag: m.tag,
+      });
+      continue;
+    }
+    if (pm.hasBakedKeyforms) {
+      skipped_baked += 1;
+      logger.debug('perPartRigWarps.skip', `pm.hasBakedKeyforms — bone-baked path`, {
+        partId: m.partId, meshName: pm.meshName, tag: m.tag,
+        jointBoneId: m.jointBoneId ?? null,
+      });
+      continue;
+    }
+    emitted += 1;
+    logger.debug('perPartRigWarps.emit', `RigWarp_${m.partId}`, {
+      partId: m.partId, meshName: pm.meshName, tag: m.tag,
+      gridCol: warpSpec.col, gridRow: warpSpec.row,
+    });
 
     const { col: warpCol, row: warpRow } = warpSpec;
     const warpGridPts = (warpCol + 1) * (warpRow + 1);
@@ -462,4 +498,12 @@ export function emitPerPartRigWarps(ctx, opts) {
 
     rigCollector.warpDeformers.push(rigWarpSpec);
   }
+
+  // BUG-018 — summary line so the user can see at a glance whether the
+  // expected emit count matches reality. `skipped_noTag` is the most likely
+  // culprit for missing RigWarp_front_hair (mesh.tag not 'front hair').
+  logger.info('perPartRigWarps', `done: ${emitted} emitted, ${skipped_noTag} skip(noTag), ${skipped_alreadyEmitted} skip(alreadyEmitted), ${skipped_baked} skip(baked)`, {
+    emitted, skipped_noTag, skipped_alreadyEmitted, skipped_baked,
+    totalMeshes: perMesh.length,
+  });
 }

@@ -14,14 +14,43 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 | Status | Entries |
 |--------|---------|
-| ✅ Closed / Phase A shipped | GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-010, GAP-011, GAP-012, GAP-013, GAP-014 |
-| ⏳ Open | GAP-001 (See-Through wizard not v3-native), GAP-002 (Groups editor — possibly redundant with Outliner), GAP-015 (Blender mesh-edit ergonomics — proportional editing + MMB-scroll radius) |
+| ✅ Closed / Phase A shipped | GAP-001 (wizard lifted to AppShell — wizardStore + PsdImportService + dwposeService + captureStore bridges; CanvasViewport stops mounting wizard chrome), GAP-002 (closed as redundant — Outliner + ObjectTab already cover the upstream "Groups tab" workflow), GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008 (Phase A + Phase B subsystems checkbox popover), GAP-009, GAP-010 (Phase A + Phase B per-mode `view`), GAP-011, GAP-012, GAP-013, GAP-014, GAP-015 (Phase A + Phase B persist + adjacency cache), GAP-016 (Phase A + Phase B named user presets) |
+| ⏳ Open | *(none — every tracked gap has at least Phase A shipped)* |
 
 Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
 
 ---
 
 ## Open
+
+### ✅ GAP-016 — View Layers picker (Phase A shipped 2026-05-02)
+
+- **Severity:** medium · **Reported:** 2026-05-02 · **Phase A SHIPPED:** 2026-05-02
+
+**Phase A — fix.** New [`src/v3/shell/ViewLayersPopover.jsx`](../src/v3/shell/ViewLayersPopover.jsx) — single popover in the viewport's top-right toolbar (left of the Reset Pose button) lists every overlay/visualization toggle grouped by Mesh / Rig / Edit, plus three preset buttons (Clean / Modeling / Diagnostics).
+
+State source of truth is now `editorStore.viewLayers` — one map replacing the prior split between `editorStore.overlays.*` (display flags) and the standalone `editorStore.showSkeleton` boolean. Two new layers (`warpGrids`, `rotationPivots`) gate the WarpDeformerOverlay and RotationDeformerOverlay in [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx) — previously rendered unconditionally in edit mode. Edit-mode flags (`meshEditMode`, `skeletonEditMode`, `blendShapeEditMode`) stay separate because they're behavioural, not display.
+
+Workspace policy ([`workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js)) filters `viewLayers` at consumption time instead of mutating it — flipping back to a permissive workspace restores the user's prior toggles automatically. `setViewLayers({skeleton:false})` also drops the user out of skeleton-edit mode (matches prior `setShowSkeleton(false)` behaviour).
+
+**Migration touched:**
+- New: [`ViewLayersPopover.jsx`](../src/v3/shell/ViewLayersPopover.jsx)
+- [`editorStore.js`](../src/store/editorStore.js) — `overlays` + `showSkeleton` collapsed into `viewLayers` map; `setOverlays` + `setShowSkeleton` replaced by `setViewLayers`
+- [`workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js) — accepts `viewLayers`, returns `{viewLayers, meshEditMode}`
+- [`scenePass.js`](../src/renderer/scenePass.js) — reads `editor.viewLayers.{image,wireframe,vertices,edgeOutline,irisClipping}`
+- [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — reads `editorState.viewLayers.skeleton`; wizard handlers call `setViewLayers({skeleton:…})`
+- [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx) — gates WarpDeformerOverlay on `viewLayers.warpGrids`, RotationDeformerOverlay on `viewLayers.rotationPivots`, mounts the popover (edit Viewport only)
+- [`captureExportFrame.js`](../src/components/canvas/viewport/captureExportFrame.js) — mock-editor uses the new shape (every layer except `image` + `irisClipping` stripped for clean frame export)
+
+**Test coverage:** `test:workspaceViewportPolicy` 57/57, `test:editorStore` 42/42, `test:livePreviewWiring` 36/36, full `npm test` suite green. `npx tsc --noEmit` clean.
+
+**Phase B SHIPPED 2026-05-02 (named user presets):**
+- New [`preferencesStore.viewLayerPresets`](../src/store/preferencesStore.js): `Record<string, ViewLayers>`, persisted to localStorage as `v3.prefs.viewLayerPresets`. Setters: `setViewLayerPreset(name, layers)` (overwrite-on-conflict, empty-name no-op) and `deleteViewLayerPreset(name)`.
+- [`ViewLayersPopover.jsx`](../src/v3/shell/ViewLayersPopover.jsx) extended with a "My presets" section + a "Save as…" form. Built-in presets (Clean / Modeling / Diagnostics) stay separate; user presets list with click-to-apply + X-to-delete.
+
+**Phase B note (still deferred):** per-area scoping (Layers picker affects only the canvas it lives on, useful when two viewport tabs ever ship side-by-side). Out of scope until the area system supports two simultaneous viewport tabs.
+
+---
 
 ### ✅ GAP-011 — Project data layer not canonical (4 rig fields lost on save→load)
 
@@ -139,15 +168,28 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### GAP-001 — See-Through import wizard not v3-native
+### ✅ GAP-001 — See-Through import wizard not v3-native (SHIPPED 2026-05-02)
 
-- **Severity:** medium
-- **Reported:** 2026-04-30
-- **Affects:** PSD import flow, all imported characters
+- **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 
-**Current state:** Upstream README sells "Native See-Through Support" as a flagship feature. We have the underlying capability — `src/io/armatureOrganizer.js` recognizes See-Through layer-tag conventions (`KNOWN_TAGS` lines 37–50: iris, eyebrow, topwear, etc.) — but the wizard UI that drives it (`PsdImportWizard`) is the v2-era component wrapped inside v3's viewport rather than a natively v3 area editor.
+**Fix.** The wizard component is now mounted at AppShell level ([`src/v3/shell/PsdImportWizard.jsx`](../src/v3/shell/PsdImportWizard.jsx)) alongside the other modal/banner chrome (StaleRigBanner, SaveModal, ExportModal). It reads from a dedicated [`wizardStore`](../src/store/wizardStore.js) and dispatches actions through [`PsdImportService`](../src/services/PsdImportService.js); CanvasViewport no longer hosts the wizard mount, the local wizardPsd state, the snapshot ref, the ONNX session ref, or any of the nine wizard handler `useCallback`s.
 
-**What "native" would look like:** Import wizard as a v3 editor type registered in `src/v3/shell/editorRegistry.js`, mountable as an area tab, using v3's modal/area conventions instead of the bespoke v2 wizard chrome.
+The 11-prop callback API is gone. The wizard's actions are 9 service methods (`start` / `cancel` / `finalize` / `reorder` / `applyRig` / `skip` / `complete` / `back` / `splitParts` / `updatePsd`). Side-effects that touch the WebGL context (mutating project.nodes from PSD layers + uploading textures + auto-meshing every part) stay in CanvasViewport but reach the wizard through `captureStore` bridges (`finalizePsdImport`, `autoMeshAllParts`) — same pattern Properties → MeshTab uses for `remeshPart`. The ONNX session moved into [`dwposeService`](../src/services/dwposeService.js) as a module-level singleton.
+
+**Why not a v3 area-editor:** the wizard is intentionally multi-modal — `review` and `dwpose` are full-screen modals while `reorder` and `adjust` are top banners over the canvas (the user works in side panels while the wizard watches). An "editor area tab" framing would force one shape on every step. AppShell-level chrome with per-step rendering follows the existing StaleRigBanner pattern and preserves every wizard step's intentional UX.
+
+**Files touched:**
+- New [`src/store/wizardStore.js`](../src/store/wizardStore.js) — pendingPsd / step / preImportSnapshot / meshAllParts.
+- New [`src/services/PsdImportService.js`](../src/services/PsdImportService.js) — 9 action methods replacing the prior useCallback handlers in CanvasViewport.
+- New [`src/services/dwposeService.js`](../src/services/dwposeService.js) — ONNX session singleton + lazy load.
+- New [`src/v3/shell/PsdImportWizard.jsx`](../src/v3/shell/PsdImportWizard.jsx) — same UI as the v2 component, but reads stores + dispatches services instead of taking 11 prop callbacks.
+- [`src/v3/shell/AppShell.jsx`](../src/v3/shell/AppShell.jsx) — mounts `<PsdImportWizard />` alongside other modals.
+- [`src/store/captureStore.js`](../src/store/captureStore.js) — added `finalizePsdImport` + `autoMeshAllParts` bridges.
+- [`src/store/editorStore.js`](../src/store/editorStore.js) — `wizardStep` / `setWizardStep` removed (consolidated to wizardStore).
+- [`src/components/canvas/CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — wizard import deleted, 9 wizard handlers + local state + 4 refs deleted, JSX mount deleted, replaced by a single useEffect that publishes finalize/autoMesh into captureStore on mount and clears them on unmount. Net removal: ~165 lines.
+- Deleted `src/components/canvas/PsdImportWizard.jsx` (555 lines).
+
+**Test coverage:** new `test:wizardStore` (19 cases), new `test:PsdImportService` (32 cases — full lifecycle: start → finalize → back rolls back project → skip → complete → splitParts/updatePsd patches). Existing 44 editorStore tests still pass after `wizardStep` removal. `npx tsc --noEmit` clean. Production build clean. Visual end-to-end (drop PSD → wizard → adjust → finish) needs browser smoke-test — pending.
 
 **Gap location:** v3 shell + `src/components/PsdImportWizard*` (v2 component) — would need a v3 wrapper or rewrite.
 
@@ -155,68 +197,48 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### GAP-015 — Blender mesh-edit ergonomics (proportional editing + MMB-scroll radius)
+### ✅ GAP-015 — Blender mesh-edit ergonomics (proportional editing + MMB-scroll radius)
 
-- **Severity:** medium
-- **Reported:** 2026-05-02
-- **Affects:** Mesh edit workflow (Modeling / Rigging workspaces) — every time the user grabs a vertex and wants nearby vertices to follow
+- **Severity:** medium · **Reported:** 2026-05-02 · **Phase A SHIPPED:** 2026-05-02
 
-**Direction (user, 2026-05-02):** straight port from Blender. Blender is installed locally so the source is on hand; the goal is to mirror Blender's proportional-editing UX byte-for-byte rather than reinvent the curves / falloff modes / hotkeys.
+**Phase A — fix.** New [`src/lib/proportionalEdit.js`](../src/lib/proportionalEdit.js) helper module: 7 falloff curves (Smooth / Sphere / Root / Linear / Sharp / InvSquare / Constant) matching Blender's `WM_proportional_falloff` enum byte-for-byte at the rim and centre, vertex-adjacency builder from triangle indices, BFS reachability for connected-only mode, and a single-call `computeProportionalWeights` that returns a `Float32Array` of per-vertex weights for a grab. 49 unit tests cover every curve + adjacency + connected-only filtering.
 
-**The headline feature:** **proportional editing.** In Blender mesh-edit, you grab a single vertex and nearby vertices follow with a falloff curve. You toggle it on/off with `O`; while a grab is in flight you scroll the **middle mouse button** to grow / shrink the influence radius live, with a visible circle showing the current reach. Several falloff curves (Smooth, Sphere, Root, Inverse Square, Sharp, Linear, Constant, Random) cycle through the same dropdown.
+State on `editorStore.proportionalEdit = { enabled, radius, falloff, connectedOnly }` (defaults: off, radius=100, smooth, connected-only off). Wired into the single-vertex drag site in [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx):
 
-**Current state in v3:**
+- **Drag start.** When `proportionalEdit.enabled = true` and the mesh has triangle indices, capture a full rest snapshot of every vertex AND build vertex adjacency (only when `connectedOnly` is on — saves work). Compute weights once; strip zero-weight vertices into an `affected[]` list of `{index, startX, startY, weight}`.
+- **Drag move.** For every entry in `affected[]`, write `{startX + localDx*weight, startY + localDy*weight}`. Origin gets weight 1 → moves the full delta; rim vertices get weight ≈0 → barely move; mid-falloff vertices follow the curve. Snapshots taken at drag start so re-renders mid-drag don't drift.
+- **MMB scroll during drag.** Wheel delta diverts to `radius` adjust (instead of zoom) when a proportional-edit drag is in flight. Recomputes weights against the captured rest snapshot — recomputing against in-flight deformed mesh would compound drift cumulatively.
 
-- Mesh-edit deform sub-mode already has a screen-space brush with cosine falloff (see [`brushWeight`](../src/components/canvas/viewport/helpers.js#L92)). But it's a paint-style tool — the user holds LMB and drags around painting deltas onto vertices under the brush. It is NOT vertex-grab + proportional follow — there's no concept of "drag this one vertex and let neighbours come along".
-- Single-vertex drag exists ([CanvasViewport pointer-down vertex picking](../src/components/canvas/CanvasViewport.jsx)), but it moves exactly one vertex with no influence on neighbours.
-- Brush radius is bound to `[` / `]` keys in `editorStore`. There is no MMB-scroll-during-drag hook.
+**Hotkeys** (Modeling / Rigging workspaces only, outside input fields):
+- `O` — toggle `proportionalEdit.enabled`
+- `Shift+O` — cycle falloff curve
+- `Alt+O` — toggle `connectedOnly`
+- `Ctrl+[` / `Ctrl+]` — shrink / grow radius (`Ctrl` disambiguates from brush mode's plain `[`/`]`)
 
-So we have *two halves* of what Blender ships as one workflow: a falloff function and a single-vertex drag. They're never composed.
+**Visual indicator.** Separate SVG `<circle>` (`propEditCircleRef`) tracks the cursor when proportional editing is enabled — yellow dashed ring at `radius * view.zoom` screen-px. Distinct from the brush-cursor white dashed ring; both can coexist when both modes are on.
 
-**What "native" should look like:**
+**Files touched:**
+- New [`src/lib/proportionalEdit.js`](../src/lib/proportionalEdit.js) + [`scripts/test/test_proportionalEdit.mjs`](../scripts/test/test_proportionalEdit.mjs) (49 cases)
+- [`src/store/editorStore.js`](../src/store/editorStore.js) — `proportionalEdit` map + `setProportionalEdit` action
+- [`src/components/canvas/CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — drag-start snapshot + drag-move weighted apply + wheel-radius-adjust + keyboard hooks + indicator ring
 
-1. **`O` key toggles proportional-edit mode.** Persistent state on `editorStore` (e.g. `proportionalEdit: { enabled, radius, falloff }`). When on, single-vertex grab affects every vertex within `radius` (mesh-local distance, not screen-px) with a falloff curve weight. When off, single-vertex grab moves only the picked vertex (today's behaviour).
-2. **MMB-scroll during a grab adjusts `radius` live.** Wheel deltas while `dragRef.current` is active map to radius changes. The brush-cursor circle (already exists, see [CanvasViewport.jsx ~2105](../src/components/canvas/CanvasViewport.jsx)) gets repurposed to render the proportional-edit influence circle whenever a grab is in flight.
-3. **Falloff curves** — at least Smooth (Blender default cosine), Sphere, Root, Linear, Constant. Curve dropdown in a small Modeling-workspace toolbar, or just cycle with `Shift+O` like Blender.
-4. **Distance metric** — Blender measures distance in object-local mesh-space (not screen-px), so zooming doesn't change which vertices are influenced. Match that. Today the brush uses `worldRadius = brushSize / view.zoom` which is screen-px-stable but Blender's mesh-local distance is what users have muscle memory for.
-5. **Connected-only mode.** Blender lets you restrict influence to vertices reachable through edges from the grabbed vertex. Important when two flaps of mesh sit close in space but logically belong to different parts of the silhouette. Off by default; toggle with `Alt+O`.
+**Phase B SHIPPED 2026-05-02:**
+- **Persist proportional-edit settings.** Moved from `editorStore.proportionalEdit` to [`preferencesStore.proportionalEdit`](../src/store/preferencesStore.js) (auto-persisted to localStorage as `v3.prefs.proportionalEdit`). User's preferred radius / falloff / connectedOnly survives across reloads. Implementation deviates from the original "per project" framing: proportional editing is a **muscle-memory** preference (the user's preferred radius doesn't change with the character they're rigging), so per-user is the correct scope.
+- **Adjacency caching.** New `getOrBuildAdjacency(indices, vertexCount)` in [`proportionalEdit.js`](../src/lib/proportionalEdit.js) backed by a module-level WeakMap keyed by the `indices` reference. Successive drags on the same part hit the cache after the first build; immer's path-only-replace semantics auto-invalidate when topology actually changes (retriangulate, vertex add/remove). 3 tests added (52/52 total).
 
-**Why a direct port (not a redesign):**
-
-Blender's proportional-editing UX has been refined for ~20 years; it's the muscle memory of every 3D artist who'll touch this tool. Reinventing curves or hotkeys would create a worse version of something already optimal. The user explicitly named "прямой порт" (direct port) and noted Blender is installed locally so the source is on hand for reference. Memory anchor: [`feedback_exact_port`](../README.md) — when the user names an upstream / reference codebase, port it byte-for-byte rather than pitch alternatives.
-
-**Implementation hooks:**
-
-- New `editorStore.proportionalEdit: { enabled: boolean, radius: number, falloff: 'smooth'|'sphere'|... , connectedOnly: boolean }`.
-- Vertex-drag site in [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) currently moves `dragRef.current.vertexIndex` only. Wrap the single-vertex move into a "compute influenced vertices + per-vertex weight" helper; when `proportionalEdit.enabled` is on, this returns a list of `{vertexIndex, weight}` instead of a single index.
-- Mesh-local distance: walk `node.mesh.vertices`, compute Euclidean distance from grabbed vertex's local coords; multiply by uniform-scale guard so non-uniform-scaled meshes don't get squashed influence radii.
-- Connected-only: precompute adjacency from `node.mesh.indices` once at drag start (cheap); BFS from the grabbed vertex.
-- MMB-scroll-during-drag: extend the `onWheel` handler in CanvasViewport to detect `dragRef.current` and divert the wheel delta to `proportionalEdit.radius` instead of `view.zoom` when active.
-- Cursor circle: the existing `brushCircleRef` SVG element is already in the right place; reuse it to render the influence ring during grabs (drop the brush-mode coupling, just bind it to "drag in flight + proportional on").
-
-**Why it ranks where it does:** the user has been doing mesh edits without proportional editing the whole time the v3 shell has shipped, so this isn't unblocking critical work — but every artist who tries the tool will reach for `O` and not find it. Medium severity = real ergonomic gap, no correctness impact.
-
-**Doesn't block:** GAP-001 / GAP-002. Independent.
-
-**Notes:**
-- The existing screen-space deform brush stays — it's a different operation (paint many vertices over time vs. grab one and let neighbours follow). They coexist as separate tools, not one replacing the other.
-- Blender shows the falloff-curve menu as a small dropdown in the 3D-viewport header. v3's Topbar has space for a similar control when in Modeling/Rigging workspace; likely the right home.
+**Phase B note (still open):** "Brush-mode-style adjustment of which sub-mode owns wheel scrolling" was deferred — today's behaviour (proportional drag in flight diverts wheel to radius; otherwise wheel zooms) is fine in practice.
 
 ---
 
-### GAP-002 — No dedicated "Groups" editor tab
+### ✅ GAP-002 — No dedicated "Groups" editor tab (closed as redundant 2026-05-02)
 
-- **Severity:** low
-- **Reported:** 2026-04-30
-- **Affects:** Layer organization workflow
+- **Severity:** low · **Reported:** 2026-04-30 · **Closed:** 2026-05-02
 
-**Current state:** Upstream README's Static Character workflow says "Use the Groups tab to parent layers and adjust pivot points". v3 has no editor type called "Groups" — the equivalent functionality (parent reassignment, pivot adjustment) lives in `src/v3/editors/properties/tabs/ObjectTab.jsx`, surfaced inside the Properties area when you select a `type='group'` node.
+**Decision:** The upstream README's "Groups tab to parent layers and adjust pivot points" workflow is fully covered by v3's Outliner + Properties → ObjectTab. Selecting a `type='group'` node in [Outliner](../src/v3/editors/outliner/) surfaces parent reassignment, pivot adjustment, and visibility in [ObjectTab.jsx](../src/v3/editors/properties/tabs/ObjectTab.jsx) (transform fields including `pivotX`/`pivotY`). A second "Groups-only" filtered view would duplicate the same actions through different chrome — net negative for user mental model.
 
-**What's missing:** A dedicated tree-style group editor that shows just the group hierarchy. The Outliner already shows the full node tree; a "Groups-only" filtered view would match the README's framing.
+**Why no port:** the entry's own Notes flagged "Possibly redundant with Outliner". Outliner already supports drag-to-reparent and group hierarchy display. Pivot edits go through Properties because pivots are per-node properties, not group-membership properties — splitting them across two tabs would be worse than today's single ObjectTab.
 
-**Gap location:** New editor in `src/v3/editors/`, or a filter mode on the existing Outliner.
-
-**Notes:** Possibly redundant with Outliner. Decide before building.
+If a future user need surfaces (filtering Outliner to groups only, batch-pivot editing, named group presets), file a fresh GAP that names the specific operation Outliner+ObjectTab can't do.
 
 ---
 
@@ -304,35 +326,42 @@ Fixed `@/` aliased imports in [`exportSpine.js`](../src/io/exportSpine.js) → r
 
 ---
 
-### ✅ GAP-010 — Live Preview as its own area tab
+### ✅ GAP-010 — Live Preview as a tab on the center area
 
-- **Severity:** medium · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02
+- **Severity:** medium · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 · **Refactored:** 2026-05-02
 - **Affects:** Viewport workflow — separation between "edit a frame" and "watch the rig live"
 
-**Phase A — fix.** New editor type [`livePreview`](../src/v3/editors/livePreview/LivePreviewEditor.jsx) registered in [editorRegistry.js](../src/v3/shell/editorRegistry.js). The editor mounts a `<CanvasViewport previewMode />` — a single boolean prop on the existing 2200-LOC canvas component that:
+**Phase A — fix.** New editor type `livePreview` registered in [editorRegistry.js](../src/v3/shell/editorRegistry.js). Live drivers (physics pendulum sway + breath cycle + cursor head-look) and editing affordances are gated by a single `previewMode` boolean on [`CanvasViewport`](../src/components/canvas/CanvasViewport.jsx):
 
-- Gates live drivers (physics + breath + cursor look) ON for the lifetime of this surface; closes them cleanly on unmount.
-- Suppresses every editing affordance: mesh edit, drag-to-pivot, gizmo, skeleton overlay, drop hint, brush cursor, K-keyframe + brush keyboard shortcuts, PSD wizard mount, file-routing onDrop. Pan/zoom and cursor look are the only pointer interactions.
-- Skips the imperative ref population (remesh / save / load / export capture / thumbnail capture) so the edit Viewport remains the canonical owner of those actions.
+- `previewMode=true` enables drivers and suppresses every editing affordance: mesh edit, drag-to-pivot, gizmo, skeleton overlay, drop hint, brush cursor, K-keyframe + brush keyboard shortcuts, PSD wizard mount, file-routing onDrop. Pan/zoom and cursor look are the only pointer interactions.
+- `previewMode=false` is genuinely static — no physics, no breath, no cursor look, no `livePreviewActive` flag in `editorStore` anywhere. The previous toggle button in [`ParametersEditor`](../src/v3/editors/parameters/ParametersEditor.jsx) is gone; the snapshot/restore plumbing is deleted.
 
-The plain Viewport editor mounts with `previewMode=false` and is now genuinely static — no physics, no breath, no cursor look, no `livePreviewActive` flag in `editorStore` anywhere. The previous toggle button in [`ParametersEditor`](../src/v3/editors/parameters/ParametersEditor.jsx) is gone; the snapshot/restore plumbing is deleted. Drivers are bound to the Live Preview component's mount lifetime, not a global flag.
+**Workspace defaults:** every workspace preset ([`uiV3Store.js`](../src/store/uiV3Store.js)) ships the `center` area with two tabs `[viewport, livePreview]`, viewport active by default. The user clicks the Live Preview tab on the center area's header to flip the same canvas into live mode. Both surfaces share `rigSpec` and `paramValues`.
 
-**Workspace defaults:** the [`AreaTree`](../src/v3/shell/AreaTree.jsx) gained a `centerRight` slot. When defined, the center column splits horizontally between `center` (edit Viewport) and `centerRight` (Live Preview surface). The `animation` and `pose` workspace presets ([`uiV3Store.js`](../src/store/uiV3Store.js)) include `centerRight: livePreview` so the user gets the side-by-side view by default. `layout`/`modeling`/`rigging` presets stay edit-only — no `centerRight` slot, so live drivers never auto-run while the user is structuring or rigging. The user can still swap any area's active tab to `livePreview` manually via the area-header dropdown to surface drivers in any workspace temporarily.
+**Single-canvas architecture (refactor 2026-05-02):** Both canvas tabs back onto the same [`<CanvasArea>`](../src/v3/shell/CanvasArea.jsx) host, which owns ONE `<CanvasViewport>` instance whose `previewMode` prop flips with the active tab. [`Area.jsx`](../src/v3/shell/Area.jsx) short-circuits the editor registry for `viewport` and `livePreview` and shares the ErrorBoundary key `${area.id}:canvas`, so toggling between the two tabs does NOT remount the canvas — WebGL2 context, texture uploads, ScenePass, the wizard's local PSD payload, ONNX session, and snapshot refs all survive. The earlier shape (two separate components per editor type, plus a brief side-by-side `centerRight` split) was replaced because every tab toggle destroyed and recreated the WebGL context, which surfaced as a "wizard character disappears forever" bug when the user toggled tabs mid-import. The registry's `component` slot for both canvas types is `null` — Area.jsx routes them through CanvasArea directly; only the `label` is consumed by AreaTabBar.
 
-Both surfaces share `rigSpec` and `paramValues`, so cursor-look on the right rotates the head in the left edit Viewport too — exactly how Cubism Editor + Viewer work side-by-side. autoSaveId bumped to `v3-ws-<wsKey>-h6` so users with stored sizes from the pre-`centerRight` shape don't get a half-collapsed center column.
+**Test coverage:** [`test:livePreviewWiring`](../scripts/test/test_livePreviewWiring.mjs) (36 cases) — every workspace's center area has `[viewport, livePreview]` tabs with viewport active, no `centerRight` slot anywhere, removed `editorStore` triple, programmatic tab swap. [`test:uiV3Store`](../scripts/test/test_uiV3Store.mjs) extended to assert the 2-tab center on layout / modeling / rigging / pose / animation.
 
-**Test coverage:** [`test:livePreviewWiring`](../scripts/test/test_livePreviewWiring.mjs) (15 cases) — workspace presets, removed `editorStore` triple, swap-via-tab escape hatch. [`test:uiV3Store`](../scripts/test/test_uiV3Store.mjs) extended to assert area counts (animation: 7, pose: 6) and the new `centerRight` tab structure.
+**Phase B SHIPPED 2026-05-02 — independent camera + zoom + pan per mode.**
 
-**Phase B (deferred):** independent camera + zoom + pan per surface. Today both `<CanvasViewport>` instances read `editorStore.view`, so panning the edit Viewport also pans the preview. The fix is to lift `view` into per-instance scope (e.g. an instanceId-keyed sub-store) but the GAP-010 Phase A scope was "drivers run only here, edit Viewport is static" — independent framing is a UX polish step, not a correctness gap. Promoted only when a user surfaces it.
+`editorStore.view` was replaced with `editorStore.viewByMode = { viewport: {...}, livePreview: {...} }`. The setter signature changed to `setView(modeKey, partial)`. CanvasViewport derives its `modeKey` from the `previewMode` prop and routes every read/write through the active mode's view; the per-frame `editorForDraw` spread that scenePass consumes resolves `view` from `viewByMode[modeKey]` so the renderer is unchanged. Mode-specific overlays (GizmoOverlay, WarpDeformerOverlay, RotationDeformerOverlay) only mount in the edit Viewport, so they hardcode `viewByMode.viewport`. Frame-selection in `v3/operators/registry.js` operates on viewport's view (livePreview's framing is read-only "what does this look like at runtime" and shouldn't be moved by editor operators).
 
-**Files touched (Phase A):**
-- New [src/v3/editors/livePreview/LivePreviewEditor.jsx](../src/v3/editors/livePreview/LivePreviewEditor.jsx)
+**Files touched:**
+- [`src/store/editorStore.js`](../src/store/editorStore.js) — `view` → `viewByMode`; `setView(partial)` → `setView(modeKey, partial)`
+- [`src/components/canvas/CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) — derived `modeKey`/`view`/per-mode `setView` wrapper; every `view` read/write threaded through it
+- [`src/components/canvas/GizmoOverlay.jsx`](../src/components/canvas/GizmoOverlay.jsx) + [`WarpDeformerOverlay.jsx`](../src/v3/editors/viewport/overlays/WarpDeformerOverlay.jsx) + [`RotationDeformerOverlay.jsx`](../src/v3/editors/viewport/overlays/RotationDeformerOverlay.jsx) — read `s.viewByMode.viewport`
+- [`src/v3/operators/registry.js`](../src/v3/operators/registry.js) — frame-selection operates on viewport's view explicitly
+- [`scripts/test/test_editorStore.mjs`](../scripts/test/test_editorStore.mjs) — per-mode setView test (44/44).
+
+**Files touched:**
+- New [src/v3/shell/CanvasArea.jsx](../src/v3/shell/CanvasArea.jsx) — single canvas host for both modes
+- [src/v3/shell/Area.jsx](../src/v3/shell/Area.jsx) — canvas-tab short-circuit + shared ErrorBoundary key
 - [src/components/canvas/CanvasViewport.jsx](../src/components/canvas/CanvasViewport.jsx) — `previewMode` prop + every gate site
-- [src/v3/shell/editorRegistry.js](../src/v3/shell/editorRegistry.js) — register `livePreview`
-- [src/v3/shell/AreaTree.jsx](../src/v3/shell/AreaTree.jsx) — center column horizontal split for `centerRight`
-- [src/store/uiV3Store.js](../src/store/uiV3Store.js) — `EditorType` union extended; `ANIMATION_AREAS` + new `POSE_AREAS` include `centerRight: livePreview`
+- [src/v3/shell/editorRegistry.js](../src/v3/shell/editorRegistry.js) — `viewport`/`livePreview` entries with `component: null`
+- [src/store/uiV3Store.js](../src/store/uiV3Store.js) — `EditorType` union extended; every preset's center area carries `[viewport, livePreview]`
 - [src/store/editorStore.js](../src/store/editorStore.js) — removed `livePreviewActive` / `setLivePreviewActive` / `editParamSnapshot`
 - [src/v3/editors/parameters/ParametersEditor.jsx](../src/v3/editors/parameters/ParametersEditor.jsx) — removed Play/Pause toggle
+- Deleted: `src/v3/editors/viewport/ViewportEditor.jsx` and `src/v3/editors/livePreview/LivePreviewEditor.jsx` (logic moved into CanvasArea)
 
 ---
 
@@ -383,7 +412,7 @@ Pick at implementation time.
 
 ### ✅ GAP-008 — No opt-out for "rig hair" in Initialize Rig
 
-- **Severity:** high · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 (data layer + filter logic; UI checkbox panel deferred)
+- **Severity:** high · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 · **Phase B SHIPPED:** 2026-05-02 (UI checkbox popover next to Init Rig button)
 - **Affects:** Init Rig flow on characters where the auto-detected hair rig is unwanted (wrong shape, breaks down, or character intentionally has rigid hair)
 
 **Phase A — data layer + filter logic shipped.** New `project.autoRigConfig.subsystems` section with seven boolean flags (faceRig / eyeRig / mouthRig / hairRig / clothingRig / bodyWarps / armPhysics), all true by default. Setting any to `false` drops matching outputs at harvest time:
@@ -400,7 +429,11 @@ Wired in [`harvestSeedFromRigSpec`](../src/io/live2d/rig/initRig.js) (post-rigSp
 
 **Test coverage:** `test:subsystemsOptOut` (46 cases) — all 7 flags individually + combined, tag-to-subsystem map correctness, physics-rule prefix mapping, no-opts fallback (pre-GAP-008 behaviour preserved), seedPhysicsRules integration.
 
-**Phase B — UI checkbox panel.** Out of scope here. When the rerig-flow gap ships a "rig settings" panel, a 7-checkbox section bound to `project.autoRigConfig.subsystems` exposes the flags. The data-layer plumbing is done; the UI is the only missing piece.
+**Phase B SHIPPED 2026-05-02 — UI checkbox popover.** New [`src/v3/editors/parameters/InitRigOptionsPopover.jsx`](../src/v3/editors/parameters/InitRigOptionsPopover.jsx). The popover trigger sits next to the Init Rig button in both [`ParametersEditor`](../src/v3/editors/parameters/ParametersEditor.jsx) surfaces (empty-state and the in-header re-run button), and renders a 7-checkbox list bound directly to `project.autoRigConfig.subsystems` via `updateProject` (so changes are undoable + persist via the existing autoRigConfig save/load path that GAP-011 Phase A already covered). Trigger label shows enabled-count (e.g. `6/7`) so users can see at a glance that they've opted out of something. Helper buttons: All / None.
+
+The expected workflow: uncheck "Hair rig" (or any other) → click Init Rig → resolveAutoRigConfig sees the flag and the post-build filter in `harvestSeedFromRigSpec` drops the matching outputs. No re-toggling needed for subsequent re-runs; the project remembers.
+
+Doesn't gate on the rerig-flow infrastructure — the UI surface is its own button next to Init Rig, not a deeper "rig settings" panel. The data-layer plumbing was always sufficient on its own.
 
 **Current state:** Initialize Rig auto-detects hair (front-hair / back-hair tags) and synthesises sway physics + warp deformers for them. There's no UI checkbox / option / config to skip the hair rig — even if the user wants every other rig output (face, body, eyes, mouth) but not hair, they get it anyway. The user has surfaced this multiple times: every Init Rig forces the hair rig, which is bad for short-hair / buzz-cut / accessory-hair characters where the auto-rig doesn't produce a useful result.
 

@@ -32,6 +32,7 @@ import { initializeRigFromProject } from './rig/initRig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
 import { EYE_SOURCE_TAGS } from './cmo3/eyeTags.js';
+import { BODY_ANALYSIS_TAGS } from './bodyAnalyzer.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -764,15 +765,23 @@ export async function buildMeshesForRig(project, images) {
     const variantSuffix =
       part.variantSuffix ?? extractVariant(meshName).variant ?? null;
 
-    // Render canvas-sized PNG for eye-source meshes only — needed by
-    // `eyeClosureFit.fitParabolaFromLowerEdge` for the PNG-alpha lower
-    // contour extraction (matches upstream pre-v3 cmo3writer behaviour
-    // where every mesh always had real PNG bytes). Other meshes get an
-    // empty placeholder; rigOnly mode short-circuits before atlas pack
-    // so it never reads them.
+    // Render canvas-sized PNG for two consumer groups:
+    //   - EYE_SOURCE_TAGS  → `eyeClosureFit.fitParabolaFromLowerEdge`
+    //                        extracts the lower-eyelid contour from PNG alpha.
+    //   - BODY_ANALYSIS_TAGS → `bodyAnalyzer.analyzeBody` unions PNG alphas
+    //                        into core/full silhouette masks for spine axis,
+    //                        anchor Ys (shoulder/hip/feet), and width profile.
+    //                        Without these, the body warp chain falls back
+    //                        to default HIP_FRAC=0.45 / FEET_FRAC=0.75 and
+    //                        legwear stretches far below the canvas.
+    // Other meshes get an empty placeholder; rigOnly mode short-circuits
+    // before atlas pack so it never reads them.
     const tag = matchTag(meshName);
     let pngData = new Uint8Array(0);
-    if (EYE_SOURCE_TAGS.has(tag) && images && images.size > 0) {
+    const needsPng =
+      (EYE_SOURCE_TAGS.has(tag) || BODY_ANALYSIS_TAGS.has(tag))
+      && images && images.size > 0;
+    if (needsPng) {
       const texId = part.textureId ?? part.id;
       const img = images.get(texId) ?? images.get(part.id);
       if (img) {

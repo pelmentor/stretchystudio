@@ -74,20 +74,25 @@ export function captureExportFrame(ctx, opts) {
   canvas.width = exportWidth;
   canvas.height = exportHeight;
 
-  // Mock editor: 1:1 pixel space, no overlays.
+  // Mock editor: 1:1 pixel space, image only — every overlay stripped so
+  // the captured frame is render-clean (matches what a viewer ships).
   const panX = cropOffset ? -cropOffset.x : 0;
   const panY = cropOffset ? -cropOffset.y : 0;
   const exportEditor = {
     ...editor,
     view: { zoom: 1, panX, panY },
     selection: [],
-    meshEditMode: false,
-    overlays: {
-      showImage: true,
-      showWireframe: false,
-      showVertices: false,
-      showEdgeOutline: false,
-      irisClipping: editor?.overlays?.irisClipping ?? true,
+    editMode: null,
+    activeBlendShapeId: null,
+    viewLayers: {
+      image: true,
+      wireframe: false,
+      vertices: false,
+      edgeOutline: false,
+      skeleton: false,
+      irisClipping: editor?.viewLayers?.irisClipping ?? true,
+      warpGrids: false,
+      rotationPivots: false,
     },
   };
 

@@ -3,13 +3,14 @@
 /**
  * v3 1A.UX — Splittable area layout.
  *
- * Three-column layout (2026-05-02 — Live Preview surface added):
+ * Three-column layout (2026-05-02 — Live Preview is a TAB on the
+ * center area, not a side-by-side panel; the canvas is never split):
  *
- *   Left column (vertical)   Center column                       Right column (vertical)
- *   ──────────────────────   ─────────────────────────────────   ───────────────────────
- *   leftTop:    Outliner     center:      Viewport (edit)        rightTop:    Parameters
- *   leftBottom: Logs         centerRight: Live Preview (drivers) rightBottom: Properties
- *                            timeline:    Timeline (anim ws)
+ *   Left column (vertical)   Center column                  Right column (vertical)
+ *   ──────────────────────   ────────────────────────────   ───────────────────────
+ *   leftTop:    Outliner     tabs: [Viewport,               rightTop:    Parameters
+ *   leftBottom: Logs                Live Preview]           rightBottom: Properties
+ *                            timeline: Timeline (anim ws)
  *
  * Areas are looked up by id (not positional index). Each side column
  * is a vertical PanelGroup when both halves are defined, falling back
@@ -17,14 +18,9 @@
  * that omit both halves of a side render as a 2-column or 1-column
  * layout.
  *
- * The center column splits horizontally between `center` and
- * `centerRight` when both are defined (GAP-010 — Live Preview surface),
- * then vertically below for `timeline` if present. Workspaces that
- * omit `centerRight` render the center column unsplit as before.
- *
- * autoSaveId is bumped to `v3-ws-<wsKey>-h6` so users with stored
- * sizes from earlier shapes don't get a half-collapsed column on
- * first render.
+ * If a `timeline` area is defined the center column splits vertically
+ * between the center area and the timeline; otherwise the center
+ * column is the center area unsplit.
  *
  * Phase 1+ replaces this with a recursive split-tree where every
  * splitter can be split further (Blender's "drag the corner to
@@ -74,43 +70,42 @@ export function AreaTree() {
   const leftTop     = byId.leftTop;
   const leftBottom  = byId.leftBottom;
   const center      = byId.center;
-  const centerRight = byId.centerRight;
   const rightTop    = byId.rightTop;
   const rightBottom = byId.rightBottom;
   const timeline    = byId.timeline;
 
   const wsKey = activeWorkspace;
 
-  // GAP-010 — center top is `center` alone, OR a horizontal split between
-  // `center` (edit Viewport) and `centerRight` (Live Preview surface) when
-  // both are defined. Then if a `timeline` area is present, the whole
-  // center column splits vertically below it.
-  const centerTop = centerRight ? (
-    <PanelGroup direction="horizontal" autoSaveId={`v3-ws-${wsKey}-cTop`}>
-      <Panel defaultSize={55} minSize={25}>
-        {center && <Area area={center} />}
-      </Panel>
-      <PanelResizeHandle className={HORIZONTAL_HANDLE} />
-      <Panel defaultSize={45} minSize={20}>
-        <Area area={centerRight} />
-      </Panel>
-    </PanelGroup>
-  ) : (
-    center && <Area area={center} />
-  );
+  // Live Preview lives as a tab on `center` (no canvas split). If a
+  // `timeline` area is present, the center column splits vertically
+  // between center and timeline.
+  //
+  // BUG-017 fix: the centerColumn wrapper is ALWAYS a vertical PanelGroup
+  // — even when `timeline` is absent — so that React reconciliation
+  // preserves CanvasArea's mount across workspace switches that toggle
+  // timeline visibility (e.g. layout ↔ animation). The earlier shape
+  // conditionally used `<Area>` bare (no timeline) vs `<PanelGroup>` (with
+  // timeline); React saw different element types at the same depth, tore
+  // down the entire subtree, and the CanvasViewport's WebGL2 context was
+  // destroyed + texture uploads lost — surfacing as "character disappears
+  // forever after layout → animation switch". Stable PanelGroup wrapper
+  // keeps the centerArea path identical across workspaces.
+  const centerArea = center && <Area area={center} />;
 
-  const centerColumn = timeline ? (
+  const centerColumn = (
     <PanelGroup direction="vertical" autoSaveId={`v3-ws-${wsKey}-c`}>
-      <Panel defaultSize={75} minSize={20}>
-        {centerTop}
+      <Panel defaultSize={timeline ? 75 : 100} minSize={20}>
+        {centerArea}
       </Panel>
-      <PanelResizeHandle className={VERTICAL_HANDLE} />
-      <Panel defaultSize={25} minSize={10}>
-        <Area area={timeline} />
-      </Panel>
+      {timeline ? (
+        <>
+          <PanelResizeHandle className={VERTICAL_HANDLE} />
+          <Panel defaultSize={25} minSize={10}>
+            <Area area={timeline} />
+          </Panel>
+        </>
+      ) : null}
     </PanelGroup>
-  ) : (
-    centerTop
   );
 
   const leftColumn  = renderSideColumn(leftTop,  leftBottom,  `v3-ws-${wsKey}-l`, 65);

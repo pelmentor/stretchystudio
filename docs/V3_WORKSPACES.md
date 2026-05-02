@@ -1,99 +1,126 @@
 # v3 Workspaces
 
-Living document. v3 has five workspace presets — Layout, Modeling, Rigging, Pose, Animation — each tuned to a phase of the rigging pipeline. This document captures what each workspace IS, what visualizations + behaviours are appropriate there, and how the per-workspace **viewport policy** keeps state from bleeding across workspaces.
+Living document. v3 has **three workspaces** — Edit, Pose, Animation — each tuned to a phase of the rigging pipeline. This document captures what each workspace IS and how the **Mode pill** + **edit modes** interact with them.
 
-> Memory anchor: workspace switching used to remount every editor + destroy the WebGL context (BUG-001, fixed 2026-05-02). Now editor identity is stable across workspaces; this doc is about what each workspace LOOKS LIKE, not how it's mounted.
+> History: 2026-05-02 collapsed 5 workspaces (Layout / Modeling / Rigging / Pose / Animation) into 3 (Edit / Pose / Animation). The first three were structurally identical (same panel layout, same `editorMode='staging'`) and only differed via a workspace-policy gate that has been deleted. False distinction removed.
 
-## Workspace × concern matrix
+## Workspaces × concerns
 
-| Workspace   | Editor mode | Mesh wireframe / vertices | Mesh edit dimming | Skeleton overlay | Bone-controller drag target | Live Preview surface (centerRight) |
-|-------------|-------------|---------------------------|-------------------|------------------|------------------------------|-------------------------------------|
-| Layout      | staging     | ❌ never                   | ❌ never           | user-toggle      | `node.transform` (persistent) | ❌ off (drivers never run)          |
-| Modeling    | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) | ❌ off                               |
-| Rigging     | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) | ❌ off                               |
-| Pose        | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    | ✅ on (preset)                       |
-| Animation   | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    | ✅ on (preset)                       |
+| Workspace   | editorMode | Timeline | Use case |
+|-------------|-----------|----------|----------|
+| **Edit**    | staging    | hidden   | Setup work: PSD import, meshes, bones, weights, rig. Edits target the rest pose. |
+| **Pose**    | animation  | hidden   | Quick posing without keyframing. Edits become timeline keyframes. |
+| **Animation** | animation | visible | Full keyframing on the timeline. Edits become timeline keyframes. |
 
-Three concerns are workspace-scoped:
+**Workspaces are layout-only.** They DO NOT gate edit modes or visualizations — Blender pattern. The previous `workspaceViewportPolicy` module was deleted 2026-05-02; `editorStore.editMode` is independent of workspace.
 
-1. **Mesh-level visualizations** (wireframe + vertex points) are only meaningful when the user is editing meshes. Object-level workspaces (Layout/Animation/Pose) suppress them so the viewport stays clean — selection feedback uses only the edge outline (Blender's "Object Mode" outline).
+**Workspace switch never touches ANY mode.** User 2026-05-02: "modes are in every window and don't change between windows". `setWorkspace` only updates `activeWorkspace`. Both `editMode` (Blender-style: mesh / skeleton / blendShape) AND `editorMode` (Spine-style: staging / animation) are preserved verbatim across workspace transitions, along with `selection` and `activeBlendShapeId`. Tab into Edit Mode in the Edit workspace, switch to Animation — you're still in Edit Mode. Locked by `test_uiV3Store` contract tests walking every editMode kind AND every editorMode value across every workspace pair.
 
-2. **Mesh edit mode** (the `meshEditMode` flag dimming non-selected parts + engaging the brush) only fires in Modeling/Rigging. Setting the flag in Modeling and switching to Layout doesn't drag the dimming into Layout — the policy gate forces it off at render time. Switching back to Modeling restores the flag automatically because we don't mutate the user's stored values.
+### The three independent axes
 
-3. **Editor mode** (`staging` vs `animation`) couples to workspace via the Topbar's workspace pill. Layout/Modeling/Rigging all use `staging` (edits target the rest pose / project structure). Pose/Animation use `animation` (edits become timeline keyframes; rest pose is preserved via `captureRestPose`).
+| Axis | Where set | What it controls |
+|------|-----------|------------------|
+| **`activeWorkspace`** (uiV3Store) | Topbar workspace pills (Edit / Pose / Animation) | Which editor panels are visible + their layout |
+| **`editorMode`** (editorStore) | Topbar Setup⇄Animate pill | Setup → edits modify rest pose; Animate → edits become timeline keyframes |
+| **`editMode`** (editorStore) | Canvas top-left Mode pill + Tab keybind | Object Mode / Edit Mode (mesh) / Skeleton Edit / Blend Shape Paint |
 
-4. **Live drivers** (physics pendulum sway + breath cycle + cursor head-look) only run while a `livePreview` editor is mounted. The Pose/Animation presets include a `centerRight` slot defaulted to Live Preview, so opening either workspace starts drivers automatically. Switching the `centerRight` tab away from Live Preview (or closing the workspace) stops every driver cleanly. Layout/Modeling/Rigging never run drivers — preview-noise during rig structuring is exactly the wrong feedback surface.
+All three change independently. Any combination is valid — Edit workspace + Animate + Mesh Edit Mode is fine (you're keyframing vertex positions while looking at edit-friendly panels). The user picks each axis explicitly; nothing implies anything else.
 
-   Hard rule: **drivers run iff `<LivePreviewEditor>` is mounted somewhere in the tree.** No global flag, no `livePreviewActive` state. Two surfaces sharing `paramValues` means cursor look on the Live Preview rotates the head in the edit Viewport too — exactly how Cubism Editor + Viewer side-by-side works.
+### EditorModeService
 
-## The viewport policy
+[`src/services/EditorModeService.js`](../src/services/EditorModeService.js) wraps `setEditorMode` so the `captureRestPose` snapshot fires on the `staging→animation` transition regardless of caller. Both the Topbar Setup⇄Animate pill and the AnimationsEditor "create animation" path go through this service. Programmatic callers should also use it; the bare `editorStore.setEditorMode` still exists for the service's own internal use but is not the public path.
 
-Code: [`src/v3/shell/workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js).
+**Live drivers** (physics + breath + cursor head-look) only run while the active center tab is `livePreview`. Every workspace ships the `center` area with two tabs `[viewport, livePreview]` (viewport active by default). Drivers gate on the `<CanvasViewport>` instance's `previewMode` prop — no global flag.
 
-The policy is a **pure function**, not a separate store. The user's preferences live in `editorStore.overlays` and `editorStore.meshEditMode`; the policy filters them at consumption time:
+## Edit modes (the contextual `editMode` slot)
 
-```js
-applyWorkspacePolicy(overlays, meshEditMode, workspaceId)
-  → { overlays, meshEditMode }   // effective values
+Code: [`src/store/editorStore.js`](../src/store/editorStore.js) → `editMode` / `enterEditMode` / `exitEditMode`.
+
+`editorStore.editMode` is one of:
+
+- **`null`** — Object Mode. Default. Selection is per-node; transforms move whole pieces.
+- **`'mesh'`** — vertex / UV editing on the selected part. Wireframe + vertices auto-shown for the active part regardless of `viewLayers` toggles. `meshSubMode` (`'deform'` | `'adjust'`) sub-selects between vertex movement and UV painting; sticky across re-entries.
+- **`'skeleton'`** — bone joint dragging. Requires the Skeleton overlay (`viewLayers.skeleton`) to be on; toggling it off auto-exits skeleton edit. The Mode pill auto-enables the skeleton overlay when entering this mode.
+- **`'blendShape'`** — painting deltas onto `activeBlendShapeId`. Same brush as mesh edit; write target is the blendShape's `deltas` array.
+
+### Mode pill (canvas top-left overlay)
+
+Code: [`src/v3/shell/ModePill.jsx`](../src/v3/shell/ModePill.jsx).
+
+The pill is the discoverable affordance for edit modes. Mounts only on the edit Viewport tab (not Live Preview — modes are meaningless there). Reads `editorStore.editMode` + active selection; renders a dropdown with the modes available for the current selection:
+
+```
+┌─ Object Mode ▼ ─┐
+│ ◉ Object Mode   │  always available
+│ ○ Edit Mode     │  meshed part selected
+│ ○ Skeleton      │  bone-role group selected
+│ ─────           │
+│ Blend Shape Paint│
+│ ○ Smile          │  per-shape rows when the part has blend shapes
+│ ○ Angry          │
+│ ─────            │
+│ ☐ Lock object modes  ← preference
+└──────────────────┘
 ```
 
-**Why pure (vs a per-workspace stored override):**
+Tab keybind (`mode.editToggle` operator) toggles between Object Mode and the contextual edit mode the active selection supports. With no valid selection, Tab pushes a toast explaining what to select.
 
-- Switching workspaces back and forth doesn't lose the user's prior toggles
-- `scenePass.draw` and `CanvasViewport`'s drag handlers can both call the same function — render and behaviour stay gated identically
-- Adding a new workspace is one entry in the `WORKSPACE_POLICY` table; no migration
+### Selection auto-exit
 
-**Edge outline (`overlays.showEdgeOutline`) is allowed in every workspace** because it's the universal "this is selected" cue. Wireframe + vertices are mesh-edit-specific.
+`setSelection` clears `editMode` whenever the selection-head changes — the new selection's edit context is unrelated. Same-head re-set keeps the mode intact (the user just clicked the same thing again).
+
+### Lock Object Modes (Blender preference)
+
+[`preferencesStore.lockObjectModes`](../src/store/preferencesStore.js), default ON. While the user is in any edit mode, clicks on a *different* part are **rejected** by `setSelection` — must Tab out before switching pieces. Mirrors Blender's "Lock Object Modes" setting. Empty selection (deselect-all) is allowed even with the lock on, but exits edit mode because there's no part to edit anymore. Toggle: ModePill dropdown footer.
+
+## Mesh-edit auto-shows the mesh
+
+When `editMode === 'mesh'` and the active part is selected, `scenePass` forces wireframe + vertices on for that part regardless of `viewLayers.wireframe` / `vertices` toggles. Blender pattern: in Edit Mode you always see what you're editing. The toggles continue to govern visualization for unselected parts.
 
 ## Reset Pose semantics by mode
 
-Code: [`src/services/PoseService.js`](../src/services/PoseService.js) — single source of truth, called from both [`Topbar.handleResetRestPose`](../src/v3/shell/Topbar.jsx) (button click) and [`RigService.initializeRig`](../src/services/RigService.js) (pre-Init reset, BUG-004/008/010 fix).
+Code: [`src/services/PoseService.js`](../src/services/PoseService.js) — single source of truth, called from both [`Topbar.handleResetRestPose`](../src/v3/shell/Topbar.jsx) and [`RigService.initializeRig`](../src/services/RigService.js).
 
-The Reset Pose button sits at the top-right of the Topbar in EVERY workspace. What it actually does depends on the editor mode because of how bone-controller drags persist:
+The Reset Pose button sits at the top-right of the Topbar in EVERY workspace. What it actually does depends on the `editorMode` because of how bone-controller drags persist:
 
-| Mode      | PoseService function | What it does                                                                           |
-|-----------|----------------------|----------------------------------------------------------------------------------------|
+| editorMode | PoseService function | What it does |
+|-----------|----------------------|--------------|
 | animation | `resetPoseDraft()`   | Clears `animationStore.draftPose` + zeros every parameter to its default. Committed timeline keyframes survive. |
 | staging   | `resetToRestPose()`  | Same as animation, PLUS zeros `node.transform.{rotation,x,y,scaleX,scaleY}` for every group with a `boneRole` (preserving pivots). Per-part transforms (non-bone) are preserved. |
 
-The split exists because in staging mode `SkeletonOverlay`'s rotation drag writes straight to `node.transform.rotation` (persistent project state, undoable). There's no transient layer to clear — we have to walk the bone groups and reset them. Per-part transforms (e.g. positioning a hat sticker in the Outliner) are NOT reset because those are intentional layout, not pose; for those the user has [Properties → Reset Transform](../src/v3/editors/properties/tabs/ObjectTab.jsx) (GAP-014).
-
-`RigService.initializeRig` calls `resetToRestPose()` BEFORE harvesting so the rig builder sees a clean rest geometry — this is the BUG-004/008/010 fix (Init Rig used to leave armature posed while mesh reset, leave bone-moved layers frozen, and break Iris Offset; all three traced back to harvesting against a non-rest pose).
+`RigService.initializeRig` calls `resetToRestPose()` BEFORE harvesting so the rig builder sees clean rest geometry — BUG-004 / BUG-008 / BUG-010 fix.
 
 ## Wizard cleanup contract
 
-Code: [`src/components/canvas/CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) → `handleWizardComplete` + `handleWizardSkip`.
+Code: [`PsdImportService.resetInteractionState`](../src/services/PsdImportService.js).
 
 Both wizard exits clear:
-
 - `editorStore.selection` (legacy node-id array)
 - `useSelectionStore.items` (universal selection)
-- `meshEditMode`, `blendShapeEditMode`, `activeBlendShapeId`
-- `skeletonEditMode`
+- `editorStore.editMode` + `activeBlendShapeId`
 
-Why: during the wizard the user can interact with parts via the Outliner, the canvas, or the wizard's own UI. Any of those interactions might write selection / mesh-edit flags into the editor store. Without this cleanup those flags survive into the post-import workspace and produce sticky selection outlines (BUG-012).
+Without this cleanup, transient interaction state leaks into the post-import workspace (BUG-012).
 
 ## Adding a new workspace
 
-1. Add the entry to `WORKSPACE_POLICY` in [`workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js)
-2. Add the preset (areas + tabs) in [`uiV3Store.js`](../src/store/uiV3Store.js)
-3. Add the workspace pill to `WORKSPACES` in [`Topbar.jsx`](../src/v3/shell/Topbar.jsx)
-4. Add a row to the matrix at the top of this doc
+1. Add the entry to `initialWorkspaces()` in [`uiV3Store.js`](../src/store/uiV3Store.js)
+2. Add the workspace pill to `WORKSPACES` in [`Topbar.jsx`](../src/v3/shell/Topbar.jsx)
+3. Bind a `Ctrl+Digit{N}` chord in [`default.js`](../src/v3/keymap/default.js)
+4. Update the matrix at the top of this doc
 
-Default policy fallback for unknown workspace names is **Modeling-permissive** — i.e., wireframe and meshEditMode honoured. That way a typo or forgotten table entry fails open (everything visible) rather than closed (a confusing blank viewport).
+There is no policy table to update — workspaces are layout-only.
 
 ## Area slots in the AreaTree
 
-The [`AreaTree`](../src/v3/shell/AreaTree.jsx) maps workspace presets to a fixed set of named slots; any preset can omit slots, and the layout collapses gracefully:
+The [`AreaTree`](../src/v3/shell/AreaTree.jsx) maps workspace presets to a fixed set of named slots:
 
 | Slot         | Position                                  | Used by                          |
 |--------------|-------------------------------------------|----------------------------------|
 | `leftTop`    | Top of left column                         | Outliner (default in every preset) |
 | `leftBottom` | Bottom of left column (vertical split)     | Logs (default in every preset)   |
-| `center`     | Top of center column                       | Viewport (edit, in every preset) |
-| `centerRight`| Right of center column (horizontal split)  | Live Preview (Pose/Animation only) |
+| `center`     | Center column                              | `[Viewport, Live Preview]` tabs (every preset) |
 | `timeline`   | Bottom of center column (vertical split)   | Timeline / Dopesheet / F-Curve (Animation only) |
 | `rightTop`   | Top of right column                        | Parameters (default in every preset) |
 | `rightBottom`| Bottom of right column (vertical split)    | Properties (or Animations + Properties in Animation) |
 
-When a preset omits both halves of a side column, the layout falls back to two-column or one-column arrangements automatically. `centerRight` is the newest slot (added 2026-05-02 for GAP-010) — it splits the center column horizontally so the user sees the edit Viewport on the left and the Live Preview on the right.
+The `center` area carries TWO tabs `[viewport, livePreview]` in every preset. [`Area.jsx`](../src/v3/shell/Area.jsx) detects canvas tabs and routes both through the shared [`<CanvasArea>`](../src/v3/shell/CanvasArea.jsx) host, so toggling between them does NOT remount the canvas.

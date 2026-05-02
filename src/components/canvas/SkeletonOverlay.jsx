@@ -15,6 +15,8 @@ import React, { useCallback, useRef, useEffect, useMemo } from 'react';
 import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';
 import { useAnimationStore } from '@/store/animationStore';
+import { useParamValuesStore } from '@/store/paramValuesStore';
+import { useRigSpecStore } from '@/store/rigSpecStore';
 import { SKELETON_CONNECTIONS } from '@/io/armatureOrganizer';
 import { computeWorldMatrices, mat3Identity } from '@/renderer/transforms';
 import { computePoseOverrides } from '@/renderer/animationEngine';
@@ -70,6 +72,14 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   const animEndFrame          = useAnimationStore(s => s.endFrame);
   const setDraftPose          = useAnimationStore(s => s.setDraftPose);
   const clearDraftPoseForNode = useAnimationStore(s => s.clearDraftPoseForNode);
+  // BUG-016 fix — iris controller knob position reads ParamEyeBallX/Y when
+  // a rigSpec is present (post-Init-Rig); the param drives the rig's
+  // iris-translation keyforms via tagWarpBindings. Pre-Init-Rig the knob
+  // falls back to node.transform.x/y so the trackpad is still a usable
+  // pose preview before rigging exists.
+  const paramEyeBallX = useParamValuesStore(s => s.values.ParamEyeBallX);
+  const paramEyeBallY = useParamValuesStore(s => s.values.ParamEyeBallY);
+  const hasRigSpec    = useRigSpecStore(s => !!s.rigSpec);
 
   const dragRef  = useRef(null); // { type: 'joint'|'rotate', nodeId, ... }
   const svgRef   = useRef(null);
@@ -198,6 +208,19 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (cyClamp > half) cyClamp = half;
       const newX = (cxClamp / half) * MAX_OFFSET;
       const newY = (cyClamp / half) * MAX_OFFSET;
+
+      // BUG-016 fix: write to ParamEyeBallX/Y so the iris controller drives
+      // the rig's iris-translation keyforms (built by tagWarpBindings.js as
+      // ParamEyeBallX × ParamEyeBallY) AFTER Init Rig has been run. Pre-Init-Rig
+      // there's no rigSpec consuming these params, but the simultaneous
+      // node.transform.x/y write below keeps the rest-mesh + worldMatrix
+      // path working for the no-rig case. Range conversion: trackpad ±40 px
+      // → ParamEyeBall ±1 (Cubism convention; ParamEyeBallY positive = look
+      // up, hence the negation since screen-y increases downward).
+      useParamValuesStore.getState().setMany({
+        ParamEyeBallX:  newX / MAX_OFFSET,
+        ParamEyeBallY: -newY / MAX_OFFSET,
+      });
 
       if (editorModeRef.current === 'animation') {
          setDraftPoseRef.current(nodeId, { x: newX, y: newY });
@@ -372,7 +395,13 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (cyClamp > half) cyClamp = half;
       const newX = (cxClamp / half) * MAX_OFFSET;
       const newY = (cyClamp / half) * MAX_OFFSET;
-      
+
+      // BUG-016 fix — see paired write in onPointerDown trackpad branch.
+      useParamValuesStore.getState().setMany({
+        ParamEyeBallX:  newX / MAX_OFFSET,
+        ParamEyeBallY: -newY / MAX_OFFSET,
+      });
+
       if (drag.isAnimMode) {
          setDraftPoseRef.current(drag.nodeId, { x: newX, y: newY });
       } else {
@@ -546,11 +575,20 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       
       const TP_SIZE = 80;
       const half = TP_SIZE / 2;
-      const MAX_OFFSET = 40; 
-      
-      const ex = node.transform.x || 0;
-      const ey = node.transform.y || 0;
-      
+      const MAX_OFFSET = 40;
+
+      // Knob position. Post-Init-Rig (rigSpec present) the trackpad
+      // controls ParamEyeBallX/Y; pre-Init-Rig it falls back to the
+      // eye-group's node.transform.x/y for a worldMatrix-based preview.
+      let ex, ey;
+      if (hasRigSpec) {
+        ex =  (paramEyeBallX ?? 0) * MAX_OFFSET;
+        ey = -(paramEyeBallY ?? 0) * MAX_OFFSET;  // ParamEyeBallY positive = look up; screen-y inverts
+      } else {
+        ex = node.transform.x || 0;
+        ey = node.transform.y || 0;
+      }
+
       const knobX = tpx + (ex / MAX_OFFSET) * half;
       const knobY = tpy + (ey / MAX_OFFSET) * half;
       

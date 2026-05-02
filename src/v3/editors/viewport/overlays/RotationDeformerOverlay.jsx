@@ -25,7 +25,10 @@ const DEG2RAD = Math.PI / 180;
 
 export function RotationDeformerOverlay() {
   const rigSpec = useRigSpecStore((s) => s.rigSpec);
-  const view = useEditorStore((s) => s.view);
+  // GAP-010 Phase B — deformer overlays only mount on the edit
+  // Viewport (CanvasArea gates them on `!isPreview`), so always read
+  // the viewport tab's view.
+  const view = useEditorStore((s) => s.viewByMode.viewport);
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {

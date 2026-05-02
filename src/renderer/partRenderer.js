@@ -57,6 +57,30 @@ export class PartRenderer {
       indexData[i * 3 + 2] = triangles[i][2];
     }
 
+    // Build wireframe edge IBO — for every triangle [a,b,c] emit the
+    // three edges as line-segment pairs (a,b, b,c, c,a). Dedupe shared
+    // edges (each interior edge appears in two triangles) so the
+    // wireframe pass draws each line once. Without this, drawing
+    // triangle indices as gl.LINES produces incoherent segments
+    // (sequential pairs of triangle indices have no edge meaning).
+    /** @type {Set<number>} */
+    const seenEdges = new Set();
+    /** @type {number[]} */
+    const wireData = [];
+    for (let i = 0; i < triangles.length; i++) {
+      const [a, b, c] = triangles[i];
+      const pairs = [[a, b], [b, c], [c, a]];
+      for (const [p, q] of pairs) {
+        const lo = Math.min(p, q);
+        const hi = Math.max(p, q);
+        const key = lo * 65536 + hi;  // fits in 32-bit int for n ≤ 65535
+        if (seenEdges.has(key)) continue;
+        seenEdges.add(key);
+        wireData.push(p, q);
+      }
+    }
+    const wireIndexData = new Uint16Array(wireData);
+
     // Reuse or create GPU state
     let state = this._parts.get(partId);
     if (!state) {
@@ -65,9 +89,11 @@ export class PartRenderer {
         vbo:        null,
         ibo:        null,
         edgeIbo:    null,
+        wireIbo:    null,
         texture:    null,
         indexCount: 0,
         edgeIndexCount: 0,
+        wireIndexCount: 0,
         vertCount:  0,
       };
       this._parts.set(partId, state);
@@ -77,8 +103,10 @@ export class PartRenderer {
     if (!state.vbo) state.vbo = gl.createBuffer();
     if (!state.ibo) state.ibo = gl.createBuffer();
     if (!state.edgeIbo) state.edgeIbo = gl.createBuffer();
+    if (!state.wireIbo) state.wireIbo = gl.createBuffer();
 
     state.indexCount = indexData.length;
+    state.wireIndexCount = wireIndexData.length;
     state.vertCount  = n;
 
     // Bind VAO and upload buffers
@@ -98,7 +126,7 @@ export class PartRenderer {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
-    // Edge indices
+    // Edge indices (boundary loop — different from wireframe)
     if (mesh.edgeIndices) {
       const edgeData = new Uint16Array(mesh.edgeIndices);
       state.edgeIndexCount = edgeData.length;
@@ -107,6 +135,10 @@ export class PartRenderer {
     } else {
       state.edgeIndexCount = 0;
     }
+
+    // Wireframe IBO — interior + boundary triangle edges as line pairs.
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.wireIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, wireIndexData, gl.STATIC_DRAW);
 
     // Ensure the main triangle ibo is bound to the VAO for the textured mesh pass
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.ibo);
@@ -225,14 +257,20 @@ export class PartRenderer {
     const { gl } = this;
     const state = this._parts.get(partId);
     // Skip wireframe for fallback quads (no edge indices = no real mesh)
-    if (!state || !state.vao || state.indexCount === 0 || state.edgeIndexCount === 0) return;
+    if (!state || !state.vao || state.indexCount === 0 || state.edgeIndexCount === 0
+        || state.wireIndexCount === 0) return;
 
     gl.uniformMatrix3fv(uMvp, false, mvp);
     // Color is set by caller (ScenePass) via uColor location
 
     gl.bindVertexArray(state.vao);
-    // Draw as lines — loop over each triangle
-    gl.drawElements(gl.LINES, state.indexCount, gl.UNSIGNED_SHORT, 0);
+    // Switch to the wireframe IBO (line-segment pairs for every
+    // triangle edge). The textured pass uses state.ibo (triangles);
+    // we restore it before unbinding so subsequent draws on this VAO
+    // see the right element buffer.
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.wireIbo);
+    gl.drawElements(gl.LINES, state.wireIndexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.ibo);
     gl.bindVertexArray(null);
   }
 
@@ -295,6 +333,7 @@ export class PartRenderer {
     if (state.vbo)     gl.deleteBuffer(state.vbo);
     if (state.ibo)     gl.deleteBuffer(state.ibo);
     if (state.edgeIbo) gl.deleteBuffer(state.edgeIbo);
+    if (state.wireIbo) gl.deleteBuffer(state.wireIbo);
     if (state.texture) gl.deleteTexture(state.texture);
     this._parts.delete(partId);
   }

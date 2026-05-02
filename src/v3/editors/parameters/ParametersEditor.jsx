@@ -24,6 +24,7 @@ import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
+import { InitRigOptionsPopover } from './InitRigOptionsPopover.jsx';
 
 export function ParametersEditor() {
   const params = useProjectStore((s) => s.project.parameters ?? []);
@@ -47,18 +48,22 @@ export function ParametersEditor() {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center text-xs text-muted-foreground select-none gap-3 p-3">
         <span>No parameters yet.</span>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={runInit}
-          className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1.5 text-xs font-semibold"
-        >
-          <Wand2 size={12} />
-          {busy ? 'Initializing…' : 'Initialize Rig'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={runInit}
+            className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1.5 text-xs font-semibold"
+          >
+            <Wand2 size={12} />
+            {busy ? 'Initializing…' : 'Initialize Rig'}
+          </button>
+          <InitRigOptionsPopover />
+        </div>
         <span className="text-[10px] text-muted-foreground/70 text-center max-w-xs">
           Runs the rig generators against current geometry and seeds the
-          standard parameter set + warp / rotation deformers.
+          standard parameter set + warp / rotation deformers. Click the
+          gear next to the button to opt out of subsystems.
         </span>
         {error ? (
           <span className="text-[10px] text-destructive max-w-xs text-center">{error}</span>
@@ -91,6 +96,7 @@ export function ParametersEditor() {
             <Wand2 size={10} />
             {busy ? 'Initializing…' : 'Initialize Rig'}
           </button>
+          <InitRigOptionsPopover />
           <button
             type="button"
             className="flex items-center gap-1 hover:text-foreground transition-colors"

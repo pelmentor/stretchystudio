@@ -25,6 +25,15 @@ import { useUIV3Store } from '../../store/uiV3Store.js';
 import { EDITOR_REGISTRY } from './editorRegistry.js';
 
 /**
+ * Editor types whose tabs are pinned to their workspace shape — no close
+ * button. Canvas tabs (Viewport / Live Preview) belong to the same
+ * single-canvas instance via CanvasArea (Area.jsx short-circuit); closing
+ * one of them would orphan the other or destroy access to the canvas
+ * entirely. Per user direction 2026-05-02.
+ */
+const NON_CLOSABLE_EDITOR_TYPES = new Set(['viewport', 'livePreview']);
+
+/**
  * @param {Object} props
  * @param {import('../../store/uiV3Store.js').AreaSlot} props.area
  */
@@ -70,7 +79,7 @@ export function AreaTabBar({ area }) {
                 />
               ) : null}
               <span>{label}</span>
-              {active && tabs.length > 1 ? (
+              {active && tabs.length > 1 && !NON_CLOSABLE_EDITOR_TYPES.has(tab.editorType) ? (
                 <span
                   role="button"
                   tabIndex={0}

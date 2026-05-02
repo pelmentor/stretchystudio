@@ -54,18 +54,20 @@ export function BlendShapeTab({ nodeId }) {
   const shapes = node.blendShapes ?? [];
   const values = node.blendShapeValues ?? {};
 
-  const paintMode = useEditorStore((s) => s.blendShapeEditMode);
+  const editMode = useEditorStore((s) => s.editMode);
   const activeShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  const paintMode = editMode === 'blendShape';
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushHardness = useEditorStore((s) => s.brushHardness);
   const setBrush = useEditorStore((s) => s.setBrush);
 
   /** @param {string|null} shapeId */
   function armForPaint(shapeId) {
-    useEditorStore.setState({
-      blendShapeEditMode: !!shapeId,
-      activeBlendShapeId: shapeId,
-    });
+    if (shapeId) {
+      useEditorStore.getState().enterEditMode('blendShape', { blendShapeId: shapeId });
+    } else {
+      useEditorStore.getState().exitEditMode();
+    }
   }
 
   function renameShape(shapeId, newName) {

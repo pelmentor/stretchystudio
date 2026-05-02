@@ -23,6 +23,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useEditorStore } from '../../../store/editorStore.js';
+import { setEditorMode as serviceSetEditorMode } from '../../../services/EditorModeService.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
 
 // shadcn/ui alert-dialog parts are forwardRefs without exported
@@ -102,7 +103,8 @@ export function AnimationsEditor() {
               const created = list[list.length - 1];
               if (created) switchAnimation(created);
               useUIV3Store.getState().setWorkspace('animation');
-              useEditorStore.getState().setEditorMode?.('animation');
+              // Service routes the captureRestPose snapshot on staging→animation transition.
+              serviceSetEditorMode('animation');
             }}
             title="Create new animation"
             aria-label="Create new animation"

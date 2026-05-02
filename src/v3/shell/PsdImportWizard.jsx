@@ -1,81 +1,102 @@
+// @ts-nocheck
+
+/**
+ * v3 GAP-001 — PSD import wizard, AppShell-level chrome.
+ *
+ * Lifted from `src/components/canvas/PsdImportWizard.jsx` (where it
+ * was a v2-era child of CanvasViewport with 11 prop callbacks). Now
+ * mounts at AppShell and reads state from `wizardStore`, dispatching
+ * actions through `PsdImportService`. The visual UX is identical:
+ *
+ *   - `review` step       — full-screen modal listing layer→tag map
+ *   - `reorder` step      — top banner over the canvas
+ *   - `adjust` step       — top banner + auto-rig button
+ *   - `dwpose` step       — full-screen modal during ONNX work
+ *
+ * The wizard never touches the canvas directly. Side effects that
+ * mutate project.nodes / upload textures / kick off mesh workers
+ * reach CanvasViewport through `captureStore`'s registered callbacks.
+ *
+ * @module v3/shell/PsdImportWizard
+ */
+
 import { useState, useCallback, useEffect } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Circle, Scissors } from 'lucide-react';
 import {
-  loadDWPoseSession, runDWPose, buildArmatureNodes, analyzeGroups,
-  matchTag, estimateSkeletonFromBounds, DWPOSE_URL, clearDWPoseSession,
-  KNOWN_TAGS, autoRearrangeLayers,
+  matchTag,
+  analyzeGroups,
+  buildArmatureNodes,
+  estimateSkeletonFromBounds,
+  runDWPose,
+  DWPOSE_URL,
+  KNOWN_TAGS,
+  autoRearrangeLayers,
 } from '../../io/armatureOrganizer';
 import { splitLayerLR } from '../../io/splitLR';
-import { HelpIcon } from '../ui/help-icon';
 import { useToast } from '../../hooks/use-toast';
-import { uid } from '@/lib/ids';
+import { uid } from '../../lib/ids';
+import { useWizardStore } from '../../store/wizardStore';
 import { usePreferencesStore } from '../../store/preferencesStore';
+import * as PsdImportService from '../../services/PsdImportService';
+import * as dwposeService from '../../services/dwposeService';
 
-export default function PsdImportWizard({
-  step,
-  onSetStep,
-  pendingPsd,
-  onnxSessionRef,
-  onFinalize,
-  onSkip,
-  onCancel,
-  onComplete,
-  onBack,
-  onSplitParts,  // (splits Array<{mergedIdx, rightLayer, leftLayer}>) → void
-  onReorder,
-  onApplyRig,
-  onUpdatePsd,
-}) {
-  const { toast } = useToast();
+export function PsdImportWizard() {
+  const step = useWizardStore((s) => s.step);
+  const pendingPsd = useWizardStore((s) => s.pendingPsd);
+  const meshAllParts = useWizardStore((s) => s.meshAllParts);
+  const setMeshAllParts = useWizardStore((s) => s.setMeshAllParts);
   const mlEnabled = usePreferencesStore((s) => s.mlEnabled);
+  const { toast } = useToast();
+
   const [rigStatus, setRigStatus] = useState('');
   const [rigLoading, setRigLoading] = useState(false);
   const [tagOverrides, setTagOverrides] = useState({});
   const [mappingExpanded, setMappingExpanded] = useState(false);
   const [splitError, setSplitError] = useState('');
-  const [meshAllParts, setMeshAllParts] = useState(true);
   const [performSplit, setPerformSplit] = useState(true);
 
-  const { psdW, psdH, layers, partIds } = pendingPsd || {};
-
   /* ── Effective layers: apply tag overrides by renaming to canonical tag ── */
+  const layers = pendingPsd?.layers ?? null;
+  const partIds = pendingPsd?.partIds ?? null;
+  const psdW = pendingPsd?.psdW ?? 0;
+  const psdH = pendingPsd?.psdH ?? 0;
+
   const effectiveLayers = layers
-    ? layers.map(l =>
-      tagOverrides[l.name] ? { ...l, name: tagOverrides[l.name] } : l
-    )
+    ? layers.map((l) =>
+        tagOverrides[l.name] ? { ...l, name: tagOverrides[l.name] } : l,
+      )
     : [];
 
-  const matchCount = effectiveLayers.filter(l => matchTag(l.name) !== null).length;
+  const matchCount = effectiveLayers.filter((l) => matchTag(l.name) !== null).length;
   const unmatchedLayers = layers
-    ? layers.filter(l => {
-      const effective = tagOverrides[l.name] ?? null;
-      if (effective !== null) return false; // user-assigned
-      return matchTag(l.name) === null;
-    })
+    ? layers.filter((l) => {
+        const effective = tagOverrides[l.name] ?? null;
+        if (effective !== null) return false;
+        return matchTag(l.name) === null;
+      })
     : [];
   const tooFew = matchCount < 4;
 
   /* ── Detect merged parts (left/right present but no -l or -r) ── */
   const SPLIT_CANDIDATES = ['handwear', 'legwear', 'footwear', 'irides', 'eyebrow', 'eyewhite', 'eyelash', 'ears'];
-  
-  const mergedTagsToSplit = effectiveLayers ? SPLIT_CANDIDATES.filter(baseTag => {
-    const hasBase = effectiveLayers.some(l => matchTag(l.name) === baseTag);
-    const hasL = effectiveLayers.some(l => matchTag(l.name) === `${baseTag}-l`);
-    const hasR = effectiveLayers.some(l => matchTag(l.name) === `${baseTag}-r`);
-    return hasBase && !hasL && !hasR;
-  }) : [];
+
+  const mergedTagsToSplit = effectiveLayers
+    ? SPLIT_CANDIDATES.filter((baseTag) => {
+        const hasBase = effectiveLayers.some((l) => matchTag(l.name) === baseTag);
+        const hasL = effectiveLayers.some((l) => matchTag(l.name) === `${baseTag}-l`);
+        const hasR = effectiveLayers.some((l) => matchTag(l.name) === `${baseTag}-r`);
+        return hasBase && !hasL && !hasR;
+      })
+    : [];
 
   const partsMerged = mergedTagsToSplit.length > 0;
 
-  /* ── Handle tag override dropdown change ────────────────────────────────── */
+  /* ── Handle tag override dropdown change ─────────────────────────────── */
   const handleTagChange = useCallback((layerName, value) => {
-    setTagOverrides(prev => {
+    setTagOverrides((prev) => {
       const next = { ...prev };
-      if (value === '') {
-        delete next[layerName];
-      } else {
-        next[layerName] = value;
-      }
+      if (value === '') delete next[layerName];
+      else next[layerName] = value;
       return next;
     });
   }, []);
@@ -86,7 +107,7 @@ export default function PsdImportWizard({
     const splits = [];
 
     for (const baseTag of mergedTagsToSplit) {
-      const mergedIdx = effectiveLayers.findIndex(l => matchTag(l.name) === baseTag);
+      const mergedIdx = effectiveLayers.findIndex((l) => matchTag(l.name) === baseTag);
       if (mergedIdx === -1) continue;
 
       const mergedLayer = effectiveLayers[mergedIdx];
@@ -120,42 +141,42 @@ export default function PsdImportWizard({
       splits.push({ mergedIdx, rightLayer, leftLayer });
     }
 
-    if (splits.length > 0) {
-      onSplitParts(splits);
-    }
+    if (splits.length > 0) PsdImportService.splitParts(splits);
 
     if (failedMsgs.length > 0) {
       const errorMsg = `Could not separate: ${failedMsgs.join(', ')}. The layer may be a single connected shape. Continuing without splitting them.`;
       setSplitError(errorMsg);
       toast({
-        title: "Partial Split Info",
+        title: 'Partial Split Info',
         description: errorMsg,
-        variant: "default",
+        variant: 'default',
       });
       return splits.length > 0;
     }
 
     return true;
-  }, [effectiveLayers, mergedTagsToSplit, psdW, psdH, onSplitParts, toast]);
+  }, [effectiveLayers, mergedTagsToSplit, psdW, psdH, toast]);
 
-  /* ── Handle manual rigging (bounding-box heuristic) ────────────────────── */
+  /* ── Handle manual rigging (bounding-box heuristic) ──────────────────── */
   const handleRigManually = useCallback(async () => {
     setRigLoading(true);
     try {
       const layerMap = {};
-      effectiveLayers.forEach(l => {
+      effectiveLayers.forEach((l) => {
         const key = l.name.toLowerCase().trim();
         layerMap[key] = l;
       });
       const groups = analyzeGroups(layerMap);
 
       const skeleton = estimateSkeletonFromBounds(effectiveLayers, psdW, psdH);
-      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`);
+      const { groupDefs, assignments } = buildArmatureNodes(
+        skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`,
+      );
 
       if (step === 'reorder') {
-        onApplyRig(groupDefs, assignments, meshAllParts);
+        PsdImportService.applyRig(groupDefs, assignments, meshAllParts);
       } else {
-        onFinalize(groupDefs, assignments, meshAllParts);
+        PsdImportService.finalize(groupDefs, assignments, meshAllParts);
       }
     } catch (err) {
       console.error('[Manual Rig]', err);
@@ -163,18 +184,17 @@ export default function PsdImportWizard({
     } finally {
       setRigLoading(false);
     }
-  }, [step, effectiveLayers, psdW, psdH, partIds, meshAllParts, onFinalize, onApplyRig]);
+  }, [step, effectiveLayers, psdW, psdH, partIds, meshAllParts]);
 
-  /* ── Handle DWPose rigging ────────────────────────────────────────────── */
+  /* ── Handle DWPose rigging ───────────────────────────────────────────── */
   const runArmatureRig = useCallback(async (onnxPayload) => {
     setRigLoading(true);
     try {
       setRigStatus('Loading ONNX model…');
-      const session = await loadDWPoseSession(onnxPayload);
-      onnxSessionRef.current = session;
+      const session = await dwposeService.loadSession(onnxPayload);
 
       const layerMap = {};
-      effectiveLayers.forEach(l => {
+      effectiveLayers.forEach((l) => {
         const key = l.name.toLowerCase().trim();
         layerMap[key] = l;
       });
@@ -183,65 +203,68 @@ export default function PsdImportWizard({
       const skeleton = await runDWPose(effectiveLayers, psdW, psdH, session, setRigStatus);
 
       setRigStatus('Building rig…');
-      const { groupDefs, assignments } = buildArmatureNodes(skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`);
+      const { groupDefs, assignments } = buildArmatureNodes(
+        skeleton, groups, effectiveLayers, partIds, () => `grp-${uid()}`,
+      );
 
       if (step === 'reorder' || step === 'dwpose' || step === 'adjust') {
-        onApplyRig(groupDefs, assignments, meshAllParts);
+        PsdImportService.applyRig(groupDefs, assignments, meshAllParts);
       } else {
-        onFinalize(groupDefs, assignments, meshAllParts);
+        PsdImportService.finalize(groupDefs, assignments, meshAllParts);
       }
     } catch (err) {
       console.error('[AutoRig]', err);
       setRigStatus(`Error: ${err.message}`);
-      clearDWPoseSession();
+      dwposeService.clearSession();
     } finally {
       setRigLoading(false);
     }
-  }, [step, effectiveLayers, psdW, psdH, partIds, meshAllParts, onFinalize, onApplyRig, onnxSessionRef]);
+  }, [step, effectiveLayers, psdW, psdH, partIds, meshAllParts]);
 
-  /* ── Effect: Auto-rearrange eye layers ────────────────────────────────── */
+  /* ── Effect: Auto-rearrange eye layers ───────────────────────────────── */
   useEffect(() => {
-    if (!layers || !partIds || !onUpdatePsd) return;
+    if (!layers || !partIds) return;
     const result = autoRearrangeLayers(layers, partIds);
     if (result) {
-      onUpdatePsd(result);
+      PsdImportService.updatePsd(result);
       toast({
-        title: "Layers Auto-Rearranged",
-        description: "Eye irides moved above eyewhite layers for proper depth.",
+        title: 'Layers Auto-Rearranged',
+        description: 'Eye irides moved above eyewhite layers for proper depth.',
       });
     }
-  }, [layers, partIds, onUpdatePsd, toast]);
+  }, [layers, partIds, toast]);
 
-  /* ── Step: Review layer mapping ─────────────────────────────────────── */
+  // Wizard mounts at AppShell level but renders nothing when not active.
+  if (!step || !pendingPsd) return null;
+
+  /* ── Step: Review layer mapping ──────────────────────────────────────── */
   if (step === 'review') {
     const layerMappings = layers
-      ? layers.map(l => ({
-        layer: l,
-        tag: tagOverrides[l.name] ?? matchTag(l.name),
-        overridden: l.name in tagOverrides,
-      }))
+      ? layers.map((l) => ({
+          layer: l,
+          tag: tagOverrides[l.name] ?? matchTag(l.name),
+          overridden: l.name in tagOverrides,
+        }))
       : [];
 
     const hasWarnings = unmatchedLayers.length > 0;
     const allMatched = unmatchedLayers.length === 0;
 
-    // When user clicks Continue, enter the reorder step
     const handleContinue = () => {
       if (partsMerged && performSplit) {
         const ok = executeSplit();
         if (!ok && splitError) return;
       }
-      onReorder();
+      PsdImportService.reorder();
     };
 
     return (
-      <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
         <div className="bg-popover border border-border rounded-lg shadow-2xl p-6 max-w-md w-full mx-4 flex flex-col gap-4">
           <h3 className="text-base font-semibold text-foreground">Review Layer Mapping</h3>
 
-          {/* Collapsed summary row */}
           <button
-            onClick={() => setMappingExpanded(v => !v)}
+            onClick={() => setMappingExpanded((v) => !v)}
             className="flex items-center gap-2 w-full text-left px-3 py-2 rounded border border-border hover:bg-muted transition-colors"
           >
             {tooFew ? (
@@ -264,11 +287,9 @@ export default function PsdImportWizard({
             </span>
             {mappingExpanded
               ? <ChevronDown size={13} className="text-muted-foreground shrink-0" />
-              : <ChevronRight size={13} className="text-muted-foreground shrink-0" />
-            }
+              : <ChevronRight size={13} className="text-muted-foreground shrink-0" />}
           </button>
 
-          {/* Expanded layer table */}
           {mappingExpanded && (
             <div className="border border-border rounded overflow-hidden">
               <div className="max-h-56 overflow-y-auto">
@@ -277,7 +298,6 @@ export default function PsdImportWizard({
                     key={layer.name}
                     className="flex items-center gap-2 px-2 py-1 border-b border-border last:border-b-0 hover:bg-muted/50"
                   >
-                    {/* Status icon */}
                     <span className="shrink-0">
                       {tag !== null ? (
                         <CheckCircle size={11} className={overridden ? 'text-blue-400' : 'text-green-500'} />
@@ -285,19 +305,12 @@ export default function PsdImportWizard({
                         <Circle size={11} className="text-amber-400" />
                       )}
                     </span>
-
-                    {/* Layer name */}
-                    <span
-                      className="flex-1 text-[11px] text-muted-foreground truncate"
-                      title={layer.name}
-                    >
+                    <span className="flex-1 text-[11px] text-muted-foreground truncate" title={layer.name}>
                       {layer.name}
                     </span>
-
-                    {/* Tag dropdown */}
                     <select
                       value={tagOverrides[layer.name] ?? (matchTag(layer.name) ?? '')}
-                      onChange={e => handleTagChange(layer.name, e.target.value)}
+                      onChange={(e) => handleTagChange(layer.name, e.target.value)}
                       className={[
                         'text-[11px] rounded border px-1 py-0.5 bg-background outline-none shrink-0',
                         tag !== null
@@ -306,7 +319,7 @@ export default function PsdImportWizard({
                       ].join(' ')}
                     >
                       <option value="">— unassigned —</option>
-                      {KNOWN_TAGS.map(t => (
+                      {KNOWN_TAGS.map((t) => (
                         <option key={t} value={t}>{t}</option>
                       ))}
                     </select>
@@ -316,21 +329,19 @@ export default function PsdImportWizard({
             </div>
           )}
 
-          {/* Warning messages */}
           {tooFew && (
             <p className="text-[11px] text-amber-400 leading-relaxed">
               At least 4 layers must be matched for automatic rigging. Assign unmatched layers above or skip rigging.
             </p>
           )}
 
-          {/* Split parts toggle (only if merged parts detected) */}
           {partsMerged && (
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
                 <input
                   type="checkbox"
                   checked={performSplit}
-                  onChange={e => setPerformSplit(e.target.checked)}
+                  onChange={(e) => setPerformSplit(e.target.checked)}
                   className="w-3.5 h-3.5 rounded border border-border"
                 />
                 <span>Split merged parts (recommended)</span>
@@ -344,28 +355,26 @@ export default function PsdImportWizard({
             </div>
           )}
 
-          {/* Mesh all parts checkbox */}
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
             <input
               type="checkbox"
               checked={meshAllParts}
-              onChange={e => setMeshAllParts(e.target.checked)}
+              onChange={(e) => setMeshAllParts(e.target.checked)}
               className="w-3.5 h-3.5 rounded border border-border"
             />
             <span>Mesh all parts after import</span>
           </label>
 
-          {/* Footer */}
           <div className="flex items-center justify-between border-t border-border pt-3 gap-1.5">
             <button
-              onClick={onCancel}
+              onClick={() => PsdImportService.cancel()}
               className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             >
               Cancel Import
             </button>
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => onSkip(meshAllParts)}
+                onClick={() => PsdImportService.skip(meshAllParts)}
                 className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
               >
                 Skip rigging
@@ -383,26 +392,21 @@ export default function PsdImportWizard({
     );
   }
 
-
-
-
-  /* ── Step: Reorder Layers (floating toolbar) ───────────────────────── */
+  /* ── Step: Reorder layers (floating toolbar) ────────────────────────── */
   if (step === 'reorder') {
     return (
       <div className="absolute top-0 inset-x-0 z-40 flex items-center gap-4 px-4 py-2
                       bg-background/90 border-b border-border backdrop-blur-sm
                       animate-in fade-in slide-in-from-top-4 duration-500 ease-out">
-        {/* Shimmer Attention Grabber */}
         <div className="absolute top-0 inset-x-0 h-[2px] overflow-hidden opacity-30">
           <div className="h-full w-1/4 bg-gradient-to-r from-transparent via-primary to-transparent animate-shimmer" />
         </div>
-
         <span className="text-xs font-semibold text-foreground">Step 2: Reorder Layers</span>
         <span className="text-xs text-muted-foreground flex-1">
           Rearrange layers in the Layer Panel as needed to fix any ordering issues.
         </span>
         <button
-          onClick={onCancel}
+          onClick={() => PsdImportService.cancel()}
           className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
           Cancel
@@ -418,11 +422,11 @@ export default function PsdImportWizard({
     );
   }
 
-  /* ── Step: DWPose loading ─────────────────────────────────────────── */
+  /* ── Step: DWPose loading ───────────────────────────────────────────── */
   if (step === 'dwpose') {
-    const modelLoaded = !!onnxSessionRef?.current;
+    const modelLoaded = dwposeService.isSessionLoaded();
     return (
-      <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
         <div className="bg-popover border border-border rounded-lg shadow-2xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4">
           <div>
             <h3 className="text-sm font-semibold text-foreground mb-1">Load DWPose model</h3>
@@ -431,7 +435,6 @@ export default function PsdImportWizard({
             </p>
           </div>
 
-          {/* Model status */}
           <div className="p-2 rounded bg-muted border border-border">
             <p className="text-xs text-muted-foreground">
               Status: {modelLoaded ? (
@@ -442,11 +445,9 @@ export default function PsdImportWizard({
             </p>
           </div>
 
-          {/* Load buttons */}
           <div className="flex flex-col gap-2">
             <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Load Model</div>
             <div className="flex gap-2">
-              {/* Local .onnx file */}
               <label className={[
                 'flex-1 text-center px-3 py-1.5 text-xs rounded border cursor-pointer transition-colors',
                 rigLoading
@@ -464,8 +465,6 @@ export default function PsdImportWizard({
                   disabled={rigLoading}
                 />
               </label>
-
-              {/* Download from HuggingFace */}
               <button
                 disabled={rigLoading}
                 className="flex-1 px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-40"
@@ -475,7 +474,6 @@ export default function PsdImportWizard({
               </button>
             </div>
 
-            {/* Status */}
             {rigStatus && (
               <p className={[
                 'text-[11px] px-1',
@@ -486,12 +484,11 @@ export default function PsdImportWizard({
             )}
           </div>
 
-          {/* Footer */}
           <div className="flex justify-between border-t border-border pt-3">
             <button
               disabled={rigLoading}
               className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
-              onClick={() => onSetStep('adjust')}
+              onClick={() => useWizardStore.getState().setStep('adjust')}
             >
               ← Back
             </button>
@@ -501,13 +498,12 @@ export default function PsdImportWizard({
     );
   }
 
-  /* ── Step: Adjust joints (floating toolbar) ────────────────────────── */
+  /* ── Step: Adjust joints (floating toolbar) ─────────────────────────── */
   if (step === 'adjust') {
     return (
       <div className="absolute top-0 inset-x-0 z-40 flex items-center gap-4 px-4 py-2
                       bg-background/90 border-b border-border backdrop-blur-sm
                       animate-in fade-in slide-in-from-top-4 duration-500 ease-out">
-        {/* Shimmer Attention Grabber */}
         <div className="absolute top-0 inset-x-0 h-[2px] overflow-hidden opacity-30">
           <div className="h-full w-1/4 bg-gradient-to-r from-transparent via-primary to-transparent animate-shimmer" />
         </div>
@@ -520,14 +516,14 @@ export default function PsdImportWizard({
           <input
             type="checkbox"
             checked={meshAllParts}
-            onChange={e => setMeshAllParts(e.target.checked)}
+            onChange={(e) => setMeshAllParts(e.target.checked)}
             className="w-3.5 h-3.5 rounded border border-border"
           />
           <span>Mesh all parts</span>
         </label>
         {mlEnabled ? (
           <button
-            onClick={() => onSetStep('dwpose')}
+            onClick={() => useWizardStore.getState().setStep('dwpose')}
             className="px-2 py-1 text-xs rounded border border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1.5"
           >
             <Scissors size={12} />
@@ -535,13 +531,13 @@ export default function PsdImportWizard({
           </button>
         ) : null}
         <button
-          onClick={onBack}
+          onClick={() => PsdImportService.back()}
           className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
           ← Back
         </button>
         <button
-          onClick={() => onComplete(meshAllParts)}
+          onClick={() => PsdImportService.complete(meshAllParts)}
           className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-all font-bold
                      shadow-lg shadow-primary/25 ring-1 ring-primary/50 animate-in zoom-in-95 duration-700 delay-300 fill-mode-both"
         >

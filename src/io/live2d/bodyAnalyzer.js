@@ -20,6 +20,17 @@ const LIMB_TAGS = new Set([
   'footwear', 'footwear-l', 'footwear-r',
 ]);
 
+/**
+ * Union of every tag whose PNG alpha must be rendered for body silhouette
+ * analysis. `buildMeshesForRig` consumes this so `analyzeBody` actually
+ * sees the bytes — without it every body mesh logged "missing pngData",
+ * `analyzeBody` returned `skipped: 'no-core'`, and the body warp chain
+ * fell back to default HIP_FRAC=0.45 / FEET_FRAC=0.75 — visible to the
+ * user as legwear stretching far below the canvas after Init Rig (because
+ * BodyWarpZ's bottom edge derives from the wrong feetY).
+ */
+export const BODY_ANALYSIS_TAGS = new Set([...CORE_TAGS, ...LIMB_TAGS]);
+
 async function decodeAlphaMask(pngData) {
   if (!pngData || !pngData.length) return null;
   if (typeof Image === 'undefined' || typeof URL === 'undefined') return null;

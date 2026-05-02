@@ -391,8 +391,77 @@ export function buildBodyWarpChain(input) {
     specs.push(bxSpec);
   }
 
+  // ── Synthesis diagnostics (BUG-003 RE iteration) ──
+  // Per-warp peak shift magnitudes for the k=+10 keyform of each
+  // ParamBodyAngle{Z,Y,X}. Surfaces what the synthesis decided would
+  // happen at a max-positive slider position so the user can compare
+  // against Cubism Viewer's authored shelby behaviour and pinpoint
+  // where the heuristics diverge from the reference.
+  //
+  // For each body warp keyform we emit:
+  //   peakShiftPx — the maximum (rest → keyform) vertex displacement
+  //                 in canvas-px (using parent-frame scale), so values
+  //                 are directly comparable to the visible movement
+  //                 the user sees in the Logs panel.
+  //   activeRowRange — first..last row index whose shift > epsilon.
+  //                    Tells us at a glance whether legs (rows past
+  //                    FEET_FRAC) accidentally got movement, or whether
+  //                    the head row is dead.
+  //
+  // Reference (authored shelby.moc3, dumped via scripts/cubism_oracle):
+  // see docs/live2d-export/CUBISM_WARP_PORT.md "Phase 2b synthesis
+  // reference" section once populated.
+  function summarizeKeyform(spec, keyformIdx, scaleX, scaleY) {
+    const baseGrid = spec.baseGrid;
+    const positions = spec.keyforms[keyformIdx].positions;
+    const cols = spec.gridSize.cols + 1;
+    const rows = spec.gridSize.rows + 1;
+    const EPS = 1e-6;
+    let maxShift = 0;
+    let firstActive = -1, lastActive = -1;
+    for (let r = 0; r < rows; r++) {
+      let rowMaxShift = 0;
+      for (let c = 0; c < cols; c++) {
+        const idx = (r * cols + c) * 2;
+        const dx = (positions[idx]     - baseGrid[idx])     * scaleX;
+        const dy = (positions[idx + 1] - baseGrid[idx + 1]) * scaleY;
+        const mag = Math.hypot(dx, dy);
+        if (mag > rowMaxShift) rowMaxShift = mag;
+      }
+      if (rowMaxShift > EPS) {
+        if (firstActive < 0) firstActive = r;
+        lastActive = r;
+      }
+      if (rowMaxShift > maxShift) maxShift = rowMaxShift;
+    }
+    return {
+      peakShiftPx: +maxShift.toFixed(2),
+      activeRowRange: firstActive >= 0 ? [firstActive, lastActive] : null,
+    };
+  }
+
+  // Scale factors: BZ is canvas-px, BY/Breath/BX are normalised in
+  // their parent's [0,1] space — multiply by parent extent in canvas-px
+  // to get the equivalent canvas-px shift.
+  const bzScaleX = 1, bzScaleY = 1;
+  const byScaleX = BZ_W * (BY_MAX - BY_MIN), byScaleY = BZ_H * (BY_MAX - BY_MIN);
+  const brScaleX = byScaleX * (BR_MAX - BR_MIN), brScaleY = byScaleY * (BR_MAX - BR_MIN);
+  const bxScaleX = brScaleX * (BX_MAX - BX_MIN), bxScaleY = brScaleY * (BX_MAX - BX_MIN);
+
+  const bzPlus10 = summarizeKeyform(bzSpec, 2, bzScaleX, bzScaleY);  // index 2 = k=+10
+  const byPlus10 = summarizeKeyform(bySpec, 2, byScaleX, byScaleY);
+  const bxPlus10 = hasParamBodyAngleX
+    ? summarizeKeyform(specs[3], 2, bxScaleX, bxScaleY)
+    : null;
+
+  const canvasExtentRatio = (BZ_H > 0 && canvasH > 0)
+    ? +(BZ_H / canvasH).toFixed(2)
+    : null;
+
   logger.info('bodyWarp', `chain built: ${specs.map(s => s.id).join(' → ')}`, {
     bzBbox: { minX: +BZ_MIN_X.toFixed(1), minY: +BZ_MIN_Y.toFixed(1), w: +BZ_W.toFixed(1), h: +BZ_H.toFixed(1) },
+    canvas: { w: canvasW, h: canvasH },
+    canvasExtentRatio,  // > 1 = body bbox extends past canvas → off-canvas mesh vertices included
     HIP_FRAC: +HIP_FRAC.toFixed(3),
     FEET_FRAC: +FEET_FRAC.toFixed(3),
     bodyFracSource,
@@ -400,6 +469,13 @@ export function buildBodyWarpChain(input) {
     spineShiftsRange: spineCfShifts.length
       ? [+Math.min(...spineCfShifts).toFixed(4), +Math.max(...spineCfShifts).toFixed(4)]
       : null,
+    synthesis: {
+      // What synthesis decided ParamBodyAngleZ=+10 should look like.
+      // Compare against authored shelby.moc3 keyforms to find divergence.
+      paramBodyAngleZ_at_plus10: bzPlus10,
+      paramBodyAngleY_at_plus10: byPlus10,
+      paramBodyAngleX_at_plus10: bxPlus10,
+    },
   });
   return {
     specs,

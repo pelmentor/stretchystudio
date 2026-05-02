@@ -6,7 +6,7 @@
  * - Builds camera MVP from view (zoom/pan)
  * - Multiplies camera MVP × world matrix for each part
  * - Issues draw calls via PartRenderer
- * - Respects editor.overlays and node.visible
+ * - Respects editor.viewLayers and node.visible
  */
 import { createProgram } from './program.js';
 import { MESH_VERT, MESH_FRAG, WIRE_VERT, WIRE_FRAG } from './shaders/mesh.js';
@@ -128,9 +128,14 @@ export class ScenePass {
 
     const camera = buildCameraMatrix(canvas.width, canvas.height, zoom, panX, panY);
 
-    const overlays     = editor.overlays   ?? {};
+    const viewLayers   = editor.viewLayers ?? {};
     const selectionSet = new Set(editor.selection ?? []);
-    const meshEditMode = editor.meshEditMode && selectionSet.size > 0;
+    // Dim non-selected parts when the user is in mesh / blendShape edit
+    // — both are vertex-level edit contexts where focusing on the
+    // selection helps. Skeleton edit doesn't dim (bones move, mesh stays
+    // legible).
+    const dimUnselected = (editor.editMode === 'mesh' || editor.editMode === 'blendShape')
+      && selectionSet.size > 0;
 
     // ── Apply pose overrides (from animation playback) ────────────────────
     // Build an effective node list with interpolated transforms merged in.
@@ -166,15 +171,15 @@ export class ScenePass {
     // any clip pair gets a 1-based stencil ID; masked meshes test against
     // that ID. Replaces the old `getIrisStencilInfo(name)` heuristic that
     // relied on hardcoded "irides" / "eyewhite" tag names + side suffix
-    // parsing. `overlays.irisClipping` is preserved as the master toggle
+    // parsing. `viewLayers.irisClipping` is preserved as the master toggle
     // (the option's user-facing label still says "iris clipping" but it
     // now governs all clip-mask pairs).
-    const stencilState = overlays.irisClipping !== false
+    const stencilState = viewLayers.irisClipping !== false
       ? allocateMaskStencils(resolveMaskConfigs(project))
       : { stencilByMaskMeshId: new Map(), stencilsByMaskedMeshId: new Map(), overflow: 0 };
 
     // ── Textured mesh pass ────────────────────────────────────────────────
-    if (overlays.showImage !== false) {
+    if (viewLayers.image !== false) {
       gl.useProgram(this.meshProgram);
       const uMvp     = this.meshUniforms('u_mvp');
       const uTexture = this.meshUniforms('u_texture');
@@ -200,7 +205,7 @@ export class ScenePass {
           : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
 
         const baseOpacity = opMap.get(part.id) ?? 1;
-        const effectiveOpacity = meshEditMode && !selectionSet.has(part.id)
+        const effectiveOpacity = dimUnselected && !selectionSet.has(part.id)
           ? baseOpacity * 0.5
           : baseOpacity;
 
@@ -227,17 +232,26 @@ export class ScenePass {
     }
 
     // ── Overlay pass (wireframe / vertices / edge outline) ────────────────
-    const needWirePass = overlays.showWireframe || overlays.showVertices ||
-                         overlays.showEdgeOutline || selectionSet.size > 0;
+    const needWirePass = viewLayers.wireframe || viewLayers.vertices ||
+                         viewLayers.edgeOutline || selectionSet.size > 0;
 
     if (needWirePass) {
       gl.useProgram(this.wireProgram);
       const uMvpW  = this.wireUniforms('u_mvp');
       const uColor = this.wireUniforms('u_color');
 
+      // Mesh edit forces wireframe + vertices on for the active part —
+      // Blender pattern: in Edit Mode you always see what you're
+      // editing, regardless of "show wireframe" toggle. selection is
+      // the active part's identity, so we only force on the SELECTED
+      // part(s), not all parts. (The user-side viewLayers toggle
+      // continues to govern visibility for unselected parts.)
+      const inMeshEdit = editor.editMode === 'mesh';
+
       for (const part of parts) {
         if (!visMap.get(part.id)) continue;
         const isSelected = selectionSet.has(part.id);
+        const forceWire = inMeshEdit && isSelected;
 
         const worldMatrix = worldMatrices.get(part.id);
         const isRigDriven = rigDrivenParts?.has(part.id);
@@ -248,20 +262,20 @@ export class ScenePass {
         gl.uniform1i(this.uIsPointLoc, 0); // not a point
 
         // Edge outline — semi-transparent dark gray
-        if (overlays.showEdgeOutline || isSelected) {
+        if (viewLayers.edgeOutline || isSelected) {
           gl.uniform4f(uColor, 0.0, 0.0, 0.0, isSelected ? 0.7 : 0.35);
           this.partRenderer.drawEdgeOutline(part.id, partMvp, uMvpW);
         }
 
         // Wireframe triangles — 25% opaque dark gray
-        if (overlays.showWireframe || isSelected) {
+        if (viewLayers.wireframe || isSelected || forceWire) {
           gl.uniform4f(uColor, 0.0, 0.0, 0.0, 0.25);
           this.partRenderer.drawWireframe(part.id, partMvp, uMvpW, uColor);
         }
 
         // Vertices — white circles with black outline (shader handles styling)
         gl.uniform1i(this.uIsPointLoc, 1);
-        if (overlays.showVertices || isSelected) {
+        if (viewLayers.vertices || isSelected || forceWire) {
           this.partRenderer.drawVertices(part.id, partMvp, uMvpW, uColor);
         }
       }

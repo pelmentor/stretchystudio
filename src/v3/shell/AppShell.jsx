@@ -37,6 +37,7 @@ import { CommandPalette } from './CommandPalette.jsx';
 import { HelpModal } from './HelpModal.jsx';
 import { Cmo3InspectModal } from './Cmo3InspectModal.jsx';
 import { ModalTransformOverlay } from './ModalTransformOverlay.jsx';
+import { PsdImportWizard } from './PsdImportWizard.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
@@ -48,7 +49,7 @@ export function AppShell() {
 
   return (
     <ErrorBoundary label="AppShell">
-      <div className="flex flex-col h-screen w-screen bg-background text-foreground">
+      <div className="flex flex-col h-screen w-screen bg-background text-foreground relative">
         <Topbar />
         <StaleRigBanner />
         <AreaTree />
@@ -59,6 +60,13 @@ export function AppShell() {
         <HelpModal />
         <Cmo3InspectModal />
         <ModalTransformOverlay />
+        {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
+            wizardStore for current step + pending PSD; renders nothing
+            when no wizard run is in flight. The reorder/adjust banners
+            attach `top-0 inset-x-0` so they sit at the top of the
+            shell (above the AreaTree); the review/dwpose modals use
+            `fixed inset-0` to take over the viewport. */}
+        <PsdImportWizard />
       </div>
     </ErrorBoundary>
   );

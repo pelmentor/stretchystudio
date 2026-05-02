@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useEditorStore } from '@/store/editorStore';
+import { usePreferencesStore } from '@/store/preferencesStore';
 import { useTheme } from '@/contexts/ThemeProvider';
 import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
@@ -7,7 +8,10 @@ import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useUIV3Store } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
-import { applyWorkspacePolicy, isMeshEditAllowed } from '@/v3/shell/workspaceViewportPolicy';
+// Workspace policy module deleted 2026-05-02 — workspaces no longer
+// gate modes or visualizations (Blender pattern: workspace = layout
+// preset + default editorMode, nothing more). `editor.editMode` and
+// `editor.viewLayers` are read directly.
 import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
 import {
   createPhysicsState,
@@ -19,7 +23,9 @@ import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
 import { detectCharacterFormat } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
-import PsdImportWizard from '@/components/canvas/PsdImportWizard';
+import { useWizardStore } from '@/store/wizardStore';
+import { useCaptureStore } from '@/store/captureStore';
+import * as PsdImportService from '@/services/PsdImportService';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,6 +53,11 @@ import {
 } from '@/components/canvas/viewport/helpers';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
+  getOrBuildAdjacency,
+  computeProportionalWeights,
+  nextFalloff,
+} from '@/lib/proportionalEdit';
+import {
   childBoneRoleFor,
   computeSkinWeights,
   computeMeshCentroid,
@@ -58,18 +69,24 @@ import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
 import { normalizeVariants } from '@/io/variantNormalizer';
+import { resetPoseDraft, resetToRestPose } from '@/services/PoseService';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { RotateCcw } from 'lucide-react';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Component
 ────────────────────────────────────────────────────────────────────────── */
 
 export default function CanvasViewport({
-  // GAP-010 — these imperative refs are populated by ViewportEditor (the
-  // edit Viewport) so external code (Inspector remesh button, save/load,
-  // export pipeline, thumbnail capture) can drive viewport-owned actions.
-  // LivePreviewCanvas mounts CanvasViewport without them — every assignment
-  // site below is guarded `if (xxxRef)`, so omitting is safe and the live
-  // preview surface never accidentally surfaces editing imperatives.
+  // Imperative refs are populated by `<CanvasArea>` (shell/CanvasArea.jsx),
+  // which hosts a single CanvasViewport instance shared between the
+  // `viewport` and `livePreview` tabs. External code (Inspector remesh,
+  // save/load toolbar, export pipeline, thumbnail capture) drives viewport-
+  // owned actions through these refs. Every `*Ref.current = …` assignment
+  // site is guarded `if (xxxRef)`, so omission is safe.
   remeshRef = null, deleteMeshRef = null,
   saveRef = null, loadRef = null, resetRef = null,
   exportCaptureRef = null, thumbCaptureRef = null,
@@ -90,18 +107,15 @@ export default function CanvasViewport({
   const gestureRef = useRef(null);  // { mode:'pinch', startDist, startMidX, startMidY, panX0, panY0, zoom0 }
   const isDirtyRef = useRef(true);
   const brushCircleRef = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
+  const propEditCircleRef = useRef(null); // GAP-015 — proportional-edit influence ring
   const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
   const fileInputRef = useRef(null);
 
-  // PSD import wizard state
-  const wizardStep = useEditorStore(s => s.wizardStep);
-  const setWizardStep = useEditorStore(s => s.setWizardStep);
-  const [wizardPsd, setWizardPsd] = useState(null);  // { psdW, psdH, layers, partIds }
+  // GAP-001 — PSD import wizard state lives in `wizardStore` and the
+  // wizard component itself is mounted at AppShell level. This canvas
+  // only retains the per-canvas drop confirmation dialog state.
   const [confirmWipeOpen, setConfirmWipeOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
-  const preImportSnapshotRef = useRef(null);  // project snapshot before finalizePsdImport
-  const onnxSessionRef = useRef(null);  // cached ONNX session across imports
-  const meshAllPartsRef = useRef(false);  // whether to auto-mesh all parts on import completion
 
   const project = useProjectStore(s => s.project);
   const versionControl = useProjectStore(s => s.versionControl);
@@ -109,7 +123,18 @@ export default function CanvasViewport({
   const resetProject = useProjectStore(s => s.resetProject);
   const editorState = useEditorStore();
   const setBrush = useEditorStore(s => s.setBrush);
-  const { setSelection, setView } = editorState;
+  const { setSelection } = editorState;
+
+  // GAP-010 Phase B — `view` is per-mode. CanvasViewport derives its
+  // mode from the `previewMode` prop and routes every read/write
+  // through `viewByMode[modeKey]` / `setView(modeKey, partial)`.
+  const modeKey = previewMode ? 'livePreview' : 'viewport';
+  const view = editorState.viewByMode[modeKey];
+  /** @param {{zoom?:number,panX?:number,panY?:number}} partial */
+  const setView = useCallback(
+    (partial) => editorState.setView(modeKey, partial),
+    [modeKey, editorState.setView],
+  );
   const { themeMode, osTheme } = useTheme();
 
   const animStore = useAnimationStore();
@@ -129,11 +154,10 @@ export default function CanvasViewport({
   const rigSpecRef = useRef(rigSpec);
   rigSpecRef.current = rigSpec;
 
-  // BUG-012 — workspace viewport policy. Layout/Animation/Pose suppress
-  // mesh-level visualizations (wireframe / vertices) and force
-  // meshEditMode off so a stale selection from the PSD wizard or a
-  // forgotten meshEditMode toggle can't bleed into a non-mesh-edit
-  // workspace. See `src/v3/shell/workspaceViewportPolicy.js`.
+  // Active workspace — only used for the proportional-edit gate now
+  // (deletion of `workspaceViewportPolicy` 2026-05-02 means no other
+  // call sites read this). Workspaces are layout-only; modes are
+  // independent.
   const activeWorkspace = useUIV3Store((s) => s.activeWorkspace);
   const activeWorkspaceRef = useRef(activeWorkspace);
   activeWorkspaceRef.current = activeWorkspace;
@@ -164,6 +188,13 @@ export default function CanvasViewport({
   // lookRef tracks LMB-cursor position for the same tick.
   const breathPhaseRef = useRef(0);
   const lookRef = useRef({ active: false, clientX: 0, clientY: 0 });
+  // Cubism-style damped follow target. CubismTargetPoint pattern:
+  // when LMB is held, target = normalized cursor; on release, target
+  // snaps to (0, 0) so the head/iris/body smoothly damp toward
+  // neutral over ~half a second. Without this the character froze
+  // at the last cursor position instead of returning to rest pose
+  // like Cubism Viewer does.
+  const lookDampRef = useRef({ x: 0, y: 0 });
 
   // Phase -1D — set of partIds that evalRig produced but no node
   // matched. Used to dedupe console warnings (only log once per ID
@@ -178,6 +209,8 @@ export default function CanvasViewport({
   // pair is identity-stable since the last evalRig call, reuse the
   // cached frames and skip the recompute.
   const lastEvalCacheRef = useRef({ rigSpec: null, paramValues: null, frames: null });
+  // BUG-015 instrumentation — throttle for the BodyAngle eval-watch log.
+  const lastBodyAngleLogTimestampRef = useRef(0);
 
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
@@ -261,18 +294,21 @@ export default function CanvasViewport({
     const vh = canvas.clientHeight;
     if (vw === 0 || vh === 0) return;
 
-    const zoom = editorRef.current.view.zoom;
+    const zoom = editorRef.current.viewByMode[modeKey].zoom;
     setView({
       panX: vw / 2 - (contentW / 2) * zoom,
       panY: vh / 2 - (contentH / 2) * zoom,
     });
     isDirtyRef.current = true;
-  }, [setView]);
+  }, [setView, modeKey]);
 
-  // Auto-center view when entering the reorder or adjust steps
+  // Auto-center view when entering the reorder or adjust steps.
+  // GAP-001 — wizard state moved to wizardStore (was editorStore + local).
+  const _wizardStep = useWizardStore((s) => s.step);
+  const _wizardPsd  = useWizardStore((s) => s.pendingPsd);
   useEffect(() => {
-    if (wizardStep === 'reorder' || wizardStep === 'adjust') {
-      const { psdW, psdH } = wizardPsd || {};
+    if (_wizardStep === 'reorder' || _wizardStep === 'adjust') {
+      const { psdW, psdH } = _wizardPsd || {};
       if (psdW && psdH) {
         // Wait a tick for sidebars to appear/animate before centering
         const timer = setTimeout(() => {
@@ -281,7 +317,7 @@ export default function CanvasViewport({
         return () => clearTimeout(timer);
       }
     }
-  }, [wizardStep, wizardPsd, centerView]);
+  }, [_wizardStep, _wizardPsd, centerView]);
 
   // Center view on initial mount
   useEffect(() => {
@@ -384,30 +420,51 @@ export default function CanvasViewport({
         const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
         updates.ParamBreath = breathV;
 
-        // Cursor look — when LMB is held over the canvas, map cursor
-        // position to head + iris params (Cubism Viewer's standard
-        // follow-cursor behaviour):
+        // Cursor look — Cubism-style damped follow. CubismTargetPoint:
+        // target = normalized cursor while LMB is held, target = (0,0)
+        // on release. Damped value chases target each frame; on
+        // release the head/iris/body smoothly return to rest pose.
+        // Half-life ≈ 100ms with a per-frame damping factor that's
+        // dt-aware so behaviour is frame-rate independent.
+        //
         //   ParamAngleX/Y/Z  ±30°  (head turn / tilt / roll)
-        //   ParamEyeBallX/Y  ±1    (iris follows cursor independently)
-        // Z mirrors X for a natural tilt as the head turns sideways.
-        // Iris uses the same normalised cursor (cx, cy) so the eyes
-        // track the cursor in lock-step with the head — without iris
-        // here the user would see the head turn but the irises stay
-        // dead-center, which looks broken.
+        //   ParamEyeBallX/Y  ±1    (iris follows the same target)
+        //   ParamBodyAngleX/Y/Z  ±10°  (body leans 1/3 of head)
+        //
+        // Without damping the character froze at the last cursor
+        // position when the user released LMB; user 2026-05-02
+        // wanted Cubism Viewer parity ("matches cubism behaviour
+        // PERFECTLY") which means smooth return to neutral.
+        let targetX = 0;
+        let targetY = 0;
         if (lookRef.current.active && canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
             const nx = ((lookRef.current.clientX - rect.left) / rect.width) * 2 - 1;
             const ny = ((lookRef.current.clientY - rect.top) / rect.height) * 2 - 1;
-            const cx = Math.max(-1, Math.min(1, nx));
-            const cy = Math.max(-1, Math.min(1, ny));
-            updates.ParamAngleX = cx * 30;
-            updates.ParamAngleY = -cy * 30; // cursor up → look up
-            updates.ParamAngleZ = cx * 30;
-            updates.ParamEyeBallX = cx;
-            updates.ParamEyeBallY = -cy; // cursor up → iris up
+            targetX = Math.max(-1, Math.min(1, nx));
+            targetY = Math.max(-1, Math.min(1, ny));
           }
         }
+        // Per-frame damping. half-life = 0.1s → α = 1 - 0.5^(dt/half).
+        // dt comes from the same lastPhysicsTimestampRef the breath
+        // cycle uses; on the very first frame dt is 0 (no movement).
+        const _dtLook = lastPhysicsTimestampRef.current !== 0
+          ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
+          : 0;
+        const _alpha = 1 - Math.pow(0.5, _dtLook / 0.1);
+        lookDampRef.current.x += (targetX - lookDampRef.current.x) * _alpha;
+        lookDampRef.current.y += (targetY - lookDampRef.current.y) * _alpha;
+        const cx = lookDampRef.current.x;
+        const cy = lookDampRef.current.y;
+        updates.ParamAngleX = cx * 30;
+        updates.ParamAngleY = -cy * 30; // cursor up → look up
+        updates.ParamAngleZ = cx * 30;
+        updates.ParamEyeBallX = cx;
+        updates.ParamEyeBallY = -cy; // cursor up → iris up
+        updates.ParamBodyAngleX = cx * 10;
+        updates.ParamBodyAngleY = -cy * 10;
+        updates.ParamBodyAngleZ = cx * 10;
 
         // Physics — rebuild state on rigSpec identity change, then
         // integrate one tick and queue outputs that actually moved.
@@ -537,6 +594,31 @@ export default function CanvasViewport({
           } else {
             frames = evalRig(_rigSpec, valuesForEval);
             lastEvalCacheRef.current = { rigSpec: _rigSpec, paramValues: valuesForEval, frames };
+            // BUG-015 instrumentation — once-per-second snapshot of the
+            // ParamBodyAngle{X,Y,Z} values that just went into evalRig +
+            // the resulting top-row vertex displacement on a sentinel
+            // mesh. Helps the user repro "BodyAngle slider doesn't move
+            // anything" by showing: did evalRig see the user's slider
+            // write? did it produce a non-zero output? Throttled so a
+            // continuous param sweep doesn't drown the Logs panel.
+            const _now = timestamp;
+            if (_now - lastBodyAngleLogTimestampRef.current > 1000) {
+              const bz = valuesForEval.ParamBodyAngleZ ?? 0;
+              const by = valuesForEval.ParamBodyAngleY ?? 0;
+              const bx = valuesForEval.ParamBodyAngleX ?? 0;
+              if (bz !== 0 || by !== 0 || bx !== 0) {
+                logger.debug('evalRigBodyAngle',
+                  `evalRig sees BodyAngle X=${bx.toFixed(2)} Y=${by.toFixed(2)} Z=${bz.toFixed(2)}`,
+                  {
+                    paramBodyAngleX: bx,
+                    paramBodyAngleY: by,
+                    paramBodyAngleZ: bz,
+                    livePreview: previewModeRef.current,
+                    frameCount: frames.length,
+                  });
+                lastBodyAngleLogTimestampRef.current = _now;
+              }
+            }
           }
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
@@ -595,8 +677,9 @@ export default function CanvasViewport({
 
           let hasInfluence = false;
           const influences = node.blendShapes.map(shape => {
-            // During edit mode, always show the active shape at full influence
-            if (ed.blendShapeEditMode && ed.activeBlendShapeId === shape.id) {
+            // During blend-shape edit mode, always show the active shape
+            // at full influence so the user paints visible deltas.
+            if (ed.editMode === 'blendShape' && ed.activeBlendShapeId === shape.id) {
               hasInfluence = true;
               return 1.0;
             }
@@ -655,13 +738,15 @@ export default function CanvasViewport({
         }
         meshOverriddenParts.current = newMeshOverridden;
 
-        // BUG-012 — apply workspace policy so Layout/Animation/Pose can't
-        // render wireframe/vertices or engage meshEditMode dimming even
-        // when those flags are set in editorStore. The user's stored
-        // toggles are preserved; only their visible effect is gated.
+        // GAP-010 Phase B — scenePass expects `editor.view` to be a
+        // single per-frame view object; resolve it from this canvas's
+        // active mode key. Workspace policy module deleted 2026-05-02:
+        // viewLayers + editMode pass through unchanged.
         const _ed = editorRef.current;
-        const _eff = applyWorkspacePolicy(_ed.overlays, _ed.meshEditMode, activeWorkspaceRef.current);
-        const editorForDraw = { ..._ed, overlays: _eff.overlays, meshEditMode: _eff.meshEditMode };
+        const editorForDraw = {
+          ..._ed,
+          view: _ed.viewByMode[modeKey],
+        };
         sceneRef.current.draw(projectRef.current, editorForDraw, isDarkRef.current, poseOverrides, { rigDrivenParts });
 
         isDirtyRef.current = false;
@@ -684,10 +769,10 @@ export default function CanvasViewport({
     };
   }, []);
 
-  /* ── Mark dirty when editor view / overlays / selection changes ──────── */
+  /* ── Mark dirty when editor view / viewLayers / selection changes ──── */
   useEffect(() => { isDirtyRef.current = true; },
-    [editorState.view, editorState.selection, editorState.overlays, editorState.meshEditMode,
-    editorState.blendShapeEditMode, editorState.activeBlendShapeId]);
+    [view, editorState.selection, editorState.viewLayers,
+    editorState.editMode, editorState.activeBlendShapeId]);
 
   /* ── Mark dirty when workspace changes (BUG-012 policy may flip) ─────── */
   useEffect(() => { isDirtyRef.current = true; }, [activeWorkspace]);
@@ -703,17 +788,59 @@ export default function CanvasViewport({
     // mounted simultaneously).
     if (previewMode) return;
     const handler = (e) => {
-      const { meshEditMode, meshSubMode, blendShapeEditMode, brushSize } = editorRef.current;
-      // BUG-012 — workspace policy gate: don't change the brush in
-      // non-meshEdit workspaces even if the meshEditMode flag is on.
-      const meshEditEffective = isMeshEditAllowed(meshEditMode, activeWorkspaceRef.current);
-      if ((!meshEditEffective || meshSubMode !== 'deform') && !blendShapeEditMode) return;
+      const { editMode, meshSubMode, brushSize } = editorRef.current;
+      const brushActive = (editMode === 'mesh' && meshSubMode === 'deform')
+        || editMode === 'blendShape';
+      if (!brushActive) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
       else if (e.key === ']') setBrush({ brushSize: Math.min(300, brushSize + 5) });
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [setBrush, previewMode]);
+
+  /* ── GAP-015 — Blender-style proportional-edit hotkeys ───────────────── */
+  // O           — toggle proportional editing on/off
+  // Shift+O     — cycle falloff curve (smooth → sphere → root → linear → sharp → invSquare → constant)
+  // Alt+O       — toggle connected-only mode
+  // Ctrl+[ / ]  — shrink / grow proportional radius (mesh-local units)
+  //
+  // Only active when proportional editing makes sense: in Modeling/Rigging
+  // workspaces, outside of input fields, and not on the Live Preview
+  // surface. Brush mode keeps `[` / `]` for its own radius — Ctrl
+  // disambiguates so the two coexist.
+  useEffect(() => {
+    if (previewMode) return;
+    const handler = (e) => {
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
+      const ws = activeWorkspaceRef.current;
+      if (ws !== 'edit') return;
+      const prefs = usePreferencesStore.getState();
+      const setPE = prefs.setProportionalEdit;
+      if (e.key === 'o' || e.key === 'O') {
+        e.preventDefault();
+        const cur = prefs.proportionalEdit;
+        if (e.shiftKey) {
+          setPE({ falloff: nextFalloff(cur.falloff) });
+          logger.debug('proportionalEdit', `falloff → ${nextFalloff(cur.falloff)}`);
+        } else if (e.altKey) {
+          setPE({ connectedOnly: !cur.connectedOnly });
+          logger.debug('proportionalEdit', `connectedOnly → ${!cur.connectedOnly}`);
+        } else {
+          setPE({ enabled: !cur.enabled });
+          logger.debug('proportionalEdit', `enabled → ${!cur.enabled}`);
+        }
+      } else if (e.ctrlKey && (e.key === '[' || e.key === ']')) {
+        e.preventDefault();
+        const cur = prefs.proportionalEdit;
+        const step = Math.max(5, cur.radius * 0.1);
+        const next = e.key === '[' ? Math.max(5, cur.radius - step) : cur.radius + step;
+        setPE({ radius: next });
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewMode]);
 
   /* ── K key — insert keyframes for selected nodes at current time ─────── */
   useEffect(() => {
@@ -1127,161 +1254,20 @@ export default function CanvasViewport({
     centerView(psdW, psdH);
   }, [updateProject, centerView]);
 
-  /* ── Wizard: cancel import (called by PsdImportWizard) ─────────────────── */
-  const handleWizardCancel = useCallback(() => {
-    setWizardPsd(null);
-    setWizardStep(null);
-  }, [setWizardStep]);
-
-  /* ── Wizard: finalize with rig (called by PsdImportWizard) ──────────────── */
-  const handleWizardFinalize = useCallback((groupDefs, assignments, meshAllParts) => {
-    const { psdW, psdH, layers, partIds } = wizardPsd;
-    // Snapshot project state before modifying (supports Back from adjust step)
-    // Only snapshot if we don't already have one (e.g. from an earlier rig attempt)
-    if (!preImportSnapshotRef.current) {
-      preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
-    }
-    finalizePsdImport(psdW, psdH, layers, partIds, groupDefs, assignments);
-    meshAllPartsRef.current = meshAllParts;
-    useEditorStore.getState().setShowSkeleton(true);
-    useEditorStore.getState().setSkeletonEditMode(true);
-    setWizardStep('adjust');
-  }, [wizardPsd, finalizePsdImport, setWizardStep]);
-
-  /* ── Wizard: enter reorder stage (finalize without rig) ────────────────── */
-  const handleWizardReorder = useCallback(() => {
-    const { psdW, psdH, layers, partIds } = wizardPsd;
-    if (!preImportSnapshotRef.current) {
-      preImportSnapshotRef.current = JSON.stringify(useProjectStore.getState().project);
-    }
-    finalizePsdImport(psdW, psdH, layers, partIds, [], null);
-    setWizardStep('reorder');
-  }, [wizardPsd, finalizePsdImport, setWizardStep]);
-
-  /* ── Wizard: apply rig to existing part nodes ──────────────────────────── */
-  const handleWizardApplyRig = useCallback((groupDefs, assignments, meshAllParts) => {
-    updateProject((proj) => {
-      // 0. Remove any existing rig groups generated by previous attempts.
-      const toDelete = findAncestorGroupsForCleanup(proj.nodes, wizardPsd.partIds);
-      if (toDelete.size > 0) {
-        proj.nodes = proj.nodes.filter(n => !toDelete.has(n.id));
-      }
-
-      // 1. Create group nodes first
-      for (const g of groupDefs) {
-        proj.nodes.push({
-          id: g.id,
-          type: 'group',
-          name: g.name,
-          parent: g.parentId,
-          opacity: 1,
-          visible: true,
-          boneRole: g.boneRole ?? null,
-          transform: {
-            ...DEFAULT_TRANSFORM(),
-            pivotX: g.pivotX ?? 0,
-            pivotY: g.pivotY ?? 0,
-          },
-        });
-      }
-
-      // 2. Update existing part nodes with new parents and draw orders
-      assignments.forEach((assign, index) => {
-        const partId = wizardPsd.partIds[index];
-        const node = proj.nodes.find(n => n.id === partId);
-        if (node) {
-          node.parent = assign.parentGroupId;
-          node.draw_order = assign.drawOrder;
-        }
-      });
-
-      // Rigging just rewrote parent + draw_order on every part; re-run
-      // variant normalization so pairs stay co-parented and stacked.
-      normalizeVariants(proj);
-    });
-
-    const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
-    const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
-    if (groupDefs.length > 0) {
-      setExpandedGroups(groupDefs.map(g => g.id));
-      setActiveLayerTab('groups');
-    }
-
-    meshAllPartsRef.current = meshAllParts;
-    useEditorStore.getState().setShowSkeleton(true);
-    useEditorStore.getState().setSkeletonEditMode(true);
-    setWizardStep('adjust');
-  }, [wizardPsd, updateProject, setWizardStep]);
-
-  /* ── Wizard: skip rigging (called by PsdImportWizard) ──────────────────── */
-  const handleWizardSkip = useCallback((meshAllParts) => {
-    const { psdW, psdH, layers, partIds } = wizardPsd;
-    finalizePsdImport(psdW, psdH, layers, partIds, [], null);
-    if (meshAllParts) {
-      // Auto-mesh will happen asynchronously as textures are uploaded
-      // Schedule it after a short delay to let finalizePsdImport complete
-      setTimeout(() => autoMeshAllParts(), 100);
-    }
-    setWizardPsd(null);
-    setWizardStep(null);
-    // BUG-012 — same cleanup as handleWizardComplete; see comment there.
-    useEditorStore.setState({
-      selection: [],
-      meshEditMode: false,
-      blendShapeEditMode: false,
-      activeBlendShapeId: null,
-      skeletonEditMode: false,
-    });
-    useSelectionStore.getState().clear();
-  }, [wizardPsd, finalizePsdImport, autoMeshAllParts, setWizardStep]);
-
-  /* ── Wizard: complete (called by PsdImportWizard adjust step) ──────────── */
-  const handleWizardComplete = useCallback((meshAllParts) => {
-    if (meshAllParts ?? meshAllPartsRef.current) {
-      // Auto-mesh all unmeshed parts with smart sizing
-      autoMeshAllParts();
-    }
-    setWizardStep(null);
-    setWizardPsd(null);
-    // BUG-012 — clear ALL transient interaction state on wizard finish.
-    // The user may have clicked a layer / part during the wizard which
-    // wrote to editorStore.selection / useSelectionStore / meshEditMode;
-    // those flags would otherwise leak into post-import workflows
-    // (sticky outline + dimming on whatever was last clicked, brush
-    // active when the user moves into Modeling, etc.).
-    useEditorStore.setState({
-      selection: [],
-      meshEditMode: false,
-      blendShapeEditMode: false,
-      activeBlendShapeId: null,
-      skeletonEditMode: false,
-    });
-    useSelectionStore.getState().clear();
-    preImportSnapshotRef.current = null;
-  }, [autoMeshAllParts, setWizardStep]);
-
-  /* ── Wizard: back from adjust (revert to snapshot, reopen wizard) ──────── */
-  const handleWizardBack = useCallback(() => {
-    if (preImportSnapshotRef.current) {
-      useProjectStore.setState({ project: JSON.parse(preImportSnapshotRef.current) });
-      preImportSnapshotRef.current = null;
-    }
-    useEditorStore.getState().setSkeletonEditMode(false);
-    useEditorStore.getState().setShowSkeleton(false);
-    setWizardStep('review');
-  }, [setWizardStep]);
-
-
-  /* ── Wizard: split merged parts into left/right ────────────── */
-  const handleWizardSplitParts = useCallback((splits) => {
-    setWizardPsd(prev => prev
-      ? { ...prev, ...applySplits(prev.layers, prev.partIds, splits, uid) }
-      : prev);
-  }, []);
-
-  const handleWizardUpdatePsd = useCallback((updates) => {
-    setWizardPsd(prev => (prev ? { ...prev, ...updates } : prev));
-  }, []);
+  /* ── GAP-001 — Wizard handlers lifted out. The wizard mounts at
+        AppShell level (`v3/shell/PsdImportWizard.jsx`) and dispatches
+        through `services/PsdImportService`, which calls back into
+        this canvas through the `captureStore` bridges below. */
+  useEffect(() => {
+    const cs = useCaptureStore.getState();
+    cs.setFinalizePsdImport(finalizePsdImport);
+    cs.setAutoMeshAllParts(autoMeshAllParts);
+    return () => {
+      const cur = useCaptureStore.getState();
+      cur.setFinalizePsdImport(null);
+      cur.setAutoMeshAllParts(null);
+    };
+  }, [finalizePsdImport, autoMeshAllParts]);
 
   /* ── Save/Load project ────────────────────────────────────────────────── */
   const handleSave = useCallback(async () => {
@@ -1372,14 +1358,14 @@ export default function CanvasViewport({
       const partIds = layers.map(() => uid());
 
       if (detectCharacterFormat(layers)) {
-        // See-through character detected → open import wizard
-        setWizardPsd({ psdW, psdH, layers, partIds });
-        setWizardStep('review');
+        // See-through character detected → open import wizard.
+        // GAP-001 — wizard mounts at AppShell level; we just kick it off.
+        PsdImportService.start({ psdW, psdH, layers, partIds });
       } else {
         finalizePsdImport(psdW, psdH, layers, partIds, [], null);
       }
     });
-  }, [finalizePsdImport, setWizardStep]);
+  }, [finalizePsdImport]);
 
   const importPsdFile = useCallback((file) => {
     const proj = projectRef.current;
@@ -1435,13 +1421,52 @@ export default function CanvasViewport({
 
   const onContextMenu = useCallback((e) => { e.preventDefault(); }, []);
 
-  /* ── Wheel: zoom ─────────────────────────────────────────────────────── */
+  /* ── Wheel: zoom (or live-radius adjust during proportional drag) ──── */
   const onWheel = useCallback((e) => {
     e.preventDefault();
+
+    // GAP-015 — When a proportional-edit drag is in flight, divert the
+    // wheel delta to live radius adjustment AND recompute weights
+    // against the rest snapshot captured at drag start (so each tick
+    // is recomputed from the canonical mesh, not whatever the
+    // in-flight deformation has produced — otherwise the deformation
+    // drifts cumulatively). Matches Blender's MMB-scroll ergonomics.
+    const drag = dragRef.current;
+    if (drag?.proportional?.fullVertSnap && drag.partId != null && drag.vertexIndex != null) {
+      const prefs = usePreferencesStore.getState();
+      const cur = prefs.proportionalEdit;
+      const step = Math.max(2, cur.radius * 0.1);
+      const next = e.deltaY < 0 ? cur.radius + step : Math.max(5, cur.radius - step);
+      prefs.setProportionalEdit({ radius: next });
+      const restSnapshot = drag.proportional.fullVertSnap;
+      const weights = computeProportionalWeights({
+        vertices: restSnapshot,
+        originIdx: drag.vertexIndex,
+        radius: next,
+        falloff: cur.falloff,
+        connectedOnly: cur.connectedOnly,
+        adjacency: drag.proportional.adjacency,
+      });
+      const affected = [];
+      for (let i = 0; i < weights.length; i++) {
+        if (weights[i] > 0) {
+          affected.push({
+            index: i,
+            startX: restSnapshot[i].x,
+            startY: restSnapshot[i].y,
+            weight: weights[i],
+          });
+        }
+      }
+      drag.proportional.affected = affected;
+      isDirtyRef.current = true;
+      return;
+    }
+
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const next = zoomAroundCursor(
-      editorRef.current.view,
+      editorRef.current.viewByMode[modeKey],
       e.deltaY,
       e.clientX - rect.left,
       e.clientY - rect.top,
@@ -1464,7 +1489,7 @@ export default function CanvasViewport({
   /* ── Pointer events ──────────────────────────────────────────────────── */
   const onPointerDown = useCallback((e) => {
     const canvas = canvasRef.current;
-    const { view } = editorRef.current;
+    const view = editorRef.current.viewByMode[modeKey];
 
     // Phase 5 touch+pen — track every pointer that lands on the canvas.
     // When two touch pointers are active simultaneously, switch into a
@@ -1539,6 +1564,13 @@ export default function CanvasViewport({
       canvas.setPointerCapture(e.pointerId);
       canvas.style.cursor = 'grab';
       isDirtyRef.current = true;
+      // BUG-015 instrumentation — confirm cursor-look engages only on canvas-
+      // initiated pointerdown. If this fires when the user is dragging a
+      // BodyAngle slider, the canvas is swallowing pointer events and Radix
+      // never sees the drag.
+      logger.debug('lookRef', 'cursor-look engaged', {
+        pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY,
+      });
       return;
     }
 
@@ -1551,10 +1583,10 @@ export default function CanvasViewport({
 
     // When skeleton is visible, we disable standard layer selection/dragging
     // to focus exclusively on bone interactions.
-    // BUGFIX: If showSkeleton is true but NO armature exists (e.g. at start or skip rigging),
+    // BUGFIX: If skeleton layer is on but NO armature exists (e.g. at start or skip rigging),
     // we MUST allow standard selection, otherwise the user is stuck.
     const hasArmature = proj.nodes.some(n => n.type === 'group' && n.boneRole);
-    if (editorRef.current.showSkeleton && hasArmature) return;
+    if (editorRef.current.viewLayers?.skeleton && hasArmature) return;
 
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
 
@@ -1594,15 +1626,13 @@ export default function CanvasViewport({
       .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
     // ── select tool: vertex drag and part selection ──────────────────────
-    // When mesh edit mode is active, restrict interaction to the selected part only.
-    // BUG-012 — workspace gate: even if the meshEditMode flag is set,
-    // the Layout/Animation/Pose workspaces don't engage mesh-edit
-    // interaction. Stale flags from a prior session in Modeling can't
-    // hijack object-level workspaces.
+    // When in mesh / blendShape edit, restrict interaction to the
+    // selected part only.
     const { toolMode } = editorRef.current;
-    const meshEditMode = isMeshEditAllowed(editorRef.current.meshEditMode, activeWorkspaceRef.current);
+    const editMode = editorRef.current.editMode;
+    const meshEditActive = editMode === 'mesh' || editMode === 'blendShape';
     const currentSelection = editorRef.current.selection ?? [];
-    if (meshEditMode && currentSelection.length > 0) {
+    if (meshEditActive && currentSelection.length > 0) {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && n.type === 'part' && n.mesh);
       if (selNode) {
         const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
@@ -1687,7 +1717,7 @@ export default function CanvasViewport({
 
           // In blend shape edit mode, apply existing deltas (active shape at full influence)
           // so each drag continues from the visually correct position, not from rest.
-          if (editorRef.current.blendShapeEditMode && selNode.blendShapes?.length) {
+          if (editorRef.current.editMode === 'blendShape' && selNode.blendShapes?.length) {
             const activeShapeId = editorRef.current.activeBlendShapeId;
             effectiveVerts = selNode.mesh.vertices.map((v, i) => {
               let bx = v.restX, by = v.restY;
@@ -1749,6 +1779,50 @@ export default function CanvasViewport({
           ?? node.mesh.vertices;
         const idx = findNearestVertex(nodeEffVerts, lx, ly, 14 / view.zoom);
         if (idx >= 0) {
+          // GAP-015 — Blender-style proportional editing. When the
+          // user has `preferencesStore.proportionalEdit.enabled = true`,
+          // capture every vertex's rest position + per-vertex weight
+          // at drag start so the move handler can pull neighbours
+          // along with a falloff curve. Connected-only mode also
+          // builds a vertex adjacency map (one BFS per drag, not per
+          // pointer event). Phase B note: adjacency caching across
+          // drags within the same node is handled by
+          // `getOrBuildAdjacency` (WeakMap keyed by indices ref).
+          const peCfg = usePreferencesStore.getState().proportionalEdit;
+          let proportional = null;
+          if (peCfg?.enabled && node.mesh.vertices && node.mesh.indices) {
+            // Full rest snapshot — used for both initial weight compute
+            // AND for live wheel-driven radius adjust during the drag
+            // (recomputed weights need the rest mesh, not the in-flight
+            // deformed mesh, otherwise each tick drifts further).
+            const vertsSnap = nodeEffVerts.map(v => ({ x: v.x, y: v.y }));
+            const adjacency = peCfg.connectedOnly
+              ? getOrBuildAdjacency(node.mesh.indices, vertsSnap.length)
+              : null;
+            const weights = computeProportionalWeights({
+              vertices: vertsSnap,
+              originIdx: idx,
+              radius: peCfg.radius,
+              falloff: peCfg.falloff,
+              connectedOnly: peCfg.connectedOnly,
+              adjacency,
+            });
+            // Strip vertices with weight 0 — apply step iterates
+            // affected indices only, not the whole mesh.
+            /** @type {Array<{index:number, startX:number, startY:number, weight:number}>} */
+            const affected = [];
+            for (let i = 0; i < weights.length; i++) {
+              if (weights[i] > 0) {
+                affected.push({
+                  index: i,
+                  startX: vertsSnap[i].x,
+                  startY: vertsSnap[i].y,
+                  weight: weights[i],
+                });
+              }
+            }
+            proportional = { affected, fullVertSnap: vertsSnap, adjacency };
+          }
           dragRef.current = {
             partId: node.id,
             vertexIndex: idx,
@@ -1759,6 +1833,7 @@ export default function CanvasViewport({
             imageWidth: node.imageWidth,
             imageHeight: node.imageHeight,
             iwm,
+            proportional,
           };
           setSelection([node.id]);
           canvas.setPointerCapture(e.pointerId);
@@ -1779,7 +1854,7 @@ export default function CanvasViewport({
 
   const onPointerMove = useCallback((e) => {
     const canvas = canvasRef.current;
-    const { view } = editorRef.current;
+    const view = editorRef.current.viewByMode[modeKey];
 
     // Phase 5 touch+pen — keep the active-pointer map fresh for in-flight
     // gestures. Reading the very latest screen positions for both fingers
@@ -1858,10 +1933,9 @@ export default function CanvasViewport({
 
     // Update brush circle cursor position (direct DOM, no React re-render)
     if (brushCircleRef.current) {
-      // BUG-012 — workspace gate on the brush cursor too.
-      const meshEditEffective = isMeshEditAllowed(editorRef.current.meshEditMode, activeWorkspaceRef.current);
-      const inDeformMode = (meshEditEffective && editorRef.current.meshSubMode === 'deform')
-        || editorRef.current.blendShapeEditMode;
+      const editMode = editorRef.current.editMode;
+      const inDeformMode = (editMode === 'mesh' && editorRef.current.meshSubMode === 'deform')
+        || editMode === 'blendShape';
       if (inDeformMode) {
         const rect = canvas.getBoundingClientRect();
         brushCircleRef.current.setAttribute('cx', e.clientX - rect.left);
@@ -1869,6 +1943,29 @@ export default function CanvasViewport({
         brushCircleRef.current.setAttribute('visibility', 'visible');
       } else {
         brushCircleRef.current.setAttribute('visibility', 'hidden');
+      }
+    }
+
+    // GAP-015 — proportional-edit influence ring. Visible whenever the
+    // user has proportional editing enabled in a permissive workspace.
+    // Radius is in mesh-local units; we scale by view.zoom to render
+    // in screen-px (mesh-local-to-screen scale ≈ image scale × zoom,
+    // but since meshes ride the canvas axes view.zoom is sufficient
+    // for an indicator). Brushed mesh-edit and proportional edit can
+    // coexist — both rings visible if both modes are on.
+    if (propEditCircleRef.current) {
+      const peCfg = usePreferencesStore.getState().proportionalEdit;
+      const ws = activeWorkspaceRef.current;
+      const wsAllows = ws === 'edit';
+      if (peCfg?.enabled && wsAllows) {
+        const rect = canvas.getBoundingClientRect();
+        const screenR = peCfg.radius * editorRef.current.viewByMode[modeKey].zoom;
+        propEditCircleRef.current.setAttribute('cx', e.clientX - rect.left);
+        propEditCircleRef.current.setAttribute('cy', e.clientY - rect.top);
+        propEditCircleRef.current.setAttribute('r', screenR);
+        propEditCircleRef.current.setAttribute('visibility', 'visible');
+      } else {
+        propEditCircleRef.current.setAttribute('visibility', 'hidden');
       }
     }
 
@@ -1905,7 +2002,7 @@ export default function CanvasViewport({
       isDirtyRef.current = true;
 
       // Blend shape edit mode — write to shape key deltas instead of mesh or draftPose
-      if (editorRef.current.blendShapeEditMode) {
+      if (editorRef.current.editMode === 'blendShape') {
         const shapeId = editorRef.current.activeBlendShapeId;
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === partId);
@@ -1950,7 +2047,7 @@ export default function CanvasViewport({
 
     // ── Single-vertex drag (non-edit-mode path) ────────────────────────────
     const { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY,
-      imageWidth, imageHeight, iwm } = dragRef.current;
+      imageWidth, imageHeight, iwm, proportional } = dragRef.current;
 
     const worldDx = worldX - startWorldX;
     const worldDy = worldY - startWorldY;
@@ -1958,6 +2055,9 @@ export default function CanvasViewport({
     const localDy = iwm[1] * worldDx + iwm[4] * worldDy;
 
     if (meshSubMode === 'adjust') {
+      // GAP-015 — adjust mode is UV remap only; proportional editing
+      // doesn't apply (the UI gesture is "exact vertex pick", not "drag
+      // and let neighbours follow").
       const newLocalX = startLocalX + localDx;
       const newLocalY = startLocalY + localDy;
       updateProject((proj) => {
@@ -1967,6 +2067,22 @@ export default function CanvasViewport({
         node.mesh.vertices[vertexIndex].y = newLocalY;
         node.mesh.uvs[vertexIndex * 2] = newLocalX / (imageWidth ?? 1);
         node.mesh.uvs[vertexIndex * 2 + 1] = newLocalY / (imageHeight ?? 1);
+      });
+    } else if (proportional) {
+      // GAP-015 — pull every affected vertex along with its captured
+      // weight. Origin gets weight 1 → moves the full delta; rim
+      // vertices get weight ≈0 → barely move; mid-falloff vertices
+      // follow the curve. Snapshots taken at drag start, so dragging
+      // is stable even when intermediate updateProject calls trigger
+      // re-renders.
+      updateProject((proj) => {
+        const node = proj.nodes.find(n => n.id === partId);
+        if (!node?.mesh) return;
+        const verts = node.mesh.vertices;
+        for (const a of proportional.affected) {
+          verts[a.index].x = a.startX + localDx * a.weight;
+          verts[a.index].y = a.startY + localDy * a.weight;
+        }
       });
     } else {
       updateProject((proj) => {
@@ -2011,6 +2127,7 @@ export default function CanvasViewport({
     if (lookRef.current.active) {
       lookRef.current.active = false;
       canvas.style.cursor = '';
+      logger.debug('lookRef', 'cursor-look released', { pointerId: e.pointerId });
       return;
     }
 
@@ -2131,7 +2248,7 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: !previewMode && isMeshEditAllowed(editorState.meshEditMode, activeWorkspace) && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
+          cursor: !previewMode && editorState.editMode === 'mesh' && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}
@@ -2142,6 +2259,7 @@ export default function CanvasViewport({
       />
 
       {/* Brush cursor circle — shown in deform edit mode, positioned via direct DOM updates. */}
+      {/* GAP-015 — separate proportional-edit indicator ring (Blender's `O`-mode cursor). */}
       {/* GAP-010 — suppressed on the Live Preview surface (no editing). */}
       {!previewMode && (
         <svg className="absolute inset-0 w-full h-full pointer-events-none">
@@ -2155,21 +2273,31 @@ export default function CanvasViewport({
             strokeDasharray="4 3"
             visibility="hidden"
           />
+          <circle
+            ref={propEditCircleRef}
+            cx={0} cy={0}
+            r={0}
+            fill="none"
+            stroke="rgb(255, 200, 80)"
+            strokeWidth="1.5"
+            strokeDasharray="6 4"
+            visibility="hidden"
+          />
         </svg>
       )}
 
       {/* Transform gizmo SVG overlay — hidden when skeleton is showing AND exists. */}
       {/* GAP-010 — never on the Live Preview surface; preview is read-only. */}
-      {!previewMode && (!editorState.showSkeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
+      {!previewMode && (!editorState.viewLayers.skeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
 
       {/* Armature skeleton overlay (staging mode, when rig exists). */}
       {/* GAP-010 — never on the Live Preview surface. */}
       {!previewMode && (
         <SkeletonOverlay
-          view={editorState.view}
+          view={view}
           editorMode={editorState.editorMode}
-          showSkeleton={editorState.showSkeleton}
-          skeletonEditMode={editorState.skeletonEditMode}
+          showSkeleton={editorState.viewLayers.skeleton}
+          skeletonEditMode={editorState.editMode === 'skeleton'}
         />
       )}
 
@@ -2248,26 +2376,55 @@ export default function CanvasViewport({
       )}
 
 
-      {/* PSD import wizard — step-by-step rigging setup. */}
-      {/* GAP-010 — wizard mounts only on the edit Viewport. Two parallel
-          wizards on two surfaces would race the same finalize state. */}
-      {!previewMode && wizardStep && wizardPsd && (
-        <PsdImportWizard
-          step={wizardStep}
-          onSetStep={setWizardStep}
-          pendingPsd={wizardPsd}
-          onnxSessionRef={onnxSessionRef}
-          onFinalize={handleWizardFinalize}
-          onSkip={handleWizardSkip}
-          onCancel={handleWizardCancel}
-          onComplete={handleWizardComplete}
-          onBack={handleWizardBack}
-          onSplitParts={handleWizardSplitParts}
-          onUpdatePsd={handleWizardUpdatePsd}
-          onReorder={handleWizardReorder}
-          onApplyRig={handleWizardApplyRig}
-        />
+      {/* GAP-006 — Reset Pose, top-right viewport corner. Visible on the edit
+          Viewport whenever a project is loaded. Behaviour depends on mode:
+            - Animation mode → `resetPoseDraft()`  (clear draftPose + paramValues; keyframes survive)
+            - Staging mode    → `resetToRestPose()` (above + bone-group transforms)
+          Hidden on the Live Preview surface (read-only).
+          Replaced the prior chains-bar + dump diagnostic that lived in this
+          slot — that signal moved to the Logs panel (`chainDiagnose` source)
+          per user direction 2026-05-02. */}
+      {!previewMode && project.nodes.length > 0 && (
+        <TooltipProvider delayDuration={400}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="secondary" size="sm"
+                className="absolute top-2 right-2 z-10 h-8 px-3 gap-1.5
+                           bg-card/85 backdrop-blur-md
+                           border border-border/60 hover:border-primary/40
+                           text-foreground/80 hover:text-foreground hover:bg-card/95
+                           shadow-md hover:shadow-lg hover:shadow-primary/10
+                           transition-all duration-150
+                           font-medium"
+                onClick={() => {
+                  const mode = editorState.editorMode;
+                  if (mode === 'animation') resetPoseDraft();
+                  else resetToRestPose();
+                  logger.debug('resetPose', `Reset Pose triggered (mode=${mode})`, {
+                    editorMode: mode,
+                    paramsReset: project?.parameters?.length ?? 0,
+                  });
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span className="text-[11px] tracking-wide">Reset Pose</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {editorState.editorMode === 'animation'
+                ? 'Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.'
+                : 'Reset to rest pose — zeros every bone-group rotation/translation/scale (preserving pivots) and resets parameters to defaults. Per-part transforms are preserved; use Properties → Reset Transform for those.'}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
+
+      {/* GAP-001 — PSD import wizard now mounts at AppShell level
+          (`v3/shell/PsdImportWizard.jsx`) and reads `wizardStore`
+          directly. The canvas exposes its imperative bridges
+          (finalizePsdImport / autoMeshAllParts) through `captureStore`
+          via the effect in this component. */}
 
       {/* Wipe project confirmation */}
       <AlertDialog open={confirmWipeOpen} onOpenChange={setConfirmWipeOpen}>

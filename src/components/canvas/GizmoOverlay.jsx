@@ -35,7 +35,10 @@ export function GizmoOverlay() {
   const toolMode      = useEditorStore(s => s.toolMode);
   const selection     = useEditorStore(s => s.selection);
   const editorMode    = useEditorStore(s => s.editorMode);
-  const view          = useEditorStore(s => s.view);
+  // GAP-010 Phase B — gizmo overlays only mount on the edit Viewport
+  // surface (CanvasViewport gates `<GizmoOverlay />` on `!previewMode`),
+  // so always read the viewport tab's view.
+  const view          = useEditorStore(s => s.viewByMode.viewport);
   const nodes         = useProjectStore(s => s.project.nodes);
   const animations    = useProjectStore(s => s.project.animations);
   const updateProject = useProjectStore(s => s.updateProject);

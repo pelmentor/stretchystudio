@@ -3,14 +3,14 @@
 /**
  * v3 Phase 5 — Shared canvas capture store.
  *
- * The `CanvasViewport` instance lives inside `ViewportEditor` (deep in
+ * The `CanvasViewport` instance lives inside `<CanvasArea>` (deep in
  * the area tree). The Save modal lives at the AppShell level. They
  * share zero render context, so a ref-based handoff would mean
  * threading props through five components.
  *
- * Instead the viewport publishes its capture function here on mount
+ * Instead CanvasArea publishes its capture function here on mount
  * and the SaveModal pulls it via `useCaptureStore.getState()` when the
- * user hits Save. The viewport clears it on unmount so a stale closure
+ * user hits Save. CanvasArea clears it on unmount so a stale closure
  * over a destroyed canvas never gets called.
  *
  * @module store/captureStore
@@ -31,6 +31,22 @@ import { create } from 'zustand';
  *   so non-viewport editors (Properties → MeshTab) can drive
  *   regeneration without prop-drilling.
  * @property {(fn: ((partId:string, opts?:any) => void)|null) => void} setRemeshPart
+ *
+ * @property {((psdW:number, psdH:number, layers:any[], partIds:string[],
+ *             groupDefs:any[], assignments:Map<number,any>|null) => void)|null} finalizePsdImport
+ *   GAP-001 — Wizard-side bridge. Mutates project.nodes from the parsed
+ *   PSD payload, uploads textures + alpha-data to the WebGL scene, and
+ *   centres the viewport on the imported character. Lives in
+ *   CanvasViewport because it touches WebGL refs + imageDataMap; the
+ *   wizard (mounted at AppShell level) calls it through this bridge.
+ * @property {(fn: any|null) => void} setFinalizePsdImport
+ *
+ * @property {(() => void)|null} autoMeshAllParts
+ *   GAP-001 — Wizard-side bridge. Triggers async mesh-worker generation
+ *   for every meshless part. Same separation reason as
+ *   `finalizePsdImport`: depends on workersRef/sceneRef inside
+ *   CanvasViewport, can't move to a service.
+ * @property {(fn: (() => void)|null) => void} setAutoMeshAllParts
  */
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<CaptureStore>>} */
@@ -39,4 +55,8 @@ export const useCaptureStore = create((set) => ({
   setCaptureThumbnail: (fn) => set({ captureThumbnail: fn }),
   remeshPart: null,
   setRemeshPart: (fn) => set({ remeshPart: fn }),
+  finalizePsdImport: null,
+  setFinalizePsdImport: (fn) => set({ finalizePsdImport: fn }),
+  autoMeshAllParts: null,
+  setAutoMeshAllParts: (fn) => set({ autoMeshAllParts: fn }),
 }));

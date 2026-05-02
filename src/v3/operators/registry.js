@@ -22,6 +22,7 @@ import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
+import { toast } from '../../hooks/use-toast.js';
 import { undo, redo, undoCount, redoCount, beginBatch } from '../../store/undoHistory.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { useExportModalStore } from '../../store/exportModalStore.js';
@@ -73,7 +74,7 @@ export function _resetOperatorsForTests() {
 
 // ── Built-in shell operators ─────────────────────────────────────────
 
-const WORKSPACE_IDS = ['layout', 'modeling', 'rigging', 'pose', 'animation'];
+const WORKSPACE_IDS = ['edit', 'pose', 'animation'];
 
 function registerBuiltins() {
   for (const id of WORKSPACE_IDS) {
@@ -210,8 +211,12 @@ function registerBuiltins() {
       const cx = (bbox.minX + bbox.maxX) / 2;
       const cy = (bbox.minY + bbox.maxY) / 2;
       const editor = useEditorStore.getState();
-      const zoom = editor.view.zoom;
-      editor.setView({
+      // GAP-010 Phase B — frame-selection operates on the edit
+      // Viewport tab; livePreview's framing is the user's read-only
+      // "what does this look like at runtime" view and shouldn't be
+      // moved by editor operators.
+      const zoom = editor.viewByMode.viewport.zoom;
+      editor.setView('viewport', {
         panX: vw / 2 - cx * zoom,
         panY: vh / 2 - cy * zoom,
       });
@@ -362,6 +367,59 @@ function registerBuiltins() {
       (it) => it.type === 'part' || it.type === 'group',
     ),
     exec: () => beginModalTransform('translate'),
+  });
+
+  // Edit mode toggle. Tab — Blender's universal "enter / exit edit
+  // mode" gesture. Selection-driven: a meshed part enters mesh edit, a
+  // bone-role group enters skeleton edit. Already in edit mode → exits.
+  // Workspace does NOT gate this (matches Blender — workspace is
+  // layout-only). BlendShape edit needs to know which shape, so it's
+  // NOT bound here; user enters from BlendShapeTab's Edit button.
+  registerOperator({
+    id: 'mode.editToggle',
+    label: 'Toggle Edit Mode (Tab)',
+    available: () => true,  // always available — exec handles feedback
+    exec: () => {
+      const ed = useEditorStore.getState();
+      if (ed.editMode) {
+        ed.exitEditMode();
+        return;
+      }
+      const active = useSelectionStore.getState().getActive();
+      if (!active) {
+        toast({
+          title: 'Nothing to edit',
+          description: 'Select a meshed part or bone group, then press Tab.',
+        });
+        return;
+      }
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === active.id);
+      if (!node) return;
+
+      if (active.type === 'part' && node.mesh) {
+        // Mesh edit needs the part selected in editorStore so scene
+        // dimming / brush / wireframe-on-selected pick it up. Sync
+        // selection from the universal store to the legacy string[]
+        // selection.
+        useEditorStore.getState().setSelection([active.id]);
+        ed.enterEditMode('mesh');
+      } else if (active.type === 'group' && node.boneRole) {
+        // Skeleton edit needs the overlay visible (drag targets are
+        // the joint circles). Auto-enable rather than fail silently.
+        if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
+        ed.enterEditMode('skeleton');
+      } else {
+        toast({
+          title: 'No edit mode for this selection',
+          description: active.type === 'part'
+            ? 'This part has no mesh — generate one before entering Edit Mode.'
+            : active.type === 'group'
+              ? 'This group has no bone role — only bone-role groups support Skeleton Edit.'
+              : `Selection type "${active.type}" has no edit context.`,
+        });
+      }
+    },
   });
   registerOperator({
     id: 'transform.rotate',
