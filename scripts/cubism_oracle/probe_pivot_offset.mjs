@@ -33,7 +33,11 @@ function findFix(name) {
   return f ? path.join(SNAPSHOTS_DIR, f) : null;
 }
 
-const ANGLE_DEG = 30;
+// FaceRotation maps ParamAngleZ keys [-30,0,30] to angles [-10,0,10]
+// (Hiyori-style cap). So at ParamAngleZ=30 the deformer rotates 10°,
+// not 30°. The earlier dump using 30° underestimated the implied
+// pivot offset by ~9×.
+const ANGLE_DEG = 10;
 const rad = (ANGLE_DEG * Math.PI) / 180;
 const cs = Math.cos(rad);
 const sn = Math.sin(rad);

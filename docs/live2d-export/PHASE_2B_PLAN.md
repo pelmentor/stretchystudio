@@ -350,5 +350,19 @@ Either fix would close the AngleZ_pos30 PARAM signal entirely. Confidence is hig
 | `scripts/cubism_oracle/map_drawables.mjs`           | Oracle ArtMeshN → v3 mesh-name + chain mapping.                        |
 | `scripts/cubism_oracle/probe_pivot_offset.mjs`      | Recovers `(R(θ)-I)⁻¹ · paramDelta` to back out implied pivot offsets.  |
 | `scripts/cubism_oracle/probe_param_uses.mjs`        | List specs binding to a chosen parameter.                              |
+| `scripts/cubism_oracle/dump_authored_rotations.mjs` | Inspect raw cmo3 rotation deformers (verifies parent=rotation case).   |
+| `scripts/cubism_oracle/verify_pivot_fix.mjs`        | Disproof artifact — see "Pivot-patch disproof" below.                  |
 | Changes in [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) | Exports `DeformerStateCache` so probes can run FD lookups directly. |
+
+### Pivot-patch disproof (2026-05-03 follow-up)
+
+A natural next move after Stage 1 was: "patch FaceRotation's `origin` in the harvested rigSpec to the authored Cubism value, re-run oracle, see PARAM drop". `verify_pivot_fix.mjs` ran exactly that experiment — and the **PARAM signal at AngleZ_pos30 did not change**. Eyebrow-l/eyebrow-r/front-hair stayed pinned at param_max=6.18 px before and after the patch.
+
+The geometric reason is straightforward once you write out the matrix. v3's rotation matrix is `out = R·in + origin` (matches Cubism's `RotationDeformer_TransformTarget` per IDA `0x7fff2b24c950`). At any angle, `d(out)/d(origin) = I` — changing `origin` shifts the output by the same constant vector regardless of `R`. The harness's PARAM is `(v3@30 − oracle@30) − (v3@rest − oracle@rest)`, which subtracts the rest-pose offset, so any constant shift in `origin` cancels out completely.
+
+The PARAM signature `(R(10°)−I)·c = (−6.13, 0.69)` therefore resolves not to a "pivot offset" but to **`c = (in_v3 − in_oracle) ≈ (−0.88, −35.4)`** — a ~35 px constant difference in the **vertex coordinates arriving AT FaceRotation's input**. Those verts come from FaceParallaxWarp's lifted output. v3 builds FaceParallaxWarp heuristically ([`src/io/live2d/cmo3writer.js`](../../src/io/live2d/cmo3writer.js) `facePivot` + radius/protected-regions); Cubism uses the authored cmo3 grid; they don't agree.
+
+So the BUG-003 9.45 px PARAM signal at AngleZ_pos30 is **the heuristic-vs-authored gap of FaceParallaxWarp** (and likely several other ancestors in the body warp chain), surfaced through FaceRotation's amplification. There is no single-deformer fix. Closing it requires `initializeRigFromProject` to prefer authored cmo3 deformer data over heuristics — a substantial feature rebuild that touches the cmo3Import → initRig → cmo3writer pipeline. That work is **out of scope for Phase 2b** and would benefit from explicit user-direction on rollout (other characters that depend on v3's heuristic init rig would need re-validation).
+
+For ongoing work: when chasing oracle-harness divergence, distinguish "kernel correctness" (chainEval / warpEval / rotationEval — verified at high precision by Phase 0/1/3 + Stage 1) from "rig-data fidelity" (heuristic init rig vs authored cmo3 — the actual delta surface). The harness measures both compounded; only the latter can move on this codebase right now.
 
