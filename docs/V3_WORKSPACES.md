@@ -73,6 +73,61 @@ Tab keybind (`mode.editToggle` operator) toggles between Object Mode and the con
 
 [`preferencesStore.lockObjectModes`](../src/store/preferencesStore.js), default ON. While the user is in any edit mode, clicks on a *different* part are **rejected** by `setSelection` — must Tab out before switching pieces. Mirrors Blender's "Lock Object Modes" setting. Empty selection (deselect-all) is allowed even with the lock on, but exits edit mode because there's no part to edit anymore. Toggle: ModePill dropdown footer.
 
+## Canvas toolbar (left edge, T-panel)
+
+Code: [`src/v3/shell/CanvasToolbar.jsx`](../src/v3/shell/CanvasToolbar.jsx) + [`canvasToolbar/tools.js`](../src/v3/shell/canvasToolbar/tools.js).
+
+Vertical icon strip on the canvas left edge, sitting just below the Mode pill. Mounts on the edit Viewport tab only (Live Preview hides it). Tool list is **driven by `editMode`**:
+
+| editMode               | Tools                                                              |
+|------------------------|--------------------------------------------------------------------|
+| `null` (Object Mode)   | Select / Move (G) / Rotate (R) / Scale (S)                         |
+| `'mesh'`               | Brush / Add Vertex / Remove Vertex                                  |
+| `'skeleton'`           | Joint Drag                                                          |
+| `'blendShape'`         | Brush                                                               |
+
+Two button kinds in [`tools.js`](../src/v3/shell/canvasToolbar/tools.js):
+
+- **`tool`** — sticky. Click sets `editorStore.toolMode` to the advertised id; the canvas pointer dispatch reads `toolMode` to decide what a click does. Click-active again is a no-op (Blender behaviour).
+- **`operator`** — momentary. Click fires the named v3 operator. Object-mode Move / Rotate / Scale are operator buttons today (firing `transform.translate` / `rotate` / `scale`); they share keymap chords G/R/S so the toolbar doubles as a discoverability surface.
+
+`enterEditMode(kind)` sets the mode's default tool: `'brush'` for mesh & blendShape, `'joint_drag'` for skeleton, `'select'` on exit. `meshSubMode` (`deform` vs `adjust`) stays a separate axis under the brush tool — UV adjust isn't a top-level toolbar slot in v1.
+
+### Out of scope (deferred)
+
+- Sticky transform tools in Object Mode (the Move/Rotate/Scale buttons fire modal G/R/S today; sticky variants need their own gizmo+drag wiring).
+- UV Adjust toolbar entry — switch via `meshSubMode` for now.
+- Knife / Loop Cut / Smooth / Inflate / Bevel / Extrude / etc. — added when the underlying handlers ship (no phantom tools).
+- Last-used-tool persistence per editMode across sessions (would live in `preferencesStore`).
+
+## Click-to-select on canvas
+
+Code: [`src/io/hitTest.js`](../src/io/hitTest.js).
+
+Blender pattern. In Object Mode (`editMode === null`) on the edit Viewport:
+
+- **LMB click on a part** → that part becomes the selection. The existing edge-outline render path in `scenePass` already lights up the boundary on `viewLayers.edgeOutline || isSelected`, so the outline appears for free.
+- **Shift+LMB click** → toggles the part in the multi-selection (universal `selectionStore`). The legacy `editorStore.selection` slot tracks just the active head — most consumers (Properties panes, GizmoOverlay) only need that.
+- **LMB click on empty canvas** → clears selection.
+- **Topmost wins by `draw_order`** descending — clicks on overlapping parts pick the front-most.
+
+Hit-testing runs as a triangle test against rig-evaluated vertex positions (the cached `evalRig` frames), so the click matches what's actually rendered, not the rest mesh. For parts the rig doesn't drive (PSDs not yet through Init Rig), the test falls back to rest mesh × `worldMatrix`.
+
+In edit modes (mesh / skeleton / blendShape) click-to-select for parts is **suppressed** — clicks already do mode-specific work (vertex drag in mesh edit, joint drag in skeleton edit handled by `SkeletonOverlay`, brush in blendShape). Lock Object Modes preference doubles down on this for the lock-on case (selection-head changes are rejected by `editorStore.setSelection`).
+
+### Select all / deselect toggle
+
+`A` (bare key) — `selection.selectAllToggle` operator. If anything is selected, deselects everything; otherwise selects every visible meshed part. Both stores are kept in sync atomically.
+
+`Esc` — `selection.clear` operator. Drops the universal selection AND legacy slot.
+
+### What's not in scope yet (deferred)
+
+- Box / Lasso select (Blender's `B` and `L`).
+- Pixel-perfect alpha hit-testing (alpha-zero holes inside a mesh still register as hits — first-cut treats the whole triangulation as opaque).
+- Mask-respecting hit-test (clicks landing on a clip-masked part outside the mask region currently still select).
+- Tab-cycle through overlapping selections (Blender's "alt-click cycles depth").
+
 ## Mesh-edit auto-shows the mesh
 
 When `editMode === 'mesh'` and the active part is selected, `scenePass` forces wireframe + vertices on for that part regardless of `viewLayers.wireframe` / `vertices` toggles. Blender pattern: in Edit Mode you always see what you're editing. The toggles continue to govern visualization for unselected parts.

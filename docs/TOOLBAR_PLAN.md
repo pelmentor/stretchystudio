@@ -1,6 +1,6 @@
 # Left Toolbar (T-panel) Plan
 
-**Status:** queued. Reference for the next sweep.
+**Status:** SHIPPED 2026-05-02 (v1) — see [`src/v3/shell/CanvasToolbar.jsx`](../src/v3/shell/CanvasToolbar.jsx), [`canvasToolbar/tools.js`](../src/v3/shell/canvasToolbar/tools.js), [`V3_WORKSPACES.md` § Canvas toolbar](V3_WORKSPACES.md). Object Mode Move/Rotate/Scale ship as operator buttons (firing modal G/R/S); sticky variants + UV Adjust slot + Knife/Smooth/Loop Cut deferred. Plan history retained below.
 **Origin:** user 2026-05-02 — "We don't have an actual toolbar lol".
 
 ## What's missing

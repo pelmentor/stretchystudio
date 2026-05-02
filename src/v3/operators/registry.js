@@ -141,7 +141,36 @@ function registerBuiltins() {
     id: 'selection.clear',
     label: 'Deselect All',
     available: () => useSelectionStore.getState().items.length > 0,
-    exec: () => useSelectionStore.getState().clear(),
+    exec: () => {
+      useSelectionStore.getState().clear();
+      useEditorStore.getState().setSelection([]);
+    },
+  });
+
+  // Selection: select-all toggle. Blender's `A` keymap — if anything
+  // is currently selected, deselect everything; else select every
+  // visible meshed part. Mirrors the result into the legacy
+  // editorStore.selection slot so Properties panes / GizmoOverlay
+  // pick up the active head.
+  registerOperator({
+    id: 'selection.selectAllToggle',
+    label: 'Select All / Deselect All',
+    exec: () => {
+      const sel = useSelectionStore.getState();
+      if (sel.items.length > 0) {
+        sel.clear();
+        useEditorStore.getState().setSelection([]);
+        return;
+      }
+      const project = useProjectStore.getState().project;
+      const partIds = (project?.nodes ?? [])
+        .filter((n) => n?.type === 'part' && n.visible !== false)
+        .map((n) => n.id);
+      if (partIds.length === 0) return;
+      sel.select(partIds.map((id) => ({ type: 'part', id })), 'replace');
+      // Legacy slot tracks the active head only.
+      useEditorStore.getState().setSelection([partIds[partIds.length - 1]]);
+    },
   });
 
   // Delete the active selection. Only operates on project nodes

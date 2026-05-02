@@ -4,7 +4,28 @@ import { usePreferencesStore } from './preferencesStore.js';
 // Editor state (UI state, selection, view transform, drag state)
 export const useEditorStore = create((set) => ({
   selection: [], // array of node IDs
-  toolMode: 'select', // 'select' | 'add_vertex' | 'remove_vertex'
+
+  /** Active tool. Scoped to the current `editMode` — the canvas
+   *  toolbar surfaces a different list per mode and resets to the
+   *  mode's default on enter/exit.
+   *
+   *    Object Mode (editMode === null):
+   *      'select'         — default (click-to-select; topmost wins)
+   *
+   *    Mesh Edit (editMode === 'mesh'):
+   *      'brush'          — default (multi-vertex deform brush; UV
+   *                          adjust when `meshSubMode === 'adjust'`)
+   *      'add_vertex'     — click adds a vertex at the cursor
+   *      'remove_vertex'  — click removes the nearest vertex
+   *
+   *    Skeleton (editMode === 'skeleton'):
+   *      'joint_drag'     — default (drag joints in SkeletonOverlay)
+   *
+   *    BlendShape (editMode === 'blendShape'):
+   *      'brush'          — default (paint deltas into the active
+   *                          blendShape)
+   */
+  toolMode: 'select',
 
   /** GAP-010 Phase B — independent view (zoom + pan) per canvas mode.
    *  The viewport tab and the livePreview tab are two views of the
@@ -159,17 +180,25 @@ export const useEditorStore = create((set) => ({
   enterEditMode: (kind, opts = {}) => set((state) => {
     if (kind !== 'mesh' && kind !== 'skeleton' && kind !== 'blendShape') return state;
     if (kind === 'blendShape' && !opts.blendShapeId) return state;
+    // Default tool per edit mode mirrors what the toolbar's first
+    // entry advertises. Re-entering a mode resets to the default
+    // (the user's last sub-mode is sticky via meshSubMode, not the
+    // toolMode slot).
+    let toolMode;
+    if (kind === 'mesh' || kind === 'blendShape') toolMode = 'brush';
+    else if (kind === 'skeleton') toolMode = 'joint_drag';
+    else toolMode = 'select';
     return {
       editMode: kind,
       activeBlendShapeId: kind === 'blendShape' ? opts.blendShapeId : null,
-      toolMode: 'select',
+      toolMode,
     };
   }),
 
   /** Exit any contextual edit mode back to object mode. Idempotent. */
-  exitEditMode: () => set({ editMode: null, activeBlendShapeId: null }),
+  exitEditMode: () => set({ editMode: null, activeBlendShapeId: null, toolMode: 'select' }),
 
-  setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'select' }),
+  setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),
   /** GAP-010 Phase B — first arg is the mode key, second is the
    *  partial view update. `setView('viewport', { zoom: 2 })` updates

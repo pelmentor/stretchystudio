@@ -51,6 +51,7 @@ import {
   computeSmartMeshOpts,
   zoomAroundCursor,
 } from '@/components/canvas/viewport/helpers';
+import { hitTestParts } from '@/io/hitTest';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
   getOrBuildAdjacency,
@@ -1581,12 +1582,13 @@ export default function CanvasViewport({
 
     const proj = projectRef.current;
 
-    // When skeleton is visible, we disable standard layer selection/dragging
-    // to focus exclusively on bone interactions.
-    // BUGFIX: If skeleton layer is on but NO armature exists (e.g. at start or skip rigging),
-    // we MUST allow standard selection, otherwise the user is stuck.
+    // Skeleton-edit mode delegates the entire canvas pointer-down
+    // surface to SkeletonOverlay (joint dragging). Bail so click-to-
+    // select doesn't fight for the same gesture. In Object Mode, the
+    // overlay only claims its own painted handles via stopPropagation,
+    // so clicks elsewhere fall through to click-to-select below.
     const hasArmature = proj.nodes.some(n => n.type === 'group' && n.boneRole);
-    if (editorRef.current.viewLayers?.skeleton && hasArmature) return;
+    if (editorRef.current.editMode === 'skeleton' && hasArmature) return;
 
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
 
@@ -1625,9 +1627,12 @@ export default function CanvasViewport({
       .filter(n => n.type === 'part')
       .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
-    // ── select tool: vertex drag and part selection ──────────────────────
-    // When in mesh / blendShape edit, restrict interaction to the
-    // selected part only.
+    // ── Mesh / blendShape edit: vertex drag scoped to the selected
+    //    part. Tool dispatch via `toolMode`:
+    //      'brush' (default)  → multi-vertex deform (or UV adjust
+    //                            when meshSubMode === 'adjust')
+    //      'add_vertex'        → click adds a vertex at cursor
+    //      'remove_vertex'     → click removes the nearest vertex
     const { toolMode } = editorRef.current;
     const editMode = editorRef.current.editMode;
     const meshEditActive = editMode === 'mesh' || editMode === 'blendShape';
@@ -1766,90 +1771,44 @@ export default function CanvasViewport({
       return;
     }
 
-    for (const node of sortedParts) {
-      const wm = worldMatrices.get(node.id) ?? mat3Identity();
-      const iwm = mat3Inverse(wm);
-      const [lx, ly] = worldToLocal(worldX, worldY, iwm);
-
-      // Check vertex hit first if mesh exists (priority for dragging)
-      if (node.mesh) {
-        const nodeEffVerts =
-          animNow.draftPose.get(node.id)?.mesh_verts
-          ?? kfOverrides?.get(node.id)?.mesh_verts
-          ?? node.mesh.vertices;
-        const idx = findNearestVertex(nodeEffVerts, lx, ly, 14 / view.zoom);
-        if (idx >= 0) {
-          // GAP-015 — Blender-style proportional editing. When the
-          // user has `preferencesStore.proportionalEdit.enabled = true`,
-          // capture every vertex's rest position + per-vertex weight
-          // at drag start so the move handler can pull neighbours
-          // along with a falloff curve. Connected-only mode also
-          // builds a vertex adjacency map (one BFS per drag, not per
-          // pointer event). Phase B note: adjacency caching across
-          // drags within the same node is handled by
-          // `getOrBuildAdjacency` (WeakMap keyed by indices ref).
-          const peCfg = usePreferencesStore.getState().proportionalEdit;
-          let proportional = null;
-          if (peCfg?.enabled && node.mesh.vertices && node.mesh.indices) {
-            // Full rest snapshot — used for both initial weight compute
-            // AND for live wheel-driven radius adjust during the drag
-            // (recomputed weights need the rest mesh, not the in-flight
-            // deformed mesh, otherwise each tick drifts further).
-            const vertsSnap = nodeEffVerts.map(v => ({ x: v.x, y: v.y }));
-            const adjacency = peCfg.connectedOnly
-              ? getOrBuildAdjacency(node.mesh.indices, vertsSnap.length)
-              : null;
-            const weights = computeProportionalWeights({
-              vertices: vertsSnap,
-              originIdx: idx,
-              radius: peCfg.radius,
-              falloff: peCfg.falloff,
-              connectedOnly: peCfg.connectedOnly,
-              adjacency,
-            });
-            // Strip vertices with weight 0 — apply step iterates
-            // affected indices only, not the whole mesh.
-            /** @type {Array<{index:number, startX:number, startY:number, weight:number}>} */
-            const affected = [];
-            for (let i = 0; i < weights.length; i++) {
-              if (weights[i] > 0) {
-                affected.push({
-                  index: i,
-                  startX: vertsSnap[i].x,
-                  startY: vertsSnap[i].y,
-                  weight: weights[i],
-                });
-              }
-            }
-            proportional = { affected, fullVertSnap: vertsSnap, adjacency };
-          }
-          dragRef.current = {
-            partId: node.id,
-            vertexIndex: idx,
-            startWorldX: worldX,
-            startWorldY: worldY,
-            startLocalX: nodeEffVerts[idx].x,
-            startLocalY: nodeEffVerts[idx].y,
-            imageWidth: node.imageWidth,
-            imageHeight: node.imageHeight,
-            iwm,
-            proportional,
-          };
-          setSelection([node.id]);
-          canvas.setPointerCapture(e.pointerId);
-          canvas.style.cursor = 'grabbing';
-          return;
-        }
+    // Click-to-select (Object Mode). Triangle hit-test against
+    // rig-evaluated vertex positions so the click matches what the
+    // user actually sees rendered (not the rest mesh). Plan:
+    // docs/CLICK_TO_SELECT_PLAN.md.
+    //
+    // In edit modes (mesh / skeleton / blendShape) clicks already
+    // belong to the mode-specific gesture and never reach this branch
+    // — the meshEditActive block above handles mesh/blendShape vertex
+    // drag, the skeleton-overlay branch above handles bone joints.
+    //
+    // Frames may be null when no rig is built yet; hitTestParts
+    // falls back to rest mesh + worldMatrices.
+    const cachedFrames = lastEvalCacheRef.current?.frames ?? null;
+    const hitId = hitTestParts(
+      proj,
+      cachedFrames,
+      worldX,
+      worldY,
+      { worldMatrices },
+    );
+    const isMulti = e.shiftKey;
+    if (hitId) {
+      if (isMulti) {
+        useSelectionStore.getState().select({ type: 'part', id: hitId }, 'toggle');
+        // Mirror the universal store's active item back into the
+        // legacy node-id slot. Most consumers (Properties panes,
+        // GizmoOverlay) only look at selection[0]; the universal
+        // store carries the full multi-select truth.
+        const active = useSelectionStore.getState().getActive();
+        setSelection(active && active.type === 'part' ? [active.id] : []);
+      } else {
+        setSelection([hitId]);
+        useSelectionStore.getState().select({ type: 'part', id: hitId }, 'replace');
       }
-
-      // Alpha-based selection (works with or without mesh)
-      const imgData = imageDataMapRef.current.get(node.id);
-      if (imgData && sampleAlpha(imgData, lx, ly) > 10) {
-        setSelection([node.id]);
-        return;
-      }
+    } else if (!isMulti) {
+      setSelection([]);
+      useSelectionStore.getState().clear();
     }
-    setSelection([]);
   }, [setSelection, updateProject]);
 
   const onPointerMove = useCallback((e) => {

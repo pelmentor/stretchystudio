@@ -96,7 +96,7 @@ reset();
   get().enterEditMode('mesh');
   assert(get().editMode === 'mesh', 'enter mesh: editMode set');
   assert(get().activeBlendShapeId === null, 'enter mesh: blendShapeId stays null');
-  assert(get().toolMode === 'select', 'enter mesh: toolMode reset to select');
+  assert(get().toolMode === 'brush', 'enter mesh: toolMode defaults to brush');
 }
 
 // ── enterEditMode('skeleton') ─────────────────────────────────────
@@ -106,6 +106,7 @@ reset();
   get().enterEditMode('skeleton');
   assert(get().editMode === 'skeleton', 'enter skeleton: editMode set');
   assert(get().activeBlendShapeId === null, 'enter skeleton: blendShapeId stays null');
+  assert(get().toolMode === 'joint_drag', 'enter skeleton: toolMode defaults to joint_drag');
 }
 
 // ── enterEditMode('blendShape', {blendShapeId}) ───────────────────
@@ -115,7 +116,7 @@ reset();
   get().enterEditMode('blendShape', { blendShapeId: 'shape-X' });
   assert(get().editMode === 'blendShape', 'enter blendShape: editMode set');
   assert(get().activeBlendShapeId === 'shape-X', 'enter blendShape: id set');
-  assert(get().toolMode === 'select', 'enter blendShape: toolMode select');
+  assert(get().toolMode === 'brush', 'enter blendShape: toolMode defaults to brush');
 }
 
 // ── enterEditMode('blendShape') without id is a no-op ─────────────

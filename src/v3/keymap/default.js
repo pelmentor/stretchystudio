@@ -57,6 +57,12 @@ export const DEFAULT_KEYMAP = {
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 
+  // Bare `A` — Blender's "select all / deselect all" toggle. Cycles
+  // between "everything visible selected" and "nothing selected"
+  // depending on current state. Available globally (no editor scope)
+  // so it works on the canvas without needing focus.
+  'KeyA': 'selection.selectAllToggle',
+
   // Delete selected project nodes. Both Delete and Backspace are
   // common muscle memory; bind both. (Backspace alone fires inside
   // editable inputs anyway, but the dispatcher's editable-target

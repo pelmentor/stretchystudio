@@ -33,6 +33,7 @@ import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { ViewLayersPopover } from './ViewLayersPopover.jsx';
 import { ModePill } from './ModePill.jsx';
+import { CanvasToolbar } from './CanvasToolbar.jsx';
 
 /**
  * @param {Object} props
@@ -95,6 +96,10 @@ export function CanvasArea({ mode }) {
           Surfaces the contextual edit mode for the active selection.
           Edit Viewport only; Live Preview is read-only. */}
       {!isPreview && <ModePill />}
+      {/* Left toolbar (Blender T-panel) — vertical icon strip below
+          the Mode pill. Tool list driven by `editMode`. Edit Viewport
+          only; Live Preview is read-only. */}
+      {!isPreview && <CanvasToolbar />}
       {/* View Layers picker (GAP-016) — sits left of Reset Pose button in
           edit Viewport. Hidden in Live Preview (read-only surface). */}
       {!isPreview && <ViewLayersPopover />}

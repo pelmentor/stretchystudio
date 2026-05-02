@@ -1,6 +1,6 @@
 # Click-to-Select on Canvas (Blender-style)
 
-**Status:** queued. Reference for the next sweep.
+**Status:** SHIPPED 2026-05-02 — see [`src/io/hitTest.js`](../src/io/hitTest.js), [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) object-mode branch, `selection.selectAllToggle` operator + `KeyA` chord, [`V3_WORKSPACES.md` § Click-to-select](V3_WORKSPACES.md). Plan history retained below.
 **Origin:** user 2026-05-02 — "We need a selection mode like in blender. with outline, with user being able to select layers just by clicking on them on the canvas. Без костылей."
 
 ## What's missing
