@@ -26,6 +26,20 @@
 //
 // Note: this harness does NOT need Cubism Core DLL. It reads pinned oracle
 // snapshots produced earlier by `dump_drawables.py`.
+//
+// Known harness limitation (2026-05-02): the rest-pose total divergence
+// (~66 px max on shelby's eyelash-l) is dominated by the eye-closure
+// parabola fit falling back to mesh-bin-max because Node has no
+// `Image` decoder. Eye meshes (eyelash, eyewhite, irides) need alpha-
+// channel extraction from their PNG to fit a clean parabola; without
+// that, `fitParabolaFromLowerEdge` uses the mesh's vertex bin-max which
+// is much coarser. Eyebrows, hair, and clothing meshes are unaffected
+// (no eye-closure handling) and show ~0.07 px rest divergence.
+//
+// In the actual browser app this divergence drops because PNG textures
+// are decoded. The harness's PARAM-DRIVEN divergence (computed by
+// subtracting the rest baseline) is unaffected by the missing
+// textures — it remains the BUG-003 signal.
 
 // ── Browser-API stubs for Node ──────────────────────────────────────
 // cmo3Import constructs Blob + URL.createObjectURL for texture refs.
@@ -49,10 +63,24 @@ import path from 'node:path';
 import { importCmo3 } from '../../src/io/live2d/cmo3Import.js';
 import { initializeRigFromProject } from '../../src/io/live2d/rig/initRig.js';
 import { evalRig } from '../../src/io/live2d/runtime/evaluator/chainEval.js';
+import { generateCmo3 } from '../../src/io/live2d/cmo3writer.js';
+import { buildMeshesForRig } from '../../src/io/live2d/exporter.js';
+import { resolveMaskConfigs } from '../../src/io/live2d/rig/maskConfigs.js';
+import { resolveBoneConfig } from '../../src/io/live2d/rig/boneConfig.js';
+import { resolveVariantFadeRules } from '../../src/io/live2d/rig/variantFadeRules.js';
+import { resolveEyeClosureConfig } from '../../src/io/live2d/rig/eyeClosureConfig.js';
+import { resolveRotationDeformerConfig } from '../../src/io/live2d/rig/rotationDeformerConfig.js';
+import { resolveAutoRigConfig } from '../../src/io/live2d/rig/autoRigConfig.js';
+import { resolveFaceParallax } from '../../src/io/live2d/rig/faceParallaxStore.js';
+import { resolveBodyWarp } from '../../src/io/live2d/rig/bodyWarpStore.js';
+import { resolveRigWarps } from '../../src/io/live2d/rig/rigWarpsStore.js';
 
 const REPO_ROOT = path.resolve(new URL('../../', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
-const CMO3_PATH = process.argv[2] ?? path.join(REPO_ROOT, 'shelby.cmo3');
-const SNAPSHOTS_DIR = process.argv[3] ?? path.join(REPO_ROOT, 'scripts/cubism_oracle/snapshots/shelby_runtime');
+const args = process.argv.slice(2);
+const useAuthoredRig = args.includes('--authored-rig');
+const positional = args.filter(a => !a.startsWith('--'));
+const CMO3_PATH = positional[0] ?? path.join(REPO_ROOT, 'shelby.cmo3');
+const SNAPSHOTS_DIR = positional[1] ?? path.join(REPO_ROOT, 'scripts/cubism_oracle/snapshots/shelby_runtime');
 
 async function main() {
   // ── Load shelby.cmo3 ──────────────────────────────────────────────
@@ -72,10 +100,23 @@ async function main() {
   );
 
   // ── Build rigSpec ────────────────────────────────────────────────
+  // Run heuristic Init Rig — this matches what the in-app "Initialize Rig"
+  // button does. The cmo3 import only populates leaf rigWarps (per
+  // cmo3Import.js); faceParallax + bodyWarp + body rotation chain are
+  // reconstructed heuristically. Both paths converge on similar rig
+  // data for shelby (validated 2026-05-02 by attempting the authored-
+  // path: cmo3Import doesn't carry the full Cubism Editor rig, so
+  // mixing authored leaves with heuristic body produces an inconsistent
+  // rig that doesn't match Cubism's eval — full divergence on the order
+  // of 100k px). Heuristic path keeps everything internally consistent.
+  console.log('[harness] Mode: HEURISTIC RIG (initRig)');
+  if (useAuthoredRig) {
+    console.log('[harness] WARNING: --authored-rig is currently disabled (mixed authored/heuristic produces inconsistent rig); using heuristic');
+  }
   const harvest = await initializeRigFromProject(project, new Map());
   const rigSpec = harvest.rigSpec;
   if (!rigSpec) {
-    console.error('[error] initializeRigFromProject returned no rigSpec');
+    console.error('[error] no rigSpec produced');
     process.exit(1);
   }
   console.log(
