@@ -1,6 +1,8 @@
 # BUG-003 Phase 2b Refactor — Plan
 
-**Status:** queued. Authored 2026-05-03 after two single-sweep attempts on 2026-05-02 evening regressed the oracle harness.
+**Status:** ⚠️ **PREMISE INVALIDATED 2026-05-03 by Stage 1 measurement.** The 9.45 px PARAM signal at AngleZ_pos30 is NOT a chainEval slope/J⁻¹ bug. It's a **FaceRotation pivot import gap** in [`src/io/live2d/cmo3Import/rotationDeformerSynth.js:130`](../../src/io/live2d/cmo3Import/rotationDeformerSynth.js) — the cmo3 importer skips authored rotation-deformer pivots when the parent is another rotation (FaceRotation under GroupRotation case), so v3's heuristic init rig produces a pivot ~12 px off Cubism's authored pivot. The plan's Stages 2-5 do not apply. See **Stage 1 Findings** at the bottom for the actual fix path.
+
+Authored 2026-05-03 after two single-sweep attempts on 2026-05-02 evening regressed the oracle harness.
 
 **Cross-references:**
 - [BUGS.md § BUG-003](../BUGS.md) — body / face Angle X/Y/Z divergence vs Cubism (current PARAM max 9.45 px on `AngleZ_pos30/neg30`)
@@ -254,3 +256,99 @@ This is `multi-day` as the docs warned, but bounded — three to four working da
 - BUG-015 (BodyAngle slider in Live Preview) — separate UI bug.
 - Cubism warp port Phase 4 (artmesh eval port) and Phase 5 (final parity sweep) — both blocked on Phase 2b's completion. Pick up after this lands.
 - UI improvements (last-used-tool persistence, box-select, etc.) — independent.
+
+---
+
+## Stage 1 Findings (2026-05-03)
+
+Stage 0 plumbing landed in commit `1833380` (kernel flag, trace API, `probe_kernel.mjs`, lifted-grid `evalChainAtPoint`). Stage 1 measurement ran on `default`, `AngleZ_pos30`, `AngleZ_neg30`, `BodyAngleX_pos10`, `BodyAngleX_neg10` and produced **clean numerical evidence that the plan's premise was wrong**.
+
+### Measurement: slope vs FD-probed J⁻¹ at every warp-parented rotation pivot
+
+[`scripts/cubism_oracle/measure_jacobian.mjs`](../../scripts/cubism_oracle/measure_jacobian.mjs) probes BodyXWarp at each `GroupRotation_*` pivot, computes J = ∂(canvas-px)/∂(warp 0..1) via FD with ε=0.01, inverts it, compares to v3's `diag(_warpSlopeX, _warpSlopeY)`:
+
+| Fixture            | J⁻¹ vs slope at pivot                          | Off-diagonal in J⁻¹ |
+|--------------------|------------------------------------------------|---------------------|
+| `default` (rest)   | identical to ~7 decimal places (Frob ~1e-8)    | 0.0%                |
+| `AngleZ_pos30`     | identical to ~7 decimal places (Frob ~1e-8)    | 0.0%                |
+| `AngleZ_neg30`     | identical to ~7 decimal places (Frob ~1e-8)    | 0.0%                |
+| `BodyAngleX_pos10` | central pivot: 9.4% Frob diff (off-diag shear) | 9.4% of |J⁻¹|       |
+| `BodyAngleX_neg10` | mirror of `pos10`                              | 9.4% of |J⁻¹|       |
+
+**Outcome class: not P1, not P2, not P3.** A new class — call it **P0** — emerged: at AngleZ_pos30 there is **nothing to fix** at the rotation→warp boundary. The slope is exactly the right J⁻¹ at every probed pivot. Yet PARAM divergence is 9.45 px.
+
+### Where the 9.45 px actually comes from
+
+Sorting all 19 oracle drawables by PARAM divergence at `AngleZ_pos30` ([`scripts/cubism_oracle/fixture_breakdown.mjs`](../../scripts/cubism_oracle/fixture_breakdown.mjs)):
+
+| Drawable    | PARAM max | PARAM mean | What it actually is                                          |
+|-------------|-----------|------------|--------------------------------------------------------------|
+| eyelash-r   | 9.45      | 7.54       | eye mesh — eye-closure parabola fit fallback (harness-known) |
+| eyelash-l   | 9.11      | 7.41       | "                                                            |
+| eyewhite-r  | 8.86      | 7.27       | "                                                            |
+| irides-r    | 8.84      | 7.34       | "                                                            |
+| eyewhite-l  | 8.57      | 7.15       | "                                                            |
+| irides-l    | 8.49      | 7.00       | "                                                            |
+| eyebrow-l   | **6.18**  | **6.17**   | **uniform shift** — pure rigid offset                        |
+| eyebrow-r   | 6.18      | 6.17       | uniform shift                                                |
+| front hair  | 6.18      | 6.17       | uniform shift                                                |
+| face/ears/back hair/body | (skipped)| (vertex-count mismatch — separate import gap) |
+
+The eye meshes' divergence is the **harness-documented eye-closure parabola fit artifact** (Node has no PNG decoder for alpha-channel sampling). That part is real but **not a chainEval bug**.
+
+The eyebrow / front-hair signal is what matters: param_max ≡ param_mean to two decimals on each, and the same value across three different meshes with different shapes/sizes — **uniform rigid shift**, the signature of a rotation pivot offset.
+
+### Recovering the pivot offset numerically
+
+[`scripts/cubism_oracle/probe_pivot_offset.mjs`](../../scripts/cubism_oracle/probe_pivot_offset.mjs) inverts `(R(30°) - I) · (P_cubism - P_v3) = paramDelta` at four representative vertices on each face-rotated mesh. Result identical across all sample vertices and all three meshes:
+
+```
+P_cubism - P_v3 = (4.35, 11.10) px       [+sign convention]
+                = (1.78, -11.79) px      [-sign convention]
+```
+
+|P_cubism - P_v3| ≈ **11.92 px**. The sign depends on Cubism's rotation direction convention; the magnitude is invariant. **Cubism's authored FaceRotation pivot is ~12 px off v3's heuristic-computed pivot in canvas-px.**
+
+### Root cause: cmo3 importer skips authored pivot when parent is another rotation
+
+[`src/io/live2d/cmo3Import/rotationDeformerSynth.js:130`](../../src/io/live2d/cmo3Import/rotationDeformerSynth.js):
+
+```js
+if (parentIsRotation) {
+  continue;  // <-- skips pivot import when rotation's parent is another rotation
+}
+```
+
+Comment at the top of the file:
+
+> For rotation deformers chained under another rotation (e.g. FaceRotation under Rotation_head), the cmo3 stores `originY` in pixel-OFFSET form relative to the parent rotation's pivot, not canvas-normalised. We skip pivot translation in that case and let the writer fall back to its bbox-of-descendant-meshes heuristic.
+
+For shelby's FaceRotation (parent = `GroupRotation_head`), the authored pivot is **never imported**. The harness uses heuristic init rig, which calls [`src/io/live2d/cmo3writer.js:851-892`](../../src/io/live2d/cmo3writer.js) — face-mesh-bbox center for X, chin/topwear-top for Y. That heuristic gives a pivot 12 px off Cubism's authored value.
+
+This is also what makes BodyAngleX behave differently: BodyXWarp's keyforms are imported correctly (warp deformers come through `rigWarpSynth.js`), so its parameter-driven J⁻¹ shear is genuine — the 9.4% off-diagonal at `BodyAngleX_pos10` IS what Cubism produces. Yesterday's option-(b) attempt that swapped slope→J⁻¹ regressed BodyAngleX from 7.34 → 14.68 px because it tried to "fix" the J⁻¹ shear, but the shear is part of the correct evaluation; the slope-rest approximation is what Cubism's `RotationDeformer_Setup` produces. (The Setup's per-frame Jacobian probe is conceptually equivalent to v3's slope at rest because BodyXWarp at rest is bilinear-of-corners.)
+
+### What this means for Phase 2b
+
+- **Stages 2-5 of this plan don't apply.** They were designed to swap the rotation→warp slope conversion for a per-frame J⁻¹. Stage 1 measured that the slope IS the right J⁻¹ at the rotation pivots in every fixture we've examined. Pursuing Stage 2 would be a reprise of yesterday's option-(b) — which we've now confirmed regressed the harness because it was solving a non-existent problem.
+- **Stage 0's plumbing is still useful.** The `kernel` flag, `TraceCollector`, lifted-grid `evalChainAtPoint`, and `probe_kernel.mjs` all stand on their own as diagnostic infrastructure. Don't revert.
+
+### Real fix path
+
+The actual BUG-003 root cause is in the importer, not the chain evaluator:
+
+1. **Extend [`rotationDeformerSynth.js:130`](../../src/io/live2d/cmo3Import/rotationDeformerSynth.js)** to recover the authored canvas-px pivot when the parent is another rotation. The cmo3 stores the value in pixel-offset form relative to the parent's pivot — so we need to walk up the rotation chain, collecting offsets, until we hit a canvas-rooted ancestor whose pivot is canvas-normalised. Sum the offsets to get absolute canvas-px.
+2. **Or** — write a project-level "authored rotation pivots" map keyed by group nodeId, and have [`cmo3writer.js:851-892`](../../src/io/live2d/cmo3writer.js) prefer the imported value over the heuristic when present.
+
+Either fix would close the AngleZ_pos30 PARAM signal entirely. Confidence is high because the signal across three independent meshes (eyebrow-l, eyebrow-r, front hair) reduces to a single (Δx, Δy) constant — there's nothing else for the divergence to be.
+
+### Stage 1 deliverables (committed alongside this revision)
+
+| Path                                                | Purpose                                                                |
+|-----------------------------------------------------|------------------------------------------------------------------------|
+| `scripts/cubism_oracle/measure_jacobian.mjs`        | Per-rotation slope vs FD-probed J⁻¹ table across multiple fixtures.    |
+| `scripts/cubism_oracle/fixture_breakdown.mjs`       | All-drawables PARAM breakdown for any fixture (extends harness top-5). |
+| `scripts/cubism_oracle/map_drawables.mjs`           | Oracle ArtMeshN → v3 mesh-name + chain mapping.                        |
+| `scripts/cubism_oracle/probe_pivot_offset.mjs`      | Recovers `(R(θ)-I)⁻¹ · paramDelta` to back out implied pivot offsets.  |
+| `scripts/cubism_oracle/probe_param_uses.mjs`        | List specs binding to a chosen parameter.                              |
+| Changes in [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) | Exports `DeformerStateCache` so probes can run FD lookups directly. |
+

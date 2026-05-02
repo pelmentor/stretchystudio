@@ -306,7 +306,7 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
  * stays untouched — it's already in the parent warp's normalised
  * 0..1 frame (cmo3writer line ~3290 converts it during re-parenting).
  */
-class DeformerStateCache {
+export class DeformerStateCache {
   constructor(rigSpec, paramValues, options) {
     this._rigSpec = rigSpec;
     this._paramValues = paramValues ?? {};
