@@ -8,12 +8,22 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 - **Severity** — `critical` / `high` / `medium` / `low`. Severity reflects user-visible impact, not implementation effort.
 - **Status flow** — `open` → `investigating` → `closed` (move between sections; don't delete on close).
 - **Verify before adding.** Like BUGS.md, this tracker is for *real* gaps confirmed by reading the code, not marketing diff against upstream's README. Speculation belongs nowhere.
+- **Header marker** — `✅` prefix on the heading means the entry is closed (or its core Phase A is shipped, with any Phase B explicitly tracked inside the body). Heading without prefix = still open.
+
+## Status snapshot (2026-05-02)
+
+| Status | Entries |
+|--------|---------|
+| ✅ Closed / Phase A shipped | GAP-003, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-011, GAP-012, GAP-013, GAP-014 |
+| ⏳ Open | GAP-001, GAP-002, GAP-004, GAP-010 |
+
+Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
 
 ---
 
 ## Open
 
-### GAP-011 — Project data layer not canonical (4 rig fields lost on save→load)
+### ✅ GAP-011 — Project data layer not canonical (4 rig fields lost on save→load)
 
 - **Severity:** critical (silently downgrades export from "use my edits" to "auto-regenerated" without warning)
 - **Reported:** 2026-05-01 (user-flagged + audit-confirmed)
@@ -46,7 +56,7 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 ---
 
-### GAP-012 — PSD reimport doesn't invalidate seeded rig data (silent corruption)
+### ✅ GAP-012 — PSD reimport doesn't invalidate seeded rig data (silent corruption)
 
 - **Severity:** high (silently corrupt exports after a normal user workflow)
 - **Reported:** 2026-05-01
@@ -90,7 +100,7 @@ This work was already partially planned in [NATIVE_RIG_REFACTOR_PLAN.md → Cros
 
 ---
 
-### GAP-013 — Parameter delete has no orphan-reference detection
+### ✅ GAP-013 — Parameter delete has no orphan-reference detection
 
 - **Severity:** medium
 - **Reported:** 2026-05-01
@@ -117,7 +127,7 @@ UI delete-confirm dialog when a parameter editor surface lands. Today's UI doesn
 
 ---
 
-### GAP-014 — No "Reset Transform" button in v3 Object properties tab
+### ✅ GAP-014 — No "Reset Transform" button in v3 Object properties tab
 
 - **Severity:** low · **Reported:** 2026-05-02 (user-flagged) · **Fixed:** 2026-05-02
 
@@ -161,7 +171,7 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### GAP-003 — Root README is upstream verbatim, doesn't reflect v3
+### ✅ GAP-003 — Root README is upstream verbatim, doesn't reflect v3
 
 - **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** First-time user impression, project identity
@@ -172,7 +182,7 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### GAP-007 — No in-app Logs panel for pipeline debugging
+### ✅ GAP-007 — No in-app Logs panel for pipeline debugging
 
 - **Severity:** high (blocks BUG-002 / BUG-003 / BUG-006 investigation)
 - **Reported:** 2026-04-30
@@ -194,7 +204,7 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### GAP-006 — No "Reset to rest pose" button in Pose workspace
+### ✅ GAP-006 — No "Reset to rest pose" button in Pose workspace
 
 - **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** Posing workflow
@@ -210,7 +220,7 @@ Distinct from [GAP-014](#gap-014--no-reset-transform-button-in-v3-object-propert
 
 ---
 
-### GAP-005 — Export button regressed from multi-target to single-target
+### ✅ GAP-005 — Export button regressed from multi-target to single-target
 
 - **Severity:** medium · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 (Spine restored; PNG-sequence still deferred)
 - **Affects:** Export workflow
@@ -277,7 +287,7 @@ Both surfaces share the same `rigSpec` and `paramValues`, so dragging a slider i
 
 ---
 
-### GAP-009 — Export "Data Layer" picker: project data vs auto-regenerated
+### ✅ GAP-009 — Export "Data Layer" picker: project data vs auto-regenerated
 
 - **Severity:** high (key differentiator — flagged "КРУТАЯ ФИЧА" by user) · **Reported:** 2026-04-30 · **SHIPPED:** 2026-05-02
 
@@ -322,7 +332,7 @@ Pick at implementation time.
 
 ---
 
-### GAP-008 — No opt-out for "rig hair" in Initialize Rig
+### ✅ GAP-008 — No opt-out for "rig hair" in Initialize Rig
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02 (data layer + filter logic; UI checkbox panel deferred)
 - **Affects:** Init Rig flow on characters where the auto-detected hair rig is unwanted (wrong shape, breaks down, or character intentionally has rigid hair)

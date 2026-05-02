@@ -10,6 +10,15 @@ Each entry is short and self-contained — anyone reading should be able to pick
 - **Status flow** — `open` → `investigating` → `fixed` (move the entry between sections; don't delete on fix).
 - **When fixing** — note the commit SHA + date in the **Fix** field, then move the entry to *Fixed*. Keep a one-line root-cause summary so future regressions can grep for it.
 - **When triaging** — fill in any missing **Repro** steps the moment you learn them. Empty Repro = guesswork.
+- **Header marker** — `✅` prefix means fix shipped (visual scrub may still be pending — see entry body).
+
+## Status snapshot (2026-05-02)
+
+| Status | Entries |
+|--------|---------|
+| ✅ Fixed / Superseded | BUG-002, BUG-003, BUG-006 |
+| 🔬 Instrumented (awaiting repro) | BUG-001, BUG-005 |
+| ⏳ Open | BUG-004, BUG-007, BUG-008, BUG-009, BUG-010 |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 
@@ -91,7 +100,7 @@ What we don't know yet:
 
 ---
 
-### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
+### ✅ BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed + Phase 2a ship:** 2026-05-02
 - **Affects:** Body angle + head angle parameter rigging in in-app native rig eval
@@ -254,7 +263,7 @@ End state: the layer stays painted at whatever pose it was in when Init Rig fire
 
 ## Fixed
 
-### BUG-006 — Breath warp squashes the whole head (and body angle / face angle leaked too)
+### ✅ BUG-006 — Breath warp squashes the whole head (and body angle / face angle leaked too)
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-04-30 (after `4e8ad18`) · **Superseded:** 2026-05-01 (Cubism warp port, Phase 1)
 - **Affects:** in-app native rig evaluator — *every* warp deformer (BreathWarp, BodyXWarp, BodyWarpY, BodyWarpZ, FaceParallax, etc.)
@@ -299,7 +308,7 @@ End state: the layer stays painted at whatever pose it was in when Init Rig fire
 
 ---
 
-### BUG-002 — Eye-closure parabola fit looks wrong (PNG-alpha path unreachable in rigOnly mode)
+### ✅ BUG-002 — Eye-closure parabola fit looks wrong (PNG-alpha path unreachable in rigOnly mode)
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-04-30 (after `4e8ad18`)
 - **Affects:** Eyelid closure curve in in-app native rig eval (and rigOnly export)

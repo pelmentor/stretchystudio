@@ -95,7 +95,7 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 ## Plan
 
-### Phase 0 — Setup, oracle harness, symbol inventory
+### ✅ Phase 0 — Setup, oracle harness, symbol inventory
 
 **Inputs:** Cubism SDK / Editor install on user's machine, IDA Pro MCP, shelby runtime bundle.
 
@@ -132,7 +132,7 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 ---
 
-### Phase 1 — Port warp deformer eval
+### ✅ Phase 1 — Port warp deformer eval
 
 **Scope:** Replace `bilinearFFD` + bbox-cutoff logic in [chainEval.js](../../src/io/live2d/runtime/evaluator/chainEval.js) (lines 139-167) and [warpEval.js](../../src/io/live2d/runtime/evaluator/warpEval.js) with the Cubism algorithm.
 
@@ -165,7 +165,7 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 ---
 
-### Phase 2 — Port rotation deformer eval
+### 🟡 Phase 2 — Port rotation deformer eval
 
 **Phase 2a — Per-vertex eval kernel — ✅ SHIPPED 2026-05-02.**
 

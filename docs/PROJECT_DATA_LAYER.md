@@ -10,6 +10,25 @@ true source of truth) and conditions much of the [CUBISM_WARP_PORT](live2d-expor
 verification (the oracle-diff test needs a programmatic rigSpec build path,
 which means a complete project data layer that survives save→load round-trips).
 
+## Status snapshot (2026-05-02)
+
+All 10 integrity holes have detection-side defences shipped (Phase A). Phase B
+follow-ups (UI delete-confirm, "preserve customisations" re-init, parameter
+editor surfaces) gate on the broader `project_v3_rerig_flow_gap` UI work.
+
+| Hole | Status | What ships |
+|------|--------|------------|
+| ✅ I-1  | Phase A shipped | `meshSignature` module + per-mesh fingerprint at seed |
+| 🟡 I-2  | Open (deferred) | binding param schema fingerprint — needs param editor UI |
+| ✅ I-3  | Phase A shipped | `paramReferences` orphan detection at seedAllRig |
+| ✅ I-4  | Phase A shipped | `variantNormalizer` rename-detected-as-removal warn |
+| ✅ I-5  | Phase A shipped | `seedAllRig` walks `mesh.jointBoneId` orphans |
+| ✅ I-6  | Phase A shipped | `seedAllRig` walks `physicsRules.outputs` orphans |
+| ✅ I-7  | Closed | `resolveAutoRigConfig` per-field spread merge over defaults |
+| ✅ I-8  | Closed | `lastInitRigCompletedAt` ISO marker (replaces heuristic) |
+| ✅ I-9  | Closed | `{strict:true}` opt-in for save/load |
+| ✅ I-10 | Phase A shipped | `<StaleRigBanner>` + load/reimport hooks + Logs warns |
+
 ---
 
 ## The strategic problem
