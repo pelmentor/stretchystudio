@@ -232,7 +232,7 @@ c. **Lift composition through canvas-final rotations**. With `isCanvasFinal:true
 
 d. **Numerical verification**. Each of (a)-(c) needs unit-level oracle harness verification BEFORE the next builds on top, otherwise regressions compound in the way today's two attempts did.
 
-**Status:** 🔴 Blocked. Two single-sweep attempts (option b: J⁻¹ swap; option a: canvas-final break) both reverted on the day. Real fix is a coordinated 3-4 stage refactor with oracle gates between stages. Out of scope for individual sweeps; needs a dedicated "Phase 2b sub-plan" doc with stages and pre-stage verification.
+**Status:** 🟠 Planned. Two single-sweep attempts (option b: J⁻¹ swap; option a: canvas-final break) both reverted on 2026-05-02. Refactor plan with explicit stages + oracle gates between stages now lives at [PHASE_2B_PLAN.md](PHASE_2B_PLAN.md) (authored 2026-05-03, 3.5-day estimated cost). Plan is queued; not started yet.
 
 **Original 2026-05-02 finding (preserved verbatim below for context):**
 
