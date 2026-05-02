@@ -392,9 +392,15 @@ Why other bands were correct: the **top band** explicitly applies a top↔bottom
 
 ---
 
-### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
+### ✅ BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
 
-- **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed via raw asm:** 2026-05-02 · **Fix in progress (Phase 2b)**
+- **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-03 · **Root cause:** v3's heuristic init rig regenerated rig data from face/topwear bbox, ignoring authored cmo3 deformer values. Phase 2b's chainEval-level investigation (Stage 1 measurement + pivot-patch disproof, 2026-05-03) showed slope ≡ J⁻¹ at every rotation pivot and that single-deformer pivot patches can't move PARAM (constant translation cancelled by rest-delta subtraction). The real surface was the heuristic-vs-authored gap in v3's body chain + FaceParallax + FaceRotation.
+- **Fix:** new authored-rig path in `initializeRigFromProject` ([`buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js)) — when project has `_cmo3Scene` (set by cmo3Import), build the RigSpec end-to-end from authored cmo3 deformer data instead of regenerating heuristically. AngleZ_pos30 PARAM dropped from 9.45 → **0.01 px**; overall TOTAL max from 24.21 → **5.44 px**; PARAM max from 9.45 → **5.42 px** (residual is body-chain keyform interpolation differences, not chainEval).
+- See [`docs/INIT_RIG_AUTHORED_REWRITE.md`](INIT_RIG_AUTHORED_REWRITE.md) for the plan that landed this fix.
+
+**Original investigation (kept for reference):**
+
+- **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed via raw asm:** 2026-05-02
 - **Affects:** Body angle + head angle parameter rigging in in-app native rig eval
 
 **Root cause confirmed (raw asm read 2026-05-02):**

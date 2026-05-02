@@ -299,6 +299,13 @@ export async function importCmo3(bytes) {
     bodyWarp: null,
     rigWarps,
     _importedFromCmo3: { modelName, canvasW: canvasW ?? null, canvasH: canvasH ?? null },
+    // Stash the extracted scene so `initializeRigFromProject` can route
+    // through `buildRigSpecFromCmo3` (authored path) instead of the
+    // heuristic init rig. Per docs/INIT_RIG_AUTHORED_REWRITE.md.
+    // The scene contains the full rig graph (deformers + bindings + grids)
+    // that the authored builder needs; persisting it on the project lets
+    // re-runs of init rig use authored data without re-parsing the cmo3.
+    _cmo3Scene: scene,
   };
 
   return {

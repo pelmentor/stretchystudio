@@ -1,6 +1,20 @@
 # Init Rig — Authored cmo3 Path
 
-**Status:** queued for implementation. Authored 2026-05-03 by user request after the Phase 2b investigation.
+**Status:** ✅ **SHIPPED 2026-05-03.** AngleZ_pos30 PARAM dropped 9.45 → **0.01 px**; overall PARAM max 9.45 → **5.42 px** (residual is body-chain keyform interp, separate signal). BUG-003 closed.
+
+Implementation: [`src/io/live2d/rig/buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js) (assembles RigSpec from cmo3 ExtractedScene), wired into [`initRig.js`](../src/io/live2d/rig/initRig.js) — fires when `project._cmo3Scene` is set by [`cmo3Import.js`](../src/io/live2d/cmo3Import.js). Hard cutover (no flag); PSD wizard path unchanged.
+
+What landed differs from the plan in scope:
+- Plan stage 1 (separate `authoredRigSeed` denormalised structure) was **skipped** — `buildRigSpecFromCmo3` reads directly from `ExtractedScene`. The seed layer was over-engineered for the MVP.
+- Plan stage 4 (`buildRigSpecFromAuthored` separate function) **shipped** as `buildRigSpecFromCmo3` (same idea, simpler name).
+- Plan's open questions about FaceParallax / Body Y-extension / cmo3-only synthesis policy: **resolved by authored chain composition** — the cmo3 already has FaceParallax (it's authored, not v3-only), and the authored chain is used verbatim end-to-end.
+- Round-trip cmo3 export (re-emitting the authored rigSpec back to .cmo3) is **out of scope for the fix** — current export pipeline regenerates via heuristic on save. Re-export round-trip lives in [`UPSTREAM_PARITY_AUDIT.md`](UPSTREAM_PARITY_AUDIT.md).
+
+Original plan retained below for reference.
+
+---
+
+Authored 2026-05-03 by user request after the Phase 2b investigation.
 
 **Origin (user 2026-05-03):**
 > Надо эту большую фичу сделать без костылей и не бойся ломать вещи, проект всё еще в стадии эмбриона.

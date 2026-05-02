@@ -43,6 +43,7 @@ import { resolveRotationDeformerConfig } from './rotationDeformerConfig.js';
 import { resolveAutoRigConfig } from './autoRigConfig.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
+import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = new Set(['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp']);
@@ -246,6 +247,40 @@ export async function initializeRigFromProject(project, images = new Map()) {
   });
 
   const meshes = await buildMeshesForRig(project, images);
+
+  // **AUTHORED PATH** — projects loaded from cmo3 have the original rig
+  // graph in `project._cmo3Scene`. Use `buildRigSpecFromCmo3` to assemble
+  // a RigSpec directly from authored deformer data, bypassing the
+  // heuristic body-warp / face-parallax / face-rotation synthesis. Per
+  // docs/INIT_RIG_AUTHORED_REWRITE.md (closes the BUG-003 9.45 px
+  // PARAM signal at AngleZ_pos30 by using the same rig values Cubism
+  // does instead of regenerating them).
+  if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {
+    const t0a = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const { rigSpec, debug } = buildRigSpecFromCmo3({
+      scene: project._cmo3Scene,
+      project,
+      meshes,
+      canvasW: project.canvas?.width ?? 800,
+      canvasH: project.canvas?.height ?? 600,
+    });
+    const dta = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0a;
+    logger.info('rigInit', 'Init Rig authored-path complete', {
+      elapsedMs: Math.round(dta),
+      ...debug,
+    });
+    // The authored path doesn't (yet) produce a separate faceParallaxSpec /
+    // bodyWarpChain harvest — those are export-pipeline concerns. The
+    // rigSpec itself is consumed by chainEval directly.
+    return {
+      faceParallaxSpec: null,
+      bodyWarpChain: null,
+      rigWarps: new Map(),
+      rigSpec,
+      debug: { source: 'authored-cmo3', ...debug },
+    };
+  }
+
   const groups = (project.nodes ?? []).filter(n => n.type === 'group').map(g => ({
     id: g.id,
     name: g.name ?? g.id,
