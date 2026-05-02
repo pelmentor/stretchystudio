@@ -38,25 +38,28 @@ Both produce roughly correct rendering at rest pose. They diverge under paramete
 
 ## Goals
 
-- Drop oracle PARAM divergence below **1.0 px** on every fixture (currently 9.45 px on `AngleZ_pos30/neg30`).
+- **Primary:** drop the BUG-003 signal — oracle PARAM divergence on `AngleZ_pos30/neg30` — below 1.0 px (currently 9.45 px).
+- **Secondary:** don't regress any other fixture by more than 0.5 px PARAM. (Some fixtures may improve and some may stay flat; that's fine. Yesterday's option-(b) attempt regressed BodyAngleX from 7.34 → 14.68 px even while improving AngleZ — this gate prevents that pattern.)
 - Don't regress TOTAL divergence beyond +5 % (currently 24.21 px).
-- All existing tests stay green.
-- No feature flags or dual code paths in production after merge.
+- All existing tests stay green (or have their hand-derived expected values rebaselined against the oracle, see Stage 4).
+- No feature flags or dual code paths in production after merge. (A `kernel` flag inside `chainEval.js` is fine during stages 1-3; it gets deleted at Stage 4 cutover.)
 
 ## Non-goals
 
 - Changing `.cmo3` / `.moc3` emission output. Round-trip with Cubism Editor stays compatible.
-- More than ~10 % per-frame perf hit in `chainEval`.
 - UI changes.
 - "Improving on Cubism" — the goal is **byte parity**, not theoretical accuracy.
+- Performance commitments. Setup adds 1 FD probe per rotation per `evalRig` call (= 3 single-point chain walks each). At shelby's ~5 rotations × ~3-deep parent chains that's ~45 chain-walk ops/frame on top of the existing few thousand. Likely cheap, but committed-to numbers happen at Stage 4 measurement, not up front.
 
 ---
 
-## Strategy: parallel kernel + oracle gates between stages
+## Strategy: feature-flagged Setup path + oracle gates between stages
 
-Build the new path as a **separate module** (`cubismChainEval.js`) alongside today's `chainEval.js`. The oracle harness selects which kernel to test via a `--kernel=` flag. Each stage advances the new kernel; today's kernel stays untouched and shipping the whole time. Cutover only when the new kernel passes the bar **on all 21 fixtures**, which means the failure mode of "single-sweep attempt regresses, gets reverted" cannot happen — divergence is checked at every stage.
+Inside `chainEval.js`, introduce a `kernel: 'v3-legacy' | 'cubism-setup'` flag (default `v3-legacy`). The flag selects branches inside `getState` for rotations and inside the chain-walker break logic — about 30 lines of branching, far less than cloning the 635-LOC file into a parallel module.
 
-This is the same shape as Phase 0 (oracle) → Phase 1 (kernel port) → Phase 3 (lift composition) successfully used.
+The oracle harness gets a `--kernel=` flag passing through. Stage 0 verifies that with `--kernel=cubism-setup` set but the new branches stubbed-out, output is byte-identical to legacy on all 21 fixtures. Stages 1-3 build the Setup path INSIDE the `cubism-setup` branch only; legacy keeps shipping the whole time. Stage 4 deletes the `v3-legacy` branch and the flag together.
+
+Same shape as Phase 0 (oracle) → Phase 1 (kernel port) → Phase 3 (lift composition) successfully used.
 
 ---
 
@@ -65,92 +68,129 @@ This is the same shape as Phase 0 (oracle) → Phase 1 (kernel port) → Phase 3
 ### Stage 0 — Diagnostic infrastructure (½ day)
 
 **Deliverables:**
-- New `src/io/live2d/runtime/evaluator/cubismChainEval.js`. Public API mirrors `chainEval.js`'s `evalRig(rigSpec, paramValues) → ArtMeshFrame[]`. Initial body just delegates to legacy `chainEval`.
-- [`diff_v3_vs_oracle.mjs`](../../scripts/cubism_oracle/diff_v3_vs_oracle.mjs) `--kernel=v3-legacy|cubism-setup` flag. Default `v3-legacy`.
-- New `scripts/cubism_oracle/probe_kernel.mjs` script: dumps the per-fixture per-deformer state for both kernels. Used to compare INTERMEDIATE state (lifted grids, rotation matrices, vertex outputs at chain steps), not just final divergence.
+1. `chainEval.js` gets a `kernel: 'v3-legacy' | 'cubism-setup'` parameter on `evalRig` (default `'v3-legacy'`). Passed down through `evalArtMeshFrame` + `DeformerStateCache` constructor. With both branches identical (Stage 0 has no real Setup path yet), output is byte-identical to today regardless of flag.
+2. [`diff_v3_vs_oracle.mjs`](../../scripts/cubism_oracle/diff_v3_vs_oracle.mjs) gets a `--kernel=` flag passing through to `evalRig`. Default `v3-legacy`.
+3. **Re-add the `evalChainAtPoint` lifted-grid update** that yesterday's reverted attempt had: when probing through a warp parent, `evalChainAtPoint` must use `getLiftedGrid` (canvas-px) to match `evalArtMeshFrame`'s Phase 3 semantics. Without this, FD probes compose the chain DIFFERENTLY from how artmesh verts see it. This is a small surgical change to the existing `evalChainAtPoint`; doesn't depend on Setup.
+4. New `scripts/cubism_oracle/probe_kernel.mjs` script: walks shelby's chain at a chosen fixture, prints per-deformer intermediate state (rotation matrices, lifted grids' bbox at each warp, vertex output at each chain step). Reads from a single-mesh trace API added to chainEval (an optional `trace: TraceCollector` arg the chain walker writes into when present).
 
 **Verification gate:**
-- `--kernel=cubism-setup` with the delegating body produces identical output to `--kernel=v3-legacy` (max diff = 0). Pure infrastructure ship.
+- `--kernel=cubism-setup` produces output byte-identical to `--kernel=v3-legacy` on all 21 fixtures. (Both branches are still identical; this gate verifies the plumbing didn't accidentally diverge them.)
+- `evalChainAtPoint` lifted-grid change passes existing `test:chainEval`.
+- `probe_kernel.mjs` produces a readable dump for `AngleZ_pos30` (no correctness check yet — just visual sanity).
 
-**Why this matters:** the previous attempts couldn't tell WHERE in the chain the divergence appeared. With probe_kernel, we can pinpoint "rotation R at chain step N produces output X under v3, Y under cubism-setup" before any regression makes it to the final-output diff.
-
----
-
-### Stage 1 — Print observed reality at the rotation→warp boundary (½ day)
-
-**Deliverable:** for shelby on `AngleZ_pos30`, dump:
-1. `_warpSlopeX/Y` value used by current `chainEval` for each rotation deformer with a warp parent
-2. The FD-probed J at the same pivot, for the same param value (using current chainEval's lifted-grid)
-3. The actual canvas position of mesh vertex (1, 0) pivot-relative for the rotation, computed both ways
-4. The Cubism oracle's canvas position for the same vertex
-
-**Verification gate:** the dump produces clear numerical evidence of WHICH end is the bug. Two possibilities:
-- **(P1)** `_warpSlopeX/Y ≠ J⁻¹` even at rest pose — the cascaded normaliser is the bug; replacing it with J⁻¹ fixes rest, and the rotation at non-rest comes out for free.
-- **(P2)** `_warpSlopeX/Y ≈ J⁻¹` at rest pose, but they diverge under parameter rotation — the issue is rest-state vs current-state, and Phase 2b's job is to swap CONSTANT for PER-FRAME without touching the rest-pose value.
-
-The previous failed attempts conflated these two possibilities. **No code lands in Stage 2 until we know which one is true.**
+**Why this stage matters:** the previous attempts tried to fix Phase 2b without observability into per-deformer-step intermediate state. They could see only final-output divergence and had to guess at WHERE the chain was wrong. With `probe_kernel.mjs`, Stage 1 can pinpoint "rotation R's matrix at chain step N produces output X under v3-legacy" with concrete numbers. We don't need (and can't get) Cubism's intermediate state — we need v3's, which we can fully observe.
 
 ---
 
-### Stage 2 — Match the rest-pose value (1 day)
+### Stage 1 — Measure v3's actual chain composition at the rotation→warp boundary (½ day)
 
-**Conditional on Stage 1's finding:**
+**Important framing:** Cubism's runtime intermediate state is NOT exposed via `csmGet*` API. The oracle harness can only show us Cubism's FINAL canvas vertex positions. So Stage 1 measures **v3's** intermediates and reasons backward — given Cubism's known final output, what does v3 need to produce at intermediate steps?
 
-**If P1 (cascaded normaliser is wrong even at rest):**
-- The fix isn't Phase 2b at all — it's that v3's emitter and chainEval are out of sync with each other on the rest-pose Jacobian.
-- Pick whichever produces canvas-correct output at rest (likely J⁻¹), update the OTHER to match.
-- Stage 3 still applies.
+**Deliverables (using `probe_kernel.mjs` from Stage 0):**
 
-**If P2 (rest is correct, only current-state diverges):**
-- In `cubismChainEval`, swap `_warpSlopeX/Y` for the FD-probed J⁻¹ AT REST.
-- Sanity check: oracle harness with `--kernel=cubism-setup` produces same divergence as legacy on the rest fixture.
+1. For shelby at REST pose (`default`), per rotation deformer with a warp parent:
+   - `_warpSlopeX/Y` constant used by current `getState`
+   - FD-probed `J⁻¹` at the same pivot using current chainEval's lifted-grid
+   - **Pure numerical comparison** of these two values; report ratio + difference
 
-**Verification gate:** both kernels match each other on all REST fixtures (no param deformation). PARAM divergence on parameter-deformed fixtures may still exist; that's Stage 3's job.
+2. For shelby at `AngleZ_pos30`, same rotations:
+   - Same two values as (1) at the param-deformed pivot position
+   - The actual mesh vertex (1, 0) pivot-relative, computed end-to-end via current chain walk → final canvas position
+   - Cubism oracle's final canvas position for the same vertex (from snapshot)
+   - Difference = the BUG-003 signal isolated to ONE rotation deformer
 
----
+3. Same instrumentation for `BodyAngleX_pos10` (yesterday's regression victim)
 
-### Stage 3 — Per-frame Setup port (1 day)
+**Possible outcomes:**
 
-In `cubismChainEval.getState` for rotations, compute the canvas-final matrix per Cubism's IDA-derived formula:
+- **(P1)** `_warpSlopeX/Y ≠ J⁻¹` at REST. The cascaded normaliser is calibrated for something other than the local Jacobian even at rest; v3's chain composition's correctness depends on this calibration. Fix path: replace `_warpSlopeX/Y` everywhere — both at rest and at non-rest — with the FD-probed J⁻¹. Side effects extend beyond rotations into any chainEval consumer of `_warpSlopeX/Y`.
 
-```
-canvasPivot = chainEval.evalChainAtPoint(rotation.parent, originX, originY)
-probeY      = chainEval.evalChainAtPoint(rotation.parent, originX, originY + ε)
-delta       = probeY - canvasPivot
-probedAngle = atan2(delta.x, delta.y)        // angle from +Y axis
-probedScale = |delta| / ε
+- **(P2)** `_warpSlopeX/Y ≈ J⁻¹` at REST but they diverge under parameter deformation. The fix is what Phase 2b was originally scoped for: swap CONSTANT for PER-FRAME without touching rest-pose semantics.
 
-// adjustedScale must be calibrated so the matrix preserves canvas-px
-// scale at rest. Stage 1's findings determine the formula:
-//   - if cubism formula 1/canvasMaxDim × probedScale = 1 at rest: use it
-//   - otherwise: derive the right multiplier from observed numbers
-adjustedScale = keyformScale × probedScale × <calibration>
-adjustedAngle = keyformAngle - probedAngle
-adjustedOrigin = canvasPivot
+- **(P3, the messy outcome)** Mixed: J⁻¹ correctly handles SOME parameter-driven deformations (e.g., AngleZ which rotates the warp grid) but introduces error for OTHERS (e.g., BodyAngleX which translates / shears the grid). This was the actual yesterday-option-(b) result. Means Cubism does something more nuanced than just "use J⁻¹"; possibly weighted by deformation type, possibly recomputed at a different point in the chain, possibly involving `Setup_LocalPivot` rebaking that we haven't disassembled.
 
-mat = R(adjustedAngle) · diag(adjustedScale) · diag(rx, ry)
-isCanvasFinal = true
-```
+**Verification gate:** the dump produces clear numerical evidence locking in P1, P2, or P3. The decision point for Stage 2-3 derives from which outcome holds.
 
-**Subtleties to handle:**
-- Per-parent-type input frame: artmesh keyforms arrive in different frames depending on chain position (rig-warp parent → `0..1` of rig warp's bbox; group-rotation parent → raw canvas-px offsets; chain root → cascaded-normaliser; legacy → PPU-normalised). Stage 3's matrix needs to know which input frame to expect.
-- Chain walker break: extend `evalArtMeshFrame` to BREAK after a `isCanvasFinal: true` rotation matrix.
-- Lift composition: `_computeLiftedGrid` walks UP from a warp through ancestors. Walking through a canvas-final rotation should break the lift (output is canvas, no further composition).
-- Degenerate FD probes (parent has zero-area cell at the pivot): fall back to Stage 2's rest-pose path.
+If P3, **Stage 2 + 3 may need re-planning** with an additional IDA pass on `Setup_LocalPivot` / `Setup_Compounded*` functions (~0x7fff2b24dee0+ at increasing addresses) and a corresponding extension of this plan. Don't proceed to Stage 2 with a half-baked theory.
 
-**Verification gate:** PARAM max < 1.0 px on **every** fixture. This is the actual Cubism-parity bar.
-
-If the gate fails on a specific fixture, use `probe_kernel.mjs` to find which deformer step causes the local divergence; iterate the formula until that step matches Cubism's intermediate state.
+**Anti-pattern:** the previous attempts conflated P1/P2 and skipped this step. Don't.
 
 ---
 
-### Stage 4 — Cutover (¼ day)
+### Stage 2 — Wire FD-probed Jacobian into `cubism-setup` branch (1 day)
 
-- `evalRig()` in `chainEval.js` switches to delegating to `cubismChainEval.evalRig`.
-- The legacy `chainEval` body becomes the inner implementation of `cubismChainEval` minus the rotation-Setup path. Or: legacy chainEval gets deleted and `cubismChainEval` is renamed back to `chainEval`. Pick whichever results in less churn — there's no production reason to keep both.
-- Update `test:chainEval`: math tests that encoded the old rotation-matrix formula get oracle-derived expected values instead of hand-derived ones (they were testing v3's specific approximation, not the canonical correct output).
+**Conditional on Stage 1's outcome:**
 
-**Verification gate:** `npm test` green; oracle harness PARAM max < 1.0 px on every fixture.
+**If P1 (rest is wrong):**
+- This is no longer Phase 2b — it's a deeper "v3's chain composition is calibrated against a wrong constant" issue. Stop, file as a separate bug ahead of Phase 2b. Re-scope.
+
+**If P2 (rest is correct, only non-rest diverges):**
+- In `chainEval.getState` for rotations, the `cubism-setup` branch FD-probes the parent at the pivot every frame and uses J⁻¹ instead of `_warpSlopeX/Y`.
+- The matrix structure stays the same as legacy (`linear = J⁻¹ · R · diag`, translation = `(originX, originY)`). Chain-walker invariant unchanged.
+- This is essentially yesterday's option (b), but with whatever calibration adjustment Stage 1 surfaced.
+
+**If P3 (mixed):**
+- Stage 1 must produce a hypothesis for what the additional Cubism behavior is (e.g., per-deformation-type weighting, additional Setup function we haven't ported). The plan extends with a sub-stage 2.5 to RE the additional Cubism function. Don't write Stage 2 code until the hypothesis is testable.
+
+**Verification gate:**
+
+- Oracle harness `--kernel=cubism-setup` produces output **within 0.05 px max-vertex-diff** of `--kernel=v3-legacy` on rest fixtures (`*__default.json`). FD probes have small float-rounding noise even when J⁻¹ ≈ `_warpSlopeX/Y` mathematically; 0.05 px is a generous bound that still catches structural bugs (wrong column/row layout, wrong inversion formula) — those would diverge by orders of magnitude.
+
+- For non-rest fixtures: don't gate yet — Stage 3 fixes those.
+
+  Note: this gate is only meaningful if both branches do real work and could plausibly diverge. With P2 confirmed by Stage 1, both branches compute the same thing via different paths (constant lookup vs FD probe + inversion), so near-equality is the right gate.
+
+---
+
+### Stage 3 — Drive the FD-probed Jacobian down to <1 px PARAM divergence on AngleZ (1 day)
+
+Stage 2 wired in the per-frame J⁻¹. If yesterday's option-(b) data holds, AngleZ should now be slightly better and BodyAngleX much worse (the P3-shaped problem). Stage 3's job is to figure out the calibration that closes both.
+
+**Possible interventions, each tested via oracle harness independently:**
+
+1. **Per-parent-type input frame normalisation**. Artmesh keyform vertex storage frame depends on parent type (per `keyformAndDeformerSections.js`):
+   - rig-warp parent → `0..1` of rig warp's `canvasBbox`
+   - group-rotation parent → raw canvas-px offsets from group pivot
+   - chain root → `canvasToInnermostX/Y` (cascaded-normaliser output)
+   - legacy → centred + PPU-normalised
+
+   Today's chainEval handles these implicitly via `_warpSlopeX/Y`. The FD-probed path in Stage 2 may have skipped one or more conversions — adding them per-parent-type is one fix vector.
+
+2. **Cubism's full Setup port** (canvas-final matrix, chain-walker break). If P3's BodyAngleX problem is "the warp's bilinear off-pivot diverges from the linear approximation that J⁻¹ encodes", the canvas-final approach (apply matrix, BREAK, never re-compose through the warp) is what Cubism uses. Yesterday's option-(a) attempt at this exploded because `keyformScale=1.0` × `probedScale=bbox_size` ≠ 1; with Stage 2's calibration result in hand, the explosion is recoverable.
+
+3. **ε retry on degenerate probes**. Cubism's `RotationDeformer_Setup` retries with ε × 0.5 up to 10× when `|delta| ≈ 0`, then tries `-Y` direction. Single-shot ε at 0.01 may give noisy J on certain shelby pivots. Port the retry loop.
+
+4. **Sub-stage 3.5 (only if P3 means something deeper)**: re-RE Cubism's `Setup_LocalPivot` / `Setup_Compounded*` functions in IDA. Update Stage 3 with the new findings.
+
+**Subtleties already known to need handling:**
+- Chain walker break: extend `evalArtMeshFrame` to BREAK after `isCanvasFinal: true` rotation matrix (yesterday's revert removed this; re-add).
+- Lift composition: `_computeLiftedGrid` walks UP from a warp through ancestors; walking through a canvas-final rotation should break the lift (output is canvas; no further composition).
+
+**Verification gate:**
+- `AngleZ_pos30/neg30` PARAM max < 1.0 px (the BUG-003 signal — primary).
+- No other fixture regresses by more than 0.5 px PARAM compared to current baseline.
+- TOTAL divergence within +5% of baseline (24.21 px).
+
+Numerical floor: Cubism's runtime is single-precision and our FD probe has its own rounding. If a fixture pins at 0.5–0.9 px on the AngleZ bound, that's "match Cubism within numerical precision" and acceptable. >1.0 px is a real divergence to chase.
+
+If the gate fails after intervention 1+2+3 are tried (3 sweeps within Stage 3), invoke 3.5 — re-RE additional Cubism Setup functions and extend the plan.
+
+---
+
+### Stage 4 — Cutover (½ day)
+
+- `evalRig` in `chainEval.js` flips its default to `kernel: 'cubism-setup'`. Run full oracle harness to confirm.
+- Delete the `kernel === 'v3-legacy'` branches from `chainEval.js`. Delete the `kernel` parameter. Delete the `--kernel=` flag from oracle harness.
+- Tests to update (each gets re-baselined against oracle output, not hand-derived expected values):
+  - `test:chainEval` — particularly any test asserting numeric vertex output of a rotation step. Hand-derived expected values came from v3's specific math; the new math may produce slightly different numbers (within 0.5 px). Replace expected values with oracle-derived ones for the same fixture.
+  - `test:rotationEval` — pure math tests on `buildRotationMat3` / `applyMat3ToPoint` are likely unaffected (those functions don't change). Verify.
+  - `test:e2e_equivalence` — end-to-end. May need rebaseline.
+  - `test:cubismRotationEval` — historical, currently retained as record. Verify still relevant or delete.
+
+- Run `npx tsc --noEmit` + `npm test` + oracle harness. Each must be green.
+- Profile `evalRig` against rest-pose shelby for 100 calls; record per-call mean before vs after. If regression > 10%, memoize `(rotationId, paramValuesIdentity) → adjustedMatrix` (cheap WeakMap hash).
+
+**Verification gate:** `npm test` green; oracle harness `AngleZ` PARAM < 1.0 px; no fixture PARAM > baseline + 0.5 px; perf delta < 10% (or memoization landed).
 
 ---
 
@@ -167,25 +207,31 @@ If the gate fails on a specific fixture, use `probe_kernel.mjs` to find which de
 
 | Risk | Mitigation |
 |------|-----------|
-| Stage 1's diagnostic dump reveals a deeper architectural issue (e.g. v3's emitter is byte-wrong against Cubism Editor's compiled output, separate from Phase 2b). | Stage 1 is cheap (½ day) and surfaces this if it's true. We'd file a separate bug and rescope before doing Stage 2-3. |
-| FD probe at the pivot is degenerate for some shelby rotations (e.g. pivot lands on a grid cell boundary). | Stage 3 specifies fallback to rest-pose path. Cubism's runtime retries with smaller ε up to 10 iterations; we'd port that retry loop if a fixture fails the gate. |
-| Some artmesh keyforms are in frames the per-parent-type code doesn't handle. | Stage 0's `probe_kernel.mjs` makes this visible — we'd see anomalous intermediate state for the broken mesh + add the missing frame. No stage-skip risk. |
-| Rotation chains (rotation under rotation) break the canvas-final-break invariant. | Cubism's Setup is recursive; each rotation in the chain gets its own Setup. Our `evalChainAtPoint` already walks recursively via `getState`, so the recursion is free — but we must verify shelby's bone-chain rotations work. |
-| Performance regression: per-rotation FD probe adds 3 single-point chain walks per evalRig call. | At shelby's ~5 rotations × ~3-deep chains, that's ~45 chain-walk ops/frame. Each op is ~5 deformer evals. Total ~225 deformer evals/frame on top of the existing ~5000. <5 % overhead. Acceptable; if it becomes a real issue, memoize `(rotationId, paramValuesIdentity) → adjustedMatrix`. |
+| Stage 1's measurement reveals **P1** (rest-pose `_warpSlopeX/Y` ≠ J⁻¹). | This is a deeper architectural issue, not Phase 2b. Stop, file as separate bug, re-scope. The plan does NOT cover the P1 case — it'd need a different doc. |
+| Stage 1's measurement reveals **P3** (mixed: J⁻¹ helps some warps, hurts others). | Stage 3's interventions list is designed for this case (per-parent-type frame, canvas-final break, ε retry). If those three don't close the gap, sub-stage 3.5 invokes additional IDA RE on `Setup_LocalPivot` / `Setup_Compounded*`. Each intervention is independently oracle-tested before stacking. |
+| FD probe at the pivot is degenerate (pivot lands on a grid-cell boundary, `\|delta\| ≈ 0`). | Stage 3 intervention 3: port Cubism's ε-retry loop (×0.5 up to 10×, then try `-Y` direction). If that still fails for a fixture, fall back to legacy `_warpSlopeX/Y` for that rotation only — better than crashing. |
+| Some artmesh keyforms are in frames the per-parent-type code doesn't handle. | `probe_kernel.mjs` from Stage 0 makes this visible — anomalous intermediate state for the broken mesh + add the missing frame. Surfaces during Stage 3 testing, not at cutover. |
+| Rotation chains (rotation under rotation): the recursive Setup needs each ancestor rotation to be Setup-adjusted before its child probes through it. | `getState` is memoized per-evalRig — first probe through R triggers R's own Setup, subsequent probes hit the cache. As long as `getState` is called consistently (not bypassed via direct keyform reads), this composes correctly. **Verify this on shelby's bone-chain rotations during Stage 3** — test:chainEval has fixtures using arm/leg rotation chains. |
+| `evalChainAtPoint` and `_computeLiftedGrid` interact (lifting computes warp grids by walking through rotations; FD probe walks through warps using lifted grids). Possible cycle. | Yesterday's `_liftingInFlight` set already detects cycles via cycle-detection sentinel. Setup recursion is ACYCLIC (rig is a tree); only malformed input would trigger. Stage 0 verifies this on shelby. |
+| Performance regression > 10%. | Stage 4 measures and gates. Memoize `(rotationId, paramValuesIdentity) → adjustedMatrix` if needed. The cache already exists for getState; extending to include Setup output is mechanical. |
+| Cutover's test rebaselines mask a real regression as "expected delta". | Stage 4's rebaselines must compare oracle-derived expected values to OBSERVED output — if they disagree by > 0.1 px, that's not a baseline drift, that's a bug. Be strict here. |
 
 ## Estimated cost
 
 | Stage | Days | Verification gate |
 |-------|------|------|
-| 0     | 0.5  | new kernel matches legacy at delegation (max diff = 0) |
-| 1     | 0.5  | numerical evidence pinpoints P1 vs P2 |
-| 2     | 1.0  | new kernel matches legacy on rest fixtures |
-| 3     | 1.0  | PARAM max < 1.0 px on all 21 fixtures |
-| 4     | 0.25 | full `npm test` green |
-| 5     | 0.25 | docs / memory updated |
-| **Total** | **3.5 days** | |
+| 0     | 0.5  | flag plumbing + lifted-grid `evalChainAtPoint` + probe script; both kernel branches still byte-identical |
+| 1     | 0.5  | measurement isolates outcome (P1 / P2 / P3) with concrete numbers |
+| 2     | 1.0  | (assuming P2 or P3) `cubism-setup` byte-matches `v3-legacy` on rest fixtures |
+| 3     | 1.0  | (assuming P2 or P3) AngleZ PARAM < 1.0 px; no fixture regresses by > 0.5 px |
+| 3.5   | +1–2 (contingent) | only if P3 demands additional Cubism IDA RE; budget for re-RE + retest |
+| 4     | 0.5  | `npm test` green; perf delta < 10% (or memoized) |
+| 5     | 0.25 | docs / memory updated; flag deleted |
+| **Total** | **3.75 days nominal, up to 5.75 with 3.5** | |
 
-This is `multi-day` as the docs warned, but bounded — three working days plus tail, with cheap rollback at every stage (each stage is a separate commit; oracle gate is mechanical).
+This is `multi-day` as the docs warned, but bounded — three to four working days plus tail. Cheap rollback at every stage: each is a separate commit; the `kernel` flag means master never has a broken kernel even mid-refactor.
+
+**If Stage 1 reveals P1**: the plan does NOT apply. Stop, write a new bug + plan, return.
 
 ---
 
@@ -193,11 +239,12 @@ This is `multi-day` as the docs warned, but bounded — three working days plus 
 
 | Failed attempts (2026-05-02) | This plan |
 |------------------------------|-----------|
-| Modified `chainEval.js` directly. Regression invalidates the entire kernel. | New `cubismChainEval.js`. Legacy stays shipping until cutover. |
-| Each attempt tested only against the final `--overall` divergence number. | Stage 0 ships `probe_kernel.mjs` for per-step intermediate-state diffs. |
-| Speculated about which Cubism semantic v3 needed to match. | Stage 1 PRINTS the actual values from both v3 and Cubism, then derives the formula from observed reality. |
-| Single sweep, single commit, single oracle check. | 5 stages, each gated. |
+| Modified `chainEval.js` directly. Regression invalidates the entire kernel. | `kernel` flag inside `chainEval.js`. Legacy branch keeps shipping until cutover; flag is removed entirely at Stage 4. |
+| Each attempt tested only against the final `--overall` divergence number. | Stage 0 ships `probe_kernel.mjs` + a `trace` API on `evalRig` for per-step intermediate-state observation. |
+| Speculated about which Cubism semantic v3 needed to match. | Stage 1 PRINTS the actual values from v3's chain composition and reasons backward from Cubism's known final output (Cubism's intermediates aren't observable; that's accepted). |
+| Single sweep, single commit, single oracle check. | 5 stages (+ contingent 3.5), each gated. |
 | No reference to v3's calibration constants (`_warpSlopeX/Y` cascaded normaliser). | Acknowledged up front; Stage 1 explicitly checks whether this is part of the bug surface. |
+| P1/P2 framing applied as binary; yesterday's data showed P3 (mixed) is the actual case. | This plan recognizes P3 explicitly and Stage 3's interventions are designed to handle it incrementally. |
 
 ---
 
