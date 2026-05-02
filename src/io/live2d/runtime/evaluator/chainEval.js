@@ -38,6 +38,17 @@ import { evalArtMesh } from './artMeshEval.js';
 import { evalWarpGrid } from './warpEval.js';
 import { evalWarpKernelCubism } from './cubismWarpEval.js';
 import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
+import { logger } from '../../../../lib/logger.js';
+
+/**
+ * Module-level WeakSet of rigSpecs we've already emitted a Phase 3
+ * lifted-grid summary for. Logs fire once per (rigSpec identity) so a
+ * normal animation tick (60+ evalRig calls/sec) doesn't flood the
+ * Logs panel — only Init Rig / cmo3 import / project load produces a
+ * new rigSpec identity, and that's exactly when an engineer wants to
+ * see the lifted bboxes.
+ */
+const _liftLoggedSpecs = new WeakSet();
 
 /**
  * Phase 2b — FD Jacobian probe step size, in the rotation deformer's
@@ -78,7 +89,60 @@ export function evalRig(rigSpec, paramValues) {
     const frame = evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformerIndex);
     if (frame) out.push(frame);
   }
+
+  // Phase 3 — first-sight log of lifted-grid bboxes per warp on each
+  // distinct rigSpec. Fires once per rigSpec identity (init rig / cmo3
+  // import / project load), NOT per frame. The summary is the canonical
+  // sanity check after a Phase 3 regression: each warp's lifted bbox
+  // should sit roughly inside the canvas (e.g. body warps span the
+  // character bbox in canvas-px). If a future change breaks the lift
+  // (e.g. tiny fractional values, NaN, or out-of-canvas extents), this
+  // log surfaces the regression at Init Rig time without needing the
+  // oracle harness.
+  if (!_liftLoggedSpecs.has(rigSpec)) {
+    _liftLoggedSpecs.add(rigSpec);
+    emitLiftedBboxSummary(rigSpec, cache);
+  }
   return out;
+}
+
+/**
+ * Walk every warp's lifted grid (computed lazily during the artmesh
+ * eval pass) and emit a structured summary to the Logs panel. Skips
+ * warps whose lift returned null (rotation-only chain; recorded in
+ * the cache as `null`). Called exactly once per rigSpec identity.
+ *
+ * @param {import('../../rig/rigSpec.js').RigSpec} rigSpec
+ * @param {DeformerStateCache} cache
+ */
+function emitLiftedBboxSummary(rigSpec, cache) {
+  const warps = Array.isArray(rigSpec.warpDeformers) ? rigSpec.warpDeformers : [];
+  if (warps.length === 0) return;
+  /** @type {Record<string, {x:[number,number], y:[number,number]}>} */
+  const summary = {};
+  let nullCount = 0;
+  for (const w of warps) {
+    const lifted = cache._liftedById.get(w.id);
+    if (!lifted) { nullCount++; continue; }
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < lifted.length; i += 2) {
+      const x = lifted[i], y = lifted[i + 1];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    summary[w.id] = {
+      x: [Math.round(minX * 10) / 10, Math.round(maxX * 10) / 10],
+      y: [Math.round(minY * 10) / 10, Math.round(maxY * 10) / 10],
+    };
+  }
+  const lifted = Object.keys(summary).length;
+  logger.debug(
+    'chainEvalLift',
+    `lifted ${lifted} warp${lifted === 1 ? '' : 's'} to canvas-px${nullCount > 0 ? ` (${nullCount} unliftable)` : ''}`,
+    { canvas: rigSpec.canvas, summary },
+  );
 }
 
 /** R10 — id → deformer spec map. Built once per evalRig call. */
@@ -265,6 +329,17 @@ class DeformerStateCache {
     // non-identity.
     /** @type {Map<string, Float64Array|null>} */
     this._liftedById = new Map();
+    /**
+     * Phase 3 — set of warp ids currently mid-recursion in
+     * `getLiftedGrid`. Used purely to detect cycles in the lift chain
+     * (W1 → W2 → W1 — a malformed rig topology) and emit a one-shot
+     * structured warn. The cycle-break itself is handled by the
+     * sentinel pattern (`_liftedById.set(id, null)` before recursion);
+     * this Set is the diagnostic surface so a malformed rig surfaces
+     * loudly in the Logs panel instead of silently degrading.
+     * @type {Set<string>}
+     */
+    this._liftingInFlight = new Set();
 
     // Legacy `_warpSlopeX/Y` retained only as a fallback when the FD
     // probe can't run (e.g. the parent warp's state can't be built).
@@ -302,6 +377,38 @@ class DeformerStateCache {
     if (!warpSpec?.id) return null;
     if (this._liftedById.has(warpSpec.id)) return this._liftedById.get(warpSpec.id);
 
+    // Cycle detection. If we're re-entered for an id that's still
+    // mid-recursion higher up the stack, the rig has a malformed parent
+    // loop. Surface it loudly and bail. The `_liftingInFlight` set is
+    // cleared in the `finally` block at the end of this method so a
+    // legitimate later call for the same warp (after the first lift
+    // returns null) doesn't re-warn.
+    if (this._liftingInFlight.has(warpSpec.id)) {
+      logger.warn(
+        'chainEvalLift',
+        `cycle detected at warp '${warpSpec.id}' — chain has a parent loop, lifted grid will be partial`,
+        { warpId: warpSpec.id, inFlight: Array.from(this._liftingInFlight) },
+      );
+      this._liftedById.set(warpSpec.id, null);
+      return null;
+    }
+    this._liftingInFlight.add(warpSpec.id);
+    try {
+      return this._computeLiftedGrid(warpSpec);
+    } finally {
+      this._liftingInFlight.delete(warpSpec.id);
+    }
+  }
+
+  /**
+   * Internal: actually compute the lifted grid. Wrapped by
+   * `getLiftedGrid` which handles the in-flight tracking + cycle
+   * detection.
+   *
+   * @param {import('../../rig/rigSpec.js').WarpDeformerSpec} warpSpec
+   * @returns {Float64Array|null}
+   */
+  _computeLiftedGrid(warpSpec) {
     const state = this.getState(warpSpec);
     if (!state || state.kind !== 'warp') {
       this._liftedById.set(warpSpec.id, null);
@@ -319,16 +426,12 @@ class DeformerStateCache {
       return grid;
     }
 
-    // Cycle guard: install a `null` sentinel BEFORE recursing into
-    // ancestors. If the chain has a cycle (W1 → W2 → W1 — a malformed
-    // rig caught by `test:chainEval`'s explicit cycle test), the
-    // recursive call hits this cached null at the top and bails out
-    // without infinite-looping. The `if (!curParentLifted) break` in
-    // the chain-walk loop below treats the null result as "ancestor
-    // can't be lifted", so this warp gets returned with whatever
-    // partial composition we got (matches legacy chainEval's bounded-
-    // safety-counter semantics — best-effort, no crash).
-    this._liftedById.set(warpSpec.id, null);
+    // (Cycle break is handled by `_liftingInFlight` set in the public
+    // `getLiftedGrid` wrapper — when a recursive call lands on an id
+    // that's already in flight, it emits a structured warn and returns
+    // null, which the `if (!curParentLifted) break` below treats as
+    // "ancestor can't be lifted", giving us a best-effort partial lift
+    // matching legacy chainEval's bounded-safety semantics — no crash.)
 
     // Walk the parent chain. Each step transforms `positions` (an
     // (rows+1)×(cols+1) grid of x,y pairs) from the current frame to
