@@ -18,10 +18,9 @@
  */
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw, Wand2, Pause, Play } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Wand2 } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
-import { useEditorStore } from '../../../store/editorStore.js';
 import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
@@ -29,8 +28,6 @@ import { ParamRow } from './ParamRow.jsx';
 export function ParametersEditor() {
   const params = useProjectStore((s) => s.project.parameters ?? []);
   const groups = buildParamGroups(params);
-  const livePreviewActive = useEditorStore((s) => s.livePreviewActive);
-  const setLivePreviewActive = useEditorStore((s) => s.setLivePreviewActive);
 
   // Collapse state per group key — local to the editor, not persisted.
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
@@ -82,26 +79,8 @@ export function ParametersEditor() {
   return (
     <div className="h-full w-full flex flex-col">
       <div className="px-2 py-1.5 border-b border-border bg-muted/20 flex items-center justify-between text-[10px] font-mono text-muted-foreground">
-        <span>{params.length} params · {livePreviewActive ? 'live preview' : 'edit mode'}</span>
+        <span>{params.length} params</span>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            className={
-              'flex items-center gap-1 transition-colors ' +
-              (livePreviewActive
-                ? 'text-primary hover:text-primary/80'
-                : 'hover:text-foreground')
-            }
-            onClick={() => setLivePreviewActive(!livePreviewActive)}
-            title={
-              livePreviewActive
-                ? 'Stop live preview — restore slider values, freeze physics/breath/cursor.'
-                : 'Start live preview — physics + breath + cursor head-tracking on LMB-drag.'
-            }
-          >
-            {livePreviewActive ? <Pause size={10} /> : <Play size={10} />}
-            {livePreviewActive ? 'preview' : 'preview'}
-          </button>
           <button
             type="button"
             disabled={busy}

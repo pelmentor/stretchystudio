@@ -54,24 +54,53 @@ function reset() {
     'rightBottom single tab = properties');
 }
 
-// ── Animation workspace adds timeline area ──────────────────────────
+// ── Animation workspace adds timeline + Live Preview area ───────────
 
 {
   const s = useUIV3Store.getState();
   const anim = s.workspaces.animation;
-  assert(anim.areas.length === 6, 'animation has 6 areas');
+  assert(anim.areas.length === 7, 'animation has 7 areas');
   const ids = anim.areas.map((a) => a.id).sort();
-  assert(JSON.stringify(ids) === '["center","leftBottom","leftTop","rightBottom","rightTop","timeline"]',
-    'animation area ids include left halves, right halves, center, timeline');
+  assert(JSON.stringify(ids) === '["center","centerRight","leftBottom","leftTop","rightBottom","rightTop","timeline"]',
+    'animation area ids include left halves, right halves, center+centerRight, timeline');
   const tl = anim.areas.find((a) => a.id === 'timeline');
   assert(tl?.tabs[0]?.editorType === 'timeline',
     'animation timeline area hosts timeline editor');
+  // GAP-010 — animation workspace gets a centerRight Live Preview surface.
+  const cr = anim.areas.find((a) => a.id === 'centerRight');
+  assert(cr?.tabs.length === 1 && cr.tabs[0].editorType === 'livePreview',
+    'animation centerRight single tab = livePreview');
   // rightBottom in animation workspace pairs Animations + Properties.
   const rb = anim.areas.find((a) => a.id === 'rightBottom');
   assert(rb?.tabs.length === 2, 'animation rightBottom has 2 tabs');
   const rbTypes = rb.tabs.map((t) => t.editorType);
   assert(JSON.stringify(rbTypes) === '["animations","properties"]',
     'animation rightBottom = [animations, properties]');
+}
+
+// ── Pose workspace gets Live Preview centerRight too (GAP-010) ──────
+
+{
+  const s = useUIV3Store.getState();
+  const pose = s.workspaces.pose;
+  assert(pose.areas.length === 6, 'pose has 6 areas');
+  const ids = pose.areas.map((a) => a.id).sort();
+  assert(JSON.stringify(ids) === '["center","centerRight","leftBottom","leftTop","rightBottom","rightTop"]',
+    'pose area ids include left halves, right halves, center+centerRight (no timeline)');
+  const cr = pose.areas.find((a) => a.id === 'centerRight');
+  assert(cr?.tabs.length === 1 && cr.tabs[0].editorType === 'livePreview',
+    'pose centerRight single tab = livePreview');
+}
+
+// ── Layout/Modeling/Rigging workspaces stay edit-only (no Live Preview) ──
+
+{
+  const s = useUIV3Store.getState();
+  for (const wsKey of /** @type {const} */ (['layout', 'modeling', 'rigging'])) {
+    const ws = s.workspaces[wsKey];
+    const cr = ws.areas.find((a) => a.id === 'centerRight');
+    assert(!cr, `${wsKey} has no centerRight area (GAP-010 — drivers off in edit-focused workspaces)`);
+  }
 }
 
 // ── setWorkspace switches active workspace ──────────────────────────

@@ -6,13 +6,13 @@ Living document. v3 has five workspace presets — Layout, Modeling, Rigging, Po
 
 ## Workspace × concern matrix
 
-| Workspace   | Editor mode | Mesh wireframe / vertices | Mesh edit dimming | Skeleton overlay | Bone-controller drag target |
-|-------------|-------------|---------------------------|-------------------|------------------|------------------------------|
-| Layout      | staging     | ❌ never                   | ❌ never           | user-toggle      | `node.transform` (persistent) |
-| Modeling    | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) |
-| Rigging     | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) |
-| Pose        | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    |
-| Animation   | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    |
+| Workspace   | Editor mode | Mesh wireframe / vertices | Mesh edit dimming | Skeleton overlay | Bone-controller drag target | Live Preview surface (centerRight) |
+|-------------|-------------|---------------------------|-------------------|------------------|------------------------------|-------------------------------------|
+| Layout      | staging     | ❌ never                   | ❌ never           | user-toggle      | `node.transform` (persistent) | ❌ off (drivers never run)          |
+| Modeling    | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) | ❌ off                               |
+| Rigging     | staging     | ✅ user-toggle             | ✅ user-toggle     | user-toggle      | `node.transform` (persistent) | ❌ off                               |
+| Pose        | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    | ✅ on (preset)                       |
+| Animation   | animation   | ❌ never                   | ❌ never           | user-toggle      | `animationStore.draftPose`    | ✅ on (preset)                       |
 
 Three concerns are workspace-scoped:
 
@@ -21,6 +21,10 @@ Three concerns are workspace-scoped:
 2. **Mesh edit mode** (the `meshEditMode` flag dimming non-selected parts + engaging the brush) only fires in Modeling/Rigging. Setting the flag in Modeling and switching to Layout doesn't drag the dimming into Layout — the policy gate forces it off at render time. Switching back to Modeling restores the flag automatically because we don't mutate the user's stored values.
 
 3. **Editor mode** (`staging` vs `animation`) couples to workspace via the Topbar's workspace pill. Layout/Modeling/Rigging all use `staging` (edits target the rest pose / project structure). Pose/Animation use `animation` (edits become timeline keyframes; rest pose is preserved via `captureRestPose`).
+
+4. **Live drivers** (physics pendulum sway + breath cycle + cursor head-look) only run while a `livePreview` editor is mounted. The Pose/Animation presets include a `centerRight` slot defaulted to Live Preview, so opening either workspace starts drivers automatically. Switching the `centerRight` tab away from Live Preview (or closing the workspace) stops every driver cleanly. Layout/Modeling/Rigging never run drivers — preview-noise during rig structuring is exactly the wrong feedback surface.
+
+   Hard rule: **drivers run iff `<LivePreviewEditor>` is mounted somewhere in the tree.** No global flag, no `livePreviewActive` state. Two surfaces sharing `paramValues` means cursor look on the Live Preview rotates the head in the edit Viewport too — exactly how Cubism Editor + Viewer side-by-side works.
 
 ## The viewport policy
 
@@ -77,3 +81,19 @@ Why: during the wizard the user can interact with parts via the Outliner, the ca
 4. Add a row to the matrix at the top of this doc
 
 Default policy fallback for unknown workspace names is **Modeling-permissive** — i.e., wireframe and meshEditMode honoured. That way a typo or forgotten table entry fails open (everything visible) rather than closed (a confusing blank viewport).
+
+## Area slots in the AreaTree
+
+The [`AreaTree`](../src/v3/shell/AreaTree.jsx) maps workspace presets to a fixed set of named slots; any preset can omit slots, and the layout collapses gracefully:
+
+| Slot         | Position                                  | Used by                          |
+|--------------|-------------------------------------------|----------------------------------|
+| `leftTop`    | Top of left column                         | Outliner (default in every preset) |
+| `leftBottom` | Bottom of left column (vertical split)     | Logs (default in every preset)   |
+| `center`     | Top of center column                       | Viewport (edit, in every preset) |
+| `centerRight`| Right of center column (horizontal split)  | Live Preview (Pose/Animation only) |
+| `timeline`   | Bottom of center column (vertical split)   | Timeline / Dopesheet / F-Curve (Animation only) |
+| `rightTop`   | Top of right column                        | Parameters (default in every preset) |
+| `rightBottom`| Bottom of right column (vertical split)    | Properties (or Animations + Properties in Animation) |
+
+When a preset omits both halves of a side column, the layout falls back to two-column or one-column arrangements automatically. `centerRight` is the newest slot (added 2026-05-02 for GAP-010) — it splits the center column horizontally so the user sees the edit Viewport on the left and the Live Preview on the right.

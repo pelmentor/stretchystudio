@@ -29,7 +29,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'animation'|'pose')} WorkspaceId
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -112,15 +112,40 @@ const DEFAULT_AREAS = () => [
  * user can browse / create / switch animations without leaving the
  * workspace.
  *
+ * GAP-010 — Animation workspace also gets a `centerRight` Live Preview
+ * surface so the user can watch the rig play through with physics +
+ * breath + cursor look running, while still scrubbing the editing
+ * Viewport on the left. Drivers are bound to mount lifetime, so the
+ * Live Preview tab MUST be the visible one in `centerRight` for them
+ * to run — switching that tab to anything else stops drivers cleanly.
+ *
  * @returns {AreaSlot[]}
  */
 const ANIMATION_AREAS = () => [
   buildArea('leftTop',     [e('outliner')]),
   buildArea('leftBottom',  [e('logs')]),
   buildArea('center',      [e('viewport')]),
+  buildArea('centerRight', [e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
   buildArea('rightBottom', [e('animations'), e('properties')]),
   buildArea('timeline',   [e('timeline'), e('dopesheet'), e('fcurve')]),
+];
+
+/**
+ * Pose workspace mirrors the default left/right columns, plus a
+ * `centerRight` Live Preview surface (same reasoning as the animation
+ * preset — pose-tweaking benefits from watching the rig sway under
+ * physics + breath alongside the static editing canvas).
+ *
+ * @returns {AreaSlot[]}
+ */
+const POSE_AREAS = () => [
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('leftBottom',  [e('logs')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('centerRight', [e('livePreview')]),
+  buildArea('rightTop',    [e('parameters')]),
+  buildArea('rightBottom', [e('properties')]),
 ];
 
 /**
@@ -132,7 +157,7 @@ const initialWorkspaces = () => ({
   modeling:  { areas: DEFAULT_AREAS() },
   rigging:   { areas: DEFAULT_AREAS() },
   animation: { areas: ANIMATION_AREAS() },
-  pose:      { areas: DEFAULT_AREAS() },
+  pose:      { areas: POSE_AREAS() },
 });
 
 export const useUIV3Store = create((set) => ({

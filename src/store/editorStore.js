@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { useParamValuesStore } from './paramValuesStore.js';
 
 // Editor state (UI state, selection, view transform, drag state)
 export const useEditorStore = create((set) => ({
@@ -75,25 +74,6 @@ export const useEditorStore = create((set) => ({
   /** Current step in the PSD import wizard: null | 'review' | 'reorder' | 'adjust' | 'dwpose' */
   wizardStep: null,
 
-  /**
-   * Phase 1F.6 — Live Preview vs Edit mode.
-   *
-   * When false (default): viewport runs as a static deform editor. Param
-   * sliders are the ONLY source of `paramValuesStore` writes; physics
-   * tick, breath driver, and cursor LMB head-tracking are all gated off.
-   * Sliders don't dance during editing.
-   *
-   * When true: physics runs (pendulum hair / breath / clothing rules
-   * from rigSpec.physicsRules), ParamBreath auto-cycles, and LMB-drag
-   * over the canvas drives ParamAngleX/Y/Z (head looks at cursor).
-   *
-   * Toggle takes a snapshot of `paramValuesStore.values` on entry and
-   * restores it on exit so user-set slider values survive a preview.
-   */
-  livePreviewActive: false,
-  /** @type {Record<string, number>|null} Snapshot of paramValues at livePreview ON; restored on OFF. */
-  editParamSnapshot: null,
-
   setSelection: (nodeIds) => set((state) => ({
     selection: nodeIds,
     // Exit mesh edit mode if selection changes to a different node or clears
@@ -158,24 +138,5 @@ export const useEditorStore = create((set) => ({
     blendShapeEditMode: false,
     activeBlendShapeId: null,
     meshEditMode: false,
-  }),
-
-  /**
-   * Toggle Live Preview. On entry, snapshots `paramValuesStore.values`
-   * so subsequent physics / breath / cursor writes can be unwound. On
-   * exit, restores the snapshot — user's edit-mode slider values are
-   * preserved across a preview session.
-   */
-  setLivePreviewActive: (on) => set((state) => {
-    const next = !!on;
-    if (next === state.livePreviewActive) return {};
-    if (next) {
-      const snap = { ...useParamValuesStore.getState().values };
-      return { livePreviewActive: true, editParamSnapshot: snap };
-    }
-    if (state.editParamSnapshot) {
-      useParamValuesStore.setState({ values: state.editParamSnapshot });
-    }
-    return { livePreviewActive: false, editParamSnapshot: null };
   }),
 }));

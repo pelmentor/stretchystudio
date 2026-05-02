@@ -64,9 +64,16 @@ import { normalizeVariants } from '@/io/variantNormalizer';
 ────────────────────────────────────────────────────────────────────────── */
 
 export default function CanvasViewport({
-  remeshRef, deleteMeshRef,
-  saveRef, loadRef, resetRef,
-  exportCaptureRef, thumbCaptureRef
+  // GAP-010 — these imperative refs are populated by ViewportEditor (the
+  // edit Viewport) so external code (Inspector remesh button, save/load,
+  // export pipeline, thumbnail capture) can drive viewport-owned actions.
+  // LivePreviewCanvas mounts CanvasViewport without them — every assignment
+  // site below is guarded `if (xxxRef)`, so omitting is safe and the live
+  // preview surface never accidentally surfaces editing imperatives.
+  remeshRef = null, deleteMeshRef = null,
+  saveRef = null, loadRef = null, resetRef = null,
+  exportCaptureRef = null, thumbCaptureRef = null,
+  previewMode = false,
 }) {
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
@@ -131,6 +138,16 @@ export default function CanvasViewport({
   const activeWorkspaceRef = useRef(activeWorkspace);
   activeWorkspaceRef.current = activeWorkspace;
 
+  // GAP-010 — Live Preview surface gate. When this CanvasViewport instance
+  // is mounted by `<LivePreviewCanvas>`, `previewMode` is true: live drivers
+  // (physics + breath + cursor look) run continuously while this instance
+  // is alive, and editing affordances (mesh edit, drag-to-pivot, gizmo,
+  // skeleton overlay, wizard, drop hint, brush) are suppressed. The plain
+  // viewport editor mounts with `previewMode=false` and never runs drivers
+  // or shows the cursor-look LMB cursor — its only job is static editing.
+  const previewModeRef = useRef(previewMode);
+  previewModeRef.current = previewMode;
+
   // R9 — pendulum physics state. Recreated whenever the rigSpec
   // changes (auto-invalidated by rigSpecStore on geometry edits).
   // `physicsStateRef.current` is null when there's no rigSpec or when
@@ -140,13 +157,12 @@ export default function CanvasViewport({
   const physicsParamSpecsRef = useRef(null);         // memoised paramSpecs map
   const lastPhysicsTimestampRef = useRef(0);         // last rAF timestamp physics consumed
 
-  // Phase 1F.6 — Live Preview drivers (physics + breath + cursor).
-  // breathPhase advances ~2π / 3.345s while livePreviewActive is on,
-  // mapped to ParamBreath ∈ [0,1] via 0.5 + 0.5*sin.
+  // GAP-010 — Live Preview drivers (physics + breath + cursor look). These
+  // refs are only meaningful when `previewMode` is true (i.e. this instance
+  // is the LivePreviewCanvas surface). breathPhase advances ~2π / 3.345s
+  // each tick the surface is alive, mapped to ParamBreath ∈ [0,1] via
+  // 0.5 + 0.5*sin. lookRef tracks LMB-cursor position for the same tick.
   const breathPhaseRef = useRef(0);
-  // Cursor look state: LMB-drag in live-preview mode drives ParamAngleX/Y/Z.
-  // `active` is set on pointerdown (no modifiers, no skeleton/wizard mode);
-  // `clientX/Y` track the latest cursor position for the next tick to read.
   const lookRef = useRef({ active: false, clientX: 0, clientY: 0 });
 
   // Phase -1D — set of partIds that evalRig produced but no node
@@ -309,15 +325,17 @@ export default function CanvasViewport({
       const moved = animRef.current.tick(timestamp);
       if (moved) isDirtyRef.current = true;
 
-      // Phase 1F.6 — Live Preview drivers gate. Physics, breath, and
-      // cursor head-tracking all run only when livePreviewActive is on;
-      // edit mode keeps params static at their slider values so the user
-      // can scrub without the dial bouncing under them. The toggle in
-      // ParametersEditor handles snapshot/restore around the session.
+      // GAP-010 — Live Preview drivers gate. Physics, breath, and cursor
+      // head-tracking only run when this CanvasViewport instance was
+      // mounted in `previewMode` (i.e. it's the LivePreviewCanvas surface).
+      // The plain Viewport editor passes `previewMode=false` and stays
+      // static so the user can scrub a parameter slider without the dial
+      // bouncing under live drivers. Drivers are bound to the surface's
+      // mount lifetime — closing the Live Preview tab stops every driver.
       let valuesForEval = paramValuesRef.current;
       const _rigSpecForPhysics = rigSpecRef.current;
       const physicsRules = _rigSpecForPhysics?.physicsRules;
-      const livePreview = !!editorRef.current.livePreviewActive;
+      const livePreview = previewModeRef.current;
 
       // Animation mode — overlay parameter keyforms from the timeline
       // BEFORE live-preview drivers run. computeParamOverrides walks
@@ -365,9 +383,15 @@ export default function CanvasViewport({
         updates.ParamBreath = breathV;
 
         // Cursor look — when LMB is held over the canvas, map cursor
-        // position to ParamAngleX/Y/Z (head looks at cursor). Range
-        // matches Cubism standard (±30°); Z mirrors X for a natural
-        // tilt as the head turns sideways.
+        // position to head + iris params (Cubism Viewer's standard
+        // follow-cursor behaviour):
+        //   ParamAngleX/Y/Z  ±30°  (head turn / tilt / roll)
+        //   ParamEyeBallX/Y  ±1    (iris follows cursor independently)
+        // Z mirrors X for a natural tilt as the head turns sideways.
+        // Iris uses the same normalised cursor (cx, cy) so the eyes
+        // track the cursor in lock-step with the head — without iris
+        // here the user would see the head turn but the irises stay
+        // dead-center, which looks broken.
         if (lookRef.current.active && canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
@@ -378,6 +402,8 @@ export default function CanvasViewport({
             updates.ParamAngleX = cx * 30;
             updates.ParamAngleY = -cy * 30; // cursor up → look up
             updates.ParamAngleZ = cx * 30;
+            updates.ParamEyeBallX = cx;
+            updates.ParamEyeBallY = -cy; // cursor up → iris up
           }
         }
 
@@ -670,6 +696,10 @@ export default function CanvasViewport({
 
   /* ── [ / ] brush size shortcuts (only in deform edit mode or blend shape edit mode) ────────────── */
   useEffect(() => {
+    // GAP-010 — Live Preview surface is read-only; don't bind window-level
+    // keyboard shortcuts on it (would also double-fire if both surfaces are
+    // mounted simultaneously).
+    if (previewMode) return;
     const handler = (e) => {
       const { meshEditMode, meshSubMode, blendShapeEditMode, brushSize } = editorRef.current;
       // BUG-012 — workspace policy gate: don't change the brush in
@@ -681,10 +711,12 @@ export default function CanvasViewport({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [setBrush]);
+  }, [setBrush, previewMode]);
 
   /* ── K key — insert keyframes for selected nodes at current time ─────── */
   useEffect(() => {
+    // GAP-010 — see brush-shortcut effect above. Same reasoning.
+    if (previewMode) return;
     const handler = (e) => {
       if (e.key !== 'k' && e.key !== 'K') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -831,7 +863,7 @@ export default function CanvasViewport({
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [updateProject]);
+  }, [updateProject, previewMode]);
 
   /* ── Mesh worker dispatch ────────────────────────────────────────────── */
   const dispatchMeshWorker = useCallback((partId, imageData, opts) => {
@@ -1386,6 +1418,10 @@ export default function CanvasViewport({
   /* ── Drag-and-drop ───────────────────────────────────────────────────── */
   const onDrop = useCallback((e) => {
     e.preventDefault();
+    // GAP-010 — Live Preview surface is read-only. File-routing belongs to
+    // the editing Viewport; ignore drops here so the user can't accidentally
+    // load a project into the preview pane.
+    if (previewModeRef.current) return;
     routeImport(e.dataTransfer.files[0], {
       importStretch: importStretchFile,
       importPsd: importPsdFile,
@@ -1493,17 +1529,21 @@ export default function CanvasViewport({
 
     if (e.button !== 0) return;
 
-    // Phase 1F.6 — In Live Preview, LMB-drag hijacks the canvas to drive
-    // ParamAngleX/Y/Z. The tick reads `lookRef.current.clientX/Y` each
-    // frame and pushes head-look values into paramValuesStore. Toggle
-    // off live preview to return to edit-mode picking.
-    if (editorRef.current.livePreviewActive && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    // GAP-010 — On the Live Preview surface, LMB-drag drives cursor look
+    // (writes ParamAngleX/Y/Z each frame). The plain Viewport never enters
+    // this path — its LMB starts vertex/part picking instead.
+    if (previewModeRef.current && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       lookRef.current = { active: true, clientX: e.clientX, clientY: e.clientY };
       canvas.setPointerCapture(e.pointerId);
       canvas.style.cursor = 'grab';
       isDirtyRef.current = true;
       return;
     }
+
+    // Live Preview surface — block any further pointer-down behaviour
+    // (no part picking, no mesh edit, no skeleton drag, no pivot edit).
+    // Only pan/zoom (handled above) and cursor look (handled above) run.
+    if (previewModeRef.current) return;
 
     const proj = projectRef.current;
 
@@ -2089,7 +2129,7 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: isMeshEditAllowed(editorState.meshEditMode, activeWorkspace) && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
+          cursor: !previewMode && isMeshEditAllowed(editorState.meshEditMode, activeWorkspace) && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}
@@ -2099,34 +2139,41 @@ export default function CanvasViewport({
         onMouseLeave={() => brushCircleRef.current?.setAttribute('visibility', 'hidden')}
       />
 
-      {/* Brush cursor circle — shown in deform edit mode, positioned via direct DOM updates */}
-      <svg className="absolute inset-0 w-full h-full pointer-events-none">
-        <circle
-          ref={brushCircleRef}
-          cx={0} cy={0}
-          r={editorState.brushSize}
-          fill="none"
-          stroke="white"
-          strokeWidth="1"
-          strokeDasharray="4 3"
-          visibility="hidden"
+      {/* Brush cursor circle — shown in deform edit mode, positioned via direct DOM updates. */}
+      {/* GAP-010 — suppressed on the Live Preview surface (no editing). */}
+      {!previewMode && (
+        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+          <circle
+            ref={brushCircleRef}
+            cx={0} cy={0}
+            r={editorState.brushSize}
+            fill="none"
+            stroke="white"
+            strokeWidth="1"
+            strokeDasharray="4 3"
+            visibility="hidden"
+          />
+        </svg>
+      )}
+
+      {/* Transform gizmo SVG overlay — hidden when skeleton is showing AND exists. */}
+      {/* GAP-010 — never on the Live Preview surface; preview is read-only. */}
+      {!previewMode && (!editorState.showSkeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
+
+      {/* Armature skeleton overlay (staging mode, when rig exists). */}
+      {/* GAP-010 — never on the Live Preview surface. */}
+      {!previewMode && (
+        <SkeletonOverlay
+          view={editorState.view}
+          editorMode={editorState.editorMode}
+          showSkeleton={editorState.showSkeleton}
+          skeletonEditMode={editorState.skeletonEditMode}
         />
-      </svg>
-
-      {/* Transform gizmo SVG overlay — hidden when skeleton is showing AND exists */}
-      {(!editorState.showSkeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
-
-      {/* Armature skeleton overlay (staging mode, when rig exists) */}
-      <SkeletonOverlay
-        view={editorState.view}
-        editorMode={editorState.editorMode}
-        showSkeleton={editorState.showSkeleton}
-        skeletonEditMode={editorState.skeletonEditMode}
-      />
+      )}
 
 
-      {/* Drop hint overlay */}
-      {project.nodes.length === 0 && (
+      {/* Drop hint overlay — edit Viewport only; Live Preview never invites uploads. */}
+      {!previewMode && project.nodes.length === 0 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
           <input
             type="file"
@@ -2199,8 +2246,10 @@ export default function CanvasViewport({
       )}
 
 
-      {/* PSD import wizard — step-by-step rigging setup */}
-      {wizardStep && wizardPsd && (
+      {/* PSD import wizard — step-by-step rigging setup. */}
+      {/* GAP-010 — wizard mounts only on the edit Viewport. Two parallel
+          wizards on two surfaces would race the same finalize state. */}
+      {!previewMode && wizardStep && wizardPsd && (
         <PsdImportWizard
           step={wizardStep}
           onSetStep={setWizardStep}

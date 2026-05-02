@@ -14,8 +14,8 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 | Status | Entries |
 |--------|---------|
-| ✅ Closed / Phase A shipped | GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-011, GAP-012, GAP-013, GAP-014 |
-| ⏳ Open | GAP-001 (See-Through wizard not v3-native), GAP-002 (Groups editor — possibly redundant with Outliner), GAP-010 (Live Preview as area tab) |
+| ✅ Closed / Phase A shipped | GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-010, GAP-011, GAP-012, GAP-013, GAP-014 |
+| ⏳ Open | GAP-001 (See-Through wizard not v3-native), GAP-002 (Groups editor — possibly redundant with Outliner), GAP-015 (Blender mesh-edit ergonomics — proportional editing + MMB-scroll radius) |
 
 Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
 
@@ -155,6 +155,55 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
+### GAP-015 — Blender mesh-edit ergonomics (proportional editing + MMB-scroll radius)
+
+- **Severity:** medium
+- **Reported:** 2026-05-02
+- **Affects:** Mesh edit workflow (Modeling / Rigging workspaces) — every time the user grabs a vertex and wants nearby vertices to follow
+
+**Direction (user, 2026-05-02):** straight port from Blender. Blender is installed locally so the source is on hand; the goal is to mirror Blender's proportional-editing UX byte-for-byte rather than reinvent the curves / falloff modes / hotkeys.
+
+**The headline feature:** **proportional editing.** In Blender mesh-edit, you grab a single vertex and nearby vertices follow with a falloff curve. You toggle it on/off with `O`; while a grab is in flight you scroll the **middle mouse button** to grow / shrink the influence radius live, with a visible circle showing the current reach. Several falloff curves (Smooth, Sphere, Root, Inverse Square, Sharp, Linear, Constant, Random) cycle through the same dropdown.
+
+**Current state in v3:**
+
+- Mesh-edit deform sub-mode already has a screen-space brush with cosine falloff (see [`brushWeight`](../src/components/canvas/viewport/helpers.js#L92)). But it's a paint-style tool — the user holds LMB and drags around painting deltas onto vertices under the brush. It is NOT vertex-grab + proportional follow — there's no concept of "drag this one vertex and let neighbours come along".
+- Single-vertex drag exists ([CanvasViewport pointer-down vertex picking](../src/components/canvas/CanvasViewport.jsx)), but it moves exactly one vertex with no influence on neighbours.
+- Brush radius is bound to `[` / `]` keys in `editorStore`. There is no MMB-scroll-during-drag hook.
+
+So we have *two halves* of what Blender ships as one workflow: a falloff function and a single-vertex drag. They're never composed.
+
+**What "native" should look like:**
+
+1. **`O` key toggles proportional-edit mode.** Persistent state on `editorStore` (e.g. `proportionalEdit: { enabled, radius, falloff }`). When on, single-vertex grab affects every vertex within `radius` (mesh-local distance, not screen-px) with a falloff curve weight. When off, single-vertex grab moves only the picked vertex (today's behaviour).
+2. **MMB-scroll during a grab adjusts `radius` live.** Wheel deltas while `dragRef.current` is active map to radius changes. The brush-cursor circle (already exists, see [CanvasViewport.jsx ~2105](../src/components/canvas/CanvasViewport.jsx)) gets repurposed to render the proportional-edit influence circle whenever a grab is in flight.
+3. **Falloff curves** — at least Smooth (Blender default cosine), Sphere, Root, Linear, Constant. Curve dropdown in a small Modeling-workspace toolbar, or just cycle with `Shift+O` like Blender.
+4. **Distance metric** — Blender measures distance in object-local mesh-space (not screen-px), so zooming doesn't change which vertices are influenced. Match that. Today the brush uses `worldRadius = brushSize / view.zoom` which is screen-px-stable but Blender's mesh-local distance is what users have muscle memory for.
+5. **Connected-only mode.** Blender lets you restrict influence to vertices reachable through edges from the grabbed vertex. Important when two flaps of mesh sit close in space but logically belong to different parts of the silhouette. Off by default; toggle with `Alt+O`.
+
+**Why a direct port (not a redesign):**
+
+Blender's proportional-editing UX has been refined for ~20 years; it's the muscle memory of every 3D artist who'll touch this tool. Reinventing curves or hotkeys would create a worse version of something already optimal. The user explicitly named "прямой порт" (direct port) and noted Blender is installed locally so the source is on hand for reference. Memory anchor: [`feedback_exact_port`](../README.md) — when the user names an upstream / reference codebase, port it byte-for-byte rather than pitch alternatives.
+
+**Implementation hooks:**
+
+- New `editorStore.proportionalEdit: { enabled: boolean, radius: number, falloff: 'smooth'|'sphere'|... , connectedOnly: boolean }`.
+- Vertex-drag site in [`CanvasViewport.jsx`](../src/components/canvas/CanvasViewport.jsx) currently moves `dragRef.current.vertexIndex` only. Wrap the single-vertex move into a "compute influenced vertices + per-vertex weight" helper; when `proportionalEdit.enabled` is on, this returns a list of `{vertexIndex, weight}` instead of a single index.
+- Mesh-local distance: walk `node.mesh.vertices`, compute Euclidean distance from grabbed vertex's local coords; multiply by uniform-scale guard so non-uniform-scaled meshes don't get squashed influence radii.
+- Connected-only: precompute adjacency from `node.mesh.indices` once at drag start (cheap); BFS from the grabbed vertex.
+- MMB-scroll-during-drag: extend the `onWheel` handler in CanvasViewport to detect `dragRef.current` and divert the wheel delta to `proportionalEdit.radius` instead of `view.zoom` when active.
+- Cursor circle: the existing `brushCircleRef` SVG element is already in the right place; reuse it to render the influence ring during grabs (drop the brush-mode coupling, just bind it to "drag in flight + proportional on").
+
+**Why it ranks where it does:** the user has been doing mesh edits without proportional editing the whole time the v3 shell has shipped, so this isn't unblocking critical work — but every artist who tries the tool will reach for `O` and not find it. Medium severity = real ergonomic gap, no correctness impact.
+
+**Doesn't block:** GAP-001 / GAP-002. Independent.
+
+**Notes:**
+- The existing screen-space deform brush stays — it's a different operation (paint many vertices over time vs. grab one and let neighbours follow). They coexist as separate tools, not one replacing the other.
+- Blender shows the falloff-curve menu as a small dropdown in the 3D-viewport header. v3's Topbar has space for a similar control when in Modeling/Rigging workspace; likely the right home.
+
+---
+
 ### GAP-002 — No dedicated "Groups" editor tab
 
 - **Severity:** low
@@ -255,39 +304,35 @@ Fixed `@/` aliased imports in [`exportSpine.js`](../src/io/exportSpine.js) → r
 
 ---
 
-### GAP-010 — Live Preview should be its own area tab, not a Viewport sub-mode
+### ✅ GAP-010 — Live Preview as its own area tab
 
-- **Severity:** medium
-- **Reported:** 2026-04-30
+- **Severity:** medium · **Reported:** 2026-04-30 · **Phase A SHIPPED:** 2026-05-02
 - **Affects:** Viewport workflow — separation between "edit a frame" and "watch the rig live"
 
-**Current state:** the Viewport area is a single canvas that toggles between two modes via a `livePreviewActive` flag (see [CanvasViewport.jsx:294](../src/components/canvas/CanvasViewport.jsx#L294)):
+**Phase A — fix.** New editor type [`livePreview`](../src/v3/editors/livePreview/LivePreviewEditor.jsx) registered in [editorRegistry.js](../src/v3/shell/editorRegistry.js). The editor mounts a `<CanvasViewport previewMode />` — a single boolean prop on the existing 2200-LOC canvas component that:
 
-- **Off (edit mode)** — params static at slider values, physics/breath/cursor-look paused. The user can scrub a parameter without it bouncing under live drivers.
-- **On (live preview)** — breath auto-cycles, cursor-look writes ParamAngleX/Y/Z while LMB held, physics integrate pendulum sway every tick.
+- Gates live drivers (physics + breath + cursor look) ON for the lifetime of this surface; closes them cleanly on unmount.
+- Suppresses every editing affordance: mesh edit, drag-to-pivot, gizmo, skeleton overlay, drop hint, brush cursor, K-keyframe + brush keyboard shortcuts, PSD wizard mount, file-routing onDrop. Pan/zoom and cursor look are the only pointer interactions.
+- Skips the imperative ref population (remesh / save / load / export capture / thumbnail capture) so the edit Viewport remains the canonical owner of those actions.
 
-The toggle lives inside ParametersEditor and snapshots/restores around the session. Both modes draw to the same canvas. Switching is the only way to see live preview, and you lose your edit context the moment you do.
+The plain Viewport editor mounts with `previewMode=false` and is now genuinely static — no physics, no breath, no cursor look, no `livePreviewActive` flag in `editorStore` anywhere. The previous toggle button in [`ParametersEditor`](../src/v3/editors/parameters/ParametersEditor.jsx) is gone; the snapshot/restore plumbing is deleted. Drivers are bound to the Live Preview component's mount lifetime, not a global flag.
 
-**What "native" should look like:** Live Preview as its own v3 editor type, mountable as an area tab next to the Viewport. Two canvases visible side-by-side:
+**Workspace defaults:** the [`AreaTree`](../src/v3/shell/AreaTree.jsx) gained a `centerRight` slot. When defined, the center column splits horizontally between `center` (edit Viewport) and `centerRight` (Live Preview surface). The `animation` and `pose` workspace presets ([`uiV3Store.js`](../src/store/uiV3Store.js)) include `centerRight: livePreview` so the user gets the side-by-side view by default. `layout`/`modeling`/`rigging` presets stay edit-only — no `centerRight` slot, so live drivers never auto-run while the user is structuring or rigging. The user can still swap any area's active tab to `livePreview` manually via the area-header dropdown to surface drivers in any workspace temporarily.
 
-- **Viewport** (left) — always edit mode. Static params, **NO live drivers AT ALL** (no physics, no breath cycle, no cursor-look). The canvas the user clicks/drags on to edit pivots, paint weights, scrub a single param. What you scrub is what you see.
-- **Live Preview** (right) — the **only** place physics + breath + cursor-look ever run. Pendulum sway, breath auto-cycle, cursor-look writes ParamAngleX/Y/Z while LMB held over THIS canvas. The user looks at it the way they'd look at Cubism Viewer: "is this the rig I want to ship?"
+Both surfaces share `rigSpec` and `paramValues`, so cursor-look on the right rotates the head in the left edit Viewport too — exactly how Cubism Editor + Viewer work side-by-side. autoSaveId bumped to `v3-ws-<wsKey>-h6` so users with stored sizes from the pre-`centerRight` shape don't get a half-collapsed center column.
 
-Hard rule: **physics is enabled ONLY in Live Preview**. Confirmed by user 2026-04-30. Removes the entire `livePreviewActive` toggle path; instead, the Live Preview component owns the physics/breath/cursor-look tick loop, the Viewport never touches it. If the Live Preview tab isn't open, no live drivers run anywhere.
+**Test coverage:** [`test:livePreviewWiring`](../scripts/test/test_livePreviewWiring.mjs) (15 cases) — workspace presets, removed `editorStore` triple, swap-via-tab escape hatch. [`test:uiV3Store`](../scripts/test/test_uiV3Store.mjs) extended to assert area counts (animation: 7, pose: 6) and the new `centerRight` tab structure.
 
-Both surfaces share the same `rigSpec` and `paramValues`, so dragging a slider in Parameters affects both — the difference is purely the additive overlay of live drivers on the Live Preview's render output. Slider edits the dial; Live Preview's drivers write further dial updates that the Viewport sees too (so a head-look in Live Preview also rotates the head in the Viewport — but only when the Live Preview tab is alive).
+**Phase B (deferred):** independent camera + zoom + pan per surface. Today both `<CanvasViewport>` instances read `editorStore.view`, so panning the edit Viewport also pans the preview. The fix is to lift `view` into per-instance scope (e.g. an instanceId-keyed sub-store) but the GAP-010 Phase A scope was "drivers run only here, edit Viewport is static" — independent framing is a UX polish step, not a correctness gap. Promoted only when a user surfaces it.
 
-**Implementation notes:**
-
-- New editor type `livePreview` registered in [editorRegistry.js](../src/v3/shell/editorRegistry.js).
-- Component is `<LivePreviewCanvas>` — its own surface, owns physics/breath/cursor-look tick loop. Camera + zoom + pan independent from the Viewport's. No drag-to-pivot, no paint, no gizmo.
-- The current `livePreviewActive` toggle in ParametersEditor goes away. Live drivers are now bound to **mount/unmount of the Live Preview component** — opening the tab starts the rAF loop, closing it stops cleanly.
-- The existing CanvasViewport must be stripped of every live-driver code path: lines 326-416 (the `livePreview` block in `tick()`), the breath phase ref, the lookRef cursor handlers, the `tickPhysics` integration. All move into LivePreviewCanvas. After this, opening the Viewport alone is genuinely static — no breath cycle, no cursor tracking, no physics. (This is also fixes a long-standing minor bug: the Viewport currently respects livePreviewActive but is also where pose drag interactions happen, so the user can drag a bone while breath is also running and see fight between physics and pose.)
-- Default workspace shape: add a Live Preview area to the center column or as a third column on the right. "Pose" / "Animation" presets show it by default; "Modeling" / "Rigging" presets keep it hidden (no physics noise during rig editing).
-
-**Why it's worth doing:** matches how every other rigging tool with both an "editing surface" and a "preview surface" works (Spine 4.x, Live2D Cubism Editor → Viewer split, Maya rigging vs playback). Removes the cognitive cost of toggling. Lets users keep an editing context while watching the rig breathe.
-
-**Notes:** depends on multi-canvas WebGL handling — currently CanvasViewport assumes one canvas per process. Either we mount two `<canvas>` and accept the GL-context cost, or share a single hidden compositor and re-render the same scene to two visible surfaces. Decide at implementation time. Doesn't block — it's a UX win, not a pipeline-correctness fix.
+**Files touched (Phase A):**
+- New [src/v3/editors/livePreview/LivePreviewEditor.jsx](../src/v3/editors/livePreview/LivePreviewEditor.jsx)
+- [src/components/canvas/CanvasViewport.jsx](../src/components/canvas/CanvasViewport.jsx) — `previewMode` prop + every gate site
+- [src/v3/shell/editorRegistry.js](../src/v3/shell/editorRegistry.js) — register `livePreview`
+- [src/v3/shell/AreaTree.jsx](../src/v3/shell/AreaTree.jsx) — center column horizontal split for `centerRight`
+- [src/store/uiV3Store.js](../src/store/uiV3Store.js) — `EditorType` union extended; `ANIMATION_AREAS` + new `POSE_AREAS` include `centerRight: livePreview`
+- [src/store/editorStore.js](../src/store/editorStore.js) — removed `livePreviewActive` / `setLivePreviewActive` / `editParamSnapshot`
+- [src/v3/editors/parameters/ParametersEditor.jsx](../src/v3/editors/parameters/ParametersEditor.jsx) — removed Play/Pause toggle
 
 ---
 

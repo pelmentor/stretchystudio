@@ -80,7 +80,7 @@ pnpm dev          # Vite dev server, http://localhost:5173
 ```
 
 ```bash
-pnpm test         # full unit-test suite (2800+ cases across 67 files) + tsc --noEmit
+pnpm test         # full unit-test suite (2800+ cases across 68 files) + tsc --noEmit
 pnpm typecheck    # tsc --noEmit only
 ```
 
@@ -100,8 +100,9 @@ src/
 ├── App.jsx                 # mounts <AppShell />
 ├── v3/
 │   ├── shell/              # Topbar, AreaTree, modals, StaleRigBanner, ExportModal
-│   ├── editors/            # area editors: viewport, outliner, properties,
-│   │                       #   parameters, timeline, dopesheet, fcurve, logs, …
+│   ├── editors/            # area editors: viewport, livePreview, outliner,
+│   │                       #   properties, parameters, timeline, dopesheet,
+│   │                       #   fcurve, logs, …
 │   ├── operators/          # commands (file.save, app.undo, …) — keyboard + UI hooks
 │   ├── keymap/             # default keybindings
 │   └── templates/          # workspace layout presets (5 default workspaces)
