@@ -185,6 +185,13 @@ The IDA disassembly was misread. The actual Cubism `RotationDeformer_TransformTa
 2. Verify the kernel via Cubism Web SDK oracle (Phase 0 harness in `scripts/cubism_oracle/`) — feed a single rotation deformer through `csmGetDrawableVertexPositions` at θ=0 and θ=±30°; compare to the JS port's output. THIS is the canonical pass criterion, not unit tests against the supposed disassembly formula.
 3. Mathematical sanity: any candidate kernel MUST reduce to identity at θ=0 with default scale=1, no reflect, origin=0.
 
+**Pre-Phase 2a-redo data shipped 2026-05-02:** [`scripts/cubism_oracle/analyze_param_sensitivity.py`](../../scripts/cubism_oracle/analyze_param_sensitivity.py) computes per-drawable max + mean displacement vs the rest baseline, across all 21 pinned shelby snapshots. First-run output reveals:
+
+- `ParamBodyAngleZ` produces ~30 px displacements with `mean ≈ max` for top movers — **rigid rotation pattern** (all verts in the chain move ~uniformly around a far pivot). That's a clean signal of the rotation kernel's contribution.
+- `ParamBodyAngleX` has `mean << max` (e.g. ArtMesh14: mean=6.15, max=21.03) — **warp pattern** (per-vertex displacement varies by grid position). That's the warp-deformer kernel + chain composition combined.
+
+So when Phase 2a redo arrives, the verification target for the rotation kernel formula has hard numbers to hit (per-drawable per-param expected displacements within float32 noise of the Cubism oracle).
+
 **Phase 2b — Finite-difference Jacobian Setup port — ⏳ Blocked on Phase 2a redo.**
 
 The `_warpSlopeX/Y = canvasToInnermostX/Y` slope approximation in chainEval still drives warp-parented rotation deformers' parent-frame conversion. Cubism actually does finite-difference Jacobian probing of the parent eval (2-3 parent.eval calls per rotation deformer per frame, 10-iteration retry with shrinking δ on degenerate cases — see Phase 0 RE at line 430-454).

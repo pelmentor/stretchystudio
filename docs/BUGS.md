@@ -16,9 +16,9 @@ Each entry is short and self-contained — anyone reading should be able to pick
 
 | Status | Entries |
 |--------|---------|
-| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002, BUG-006, BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy) |
-| 🔬 Instrumented (awaiting repro) | BUG-005 |
-| ⏳ Open | BUG-003 (Phase 2a reverted on math grounds, pending re-RE), BUG-004, BUG-007, BUG-008, BUG-009, BUG-010 |
+| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy) |
+| 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider) |
+| ⏳ Open | BUG-003 (Phase 2a reverted on math grounds, pending re-RE) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 
@@ -191,38 +191,25 @@ After the revert, BUG-003's original symptom (body angle / face angle don't matc
 
 ---
 
-### BUG-004 — Initialize Rig leaves visual mesh and armature out of sync
+### ✅ BUG-004 — Initialize Rig leaves visual mesh and armature out of sync
 
-- **Severity:** high
-- **Reported:** 2026-04-30
+- **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** Pose workflow → re-rig handoff
 
-**Repro:**
+**Root cause (one-line):** [`RigService.initializeRig`](../src/services/RigService.js) didn't reset transient pose state before harvesting. After the harvest, evalRig produced rest-pose verts (because `buildMeshesForRig` reads `mesh.vertices.restX/restY` — pose-independent), but `node.transform` still carried the user's bone-controller rotations from before Init Rig. Skeleton overlay reads `node.transform.rotation` directly, so armature stayed posed while the rendered mesh snapped to rest.
 
-1. Import a character (e.g. `shelby_neutral_ok.psd`)
-2. Pose the character — drag bones, set `ParamAngleX`, etc. so the visible character is in a non-rest pose
-3. Click "Initialize Rig" (or whichever operator runs the rig builder again)
-4. Observe: **visual mesh parts snap back to rest pose**, but the **armature / skeleton overlay stays in the posed transform**
+**Fix (2026-05-02):** Init Rig is structurally a "rebuild from rest" operation. `RigService.initializeRig` now calls [`resetToRestPose()`](../src/services/PoseService.js) before harvesting:
 
-End state: armature shows posed bones (rotated joints, moved pivots) over a mesh that's drawn at rest. Two views of the same project disagree.
+- `animationStore.draftPose` cleared
+- `paramValuesStore.values` reset to canonical defaults (eyes-open etc.)
+- Every group with a `boneRole` has `transform.{rotation, x, y, scaleX, scaleY}` zeroed (`pivotX/pivotY` preserved — those define WHERE the bone is, not the pose)
+- Per-part transforms (non-bone) are intentionally NOT reset — those are user layout (e.g. a hat positioned via Outliner), not pose
 
-**Suspects (not verified):**
+Sister bugs **BUG-008** + **BUG-010** share this root cause and same fix.
 
-1. Initialize-Rig operator only resets one of the two pipelines:
-   - **Visual side** — re-runs mesh sampling / weights / draw-buffer regen → falls back to rest-pose verts
-   - **Armature side** — keeps current `ParamAngleX/Y/Z` + rotation deformer values intact because they live in `paramValuesStore` / pose draft, not in the rig spec
-2. Or vice-versa: the armature's bone-pivot positions get re-derived from current rig spec while mesh draw uses cached rest verts.
-3. Possibly the operator should call `captureRestPose` / clear pose draft / reset `paramValues` before rebuilding.
+**Files touched:** [`src/services/PoseService.js`](../src/services/PoseService.js) (new shared module), [`src/services/RigService.js`](../src/services/RigService.js) (call resetToRestPose before harvest), [`src/v3/shell/Topbar.jsx`](../src/v3/shell/Topbar.jsx) (Reset Pose button now calls the same shared module).
 
-**Next steps:**
-
-1. Find the "Initialize Rig" operator — likely in `src/v3/operators/registry.js` or a rig-builder action.
-2. Trace what it touches: project nodes, rigSpec, paramValues, animation draft pose, skeletonOverlay state.
-3. Confirm whether the desync is "mesh resets, armature doesn't" or "mesh stays posed, armature resets to rest" — user reports the former, but verify in the actual code path.
-
-**What "fixed" looks like:** after Initialize Rig, the visible character + armature both show the same pose (most natural: both reset to rest, since rig-init implies "rebuild from scratch"). The user can then re-pose if they want.
-
-**Notes:** Related to GAP-006 (no reset-to-rest button) — if the user had a one-click way to clear the pose before clicking Initialize Rig, this desync would never appear in practice. But the underlying bug is still real and should be fixed at the operator level, not papered over with UI.
+**Tests:** [`test:poseService`](../scripts/test/test_poseService.mjs) — 26 cases covering bone-group reset semantics, pivot preservation, paramValues reset, draftPose clear, no-op + edge cases.
 
 ---
 
@@ -259,65 +246,25 @@ End state: armature shows posed bones (rotated joints, moved pivots) over a mesh
 
 ---
 
-### BUG-008 — Bone-move + Initialize Rig leaves the moved layer visually frozen (no param can move it)
+### ✅ BUG-008 — Bone-move + Initialize Rig leaves the moved layer visually frozen (sister to BUG-004)
 
-- **Severity:** high
-- **Reported:** 2026-04-30
-- **Affects:** Pose → re-rig handoff (sister bug to BUG-004)
+- **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
+- **Affects:** Pose → re-rig handoff
 
-**Repro:**
+**Root cause (one-line):** Same as [BUG-004](#-bug-004--initialize-rig-leaves-visual-mesh-and-armature-out-of-sync). With a bone rotated when Init Rig fired, the rig was harvested while `node.transform.rotation` carried the rotation. The harvested chain's keyforms were derived from rest geometry (good), but the renderer composes `evalRig output × world matrix(node.transform)`. Since `node.transform.rotation ≠ 0`, the rig-driven verts emerged from evalRig at rest but rendered through a rotation matrix → "stuck at the bone's pre-Init-Rig pose, no parameter can move it".
 
-1. Import a character (e.g. `shelby_neutral_ok.psd`)
-2. Drag a single bone — the layer attached to that bone visibly moves
-3. Click **Initialize Rig**
-4. Try to move that same layer via any parameter (`ParamAngleX`, `ParamBodyAngleX`, anything that should drive it)
-5. Observe: **the layer is completely frozen** — no parameter affects it visually
-
-End state: the layer stays painted at whatever pose it was in when Init Rig fired, regardless of param values. Other (non-bone-moved) layers still respond to params normally.
-
-**Suspects (not verified):**
-
-1. **Bone transform got baked into rest verts on Init Rig**, but the param→deformer rigging that should drive the layer was rebuilt without that layer in any chain. So the rest pose absorbs the displacement and the layer is no longer wired to any deformer.
-2. **Re-init wiped the layer's `boneWeights` / `parentDeformerGuidRef`** — Initialize Rig may iterate only over layers it auto-recognises and skip layers it considers "user-modified". The skipped layer ends up rigless.
-3. **Pose draft + rest pose merged in the wrong direction** — the bone move was committed into the project as if it were a rest-pose edit, then Init Rig captured that as the new rest, but the deformer chain regenerator emitted a chain from the OLD layer positions. Mismatch → layer stuck at its mid-pose location with no driver.
-
-**Next steps:**
-
-1. Find the Initialize Rig operator (same code path as BUG-004 — likely `src/v3/operators/registry.js` or a rig builder action). Trace what happens to a layer's `boneWeights`, `parentDeformerGuidRef`, and rest verts when the operator runs after a bone-move.
-2. Repro on shelby_neutral_ok.psd, pick a single bone (e.g. left arm), move it 50px, click Init Rig, then attempt every param. Confirm the layer is fully unrigged vs. partially rigged.
-3. Same instrumentation pattern as BUG-002: route Init Rig's per-layer decisions through `lib/logger.js` (source: `'rigInit'`) — log which layers are kept vs rebuilt vs orphaned. Then we'll see in the panel exactly what happened to the frozen layer.
-
-**Notes:** This is a strict superset of BUG-004 — that one is "armature shows posed, mesh resets to rest"; this one is "after Init Rig, the visual is forever stuck". Both tell us the rig-init operator is not idempotent over the pose-state pair (rest verts, current pose). Fix should make Init Rig a clean reset: clear pose draft → rebuild rig from rest verts → all layers wired to their auto-detected deformer chain.
+**Fix:** Same as BUG-004 — `RigService.initializeRig` calls [`resetToRestPose()`](../src/services/PoseService.js) before harvesting. The bone-group transform is zeroed before the rig builder ever sees it; the layer is wired to a clean chain that responds normally to params.
 
 ---
 
-### BUG-010 — Iris Offset controller becomes useless after Init Rig (drives nothing)
+### ✅ BUG-010 — Iris Offset controller becomes useless after Init Rig (sister to BUG-004 / BUG-008)
 
-- **Severity:** high
-- **Reported:** 2026-04-30
+- **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** Properties / Parameters → Iris Offset 2D pad
 
-**Repro:**
+**Root cause (one-line):** Same as [BUG-004](#-bug-004--initialize-rig-leaves-visual-mesh-and-armature-out-of-sync) / [BUG-008](#-bug-008--bone-move--initialize-rig-leaves-the-moved-layer-visually-frozen-sister-to-bug-004). Iris Offset writes to `ParamEyeBallX/Y`. When Init Rig was clicked while those params already had non-default values (the user had been dragging the pad before Init Rig), the iris RotationDeformer's keyforms were derived against the iris's CURRENT (offset) positions. After Init Rig, the controller wrote ParamEyeBallX → 0 (default after reseed) but the rig's rest position WAS the offset → no visible motion.
 
-1. Import `shelby_neutral_ok.psd`, run the wizard
-2. **Before** clicking Initialize Rig: drag the Iris Offset pad — irises move, pupils track. Working as expected.
-3. Click **Initialize Rig**
-4. **After** Init Rig: drag the Iris Offset pad — irises don't move at all. The controller is dead.
-
-**Suspects (not verified):**
-
-1. **Init Rig overwrites the iris rig with a regenerated chain that doesn't bind to `ParamEyeBallX/Y`** (the params Iris Offset writes to). Heuristic rebuild may produce a different deformer chain than the wizard's iris-rotation deformer, and the new chain isn't wired to the same params.
-2. **The iris RotationDeformer's keyforms get wiped during seeding.** `seedAllRig` may pass a fresh rigSpec where the iris deformer exists structurally but with empty keyforms, so the pad's writes have no effect.
-3. **Param ID mismatch after reseeding.** Iris Offset controller writes to `ParamEyeBallX`; init-rig may emit `ParamEyeBallX2` or an alternate ID, leaving the controller writing into a phantom param.
-
-**Next steps:**
-
-1. Repro on shelby_neutral_ok.psd. After Init Rig, check `useParamValuesStore.values` keys before/after — does `ParamEyeBallX` exist? Has the value been written when the user drags the pad?
-2. Check the harvest in `initializeRigFromProject` — is the iris RotationDeformer present in `rigSpec.rotationDeformers`? Are its keyforms populated?
-3. Compare `project.rigWarps` / `project.rotationDeformers` snapshot before vs after Init Rig — the seeder may be replacing a working deformer with a broken one.
-4. Same instrumentation pattern: log iris-deformer harvest results through `lib/logger.js` (source: `'rigInit'`) to see in the panel exactly what changed.
-
-**Notes:** Sister to BUG-008 (frozen layer after bone-move + Init Rig). Both fit the pattern "Init Rig clobbers something the user just had working." Suggests the rebuild path is destructive rather than additive — fix likely needs to either preserve user-customised deformers or rebuild ALL deformers from a known-good template (not partial overwrite).
+**Fix:** Same as BUG-004 — `RigService.initializeRig` calls [`resetToRestPose()`](../src/services/PoseService.js) before harvesting. paramValues snap to defaults FIRST, then the rig builder sees iris meshes at their genuine rest positions, and the harvested keyforms drive movement correctly across the param's range.
 
 ---
 

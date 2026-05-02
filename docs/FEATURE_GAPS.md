@@ -14,8 +14,8 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 | Status | Entries |
 |--------|---------|
-| ✅ Closed / Phase A shipped | GAP-003, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-011, GAP-012, GAP-013, GAP-014 |
-| ⏳ Open | GAP-001, GAP-002, GAP-004, GAP-010 |
+| ✅ Closed / Phase A shipped | GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008, GAP-009, GAP-011, GAP-012, GAP-013, GAP-014 |
+| ⏳ Open | GAP-001 (See-Through wizard not v3-native), GAP-002 (Groups editor — possibly redundant with Outliner), GAP-010 (Live Preview as area tab) |
 
 Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
 
@@ -379,26 +379,18 @@ User toggles before clicking Init Rig; unchecked subsystems are skipped entirely
 
 ---
 
-### GAP-004 — Audio + Spine export reachability through v3 needs verification
+### ✅ GAP-004 — Audio + Spine export reachability through v3 (verified)
 
-- **Severity:** low
-- **Reported:** 2026-04-30
+- **Severity:** low · **Reported:** 2026-04-30 · **Verified:** 2026-05-02
 - **Affects:** Feature completeness through v3 shell
 
-**Current state:** Both features are implemented:
+**Audit result: both features ARE surfaced through v3.**
 
-- Audio tracks — `src/v3/editors/timeline/TimelineEditor.jsx` has full `useAudioSync()` + `AudioTrackRow` + `AudioTrackModal`
-- Spine 4.0 export — `src/io/exportSpine.js:exportToSpine()`
+- **Spine 4.0 export.** [`src/v3/shell/ExportModal.jsx:70-72`](../src/v3/shell/ExportModal.jsx#L70) lists Spine as the fourth format option (Bone icon, blurb "Skeleton JSON + per-part PNGs zip for Spine runtimes"). `ExportService.runExport(format='spine')` calls `exportToSpine({project, onProgress})` which produces `<modelName>_spine.zip` (skeleton.json + per-part PNGs). Restored as part of GAP-005 Phase A on 2026-05-02.
 
-But it's not confirmed both are surfaced through v3's UI in their final form. Spine export specifically: does the v3 ExportModal expose the Spine pathway, or only the Live2D `.cmo3` pathway?
+- **Audio tracks.** [`src/v3/editors/timeline/TimelineEditor.jsx:1453-1479`](../src/v3/editors/timeline/TimelineEditor.jsx#L1453) has an "Add Audio Track" button (Music icon) in the timeline transport. Clicking prompts for a name, creates an `audioTracks[]` entry on the active animation, and renders an [`AudioTrackRow`](../src/v3/editors/timeline/TimelineEditor.jsx#L411) for upload. [`AudioTrackModal`](../src/v3/editors/timeline/TimelineEditor.jsx#L228) handles per-track edits (start/end ms, timeline placement). Web Audio playback sync via [`useAudioSync`](../src/v3/editors/timeline/TimelineEditor.jsx#L128) keeps the buffer aligned to the playhead; loop restart hooks into `animationStore.loopCount`.
 
-**What to do:** Manual smoke-test in browser:
-1. Open `src/v3/shell/ExportModal.jsx` — does it list Spine as an output target?
-2. Drop an audio file onto the Animation timeline — does the v3 timeline accept it?
-
-Not a fix yet; an audit task.
-
-**Notes:** Promote to a real GAP entry only if smoke-test reveals a missing surface.
+No new gap to file. The GAP-004 smoke-test list cleared.
 
 ---
 

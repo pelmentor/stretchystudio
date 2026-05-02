@@ -42,11 +42,11 @@ import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useAnimationStore } from '../../store/animationStore.js';
-import { useParamValuesStore } from '../../store/paramValuesStore.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { logger } from '../../lib/logger.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
+import { resetPoseDraft, resetToRestPose } from '../../services/PoseService.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
@@ -79,8 +79,6 @@ export function Topbar() {
   const activeWorkspace  = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace     = useUIV3Store((s) => s.setWorkspace);
   const captureRestPose  = useAnimationStore((s) => s.captureRestPose);
-  const clearDraftPose   = useAnimationStore((s) => s.clearDraftPose);
-  const resetParamValues = useParamValuesStore((s) => s.resetToDefaults);
   const hotReloadStatus  = useAssetHotReloadStore((s) => s.status);
 
   const [confirmNew, setConfirmNew] = useState(false);
@@ -133,54 +131,18 @@ export function Topbar() {
   }
 
   /**
-   * GAP-006 — Reset to Rest Pose. Visible in EVERY workspace.
+   * GAP-006 — Reset to Rest Pose. Visible in EVERY workspace. Behaviour
+   * depends on mode (see PoseService.js for the canonical semantics):
    *
-   * Mental model: "put the character back to the rest position". The
-   * concrete mutations depend on which mode the user is in, because
-   * different workspaces persist transforms differently:
-   *
-   *   - **Animation mode** (Pose / Animation workspace): bone-controller
-   *     drags write to `animationStore.draftPose` (transient overlay).
-   *     Reset clears the draft + zeros paramValues. Committed timeline
-   *     keyframes survive — `node.transform` itself stays untouched.
-   *
-   *   - **Staging mode** (Layout / Modeling / Rigging): bone-controller
-   *     drags write straight to `node.transform.rotation` in
-   *     `projectStore` — there's no transient overlay. Reset zeros
-   *     `transform.rotation` (and clears any drag-introduced translate /
-   *     scale on bone groups) for every node tagged with a `boneRole`.
-   *     Non-bone nodes' transforms are NOT reset — those are the user's
-   *     intentional layout (per-part position / scale set in the
-   *     Outliner or PSD-derived). Per-node Reset Transform in
-   *     Properties is the right tool for those.
-   *
-   *   - Always: paramValues reset to defaults (so e.g. ParamRotation_X
-   *     baked-bone outputs go back to 0 before any next frame's eval).
+   *   - Animation mode → `resetPoseDraft()` (clear draftPose + paramValues)
+   *   - Staging mode    → `resetToRestPose()` (above + bone-group transforms)
    *
    * Distinct from GAP-014's per-node Reset Transform which resets ONE
    * arbitrary node's transform.
    */
   function handleResetRestPose() {
-    clearDraftPose();
-    resetParamValues(project?.parameters ?? []);
-    // Staging-mode: bone-controller drags persist in node.transform.
-    // Reset every bone-tagged group's transform to identity. Goes
-    // through updateProject so the action is undoable.
-    if (editorMode !== 'animation') {
-      useProjectStore.getState().updateProject((proj) => {
-        for (const n of proj.nodes ?? []) {
-          if (n?.type !== 'group' || !n.boneRole) continue;
-          if (!n.transform) continue;
-          // Preserve pivotX/pivotY — those define WHERE the bone is, not
-          // the user's pose. Resetting pivot would warp the rig.
-          n.transform.rotation = 0;
-          n.transform.x = 0;
-          n.transform.y = 0;
-          n.transform.scaleX = 1;
-          n.transform.scaleY = 1;
-        }
-      });
-    }
+    if (editorMode === 'animation') resetPoseDraft();
+    else resetToRestPose();
     logger.debug('resetPose', `Reset Pose triggered (mode=${editorMode})`, {
       editorMode,
       paramsReset: project?.parameters?.length ?? 0,

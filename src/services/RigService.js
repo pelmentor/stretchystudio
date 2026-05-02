@@ -26,6 +26,7 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
+import { resetToRestPose } from './PoseService.js';
 
 /**
  * @typedef {Object} BuildRigResult
@@ -112,6 +113,26 @@ export async function initializeRig() {
     return { ok: false, error: pre.reasons.join('; '), rigSpec: null };
   }
   try {
+    // BUG-004 / BUG-008 / BUG-010 — Init Rig is structurally a "rebuild
+    // from rest pose" operation. Reset transient pose state BEFORE
+    // harvesting so:
+    //   - Bone groups have rotation=0 → skeleton overlay matches the
+    //     rig's evalRig output (no armature-vs-mesh desync, BUG-004)
+    //   - The rig builder sees pristine bone pivot positions instead
+    //     of pivots offset by uncommitted bone-controller drags
+    //     (BUG-008: layer "frozen" because rest verts absorbed the
+    //     drag offset and the new chain doesn't have a deformer that
+    //     drives it back)
+    //   - Iris-related deformer keyforms are derived from rest iris
+    //     positions, not whatever pose the user had when they clicked
+    //     Init Rig (BUG-010: iris controller dies because new keyforms
+    //     diverge from the controller's expected param→position map)
+    //
+    // Pose reset = clear draftPose + reset paramValues + zero every
+    // bone-tagged group's transform (preserving pivots). Per-part
+    // transforms (non-bone) are intentionally preserved — those are
+    // user layout, not pose. See `services/PoseService.js`.
+    resetToRestPose();
     const project = useProjectStore.getState().project;
     // Load textures so eye-source meshes get real PNG bytes for the
     // closure parabola fit. Failure here is non-fatal — rig init still
