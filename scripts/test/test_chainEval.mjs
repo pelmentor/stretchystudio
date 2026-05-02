@@ -167,26 +167,21 @@ const f64 = (xs) => new Float64Array(xs);
       drawOrder: 500,
     }],
   };
-  // Cubism Warp Port Phase 2a — rotation kernel matches the DLL, not v3's
-  // textbook rotation. At A=0, the Cubism kernel is NOT the identity:
-  //   out.x = px·(-sin·s·ry) + py·(cos·s·rx) + ox
-  //         = 10·0 + 0·1 + 100 = 100
-  //   out.y = px·(cos·s·ry) + py·(sin·s·rx) + oy
-  //         = 10·1 + 0·0 + 100 = 110
-  // So Cubism's "rotation deformer at θ=0" is structurally a 90° rotation
-  // relative to the textbook identity. Cubism Editor accounts for this when
-  // authoring keyforms; the kernel reads them as-is. See cubismRotationEval.js.
+  // Textbook rotation: at A=0, the matrix is identity around origin →
+  // the point (10,0) just translates by origin (100,100) → (110, 100).
+  // (Phase 2a Cubism-kernel port reverted 2026-05-02; it sent meshes off-
+  // screen at neutral angles. BUG-003 re-opened pending re-RE pass.)
   let frame = evalRig(rigSpec, { A: 0 })[0];
-  assert(arrEq(frame.vertexPositions, [100, 110]),
-    'rotation 0°: Cubism kernel (10,0)→(100,110) not v3 (110,100)');
-  // A=90: sin=1, cos=0 → out.x = -10+100 = 90, out.y = 0+100 = 100
+  assert(arrEq(frame.vertexPositions, [110, 100]),
+    'rotation 0°: textbook identity → (10,0) + (100,100) = (110, 100)');
+  // A=90: sin=1, cos=0 → R·(10,0) = (0, 10) → +(100,100) = (100, 110)
   frame = evalRig(rigSpec, { A: 90 })[0];
-  assert(arrEq(frame.vertexPositions, [90, 100], 1e-5),
-    'rotation 90°: Cubism kernel (10,0)→(90,100)');
-  // A=-90: sin=-1, cos=0 → out.x = 10+100 = 110, out.y = 0+100 = 100
+  assert(arrEq(frame.vertexPositions, [100, 110], 1e-5),
+    'rotation 90°: (10,0) → (0, 10) + (100,100)');
+  // A=-90: sin=-1, cos=0 → R·(10,0) = (0, -10) → +(100,100) = (100, 90)
   frame = evalRig(rigSpec, { A: -90 })[0];
-  assert(arrEq(frame.vertexPositions, [110, 100], 1e-5),
-    'rotation -90°: Cubism kernel (10,0)→(110,100)');
+  assert(arrEq(frame.vertexPositions, [100, 90], 1e-5),
+    'rotation -90°: (10,0) → (0, -10) + (100,100)');
 }
 
 // ── Multiple meshes share a parent (cache verification) ──
@@ -296,15 +291,13 @@ const f64 = (xs) => new Float64Array(xs);
   };
   const frame = evalRig(rigSpec, {})[0];
   // Step 1: artMesh positions = (10, 0) [pivot-relative canvas-px]
-  // Step 2: R at angle=0 with parent=warp → Cubism kernel + extraSx/Sy=0.01:
-  //   m[0]=-sin·s·ry·sx=0, m[1]=cos·s·rx·sx=0.01, m[2]=ox=0.5
-  //   m[3]=cos·s·ry·sy=0.01, m[4]=sin·s·rx·sy=0, m[5]=oy=0.5
-  //   (10, 0) → (0·10 + 0.01·0 + 0.5, 0.01·10 + 0·0 + 0.5) = (0.5, 0.6) [normalized]
-  // Step 3: bilinearFFD(restGrid, 1×1, 0.5, 0.6) → (50, 60) canvas-px
-  // Note: pre-port v3 produced (60, 50); the swap reflects Cubism's kernel
-  // applying the rotation as a 90°-offset textbook rotation (BUG-003 root).
-  assert(arrEq(frame.vertexPositions, [50, 60], 1e-5),
-    'two-deep chain: rotation→warp with Cubism kernel');
+  // Step 2: R at angle=0 with parent=warp → textbook + extraSx/Sy=0.01:
+  //   m[0]=cs·s·rx·sx=0.01, m[1]=-sn·s·ry·sx=0, m[2]=ox=0.5
+  //   m[3]=sn·s·rx·sy=0,    m[4]=cs·s·ry·sy=0.01, m[5]=oy=0.5
+  //   (10, 0) → (0.01·10 + 0·0 + 0.5, 0·10 + 0.01·0 + 0.5) = (0.6, 0.5)
+  // Step 3: bilinearFFD(restGrid, 1×1, 0.6, 0.5) → (60, 50) canvas-px
+  assert(arrEq(frame.vertexPositions, [60, 50], 1e-5),
+    'two-deep chain: rotation→warp scale converts canvas-px → normalized');
 }
 
 // ── Regression: rotation under warp WITHOUT canvasMaxDim scaling = wrong ──
@@ -350,16 +343,14 @@ const f64 = (xs) => new Float64Array(xs);
   };
   const frame = evalRig(rigSpec, {})[0];
   // Step 1: (100, -50) pivot-relative-px
-  // Step 2: Cubism kernel + scale 0.001 (extraSx/Sy):
-  //   m[0]=0, m[1]=0.001, m[2]=0.4
-  //   m[3]=0.001, m[4]=0, m[5]=0.4
-  //   (100, -50) → (0·100 + 0.001·(-50) + 0.4, 0.001·100 + 0·(-50) + 0.4)
-  //              = (0.35, 0.5) [normalized]
-  // Step 3: bilinearFFD on 1000-px restGrid at (0.35, 0.5) → (350, 500)
-  // Pre-port produced (500, 350); the swap is the Cubism kernel's
-  // structural 90° offset.
-  assert(arrEq(frame.vertexPositions, [350, 500], 1e-3),
-    'regression: rotation→warp scale converts canvas-px → normalized (Cubism kernel)');
+  // Step 2: textbook kernel + scale 0.001 (extraSx/Sy):
+  //   m[0]=0.001, m[1]=0,     m[2]=0.4
+  //   m[3]=0,     m[4]=0.001, m[5]=0.4
+  //   (100, -50) → (0.001·100 + 0·(-50) + 0.4, 0·100 + 0.001·(-50) + 0.4)
+  //              = (0.5, 0.35) [normalized]
+  // Step 3: bilinearFFD on 1000-px restGrid at (0.5, 0.35) → (500, 350)
+  assert(arrEq(frame.vertexPositions, [500, 350], 1e-3),
+    'regression: rotation→warp scale converts canvas-px → normalized');
 }
 
 // ── No canvas in spec: fallback scale=1 (legacy behavior preserved) ──
@@ -394,13 +385,13 @@ const f64 = (xs) => new Float64Array(xs);
     }],
   };
   const frame = evalRig(rigSpec, {})[0];
-  // canvasMaxDim falls back to 1 → scale 1 → input passes through Cubism
+  // canvasMaxDim falls back to 1 → scale 1 → input passes through textbook
   // kernel directly. At angle=0:
-  //   out.x = 0.1·0 + 0·1 + 0.5 = 0.5
-  //   out.y = 0.1·1 + 0·0 + 0.5 = 0.6
-  // bilinearFFD at (0.5, 0.6) → (50, 60). Pre-port produced (60, 50).
-  assert(arrEq(frame.vertexPositions, [50, 60], 1e-5),
-    'no-canvas fallback: scale=1 (Cubism kernel)');
+  //   out.x = 0.1·1 + 0·0 + 0.5 = 0.6
+  //   out.y = 0.1·0 + 0·1 + 0.5 = 0.5
+  // bilinearFFD at (0.6, 0.5) → (60, 50).
+  assert(arrEq(frame.vertexPositions, [60, 50], 1e-5),
+    'no-canvas fallback: scale=1 (textbook identity at θ=0)');
 }
 
 // ── Output is fresh Float32Array (no aliasing of keyform buffer) ──

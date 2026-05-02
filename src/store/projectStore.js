@@ -54,7 +54,7 @@ export const DEFAULT_TRANSFORM = () => ({
 });
 
 // Project store (The .stretch model, undoable)
-export const useProjectStore = create((set) => {
+export const useProjectStore = create((set, get) => {
   // Helper that lifts a `(project, ...args) => void` mutator function
   // into a zustand action with the standard ritual:
   //   1. Snapshot the pre-mutation project for undo (unless mid-batch).

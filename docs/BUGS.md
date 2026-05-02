@@ -16,9 +16,9 @@ Each entry is short and self-contained — anyone reading should be able to pick
 
 | Status | Entries |
 |--------|---------|
-| ✅ Fixed / Superseded | BUG-002, BUG-003, BUG-006 |
-| 🔬 Instrumented (awaiting repro) | BUG-001, BUG-005 |
-| ⏳ Open | BUG-004, BUG-007, BUG-008, BUG-009, BUG-010 |
+| ✅ Fixed / Superseded | BUG-001 (tab-switch remount, log-confirmed + fixed), BUG-002, BUG-006, BUG-011 (seedAllRig get-throw, root cause of "params don't drive") |
+| 🔬 Instrumented (awaiting repro) | BUG-005 |
+| ⏳ Open | BUG-003 (Phase 2a reverted on math grounds, pending re-RE), BUG-004, BUG-007, BUG-008, BUG-009, BUG-010 |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 
@@ -61,67 +61,102 @@ The reference `shelby.cmo3` and runtime files were produced by Cubism Editor dir
 
 ## Open
 
-### BUG-001 — Character disappears when switching workspaces / area tabs
+### ✅ BUG-001 — Character disappears when switching workspaces / area tabs
 
-- **Severity:** high
-- **Reported:** 2026-04-30 (recurring report; user has surfaced this multiple times)
+- **Severity:** high · **Reported:** 2026-04-30 · **Confirmed via logs + Fixed:** 2026-05-02
 - **Affects:** v3 viewport rendering, all imported PSD characters
 
-**Repro (incomplete — fill in once captured):**
+**Repro (confirmed):** every workspace switch full-cycles the WebGL context AND remounts every editor in every area. Logs from shelby on 2026-05-02 (workspace pill click `layout → modeling`):
 
-1. Import a PSD via the wizard
-2. Confirm the character renders in the Viewport area
-3. Switch workspaces (Layout → Modeling, Modeling → Rigging, etc.) **OR** switch area tabs within a workspace
-4. Observe: viewport goes blank — character vanishes from the canvas
+```
+workspaceSwitch — layout → modeling (modeWillChange=false)
+viewportGL      — WebGL2 context destroyed (cleanup)
+areaTab         — leftTop:  t1 → t6  (remount=true)
+areaTab         — leftBottom: t2 → t7  (remount=true)
+viewportGL      — WebGL2 context initialised
+areaTab         — center:    t3 → t8  (remount=true)
+areaTab         — rightTop:  t4 → t9  (remount=true)
+areaTab         — rightBottom: t5 → t10 (remount=true)
+```
 
-What we don't know yet:
+Symmetric event sequence on the way back (`modeling → layout` switches `t6 → t1`, `t7 → t2`, etc.). Observations:
 
-- Does it happen on *every* workspace switch or only specific transitions?
-- Does it happen on tab switches inside a single workspace, or only across workspaces?
-- Does the model come back if you toggle the workspace again?
-- Does it happen in the `Animation` workspace specifically (where the timeline mounts)?
+1. **Tab IDs are workspace-scoped, not editor-type-scoped.** Layout workspace owns `t1..t5`, Modeling workspace owns `t6..t10`, Rigging owns `t11..t15`. So even though both layouts have the same editor types in the same areas (outliner / logs / viewport / parameters / properties), React sees `key` change → remounts the editor → tears down its state.
+2. **WebGL context is destroyed AND recreated on every switch** because the viewport's `<canvas>` element gets a new instance from the remount. All texture uploads from `partRenderer` are lost; the very next `scenePass.draw` runs against an empty texture cache → "character disappeared" until the next geometry-edit / paramValues-write triggers a re-upload (which never happens unless the user touches something).
+3. `modeWillChange=false` confirms this is NOT the editorMode flip suspect — it's pure tab-key churn.
 
-**Suspects (none confirmed — instrument before fixing):**
-
-1. **Viewport unmount/remount loses GL state.** `Area.jsx` may re-key the editor on tab change, fully remounting `CanvasViewport`. The webgl context, texture uploads, or canvas-ref state could die with it.
-2. **`editorMode` flip side-effect.** Topbar now re-couples workspace → editorMode (Pose/Animation → `'animation'`, others → `'staging'`). The renderer's "first frame after mode change" path may leave projection / draw-state inconsistent.
-3. **`view.zoom` / `view.panX/Y` reset.** Something on workspace switch may be resetting the view transform, sending the model far off-screen rather than truly hiding it.
+**Root cause:** `WorkspaceTabs.jsx` (recently moved to `editorRegistry.js`) builds a fresh `tabId` per workspace via something like a counter; same logical tab in different workspaces gets different IDs. Fix shape: make tab IDs derive from `(workspaceId, areaId, editorType)` so switching workspaces keeps the editor's React key stable when the editor type matches what was already mounted.
 
 **Next steps:**
 
-1. Get a precise repro from the user — exact tab/workspace sequence
-2. ✅ **Instrumentation shipped 2026-05-02** (per memory `feedback_verify_not_theorize.md`):
-   - [`Topbar.handleWorkspaceClick`](../src/v3/shell/Topbar.jsx) emits `logger.debug('workspaceSwitch', …, {previousWorkspace, nextWorkspace, previousMode, nextMode, modeWillChange})` on every workspace pill click
-   - [`Area.useEffect`](../src/v3/shell/Area.jsx) emits `logger.debug('areaTab', …, {areaId, previousTabId, nextTabId, editorType, remount})` on every tab transition. Detects the ErrorBoundary `key` flip that fully unmounts the editor body
-   - [`CanvasViewport`](../src/components/canvas/CanvasViewport.jsx) `WebGL init` useEffect logs `logger.debug('viewportGL', 'WebGL2 context initialised', …)` on mount and `'WebGL2 context destroyed'` on cleanup. Direct evidence of GL context cycling
-3. **Repro flow:** open the v3 Logs editor (left-bottom area), perform the disappear repro, scroll back through `workspaceSwitch` → `areaTab` → `viewportGL` event sequence. The pattern should immediately distinguish (a) Viewport unmount-remount loses GPU uploads (b) workspace mode flip vs (c) view transform reset.
+1. Find the tab-ID generator in `editorRegistry.js` / workspace defaults
+2. Stable-key tabs by `(area, editorType)` so cross-workspace switches reuse mounted editors
+3. Verify: after fix, the `areaTab` log should show `remount=false` for areas whose editor type didn't change; `viewportGL` should NOT log destroyed/initialised on every switch
+4. Optional but cheap: even with the remount, `partRenderer` could re-upload textures on its first draw call when its texture cache is empty — defensive recovery if a future regression re-introduces remounting
 
 **Notes:** Memory entry mirrors this — `memory/project_v3_tab_switch_disappears.md`.
 
 ---
 
-### ✅ BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
+### ✅ BUG-011 — `seedAllRig` threw `ReferenceError: get is not defined` after Init Rig
 
-- **Severity:** high · **Reported:** 2026-04-30 · **Root cause confirmed + Phase 2a ship:** 2026-05-02
+- **Severity:** critical (rig completely non-functional after Init Rig) · **Introduced:** 2026-05-01 (commit 99113ef, GAP-012/013 step 4) · **Fixed:** 2026-05-02
+
+**Symptoms (user shelby test, 2026-05-02):**
+
+- Character rendered at "rest pose" forever after Init Rig
+- Live preview (breath / cursor head-tracking) had no visible effect
+- All param sliders had no effect
+- Bone controllers (elbow rotation via SkeletonOverlay) DID work — those bypass `evalRig` and write directly to `node.transform`
+- A red `get is not defined` banner appeared at the top of the Parameters editor
+
+**Root cause:** [src/store/projectStore.js:57](../src/store/projectStore.js#L57) — `useProjectStore` was created with `create((set) => {…})`, never destructuring `get`. GAP-012/013 step 4 (commit 99113ef) added `const postSeedProject = get().project;` at line 530 inside `seedAllRig` to enumerate orphan references / bone orphans / physics orphans AFTER the immer `produce` block committed. That `get()` reference threw `ReferenceError`, caught by `RigService.initializeRig`'s try/catch and surfaced as the Parameters-tab error banner.
+
+The throw happened AFTER `set()` committed the seeded project (so the user saw `23 params` in the editor) but BEFORE:
+
+1. `RigService.initializeRig` reached `useRigSpecStore.setState({rigSpec, …})` to cache the rigSpec for `evalRig`
+2. `useParamValuesStore.getState().resetToDefaults(paramsAfterSeed)` to populate dial positions
+
+No cached rigSpec → `CanvasViewport`'s tick loop's `_rigSpec = rigSpecRef.current` is null → `evalRig` skipped → renderer falls back to rest mesh_verts. `paramValuesStore.values` stays `{}` → `ParamRow`'s `useParamValuesStore((s) => s.values[param.id] ?? param.default)` shows the default but writes never push through to a missing rigSpec. Hence "params don't drive anything".
+
+**Fix (2026-05-02):** [`projectStore.js:57`](../src/store/projectStore.js#L57) — changed `create((set) => {…})` to `create((set, get) => {…})`. One-character fix.
+
+**Why this slipped past CI:** the GAP-012/013 unit tests for orphan references / bone orphans / physics orphans test the pure functions (`findOrphanReferences` etc.), not the seeder action that calls them. The test suite for `seedAllRig` itself doesn't currently exercise the orphan-detection branches. Adding a regression test would require mounting the full project store + harvest fixture, which is heavier than the existing roundtrip suites.
+
+**Phase 2a context:** before isolating this bug I (incorrectly) attributed the regression to Phase 2a's Cubism rotation kernel port, which was reverted on the same day. Phase 2a's kernel is mathematically wrong on its own (at θ=0 it produces `(out.x = py + ox, out.y = px + oy)` — a structural x↔y swap at neutral angle, which can't be the actual Cubism kernel since the Editor displays models upright at default params). So the revert is correct on math grounds even though Phase 2a wasn't responsible for the user's observed regression. BUG-003 stays open pending a proper re-RE of `RotationDeformer_TransformTarget`.
+
+**Lesson:** when a `set()` block runs but then throws after it, the user sees a partial state — half the seeders applied, the other half gone. This is the "store-action-with-side-effects-after-set" anti-pattern. Either keep all post-set work inside the produce, or wrap it in its own try/catch so the partial-state case is recoverable. Until then, every action that calls `get()` after `set()` needs careful review.
+
+---
+
+---
+
+### BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
+
+- **Severity:** high · **Reported:** 2026-04-30 · **Phase 2a attempted + reverted:** 2026-05-02
 - **Affects:** Body angle + head angle parameter rigging in in-app native rig eval
 
-**Root cause (confirmed via IDA Pro disassembly of `RotationDeformer_TransformTarget` at `0x7fff2b24c950`, 2026-05-02):** v3's hand-written `buildRotationMat3` used a textbook 2D rotation matrix; Cubism's actual kernel applies a different linear transform — equivalent to `R_textbook(θ + 90°)·diag(rx, ry)`. The two formulas:
+**History.** A "byte-faithful Phase 2a port" of `RotationDeformer_TransformTarget` from IDA `0x7fff2b24c950` was shipped and reverted on the same day. The port's kernel:
 
 ```
-v3 textbook:    out.x = cos·s·rX·px + (-sin·s·rY)·py + originX
-                out.y = sin·s·rX·px + ( cos·s·rY)·py + originY
-
-Cubism actual:  out.x = (-sin·s·rY)·px + (cos·s·rX)·py + originX
-                out.y = ( cos·s·rY)·px + (sin·s·rX)·py + originY
+out.x = (-sin·s·rY)·px + (cos·s·rX)·py + originX
+out.y = ( cos·s·rY)·px + (sin·s·rX)·py + originY
 ```
 
-For a body-angle deformer at θ=±10° (Cubism's typical range), v3 produced near-identity behaviour while Cubism produces near-90°-rotated behaviour. The user-visible symptom "body angle X/Y/Z don't match Cubism" was exactly this 90° offset.
+…produced `(out.x = py + ox, out.y = px + oy)` at θ=0 — a structural x↔y swap at neutral angle. That is mathematically inconsistent with how Cubism Editor displays models upright at default params, so the disassembly was misread. See [BUG-011](#bug-011) for the regression details.
 
-**Phase 2a fix (2026-05-02):** [`src/io/live2d/runtime/evaluator/cubismRotationEval.js`](../src/io/live2d/runtime/evaluator/cubismRotationEval.js) byte-faithful port of the kernel; `chainEval.js` switched to `buildRotationMat3CubismAniso`. Tests: `test:cubismRotationEval` (57 cases including a "BUG-003 canary" that asserts the new formula diverges from v3's textbook for non-trivial inputs); `test:chainEval` updated (6 cases re-asserted to Cubism semantics).
+After the revert, BUG-003's original symptom (body angle / face angle don't match Cubism Viewer) is back. Possible roots, in priority order:
 
-**Open Phase 2b:** the `_warpSlopeX/Y` closed-form approximation for warp-parented rotation deformers (`canvasToInnermostX/Y` slope) still approximates the parent warp's local Jacobian instead of probing it via finite-difference like Cubism does. For shelby's smaller body-warp bbox this is ~5× off. Visual scrub on shelby will determine whether residual divergence justifies Phase 2b before that ships.
+1. **The actual kernel may be exactly textbook**, and BUG-003 was always pure chain-composition (Phase 2b territory — `_warpSlopeX/Y` slope approximation diverges from Cubism's FD Jacobian probe by ~5× for shelby's smaller body warp).
+2. **The kernel may have a non-90° structural difference** that the misread Phase 2a happened to mask. Re-RE pass needed.
 
-**Verify on shelby:** scrub `ParamBodyAngleX/Y/Z` and `ParamAngleX/Y/Z`. With Phase 2a the kernel matches Cubism's; remaining divergence is pure chain-composition (Phase 2b territory).
+**What's NOT to do for the redo:**
+
+- Do not infer the formula from Hex-Rays pseudocode alone — that's where the swap-confusion came from.
+- Do not assert "the kernel is X" via unit tests against the supposed disassembly. Verify against the **Cubism Web SDK oracle** (Phase 0 harness in `scripts/cubism_oracle/`) — that's the canonical pass criterion.
+- Mathematical sanity check: any candidate kernel MUST reduce to identity at θ=0 with default scale=1, no reflect, origin=0.
+
+**Status:** ⏳ Open. Pending re-RE pass (read raw asm at IDA `0x7fff2b24c950`, NOT pseudocode; cross-verify with oracle output).
 
 ---
 

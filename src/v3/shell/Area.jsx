@@ -27,27 +27,33 @@ export function Area({ area }) {
   const entry = tab ? EDITOR_REGISTRY[tab.editorType] : null;
   const Body = entry?.component;
 
-  // BUG-001 instrumentation — when tab.id changes, the ErrorBoundary's
-  // `key` flips, fully unmounting and remounting the editor body. For
-  // Viewport that means losing the WebGL context. Log every transition
-  // so the Logs panel captures the sequence around "character
-  // disappears" repros.
+  // BUG-001 instrumentation — log transitions so the Logs panel can
+  // confirm the keying fix. After 2026-05-02 fix the ErrorBoundary
+  // keys on (area.id, editorType), so cross-workspace switches whose
+  // editorType matches do NOT remount; only intra-area tab swaps that
+  // change editorType cause remount. `remount` reflects the new key.
   const prevTabIdRef = useRef(/** @type {string|null} */(null));
+  const prevEditorTypeRef = useRef(/** @type {string|null} */(null));
   useEffect(() => {
-    const next = tab?.id ?? null;
-    const prev = prevTabIdRef.current;
-    if (prev !== next) {
+    const nextTabId = tab?.id ?? null;
+    const nextEditorType = tab?.editorType ?? null;
+    const prevTabId = prevTabIdRef.current;
+    const prevEditorType = prevEditorTypeRef.current;
+    if (prevTabId !== nextTabId || prevEditorType !== nextEditorType) {
       logger.debug('areaTab',
-        `${area.id}: ${prev ?? '(none)'} → ${next ?? '(none)'}`,
+        `${area.id}: ${prevTabId ?? '(none)'} → ${nextTabId ?? '(none)'}`,
         {
           areaId: area.id,
-          previousTabId: prev,
-          nextTabId: next,
-          editorType: tab?.editorType ?? null,
-          remount: prev !== null && next !== null && prev !== next,
+          previousTabId: prevTabId,
+          nextTabId: nextTabId,
+          previousEditorType: prevEditorType,
+          editorType: nextEditorType,
+          remount: prevEditorType !== null && nextEditorType !== null
+                   && prevEditorType !== nextEditorType,
         },
       );
-      prevTabIdRef.current = next;
+      prevTabIdRef.current = nextTabId;
+      prevEditorTypeRef.current = nextEditorType;
     }
   }, [area.id, tab?.id, tab?.editorType]);
 
@@ -55,7 +61,21 @@ export function Area({ area }) {
     <div className="flex flex-col h-full w-full bg-background">
       <AreaTabBar area={area} />
       <div className="flex-1 min-h-0 min-w-0">
-        <ErrorBoundary key={tab?.id ?? 'empty'} label={entry?.label ?? tab?.editorType ?? 'area'}>
+        {/* BUG-001 fix: key by `area.id:editorType` not tab.id. Tab IDs are
+            workspace-scoped (uiV3Store's global `_nextId` counter assigns
+            t1..t5 to layout, t6..t10 to modeling, etc.), so a `tab.id` key
+            unmounts and remounts the editor on every workspace switch even
+            when the same editor type sits in the same area. For Viewport
+            that destroys the WebGL context and all texture uploads → the
+            "character disappears on tab switch" symptom. Keying by
+            (area.id, editorType) keeps mount stability across workspace
+            switches; switching tabs WITHIN one area (e.g. animation's
+            timeline ↔ dopesheet) still flips editorType, which still
+            triggers the intended remount. */}
+        <ErrorBoundary
+          key={tab ? `${area.id}:${tab.editorType}` : 'empty'}
+          label={entry?.label ?? tab?.editorType ?? 'area'}
+        >
           {Body
             ? <Body />
             : <div className="p-2 text-xs text-destructive">unknown editor type: {tab?.editorType ?? '?'}</div>

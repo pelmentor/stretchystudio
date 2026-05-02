@@ -165,34 +165,33 @@ For each: capture oracle snapshot at a few key values (e.g., -10, -5, 0, 5, 10),
 
 ---
 
-### 🟡 Phase 2 — Port rotation deformer eval
+### 🔴 Phase 2 — Port rotation deformer eval
 
-**Phase 2a — Per-vertex eval kernel — ✅ SHIPPED 2026-05-02.**
+**Phase 2a — Per-vertex eval kernel — ❌ REVERTED 2026-05-02 (same day as ship).**
 
-[`src/io/live2d/runtime/evaluator/cubismRotationEval.js`](../../src/io/live2d/runtime/evaluator/cubismRotationEval.js) — byte-faithful port of `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950`. Three exports: `evalRotationKernelCubism` (per-vertex direct eval), `buildRotationMat3Cubism` (matrix form for chainEval orchestration), `buildRotationMat3CubismAniso` (aniso-scale variant for warp-parented rotations).
+The "byte-faithful port" produced a kernel that at θ=0 returned `(out.x = py + ox, out.y = px + oy)` — i.e. a structural x↔y SWAP at neutral angle. A correct rotation deformer at neutral must be the identity around its origin (`out = (px + ox, py + oy)`); anything else corrupts every rotation-deformer-driven mesh in the rig at default param values.
 
-The kernel formula:
+User shelby test (logs captured in [BUGS.md → BUG-011](../BUGS.md#bug-011)):
+- Character rendered at rest pose forever after Init Rig
+- Live preview (breath, cursor head-tracking) had no visible effect on rotation-deformer-driven parts (face Angle X/Y/Z)
+- Bone-controller-driven elbow rotation worked because SkeletonOverlay updates `node.transform` directly, bypassing evalRig
 
-```
-out.x = px·(-sin·s·rY) + py·(cos·s·rX) + originX
-out.y = px·( cos·s·rY) + py·( sin·s·rX) + originY
-```
+The IDA disassembly was misread. The actual Cubism `RotationDeformer_TransformTarget` is the textbook formula (it has to be — Cubism Editor displays models upright at neutral, which would be impossible with a 90°-offset kernel). What the disassembly probably showed was either operands in registers swapped during JIT, or a transposed convention in a struct read.
 
-The linear part differs from v3's textbook rotation by a 90° offset (linear coefficients in different cells of the 2x2). This is the root of [BUG-003](../BUGS.md#bug-003) — body angle / face angle don't match Cubism. Proven by the unit test at the bottom of `test:cubismRotationEval` ("BUG-003 canary"): for non-zero θ, the two formulas diverge by units of input.
+**Reverted in `chainEval.js`:** `buildRotationMat3CubismAniso` → restored the local `buildRotationMat3Aniso` (textbook formula, anisotropic post-scale unchanged). [`cubismRotationEval.js`](../../src/io/live2d/runtime/evaluator/cubismRotationEval.js) and `test:cubismRotationEval` retained as historical record of the bad port — DO NOT IMPORT FROM CHAINEVAL until a re-RE pass confirms the actual kernel.
 
-**Field semantics correction:** the original Phase 0 RE notes (line 419-423) labelled `model[69]` and `model[70]` as "ty" / "tx" (creating the impression of an x↔y axis swap). Re-disassembly + cross-reference with `moc3writer.js:403-404` (`rotation_deformer_keyform.origin_xs` / `origin_ys`) confirmed the correct labels: `model[69]` = origin_X, `model[70]` = origin_Y. No translation swap exists. The "swap" was only in the linear part, which is the 90° offset described above.
+**Phase 2a status:** 🔴 Reverted. Re-do requires:
+1. Re-disassemble `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` carefully — read the asm directly, not Hex-Rays pseudocode (which was likely wrong).
+2. Verify the kernel via Cubism Web SDK oracle (Phase 0 harness in `scripts/cubism_oracle/`) — feed a single rotation deformer through `csmGetDrawableVertexPositions` at θ=0 and θ=±30°; compare to the JS port's output. THIS is the canonical pass criterion, not unit tests against the supposed disassembly formula.
+3. Mathematical sanity: any candidate kernel MUST reduce to identity at θ=0 with default scale=1, no reflect, origin=0.
 
-**Wired into chainEval:** [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) DeformerStateCache.getState now calls `buildRotationMat3CubismAniso(r, sx, sy)` instead of v3's `buildRotationMat3Aniso`. The local copy of `buildRotationMat3Aniso` removed; `applyMat3ToPoint` still used for matrix application (the matrix layout is compatible — only coefficients differ).
-
-**Test coverage:** `test:cubismRotationEval` (57 cases) — kernel formula bit-for-bit, reflect flags, scale, translation, 4-vert SIMD-unroll boundary + tail loop, in-place safety, defaults, mat3 builders match the kernel, BUG-003 canary. `test:chainEval` (25 cases) updated to assert Cubism-kernel outputs (6 tests changed; new expected values documented inline). Full eval-pipeline regression green: warpEval (45), cubismWarpEval (29), rotationEval (41), artMeshEval (32), initRig (45), rigSpec (25), e2e (27), cellSelect (39).
-
-**Phase 2b — Finite-difference Jacobian Setup port — ⏳ Open.**
+**Phase 2b — Finite-difference Jacobian Setup port — ⏳ Blocked on Phase 2a redo.**
 
 The `_warpSlopeX/Y = canvasToInnermostX/Y` slope approximation in chainEval still drives warp-parented rotation deformers' parent-frame conversion. Cubism actually does finite-difference Jacobian probing of the parent eval (2-3 parent.eval calls per rotation deformer per frame, 10-iteration retry with shrinking δ on degenerate cases — see Phase 0 RE at line 430-454).
 
-The slope approximation is exact when the parent's eval has a constant Jacobian (uniform-bbox warp), but for shelby's smaller body warp the slope is ~5× off and the user reports residual rotation-deformer divergence after Phase 2a. Phase 2b ports `RotationDeformer_Setup` to replace the slope-baked aniso scale with a true Jacobian probe.
+The slope approximation is exact when the parent's eval has a constant Jacobian (uniform-bbox warp), but for shelby's smaller body warp the slope is ~5× off — that's likely BUG-003's residual after kernel correctness. Phase 2b ports `RotationDeformer_Setup` to replace the slope-baked aniso scale with a true Jacobian probe.
 
-**Phase 2b status:** ⏳ Open. Depends on having a way to call a parent's eval kernel from inside DeformerStateCache.getState (Phase 1's warp kernel + Phase 2a's rotation kernel both expose this interface). Visual scrub of Phase 2a on shelby first to gauge how much divergence remains before sinking effort into 2b.
+**Phase 2b status:** ⏳ Blocked. Cannot start until Phase 2a kernel is verified correct against the oracle.
 
 ---
 
