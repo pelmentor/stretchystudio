@@ -159,9 +159,9 @@ export default function CanvasViewport({
 
   // GAP-010 — Live Preview drivers (physics + breath + cursor look). These
   // refs are only meaningful when `previewMode` is true (i.e. this instance
-  // is the LivePreviewCanvas surface). breathPhase advances ~2π / 3.345s
-  // each tick the surface is alive, mapped to ParamBreath ∈ [0,1] via
-  // 0.5 + 0.5*sin. lookRef tracks LMB-cursor position for the same tick.
+  // is the LivePreviewCanvas surface). breathPhase advances 2π every
+  // `BREATH_CYCLE_SEC` and feeds `0.5 + 0.5*sin(phase)` into ParamBreath.
+  // lookRef tracks LMB-cursor position for the same tick.
   const breathPhaseRef = useRef(0);
   const lookRef = useRef({ active: false, clientX: 0, clientY: 0 });
 
@@ -370,14 +370,16 @@ export default function CanvasViewport({
       if (livePreview) {
         const updates = {};
 
-        // Breath — auto-cycle ParamBreath at Cubism's ~3.345s standard
-        // period. Phase advances by dt; offset 0.5, amplitude 0.5 so
-        // the curve sits in [0,1]. Free-runs across toggles for a
-        // natural rhythm; reset to 0 if you want a "just toggled"
-        // feel — current behaviour matches Cubism Viewer (continuous).
+        // Breath — auto-cycle ParamBreath. Period matches Cubism Web
+        // Framework's `CubismBreath` standard wiring for ParamBreath
+        // (cycle=3.2345s, offset=0.5, peak=0.5) so our live preview
+        // stays phase-synced with Cubism Viewer running the same model.
+        // Phase advances by dt; offset 0.5, amplitude 0.5 so the curve
+        // sits in [0,1]. Free-runs across mounts so toggling Live
+        // Preview off/on doesn't snap the breath back to phase 0.
         if (lastPhysicsTimestampRef.current !== 0) {
           const dtBreath = Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000));
-          breathPhaseRef.current += dtBreath * (2 * Math.PI / 3.345);
+          breathPhaseRef.current += dtBreath * (2 * Math.PI / 3.2345);
         }
         const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
         updates.ParamBreath = breathV;
