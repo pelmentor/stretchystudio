@@ -43,16 +43,18 @@ applyWorkspacePolicy(overlays, meshEditMode, workspaceId)
 
 ## Reset Pose semantics by mode
 
-Code: [`src/v3/shell/Topbar.jsx`](../src/v3/shell/Topbar.jsx) → `handleResetRestPose`.
+Code: [`src/services/PoseService.js`](../src/services/PoseService.js) — single source of truth, called from both [`Topbar.handleResetRestPose`](../src/v3/shell/Topbar.jsx) (button click) and [`RigService.initializeRig`](../src/services/RigService.js) (pre-Init reset, BUG-004/008/010 fix).
 
 The Reset Pose button sits at the top-right of the Topbar in EVERY workspace. What it actually does depends on the editor mode because of how bone-controller drags persist:
 
-| Mode      | What Reset Pose does                                                                           |
-|-----------|------------------------------------------------------------------------------------------------|
-| animation | Clears `animationStore.draftPose` + zeros every parameter to its default. Committed timeline keyframes survive. |
-| staging   | Same as animation, PLUS zeros `node.transform.{rotation,x,y,scaleX,scaleY}` for every group with a `boneRole` (preserving pivots). Per-part transforms (non-bone) are preserved. |
+| Mode      | PoseService function | What it does                                                                           |
+|-----------|----------------------|----------------------------------------------------------------------------------------|
+| animation | `resetPoseDraft()`   | Clears `animationStore.draftPose` + zeros every parameter to its default. Committed timeline keyframes survive. |
+| staging   | `resetToRestPose()`  | Same as animation, PLUS zeros `node.transform.{rotation,x,y,scaleX,scaleY}` for every group with a `boneRole` (preserving pivots). Per-part transforms (non-bone) are preserved. |
 
 The split exists because in staging mode `SkeletonOverlay`'s rotation drag writes straight to `node.transform.rotation` (persistent project state, undoable). There's no transient layer to clear — we have to walk the bone groups and reset them. Per-part transforms (e.g. positioning a hat sticker in the Outliner) are NOT reset because those are intentional layout, not pose; for those the user has [Properties → Reset Transform](../src/v3/editors/properties/tabs/ObjectTab.jsx) (GAP-014).
+
+`RigService.initializeRig` calls `resetToRestPose()` BEFORE harvesting so the rig builder sees a clean rest geometry — this is the BUG-004/008/010 fix (Init Rig used to leave armature posed while mesh reset, leave bone-moved layers frozen, and break Iris Offset; all three traced back to harvesting against a non-rest pose).
 
 ## Wizard cleanup contract
 

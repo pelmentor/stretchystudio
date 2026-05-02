@@ -6,9 +6,12 @@ gaps exist between "seeded into project" and "persisted to .stretch", and the
 migration plan for closing those gaps.
 
 This is the foundation for [GAP-011](FEATURE_GAPS.md#gap-011) (project as
-true source of truth) and conditions much of the [CUBISM_WARP_PORT](live2d-export/CUBISM_WARP_PORT.md)
-verification (the oracle-diff test needs a programmatic rigSpec build path,
-which means a complete project data layer that survives save→load round-trips).
+true source of truth). The [CUBISM_WARP_PORT](live2d-export/CUBISM_WARP_PORT.md)
+oracle-diff test ([`scripts/cubism_oracle/diff_v3_vs_oracle.mjs`](../scripts/cubism_oracle/diff_v3_vs_oracle.mjs))
+ships its own programmatic rigSpec build path via `cmo3Import → initializeRigFromProject`
+in Node, so it doesn't depend on save/load round-trip parity — but a future
+version that loads a `.stretch` project file directly would benefit from
+the data-layer holes being closed.
 
 ## Status snapshot (2026-05-02)
 

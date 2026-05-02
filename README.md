@@ -80,16 +80,17 @@ pnpm dev          # Vite dev server, http://localhost:5173
 ```
 
 ```bash
-pnpm test         # full unit-test suite (1700+ cases) + tsc --noEmit
+pnpm test         # full unit-test suite (2800+ cases across 67 files) + tsc --noEmit
 pnpm typecheck    # tsc --noEmit only
 ```
 
 Architecture overview lives in [docs/](docs/):
 
-- [docs/PROJECT_DATA_LAYER.md](docs/PROJECT_DATA_LAYER.md) — what survives save→load, what's re-derived at export, integrity holes
+- [docs/V3_WORKSPACES.md](docs/V3_WORKSPACES.md) — workspace × concern matrix, viewport policy, Reset Pose semantics
+- [docs/PROJECT_DATA_LAYER.md](docs/PROJECT_DATA_LAYER.md) — what survives save→load, what's re-derived at export, integrity holes (Phase A all shipped)
 - [docs/FEATURE_GAPS.md](docs/FEATURE_GAPS.md) — open work + cross-references to upstream
 - [docs/BUGS.md](docs/BUGS.md) — known bugs
-- [docs/live2d-export/CUBISM_WARP_PORT.md](docs/live2d-export/CUBISM_WARP_PORT.md) — IDA Pro disassembly + JS port plan for the Cubism deformer kernel
+- [docs/live2d-export/CUBISM_WARP_PORT.md](docs/live2d-export/CUBISM_WARP_PORT.md) — IDA Pro disassembly + JS port plan for the Cubism deformer kernel; oracle diff harness for BUG-003 quantification
 - [docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md](docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md) — rig ownership migration (export-time → project-time)
 
 ### Project layout
@@ -133,18 +134,23 @@ src/
 └── components/             # legacy v2 UI (PsdImportWizard wrapped inside v3)
 
 scripts/
-├── test/                   # 90+ standalone unit-test scripts (≈1700 cases)
+├── test/                   # 67 standalone unit-test scripts (~2800 cases)
 ├── cubism_oracle/          # Python ctypes harness over Live2DCubismCore.dll
-│                           #   (oracle for byte-faithful port verification)
+│                           #   + JS oracle diff harness (cmo3 → rigSpec → evalRig
+│                           #   vs Cubism). BUG-003 quantification.
 ├── native-rig-diff/        # canonicalise + diff helper for export regression
 └── idle/                   # idle-motion CLI
 
 docs/
+├── V3_WORKSPACES.md        # workspace × concern matrix, viewport policy,
+│                           #   Reset Pose semantics, wizard cleanup contract
 ├── PROJECT_DATA_LAYER.md   # data-layer audit + 10 integrity holes (Phase A
-│                           #   detection shipped 2026-05-02)
+│                           #   detection all shipped 2026-05-02)
 ├── FEATURE_GAPS.md         # open features + cross-refs to upstream
 ├── BUGS.md                 # bug tracker (real bugs only)
 └── live2d-export/          # format reverse-engineering + porting docs
+    ├── CUBISM_WARP_PORT.md     # IDA disassembly + JS port plan
+    └── NATIVE_RIG_REFACTOR_PLAN.md  # rig ownership migration
 
 reference/
 ├── stretchystudio-upstream-original/   # pristine upstream snapshot
