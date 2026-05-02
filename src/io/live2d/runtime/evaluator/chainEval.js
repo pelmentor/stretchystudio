@@ -73,11 +73,20 @@ const FD_PROBE_EPS = 0.01;
  *
  * @param {import('../../rig/rigSpec.js').RigSpec} rigSpec
  * @param {Object<string, number>} paramValues
+ * @param {{kernel?: 'v3-legacy'|'cubism-setup', trace?: TraceCollector}} [options]
+ *   Phase 2b — `kernel` selects the rotation-deformer composition
+ *   strategy. `'v3-legacy'` (default) keeps the cascaded-normaliser
+ *   `_warpSlopeX/Y` constant. `'cubism-setup'` is reserved for the
+ *   in-progress Setup port (Stage 0: branches still identical, output
+ *   byte-equal). `trace` is an optional collector for per-deformer
+ *   intermediate state; consumed by `scripts/cubism_oracle/probe_kernel.mjs`.
  * @returns {ArtMeshFrame[]}
  */
-export function evalRig(rigSpec, paramValues) {
+export function evalRig(rigSpec, paramValues, options) {
   if (!rigSpec || !Array.isArray(rigSpec.artMeshes)) return [];
-  const cache = new DeformerStateCache(rigSpec, paramValues);
+  const kernel = options?.kernel === 'cubism-setup' ? 'cubism-setup' : 'v3-legacy';
+  const trace = options?.trace ?? null;
+  const cache = new DeformerStateCache(rigSpec, paramValues, { kernel, trace });
   // R10 — pre-build a deformer-id → spec map once per evalRig call so
   // the chain walk does O(1) lookups instead of double linear scans
   // through warpDeformers + rotationDeformers per parent step. With a
@@ -298,9 +307,26 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
  * 0..1 frame (cmo3writer line ~3290 converts it during re-parenting).
  */
 class DeformerStateCache {
-  constructor(rigSpec, paramValues) {
+  constructor(rigSpec, paramValues, options) {
     this._rigSpec = rigSpec;
     this._paramValues = paramValues ?? {};
+    /**
+     * Phase 2b — which kernel branch should `getState` follow when it
+     * builds rotation matrices and which composition strategy should
+     * `evalChainAtPoint` use. Stored on the cache so per-frame state
+     * derivations stay consistent with the chosen kernel for the whole
+     * `evalRig` call. Stage 0: branches are identical except for the
+     * `kernel` field being readable; output byte-equal.
+     * @type {'v3-legacy'|'cubism-setup'}
+     */
+    this._kernel = options?.kernel === 'cubism-setup' ? 'cubism-setup' : 'v3-legacy';
+    /**
+     * Phase 2b — optional `TraceCollector` for `probe_kernel.mjs`.
+     * `null` in production paths so the trace branches are dead-code-
+     * eliminated by the JIT after a few iterations.
+     * @type {TraceCollector|null}
+     */
+    this._trace = options?.trace ?? null;
     this._byId = new Map();
     // Build a deformer-id → spec map once. Phase 2b's chain-walk helper
     // needs O(1) parent lookups; building it here is the same map
@@ -423,6 +449,7 @@ class DeformerStateCache {
     // No lift needed; return the current-frame grid directly.
     if (!warpSpec.parent || warpSpec.parent.type === 'root') {
       this._liftedById.set(warpSpec.id, grid);
+      if (this._trace) this._trace.recordLiftedGrid(warpSpec, grid);
       return grid;
     }
 
@@ -491,6 +518,7 @@ class DeformerStateCache {
     }
 
     this._liftedById.set(warpSpec.id, positions);
+    if (this._trace) this._trace.recordLiftedGrid(warpSpec, positions);
     return positions;
   }
 
@@ -502,6 +530,17 @@ class DeformerStateCache {
    * Mirrors the per-vertex chain walk in `evalArtMeshFrame` but for
    * one point and with no buffer ping-pong. Returns the point's
    * canvas-final position.
+   *
+   * **Phase 3 lifted-grid composition.** When the walk hits a warp
+   * parent we evaluate against that warp's LIFTED grid (canvas-px
+   * control points pre-composed through every ancestor warp/rotation)
+   * and STOP. This matches `evalArtMeshFrame`'s Phase 3 semantics —
+   * artmesh verts and FD probes must traverse the chain identically,
+   * otherwise the FD probe measures a Jacobian that doesn't correspond
+   * to what the artmesh sees.
+   *
+   * Falls back to the unlifted current-frame grid when the warp has no
+   * lifted grid (broken chain). Mirrors `evalArtMeshFrame`'s same fallback.
    *
    * @param {{type: string, id: string|null}|null} parent
    * @param {number} x  point in `parent`'s natural input frame
@@ -523,6 +562,19 @@ class DeformerStateCache {
       const state = this.getState(parentSpec);
       if (!state) { cur = parentSpec.parent; continue; }
       if (state.kind === 'warp') {
+        // Phase 3: prefer the lifted (canvas-px) grid; output is
+        // canvas-px, so the chain collapses after this single step.
+        const lifted = this.getLiftedGrid(parentSpec);
+        if (lifted) {
+          inBuf[0] = cx; inBuf[1] = cy;
+          evalWarpKernelCubism(
+            lifted, parentSpec.gridSize, parentSpec.isQuadTransform === true,
+            inBuf, outBuf, 1,
+          );
+          cx = outBuf[0]; cy = outBuf[1];
+          break;
+        }
+        // Fallback: unlifted current-frame grid; continue walking.
         inBuf[0] = cx; inBuf[1] = cy;
         evalWarpKernelCubism(
           state.grid, state.gridSize, state.isQuadTransform === true,
@@ -569,24 +621,28 @@ class DeformerStateCache {
           // its grid bbox. Scale anisotropic to handle non-square bboxes.
           // For rotation parents, the child's canvas-px stays canvas-px.
           //
-          // Phase 2b is BLOCKED on this code path: the matrix structure
-          // here is `R · diag(extraSx, extraSy)` — diagonal scale only.
-          // Cubism's actual frame conversion at the rotation→warp boundary
-          // is the FULL 2x2 inverse Jacobian of the parent warp's bilerp
-          // at the pivot (which has off-diagonal terms when the warp is
-          // parameter-rotated). A diagonal approximation captures
-          // magnitudes but not directional rotation. Full Phase 2b
-          // requires switching the rotation state's matrix to a general
-          // 2x2 + translation (or a different kernel approach).
-          // See docs/live2d-export/CUBISM_WARP_PORT.md Phase 2b.
+          // Phase 2b kernel switch: both branches currently produce the
+          // same output (Stage 0 plumbing — Setup path lands in Stage 2).
+          // The branch exists so Stages 1-3 can swap `_warpSlopeX/Y` for
+          // an FD-probed J⁻¹ inside `cubism-setup` without disturbing the
+          // production legacy path.
           const isWarpParent = spec.parent?.type === 'warp';
-          const sx = isWarpParent ? this._warpSlopeX : 1;
-          const sy = isWarpParent ? this._warpSlopeY : 1;
-          state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+          if (this._kernel === 'cubism-setup') {
+            // Stage 0 stub: identical to legacy. Real Setup path lands
+            // in Stage 2 after Stage 1's measurement pass picks P1/P2/P3.
+            const sx = isWarpParent ? this._warpSlopeX : 1;
+            const sy = isWarpParent ? this._warpSlopeY : 1;
+            state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+          } else {
+            const sx = isWarpParent ? this._warpSlopeX : 1;
+            const sy = isWarpParent ? this._warpSlopeY : 1;
+            state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+          }
         }
       }
     }
     this._byId.set(spec.id, state);
+    if (this._trace && state) this._trace.recordDeformerState(spec, state, this);
     return state;
   }
 }
@@ -632,4 +688,77 @@ function buildRotationMat3Aniso(r, extraSx, extraSy) {
   m[3] = d; m[4] = e; m[5] = oy;
   m[6] = 0; m[7] = 0; m[8] = 1;
   return m;
+}
+
+/**
+ * Phase 2b — diagnostic trace collector. Pass an instance via
+ * `evalRig(rigSpec, paramValues, { trace })` and the cache will record
+ * per-deformer intermediate state into it as `getState` /
+ * `getLiftedGrid` populate. Consumed by
+ * `scripts/cubism_oracle/probe_kernel.mjs` to print numerical state at
+ * a chosen fixture for Stage 1's measurement pass.
+ *
+ * Storage:
+ *  - `deformerStates: Map<id, {kind, ...}>` — the public state from
+ *    `getState`, plus extra metadata: `parentType`, `slopeX`, `slopeY`
+ *    (the cascaded-normaliser values used for warp-parent rotations).
+ *  - `liftedBboxes: Map<warpId, {x:[min,max], y:[min,max]}>` — the
+ *    lifted-grid extents in canvas-px (one entry per warp that was
+ *    lifted during the call; rotation-only ancestor chains produce no
+ *    entry).
+ *
+ * The collector is a plain class (no globals), so a probe can run
+ * multiple `evalRig` calls and inspect each independently.
+ */
+export class TraceCollector {
+  constructor() {
+    /** @type {Map<string, {id:string, kind:string, parentType:string|null, parentId:string|null, mat?:Float64Array, slopeX?:number, slopeY?:number, gridSize?:{rows:number,cols:number}}>} */
+    this.deformerStates = new Map();
+    /** @type {Map<string, {x:[number,number], y:[number,number]}>} */
+    this.liftedBboxes = new Map();
+  }
+
+  /**
+   * Called by `DeformerStateCache.getState` after the state is built.
+   * @param {{id:string, parent?:{type:string,id:string|null}}} spec
+   * @param {{kind:string, mat?:Float64Array, gridSize?:{rows:number,cols:number}}} state
+   * @param {DeformerStateCache} cache
+   */
+  recordDeformerState(spec, state, cache) {
+    if (!spec?.id || !state) return;
+    const parentType = spec.parent?.type ?? null;
+    const parentId = spec.parent?.id ?? null;
+    const entry = { id: spec.id, kind: state.kind, parentType, parentId };
+    if (state.kind === 'rotation') {
+      entry.mat = state.mat ? Float64Array.from(state.mat) : null;
+      if (parentType === 'warp') {
+        entry.slopeX = cache._warpSlopeX;
+        entry.slopeY = cache._warpSlopeY;
+      }
+    } else if (state.kind === 'warp') {
+      entry.gridSize = state.gridSize;
+    }
+    this.deformerStates.set(spec.id, entry);
+  }
+
+  /**
+   * Called by `DeformerStateCache._computeLiftedGrid` after a warp's
+   * lifted grid is populated. Stores only the bbox (cheap) — the full
+   * grid is left in the cache for the consumer to fetch directly when
+   * needed.
+   * @param {{id:string}} warpSpec
+   * @param {Float64Array|null} positions
+   */
+  recordLiftedGrid(warpSpec, positions) {
+    if (!warpSpec?.id || !positions) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < positions.length; i += 2) {
+      const x = positions[i], y = positions[i + 1];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    this.liftedBboxes.set(warpSpec.id, { x: [minX, maxX], y: [minY, maxY] });
+  }
 }

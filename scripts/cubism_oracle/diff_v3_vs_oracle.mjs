@@ -19,10 +19,15 @@
 //   5. Report: per-fixture max + mean diff, top divergent drawables.
 //
 // Usage:
-//   node scripts/cubism_oracle/diff_v3_vs_oracle.mjs [cmo3-path] [snapshots-dir]
+//   node scripts/cubism_oracle/diff_v3_vs_oracle.mjs [cmo3-path] [snapshots-dir] [--kernel=v3-legacy|cubism-setup]
 //
 // Default cmo3 path: shelby.cmo3 in repo root.
 // Default snapshots: scripts/cubism_oracle/snapshots/shelby_runtime/
+// Default kernel:   v3-legacy
+//
+// `--kernel=cubism-setup` is the in-progress Setup port (Phase 2b plan,
+// docs/live2d-export/PHASE_2B_PLAN.md). At Stage 0 it is byte-identical
+// to v3-legacy; from Stage 2 onwards it diverges.
 //
 // Note: this harness does NOT need Cubism Core DLL. It reads pinned oracle
 // snapshots produced earlier by `dump_drawables.py`.
@@ -78,6 +83,12 @@ import { resolveRigWarps } from '../../src/io/live2d/rig/rigWarpsStore.js';
 const REPO_ROOT = path.resolve(new URL('../../', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 const args = process.argv.slice(2);
 const useAuthoredRig = args.includes('--authored-rig');
+const kernelArg = args.find(a => a.startsWith('--kernel='));
+const KERNEL = kernelArg ? kernelArg.slice('--kernel='.length) : 'v3-legacy';
+if (KERNEL !== 'v3-legacy' && KERNEL !== 'cubism-setup') {
+  console.error(`[error] --kernel must be 'v3-legacy' or 'cubism-setup' (got '${KERNEL}')`);
+  process.exit(1);
+}
 const positional = args.filter(a => !a.startsWith('--'));
 const CMO3_PATH = positional[0] ?? path.join(REPO_ROOT, 'shelby.cmo3');
 const SNAPSHOTS_DIR = positional[1] ?? path.join(REPO_ROOT, 'scripts/cubism_oracle/snapshots/shelby_runtime');
@@ -125,6 +136,7 @@ async function main() {
     `${rigSpec.rotationDeformers?.length ?? 0} rotations, ` +
     `canvas ${rigSpec.canvas?.w}×${rigSpec.canvas?.h}`,
   );
+  console.log(`[harness] Kernel: ${KERNEL}`);
 
   // ── Build oracle-drawable → v3-artmesh index map ─────────────────
   // Both should iterate in the same order: Cubism's drawable index
@@ -152,7 +164,7 @@ async function main() {
     }
   }
   if (restSnapshot) {
-    const restFrames = evalRig(rigSpec, {});
+    const restFrames = evalRig(rigSpec, {}, { kernel: KERNEL });
     const ppu = restSnapshot.canvas_info?.pixels_per_unit ?? 1;
     const halfW = (restSnapshot.canvas_info?.size?.[0] ?? 0) / 2;
     const halfH = (restSnapshot.canvas_info?.size?.[1] ?? 0) / 2;
@@ -187,7 +199,7 @@ async function main() {
     const paramValues = { ...applied };
 
     // Run v3's evalRig
-    const frames = evalRig(rigSpec, paramValues);
+    const frames = evalRig(rigSpec, paramValues, { kernel: KERNEL });
 
     // Match drawables by index (positional). Compute per-fixture diffs.
     let totalMaxPx = 0;
