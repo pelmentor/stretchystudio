@@ -180,14 +180,17 @@ export const useEditorStore = create((set) => ({
   enterEditMode: (kind, opts = {}) => set((state) => {
     if (kind !== 'mesh' && kind !== 'skeleton' && kind !== 'blendShape') return state;
     if (kind === 'blendShape' && !opts.blendShapeId) return state;
-    // Default tool per edit mode mirrors what the toolbar's first
-    // entry advertises. Re-entering a mode resets to the default
-    // (the user's last sub-mode is sticky via meshSubMode, not the
-    // toolMode slot).
-    let toolMode;
-    if (kind === 'mesh' || kind === 'blendShape') toolMode = 'brush';
-    else if (kind === 'skeleton') toolMode = 'joint_drag';
-    else toolMode = 'select';
+    // Restore the user's last-used tool for this mode if persisted —
+    // sticky choices (e.g. preferring `add_vertex` over the default
+    // `brush`) survive Tab out / Tab in and page reloads. Falls back
+    // to the canonical default when nothing has been recorded yet.
+    const persisted = usePreferencesStore.getState().lastToolByMode ?? {};
+    let toolMode = persisted[kind];
+    if (typeof toolMode !== 'string' || toolMode.length === 0) {
+      if (kind === 'mesh' || kind === 'blendShape') toolMode = 'brush';
+      else if (kind === 'skeleton') toolMode = 'joint_drag';
+      else toolMode = 'select';
+    }
     return {
       editMode: kind,
       activeBlendShapeId: kind === 'blendShape' ? opts.blendShapeId : null,
@@ -212,7 +215,16 @@ export const useEditorStore = create((set) => ({
       },
     };
   }),
-  setToolMode:          (mode)     => set({ toolMode: mode }),
+  setToolMode: (mode) => set((state) => {
+    if (typeof mode !== 'string' || mode === state.toolMode) return state;
+    // Persist the new tool against the current edit mode so the next
+    // entry into this mode (Tab out → Tab in, or next session)
+    // restores the user's choice rather than the canonical default.
+    // Object Mode uses the `'object'` key.
+    const modeKey = state.editMode ?? 'object';
+    usePreferencesStore.getState().setLastToolForMode(modeKey, mode);
+    return { toolMode: mode };
+  }),
   setDragState:         (ds)       => set((state) => ({ dragState: { ...state.dragState, ...ds } })),
   setArmedParameterId:  (id)       => set({ armedParameterId: id }),
   setViewLayers:        (partial)  => set((state) => {

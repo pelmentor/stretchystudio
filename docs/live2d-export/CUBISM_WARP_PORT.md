@@ -214,7 +214,29 @@ For body-angle-driven head/face deformations: when `ParamBodyAngleZ ≠ 0`, Body
 
 `WarpDeformer_Setup` (IDA `0x7fff2b24e410`) is similar but simpler: calls `parent.TransformTarget(grid)` IN-PLACE so the warp's grid gets lifted from "parent's child-frame" to "parent's parent-frame" each frame. Topological-order deformer iteration means by the time a warp's Setup runs, its parent's grid is already in canvas-root, so this single call promotes the warp's grid to canvas-root too.
 
-**Phase 2b implementation status — 🔴 BLOCKED on architectural mismatch (2026-05-02 finding):**
+**Phase 2b implementation status — 🔴 BLOCKED on architectural mismatch (2026-05-02 finding, additional 2026-05-02 evening attempt):**
+
+**2026-05-02 evening attempt** — confirmed the architectural blocker is deeper than just the rotation-matrix-structure:
+
+1. **Option (b) "full FD-probed J⁻¹ in matrix linear part"** — keeps today's chain-walker invariant (rotation matrix maps `pivot-relative canvas-px` → `parent's localFrame`), only swaps `diag(_warpSlopeX, _warpSlopeY)` for the actual 2×2 inverse Jacobian computed via FD probe. **Regressed**: PARAM max 9.45 → 14.68 px on the oracle harness. Root cause: v3's `_warpSlopeX/Y = canvasToInnermostX/Y` is NOT `1/bbox` — it cascades through 4 nested 0..1 transforms (`BZ → BY → BR → BX`, see `bodyWarp.js:makeBodyWarpNormalizers`). So the constant `_warpSlopeX/Y` and the FD-probed J⁻¹ compute fundamentally different quantities EVEN at rest pose. Replacing one with the other shifts the entire chain composition away from a long-baked-in approximation that the rest of v3's emitter math is calibrated against.
+
+2. **Option (a) "canvas-final matrix with chain break"** — Cubism's literal Setup formula (`originX/Y ← canvasPivot`, `angle ← angle - probedAngle`, `scale ← scale × probedScale`), output is canvas-final, mark `isCanvasFinal:true` so chain walker breaks after applying. **Catastrophic divergence** (PARAM max ~85,000 px). Root cause: the formula assumes `keyformScale = 1/canvasMaxDim` (Cubism's compiled value, per the moc3 binary spec), which makes `s × probedScale ≈ 1` at rest. v3 emits `keyformScale = 1.0` and compensates at runtime via the `_warpSlopeX/Y` slope — those compensations live in `chainEval` (not in cmo3 emission), so simply baking `s × probedScale` from a v3 keyform produces a `~1100×` over-scaled matrix.
+
+**What a real Phase 2b ship requires (multi-day):**
+
+a. **Reconcile v3's frame conventions with Cubism's**. v3 today uses `_warpSlopeX/Y` (cascaded normaliser) as the "frame conversion" between rotation child-frame and warp-localFrame. Cubism uses `keyformScale_compiled × probedScale_runtime`. These produce different numbers; getting them to agree requires either (i) re-emitting v3's cmo3/moc3 with `keyformScale = 1/canvasMaxDim` and gutting `_warpSlopeX/Y` from chainEval, or (ii) carefully composing the cascaded normaliser into the FD probe so the runtime numbers match.
+
+b. **Per-parent-type input-frame normalisation**. The artmesh keyform vertex storage frame depends on parent type (per `keyformAndDeformerSections.js`): rig-warp parent → 0..1 of rig warp's canvasBbox; group-rotation parent → raw canvas-px offsets; chain-root → `canvasToInnermostX/Y` (cascaded normaliser); legacy → PPU-normalised. The Setup-adjusted matrix needs to KNOW which input frame the verts arrive in, and apply the corresponding pre-conversion. Today's chainEval implicitly handles this via `_warpSlopeX/Y` working uniformly; Setup-adjusted breaks the implicit handling.
+
+c. **Lift composition through canvas-final rotations**. With `isCanvasFinal:true` rotations, the `_computeLiftedGrid` walk through rotation ancestors needs to break (output is canvas), but warp ancestors above that rotation need their lifts computed with respect to the canvas-final rotation as their "input frame" — currently the lift assumes uniform "child output is parent's input localFrame".
+
+d. **Numerical verification**. Each of (a)-(c) needs unit-level oracle harness verification BEFORE the next builds on top, otherwise regressions compound in the way today's two attempts did.
+
+**Status:** 🔴 Blocked. Two single-sweep attempts (option b: J⁻¹ swap; option a: canvas-final break) both reverted on the day. Real fix is a coordinated 3-4 stage refactor with oracle gates between stages. Out of scope for individual sweeps; needs a dedicated "Phase 2b sub-plan" doc with stages and pre-stage verification.
+
+**Original 2026-05-02 finding (preserved verbatim below for context):**
+
+
 
 Initial Phase 2b attempt (commit not landed) revealed that v3's chain-walk eval architecture is **fundamentally incompatible with how Cubism handles the rotation→warp boundary**. Two alternatives, both blocked for different reasons:
 

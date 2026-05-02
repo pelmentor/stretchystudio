@@ -29,12 +29,26 @@ const ML_KEY = 'v3.prefs.mlEnabled';
 const PE_KEY = 'v3.prefs.proportionalEdit';
 const VLP_KEY = 'v3.prefs.viewLayerPresets';
 const LOM_KEY = 'v3.prefs.lockObjectModes';
+const LTM_KEY = 'v3.prefs.lastToolByMode';
 
 const PE_DEFAULT = Object.freeze({
   enabled:       false,
   radius:        100,
   falloff:       'smooth',
   connectedOnly: false,
+});
+
+/** Last-used tool per `editMode`. Keys mirror `editorStore.editMode`
+ *  values: `null` is encoded as `'object'`. Reseeded by
+ *  `editorStore.setToolMode` so sticky tool choices persist across
+ *  Tab in/out within a session AND across page reloads. Values must
+ *  be strings the toolbar's `tools.js` advertises for that mode —
+ *  unknown values fall back to the mode's first sticky tool entry. */
+const LTM_DEFAULT = Object.freeze({
+  object:     'select',
+  mesh:       'brush',
+  skeleton:   'joint_drag',
+  blendShape: 'brush',
 });
 
 /** GAP-016 Phase B — `viewLayerPresets` is a dict of user-named
@@ -89,6 +103,13 @@ export const usePreferencesStore = create((set, get) => ({
    *  selection-head changes auto-exit edit mode (the prior SS
    *  behaviour). */
   lockObjectModes: loadBool(LOM_KEY, true),
+  /** Last-used tool per editMode (`'object' | 'mesh' | 'skeleton' |
+   *  'blendShape'`). Persisted across sessions so sticky tool choices
+   *  (e.g. preferring `add_vertex` over the default `brush` in mesh
+   *  edit) survive Tab out / Tab in, page reload, and project switch.
+   *  See `editorStore.enterEditMode` (reads on entry) and
+   *  `editorStore.setToolMode` (writes on every tool flip). */
+  lastToolByMode: loadJson(LTM_KEY, LTM_DEFAULT),
 
   setMlEnabled(v) {
     const next = !!v;
@@ -126,5 +147,17 @@ export const usePreferencesStore = create((set, get) => ({
     delete next[name];
     saveJson(VLP_KEY, next);
     set({ viewLayerPresets: next });
+  },
+
+  /** Record the user's current tool for the given mode key. Empty /
+   *  unknown keys are no-ops so callers can pass `editMode` blindly
+   *  without guarding. */
+  setLastToolForMode(modeKey, toolModeId) {
+    if (typeof modeKey !== 'string' || typeof toolModeId !== 'string') return;
+    const cur = get().lastToolByMode;
+    if (cur[modeKey] === toolModeId) return;
+    const next = { ...cur, [modeKey]: toolModeId };
+    saveJson(LTM_KEY, next);
+    set({ lastToolByMode: next });
   },
 }));

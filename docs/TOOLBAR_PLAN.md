@@ -84,7 +84,7 @@ Per-tool hotkeys assigned at implementation time matching Blender where possible
 
 - Tool-specific draggable side panels (Blender's "Active Tool" panel in Properties). SS settings already live in Properties tabs; no need to duplicate.
 - Toolbar resize / flyout sub-tools (Blender's long-press for variants). Implement only if a tool genuinely has variants worth surfacing.
-- Persisting last-used tool per editMode across sessions. Would go in preferencesStore. Defer.
+- ~~Persisting last-used tool per editMode across sessions~~ — SHIPPED 2026-05-02 via `preferencesStore.lastToolByMode` (`v3.prefs.lastToolByMode` localStorage key). `editorStore.enterEditMode` reads on entry; `setToolMode` mirrors on every flip.
 
 ## Anti-crutch checklist
 

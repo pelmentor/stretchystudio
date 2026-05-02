@@ -91,14 +91,13 @@ Two button kinds in [`tools.js`](../src/v3/shell/canvasToolbar/tools.js):
 - **`tool`** — sticky. Click sets `editorStore.toolMode` to the advertised id; the canvas pointer dispatch reads `toolMode` to decide what a click does. Click-active again is a no-op (Blender behaviour).
 - **`operator`** — momentary. Click fires the named v3 operator. Object-mode Move / Rotate / Scale are operator buttons today (firing `transform.translate` / `rotate` / `scale`); they share keymap chords G/R/S so the toolbar doubles as a discoverability surface.
 
-`enterEditMode(kind)` sets the mode's default tool: `'brush'` for mesh & blendShape, `'joint_drag'` for skeleton, `'select'` on exit. `meshSubMode` (`deform` vs `adjust`) stays a separate axis under the brush tool — UV adjust isn't a top-level toolbar slot in v1.
+`enterEditMode(kind)` sets the mode's tool from `preferencesStore.lastToolByMode[kind]` if the user has a recorded preference, falling back to the canonical default (`'brush'` for mesh & blendShape, `'joint_drag'` for skeleton, `'select'` on exit). Every `setToolMode(...)` mirrors back into `preferencesStore.lastToolByMode` so sticky tool choices persist across Tab in/out, page reloads, and project switches. `meshSubMode` (`deform` vs `adjust`) stays a separate axis under the brush tool — UV adjust isn't a top-level toolbar slot in v1.
 
 ### Out of scope (deferred)
 
 - Sticky transform tools in Object Mode (the Move/Rotate/Scale buttons fire modal G/R/S today; sticky variants need their own gizmo+drag wiring).
 - UV Adjust toolbar entry — switch via `meshSubMode` for now.
 - Knife / Loop Cut / Smooth / Inflate / Bevel / Extrude / etc. — added when the underlying handlers ship (no phantom tools).
-- Last-used-tool persistence per editMode across sessions (would live in `preferencesStore`).
 
 ## Click-to-select on canvas
 

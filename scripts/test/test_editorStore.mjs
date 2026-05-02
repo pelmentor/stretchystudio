@@ -324,6 +324,67 @@ reset();
     'setViewLayers({skeleton:false}): does NOT exit mesh edit');
 }
 
+// ── Last-used-tool persistence: setToolMode mirrors into prefs ────
+
+{
+  reset();
+  // Seed mesh edit; default toolMode = 'brush'.
+  useEditorStore.setState({ editMode: 'mesh' });
+  // Reset the persisted map to a known shape so we observe a write.
+  usePreferencesStore.setState({
+    lastToolByMode: { object: 'select', mesh: 'brush', skeleton: 'joint_drag', blendShape: 'brush' },
+  });
+
+  get().setToolMode('add_vertex');
+  assert(get().toolMode === 'add_vertex',
+    'setToolMode: in-memory updated');
+  assert(usePreferencesStore.getState().lastToolByMode.mesh === 'add_vertex',
+    'setToolMode: prefs.lastToolByMode.mesh mirrored');
+  assert(usePreferencesStore.getState().lastToolByMode.object === 'select',
+    'setToolMode: untouched mode keys preserved');
+
+  // Object-mode key encoded as 'object'.
+  useEditorStore.setState({ editMode: null, toolMode: 'select' });
+  get().setToolMode('select');
+  assert(usePreferencesStore.getState().lastToolByMode.object === 'select',
+    'setToolMode: object-mode key written');
+
+  // Identical-value write is a no-op (no extra prefs churn).
+  const before = usePreferencesStore.getState().lastToolByMode;
+  get().setToolMode('select');
+  assert(usePreferencesStore.getState().lastToolByMode === before,
+    'setToolMode: identical value preserves prefs identity');
+}
+
+// ── enterEditMode reads persisted last-tool (sticky across Tab) ───
+
+{
+  reset();
+  // Persist a non-default tool for mesh edit.
+  usePreferencesStore.setState({
+    lastToolByMode: { object: 'select', mesh: 'remove_vertex', skeleton: 'joint_drag', blendShape: 'brush' },
+  });
+  get().enterEditMode('mesh');
+  assert(get().toolMode === 'remove_vertex',
+    'enterEditMode(mesh): restores last-used tool from prefs');
+
+  // Skeleton entry restores joint_drag (default).
+  reset();
+  usePreferencesStore.setState({
+    lastToolByMode: { object: 'select', mesh: 'brush', skeleton: 'joint_drag', blendShape: 'brush' },
+  });
+  get().enterEditMode('skeleton');
+  assert(get().toolMode === 'joint_drag',
+    'enterEditMode(skeleton): restores joint_drag');
+
+  // Empty / malformed prefs → falls through to canonical defaults.
+  reset();
+  usePreferencesStore.setState({ lastToolByMode: {} });
+  get().enterEditMode('mesh');
+  assert(get().toolMode === 'brush',
+    'enterEditMode(mesh) with empty prefs: falls back to brush');
+}
+
 // ── toggleGroupExpand ─────────────────────────────────────────────
 
 {
