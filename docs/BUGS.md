@@ -16,7 +16,7 @@ Each entry is short and self-contained — anyone reading should be able to pick
 
 | Status | Entries |
 |--------|---------|
-| ✅ Fixed / Superseded | BUG-001 (tab-switch remount, log-confirmed + fixed), BUG-002, BUG-006, BUG-011 (seedAllRig get-throw, root cause of "params don't drive") |
+| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002, BUG-006, BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 |
 | ⏳ Open | BUG-003 (Phase 2a reverted on math grounds, pending re-RE), BUG-004, BUG-007, BUG-008, BUG-009, BUG-010 |
 
@@ -128,6 +128,37 @@ No cached rigSpec → `CanvasViewport`'s tick loop's `_rigSpec = rigSpecRef.curr
 **Lesson:** when a `set()` block runs but then throws after it, the user sees a partial state — half the seeders applied, the other half gone. This is the "store-action-with-side-effects-after-set" anti-pattern. Either keep all post-set work inside the produce, or wrap it in its own try/catch so the partial-state case is recoverable. Until then, every action that calls `get()` after `set()` needs careful review.
 
 ---
+
+### ✅ BUG-012 — PSD wizard selection + meshEditMode flags persist into post-import workspaces
+
+- **Severity:** medium (no data loss, but viewport stays in a confusing state) · **Reported:** 2026-05-02 · **Fixed:** 2026-05-02
+
+**Repro (user shelby, 2026-05-02):**
+
+1. Drop PSD into the editor → wizard opens
+2. Click on a layer/part during the wizard (e.g. "torso")
+3. Finish the wizard with auto-mesh checkbox on
+4. **Symptom:** torso stays selected forever; mesh wireframe + edge outline keep highlighting it across every workspace (including Layout where mesh visualizations don't belong)
+
+**Root causes — two distinct bugs that compounded:**
+
+1. **Wizard didn't clear transient editor state on finish.** [`handleWizardComplete`](../src/components/canvas/CanvasViewport.jsx) only cleared `wizardStep`, `wizardPsd`, `skeletonEditMode`, and the snapshot ref. `editorStore.selection`, `useSelectionStore.items`, `meshEditMode`, `blendShapeEditMode`, `activeBlendShapeId` all survived into the post-import editor — whatever the user had selected during the wizard kept its outline + dimming.
+
+2. **Workspace had no concept of "mesh visualizations are workspace-scoped".** `scenePass.draw` ran the wireframe pass whenever ANYTHING was selected, regardless of workspace (`needWirePass = … || selectionSet.size > 0`). So the sticky selection from #1 triggered wireframe rendering even in Layout workspace where the user is doing object-level work.
+
+**Fix (2026-05-02):**
+
+- **Wizard cleanup** — `handleWizardComplete` + `handleWizardSkip` now clear `selection`, `meshEditMode`, `blendShapeEditMode`, `activeBlendShapeId`, `skeletonEditMode` in `editorStore` AND `useSelectionStore.items` via `clear()`. Both wizard exit paths covered.
+
+- **Workspace viewport policy** — new pure module [`src/v3/shell/workspaceViewportPolicy.js`](../src/v3/shell/workspaceViewportPolicy.js) — `applyWorkspacePolicy(overlays, meshEditMode, workspaceId)` returns the EFFECTIVE values that scenePass + drag handlers should consume. Layout / Animation / Pose force `showWireframe = false`, `showVertices = false`, `meshEditMode = false`. Modeling / Rigging are permissive. Edge outline always passthrough (selection feedback works in every workspace). The user's stored toggles are NOT mutated — switching back to Modeling restores their prior wireframe / vertex setup automatically.
+
+- **CanvasViewport** reads the policy at every draw call and at the brush / mesh-edit drag handlers; render and behaviour are gated identically through the same pure function.
+
+**Tests:** [`scripts/test/test_workspaceViewportPolicy.mjs`](../scripts/test/test_workspaceViewportPolicy.mjs) — 54 cases covering every workspace × overlay combo, fallback for unknown workspace IDs, no-mutation invariant.
+
+**Doc:** [`docs/V3_WORKSPACES.md`](V3_WORKSPACES.md) — workspace × concern matrix, policy semantics, Reset Pose semantics by mode, wizard cleanup contract, "adding a new workspace" checklist.
+
+**Adjacent improvement (same commit):** Reset Pose ungated from animation mode. In staging mode (Layout / Modeling / Rigging) it now also resets every bone-tagged group's `node.transform.{rotation, x, y, scaleX, scaleY}` to identity (pivots preserved — those define WHERE the bone is, not the pose). User flow that motivated this: rotate bone controllers in Layout to inspect, want to revert. Per-part transforms (non-bone) stay untouched; for those the user has Properties → Reset Transform (GAP-014).
 
 ---
 

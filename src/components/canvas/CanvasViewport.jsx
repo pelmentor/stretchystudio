@@ -5,6 +5,9 @@ import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
+import { useUIV3Store } from '@/store/uiV3Store';
+import { useSelectionStore } from '@/store/selectionStore';
+import { applyWorkspacePolicy, isMeshEditAllowed } from '@/v3/shell/workspaceViewportPolicy';
 import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
 import {
   createPhysicsState,
@@ -118,6 +121,15 @@ export default function CanvasViewport({
   const rigSpec = useRigSpecStore(s => s.rigSpec);
   const rigSpecRef = useRef(rigSpec);
   rigSpecRef.current = rigSpec;
+
+  // BUG-012 — workspace viewport policy. Layout/Animation/Pose suppress
+  // mesh-level visualizations (wireframe / vertices) and force
+  // meshEditMode off so a stale selection from the PSD wizard or a
+  // forgotten meshEditMode toggle can't bleed into a non-mesh-edit
+  // workspace. See `src/v3/shell/workspaceViewportPolicy.js`.
+  const activeWorkspace = useUIV3Store((s) => s.activeWorkspace);
+  const activeWorkspaceRef = useRef(activeWorkspace);
+  activeWorkspaceRef.current = activeWorkspace;
 
   // R9 — pendulum physics state. Recreated whenever the rigSpec
   // changes (auto-invalidated by rigSpecStore on geometry edits).
@@ -615,7 +627,14 @@ export default function CanvasViewport({
         }
         meshOverriddenParts.current = newMeshOverridden;
 
-        sceneRef.current.draw(projectRef.current, editorRef.current, isDarkRef.current, poseOverrides, { rigDrivenParts });
+        // BUG-012 — apply workspace policy so Layout/Animation/Pose can't
+        // render wireframe/vertices or engage meshEditMode dimming even
+        // when those flags are set in editorStore. The user's stored
+        // toggles are preserved; only their visible effect is gated.
+        const _ed = editorRef.current;
+        const _eff = applyWorkspacePolicy(_ed.overlays, _ed.meshEditMode, activeWorkspaceRef.current);
+        const editorForDraw = { ..._ed, overlays: _eff.overlays, meshEditMode: _eff.meshEditMode };
+        sceneRef.current.draw(projectRef.current, editorForDraw, isDarkRef.current, poseOverrides, { rigDrivenParts });
 
         isDirtyRef.current = false;
       }
@@ -642,6 +661,9 @@ export default function CanvasViewport({
     [editorState.view, editorState.selection, editorState.overlays, editorState.meshEditMode,
     editorState.blendShapeEditMode, editorState.activeBlendShapeId]);
 
+  /* ── Mark dirty when workspace changes (BUG-012 policy may flip) ─────── */
+  useEffect(() => { isDirtyRef.current = true; }, [activeWorkspace]);
+
   /* ── Mark dirty when animation time or draft pose changes ───────────── */
   useEffect(() => { isDirtyRef.current = true; }, [animStore.currentTime]);
   useEffect(() => { isDirtyRef.current = true; }, [animStore.draftPose]);
@@ -650,7 +672,10 @@ export default function CanvasViewport({
   useEffect(() => {
     const handler = (e) => {
       const { meshEditMode, meshSubMode, blendShapeEditMode, brushSize } = editorRef.current;
-      if ((!meshEditMode || meshSubMode !== 'deform') && !blendShapeEditMode) return;
+      // BUG-012 — workspace policy gate: don't change the brush in
+      // non-meshEdit workspaces even if the meshEditMode flag is on.
+      const meshEditEffective = isMeshEditAllowed(meshEditMode, activeWorkspaceRef.current);
+      if ((!meshEditEffective || meshSubMode !== 'deform') && !blendShapeEditMode) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
       else if (e.key === ']') setBrush({ brushSize: Math.min(300, brushSize + 5) });
     };
@@ -1165,6 +1190,15 @@ export default function CanvasViewport({
     }
     setWizardPsd(null);
     setWizardStep(null);
+    // BUG-012 — same cleanup as handleWizardComplete; see comment there.
+    useEditorStore.setState({
+      selection: [],
+      meshEditMode: false,
+      blendShapeEditMode: false,
+      activeBlendShapeId: null,
+      skeletonEditMode: false,
+    });
+    useSelectionStore.getState().clear();
   }, [wizardPsd, finalizePsdImport, autoMeshAllParts, setWizardStep]);
 
   /* ── Wizard: complete (called by PsdImportWizard adjust step) ──────────── */
@@ -1175,7 +1209,20 @@ export default function CanvasViewport({
     }
     setWizardStep(null);
     setWizardPsd(null);
-    useEditorStore.getState().setSkeletonEditMode(false);
+    // BUG-012 — clear ALL transient interaction state on wizard finish.
+    // The user may have clicked a layer / part during the wizard which
+    // wrote to editorStore.selection / useSelectionStore / meshEditMode;
+    // those flags would otherwise leak into post-import workflows
+    // (sticky outline + dimming on whatever was last clicked, brush
+    // active when the user moves into Modeling, etc.).
+    useEditorStore.setState({
+      selection: [],
+      meshEditMode: false,
+      blendShapeEditMode: false,
+      activeBlendShapeId: null,
+      skeletonEditMode: false,
+    });
+    useSelectionStore.getState().clear();
     preImportSnapshotRef.current = null;
   }, [autoMeshAllParts, setWizardStep]);
 
@@ -1506,7 +1553,12 @@ export default function CanvasViewport({
 
     // ── select tool: vertex drag and part selection ──────────────────────
     // When mesh edit mode is active, restrict interaction to the selected part only.
-    const { meshEditMode, toolMode } = editorRef.current;
+    // BUG-012 — workspace gate: even if the meshEditMode flag is set,
+    // the Layout/Animation/Pose workspaces don't engage mesh-edit
+    // interaction. Stale flags from a prior session in Modeling can't
+    // hijack object-level workspaces.
+    const { toolMode } = editorRef.current;
+    const meshEditMode = isMeshEditAllowed(editorRef.current.meshEditMode, activeWorkspaceRef.current);
     const currentSelection = editorRef.current.selection ?? [];
     if (meshEditMode && currentSelection.length > 0) {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && n.type === 'part' && n.mesh);
@@ -1764,7 +1816,9 @@ export default function CanvasViewport({
 
     // Update brush circle cursor position (direct DOM, no React re-render)
     if (brushCircleRef.current) {
-      const inDeformMode = (editorRef.current.meshEditMode && editorRef.current.meshSubMode === 'deform')
+      // BUG-012 — workspace gate on the brush cursor too.
+      const meshEditEffective = isMeshEditAllowed(editorRef.current.meshEditMode, activeWorkspaceRef.current);
+      const inDeformMode = (meshEditEffective && editorRef.current.meshSubMode === 'deform')
         || editorRef.current.blendShapeEditMode;
       if (inDeformMode) {
         const rect = canvas.getBoundingClientRect();
@@ -2035,7 +2089,7 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: editorState.meshEditMode && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
+          cursor: isMeshEditAllowed(editorState.meshEditMode, activeWorkspace) && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}

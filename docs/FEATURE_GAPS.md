@@ -204,19 +204,23 @@ Distinct from [GAP-006](#gap-006--no-reset-to-rest-pose-button-in-pose-workspace
 
 ---
 
-### ✅ GAP-006 — No "Reset to rest pose" button in Pose workspace
+### ✅ GAP-006 — No "Reset to rest pose" button (originally Pose-only; expanded to all workspaces)
 
-- **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
-- **Affects:** Posing workflow
+- **Severity:** medium · **Reported:** 2026-04-30 · **Initial fix:** 2026-05-02 · **Expanded:** 2026-05-02
+- **Affects:** Posing workflow + bone-controller workflow in staging-mode workspaces
 
-**Fix:** [`Topbar.jsx`](../src/v3/shell/Topbar.jsx) now renders a "Reset Pose" button (RotateCcw icon + label) in the right cluster, visible **only** when `editorMode === 'animation'` (Pose / Animation workspaces). One click does:
+**Fix:** [`Topbar.jsx`](../src/v3/shell/Topbar.jsx) renders a "Reset Pose" button (RotateCcw icon + label) in the right cluster, **visible in every workspace**. Behaviour depends on the current editor mode because of how bone-controller drags persist:
 
-1. `useAnimationStore.clearDraftPose()` — drops uncommitted pose edits.
-2. `useParamValuesStore.resetToDefaults(project.parameters)` — every dial back to its canonical default (eyes open, no rotation, mouth closed, etc.).
+- **Animation mode** (Pose / Animation workspace) — bone drags write to `animationStore.draftPose` (transient overlay). Reset:
+  1. `clearDraftPose()` — drops uncommitted pose edits.
+  2. `resetToDefaults(project.parameters)` — every dial back to its canonical default.
+  3. Committed timeline keyframes are intentionally NOT touched.
 
-Committed timeline keyframes are intentionally NOT touched — those are the user's authored content. The button is the "give me the live preview's rest visual back" action, not "delete my animation".
+- **Staging mode** (Layout / Modeling / Rigging) — bone drags write straight to `node.transform.rotation` in `projectStore` (persistent). Reset does the same as animation mode PLUS walks every group with a `boneRole` and zeros `transform.{rotation, x, y, scaleX, scaleY}` (preserving `pivotX/pivotY` because pivots define WHERE the bone is, not the pose). Per-part transforms (non-bone nodes) are NOT reset — those are intentional layout (positioning a hat sticker, etc.); for those the user has [GAP-014's per-node Reset Transform](#gap-014--no-reset-transform-button-in-v3-object-properties-tab).
 
-Distinct from [GAP-014](#gap-014--no-reset-transform-button-in-v3-object-properties-tab) (per-node Reset Transform inside ObjectTab). Both shipped together 2026-05-02.
+The original 2026-05-02 fix gated the button to `editorMode === 'animation'`, which left users in Layout/Modeling/Rigging without a way to revert bone-controller rotations short of Ctrl+Z spam or per-node reset. Expanded same day after user feedback ("где кнопка сброса трансформов когда я повернул контроллеры костей в layout?").
+
+Doc anchor for the workspace × mode matrix: [`docs/V3_WORKSPACES.md`](V3_WORKSPACES.md).
 
 ---
 

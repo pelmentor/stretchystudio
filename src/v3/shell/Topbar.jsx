@@ -133,19 +133,58 @@ export function Topbar() {
   }
 
   /**
-   * GAP-006 — Reset to Rest Pose. Animation-mode only.
+   * GAP-006 — Reset to Rest Pose. Visible in EVERY workspace.
    *
-   * Drops uncommitted draft pose edits and zeros every parameter value
-   * to its canonical default. Does NOT touch committed keyframes — the
-   * timeline survives. After this, the live preview shows the rest
-   * pose plus whatever the keyframes at the current time say.
+   * Mental model: "put the character back to the rest position". The
+   * concrete mutations depend on which mode the user is in, because
+   * different workspaces persist transforms differently:
+   *
+   *   - **Animation mode** (Pose / Animation workspace): bone-controller
+   *     drags write to `animationStore.draftPose` (transient overlay).
+   *     Reset clears the draft + zeros paramValues. Committed timeline
+   *     keyframes survive — `node.transform` itself stays untouched.
+   *
+   *   - **Staging mode** (Layout / Modeling / Rigging): bone-controller
+   *     drags write straight to `node.transform.rotation` in
+   *     `projectStore` — there's no transient overlay. Reset zeros
+   *     `transform.rotation` (and clears any drag-introduced translate /
+   *     scale on bone groups) for every node tagged with a `boneRole`.
+   *     Non-bone nodes' transforms are NOT reset — those are the user's
+   *     intentional layout (per-part position / scale set in the
+   *     Outliner or PSD-derived). Per-node Reset Transform in
+   *     Properties is the right tool for those.
+   *
+   *   - Always: paramValues reset to defaults (so e.g. ParamRotation_X
+   *     baked-bone outputs go back to 0 before any next frame's eval).
    *
    * Distinct from GAP-014's per-node Reset Transform which resets ONE
-   * node's transform to identity.
+   * arbitrary node's transform.
    */
   function handleResetRestPose() {
     clearDraftPose();
     resetParamValues(project?.parameters ?? []);
+    // Staging-mode: bone-controller drags persist in node.transform.
+    // Reset every bone-tagged group's transform to identity. Goes
+    // through updateProject so the action is undoable.
+    if (editorMode !== 'animation') {
+      useProjectStore.getState().updateProject((proj) => {
+        for (const n of proj.nodes ?? []) {
+          if (n?.type !== 'group' || !n.boneRole) continue;
+          if (!n.transform) continue;
+          // Preserve pivotX/pivotY — those define WHERE the bone is, not
+          // the user's pose. Resetting pivot would warp the rig.
+          n.transform.rotation = 0;
+          n.transform.x = 0;
+          n.transform.y = 0;
+          n.transform.scaleX = 1;
+          n.transform.scaleY = 1;
+        }
+      });
+    }
+    logger.debug('resetPose', `Reset Pose triggered (mode=${editorMode})`, {
+      editorMode,
+      paramsReset: project?.parameters?.length ?? 0,
+    });
   }
 
   async function handleHotReloadClick() {
@@ -310,26 +349,27 @@ export function Topbar() {
       <div className="flex-1" />
 
       <TooltipProvider delayDuration={400}>
-        {/* GAP-006 — visible only in Pose / Animation. Drops draft pose
-            edits + zeros paramValues to defaults; committed keyframes
-            untouched. */}
-        {editorMode === 'animation' ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost" size="sm"
-                className="h-7 px-2 text-muted-foreground hover:text-foreground"
-                onClick={handleResetRestPose}
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span className="ml-1 text-[11px]">Reset Pose</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
+        {/* GAP-006 — Reset Pose visible in EVERY workspace. Behaviour
+            depends on mode: animation = clear draft + paramValues only
+            (keyframes survive); staging = also reset every bone-group's
+            node.transform.rotation/translate/scale to identity. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost" size="sm"
+              className="h-7 px-2 text-muted-foreground hover:text-foreground"
+              onClick={handleResetRestPose}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span className="ml-1 text-[11px]">Reset Pose</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {editorMode === 'animation'
+              ? 'Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.'
+              : 'Reset to rest pose — zeros every bone-group rotation/translation/scale (preserving pivots) and resets parameters to defaults. Per-part transforms are preserved; use Properties → Reset Transform for those.'}
+          </TooltipContent>
+        </Tooltip>
 
         <Tooltip>
           <TooltipTrigger asChild>
