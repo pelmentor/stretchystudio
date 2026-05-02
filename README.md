@@ -80,7 +80,7 @@ pnpm dev          # Vite dev server, http://localhost:5173
 ```
 
 ```bash
-pnpm test         # full unit-test suite (2800+ cases across 68 files) + tsc --noEmit
+pnpm test         # full unit-test suite (2900+ cases across 69 files) + tsc --noEmit
 pnpm typecheck    # tsc --noEmit only
 ```
 
@@ -135,7 +135,7 @@ src/
 └── components/             # legacy v2 UI (PsdImportWizard wrapped inside v3)
 
 scripts/
-├── test/                   # 67 standalone unit-test scripts (~2800 cases)
+├── test/                   # 69 standalone unit-test scripts (~2900 cases)
 ├── cubism_oracle/          # Python ctypes harness over Live2DCubismCore.dll
 │                           #   + JS oracle diff harness (cmo3 → rigSpec → evalRig
 │                           #   vs Cubism). BUG-003 quantification.

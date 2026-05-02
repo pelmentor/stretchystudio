@@ -18,7 +18,7 @@ Each entry is short and self-contained — anyone reading should be able to pick
 |--------|---------|
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider) |
-| ⏳ Open | BUG-003 (kernel verified textbook via raw asm; Phase 2b FD Jacobian probe BLOCKED on rotation-matrix-structure refactor — quantified at 17.73 px param max via oracle harness) |
+| ⏳ Open | BUG-003 (Phase 3 lifted-grid composition shipped — PARAM mean dropped 6.66 → 2.45 px / 63% reduction; breath case 16.76 → 5.45 px / 67%; AngleZ peak still 17.73 px pending Phase 2b rotation FD Jacobian Setup, blocked on rotation matrix-structure refactor) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 
