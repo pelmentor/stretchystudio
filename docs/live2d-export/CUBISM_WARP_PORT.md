@@ -214,38 +214,34 @@ For body-angle-driven head/face deformations: when `ParamBodyAngleZ ≠ 0`, Body
 
 `WarpDeformer_Setup` (IDA `0x7fff2b24e410`) is similar but simpler: calls `parent.TransformTarget(grid)` IN-PLACE so the warp's grid gets lifted from "parent's child-frame" to "parent's parent-frame" each frame. Topological-order deformer iteration means by the time a warp's Setup runs, its parent's grid is already in canvas-root, so this single call promotes the warp's grid to canvas-root too.
 
-**Phase 2b plan (autonomous-doable):**
+**Phase 2b implementation status — 🔴 BLOCKED on architectural mismatch (2026-05-02 finding):**
 
-In v3's [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) `DeformerStateCache.getState`, when constructing the rotation state for a warp-parented rotation deformer:
+Initial Phase 2b attempt (commit not landed) revealed that v3's chain-walk eval architecture is **fundamentally incompatible with how Cubism handles the rotation→warp boundary**. Two alternatives, both blocked for different reasons:
 
-```js
-// Replace the closed-form approximation:
-//   const sx = isWarpParent ? this._warpSlopeX : 1;
-//   const sy = isWarpParent ? this._warpSlopeY : 1;
+**Alternative A — Match Cubism's "canvas-final after Setup" model.**
 
-// With FD Jacobian probe:
-const [cpX, cpY]   = evalParentChain(spec.parent, [r.originX, r.originY]);
-const [pX1, pY1]   = evalParentChain(spec.parent, [r.originX, r.originY + EPS]);
-const dx = pX1 - cpX, dy = pY1 - cpY;
-const probedScale  = Math.hypot(dx, dy) / EPS;
-const probedAngle  = Math.atan2(dx, dy); // angle of probe response from +Y
-state = { kind: 'rotation', mat: buildRotationMat3CanvasFinal({
-  ...r,
-  angleDeg: r.angleDeg - probedAngle * 180 / Math.PI,
-  originX: cpX,                    // canvas-final pivot
-  originY: cpY,
-  scale: r.scale * probedScale,
-}) };
-// At eval time, this rotation produces canvas-final output directly,
-// so NO further chain walk is needed for verts already in this rotation's
-// child frame — they go straight to canvas-px.
-```
+Build the rotation matrix to take child verts (canvas-px relative to pivot) and produce canvas-final output directly. Then short-circuit the chain walker after applying the matrix.
 
-Then the chain walk for an artmesh under such a rotation simplifies: artmesh.verts → rotation.TransformTarget → canvas-px (no further traversal needed, since rotation now outputs canvas-final).
+Tested against the [oracle diff harness](../../scripts/cubism_oracle/diff_v3_vs_oracle.mjs) — divergence exploded **1700× worse** than baseline (max 85,000 px vs 17 px). Root cause: child verts arriving at the rotation deformer in v3's chain walker are NOT in canvas-px-relative-to-pivot — they're in whatever frame the previous chain step produced (typically a warp's normalised 0..1 or canvas-rel-grandparent-pivot, depending on what's below). Cubism's `Setup` rebuilds the entire chain so child frames are consistent canvas-px; v3 doesn't.
 
-**Verification via oracle (per memory `feedback_oracle_before_unit_tests.md`):** before shipping, build the v3 evalRig vs oracle diff harness using shelby.cmo3 (cmo3Import → rigSpec → evalRig) and assert per-drawable max-diff drops below 1px across all 21 fixtures. That's the canonical pass criterion.
+**Alternative B — Replace `_warpSlopeX/Y` with the FD-probed slope (per-frame, per-deformer).**
 
-**Phase 2b status:** 🔴 Code design complete, needs harness + verification before ship.
+Same matrix structure as v3's existing code, just better numbers for `extraSx/Sy`. The probe is straightforward (probe `parent.eval(pivot)` and `parent.eval(pivot + EPS·ŷ)`, compute `|delta| / EPS`).
+
+Tested — divergence got **worse** (max 36 px param vs 17 px baseline). Root cause: v3's matrix structure only supports DIAGONAL scaling (`R · diag(extraSx, extraSy)`). When a warp is parameter-rotated (e.g. `ParamBodyAngleZ ≠ 0`), the warp's local Jacobian at the pivot has **off-diagonal terms** — a rotation. The FD probe captures the magnitude correctly (`|delta|`) but throws away the directional information (just isotropic scale). v3's diagonal-only matrix can't represent the rotation, so the FD-magnitude as scale produces the wrong transformation when the warp is rotated.
+
+The closed-form `_warpSlopeX/Y` happens to be a slightly more conservative approximation (it's a constant for the whole rig, derived from canvas-to-innermost-warp slopes), so it gives a smaller error in practice for shelby's data — but it's wrong for a different reason (axis-aligned, ignores per-deformer pivot location).
+
+**Real fix requires changing the rotation matrix structure** to a general `M2 · v + t` (full 2x2 + translation), so the FD probe in TWO directions can be packed into the matrix as the inverse Jacobian. That's a refactor of [`rotationEval.js`](../../src/io/live2d/runtime/evaluator/rotationEval.js)'s `buildRotationMat3Aniso` + `applyMat3ToPoint` — which propagates to several downstream consumers — plus a chain-walker change to handle the new state shape.
+
+**Infrastructure shipped 2026-05-02 for the eventual Phase 2b:**
+
+- [`scripts/cubism_oracle/diff_v3_vs_oracle.mjs`](../../scripts/cubism_oracle/diff_v3_vs_oracle.mjs) — automated v3-vs-oracle diff harness across 21 pinned snapshots. Splits TOTAL divergence (rigSpec accuracy) from PARAM-DRIVEN divergence (BUG-003 signal). Current baseline: total max=73.23 px, param max=17.73 px, param mean=3.25 px.
+- `DeformerStateCache.evalChainAtPoint(parent, x, y)` in [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js) — single-point parent-chain walk. Currently unused; preserved for the next Phase 2b attempt.
+
+**Verification contract (per memory `feedback_oracle_before_unit_tests.md`):** any future Phase 2b ship must drop param max below 1.0 px across all 21 fixtures via the harness BEFORE merge. No "looks better visually" — measured numbers only.
+
+**Phase 2b status:** 🔴 Blocked on rotation-matrix-structure refactor. Out of scope for the current sweep.
 
 ---
 

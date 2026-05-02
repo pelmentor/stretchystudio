@@ -189,7 +189,15 @@ For body-angle params: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated
 
 **Fix path:** Phase 2b in [`docs/live2d-export/CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02). Implement the FD Jacobian probe in `chainEval.js`'s `DeformerStateCache.getState` for warp-parented rotation deformers. Verify via oracle diff harness (cmo3 → rigSpec → evalRig vs Cubism oracle) BEFORE shipping (per `feedback_oracle_before_unit_tests.md`).
 
-**Status:** ⏳ In progress. Root cause settled; implementation + oracle harness next.
+**Quantified baseline (oracle harness 2026-05-02):**
+
+- TOTAL divergence (raw v3 vs oracle, all causes): max=73.23 px, mean=6.00 px across 21 fixtures
+- PARAM-DRIVEN divergence (total minus rest baseline — pure BUG-003 signal): max=17.73 px, mean=3.25 px
+- Worst drawable: ArtMesh6 (eyelash-l), chain has rotation-on-warp-parent boundaries
+
+**Phase 2b implementation blocker found (2026-05-02):** initial attempt revealed v3's rotation matrix structure (`R · diag(extraSx, extraSy)`) is **diagonal-only**. When a warp is parameter-rotated, the warp's local Jacobian at the rotation pivot has off-diagonal terms — a rotation that the FD probe captures as `(dx, dy)`. v3's diagonal matrix can only carry the magnitude `|delta|`, not the directional information. Both attempted alternatives (canvas-final + chain-stop OR FD-magnitude-as-slope) made divergence worse than baseline. Real fix requires switching `rotationEval.js`'s matrix to a general 2×2 + translation, which is a downstream-consumer refactor out of scope for a single sweep. Detail in [`CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02).
+
+**Status:** ⏳ Blocked on rotation-matrix-structure refactor. Diagnostic harness shipped; baseline pinned; infrastructure (`DeformerStateCache.evalChainAtPoint`) preserved for the next attempt.
 
 ---
 

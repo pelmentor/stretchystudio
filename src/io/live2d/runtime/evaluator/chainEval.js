@@ -40,6 +40,16 @@ import { evalWarpKernelCubism } from './cubismWarpEval.js';
 import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
 
 /**
+ * Phase 2b — FD Jacobian probe step size, in the rotation deformer's
+ * parent-warp's normalised 0..1 frame. Cubism's RotationDeformer_Setup
+ * starts at 1.0 and shrinks to 0.0125 over 10 retries on degenerate
+ * cases; for non-degenerate warps a smallish constant gives stable
+ * single-precision deltas without numerical noise. 0.01 = 1% of the
+ * parent's normalised extent.
+ */
+const FD_PROBE_EPS = 0.01;
+
+/**
  * @typedef {Object} ArtMeshFrame
  * @property {string} id                     - artMesh.id (= partId)
  * @property {Float32Array} vertexPositions  - canvas-px, length = 2*N
@@ -208,14 +218,23 @@ class DeformerStateCache {
     this._rigSpec = rigSpec;
     this._paramValues = paramValues ?? {};
     this._byId = new Map();
-    // Cache the canvas-px → warp-input-frame slopes once per call.
-    // The reverse-engineered moc3 value `1/canvasMaxDim` only matches the
-    // Cubism convention when the warp parent's input frame happens to be
-    // `canvas/canvasMaxDim`-normalised (true for Hiyori where the body
-    // warp chain spans the canvas; FALSE for character rigs whose
-    // BodyXWarp covers a smaller extent — shelby's slope is ~5×
-    // larger). We pull the actual slope from `canvasToInnermostX/Y`,
-    // which encodes the chained BZ/BY/BR/BX normalisation slopes.
+    // Build a deformer-id → spec map once. Phase 2b's chain-walk helper
+    // needs O(1) parent lookups; building it here is the same map
+    // buildDeformerIndex builds for the outer loop, but we can't share
+    // because chainEval.evalRig builds it before constructing this cache.
+    // 41 deformers × 5-deep chain × probe-per-rotation → ~250 lookups
+    // per evalRig call, so the duplicate map cost is trivial.
+    this._specById = new Map();
+    if (Array.isArray(rigSpec?.warpDeformers)) {
+      for (const d of rigSpec.warpDeformers) if (d?.id) this._specById.set(d.id, d);
+    }
+    if (Array.isArray(rigSpec?.rotationDeformers)) {
+      for (const d of rigSpec.rotationDeformers) if (d?.id) this._specById.set(d.id, d);
+    }
+
+    // Legacy `_warpSlopeX/Y` retained only as a fallback when the FD
+    // probe can't run (e.g. the parent warp's state can't be built).
+    // Phase 2b's probe-based scale is preferred everywhere else.
     const w = rigSpec?.canvas?.w ?? 0;
     const h = rigSpec?.canvas?.h ?? 0;
     const cmd = Math.max(w, h) || 1;
@@ -223,6 +242,53 @@ class DeformerStateCache {
     const cToY = rigSpec?.canvasToInnermostY;
     this._warpSlopeX = typeof cToX === 'function' ? (cToX(1) - cToX(0)) : 1 / cmd;
     this._warpSlopeY = typeof cToY === 'function' ? (cToY(1) - cToY(0)) : 1 / cmd;
+  }
+
+  /**
+   * Phase 2b — walk the parent chain at a SINGLE point. Used by the
+   * rotation deformer's FD Jacobian probe to compute a canvas-final
+   * pivot + measure the parent's local Jacobian.
+   *
+   * Mirrors the per-vertex chain walk in `evalArtMeshFrame` but for
+   * one point and with no buffer ping-pong. Returns the point's
+   * canvas-final position.
+   *
+   * @param {{type: string, id: string|null}|null} parent
+   * @param {number} x  point in `parent`'s natural input frame
+   * @param {number} y
+   * @param {number[]} [out]
+   * @returns {[number, number]}
+   */
+  evalChainAtPoint(parent, x, y, out) {
+    let cx = x, cy = y;
+    let cur = parent;
+    let safety = 32;
+    const tmp = out ?? [0, 0];
+    const inBuf = new Float32Array(2);
+    const outBuf = new Float32Array(2);
+    while (cur && cur.type !== 'root' && safety-- > 0) {
+      if (!cur.id) break;
+      const parentSpec = this._specById.get(cur.id);
+      if (!parentSpec) break;
+      const state = this.getState(parentSpec);
+      if (!state) { cur = parentSpec.parent; continue; }
+      if (state.kind === 'warp') {
+        inBuf[0] = cx; inBuf[1] = cy;
+        evalWarpKernelCubism(
+          state.grid, state.gridSize, state.isQuadTransform === true,
+          inBuf, outBuf, 1,
+        );
+        cx = outBuf[0]; cy = outBuf[1];
+      } else if (state.kind === 'rotation') {
+        applyMat3ToPoint(state.mat, cx, cy, tmp);
+        cx = tmp[0]; cy = tmp[1];
+        // Canvas-final rotation stops the walk (same as evalArtMeshFrame).
+        if (state.isCanvasFinal) break;
+      }
+      cur = parentSpec.parent;
+    }
+    tmp[0] = cx; tmp[1] = cy;
+    return tmp;
   }
 
   getState(spec) {
@@ -252,6 +318,17 @@ class DeformerStateCache {
           // pixels into the parent warp's INPUT frame, which is `0..1` of
           // its grid bbox. Scale anisotropic to handle non-square bboxes.
           // For rotation parents, the child's canvas-px stays canvas-px.
+          //
+          // Phase 2b is BLOCKED on this code path: the matrix structure
+          // here is `R · diag(extraSx, extraSy)` — diagonal scale only.
+          // Cubism's actual frame conversion at the rotation→warp boundary
+          // is the FULL 2x2 inverse Jacobian of the parent warp's bilerp
+          // at the pivot (which has off-diagonal terms when the warp is
+          // parameter-rotated). A diagonal approximation captures
+          // magnitudes but not directional rotation. Full Phase 2b
+          // requires switching the rotation state's matrix to a general
+          // 2x2 + translation (or a different kernel approach).
+          // See docs/live2d-export/CUBISM_WARP_PORT.md Phase 2b.
           const isWarpParent = spec.parent?.type === 'warp';
           const sx = isWarpParent ? this._warpSlopeX : 1;
           const sy = isWarpParent ? this._warpSlopeY : 1;
