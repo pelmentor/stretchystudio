@@ -21,7 +21,7 @@
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | open |
 | [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | open |
-| [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | open |
+| [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | (a) closed; (b)(c) open |
 
 ---
 
@@ -30,7 +30,7 @@
 <a id="pp1-001"></a>
 ### PP1-001 — Bone-controller rotation doesn't propagate to layers (no re-render trigger)
 
-**Type:** bug · **Severity:** high · **Status:** closed (commit pending)
+**Type:** bug · **Severity:** high · **Status:** closed (commit `2d6cf29`)
 
 **Resolution.** The actual cause was deeper than "missing re-render trigger" — `worldMatrix` is **skipped** for rig-driven parts (scenePass.js:84-95), so for those parts the bone's `node.transform.rotation` has zero effect on the rendered pose. The rig is driven by `paramValues` only, via `evalRig`. The auto-rig already creates `ParamRotation_<sanitisedName>` for every bone group ([`paramSpec.js:267-303`](../src/io/live2d/rig/paramSpec.js#L267-L303)) — the SkeletonOverlay rotate-drag was just never writing to it.
 
@@ -200,22 +200,11 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 
 Two related but separable problems in the mesh-edit surface. Filing as one entry because they share the same code path; will likely split into two commits when fixed.
 
-#### Sub-issue (a) — vertices don't move at all
+#### Sub-issue (a) — vertices don't move at all — closed (commit pending)
 
-**Symptom (user-visible).** In mesh edit mode, attempting to drag a vertex produces no movement. The vertex stays where it is; mesh stays where it is.
+**Root cause.** The handlers were intact — drag uploads were happening on every pointer move. The bug was in the rAF tick: after Init Rig, `evalRig` produces frames for every art mesh, those frames go into `poseOverrides[id].mesh_verts`, and the renderer uploads them every frame ([`CanvasViewport.jsx:740-748`](../src/components/canvas/CanvasViewport.jsx#L740-L748)). Rig keyforms are baked at Init Rig time from the THEN-current `node.mesh.vertices`. The user's mesh edit writes to `node.mesh.vertices` and uploads the new positions, but the next rAF tick re-uploads the stale rig output on top — net effect: vertices appear pinned.
 
-**Investigation context (memory + recent code).** Memory `feedback_blender_mesh_edit_port.md` (2026-05-02) says the proportional-edit + MMB-scroll port from Blender shipped via `test:proportionalEdit` test suite. Edit-mode refactor (commit `2026-05-02`) collapsed the 3-flag triple into single `editorStore.editMode` slot and added `allowedEditModes` per workspace. The vertex-drag handler may have:
-- (a) Lost its event wiring during the edit-mode refactor (handler now gated on a flag that doesn't fire).
-- (b) Detached when the mesh-edit-mode auto-show-wireframe layer was added (BUG-019 fix folded into the refactor).
-- (c) Regressed during the workspace rework that deleted `workspaceViewportPolicy.js`.
-
-**Investigation steps.**
-1. Open mesh edit mode + confirm wireframe + vertices ARE rendered (per memory: auto-shown). If vertices not rendered, drag handler probably never reaches them.
-2. Click a vertex with a console listener attached to the SVG/canvas — verify pointer events reach the vertex element.
-3. Check whether `editorStore.editMode === 'mesh'` AND the workspace's `allowedEditModes` includes 'mesh' at hit-test time.
-4. Re-run `npm test test:proportionalEdit` + `test:meshPostProcess` — confirm the unit tests still pass; the gap will be in the React event wiring, not the math.
-
-**Repair scope.** Diagnostic-led; can't predict the fix without the trace.
+**Fix.** While the user is mesh-editing a part, skip the rig override for THAT part. Other parts keep evalRig output as usual; only the selected mesh-edited part drops out so the user's edits show through. Other parts continue to be driven by paramValues. The rigSpec keyforms remain stale until the user clicks Refit (RigStagesTab) — which is the documented path to refresh the rig with their edits.
 
 #### Sub-issue (b) — proportional editing UX needs Blender-faithful rework
 

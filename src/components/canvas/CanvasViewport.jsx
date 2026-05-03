@@ -640,8 +640,24 @@ export default function CanvasViewport({
               }
             }
           }
+          // PP1-008(a) — while the user is mesh-editing a part, skip the
+          // rig override for THAT part so their vertex edits are visible
+          // immediately. evalRig walks rigSpec.artMeshes baked at Init Rig
+          // time; once the user moves a vertex those keyforms are stale,
+          // and the rig override would re-upload the stale verts every
+          // frame, hiding the edit. Re-baking the keyforms mid-drag is
+          // expensive — the V3 re-rig flow's Refit All (or per-stage
+          // rebake) is the path to refresh the rig once the user is done.
+          // Other parts stay on rig output as usual; only the selected
+          // part being edited drops out.
+          const _ed_mesh = editorRef.current;
+          const _meshEditingPartId =
+            (_ed_mesh.editMode === 'mesh' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
+              ? _ed_mesh.selection[0]
+              : null;
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
+            if (f.id === _meshEditingPartId) continue;
             const node = projectRef.current.nodes.find(n => n.id === f.id);
             if (!node?.mesh) {
               // Phase -1D: log once per missing partId in dev so the
