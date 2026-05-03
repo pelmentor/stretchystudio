@@ -27,6 +27,7 @@ import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
+import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -316,6 +317,11 @@ export async function runStage(stage, opts = {}) {
   const mode = opts.mode ?? 'merge';
   _runStageInFlight = true;
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  // beginBatch + endBatch fold the seeder commit and the telemetry stamp
+  // into ONE undo entry — Ctrl+Z reverts both together (one click in =
+  // one click out). Without this the user has to undo twice to fully
+  // unwind a refit (timestamp, then data), which is confusing.
+  beginBatch(useProjectStore.getState().project);
   try {
     if (KEYFORM_STAGES.has(stage)) {
       // Stages 9-11: rest-pose harvest required.
@@ -329,17 +335,28 @@ export async function runStage(stage, opts = {}) {
         const harvest = await initializeRigFromProject(project, images);
         const action = STAGE_TO_ACTION[stage];
         const store = useProjectStore.getState();
+        // For each keyform stage: if harvest produced a value, seed it;
+        // otherwise in REPLACE mode clear the stored value (mirrors the
+        // `else if (mode === 'replace') clearXxx()` branches in
+        // `seedAllRig`). MERGE mode preserves the existing stored value
+        // when harvest is null — by design.
         if (stage === 'faceParallax') {
           if (harvest?.faceParallaxSpec) {
             store[action](harvest.faceParallaxSpec, mode);
+          } else if (mode === 'replace') {
+            store.clearFaceParallax();
           }
         } else if (stage === 'bodyWarpChain') {
           if (harvest?.bodyWarpChain) {
             store[action](harvest.bodyWarpChain, mode);
+          } else if (mode === 'replace') {
+            store.clearBodyWarp();
           }
         } else if (stage === 'rigWarps') {
           if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
             store[action](harvest.rigWarps, mode);
+          } else if (mode === 'replace') {
+            store.clearRigWarps();
           }
         }
       } finally {
@@ -355,9 +372,9 @@ export async function runStage(stage, opts = {}) {
       useProjectStore.getState()[action](mode);
     }
 
-    // Stamp telemetry — separate immer commit because the seeders above
-    // already snapshotted; stamping here adds one more redo step but is
-    // cheap and survives undo as a paired entry.
+    // Stamp telemetry inside the same batch → folds into the seeder's
+    // single undo snapshot. `skipHistory` would also work; batch is the
+    // standard pattern and pairs with the begin/end calls above.
     const isoNow = new Date().toISOString();
     useProjectStore.getState().updateProject((p) => {
       if (!p.rigStageLastRunAt || typeof p.rigStageLastRunAt !== 'object') {
@@ -374,6 +391,7 @@ export async function runStage(stage, opts = {}) {
     if (typeof console !== 'undefined') console.error('[RigService] runStage failed:', stage, err);
     return { ok: false, error };
   } finally {
+    endBatch();
     _runStageInFlight = false;
   }
 }
@@ -405,6 +423,8 @@ export async function refitAll(opts = {}) {
   _runStageInFlight = true;
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const snapshot = capturePose();
+  // Single undo entry — see runStage for rationale.
+  beginBatch(useProjectStore.getState().project);
   try {
     resetToRestPose();
     const project = useProjectStore.getState().project;
@@ -435,6 +455,7 @@ export async function refitAll(opts = {}) {
     if (typeof console !== 'undefined') console.error('[RigService] refitAll failed:', err);
     return { ok: false, error };
   } finally {
+    endBatch();
     _runStageInFlight = false;
   }
 }
