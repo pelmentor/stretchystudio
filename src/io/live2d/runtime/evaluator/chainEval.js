@@ -73,13 +73,19 @@ const FD_PROBE_EPS = 0.01;
  *
  * @param {import('../../rig/rigSpec.js').RigSpec} rigSpec
  * @param {Object<string, number>} paramValues
- * @param {{kernel?: 'v3-legacy'|'cubism-setup', trace?: TraceCollector}} [options]
+ * @param {{kernel?: 'v3-legacy'|'cubism-setup', trace?: TraceCollector, out?: {liftedGrids?: Map<string, Float64Array>|null}}} [options]
  *   Phase 2b — `kernel` selects the rotation-deformer composition
  *   strategy. `'v3-legacy'` (default) keeps the cascaded-normaliser
  *   `_warpSlopeX/Y` constant. `'cubism-setup'` is reserved for the
  *   in-progress Setup port (Stage 0: branches still identical, output
  *   byte-equal). `trace` is an optional collector for per-deformer
  *   intermediate state; consumed by `scripts/cubism_oracle/probe_kernel.mjs`.
+ *
+ *   PP2-010 — `out.liftedGrids`, when supplied as a Map, gets populated
+ *   with `warpId → canvas-px lifted grid (Float64Array)` for every warp
+ *   in the rig. Used by `WarpDeformerOverlay` to render the live
+ *   network of warp lattices animated under current params, without
+ *   forcing a second eval pass.
  * @returns {ArtMeshFrame[]}
  */
 export function evalRig(rigSpec, paramValues, options) {
@@ -101,6 +107,21 @@ export function evalRig(rigSpec, paramValues, options) {
   for (const meshSpec of rigSpec.artMeshes) {
     const frame = evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformerIndex);
     if (frame) out.push(frame);
+  }
+
+  // PP2-010 — populate caller's lifted-grids receiver. Force-lift every
+  // warp the eval didn't already touch so the overlay sees the full
+  // network. Cheap: each warp lifts at most once per cache via
+  // `_liftedById` memoization; warps already lifted during the artmesh
+  // pass return their cached entry immediately.
+  const liftedOut = options?.out?.liftedGrids;
+  if (liftedOut instanceof Map) {
+    const warps = Array.isArray(rigSpec.warpDeformers) ? rigSpec.warpDeformers : [];
+    for (const w of warps) {
+      if (!w?.id) continue;
+      const grid = cache.getLiftedGrid(w);
+      if (grid) liftedOut.set(w.id, grid);
+    }
   }
 
   // Phase 3 — first-sight log of lifted-grid bboxes per warp on each

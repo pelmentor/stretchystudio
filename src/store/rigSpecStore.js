@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore.js';
 import { useParamValuesStore } from './paramValuesStore.js';
+import { useRigEvalStore } from './rigEvalStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
@@ -81,7 +82,13 @@ export const useRigSpecStore = create((set, get) => ({
     }
   },
 
-  invalidate: () => set({ rigSpec: null, lastBuiltGeometryVersion: -1, error: null }),
+  invalidate: () => {
+    set({ rigSpec: null, lastBuiltGeometryVersion: -1, error: null });
+    // PP2-010 — drop the live lifted-grid cache too; without this,
+    // WarpDeformerOverlay would keep painting the previous rig's
+    // lattices until the next eval pass on the new spec.
+    useRigEvalStore.getState().setLiftedGrids(null);
+  },
 }));
 
 // Auto-invalidate on geometry edits. Listens for `versionControl.geometryVersion`

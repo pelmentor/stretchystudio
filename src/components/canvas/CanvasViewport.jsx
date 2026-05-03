@@ -6,6 +6,7 @@ import { useProjectStore, DEFAULT_TRANSFORM } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
+import { useRigEvalStore } from '@/store/rigEvalStore';
 import { useUIV3Store } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
 // Workspace policy module deleted 2026-05-02 — workspaces no longer
@@ -637,11 +638,25 @@ export default function CanvasViewport({
           // store object until setParamValue/setMany fires.
           const cache = lastEvalCacheRef.current;
           let frames;
+          // PP2-010 — only collect lifted grids when the warp-grid overlay is
+          // actually mounted. Allocates a fresh Map per eval; cheap, but
+          // skipping when invisible avoids the per-frame allocation.
+          const _wantLifted = !previewModeRef.current
+            && (editorRef.current.viewLayers?.warpGrids ?? true);
           if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null) {
             frames = cache.frames;
           } else {
-            frames = evalRig(_rigSpec, valuesForEval);
-            lastEvalCacheRef.current = { rigSpec: _rigSpec, paramValues: valuesForEval, frames };
+            const evalOut = _wantLifted ? { liftedGrids: new Map() } : null;
+            frames = evalRig(_rigSpec, valuesForEval, evalOut ? { out: evalOut } : undefined);
+            lastEvalCacheRef.current = {
+              rigSpec: _rigSpec, paramValues: valuesForEval, frames,
+              liftedGrids: evalOut?.liftedGrids ?? null,
+            };
+            // Publish to rigEvalStore so WarpDeformerOverlay sees the
+            // current-frame lattice positions for every warp (including
+            // nested normalised-0to1 ones, which the Phase 1 overlay
+            // skipped entirely).
+            useRigEvalStore.getState().setLiftedGrids(evalOut?.liftedGrids ?? null);
             // BUG-015 instrumentation — once-per-second snapshot of the
             // ParamBodyAngle{X,Y,Z} values that just went into evalRig +
             // the resulting top-row vertex displacement on a sentinel

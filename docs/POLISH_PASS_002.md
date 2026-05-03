@@ -13,13 +13,13 @@
 | [PP2-001](#pp2-001) | bug    | medium | Wizard Reorder step — canvas click-to-select dead | closed (`9330211`) |
 | [PP2-002](#pp2-002) | bug    | medium | Proportional-edit ring visible outside mesh edit (wizard, Object Mode) | closed (`9330211`) |
 | [PP2-003](#pp2-003) | feature| medium | Warp grid overlay — black + 25% opacity defaults | closed (`9330211`) |
-| [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | open |
+| [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | closed (subsumed by PP2-010 a) |
 | [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; (b) neutralisation verified identity, root cause moved upstream | partial |
 | [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | partial (trunk closed; legs/legwear open) |
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | closed (this commit) |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
 | [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
-| [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | open (supersedes PP2-004) |
+| [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | partial — (a) live lattices closed (this commit); (b) per-warp visibility deferred |
 
 ---
 
@@ -182,19 +182,21 @@ This is "do as Live2D does": bones in the natural skeleton don't have their own 
 <a id="pp2-010"></a>
 ### PP2-010 — Warp grid overlay: render all warps live + outliner per-warp visibility
 
-**Type:** feature · **Severity:** medium · **Status:** open (supersedes PP2-004)
+**Type:** feature · **Severity:** medium · **Status:** partial — (a) shipped; (b) per-warp visibility deferred to a follow-up
 
 **Why this exists.** User explained the original design intent: *"Я придумал чтобы посмотреть как ПРОИСХОДИТ деформация когда я драйвлю ANGLE XYZ и другие PARAMS."* The warp-grid overlay is a debug tool — see how each lattice deforms as parameters change. Cubism Editor shows the SELECTED deformer's grid; SS's intent is broader (network view of all lattices, animated with params).
 
-**Scope.** Three sub-tasks bundled because they share infrastructure:
+**(a) Render every warp's grid in canvas-px, animated with params (this commit).**
 
-**(a) Render every warp's grid in canvas-px, animated with params.** Currently the overlay only renders warps with `localFrame === 'canvas-px'` — body chain top-level warps. Per-part rigWarps (hair, eyes, clothing, face accents) are `normalized-0to1` and don't render. Their canvas-px positions exist in chainEval's `cache._liftedById` map but aren't exposed.
+`evalRig` now accepts an optional `out.liftedGrids` Map; when CanvasViewport's overlay flag is on, it allocates the map and forwards it. `evalRig` populates it via `cache.getLiftedGrid(warp)` for every warp in the rig (lift is memoised per cache, so the artmesh pass and this loop share work — no double composition). Output is published to a new [`rigEvalStore`](../src/store/rigEvalStore.js) so `WarpDeformerOverlay` can subscribe without prop-drilling. Per-frame allocation is gated on `viewLayers.warpGrids` so when the overlay is off, the eval still costs nothing extra.
 
-  Repair: add `liftedGrids: Map<warpId, Float32Array>` to `evalRig`'s output. CanvasViewport caches it on `lastEvalCacheRef`. Overlay reads it via a new `useRigSpecStore` slice (or a dedicated `useRigEvalStore`). Overlay's `buildGrid` switches from `keyforms[0].positions` to `liftedGrids.get(warp.id)` when available — that gives canvas-px positions of the LIVE-evaluated grid (deforms with params, exactly what the user wants).
+Overlay's `buildGrid` now prefers the lifted canvas-px grid for any warp; falls back to `keyforms[0].positions` only for canvas-px warps when the lift cache is empty (first paint, or rig with no eval pass yet). The Phase-1 `localFrame === 'canvas-px'` filter is dropped — every warp with a valid `gridSize` renders. Nested warps (face accents, hair, eyes, clothing) are now visible alongside the body chain. The dead `NestedWarpHint` component is removed.
 
-**(b) Per-warp visibility toggles in the Outliner Rig tab.** Currently the Rig tab shows the warp/rotation tree but every entry is "visible if master toggle is on". Add an eye icon per row that flips a `viewLayers.warpGridVisibility[warpId] = boolean` map. Default true. The overlay filters `displayWarps` by this map.
+`rigSpecStore.invalidate` clears `rigEvalStore.liftedGrids` so the overlay doesn't paint stale lattices from a deleted rig.
 
-**(c) Cubism comparison.** Cubism Editor's pattern is: list deformers in left panel, click one → that deformer's grid shows on the canvas, control points draggable, grid follows live param changes. There's no "show all" mode out-of-the-box. SS's all-warps-on-by-default with per-row toggles is a SUPERSET — better for debugging. Cubism's draggable control points are out of scope for this entry (Phase 2D editing); the read-only network view comes first.
+**(b) Per-warp visibility toggles in the Outliner Rig tab — open.** Currently every warp paints (subject to the master toggle). The user can already mute the overlay via `viewLayers.warpGrids` in `ViewLayersPopover`. Per-warp eye-icon toggles need an Outliner Rig-tab change + a new `viewLayers.warpGridVisibility[warpId] = boolean` map; deferred until the user signals which warps actually need to be hidden in practice (the lifted-grid render may already make individual hiding less necessary now that the user can see the lattice network at a glance).
+
+**Cubism comparison.** Cubism Editor's pattern is: list deformers in left panel, click one → that deformer's grid shows on the canvas, control points draggable, grid follows live param changes. There's no "show all" mode out-of-the-box. SS's all-warps-on-by-default is a superset and matches the user's stated debug-tool intent. Draggable control points are still out of scope (Phase 2D).
 
 ---
 

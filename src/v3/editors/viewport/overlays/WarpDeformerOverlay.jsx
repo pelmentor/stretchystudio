@@ -3,35 +3,43 @@
 /**
  * v3 Phase 2A — Warp Deformer Editor: lattice overlay.
  *
- * Renders the active warp deformer's control-point grid as an SVG
- * overlay above the canvas. Read-only first cut — the user can see
- * where the warp's lattice sits relative to the parts it deforms,
- * which is enough to debug the auto-rig output and decide whether
- * a fit-to-children adjust is needed before exporting.
+ * Renders the warp deformer control-point grids as an SVG overlay
+ * above the canvas. Read-only — the user sees where every lattice
+ * sits relative to the parts it deforms, animated under current
+ * params. Useful for debugging the auto-rig output and confirming
+ * which warps are responding to which parameter changes.
  *
  * Edit (drag a control point → mutate the rest-pose grid → store the
  * delta as a new keyform tuple) is Phase 2D's job; the keyform
  * editor needs scrubber-aware UI that's bigger than this single
  * substage.
  *
- * Coverage:
- *  - Only `localFrame === 'canvas-px'` warps render (Body / Face /
- *    Breath top-level chain). Nested warps (`normalized-0to1`)
- *    require parent-grid resolution that's deferred until the editor
- *    can drag them — read-only display of normalized coords would
- *    just confuse.
- *  - Multiple keyforms collapse to keyform[0] (the rest tuple). The
- *    Properties tab shows the full keyform list separately.
+ * Coverage (PP2-010):
+ *  - Every warp renders, regardless of authored localFrame. Nested
+ *    warps (normalised-0to1 / pivot-relative) read their lifted
+ *    canvas-px grid from `rigEvalStore.liftedGrids`, which CanvasViewport
+ *    populates per frame via `evalRig({ out: { liftedGrids } })`.
+ *  - Top-level canvas-px warps fall back to `keyforms[0].positions`
+ *    when the lifted cache is empty (e.g. before the first eval).
+ *  - The selected warp paints last (on top) at full opacity and the
+ *    sky-blue accent. Other warps inherit the user-set opacity.
  *
  * @module v3/editors/viewport/overlays/WarpDeformerOverlay
  */
 
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useRigSpecStore } from '../../../../store/rigSpecStore.js';
+import { useRigEvalStore } from '../../../../store/rigEvalStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
 
 export function WarpDeformerOverlay() {
   const rigSpec = useRigSpecStore((s) => s.rigSpec);
+  // PP2-010 — chainEval's lifted grids: every warp's control points
+  // composed through the parent chain at current params, in canvas-px.
+  // Lets us render nested warps (hair/eye/clothing under FaceParallax /
+  // body chain) that the Phase-1 overlay skipped because their
+  // keyform positions were in normalised-0to1 of a parent.
+  const liftedGrids = useRigEvalStore((s) => s.liftedGrids);
   // GAP-010 Phase B — deformer overlays only mount on the edit
   // Viewport (CanvasArea gates them on `!isPreview`), so always read
   // the viewport tab's view.
@@ -48,21 +56,11 @@ export function WarpDeformerOverlay() {
 
   if (!rigSpec || !warpGridsOn) return null;
 
-  // PP1-007 — render every canvas-px warp at the user-set opacity, with the
-  // selected one pinned to full opacity for accent. Pre-PP1-007 the overlay
-  // only showed the selected warp; users had no way to see the full lattice
-  // network without clicking each warp in turn.
+  // PP2-010 — render every warp using its lifted canvas-px grid (live,
+  // animated under current params). Falls back to keyform[0] for warps
+  // that are already canvas-px AND have no lifted entry (the lift cache
+  // is empty until the first eval; covers the very first paint).
   const allWarps = rigSpec.warpDeformers ?? [];
-  const selectedWarp = activeDeformerId
-    ? allWarps.find((w) => w?.id === activeDeformerId)
-    : null;
-  if (selectedWarp && selectedWarp.localFrame !== 'canvas-px') {
-    // Nested warps need parent-grid resolution to display in canvas
-    // space. Surface a hint instead so the user understands why
-    // there's no overlay and isn't left wondering if the editor is
-    // broken.
-    return <NestedWarpHint warp={selectedWarp} />;
-  }
 
   // Map canvas-px → screen-px. CanvasViewport applies the same
   // (zoom, panX, panY) so rendering in the same frame keeps the
@@ -79,9 +77,20 @@ export function WarpDeformerOverlay() {
     const cols = warp?.gridSize?.cols ?? 0;
     const rows = warp?.gridSize?.rows ?? 0;
     if (cols < 1 || rows < 1) return null;
-    const kf = (warp.keyforms ?? [])[0];
-    const positions = kf?.positions;
-    if (!positions || positions.length < (cols + 1) * (rows + 1) * 2) return null;
+    const lifted = liftedGrids?.get(warp.id);
+    // Prefer the lifted (live, canvas-px) grid; fall back to keyform[0]
+    // for canvas-px warps when no lift exists yet (first frame, or rig
+    // without an active eval pass).
+    let positions = null;
+    if (lifted && lifted.length >= (cols + 1) * (rows + 1) * 2) {
+      positions = lifted;
+    } else if (warp.localFrame === 'canvas-px') {
+      const kf = (warp.keyforms ?? [])[0];
+      if (kf?.positions && kf.positions.length >= (cols + 1) * (rows + 1) * 2) {
+        positions = kf.positions;
+      }
+    }
+    if (!positions) return null;
     const ptCount = (cols + 1) * (rows + 1);
     const projected = new Array(ptCount);
     for (let i = 0; i < ptCount; i++) {
@@ -105,12 +114,10 @@ export function WarpDeformerOverlay() {
     return { cols, rows, projected, lines };
   }
 
-  // Draw every canvas-px warp; the selected one renders last (on top) at
-  // full opacity for accent. Nested warps (normalized-0to1 / pivot-relative)
-  // are filtered out — those need parent-grid resolution to project into
-  // canvas space, surfaced separately via NestedWarpHint when the user
-  // explicitly selects one.
-  const displayWarps = allWarps.filter((w) => w?.localFrame === 'canvas-px');
+  // PP2-010 — display every warp that has a buildable grid (lifted OR
+  // canvas-px keyform fallback). The lifted-grid pass canvas-fies nested
+  // warps too, so the user finally sees the full network.
+  const displayWarps = allWarps.filter((w) => w?.gridSize?.cols && w?.gridSize?.rows);
   if (displayWarps.length === 0) return null;
 
   // Render the selected warp last so it paints on top of the others.
@@ -173,18 +180,5 @@ export function WarpDeformerOverlay() {
         );
       })}
     </svg>
-  );
-}
-
-function NestedWarpHint({ warp }) {
-  return (
-    <div
-      className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-2 py-1
-                 rounded bg-card/80 border border-border text-[10px]
-                 text-muted-foreground font-mono"
-    >
-      {warp.name ?? warp.id} — nested warp
-      ({warp.localFrame}); lattice display Phase 2D.
-    </div>
   );
 }
