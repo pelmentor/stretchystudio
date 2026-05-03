@@ -1,6 +1,46 @@
 # BUG-003 Phase 2b Refactor — Plan
 
-**Status:** ⚠️ **PREMISE INVALIDATED 2026-05-03 by Stage 1 measurement.** The 9.45 px PARAM signal at AngleZ_pos30 is NOT a chainEval slope/J⁻¹ bug. It's a **FaceRotation pivot import gap** in [`src/io/live2d/cmo3Import/rotationDeformerSynth.js:130`](../../src/io/live2d/cmo3Import/rotationDeformerSynth.js) — the cmo3 importer skips authored rotation-deformer pivots when the parent is another rotation (FaceRotation under GroupRotation case), so v3's heuristic init rig produces a pivot ~12 px off Cubism's authored pivot. The plan's Stages 2-5 do not apply. See **Stage 1 Findings** at the bottom for the actual fix path.
+**Status:** ✅ **SHIPPED 2026-05-03** — see "Shipped state" at top of this doc.
+
+---
+
+## Shipped state (2026-05-03)
+
+Phase 2b shipped via canvas-final Setup port in [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js):
+
+- `DeformerStateCache.getRotationSetup(spec, r)` — FD-probes `parent.evalChainAtPoint(pivot)` and `parent.evalChainAtPoint(pivot + (0, ε))`; bakes `canvasFinalPivot` (= parent.eval(authoredPivot)) and `effectiveAngleDeg` (= keyform.angle − probedAngleDeg). ε = 0.01 for warp parents (input frame is [0..1]), 1.0 for rotation parents (input frame is canvas-px).
+- `buildRotationMat3CanvasFinal(setup)` — constructs `R(effective) · diag(s·rX, s·rY) · v + canvasFinalPivot`. Output is canvas-final.
+- `isCanvasFinal: true` flag on rotation states. Both `evalArtMeshFrame`'s chain walker AND `_computeLiftedGrid` BREAK after applying a canvas-final rotation matrix (chain collapsed).
+- Default kernel flipped from `v3-legacy` to `cubism-setup`. Legacy retained behind `--kernel=v3-legacy` for A/B diffing only; remove after one release.
+
+**Verification gates (all passed):**
+
+| Gate | Target | Result |
+|---|---|---|
+| AngleZ_pos30/neg30 PARAM max | < 1.0 px | 0.01 px ✓ |
+| No fixture regresses by > 0.5 px PARAM | — | All fixtures dropped or stayed flat ✓ |
+| TOTAL within +5% baseline (24.21 px) | — | TOTAL max dropped to 1.34 px (-94%) ✓ |
+| `npm test` green | — | 92 suites, 0 failures ✓ |
+
+**Oracle harness numerical drop (shelby):**
+
+| Fixture group | Pre-Setup PARAM | Post-Setup PARAM | Reduction |
+|---|---|---|---|
+| Breath_full / half | 2.71–5.42 | **0.07–0.14** | -97% |
+| BodyAngleX (±5/±10) | 2.51–5.18 | **0.66–1.32** | -73% to -74% |
+| BodyAngleY (±10) | 2.22–3.50 | **0.18–0.19** | -91% to -95% |
+| BodyAngleZ (±10) | 3.01–3.52 | **0.21** | -93% to -94% |
+| AngleX/Y/Z, EyeBallX/Y, default | 0.00–0.01 | 0.00–0.01 | (no regression) |
+
+Stage 1's "premise invalidated" finding still applies — BUG-003's 9.45 px AngleZ signal was the FaceParallax/etc heuristic-vs-authored gap, closed by the authored-rig path landed earlier the same day. The body-chain residual that remained AFTER that fix (a separate signal documented as the "Tier 2 #4" known-residual) is what Phase 2b's Setup port closes.
+
+The Stage 1/measurement-pass infrastructure (`probe_kernel.mjs`, `measure_jacobian.mjs`, `fixture_breakdown.mjs`, `map_drawables.mjs`) shipped 2026-05-03 and stays as diagnostic surface — useful for future kernel-port work.
+
+---
+
+## Earlier (pre-shipped) plan, kept for context
+
+**Status (pre-2026-05-03):** ⚠️ PREMISE INVALIDATED 2026-05-03 by Stage 1 measurement. The 9.45 px PARAM signal at AngleZ_pos30 is NOT a chainEval slope/J⁻¹ bug. It's a **FaceRotation pivot import gap** in [`src/io/live2d/cmo3Import/rotationDeformerSynth.js:130`](../../src/io/live2d/cmo3Import/rotationDeformerSynth.js) — the cmo3 importer skips authored rotation-deformer pivots when the parent is another rotation (FaceRotation under GroupRotation case), so v3's heuristic init rig produces a pivot ~12 px off Cubism's authored pivot. The plan's Stages 2-5 do not apply. See **Stage 1 Findings** at the bottom for the actual fix path.
 
 Authored 2026-05-03 after two single-sweep attempts on 2026-05-02 evening regressed the oracle harness.
 

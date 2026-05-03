@@ -353,7 +353,7 @@ const f64 = (xs) => new Float64Array(xs);
     'regression: rotation→warp scale converts canvas-px → normalized');
 }
 
-// ── No canvas in spec: fallback scale=1 (legacy behavior preserved) ──
+// ── No canvas in spec: cubism-setup canvas-final matrix ──
 {
   const restGrid = f64([0, 0, 100, 0, 0, 100, 100, 100]);
   const rigSpec = {
@@ -385,13 +385,12 @@ const f64 = (xs) => new Float64Array(xs);
     }],
   };
   const frame = evalRig(rigSpec, {})[0];
-  // canvasMaxDim falls back to 1 → scale 1 → input passes through textbook
-  // kernel directly. At angle=0:
-  //   out.x = 0.1·1 + 0·0 + 0.5 = 0.6
-  //   out.y = 0.1·0 + 0·1 + 0.5 = 0.5
-  // bilinearFFD at (0.6, 0.5) → (60, 50).
-  assert(arrEq(frame.vertexPositions, [60, 50], 1e-5),
-    'no-canvas fallback: scale=1 (textbook identity at θ=0)');
+  // Phase 2b cubism-setup: rotation Setup probes parent.eval(authoredPivot)
+  // → canvasFinalPivot = bilerp(0.5, 0.5) on (0..100)x(0..100) = (50, 50).
+  // Matrix = R(0)·diag(1,1)·v + canvasFinalPivot. Mesh vert (0.1, 0) is
+  // pivot-relative-canvas-px so output = (0.1, 0) + (50, 50) = (50.1, 50).
+  assert(arrEq(frame.vertexPositions, [50.1, 50], 1e-5),
+    'cubism-setup: canvas-final pivot from parent.eval, identity at θ=0');
 }
 
 // ── Output is fresh Float32Array (no aliasing of keyform buffer) ──

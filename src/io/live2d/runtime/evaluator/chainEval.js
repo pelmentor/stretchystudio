@@ -84,7 +84,11 @@ const FD_PROBE_EPS = 0.01;
  */
 export function evalRig(rigSpec, paramValues, options) {
   if (!rigSpec || !Array.isArray(rigSpec.artMeshes)) return [];
-  const kernel = options?.kernel === 'cubism-setup' ? 'cubism-setup' : 'v3-legacy';
+  // Phase 2b SHIPPED 2026-05-03: cubism-setup is the default. The legacy
+  // path is kept opt-in (--kernel=v3-legacy in the oracle harness) for A/B
+  // diffing only; remove after one release once the production behaviour
+  // has settled and no regression reports come in.
+  const kernel = options?.kernel === 'v3-legacy' ? 'v3-legacy' : 'cubism-setup';
   const trace = options?.trace ?? null;
   const cache = new DeformerStateCache(rigSpec, paramValues, { kernel, trace });
   // R10 — pre-build a deformer-id → spec map once per evalRig call so
@@ -261,6 +265,14 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
         write[i] = tmp0[0];
         write[i + 1] = tmp0[1];
       }
+      // Phase 2b — Setup-baked rotations output canvas-final positions
+      // directly (matrix translation = canvas-final pivot from parent.eval(pivot)).
+      // No further chain composition needed; mirrors Cubism Core's pipeline.
+      if (state.isCanvasFinal) {
+        bufA = bufB;
+        bufB = read;
+        break;
+      }
     }
 
     // Swap.
@@ -319,7 +331,7 @@ export class DeformerStateCache {
      * `kernel` field being readable; output byte-equal.
      * @type {'v3-legacy'|'cubism-setup'}
      */
-    this._kernel = options?.kernel === 'cubism-setup' ? 'cubism-setup' : 'v3-legacy';
+    this._kernel = options?.kernel === 'v3-legacy' ? 'v3-legacy' : 'cubism-setup';
     /**
      * Phase 2b — optional `TraceCollector` for `probe_kernel.mjs`.
      * `null` in production paths so the trace branches are dead-code-
@@ -377,6 +389,20 @@ export class DeformerStateCache {
     const cToY = rigSpec?.canvasToInnermostY;
     this._warpSlopeX = typeof cToX === 'function' ? (cToX(1) - cToX(0)) : 1 / cmd;
     this._warpSlopeY = typeof cToY === 'function' ? (cToY(1) - cToY(0)) : 1 / cmd;
+
+    // Phase 2b — per-rotation Setup state cache. Mirrors Cubism Core's
+    // `RotationDeformer_Setup` (IDA `0x7fff2b24dee0`): for each rotation
+    // deformer, FD-probe the parent's eval at the rotation's authored
+    // pivot to extract canvas-final pivot + parent's local angle, then
+    // bake into `{ canvasFinalPivot, effectiveAngleDeg, scaleY, ... }`.
+    // The eval kernel reads this baked state and produces canvas-final
+    // output directly, so the chain walker breaks after applying a
+    // rotation matrix (mirrors Cubism's "everything is canvas-final
+    // after Setup" property).
+    /** @type {Map<string, {canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean, opacity:number}|null>} */
+    this._rotationSetupById = new Map();
+    /** @type {Set<string>} — Setup recursion guard (rotation chains under rotations) */
+    this._setupInFlight = new Set();
   }
 
   /**
@@ -501,8 +527,11 @@ export class DeformerStateCache {
         curParent = null;
         break;
       } else if (curParent.type === 'rotation') {
-        // Apply rotation matrix at every control point. Output is in
-        // the rotation's parent's input frame; continue walking up.
+        // Apply rotation matrix at every control point.
+        // - Setup-baked (canvas-final) rotation: output is canvas-px,
+        //   chain collapsed, BREAK.
+        // - Legacy rotation: output is in parent's input frame, continue
+        //   walking up to find a warp ancestor or the root.
         const curParentState = this.getState(curParentSpec);
         if (!curParentState || curParentState.kind !== 'rotation') break;
         const m = curParentState.mat;
@@ -510,6 +539,10 @@ export class DeformerStateCache {
           applyMat3ToPoint(m, positions[i * 2], positions[i * 2 + 1], tmp);
           positions[i * 2] = tmp[0];
           positions[i * 2 + 1] = tmp[1];
+        }
+        if (curParentState.isCanvasFinal) {
+          curParent = null;
+          break;
         }
         curParent = curParentSpec.parent;
       } else {
@@ -593,6 +626,137 @@ export class DeformerStateCache {
     return tmp;
   }
 
+  /**
+   * Phase 2b — port of `RotationDeformer_Setup` (IDA `0x7fff2b24dee0`).
+   *
+   * For a rotation deformer, FD-probe the parent's eval at the rotation's
+   * authored pivot to extract:
+   *   - canvasFinalPivot = parent.eval(authoredPivot) — the canvas-px
+   *     position the rotation pivot ends up at after parent deformation
+   *   - probedAngleDeg = `angle_between((0, ε), parent.eval(pivot+(0,ε))
+   *     − parent.eval(pivot))` — the parent's local rotation at the pivot
+   *
+   * Bakes into setup state:
+   *   - canvasFinalPivot — used as the rotation matrix's translation
+   *   - effectiveAngleDeg = keyform.angle − probedAngleDeg — compensates
+   *     parent's local rotation so the rotation deformer's authored angle
+   *     stays meaningful in canvas-space
+   *   - scale = keyform.scale (Cubism's compoundedScale chain through warps
+   *     is passthrough = 1, so for v3 we just use the authored keyform
+   *     scale; matches Cubism for any rig with default keyform.scale = 1)
+   *   - reflect flags + opacity from the keyform blend
+   *
+   * The eval kernel `out = R(effective) · diag(s·rX, s·rY) · v +
+   * canvasFinalPivot` produces canvas-final output directly when applied
+   * to verts in the rotation's natural input frame (canvas-px offsets
+   * from the authored pivot). Chain walker BREAKS after applying.
+   *
+   * Recursion guard via `_setupInFlight` — rotation chains under
+   * rotations would otherwise recurse via `evalChainAtPoint` →
+   * `getState` → `getRotationSetup` → ... → infinite. Cycle marker
+   * returns null which falls through to legacy matrix.
+   *
+   * Falls back to null when the parent's chain can't be resolved
+   * (broken rig). Caller then falls back to legacy matrix structure.
+   *
+   * @param {import('../../rig/rigSpec.js').RotationDeformerSpec} spec
+   * @param {{angleDeg:number, originX:number, originY:number, scale?:number, reflectX?:boolean, reflectY?:boolean, opacity?:number}} r
+   * @returns {{canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean, opacity:number}|null}
+   */
+  getRotationSetup(spec, r) {
+    if (!spec?.id) return null;
+    if (this._rotationSetupById.has(spec.id)) {
+      return this._rotationSetupById.get(spec.id);
+    }
+    if (this._setupInFlight.has(spec.id)) {
+      // Cyclic Setup — bail and fall back to legacy.
+      this._rotationSetupById.set(spec.id, null);
+      return null;
+    }
+    this._setupInFlight.add(spec.id);
+    try {
+      const parent = spec.parent;
+      // Root-parented rotations: pivot is already in canvas-px, no probe
+      // needed. Canvas-final pivot = authored pivot. probedAngle = 0.
+      if (!parent || parent.type === 'root' || !parent.id) {
+        const setup = {
+          canvasFinalPivot: [r.originX ?? 0, r.originY ?? 0],
+          effectiveAngleDeg: r.angleDeg ?? 0,
+          scale: r.scale ?? 1,
+          reflectX: !!r.reflectX,
+          reflectY: !!r.reflectY,
+          opacity: r.opacity ?? 1,
+        };
+        this._rotationSetupById.set(spec.id, setup);
+        return setup;
+      }
+
+      // Pick FD probe ε based on parent's natural input frame:
+      //   - warp parent → input is [0..1] of warp's bbox; ε = 0.01 (1%)
+      //   - rotation parent → input is canvas-px from pivot; ε = 1.0 (1 px)
+      // (Mirrors the dispatch-flag-driven choice in IDA RotationDeformer_Setup
+      // between -10.0 and -0.1 — different scales for different parent types.)
+      const isWarpParent = parent.type === 'warp';
+      const eps = isWarpParent ? 0.01 : 1.0;
+
+      const px = r.originX ?? 0;
+      const py = r.originY ?? 0;
+      const tmpC = [0, 0];
+      const tmpD = [0, 0];
+
+      // Probe 1: parent.eval(pivot) → center (canvas-final pivot)
+      this.evalChainAtPoint(parent, px, py, tmpC);
+      const cx = tmpC[0];
+      const cy = tmpC[1];
+
+      // Probe 2: parent.eval(pivot + (0, eps)) → response in +Y direction
+      this.evalChainAtPoint(parent, px, py + eps, tmpD);
+      let dx = tmpD[0] - cx;
+      let dy = tmpD[1] - cy;
+
+      // Degenerate: if +Y probe had no response, try -Y direction
+      // (mirrors RotationDeformer_Setup's fallback at IDA 0x7fff2b24e0c5).
+      if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+        this.evalChainAtPoint(parent, px, py - eps, tmpD);
+        dx = -(tmpD[0] - cx);  // flip sign to keep convention with +Y probe
+        dy = -(tmpD[1] - cy);
+      }
+
+      // probedAngle = wrap_pi_pi(atan2(eps, 0) - atan2(dy, dx))
+      //             = wrap_pi_pi(π/2 - atan2(dy, dx))
+      // For identity parent (dx=0, dy=eps): atan2(eps, 0) = π/2;
+      //   result = π/2 - π/2 = 0. ✓
+      // For parent rotated +30° (CCW), v=(0,eps) → output direction
+      //   rotated by +30°. atan2(dy_rotated, dx_rotated) = π/2 + 30°.
+      //   probedAngle = π/2 - (π/2 + 30°) = -30°. So
+      //   effectiveAngle = keyform.angle - probedAngle = keyform + 30°,
+      //   which adds parent's rotation back in (compensation in own frame).
+      let probedRad;
+      if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+        probedRad = 0;
+      } else {
+        probedRad = Math.PI / 2 - Math.atan2(dy, dx);
+        // Wrap to (-π, π]
+        while (probedRad > Math.PI) probedRad -= 2 * Math.PI;
+        while (probedRad <= -Math.PI) probedRad += 2 * Math.PI;
+      }
+      const probedAngleDeg = probedRad * 180 / Math.PI;
+
+      const setup = {
+        canvasFinalPivot: [cx, cy],
+        effectiveAngleDeg: (r.angleDeg ?? 0) - probedAngleDeg,
+        scale: r.scale ?? 1,
+        reflectX: !!r.reflectX,
+        reflectY: !!r.reflectY,
+        opacity: r.opacity ?? 1,
+      };
+      this._rotationSetupById.set(spec.id, setup);
+      return setup;
+    } finally {
+      this._setupInFlight.delete(spec.id);
+    }
+  }
+
   getState(spec) {
     if (!spec?.id) return null;
     const cached = this._byId.get(spec.id);
@@ -615,25 +779,32 @@ export class DeformerStateCache {
       } else if (first && (typeof first.angle === 'number' || typeof first.originX === 'number')) {
         const r = evalRotation(spec, cell);
         if (r) {
-          // Apply the parent-frame conversion — see class doc above.
-          // For warp parents the scale must collapse pivot-relative canvas-
-          // pixels into the parent warp's INPUT frame, which is `0..1` of
-          // its grid bbox. Scale anisotropic to handle non-square bboxes.
-          // For rotation parents, the child's canvas-px stays canvas-px.
-          //
-          // Phase 2b kernel switch: both branches currently produce the
-          // same output (Stage 0 plumbing — Setup path lands in Stage 2).
-          // The branch exists so Stages 1-3 can swap `_warpSlopeX/Y` for
-          // an FD-probed J⁻¹ inside `cubism-setup` without disturbing the
-          // production legacy path.
-          const isWarpParent = spec.parent?.type === 'warp';
           if (this._kernel === 'cubism-setup') {
-            // Stage 0 stub: identical to legacy. Real Setup path lands
-            // in Stage 2 after Stage 1's measurement pass picks P1/P2/P3.
-            const sx = isWarpParent ? this._warpSlopeX : 1;
-            const sy = isWarpParent ? this._warpSlopeY : 1;
-            state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+            // Phase 2b — Setup-baked canvas-final matrix. FD-probes the
+            // parent at the rotation's authored pivot to pick up the
+            // parent's local rotation at this point, then bakes the
+            // canvas-final pivot + adjusted angle into the matrix.
+            // Output is canvas-final, so the chain walker BREAKS after
+            // applying — mirrors Cubism Core's "everything is canvas-
+            // final after Setup" property.
+            const setup = this.getRotationSetup(spec, r);
+            state = setup
+              ? {
+                  kind: 'rotation',
+                  mat: buildRotationMat3CanvasFinal(setup),
+                  isCanvasFinal: true,
+                  setup,
+                }
+              : null;
           } else {
+            // Legacy path: matrix maps pivot-relative input to parent's
+            // localFrame. For warp parents, _warpSlopeX/Y converts canvas-
+            // px-from-pivot to the parent warp's [0..1] frame; chain walker
+            // continues up to apply the parent warp's bilerp. Equivalent
+            // to Cubism at REST pose for shelby (where _warpSlopeX/Y =
+            // 1/bbox_width and the bilerp's linear coefficient = bbox_width
+            // exactly cancel) but diverges under parameter deformation.
+            const isWarpParent = spec.parent?.type === 'warp';
             const sx = isWarpParent ? this._warpSlopeX : 1;
             const sy = isWarpParent ? this._warpSlopeY : 1;
             state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
@@ -686,6 +857,43 @@ function buildRotationMat3Aniso(r, extraSx, extraSy) {
   const m = new Float64Array(9);
   m[0] = a; m[1] = b; m[2] = ox;
   m[3] = d; m[4] = e; m[5] = oy;
+  m[6] = 0; m[7] = 0; m[8] = 1;
+  return m;
+}
+
+/**
+ * Phase 2b — Setup-baked canvas-final rotation matrix.
+ *
+ * Mirrors Cubism Core's RotationDeformer_TransformTarget (IDA
+ * `0x7fff2b24c950`):
+ *
+ *     out.x = px·cos·s·rX + py·(-sin)·s·rY + canvasFinalPivotX
+ *     out.y = px·sin·s·rX + py·  cos ·s·rY + canvasFinalPivotY
+ *
+ * Where `cos/sin` use `effectiveAngleDeg` (= keyform angle adjusted
+ * for parent's local rotation per the FD probe in `getRotationSetup`)
+ * and the translation is the canvas-final pivot from `parent.eval(authoredPivot)`.
+ *
+ * Output is canvas-final, so the chain walker breaks after applying.
+ *
+ * @param {{canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean}} setup
+ * @returns {Float64Array}
+ */
+function buildRotationMat3CanvasFinal(setup) {
+  const angleDeg = setup?.effectiveAngleDeg ?? 0;
+  const s = setup?.scale ?? 1;
+  const rx = setup?.reflectX ? -1 : 1;
+  const ry = setup?.reflectY ? -1 : 1;
+  const rad = (angleDeg * Math.PI) / 180;
+  const cs = Math.cos(rad);
+  const sn = Math.sin(rad);
+  const a = cs * s * rx;
+  const b = -sn * s * ry;
+  const d = sn * s * rx;
+  const e = cs * s * ry;
+  const m = new Float64Array(9);
+  m[0] = a; m[1] = b; m[2] = setup?.canvasFinalPivot?.[0] ?? 0;
+  m[3] = d; m[4] = e; m[5] = setup?.canvasFinalPivot?.[1] ?? 0;
   m[6] = 0; m[7] = 0; m[8] = 1;
   return m;
 }

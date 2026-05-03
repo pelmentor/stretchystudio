@@ -19,7 +19,7 @@ Each entry is short and self-contained — anyone reading should be able to pick
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
 | ⏳ Open | *(none)* |
-| Recently fixed (2026-05-03) | BUG-003 (authored-cmo3 init rig path — `buildRigSpecFromCmo3.js` builds RigSpec end-to-end from authored deformer data; AngleZ_pos30 PARAM 9.45 → **0.01 px**, overall TOTAL 24.21 → **5.44 px**, PARAM 9.45 → **5.42 px**), GAP-008 opt-out wired to authored path |
+| Recently fixed (2026-05-03) | BUG-003 (closed via TWO commits same day): (1) authored-cmo3 init rig path closed the heuristic-vs-authored gap (AngleZ_pos30 PARAM 9.45 → **0.01 px**), (2) Phase 2b Setup port (`getRotationSetup` + canvas-final matrix) closed the body-warp residual (Breath_full PARAM 5.42 → **0.14 px** -97%, BodyAngleX 5.18 → **1.32 px** -74%, BodyAngleY/Z 3.50 → **0.18-0.21 px** -91 to -95%). Default chainEval kernel flipped to `cubism-setup`. GAP-008 opt-out wired to authored path |
 | Recently fixed (2026-05-02) | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
@@ -399,22 +399,30 @@ Why other bands were correct: the **top band** explicitly applies a top↔bottom
 - **Fix:** new authored-rig path in `initializeRigFromProject` ([`buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js)) — when project has `_cmo3Scene` (set by cmo3Import), build the RigSpec end-to-end from authored cmo3 deformer data instead of regenerating heuristically. AngleZ_pos30 PARAM dropped from 9.45 → **0.01 px**; overall TOTAL max from 24.21 → **5.44 px**; PARAM max from 9.45 → **5.42 px** (residual is body-chain composition through deep face chain; see "Known residual" below).
 - See [`docs/INIT_RIG_AUTHORED_REWRITE.md`](INIT_RIG_AUTHORED_REWRITE.md) for the plan that landed this fix.
 
-#### Known residual after fix (2026-05-03 oracle re-measurement)
+#### Phase 2b residual closed (2026-05-03 — same day)
 
-Confirmed acceptable per the post-fix triage. **Face-driven params are essentially perfect; body-warp params carry a chain-wide systematic offset.**
+The "known residual" above was eliminated by the Phase 2b Setup port shipped in [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) — a byte-faithful port of Cubism Core's `RotationDeformer_Setup` (IDA `0x7fff2b24dee0`).
 
-| Fixture group | PARAM max | PARAM mean | Notes |
+**What changed:** rotation deformers now run a Setup pass per evalRig call:
+
+1. **FD probe** — `evalChainAtPoint(parent, pivot)` and `evalChainAtPoint(parent, pivot + (0, ε))` capture the parent's local rotation at the rotation's pivot.
+2. **Bake canvas-final state**:
+   - `canvasFinalPivot` = parent.eval(authoredPivot) — replaces authored pivot with parent-deformation-aware position
+   - `effectiveAngleDeg` = keyform.angle − probedAngleDeg — compensates parent's local rotation
+3. **Eval** uses the baked state: `out = R(effective) · diag(s·rX, s·rY) · v + canvasFinalPivot`. Output is canvas-final; chain walker BREAKS after applying. Mirrors Cubism's "everything is canvas-final after Setup" property.
+
+**Result on shelby oracle harness:**
+
+| Fixture group | Pre-Setup PARAM | Post-Setup PARAM | Reduction |
 |---|---|---|---|
-| AngleX/Y/Z, EyeBallX/Y, default | **0.00–0.01 px** | 0.00 px | Perfect after authored-rig fix. |
-| BodyAngleX/Y/Z (±5..±10), Breath (0.5..1.0) | **2.5–5.4 px** | 1.3–5.1 px | Residual scales with body-warp magnitude. Chain-wide constant offset (max ≈ mean across small face-chain meshes), not per-vertex grid error. |
+| Breath_full | 5.42 px | **0.14 px** | -97% |
+| Breath_half | 2.71 px | **0.07 px** | -97% |
+| BodyAngleX (±5/±10) | 2.51–5.18 px | **0.66–1.32 px** | -73% to -74% |
+| BodyAngleY (±10) | 2.22–3.50 px | **0.18–0.19 px** | -91% to -95% |
+| BodyAngleZ (±10) | 3.01–3.52 px | **0.21 px** | -93% to -94% |
+| AngleX/Y/Z, EyeBallX/Y, default | 0.00–0.01 px | 0.00–0.01 px | (no regression) |
 
-**Why it's a known residual (not a fix-soon bug):**
-
-1. The remaining gap is the same structural issue Phase 2b ran into — `rotationEval.js` uses a diagonal-only matrix (`diag(extraSx, extraSy) · R · diag(s·rx, s·ry)`) while Cubism's `RotationDeformer_Setup` uses a general 2×2 baked from FD-probed parent Jacobian. When body warps deform the parent grids through which face-chain rotations sit, v3's diagonal matrix misses the off-diagonal terms.
-2. Real fix is a downstream-consumer refactor: switch the rotation matrix to a general 2×2 + translation, update `chainEval.js`'s `_warpSlopeX/Y` consumer + the binary `rotation_deformer_keyform.scales` field in `moc3writer.js`. Multi-day, was already attempted in Phase 2b and abandoned because both alternative formulations made divergence worse than baseline.
-3. 5 px on 1792 px canvas = 0.28% of canvas dimension; visually sub-pixel after typical render scaling. Body-warp-extreme poses (full breath, ±10° body angle) are the worst case; idle usage stays in the 1-3 px range.
-
-**Re-open trigger:** if a user reports visible drift under typical motion (not extreme-pose stress), or if Phase 4 / Phase 5 of the Cubism warp port lands the rotation matrix refactor anyway.
+PHASE_2B_PLAN.md verification gate was "AngleZ PARAM < 1 px and no fixture regresses by > 0.5 px" — passed across the board. Fix file: [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) `getRotationSetup` + `buildRotationMat3CanvasFinal`. See [`CUBISM_WARP_PORT.md` Phase 2b](live2d-export/CUBISM_WARP_PORT.md) for the kernel-level explanation and [`PHASE_2B_PLAN.md`](live2d-export/PHASE_2B_PLAN.md) for the staged plan.
 
 **Original investigation (kept for reference):**
 

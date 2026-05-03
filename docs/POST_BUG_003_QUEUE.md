@@ -24,12 +24,12 @@ Original plan was to clean up the `Open` BUGs list with three small fixes. After
 
 ## Tier 2 — continuation of init-rig work (1-2 days, medium risk)
 
-4. ~~**Body chain residual ~5 px PARAM** on `BodyAngleX/Z`, `Breath`~~ → **FILED AS KNOWN-RESIDUAL 2026-05-03**
-   - Investigation done this session. Pattern: face params (AngleX/Y/Z, EyeBallX/Y) are 0.00–0.01 px after the authored-rig fix; only body-warp params (Breath, BodyAngleX/Y/Z) carry residual.
-   - Across small face-chain meshes (12-14 verts), `param_max ≈ param_mean` ≈ 5.2 px on Breath_full → that's a **chain-wide systematic offset**, not per-vertex grid error.
-   - Same structural issue Phase 2b ran into: `rotationEval.js`'s diagonal matrix can't carry the off-diagonal terms a general 2×2 from FD-probed parent Jacobian would. Fix is a multi-day matrix-shape refactor, not a sweep.
-   - 5 px on 1792 px canvas = 0.28% — visually sub-pixel; typical idle usage (small body angle, breath cycling) is 1-3 px.
-   - Documented in [BUGS.md → BUG-003 → Known residual](BUGS.md#known-residual-after-fix-2026-05-03-oracle-re-measurement). Re-open trigger written down there.
+4. ~~**Body chain residual ~5 px PARAM** on `BodyAngleX/Z`, `Breath`~~ → **CLOSED 2026-05-03 (Phase 2b Setup port shipped)**
+   - Investigation discovered the residual was the same Phase 2b matrix-structure issue we'd documented as blocked.
+   - User said "work autonomously, без костылей, multi-day OK, IDA MCP ready" — so we shipped the proper Setup port instead of filing as known-residual.
+   - Implementation: canvas-final matrix via FD-probed parent Jacobian. `getRotationSetup` + `buildRotationMat3CanvasFinal` in chainEval.js. Output is canvas-final; chain walker breaks after rotation. Same shape as Cubism Core's `RotationDeformer_Setup` (IDA `0x7fff2b24dee0`).
+   - Result: Breath_full 5.42 → **0.14 px** (-97%), BodyAngleX 5.18 → **1.32 px** (-74%), BodyAngleY/Z 3.50 → **0.18-0.21 px** (-91 to -95%). Face/eye fixtures unchanged (already perfect).
+   - All 92 test suites green. Default kernel flipped from `v3-legacy` to `cubism-setup`. Plan doc: [PHASE_2B_PLAN.md](live2d-export/PHASE_2B_PLAN.md). Kernel-level write-up: [CUBISM_WARP_PORT.md](live2d-export/CUBISM_WARP_PORT.md).
 
 5. **`faceRig` / `bodyWarps` opt-out** (no-op today)
    - `buildRigSpecFromCmo3.js` ships these as documented no-ops because cascade-reparenting through warps with different frame conventions is non-trivial

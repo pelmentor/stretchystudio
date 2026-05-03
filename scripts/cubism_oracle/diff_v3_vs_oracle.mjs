@@ -23,7 +23,7 @@
 //
 // Default cmo3 path: shelby.cmo3 in repo root.
 // Default snapshots: scripts/cubism_oracle/snapshots/shelby_runtime/
-// Default kernel:   v3-legacy
+// Default kernel:   cubism-setup (Phase 2b shipped 2026-05-03)
 //
 // `--kernel=cubism-setup` is the in-progress Setup port (Phase 2b plan,
 // docs/live2d-export/PHASE_2B_PLAN.md). At Stage 0 it is byte-identical
@@ -84,7 +84,7 @@ const REPO_ROOT = path.resolve(new URL('../../', import.meta.url).pathname.repla
 const args = process.argv.slice(2);
 const useAuthoredRig = args.includes('--authored-rig');
 const kernelArg = args.find(a => a.startsWith('--kernel='));
-const KERNEL = kernelArg ? kernelArg.slice('--kernel='.length) : 'v3-legacy';
+const KERNEL = kernelArg ? kernelArg.slice('--kernel='.length) : 'cubism-setup';
 if (KERNEL !== 'v3-legacy' && KERNEL !== 'cubism-setup') {
   console.error(`[error] --kernel must be 'v3-legacy' or 'cubism-setup' (got '${KERNEL}')`);
   process.exit(1);

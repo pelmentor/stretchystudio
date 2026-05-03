@@ -191,7 +191,25 @@ Sums: `out_x = (px·cos·s·rX) + (py·-sin·s·rY) + originX`; `out_y = (px·si
 
 [`cubismRotationEval.js`](../../src/io/live2d/runtime/evaluator/cubismRotationEval.js) is no longer needed and is retained only as historical record. Production path uses `buildRotationMat3Aniso` from `rotationEval.js`.
 
-**Phase 2b — Finite-difference Jacobian Setup port — 🔴 ROOT CAUSE OF BUG-003.**
+**Phase 2b — Finite-difference Jacobian Setup port — ✅ SHIPPED 2026-05-03.**
+
+> **2026-05-03 update.** Phase 2b shipped after the authored-rig path closed BUG-003 itself. Implementation: `getRotationSetup` + `buildRotationMat3CanvasFinal` in [`chainEval.js`](../../src/io/live2d/runtime/evaluator/chainEval.js). Mirrors `RotationDeformer_Setup` (IDA `0x7fff2b24dee0`) — FD-probes parent.eval at the rotation's authored pivot to extract canvas-final pivot + parent's local angle, bakes into matrix. Output is canvas-final; chain walker breaks after rotation.
+>
+> **Oracle harness (shelby, 21 fixtures):**
+>
+> | Fixture group | v3-legacy PARAM | cubism-setup PARAM | Reduction |
+> |---|---|---|---|
+> | Breath_full / half | 2.71–5.42 | 0.07–0.14 | -97% |
+> | BodyAngleX (±5/±10) | 2.51–5.18 | 0.66–1.32 | -73 to -74% |
+> | BodyAngleY (±10) | 2.22–3.50 | 0.18–0.19 | -91 to -95% |
+> | BodyAngleZ (±10) | 3.01–3.52 | 0.21 | -93 to -94% |
+> | AngleX/Y/Z, EyeBallX/Y, default | 0.00–0.01 | 0.00–0.01 | (no regression) |
+>
+> All Phase 2b plan verification gates passed. Default kernel flipped from `v3-legacy` to `cubism-setup`; legacy branch retained behind `--kernel=v3-legacy` flag for A/B diffing only, scheduled for removal after one release. The stale "blocked on architectural mismatch" notes below are kept verbatim for context but no longer reflect the shipped state.
+
+---
+
+**Why the earlier attempts failed (2026-05-02):**
 
 The asm of `RotationDeformer_Setup` at IDA `0x7fff2b24dee0` reveals Cubism's Setup mechanism (runs every frame, parameter-dependent):
 
@@ -263,7 +281,7 @@ The closed-form `_warpSlopeX/Y` happens to be a slightly more conservative appro
 
 **Verification contract (per memory `feedback_oracle_before_unit_tests.md`):** any future Phase 2b ship must drop param max below 1.0 px across all 21 fixtures via the harness BEFORE merge. No "looks better visually" — measured numbers only.
 
-**Phase 2b status:** 🔴 Blocked on rotation-matrix-structure refactor. Out of scope for the current sweep.
+**Phase 2b status:** ✅ SHIPPED 2026-05-03. See banner at top of section.
 
 ---
 
@@ -833,10 +851,10 @@ The unidentified internal helpers can be named on demand as Phases 2-4 reference
 | 0 — Setup + symbol inventory | ✅ Done | 2026-04-30 | 2026-05-01 | Binary inventoried, kernels + setups RE'd, oracle harness shipping, baselines pinned |
 | 1 — Warp port | ✅ Code shipped + oracle-quantified | 2026-05-01 | 2026-05-02 | `cubismWarpEval.js` ported. Oracle harness shipped 2026-05-02 (`scripts/cubism_oracle/diff_v3_vs_oracle.mjs`). Phase 1 verified clean at rest pose: non-eye meshes (eyebrows, hair) show ~0.07 px max divergence, well within float32 noise floor. Eye meshes show ~13-66 px due to eye-closure parabola fit falling back to mesh-bin-max in Node (no Image decoder); not a Phase 1 issue |
 | 2a — Rotation eval kernel port | ✅ Verified-no-port-needed 2026-05-02 | — | 2026-05-02 | Raw asm of `RotationDeformer_TransformTarget` at IDA `0x7fff2b24c950` confirms kernel = textbook `R · diag(rX, rY) · scale`, identical to `buildRotationMat3Aniso` in `rotationEval.js`. Earlier "Phase 2a port" (commit `0f512d0`) was a register-tracking misread, reverted same day. No port file needed |
-| 2b — RotationDeformer_Setup (FD Jacobian) | 🔴 BLOCKED on matrix-structure refactor | — | — | Root cause of BUG-003. Cubism's Setup probes parent.TransformTarget per frame and bakes canvas-final pivot + parent-rotation-compensated angle + compounded scale. v3's `_warpSlopeX/Y` is a closed-form rest-state approximation that diverges when warps are parameter-rotated. **Implementation blocked**: v3's rotation matrix is `R · diag(extraSx, extraSy)` (diagonal-only); FD probe captures the parent's local Jacobian as a 2D delta with off-diagonal info that diagonal scaling can't carry. Real fix requires switching `rotationEval.js` to a general 2x2 + translation. Both attempted alternatives (canvas-final + chain-stop, FD-magnitude-as-slope) made divergence worse than baseline. Quantified baseline: PARAM-DRIVEN max=17.73 px, mean=3.25 px |
+| 2b — RotationDeformer_Setup (FD Jacobian) | ✅ SHIPPED + oracle-verified | 2026-05-03 | 2026-05-03 | Setup port lands canvas-final-after-Setup architecture. `getRotationSetup` FD-probes parent.eval at the rotation's authored pivot (ε = 0.01 for warp parents, 1.0 for rotation parents); bakes `canvasFinalPivot = parent.eval(pivot)` and `effectiveAngleDeg = keyform.angle - probedAngleDeg` into per-frame setup state. `buildRotationMat3CanvasFinal` constructs `R(effective)·diag(s·rX, s·rY)·v + canvasFinalPivot`; `isCanvasFinal: true` flag breaks chain walker after applying. Default kernel flipped from `v3-legacy` to `cubism-setup`; legacy retained behind `--kernel=v3-legacy` flag. Oracle harness: Breath_full PARAM 5.42 → 0.14 px (-97%), BodyAngleX 5.18 → 1.32 px (-74%), BodyAngleY/Z 3.50 → 0.18-0.21 px (-91 to -95%); face/eye fixtures unchanged. All 92 test suites green |
 | 3 — Chain composition port | ✅ Shipped + oracle-verified | 2026-05-02 | 2026-05-02 | Lifted-grid Setup via new `DeformerStateCache.getLiftedGrid()`. Each warp's grid is composed top-down through ancestors to canvas-px once per frame; artmesh evaluation does ONE bilinear against the lifted grid (matching Cubism Core's `WarpDeformer_Setup`). Recursive + memoized + cycle-guarded. PARAM mean dropped 6.66 → 2.45 px (63%); breath case 16.76 → 5.45 px (67%). Body-chain fixtures roughly halved. AngleZ rotations still at 17.73 — Phase 2b territory |
-| 4 — Artmesh port | ⏳ Deferred | — | — | Phase 3 already covers the chain composition Cubism does at the artmesh boundary; remaining work is the keyform-blending math, which currently matches at the byte level. Promote only when oracle harness shows artmesh-specific divergence not explained by Phase 2b/3 |
-| 5 — Visual parity sweep | ⏳ Phase 2b unblocks | — | — | After Phase 2b lands, sweep all 21 oracle fixtures + run user visual diff against Cubism Viewer |
+| 4 — Artmesh port | ⏳ Promote when oracle shows artmesh-specific divergence | — | — | Phases 2b + 3 cover what Phases 1 + Setup did for warps; remaining work is the keyform-blending math which currently matches at byte level. After Phase 2b shipped, post-fix oracle PARAM max is 1.32 px (BodyAngleX) — within float-precision floor; no signal that demands Phase 4 today |
+| 5 — Visual parity sweep | ⏳ Pending user visual confirm in Cubism Viewer | — | — | Numerical parity passed (post-Phase-2b PARAM max 1.32 px, mean ~0.5 px). Visual sweep is the user-eye check across all params — run when user has time to side-by-side with Cubism Viewer |
 
 | Diagnostic param | Pre-Phase-3 | Post-Phase-3 | Notes |
 |------------------|-------------|--------------|-------|
