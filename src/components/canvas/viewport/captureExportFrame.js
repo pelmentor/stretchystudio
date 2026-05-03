@@ -44,6 +44,7 @@ import { computePoseOverrides } from '../../../renderer/animationEngine.js';
  * @property {object} editor
  * @property {object} project
  * @property {boolean} isDark
+ * @property {number} [globalOpacity=1]   - PP2-008 — ParamOpacity multiplier (1 = opaque)
  */
 
 /**
@@ -54,7 +55,7 @@ import { computePoseOverrides } from '../../../renderer/animationEngine.js';
  * @returns {string|null}
  */
 export function captureExportFrame(ctx, opts) {
-  const { canvas, scene, editor, project, isDark } = ctx;
+  const { canvas, scene, editor, project, isDark, globalOpacity = 1 } = ctx;
   if (!canvas || !scene) return null;
 
   const {
@@ -169,6 +170,7 @@ export function captureExportFrame(ctx, opts) {
   scene.draw(exportProject, exportEditor, isDark, poseOverrides, {
     skipResize: true,
     exportMode: true,
+    globalOpacity,
   });
 
   const mimeType = format === 'jpg'

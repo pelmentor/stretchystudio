@@ -800,7 +800,13 @@ export default function CanvasViewport({
           ..._ed,
           view: _ed.viewByMode[modeKey],
         };
-        sceneRef.current.draw(projectRef.current, editorForDraw, isDarkRef.current, poseOverrides, { rigDrivenParts });
+        // PP2-008 — ParamOpacity is the canonical Live2D global-opacity
+        // slider. Mesh keyform bindings can't drive it (their default is
+        // a single keyform at 1.0), so it's applied as a uniform draw-
+        // time multiplier instead.
+        const _gOpacity = paramValuesRef.current?.ParamOpacity;
+        const globalOpacity = (typeof _gOpacity === 'number') ? _gOpacity : 1;
+        sceneRef.current.draw(projectRef.current, editorForDraw, isDarkRef.current, poseOverrides, { rigDrivenParts, globalOpacity });
 
         isDirtyRef.current = false;
       }
@@ -2349,6 +2355,8 @@ export default function CanvasViewport({
     const canvas = canvasRef.current;
     const scene = sceneRef.current;
     if (!canvas || !scene) return null;
+    const _gOpacity = paramValuesRef.current?.ParamOpacity;
+    const globalOpacity = (typeof _gOpacity === 'number') ? _gOpacity : 1;
     const dataUrl = captureExportFrameImpl(
       {
         canvas,
@@ -2356,6 +2364,7 @@ export default function CanvasViewport({
         editor: editorRef.current,
         project: projectRef.current,
         isDark: isDarkRef.current,
+        globalOpacity,
       },
       opts,
     );

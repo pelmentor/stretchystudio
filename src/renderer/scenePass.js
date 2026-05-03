@@ -92,8 +92,15 @@ export class ScenePass {
    *   When this set contains a part id, draw uses `camera` directly
    *   (no worldMatrix multiplication). Empty/null = legacy behavior
    *   (every part gets its worldMatrix).
+   *
+   * @param {number} [opts.globalOpacity=1]
+   *   PP2-008 — canonical `ParamOpacity` global multiplier. Multiplied
+   *   into every part's effective opacity at draw time. Default 1
+   *   (no-op). Mesh keyform bindings emit `ParamOpacity[1.0]` as a
+   *   single-keyform default, so chainEval can't drive global opacity
+   *   that way; this uniform multiplier is the canonical Live2D path.
    */
-  draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false, rigDrivenParts = null } = {}) {
+  draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false, rigDrivenParts = null, globalOpacity = 1 } = {}) {
     const { gl } = this;
     const { canvas } = gl;
 
@@ -229,9 +236,10 @@ export class ScenePass {
           : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
 
         const baseOpacity = opMap.get(part.id) ?? 1;
-        const effectiveOpacity = dimUnselected && !selectionSet.has(part.id)
+        const dimmed = dimUnselected && !selectionSet.has(part.id)
           ? baseOpacity * 0.5
           : baseOpacity;
+        const effectiveOpacity = dimmed * globalOpacity;
 
         if (writeStencil != null) {
           gl.enable(gl.STENCIL_TEST);

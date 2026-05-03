@@ -17,7 +17,7 @@
 | [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; visual deformation (b) open | partial |
 | [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | open |
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | open |
-| [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | open |
+| [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
 | [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
 | [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | open (supersedes PP2-004) |
 
@@ -150,13 +150,13 @@ This is "do as Live2D does": bones in the natural skeleton don't have their own 
 <a id="pp2-008"></a>
 ### PP2-008 — `ParamOpacity` (char global opacity) does nothing
 
-**Type:** bug · **Severity:** medium · **Status:** open
+**Type:** bug · **Severity:** medium · **Status:** closed (this commit)
 
-**Symptom.** The `ParamOpacity` slider in the Parameters panel produces no visible effect when moved. Should multiply the rendered opacity of every part by the slider value (canonical Live2D global-opacity behaviour).
+**Symptom.** The `ParamOpacity` slider in the Parameters panel produced no visible effect when moved. Should multiply the rendered opacity of every part by the slider value (canonical Live2D global-opacity behaviour).
 
-**Where to look.** `ParamOpacity` is emitted by `paramSpec.js` (line ~206 — `push({ ...PARAM_OPACITY })`). chainEval reads keyforms; per-mesh opacity is composed (variant fades, etc). Global `ParamOpacity` likely needs an explicit consumer in either chainEval (multiply mesh opacity by ParamOpacity value) or scenePass (uniform u_opacity multiplied at draw time).
+**Root cause.** Mesh keyform bindings emit `ParamOpacity` with a single keyform at value `1.0` ([`artMeshSourceEmit.js:646`](../src/io/live2d/cmo3/artMeshSourceEmit.js#L646), [`meshBindingPlan.js:177`](../src/io/live2d/moc3/meshBindingPlan.js#L177) — same default, both rig + moc3 paths). With one keyform, `cellSelect` returns the same opacity regardless of slider value, so chainEval can't drive global opacity through bindings.
 
-**Repair sketch.** Add a global-opacity uniform multiplier in [`scenePass.js`](../src/renderer/scenePass.js) that reads `paramValues.ParamOpacity` (default 1) and multiplies it into `effectiveOpacity` for every part. Trivial fix; one read + one multiply.
+**Fix.** Added a `globalOpacity` opt to [`scenePass.draw`](../src/renderer/scenePass.js) that multiplies into `effectiveOpacity` per part. CanvasViewport reads `paramValues.ParamOpacity` (default 1) and threads it through both the live tick and `captureExportFrame` so single-frame + animation export honour the slider too. One read + one multiply, exactly per the original repair sketch.
 
 ---
 
