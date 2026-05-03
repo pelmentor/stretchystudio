@@ -1,6 +1,8 @@
 # Cubism Physics Port — Plan
 
-**Status:** queued. Authored 2026-05-03 by user request: "порт физики из cubism viewer это первоочередная задача". User-flagged as **top priority** for the next autonomous session.
+**Status:** Phase 0 **SHIPPED 2026-05-03** — see [CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md](CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md). Verdict: Phase 1 port is required (max divergence 2.0, mean 0.5–1.3 across both shelby and Hiyori). Phase 1 starts next.
+
+**Original status (queued):** Authored 2026-05-03 by user request: "порт физики из cubism viewer это первоочередная задача". User-flagged as **top priority** for the next autonomous session.
 
 Sister document to [CUBISM_WARP_PORT.md](CUBISM_WARP_PORT.md) — same shape: byte-faithful port from a known-correct reference, with an oracle harness gating each phase.
 
