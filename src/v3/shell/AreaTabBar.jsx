@@ -29,9 +29,15 @@ import { EDITOR_REGISTRY } from './editorRegistry.js';
  * button. Canvas tabs (Viewport / Live Preview) belong to the same
  * single-canvas instance via CanvasArea (Area.jsx short-circuit); closing
  * one of them would orphan the other or destroy access to the canvas
- * entirely. Per user direction 2026-05-02.
+ * entirely. Animation timeline trio (timeline / dopesheet / fcurve)
+ * occupies the bottom area in the Animation workspace; closing them
+ * would empty that area and the user has no way to restore them
+ * without `Reset workspace` (per user direction 2026-05-03).
  */
-const NON_CLOSABLE_EDITOR_TYPES = new Set(['viewport', 'livePreview']);
+const NON_CLOSABLE_EDITOR_TYPES = new Set([
+  'viewport', 'livePreview',
+  'timeline', 'dopesheet', 'fcurve',
+]);
 
 /**
  * @param {Object} props
