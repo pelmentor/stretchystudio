@@ -2474,8 +2474,8 @@ export default function CanvasViewport({
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {editorState.editorMode === 'animation'
-                ? 'Reset to rest pose — clears unsaved pose edits and zeros every parameter to its default. Committed timeline keyframes are kept.'
-                : 'Reset to rest pose — zeros every bone-group rotation/translation/scale (preserving pivots) and resets parameters to defaults. Per-part transforms are preserved; use Properties → Reset Transform for those.'}
+                ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
+                : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

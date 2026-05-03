@@ -16,7 +16,7 @@
 |----|------|----------|-------|--------|
 | [PP1-001](#pp1-001) | bug     | high   | Bone-controller rotation doesn't propagate to layers (no re-render trigger) | closed |
 | [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | closed |
-| [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
+| [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | closed |
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | closed |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | closed |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | closed |
@@ -87,7 +87,11 @@ But the **authored-cmo3** init path landed later (commit `41e63bc` 2026-05-03 �
 <a id="pp1-003"></a>
 ### PP1-003 — Inline-tooltip pattern eats screen real-estate (cross-cutting)
 
-**Type:** ux · **Severity:** medium · **Status:** open
+**Type:** ux · **Severity:** medium · **Status:** closed (commit pending)
+
+**Root cause.** The `TooltipContent` shadcn primitive ([`tooltip.jsx`](../src/components/ui/tooltip.jsx)) had no default max-width — long strings rendered as a single wide line that stretched across the viewport. Reset Pose's ~220-char tooltip was the worst offender, but the same pattern occurred at any caller that passed long `tip` text.
+
+Fix (cross-cutting): added a default `max-w-xs` (~20rem) to `TooltipContent`'s class list. Long help text now wraps at a reasonable column instead of stretching across the screen. Individual callers can still pass an explicit `max-w-*` class to override. Also trimmed the Reset Pose tooltip itself to a one-line summary; the Properties → Reset Transform pointer survives in the staging-mode message.
 
 **Symptom (user-visible).** Hovering "Reset Pose" in the canvas top-right reveals a long single-line info bar at the bottom of the canvas: "Reset to rest pose — zeros every bone-group rotation/translation/scale (preserving pivots) and resets parameters to defaults. Per-part transforms are preserved; use Properties → Reset Transform for those." (See screenshot.) The bar spans roughly half the canvas width and obscures the workspace below.
 
@@ -109,7 +113,7 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-004"></a>
 ### PP1-004 — Iris clip-mask edges are aliased (stairstep, not antialiased)
 
-**Type:** bug · **Severity:** medium · **Status:** closed (commit pending)
+**Type:** bug · **Severity:** medium · **Status:** closed (commit `9949436`)
 
 **Root cause.** Stencil masks are inherently binary: each fragment either writes a stencil value or it doesn't. The iris is drawn into the stencil buffer with `gl.stencilOp(KEEP, KEEP, REPLACE)`; edge pixels that the rasterizer assigns to the iris triangle write the stencil with no per-sample weighting, so the eyewhite's `gl.EQUAL` test produces a hard, stairstepped boundary.
 
