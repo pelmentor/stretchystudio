@@ -12,14 +12,15 @@ Each entry is short and self-contained — anyone reading should be able to pick
 - **When triaging** — fill in any missing **Repro** steps the moment you learn them. Empty Repro = guesswork.
 - **Header marker** — `✅` prefix means fix shipped (visual scrub may still be pending — see entry body).
 
-## Status snapshot (2026-05-02)
+## Status snapshot (2026-05-03)
 
 | Status | Entries |
 |--------|---------|
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
-| ⏳ Open | BUG-003 (Phase 3 lifted-grid composition shipped — PARAM mean dropped 6.66 → 2.45 px / 63% reduction; breath case 16.76 → 5.45 px / 67%; AngleZ peak still 17.73 px pending Phase 2b rotation FD Jacobian Setup, blocked on rotation matrix-structure refactor) |
-| Recently fixed | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
+| ⏳ Open | *(none)* |
+| Recently fixed (2026-05-03) | BUG-003 (authored-cmo3 init rig path — `buildRigSpecFromCmo3.js` builds RigSpec end-to-end from authored deformer data; AngleZ_pos30 PARAM 9.45 → **0.01 px**, overall TOTAL 24.21 → **5.44 px**, PARAM 9.45 → **5.42 px**), GAP-008 opt-out wired to authored path |
+| Recently fixed (2026-05-02) | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
 
 ### Fix-style rule: when there's an upstream/older reference, do an exact port
 

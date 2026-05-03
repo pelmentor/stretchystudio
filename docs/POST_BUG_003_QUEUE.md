@@ -12,20 +12,15 @@ This file ranks the next-best things to work on, written down before /compact so
 - **BUG-003 closed via authored-cmo3 init rig path** (`5152ba4`): `buildRigSpecFromCmo3.js` assembles RigSpec end-to-end from authored cmo3 deformer data. AngleZ_pos30 PARAM 9.45 → 0.01 px; overall PARAM max 9.45 → 5.42 px; rest-pose match to 0.07 px.
 - **GAP-008 opt-out wired to authored path** (`41e63bc`): `eyeRig`/`hairRig`/`clothingRig`/`mouthRig` flags drop matching leaf rigWarps + reparent art meshes upward.
 
-## Tier 1 — small wins (½ day combined, low risk, user-visible)
+## Tier 1 — small wins **(EVAPORATED 2026-05-03 — re-check showed nothing actionable)**
 
-Rationale: clean up the `Open` BUGs list. Each is small, tests are fast, no architectural surface. Probably one-file fixes.
+Original plan was to clean up the `Open` BUGs list with three small fixes. After re-reading [BUGS.md](BUGS.md) on 2026-05-03 the picture is different from what I wrote at /compact time:
 
-1. **BUG-005** — Per-piece Opacity slider does nothing
-   - Severity: medium · Status: open
-   - Likely a wiring issue between the slider and the per-mesh opacity binding
-2. **BUG-007** — Variant `*.suffix` layers visible by default after PSD import
-   - Variants should be `wasVisibleInPsd: false` until driver param activates them
-   - Probably one place in PSD-import where the flag isn't propagated
-3. **BUG-009** — Eyes display closed after Init Rig until param toggled
-   - ParamEyeLOpen / ParamEyeROpen probably initializes to 0 when default should be 1
+1. ~~**BUG-005**~~ — *Instrumented, awaiting user drag-time repro* (not "open and fixable"). [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) already logs `opacityCommit` on every commit. Without the user dragging the slider with Logs panel open, we can't tell if the commit is firing or the renderer is ignoring the change. Blocked on user repro, same status as BUG-015.
+2. ~~**BUG-007**~~ — Already **✅ Fixed 2026-04-30** ([variantNormalizer.js:109-122](../src/io/variantNormalizer.js#L109)). The /compact-time queue confused this with an open bug.
+3. ~~**BUG-009**~~ — Already **✅ Fixed 2026-04-30** ([RigService.js:147-159](../src/services/RigService.js#L147)). The /compact-time queue confused this with an open bug.
 
-These three could ship in one sweep. Recommend doing this **next session**.
+**Net:** Tier 1 is empty. Promote Tier 2 / Tier 3.
 
 ## Tier 2 — continuation of init-rig work (1-2 days, medium risk)
 
@@ -69,17 +64,19 @@ These three could ship in one sweep. Recommend doing this **next session**.
 
 10. **BUG-005 / BUG-007 / BUG-009** above can also be moved here if first-look investigation needs the user to confirm steps
 
-## Recommendation for next session
+## Recommendation for next session (revised 2026-05-03)
 
-**Tier 1 sweep** — three small BUG-fixes in one session.
+Since Tier 1 evaporated, the genuine choices are:
 
-- Closes 3 of 4 open BUGs (only BUG-003 was the big one and that's done)
-- Fast tests, low context burn
-- User-visible improvements
+**A. Tier 2 #4 — body chain ~5 px PARAM residual.** Direct continuation of BUG-003 work, same mental model cached. Highest ROI from "what's actually still wrong with the rig". 1-2 days estimated. *Recommended* if user wants more rig fidelity.
 
-Or, if heroics: **Tier 2 #4** (body residual). Direct continuation of today's work; same mental model still cached.
+**B. Tier 3 #6 — UPSTREAM_PARITY_AUDIT.** Plan already written ([UPSTREAM_PARITY_AUDIT.md](UPSTREAM_PARITY_AUDIT.md)). Now sensible to run since init-rig refactor landed. 1.75–3.25 days.
 
-**Don't combine Tier 1 + Tier 2** in a single session — different contexts, different test cycles, mistakes rise sharply.
+**C. Tier 3 #8 — Cubism Warp Port Phase 4** (artmesh keyform composition). Continues the kernel-port arc. Phase 5 closes the parity sweep.
+
+**D. New feature pillar — V3 re-rig flow gap (Tier 3 #7).** Whole UI for editing pivots / weights / re-running wizard stages. Needs user direction before plan is written.
+
+**Don't pick A + B in same session** — different mental models, different test cycles. One at a time.
 
 ## Anti-patterns to avoid
 
