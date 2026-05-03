@@ -878,7 +878,7 @@ export default function CanvasViewport({
     const handler = (e) => {
       if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
       const ws = activeWorkspaceRef.current;
-      if (ws !== 'edit') return;
+      if (ws !== 'default') return;
       const prefs = usePreferencesStore.getState();
       const setPE = prefs.setProportionalEdit;
       if (e.key === 'o' || e.key === 'O') {
@@ -2060,7 +2060,7 @@ export default function CanvasViewport({
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
       const ws = activeWorkspaceRef.current;
-      const wsAllows = ws === 'edit';
+      const wsAllows = ws === 'default';
       // PP1-008(b) — also show the ring during F-mode radius adjust, even
       // when proportional editing is disabled, so the user sees what
       // they're sizing. F-mode is gated on editMode='mesh' at entry.

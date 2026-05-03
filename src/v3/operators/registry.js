@@ -74,7 +74,7 @@ export function _resetOperatorsForTests() {
 
 // ── Built-in shell operators ─────────────────────────────────────────
 
-const WORKSPACE_IDS = ['edit', 'pose', 'animation'];
+const WORKSPACE_IDS = ['default', 'animation'];
 
 function registerBuiltins() {
   for (const id of WORKSPACE_IDS) {

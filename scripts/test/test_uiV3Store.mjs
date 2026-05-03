@@ -1,6 +1,8 @@
 // v3 Phase 0A / 1A.UX — uiV3Store tests (tabs-per-area shape).
 // Updated 2026-05-02 — workspaces collapsed from 5 to 3 (edit / pose /
 // animation). Layout / Modeling / Rigging merged into 'edit'.
+// Updated 2026-05-03 — collapsed 3 → 2 (default / animation). 'edit' and
+// 'pose' merged into 'default' since they had identical layouts.
 // Run: node scripts/test/test_uiV3Store.mjs
 
 import { useUIV3Store, getActiveTab } from '../../src/store/uiV3Store.js';
@@ -15,7 +17,7 @@ function assert(cond, name) {
 }
 
 function reset() {
-  useUIV3Store.getState().setWorkspace('edit');
+  useUIV3Store.getState().setWorkspace('default');
   useUIV3Store.getState().resetWorkspace();
 }
 
@@ -23,19 +25,19 @@ function reset() {
 
 {
   const s = useUIV3Store.getState();
-  assert(s.activeWorkspace === 'edit', 'initial workspace = edit');
-  assert(Object.keys(s.workspaces).length === 3, '3 workspace presets');
+  assert(s.activeWorkspace === 'default', 'initial workspace = default');
+  assert(Object.keys(s.workspaces).length === 2, '2 workspace presets');
   const wsKeys = Object.keys(s.workspaces).sort();
-  assert(JSON.stringify(wsKeys) === '["animation","edit","pose"]',
-    'workspace keys = [animation, edit, pose]');
+  assert(JSON.stringify(wsKeys) === '["animation","default"]',
+    'workspace keys = [animation, default]');
 
-  // Default 'edit' layout: leftTop / leftBottom / center / rightTop / rightBottom.
+  // Default layout: leftTop / leftBottom / center / rightTop / rightBottom.
   // Both side columns are vertical splits.
-  const ws = s.workspaces.edit;
-  assert(ws.areas.length === 5, 'edit has 5 areas');
+  const ws = s.workspaces.default;
+  assert(ws.areas.length === 5, 'default has 5 areas');
   const ids = ws.areas.map((a) => a.id).sort();
   assert(JSON.stringify(ids) === '["center","leftBottom","leftTop","rightBottom","rightTop"]',
-    'edit area ids = [center, leftBottom, leftTop, rightBottom, rightTop]');
+    'default area ids = [center, leftBottom, leftTop, rightBottom, rightTop]');
 
   const leftTop = ws.areas.find((a) => a.id === 'leftTop');
   assert(leftTop?.tabs.length === 1 && leftTop.tabs[0].editorType === 'outliner',
@@ -87,26 +89,11 @@ function reset() {
     'animation rightBottom = [animations, properties]');
 }
 
-// ── Pose workspace = default areas (Live Preview tab on center) ─────
-
-{
-  const s = useUIV3Store.getState();
-  const pose = s.workspaces.pose;
-  assert(pose.areas.length === 5, 'pose has 5 areas');
-  const ids = pose.areas.map((a) => a.id).sort();
-  assert(JSON.stringify(ids) === '["center","leftBottom","leftTop","rightBottom","rightTop"]',
-    'pose area ids = [left halves, center, right halves]');
-  const c = pose.areas.find((a) => a.id === 'center');
-  assert(c?.tabs.length === 2, 'pose center has 2 tabs');
-  assert(c?.tabs[0].editorType === 'viewport' && c?.tabs[1].editorType === 'livePreview',
-    'pose center tabs = [viewport, livePreview]');
-}
-
 // ── No workspace ships a centerRight slot — single canvas, tabbed swap ──
 
 {
   const s = useUIV3Store.getState();
-  for (const wsKey of /** @type {const} */ (['edit', 'pose', 'animation'])) {
+  for (const wsKey of /** @type {const} */ (['default', 'animation'])) {
     const ws = s.workspaces[wsKey];
     const cr = ws.areas.find((a) => a.id === 'centerRight');
     assert(!cr, `${wsKey} has no centerRight area (Live Preview rides as a tab on center)`);
@@ -119,10 +106,8 @@ function reset() {
   reset();
   useUIV3Store.getState().setWorkspace('animation');
   assert(useUIV3Store.getState().activeWorkspace === 'animation', 'setWorkspace → animation');
-  useUIV3Store.getState().setWorkspace('pose');
-  assert(useUIV3Store.getState().activeWorkspace === 'pose', 'setWorkspace → pose');
-  useUIV3Store.getState().setWorkspace('edit');
-  assert(useUIV3Store.getState().activeWorkspace === 'edit', 'setWorkspace → edit');
+  useUIV3Store.getState().setWorkspace('default');
+  assert(useUIV3Store.getState().activeWorkspace === 'default', 'setWorkspace → default');
 }
 
 // ── Blender contract: workspace switch does NOT touch editMode ──────
@@ -144,7 +129,7 @@ function reset() {
     meshSubMode: 'deform',
   });
 
-  for (const wsId of /** @type {const} */ (['edit', 'pose', 'animation', 'edit', 'pose'])) {
+  for (const wsId of /** @type {const} */ (['default', 'animation', 'default', 'animation'])) {
     useUIV3Store.getState().setWorkspace(wsId);
     assert(useEditorStore.getState().editMode === 'mesh',
       `workspace switch → ${wsId}: editMode='mesh' preserved`);
@@ -167,7 +152,7 @@ function reset() {
     editMode: 'blendShape',
     activeBlendShapeId: 'shape-1',
   });
-  useUIV3Store.getState().setWorkspace('pose');
+  useUIV3Store.getState().setWorkspace('default');
   assert(useEditorStore.getState().editMode === 'blendShape',
     'workspace switch: blendShape edit preserved');
   assert(useEditorStore.getState().activeBlendShapeId === 'shape-1',
@@ -188,7 +173,7 @@ function reset() {
 
   // Set editorMode='animation' explicitly, then walk all workspaces
   useEditorStore.setState({ editorMode: 'animation' });
-  for (const wsId of /** @type {const} */ (['edit', 'pose', 'animation', 'edit'])) {
+  for (const wsId of /** @type {const} */ (['default', 'animation', 'default'])) {
     useUIV3Store.getState().setWorkspace(wsId);
     assert(useEditorStore.getState().editorMode === 'animation',
       `workspace switch → ${wsId}: editorMode='animation' preserved`);
@@ -196,7 +181,7 @@ function reset() {
 
   // Same in reverse — staging mode survives every workspace
   useEditorStore.setState({ editorMode: 'staging' });
-  for (const wsId of /** @type {const} */ (['animation', 'pose', 'edit', 'animation'])) {
+  for (const wsId of /** @type {const} */ (['animation', 'default', 'animation'])) {
     useUIV3Store.getState().setWorkspace(wsId);
     assert(useEditorStore.getState().editorMode === 'staging',
       `workspace switch → ${wsId}: editorMode='staging' preserved`);
@@ -211,12 +196,12 @@ function reset() {
 {
   reset();
   // leftTop active tab should be the first one (outliner).
-  const before = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'leftTop');
+  const before = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'leftTop');
   const beforeActiveType = before.tabs.find((t) => t.id === before.activeTabId).editorType;
   assert(beforeActiveType === 'outliner', 'pre: leftTop active = outliner');
 
   useUIV3Store.getState().setAreaEditor('leftTop', 'properties');
-  const after = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'leftTop');
+  const after = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'leftTop');
   const afterActiveType = after.tabs.find((t) => t.id === after.activeTabId).editorType;
   assert(afterActiveType === 'properties', 'setAreaEditor swaps active tab type');
   assert(after.tabs.length === 1, 'tab count preserved (single-tab area)');
@@ -227,14 +212,14 @@ function reset() {
 {
   reset();
   useUIV3Store.getState().addTab('rightBottom', 'parameters');
-  const rightBottom = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const rightBottom = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   const second = rightBottom.tabs[1];
   useUIV3Store.getState().setAreaActiveTab('rightBottom', second.id);
-  const after = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const after = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   assert(after.activeTabId === second.id, 'setAreaActiveTab updates id');
   // Switching to an unknown tab id is a no-op.
   useUIV3Store.getState().setAreaActiveTab('rightBottom', 'nonexistent-tab-id');
-  const after2 = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const after2 = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   assert(after2.activeTabId === second.id,
     'setAreaActiveTab with unknown tab id = no-op');
 }
@@ -244,7 +229,7 @@ function reset() {
 {
   reset();
   useUIV3Store.getState().addTab('rightBottom', 'parameters');
-  const rb = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const rb = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   assert(rb.tabs.length === 2, 'addTab appended');
   assert(rb.tabs[1].editorType === 'parameters', 'new tab type correct');
   assert(rb.activeTabId === rb.tabs[1].id, 'new tab is active');
@@ -254,9 +239,9 @@ function reset() {
 
 {
   reset();
-  const lt = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'leftTop');
+  const lt = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'leftTop');
   useUIV3Store.getState().removeTab('leftTop', lt.tabs[0].id);
-  const after = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'leftTop');
+  const after = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'leftTop');
   assert(after.tabs.length === 1, 'cannot remove last remaining tab');
 }
 
@@ -265,11 +250,11 @@ function reset() {
 {
   reset();
   useUIV3Store.getState().addTab('rightBottom', 'parameters');
-  const rightBottom = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const rightBottom = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   const paramsTab = rightBottom.tabs[1];
   useUIV3Store.getState().setAreaActiveTab('rightBottom', paramsTab.id);
   useUIV3Store.getState().removeTab('rightBottom', paramsTab.id);
-  const after = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'rightBottom');
+  const after = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
   assert(after.tabs.length === 1, 'tab removed');
   assert(after.activeTabId === after.tabs[0].id,
     'active fell back to remaining tab');
@@ -281,7 +266,7 @@ function reset() {
   reset();
   useUIV3Store.getState().setAreaEditor('center', 'properties');
   useUIV3Store.getState().resetWorkspace();
-  const center = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'center');
+  const center = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'center');
   assert(center.tabs[0].editorType === 'viewport',
     'resetWorkspace restored center = viewport');
 }
@@ -290,9 +275,9 @@ function reset() {
 
 {
   reset();
-  const before = JSON.stringify(useUIV3Store.getState().workspaces.edit);
+  const before = JSON.stringify(useUIV3Store.getState().workspaces.default);
   useUIV3Store.getState().setAreaEditor('does-not-exist', 'outliner');
-  const after = JSON.stringify(useUIV3Store.getState().workspaces.edit);
+  const after = JSON.stringify(useUIV3Store.getState().workspaces.default);
   assert(before === after, 'setAreaEditor on missing id: no change');
 }
 
@@ -300,7 +285,7 @@ function reset() {
 
 {
   reset();
-  const leftTop = useUIV3Store.getState().workspaces.edit.areas.find((a) => a.id === 'leftTop');
+  const leftTop = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'leftTop');
   const t = getActiveTab(leftTop);
   assert(t?.editorType === 'outliner', 'getActiveTab returns active tab');
   assert(getActiveTab(null) === null, 'getActiveTab(null) = null');

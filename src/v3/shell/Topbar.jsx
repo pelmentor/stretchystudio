@@ -43,10 +43,8 @@ import { setEditorMode as serviceSetEditorMode } from '../../services/EditorMode
 
 /** @type {WorkspaceTab[]} */
 const WORKSPACES = [
-  { id: 'edit',      label: 'Edit',
-    tip: 'Edit — panels for setup work: Outliner, Logs, Parameters, Properties.' },
-  { id: 'pose',      label: 'Pose',
-    tip: 'Pose — same panels as Edit; named for posing workflow.' },
+  { id: 'default',   label: 'Default',
+    tip: 'Default — Outliner, Logs, Viewport, Parameters, Properties. Covers setup AND posing; switch to Animation for the timeline.' },
   { id: 'animation', label: 'Animation',
     tip: 'Animation — adds a timeline area at the bottom for keyframing.' },
 ];

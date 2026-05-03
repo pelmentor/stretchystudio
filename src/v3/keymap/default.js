@@ -21,11 +21,11 @@
 
 /** @type {Record<string, string>} */
 export const DEFAULT_KEYMAP = {
-  // Workspace switches - Ctrl+1..3 (collapsed from 5 to 3 workspaces
-  // 2026-05-02; Layout / Modeling / Rigging merged into 'edit').
-  'Ctrl+Digit1': 'workspace.set.edit',
-  'Ctrl+Digit2': 'workspace.set.pose',
-  'Ctrl+Digit3': 'workspace.set.animation',
+  // Workspace switches - Ctrl+1..2 (5 → 3 collapse 2026-05-02 merging
+  // Layout / Modeling / Rigging into 'edit'; 3 → 2 collapse 2026-05-03
+  // merging 'edit' and 'pose' into 'default').
+  'Ctrl+Digit1': 'workspace.set.default',
+  'Ctrl+Digit2': 'workspace.set.animation',
 
   // Layout reset - uncommon enough that Ctrl+Shift+Backspace is fine.
   'Ctrl+Shift+Backspace': 'workspace.reset',

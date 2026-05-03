@@ -27,16 +27,18 @@
 import { create } from 'zustand';
 
 /**
- * @typedef {('edit'|'pose'|'animation')} WorkspaceId
- *  Workspaces are layout-only: which editors are visible + the
- *  default `editorMode` (staging vs animation). They DO NOT gate
- *  edit modes — `editorStore.editMode` is independent of workspace.
+ * @typedef {('default'|'animation')} WorkspaceId
+ *  Workspaces are layout-only presets (Blender-style). They DO NOT
+ *  gate edit modes — `editorStore.editMode` is independent of
+ *  workspace, and the Setup/Animate `editorMode` axis has its own
+ *  topbar pill.
  *
- *  - **edit** (staging, no timeline) — setup work: PSD import,
- *    meshes, bones, weights, rig.
- *  - **pose** (animation, no timeline) — quick posing without
+ *  - **default** — Outliner / Logs / Viewport / Parameters /
+ *    Properties. Covers setup work AND quick posing; previously
+ *    split into separate `edit` and `pose` presets that had
+ *    structurally identical layouts.
+ *  - **animation** — adds a timeline area at the bottom for
  *    keyframing.
- *  - **animation** (animation, timeline visible) — full keyframing.
  *
  *
  * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview')} EditorType
@@ -136,33 +138,26 @@ const ANIMATION_AREAS = () => [
 ];
 
 /**
- * Pose workspace = DEFAULT_AREAS today. Kept as a separate factory
- * so future per-workspace divergence (e.g. a pose-specific tab) doesn't
- * have to retro-fit a branch.
+ * Per-workspace presets. Two workspaces — `default` / `animation`.
  *
- * @returns {AreaSlot[]}
- */
-const POSE_AREAS = () => DEFAULT_AREAS();
-
-/**
- * Per-workspace presets. Three workspaces — `edit` / `pose` /
- * `animation`. The previous five-workspace shape (Layout / Modeling /
- * Rigging / Pose / Animation) collapsed 2026-05-02: Layout / Modeling /
- * Rigging were structurally identical (same DEFAULT_AREAS, same
- * editorMode='staging') and only differed via a workspace-policy gate
- * that has been deleted. False distinction removed.
+ * Reduction history: the previous five-workspace shape (Layout /
+ * Modeling / Rigging / Pose / Animation) collapsed to three on
+ * 2026-05-02 (Layout / Modeling / Rigging were structurally identical,
+ * folded into `edit`). On 2026-05-03 `edit` and `pose` merged into
+ * `default` since they shared the same DEFAULT_AREAS layout — the
+ * Setup/Animate distinction lives on its own topbar pill, so a
+ * separate workspace for posing was redundant.
  *
  * @returns {Record<WorkspaceId, WorkspacePreset>}
  */
 const initialWorkspaces = () => ({
-  edit:      { areas: DEFAULT_AREAS() },
-  pose:      { areas: POSE_AREAS() },
+  default:   { areas: DEFAULT_AREAS() },
   animation: { areas: ANIMATION_AREAS() },
 });
 
 export const useUIV3Store = create((set) => ({
   /** @type {WorkspaceId} */
-  activeWorkspace: 'edit',
+  activeWorkspace: 'default',
 
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),

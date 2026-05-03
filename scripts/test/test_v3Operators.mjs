@@ -25,7 +25,7 @@ function assertThrows(fn, name) {
 // ── registry: built-ins exist ───────────────────────────────────────
 
 {
-  for (const ws of ['edit', 'pose', 'animation']) {
+  for (const ws of ['default', 'animation']) {
     const op = getOperator(`workspace.set.${ws}`);
     assert(op !== null, `built-in workspace.set.${ws} registered`);
     assert(op.label.includes(ws), `built-in workspace.set.${ws} label OK`);
@@ -51,22 +51,22 @@ assertThrows(
 
 {
   const all = listOperators();
-  assert(all.length >= 4, 'listOperators returns ≥ 4 (3 workspaces + reset)');
+  assert(all.length >= 3, 'listOperators returns ≥ 3 (2 workspaces + reset)');
   assert(all.every(o => typeof o.exec === 'function'), 'all ops have exec()');
 }
 
 // ── operator exec actually mutates store ────────────────────────────
 
 {
-  useUIV3Store.getState().setWorkspace('edit');
+  useUIV3Store.getState().setWorkspace('default');
   const before = useUIV3Store.getState().activeWorkspace;
-  assert(before === 'edit', 'pre-exec: edit');
+  assert(before === 'default', 'pre-exec: default');
 
   getOperator('workspace.set.animation').exec({ editorType: null });
   assert(useUIV3Store.getState().activeWorkspace === 'animation', 'exec: switched to animation');
 
-  getOperator('workspace.set.edit').exec({ editorType: null });
-  assert(useUIV3Store.getState().activeWorkspace === 'edit', 'exec: back to edit');
+  getOperator('workspace.set.default').exec({ editorType: null });
+  assert(useUIV3Store.getState().activeWorkspace === 'default', 'exec: back to default');
 }
 
 // ── keymap: chord builder ───────────────────────────────────────────
