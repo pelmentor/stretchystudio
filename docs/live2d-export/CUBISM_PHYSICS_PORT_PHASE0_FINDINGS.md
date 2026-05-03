@@ -4,6 +4,10 @@
 **Plan doc:** [CUBISM_PHYSICS_PORT.md](CUBISM_PHYSICS_PORT.md)
 **Verdict:** Phase 1 port is **required**. v3's `physicsTick.js` diverges from Cubism Web Framework's `CubismPhysics` by **max 2.0** (sign-flipped clamp) and **mean 0.5–1.3** across both shelby and Hiyori fixtures.
 
+> **Update 2026-05-03 same day:** Phase 1 + Phase 2 SHIPPED. The new kernel `src/io/live2d/runtime/cubismPhysicsKernel.js` is wired into `physicsTick.js` as the default; the harness now reports max divergence **1e-5** (float32 noise floor) across all fixtures. This document remains the rationale snapshot for the divergence pre-port; the harness is now repurposed as the regression net for the production kernel.
+>
+> **Open Phase 3 issue (user-side):** the auto-rig default `outputScale` values at `cmo3/physics.js:PHYSICS_RULES` (range 0.4–2.061) were tuned in v3-legacy `(deg/angleMax)*scale` semantics. Under cubism-port (radians × scale) they produce ~5.7× smaller magnitude. Defaults are deliberately **not** re-tuned: doing so would specifically match v3-legacy's wrong-magnitude output, undoing the byte-faithfulness. If Phase 3 visual sweep shows Cubism Viewer agreeing with the new (smaller) magnitudes, defaults are correct as-is. If Cubism Viewer shows v3-legacy's larger magnitudes, that would imply Cubism Viewer was already running with a different scale convention — which is testable, but has not been observed.
+
 ## Methodology
 
 1. **Reference snapshot** at [`reference/cubism-web-framework/`](../../reference/cubism-web-framework/) — verbatim copy of the physics-relevant subset of [Live2D's CubismWebFramework](https://github.com/Live2D/CubismWebFramework) at commit `d4da0aa07e47d2c1e4f5fa7ea6047861ea5e5d0b` ("Update to Cubism 5 SDK for Web R5"), with attribution and the Live2D Open Software License preserved.

@@ -1,6 +1,11 @@
 # Cubism Physics Port — Plan
 
-**Status:** Phase 0 **SHIPPED 2026-05-03** — see [CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md](CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md). Verdict: Phase 1 port is required (max divergence 2.0, mean 0.5–1.3 across both shelby and Hiyori). Phase 1 starts next.
+**Status:** Phase 0 + Phase 1 + Phase 2 **SHIPPED 2026-05-03**.
+- Phase 0 (oracle harness): see [CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md](CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md). Verdict: port required. Max divergence 2.0; mean 0.5–1.3 across shelby+Hiyori.
+- Phase 1 (kernel port): `src/io/live2d/runtime/cubismPhysicsKernel.js`. Oracle harness shows max divergence **1e-5** (float32 noise floor) across all driver fixtures. Byte-faithful match achieved.
+- Phase 2 (wire-in + flag): `physicsTick.js` delegates to the kernel by default. `setPhysicsKernel('v3-legacy')` retains the verlet integrator for one release cycle as opt-out. All 93 test suites green; typecheck silent.
+
+**Phase 3 (visual sweep)** still owed: side-by-side compare with Cubism Viewer on shelby + Hiyori. User-side activity. May surface that auto-rig defaults at `cmo3/physics.js:PHYSICS_RULES` need re-tuning (their `scale` fields were tuned for v3-legacy's `(deg/angleMax)*scale` mapping; under cubism-port = `radians*scale` the output magnitudes shrink ~5.7× for SRC_TO_G_ANGLE outputs).
 
 **Original status (queued):** Authored 2026-05-03 by user request: "порт физики из cubism viewer это первоочередная задача". User-flagged as **top priority** for the next autonomous session.
 
