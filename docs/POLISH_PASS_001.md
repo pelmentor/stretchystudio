@@ -18,7 +18,7 @@
 | [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | closed |
 | [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
-| [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
+| [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | closed |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | closed |
 | [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | closed |
 | [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | closed |
@@ -130,7 +130,11 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-005"></a>
 ### PP1-005 — "Setup" button at top of UI is non-clickable + unexplained
 
-**Type:** ux/bug · **Severity:** low · **Status:** open
+**Type:** ux/bug · **Severity:** low · **Status:** closed (commit pending)
+
+**What it actually was.** The button is the Setup half of a Setup⇄Animate toggle pair (the `editorMode` axis: Setup = edits the rest pose; Animate = edits become keyframes). It's not non-clickable — it's idempotent: clicking the already-active half is a no-op (per `EditorModeService.setEditorMode` which returns early on same-mode calls). The hover tooltip used Radix's `<Tooltip>` with a 400 ms delay, which the user evidently didn't trip while exploring.
+
+Fix: prefixed the pair with a small "Mode" label so the role is unmistakable, and added a native `title=` fallback so the explanation appears on a regular short hover even if Radix Tooltip misses.
 
 **Symptom (user-visible).** A button labelled "Setup" appears in the top of the UI. Clicking it does nothing. Hover/focus produces no tooltip explaining its purpose. User confused about what it is.
 
@@ -146,7 +150,7 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-006"></a>
 ### PP1-006 — Edit-mode picker disabled-until-selection has no affordance
 
-**Type:** ux · **Severity:** low · **Status:** closed (commit pending)
+**Type:** ux · **Severity:** low · **Status:** closed (commit `ccd58f2`)
 
 Added an always-visible hint banner at the top of the ModePill popover when the active selection doesn't qualify for any edit mode (`kind !== 'meshedPart' && kind !== 'boneGroup'`): "Select a meshed part to enter Edit Mode, or a bone group for Skeleton Edit." Disabled rows still have their `title` tooltip as a secondary affordance — the banner is the primary discoverability fix.
 

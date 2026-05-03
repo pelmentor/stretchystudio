@@ -238,7 +238,13 @@ export function Topbar() {
               — clicking a workspace pill no longer changes editorMode.
               The user explicitly picks Setup vs Animate here. Going
               from Setup→Animate captures the current rest pose so
-              keyframes don't bake the in-flight pose into rest. */}
+              keyframes don't bake the in-flight pose into rest.
+              PP1-005 — small "Mode" label + native `title` tooltips so
+              the pair is unmistakably a Setup-vs-Animate toggle (was
+              perceived as a non-clickable label without explanation). */}
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1.5 select-none">
+            Mode
+          </span>
           {(/** @type {const} */ (['staging', 'animation'])).map((m, i) => {
             const on = editorMode === m;
             const label = m === 'staging' ? 'Setup' : 'Animate';
@@ -252,6 +258,7 @@ export function Topbar() {
                     type="button"
                     role="tab"
                     aria-selected={on}
+                    title={tip}
                     onClick={() => serviceSetEditorMode(m)}
                     className={cn(
                       'px-2.5 py-1 rounded-md text-[12px] font-medium transition-all flex items-center',
