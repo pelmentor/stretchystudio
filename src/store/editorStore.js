@@ -43,13 +43,11 @@ export const useEditorStore = create((set) => ({
     livePreview: { zoom: 1, panX: 0, panY: 0 },
   },
 
-  dragState: {
-    isDragging: false,
-    partId: null,
-    vertexIndex: null,
-  },
-
-  armedParameterId: null,
+  // BLENDER_FIDELITY: removed 2026-05-03 — `dragState` and
+  // `armedParameterId` lived here but had no readers anywhere in the
+  // codebase. All drag state is owned by per-component refs
+  // (CanvasViewport.dragRef, SkeletonOverlay.dragRef) where it belongs.
+  // The setters are removed alongside the fields below.
 
   /** GAP-016 — Single map of every visualization toggle, surfaced in
    *  ViewLayersPopover. Replaces the prior split between
@@ -230,8 +228,6 @@ export const useEditorStore = create((set) => ({
     usePreferencesStore.getState().setLastToolForMode(modeKey, mode);
     return { toolMode: mode };
   }),
-  setDragState:         (ds)       => set((state) => ({ dragState: { ...state.dragState, ...ds } })),
-  setArmedParameterId:  (id)       => set({ armedParameterId: id }),
   setViewLayers:        (partial)  => set((state) => {
     const next = { ...state.viewLayers, ...partial };
     // Skeleton-edit requires a visible skeleton — toggling skeleton
