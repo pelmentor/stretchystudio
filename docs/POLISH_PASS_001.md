@@ -19,7 +19,7 @@
 | [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
-| [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | open |
+| [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | closed |
 | [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | closed |
 | [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | closed |
 
@@ -146,7 +146,9 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-006"></a>
 ### PP1-006 — Edit-mode picker disabled-until-selection has no affordance
 
-**Type:** ux · **Severity:** low · **Status:** investigating (user self-resolved → confirms it's an affordance issue)
+**Type:** ux · **Severity:** low · **Status:** closed (commit pending)
+
+Added an always-visible hint banner at the top of the ModePill popover when the active selection doesn't qualify for any edit mode (`kind !== 'meshedPart' && kind !== 'boneGroup'`): "Select a meshed part to enter Edit Mode, or a bone group for Skeleton Edit." Disabled rows still have their `title` tooltip as a secondary affordance — the banner is the primary discoverability fix.
 
 **Symptom (user-visible).** Object-mode picker shows one mode "stuck" as the active option; the others appear greyed-out and uninteractable. User reported as broken; later self-resolved by realising they had to select a layer first ("Ой у меня получилось зайти в edit mode просто надо было селекнуть слой").
 
@@ -164,7 +166,7 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-007"></a>
 ### PP1-007 — Layers panel: warps default-visible + opacity slider
 
-**Type:** feature · **Severity:** medium · **Status:** closed (commit pending)
+**Type:** feature · **Severity:** medium · **Status:** closed (commit `e7bae2c`)
 
 Implementation followed schema option (a): added `viewLayers.warpGridsOpacity` (0..1, default 0.5) alongside the existing `viewLayers.warpGrids` boolean. `WarpDeformerOverlay` now renders every canvas-px warp lattice at the slider opacity, with the selected warp pinned to full opacity for accent. The popover gains an indented opacity slider that appears under the Warp grids checkbox when it's on.
 

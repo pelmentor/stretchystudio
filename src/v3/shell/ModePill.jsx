@@ -155,6 +155,20 @@ export function ModePill() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-60 p-2 space-y-0.5">
+        {/* PP1-006 — disabled rows had only a `title` tooltip; that's
+            invisible until you hover-and-wait, so first-time users hit
+            the "modes are greyed out, must be broken" cliff. Surface an
+            always-visible hint at the top whenever the active selection
+            doesn't qualify for any edit mode. */}
+        {kind !== 'meshedPart' && kind !== 'boneGroup' && (
+          <div
+            className="text-[10px] text-muted-foreground/85 italic
+                       bg-muted/30 border border-border/50 rounded
+                       px-2 py-1.5 mb-1 leading-snug"
+          >
+            Select a meshed part to enter Edit Mode, or a bone group for Skeleton Edit.
+          </div>
+        )}
         <ModeRow
           icon={Box}
           label="Object Mode"
