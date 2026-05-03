@@ -17,7 +17,7 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 | ✅ Closed / Phase A shipped | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008 (A+B), GAP-009, GAP-010 (A+B), GAP-011, GAP-012, GAP-013, GAP-014, GAP-015 (A+B), GAP-016 (A+B), GAP-017 (Phase A only — user-decided 2026-05-03; Phase B/C not pursued) |
 | ⏳ Open | (none) |
 
-Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
+Phase B follow-ups for closed entries (UI delete-confirm dialogs, parameter-editor surfaces, etc.) used to be gated on the broader `project_v3_rerig_flow_gap` — that pillar SHIPPED 2026-05-03 (Phases 0+1+3+4 of [V3_RERIG_FLOW_PLAN.md](V3_RERIG_FLOW_PLAN.md)). The "preserve customisations" re-init mode is the new RigStagesTab → "Refit X" buttons (`mode: 'merge'`). Per-stage refit, marker-based authoring tracking, single-flight guard, and the `seedAutoRigConfig` clobber-fix all landed.
 
 ---
 

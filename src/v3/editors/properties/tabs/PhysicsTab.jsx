@@ -22,6 +22,8 @@ import { Wind, Upload, RotateCcw } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { resolvePhysicsRules } from '../../../../io/live2d/rig/physicsConfig.js';
 import { parsePhysics3Json } from '../../../../io/live2d/physics3jsonImport.js';
+import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
+import { runStage } from '../../../../services/RigService.js';
 
 /**
  * @param {Object} props
@@ -43,9 +45,9 @@ export function PhysicsTab({ nodeId }) {
 function PhysicsTabBody({ node }) {
   const project = useProjectStore((s) => s.project);
   const updateProject = useProjectStore((s) => s.updateProject);
-  const seedPhysicsRules = useProjectStore((s) => s.seedPhysicsRules);
   const fileRef = useRef(null);
   const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
   const stored = Array.isArray(project.physicsRules) ? project.physicsRules : [];
 
   function handleFile(e) {
@@ -58,7 +60,10 @@ function PhysicsTabBody({ node }) {
         const text = String(reader.result ?? '');
         const { rules, warnings } = parsePhysics3Json(text);
         updateProject((p) => {
-          p.physicsRules = rules;
+          // V3 Re-Rig Phase 0: parsePhysics3Json already marks every rule
+          // with `_userAuthored: true`. Defensive re-mark in case a future
+          // import path adds rules through a different code path.
+          p.physicsRules = rules.map((r) => markUserAuthored(r));
         });
         setStatus({
           kind: warnings.length ? 'warn' : 'ok',
@@ -75,9 +80,25 @@ function PhysicsTabBody({ node }) {
     e.target.value = '';
   }
 
-  function handleReset() {
-    seedPhysicsRules();
-    setStatus({ kind: 'ok', text: 'Reset to default rules.' });
+  // V3 Re-Rig Phase 4 — Reset routes through `RigService.runStage` so
+  // there's one execution path for "reseed physicsRules from defaults".
+  // Semantics unchanged: Reset = `mode: 'replace'` (destructive, wipes
+  // imported rules); RigStagesTab → "Refit Physics" = `mode: 'merge'`
+  // (preserves imported rules). Two distinct intents, two buttons.
+  async function handleReset() {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const result = await runStage('physicsRules', { mode: 'replace' });
+      if (result.ok) {
+        setStatus({ kind: 'ok', text: 'Reset to default rules.' });
+      } else {
+        setStatus({ kind: 'error', text: result.error ?? 'Reset failed.' });
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   const rules = resolvePhysicsRules(project) ?? [];
@@ -118,8 +139,9 @@ function PhysicsTabBody({ node }) {
           <button
             type="button"
             onClick={handleReset}
-            className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
-            title="Re-seed project.physicsRules from the auto-rig defaults"
+            disabled={busy}
+            className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Re-seed project.physicsRules from the auto-rig defaults (drops imported rules)"
           >
             <RotateCcw size={11} /> Reset
           </button>

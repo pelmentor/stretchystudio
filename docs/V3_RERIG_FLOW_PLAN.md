@@ -1,6 +1,15 @@
 # V3 Re-Rig Flow — Plan
 
-**Status:** queued (2026-05-03). Plan written after a thorough current-state audit; awaiting user agreement on the `merge` semantics + scope before Phase 0 starts.
+**Status:** **SHIPPED 2026-05-03.** Phases 0 + 1 + 3 + 4 all delivered in a single autonomous session after `/compact`. Phase 2 (conflict preview) was the optional 0.5d that the plan default skipped — undo is the safety net.
+
+**Commits:**
+- Phase 0 (merge primitives + clobber fix): commit `d3f4078`
+- Phase 1 (runStage + RigStagesTab + telemetry): commit `ac87052`
+- Phase 3 + 4 (integration test + PhysicsTab reroute + docs): pending in this commit
+
+The original plan body below describes the design; treat it as historical context. The shipped surface lives in [`RigStagesTab.jsx`](../src/v3/editors/properties/tabs/RigStagesTab.jsx), [`RigService.js`](../src/services/RigService.js) (`runStage` / `refitAll`), [`PoseService.js`](../src/services/PoseService.js) (`capturePose` / `restorePose`), and [`userAuthorMarkers.js`](../src/io/live2d/rig/userAuthorMarkers.js).
+
+---
 
 **Premise.** After the PSD-import wizard runs, users today have NO way to refit individual rig stages — the only "re-rig" path is re-importing the PSD, which clobbers every manual edit (mask additions, physics imports, joint pivots, transform tweaks, etc.). This plan adds per-stage refit operators with merge-aware seeders, so iterating on a rig is safe.
 
