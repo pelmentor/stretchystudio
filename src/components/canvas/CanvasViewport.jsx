@@ -147,6 +147,17 @@ export default function CanvasViewport({
   // mode from the `previewMode` prop and routes every read/write
   // through `viewByMode[modeKey]` / `setView(modeKey, partial)`.
   const modeKey = previewMode ? 'livePreview' : 'viewport';
+  // PP2-007 — the WebGL init `useEffect(..., [])` captures `modeKey`
+  // in its rAF-tick closure once at mount. CanvasArea reuses the same
+  // CanvasViewport instance for both Viewport and Live Preview tabs
+  // (so the GL context survives tab toggles); without a ref, the tick
+  // keeps reading `viewByMode[<initial modeKey>]` while the pan/zoom
+  // handlers correctly write to `viewByMode[<current modeKey>]`.
+  // Result: gestures land in the right slot but the renderer reads
+  // from the wrong one — pan/zoom feel dead. The ref lets the tick
+  // re-read the current key on every frame.
+  const modeKeyRef = useRef(modeKey);
+  modeKeyRef.current = modeKey;
   const view = editorState.viewByMode[modeKey];
   /** @param {{zoom?:number,panX?:number,panY?:number}} partial */
   const setView = useCallback(
@@ -795,10 +806,14 @@ export default function CanvasViewport({
         // single per-frame view object; resolve it from this canvas's
         // active mode key. Workspace policy module deleted 2026-05-02:
         // viewLayers + editMode pass through unchanged.
+        // PP2-007 — read modeKey via ref so this tick honours the
+        // CURRENT preview/edit tab, not the one that was active at
+        // mount time (CanvasArea shares this instance across tabs).
         const _ed = editorRef.current;
+        const _modeKey = modeKeyRef.current;
         const editorForDraw = {
           ..._ed,
-          view: _ed.viewByMode[modeKey],
+          view: _ed.viewByMode[_modeKey],
         };
         // PP2-008 — ParamOpacity is the canonical Live2D global-opacity
         // slider. Mesh keyform bindings can't drive it (their default is
@@ -832,6 +847,13 @@ export default function CanvasViewport({
   useEffect(() => { isDirtyRef.current = true; },
     [view, editorState.selection, editorState.viewLayers,
     editorState.editMode, editorState.activeBlendShapeId]);
+
+  /* ── PP2-007 — mark dirty when the canvas tab toggles (modeKey flips).
+       The shared CanvasViewport instance has a different `view` slot per
+       tab; without an explicit dirty flag the rAF tick happily re-uses
+       its last-rendered output, so the freshly-active tab's pan/zoom
+       state doesn't paint until something else triggers a redraw. */
+  useEffect(() => { isDirtyRef.current = true; }, [modeKey]);
 
   /* ── Mark dirty when workspace changes (BUG-012 policy may flip) ─────── */
   useEffect(() => { isDirtyRef.current = true; }, [activeWorkspace]);

@@ -15,8 +15,8 @@
 | [PP2-003](#pp2-003) | feature| medium | Warp grid overlay — black + 25% opacity defaults | closed (`9330211`) |
 | [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | open |
 | [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; visual deformation (b) open | partial |
-| [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | open |
-| [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | open |
+| [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | partial (trunk closed; legs/legwear open) |
+| [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | closed (this commit) |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
 | [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
 | [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | open (supersedes PP2-004) |
@@ -106,7 +106,19 @@
 <a id="pp2-006"></a>
 ### PP2-006 — Bone rotation: only elbow/arm/head bones drive layers; rest are inert
 
-**Type:** bug · **Severity:** high · **Status:** open
+**Type:** bug · **Severity:** high · **Status:** partial — trunk bones (neck/torso/head) closed (this commit); legs / clothing bones still need investigation
+
+**Trunk-bone fix (this commit).** Added `BONE_ROLE_FALLBACK_PARAM` in [`SkeletonOverlay.jsx`](../src/components/canvas/SkeletonOverlay.jsx) — when a bone has no `ParamRotation_<sanitisedName>` (the auto-rig's `SKIP_ROTATION_ROLES` set: `torso` / `eyes` / `neck`), the rotation arc gesture writes to the canonical Live2D in-plane rotation param instead:
+- `neck` / `head` → `ParamAngleZ`
+- `torso` → `ParamBodyAngleZ`
+
+`eyes` has no sensible single-axis rotation param (ParamEyeBallX/Y is iris position, not eye rotation), so it falls through to transform-only.
+
+The clamp also tightened: when the bone drives any rig param, the visible bone arc clamps to the param range too (prevents the SVG arc from overshooting the param's `[-30, +30]` ceiling — which previously misread as "the rig is broken" since the arc kept rotating while the deformation stopped). The JS-skinning delta is re-derived from the clamped rotation so transform / param / skinning stay in sync.
+
+X / Y axes (3D look-around — pull-the-bone-tip gesture) are out of scope; rotation arc gives one in-plane angle by construction.
+
+**Open: legs + clothing bones.** The user's repro also mentioned `bothLegs` / `legwear`. Those bones are NOT in `SKIP_ROTATION_ROLES`, so [`paramSpec.js:300`](../src/io/live2d/rig/paramSpec.js#L300) section 6 should emit `ParamRotation_BothLegs` etc. and PP1-001 would route the gesture there. Why those particular bones still feel inert needs a live trace — possibilities: (a) the dependent meshes aren't wired into the rotation deformer's children, (b) sanitisation between auto-rig emit and SkeletonOverlay lookup diverges, (c) the user's `legwear` is a clothing-rig group that gets dropped when clothing-rig is opted out.
 
 **Symptom (expanded 2026-05-03).** *"ПОСЛЕ INIT RIG СКЕЛЕТНЫЕ КОСТИ СТАНОВЯТСЯ USELESS - КРОМЕ ELBOW И ARM И FACE КОСТИ - ОСТАЛЬНЫЕ КОСТИ ПЕРЕСТАЮТ ВООБЩЕ ДРАЙВИТЬ ЧТО ЛИБО."* The arm + elbow bones rotate things (PP1-001). Neck / torso / legwear / bothLegs / etc. don't.
 
@@ -133,17 +145,13 @@ This is "do as Live2D does": bones in the natural skeleton don't have their own 
 <a id="pp2-007"></a>
 ### PP2-007 — Live Preview tab — wheel zoom and pan don't work
 
-**Type:** bug · **Severity:** high · **Status:** open
+**Type:** bug · **Severity:** high · **Status:** closed (this commit)
 
-**Symptom.** On the Live Preview canvas tab, wheel does nothing and middle-mouse drag doesn't pan. The user can't reframe the live preview.
+**Symptom.** On the Live Preview canvas tab, wheel did nothing and middle-mouse drag didn't pan. Pointer events DID reach the canvas (the `previewMode` gates run cursor-look on LMB just fine); the writes also fired against `viewByMode.livePreview` via `setView('livePreview', …)`. They simply didn't appear on screen.
 
-**Where to look.** [`CanvasViewport.jsx onPointerDown ~line 1620`](../src/components/canvas/CanvasViewport.jsx#L1620) — middle/right mouse + Alt+left → pan / zoom block. Then ~line 1644 there's a `previewModeRef.current` short-circuit that arms cursor look on LMB. The pan / zoom block IS above that, so middle-mouse pan should work in preview. Wheel handler is registered at `useEffect` ~1592 unconditionally.
+**Root cause.** [`CanvasArea.jsx:75`](../src/v3/shell/CanvasArea.jsx#L75) shares a single `<CanvasViewport>` instance across the Viewport and Live Preview tabs (so the WebGL2 context survives tab toggles — see `feedback_two_views_one_host`). The WebGL init lives in a `useEffect(..., [])` that captures `modeKey` in its rAF-tick closure exactly once at mount. Pan / zoom handlers correctly write to `viewByMode[<current modeKey>]` because their `useCallback` lists `modeKey` as a dep — but the tick kept reading `viewByMode[<initial modeKey>]`. So when the user opened Live Preview, gestures landed in `viewByMode.livePreview` while the renderer kept painting from `viewByMode.viewport`, producing the dead-feel.
 
-**Hypothesis.** The Live Preview surface might have its own pointer-events stack that swallows the wheel/middle-mouse events before CanvasViewport sees them, OR `previewModeRef.current` gating is short-circuiting somewhere we missed. Needs a trace.
-
-**Investigation steps.**
-1. Add `logger.debug('preview-pointer', e.button, e.type)` at the very top of CanvasViewport's `onPointerDown` and `onWheel` and check whether events reach when previewMode is true.
-2. Inspect the LivePreviewEditor wrapper for any `pointerEvents: 'none'` / `stopPropagation` that intercepts canvas events.
+**Fix.** Added `modeKeyRef` mirroring `modeKey` and changed the rAF tick to read it via the ref each frame. Also added a `useEffect(..., [modeKey])` that flips `isDirtyRef = true` so the freshly-active tab repaints immediately on toggle (no need to wait for an unrelated mutation).
 
 ---
 

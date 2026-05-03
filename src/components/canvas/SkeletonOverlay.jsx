@@ -35,6 +35,27 @@ const JOINT_RADIUS_EDIT   = 8;
 
 // Arc handle constants
 const ARC_BONE_ROLES = new Set(['torso', 'neck', 'head', 'leftArm', 'rightArm', 'leftElbow', 'rightElbow', 'bothArms', 'leftLeg', 'rightLeg', 'leftKnee', 'rightKnee', 'bothLegs']);
+
+/**
+ * PP2-006 — fallback mapping from `boneRole` to a canonical Live2D
+ * parameter ID. Used when the bone has no `ParamRotation_<sanitisedName>`
+ * (the auto-rig's `SKIP_ROTATION_ROLES` set: torso/eyes/neck) — these
+ * trunk segments are warp-driven by the standard ParamAngle / ParamBodyAngle
+ * set, not by per-bone rotation params.
+ *
+ * The user's rotation gesture is a single in-plane arc, so we map to the
+ * Z-axis equivalent (in-plane rotation):
+ *   - neck / head → `ParamAngleZ` (head spin)
+ *   - torso       → `ParamBodyAngleZ` (body lean)
+ *
+ * X / Y axes (3D look-around) need a different gesture (e.g. drag-and-pull
+ * on the bone tip) — out of scope for this entry.
+ */
+const BONE_ROLE_FALLBACK_PARAM = Object.freeze({
+  neck:  'ParamAngleZ',
+  head:  'ParamAngleZ',
+  torso: 'ParamBodyAngleZ',
+});
 const ARC_RADIUS = 28;      // screen px
 const ARC_SWEEP_DEG = 270;  // coverage
 const ARC_COLOUR = 'rgba(251,191,36,0.55)';
@@ -295,17 +316,30 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // matching parameter (chainEval path, rig-driven parts) — without it,
       // rig-driven layers don't move until some other dispatch triggers a
       // re-render, producing the catch-up snap users were seeing.
+      //
+      // PP2-006 — when no `ParamRotation_<bone>` exists (trunk bones in the
+      // auto-rig's SKIP_ROTATION_ROLES set: torso/eyes/neck), fall back to
+      // the canonical standard param for that role. ParamAngleZ / ParamBodyAngleZ
+      // is in-plane rotation, exactly what the bone arc gesture produces.
       let rotationParamId = null;
       let rotationParamMin = -90;
       let rotationParamMax = 90;
       const sanitised = sanitisePartName(node.name || node.id);
       const candidateId = `ParamRotation_${sanitised}`;
-      const paramSpec = (useProjectStore.getState().project.parameters ?? [])
-        .find(p => p.id === candidateId);
+      const params = useProjectStore.getState().project.parameters ?? [];
+      const paramSpec = params.find(p => p.id === candidateId);
       if (paramSpec) {
         rotationParamId = candidateId;
         if (typeof paramSpec.min === 'number') rotationParamMin = paramSpec.min;
         if (typeof paramSpec.max === 'number') rotationParamMax = paramSpec.max;
+      } else {
+        const fallbackId = BONE_ROLE_FALLBACK_PARAM[node.boneRole];
+        const fallbackSpec = fallbackId ? params.find(p => p.id === fallbackId) : null;
+        if (fallbackSpec) {
+          rotationParamId = fallbackId;
+          if (typeof fallbackSpec.min === 'number') rotationParamMin = fallbackSpec.min;
+          if (typeof fallbackSpec.max === 'number') rotationParamMax = fallbackSpec.max;
+        }
       }
 
       dragRef.current = {
@@ -363,7 +397,20 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // Shift modifier for 15-degree snapping
       if (e.shiftKey) delta = Math.round(delta / 15) * 15;
 
-      const newRotation = drag.startRotation + delta;
+      // PP2-006 — when the bone drives a rig parameter, clamp the visual
+      // bone rotation to the param range too. Otherwise the SVG arc
+      // overshoots the param's [-30, +30] (etc.) ceiling and the user
+      // sees the bone keep rotating while the deformation stops, which
+      // misreads as "the rig is broken". Clamping in lockstep makes the
+      // arc handle a faithful indicator of the underlying param value.
+      // The JS-skinning path below uses `delta` directly to rotate
+      // weighted verts, so re-derive it from the clamped rotation to
+      // keep transform / param / skinning in sync.
+      let newRotation = drag.startRotation + delta;
+      if (drag.rotationParamId) {
+        newRotation = Math.max(drag.rotationParamMin, Math.min(drag.rotationParamMax, newRotation));
+        delta = newRotation - drag.startRotation;
+      }
       if (drag.isAnimMode) {
         setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
       } else {
@@ -380,9 +427,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // (non-rig-driven) follow the bone; rig-driven parts (warps, baked
       // keyforms) stay frozen at their last param-derived pose. Mirrors the
       // dual-write pattern the iris trackpad already uses for ParamEyeBallX/Y.
+      // PP2-006 — newRotation is already clamped to the param range above.
       if (drag.rotationParamId) {
-        const clamped = Math.max(drag.rotationParamMin, Math.min(drag.rotationParamMax, newRotation));
-        useParamValuesStore.getState().setParamValue(drag.rotationParamId, clamped);
+        useParamValuesStore.getState().setParamValue(drag.rotationParamId, newRotation);
       }
 
       // Apply JS vertex skinning if there are dependent parts.
