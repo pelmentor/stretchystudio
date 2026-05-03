@@ -60,15 +60,25 @@ Original plan was to clean up the `Open` BUGs list with three small fixes. After
 
 10. **BUG-005 / BUG-007 / BUG-009** above can also be moved here if first-look investigation needs the user to confirm steps
 
-## Recommendation for next session (revised 2026-05-03 — Tier 2 #4 also filed as known-residual)
+## Recommendation for next session (revised 2026-05-03, late evening)
 
-With both Tier 1 and Tier 2 #4 closed (#4 as known-residual, #1-3 as already-fixed or awaiting-repro), the genuine choices are:
+Both Tier 1 and Tier 2 #4 closed; Phase 2b shipped; UPSTREAM_PARITY_AUDIT shipped (zero regressions found). User added two new items to the plan:
 
-**A. Tier 3 #6 — UPSTREAM_PARITY_AUDIT.** Plan already written ([UPSTREAM_PARITY_AUDIT.md](UPSTREAM_PARITY_AUDIT.md)). Now sensible to run since init-rig refactor landed. 1.75–3.25 days. *Recommended* — concrete, bounded scope.
+**🔥 Top priority — Cubism Physics Port** ([`live2d-export/CUBISM_PHYSICS_PORT.md`](live2d-export/CUBISM_PHYSICS_PORT.md))
+- User-flagged: "порт физики из cubism viewer это первоочередная задача" 2026-05-03
+- v3's `physicsTick.js` is hand-rolled "Cubism-style" — diverges visually from Cubism Viewer
+- Reference: Cubism Web Framework's `CubismPhysics.ts` (open source); fallback: live2dcubismcore.dll via IDA MCP
+- Same shape as CUBISM_WARP_PORT: Phase 0 (RE + oracle harness) → Phase 1 (kernel port) → Phase 2 (wire-in) → Phase 3 (visual sweep). 2.25–3.75 days nominal.
 
-**B. Tier 3 #8 — Cubism Warp Port Phase 4** (artmesh keyform composition). Continues the kernel-port arc. Phase 5 closes the parity sweep. Note: would also unblock the rotation-matrix refactor that closes the BUG-003 known-residual.
+**Medium — GAP-017 in-app idle motion generation** ([FEATURE_GAPS.md](FEATURE_GAPS.md#gap-017--in-app-idle-motion-generation))
+- Backend ready: `src/io/live2d/idle/builder.js` is a pure module
+- Need: UI surface (Animation workspace topbar action + dialog), Phase A is small
+- Phase B integrates idle as first-class SS animation track for in-app preview
 
-**C. New feature pillar — V3 re-rig flow gap (Tier 3 #7).** Whole UI for editing pivots / weights / re-running wizard stages. Needs user direction before plan is written.
+**Other open threads:**
+- Phase 5 of Cubism Warp Port (visual sweep) — pending user side-by-side with Cubism Viewer
+- V3 re-rig flow gap — whole feature pillar, needs user scope direction
+- BUG-015, BUG-005 — instrumented, awaiting user drag repro
 
 ## Anti-patterns to avoid
 
