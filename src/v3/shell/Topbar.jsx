@@ -27,7 +27,6 @@ import {
 } from '../../components/ui/tooltip.jsx';
 import { cn } from '../../lib/utils.js';
 import { useProjectStore } from '../../store/projectStore.js';
-import { useEditorStore } from '../../store/editorStore.js';
 import { useUIV3Store } from '../../store/uiV3Store.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { logger } from '../../lib/logger.js';
@@ -37,7 +36,6 @@ import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { PreferencesModal } from './PreferencesModal.jsx';
 import { NewProjectDialog } from './NewProjectDialog.jsx';
-import { setEditorMode as serviceSetEditorMode } from '../../services/EditorModeService.js';
 
 /** @typedef {{ id: string, label: string, tip: string }} WorkspaceTab */
 
@@ -54,8 +52,7 @@ export function Topbar() {
   // Subscribing to `project` keeps undoCount() / redoCount() in sync —
   // every project mutation pushes a snapshot, so any time the stack
   // changes the project reference also changes and we re-render.
-  const project          = useProjectStore((s) => s.project);
-  const editorMode       = useEditorStore((s) => s.editorMode);
+  useProjectStore((s) => s.project);
   const activeWorkspace  = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace     = useUIV3Store((s) => s.setWorkspace);
   const hotReloadStatus  = useAssetHotReloadStore((s) => s.status);
@@ -230,49 +227,12 @@ export function Topbar() {
             );
           })}
 
-          <div className="w-px h-4 bg-border/40 mx-2" />
-
-          {/* Setup/Animate (editorMode) toggle. Independent of workspace
-              — clicking a workspace pill no longer changes editorMode.
-              The user explicitly picks Setup vs Animate here. Going
-              from Setup→Animate captures the current rest pose so
-              keyframes don't bake the in-flight pose into rest.
-              PP1-005 — small "Mode" label + native `title` tooltips so
-              the pair is unmistakably a Setup-vs-Animate toggle (was
-              perceived as a non-clickable label without explanation). */}
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1.5 select-none">
-            Mode
-          </span>
-          {(/** @type {const} */ (['staging', 'animation'])).map((m, i) => {
-            const on = editorMode === m;
-            const label = m === 'staging' ? 'Setup' : 'Animate';
-            const tip = m === 'staging'
-              ? 'Setup — edits modify the rest pose / project structure directly.'
-              : 'Animate — edits become timeline keyframes; rest pose is preserved.';
-            return (
-              <Tooltip key={m}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    title={tip}
-                    onClick={() => serviceSetEditorMode(m)}
-                    className={cn(
-                      'px-2.5 py-1 rounded-md text-[12px] font-medium transition-all flex items-center',
-                      i > 0 && 'ml-0.5',
-                      on
-                        ? 'bg-primary/80 text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    {label}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{tip}</TooltipContent>
-              </Tooltip>
-            );
-          })}
+          {/* Setup/Animate pill removed 2026-05-03. `editorMode` is now
+              derived from the active workspace: Default → 'staging',
+              Animation → 'animation'. The dual axis was a crutch — the
+              user always wanted Animate while in the Animation workspace
+              and Setup elsewhere. setWorkspace now drives the mode in
+              uiV3Store; nothing else writes editorMode in the topbar. */}
 
           <div className="w-px h-4 bg-border/40 mx-2" />
 

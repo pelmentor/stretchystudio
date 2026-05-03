@@ -162,30 +162,26 @@ function reset() {
   useEditorStore.setState({ selection: [], editMode: null, activeBlendShapeId: null });
 }
 
-// ── Blender contract: workspace switch does NOT touch editorMode ────
+// ── PP2 — workspace DRIVES editorMode (Setup/Animate pill removed) ──
 //
-// Setup/Animate (`editorMode`) is its own axis with its own pill.
-// Workspace clicks must not flip it.
+// Default workspace → 'staging'. Animation workspace → 'animation'.
+// One axis instead of two; user always wanted them in lockstep.
 
 {
   reset();
   const { useEditorStore } = await import('../../src/store/editorStore.js');
 
-  // Set editorMode='animation' explicitly, then walk all workspaces
-  useEditorStore.setState({ editorMode: 'animation' });
-  for (const wsId of /** @type {const} */ (['default', 'animation', 'default'])) {
-    useUIV3Store.getState().setWorkspace(wsId);
-    assert(useEditorStore.getState().editorMode === 'animation',
-      `workspace switch → ${wsId}: editorMode='animation' preserved`);
-  }
+  useUIV3Store.getState().setWorkspace('default');
+  assert(useEditorStore.getState().editorMode === 'staging',
+    'workspace default → editorMode staging');
 
-  // Same in reverse — staging mode survives every workspace
-  useEditorStore.setState({ editorMode: 'staging' });
-  for (const wsId of /** @type {const} */ (['animation', 'default', 'animation'])) {
-    useUIV3Store.getState().setWorkspace(wsId);
-    assert(useEditorStore.getState().editorMode === 'staging',
-      `workspace switch → ${wsId}: editorMode='staging' preserved`);
-  }
+  useUIV3Store.getState().setWorkspace('animation');
+  assert(useEditorStore.getState().editorMode === 'animation',
+    'workspace animation → editorMode animation');
+
+  useUIV3Store.getState().setWorkspace('default');
+  assert(useEditorStore.getState().editorMode === 'staging',
+    'workspace default again → editorMode staging again');
 
   // Reset
   useEditorStore.setState({ editorMode: 'staging' });

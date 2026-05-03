@@ -25,13 +25,17 @@
  */
 
 import { create } from 'zustand';
+import { setEditorMode } from '../services/EditorModeService.js';
 
 /**
  * @typedef {('default'|'animation')} WorkspaceId
  *  Workspaces are layout-only presets (Blender-style). They DO NOT
- *  gate edit modes — `editorStore.editMode` is independent of
- *  workspace, and the Setup/Animate `editorMode` axis has its own
- *  topbar pill.
+ *  gate Blender-style edit modes (mesh / skeleton / blendShape) —
+ *  `editorStore.editMode` is independent of workspace. They DO drive
+ *  Setup/Animate (`editorStore.editorMode`) via `setEditorMode` —
+ *  see `setWorkspace`. The previous topbar Setup/Animate pill was a
+ *  redundant axis: the user always wanted Animate while in the
+ *  Animation workspace and Setup elsewhere.
  *
  *  - **default** — Outliner / Logs / Viewport / Parameters /
  *    Properties. Covers setup work AND quick posing; previously
@@ -162,8 +166,16 @@ export const useUIV3Store = create((set) => ({
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),
 
-  /** Switch active workspace; per-workspace area state is preserved. */
-  setWorkspace: (id) => set({ activeWorkspace: id }),
+  /** Switch active workspace; per-workspace area state is preserved.
+   *  PP2 — also drives `editorStore.editorMode` (Default → 'staging',
+   *  Animation → 'animation') via EditorModeService. The Setup/Animate
+   *  pill the topbar used to host has been removed; the mode follows
+   *  the workspace. EditorModeService is idempotent on no-op
+   *  transitions and captures the rest pose on staging → animation. */
+  setWorkspace: (id) => {
+    set({ activeWorkspace: id });
+    setEditorMode(id === 'animation' ? 'animation' : 'staging');
+  },
 
   /**
    * Set which tab is active inside an area.

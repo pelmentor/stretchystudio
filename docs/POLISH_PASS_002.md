@@ -14,10 +14,12 @@
 | [PP2-002](#pp2-002) | bug    | medium | Proportional-edit ring visible outside mesh edit (wizard, Object Mode) | closed (`9330211`) |
 | [PP2-003](#pp2-003) | feature| medium | Warp grid overlay — black + 25% opacity defaults | closed (`9330211`) |
 | [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | open |
-| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out leaks: ParamHair* still emitted, hair layers deformed | open |
-| [PP2-006](#pp2-006) | bug    | high   | Bone rotation drag — neck / torso / legwear / bothLegs bones don't drive layers | open |
+| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; visual deformation (b) open | partial |
+| [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | open |
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | open |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | open |
+| [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
+| [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | open (supersedes PP2-004) |
 
 ---
 
@@ -80,7 +82,7 @@
 <a id="pp2-005"></a>
 ### PP2-005 — Hair opt-out leaks: params + deformation
 
-**Type:** bug · **Severity:** high · **Status:** open
+**Type:** bug · **Severity:** high · **Status:** partial — (a) params closed (this commit); (b) visual deformation open
 
 **Symptom.** User opens Init Rig Options popover, unchecks **Hair Rig**, presses Init Rig:
 1. `ParamHairFront` / `ParamHairBack` sliders STILL appear in the Parameters panel.
@@ -96,16 +98,17 @@
 3. With params at rest, slowly move ParamBodyAngleX — observe whether hair follows. That's expected (body warp drags hair). User may have meant "hair sways with body" rather than "hair sways autonomously".
 
 **Repair plan.**
-- Param leak: extend `buildParameterSpec(input)` to take `subsystems` and skip `ParamHair*` when `subsystems.hairRig === false`, `ParamShirt`/`Pants`/`Skirt` when `clothingRig === false`. Wire `subsystems` from `seedParameters` (read `project.autoRigConfig.subsystems`).
-- Bone params: drop `ParamRotation_<bone>` when the bone group's name (or boneRole) matches the disabled subsystem (e.g. name lower-cased contains "hair"). Heuristic but matches the auto-rig naming convention.
-- Deformation: needs trace before deciding fix.
+- (a) ✅ Param leak fixed (this commit). `STANDARD_PARAMS` entries for hair/clothing now carry a `subsystem` tag; `buildParameterSpec` accepts `subsystems` and drops them when the flag is `false`. Bone-rotation + group-rotation passes also filter by name heuristic (`/hair/`, `/topwear|bottomwear|legwear|skirt|shirt|pants|cloth/`). `seedParameters` reads `project.autoRigConfig.subsystems` and threads it through.
+- (b) Visual deformation — still open. With PP1-002 audit's hair-warp neutralisation in place, the rest keyform should be identity. User reports verts shift after Init Rig anyway. Hypothesis: A.6b widened-bbox rest grids aren't pure identity over the part's bbox (the widening shifts the bilinear-FFD interpolation result for verts at bbox edges). Needs an oracle dump: `evalRig(rigSpec, allParamsAtDefault)` → compare hair part output verts vs `node.mesh.vertices` to confirm whether the inert chain is actually identity at rest. If it isn't, replace the widened rest keyform with a uniform-rest grid that exactly fits the part's canvas-px bbox.
 
 ---
 
 <a id="pp2-006"></a>
-### PP2-006 — Bone rotation drag: neck / torso / legwear / bothLegs don't drive layers
+### PP2-006 — Bone rotation: only elbow/arm/head bones drive layers; rest are inert
 
 **Type:** bug · **Severity:** high · **Status:** open
+
+**Symptom (expanded 2026-05-03).** *"ПОСЛЕ INIT RIG СКЕЛЕТНЫЕ КОСТИ СТАНОВЯТСЯ USELESS - КРОМЕ ELBOW И ARM И FACE КОСТИ - ОСТАЛЬНЫЕ КОСТИ ПЕРЕСТАЮТ ВООБЩЕ ДРАЙВИТЬ ЧТО ЛИБО."* The arm + elbow bones rotate things (PP1-001). Neck / torso / legwear / bothLegs / etc. don't.
 
 **Symptom.** Quote from user: *"neck bone rotation doesn't drive layer pieces, only skeleton moves. same issue with bones like legwear, torso. НАДО ФИКСИТЬ ВСЁ БЕЗ КОСТЫЛЕЙ."*
 
@@ -154,6 +157,36 @@ This is "do as Live2D does": bones in the natural skeleton don't have their own 
 **Where to look.** `ParamOpacity` is emitted by `paramSpec.js` (line ~206 — `push({ ...PARAM_OPACITY })`). chainEval reads keyforms; per-mesh opacity is composed (variant fades, etc). Global `ParamOpacity` likely needs an explicit consumer in either chainEval (multiply mesh opacity by ParamOpacity value) or scenePass (uniform u_opacity multiplied at draw time).
 
 **Repair sketch.** Add a global-opacity uniform multiplier in [`scenePass.js`](../src/renderer/scenePass.js) that reads `paramValues.ParamOpacity` (default 1) and multiplies it into `effectiveOpacity` for every part. Trivial fix; one read + one multiply.
+
+---
+
+<a id="pp2-009"></a>
+### PP2-009 — Drop the Setup/Animate topbar pill
+
+**Type:** refactor · **Severity:** medium · **Status:** closed (this commit)
+
+**Why.** The Setup/Animate pill was a redundant axis. Memory `project_open_post_compact_2026_05_02` shows the pill went through several iterations (added, refined with "Mode" label PP1-005). User concluded the user always wanted Animate while in the Animation workspace and Setup elsewhere — two axes for one decision. Cleanest answer: drop the pill, derive `editorMode` from `activeWorkspace`.
+
+**Implementation.** `uiV3Store.setWorkspace` now calls `setEditorMode('animation')` for the Animation workspace and `'staging'` for Default (via `EditorModeService`, which is already idempotent on no-op transitions and captures the rest pose on staging→animation). Topbar's pill + `editorMode` selector + `serviceSetEditorMode` import all removed. `test_uiV3Store` updated: the prior "workspace switch does NOT touch editorMode" Blender-contract assertion is replaced with the new "workspace DRIVES editorMode" assertion.
+
+---
+
+<a id="pp2-010"></a>
+### PP2-010 — Warp grid overlay: render all warps live + outliner per-warp visibility
+
+**Type:** feature · **Severity:** medium · **Status:** open (supersedes PP2-004)
+
+**Why this exists.** User explained the original design intent: *"Я придумал чтобы посмотреть как ПРОИСХОДИТ деформация когда я драйвлю ANGLE XYZ и другие PARAMS."* The warp-grid overlay is a debug tool — see how each lattice deforms as parameters change. Cubism Editor shows the SELECTED deformer's grid; SS's intent is broader (network view of all lattices, animated with params).
+
+**Scope.** Three sub-tasks bundled because they share infrastructure:
+
+**(a) Render every warp's grid in canvas-px, animated with params.** Currently the overlay only renders warps with `localFrame === 'canvas-px'` — body chain top-level warps. Per-part rigWarps (hair, eyes, clothing, face accents) are `normalized-0to1` and don't render. Their canvas-px positions exist in chainEval's `cache._liftedById` map but aren't exposed.
+
+  Repair: add `liftedGrids: Map<warpId, Float32Array>` to `evalRig`'s output. CanvasViewport caches it on `lastEvalCacheRef`. Overlay reads it via a new `useRigSpecStore` slice (or a dedicated `useRigEvalStore`). Overlay's `buildGrid` switches from `keyforms[0].positions` to `liftedGrids.get(warp.id)` when available — that gives canvas-px positions of the LIVE-evaluated grid (deforms with params, exactly what the user wants).
+
+**(b) Per-warp visibility toggles in the Outliner Rig tab.** Currently the Rig tab shows the warp/rotation tree but every entry is "visible if master toggle is on". Add an eye icon per row that flips a `viewLayers.warpGridVisibility[warpId] = boolean` map. Default true. The overlay filters `displayWarps` by this map.
+
+**(c) Cubism comparison.** Cubism Editor's pattern is: list deformers in left panel, click one → that deformer's grid shows on the canvas, control points draggable, grid follows live param changes. There's no "show all" mode out-of-the-box. SS's all-warps-on-by-default with per-row toggles is a SUPERSET — better for debugging. Cubism's draggable control points are out of scope for this entry (Phase 2D editing); the read-only network view comes first.
 
 ---
 

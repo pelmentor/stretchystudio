@@ -36,16 +36,19 @@ import { sanitisePartName } from '../../../lib/partId.js';
  * FaceForge, Cubism Viewer demo motions) recognize. Emitted only when
  * `generateRig: true` — matches the cmo3 auto-rig behaviour.
  *
- * Each entry may carry `requireTag`: a tag that some mesh in the project
- * must have for the param to be emitted. Same gating pattern as physics
- * rules (`cmo3/physics.js`). Without this, a character without (say) a
- * skirt mesh still got `ParamSkirt` registered, polluting the parameter
- * panel with dial positions that drive nothing — see the user report
- * "ParamSkirt without a skirt layer in shelby" (2026-04-30).
+ * Each entry may carry:
+ *   - `requireTag`: a tag that some mesh in the project must carry for
+ *     the param to be emitted (gates accessory params like ParamSkirt
+ *     when no skirt layer exists).
+ *   - `subsystem`: PP2-005 — owning subsystem (`hairRig`, `clothingRig`,
+ *     etc). Skipped when `subsystems[that-key] === false`. Without this
+ *     filter, opting hair out via the Init Rig popover left
+ *     ParamHairFront / ParamHairBack in the parameter panel where they
+ *     drive nothing (the warps + physics they used to drive are
+ *     filtered separately).
  *
  * Core face/body params (Angle, BodyAngle, Eye, Brow, Mouth, Breath,
  * EyeBall) are unconditional — every character has eyes/brows/mouth.
- * Hair/clothing/bust accessories are gated.
  *
  * Source: cmo3writer.js (was inline at lines 240-269 before this refactor).
  */
@@ -65,11 +68,11 @@ const STANDARD_PARAMS = [
   { id: 'ParamBrowRY',     name: 'Brow R Y',      min: -1,  max: 1,  def: 0 },
   { id: 'ParamMouthForm',  name: 'Mouth Form',    min: -1,  max: 1,  def: 0 },
   { id: 'ParamMouthOpenY', name: 'Mouth Open',    min: 0,   max: 1,  def: 0 },
-  { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0, requireTag: 'front hair' },
-  { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0, requireTag: 'back hair'  },
-  { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0, requireTag: 'bottomwear' },
-  { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0, requireTag: 'topwear'    },
-  { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0, requireTag: 'legwear'    },
+  { id: 'ParamHairFront',  name: 'Hair Front',    min: -1,  max: 1,  def: 0, requireTag: 'front hair', subsystem: 'hairRig' },
+  { id: 'ParamHairBack',   name: 'Hair Back',     min: -1,  max: 1,  def: 0, requireTag: 'back hair',  subsystem: 'hairRig' },
+  { id: 'ParamSkirt',      name: 'Skirt',         min: -1,  max: 1,  def: 0, requireTag: 'bottomwear', subsystem: 'clothingRig' },
+  { id: 'ParamShirt',      name: 'Shirt',         min: -1,  max: 1,  def: 0, requireTag: 'topwear',    subsystem: 'clothingRig' },
+  { id: 'ParamPants',      name: 'Pants',         min: -1,  max: 1,  def: 0, requireTag: 'legwear',    subsystem: 'clothingRig' },
   { id: 'ParamBust',       name: 'Bust',          min: -1,  max: 1,  def: 0, requireTag: 'topwear'    },
   // ParamHairSide intentionally removed — declared in pre-refactor cmo3writer
   // but no warp binding or physics rule ever consumed it, so it surfaced as a
@@ -178,6 +181,12 @@ export function buildParameterSpec(input = {}) {
     // Stage 8: rotation deformer config (skipRotationRoles + paramAngleRange).
     // When absent, falls back to today's hardcoded constants.
     rotationDeformerConfig = null,
+    // PP2-005 — subsystem opt-out. Standard params owning a disabled
+    // subsystem are skipped (ParamHairFront/Back when hairRig=false,
+    // ParamShirt/Skirt/Pants when clothingRig=false). Bone-rotation
+    // params for hair/clothing-named bones are filtered too. Optional;
+    // null/undefined → no subsystem filter (back-compat).
+    subsystems = null,
   } = input;
 
   // Resolve Stage 8 constants used in the group-rotation pass below.
@@ -247,6 +256,8 @@ export function buildParameterSpec(input = {}) {
     }
     for (const sp of STANDARD_PARAMS) {
       if (sp.requireTag && !tagsPresent.has(sp.requireTag)) continue;
+      // PP2-005 — drop accessory params owned by an opted-out subsystem.
+      if (sp.subsystem && subsystems && subsystems[sp.subsystem] === false) continue;
       push({
         id: sp.id, name: sp.name,
         min: sp.min, max: sp.max, default: sp.def,
@@ -264,6 +275,15 @@ export function buildParameterSpec(input = {}) {
     seenBones.add(m.jointBoneId);
     const boneGroup = groups.find(g => g.id === m.jointBoneId);
     const boneName = sanitisePartName(boneGroup?.name || m.jointBoneId);
+    // PP2-005 — drop bone-rotation params for bones owned by an opted-out
+    // subsystem. Heuristic by name (auto-rig naming convention contains
+    // the subsystem keyword in the bone group's name, e.g. front_hair_root).
+    if (subsystems) {
+      const lower = (boneGroup?.name ?? boneName).toLowerCase();
+      if (subsystems.hairRig === false && /hair/.test(lower)) continue;
+      if (subsystems.clothingRig === false
+          && /(top ?wear|bottom ?wear|leg ?wear|skirt|shirt|pants|cloth)/.test(lower)) continue;
+    }
     const id = `ParamRotation_${boneName}`;
     push({
       id,
@@ -289,6 +309,13 @@ export function buildParameterSpec(input = {}) {
       if (!g?.id) continue;
       if (seenBones.has(g.id)) continue;       // bones got bone params above
       if (g.boneRole && SKIP_ROTATION_ROLES.has(g.boneRole)) continue;
+      // PP2-005 — same heuristic name filter as the bone-param pass above.
+      if (subsystems) {
+        const lower = (g.name ?? g.id ?? '').toLowerCase();
+        if (subsystems.hairRig === false && /hair/.test(lower)) continue;
+        if (subsystems.clothingRig === false
+            && /(top ?wear|bottom ?wear|leg ?wear|skirt|shirt|pants|cloth)/.test(lower)) continue;
+      }
       const sanitized = sanitisePartName(g.name || g.id);
       const id = `ParamRotation_${sanitized}`;
       push({
@@ -354,6 +381,12 @@ export function seedParameters(project) {
   // `paramOrphans` because tagWarpBindings still referenced them despite
   // project.parameters never registering them. Test fixtures DO set
   // `n.tag` explicitly, so prefer it when present.
+  // PP2-005 — read subsystems opt-out flags so disabled subsystems'
+  // standard params (ParamHair*, ParamShirt/Skirt/Pants) and bone
+  // rotation params for hair/clothing-named bones get filtered out
+  // alongside the existing rigWarp / physics-rule filters.
+  const subsystems = project?.autoRigConfig?.subsystems ?? null;
+
   const spec = buildParameterSpec({
     baseParameters: [],
     meshes: meshNodes.map((n) => ({
@@ -365,6 +398,7 @@ export function seedParameters(project) {
     })),
     groups: groupNodes,
     generateRig: true,
+    subsystems,
   });
 
   project.parameters = spec;
