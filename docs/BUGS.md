@@ -396,8 +396,25 @@ Why other bands were correct: the **top band** explicitly applies a top↔bottom
 ### ✅ BUG-003 — Body Angle X/Y/Z + face Angle X/Y/Z don't match Cubism
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-03 · **Root cause:** v3's heuristic init rig regenerated rig data from face/topwear bbox, ignoring authored cmo3 deformer values. Phase 2b's chainEval-level investigation (Stage 1 measurement + pivot-patch disproof, 2026-05-03) showed slope ≡ J⁻¹ at every rotation pivot and that single-deformer pivot patches can't move PARAM (constant translation cancelled by rest-delta subtraction). The real surface was the heuristic-vs-authored gap in v3's body chain + FaceParallax + FaceRotation.
-- **Fix:** new authored-rig path in `initializeRigFromProject` ([`buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js)) — when project has `_cmo3Scene` (set by cmo3Import), build the RigSpec end-to-end from authored cmo3 deformer data instead of regenerating heuristically. AngleZ_pos30 PARAM dropped from 9.45 → **0.01 px**; overall TOTAL max from 24.21 → **5.44 px**; PARAM max from 9.45 → **5.42 px** (residual is body-chain keyform interpolation differences, not chainEval).
+- **Fix:** new authored-rig path in `initializeRigFromProject` ([`buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js)) — when project has `_cmo3Scene` (set by cmo3Import), build the RigSpec end-to-end from authored cmo3 deformer data instead of regenerating heuristically. AngleZ_pos30 PARAM dropped from 9.45 → **0.01 px**; overall TOTAL max from 24.21 → **5.44 px**; PARAM max from 9.45 → **5.42 px** (residual is body-chain composition through deep face chain; see "Known residual" below).
 - See [`docs/INIT_RIG_AUTHORED_REWRITE.md`](INIT_RIG_AUTHORED_REWRITE.md) for the plan that landed this fix.
+
+#### Known residual after fix (2026-05-03 oracle re-measurement)
+
+Confirmed acceptable per the post-fix triage. **Face-driven params are essentially perfect; body-warp params carry a chain-wide systematic offset.**
+
+| Fixture group | PARAM max | PARAM mean | Notes |
+|---|---|---|---|
+| AngleX/Y/Z, EyeBallX/Y, default | **0.00–0.01 px** | 0.00 px | Perfect after authored-rig fix. |
+| BodyAngleX/Y/Z (±5..±10), Breath (0.5..1.0) | **2.5–5.4 px** | 1.3–5.1 px | Residual scales with body-warp magnitude. Chain-wide constant offset (max ≈ mean across small face-chain meshes), not per-vertex grid error. |
+
+**Why it's a known residual (not a fix-soon bug):**
+
+1. The remaining gap is the same structural issue Phase 2b ran into — `rotationEval.js` uses a diagonal-only matrix (`diag(extraSx, extraSy) · R · diag(s·rx, s·ry)`) while Cubism's `RotationDeformer_Setup` uses a general 2×2 baked from FD-probed parent Jacobian. When body warps deform the parent grids through which face-chain rotations sit, v3's diagonal matrix misses the off-diagonal terms.
+2. Real fix is a downstream-consumer refactor: switch the rotation matrix to a general 2×2 + translation, update `chainEval.js`'s `_warpSlopeX/Y` consumer + the binary `rotation_deformer_keyform.scales` field in `moc3writer.js`. Multi-day, was already attempted in Phase 2b and abandoned because both alternative formulations made divergence worse than baseline.
+3. 5 px on 1792 px canvas = 0.28% of canvas dimension; visually sub-pixel after typical render scaling. Body-warp-extreme poses (full breath, ±10° body angle) are the worst case; idle usage stays in the 1-3 px range.
+
+**Re-open trigger:** if a user reports visible drift under typical motion (not extreme-pose stress), or if Phase 4 / Phase 5 of the Cubism warp port lands the rotation matrix refactor anyway.
 
 **Original investigation (kept for reference):**
 

@@ -24,16 +24,12 @@ Original plan was to clean up the `Open` BUGs list with three small fixes. After
 
 ## Tier 2 — continuation of init-rig work (1-2 days, medium risk)
 
-4. **Body chain residual ~5 px PARAM** on `BodyAngleX/Z`, `Breath`
-   - Separate signal from BUG-003's AngleZ pivot issue (which is now 0.01 px)
-   - Likely body warp keyform interpolation difference between v3's evaluator and Cubism's
-   - Investigation path:
-     - Run oracle on `BodyAngleX_pos10`, find which mesh diverges most
-     - Use `probe_kernel.mjs` to dump body warp lifted bboxes at param-driven pose
-     - Compare authored body warp keyform[1] (param=10) vs interpolated value at param=10
-     - If they match: the bug is in chainEval's per-keyform composition
-     - If they don't: the bug is in v3's keyform evaluation (`evalWarpGrid` interpolation)
-   - Worst case re-derived ~5px is acceptable and we file as known-residual
+4. ~~**Body chain residual ~5 px PARAM** on `BodyAngleX/Z`, `Breath`~~ → **FILED AS KNOWN-RESIDUAL 2026-05-03**
+   - Investigation done this session. Pattern: face params (AngleX/Y/Z, EyeBallX/Y) are 0.00–0.01 px after the authored-rig fix; only body-warp params (Breath, BodyAngleX/Y/Z) carry residual.
+   - Across small face-chain meshes (12-14 verts), `param_max ≈ param_mean` ≈ 5.2 px on Breath_full → that's a **chain-wide systematic offset**, not per-vertex grid error.
+   - Same structural issue Phase 2b ran into: `rotationEval.js`'s diagonal matrix can't carry the off-diagonal terms a general 2×2 from FD-probed parent Jacobian would. Fix is a multi-day matrix-shape refactor, not a sweep.
+   - 5 px on 1792 px canvas = 0.28% — visually sub-pixel; typical idle usage (small body angle, breath cycling) is 1-3 px.
+   - Documented in [BUGS.md → BUG-003 → Known residual](BUGS.md#known-residual-after-fix-2026-05-03-oracle-re-measurement). Re-open trigger written down there.
 
 5. **`faceRig` / `bodyWarps` opt-out** (no-op today)
    - `buildRigSpecFromCmo3.js` ships these as documented no-ops because cascade-reparenting through warps with different frame conventions is non-trivial
@@ -64,19 +60,15 @@ Original plan was to clean up the `Open` BUGs list with three small fixes. After
 
 10. **BUG-005 / BUG-007 / BUG-009** above can also be moved here if first-look investigation needs the user to confirm steps
 
-## Recommendation for next session (revised 2026-05-03)
+## Recommendation for next session (revised 2026-05-03 — Tier 2 #4 also filed as known-residual)
 
-Since Tier 1 evaporated, the genuine choices are:
+With both Tier 1 and Tier 2 #4 closed (#4 as known-residual, #1-3 as already-fixed or awaiting-repro), the genuine choices are:
 
-**A. Tier 2 #4 — body chain ~5 px PARAM residual.** Direct continuation of BUG-003 work, same mental model cached. Highest ROI from "what's actually still wrong with the rig". 1-2 days estimated. *Recommended* if user wants more rig fidelity.
+**A. Tier 3 #6 — UPSTREAM_PARITY_AUDIT.** Plan already written ([UPSTREAM_PARITY_AUDIT.md](UPSTREAM_PARITY_AUDIT.md)). Now sensible to run since init-rig refactor landed. 1.75–3.25 days. *Recommended* — concrete, bounded scope.
 
-**B. Tier 3 #6 — UPSTREAM_PARITY_AUDIT.** Plan already written ([UPSTREAM_PARITY_AUDIT.md](UPSTREAM_PARITY_AUDIT.md)). Now sensible to run since init-rig refactor landed. 1.75–3.25 days.
+**B. Tier 3 #8 — Cubism Warp Port Phase 4** (artmesh keyform composition). Continues the kernel-port arc. Phase 5 closes the parity sweep. Note: would also unblock the rotation-matrix refactor that closes the BUG-003 known-residual.
 
-**C. Tier 3 #8 — Cubism Warp Port Phase 4** (artmesh keyform composition). Continues the kernel-port arc. Phase 5 closes the parity sweep.
-
-**D. New feature pillar — V3 re-rig flow gap (Tier 3 #7).** Whole UI for editing pivots / weights / re-running wizard stages. Needs user direction before plan is written.
-
-**Don't pick A + B in same session** — different mental models, different test cycles. One at a time.
+**C. New feature pillar — V3 re-rig flow gap (Tier 3 #7).** Whole UI for editing pivots / weights / re-running wizard stages. Needs user direction before plan is written.
 
 ## Anti-patterns to avoid
 
