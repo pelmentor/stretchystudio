@@ -14,7 +14,7 @@
 
 | ID | Type | Severity | Title | Status |
 |----|------|----------|-------|--------|
-| [PP1-001](#pp1-001) | bug     | high   | Bone-controller rotation doesn't propagate to layers (no re-render trigger) | open |
+| [PP1-001](#pp1-001) | bug     | high   | Bone-controller rotation doesn't propagate to layers (no re-render trigger) | closed |
 | [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | open |
 | [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
@@ -30,7 +30,11 @@
 <a id="pp1-001"></a>
 ### PP1-001 — Bone-controller rotation doesn't propagate to layers (no re-render trigger)
 
-**Type:** bug · **Severity:** high · **Status:** open
+**Type:** bug · **Severity:** high · **Status:** closed (commit pending)
+
+**Resolution.** The actual cause was deeper than "missing re-render trigger" — `worldMatrix` is **skipped** for rig-driven parts (scenePass.js:84-95), so for those parts the bone's `node.transform.rotation` has zero effect on the rendered pose. The rig is driven by `paramValues` only, via `evalRig`. The auto-rig already creates `ParamRotation_<sanitisedName>` for every bone group ([`paramSpec.js:267-303`](../src/io/live2d/rig/paramSpec.js#L267-L303)) — the SkeletonOverlay rotate-drag was just never writing to it.
+
+Fix: SkeletonOverlay rotate-drag now captures the bone's `ParamRotation_<sanitisedName>` id + range at pointer-down time, and the move handler routes the angle through both `node.transform.rotation` (worldMatrix path, non-rig parts) AND that parameter (chainEval path, rig-driven parts). Mirrors the dual-write pattern the iris trackpad already uses for `ParamEyeBallX/Y`. Bones outside `SKIP_ROTATION_ROLES` (= every bone with a rig parameter) now drive the live preview directly; bones that don't get a parameter (torso/eyes/neck — handled by warps) remain worldMatrix-only, which is correct.
 
 **Symptom (user-visible).** After Init Rig, dragging a bone controller in `SkeletonOverlay` writes the rotation into `node.transform.rotation` but the dependent layers don't move. As soon as the user touches **any** bone that DOES move things (e.g. elbow), the entire skeleton's pose catches up — every previously-rotated bone snaps into place at once. Body warp deformers (driven by `ParamBodyAngle*` sliders) work normally throughout — confirms chainEval is running.
 

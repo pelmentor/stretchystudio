@@ -22,6 +22,7 @@ import { computeWorldMatrices, mat3Identity } from '@/renderer/transforms';
 import { computePoseOverrides } from '@/renderer/animationEngine';
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
+import { sanitisePartName } from '@/lib/partId';
 
 // Colour palette
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
@@ -287,6 +288,26 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         }
       }
 
+      // PP1-001 — bones drive rig deformers via `ParamRotation_<sanitisedName>`
+      // (auto-rig convention from paramSpec.js). Capture the param id + range
+      // up-front so the move handler can route the dragged angle through both
+      // node.transform.rotation (worldMatrix path, non-rig parts) AND the
+      // matching parameter (chainEval path, rig-driven parts) — without it,
+      // rig-driven layers don't move until some other dispatch triggers a
+      // re-render, producing the catch-up snap users were seeing.
+      let rotationParamId = null;
+      let rotationParamMin = -90;
+      let rotationParamMax = 90;
+      const sanitised = sanitisePartName(node.name || node.id);
+      const candidateId = `ParamRotation_${sanitised}`;
+      const paramSpec = (useProjectStore.getState().project.parameters ?? [])
+        .find(p => p.id === candidateId);
+      if (paramSpec) {
+        rotationParamId = candidateId;
+        if (typeof paramSpec.min === 'number') rotationParamMin = paramSpec.min;
+        if (typeof paramSpec.max === 'number') rotationParamMax = paramSpec.max;
+      }
+
       dragRef.current = {
         type: 'rotate',
         nodeId,
@@ -296,6 +317,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         pivotScreenY,
         isAnimMode: editorModeRef.current === 'animation',
         dependentParts,
+        rotationParamId,
+        rotationParamMin,
+        rotationParamMax,
       };
 
       // Select the bone so GizmoOverlay appears
@@ -339,17 +363,28 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // Shift modifier for 15-degree snapping
       if (e.shiftKey) delta = Math.round(delta / 15) * 15;
 
+      const newRotation = drag.startRotation + delta;
       if (drag.isAnimMode) {
-        setDraftPoseRef.current(drag.nodeId, { rotation: drag.startRotation + delta });
+        setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
       } else {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
           if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-          node.transform.rotation = drag.startRotation + delta;
+          node.transform.rotation = newRotation;
         }, { skipHistory: true });
       }
-      
+
+      // PP1-001 — drive the corresponding rig parameter so chainEval picks
+      // up the bone rotation. Without this only worldMatrix-applied parts
+      // (non-rig-driven) follow the bone; rig-driven parts (warps, baked
+      // keyforms) stay frozen at their last param-derived pose. Mirrors the
+      // dual-write pattern the iris trackpad already uses for ParamEyeBallX/Y.
+      if (drag.rotationParamId) {
+        const clamped = Math.max(drag.rotationParamMin, Math.min(drag.rotationParamMax, newRotation));
+        useParamValuesStore.getState().setParamValue(drag.rotationParamId, clamped);
+      }
+
       // Apply JS vertex skinning if there are dependent parts.
       // Always use setDraftPose so the GPU upload path in the rAF tick fires
       // regardless of editor mode (staging or animation).
