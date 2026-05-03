@@ -38,6 +38,7 @@
     "test:physicsTick": "node scripts/test/test_physicsTick.mjs",
     "test:cubismPhysicsKernel": "node scripts/test/test_cubismPhysicsKernel.mjs",
     "test:cubismPhysicsOracle": "node scripts/cubism_physics/diff_v3_vs_oracle.mjs",
+    "audit:physics-defaults": "node scripts/cubism_physics/compare_defaults.mjs",
     "test:e2e": "node scripts/test/test_e2e_equivalence.mjs",
     "test:partId": "node scripts/test/test_partId.mjs",
     "test:ids": "node scripts/test/test_ids.mjs",
