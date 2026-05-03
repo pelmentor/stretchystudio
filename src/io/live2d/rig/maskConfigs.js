@@ -12,6 +12,7 @@
  */
 
 import { matchTag } from '../../armatureOrganizer.js';
+import { mergeAuthoredByStage } from './userAuthorMarkers.js';
 
 /**
  * Tag → mask tag. A mesh whose tag is a key here gets clipped by the
@@ -129,16 +130,28 @@ export function resolveMaskConfigs(project) {
 }
 
 /**
- * Seed `project.maskConfigs` from the auto-rig heuristic. Destructive
- * (overwrites existing configs). After this runs, the export pipeline
- * reads from `project.maskConfigs` directly — `resolveMaskConfigs`
- * takes the populated path.
+ * Seed `project.maskConfigs` from the auto-rig heuristic.
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): destructive — overwrites
+ *     existing configs entirely. Original Stage-3 behaviour; what
+ *     full Re-Init Rig + the existing call sites still expect.
+ *   - `'merge'`: preserves any existing entry with `_userAuthored: true`
+ *     (manually added via MaskTab); reseeds the rest. Used by per-stage
+ *     "Refit" UI in Phase 1.
+ *
+ * After this runs, `project.maskConfigs` is populated and the export
+ * pipeline reads from it directly via `resolveMaskConfigs`.
  *
  * @param {object} project - mutated
+ * @param {'replace'|'merge'} [mode='replace']
  * @returns {MaskConfig[]} - the seeded list (also written to project.maskConfigs)
  */
-export function seedMaskConfigs(project) {
-  const configs = buildMaskConfigsFromProject(project);
-  project.maskConfigs = configs;
-  return configs;
+export function seedMaskConfigs(project, mode = 'replace') {
+  const autoSeeded = buildMaskConfigsFromProject(project);
+  const next = mode === 'merge'
+    ? mergeAuthoredByStage('maskConfigs', autoSeeded, project.maskConfigs)
+    : autoSeeded;
+  project.maskConfigs = next;
+  return next;
 }

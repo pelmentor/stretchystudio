@@ -392,15 +392,42 @@ export function resolveAutoRigConfig(project) {
 }
 
 /**
- * Seed `project.autoRigConfig` from defaults. Destructive — overwrites
- * any prior config (which is the point: re-seed = reset to canonical
- * defaults).
+ * Seed `project.autoRigConfig` from defaults.
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): reset all fields to defaults
+ *     EXCEPT `subsystems` — those are per-character user config (set
+ *     via InitRigOptionsPopover) and were silently clobbered on every
+ *     full re-init prior to Phase 0. Now preserved across re-init too.
+ *   - `'merge'`: same behaviour as replace for this section. There is
+ *     no per-entry user-authored marker for autoRigConfig — every
+ *     section is either an auto-derived default or a user-tuned scalar
+ *     bag, and `subsystems` always carries forward.
+ *
+ * **The non-default `subsystems` preservation is the headline bug fix.**
+ * Pre-Phase-0, a user opting out of `hairRig` via the Init Rig popover
+ * had their flag reset on the next "Re-Init Rig" click. Auto-derive
+ * happily restored hair physics + sway warps even though the user just
+ * said "don't do that for this character".
  *
  * @param {object} project - mutated
+ * @param {'replace'|'merge'} [_mode='replace'] - reserved for symmetry; both modes behave identically here
  * @returns {AutoRigConfig} the seeded config
  */
-export function seedAutoRigConfig(project) {
-  const cfg = buildAutoRigConfigFromProject(project);
-  project.autoRigConfig = cfg;
-  return cfg;
+export function seedAutoRigConfig(project, _mode = 'replace') {
+  const fresh = buildAutoRigConfigFromProject(project);
+  // V3 Re-Rig Phase 0 fix — preserve `subsystems` from the prior config
+  // if the user had tuned them (any flag flipped from default). The
+  // preservation is unconditional in both modes; subsystems are
+  // per-character config, not auto-derived rig output, so re-init must
+  // not silently undo the user's opt-out choices.
+  const priorSubs = project?.autoRigConfig?.subsystems;
+  if (priorSubs && typeof priorSubs === 'object' && !Array.isArray(priorSubs)) {
+    // Spread-merge: preserve every flag the user has set; new subsystem
+    // keys (added in future schema bumps) get default values from
+    // `fresh.subsystems`.
+    fresh.subsystems = { ...fresh.subsystems, ...priorSubs };
+  }
+  project.autoRigConfig = fresh;
+  return fresh;
 }

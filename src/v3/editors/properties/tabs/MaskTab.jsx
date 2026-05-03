@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { Layers, Plus, X } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
+import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
 
 /**
  * @param {Object} props
@@ -55,8 +56,12 @@ export function MaskTab({ nodeId }) {
       const existing = cfgs.find((c) => c.maskedMeshId === nodeId);
       if (existing) {
         if (!existing.maskMeshIds.includes(mid)) existing.maskMeshIds.push(mid);
+        // Manual edit to an existing config promotes it to user-authored
+        // — the user has now expressed intent over this entry; refit
+        // (`mode: 'merge'`) preserves it.
+        markUserAuthored(existing);
       } else {
-        cfgs.push({ maskedMeshId: nodeId, maskMeshIds: [mid] });
+        cfgs.push(markUserAuthored({ maskedMeshId: nodeId, maskMeshIds: [mid] }));
       }
     });
     setPicking(false);

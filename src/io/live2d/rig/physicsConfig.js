@@ -25,6 +25,7 @@
 
 import { PHYSICS_RULES } from '../cmo3/physics.js';
 import { sanitisePartName } from '../../../lib/partId.js';
+import { mergeAuthoredByStage } from './userAuthorMarkers.js';
 
 /**
  * Re-export of the baseline rules. Stored as the seed source. New rules
@@ -130,24 +131,37 @@ export function resolvePhysicsRules(project) {
 }
 
 /**
- * Seed `project.physicsRules` from the auto-rig defaults. Destructive.
+ * Seed `project.physicsRules` from the auto-rig defaults.
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): destructive — overwrites
+ *     existing rules entirely. What PhysicsTab "Reset" + full Re-Init Rig
+ *     still expect.
+ *   - `'merge'`: preserves any existing rule with `_userAuthored: true`
+ *     (e.g. imported via PhysicsTab → "Import .physics3.json"); reseeds
+ *     the rest. Used by per-stage "Refit" UI in Phase 1.
+ *
  * After this runs, the writers read from `project.physicsRules` directly
  * — no more boneOutputs resolution at export time, and the user can edit
  * the stored rules to tune per-character physics.
  *
  * @param {object} project - mutated
+ * @param {'replace'|'merge'} [mode='replace']
  * @returns {Array<object>} the seeded list
  */
-export function seedPhysicsRules(project) {
-  const rules = buildPhysicsRulesFromProject(project);
+export function seedPhysicsRules(project, mode = 'replace') {
+  const autoSeeded = buildPhysicsRulesFromProject(project);
   // GAP-008 — drop rules belonging to opted-out subsystems (hairRig,
   // clothingRig, armPhysics, bodyWarps→breath). Subsystem ownership is
   // resolved by rule-name prefix in initRig.physicsRuleSubsystem; keep
   // this in sync if rule names change.
   const subs = project?.autoRigConfig?.subsystems ?? null;
-  const filtered = subs ? rules.filter((rule) => !ruleIsDisabled(rule, subs)) : rules;
-  project.physicsRules = filtered;
-  return filtered;
+  const filtered = subs ? autoSeeded.filter((rule) => !ruleIsDisabled(rule, subs)) : autoSeeded;
+  const next = mode === 'merge'
+    ? mergeAuthoredByStage('physicsRules', filtered, project.physicsRules)
+    : filtered;
+  project.physicsRules = next;
+  return next;
 }
 
 /** GAP-008 helper — kept here (not imported from initRig) to avoid a

@@ -461,47 +461,56 @@ export const useProjectStore = create((set, get) => {
    * `initializeRigFromProject(project, images)`. Single snapshot covers
    * all writes so undo reverts the whole init in one step.
    *
-   * Existing seeded data is overwritten — the harvest already ran the
-   * heuristics with `null` keyform-bearing inputs, so the result reflects
-   * the current mesh geometry.
+   * **Mode (V3 Re-Rig Phase 0):**
+   *   - `'replace'` (default, back-compat): full destructive re-init —
+   *     what "Re-Init Rig" + StaleRigBanner do today.
+   *   - `'merge'`: preserves user-authored entries on conflict-surface
+   *     fields (maskConfigs, physicsRules, faceParallax, bodyWarp,
+   *     rigWarps); used by Phase 1's per-stage refit + "Refit All" UI.
+   *     `subsystems` is preserved in BOTH modes (the headline Phase 0 fix).
+   *
+   * In merge mode, `clearFaceParallax` / `clearBodyWarp` / `clearRigWarps`
+   * are bypassed — clearing a slot the user hasn't authored is fine, but
+   * we don't want a missing-value harvest to wipe a user's authored spec.
    *
    * @param {{
    *   faceParallaxSpec: object|null,
    *   bodyWarpChain: object|null,
    *   rigWarps: Map<string,object>,
    * }} harvest
+   * @param {'replace'|'merge'} [mode='replace']
    */
-  seedAllRig: (harvest) => {
+  seedAllRig: (harvest, mode = 'replace') => {
     set((state) => {
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       const proj = draft.project;
-      // Config-only seeders (no keyforms). All idempotent.
+      // Config-only seeders (no keyforms). Pure defaults; merge==replace.
       seedParametersFn(proj);
-      seedMaskConfigsFn(proj);
-      seedPhysicsRulesFn(proj);
+      seedMaskConfigsFn(proj, mode);
+      seedPhysicsRulesFn(proj, mode);
       seedBoneConfigFn(proj);
       seedVariantFadeRulesFn(proj);
       seedEyeClosureConfigFn(proj);
       seedRotationDeformerConfigFn(proj);
-      seedAutoRigConfigFn(proj);
+      seedAutoRigConfigFn(proj, mode);
       // Keyform-bearing seeders. Each only fires when the harvester
       // actually produced a value — buildBodyWarpChain returns null for
       // models without ParamBodyAngleZ/Y, faceParallax is null when no
       // face-tagged meshes exist, etc.
       if (harvest?.faceParallaxSpec) {
-        seedFaceParallaxFn(proj, harvest.faceParallaxSpec);
-      } else {
+        seedFaceParallaxFn(proj, harvest.faceParallaxSpec, mode);
+      } else if (mode === 'replace') {
         clearFaceParallaxFn(proj);
       }
       if (harvest?.bodyWarpChain) {
-        seedBodyWarpChainFn(proj, harvest.bodyWarpChain);
-      } else {
+        seedBodyWarpChainFn(proj, harvest.bodyWarpChain, mode);
+      } else if (mode === 'replace') {
         clearBodyWarpFn(proj);
       }
       if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
-        seedRigWarpsFn(proj, harvest.rigWarps);
-      } else {
+        seedRigWarpsFn(proj, harvest.rigWarps, mode);
+      } else if (mode === 'replace') {
         clearRigWarpsFn(proj);
       }
       // GAP-012 Phase A — capture per-mesh fingerprint at seed time so

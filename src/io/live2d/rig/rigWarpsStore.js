@@ -195,16 +195,25 @@ export function resolveRigWarps(project) {
 
 /**
  * Seed `project.rigWarps` from a pre-computed `partId → spec` map (or
- * iterable of specs with `targetPartId` set). Destructive — overwrites
- * whatever was stored. Caller is responsible for harvesting specs from
- * a one-shot rig-init pass (e.g., calling `generateCmo3` once and
- * filtering `rigSpec.warpDeformers` to entries with `targetPartId`).
+ * iterable of specs with `targetPartId` set).
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): destructive — overwrites
+ *     the entire stored map.
+ *   - `'merge'`: per-partId — preserve any stored entry with
+ *     `_userAuthored: true` (no UI writes this today; reserved for a
+ *     future per-mesh keyform editor); reseed the rest.
+ *
+ * Caller is responsible for harvesting specs from a one-shot rig-init
+ * pass (e.g., calling `generateCmo3` once and filtering
+ * `rigSpec.warpDeformers` to entries with `targetPartId`).
  *
  * @param {object} project - mutated
  * @param {Map<string,object>|Iterable<object>} rigWarps
+ * @param {'replace'|'merge'} [mode='replace']
  * @returns {Record<string, StoredRigWarpSpec>} the serialized form written
  */
-export function seedRigWarps(project, rigWarps) {
+export function seedRigWarps(project, rigWarps, mode = 'replace') {
   let specs;
   if (rigWarps instanceof Map) {
     specs = Array.from(rigWarps.values());
@@ -212,6 +221,17 @@ export function seedRigWarps(project, rigWarps) {
     specs = Array.from(rigWarps);
   }
   const stored = serializeRigWarps(specs);
+  if (mode === 'merge') {
+    const prior = (project.rigWarps && typeof project.rigWarps === 'object') ? project.rigWarps : {};
+    const merged = { ...stored };
+    for (const [partId, entry] of Object.entries(prior)) {
+      if (entry && typeof entry === 'object' && entry._userAuthored === true) {
+        merged[partId] = entry;
+      }
+    }
+    project.rigWarps = merged;
+    return merged;
+  }
   project.rigWarps = stored;
   return stored;
 }

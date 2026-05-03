@@ -114,15 +114,29 @@ export function resolveFaceParallax(project) {
 }
 
 /**
- * Seed `project.faceParallax` from a pre-computed spec. Destructive —
- * overwrites whatever was stored. Caller is responsible for computing
- * the spec via `buildFaceParallaxSpec(...)` with current project state.
+ * Seed `project.faceParallax` from a pre-computed spec.
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): destructive — overwrites
+ *     any prior stored value.
+ *   - `'merge'`: if the prior value has `_userAuthored: true` at the
+ *     top level, preserve it (no UI writes this today; reserved for
+ *     a future "Edit Face Parallax Keyforms" surface). Otherwise
+ *     same as replace.
  *
  * @param {object} project - mutated
  * @param {import('./rigSpec.js').WarpDeformerSpec} spec
- * @returns {object} the serialized form written to project
+ * @param {'replace'|'merge'} [mode='replace']
+ * @returns {object|null} the serialized form written to project (null if preserved existing)
  */
-export function seedFaceParallax(project, spec) {
+export function seedFaceParallax(project, spec, mode = 'replace') {
+  if (mode === 'merge') {
+    const prior = project.faceParallax;
+    if (prior && typeof prior === 'object' && prior._userAuthored === true) {
+      // Preserve user-authored override; nothing written.
+      return null;
+    }
+  }
   const stored = serializeFaceParallaxSpec(spec);
   project.faceParallax = stored;
   return stored;

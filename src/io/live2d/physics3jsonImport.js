@@ -21,6 +21,8 @@
  * @module io/live2d/physics3jsonImport
  */
 
+import { markUserAuthored } from './rig/userAuthorMarkers.js';
+
 /**
  * Inverse of physics3json.js' INPUT_TYPE_MAP.
  */
@@ -157,7 +159,10 @@ export function parsePhysics3Json(jsonText) {
       continue;
     }
 
-    rules.push({
+    // V3 Re-Rig Phase 0 — imported rules are user-authored (the user
+    // explicitly chose to import them). Refit (`mode: 'merge'`) preserves
+    // them; full re-init (`mode: 'replace'`) wipes them as it always has.
+    rules.push(markUserAuthored({
       id,
       name,
       category: 'imported',
@@ -167,7 +172,7 @@ export function parsePhysics3Json(jsonText) {
       outputs,
       vertices,
       normalization,
-    });
+    }));
   }
 
   return { rules, warnings };

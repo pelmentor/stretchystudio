@@ -179,16 +179,28 @@ export function resolveBodyWarp(project) {
 }
 
 /**
- * Seed `project.bodyWarp` from a pre-computed chain. Destructive —
- * overwrites whatever was stored. Caller is responsible for computing
- * the chain via `buildBodyWarpChain(...)` with current mesh / canvas /
- * body-anatomy inputs.
+ * Seed `project.bodyWarp` from a pre-computed chain.
+ *
+ * **Mode semantics (V3 Re-Rig Phase 0):**
+ *   - `'replace'` (default, back-compat): destructive — overwrites
+ *     any prior stored chain.
+ *   - `'merge'`: if the prior value has `_userAuthored: true` at the
+ *     top level, preserve it (no UI writes this today; reserved for a
+ *     future "Edit Body Warp Keyforms" surface). Otherwise same as
+ *     replace.
  *
  * @param {object} project - mutated
  * @param {ReturnType<typeof import('./bodyWarp.js').buildBodyWarpChain>} chain
- * @returns {StoredBodyWarpChain} the serialized form written to project
+ * @param {'replace'|'merge'} [mode='replace']
+ * @returns {StoredBodyWarpChain|null} the serialized form written to project (null if preserved existing)
  */
-export function seedBodyWarpChain(project, chain) {
+export function seedBodyWarpChain(project, chain, mode = 'replace') {
+  if (mode === 'merge') {
+    const prior = project.bodyWarp;
+    if (prior && typeof prior === 'object' && prior._userAuthored === true) {
+      return null;
+    }
+  }
   const stored = serializeBodyWarpChain(chain);
   project.bodyWarp = stored;
   return stored;

@@ -92,6 +92,14 @@ export async function buildRig() {
   return { ok: true, rigSpec };
 }
 
+// V3 Re-Rig Phase 0 — single-flight guard. The async window between
+// `loadProjectTextures` (texture I/O) and `seedAllRig` (immer commit) is
+// long enough that a rapid double-click on "Re-Init Rig" / "Initialize
+// Rig" can run two harvests concurrently and write contradictory results
+// — last writer wins, but the loser also fired UI side effects. Hold
+// the lock for the whole `initializeRig` lifetime and release in finally.
+let _initializeRigInFlight = false;
+
 /**
  * Full "Initialize Rig" flow used by v3 ParametersEditor (and the
  * future `rig.initialize` operator). Distinct from `buildRig()` —
@@ -105,13 +113,21 @@ export async function buildRig() {
  * identical across shells. Eventually elevates to a Phase 5 operator
  * with confirm-modal gating; v3 first cut just wraps the same calls.
  *
+ * **Single-flight (V3 Re-Rig Phase 0):** concurrent calls return early
+ * with `{ ok: false, error: 'rig init already in flight' }`. The lock
+ * is module-scope; it survives across React re-renders.
+ *
  * @returns {Promise<BuildRigResult>}
  */
 export async function initializeRig() {
+  if (_initializeRigInFlight) {
+    return { ok: false, error: 'rig init already in flight', rigSpec: null };
+  }
   const pre = preflightBuildRig();
   if (!pre.ok) {
     return { ok: false, error: pre.reasons.join('; '), rigSpec: null };
   }
+  _initializeRigInFlight = true;
   try {
     // BUG-004 / BUG-008 / BUG-010 — Init Rig is structurally a "rebuild
     // from rest pose" operation. Reset transient pose state BEFORE
@@ -182,7 +198,23 @@ export async function initializeRig() {
     const error = /** @type {any} */ (err)?.message ?? String(err);
     if (typeof console !== 'undefined') console.error('[RigService] initializeRig failed:', err);
     return { ok: false, error, rigSpec: null };
+  } finally {
+    _initializeRigInFlight = false;
   }
+}
+
+/**
+ * V3 Re-Rig Phase 0 — test-only helper. Resets the single-flight lock
+ * so unit tests can exercise the "second call returns early" path
+ * without spinning up a real harvest. Not exported via the public API
+ * surface in production code paths.
+ *
+ * @returns {boolean} true if a flight was in progress; false if already idle
+ */
+export function _resetInitializeRigInFlightForTest() {
+  const wasInFlight = _initializeRigInFlight;
+  _initializeRigInFlight = false;
+  return wasInFlight;
 }
 
 /** Drop the cached rigSpec; next read re-builds. */
