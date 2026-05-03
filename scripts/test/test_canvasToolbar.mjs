@@ -80,8 +80,10 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   assert(ops.includes('transform.scale'),     'object includes transform.scale');
 }
 
-// ── Mesh: brush is default (first); add/remove vertex are tools;
-//        proportional-edit is a toggle (orthogonal to the active tool) ─
+// ── Mesh: brush is default (first); add/remove vertex are tools.
+//        PP1-008(c) — proportional-edit toggle relocated out of the
+//        T-panel into ModePill (sibling of the edit-mode picker), so
+//        the mesh tool list has no toggle entries anymore.
 
 {
   const mesh = TOOLS_BY_MODE.mesh;
@@ -89,9 +91,9 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   const tids = mesh.filter((t) => t.kind === 'tool').map((t) => t.toolModeId);
   assert(tids.includes('add_vertex'),    'mesh includes add_vertex');
   assert(tids.includes('remove_vertex'), 'mesh includes remove_vertex');
-  const toggles = mesh.filter((t) => t.kind === 'toggle').map((t) => t.toggleId);
-  assert(toggles.includes('proportionalEdit'),
-    'mesh includes proportionalEdit toggle');
+  const toggles = mesh.filter((t) => t.kind === 'toggle');
+  assert(toggles.length === 0,
+    'mesh tools list has no toggle entries (proportionalEdit moved to ModePill)');
 }
 
 // ── Skeleton: only joint_drag is exposed (one tool) ────────────────
