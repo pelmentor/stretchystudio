@@ -1,16 +1,24 @@
-// Tests for the R9 physics tick (Cubism-style pendulum integrator).
+// Tests for the v3-legacy physics kernel (hand-rolled verlet integrator).
 //
-// Pure JS — no GL, no React. Verifies the integrator state machine,
-// input aggregation, output mapping, frame independence, and edge
-// cases.
+// Pinned to legacy semantics: state.byRuleId.particles[] shape, degrees-based
+// output mapping (degrees/angleMax) * scale. The cubism-port kernel uses a
+// different state shape (flat rig with separate particle/input/output arrays)
+// and different output semantics (radians * scale) and is byte-pinned by the
+// oracle harness in scripts/cubism_physics/diff_v3_vs_oracle.mjs (gates < 1e-4).
+//
+// We force the legacy kernel here so this file remains the unit-test baseline
+// for the verlet integrator until v3-legacy is removed.
 
 import { strict as assert } from 'node:assert';
 import {
   createPhysicsState,
   tickPhysics,
   buildParamSpecs,
+  setPhysicsKernel,
   __testing__,
 } from '../../src/io/live2d/runtime/physicsTick.js';
+
+setPhysicsKernel('v3-legacy');
 
 let pass = 0;
 let fail = 0;

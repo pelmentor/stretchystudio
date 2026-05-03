@@ -1,5 +1,20 @@
 /**
- * v2 R9 — Physics tick. Cubism-style pendulum integrator that turns
+ * Physics tick. Two kernels available, selected by `setPhysicsKernel(...)`:
+ *
+ *  - `'cubism-port'` (default 2026-05-03+): byte-faithful port of Cubism Web
+ *    Framework's `CubismPhysics` — see `cubismPhysicsKernel.js`. Reference:
+ *    `reference/cubism-web-framework/physics/cubismphysics.ts` (commit `d4da0aa`).
+ *    Phase 0 oracle harness drove the divergence measurement; see
+ *    `docs/live2d-export/CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md`.
+ *
+ *  - `'v3-legacy'`: hand-rolled "Cubism-style" verlet+rod integrator from before
+ *    the port. Kept as an opt-out for one release cycle in case the new kernel
+ *    surfaces unexpected behaviour on existing characters; will be removed.
+ *
+ * The legacy kernel description is preserved below verbatim.
+ *
+ * --- v3-legacy kernel ---
+ * Hand-rolled "Cubism-style" pendulum integrator that turns
  * head/body angle inputs into lagged hair / clothing / bust / arm
  * sway outputs. Pure JS, frame-independent (fixed-dt accumulator),
  * no GL — driven from the main viewport tick.
@@ -77,6 +92,18 @@
  * @module io/live2d/runtime/physicsTick
  */
 
+import { createKernelState, kernelTick, kernelReset } from './cubismPhysicsKernel.js';
+
+// --- kernel flag ---
+let _activeKernel = 'cubism-port';   // default 2026-05-03+
+/** @param {'cubism-port'|'v3-legacy'} k */
+export function setPhysicsKernel(k) {
+  if (k !== 'cubism-port' && k !== 'v3-legacy') return;
+  _activeKernel = k;
+}
+export function getPhysicsKernel() { return _activeKernel; }
+
+// --- v3-legacy constants (used only when kernel = 'v3-legacy') ---
 const PHYSICS_DT = 1 / 60;          // fixed simulation step (s)
 const MAX_SUBSTEPS = 6;             // cap to prevent spiral-of-death after long pauses
 const ACCEL_SCALAR = 100;           // tuning constant: maps acceleration*radius force to deg/s²
@@ -111,6 +138,20 @@ const ACCEL_SCALAR = 100;           // tuning constant: maps acceleration*radius
  * @returns {PhysicsState}
  */
 export function createPhysicsState(rules) {
+  if (_activeKernel === 'cubism-port') {
+    // Cubism-port: state is owned by the kernel. We hand back an object
+    // carrying both `kernel` (the kernel's own state) and the legacy
+    // `byRuleId` map (kept empty so any consumer that probes it doesn't
+    // crash — none currently rely on its contents).
+    return {
+      kernel: createKernelState(rules ?? [], null),
+      byRuleId: new Map(),
+    };
+  }
+  return createLegacyPhysicsState(rules);
+}
+
+function createLegacyPhysicsState(rules) {
   const byRuleId = new Map();
   if (!Array.isArray(rules)) return { byRuleId };
   for (const rule of rules) {
@@ -162,6 +203,14 @@ function restPositionForIndex(vertices, i) {
  *          caller's "should I update the store?" check).
  */
 export function tickPhysics(state, rules, paramValues, paramSpecs, dtSeconds) {
+  if (_activeKernel === 'cubism-port') {
+    if (!state || !state.kernel) return { stepsApplied: 0, outputsChanged: 0 };
+    return kernelTick(state.kernel, paramValues, paramSpecs, dtSeconds);
+  }
+  return tickPhysicsLegacy(state, rules, paramValues, paramSpecs, dtSeconds);
+}
+
+function tickPhysicsLegacy(state, rules, paramValues, paramSpecs, dtSeconds) {
   if (!state || !Array.isArray(rules)) return { stepsApplied: 0, outputsChanged: 0 };
   const dt = Math.max(0, Math.min(dtSeconds, MAX_SUBSTEPS * PHYSICS_DT));
   let totalSteps = 0;
