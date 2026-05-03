@@ -26,7 +26,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CubismPhysicsOracle } from './oracle/cubismPhysicsOracle.mjs';
 import { parsePhysics3Json } from '../../src/io/live2d/physics3jsonImport.js';
-import { tickPhysics, createPhysicsState, buildParamSpecs } from '../../src/io/live2d/runtime/physicsTick.js';
+import { tickPhysics, createPhysicsState, buildParamSpecs, setPhysicsKernel, getPhysicsKernel } from '../../src/io/live2d/runtime/physicsTick.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,6 +42,9 @@ function arg(name) {
 }
 const VERBOSE = args.includes('--verbose');
 const JSON_PATH = arg('json') ?? resolve(ROOT, 'New Folder', 'shelby.physics3.json');
+const KERNEL = arg('kernel');
+if (KERNEL === 'v3-legacy' || KERNEL === 'cubism-port') setPhysicsKernel(KERNEL);
+console.log(`# active v3 kernel: ${getPhysicsKernel()}`);
 const FIXTURE_FILTER = arg('fixture');
 
 // -------------------- driver fixtures --------------------
