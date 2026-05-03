@@ -105,15 +105,15 @@ export function AnimationsEditor() {
                 // After creating, the new animation lands at the end of
                 // project.animations. Pick it up from the freshly-read
                 // store and dispatch switchAnimation so playback +
-                // timeline focus on it. Also force the Animation
-                // workspace + editorMode so the user actually sees the
-                // timeline they just made.
+                // timeline focus on it. Also route to the Animation
+                // workspace so the user sees the timeline they just made.
+                // (BFA-001: editorMode is derived from activeWorkspace,
+                // and setWorkspace itself captures the rest pose on the
+                // staging→animation transition.)
                 createAnimation();
                 const list = useProjectStore.getState().project.animations ?? [];
                 const created = list[list.length - 1];
                 if (created) switchAnimation(created);
-                // setWorkspace drives editorMode via EditorModeService —
-                // captureRestPose runs on the staging→animation transition.
                 useUIV3Store.getState().setWorkspace('animation');
               }}
               title="Create new animation"

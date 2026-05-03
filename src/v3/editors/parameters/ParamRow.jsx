@@ -19,6 +19,7 @@ import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
+import { getEditorMode } from '../../../store/uiV3Store.js';
 import { setParamKeyframeAt } from '../../../renderer/animationEngine.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 import { logger } from '../../../lib/logger.js';
@@ -130,7 +131,7 @@ export function ParamRow({ param }) {
           // animation tick reads `paramId` tracks via
           // `computeParamOverrides` and feeds them into chainEval.
           const ed = useEditorStore.getState();
-          if (ed.editorMode !== 'animation' || !ed.autoKeyframe) return;
+          if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
           const an = useAnimationStore.getState();
           const proj = useProjectStore.getState().project;
           const activeAnim = proj.animations.find((a) => a.id === an.activeAnimationId);

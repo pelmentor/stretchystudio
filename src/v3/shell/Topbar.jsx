@@ -3,15 +3,14 @@
  *
  * Single-row layout: left → bold "Stretchy Studio" + version badge
  * + file action strip (New / Save / Open / Export / Canvas Props /
- * Settings); center → workspace pills (Edit / Pose / Animation),
- * Setup⇄Animate pill, Undo / Redo, Hot Reload pill; right → gesture
- * hints + Reset Pose.
+ * Settings); center → workspace pills (Default / Animation), Undo /
+ * Redo, Hot Reload pill; right → gesture hints + Reset Pose.
  *
- * Workspace pills are PURELY layout — clicking them changes which
- * panels are visible and nothing else. Setup⇄Animate (the
- * `editorMode` axis) is its own pill; the Blender-style edit slot
- * (`editMode`: mesh / skeleton / blendShape) lives on the canvas
- * Mode pill. All three axes are independent.
+ * Workspace pills are layout presets. The Setup/Animate axis is
+ * derived from the active workspace (BFA-001 — Default → 'staging',
+ * Animation → 'animation'); the Blender-style edit slot (`editMode`:
+ * mesh / skeleton / blendShape) lives on the canvas Mode pill, on
+ * its own axis.
  *
  * @module v3/shell/Topbar
  */
@@ -75,14 +74,14 @@ export function Topbar() {
   }
 
   /**
-   * Switch workspace. ONLY layout — no mode side-effects.
+   * Switch workspace. Layout + (BFA-001) the editorMode derivation.
    *
-   * Blender contract (user 2026-05-02): workspaces are layout-only.
-   * NOTHING in editorStore changes when a workspace pill is clicked.
-   * `editMode`, `editorMode`, `selection`, and `activeBlendShapeId`
-   * all persist verbatim. The Setup/Animate (`editorMode`) axis has
-   * its own pill (handled by `setEditorMode` from EditorModeService);
-   * the Blender-style `editMode` axis has the canvas Mode pill.
+   * Workspaces are layout-only for editor state — `editMode`, `selection`,
+   * and `activeBlendShapeId` persist across switches verbatim. The
+   * Setup/Animate axis is now derived from the active workspace itself
+   * (Default → 'staging', Animation → 'animation' via `selectEditorMode`)
+   * — there is no separate `editorMode` slot any more, so the previous
+   * Setup/Animate pill is gone.
    *
    * @param {WorkspaceTab} tab
    */

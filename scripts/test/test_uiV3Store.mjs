@@ -162,29 +162,32 @@ function reset() {
   useEditorStore.setState({ selection: [], editMode: null, activeBlendShapeId: null });
 }
 
-// ── PP2 — workspace DRIVES editorMode (Setup/Animate pill removed) ──
+// ── BFA-001 — workspace DERIVES editorMode (no separate slot) ──
 //
 // Default workspace → 'staging'. Animation workspace → 'animation'.
-// One axis instead of two; user always wanted them in lockstep.
+// One axis instead of two; the previous editorStore.editorMode field
+// + EditorModeService were removed and replaced with the derived
+// `selectEditorMode` / `getEditorMode` selector on uiV3Store.
 
 {
   reset();
-  const { useEditorStore } = await import('../../src/store/editorStore.js');
+  const { selectEditorMode, getEditorMode } = await import('../../src/store/uiV3Store.js');
 
   useUIV3Store.getState().setWorkspace('default');
-  assert(useEditorStore.getState().editorMode === 'staging',
-    'workspace default → editorMode staging');
+  assert(selectEditorMode(useUIV3Store.getState()) === 'staging',
+    'workspace default → selectEditorMode staging');
+  assert(getEditorMode() === 'staging',
+    'workspace default → getEditorMode() staging');
 
   useUIV3Store.getState().setWorkspace('animation');
-  assert(useEditorStore.getState().editorMode === 'animation',
-    'workspace animation → editorMode animation');
+  assert(selectEditorMode(useUIV3Store.getState()) === 'animation',
+    'workspace animation → selectEditorMode animation');
+  assert(getEditorMode() === 'animation',
+    'workspace animation → getEditorMode() animation');
 
   useUIV3Store.getState().setWorkspace('default');
-  assert(useEditorStore.getState().editorMode === 'staging',
-    'workspace default again → editorMode staging again');
-
-  // Reset
-  useEditorStore.setState({ editorMode: 'staging' });
+  assert(getEditorMode() === 'staging',
+    'workspace default again → getEditorMode() staging again');
 }
 
 // ── setAreaEditor swaps the active tab's editor type ────────────────

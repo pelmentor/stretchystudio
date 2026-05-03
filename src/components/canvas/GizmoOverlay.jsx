@@ -17,6 +17,7 @@ import { useRef, useEffect, useMemo } from 'react';
 import { useEditorStore } from '@/store/editorStore';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
+import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
 import { computePoseOverrides } from '@/renderer/animationEngine';
 import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/transforms';
 import { beginBatch, endBatch } from '@/store/undoHistory';
@@ -34,7 +35,7 @@ export function GizmoOverlay() {
 
   const toolMode      = useEditorStore(s => s.toolMode);
   const selection     = useEditorStore(s => s.selection);
-  const editorMode    = useEditorStore(s => s.editorMode);
+  const editorMode    = useUIV3Store(selectEditorMode);
   // GAP-010 Phase B — gizmo overlays only mount on the edit Viewport
   // surface (CanvasViewport gates `<GizmoOverlay />` on `!previewMode`),
   // so always read the viewport tab's view.
@@ -346,7 +347,7 @@ export function GizmoOverlay() {
     endBatch();
     dragRef.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
-    if (useEditorStore.getState().autoKeyframe && useEditorStore.getState().editorMode === 'animation') {
+    if (useEditorStore.getState().autoKeyframe && getEditorMode() === 'animation') {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
     }
   }

@@ -25,18 +25,22 @@
  */
 
 import { create } from 'zustand';
-import { setEditorMode } from '../services/EditorModeService.js';
+import { useProjectStore } from './projectStore.js';
+import { useAnimationStore } from './animationStore.js';
 
 /**
  * @typedef {('default'|'animation')} WorkspaceId
  *  Workspaces are layout-only presets (Blender-style). They DO NOT
  *  gate Blender-style edit modes (mesh / skeleton / blendShape) —
- *  `editorStore.editMode` is independent of workspace. They DO drive
- *  Setup/Animate (`editorStore.editorMode`) via `setEditorMode` —
- *  see `setWorkspace`. The previous topbar Setup/Animate pill was a
- *  redundant axis: the user always wanted Animate while in the
- *  Animation workspace and Setup elsewhere.
+ *  `editorStore.editMode` is independent of workspace.
  *
+ *  BFA-001 — the Setup/Animate axis is now DERIVED from the workspace
+ *  (Animation → 'animation', everything else → 'staging' — see
+ *  `selectEditorMode` / `getEditorMode`); there is no longer a separate
+ *  `editorStore.editorMode` slot. The previous topbar Setup/Animate
+ *  pill was a redundant second axis on the same decision and is gone.
+ *
+
  *  - **default** — Outliner / Logs / Viewport / Parameters /
  *    Properties. Covers setup work AND quick posing; previously
  *    split into separate `edit` and `pose` presets that had
@@ -167,15 +171,26 @@ export const useUIV3Store = create((set) => ({
   workspaces: initialWorkspaces(),
 
   /** Switch active workspace; per-workspace area state is preserved.
-   *  PP2 — also drives `editorStore.editorMode` (Default → 'staging',
-   *  Animation → 'animation') via EditorModeService. The Setup/Animate
-   *  pill the topbar used to host has been removed; the mode follows
-   *  the workspace. EditorModeService is idempotent on no-op
-   *  transitions and captures the rest pose on staging → animation. */
-  setWorkspace: (id) => {
-    set({ activeWorkspace: id });
-    setEditorMode(id === 'animation' ? 'animation' : 'staging');
-  },
+   *
+   *  BFA-001 — `editorMode` is now derived from `activeWorkspace` (see
+   *  `selectEditorMode` / `getEditorMode` below); the previous separate
+   *  `editorStore.editorMode` slot is gone, so this setter no longer
+   *  needs to dual-write. The only side-effect is the rest-pose snapshot
+   *  on a staging→animation transition (used as the baseline for keyframe
+   *  diffs). Idempotent on no-op transitions because `captureRestPose`
+   *  only runs when `prev !== 'animation'` AND `next === 'animation'`. */
+  setWorkspace: (id) => set((state) => {
+    const prevWasAnimation = state.activeWorkspace === 'animation';
+    const nextIsAnimation = id === 'animation';
+    if (!prevWasAnimation && nextIsAnimation) {
+      const project = useProjectStore.getState().project;
+      const captureRestPose = useAnimationStore.getState().captureRestPose;
+      if (project?.nodes && typeof captureRestPose === 'function') {
+        captureRestPose(project.nodes);
+      }
+    }
+    return { activeWorkspace: id };
+  }),
 
   /**
    * Set which tab is active inside an area.
@@ -283,4 +298,29 @@ function updateActiveWorkspace(state, fn) {
 export function getActiveTab(area) {
   if (!area || !Array.isArray(area.tabs) || area.tabs.length === 0) return null;
   return area.tabs.find((t) => t.id === area.activeTabId) ?? area.tabs[0];
+}
+
+/**
+ * BFA-001 — derived `editorMode` selector.
+ *
+ * `editorMode` is no longer a stored field; it's a function of the
+ * active workspace (Animation workspace → 'animation', everything else
+ * → 'staging'). Use the React hook form when subscribing inside a
+ * component (`useUIV3Store(selectEditorMode)`) and `getEditorMode()`
+ * when reading imperatively from refs / event handlers.
+ *
+ * @param {{activeWorkspace: WorkspaceId}} s
+ * @returns {('staging'|'animation')}
+ */
+export const selectEditorMode = (s) =>
+  s.activeWorkspace === 'animation' ? 'animation' : 'staging';
+
+/**
+ * Imperative form of `selectEditorMode` — for use sites that don't have
+ * a Zustand subscription handy (rAF tick, pointer handlers, etc.).
+ *
+ * @returns {('staging'|'animation')}
+ */
+export function getEditorMode() {
+  return selectEditorMode(useUIV3Store.getState());
 }

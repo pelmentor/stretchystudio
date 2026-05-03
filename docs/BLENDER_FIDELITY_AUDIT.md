@@ -22,29 +22,23 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 | 2026-05-03 | Redundant `setEditorMode` calls after `setWorkspace`     | `IdleMotionDialog` + `AnimationsEditor` paired `setWorkspace('animation')` with a follow-up `serviceSetEditorMode('animation')`. After PP2-009 the second call is a no-op (idempotent). | Removed both calls + their imports; `setWorkspace` is now the canonical entry. |
 | 2026-05-03 | Tab-close `×` on canvas / timeline trio                 | Closing them empties an area with no in-product way back.                                                  | `NON_CLOSABLE_EDITOR_TYPES` allow-list. |
 | 2026-05-03 | Inline-tooltip wide bar                                 | shadcn `TooltipContent` had no max-width; long help text stretched across the canvas.                       | Default `max-w-xs`; per-call override still works (PP1-003). |
+| 2026-05-04 | `editorStore.editorMode` slot + `EditorModeService` chain | Stored field whose only writer was `setWorkspace`. Two slots holding the same information. | Replaced with `selectEditorMode` / `getEditorMode` derived from `uiV3Store.activeWorkspace`. `editorMode` field, `setEditorMode` action, `EditorModeService.js`, and its test all deleted. `setWorkspace` itself runs `captureRestPose` on staging→animation (BFA-001 + BFA-005). |
 
 ---
 
 ## Open crutches
 
-### BFA-001 — `editorStore.editorMode` is now a derived field
+### BFA-001 — `editorStore.editorMode` collapsed to a derived selector — **CLOSED**
 
-**What it is.** `editorMode: 'staging' | 'animation'` is a stored slot in `editorStore`. After PP2-009 + the redundant-call cleanup in this audit, the **only writer** is `uiV3Store.setWorkspace` (via `EditorModeService.setEditorMode`). The slot is therefore always `(activeWorkspace === 'animation' ? 'animation' : 'staging')`.
+**Status (this commit).** Closed. `editorStore.editorMode` and `editorStore.setEditorMode` are deleted; `EditorModeService` (and its test) are deleted. `uiV3Store` exports `selectEditorMode(s) = s.activeWorkspace === 'animation' ? 'animation' : 'staging'` and a `getEditorMode()` imperative form. `setWorkspace` itself runs the `captureRestPose` side-effect on the staging→animation transition (no service indirection). All call sites — CanvasViewport rAF tick, GizmoOverlay, SkeletonOverlay (via prop), ParamRow auto-keyframe gate, Topbar — read through the selector. Tests updated; full suite green including the previously-existing "workspace DRIVES editorMode" assertion (now formulated as "selector follows workspace").
 
-**Why it's a crutch.** Two slots holding the same information is a future-bug factory. New contributors will write to one without the other. The current `setWorkspace → setEditorMode` chain papers over the duplication; collapsing it removes the chain.
+**Original analysis.** `editorMode: 'staging' | 'animation'` was a stored slot whose only writer was `setWorkspace`. Two slots holding the same information is a future-bug factory; the chain `setWorkspace → setEditorMode` papered over the duplication. Collapsing it removes the chain.
 
-**Plan.**
-1. **Add a derived selector.** Export from `uiV3Store`:
-   ```js
-   export const selectEditorMode = (s) => s.activeWorkspace === 'animation' ? 'animation' : 'staging';
-   ```
-2. **Replace reads.** ~51 occurrences across 11 files (a handful are comments). Each `useEditorStore(s => s.editorMode)` becomes `useUIV3Store(selectEditorMode)`.
-3. **Move rest-pose capture out of EditorModeService.** Today `setEditorMode('animation')` calls `captureRestPose` on staging→animation. Move that side-effect into `setWorkspace` directly.
-4. **Delete** `editorStore.editorMode` + `editorStore.setEditorMode` + `EditorModeService` once no readers remain.
-
-**Risk.** Touching 49 call sites; some are in hot paths (canvas rAF tick, gesture handlers). Worth shipping in one PR with a single test pass, not piecemeal.
-
-**Out of scope today.** The current PP2 sweep is closing user-visible bugs; this is a code-cleanliness pass. Land it after PP2-005b/-006/-007/-008.
+**What landed.**
+1. **Derived selector exported** from `uiV3Store` (`selectEditorMode` for hooks, `getEditorMode()` for imperative reads).
+2. **Reads replaced.** Components subscribing via Zustand use `useUIV3Store(selectEditorMode)`; rAF-tick / pointer-handler imperative reads use `getEditorMode()`. SkeletonOverlay still receives `editorMode` as a prop — its parent (CanvasViewport) computes it from the selector once.
+3. **Rest-pose capture moved into `setWorkspace`** directly, gated on the staging→animation transition in `set((state) => ...)` so it has access to the previous value atomically.
+4. **`editorMode` field + `setEditorMode` action + `EditorModeService` + its test all deleted.** Comment-only references in animations editor / topbar / uiV3Store / docstrings updated.
 
 ---
 
@@ -83,13 +77,9 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 
 ---
 
-### BFA-005 — `editorMode` (Spine name) coexisting with `editMode` (Blender name)
+### BFA-005 — naming collision between `editorMode` and `editMode` — **CLOSED**
 
-**What it is.** Two state fields with confusingly similar names: `editorMode` (the Setup/Animate axis from BFA-001) and `editMode` (the Blender-style mesh/skeleton/blendShape contextual mode). In the same store. With nearly the same name. Differing by ONE letter.
-
-**Why it's a crutch.** Pure naming hazard. Easy to grep `editMode` and get `editorMode` matches (or vice versa) — autocomplete misfires the same way. When BFA-001 lands and `editorMode` is removed, this collapses naturally; until then, any new contributor needs to stay alert.
-
-**Plan.** Remove `editorMode` per BFA-001. Until then, keep the JSDoc warnings on both fields.
+**Status.** Closed automatically when BFA-001 landed: `editorStore.editorMode` is gone, so `editMode` is now the only mode-shaped field on `editorStore`. The grep / autocomplete hazard the entry described no longer exists. Remaining `editorMode` identifiers are local variables in components (computed from `selectEditorMode`) and JSDoc references to the derived selector — no second store field to confuse with.
 
 ---
 

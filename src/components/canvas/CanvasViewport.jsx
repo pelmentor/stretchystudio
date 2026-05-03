@@ -7,7 +7,7 @@ import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useRigEvalStore } from '@/store/rigEvalStore';
-import { useUIV3Store } from '@/store/uiV3Store';
+import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
 // Workspace policy module deleted 2026-05-02 — workspaces no longer
 // gate modes or visualizations (Blender pattern: workspace = layout
@@ -191,6 +191,10 @@ export default function CanvasViewport({
   const activeWorkspace = useUIV3Store((s) => s.activeWorkspace);
   const activeWorkspaceRef = useRef(activeWorkspace);
   activeWorkspaceRef.current = activeWorkspace;
+  // BFA-001 — editorMode is derived from the workspace; subscribe via
+  // the canonical selector so React re-renders push the prop into
+  // SkeletonOverlay / GizmoOverlay when the workspace flips.
+  const editorMode = useUIV3Store(selectEditorMode);
 
   // GAP-010 — Live Preview surface gate. When this CanvasViewport instance
   // is mounted by `<LivePreviewCanvas>`, `previewMode` is true: live drivers
@@ -429,7 +433,7 @@ export default function CanvasViewport({
       // merged into the working values so chainEval sees the animated
       // dial position. We also push the merged values into
       // paramValuesStore so the ParametersEditor sliders track playback.
-      if (editorRef.current.editorMode === 'animation') {
+      if (getEditorMode() === 'animation') {
         const _anim = animRef.current;
         const _proj = projectRef.current;
         const _activeAnim = _proj.animations.find((a) => a.id === _anim.activeAnimationId) ?? null;
@@ -582,7 +586,7 @@ export default function CanvasViewport({
         const activeAnim = proj.animations.find(a => a.id === anim.activeAnimationId) ?? null;
 
         let poseOverrides = null;
-        if (editorRef.current.editorMode === 'animation') {
+        if (getEditorMode() === 'animation') {
           // Base: keyframe-interpolated values
           const endMs = (anim.endFrame / anim.fps) * 1000;
           poseOverrides = computePoseOverrides(activeAnim, anim.currentTime, anim.loopKeyframes, endMs);
@@ -993,7 +997,7 @@ export default function CanvasViewport({
 
       const ed = editorRef.current;
       const anim = useAnimationStore.getState();
-      if (ed.editorMode !== 'animation') return;
+      if (getEditorMode() !== 'animation') return;
 
       const proj = projectRef.current;
       if (proj.animations.length === 0) return;
@@ -1762,7 +1766,7 @@ export default function CanvasViewport({
     // Build effective nodes: apply animation pose overrides so world matrices
     // and vertex positions match what is visually displayed on the canvas.
     const animNow = animRef.current;
-    const isAnimMode = editorRef.current.editorMode === 'animation';
+    const isAnimMode = getEditorMode() === 'animation';
     const activeAnim = isAnimMode
       ? (proj.animations.find(a => a.id === animNow.activeAnimationId) ?? null)
       : null;
@@ -2196,7 +2200,7 @@ export default function CanvasViewport({
 
       // In animation mode + deform: store to draftPose — don't bake into base mesh.
       // The user will press K to commit as a keyframe.
-      if (editorRef.current.editorMode === 'animation' && meshSubMode === 'deform') {
+      if (getEditorMode() === 'animation' && meshSubMode === 'deform') {
         animRef.current.setDraftPose(partId, { mesh_verts: newVerts.map(v => ({ x: v.x, y: v.y })) });
         return;
       }
@@ -2313,7 +2317,7 @@ export default function CanvasViewport({
     if (dragRef.current) {
       dragRef.current = null;
       canvas.style.cursor = '';
-      if (editorRef.current.autoKeyframe && editorRef.current.editorMode === 'animation') {
+      if (editorRef.current.autoKeyframe && getEditorMode() === 'animation') {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
       }
     }
@@ -2472,7 +2476,7 @@ export default function CanvasViewport({
       {!previewMode && (
         <SkeletonOverlay
           view={view}
-          editorMode={editorState.editorMode}
+          editorMode={editorMode}
           showSkeleton={editorState.viewLayers.skeleton}
           skeletonEditMode={editorState.editMode === 'skeleton'}
         />
@@ -2575,7 +2579,7 @@ export default function CanvasViewport({
                            transition-all duration-150
                            font-medium"
                 onClick={() => {
-                  const mode = editorState.editorMode;
+                  const mode = editorMode;
                   if (mode === 'animation') resetPoseDraft();
                   else resetToRestPose();
                   logger.debug('resetPose', `Reset Pose triggered (mode=${mode})`, {
@@ -2589,7 +2593,7 @@ export default function CanvasViewport({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {editorState.editorMode === 'animation'
+              {editorMode === 'animation'
                 ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
                 : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
             </TooltipContent>

@@ -152,8 +152,8 @@ export function IdleMotionDialog({ open, onOpenChange }) {
       }));
 
       // Switch to the new animation + route to Animation workspace.
-      // setWorkspace drives editorMode via EditorModeService — no
-      // separate setEditorMode call needed.
+      // (BFA-001: editorMode is derived from activeWorkspace; setWorkspace
+      // captures the rest pose on the staging→animation transition.)
       const finalAnimation = useProjectStore.getState().project.animations.find((a) => a.id === created.id);
       if (finalAnimation) useAnimationStore.getState().switchAnimation(finalAnimation);
       useUIV3Store.getState().setWorkspace('animation');

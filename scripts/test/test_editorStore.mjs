@@ -42,7 +42,9 @@ reset();
   assert(s.editMode === null, 'initial: editMode null (object mode)');
   assert(s.activeBlendShapeId === null, 'initial: activeBlendShapeId null');
   assert(s.meshSubMode === 'deform', 'initial: meshSubMode deform');
-  assert(s.editorMode === 'staging', 'initial: editorMode = staging');
+  // BFA-001 — editorMode is no longer a stored field; it derives from
+  // uiV3Store.activeWorkspace via selectEditorMode.
+  assert(s.editorMode === undefined, 'initial: editorMode field removed');
 }
 
 // ── setSelection: clearing exits any edit mode ────────────────────

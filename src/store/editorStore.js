@@ -85,12 +85,6 @@ export const useEditorStore = create((set) => ({
   /** Active tab in the Layers panel: 'depth' (draw order) or 'groups' (hierarchy) */
   activeLayerTab: 'depth',
 
-  /** Editor mode: 'staging' = M3 workflow, 'animation' = timeline/keyframing active.
-   *  Distinct axis from `editMode` below — editorMode is Spine-style
-   *  Setup/Animate (timeline on/off), editMode is Blender-style
-   *  contextual edit (mesh / skeleton / blendShape). */
-  editorMode: 'staging',
-
   /** Single contextual edit mode. Replaces the prior triple of
    *  `meshEditMode` / `skeletonEditMode` / `blendShapeEditMode` flags
    *  that pretended to be orthogonal but were actually nested
@@ -239,7 +233,6 @@ export const useEditorStore = create((set) => ({
   }),
   setMeshDefaults:      (partial)  => set((state) => ({ meshDefaults: { ...state.meshDefaults, ...partial } })),
   setActiveLayerTab:    (tab)      => set({ activeLayerTab: tab }),
-  setEditorMode:        (mode)     => set({ editorMode: mode }),
   toggleGroupExpand:    (id)       => set((s) => {
     const next = new Set(s.expandedGroups);
     if (next.has(id)) next.delete(id);
