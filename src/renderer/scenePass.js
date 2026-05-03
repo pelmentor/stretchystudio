@@ -238,7 +238,16 @@ export class ScenePass {
           gl.stencilFunc(gl.ALWAYS, writeStencil, 0xFF);
           gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
           gl.stencilMask(0xFF);
+          // PP1-004 — alpha-to-coverage on the mask write so the stencil
+          // edge inherits MSAA sub-pixel coverage from the mask texture's
+          // alpha gradient. Without it the mask is binary (per-pixel) and
+          // the masked mesh's stencil-EQUAL test produces visible
+          // stairstepping along the iris/eyewhite boundary. The default
+          // framebuffer is multisampled (antialias defaults to true on
+          // WebGL2), so per-sample stencil writes are honoured.
+          gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
           this.partRenderer.drawPart(part.id, partMvp, effectiveOpacity, uMvp, uTexture, uOpacity);
+          gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
         } else if (readStencils && readStencils.length > 0) {
           gl.enable(gl.STENCIL_TEST);
           gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);

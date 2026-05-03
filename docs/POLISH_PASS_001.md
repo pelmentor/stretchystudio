@@ -17,7 +17,7 @@
 | [PP1-001](#pp1-001) | bug     | high   | Bone-controller rotation doesn't propagate to layers (no re-render trigger) | closed |
 | [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | closed |
 | [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
-| [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
+| [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | closed |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | closed |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | closed |
 | [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | closed |
@@ -109,7 +109,11 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-004"></a>
 ### PP1-004 — Iris clip-mask edges are aliased (stairstep, not antialiased)
 
-**Type:** bug · **Severity:** medium · **Status:** open
+**Type:** bug · **Severity:** medium · **Status:** closed (commit pending)
+
+**Root cause.** Stencil masks are inherently binary: each fragment either writes a stencil value or it doesn't. The iris is drawn into the stencil buffer with `gl.stencilOp(KEEP, KEEP, REPLACE)`; edge pixels that the rasterizer assigns to the iris triangle write the stencil with no per-sample weighting, so the eyewhite's `gl.EQUAL` test produces a hard, stairstepped boundary.
+
+**Fix.** Enable `gl.SAMPLE_ALPHA_TO_COVERAGE` while drawing the mask mesh. The default WebGL2 framebuffer is multisampled (antialias defaults to true), so per-sample stencil writes inherit the mask texture's alpha gradient: sample N of an edge pixel writes the stencil iff `texture.alpha > sample-coverage-threshold(N)`. The eyewhite's per-sample stencil-EQUAL test then resolves to fractional coverage on edge pixels → smooth boundary. Disabled again immediately after the mask draw so non-mask geometry still benefits from regular alpha blending. Localised to `scenePass.js`; no shader or framebuffer changes needed.
 
 **Symptom (user-visible).** Iris clip-mask cuts produce visibly stairstepped edges in the rendered output. Eyeball edges look pixel-precise binary instead of smoothly antialiased — see screenshot of the eye, the brown iris boundary against the eyewhite has visible diagonal lesenka.
 
@@ -130,7 +134,7 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-005"></a>
 ### PP1-005 — "Setup" button at top of UI is non-clickable + unexplained
 
-**Type:** ux/bug · **Severity:** low · **Status:** closed (commit pending)
+**Type:** ux/bug · **Severity:** low · **Status:** closed (commit `4e804ee`)
 
 **What it actually was.** The button is the Setup half of a Setup⇄Animate toggle pair (the `editorMode` axis: Setup = edits the rest pose; Animate = edits become keyframes). It's not non-clickable — it's idempotent: clicking the already-active half is a no-op (per `EditorModeService.setEditorMode` which returns early on same-mode calls). The hover tooltip used Radix's `<Tooltip>` with a 400 ms delay, which the user evidently didn't trip while exploring.
 
