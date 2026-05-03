@@ -31,6 +31,7 @@ import { VariantTab } from './tabs/VariantTab.jsx';
 import { MeshTab } from './tabs/MeshTab.jsx';
 import { MaskTab } from './tabs/MaskTab.jsx';
 import { PhysicsTab } from './tabs/PhysicsTab.jsx';
+import { RigStagesTab } from './tabs/RigStagesTab.jsx';
 
 /**
  * @typedef {Object} TabContext
@@ -117,6 +118,17 @@ export const PROPERTIES_TABS = [
       return nodes.some((n) => n?.variantOf === active.id);
     },
     render: ({ active }) => <VariantTab nodeId={active.id} />,
+  },
+  {
+    // V3 Re-Rig Phase 1 — RigStages: per-stage refit operators.
+    // Always-show on parts/groups (the rig graph nodes). Project-level,
+    // not selection-scoped — the tab ignores `active`. Phase 4 may
+    // narrow visibility; for v1 this lives wherever the user happens
+    // to be in the Properties pane.
+    id: 'rigStages',
+    label: 'Rig Stages',
+    applies: ({ active }) => active.type === 'part' || active.type === 'group',
+    render: () => <RigStagesTab />,
   },
 ];
 

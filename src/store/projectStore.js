@@ -128,6 +128,7 @@ export const useProjectStore = create((set, get) => {
     rigWarps: {},
     meshSignatures: {},
     lastInitRigCompletedAt: null,
+    rigStageLastRunAt: {},
   },
 
   // Versions used to trigger rendering passes independently of React
@@ -292,6 +293,7 @@ export const useProjectStore = create((set, get) => {
       state.project.faceParallax = null;
       state.project.bodyWarp = null;
       state.project.rigWarps = {};
+      state.project.rigStageLastRunAt = {};
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -338,6 +340,7 @@ export const useProjectStore = create((set, get) => {
       // saves; exporter's seeded-state check falls back to the old
       // heuristic when the marker is missing.
       state.project.lastInitRigCompletedAt = projectData.lastInitRigCompletedAt ?? null;
+      state.project.rigStageLastRunAt = projectData.rigStageLastRunAt ?? {};
       // Phase 1G — disk-loaded projects start unlinked from any library
       // record. The library-load operator sets `currentLibraryId` itself
       // after this call so a "save" goes back to the correct record.

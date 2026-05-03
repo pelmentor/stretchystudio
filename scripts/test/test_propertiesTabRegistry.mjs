@@ -43,6 +43,13 @@ const TABS = [
       return nodes.some((n) => n?.variantOf === active.id);
     },
   },
+  {
+    // V3 Re-Rig Phase 1 — rigStages: always shows on parts/groups
+    // (the rig graph nodes). Project-level operator surface; ignores
+    // the active selection's identity.
+    id: 'rigStages',
+    applies: ({ active }) => active.type === 'part' || active.type === 'group',
+  },
 ];
 
 function tabsFor(ctx) {
@@ -67,31 +74,35 @@ function assert(cond, name) {
     active: { type: 'group', id: 'g1' },
     project: { nodes: [{ id: 'g1', type: 'group' }] },
   });
-  assert(tabs.length === 1, 'group: 1 tab');
-  assert(tabs[0].id === 'object', 'group: Object only');
+  // group: Object + RigStages (RigStages always-applies on groups).
+  assert(tabs.length === 2, 'group: 2 tabs (Object + RigStages)');
+  assert(tabs[0].id === 'object', 'group: Object first');
+  assert(tabs[1].id === 'rigStages', 'group: RigStages second');
 }
 
-// ── Part with mesh: Object + BlendShapes ────────────────────────────
+// ── Part with mesh: Object + BlendShapes + RigStages ────────────────
 
 {
   const tabs = tabsFor({
     active: { type: 'part', id: 'p1' },
     project: { nodes: [{ id: 'p1', type: 'part', mesh: { vertices: [] } }] },
   });
-  assert(tabs.length === 2, 'meshed part: 2 tabs');
-  assert(tabs[0].id === 'object',     'order: Object first');
+  assert(tabs.length === 3, 'meshed part: 3 tabs (+ RigStages)');
+  assert(tabs[0].id === 'object',      'order: Object first');
   assert(tabs[1].id === 'blendShapes', 'order: BlendShapes second');
+  assert(tabs[2].id === 'rigStages',   'order: RigStages third');
 }
 
-// ── Part WITHOUT mesh: Object only (BlendShapes gated on mesh) ──────
+// ── Part WITHOUT mesh: Object + RigStages (BlendShapes gated on mesh) ──
 
 {
   const tabs = tabsFor({
     active: { type: 'part', id: 'p1' },
     project: { nodes: [{ id: 'p1', type: 'part' /* no mesh */ }] },
   });
-  assert(tabs.length === 1, 'unmeshed part: 1 tab');
-  assert(tabs[0].id === 'object', 'unmeshed part: Object only');
+  assert(tabs.length === 2, 'unmeshed part: 2 tabs (Object + RigStages)');
+  assert(tabs[0].id === 'object', 'unmeshed part: Object first');
+  assert(tabs[1].id === 'rigStages', 'unmeshed part: RigStages second');
 }
 
 // ── Deformer selection: only Deformer tab ───────────────────────────
@@ -133,8 +144,9 @@ function assert(cond, name) {
     active: { type: 'part', id: 'p-deleted' },
     project: { nodes: [] },
   });
-  assert(tabs.length === 1 && tabs[0].id === 'object',
-    'orphan-part selection: Object stays, BlendShapes drops on missing node');
+  // Object + RigStages — both always-apply on parts, BlendShapes drops.
+  assert(tabs.length === 2 && tabs[0].id === 'object' && tabs[1].id === 'rigStages',
+    'orphan-part selection: Object + RigStages stay, BlendShapes drops on missing node');
 }
 
 // ── Predicate throws → tab dropped (catch in tabsFor) ───────────────
@@ -149,8 +161,10 @@ function assert(cond, name) {
   // BlendShapes predicate: `(project?.nodes ?? []).find(...)` returns
   // undefined → !!undefined?.mesh = false → tab NOT applied. Object
   // applies. So 1 tab.
-  assert(tabs.length === 1 && tabs[0].id === 'object',
-    'null project: Object only (predicate handles nullish)');
+  // Object + RigStages on parts even when project is null (RigStages
+  // doesn't read project state in its predicate).
+  assert(tabs.length === 2 && tabs[0].id === 'object' && tabs[1].id === 'rigStages',
+    'null project: Object + RigStages (BlendShapes drops without project)');
 }
 
 // ── Order is canonical regardless of input order ───────────────────
@@ -164,7 +178,7 @@ function assert(cond, name) {
   const a = tabsFor(ctx).map((t) => t.id);
   const b = tabsFor(ctx).map((t) => t.id);
   assert(JSON.stringify(a) === JSON.stringify(b), 'output order is stable');
-  assert(JSON.stringify(a) === '["object","blendShapes"]',
+  assert(JSON.stringify(a) === '["object","blendShapes","rigStages"]',
     'canonical part order');
 }
 
@@ -184,6 +198,7 @@ function assert(cond, name) {
   assert(ids.includes('variant'), 'variant child: Variant tab present');
   assert(ids.includes('object'),     'variant child: Object tab present');
   assert(ids.includes('blendShapes'), 'variant child: BlendShapes tab present (mesh)');
+  assert(ids.includes('rigStages'),   'variant child: RigStages tab present');
 }
 
 // ── Variant tab: shows on a base whose children point at it ─────────

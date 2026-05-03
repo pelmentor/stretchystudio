@@ -26,7 +26,8 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
-import { resetToRestPose } from './PoseService.js';
+import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * @typedef {Object} BuildRigResult
@@ -215,6 +216,237 @@ export function _resetInitializeRigInFlightForTest() {
   const wasInFlight = _initializeRigInFlight;
   _initializeRigInFlight = false;
   return wasInFlight;
+}
+
+/**
+ * V3 Re-Rig Phase 1 — canonical stage names. Order matches the seeder
+ * order in `seedAllRig`. Used by `runStage` + RigStagesTab to dispatch.
+ *
+ * @typedef {'parameters'|'maskConfigs'|'physicsRules'|'boneConfig'|'variantFadeRules'|'eyeClosureConfig'|'rotationDeformerConfig'|'autoRigConfig'|'faceParallax'|'bodyWarpChain'|'rigWarps'} RigStageName
+ */
+
+/** @type {RigStageName[]} */
+export const RIG_STAGE_NAMES = [
+  'parameters',
+  'maskConfigs',
+  'physicsRules',
+  'boneConfig',
+  'variantFadeRules',
+  'eyeClosureConfig',
+  'rotationDeformerConfig',
+  'autoRigConfig',
+  'faceParallax',
+  'bodyWarpChain',
+  'rigWarps',
+];
+
+/** Stages 9-11 — keyform-bearing seeders that need a rest-pose harvest. */
+const KEYFORM_STAGES = new Set(['faceParallax', 'bodyWarpChain', 'rigWarps']);
+
+/**
+ * Map stage name → projectStore action name. Most are 1:1; the
+ * exception is `bodyWarpChain` (action is `seedBodyWarp` because
+ * "Chain" was internal terminology when the action was named).
+ *
+ * @type {Record<RigStageName, string>}
+ */
+const STAGE_TO_ACTION = {
+  parameters:             'seedParameters',
+  maskConfigs:            'seedMaskConfigs',
+  physicsRules:           'seedPhysicsRules',
+  boneConfig:             'seedBoneConfig',
+  variantFadeRules:       'seedVariantFadeRules',
+  eyeClosureConfig:       'seedEyeClosureConfig',
+  rotationDeformerConfig: 'seedRotationDeformerConfig',
+  autoRigConfig:          'seedAutoRigConfig',
+  faceParallax:           'seedFaceParallax',
+  bodyWarpChain:          'seedBodyWarp',
+  rigWarps:               'seedRigWarps',
+};
+
+// Single-flight lock for runStage (separate from initializeRig — both
+// can race against each other but distinct guards let the UI distinguish).
+let _runStageInFlight = false;
+
+/**
+ * V3 Re-Rig Phase 1 — refit a single rig stage.
+ *
+ * **Behaviour by stage class:**
+ *
+ *   - **Stages 1-8 (config-only):** read project state directly; no
+ *     harvest required. Pose is preserved by default — no save/restore
+ *     needed because seeders don't touch pose state.
+ *
+ *   - **Stages 9-11 (keyform-bearing):** require a harvest from a
+ *     pristine rest pose so vertex positions snapshot correctly. Flow:
+ *
+ *         1. capturePose()           // snapshot live pose
+ *         2. resetToRestPose()       // dial sliders + bone transforms = 0
+ *         3. loadProjectTextures()   // PNG bytes for parabola fitting (eye stage)
+ *         4. initializeRigFromProject() → harvest
+ *         5. seedXxx(harvest.slot, mode)
+ *         6. restorePose(snapshot)   // dials + bones back where the user had them
+ *
+ *     `paramValuesStore.resetToDefaults` is NOT called at the end —
+ *     that's the destructive "Re-Init Rig" semantics, distinct from
+ *     per-stage refit.
+ *
+ * **Mode:** defaults to `'merge'` (preserve `_userAuthored` entries on
+ * conflict-surface fields). Pass `'replace'` to wipe + reseed.
+ *
+ * **Single-flight:** concurrent calls return early.
+ *
+ * **Telemetry:** writes `project.rigStageLastRunAt[stage]` on success.
+ *
+ * @param {RigStageName} stage
+ * @param {{mode?: 'replace'|'merge'}} [opts={}]
+ * @returns {Promise<{ok:boolean, error?:string}>}
+ */
+export async function runStage(stage, opts = {}) {
+  if (!STAGE_TO_ACTION[stage]) {
+    return { ok: false, error: `runStage: unknown stage "${stage}"` };
+  }
+  if (_runStageInFlight) {
+    return { ok: false, error: 'rig stage refit already in flight' };
+  }
+  const pre = preflightBuildRig();
+  if (!pre.ok) {
+    return { ok: false, error: pre.reasons.join('; ') };
+  }
+  const mode = opts.mode ?? 'merge';
+  _runStageInFlight = true;
+  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  try {
+    if (KEYFORM_STAGES.has(stage)) {
+      // Stages 9-11: rest-pose harvest required.
+      const snapshot = capturePose();
+      try {
+        resetToRestPose();
+        const project = useProjectStore.getState().project;
+        let images = new Map();
+        try { images = await loadProjectTextures(project); }
+        catch (_err) { /* textures missing → fall back to mesh bin-max */ }
+        const harvest = await initializeRigFromProject(project, images);
+        const action = STAGE_TO_ACTION[stage];
+        const store = useProjectStore.getState();
+        if (stage === 'faceParallax') {
+          if (harvest?.faceParallaxSpec) {
+            store[action](harvest.faceParallaxSpec, mode);
+          }
+        } else if (stage === 'bodyWarpChain') {
+          if (harvest?.bodyWarpChain) {
+            store[action](harvest.bodyWarpChain, mode);
+          }
+        } else if (stage === 'rigWarps') {
+          if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
+            store[action](harvest.rigWarps, mode);
+          }
+        }
+      } finally {
+        // Always restore — even if seeding threw, the user's pose
+        // survives.
+        restorePose(snapshot);
+      }
+    } else {
+      // Stages 1-8: direct seed call. Most accept (mode); some are
+      // pure-defaults (parameters, boneConfig, variantFadeRules,
+      // eyeClosureConfig, rotationDeformerConfig) and ignore extra args.
+      const action = STAGE_TO_ACTION[stage];
+      useProjectStore.getState()[action](mode);
+    }
+
+    // Stamp telemetry — separate immer commit because the seeders above
+    // already snapshotted; stamping here adds one more redo step but is
+    // cheap and survives undo as a paired entry.
+    const isoNow = new Date().toISOString();
+    useProjectStore.getState().updateProject((p) => {
+      if (!p.rigStageLastRunAt || typeof p.rigStageLastRunAt !== 'object') {
+        p.rigStageLastRunAt = {};
+      }
+      p.rigStageLastRunAt[stage] = isoNow;
+    });
+
+    const dt = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    logger.info('rigStageRun', `runStage: ${stage} (${mode}) ${dt}ms`, { stage, mode, elapsedMs: dt });
+    return { ok: true };
+  } catch (err) {
+    const error = /** @type {any} */ (err)?.message ?? String(err);
+    if (typeof console !== 'undefined') console.error('[RigService] runStage failed:', stage, err);
+    return { ok: false, error };
+  } finally {
+    _runStageInFlight = false;
+  }
+}
+
+/**
+ * V3 Re-Rig Phase 1 — refit every stage in `seedAllRig` order with the
+ * given mode. Default `'merge'` preserves user-authored entries; pass
+ * `'replace'` for "Re-Init Rig" semantics (which already has its own
+ * `initializeRig()` entry point — call that instead for full reset
+ * including paramValues defaults reset).
+ *
+ * "Refit All" is structurally `runStage` for each name in
+ * `RIG_STAGE_NAMES`, but we wrap it as a single immer transaction by
+ * delegating to `seedAllRig(harvest, mode)` — same path the wizard
+ * uses, plus pose save/restore around the keyform stages.
+ *
+ * @param {{mode?: 'replace'|'merge'}} [opts={}]
+ * @returns {Promise<{ok:boolean, error?:string}>}
+ */
+export async function refitAll(opts = {}) {
+  if (_runStageInFlight) {
+    return { ok: false, error: 'rig stage refit already in flight' };
+  }
+  const pre = preflightBuildRig();
+  if (!pre.ok) {
+    return { ok: false, error: pre.reasons.join('; ') };
+  }
+  const mode = opts.mode ?? 'merge';
+  _runStageInFlight = true;
+  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const snapshot = capturePose();
+  try {
+    resetToRestPose();
+    const project = useProjectStore.getState().project;
+    let images = new Map();
+    try { images = await loadProjectTextures(project); }
+    catch (_err) { /* textures missing — proceed without */ }
+    const harvest = await initializeRigFromProject(project, images);
+    useProjectStore.getState().seedAllRig(harvest, mode);
+
+    // Stamp every stage as run.
+    const isoNow = new Date().toISOString();
+    useProjectStore.getState().updateProject((p) => {
+      if (!p.rigStageLastRunAt || typeof p.rigStageLastRunAt !== 'object') {
+        p.rigStageLastRunAt = {};
+      }
+      for (const s of RIG_STAGE_NAMES) p.rigStageLastRunAt[s] = isoNow;
+    });
+
+    restorePose(snapshot);
+
+    const dt = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    logger.info('rigStageRun', `refitAll (${mode}) ${dt}ms`, { mode, elapsedMs: dt });
+    return { ok: true };
+  } catch (err) {
+    // Best-effort restore even on failure.
+    try { restorePose(snapshot); } catch (_e) { /* swallow */ }
+    const error = /** @type {any} */ (err)?.message ?? String(err);
+    if (typeof console !== 'undefined') console.error('[RigService] refitAll failed:', err);
+    return { ok: false, error };
+  } finally {
+    _runStageInFlight = false;
+  }
+}
+
+/**
+ * V3 Re-Rig Phase 1 — test-only helper. Resets the runStage single-flight
+ * lock for unit tests.
+ */
+export function _resetRunStageInFlightForTest() {
+  const was = _runStageInFlight;
+  _runStageInFlight = false;
+  return was;
 }
 
 /** Drop the cached rigSpec; next read re-builds. */

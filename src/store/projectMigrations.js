@@ -19,7 +19,7 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -212,6 +212,21 @@ const MIGRATIONS = {
   13: (project) => {
     if (project.lastInitRigCompletedAt === undefined) {
       project.lastInitRigCompletedAt = null;
+    }
+    return project;
+  },
+
+  // v14 — V3 Re-Rig Phase 1: project.rigStageLastRunAt is the per-stage
+  // freshness telemetry — `Record<stageName, ISO timestamp>` populated
+  // by `RigService.runStage` and `RigService.refitAll`. Empty `{}` means
+  // no per-stage refit has run yet (the "freshness" indicator in
+  // RigStagesTab shows ⚪ never-run-since-init for entries missing this
+  // marker). Coexists with `lastInitRigCompletedAt` — that field is the
+  // "Re-Init Rig completed" marker, used by exporter for seeded-state
+  // gating; rigStageLastRunAt is granular per-stage for the UI.
+  14: (project) => {
+    if (!project.rigStageLastRunAt || typeof project.rigStageLastRunAt !== 'object') {
+      project.rigStageLastRunAt = {};
     }
     return project;
   },

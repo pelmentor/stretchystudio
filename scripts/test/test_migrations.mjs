@@ -103,6 +103,29 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v14: rigStageLastRunAt defaults to {} when missing.
+  const p = { schemaVersion: 13 };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v13→current: schemaVersion bumped');
+  assertEq(p.rigStageLastRunAt, {}, 'v14: rigStageLastRunAt defaults to {}');
+}
+
+{
+  // v14: existing rigStageLastRunAt preserved (idempotent).
+  const stamps = { faceParallax: '2026-05-03T12:00:00.000Z', physicsRules: '2026-05-03T12:01:00.000Z' };
+  const p = { schemaVersion: 14, rigStageLastRunAt: stamps };
+  migrateProject(p);
+  assertEq(p.rigStageLastRunAt, stamps, 'v14 idempotent: existing stamps preserved');
+}
+
+{
+  // v14: defensive — non-object value reset to {}.
+  const p = { schemaVersion: 13, rigStageLastRunAt: 'broken' };
+  migrateProject(p);
+  assertEq(p.rigStageLastRunAt, {}, 'v14: malformed rigStageLastRunAt → {}');
+}
+
+{
   // v11: legacy puppetWarp / puppet_pins tracks are stripped.
   const p = {
     schemaVersion: 10,

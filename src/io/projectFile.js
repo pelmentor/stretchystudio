@@ -124,6 +124,9 @@ export async function saveProject(project, opts = {}) {
     // Replaces the exporter's old heuristic that inferred seeded state
     // from `faceParallax/bodyWarp/rigWarps` field presence.
     lastInitRigCompletedAt: project.lastInitRigCompletedAt ?? null,
+    // V3 Re-Rig Phase 1: per-stage refit telemetry (Record<stage, ISO ts>).
+    // Empty {} means no per-stage refit has run yet.
+    rigStageLastRunAt: project.rigStageLastRunAt ?? {},
   };
 
   zip.file('project.json', JSON.stringify(projectJson, null, 2));

@@ -44,6 +44,88 @@ export function resetPoseDraft() {
 }
 
 /**
+ * V3 Re-Rig Phase 1 — capture the live pose so per-stage refit can
+ * reset-to-rest, harvest, then restore.
+ *
+ * Captured state:
+ *   1. `paramValuesStore.values` — slider positions (shallow clone).
+ *   2. `animationStore.draftPose` — uncommitted bone-controller drags
+ *      (Map clone). Empty Map if none.
+ *   3. Per-bone-group `node.transform` for groups with a `boneRole` —
+ *      `{rotation, x, y, scaleX, scaleY}`. Pivots NOT captured (they're
+ *      part of the rig anatomy, not pose).
+ *
+ * The returned snapshot is opaque to callers; pass it to `restorePose`.
+ *
+ * @returns {{
+ *   paramValues: Record<string, number>,
+ *   draftPose: Map<string, any>,
+ *   boneTransforms: Record<string, {rotation:number,x:number,y:number,scaleX:number,scaleY:number}>,
+ * }}
+ */
+export function capturePose() {
+  const paramValues = { ...useParamValuesStore.getState().values };
+  // draftPose is a Map keyed by boneId → {x?, y?, rotation?}. Clone so
+  // post-capture mutations don't leak into the snapshot.
+  const draftPoseSrc = useAnimationStore.getState().draftPose ?? new Map();
+  const draftPose = new Map();
+  for (const [k, v] of draftPoseSrc.entries()) {
+    draftPose.set(k, (v && typeof v === 'object') ? { ...v } : v);
+  }
+  /** @type {Record<string, {rotation:number,x:number,y:number,scaleX:number,scaleY:number}>} */
+  const boneTransforms = {};
+  const proj = useProjectStore.getState().project;
+  for (const n of proj?.nodes ?? []) {
+    if (n?.type !== 'group' || !n.boneRole || !n.transform) continue;
+    boneTransforms[n.id] = {
+      rotation: n.transform.rotation ?? 0,
+      x:        n.transform.x ?? 0,
+      y:        n.transform.y ?? 0,
+      scaleX:   n.transform.scaleX ?? 1,
+      scaleY:   n.transform.scaleY ?? 1,
+    };
+  }
+  return { paramValues, draftPose, boneTransforms };
+}
+
+/**
+ * V3 Re-Rig Phase 1 — restore a snapshot taken via `capturePose`.
+ * Inverse op; idempotent against the snapshot's contents.
+ *
+ * Pivots are intentionally NOT restored — if a per-stage refit moved
+ * pivots (it shouldn't; pivots are inputs to seeders, not outputs),
+ * the user's joint-drag edits would be lost. Today no seeder writes
+ * pivots, so this is a no-op concern.
+ *
+ * @param {ReturnType<typeof capturePose>} snapshot
+ */
+export function restorePose(snapshot) {
+  if (!snapshot) return;
+  // 1. Restore paramValues.
+  useParamValuesStore.setState({ values: { ...snapshot.paramValues } });
+  // 2. Restore draftPose (it's a Map; clone so the store gets a fresh ref).
+  const restored = new Map();
+  for (const [k, v] of snapshot.draftPose.entries()) {
+    restored.set(k, (v && typeof v === 'object') ? { ...v } : v);
+  }
+  useAnimationStore.setState({ draftPose: restored });
+  // 3. Restore per-bone-group transforms.
+  useProjectStore.getState().updateProject((p) => {
+    for (const n of p.nodes ?? []) {
+      if (n?.type !== 'group' || !n.boneRole) continue;
+      const saved = snapshot.boneTransforms[n.id];
+      if (!saved || !n.transform) continue;
+      n.transform.rotation = saved.rotation;
+      n.transform.x = saved.x;
+      n.transform.y = saved.y;
+      n.transform.scaleX = saved.scaleX;
+      n.transform.scaleY = saved.scaleY;
+      // pivotX / pivotY left as-is — those are rig anatomy, not pose.
+    }
+  });
+}
+
+/**
  * Full reset to rest pose: animation-mode reset PLUS persistent project
  * state for bone groups.
  *
