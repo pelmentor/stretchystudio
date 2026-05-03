@@ -38,6 +38,25 @@ import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { matchTag } from '../../armatureOrganizer.js';
 
 /**
+ * GAP-008 — tag → owning subsystem mapping. Mirror of `initRig.js`'s
+ * `TAG_TO_SUBSYSTEM`. Tags listed here have their per-part rigWarps
+ * dropped when the corresponding subsystem flag is `false`. Tags not
+ * listed here pass through (unaffected by opt-out).
+ */
+const TAG_TO_SUBSYSTEM = {
+  'front hair': 'hairRig',
+  'back hair':  'hairRig',
+  'topwear':    'clothingRig',
+  'bottomwear': 'clothingRig',
+  'legwear':    'clothingRig',
+  'eyewhite':   'eyeRig', 'eyewhite-l': 'eyeRig', 'eyewhite-r': 'eyeRig',
+  'eyelash':    'eyeRig', 'eyelash-l':  'eyeRig', 'eyelash-r':  'eyeRig',
+  'irides':     'eyeRig', 'irides-l':   'eyeRig', 'irides-r':   'eyeRig',
+  'eyebrow':    'eyeRig', 'eyebrow-l':  'eyeRig', 'eyebrow-r':  'eyeRig',
+  'mouth':      'mouthRig',
+};
+
+/**
  * Build a complete RigSpec from a cmo3 ExtractedScene + project state.
  *
  * @param {Object} input
@@ -46,9 +65,16 @@ import { matchTag } from '../../armatureOrganizer.js';
  * @param {Array} input.meshes                        output of buildMeshesForRig
  * @param {number} input.canvasW
  * @param {number} input.canvasH
+ * @param {import('./autoRigConfig.js').AutoRigSubsystems|null} [input.subsystems]
+ *   GAP-008 — per-subsystem on/off flags. When a flag is `false`, matching
+ *   per-part rigWarps are dropped and their child art meshes reparent to
+ *   the rigWarp's parent. `eyeRig`, `hairRig`, `clothingRig`, `mouthRig`
+ *   supported (leaf rigWarp drops). `bodyWarps` and `faceRig` are no-ops
+ *   for now — they'd require chain-cascade reparenting through warps with
+ *   different frame conventions, separate work.
  * @returns {{rigSpec: import('./rigSpec.js').RigSpec, debug: Object}}
  */
-export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH }) {
+export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH, subsystems = null }) {
   // ── Resolve binding GUID → paramId map ──────────────────────────────
   // Each KeyformBindingSource carries the parameter via xs.ref to a
   // CParameterGuid. The writer stamps the param idStr on the binding's
@@ -223,29 +249,56 @@ export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH 
   // ── Build artMeshes from project meshes + cmo3 part deformerGuidRef ─
   /** @type {import('./rigSpec.js').ArtMeshSpec[]} */
   const artMeshes = [];
-  // Index parts by their xsId so we can match meshes (which reference
-  // project node ids) back to scene parts. The mesh order from
-  // buildMeshesForRig is "draw_order desc" of project nodes; scene.parts
-  // is in cmo3 file order. They don't necessarily match.
-  /** @type {Map<string, import('../cmo3PartExtract.js').ExtractedPart>} */
-  const partByDrawableIdStr = new Map();
-  for (const part of scene.parts) partByDrawableIdStr.set(part.drawableIdStr, part);
-  // The project nodes that became part of meshes have an `id` from uid()
-  // — to back-link to scene.parts, the cmo3Import would need to stash
-  // the original drawableIdStr on the node. Lookup by name is fragile but
-  // shelby's mesh names are unique. Build a name→part map.
   /** @type {Map<string, import('../cmo3PartExtract.js').ExtractedPart>} */
   const partByName = new Map();
   for (const part of scene.parts) {
     if (part.name && !partByName.has(part.name)) partByName.set(part.name, part);
   }
 
+  // GAP-008 — pre-pass to identify per-part rigWarps owned by disabled
+  // subsystems. The mesh's tag drives the lookup (TAG_TO_SUBSYSTEM). If
+  // a mesh's leaf warp is owned by a disabled subsystem, the warp is
+  // dropped and the artmesh reparents to the warp's parent.
+  /** @type {Set<string>} */
+  const droppedWarpIds = new Set();
+  let dbgOptOutDropped = 0;
+  if (subsystems) {
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i];
+      const tag = m.tag ?? matchTag(m.name);
+      const owningSubsystem = tag ? TAG_TO_SUBSYSTEM[tag] : null;
+      if (!owningSubsystem || subsystems[owningSubsystem] !== false) continue;
+      const part = partByName.get(m.name) ?? scene.parts[i];
+      const parentDef = part?.deformerGuidRef ? deformerByGuid.get(part.deformerGuidRef) : null;
+      if (parentDef?.kind === 'warp' && parentDef.idStr) {
+        droppedWarpIds.add(parentDef.idStr);
+      }
+    }
+  }
+
   for (let i = 0; i < meshes.length; i++) {
     const m = meshes[i];
-    // Find the matching cmo3 part by name. (Project nodes inherit the
-    // mesh name from cmo3 part on import.) Falls back to positional match.
     const part = partByName.get(m.name) ?? scene.parts[i];
-    const parentDef = part?.deformerGuidRef ? deformerByGuid.get(part.deformerGuidRef) : null;
+    let parentDef = part?.deformerGuidRef ? deformerByGuid.get(part.deformerGuidRef) : null;
+
+    // If parent rigWarp was opt-out-dropped, reparent to its parent.
+    // Frame conversion below picks up the new parent's restState.
+    if (parentDef && droppedWarpIds.has(parentDef.idStr)) {
+      const w = warpById.get(parentDef.idStr);
+      if (w?.parent.type === 'warp' && w.parent.id) {
+        parentDef = deformerByGuid.get(
+          [...deformerByGuid.entries()].find(([, d]) => d.idStr === w.parent.id)?.[0],
+        );
+      } else if (w?.parent.type === 'rotation' && w.parent.id) {
+        parentDef = deformerByGuid.get(
+          [...deformerByGuid.entries()].find(([, d]) => d.idStr === w.parent.id)?.[0],
+        );
+      } else {
+        parentDef = null;  // becomes root-parented
+      }
+      dbgOptOutDropped++;
+    }
+
     const parent = parentDef
       ? { type: parentDef.kind, id: parentDef.idStr }
       : { type: 'root', id: null };
@@ -317,6 +370,11 @@ export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH 
     canvasToInnermostY = (cy) => (cy - minY) / h;
   }
 
+  // Drop opt-out warps from the final rigSpec.
+  const filteredWarpDeformers = droppedWarpIds.size > 0
+    ? warpDeformers.filter(w => !droppedWarpIds.has(w.id))
+    : warpDeformers;
+
   /** @type {import('./rigSpec.js').RigSpec} */
   const rigSpec = {
     parameters: project.parameters ?? [],
@@ -329,7 +387,7 @@ export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH 
         isVisible: g.visible !== false,
         opacity: 1,
       })),
-    warpDeformers,
+    warpDeformers: filteredWarpDeformers,
     rotationDeformers,
     artMeshes,
     physicsRules: [],
@@ -344,12 +402,14 @@ export function buildRigSpecFromCmo3({ scene, project, meshes, canvasW, canvasH 
   return {
     rigSpec,
     debug: {
-      warpCount: warpDeformers.length,
+      warpCount: filteredWarpDeformers.length,
       rotationCount: rotationDeformers.length,
       artMeshCount: artMeshes.length,
       innermostBodyWarpId,
       warpRestLifted: warpRest.size,
       rotationRestComputed: rotationRest.size,
+      optOutWarpsDropped: droppedWarpIds.size,
+      optOutMeshesReparented: dbgOptOutDropped,
     },
   };
 }

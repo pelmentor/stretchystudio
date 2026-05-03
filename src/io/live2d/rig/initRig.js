@@ -257,17 +257,23 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // does instead of regenerating them).
   if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {
     const t0a = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
     const { rigSpec, debug } = buildRigSpecFromCmo3({
       scene: project._cmo3Scene,
       project,
       meshes,
       canvasW: project.canvas?.width ?? 800,
       canvasH: project.canvas?.height ?? 600,
+      subsystems,
     });
     const dta = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0a;
+    const disabled = subsystems
+      ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
+      : [];
     logger.info('rigInit', 'Init Rig authored-path complete', {
       elapsedMs: Math.round(dta),
       ...debug,
+      disabledSubsystems: disabled.length > 0 ? disabled : undefined,
     });
     // The authored path doesn't (yet) produce a separate faceParallaxSpec /
     // bodyWarpChain harvest — those are export-pipeline concerns. The
