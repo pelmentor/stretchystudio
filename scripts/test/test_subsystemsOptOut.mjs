@@ -23,6 +23,7 @@ import {
 import {
   harvestSeedFromRigSpec,
   filterPhysicsRulesBySubsystems,
+  applySubsystemOptOutToRigSpec,
 } from '../../src/io/live2d/rig/initRig.js';
 import { seedPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
 
@@ -275,6 +276,76 @@ function assert(cond, name) {
   assert(r.faceParallaxSpec !== null, 'no opts: face retained');
   assert(r.bodyWarpChain !== null, 'no opts: body retained');
   assert(r.rigWarps.has('p-x'), 'no opts: rigWarp retained');
+}
+
+// ── PP1-002 — applySubsystemOptOutToRigSpec drops disabled rigWarps and
+//             reparents affected art meshes ──────────────────────────
+{
+  const nodes = [
+    { id: 'p-front-hair', name: 'front hair' },
+    { id: 'p-back-hair',  name: 'back hair' },
+    { id: 'p-face',       name: 'face' },
+  ];
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'FaceParallaxWarp', parent: { type: 'root', id: null } },
+      { id: 'RigWarp_FH', targetPartId: 'p-front-hair', parent: { type: 'warp', id: 'FaceParallaxWarp' } },
+      { id: 'RigWarp_BH', targetPartId: 'p-back-hair',  parent: { type: 'root', id: null } },
+    ],
+    rotationDeformers: [],
+    artMeshes: [
+      { id: 'p-front-hair', parent: { type: 'warp', id: 'RigWarp_FH' } },
+      { id: 'p-back-hair',  parent: { type: 'warp', id: 'RigWarp_BH' } },
+      { id: 'p-face',       parent: { type: 'warp', id: 'FaceParallaxWarp' } },
+    ],
+  };
+
+  // hairRig=false → both hair rigWarps dropped; art meshes reparent.
+  const r = applySubsystemOptOutToRigSpec(rigSpec, {
+    subsystems: { hairRig: false },
+    nodes,
+  });
+  assert(r.droppedWarpIds.length === 2, 'PP1-002 hairRig=false drops 2 warps');
+  assert(r.rigSpec.warpDeformers.length === 1, 'PP1-002 only FaceParallaxWarp survives');
+  assert(r.rigSpec.warpDeformers[0].id === 'FaceParallaxWarp', 'PP1-002 surviving warp is FaceParallax');
+  // Reparent: front-hair art mesh's parent was RigWarp_FH (whose parent was FaceParallaxWarp)
+  const fh = r.rigSpec.artMeshes.find(m => m.id === 'p-front-hair');
+  assert(fh?.parent?.type === 'warp' && fh.parent.id === 'FaceParallaxWarp',
+    'PP1-002 front-hair reparented to FaceParallaxWarp (its dropped warp\'s parent)');
+  // Back-hair: dropped warp's parent was root → back-hair art mesh now root-parented
+  const bh = r.rigSpec.artMeshes.find(m => m.id === 'p-back-hair');
+  assert(bh?.parent?.type === 'root', 'PP1-002 back-hair reparented to root');
+  // Face is untouched.
+  const face = r.rigSpec.artMeshes.find(m => m.id === 'p-face');
+  assert(face?.parent?.id === 'FaceParallaxWarp', 'PP1-002 face artmesh untouched');
+}
+
+// ── PP1-002 — no opts / null subsystems → identity ─────────────────
+{
+  const rigSpec = {
+    warpDeformers: [{ id: 'X', targetPartId: 'p-x' }],
+    artMeshes: [{ id: 'p-x', parent: { type: 'warp', id: 'X' } }],
+  };
+  const r1 = applySubsystemOptOutToRigSpec(rigSpec, {});
+  assert(r1.rigSpec === rigSpec, 'PP1-002 no opts → identity');
+  assert(r1.droppedWarpIds.length === 0, 'PP1-002 no opts → 0 drops');
+
+  const r2 = applySubsystemOptOutToRigSpec(rigSpec, { subsystems: null, nodes: [] });
+  assert(r2.rigSpec === rigSpec, 'PP1-002 null subsystems → identity');
+}
+
+// ── PP1-002 — disabled subsystem with no matching tags → no drops ──
+{
+  const nodes = [{ id: 'p-x', name: 'face' }];
+  const rigSpec = {
+    warpDeformers: [{ id: 'X', targetPartId: 'p-x' }],
+    artMeshes: [{ id: 'p-x', parent: { type: 'warp', id: 'X' } }],
+  };
+  const r = applySubsystemOptOutToRigSpec(rigSpec, {
+    subsystems: { hairRig: false },
+    nodes,
+  });
+  assert(r.droppedWarpIds.length === 0, 'PP1-002 hairRig=false but no hair-tagged parts → 0 drops');
 }
 
 console.log(`subsystemsOptOut: ${passed} passed, ${failed} failed`);

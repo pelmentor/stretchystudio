@@ -15,7 +15,7 @@
 | ID | Type | Severity | Title | Status |
 |----|------|----------|-------|--------|
 | [PP1-001](#pp1-001) | bug     | high   | Bone-controller rotation doesn't propagate to layers (no re-render trigger) | closed |
-| [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | open |
+| [PP1-002](#pp1-002) | bug     | high   | Init Rig honours `subsystems.hairRig=false` opt-out only partially | closed |
 | [PP1-003](#pp1-003) | ux      | medium | Inline-tooltip pattern eats screen real-estate (cross-cutting) | open |
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
@@ -57,7 +57,11 @@ Bones that own skinned mesh weights (elbow, knee, etc.) have `dependentParts.len
 <a id="pp1-002"></a>
 ### PP1-002 — Init Rig honours `subsystems.hairRig=false` opt-out only partially
 
-**Type:** bug · **Severity:** high · **Status:** open
+**Type:** bug · **Severity:** high · **Status:** closed (commit pending)
+
+**Root cause.** The previously-shipped GAP-008 work (commit `41e63bc`) added the subsystem-opt-out filter on the **authored-cmo3** path and on the **harvested seed-output** for the heuristic path (`project.rigWarps` storage, `project.physicsRules` storage). What it didn't filter was the live **`rigSpec.warpDeformers`** that comes back from `generateCmo3` on the heuristic path — chainEval consumes that spec directly, so hair-tagged rigWarps that were dropped from the seed-output were still getting evaluated every frame, producing the visible "hair sways during body lean" symptom. Physics rules + storage seeds were correctly empty; only the live evaluator's chain still had hair warps.
+
+Fix: added `applySubsystemOptOutToRigSpec(rigSpec, {subsystems, nodes})` in [`initRig.js`](../src/io/live2d/rig/initRig.js) that mirrors what `buildRigSpecFromCmo3` does for the authored path — drops per-part rigWarps owned by disabled subsystems and reparents affected art meshes / rotation deformers to the dropped warp's parent. Wired into the heuristic path so chainEval no longer sees hair/clothing/eye/mouth warps when their subsystem is off.
 
 **Symptom (user-visible).** User opens Init Rig Options popover, unchecks "Hair Rig", clicks Init Rig. Live preview after init STILL shows hair swinging — physics rules + hair sway warps appear to have been generated despite the opt-out.
 
@@ -200,7 +204,7 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 
 Two related but separable problems in the mesh-edit surface. Filing as one entry because they share the same code path; will likely split into two commits when fixed.
 
-#### Sub-issue (a) — vertices don't move at all — closed (commit pending)
+#### Sub-issue (a) — vertices don't move at all — closed (commit `238993a`)
 
 **Root cause.** The handlers were intact — drag uploads were happening on every pointer move. The bug was in the rAF tick: after Init Rig, `evalRig` produces frames for every art mesh, those frames go into `poseOverrides[id].mesh_verts`, and the renderer uploads them every frame ([`CanvasViewport.jsx:740-748`](../src/components/canvas/CanvasViewport.jsx#L740-L748)). Rig keyforms are baked at Init Rig time from the THEN-current `node.mesh.vertices`. The user's mesh edit writes to `node.mesh.vertices` and uploads the new positions, but the next rAF tick re-uploads the stale rig output on top — net effect: vertices appear pinned.
 
