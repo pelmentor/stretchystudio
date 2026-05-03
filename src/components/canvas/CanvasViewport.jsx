@@ -111,10 +111,21 @@ export default function CanvasViewport({
   const propEditCircleRef = useRef(null); // GAP-015 — proportional-edit influence ring
   // PP1-008(b) — F→scroll→click radius adjust mode. While `active`, wheel
   // events update proportionalEdit.radius and the next click commits +
-  // exits. ESC restores `startRadius` and exits without committing. Lives
-  // in a ref so the wheel/pointer handlers see the live state without
-  // triggering re-renders on every frame.
-  const radiusAdjustModeRef = useRef({ active: false, startRadius: null });
+  // exits. ESC restores `startRadius` and exits without committing.
+  // `anchorClientX/Y` is captured at F-press for the Blender-faithful
+  // cursor-distance gesture (radius = distance(cursor, anchor) / zoom).
+  // Lives in a ref so the wheel/pointer handlers see the live state
+  // without triggering re-renders on every frame.
+  const radiusAdjustModeRef = useRef({
+    active: false,
+    startRadius: null,
+    anchorClientX: null,
+    anchorClientY: null,
+  });
+  // Latest pointer position over the canvas, refreshed on every move so
+  // F-press can snapshot it as the radius-adjust anchor. Lives outside
+  // React to avoid re-rendering on mouse movement.
+  const lastCursorRef = useRef({ clientX: 0, clientY: 0 });
   const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
   const fileInputRef = useRef(null);
 
@@ -846,6 +857,8 @@ export default function CanvasViewport({
     if (editorState.editMode !== 'mesh' && radiusAdjustModeRef.current.active) {
       radiusAdjustModeRef.current.active = false;
       radiusAdjustModeRef.current.startRadius = null;
+      radiusAdjustModeRef.current.anchorClientX = null;
+      radiusAdjustModeRef.current.anchorClientY = null;
       isDirtyRef.current = true;
     }
   }, [editorState.editMode]);
@@ -890,16 +903,23 @@ export default function CanvasViewport({
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // PP1-008(b) — F enters radius-adjust mode. Only meaningful in
         // mesh edit; otherwise no-op (don't claim F globally). Captures
-        // the current radius so ESC can restore it. Toggling F again
-        // before committing exits the mode without changing radius.
+        // the current radius so ESC can restore it, and the cursor
+        // position so the Blender-faithful cursor-distance gesture has
+        // an anchor (radius = distance(cursor, anchor) / view.zoom).
+        // Toggling F again before committing exits without changing
+        // radius. Wheel adjustments still work alongside the gesture.
         if (editorRef.current.editMode !== 'mesh') return;
         e.preventDefault();
         if (radiusAdjustModeRef.current.active) {
           radiusAdjustModeRef.current.active = false;
           radiusAdjustModeRef.current.startRadius = null;
+          radiusAdjustModeRef.current.anchorClientX = null;
+          radiusAdjustModeRef.current.anchorClientY = null;
         } else {
           radiusAdjustModeRef.current.active = true;
           radiusAdjustModeRef.current.startRadius = prefs.proportionalEdit.radius;
+          radiusAdjustModeRef.current.anchorClientX = lastCursorRef.current.clientX;
+          radiusAdjustModeRef.current.anchorClientY = lastCursorRef.current.clientY;
         }
         isDirtyRef.current = true;
       } else if (e.key === 'Escape' && radiusAdjustModeRef.current.active) {
@@ -909,6 +929,8 @@ export default function CanvasViewport({
         if (typeof start === 'number') setPE({ radius: start });
         radiusAdjustModeRef.current.active = false;
         radiusAdjustModeRef.current.startRadius = null;
+        radiusAdjustModeRef.current.anchorClientX = null;
+        radiusAdjustModeRef.current.anchorClientY = null;
         isDirtyRef.current = true;
       }
     };
@@ -1585,6 +1607,8 @@ export default function CanvasViewport({
     if (radiusAdjustModeRef.current.active && e.button === 0) {
       radiusAdjustModeRef.current.active = false;
       radiusAdjustModeRef.current.startRadius = null;
+      radiusAdjustModeRef.current.anchorClientX = null;
+      radiusAdjustModeRef.current.anchorClientY = null;
       isDirtyRef.current = true;
       e.preventDefault();
       return;
@@ -2010,19 +2034,53 @@ export default function CanvasViewport({
     // but since meshes ride the canvas axes view.zoom is sufficient
     // for an indicator). Brushed mesh-edit and proportional edit can
     // coexist — both rings visible if both modes are on.
+    // PP1-008(b) — keep the most recent cursor position so an F press
+    // can snapshot it as the radius-adjust anchor. Outside the canvas
+    // event flow this stays stale, but F is gated on mesh edit which
+    // implies the user has been interacting with the canvas.
+    lastCursorRef.current.clientX = e.clientX;
+    lastCursorRef.current.clientY = e.clientY;
+
+    // PP1-008(b) — Blender-faithful gesture: while the radius-adjust
+    // mode is active, cursor distance from the anchor (F-press point)
+    // sets the proportional-edit radius. Wheel still nudges the value
+    // for users who prefer that; the two coexist with last-gesture-wins
+    // semantics. Convert screen-px to mesh-local by dividing by zoom.
+    const radiusMode = radiusAdjustModeRef.current;
+    if (radiusMode.active && typeof radiusMode.anchorClientX === 'number') {
+      const dxAnchor = e.clientX - radiusMode.anchorClientX;
+      const dyAnchor = e.clientY - radiusMode.anchorClientY;
+      const screenDist = Math.hypot(dxAnchor, dyAnchor);
+      const zoomNow = editorRef.current.viewByMode[modeKey].zoom;
+      const meshRadius = Math.max(5, screenDist / Math.max(0.0001, zoomNow));
+      usePreferencesStore.getState().setProportionalEdit({ radius: meshRadius });
+      isDirtyRef.current = true;
+    }
+
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
       const ws = activeWorkspaceRef.current;
       const wsAllows = ws === 'edit';
       // PP1-008(b) — also show the ring during F-mode radius adjust, even
       // when proportional editing is disabled, so the user sees what
-      // they're scrolling. F-mode is gated on editMode='mesh' at entry.
-      const showRing = wsAllows && (peCfg?.enabled || radiusAdjustModeRef.current.active);
+      // they're sizing. F-mode is gated on editMode='mesh' at entry.
+      const showRing = wsAllows && (peCfg?.enabled || radiusMode.active);
       if (showRing) {
         const rect = canvas.getBoundingClientRect();
         const screenR = peCfg.radius * editorRef.current.viewByMode[modeKey].zoom;
-        propEditCircleRef.current.setAttribute('cx', e.clientX - rect.left);
-        propEditCircleRef.current.setAttribute('cy', e.clientY - rect.top);
+        // Blender pattern: while the gesture is live, the ring is anchored
+        // at the F-press point (the cursor traces the ring's edge so the
+        // user "draws" the radius). Outside F-mode the ring follows the
+        // cursor as before, since proportional-edit's normal preview is
+        // a brush-like indicator at the active vertex location.
+        const ringX = (radiusMode.active && typeof radiusMode.anchorClientX === 'number')
+          ? radiusMode.anchorClientX - rect.left
+          : e.clientX - rect.left;
+        const ringY = (radiusMode.active && typeof radiusMode.anchorClientY === 'number')
+          ? radiusMode.anchorClientY - rect.top
+          : e.clientY - rect.top;
+        propEditCircleRef.current.setAttribute('cx', ringX);
+        propEditCircleRef.current.setAttribute('cy', ringY);
         propEditCircleRef.current.setAttribute('r', screenR);
         propEditCircleRef.current.setAttribute('visibility', 'visible');
       } else {

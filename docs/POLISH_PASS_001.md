@@ -87,7 +87,7 @@ But the **authored-cmo3** init path landed later (commit `41e63bc` 2026-05-03 �
 <a id="pp1-003"></a>
 ### PP1-003 — Inline-tooltip pattern eats screen real-estate (cross-cutting)
 
-**Type:** ux · **Severity:** medium · **Status:** closed (commit pending)
+**Type:** ux · **Severity:** medium · **Status:** closed (commit `69a4978`)
 
 **Root cause.** The `TooltipContent` shadcn primitive ([`tooltip.jsx`](../src/components/ui/tooltip.jsx)) had no default max-width — long strings rendered as a single wide line that stretched across the viewport. Reset Pose's ~220-char tooltip was the worst offender, but the same pattern occurred at any caller that passed long `tip` text.
 
@@ -226,9 +226,13 @@ Two related but separable problems in the mesh-edit surface. Filing as one entry
 
 **Fix.** While the user is mesh-editing a part, skip the rig override for THAT part. Other parts keep evalRig output as usual; only the selected mesh-edited part drops out so the user's edits show through. Other parts continue to be driven by paramValues. The rigSpec keyforms remain stale until the user clicks Refit (RigStagesTab) — which is the documented path to refresh the rig with their edits.
 
-#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework — closed (commit `cf82570`)
+#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework — closed (commits `cf82570` + cursor-distance follow-up)
 
-Implementation: `F` in mesh edit toggles a transient `radiusAdjustModeRef.active` flag in `CanvasViewport`. While active, wheel events update `proportionalEdit.radius` (without zooming the canvas), the influence ring is forced visible regardless of `proportionalEdit.enabled`, the next click commits + exits, and `ESC` restores the radius captured at F-press. F also auto-exits when leaving mesh edit. MMB-scroll-while-dragging behaviour is preserved (still recomputes weights against the rest snapshot).
+Implementation: `F` in mesh edit toggles a transient `radiusAdjustModeRef.active` flag in `CanvasViewport`. While active two gestures coexist (last-write wins):
+- **Cursor distance from F-press anchor** sets the radius — Blender pattern. The ring is anchored at the F-press point so the cursor traces the radius edge.
+- **Wheel** still nudges the radius for users who prefer scroll.
+
+Click commits + exits; `ESC` restores the radius captured at F-press. F also auto-exits when leaving mesh edit. The influence ring is forced visible during the gesture regardless of `proportionalEdit.enabled` so the user sees what they're sizing. MMB-scroll-while-dragging behaviour is preserved (still recomputes weights against the rest snapshot).
 
 #### Sub-issue (c) — proportional-editing toggle is in the wrong place — closed (commit `cf82570`)
 

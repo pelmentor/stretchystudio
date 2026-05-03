@@ -236,7 +236,7 @@ export function ModePill() {
           type="button"
           aria-pressed={peEnabled}
           onClick={() => setProportionalEdit({ enabled: !peEnabled })}
-          title="Proportional Edit (O) — drag pulls neighbours along. Shift+O cycles falloff, Alt+O toggles connected-only, F enters radius-adjust mode (scroll to size, click to commit)."
+          title="Proportional Edit (O) — drag pulls neighbours along. Shift+O cycles falloff, Alt+O toggles connected-only, F enters radius-adjust mode (scroll OR move cursor to size, click to commit)."
           className={
             'h-8 w-8 flex items-center justify-center rounded-md ' +
             'bg-card/85 backdrop-blur-md border shadow-md transition-all duration-150 ' +
