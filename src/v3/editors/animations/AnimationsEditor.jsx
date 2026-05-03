@@ -22,8 +22,6 @@ import { Plus, Pencil, Trash2, Check, X, Film, Sparkles } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
-import { useEditorStore } from '../../../store/editorStore.js';
-import { setEditorMode as serviceSetEditorMode } from '../../../services/EditorModeService.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
 import { IdleMotionDialog } from './IdleMotionDialog.jsx';
 
@@ -114,9 +112,9 @@ export function AnimationsEditor() {
                 const list = useProjectStore.getState().project.animations ?? [];
                 const created = list[list.length - 1];
                 if (created) switchAnimation(created);
+                // setWorkspace drives editorMode via EditorModeService —
+                // captureRestPose runs on the staging→animation transition.
                 useUIV3Store.getState().setWorkspace('animation');
-                // Service routes the captureRestPose snapshot on staging→animation transition.
-                serviceSetEditorMode('animation');
               }}
               title="Create new animation"
               aria-label="Create new animation"

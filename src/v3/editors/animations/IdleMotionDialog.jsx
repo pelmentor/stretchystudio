@@ -29,7 +29,6 @@ import * as SelectImpl from '../../../components/ui/select.jsx';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
-import { setEditorMode as serviceSetEditorMode } from '../../../services/EditorModeService.js';
 import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS } from '../../../io/live2d/idle/builder.js';
 
 // shadcn/ui forwardRef components ship without JSX-typed declarations — cast
@@ -152,11 +151,12 @@ export function IdleMotionDialog({ open, onOpenChange }) {
         },
       }));
 
-      // Switch to the new animation + route to Animation workspace + Animate mode.
+      // Switch to the new animation + route to Animation workspace.
+      // setWorkspace drives editorMode via EditorModeService — no
+      // separate setEditorMode call needed.
       const finalAnimation = useProjectStore.getState().project.animations.find((a) => a.id === created.id);
       if (finalAnimation) useAnimationStore.getState().switchAnimation(finalAnimation);
       useUIV3Store.getState().setWorkspace('animation');
-      serviceSetEditorMode('animation');
 
       reset();
       onOpenChange(false);
