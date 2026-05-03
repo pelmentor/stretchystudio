@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:diff-harness": "node scripts/native-rig-diff/test_canonicalize.mjs && node scripts/native-rig-diff/test_diff.mjs",
+    "audit:upstream-parity": "node scripts/upstream_parity/diff_writers.mjs",
     "test:migrations": "node scripts/test/test_migrations.mjs",
     "test:paramSpec": "node scripts/test/test_paramSpec.mjs",
     "test:maskConfigs": "node scripts/test/test_maskConfigs.mjs",

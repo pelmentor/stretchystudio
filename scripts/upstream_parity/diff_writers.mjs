@@ -127,6 +127,42 @@ const FIXTURES = {
     parameters: [],
     generateRig: true,
   }),
+
+  // Fixture 4 — shelby-shape: full mesh set covering the standard Live2D
+  // tag landscape (face, eyes, eyebrows, irides, hair front+back, ears,
+  // neck, topwear, legwear, hands). The actual shelby reference at
+  // shelby.cmo3 uses this layout. Exercises every code path that fires
+  // when a "complete" character is exported.
+  shelby_like: () => ({
+    canvasW: 1792,
+    canvasH: 1792,
+    modelName: 'parity-shelby-like',
+    meshes: [
+      // Face region.
+      makeMesh('face',       { partId: 'face',       tag: 'face',       minX: 660, minY: 480, maxX: 1130, maxY: 1000 }),
+      makeMesh('back hair',  { partId: 'back-hair',  tag: 'back hair',  minX: 580, minY: 380, maxX: 1210, maxY: 1080 }),
+      makeMesh('front hair', { partId: 'front-hair', tag: 'front hair', minX: 600, minY: 360, maxX: 1190, maxY: 980 }),
+      makeMesh('ears-l',     { partId: 'ears-l',     tag: 'ears',       minX: 1090, minY: 600, maxX: 1180, maxY: 760 }),
+      makeMesh('ears-r',     { partId: 'ears-r',     tag: 'ears',       minX: 610, minY: 600, maxX: 700, maxY: 760 }),
+      makeMesh('eyebrow-l',  { partId: 'eyebrow-l', tag: 'eyebrow',     minX: 920, minY: 660, maxX: 1050, maxY: 720 }),
+      makeMesh('eyebrow-r',  { partId: 'eyebrow-r', tag: 'eyebrow',     minX: 740, minY: 660, maxX: 870, maxY: 720 }),
+      makeMesh('eyelash-l',  { partId: 'eyelash-l', tag: 'eyelash',     minX: 920, minY: 760, maxX: 1050, maxY: 820 }),
+      makeMesh('eyelash-r',  { partId: 'eyelash-r', tag: 'eyelash',     minX: 740, minY: 760, maxX: 870, maxY: 820 }),
+      makeMesh('eyewhite-l', { partId: 'eyewhite-l', tag: 'eyewhite',   minX: 920, minY: 780, maxX: 1050, maxY: 850 }),
+      makeMesh('eyewhite-r', { partId: 'eyewhite-r', tag: 'eyewhite',   minX: 740, minY: 780, maxX: 870, maxY: 850 }),
+      makeMesh('irides-l',   { partId: 'irides-l',   tag: 'irides',     minX: 950, minY: 790, maxX: 1020, maxY: 840 }),
+      makeMesh('irides-r',   { partId: 'irides-r',   tag: 'irides',     minX: 770, minY: 790, maxX: 840, maxY: 840 }),
+      // Body region.
+      makeMesh('neck',       { partId: 'neck',     tag: 'neck',     minX: 800, minY: 1000, maxX: 990, maxY: 1100 }),
+      makeMesh('topwear',    { partId: 'topwear',  tag: 'topwear',  minX: 600, minY: 1080, maxX: 1190, maxY: 1380 }),
+      makeMesh('legwear',    { partId: 'legwear',  tag: 'legwear',  minX: 660, minY: 1380, maxX: 1130, maxY: 1700 }),
+      makeMesh('handwear-l', { partId: 'handwear-l', tag: 'arm',    minX: 1190, minY: 1180, maxX: 1300, maxY: 1480 }),
+      makeMesh('handwear-r', { partId: 'handwear-r', tag: 'arm',    minX: 490,  minY: 1180, maxX: 600,  maxY: 1480 }),
+    ],
+    groups: [],
+    parameters: [],
+    generateRig: true,
+  }),
 };
 
 // ── Deterministic UUIDs ─────────────────────────────────────────────

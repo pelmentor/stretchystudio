@@ -1,6 +1,10 @@
 # Upstream Parity Audit — Plan
 
-**Status:** queued. Authored 2026-05-03 by user request after the Phase 2b investigation surfaced concerns about v3's heuristic vs authored rigs.
+**Status:** ✅ SHIPPED 2026-05-03 — see [UPSTREAM_PARITY_FINDINGS.md](UPSTREAM_PARITY_FINDINGS.md). Stage 0 (harness) + Stage 1 (classify) + Stage 3 (lock-in) landed; Stage 2 (fix drift) was a no-op because zero unintentional regressions were found across 4 fixtures (`minimal`, `two_groups`, `with_rig`, `shelby_like`). All structural diffs are documented intentional v3 changes (param `requireTag` gating, `ParamHairSide` removal, physics-rules resolver extraction) or cosmetic ordering.
+
+Run: `npm run audit:upstream-parity [<fixture>]` (default `minimal`).
+
+**Original (pre-shipped) status:** queued. Authored 2026-05-03 by user request after the Phase 2b investigation surfaced concerns about v3's heuristic vs authored rigs.
 
 **Origin (user 2026-05-03):**
 > can we properly check if our cmo3 and other modules are correct by observing the original cmo3 moc3 writers at /reference/stretchystudio-upstream...? И имеется ли смысл в этом? Если он реально есть тогда стоит это сделать должным образом (проверить) без костылей, с планом, с md доком.
