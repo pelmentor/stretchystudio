@@ -20,7 +20,7 @@
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | open |
-| [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | open |
+| [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | closed |
 | [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | closed |
 
 ---
@@ -164,7 +164,9 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 <a id="pp1-007"></a>
 ### PP1-007 — Layers panel: warps default-visible + opacity slider
 
-**Type:** feature · **Severity:** medium · **Status:** open
+**Type:** feature · **Severity:** medium · **Status:** closed (commit pending)
+
+Implementation followed schema option (a): added `viewLayers.warpGridsOpacity` (0..1, default 0.5) alongside the existing `viewLayers.warpGrids` boolean. `WarpDeformerOverlay` now renders every canvas-px warp lattice at the slider opacity, with the selected warp pinned to full opacity for accent. The popover gains an indented opacity slider that appears under the Warp grids checkbox when it's on.
 
 **Request (refined 2026-05-03).** Two coupled asks from the user:
 1. **Default visible.** Warp grids should be visible by default whenever any warps exist on the character. Today's `viewLayers.warpGrids` default is already `true` ([`editorStore.js:69`](../src/store/editorStore.js#L69)) — so this part is satisfied IF the rendering is actually firing for all warps. Investigation: confirm WarpDeformerOverlay isn't filtering by selection (only rendering the currently-selected warp).
@@ -210,11 +212,11 @@ Two related but separable problems in the mesh-edit surface. Filing as one entry
 
 **Fix.** While the user is mesh-editing a part, skip the rig override for THAT part. Other parts keep evalRig output as usual; only the selected mesh-edited part drops out so the user's edits show through. Other parts continue to be driven by paramValues. The rigSpec keyforms remain stale until the user clicks Refit (RigStagesTab) — which is the documented path to refresh the rig with their edits.
 
-#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework — closed (commit pending)
+#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework — closed (commit `cf82570`)
 
 Implementation: `F` in mesh edit toggles a transient `radiusAdjustModeRef.active` flag in `CanvasViewport`. While active, wheel events update `proportionalEdit.radius` (without zooming the canvas), the influence ring is forced visible regardless of `proportionalEdit.enabled`, the next click commits + exits, and `ESC` restores the radius captured at F-press. F also auto-exits when leaving mesh edit. MMB-scroll-while-dragging behaviour is preserved (still recomputes weights against the rest snapshot).
 
-#### Sub-issue (c) — proportional-editing toggle is in the wrong place — closed (commit pending)
+#### Sub-issue (c) — proportional-editing toggle is in the wrong place — closed (commit `cf82570`)
 
 Toggle moved out of the left T-panel toolbar into [`ModePill.jsx`](../src/v3/shell/ModePill.jsx) as a sibling to the edit-mode picker (visible only when `editMode === 'mesh'`). The CanvasToolbar's now-unused `TOGGLES` registry was deleted (the architecture stays minimal — re-adding for the next toggle is cheap). Falloff dropdown placement deferred — Shift+O cycle is documented in the toggle's tooltip and remains a power-user keybind for now.
 

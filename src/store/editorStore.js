@@ -67,6 +67,11 @@ export const useEditorStore = create((set) => ({
     skeleton:       true,
     irisClipping:   true,
     warpGrids:      true,
+    /** PP1-007 — opacity for warp grid overlays in the 0..1 range.
+     *  Default 0.5 so all warps are visible-but-quiet by default; the
+     *  selected warp paints at full opacity for accent.
+     *  Pairs with the `warpGrids` boolean (master on/off). */
+    warpGridsOpacity: 0.5,
     rotationPivots: true,
   },
 

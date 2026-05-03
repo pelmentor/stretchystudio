@@ -31,6 +31,7 @@ import { Layers, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.jsx';
 import { Button } from '../../components/ui/button.jsx';
 import { Checkbox } from '../../components/ui/checkbox.jsx';
+import { Slider } from '../../components/ui/slider.jsx';
 import { useEditorStore } from '../../store/editorStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
 
@@ -202,6 +203,22 @@ export function ViewLayersPopover() {
             checked={viewLayers.warpGrids}
             onChange={(v) => setViewLayers({ warpGrids: v })}
           />
+          {viewLayers.warpGrids && (
+            <div className="pl-6 pr-1 pt-0.5 pb-1 flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground/80 w-12 shrink-0">Opacity</span>
+              <Slider
+                min={0}
+                max={1}
+                step={0.05}
+                value={[viewLayers.warpGridsOpacity ?? 0.5]}
+                onValueChange={(v) => setViewLayers({ warpGridsOpacity: v[0] })}
+                className="flex-1"
+              />
+              <span className="text-[10px] text-muted-foreground/80 w-7 text-right tabular-nums">
+                {Math.round((viewLayers.warpGridsOpacity ?? 0.5) * 100)}%
+              </span>
+            </div>
+          )}
           <LayerRow
             label="Rotation pivots"
             checked={viewLayers.rotationPivots}

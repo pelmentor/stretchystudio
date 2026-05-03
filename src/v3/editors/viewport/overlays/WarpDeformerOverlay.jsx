@@ -36,6 +36,8 @@ export function WarpDeformerOverlay() {
   // Viewport (CanvasArea gates them on `!isPreview`), so always read
   // the viewport tab's view.
   const view = useEditorStore((s) => s.viewByMode.viewport);
+  const warpGridsOn = useEditorStore((s) => s.viewLayers.warpGrids ?? true);
+  const warpGridsOpacity = useEditorStore((s) => s.viewLayers.warpGridsOpacity ?? 0.5);
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {
@@ -44,29 +46,23 @@ export function WarpDeformerOverlay() {
     return null;
   });
 
-  if (!rigSpec || !activeDeformerId) return null;
+  if (!rigSpec || !warpGridsOn) return null;
 
-  const warp = (rigSpec.warpDeformers ?? []).find((w) => w?.id === activeDeformerId);
-  if (!warp) return null;
-  if (warp.localFrame !== 'canvas-px') {
+  // PP1-007 — render every canvas-px warp at the user-set opacity, with the
+  // selected one pinned to full opacity for accent. Pre-PP1-007 the overlay
+  // only showed the selected warp; users had no way to see the full lattice
+  // network without clicking each warp in turn.
+  const allWarps = rigSpec.warpDeformers ?? [];
+  const selectedWarp = activeDeformerId
+    ? allWarps.find((w) => w?.id === activeDeformerId)
+    : null;
+  if (selectedWarp && selectedWarp.localFrame !== 'canvas-px') {
     // Nested warps need parent-grid resolution to display in canvas
     // space. Surface a hint instead so the user understands why
     // there's no overlay and isn't left wondering if the editor is
     // broken.
-    return <NestedWarpHint warp={warp} />;
+    return <NestedWarpHint warp={selectedWarp} />;
   }
-
-  const cols = warp.gridSize?.cols ?? 0;
-  const rows = warp.gridSize?.rows ?? 0;
-  if (cols < 1 || rows < 1) return null;
-
-  // Use keyform[0] as the displayed lattice. Most rigs have a single
-  // keyform per deformer (rest pose); compound 2D grids carry more,
-  // and the Properties tab is the right place to inspect those —
-  // here we keep the visual minimal.
-  const kf = (warp.keyforms ?? [])[0];
-  const positions = kf?.positions;
-  if (!positions || positions.length < (cols + 1) * (rows + 1) * 2) return null;
 
   // Map canvas-px → screen-px. CanvasViewport applies the same
   // (zoom, panX, panY) so rendering in the same frame keeps the
@@ -78,31 +74,51 @@ export function WarpDeformerOverlay() {
     };
   }
 
-  const ptCount = (cols + 1) * (rows + 1);
-
-  /** @type {Array<{x:number,y:number}>} */
-  const projected = [];
-  for (let i = 0; i < ptCount; i++) {
-    projected.push(project(positions[i * 2], positions[i * 2 + 1]));
-  }
-
-  // Grid line segments (rows + cols).
-  /** @type {Array<{x1:number,y1:number,x2:number,y2:number}>} */
-  const lines = [];
-  for (let r = 0; r <= rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const a = projected[r * (cols + 1) + c];
-      const b = projected[r * (cols + 1) + c + 1];
-      lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+  /** @returns {{cols:number,rows:number,projected:Array<{x:number,y:number}>,lines:Array<{x1:number,y1:number,x2:number,y2:number}>}|null} */
+  function buildGrid(warp) {
+    const cols = warp?.gridSize?.cols ?? 0;
+    const rows = warp?.gridSize?.rows ?? 0;
+    if (cols < 1 || rows < 1) return null;
+    const kf = (warp.keyforms ?? [])[0];
+    const positions = kf?.positions;
+    if (!positions || positions.length < (cols + 1) * (rows + 1) * 2) return null;
+    const ptCount = (cols + 1) * (rows + 1);
+    const projected = new Array(ptCount);
+    for (let i = 0; i < ptCount; i++) {
+      projected[i] = project(positions[i * 2], positions[i * 2 + 1]);
     }
-  }
-  for (let c = 0; c <= cols; c++) {
-    for (let r = 0; r < rows; r++) {
-      const a = projected[r * (cols + 1) + c];
-      const b = projected[(r + 1) * (cols + 1) + c];
-      lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    const lines = [];
+    for (let r = 0; r <= rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = projected[r * (cols + 1) + c];
+        const b = projected[r * (cols + 1) + c + 1];
+        lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
     }
+    for (let c = 0; c <= cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        const a = projected[r * (cols + 1) + c];
+        const b = projected[(r + 1) * (cols + 1) + c];
+        lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+    }
+    return { cols, rows, projected, lines };
   }
+
+  // Draw every canvas-px warp; the selected one renders last (on top) at
+  // full opacity for accent. Nested warps (normalized-0to1 / pivot-relative)
+  // are filtered out — those need parent-grid resolution to project into
+  // canvas space, surfaced separately via NestedWarpHint when the user
+  // explicitly selects one.
+  const displayWarps = allWarps.filter((w) => w?.localFrame === 'canvas-px');
+  if (displayWarps.length === 0) return null;
+
+  // Render the selected warp last so it paints on top of the others.
+  const ordered = displayWarps.slice().sort((a, b) => {
+    if (a.id === activeDeformerId) return 1;
+    if (b.id === activeDeformerId) return -1;
+    return 0;
+  });
 
   return (
     <svg
@@ -110,42 +126,48 @@ export function WarpDeformerOverlay() {
       style={{ width: '100%', height: '100%' }}
       aria-hidden="true"
     >
-      {/* Phase 4I theme audit: route stroke / fill through
-          `currentColor` so Tailwind utility classes drive the palette
-          and dark-mode / theme presets can re-skin without rewriting
-          rgb literals. */}
-      <g className="text-sky-400">
-        {lines.map((l, i) => (
-          <line
-            key={i}
-            x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-            stroke="currentColor"
-            strokeOpacity={0.6}
-            strokeWidth={1}
-          />
-        ))}
-        {projected.map((p, i) => (
-          <circle
-            key={i}
-            cx={p.x}
-            cy={p.y}
-            r={3}
-            fill="currentColor"
-            fillOpacity={0.9}
-            className="stroke-slate-900/80"
-            strokeWidth={1}
-          />
-        ))}
-      </g>
-      <text
-        x={projected[0].x + 6}
-        y={projected[0].y - 6}
-        fontSize={10}
-        className="fill-sky-400"
-        style={{ fontFamily: 'monospace' }}
-      >
-        {warp.name ?? warp.id} ({cols}×{rows})
-      </text>
+      {ordered.map((warp) => {
+        const grid = buildGrid(warp);
+        if (!grid) return null;
+        const isSelected = warp.id === activeDeformerId;
+        const groupOpacity = isSelected ? 1 : Math.max(0, Math.min(1, warpGridsOpacity));
+        return (
+          <g key={warp.id} className="text-sky-400" opacity={groupOpacity}>
+            {grid.lines.map((l, i) => (
+              <line
+                key={i}
+                x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
+                stroke="currentColor"
+                strokeOpacity={0.6}
+                strokeWidth={1}
+              />
+            ))}
+            {grid.projected.map((p, i) => (
+              <circle
+                key={i}
+                cx={p.x}
+                cy={p.y}
+                r={isSelected ? 3 : 2}
+                fill="currentColor"
+                fillOpacity={0.9}
+                className="stroke-slate-900/80"
+                strokeWidth={1}
+              />
+            ))}
+            {isSelected && grid.projected[0] && (
+              <text
+                x={grid.projected[0].x + 6}
+                y={grid.projected[0].y - 6}
+                fontSize={10}
+                className="fill-sky-400"
+                style={{ fontFamily: 'monospace' }}
+              >
+                {warp.name ?? warp.id} ({grid.cols}×{grid.rows})
+              </text>
+            )}
+          </g>
+        );
+      })}
     </svg>
   );
 }
