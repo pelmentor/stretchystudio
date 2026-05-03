@@ -20,7 +20,7 @@
 | [PP1-004](#pp1-004) | bug     | medium | Iris clip-mask edges are aliased (stairstep, not antialiased) | open |
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | open |
-| [PP1-007](#pp1-007) | feature | medium | Layers panel — single toggle to show every warp deformer on the character | open |
+| [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | open |
 | [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | open |
 
 ---
@@ -154,23 +154,38 @@ Plan to investigate the actual component before scoping. May open a sibling plan
 ---
 
 <a id="pp1-007"></a>
-### PP1-007 — Layers panel: single toggle to show every warp deformer
+### PP1-007 — Layers panel: warps default-visible + opacity slider
 
 **Type:** feature · **Severity:** medium · **Status:** open
 
-**Request.** Layers panel should have a master toggle that shows the visualisation overlay for **every warp deformer on the character** at once. Today (per memory `reference_v3_workspace_policy`) there's a `warpGrids` viewLayer but it appears to either not cover all warps or not be discoverable as the right knob.
+**Request (refined 2026-05-03).** Two coupled asks from the user:
+1. **Default visible.** Warp grids should be visible by default whenever any warps exist on the character. Today's `viewLayers.warpGrids` default is already `true` ([`editorStore.js:69`](../src/store/editorStore.js#L69)) — so this part is satisfied IF the rendering is actually firing for all warps. Investigation: confirm WarpDeformerOverlay isn't filtering by selection (only rendering the currently-selected warp).
+2. **Opacity, not just on/off.** Default opacity = **0.50** (semi-transparent), controllable via a slider in the ViewLayers popover. The boolean toggle becomes "show / hide" master; the slider becomes "intensity when shown".
 
 **What exists today.**
-- `editorStore.viewLayers.warpGrids` — gates `WarpDeformerOverlay` in [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx).
-- `editorStore.viewLayers.rotationPivots` — gates `RotationDeformerOverlay`.
-- ViewLayersPopover shows toggles grouped by Mesh / Rig / Edit.
+- `editorStore.viewLayers.warpGrids: true` — boolean toggle gating `WarpDeformerOverlay` in [`CanvasArea.jsx`](../src/v3/shell/CanvasArea.jsx).
+- `editorStore.viewLayers.rotationPivots: true` — sibling toggle for `RotationDeformerOverlay`.
+- ViewLayersPopover shows toggles grouped by Mesh / Rig / Edit (per `project_gaps_post_compact_2026_05_02` for the popover's Phase A surface).
+
+**Schema change.** Replace `viewLayers.warpGrids: boolean` with two coexisting fields, OR with a single numeric:
+- **Option (a):** `warpGrids: boolean` (visible/hidden) + `warpGridsOpacity: number` (0..1, default 0.5). Two slots; clean separation of intent (hide = master off; intensity = preference). Hide overrides intensity.
+- **Option (b):** `warpGrids: number` (0..1, where 0 = hidden, 0.5 default, 1 = full). Single slot; ergonomically same outcome (slider with snap-to-0 = hide).
+
+(a) is more conventional for shadcn/ui (Switch + Slider) and matches the existing visual pattern of other layers having on/off toggles. (b) is one less field but conflates two concepts.
+
+**UX sketch.** Inside ViewLayersPopover's Rig section:
+- Existing "Warp Grids" Switch → unchanged.
+- New row underneath when Switch is on: "Opacity" label + Slider (0–100%). Default 50.
+- Sibling pattern likely warranted later for `rotationPivots` and `skeleton` — but those aren't requested today.
+
+**Renderer wiring.** [`WarpDeformerOverlay`](../src/v3/shell/CanvasArea.jsx) (or the actual overlay component) reads the opacity from editorStore and applies it to its SVG/Canvas grid stroke as `stroke-opacity` / `globalAlpha`. Trivial once the store field exists.
 
 **Investigation steps.**
-1. Check whether `warpGrids` actually shows ALL warps or only the currently-selected one. The deformer overlay code may filter by selection.
-2. If it's selection-filtered, add a "show all warps" mode (or split into "selected warp" vs "all warps" toggles).
-3. Verify rendering performance with a fully-warped character — Hiyori-grade rig has 10+ warp deformers; rendering all simultaneously could be heavy.
+1. Verify WarpDeformerOverlay renders ALL warps (not selection-filtered). If selection-filtered, lift that restriction first — that's the "default visible" part.
+2. Decide between schema option (a) vs (b). Default to (a) — cleaner, shadcn-friendly.
+3. Add opacity field to editorStore + migrate preferences if `viewLayerPresets` records the field.
 
-**UX sketch.** In ViewLayersPopover under the Rig group, show a "Warp Grids" toggle (as today) and add an "All warps" sub-option underneath when the master toggle is on. Or change the existing toggle's semantic to "all warps" by default, and add a separate "Selected warp only" mode.
+**Migration.** If `preferencesStore.viewLayerPresets` records the boolean, add a forward-compat read (`typeof saved === 'boolean' ? {warpGrids: saved, warpGridsOpacity: 0.5} : saved`). Old saved presets default opacity to 0.5 on load.
 
 ---
 
