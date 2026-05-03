@@ -21,7 +21,7 @@
 | [PP1-005](#pp1-005) | ux/bug  | low    | "Setup" button at top of UI is non-clickable + unexplained | open |
 | [PP1-006](#pp1-006) | ux      | low    | Edit-mode picker disabled-until-selection has no affordance | open |
 | [PP1-007](#pp1-007) | feature | medium | Layers panel — warps default-visible + opacity slider (default 0.50) | open |
-| [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | (a) closed; (b)(c) open |
+| [PP1-008](#pp1-008) | bug + ux | high | Mesh edit broken (vertices don't move) + proportional-editing UX rework + toolbar relocation | closed |
 
 ---
 
@@ -57,7 +57,7 @@ Bones that own skinned mesh weights (elbow, knee, etc.) have `dependentParts.len
 <a id="pp1-002"></a>
 ### PP1-002 — Init Rig honours `subsystems.hairRig=false` opt-out only partially
 
-**Type:** bug · **Severity:** high · **Status:** closed (commit pending)
+**Type:** bug · **Severity:** high · **Status:** closed (commit `1c633ec`)
 
 **Root cause.** The previously-shipped GAP-008 work (commit `41e63bc`) added the subsystem-opt-out filter on the **authored-cmo3** path and on the **harvested seed-output** for the heuristic path (`project.rigWarps` storage, `project.physicsRules` storage). What it didn't filter was the live **`rigSpec.warpDeformers`** that comes back from `generateCmo3` on the heuristic path — chainEval consumes that spec directly, so hair-tagged rigWarps that were dropped from the seed-output were still getting evaluated every frame, producing the visible "hair sways during body lean" symptom. Physics rules + storage seeds were correctly empty; only the live evaluator's chain still had hair warps.
 
@@ -210,31 +210,13 @@ Two related but separable problems in the mesh-edit surface. Filing as one entry
 
 **Fix.** While the user is mesh-editing a part, skip the rig override for THAT part. Other parts keep evalRig output as usual; only the selected mesh-edited part drops out so the user's edits show through. Other parts continue to be driven by paramValues. The rigSpec keyforms remain stale until the user clicks Refit (RigStagesTab) — which is the documented path to refresh the rig with their edits.
 
-#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework
+#### Sub-issue (b) — proportional editing UX needs Blender-faithful rework — closed (commit pending)
 
-**Current behavior (per memory).** MMB-scroll changes radius while dragging.
+Implementation: `F` in mesh edit toggles a transient `radiusAdjustModeRef.active` flag in `CanvasViewport`. While active, wheel events update `proportionalEdit.radius` (without zooming the canvas), the influence ring is forced visible regardless of `proportionalEdit.enabled`, the next click commits + exits, and `ESC` restores the radius captured at F-press. F also auto-exits when leaving mesh edit. MMB-scroll-while-dragging behaviour is preserved (still recomputes weights against the rest snapshot).
 
-**Desired behavior (Blender-faithful).** User presses **F** → enters "adjust radius" mode → scroll wheel grows / shrinks the falloff radius (live preview circle on canvas) → click anywhere commits the new radius → exits adjust mode. This matches Blender's `Shift+O` / radius-adjust gesture and is what user originally referenced as the model in the mesh-edit feedback.
+#### Sub-issue (c) — proportional-editing toggle is in the wrong place — closed (commit pending)
 
-**Repair sketch.**
-- Add a keymap entry: `F` while in mesh edit mode → toggle `proportionalEditAdjustingRadius: true` in `editorStore`.
-- While `adjustingRadius`, the canvas overlay listens for `wheel` events → mutate `editorStore.proportionalRadius`. (Distinct from MMB-scroll, which can stay as the "during-drag" adjust.)
-- First click while `adjustingRadius` commits + flips back to false. ESC cancels.
-- Render a circle gizmo at cursor showing the current radius live.
-
-**Cross-link.** Memory `feedback_blender_mesh_edit_port.md` says: "match `O`/`Shift+O`/`Alt+O` hotkeys + falloff curves byte-for-byte." This entry adds **`F`** to that list as the radius-set keybind. Verify against Blender 5.1 (installed locally per `reference_blender_install`) before shipping.
-
-#### Sub-issue (c) — proportional-editing toggle is in the wrong place
-
-**Current placement.** The proportional-editing toggle button currently sits near the brushes/tools toolbar (left edge T-panel per `project_click_to_select_and_toolbar_shipped_2026_05_02`). User finds this wrong.
-
-**Desired placement.** Like Blender — on the **header bar where edit-mode / object-mode picker lives**, immediately to the **right** of the active-mode display. Blender's pattern: mode dropdown · proportional-edit toggle · falloff-shape dropdown · X-mirror · ... → all in the same row at the top of the editor area.
-
-**Why this matters.** Proportional editing is a global mesh-edit-mode modifier that affects every brush + every drag. Putting it next to the mode picker (where the user already looks to confirm "am I in mesh edit mode?") is correct grouping. Putting it next to brushes implies it's a brush option, which it isn't.
-
-**Repair sketch.** Move the toggle's render site from the tools toolbar to the same component that hosts the edit-mode picker (likely the workspace header or the canvas top-bar). Wire it to the same `editorStore.proportionalEdit` flag — just relocate, no behavior change. Same applies to the falloff-shape dropdown (Blender shows it as a sibling toggle).
-
-**Verification.** Open Blender 5.1 → 3D Viewport edit mode → screenshot the top header bar from "Object Mode" dropdown to "Snap" controls. Match SS layout to that grouping.
+Toggle moved out of the left T-panel toolbar into [`ModePill.jsx`](../src/v3/shell/ModePill.jsx) as a sibling to the edit-mode picker (visible only when `editMode === 'mesh'`). The CanvasToolbar's now-unused `TOGGLES` registry was deleted (the architecture stays minimal — re-adding for the next toggle is cheap). Falloff dropdown placement deferred — Shift+O cycle is documented in the toggle's tooltip and remains a power-user keybind for now.
 
 ---
 

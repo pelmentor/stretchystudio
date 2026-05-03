@@ -38,7 +38,6 @@ import {
   MinusCircle,
   Bone,
   Sparkles,
-  Circle,
 } from 'lucide-react';
 
 /**
@@ -135,16 +134,10 @@ export const TOOLS_BY_MODE = {
       icon: MinusCircle,
       hint: 'Click to remove the nearest vertex',
     },
-    {
-      id: 'proportionalEdit',
-      kind: 'toggle',
-      toggleId: 'proportionalEdit',
-      label: 'Proportional Edit',
-      icon: Circle,
-      hotkey: 'O',
-      hint: 'Drag pulls neighbours along (Shift+O cycles falloff curve, Alt+O toggles connected-only, Ctrl+[/] resize radius)',
-      divider: true,
-    },
+    // PP1-008(c) — Proportional-edit toggle relocated to ModePill (right
+    // of the edit-mode picker), matching Blender's header layout where
+    // proportional-edit is a sibling of the mode dropdown rather than
+    // a brush option in the T-panel.
   ],
 
   skeleton: [

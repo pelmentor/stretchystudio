@@ -25,7 +25,7 @@
  * @module v3/shell/ModePill
  */
 
-import { ChevronDown, Box, Pencil, Bone, Sparkles } from 'lucide-react';
+import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.jsx';
 import { Button } from '../../components/ui/button.jsx';
 import { Checkbox } from '../../components/ui/checkbox.jsx';
@@ -126,13 +126,22 @@ export function ModePill() {
     ? node.blendShapes
     : [];
 
+  // PP1-008(c) — proportional-edit toggle moves out of the left T-panel
+  // toolbar (which was confusing since it implied a "brush option") and
+  // sits to the right of the ModePill, mirroring Blender's header layout
+  // where the proportional-edit button is a sibling of the mode picker.
+  const peEnabled = usePreferencesStore((s) => s.proportionalEdit?.enabled ?? false);
+  const setProportionalEdit = usePreferencesStore((s) => s.setProportionalEdit);
+  const showProportionalToggle = editMode === 'mesh';
+
   return (
+    <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
     <Popover>
       <PopoverTrigger asChild>
         <Button
           variant="secondary"
           size="sm"
-          className="absolute top-2 left-2 z-10 h-8 px-3 gap-1.5
+          className="h-8 px-3 gap-1.5
                      bg-card/85 backdrop-blur-md
                      border border-border/60 hover:border-primary/40
                      text-foreground/80 hover:text-foreground hover:bg-card/95
@@ -208,5 +217,23 @@ export function ModePill() {
         </div>
       </PopoverContent>
     </Popover>
+      {showProportionalToggle && (
+        <button
+          type="button"
+          aria-pressed={peEnabled}
+          onClick={() => setProportionalEdit({ enabled: !peEnabled })}
+          title="Proportional Edit (O) — drag pulls neighbours along. Shift+O cycles falloff, Alt+O toggles connected-only, F enters radius-adjust mode (scroll to size, click to commit)."
+          className={
+            'h-8 w-8 flex items-center justify-center rounded-md ' +
+            'bg-card/85 backdrop-blur-md border shadow-md transition-all duration-150 ' +
+            (peEnabled
+              ? 'border-primary/50 text-primary hover:border-primary/70 hover:bg-card/95'
+              : 'border-border/60 text-foreground/70 hover:text-foreground hover:border-primary/40 hover:bg-card/95')
+          }
+        >
+          <Circle className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
   );
 }

@@ -109,6 +109,12 @@ export default function CanvasViewport({
   const isDirtyRef = useRef(true);
   const brushCircleRef = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
   const propEditCircleRef = useRef(null); // GAP-015 — proportional-edit influence ring
+  // PP1-008(b) — F→scroll→click radius adjust mode. While `active`, wheel
+  // events update proportionalEdit.radius and the next click commits +
+  // exits. ESC restores `startRadius` and exits without committing. Lives
+  // in a ref so the wheel/pointer handlers see the live state without
+  // triggering re-renders on every frame.
+  const radiusAdjustModeRef = useRef({ active: false, startRadius: null });
   const meshOverriddenParts = useRef(new Set()); // parts whose GPU mesh was overridden last frame
   const fileInputRef = useRef(null);
 
@@ -835,6 +841,15 @@ export default function CanvasViewport({
     return () => window.removeEventListener('keydown', handler);
   }, [setBrush, previewMode]);
 
+  /* ── PP1-008(b) — exit F-mode radius adjust when leaving mesh edit ── */
+  useEffect(() => {
+    if (editorState.editMode !== 'mesh' && radiusAdjustModeRef.current.active) {
+      radiusAdjustModeRef.current.active = false;
+      radiusAdjustModeRef.current.startRadius = null;
+      isDirtyRef.current = true;
+    }
+  }, [editorState.editMode]);
+
   /* ── GAP-015 — Blender-style proportional-edit hotkeys ───────────────── */
   // O           — toggle proportional editing on/off
   // Shift+O     — cycle falloff curve (smooth → sphere → root → linear → sharp → invSquare → constant)
@@ -872,6 +887,29 @@ export default function CanvasViewport({
         const step = Math.max(5, cur.radius * 0.1);
         const next = e.key === '[' ? Math.max(5, cur.radius - step) : cur.radius + step;
         setPE({ radius: next });
+      } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // PP1-008(b) — F enters radius-adjust mode. Only meaningful in
+        // mesh edit; otherwise no-op (don't claim F globally). Captures
+        // the current radius so ESC can restore it. Toggling F again
+        // before committing exits the mode without changing radius.
+        if (editorRef.current.editMode !== 'mesh') return;
+        e.preventDefault();
+        if (radiusAdjustModeRef.current.active) {
+          radiusAdjustModeRef.current.active = false;
+          radiusAdjustModeRef.current.startRadius = null;
+        } else {
+          radiusAdjustModeRef.current.active = true;
+          radiusAdjustModeRef.current.startRadius = prefs.proportionalEdit.radius;
+        }
+        isDirtyRef.current = true;
+      } else if (e.key === 'Escape' && radiusAdjustModeRef.current.active) {
+        // PP1-008(b) — ESC cancels: restore the radius captured at F-press.
+        e.preventDefault();
+        const start = radiusAdjustModeRef.current.startRadius;
+        if (typeof start === 'number') setPE({ radius: start });
+        radiusAdjustModeRef.current.active = false;
+        radiusAdjustModeRef.current.startRadius = null;
+        isDirtyRef.current = true;
       }
     };
     window.addEventListener('keydown', handler);
@@ -1461,6 +1499,20 @@ export default function CanvasViewport({
   const onWheel = useCallback((e) => {
     e.preventDefault();
 
+    // PP1-008(b) — F-mode radius adjust. While active (no drag yet), wheel
+    // updates proportionalEdit.radius without zooming the canvas. The
+    // user commits the new radius with a click (handled in onPointerDown)
+    // or restores the original with ESC.
+    if (radiusAdjustModeRef.current.active) {
+      const prefs = usePreferencesStore.getState();
+      const cur = prefs.proportionalEdit;
+      const step = Math.max(2, cur.radius * 0.1);
+      const next = e.deltaY < 0 ? cur.radius + step : Math.max(5, cur.radius - step);
+      prefs.setProportionalEdit({ radius: next });
+      isDirtyRef.current = true;
+      return;
+    }
+
     // GAP-015 — When a proportional-edit drag is in flight, divert the
     // wheel delta to live radius adjustment AND recompute weights
     // against the rest snapshot captured at drag start (so each tick
@@ -1526,6 +1578,17 @@ export default function CanvasViewport({
   const onPointerDown = useCallback((e) => {
     const canvas = canvasRef.current;
     const view = editorRef.current.viewByMode[modeKey];
+
+    // PP1-008(b) — F-mode radius adjust: a click commits the new radius
+    // and exits the mode. Swallow this event so it doesn't also trigger
+    // a vertex pick or pan/zoom gesture.
+    if (radiusAdjustModeRef.current.active && e.button === 0) {
+      radiusAdjustModeRef.current.active = false;
+      radiusAdjustModeRef.current.startRadius = null;
+      isDirtyRef.current = true;
+      e.preventDefault();
+      return;
+    }
 
     // Phase 5 touch+pen — track every pointer that lands on the canvas.
     // When two touch pointers are active simultaneously, switch into a
@@ -1951,7 +2014,11 @@ export default function CanvasViewport({
       const peCfg = usePreferencesStore.getState().proportionalEdit;
       const ws = activeWorkspaceRef.current;
       const wsAllows = ws === 'edit';
-      if (peCfg?.enabled && wsAllows) {
+      // PP1-008(b) — also show the ring during F-mode radius adjust, even
+      // when proportional editing is disabled, so the user sees what
+      // they're scrolling. F-mode is gated on editMode='mesh' at entry.
+      const showRing = wsAllows && (peCfg?.enabled || radiusAdjustModeRef.current.active);
+      if (showRing) {
         const rect = canvas.getBoundingClientRect();
         const screenR = peCfg.radius * editorRef.current.viewByMode[modeKey].zoom;
         propEditCircleRef.current.setAttribute('cx', e.clientX - rect.left);
