@@ -140,28 +140,31 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   }
   const worldMatrices = opts.worldMatrices ?? null;
 
-  const parts = (project?.nodes ?? []).filter((n) =>
-    n
-    && n.type === 'part'
-    && n.visible !== false
-    && n.mesh
-    && Array.isArray(n.mesh.triangles)
-    && n.mesh.triangles.length > 0,
-  );
+  // Include parts with a triangulated mesh OR raw image-only parts (no
+  // mesh yet — e.g. fresh PSD imports during the wizard's Reorder step).
+  // Pre-mesh parts get a quad bbox hit-test using imageWidth/imageHeight;
+  // post-mesh parts use the triangulation as before.
+  const parts = (project?.nodes ?? []).filter((n) => {
+    if (!n || n.type !== 'part' || n.visible === false) return false;
+    const hasTris = n.mesh
+      && Array.isArray(n.mesh.triangles)
+      && n.mesh.triangles.length > 0;
+    const hasQuad = typeof n.imageWidth === 'number'
+      && typeof n.imageHeight === 'number'
+      && n.imageWidth > 0
+      && n.imageHeight > 0;
+    return hasTris || hasQuad;
+  });
   parts.sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
   for (const part of parts) {
-    const tris = part.mesh.triangles;
+    const tris = part.mesh?.triangles ?? null;
     const rigVerts = frameMap.get(part.id);
-    if (rigVerts) {
+    if (rigVerts && tris && tris.length > 0) {
       if (pointInAnyTriangle(rigVerts, tris, worldX, worldY)) return part.id;
       continue;
     }
 
-    // Fallback: rest mesh. Inverse-transform the click point into
-    // the part's local space if a worldMatrix is available.
-    const local = part.mesh.vertices;
-    if (!Array.isArray(local) || local.length === 0) continue;
     const wm = worldMatrices?.get(part.id) ?? null;
     let lx = worldX, ly = worldY;
     if (wm) {
@@ -169,7 +172,24 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
       lx = inv[0] * worldX + inv[3] * worldY + inv[6];
       ly = inv[1] * worldX + inv[4] * worldY + inv[7];
     }
-    if (pointInAnyTriangleObjs(local, tris, lx, ly)) return part.id;
+
+    // Triangulated mesh path: rest verts in local space.
+    if (tris && tris.length > 0) {
+      const local = part.mesh.vertices;
+      if (Array.isArray(local) && local.length > 0
+          && pointInAnyTriangleObjs(local, tris, lx, ly)) {
+        return part.id;
+      }
+      continue;
+    }
+
+    // Quad fallback: imageWidth/imageHeight rectangle in local space.
+    // Used during the PSD import wizard's Reorder step where parts have
+    // raw image bytes but auto-mesh hasn't run yet, so click-to-select
+    // would otherwise be dead.
+    const w = part.imageWidth;
+    const h = part.imageHeight;
+    if (lx >= 0 && lx <= w && ly >= 0 && ly <= h) return part.id;
   }
   return null;
 }

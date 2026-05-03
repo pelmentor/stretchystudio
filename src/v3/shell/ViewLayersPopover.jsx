@@ -210,12 +210,12 @@ export function ViewLayersPopover() {
                 min={0}
                 max={1}
                 step={0.05}
-                value={[viewLayers.warpGridsOpacity ?? 0.5]}
+                value={[viewLayers.warpGridsOpacity ?? 0.25]}
                 onValueChange={(v) => setViewLayers({ warpGridsOpacity: v[0] })}
                 className="flex-1"
               />
               <span className="text-[10px] text-muted-foreground/80 w-7 text-right tabular-nums">
-                {Math.round((viewLayers.warpGridsOpacity ?? 0.5) * 100)}%
+                {Math.round((viewLayers.warpGridsOpacity ?? 0.25) * 100)}%
               </span>
             </div>
           )}

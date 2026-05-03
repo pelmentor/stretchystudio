@@ -2069,12 +2069,14 @@ export default function CanvasViewport({
 
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
-      const ws = activeWorkspaceRef.current;
-      const wsAllows = ws === 'default';
-      // PP1-008(b) — also show the ring during F-mode radius adjust, even
-      // when proportional editing is disabled, so the user sees what
-      // they're sizing. F-mode is gated on editMode='mesh' at entry.
-      const showRing = wsAllows && (peCfg?.enabled || radiusMode.active);
+      // Proportional edit + F-mode only mean something inside mesh edit;
+      // gating on `editMode === 'mesh'` (rather than the whole workspace)
+      // hides the ring during Object Mode, the PSD import wizard, and any
+      // other context where the user can't actually deform a mesh —
+      // previously the ring showed across the entire Default workspace,
+      // including the reorder/adjust wizard steps where it was confusing.
+      const inMeshEdit = editorRef.current.editMode === 'mesh';
+      const showRing = inMeshEdit && (peCfg?.enabled || radiusMode.active);
       if (showRing) {
         const rect = canvas.getBoundingClientRect();
         const screenR = peCfg.radius * editorRef.current.viewByMode[modeKey].zoom;

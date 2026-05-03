@@ -37,7 +37,7 @@ export function WarpDeformerOverlay() {
   // the viewport tab's view.
   const view = useEditorStore((s) => s.viewByMode.viewport);
   const warpGridsOn = useEditorStore((s) => s.viewLayers.warpGrids ?? true);
-  const warpGridsOpacity = useEditorStore((s) => s.viewLayers.warpGridsOpacity ?? 0.5);
+  const warpGridsOpacity = useEditorStore((s) => s.viewLayers.warpGridsOpacity ?? 0.25);
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {
@@ -131,8 +131,13 @@ export function WarpDeformerOverlay() {
         if (!grid) return null;
         const isSelected = warp.id === activeDeformerId;
         const groupOpacity = isSelected ? 1 : Math.max(0, Math.min(1, warpGridsOpacity));
+        // Default colour is the theme foreground (black on light, light
+        // on dark) — user 2026-05-03 wanted neutral lattices instead of
+        // the previous sky-blue-on-everything. Selected warp keeps the
+        // sky-blue accent so it pops against neutral grids.
+        const groupClass = isSelected ? 'text-sky-400' : 'text-foreground';
         return (
-          <g key={warp.id} className="text-sky-400" opacity={groupOpacity}>
+          <g key={warp.id} className={groupClass} opacity={groupOpacity}>
             {grid.lines.map((l, i) => (
               <line
                 key={i}
@@ -150,8 +155,7 @@ export function WarpDeformerOverlay() {
                 r={isSelected ? 3 : 2}
                 fill="currentColor"
                 fillOpacity={0.9}
-                className="stroke-slate-900/80"
-                strokeWidth={1}
+                strokeWidth={0}
               />
             ))}
             {isSelected && grid.projected[0] && (
