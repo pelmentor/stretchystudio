@@ -18,13 +18,14 @@
  */
 
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, Check, X, Film } from 'lucide-react';
+import { Plus, Pencil, Trash2, Check, X, Film, Sparkles } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { setEditorMode as serviceSetEditorMode } from '../../../services/EditorModeService.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
+import { IdleMotionDialog } from './IdleMotionDialog.jsx';
 
 // shadcn/ui alert-dialog parts are forwardRefs without exported
 // JSDoc types — tsc can't see their props. Cast through one alias
@@ -54,6 +55,7 @@ export function AnimationsEditor() {
   const [editingId, setEditingId] = useState(/** @type {string|null} */ (null));
   const [editValue, setEditValue] = useState('');
   const [deleteId, setDeleteId] = useState(/** @type {string|null} */ (null));
+  const [showIdleDialog, setShowIdleDialog] = useState(false);
 
   function startEdit(a) {
     setEditingId(a.id);
@@ -88,29 +90,40 @@ export function AnimationsEditor() {
               Animations ({animations.length})
             </h2>
           </div>
-          <button
-            type="button"
-            className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
-            onClick={() => {
-              // After creating, the new animation lands at the end of
-              // project.animations. Pick it up from the freshly-read
-              // store and dispatch switchAnimation so playback +
-              // timeline focus on it. Also force the Animation
-              // workspace + editorMode so the user actually sees the
-              // timeline they just made.
-              createAnimation();
-              const list = useProjectStore.getState().project.animations ?? [];
-              const created = list[list.length - 1];
-              if (created) switchAnimation(created);
-              useUIV3Store.getState().setWorkspace('animation');
-              // Service routes the captureRestPose snapshot on staging→animation transition.
-              serviceSetEditorMode('animation');
-            }}
-            title="Create new animation"
-            aria-label="Create new animation"
-          >
-            <Plus size={12} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-primary hover:bg-muted/60"
+              onClick={() => setShowIdleDialog(true)}
+              title="Generate idle motion…"
+              aria-label="Generate idle motion"
+            >
+              <Sparkles size={12} />
+            </button>
+            <button
+              type="button"
+              className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              onClick={() => {
+                // After creating, the new animation lands at the end of
+                // project.animations. Pick it up from the freshly-read
+                // store and dispatch switchAnimation so playback +
+                // timeline focus on it. Also force the Animation
+                // workspace + editorMode so the user actually sees the
+                // timeline they just made.
+                createAnimation();
+                const list = useProjectStore.getState().project.animations ?? [];
+                const created = list[list.length - 1];
+                if (created) switchAnimation(created);
+                useUIV3Store.getState().setWorkspace('animation');
+                // Service routes the captureRestPose snapshot on staging→animation transition.
+                serviceSetEditorMode('animation');
+              }}
+              title="Create new animation"
+              aria-label="Create new animation"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto py-1">
@@ -198,6 +211,8 @@ export function AnimationsEditor() {
           )}
         </div>
       </div>
+
+      <IdleMotionDialog open={showIdleDialog} onOpenChange={setShowIdleDialog} />
 
       <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>
