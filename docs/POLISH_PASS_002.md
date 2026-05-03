@@ -14,7 +14,7 @@
 | [PP2-002](#pp2-002) | bug    | medium | Proportional-edit ring visible outside mesh edit (wizard, Object Mode) | closed (`9330211`) |
 | [PP2-003](#pp2-003) | feature| medium | Warp grid overlay — black + 25% opacity defaults | closed (`9330211`) |
 | [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | open |
-| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; visual deformation (b) open | partial |
+| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; (b) neutralisation verified identity, root cause moved upstream | partial |
 | [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | partial (trunk closed; legs/legwear open) |
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | closed (this commit) |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
@@ -99,7 +99,7 @@
 
 **Repair plan.**
 - (a) ✅ Param leak fixed (this commit). `STANDARD_PARAMS` entries for hair/clothing now carry a `subsystem` tag; `buildParameterSpec` accepts `subsystems` and drops them when the flag is `false`. Bone-rotation + group-rotation passes also filter by name heuristic (`/hair/`, `/topwear|bottomwear|legwear|skirt|shirt|pants|cloth/`). `seedParameters` reads `project.autoRigConfig.subsystems` and threads it through.
-- (b) Visual deformation — still open. With PP1-002 audit's hair-warp neutralisation in place, the rest keyform should be identity. User reports verts shift after Init Rig anyway. Hypothesis: A.6b widened-bbox rest grids aren't pure identity over the part's bbox (the widening shifts the bilinear-FFD interpolation result for verts at bbox edges). Needs an oracle dump: `evalRig(rigSpec, allParamsAtDefault)` → compare hair part output verts vs `node.mesh.vertices` to confirm whether the inert chain is actually identity at rest. If it isn't, replace the widened rest keyform with a uniform-rest grid that exactly fits the part's canvas-px bbox.
+- (b) Visual deformation — investigation moved upstream (this commit). Wrote [`scripts/test/test_neutralisedWarpIdentity.mjs`](../scripts/test/test_neutralisedWarpIdentity.mjs) — a synthetic 3-warp chain (body → FaceParallax → hair, hair neutralised via `applySubsystemOptOutToRigSpec({hairRig: false})`). At default params it asserts identity vs the source canvas verts AND identity vs the pre-neutralisation rig output. Both asserts pass with max delta = 0.0000 px. So PP1-002's neutralisation IS correct in the simple case; the user's reported shift comes from somewhere else in the full rig chain. Probable suspects: A.6b widening on FaceParallax (needs a real-rig oracle dump), bone-rotation deformers in the chain at non-default rest, or a coordinate mismatch in the lifted-grid composition specific to the user's project shape. Re-investigate with an actual hairRig=false project + chainEval lift trace.
 
 ---
 
