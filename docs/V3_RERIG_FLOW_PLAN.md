@@ -5,7 +5,8 @@
 **Commits:**
 - Phase 0 (merge primitives + clobber fix): commit `d3f4078`
 - Phase 1 (runStage + RigStagesTab + telemetry): commit `ac87052`
-- Phase 3 + 4 (integration test + PhysicsTab reroute + docs): pending in this commit
+- Phase 3 + 4 (integration test + PhysicsTab reroute + docs): commit `48166b2`
+- **Post-ship audit (3 fixes):** commit `101d560` — runStage replace-mode null-harvest clear (was asymmetric with seedAllRig), single undo entry via `beginBatch`/`endBatch` (was two snapshots per refit click), immer-draft merge-path coverage in integration test.
 
 The original plan body below describes the design; treat it as historical context. The shipped surface lives in [`RigStagesTab.jsx`](../src/v3/editors/properties/tabs/RigStagesTab.jsx), [`RigService.js`](../src/services/RigService.js) (`runStage` / `refitAll`), [`PoseService.js`](../src/services/PoseService.js) (`capturePose` / `restorePose`), and [`userAuthorMarkers.js`](../src/io/live2d/rig/userAuthorMarkers.js).
 
