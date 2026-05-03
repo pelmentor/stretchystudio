@@ -14,8 +14,8 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 
 | Status | Entries |
 |--------|---------|
-| ✅ Closed / Phase A shipped | GAP-001 (wizard lifted to AppShell — wizardStore + PsdImportService + dwposeService + captureStore bridges; CanvasViewport stops mounting wizard chrome), GAP-002 (closed as redundant — Outliner + ObjectTab already cover the upstream "Groups tab" workflow), GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008 (Phase A + Phase B subsystems checkbox popover), GAP-009, GAP-010 (Phase A + Phase B per-mode `view`), GAP-011, GAP-012, GAP-013, GAP-014, GAP-015 (Phase A + Phase B persist + adjacency cache), GAP-016 (Phase A + Phase B named user presets) |
-| ⏳ Open | GAP-017 (in-app idle motion generation) |
+| ✅ Closed / Phase A shipped | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008 (A+B), GAP-009, GAP-010 (A+B), GAP-011, GAP-012, GAP-013, GAP-014, GAP-015 (A+B), GAP-016 (A+B), GAP-017 (Phase A only — user-decided 2026-05-03; Phase B/C not pursued) |
+| ⏳ Open | (none) |
 
 Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve customisations" re-init mode, parameter-editor surfaces, etc.) are tracked inside each entry's body and gated on the broader `project_v3_rerig_flow_gap` UI surface landing.
 
@@ -23,39 +23,18 @@ Phase B follow-ups for closed entries (UI delete-confirm dialogs, "preserve cust
 
 ## Open
 
-### GAP-017 — In-app idle motion generation
+### ✅ GAP-017 — In-app idle motion generation (Phase A shipped 2026-05-03)
 
-- **Severity:** medium · **Reported:** 2026-05-03 · **Status:** open
+- **Severity:** medium · **Reported:** 2026-05-03 · **Phase A SHIPPED:** 2026-05-03 (commit `4f7e0b3`)
+- **Phase B/C:** **not pursued** (user decision 2026-05-03 — "Достаточно только idle"). Phase A is sufficient.
 
-**Today.** The procedural idle motion3.json generator ships as `scripts/idle/generate_idle_motion.mjs` — a thin CLI wrapper around the pure builder at [`src/io/live2d/idle/builder.js`](../src/io/live2d/idle/builder.js). User invokes it via `/idle <model3.json> [personality] [duration]` slash command after exporting the model. End-to-end works, user-confirmed (memory: `project_idle_motion_generator.md`).
+**Phase A — what shipped.** Sparkles button next to "+" in [AnimationsEditor.jsx](../src/v3/editors/animations/AnimationsEditor.jsx) opens [IdleMotionDialog.jsx](../src/v3/editors/animations/IdleMotionDialog.jsx) — preset (idle / listening / talkingIdle / embarrassedHold) × personality (calm / energetic / tired / nervous / confident) × duration (4–15 s) × fps (24/30/60) × seed. On Generate, calls [`buildMotion3()`](../src/io/live2d/idle/builder.js) directly against `project.parameters` + `project.physicsRules` (no file I/O), creates a new animation populated with one track per animated paramId, switches to it, routes to Animation workspace + Animate mode. Physics-output paramIds are skipped automatically (never animated; driven by physics tick).
 
-**Gap.** No in-app surface. To generate idle for a SS-authored character today, the user has to:
-1. Export the model (model3.json + cdi3.json + physics3.json + motion3.json)
-2. Drop to a terminal
-3. Run the slash command or CLI
-4. Import the resulting motion3.json back into SS or load it via SDK
+Wiring covered by [`scripts/test/test_idleDialogWiring.mjs`](../scripts/test/test_idleDialogWiring.mjs) — 4 presets × physics-skip × seed determinism = 7 cases passing.
 
-That's a multi-step round-trip for a feature that should be one click inside the Animation workspace.
+**Phase B (animation-track integration) — not pursued.** The Phase A dialog already pushes generated motion into `project.animations` as a real SS animation, so it IS a first-class track. Per-curve editing already works via the standard timeline. The cross-preset blending Phase B mentioned (70% idle + 30% breathing) is a feature-pillar scope that doesn't justify itself for the existing use case.
 
-**Phase A — single-shot dialog (small):**
-- Topbar action in Animation workspace: "Generate Idle Motion".
-- Dialog with preset picker (idle / listening / talking-idle / embarrassed), personality (calm / energetic / tired / nervous / confident), duration slider, seed.
-- Calls `buildMotion3()` directly from `builder.js` against the project's resolved param + physics rules (no need to round-trip through file I/O — the builder is a pure module).
-- Output options: (a) download .motion3.json, (b) push into `project.animations` as a new SS animation track for in-app preview.
-
-**Phase B — animation-track integration (medium):**
-- Generated idle becomes a first-class SS animation track (visible in animationStore, scrubable, editable per-curve).
-- Loop preview in Live Preview canvas (GAP-010 surface).
-- Combine multiple presets at runtime (e.g. blend 70% idle + 30% breathing). Already supported in Cubism SDK runtime; SS animation system would need a blend mode on tracks.
-
-**Phase C — Phase 2 of the original generator plan:** walk / wave / jump presets. Architecture is ready (same pure builder, new tuning tables); needs:
-- New preset entries in `idle/presets.js`
-- Parameter sweeps that aren't loop-symmetric (walk has phase relationship between L/R limbs)
-- UI surface to pick "looping" vs "one-shot" intent
-
-**Why it matters.** The idle motion is the first thing a user sees of their character once it's exported. Making this one-click closes the loop "import PSD → rig → export → see idle" inside SS without leaving the app.
-
-**Out of scope.** Voice-driven lip-sync (a separate feature pillar). Procedural facial expressions tied to dialogue (also separate). The /idle generator is geometry-only.
+**Phase C (walk / wave / jump presets) — not pursued.** User-decided. The 4 idle-style presets cover the "what does my character do at rest" use case; non-loop one-shot motions are a different feature shape.
 
 ---
 
