@@ -129,8 +129,12 @@ export const useEditorStore = create((set) => ({
   /** Set of group IDs that are expanded in the Groups tab UI */
   expandedGroups: new Set(),
 
-  /** When true, property changes in animation mode automatically create/update keyframes */
-  autoKeyframe: true,
+  /** BFA-002 — Auto-Keying. When true, property changes in animation mode
+   *  automatically write keyframes at the playhead. Default `false` to
+   *  match Blender (canonical "explicit `K` to insert" path; the red
+   *  record-dot button in the timeline header opts the user into the
+   *  Auto-Key shortcut on demand). */
+  autoKeyframe: false,
 
   /** The ID of the blend shape currently being edited; only meaningful
    *  when editMode === 'blendShape'. Cleared on exitEditMode + on any

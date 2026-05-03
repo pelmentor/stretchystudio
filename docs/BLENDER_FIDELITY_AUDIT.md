@@ -23,6 +23,7 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 | 2026-05-03 | Tab-close `×` on canvas / timeline trio                 | Closing them empties an area with no in-product way back.                                                  | `NON_CLOSABLE_EDITOR_TYPES` allow-list. |
 | 2026-05-03 | Inline-tooltip wide bar                                 | shadcn `TooltipContent` had no max-width; long help text stretched across the canvas.                       | Default `max-w-xs`; per-call override still works (PP1-003). |
 | 2026-05-04 | `editorStore.editorMode` slot + `EditorModeService` chain | Stored field whose only writer was `setWorkspace`. Two slots holding the same information. | Replaced with `selectEditorMode` / `getEditorMode` derived from `uiV3Store.activeWorkspace`. `editorMode` field, `setEditorMode` action, `EditorModeService.js`, and its test all deleted. `setWorkspace` itself runs `captureRestPose` on staging→animation (BFA-001 + BFA-005). |
+| 2026-05-04 | `autoKeyframe` defaulted on (Spine, not Blender)         | Property changes silently wrote keyframes; only the `K` shortcut showed users the explicit path. | Default flipped to `false` (BFA-002). Timeline header's red record-dot button opts users into Auto-Keying explicitly; tooltip rewritten. K stays as the canonical manual-insert path. |
 
 ---
 
@@ -42,18 +43,11 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 
 ---
 
-### BFA-002 — `autoKeyframe` is a Spine pattern, not Blender
+### BFA-002 — `autoKeyframe` defaults to off (Blender-faithful) — **CLOSED**
 
-**What it is.** `editorStore.autoKeyframe: true` causes pointer-up on a bone / param drag in animation mode to dispatch a synthetic K key, automatically writing a keyframe at the current time.
+**What it was.** `editorStore.autoKeyframe` defaulted to `true`, so any property change in animation mode silently wrote a keyframe at the playhead. Blender ships Auto-Keying off by default — explicit `K` (or `I` in Blender proper) inserts a key, the red record-dot in the timeline header opts into the auto-write shortcut.
 
-**Why it might be a crutch.** Blender's pattern: explicit `I` press to insert a keyframe, full stop. There IS a global Auto-Keying button (the red record dot) in the timeline header that turns on automatic keyframing for every property change — but it's **off by default** and lives in the timeline chrome, not buried in editor state. Our default flips that: Auto-Key is on out of the box and only the K binding shows the user the explicit path.
-
-**Plan (deferred — needs user input).**
-- Surface the toggle in the timeline header (Blender pattern), not as a hidden default.
-- Default to `false` (matches Blender ergonomics; user explicitly asks for keyframes).
-- Keep the K key as the canonical path.
-
-**Open question for the user:** is auto-keyframe actually wanted? If yes, leave on; if no, default off. Not actioned in this audit pass.
+**Status (this commit).** Closed. Default flipped to `false` in [`editorStore.autoKeyframe`](../src/store/editorStore.js). The Auto-Keying button is already in the timeline header (red record dot, `animate-recording` pulse when on); the tooltip rewrites to spell out the semantics ("when on, every property change writes a keyframe at the playhead. Off by default — press K to insert manually."). The K-key handler in CanvasViewport stays as the canonical insert path. No runtime behaviour change for users who actively turn Auto-Key on; the only difference is that fresh sessions start in the explicit-insert mode instead of silently recording.
 
 ---
 

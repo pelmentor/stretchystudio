@@ -1439,13 +1439,16 @@ export function TimelineEditor() {
           <RotateCcw size={14} />
         </TransportBtn>
 
-        {/* Auto Keyframe */}
+        {/* Auto Keyframe — Blender-style red record dot. Off by default
+            (BFA-002): the canonical insert path is the K shortcut; this
+            toggle opts the user into "any property change writes a key
+            at the playhead", matching Blender's Auto-Keying. */}
         <TransportBtn
           disabled={!hasAnimation}
           onClick={() => setAutoKeyframe(!autoKeyframe)}
           active={autoKeyframe}
           className={autoKeyframe ? 'animate-recording' : ''}
-          title="Auto Keyframe: Automatically commit values to track when properties are changed"
+          title="Auto-Keying: when on, every property change writes a keyframe at the playhead. Off by default — press K to insert manually."
         >
           <Disc size={14} strokeWidth={2} />
         </TransportBtn>
