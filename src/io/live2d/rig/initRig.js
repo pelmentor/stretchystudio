@@ -190,23 +190,32 @@ function buildPartIdToTagMap(nodes) {
 }
 
 /**
- * PP1-002 — drop subsystem-disabled rigWarps from a heuristic-path
- * rigSpec, mirroring what `buildRigSpecFromCmo3` does for the authored
- * path. The previously-shipped GAP-008 work filtered the seed-output
- * (project.rigWarps storage) but left `rigSpec.warpDeformers` intact —
- * which meant the live evaluator (chainEval) still applied disabled
- * subsystem warps, e.g. hair sway driven by ParamBodyAngle*. Filtering
- * the rigSpec itself fixes the partial opt-out.
+ * PP1-002 — neutralise subsystem-disabled rigWarps in a heuristic-path
+ * rigSpec. Previously-shipped GAP-008 work filtered the seed-output
+ * (`project.rigWarps` storage) but left `rigSpec.warpDeformers` intact,
+ * so the live evaluator (chainEval) still applied disabled-subsystem
+ * warps and the user saw hair sway during body lean even with
+ * `hairRig=false`.
  *
- * Algorithm:
- *   1. Walk warpDeformers; for each rigWarp with `targetPartId` whose
- *      tag maps to a disabled subsystem, queue it for drop.
- *   2. Drop those warps; reparent every artMesh / warp / rotation that
- *      pointed at one of them to the dropped warp's parent. Frame
- *      conversion is NOT redone — the verts are kept in their existing
- *      frame, which means the part renders at its rest pose under the
- *      new parent (no warp deformation applied to that mesh). This is
- *      the desired behaviour for opt-out: "show the part, don't deform".
+ * Algorithm: identify per-part rigWarps owned by disabled subsystems
+ * (tag → TAG_TO_SUBSYSTEM lookup) and replace each one with an inert
+ * pass-through:
+ *   - `bindings: []`               — no params drive the warp.
+ *   - `keyforms: [keyforms[0]]`    — only the rest grid survives.
+ *
+ * `cellSelect` with empty bindings returns the rest keyform with weight
+ * 1 ([cellSelect.js:59](../runtime/evaluator/cellSelect.js#L59)), so the
+ * warp evaluates to its rest grid every frame regardless of param
+ * values. Bilinear FFD through that rest grid is identity within the
+ * warp's bbox — input verts pass through to the parent's frame
+ * unchanged. The art mesh stays at its rest canvas position with no
+ * sway.
+ *
+ * Why neutralise instead of drop+reparent: dropping the warp would
+ * orphan the art mesh's verts. The verts are stored in the dropped
+ * warp's normalised 0..1 frame; reparenting to a different warp /
+ * rotation / root would mismatch the frame and put the part at the
+ * wrong location. Neutralising keeps the chain coord-correct.
  *
  * Pure: returns a new rigSpec, leaves the input untouched.
  *
@@ -215,68 +224,44 @@ function buildPartIdToTagMap(nodes) {
  *   subsystems?: import('./autoRigConfig.js').AutoRigSubsystems|null,
  *   nodes?: Array<{id:string, name?:string}>,
  * }} [opts]
- * @returns {{rigSpec:object, droppedWarpIds:string[]}}
+ * @returns {{rigSpec:object, neutralisedWarpIds:string[]}}
  */
 export function applySubsystemOptOutToRigSpec(rigSpec, opts = {}) {
   if (!rigSpec || !Array.isArray(rigSpec.warpDeformers)) {
-    return { rigSpec, droppedWarpIds: [] };
+    return { rigSpec, neutralisedWarpIds: [] };
   }
   const subs = opts.subsystems ?? null;
-  if (!subs) return { rigSpec, droppedWarpIds: [] };
+  if (!subs) return { rigSpec, neutralisedWarpIds: [] };
 
   const partIdToTag = opts.nodes ? buildPartIdToTagMap(opts.nodes) : null;
-  if (!partIdToTag) return { rigSpec, droppedWarpIds: [] };
+  if (!partIdToTag) return { rigSpec, neutralisedWarpIds: [] };
 
-  // Build warpId → parent map for reparent lookup.
-  const warpById = new Map();
-  for (const w of rigSpec.warpDeformers) {
-    if (w?.id) warpById.set(w.id, w);
-  }
-
-  // 1. Identify warp ids to drop (per-part rigWarps owned by disabled subsystems).
-  const droppedWarpIds = new Set();
+  // Identify per-part rigWarps owned by disabled subsystems.
+  const neutralised = new Set();
   for (const spec of rigSpec.warpDeformers) {
     if (!spec) continue;
     if (typeof spec.targetPartId !== 'string' || spec.targetPartId.length === 0) continue;
     const tag = partIdToTag.get(spec.targetPartId);
     const owning = tag ? TAG_TO_SUBSYSTEM[tag] ?? null : null;
-    if (owning && subs[owning] === false) droppedWarpIds.add(spec.id);
+    if (owning && subs[owning] === false) neutralised.add(spec.id);
   }
-  if (droppedWarpIds.size === 0) return { rigSpec, droppedWarpIds: [] };
+  if (neutralised.size === 0) return { rigSpec, neutralisedWarpIds: [] };
 
-  // 2. Resolve each dropped warp's effective surviving ancestor. If the
-  //    parent is itself a dropped warp, walk up.
-  function resolveSurvivingParent(parentRef) {
-    let p = parentRef;
-    while (p && p.type === 'warp' && droppedWarpIds.has(p.id)) {
-      const w = warpById.get(p.id);
-      p = w?.parent ?? { type: 'root', id: null };
-    }
-    return p ?? { type: 'root', id: null };
-  }
-
-  const filteredWarps = rigSpec.warpDeformers
-    .filter(w => w && !droppedWarpIds.has(w.id));
-
-  const reparentedArtMeshes = (rigSpec.artMeshes ?? []).map((m) => {
-    if (!m?.parent || m.parent.type !== 'warp' || !droppedWarpIds.has(m.parent.id)) return m;
-    return { ...m, parent: resolveSurvivingParent(m.parent) };
-  });
-
-  // Rotation deformers may also parent to a dropped warp — reparent them too.
-  const reparentedRotations = (rigSpec.rotationDeformers ?? []).map((r) => {
-    if (!r?.parent || r.parent.type !== 'warp' || !droppedWarpIds.has(r.parent.id)) return r;
-    return { ...r, parent: resolveSurvivingParent(r.parent) };
+  const newWarps = rigSpec.warpDeformers.map((w) => {
+    if (!w?.id || !neutralised.has(w.id)) return w;
+    const restKf = Array.isArray(w.keyforms) && w.keyforms.length > 0
+      ? w.keyforms[0]
+      : null;
+    return {
+      ...w,
+      bindings: [],
+      keyforms: restKf ? [restKf] : [],
+    };
   });
 
   return {
-    rigSpec: {
-      ...rigSpec,
-      warpDeformers: filteredWarps,
-      artMeshes: reparentedArtMeshes,
-      rotationDeformers: reparentedRotations,
-    },
-    droppedWarpIds: [...droppedWarpIds],
+    rigSpec: { ...rigSpec, warpDeformers: newWarps },
+    neutralisedWarpIds: [...neutralised],
   };
 }
 
@@ -417,13 +402,13 @@ export async function initializeRigFromProject(project, images = new Map()) {
     { subsystems, nodes: project.nodes ?? [] },
   );
 
-  // PP1-002 — filter the live rigSpec itself so chainEval doesn't apply
-  // disabled-subsystem rigWarps. Mirrors the authored-cmo3 path's drop +
-  // reparent behaviour. Without this, `project.rigWarps` storage is filtered
-  // (export-time) but `rigSpec.warpDeformers` still contains hair/clothing/eye
-  // warps that get evaluated every frame, producing the visible "hair still
-  // sways" symptom even when hairRig=false.
-  const { rigSpec: filteredRigSpec, droppedWarpIds } = applySubsystemOptOutToRigSpec(
+  // PP1-002 — neutralise disabled-subsystem rigWarps in the live rigSpec
+  // so chainEval evaluates them as pass-throughs. Without this,
+  // `project.rigWarps` storage is filtered (export-time) but
+  // `rigSpec.warpDeformers` still contains hair/clothing/eye warps that
+  // get evaluated every frame, producing the visible "hair still sways"
+  // symptom even when hairRig=false.
+  const { rigSpec: filteredRigSpec, neutralisedWarpIds } = applySubsystemOptOutToRigSpec(
     result.rigSpec,
     { subsystems, nodes: project.nodes ?? [] },
   );
@@ -444,7 +429,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     bodyWarpChain: bodyWarpChain ? 'present' : 'missing',
     rigWarpsByPartId: rigWarps?.size ?? 0,
     disabledSubsystems: disabled.length > 0 ? disabled : undefined,
-    optOutWarpsDroppedFromRigSpec: droppedWarpIds.length || undefined,
+    optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
   });
   return {
     faceParallaxSpec,

@@ -903,9 +903,11 @@ export default function CanvasViewport({
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // PP1-008(b) — F enters radius-adjust mode. Only meaningful in
         // mesh edit; otherwise no-op (don't claim F globally). Captures
-        // the current radius so ESC can restore it, and the cursor
-        // position so the Blender-faithful cursor-distance gesture has
-        // an anchor (radius = distance(cursor, anchor) / view.zoom).
+        // the current radius so ESC can restore it. The cursor anchor
+        // is intentionally left null and snapshotted on the FIRST
+        // pointermove after F-press — this avoids using the stale
+        // (0,0) lastCursorRef when the user entered mesh-edit via the
+        // outliner / ModePill without first hovering the canvas.
         // Toggling F again before committing exits without changing
         // radius. Wheel adjustments still work alongside the gesture.
         if (editorRef.current.editMode !== 'mesh') return;
@@ -918,8 +920,8 @@ export default function CanvasViewport({
         } else {
           radiusAdjustModeRef.current.active = true;
           radiusAdjustModeRef.current.startRadius = prefs.proportionalEdit.radius;
-          radiusAdjustModeRef.current.anchorClientX = lastCursorRef.current.clientX;
-          radiusAdjustModeRef.current.anchorClientY = lastCursorRef.current.clientY;
+          radiusAdjustModeRef.current.anchorClientX = null;
+          radiusAdjustModeRef.current.anchorClientY = null;
         }
         isDirtyRef.current = true;
       } else if (e.key === 'Escape' && radiusAdjustModeRef.current.active) {
@@ -2043,17 +2045,25 @@ export default function CanvasViewport({
 
     // PP1-008(b) — Blender-faithful gesture: while the radius-adjust
     // mode is active, cursor distance from the anchor (F-press point)
-    // sets the proportional-edit radius. Wheel still nudges the value
-    // for users who prefer that; the two coexist with last-gesture-wins
-    // semantics. Convert screen-px to mesh-local by dividing by zoom.
+    // sets the proportional-edit radius. The anchor is snapshotted on
+    // the first pointermove after F-press, not at the keydown itself —
+    // that way users who entered mesh-edit via outliner / ModePill
+    // (without hovering the canvas first) still get a sane anchor at
+    // the position where their cursor actually arrives. Wheel still
+    // nudges the value alongside; last gesture wins.
     const radiusMode = radiusAdjustModeRef.current;
-    if (radiusMode.active && typeof radiusMode.anchorClientX === 'number') {
-      const dxAnchor = e.clientX - radiusMode.anchorClientX;
-      const dyAnchor = e.clientY - radiusMode.anchorClientY;
-      const screenDist = Math.hypot(dxAnchor, dyAnchor);
-      const zoomNow = editorRef.current.viewByMode[modeKey].zoom;
-      const meshRadius = Math.max(5, screenDist / Math.max(0.0001, zoomNow));
-      usePreferencesStore.getState().setProportionalEdit({ radius: meshRadius });
+    if (radiusMode.active) {
+      if (radiusMode.anchorClientX === null) {
+        radiusMode.anchorClientX = e.clientX;
+        radiusMode.anchorClientY = e.clientY;
+      } else {
+        const dxAnchor = e.clientX - radiusMode.anchorClientX;
+        const dyAnchor = e.clientY - radiusMode.anchorClientY;
+        const screenDist = Math.hypot(dxAnchor, dyAnchor);
+        const zoomNow = editorRef.current.viewByMode[modeKey].zoom;
+        const meshRadius = Math.max(5, screenDist / Math.max(0.0001, zoomNow));
+        usePreferencesStore.getState().setProportionalEdit({ radius: meshRadius });
+      }
       isDirtyRef.current = true;
     }
 

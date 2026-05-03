@@ -278,8 +278,10 @@ function assert(cond, name) {
   assert(r.rigWarps.has('p-x'), 'no opts: rigWarp retained');
 }
 
-// ── PP1-002 — applySubsystemOptOutToRigSpec drops disabled rigWarps and
-//             reparents affected art meshes ──────────────────────────
+// ── PP1-002 — applySubsystemOptOutToRigSpec neutralises disabled rigWarps
+//             (single rest keyform, empty bindings → pass-through). The
+//             art mesh's parent is preserved so verts stay in their
+//             correct frame; the warp evaluates to identity. ───────
 {
   const nodes = [
     { id: 'p-front-hair', name: 'front hair' },
@@ -288,9 +290,15 @@ function assert(cond, name) {
   ];
   const rigSpec = {
     warpDeformers: [
-      { id: 'FaceParallaxWarp', parent: { type: 'root', id: null } },
-      { id: 'RigWarp_FH', targetPartId: 'p-front-hair', parent: { type: 'warp', id: 'FaceParallaxWarp' } },
-      { id: 'RigWarp_BH', targetPartId: 'p-back-hair',  parent: { type: 'root', id: null } },
+      { id: 'FaceParallaxWarp', parent: { type: 'root', id: null },
+        bindings: [{ parameterId: 'ParamAngleX', keys: [-30, 0, 30] }],
+        keyforms: [{}, {}, {}] },
+      { id: 'RigWarp_FH', targetPartId: 'p-front-hair', parent: { type: 'warp', id: 'FaceParallaxWarp' },
+        bindings: [{ parameterId: 'ParamBodyAngleX', keys: [-10, 0, 10] }],
+        keyforms: [{ id: 'rest' }, { id: 'left' }, { id: 'right' }] },
+      { id: 'RigWarp_BH', targetPartId: 'p-back-hair',  parent: { type: 'root', id: null },
+        bindings: [{ parameterId: 'ParamBodyAngleZ', keys: [-10, 0, 10] }],
+        keyforms: [{ id: 'rest' }, { id: 'cw' }, { id: 'ccw' }] },
     ],
     rotationDeformers: [],
     artMeshes: [
@@ -300,24 +308,37 @@ function assert(cond, name) {
     ],
   };
 
-  // hairRig=false → both hair rigWarps dropped; art meshes reparent.
   const r = applySubsystemOptOutToRigSpec(rigSpec, {
     subsystems: { hairRig: false },
     nodes,
   });
-  assert(r.droppedWarpIds.length === 2, 'PP1-002 hairRig=false drops 2 warps');
-  assert(r.rigSpec.warpDeformers.length === 1, 'PP1-002 only FaceParallaxWarp survives');
-  assert(r.rigSpec.warpDeformers[0].id === 'FaceParallaxWarp', 'PP1-002 surviving warp is FaceParallax');
-  // Reparent: front-hair art mesh's parent was RigWarp_FH (whose parent was FaceParallaxWarp)
+  assert(r.neutralisedWarpIds.length === 2, 'PP1-002 hairRig=false neutralises 2 warps');
+  assert(r.rigSpec.warpDeformers.length === 3, 'PP1-002 warp count unchanged (count not drop)');
+
+  const fhWarp = r.rigSpec.warpDeformers.find(w => w.id === 'RigWarp_FH');
+  assert(fhWarp.bindings.length === 0, 'PP1-002 hair warp bindings cleared');
+  assert(fhWarp.keyforms.length === 1, 'PP1-002 hair warp reduced to 1 rest keyform');
+  assert(fhWarp.keyforms[0].id === 'rest', 'PP1-002 retained keyform IS the rest one (index 0)');
+  assert(fhWarp.parent.id === 'FaceParallaxWarp',
+    'PP1-002 hair warp parent untouched (frame stays consistent)');
+
+  const bhWarp = r.rigSpec.warpDeformers.find(w => w.id === 'RigWarp_BH');
+  assert(bhWarp.bindings.length === 0, 'PP1-002 back-hair warp bindings cleared');
+  assert(bhWarp.keyforms.length === 1 && bhWarp.keyforms[0].id === 'rest',
+    'PP1-002 back-hair warp reduced to rest');
+
+  // Face's warp untouched.
+  const faceParallax = r.rigSpec.warpDeformers.find(w => w.id === 'FaceParallaxWarp');
+  assert(faceParallax.bindings.length === 1 && faceParallax.keyforms.length === 3,
+    'PP1-002 FaceParallax warp untouched (faceRig still on)');
+
+  // Art mesh parents stay put — verts remain in the correct (still-existing) parent frame.
   const fh = r.rigSpec.artMeshes.find(m => m.id === 'p-front-hair');
-  assert(fh?.parent?.type === 'warp' && fh.parent.id === 'FaceParallaxWarp',
-    'PP1-002 front-hair reparented to FaceParallaxWarp (its dropped warp\'s parent)');
-  // Back-hair: dropped warp's parent was root → back-hair art mesh now root-parented
+  assert(fh.parent.id === 'RigWarp_FH', 'PP1-002 front-hair parent untouched');
   const bh = r.rigSpec.artMeshes.find(m => m.id === 'p-back-hair');
-  assert(bh?.parent?.type === 'root', 'PP1-002 back-hair reparented to root');
-  // Face is untouched.
+  assert(bh.parent.id === 'RigWarp_BH', 'PP1-002 back-hair parent untouched');
   const face = r.rigSpec.artMeshes.find(m => m.id === 'p-face');
-  assert(face?.parent?.id === 'FaceParallaxWarp', 'PP1-002 face artmesh untouched');
+  assert(face.parent.id === 'FaceParallaxWarp', 'PP1-002 face parent untouched');
 }
 
 // ── PP1-002 — no opts / null subsystems → identity ─────────────────
@@ -328,24 +349,42 @@ function assert(cond, name) {
   };
   const r1 = applySubsystemOptOutToRigSpec(rigSpec, {});
   assert(r1.rigSpec === rigSpec, 'PP1-002 no opts → identity');
-  assert(r1.droppedWarpIds.length === 0, 'PP1-002 no opts → 0 drops');
+  assert(r1.neutralisedWarpIds.length === 0, 'PP1-002 no opts → 0 neutralised');
 
   const r2 = applySubsystemOptOutToRigSpec(rigSpec, { subsystems: null, nodes: [] });
   assert(r2.rigSpec === rigSpec, 'PP1-002 null subsystems → identity');
 }
 
-// ── PP1-002 — disabled subsystem with no matching tags → no drops ──
+// ── PP1-002 — disabled subsystem with no matching tags → no neutralise ─
 {
   const nodes = [{ id: 'p-x', name: 'face' }];
   const rigSpec = {
-    warpDeformers: [{ id: 'X', targetPartId: 'p-x' }],
+    warpDeformers: [{ id: 'X', targetPartId: 'p-x', bindings: [], keyforms: [{}] }],
     artMeshes: [{ id: 'p-x', parent: { type: 'warp', id: 'X' } }],
   };
   const r = applySubsystemOptOutToRigSpec(rigSpec, {
     subsystems: { hairRig: false },
     nodes,
   });
-  assert(r.droppedWarpIds.length === 0, 'PP1-002 hairRig=false but no hair-tagged parts → 0 drops');
+  assert(r.neutralisedWarpIds.length === 0,
+    'PP1-002 hairRig=false but no hair-tagged parts → 0 neutralised');
+}
+
+// ── PP1-002 — warp with no keyforms → keyforms stays empty array ─
+{
+  const nodes = [{ id: 'p-h', name: 'front hair' }];
+  const rigSpec = {
+    warpDeformers: [{ id: 'X', targetPartId: 'p-h', bindings: [{ parameterId: 'ParamA', keys: [0, 1] }], keyforms: [] }],
+    artMeshes: [{ id: 'p-h', parent: { type: 'warp', id: 'X' } }],
+  };
+  const r = applySubsystemOptOutToRigSpec(rigSpec, {
+    subsystems: { hairRig: false },
+    nodes,
+  });
+  assert(r.neutralisedWarpIds.length === 1, 'PP1-002 empty-keyforms warp still neutralised');
+  const w = r.rigSpec.warpDeformers[0];
+  assert(w.bindings.length === 0 && w.keyforms.length === 0,
+    'PP1-002 empty-keyforms input → empty output, no crash');
 }
 
 console.log(`subsystemsOptOut: ${passed} passed, ${failed} failed`);
