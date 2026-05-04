@@ -125,6 +125,28 @@ type ProjectNode =
 - `project.bodyWarp.specs[]` → each entry becomes a `type:'deformer'` node; the surrounding `layout`/`bodyFrac` metadata moves to `project.bodyWarpLayout` (kept as small sidetable since it's measurement metadata, not deformer state).
 - `project.rigWarps` → each entry becomes a `type:'deformer'` node with `targetPartId` set.
 
+### What stays derived (NOT persisted on deformer nodes)
+
+`selectRigSpec` regenerates these fields from project.nodes each call. Persisting them would let stored data drift from geometry — the audit confirms chainEval and the writers consume all of them.
+
+- **`ArtMeshSpec.verticesCanvas` / `triangles` / `uvs`** — read from `node.mesh.*` at projection time. Persisting would duplicate mesh state.
+- **`RigSpec.canvasToInnermostX` / `canvasToInnermostY`** — closures over the innermost body warp's bbox (currently `BodyXWarp`). chainEval reads them at [`chainEval.js:409`](../src/io/live2d/runtime/evaluator/chainEval.js#L409) for the legacy `_warpSlopeX/Y` fallback. `selectRigSpec` rebuilds them from the innermost warp deformer node's `baseGrid` bbox.
+- **`RigSpec.innermostBodyWarpId`** — the id of the deepest `BodyXWarp`-style warp; selector picks the bottom of the BodyWarp* chain.
+- **`RigSpec.parts`** — built from `project.nodes.filter(type==='part')`.
+- **`RigSpec.parameters`** — already in `project.parameters`, copied verbatim.
+- **`RigSpec.physicsRules`** — `resolvePhysicsRules(project)` (already a derived selector).
+- **`RigSpec.canvas`** — `project.canvas`.
+
+### `_userAuthored` keying after migration
+
+Today the marker key is per-stage:
+- `maskConfigs` → `maskedMeshId`
+- `physicsRules` → `id`
+- `rigWarps` → `targetPartId`
+- `faceParallax` / `bodyWarp` → scalar (the marker lives on the singleton itself, so EITHER the whole thing is user-authored OR not)
+
+After migration everything is a `project.nodes` entry, so the merge logic collapses into ONE rule: **id-keyed merge.** `seedAllRig({mode:'merge'})` walks both arrays, preserves nodes whose `_userAuthored === true`, and overwrites the rest with auto-seeded entries that share an id. Per-deformer granularity replaces the singleton "all-or-nothing" semantics that `faceParallax` / `bodyWarp` had — a strict UX improvement.
+
 ---
 
 ## Phase breakdown
@@ -168,21 +190,23 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 **Goal:** `initializeRigFromProject` + `seedAllRig` + per-stage refit all WRITE deformer nodes into `project.nodes` directly. The three legacy sidetables stop being touched.
 
 - `seedAllRig(harvest)` rewrites: it now upserts deformer nodes in `project.nodes`, indexed by id. `mode: 'merge'` preserves `_userAuthored` markers per-node. `mode: 'replace'` clobbers.
+- **Synthetic "Rig" Collection (per Decision 2):** `seedAllRig` ensures a root-level `type:'group'` node named "Rig" exists, then sets every generated deformer node's `parent` to that group's id. User can rename / move / delete the group post-seed; deformers fall back to root-parented when the Rig group goes away.
 - Per-stage refit (`runStage`): same `seedAllRig(harvest, mode)` path; harvest already returns the right shape, only the WRITE side changes.
 - `paramSpec.js` / `physicsConfig.js` / etc. — already write to `project.parameters` / `project.physicsRules`, no change.
 - `applySubsystemOptOutToRigSpec` (PP1-002) becomes a project-walking pass: filter `project.nodes` to deformers, identify subsystem-owned ones via `targetPartId → tag → subsystem`, neutralise (single rest keyform, empty bindings) verbatim — same algorithm, different input shape.
 
-**Deliverable:** Init Rig produces the same rendered output. `npm test` green including the round-trip + e2e tests.
+**Deliverable:** Init Rig produces the same rendered output, with deformers visible in the Outliner under a "Rig" Collection. `npm test` green including the round-trip + e2e tests.
 
 ### Phase 4 — Outliner naturalisation (~0.5 day)
 
-**Goal:** Outliner's View Layer mode shows deformers as natural siblings of parts/groups, without the synthetic "Rig" pseudo-root.
+**Goal:** Outliner's View Layer mode shows deformers as siblings of parts/groups (or under the "Rig" Collection group from Phase 3), without the runtime-synthesised pseudo-root.
 
 - `buildHierarchyTree` already walks `project.nodes`. Once deformers are in there, they appear naturally — no special-case code.
-- The `RIG_PSEUDO_ROOT_ID` synthetic pseudo-root and `buildViewLayerTree` composition can be removed, OR kept as a "show deformers in a separate section" cosmetic toggle. Recommendation: remove (one true tree).
-- Optional: deformers render with a different bg tint or appear under a "Rig" collection-style folder by convention (auto-rig generates a `type:'group'` named "Rig" that contains the deformer subtree). This matches Blender's Collection pattern.
+- **Delete `RIG_PSEUDO_ROOT_ID` + `buildViewLayerTree` composition.** The "Rig" Collection group from Phase 3 is now a real `type:'group'` node, not a synthetic one — the unified tree is just the hierarchy walker.
+- "Armature Data" and "Rig Data" dropdown filters become SAME-DATA filters over the unified tree (predicate-based on `node.type === 'deformer'` etc.), not separate trees with different builders.
+- TreeNode's `isBone` flag stays; add an analogous `isDeformer` for icon picking (warp icon for `deformerKind:'warp'`, rotation icon for `deformerKind:'rotation'`).
 
-**Deliverable:** Outliner shows one canonical tree. Unified View Layer name still applies but the dropdown's `Armature Data` and `Rig Data` filters are now SAME-DATA filters, not different-tree filters.
+**Deliverable:** Outliner shows one canonical tree. The unified View Layer name still applies but the dropdown's `Armature Data` and `Rig Data` filters are now SAME-DATA filters, not different-tree filters. `RIG_PSEUDO_ROOT_ID` constant + `buildViewLayerTree` function are removed.
 
 ### Phase 5 — Selection + per-deformer properties (~0.5 day)
 
@@ -232,6 +256,9 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 | Cubism byte-exact export breaks | high | Every phase keeps `chainEval` and `generateCmo3` consumers unchanged. They read the same shape. The only diff is WHERE that shape comes from (a derived selector vs. a built blob). Run `test:cubismPhysicsOracle` + `test:e2e` after each phase. |
 | Per-stage refit (V3 Re-Rig) regression | medium | Phase 3 ports the merge logic node-by-node. The 11-stage runStageIntegration test is the regression net. |
 | Outliner drag-reorder lands deformers in invalid parents | low | Phase 5's drag handler validates: deformer parent must be another deformer or root; part parent must be group/null; group parent must be group/null. Reject invalid drops. |
+| `canvasToInnermostX/Y` closures regenerated each `selectRigSpec` call → allocation churn on the chainEval hot path | medium | Memoize `selectRigSpec` on `project` identity (`useProjectStore` already preserves identity across non-mutating reads). Closures only rebuild when project changes — same cadence as today's `useRigSpecStore.buildRigSpec`. Bench against shelby to confirm <5% frame-budget delta. |
+| User deletes the synthetic "Rig" Collection group → orphan deformers | low | Group-delete path either reparents children to root (legitimate) or refuses if `_userAuthored`-marked deformers would orphan. Keep the soft fallback: deformers with `parent === <deletedRigId>` get `parent: null` on group delete. Auto-rig recreates the Rig group on the next Init Rig if missing. |
+| Migration v15 reconstructing `parts[i].rigParent` requires re-running Init Rig (async) → migration becomes async | medium | Migration v15 reads `project.rigWarps[partId]` directly to figure out which deformer parents which part — the data is already there, no async re-run needed. The synthesis is "for each rigWarps key, set `parts[partId].rigParent = rigWarps[partId].id`." Plus FaceParallax / BodyWarp parts inferred from their existing `parent` fields in the spec. Synchronous. |
 
 ---
 
@@ -244,12 +271,17 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 ---
 
-## Open questions for the user
+## Decisions (2026-05-04 — "делаем как Blender")
 
-1. **Bone vs deformer separation.** Plan keeps bones as `type:'group'` with `boneRole`. Do you want them collapsed into `type:'deformer'` too? Recommendation: keep separate (Blender's contract — bones are Armature data, modifiers are separate).
-2. **Synthetic "Rig" Collection group.** When auto-rig writes deformer nodes, should it group them under a synthetic `type:'group'` named "Rig" so the Outliner shows a tidy folder, or leave deformers as siblings of parts/groups at root level? Recommendation: synthetic group for tidiness; user can rename/move it.
-3. **Phase commit cadence.** Each phase ships green + behaviour-preserving. Do you want to push after each phase (incremental) or batch into one big PR after Phase 7? Recommendation: incremental (smaller blast radius, easier to revert).
-4. **Migration soak time.** Plan keeps old fields populated during Phases 1–5. How long do we want them around before Phase 6 deletes them? Recommendation: at least one week of daily-driver use after Phase 5.
+User locked in the four open questions with "do as Blender does". The Blender-canonical answers happen to match the original recommendations — formalising them so each phase has a fixed contract:
+
+1. **Bones stay separate from deformers.** Blender's data model: bones are sub-data of an Armature OBJECT (not Objects themselves); modifiers are sub-data of Mesh Objects. They're structurally distinct categories. SS mirrors this: bones stay `type:'group' + boneRole`, deformers become `type:'deformer'`. The two categories interact through `ParamRotation_<bone>` parameters — bones don't BECOME rotation deformers, they DRIVE them.
+
+2. **Auto-rig creates a default "Rig" Collection.** Blender's auto-generated rigs (e.g. Rigify) drop their generated objects into a sub-Collection by default. SS auto-rig will do the same: the seed step creates a `type:'group'` node named "Rig" at root level, then attaches every generated deformer node under it. The user can rename it, move deformers OUT of it, delete it (deformers reparent to root) — it's just a Collection. This keeps the default Outliner tidy when there are 30–50 generated deformers without forcing structure on power users.
+
+3. **Incremental push after each phase.** Blender's main is always green; large refactors land in small reviewable patches. Each phase here is shippable + behaviour-preserving — push after each. Smaller blast radius, easier revert per phase, oracle gate runs catch regressions before the next phase compounds them.
+
+4. **One week of daily-driver soak before Phase 6.** Blender's deprecation cycle is ≥1 release before removal. Phases 1–5 keep `project.faceParallax` / `project.bodyWarp` / `project.rigWarps` populated alongside the new deformer nodes (dual-write). After Phase 5 lands and at least one week of daily-driver use passes with no rig-eval / export regressions, Phase 6 deletes the old fields. Rollback to Phase 5 stays possible during that window.
 
 ---
 
