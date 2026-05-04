@@ -17,6 +17,7 @@ import { useEditorStore } from '@/store/editorStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
+import { useSelectionStore } from '@/store/selectionStore';
 import { SKELETON_CONNECTIONS } from '@/io/armatureOrganizer';
 import { computeWorldMatrices, mat3Identity } from '@/renderer/transforms';
 import { computePoseOverrides } from '@/renderer/animationEngine';
@@ -29,6 +30,10 @@ import { logger } from '@/lib/logger';
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
 const COLOUR_EDIT   = '#facc15';      // yellow — edit mode ready to drag
 const COLOUR_DRAG   = '#22d3ee';      // cyan — currently dragging
+// Outliner ↔ canvas selection sync — bones the user picked in the
+// Outliner Skeleton tab (or via canvas click) get the sky-blue accent
+// + a soft halo ring so they pop against the red/yellow joint dots.
+const COLOUR_SELECTED = '#38bdf8';    // sky-400
 const LINE_COLOUR   = 'rgba(34,211,238,0.55)';
 
 const JOINT_RADIUS_NORMAL = 5;
@@ -87,6 +92,12 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
+  // Outliner→canvas selection bridge: the universal selectionStore is
+  // the canonical truth (Outliner Skeleton tab writes here), the legacy
+  // `editorStore.selection` carries the same payload mirrored by
+  // CanvasViewport's part-click handler. Read both so a click in
+  // EITHER surface highlights the matching joint dot.
+  const selectionStoreItems = useSelectionStore(s => s.items);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
@@ -615,19 +626,57 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     );
   }
 
+  // Union of both selection sources. `editorStore.selection` already
+  // carries plain ids; selectionStore's group entries name bones too.
+  const selectionSet = new Set(selection ?? []);
+  for (const it of selectionStoreItems) {
+    if (it && (it.type === 'group' || it.type === 'part') && typeof it.id === 'string') {
+      selectionSet.add(it.id);
+    }
+  }
+
   const circles = [];
   for (const [role, node] of Object.entries(boneNodes)) {
     if (role === 'root') continue;
     const [cx, cy] = pivotScreenPos(node);
     const isDragging = dragRef.current?.nodeId === node.id;
-    const fill = isDragging ? COLOUR_DRAG : (skeletonEditMode ? COLOUR_EDIT : COLOUR_NORMAL);
+    const isSelected = selectionSet.has(node.id);
+    // Drag wins over selection so the active gesture always reads as
+    // cyan; otherwise selection wins over edit-mode/normal — that way
+    // a click in Outliner→Skeleton picks a bone and the canvas
+    // immediately confirms which one.
+    const fill = isDragging
+      ? COLOUR_DRAG
+      : isSelected
+        ? COLOUR_SELECTED
+        : (skeletonEditMode ? COLOUR_EDIT : COLOUR_NORMAL);
+    if (isSelected && !isDragging) {
+      // Soft halo ring — same accent at low opacity, fattens to
+      // ~2x the joint radius. Drawn first so the solid dot paints on top.
+      circles.push(
+        <circle key={`${role}-halo`}
+          cx={cx} cy={cy} r={radius * 2}
+          fill="none" stroke={COLOUR_SELECTED} strokeOpacity={0.4} strokeWidth={2}
+          pointerEvents="none"
+        />
+      );
+    }
     circles.push(
       <circle key={role}
         cx={cx} cy={cy} r={radius}
         fill={fill} stroke="#000" strokeWidth={1.5}
         style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
         onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
-        onClick={() => !skeletonEditMode && setSelection([node.id])}
+        onClick={() => {
+          if (skeletonEditMode) return;
+          // Mirror to BOTH stores — same dual-write pattern CanvasViewport
+          // uses for part picks (line ~1984). Outliner Skeleton tab
+          // subscribes to selectionStore; legacy consumers (Properties,
+          // Gizmo) read editorStore.selection. Either way the user sees
+          // the bone highlighted everywhere it appears.
+          setSelection([node.id]);
+          useSelectionStore.getState().select({ type: 'group', id: node.id }, 'replace');
+        }}
       />
     );
     if (skeletonEditMode) {

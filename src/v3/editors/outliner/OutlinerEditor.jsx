@@ -36,6 +36,7 @@ import { TreeNode } from './TreeNode.jsx';
 const MODES = /** @type {const} */ ([
   { id: 'hierarchy', label: 'Hierarchy' },
   { id: 'rig',       label: 'Rig' },
+  { id: 'skeleton',  label: 'Skeleton' },
 ]);
 
 export function OutlinerEditor() {
@@ -59,8 +60,16 @@ export function OutlinerEditor() {
 
   const roots = useMemo(() => {
     if (mode === 'rig') return buildOutlinerTree(rigSpec, { mode: 'rig' });
+    if (mode === 'skeleton') return buildOutlinerTree(nodes, { mode: 'skeleton' });
     return buildOutlinerTree(nodes, { mode: 'hierarchy' });
   }, [mode, nodes, rigSpec]);
+
+  // Whether the project has any boneRole-tagged groups. Drives the
+  // Skeleton-tab disabled state + the empty-state message.
+  const hasArmature = useMemo(
+    () => nodes.some((n) => n?.type === 'group' && n?.boneRole),
+    [nodes],
+  );
 
   // Apply search filter — `q.length > 0` shrinks the visible tree to
   // matching rows + their ancestors. Empty query → unfiltered.
@@ -78,6 +87,10 @@ export function OutlinerEditor() {
     for (const it of items) {
       if (mode === 'rig') {
         if (it.type === 'deformer' || it.type === 'part') s.add(it.id);
+      } else if (mode === 'skeleton') {
+        // Skeleton view is bone-only; only group selections matter
+        // here. (Bones are stored as `type:'group'` with `boneRole`.)
+        if (it.type === 'group') s.add(it.id);
       } else {
         if (it.type === 'part' || it.type === 'group') s.add(it.id);
       }
@@ -89,7 +102,8 @@ export function OutlinerEditor() {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if (mode === 'rig' && (it.type === 'deformer' || it.type === 'part')) return it.id;
-      if (mode !== 'rig' && (it.type === 'part' || it.type === 'group')) return it.id;
+      if (mode === 'skeleton' && it.type === 'group') return it.id;
+      if (mode !== 'rig' && mode !== 'skeleton' && (it.type === 'part' || it.type === 'group')) return it.id;
     }
     return null;
   }, [items, mode]);
@@ -211,9 +225,10 @@ export function OutlinerEditor() {
         query={query}
         onQueryChange={setQuery}
         rigAvailable={!!rigSpec}
+        skeletonAvailable={hasArmature}
       />
       {rows.length === 0 ? (
-        <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasQuery={!!query.trim()} />
+        <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasArmature={hasArmature} hasQuery={!!query.trim()} />
       ) : (
         <div
           role="tree"
@@ -256,24 +271,28 @@ export function OutlinerEditor() {
   );
 }
 
-function Header({ mode, onModeChange, query, onQueryChange, rigAvailable }) {
+function Header({ mode, onModeChange, query, onQueryChange, rigAvailable, skeletonAvailable }) {
   return (
     <div className="border-b border-border bg-muted/20 flex flex-col">
       <div className="flex items-center gap-0.5 px-1 pt-1">
         {MODES.map((m) => {
           const on = m.id === mode;
-          const disabled = m.id === 'rig' && !rigAvailable;
+          const disabled =
+            (m.id === 'rig' && !rigAvailable)
+            || (m.id === 'skeleton' && !skeletonAvailable);
+          const disabledTip =
+            m.id === 'rig'
+              ? 'Rig mode requires a built rigSpec — run Initialize Rig first.'
+              : m.id === 'skeleton'
+                ? 'Skeleton mode needs an armature — import a PSD with bone-tagged groups or run Init Rig.'
+                : m.label;
           return (
             <button
               key={m.id}
               type="button"
               disabled={disabled}
               onClick={() => onModeChange(m.id)}
-              title={
-                disabled
-                  ? 'Rig mode requires a built rigSpec — run Initialize Rig first.'
-                  : m.label
-              }
+              title={disabled ? disabledTip : m.label}
               className={
                 'px-2 h-6 text-[11px] rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ' +
                 (on
@@ -311,11 +330,13 @@ function Header({ mode, onModeChange, query, onQueryChange, rigAvailable }) {
   );
 }
 
-function EmptyState({ mode, hasNodes, hasRigSpec, hasQuery }) {
+function EmptyState({ mode, hasNodes, hasRigSpec, hasArmature, hasQuery }) {
   let msg = '';
   if (hasQuery) msg = 'No matches.';
   else if (mode === 'rig' && !hasRigSpec) msg = 'No rig built — click Initialize Rig in Parameters.';
   else if (mode === 'rig') msg = 'Rig is empty.';
+  else if (mode === 'skeleton' && !hasArmature) msg = 'No armature — import a PSD with bone-tagged groups, or run Init Rig.';
+  else if (mode === 'skeleton') msg = 'Skeleton is empty.';
   else if (!hasNodes) msg = 'No layers — import a PSD to begin.';
   else msg = 'Empty.';
   return (

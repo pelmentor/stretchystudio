@@ -13,6 +13,11 @@
  *   - `'hierarchy'` — scene tree (parts + groups). Default.
  *   - `'rig'`       — rigSpec deformer tree (warps + rotations) with
  *                     art meshes shown under their parent deformer.
+ *   - `'skeleton'`  — armature view: only `boneRole`-tagged groups,
+ *                     bone-to-bone parent chain. Mirrors Blender's
+ *                     Armature outliner; click → selects the bone, with
+ *                     SkeletonOverlay's canvas joint dot highlighting
+ *                     the selection in lockstep.
  *   - `'param'`     — parameters grouped by role. (Not implemented;
  *                     largely covered by ParametersEditor for now.)
  *   - `'anim'`      — animations + tracks. (Not implemented; lands
@@ -35,6 +40,9 @@
  * @property {string|null|undefined} parent
  * @property {number=}             draw_order
  * @property {boolean=}            visible
+ * @property {string|null=}        boneRole
+ *   When `type === 'group'` and this is set, the group is a skeleton
+ *   bone. Used by `'skeleton'` mode to filter to bones-only.
  */
 
 /**
@@ -71,10 +79,14 @@
  * @property {boolean}                                         visible
  * @property {number}                                          sortKey
  * @property {('warp'|'rotation')=}                            deformerKind
+ * @property {boolean=}                                        isBone
+ *   Skeleton-mode rows set this so TreeNode renders a bone icon
+ *   instead of the default folder. The underlying node is still a
+ *   group (selectionStore uses `type:'group'`).
  */
 
 /**
- * @typedef {('hierarchy'|'rig'|'param'|'anim')} OutlinerDisplayMode
+ * @typedef {('hierarchy'|'rig'|'skeleton'|'param'|'anim')} OutlinerDisplayMode
  */
 
 const DEFAULT_DRAW_ORDER = 0;
@@ -95,6 +107,8 @@ export function buildOutlinerTree(input, opts = {}) {
       return buildHierarchyTree(/** @type {ProjectNodeLike[]} */ (input));
     case 'rig':
       return buildRigTree(/** @type {RigSpecLike} */ (input));
+    case 'skeleton':
+      return buildSkeletonTree(/** @type {ProjectNodeLike[]} */ (input));
     case 'param':
     case 'anim':
       throw new Error(`buildOutlinerTree: mode '${mode}' not implemented yet`);
@@ -189,6 +203,87 @@ function buildHierarchyTree(nodes) {
     .map(build)
     .sort((a, b) => b.sortKey - a.sortKey);
   return roots;
+}
+
+/**
+ * Build the armature tree — only `boneRole`-tagged groups, parent chain
+ * collapsed to bone-to-bone (a bone whose `parent` points at a non-bone
+ * group is treated as a root). Mirrors Blender's Armature outliner.
+ *
+ * Sort order: alphabetical by `boneRole` within siblings — the auto-rig
+ * naming convention (`leftArm` / `rightArm`, `leftLeg` / `rightLeg`,
+ * `leftKnee` / `rightKnee`) makes this stable and readable.
+ *
+ * @param {ProjectNodeLike[]|null|undefined} nodes
+ * @returns {OutlinerNode[]}
+ */
+function buildSkeletonTree(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) return [];
+
+  /** @type {Map<string, ProjectNodeLike>} */
+  const bonesById = new Map();
+  for (const n of nodes) {
+    if (!n || typeof n.id !== 'string' || n.id === '') continue;
+    if (n.type !== 'group') continue;
+    if (!n.boneRole) continue;
+    bonesById.set(n.id, n);
+  }
+  if (bonesById.size === 0) return [];
+
+  /** @type {Map<string, ProjectNodeLike[]>} */
+  const childrenByParent = new Map();
+  childrenByParent.set('__ROOT__', []);
+  for (const bone of bonesById.values()) {
+    // Walk up `parent` chain until we land on another bone (or the
+    // project root). Non-bone groups in between are skipped — they're
+    // not part of the armature view.
+    let p = bone.parent ?? null;
+    while (p && !bonesById.has(p)) {
+      const upstream = nodes.find((n) => n?.id === p);
+      p = upstream?.parent ?? null;
+    }
+    const parentKey = p && bonesById.has(p) ? p : '__ROOT__';
+    let bucket = childrenByParent.get(parentKey);
+    if (!bucket) { bucket = []; childrenByParent.set(parentKey, bucket); }
+    bucket.push(bone);
+  }
+
+  const onPath = new Set();
+
+  /**
+   * @param {ProjectNodeLike} bone
+   * @returns {OutlinerNode}
+   */
+  function build(bone) {
+    if (onPath.has(bone.id)) {
+      return {
+        id: bone.id, type: 'group', name: bone.boneRole ?? bone.name,
+        parent: null, children: [], visible: bone.visible !== false,
+        sortKey: 0, isBone: true,
+      };
+    }
+    onPath.add(bone.id);
+    const rawKids = childrenByParent.get(bone.id) ?? [];
+    const kids = rawKids.map(build).sort((a, b) => a.name.localeCompare(b.name));
+    onPath.delete(bone.id);
+    return {
+      id: bone.id,
+      type: 'group',
+      // Surface boneRole as the row label — auto-rig conventions
+      // (`head`, `leftArm`, `bothLegs`) read better than the auto-
+      // generated group name which often duplicates the role.
+      name: bone.boneRole ?? bone.name,
+      parent: bone.parent && bonesById.has(bone.parent) ? bone.parent : null,
+      children: kids,
+      visible: bone.visible !== false,
+      sortKey: 0,
+      isBone: true,
+    };
+  }
+
+  return (childrenByParent.get('__ROOT__') ?? [])
+    .map(build)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

@@ -366,6 +366,80 @@ assertThrows(
   assert(a[0] !== b[0], 'idempotent: deep different references');
 }
 
+// ── Skeleton mode — boneRole-tagged groups, bone-to-bone parent chain ─
+
+{
+  // Realistic auto-rig shape: torso is the root bone; head/arms hang
+  // off it; non-bone groups (a generic 'body' wrapper) sit between
+  // bones in the project hierarchy and should be SKIPPED on the way up.
+  const nodes = [
+    { id: 'g-body',   type: 'group', name: 'body wrapper', parent: null }, // non-bone
+    { id: 'b-torso',  type: 'group', name: 'torso',        parent: 'g-body', boneRole: 'torso' },
+    { id: 'b-head',   type: 'group', name: 'head',         parent: 'b-torso', boneRole: 'head' },
+    { id: 'b-larm',   type: 'group', name: 'left arm',     parent: 'b-torso', boneRole: 'leftArm' },
+    { id: 'b-rarm',   type: 'group', name: 'right arm',    parent: 'b-torso', boneRole: 'rightArm' },
+    { id: 'b-lelbow', type: 'group', name: 'left elbow',   parent: 'b-larm',  boneRole: 'leftElbow' },
+    { id: 'p-mesh',   type: 'part',  name: 'mesh',         parent: 'b-head' }, // parts ignored
+  ];
+
+  const tree = buildOutlinerTree(nodes, { mode: 'skeleton' });
+  assert(Array.isArray(tree) && tree.length === 1, 'skeleton: 1 root (torso)');
+  const torso = tree[0];
+  assert(torso.id === 'b-torso', 'skeleton: torso is the root bone');
+  assert(torso.name === 'torso', 'skeleton: row label uses boneRole, not group name');
+  assert(torso.isBone === true, 'skeleton: rows are flagged isBone');
+  assert(torso.children.length === 3, 'skeleton: torso has head + 2 arms (parts excluded)');
+
+  // Children sorted alphabetically: head, leftArm, rightArm
+  assert(torso.children[0].name === 'head',     'skeleton: alphabetical sort — head first');
+  assert(torso.children[1].name === 'leftArm',  'skeleton: leftArm second');
+  assert(torso.children[2].name === 'rightArm', 'skeleton: rightArm third');
+
+  // leftElbow nests under leftArm even though they share no direct
+  // project parent (project hierarchy goes torso → larm → lelbow,
+  // skeleton tree picks that up via the bone-bone walk).
+  const larm = torso.children[1];
+  assert(larm.children.length === 1 && larm.children[0].name === 'leftElbow',
+    'skeleton: leftElbow nested under leftArm');
+}
+
+// ── Skeleton mode — non-bone parents skipped on the way up ──────────
+
+{
+  // Head's project parent is a non-bone group, but its grand-parent IS
+  // a bone. Skeleton tree should attach head directly to torso.
+  const nodes = [
+    { id: 'b-torso',  type: 'group', name: 'torso', parent: null,       boneRole: 'torso' },
+    { id: 'g-spacer', type: 'group', name: 'spacer', parent: 'b-torso' }, // non-bone in between
+    { id: 'b-head',   type: 'group', name: 'head',  parent: 'g-spacer', boneRole: 'head' },
+  ];
+  const tree = buildOutlinerTree(nodes, { mode: 'skeleton' });
+  const torso = tree[0];
+  assert(torso.children.length === 1 && torso.children[0].id === 'b-head',
+    'skeleton: non-bone group skipped in parent walk');
+}
+
+// ── Skeleton mode — empty when no bones ─────────────────────────────
+
+{
+  const noBones = [
+    { id: 'g1', type: 'group', name: 'body', parent: null }, // boneRole missing
+    { id: 'p1', type: 'part',  name: 'face', parent: 'g1', draw_order: 1 },
+  ];
+  const tree = buildOutlinerTree(noBones, { mode: 'skeleton' });
+  assert(Array.isArray(tree) && tree.length === 0, 'skeleton: empty when no boneRole-tagged groups');
+}
+
+// ── Skeleton mode — bone whose parent is a non-existent ID is treated as root ─
+
+{
+  const orphanBone = [
+    { id: 'b-x', type: 'group', name: 'x', parent: 'missing-id', boneRole: 'head' },
+  ];
+  const tree = buildOutlinerTree(orphanBone, { mode: 'skeleton' });
+  assert(tree.length === 1 && tree[0].id === 'b-x', 'skeleton: orphan bone surfaces as root');
+}
+
 // ── Output ──────────────────────────────────────────────────────────
 
 console.log(`outlinerTreeBuilder: ${passed} passed, ${failed} failed`);

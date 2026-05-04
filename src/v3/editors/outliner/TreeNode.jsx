@@ -17,7 +17,7 @@
 import {
   ChevronRight, ChevronDown,
   Folder, Image as ImageIcon, Eye, EyeOff,
-  Box, RotateCw,
+  Box, RotateCw, Bone,
 } from 'lucide-react';
 
 const INDENT_PX = 14;
@@ -45,7 +45,8 @@ export function TreeNode({
 }) {
   const hasChildren = node.children.length > 0;
   const Icon =
-    node.type === 'group' ? Folder
+    node.isBone ? Bone
+    : node.type === 'group' ? Folder
     : node.type === 'deformer' ? (node.deformerKind === 'rotation' ? RotateCw : Box)
     : ImageIcon;
   const VisIcon = node.visible === false ? EyeOff : Eye;
