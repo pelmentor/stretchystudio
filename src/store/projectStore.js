@@ -425,47 +425,70 @@ export const useProjectStore = create((set, get) => {
   seedAutoRigConfig:          projectMutator(seedAutoRigConfigFn),
 
   /**
-   * Seed `project.faceParallax` from a pre-computed spec (Stage 4).
-   * Caller is responsible for producing the spec — typically via
-   * `buildFaceParallaxSpec(...)` with current mesh / bbox / pivot
-   * inputs. Destructive: overwrites prior storage.
+   * Upsert the FaceParallax warp deformer node in `project.nodes`
+   * from a pre-computed `WarpDeformerSpec`. Caller produces the spec
+   * — typically via `buildFaceParallaxSpec(...)` with current mesh /
+   * bbox / pivot inputs. Destructive: overwrites the prior node by
+   * id `'FaceParallaxWarp'`.
+   *
+   * BFA-006 Phase 6 — formerly wrote `project.faceParallax`; the
+   * legacy sidetable was deleted by migration v16.
    */
   seedFaceParallax:           projectMutator(seedFaceParallaxFn),
 
   /**
-   * Clear `project.faceParallax` to revert to the heuristic generator
-   * path. Use after PSD reimport invalidates stored vertex deltas.
+   * Remove the FaceParallax warp deformer node from `project.nodes`.
+   * Use after PSD reimport invalidates stored vertex deltas — the
+   * heuristic generator will re-synthesise it on the next Init Rig.
    */
   clearFaceParallax:          projectMutator(clearFaceParallaxFn),
 
   /**
-   * Seed `project.bodyWarp` from a pre-computed chain (Stage 10).
-   * Caller is responsible for producing the chain — typically via
-   * `buildBodyWarpChain(...)` with current mesh / canvas / body-anatomy
-   * inputs. Destructive: overwrites prior storage.
+   * Upsert the body warp chain (BZ → BY → Breath → optional BX) into
+   * `project.nodes` as deformer nodes, plus write
+   * `project.bodyWarpLayout` (the canvas → innermost-warp normalizer
+   * ranges). Caller produces the chain — typically via
+   * `buildBodyWarpChain(...)`. Destructive: replaces all four chain
+   * nodes (or three if no BX) by id.
+   *
+   * BFA-006 Phase 6 — formerly wrote the full chain to
+   * `project.bodyWarp`; that sidetable was deleted by migration v16.
+   * Layout/debug now persist in the small `project.bodyWarpLayout`
+   * sidetable since the closures need ranges that can't be recovered
+   * from chained `baseGrid`s alone.
    */
   seedBodyWarp:               projectMutator(seedBodyWarpChainFn),
 
   /**
-   * Clear `project.bodyWarp` to revert to the heuristic generator
-   * path. Use after PSD reimport invalidates stored vertex deltas
-   * or body silhouette anchors.
+   * Remove all body-warp-chain deformer nodes from `project.nodes`
+   * and null out `project.bodyWarpLayout`. Use after PSD reimport
+   * invalidates stored vertex deltas or body silhouette anchors —
+   * the heuristic generator will rebuild on the next Init Rig.
    */
   clearBodyWarp:              projectMutator(clearBodyWarpFn),
 
   /**
-   * Seed `project.rigWarps` from a pre-computed `partId → spec` map
-   * (or iterable of specs with `targetPartId`) — Stage 9b. Caller is
-   * typically a rig-init flow that runs `generateCmo3` once and
-   * harvests `rigSpec.warpDeformers` filtered to per-mesh entries.
-   * Destructive: overwrites the entire stored map.
+   * Upsert per-mesh rigWarp deformer nodes (those with
+   * `targetPartId` set) into `project.nodes` from a pre-computed
+   * `partId → spec` map (or iterable of specs). Caller is typically
+   * a rig-init flow that runs `generateCmo3` once and harvests
+   * `rigSpec.warpDeformers` filtered to per-mesh entries.
+   * Destructive: replaces every prior rigWarp node whose
+   * `targetPartId` is in the incoming map.
+   *
+   * BFA-006 Phase 6 — formerly wrote `project.rigWarps[partId]`;
+   * that sidetable was deleted by migration v16. Each part's
+   * `rigParent` field also gets pointed at the deformer's id so the
+   * runtime selector (`selectRigSpec`) resolves the per-part chain
+   * without walking rigSpec.
    */
   seedRigWarps:               projectMutator(seedRigWarpsFn),
 
   /**
-   * Clear `project.rigWarps` to revert to the heuristic shiftFn
-   * path. Use after PSD reimport invalidates stored per-vertex
-   * deltas or any binding-axis change.
+   * Remove all rigWarp deformer nodes (those with `targetPartId`)
+   * from `project.nodes` and clear every part's `rigParent` pointer.
+   * Use after PSD reimport invalidates stored per-vertex deltas or
+   * any binding-axis change.
    */
   clearRigWarps:              projectMutator(clearRigWarpsFn),
 

@@ -23,7 +23,7 @@
  * the sidetables entirely.
  *
  * **Stable ids.** A deformer node's `id` is the same string the spec
- * carries (`'FaceParallaxWarp'`, `'BodyZWarp'`, the per-mesh rigWarp's
+ * carries (`'FaceParallaxWarp'`, `'BodyWarpZ'`, the per-mesh rigWarp's
  * id, etc.). This means the migration is idempotent if re-run, and
  * dual-write upserts replace existing entries by id.
  *

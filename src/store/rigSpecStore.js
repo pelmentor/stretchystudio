@@ -57,7 +57,7 @@ export const useRigSpecStore = create((set, get) => ({
     // not yet Init-Rig'd post Phase 3).
     const proj0 = useProjectStore.getState().project;
     const fast = selectRigSpec(proj0);
-    if (_isComplete(fast)) {
+    if (_isComplete(fast, proj0)) {
       const v = useProjectStore.getState().versionControl?.geometryVersion ?? 0;
       // physicsRules already resolved inside selectRigSpec.
       set({
@@ -115,15 +115,28 @@ export const useRigSpecStore = create((set, get) => ({
 }));
 
 /**
- * BFA-006 Phase 3 — a "complete" rigSpec has both rotation deformers
- * AND artMeshes populated. Pre-Phase-3 projects (sidetables only;
- * never Init-Rig'd under Phase 3) produce partial output that selects
- * to empty rotations / artMeshes — we fall through to the async
- * builder for those.
+ * BFA-006 Phase 3+6 — a "complete" rigSpec is one whose owning project
+ * has been Init-Rig'd at least once. The marker
+ * `project.lastInitRigCompletedAt` (Hole I-8) is the canonical signal:
+ * when set, `seedAllRig` has run and the deformer graph in
+ * `project.nodes` is the source of truth, even if some slices are
+ * legitimately empty (a character without head rotation has zero
+ * `rotationDeformers`; a body-only model with no rigWarps has only
+ * the body chain). The pre-fix gate required non-empty rotation +
+ * artMesh slices, which mis-rejected those projects forever.
+ *
+ * Pre-Init-Rig projects (just imported from PSD; deformer nodes not
+ * yet synthesised) fall through to the async generator.
+ *
+ * @param {object} rigSpec
+ * @param {object} project
  */
-function _isComplete(rigSpec) {
+function _isComplete(rigSpec, project) {
   if (!rigSpec) return false;
-  if (!Array.isArray(rigSpec.rotationDeformers) || rigSpec.rotationDeformers.length === 0) return false;
+  if (!project?.lastInitRigCompletedAt) return false;
+  // Defensive: a project with the completion marker set but zero
+  // artMeshes is broken (no parts have mesh data); bail out so the
+  // async path can re-derive.
   if (!Array.isArray(rigSpec.artMeshes) || rigSpec.artMeshes.length === 0) return false;
   return true;
 }
@@ -178,7 +191,7 @@ useProjectStore.subscribe((state) => {
   const { rigSpec, isBuilding } = useRigSpecStore.getState();
   if (rigSpec || isBuilding) return;
   const fast = selectRigSpec(project);
-  if (!_isComplete(fast)) return;
+  if (!_isComplete(fast, project)) return;
   const v = state.versionControl?.geometryVersion ?? 0;
   useRigSpecStore.setState({
     rigSpec: fast,

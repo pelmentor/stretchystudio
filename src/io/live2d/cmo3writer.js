@@ -718,10 +718,12 @@ export async function generateCmo3(input) {
   // The legacy inline math (~50 LOC) used to live here and was duplicated
   // in the body-warp emission block; the spec consolidates both into one
   // canonical computation.
-  // Stage 10: prefer the pre-resolved chain from `project.bodyWarp` when
-  // populated; otherwise fall back to the inline heuristic. The shape is
-  // identical (specs + layout + canvasToBodyXX/Y + debug) so downstream
-  // consumers don't branch.
+  // Stage 10: prefer the pre-resolved chain passed in via `bodyWarpChain`
+  // (`exporter.js` calls `resolveBodyWarp(project)` which post-Phase-6
+  // walks `project.nodes` deformer entries + `project.bodyWarpLayout`);
+  // otherwise fall back to the inline heuristic. The shape is identical
+  // (specs + layout + canvasToBodyXX/Y + debug) so downstream consumers
+  // don't branch.
   //
   // Stage 11 invariant: outside `rigOnly` mode the heuristic should never
   // fire — exporter.js's `resolveAllKeyformSpecs` runs the seeder first.
@@ -755,9 +757,10 @@ export async function generateCmo3(input) {
     ?? _bodyChain.specs.find(s => s.id === 'BreathWarp')?.id
     ?? null;
   // Stage 1b harvest: stash the full chain object (specs + layout + debug
-  // + closures) so callers running rigOnly mode can seed `project.bodyWarp`
-  // without re-running buildBodyWarpChain themselves. The closures aren't
-  // serializable but seedBodyWarpChain serializes from the chain anyway.
+  // + closures) so callers running rigOnly mode can seed the body-warp
+  // deformer nodes (and `project.bodyWarpLayout`) without re-running
+  // buildBodyWarpChain themselves. The closures aren't serializable but
+  // seedBodyWarpChain serializes from the chain anyway.
   rigCollector.bodyWarpChain = _bodyChain;
   if (rigDebugLog) {
     rigDebugLog.bodyFracSource = _bodyChain.debug.bodyFracSource;
