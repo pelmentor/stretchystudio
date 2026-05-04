@@ -14,8 +14,8 @@
 | [PP2-002](#pp2-002) | bug    | medium | Proportional-edit ring visible outside mesh edit (wizard, Object Mode) | closed (`9330211`) |
 | [PP2-003](#pp2-003) | feature| medium | Warp grid overlay — black + 25% opacity defaults | closed (`9330211`) |
 | [PP2-004](#pp2-004) | bug    | high   | Warp grid overlay only renders ONE giant grid (nested warps invisible) | closed (subsumed by PP2-010 a) |
-| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; (b) neutralisation verified identity, root cause moved upstream | partial |
-| [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | partial (trunk closed; legs/legwear open) |
+| [PP2-005](#pp2-005) | bug    | high   | Hair opt-out — params (a) closed; (b) diagnostic landed, awaiting live trace | partial |
+| [PP2-006](#pp2-006) | bug    | high   | Bone rotation — only elbow/arm/head bones drive layers; rest are inert | partial (trunk closed; legs/legwear diagnostic landed) |
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | closed (this commit) |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
 | [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
@@ -99,7 +99,10 @@
 
 **Repair plan.**
 - (a) ✅ Param leak fixed (this commit). `STANDARD_PARAMS` entries for hair/clothing now carry a `subsystem` tag; `buildParameterSpec` accepts `subsystems` and drops them when the flag is `false`. Bone-rotation + group-rotation passes also filter by name heuristic (`/hair/`, `/topwear|bottomwear|legwear|skirt|shirt|pants|cloth/`). `seedParameters` reads `project.autoRigConfig.subsystems` and threads it through.
-- (b) Visual deformation — investigation moved upstream (this commit). Wrote [`scripts/test/test_neutralisedWarpIdentity.mjs`](../scripts/test/test_neutralisedWarpIdentity.mjs) — a synthetic 3-warp chain (body → FaceParallax → hair, hair neutralised via `applySubsystemOptOutToRigSpec({hairRig: false})`). At default params it asserts identity vs the source canvas verts AND identity vs the pre-neutralisation rig output. Both asserts pass with max delta = 0.0000 px. So PP1-002's neutralisation IS correct in the simple case; the user's reported shift comes from somewhere else in the full rig chain. Probable suspects: A.6b widening on FaceParallax (needs a real-rig oracle dump), bone-rotation deformers in the chain at non-default rest, or a coordinate mismatch in the lifted-grid composition specific to the user's project shape. Re-investigate with an actual hairRig=false project + chainEval lift trace.
+- (b) Visual deformation — investigation moved upstream + a diagnostic now lights up on the next live repro.
+  - Wrote [`scripts/test/test_neutralisedWarpIdentity.mjs`](../scripts/test/test_neutralisedWarpIdentity.mjs) — a synthetic 3-warp chain (body → FaceParallax → hair, hair neutralised via `applySubsystemOptOutToRigSpec({hairRig: false})`). At default params it asserts identity vs the source canvas verts AND identity vs the pre-neutralisation rig output. Both asserts pass with max delta = 0.0000 px. So PP1-002's neutralisation IS correct in the simple case; the user's reported shift comes from somewhere else in the full rig chain.
+  - Added an `rigInitIdentityDiag` log in [`initRig.js`](../src/io/live2d/rig/initRig.js): on every Init Rig with at least one disabled subsystem, run `evalRig(rigSpec, {})` once, compare each art mesh's output vs `verticesCanvas`, and log the max delta plus the top 10 offenders by partId/name. Anything > 1 px means the chain isn't pure-identity at rest for that part. Surfaces in the Logs panel without further code-diving — the next user repro will name the exact offender.
+  - Probable suspects to chase once the log fires: A.6b widening on FaceParallax (real-rig oracle dump), bone-rotation deformers at non-default rest, or a coord-frame mismatch in the lifted-grid composition specific to the user's project shape.
 
 ---
 
@@ -118,7 +121,9 @@ The clamp also tightened: when the bone drives any rig param, the visible bone a
 
 X / Y axes (3D look-around — pull-the-bone-tip gesture) are out of scope; rotation arc gives one in-plane angle by construction.
 
-**Open: legs + clothing bones.** The user's repro also mentioned `bothLegs` / `legwear`. Those bones are NOT in `SKIP_ROTATION_ROLES`, so [`paramSpec.js:300`](../src/io/live2d/rig/paramSpec.js#L300) section 6 should emit `ParamRotation_BothLegs` etc. and PP1-001 would route the gesture there. Why those particular bones still feel inert needs a live trace — possibilities: (a) the dependent meshes aren't wired into the rotation deformer's children, (b) sanitisation between auto-rig emit and SkeletonOverlay lookup diverges, (c) the user's `legwear` is a clothing-rig group that gets dropped when clothing-rig is opted out.
+**Open: legs + clothing bones — diagnostic landed (this commit).** The user's repro also mentioned `bothLegs` / `legwear`. Those bones are NOT in `SKIP_ROTATION_ROLES`, so [`paramSpec.js:300`](../src/io/live2d/rig/paramSpec.js#L300) section 6 should emit `ParamRotation_BothLegs` etc. and PP1-001 would route the gesture there. Why those particular bones still feel inert needs a live trace.
+
+To make the next repro self-naming, [`SkeletonOverlay`](../src/components/canvas/SkeletonOverlay.jsx) now logs a `boneNoDriverParam` warn whenever a bone arc gesture starts and no driver param can be found — including the bone's name + role, the candidate `ParamRotation_<sanitisedName>` it tried, the role-fallback (if any), and a list of plausible `ParamRotation_*` ids that DO exist. The next user repro pinpoints the exact mismatch (sanitisation drift / missing-emit / clothing-rig opt-out drop) without further code-diving.
 
 **Symptom (expanded 2026-05-03).** *"ПОСЛЕ INIT RIG СКЕЛЕТНЫЕ КОСТИ СТАНОВЯТСЯ USELESS - КРОМЕ ELBOW И ARM И FACE КОСТИ - ОСТАЛЬНЫЕ КОСТИ ПЕРЕСТАЮТ ВООБЩЕ ДРАЙВИТЬ ЧТО ЛИБО."* The arm + elbow bones rotate things (PP1-001). Neck / torso / legwear / bothLegs / etc. don't.
 

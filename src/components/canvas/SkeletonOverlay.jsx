@@ -23,6 +23,7 @@ import { computePoseOverrides } from '@/renderer/animationEngine';
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
+import { logger } from '@/lib/logger';
 
 // Colour palette
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
@@ -340,6 +341,32 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
           if (typeof fallbackSpec.min === 'number') rotationParamMin = fallbackSpec.min;
           if (typeof fallbackSpec.max === 'number') rotationParamMax = fallbackSpec.max;
         }
+      }
+
+      // PP2-006 — diagnostic for the "bone rotation does nothing"
+      // class of bug. When the user grabs a bone arc and the gesture
+      // has no driver param to write to, only `node.transform.rotation`
+      // updates — and that's invisible for rig-driven parts (which is
+      // most parts after Init Rig). Log the bone identity + the
+      // candidate id we tried + a few plausible alternates so the next
+      // user repro names the offender without further code-diving.
+      if (!rotationParamId) {
+        const altMatches = params
+          .filter((p) => typeof p?.id === 'string' && /^ParamRotation_/.test(p.id))
+          .map((p) => p.id);
+        const standardCandidates = ['ParamAngleZ', 'ParamBodyAngleZ']
+          .filter((id) => params.some((p) => p?.id === id));
+        logger.warn('boneNoDriverParam',
+          `Bone "${node.name ?? node.id}" (role=${node.boneRole ?? 'none'}) has no rig driver param — rotation gesture will only update node.transform.rotation (invisible for rig-driven parts).`,
+          {
+            nodeId,
+            nodeName: node.name ?? null,
+            boneRole: node.boneRole ?? null,
+            triedCandidate: candidateId,
+            roleFallbackChecked: BONE_ROLE_FALLBACK_PARAM[node.boneRole] ?? null,
+            standardParamsAvailable: standardCandidates,
+            allParamRotationIds: altMatches.slice(0, 20),
+          });
       }
 
       dragRef.current = {

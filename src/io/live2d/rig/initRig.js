@@ -44,6 +44,7 @@ import { resolveAutoRigConfig } from './autoRigConfig.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
 import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
+import { evalRig } from '../runtime/evaluator/chainEval.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = new Set(['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp']);
@@ -431,6 +432,54 @@ export async function initializeRigFromProject(project, images = new Map()) {
     disabledSubsystems: disabled.length > 0 ? disabled : undefined,
     optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
   });
+
+  // PP2-005b — identity-divergence diagnostic. When a subsystem is opted
+  // out, the user's complaint is that the corresponding parts visibly
+  // shift after Init Rig (hair sways under no params). Run evalRig once
+  // at default params and compare each rig-driven art mesh's output vs
+  // its `verticesCanvas` source. Anything > 1px is real divergence.
+  // Logged per-part so the next user repro names the offender.
+  if (rs && Array.isArray(rs.artMeshes) && rs.artMeshes.length > 0 && disabled.length > 0) {
+    try {
+      const frames = evalRig(rs, {});
+      const meshById = new Map(rs.artMeshes.map((m) => [m.id, m]));
+      /** @type {Array<{partId:string, name:string, maxDelta:number}>} */
+      const offenders = [];
+      let maxOverall = 0;
+      for (const f of frames) {
+        const meshSpec = meshById.get(f.id);
+        const source = meshSpec?.verticesCanvas;
+        if (!source || !f.vertexPositions) continue;
+        const len = Math.min(source.length, f.vertexPositions.length);
+        let partMax = 0;
+        for (let i = 0; i < len; i++) {
+          const d = Math.abs(source[i] - f.vertexPositions[i]);
+          if (d > partMax) partMax = d;
+        }
+        if (partMax > maxOverall) maxOverall = partMax;
+        if (partMax > 1.0) {
+          offenders.push({ partId: f.id, name: meshSpec?.name ?? f.id, maxDelta: partMax });
+        }
+      }
+      // Top 10 by delta — keeps the log readable on large rigs.
+      offenders.sort((a, b) => b.maxDelta - a.maxDelta);
+      logger.info('rigInitIdentityDiag',
+        `Init Rig rest-divergence (subsystems off: ${disabled.join(', ')}): max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px`,
+        {
+          disabledSubsystems: disabled,
+          maxOverallPx: Math.round(maxOverall * 100) / 100,
+          partCount: frames.length,
+          offenderCount: offenders.length,
+          top10Offenders: offenders.slice(0, 10).map((o) => ({
+            partId: o.partId, name: o.name, maxDeltaPx: Math.round(o.maxDelta * 100) / 100,
+          })),
+        });
+    } catch (err) {
+      // Non-fatal; instrumentation only.
+      logger.warn('rigInitIdentityDiag', 'identity-divergence probe threw', { error: err?.message ?? String(err) });
+    }
+  }
+
   return {
     faceParallaxSpec,
     bodyWarpChain,
