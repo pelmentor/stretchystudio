@@ -1624,8 +1624,12 @@ export default function CanvasViewport({
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
+    // PP2-007 — read modeKey via ref so the wheel handler honours the
+    // CURRENT canvas tab (Viewport vs Live Preview). The handler's
+    // useCallback deps don't list modeKey directly; the ref keeps the
+    // read fresh without forcing a re-bind on every tab toggle.
     const next = zoomAroundCursor(
-      editorRef.current.viewByMode[modeKey],
+      editorRef.current.viewByMode[modeKeyRef.current],
       e.deltaY,
       e.clientX - rect.left,
       e.clientY - rect.top,
@@ -1648,7 +1652,11 @@ export default function CanvasViewport({
   /* ── Pointer events ──────────────────────────────────────────────────── */
   const onPointerDown = useCallback((e) => {
     const canvas = canvasRef.current;
-    const view = editorRef.current.viewByMode[modeKey];
+    // PP2-007 — read modeKey via ref so the pan/zoom start positions
+    // come from the CURRENT canvas tab. This useCallback's deps don't
+    // re-create when modeKey flips, so without the ref the pan would
+    // start from the OTHER tab's view and jump on the first frame.
+    const view = editorRef.current.viewByMode[modeKeyRef.current];
 
     // PP1-008(b) — F-mode radius adjust: a click commits the new radius
     // and exits the mode. Swallow this event so it doesn't also trigger
@@ -1984,7 +1992,8 @@ export default function CanvasViewport({
 
   const onPointerMove = useCallback((e) => {
     const canvas = canvasRef.current;
-    const view = editorRef.current.viewByMode[modeKey];
+    // PP2-007 — read modeKey via ref (same reason as onPointerDown).
+    const view = editorRef.current.viewByMode[modeKeyRef.current];
 
     // Phase 5 touch+pen — keep the active-pointer map fresh for in-flight
     // gestures. Reading the very latest screen positions for both fingers
