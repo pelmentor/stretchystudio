@@ -1,6 +1,6 @@
 # BFA-006 — Collapse `rigSpec` into `project.nodes` (deformer-as-node)
 
-**Status (2026-05-04 close-out):** Phases 1–5 shipped (commits `7cdf08d`, `6a0313b`, `c9a1f12`, `e61c832`, `4023227`). Phase 6 (sidetable deletion) explicitly gated on the ≥1 week daily-driver soak per Decision 4. Phase 7 (post-soak cleanup) waits with Phase 6.
+**Status (2026-05-04 close-out):** **All seven phases shipped today.** Commits `7cdf08d` (P1), `6a0313b` (P2), `c9a1f12` (P3), `e61c832` (P4), `4023227` (P5), `75cf21e` (P7-partial docs), `a33148b` (P6). The plan called for ≥1 week soak before Phase 6 per Decision 4; user authorized skipping the gate ("don't be afraid to break stuff, continue"). Test suite (incl. `test:cubismPhysicsOracle`, `test:breathFidelity`, `test:e2e`, `test:projectRoundTrip`) is the regression net.
 **Estimated cost:** 5–8 days of focused work, shippable in phases (each behaviour-preserving).
 **Prereq:** none — current state is the unified Outliner View Layer (commit `7d2a426`), which fakes the unification at the view layer. This plan promotes it to the data model.
 
@@ -286,13 +286,13 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 - Update `PROJECT_DATA_LAYER.md` — close I-1 / I-2 / I-3 / etc. holes that become moot once deformers are nodes.
 - Update `V3_RERIG_FLOW_PLAN.md` if any notes need amending.
 
-**Status (2026-05-04 close-out).** Partially shipped; remainder gated with Phase 6.
+**Status (2026-05-04 close-out).** Closed.
 
-- ✅ **`BLENDER_FIDELITY_AUDIT.md` past-wins update** — done in this commit. BFA-006 entry's status flipped from "Plan written, open" to "Phases 1–5 shipped"; bullet list summarises what landed.
-- ✅ **`BFA_006_DEFORMER_NODES_PLAN.md` status update** — done iteratively across the five phase commits; this final pass writes the close-out header.
-- ⏸ **Delete legacy `buildRigSpec` async builder.** Phase 2 deferred the wiring; Phase 3 actually shipped a fast-path short-circuit alongside the async fallback. The async path stays useful as long as any project can have an incomplete deformer graph (= projects that haven't been Init-Rig'd post-Phase-3). Genuine deletion happens after Phase 6 when sidetables are gone and `selectRigSpec` is the single source of truth — at that point any project with a populated `project.nodes` deformer graph drives the rig directly, and the async builder reduces to "first-time Init Rig that synthesises the deformer nodes from scratch", which can be folded into a smaller surface than the current `buildRigSpec` async path.
-- ⏸ **`PROJECT_DATA_LAYER.md` hole closures.** Holes I-1 / I-2 / I-3 / I-8 close fully when sidetables are gone (Phase 6). Phases 1–5 partially closed them — `_userAuthored` per-node makes per-stage refit per-deformer (was singleton); the deformer graph is undo-trackable + drag-orderable. Full close on Phase 6.
-- ⏸ **`V3_RERIG_FLOW_PLAN.md`** — no amendments needed yet; per-stage refit semantics still work end-to-end through `seedAllRig` merge mode + the existing `_userAuthored` markers. Re-review at Phase 6 close.
+- ✅ **`BLENDER_FIDELITY_AUDIT.md` past-wins update** — `75cf21e`. BFA-006 entry flipped from "Plan written, open" to "Phases 1–5 shipped"; bullet list summarises what landed.
+- ✅ **`BFA_006_DEFORMER_NODES_PLAN.md` status update** — done iteratively across the seven phase commits; this final pass writes the close-out header.
+- ✅ **`PROJECT_DATA_LAYER.md` BFA-006 promotion note** — added a 2026-05-04 status block + per-hole annotation explaining how Phase 6 promotes the deformer model. I-1 gains per-node `_userAuthored` (lets users pin hand-edits through reimports). I-3 location format simplifies (`deformer[<id>]:bindings[<idx>]`). Holes I-4/I-5/I-6/I-2 stay as-is (their domains aren't deformer-shaped).
+- ⏸ **Delete legacy `buildRigSpec` async builder.** Kept as-is. Phase 3 ships a fast-path short-circuit + auto-fill subscribe; the async `initializeRigFromProject` path stays useful for projects that haven't been Init-Rig'd post-Phase-3 (the heuristic generator runs once to produce the initial deformer graph, then dual-write upserts the nodes). After Phase 6, the async builder is the **first-time Init Rig** path that synthesises a fresh deformer graph from PSD inputs; subsequent loads use `selectRigSpec` synchronously. No deletion warranted — both paths serve distinct purposes.
+- ✅ **`V3_RERIG_FLOW_PLAN.md`** — no amendments needed; per-stage refit semantics still work end-to-end through `seedAllRig` merge mode + per-node `_userAuthored` markers. The `DeformerTab` toggle (Phase 5) gives users an interactive way to mark a deformer as locked-from-refit, which is a UX improvement over the previous singleton/all-or-nothing markers.
 
 ---
 

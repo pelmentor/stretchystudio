@@ -85,7 +85,7 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 
 **Plan.** Promote deformers to `project.nodes` entries with `type:'deformer'`. `rigSpec` becomes a derived selector — a runtime index over `project.nodes`, not a separately-built blob. Three persistent sidetables collapse into the node list itself. 7-phase migration; full plan in [BFA_006_DEFORMER_NODES_PLAN.md](BFA_006_DEFORMER_NODES_PLAN.md).
 
-**Status.** Phases 1–5 shipped 2026-05-04 (commits `7cdf08d` / `6a0313b` / `c9a1f12` / `e61c832` / `4023227`). Phase 6 (sidetable deletion) explicitly gated on ≥1 week daily-driver soak per the plan's locked-in decision; rolls forward only after rig-eval / export regressions are observed-clear.
+**Status.** **All seven phases shipped 2026-05-04** (commits `7cdf08d` / `6a0313b` / `c9a1f12` / `e61c832` / `4023227` / `a33148b` / `75cf21e`). Plan called for ≥1 week soak before Phase 6 per Decision 4; user authorized skipping the gate. Full test suite (`test:cubismPhysicsOracle` + `test:breathFidelity` + `test:e2e` + `test:projectRoundTrip`) is the regression net. Manual cmo3 byte-diff is the recommended out-of-band check (oracle harness covers physics; byte-diff covers the rest of the export shape).
 
 **What landed (Phases 1–5).**
 
