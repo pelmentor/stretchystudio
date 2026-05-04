@@ -245,6 +245,15 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Deliverable:** The user can browse, edit, and re-parent deformers from the Outliner without any rig-sidetable knowledge.
 
+**Status (this commit).** Closed for the in-tab reparent + lock surface. What landed:
+
+- **`DeformerTab` reads from `project.nodes` directly** (Phase 1+3 ships them as first-class entries). The pre-Phase-5 implementation read from `useRigSpecStore.rigSpec` — equivalent post-Phase-3 since the store is auto-derived, but reading from `project.nodes` lets the tab render even when `rigSpec` is null (the project loaded but Init Rig hasn't run yet) and avoids a stale-cache footgun if the deformer was just reparented.
+- **Parent dropdown.** A shadcn `<Select>` lists every part / group / deformer in the project as a possible parent (root + all non-descendant nodes; cycle-prevention via descendant walk). Choosing an option mutates `node.parent` through `updateProject` — the standard project mutation path that snapshots for undo and triggers downstream invalidations. Reparenting a chain warp under a different ancestor takes effect immediately because `selectRigSpec` is project-identity-memoized.
+- **`_userAuthored` toggle.** Visible at the bottom of the tab as a labelled button with lock/unlock icon; click flips `node._userAuthored` between `true` and `undefined`. The seedAllRig merge mode reads this marker (was already in place from Phase 1 / V3 Re-Rig Phase 0); flipping the toggle on a hand-edited deformer immunises it from per-stage refit clobbers.
+- Single `DeformerTab` covers both warp + rotation kinds (the per-kind UI splits internally by `node.deformerKind`). Plan called for two separate tabs (`WarpDeformerTab` / `RotationDeformerTab`); collapsing to one matches the rest of the codebase's existing pattern (`ObjectTab` covers parts + groups, `MaskTab` covers iris + eyewhite, etc.) and avoids tab-strip churn when the user clicks across deformer kinds.
+
+**Deferred.** Drag-reorder in the Outliner extending to deformers — that's a sibling operator (existing reparent action `useProjectStore.reparentNode`) but the Outliner pane has no drag UI yet (it relies on click-to-select + the Properties pane for reparenting). The in-tab dropdown delivers the same reparent capability; drag-reorder is a UX polish that lands when the broader Outliner DnD support arrives.
+
 ### Phase 6 — Sidetable deletion (~1 day)
 
 **Goal:** `project.faceParallax` / `project.bodyWarp` / `project.rigWarps` removed from the schema.
