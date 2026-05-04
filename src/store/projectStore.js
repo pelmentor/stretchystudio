@@ -23,6 +23,11 @@ import {
   clearRigWarps as clearRigWarpsFn,
 } from '../io/live2d/rig/rigWarpsStore.js';
 import { computeProjectSignatures } from '../io/meshSignature.js';
+import {
+  rotationSpecToDeformerNode,
+  upsertDeformerNode,
+  removeAllRotationDeformerNodes,
+} from './deformerNodeSync.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
@@ -515,6 +520,45 @@ export const useProjectStore = create((set, get) => {
         seedRigWarpsFn(proj, harvest.rigWarps, mode);
       } else if (mode === 'replace') {
         clearRigWarpsFn(proj);
+      }
+      // BFA-006 Phase 3 — dual-write rotation deformer nodes from the
+      // harvest's rigSpec so `selectRigSpec(project)` picks them up
+      // alongside the warp deformer nodes that Phase 1 already
+      // dual-writes via the seedXxx warp seeders. Rotation deformers
+      // were never persisted in sidetables (they're (re)generated
+      // every Init Rig); this write is what closes the post-load
+      // "click Init Rig to rebuild" gap once the project's been
+      // through one Init Rig pass under Phase 3+.
+      //
+      // Replace mode wipes all prior rotation nodes before upserting
+      // the harvest output. Merge mode preserves _userAuthored
+      // entries by id (same semantics the warp dual-writes use).
+      const rotationDeformers = harvest?.rigSpec?.rotationDeformers ?? [];
+      if (Array.isArray(proj.nodes)) {
+        if (mode === 'replace') {
+          removeAllRotationDeformerNodes(proj.nodes);
+        } else {
+          // Merge mode: drop only the rotations being overwritten;
+          // _userAuthored survivors stay in place.
+          const incomingIds = new Set(rotationDeformers.map((r) => r?.id).filter(Boolean));
+          for (let i = proj.nodes.length - 1; i >= 0; i--) {
+            const n = proj.nodes[i];
+            if (n?.type !== 'deformer' || n.deformerKind !== 'rotation') continue;
+            if (incomingIds.has(n.id) && n._userAuthored !== true) {
+              proj.nodes.splice(i, 1);
+            }
+          }
+        }
+        for (const spec of rotationDeformers) {
+          if (!spec || !spec.id) continue;
+          if (mode === 'merge') {
+            const prior = proj.nodes.find(
+              (n) => n && n.id === spec.id && n.type === 'deformer'
+            );
+            if (prior && prior._userAuthored === true) continue;
+          }
+          upsertDeformerNode(proj.nodes, rotationSpecToDeformerNode(spec));
+        }
       }
       // GAP-012 Phase A — capture per-mesh fingerprint at seed time so
       // PSD reimport can detect when stored vertex-indexed keyforms have

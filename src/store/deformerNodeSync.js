@@ -70,6 +70,63 @@ export function parentSpecToNodeId(parent) {
 }
 
 /**
+ * Convert a `RotationDeformerSpec` (from a rigSpec.rotationDeformers
+ * entry) into a `type:'deformer', deformerKind:'rotation'` node. The
+ * spec shape uses RigSpec parent `{type,id}` discriminators — we
+ * flatten to `parent: nodeId|null` so the node looks the same in
+ * `project.nodes` as a part / group / warp deformer.
+ *
+ * BFA-006 Phase 3 — used by `seedAllRig`'s rotation dual-write to
+ * mirror `harvest.rigSpec.rotationDeformers` into `project.nodes`.
+ *
+ * @param {import('../io/live2d/rig/rigSpec.js').RotationDeformerSpec} spec
+ * @returns {object} - a `type:'deformer', deformerKind:'rotation'` node
+ */
+export function rotationSpecToDeformerNode(spec) {
+  return {
+    type: 'deformer',
+    deformerKind: 'rotation',
+    id: spec.id,
+    name: spec.name ?? spec.id,
+    parent: parentSpecToNodeId(spec.parent),
+    visible: spec.isVisible !== false,
+    bindings: (spec.bindings ?? []).map((b) => ({
+      parameterId: b.parameterId,
+      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      interpolation: b.interpolation ?? 'LINEAR',
+    })),
+    keyforms: (spec.keyforms ?? []).map((k) => ({
+      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
+      angle: typeof k.angle === 'number' ? k.angle : 0,
+      originX: typeof k.originX === 'number' ? k.originX : 0,
+      originY: typeof k.originY === 'number' ? k.originY : 0,
+      scale: typeof k.scale === 'number' ? k.scale : 1,
+      reflectX: k.reflectX === true,
+      reflectY: k.reflectY === true,
+      opacity: typeof k.opacity === 'number' ? k.opacity : 1,
+    })),
+    baseAngle: typeof spec.baseAngle === 'number' ? spec.baseAngle : 0,
+    handleLengthOnCanvas:
+      typeof spec.handleLengthOnCanvas === 'number' ? spec.handleLengthOnCanvas : 200,
+    circleRadiusOnCanvas:
+      typeof spec.circleRadiusOnCanvas === 'number' ? spec.circleRadiusOnCanvas : 100,
+    isLocked: spec.isLocked === true,
+    useBoneUiTestImpl: spec.useBoneUiTestImpl !== false,
+  };
+}
+
+/**
+ * Remove every rotation deformer node, if present. Used by
+ * `seedAllRig` (replace mode) to wipe stale rotation entries before
+ * upserting fresh ones from the new harvest.
+ *
+ * @param {Array<object>} nodes
+ */
+export function removeAllRotationDeformerNodes(nodes) {
+  removeDeformerNodesByPredicate(nodes, (n) => n.deformerKind === 'rotation');
+}
+
+/**
  * Convert a stored warp spec (faceParallax / bodyWarp[i] / rigWarps[partId])
  * into a deformer node. The spec shape matches what
  * `faceParallaxStore.serializeFaceParallaxSpec` / `bodyWarpStore._serializeSpec`

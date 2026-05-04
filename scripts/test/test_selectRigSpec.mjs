@@ -267,6 +267,171 @@ function assertEq(actual, expected, name) {
   assert(typeof spec.canvasToInnermostX === 'function', 'e2e: closures resolved');
 }
 
+// ── Phase 3: rotation deformers + artMeshes ──────────────────────
+
+{
+  // Rotation deformer node → RotationDeformerSpec.
+  const project = {
+    canvas: { width: 800, height: 600 }, parameters: [],
+    nodes: [
+      {
+        id: 'FaceRotation', type: 'deformer', deformerKind: 'rotation',
+        name: 'Face Rotation', parent: null, visible: true,
+        bindings: [{ parameterId: 'ParamAngleZ', keys: [-30, 0, 30], interpolation: 'LINEAR' }],
+        keyforms: [
+          { keyTuple: [-30], angle: -10, originX: 400, originY: 200, scale: 1, opacity: 1 },
+          { keyTuple: [0],   angle:   0, originX: 400, originY: 200, scale: 1, opacity: 1 },
+          { keyTuple: [30],  angle:  10, originX: 400, originY: 200, scale: 1, opacity: 1 },
+        ],
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  assertEq(spec.rotationDeformers.length, 1, 'rotation: one node read');
+  const r = spec.rotationDeformers[0];
+  assertEq(r.id, 'FaceRotation', 'rotation: id');
+  assertEq(r.parent, { type: 'root', id: null }, 'rotation: parent inflated');
+  assertEq(r.bindings[0].parameterId, 'ParamAngleZ', 'rotation: bindings preserved');
+  assertEq(r.keyforms.length, 3, 'rotation: 3 keyforms');
+  assertEq(r.keyforms[0].angle, -10, 'rotation: keyform angle preserved');
+  assertEq(r.keyforms[1].originX, 400, 'rotation: originX preserved');
+}
+
+{
+  // artMesh derivation: a part with mesh + a body warp parent.
+  const project = {
+    canvas: { width: 800, height: 600 }, parameters: [],
+    nodes: [
+      {
+        id: 'BodyXWarp', type: 'deformer', deformerKind: 'warp',
+        name: 'BX', parent: null, visible: true,
+        gridSize: { rows: 1, cols: 1 },
+        // Identity grid covering canvas: corners (0,0)→(800,0)→(0,600)→(800,600)
+        baseGrid: [0, 0, 800, 0, 0, 600, 800, 600],
+        localFrame: 'canvas-px',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: [0, 0, 800, 0, 0, 600, 800, 600], opacity: 1 }],
+      },
+      {
+        id: 'partA', type: 'part', name: 'face',
+        rigParent: 'BodyXWarp',
+        mesh: {
+          // Single-triangle mesh inside canvas: vertices at (200,150),(600,150),(400,450)
+          vertices: [200, 150, 600, 150, 400, 450],
+          triangles: [0, 1, 2],
+          uvs: [0.25, 0.25, 0.75, 0.25, 0.5, 0.75],
+        },
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  assertEq(spec.artMeshes.length, 1, 'artMeshes: one part with mesh → one entry');
+  const am = spec.artMeshes[0];
+  assertEq(am.id, 'partA', 'artMesh: id from part');
+  assertEq(am.parent, { type: 'warp', id: 'BodyXWarp' }, 'artMesh: parent from rigParent');
+  assert(am.verticesCanvas instanceof Float32Array, 'artMesh: verticesCanvas typed');
+  assertEq(Array.from(am.verticesCanvas), [200, 150, 600, 150, 400, 450], 'artMesh: canvas verts preserved');
+  assertEq(am.keyforms.length, 1, 'artMesh: single rest keyform');
+  assertEq(am.bindings, [], 'artMesh: no bindings (rest-only)');
+  // verts in parent-deformer-local: BodyXWarp covers canvas (0..800,0..600) so
+  // (200,150) → (0.25, 0.25); (600,150) → (0.75, 0.25); (400,450) → (0.5, 0.75)
+  const local = Array.from(am.keyforms[0].vertexPositions);
+  assert(Math.abs(local[0] - 0.25) < 1e-6, 'artMesh: vert 0 x normalised');
+  assert(Math.abs(local[1] - 0.25) < 1e-6, 'artMesh: vert 0 y normalised');
+  assert(Math.abs(local[2] - 0.75) < 1e-6, 'artMesh: vert 1 x normalised');
+  assert(Math.abs(local[5] - 0.75) < 1e-6, 'artMesh: vert 2 y normalised');
+}
+
+{
+  // artMesh fallback: a part WITHOUT rigParent → uses innermostBodyWarpId.
+  const project = {
+    canvas: { width: 800, height: 600 }, parameters: [],
+    nodes: [
+      {
+        id: 'BodyXWarp', type: 'deformer', deformerKind: 'warp',
+        name: 'BX', parent: null, visible: true,
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [0, 0, 800, 0, 0, 600, 800, 600],
+        localFrame: 'canvas-px',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [0, 0, 800, 0, 0, 600, 800, 600], opacity: 1 }],
+      },
+      {
+        id: 'partB', type: 'part', name: 'orphan',
+        // No rigParent set
+        mesh: {
+          vertices: [400, 300],
+          triangles: [],
+          uvs: [0.5, 0.5],
+        },
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  assertEq(spec.artMeshes[0].parent, { type: 'warp', id: 'BodyXWarp' },
+    'artMesh: rigParent-less part falls back to innermost body warp');
+}
+
+{
+  // artMesh with rotation parent: verts become canvas-relative-to-pivot.
+  const project = {
+    canvas: { width: 800, height: 600 }, parameters: [],
+    nodes: [
+      {
+        id: 'HeadRotation', type: 'deformer', deformerKind: 'rotation',
+        name: 'HR', parent: null, visible: true,
+        bindings: [],
+        keyforms: [{ keyTuple: [], angle: 0, originX: 400, originY: 200, scale: 1, opacity: 1 }],
+      },
+      {
+        id: 'partFace', type: 'part', name: 'face',
+        rigParent: 'HeadRotation',
+        mesh: { vertices: [400, 200, 500, 300], triangles: [], uvs: [0,0,1,1] },
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes[0];
+  assertEq(am.parent, { type: 'rotation', id: 'HeadRotation' }, 'artMesh: rotation parent');
+  const local = Array.from(am.keyforms[0].vertexPositions);
+  // (400,200) - pivot(400,200) = (0,0)
+  // (500,300) - pivot(400,200) = (100,100)
+  assertEq(local, [0, 0, 100, 100], 'artMesh: rotation parent → pivot-relative offsets');
+}
+
+{
+  // Chained warp: BodyZWarp (canvas-px root) → BodyXWarp (normalised under BZ).
+  // BX baseGrid is in 0..1 of BZ; BZ's canvas covers (0..800, 0..600).
+  // So BX at rest is identity → its lifted canvas-px bbox should match BZ's bbox.
+  const project = {
+    canvas: { width: 800, height: 600 }, parameters: [],
+    nodes: [
+      {
+        id: 'BodyZWarp', type: 'deformer', deformerKind: 'warp',
+        name: 'BZ', parent: null, visible: true,
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [0, 0, 800, 0, 0, 600, 800, 600],
+        localFrame: 'canvas-px',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [0, 0, 800, 0, 0, 600, 800, 600], opacity: 1 }],
+      },
+      {
+        id: 'BodyXWarp', type: 'deformer', deformerKind: 'warp',
+        name: 'BX', parent: 'BodyZWarp', visible: true,
+        gridSize: { rows: 1, cols: 1 },
+        // Identity in 0..1: corners (0,0)→(1,0)→(0,1)→(1,1)
+        baseGrid: [0, 0, 1, 0, 0, 1, 1, 1],
+        localFrame: 'normalized-0to1',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [0, 0, 1, 0, 0, 1, 1, 1], opacity: 1 }],
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  assertEq(spec.innermostBodyWarpId, 'BodyXWarp', 'chain: BX detected as innermost');
+  // Closures should map canvas → 0..1 in BX's lifted bbox (= canvas).
+  assert(typeof spec.canvasToInnermostX === 'function', 'chain: closure X built');
+  const x = spec.canvasToInnermostX(400);
+  assert(Math.abs(x - 0.5) < 1e-6, 'chain: closure X(400) → 0.5 via lifted bbox');
+}
+
 // ── getRigSpec is alias of selectRigSpec ─────────────────────────
 
 {

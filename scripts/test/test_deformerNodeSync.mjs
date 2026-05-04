@@ -7,11 +7,13 @@
 import {
   parentSpecToNodeId,
   warpSpecToDeformerNode,
+  rotationSpecToDeformerNode,
   upsertDeformerNode,
   removeDeformerNodesByPredicate,
   removeFaceParallaxNode,
   removeBodyWarpChainNodes,
   removeRigWarpNodes,
+  removeAllRotationDeformerNodes,
   synthesizeDeformerNodesFromSidetables,
 } from '../../src/store/deformerNodeSync.js';
 
@@ -376,6 +378,51 @@ function assertEq(actual, expected, name) {
     'dual-write RW: clear drops all rigWarp nodes');
   assertEq(partA.rigParent, null, 'dual-write RW: clear nulls partA.rigParent');
   assertEq(partB.rigParent, null, 'dual-write RW: clear nulls partB.rigParent');
+}
+
+// ── rotationSpecToDeformerNode + removeAllRotationDeformerNodes ───
+
+{
+  const spec = {
+    id: 'FaceRotation',
+    name: 'Face Rotation',
+    parent: { type: 'warp', id: 'BodyXWarp' },
+    bindings: [{ parameterId: 'ParamAngleZ', keys: [-30, 0, 30], interpolation: 'LINEAR' }],
+    keyforms: [
+      { keyTuple: [-30], angle: -10, originX: 100, originY: 200, scale: 1, opacity: 1 },
+      { keyTuple: [0],   angle: 0,   originX: 100, originY: 200, scale: 1, opacity: 1 },
+      { keyTuple: [30],  angle: 10,  originX: 100, originY: 200, scale: 1, opacity: 1 },
+    ],
+    baseAngle: 0,
+    handleLengthOnCanvas: 200,
+    circleRadiusOnCanvas: 100,
+    isVisible: true, isLocked: false,
+    useBoneUiTestImpl: true,
+  };
+  const node = rotationSpecToDeformerNode(spec);
+  assertEq(node.type, 'deformer', 'rotation node: type');
+  assertEq(node.deformerKind, 'rotation', 'rotation node: deformerKind');
+  assertEq(node.id, 'FaceRotation', 'rotation node: id');
+  assertEq(node.parent, 'BodyXWarp', 'rotation node: parent flattened');
+  assertEq(node.keyforms.length, 3, 'rotation node: keyforms count');
+  assertEq(node.keyforms[0].angle, -10, 'rotation node: keyform angle');
+  assertEq(node.keyforms[0].originX, 100, 'rotation node: keyform originX');
+  assertEq(node.bindings[0].parameterId, 'ParamAngleZ', 'rotation node: bindings preserved');
+  assertEq(node.handleLengthOnCanvas, 200, 'rotation node: handleLength preserved');
+  assertEq(node.useBoneUiTestImpl, true, 'rotation node: useBoneUi default-on');
+}
+
+{
+  // removeAllRotationDeformerNodes drops only rotations; warps + parts survive.
+  const nodes = [
+    { id: 'P1', type: 'part' },
+    { id: 'BX', type: 'deformer', deformerKind: 'warp' },
+    { id: 'R1', type: 'deformer', deformerKind: 'rotation' },
+    { id: 'R2', type: 'deformer', deformerKind: 'rotation' },
+    { id: 'BZ', type: 'deformer', deformerKind: 'warp' },
+  ];
+  removeAllRotationDeformerNodes(nodes);
+  assertEq(nodes.map((n) => n.id), ['P1', 'BX', 'BZ'], 'removeRotations: only rotations removed');
 }
 
 // ── Round-trip: synthesize → JSON → parse → identical deformer nodes ──

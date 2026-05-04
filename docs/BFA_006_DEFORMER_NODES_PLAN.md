@@ -204,6 +204,18 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Deliverable:** Init Rig produces the same rendered output, with deformers visible in the Outliner under a "Rig" Collection. `npm test` green including the round-trip + e2e tests.
 
+**Status (this commit).** Closed for the wiring + rotation/artMesh slices. What landed:
+
+- **Rotation-deformer dual-write at `seedAllRig`.** `harvest.rigSpec.rotationDeformers` upserts as `type:'deformer', deformerKind:'rotation'` nodes in `project.nodes`. Replace mode wipes prior rotation nodes; merge mode preserves `_userAuthored` entries by id. `rotationSpecToDeformerNode` + `removeAllRotationDeformerNodes` added to `deformerNodeSync.js`.
+- **`selectRigSpec` artMesh + rest-state pass.** Ported the lifted-grid algorithm verbatim from `buildRigSpecFromCmo3.js` into `selectRigSpec.js` (Kahn topo sort over `node.parent`; `_liftWarpToCanvasAtRest` recursive rest-pass; `_computeRotationCanvasPivotAtRest`; `_buildArtMeshes` frame-converts each part's mesh canvas-px verts into parent-deformer-local). `canvasToInnermostX/Y` closures now derive from the lifted bbox so chained body warps (BodyZ→BodyY→Breath→BodyX) work, not just the outermost root-parented warp.
+- **`useRigSpecStore` fast-path wiring.** `buildRigSpec()` first tries `selectRigSpec(project)` and short-circuits when the result is "complete" (rotation deformers + artMeshes both populated). Plus a top-level `useProjectStore.subscribe` that auto-fills `rigSpec` on project mutation when the deformer graph is complete — closes the "click Init Rig to rebuild after load" UX gap. Async `initializeRigFromProject` path stays as the fallback for projects that haven't been Init-Rig'd post Phase 3.
+- **64-assertion `test_selectRigSpec.mjs`** (24 new) covers rotation node read, artMesh derivation under warp/rotation/no parent, chained body warp closure, end-to-end synthesize→select roundtrip.
+- **72-assertion `test_deformerNodeSync.mjs`** (11 new) covers `rotationSpecToDeformerNode` + `removeAllRotationDeformerNodes`.
+
+**Deferred (deviation from plan):**
+- **Synthetic "Rig" Collection group** — would have required overloading `node.parent` with both display-tree and chain semantics, OR splitting them into two fields (chain parent vs project-tree parent). Phase 3 keeps `node.parent` = chain parent, matching Phase 1's flattening. Phase 4's Outliner naturalisation works fine without the synthetic group: deformer nodes appear under their chain parent (other deformers) or at root level alongside parts/groups. Future polish could add a display-only Rig group if 30+ deformers cluttering the root becomes a UX issue.
+- **`applySubsystemOptOutToRigSpec` project-walking** — still operates on the rigSpec produced by either `buildRigSpec` path; behaviour-preserving. Folding it into a pure project-walking pass is mechanical; deferred to Phase 6 cleanup.
+
 ### Phase 4 — Outliner naturalisation (~0.5 day)
 
 **Goal:** Outliner's View Layer mode shows deformers as siblings of parts/groups (or under the "Rig" Collection group from Phase 3), without the runtime-synthesised pseudo-root.
