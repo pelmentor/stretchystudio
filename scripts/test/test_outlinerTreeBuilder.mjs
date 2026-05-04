@@ -11,7 +11,6 @@ import {
   walkOutlinerTree,
   findOutlinerNode,
   ancestorChain,
-  RIG_PSEUDO_ROOT_ID,
 } from '../../src/v3/editors/outliner/treeBuilder.js';
 
 let passed = 0;
@@ -384,64 +383,69 @@ assertThrows(
   assert(head.isBone === true, 'hierarchy: bone group flagged isBone');
 }
 
-// ── View Layer mode — unified hierarchy + Rig pseudo-root ──────────
+// ── View Layer mode — unified hierarchy with deformers inline (Phase 4) ─
 
 {
-  // Rich fixture: project hierarchy with a bone, plus a rigSpec with
-  // one warp + one rotation deformer.
+  // Rich fixture: project hierarchy with a bone, plus deformer nodes
+  // sitting in `project.nodes` (BFA-006 Phase 1+3 ships them as
+  // first-class entries; Phase 4 surfaces them in the unified tree).
   const nodes = [
     { id: 'g-root', type: 'group', name: 'root',  parent: null },
     { id: 'p-face', type: 'part',  name: 'face',  parent: 'g-root', draw_order: 10 },
     { id: 'b-head', type: 'group', name: 'head',  parent: 'g-root', boneRole: 'head' },
+    { id: 'BodyWarp', type: 'deformer', deformerKind: 'warp',
+      name: 'BodyWarp',  parent: null },
+    { id: 'FaceWarp', type: 'deformer', deformerKind: 'warp',
+      name: 'FaceWarp',  parent: 'BodyWarp' },
+    { id: 'GroupRotation_head', type: 'deformer', deformerKind: 'rotation',
+      name: 'GroupRotation_head', parent: null },
   ];
-  const rigSpec = {
-    warpDeformers: [
-      { id: 'BodyWarp',  name: 'BodyWarp',  parent: { type: 'root' } },
-      { id: 'FaceWarp',  name: 'FaceWarp',  parent: { type: 'warp', id: 'BodyWarp' } },
-    ],
-    rotationDeformers: [
-      { id: 'GroupRotation_head', name: 'GroupRotation_head', parent: { type: 'root' } },
-    ],
-    artMeshes: [
-      { id: 'p-face', parent: { type: 'warp', id: 'FaceWarp' } },
-    ],
-  };
+  // rigSpec is ignored under viewLayer in Phase 4 (kept for back-compat).
+  const tree = buildOutlinerTree({ nodes, rigSpec: null }, { mode: 'viewLayer' });
+  // Phase 4 — deformers appear under their chain parent inline. The
+  // root list contains the project hierarchy root + the two
+  // chain-rooted deformers (BodyWarp and GroupRotation_head).
+  assert(tree.length === 3, 'viewLayer: 1 hierarchy root + 2 root-parented deformers');
 
-  const tree = buildOutlinerTree({ nodes, rigSpec }, { mode: 'viewLayer' });
-  // Should be project hierarchy roots + 1 Rig pseudo-root at end.
-  assert(tree.length === 2, 'viewLayer: hierarchy + 1 rig pseudo-root');
-  const last = tree[tree.length - 1];
-  assert(last.id === RIG_PSEUDO_ROOT_ID, 'viewLayer: last entry is the rig pseudo-root');
-  assert(last.name === 'Rig', 'viewLayer: pseudo-root is labelled "Rig"');
-  assert(last.children.length === 2, 'viewLayer: pseudo-root contains 2 deformer roots (warp + rotation)');
+  const ids = tree.map((n) => n.id);
+  assert(ids.includes('g-root'), 'viewLayer: project root is in tree');
+  assert(ids.includes('BodyWarp'), 'viewLayer: root-parented warp deformer in tree');
+  assert(ids.includes('GroupRotation_head'), 'viewLayer: rotation deformer in tree');
 
-  // Art-mesh leaves should be EXCLUDED from the rig pseudo-root in
-  // viewLayer mode — they already appear in the hierarchy section as
-  // parts. Only deformers (warps + rotations) inside the Rig branch.
-  let foundArtmesh = false;
-  walkOutlinerTree(last.children, (n) => {
-    if (n.type === 'artmesh') foundArtmesh = true;
-  });
-  assert(!foundArtmesh, 'viewLayer: no art-mesh leaves under the rig pseudo-root');
+  // Deformer nodes are flagged for icon picking.
+  const bodyWarp = tree.find((n) => n.id === 'BodyWarp');
+  assert(bodyWarp.type === 'deformer', 'viewLayer: deformer type preserved');
+  assert(bodyWarp.isDeformer === true, 'viewLayer: isDeformer flag set');
+  assert(bodyWarp.deformerKind === 'warp', 'viewLayer: deformerKind=warp on warp node');
+  const groupRot = tree.find((n) => n.id === 'GroupRotation_head');
+  assert(groupRot.deformerKind === 'rotation', 'viewLayer: deformerKind=rotation on rotation node');
+
+  // FaceWarp lives under BodyWarp via chain parent.
+  assert(bodyWarp.children.length === 1, 'viewLayer: BodyWarp has 1 chain child');
+  assert(bodyWarp.children[0].id === 'FaceWarp', 'viewLayer: FaceWarp under BodyWarp');
 
   // Hierarchy section should have the bone with isBone flag set.
   let foundBone = null;
-  walkOutlinerTree([tree[0]], (n) => {
+  walkOutlinerTree([tree.find((n) => n.id === 'g-root')], (n) => {
     if (!foundBone && n.id === 'b-head') foundBone = n;
   });
   assert(foundBone && foundBone.isBone === true,
     'viewLayer: bone in hierarchy section flagged isBone');
+
+  // Sort: parts/groups (sortKey from draw_order) sort above deformers
+  // (sortKey=-1). g-root has sortKey ≥ 10 so it comes first.
+  assert(tree[0].id === 'g-root', 'viewLayer: project hierarchy roots sort above deformers');
 }
 
-// ── View Layer mode without a rigSpec → just hierarchy ─────────────
+// ── View Layer mode without deformers → just hierarchy ─────────────
 
 {
   const nodes = fixtureNodes();
   const tree = buildOutlinerTree({ nodes, rigSpec: null }, { mode: 'viewLayer' });
-  // No rig → no pseudo-root, just the hierarchy roots.
-  assert(tree.every((n) => n.id !== RIG_PSEUDO_ROOT_ID),
-    'viewLayer: empty rigSpec → no pseudo-root');
-  assert(tree.length === 3, 'viewLayer: empty rigSpec → 3 hierarchy roots from fixture');
+  // No deformer nodes → just the hierarchy roots.
+  assert(tree.length === 3, 'viewLayer: no deformers → 3 hierarchy roots from fixture');
+  assert(tree.every((n) => n.type !== 'deformer'),
+    'viewLayer: no deformer rows when none in nodes');
 }
 
 // ── View Layer mode tolerates plain array input ────────────────────

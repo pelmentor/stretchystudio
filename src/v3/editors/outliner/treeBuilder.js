@@ -12,13 +12,16 @@
  *
  *   - `'viewLayer'` — Blender's "View Layer" — single canonical tree
  *                     unifying the scene hierarchy AND the rig graph.
- *                     Project nodes (parts + groups) appear as today;
- *                     a synthetic "Rig" pseudo-root pinned to the
- *                     bottom holds the deformer tree. Bones get an
- *                     isBone flag so TreeNode picks the bone icon.
- *                     Default — Blender's "one tree, expand to drill".
- *   - `'hierarchy'` — legacy: just project.nodes (parts + groups).
- *                     Equivalent to `viewLayer` minus the Rig branch.
+ *                     Post-BFA-006 Phase 4 this is just the unified
+ *                     hierarchy walker over `project.nodes` (which
+ *                     now contains deformer nodes alongside parts +
+ *                     groups; see Phase 1 + Phase 3). Bones get an
+ *                     `isBone` flag, deformers an `isDeformer` /
+ *                     `deformerKind` flag so TreeNode picks the right
+ *                     icon. Default — Blender's "one tree, expand to drill".
+ *   - `'hierarchy'` — legacy alias: just project.nodes. Identical to
+ *                     `viewLayer` after Phase 4 (kept for back-compat
+ *                     with existing tests).
  *   - `'rig'`       — rigSpec deformer tree only (warps + rotations)
  *                     with art meshes shown under their parent deformer.
  *   - `'skeleton'`  — armature-only filter: only `boneRole`-tagged
@@ -42,7 +45,7 @@
  *
  * @typedef {Object} ProjectNodeLike
  * @property {string}              id
- * @property {'part'|'group'}      type
+ * @property {'part'|'group'|'deformer'}      type
  * @property {string}              name
  * @property {string|null|undefined} parent
  * @property {number=}             draw_order
@@ -50,6 +53,10 @@
  * @property {string|null=}        boneRole
  *   When `type === 'group'` and this is set, the group is a skeleton
  *   bone. Used by `'skeleton'` mode to filter to bones-only.
+ * @property {('warp'|'rotation')=} deformerKind
+ *   When `type === 'deformer'`, discriminates warp vs rotation. Phase 4
+ *   surfaces this via the `isDeformer`/`deformerKind` fields on
+ *   `OutlinerNode` so TreeNode can pick the matching icon.
  */
 
 /**
@@ -90,6 +97,11 @@
  *   Skeleton-mode rows set this so TreeNode renders a bone icon
  *   instead of the default folder. The underlying node is still a
  *   group (selectionStore uses `type:'group'`).
+ * @property {boolean=}                                        isDeformer
+ *   BFA-006 Phase 4 — set on `type:'deformer'` rows in the unified
+ *   hierarchy tree. Lets TreeNode pick a deformer-specific icon
+ *   without overloading `type` (we keep `type:'deformer'` so
+ *   selectionStore + click-routing works the same).
  */
 
 /**
@@ -134,54 +146,35 @@ export function buildOutlinerTree(input, opts = {}) {
 }
 
 /**
- * Special id for the synthetic "Rig" pseudo-root in viewLayer mode.
- * Not a real project / rigSpec id — exported so `OutlinerEditor`'s
- * onSelect can recognise it and treat as a non-selectable spacer.
+ * Deprecated. Pre-Phase-4 export of the synthetic "Rig" pseudo-root id;
+ * `buildViewLayerTree` no longer composes a rig branch since deformer
+ * nodes now live in `project.nodes` directly (BFA-006 Phase 1+3).
+ *
+ * Kept exported (set to `null`) so any third-party / scratch consumer
+ * that imported it keeps loading; check should be `id !== RIG_PSEUDO_ROOT_ID`
+ * which now always evaluates true. Remove in a future release.
+ *
+ * @deprecated since BFA-006 Phase 4 — no longer used.
  */
-export const RIG_PSEUDO_ROOT_ID = '__viewLayer__rig__';
+export const RIG_PSEUDO_ROOT_ID = null;
 
 /**
- * Compose project hierarchy + a synthetic "Rig" branch into one tree.
+ * BFA-006 Phase 4 — viewLayer is the unified hierarchy. Deformer
+ * nodes live in `project.nodes` post-Phase-3 (warps from the
+ * migration v15 + dual-write seeders, rotations from `seedAllRig`'s
+ * rotation dual-write), so the unified tree is just
+ * `buildHierarchyTree(nodes)` — no synthetic pseudo-root, no rigSpec
+ * composition.
  *
- * Layout:
- *   ├── (project hierarchy roots, sorted by draw_order desc)
- *   │   ├── …
- *   │   └── …
- *   └── Rig (pseudo-root, only present when rigSpec has deformers)
- *       ├── BodyWarp / FaceParallax / etc.
- *       └── …
- *
- * The Rig pseudo-root deliberately omits art-mesh leaves — those
- * already appear in the hierarchy section as parts. Showing them in
- * BOTH places would double-list every deforming mesh.
+ * The `rigSpec` argument is accepted for back-compat with the prior
+ * caller signature but ignored.
  *
  * @param {ProjectNodeLike[]|null|undefined} nodes
- * @param {RigSpecLike|null|undefined} rigSpec
+ * @param {RigSpecLike|null|undefined} _rigSpec  unused (Phase 4)
  * @returns {OutlinerNode[]}
  */
-function buildViewLayerTree(nodes, rigSpec) {
-  const hierarchy = buildHierarchyTree(nodes);
-
-  const warps = Array.isArray(rigSpec?.warpDeformers) ? rigSpec.warpDeformers : [];
-  const rotations = Array.isArray(rigSpec?.rotationDeformers) ? rigSpec.rotationDeformers : [];
-  if (warps.length === 0 && rotations.length === 0) return hierarchy;
-
-  // Reuse the rig-mode tree but strip art-mesh leaves so they don't
-  // duplicate parts that already live in the hierarchy section.
-  const rigRootsWithMeshes = buildRigTree({ ...rigSpec, artMeshes: [] });
-
-  /** @type {OutlinerNode} */
-  const rigPseudoRoot = {
-    id: RIG_PSEUDO_ROOT_ID,
-    type: 'group',
-    name: 'Rig',
-    parent: null,
-    children: rigRootsWithMeshes,
-    visible: true,
-    sortKey: -Infinity, // pin to the bottom
-  };
-
-  return [...hierarchy, rigPseudoRoot];
+function buildViewLayerTree(nodes, _rigSpec) {
+  return buildHierarchyTree(nodes);
 }
 
 /**
@@ -195,7 +188,11 @@ function buildHierarchyTree(nodes) {
   const byId = new Map();
   for (const n of nodes) {
     if (!n || typeof n.id !== 'string' || n.id === '') continue;
-    if (n.type !== 'part' && n.type !== 'group') continue;
+    // BFA-006 Phase 4 — accept deformer nodes too. Phase 1 + Phase 3
+    // ship them as first-class entries on `project.nodes`; the
+    // hierarchy walker below renders them under their `node.parent`
+    // (chain parent for deformers).
+    if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer') continue;
     byId.set(n.id, n);
   }
 
@@ -215,6 +212,10 @@ function buildHierarchyTree(nodes) {
   /** @returns {number} sort key for `n` (groups: max descendant draw_order). */
   function effectiveDrawOrder(/** @type {ProjectNodeLike} */ n) {
     if (n.type === 'part') return n.draw_order ?? DEFAULT_DRAW_ORDER;
+    // Phase 4 — deformer nodes have no draw_order. Pin them below the
+    // lowest part draw_order so they cluster at the bottom of the
+    // root list (parts/groups stay on top, matching today's UX).
+    if (n.type === 'deformer') return -1;
     const seen = new Set();
     let max = -Infinity;
     /** @param {ProjectNodeLike} g */
@@ -245,6 +246,12 @@ function buildHierarchyTree(nodes) {
     // bone icon inline. The flag is type-orthogonal — selectionStore
     // still treats them as `type:'group'`.
     const isBone = n.type === 'group' && !!n.boneRole;
+    // Phase 4 — deformers get the `isDeformer` flag (+ `deformerKind`
+    // for icon picking). Same idea: the type stays `'deformer'` so
+    // selection routing works; the flag is for TreeNode rendering.
+    const isDeformer = n.type === 'deformer';
+    const deformerKind = isDeformer && (n.deformerKind === 'rotation' || n.deformerKind === 'warp')
+      ? n.deformerKind : undefined;
     if (onPath.has(n.id)) {
       return {
         id: n.id, type: n.type, name: n.name,
@@ -253,6 +260,8 @@ function buildHierarchyTree(nodes) {
         visible: n.visible !== false,
         sortKey: DEFAULT_DRAW_ORDER,
         ...(isBone ? { isBone: true } : null),
+        ...(isDeformer ? { isDeformer: true } : null),
+        ...(deformerKind ? { deformerKind } : null),
       };
     }
     onPath.add(n.id);
@@ -270,6 +279,8 @@ function buildHierarchyTree(nodes) {
       visible: n.visible !== false,
       sortKey: effectiveDrawOrder(n),
       ...(isBone ? { isBone: true } : null),
+      ...(isDeformer ? { isDeformer: true } : null),
+      ...(deformerKind ? { deformerKind } : null),
     };
   }
 

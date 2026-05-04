@@ -227,6 +227,14 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Deliverable:** Outliner shows one canonical tree. The unified View Layer name still applies but the dropdown's `Armature Data` and `Rig Data` filters are now SAME-DATA filters, not different-tree filters. `RIG_PSEUDO_ROOT_ID` constant + `buildViewLayerTree` function are removed.
 
+**Status (this commit).** Closed.
+
+- `buildHierarchyTree` accepts `type:'deformer'` nodes (alongside parts and groups). Deformer rows surface `isDeformer:true` + `deformerKind:'warp'|'rotation'` flags so `TreeNode` picks the matching icon (already in place from when rig mode existed). `effectiveDrawOrder` returns `-1` for deformers so they cluster at the bottom of the root row sort; chain children appear nested under their warp/rotation parent naturally.
+- `buildViewLayerTree` body collapses to a single `buildHierarchyTree(nodes)` call (the `rigSpec` argument is accepted but ignored — kept for back-compat with the prior signature).
+- `RIG_PSEUDO_ROOT_ID` exported as `null` (no longer used; preserved for one release so any third-party / scratch consumer that imported it keeps loading). `OutlinerEditor` drops the import + the obsolete pseudo-root guard in `onSelect`.
+- 96-assertion `test_outlinerTreeBuilder.mjs` (rewrote 3 viewLayer pseudo-root assertions for the unified-tree shape; deformer flags + chain nesting + sort order verified).
+- Tests of `'rig'` mode (separate rigSpec-driven tree with art-mesh leaves under their parent deformer) still pass — that mode stays usable as the "Rig Data" filter view; predicate-based reduction over the unified tree is a future polish if we want it identical-shape across all three.
+
 ### Phase 5 — Selection + per-deformer properties (~0.5 day)
 
 **Goal:** clicking a deformer in Outliner / canvas opens its properties (keyform editor, bindings, etc.) like any other node.

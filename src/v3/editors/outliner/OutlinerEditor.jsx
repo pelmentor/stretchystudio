@@ -8,10 +8,11 @@
  * shape of the tree. Three scopes:
  *
  *   - **View Layer** (default): full unified tree. Project hierarchy
- *     (parts + groups + bones inline) plus a synthetic "Rig" pseudo-
- *     root pinned to the bottom holding the deformer graph. Bones get
- *     the bone icon via `isBone` so a glance at the tree tells you
- *     what's an armature without flipping modes.
+ *     (parts + groups + bones inline) plus deformer nodes (warps +
+ *     rotations from BFA-006 Phase 1+3, living in `project.nodes`
+ *     under their chain parent). Bones get the bone icon via `isBone`,
+ *     deformers via `isDeformer` + `deformerKind`, so a glance at
+ *     the tree tells you what's what without flipping modes.
  *   - **Armature Data**: bones-only filter — only `boneRole`-tagged
  *     groups, bone-to-bone parent chain (non-bone groups skipped on
  *     the way up). Click → highlights the bone in SkeletonOverlay.
@@ -37,7 +38,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
-import { buildOutlinerTree, walkOutlinerTree, RIG_PSEUDO_ROOT_ID } from './treeBuilder.js';
+import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
 import { filterOutlinerTree } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
 import * as SelectImpl from '../../../components/ui/select.jsx';
@@ -149,9 +150,6 @@ export function OutlinerEditor() {
   const onSelect = useCallback(
     /** @param {string} id @param {'replace'|'add'|'toggle'} modifier */
     (id, modifier) => {
-      // The synthetic "Rig" pseudo-root in viewLayer mode is a non-
-      // selectable spacer — clicking it should expand/collapse only.
-      if (id === RIG_PSEUDO_ROOT_ID) return;
       // Resolve type from the tree node — different display modes map
       // to different selectionStore types. Art-mesh leaves in rig mode
       // dispatch as 'part' (they're parts of the project, just shown
