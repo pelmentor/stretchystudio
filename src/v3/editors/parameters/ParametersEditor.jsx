@@ -18,13 +18,14 @@
  */
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw, Wand2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Wand2, Sparkles } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
 import { InitRigOptionsPopover } from './InitRigOptionsPopover.jsx';
+import { IdleMotionDialog } from '../animations/IdleMotionDialog.jsx';
 
 export function ParametersEditor() {
   const params = useProjectStore((s) => s.project.parameters ?? []);
@@ -34,6 +35,12 @@ export function ParametersEditor() {
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(/** @type {string|null} */ (null));
+  // GAP-017 Phase B — surface idle-motion generation right next to Init
+  // Rig so the natural "rig → animate" workflow doesn't require a
+  // workspace switch. Same dialog AnimationsEditor mounts; either
+  // call-site wins, since IdleMotionDialog routes to the Animation
+  // workspace + activates the new animation on success.
+  const [showIdleDialog, setShowIdleDialog] = useState(false);
 
   async function runInit() {
     if (busy) return;
@@ -99,6 +106,15 @@ export function ParametersEditor() {
           <InitRigOptionsPopover />
           <button
             type="button"
+            className="flex items-center gap-1 hover:text-primary transition-colors"
+            onClick={() => setShowIdleDialog(true)}
+            title="Generate idle motion (head wander / breath / blinks) and add it as a new animation."
+          >
+            <Sparkles size={10} />
+            generate idle
+          </button>
+          <button
+            type="button"
             className="flex items-center gap-1 hover:text-foreground transition-colors"
             onClick={() => useParamValuesStore.getState().resetToDefaults(params)}
             title="Reset every slider back to its parameter's default value."
@@ -108,6 +124,7 @@ export function ParametersEditor() {
           </button>
         </div>
       </div>
+      <IdleMotionDialog open={showIdleDialog} onOpenChange={setShowIdleDialog} />
       {error ? (
         <div className="px-2 py-1 border-b border-destructive/40 text-[10px] text-destructive bg-destructive/10">
           {error}
