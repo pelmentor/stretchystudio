@@ -34,6 +34,11 @@
  */
 
 import { makeBodyWarpNormalizers } from './bodyWarp.js';
+import {
+  warpSpecToDeformerNode,
+  upsertDeformerNode,
+  removeBodyWarpChainNodes,
+} from '../../../store/deformerNodeSync.js';
 
 /**
  * @typedef {Object} BodyWarpLayout
@@ -203,6 +208,17 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
   }
   const stored = serializeBodyWarpChain(chain);
   project.bodyWarp = stored;
+  // BFA-006 Phase 1 — dual-write deformer nodes for each spec in the
+  // chain. Drop any prior chain nodes first so a 4-spec replacement
+  // over a 3-spec prior chain doesn't leave a stale BodyXWarp node
+  // (or vice-versa).
+  if (Array.isArray(project.nodes)) {
+    removeBodyWarpChainNodes(project.nodes);
+    for (const spec of stored.specs ?? []) {
+      if (!spec) continue;
+      upsertDeformerNode(project.nodes, warpSpecToDeformerNode(spec));
+    }
+  }
   return stored;
 }
 
@@ -214,4 +230,8 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
  */
 export function clearBodyWarp(project) {
   project.bodyWarp = null;
+  // BFA-006 Phase 1 — drop shadow chain nodes alongside the sidetable.
+  if (Array.isArray(project.nodes)) {
+    removeBodyWarpChainNodes(project.nodes);
+  }
 }

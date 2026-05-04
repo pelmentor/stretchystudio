@@ -45,6 +45,13 @@
  * @module io/live2d/rig/rigWarpsStore
  */
 
+import {
+  warpSpecToDeformerNode,
+  upsertDeformerNode,
+  removeRigWarpNodes,
+  removeDeformerNodesByPredicate,
+} from '../../../store/deformerNodeSync.js';
+
 /**
  * @typedef {Object} StoredRigWarpSpec
  *   Per-mesh rig warp keyform record. Shape mirrors the `rigWarpSpec`
@@ -221,6 +228,7 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
     specs = Array.from(rigWarps);
   }
   const stored = serializeRigWarps(specs);
+  let finalMap;
   if (mode === 'merge') {
     const prior = (project.rigWarps && typeof project.rigWarps === 'object') ? project.rigWarps : {};
     const merged = { ...stored };
@@ -230,10 +238,37 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
       }
     }
     project.rigWarps = merged;
-    return merged;
+    finalMap = merged;
+  } else {
+    project.rigWarps = stored;
+    finalMap = stored;
   }
-  project.rigWarps = stored;
-  return stored;
+  // BFA-006 Phase 1 — dual-write deformer nodes for the final map.
+  // In replace mode we drop ALL prior rigWarp nodes first; in merge mode
+  // we drop only nodes whose targetPartId is being overwritten by this
+  // pass (preserves _userAuthored entries that were preserved above).
+  if (Array.isArray(project.nodes)) {
+    if (mode === 'merge') {
+      const incomingPartIds = new Set(Object.keys(stored));
+      removeDeformerNodesByPredicate(project.nodes, (n) =>
+        typeof n.targetPartId === 'string' && incomingPartIds.has(n.targetPartId)
+      );
+    } else {
+      removeRigWarpNodes(project.nodes);
+    }
+    for (const spec of Object.values(finalMap)) {
+      if (!spec) continue;
+      upsertDeformerNode(project.nodes, warpSpecToDeformerNode(spec));
+    }
+    // Sync parts[i].rigParent: every part covered by the map gets
+    // pointed at its rigWarp deformer's id.
+    for (const [partId, spec] of Object.entries(finalMap)) {
+      if (!spec || typeof spec.id !== 'string') continue;
+      const partNode = project.nodes.find((n) => n && n.id === partId && n.type === 'part');
+      if (partNode) partNode.rigParent = spec.id;
+    }
+  }
+  return finalMap;
 }
 
 /**
@@ -244,4 +279,15 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
  */
 export function clearRigWarps(project) {
   project.rigWarps = {};
+  // BFA-006 Phase 1 — drop the shadow rigWarp nodes; clear part
+  // rigParent pointers that referenced them so dangling refs don't
+  // confuse Phase 2's selectRigSpec.
+  if (Array.isArray(project.nodes)) {
+    removeRigWarpNodes(project.nodes);
+    for (const n of project.nodes) {
+      if (n && n.type === 'part' && n.rigParent !== undefined) {
+        n.rigParent = null;
+      }
+    }
+  }
 }

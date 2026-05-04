@@ -31,6 +31,12 @@
  * @module io/live2d/rig/faceParallaxStore
  */
 
+import {
+  warpSpecToDeformerNode,
+  upsertDeformerNode,
+  removeFaceParallaxNode,
+} from '../../../store/deformerNodeSync.js';
+
 /**
  * Convert a face-parallax `WarpDeformerSpec` to a JSON-friendly value
  * (Float64Arrays → plain arrays). Pure; doesn't mutate input.
@@ -139,6 +145,12 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
   }
   const stored = serializeFaceParallaxSpec(spec);
   project.faceParallax = stored;
+  // BFA-006 Phase 1 — dual-write the deformer node alongside the
+  // sidetable so `project.nodes` stays in sync with the spec the
+  // exporter / chainEval still read from `project.faceParallax`.
+  if (Array.isArray(project.nodes)) {
+    upsertDeformerNode(project.nodes, warpSpecToDeformerNode(stored));
+  }
   return stored;
 }
 
@@ -150,4 +162,8 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
  */
 export function clearFaceParallax(project) {
   project.faceParallax = null;
+  // BFA-006 Phase 1 — drop the shadow deformer node too.
+  if (Array.isArray(project.nodes)) {
+    removeFaceParallaxNode(project.nodes);
+  }
 }

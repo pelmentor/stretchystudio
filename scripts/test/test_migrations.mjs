@@ -422,6 +422,169 @@ function assertThrows(fn, name) {
   assert(p.rigWarps === rw, 'v9→current: existing rigWarps preserved');
 }
 
+// ---- v15: BFA-006 Phase 1 — deformer-node sync ----
+
+{
+  // v15: faceParallax sidetable → synthesized 'FaceParallaxWarp' deformer node.
+  const fp = {
+    id: 'FaceParallaxWarp',
+    name: 'Face Parallax',
+    parent: { type: 'rotation', id: 'FaceRotation' },
+    gridSize: { rows: 5, cols: 5 },
+    baseGrid: new Array(72).fill(0),
+    localFrame: 'pivot-relative',
+    bindings: [{ parameterId: 'ParamAngleX', keys: [-30, 0, 30], interpolation: 'LINEAR' }],
+    keyforms: [
+      { keyTuple: [-30], positions: new Array(72).fill(1), opacity: 1 },
+      { keyTuple: [0],   positions: new Array(72).fill(0), opacity: 1 },
+      { keyTuple: [30],  positions: new Array(72).fill(2), opacity: 1 },
+    ],
+    isVisible: true, isLocked: false, isQuadTransform: false,
+  };
+  const p = { schemaVersion: 14, faceParallax: fp, nodes: [] };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v15: schemaVersion bumped');
+  const fpNode = p.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(!!fpNode, 'v15: FaceParallax deformer node synthesized');
+  assertEq(fpNode.type, 'deformer', 'v15: FaceParallax node type');
+  assertEq(fpNode.deformerKind, 'warp', 'v15: FaceParallax node deformerKind');
+  assertEq(fpNode.parent, 'FaceRotation', 'v15: FaceParallax parent flattened to id');
+  assertEq(fpNode.localFrame, 'pivot-relative', 'v15: localFrame preserved');
+  assertEq(fpNode.bindings.length, 1, 'v15: FaceParallax binding count');
+  assertEq(fpNode.keyforms.length, 3, 'v15: FaceParallax keyform count');
+  assertEq(fpNode.keyforms[2].keyTuple, [30], 'v15: FaceParallax keyform tuple preserved');
+  assertEq(fpNode.gridSize, { rows: 5, cols: 5 }, 'v15: gridSize preserved');
+  assert(p.faceParallax === fp, 'v15: original faceParallax sidetable still in place');
+}
+
+{
+  // v15: bodyWarp.specs[] → 4 'Body*Warp' / 'BreathWarp' deformer nodes.
+  const bw = {
+    specs: [
+      { id: 'BodyZWarp', name: 'BZ', parent: { type: 'root', id: null },
+        gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+        localFrame: 'canvas-px',
+        bindings: [{ parameterId: 'ParamBodyAngleZ', keys: [-10, 0, 10], interpolation: 'LINEAR' }],
+        keyforms: [{ keyTuple: [-10], positions: new Array(72).fill(0), opacity: 1 }],
+        isVisible: true, isLocked: false, isQuadTransform: false },
+      { id: 'BodyYWarp', name: 'BY', parent: { type: 'warp', id: 'BodyZWarp' },
+        gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+        localFrame: 'normalized-0to1',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: new Array(72).fill(0), opacity: 1 }],
+        isVisible: true, isLocked: false, isQuadTransform: false },
+      { id: 'BreathWarp', name: 'Breath', parent: { type: 'warp', id: 'BodyYWarp' },
+        gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+        localFrame: 'normalized-0to1',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: new Array(72).fill(0), opacity: 1 }],
+        isVisible: true, isLocked: false, isQuadTransform: false },
+      { id: 'BodyXWarp', name: 'BX', parent: { type: 'warp', id: 'BreathWarp' },
+        gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+        localFrame: 'normalized-0to1',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: new Array(72).fill(0), opacity: 1 }],
+        isVisible: true, isLocked: false, isQuadTransform: false },
+    ],
+    layout: { BZ_MIN_X: 0, BZ_MIN_Y: 0, BZ_W: 800, BZ_H: 600,
+      BY_MIN: 0, BY_MAX: 1, BR_MIN: 0, BR_MAX: 1, BX_MIN: 0, BX_MAX: 1 },
+    hasParamBodyAngleX: true,
+    debug: { HIP_FRAC: 0.45, FEET_FRAC: 0.75, bodyFracSource: 'defaults', spineCfShifts: [] },
+  };
+  const p = { schemaVersion: 14, bodyWarp: bw, nodes: [] };
+  migrateProject(p);
+  const ids = p.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
+  assertEq(ids, ['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp'],
+    'v15: bodyWarp chain → 4 deformer nodes in order');
+  const bz = p.nodes.find((n) => n.id === 'BodyZWarp');
+  assertEq(bz.parent, null, 'v15: BodyZWarp root parent flattened to null');
+  const by = p.nodes.find((n) => n.id === 'BodyYWarp');
+  assertEq(by.parent, 'BodyZWarp', 'v15: BodyYWarp parent flattened to id');
+  const bx = p.nodes.find((n) => n.id === 'BodyXWarp');
+  assertEq(bx.parent, 'BreathWarp', 'v15: BodyXWarp parent flattened to id');
+  assert(p.bodyWarp === bw, 'v15: original bodyWarp sidetable still in place');
+}
+
+{
+  // v15: rigWarps map → per-part deformer nodes; parts[i].rigParent set.
+  const partA = { id: 'partA', type: 'part', name: 'hairFront' };
+  const partB = { id: 'partB', type: 'part', name: 'orphan' };
+  const rw = {
+    partA: {
+      id: 'RigWarp_partA', name: 'partA Warp',
+      parent: { type: 'warp', id: 'BodyXWarp' },
+      targetPartId: 'partA',
+      canvasBbox: { minX: 10, minY: 20, W: 100, H: 200 },
+      gridSize: { rows: 2, cols: 2 }, baseGrid: new Array(18).fill(0),
+      localFrame: 'normalized-0to1',
+      bindings: [{ parameterId: 'ParamHairFront', keys: [-1, 0, 1], interpolation: 'LINEAR' }],
+      keyforms: [{ keyTuple: [-1], positions: new Array(18).fill(0), opacity: 1 }],
+      isVisible: true, isLocked: false, isQuadTransform: false,
+    },
+  };
+  const p = { schemaVersion: 14, rigWarps: rw, nodes: [partA, partB] };
+  migrateProject(p);
+  const rwNode = p.nodes.find((n) => n.id === 'RigWarp_partA');
+  assert(!!rwNode, 'v15: rigWarp deformer node synthesized');
+  assertEq(rwNode.targetPartId, 'partA', 'v15: targetPartId preserved');
+  assertEq(rwNode.canvasBbox, { minX: 10, minY: 20, W: 100, H: 200 }, 'v15: canvasBbox preserved');
+  assertEq(partA.rigParent, 'RigWarp_partA', 'v15: parts[partA].rigParent points at deformer node id');
+  assert(partB.rigParent === undefined, 'v15: parts[partB].rigParent untouched (no rigWarp entry)');
+  assert(p.rigWarps === rw, 'v15: original rigWarps sidetable still in place');
+}
+
+{
+  // v15 idempotent: running migration twice doesn't duplicate deformer nodes.
+  const p = {
+    schemaVersion: 14,
+    nodes: [],
+    faceParallax: {
+      id: 'FaceParallaxWarp', name: 'Face Parallax',
+      parent: { type: 'rotation', id: 'FaceRotation' },
+      gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+      localFrame: 'pivot-relative',
+      bindings: [], keyforms: [{ keyTuple: [], positions: new Array(72).fill(0), opacity: 1 }],
+      isVisible: true, isLocked: false, isQuadTransform: false,
+    },
+  };
+  migrateProject(p);
+  const after1 = p.nodes.filter((n) => n.id === 'FaceParallaxWarp').length;
+  // Reset schemaVersion to force migration to re-run; simulates a fixture
+  // hand-edited back to v14 with the migration's prior write still present.
+  p.schemaVersion = 14;
+  migrateProject(p);
+  const after2 = p.nodes.filter((n) => n.id === 'FaceParallaxWarp').length;
+  assertEq(after1, 1, 'v15 idempotent: first run produces exactly one node');
+  assertEq(after2, 1, 'v15 idempotent: second run does not duplicate');
+}
+
+{
+  // v15: empty sidetables → no deformer nodes produced.
+  const p = { schemaVersion: 14, faceParallax: null, bodyWarp: null, rigWarps: {}, nodes: [] };
+  migrateProject(p);
+  const deformers = p.nodes.filter((n) => n.type === 'deformer');
+  assertEq(deformers.length, 0, 'v15: empty sidetables → zero deformer nodes');
+}
+
+{
+  // v15: missing nodes array — migration creates one defensively.
+  const p = {
+    schemaVersion: 14,
+    faceParallax: {
+      id: 'FaceParallaxWarp', name: 'FP',
+      parent: { type: 'rotation', id: 'FaceRotation' },
+      gridSize: { rows: 5, cols: 5 }, baseGrid: new Array(72).fill(0),
+      localFrame: 'pivot-relative',
+      bindings: [], keyforms: [{ keyTuple: [], positions: new Array(72).fill(0), opacity: 1 }],
+      isVisible: true, isLocked: false, isQuadTransform: false,
+    },
+    // intentionally no `nodes`
+  };
+  migrateProject(p);
+  assert(Array.isArray(p.nodes), 'v15: missing nodes array created');
+  assert(p.nodes.some((n) => n.id === 'FaceParallaxWarp'), 'v15: FaceParallax node synthesized into created array');
+}
+
 {
   // v0 (no schemaVersion) walks through all migrations.
   const p = {};

@@ -19,7 +19,9 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-export const CURRENT_SCHEMA_VERSION = 14;
+import { synthesizeDeformerNodesFromSidetables } from './deformerNodeSync.js';
+
+export const CURRENT_SCHEMA_VERSION = 15;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -228,6 +230,32 @@ const MIGRATIONS = {
     if (!project.rigStageLastRunAt || typeof project.rigStageLastRunAt !== 'object') {
       project.rigStageLastRunAt = {};
     }
+    return project;
+  },
+
+  // v15 — BFA-006 Phase 1: lift the three persisted warp-deformer
+  // sidetables (`project.faceParallax`, `project.bodyWarp.specs[]`,
+  // `project.rigWarps[*]`) into first-class entries on `project.nodes`
+  // carrying `type:'deformer', deformerKind:'warp'`. The sidetables
+  // STAY populated for now — they remain the source of truth that
+  // `cmo3writer` and `chainEval` read; the deformer nodes are SHADOW
+  // DATA kept in sync via `seedFaceParallax` / `seedBodyWarpChain` /
+  // `seedRigWarps` (and their `clearXxx` counterparts).
+  //
+  // Phases 2–6 strangle the sidetables progressively: Phase 2 reads
+  // through a `selectRigSpec` derived selector over `project.nodes`,
+  // Phase 3 makes auto-rig WRITE deformer nodes directly (sidetables
+  // become dual-write shadows), Phase 6 deletes the sidetables.
+  //
+  // This migration is synchronous and idempotent: existing deformer
+  // nodes with matching ids upsert in place rather than duplicate, and
+  // it doesn't re-run Init Rig (the sidetable data is already
+  // self-contained). Old fields are left in place so a Phase-1 rollback
+  // is possible.
+  //
+  // See docs/BFA_006_DEFORMER_NODES_PLAN.md.
+  15: (project) => {
+    synthesizeDeformerNodesFromSidetables(project);
     return project;
   },
 };
