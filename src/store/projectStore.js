@@ -128,9 +128,13 @@ export const useProjectStore = create((set, get) => {
     eyeClosureConfig: null,
     rotationDeformerConfig: null,
     autoRigConfig: null,
-    faceParallax: null,
-    bodyWarp: null,
-    rigWarps: {},
+    // BFA-006 Phase 6 — legacy `faceParallax` / `bodyWarp` / `rigWarps`
+    // sidetables deleted. Deformers now live in `project.nodes` as
+    // `type:'deformer'` entries; the body warp's layout + debug
+    // metadata persists here in the small `bodyWarpLayout` sidetable
+    // (the canvas→innermost normalizer closures need persisted
+    // ranges that can't be recovered from baseGrids alone).
+    bodyWarpLayout: null,
     meshSignatures: {},
     lastInitRigCompletedAt: null,
     rigStageLastRunAt: {},
@@ -295,9 +299,10 @@ export const useProjectStore = create((set, get) => {
       state.project.eyeClosureConfig = null;
       state.project.rotationDeformerConfig = null;
       state.project.autoRigConfig = null;
-      state.project.faceParallax = null;
-      state.project.bodyWarp = null;
-      state.project.rigWarps = {};
+      // BFA-006 Phase 6 — legacy sidetables deleted; deformer nodes
+      // live in `project.nodes`. resetProject's `state.project.nodes = []`
+      // above already clears them. The body warp's layout sidetable:
+      state.project.bodyWarpLayout = null;
       state.project.rigStageLastRunAt = {};
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
@@ -334,9 +339,11 @@ export const useProjectStore = create((set, get) => {
       // after a rig init would silently lose its keyform stores; the
       // generator path then re-fired on every export, masking the loss.
       state.project.autoRigConfig = projectData.autoRigConfig ?? null;
-      state.project.faceParallax = projectData.faceParallax ?? null;
-      state.project.bodyWarp = projectData.bodyWarp ?? null;
-      state.project.rigWarps = projectData.rigWarps ?? {};
+      // BFA-006 Phase 6 — `faceParallax` / `bodyWarp` / `rigWarps`
+      // sidetables deleted; deformer state lives in `project.nodes`
+      // (loaded via `state.project.nodes = projectData.nodes` above).
+      // Body warp layout/debug stays as the small dedicated sidetable:
+      state.project.bodyWarpLayout = projectData.bodyWarpLayout ?? null;
       // GAP-012 step 2: meshSignatures captured at last seedAllRig.
       // Load preserves them verbatim; the StaleRigBanner re-validates
       // against current node geometry on every render.

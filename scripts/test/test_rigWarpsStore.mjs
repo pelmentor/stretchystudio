@@ -115,46 +115,50 @@ function makeSpec(partId) {
 }
 
 // ── resolveRigWarps ───────────────────────────────────────────────
+// (BFA-006 Phase 6: rigWarps live as deformer nodes with targetPartId.)
 
 {
   assert(resolveRigWarps(null).size === 0, 'resolve: null project → empty');
-  assert(resolveRigWarps({}).size === 0, 'resolve: no rigWarps → empty');
+  assert(resolveRigWarps({}).size === 0, 'resolve: no nodes → empty');
+  assert(resolveRigWarps({ nodes: [] }).size === 0, 'resolve: empty nodes → empty');
 
-  const project = { rigWarps: serializeRigWarps([makeSpec('q')]) };
+  const project = { nodes: [] };
+  seedRigWarps(project, [makeSpec('q')]);
   const map = resolveRigWarps(project);
-  assert(map.has('q'), 'resolve: with stored data → populated Map');
+  assert(map.has('q'), 'resolve: with rigWarp deformer node → populated Map');
 }
 
 // ── seedRigWarps from Map ─────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const inputMap = new Map([
     ['p1', makeSpec('p1')],
     ['p2', makeSpec('p2')],
   ]);
-  const stored = seedRigWarps(project, inputMap);
-  assert(project.rigWarps === stored, 'seed: returns and stores same reference');
-  assert(Object.keys(project.rigWarps).length === 2, 'seed (Map): both entries written');
-  assert(project.rigWarps.p1.targetPartId === 'p1', 'seed (Map): p1 keyed');
+  seedRigWarps(project, inputMap);
+  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  assert(rigNodes.length === 2, 'seed (Map): both rigWarp nodes written');
+  assert(rigNodes.find((n) => n.targetPartId === 'p1'), 'seed (Map): p1 node present');
 }
 
 // ── seedRigWarps from iterable ────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [makeSpec('p1'), makeSpec('p2')]);
-  assert(Object.keys(project.rigWarps).length === 2, 'seed (array): both entries');
+  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  assert(rigNodes.length === 2, 'seed (array): both rigWarp nodes');
 }
 
 // ── clearRigWarps ─────────────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [makeSpec('p1')]);
   clearRigWarps(project);
-  assert(typeof project.rigWarps === 'object', 'clear: still an object');
-  assert(Object.keys(project.rigWarps).length === 0, 'clear: empty map');
+  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  assert(rigNodes.length === 0, 'clear: rigWarp nodes removed');
 }
 
 console.log(`rigWarpsStore: ${passed} passed, ${failed} failed`);

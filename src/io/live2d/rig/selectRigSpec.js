@@ -677,7 +677,7 @@ function _deriveInnermostBodyClosures(warpNodes, allDeformerNodes, warpRestById)
     function depthDfs(id, depth) {
       const w = byId.get(id);
       if (!w) return;
-      const isBodyName = ['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp'].includes(id);
+      const isBodyName = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'].includes(id);
       if (isBodyName && depth > depthBest) {
         depthBest = depth;
         best = id;

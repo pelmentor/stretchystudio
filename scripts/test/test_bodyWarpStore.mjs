@@ -46,8 +46,8 @@ function makeSpec(id) {
 
 function makeChain(withBX) {
   const specs = [
-    makeSpec('BodyZWarp'),
-    makeSpec('BodyYWarp'),
+    makeSpec('BodyWarpZ'),
+    makeSpec('BodyWarpY'),
     makeSpec('BreathWarp'),
   ];
   if (withBX) specs.push(makeSpec('BodyXWarp'));
@@ -166,37 +166,45 @@ function makeChain(withBX) {
 }
 
 // ── resolveBodyWarp ───────────────────────────────────────────────
+// (BFA-006 Phase 6: chain specs persist as deformer nodes; layout +
+//  debug live in `project.bodyWarpLayout` sidetable.)
 
 {
   assert(resolveBodyWarp(null) === null, 'resolve: null project → null');
-  assert(resolveBodyWarp({}) === null, 'resolve: no bodyWarp → null');
-  assert(resolveBodyWarp({ bodyWarp: null }) === null,
-    'resolve: explicit null → null');
+  assert(resolveBodyWarp({}) === null, 'resolve: no nodes/layout → null');
+  assert(resolveBodyWarp({ nodes: [] }) === null,
+    'resolve: empty nodes → null');
 
-  const project = { bodyWarp: serializeBodyWarpChain(makeChain(true)) };
+  const project = { nodes: [] };
+  seedBodyWarpChain(project, makeChain(true));
   const r = resolveBodyWarp(project);
-  assert(r !== null, 'resolve: with stored chain → object');
+  assert(r !== null, 'resolve: with chain nodes + layout → object');
   assert(r.specs.length === 4, 'resolve: spec count preserved');
-  assert(typeof r.canvasToBodyXX === 'function', 'resolve: closures rebuilt');
+  assert(typeof r.canvasToBodyXX === 'function', 'resolve: closures rebuilt from layout');
 }
 
 // ── seedBodyWarpChain ─────────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const stored = seedBodyWarpChain(project, makeChain(true));
-  assert(project.bodyWarp === stored, 'seed: writes to project + returns');
-  assert(Array.isArray(project.bodyWarp.specs[0].baseGrid),
-    'seed: stored is JSON-safe');
+  assert(stored != null, 'seed: returns serialized chain');
+  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
+  assert(chainNodes.length === 4, 'seed: 4 chain deformer nodes written');
+  assert(project.bodyWarpLayout != null, 'seed: bodyWarpLayout sidetable populated');
+  assert(Array.isArray(chainNodes[0].baseGrid),
+    'seed: node baseGrid is plain array (JSON-safe)');
 }
 
 // ── clearBodyWarp ─────────────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedBodyWarpChain(project, makeChain(true));
   clearBodyWarp(project);
-  assert(project.bodyWarp === null, 'clear: sets to null');
+  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
+  assert(chainNodes.length === 0, 'clear: chain nodes removed');
+  assert(project.bodyWarpLayout === null, 'clear: bodyWarpLayout nulled');
 }
 
 console.log(`bodyWarpStore: ${passed} passed, ${failed} failed`);

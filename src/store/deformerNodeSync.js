@@ -37,7 +37,7 @@
  */
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
-const BODY_WARP_IDS = ['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp'];
+const BODY_WARP_IDS = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'];
 
 /**
  * Set of deformer-node ids that mirror the bodyWarp chain. Used by

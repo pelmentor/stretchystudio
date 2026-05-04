@@ -322,24 +322,24 @@ function makeFaceBoxes() {
 }
 
 // --- resolveFaceParallax / seedFaceParallax / clearFaceParallax ---
+// (BFA-006 Phase 6: storage moved to `project.nodes` deformer entries;
+//  resolvers walk nodes; legacy `project.faceParallax` sidetable is gone.)
 
 {
-  const project = {};
-  assertEq(resolveFaceParallax(project), null, 'no project.faceParallax → null');
+  const project = { nodes: [] };
+  assertEq(resolveFaceParallax(project), null, 'no FaceParallaxWarp node → null');
 }
 
 {
-  const project = { faceParallax: null };
-  assertEq(resolveFaceParallax(project), null, 'null → null');
-}
-
-{
-  const project = {};
+  const project = { nodes: [] };
   const meshes = makeFaceMeshes();
   const { spec } = buildFaceParallaxSpec({ meshes, ...makeFaceBoxes() });
   seedFaceParallax(project, spec);
-  assert(project.faceParallax != null, 'seed wrote project.faceParallax');
-  assert(Array.isArray(project.faceParallax.baseGrid), 'stored as plain array');
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode != null, 'seed created FaceParallaxWarp deformer node');
+  assertEq(fpNode.type, 'deformer', 'node type');
+  assertEq(fpNode.deformerKind, 'warp', 'node deformerKind');
+  assert(Array.isArray(fpNode.baseGrid), 'baseGrid stored as plain array on node');
   const resolved = resolveFaceParallax(project);
   assert(resolved != null, 'resolve returns spec when populated');
   arraysClose(resolved.baseGrid, spec.baseGrid, 1e-15, 'resolved baseGrid matches seeded');
@@ -350,32 +350,33 @@ function makeFaceBoxes() {
 }
 
 {
-  // seedFaceParallax destructive: overwrites prior content.
+  // re-seed overwrites the prior deformer node by id.
   const project = {
-    faceParallax: { extraField: 'should be gone after re-seed' },
+    nodes: [{ id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp', stale: 'yes' }],
   };
   const meshes = makeFaceMeshes();
   const { spec } = buildFaceParallaxSpec({ meshes, ...makeFaceBoxes() });
   seedFaceParallax(project, spec);
-  assert(!project.faceParallax.extraField, 'destructive: prior fields gone');
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode && !('stale' in fpNode), 're-seed: prior node fields cleared');
 }
 
 {
-  // clearFaceParallax sets back to null.
-  const project = {};
+  // clearFaceParallax drops the deformer node.
+  const project = { nodes: [] };
   const meshes = makeFaceMeshes();
   const { spec } = buildFaceParallaxSpec({ meshes, ...makeFaceBoxes() });
   seedFaceParallax(project, spec);
-  assert(project.faceParallax != null, 'pre-clear: populated');
+  assert(project.nodes.find((n) => n.id === 'FaceParallaxWarp'), 'pre-clear: node populated');
   clearFaceParallax(project);
-  assertEq(project.faceParallax, null, 'clear: null');
+  assert(!project.nodes.find((n) => n.id === 'FaceParallaxWarp'), 'clear: node removed');
   assertEq(resolveFaceParallax(project), null, 'resolve after clear: null');
 }
 
 // --- JSON round-trip via stringify/parse (simulates .stretch save/load) ---
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const meshes = makeFaceMeshes();
   const { spec } = buildFaceParallaxSpec({ meshes, ...makeFaceBoxes() });
   seedFaceParallax(project, spec);

@@ -265,14 +265,19 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Deliverable:** `git grep "project.faceParallax\|project.bodyWarp\|project.rigWarps"` returns zero hits in `src/`. All tests green.
 
-**Status (2026-05-04 close-out).** **Gated open** per Decision 4 — Phases 1–5 shipped today; the soak window starts now. Resumes after at least one week of daily-driver use with no observed rig-eval / export regressions. Concrete checklist for the resume session:
+**Status (2026-05-04 close-out).** Shipped under explicit user authorization to skip the soak gate. The full test suite (incl. `test:cubismPhysicsOracle`, `test:breathFidelity`, `test:e2e`, `test:projectRoundTrip`) is the regression net. What landed:
 
-1. Run `git grep "project.faceParallax\\|project.bodyWarp\\|project.rigWarps"` in `src/` — expect ~23 reader sites.
-2. Migrate the readers in this priority order (lowest blast radius first): `services/RigService.js`, `store/rigSpecStore.js`, `store/projectStore.js`, then the cmo3 import path, then `cmo3writer.js` + `cmo3/*` emitters, then `KeyformGraphEditor.jsx`. Each reader reads from either `selectRigSpec(project)` (when it wants the full RigSpec shape) or `project.nodes.filter(n => n.type === 'deformer')` (when it needs node identity / `_userAuthored`).
-3. After all readers are migrated, stop the seeders' dual-write to legacy fields. Delete the legacy field defaults in `projectStore.js`'s initial state.
-4. Migration v16: synchronously delete `project.faceParallax`, `project.bodyWarp`, `project.rigWarps` from any project carrying them.
-5. Run the full regression gate after each cluster of 3-4 readers: `npm test` (incl. `test:cubismPhysicsOracle`, `test:breathFidelity`, `test:e2e`, `test:projectRoundTrip`).
-6. **Manual byte-diff** of a representative cmo3 export (shelby) before and after Phase 6 — must match identically. The oracle harness covers physics; the byte-diff covers the rest of the export shape.
+- **Migration v16** (`projectMigrations.js`): synchronously deletes `project.faceParallax`, `project.bodyWarp`, `project.rigWarps`. `bodyWarp.layout` + `debug` lift into a small new sidetable `project.bodyWarpLayout` (the canvas → innermost-warp normalizer closures need persisted ranges that can't be recovered from chained `baseGrid`s alone).
+- **`deformerNodeReaders.js`** (new): focused module producing `WarpDeformerSpec` / `RotationDeformerSpec` shapes from `project.nodes` deformer entries. Read-side counterpart to Phase 1's `deformerNodeSync.js` write helpers.
+- **Resolvers rewired:** `resolveFaceParallax` / `resolveBodyWarp` / `resolveRigWarps` (still exported under their original names so `exporter.js` and other consumers don't change) now walk `project.nodes`. `resolveBodyWarp` reads chain specs from nodes + layout/debug from `project.bodyWarpLayout`.
+- **Seeders single-write:** `seedFaceParallax` / `seedBodyWarpChain` / `seedRigWarps` no longer touch the legacy sidetables (Phase 1's dual-write was the bridge; Phase 6 makes nodes the singular target). `seedBodyWarpChain` also writes `project.bodyWarpLayout`. `clearXxx` actions remove the corresponding deformer nodes (and clear `bodyWarpLayout` for the body chain).
+- **Reader migration (4 sites):** `paramReferences.js` (orphan-ref scan reads bindings from deformer nodes; locations report `deformer[<id>]:bindings[<idx>]`), `KeyformGraphEditor.jsx` (reads rigWarp via `targetPartId` lookup on nodes), `projectFile.js` (saves `bodyWarpLayout` instead of three legacy fields), `projectStore.js` (initial state + `loadProject` no longer carry the legacy fields).
+- **One bug fixed in passing:** the body warp ids in three places (`deformerNodeSync.js`, `deformerNodeReaders.js`, `selectRigSpec.js`, `initRig.js`) had `BodyZWarp` / `BodyYWarp`; the actual ids `bodyWarp.js` produces are `BodyWarpZ` / `BodyWarpY`. The wrong constants prevented the chain remover + innermost-warp detector from finding real chain nodes. Real export paths weren't affected because the wrong-id filters in `harvestSeedFromRigSpec` were defensive (skip-if-match / continue) — the body warps got skipped via the next predicate (`!targetPartId`). Now corrected throughout.
+- **Tests:** ~30 assertions updated across 9 test files (`test_migrations.mjs`, `test_faceParallax.mjs`, `test_bodyWarp.mjs`, `test_rigWarps.mjs`, `test_faceParallaxStore.mjs`, `test_bodyWarpStore.mjs`, `test_rigWarpsStore.mjs`, `test_paramReferences.mjs`, `test_userAuthorMarkers.mjs`, `test_deformerNodeSync.mjs`, `test_projectRoundTrip.mjs`, `test_selectRigSpec.mjs`) to read/write through `project.nodes` instead of legacy sidetables.
+
+`git grep "project.faceParallax\\|project.bodyWarp\\|project.rigWarps"` in `src/` now returns only docstring / comment references — no executable reads or writes survive.
+
+**Manual byte-diff of cmo3 export deferred** (out-of-band check the user can run any time): the oracle harness + breath fidelity tests confirm runtime byte-fidelity; an `Export For Runtime` byte-diff against a pre-Phase-6 commit closes the export-shape verification.
 
 ### Phase 7 — Cleanup + docs (~0.5 day)
 

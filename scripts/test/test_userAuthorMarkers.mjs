@@ -336,34 +336,52 @@ function makeFaceParallaxSpec() {
 }
 
 {
-  // Replace overwrites prior, regardless of marker.
-  const project = { faceParallax: { _userAuthored: true, sentinel: 'manual' } };
+  // BFA-006 Phase 6 — _userAuthored marker on the FaceParallax
+  // deformer node. Replace overwrites prior regardless of marker.
+  const project = {
+    nodes: [{
+      id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp',
+      _userAuthored: true, name: 'manual-edit',
+    }],
+  };
   seedFaceParallax(project, makeFaceParallaxSpec()); // 'replace' default
-  assert(project.faceParallax.sentinel === undefined,
-    'replace: prior _userAuthored value overwritten');
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode != null && fpNode._userAuthored !== true,
+    'replace: prior _userAuthored marker overwritten');
 }
 
 {
   // Merge with marker: prior preserved.
-  const project = { faceParallax: { _userAuthored: true, sentinel: 'manual' } };
+  const project = {
+    nodes: [{
+      id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp',
+      _userAuthored: true, name: 'manual-edit',
+    }],
+  };
   const ret = seedFaceParallax(project, makeFaceParallaxSpec(), 'merge');
   assertEq(ret, null, 'merge: returns null when preserving');
-  assert(project.faceParallax.sentinel === 'manual',
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode._userAuthored === true && fpNode.name === 'manual-edit',
     'merge: marked prior value preserved');
 }
 
 {
   // Merge without marker: replaced.
-  const project = { faceParallax: { sentinel: 'auto' } };
+  const project = {
+    nodes: [{
+      id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp',
+      name: 'auto',
+    }],
+  };
   seedFaceParallax(project, makeFaceParallaxSpec(), 'merge');
-  assert(project.faceParallax.sentinel === undefined,
-    'merge: unmarked prior value replaced');
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode.name !== 'auto', 'merge: unmarked prior value replaced');
 }
 
 function makeBodyWarpChain() {
   return {
     specs: [{
-      id: 'BodyZWarp', name: 'BodyZ',
+      id: 'BodyWarpZ', name: 'BodyZ',
       parent: { type: 'root', id: null },
       gridSize: { rows: 4, cols: 4 },
       baseGrid: new Float64Array(50),
@@ -384,15 +402,26 @@ function makeBodyWarpChain() {
 }
 
 {
-  // bodyWarp merge with marker: preserved.
-  const project = { bodyWarp: { _userAuthored: true, sentinel: 'manual' } };
+  // BFA-006 Phase 6 — bodyWarp merge: marker lives on chain
+  // deformer nodes (any one with `_userAuthored:true` blocks
+  // re-clobber). Preserves the manually-edited chain.
+  const project = {
+    nodes: [{
+      id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
+      _userAuthored: true, name: 'manual-BZ',
+    }],
+  };
   const ret = seedBodyWarpChain(project, makeBodyWarpChain(), 'merge');
   assertEq(ret, null, 'bodyWarp merge: returns null when preserving');
-  assert(project.bodyWarp.sentinel === 'manual', 'bodyWarp merge: marked prior preserved');
+  const bzNode = project.nodes.find((n) => n.id === 'BodyWarpZ');
+  assert(bzNode._userAuthored === true && bzNode.name === 'manual-BZ',
+    'bodyWarp merge: marked chain node preserved');
 }
 
 {
-  // rigWarps merge: per-partId preservation.
+  // BFA-006 Phase 6 — rigWarps merge: per-partId preservation. Marker
+  // lives on the rigWarp deformer node; merge keeps marked nodes,
+  // replaces unmarked ones with the harvested specs.
   const auto = new Map();
   auto.set('p1', {
     id: 'w1', name: 'AutoWarp', targetPartId: 'p1',
@@ -417,14 +446,21 @@ function makeBodyWarpChain() {
     isVisible: true, isLocked: false, isQuadTransform: false,
   });
   const project = {
-    rigWarps: {
-      p1: { _userAuthored: true, targetPartId: 'p1', sentinel: 'manual', baseGrid: [0], keyforms: [{positions:[0]}] },
-    },
+    nodes: [{
+      id: 'manual-p1-rigWarp', type: 'deformer', deformerKind: 'warp',
+      targetPartId: 'p1', _userAuthored: true, name: 'manual-edit',
+      parent: 'BodyXWarp',
+      gridSize: { rows: 2, cols: 2 }, baseGrid: [0],
+      bindings: [], keyforms: [{ keyTuple: [], positions: [0], opacity: 1 }],
+    }],
   };
   seedRigWarps(project, auto, 'merge');
-  assertEq(project.rigWarps.p1.sentinel, 'manual', 'rigWarps merge: marked p1 preserved');
-  assert(project.rigWarps.p2 != null, 'rigWarps merge: p2 auto-seeded');
-  assert(project.rigWarps.p2._userAuthored !== true, 'rigWarps merge: p2 not marked');
+  const p1Node = project.nodes.find((n) => n.targetPartId === 'p1');
+  const p2Node = project.nodes.find((n) => n.targetPartId === 'p2');
+  assert(p1Node && p1Node._userAuthored === true, 'rigWarps merge: marked p1 preserved');
+  assertEq(p1Node.name, 'manual-edit', 'rigWarps merge: p1 retains hand-edited name');
+  assert(p2Node != null, 'rigWarps merge: p2 auto-seeded');
+  assert(p2Node._userAuthored !== true, 'rigWarps merge: p2 not marked');
 }
 
 // --- Summary ---

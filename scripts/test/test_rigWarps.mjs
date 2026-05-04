@@ -279,20 +279,19 @@ function makeSpec({
 }
 
 // --- resolveRigWarps(project): null / missing / empty / populated ---
+// (BFA-006 Phase 6: rigWarps live as deformer nodes with targetPartId.)
 
 {
-  assertEq(resolveRigWarps({}).size, 0, 'no project.rigWarps → empty Map');
-  assertEq(resolveRigWarps({ rigWarps: null }).size, 0,
-    'project.rigWarps null → empty Map');
-  assertEq(resolveRigWarps({ rigWarps: {} }).size, 0,
-    'project.rigWarps empty → empty Map');
+  assertEq(resolveRigWarps({}).size, 0, 'no nodes → empty Map');
+  assertEq(resolveRigWarps({ nodes: [] }).size, 0,
+    'empty nodes → empty Map');
   assertEq(resolveRigWarps(null).size, 0, 'null project → empty Map');
   assertEq(resolveRigWarps(undefined).size, 0, 'undefined project → empty Map');
 }
 
 {
-  const specs = [makeSpec({ partId: 'A' }), makeSpec({ partId: 'B' })];
-  const project = { rigWarps: serializeRigWarps(specs) };
+  const project = { nodes: [] };
+  seedRigWarps(project, [makeSpec({ partId: 'A' }), makeSpec({ partId: 'B' })]);
   const resolved = resolveRigWarps(project);
   assertEq(resolved.size, 2, 'resolve populated → size 2');
   assert(resolved.has('A'), 'resolve has A');
@@ -302,14 +301,17 @@ function makeSpec({
 // --- seedRigWarps: accepts Map ---
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const map = new Map([
     ['A', makeSpec({ partId: 'A' })],
     ['B', makeSpec({ partId: 'B' })],
   ]);
-  const stored = seedRigWarps(project, map);
-  assert(project.rigWarps === stored, 'seed assigns project.rigWarps');
-  assertEq(Object.keys(project.rigWarps).sort(), ['A', 'B'], 'seeded both');
+  seedRigWarps(project, map);
+  const rigNodes = project.nodes
+    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .map((n) => n.targetPartId)
+    .sort();
+  assertEq(rigNodes, ['A', 'B'], 'seeded both rigWarp nodes (Map)');
   const resolved = resolveRigWarps(project);
   assertEq(resolved.size, 2, 'resolve reads back size');
 }
@@ -317,32 +319,39 @@ function makeSpec({
 // --- seedRigWarps: accepts iterable of specs ---
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const specs = [makeSpec({ partId: 'X' }), makeSpec({ partId: 'Y' })];
   seedRigWarps(project, specs);
-  assertEq(Object.keys(project.rigWarps).sort(), ['X', 'Y'],
-    'iterable input keyed by targetPartId');
+  const rigParts = project.nodes
+    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .map((n) => n.targetPartId).sort();
+  assertEq(rigParts, ['X', 'Y'], 'iterable input keyed by targetPartId');
 }
 
-// --- seedRigWarps: destructive — overwrites prior storage ---
+// --- seedRigWarps: replace mode — overwrites prior storage ---
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [makeSpec({ partId: 'A' })]);
-  assertEq(Object.keys(project.rigWarps), ['A'], 'first seed → A only');
+  let rigParts = project.nodes
+    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .map((n) => n.targetPartId);
+  assertEq(rigParts, ['A'], 'first seed → A only');
   seedRigWarps(project, [makeSpec({ partId: 'B' })]);
-  assertEq(Object.keys(project.rigWarps), ['B'], 'second seed replaces');
-  assert(!('A' in project.rigWarps), 'A removed');
+  rigParts = project.nodes
+    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .map((n) => n.targetPartId);
+  assertEq(rigParts, ['B'], 'second seed replaces');
 }
 
-// --- clearRigWarps: resets to {} ---
+// --- clearRigWarps: drops rigWarp nodes ---
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [makeSpec({ partId: 'A' })]);
-  assert(Object.keys(project.rigWarps).length > 0, 'seeded');
+  assert(project.nodes.some((n) => n.type === 'deformer' && n.targetPartId === 'A'), 'seeded');
   clearRigWarps(project);
-  assertEq(project.rigWarps, {}, 'clear → {}');
+  assert(!project.nodes.some((n) => n.type === 'deformer' && n.targetPartId), 'clear: no rigWarp nodes');
   assertEq(resolveRigWarps(project).size, 0, 'resolve after clear: empty');
 }
 
@@ -350,7 +359,7 @@ function makeSpec({
 
 {
   const original = makeSpec({ partId: 'A', numKf: 3 });
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [original]);
   const json = JSON.stringify(project);
   const reloaded = JSON.parse(json);
@@ -374,7 +383,7 @@ function makeSpec({
   for (let i = 0; i < original.keyforms[0].positions.length; i++) {
     original.keyforms[0].positions[i] = 999.0 + i * 0.001;
   }
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [original]);
   const resolved = resolveRigWarps(project);
   arraysClose(resolved.get('A').keyforms[0].positions,
@@ -399,7 +408,7 @@ function makeSpec({
     ],
     numKf: 9,
   });
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [spec]);
   const resolved = resolveRigWarps(project).get('multi');
   assertEq(resolved.bindings.length, 2, 'multi-binding preserved');
@@ -416,7 +425,7 @@ function makeSpec({
 
 {
   const spec = makeSpec({ partId: 'A', numKf: 3 });
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [spec]);
   const resolved = resolveRigWarps(project).get('A');
   // The cmo3writer.js validity check would do:
@@ -438,7 +447,7 @@ function makeSpec({
   // Simulate a save where the user re-meshed and the grid expanded
   // (was 2×2 / 9 points / 18 numbers, now suddenly 3×3 / 16 points / 32 numbers).
   const spec = makeSpec({ partId: 'A', numKf: 3 });
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [spec]);
   const resolved = resolveRigWarps(project).get('A');
 
@@ -457,7 +466,7 @@ function makeSpec({
 {
   // Now an entry where keyform count differs (binding axis added).
   const spec = makeSpec({ partId: 'A', numKf: 3 });
-  const project = {};
+  const project = { nodes: [] };
   seedRigWarps(project, [spec]);
   const resolved = resolveRigWarps(project).get('A');
   const numKfExpected = 9; // pretend a 2nd binding was added (3×3 cartesian)

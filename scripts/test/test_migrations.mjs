@@ -327,11 +327,12 @@ function assertThrows(fn, name) {
 }
 
 {
-  // A save at v7 lacks faceParallax. v8 migration adds it as null.
+  // A save at v7 lacks faceParallax. v8 migration adds it as null,
+  // v16 then deletes it (BFA-006 Phase 6).
   const p = { schemaVersion: 7 };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v7→current: schemaVersion bumped');
-  assert(p.faceParallax === null, 'v7→current: faceParallax added as null');
+  assert(p.faceParallax === undefined, 'v7→current: faceParallax deleted by v16 (Phase 6)');
 }
 
 {
@@ -349,15 +350,20 @@ function assertThrows(fn, name) {
   };
   const p = { schemaVersion: 7, faceParallax: fp };
   migrateProject(p);
-  assert(p.faceParallax === fp, 'v7→current: existing faceParallax preserved');
+  // v15 lifts the spec into a `type:'deformer'` node, then v16 deletes
+  // the sidetable. Verify the node landed.
+  assert(p.faceParallax === undefined, 'v7→current: faceParallax sidetable deleted by v16');
+  const fpNode = (p.nodes ?? []).find((n) => n?.id === 'FaceParallaxWarp');
+  assert(!!fpNode, 'v7→current: faceParallax migrated into deformer node');
+  assertEq(fpNode.type, 'deformer', 'v7→current: deformer node type');
 }
 
 {
-  // A save at v8 lacks bodyWarp. v9 migration adds it as null.
+  // A save at v8 lacks bodyWarp. v9 adds it as null, v16 deletes it.
   const p = { schemaVersion: 8 };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v8→current: schemaVersion bumped');
-  assert(p.bodyWarp === null, 'v8→current: bodyWarp added as null');
+  assert(p.bodyWarp === undefined, 'v8→current: bodyWarp deleted by v16');
 }
 
 {
@@ -385,15 +391,21 @@ function assertThrows(fn, name) {
   };
   const p = { schemaVersion: 8, bodyWarp: bw };
   migrateProject(p);
-  assert(p.bodyWarp === bw, 'v8→current: existing bodyWarp preserved');
+  // v15 mirrors specs into deformer nodes; v16 deletes the sidetable
+  // and lifts layout/debug into `project.bodyWarpLayout`.
+  assert(p.bodyWarp === undefined, 'v8→current: bodyWarp sidetable deleted by v16');
+  const bzNode = (p.nodes ?? []).find((n) => n?.id === 'BodyWarpZ');
+  assert(!!bzNode, 'v8→current: BodyWarpZ migrated into deformer node');
+  assert(p.bodyWarpLayout && p.bodyWarpLayout.layout, 'v8→current: bodyWarpLayout sidetable populated');
+  assertEq(p.bodyWarpLayout.layout.BZ_W, 800, 'v8→current: layout BZ_W lifted');
 }
 
 {
-  // A save at v9 lacks rigWarps. v10 migration adds it as {}.
+  // A save at v9 lacks rigWarps. v10 adds it as {}, v16 deletes it.
   const p = { schemaVersion: 9 };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v9→current: schemaVersion bumped');
-  assertEq(p.rigWarps, {}, 'v9→current: rigWarps added as empty object');
+  assert(p.rigWarps === undefined, 'v9→current: rigWarps deleted by v16');
 }
 
 {
@@ -419,7 +431,12 @@ function assertThrows(fn, name) {
   };
   const p = { schemaVersion: 9, rigWarps: rw };
   migrateProject(p);
-  assert(p.rigWarps === rw, 'v9→current: existing rigWarps preserved');
+  // v15 mirrors per-mesh rigWarps into deformer nodes; v16 deletes
+  // the sidetable.
+  assert(p.rigWarps === undefined, 'v9→current: rigWarps sidetable deleted by v16');
+  const rwNode = (p.nodes ?? []).find((n) => n?.id === 'RigWarp_part_A');
+  assert(!!rwNode, 'v9→current: rigWarp migrated into deformer node');
+  assertEq(rwNode.targetPartId, 'part-A', 'v9→current: targetPartId preserved');
 }
 
 // ---- v15: BFA-006 Phase 1 — deformer-node sync ----
@@ -454,7 +471,8 @@ function assertThrows(fn, name) {
   assertEq(fpNode.keyforms.length, 3, 'v15: FaceParallax keyform count');
   assertEq(fpNode.keyforms[2].keyTuple, [30], 'v15: FaceParallax keyform tuple preserved');
   assertEq(fpNode.gridSize, { rows: 5, cols: 5 }, 'v15: gridSize preserved');
-  assert(p.faceParallax === fp, 'v15: original faceParallax sidetable still in place');
+  // BFA-006 Phase 6 — v16 chains after v15 and deletes the sidetable.
+  assert(p.faceParallax === undefined, 'v15+v16: faceParallax sidetable deleted');
 }
 
 {
@@ -502,7 +520,10 @@ function assertThrows(fn, name) {
   assertEq(by.parent, 'BodyZWarp', 'v15: BodyYWarp parent flattened to id');
   const bx = p.nodes.find((n) => n.id === 'BodyXWarp');
   assertEq(bx.parent, 'BreathWarp', 'v15: BodyXWarp parent flattened to id');
-  assert(p.bodyWarp === bw, 'v15: original bodyWarp sidetable still in place');
+  // BFA-006 Phase 6 — v16 chains after v15 and deletes the sidetable;
+  // layout/debug move to `project.bodyWarpLayout`.
+  assert(p.bodyWarp === undefined, 'v15+v16: bodyWarp sidetable deleted');
+  assert(p.bodyWarpLayout && p.bodyWarpLayout.layout, 'v15+v16: bodyWarpLayout populated');
 }
 
 {
@@ -530,7 +551,8 @@ function assertThrows(fn, name) {
   assertEq(rwNode.canvasBbox, { minX: 10, minY: 20, W: 100, H: 200 }, 'v15: canvasBbox preserved');
   assertEq(partA.rigParent, 'RigWarp_partA', 'v15: parts[partA].rigParent points at deformer node id');
   assert(partB.rigParent === undefined, 'v15: parts[partB].rigParent untouched (no rigWarp entry)');
-  assert(p.rigWarps === rw, 'v15: original rigWarps sidetable still in place');
+  // BFA-006 Phase 6 — v16 chains after v15 and deletes the sidetable.
+  assert(p.rigWarps === undefined, 'v15+v16: rigWarps sidetable deleted');
 }
 
 {
@@ -597,9 +619,11 @@ function assertThrows(fn, name) {
   assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');
   assert(p.rotationDeformerConfig === null, 'v0→current: rotationDeformerConfig added as null');
   assert(p.autoRigConfig === null, 'v0→current: autoRigConfig added as null');
-  assert(p.faceParallax === null, 'v0→current: faceParallax added as null');
-  assert(p.bodyWarp === null, 'v0→current: bodyWarp added as null');
-  assertEq(p.rigWarps, {}, 'v0→current: rigWarps added as {}');
+  // BFA-006 Phase 6 — these three sidetables are deleted by v16.
+  assert(p.faceParallax === undefined, 'v0→current: faceParallax deleted by v16');
+  assert(p.bodyWarp === undefined, 'v0→current: bodyWarp deleted by v16');
+  assert(p.rigWarps === undefined, 'v0→current: rigWarps deleted by v16');
+  assert(p.bodyWarpLayout === null, 'v0→current: bodyWarpLayout default null');
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 

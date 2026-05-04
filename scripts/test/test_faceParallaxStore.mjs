@@ -135,41 +135,55 @@ function makeSpec() {
 }
 
 // ── resolveFaceParallax ───────────────────────────────────────────
+// (BFA-006 Phase 6: storage shifted to `project.nodes` deformer
+//  entries; resolver walks nodes, legacy sidetable is gone.)
 
 {
   assert(resolveFaceParallax(null) === null, 'resolve: null project → null');
-  assert(resolveFaceParallax({}) === null, 'resolve: no faceParallax field → null');
-  assert(resolveFaceParallax({ faceParallax: null }) === null,
-    'resolve: explicit null faceParallax → null');
+  assert(resolveFaceParallax({}) === null, 'resolve: no nodes → null');
+  assert(resolveFaceParallax({ nodes: [] }) === null,
+    'resolve: empty nodes → null');
 
-  const project = { faceParallax: serializeFaceParallaxSpec(makeSpec()) };
+  // Build a project with an FP deformer node (matches what
+  // seedFaceParallax produces under Phase 6).
+  const project = { nodes: [] };
+  seedFaceParallax(project, makeSpec());
   const r = resolveFaceParallax(project);
-  assert(r !== null, 'resolve: with stored spec → object');
+  assert(r !== null, 'resolve: with FaceParallaxWarp node → object');
   assert(r.id === 'FaceParallaxWarp', 'resolve: id preserved');
 }
 
 // ── seedFaceParallax ──────────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   const stored = seedFaceParallax(project, makeSpec());
-  assert(project.faceParallax !== null, 'seed: writes to project');
-  assert(project.faceParallax === stored, 'seed: returns the stored shape');
-  assert(Array.isArray(project.faceParallax.baseGrid),
-    'seed: stored is JSON-safe (plain array)');
+  const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
+  assert(fpNode != null, 'seed: writes deformer node to project.nodes');
+  assert(stored != null, 'seed: returns the JSON-shape spec');
+  assert(Array.isArray(fpNode.baseGrid),
+    'seed: node baseGrid is plain array (JSON-safe)');
 
-  // Idempotent — re-seed overwrites
-  const second = seedFaceParallax(project, makeSpec());
-  assert(project.faceParallax === second, 'seed: re-seed overwrites');
+  // Idempotent — re-seed overwrites the node by id.
+  const beforeCount = project.nodes.length;
+  seedFaceParallax(project, makeSpec());
+  assertEq(project.nodes.length, beforeCount, 'seed: re-seed does not duplicate node');
 }
 
 // ── clearFaceParallax ─────────────────────────────────────────────
 
 {
-  const project = {};
+  const project = { nodes: [] };
   seedFaceParallax(project, makeSpec());
+  assert(project.nodes.find((n) => n.id === 'FaceParallaxWarp'), 'pre-clear: node populated');
   clearFaceParallax(project);
-  assert(project.faceParallax === null, 'clear: sets to null');
+  assert(!project.nodes.find((n) => n.id === 'FaceParallaxWarp'), 'clear: node removed');
+}
+
+function assertEq(actual, expected, name) {
+  if (actual === expected) { passed++; return; }
+  failed++;
+  console.error(`FAIL: ${name} (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`);
 }
 
 console.log(`faceParallaxStore: ${passed} passed, ${failed} failed`);

@@ -39,6 +39,11 @@ import {
   upsertDeformerNode,
   removeBodyWarpChainNodes,
 } from '../../../store/deformerNodeSync.js';
+import {
+  getBodyWarpChainNodes,
+  nodeToWarpSpec,
+  indexProjectNodes,
+} from './deformerNodeReaders.js';
 
 /**
  * @typedef {Object} BodyWarpLayout
@@ -170,17 +175,44 @@ export function deserializeBodyWarpChain(stored) {
 }
 
 /**
- * Resolve `project.bodyWarp` to a usable chain, or `null` when the
- * field is absent / malformed. When `null`, the writer falls back to
- * its inline `buildBodyWarpChain` heuristic (today's path).
+ * Resolve a project to its body warp chain, or `null` when the
+ * project has no body warp deformer nodes. When `null`, the writer
+ * falls back to its inline `buildBodyWarpChain` heuristic (today's
+ * path).
+ *
+ * BFA-006 Phase 6 — reads from `project.nodes` (chain specs) +
+ * `project.bodyWarpLayout` (layout/debug metadata; small new sidetable
+ * preserved because the canvas→innermost normalizer closures need a
+ * persisted bbox + per-axis ranges that can't be recovered from
+ * baseGrids alone). The legacy `project.bodyWarp` sidetable is
+ * deleted by migration v16.
  *
  * @param {object} project
  * @returns {ReturnType<typeof import('./bodyWarp.js').buildBodyWarpChain> | null}
  */
 export function resolveBodyWarp(project) {
-  const stored = project?.bodyWarp;
-  if (!stored) return null;
-  return deserializeBodyWarpChain(stored);
+  const chainNodes = getBodyWarpChainNodes(project);
+  if (chainNodes.length === 0) return null;
+  const layout = project?.bodyWarpLayout?.layout;
+  if (!layout || typeof layout !== 'object') return null;
+
+  const byId = indexProjectNodes(project);
+  if (!byId) return null;
+  const specs = chainNodes.map((n) => nodeToWarpSpec(n, byId));
+  const { canvasToBodyXX, canvasToBodyXY } = makeBodyWarpNormalizers(layout);
+  const debug = project.bodyWarpLayout.debug ?? {};
+  return {
+    specs,
+    layout: { ...layout },
+    canvasToBodyXX,
+    canvasToBodyXY,
+    debug: {
+      HIP_FRAC: typeof debug.HIP_FRAC === 'number' ? debug.HIP_FRAC : 0.45,
+      FEET_FRAC: typeof debug.FEET_FRAC === 'number' ? debug.FEET_FRAC : 0.75,
+      bodyFracSource: debug.bodyFracSource ?? 'stored',
+      spineCfShifts: Array.isArray(debug.spineCfShifts) ? debug.spineCfShifts.slice() : [],
+    },
+  };
 }
 
 /**
@@ -201,17 +233,21 @@ export function resolveBodyWarp(project) {
  */
 export function seedBodyWarpChain(project, chain, mode = 'replace') {
   if (mode === 'merge') {
-    const prior = project.bodyWarp;
-    if (prior && typeof prior === 'object' && prior._userAuthored === true) {
-      return null;
+    // Merge mode: preserve existing chain when ANY of the chain
+    // nodes carry `_userAuthored`. Conservative — body warps are
+    // chained, so a single hand-edited node implies the chain
+    // shouldn't be re-clobbered.
+    if (Array.isArray(project.nodes)) {
+      const priorChain = getBodyWarpChainNodes(project);
+      if (priorChain.some((n) => n._userAuthored === true)) return null;
     }
   }
   const stored = serializeBodyWarpChain(chain);
-  project.bodyWarp = stored;
-  // BFA-006 Phase 1 — dual-write deformer nodes for each spec in the
-  // chain. Drop any prior chain nodes first so a 4-spec replacement
-  // over a 3-spec prior chain doesn't leave a stale BodyXWarp node
-  // (or vice-versa).
+  // BFA-006 Phase 6 — write deformer nodes + the small layout sidetable.
+  // The full `project.bodyWarp` sidetable is gone; layout + debug live
+  // in `project.bodyWarpLayout` because the canvas→innermost normaliser
+  // closures need persisted ranges that can't be recovered from
+  // baseGrids alone.
   if (Array.isArray(project.nodes)) {
     removeBodyWarpChainNodes(project.nodes);
     for (const spec of stored.specs ?? []) {
@@ -219,19 +255,23 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
       upsertDeformerNode(project.nodes, warpSpecToDeformerNode(spec));
     }
   }
+  project.bodyWarpLayout = {
+    layout: stored.layout,
+    debug: stored.debug,
+  };
   return stored;
 }
 
 /**
- * Clear `project.bodyWarp`. Used to revert to the heuristic path
+ * Clear the body warp chain — drops chain deformer nodes and clears
+ * `project.bodyWarpLayout`. Used to revert to the heuristic path
  * (e.g., after PSD reimport invalidates stored deltas).
  *
  * @param {object} project - mutated
  */
 export function clearBodyWarp(project) {
-  project.bodyWarp = null;
-  // BFA-006 Phase 1 — drop shadow chain nodes alongside the sidetable.
   if (Array.isArray(project.nodes)) {
     removeBodyWarpChainNodes(project.nodes);
   }
+  project.bodyWarpLayout = null;
 }

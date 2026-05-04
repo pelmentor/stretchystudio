@@ -147,8 +147,8 @@ function assertEq(actual, expected, name) {
   const nodes = [
     { id: 'PartA',           type: 'part' },
     { id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp' },
-    { id: 'BodyZWarp',       type: 'deformer', deformerKind: 'warp' },
-    { id: 'BodyYWarp',       type: 'deformer', deformerKind: 'warp' },
+    { id: 'BodyWarpZ',       type: 'deformer', deformerKind: 'warp' },
+    { id: 'BodyWarpY',       type: 'deformer', deformerKind: 'warp' },
     { id: 'BreathWarp',      type: 'deformer', deformerKind: 'warp' },
     { id: 'BodyXWarp',       type: 'deformer', deformerKind: 'warp' },
     { id: 'RigWarp_partA',   type: 'deformer', deformerKind: 'warp', targetPartId: 'partA' },
@@ -159,7 +159,7 @@ function assertEq(actual, expected, name) {
   assertEq(nodes.length, 7, 'removeFP: only 1 node removed');
 
   removeBodyWarpChainNodes(nodes);
-  assert(!nodes.some((n) => ['BodyZWarp','BodyYWarp','BreathWarp','BodyXWarp'].includes(n.id)),
+  assert(!nodes.some((n) => ['BodyWarpZ','BodyWarpY','BreathWarp','BodyXWarp'].includes(n.id)),
     'removeBW: chain nodes all gone');
   assertEq(nodes.length, 3, 'removeBW: 4 nodes removed');
 
@@ -231,16 +231,16 @@ function assertEq(actual, expected, name) {
     isVisible: true, isLocked: false, isQuadTransform: false,
   };
   seedFaceParallax(project, spec);
-  assert(project.faceParallax !== null, 'dual-write FP: sidetable written');
+  // BFA-006 Phase 6 — single-write to project.nodes; sidetable is gone.
   const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
-  assert(!!fpNode, 'dual-write FP: deformer node written');
-  assertEq(fpNode.type, 'deformer', 'dual-write FP: node type');
-  assertEq(fpNode.deformerKind, 'warp', 'dual-write FP: node deformerKind');
+  assert(!!fpNode, 'seed FP: deformer node written');
+  assertEq(fpNode.type, 'deformer', 'seed FP: node type');
+  assertEq(fpNode.deformerKind, 'warp', 'seed FP: node deformerKind');
+  assert(project.faceParallax === undefined, 'seed FP: no legacy sidetable write');
 
   clearFaceParallax(project);
-  assert(project.faceParallax === null, 'dual-write FP: clear nullifies sidetable');
   assert(!project.nodes.some((n) => n.id === 'FaceParallaxWarp'),
-    'dual-write FP: clear removes deformer node');
+    'clear FP: removes deformer node');
 }
 
 {
@@ -271,9 +271,11 @@ function assertEq(actual, expected, name) {
     bindings: [], keyforms: [{ keyTuple: [], positions: new Float64Array(72), opacity: 1 }],
     isVisible: true, isLocked: false, isQuadTransform: false,
   };
+  // No nodes array → seed is a no-op (BFA-006 Phase 6 single-writes
+  // to nodes; no legacy sidetable write to fall back on).
   seedFaceParallax(project, spec);
-  assert(project.faceParallax !== null, 'no-nodes-FP: sidetable still written');
-  // No throw, no nodes mutation.
+  assert(project.faceParallax === undefined, 'no-nodes-FP: no sidetable write');
+  // No throw.
 }
 
 // ── Dual-write seedBodyWarpChain / clearBodyWarp ─────────────────
@@ -282,17 +284,17 @@ function assertEq(actual, expected, name) {
   const project = { nodes: [] };
   const chain = {
     specs: [
-      { id: 'BodyZWarp', name: 'BZ', parent: { type: 'root', id: null },
+      { id: 'BodyWarpZ', name: 'BZ', parent: { type: 'root', id: null },
         gridSize: { rows: 5, cols: 5 }, baseGrid: new Float64Array(72),
         localFrame: 'canvas-px',
         bindings: [], keyforms: [{ keyTuple: [], positions: new Float64Array(72), opacity: 1 }],
         isVisible: true, isLocked: false, isQuadTransform: false },
-      { id: 'BodyYWarp', name: 'BY', parent: { type: 'warp', id: 'BodyZWarp' },
+      { id: 'BodyWarpY', name: 'BY', parent: { type: 'warp', id: 'BodyWarpZ' },
         gridSize: { rows: 5, cols: 5 }, baseGrid: new Float64Array(72),
         localFrame: 'normalized-0to1',
         bindings: [], keyforms: [{ keyTuple: [], positions: new Float64Array(72), opacity: 1 }],
         isVisible: true, isLocked: false, isQuadTransform: false },
-      { id: 'BreathWarp', name: 'Breath', parent: { type: 'warp', id: 'BodyYWarp' },
+      { id: 'BreathWarp', name: 'Breath', parent: { type: 'warp', id: 'BodyWarpY' },
         gridSize: { rows: 5, cols: 5 }, baseGrid: new Float64Array(72),
         localFrame: 'normalized-0to1',
         bindings: [], keyforms: [{ keyTuple: [], positions: new Float64Array(72), opacity: 1 }],
@@ -311,8 +313,9 @@ function assertEq(actual, expected, name) {
   };
   seedBodyWarpChain(project, chain);
   const ids = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
-  assertEq(ids, ['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp'],
-    'dual-write BW: all 4 chain nodes written');
+  assertEq(ids, ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'],
+    'seed BW: all 4 chain nodes written');
+  assert(project.bodyWarpLayout != null, 'seed BW: layout sidetable populated');
 
   // Re-seed with a 3-spec chain (no BX). Stale BX node should be dropped.
   const shorter = {
@@ -322,13 +325,13 @@ function assertEq(actual, expected, name) {
   };
   seedBodyWarpChain(project, shorter);
   const ids2 = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
-  assertEq(ids2, ['BodyZWarp', 'BodyYWarp', 'BreathWarp'],
-    'dual-write BW: shorter chain replaces longer; stale BX dropped');
+  assertEq(ids2, ['BodyWarpZ', 'BodyWarpY', 'BreathWarp'],
+    'seed BW: shorter chain replaces longer; stale BX dropped');
 
   clearBodyWarp(project);
-  assert(project.bodyWarp === null, 'dual-write BW: clear nullifies sidetable');
+  assert(project.bodyWarpLayout === null, 'clear BW: layout sidetable nulled');
   assertEq(project.nodes.filter((n) => n.type === 'deformer').length, 0,
-    'dual-write BW: clear drops all chain nodes');
+    'clear BW: drops all chain nodes');
 }
 
 // ── Dual-write seedRigWarps / clearRigWarps ──────────────────────
@@ -373,11 +376,10 @@ function assertEq(actual, expected, name) {
   assertEq(after, ['RigWarp_partA'], 'dual-write RW: replace mode drops partB node');
 
   clearRigWarps(project);
-  assertEq(project.rigWarps, {}, 'dual-write RW: clear nullifies sidetable');
   assertEq(project.nodes.filter((n) => n.type === 'deformer').length, 0,
-    'dual-write RW: clear drops all rigWarp nodes');
-  assertEq(partA.rigParent, null, 'dual-write RW: clear nulls partA.rigParent');
-  assertEq(partB.rigParent, null, 'dual-write RW: clear nulls partB.rigParent');
+    'clear RW: drops all rigWarp nodes');
+  assertEq(partA.rigParent, null, 'clear RW: nulls partA.rigParent');
+  assertEq(partB.rigParent, null, 'clear RW: nulls partB.rigParent');
 }
 
 // ── rotationSpecToDeformerNode + removeAllRotationDeformerNodes ───

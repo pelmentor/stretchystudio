@@ -113,9 +113,11 @@ export async function saveProject(project, opts = {}) {
     // editor, autoRigConfig opt-outs) was lost on save→load. See
     // docs/PROJECT_DATA_LAYER.md (Tier 2).
     autoRigConfig: project.autoRigConfig ?? null,
-    faceParallax: project.faceParallax ?? null,
-    bodyWarp: project.bodyWarp ?? null,
-    rigWarps: project.rigWarps ?? {},
+    // BFA-006 Phase 6 — `faceParallax` / `bodyWarp` / `rigWarps`
+    // sidetables removed; deformer state persists in `project.nodes`
+    // as `type:'deformer'` entries (already part of `nodes` above).
+    // The body warp's layout block stays as a tiny dedicated sidetable:
+    bodyWarpLayout: project.bodyWarpLayout ?? null,
     // GAP-012 Phase A — per-mesh fingerprint captured at seed time;
     // load + reimport recompute and compare to detect stale keyforms.
     // See docs/PROJECT_DATA_LAYER.md hole I-1 + src/io/meshSignature.js.

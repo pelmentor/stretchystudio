@@ -170,7 +170,11 @@ function buildView(project, selection) {
   const part = (project.nodes ?? []).find((n) => n.id === partSel.id);
   if (!part) return null;
 
-  const spec = project.rigWarps?.[partSel.id];
+  // BFA-006 Phase 6 — rigWarps live as `type:'deformer'` nodes with
+  // `targetPartId` set. Find the rigWarp deformer driving this part.
+  const spec = (project.nodes ?? []).find(
+    (n) => n?.type === 'deformer' && n.deformerKind === 'warp' && n.targetPartId === partSel.id,
+  );
   if (!spec) return null;
 
   const partName = part.name ?? partSel.id;

@@ -52,37 +52,45 @@ function assert(cond, name) {
   assert(r.total === 2, 'total = 2');
 }
 
-// ── findReferences: bindings (face / body / rig warps) ─────────────
+// ── findReferences: bindings on deformer nodes (BFA-006 Phase 6) ─────
 {
+  // Bindings live on `project.nodes` deformer entries; locations are
+  // reported as `deformer[<id>]:bindings[<idx>]`.
   const project = {
-    faceParallax: {
-      bindings: [
-        { parameterId: 'ParamAngleX' },
-        { parameterId: 'ParamAngleY' },
-      ],
-    },
-    bodyWarp: {
-      specs: [
-        { bindings: [{ parameterId: 'ParamBodyAngleZ' }] },
-        { bindings: [{ parameterId: 'ParamAngleX' }] },
-      ],
-    },
-    rigWarps: {
-      'hair-front': { bindings: [{ parameterId: 'ParamHairFront' }] },
-      'top-front':  { bindings: [{ parameterId: 'ParamShirt' }] },
-    },
+    nodes: [
+      { id: 'FaceParallax', type: 'deformer', deformerKind: 'warp',
+        bindings: [
+          { parameterId: 'ParamAngleX' },
+          { parameterId: 'ParamAngleY' },
+        ],
+      },
+      { id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
+        bindings: [{ parameterId: 'ParamBodyAngleZ' }],
+      },
+      { id: 'BodyWarpY', type: 'deformer', deformerKind: 'warp',
+        bindings: [{ parameterId: 'ParamAngleX' }],
+      },
+      { id: 'RigWarp_hair-front', type: 'deformer', deformerKind: 'warp',
+        targetPartId: 'hair-front',
+        bindings: [{ parameterId: 'ParamHairFront' }],
+      },
+      { id: 'RigWarp_top-front', type: 'deformer', deformerKind: 'warp',
+        targetPartId: 'top-front',
+        bindings: [{ parameterId: 'ParamShirt' }],
+      },
+    ],
   };
 
   const angleX = findReferences(project, 'ParamAngleX');
   assert(angleX.bindings.length === 2, 'ParamAngleX: 2 binding hits');
   const locs = angleX.bindings.map(b => b.location).sort();
-  assert(locs.includes('faceParallax:bindings[0]'), 'face parallax binding location');
-  assert(locs.includes('bodyWarp:specs[1]:bindings[0]'), 'body warp binding location');
+  assert(locs.includes('deformer[FaceParallax]:bindings[0]'), 'FaceParallax binding location');
+  assert(locs.includes('deformer[BodyWarpY]:bindings[0]'), 'BodyWarpY binding location');
 
   const hair = findReferences(project, 'ParamHairFront');
   assert(hair.bindings.length === 1, 'ParamHairFront: 1 rigWarp binding hit');
-  assert(hair.bindings[0].location === 'rigWarps[hair-front]:bindings[0]',
-    'rigWarps location includes partId');
+  assert(hair.bindings[0].location === 'deformer[RigWarp_hair-front]:bindings[0]',
+    'rigWarp deformer location identifies node id');
 }
 
 // ── findReferences: physics inputs ─────────────────────────────────

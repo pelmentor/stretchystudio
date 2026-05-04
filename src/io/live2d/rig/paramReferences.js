@@ -104,45 +104,23 @@ export function findReferences(project, paramId) {
     }
   }
 
-  // Bindings — three storage shapes, all with `bindings[].parameterId`.
-  // faceParallax: single spec with bindings.
-  if (project.faceParallax?.bindings) {
-    project.faceParallax.bindings.forEach((b, i) => {
+  // Bindings — BFA-006 Phase 6: read from `project.nodes` deformer
+  // entries (the legacy `faceParallax` / `bodyWarp` / `rigWarps`
+  // sidetables are gone). Every deformer node carries
+  // `bindings[].parameterId`; iterate them all and tag the location
+  // by the node id (more useful for debugging than the prior
+  // sidetable-relative paths since deformer nodes are first-class).
+  for (const n of project.nodes ?? []) {
+    if (!n || n.type !== 'deformer') continue;
+    const bindings = Array.isArray(n.bindings) ? n.bindings : [];
+    bindings.forEach((b, bi) => {
       if (b?.parameterId === paramId) {
         report.bindings.push({
           kind: 'binding',
-          location: `faceParallax:bindings[${i}]`,
+          location: `deformer[${n.id}]:bindings[${bi}]`,
         });
       }
     });
-  }
-  // bodyWarp: chain of specs, each with bindings.
-  if (Array.isArray(project.bodyWarp?.specs)) {
-    project.bodyWarp.specs.forEach((spec, si) => {
-      (spec?.bindings ?? []).forEach((b, bi) => {
-        if (b?.parameterId === paramId) {
-          report.bindings.push({
-            kind: 'binding',
-            location: `bodyWarp:specs[${si}]:bindings[${bi}]`,
-          });
-        }
-      });
-    });
-  }
-  // rigWarps: { [partId]: spec with bindings }.
-  if (project.rigWarps && typeof project.rigWarps === 'object') {
-    for (const [partId, spec] of Object.entries(project.rigWarps)) {
-      const bindings = /** @type {any} */ (spec)?.bindings;
-      if (!Array.isArray(bindings)) continue;
-      bindings.forEach((b, bi) => {
-        if (b?.parameterId === paramId) {
-          report.bindings.push({
-            kind: 'binding',
-            location: `rigWarps[${partId}]:bindings[${bi}]`,
-          });
-        }
-      });
-    }
   }
 
   // Physics inputs: rule.inputs[].paramId references parameters.
@@ -195,19 +173,11 @@ export function findOrphanReferences(project) {
       if (t?.paramId) referenced.add(t.paramId);
     }
   }
-  for (const b of project.faceParallax?.bindings ?? []) {
-    if (b?.parameterId) referenced.add(b.parameterId);
-  }
-  for (const spec of project.bodyWarp?.specs ?? []) {
-    for (const b of spec?.bindings ?? []) {
+  // BFA-006 Phase 6 — deformer bindings live on nodes now.
+  for (const n of project.nodes ?? []) {
+    if (!n || n.type !== 'deformer') continue;
+    for (const b of n.bindings ?? []) {
       if (b?.parameterId) referenced.add(b.parameterId);
-    }
-  }
-  if (project.rigWarps && typeof project.rigWarps === 'object') {
-    for (const spec of Object.values(project.rigWarps)) {
-      for (const b of /** @type {any} */ (spec)?.bindings ?? []) {
-        if (b?.parameterId) referenced.add(b.parameterId);
-      }
     }
   }
   for (const rule of project.physicsRules ?? []) {

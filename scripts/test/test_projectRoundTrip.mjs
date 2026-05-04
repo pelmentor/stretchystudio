@@ -41,11 +41,53 @@ function deepEqual(a, b) {
 function makeFixtureProject() {
   return {
     version: '0.1',
+    schemaVersion: 16,
     canvas: { width: 1792, height: 1792, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
     textures: [],
     nodes: [
       { id: 'g1', type: 'group', name: 'root', parent: null, opacity: 1, visible: true,
         transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+      // BFA-006 Phase 6 — deformer nodes live here, replacing the
+      // legacy faceParallax / bodyWarp / rigWarps sidetables.
+      {
+        id: 'FaceParallax', type: 'deformer', deformerKind: 'warp',
+        name: 'FaceParallax', parent: 'g1', visible: true,
+        gridSize: { rows: 5, cols: 5 },
+        baseGrid: new Array(36 * 2).fill(0).map((_, i) => i * 0.01),
+        localFrame: 'pivot-relative',
+        bindings: [
+          { parameterId: 'ParamAngleX', keys: [-30, 0, 30], interpolation: 'LINEAR' },
+          { parameterId: 'ParamAngleY', keys: [-30, 0, 30], interpolation: 'LINEAR' },
+        ],
+        keyforms: [
+          { keyTuple: [0, 0], positions: new Array(36 * 2).fill(0).map((_, i) => i * 0.011), opacity: 1 },
+          { keyTuple: [1, 1], positions: new Array(36 * 2).fill(0).map((_, i) => i * 0.012), opacity: 1 },
+        ],
+      },
+      {
+        id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
+        name: 'BodyWarpZ', parent: null, visible: true,
+        gridSize: { rows: 3, cols: 3 },
+        baseGrid: new Array(16 * 2).fill(0).map((_, i) => i * 0.01),
+        localFrame: 'canvas-px',
+        bindings: [{ parameterId: 'ParamBodyAngleZ', keys: [-10, 0, 10], interpolation: 'LINEAR' }],
+        keyforms: [
+          { keyTuple: [0], positions: new Array(16 * 2).fill(0).map((_, i) => i * 0.012), opacity: 1 },
+        ],
+      },
+      {
+        id: 'RigWarp_hair-front', type: 'deformer', deformerKind: 'warp',
+        name: 'RigWarp_hair-front', parent: 'BodyWarpZ', visible: true,
+        targetPartId: 'hair-front-mesh-id',
+        canvasBbox: { minX: 100, minY: 100, W: 200, H: 300 },
+        gridSize: { rows: 4, cols: 4 },
+        baseGrid: new Array(25 * 2).fill(0).map((_, i) => i * 0.013),
+        localFrame: 'normalized-0to1',
+        bindings: [{ parameterId: 'ParamHairFront', keys: [-1, 0, 1], interpolation: 'LINEAR' }],
+        keyforms: [
+          { keyTuple: [0], positions: new Array(25 * 2).fill(0).map((_, i) => i * 0.014), opacity: 1 },
+        ],
+      },
     ],
     animations: [],
 
@@ -70,67 +112,25 @@ function makeFixtureProject() {
       deformerAngleMax: 30,
     },
 
-    // Tier 2 — these are the FOUR that were lost on save/load before the fix.
+    // Tier 2 — autoRigConfig persists. The pre-Phase-6 faceParallax /
+    // bodyWarp / rigWarps sidetables are GONE; deformers live in
+    // `project.nodes` (added below). bodyWarpLayout sidetable carries
+    // the canvas→innermost normalizer ranges.
     autoRigConfig: {
       bodyWarp:     { hipFracFallback: 0.55, feetFracFallback: 0.05 },
       faceParallax: { protectionByTag: { face: 1.0, eyebrow: 0.7 } },
       neckWarp:     { tiltFrac: 0.07 },
     },
-    faceParallax: {
-      id: 'FaceParallax',
-      name: 'FaceParallax',
-      parent: { type: 'part', id: 'face-grp' },
-      gridSize: { rows: 5, cols: 5 },
-      // Float-grids are stored as flat number[] for JSON friendliness.
-      baseGrid: new Array(36 * 2).fill(0).map((_, i) => i * 0.01),
-      bindings: [
-        { paramId: 'ParamAngleX', type: 'normal', keyValues: [-30, 0, 30] },
-        { paramId: 'ParamAngleY', type: 'normal', keyValues: [-30, 0, 30] },
-      ],
-      keyforms: [
-        { keyTuple: [0, 0], positions: new Array(36 * 2).fill(0).map((_, i) => i * 0.011), opacity: 1 },
-        { keyTuple: [1, 1], positions: new Array(36 * 2).fill(0).map((_, i) => i * 0.012), opacity: 1 },
-      ],
-      isVisible: true,
-      isLocked: false,
-      isQuadTransform: false,
-    },
-    bodyWarp: {
-      // Layout block + chain of warp specs.
+    bodyWarpLayout: {
       layout: {
-        BZ: { centerX: 0.5, centerY: 0.5, halfW: 0.45, halfH: 0.45 },
-        BY: { centerX: 0.5, centerY: 0.5, halfW: 0.40, halfH: 0.40 },
-        BR: { centerX: 0.5, centerY: 0.5, halfW: 0.35, halfH: 0.35 },
-        BX: { centerX: 0.5, centerY: 0.5, halfW: 0.30, halfH: 0.30 },
+        BZ_MIN_X: 0, BZ_MIN_Y: 0, BZ_W: 800, BZ_H: 600,
+        BY_MIN: -10, BY_MAX: 10,
+        BR_MIN: -10, BR_MAX: 10,
+        BX_MIN: -10, BX_MAX: 10,
       },
-      bodyFracSource: 'measured',
-      bodyFrac: { hip: 0.55, feet: 0.05 },
-      specs: [
-        { id: 'BodyWarpZ', parent: { type: 'root' }, gridSize: { rows: 3, cols: 3 },
-          baseGrid: new Array(16 * 2).fill(0).map((_, i) => i * 0.01),
-          bindings: [{ paramId: 'ParamBodyAngleZ', type: 'normal', keyValues: [-10, 0, 10] }],
-          keyforms: [
-            { keyTuple: [0], positions: new Array(16 * 2).fill(0).map((_, i) => i * 0.012), opacity: 1 },
-          ],
-        },
-      ],
-    },
-    rigWarps: {
-      'hair-front-mesh-id': {
-        id: 'RigWarp_hair-front',
-        parent: { type: 'part', id: 'hair-grp' },
-        targetPartId: 'hair-front-mesh-id',
-        canvasBbox: { minX: 100, minY: 100, maxX: 300, maxY: 400 },
-        gridSize: { rows: 4, cols: 4 },
-        baseGrid: new Array(25 * 2).fill(0).map((_, i) => i * 0.013),
-        bindings: [{ paramId: 'ParamHairFront', type: 'normal', keyValues: [-1, 0, 1] }],
-        keyforms: [
-          { keyTuple: [0], positions: new Array(25 * 2).fill(0).map((_, i) => i * 0.014), opacity: 1 },
-        ],
-        opacity: 1,
-        isVisible: true,
-        isLocked: false,
-        isQuadTransform: false,
+      debug: {
+        HIP_FRAC: 0.55, FEET_FRAC: 0.05,
+        bodyFracSource: 'measured', spineCfShifts: [],
       },
     },
     meshSignatures: {
@@ -180,14 +180,21 @@ async function saveAndReload(project) {
   assert(reloaded.autoRigConfig !== null, 'autoRigConfig is not null after reload');
   assert(deepEqual(reloaded.autoRigConfig, original.autoRigConfig), 'autoRigConfig deep-equals original (GAP-011)');
 
-  assert(reloaded.faceParallax !== null, 'faceParallax is not null after reload');
-  assert(deepEqual(reloaded.faceParallax, original.faceParallax), 'faceParallax deep-equals original (GAP-011)');
-
-  assert(reloaded.bodyWarp !== null, 'bodyWarp is not null after reload');
-  assert(deepEqual(reloaded.bodyWarp, original.bodyWarp), 'bodyWarp deep-equals original (GAP-011)');
-
-  assert(reloaded.rigWarps && Object.keys(reloaded.rigWarps).length > 0, 'rigWarps is non-empty after reload');
-  assert(deepEqual(reloaded.rigWarps, original.rigWarps), 'rigWarps deep-equals original (GAP-011)');
+  // BFA-006 Phase 6 — `faceParallax` / `bodyWarp` / `rigWarps`
+  // sidetables are gone. The fixture's pre-Phase-6 sidetables get
+  // synthesized into `project.nodes` deformer entries by migration v15,
+  // then v16 deletes the legacy fields. Verify the deformer nodes
+  // landed and `bodyWarpLayout` carries the lifted layout/debug.
+  assert(reloaded.faceParallax === undefined, 'faceParallax sidetable removed (Phase 6)');
+  assert(reloaded.bodyWarp === undefined, 'bodyWarp sidetable removed (Phase 6)');
+  assert(reloaded.rigWarps === undefined, 'rigWarps sidetable removed (Phase 6)');
+  // Synthesized deformer nodes carry the pre-Phase-6 spec data.
+  const deformerNodes = (reloaded.nodes ?? []).filter((n) => n?.type === 'deformer');
+  assert(deformerNodes.length > 0, 'deformer nodes present in reloaded project.nodes');
+  const fpNode = deformerNodes.find((n) => n.id === 'FaceParallax');
+  assert(fpNode != null, 'FaceParallax deformer node survived Phase 6 round-trip');
+  assert(reloaded.bodyWarpLayout && reloaded.bodyWarpLayout.layout,
+    'bodyWarpLayout sidetable present (Phase 6)');
 
   // ── meshSignatures (GAP-012 Phase A — fingerprint round-trip) ──
   assert(reloaded.meshSignatures && Object.keys(reloaded.meshSignatures).length > 0,
@@ -211,17 +218,21 @@ async function saveAndReload(project) {
   // ── Empty/null handling — make sure loaded.field is sensible when original is null ──
   const empty = makeFixtureProject();
   empty.autoRigConfig = null;
+  // Phase 6 — empty deformer state means no deformer nodes + null layout.
+  empty.nodes = (empty.nodes ?? []).filter((n) => n?.type !== 'deformer');
   empty.faceParallax = null;
   empty.bodyWarp = null;
   empty.rigWarps = {};
+  empty.bodyWarpLayout = null;
   empty.meshSignatures = {};
   empty.lastInitRigCompletedAt = null;
   empty.rigStageLastRunAt = {};
   const { project: emptyReloaded } = await saveAndReload(empty);
   assert(emptyReloaded.autoRigConfig === null, 'autoRigConfig stays null when not seeded');
-  assert(emptyReloaded.faceParallax === null, 'faceParallax stays null when not seeded');
-  assert(emptyReloaded.bodyWarp === null, 'bodyWarp stays null when not seeded');
-  assert(deepEqual(emptyReloaded.rigWarps, {}), 'rigWarps stays {} when not seeded');
+  assert(emptyReloaded.faceParallax === undefined, 'faceParallax stays absent when no rig (Phase 6)');
+  assert(emptyReloaded.bodyWarp === undefined, 'bodyWarp stays absent when no rig (Phase 6)');
+  assert(emptyReloaded.rigWarps === undefined, 'rigWarps stays absent when no rig (Phase 6)');
+  assert(emptyReloaded.bodyWarpLayout === null, 'bodyWarpLayout stays null when not seeded');
   assert(deepEqual(emptyReloaded.meshSignatures, {}), 'meshSignatures stays {} when not seeded');
   assert(emptyReloaded.lastInitRigCompletedAt === null, 'lastInitRigCompletedAt stays null when not seeded');
   assert(deepEqual(emptyReloaded.rigStageLastRunAt, {}), 'rigStageLastRunAt stays {} when not seeded');
@@ -272,12 +283,13 @@ async function saveAndReload(project) {
 
     assert(deepEqual(stored.autoRigConfig, original.autoRigConfig),
       'projectStore.loadProject hydrates autoRigConfig');
-    assert(deepEqual(stored.faceParallax, original.faceParallax),
-      'projectStore.loadProject hydrates faceParallax');
-    assert(deepEqual(stored.bodyWarp, original.bodyWarp),
-      'projectStore.loadProject hydrates bodyWarp');
-    assert(deepEqual(stored.rigWarps, original.rigWarps),
-      'projectStore.loadProject hydrates rigWarps');
+    // Phase 6 — sidetables removed; deformer nodes survive in
+    // `project.nodes`; bodyWarpLayout sidetable survives.
+    const storedDeformers = (stored.nodes ?? []).filter((n) => n?.type === 'deformer');
+    assert(storedDeformers.length > 0,
+      'projectStore.loadProject hydrates deformer nodes (Phase 6)');
+    assert(stored.bodyWarpLayout != null,
+      'projectStore.loadProject hydrates bodyWarpLayout (Phase 6)');
     assert(deepEqual(stored.meshSignatures, original.meshSignatures),
       'projectStore.loadProject hydrates meshSignatures');
     assert(stored.lastInitRigCompletedAt === original.lastInitRigCompletedAt,

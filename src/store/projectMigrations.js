@@ -21,7 +21,7 @@
 
 import { synthesizeDeformerNodesFromSidetables } from './deformerNodeSync.js';
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -256,6 +256,45 @@ const MIGRATIONS = {
   // See docs/BFA_006_DEFORMER_NODES_PLAN.md.
   15: (project) => {
     synthesizeDeformerNodesFromSidetables(project);
+    return project;
+  },
+
+  // v16 — BFA-006 Phase 6: deletion of the three legacy warp-deformer
+  // sidetables (`project.faceParallax`, `project.bodyWarp`,
+  // `project.rigWarps`). After this migration, `project.nodes` is the
+  // sole runtime source of truth — sidetables are gone and all readers
+  // (`resolveFaceParallax`, `resolveBodyWarp`, `resolveRigWarps`) now
+  // walk `project.nodes` directly.
+  //
+  // Body warp metadata that doesn't fit on individual deformer nodes
+  // (the `layout` block driving the canvas-px → innermost-warp 0..1
+  // closures + the `bodyFracSource` debug record) splits off into
+  // a tiny `project.bodyWarpLayout` sidetable. Migration shifts it
+  // from the old `project.bodyWarp.{layout, debug}` to the new shape.
+  //
+  // Rollback to Phase 5 means restoring these fields from a Phase-5
+  // save; that's a hard cutover, not a soft window. Phase 6 is gated
+  // by the plan's Decision-4 soak window (≥1 week of daily-driver
+  // use post-Phase-5 with no regressions).
+  16: (project) => {
+    if (project.bodyWarpLayout === undefined) project.bodyWarpLayout = null;
+    // Lift the layout + debug from the legacy sidetable, IF it has
+    // them. Run before deleting the sidetable so the lift is well-
+    // formed; the v15 migration that runs first has already mirrored
+    // the chain specs into `project.nodes` as deformer nodes, so
+    // those don't need lifting again here.
+    const legacy = project.bodyWarp;
+    if (legacy && typeof legacy === 'object' && legacy.layout) {
+      project.bodyWarpLayout = {
+        layout: { ...legacy.layout },
+        debug: legacy.debug ?? {},
+      };
+    }
+    // Delete the three legacy sidetables. Idempotent: missing keys
+    // are no-ops.
+    delete project.faceParallax;
+    delete project.bodyWarp;
+    delete project.rigWarps;
     return project;
   },
 };

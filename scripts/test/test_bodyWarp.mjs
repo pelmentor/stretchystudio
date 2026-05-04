@@ -270,23 +270,27 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
 }
 
 // --- resolveBodyWarp / seedBodyWarpChain / clearBodyWarp ---
+// (BFA-006 Phase 6: chain specs persist as deformer nodes; layout +
+//  debug live in `project.bodyWarpLayout` sidetable.)
 
 {
-  const project = {};
-  assert(resolveBodyWarp(project) === null, 'no project.bodyWarp → null');
+  const project = { nodes: [] };
+  assert(resolveBodyWarp(project) === null, 'no chain nodes → null');
 }
 
 {
-  const project = { bodyWarp: null };
-  assert(resolveBodyWarp(project) === null, 'project.bodyWarp null → null');
+  const project = {};
+  assert(resolveBodyWarp(project) === null, 'no nodes array → null');
 }
 
 {
   const original = buildBodyWarpChain(makeChainCtx());
-  const project = {};
+  const project = { nodes: [] };
   const writeResult = seedBodyWarpChain(project, original);
-  assert(project.bodyWarp === writeResult, 'seed assigns project.bodyWarp');
-  assertEq(project.bodyWarp.specs.length, 4, 'seeded chain has 4 specs');
+  assert(writeResult != null, 'seed returns serialized chain');
+  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
+  assertEq(chainNodes.length, 4, 'seeded chain has 4 deformer nodes');
+  assert(project.bodyWarpLayout != null, 'seeded layout sidetable populated');
   // Resolve should reconstruct.
   const resolved = resolveBodyWarp(project);
   assert(resolved !== null, 'resolveBodyWarp post-seed not null');
@@ -299,11 +303,14 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
 
 {
   const original = buildBodyWarpChain(makeChainCtx());
-  const project = {};
+  const project = { nodes: [] };
   seedBodyWarpChain(project, original);
-  assert(project.bodyWarp !== null, 'seeded');
+  const chainBefore = project.nodes.filter((n) => n.type === 'deformer');
+  assert(chainBefore.length === 4, 'seeded');
   clearBodyWarp(project);
-  assert(project.bodyWarp === null, 'clearBodyWarp resets to null');
+  const chainAfter = project.nodes.filter((n) => n.type === 'deformer');
+  assert(chainAfter.length === 0, 'clearBodyWarp drops chain nodes');
+  assert(project.bodyWarpLayout === null, 'clearBodyWarp clears layout');
   assert(resolveBodyWarp(project) === null, 'resolve after clear: null');
 }
 
@@ -311,7 +318,7 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
 
 {
   const original = buildBodyWarpChain(makeChainCtx());
-  const project = {};
+  const project = { nodes: [] };
   seedBodyWarpChain(project, original);
   const json = JSON.stringify(project);
   const reloaded = JSON.parse(json);
@@ -334,7 +341,7 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
 
 {
   const original = buildBodyWarpChain(makeChainCtx());
-  const project = {};
+  const project = { nodes: [] };
   seedBodyWarpChain(project, original);
   // resolveBodyWarp is pure — should not look at meshes/canvas/anatomy at all.
   const resolved = resolveBodyWarp(project);

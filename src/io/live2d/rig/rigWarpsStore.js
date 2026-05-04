@@ -51,6 +51,11 @@ import {
   removeRigWarpNodes,
   removeDeformerNodesByPredicate,
 } from '../../../store/deformerNodeSync.js';
+import {
+  getRigWarpNodes,
+  nodeToWarpSpec,
+  indexProjectNodes,
+} from './deformerNodeReaders.js';
 
 /**
  * @typedef {Object} StoredRigWarpSpec
@@ -188,16 +193,28 @@ export function deserializeRigWarps(stored) {
 }
 
 /**
- * Resolve `project.rigWarps` to a `partId → spec` Map, or an empty
- * Map when the field is absent / empty. The cmo3 writer threads this
- * through and reads `map.get(partId)` per mesh; missing entries
- * fall through to the inline shiftFn path.
+ * Resolve a project to its `partId → rigWarp spec` map by walking
+ * `project.nodes` for per-mesh rigWarp deformer nodes (those with a
+ * `targetPartId`). The cmo3 writer threads this through and reads
+ * `map.get(partId)` per mesh; missing entries fall through to the
+ * inline shiftFn path.
+ *
+ * BFA-006 Phase 6 — reads from `project.nodes` exclusively. The
+ * legacy `project.rigWarps` sidetable is deleted by migration v16.
  *
  * @param {object} project
  * @returns {Map<string, object>}
  */
 export function resolveRigWarps(project) {
-  return deserializeRigWarps(project?.rigWarps);
+  const out = new Map();
+  const nodes = getRigWarpNodes(project);
+  if (nodes.size === 0) return out;
+  const byId = indexProjectNodes(project);
+  if (!byId) return out;
+  for (const [partId, node] of nodes) {
+    out.set(partId, nodeToWarpSpec(node, byId));
+  }
+  return out;
 }
 
 /**
@@ -228,25 +245,25 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
     specs = Array.from(rigWarps);
   }
   const stored = serializeRigWarps(specs);
-  let finalMap;
-  if (mode === 'merge') {
-    const prior = (project.rigWarps && typeof project.rigWarps === 'object') ? project.rigWarps : {};
+  let finalMap = stored;
+  if (mode === 'merge' && Array.isArray(project.nodes)) {
+    // Merge: per-partId. Preserve any existing rigWarp deformer node
+    // whose `_userAuthored:true` flag is set; reseed the rest.
+    const priorNodes = getRigWarpNodes(project);
     const merged = { ...stored };
-    for (const [partId, entry] of Object.entries(prior)) {
-      if (entry && typeof entry === 'object' && entry._userAuthored === true) {
-        merged[partId] = entry;
+    const byId = indexProjectNodes(project);
+    if (byId) {
+      for (const [partId, priorNode] of priorNodes) {
+        if (priorNode._userAuthored === true) {
+          merged[partId] = nodeToWarpSpec(priorNode, byId);
+        }
       }
     }
-    project.rigWarps = merged;
     finalMap = merged;
-  } else {
-    project.rigWarps = stored;
-    finalMap = stored;
   }
-  // BFA-006 Phase 1 — dual-write deformer nodes for the final map.
-  // In replace mode we drop ALL prior rigWarp nodes first; in merge mode
-  // we drop only nodes whose targetPartId is being overwritten by this
-  // pass (preserves _userAuthored entries that were preserved above).
+  // BFA-006 Phase 6 — single-write to `project.nodes`. Drop prior
+  // rigWarp nodes (preserving _userAuthored survivors in merge mode
+  // already pre-collected into `merged`), upsert the final map.
   if (Array.isArray(project.nodes)) {
     if (mode === 'merge') {
       const incomingPartIds = new Set(Object.keys(stored));
@@ -272,16 +289,14 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
 }
 
 /**
- * Clear `project.rigWarps`. Used to revert to the heuristic path
- * (e.g., after PSD reimport invalidates stored per-vertex deltas).
+ * Drop all rigWarp deformer nodes from `project.nodes` and clear
+ * any `parts[i].rigParent` pointers that referenced them. Used to
+ * revert to the heuristic path (e.g., after PSD reimport invalidates
+ * stored per-vertex deltas).
  *
  * @param {object} project - mutated
  */
 export function clearRigWarps(project) {
-  project.rigWarps = {};
-  // BFA-006 Phase 1 — drop the shadow rigWarp nodes; clear part
-  // rigParent pointers that referenced them so dangling refs don't
-  // confuse Phase 2's selectRigSpec.
   if (Array.isArray(project.nodes)) {
     removeRigWarpNodes(project.nodes);
     for (const n of project.nodes) {

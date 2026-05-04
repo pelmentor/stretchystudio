@@ -36,6 +36,11 @@ import {
   upsertDeformerNode,
   removeFaceParallaxNode,
 } from '../../../store/deformerNodeSync.js';
+import {
+  getFaceParallaxNode,
+  nodeToWarpSpec,
+  indexProjectNodes,
+} from './deformerNodeReaders.js';
 
 /**
  * Convert a face-parallax `WarpDeformerSpec` to a JSON-friendly value
@@ -106,17 +111,22 @@ export function deserializeFaceParallaxSpec(stored) {
 }
 
 /**
- * Resolve `project.faceParallax` to a usable spec, or `null` if the
- * field is absent / malformed. When `null`, the writer falls back to
- * its inline heuristic (today's path).
+ * Resolve a project to its FaceParallax warp spec, or `null` if the
+ * project has no FaceParallax deformer node. When `null`, the writer
+ * falls back to its inline heuristic (today's path).
+ *
+ * BFA-006 Phase 6 — reads from `project.nodes` exclusively. The
+ * legacy `project.faceParallax` sidetable is deleted by migration v16.
  *
  * @param {object} project
  * @returns {import('./rigSpec.js').WarpDeformerSpec | null}
  */
 export function resolveFaceParallax(project) {
-  const stored = project?.faceParallax;
-  if (!stored) return null;
-  return deserializeFaceParallaxSpec(stored);
+  const node = getFaceParallaxNode(project);
+  if (!node) return null;
+  const byId = indexProjectNodes(project);
+  if (!byId) return null;
+  return nodeToWarpSpec(node, byId);
 }
 
 /**
@@ -137,17 +147,19 @@ export function resolveFaceParallax(project) {
  */
 export function seedFaceParallax(project, spec, mode = 'replace') {
   if (mode === 'merge') {
-    const prior = project.faceParallax;
-    if (prior && typeof prior === 'object' && prior._userAuthored === true) {
-      // Preserve user-authored override; nothing written.
-      return null;
+    // Preserve user-authored override on the existing deformer node
+    // if present. The legacy sidetable was the singular merge surface
+    // pre-Phase-6; post-Phase-6 the per-node `_userAuthored` marker
+    // is the canonical signal.
+    if (Array.isArray(project.nodes)) {
+      const prior = getFaceParallaxNode(project);
+      if (prior && prior._userAuthored === true) return null;
     }
   }
   const stored = serializeFaceParallaxSpec(spec);
-  project.faceParallax = stored;
-  // BFA-006 Phase 1 — dual-write the deformer node alongside the
-  // sidetable so `project.nodes` stays in sync with the spec the
-  // exporter / chainEval still read from `project.faceParallax`.
+  // BFA-006 Phase 6 — single-write to `project.nodes`. The legacy
+  // `project.faceParallax` sidetable is gone; the deformer node IS
+  // the storage surface.
   if (Array.isArray(project.nodes)) {
     upsertDeformerNode(project.nodes, warpSpecToDeformerNode(stored));
   }
@@ -155,14 +167,13 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
 }
 
 /**
- * Clear `project.faceParallax`. Used to revert to the heuristic path
- * (e.g., after PSD reimport invalidates stored deltas).
+ * Remove the FaceParallax deformer node from `project.nodes`. Used
+ * to revert to the heuristic path (e.g., after PSD reimport
+ * invalidates stored deltas).
  *
  * @param {object} project - mutated
  */
 export function clearFaceParallax(project) {
-  project.faceParallax = null;
-  // BFA-006 Phase 1 — drop the shadow deformer node too.
   if (Array.isArray(project.nodes)) {
     removeFaceParallaxNode(project.nodes);
   }

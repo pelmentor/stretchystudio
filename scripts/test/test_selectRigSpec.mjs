@@ -59,7 +59,7 @@ function assertEq(actual, expected, name) {
     parameters: [{ id: 'ParamAngleZ', min: -30, max: 30, defaultValue: 0 }],
     nodes: [
       {
-        id: 'BodyZWarp', type: 'deformer', deformerKind: 'warp',
+        id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
         name: 'BZ', parent: null, visible: true,
         gridSize: { rows: 5, cols: 5 },
         baseGrid: new Array(72).fill(0).map((_, i) => i),
@@ -72,8 +72,8 @@ function assertEq(actual, expected, name) {
         ],
       },
       {
-        id: 'BodyYWarp', type: 'deformer', deformerKind: 'warp',
-        name: 'BY', parent: 'BodyZWarp', visible: true,
+        id: 'BodyWarpY', type: 'deformer', deformerKind: 'warp',
+        name: 'BY', parent: 'BodyWarpZ', visible: true,
         gridSize: { rows: 5, cols: 5 },
         baseGrid: new Array(72).fill(0),
         localFrame: 'normalized-0to1',
@@ -84,9 +84,9 @@ function assertEq(actual, expected, name) {
   };
   const spec = selectRigSpec(project);
   assertEq(spec.warpDeformers.length, 2, 'warp count');
-  assertEq(spec.warpDeformers[0].id, 'BodyZWarp', 'warp 0 id');
+  assertEq(spec.warpDeformers[0].id, 'BodyWarpZ', 'warp 0 id');
   assertEq(spec.warpDeformers[0].parent, { type: 'root', id: null }, 'warp 0: root parent inflated');
-  assertEq(spec.warpDeformers[1].parent, { type: 'warp', id: 'BodyZWarp' }, 'warp 1: warp parent inflated');
+  assertEq(spec.warpDeformers[1].parent, { type: 'warp', id: 'BodyWarpZ' }, 'warp 1: warp parent inflated');
   assert(spec.warpDeformers[0].baseGrid instanceof Float64Array, 'warp baseGrid → Float64Array');
   assertEq(spec.warpDeformers[0].baseGrid[5], 5, 'warp baseGrid values preserved');
   assert(spec.warpDeformers[0].keyforms[0].positions instanceof Float64Array, 'warp keyform positions → Float64Array');
@@ -166,14 +166,14 @@ function assertEq(actual, expected, name) {
   assertEq(spec.parts[1].parentPartId, 'g1', 'parts[1].parentPartId points to g1');
 }
 
-// ── canvasToInnermostX/Y from BodyZWarp baseGrid ─────────────────
+// ── canvasToInnermostX/Y from BodyWarpZ baseGrid ─────────────────
 
 {
   const project = {
     canvas: { width: 800, height: 600 }, parameters: [],
     nodes: [
       {
-        id: 'BodyZWarp', type: 'deformer', deformerKind: 'warp',
+        id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
         name: 'BZ', parent: null, visible: true,
         gridSize: { rows: 1, cols: 1 },
         // 2x2 grid covering canvas: corners at (0,0), (800,0), (0,600), (800,600).
@@ -184,7 +184,7 @@ function assertEq(actual, expected, name) {
     ],
   };
   const spec = selectRigSpec(project);
-  assertEq(spec.innermostBodyWarpId, 'BodyZWarp', 'innermost: single Body* node detected');
+  assertEq(spec.innermostBodyWarpId, 'BodyWarpZ', 'innermost: single Body* node detected');
   assert(typeof spec.canvasToInnermostX === 'function', 'innermost: closure X is function');
   assertEq(spec.canvasToInnermostX(0), 0, 'closure X: (0) → 0');
   assertEq(spec.canvasToInnermostX(800), 1, 'closure X: (800) → 1');
@@ -246,7 +246,7 @@ function assertEq(actual, expected, name) {
     },
     bodyWarp: {
       specs: [
-        { id: 'BodyZWarp', name: 'BZ', parent: { type: 'root', id: null },
+        { id: 'BodyWarpZ', name: 'BZ', parent: { type: 'root', id: null },
           gridSize: { rows: 1, cols: 1 },
           baseGrid: [0,0,800,0,0,600,800,600],
           localFrame: 'canvas-px',
@@ -260,10 +260,10 @@ function assertEq(actual, expected, name) {
   };
   synthesizeDeformerNodesFromSidetables(project);
   const spec = selectRigSpec(project);
-  // Order from synthesize: FaceParallax then BodyZWarp.
-  assertEq(spec.warpDeformers.map((w) => w.id), ['FaceParallaxWarp', 'BodyZWarp'],
+  // Order from synthesize: FaceParallax then BodyWarpZ.
+  assertEq(spec.warpDeformers.map((w) => w.id), ['FaceParallaxWarp', 'BodyWarpZ'],
     'e2e: synthesized warps roundtrip into selectRigSpec');
-  assertEq(spec.innermostBodyWarpId, 'BodyZWarp', 'e2e: BodyZWarp picked as innermost');
+  assertEq(spec.innermostBodyWarpId, 'BodyWarpZ', 'e2e: BodyWarpZ picked as innermost');
   assert(typeof spec.canvasToInnermostX === 'function', 'e2e: closures resolved');
 }
 
@@ -399,14 +399,14 @@ function assertEq(actual, expected, name) {
 }
 
 {
-  // Chained warp: BodyZWarp (canvas-px root) → BodyXWarp (normalised under BZ).
+  // Chained warp: BodyWarpZ (canvas-px root) → BodyXWarp (normalised under BZ).
   // BX baseGrid is in 0..1 of BZ; BZ's canvas covers (0..800, 0..600).
   // So BX at rest is identity → its lifted canvas-px bbox should match BZ's bbox.
   const project = {
     canvas: { width: 800, height: 600 }, parameters: [],
     nodes: [
       {
-        id: 'BodyZWarp', type: 'deformer', deformerKind: 'warp',
+        id: 'BodyWarpZ', type: 'deformer', deformerKind: 'warp',
         name: 'BZ', parent: null, visible: true,
         gridSize: { rows: 1, cols: 1 },
         baseGrid: [0, 0, 800, 0, 0, 600, 800, 600],
@@ -415,7 +415,7 @@ function assertEq(actual, expected, name) {
       },
       {
         id: 'BodyXWarp', type: 'deformer', deformerKind: 'warp',
-        name: 'BX', parent: 'BodyZWarp', visible: true,
+        name: 'BX', parent: 'BodyWarpZ', visible: true,
         gridSize: { rows: 1, cols: 1 },
         // Identity in 0..1: corners (0,0)→(1,0)→(0,1)→(1,1)
         baseGrid: [0, 0, 1, 0, 0, 1, 1, 1],

@@ -47,7 +47,7 @@ import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
 import { evalRig } from '../runtime/evaluator/chainEval.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
-const BODY_WARP_IDS = new Set(['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp']);
+const BODY_WARP_IDS = new Set(['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp']);
 const NECK_WARP_ID = 'NeckWarp';
 
 /**
