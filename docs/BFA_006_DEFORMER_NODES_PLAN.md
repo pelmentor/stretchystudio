@@ -185,6 +185,13 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Deliverable:** `chainEval` consumers still get the same object shape. `npm test` green. Manual verify: open project, drag a slider, see the rig deform. No "click Init Rig to rebuild" needed after load.
 
+**Status (this commit).** Pure selector shipped at `src/io/live2d/rig/selectRigSpec.js` + 40-assertion test (`test_selectRigSpec.mjs`). The full Phase-2 wiring of `useRigSpecStore` was deferred — the selector currently produces a partial RigSpec (warps + parts + canvas + parameters + physicsRules + body-warp closures). Two slices stay empty:
+
+  - `rotationDeformers: []` — Phase 1's migration only synthesised warp deformer nodes from sidetables (rotation deformers were never persisted; they're generated each Init Rig). The selector reads rotation nodes when present, so as soon as Phase 3 dual-writes them, this slice fills in automatically with no code change here.
+  - `artMeshes: []` — derivation requires lifting each parent warp's rest grid to canvas-px to project mesh verts into the parent deformer's local frame; the lifted-grid pass needs both warps + rotations resolved, so it lands alongside Phase 3.
+
+`useRigSpecStore.rigSpec` keeps reading through the legacy `buildRigSpec` async builder until Phase 3 — the partial selector would otherwise drop rotation deformers from the live evaluator. The selector + memoization (project-identity `WeakMap`) are in place so Phase 3's wiring is a one-line swap.
+
 ### Phase 3 — Auto-rig writes deformer nodes (~2 days)
 
 **Goal:** `initializeRigFromProject` + `seedAllRig` + per-stage refit all WRITE deformer nodes into `project.nodes` directly. The three legacy sidetables stop being touched.
