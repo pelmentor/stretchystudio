@@ -46,6 +46,8 @@ export function WarpDeformerOverlay() {
   const view = useEditorStore((s) => s.viewByMode.viewport);
   const warpGridsOn = useEditorStore((s) => s.viewLayers.warpGrids ?? true);
   const warpGridsOpacity = useEditorStore((s) => s.viewLayers.warpGridsOpacity ?? 0.25);
+  // PP2-010(b) — per-warp visibility map (sparse: missing key = visible).
+  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility ?? {});
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {
@@ -117,7 +119,13 @@ export function WarpDeformerOverlay() {
   // PP2-010 — display every warp that has a buildable grid (lifted OR
   // canvas-px keyform fallback). The lifted-grid pass canvas-fies nested
   // warps too, so the user finally sees the full network.
-  const displayWarps = allWarps.filter((w) => w?.gridSize?.cols && w?.gridSize?.rows);
+  // PP2-010(b) — per-warp visibility map filters out warps the user
+  // hid via the Outliner Rig-tab eye icon. Sparse: missing key = visible.
+  const displayWarps = allWarps.filter((w) =>
+    w?.gridSize?.cols
+    && w?.gridSize?.rows
+    && warpGridVisibility[w.id] !== false,
+  );
   if (displayWarps.length === 0) return null;
 
   // Render the selected warp last so it paints on top of the others.

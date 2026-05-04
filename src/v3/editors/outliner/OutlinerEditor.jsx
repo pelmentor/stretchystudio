@@ -28,6 +28,7 @@ import { Search, X } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
+import { useEditorStore } from '../../../store/editorStore.js';
 import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
 import { filterOutlinerTree } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
@@ -44,6 +45,12 @@ export function OutlinerEditor() {
 
   const items = useSelectionStore((s) => s.items);
   const select = useSelectionStore((s) => s.select);
+
+  // PP2-010(b) — per-warp visibility map. Rig-mode warp rows surface
+  // an eye icon that flips this entry; WarpDeformerOverlay reads the
+  // map to filter which lattices it paints.
+  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility ?? {});
+  const toggleWarpGridVisibility = useEditorStore((s) => s.toggleWarpGridVisibility);
 
   /** @type {[import('./treeBuilder.js').OutlinerDisplayMode, Function]} */
   const [mode, setMode] = useState(/** @type {any} */ ('hierarchy'));
@@ -130,7 +137,7 @@ export function OutlinerEditor() {
     });
   }, []);
 
-  const onToggleVisibility = useCallback(
+  const onToggleNodeVisibility = useCallback(
     (id) => {
       // Visibility only makes sense for project nodes (parts/groups).
       // Deformer rows have no visibility flag in the project model.
@@ -140,6 +147,12 @@ export function OutlinerEditor() {
       });
     },
     [updateProject],
+  );
+
+  // PP2-010(b) — per-warp eye toggle for rig-mode warp rows.
+  const onToggleWarpVisibility = useCallback(
+    (id) => toggleWarpGridVisibility(id),
+    [toggleWarpGridVisibility],
   );
 
   // ↑/↓ moves active row, ←/→ collapse/expand. Scoped to the
@@ -209,24 +222,34 @@ export function OutlinerEditor() {
           onKeyDown={onTreeKeyDown}
           className="flex-1 min-h-0 overflow-auto py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
         >
-          {rows.map(({ node, depth }) => (
-            <TreeNode
-              key={node.id}
-              node={node}
-              depth={depth}
-              expanded={!collapsed.has(node.id)}
-              selected={selectedIds.has(node.id)}
-              active={activeId === node.id}
-              onSelect={onSelect}
-              onToggleExpand={onToggleExpand}
-              // Visibility toggle only meaningful on project nodes.
-              onToggleVisibility={
-                node.type === 'part' || node.type === 'group'
-                  ? onToggleVisibility
-                  : undefined
-              }
-            />
-          ))}
+          {rows.map(({ node, depth }) => {
+            // PP2-010(b) — rig-mode warp rows surface a per-warp eye
+            // toggle. Decorate `visible` from the editorStore map so
+            // the row dims/highlights match the lattice overlay state.
+            const isWarpRow =
+              mode === 'rig' && node.type === 'deformer' && node.deformerKind === 'warp';
+            const decorated = isWarpRow
+              ? { ...node, visible: warpGridVisibility[node.id] !== false }
+              : node;
+            const visToggle = isWarpRow
+              ? onToggleWarpVisibility
+              : (node.type === 'part' || node.type === 'group')
+                ? onToggleNodeVisibility
+                : undefined;
+            return (
+              <TreeNode
+                key={node.id}
+                node={decorated}
+                depth={depth}
+                expanded={!collapsed.has(node.id)}
+                selected={selectedIds.has(node.id)}
+                active={activeId === node.id}
+                onSelect={onSelect}
+                onToggleExpand={onToggleExpand}
+                onToggleVisibility={visToggle}
+              />
+            );
+          })}
         </div>
       )}
     </div>

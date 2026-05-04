@@ -19,7 +19,7 @@
 | [PP2-007](#pp2-007) | bug    | high   | Live Preview tab — wheel zoom and middle-mouse pan don't work | closed (this commit) |
 | [PP2-008](#pp2-008) | bug    | medium | `ParamOpacity` (char global opacity) slider does nothing | closed (this commit) |
 | [PP2-009](#pp2-009) | refactor | medium | Drop the Setup/Animate topbar pill — workspace drives editorMode | closed (this commit) |
-| [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | partial — (a) live lattices closed (this commit); (b) per-warp visibility deferred |
+| [PP2-010](#pp2-010) | feature  | medium | Warp grid overlay — render all warps live + outliner per-warp visibility | closed (a + b) |
 
 ---
 
@@ -194,7 +194,7 @@ Overlay's `buildGrid` now prefers the lifted canvas-px grid for any warp; falls 
 
 `rigSpecStore.invalidate` clears `rigEvalStore.liftedGrids` so the overlay doesn't paint stale lattices from a deleted rig.
 
-**(b) Per-warp visibility toggles in the Outliner Rig tab — open.** Currently every warp paints (subject to the master toggle). The user can already mute the overlay via `viewLayers.warpGrids` in `ViewLayersPopover`. Per-warp eye-icon toggles need an Outliner Rig-tab change + a new `viewLayers.warpGridVisibility[warpId] = boolean` map; deferred until the user signals which warps actually need to be hidden in practice (the lifted-grid render may already make individual hiding less necessary now that the user can see the lattice network at a glance).
+**(b) Per-warp visibility toggles in the Outliner Rig tab — closed (this commit).** Added `editorStore.viewLayers.warpGridVisibility: Record<warpId, boolean>` (sparse: missing key = visible) plus a `toggleWarpGridVisibility(warpId, visible?)` action. OutlinerEditor decorates rig-mode warp rows with the computed `visible` flag and routes the eye-icon click through the new toggle. WarpDeformerOverlay filters `displayWarps` by the map. Tests: 5 new assertions in `test_editorStore.mjs` covering the toggle's hide/show/explicit-set/empty-id branches.
 
 **Cubism comparison.** Cubism Editor's pattern is: list deformers in left panel, click one → that deformer's grid shows on the canvas, control points draggable, grid follows live param changes. There's no "show all" mode out-of-the-box. SS's all-warps-on-by-default is a superset and matches the user's stated debug-tool intent. Draggable control points are still out of scope (Phase 2D).
 

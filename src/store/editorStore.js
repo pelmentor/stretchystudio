@@ -65,6 +65,12 @@ export const useEditorStore = create((set) => ({
     skeleton:       true,
     irisClipping:   true,
     warpGrids:      true,
+    /** PP2-010(b) — per-warp visibility map: `warpId → boolean`.
+     *  Surfaces in the Outliner Rig tab as an eye icon per warp row.
+     *  Missing entry = visible (default true), so the map only carries
+     *  user-hidden warps. The master `warpGrids` toggle still applies
+     *  on top — when it's off, the per-warp map is irrelevant. */
+    warpGridVisibility: /** @type {Record<string, boolean>} */ ({}),
     /** PP1-007 — opacity for warp grid overlays in the 0..1 range.
      *  Default 0.25 so all warps are visible-but-quiet by default; the
      *  selected warp paints at full opacity for accent.
@@ -234,6 +240,24 @@ export const useEditorStore = create((set) => ({
       return { viewLayers: next, editMode: null };
     }
     return { viewLayers: next };
+  }),
+  /** PP2-010(b) — toggle a single warp's visibility in the lattice
+   *  overlay. Pass `visible` to set explicitly; omit to toggle from
+   *  the current value (default true → false on first click). */
+  toggleWarpGridVisibility: (warpId, visible) => set((state) => {
+    if (!warpId) return state;
+    const cur = state.viewLayers.warpGridVisibility ?? {};
+    const next = { ...cur };
+    const target = typeof visible === 'boolean'
+      ? visible
+      : !(cur[warpId] !== false);
+    if (target) {
+      // Visible is the default — drop the entry to keep the map sparse.
+      delete next[warpId];
+    } else {
+      next[warpId] = false;
+    }
+    return { viewLayers: { ...state.viewLayers, warpGridVisibility: next } };
   }),
   setMeshDefaults:      (partial)  => set((state) => ({ meshDefaults: { ...state.meshDefaults, ...partial } })),
   setActiveLayerTab:    (tab)      => set({ activeLayerTab: tab }),

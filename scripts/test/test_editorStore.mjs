@@ -303,6 +303,41 @@ reset();
   assert(get().viewLayers.skeleton === true, 'setViewLayers: skeleton preserved');
 }
 
+// ── PP2-010(b) — toggleWarpGridVisibility ─────────────────────────
+
+{
+  reset();
+  useEditorStore.setState({
+    viewLayers: { ...get().viewLayers, warpGridVisibility: {} },
+  });
+
+  // First click on a fresh entry: visible default → hidden.
+  get().toggleWarpGridVisibility('warp-A');
+  assert(get().viewLayers.warpGridVisibility['warp-A'] === false,
+    'toggleWarpGridVisibility: first call hides (default true → false)');
+
+  // Toggle again: hidden → visible (entry dropped to keep map sparse).
+  get().toggleWarpGridVisibility('warp-A');
+  assert(!('warp-A' in get().viewLayers.warpGridVisibility),
+    'toggleWarpGridVisibility: second call drops entry (back to default visible)');
+
+  // Explicit visible:false sets directly.
+  get().toggleWarpGridVisibility('warp-B', false);
+  assert(get().viewLayers.warpGridVisibility['warp-B'] === false,
+    'toggleWarpGridVisibility(warp-B, false): hidden');
+
+  // Explicit visible:true drops.
+  get().toggleWarpGridVisibility('warp-B', true);
+  assert(!('warp-B' in get().viewLayers.warpGridVisibility),
+    'toggleWarpGridVisibility(warp-B, true): drops to default visible');
+
+  // Empty / null id is a no-op.
+  const before = JSON.stringify(get().viewLayers.warpGridVisibility);
+  get().toggleWarpGridVisibility('');
+  assert(JSON.stringify(get().viewLayers.warpGridVisibility) === before,
+    'toggleWarpGridVisibility(""): no-op');
+}
+
 // ── setViewLayers({skeleton:false}) auto-exits skeleton edit ──────
 
 {
