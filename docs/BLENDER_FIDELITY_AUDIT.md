@@ -77,6 +77,18 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 
 ---
 
+### BFA-006 — `rigSpec` is a parallel graph that should live in `project.nodes`
+
+**What it is.** Today's data has TWO graphs: `project.nodes` (parts + groups + bones) is the scene graph; `useRigSpecStore.rigSpec` (warps + rotations + art-mesh frames) is the rig graph, computed from three persistent sidetables (`project.faceParallax`, `project.bodyWarp`, `project.rigWarps`). The Outliner just shipped a unified View Layer mode (commit `7d2a426`) that **fakes** one tree by composing both at render time — that's a view-layer fix, not a data-model fix.
+
+**Why it's a crutch.** Save/load is twice the surface (GAP-011 caught a silent field drop). `_userAuthored` markers live on storage shape, not on identifiable nodes. Deformers can't be referenced before Init Rig, can't be undo-tracked, can't be drag-reordered. After project load the user must click Init Rig again to repopulate the live evaluator.
+
+**Plan.** Promote deformers to `project.nodes` entries with `type:'deformer'`. `rigSpec` becomes a derived selector — a runtime index over `project.nodes`, not a separately-built blob. Three persistent sidetables collapse into the node list itself. 7-phase migration; full plan in [BFA_006_DEFORMER_NODES_PLAN.md](BFA_006_DEFORMER_NODES_PLAN.md).
+
+**Status.** Plan written 2026-05-04. Open — multi-day refactor, scoped to start after the next /compact.
+
+---
+
 ## Working principles (carry-forward)
 
 1. **One axis, one slot.** Don't store information that can be derived. Don't pair a UI pill with another pill if the user always wants them in lockstep.
