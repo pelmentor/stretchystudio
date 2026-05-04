@@ -18,7 +18,7 @@ Each entry is short and self-contained — anyone reading should be able to pick
 |--------|---------|
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
 | 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
-| ⏳ Open | *(none)* |
+| ⏳ Open | BUG-022 (hair tilted under hairRig:false), BUG-023 (save→load breaks arm/neck/hair live preview), BUG-024 (wizard reorder step: canvas click-to-select dead) — wave of bugs flagged 2026-05-04, fix pass scheduled after next /compact |
 | Recently fixed (2026-05-03) | BUG-003 (closed via TWO commits same day): (1) authored-cmo3 init rig path closed the heuristic-vs-authored gap (AngleZ_pos30 PARAM 9.45 → **0.01 px**), (2) Phase 2b Setup port (`getRotationSetup` + canvas-final matrix) closed the body-warp residual (Breath_full PARAM 5.42 → **0.14 px** -97%, BodyAngleX 5.18 → **1.32 px** -74%, BodyAngleY/Z 3.50 → **0.18-0.21 px** -91 to -95%). Default chainEval kernel flipped to `cubism-setup`. GAP-008 opt-out wired to authored path |
 | Recently fixed (2026-05-02) | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
 
@@ -65,6 +65,74 @@ Common test inputs + references used across pipeline bugs (BUG-002, BUG-003, any
 ---
 
 ## Open
+
+### BUG-024 — Wizard step 2 "Reorder Layers": clicks on canvas don't select pieces
+
+- **Severity:** medium (workaround exists — drag-reorder in the Outliner pane) · **Reported:** 2026-05-04 (user) · **Status:** open
+
+**Repro:** PSD import wizard → step 2 (Reorder Layers banner). Click any layer/piece in the canvas. Selection doesn't change.
+
+**Root cause (already traced):** Pre-mesh part nodes (created by `finalizePsdImport` after PSD parse) have no `mesh` field yet, and the click-to-select fallback in [src/io/hitTest.js:152-156](src/io/hitTest.js#L152-L156) requires `node.imageWidth` + `node.imageHeight` to enter the parts list at all:
+
+```js
+const hasQuad = typeof n.imageWidth === 'number'
+  && typeof n.imageHeight === 'number'
+  && n.imageWidth > 0
+  && n.imageHeight > 0;
+return hasTris || hasQuad;
+```
+
+Search across `src/` confirms: no PSD import code path (`PsdImportService.js`, `captureStore.finalizePsdImport`) sets `imageWidth` / `imageHeight` on parts. The fallback was designed for this exact case but never wired to its data source. Pre-mesh parts get filtered out → click-to-select silently does nothing during reorder.
+
+**Fix outline (no crutches):** in `finalizePsdImport` (registered in `captureStore` from `CanvasViewport.jsx`), set `node.imageWidth = layer.width` + `node.imageHeight = layer.height` from the parsed PSD layer data when each part node is created. The `transform.x/y` already positions the layer in canvas-px so the existing inverse-worldMatrix path in hitTest.js maps the click correctly.
+
+---
+
+### BUG-022 — Init Rig with `hairRig: false` produces tilted/perma-deformed hair
+
+- **Severity:** high (subsystem opt-out is a core "auto-rig is good enough" feature) · **Reported:** 2026-05-04 (user) · **Status:** open
+
+**Repro:** Open a rigged project, set `autoRigConfig.subsystems.hairRig = false`, run Init Rig. Observe: hair pieces (front-hair, back-hair) render as if a hair-sway parameter is permanently applied — tilted / pre-deformed at rest, instead of staying in their canvas-px PSD position.
+
+**Suspect surface — post-BFA-006 wiring divergence.** Pre-Phase-3, the live evaluator received `applySubsystemOptOutToRigSpec(rigSpec, {subsystems, nodes})`'s output from `useRigSpecStore.buildRigSpec()`. That pass neutralises disabled-subsystem rigWarps in-place (single rest keyform, empty bindings → identity FFD on every frame). After Phase 3's wiring, `useRigSpecStore.rigSpec` can come from `selectRigSpec(project)` (the fast-path / auto-fill subscribe) which walks `project.nodes` deformer entries directly. The opt-out neutralisation step is **not** in that pipeline. Whether disabled-subsystem rigWarp nodes survive in `project.nodes` after `seedAllRig` (they shouldn't — `harvestSeedFromRigSpec` filters them before seeding) needs verification; if any DO survive, chainEval evaluates them with no neutralisation and the hair tilts.
+
+**Where to look first:**
+- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) `applySubsystemOptOutToRigSpec` — the neutralisation pass, currently applied to the heuristic generator's output before storing in `useRigSpecStore.rigSpec`. Check what selectRigSpec produces in the disabled-subsystem case.
+- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) `harvestSeedFromRigSpec` — does it skip the rigWarp from the harvest map (so seedRigWarps doesn't write the node)? Confirm the dropped warps don't slip in via a different channel (e.g. cmo3-authored path's `_cmo3Scene.deformers` synth).
+- [src/store/rigSpecStore.js](src/store/rigSpecStore.js) — both the buildRigSpec fast path AND the auto-fill subscribe should run the neutralisation step before publishing the rigSpec. Probably the cleanest fix is to apply opt-out inside `selectRigSpec` itself (read `project.autoRigConfig.subsystems` + filter), so any consumer of selectRigSpec gets the right rigSpec.
+
+**Fix outline (no crutches):** make subsystem opt-out an intrinsic part of `selectRigSpec` so every consumer sees the neutralised rig regardless of which path published it. Drop the duplicated `applySubsystemOptOutToRigSpec` call in initRig.js once the selector handles it.
+
+---
+
+### BUG-023 — Save→IDB→Load: live preview broken (arm sway dead, neck/hair don't track cursor)
+
+- **Severity:** high (post-BFA-006 round-trip regression — core editor flow) · **Reported:** 2026-05-04 (user) · **Status:** open
+
+**Repro:** Save a rigged project to IndexedDB ("Save to Library"). Reload it. Switch to Live Preview. Observe:
+- Arm sway physics doesn't fire on torso movement.
+- Neck doesn't follow the cursor (LMB cursor → ParamAngleX/Y).
+- Front/back hair don't follow the cursor either.
+
+Re-running Init Rig after the load most likely fixes it (not yet confirmed by user — verify before fix).
+
+**Suspect surface — multiple BFA-006 wiring touchpoints converge on save/load:**
+
+1. **`useRigSpecStore.rigSpec` auto-fill gate.** `94dc0be` changed `_isComplete` to `project.lastInitRigCompletedAt` + `artMeshes.length > 0`. After save/load, `lastInitRigCompletedAt` IS persisted (verified in projectFile.js + projectStore.loadProject hydrators). But a project that was Init-Rig'd pre-Phase-6 (sidetables only, no rotation deformer nodes) may now have artMeshes in selectRigSpec's output but produce a partial rigSpec missing rotation deformers — chainEval renders it but rotation-driven params (ParamAngleX/Y for face/neck) have no deformer to drive.
+2. **physicsRules in selectRigSpec output.** `selectRigSpec` calls `resolvePhysicsRules(project)`. If `project.physicsRules` is empty / not-resolved-into-physics3 form, the runtime physics tick has no rules → no arm sway.
+3. **Cursor → param-value pipeline.** Possibly unrelated to BFA-006; verify `useParamValuesStore` mounts cursor handlers on load. (Memory `feedback_in_app_logging` — Logs panel may show whether the cursor handler is publishing param values at all.)
+4. **`paramValuesStore.seedMissingDefaults` not running on auto-fill path.** `_seedDefaultsForRig` IS called from both buildRigSpec paths AND the auto-fill subscribe in `94dc0be`. But it doesn't seed cursor-driven values (those start at 0 / default and update on pointer-move). Should not be the cause.
+
+**Where to look first:**
+- Open Logs panel after save/load reproduction. Note any `paramOrphans`, missing physicsRules, or missing rigSpec warnings.
+- Compare `selectRigSpec(project)` output before (Init Rig run, working) vs after (save→load, broken). If rotation deformers are missing in the post-load case → migration v15 didn't synthesise them (correct — they're never sidetables) AND the project has no rotation deformer nodes from a Phase-3+ Init Rig.
+- Identify whether the user's broken project was first Init-Rig'd PRE-Phase-3 (= rotations never got dual-written to nodes; only legacy sidetables had warps; v15 migration synthesised warp nodes on load but rotations are absent from project.nodes).
+
+**Hypothesised root cause:** Phase 3's auto-fill gate now permits a "rigSpec without rotations" through (because `_isComplete` doesn't check rotation count by design — see audit fix at `94dc0be`). For projects that haven't been re-Init-Rigged under Phase 3+, the runtime gets a partial rigSpec → angle-driven body deformation works, but face/neck/head rotation deformers are missing → cursor params have no driver.
+
+**Fix outline (no crutches):** treat `lastInitRigCompletedAt` as not-sufficient when project.nodes lacks any rotation deformer nodes — auto-fill should additionally trigger an async `buildRigSpec` to populate rotations + physics on first load post-Phase-3, then the marker matches reality. Or: migration v15 detects pre-Phase-3 saves and clears `lastInitRigCompletedAt` so the user is prompted (or auto-flow) re-Init-Rigs.
+
+---
 
 ### ✅ BUG-019 — Wireframe overlay toggle never makes anything visible
 
