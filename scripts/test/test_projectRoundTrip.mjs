@@ -138,6 +138,16 @@ function makeFixtureProject() {
       'face-mesh-id':       { vertexCount: 60, triCount: 80, uvHash: 987654321 },
     },
     lastInitRigCompletedAt: '2026-05-01T18:00:00.000Z',
+    // V3 Re-Rig Phase 1 — per-stage refit telemetry (ISO timestamps).
+    // RigStagesTab reads these to render "stale" / "fresh" pills.
+    rigStageLastRunAt: {
+      psdImport:    '2026-05-01T18:00:00.000Z',
+      meshGen:      '2026-05-01T18:00:01.000Z',
+      paramSpec:    '2026-05-01T18:00:02.000Z',
+      faceParallax: '2026-05-01T18:00:03.000Z',
+      bodyWarp:     '2026-05-01T18:00:04.000Z',
+      rigWarps:     '2026-05-01T18:00:05.000Z',
+    },
   };
 }
 
@@ -189,6 +199,15 @@ async function saveAndReload(project) {
   assert(reloaded.lastInitRigCompletedAt === original.lastInitRigCompletedAt,
     'lastInitRigCompletedAt survives round-trip (I-8)');
 
+  // ── rigStageLastRunAt (V3 Re-Rig Phase 1 — per-stage refit telemetry) ──
+  // RigStagesTab depends on these timestamps to render freshness pills;
+  // losing them on save→load was the original symptom that motivated the
+  // GAP-011 audit. Verify the map round-trips intact.
+  assert(reloaded.rigStageLastRunAt && Object.keys(reloaded.rigStageLastRunAt).length > 0,
+    'rigStageLastRunAt is non-empty after reload');
+  assert(deepEqual(reloaded.rigStageLastRunAt, original.rigStageLastRunAt),
+    'rigStageLastRunAt deep-equals original (V3 Re-Rig)');
+
   // ── Empty/null handling — make sure loaded.field is sensible when original is null ──
   const empty = makeFixtureProject();
   empty.autoRigConfig = null;
@@ -197,6 +216,7 @@ async function saveAndReload(project) {
   empty.rigWarps = {};
   empty.meshSignatures = {};
   empty.lastInitRigCompletedAt = null;
+  empty.rigStageLastRunAt = {};
   const { project: emptyReloaded } = await saveAndReload(empty);
   assert(emptyReloaded.autoRigConfig === null, 'autoRigConfig stays null when not seeded');
   assert(emptyReloaded.faceParallax === null, 'faceParallax stays null when not seeded');
@@ -204,6 +224,7 @@ async function saveAndReload(project) {
   assert(deepEqual(emptyReloaded.rigWarps, {}), 'rigWarps stays {} when not seeded');
   assert(deepEqual(emptyReloaded.meshSignatures, {}), 'meshSignatures stays {} when not seeded');
   assert(emptyReloaded.lastInitRigCompletedAt === null, 'lastInitRigCompletedAt stays null when not seeded');
+  assert(deepEqual(emptyReloaded.rigStageLastRunAt, {}), 'rigStageLastRunAt stays {} when not seeded');
 
   // ── Strict mode (Hole I-9) ─────────────────────────────────────────
   // strict:true throws on first asset error instead of console.error +
@@ -232,6 +253,46 @@ async function saveAndReload(project) {
       defaultThrew = true;
     }
     assert(!defaultThrew, 'saveProject() default mode swallows asset errors (back-compat)');
+  }
+
+  // ── projectStore.loadProject hydration — the path LoadModal takes ──
+  //
+  // saveAndReload above only exercises the file-level round-trip.
+  // LoadModal then calls `useProjectStore.getState().loadProject(project)`
+  // which copies each field into the immer-managed state. Verify the
+  // post-Init-Rig fields land in the running store too — historically
+  // the missing assignments here is what made GAP-011 a silent loss.
+  {
+    const { useProjectStore } = await import('../../src/store/projectStore.js');
+    const original = makeFixtureProject();
+    const { project: reloaded } = await saveAndReload(original);
+    useProjectStore.getState().loadProject(reloaded);
+    const storeState = useProjectStore.getState();
+    const stored = storeState.project;
+
+    assert(deepEqual(stored.autoRigConfig, original.autoRigConfig),
+      'projectStore.loadProject hydrates autoRigConfig');
+    assert(deepEqual(stored.faceParallax, original.faceParallax),
+      'projectStore.loadProject hydrates faceParallax');
+    assert(deepEqual(stored.bodyWarp, original.bodyWarp),
+      'projectStore.loadProject hydrates bodyWarp');
+    assert(deepEqual(stored.rigWarps, original.rigWarps),
+      'projectStore.loadProject hydrates rigWarps');
+    assert(deepEqual(stored.meshSignatures, original.meshSignatures),
+      'projectStore.loadProject hydrates meshSignatures');
+    assert(stored.lastInitRigCompletedAt === original.lastInitRigCompletedAt,
+      'projectStore.loadProject hydrates lastInitRigCompletedAt');
+    assert(deepEqual(stored.rigStageLastRunAt, original.rigStageLastRunAt),
+      'projectStore.loadProject hydrates rigStageLastRunAt');
+    assert(stored.parameters.length === original.parameters.length,
+      'projectStore.loadProject hydrates parameters');
+    // versionControl bumps mark a stale rigSpec — the live evaluator
+    // re-builds on next click. Verify the bump fired so subscribers see it.
+    // versionControl + hasUnsavedChanges are on the store ROOT (not project).
+    assert(storeState.versionControl.geometryVersion >= 1,
+      'projectStore.loadProject bumps geometryVersion (rigSpec invalidates)');
+    assert(storeState.hasUnsavedChanges === false,
+      'projectStore.loadProject clears hasUnsavedChanges (load is a clean slate)');
   }
 
   console.log(`projectRoundTrip: ${passed} passed, ${failed} failed`);
