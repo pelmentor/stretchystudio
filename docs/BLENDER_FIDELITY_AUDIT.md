@@ -85,7 +85,18 @@ The rule of thumb: **one axis, one stored slot, derive the rest**. If a state ca
 
 **Plan.** Promote deformers to `project.nodes` entries with `type:'deformer'`. `rigSpec` becomes a derived selector — a runtime index over `project.nodes`, not a separately-built blob. Three persistent sidetables collapse into the node list itself. 7-phase migration; full plan in [BFA_006_DEFORMER_NODES_PLAN.md](BFA_006_DEFORMER_NODES_PLAN.md).
 
-**Status.** Plan written 2026-05-04. Open — multi-day refactor, scoped to start after the next /compact.
+**Status.** Phases 1–5 shipped 2026-05-04 (commits `7cdf08d` / `6a0313b` / `c9a1f12` / `e61c832` / `4023227`). Phase 6 (sidetable deletion) explicitly gated on ≥1 week daily-driver soak per the plan's locked-in decision; rolls forward only after rig-eval / export regressions are observed-clear.
+
+**What landed (Phases 1–5).**
+
+1. **Migration v15 + dual-write seeders (Phase 1).** Warp deformers from `project.faceParallax` / `project.bodyWarp.specs[]` / `project.rigWarps[*]` lift into first-class `type:'deformer', deformerKind:'warp'` entries on `project.nodes` at load time. `seedFaceParallax` / `seedBodyWarpChain` / `seedRigWarps` (and their `clearXxx`) mirror their writes onto `project.nodes` so Init Rig keeps the shadow consistent. Sidetables stay populated as the runtime source of truth.
+2. **`selectRigSpec(project)` derived selector (Phases 2–3).** Pure synchronous derivation of the full RigSpec (warpDeformers + rotationDeformers + artMeshes + canvasToInnermostX/Y closures) from `project.nodes`. Memoized on project identity. Phase 3 added the lifted-grid rest pass (ported verbatim from `buildRigSpecFromCmo3.js`) for artMesh parent-frame conversion + chained body-warp closure derivation.
+3. **`seedAllRig` rotation dual-write (Phase 3).** Init Rig now upserts `harvest.rigSpec.rotationDeformers` as `type:'deformer', deformerKind:'rotation'` nodes alongside the warp dual-writes. Replace mode wipes prior rotations; merge mode preserves `_userAuthored` entries.
+4. **`useRigSpecStore` fast-path (Phase 3).** `buildRigSpec()` short-circuits via `selectRigSpec` when complete; a top-level `useProjectStore.subscribe` auto-fills `rigSpec` on project mutation when the deformer graph is complete. **Closes the "click Init Rig to rebuild after load" UX gap.**
+5. **Outliner naturalisation (Phase 4).** `buildHierarchyTree` accepts deformer nodes (alongside parts + groups); deformer rows surface `isDeformer` + `deformerKind` flags so TreeNode picks the right icon. `buildViewLayerTree` collapses to `buildHierarchyTree(nodes)` — no synthetic Rig pseudo-root, no rigSpec composition.
+6. **DeformerTab read+write (Phase 5).** Reads from `project.nodes` directly. Adds a parent dropdown (reparent under any non-descendant node via `updateProject`) and a `_userAuthored` toggle (immunises a hand-edited deformer from per-stage refit clobbers).
+
+**Still open until Phase 6.** Three sidetables (`project.faceParallax`, `project.bodyWarp`, `project.rigWarps`) remain the runtime source of truth that `cmo3writer` and `chainEval` read; they're the dual-write target of the seeders. Phase 6 deletes them after the soak window, migrating ~23 sidetable readers to read from `project.nodes` directly.
 
 ---
 

@@ -1,6 +1,6 @@
 # BFA-006 — Collapse `rigSpec` into `project.nodes` (deformer-as-node)
 
-**Status:** plan, not yet started.
+**Status (2026-05-04 close-out):** Phases 1–5 shipped (commits `7cdf08d`, `6a0313b`, `c9a1f12`, `e61c832`, `4023227`). Phase 6 (sidetable deletion) explicitly gated on the ≥1 week daily-driver soak per Decision 4. Phase 7 (post-soak cleanup) waits with Phase 6.
 **Estimated cost:** 5–8 days of focused work, shippable in phases (each behaviour-preserving).
 **Prereq:** none — current state is the unified Outliner View Layer (commit `7d2a426`), which fakes the unification at the view layer. This plan promotes it to the data model.
 
@@ -258,12 +258,21 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 
 **Goal:** `project.faceParallax` / `project.bodyWarp` / `project.rigWarps` removed from the schema.
 
-- All readers (~18 files) are migrated to read from `project.nodes` directly.
+- All readers (~18 files; the actual count is 23 per the post-Phase-5 grep) are migrated to read from `project.nodes` directly.
 - `seedFaceParallax` / `seedBodyWarp` / `seedRigWarps` actions on `projectStore` deprecate (the `seedAllRig` write-path is the new home).
 - Migration v16: drop the old fields from any project that still carries them.
 - `saveProject` / `loadProject`: stop emitting/reading the three fields.
 
 **Deliverable:** `git grep "project.faceParallax\|project.bodyWarp\|project.rigWarps"` returns zero hits in `src/`. All tests green.
+
+**Status (2026-05-04 close-out).** **Gated open** per Decision 4 — Phases 1–5 shipped today; the soak window starts now. Resumes after at least one week of daily-driver use with no observed rig-eval / export regressions. Concrete checklist for the resume session:
+
+1. Run `git grep "project.faceParallax\\|project.bodyWarp\\|project.rigWarps"` in `src/` — expect ~23 reader sites.
+2. Migrate the readers in this priority order (lowest blast radius first): `services/RigService.js`, `store/rigSpecStore.js`, `store/projectStore.js`, then the cmo3 import path, then `cmo3writer.js` + `cmo3/*` emitters, then `KeyformGraphEditor.jsx`. Each reader reads from either `selectRigSpec(project)` (when it wants the full RigSpec shape) or `project.nodes.filter(n => n.type === 'deformer')` (when it needs node identity / `_userAuthored`).
+3. After all readers are migrated, stop the seeders' dual-write to legacy fields. Delete the legacy field defaults in `projectStore.js`'s initial state.
+4. Migration v16: synchronously delete `project.faceParallax`, `project.bodyWarp`, `project.rigWarps` from any project carrying them.
+5. Run the full regression gate after each cluster of 3-4 readers: `npm test` (incl. `test:cubismPhysicsOracle`, `test:breathFidelity`, `test:e2e`, `test:projectRoundTrip`).
+6. **Manual byte-diff** of a representative cmo3 export (shelby) before and after Phase 6 — must match identically. The oracle harness covers physics; the byte-diff covers the rest of the export shape.
 
 ### Phase 7 — Cleanup + docs (~0.5 day)
 
@@ -271,6 +280,14 @@ Each phase is **independently shippable**. After each phase, all tests pass + th
 - Update `BLENDER_FIDELITY_AUDIT.md` past-wins entry for BFA-006.
 - Update `PROJECT_DATA_LAYER.md` — close I-1 / I-2 / I-3 / etc. holes that become moot once deformers are nodes.
 - Update `V3_RERIG_FLOW_PLAN.md` if any notes need amending.
+
+**Status (2026-05-04 close-out).** Partially shipped; remainder gated with Phase 6.
+
+- ✅ **`BLENDER_FIDELITY_AUDIT.md` past-wins update** — done in this commit. BFA-006 entry's status flipped from "Plan written, open" to "Phases 1–5 shipped"; bullet list summarises what landed.
+- ✅ **`BFA_006_DEFORMER_NODES_PLAN.md` status update** — done iteratively across the five phase commits; this final pass writes the close-out header.
+- ⏸ **Delete legacy `buildRigSpec` async builder.** Phase 2 deferred the wiring; Phase 3 actually shipped a fast-path short-circuit alongside the async fallback. The async path stays useful as long as any project can have an incomplete deformer graph (= projects that haven't been Init-Rig'd post-Phase-3). Genuine deletion happens after Phase 6 when sidetables are gone and `selectRigSpec` is the single source of truth — at that point any project with a populated `project.nodes` deformer graph drives the rig directly, and the async builder reduces to "first-time Init Rig that synthesises the deformer nodes from scratch", which can be folded into a smaller surface than the current `buildRigSpec` async path.
+- ⏸ **`PROJECT_DATA_LAYER.md` hole closures.** Holes I-1 / I-2 / I-3 / I-8 close fully when sidetables are gone (Phase 6). Phases 1–5 partially closed them — `_userAuthored` per-node makes per-stage refit per-deformer (was singleton); the deformer graph is undo-trackable + drag-orderable. Full close on Phase 6.
+- ⏸ **`V3_RERIG_FLOW_PLAN.md`** — no amendments needed yet; per-stage refit semantics still work end-to-end through `seedAllRig` merge mode + the existing `_userAuthored` markers. Re-review at Phase 6 close.
 
 ---
 
