@@ -11,6 +11,7 @@ import {
   walkOutlinerTree,
   findOutlinerNode,
   ancestorChain,
+  RIG_PSEUDO_ROOT_ID,
 } from '../../src/v3/editors/outliner/treeBuilder.js';
 
 let passed = 0;
@@ -364,6 +365,91 @@ assertThrows(
   assert(JSON.stringify(a) === JSON.stringify(b), 'idempotent: same shape');
   assert(a !== b, 'idempotent: different references');
   assert(a[0] !== b[0], 'idempotent: deep different references');
+}
+
+// ── Hierarchy mode flags bones with isBone ─────────────────────────
+
+{
+  // Bones (boneRole-tagged groups) get the isBone discriminator in
+  // hierarchy mode too — not just skeleton mode. The unified
+  // viewLayer tree relies on this so the bone icon shows inline.
+  const nodes = [
+    { id: 'g-body', type: 'group', name: 'body', parent: null }, // non-bone
+    { id: 'b-head', type: 'group', name: 'head', parent: 'g-body', boneRole: 'head' },
+  ];
+  const tree = buildOutlinerTree(nodes, { mode: 'hierarchy' });
+  const body = tree[0];
+  assert(body.isBone !== true, 'hierarchy: non-bone group has no isBone flag');
+  const head = body.children[0];
+  assert(head.isBone === true, 'hierarchy: bone group flagged isBone');
+}
+
+// ── View Layer mode — unified hierarchy + Rig pseudo-root ──────────
+
+{
+  // Rich fixture: project hierarchy with a bone, plus a rigSpec with
+  // one warp + one rotation deformer.
+  const nodes = [
+    { id: 'g-root', type: 'group', name: 'root',  parent: null },
+    { id: 'p-face', type: 'part',  name: 'face',  parent: 'g-root', draw_order: 10 },
+    { id: 'b-head', type: 'group', name: 'head',  parent: 'g-root', boneRole: 'head' },
+  ];
+  const rigSpec = {
+    warpDeformers: [
+      { id: 'BodyWarp',  name: 'BodyWarp',  parent: { type: 'root' } },
+      { id: 'FaceWarp',  name: 'FaceWarp',  parent: { type: 'warp', id: 'BodyWarp' } },
+    ],
+    rotationDeformers: [
+      { id: 'GroupRotation_head', name: 'GroupRotation_head', parent: { type: 'root' } },
+    ],
+    artMeshes: [
+      { id: 'p-face', parent: { type: 'warp', id: 'FaceWarp' } },
+    ],
+  };
+
+  const tree = buildOutlinerTree({ nodes, rigSpec }, { mode: 'viewLayer' });
+  // Should be project hierarchy roots + 1 Rig pseudo-root at end.
+  assert(tree.length === 2, 'viewLayer: hierarchy + 1 rig pseudo-root');
+  const last = tree[tree.length - 1];
+  assert(last.id === RIG_PSEUDO_ROOT_ID, 'viewLayer: last entry is the rig pseudo-root');
+  assert(last.name === 'Rig', 'viewLayer: pseudo-root is labelled "Rig"');
+  assert(last.children.length === 2, 'viewLayer: pseudo-root contains 2 deformer roots (warp + rotation)');
+
+  // Art-mesh leaves should be EXCLUDED from the rig pseudo-root in
+  // viewLayer mode — they already appear in the hierarchy section as
+  // parts. Only deformers (warps + rotations) inside the Rig branch.
+  let foundArtmesh = false;
+  walkOutlinerTree(last.children, (n) => {
+    if (n.type === 'artmesh') foundArtmesh = true;
+  });
+  assert(!foundArtmesh, 'viewLayer: no art-mesh leaves under the rig pseudo-root');
+
+  // Hierarchy section should have the bone with isBone flag set.
+  let foundBone = null;
+  walkOutlinerTree([tree[0]], (n) => {
+    if (!foundBone && n.id === 'b-head') foundBone = n;
+  });
+  assert(foundBone && foundBone.isBone === true,
+    'viewLayer: bone in hierarchy section flagged isBone');
+}
+
+// ── View Layer mode without a rigSpec → just hierarchy ─────────────
+
+{
+  const nodes = fixtureNodes();
+  const tree = buildOutlinerTree({ nodes, rigSpec: null }, { mode: 'viewLayer' });
+  // No rig → no pseudo-root, just the hierarchy roots.
+  assert(tree.every((n) => n.id !== RIG_PSEUDO_ROOT_ID),
+    'viewLayer: empty rigSpec → no pseudo-root');
+  assert(tree.length === 3, 'viewLayer: empty rigSpec → 3 hierarchy roots from fixture');
+}
+
+// ── View Layer mode tolerates plain array input ────────────────────
+
+{
+  // Not the canonical shape, but useful for tests / quick diagnostics.
+  const tree = buildOutlinerTree(fixtureNodes(), { mode: 'viewLayer' });
+  assert(tree.length === 3, 'viewLayer: bare array input falls back to hierarchy build');
 }
 
 // ── Skeleton mode — boneRole-tagged groups, bone-to-bone parent chain ─

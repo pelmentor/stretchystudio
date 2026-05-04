@@ -8,18 +8,25 @@
  * the PSD authoring convention so the user reads a familiar list:
  * top of the outliner = top of the canvas (highest draw_order).
  *
- * Plan §4.1 specifies four display modes:
+ * Plan §4.1 specifies five display modes:
  *
- *   - `'hierarchy'` — scene tree (parts + groups). Default.
- *   - `'rig'`       — rigSpec deformer tree (warps + rotations) with
- *                     art meshes shown under their parent deformer.
- *   - `'skeleton'`  — armature view: only `boneRole`-tagged groups,
- *                     bone-to-bone parent chain. Mirrors Blender's
- *                     Armature outliner; click → selects the bone, with
- *                     SkeletonOverlay's canvas joint dot highlighting
- *                     the selection in lockstep.
+ *   - `'viewLayer'` — Blender's "View Layer" — single canonical tree
+ *                     unifying the scene hierarchy AND the rig graph.
+ *                     Project nodes (parts + groups) appear as today;
+ *                     a synthetic "Rig" pseudo-root pinned to the
+ *                     bottom holds the deformer tree. Bones get an
+ *                     isBone flag so TreeNode picks the bone icon.
+ *                     Default — Blender's "one tree, expand to drill".
+ *   - `'hierarchy'` — legacy: just project.nodes (parts + groups).
+ *                     Equivalent to `viewLayer` minus the Rig branch.
+ *   - `'rig'`       — rigSpec deformer tree only (warps + rotations)
+ *                     with art meshes shown under their parent deformer.
+ *   - `'skeleton'`  — armature-only filter: only `boneRole`-tagged
+ *                     groups, bone-to-bone parent chain. Click selects
+ *                     the bone; SkeletonOverlay highlights it on the
+ *                     canvas in lockstep.
  *   - `'param'`     — parameters grouped by role. (Not implemented;
- *                     largely covered by ParametersEditor for now.)
+ *                     covered by ParametersEditor for now.)
  *   - `'anim'`      — animations + tracks. (Not implemented; lands
  *                     with Phase 3 Timeline editor.)
  *
@@ -86,7 +93,7 @@
  */
 
 /**
- * @typedef {('hierarchy'|'rig'|'skeleton'|'param'|'anim')} OutlinerDisplayMode
+ * @typedef {('viewLayer'|'hierarchy'|'rig'|'skeleton'|'param'|'anim')} OutlinerDisplayMode
  */
 
 const DEFAULT_DRAW_ORDER = 0;
@@ -94,15 +101,24 @@ const DEFAULT_DRAW_ORDER = 0;
 /**
  * Build the outliner tree.
  *
- * @param {ProjectNodeLike[]|RigSpecLike|null|undefined} input
- *   For 'hierarchy' mode: project.nodes array.
- *   For 'rig' mode: a rigSpec object.
+ * @param {ProjectNodeLike[]|RigSpecLike|{nodes?: ProjectNodeLike[], rigSpec?: RigSpecLike|null}|null|undefined} input
+ *   For `'hierarchy'` / `'skeleton'` mode: project.nodes array.
+ *   For `'rig'` mode: a rigSpec object.
+ *   For `'viewLayer'` mode: an object `{nodes, rigSpec}` so the
+ *   builder can compose both into one tree.
  * @param {{ mode?: OutlinerDisplayMode }} [opts]
  * @returns {OutlinerNode[]}
  */
 export function buildOutlinerTree(input, opts = {}) {
-  const mode = opts.mode ?? 'hierarchy';
+  const mode = opts.mode ?? 'viewLayer';
   switch (mode) {
+    case 'viewLayer': {
+      const composite = /** @type {{nodes?: ProjectNodeLike[], rigSpec?: RigSpecLike|null}} */ (input);
+      const nodes = Array.isArray(composite?.nodes) ? composite.nodes
+        : (Array.isArray(input) ? /** @type {ProjectNodeLike[]} */ (input) : []);
+      const rigSpec = composite?.rigSpec ?? null;
+      return buildViewLayerTree(nodes, rigSpec);
+    }
     case 'hierarchy':
       return buildHierarchyTree(/** @type {ProjectNodeLike[]} */ (input));
     case 'rig':
@@ -115,6 +131,57 @@ export function buildOutlinerTree(input, opts = {}) {
     default:
       throw new Error(`buildOutlinerTree: unknown mode '${mode}'`);
   }
+}
+
+/**
+ * Special id for the synthetic "Rig" pseudo-root in viewLayer mode.
+ * Not a real project / rigSpec id — exported so `OutlinerEditor`'s
+ * onSelect can recognise it and treat as a non-selectable spacer.
+ */
+export const RIG_PSEUDO_ROOT_ID = '__viewLayer__rig__';
+
+/**
+ * Compose project hierarchy + a synthetic "Rig" branch into one tree.
+ *
+ * Layout:
+ *   ├── (project hierarchy roots, sorted by draw_order desc)
+ *   │   ├── …
+ *   │   └── …
+ *   └── Rig (pseudo-root, only present when rigSpec has deformers)
+ *       ├── BodyWarp / FaceParallax / etc.
+ *       └── …
+ *
+ * The Rig pseudo-root deliberately omits art-mesh leaves — those
+ * already appear in the hierarchy section as parts. Showing them in
+ * BOTH places would double-list every deforming mesh.
+ *
+ * @param {ProjectNodeLike[]|null|undefined} nodes
+ * @param {RigSpecLike|null|undefined} rigSpec
+ * @returns {OutlinerNode[]}
+ */
+function buildViewLayerTree(nodes, rigSpec) {
+  const hierarchy = buildHierarchyTree(nodes);
+
+  const warps = Array.isArray(rigSpec?.warpDeformers) ? rigSpec.warpDeformers : [];
+  const rotations = Array.isArray(rigSpec?.rotationDeformers) ? rigSpec.rotationDeformers : [];
+  if (warps.length === 0 && rotations.length === 0) return hierarchy;
+
+  // Reuse the rig-mode tree but strip art-mesh leaves so they don't
+  // duplicate parts that already live in the hierarchy section.
+  const rigRootsWithMeshes = buildRigTree({ ...rigSpec, artMeshes: [] });
+
+  /** @type {OutlinerNode} */
+  const rigPseudoRoot = {
+    id: RIG_PSEUDO_ROOT_ID,
+    type: 'group',
+    name: 'Rig',
+    parent: null,
+    children: rigRootsWithMeshes,
+    visible: true,
+    sortKey: -Infinity, // pin to the bottom
+  };
+
+  return [...hierarchy, rigPseudoRoot];
 }
 
 /**
@@ -173,6 +240,11 @@ function buildHierarchyTree(nodes) {
    * @returns {OutlinerNode}
    */
   function build(n) {
+    // `boneRole`-tagged groups get the `isBone` flag here too (not just
+    // in skeleton mode), so the unified "View Layer" tree shows the
+    // bone icon inline. The flag is type-orthogonal — selectionStore
+    // still treats them as `type:'group'`.
+    const isBone = n.type === 'group' && !!n.boneRole;
     if (onPath.has(n.id)) {
       return {
         id: n.id, type: n.type, name: n.name,
@@ -180,6 +252,7 @@ function buildHierarchyTree(nodes) {
         children: [],
         visible: n.visible !== false,
         sortKey: DEFAULT_DRAW_ORDER,
+        ...(isBone ? { isBone: true } : null),
       };
     }
     onPath.add(n.id);
@@ -196,6 +269,7 @@ function buildHierarchyTree(nodes) {
       children: kids,
       visible: n.visible !== false,
       sortKey: effectiveDrawOrder(n),
+      ...(isBone ? { isBone: true } : null),
     };
   }
 

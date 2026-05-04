@@ -3,22 +3,30 @@
 /**
  * v3 Phase 1A — Outliner editor.
  *
- * Hierarchy / rig display modes wired to selectionStore + a search
- * filter that hides any row whose name doesn't match (parents are
- * kept when a descendant matches so the user keeps context).
+ * Single canonical tree (Blender's "View Layer" pattern) with a header
+ * dropdown that switches the *scope* of the visible rows — not the
+ * shape of the tree. Three scopes:
  *
- * Why a separate editor (vs. reusing v2 LayerPanel): v2 panel
- * couples drag-reordering with depth editing and lives inside the
- * floating Inspector. v3 outliner is a workspace-area editor that
- * shares one selection model with Properties / Viewport / Parameters
- * (Plan §5). Same data, different interaction surface.
+ *   - **View Layer** (default): full unified tree. Project hierarchy
+ *     (parts + groups + bones inline) plus a synthetic "Rig" pseudo-
+ *     root pinned to the bottom holding the deformer graph. Bones get
+ *     the bone icon via `isBone` so a glance at the tree tells you
+ *     what's an armature without flipping modes.
+ *   - **Armature Data**: bones-only filter — only `boneRole`-tagged
+ *     groups, bone-to-bone parent chain (non-bone groups skipped on
+ *     the way up). Click → highlights the bone in SkeletonOverlay.
+ *   - **Rig Data**: deformer-only filter (rigSpec graph; warps +
+ *     rotations + their art-mesh leaves).
  *
- * Display modes:
- *   - hierarchy → project.nodes (parts + groups)
- *   - rig       → rigSpec deformers + art meshes (after Initialize Rig)
+ * Why a single tree + dropdown (vs. the old 3 tabs): Blender's
+ * Outliner has ONE tree and a header dropdown that filters scope.
+ * Three tabs broke that muscle memory and duplicated bones across
+ * Hierarchy + Skeleton modes. Plan: docs/BLENDER_FIDELITY_AUDIT.md.
  *
- * Param + anim modes are intentionally absent: ParametersEditor
- * already covers param scrubbing, and Timeline (anim) is Phase 3.
+ * Why separate editor (vs. reusing v2 LayerPanel): v2 panel couples
+ * drag-reordering with depth editing and lives inside the floating
+ * Inspector. v3 outliner is a workspace-area editor that shares one
+ * selection model with Properties / Viewport / Parameters (Plan §5).
  *
  * @module v3/editors/outliner/OutlinerEditor
  */
@@ -29,14 +37,28 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
-import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
+import { buildOutlinerTree, walkOutlinerTree, RIG_PSEUDO_ROOT_ID } from './treeBuilder.js';
 import { filterOutlinerTree } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
+import * as SelectImpl from '../../../components/ui/select.jsx';
 
+// shadcn/ui Select parts are forwardRefs without JSX-typed declarations —
+// tsc can't see their props (children, className). Cast through one alias
+// so the dropdown JSX below stays permissive at runtime they're the same.
+// (Same pattern AnimationsEditor + IdleMotionDialog use for AlertDialog.)
+/** @type {Record<string, React.ComponentType<any>>} */
+const Sel = /** @type {any} */ (SelectImpl);
+const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } = Sel;
+
+/**
+ * Header dropdown options. Matches Blender's "View Layer / Scenes /
+ * Blender File / Data API" dropdown — names follow Blender's vocabulary
+ * so the muscle memory transfers.
+ */
 const MODES = /** @type {const} */ ([
-  { id: 'hierarchy', label: 'Hierarchy' },
-  { id: 'rig',       label: 'Rig' },
-  { id: 'skeleton',  label: 'Skeleton' },
+  { id: 'viewLayer', label: 'View Layer' },
+  { id: 'skeleton',  label: 'Armature Data' },
+  { id: 'rig',       label: 'Rig Data' },
 ]);
 
 export function OutlinerEditor() {
@@ -54,14 +76,16 @@ export function OutlinerEditor() {
   const toggleWarpGridVisibility = useEditorStore((s) => s.toggleWarpGridVisibility);
 
   /** @type {[import('./treeBuilder.js').OutlinerDisplayMode, Function]} */
-  const [mode, setMode] = useState(/** @type {any} */ ('hierarchy'));
+  const [mode, setMode] = useState(/** @type {any} */ ('viewLayer'));
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
   const [query, setQuery] = useState('');
 
   const roots = useMemo(() => {
     if (mode === 'rig') return buildOutlinerTree(rigSpec, { mode: 'rig' });
     if (mode === 'skeleton') return buildOutlinerTree(nodes, { mode: 'skeleton' });
-    return buildOutlinerTree(nodes, { mode: 'hierarchy' });
+    // viewLayer (default): unified tree composed from both project
+    // nodes AND rigSpec.
+    return buildOutlinerTree({ nodes, rigSpec }, { mode: 'viewLayer' });
   }, [mode, nodes, rigSpec]);
 
   // Whether the project has any boneRole-tagged groups. Drives the
@@ -92,7 +116,9 @@ export function OutlinerEditor() {
         // here. (Bones are stored as `type:'group'` with `boneRole`.)
         if (it.type === 'group') s.add(it.id);
       } else {
-        if (it.type === 'part' || it.type === 'group') s.add(it.id);
+        // viewLayer: unified tree carries both project nodes and
+        // deformers, so any selection type can show up here.
+        if (it.type === 'part' || it.type === 'group' || it.type === 'deformer') s.add(it.id);
       }
     }
     return s;
@@ -103,7 +129,8 @@ export function OutlinerEditor() {
       const it = items[i];
       if (mode === 'rig' && (it.type === 'deformer' || it.type === 'part')) return it.id;
       if (mode === 'skeleton' && it.type === 'group') return it.id;
-      if (mode !== 'rig' && mode !== 'skeleton' && (it.type === 'part' || it.type === 'group')) return it.id;
+      if (mode === 'viewLayer'
+        && (it.type === 'part' || it.type === 'group' || it.type === 'deformer')) return it.id;
     }
     return null;
   }, [items, mode]);
@@ -122,6 +149,9 @@ export function OutlinerEditor() {
   const onSelect = useCallback(
     /** @param {string} id @param {'replace'|'add'|'toggle'} modifier */
     (id, modifier) => {
+      // The synthetic "Rig" pseudo-root in viewLayer mode is a non-
+      // selectable spacer — clicking it should expand/collapse only.
+      if (id === RIG_PSEUDO_ROOT_ID) return;
       // Resolve type from the tree node — different display modes map
       // to different selectionStore types. Art-mesh leaves in rig mode
       // dispatch as 'part' (they're parts of the project, just shown
@@ -274,37 +304,39 @@ export function OutlinerEditor() {
 function Header({ mode, onModeChange, query, onQueryChange, rigAvailable, skeletonAvailable }) {
   return (
     <div className="border-b border-border bg-muted/20 flex flex-col">
-      <div className="flex items-center gap-0.5 px-1 pt-1">
-        {MODES.map((m) => {
-          const on = m.id === mode;
-          const disabled =
-            (m.id === 'rig' && !rigAvailable)
-            || (m.id === 'skeleton' && !skeletonAvailable);
-          const disabledTip =
-            m.id === 'rig'
-              ? 'Rig mode requires a built rigSpec — run Initialize Rig first.'
-              : m.id === 'skeleton'
-                ? 'Skeleton mode needs an armature — import a PSD with bone-tagged groups or run Init Rig.'
-                : m.label;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => onModeChange(m.id)}
-              title={disabled ? disabledTip : m.label}
-              className={
-                'px-2 h-6 text-[11px] rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ' +
-                (on
-                  ? 'bg-background text-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50')
-              }
-              aria-pressed={on}
-            >
-              {m.label}
-            </button>
-          );
-        })}
+      <div className="flex items-center px-1.5 pt-1.5">
+        {/* Blender-style scope dropdown — one tree, three filters.
+            Replaces the old 3-tab layout that broke Outliner muscle
+            memory by switching tree shape per click. */}
+        <Select value={mode} onValueChange={onModeChange}>
+          <SelectTrigger
+            className="h-6 px-2 text-[11px] gap-1 bg-transparent border-0
+                       hover:bg-background/50 focus:ring-0 focus:ring-offset-0
+                       w-auto min-w-[110px]"
+            aria-label="Outliner display scope"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="min-w-[180px]">
+            {MODES.map((m) => {
+              const disabled =
+                (m.id === 'rig' && !rigAvailable)
+                || (m.id === 'skeleton' && !skeletonAvailable);
+              return (
+                <SelectItem
+                  key={m.id}
+                  value={m.id}
+                  disabled={disabled}
+                  className="text-[11px]"
+                >
+                  {m.label}
+                  {disabled && m.id === 'rig' ? ' (no rig built)' : null}
+                  {disabled && m.id === 'skeleton' ? ' (no armature)' : null}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
       </div>
       <div className="flex items-center px-2 py-1 gap-1.5">
         <Search size={11} className="text-muted-foreground shrink-0" />
