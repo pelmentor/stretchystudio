@@ -13,13 +13,18 @@ in Node, so it doesn't depend on save/load round-trip parity — but a future
 version that loads a `.stretch` project file directly would benefit from
 the data-layer holes being closed.
 
-## Status snapshot (2026-05-04 — post BFA-006 Phase 6)
+## Status snapshot (2026-05-06 — post V4 Track 2 + BVR-001..008)
 
-9 of 10 integrity holes have detection-side defences shipped (Phase A); I-2
-(binding param schema fingerprint) deferred — needs the parameter editor UI
-surface. Phase B follow-ups (UI delete-confirm, "preserve customisations"
-re-init, parameter editor surfaces) gate on the broader
-`project_v3_rerig_flow_gap` UI work.
+**All 10 integrity holes have detection-side defences shipped (Phase A).**
+I-2 (binding param schema drift) closed 2026-05-06 — `findBindingSchemaDrift`
+walks every deformer-node binding and compares against the resolved param's
+current `keys` + `[min, max]`; hooked into both `loadProject` and `seedAllRig`
+(post-seed in 'merge' mode), emits `logger.warn('paramSchemaDrift', …)`.
+
+Phase B follow-ups (UI delete-confirm, "preserve customisations" re-init,
+parameter editor surfaces) gate on the broader `project_v3_rerig_flow_gap`
+UI work — most prerequisites (param editor, armature edit mode, drag-reparent)
+shipped 2026-05-05/06; see `BLENDER_VIBE_REFACTOR_PLAN.md`.
 
 **BFA-006 Phase 6 promotion (2026-05-04):** the three legacy warp-deformer
 sidetables (`project.faceParallax` / `project.bodyWarp` / `project.rigWarps`)
@@ -31,7 +36,7 @@ Updated status reflects the post-Phase-6 model.
 | Hole | Status | What ships |
 |------|--------|------------|
 | ✅ I-1  | Phase A shipped | `meshSignature` module + per-mesh fingerprint at seed; **BFA-006**: `_userAuthored` per deformer node lets users pin hand-edited entries through PSD reimports (Phase B remediation surfaces in the deformer Properties tab) |
-| 🟡 I-2  | Open (deferred) | binding param schema fingerprint — needs param editor UI |
+| ✅ I-2  | Phase A shipped 2026-05-06 | `findBindingSchemaDrift` walks bindings, compares `keys` + range against resolved param. `loadProject` + `seedAllRig` post-seed hook emits `logger.warn('paramSchemaDrift')` |
 | ✅ I-3  | Phase A shipped | `paramReferences` orphan detection at seedAllRig; **BFA-006**: locations now report `deformer[<id>]:bindings[<idx>]` instead of sidetable-relative paths (more useful for debugging since deformer nodes are first-class and selectable) |
 | ✅ I-4  | Phase A shipped | `variantNormalizer` rename-detected-as-removal warn |
 | ✅ I-5  | Phase A shipped | `seedAllRig` walks `mesh.jointBoneId` orphans |

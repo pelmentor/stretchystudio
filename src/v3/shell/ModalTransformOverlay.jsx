@@ -98,8 +98,12 @@ export function ModalTransformOverlay() {
       const useTyped = Number.isFinite(typed);
 
       if (useTyped && kind === 'translate') {
-        if (axis === 'y') { dxCanvas = 0; dyCanvas = typed; }
-        else              { dxCanvas = typed; dyCanvas = axis === 'x' ? 0 : 0; }
+        // Axis-locked typed translate: typed value goes on the locked
+        // axis only. Unconstrained (axis === null) Blender-style: typed
+        // value goes on X (matches Blender's "G → type → axis defaults
+        // to X"); user can press X/Y to reroute.
+        if (axis === 'y') { dxCanvas = 0;     dyCanvas = typed; }
+        else              { dxCanvas = typed; dyCanvas = 0;     }
       }
 
       const updateProject = useProjectStore.getState().updateProject;

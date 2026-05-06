@@ -35,6 +35,7 @@ import {
   removeAllRotationDeformerNodes,
 } from './deformerNodeSync.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
+import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
 import { computeWorldMatrices } from '../renderer/transforms.js';
@@ -211,23 +212,27 @@ export const useProjectStore = create((set, get) => {
    *   - reparent to a descendant (cycle) → no-op
    *   - bone → part parent → no-op (parts can't own bones)
    *
+   * Pushes an undo snapshot ON SUCCESS only — rejected reparents
+   * (cycle / dangling / type mismatch) are no-ops and don't pollute
+   * the undo stack. Exposed as a user gesture by BVR-006 (Outliner
+   * drag-reparent), so a misplaced drop now has a clean Ctrl+Z path.
+   *
    * Returns nothing; caller can read `project.nodes` after to verify.
    */
-  reparentNode: (nodeId, newParentId) => set(produce((state) => {
+  reparentNode: (nodeId, newParentId) => set((state) => {
     const nodes = state.project.nodes;
-    if (!Array.isArray(nodes)) return;
+    if (!Array.isArray(nodes)) return state;
     const node = nodes.find((n) => n?.id === nodeId);
-    if (!node) return;
-    if (newParentId === nodeId) return; // self-parenting
-    /** @type {object|null} */
+    if (!node) return state;
+    if (newParentId === nodeId) return state; // self-parenting
     const newParent = newParentId ? (nodes.find((n) => n?.id === newParentId) ?? null) : null;
-    if (newParentId && !newParent) return; // dangling target
+    if (newParentId && !newParent) return state; // dangling target
     // Cycle: walk newParent's ancestry; if nodeId appears anywhere, reject.
     if (newParent) {
       let cursor = /** @type {any} */ (newParent);
       const guard = new Set();
       while (cursor) {
-        if (cursor.id === nodeId) return;
+        if (cursor.id === nodeId) return state;
         if (guard.has(cursor.id)) break;
         guard.add(cursor.id);
         cursor = cursor.parent ? nodes.find((n) => n?.id === cursor.parent) : null;
@@ -237,11 +242,18 @@ export const useProjectStore = create((set, get) => {
     // no skeleton role, can't own bones). Other pairings are permitted —
     // a part under another part is rare but legal (PSD layer convention).
     const isBone = node.type === 'group' && !!node.boneRole;
-    if (isBone && newParent && newParent.type === 'part') return;
-    state.hasUnsavedChanges = true;
-    node.parent = newParentId ?? null;
-    state.versionControl.transformVersion++;
-  })),
+    if (isBone && newParent && newParent.type === 'part') return state;
+    // No-op short-circuit: parent already correct.
+    if ((node.parent ?? null) === (newParentId ?? null)) return state;
+    // Validation passed — snapshot for undo, then mutate.
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      const n = draft.project.nodes.find((nn) => nn?.id === nodeId);
+      if (n) n.parent = newParentId ?? null;
+      draft.hasUnsavedChanges = true;
+      draft.versionControl.transformVersion++;
+    });
+  }),
   /**
    * Animation CRUD
    */
@@ -823,6 +835,19 @@ export const useProjectStore = create((set, get) => {
       if (orphans.length > 0) {
         logger.warn('paramOrphans', `${orphans.length} binding(s) reference unknown params on load`, { orphans });
       }
+      // Hole I-2: binding-vs-param schema drift. Detects bindings whose
+      // `keys` no longer match the param's current `keys`, or whose
+      // keys fall outside the param's [min, max] range. Drift can sit
+      // in a saved project when the user edited a param via V4 Track 2
+      // and saved without re-running Init Rig.
+      const drift = findBindingSchemaDrift(projectData);
+      if (drift.length > 0) {
+        logger.warn(
+          'paramSchemaDrift',
+          `${drift.length} binding(s) drifted from their param schema on load; re-Init Rig to refresh`,
+          { drift },
+        );
+      }
     }
     return set(produce((state) => {
       state.project.version = projectData.version;
@@ -1183,6 +1208,20 @@ export const useProjectStore = create((set, get) => {
             physicsInputs:   orphans[id].physicsInputs.map(r => r.location),
           }])
         )
+      );
+    }
+    // Hole I-2: binding-vs-param schema drift. Detects bindings whose
+    // `keys` no longer match the param's current `keys`, or whose keys
+    // fall outside the param's [min, max] range. Drift accumulates when
+    // the V4 Track 2 param editor mutates a param's range / keys without
+    // a follow-up Init Rig — bindings still carry the old schema.
+    // Detection only; "you have stale rig wiring" UI banner deferred.
+    const drift = findBindingSchemaDrift(postSeedProject);
+    if (drift.length > 0) {
+      logger.warn(
+        'paramSchemaDrift',
+        `${drift.length} binding(s) drifted from their param schema; re-Init Rig to refresh`,
+        { drift },
       );
     }
     // Hole I-5: bone-reference orphans. `node.mesh.jointBoneId` is a
