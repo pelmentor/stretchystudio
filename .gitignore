@@ -65,6 +65,20 @@ shelby*.can3
 *.blend
 *.blend1
 
+# Cubism Editor "Export For Runtime" output — generated, not source.
+# Catches the model_live2d/ directory pattern + bare runtime files.
+*.moc3
+*.model3.json
+*.cdi3.json
+*.physics3.json
+*.motion3.json
+*.exp3.json
+*.userdata3.json
+*.2048
+*.4096
+model_live2d/
+*_live2d/
+
 # Local test export folders (user-side scratch space, not source)
 New Folder/
 New Folder_*/
