@@ -106,9 +106,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
-  // BVR-004 — Pose Mode vs Armature Edit Mode write-target gate.
-  // 'skeleton' = Pose Mode (pose-shape writes; existing behavior).
-  // 'armatureEdit' = Edit Mode (rest pivot shift with descendant-follow).
+  // editMode === 'skeleton' is Pose Mode — the SOLE bone-edit mode.
+  // Joint drag writes pose.x/y; rotation arc writes pose.rotation (or the
+  // driver param). Object Mode = selection only, no bone interaction.
   const editMode       = useEditorStore(s => s.editMode);
   // Outliner→canvas selection bridge: the universal selectionStore is
   // the canonical truth (Outliner Skeleton tab writes here), the legacy
@@ -305,8 +305,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
          });
       }
     } else if (dragType === 'rotate') {
-      // Rotation arc drag — active outside skeleton edit mode
-      if (skeletonEditMode) return;
+      // Rotation arc drag — only in Pose Mode (skeletonEditMode true).
+      // Object Mode = selection only, no bone rotation. (Earlier code
+      // did the inverse — arcs fired ONLY in Object Mode — which broke
+      // Blender semantics; flipped 2026-05-06.)
+      if (!skeletonEditMode) return;
       const svg = svgRef.current;
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
@@ -449,10 +452,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     const rect = svg.getBoundingClientRect();
 
     if (drag.type === 'joint') {
-      // Joint position drag — write target depends on editMode:
-      //
-      //   armatureEdit (Blender Edit Mode): shift transform.pivotX/Y +
-      //     descendants follow (rigid rest topology). Via shiftBonePivot.
+      // Joint position drag — write target:
       //
       //   skeleton (Pose Mode): write node.pose.x/y in this bone's
       //     parent-rest frame so the joint visually lands at the cursor.
@@ -460,22 +460,17 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       //     The inverse is captured at drag-start (cached in dragRef) so
       //     mousemove is just one matrix-point multiply.
       //
-      //   any other (legacy / no editMode + skeleton overlay shown):
-      //     keep the direct-pivot-write path for back-compat.
+      //   wizard adjust step (no editMode but skeletonEditMode forced
+      //     true via the wizard prop): direct pivotX/Y write — only the
+      //     dragged bone moves, no descendant follow, no pose write.
+      //     This is the rest-pivot placement gesture for the import
+      //     wizard, where parts aren't yet skinned to bones so a pose
+      //     write would visually drag children too.
       const cssX = e.clientX - rect.left;
       const cssY = e.clientY - rect.top;
       const { zoom, panX, panY } = viewRef.current;
       const [imgX, imgY] = toImage(cssX, cssY, zoom, panX, panY);
-      if (editMode === 'armatureEdit') {
-        const node = useProjectStore.getState().project.nodes.find((n) => n?.id === drag.nodeId);
-        if (node?.transform) {
-          const dx = imgX - (node.transform.pivotX ?? 0);
-          const dy = imgY - (node.transform.pivotY ?? 0);
-          if (dx !== 0 || dy !== 0) {
-            useProjectStore.getState().shiftBonePivot(drag.nodeId, dx, dy);
-          }
-        }
-      } else if (editMode === 'skeleton' && drag.poseSetup) {
+      if (editMode === 'skeleton' && drag.poseSetup) {
         const { x: newPoseX, y: newPoseY } = applyPoseTranslate(drag.poseSetup, imgX, imgY);
         updateProject((proj) => {
           const node = proj.nodes.find((n) => n.id === drag.nodeId);
@@ -863,7 +858,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       continue;
     }
 
-    if (!ARC_BONE_ROLES.has(role) || skeletonEditMode) continue;
+    // Render arcs ONLY in Pose Mode. Object Mode shows joint dots for
+    // selection but no rotation handles. (Earlier code rendered arcs
+    // ONLY in Object Mode — opposite of Blender; flipped 2026-05-06.)
+    if (!ARC_BONE_ROLES.has(role) || !skeletonEditMode) continue;
     // Every bone in ARC_BONE_ROLES is draggable and visibly responds:
     // bones with a `ParamRotation_<role>` deformer drive their param
     // and the rig moves via chainEval; bones without a deformer write

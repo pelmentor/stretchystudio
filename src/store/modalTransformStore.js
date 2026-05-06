@@ -21,11 +21,10 @@
  *                            Non-empty → overrides mouse delta. Translate
  *                            interprets as canvas-px on active axis; rotate
  *                            as degrees; scale as multiplier.
- *   - `restFrame`         — BVR-004 follow-up: when true, the modal
- *                            session is editing a bone's REST layout
- *                            (transform fields). Otherwise it edits
- *                            pose. Set by `beginModalTransform` from
- *                            `editorStore.editMode === 'armatureEdit'`.
+ *
+ * Modal G/R/S always writes pose-shape values for bones (rest editing
+ * was a separate Armature Edit Mode in earlier versions; that mode
+ * was collapsed into Pose Mode 2026-05-06).
  *
  * The actual mousemove + keydown handling is done by the
  * `ModalTransformOverlay` component mounted at the AppShell level.
@@ -46,8 +45,7 @@ import { create } from 'zustand';
  * @property {Map<string, any>} original           - nodeId → original transform clone
  * @property {boolean} committed
  * @property {string} typedBuffer
- * @property {boolean} restFrame
- * @property {(args: {kind: TransformKind, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<string, any>, restFrame?: boolean}) => void} begin
+ * @property {(args: {kind: TransformKind, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<string, any>}) => void} begin
  * @property {(axis: ('x'|'y'|null)) => void} setAxis
  * @property {(ch: string) => void} appendTyped
  * @property {() => void} popTyped
@@ -66,10 +64,9 @@ export const useModalTransformStore = create((set) => ({
   original: new Map(),
   committed: false,
   typedBuffer: '',
-  restFrame: false,
 
-  begin: ({ kind, startMouse, pivotCanvas, original, restFrame }) =>
-    set({ kind, axis: null, startMouse, pivotCanvas, original, committed: false, typedBuffer: '', restFrame: !!restFrame }),
+  begin: ({ kind, startMouse, pivotCanvas, original }) =>
+    set({ kind, axis: null, startMouse, pivotCanvas, original, committed: false, typedBuffer: '' }),
 
   setAxis: (axis) => set({ axis }),
 
@@ -97,7 +94,7 @@ export const useModalTransformStore = create((set) => ({
   })),
   clearTyped: () => set({ typedBuffer: '' }),
 
-  commit: () => set({ committed: true, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '', restFrame: false }),
-  cancel: () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '', restFrame: false }),
-  reset:  () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '', restFrame: false }),
+  commit: () => set({ committed: true, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
+  cancel: () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
+  reset:  () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
 }));

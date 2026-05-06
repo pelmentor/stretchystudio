@@ -5,7 +5,7 @@
  *
  * Sits on the canvas's right edge. Mode-driven content:
  *   - mesh / blendShape / weightPaint → brush settings (size, hardness)
- *   - skeleton / armatureEdit         → mode-status hint (no settings yet)
+ *   - skeleton                        → Pose Mode hint (no settings yet)
  *   - object mode / null              → empty state
  *
  * Companion to the left-edge `CanvasToolbar` (T-panel = tool **picker**).
@@ -102,15 +102,7 @@ function ContentForMode({ editMode }) {
     return (
       <ModeHint
         title="Pose Mode"
-        body="Drag joints / rotation handles to pose bones. Writes go to node.pose. Tab to switch to Armature Edit Mode."
-      />
-    );
-  }
-  if (editMode === 'armatureEdit') {
-    return (
-      <ModeHint
-        title="Armature Edit"
-        body="Drag joints to shift pivots (descendants follow). G / R / S edit rest layout (transform.pivot, rotation, scale). Tab back to Pose Mode."
+        body="Drag joints / rotation handles to pose bones. G / R / S also edit pose. Apply Pose As Rest bakes the current pose into rest."
       />
     );
   }

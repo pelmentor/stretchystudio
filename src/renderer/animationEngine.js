@@ -387,11 +387,13 @@ export function writePoseValues(node, updates) {
 }
 
 /**
- * BVR-004 follow-up — `armatureEdit` (Blender Edit Mode) reads rest
- * fields. For bones, that means `transform.pivotX/pivotY` (translate),
- * `transform.rotation`, `transform.scaleX/Y` — the v17 "reserved"
- * fields are now the rest layout. Non-bones fall back to
- * `readPoseValue` since armatureEdit only really activates on bones.
+ * Read rest-layout fields off a bone (translate via pivotX/pivotY,
+ * rotation/scale via transform.*). Non-bones fall back to
+ * `readPoseValue` since rest is a bone-only concept.
+ *
+ * Used by `applyPoseAsRest` and other rest-bake code paths. The user-
+ * facing modal G/R/S no longer routes through here (Armature Edit Mode
+ * was collapsed into Pose Mode 2026-05-06; modal writes pose-shape).
  *
  * @param {object} node
  * @param {'rotation'|'x'|'y'|'scaleX'|'scaleY'} key
@@ -405,9 +407,12 @@ export function readRestValue(node, key) {
 }
 
 /**
- * Mutator inverse of `readRestValue`. For bones in armatureEdit mode,
- * writes `transform.pivotX/Y` (translate) / `transform.rotation` /
- * `transform.scaleX/Y`. For non-bones, falls back to `writePoseValues`.
+ * Mutator inverse of `readRestValue`. Writes `transform.pivotX/Y`
+ * (translate) / `transform.rotation` / `transform.scaleX/Y` for bones;
+ * falls back to `writePoseValues` for non-bones.
+ *
+ * Same audience as `readRestValue` — rest-bake helpers, not modal G/R/S
+ * (which writes pose-shape only after the 2026-05-06 mode collapse).
  *
  * @param {object} node
  * @param {Partial<{rotation:number, x:number, y:number, scaleX:number, scaleY:number}>} updates

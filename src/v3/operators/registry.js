@@ -31,7 +31,7 @@ import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
-import { readPoseValue, readRestValue } from '../../renderer/animationEngine.js';
+import { readPoseValue } from '../../renderer/animationEngine.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -355,19 +355,11 @@ function registerBuiltins() {
       .filter((it) => it.type === 'part' || it.type === 'group')
       .map((it) => it.id);
     if (targetIds.length === 0) return;
-    // BVR-004 follow-up — Armature Edit Mode now reads/writes REST
-    // fields (transform.pivotX/Y for translate, transform.rotation,
-    // transform.scaleX/Y). The v17 "reserved at identity" contract is
-    // lifted here: armatureEdit IS the writer of rest layout. Pose
-    // Mode (`editMode === 'skeleton'`) keeps the pose-write path.
-    const editMode = useEditorStore.getState().editMode;
-    const restFrame = editMode === 'armatureEdit';
-
+    // Modal G/R/S writes pose-shape values for bones. Rest editing is
+    // not a separate mode anymore (Armature Edit Mode was collapsed
+    // into Pose Mode 2026-05-06; rest pivot edits go through Apply
+    // Pose As Rest after posing).
     const project = useProjectStore.getState().project;
-    // Bone-aware capture. Pose mode → snapshot pose-shape via
-    // readPoseValue. Armature Edit → snapshot rest-shape via
-    // readRestValue. Non-bones use readPoseValue regardless (rest is
-    // a bone-only concept).
     const worldMap = computeWorldMatrices(project.nodes);
     /** @type {Map<string, {x:number,y:number,rotation:number,scaleX:number,scaleY:number}>} */
     const original = new Map();
@@ -376,13 +368,12 @@ function registerBuiltins() {
     for (const id of targetIds) {
       const node = project.nodes.find((n) => n.id === id);
       if (!node) continue;
-      const reader = restFrame ? readRestValue : readPoseValue;
       original.set(id, {
-        x:        reader(node, 'x'),
-        y:        reader(node, 'y'),
-        rotation: reader(node, 'rotation'),
-        scaleX:   reader(node, 'scaleX'),
-        scaleY:   reader(node, 'scaleY'),
+        x:        readPoseValue(node, 'x'),
+        y:        readPoseValue(node, 'y'),
+        rotation: readPoseValue(node, 'rotation'),
+        scaleX:   readPoseValue(node, 'scaleX'),
+        scaleY:   readPoseValue(node, 'scaleY'),
       });
       // Modal pivot center: for bones, use world-space pivot (where the
       // joint is on canvas). For non-bones, average their canvas-space
@@ -420,7 +411,6 @@ function registerBuiltins() {
       startMouse,
       pivotCanvas: { x: pivotX, y: pivotY },
       original,
-      restFrame,
     });
   }
 
@@ -445,22 +435,14 @@ function registerBuiltins() {
     available: () => true,  // always available — exec handles feedback
     exec: () => {
       const ed = useEditorStore.getState();
-      // BVR-004 — In armature contexts, Tab cycles between Pose Mode
-      // and Armature Edit Mode (Blender's behavior). Outside armature
-      // contexts (no editMode, mesh edit, weight paint, etc.) Tab
-      // toggles enter/exit per the historical pattern.
-      const activeForCycle = useSelectionStore.getState().getActive();
-      const project0 = useProjectStore.getState().project;
-      const cycleNode = activeForCycle
-        ? project0.nodes.find((n) => n.id === activeForCycle.id)
-        : null;
-      const inArmatureCtx = cycleNode?.type === 'group' && !!cycleNode.boneRole;
-      if (inArmatureCtx && (ed.editMode === 'skeleton' || ed.editMode === 'armatureEdit')) {
-        const next = ed.editMode === 'skeleton' ? 'armatureEdit' : 'skeleton';
-        if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
-        ed.enterEditMode(next);
-        return;
-      }
+      // Tab toggles Object Mode ↔ Edit Mode for the active selection
+      // type (Blender's universal pattern):
+      //   meshed part   → Edit Mode (vertex edit, 'mesh')
+      //   bone group    → Pose Mode (bone manipulation, 'skeleton')
+      //   already in any edit mode → exit to Object Mode
+      // The previous three-way cycle (Pose ↔ Armature Edit) was removed
+      // when the Armature Edit mode was collapsed into Pose Mode
+      // 2026-05-06 — there's no second bone-edit mode to cycle to.
       if (ed.editMode) {
         ed.exitEditMode();
         return;

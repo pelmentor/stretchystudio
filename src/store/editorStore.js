@@ -103,22 +103,18 @@ export const useEditorStore = create((set) => ({
    *  gate cleanly.
    *
    *  Values:
-   *    - null           → object mode (no edit interaction)
+   *    - null           → Object Mode (no edit interaction; selection only)
    *    - 'mesh'         → part vertex/UV editing. meshSubMode applies.
-   *    - 'skeleton'     → POSE MODE — bone joint dragging writes to
-   *                       `node.pose.*` (Blender's Pose Mode). Requires
-   *                       `viewLayers.skeleton` (overlay must show
-   *                       joints to drag them). Apply Pose As Rest
-   *                       enabled here.
-   *    - 'armatureEdit' → ARMATURE EDIT MODE — bone joint dragging
-   *                       writes to `node.transform.{pivotX,pivotY}`
-   *                       (Blender's Edit Mode for armatures). Pose
-   *                       is locked to identity for visual feedback;
-   *                       descendants follow on parent translate
-   *                       (rigid pivot shift). R/S disabled (no
-   *                       `rest.rotation` / `rest.scale` slots — the
-   *                       2D-rest limitation documented in
-   *                       REST_POSE_SPLIT_PLAN.md).
+   *    - 'skeleton'     → POSE MODE — the SOLE bone-edit mode. Joint drag
+   *                       writes to `node.pose.*`; rotation arcs write to
+   *                       `node.pose.rotation` or the driver param. Apply
+   *                       Pose As Rest is the bake path that converts
+   *                       pose → rest (rest pivot edits go through that
+   *                       single coherent flow rather than a second mode).
+   *                       (Earlier versions had a separate 'armatureEdit'
+   *                       mode for direct rest-pivot drag — collapsed
+   *                       2026-05-06 since it shipped as a near-identical
+   *                       UI to Pose Mode and confused users.)
    *    - 'blendShape'   → painting deltas onto `activeBlendShapeId`.
    *                       Same brush behaviour as mesh edit; write
    *                       target is the blendShape's deltas array.
@@ -232,7 +228,7 @@ export const useEditorStore = create((set) => ({
    *  the active part).
    *  Returns nothing; read editMode after. */
   enterEditMode: (kind, opts = {}) => set((state) => {
-    if (kind !== 'mesh' && kind !== 'skeleton' && kind !== 'armatureEdit'
+    if (kind !== 'mesh' && kind !== 'skeleton'
         && kind !== 'blendShape' && kind !== 'keyform' && kind !== 'weightPaint') return state;
     if (kind === 'blendShape' && !opts.blendShapeId) return state;
     if (kind === 'keyform') {
@@ -247,7 +243,7 @@ export const useEditorStore = create((set) => ({
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
       if (kind === 'mesh' || kind === 'blendShape' || kind === 'weightPaint') toolMode = 'brush';
-      else if (kind === 'skeleton' || kind === 'armatureEdit') toolMode = 'joint_drag';
+      else if (kind === 'skeleton') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
     }
@@ -305,7 +301,7 @@ export const useEditorStore = create((set) => ({
     // Skeleton-edit requires a visible skeleton — toggling skeleton
     // off implicitly drops the user out of skeleton edit mode.
     if ('skeleton' in partial && !partial.skeleton
-        && (state.editMode === 'skeleton' || state.editMode === 'armatureEdit')) {
+        && state.editMode === 'skeleton') {
       return { viewLayers: next, editMode: null };
     }
     return { viewLayers: next };

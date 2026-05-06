@@ -105,14 +105,12 @@ export function makeLocalMatrix(t) {
  * Where `poseAroundPivot` is the bone's `pose` reinterpreted as a
  * transform whose `pivotX/pivotY` matches the rest pivot.
  *
- * **BVR-004 follow-up (2026-05-06):** the v17 "rotation/x/y/scale
- * reserved at identity for bones" contract is lifted. `transform.rotation`,
- * `transform.scaleX/Y`, and `transform.x/y` are now the bone's REST
- * layout fields — the user can author them in Armature Edit Mode
- * (`editorStore.editMode === 'armatureEdit'`). When all are at their
- * identity values (rotation=0, scale=1, x=y=0), the rest matrix is
- * identity-modulo-pivot and the compose reduces to pose-around-pivot —
- * matching the v17 fast path.
+ * `transform.rotation`, `transform.scaleX/Y`, and `transform.x/y` are
+ * the bone's REST layout fields. Direct user editing happens through
+ * the Properties panel (typed numeric input) or by posing in Pose Mode
+ * + Apply Pose As Rest. When all are at their identity values
+ * (rotation=0, scale=1, x=y=0) the rest matrix is identity-modulo-pivot
+ * and the compose reduces to pose-around-pivot.
  *
  * @param {{ pivotX?, pivotY?, rotation?, x?, y?, scaleX?, scaleY? }|null|undefined} transform
  * @param {{ rotation?, x?, y?, scaleX?, scaleY? }|null|undefined} pose

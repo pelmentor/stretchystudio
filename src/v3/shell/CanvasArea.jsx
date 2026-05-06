@@ -32,7 +32,6 @@ import { RotationDeformerOverlay } from '../editors/viewport/overlays/RotationDe
 import { WeightPaintOverlay } from '../editors/viewport/overlays/WeightPaintOverlay.jsx';
 import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
-import { ViewLayersPopover } from './ViewLayersPopover.jsx';
 import { ModePill } from './ModePill.jsx';
 import { CanvasToolbar } from './CanvasToolbar.jsx';
 import { ToolSettingsPanel } from './ToolSettingsPanel.jsx';
@@ -113,14 +112,17 @@ export function CanvasArea({ mode }) {
       {!isPreview && <ModePill />}
       {/* Left toolbar (Blender T-panel) — vertical icon strip below
           the Mode pill. Tool list driven by `editMode`. Edit Viewport
-          only; Live Preview is read-only. */}
+          only; Live Preview is read-only.
+
+          ViewLayersPopover is NOT mounted here anymore — it's now a flex
+          sibling of the Reset Pose cluster inside CanvasViewport so the
+          two buttons can't overlap (3rd reported regression of that
+          shape, fixed 2026-05-06 by collapsing the two absolute anchors
+          into a single flex container). */}
       {!isPreview && <CanvasToolbar />}
-      {/* View Layers picker (GAP-016) — sits left of Reset Pose button in
-          edit Viewport. Hidden in Live Preview (read-only surface). */}
-      {!isPreview && <ViewLayersPopover />}
       {/* BVR-007 — N-panel (Blender's right-edge tool settings panel).
-          Mode-driven content (brush sliders for paint modes, mode hints
-          for armature modes, empty for object mode). Edit Viewport only. */}
+          Mode-driven content (brush sliders for paint modes, Pose Mode
+          hint, empty for Object Mode). Edit Viewport only. */}
       {!isPreview && <ToolSettingsPanel />}
       {isPreview && (
         <div className="absolute top-1.5 left-2 px-2 py-0.5 rounded bg-primary/20 text-primary text-[9px] font-mono uppercase tracking-wider border border-primary/30 pointer-events-none select-none">

@@ -37,7 +37,7 @@ import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { endBatch } from '../../store/undoHistory.js';
-import { writePoseValues, writeRestValues } from '../../renderer/animationEngine.js';
+import { writePoseValues } from '../../renderer/animationEngine.js';
 
 const SNAP_TRANSLATE = 10;       // px in canvas space
 const SNAP_ROTATE    = 15 * Math.PI / 180;
@@ -50,7 +50,6 @@ export function ModalTransformOverlay() {
   const pivotCanvas = useModalTransformStore((s) => s.pivotCanvas);
   const original    = useModalTransformStore((s) => s.original);
   const typedBuffer = useModalTransformStore((s) => s.typedBuffer);
-  const restFrame   = useModalTransformStore((s) => s.restFrame);
   const setAxis     = useModalTransformStore((s) => s.setAxis);
   const appendTyped = useModalTransformStore((s) => s.appendTyped);
   const popTyped    = useModalTransformStore((s) => s.popTyped);
@@ -111,11 +110,10 @@ export function ModalTransformOverlay() {
         for (const [nodeId, orig] of original) {
           const node = proj.nodes.find((n) => n.id === nodeId);
           if (!node) continue;
-          // `orig` was captured by registry.js via readPoseValue or
-          // readRestValue (when armatureEdit). The matching writer
-          // (writePoseValues / writeRestValues) routes the commit to
-          // the right slot for bones vs non-bones, pose vs rest.
-          const writer = restFrame ? writeRestValues : writePoseValues;
+          // Modal G/R/S always writes pose-shape values for bones
+          // (writePoseValues routes to node.pose for bones, node.transform
+          // for non-bones).
+          const writer = writePoseValues;
           if (kind === 'translate') {
             let nx = (orig.x ?? 0) + dxCanvas;
             let ny = (orig.y ?? 0) + dyCanvas;
@@ -231,15 +229,13 @@ export function ModalTransformOverlay() {
 
     function revert() {
       const updateProject = useProjectStore.getState().updateProject;
-      const restoreWriter = restFrame ? writeRestValues : writePoseValues;
       updateProject((proj) => {
         for (const [nodeId, orig] of original) {
           const node = proj.nodes.find((n) => n.id === nodeId);
           if (!node) continue;
-          // `orig` is a snapshot in the same frame as the live writes —
-          // route through the matching restoreWriter so cancellation
-          // lands the originals back in the right slot (pose vs rest).
-          restoreWriter(node, orig);
+          // Same writer the live-mousemove writes used → cancellation
+          // lands the originals back in the right slot.
+          writePoseValues(node, orig);
         }
       }, { skipHistory: true });
     }
@@ -258,7 +254,7 @@ export function ModalTransformOverlay() {
       window.removeEventListener('contextmenu', onContextMenu, { capture: true });
       window.removeEventListener('keydown', onKeyDown, { capture: true });
     };
-  }, [kind, axis, startMouse, pivotCanvas, original, restFrame, setAxis, appendTyped, popTyped, commit, cancel]);
+  }, [kind, axis, startMouse, pivotCanvas, original, setAxis, appendTyped, popTyped, commit, cancel]);
 
   if (!kind) return null;
 

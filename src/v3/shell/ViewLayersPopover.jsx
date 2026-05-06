@@ -142,13 +142,16 @@ export function ViewLayersPopover() {
     });
   }
 
+  // Renders as a flex child of the top-right cluster (mounted by
+  // CanvasViewport). No absolute positioning — the parent flex layout
+  // handles spacing so Layers + Reset Pose can never overlap.
   return (
     <Popover>
       <PopoverTrigger asChild>
         <Button
           variant="secondary"
           size="sm"
-          className="absolute top-2 right-32 z-10 h-8 px-3 gap-1.5
+          className="h-8 px-3 gap-1.5
                      bg-card/85 backdrop-blur-md
                      border border-border/60 hover:border-primary/40
                      text-foreground/80 hover:text-foreground hover:bg-card/95

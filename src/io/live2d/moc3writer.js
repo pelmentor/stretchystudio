@@ -258,8 +258,21 @@ function buildSectionData(input) {
   sections.set('parameter.keyform_binding_begin_indices', paramKfbBegin);
   sections.set('parameter.keyform_binding_counts', paramKfbCount);
 
+  // BAND DATA — was missing in the refactored writer (counts[KEYFORM_BINDING_BANDS]
+  // stayed at 0 default and the band sections were never written). Cubism rejects
+  // the moc3 because every mesh / deformer references a band index, but the
+  // band array reads as zero-length so the runtime can't resolve any binding.
+  // Section emit + count restored here, matching upstream's writer.
+  sections.set('keyform_binding_band.begin_indices', bandBegins);
+  sections.set('keyform_binding_band.counts', bandCounts);
+  sections.set('keyform_binding_index.indices', keyformBindingIndices);
+  sections.set('keyform_binding.keys_begin_indices', bindingKeysBegin);
+  sections.set('keyform_binding.keys_counts', bindingKeysCount);
+  sections.set('keys.values', flatKeys);
+
   counts[COUNT_IDX.KEYFORM_BINDINGS] = uniqueBindings.length;
   counts[COUNT_IDX.KEYFORM_BINDING_INDICES] = keyformBindingIndices.length;
+  counts[COUNT_IDX.KEYFORM_BINDING_BANDS] = bandBegins.length;
   counts[COUNT_IDX.KEYS] = flatKeys.length;
 
   // Drawable masks: 1 dummy entry (SDK requires begin < total, can't use -1 with total=0)

@@ -116,8 +116,13 @@ const samplePsd = () => ({
     'finalize: meshAllParts stored');
   assert(useEditorStore.getState().viewLayers.skeleton === true,
     'finalize: skeleton layer turned on');
-  assert(useEditorStore.getState().editMode === 'skeleton',
-    'finalize: skeleton edit mode on');
+  // Wizard adjust step is rest-pivot placement, NOT pose. Editor stays
+  // in Object Mode (editMode === null); skeletonEditMode prop is forced
+  // true via the wizard-step gate in CanvasViewport. This is the
+  // post-2026-05-06 behavior — entering Pose Mode on `finalize` would
+  // route joint drags through pose.x/y and drag children with the bone.
+  assert(useEditorStore.getState().editMode === null,
+    'finalize: editor stays in Object Mode (wizard handles bone drag via wizardStep gate)');
   uninstallBridges();
 }
 

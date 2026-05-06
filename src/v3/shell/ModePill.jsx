@@ -62,7 +62,6 @@ const MODE_META = {
   null:         { label: 'Object Mode',    icon: Box },
   mesh:         { label: 'Edit Mode',      icon: Pencil },
   skeleton:     { label: 'Pose Mode',      icon: Bone },
-  armatureEdit: { label: 'Armature Edit',  icon: Bone },
   blendShape:   { label: 'Blend Shape',    icon: Sparkles },
   weightPaint:  { label: 'Weight Paint',   icon: Brush },
 };
@@ -130,10 +129,6 @@ export function ModePill() {
   function enterSkeleton() {
     if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
     enterEditMode('skeleton');
-  }
-  function enterArmatureEdit() {
-    if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
-    enterEditMode('armatureEdit');
   }
   function enterBlendShape(shapeId) {
     if (!active) return;
@@ -226,18 +221,6 @@ export function ModePill() {
               : 'Select a bone-role group to enter Pose Mode'
           }
           onSelect={enterSkeleton}
-        />
-        <ModeRow
-          icon={Bone}
-          label="Armature Edit"
-          checked={editMode === 'armatureEdit'}
-          disabled={kind !== 'boneGroup'}
-          hint={
-            kind === 'boneGroup'
-              ? 'Edit rest layout — drag joints to shift pivots (descendants follow). G/R/S edit transform.{pivot, rotation, scale} (rest, not pose).'
-              : 'Select a bone-role group to enter Armature Edit'
-          }
-          onSelect={enterArmatureEdit}
         />
         <ModeRow
           icon={Brush}

@@ -38,11 +38,9 @@
  *   - `bandBegins`, `bandCounts`: per-band kfbi range
  *   - `keyformBindingIndices`: flat kfbi (band-expanded)
  *   - `bindingKeysBegin`, `bindingKeysCount`, `flatKeys`: per-binding keys
- *   - `paramKfbBegin`, `paramKfbCount`: per-param binding range.
- *      Begin is ALWAYS a valid in-range cumulative index — Cubism rejects
- *      moc3 with -1 sentinel begins. Params with 0 bindings get their
- *      begin from the running cursor (= preceding-counts cumulative)
- *      with count=0 so the sequence stays contiguous.
+ *   - `paramKfbBegin`, `paramKfbCount`: per-param binding range. Empty
+ *      params (no bindings reference them) get begin=-1 (0xFFFFFFFF on
+ *      the wire), count=0 — matches upstream + Cubism convention.
  *
  * @module io/live2d/moc3/keyformBindings
  */
@@ -69,12 +67,24 @@
 export function buildKeyformBindings(opts) {
   const { meshBindingPlan, allDeformerSpecs, params } = opts;
 
+  // Cubism runtime rejects the moc3 if any binding in `keyform_bindings[]`
+  // references a paramId that's NOT in `parameters[]` — its band-walk
+  // loops every binding looking for the owning param via kfb_begin/count
+  // ranges. Init Rig's orphan-param prune may drop a param from
+  // `project.parameters` while leaving stale bindings on deformer nodes
+  // (e.g. `ParamRotation_bothLegs` for a no-driver bone). Filter those
+  // bindings here so they never enter `uniqueBindings`. Objects that lose
+  // their only binding fall back to band 0 (the null band) — same as
+  // unbound parts.
+  const validParamIds = new Set(params.map((p) => p.id));
+
   /** @type {{paramId:string, keys:number[]}[]} */
   const uniqueBindings = [];
   /** @type {Map<string, number>} */
   const bindingHashToIdx = new Map();
   const bindHash = (pid, keys) => `${pid}|${keys.join(',')}`;
   const internBinding = (paramId, keys) => {
+    if (!validParamIds.has(paramId)) return null;
     const h = bindHash(paramId, keys);
     const existing = bindingHashToIdx.get(h);
     if (existing !== undefined) return existing;
@@ -87,13 +97,18 @@ export function buildKeyformBindings(opts) {
   // Collect each object's binding indices.
   // Objects: art_meshes (in meshParts order), then deformers (in unified
   // topo-sorted order — same as the deformer.* sections).
+  // Orphan-param bindings come back as `null` from internBinding — drop
+  // them so the object's band reflects only its live param drivers.
   /** @type {number[][]} */
-  const meshObjectBindings = meshBindingPlan.map(plan =>
-    [internBinding(plan.paramId, plan.keys)],
-  );
+  const meshObjectBindings = meshBindingPlan.map((plan) => {
+    const idx = internBinding(plan.paramId, plan.keys);
+    return idx === null ? [] : [idx];
+  });
   /** @type {number[][]} */
-  const deformerObjectBindings = allDeformerSpecs.map(spec =>
-    spec.bindings.map(b => internBinding(b.parameterId, b.keys)),
+  const deformerObjectBindings = allDeformerSpecs.map((spec) =>
+    spec.bindings
+      .map((b) => internBinding(b.parameterId, b.keys))
+      .filter((idx) => idx !== null),
   );
 
   // ── Reorder uniqueBindings to be contiguous-by-param ──
@@ -164,26 +179,27 @@ export function buildKeyformBindings(opts) {
   }
 
   // Per-parameter binding range — index INTO uniqueBindings[], not kfbi.
-  //
-  // CRITICAL: Cubism's runtime treats `kfb_begin` as a valid in-range
-  // index into `keyform_bindings[]` for EVERY parameter, even ones with
-  // 0 bindings. Emitting `-1` (sentinel) for empty params makes the
-  // runtime reject the moc3 with "Unable to load." Instead, walk the
-  // sorted-by-paramOrder uniqueBindings and assign each param the
-  // current cursor position; params with 0 bindings get the cursor too
-  // (which equals the next-with-bindings param's begin), keeping the
-  // sequence contiguous and in-range.
+  // Verified byte-faithful against upstream + Cubism: a param with no
+  // bindings gets begin=-1 (0xFFFFFFFF on the wire), count=0; non-empty
+  // params get the real cumulative begin and count.
   const paramKfbBegin = [];
   const paramKfbCount = [];
-  let cursor = 0;
   for (const p of params) {
+    let begin = -1;
     let count = 0;
     for (let bi = 0; bi < uniqueBindings.length; bi++) {
-      if (uniqueBindings[bi].paramId === p.id) count++;
+      if (uniqueBindings[bi].paramId === p.id) {
+        if (begin === -1) begin = bi;
+        count++;
+      }
     }
-    paramKfbBegin.push(cursor);
-    paramKfbCount.push(count);
-    cursor += count;
+    if (begin >= 0) {
+      paramKfbBegin.push(begin);
+      paramKfbCount.push(count);
+    } else {
+      paramKfbBegin.push(-1);
+      paramKfbCount.push(0);
+    }
   }
 
   return {

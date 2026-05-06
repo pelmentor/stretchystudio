@@ -24,6 +24,7 @@ import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
 import { detectCharacterFormat } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
+import { ViewLayersPopover } from '@/v3/shell/ViewLayersPopover';
 import { useWizardStore } from '@/store/wizardStore';
 import { useCaptureStore } from '@/store/captureStore';
 import * as PsdImportService from '@/services/PsdImportService';
@@ -2517,7 +2518,6 @@ export default function CanvasViewport({
           showSkeleton={editorState.viewLayers.skeleton}
           skeletonEditMode={
             editorState.editMode === 'skeleton'
-            || editorState.editMode === 'armatureEdit'
             || _wizardStep === 'adjust'
           }
         />
@@ -2598,16 +2598,19 @@ export default function CanvasViewport({
       )}
 
 
-      {/* Pose menu — top-right viewport corner. Reset Pose is the primary
-          action (one click); the chevron opens a dropdown with advanced
-          pose ops (Blender-style "Apply Pose As Rest" + future entries).
-          Hidden on Live Preview (read-only).
+      {/* Top-right cluster — Layers picker + Pose menu (Reset Pose +
+          chevron dropdown for Apply Pose As Rest). Single absolute-
+          positioned flex container so siblings can't overlap (was a
+          recurring bug when Layers + Reset Pose had separate absolute
+          anchors). Hidden on Live Preview (read-only).
 
           Reset Pose mode-dependent behaviour:
             - Animation mode → `resetPoseDraft()`  (clear draftPose + paramValues; keyframes survive)
             - Staging mode    → `resetToRestPose()` (above + bone-group poses + skinned mesh verts) */}
       {!previewMode && project.nodes.length > 0 && (
-        <div className="absolute top-2 right-2 z-10 flex items-stretch gap-px">
+        <div className="absolute top-2 right-2 z-10 flex items-stretch gap-1.5">
+          <ViewLayersPopover />
+          <div className="flex items-stretch gap-px">
           <TooltipProvider delayDuration={400}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -2663,24 +2666,18 @@ export default function CanvasViewport({
                   // Apply Pose As Rest — bake current pose into descendant
                   // mesh rest verts + bone pivots, zero all bone poses.
                   // Disabled in animation mode (would produce unexpected
-                  // shifts at non-zero playback time) and in Armature Edit
-                  // Mode (BVR-004 — user is editing rest, not pose).
+                  // shifts at non-zero playback time).
                   if (editorMode === 'animation') {
                     logger.warn('applyPoseAsRest', 'Skipped: animation mode (switch to Default to bake pose)');
-                    return;
-                  }
-                  const em = useEditorStore.getState().editMode;
-                  if (em === 'armatureEdit') {
-                    logger.warn('applyPoseAsRest', 'Skipped: Armature Edit Mode (Tab to Pose Mode to bake pose)');
                     return;
                   }
                   useProjectStore.getState().applyPoseAsRest();
                   logger.info('applyPoseAsRest', 'Applied current pose as the new rest pose');
                 }}
-                disabled={editorMode === 'animation' || useEditorStore.getState().editMode === 'armatureEdit'}
+                disabled={editorMode === 'animation'}
                 className={
                   'flex items-start gap-2 w-full text-left px-2 py-2 rounded text-[11px] ' +
-                  (editorMode === 'animation' || useEditorStore.getState().editMode === 'armatureEdit'
+                  (editorMode === 'animation'
                     ? 'opacity-40 cursor-not-allowed'
                     : 'hover:bg-muted/40 cursor-pointer')
                 }
@@ -2691,14 +2688,13 @@ export default function CanvasViewport({
                   <span className="text-muted-foreground/85 text-[10px] leading-snug block mt-0.5">
                     {editorMode === 'animation'
                       ? 'Switch to Default workspace first'
-                      : useEditorStore.getState().editMode === 'armatureEdit'
-                        ? 'You\'re editing rest — Tab to Pose Mode to bake pose'
-                        : 'Bakes current pose into mesh rest + bone pivots. Visual unchanged. Drag bones from new neutral.'}
+                      : 'Bakes current pose into mesh rest + bone pivots. Visual unchanged. Drag bones from new neutral.'}
                   </span>
                 </span>
               </button>
             </PopoverContent>
           </Popover>
+          </div>
         </div>
       )}
 
