@@ -2505,13 +2505,21 @@ export default function CanvasViewport({
       {!previewMode && (!editorState.viewLayers.skeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
 
       {/* Armature skeleton overlay (staging mode, when rig exists). */}
-      {/* GAP-010 — never on the Live Preview surface. */}
+      {/* GAP-010 — never on the Live Preview surface.
+          Wizard "adjust" step forces skeletonEditMode on so joint dots
+          accept drags (otherwise pointerDown bails and the click falls
+          through to part-pick → user drags the whole limb art instead
+          of the elbow joint). Root dot is rendered for the same reason. */}
       {!previewMode && (
         <SkeletonOverlay
           view={view}
           editorMode={editorMode}
           showSkeleton={editorState.viewLayers.skeleton}
-          skeletonEditMode={editorState.editMode === 'skeleton' || editorState.editMode === 'armatureEdit'}
+          skeletonEditMode={
+            editorState.editMode === 'skeleton'
+            || editorState.editMode === 'armatureEdit'
+            || _wizardStep === 'adjust'
+          }
         />
       )}
 

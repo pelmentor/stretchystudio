@@ -112,6 +112,18 @@ export async function runExport(opts) {
   // pct=undefined (meaning indeterminate). When the exporters are
   // upgraded to emit pct (a Phase 1 todo), they'll pass through.
   const wrapProgress = (msg) => emit(undefined, typeof msg === 'string' ? msg : 'progress');
+
+  // Derive modelName from the project so files inside the zip
+  // (model.moc3, model.model3.json, …) match the user's project name —
+  // not the bare "model" default. ASCII-safe sanitisation matches the
+  // exporter's `sanitizeName` rules so Cubism accepts the filenames.
+  const rawName = (project?.name ?? '').trim();
+  const sanitised = rawName
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const modelName = sanitised.length > 0 ? sanitised : 'model';
+
   try {
     /** @type {Blob|undefined} */
     let blob;
@@ -120,12 +132,14 @@ export async function runExport(opts) {
       // exportLive2D below = the runtime .moc3.zip path. Names swapped
       // historically; see io/live2d/exporter.js header comments.
       blob = await exportLive2DProject(project, images, {
+        modelName,
         ...extra,
         generateRig: true,
         onProgress: wrapProgress,
       });
     } else if (format === 'live2d-runtime' || format === 'live2d-full') {
       blob = await exportLive2D(project, images, {
+        modelName,
         ...extra,
         generateRig: format === 'live2d-full',
         onProgress: wrapProgress,

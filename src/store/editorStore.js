@@ -160,9 +160,9 @@ export const useEditorStore = create((set) => ({
   autoKeyframe: false,
 
   /** BVR-007 — N-panel (right-edge tool settings) visibility. Blender's
-   *  `N` toggle. Default true so first-launch users discover the panel;
-   *  collapsing sticks via persistence/UI-toggle if added later. */
-  toolPanelVisible: true,
+   *  `N` toggle. Default false matches Blender (panel collapsed until
+   *  explicitly summoned with N). */
+  toolPanelVisible: false,
 
   /** The ID of the blend shape currently being edited; only meaningful
    *  when editMode === 'blendShape'. Cleared on exitEditMode + on any

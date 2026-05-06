@@ -127,13 +127,16 @@ export function ToolSettingsPanel() {
   const editMode = useEditorStore((s) => s.editMode);
   const toggle   = useEditorStore((s) => s.toggleToolPanel);
 
+  // Collapsed: vertically-centered chevron on the right edge — matches
+  // Blender's N-panel toggle position. Clear of the Reset Pose / View
+  // Layers cluster at top-2 right-2.
   if (!visible) {
     return (
       <button
         type="button"
         onClick={toggle}
         title="Show tool settings (N)"
-        className="absolute top-2 right-2 z-10 h-7 w-7 flex items-center justify-center rounded
+        className="absolute top-1/2 right-2 -translate-y-1/2 z-10 h-7 w-7 flex items-center justify-center rounded
                    bg-card/85 backdrop-blur-md border border-border/60
                    text-foreground/70 hover:text-foreground hover:border-primary/40
                    shadow-md transition-all duration-150"
@@ -143,9 +146,11 @@ export function ToolSettingsPanel() {
     );
   }
 
+  // Expanded: still starts below the Reset Pose row, full panel down to
+  // the canvas bottom.
   return (
     <div
-      className="absolute top-2 right-2 bottom-2 z-10 w-56 flex flex-col
+      className="absolute top-12 right-2 bottom-2 z-10 w-56 flex flex-col
                  bg-card/85 backdrop-blur-md border border-border/60
                  rounded shadow-md text-xs"
     >

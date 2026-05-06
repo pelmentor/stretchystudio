@@ -80,7 +80,14 @@ export function finalize(groupDefs, assignments, meshAllParts) {
   if (fpi) fpi(psd.psdW, psd.psdH, psd.layers, psd.partIds, groupDefs, assignments);
   wiz.setMeshAllParts(meshAllParts);
   useEditorStore.getState().setViewLayers({ skeleton: true });
-  useEditorStore.getState().enterEditMode('skeleton');
+  // Wizard adjust step is rest-pivot placement, NOT pose. Skeleton edit
+  // affordance (yellow joint dots, drag handlers) is enabled by the
+  // `_wizardStep === 'adjust'` gate in CanvasViewport. Entering Pose
+  // Mode here would route joint drags through `node.pose.x/y`, which
+  // translates the bone's worldMatrix and drags every child mesh with
+  // it — exactly the "whole arm follows the joint" bug reported during
+  // the wizard.
+  useEditorStore.getState().exitEditMode();
   wiz.setStep('adjust');
 }
 
@@ -145,7 +152,9 @@ export function applyRig(groupDefs, assignments, meshAllParts) {
   }
   wiz.setMeshAllParts(meshAllParts);
   useEditorStore.getState().setViewLayers({ skeleton: true });
-  useEditorStore.getState().enterEditMode('skeleton');
+  // Same rationale as `finalize` above — adjust step is rest-pivot, not
+  // pose. Drags route through the wizard-step gate, not Pose Mode.
+  useEditorStore.getState().exitEditMode();
   wiz.setStep('adjust');
 }
 

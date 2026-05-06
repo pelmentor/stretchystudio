@@ -906,16 +906,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         {trackpads}
       </svg>
 
-      {/* Floating instruction toolbar — skeleton edit mode */}
-      {skeletonEditMode && (
-        <div className="absolute top-0 inset-x-0 z-40 flex items-center gap-4 px-4 py-2
-                        bg-background/90 border-b border-border backdrop-blur-sm">
-          <span className="text-xs font-semibold text-foreground">Adjust Joints</span>
-          <span className="text-xs text-muted-foreground flex-1">
-            Drag yellow dots to reposition joints.
-          </span>
-        </div>
-      )}
+      {/* Wizard-only instruction banner. The PSD import wizard renders its
+          own toolbar (`PsdImportWizard.jsx` Step 3), so we DO NOT render
+          this duplicate during the wizard either — keep this component
+          quiet and let the wizard own its chrome. Pose / Armature Edit
+          modes get their hints via the N-panel ModeHint + ModePill. */}
     </>
   );
 }

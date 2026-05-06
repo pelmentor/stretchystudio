@@ -64,8 +64,8 @@ const EN = {
   'help.close':                     'Close',
 
   // Export modal
-  'export.title':                   'Export Live2D Model',
-  'export.subtitle':                "Pick the output format. Auto-rig regenerates the rig from the project's PSD layout + tag annotations on every export.",
+  'export.title':                   'Export',
+  'export.subtitle':                "Pick the output format. For Live2D outputs, auto-rig regenerates from the project's PSD layout + tag annotations on every export.",
   'export.format.full.title':       'Live2D Runtime + Auto Rig',
   'export.format.runtime.title':    'Live2D Runtime (no rig)',
   'export.format.cmo3.title':       'Cubism Source (.cmo3)',

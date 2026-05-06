@@ -38,8 +38,11 @@
  *   - `bandBegins`, `bandCounts`: per-band kfbi range
  *   - `keyformBindingIndices`: flat kfbi (band-expanded)
  *   - `bindingKeysBegin`, `bindingKeysCount`, `flatKeys`: per-binding keys
- *   - `paramKfbBegin`, `paramKfbCount`: per-param binding range (-1 means
- *      param is unused; moc3 stores it as 0xFFFFFFFF on the wire).
+ *   - `paramKfbBegin`, `paramKfbCount`: per-param binding range.
+ *      Begin is ALWAYS a valid in-range cumulative index — Cubism rejects
+ *      moc3 with -1 sentinel begins. Params with 0 bindings get their
+ *      begin from the running cursor (= preceding-counts cumulative)
+ *      with count=0 so the sequence stays contiguous.
  *
  * @module io/live2d/moc3/keyformBindings
  */
@@ -161,24 +164,26 @@ export function buildKeyformBindings(opts) {
   }
 
   // Per-parameter binding range — index INTO uniqueBindings[], not kfbi.
+  //
+  // CRITICAL: Cubism's runtime treats `kfb_begin` as a valid in-range
+  // index into `keyform_bindings[]` for EVERY parameter, even ones with
+  // 0 bindings. Emitting `-1` (sentinel) for empty params makes the
+  // runtime reject the moc3 with "Unable to load." Instead, walk the
+  // sorted-by-paramOrder uniqueBindings and assign each param the
+  // current cursor position; params with 0 bindings get the cursor too
+  // (which equals the next-with-bindings param's begin), keeping the
+  // sequence contiguous and in-range.
   const paramKfbBegin = [];
   const paramKfbCount = [];
+  let cursor = 0;
   for (const p of params) {
-    let begin = -1;
     let count = 0;
     for (let bi = 0; bi < uniqueBindings.length; bi++) {
-      if (uniqueBindings[bi].paramId === p.id) {
-        if (begin === -1) begin = bi;
-        count++;
-      }
+      if (uniqueBindings[bi].paramId === p.id) count++;
     }
-    if (begin >= 0) {
-      paramKfbBegin.push(begin);
-      paramKfbCount.push(count);
-    } else {
-      paramKfbBegin.push(-1); // 0xFFFFFFFF on the wire
-      paramKfbCount.push(0);
-    }
+    paramKfbBegin.push(cursor);
+    paramKfbCount.push(count);
+    cursor += count;
   }
 
   return {

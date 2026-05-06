@@ -508,7 +508,7 @@ export function ExportModal() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Download size={16} className="text-primary" />
-            Export Live2D Model
+            Export
           </DialogTitle>
           <DialogDescription>
             Pick the output format. Auto-rig regenerates the rig from the project's PSD layout +

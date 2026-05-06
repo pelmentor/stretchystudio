@@ -185,6 +185,7 @@ useProjectStore.subscribe((state) => {
 // in a previous session post Phase 3), rigSpec auto-fills with no
 // async pass.
 let _lastSeenProject = null;
+let _lastSkipReasonsKey = null;
 useProjectStore.subscribe((state) => {
   const project = state.project;
   if (project === _lastSeenProject) return;
@@ -194,19 +195,27 @@ useProjectStore.subscribe((state) => {
   const fast = selectRigSpec(project);
   // BUG-023 instrumentation — log why the auto-fill skipped vs populated
   // so we can diagnose post-load "rig is dead" reports without ambiguity.
+  // Dedupe by reasons key so dragging during the wizard's adjust-joints
+  // step (which mutates project on every mousemove without changing the
+  // skip reasons) doesn't flood the log.
   if (!_isComplete(fast, project)) {
     const reasons = [];
     if (!project?.lastInitRigCompletedAt) reasons.push('no-lastInitRigCompletedAt');
     if (!Array.isArray(fast?.artMeshes) || fast.artMeshes.length === 0) reasons.push('empty-artMeshes');
-    logger.warn('rigSpecPostLoad', `auto-fill SKIPPED: ${reasons.join(', ')}`, {
-      reasons,
-      lastInitRigCompletedAt: project?.lastInitRigCompletedAt ?? null,
-      artMeshCount: fast?.artMeshes?.length ?? 0,
-      warpCount: fast?.warpDeformers?.length ?? 0,
-      rotationCount: fast?.rotationDeformers?.length ?? 0,
-    });
+    const key = reasons.join(',');
+    if (key !== _lastSkipReasonsKey) {
+      _lastSkipReasonsKey = key;
+      logger.warn('rigSpecPostLoad', `auto-fill SKIPPED: ${reasons.join(', ')}`, {
+        reasons,
+        lastInitRigCompletedAt: project?.lastInitRigCompletedAt ?? null,
+        artMeshCount: fast?.artMeshes?.length ?? 0,
+        warpCount: fast?.warpDeformers?.length ?? 0,
+        rotationCount: fast?.rotationDeformers?.length ?? 0,
+      });
+    }
     return;
   }
+  _lastSkipReasonsKey = null;
   const v = state.versionControl?.geometryVersion ?? 0;
   useRigSpecStore.setState({
     rigSpec: fast,
