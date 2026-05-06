@@ -24,13 +24,20 @@ import {
 } from '../io/live2d/rig/rigWarpsStore.js';
 import { computeProjectSignatures } from '../io/meshSignature.js';
 import {
+  ensureWeightGroups,
+  syncBoneWeightsFromActive,
+  applyWeightStroke,
+} from '../io/live2d/rig/meshSync.js';
+import {
   rotationSpecToDeformerNode,
+  warpSpecToDeformerNode,
   upsertDeformerNode,
   removeAllRotationDeformerNodes,
 } from './deformerNodeSync.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
+import { computeWorldMatrices } from '../renderer/transforms.js';
 
 /**
  * Deep clone an object, preserving TypedArrays.
@@ -198,11 +205,41 @@ export const useProjectStore = create((set, get) => {
   /**
    * Reparent a node to a new parent (or to root if newParentId is null).
    * Never touches draw_order.
+   *
+   * BVR-006 — validates against cycles + obviously-bad type pairings:
+   *   - reparent to self → no-op
+   *   - reparent to a descendant (cycle) → no-op
+   *   - bone → part parent → no-op (parts can't own bones)
+   *
+   * Returns nothing; caller can read `project.nodes` after to verify.
    */
   reparentNode: (nodeId, newParentId) => set(produce((state) => {
+    const nodes = state.project.nodes;
+    if (!Array.isArray(nodes)) return;
+    const node = nodes.find((n) => n?.id === nodeId);
+    if (!node) return;
+    if (newParentId === nodeId) return; // self-parenting
+    /** @type {object|null} */
+    const newParent = newParentId ? (nodes.find((n) => n?.id === newParentId) ?? null) : null;
+    if (newParentId && !newParent) return; // dangling target
+    // Cycle: walk newParent's ancestry; if nodeId appears anywhere, reject.
+    if (newParent) {
+      let cursor = /** @type {any} */ (newParent);
+      const guard = new Set();
+      while (cursor) {
+        if (cursor.id === nodeId) return;
+        if (guard.has(cursor.id)) break;
+        guard.add(cursor.id);
+        cursor = cursor.parent ? nodes.find((n) => n?.id === cursor.parent) : null;
+      }
+    }
+    // Type compatibility: bones can't be children of parts (parts have
+    // no skeleton role, can't own bones). Other pairings are permitted —
+    // a part under another part is rare but legal (PSD layer convention).
+    const isBone = node.type === 'group' && !!node.boneRole;
+    if (isBone && newParent && newParent.type === 'part') return;
     state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find(n => n.id === nodeId);
-    if (node) node.parent = newParentId ?? null;
+    node.parent = newParentId ?? null;
     state.versionControl.transformVersion++;
   })),
   /**
@@ -282,6 +319,443 @@ export const useProjectStore = create((set, get) => {
     }
   })),
 
+  // ── Parameter CRUD (V4 Phase 2 — Param editor polish) ────────────
+  // All actions write through the immer recipe so they're undoable.
+  // Mutations stamp `_userAuthored: true` so the entry survives Init
+  // Rig 'merge' (paramSpec.seedParameters honours the marker).
+  // Cascading remove/rename walks every place a paramId can appear:
+  //   - deformer node bindings (`node.bindings[].parameterId`)
+  //   - animation tracks (`anim.tracks[].paramId`)
+  //   - physics rules (`rule.inputs[].paramId`)
+  // Keyforms aren't expanded/collapsed on key add/remove — that's
+  // Track 3 (Keyform editor) territory; keys stored on the param drive
+  // the next Init Rig regen, and the existing keyforms stay until then.
+
+  /**
+   * Add a new parameter. Stamps `_userAuthored: true` so the entry
+   * survives Init Rig 'merge'. Returns true on success, false if the
+   * id collides with an existing param.
+   *
+   * @param {{
+   *   id: string,
+   *   name?: string,
+   *   role?: string,
+   *   min?: number,
+   *   max?: number,
+   *   default?: number,
+   *   decimalPlaces?: number,
+   *   keys?: number[],
+   * }} spec
+   */
+  addParameter: (spec) => {
+    if (!spec || typeof spec.id !== 'string' || spec.id.length === 0) return false;
+    const params = get().project?.parameters ?? [];
+    if (params.some((p) => p?.id === spec.id)) return false;
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const min = typeof spec.min === 'number' ? spec.min : 0;
+      const max = typeof spec.max === 'number' ? spec.max : 1;
+      const def = typeof spec.default === 'number' ? spec.default : Math.min(Math.max(0, min), max);
+      const keys = Array.isArray(spec.keys) ? spec.keys.slice() : [];
+      state.project.parameters = state.project.parameters ?? [];
+      state.project.parameters.push({
+        id:   spec.id,
+        name: spec.name ?? spec.id,
+        role: spec.role ?? 'custom',
+        min,
+        max,
+        default: def,
+        decimalPlaces: typeof spec.decimalPlaces === 'number' ? spec.decimalPlaces : 2,
+        keys,
+        _userAuthored: true,
+        _userAuthoredKeys: keys.slice(),
+      });
+    }));
+    return true;
+  },
+
+  /**
+   * Remove a parameter and cascade-drop every reference. Drops:
+   *   - matching deformer bindings
+   *   - matching animation tracks
+   *   - matching physics rule inputs
+   * Existing keyforms whose keyTuple includes a key on the dropped
+   * param are NOT touched — they're left orphan in the deformer node
+   * and Init Rig regenerates them on the next pass. (See V4 plan §4
+   * Risks — keyform editor track owns the live collapse.)
+   */
+  removeParameter: (paramId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
+    const proj = state.project;
+    proj.parameters = (proj.parameters ?? []).filter((p) => p?.id !== paramId);
+    for (const n of proj.nodes ?? []) {
+      if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
+      n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
+    }
+    for (const anim of proj.animations ?? []) {
+      if (!Array.isArray(anim?.tracks)) continue;
+      anim.tracks = anim.tracks.filter((t) => t?.paramId !== paramId);
+    }
+    for (const rule of proj.physicsRules ?? []) {
+      if (!Array.isArray(rule?.inputs)) continue;
+      rule.inputs = rule.inputs.filter((inp) => inp?.paramId !== paramId);
+    }
+  })),
+
+  /**
+   * Rename a parameter id. Cascades the rename through deformer
+   * bindings, animation tracks, and physics rule inputs. No-op if
+   * `oldId === newId`. Returns false if `newId` collides with another
+   * existing param. Stamps `_userAuthored: true` on the renamed entry.
+   */
+  renameParameter: (oldId, newId) => {
+    if (typeof oldId !== 'string' || typeof newId !== 'string') return false;
+    if (newId.length === 0) return false;
+    if (oldId === newId) return true;
+    const params = get().project?.parameters ?? [];
+    if (params.some((p) => p?.id === newId)) return false;
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const proj = state.project;
+      const param = (proj.parameters ?? []).find((p) => p?.id === oldId);
+      if (!param) return;
+      param.id = newId;
+      param._userAuthored = true;
+      for (const n of proj.nodes ?? []) {
+        if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
+        for (const b of n.bindings) {
+          if (b?.parameterId === oldId) b.parameterId = newId;
+        }
+      }
+      for (const anim of proj.animations ?? []) {
+        for (const t of anim?.tracks ?? []) {
+          if (t?.paramId === oldId) t.paramId = newId;
+        }
+      }
+      for (const rule of proj.physicsRules ?? []) {
+        for (const inp of rule?.inputs ?? []) {
+          if (inp?.paramId === oldId) inp.paramId = newId;
+        }
+      }
+    }));
+    return true;
+  },
+
+  /**
+   * Patch fields on an existing parameter. Whitelisted fields only:
+   * name, min, max, default, decimalPlaces, role. Stamps
+   * `_userAuthored: true` on first patch. No cascade — just field
+   * edits.
+   */
+  patchParameter: (paramId, partial) => set(produce((state) => {
+    if (!partial || typeof partial !== 'object') return;
+    state.hasUnsavedChanges = true;
+    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
+    if (!param) return;
+    if (typeof partial.name === 'string')          param.name = partial.name;
+    if (typeof partial.role === 'string')          param.role = partial.role;
+    if (typeof partial.min === 'number')           param.min = partial.min;
+    if (typeof partial.max === 'number')           param.max = partial.max;
+    if (typeof partial.default === 'number')       param.default = partial.default;
+    if (typeof partial.decimalPlaces === 'number') param.decimalPlaces = partial.decimalPlaces;
+    param._userAuthored = true;
+  })),
+
+  /**
+   * Add a breakpoint key value to a parameter. Idempotent
+   * (epsilon-equal values dedup). Sorts ascending. Tracks the new
+   * value in `_userAuthoredKeys` so Init Rig 'merge' preserves it.
+   * Does NOT expand existing deformer keyforms — Track 3 owns that.
+   */
+  addParamKey: (paramId, value) => set(produce((state) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    state.hasUnsavedChanges = true;
+    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
+    if (!param) return;
+    const EPS = 1e-6;
+    const keys = Array.isArray(param.keys) ? param.keys.slice() : [];
+    if (!keys.some((k) => Math.abs(k - value) < EPS)) {
+      keys.push(value);
+      keys.sort((a, b) => a - b);
+      param.keys = keys;
+    }
+    const userKeys = Array.isArray(param._userAuthoredKeys) ? param._userAuthoredKeys.slice() : [];
+    if (!userKeys.some((k) => Math.abs(k - value) < EPS)) {
+      userKeys.push(value);
+      userKeys.sort((a, b) => a - b);
+      param._userAuthoredKeys = userKeys;
+    }
+    param._userAuthored = true;
+  })),
+
+  /**
+   * Remove a breakpoint key value from a parameter. Removes from both
+   * `keys` and `_userAuthoredKeys` (if it was user-added). Does NOT
+   * collapse existing deformer keyforms — they stay until the next
+   * Init Rig pass regenerates the keyform list.
+   */
+  removeParamKey: (paramId, value) => set(produce((state) => {
+    if (typeof value !== 'number') return;
+    state.hasUnsavedChanges = true;
+    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
+    if (!param) return;
+    const EPS = 1e-6;
+    if (Array.isArray(param.keys)) {
+      param.keys = param.keys.filter((k) => Math.abs(k - value) >= EPS);
+    }
+    if (Array.isArray(param._userAuthoredKeys)) {
+      param._userAuthoredKeys = param._userAuthoredKeys.filter((k) => Math.abs(k - value) >= EPS);
+    }
+    param._userAuthored = true;
+  })),
+
+  /**
+   * Toggle the `_userAuthored` lock flag on a parameter. When set,
+   * Init Rig 'merge' mode preserves the parameter verbatim (range,
+   * default, keys, role unchanged). 'replace' mode still clobbers.
+   */
+  setParameterUserAuthored: (paramId, on) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
+    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
+    if (!param) return;
+    if (on) param._userAuthored = true;
+    else delete param._userAuthored;
+  })),
+
+  // ── Weight paint (V4 Phase 4b) ────────────────────────────────────
+  // All actions write through immer so they're undoable. They migrate
+  // legacy `mesh.boneWeights` + `mesh.jointBoneId` into the modern
+  // `mesh.weightGroups` + `mesh.activeWeightGroup` shape on first
+  // touch, then mirror the active group's weights back into
+  // `mesh.boneWeights` so the cmo3 export pipeline stays unchanged
+  // (single-bone export preserved per plan §6 scope cut).
+
+  /**
+   * Ensure a part's mesh has the weightGroups shape. Idempotent.
+   * Used as the first step of entering weight paint mode (so the
+   * brush has something to paint into) and by `setActiveWeightGroup`
+   * before swapping the active.
+   */
+  ensureWeightGroupsForPart: (partId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
+    const node = state.project.nodes.find((n) => n?.id === partId);
+    if (!node?.mesh) return;
+    const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
+    if (ensureWeightGroups(node.mesh, boneGroups)) {
+      syncBoneWeightsFromActive(node.mesh, boneGroups);
+    }
+  })),
+
+  /**
+   * Switch the active weight group on a part. Auto-migrates if needed
+   * (so the user can pick "set active" before painting). Mirrors the
+   * new active group into legacy `mesh.boneWeights`.
+   */
+  setActiveWeightGroup: (partId, groupName) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
+    const node = state.project.nodes.find((n) => n?.id === partId);
+    if (!node?.mesh) return;
+    const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
+    ensureWeightGroups(node.mesh, boneGroups);
+    if (typeof groupName !== 'string' || !node.mesh.weightGroups?.[groupName]) return;
+    node.mesh.activeWeightGroup = groupName;
+    syncBoneWeightsFromActive(node.mesh, boneGroups);
+  })),
+
+  /**
+   * Apply a brush stroke's per-vertex updates to the active weight
+   * group. Updates is `[{ vertexIndex, weight }]`. Mirrors back to
+   * `mesh.boneWeights` automatically. Called many times per stroke;
+   * each call is one immer commit (undo restores per-stroke
+   * granularity).
+   */
+  paintWeightStroke: (partId, updates) => {
+    if (!Array.isArray(updates) || updates.length === 0) return;
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const node = state.project.nodes.find((n) => n?.id === partId);
+      if (!node?.mesh) return;
+      const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
+      ensureWeightGroups(node.mesh, boneGroups);
+      applyWeightStroke(node.mesh, updates, boneGroups);
+      // NOTE: do NOT bump geometryVersion here. Weights are not geometry —
+      // bumping it invalidates rigSpec on every paint commit, which makes
+      // the live-preview physics tick rebuild physicsState every frame
+      // (resetting accumulated pendulum velocity). The mesh vertex array
+      // hasn't changed, so the rig is still valid.
+    }));
+  },
+
+  /**
+   * Blender's "Apply Pose As Rest" — bake every bone's pose offset
+   * into descendant rest data and zero all bone poses simultaneously.
+   *
+   * After this, the current visual state IS the new rest pose:
+   *   - Mesh `restX/restY` (and `x/y`) are updated to the canvas-space
+   *     positions the meshes were previously rendered at (with poses
+   *     active). Render at zero pose now matches pre-bake render.
+   *   - Each bone's `transform.pivotX/pivotY` shifts to the joint's
+   *     visually-current canvas-space position. Future bone arc drags
+   *     rotate around the right point.
+   *   - All bones' `pose` fields zero out.
+   *
+   * Driver-param bones (arms / elbows / head — anything with a
+   * `ParamRotation_<role>` param) keep their pose at zero by contract,
+   * so this action is a no-op for them. Their rotation lives in
+   * params and the rig deformer chain; that wiring is untouched.
+   *
+   * Why all poses must zero simultaneously: rotation around point A by
+   * angle α composed with rotation around point B by angle β isn't a
+   * rotation by (α+β) around any C derivable from A and B alone. If we
+   * baked one bone at a time leaving descendant poses in place, the
+   * descendant pose centers shift but their rotations don't compose
+   * correctly. Zero-all-at-once + bake cumulative world matrices into
+   * mesh rest sidesteps that — meshes carry the cumulative transform
+   * directly in canvas-space.
+   *
+   * Bumps `geometryVersion` so `rigSpecStore` invalidates and rebuilds
+   * against the new rest. Idle motions / animation deltas computed
+   * relative to mesh rest will see the new baseline; existing keyframe
+   * tracks targeting bone poses still fire (they target node id +
+   * prop name, neither of which changed).
+   */
+  /**
+   * BVR-004 — Armature Edit Mode parent translate.
+   * Shifts a bone's `transform.pivotX/Y` by `(dx, dy)`; **descendants
+   * follow** by applying the same delta to their pivots so the rest
+   * topology stays rigid. Mirrors Blender's Edit Mode "G" on a parent
+   * bone — children move in lockstep.
+   *
+   * Pure-rest write: only `transform.pivotX/Y` are touched. `node.pose`
+   * is untouched. Children's `pose` is untouched too — descendant-
+   * follow is rest-frame-only.
+   *
+   * @param {string} nodeId — id of the bone to translate
+   * @param {number} dx — canvas-px delta on X
+   * @param {number} dy — canvas-px delta on Y
+   */
+  shiftBonePivot: (nodeId, dx, dy) => set(produce((state) => {
+    const project = state.project;
+    const nodes = project.nodes ?? [];
+    if (nodes.length === 0) return;
+    if (typeof dx !== 'number' || typeof dy !== 'number') return;
+    if (dx === 0 && dy === 0) return;
+    const start = nodes.find((n) => n?.id === nodeId);
+    if (!start || start.type !== 'group' || !start.boneRole) return;
+    // Walk descendants once (BFS) so we touch every bone whose chain
+    // includes the dragged bone. Non-bone descendants don't carry
+    // pivots — skip them, but DO descend through them so a bone child
+    // separated by a plain group still moves.
+    /** @type {Map<string, string[]>} */
+    const childrenById = new Map();
+    for (const n of nodes) {
+      if (!n?.parent) continue;
+      let bucket = childrenById.get(n.parent);
+      if (!bucket) { bucket = []; childrenById.set(n.parent, bucket); }
+      bucket.push(n.id);
+    }
+    const queue = [nodeId];
+    const visited = new Set();
+    while (queue.length > 0) {
+      const cur = queue.shift();
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      const n = nodes.find((nn) => nn?.id === cur);
+      if (n && n.type === 'group' && n.boneRole) {
+        if (!n.transform) {
+          n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+        }
+        n.transform.pivotX = (n.transform.pivotX ?? 0) + dx;
+        n.transform.pivotY = (n.transform.pivotY ?? 0) + dy;
+      }
+      const kids = childrenById.get(cur) ?? [];
+      for (const kid of kids) queue.push(kid);
+    }
+    // Pivot is rest-frame; bump geometryVersion so rigSpec invalidates.
+    state.versionControl.geometryVersion++;
+  })),
+
+  applyPoseAsRest: () => set(produce((state) => {
+    const project = state.project;
+    const nodes = project.nodes ?? [];
+    if (nodes.length === 0) return;
+
+    const worldMap = computeWorldMatrices(nodes);
+
+    // 1. Bake each part's world matrix into its mesh rest verts. The
+    //    world matrix already incorporates every ancestor bone's pose,
+    //    so this captures the cumulative transform in canvas-space.
+    let bakedAnything = false;
+    for (const n of nodes) {
+      if (n?.type !== 'part' || !n.mesh || !Array.isArray(n.mesh.vertices)) continue;
+      const m = worldMap.get(n.id);
+      if (!m) continue;
+      // Skip if the matrix is identity — nothing to bake on this part.
+      const isIdentity =
+           Math.abs(m[0] - 1) < 1e-6 && Math.abs(m[1])     < 1e-6
+        && Math.abs(m[3])     < 1e-6 && Math.abs(m[4] - 1) < 1e-6
+        && Math.abs(m[6])     < 1e-6 && Math.abs(m[7])     < 1e-6;
+      if (isIdentity) continue;
+      for (const v of n.mesh.vertices) {
+        if (!v) continue;
+        const rx = (typeof v.restX === 'number') ? v.restX : v.x;
+        const ry = (typeof v.restY === 'number') ? v.restY : v.y;
+        const nx = m[0] * rx + m[3] * ry + m[6];
+        const ny = m[1] * rx + m[4] * ry + m[7];
+        v.restX = nx;
+        v.restY = ny;
+        v.x     = nx;
+        v.y     = ny;
+      }
+      bakedAnything = true;
+    }
+
+    // 2. Update each bone's pivot to its visually-current canvas
+    //    position. We compute this in the bone's PARENT's frame: the
+    //    pivot is stored relative to the parent's coordinate system,
+    //    but post-bake every parent bone has identity world (pose
+    //    zero, rest identity-modulo-pivot which IS identity for any
+    //    input point), so parent's frame collapses to canvas.
+    //    Therefore the new pivot in parent's frame = the pivot's
+    //    canvas position with pre-bake poses.
+    for (const n of nodes) {
+      if (n?.type !== 'group' || !n.boneRole) continue;
+      const m = worldMap.get(n.id);
+      if (!m) continue;
+      // Apply the bone's WORLD matrix to its own pivot. The pivot is
+      // an input in the bone's local frame (which is parent's frame
+      // under our flat-canvas model); world maps that to canvas.
+      const px = n.transform?.pivotX ?? 0;
+      const py = n.transform?.pivotY ?? 0;
+      const newPx = m[0] * px + m[3] * py + m[6];
+      const newPy = m[1] * px + m[4] * py + m[7];
+      if (!n.transform) {
+        n.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+      }
+      n.transform.pivotX = newPx;
+      n.transform.pivotY = newPy;
+    }
+
+    // 3. Zero all bone poses simultaneously.
+    for (const n of nodes) {
+      if (n?.type !== 'group' || !n.boneRole) continue;
+      if (!n.pose) {
+        n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+      } else {
+        n.pose.rotation = 0;
+        n.pose.x        = 0;
+        n.pose.y        = 0;
+        n.pose.scaleX   = 1;
+        n.pose.scaleY   = 1;
+      }
+    }
+
+    if (bakedAnything) {
+      state.versionControl.geometryVersion++;
+    }
+    state.hasUnsavedChanges = true;
+  })),
+
   /** Reset project to empty state */
   resetProject: () => {
     clearHistory();
@@ -320,6 +794,36 @@ export const useProjectStore = create((set, get) => {
     // migrated, but call again here to defend against direct callers.
     migrateProject(projectData);
     clearHistory();
+    // BUG-023 instrumentation — surface paramOrphans + deformer/part counts
+    // at load time so when the user reports "rig dead after reload" we
+    // already have the failure mode logged. Cheap walk, fires once per load.
+    {
+      const paramIds = new Set((projectData.parameters ?? []).map((p) => p?.id).filter(Boolean));
+      const orphans = [];
+      let deformerCount = 0;
+      let partWithMeshCount = 0;
+      for (const n of projectData.nodes ?? []) {
+        if (n?.type === 'deformer') {
+          deformerCount++;
+          for (const b of n.bindings ?? []) {
+            if (b?.parameterId && !paramIds.has(b.parameterId)) {
+              orphans.push({ nodeId: n.id, parameterId: b.parameterId });
+            }
+          }
+        } else if (n?.type === 'part' && n.mesh?.vertices) {
+          partWithMeshCount++;
+        }
+      }
+      logger.info('loadProject', `nodes=${projectData.nodes?.length ?? 0} parts=${partWithMeshCount} deformers=${deformerCount} params=${paramIds.size} initRigDone=${!!projectData.lastInitRigCompletedAt}`, {
+        partWithMeshCount,
+        deformerCount,
+        paramCount: paramIds.size,
+        lastInitRigCompletedAt: projectData.lastInitRigCompletedAt ?? null,
+      });
+      if (orphans.length > 0) {
+        logger.warn('paramOrphans', `${orphans.length} binding(s) reference unknown params on load`, { orphans });
+      }
+    }
     return set(produce((state) => {
       state.project.version = projectData.version;
       state.project.schemaVersion = projectData.schemaVersion;
@@ -524,7 +1028,9 @@ export const useProjectStore = create((set, get) => {
     return produce(state, (draft) => {
       const proj = draft.project;
       // Config-only seeders (no keyforms). Pure defaults; merge==replace.
-      seedParametersFn(proj);
+      // V4 Phase 2 — `seedParametersFn` honours `mode` so user-authored
+      // params + user-added keys survive Init Rig 'merge'.
+      seedParametersFn(proj, mode);
       seedMaskConfigsFn(proj, mode);
       seedPhysicsRulesFn(proj, mode);
       seedBoneConfigFn(proj);
@@ -550,6 +1056,37 @@ export const useProjectStore = create((set, get) => {
         seedRigWarpsFn(proj, harvest.rigWarps, mode);
       } else if (mode === 'replace') {
         clearRigWarpsFn(proj);
+      }
+      // BFA-006 Phase 6 fallout — NeckWarp dual-write. Pre-Phase-6
+      // the NeckWarp deformer was dropped on the floor (lived only
+      // in rigSpec). Post-Phase-6 every per-part rigWarp under it
+      // carries `parent: 'NeckWarp'`, so without persisting the
+      // NeckWarp itself, export validation fails with ORPHAN_PARENT
+      // and the runtime can't resolve the chain. Mirrors the
+      // faceParallax dual-write — single deformer, by-id upsert,
+      // merge mode preserves a user-authored entry when present.
+      if (Array.isArray(proj.nodes)) {
+        if (harvest?.neckWarpSpec) {
+          if (mode === 'merge') {
+            const prior = proj.nodes.find(
+              (n) => n && n.id === harvest.neckWarpSpec.id && n.type === 'deformer'
+            );
+            if (!prior || prior._userAuthored !== true) {
+              upsertDeformerNode(proj.nodes, warpSpecToDeformerNode(harvest.neckWarpSpec));
+            }
+          } else {
+            upsertDeformerNode(proj.nodes, warpSpecToDeformerNode(harvest.neckWarpSpec));
+          }
+        } else if (mode === 'replace') {
+          // No NeckWarp this run (faceRig opt-out, or no neck-tagged
+          // meshes). Drop any stale entry so children aren't orphaned.
+          for (let i = proj.nodes.length - 1; i >= 0; i--) {
+            const n = proj.nodes[i];
+            if (n?.id === 'NeckWarp' && n.type === 'deformer') {
+              proj.nodes.splice(i, 1);
+            }
+          }
+        }
       }
       // BFA-006 Phase 3 — dual-write rotation deformer nodes from the
       // harvest's rigSpec so `selectRigSpec(project)` picks them up
@@ -597,6 +1134,25 @@ export const useProjectStore = create((set, get) => {
       // `validateProjectSignatures(project)` returns the divergence
       // report; consumer (UI banner) decides what to do.
       proj.meshSignatures = computeProjectSignatures(proj);
+      // Drop `ParamRotation_<g>` entries whose owning rotation deformer
+      // was pruned as a dead-end orphan in `pruneOrphanRotationDeformers`
+      // (initRig.js). seedParameters above synthesises one per non-bone,
+      // non-skipped group; harvest knows which of those rotations have
+      // no mesh chain through them and reports the corresponding
+      // parameter ids back here. Without this, the slider sits in the
+      // Parameters panel driving nothing (Rotation_root, Rotation_bothLegs,
+      // Rotation_<arm> when handwear has no boneWeights yet, etc.).
+      const droppedParamIds = harvest?.droppedParamIds;
+      if (Array.isArray(droppedParamIds) && droppedParamIds.length > 0) {
+        const dropSet = new Set(droppedParamIds);
+        // V4 Phase 2 — keep user-authored params even if their owning
+        // rotation deformer was pruned as orphan. Auto-seeded ones drop.
+        proj.parameters = proj.parameters.filter((p) => {
+          if (!p?.id) return true;
+          if (!dropSet.has(p.id)) return true;
+          return p._userAuthored === true;
+        });
+      }
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.
       // ISO timestamp; readable in logs / debug if needed.

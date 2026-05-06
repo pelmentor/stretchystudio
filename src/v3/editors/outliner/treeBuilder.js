@@ -83,26 +83,44 @@
  *   - 'part' / 'group' come from the hierarchy mode.
  *   - 'deformer' comes from rig mode (kind tells warp vs rotation).
  *   - 'artmesh' is the rig-mode leaf (selects the part by mesh id).
+ *   - 'armature' is the BVR-003 synthetic Armature root (groups all
+ *     top-level bones). Not backed by a real `project.nodes` entry;
+ *     `isSynthetic: true`. Clicking selects the first child bone.
  *
  * @typedef {Object} OutlinerNode
- * @property {string}                                          id
- * @property {('part'|'group'|'deformer'|'artmesh')}           type
- * @property {string}                                          name
- * @property {string|null}                                     parent
- * @property {OutlinerNode[]}                                  children
- * @property {boolean}                                         visible
- * @property {number}                                          sortKey
- * @property {('warp'|'rotation')=}                            deformerKind
- * @property {boolean=}                                        isBone
+ * @property {string}                                                       id
+ * @property {('part'|'group'|'deformer'|'artmesh'|'armature')}             type
+ * @property {string}                                                       name
+ * @property {string|null}                                                  parent
+ * @property {OutlinerNode[]}                                               children
+ * @property {boolean}                                                      visible
+ * @property {number}                                                       sortKey
+ * @property {('warp'|'rotation')=}                                         deformerKind
+ * @property {boolean=}                                                     isBone
  *   Skeleton-mode rows set this so TreeNode renders a bone icon
  *   instead of the default folder. The underlying node is still a
  *   group (selectionStore uses `type:'group'`).
- * @property {boolean=}                                        isDeformer
+ * @property {boolean=}                                                     isArmature
+ *   BVR-003 — synthetic Armature container row. Renders with the
+ *   bone icon at full opacity / medium weight. Only the synthetic
+ *   armature carries this; real bones use `isBone` instead.
+ * @property {boolean=}                                                     isSynthetic
+ *   Set on rows that have no backing `project.nodes` entry (the
+ *   synthetic Armature root). Selection click on a synthetic row
+ *   routes to the first child bone instead of dispatching a
+ *   `select({type:'armature', id})` we don't yet support.
+ * @property {boolean=}                                                     isDeformer
  *   BFA-006 Phase 4 — set on `type:'deformer'` rows in the unified
  *   hierarchy tree. Lets TreeNode pick a deformer-specific icon
  *   without overloading `type` (we keep `type:'deformer'` so
  *   selectionStore + click-routing works the same).
  */
+
+/**
+ * Synthetic Armature root id. Stable so collapse-state and keyboard
+ * nav reference it across renders. Not present in `project.nodes`.
+ */
+export const ARMATURE_SYNTHETIC_ID = '__armature_root__';
 
 /**
  * @typedef {('viewLayer'|'hierarchy'|'rig'|'skeleton'|'param'|'anim')} OutlinerDisplayMode
@@ -287,7 +305,38 @@ function buildHierarchyTree(nodes) {
   const roots = (childrenByParent.get('__ROOT__') ?? [])
     .map(build)
     .sort((a, b) => b.sortKey - a.sortKey);
-  return roots;
+  return wrapArmature(roots);
+}
+
+/**
+ * BVR-003 — wrap top-level bone rows in a synthetic Armature container
+ * so the Outliner reads "Armature → bones" instead of bones-as-peers
+ * with parts. Pure UI shape; no data-model change. Idempotent: if no
+ * top-level bones exist (no rig yet), returns `roots` unchanged.
+ *
+ * @param {OutlinerNode[]} roots
+ * @returns {OutlinerNode[]}
+ */
+function wrapArmature(roots) {
+  const bones = [];
+  const others = [];
+  for (const r of roots) {
+    if (r.isBone) bones.push(r);
+    else others.push(r);
+  }
+  if (bones.length === 0) return roots;
+  const armature = /** @type {OutlinerNode} */ ({
+    id: ARMATURE_SYNTHETIC_ID,
+    type: 'armature',
+    name: 'Armature',
+    parent: null,
+    children: bones,
+    visible: true,
+    sortKey: Number.POSITIVE_INFINITY, // pin to top of the root list
+    isArmature: true,
+    isSynthetic: true,
+  });
+  return [armature, ...others];
 }
 
 /**
@@ -366,9 +415,10 @@ function buildSkeletonTree(nodes) {
     };
   }
 
-  return (childrenByParent.get('__ROOT__') ?? [])
+  const roots = (childrenByParent.get('__ROOT__') ?? [])
     .map(build)
     .sort((a, b) => a.name.localeCompare(b.name));
+  return wrapArmature(roots);
 }
 
 /**

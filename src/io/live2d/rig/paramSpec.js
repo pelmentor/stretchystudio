@@ -350,37 +350,51 @@ export function indexParamSpec(specs) {
  * the project owns its parameter list — exports become deterministic for
  * this subsystem, and the user can edit the list (Stage 1+ UI).
  *
- * Destructive: overwrites the existing `project.parameters`. The plan's
- * "Seeder semantics" section is the contract — caller is responsible for
- * any confirmation prompt before calling.
+ * **Mode (V4 Phase 2 extension):**
+ *   - `'replace'` (default, back-compat): full destructive re-init —
+ *     overwrites every entry, ignoring `_userAuthored` markers.
+ *   - `'merge'`: preserve user-authored params + user-added breakpoints.
+ *     - Param entries with `_userAuthored: true` survive verbatim.
+ *     - For non-user-authored params, any `_userAuthoredKeys: number[]`
+ *       are unioned into the regenerated `keys` (sorted, deduped).
  *
  * Idempotent in the sense that calling twice with the same project state
- * produces the same result. Different from re-seeding after the user has
- * tweaked the list — that's destructive (intentional).
+ * produces the same result.
  *
  * @param {object} project - the live project object (mutated)
+ * @param {'replace'|'merge'} [mode='replace']
  * @returns {ParamSpec[]} the seeded list (also written to project.parameters)
  */
-export function seedParameters(project) {
+export function seedParameters(project, mode = 'replace') {
   const meshNodes = (project.nodes ?? []).filter(
     (n) => n.type === 'part' && n.mesh && n.visible !== false
   );
   const groupNodes = (project.nodes ?? []).filter((n) => n.type === 'group');
 
-  // Run the generator with empty baseParameters — forces synthesis of the
-  // full standard + variant + bone + rotation list. Then store the result
-  // verbatim. After this, future `buildParameterSpec({ baseParameters: project.parameters })`
-  // calls take the native rig path and return the seed unchanged.
-  //
+  // V4 Phase 2 — capture user-authored state BEFORE we run the generator.
+  // In 'merge' mode we use these snapshots to preserve the user's edits;
+  // in 'replace' mode we throw them away and the snapshot is unused.
+  /** @type {Map<string, object>} */
+  const priorUserAuthored = new Map();
+  /** @type {Map<string, number[]>} */
+  const priorUserAuthoredKeys = new Map();
+  if (mode === 'merge') {
+    for (const p of project.parameters ?? []) {
+      if (!p?.id) continue;
+      if (p._userAuthored === true) {
+        priorUserAuthored.set(p.id, p);
+      }
+      if (Array.isArray(p._userAuthoredKeys) && p._userAuthoredKeys.length > 0) {
+        priorUserAuthoredKeys.set(p.id, p._userAuthoredKeys.slice());
+      }
+    }
+  }
+
   // BUG-018 — real-world wizard-imported projects never write `n.tag` onto
   // the node; every other consumer (exporter.js, moc3writer.js, physics3
   // generator) derives the tag from `matchTag(node.name)`. Reading `n.tag`
   // alone returned undefined and `tagsPresent` ended up empty, silently
-  // dropping every `requireTag`-gated standard param (ParamHairFront,
-  // ParamHairBack, ParamShirt, ParamBust, ParamPants) — they showed up in
-  // `paramOrphans` because tagWarpBindings still referenced them despite
-  // project.parameters never registering them. Test fixtures DO set
-  // `n.tag` explicitly, so prefer it when present.
+  // dropping every `requireTag`-gated standard param.
   // PP2-005 — read subsystems opt-out flags so disabled subsystems'
   // standard params (ParamHair*, ParamShirt/Skirt/Pants) and bone
   // rotation params for hair/clothing-named bones get filtered out
@@ -401,6 +415,52 @@ export function seedParameters(project) {
     subsystems,
   });
 
+  if (mode === 'merge' && (priorUserAuthored.size > 0 || priorUserAuthoredKeys.size > 0)) {
+    // 1) Merge per-param user-added keys into the regenerated keys.
+    for (const p of spec) {
+      if (!p?.id) continue;
+      const userKeys = priorUserAuthoredKeys.get(p.id);
+      if (!userKeys) continue;
+      const merged = mergeKeyLists(p.keys ?? [], userKeys);
+      p.keys = merged;
+      p._userAuthoredKeys = userKeys.slice();
+    }
+    // 2) Replace generator entries with their user-authored versions
+    //    (user wins on id collision), then append any user-authored
+    //    params that the generator didn't produce.
+    const seen = new Set(spec.map((p) => p?.id).filter(Boolean));
+    for (let i = 0; i < spec.length; i++) {
+      const replacement = priorUserAuthored.get(spec[i]?.id);
+      if (replacement) spec[i] = replacement;
+    }
+    for (const [id, p] of priorUserAuthored) {
+      if (!seen.has(id)) spec.push(p);
+    }
+  }
+
   project.parameters = spec;
   return spec;
+}
+
+/**
+ * Sorted-ascending dedup union of two number arrays (with epsilon-equal
+ * de-duping at 1e-6 to dodge float rounding artefacts when user adds
+ * a key visually-equal to a generated one).
+ *
+ * @param {number[]} a
+ * @param {number[]} b
+ * @returns {number[]}
+ */
+function mergeKeyLists(a, b) {
+  const out = [];
+  const seen = [];
+  const EPS = 1e-6;
+  for (const v of [...a, ...b]) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    if (seen.some((s) => Math.abs(s - v) < EPS)) continue;
+    seen.push(v);
+    out.push(v);
+  }
+  out.sort((x, y) => x - y);
+  return out;
 }

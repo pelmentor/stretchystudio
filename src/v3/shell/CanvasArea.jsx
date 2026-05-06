@@ -29,11 +29,13 @@ import { useEffect, useRef } from 'react';
 import CanvasViewport from '../../components/canvas/CanvasViewport.jsx';
 import { WarpDeformerOverlay } from '../editors/viewport/overlays/WarpDeformerOverlay.jsx';
 import { RotationDeformerOverlay } from '../editors/viewport/overlays/RotationDeformerOverlay.jsx';
+import { WeightPaintOverlay } from '../editors/viewport/overlays/WeightPaintOverlay.jsx';
 import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { ViewLayersPopover } from './ViewLayersPopover.jsx';
 import { ModePill } from './ModePill.jsx';
 import { CanvasToolbar } from './CanvasToolbar.jsx';
+import { ToolSettingsPanel } from './ToolSettingsPanel.jsx';
 
 /**
  * @param {Object} props
@@ -60,9 +62,18 @@ export function CanvasArea({ mode }) {
   useEffect(() => {
     useCaptureStore.getState().setCaptureThumbnail(() => thumbCaptureRef.current?.() ?? null);
     useCaptureStore.getState().setRemeshPart((partId, opts) => remeshRef.current?.(partId, opts));
+    // 2026-05-05 — publish exportCaptureRef so the AppShell-level
+    // ExportModal can drive frame capture without prop-drilling. Same
+    // pattern as captureThumbnail. Only the edit Viewport's CanvasArea
+    // wires this — the livePreview tab also mounts but its capture
+    // would render the preview chrome state, not what the user wants
+    // exported. Last-mounted wins; that's fine because the edit tab
+    // and preview tab share project state and share a renderer.
+    useCaptureStore.getState().setCaptureExportFrame((opts) => exportCaptureRef.current?.(opts) ?? null);
     return () => {
       useCaptureStore.getState().setCaptureThumbnail(null);
       useCaptureStore.getState().setRemeshPart(null);
+      useCaptureStore.getState().setCaptureExportFrame(null);
     };
   }, []);
 
@@ -92,6 +103,10 @@ export function CanvasArea({ mode }) {
           View Layers popover (`viewLayers.warpGrids` / `viewLayers.rotationPivots`). */}
       {!isPreview && showWarpGrids       && <WarpDeformerOverlay />}
       {!isPreview && showRotationPivots && <RotationDeformerOverlay />}
+      {/* V4 Phase 4b — weight paint overlay self-gates on
+          `editorStore.editMode === 'weightPaint'` so it only mounts
+          when the user is actively painting; no view-layer toggle. */}
+      {!isPreview && <WeightPaintOverlay />}
       {/* Mode pill (Blender-style) — top-left canvas overlay.
           Surfaces the contextual edit mode for the active selection.
           Edit Viewport only; Live Preview is read-only. */}
@@ -103,6 +118,10 @@ export function CanvasArea({ mode }) {
       {/* View Layers picker (GAP-016) — sits left of Reset Pose button in
           edit Viewport. Hidden in Live Preview (read-only surface). */}
       {!isPreview && <ViewLayersPopover />}
+      {/* BVR-007 — N-panel (Blender's right-edge tool settings panel).
+          Mode-driven content (brush sliders for paint modes, mode hints
+          for armature modes, empty for object mode). Edit Viewport only. */}
+      {!isPreview && <ToolSettingsPanel />}
       {isPreview && (
         <div className="absolute top-1.5 left-2 px-2 py-0.5 rounded bg-primary/20 text-primary text-[9px] font-mono uppercase tracking-wider border border-primary/30 pointer-events-none select-none">
           live preview

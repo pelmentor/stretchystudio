@@ -21,7 +21,12 @@
 
 import { synthesizeDeformerNodesFromSidetables } from './deformerNodeSync.js';
 
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
+
+/** Identity pose offset for a bone group. */
+function identityPose() {
+  return { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+}
 
 const DEFAULT_CANVAS = () => ({
   width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff',
@@ -295,6 +300,67 @@ const MIGRATIONS = {
     delete project.faceParallax;
     delete project.bodyWarp;
     delete project.rigWarps;
+    return project;
+  },
+
+  // v17 — Blender-style rest/pose split for bone groups.
+  //
+  // Pre-v17 every bone-group `node.transform` carried a mix of "rest
+  // layout" fields (`pivotX`/`pivotY` — where the joint actually sits)
+  // and "pose offset" fields (`rotation` / `x` / `y` / `scale*` —
+  // user's drag deltas in skeleton edit and pose work). That mix made
+  // it impossible to do "Apply Pose As Rest" cleanly: there was no
+  // separate slot to bake INTO, and nothing distinguished a rest pivot
+  // change (Skeleton Edit Mode) from a pose drag.
+  //
+  // v17 adds `node.pose = { rotation, x, y, scaleX, scaleY }` for
+  // every bone-group node. `node.transform.{rotation, x, y, scaleX,
+  // scaleY}` is RESERVED (kept at identity) — only `pivotX/pivotY`
+  // remains meaningful on bone-group transforms post-v17.
+  //
+  // Legacy `transform.{rotation, x, y, scaleX, scaleY}` values
+  // (non-default, written by pre-v17 SkeletonOverlay drags) migrate
+  // into `pose` so the user's saved pose survives the format change.
+  // Non-bone nodes (parts, plain groups, deformers) keep `transform`
+  // untouched — pose semantics only apply to bones.
+  17: (project) => {
+    for (const node of project.nodes ?? []) {
+      if (!node || node.type !== 'group' || !node.boneRole) continue;
+      // Establish pose slot. Pre-existing pose (from a re-save mid-
+      // migration) wins over re-deriving from transform.
+      if (!node.pose || typeof node.pose !== 'object') {
+        node.pose = identityPose();
+      } else {
+        const p = node.pose;
+        if (typeof p.rotation !== 'number') p.rotation = 0;
+        if (typeof p.x        !== 'number') p.x        = 0;
+        if (typeof p.y        !== 'number') p.y        = 0;
+        if (typeof p.scaleX   !== 'number') p.scaleX   = 1;
+        if (typeof p.scaleY   !== 'number') p.scaleY   = 1;
+      }
+      // Lift legacy pose values out of transform.
+      if (node.transform && typeof node.transform === 'object') {
+        const t = node.transform;
+        const hasPose =
+             (typeof t.rotation === 'number' && Math.abs(t.rotation) > 1e-9)
+          || (typeof t.x        === 'number' && Math.abs(t.x)        > 1e-9)
+          || (typeof t.y        === 'number' && Math.abs(t.y)        > 1e-9)
+          || (typeof t.scaleX   === 'number' && Math.abs(t.scaleX - 1) > 1e-9)
+          || (typeof t.scaleY   === 'number' && Math.abs(t.scaleY - 1) > 1e-9);
+        if (hasPose) {
+          node.pose.rotation = t.rotation ?? 0;
+          node.pose.x        = t.x        ?? 0;
+          node.pose.y        = t.y        ?? 0;
+          node.pose.scaleX   = t.scaleX   ?? 1;
+          node.pose.scaleY   = t.scaleY   ?? 1;
+        }
+        t.rotation = 0;
+        t.x        = 0;
+        t.y        = 0;
+        t.scaleX   = 1;
+        t.scaleY   = 1;
+      }
+    }
     return project;
   },
 };

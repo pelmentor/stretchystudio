@@ -25,7 +25,7 @@
  * @module v3/shell/ModePill
  */
 
-import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle } from 'lucide-react';
+import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle, Brush } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.jsx';
 import { Button } from '../../components/ui/button.jsx';
 import { Checkbox } from '../../components/ui/checkbox.jsx';
@@ -37,20 +37,34 @@ import { usePreferencesStore } from '../../store/preferencesStore.js';
 /** Resolve the active selection's project node + the modes it supports. */
 function describeSelection() {
   const active = useSelectionStore.getState().getActive();
-  if (!active) return { active: null, node: null, kind: 'none' };
+  if (!active) return { active: null, node: null, kind: 'none', hasWeights: false };
   const project = useProjectStore.getState().project;
   const node = project.nodes.find((n) => n.id === active.id) ?? null;
-  if (!node) return { active, node: null, kind: 'unknown' };
-  if (active.type === 'part' && node.mesh) return { active, node, kind: 'meshedPart' };
-  if (active.type === 'group' && node.boneRole) return { active, node, kind: 'boneGroup' };
-  return { active, node, kind: 'other' };
+  if (!node) return { active, node: null, kind: 'unknown', hasWeights: false };
+  // V4 Phase 4b — meshed parts with bone-binding data (legacy
+  // `boneWeights` / `jointBoneId` from auto-rig OR modern `weightGroups`)
+  // qualify for Weight Paint. Surface as a separate flag so the
+  // dropdown can enable Edit Mode AND Weight Paint independently.
+  const mesh = node?.mesh;
+  const hasWeights = !!(
+    mesh && (
+      mesh.boneWeights
+      || mesh.jointBoneId
+      || (mesh.weightGroups && Object.keys(mesh.weightGroups).length > 0)
+    )
+  );
+  if (active.type === 'part' && node.mesh) return { active, node, kind: 'meshedPart', hasWeights };
+  if (active.type === 'group' && node.boneRole) return { active, node, kind: 'boneGroup', hasWeights: false };
+  return { active, node, kind: 'other', hasWeights: false };
 }
 
 const MODE_META = {
-  null:        { label: 'Object Mode',  icon: Box },
-  mesh:        { label: 'Edit Mode',    icon: Pencil },
-  skeleton:    { label: 'Skeleton',     icon: Bone },
-  blendShape:  { label: 'Blend Shape',  icon: Sparkles },
+  null:         { label: 'Object Mode',    icon: Box },
+  mesh:         { label: 'Edit Mode',      icon: Pencil },
+  skeleton:     { label: 'Pose Mode',      icon: Bone },
+  armatureEdit: { label: 'Armature Edit',  icon: Bone },
+  blendShape:   { label: 'Blend Shape',    icon: Sparkles },
+  weightPaint:  { label: 'Weight Paint',   icon: Brush },
 };
 
 function ModeRow({ icon: Icon, label, checked, onSelect, disabled, hint }) {
@@ -94,7 +108,8 @@ export function ModePill() {
   // user picks a different node.
   useSelectionStore((s) => s.items);
 
-  const { active, node, kind } = describeSelection();
+  const { active, node, kind, hasWeights } = describeSelection();
+  const ensureWeightGroupsForPart = useProjectStore((s) => s.ensureWeightGroupsForPart);
 
   const meta = MODE_META[editMode ?? 'null'] ?? MODE_META.null;
   const PillIcon = meta.icon;
@@ -116,10 +131,22 @@ export function ModePill() {
     if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
     enterEditMode('skeleton');
   }
+  function enterArmatureEdit() {
+    if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
+    enterEditMode('armatureEdit');
+  }
   function enterBlendShape(shapeId) {
     if (!active) return;
     setSelection([active.id]);
     enterEditMode('blendShape', { blendShapeId: shapeId });
+  }
+  function enterWeightPaint() {
+    if (!active) return;
+    setSelection([active.id]);
+    // Lazy-migrate legacy boneWeights → modern weightGroups so the
+    // brush has somewhere to write into.
+    ensureWeightGroupsForPart(active.id);
+    enterEditMode('weightPaint');
   }
 
   const blendShapes = (kind === 'meshedPart' && Array.isArray(node?.blendShapes))
@@ -190,15 +217,41 @@ export function ModePill() {
         />
         <ModeRow
           icon={Bone}
-          label="Skeleton Edit"
+          label="Pose Mode"
           checked={editMode === 'skeleton'}
           disabled={kind !== 'boneGroup'}
           hint={
             kind === 'boneGroup'
-              ? 'Drag bone joints to reposition pivots'
-              : 'Select a bone-role group to enter Skeleton Edit'
+              ? 'Pose bones — drag joints / rotate. Writes to node.pose.*. Apply Pose As Rest available.'
+              : 'Select a bone-role group to enter Pose Mode'
           }
           onSelect={enterSkeleton}
+        />
+        <ModeRow
+          icon={Bone}
+          label="Armature Edit"
+          checked={editMode === 'armatureEdit'}
+          disabled={kind !== 'boneGroup'}
+          hint={
+            kind === 'boneGroup'
+              ? 'Edit rest layout — drag joints to shift pivots (descendants follow). G/R/S edit transform.{pivot, rotation, scale} (rest, not pose).'
+              : 'Select a bone-role group to enter Armature Edit'
+          }
+          onSelect={enterArmatureEdit}
+        />
+        <ModeRow
+          icon={Brush}
+          label="Weight Paint"
+          checked={editMode === 'weightPaint'}
+          disabled={kind !== 'meshedPart' || !hasWeights}
+          hint={
+            kind !== 'meshedPart'
+              ? 'Select a meshed part to paint weights'
+              : !hasWeights
+                ? 'This mesh has no bone-binding yet (auto-rig sets it on handwear / arm parts; manual binding lands in a follow-up)'
+                : 'Paint per-vertex weights for the active vertex group'
+          }
+          onSelect={enterWeightPaint}
         />
 
         {blendShapes.length > 0 && (

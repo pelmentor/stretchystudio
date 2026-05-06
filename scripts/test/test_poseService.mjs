@@ -5,8 +5,13 @@
 //
 //   - resetPoseDraft()  — clear draftPose + reset paramValues only
 //   - resetToRestPose() — same as above + zero every bone-tagged
-//                         group's transform.{rotation,x,y,scaleX,scaleY}
-//                         (pivotX/pivotY preserved)
+//                         group's `node.pose.{rotation,x,y,scaleX,scaleY}`
+//                         (transform.pivotX/pivotY preserved as rest layout;
+//                          mesh.vertices.x/y restored to restX/restY for
+//                          parts whose verts were displaced by JS skinning).
+//
+// Schema v17+: bone groups split into `transform` (rest, only pivot is
+// meaningful) and `pose` (offset, identity at rest).
 //
 // Run: node scripts/test/test_poseService.mjs
 
@@ -36,23 +41,26 @@ function setupProject({ withBoneRotations = true, withParamValues = true, withDr
   useProjectStore.setState({
     project: {
       version: '0.1',
-      schemaVersion: 13,
+      schemaVersion: 17,
       canvas: { width: 800, height: 600 },
       textures: [],
       nodes: [
         {
           id: 'bone-arm-l', type: 'group', name: 'arm-l', parent: null,
           boneRole: 'leftElbow',
-          transform: withBoneRotations
-            ? { x: 10, y: 5, rotation: 45, scaleX: 1.2, scaleY: 0.9, pivotX: 200, pivotY: 300 }
-            : { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 200, pivotY: 300 },
+          // Schema v17: rest layout only on `transform`. Pose offset on `pose`.
+          transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 200, pivotY: 300 },
+          pose: withBoneRotations
+            ? { x: 10, y: 5, rotation: 45, scaleX: 1.2, scaleY: 0.9 }
+            : { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
         },
         {
           id: 'bone-leg-r', type: 'group', name: 'leg-r', parent: null,
           boneRole: 'rightKnee',
-          transform: withBoneRotations
-            ? { x: -3, y: 2, rotation: -20, scaleX: 1, scaleY: 1.1, pivotX: 400, pivotY: 500 }
-            : { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 400, pivotY: 500 },
+          transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 400, pivotY: 500 },
+          pose: withBoneRotations
+            ? { x: -3, y: 2, rotation: -20, scaleX: 1, scaleY: 1.1 }
+            : { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
         },
         {
           id: 'group-no-bone', type: 'group', name: 'face', parent: null,
@@ -109,11 +117,14 @@ function setupProject({ withBoneRotations = true, withParamValues = true, withDr
   assert(nearlyEq(v.ParamAngleX, 0), 'resetPoseDraft: ParamAngleX → 0 (default)');
   assert(nearlyEq(v.ParamEyeLOpen, 1), 'resetPoseDraft: ParamEyeLOpen → 1 (default)');
 
-  // Bone-group transforms NOT touched (animation-mode semantics)
+  // Bone-group pose NOT touched (animation-mode semantics: only draft + paramValues clear)
   const proj = useProjectStore.getState().project;
   const armL = proj.nodes.find(n => n.id === 'bone-arm-l');
-  assert(armL.transform.rotation === 45, 'resetPoseDraft: bone-arm-l rotation preserved (animation mode)');
-  assert(armL.transform.x === 10,         'resetPoseDraft: bone-arm-l x preserved');
+  assert(armL.pose.rotation === 45, 'resetPoseDraft: bone-arm-l pose.rotation preserved (animation mode)');
+  assert(armL.pose.x === 10,         'resetPoseDraft: bone-arm-l pose.x preserved');
+  // Rest layout (transform) untouched throughout.
+  assert(armL.transform.rotation === 0, 'resetPoseDraft: bone-arm-l transform.rotation stays at rest (zero)');
+  assert(armL.transform.pivotX === 200, 'resetPoseDraft: bone-arm-l pivotX preserved');
 }
 
 // ── resetToRestPose: above PLUS bone-group transforms zeroed ──────────
@@ -130,21 +141,23 @@ function setupProject({ withBoneRotations = true, withParamValues = true, withDr
 
   const proj = useProjectStore.getState().project;
   const armL = proj.nodes.find(n => n.id === 'bone-arm-l');
-  assert(armL.transform.rotation === 0, 'resetToRestPose: bone-arm-l rotation → 0');
-  assert(armL.transform.x === 0,        'resetToRestPose: bone-arm-l x → 0');
-  assert(armL.transform.y === 0,        'resetToRestPose: bone-arm-l y → 0');
-  assert(armL.transform.scaleX === 1,   'resetToRestPose: bone-arm-l scaleX → 1');
-  assert(armL.transform.scaleY === 1,   'resetToRestPose: bone-arm-l scaleY → 1');
-  // Pivots preserved
+  // Pose zeroed.
+  assert(armL.pose.rotation === 0, 'resetToRestPose: bone-arm-l pose.rotation → 0');
+  assert(armL.pose.x === 0,        'resetToRestPose: bone-arm-l pose.x → 0');
+  assert(armL.pose.y === 0,        'resetToRestPose: bone-arm-l pose.y → 0');
+  assert(armL.pose.scaleX === 1,   'resetToRestPose: bone-arm-l pose.scaleX → 1');
+  assert(armL.pose.scaleY === 1,   'resetToRestPose: bone-arm-l pose.scaleY → 1');
+  // Rest (transform) untouched.
+  assert(armL.transform.rotation === 0, 'resetToRestPose: bone-arm-l transform.rotation stays 0 (rest)');
   assert(armL.transform.pivotX === 200, 'resetToRestPose: bone-arm-l pivotX preserved');
   assert(armL.transform.pivotY === 300, 'resetToRestPose: bone-arm-l pivotY preserved');
 
   const legR = proj.nodes.find(n => n.id === 'bone-leg-r');
-  assert(legR.transform.rotation === 0, 'resetToRestPose: bone-leg-r rotation → 0');
-  assert(legR.transform.scaleY === 1,   'resetToRestPose: bone-leg-r scaleY → 1');
+  assert(legR.pose.rotation === 0, 'resetToRestPose: bone-leg-r pose.rotation → 0');
+  assert(legR.pose.scaleY === 1,   'resetToRestPose: bone-leg-r pose.scaleY → 1');
   assert(legR.transform.pivotX === 400, 'resetToRestPose: bone-leg-r pivotX preserved');
 
-  // Non-bone group should NOT be reset
+  // Non-bone group should NOT be reset (no `pose` slot, transform untouched)
   const face = proj.nodes.find(n => n.id === 'group-no-bone');
   assert(face.transform.rotation === 12, 'resetToRestPose: non-bone group rotation preserved');
   assert(face.transform.x === 50,        'resetToRestPose: non-bone group x preserved');
@@ -161,8 +174,9 @@ function setupProject({ withBoneRotations = true, withParamValues = true, withDr
 
   const proj = useProjectStore.getState().project;
   const armL = proj.nodes.find(n => n.id === 'bone-arm-l');
-  assert(armL.transform.rotation === 0,  'noop: bone-arm-l rotation already 0');
-  assert(armL.transform.pivotX === 200,  'noop: bone-arm-l pivotX still 200');
+  assert(armL.pose.rotation === 0,        'noop: bone-arm-l pose.rotation already 0');
+  assert(armL.transform.rotation === 0,   'noop: bone-arm-l transform.rotation always 0 (rest)');
+  assert(armL.transform.pivotX === 200,   'noop: bone-arm-l pivotX still 200');
 
   const draft = useAnimationStore.getState().draftPose;
   assert(draft.size === 0, 'noop: draftPose still empty');

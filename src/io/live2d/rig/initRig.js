@@ -133,7 +133,7 @@ function physicsRuleSubsystem(ruleName) {
  */
 export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
   if (!rigSpec || !Array.isArray(rigSpec.warpDeformers)) {
-    return { faceParallaxSpec: null, bodyWarpChain: null, rigWarps: new Map() };
+    return { faceParallaxSpec: null, bodyWarpChain: null, neckWarpSpec: null, rigWarps: new Map() };
   }
 
   const subs = opts.subsystems ?? null;
@@ -142,6 +142,7 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
   const partIdToTag = subs && opts.nodes ? buildPartIdToTagMap(opts.nodes) : null;
 
   let faceParallaxSpec = null;
+  let neckWarpSpec = null;
   const rigWarps = new Map();
   for (const spec of rigSpec.warpDeformers) {
     if (!spec) continue;
@@ -151,7 +152,19 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
       continue;
     }
     if (BODY_WARP_IDS.has(spec.id)) continue;        // collected via bodyWarpChain
-    if (spec.id === NECK_WARP_ID) continue;          // dropped (always part of body chain)
+    if (spec.id === NECK_WARP_ID) {
+      // BFA-006 Phase 6 fallout — pre-Phase-6 the NeckWarp lived only
+      // in the rigSpec and was never persisted (the comment here used
+      // to say "always part of body chain", but it isn't a body chain
+      // member; it sits between BodyXWarp and per-part rigWarps).
+      // Post-Phase-6 every deformer must land in `project.nodes` or
+      // its children orphan. Capture the spec so seedAllRig can
+      // upsert it. Subsystem opt-out: tied to faceRig (NeckWarp is the
+      // head-tilt warp).
+      if (subs && subs.faceRig === false) continue;
+      neckWarpSpec = spec;
+      continue;
+    }
     if (typeof spec.targetPartId === 'string' && spec.targetPartId.length > 0) {
       // GAP-008 — tag-based subsystem filter. Unknown tags pass through.
       if (subs && partIdToTag) {
@@ -168,7 +181,7 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
     ? null
     : (rigSpec.bodyWarpChain ?? null);
 
-  return { faceParallaxSpec, bodyWarpChain, rigWarps };
+  return { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps };
 }
 
 /**
@@ -250,9 +263,23 @@ export function applySubsystemOptOutToRigSpec(rigSpec, opts = {}) {
 
   const newWarps = rigSpec.warpDeformers.map((w) => {
     if (!w?.id || !neutralised.has(w.id)) return w;
-    const restKf = Array.isArray(w.keyforms) && w.keyforms.length > 0
-      ? w.keyforms[0]
-      : null;
+    // BUG-022 — `w.keyforms[0]` is the FIRST keyform from the cartesian
+    // product, not the REST keyform. For a hair warp bound to
+    // `[ParamHairFront, keys: [-1, 0, 1]]`, perPartRigWarps emits keyforms
+    // in order `keyTuple=[-1] / [0] / [1]` — `keyforms[0]` is the
+    // swung-left grid. Picking it as the rest left disabled-subsystem
+    // hair permanently tilted (15.5 px on shelby's front-hair / 12.2 px
+    // on back-hair, per `rigInitIdentityDiag`).
+    //
+    // Pick the keyform whose keyTuple is all-zero (= rest of every
+    // binding axis). Fall back to `keyforms[0]` for warps with non-
+    // standard binding shapes (e.g. the `ParamOpacity[1.0]` no-op
+    // single-keyform path) where no all-zero tuple exists.
+    const kfs = Array.isArray(w.keyforms) ? w.keyforms : [];
+    const restKf = kfs.find((k) =>
+      Array.isArray(k?.keyTuple) && k.keyTuple.length > 0
+        && k.keyTuple.every((v) => v === 0)
+    ) ?? kfs[0] ?? null;
     return {
       ...w,
       bindings: [],
@@ -283,6 +310,155 @@ export function filterPhysicsRulesBySubsystems(rules, subsystems) {
     if (!owning) return true;
     return subsystems[owning] !== false;
   });
+}
+
+/**
+ * Drop rotation deformers that nothing in the rig actually chains
+ * through, plus their `ParamRotation_<group>` parameter entries.
+ *
+ * **Background.** The cmo3 generator emits one `GroupRotation_<g>` per
+ * non-bone, non-skipped group + a matching `ParamRotation_<g>` param.
+ * Whether anything ever drives through that rotation depends on where
+ * downstream meshes / deformers parent at the end of `structuralChainEmit`
+ * — and several configurations leave specific rotations as dead-end
+ * orphans:
+ *
+ *   - `Rotation_root`: typical rigs re-parent every group rotation
+ *     directly to BodyXWarp (line ~150-165 of structuralChainEmit), so
+ *     `Rotation_root` ends up a sibling rather than an ancestor of the
+ *     other rotations. The only descendant is whatever happens to have
+ *     `parent.id === Rotation_root` after the immediate-ancestor walk
+ *     in `rotationDeformerEmit:160-162`. For shelby, that's just
+ *     `Rotation_bothLegs` — itself dead — so the chain dead-ends.
+ *   - `Rotation_bothLegs`: `LEG_ROLES` skip in
+ *     `structuralChainEmit:150-205` keeps it parented at root with no
+ *     pivot conversion, AND every legwear mesh gets its own `RigWarp`
+ *     re-parented to BodyXWarp (`structuralChainEmit:218`), so no
+ *     mesh chain passes through `Rotation_bothLegs`.
+ *   - `Rotation_leftArm`/`rightArm`: shelby's arms are bones with no
+ *     mesh weights computed at PSD import (`childBoneRoleFor` only
+ *     wires `arm → elbow` skinning when `node.mesh.boneWeights` exists,
+ *     populated only at remesh time), so handwear meshes have no
+ *     baked-keyform `ParamRotation_<arm>` bindings. The arm rotation
+ *     deformer gets emitted but no mesh references it.
+ *
+ * The result: ghost sliders in the Parameters panel that the user
+ * drags but nothing moves. Pruning them at harvest-time is the
+ * smallest fix — the deformer chain isn't broken, it just hides
+ * sliders that drive nothing.
+ *
+ * **Algorithm.** Walk every art mesh's parent chain and every other
+ * deformer's parent chain. Mark every deformer id encountered.
+ * Any rotation deformer NOT in the marked set is a dead-end orphan
+ * — drop it from `rigSpec.rotationDeformers` and drop the matching
+ * `ParamRotation_<id>` from `rigSpec.parameters`. (Identifying
+ * `ParamRotation_<id>`: the rotation spec's `bindings[].parameterId`
+ * — typically a single entry per rotation, but iterate to be safe.)
+ *
+ * Pure: returns a new rigSpec, leaves the input untouched.
+ *
+ * @param {object} rigSpec
+ * @returns {{rigSpec: object, droppedRotationIds: string[], droppedParamIds: string[]}}
+ */
+export function pruneOrphanRotationDeformers(rigSpec) {
+  if (!rigSpec) return { rigSpec, droppedRotationIds: [], droppedParamIds: [] };
+  const rotations = Array.isArray(rigSpec.rotationDeformers) ? rigSpec.rotationDeformers : [];
+  if (rotations.length === 0) return { rigSpec, droppedRotationIds: [], droppedParamIds: [] };
+
+  const warps = Array.isArray(rigSpec.warpDeformers) ? rigSpec.warpDeformers : [];
+  const meshes = Array.isArray(rigSpec.artMeshes) ? rigSpec.artMeshes : [];
+
+  // Index for parent-chain walks. A deformer's parent ref is `{type, id}`;
+  // we only care about the id when it points at another rotation/warp.
+  /** @type {Map<string, {type: string, id: string|null}>} */
+  const parentById = new Map();
+  for (const w of warps) {
+    if (w?.id && w.parent) parentById.set(w.id, w.parent);
+  }
+  for (const r of rotations) {
+    if (r?.id && r.parent) parentById.set(r.id, r.parent);
+  }
+
+  const reachable = new Set();
+  const walkChain = (parent) => {
+    let cur = parent;
+    let safety = 64;
+    while (cur && cur.type !== 'root' && cur.id && safety-- > 0) {
+      if (reachable.has(cur.id)) return; // already explored this branch
+      reachable.add(cur.id);
+      cur = parentById.get(cur.id) ?? null;
+    }
+  };
+
+  for (const m of meshes) walkChain(m?.parent);
+
+  // Rotation IDs whose parent chain is reachable from a mesh ARE alive.
+  // Rotation IDs that are themselves an ancestor of an art mesh ARE alive
+  // (covered by walkChain above). What's NOT alive: rotations that no
+  // art mesh chain visits.
+  const droppedRotationIds = [];
+  const keptRotations = [];
+  for (const r of rotations) {
+    if (!r?.id) { keptRotations.push(r); continue; }
+    if (reachable.has(r.id)) {
+      keptRotations.push(r);
+    } else {
+      droppedRotationIds.push(r.id);
+    }
+  }
+  if (droppedRotationIds.length === 0) {
+    return { rigSpec, droppedRotationIds: [], droppedParamIds: [] };
+  }
+
+  // Identify param ids bound only by dropped rotations. A param is dead
+  // if every binding referencing it lives on a dropped rotation. If any
+  // surviving rotation / warp / art mesh still binds the param, KEEP it
+  // (e.g. `ParamAngleZ` is bound by both FaceRotation [kept] and could
+  // be bound by other deformers — never drop it).
+  const droppedParamIdsCandidate = new Set();
+  for (const r of rotations) {
+    if (!r?.id || !droppedRotationIds.includes(r.id)) continue;
+    for (const b of (r.bindings ?? [])) {
+      if (b?.parameterId) droppedParamIdsCandidate.add(b.parameterId);
+    }
+  }
+  if (droppedParamIdsCandidate.size === 0) {
+    return {
+      rigSpec: { ...rigSpec, rotationDeformers: keptRotations },
+      droppedRotationIds,
+      droppedParamIds: [],
+    };
+  }
+  const survivingBindings = [];
+  for (const r of keptRotations) {
+    for (const b of (r?.bindings ?? [])) {
+      if (b?.parameterId) survivingBindings.push(b.parameterId);
+    }
+  }
+  for (const w of warps) {
+    for (const b of (w?.bindings ?? [])) {
+      if (b?.parameterId) survivingBindings.push(b.parameterId);
+    }
+  }
+  for (const m of meshes) {
+    for (const b of (m?.bindings ?? [])) {
+      if (b?.parameterId) survivingBindings.push(b.parameterId);
+    }
+  }
+  const survivingSet = new Set(survivingBindings);
+  const droppedParamIds = [...droppedParamIdsCandidate].filter((id) => !survivingSet.has(id));
+
+  let parameters = Array.isArray(rigSpec.parameters) ? rigSpec.parameters : [];
+  if (droppedParamIds.length > 0) {
+    const dropSet = new Set(droppedParamIds);
+    parameters = parameters.filter((p) => !p?.id || !dropSet.has(p.id));
+  }
+
+  return {
+    rigSpec: { ...rigSpec, rotationDeformers: keptRotations, parameters },
+    droppedRotationIds,
+    droppedParamIds,
+  };
 }
 
 /**
@@ -335,7 +511,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {
     const t0a = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
-    const { rigSpec, debug } = buildRigSpecFromCmo3({
+    const built = buildRigSpecFromCmo3({
       scene: project._cmo3Scene,
       project,
       meshes,
@@ -343,6 +519,9 @@ export async function initializeRigFromProject(project, images = new Map()) {
       canvasH: project.canvas?.height ?? 600,
       subsystems,
     });
+    const debug = built.debug;
+    const pruned = pruneOrphanRotationDeformers(built.rigSpec);
+    const rigSpec = pruned.rigSpec;
     const dta = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0a;
     const disabled = subsystems
       ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
@@ -351,6 +530,8 @@ export async function initializeRigFromProject(project, images = new Map()) {
       elapsedMs: Math.round(dta),
       ...debug,
       disabledSubsystems: disabled.length > 0 ? disabled : undefined,
+      droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
+      droppedOrphanParams: pruned.droppedParamIds.length || undefined,
     });
     // The authored path doesn't (yet) produce a separate faceParallaxSpec /
     // bodyWarpChain harvest — those are export-pipeline concerns. The
@@ -360,7 +541,8 @@ export async function initializeRigFromProject(project, images = new Map()) {
       bodyWarpChain: null,
       rigWarps: new Map(),
       rigSpec,
-      debug: { source: 'authored-cmo3', ...debug },
+      droppedParamIds: pruned.droppedParamIds,
+      debug: { source: 'authored-cmo3', ...debug, droppedOrphanRotations: pruned.droppedRotationIds, droppedOrphanParams: pruned.droppedParamIds },
     };
   }
 
@@ -398,7 +580,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   });
 
   const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
-  const { faceParallaxSpec, bodyWarpChain, rigWarps } = harvestSeedFromRigSpec(
+  const { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps } = harvestSeedFromRigSpec(
     result.rigSpec,
     { subsystems, nodes: project.nodes ?? [] },
   );
@@ -414,8 +596,14 @@ export async function initializeRigFromProject(project, images = new Map()) {
     { subsystems, nodes: project.nodes ?? [] },
   );
 
+  // Drop dead-end orphan rotation deformers (`Rotation_root`,
+  // `Rotation_bothLegs`, etc. — see `pruneOrphanRotationDeformers`
+  // doc) so their `ParamRotation_<g>` sliders disappear from the
+  // Parameters panel instead of sitting dead.
+  const pruned = pruneOrphanRotationDeformers(filteredRigSpec);
+
   const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-  const rs = filteredRigSpec;
+  const rs = pruned.rigSpec;
   // GAP-008 — log which subsystems are off so the user sees in the Logs
   // panel that the opt-out worked end-to-end.
   const disabled = subsystems
@@ -431,15 +619,20 @@ export async function initializeRigFromProject(project, images = new Map()) {
     rigWarpsByPartId: rigWarps?.size ?? 0,
     disabledSubsystems: disabled.length > 0 ? disabled : undefined,
     optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
+    droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
+    droppedOrphanParams: pruned.droppedParamIds.length || undefined,
   });
 
-  // PP2-005b — identity-divergence diagnostic. When a subsystem is opted
-  // out, the user's complaint is that the corresponding parts visibly
-  // shift after Init Rig (hair sways under no params). Run evalRig once
-  // at default params and compare each rig-driven art mesh's output vs
-  // its `verticesCanvas` source. Anything > 1px is real divergence.
+  // PP2-005b — identity-divergence diagnostic. The user's complaint is
+  // that some parts visibly shift after Init Rig (hair sways/tilts
+  // under no params, eyes drop, etc). Run evalRig once at default
+  // params and compare each rig-driven art mesh's output vs its
+  // `verticesCanvas` source. Anything > 1px is real divergence.
   // Logged per-part so the next user repro names the offender.
-  if (rs && Array.isArray(rs.artMeshes) && rs.artMeshes.length > 0 && disabled.length > 0) {
+  // Originally gated on disabled subsystems; now runs unconditionally
+  // so any visible rest-pose shift surfaces in the Logs panel without
+  // having to toggle a subsystem first.
+  if (rs && Array.isArray(rs.artMeshes) && rs.artMeshes.length > 0) {
     try {
       const frames = evalRig(rs, {});
       const meshById = new Map(rs.artMeshes.map((m) => [m.id, m]));
@@ -463,10 +656,11 @@ export async function initializeRigFromProject(project, images = new Map()) {
       }
       // Top 10 by delta — keeps the log readable on large rigs.
       offenders.sort((a, b) => b.maxDelta - a.maxDelta);
+      const disabledNote = disabled.length > 0 ? ` (subsystems off: ${disabled.join(', ')})` : '';
       logger.info('rigInitIdentityDiag',
-        `Init Rig rest-divergence (subsystems off: ${disabled.join(', ')}): max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px`,
+        `Init Rig rest-divergence${disabledNote}: max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px`,
         {
-          disabledSubsystems: disabled,
+          disabledSubsystems: disabled.length > 0 ? disabled : undefined,
           maxOverallPx: Math.round(maxOverall * 100) / 100,
           partCount: frames.length,
           offenderCount: offenders.length,
@@ -483,8 +677,10 @@ export async function initializeRigFromProject(project, images = new Map()) {
   return {
     faceParallaxSpec,
     bodyWarpChain,
+    neckWarpSpec,
     rigWarps,
-    rigSpec: filteredRigSpec ?? null,
+    rigSpec: pruned.rigSpec ?? null,
+    droppedParamIds: pruned.droppedParamIds,
     debug: result.rigDebugLog ?? null,
   };
 }

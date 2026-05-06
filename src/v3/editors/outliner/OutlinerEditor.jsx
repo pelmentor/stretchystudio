@@ -161,6 +161,18 @@ export function OutlinerEditor() {
         if (!found && n.id === id) found = n;
       });
       if (!found) return;
+      // BVR-003 — clicking the synthetic Armature root has no real
+      // backing node. Route to the first child bone so keyboard nav
+      // still feels right and Properties has something to inspect.
+      const synthetic = /** @type {any} */ (found).isSynthetic === true;
+      if (synthetic) {
+        const firstChild = /** @type {import('./treeBuilder.js').OutlinerNode|undefined} */ (
+          /** @type {any} */ (found).children?.[0]
+        );
+        if (!firstChild) return;
+        select({ type: 'group', id: firstChild.id }, modifier);
+        return;
+      }
       const ft = /** @type {import('./treeBuilder.js').OutlinerNode} */ (found).type;
       if (ft === 'part' || ft === 'artmesh') type = 'part';
       else if (ft === 'group') type = 'group';
@@ -195,6 +207,34 @@ export function OutlinerEditor() {
   const onToggleWarpVisibility = useCallback(
     (id) => toggleWarpGridVisibility(id),
     [toggleWarpGridVisibility],
+  );
+
+  // BVR-006 — drag-reparent handler. The synthetic Armature root
+  // doesn't exist in `project.nodes`, so dropping onto it routes to
+  // its first child bone (= top-level bone) when the dragged item
+  // is itself a bone; otherwise it's a no-op (Armature can't own
+  // non-bones). Other drops dispatch projectStore.reparentNode which
+  // validates cycles + type compatibility.
+  const reparentNode = useProjectStore((s) => s.reparentNode);
+  const onReparent = useCallback(
+    /** @param {string} childId @param {string} newParentId */
+    (childId, newParentId) => {
+      // Resolve child + drop target via the current node array.
+      const child = nodes.find((n) => n?.id === childId);
+      if (!child) return;
+      // Synthetic Armature drop: route to first top-level bone, or
+      // drop to root if the dragged child is itself the first bone.
+      if (newParentId === '__armature_root__') {
+        const isBone = child.type === 'group' && !!child.boneRole;
+        if (!isBone) return; // armature only owns bones
+        // For now, drop to root — the user can re-drop onto a specific
+        // bone for nesting. Avoids guessing which top-level bone.
+        reparentNode(childId, null);
+        return;
+      }
+      reparentNode(childId, newParentId);
+    },
+    [nodes, reparentNode],
   );
 
   // ↑/↓ moves active row, ←/→ collapse/expand. Scoped to the
@@ -290,6 +330,7 @@ export function OutlinerEditor() {
                 onSelect={onSelect}
                 onToggleExpand={onToggleExpand}
                 onToggleVisibility={visToggle}
+                onReparent={mode === 'rig' ? undefined : onReparent}
               />
             );
           })}

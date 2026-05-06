@@ -47,6 +47,25 @@ import { create } from 'zustand';
  *   `finalizePsdImport`: depends on workersRef/sceneRef inside
  *   CanvasViewport, can't move to a service.
  * @property {(fn: (() => void)|null) => void} setAutoMeshAllParts
+ *
+ * @property {((opts: {
+ *     animId: string,
+ *     timeMs: number,
+ *     bgEnabled?: boolean,
+ *     bgColor?: string,
+ *     exportWidth?: number,
+ *     exportHeight?: number,
+ *     format?: 'png'|'webp'|'jpg',
+ *     quality?: number,
+ *     cropOffset?: {x:number, y:number}|null,
+ *   }) => string|null)|null} captureExportFrame
+ *   2026-05-05 — frame-export bridge. CanvasViewport renders the rig
+ *   at (animId, timeMs) into an offscreen canvas sized to
+ *   (exportWidth, exportHeight) with the requested bg + crop offset
+ *   and returns a data URL of the chosen format. The ExportModal
+ *   calls this once per frame spec when running a PNG sequence /
+ *   single-frame export. Mirrors the `captureThumbnail` pattern.
+ * @property {(fn: any|null) => void} setCaptureExportFrame
  */
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<CaptureStore>>} */
@@ -59,4 +78,6 @@ export const useCaptureStore = create((set) => ({
   setFinalizePsdImport: (fn) => set({ finalizePsdImport: fn }),
   autoMeshAllParts: null,
   setAutoMeshAllParts: (fn) => set({ autoMeshAllParts: fn }),
+  captureExportFrame: null,
+  setCaptureExportFrame: (fn) => set({ captureExportFrame: fn }),
 }));

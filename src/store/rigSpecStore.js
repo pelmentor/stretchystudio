@@ -6,6 +6,7 @@ import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * v2 R1 — RigSpec session cache.
@@ -191,7 +192,21 @@ useProjectStore.subscribe((state) => {
   const { rigSpec, isBuilding } = useRigSpecStore.getState();
   if (rigSpec || isBuilding) return;
   const fast = selectRigSpec(project);
-  if (!_isComplete(fast, project)) return;
+  // BUG-023 instrumentation — log why the auto-fill skipped vs populated
+  // so we can diagnose post-load "rig is dead" reports without ambiguity.
+  if (!_isComplete(fast, project)) {
+    const reasons = [];
+    if (!project?.lastInitRigCompletedAt) reasons.push('no-lastInitRigCompletedAt');
+    if (!Array.isArray(fast?.artMeshes) || fast.artMeshes.length === 0) reasons.push('empty-artMeshes');
+    logger.warn('rigSpecPostLoad', `auto-fill SKIPPED: ${reasons.join(', ')}`, {
+      reasons,
+      lastInitRigCompletedAt: project?.lastInitRigCompletedAt ?? null,
+      artMeshCount: fast?.artMeshes?.length ?? 0,
+      warpCount: fast?.warpDeformers?.length ?? 0,
+      rotationCount: fast?.rotationDeformers?.length ?? 0,
+    });
+    return;
+  }
   const v = state.versionControl?.geometryVersion ?? 0;
   useRigSpecStore.setState({
     rigSpec: fast,
@@ -200,4 +215,10 @@ useProjectStore.subscribe((state) => {
     error: null,
   });
   _seedDefaultsForRig(fast, project);
+  logger.info('rigSpecPostLoad', `auto-fill OK: ${fast.warpDeformers.length}w/${fast.rotationDeformers.length}r/${fast.artMeshes.length}m`, {
+    warpCount: fast.warpDeformers.length,
+    rotationCount: fast.rotationDeformers.length,
+    artMeshCount: fast.artMeshes.length,
+    paramCount: fast.parameters?.length ?? 0,
+  });
 });

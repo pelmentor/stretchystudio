@@ -67,6 +67,7 @@ import {
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
+import { computeBoneOverlayMatrices, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -76,7 +77,8 @@ import { Button } from '@/components/ui/button';
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { RotateCcw } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { RotateCcw, ChevronDown, Anchor } from 'lucide-react';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Component
@@ -702,6 +704,19 @@ export default function CanvasViewport({
             (_ed_mesh.editMode === 'mesh' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
               ? _ed_mesh.selection[0]
               : null;
+          // Blender-style bone overlay. Composes ancestor bone-group
+          // `node.transform` matrices on top of rig output so dragging
+          // any bone (with or without a `ParamRotation_<role>` deformer)
+          // moves its descendants. Bones whose rotation IS rig-driven
+          // keep their `node.transform.rotation` at zero by contract
+          // (SkeletonOverlay only writes the param when a driver exists),
+          // so they contribute identity here — no double-rotation.
+          // Empty map when no bone has a non-rest transform; the
+          // overlay loop short-circuits and we pay nothing.
+          const boneOverlay = computeBoneOverlayMatrices(
+            projectRef.current.nodes,
+            projectRef.current.parameters,
+          );
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) continue;
@@ -724,6 +739,9 @@ export default function CanvasViewport({
             for (let i = 0; i < verts.length; i++) {
               verts[i] = { x: f.vertexPositions[i * 2], y: f.vertexPositions[i * 2 + 1] };
             }
+            // Apply post-rig bone overlay (Blender-style pose offset).
+            // No-op when `boneOverlay.get(f.id)` is undefined.
+            applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
             if (!poseOverrides) poseOverrides = new Map();
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;
@@ -1317,6 +1335,7 @@ export default function CanvasViewport({
 
       // Create group nodes first (so parent IDs exist when parts reference them)
       for (const g of groupDefs) {
+        const isBone = !!g.boneRole;
         proj.nodes.push({
           id: g.id,
           type: 'group',
@@ -1330,6 +1349,11 @@ export default function CanvasViewport({
             pivotX: g.pivotX ?? 0,
             pivotY: g.pivotY ?? 0,
           },
+          // Schema v17 — bones carry a separate `pose` slot. Born identity
+          // for fresh imports; SkeletonOverlay drags write here.
+          ...(isBone
+            ? { pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 } }
+            : null),
         });
       }
 
@@ -1968,7 +1992,7 @@ export default function CanvasViewport({
       cachedFrames,
       worldX,
       worldY,
-      { worldMatrices },
+      { worldMatrices, imageDataMap: imageDataMapRef.current },
     );
     const isMulti = e.shiftKey;
     if (hitId) {
@@ -2487,7 +2511,7 @@ export default function CanvasViewport({
           view={view}
           editorMode={editorMode}
           showSkeleton={editorState.viewLayers.skeleton}
-          skeletonEditMode={editorState.editMode === 'skeleton'}
+          skeletonEditMode={editorState.editMode === 'skeleton' || editorState.editMode === 'armatureEdit'}
         />
       )}
 
@@ -2566,48 +2590,108 @@ export default function CanvasViewport({
       )}
 
 
-      {/* GAP-006 — Reset Pose, top-right viewport corner. Visible on the edit
-          Viewport whenever a project is loaded. Behaviour depends on mode:
+      {/* Pose menu — top-right viewport corner. Reset Pose is the primary
+          action (one click); the chevron opens a dropdown with advanced
+          pose ops (Blender-style "Apply Pose As Rest" + future entries).
+          Hidden on Live Preview (read-only).
+
+          Reset Pose mode-dependent behaviour:
             - Animation mode → `resetPoseDraft()`  (clear draftPose + paramValues; keyframes survive)
-            - Staging mode    → `resetToRestPose()` (above + bone-group transforms)
-          Hidden on the Live Preview surface (read-only).
-          Replaced the prior chains-bar + dump diagnostic that lived in this
-          slot — that signal moved to the Logs panel (`chainDiagnose` source)
-          per user direction 2026-05-02. */}
+            - Staging mode    → `resetToRestPose()` (above + bone-group poses + skinned mesh verts) */}
       {!previewMode && project.nodes.length > 0 && (
-        <TooltipProvider delayDuration={400}>
-          <Tooltip>
-            <TooltipTrigger asChild>
+        <div className="absolute top-2 right-2 z-10 flex items-stretch gap-px">
+          <TooltipProvider delayDuration={400}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="secondary" size="sm"
+                  className="h-8 px-3 gap-1.5 rounded-r-none
+                             bg-card/85 backdrop-blur-md
+                             border border-border/60 hover:border-primary/40
+                             text-foreground/80 hover:text-foreground hover:bg-card/95
+                             shadow-md hover:shadow-lg hover:shadow-primary/10
+                             transition-all duration-150
+                             font-medium"
+                  onClick={() => {
+                    const mode = editorMode;
+                    if (mode === 'animation') resetPoseDraft();
+                    else resetToRestPose();
+                    logger.debug('resetPose', `Reset Pose triggered (mode=${mode})`, {
+                      editorMode: mode,
+                      paramsReset: project?.parameters?.length ?? 0,
+                    });
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span className="text-[11px] tracking-wide">Reset Pose</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {editorMode === 'animation'
+                  ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
+                  : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <Popover>
+            <PopoverTrigger asChild>
               <Button
                 variant="secondary" size="sm"
-                className="absolute top-2 right-2 z-10 h-8 px-3 gap-1.5
+                className="h-8 w-7 px-0 rounded-l-none border-l-0
                            bg-card/85 backdrop-blur-md
                            border border-border/60 hover:border-primary/40
                            text-foreground/80 hover:text-foreground hover:bg-card/95
                            shadow-md hover:shadow-lg hover:shadow-primary/10
-                           transition-all duration-150
-                           font-medium"
-                onClick={() => {
-                  const mode = editorMode;
-                  if (mode === 'animation') resetPoseDraft();
-                  else resetToRestPose();
-                  logger.debug('resetPose', `Reset Pose triggered (mode=${mode})`, {
-                    editorMode: mode,
-                    paramsReset: project?.parameters?.length ?? 0,
-                  });
-                }}
+                           transition-all duration-150"
+                title="Pose menu"
               >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span className="text-[11px] tracking-wide">Reset Pose</span>
+                <ChevronDown className="h-3 w-3 opacity-70" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {editorMode === 'animation'
-                ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
-                : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+            </PopoverTrigger>
+            <PopoverContent align="end" sideOffset={6} className="w-64 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  // Apply Pose As Rest — bake current pose into descendant
+                  // mesh rest verts + bone pivots, zero all bone poses.
+                  // Disabled in animation mode (would produce unexpected
+                  // shifts at non-zero playback time) and in Armature Edit
+                  // Mode (BVR-004 — user is editing rest, not pose).
+                  if (editorMode === 'animation') {
+                    logger.warn('applyPoseAsRest', 'Skipped: animation mode (switch to Default to bake pose)');
+                    return;
+                  }
+                  const em = useEditorStore.getState().editMode;
+                  if (em === 'armatureEdit') {
+                    logger.warn('applyPoseAsRest', 'Skipped: Armature Edit Mode (Tab to Pose Mode to bake pose)');
+                    return;
+                  }
+                  useProjectStore.getState().applyPoseAsRest();
+                  logger.info('applyPoseAsRest', 'Applied current pose as the new rest pose');
+                }}
+                disabled={editorMode === 'animation' || useEditorStore.getState().editMode === 'armatureEdit'}
+                className={
+                  'flex items-start gap-2 w-full text-left px-2 py-2 rounded text-[11px] ' +
+                  (editorMode === 'animation' || useEditorStore.getState().editMode === 'armatureEdit'
+                    ? 'opacity-40 cursor-not-allowed'
+                    : 'hover:bg-muted/40 cursor-pointer')
+                }
+              >
+                <Anchor className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-70" />
+                <span className="flex-1">
+                  <span className="font-medium block">Apply Pose As Rest</span>
+                  <span className="text-muted-foreground/85 text-[10px] leading-snug block mt-0.5">
+                    {editorMode === 'animation'
+                      ? 'Switch to Default workspace first'
+                      : useEditorStore.getState().editMode === 'armatureEdit'
+                        ? 'You\'re editing rest — Tab to Pose Mode to bake pose'
+                        : 'Bakes current pose into mesh rest + bone pivots. Visual unchanged. Drag bones from new neutral.'}
+                  </span>
+                </span>
+              </button>
+            </PopoverContent>
+          </Popover>
+        </div>
       )}
 
       {/* GAP-001 — PSD import wizard now mounts at AppShell level

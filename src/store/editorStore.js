@@ -103,14 +103,25 @@ export const useEditorStore = create((set) => ({
    *  gate cleanly.
    *
    *  Values:
-   *    - null         → object mode (no edit interaction)
-   *    - 'mesh'       → part vertex/UV editing. meshSubMode applies.
-   *    - 'skeleton'   → bone joint dragging. Requires
-   *                     `viewLayers.skeleton` (overlay must show
-   *                     joints to drag them).
-   *    - 'blendShape' → painting deltas onto `activeBlendShapeId`.
-   *                     Same brush behaviour as mesh edit; write
-   *                     target is the blendShape's deltas array.
+   *    - null           → object mode (no edit interaction)
+   *    - 'mesh'         → part vertex/UV editing. meshSubMode applies.
+   *    - 'skeleton'     → POSE MODE — bone joint dragging writes to
+   *                       `node.pose.*` (Blender's Pose Mode). Requires
+   *                       `viewLayers.skeleton` (overlay must show
+   *                       joints to drag them). Apply Pose As Rest
+   *                       enabled here.
+   *    - 'armatureEdit' → ARMATURE EDIT MODE — bone joint dragging
+   *                       writes to `node.transform.{pivotX,pivotY}`
+   *                       (Blender's Edit Mode for armatures). Pose
+   *                       is locked to identity for visual feedback;
+   *                       descendants follow on parent translate
+   *                       (rigid pivot shift). R/S disabled (no
+   *                       `rest.rotation` / `rest.scale` slots — the
+   *                       2D-rest limitation documented in
+   *                       REST_POSE_SPLIT_PLAN.md).
+   *    - 'blendShape'   → painting deltas onto `activeBlendShapeId`.
+   *                       Same brush behaviour as mesh edit; write
+   *                       target is the blendShape's deltas array.
    *
    *  Selection drives entry: enterEditMode('mesh' | 'blendShape')
    *  needs a meshed part selection; enterEditMode('skeleton') needs
@@ -135,6 +146,12 @@ export const useEditorStore = create((set) => ({
   /** Set of group IDs that are expanded in the Groups tab UI */
   expandedGroups: new Set(),
 
+  /** V4 Properties reform — collapse state per Properties section, by
+   *  registry id. Persists across selections so the user's "I never
+   *  want Rig Stages expanded" preference survives clicking around the
+   *  Outliner. Sparse: missing entry = expanded (default). */
+  propertiesSectionsCollapsed: new Set(),
+
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to
    *  match Blender (canonical "explicit `K` to insert" path; the red
@@ -142,10 +159,34 @@ export const useEditorStore = create((set) => ({
    *  Auto-Key shortcut on demand). */
   autoKeyframe: false,
 
+  /** BVR-007 — N-panel (right-edge tool settings) visibility. Blender's
+   *  `N` toggle. Default true so first-launch users discover the panel;
+   *  collapsing sticks via persistence/UI-toggle if added later. */
+  toolPanelVisible: true,
+
   /** The ID of the blend shape currently being edited; only meaningful
    *  when editMode === 'blendShape'. Cleared on exitEditMode + on any
    *  selection-head change. */
   activeBlendShapeId: null,
+
+  /** V4 Phase 3b — Keyform edit mode payload. Only meaningful when
+   *  `editMode === 'keyform'`.
+   *
+   *  Shape:
+   *    {
+   *      deformerId:    string,        // node id under edit
+   *      keyformIndex:  number,        // index into deformer.keyforms[]
+   *      keyTuple:      number[],      // the active key tuple (locked while editing)
+   *      snapshot:      object,        // deep copy of keyforms[keyformIndex]
+   *                                    // before any drag — used for Cancel restore
+   *      authoredOnEntry: boolean,     // whether the keyform already had
+   *                                    // _userAuthored:true before edit (so we
+   *                                    // don't strip it on Cancel of an existing
+   *                                    // user-authored keyform)
+   *    }
+   *
+   *  Cleared on exitEditMode / commitKeyformEdit / cancelKeyformEdit. */
+  keyformEdit: null,
 
   // GAP-001 — PSD import wizard state (step + pendingPsd + snapshot)
   // moved to `wizardStore`. Actions live in `services/PsdImportService`.
@@ -177,16 +218,27 @@ export const useEditorStore = create((set) => ({
       selection: nodeIds,
       editMode: null,
       activeBlendShapeId: null,
+      keyformEdit: null,
     };
   }),
 
-  /** Enter a contextual edit mode. kind ∈ {'mesh','skeleton','blendShape'}.
+  /** Enter a contextual edit mode.
+   *  kind ∈ {'mesh','skeleton','blendShape','keyform','weightPaint'}.
    *  For 'blendShape', opts.blendShapeId is required — without it the
    *  call is a no-op (blendShape edit needs to know which shape).
+   *  For 'keyform', opts.deformerId + opts.keyformIndex + opts.keyTuple
+   *  + opts.snapshot are required; on success populates `keyformEdit`.
+   *  For 'weightPaint', no opts required (V4 Phase 4b — selection drives
+   *  the active part).
    *  Returns nothing; read editMode after. */
   enterEditMode: (kind, opts = {}) => set((state) => {
-    if (kind !== 'mesh' && kind !== 'skeleton' && kind !== 'blendShape') return state;
+    if (kind !== 'mesh' && kind !== 'skeleton' && kind !== 'armatureEdit'
+        && kind !== 'blendShape' && kind !== 'keyform' && kind !== 'weightPaint') return state;
     if (kind === 'blendShape' && !opts.blendShapeId) return state;
+    if (kind === 'keyform') {
+      if (!opts.deformerId || typeof opts.keyformIndex !== 'number') return state;
+      if (!Array.isArray(opts.keyTuple) || !opts.snapshot) return state;
+    }
     // Restore the user's last-used tool for this mode if persisted —
     // sticky choices (e.g. preferring `add_vertex` over the default
     // `brush`) survive Tab out / Tab in and page reloads. Falls back
@@ -194,19 +246,35 @@ export const useEditorStore = create((set) => ({
     const persisted = usePreferencesStore.getState().lastToolByMode ?? {};
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
-      if (kind === 'mesh' || kind === 'blendShape') toolMode = 'brush';
-      else if (kind === 'skeleton') toolMode = 'joint_drag';
+      if (kind === 'mesh' || kind === 'blendShape' || kind === 'weightPaint') toolMode = 'brush';
+      else if (kind === 'skeleton' || kind === 'armatureEdit') toolMode = 'joint_drag';
+      else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
     }
     return {
       editMode: kind,
       activeBlendShapeId: kind === 'blendShape' ? opts.blendShapeId : null,
+      keyformEdit: kind === 'keyform' ? {
+        deformerId:      opts.deformerId,
+        keyformIndex:    opts.keyformIndex,
+        keyTuple:        opts.keyTuple.slice(),
+        snapshot:        opts.snapshot,
+        authoredOnEntry: opts.authoredOnEntry === true,
+      } : null,
       toolMode,
     };
   }),
 
-  /** Exit any contextual edit mode back to object mode. Idempotent. */
-  exitEditMode: () => set({ editMode: null, activeBlendShapeId: null, toolMode: 'select' }),
+  /** Exit any contextual edit mode back to object mode. Idempotent.
+   *  Does NOT restore keyform from snapshot — that's `cancelKeyformEdit`'s
+   *  job. Calling `exitEditMode` while in keyform mode commits whatever
+   *  the user has dragged so far (Apply semantics). */
+  exitEditMode: () => set({
+    editMode: null,
+    activeBlendShapeId: null,
+    keyformEdit: null,
+    toolMode: 'select',
+  }),
 
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),
@@ -236,7 +304,8 @@ export const useEditorStore = create((set) => ({
     const next = { ...state.viewLayers, ...partial };
     // Skeleton-edit requires a visible skeleton — toggling skeleton
     // off implicitly drops the user out of skeleton edit mode.
-    if ('skeleton' in partial && !partial.skeleton && state.editMode === 'skeleton') {
+    if ('skeleton' in partial && !partial.skeleton
+        && (state.editMode === 'skeleton' || state.editMode === 'armatureEdit')) {
       return { viewLayers: next, editMode: null };
     }
     return { viewLayers: next };
@@ -273,4 +342,13 @@ export const useEditorStore = create((set) => ({
   }),
   setExpandedGroups:    (ids)      => set({ expandedGroups: new Set(ids) }),
   setAutoKeyframe:      (on)       => set({ autoKeyframe: on }),
+  toggleToolPanel:      ()         => set((s) => ({ toolPanelVisible: !s.toolPanelVisible })),
+  setToolPanelVisible:  (v)        => set({ toolPanelVisible: !!v }),
+  togglePropertiesSection: (id) => set((s) => {
+    if (typeof id !== 'string' || id.length === 0) return s;
+    const next = new Set(s.propertiesSectionsCollapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return { propertiesSectionsCollapsed: next };
+  }),
 }));

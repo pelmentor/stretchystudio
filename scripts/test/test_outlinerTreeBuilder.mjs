@@ -473,9 +473,14 @@ assertThrows(
   ];
 
   const tree = buildOutlinerTree(nodes, { mode: 'skeleton' });
-  assert(Array.isArray(tree) && tree.length === 1, 'skeleton: 1 root (torso)');
-  const torso = tree[0];
-  assert(torso.id === 'b-torso', 'skeleton: torso is the root bone');
+  // BVR-003 — top-level bones are wrapped in a synthetic Armature root.
+  assert(Array.isArray(tree) && tree.length === 1, 'skeleton: 1 root (Armature wrapper)');
+  const armature = tree[0];
+  assert(armature.isArmature === true, 'skeleton: root is the synthetic Armature');
+  assert(armature.isSynthetic === true, 'skeleton: Armature is synthetic (no backing node)');
+  assert(armature.children.length === 1, 'skeleton: Armature has 1 child (torso)');
+  const torso = armature.children[0];
+  assert(torso.id === 'b-torso', 'skeleton: torso is under Armature');
   assert(torso.name === 'torso', 'skeleton: row label uses boneRole, not group name');
   assert(torso.isBone === true, 'skeleton: rows are flagged isBone');
   assert(torso.children.length === 3, 'skeleton: torso has head + 2 arms (parts excluded)');
@@ -504,7 +509,8 @@ assertThrows(
     { id: 'b-head',   type: 'group', name: 'head',  parent: 'g-spacer', boneRole: 'head' },
   ];
   const tree = buildOutlinerTree(nodes, { mode: 'skeleton' });
-  const torso = tree[0];
+  // BVR-003 — Armature wrapper.
+  const torso = tree[0].children[0];
   assert(torso.children.length === 1 && torso.children[0].id === 'b-head',
     'skeleton: non-bone group skipped in parent walk');
 }
@@ -527,7 +533,64 @@ assertThrows(
     { id: 'b-x', type: 'group', name: 'x', parent: 'missing-id', boneRole: 'head' },
   ];
   const tree = buildOutlinerTree(orphanBone, { mode: 'skeleton' });
-  assert(tree.length === 1 && tree[0].id === 'b-x', 'skeleton: orphan bone surfaces as root');
+  // BVR-003 — Armature wrapper. Orphan bone surfaces as the lone child.
+  assert(tree.length === 1 && tree[0].isArmature === true,
+    'skeleton: orphan bone wrapped in synthetic Armature root');
+  assert(tree[0].children.length === 1 && tree[0].children[0].id === 'b-x',
+    'skeleton: orphan bone surfaces as the Armature\'s child');
+}
+
+// ── BVR-003 — Armature synthetic root in viewLayer mode ────────────
+
+{
+  // viewLayer mode wraps top-level bones in a synthetic Armature so
+  // the user reads "Armature → bones" instead of bones-as-peers
+  // alongside parts/collections.
+  const nodes = [
+    { id: 'b-torso', type: 'group', name: 'torso', parent: null, boneRole: 'torso' },
+    { id: 'b-head',  type: 'group', name: 'head',  parent: 'b-torso', boneRole: 'head' },
+    { id: 'g-parts', type: 'group', name: 'parts', parent: null }, // non-bone collection
+    { id: 'p-face',  type: 'part',  name: 'face',  parent: 'g-parts', draw_order: 1 },
+  ];
+  const tree = buildOutlinerTree({ nodes, rigSpec: null }, { mode: 'viewLayer' });
+  // Expect: [Armature(torso → head), parts(face)] — synthetic Armature
+  // at the top, parts-collection underneath.
+  assert(tree.length === 2, 'viewLayer: 2 root entries (Armature + parts)');
+  const armature = tree.find((n) => n.isArmature === true);
+  assert(armature != null, 'viewLayer: synthetic Armature present');
+  assert(armature.isSynthetic === true, 'viewLayer: Armature flagged synthetic');
+  assert(armature.children.length === 1 && armature.children[0].id === 'b-torso',
+    'viewLayer: Armature contains top-level bone (torso)');
+  assert(armature.children[0].children.length === 1 && armature.children[0].children[0].id === 'b-head',
+    'viewLayer: nested bones preserved (head under torso)');
+  // Parts-collection stays at root level alongside Armature.
+  const parts = tree.find((n) => n.id === 'g-parts');
+  assert(parts != null, 'viewLayer: non-bone collection stays at root');
+}
+
+{
+  // No bones → no Armature wrapper.
+  const noBones = [
+    { id: 'g1', type: 'group', name: 'body', parent: null }, // no boneRole
+    { id: 'p1', type: 'part',  name: 'face', parent: 'g1', draw_order: 1 },
+  ];
+  const tree = buildOutlinerTree({ nodes: noBones, rigSpec: null }, { mode: 'viewLayer' });
+  assert(!tree.some((n) => n.isArmature === true),
+    'viewLayer: no Armature wrapper when project has zero bones');
+}
+
+{
+  // Multiple top-level bones (would be unusual but legal): all under
+  // ONE Armature.
+  const multiRoot = [
+    { id: 'b-a', type: 'group', name: 'a', parent: null, boneRole: 'a' },
+    { id: 'b-b', type: 'group', name: 'b', parent: null, boneRole: 'b' },
+  ];
+  const tree = buildOutlinerTree({ nodes: multiRoot, rigSpec: null }, { mode: 'viewLayer' });
+  const armature = tree.find((n) => n.isArmature === true);
+  assert(armature != null, 'viewLayer: multi-root bones still wrapped');
+  assert(armature.children.length === 2,
+    'viewLayer: Armature contains all top-level bones');
 }
 
 // ── Output ──────────────────────────────────────────────────────────

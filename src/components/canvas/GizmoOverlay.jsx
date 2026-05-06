@@ -18,15 +18,13 @@ import { useEditorStore } from '@/store/editorStore';
 import { useProjectStore } from '@/store/projectStore';
 import { useAnimationStore } from '@/store/animationStore';
 import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
-import { computePoseOverrides } from '@/renderer/animationEngine';
+import { computePoseOverrides, applyOverrideToNode, readPoseValue, writePoseValues } from '@/renderer/animationEngine';
 import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/transforms';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
 
-/** Transform fields the gizmo can write through to a node. */
-const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 const ROT_OFFSET_PX = 52; // screen-space distance from pivot to rotation handle
 
 export function GizmoOverlay() {
@@ -62,6 +60,8 @@ export function GizmoOverlay() {
   useEffect(() => { setDraftPoseRef.current = setDraftPose; }, [setDraftPose]);
 
   // Build effective nodes: keyframe overrides first, then draftPose on top.
+  // `applyOverrideToNode` routes pose-shape values to `pose` for
+  // bones, `transform` for non-bones (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
     const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
@@ -73,14 +73,10 @@ export function GizmoOverlay() {
       const ov = overrides.get(node.id);
       const dr = animDraftPose.get(node.id);
       if (!ov && !dr) return node;
-      const transformOv = { ...node.transform };
-      if (ov) { for (const k of ANIM_KEYS) { if (ov[k] !== undefined) transformOv[k] = ov[k]; } }
-      if (dr) { for (const k of ANIM_KEYS) { if (dr[k] !== undefined) transformOv[k] = dr[k]; } }
-      return {
-        ...node,
-        transform: transformOv,
-        opacity: dr?.opacity ?? ov?.opacity ?? node.opacity,
-      };
+      let n = node;
+      if (ov) n = applyOverrideToNode(n, ov);
+      if (dr) n = applyOverrideToNode(n, dr);
+      return n;
     });
   }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
@@ -188,8 +184,8 @@ export function GizmoOverlay() {
       nodeId:       selectedNode.id,
       startClientX: e.clientX,
       startClientY: e.clientY,
-      startX:       t.x ?? 0,   // reads effective (keyframe + draft) value
-      startY:       t.y ?? 0,
+      startX:       readPoseValue(selectedNode, 'x'),  // pose for bones, transform for non-bones
+      startY:       readPoseValue(selectedNode, 'y'),
       isAnimMode:   editorModeRef.current === 'animation',
     };
   }
@@ -210,7 +206,7 @@ export function GizmoOverlay() {
       type:          'rotate',
       nodeId:        selectedNode.id,
       startAngle:    Math.atan2(dy, dx),
-      startRotation: t.rotation ?? 0,  // reads effective value
+      startRotation: readPoseValue(selectedNode, 'rotation'),  // pose for bones, transform for non-bones
       pivotScreenX:  pivotScreenX,
       pivotScreenY:  pivotScreenY,
       isAnimMode:    editorModeRef.current === 'animation',
@@ -228,10 +224,10 @@ export function GizmoOverlay() {
       nodeId:       selectedNode.id,
       startClientX: e.clientX,
       startClientY: e.clientY,
-      startPivotX:  t.pivotX ?? 0,
+      startPivotX:  t.pivotX ?? 0,                     // rest layout — transform
       startPivotY:  t.pivotY ?? 0,
-      startX:       t.x ?? 0,
-      startY:       t.y ?? 0,
+      startX:       readPoseValue(selectedNode, 'x'),  // pose offset — bone-aware
+      startY:       readPoseValue(selectedNode, 'y'),
       iswm:         mat3Inverse(wm), // current inverse world matrix
     };
   }
@@ -242,12 +238,17 @@ export function GizmoOverlay() {
     const cy = (minY + maxY) / 2;
     const dLx = cx - (t.pivotX ?? 0);
     const dLy = cy - (t.pivotY ?? 0);
-    
+
     updateProject((proj) => {
       const node = proj.nodes.find(n => n.id === selectedNode.id);
       if (!node?.transform) return;
-      const t = node.transform;
-      const { rotation = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+      // Same rest+pose split as the pivot drag: rotation/scale read
+      // from whichever slot owns them (pose for bones, transform for
+      // non-bones); pivot is rest layout (transform); x/y adjust is
+      // pose-shape (writePoseValues routes correctly).
+      const rotation = readPoseValue(node, 'rotation');
+      const sX = readPoseValue(node, 'scaleX');
+      const sY = readPoseValue(node, 'scaleY');
       const θ = rotation * (Math.PI / 180);
       const c = Math.cos(θ), s = Math.sin(θ);
 
@@ -256,11 +257,14 @@ export function GizmoOverlay() {
       const m3 = -sY * s;
       const m4 = sY * c;
 
-      // Adjust x,y to counter-act the pivot move
-      t.x += dLx * (m0 - 1) + dLy * m3;
-      t.y += dLx * m1 + dLy * (m4 - 1);
-      t.pivotX = cx;
-      t.pivotY = cy;
+      const startX = readPoseValue(node, 'x');
+      const startY = readPoseValue(node, 'y');
+      writePoseValues(node, {
+        x: startX + dLx * (m0 - 1) + dLy * m3,
+        y: startY + dLx * m1 + dLy * (m4 - 1),
+      });
+      node.transform.pivotX = cx;
+      node.transform.pivotY = cy;
     });
   }
 
@@ -273,15 +277,14 @@ export function GizmoOverlay() {
       const dx = (e.clientX - drag.startClientX) / z;
       const dy = (e.clientY - drag.startClientY) / z;
       if (drag.isAnimMode) {
-        // In animation mode: write to draftPose, don't touch node.transform
+        // In animation mode: write to draftPose, don't touch the node directly.
         setDraftPoseRef.current(drag.nodeId, { x: drag.startX + dx, y: drag.startY + dy });
       } else {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-          node.transform.x = drag.startX + dx;
-          node.transform.y = drag.startY + dy;
+          // Bone-aware: writes to `pose` for bone groups, `transform` otherwise.
+          writePoseValues(node, { x: drag.startX + dx, y: drag.startY + dy });
         }, { skipHistory: true });
       }
       return;
@@ -303,8 +306,9 @@ export function GizmoOverlay() {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-          node.transform.rotation = drag.startRotation + delta;
+          // Bone-aware: writes to `pose.rotation` for bone groups,
+          // `transform.rotation` otherwise.
+          writePoseValues(node, { rotation: drag.startRotation + delta });
         }, { skipHistory: true });
       }
       return;
@@ -323,8 +327,13 @@ export function GizmoOverlay() {
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === drag.nodeId);
         if (!node?.transform) return;
-        const t = node.transform;
-        const { rotation = 0, scaleX: sX = 1, scaleY: sY = 1 } = t;
+        // Pivot lives on transform (rest layout) for both bones and
+        // non-bones; pose-shape values go to the right slot via
+        // writePoseValues. Read current rotation/scale from whichever
+        // slot owns it (pose for bones, transform for non-bones).
+        const rotation = readPoseValue(node, 'rotation');
+        const sX = readPoseValue(node, 'scaleX');
+        const sY = readPoseValue(node, 'scaleY');
         const θ = rotation * (Math.PI / 180);
         const c = Math.cos(θ), s = Math.sin(θ);
 
@@ -333,12 +342,14 @@ export function GizmoOverlay() {
         const m3 = -sY * s;
         const m4 = sY * c;
 
-        t.pivotX = drag.startPivotX + dLx;
-        t.pivotY = drag.startPivotY + dLy;
+        node.transform.pivotX = drag.startPivotX + dLx;
+        node.transform.pivotY = drag.startPivotY + dLy;
         // x' = x - (Tx(newPivot) - Tx(oldPivot))
         // This keeps world position stable while moving pivot
-        t.x = drag.startX + dLx * (m0 - 1) + dLy * m3;
-        t.y = drag.startY + dLx * m1 + dLy * (m4 - 1);
+        writePoseValues(node, {
+          x: drag.startX + dLx * (m0 - 1) + dLy * m3,
+          y: drag.startY + dLx * m1 + dLy * (m4 - 1),
+        });
       }, { skipHistory: true });
     }
   }

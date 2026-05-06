@@ -121,11 +121,21 @@ function pointInAnyTriangleObjs(verts, tris, px, py) {
  *   3. Rest mesh in canvas-px — final fallback; matches what the
  *      renderer falls back to when no worldMatrix is available.
  *
+ * Pre-mesh parts (PSD-imported, not yet auto-meshed — wizard reorder
+ * step) hit-test against imageData alpha when `opts.imageDataMap` is
+ * supplied: the canvas-sized RGBA buffer painted at PSD import time
+ * already holds the layer's opaque-pixel footprint, so alpha-sampling
+ * matches what the user sees rendered. Falls back to `imageBounds`
+ * (opaque-pixel bbox in canvas space) when alpha data isn't available,
+ * and finally to the full `imageWidth`/`imageHeight` rectangle. The
+ * latter two are coarser — `imageWidth`/`imageHeight` is the entire
+ * canvas for PSD parts, so it would always hit the topmost layer.
+ *
  * @param {{nodes?: ReadonlyArray<any>}} project
  * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
  * @param {number} worldX
  * @param {number} worldY
- * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null}} [opts]
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, {data: Uint8ClampedArray, width: number, height: number}> | null}} [opts]
  * @returns {string | null}
  */
 export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
@@ -139,21 +149,27 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
     }
   }
   const worldMatrices = opts.worldMatrices ?? null;
+  const imageDataMap = opts.imageDataMap ?? null;
 
   // Include parts with a triangulated mesh OR raw image-only parts (no
   // mesh yet — e.g. fresh PSD imports during the wizard's Reorder step).
-  // Pre-mesh parts get a quad bbox hit-test using imageWidth/imageHeight;
-  // post-mesh parts use the triangulation as before.
+  // Pre-mesh parts hit-test against alpha / imageBounds / imageWidth-Height
+  // (in that priority); post-mesh parts use the triangulation as before.
   const parts = (project?.nodes ?? []).filter((n) => {
     if (!n || n.type !== 'part' || n.visible === false) return false;
     const hasTris = n.mesh
       && Array.isArray(n.mesh.triangles)
       && n.mesh.triangles.length > 0;
+    const hasBounds = n.imageBounds
+      && typeof n.imageBounds.minX === 'number'
+      && typeof n.imageBounds.maxX === 'number'
+      && n.imageBounds.maxX > n.imageBounds.minX
+      && n.imageBounds.maxY > n.imageBounds.minY;
     const hasQuad = typeof n.imageWidth === 'number'
       && typeof n.imageHeight === 'number'
       && n.imageWidth > 0
       && n.imageHeight > 0;
-    return hasTris || hasQuad;
+    return hasTris || hasBounds || hasQuad;
   });
   parts.sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
@@ -183,13 +199,48 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
       continue;
     }
 
-    // Quad fallback: imageWidth/imageHeight rectangle in local space.
-    // Used during the PSD import wizard's Reorder step where parts have
-    // raw image bytes but auto-mesh hasn't run yet, so click-to-select
-    // would otherwise be dead.
+    // Pre-mesh hit-test priority for PSD-imported parts (wizard Reorder /
+    // Adjust steps before auto-mesh runs):
+    //   (a) alpha sample of the cached canvas-sized imageData — the layer's
+    //       opaque-pixel footprint matches exactly what the user sees, so
+    //       clicks on transparent areas (between layers) fall through to
+    //       parts behind.
+    //   (b) `imageBounds` rectangle in canvas space — the opaque-pixel
+    //       bbox computed at PSD import. Coarser than alpha but still
+    //       per-layer (every layer has a different bbox).
+    //   (c) `imageWidth`/`imageHeight` rectangle in local space — final
+    //       fallback. For PSD parts these dimensions are the FULL canvas
+    //       (the texture covers the whole canvas with the layer painted
+    //       at its PSD position), so this branch is always-hit and only
+    //       useful when neither imageData nor imageBounds is available.
+    //
+    // imageData was painted in canvas space at PSD import (`drawImage(tmp,
+    // layer.x, layer.y)`), so we sample at (worldX, worldY) directly.
+    // imageBounds is also canvas-space. For the wizard scenario, parts'
+    // worldMatrices are identity so canvas == local; once auto-mesh runs
+    // and rigs are applied, the triangulation path (above) takes over.
+    const imgData = imageDataMap?.get(part.id) ?? null;
+    if (imgData && imgData.data && imgData.width > 0) {
+      const ix = Math.floor(worldX);
+      const iy = Math.floor(worldY);
+      if (ix >= 0 && ix < imgData.width && iy >= 0 && iy < imgData.height) {
+        const alpha = imgData.data[(iy * imgData.width + ix) * 4 + 3];
+        if (alpha > 0) return part.id;
+      }
+      continue;
+    }
+
+    const bb = part.imageBounds;
+    if (bb && typeof bb.minX === 'number' && bb.maxX > bb.minX) {
+      if (worldX >= bb.minX && worldX <= bb.maxX
+          && worldY >= bb.minY && worldY <= bb.maxY) return part.id;
+      continue;
+    }
+
     const w = part.imageWidth;
     const h = part.imageHeight;
-    if (lx >= 0 && lx <= w && ly >= 0 && ly <= h) return part.id;
+    if (typeof w === 'number' && typeof h === 'number'
+        && lx >= 0 && lx <= w && ly >= 0 && ly <= h) return part.id;
   }
   return null;
 }

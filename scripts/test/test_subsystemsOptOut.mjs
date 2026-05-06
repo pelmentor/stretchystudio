@@ -370,6 +370,40 @@ function assert(cond, name) {
     'PP1-002 hairRig=false but no hair-tagged parts → 0 neutralised');
 }
 
+// ── BUG-022 — neutralisation picks the all-zero keyTuple as REST,
+//            not blindly keyforms[0]. The cartesian-product order in
+//            perPartRigWarps emits keyTuple=[-1] first for a binding
+//            with keys=[-1, 0, 1], so keyforms[0] is the swung-left
+//            grid. Picking it as rest leaves disabled-subsystem hair
+//            permanently tilted (15.5 px on shelby's front-hair). ──
+{
+  const nodes = [{ id: 'p-fh', name: 'front hair' }];
+  const rigSpec = {
+    warpDeformers: [{
+      id: 'RigWarp_FH', targetPartId: 'p-fh',
+      bindings: [{ parameterId: 'ParamHairFront', keys: [-1, 0, 1], interpolation: 'LINEAR' }],
+      keyforms: [
+        // keyTuple [-1] — swung-LEFT grid (NOT rest)
+        { keyTuple: [-1], positions: [10, 0, 11, 0, 10, 1, 11, 1], opacity: 1 },
+        // keyTuple [0] — REST (canvas-aligned)
+        { keyTuple: [0],  positions: [0, 0, 1, 0, 0, 1, 1, 1], opacity: 1 },
+        // keyTuple [1] — swung-RIGHT grid
+        { keyTuple: [1],  positions: [-10, 0, -9, 0, -10, 1, -9, 1], opacity: 1 },
+      ],
+    }],
+    artMeshes: [{ id: 'p-fh', parent: { type: 'warp', id: 'RigWarp_FH' } }],
+  };
+
+  const r = applySubsystemOptOutToRigSpec(rigSpec, { subsystems: { hairRig: false }, nodes });
+  const w = r.rigSpec.warpDeformers[0];
+  assert(w.bindings.length === 0, 'BUG-022 bindings cleared');
+  assert(w.keyforms.length === 1, 'BUG-022 reduced to single keyform');
+  assert(JSON.stringify(w.keyforms[0].keyTuple) === '[0]',
+    'BUG-022 surviving keyform is keyTuple=[0] (REST), not keyforms[0]=[-1] (swung)');
+  assert(w.keyforms[0].positions[0] === 0,
+    'BUG-022 surviving keyform positions are the rest grid (not the +10-shifted swung-left grid)');
+}
+
 // ── PP1-002 — warp with no keyforms → keyforms stays empty array ─
 {
   const nodes = [{ id: 'p-h', name: 'front hair' }];

@@ -30,6 +30,8 @@ import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
+import { computeWorldMatrices } from '../../renderer/transforms.js';
+import { readPoseValue, readRestValue } from '../../renderer/animationEngine.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -353,21 +355,53 @@ function registerBuiltins() {
       .filter((it) => it.type === 'part' || it.type === 'group')
       .map((it) => it.id);
     if (targetIds.length === 0) return;
+    // BVR-004 follow-up — Armature Edit Mode now reads/writes REST
+    // fields (transform.pivotX/Y for translate, transform.rotation,
+    // transform.scaleX/Y). The v17 "reserved at identity" contract is
+    // lifted here: armatureEdit IS the writer of rest layout. Pose
+    // Mode (`editMode === 'skeleton'`) keeps the pose-write path.
+    const editMode = useEditorStore.getState().editMode;
+    const restFrame = editMode === 'armatureEdit';
 
     const project = useProjectStore.getState().project;
-    /** @type {Map<string, any>} */
+    // Bone-aware capture. Pose mode → snapshot pose-shape via
+    // readPoseValue. Armature Edit → snapshot rest-shape via
+    // readRestValue. Non-bones use readPoseValue regardless (rest is
+    // a bone-only concept).
+    const worldMap = computeWorldMatrices(project.nodes);
+    /** @type {Map<string, {x:number,y:number,rotation:number,scaleX:number,scaleY:number}>} */
     const original = new Map();
     let pivotX = 0, pivotY = 0;
+    let count = 0;
     for (const id of targetIds) {
       const node = project.nodes.find((n) => n.id === id);
-      if (!node?.transform) continue;
-      original.set(id, { ...node.transform });
-      pivotX += node.transform.x ?? 0;
-      pivotY += node.transform.y ?? 0;
+      if (!node) continue;
+      const reader = restFrame ? readRestValue : readPoseValue;
+      original.set(id, {
+        x:        reader(node, 'x'),
+        y:        reader(node, 'y'),
+        rotation: reader(node, 'rotation'),
+        scaleX:   reader(node, 'scaleX'),
+        scaleY:   reader(node, 'scaleY'),
+      });
+      // Modal pivot center: for bones, use world-space pivot (where the
+      // joint is on canvas). For non-bones, average their canvas-space
+      // anchor (transform.x/y) — same heuristic the original code used,
+      // just routed through the world matrix so the answer is correct
+      // for nested non-bones too.
+      const wm = worldMap.get(id);
+      if (wm) {
+        const isBone = node.type === 'group' && !!node.boneRole;
+        const px = isBone ? (node.transform?.pivotX ?? 0) : (node.transform?.x ?? 0);
+        const py = isBone ? (node.transform?.pivotY ?? 0) : (node.transform?.y ?? 0);
+        pivotX += wm[0] * px + wm[3] * py + wm[6];
+        pivotY += wm[1] * px + wm[4] * py + wm[7];
+      }
+      count += 1;
     }
     if (original.size === 0) return;
-    pivotX /= original.size;
-    pivotY /= original.size;
+    pivotX /= count;
+    pivotY /= count;
 
     // Open an undo batch so a single Ctrl+Z undoes the whole modal
     // session; ModalTransformOverlay closes the batch on commit /
@@ -386,6 +420,7 @@ function registerBuiltins() {
       startMouse,
       pivotCanvas: { x: pivotX, y: pivotY },
       original,
+      restFrame,
     });
   }
 
@@ -410,6 +445,22 @@ function registerBuiltins() {
     available: () => true,  // always available — exec handles feedback
     exec: () => {
       const ed = useEditorStore.getState();
+      // BVR-004 — In armature contexts, Tab cycles between Pose Mode
+      // and Armature Edit Mode (Blender's behavior). Outside armature
+      // contexts (no editMode, mesh edit, weight paint, etc.) Tab
+      // toggles enter/exit per the historical pattern.
+      const activeForCycle = useSelectionStore.getState().getActive();
+      const project0 = useProjectStore.getState().project;
+      const cycleNode = activeForCycle
+        ? project0.nodes.find((n) => n.id === activeForCycle.id)
+        : null;
+      const inArmatureCtx = cycleNode?.type === 'group' && !!cycleNode.boneRole;
+      if (inArmatureCtx && (ed.editMode === 'skeleton' || ed.editMode === 'armatureEdit')) {
+        const next = ed.editMode === 'skeleton' ? 'armatureEdit' : 'skeleton';
+        if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
+        ed.enterEditMode(next);
+        return;
+      }
       if (ed.editMode) {
         ed.exitEditMode();
         return;
@@ -433,6 +484,18 @@ function registerBuiltins() {
         // selection.
         useEditorStore.getState().setSelection([active.id]);
         ed.enterEditMode('mesh');
+      } else if (active.type === 'part'
+                 && (node.mesh?.boneWeights || node.mesh?.jointBoneId
+                     || (node.mesh?.weightGroups && Object.keys(node.mesh.weightGroups).length > 0))) {
+        // V4 Phase 4b — Tab on a weight-bound part with no mesh
+        // (shouldn't really happen but defensive) goes to weight paint.
+        // The primary entry point for weight paint is the Vertex
+        // Groups section's "Edit Weights" button; Tab with mesh+weights
+        // still enters mesh edit per the branch above (Blender's pattern
+        // is one-mode-per-Tab, dedicated cycle for Weight Paint).
+        useEditorStore.getState().setSelection([active.id]);
+        useProjectStore.getState().ensureWeightGroupsForPart(active.id);
+        ed.enterEditMode('weightPaint');
       } else if (active.type === 'group' && node.boneRole) {
         // Skeleton edit needs the overlay visible (drag targets are
         // the joint circles). Auto-enable rather than fail silently.
@@ -465,6 +528,15 @@ function registerBuiltins() {
       (it) => it.type === 'part' || it.type === 'group',
     ),
     exec: () => beginModalTransform('scale'),
+  });
+  // BVR-007 — N-panel toggle. Blender's `N` keybind shows / hides the
+  // right-edge tool-settings panel. Always available (no selection
+  // gate); the panel itself decides what to render based on mode.
+  registerOperator({
+    id: 'panel.toolSettingsToggle',
+    label: 'Toggle Tool Settings (N)',
+    available: () => true,
+    exec: () => useEditorStore.getState().toggleToolPanel(),
   });
 }
 

@@ -256,9 +256,19 @@ export const PROP_LABELS = {
 };
 
 /**
+ * Detect whether a node is a bone group (schema v17+ pose carrier).
+ * Bones store transform pose-fields (`rotation`, `x`, `y`, `scaleX`,
+ * `scaleY`) on `node.pose`, not `node.transform`. Non-bone nodes
+ * (parts, plain groups, deformers) keep everything on `transform`.
+ */
+function isBoneNode(node) {
+  return node?.type === 'group' && !!node?.boneRole;
+}
+
+/**
  * Get the current value of a property from a node (used when inserting keyframes).
- * Reads from transform for transform props, directly from node for opacity.
- * Handles blend shape influences via blendShape:{shapeId} property names.
+ * Reads from transform for non-bones, from `pose` for bones (schema v17+).
+ * Opacity/visible/blendShape live on the node directly regardless.
  */
 export function getNodePropertyValue(node, property) {
   if (property === 'opacity') return node.opacity ?? 1;
@@ -267,7 +277,152 @@ export function getNodePropertyValue(node, property) {
     const shapeId = property.slice(BLEND_SHAPE_TRACK_PREFIX.length);
     return node.blendShapeValues?.[shapeId] ?? 0;
   }
+  // Bone pose-fields live on `node.pose`. The bone's `node.transform`
+  // is reserved for rest layout (only `pivotX/pivotY` is meaningful
+  // post-v17), so reading transform.rotation for a bone returns 0
+  // regardless of pose. Route through `pose` for bones.
+  if (isBoneNode(node) && (property === 'rotation' || property === 'x' || property === 'y' || property === 'scaleX' || property === 'scaleY')) {
+    if (property === 'scaleX' || property === 'scaleY') {
+      return node.pose?.[property] ?? 1;
+    }
+    return node.pose?.[property] ?? 0;
+  }
   return node.transform?.[property] ?? 0;
+}
+
+/**
+ * Build an "effective node" — `node` with override values (from
+ * keyframes / draftPose / animation playback) merged into the right
+ * slot. For bones, transform pose-fields go into a synthetic `pose`;
+ * for non-bones, into a synthetic `transform`. Opacity is applied to
+ * the node-level `opacity` slot.
+ *
+ * Returns the input node unchanged when the override map has no
+ * entries that affect this node — saves an allocation per render.
+ *
+ * Used by:
+ *   - `scenePass.draw` to feed the renderer with posed verts/values.
+ *   - `SkeletonOverlay` / `GizmoOverlay` for `effectiveNodes` in the
+ *     overlay pointer-handler scope.
+ *
+ * @param {object} node
+ * @param {Record<string, any>|undefined|null} override
+ *        Map of `{x?, y?, rotation?, scaleX?, scaleY?, opacity?, visible?, mesh_verts?, ...blendShape:N?}`.
+ * @returns {object}
+ */
+export function applyOverrideToNode(node, override) {
+  if (!override) return node;
+  const isBone = isBoneNode(node);
+  let pose = null;
+  let transform = null;
+  for (const k of TRANSFORM_PROPS) {
+    if (override[k] === undefined) continue;
+    if (isBone) {
+      if (!pose) pose = { ...(node.pose ?? IDENTITY_POSE) };
+      pose[k] = override[k];
+    } else {
+      if (!transform) transform = { ...(node.transform ?? {}) };
+      transform[k] = override[k];
+    }
+  }
+  if (!pose && !transform && override.opacity === undefined && override.visible === undefined) {
+    return node;
+  }
+  return {
+    ...node,
+    ...(transform ? { transform } : null),
+    ...(pose ? { pose } : null),
+    ...(override.opacity !== undefined ? { opacity: override.opacity } : null),
+    ...(override.visible !== undefined ? { visible: override.visible } : null),
+  };
+}
+
+const TRANSFORM_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+const IDENTITY_POSE = Object.freeze({ rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 });
+
+/**
+ * Read a pose-shape value (`rotation`/`x`/`y`/`scaleX`/`scaleY`)
+ * routed to the right slot — `pose` for bones, `transform` for
+ * everything else. Returns sensible defaults when the slot is
+ * missing (0 for translate/rotate, 1 for scale).
+ *
+ * Use this from drag-start handlers (Gizmo / Modal / Skeleton arc)
+ * so the gesture continues from the user's current pose, not from
+ * stale transform-fields that v17 zeroed out for bones.
+ *
+ * @param {object} node
+ * @param {'rotation'|'x'|'y'|'scaleX'|'scaleY'} key
+ */
+export function readPoseValue(node, key) {
+  const dflt = (key === 'scaleX' || key === 'scaleY') ? 1 : 0;
+  if (isBoneNode(node)) return node.pose?.[key] ?? dflt;
+  return node.transform?.[key] ?? dflt;
+}
+
+/**
+ * Mutator inverse of `readPoseValue`. Writes a partial set of
+ * pose-shape values to the right slot. The node is mutated in place
+ * (call inside an `updateProject` recipe).
+ *
+ * For bones, ensures `node.pose` exists (initialized to identity if
+ * absent). For non-bones, ensures `node.transform` exists. Doesn't
+ * touch unrelated keys, so a translate-only commit doesn't accidentally
+ * reset rotation.
+ *
+ * @param {object} node
+ * @param {Partial<{rotation:number, x:number, y:number, scaleX:number, scaleY:number}>} updates
+ */
+export function writePoseValues(node, updates) {
+  if (isBoneNode(node)) {
+    if (!node.pose) node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    for (const k of TRANSFORM_PROPS) {
+      if (updates[k] !== undefined) node.pose[k] = updates[k];
+    }
+  } else {
+    if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+    for (const k of TRANSFORM_PROPS) {
+      if (updates[k] !== undefined) node.transform[k] = updates[k];
+    }
+  }
+}
+
+/**
+ * BVR-004 follow-up — `armatureEdit` (Blender Edit Mode) reads rest
+ * fields. For bones, that means `transform.pivotX/pivotY` (translate),
+ * `transform.rotation`, `transform.scaleX/Y` — the v17 "reserved"
+ * fields are now the rest layout. Non-bones fall back to
+ * `readPoseValue` since armatureEdit only really activates on bones.
+ *
+ * @param {object} node
+ * @param {'rotation'|'x'|'y'|'scaleX'|'scaleY'} key
+ */
+export function readRestValue(node, key) {
+  if (!isBoneNode(node)) return readPoseValue(node, key);
+  if (key === 'x') return node.transform?.pivotX ?? 0;
+  if (key === 'y') return node.transform?.pivotY ?? 0;
+  if (key === 'scaleX' || key === 'scaleY') return node.transform?.[key] ?? 1;
+  return node.transform?.[key] ?? 0;
+}
+
+/**
+ * Mutator inverse of `readRestValue`. For bones in armatureEdit mode,
+ * writes `transform.pivotX/Y` (translate) / `transform.rotation` /
+ * `transform.scaleX/Y`. For non-bones, falls back to `writePoseValues`.
+ *
+ * @param {object} node
+ * @param {Partial<{rotation:number, x:number, y:number, scaleX:number, scaleY:number}>} updates
+ */
+export function writeRestValues(node, updates) {
+  if (!isBoneNode(node)) {
+    writePoseValues(node, updates);
+    return;
+  }
+  if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
+  if (updates.x !== undefined) node.transform.pivotX = updates.x;
+  if (updates.y !== undefined) node.transform.pivotY = updates.y;
+  if (updates.rotation !== undefined) node.transform.rotation = updates.rotation;
+  if (updates.scaleX !== undefined) node.transform.scaleX = updates.scaleX;
+  if (updates.scaleY !== undefined) node.transform.scaleY = updates.scaleY;
 }
 
 /**

@@ -101,6 +101,11 @@ export const DEFAULT_KEYMAP = {
   // → exit. BlendShape edit is entered from BlendShapeTab where the
   // user picks which shape to paint.
   'Tab': 'mode.editToggle',
+
+  // BVR-007 — N toggles the right-edge tool-settings panel. Blender's
+  // canonical "show/hide N-panel" gesture. Bare N (no modifier) so it
+  // doesn't collide with Ctrl+N (file.new).
+  'KeyN': 'panel.toolSettingsToggle',
 };
 
 /**

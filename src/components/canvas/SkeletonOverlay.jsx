@@ -19,8 +19,11 @@ import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useSelectionStore } from '@/store/selectionStore';
 import { SKELETON_CONNECTIONS } from '@/io/armatureOrganizer';
-import { computeWorldMatrices, mat3Identity } from '@/renderer/transforms';
-import { computePoseOverrides } from '@/renderer/animationEngine';
+import {
+  computeWorldMatrices, mat3Identity,
+  preparePoseTranslate, applyPoseTranslate,
+} from '@/renderer/transforms';
+import { computePoseOverrides, applyOverrideToNode } from '@/renderer/animationEngine';
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
@@ -58,9 +61,20 @@ const ARC_BONE_ROLES = new Set(['torso', 'neck', 'head', 'leftArm', 'rightArm', 
  * on the bone tip) — out of scope for this entry.
  */
 const BONE_ROLE_FALLBACK_PARAM = Object.freeze({
-  neck:  'ParamAngleZ',
+  // Head drives ParamAngleZ; the NeckWarp deformer also responds to
+  // ParamAngleZ (it tilts the neck region as the head turns), so the
+  // neck bone deliberately has NO fallback — dragging it would write
+  // ParamAngleZ in conflict with the head arc. Leaving it out makes
+  // the neck arc a no-op driver-wise (logs `boneNoDriverParam`); the
+  // user drags the head when they want a head/neck tilt.
+  //
+  // Torso similarly has NO fallback — Cubism models torso rotation as
+  // ParamBodyAngleZ (body lean), but that's structurally body-wide,
+  // not torso-local. Routing the torso bone arc to ParamBodyAngleZ
+  // surprised users ("why does dragging torso lean the whole body?").
+  // Drag the ParamBodyAngleZ slider directly when you want a body
+  // lean; the torso bone is just a structural pivot.
   head:  'ParamAngleZ',
-  torso: 'ParamBodyAngleZ',
 });
 const ARC_RADIUS = 28;      // screen px
 const ARC_SWEEP_DEG = 270;  // coverage
@@ -92,6 +106,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
+  // BVR-004 — Pose Mode vs Armature Edit Mode write-target gate.
+  // 'skeleton' = Pose Mode (pose-shape writes; existing behavior).
+  // 'armatureEdit' = Edit Mode (rest pivot shift with descendant-follow).
+  const editMode       = useEditorStore(s => s.editMode);
   // Outliner→canvas selection bridge: the universal selectionStore is
   // the canonical truth (Outliner Skeleton tab writes here), the legacy
   // `editorStore.selection` carries the same payload mirrored by
@@ -145,8 +163,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     }
   }, [selection, nodes, toast]);
 
-  // Compute effective nodes (animation overrides + draft pose)
-  const ANIM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+  // Compute effective nodes (animation overrides + draft pose).
+  // `applyOverrideToNode` routes transform-shape values to pose for
+  // bone groups, transform for everything else (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
     const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
@@ -158,10 +177,12 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       const ov = overrides.get(node.id);
       const dr = animDraftPose.get(node.id);
       if (!ov && !dr) return node;
-      const tr = { ...node.transform };
-      if (ov) for (const k of ANIM_KEYS) { if (ov[k] !== undefined) tr[k] = ov[k]; }
-      if (dr) for (const k of ANIM_KEYS) { if (dr[k] !== undefined) tr[k] = dr[k]; }
-      return { ...node, transform: tr, opacity: dr?.opacity ?? ov?.opacity ?? node.opacity };
+      // Compose: keyframe value first, draft on top (drag overrides
+      // keyframe). Both flow through the same bone-aware merge.
+      let n = node;
+      if (ov) n = applyOverrideToNode(n, ov);
+      if (dr) n = applyOverrideToNode(n, dr);
+      return n;
     });
   }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
@@ -188,9 +209,25 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     e.currentTarget.setPointerCapture(e.pointerId);
 
     if (dragType === 'joint') {
-      // Joint drag — only active in skeleton edit mode
+      // Joint drag — only active in skeleton edit mode (Pose or Armature
+      // Edit). For Pose Mode, capture the rest-world inverse + pivot so
+      // the move handler can compute pose.x/y in one matrix-point multiply.
       if (!skeletonEditMode) return;
-      dragRef.current = { type: 'joint', nodeId };
+      const drag = { type: 'joint', nodeId };
+      const ed = useEditorStore.getState();
+      if (ed.editMode === 'skeleton') {
+        const proj = useProjectStore.getState().project;
+        const projNodes = proj?.nodes ?? [];
+        const node = projNodes.find((n) => n?.id === nodeId);
+        if (node?.transform) {
+          const wm = computeWorldMatrices(projNodes);
+          const parentWorld = (node.parent && wm.has(node.parent))
+            ? wm.get(node.parent)
+            : mat3Identity();
+          drag.poseSetup = preparePoseTranslate(parentWorld, node.transform);
+        }
+      }
+      dragRef.current = drag;
     } else if (dragType === 'trackpad') {
       if (skeletonEditMode) return;
       const svg = svgRef.current;
@@ -354,37 +391,38 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         }
       }
 
-      // PP2-006 — diagnostic for the "bone rotation does nothing"
-      // class of bug. When the user grabs a bone arc and the gesture
-      // has no driver param to write to, only `node.transform.rotation`
-      // updates — and that's invisible for rig-driven parts (which is
-      // most parts after Init Rig). Log the bone identity + the
-      // candidate id we tried + a few plausible alternates so the next
-      // user repro names the offender without further code-diving.
+      // No-driver bones are no longer a UX dead-end: their rotation
+      // composes via the post-rig bone overlay matrix
+      // (renderer/boneOverlayMatrix.js). Keep the diagnostic at debug
+      // level so anyone investigating a downstream rig issue can still
+      // grep the Logs panel for it, but stop calling it a warning.
       if (!rotationParamId) {
-        const altMatches = params
-          .filter((p) => typeof p?.id === 'string' && /^ParamRotation_/.test(p.id))
-          .map((p) => p.id);
-        const standardCandidates = ['ParamAngleZ', 'ParamBodyAngleZ']
-          .filter((id) => params.some((p) => p?.id === id));
-        logger.warn('boneNoDriverParam',
-          `Bone "${node.name ?? node.id}" (role=${node.boneRole ?? 'none'}) has no rig driver param — rotation gesture will only update node.transform.rotation (invisible for rig-driven parts).`,
+        logger.debug('boneNoDriverParam',
+          `Bone "${node.name ?? node.id}" (role=${node.boneRole ?? 'none'}) has no rig driver param — rotation composes via the post-rig overlay matrix on node.transform.rotation.`,
           {
             nodeId,
             nodeName: node.name ?? null,
             boneRole: node.boneRole ?? null,
             triedCandidate: candidateId,
-            roleFallbackChecked: BONE_ROLE_FALLBACK_PARAM[node.boneRole] ?? null,
-            standardParamsAvailable: standardCandidates,
-            allParamRotationIds: altMatches.slice(0, 20),
           });
       }
 
+      // Drag start rotation: read from whichever side owns it.
+      //  - Bones with a driver param store rotation in the param value
+      //    (Blender-style pose offset on top of rig output). Their
+      //    `node.pose.rotation` stays at zero so the post-rig
+      //    overlay matrix doesn't double-apply.
+      //  - Bones without a driver param store rotation in
+      //    `node.pose.rotation`; the overlay matrix folds it into
+      //    canvas-space verts on every frame.
+      const startRotation = rotationParamId
+        ? (useParamValuesStore.getState().values?.[rotationParamId] ?? 0)
+        : (node.pose?.rotation ?? 0);
       dragRef.current = {
         type: 'rotate',
         nodeId,
         startAngle: Math.atan2(dy, dx),
-        startRotation: node.transform.rotation ?? 0,
+        startRotation,
         pivotScreenX,
         pivotScreenY,
         isAnimMode: editorModeRef.current === 'animation',
@@ -411,18 +449,52 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     const rect = svg.getBoundingClientRect();
 
     if (drag.type === 'joint') {
-      // Joint position drag
+      // Joint position drag — write target depends on editMode:
+      //
+      //   armatureEdit (Blender Edit Mode): shift transform.pivotX/Y +
+      //     descendants follow (rigid rest topology). Via shiftBonePivot.
+      //
+      //   skeleton (Pose Mode): write node.pose.x/y in this bone's
+      //     parent-rest frame so the joint visually lands at the cursor.
+      //     Math: pose.{x,y} = inverse(parentWorld × restM) × target - pivot.
+      //     The inverse is captured at drag-start (cached in dragRef) so
+      //     mousemove is just one matrix-point multiply.
+      //
+      //   any other (legacy / no editMode + skeleton overlay shown):
+      //     keep the direct-pivot-write path for back-compat.
       const cssX = e.clientX - rect.left;
       const cssY = e.clientY - rect.top;
       const { zoom, panX, panY } = viewRef.current;
       const [imgX, imgY] = toImage(cssX, cssY, zoom, panX, panY);
-      updateProject((proj) => {
-        const node = proj.nodes.find(n => n.id === drag.nodeId);
-        if (node) {
-          node.transform.pivotX = imgX;
-          node.transform.pivotY = imgY;
+      if (editMode === 'armatureEdit') {
+        const node = useProjectStore.getState().project.nodes.find((n) => n?.id === drag.nodeId);
+        if (node?.transform) {
+          const dx = imgX - (node.transform.pivotX ?? 0);
+          const dy = imgY - (node.transform.pivotY ?? 0);
+          if (dx !== 0 || dy !== 0) {
+            useProjectStore.getState().shiftBonePivot(drag.nodeId, dx, dy);
+          }
         }
-      }, { skipHistory: true });
+      } else if (editMode === 'skeleton' && drag.poseSetup) {
+        const { x: newPoseX, y: newPoseY } = applyPoseTranslate(drag.poseSetup, imgX, imgY);
+        updateProject((proj) => {
+          const node = proj.nodes.find((n) => n.id === drag.nodeId);
+          if (!node) return;
+          if (!node.pose) {
+            node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+          }
+          node.pose.x = newPoseX;
+          node.pose.y = newPoseY;
+        }, { skipHistory: true });
+      } else {
+        updateProject((proj) => {
+          const node = proj.nodes.find(n => n.id === drag.nodeId);
+          if (node) {
+            node.transform.pivotX = imgX;
+            node.transform.pivotY = imgY;
+          }
+        }, { skipHistory: true });
+      }
     } else if (drag.type === 'rotate') {
       // Rotation arc drag
       const cssX = e.clientX - rect.left;
@@ -449,25 +521,29 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         newRotation = Math.max(drag.rotationParamMin, Math.min(drag.rotationParamMax, newRotation));
         delta = newRotation - drag.startRotation;
       }
-      if (drag.isAnimMode) {
+      // Single-writer commit. With a driver param the rotation lives in
+      // `paramValuesStore` and chainEval folds it into rig output; with
+      // no driver, it lives in `node.pose.rotation` and the post-rig
+      // bone overlay matrix folds it into canvas-space verts. Writing
+      // BOTH would double-rotate after Init Rig (rig deformer + overlay).
+      if (drag.rotationParamId) {
+        if (drag.isAnimMode) {
+          // Anim mode still wants `draftPose.rotation` for the auto-keyframe
+          // capture path that watches transform-shape props; the bone
+          // overlay matrix reads `node.pose`, so this draft is a
+          // keyframe-capture concern, not a renderer one.
+          setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
+        }
+        useParamValuesStore.getState().setParamValue(drag.rotationParamId, newRotation);
+      } else if (drag.isAnimMode) {
         setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
       } else {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
           if (!node) return;
-          if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-          node.transform.rotation = newRotation;
+          if (!node.pose) node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+          node.pose.rotation = newRotation;
         }, { skipHistory: true });
-      }
-
-      // PP1-001 — drive the corresponding rig parameter so chainEval picks
-      // up the bone rotation. Without this only worldMatrix-applied parts
-      // (non-rig-driven) follow the bone; rig-driven parts (warps, baked
-      // keyforms) stay frozen at their last param-derived pose. Mirrors the
-      // dual-write pattern the iris trackpad already uses for ParamEyeBallX/Y.
-      // PP2-006 — newRotation is already clamped to the param range above.
-      if (drag.rotationParamId) {
-        useParamValuesStore.getState().setParamValue(drag.rotationParamId, newRotation);
       }
 
       // Apply JS vertex skinning if there are dependent parts.
@@ -528,9 +604,12 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
          updateProject((proj) => {
            const pn = proj.nodes.find(n => n.id === drag.nodeId);
            if (!pn) return;
-           if (!pn.transform) pn.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
-           pn.transform.x = newX;
-           pn.transform.y = newY;
+           // Eyes is a bone group → translation goes into pose, not transform.
+           // Pre-Init-Rig the worldMatrix path reads pose-on-bones now; the
+           // trackpad's visual feedback follows.
+           if (!pn.pose) pn.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+           pn.pose.x = newX;
+           pn.pose.y = newY;
          }, { skipHistory: true });
       }
     }
@@ -637,7 +716,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const circles = [];
   for (const [role, node] of Object.entries(boneNodes)) {
-    if (role === 'root') continue;
+    // Root is the canvas-level pivot — no rotation arc, no skinning.
+    // Previously skipped entirely, so clicking root in the outliner
+    // produced zero on-canvas feedback. Render a small dot so selection
+    // is visible; arc rendering further down still skips root.
+    const isRoot = role === 'root';
     const [cx, cy] = pivotScreenPos(node);
     const isDragging = dragRef.current?.nodeId === node.id;
     const isSelected = selectionSet.has(node.id);
@@ -650,12 +733,17 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       : isSelected
         ? COLOUR_SELECTED
         : (skeletonEditMode ? COLOUR_EDIT : COLOUR_NORMAL);
+    // Root dot is half-size and only renders in edit mode or when the
+    // user has it selected — full-size always-on would clutter the
+    // canvas with a permanent dot at the pivot.
+    if (isRoot && !isSelected && !skeletonEditMode) continue;
+    const dotRadius = isRoot ? Math.max(3, radius * 0.6) : radius;
     if (isSelected && !isDragging) {
       // Soft halo ring — same accent at low opacity, fattens to
       // ~2x the joint radius. Drawn first so the solid dot paints on top.
       circles.push(
         <circle key={`${role}-halo`}
-          cx={cx} cy={cy} r={radius * 2}
+          cx={cx} cy={cy} r={dotRadius * 2}
           fill="none" stroke={COLOUR_SELECTED} strokeOpacity={0.4} strokeWidth={2}
           pointerEvents="none"
         />
@@ -663,7 +751,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     }
     circles.push(
       <circle key={role}
-        cx={cx} cy={cy} r={radius}
+        cx={cx} cy={cy} r={dotRadius}
         fill={fill} stroke="#000" strokeWidth={1.5}
         style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
         onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
@@ -737,14 +825,14 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
       // Knob position. Post-Init-Rig (rigSpec present) the trackpad
       // controls ParamEyeBallX/Y; pre-Init-Rig it falls back to the
-      // eye-group's node.transform.x/y for a worldMatrix-based preview.
+      // eye-group's pose offset for a worldMatrix-based preview.
       let ex, ey;
       if (hasRigSpec) {
         ex =  (paramEyeBallX ?? 0) * MAX_OFFSET;
         ey = -(paramEyeBallY ?? 0) * MAX_OFFSET;  // ParamEyeBallY positive = look up; screen-y inverts
       } else {
-        ex = node.transform.x || 0;
-        ey = node.transform.y || 0;
+        ex = node.pose?.x ?? 0;
+        ey = node.pose?.y ?? 0;
       }
 
       const knobX = tpx + (ex / MAX_OFFSET) * half;
@@ -776,6 +864,14 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     }
 
     if (!ARC_BONE_ROLES.has(role) || skeletonEditMode) continue;
+    // Every bone in ARC_BONE_ROLES is draggable and visibly responds:
+    // bones with a `ParamRotation_<role>` deformer drive their param
+    // and the rig moves via chainEval; bones without a deformer write
+    // `node.transform.rotation` and the post-rig bone overlay matrix
+    // (renderer/boneOverlayMatrix.js) folds it into canvas-space verts.
+    // Pre-Init-Rig the same `node.transform.rotation` propagates via
+    // worldMatrix on non-rig-driven parts. Either way the gesture is
+    // never silent.
     const [cx, cy] = pivotScreenPos(node);
     const wm = worldMap.get(node.id) ?? mat3Identity();
     // Orient gap along local Y-axis (upward from pivot)

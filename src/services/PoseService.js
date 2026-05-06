@@ -51,16 +51,17 @@ export function resetPoseDraft() {
  *   1. `paramValuesStore.values` — slider positions (shallow clone).
  *   2. `animationStore.draftPose` — uncommitted bone-controller drags
  *      (Map clone). Empty Map if none.
- *   3. Per-bone-group `node.transform` for groups with a `boneRole` —
- *      `{rotation, x, y, scaleX, scaleY}`. Pivots NOT captured (they're
- *      part of the rig anatomy, not pose).
+ *   3. Per-bone-group `node.pose` (schema v17+) — the user-authored
+ *      pose offset (`{rotation, x, y, scaleX, scaleY}`). The bone's
+ *      rest layout (`transform.pivotX/pivotY`) is intentionally NOT
+ *      captured — pivots are rig anatomy, not pose.
  *
  * The returned snapshot is opaque to callers; pass it to `restorePose`.
  *
  * @returns {{
  *   paramValues: Record<string, number>,
  *   draftPose: Map<string, any>,
- *   boneTransforms: Record<string, {rotation:number,x:number,y:number,scaleX:number,scaleY:number}>,
+ *   bonePoses: Record<string, {rotation:number,x:number,y:number,scaleX:number,scaleY:number}>,
  * }}
  */
 export function capturePose() {
@@ -73,19 +74,20 @@ export function capturePose() {
     draftPose.set(k, (v && typeof v === 'object') ? { ...v } : v);
   }
   /** @type {Record<string, {rotation:number,x:number,y:number,scaleX:number,scaleY:number}>} */
-  const boneTransforms = {};
+  const bonePoses = {};
   const proj = useProjectStore.getState().project;
   for (const n of proj?.nodes ?? []) {
-    if (n?.type !== 'group' || !n.boneRole || !n.transform) continue;
-    boneTransforms[n.id] = {
-      rotation: n.transform.rotation ?? 0,
-      x:        n.transform.x ?? 0,
-      y:        n.transform.y ?? 0,
-      scaleX:   n.transform.scaleX ?? 1,
-      scaleY:   n.transform.scaleY ?? 1,
+    if (n?.type !== 'group' || !n.boneRole) continue;
+    const p = n.pose;
+    bonePoses[n.id] = {
+      rotation: p?.rotation ?? 0,
+      x:        p?.x ?? 0,
+      y:        p?.y ?? 0,
+      scaleX:   p?.scaleX ?? 1,
+      scaleY:   p?.scaleY ?? 1,
     };
   }
-  return { paramValues, draftPose, boneTransforms };
+  return { paramValues, draftPose, bonePoses };
 }
 
 /**
@@ -109,18 +111,19 @@ export function restorePose(snapshot) {
     restored.set(k, (v && typeof v === 'object') ? { ...v } : v);
   }
   useAnimationStore.setState({ draftPose: restored });
-  // 3. Restore per-bone-group transforms.
+  // 3. Restore per-bone-group pose offsets (schema v17+).
   useProjectStore.getState().updateProject((p) => {
     for (const n of p.nodes ?? []) {
       if (n?.type !== 'group' || !n.boneRole) continue;
-      const saved = snapshot.boneTransforms[n.id];
-      if (!saved || !n.transform) continue;
-      n.transform.rotation = saved.rotation;
-      n.transform.x = saved.x;
-      n.transform.y = saved.y;
-      n.transform.scaleX = saved.scaleX;
-      n.transform.scaleY = saved.scaleY;
-      // pivotX / pivotY left as-is — those are rig anatomy, not pose.
+      const saved = snapshot.bonePoses?.[n.id];
+      if (!saved) continue;
+      if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+      n.pose.rotation = saved.rotation;
+      n.pose.x        = saved.x;
+      n.pose.y        = saved.y;
+      n.pose.scaleX   = saved.scaleX;
+      n.pose.scaleY   = saved.scaleY;
+      // pivotX / pivotY (on transform) left as-is — rig anatomy, not pose.
     }
   });
 }
@@ -149,14 +152,35 @@ export function resetToRestPose() {
   resetPoseDraft();
   useProjectStore.getState().updateProject((p) => {
     for (const n of p.nodes ?? []) {
-      if (n?.type !== 'group' || !n.boneRole) continue;
-      if (!n.transform) continue;
-      n.transform.rotation = 0;
-      n.transform.x = 0;
-      n.transform.y = 0;
-      n.transform.scaleX = 1;
-      n.transform.scaleY = 1;
+      // Bone-group poses (schema v17+). Rest layout (pivot) is left
+      // untouched — that's rig anatomy, not pose.
+      if (n?.type === 'group' && n.boneRole) {
+        if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+        else {
+          n.pose.rotation = 0;
+          n.pose.x = 0;
+          n.pose.y = 0;
+          n.pose.scaleX = 1;
+          n.pose.scaleY = 1;
+        }
+        continue;
+      }
+      // Mesh vertices that were displaced by JS-skinning during a bone
+      // drag (SkeletonOverlay onPointerUp commits dependentParts'
+      // deformed verts directly into mesh.vertices). Each vert carries
+      // restX/restY captured at PSD import; snap x/y back to those so
+      // Reset Pose actually undoes elbow / knee skinning. We don't touch
+      // restX/restY — those define the rest pose itself, so a vert that's
+      // BEEN edited in mesh-edit mode (where restX/restY updates alongside
+      // x/y) is already at rest by definition.
+      if (n?.type === 'part' && n.mesh && Array.isArray(n.mesh.vertices)) {
+        for (const v of n.mesh.vertices) {
+          if (!v) continue;
+          if (typeof v.restX === 'number') v.x = v.restX;
+          if (typeof v.restY === 'number') v.y = v.restY;
+        }
+      }
     }
   });
-  logger.debug('poseReset', 'resetToRestPose: bone groups + paramValues + draftPose all reset', {});
+  logger.debug('poseReset', 'resetToRestPose: bone groups + paramValues + draftPose + skinned verts all reset', {});
 }

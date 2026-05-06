@@ -28,6 +28,15 @@ import { NumberField } from '../fields/NumberField.jsx';
  * @param {string} props.nodeId
  */
 export function BlendShapeTab({ nodeId }) {
+  // V4 Phase 1 — ALL hooks at the top, BEFORE any early return.
+  // Pre-V4 the tab only mounted when the user clicked its tab, so the
+  // hook-count-after-early-return violation was masked by unmount/
+  // remount on tab change. Phase 1 renders all sections simultaneously
+  // → BlendShapeTab mounts whenever a meshed part is selected, and
+  // any selection-driven re-render that flips between "no mesh" and
+  // "has mesh" branches changes the hook count → React loops trying
+  // to reconcile. Moving the hook calls above the early returns
+  // pins the count.
   const node = useProjectStore((s) =>
     s.project.nodes.find((n) => n.id === nodeId) ?? null,
   );
@@ -35,6 +44,12 @@ export function BlendShapeTab({ nodeId }) {
   const createBlendShape  = useProjectStore((s) => s.createBlendShape);
   const deleteBlendShape  = useProjectStore((s) => s.deleteBlendShape);
   const setBlendShapeValue = useProjectStore((s) => s.setBlendShapeValue);
+  const editMode = useEditorStore((s) => s.editMode);
+  const activeShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  const brushSize = useEditorStore((s) => s.brushSize);
+  const brushHardness = useEditorStore((s) => s.brushHardness);
+  const setBrush = useEditorStore((s) => s.setBrush);
+  const paintMode = editMode === 'blendShape';
 
   if (!node || node.type !== 'part') {
     return (
@@ -53,13 +68,6 @@ export function BlendShapeTab({ nodeId }) {
 
   const shapes = node.blendShapes ?? [];
   const values = node.blendShapeValues ?? {};
-
-  const editMode = useEditorStore((s) => s.editMode);
-  const activeShapeId = useEditorStore((s) => s.activeBlendShapeId);
-  const paintMode = editMode === 'blendShape';
-  const brushSize = useEditorStore((s) => s.brushSize);
-  const brushHardness = useEditorStore((s) => s.brushHardness);
-  const setBrush = useEditorStore((s) => s.setBrush);
 
   /** @param {string|null} shapeId */
   function armForPaint(shapeId) {

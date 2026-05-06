@@ -13,6 +13,7 @@ import { MESH_VERT, MESH_FRAG, WIRE_VERT, WIRE_FRAG } from './shaders/mesh.js';
 import { PartRenderer } from './partRenderer.js';
 import { BackgroundRenderer } from './backgroundRenderer.js';
 import { computeWorldMatrices, computeEffectiveProps, mat3Mul } from './transforms.js';
+import { applyOverrideToNode } from './animationEngine.js';
 import { resolveMaskConfigs } from '../io/live2d/rig/maskConfigs.js';
 import { allocateMaskStencils } from './maskStencil.js';
 
@@ -169,23 +170,11 @@ export class ScenePass {
       && selectionSet.size > 0;
 
     // ── Apply pose overrides (from animation playback) ────────────────────
-    // Build an effective node list with interpolated transforms merged in.
-    // This avoids mutating projectStore state during playback.
+    // `applyOverrideToNode` routes transform-shape values to the right
+    // slot: pose for bone groups, transform for everything else. This
+    // avoids mutating projectStore state during playback.
     const effectiveNodes = (poseOverrides && poseOverrides.size > 0)
-      ? project.nodes.map(node => {
-          const ov = poseOverrides.get(node.id);
-          if (!ov) return node;
-          const transformOv = { ...node.transform };
-          for (const k of ['x', 'y', 'rotation', 'scaleX', 'scaleY']) {
-            if (ov[k] !== undefined) transformOv[k] = ov[k];
-          }
-          return {
-            ...node,
-            transform: transformOv,
-            opacity: ov.opacity !== undefined ? ov.opacity : node.opacity,
-            visible: ov.visible !== undefined ? ov.visible : node.visible,
-          };
-        })
+      ? project.nodes.map(node => applyOverrideToNode(node, poseOverrides.get(node.id)))
       : project.nodes;
 
     // ── Hierarchy pass: compute world matrix and effective vis/opacity ────

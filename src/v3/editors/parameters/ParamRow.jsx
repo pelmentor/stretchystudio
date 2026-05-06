@@ -14,6 +14,8 @@
  * @module v3/editors/parameters/ParamRow
  */
 
+import { useState } from 'react';
+import { Trash2, Check, X } from 'lucide-react';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
@@ -44,6 +46,8 @@ export function ParamRow({ param }) {
   const value = useParamValuesStore((s) => s.values[param.id] ?? param.default ?? 0);
   const setParamValue = useParamValuesStore((s) => s.setParamValue);
   const select = useSelectionStore((s) => s.select);
+  const removeParameter = useProjectStore((s) => s.removeParameter);
+  const [pendingDelete, setPendingDelete] = useState(false);
   // Treat the active selection's id as "selected" for this row.
   const activeId = useSelectionStore((s) => {
     const items = s.items;
@@ -102,15 +106,59 @@ export function ParamRow({ param }) {
       }}
       title="Right-click or double-click to reset to default"
     >
-      <div className="flex items-center justify-between gap-2 text-[11px]">
+      <div className="flex items-center justify-between gap-2 text-[11px] group">
         <span className="truncate font-medium" title={param.id}>
           {param.name || param.id}
         </span>
-        <span className="text-muted-foreground shrink-0 tabular-nums font-mono text-[10px]">
-          {fmt}
-          <span className="text-muted-foreground/50 ml-1">
-            [{min}, {max}]
+        <span className="flex items-center gap-1 shrink-0">
+          <span className="text-muted-foreground tabular-nums font-mono text-[10px]">
+            {fmt}
+            <span className="text-muted-foreground/50 ml-1">
+              [{min}, {max}]
+            </span>
           </span>
+          {pendingDelete ? (
+            <span
+              className="flex items-center gap-0.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="p-0.5 rounded hover:bg-destructive/30 text-destructive"
+                title="Confirm delete (cascades through bindings, tracks, physics inputs)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeParameter(param.id);
+                  setPendingDelete(false);
+                }}
+              >
+                <Check size={10} />
+              </button>
+              <button
+                type="button"
+                className="p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
+                title="Cancel"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPendingDelete(false);
+                }}
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Delete parameter (drops every reference)"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPendingDelete(true);
+              }}
+            >
+              <Trash2 size={10} />
+            </button>
+          )}
         </span>
       </div>
       <Slider

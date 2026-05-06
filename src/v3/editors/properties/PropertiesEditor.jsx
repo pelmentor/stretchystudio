@@ -1,26 +1,25 @@
 // @ts-check
 
 /**
- * v3 Phase 1B — Properties editor with internal tab strip.
+ * V4 Phase 1 — Properties editor with stacked, contextual sections.
  *
- * Reads the active item from `selectionStore`. The tabRegistry tells
- * us which Plan §4.2 tabs apply for that selection + project state;
- * we render an in-Properties OPNsense-style mini-tab-strip and the
- * active tab's body underneath.
+ * Replaces the per-Properties tab strip with a Blender-style scrollable
+ * column of collapsible sections. Visibility per section is decided
+ * via `sectionRegistry.sectionsFor(ctx)`; all visible sections render
+ * simultaneously so the user can see Transform + Mesh + Shape Keys at
+ * a glance instead of tabbing between them.
  *
- * Why a per-Properties tab strip on top of the area-level AreaTabBar:
- * the AreaTabBar swaps EDITORS (Outliner ↔ Parameters); the
- * Properties tab strip swaps the SUBJECT TAB inside the same editor
- * (Object ↔ BlendShapes ↔ Mesh ↔ ...). Different concept, separate
- * strip.
+ * Header row at the top: a one-line breadcrumb naming the active node
+ * and its type (Blender's Properties Editor mirrors this with an icon
+ * + name + parent jump).
  *
  * @module v3/editors/properties/PropertiesEditor
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
-import { tabsFor } from './tabRegistry.jsx';
+import { sectionsFor } from './sectionRegistry.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
@@ -28,25 +27,10 @@ export function PropertiesEditor() {
 
   const active = items.length > 0 ? items[items.length - 1] : null;
 
-  const tabs = useMemo(
-    () => (active ? tabsFor({ active, project }) : []),
+  const sections = useMemo(
+    () => (active ? sectionsFor({ active, project }) : []),
     [active, project],
   );
-
-  // Per-selection-type "last selected tab" memory: pick the first
-  // applicable tab on selection-type change; preserve user's choice
-  // within a stable selection. Active tab is keyed by selection
-  // type so swapping between e.g. parts doesn't reset to Object
-  // every time.
-  const [activeTabsByType, setActiveTabsByType] = useState(/** @type {Record<string, string>} */ ({}));
-
-  useEffect(() => {
-    if (!active || tabs.length === 0) return;
-    const current = activeTabsByType[active.type];
-    if (!current || !tabs.some((t) => t.id === current)) {
-      setActiveTabsByType((prev) => ({ ...prev, [active.type]: tabs[0].id }));
-    }
-  }, [active, tabs, activeTabsByType]);
 
   if (!active) {
     return (
@@ -56,82 +40,44 @@ export function PropertiesEditor() {
     );
   }
 
-  if (tabs.length === 0) {
-    return (
-      <div className="h-full w-full flex flex-col">
-        {items.length > 1 ? (
-          <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border bg-muted/20">
-            {items.length} items selected — editing active ({active.type}: {active.id})
-          </div>
-        ) : null}
-        <div className="p-3 text-xs text-muted-foreground">
-          Properties for type{' '}
-          <code className="text-foreground">{active.type}</code> coming in
-          a later Phase 1B substage.
-        </div>
-      </div>
-    );
-  }
-
-  const activeTabId = activeTabsByType[active.type] ?? tabs[0].id;
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+  const activeNode = active.type === 'part' || active.type === 'group' || active.type === 'deformer'
+    ? (project?.nodes ?? []).find((n) => n?.id === active.id) ?? null
+    : null;
+  const headerName =
+    active.type === 'parameter'
+      ? active.id
+      : (activeNode?.name ?? active.id);
+  const headerType = active.type === 'deformer' && activeNode?.deformerKind === 'rotation'
+    ? 'rotation'
+    : active.type;
 
   return (
     <div className="h-full w-full flex flex-col">
-      {items.length > 1 ? (
-        <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border bg-muted/20">
-          {items.length} items selected — editing active ({active.type}: {active.id})
+      <div className="px-2 py-1 border-b border-border bg-muted/20 shrink-0">
+        <div className="text-[11px] text-foreground truncate flex items-center gap-1.5">
+          <span className="font-medium">{headerName}</span>
+          <span className="text-muted-foreground">·</span>
+          <span className="text-muted-foreground">{headerType}</span>
         </div>
-      ) : null}
-      {tabs.length > 1 ? (
-        <PropertiesTabStrip
-          tabs={tabs}
-          activeId={activeTab.id}
-          onSelect={(id) =>
-            setActiveTabsByType((prev) => ({ ...prev, [active.type]: id }))
-          }
-        />
-      ) : null}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab.render({ active, project })}
+        {items.length > 1 ? (
+          <div className="text-[10px] text-muted-foreground">
+            {items.length} items selected — editing active
+          </div>
+        ) : null}
       </div>
-    </div>
-  );
-}
 
-function PropertiesTabStrip({ tabs, activeId, onSelect }) {
-  return (
-    <div className="relative h-7 flex items-end pl-1 pr-1 bg-muted/10 border-b border-border select-none shrink-0">
-      <div className="absolute left-0 right-0 bottom-0 h-px bg-border pointer-events-none" />
-      <div className="flex items-end gap-0">
-        {tabs.map((t) => {
-          const on = t.id === activeId;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => onSelect(t.id)}
-              role="tab"
-              aria-selected={on}
-              className={
-                'relative h-6 px-2.5 text-[11px] flex items-center gap-1 ' +
-                'border border-b-0 rounded-t-sm -mb-px transition-colors ' +
-                (on
-                  ? 'bg-background text-foreground border-border z-10'
-                  : 'bg-muted/20 text-muted-foreground border-transparent ' +
-                    'hover:bg-muted/40 hover:text-foreground')
-              }
-            >
-              {on ? (
-                <span
-                  aria-hidden
-                  className="absolute left-0 right-0 top-0 h-0.5 bg-primary rounded-t-sm"
-                />
-              ) : null}
-              <span>{t.label}</span>
-            </button>
-          );
-        })}
+      <div className="flex-1 min-h-0 overflow-auto flex flex-col">
+        {sections.length === 0 ? (
+          <div className="p-3 text-xs text-muted-foreground">
+            Properties for type{' '}
+            <code className="text-foreground">{active.type}</code> coming in
+            a later phase.
+          </div>
+        ) : (
+          sections.map((sec) => (
+            <div key={sec.id}>{sec.render({ active, project })}</div>
+          ))
+        )}
       </div>
     </div>
   );

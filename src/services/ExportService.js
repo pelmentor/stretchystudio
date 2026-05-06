@@ -116,9 +116,16 @@ export async function runExport(opts) {
     /** @type {Blob|undefined} */
     let blob;
     if (format === 'cmo3') {
-      blob = await exportLive2D(project, images, { ...extra, onProgress: wrapProgress });
-    } else if (format === 'live2d-runtime' || format === 'live2d-full') {
+      // exportLive2DProject = the .cmo3 (Cubism Editor source) path.
+      // exportLive2D below = the runtime .moc3.zip path. Names swapped
+      // historically; see io/live2d/exporter.js header comments.
       blob = await exportLive2DProject(project, images, {
+        ...extra,
+        generateRig: true,
+        onProgress: wrapProgress,
+      });
+    } else if (format === 'live2d-runtime' || format === 'live2d-full') {
+      blob = await exportLive2D(project, images, {
         ...extra,
         generateRig: format === 'live2d-full',
         onProgress: wrapProgress,

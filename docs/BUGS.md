@@ -12,13 +12,15 @@ Each entry is short and self-contained — anyone reading should be able to pick
 - **When triaging** — fill in any missing **Repro** steps the moment you learn them. Empty Repro = guesswork.
 - **Header marker** — `✅` prefix means fix shipped (visual scrub may still be pending — see entry body).
 
-## Status snapshot (2026-05-03)
+## Status snapshot (2026-05-06)
 
 | Status | Entries |
 |--------|---------|
-| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
-| 🔬 Instrumented (awaiting repro) | BUG-005 (per-piece Opacity slider), BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary) |
-| ⏳ Open | BUG-022 (hair tilted under hairRig:false), BUG-023 (save→load breaks arm/neck/hair live preview), BUG-024 (wizard reorder step: canvas click-to-select dead) — wave of bugs flagged 2026-05-04, fix pass scheduled after next /compact |
+| ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-005 (Opacity slider — was NumberField spinner that didn't commit on ▲/▼; replaced with Radix Slider, fires onValueChange on every drag tick), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
+| 🔬 Instrumented (awaiting repro) | BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary), BUG-023 (save→load breaks most params — instrumentation shipped 2026-05-06: `loadProject` summary + `paramOrphans` walk + `rigSpecPostLoad` auto-fill OK/SKIPPED log; needs `.stretch` repro from a save that breaks) |
+| Recently fixed (2026-05-04) | BUG-022 (hair tilted under `hairRig:false` — `applySubsystemOptOutToRigSpec` was picking `keyforms[0]` as rest, but cartesian-product order makes it the swung-`k=-1` keyform; fixed to find the all-zero `keyTuple`). BUG-024 (wizard reorder click-select dead — POLISH-PASS-002 quad fallback hit every layer because PSD parts have `imageWidth = psdW`; fixed via alpha-sample of cached `imageData` first, then `imageBounds`, then full quad). Plus dead `ParamRotation_root` / `ParamRotation_bothLegs` ghost sliders pruned via new `pruneOrphanRotationDeformers` (post-harvest reachability walk drops rotation deformers no mesh chain passes through, plus their `ParamRotation_<g>` entries). `rigInitIdentityDiag` log fires unconditionally now (was gated on disabled subsystems) so future rest-pose drift surfaces in the Logs panel without toggling a flag. |
+| ⏳ Open | (none — BUG-015 + BUG-023 are instrumented and waiting on user-side Logs / `.stretch` repro; they'll move to Investigating once repro data lands) |
+| Recently fixed (2026-05-06) | BUG-005 (Opacity slider was edit-and-commit NumberField spinner; clicking ▲/▼ updated input visually but didn't commit until blur. Replaced with Radix `<Slider>` in `VisibilitySection.jsx` — `onValueChange` fires on every drag tick) |
 | Recently fixed (2026-05-03) | BUG-003 (closed via TWO commits same day): (1) authored-cmo3 init rig path closed the heuristic-vs-authored gap (AngleZ_pos30 PARAM 9.45 → **0.01 px**), (2) Phase 2b Setup port (`getRotationSetup` + canvas-final matrix) closed the body-warp residual (Breath_full PARAM 5.42 → **0.14 px** -97%, BodyAngleX 5.18 → **1.32 px** -74%, BodyAngleY/Z 3.50 → **0.18-0.21 px** -91 to -95%). Default chainEval kernel flipped to `cubism-setup`. GAP-008 opt-out wired to authored path |
 | Recently fixed (2026-05-02) | BUG-020 (canvas distortion on panel resize — `ResizeObserver` + DPR-aware drawingbuffer sync), BUG-021 (proportional-edit toggle now surfaced in canvas toolbar via new `toggle` button kind) |
 
@@ -66,71 +68,123 @@ Common test inputs + references used across pipeline bugs (BUG-002, BUG-003, any
 
 ## Open
 
-### BUG-024 — Wizard step 2 "Reorder Layers": clicks on canvas don't select pieces
+### BUG-023 — Save→IDB→Load: live preview broken (most params dead, neck/hair frozen, eyes don't blink)
 
-- **Severity:** medium (workaround exists — drag-reorder in the Outliner pane) · **Reported:** 2026-05-04 (user) · **Status:** open
+- **Severity:** high · **Reported:** 2026-05-04 (user) · **Status:** open · **Investigated:** 2026-05-04
 
-**Repro:** PSD import wizard → step 2 (Reorder Layers banner). Click any layer/piece in the canvas. Selection doesn't change.
+**Repro:** Save a rigged project to IndexedDB ("Save to Library"). Close the session. Reload it. Most params don't drive their targets — neck/hair frozen, eye L/R open doesn't blink, cursor look has no effect. Re-running Init Rig in the loaded session restores it.
 
-**Root cause (already traced):** Pre-mesh part nodes (created by `finalizePsdImport` after PSD parse) have no `mesh` field yet, and the click-to-select fallback in [src/io/hitTest.js:152-156](src/io/hitTest.js#L152-L156) requires `node.imageWidth` + `node.imageHeight` to enter the parts list at all:
+**What was checked this session, all clean:**
+
+- **Deformer node JSON round-trip.** Wrote a node-side test that builds a project with rotation + warp deformer nodes (post-Init-Rig shape), `saveProject(proj)` → `JSZip.loadAsync` → JSON.parse round-trip. All `bindings`, `keyforms`, `keyTuple`, `positions` fields survive as plain `Array`. `selectRigSpec`'s `_toFloat64` correctly inflates back to `Float64Array`. **No data loss at the file format layer.**
+
+- **`projectFile.js` save/load contract.** Save serializes `project.nodes` via `{...node}` spread; the only typed-array conversion is for `n.mesh.uvs/edgeIndices`. Deformer nodes already carry plain `Array` everywhere thanks to `deformerNodeSync.warpSpecToDeformerNode` (line 151+158-161 — `Array.isArray(stored.baseGrid) ? stored.baseGrid.slice() : []`). No mismatch.
+
+- **`projectStore.loadProject`.** Mutates `state.project` field-by-field via immer `produce`, bumps `versionControl.geometryVersion`. Both subscriptions in `rigSpecStore` fire afterward (geometry-version subscriber invalidates stale rigSpec, then the auto-fill subscribe rebuilds via `selectRigSpec(project)`).
+
+**One earlier attempted fix was a crutch and got reverted in this session:** an auto-rebuild trigger inside the `rigSpecStore` subscribe that ran `initializeRigFromProject` + `seedAllRig('merge')` whenever `lastInitRigCompletedAt` was set but `project.nodes` had warps without rotations + bones. It raced with `RigService.initializeRig` when the user clicked Init Rig (two concurrent harvests + seedAllRig → corrupted state: rotation root dead, body Z applied parallax instead of rigid rotation, leg rotations unbound). User explicitly rejected migration v17 as a crutch ("we don't need support, we are not even at that stage where the product is even working, it's an embryo").
+
+**To localise (next session):** post-load, open the Logs panel and capture entries from:
+- `paramSeed` — confirms `seedMissingDefaults` ran (24 params expected for rigged shelby).
+- `chainEvalLift` — confirms the warp lift pass ran with the expected canvas-px ranges per warp.
+- `rigInitIdentityDiag` — only fires on Init Rig; the no-Init-Rig load path won't show this. If `top10Offenders` contains parts that AREN'T in the offender set on a fresh Init Rig of the same project, that's the loss.
+- `paramOrphans` — flags any binding whose `parameterId` doesn't resolve in `project.parameters` post-load.
+
+Also useful: a `.stretch` blob from a save that breaks on reload — that lets the diff harness compare pre-save vs post-load `rigSpec` outputs deterministically.
+
+**No fix outline yet** — too many candidate root causes (paramValues init order, rigSpec cache invalidation, frame-evaluator state) and no concrete localisation. Don't ship a guess; capture data first.
+
+**2026-05-06 instrumentation pass:**
+
+- `scripts/test/test_saveLoadRigSpec.mjs` — Node E2E that goes save → load → projectStore.loadProject → verifies the rigSpecStore auto-fill subscriber populates rigSpec, paramValuesStore seeds defaults, no paramOrphans, identity-stable across redundant calls. **All 19 assertions pass.** This confirms the file-format and store-layer round-trip is clean; BUG-023 is genuinely browser-only (live evaluator / React effect ordering / GPU buffer state).
+- `projectStore.loadProject` now emits `logger.info('loadProject', …)` with `parts/deformers/params/initRigDone` summary on every load, plus `logger.warn('paramOrphans', …)` when any binding's parameterId is missing from `project.parameters` post-load.
+- `rigSpecStore` auto-fill subscriber now emits `logger.info('rigSpecPostLoad', 'auto-fill OK')` when it populates rigSpec, or `logger.warn('rigSpecPostLoad', 'auto-fill SKIPPED: <reasons>')` when `_isComplete` rejects (no-lastInitRigCompletedAt / empty-artMeshes).
+
+**Next step needed:** user repro on a real `.stretch` save that breaks → capture the Logs panel output. The new instrumentation will name the failure mode (subscriber skipped + reason, or auto-filled but live evaluator still dead).
+
+---
+
+### ✅ BUG-024 — Wizard step 2 "Reorder Layers": clicks on canvas don't select pieces
+
+- **Severity:** medium · **Reported:** 2026-05-04 (user) · **Fixed:** 2026-05-04
+
+**Repro:** PSD import wizard → step 2 (Reorder Layers banner). Click any layer on the canvas. Selection doesn't change.
+
+**Root cause:** the POLISH-PASS-002 quad fallback in [src/io/hitTest.js](src/io/hitTest.js) tested `imageWidth`/`imageHeight` against the click in local space. PSD parts created by [`finalizePsdImport`](src/components/canvas/CanvasViewport.jsx#L1304) set `imageWidth = psdW` and `imageHeight = psdH` (= the FULL canvas), because the rendered fallback quad covers the entire canvas with the layer painted at its PSD position. So every part's "quad" spanned the whole canvas → every click hit the topmost layer regardless of where it landed → user couldn't distinguish layers.
+
+**Fix:** `hitTestParts` now prefers two tighter sources before the full quad:
+
+1. **Alpha-sample the cached `imageData`** (`imageDataMapRef.current`, threaded through `opts.imageDataMap`). The image was painted at PSD import time at canvas coordinates, so a non-zero alpha at `(worldX, worldY)` means the layer is genuinely visible at the click location. Pixel-perfect match between what the user sees and what the click selects.
+2. **`imageBounds` rectangle** (the opaque-pixel bbox computed at PSD import). Coarser than alpha but still per-layer. Used when imageData isn't available.
+3. **Full `imageWidth`/`imageHeight` quad** — final fallback. For PSD parts this is the entire canvas, so it acts as a topmost-layer always-hit; only useful when neither imageData nor imageBounds are present.
+
+**Files touched:**
+- [src/io/hitTest.js](src/io/hitTest.js) — imageDataMap-aware quad fallback with alpha → imageBounds → imageWidth/Height priority
+- [src/components/canvas/CanvasViewport.jsx](src/components/canvas/CanvasViewport.jsx) — pass `imageDataMap: imageDataMapRef.current` through `opts`
+- [scripts/test/test_hitTest.mjs](../scripts/test/test_hitTest.mjs) — new alpha + imageBounds regression cases
+
+---
+
+### ✅ BUG-022 — Init Rig with `hairRig: false` produces tilted hair pieces
+
+- **Severity:** high · **Reported:** 2026-05-04 (user) · **Fixed:** 2026-05-04
+
+**Repro:** PSD import → toggle `autoRigConfig.subsystems.hairRig = false` in the Init Rig Options popover → Init Rig. Front-hair and back-hair render permanently tilted at rest (no params moved). On shelby the rest divergence was **15.52 px** for front-hair, **12.25 px** for back-hair (per `rigInitIdentityDiag`).
+
+**Root cause (empirically localised via the `rigInitIdentityDiag` log the user shared):** [`applySubsystemOptOutToRigSpec` in `initRig.js:251-261`](src/io/live2d/rig/initRig.js) picked `keyforms[0]` as the "rest" keyform for the neutralisation pass. But [`perPartRigWarps.js`](src/io/live2d/cmo3/perPartRigWarps.js) emits keyforms in **cartesian-product order** — for `[ParamHairFront, keys: [-1, 0, 1]]` that's `keyTuple=[-1] / [0] / [1]`, so `keyforms[0]` is the **swung-left** grid (k=-1), not rest (k=0). The neutralised hair warp evaluated against the swung-left grid every frame regardless of param value → permanent tilt.
+
+The chain math itself is identity at rest (verified: front-hair lifted grid is perfectly axis-aligned in canvas-px, 0.000 px rest divergence on `hairRig:true`). The bug was strictly in the opt-out neutralisation pass.
+
+**Fix:** pick the keyform whose `keyTuple` is all zeros (= true rest of every binding axis), with fallback to `keyforms[0]` only when no all-zero tuple exists (e.g., the `ParamOpacity[1.0]` no-op single-keyform path):
 
 ```js
-const hasQuad = typeof n.imageWidth === 'number'
-  && typeof n.imageHeight === 'number'
-  && n.imageWidth > 0
-  && n.imageHeight > 0;
-return hasTris || hasQuad;
+const restKf = kfs.find((k) =>
+  Array.isArray(k?.keyTuple) && k.keyTuple.length > 0
+    && k.keyTuple.every((v) => v === 0)
+) ?? kfs[0] ?? null;
 ```
 
-Search across `src/` confirms: no PSD import code path (`PsdImportService.js`, `captureStore.finalizePsdImport`) sets `imageWidth` / `imageHeight` on parts. The fallback was designed for this exact case but never wired to its data source. Pre-mesh parts get filtered out → click-to-select silently does nothing during reorder.
+Verified post-fix: front-hair and back-hair drop out of `rigInitIdentityDiag` offenders (both <0.5 px). Eyes still divergent in the harness due to the documented Node-only `Image` decoder limitation (eye-closure parabola fits to mesh-bin-max instead of opaque-pixel curve); browser-side they're fine.
 
-**Fix outline (no crutches):** in `finalizePsdImport` (registered in `captureStore` from `CanvasViewport.jsx`), set `node.imageWidth = layer.width` + `node.imageHeight = layer.height` from the parsed PSD layer data when each part node is created. The `transform.x/y` already positions the layer in canvas-px so the existing inverse-worldMatrix path in hitTest.js maps the click correctly.
-
----
-
-### BUG-022 — Init Rig with `hairRig: false` produces tilted/perma-deformed hair
-
-- **Severity:** high (subsystem opt-out is a core "auto-rig is good enough" feature) · **Reported:** 2026-05-04 (user) · **Status:** open
-
-**Repro:** Open a rigged project, set `autoRigConfig.subsystems.hairRig = false`, run Init Rig. Observe: hair pieces (front-hair, back-hair) render as if a hair-sway parameter is permanently applied — tilted / pre-deformed at rest, instead of staying in their canvas-px PSD position.
-
-**Suspect surface — post-BFA-006 wiring divergence.** Pre-Phase-3, the live evaluator received `applySubsystemOptOutToRigSpec(rigSpec, {subsystems, nodes})`'s output from `useRigSpecStore.buildRigSpec()`. That pass neutralises disabled-subsystem rigWarps in-place (single rest keyform, empty bindings → identity FFD on every frame). After Phase 3's wiring, `useRigSpecStore.rigSpec` can come from `selectRigSpec(project)` (the fast-path / auto-fill subscribe) which walks `project.nodes` deformer entries directly. The opt-out neutralisation step is **not** in that pipeline. Whether disabled-subsystem rigWarp nodes survive in `project.nodes` after `seedAllRig` (they shouldn't — `harvestSeedFromRigSpec` filters them before seeding) needs verification; if any DO survive, chainEval evaluates them with no neutralisation and the hair tilts.
-
-**Where to look first:**
-- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) `applySubsystemOptOutToRigSpec` — the neutralisation pass, currently applied to the heuristic generator's output before storing in `useRigSpecStore.rigSpec`. Check what selectRigSpec produces in the disabled-subsystem case.
-- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) `harvestSeedFromRigSpec` — does it skip the rigWarp from the harvest map (so seedRigWarps doesn't write the node)? Confirm the dropped warps don't slip in via a different channel (e.g. cmo3-authored path's `_cmo3Scene.deformers` synth).
-- [src/store/rigSpecStore.js](src/store/rigSpecStore.js) — both the buildRigSpec fast path AND the auto-fill subscribe should run the neutralisation step before publishing the rigSpec. Probably the cleanest fix is to apply opt-out inside `selectRigSpec` itself (read `project.autoRigConfig.subsystems` + filter), so any consumer of selectRigSpec gets the right rigSpec.
-
-**Fix outline (no crutches):** make subsystem opt-out an intrinsic part of `selectRigSpec` so every consumer sees the neutralised rig regardless of which path published it. Drop the duplicated `applySubsystemOptOutToRigSpec` call in initRig.js once the selector handles it.
+**Files touched:**
+- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) — `applySubsystemOptOutToRigSpec` rest-keyform selection
+- [scripts/test/test_subsystemsOptOut.mjs](../scripts/test/test_subsystemsOptOut.mjs) — new BUG-022 regression test with realistic `keyTuple=[-1, 0, 1]` keyforms (the previous fixture had `id: 'rest'` at `keyforms[0]`, masking the bug)
 
 ---
 
-### BUG-023 — Save→IDB→Load: live preview broken (arm sway dead, neck/hair don't track cursor)
+### ✅ Dead `ParamRotation_root` / `ParamRotation_bothLegs` ghost sliders
 
-- **Severity:** high (post-BFA-006 round-trip regression — core editor flow) · **Reported:** 2026-05-04 (user) · **Status:** open
+- **Severity:** medium (UX clutter — sliders that drive nothing) · **Reported:** 2026-05-04 (user, "always dead at all dev points") · **Fixed:** 2026-05-04
 
-**Repro:** Save a rigged project to IndexedDB ("Save to Library"). Reload it. Switch to Live Preview. Observe:
-- Arm sway physics doesn't fire on torso movement.
-- Neck doesn't follow the cursor (LMB cursor → ParamAngleX/Y).
-- Front/back hair don't follow the cursor either.
+**Repro:** Run Init Rig on shelby (or any PSD with a `root` group + `bothLegs` bone group). The Parameters panel shows `ParamRotation_root` and `ParamRotation_bothLegs` sliders. Dragging them does nothing visible.
 
-Re-running Init Rig after the load most likely fixes it (not yet confirmed by user — verify before fix).
+**Root cause:** the cmo3 generator emits a `GroupRotation_<g>` per non-bone, non-skipped group + a matching `ParamRotation_<g>` param. Three independent reasons make `Rotation_root` and `Rotation_bothLegs` dead-end orphans on shelby:
 
-**Suspect surface — multiple BFA-006 wiring touchpoints converge on save/load:**
+- `Rotation_root`: `structuralChainEmit:150-205` re-parents every non-leg group rotation to BodyXWarp, so `Rotation_root` ends up a sibling rather than ancestor of the other rotations. Its only descendant in shelby is `Rotation_bothLegs`, itself dead.
+- `Rotation_bothLegs`: `LEG_ROLES` skip in `structuralChainEmit:150-205` keeps it parented at root with no pivot conversion, AND every legwear mesh gets `RigWarp_legwear` re-parented to BodyXWarp at line 218, bypassing `Rotation_bothLegs` entirely. No mesh chain passes through it.
 
-1. **`useRigSpecStore.rigSpec` auto-fill gate.** `94dc0be` changed `_isComplete` to `project.lastInitRigCompletedAt` + `artMeshes.length > 0`. After save/load, `lastInitRigCompletedAt` IS persisted (verified in projectFile.js + projectStore.loadProject hydrators). But a project that was Init-Rig'd pre-Phase-6 (sidetables only, no rotation deformer nodes) may now have artMeshes in selectRigSpec's output but produce a partial rigSpec missing rotation deformers — chainEval renders it but rotation-driven params (ParamAngleX/Y for face/neck) have no deformer to drive.
-2. **physicsRules in selectRigSpec output.** `selectRigSpec` calls `resolvePhysicsRules(project)`. If `project.physicsRules` is empty / not-resolved-into-physics3 form, the runtime physics tick has no rules → no arm sway.
-3. **Cursor → param-value pipeline.** Possibly unrelated to BFA-006; verify `useParamValuesStore` mounts cursor handlers on load. (Memory `feedback_in_app_logging` — Logs panel may show whether the cursor handler is publishing param values at all.)
-4. **`paramValuesStore.seedMissingDefaults` not running on auto-fill path.** `_seedDefaultsForRig` IS called from both buildRigSpec paths AND the auto-fill subscribe in `94dc0be`. But it doesn't seed cursor-driven values (those start at 0 / default and update on pointer-move). Should not be the cause.
+**Fix:** new `pruneOrphanRotationDeformers(rigSpec)` in [initRig.js](src/io/live2d/rig/initRig.js) walks every art mesh's parent chain, marks every reachable deformer id, then drops any rotation deformer not in the marked set. Drops the matching `ParamRotation_<g>` from `rigSpec.parameters` only when no surviving spec still binds it (defensive against shared params). Also threaded into `seedAllRig` so the dropped param ids are removed from `project.parameters` post-seed — the slider never appears in the UI.
 
-**Where to look first:**
-- Open Logs panel after save/load reproduction. Note any `paramOrphans`, missing physicsRules, or missing rigSpec warnings.
-- Compare `selectRigSpec(project)` output before (Init Rig run, working) vs after (save→load, broken). If rotation deformers are missing in the post-load case → migration v15 didn't synthesise them (correct — they're never sidetables) AND the project has no rotation deformer nodes from a Phase-3+ Init Rig.
-- Identify whether the user's broken project was first Init-Rig'd PRE-Phase-3 (= rotations never got dual-written to nodes; only legacy sidetables had warps; v15 migration synthesised warp nodes on load but rotations are absent from project.nodes).
+Verified empirically against shelby's heuristic Init Rig output: drops `Rotation_root` + `Rotation_bothLegs`, keeps `Rotation_head` / `leftArm` / `rightArm` / `FaceRotation` (which are reachable: `FaceRotation.parent = Rotation_head`, handwear-l/-r meshes parent directly to `Rotation_leftArm` / `Rotation_rightArm`).
 
-**Hypothesised root cause:** Phase 3's auto-fill gate now permits a "rigSpec without rotations" through (because `_isComplete` doesn't check rotation count by design — see audit fix at `94dc0be`). For projects that haven't been re-Init-Rigged under Phase 3+, the runtime gets a partial rigSpec → angle-driven body deformation works, but face/neck/head rotation deformers are missing → cursor params have no driver.
+Note: this does NOT make leg rotation actually drive the legs — that would require either re-parenting leg-tagged rigWarps under the bothLegs rotation, OR baked mesh keyforms with `boneWeights`. Today shelby has no `boneWeights` on leg meshes (the wizard only computes them for arm/elbow chains via `childBoneRoleFor`). The prune just hides the dead slider; making rigid leg rotation actually work is a separate feature.
 
-**Fix outline (no crutches):** treat `lastInitRigCompletedAt` as not-sufficient when project.nodes lacks any rotation deformer nodes — auto-fill should additionally trigger an async `buildRigSpec` to populate rotations + physics on first load post-Phase-3, then the marker matches reality. Or: migration v15 detects pre-Phase-3 saves and clears `lastInitRigCompletedAt` so the user is prompted (or auto-flow) re-Init-Rigs.
+**Files touched:**
+- [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) — new `pruneOrphanRotationDeformers` exported helper, applied in both heuristic and authored Init Rig paths
+- [src/store/projectStore.js](src/store/projectStore.js) — `seedAllRig` drops harvest-reported `droppedParamIds` from `project.parameters` post-seed
+- [scripts/test/test_initRig.mjs](../scripts/test/test_initRig.mjs) — three regression cases covering the dead-end orphan pattern + the shared-param-preservation guard
+
+---
+
+### ✅ `rigInitIdentityDiag` log fires unconditionally
+
+- **Reported:** infrastructure improvement to support BUG-022/-023 investigation · **Shipped:** 2026-05-04
+
+Previously gated on `disabled.length > 0` (= at least one subsystem opted out). Now runs on every Init Rig so future rest-pose drift surfaces in the Logs panel without having to toggle a subsystem first. The log emit's tag note adapts: `Init Rig rest-divergence (subsystems off: ...)` becomes plain `Init Rig rest-divergence` when no subsystems are disabled.
+
+This was the diagnostic that empirically localised BUG-022 — the user shared the log output showing `front hair: 15.52 px` / `back hair: 12.25 px` on `hairRig:false`, which pinpointed the keyform-cartesian-order bug in the opt-out pass.
+
+**File touched:** [src/io/live2d/rig/initRig.js](src/io/live2d/rig/initRig.js) — gate flipped, log message phrasing made conditional.
 
 ---
 
@@ -564,28 +618,36 @@ Sister bugs **BUG-008** + **BUG-010** share this root cause and same fix.
 
 ---
 
-### BUG-005 — Per-piece Opacity slider does nothing
+### ✅ BUG-005 — Per-piece Opacity slider does nothing
 
 - **Severity:** high
-- **Reported:** 2026-04-30
-- **Affects:** Properties tab on selected pieces
+- **Reported:** 2026-04-30 · **Fixed:** 2026-05-06
 
-**Repro:**
+**Root cause (one-line):** the Opacity control wasn't a slider — it was a `<NumberField>` (edit-and-commit spinner) that only fires `onCommit` on blur / Enter. Clicking the spinner ▲/▼ updated the input visually but never committed → renderer kept reading the previous `node.opacity` and the user's bump was invisible.
+
+**Fix:** [`VisibilitySection.jsx`](../src/v3/editors/properties/sections/VisibilitySection.jsx) replaces the NumberField with a Radix `<Slider>` (range 0..1, step 0.01) plus a 2-decimal value readout. The slider's `onValueChange` fires on every drag tick, so `patch((n) => { n.opacity = v; })` runs immediately and the renderer redraws each frame. Existing `opacityCommit` log retained for telemetry. Same `<input type="number">` spinner UX issue exists on other NumberField consumers (Transform / Mesh / Param sections) but those fields are typed values where edit-and-commit is appropriate; only opacity benefits from a continuous slider.
+
+**Files touched:** [VisibilitySection.jsx](../src/v3/editors/properties/sections/VisibilitySection.jsx).
+
+---
+
+### Earlier triage (preserved for history)
+
+**Reported repro:**
 
 1. Select a piece (any mesh node) in the Outliner
 2. Open Properties → find the Opacity slider/input
 3. Drag the slider or change the value
 4. Observe: visual rendering is unaffected — the piece stays at its current opacity regardless of the input value
 
-**Suspects (not verified):**
+**Suspects considered (audit, 2026-05-02):**
 
-1. The Properties Opacity input writes to a project field (`node.opacity`?) that the renderer no longer reads. v3 may have switched the renderer to use a different opacity source (e.g. `paramValues['ParamOpacity']`, or a per-node animation track override) and the static Properties path is dead.
-2. The store mutation runs but doesn't bump a version counter the renderer's selector is watching, so the canvas never re-tickets a redraw.
-3. The Properties tab writes to a draft state that's never committed.
+1. The Properties Opacity input writes to a project field (`node.opacity`?) that the renderer no longer reads. v3 may have switched the renderer to use a different opacity source (e.g. `paramValues['ParamOpacity']`, or a per-node animation track override) and the static Properties path is dead. **Ruled out** — renderer reads `node.opacity` via `computeEffectiveProps` parent-chain.
+2. The store mutation runs but doesn't bump a version counter the renderer's selector is watching, so the canvas never re-tickets a redraw. **Ruled out** — immer produces a fresh project ref; CanvasViewport's deps array picks it up.
+3. The Properties tab writes to a draft state that's never committed. **CONFIRMED** — root cause was NumberField's edit-and-commit semantics never firing on spinner clicks.
 
-**Next steps:**
+**Audit shipped 2026-05-02:**
 
-1. ✅ **Audit shipped 2026-05-02:**
    - [`ObjectTab.jsx`](../src/v3/editors/properties/tabs/ObjectTab.jsx) Opacity input writes `node.opacity` via `patch((n) => { n.opacity = v; })` — the standard updateProject flow.
    - Renderer reads node.opacity in 4 places: [`scenePass.js:149`](../src/renderer/scenePass.js#L149) (`opacity: ov.opacity !== undefined ? ov.opacity : node.opacity`), [`transforms.js:143-146`](../src/renderer/transforms.js#L143) (`computeEffectiveProps` parent-chain multiplication into `opMap`), [`CanvasViewport.jsx:1472`](../src/components/canvas/CanvasViewport.jsx#L1472) (`opacity: drOv?.opacity ?? kfOv?.opacity ?? node.opacity`), and similarly in `GizmoOverlay.jsx` / `SkeletonOverlay.jsx`.
    - The chain looks intact: `ObjectTab.write → store mutation → effective opMap → render call`.

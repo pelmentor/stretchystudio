@@ -94,8 +94,53 @@ export function makeLocalMatrix(t) {
 }
 
 /**
+ * Build a bone-group's local matrix.
+ *
+ * Bones split rest layout (`transform`) from pose offset (`pose`). The
+ * bone's local frame is `restMatrix × poseMatrix`, both centered on the
+ * same pivot:
+ *
+ *   localBone = makeLocalMatrix(transform) × makeLocalMatrix(poseAroundPivot)
+ *
+ * Where `poseAroundPivot` is the bone's `pose` reinterpreted as a
+ * transform whose `pivotX/pivotY` matches the rest pivot.
+ *
+ * **BVR-004 follow-up (2026-05-06):** the v17 "rotation/x/y/scale
+ * reserved at identity for bones" contract is lifted. `transform.rotation`,
+ * `transform.scaleX/Y`, and `transform.x/y` are now the bone's REST
+ * layout fields — the user can author them in Armature Edit Mode
+ * (`editorStore.editMode === 'armatureEdit'`). When all are at their
+ * identity values (rotation=0, scale=1, x=y=0), the rest matrix is
+ * identity-modulo-pivot and the compose reduces to pose-around-pivot —
+ * matching the v17 fast path.
+ *
+ * @param {{ pivotX?, pivotY?, rotation?, x?, y?, scaleX?, scaleY? }|null|undefined} transform
+ * @param {{ rotation?, x?, y?, scaleX?, scaleY? }|null|undefined} pose
+ */
+export function makeBoneLocalMatrix(transform, pose) {
+  const restM = makeLocalMatrix(transform);
+  if (!pose) return restM;
+  const r = pose.rotation ?? 0;
+  const px = pose.x ?? 0;
+  const py = pose.y ?? 0;
+  const sx = pose.scaleX ?? 1;
+  const sy = pose.scaleY ?? 1;
+  if (r === 0 && px === 0 && py === 0 && sx === 1 && sy === 1) return restM;
+  const poseM = makeLocalMatrix({
+    rotation: r, x: px, y: py, scaleX: sx, scaleY: sy,
+    pivotX: transform?.pivotX ?? 0,
+    pivotY: transform?.pivotY ?? 0,
+  });
+  return mat3Mul(restM, poseM);
+}
+
+/**
  * Compute world matrices for every node in a flat array.
  * world = parentWorld × local  (depth-first, memoised).
+ *
+ * Bones use `makeBoneLocalMatrix(transform, pose)` so user pose drags
+ * compose on top of rest. Non-bone nodes use `makeLocalMatrix(transform)`
+ * unchanged — `pose` only has meaning on bone groups.
  *
  * @param {Array} nodes  Flat node array from projectStore
  * @returns {Map<string, Float32Array>}  nodeId → column-major 3×3
@@ -106,7 +151,10 @@ export function computeWorldMatrices(nodes) {
 
   function resolve(node) {
     if (worldMap.has(node.id)) return worldMap.get(node.id);
-    const local = makeLocalMatrix(node.transform);
+    const isBone = node.type === 'group' && !!node.boneRole;
+    const local = isBone
+      ? makeBoneLocalMatrix(node.transform, node.pose)
+      : makeLocalMatrix(node.transform);
     const world = (node.parent && nodeMap.has(node.parent))
       ? mat3Mul(resolve(nodeMap.get(node.parent)), local)
       : local;
@@ -116,6 +164,58 @@ export function computeWorldMatrices(nodes) {
 
   for (const node of nodes) resolve(node);
   return worldMap;
+}
+
+/**
+ * BVR-004 follow-up — drag-time helper for Pose Mode joint translate.
+ *
+ * Captures the rest-frame inverse matrix + pivot for a bone so that
+ * the per-move handler can compute `pose.{x,y}` in one matrix-point
+ * multiply (`applyPoseTranslate`) — keeping the drag at 60Hz.
+ *
+ * The "rest world" here is `parentWorldWithPose × restMatrix(this bone)`.
+ * Parent's pose IS included (so dragging a child of a posed parent
+ * stays correct). Only THIS bone's pose is excluded — that's what
+ * we're computing.
+ *
+ * @param {Float32Array} parentWorldWithPose  Parent's full world matrix
+ *   (from `computeWorldMatrices`). Pass `mat3Identity()` for top-level.
+ * @param {{ pivotX?, pivotY?, rotation?, x?, y?, scaleX?, scaleY? }} transform
+ *   Bone's `transform` (rest layout).
+ * @returns {{inverse: Float32Array, pivotX: number, pivotY: number} | null}
+ *   `null` if transform is missing or the rest world is degenerate.
+ */
+export function preparePoseTranslate(parentWorldWithPose, transform) {
+  if (!transform) return null;
+  const restM = makeLocalMatrix(transform);
+  const restWorld = mat3Mul(parentWorldWithPose, restM);
+  const inverse = mat3Inverse(restWorld);
+  return {
+    inverse,
+    pivotX: transform.pivotX ?? 0,
+    pivotY: transform.pivotY ?? 0,
+  };
+}
+
+/**
+ * Per-move pair to `preparePoseTranslate`. Maps a canvas-px target to
+ * `pose.{x,y}` such that the bone's joint dot lands at that target.
+ *
+ * Math: `pose = inverse(restWorld) · target - pivot`. Pivot is in the
+ * bone's parent-rest frame; subtracting it yields the post-rest
+ * translation that `pose.x/y` carries (rotation around pivot fixes
+ * pivot, then translate by pose moves it to the target).
+ *
+ * @param {{inverse: Float32Array, pivotX: number, pivotY: number}} setup
+ * @param {number} targetCanvasX
+ * @param {number} targetCanvasY
+ * @returns {{x: number, y: number}}
+ */
+export function applyPoseTranslate(setup, targetCanvasX, targetCanvasY) {
+  const inv = setup.inverse;
+  const localX = inv[0] * targetCanvasX + inv[3] * targetCanvasY + inv[6];
+  const localY = inv[1] * targetCanvasX + inv[4] * targetCanvasY + inv[7];
+  return { x: localX - setup.pivotX, y: localY - setup.pivotY };
 }
 
 /**

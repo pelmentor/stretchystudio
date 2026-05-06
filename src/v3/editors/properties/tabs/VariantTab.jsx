@@ -34,14 +34,23 @@ import { useSelectionStore } from '../../../../store/selectionStore.js';
 import { matchTag } from '../../../../io/armatureOrganizer.js';
 import { DEFAULT_BACKDROP_TAGS } from '../../../../io/live2d/rig/variantFadeRules.js';
 
+/** Module-scope empty array — referentially stable for the `?? EMPTY_ARRAY`
+ *  fallback. Fresh `[]` literals each call would trip
+ *  useSyncExternalStore's "result of getSnapshot should be cached" guard. */
+const EMPTY_ARRAY = Object.freeze([]);
+
 /**
  * @param {Object} props
  * @param {string} props.nodeId
  */
 export function VariantTab({ nodeId }) {
-  const nodes = useProjectStore((s) => s.project?.nodes ?? []);
+  // Subscribe to the stable `nodes` ref directly (`?? []` inline would
+  // return a fresh empty array each getSnapshot when the project hasn't
+  // loaded yet → useSyncExternalStore infinite-loop trap).
+  const nodesRaw = useProjectStore((s) => s.project?.nodes);
+  const nodes = nodesRaw ?? EMPTY_ARRAY;
   const variantFadeRules = useProjectStore((s) => s.project?.variantFadeRules);
-  const setSelection = useSelectionStore((s) => s.setSelection);
+  const select = useSelectionStore((s) => s.select);
 
   const node = nodes.find((n) => n?.id === nodeId);
   if (!node) {
@@ -61,7 +70,14 @@ export function VariantTab({ nodeId }) {
       <div className="flex flex-col gap-1.5 p-2 overflow-auto">
         <Section label="Variant of base" icon={<Layers size={11} />}>
           <Row label="Base part">
-            <PartLink node={base} fallbackId={node.variantOf} onSelect={setSelection} />
+            <PartLink
+              node={base}
+              fallbackId={node.variantOf}
+              onSelect={(items) => {
+                const first = Array.isArray(items) ? items[0] : null;
+                if (first?.id && first?.type) select(first, 'replace');
+              }}
+            />
           </Row>
           <Row label="Suffix">
             <span className="text-xs text-foreground font-mono">
@@ -108,7 +124,7 @@ export function VariantTab({ nodeId }) {
               <button
                 key={c.id}
                 type="button"
-                onClick={() => setSelection([{ type: 'part', id: c.id }])}
+                onClick={() => select({ type: 'part', id: c.id }, 'replace')}
                 className="flex items-center justify-between gap-2 text-[11px] font-mono px-1.5 py-1 rounded hover:bg-muted/40 transition-colors text-left"
                 title={`Open ${c.name ?? c.id}`}
               >

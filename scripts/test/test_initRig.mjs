@@ -8,7 +8,11 @@
 // covered indirectly by test_e2e_equivalence.mjs and the export integration
 // tests. Here we exercise the filter logic in isolation.
 
-import { harvestSeedFromRigSpec, initializeRigFromProject } from '../../src/io/live2d/rig/initRig.js';
+import {
+  harvestSeedFromRigSpec,
+  initializeRigFromProject,
+  pruneOrphanRotationDeformers,
+} from '../../src/io/live2d/rig/initRig.js';
 
 let passed = 0;
 let failed = 0;
@@ -320,6 +324,91 @@ function makeNeckWarpSpec() {
       }
     }
   }
+}
+
+// ── pruneOrphanRotationDeformers ────────────────────────────────
+//
+// Verifies dead-end orphan rotation deformers (and their ParamRotation_*
+// params) are dropped at harvest-time so the Parameters panel doesn't
+// expose sliders driving nothing. Mirrors shelby's signature: rotation
+// chain Rotation_root ← Rotation_bothLegs (both unreachable from any
+// art mesh) + Rotation_head ← FaceRotation (reachable via face mesh).
+{
+  const rigSpec = {
+    parameters: [
+      { id: 'ParamAngleZ',           name: 'AngleZ',  min: -30, max: 30, default: 0 },
+      { id: 'ParamRotation_head',    name: 'R head',  min: -30, max: 30, default: 0 },
+      { id: 'ParamRotation_root',    name: 'R root',  min: -30, max: 30, default: 0 },
+      { id: 'ParamRotation_bothLegs', name: 'R legs', min: -30, max: 30, default: 0 },
+    ],
+    warpDeformers: [
+      { id: 'BodyXWarp',  parent: { type: 'root', id: null }, bindings: [], keyforms: [] },
+      { id: 'FaceParallax', parent: { type: 'rotation', id: 'FaceRotation' }, bindings: [], keyforms: [] },
+      { id: 'RigWarp_face', parent: { type: 'warp', id: 'FaceParallax' }, bindings: [], keyforms: [] },
+    ],
+    rotationDeformers: [
+      // FaceRotation: parented under Rotation_head — face mesh reaches it.
+      { id: 'FaceRotation',  parent: { type: 'rotation', id: 'Rotation_head' },
+        bindings: [{ parameterId: 'ParamAngleZ', keys: [-30, 0, 30], interpolation: 'LINEAR' }], keyforms: [] },
+      // Rotation_head: descendant chain reaches face mesh — KEEP.
+      { id: 'Rotation_head', parent: { type: 'warp', id: 'BodyXWarp' },
+        bindings: [{ parameterId: 'ParamRotation_head', keys: [-30, 0, 30], interpolation: 'LINEAR' }], keyforms: [] },
+      // Rotation_root: only descendant is Rotation_bothLegs (also orphan)
+      // — DROP.
+      { id: 'Rotation_root', parent: { type: 'warp', id: 'BodyXWarp' },
+        bindings: [{ parameterId: 'ParamRotation_root', keys: [-30, 0, 30], interpolation: 'LINEAR' }], keyforms: [] },
+      // Rotation_bothLegs: nothing parents to it, no mesh chain — DROP.
+      { id: 'Rotation_bothLegs', parent: { type: 'rotation', id: 'Rotation_root' },
+        bindings: [{ parameterId: 'ParamRotation_bothLegs', keys: [-30, 0, 30], interpolation: 'LINEAR' }], keyforms: [] },
+    ],
+    artMeshes: [
+      { id: 'face', name: 'face', parent: { type: 'warp', id: 'RigWarp_face' }, bindings: [], keyforms: [] },
+    ],
+  };
+
+  const r = pruneOrphanRotationDeformers(rigSpec);
+  assert(r.droppedRotationIds.includes('Rotation_root'), 'prune: Rotation_root dropped');
+  assert(r.droppedRotationIds.includes('Rotation_bothLegs'), 'prune: Rotation_bothLegs dropped');
+  assert(!r.droppedRotationIds.includes('Rotation_head'), 'prune: Rotation_head kept (descendant chain reaches face)');
+  assert(!r.droppedRotationIds.includes('FaceRotation'), 'prune: FaceRotation kept (face mesh chains through it)');
+  assert(r.droppedParamIds.includes('ParamRotation_root'), 'prune: ParamRotation_root dropped');
+  assert(r.droppedParamIds.includes('ParamRotation_bothLegs'), 'prune: ParamRotation_bothLegs dropped');
+  assert(!r.droppedParamIds.includes('ParamRotation_head'), 'prune: ParamRotation_head kept');
+  assert(!r.droppedParamIds.includes('ParamAngleZ'), 'prune: ParamAngleZ kept (FaceRotation binds it, FaceRotation is alive)');
+  // Result rigSpec reflects the drops.
+  assert(r.rigSpec.rotationDeformers.length === 2, 'prune: rigSpec.rotationDeformers shrunk to 2 alive');
+  assert(r.rigSpec.parameters.length === 2, 'prune: rigSpec.parameters shrunk by 2 (root + bothLegs dropped)');
+}
+
+{
+  // Empty / null inputs are a no-op.
+  const r1 = pruneOrphanRotationDeformers(null);
+  assertEq(r1.droppedRotationIds, [], 'prune: null rigSpec → no drops');
+  assertEq(r1.droppedParamIds, [], 'prune: null rigSpec → no param drops');
+  const r2 = pruneOrphanRotationDeformers({ rotationDeformers: [], warpDeformers: [], artMeshes: [] });
+  assertEq(r2.droppedRotationIds, [], 'prune: empty rotations → no drops');
+}
+
+{
+  // A rotation deformer's param is preserved if any OTHER spec also binds it.
+  const rigSpec = {
+    parameters: [{ id: 'ParamShared', min: -30, max: 30, default: 0 }],
+    warpDeformers: [
+      // A warp also binds ParamShared — keep the param even if the rotation is dropped.
+      { id: 'BodyXWarp', parent: { type: 'root', id: null },
+        bindings: [{ parameterId: 'ParamShared', keys: [-30, 0, 30], interpolation: 'LINEAR' }],
+        keyforms: [] },
+    ],
+    rotationDeformers: [
+      { id: 'OrphanRot', parent: { type: 'root', id: null },
+        bindings: [{ parameterId: 'ParamShared', keys: [-30, 0, 30], interpolation: 'LINEAR' }],
+        keyforms: [] },
+    ],
+    artMeshes: [],
+  };
+  const r = pruneOrphanRotationDeformers(rigSpec);
+  assert(r.droppedRotationIds.includes('OrphanRot'), 'prune: orphan rotation dropped');
+  assert(!r.droppedParamIds.includes('ParamShared'), 'prune: shared param preserved (warp still binds it)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -627,6 +627,100 @@ function assertThrows(fn, name) {
   assert(Array.isArray(p.parameters), 'v0→current: v1 fields still added');
 }
 
+// ---- v17: rest/pose split for bone groups ----
+
+{
+  // Pre-v17 bone with full transform pose-fields → migrated into pose.
+  const p = {
+    schemaVersion: 16,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    textures: [], animations: [], parameters: [], physics_groups: [],
+    nodes: [
+      {
+        id: 'bone-arm', type: 'group', name: 'arm', boneRole: 'leftArm',
+        transform: { x: 10, y: 5, rotation: 30, scaleX: 1.2, scaleY: 0.9, pivotX: 200, pivotY: 300 },
+      },
+      {
+        // Already-rest bone shouldn't gain pose data, only the slot itself.
+        id: 'bone-head', type: 'group', name: 'head', boneRole: 'head',
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 400, pivotY: 100 },
+      },
+      {
+        // Non-bone group is untouched.
+        id: 'group-folder', type: 'group', name: 'folder',
+        transform: { x: 50, y: 60, rotation: 12, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
+      },
+      {
+        // Part is untouched (transform = layout, not pose).
+        id: 'part-hat', type: 'part', name: 'hat',
+        transform: { x: 25, y: -10, rotation: 5, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
+      },
+    ],
+  };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v17: schemaVersion bumped');
+
+  const arm = p.nodes.find(n => n.id === 'bone-arm');
+  // Pose lifted out of transform.
+  assertEq(arm.pose, { rotation: 30, x: 10, y: 5, scaleX: 1.2, scaleY: 0.9 }, 'v17 arm: pose populated from legacy transform');
+  // Transform pose-fields zeroed.
+  assertEq(arm.transform.rotation, 0, 'v17 arm: transform.rotation zeroed');
+  assertEq(arm.transform.x, 0, 'v17 arm: transform.x zeroed');
+  assertEq(arm.transform.y, 0, 'v17 arm: transform.y zeroed');
+  assertEq(arm.transform.scaleX, 1, 'v17 arm: transform.scaleX → 1');
+  assertEq(arm.transform.scaleY, 1, 'v17 arm: transform.scaleY → 1');
+  // Pivot preserved.
+  assertEq(arm.transform.pivotX, 200, 'v17 arm: pivotX preserved');
+  assertEq(arm.transform.pivotY, 300, 'v17 arm: pivotY preserved');
+
+  const head = p.nodes.find(n => n.id === 'bone-head');
+  // Already-rest bone gets identity pose (slot is established).
+  assertEq(head.pose, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, 'v17 head: identity pose initialized');
+  assertEq(head.transform.pivotX, 400, 'v17 head: pivotX preserved');
+
+  const folder = p.nodes.find(n => n.id === 'group-folder');
+  assert(folder.pose === undefined, 'v17 non-bone group: no pose slot added');
+  assertEq(folder.transform.rotation, 12, 'v17 non-bone group: transform untouched');
+
+  const hat = p.nodes.find(n => n.id === 'part-hat');
+  assert(hat.pose === undefined, 'v17 part: no pose slot added');
+  assertEq(hat.transform.x, 25, 'v17 part: transform untouched');
+}
+
+{
+  // Idempotence — running v17 twice produces identical result.
+  const make = () => ({
+    schemaVersion: 16,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    textures: [], animations: [], parameters: [], physics_groups: [],
+    nodes: [{
+      id: 'b', type: 'group', boneRole: 'torso',
+      transform: { x: 7, y: 0, rotation: 15, scaleX: 1, scaleY: 1, pivotX: 100, pivotY: 200 },
+    }],
+  });
+  const a = make(); migrateProject(a);
+  const b = make(); migrateProject(b); migrateProject(b);  // re-run noop
+  assertEq(a, b, 'v17: idempotent (re-running migrate is a no-op)');
+}
+
+{
+  // Already-on-v17 with pre-existing pose: pose wins, transform stays clean.
+  const p = {
+    schemaVersion: 17,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    textures: [], animations: [], parameters: [], physics_groups: [],
+    nodes: [{
+      id: 'b', type: 'group', boneRole: 'leftArm',
+      transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 50, pivotY: 60 },
+      pose: { rotation: 22, x: 3, y: 4, scaleX: 1, scaleY: 1 },
+    }],
+  };
+  migrateProject(p);
+  const b = p.nodes[0];
+  assertEq(b.pose.rotation, 22, 'v17 already-v17: pose.rotation preserved');
+  assertEq(b.transform.rotation, 0, 'v17 already-v17: transform.rotation stays 0');
+}
+
 // ---- Future version: throws ----
 
 {
