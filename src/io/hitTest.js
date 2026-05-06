@@ -8,7 +8,7 @@
  * coordinate, returns the topmost partId whose triangulation contains
  * the point — matching what the user actually sees rendered.
  *
- * Plan: docs/CLICK_TO_SELECT_PLAN.md.
+ * Plan: docs/archive/plans-shipped/CLICK_TO_SELECT.md.
  *
  * Why triangulation, not pixel sampling: the alpha-sample path the
  * canvas used previously only worked against the rest texture (no rig

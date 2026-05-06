@@ -409,7 +409,7 @@ export function buildBodyWarpChain(input) {
   //                    the head row is dead.
   //
   // Reference (authored shelby.moc3, dumped via scripts/cubism_oracle):
-  // see docs/live2d-export/CUBISM_WARP_PORT.md "Phase 2b synthesis
+  // see docs/live2d/CUBISM_WARP_PORT.md "Phase 2b synthesis
   // reference" section once populated.
   function summarizeKeyform(spec, keyformIdx, scaleX, scaleY) {
     const baseGrid = spec.baseGrid;

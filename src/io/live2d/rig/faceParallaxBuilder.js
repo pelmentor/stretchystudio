@@ -18,7 +18,7 @@
  * Stage 4 architectural anchor: by separating compute from emit, the
  * project can store the spec on disk and replay it on subsequent
  * exports without re-running the heuristic. See
- * `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 4.
+ * `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 4.
  *
  * @module io/live2d/rig/faceParallaxBuilder
  */

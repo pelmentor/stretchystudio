@@ -11,7 +11,7 @@
  * This module defines ONLY types (JSDoc) plus a couple of trivial helpers.
  * No emission logic. No XmlBuilder. No binary writers. Pure data.
  *
- * See `docs/live2d-export/RUNTIME_PARITY_PLAN.md` for the migration plan
+ * See `docs/archive/plans-shipped/RUNTIME_PARITY.md` for the migration plan
  * mapping legacy inline code to the new modules.
  *
  * @module io/live2d/rig/rigSpec

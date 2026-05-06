@@ -41,7 +41,7 @@
  *   - `model[72]`  = `rotation_deformer_keyform.reflect_xs`
  *   - `model[73]`  = `rotation_deformer_keyform.reflect_ys`
  *
- * Note: an earlier draft of [docs/live2d-export/CUBISM_WARP_PORT.md](../../../../docs/live2d-export/CUBISM_WARP_PORT.md)
+ * Note: an earlier draft of [docs/live2d/CUBISM_WARP_PORT.md](../../../../docs/live2d/CUBISM_WARP_PORT.md)
  * labeled model[69]/model[70] as "ty"/"tx" (creating the impression of an
  * x↔y axis swap). That was a mis-labelling — model[69] = origin_xs,
  * model[70] = origin_ys per the moc3 sections in `moc3writer.js:403-404`.

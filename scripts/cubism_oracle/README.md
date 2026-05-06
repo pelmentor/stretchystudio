@@ -1,7 +1,7 @@
 # Cubism Oracle Harness
 
 Numeric ground truth for the Cubism warp-evaluator port.
-See [CUBISM_WARP_PORT.md](../../docs/live2d-export/CUBISM_WARP_PORT.md)
+See [CUBISM_WARP_PORT.md](../../docs/live2d/CUBISM_WARP_PORT.md)
 for the project context.
 
 This is the canonical pass criterion for every phase of the port:

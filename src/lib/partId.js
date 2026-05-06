@@ -36,7 +36,7 @@
  *      strings, `null` / `undefined` / non-strings sneaking in, and
  *      cross-conversion mismatches.
  *
- * The full 24-site audit lives in `docs/V3_BLENDER_REFACTOR_PLAN.md`
+ * The full 24-site audit lives in `docs/archive/plans-shipped/V3_BLENDER_REFACTOR.md`
  * Phase -1D / Pillar B; this module ships the runtime layer. Brand
  * enforcement at compile time is Phase 0D scope.
  *

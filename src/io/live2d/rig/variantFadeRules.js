@@ -27,7 +27,7 @@
  *     neck shapekey tag handling.
  *   - feedback_reference_only_hiyori — reference for the backdrop set.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 5.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 5.
  */
 
 /**

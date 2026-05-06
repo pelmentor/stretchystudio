@@ -2,7 +2,7 @@
  * Build a v3 RigSpec directly from an authored cmo3 ExtractedScene.
  *
  * This is the **authored path** for rig initialization (per
- * [docs/INIT_RIG_AUTHORED_REWRITE.md](../../../../docs/INIT_RIG_AUTHORED_REWRITE.md)).
+ * [docs/archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md](../../../../docs/archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md)).
  * Used when a project was loaded from a cmo3 file — `cmo3Import.js` stashes
  * the scene on `project._cmo3Scene` and `initializeRigFromProject` routes
  * here instead of running the heuristic `generateCmo3` pass.

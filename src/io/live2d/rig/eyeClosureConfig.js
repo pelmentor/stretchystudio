@@ -24,7 +24,7 @@
  *   - reference_emotions_two_patterns — eye sub-meshes treated as one unit.
  *   - feedback_no_sharing_eye_2d_grid — variant closure uses its own fit.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 5.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 5.
  */
 
 /**

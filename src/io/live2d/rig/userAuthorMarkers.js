@@ -26,7 +26,7 @@
  * is the safe default (everything reseedable). After Phase 0, manual
  * edits write markers going forward.
  *
- * Plan: docs/V3_RERIG_FLOW_PLAN.md → Phase 0.
+ * Plan: docs/archive/plans-shipped/V3_RERIG_FLOW.md → Phase 0.
  *
  * @module io/live2d/rig/userAuthorMarkers
  */

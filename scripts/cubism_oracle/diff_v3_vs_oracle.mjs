@@ -3,7 +3,7 @@
 // compares per-drawable vertex output to the pinned oracle snapshots.
 //
 // This is the canonical pass criterion for the Cubism Warp Port phases
-// (per `docs/live2d-export/CUBISM_WARP_PORT.md`): for each fixture in
+// (per `docs/live2d/CUBISM_WARP_PORT.md`): for each fixture in
 // `scripts/cubism_oracle/snapshots/<character>/`, the v3 evalRig output
 // must match Cubism's csmGetDrawableVertexPositions within ~float32
 // noise floor.
@@ -26,7 +26,7 @@
 // Default kernel:   cubism-setup (Phase 2b shipped 2026-05-03)
 //
 // `--kernel=cubism-setup` is the in-progress Setup port (Phase 2b plan,
-// docs/live2d-export/PHASE_2B_PLAN.md). At Stage 0 it is byte-identical
+// docs/archive/plans-shipped/PHASE_2B.md). At Stage 0 it is byte-identical
 // to v3-legacy; from Stage 2 onwards it diverges.
 //
 // Note: this harness does NOT need Cubism Core DLL. It reads pinned oracle

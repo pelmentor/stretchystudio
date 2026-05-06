@@ -10,7 +10,7 @@
  * atlas (reference/live2d-sample/). Initial naive implementations (shelf packing,
  * MaxRects without upscaling) wasted 70%+ space. The reference atlas is tightly
  * packed with upscaled parts — always study reference output before implementing.
- * See docs/live2d-export/DECISIONS.md#007, #008.
+ * See docs/archive/sessions/DECISIONS.md#007, #008.
  *
  * @module io/live2d/textureAtlas
  */

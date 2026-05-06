@@ -1,126 +1,129 @@
-# 🧬 Stretchy Studio
+# Stretchy Studio
 
-**The fastest way to rig and animate "See-Through" SOTA character models.**
+**A 2D rigging editor that exports Live2D Cubism models — built around a Blender-style authoring workflow.**
 
-Stretchy Studio is a high-performance 2D animation tool designed to turn static layers into expressive, mesh-deformed animations. We are built specifically to bridge the gap between AI-driven layer decomposition (like the **See-Through** SOTA model) and professional-grade animation.
+Stretchy Studio takes a tagged PSD or hand-laid layer set, auto-rigs a full Live2D Cubism rig (face parallax, eye closure, mouth open, head/body angle, physics), and exports both runtime `.moc3` and editable `.cmo3` projects that open in Cubism Editor 5.0. The authoring surface — modes, tools, hotkeys, the Properties panel, the canvas toolbar — is modelled after Blender so 2D artists with a 3D background feel at home.
 
-Unlike traditional bone-based systems, Stretchy Studio combines **AI-powered auto-rigging** with a **timeline-first, direct-deformation workflow**. Letting you go from a flat PSD to a fully rigged character in seconds.
-
-[🚀 Launch the Editor](https://editor.stretchy.studio) | [💬 Join the Discord](https://discord.com/invite/zB6TrHTwAb) | [🌐 Visit the Website](https://stretchy.studio)
+[🚀 Launch the Editor](https://editor.stretchy.studio) · [💬 Discord](https://discord.com/invite/zB6TrHTwAb) · [🌐 stretchy.studio](https://stretchy.studio)
 
 ---
 
-## ✨ Key Highlights
+## What it does
 
-### 📂 Native "See-Through" Support
-Optimized for characters generated via SOTA layer decomposition models like **See-Through**. Import your segmented PSDs and let Stretchy Studio handle the complex occlusions, depth layering, and mesh generation automatically.
+### Live2D export pipeline (the centerpiece)
 
----
+- **`.moc3` runtime** — texture atlas, draw order, parameters, animations (`.motion3.json`). Loads in Cubism Viewer, Ren'Py, and any Cubism SDK app.
+- **`.cmo3` Cubism Editor project** — per-mesh textures, part hierarchy, rotation deformers, parameter bindings. Opens in Cubism Editor 5.0 for further authoring.
+- **`.can3` animation** — parameter keyframes with Bezier curves, auto-generated alongside `.cmo3` when the project has animations.
 
-## 🧩 The See-Through Pipeline
+### Auto-rigging
 
-Stretchy Studio is designed to be an animation engine for the [**See-Through**](https://github.com/shitagaki-lab/see-through) model. While traditional 2D animation requires manual layering and inpainting, See-Through automates this process using a single static illustration.
+- **Tagged PSD layers → full standard rig.** Tag layers `face`, `mouth`, `eyewhite-l/r`, `legwear`, etc., run Init Rig, get face parallax, eye closure, mouth open, neck/body tilt, head angle, physics-driven hair sway — without manually wiring deformers.
+- **DWPose ONNX** for AI-driven joint detection on see-through-style PSDs; **heuristic** fallback for instant skeleton estimation from layer bounds.
+- **Variants.** Layer-name convention `<base>.<suffix>` (e.g. `mouth.smile`, `topwear.winter`) auto-creates `Param<Suffix>` that crossfades between base and variant. Eye variants get a 2D keyform grid (blink × variant simultaneously).
 
-### What is See-Through?
-See-Through is a SOTA framework that transforms a single anime illustration into a manipulatable character model by decomposing it into fully inpainted, semantically distinct body-part layers.
+### Authoring (Blender-style)
 
-- **Official Repository**: [shitagaki-lab/see-through](https://github.com/shitagaki-lab/see-through)
-- **Academic Paper**: ["See-through: Single-image Layer Decomposition for Anime Characters"](https://arxiv.org/abs/2602.03749)
+- **3 workspaces** — Edit, Pose, Animation — each tuned to a phase of the pipeline, sharing one canvas + one source of truth.
+- **One Edit Mode slot** with sub-modes (Mesh / Skeleton / BlendShape / Keyform / Weight Paint), surfaced via the canvas ModePill. `Tab` toggles Object↔Edit universally; `G/R/S` does modal grab/rotate/scale on bone pose; mesh-edit gets proportional editing with `O`/`Shift+O`/`Alt+O` falloff.
+- **Click-to-select** with triangle hit-test against rig frames; `KeyA` toggles select-all.
+- **Native runtime evaluator** — chain eval, scrubber UI, mask allocator, Cubism pendulum physics, idle-skip eval cache. The viewport shows the deformed rig live; you don't need Cubism Viewer to preview.
+- **Cubism warp / physics ports** — byte-faithful ports of Cubism's evaluator (Phase 2b shipped) and pendulum kernel (Phases 0/1/2 shipped). Live preview matches Cubism Editor's deformation within float32 noise.
 
-### How to get decomposed PSDs
-**Quick Start (Recommended)**: Use the [**Free Hugging Face Demo**](https://huggingface.co/spaces/24yearsold/see-through-demo) to quickly run the model on your character.
+### Other exports
 
-> See-Through is specifically trained on **anime and VTuber-style** illustrations. Realistic or non-anime styles may not decompose correctly.
+- **Spine 4.0 JSON** — maps SS hierarchies, setup poses, and animation tracks (translate / rotate / scale / opacity) to the Spine 4.0 schema, with auto image packing.
+- **PNG / WEBP / JPG sequences** — frame-by-frame export with custom scale, FPS, transparent / solid / grid backgrounds.
 
-### 📐 Magic Auto-Rigging
-Rigging doesn't have to be a chore. Use **AI-powered pose detection** (DWPose) to automatically generate a skeleton for your character, or use our instant "heuristic" method to get moving in seconds.
+### Other features
 
-### 🎬 Organic "Stretchy" Motion
-Don't just rotate layers—warp them! Animate individual mesh vertices to create organic, fluid motion. Perfect for breathing effects, flowing hair, and those subtle "Live2D-style" micro-expressions.
-
-### 🎯 Puppet Warp
-Place control pins on any layer and drag them to deform the mesh intuitively. Unmoved pins act as anchors to keep other regions in place. Perfect for eyebrow raises, mouth shapes, and subtle character movements without touching individual vertices. Puppet pins are fully keyframeable and work seamlessly with blend shapes.
-
-### 🔦 Some other features you may like
-- **Automatic Eye Clipping**: Irises stay perfectly contained within the eyes—no complex masking required.
-- **Realistic Limb Bending**: Built-in vertex skinning for arms and legs so they bend exactly how they should.
-- **Blender-Style Shape Keys**: Create complex deformations (like smiles or blinks) once and blend them anyway you like via influence sliders. Record puppet pin movements into shape keys for advanced blend-based deformation.
-- **Synced Audio Tracks**: Layer background music and SFX directly in the timeline. Trim, position, and sync audio clips with your animations for a complete multimedia experience.
-- **Spine 4.0 Export**: Export your rigs and animations directly to Spine JSON format for use in game engines and professional production pipelines.
+- **Iris clipping** — irises stay contained in their paired eyewhite (variant-aware).
+- **Limb skinning** — monolithic limb meshes with per-vertex bone weights bake to art-mesh keyforms, so elbows/knees bend without mesh splitting.
+- **Audio tracks** — layer music + SFX in the timeline; trim, position, sync with animation.
+- **Project format** — `.stretch` (ZIP with embedded textures + JSON metadata), with full undo/redo via snapshot history.
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
-1. **Open the App**: Head to [editor.stretchy.studio](https://editor.stretchy.studio).
-2. **Drop your Art**: Drag a `.stretch` project, PSD, or PNG file into the workspace.
-3. **Auto-Rig**: Follow the streamlined setup wizard to map layers and establish your character skeleton.
-4. **Animate**: Switch to **Animation mode** and start creating keyframes!
+1. Open [editor.stretchy.studio](https://editor.stretchy.studio).
+2. Drag a `.stretch` project, PSD, or PNG into the workspace.
+3. For a fresh PSD: follow the 3-step wizard (rig method → joint adjust → finish).
+4. **Export** in the toolbar → pick **Live2D Runtime** (.moc3) or **Live2D Project** (.cmo3) or **Spine** or **PNG sequence**.
 
----
-
-## 🎨 Workflow Examples
-
-### Static Character
-1. **Import**: Drag a PSD into the editor viewport.
-2. **Organize**: Use the Groups tab to parent layers and adjust pivot points.
-3. **Mesh**: Click "Generate Mesh" on any part to enable organic warping.
-4. **Animate**: Switch to **Animation** mode, create a clip, and start keyframing!
-
-### SOTA Workflow (e.g., See-Through)
-1. **Import**: Drag your decomposed "See-Through" PSD into the editor.
-2. **Auto-Rig**: Launch the Rigging Wizard. Stretchy Studio uses AI to map your layers to a skeletal structure instantly.
-3. **Refine**: Adjust joint positions and mesh density to handle occluded areas (like hair behind the neck).
-4. **Animate**: Create fluid, multi-layered animations that take full advantage of the "See-Through" depth data.
+For tagged-PSD auto-rig to work end-to-end, the layer names need standard tags (`face`, `eyewhite-l/r`, `mouth`, etc.). The wizard's heuristic mode and DWPose mode both write these tags during import.
 
 ---
 
-## 🛠 For Developers
+## For developers
 
-## 🏗 Project Structure
+### Tech stack
 
-```bash
-src/
-├── app/layout/          # 4-zone UI layout (Canvas, Layers, Inspector, Timeline)
-├── components/
-│   ├── canvas/          # WebGL Viewport, Gizmos, and Picking logic
-│   ├── layers/          # Hierarchical draw order and grouping management
-│   ├── inspector/       # Node properties and mesh generation controls
-│   └── timeline/        # Playhead, Keyframe tracks, and Animation CRUD
-├── renderer/
-│   ├── transforms.js    # Matrix math & world matrix composition
-│   ├── scenePass.js     # Hierarchical draw-order rendering
-│   └── partRenderer.js  # GPU buffer management (VAO/EBO)
-├── store/
-│   ├── projectStore.js  # Scene tree and persistent node state
-│   ├── animationStore.js # Playback state, interpolation, and pose overrides
-│   └── editorStore.js   # UI state, selection, and viewport settings
-├── mesh/                # Auto-triangulation and mesh editing algorithms
-└── io/                  # PSD parsing and export utilities
+[React](https://react.dev/) + [Vite](https://vitejs.dev/) · [Zustand](https://github.com/pmndrs/zustand) + [Immer](https://immerjs.github.io/immer/) · [WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext) + [gl-matrix](http://glmatrix.net/) · [Tailwind CSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) · [ag-psd](https://github.com/misonou/ag-psd) (PSD parsing) · [JSZip](https://stuk.github.io/jszip/) (Live2D export packaging).
+
+### Project structure
+
 ```
-
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
-- [pnpm](https://pnpm.io/) (Recommended)
+src/
+├── v3/                      Authoring shell (workspaces, ModePill, canvas toolbar, modals)
+│   ├── shell/               AppShell, Topbar, CanvasArea, ExportModal, PsdImportWizard, etc.
+│   ├── editors/             Per-area editors (outliner, properties, parameters, timeline,
+│   │                        viewport, animations, dopesheet, fcurve, keyformGraph, logs)
+│   ├── operators/           Keymap-bound operations (G/R/S, Tab, KeyA, click-select, …)
+│   ├── keymap/              Hotkey registry + chord handling
+│   └── templates/           Workspace layout templates
+│
+├── store/                   Zustand stores (projectStore, editorStore, animationStore,
+│                            historyStore, rigSpecStore, modalTransformStore, …)
+├── services/                Side-effect services (ExportService, ImportService,
+│                            PsdImportService, RigService, PoseService, dwposeService, …)
+│
+├── io/
+│   ├── live2d/              Live2D export pipeline (cmo3writer, moc3writer, can3writer,
+│   │                        rig data layer, runtime evaluator, idle motion generator)
+│   ├── exportSpine.js       Spine 4.0 JSON export
+│   ├── psd.js               PSD parsing + tagging
+│   └── projectFile.js       .stretch save/load
+│
+├── renderer/                WebGL2 pipeline (transforms, scenePass, partRenderer, mask
+│                            stencil, gizmo overlay)
+├── mesh/                    Auto-triangulation + edit algorithms
+├── components/canvas/       Canvas-host React components (CanvasViewport, SkeletonOverlay,
+│                            GizmoOverlay) — mounted under v3/shell/CanvasArea
+└── components/ui/           Radix-derived primitives
+```
 
 ### Setup
+
 ```bash
-# Install dependencies
 pnpm install
-
-# Run the development server
-pnpm dev
+pnpm dev        # http://localhost:5173
+pnpm test       # full test suite
+pnpm typecheck  # tsc --noEmit
 ```
-Open `http://localhost:5173` to view the app locally.
+
+### Documentation
+
+- [docs/README.md](docs/README.md) — entry point + "where do I look for X"
+- [docs/BUGS.md](docs/BUGS.md) · [docs/FEATURE_GAPS.md](docs/FEATURE_GAPS.md) — living trackers
+- [docs/PROJECT_DATA_LAYER.md](docs/PROJECT_DATA_LAYER.md) — project schema + integrity holes
+- [docs/WORKSPACES.md](docs/WORKSPACES.md) — workspace + edit-mode + toolbar contract
+- [docs/live2d/README.md](docs/live2d/README.md) — Live2D export pipeline reference
+- [docs/archive/](docs/archive/) — shipped plans + session post-mortems
 
 ---
 
-## 💬 Community & Support
+## See-Through pipeline (one supported entry point)
 
-Join our [Discord](https://discord.com/invite/zB6TrHTwAb) to share your animations, get help, or suggest new features!
+Stretchy Studio is friendly to PSDs decomposed by [**See-Through**](https://github.com/shitagaki-lab/see-through), a SOTA framework that takes a single anime illustration and produces fully inpainted, semantically distinct body-part layers. The wizard's tagging step recognises See-Through's naming convention and auto-rigs from there.
+
+- Free demo: [Hugging Face](https://huggingface.co/spaces/24yearsold/see-through-demo)
+- Paper: [arxiv.org/abs/2602.03749](https://arxiv.org/abs/2602.03749)
+
+See-Through is trained on anime / VTuber styles. Realistic styles may not decompose well.
 
 ---
 
-## 📜 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT. See [LICENSE](LICENSE).

@@ -17,7 +17,7 @@
  * keyforms in cmo3 — re-seed required. Documented in cross-cutting
  * invariants.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 7.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 7.
  */
 
 /**

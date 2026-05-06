@@ -8,7 +8,7 @@
  * and the writers can fall back to the same algorithm verbatim when the
  * project is unseeded.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 3.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 3.
  */
 
 import { matchTag } from '../../armatureOrganizer.js';

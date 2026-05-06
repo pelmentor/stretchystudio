@@ -5,7 +5,7 @@
  *    Framework's `CubismPhysics` — see `cubismPhysicsKernel.js`. Reference:
  *    `reference/cubism-web-framework/physics/cubismphysics.ts` (commit `d4da0aa`).
  *    Phase 0 oracle harness drove the divergence measurement; see
- *    `docs/live2d-export/CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md`.
+ *    `docs/archive/plans-shipped/CUBISM_PHYSICS_PORT_PHASE0_FINDINGS.md`.
  *
  *  - `'v3-legacy'`: hand-rolled "Cubism-style" verlet+rod integrator from before
  *    the port. Kept as an opt-out for one release cycle in case the new kernel

@@ -7,7 +7,7 @@
  * preserves the existing emission shape; the moc3 path consumes the same
  * spec and translates to binary.
  *
- * See `docs/live2d-export/RUNTIME_PARITY_PLAN.md` for the full migration
+ * See `docs/archive/plans-shipped/RUNTIME_PARITY.md` for the full migration
  * map and `rig/rigSpec.js` for the data types.
  *
  * @module io/live2d/rig/warpDeformers

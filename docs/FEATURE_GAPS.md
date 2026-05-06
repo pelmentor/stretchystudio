@@ -17,7 +17,7 @@ Living document. Tracks where v3 lags upstream's [README.md](../reference/stretc
 | ✅ Closed / Phase A shipped | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-007, GAP-008 (A+B), GAP-009, GAP-010 (A+B), GAP-011, GAP-012, GAP-013, GAP-014, GAP-015 (A+B), GAP-016 (A+B), GAP-017 (Phase A only — user-decided 2026-05-03; Phase B/C not pursued) |
 | ⏳ Open | (none) |
 
-Phase B follow-ups for closed entries (UI delete-confirm dialogs, parameter-editor surfaces, etc.) used to be gated on the broader `project_v3_rerig_flow_gap` — that pillar SHIPPED 2026-05-03 (Phases 0+1+3+4 of [V3_RERIG_FLOW_PLAN.md](V3_RERIG_FLOW_PLAN.md)). The "preserve customisations" re-init mode is the new RigStagesTab → "Refit X" buttons (`mode: 'merge'`). Per-stage refit, marker-based authoring tracking, single-flight guard, and the `seedAutoRigConfig` clobber-fix all landed.
+Phase B follow-ups for closed entries (UI delete-confirm dialogs, parameter-editor surfaces, etc.) used to be gated on the broader `project_v3_rerig_flow_gap` — that pillar SHIPPED 2026-05-03 (Phases 0+1+3+4 of [archive/plans-shipped/V3_RERIG_FLOW.md](archive/plans-shipped/V3_RERIG_FLOW.md)). The "preserve customisations" re-init mode is the new RigStagesTab → "Refit X" buttons (`mode: 'merge'`). Per-stage refit, marker-based authoring tracking, single-flight guard, and the `seedAutoRigConfig` clobber-fix all landed.
 
 ---
 
@@ -96,7 +96,7 @@ Originally `workspaceViewportPolicy.js` filtered `viewLayers` at consumption tim
 **Why GAP-011 ranks above other Open entries:**
 
 - Multiple downstream features wait on this: GAP-005 (multi-target export — without a stable data layer, every target's "use my edits" path is broken the same way), GAP-008 (Init Rig opt-out with persistence — the opt-out flag would land in `autoRigConfig` which doesn't survive save/load), GAP-009 (Project vs Auto-regenerated picker — in current state both produce identical output after save/load, defeating the picker's purpose), and the entire `project_v3_rerig_flow_gap` (no point editing in a UI surface if edits don't persist).
-- It's also a verification blocker for [CUBISM_WARP_PORT.md](live2d-export/CUBISM_WARP_PORT.md) Phase 1 — the oracle-diff numeric test needs a programmatic rigSpec build path, which means the project must contain enough data to skip the wizard. Today it doesn't survive save/load, so CLI-driven oracle-diff is impossible.
+- It's also a verification blocker for [CUBISM_WARP_PORT.md](live2d/CUBISM_WARP_PORT.md) Phase 1 — the oracle-diff numeric test needs a programmatic rigSpec build path, which means the project must contain enough data to skip the wizard. Today it doesn't survive save/load, so CLI-driven oracle-diff is impossible.
 
 **Notes:** Phase A only fixes the round-trip. Phase B (move Tier 3 fields like eye closure parabolas into Tier 1) is deferred until UI editors for them exist. See PROJECT_DATA_LAYER.md "Migration plan" section.
 
@@ -142,7 +142,7 @@ Originally `workspaceViewportPolicy.js` filtered `viewLayers` at consumption tim
 
 **Notes:** GAP-011 (round-trip persistence) is the prerequisite — Phase A's signature fields would also be lost on save/load without GAP-011's fix. Phase A of GAP-011 is shipped (2026-05-01), so GAP-012 is unblocked.
 
-This work was already partially planned in [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants → ID stability](live2d-export/NATIVE_RIG_REFACTOR_PLAN.md#id-stability-and-invalidation) — explicitly deferred from v1 of the refactor as a footgun acceptable for the initial ship. GAP-012 is the formal entry to track shipping it.
+This work was already partially planned in [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants → ID stability](archive/plans-shipped/NATIVE_RIG_REFACTOR.md#id-stability-and-invalidation) — explicitly deferred from v1 of the refactor as a footgun acceptable for the initial ship. GAP-012 is the formal entry to track shipping it.
 
 ---
 
@@ -264,7 +264,7 @@ If a future user need surfaces (filtering Outliner to groups only, batch-pivot e
 - **Severity:** medium · **Reported:** 2026-04-30 · **Fixed:** 2026-05-02
 - **Affects:** First-time user impression, project identity
 
-**Fix:** [README.md](../README.md) rewritten to lead with the Cubism / Live2D pipeline as the differentiator (cmo3/moc3/can3 export, native rig in viewport, byte-faithful Cubism Core port) while keeping See-Through credit (the auto-rig genuinely uses See-Through layer-tag conventions). Project Structure section now reflects v3 layout (`src/v3/shell/`, `src/v3/editors/`, `src/io/live2d/`) instead of upstream's 4-zone shape. Cross-links to [docs/PROJECT_DATA_LAYER.md](PROJECT_DATA_LAYER.md), [docs/FEATURE_GAPS.md](FEATURE_GAPS.md), [docs/BUGS.md](BUGS.md), [docs/live2d-export/CUBISM_WARP_PORT.md](live2d-export/CUBISM_WARP_PORT.md), and the native rig refactor plan. Notes upstream's Spine/PNG paths still build (deferred surfacing tracked under GAP-005).
+**Fix:** [README.md](../README.md) rewritten to lead with the Cubism / Live2D pipeline as the differentiator (cmo3/moc3/can3 export, native rig in viewport, byte-faithful Cubism Core port) while keeping See-Through credit (the auto-rig genuinely uses See-Through layer-tag conventions). Project Structure section now reflects v3 layout (`src/v3/shell/`, `src/v3/editors/`, `src/io/live2d/`) instead of upstream's 4-zone shape. Cross-links to [docs/PROJECT_DATA_LAYER.md](PROJECT_DATA_LAYER.md), [docs/FEATURE_GAPS.md](FEATURE_GAPS.md), [docs/BUGS.md](BUGS.md), [docs/live2d/CUBISM_WARP_PORT.md](live2d/CUBISM_WARP_PORT.md), and the native rig refactor plan. Notes upstream's Spine/PNG paths still build (deferred surfacing tracked under GAP-005).
 
 **Pre-fix state (for history):** [README.md](../README.md) was byte-identical (modulo whitespace) to upstream's pristine README at `reference/stretchystudio-upstream-original/README.md`. It marketed See-Through + DWPose + Spine export — true claims — but said nothing about our differentiators (Cubism pipeline, native rig refactor, variant system, Cubism physics, idle motion gen, hot-reload). Project Structure pointed at `src/app/layout/` and `src/components/inspector/` which were never v3 layout.
 
@@ -308,7 +308,7 @@ If a future user need surfaces (filtering Outliner to groups only, batch-pivot e
 
 The original 2026-05-02 fix gated the button to `editorMode === 'animation'`, which left users in Layout/Modeling/Rigging without a way to revert bone-controller rotations short of Ctrl+Z spam or per-node reset. Expanded same day after user feedback ("где кнопка сброса трансформов когда я повернул контроллеры костей в layout?").
 
-Doc anchor for the workspace × mode matrix: [`docs/V3_WORKSPACES.md`](V3_WORKSPACES.md).
+Doc anchor for the workspace × mode matrix: [`docs/WORKSPACES.md`](WORKSPACES.md).
 
 ---
 

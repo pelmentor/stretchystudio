@@ -505,7 +505,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // graph in `project._cmo3Scene`. Use `buildRigSpecFromCmo3` to assemble
   // a RigSpec directly from authored deformer data, bypassing the
   // heuristic body-warp / face-parallax / face-rotation synthesis. Per
-  // docs/INIT_RIG_AUTHORED_REWRITE.md (closes the BUG-003 9.45 px
+  // docs/archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md (closes the BUG-003 9.45 px
   // PARAM signal at AngleZ_pos30 by using the same rig values Cubism
   // does instead of regenerating them).
   if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {

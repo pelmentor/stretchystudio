@@ -22,7 +22,7 @@
  * Why a single tree + dropdown (vs. the old 3 tabs): Blender's
  * Outliner has ONE tree and a header dropdown that filters scope.
  * Three tabs broke that muscle memory and duplicated bones across
- * Hierarchy + Skeleton modes. Plan: docs/BLENDER_FIDELITY_AUDIT.md.
+ * Hierarchy + Skeleton modes. Plan: docs/archive/plans-shipped/BLENDER_FIDELITY_AUDIT.md.
  *
  * Why separate editor (vs. reusing v2 LayerPanel): v2 panel couples
  * drag-reordering with depth editing and lives inside the floating

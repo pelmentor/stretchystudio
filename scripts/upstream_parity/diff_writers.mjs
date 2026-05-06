@@ -15,7 +15,7 @@
 // Default fixture: `minimal` — a one-mesh, no-rig project. Other
 // fixtures can be added under `FIXTURES` below.
 //
-// Plan: docs/UPSTREAM_PARITY_AUDIT.md (Stage 0).
+// Plan: docs/archive/plans-shipped/UPSTREAM_PARITY_AUDIT.md (Stage 0).
 
 import fs from 'node:fs';
 import path from 'node:path';

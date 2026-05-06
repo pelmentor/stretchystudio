@@ -20,7 +20,7 @@
  * iterate it instead of PHYSICS_RULES. Custom rules added by future UI
  * appear here too.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 6.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 6.
  */
 
 import { PHYSICS_RULES } from '../cmo3/physics.js';

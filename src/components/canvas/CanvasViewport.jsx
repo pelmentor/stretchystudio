@@ -1978,7 +1978,7 @@ export default function CanvasViewport({
     // Click-to-select (Object Mode). Triangle hit-test against
     // rig-evaluated vertex positions so the click matches what the
     // user actually sees rendered (not the rest mesh). Plan:
-    // docs/CLICK_TO_SELECT_PLAN.md.
+    // docs/archive/plans-shipped/CLICK_TO_SELECT.md.
     //
     // In edit modes (mesh / skeleton / blendShape) clicks already
     // belong to the mode-specific gesture and never reach this branch

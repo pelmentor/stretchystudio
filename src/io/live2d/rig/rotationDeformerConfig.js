@@ -34,7 +34,7 @@
  * Memory cross-refs:
  *   - SESSION_23_FINDINGS.md — neck added to SKIP_ROTATION_ROLES.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 8.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 8.
  */
 
 /**

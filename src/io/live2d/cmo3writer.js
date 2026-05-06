@@ -245,7 +245,7 @@ export async function generateCmo3(input) {
 
   // ── Phase 0 diagnostic log (only populated when generateRig is on) ──
   // Emitted as `{modelName}.rig.log.json` alongside the .cmo3 in the export zip.
-  // Pure capture — no behavior changes. See docs/live2d-export/AUTO_RIG_PLAN.md.
+  // Pure capture — no behavior changes. See docs/archive/plans-shipped/AUTO_RIG.md.
   // ctx owns the canonical instance; this local is an alias kept until the
   // extraction sweeps migrate every reference to `ctx.rigDebugLog`.
   const rigDebugLog = ctx.rigDebugLog;
@@ -835,7 +835,7 @@ export async function generateCmo3(input) {
   // The 151 px offset made ParamAngleZ rotate waifu's head around a point
   // far below the neck, producing a large unnatural swing arc.
   //
-  // See docs/live2d-export/AUTO_RIG_PLAN.md (P0 fix, evidence-driven).
+  // See docs/archive/plans-shipped/AUTO_RIG.md (P0 fix, evidence-driven).
   let faceMeshBbox = null;
   for (const m of meshes) {
     if (m.tag !== 'face') continue;

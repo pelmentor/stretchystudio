@@ -429,7 +429,7 @@ No cached rigSpec → `CanvasViewport`'s tick loop's `_rigSpec = rigSpecRef.curr
 
 **Tests:** [`scripts/test/test_workspaceViewportPolicy.mjs`](../scripts/test/test_workspaceViewportPolicy.mjs) — 54 cases covering every workspace × overlay combo, fallback for unknown workspace IDs, no-mutation invariant.
 
-**Doc:** [`docs/V3_WORKSPACES.md`](V3_WORKSPACES.md) — workspace × concern matrix, policy semantics, Reset Pose semantics by mode, wizard cleanup contract, "adding a new workspace" checklist.
+**Doc:** [`docs/WORKSPACES.md`](WORKSPACES.md) — workspace × concern matrix, policy semantics, Reset Pose semantics by mode, wizard cleanup contract, "adding a new workspace" checklist.
 
 **Adjacent improvement (same commit):** Reset Pose ungated from animation mode. In staging mode (Layout / Modeling / Rigging) it now also resets every bone-tagged group's `node.transform.{rotation, x, y, scaleX, scaleY}` to identity (pivots preserved — those define WHERE the bone is, not the pose). User flow that motivated this: rotate bone controllers in Layout to inspect, want to revert. Per-part transforms (non-bone) stay untouched; for those the user has Properties → Reset Transform (GAP-014).
 
@@ -519,7 +519,7 @@ Why other bands were correct: the **top band** explicitly applies a top↔bottom
 
 - **Severity:** high · **Reported:** 2026-04-30 · **Fixed:** 2026-05-03 · **Root cause:** v3's heuristic init rig regenerated rig data from face/topwear bbox, ignoring authored cmo3 deformer values. Phase 2b's chainEval-level investigation (Stage 1 measurement + pivot-patch disproof, 2026-05-03) showed slope ≡ J⁻¹ at every rotation pivot and that single-deformer pivot patches can't move PARAM (constant translation cancelled by rest-delta subtraction). The real surface was the heuristic-vs-authored gap in v3's body chain + FaceParallax + FaceRotation.
 - **Fix:** new authored-rig path in `initializeRigFromProject` ([`buildRigSpecFromCmo3.js`](../src/io/live2d/rig/buildRigSpecFromCmo3.js)) — when project has `_cmo3Scene` (set by cmo3Import), build the RigSpec end-to-end from authored cmo3 deformer data instead of regenerating heuristically. AngleZ_pos30 PARAM dropped from 9.45 → **0.01 px**; overall TOTAL max from 24.21 → **5.44 px**; PARAM max from 9.45 → **5.42 px** (residual is body-chain composition through deep face chain; see "Known residual" below).
-- See [`docs/INIT_RIG_AUTHORED_REWRITE.md`](INIT_RIG_AUTHORED_REWRITE.md) for the plan that landed this fix.
+- See [`docs/archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md`](archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md) for the plan that landed this fix.
 
 #### Phase 2b residual closed (2026-05-03 — same day)
 
@@ -544,7 +544,7 @@ The "known residual" above was eliminated by the Phase 2b Setup port shipped in 
 | BodyAngleZ (±10) | 3.01–3.52 px | **0.21 px** | -93% to -94% |
 | AngleX/Y/Z, EyeBallX/Y, default | 0.00–0.01 px | 0.00–0.01 px | (no regression) |
 
-PHASE_2B_PLAN.md verification gate was "AngleZ PARAM < 1 px and no fixture regresses by > 0.5 px" — passed across the board. Fix file: [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) `getRotationSetup` + `buildRotationMat3CanvasFinal`. See [`CUBISM_WARP_PORT.md` Phase 2b](live2d-export/CUBISM_WARP_PORT.md) for the kernel-level explanation and [`PHASE_2B_PLAN.md`](live2d-export/PHASE_2B_PLAN.md) for the staged plan.
+PHASE_2B_PLAN.md verification gate was "AngleZ PARAM < 1 px and no fixture regresses by > 0.5 px" — passed across the board. Fix file: [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) `getRotationSetup` + `buildRotationMat3CanvasFinal`. See [`CUBISM_WARP_PORT.md` Phase 2b](live2d/CUBISM_WARP_PORT.md) for the kernel-level explanation and [`PHASE_2B_PLAN.md`](archive/plans-shipped/PHASE_2B.md) for the staged plan.
 
 **Original investigation (kept for reference):**
 
@@ -571,7 +571,7 @@ So at eval time, the rotation's frame is fully canvas-final-compensated. v3's ch
 
 For body-angle params: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated. Cubism's Setup picks up that local rotation when probing the head-rotation deformer's pivot. v3's chainEval doesn't — it assumes the warp's frame is rest-state. **That's the divergence.**
 
-**Fix path:** Phase 2b in [`docs/live2d-export/CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02). Implement the FD Jacobian probe in `chainEval.js`'s `DeformerStateCache.getState` for warp-parented rotation deformers. Verify via oracle diff harness (cmo3 → rigSpec → evalRig vs Cubism oracle) BEFORE shipping (per `feedback_oracle_before_unit_tests.md`).
+**Fix path:** Phase 2b in [`docs/live2d/CUBISM_WARP_PORT.md`](live2d/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02). Implement the FD Jacobian probe in `chainEval.js`'s `DeformerStateCache.getState` for warp-parented rotation deformers. Verify via oracle diff harness (cmo3 → rigSpec → evalRig vs Cubism oracle) BEFORE shipping (per `feedback_oracle_before_unit_tests.md`).
 
 **Quantified baseline (oracle harness 2026-05-02):**
 
@@ -588,7 +588,7 @@ For body-angle params: when `ParamBodyAngleZ ≠ 0`, BodyXWarp's grid is rotated
 
 **Cycle-period correctness fix (2026-05-02, separate from chain comp):** the live-preview ParamBreath synthesizer in CanvasViewport used cycle=3.345 s. Cubism Web Framework's `CubismBreath` standard wiring uses **3.2345 s** for ParamBreath. The 0.11 s discrepancy made our breath drift relative to a Cubism Viewer playing the same model side-by-side. Fixed.
 
-**Phase 2b implementation blocker found (2026-05-02):** initial attempt revealed v3's rotation matrix structure (`R · diag(extraSx, extraSy)`) is **diagonal-only**. When a warp is parameter-rotated, the warp's local Jacobian at the rotation pivot has off-diagonal terms — a rotation that the FD probe captures as `(dx, dy)`. v3's diagonal matrix can only carry the magnitude `|delta|`, not the directional information. Both attempted alternatives (canvas-final + chain-stop OR FD-magnitude-as-slope) made divergence worse than baseline. Real fix requires switching `rotationEval.js`'s matrix to a general 2×2 + translation, which is a downstream-consumer refactor out of scope for a single sweep. Detail in [`CUBISM_WARP_PORT.md`](live2d-export/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02).
+**Phase 2b implementation blocker found (2026-05-02):** initial attempt revealed v3's rotation matrix structure (`R · diag(extraSx, extraSy)`) is **diagonal-only**. When a warp is parameter-rotated, the warp's local Jacobian at the rotation pivot has off-diagonal terms — a rotation that the FD probe captures as `(dx, dy)`. v3's diagonal matrix can only carry the magnitude `|delta|`, not the directional information. Both attempted alternatives (canvas-final + chain-stop OR FD-magnitude-as-slope) made divergence worse than baseline. Real fix requires switching `rotationEval.js`'s matrix to a general 2×2 + translation, which is a downstream-consumer refactor out of scope for a single sweep. Detail in [`CUBISM_WARP_PORT.md`](live2d/CUBISM_WARP_PORT.md#-phase-2--rotation-deformer-eval-raw-asm-verified-2026-05-02).
 
 **Phase 3 shipped 2026-05-02:** lifted-grid Setup mirroring Cubism Core's `WarpDeformer_Setup`. Each warp's grid is composed top-down through ancestors to canvas-px once per frame; artmesh evaluation does a single bilinear against the lifted grid instead of nested bilinears through the chain. Mathematically equivalent to Cubism's pipeline (nested bilinears compose to a quartic when intermediate warps are non-identity, while lifted bilinear stays a proper bilinear). Reduced PARAM mean divergence from 6.66 → 2.45 px (63%). Most body-chain fixtures roughly halved. Files: [`chainEval.js`](../src/io/live2d/runtime/evaluator/chainEval.js) — new `getLiftedGrid` method on `DeformerStateCache`, plus rewired warp branch in `evalArtMeshFrame` to break after applying the lifted grid.
 
@@ -746,7 +746,7 @@ The mesh tool list now ends with a "Proportional Edit" toggle entry (`Circle` ic
 
 **Initial fix (2026-04-30):** at the warp step in `chainEval`, branch on `(u, v) ∈ [0, 1]² ?` — inside use the deformed `state.grid`, outside fall back to `state.baseGrid` (uniform rest projection). This stops the unwanted extrapolation but is still **not** what Cubism Core actually does.
 
-**Phase 1 supersession (2026-05-01):** Phase 0 IDA reverse-engineering of `WarpDeformer_TransformTarget` revealed the real Cubism behaviour — it doesn't cut off, it **continues to displace OOB vertices using edge-gradient linear extrapolation**, with smooth handoff via a 9-region dispatch (1 far field + 4 boundary bands + 4 corner zones). The cutoff fix was too conservative and left a class of "vertex stops moving when it leaves the bbox" residual visible in shelby's body chain. Replaced by [cubismWarpEval.js](../src/io/live2d/runtime/evaluator/cubismWarpEval.js), which is a byte-faithful port of the Cubism kernel; `chainEval.js` warp branch now calls `evalWarpKernelCubism` instead of `bilinearFFD(inside ? grid : baseGrid)`. See [CUBISM_WARP_PORT.md](./live2d-export/CUBISM_WARP_PORT.md) for the full RE pseudocode + verification setup.
+**Phase 1 supersession (2026-05-01):** Phase 0 IDA reverse-engineering of `WarpDeformer_TransformTarget` revealed the real Cubism behaviour — it doesn't cut off, it **continues to displace OOB vertices using edge-gradient linear extrapolation**, with smooth handoff via a 9-region dispatch (1 far field + 4 boundary bands + 4 corner zones). The cutoff fix was too conservative and left a class of "vertex stops moving when it leaves the bbox" residual visible in shelby's body chain. Replaced by [cubismWarpEval.js](../src/io/live2d/runtime/evaluator/cubismWarpEval.js), which is a byte-faithful port of the Cubism kernel; `chainEval.js` warp branch now calls `evalWarpKernelCubism` instead of `bilinearFFD(inside ? grid : baseGrid)`. See [CUBISM_WARP_PORT.md](./live2d/CUBISM_WARP_PORT.md) for the full RE pseudocode + verification setup.
 
 **Files touched (Phase 1):** [cubismWarpEval.js](../src/io/live2d/runtime/evaluator/cubismWarpEval.js) (new), [chainEval.js](../src/io/live2d/runtime/evaluator/chainEval.js) (warp branch swap, `isQuadTransform` plumbed via `DeformerStateCache.getState`).
 

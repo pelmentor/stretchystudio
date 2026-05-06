@@ -1,7 +1,7 @@
 /**
  * Cubism Physics Oracle — pure-JS transcription of Cubism Web Framework's
  * `CubismPhysics`. Used as the byte-faithful reference for v3's runtime physics
- * port (see `docs/live2d-export/CUBISM_PHYSICS_PORT.md`).
+ * port (see `docs/live2d/CUBISM_PHYSICS_PORT.md`).
  *
  * Source snapshot: `reference/cubism-web-framework/physics/`
  *   - cubismphysics.ts (kernel: evaluate, updateParticles, updateOutputParameterValue, normalizeParameterValue)

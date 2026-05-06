@@ -19,7 +19,7 @@
  * fire `transform.translate` / `transform.rotate` / `transform.scale`,
  * matching G/R/S keybinds). Sticky transform tools would need their
  * own gizmo+drag wiring in CanvasViewport, which is deferred per
- * docs/TOOLBAR_PLAN.md.
+ * docs/archive/plans-shipped/TOOLBAR.md.
  *
  * Mounts only on the edit Viewport tab — same gating as ModePill /
  * ViewLayersPopover. Live Preview is read-only.

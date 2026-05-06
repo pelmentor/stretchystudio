@@ -38,7 +38,7 @@
  * was wrong — too harsh for a multi-section config that downstream
  * stages will add to.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` → Stage 2.
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` → Stage 2.
  */
 
 /**

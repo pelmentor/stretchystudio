@@ -1,7 +1,7 @@
 // Canonicalize export outputs to remove known sources of non-determinism
 // before structural comparison.
 //
-// See docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md ("The diff harness")
+// See docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md ("The diff harness")
 // for the rationale. Two consecutive exports of the same .stretch differ at:
 //   - crypto.randomUUID() in xmlbuilder.js (one fresh UUID per deformer/mesh/param)
 //   - new Date().toISOString() in cmo3writer.js (export wall-clock)

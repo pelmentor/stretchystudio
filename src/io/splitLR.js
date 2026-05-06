@@ -2,7 +2,7 @@
  * splitLR.js
  *
  * Client-side Left/Right split for a single merged layer (e.g. "handwear").
- * Mirrors the server-side TBLR heuristic documented in docs/TBLR_implementation.md.
+ * Mirrors the server-side TBLR heuristic documented in docs/archive/historical/TBLR_implementation.md.
  *
  * Algorithm:
  *   1. Label every opaque pixel with a connected-component ID (8-connectivity, union-find).

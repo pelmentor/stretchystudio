@@ -6,7 +6,7 @@
  * `CURRENT_SCHEMA_VERSION` so downstream code (projectStore, exporter)
  * can assume a single canonical shape.
  *
- * See `docs/live2d-export/NATIVE_RIG_REFACTOR_PLAN.md` →
+ * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` →
  * "Cross-cutting invariants → Schema versioning" for rationale.
  *
  * Adding a migration:
@@ -258,7 +258,7 @@ const MIGRATIONS = {
   // self-contained). Old fields are left in place so a Phase-1 rollback
   // is possible.
   //
-  // See docs/BFA_006_DEFORMER_NODES_PLAN.md.
+  // See docs/archive/plans-shipped/BFA_006_DEFORMER_NODES.md.
   15: (project) => {
     synthesizeDeformerNodesFromSidetables(project);
     return project;

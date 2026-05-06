@@ -6,7 +6,7 @@ gaps exist between "seeded into project" and "persisted to .stretch", and the
 migration plan for closing those gaps.
 
 This is the foundation for [GAP-011](FEATURE_GAPS.md#gap-011) (project as
-true source of truth). The [CUBISM_WARP_PORT](live2d-export/CUBISM_WARP_PORT.md)
+true source of truth). The [CUBISM_WARP_PORT](live2d/CUBISM_WARP_PORT.md)
 oracle-diff test ([`scripts/cubism_oracle/diff_v3_vs_oracle.mjs`](../scripts/cubism_oracle/diff_v3_vs_oracle.mjs))
 ships its own programmatic rigSpec build path via `cmo3Import → initializeRigFromProject`
 in Node, so it doesn't depend on save/load round-trip parity — but a future
@@ -24,7 +24,7 @@ current `keys` + `[min, max]`; hooked into both `loadProject` and `seedAllRig`
 Phase B follow-ups (UI delete-confirm, "preserve customisations" re-init,
 parameter editor surfaces) gate on the broader `project_v3_rerig_flow_gap`
 UI work — most prerequisites (param editor, armature edit mode, drag-reparent)
-shipped 2026-05-05/06; see `BLENDER_VIBE_REFACTOR_PLAN.md`.
+shipped 2026-05-05/06; see `archive/plans-shipped/BLENDER_VIBE_REFACTOR.md`.
 
 **BFA-006 Phase 6 promotion (2026-05-04):** the three legacy warp-deformer
 sidetables (`project.faceParallax` / `project.bodyWarp` / `project.rigWarps`)
@@ -247,7 +247,7 @@ The Phase A fix closes the round-trip gap — fields persist correctly. The foll
 
 **Phase A status (2026-05-02):** all 10 holes have detection-side defences shipped. Phase B (UI gates / delete-confirm dialogs / interactive remediation) is deferred until the relevant UI surfaces (parameter editor, bone-edit operator, group-edit operator, layer-rename op) land — those gate Phase B more than the data-layer plumbing does. See "Steps 1–7 closure plan" in the decision log below.
 
-These are the "known footguns" originally documented module-by-module across the codebase ([rigWarpsStore.js:35-43](../src/io/live2d/rig/rigWarpsStore.js#L35), [faceParallaxStore.js:22-30](../src/io/live2d/rig/faceParallaxStore.js#L22), [bodyWarpStore.js:23-30](../src/io/live2d/rig/bodyWarpStore.js#L23), [eyeClosureConfig.js:19-22](../src/io/live2d/rig/eyeClosureConfig.js#L19), [boneConfig.js:14-19](../src/io/live2d/rig/boneConfig.js#L14), [rotationDeformerConfig.js:26-30](../src/io/live2d/rig/rotationDeformerConfig.js#L26), and the cross-cutting "ID stability" section of [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants](live2d-export/NATIVE_RIG_REFACTOR_PLAN.md#cross-cutting-invariants)) — consolidated here.
+These are the "known footguns" originally documented module-by-module across the codebase ([rigWarpsStore.js:35-43](../src/io/live2d/rig/rigWarpsStore.js#L35), [faceParallaxStore.js:22-30](../src/io/live2d/rig/faceParallaxStore.js#L22), [bodyWarpStore.js:23-30](../src/io/live2d/rig/bodyWarpStore.js#L23), [eyeClosureConfig.js:19-22](../src/io/live2d/rig/eyeClosureConfig.js#L19), [boneConfig.js:14-19](../src/io/live2d/rig/boneConfig.js#L14), [rotationDeformerConfig.js:26-30](../src/io/live2d/rig/rotationDeformerConfig.js#L26), and the cross-cutting "ID stability" section of [NATIVE_RIG_REFACTOR_PLAN.md → Cross-cutting invariants](archive/plans-shipped/NATIVE_RIG_REFACTOR.md#cross-cutting-invariants)) — consolidated here.
 
 ### Hole I-1 — No mesh signature hash → stale warp keyforms after PSD reimport
 

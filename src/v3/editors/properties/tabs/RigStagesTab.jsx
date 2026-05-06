@@ -14,7 +14,7 @@
  * Parameters editor, which is `mode: 'replace'` (destructive on
  * purpose — wipe and regen).
  *
- * Plan: docs/V3_RERIG_FLOW_PLAN.md → Phase 1.
+ * Plan: docs/archive/plans-shipped/V3_RERIG_FLOW.md → Phase 1.
  *
  * @module v3/editors/properties/tabs/RigStagesTab
  */

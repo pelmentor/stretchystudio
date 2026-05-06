@@ -18,7 +18,7 @@
  *   node scripts/cubism_physics/diff_v3_vs_oracle.mjs --fixture=<name>  # single fixture
  *   node scripts/cubism_physics/diff_v3_vs_oracle.mjs --verbose         # per-frame trace
  *
- * Plan: docs/live2d-export/CUBISM_PHYSICS_PORT.md
+ * Plan: docs/live2d/CUBISM_PHYSICS_PORT.md
  */
 
 import { readFileSync } from 'node:fs';
