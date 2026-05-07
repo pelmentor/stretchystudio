@@ -363,6 +363,46 @@ export function synthesizeDeformerNodesFromSidetables(project) {
  *
  * @param {object} project - mutated in place
  */
+
+/** Field lists for `_packModifierData` — must mirror the v28 migration
+ *  in `migrations/v28_modifier_data_fold.js`. Phase 3.B will read from
+ *  `modifier.data.<field>` instead of the deformer node, so the lists
+ *  need to be synchronised. */
+const _PACK_WARP_FIELDS = /** @type {const} */ ([
+  'name', 'visible', 'gridSize', 'baseGrid', 'localFrame',
+  'bindings', 'keyforms',
+  'isLocked', 'isQuadTransform',
+  'targetPartId', 'canvasBbox',
+  '_userAuthored',
+]);
+const _PACK_ROTATION_FIELDS = /** @type {const} */ ([
+  'name', 'visible',
+  'bindings', 'keyforms',
+  'baseAngle', 'handleLengthOnCanvas', 'circleRadiusOnCanvas',
+  'isLocked', 'useBoneUiTestImpl',
+  '_userAuthored',
+]);
+
+/**
+ * Pack a deformer node's state into the `modifier.data` shape v28+
+ * expects. Used by `synthesizeModifierStacks` so every rebuild
+ * carries fresh data (the dual-write window).
+ *
+ * @param {object} def - a `type:'deformer'` node
+ * @returns {object}
+ */
+function _packModifierData(def) {
+  const fields = def.deformerKind === 'rotation'
+    ? _PACK_ROTATION_FIELDS : _PACK_WARP_FIELDS;
+  const data = {};
+  for (const key of fields) {
+    if (key in def) {
+      data[key] = def[key];
+    }
+  }
+  return data;
+}
+
 export function synthesizeModifierStacks(project) {
   if (!project) return;
   if (!Array.isArray(project.nodes)) return;
@@ -387,6 +427,13 @@ export function synthesizeModifierStacks(project) {
         enabled: true,
         mode: DEFAULT_MIGRATED_MODE,
         showInEditor: true,
+        // BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.A: dual-write the
+        // deformer-node state into modifier.data so the per-part stack
+        // becomes self-contained. Phase 3.B switches readers to this
+        // path; Phase 3.C deletes the deformer node. Built via
+        // `_packModifierData(def)` so the field list stays in sync
+        // with the v28 migration.
+        data: _packModifierData(def),
       });
       cur = typeof def.parent === 'string' && def.parent.length > 0
         ? def.parent

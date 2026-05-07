@@ -641,6 +641,41 @@ export function reorderModifier(node, modifierId, newIndex) {
   return true;
 }
 
+/**
+ * Resolve a modifier entry's deformer state. Returns the modifier's
+ * own `data` sub-object if present (post-v28); falls back to looking
+ * up the matching `node.type === 'deformer'` entry in `project.nodes`
+ * (pre-v28 / Phase 3.A backward-compat).
+ *
+ * Phase 3.A scaffold (BLENDER_DEVIATION_AUDIT Fix 3):
+ *   - Pre-v28 readers walked `project.nodes` filter for the deformer.
+ *   - Post-v28 the v28 migration copies that data into
+ *     `modifier.data`.
+ *   - Phase 3.B switches the export pipeline + UI editors to read
+ *     through this helper so they see the modifier-data path.
+ *   - Phase 3.C deletes the standalone deformer nodes.
+ *
+ * Always returns a plain object (or null on miss). Mutate at your
+ * own risk during the dual-write window — modifier.data is a copy of
+ * the deformer node's state, not a reference.
+ *
+ * @param {object|null|undefined} modifier  — entry from `node.modifiers[]`
+ * @param {object|null|undefined} project   — project for fallback lookup
+ * @returns {object|null}
+ */
+export function getModifierData(modifier, project) {
+  if (!modifier || typeof modifier !== 'object') return null;
+  if (modifier.data && typeof modifier.data === 'object') {
+    return modifier.data;
+  }
+  // Pre-v28 fallback: look up the deformer node by id.
+  if (typeof modifier.deformerId !== 'string') return null;
+  if (!project || !Array.isArray(project.nodes)) return null;
+  const node = project.nodes.find((n) =>
+    n && n.type === 'deformer' && n.id === modifier.deformerId);
+  return node ?? null;
+}
+
 // ── Constraint stack (Phase 4 scaffold) ───────────────────────────────────
 
 /**

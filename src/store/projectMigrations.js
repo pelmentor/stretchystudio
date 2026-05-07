@@ -27,8 +27,9 @@ import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animatio
 import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename.js';
 import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold.js';
 import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
+import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js';
 
-export const CURRENT_SCHEMA_VERSION = 27;
+export const CURRENT_SCHEMA_VERSION = 28;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -422,6 +423,18 @@ const MIGRATIONS = {
   // See `src/store/migrations/v27_skeleton_to_pose_rename.js`.
   27: (project) => {
     migrateSkeletonToPoseRename(project);
+    return project;
+  },
+
+  // v28 — BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.A: fold deformer-node
+  // state INTO `Object.modifiers[i].data`. Each modifier entry gains
+  // a `.data` sub-object copying the matching `node.type === 'deformer'`
+  // fields. The deformer node itself stays for backward-compat (Phase
+  // 3.B switches the export pipeline; Phase 3.C deletes the nodes).
+  //
+  // See `src/store/migrations/v28_modifier_data_fold.js`.
+  28: (project) => {
+    migrateModifierDataFold(project);
     return project;
   },
 
