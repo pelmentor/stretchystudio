@@ -30,13 +30,10 @@ const PE_KEY = 'v3.prefs.proportionalEdit';
 const VLP_KEY = 'v3.prefs.viewLayerPresets';
 const LOM_KEY = 'v3.prefs.lockObjectModes';
 const LTM_KEY = 'v3.prefs.lastToolByMode';
-/** V2 Phase D-5 — eval-engine selector. `'depgraph'` (default
- *  2026-05-07) runs the depgraph as a shadow validator alongside
- *  `chainEval` and logs any per-warp lifted-grid divergence to the
- *  Logs panel; visual rendering still goes through `chainEval`.
- *  `'classic'` disables the shadow pass entirely. The default flip
- *  starts the shadow-soak window that gates the cleanup-phase
- *  deletions (chainEval / selectRigSpec / synthesis mirrors). */
+/** V2 Phase D-5 — eval-engine selector. `'classic'` (default) is the
+ *  only engine that drives the viewport tick today. `'depgraph'` is
+ *  retained as opt-in for future render-side wiring; it has no
+ *  production effect under the current flag-gated reads. */
 const EVAL_KEY = 'v3.prefs.evalEngine';
 
 const PE_DEFAULT = Object.freeze({
@@ -134,11 +131,10 @@ export const usePreferencesStore = create((set, get) => ({
    *  `editorStore.setToolMode` (writes on every tool flip). */
   lastToolByMode: loadJson(LTM_KEY, LTM_DEFAULT),
   /** V2 Phase D-5 evalEngine selector — `'classic' | 'depgraph'`.
-   *  Default `'depgraph'` (2026-05-07): runs the shadow validator
-   *  alongside chainEval and logs lifted-grid divergence; rendering
-   *  still goes through chainEval. Stored value `'classic'` opts out
-   *  of the shadow pass; missing value falls back to the default. */
-  evalEngine: (loadJsonScalar(EVAL_KEY, 'depgraph') === 'classic') ? 'classic' : 'depgraph',
+   *  Default `'classic'` (chainEval is the production engine). The
+   *  `'depgraph'` opt-in has no production-side reader today; it
+   *  remains as a hook for future render-side wiring. */
+  evalEngine: (loadJsonScalar(EVAL_KEY, 'classic') === 'depgraph') ? 'depgraph' : 'classic',
 
   setEvalEngine(v) {
     const next = v === 'depgraph' ? 'depgraph' : 'classic';

@@ -14,7 +14,6 @@ import { useSelectionStore } from '@/store/selectionStore';
 // preset + default editorMode, nothing more). `editor.editMode` and
 // `editor.viewLayers` are read directly.
 import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
-import { runShadowDepgraphTick, resetShadowFlare } from '@/anim/depgraph/shadowValidate';
 import {
   createPhysicsState,
   tickPhysics,
@@ -278,13 +277,6 @@ export default function CanvasViewport({
     // mismatches.
     missingFrameIds.current.clear();
   }, [rigSpec]);
-
-  // V2 final wire — when the user toggles `evalEngine`, reset the
-  // shadow validator's flared-divergence flag so any pre-existing
-  // divergence re-logs (or a clean run after a fix re-arms the next
-  // flare).
-  const _evalEngine = usePreferencesStore((s) => s.evalEngine);
-  useEffect(() => { resetShadowFlare(); }, [_evalEngine]);
 
   // BUG-020 — flip the dirty bit on every CSS-box change so the next
   // rAF tick re-runs `scenePass.draw`, which re-syncs `canvas.width`
@@ -716,26 +708,6 @@ export default function CanvasViewport({
                     frameCount: frames.length,
                   });
                 lastBodyAngleLogTimestampRef.current = _now;
-              }
-            }
-
-            // V2 final wire (2026-05-07) — depgraph shadow validator.
-            // When `preferences.evalEngine === 'depgraph'`, run the
-            // depgraph against this same param snapshot and diff its
-            // lifted grids vs chainEval's. Throttled to 1 Hz inside
-            // the validator. Visual tick stays on chainEval; this is
-            // shadow-only until the soak proves divergences are clean
-            // and the default flag flips.
-            if (usePreferencesStore.getState().evalEngine === 'depgraph') {
-              try {
-                runShadowDepgraphTick(
-                  projectRef.current,
-                  valuesForEval,
-                  evalOut?.liftedGrids ?? null,
-                );
-              } catch (err) {
-                logger.warn('depgraphShadowError',
-                  `Shadow depgraph crashed: ${err?.message ?? err}`);
               }
             }
           }

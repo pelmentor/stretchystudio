@@ -75,38 +75,32 @@ re-running the chain produces identical state.
   the reference primitive, or (b) the manual user gate awaiting
   Shelby validation. ✓
 
-## What's NOT shipped (deliberately)
+## V2 plan FINAL status (2026-05-07)
 
-1. **CanvasViewport tick path actually using the depgraph for
-   rendering** — visual tick stays on `chainEval`. The depgraph runs
-   in **shadow** alongside chainEval when `evalEngine === 'depgraph'`
-   (see "Shadow validator wire" below). A render-side flip needs an
-   art-mesh keyform kernel + frame collection — out of scope for V2.
-2. **`cmo3writer` / `moc3writer` reading from RigTree directly** —
-   still reads parent-link mirror via `selectRigSpec`. Switching
-   readers is the cleanup phase.
-3. **Cleanup phase deletions** — `chainEval.js`, `selectRigSpec.js`,
-   `synthesizeDeformerParents`, dual-write `synthesizeModifierStacks`,
-   `'classic'` flag. Per plan: gated on a clean shadow soak under
-   `evalEngine: 'depgraph'`.
+V2 ships as the **architectural foundation**: depgraph engine +
+NodeTree datablocks + visual editor are all in tree, behind their
+respective flags, with their full kernel test coverage. No
+production handover beyond the NodeTreeEditor read-only view.
 
-## Shadow validator wire (2026-05-07)
+Decisions taken on closure:
 
-`src/anim/depgraph/shadowValidate.js` — `runShadowDepgraphTick`
-runs the depgraph against the same project + paramValues snapshot
-that `evalRig` just consumed, then diffs per-warp lifted grids
-against the chainEval map collected via
-`evalRig({ out: { liftedGrids } })`. Throttled to ~1 Hz; flares the
-first divergence per session via `logger.warn('depgraphShadowDivergence', …)`,
-clears + re-flares when the user toggles `evalEngine`.
-
-Called from `CanvasViewport.jsx` inside the existing eval-cache miss
-path, gated on `usePreferencesStore.getState().evalEngine === 'depgraph'`.
-Visual rendering continues from chainEval — shadow-only — so the
-worst-case impact of a divergence is a Logs-panel flag, never a
-visible regression.
-
-Test: `scripts/test/test_depgraphShadow.mjs` (17 assertions).
+- **Shadow validator removed.** A `runShadowDepgraphTick` wire
+  briefly ran the depgraph alongside chainEval and logged
+  divergences; user direction was that the parallel-execution
+  pattern is a crutch. Scrapped along with its test. The first
+  shadow run on Shelby caught a real bug (per-part `RigWarp_*`
+  lifted grids diverged by ~`canvasW/2` — pivot-relative vs
+  TL-origin coordinate-frame mismatch); recorded here so a future
+  render-side wire begins by fixing it.
+- **`evalEngine` flag stays as opt-in `'classic' | 'depgraph'`** with
+  default `'classic'`. No production reader today; reserved for the
+  future render-side flip.
+- **Cleanup-phase deletions deferred indefinitely.** `chainEval.js`,
+  `selectRigSpec.js`, `synthesizeDeformerParents`, dual-write
+  `synthesizeModifierStacks` all stay — they're the only thing
+  actually rendering. Removing them is gated on the depgraph having
+  an art-mesh keyform kernel + frame collection (out of scope).
+- **`cmo3writer` / `moc3writer` continue reading via `selectRigSpec`.**
 
 ## NodeTreeEditor app-shell wire (2026-05-07)
 
