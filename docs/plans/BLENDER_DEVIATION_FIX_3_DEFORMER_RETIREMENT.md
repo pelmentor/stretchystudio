@@ -74,6 +74,56 @@ LOC est ~300; schema v29; **deletes ~200 LOC of dual-write code**.
 
 Each phase is its own commit + tests + push. Total estimated time: 3 working sessions.
 
+## Status as of 2026-05-07 (commit `ed04985`)
+
+**Phase 3.A SHIPPED** (commit `1308a5b`).
+
+**Phase 3.B SHIPPED + byte-confirmed** (commit `ed04985`):
+- Pre-flight on user's Shelby `.stretch`: 27 deformers via synth ≡ 27 via node-filter, 0 field diffs (incl bindings/keyforms). Pre-flight harness at `scripts/byteFidelity/preflight_synth_vs_filter.mjs`.
+- Re-export comparison vs morning V2 baseline:
+  - `.moc3` BYTE-IDENTICAL (sha 64ebff360f3f51dd both sides).
+  - `.cdi3.json`, `.model3.json`, `.physics3.json` BYTE-IDENTICAL.
+  - `.rig.log.json` differs only by export timestamp.
+  - `.cmo3` differs because `cmo3writer` calls `uuid()` ~20× per export
+    (CModelGuid, CPartGuid, CDeformerGuid, CFormGuid, etc.) — pre-existing
+    non-determinism, NOT a Phase 3.B regression.
+
+**Phase 3.C BLOCKED on "neck gone before re-init" investigation.**
+
+User reported 2026-05-07: loading their Shelby project from IndexedDB
+cache, the neck mesh wasn't rendering until they clicked "Re-initialize
+Rig". After re-init it worked, and that's the state used for the byte-
+diff above.
+
+Root-cause investigation (`scripts/byteFidelity/inspect_neck_state.mjs`)
+on the saved `.stretch` showed the file is fully populated: schemaVersion=28,
+NeckWarp deformer node present + connected to chain (BodyXWarp parent),
+all 125 modifiers across 17 parts have `.data`, the neck part has the
+full 6-warp stack with NeckWarp at index [1]. So the saved state is
+correct.
+
+The only way "neck gone" happens with a correct .stretch file is if the
+LIVE in-app project state differed from what got saved — most likely
+the user's IndexedDB cache held a stale snapshot from a prior session
+that pre-dated Phase 3.A's `modifier.data` population, and the v28
+migration on DB-load couldn't restore it (e.g. if deformer nodes were
+also missing from that DB record).
+
+Phase 3.C deletes deformer nodes from `project.nodes`, removing the
+orphan-fallback safety net in `synthesizeDeformerNodesForExport`. After
+3.C, any project where `modifier.data` is incomplete becomes
+permanently broken (no re-init can fix it because re-init wouldn't
+have deformer nodes to read from either).
+
+**Until "neck gone" is reproducible and root-caused, Phase 3.C is
+unsafe.** Investigation paths for next session:
+- Force-load a Shelby DB record + log which deformers fail to render.
+- Add a `logger.warn('synthOrphanFallback', …)` that fires when a
+  deformer reaches the synth output ONLY via the orphan path (so users
+  flagging "X is gone" get a self-diagnosing log entry).
+- Audit every codepath that mutates `node.modifiers[]` to confirm
+  `modifier.data` always stays in sync with the deformer node.
+
 ---
 
 ## Why I'm not just shipping it now
