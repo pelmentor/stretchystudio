@@ -13,11 +13,15 @@ export const useEditorStore = create((set) => ({
    *    Object Mode (editMode === null):
    *      'select'         — default (click-to-select; topmost wins)
    *
-   *    Mesh Edit (editMode === 'mesh'):
+   *    Edit Mode on mesh data (editMode === 'edit', dataKind === 'mesh'):
    *      'brush'          — default (multi-vertex deform brush; UV
    *                          adjust when `meshSubMode === 'adjust'`)
    *      'add_vertex'     — click adds a vertex at the cursor
    *      'remove_vertex'  — click removes the nearest vertex
+   *
+   *    Edit Mode on armature data (editMode === 'edit', dataKind === 'armature'):
+   *      'pivot_drag'     — default (drag joints to write
+   *                          `node.transform.pivotX/Y` — rest bind edit)
    *
    *    Skeleton (editMode === 'skeleton'):
    *      'joint_drag'     — default (drag joints in SkeletonOverlay)
@@ -105,26 +109,30 @@ export const useEditorStore = create((set) => ({
    *
    *  Values:
    *    - null           → Object Mode (no edit interaction; selection only)
-   *    - 'mesh'         → part vertex/UV editing. meshSubMode applies.
-   *    - 'skeleton'     → POSE MODE — the SOLE bone-edit mode. Joint drag
-   *                       writes to `node.pose.*`; rotation arcs write to
-   *                       `node.pose.rotation` or the driver param. Apply
-   *                       Pose As Rest is the bake path that converts
-   *                       pose → rest (rest pivot edits go through that
-   *                       single coherent flow rather than a second mode).
-   *                       (Earlier versions had a separate 'armatureEdit'
-   *                       mode for direct rest-pivot drag — collapsed
-   *                       2026-05-06 since it shipped as a near-identical
-   *                       UI to Pose Mode and confused users.)
+   *    - 'edit'         → Blender's universal `OB_MODE_EDIT`. Editor
+   *                       behaviour dispatches by the active object's
+   *                       dataKind:
+   *                         · mesh dataKind     → vertex / UV editing
+   *                                               (meshSubMode applies)
+   *                         · armature dataKind → bone REST pivot drag
+   *                                               (writes node.transform.pivotX/Y)
+   *                       Renamed 2026-05-07 from legacy `'mesh'` to match
+   *                       Blender's universal Edit Mode taxonomy (one
+   *                       OB_MODE_EDIT slot, dispatch by data type). The
+   *                       v25 schema migration rewrites stored `'mesh'`
+   *                       editMode values to `'edit'`.
+   *    - 'skeleton'     → POSE MODE. Joint drag writes to `node.pose.*`;
+   *                       rotation arcs write to `node.pose.rotation`
+   *                       or the driver param. Apply Pose As Rest is
+   *                       the bake path.
    *    - 'blendShape'   → painting deltas onto `activeBlendShapeId`.
-   *                       Same brush behaviour as mesh edit; write
-   *                       target is the blendShape's deltas array.
+   *                       Same brush behaviour as Edit Mode on a mesh;
+   *                       write target is the blendShape's deltas array.
    *
-   *  Selection drives entry: enterEditMode('mesh' | 'blendShape')
-   *  needs a meshed part selection; enterEditMode('skeleton') needs
-   *  a bone-role group. The Tab keybind in `mode.editToggle`
-   *  enforces this; direct callers (BlendShapeTab arm button,
-   *  PsdImportService finalize) take responsibility for the gate. */
+   *  Selection drives entry: `enterEditMode('edit')` works for both
+   *  meshed parts and bone groups; `enterEditMode('blendShape')` needs
+   *  a meshed part; `enterEditMode('skeleton')` needs a bone-role
+   *  group. The Tab keybind in `mode.editToggle` enforces this. */
   editMode: null,
 
   /** Sub-mode while in mesh edit mode: 'deform' moves vertices, 'adjust' moves UVs.
@@ -238,7 +246,8 @@ export const useEditorStore = create((set) => ({
   }),
 
   /** Enter a contextual edit mode.
-   *  kind ∈ {'mesh','skeleton','blendShape','keyform','weightPaint'}.
+   *  kind ∈ {'edit','skeleton','blendShape','keyform','weightPaint'}.
+   *  Legacy alias `'mesh'` is accepted and normalised to `'edit'`.
    *  For 'blendShape', opts.blendShapeId is required — without it the
    *  call is a no-op (blendShape edit needs to know which shape).
    *  For 'keyform', opts.deformerId + opts.keyformIndex + opts.keyTuple
@@ -247,8 +256,11 @@ export const useEditorStore = create((set) => ({
    *  the active part).
    *  Returns nothing; read editMode after. */
   enterEditMode: (kind, opts = {}) => set((state) => {
-    if (kind !== 'mesh' && kind !== 'skeleton'
-        && kind !== 'blendShape' && kind !== 'keyform' && kind !== 'weightPaint') return state;
+    // Legacy alias normalisation: 'mesh' → 'edit' (Blender taxonomy).
+    if (kind === 'mesh') kind = 'edit';
+    if (kind !== 'edit' && kind !== 'skeleton'
+        && kind !== 'blendShape' && kind !== 'keyform'
+        && kind !== 'weightPaint') return state;
     if (kind === 'blendShape' && !opts.blendShapeId) return state;
     if (kind === 'keyform') {
       if (!opts.deformerId || typeof opts.keyformIndex !== 'number') return state;
@@ -261,7 +273,7 @@ export const useEditorStore = create((set) => ({
     const persisted = usePreferencesStore.getState().lastToolByMode ?? {};
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
-      if (kind === 'mesh' || kind === 'blendShape' || kind === 'weightPaint') toolMode = 'brush';
+      if (kind === 'edit' || kind === 'blendShape' || kind === 'weightPaint') toolMode = 'brush';
       else if (kind === 'skeleton') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';

@@ -166,11 +166,12 @@ export const TOOLS_BY_MODE = {
 /**
  * Resolve which tool table to render for the current `editMode`.
  *
- * @param {null | 'mesh' | 'skeleton' | 'blendShape'} editMode
+ * @param {null | 'edit' | 'skeleton' | 'blendShape'} editMode
  * @returns {ToolEntry[]}
  */
 export function toolsFor(editMode) {
-  if (editMode === 'mesh') return TOOLS_BY_MODE.mesh;
+  // Legacy alias 'mesh' kept for any unmigrated caller.
+  if (editMode === 'edit' || editMode === 'mesh') return TOOLS_BY_MODE.mesh;
   if (editMode === 'skeleton') return TOOLS_BY_MODE.skeleton;
   if (editMode === 'blendShape') return TOOLS_BY_MODE.blendShape;
   return TOOLS_BY_MODE.object;

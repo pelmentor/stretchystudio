@@ -51,7 +51,7 @@ const PE_DEFAULT = Object.freeze({
  *  unknown values fall back to the mode's first sticky tool entry. */
 const LTM_DEFAULT = Object.freeze({
   object:     'select',
-  mesh:       'brush',
+  edit:       'brush',          // Blender's universal Edit Mode (was 'mesh')
   skeleton:   'joint_drag',
   blendShape: 'brush',
 });
@@ -123,13 +123,22 @@ export const usePreferencesStore = create((set, get) => ({
    *  selection-head changes auto-exit edit mode (the prior SS
    *  behaviour). */
   lockObjectModes: loadBool(LOM_KEY, true),
-  /** Last-used tool per editMode (`'object' | 'mesh' | 'skeleton' |
+  /** Last-used tool per editMode (`'object' | 'edit' | 'skeleton' |
    *  'blendShape'`). Persisted across sessions so sticky tool choices
-   *  (e.g. preferring `add_vertex` over the default `brush` in mesh
-   *  edit) survive Tab out / Tab in, page reload, and project switch.
+   *  (e.g. preferring `add_vertex` over the default `brush` in Edit
+   *  Mode) survive Tab out / Tab in, page reload, and project switch.
    *  See `editorStore.enterEditMode` (reads on entry) and
    *  `editorStore.setToolMode` (writes on every tool flip). */
-  lastToolByMode: loadJson(LTM_KEY, LTM_DEFAULT),
+  lastToolByMode: (() => {
+    // Legacy 'mesh' key normalisation: pre-2026-05-07 entries used
+    // 'mesh' as the slot name; rename to 'edit' on read.
+    const loaded = loadJson(LTM_KEY, LTM_DEFAULT);
+    if (loaded && typeof loaded === 'object' && 'mesh' in loaded && !('edit' in loaded)) {
+      const { mesh: _mesh, ...rest } = loaded;
+      return { ...rest, edit: _mesh };
+    }
+    return loaded;
+  })(),
   /** V2 Phase D-5 evalEngine selector — `'classic' | 'depgraph'`.
    *  Default `'classic'` (chainEval is the production engine). The
    *  `'depgraph'` opt-in has no production-side reader today; it

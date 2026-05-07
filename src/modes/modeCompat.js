@@ -26,9 +26,9 @@
  *
  * Blender's source allows `OB_MODE_EDIT | OB_MODE_POSE` for `OB_ARMATURE`
  * (object_modes.cc:132–136). SS collapsed Armature Edit into Pose Mode
- * 2026-05-06 (commit `9df561f`) for UX reasons, so our `armature` row
- * lists Pose only. Re-introducing Armature Edit needs an explicit table
- * edit + UX policy decision — it's not a bug fix.
+ * 2026-05-06 (commit `9df561f`); re-added it 2026-05-07 (Blender Armature
+ * Alignment plan) with distinct rest-pivot-edit semantics that don't
+ * overlap Pose Mode's animation-overlay semantics.
  *
  * SS adds `MODE_BLEND_SHAPE` to the `mesh` row; Blender doesn't have a
  * dedicated mode for shape-key painting (it lives inside Edit Mode +
@@ -50,9 +50,12 @@
  *   - `null`         — Blender's `OB_MODE_OBJECT`. The "no edit mode"
  *                       state, where transform gizmos drag whole
  *                       objects.
- *   - `'mesh'`       — Blender's `OB_MODE_EDIT` for mesh objects. SS
- *                       shipped this name pre-rename; keep it for
- *                       compat.
+ *   - `'edit'`       — Blender's universal `OB_MODE_EDIT`. Renamed
+ *                       from legacy `'mesh'` 2026-05-07 to match
+ *                       Blender's taxonomy: one mode value, dispatch
+ *                       editor by the active object's dataKind. Works
+ *                       for both `mesh` and `armature` (and future
+ *                       `curve`) dataKinds.
  *   - `'skeleton'`   — Blender's `OB_MODE_POSE`. SS originally called
  *                       this Skeleton Edit, then collapsed Armature
  *                       Edit into Pose Mode (2026-05-06 commit
@@ -86,8 +89,18 @@
  */
 export const MODE_OBJECT = null;
 
-/** Edit Mode for meshes — vertex / UV / triangulation editing. */
-export const MODE_EDIT_MESH = 'mesh';
+/** Blender's universal `OB_MODE_EDIT`. Editor behaviour dispatches by
+ *  the active object's data type:
+ *    - mesh data     → vertex / UV / triangulation editing
+ *    - armature data → bone REST pivot drag (writes node.transform.pivotX/Y)
+ *    - curve data    → control-point editing (unimplemented)
+ *  Renamed from legacy `MODE_EDIT_MESH` 2026-05-07; the string value is
+ *  now `'edit'` (was `'mesh'`). The v25 schema migration rewrites
+ *  stored editMode values. */
+export const MODE_EDIT = 'edit';
+/** @deprecated Use MODE_EDIT. Kept as a value-identical alias for any
+ *  call-sites that haven't migrated yet. */
+export const MODE_EDIT_MESH = MODE_EDIT;
 
 /** Pose Mode — bone pose drag / rotation, writes to `node.pose.*`. */
 export const MODE_POSE = 'skeleton';
@@ -117,7 +130,7 @@ export const MODE_TEXTURE_PAINT = 'texturePaint';
  */
 const COMPAT = {
   mesh: new Set([
-    MODE_EDIT_MESH,
+    MODE_EDIT,
     MODE_WEIGHT_PAINT,
     MODE_BLEND_SHAPE,
     MODE_SCULPT,
@@ -125,11 +138,8 @@ const COMPAT = {
     MODE_TEXTURE_PAINT,
   ]),
   armature: new Set([
+    MODE_EDIT,   // Blender's universal Edit Mode — bone REST pivot drag.
     MODE_POSE,
-    // Armature Edit (`MODE_EDIT_MESH` for armature dataKind would be
-    // 'edit_armature' in Blender) is collapsed into Pose Mode in SS.
-    // If the user community asks to re-introduce it, add a new mode
-    // constant + entry here.
   ]),
   empty: new Set([
     // Empties only allow Object Mode. Plain organisational groups

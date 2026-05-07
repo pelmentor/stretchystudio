@@ -11,7 +11,8 @@ import {
   modeCompatTest,
   modesForDataKind,
   MODE_OBJECT,
-  MODE_EDIT_MESH,
+  MODE_EDIT,
+  MODE_EDIT_MESH,  // legacy alias for MODE_EDIT
   MODE_POSE,
   MODE_WEIGHT_PAINT,
   MODE_BLEND_SHAPE,
@@ -40,7 +41,10 @@ function assertEq(actual, expected, name) {
 // ── Constants ──
 {
   assert(MODE_OBJECT === null, 'MODE_OBJECT is null (the "no edit mode" sentinel)');
-  assert(MODE_EDIT_MESH === 'mesh', 'MODE_EDIT_MESH legacy slot value preserved');
+  assert(MODE_EDIT === 'edit',
+    'MODE_EDIT = "edit" — Blender universal OB_MODE_EDIT (renamed from "mesh" 2026-05-07)');
+  assert(MODE_EDIT_MESH === MODE_EDIT,
+    'MODE_EDIT_MESH legacy alias === MODE_EDIT');
   assert(MODE_POSE === 'skeleton', 'MODE_POSE legacy slot value preserved');
   assert(MODE_WEIGHT_PAINT === 'weightPaint', 'MODE_WEIGHT_PAINT slot value');
   assert(MODE_BLEND_SHAPE === 'blendShape', 'MODE_BLEND_SHAPE slot value');
@@ -66,10 +70,18 @@ function assertEq(actual, expected, name) {
   assert(!modeCompatTest('mesh', MODE_POSE), 'mesh: Pose Mode REJECTED');
 }
 
-// ── Armature data-kind allows pose only (Edit collapsed into Pose 9df561f) ──
+// ── Armature data-kind allows Edit Mode + Pose Mode ──
+// Per Blender taxonomy: OB_MODE_EDIT is universal (mesh / armature /
+// curve / etc — same enum value, behavior dispatched by dataKind);
+// OB_MODE_POSE is armature-only.
+//   - Edit Mode on armature → bone REST pivot drag
+//     (writes node.transform.pivotX/Y).
+//   - Pose Mode on armature → bone pose drag/rotation
+//     (writes node.pose.*).
 {
+  assert(modeCompatTest('armature', MODE_EDIT),
+    'armature: Edit Mode legal (Blender universal OB_MODE_EDIT)');
   assert(modeCompatTest('armature', MODE_POSE), 'armature: Pose Mode legal');
-  assert(!modeCompatTest('armature', MODE_EDIT_MESH), 'armature: mesh Edit Mode REJECTED');
   assert(!modeCompatTest('armature', MODE_WEIGHT_PAINT), 'armature: Weight Paint REJECTED');
   assert(!modeCompatTest('armature', MODE_BLEND_SHAPE), 'armature: Blend Shape REJECTED');
   assert(!modeCompatTest('armature', MODE_SCULPT), 'armature: Sculpt REJECTED');
@@ -107,7 +119,12 @@ function assertEq(actual, expected, name) {
   assert(!meshModes.includes(MODE_POSE), 'modesForDataKind(mesh) excludes Pose');
 
   const armModes = modesForDataKind('armature');
-  assertEq(armModes, [MODE_POSE], 'modesForDataKind(armature) is [Pose] today');
+  assert(armModes.includes(MODE_POSE),
+    'modesForDataKind(armature) includes Pose');
+  assert(armModes.includes(MODE_EDIT),
+    'modesForDataKind(armature) includes Edit (universal OB_MODE_EDIT)');
+  assert(armModes.length === 2,
+    'modesForDataKind(armature) = exactly 2 entries');
 
   assertEq(modesForDataKind('empty'), [], 'modesForDataKind(empty) is empty');
   assertEq(modesForDataKind(null), [], 'modesForDataKind(null) is empty');
@@ -134,13 +151,15 @@ function assertEq(actual, expected, name) {
   const bone = { type: 'group', id: 'g1', boneRole: 'head' };
   const folder = { type: 'group', id: 'g2', name: 'Costume Folder' };
 
-  // Bone selected → Pose Mode legal, Edit Mode disabled (the original
-  // bug that triggered the Blender Parity Refactor).
+  // Bone selected → Pose AND Edit (Blender universal OB_MODE_EDIT)
+  // both legal post-2026-05-07. Behavior in Edit Mode dispatches by
+  // dataKind: armature → bone REST pivot drag; mesh → vertex edit.
   assert(modeCompatTest(getDataKind(bone), MODE_POSE), 'bone selected → Pose enters');
-  assert(!modeCompatTest(getDataKind(bone), MODE_EDIT_MESH), 'bone selected → Edit greys out');
+  assert(modeCompatTest(getDataKind(bone), MODE_EDIT),
+    'bone selected → Edit enters (universal OB_MODE_EDIT)');
 
   // Mesh selected → Edit Mode legal, Pose disabled.
-  assert(modeCompatTest(getDataKind(part), MODE_EDIT_MESH), 'part selected → Edit enters');
+  assert(modeCompatTest(getDataKind(part), MODE_EDIT), 'part selected → Edit enters');
   assert(!modeCompatTest(getDataKind(part), MODE_POSE), 'part selected → Pose greys out');
 
   // Folder selected → only Object Mode.

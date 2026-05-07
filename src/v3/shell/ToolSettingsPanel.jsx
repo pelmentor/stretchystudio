@@ -95,7 +95,7 @@ function ModeHint({ title, body }) {
 }
 
 function ContentForMode({ editMode }) {
-  if (editMode === 'mesh' || editMode === 'blendShape' || editMode === 'weightPaint') {
+  if (editMode === 'edit' || editMode === 'blendShape' || editMode === 'weightPaint') {
     return <BrushSection />;
   }
   if (editMode === 'skeleton') {

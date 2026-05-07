@@ -41,7 +41,7 @@ import {
 } from '../../store/objectDataAccess.js';
 import {
   modeCompatTest,
-  MODE_EDIT_MESH,
+  MODE_EDIT,
   MODE_POSE,
   MODE_WEIGHT_PAINT,
   MODE_BLEND_SHAPE,
@@ -79,7 +79,7 @@ function describeSelection() {
 
 const MODE_META = {
   null:         { label: 'Object Mode',    icon: Box },
-  mesh:         { label: 'Edit Mode',      icon: Pencil },
+  edit:         { label: 'Edit Mode',      icon: Pencil },
   skeleton:     { label: 'Pose Mode',      icon: Bone },
   blendShape:   { label: 'Blend Shape',    icon: Sparkles },
   weightPaint:  { label: 'Weight Paint',   icon: Brush },
@@ -140,10 +140,13 @@ export function ModePill() {
     if (shape) pillLabel = `Blend Shape: ${shape.name}`;
   }
 
-  function enterMesh() {
+  function enterEdit() {
     if (!active) return;
     setSelection([active.id]);
-    enterEditMode('mesh');
+    // For armature dataKind, Edit Mode wants the skeleton overlay visible
+    // so joint drag targets render.
+    if (kind === 'boneGroup' && !viewLayers.skeleton) setViewLayers({ skeleton: true });
+    enterEditMode(MODE_EDIT);
   }
   function enterSkeleton() {
     if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
@@ -173,7 +176,7 @@ export function ModePill() {
   // where the proportional-edit button is a sibling of the mode picker.
   const peEnabled = usePreferencesStore((s) => s.proportionalEdit?.enabled ?? false);
   const setProportionalEdit = usePreferencesStore((s) => s.setProportionalEdit);
-  const showProportionalToggle = editMode === 'mesh';
+  const showProportionalToggle = editMode === MODE_EDIT;
 
   return (
     <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
@@ -220,21 +223,19 @@ export function ModePill() {
         <ModeRow
           icon={Pencil}
           label="Edit Mode"
-          checked={editMode === 'mesh'}
-          disabled={!modeCompatTest(dataKind, MODE_EDIT_MESH)}
+          checked={editMode === MODE_EDIT}
+          disabled={!modeCompatTest(dataKind, MODE_EDIT)}
           hint={
             kind === 'meshedPart'
               ? 'Edit vertex positions / UVs of the selected part'
               : kind === 'boneGroup'
-                // Edit Mode is mesh-only post-consolidation (9df561f).
-                // Bones edit through Pose Mode now (Apply Pose As Rest
-                // bakes pose → rest), so direct the user there rather
-                // than saying "select a meshed part" which they didn't
-                // ask to do.
-                ? 'Edit Mode is for meshes — use Pose Mode for bones'
-                : 'Select a meshed part to enter Edit Mode'
+                // Blender's universal OB_MODE_EDIT — for armatures it
+                // edits the bone REST pivots (writes node.transform.pivotX/Y).
+                // Pose Mode (separate slot) is for animation overlay.
+                ? 'Edit bone REST pivots — drag writes node.transform.pivotX/Y'
+                : 'Select a meshed part or bone-role group to enter Edit Mode'
           }
-          onSelect={enterMesh}
+          onSelect={enterEdit}
         />
         <ModeRow
           icon={Bone}

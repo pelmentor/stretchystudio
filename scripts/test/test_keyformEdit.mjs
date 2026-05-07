@@ -167,8 +167,11 @@ reset();
 reset();
 {
   // Sanity: confirm pre-existing non-keyform kinds still work the same.
+  // Legacy 'mesh' alias is normalised to 'edit' (Blender's universal
+  // OB_MODE_EDIT) by enterEditMode.
   get().enterEditMode('mesh');
-  assert(get().editMode === 'mesh', 'enterEditMode("mesh") still works');
+  assert(get().editMode === 'edit',
+    'enterEditMode("mesh") legacy alias still works (normalised to "edit")');
   assert(get().keyformEdit === null,
     'enterEditMode("mesh") leaves keyformEdit null');
 }

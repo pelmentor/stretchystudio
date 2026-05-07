@@ -24,8 +24,9 @@ import { migrateModifierModeFlags } from './migrations/v21_modifier_mode_flags.j
 import { migrateNodeTreeRigTree } from './migrations/v22_nodetree_rigtree.js';
 import { migrateNodeTreeDriverTree } from './migrations/v23_nodetree_drivertree.js';
 import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animationtree.js';
+import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename.js';
 
-export const CURRENT_SCHEMA_VERSION = 24;
+export const CURRENT_SCHEMA_VERSION = 25;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -387,6 +388,17 @@ const MIGRATIONS = {
   // See `src/store/migrations/v24_nodetree_animationtree.js`.
   24: (project) => {
     migrateNodeTreeAnimationTree(project);
+    return project;
+  },
+
+  // v25 — Blender Armature Alignment Phase 2: rename the editMode
+  // slot value `'mesh'` → `'edit'` to match Blender's universal
+  // `OB_MODE_EDIT` taxonomy. Rewrites any persisted `node.mode === 'mesh'`
+  // (per-object mode storage from Phase 2b) to `'edit'`.
+  //
+  // See `src/store/migrations/v25_editmode_slot_rename.js`.
+  25: (project) => {
+    migrateEditModeSlotRename(project);
     return project;
   },
 

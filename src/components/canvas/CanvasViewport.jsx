@@ -723,7 +723,7 @@ export default function CanvasViewport({
           // part being edited drops out.
           const _ed_mesh = editorRef.current;
           const _meshEditingPartId =
-            (_ed_mesh.editMode === 'mesh' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
+            (_ed_mesh.editMode === 'edit' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
               ? _ed_mesh.selection[0]
               : null;
           // Blender-style bone overlay. Composes ancestor bone-group
@@ -931,7 +931,7 @@ export default function CanvasViewport({
     if (previewMode) return;
     const handler = (e) => {
       const { editMode, meshSubMode, brushSize } = editorRef.current;
-      const brushActive = (editMode === 'mesh' && meshSubMode === 'deform')
+      const brushActive = (editMode === 'edit' && meshSubMode === 'deform')
         || editMode === 'blendShape';
       if (!brushActive) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
@@ -1866,7 +1866,7 @@ export default function CanvasViewport({
     //      'remove_vertex'     → click removes the nearest vertex
     const { toolMode } = editorRef.current;
     const editMode = editorRef.current.editMode;
-    const meshEditActive = editMode === 'mesh' || editMode === 'blendShape';
+    const meshEditActive = editMode === 'edit' || editMode === 'blendShape';
     const currentSelection = editorRef.current.selection ?? [];
     if (meshEditActive && currentSelection.length > 0) {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
@@ -2128,7 +2128,7 @@ export default function CanvasViewport({
     // Update brush circle cursor position (direct DOM, no React re-render)
     if (brushCircleRef.current) {
       const editMode = editorRef.current.editMode;
-      const inDeformMode = (editMode === 'mesh' && editorRef.current.meshSubMode === 'deform')
+      const inDeformMode = (editMode === 'edit' && editorRef.current.meshSubMode === 'deform')
         || editMode === 'blendShape';
       if (inDeformMode) {
         const rect = canvas.getBoundingClientRect();
@@ -2181,12 +2181,12 @@ export default function CanvasViewport({
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
       // Proportional edit + F-mode only mean something inside mesh edit;
-      // gating on `editMode === 'mesh'` (rather than the whole workspace)
+      // gating on `editMode === 'edit'` (rather than the whole workspace)
       // hides the ring during Object Mode, the PSD import wizard, and any
       // other context where the user can't actually deform a mesh —
       // previously the ring showed across the entire Default workspace,
       // including the reorder/adjust wizard steps where it was confusing.
-      const inMeshEdit = editorRef.current.editMode === 'mesh';
+      const inMeshEdit = editorRef.current.editMode === 'edit';
       const showRing = inMeshEdit && (peCfg?.enabled || radiusMode.active);
       if (showRing) {
         const rect = canvas.getBoundingClientRect();
@@ -2499,7 +2499,7 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: !previewMode && editorState.editMode === 'mesh' && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
+          cursor: !previewMode && editorState.editMode === 'edit' && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}
@@ -2547,17 +2547,32 @@ export default function CanvasViewport({
           accept drags (otherwise pointerDown bails and the click falls
           through to part-pick → user drags the whole limb art instead
           of the elbow joint). Root dot is rendered for the same reason. */}
-      {!previewMode && (
-        <SkeletonOverlay
-          view={view}
-          editorMode={editorMode}
-          showSkeleton={editorState.viewLayers.skeleton}
-          skeletonEditMode={
-            editorState.editMode === 'skeleton'
-            || _wizardStep === 'adjust'
-          }
-        />
-      )}
+      {!previewMode && (() => {
+        // skeletonEditMode = "joint drags are accepted by the overlay".
+        //   - Pose Mode: always (writes node.pose.*).
+        //   - Edit Mode (Blender's universal OB_MODE_EDIT) on an
+        //     armature dataKind: writes node.transform.pivotX/Y (rest
+        //     bind edit). Gated to bone selection so Edit Mode on a
+        //     mesh part doesn't accidentally drag nearby joints.
+        //   - Wizard "adjust" step: forced on so the user can place
+        //     joints during PSD import.
+        const headSel = (editorState.selection && editorState.selection.length > 0)
+          ? editorState.selection[0] : null;
+        const headNode = headSel ? project.nodes.find((n) => n.id === headSel) : null;
+        const headIsBone = !!headNode && isBoneGroup(headNode);
+        const skeletonEditMode =
+          editorState.editMode === 'skeleton'
+          || (editorState.editMode === 'edit' && headIsBone)
+          || _wizardStep === 'adjust';
+        return (
+          <SkeletonOverlay
+            view={view}
+            editorMode={editorMode}
+            showSkeleton={editorState.viewLayers.skeleton}
+            skeletonEditMode={skeletonEditMode}
+          />
+        );
+      })()}
 
 
       {/* Drop hint overlay — edit Viewport only; Live Preview never invites uploads. */}

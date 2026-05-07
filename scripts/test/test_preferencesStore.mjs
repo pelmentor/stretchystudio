@@ -161,34 +161,37 @@ function get() { return usePreferencesStore.getState(); }
 }
 
 // ── lastToolByMode: persistence per editMode ──────────────────────
+// Slot key 'mesh' renamed to 'edit' on 2026-05-07 (Blender universal
+// OB_MODE_EDIT taxonomy). preferencesStore normalises legacy 'mesh'
+// keys to 'edit' on read.
 {
   // Default shape includes one entry per known editMode key.
   const ltm = get().lastToolByMode;
   assert(ltm && ltm.object === 'select', 'lastToolByMode: object → select default');
-  assert(ltm.mesh === 'brush',           'lastToolByMode: mesh → brush default');
+  assert(ltm.edit === 'brush',           'lastToolByMode: edit → brush default');
   assert(ltm.skeleton === 'joint_drag',  'lastToolByMode: skeleton → joint_drag default');
   assert(ltm.blendShape === 'brush',     'lastToolByMode: blendShape → brush default');
 
   // setLastToolForMode merges, persists, in-memory updated.
-  get().setLastToolForMode('mesh', 'add_vertex');
-  assert(get().lastToolByMode.mesh === 'add_vertex',
-    'setLastToolForMode: mesh updated to add_vertex');
+  get().setLastToolForMode('edit', 'add_vertex');
+  assert(get().lastToolByMode.edit === 'add_vertex',
+    'setLastToolForMode: edit updated to add_vertex');
   assert(get().lastToolByMode.object === 'select',
     'setLastToolForMode: untouched modes preserved');
   const persisted = JSON.parse(_store.get('v3.prefs.lastToolByMode'));
-  assert(persisted.mesh === 'add_vertex' && persisted.object === 'select',
+  assert(persisted.edit === 'add_vertex' && persisted.object === 'select',
     'setLastToolForMode: localStorage carries full shape');
 
   // Identical write is a no-op (Zustand short-circuit).
   const beforeRef = get().lastToolByMode;
-  get().setLastToolForMode('mesh', 'add_vertex');
+  get().setLastToolForMode('edit', 'add_vertex');
   assert(get().lastToolByMode === beforeRef,
     'setLastToolForMode: identical value preserves identity');
 
   // Defensive guards: non-string args are rejected.
   get().setLastToolForMode(null, 'brush');
-  get().setLastToolForMode('mesh', 42);
-  assert(get().lastToolByMode.mesh === 'add_vertex',
+  get().setLastToolForMode('edit', 42);
+  assert(get().lastToolByMode.edit === 'add_vertex',
     'setLastToolForMode: malformed args ignored');
 }
 

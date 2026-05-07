@@ -38,7 +38,7 @@ import {
 } from '../../store/objectDataAccess.js';
 import {
   modeCompatTest,
-  MODE_EDIT_MESH,
+  MODE_EDIT,
   MODE_POSE,
   MODE_WEIGHT_PAINT,
 } from '../../modes/modeCompat.js';
@@ -446,13 +446,16 @@ function registerBuiltins() {
     exec: () => {
       const ed = useEditorStore.getState();
       // Tab toggles Object Mode ↔ Edit Mode for the active selection
-      // type (Blender's universal pattern):
-      //   meshed part   → Edit Mode (vertex edit, 'mesh')
-      //   bone group    → Pose Mode (bone manipulation, 'skeleton')
+      // (Blender's universal pattern: Tab enters OB_MODE_EDIT for
+      // whatever the active object's data type is):
+      //   meshed part   → Edit Mode (vertex / UV editing)
+      //   bone group    → Edit Mode (bone REST pivot drag)
       //   already in any edit mode → exit to Object Mode
-      // The previous three-way cycle (Pose ↔ Armature Edit) was removed
-      // when the Armature Edit mode was collapsed into Pose Mode
-      // 2026-05-06 — there's no second bone-edit mode to cycle to.
+      //
+      // Pose Mode (armature-specific) is reached via the ModePill
+      // dropdown, NOT Tab — matching Blender, where Tab on an
+      // armature enters Edit Mode and Ctrl+Tab toggles Pose. Pose
+      // remains its own slot value (`'skeleton'`).
       if (ed.editMode) {
         ed.exitEditMode();
         return;
@@ -468,25 +471,31 @@ function registerBuiltins() {
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === active.id);
       if (!node) return;
+      const dataKind = getDataKind(node, project);
 
       // Phase 2 — route mode entry through `modeCompatTest(dataKind, mode)`
       // instead of the legacy `if (active.type === 'part') ...` chain. Adding
-      // a new editable data kind (e.g. an Armature Edit recovery, sculpt mode)
-      // becomes a one-line table edit in `src/modes/modeCompat.js`; this
-      // dispatcher picks it up automatically.
-      const dataKind = getDataKind(node, project);
+      // a new editable data kind (e.g. sculpt mode, curve edit) becomes a
+      // one-line table edit in `src/modes/modeCompat.js`; this dispatcher
+      // picks it up automatically.
       const mesh = getMesh(node, project);
 
-      if (modeCompatTest(dataKind, MODE_EDIT_MESH) && mesh) {
+      if (dataKind === 'mesh' && modeCompatTest(dataKind, MODE_EDIT) && mesh) {
         // Mesh Edit Mode requires real mesh data (a meshed part). Pre-mesh
         // PSD layers fall through to the no-edit-mode toast below.
         useEditorStore.getState().setSelection([active.id]);
-        ed.enterEditMode('mesh');
-      } else if (modeCompatTest(dataKind, MODE_POSE)) {
-        // Skeleton edit needs the overlay visible (drag targets are
-        // the joint circles). Auto-enable rather than fail silently.
+        ed.enterEditMode(MODE_EDIT);
+      } else if (dataKind === 'armature' && modeCompatTest(dataKind, MODE_EDIT)) {
+        // Edit Mode on an armature = REST pivot drag. Pose Mode is the
+        // animation-overlay flow, available via ModePill.
         if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
-        ed.enterEditMode('skeleton');
+        ed.enterEditMode(MODE_EDIT);
+      } else if (modeCompatTest(dataKind, MODE_POSE)) {
+        // Defensive fallback — armatures with Edit disabled in their
+        // compat set fall back to Pose. Today's compat set lists both
+        // so this branch is unreachable; kept for future dataKinds.
+        if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
+        ed.enterEditMode(MODE_POSE);
       } else if (modeCompatTest(dataKind, MODE_WEIGHT_PAINT)
                  && (mesh?.boneWeights || mesh?.jointBoneId
                      || (mesh?.weightGroups && Object.keys(mesh.weightGroups).length > 0))) {

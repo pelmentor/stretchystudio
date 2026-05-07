@@ -55,7 +55,7 @@ reset();
   reset();
   useEditorStore.setState({
     selection: ['part-1'],
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   get().setSelection([]);
   assert(get().selection.length === 0, 'setSelection([]): cleared');
@@ -86,19 +86,19 @@ reset();
   reset();
   useEditorStore.setState({
     selection: ['part-1', 'part-2'],
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   // Same head 'part-1' but new tail order.
   get().setSelection(['part-1', 'part-3']);
-  assert(get().editMode === 'mesh', 'setSelection same head: editMode preserved');
+  assert(get().editMode === 'edit', 'setSelection same head: editMode preserved');
 }
 
 // ── enterEditMode('mesh') ─────────────────────────────────────────
 
 {
   reset();
-  get().enterEditMode('mesh');
-  assert(get().editMode === 'mesh', 'enter mesh: editMode set');
+  get().enterEditMode('edit');
+  assert(get().editMode === 'edit', 'enter mesh: editMode set');
   assert(get().activeBlendShapeId === null, 'enter mesh: blendShapeId stays null');
   assert(get().toolMode === 'brush', 'enter mesh: toolMode defaults to brush');
 }
@@ -157,7 +157,7 @@ reset();
 
 {
   reset();
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   get().enterEditMode('skeleton');
   assert(get().editMode === 'skeleton', 'switch mesh→skeleton: editMode skeleton');
 
@@ -166,8 +166,8 @@ reset();
   assert(get().activeBlendShapeId === 'shape-1', 'switch skeleton→blendShape: id set');
 
   // Switching back to mesh clears blendShape's id
-  get().enterEditMode('mesh');
-  assert(get().editMode === 'mesh', 'switch blendShape→mesh: editMode mesh');
+  get().enterEditMode('edit');
+  assert(get().editMode === 'edit', 'switch blendShape→mesh: editMode mesh');
   assert(get().activeBlendShapeId === null,
     'switch blendShape→mesh: blendShapeId cleared');
 }
@@ -176,12 +176,12 @@ reset();
 
 {
   reset();
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   get().setMeshSubMode('adjust');
   assert(get().meshSubMode === 'adjust', 'setMeshSubMode: stored');
   get().exitEditMode();
   assert(get().meshSubMode === 'adjust', 'exit: meshSubMode preserved');
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   assert(get().meshSubMode === 'adjust',
     're-enter mesh: previous sub-mode (adjust) restored');
 }
@@ -194,12 +194,12 @@ reset();
   usePreferencesStore.setState({ lockObjectModes: true });
   useEditorStore.setState({
     selection: ['part-A'],
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   get().setSelection(['part-B']);
   assert(get().selection[0] === 'part-A',
     'lock ON: head-change while in editMode rejected (selection unchanged)');
-  assert(get().editMode === 'mesh',
+  assert(get().editMode === 'edit',
     'lock ON: editMode preserved across rejected selection change');
 
   // Empty selection (deselect-all) is allowed even with lock on — and
@@ -215,7 +215,7 @@ reset();
   usePreferencesStore.setState({ lockObjectModes: false });
   useEditorStore.setState({
     selection: ['part-A'],
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   get().setSelection(['part-B']);
   assert(get().selection[0] === 'part-B',
@@ -227,12 +227,12 @@ reset();
   usePreferencesStore.setState({ lockObjectModes: true });
   useEditorStore.setState({
     selection: ['part-A'],
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   get().setSelection(['part-A', 'extra-tail']);
   assert(get().selection.length === 2,
     'lock ON + same head: tail-extension goes through');
-  assert(get().editMode === 'mesh',
+  assert(get().editMode === 'edit',
     'lock ON + same head: editMode preserved');
 
   // No editMode → lock is irrelevant
@@ -356,10 +356,10 @@ reset();
   // NOT exit mesh edit (skeleton layer is independent of mesh edit).
   useEditorStore.setState({
     viewLayers: { ...get().viewLayers, skeleton: true },
-    editMode: 'mesh',
+    editMode: 'edit',
   });
   get().setViewLayers({ skeleton: false });
-  assert(get().editMode === 'mesh',
+  assert(get().editMode === 'edit',
     'setViewLayers({skeleton:false}): does NOT exit mesh edit');
 }
 
@@ -368,7 +368,7 @@ reset();
 {
   reset();
   // Seed mesh edit; default toolMode = 'brush'.
-  useEditorStore.setState({ editMode: 'mesh' });
+  useEditorStore.setState({ editMode: 'edit' });
   // Reset the persisted map to a known shape so we observe a write.
   usePreferencesStore.setState({
     lastToolByMode: { object: 'select', mesh: 'brush', skeleton: 'joint_drag', blendShape: 'brush' },
@@ -377,8 +377,8 @@ reset();
   get().setToolMode('add_vertex');
   assert(get().toolMode === 'add_vertex',
     'setToolMode: in-memory updated');
-  assert(usePreferencesStore.getState().lastToolByMode.mesh === 'add_vertex',
-    'setToolMode: prefs.lastToolByMode.mesh mirrored');
+  assert(usePreferencesStore.getState().lastToolByMode.edit === 'add_vertex',
+    'setToolMode: prefs.lastToolByMode.edit mirrored');
   assert(usePreferencesStore.getState().lastToolByMode.object === 'select',
     'setToolMode: untouched mode keys preserved');
 
@@ -399,13 +399,13 @@ reset();
 
 {
   reset();
-  // Persist a non-default tool for mesh edit.
+  // Persist a non-default tool for Edit Mode.
   usePreferencesStore.setState({
-    lastToolByMode: { object: 'select', mesh: 'remove_vertex', skeleton: 'joint_drag', blendShape: 'brush' },
+    lastToolByMode: { object: 'select', edit: 'remove_vertex', skeleton: 'joint_drag', blendShape: 'brush' },
   });
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   assert(get().toolMode === 'remove_vertex',
-    'enterEditMode(mesh): restores last-used tool from prefs');
+    'enterEditMode(edit): restores last-used tool from prefs');
 
   // Skeleton entry restores joint_drag (default).
   reset();
@@ -419,7 +419,7 @@ reset();
   // Empty / malformed prefs → falls through to canonical defaults.
   reset();
   usePreferencesStore.setState({ lastToolByMode: {} });
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   assert(get().toolMode === 'brush',
     'enterEditMode(mesh) with empty prefs: falls back to brush');
 }
@@ -472,8 +472,8 @@ function projectNode(id) {
     { id: 'part-B', type: 'part', name: 'B' },
   ]);
   useEditorStore.setState({ selection: ['part-A'] });
-  get().enterEditMode('mesh');
-  assert(getObjectMode(projectNode('part-A')) === 'mesh',
+  get().enterEditMode('edit');
+  assert(getObjectMode(projectNode('part-A')) === 'edit',
     'Phase 2b: enterEditMode mirrors mode onto active object');
   assert(getObjectMode(projectNode('part-B')) === null,
     'Phase 2b: enterEditMode does NOT touch other objects');
@@ -483,7 +483,7 @@ function projectNode(id) {
   reset();
   seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
   useEditorStore.setState({ selection: ['part-A'] });
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   get().exitEditMode();
   assert(getObjectMode(projectNode('part-A')) === null,
     'Phase 2b: exitEditMode clears active object mode');
@@ -498,8 +498,8 @@ function projectNode(id) {
     { id: 'part-B', type: 'part', name: 'B' },
   ]);
   useEditorStore.setState({ selection: ['part-A'] });
-  get().enterEditMode('mesh');
-  assert(getObjectMode(projectNode('part-A')) === 'mesh',
+  get().enterEditMode('edit');
+  assert(getObjectMode(projectNode('part-A')) === 'edit',
     'Phase 2b: A mode set before selection change');
 
   // Lock OFF — selection-head change to B clears A's stored mode.
@@ -518,7 +518,7 @@ function projectNode(id) {
   // setSelection clearing to empty also clears prior active object mode.
   seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
   useEditorStore.setState({ selection: ['part-A'] });
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   get().setSelection([]);
   assert(getObjectMode(projectNode('part-A')) === null,
     'Phase 2b: empty selection clears prior active object mode');
@@ -529,7 +529,7 @@ function projectNode(id) {
   // Switching between edit modes overwrites the per-object record.
   seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
   useEditorStore.setState({ selection: ['part-A'] });
-  get().enterEditMode('mesh');
+  get().enterEditMode('edit');
   get().enterEditMode('blendShape', { blendShapeId: 'shape-1' });
   assert(getObjectMode(projectNode('part-A')) === 'blendShape',
     'Phase 2b: switching edit modes overwrites per-object record');

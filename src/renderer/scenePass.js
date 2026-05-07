@@ -166,7 +166,7 @@ export class ScenePass {
     // — both are vertex-level edit contexts where focusing on the
     // selection helps. Skeleton edit doesn't dim (bones move, mesh stays
     // legible).
-    const dimUnselected = (editor.editMode === 'mesh' || editor.editMode === 'blendShape')
+    const dimUnselected = (editor.editMode === 'edit' || editor.editMode === 'blendShape')
       && selectionSet.size > 0;
 
     // ── Apply pose overrides (from animation playback) ────────────────────
@@ -276,7 +276,7 @@ export class ScenePass {
       // the active part's identity, so we only force on the SELECTED
       // part(s), not all parts. (The user-side viewLayers toggle
       // continues to govern visibility for unselected parts.)
-      const inMeshEdit = editor.editMode === 'mesh';
+      const inMeshEdit = editor.editMode === 'edit';
 
       for (const part of parts) {
         if (!visMap.get(part.id)) continue;
