@@ -16,6 +16,8 @@ import {
   analyzeGroups,
   getSkeletonFromNodes,
   autoRearrangeLayers,
+  estimateSkeletonFromBounds,
+  buildArmatureNodes,
 } from '../../src/io/armatureOrganizer.js';
 
 let passed = 0;
@@ -193,6 +195,50 @@ function assertEq(actual, expected, name) {
   const iLIdx = result.layers.findIndex(l => l.name === 'irides-l');
   const eLIdx = result.layers.findIndex(l => l.name === 'eyewhite-l');
   assert(iLIdx < eLIdx, 'autoRearrange: per-side l fixed');
+}
+
+// ── Phase 1 (Blender alignment): root bone seeded inside canvas ─────
+
+{
+  // Empty layers → estimateSkeletonFromBounds produces an empty kp,
+  // then buildArmatureNodes' fallbacks kick in → root pivot must
+  // land at canvas-center, well inside [0..W] × [0..H].
+  const psdW = 1792, psdH = 1792;
+  const sk = estimateSkeletonFromBounds([], psdW, psdH);
+  const { groupDefs } = buildArmatureNodes(sk, { head: false }, [], [], (() => {
+    let n = 0; return () => `g${n++}`;
+  })());
+  const root = groupDefs.find((g) => g.boneRole === 'root');
+  assert(!!root, 'root bone created on empty layers');
+  assert(root.pivotX >= 0 && root.pivotX <= psdW,
+    'root pivotX inside canvas bounds');
+  assert(root.pivotY >= 0 && root.pivotY <= psdH,
+    'root pivotY inside canvas bounds');
+  assert(root.parentId === null, 'root parentId is null');
+  // Canvas-center fallback: pivot should be exactly (psdW/2, psdH/2).
+  assert(Math.abs(root.pivotX - psdW / 2) < 1, 'root pivotX = canvas-center on fallback');
+  assert(Math.abs(root.pivotY - psdH / 2) < 1, 'root pivotY = canvas-center on fallback');
+}
+
+{
+  // Real face layer → estimateSkeletonFromBounds derives kp.pelvis
+  // from limb bboxes; root pivot follows that (still inside canvas).
+  const psdW = 800, psdH = 1200;
+  const layers = [
+    { name: 'face', x: 300, y: 100, width: 200, height: 250 },
+    { name: 'topwear', x: 250, y: 350, width: 300, height: 400 },
+    { name: 'legwear', x: 280, y: 750, width: 240, height: 400 },
+  ];
+  const sk = estimateSkeletonFromBounds(layers, psdW, psdH);
+  const { groupDefs } = buildArmatureNodes(sk, { head: true, torso: true }, layers, [], (() => {
+    let n = 0; return () => `g${n++}`;
+  })());
+  const root = groupDefs.find((g) => g.boneRole === 'root');
+  assert(!!root, 'root bone created with real layers');
+  assert(root.pivotX >= 0 && root.pivotX <= psdW,
+    'root pivotX inside canvas (measured)');
+  assert(root.pivotY >= 0 && root.pivotY <= psdH,
+    'root pivotY inside canvas (measured)');
 }
 
 console.log(`armatureOrganizer: ${passed} passed, ${failed} failed`);

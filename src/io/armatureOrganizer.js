@@ -15,6 +15,7 @@ import {
   getBoneRole,
   getBoneRestPivot,
 } from '../store/objectDataAccess.js';
+import { logger } from '../lib/logger.js';
 
 
 // Lazy-loaded onnxruntime-web
@@ -232,7 +233,15 @@ export function estimateSkeletonFromBounds(layers, psdW, psdH) {
 
   // Mandatory fallbacks for keypoints buildArmatureNodes always reads
   const cx = psdW / 2, cy = psdH / 2;
-  if (!kp.pelvis)      kp.pelvis      = { x: cx,              y: cy };
+  // Phase 1 (Blender alignment) — track whether root pelvis came
+  // from a real keypoint or the canvas-center fallback so the
+  // rootBoneInit diag log can surface the source.
+  if (!kp.pelvis) {
+    kp.pelvis      = { x: cx,              y: cy };
+    kp._pelvisSource = 'fallback';
+  } else {
+    kp._pelvisSource = kp._pelvisSource ?? 'measured';
+  }
   if (!kp.neck)        kp.neck        = { x: cx,              y: psdH * 0.25 };
   if (!kp.headBase)    kp.headBase    = { x: cx,              y: psdH * 0.22 };
   if (!kp.lShoulder)   kp.lShoulder   = { x: cx + psdW * 0.15, y: psdH * 0.30 };
@@ -562,6 +571,20 @@ export function buildArmatureNodes(skeleton, groups, layers, partIds, uidFn) {
     const parentBoneName = parentBone[bone];
     const parentId = parentBoneName ? (groupIds[parentBoneName] ?? null) : null;
     groupDefs.push({ id, name: bone, parentId, boneRole: bone, pivotX: piv.x, pivotY: piv.y });
+    // Phase 1 (Blender alignment) — surface root bone placement so a
+    // future "I can't see root" report is one Logs-panel entry away
+    // from a diagnosis. Source 'fallback' means the canvas-center
+    // default kicked in (DWPose / heuristic produced no pelvis kp).
+    if (bone === 'root') {
+      logger.debug('rootBoneInit',
+        `Root bone seeded at (${piv.x.toFixed(1)}, ${piv.y.toFixed(1)}) — source=${kp._pelvisSource ?? 'unknown'}`,
+        {
+          pivotX: piv.x,
+          pivotY: piv.y,
+          source: kp._pelvisSource ?? 'unknown',
+          nodeId: id,
+        });
+    }
   }
 
   /* ── Build layerMap for fast lookup (normalized name → layer index) ── */

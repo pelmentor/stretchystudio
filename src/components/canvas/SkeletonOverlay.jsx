@@ -760,18 +760,45 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         />
       );
     }
-    circles.push(
-      <circle key={role}
-        cx={cx} cy={cy} r={dotRadius}
-        fill={fill} stroke="#000" strokeWidth={1.5}
-        style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
-        onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
-        onClick={() => {
-          if (skeletonEditMode) return;
-          selectBoneInBothStores(node.id);
-        }}
-      />
-    );
+    if (isRoot) {
+      // Phase 1 (Blender alignment) — render root as an octahedral
+      // diamond outline (matches Blender's Armature root marker)
+      // instead of a small dot. Larger hit area than the previous
+      // 60%-radius dot so it's harder to miss against busy geometry.
+      const dHalf = dotRadius * 1.6;
+      const points = [
+        `${cx},${cy - dHalf}`,
+        `${cx + dHalf},${cy}`,
+        `${cx},${cy + dHalf}`,
+        `${cx - dHalf},${cy}`,
+      ].join(' ');
+      circles.push(
+        <polygon key={role}
+          points={points}
+          fill={fill} fillOpacity={0.25}
+          stroke={COLOUR_SELECTED} strokeWidth={2}
+          style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
+          onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
+          onClick={() => {
+            if (skeletonEditMode) return;
+            selectBoneInBothStores(node.id);
+          }}
+        />
+      );
+    } else {
+      circles.push(
+        <circle key={role}
+          cx={cx} cy={cy} r={dotRadius}
+          fill={fill} stroke="#000" strokeWidth={1.5}
+          style={{ cursor: skeletonEditMode ? 'grab' : 'pointer', pointerEvents: 'visiblePainted' }}
+          onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
+          onClick={() => {
+            if (skeletonEditMode) return;
+            selectBoneInBothStores(node.id);
+          }}
+        />
+      );
+    }
     if (skeletonEditMode) {
       // Label under each joint in edit mode for orientation
       const labelY = cy + radius + 11;
