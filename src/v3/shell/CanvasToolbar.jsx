@@ -64,8 +64,9 @@ export function CanvasToolbar() {
   const editMode = useEditorStore((s) => s.editMode);
   const toolMode = useEditorStore((s) => s.toolMode);
   const setToolMode = useEditorStore((s) => s.setToolMode);
+  const activeBlendShapeId = useEditorStore((s) => s.activeBlendShapeId);
 
-  const tools = toolsFor(editMode);
+  const tools = toolsFor(editMode, activeBlendShapeId);
   if (!tools || tools.length === 0) return null;
 
   function activate(entry) {

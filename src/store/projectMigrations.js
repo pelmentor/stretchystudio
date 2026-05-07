@@ -25,8 +25,9 @@ import { migrateNodeTreeRigTree } from './migrations/v22_nodetree_rigtree.js';
 import { migrateNodeTreeDriverTree } from './migrations/v23_nodetree_drivertree.js';
 import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animationtree.js';
 import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename.js';
+import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold.js';
 
-export const CURRENT_SCHEMA_VERSION = 25;
+export const CURRENT_SCHEMA_VERSION = 26;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -399,6 +400,17 @@ const MIGRATIONS = {
   // See `src/store/migrations/v25_editmode_slot_rename.js`.
   25: (project) => {
     migrateEditModeSlotRename(project);
+    return project;
+  },
+
+  // v26 — BLENDER_DEVIATION_AUDIT Fix 1: fold the legacy
+  // `editMode === 'blendShape'` slot into Edit Mode + active-shape
+  // pointer (Blender pattern). Rewrites stored `node.mode === 'blendShape'`
+  // to `'edit'`.
+  //
+  // See `src/store/migrations/v26_blendshape_mode_fold.js`.
+  26: (project) => {
+    migrateBlendShapeModeFold(project);
     return project;
   },
 

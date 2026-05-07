@@ -800,9 +800,10 @@ export default function CanvasViewport({
 
           let hasInfluence = false;
           const influences = node.blendShapes.map(shape => {
-            // During blend-shape edit mode, always show the active shape
-            // at full influence so the user paints visible deltas.
-            if (ed.editMode === 'blendShape' && ed.activeBlendShapeId === shape.id) {
+            // While painting a shape (Edit Mode + active-shape pointer set),
+            // pin the active shape at full influence so the user sees
+            // visible deltas as they paint.
+            if (ed.editMode === 'edit' && ed.activeBlendShapeId === shape.id) {
               hasInfluence = true;
               return 1.0;
             }
@@ -931,8 +932,10 @@ export default function CanvasViewport({
     if (previewMode) return;
     const handler = (e) => {
       const { editMode, meshSubMode, brushSize } = editorRef.current;
-      const brushActive = (editMode === 'edit' && meshSubMode === 'deform')
-        || editMode === 'blendShape';
+      // Brush keys [/] adjust radius. Active in Edit Mode (deform sub-mode
+      // OR shape-paint with active blend shape).
+      const brushActive = editMode === 'edit'
+        && (meshSubMode === 'deform' || !!editorRef.current.activeBlendShapeId);
       if (!brushActive) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
       else if (e.key === ']') setBrush({ brushSize: Math.min(300, brushSize + 5) });
@@ -1866,7 +1869,10 @@ export default function CanvasViewport({
     //      'remove_vertex'     → click removes the nearest vertex
     const { toolMode } = editorRef.current;
     const editMode = editorRef.current.editMode;
-    const meshEditActive = editMode === 'edit' || editMode === 'blendShape';
+    // Mesh-edit active = Edit Mode on a meshed part. Folded 2026-05-07:
+    // shape-key painting is now Edit Mode + activeBlendShapeId pointer,
+    // so the OR-with-'blendShape' is gone — single check suffices.
+    const meshEditActive = editMode === 'edit';
     const currentSelection = editorRef.current.selection ?? [];
     if (meshEditActive && currentSelection.length > 0) {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
@@ -1954,9 +1960,12 @@ export default function CanvasViewport({
             ?? kfOverrides?.get(selNode.id)?.mesh_verts
             ?? selMesh.vertices;
 
-          // In blend shape edit mode, apply existing deltas (active shape at full influence)
-          // so each drag continues from the visually correct position, not from rest.
-          if (editorRef.current.editMode === 'blendShape' && selNode.blendShapes?.length) {
+          // While painting a shape (Edit Mode + active-shape pointer),
+          // apply existing deltas so each drag continues from the
+          // visually correct position, not from rest.
+          if (editorRef.current.editMode === 'edit'
+              && editorRef.current.activeBlendShapeId
+              && selNode.blendShapes?.length) {
             const activeShapeId = editorRef.current.activeBlendShapeId;
             effectiveVerts = selMesh.vertices.map((v, i) => {
               let bx = v.restX, by = v.restY;
@@ -2128,8 +2137,11 @@ export default function CanvasViewport({
     // Update brush circle cursor position (direct DOM, no React re-render)
     if (brushCircleRef.current) {
       const editMode = editorRef.current.editMode;
-      const inDeformMode = (editMode === 'edit' && editorRef.current.meshSubMode === 'deform')
-        || editMode === 'blendShape';
+      // Brush cursor active in Edit Mode (deform sub-mode OR shape-paint
+      // when an active shape is set). Folded 2026-05-07.
+      const inDeformMode = editMode === 'edit'
+        && (editorRef.current.meshSubMode === 'deform'
+            || !!editorRef.current.activeBlendShapeId);
       if (inDeformMode) {
         const rect = canvas.getBoundingClientRect();
         brushCircleRef.current.setAttribute('cx', e.clientX - rect.left);
@@ -2243,8 +2255,9 @@ export default function CanvasViewport({
       sceneRef.current?.parts.uploadPositions(partId, newVerts, allUvs);
       isDirtyRef.current = true;
 
-      // Blend shape edit mode — write to shape key deltas instead of mesh or draftPose
-      if (editorRef.current.editMode === 'blendShape') {
+      // Edit Mode + active shape pointer = paint deltas (Blender pattern).
+      // Folded 2026-05-07: pre-fold this branched on `editMode === 'blendShape'`.
+      if (editorRef.current.editMode === 'edit' && editorRef.current.activeBlendShapeId) {
         const shapeId = editorRef.current.activeBlendShapeId;
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === partId);

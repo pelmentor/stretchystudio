@@ -166,13 +166,22 @@ export const TOOLS_BY_MODE = {
 /**
  * Resolve which tool table to render for the current `editMode`.
  *
- * @param {null | 'edit' | 'skeleton' | 'blendShape'} editMode
+ * Edit Mode dispatches by `activeBlendShapeId`: when set, the brush
+ * paints shape deltas (Blender pattern — Edit Mode + active-shape
+ * pointer); when null, the mesh-vertex tools (brush / add / remove)
+ * apply.
+ *
+ * @param {null | 'edit' | 'skeleton'} editMode
+ * @param {string | null} [activeBlendShapeId]
  * @returns {ToolEntry[]}
  */
-export function toolsFor(editMode) {
+export function toolsFor(editMode, activeBlendShapeId = null) {
   // Legacy alias 'mesh' kept for any unmigrated caller.
-  if (editMode === 'edit' || editMode === 'mesh') return TOOLS_BY_MODE.mesh;
+  if (editMode === 'edit' || editMode === 'mesh') {
+    return activeBlendShapeId ? TOOLS_BY_MODE.blendShape : TOOLS_BY_MODE.mesh;
+  }
   if (editMode === 'skeleton') return TOOLS_BY_MODE.skeleton;
+  // Legacy 'blendShape' editMode — folded into Edit Mode 2026-05-07.
   if (editMode === 'blendShape') return TOOLS_BY_MODE.blendShape;
   return TOOLS_BY_MODE.object;
 }

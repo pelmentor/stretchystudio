@@ -113,13 +113,18 @@ reset();
   assert(get().toolMode === 'joint_drag', 'enter skeleton: toolMode defaults to joint_drag');
 }
 
-// ── enterEditMode('blendShape', {blendShapeId}) ───────────────────
+// ── enterEditMode('blendShape', {blendShapeId}) — folded into 'edit' ──
+// 2026-05-07 (BLENDER_DEVIATION_AUDIT Fix 1): the legacy 'blendShape'
+// alias enters Edit Mode AND sets activeBlendShapeId atomically, since
+// Blender expresses shape-key painting as Edit Mode + active-shape pointer.
 
 {
   reset();
   get().enterEditMode('blendShape', { blendShapeId: 'shape-X' });
-  assert(get().editMode === 'blendShape', 'enter blendShape: editMode set');
-  assert(get().activeBlendShapeId === 'shape-X', 'enter blendShape: id set');
+  assert(get().editMode === 'edit',
+    "enter blendShape (alias): editMode = 'edit' (folded)");
+  assert(get().activeBlendShapeId === 'shape-X',
+    'enter blendShape (alias): id set');
   assert(get().toolMode === 'brush', 'enter blendShape: toolMode defaults to brush');
 }
 
@@ -161,15 +166,18 @@ reset();
   get().enterEditMode('skeleton');
   assert(get().editMode === 'skeleton', 'switch mesh→skeleton: editMode skeleton');
 
+  // Folded 2026-05-07: 'blendShape' alias enters Edit Mode + sets the
+  // active-shape pointer.
   get().enterEditMode('blendShape', { blendShapeId: 'shape-1' });
-  assert(get().editMode === 'blendShape', 'switch skeleton→blendShape: editMode blendShape');
+  assert(get().editMode === 'edit',
+    "switch skeleton→blendShape (alias): editMode = 'edit'");
   assert(get().activeBlendShapeId === 'shape-1', 'switch skeleton→blendShape: id set');
 
-  // Switching back to mesh clears blendShape's id
+  // Re-entering plain Edit Mode (no shape) clears the pointer.
   get().enterEditMode('edit');
-  assert(get().editMode === 'edit', 'switch blendShape→mesh: editMode mesh');
+  assert(get().editMode === 'edit', 'switch back to plain Edit Mode');
   assert(get().activeBlendShapeId === null,
-    'switch blendShape→mesh: blendShapeId cleared');
+    'plain enterEditMode("edit"): activeBlendShapeId cleared');
 }
 
 // ── meshSubMode is sticky across edit-mode re-entries ─────────────
@@ -527,12 +535,17 @@ function projectNode(id) {
 {
   reset();
   // Switching between edit modes overwrites the per-object record.
+  // Folded 2026-05-07: 'blendShape' alias normalises to 'edit', so the
+  // per-object record is 'edit' (with activeBlendShapeId set on the
+  // editor side).
   seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
   useEditorStore.setState({ selection: ['part-A'] });
   get().enterEditMode('edit');
   get().enterEditMode('blendShape', { blendShapeId: 'shape-1' });
-  assert(getObjectMode(projectNode('part-A')) === 'blendShape',
-    'Phase 2b: switching edit modes overwrites per-object record');
+  assert(getObjectMode(projectNode('part-A')) === 'edit',
+    'Phase 2b: switching edit modes (blendShape alias → edit) overwrites per-object record');
+  assert(get().activeBlendShapeId === 'shape-1',
+    "Phase 2b: blendShape alias also sets activeBlendShapeId");
 }
 
 {

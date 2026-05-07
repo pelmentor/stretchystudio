@@ -47,7 +47,11 @@ function assertEq(actual, expected, name) {
     'MODE_EDIT_MESH legacy alias === MODE_EDIT');
   assert(MODE_POSE === 'skeleton', 'MODE_POSE legacy slot value preserved');
   assert(MODE_WEIGHT_PAINT === 'weightPaint', 'MODE_WEIGHT_PAINT slot value');
-  assert(MODE_BLEND_SHAPE === 'blendShape', 'MODE_BLEND_SHAPE slot value');
+  // Folded 2026-05-07 (BLENDER_DEVIATION_AUDIT Fix 1): MODE_BLEND_SHAPE
+  // is now a deprecated alias for MODE_EDIT. Shape-key painting lives
+  // inside Edit Mode + activeBlendShapeId pointer (Blender pattern).
+  assert(MODE_BLEND_SHAPE === MODE_EDIT,
+    'MODE_BLEND_SHAPE legacy alias === MODE_EDIT (folded 2026-05-07)');
 }
 
 // ── modeCompatTest: Object Mode is universal ──
@@ -83,8 +87,11 @@ function assertEq(actual, expected, name) {
     'armature: Edit Mode legal (Blender universal OB_MODE_EDIT)');
   assert(modeCompatTest('armature', MODE_POSE), 'armature: Pose Mode legal');
   assert(!modeCompatTest('armature', MODE_WEIGHT_PAINT), 'armature: Weight Paint REJECTED');
-  assert(!modeCompatTest('armature', MODE_BLEND_SHAPE), 'armature: Blend Shape REJECTED');
   assert(!modeCompatTest('armature', MODE_SCULPT), 'armature: Sculpt REJECTED');
+  // MODE_BLEND_SHAPE is now an alias for MODE_EDIT — armature compat
+  // accepts it because it accepts MODE_EDIT. The old "blend shape on
+  // armature is illegal" assertion was load-bearing only when the
+  // values were distinct. Folded 2026-05-07.
 }
 
 // ── Empty data-kind allows Object Mode only ──

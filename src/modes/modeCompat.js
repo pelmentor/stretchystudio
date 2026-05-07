@@ -30,10 +30,10 @@
  * Alignment plan) with distinct rest-pivot-edit semantics that don't
  * overlap Pose Mode's animation-overlay semantics.
  *
- * SS adds `MODE_BLEND_SHAPE` to the `mesh` row; Blender doesn't have a
- * dedicated mode for shape-key painting (it lives inside Edit Mode +
- * Sculpt Mode's "use shape key" toggle). We surface it as a top-level
- * mode for discoverability.
+ * Pre-2026-05-07 SS exposed `MODE_BLEND_SHAPE` as a peer of Edit /
+ * Pose. Folded into Edit Mode + an active-shape pointer per Blender
+ * (`editorStore.activeBlendShapeId`); see BLENDER_DEVIATION_AUDIT.md.
+ * `MODE_BLEND_SHAPE` is now a deprecated alias for `MODE_EDIT`.
  *
  * SS `mesh` row also lists `MODE_SCULPT`, `MODE_VERTEX_PAINT`,
  * `MODE_TEXTURE_PAINT` to match Blender's table, but the operators
@@ -108,8 +108,13 @@ export const MODE_POSE = 'skeleton';
 /** Weight Paint — per-vertex bone-weight brush. */
 export const MODE_WEIGHT_PAINT = 'weightPaint';
 
-/** Blend Shape — paint vertex deltas into a shape key. */
-export const MODE_BLEND_SHAPE = 'blendShape';
+/** @deprecated 2026-05-07 — Blender doesn't have a separate Blend Shape
+ *  mode; shape-key painting lives INSIDE Edit Mode + an active-shape
+ *  pointer (`editorStore.activeBlendShapeId`). The constant remains as
+ *  a compile-time alias for `MODE_EDIT` so legacy call-sites don't
+ *  break, but new code should NOT use it. v26 migration rewrites
+ *  stored `'blendShape'` editMode values to `'edit'`. */
+export const MODE_BLEND_SHAPE = MODE_EDIT;
 
 /** Sculpt — high-density mesh sculpt brushes (unimplemented). */
 export const MODE_SCULPT = 'sculpt';
@@ -132,10 +137,11 @@ const COMPAT = {
   mesh: new Set([
     MODE_EDIT,
     MODE_WEIGHT_PAINT,
-    MODE_BLEND_SHAPE,
     MODE_SCULPT,
     MODE_VERTEX_PAINT,
     MODE_TEXTURE_PAINT,
+    // MODE_BLEND_SHAPE removed 2026-05-07: blend-shape painting is now
+    // a sub-state of MODE_EDIT (active-shape pointer pattern, Blender).
   ]),
   armature: new Set([
     MODE_EDIT,   // Blender's universal Edit Mode — bone REST pivot drag.

@@ -166,7 +166,10 @@ export class ScenePass {
     // — both are vertex-level edit contexts where focusing on the
     // selection helps. Skeleton edit doesn't dim (bones move, mesh stays
     // legible).
-    const dimUnselected = (editor.editMode === 'edit' || editor.editMode === 'blendShape')
+    // Dim non-selected parts during Edit Mode — both vertex edit and
+    // shape-paint (Edit Mode + active shape pointer) are vertex-level
+    // contexts where focusing on the active part helps. Folded 2026-05-07.
+    const dimUnselected = editor.editMode === 'edit'
       && selectionSet.size > 0;
 
     // ── Apply pose overrides (from animation playback) ────────────────────

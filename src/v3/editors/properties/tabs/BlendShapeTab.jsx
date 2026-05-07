@@ -54,7 +54,9 @@ export function BlendShapeTab({ nodeId }) {
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushHardness = useEditorStore((s) => s.brushHardness);
   const setBrush = useEditorStore((s) => s.setBrush);
-  const paintMode = editMode === 'blendShape';
+  // Folded 2026-05-07: shape-key painting is Edit Mode + active-shape
+  // pointer (Blender pattern). Pre-fold it had its own editMode value.
+  const paintMode = editMode === 'edit' && !!activeShapeId;
 
   if (!node || node.type !== 'part') {
     return (

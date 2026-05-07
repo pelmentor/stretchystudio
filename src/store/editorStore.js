@@ -26,9 +26,12 @@ export const useEditorStore = create((set) => ({
    *    Skeleton (editMode === 'skeleton'):
    *      'joint_drag'     — default (drag joints in SkeletonOverlay)
    *
-   *    BlendShape (editMode === 'blendShape'):
-   *      'brush'          — default (paint deltas into the active
-   *                          blendShape)
+   *    Edit Mode + active blend shape (editMode === 'edit', activeBlendShapeId set):
+   *      'brush'          — default (paint deltas into the active shape).
+   *                          Folded into Edit Mode 2026-05-07 — Blender's
+   *                          pattern (Mesh → Shape Keys panel + active-shape
+   *                          pointer); SS no longer has a separate 'blendShape'
+   *                          mode.
    */
   toolMode: 'select',
 
@@ -125,14 +128,20 @@ export const useEditorStore = create((set) => ({
    *                       rotation arcs write to `node.pose.rotation`
    *                       or the driver param. Apply Pose As Rest is
    *                       the bake path.
-   *    - 'blendShape'   → painting deltas onto `activeBlendShapeId`.
-   *                       Same brush behaviour as Edit Mode on a mesh;
-   *                       write target is the blendShape's deltas array.
+   *
+   *  Blend-shape painting lives INSIDE Edit Mode (Blender pattern):
+   *  set `activeBlendShapeId` on the active part, then the Edit Mode
+   *  brush writes shape deltas. Pre-2026-05-07 SS had a separate
+   *  `editMode === 'blendShape'` slot — folded into Edit Mode +
+   *  pointer 2026-05-07 (BLENDER_DEVIATION_AUDIT Fix 1).
+   *  `enterEditMode('blendShape', { blendShapeId })` is preserved as
+   *  a legacy alias that enters `'edit'` and sets the pointer
+   *  atomically; v26 migration rewrites stored `'blendShape'` modes.
    *
    *  Selection drives entry: `enterEditMode('edit')` works for both
-   *  meshed parts and bone groups; `enterEditMode('blendShape')` needs
-   *  a meshed part; `enterEditMode('skeleton')` needs a bone-role
-   *  group. The Tab keybind in `mode.editToggle` enforces this. */
+   *  meshed parts and bone groups; `enterEditMode('skeleton')` needs
+   *  a bone-role group. The Tab keybind in `mode.editToggle` enforces
+   *  this. */
   editMode: null,
 
   /** Sub-mode while in mesh edit mode: 'deform' moves vertices, 'adjust' moves UVs.
@@ -169,9 +178,17 @@ export const useEditorStore = create((set) => ({
    *  explicitly summoned with N). */
   toolPanelVisible: false,
 
-  /** The ID of the blend shape currently being edited; only meaningful
-   *  when editMode === 'blendShape'. Cleared on exitEditMode + on any
-   *  selection-head change. */
+  /** The ID of the blend shape currently being painted. Meaningful
+   *  only inside `editMode === 'edit'` on a meshed part — Blender's
+   *  "active shape key" pointer (Mesh data → Shape Keys panel). When
+   *  set, Edit Mode's brush tool writes to the shape's deltas instead
+   *  of the rest vertex positions. Cleared on `exitEditMode` and on
+   *  any selection-head change.
+   *
+   *  Pre-2026-05-07 SS surfaced this as a separate `editMode ===
+   *  'blendShape'` slot, which had no Blender counterpart. Folded into
+   *  Edit Mode + this pointer 2026-05-07 (BLENDER_DEVIATION_AUDIT
+   *  Fix 1; v26 migration). */
   activeBlendShapeId: null,
 
   /** V4 Phase 3b — Keyform edit mode payload. Only meaningful when
@@ -246,10 +263,12 @@ export const useEditorStore = create((set) => ({
   }),
 
   /** Enter a contextual edit mode.
-   *  kind ∈ {'edit','skeleton','blendShape','keyform','weightPaint'}.
+   *  kind ∈ {'edit','skeleton','keyform','weightPaint'}.
    *  Legacy alias `'mesh'` is accepted and normalised to `'edit'`.
-   *  For 'blendShape', opts.blendShapeId is required — without it the
-   *  call is a no-op (blendShape edit needs to know which shape).
+   *  Legacy alias `'blendShape'` enters Edit Mode and sets
+   *  `activeBlendShapeId` from `opts.blendShapeId` — Blender's pattern
+   *  where shape-key painting is Edit Mode + an active-shape pointer.
+   *  Without `opts.blendShapeId` the alias call is a no-op.
    *  For 'keyform', opts.deformerId + opts.keyformIndex + opts.keyTuple
    *  + opts.snapshot are required; on success populates `keyformEdit`.
    *  For 'weightPaint', no opts required (V4 Phase 4b — selection drives
@@ -258,10 +277,16 @@ export const useEditorStore = create((set) => ({
   enterEditMode: (kind, opts = {}) => set((state) => {
     // Legacy alias normalisation: 'mesh' → 'edit' (Blender taxonomy).
     if (kind === 'mesh') kind = 'edit';
+    // Legacy alias normalisation: 'blendShape' → 'edit' + active shape
+    // pointer (Blender folds shape-key painting into Edit Mode).
+    let activeShapeOnEntry = null;
+    if (kind === 'blendShape') {
+      if (!opts.blendShapeId) return state;
+      activeShapeOnEntry = opts.blendShapeId;
+      kind = 'edit';
+    }
     if (kind !== 'edit' && kind !== 'skeleton'
-        && kind !== 'blendShape' && kind !== 'keyform'
-        && kind !== 'weightPaint') return state;
-    if (kind === 'blendShape' && !opts.blendShapeId) return state;
+        && kind !== 'keyform' && kind !== 'weightPaint') return state;
     if (kind === 'keyform') {
       if (!opts.deformerId || typeof opts.keyformIndex !== 'number') return state;
       if (!Array.isArray(opts.keyTuple) || !opts.snapshot) return state;
@@ -273,7 +298,7 @@ export const useEditorStore = create((set) => ({
     const persisted = usePreferencesStore.getState().lastToolByMode ?? {};
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
-      if (kind === 'edit' || kind === 'blendShape' || kind === 'weightPaint') toolMode = 'brush';
+      if (kind === 'edit' || kind === 'weightPaint') toolMode = 'brush';
       else if (kind === 'skeleton') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
@@ -291,7 +316,9 @@ export const useEditorStore = create((set) => ({
     }
     return {
       editMode: kind,
-      activeBlendShapeId: kind === 'blendShape' ? opts.blendShapeId : null,
+      // Active shape pointer survives only inside Edit Mode on a mesh.
+      // When entering a non-Edit mode, clear it.
+      activeBlendShapeId: kind === 'edit' ? activeShapeOnEntry : null,
       keyformEdit: kind === 'keyform' ? {
         deformerId:      opts.deformerId,
         keyformIndex:    opts.keyformIndex,
@@ -301,6 +328,15 @@ export const useEditorStore = create((set) => ({
       } : null,
       toolMode,
     };
+  }),
+
+  /** Set or clear the active blend shape pointer while in Edit Mode.
+   *  Blender's pattern: select a shape key → brush paints its deltas;
+   *  deselect → brush paints rest vertex positions. Pass `null` to
+   *  clear. No-op outside Edit Mode. */
+  setActiveBlendShape: (shapeId) => set((state) => {
+    if (state.editMode !== 'edit') return state;
+    return { activeBlendShapeId: shapeId ?? null };
   }),
 
   /** Exit any contextual edit mode back to object mode. Idempotent.

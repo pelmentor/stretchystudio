@@ -113,6 +113,7 @@ function ModeRow({ icon: Icon, label, checked, onSelect, disabled, hint }) {
 export function ModePill() {
   const editMode = useEditorStore((s) => s.editMode);
   const activeBlendShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  const setActiveBlendShape = useEditorStore((s) => s.setActiveBlendShape);
   const enterEditMode = useEditorStore((s) => s.enterEditMode);
   const exitEditMode = useEditorStore((s) => s.exitEditMode);
   const setSelection = useEditorStore((s) => s.setSelection);
@@ -132,12 +133,14 @@ export function ModePill() {
   const meta = MODE_META[editMode ?? 'null'] ?? MODE_META.null;
   const PillIcon = meta.icon;
 
-  // Mode label gets a "(shape name)" suffix when in blend-shape edit
-  // so the user always knows which shape they're painting.
+  // Mode label gets a "(Shape: name)" suffix when in Edit Mode with
+  // an active blend shape so the user always knows which shape they're
+  // painting. Folded 2026-05-07 — Blender's pattern: shape-key paint
+  // lives inside Edit Mode, not as a peer mode.
   let pillLabel = meta.label;
-  if (editMode === 'blendShape' && activeBlendShapeId && node?.blendShapes) {
+  if (editMode === 'edit' && activeBlendShapeId && node?.blendShapes) {
     const shape = node.blendShapes.find((s) => s.id === activeBlendShapeId);
-    if (shape) pillLabel = `Blend Shape: ${shape.name}`;
+    if (shape) pillLabel = `Edit Mode (Shape: ${shape.name})`;
   }
 
   function enterEdit() {
@@ -264,19 +267,34 @@ export function ModePill() {
           onSelect={enterWeightPaint}
         />
 
+        {/* Active shape-key picker — Blender pattern: shape painting
+            lives inside Edit Mode + an active-shape pointer. Each row
+            is a shortcut: "enter Edit Mode + set this shape active"
+            (or just "set active" if already in Edit Mode). Selecting
+            "(none)" clears the pointer so the brush paints rest verts. */}
         {blendShapes.length > 0 && (
           <div className="pt-1 mt-1 border-t border-border/40">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground/70 px-1 mb-0.5">
-              Blend Shape Paint
+              Active Shape (Edit Mode)
             </div>
+            <ModeRow
+              icon={Pencil}
+              label="(none — paint rest)"
+              checked={editMode === 'edit' && !activeBlendShapeId}
+              onSelect={() => {
+                if (editMode === 'edit') setActiveBlendShape(null);
+                else enterEdit();
+              }}
+              hint="Edit Mode without an active shape — brush paints rest vertex positions"
+            />
             {blendShapes.map((shape) => (
               <ModeRow
                 key={shape.id}
                 icon={Sparkles}
                 label={shape.name}
-                checked={editMode === 'blendShape' && activeBlendShapeId === shape.id}
+                checked={editMode === 'edit' && activeBlendShapeId === shape.id}
                 onSelect={() => enterBlendShape(shape.id)}
-                hint={`Paint deltas onto ${shape.name}`}
+                hint={`Edit Mode + paint deltas onto ${shape.name}`}
               />
             ))}
           </div>
