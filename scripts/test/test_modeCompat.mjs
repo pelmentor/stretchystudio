@@ -45,7 +45,10 @@ function assertEq(actual, expected, name) {
     'MODE_EDIT = "edit" — Blender universal OB_MODE_EDIT (renamed from "mesh" 2026-05-07)');
   assert(MODE_EDIT_MESH === MODE_EDIT,
     'MODE_EDIT_MESH legacy alias === MODE_EDIT');
-  assert(MODE_POSE === 'skeleton', 'MODE_POSE legacy slot value preserved');
+  // Fix 2 (BLENDER_DEVIATION_AUDIT): MODE_POSE renamed from legacy
+  // 'skeleton' to 'pose' to match Blender's OB_MODE_POSE.
+  assert(MODE_POSE === 'pose',
+    "MODE_POSE = 'pose' — Blender OB_MODE_POSE (renamed from 'skeleton' 2026-05-07)");
   assert(MODE_WEIGHT_PAINT === 'weightPaint', 'MODE_WEIGHT_PAINT slot value');
   // Folded 2026-05-07 (BLENDER_DEVIATION_AUDIT Fix 1): MODE_BLEND_SHAPE
   // is now a deprecated alias for MODE_EDIT. Shape-key painting lives

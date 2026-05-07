@@ -80,8 +80,7 @@ function describeSelection() {
 const MODE_META = {
   null:         { label: 'Object Mode',    icon: Box },
   edit:         { label: 'Edit Mode',      icon: Pencil },
-  skeleton:     { label: 'Pose Mode',      icon: Bone },
-  blendShape:   { label: 'Blend Shape',    icon: Sparkles },
+  pose:         { label: 'Pose Mode',      icon: Bone },
   weightPaint:  { label: 'Weight Paint',   icon: Brush },
 };
 
@@ -153,7 +152,7 @@ export function ModePill() {
   }
   function enterSkeleton() {
     if (!viewLayers.skeleton) setViewLayers({ skeleton: true });
-    enterEditMode('skeleton');
+    enterEditMode(MODE_POSE);
   }
   function enterBlendShape(shapeId) {
     if (!active) return;
@@ -243,7 +242,7 @@ export function ModePill() {
         <ModeRow
           icon={Bone}
           label="Pose Mode"
-          checked={editMode === 'skeleton'}
+          checked={editMode === MODE_POSE}
           disabled={!modeCompatTest(dataKind, MODE_POSE)}
           hint={
             kind === 'boneGroup'

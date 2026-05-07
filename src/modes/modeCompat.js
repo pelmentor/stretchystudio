@@ -56,10 +56,10 @@
  *                       editor by the active object's dataKind. Works
  *                       for both `mesh` and `armature` (and future
  *                       `curve`) dataKinds.
- *   - `'skeleton'`   — Blender's `OB_MODE_POSE`. SS originally called
- *                       this Skeleton Edit, then collapsed Armature
- *                       Edit into Pose Mode (2026-05-06 commit
- *                       `9df561f`); the slot kept the legacy name.
+ *   - `'pose'`       — Blender's `OB_MODE_POSE`. Renamed from legacy
+ *                       `'skeleton'` 2026-05-07 (BLENDER_DEVIATION_AUDIT
+ *                       Fix 2). v27 migration rewrites persisted
+ *                       `node.mode === 'skeleton'` values.
  *   - `'weightPaint'` — Blender's `OB_MODE_WEIGHT_PAINT`.
  *   - `'blendShape'`  — SS-specific. Blender ships shape-key painting
  *                       inside Edit Mode + a "Sculpt mode on shape key"
@@ -102,8 +102,11 @@ export const MODE_EDIT = 'edit';
  *  call-sites that haven't migrated yet. */
 export const MODE_EDIT_MESH = MODE_EDIT;
 
-/** Pose Mode — bone pose drag / rotation, writes to `node.pose.*`. */
-export const MODE_POSE = 'skeleton';
+/** Blender's `OB_MODE_POSE`. Bone pose drag / rotation; writes to
+ *  `node.pose.*`. Renamed from legacy `'skeleton'` 2026-05-07
+ *  (BLENDER_DEVIATION_AUDIT Fix 2). v27 schema migration rewrites
+ *  stored `node.mode === 'skeleton'` to `'pose'`. */
+export const MODE_POSE = 'pose';
 
 /** Weight Paint — per-vertex bone-weight brush. */
 export const MODE_WEIGHT_PAINT = 'weightPaint';

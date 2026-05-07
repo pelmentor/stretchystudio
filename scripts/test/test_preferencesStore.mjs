@@ -165,12 +165,16 @@ function get() { return usePreferencesStore.getState(); }
 // OB_MODE_EDIT taxonomy). preferencesStore normalises legacy 'mesh'
 // keys to 'edit' on read.
 {
-  // Default shape includes one entry per known editMode key.
+  // Default shape includes one entry per known editMode key (Blender
+  // taxonomy: object / edit / pose / weightPaint).
   const ltm = get().lastToolByMode;
   assert(ltm && ltm.object === 'select', 'lastToolByMode: object → select default');
   assert(ltm.edit === 'brush',           'lastToolByMode: edit → brush default');
-  assert(ltm.skeleton === 'joint_drag',  'lastToolByMode: skeleton → joint_drag default');
-  assert(ltm.blendShape === 'brush',     'lastToolByMode: blendShape → brush default');
+  assert(ltm.pose === 'joint_drag',      'lastToolByMode: pose → joint_drag default');
+  // 'blendShape' key dropped (Fix 1, folded into Edit Mode);
+  // 'skeleton' key renamed to 'pose' (Fix 2, OB_MODE_POSE taxonomy).
+  assert(!('blendShape' in ltm), 'lastToolByMode: blendShape key absent (folded)');
+  assert(!('skeleton' in ltm), 'lastToolByMode: skeleton key absent (renamed → pose)');
 
   // setLastToolForMode merges, persists, in-memory updated.
   get().setLastToolForMode('edit', 'add_vertex');

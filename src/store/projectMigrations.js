@@ -26,8 +26,9 @@ import { migrateNodeTreeDriverTree } from './migrations/v23_nodetree_drivertree.
 import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animationtree.js';
 import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename.js';
 import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold.js';
+import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
 
-export const CURRENT_SCHEMA_VERSION = 26;
+export const CURRENT_SCHEMA_VERSION = 27;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -411,6 +412,16 @@ const MIGRATIONS = {
   // See `src/store/migrations/v26_blendshape_mode_fold.js`.
   26: (project) => {
     migrateBlendShapeModeFold(project);
+    return project;
+  },
+
+  // v27 — BLENDER_DEVIATION_AUDIT Fix 2: rename the editMode slot
+  // value `'skeleton'` → `'pose'` to match Blender's `OB_MODE_POSE`
+  // taxonomy. Rewrites stored `node.mode === 'skeleton'` to `'pose'`.
+  //
+  // See `src/store/migrations/v27_skeleton_to_pose_rename.js`.
+  27: (project) => {
+    migrateSkeletonToPoseRename(project);
     return project;
   },
 

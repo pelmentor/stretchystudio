@@ -107,8 +107,8 @@ reset();
 
 {
   reset();
-  get().enterEditMode('skeleton');
-  assert(get().editMode === 'skeleton', 'enter skeleton: editMode set');
+  get().enterEditMode('pose');
+  assert(get().editMode === 'pose', 'enter skeleton: editMode set');
   assert(get().activeBlendShapeId === null, 'enter skeleton: blendShapeId stays null');
   assert(get().toolMode === 'joint_drag', 'enter skeleton: toolMode defaults to joint_drag');
 }
@@ -163,8 +163,8 @@ reset();
 {
   reset();
   get().enterEditMode('edit');
-  get().enterEditMode('skeleton');
-  assert(get().editMode === 'skeleton', 'switch mesh→skeleton: editMode skeleton');
+  get().enterEditMode('pose');
+  assert(get().editMode === 'pose', 'switch mesh→skeleton: editMode skeleton');
 
   // Folded 2026-05-07: 'blendShape' alias enters Edit Mode + sets the
   // active-shape pointer.
@@ -354,7 +354,7 @@ reset();
   reset();
   useEditorStore.setState({
     viewLayers: { ...get().viewLayers, skeleton: true },
-    editMode: 'skeleton',
+    editMode: 'pose',
   });
   get().setViewLayers({ skeleton: false });
   assert(get().viewLayers.skeleton === false, 'setViewLayers({skeleton:false}): off');
@@ -420,7 +420,7 @@ reset();
   usePreferencesStore.setState({
     lastToolByMode: { object: 'select', mesh: 'brush', skeleton: 'joint_drag', blendShape: 'brush' },
   });
-  get().enterEditMode('skeleton');
+  get().enterEditMode('pose');
   assert(get().toolMode === 'joint_drag',
     'enterEditMode(skeleton): restores joint_drag');
 
@@ -554,7 +554,7 @@ function projectNode(id) {
   seedProject([{ id: 'bone-A', type: 'group', name: 'A', boneRole: 'head' }]);
   useEditorStore.setState({
     selection: ['bone-A'],
-    editMode: 'skeleton',
+    editMode: 'pose',
     viewLayers: { ...get().viewLayers, skeleton: true },
   });
   // Manually mirror, since we set editMode via setState (bypassing enterEditMode).

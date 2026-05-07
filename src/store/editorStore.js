@@ -23,7 +23,7 @@ export const useEditorStore = create((set) => ({
    *      'pivot_drag'     — default (drag joints to write
    *                          `node.transform.pivotX/Y` — rest bind edit)
    *
-   *    Skeleton (editMode === 'skeleton'):
+   *    Pose Mode (editMode === 'pose'):
    *      'joint_drag'     — default (drag joints in SkeletonOverlay)
    *
    *    Edit Mode + active blend shape (editMode === 'edit', activeBlendShapeId set):
@@ -124,10 +124,13 @@ export const useEditorStore = create((set) => ({
    *                       OB_MODE_EDIT slot, dispatch by data type). The
    *                       v25 schema migration rewrites stored `'mesh'`
    *                       editMode values to `'edit'`.
-   *    - 'skeleton'     → POSE MODE. Joint drag writes to `node.pose.*`;
-   *                       rotation arcs write to `node.pose.rotation`
-   *                       or the driver param. Apply Pose As Rest is
-   *                       the bake path.
+   *    - 'pose'         → Blender's `OB_MODE_POSE`. Joint drag writes
+   *                       to `node.pose.*`; rotation arcs write to
+   *                       `node.pose.rotation` or the driver param.
+   *                       Apply Pose As Rest is the bake path. Renamed
+   *                       from legacy `'skeleton'` 2026-05-07
+   *                       (BLENDER_DEVIATION_AUDIT Fix 2). v27 schema
+   *                       migration rewrites stored values.
    *
    *  Blend-shape painting lives INSIDE Edit Mode (Blender pattern):
    *  set `activeBlendShapeId` on the active part, then the Edit Mode
@@ -139,7 +142,7 @@ export const useEditorStore = create((set) => ({
    *  atomically; v26 migration rewrites stored `'blendShape'` modes.
    *
    *  Selection drives entry: `enterEditMode('edit')` works for both
-   *  meshed parts and bone groups; `enterEditMode('skeleton')` needs
+   *  meshed parts and bone groups; `enterEditMode('pose')` needs
    *  a bone-role group. The Tab keybind in `mode.editToggle` enforces
    *  this. */
   editMode: null,
@@ -263,8 +266,9 @@ export const useEditorStore = create((set) => ({
   }),
 
   /** Enter a contextual edit mode.
-   *  kind ∈ {'edit','skeleton','keyform','weightPaint'}.
+   *  kind ∈ {'edit','pose','keyform','weightPaint'}.
    *  Legacy alias `'mesh'` is accepted and normalised to `'edit'`.
+   *  Legacy alias `'skeleton'` is accepted and normalised to `'pose'`.
    *  Legacy alias `'blendShape'` enters Edit Mode and sets
    *  `activeBlendShapeId` from `opts.blendShapeId` — Blender's pattern
    *  where shape-key painting is Edit Mode + an active-shape pointer.
@@ -277,6 +281,8 @@ export const useEditorStore = create((set) => ({
   enterEditMode: (kind, opts = {}) => set((state) => {
     // Legacy alias normalisation: 'mesh' → 'edit' (Blender taxonomy).
     if (kind === 'mesh') kind = 'edit';
+    // Legacy alias normalisation: 'skeleton' → 'pose' (Blender taxonomy).
+    if (kind === 'skeleton') kind = 'pose';
     // Legacy alias normalisation: 'blendShape' → 'edit' + active shape
     // pointer (Blender folds shape-key painting into Edit Mode).
     let activeShapeOnEntry = null;
@@ -285,7 +291,7 @@ export const useEditorStore = create((set) => ({
       activeShapeOnEntry = opts.blendShapeId;
       kind = 'edit';
     }
-    if (kind !== 'edit' && kind !== 'skeleton'
+    if (kind !== 'edit' && kind !== 'pose'
         && kind !== 'keyform' && kind !== 'weightPaint') return state;
     if (kind === 'keyform') {
       if (!opts.deformerId || typeof opts.keyformIndex !== 'number') return state;
@@ -299,7 +305,7 @@ export const useEditorStore = create((set) => ({
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
       if (kind === 'edit' || kind === 'weightPaint') toolMode = 'brush';
-      else if (kind === 'skeleton') toolMode = 'joint_drag';
+      else if (kind === 'pose') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
     }
@@ -384,10 +390,12 @@ export const useEditorStore = create((set) => ({
   }),
   setViewLayers:        (partial)  => set((state) => {
     const next = { ...state.viewLayers, ...partial };
-    // Skeleton-edit requires a visible skeleton — toggling skeleton
-    // off implicitly drops the user out of skeleton edit mode.
+    // Pose Mode requires the skeleton overlay visible — toggling it
+    // off implicitly drops the user out of Pose Mode.
+    // (`viewLayers.skeleton` is the overlay-visibility flag, NOT the
+    // editMode value — kept under that name because it's a layer name.)
     if ('skeleton' in partial && !partial.skeleton
-        && state.editMode === 'skeleton') {
+        && state.editMode === 'pose') {
       // Phase 2b — keep the per-object mode record in sync with the
       // global slot.
       const activeId = state.selection[0];

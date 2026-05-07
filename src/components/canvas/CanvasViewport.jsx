@@ -1822,7 +1822,7 @@ export default function CanvasViewport({
     // overlay only claims its own painted handles via stopPropagation,
     // so clicks elsewhere fall through to click-to-select below.
     const hasArmature = proj.nodes.some(n => isBoneGroup(n));
-    if (editorRef.current.editMode === 'skeleton' && hasArmature) return;
+    if (editorRef.current.editMode === 'pose' && hasArmature) return;
 
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
 
@@ -2574,7 +2574,7 @@ export default function CanvasViewport({
         const headNode = headSel ? project.nodes.find((n) => n.id === headSel) : null;
         const headIsBone = !!headNode && isBoneGroup(headNode);
         const skeletonEditMode =
-          editorState.editMode === 'skeleton'
+          editorState.editMode === 'pose'
           || (editorState.editMode === 'edit' && headIsBone)
           || _wizardStep === 'adjust';
         return (

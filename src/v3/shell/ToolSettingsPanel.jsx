@@ -98,7 +98,7 @@ function ContentForMode({ editMode }) {
   if (editMode === 'edit' || editMode === 'weightPaint') {
     return <BrushSection />;
   }
-  if (editMode === 'skeleton') {
+  if (editMode === 'pose') {
     return (
       <ModeHint
         title="Pose Mode"

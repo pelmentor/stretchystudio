@@ -455,7 +455,7 @@ function registerBuiltins() {
       // Pose Mode (armature-specific) is reached via the ModePill
       // dropdown, NOT Tab — matching Blender, where Tab on an
       // armature enters Edit Mode and Ctrl+Tab toggles Pose. Pose
-      // remains its own slot value (`'skeleton'`).
+      // remains its own slot value (`'pose'`).
       if (ed.editMode) {
         ed.exitEditMode();
         return;

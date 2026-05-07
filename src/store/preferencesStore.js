@@ -50,10 +50,9 @@ const PE_DEFAULT = Object.freeze({
  *  be strings the toolbar's `tools.js` advertises for that mode —
  *  unknown values fall back to the mode's first sticky tool entry. */
 const LTM_DEFAULT = Object.freeze({
-  object:     'select',
-  edit:       'brush',          // Blender's universal Edit Mode (was 'mesh')
-  skeleton:   'joint_drag',
-  blendShape: 'brush',
+  object: 'select',
+  edit:   'brush',          // Blender's universal Edit Mode (was 'mesh')
+  pose:   'joint_drag',     // Blender's OB_MODE_POSE (was 'skeleton')
 });
 
 /** GAP-016 Phase B — `viewLayerPresets` is a dict of user-named
@@ -130,12 +129,27 @@ export const usePreferencesStore = create((set, get) => ({
    *  See `editorStore.enterEditMode` (reads on entry) and
    *  `editorStore.setToolMode` (writes on every tool flip). */
   lastToolByMode: (() => {
-    // Legacy 'mesh' key normalisation: pre-2026-05-07 entries used
-    // 'mesh' as the slot name; rename to 'edit' on read.
-    const loaded = loadJson(LTM_KEY, LTM_DEFAULT);
-    if (loaded && typeof loaded === 'object' && 'mesh' in loaded && !('edit' in loaded)) {
+    // Legacy slot-name normalisation. Pre-2026-05-07 SS used the slot
+    // names 'mesh' (Blender's universal OB_MODE_EDIT) and 'skeleton'
+    // (Blender's OB_MODE_POSE). Renamed to match Blender's taxonomy:
+    //   'mesh'     → 'edit'
+    //   'skeleton' → 'pose'
+    // Rewrite legacy keys on load (lossy: drops the legacy key after
+    // copying its value to the new key).
+    let loaded = loadJson(LTM_KEY, LTM_DEFAULT);
+    if (!loaded || typeof loaded !== 'object') return loaded;
+    if ('mesh' in loaded && !('edit' in loaded)) {
       const { mesh: _mesh, ...rest } = loaded;
-      return { ...rest, edit: _mesh };
+      loaded = { ...rest, edit: _mesh };
+    }
+    if ('skeleton' in loaded && !('pose' in loaded)) {
+      const { skeleton: _sk, ...rest } = loaded;
+      loaded = { ...rest, pose: _sk };
+    }
+    // Drop dead 'blendShape' key (folded into Edit Mode 2026-05-07 — Fix 1).
+    if ('blendShape' in loaded) {
+      const { blendShape: _bs, ...rest } = loaded;
+      loaded = rest;
     }
     return loaded;
   })(),

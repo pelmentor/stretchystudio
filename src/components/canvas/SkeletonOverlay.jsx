@@ -112,7 +112,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
-  // editMode === 'skeleton' is Pose Mode — the SOLE bone-edit mode.
+  // editMode === 'pose' is Pose Mode — the SOLE bone-edit mode.
   // Joint drag writes pose.x/y; rotation arc writes pose.rotation (or the
   // driver param). Object Mode = selection only, no bone interaction.
   const editMode       = useEditorStore(s => s.editMode);
@@ -231,7 +231,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (!skeletonEditMode) return;
       const drag = { type: 'joint', nodeId };
       const ed = useEditorStore.getState();
-      if (ed.editMode === 'skeleton') {
+      if (ed.editMode === 'pose') {
         const proj = useProjectStore.getState().project;
         const projNodes = proj?.nodes ?? [];
         const node = projNodes.find((n) => n?.id === nodeId);
@@ -493,7 +493,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       const cssY = e.clientY - rect.top;
       const { zoom, panX, panY } = viewRef.current;
       const [imgX, imgY] = toImage(cssX, cssY, zoom, panX, panY);
-      if (editMode === 'skeleton' && drag.poseSetup) {
+      if (editMode === 'pose' && drag.poseSetup) {
         const { x: newPoseX, y: newPoseY } = applyPoseTranslate(drag.poseSetup, imgX, imgY);
         updateProject((proj) => {
           const node = proj.nodes.find((n) => n.id === drag.nodeId);

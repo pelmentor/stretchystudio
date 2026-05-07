@@ -171,7 +171,7 @@ export const TOOLS_BY_MODE = {
  * pointer); when null, the mesh-vertex tools (brush / add / remove)
  * apply.
  *
- * @param {null | 'edit' | 'skeleton'} editMode
+ * @param {null | 'edit' | 'pose'} editMode
  * @param {string | null} [activeBlendShapeId]
  * @returns {ToolEntry[]}
  */
@@ -180,7 +180,8 @@ export function toolsFor(editMode, activeBlendShapeId = null) {
   if (editMode === 'edit' || editMode === 'mesh') {
     return activeBlendShapeId ? TOOLS_BY_MODE.blendShape : TOOLS_BY_MODE.mesh;
   }
-  if (editMode === 'skeleton') return TOOLS_BY_MODE.skeleton;
+  // Legacy alias 'skeleton' (renamed → 'pose' 2026-05-07).
+  if (editMode === 'pose' || editMode === 'skeleton') return TOOLS_BY_MODE.skeleton;
   // Legacy 'blendShape' editMode — folded into Edit Mode 2026-05-07.
   if (editMode === 'blendShape') return TOOLS_BY_MODE.blendShape;
   return TOOLS_BY_MODE.object;
