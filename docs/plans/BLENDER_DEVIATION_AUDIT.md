@@ -1,6 +1,6 @@
 # Blender Deviation Audit — Stretchy Studio
 
-Status: PROPOSED 2026-05-07. Awaiting user prioritisation.
+Status: Fix 1 SHIPPED `d8fb53d`, Fix 2 SHIPPED `d700d61` (both 2026-05-07). Fix 3 broken out into [BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md](BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md) as multi-session work.
 
 User direction: "We follow Blender in almost all regards" — this audit
 enumerates every SS-invented concept that doesn't have a 1:1 Blender
@@ -36,7 +36,7 @@ files cited per item.
 
 ## Top 3 fixes by user-impact (recommended priority)
 
-### Fix 1 — Fold `MODE_BLEND_SHAPE` into Edit Mode.
+### Fix 1 — Fold `MODE_BLEND_SHAPE` into Edit Mode. **SHIPPED 2026-05-07 (`d8fb53d`).**
 
 **Why first:** Only invented top-level mode left. Removes a peer-mode that Blender users misread; deletes a row from `modeCompat.js`'s `mesh` set; lets the same Tab-then-pick-shape-key flow Blender ships work here too.
 
@@ -48,7 +48,7 @@ files cited per item.
 
 LOC est. ~200, schema v26.
 
-### Fix 2 — Rename `'skeleton'` → `'pose'` slot value.
+### Fix 2 — Rename `'skeleton'` → `'pose'` slot value. **SHIPPED 2026-05-07 (`d700d61`).**
 
 **Why second:** Pure terminological alignment, mechanical. The slot semantics are already Pose Mode; only the label lies.
 
@@ -61,17 +61,11 @@ LOC est. ~200, schema v26.
 
 LOC est. ~150, schema v26.
 
-### Fix 3 — Retire `node.type === 'deformer'` as a sibling node.
+### Fix 3 — Retire `node.type === 'deformer'` as a sibling node. **PLANNED — see [BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md](BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md).**
 
-**Why third:** Biggest blast radius — touches the data layer + every reader that branches on deformer-as-node vs deformer-as-modifier. But it closes the BFA-006 plan's stated goal: "no dual representation". Today every reader has to branch.
+Investigation (2026-05-07) showed Fix 3 needs a multi-phase migration because `Object.modifiers[]` today carries only `{type, deformerId, enabled, mode, showInEditor}` — a parent-chain INDEX. All actual deformer state (`keyforms[]`, `bindings[]`, `gridSize`, `baseGrid`, `baseAngle`, …) still lives on the deformer node. 6+ UI components and the cmo3/moc3 export pipeline read these fields directly. Doing the data fold + writer rewrite in one session risks a byte-fidelity regression in the .moc3 export.
 
-**Plan:**
-- `Object.modifiers[]` (v20) becomes the canonical store for warp/rotation deformer state.
-- Delete `node.type === 'deformer'` entries from `project.nodes` in v26 migration.
-- All readers (export pipeline, chainEval, depgraph, NodeTreeEditor) that walked the node array now walk `Object.modifiers[]` instead.
-- This is the V2-Cleanup-Phase work that was deferred earlier today.
-
-LOC est. ~600, schema v26 (or split: v26 marks deprecated, v27 deletes after a soak).
+The retirement is split into Phases 3.A (data fold), 3.B (synthetic export pipeline, byte-diff gated), and 3.C (cleanup). Total ~950 LOC; ~3 sessions.
 
 ---
 
