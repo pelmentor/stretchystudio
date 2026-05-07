@@ -16,7 +16,7 @@
 //
 // Run: node scripts/test/test_synthesizeDeformerNodesForExport.mjs
 
-import { synthesizeDeformerNodesForExport } from '../../src/io/live2d/rig/synthesizeDeformerNodesForExport.js';
+import { synthesizeDeformerNodesForExport, resetSynthFlare } from '../../src/io/live2d/rig/synthesizeDeformerNodesForExport.js';
 
 let passed = 0;
 let failed = 0;
@@ -193,6 +193,50 @@ function findById(arr, id) {
     'null project → []');
   assert(synthesizeDeformerNodesForExport({}).length === 0, '{} → []');
   assert(synthesizeDeformerNodesForExport({ nodes: [] }).length === 0, 'no nodes → []');
+}
+
+// ---- 8. Orphan-fallback flare suppressed under suppressFlare ----
+// (Verifies the diagnostic doesn't crash; actual log output is tested
+// in-app via the Logs panel.)
+{
+  resetSynthFlare();
+  const project = {
+    nodes: [
+      // Orphan: no part references it.
+      { id: 'OrphanW', type: 'deformer', deformerKind: 'warp',
+        name: 'OrphanW', parent: null },
+    ],
+  };
+  // suppressFlare prevents the logger.warn — keeps test output clean.
+  const synth = synthesizeDeformerNodesForExport(project, { suppressFlare: true });
+  assert(synth.length === 1, 'orphan still emitted with suppressFlare');
+  assert(synth[0].id === 'OrphanW', 'orphan id preserved');
+}
+
+// ---- 9. Modifier referenced WITHOUT .data — orphan fallback catches it
+//          (the "neck gone" hazard scenario) ----
+{
+  resetSynthFlare();
+  const project = {
+    nodes: [
+      {
+        id: 'p1', type: 'part',
+        modifiers: [
+          // .data missing — main-pass skips this entry...
+          { type: 'warp', deformerId: 'StaleW' },
+        ],
+      },
+      // ...but the deformer node still exists, so orphan pass picks it up.
+      { id: 'StaleW', type: 'deformer', deformerKind: 'warp',
+        name: 'StaleW', parent: null,
+        gridSize: { rows: 5, cols: 5 }, keyforms: [], bindings: [] },
+    ],
+  };
+  const synth = synthesizeDeformerNodesForExport(project, { suppressFlare: true });
+  assert(synth.length === 1, 'orphan-fallback emits the stale deformer');
+  assert(synth[0].id === 'StaleW', 'stale deformer id preserved');
+  assert(synth[0].name === 'StaleW',
+    'orphan-fallback copies node fields (not modifier.data)');
 }
 
 console.log(`synthesizeDeformerNodesForExport: ${passed} passed, ${failed} failed`);

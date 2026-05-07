@@ -45,9 +45,32 @@
  * @module io/live2d/rig/synthesizeDeformerNodesForExport
  */
 
+import { logger } from '../../../lib/logger.js';
+
+/**
+ * Module-scoped flare bookkeeping for the orphan-fallback diagnostic.
+ * Tracks the set of deformer ids that have been flared this session so
+ * a steady-state divergence doesn't spam the Logs panel. Reset by
+ * project identity change — first synth pass on a freshly-loaded
+ * project gets a clean flare opportunity, subsequent passes dedupe.
+ */
+let _lastFlaredProject = null;
+/** @type {Set<string>} */
+let _flaredOrphanIds = new Set();
+
+/**
+ * Reset the orphan-fallback flare state. Useful in tests; production
+ * code shouldn't need to call it (project-identity tracking does it
+ * automatically).
+ */
+export function resetSynthFlare() {
+  _lastFlaredProject = null;
+  _flaredOrphanIds = new Set();
+}
+
 /**
  * @param {object} project
- * @param {{ includeOrphans?: boolean }} [opts]
+ * @param {{ includeOrphans?: boolean, suppressFlare?: boolean }} [opts]
  * @returns {Array<object>}  Array of synthetic `type:'deformer'` nodes.
  */
 export function synthesizeDeformerNodesForExport(project, opts = {}) {
@@ -93,6 +116,8 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
   // referenced in their stack (e.g. body warps not yet wired into a
   // part because the rigging isn't complete, or partially-stripped
   // re-rig states).
+  /** @type {Array<{id: string, deformerKind: string, reason: string}>} */
+  const orphanFallbacks = [];
   if (includeOrphans) {
     for (const n of project.nodes) {
       if (!n || n.type !== 'deformer') continue;
@@ -103,6 +128,65 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
       byId.set(n.id, copy);
       parentEdges.set(n.id,
         typeof n.parent === 'string' ? n.parent : null);
+      // Detect WHY this deformer hit the orphan path: was it referenced
+      // in a modifier stack but with empty .data, or was it not in any
+      // modifier stack at all? Phase 3.C deletes the orphan-fallback
+      // safety net, so any deformer reaching output via this path is
+      // at risk of disappearing post-3.C.
+      let referencedWithoutData = false;
+      let referencedAtAll = false;
+      for (const part of project.nodes) {
+        if (!part || part.type !== 'part') continue;
+        if (!Array.isArray(part.modifiers)) continue;
+        for (const mod of part.modifiers) {
+          if (mod?.deformerId === n.id) {
+            referencedAtAll = true;
+            if (!mod.data || typeof mod.data !== 'object') {
+              referencedWithoutData = true;
+            }
+          }
+        }
+      }
+      orphanFallbacks.push({
+        id: n.id,
+        deformerKind: n.deformerKind ?? 'unknown',
+        reason: referencedWithoutData
+          ? 'modifier-data-missing'   // in stack but .data empty — stale state
+          : referencedAtAll
+            ? 'in-stack-with-data'    // shouldn't happen if main pass worked
+            : 'never-in-stack',       // truly orphaned, no part renders it
+      });
+    }
+  }
+
+  // Diagnostic flare: log the first time we see orphan-fallback
+  // emissions for a given project. After Phase 3.C deletes the
+  // orphan-fallback safety net, any deformer that reached output
+  // via this path will silently disappear from the rig — surfacing
+  // it now lets the user notice and re-init before it bites.
+  if (
+    !opts.suppressFlare
+    && orphanFallbacks.length > 0
+    && project !== _lastFlaredProject
+  ) {
+    _lastFlaredProject = project;
+    _flaredOrphanIds = new Set();
+    const firstNew = [];
+    for (const o of orphanFallbacks) {
+      if (!_flaredOrphanIds.has(o.id)) {
+        _flaredOrphanIds.add(o.id);
+        firstNew.push(o);
+      }
+    }
+    if (firstNew.length > 0) {
+      logger.warn(
+        'synthOrphanFallback',
+        `${firstNew.length} deformer(s) only present via orphan-fallback. After Phase 3.C they will disappear unless modifier.data is repaired (Re-initialize Rig refreshes it).`,
+        {
+          orphans: firstNew.slice(0, 10),
+          totalCount: orphanFallbacks.length,
+        },
+      );
     }
   }
 
