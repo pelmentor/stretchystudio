@@ -50,6 +50,8 @@ import {
   upsertDeformerNode,
   removeRigWarpNodes,
   removeDeformerNodesByPredicate,
+  synthesizeModifierStacks,
+  synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
 import {
   getRigWarpNodes,
@@ -284,6 +286,11 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
       const partNode = project.nodes.find((n) => n && n.id === partId && n.type === 'part');
       if (partNode) partNode.rigParent = spec.id;
     }
+    // Phase 3 storage flip — derive each part's modifier stack from
+    // the freshly-updated rigParent + deformer tree.
+    synthesizeModifierStacks(project);
+    // V2 Phase 0.3 — modifier stacks are canonical; mirror to parent links.
+    synthesizeDeformerParents(project);
   }
   return finalMap;
 }
@@ -304,5 +311,10 @@ export function clearRigWarps(project) {
         n.rigParent = null;
       }
     }
+    // Phase 3 storage flip — modifier stacks reflect the (now-empty)
+    // rigParent state. With rigParent cleared everywhere, every part's
+    // stack drops to empty and the field is removed.
+    synthesizeModifierStacks(project);
+    synthesizeDeformerParents(project);
   }
 }

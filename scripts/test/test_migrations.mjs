@@ -6,6 +6,7 @@ import {
   CURRENT_SCHEMA_VERSION,
   migrateProject,
 } from '../../src/store/projectMigrations.js';
+import { getBonePose } from '../../src/store/objectDataAccess.js';
 
 let passed = 0;
 let failed = 0;
@@ -661,8 +662,9 @@ function assertThrows(fn, name) {
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v17: schemaVersion bumped');
 
   const arm = p.nodes.find(n => n.id === 'bone-arm');
-  // Pose lifted out of transform.
-  assertEq(arm.pose, { rotation: 30, x: 10, y: 5, scaleX: 1.2, scaleY: 0.9 }, 'v17 arm: pose populated from legacy transform');
+  // Pose lifted out of transform. Read shape-agnostically so the
+  // assertion survives v19's pose channelisation (`pose.channels[id]`).
+  assertEq(getBonePose(arm), { rotation: 30, x: 10, y: 5, scaleX: 1.2, scaleY: 0.9 }, 'v17 arm: pose populated from legacy transform');
   // Transform pose-fields zeroed.
   assertEq(arm.transform.rotation, 0, 'v17 arm: transform.rotation zeroed');
   assertEq(arm.transform.x, 0, 'v17 arm: transform.x zeroed');
@@ -675,7 +677,7 @@ function assertThrows(fn, name) {
 
   const head = p.nodes.find(n => n.id === 'bone-head');
   // Already-rest bone gets identity pose (slot is established).
-  assertEq(head.pose, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, 'v17 head: identity pose initialized');
+  assertEq(getBonePose(head), { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, 'v17 head: identity pose initialized');
   assertEq(head.transform.pivotX, 400, 'v17 head: pivotX preserved');
 
   const folder = p.nodes.find(n => n.id === 'group-folder');
@@ -717,7 +719,7 @@ function assertThrows(fn, name) {
   };
   migrateProject(p);
   const b = p.nodes[0];
-  assertEq(b.pose.rotation, 22, 'v17 already-v17: pose.rotation preserved');
+  assertEq(getBonePose(b)?.rotation, 22, 'v17 already-v17: pose.rotation preserved');
   assertEq(b.transform.rotation, 0, 'v17 already-v17: transform.rotation stays 0');
 }
 

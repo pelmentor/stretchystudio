@@ -39,6 +39,7 @@ import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
+import { isBoneGroup } from '../../../store/objectDataAccess.js';
 import { filterOutlinerTree } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
 import * as SelectImpl from '../../../components/ui/select.jsx';
@@ -92,7 +93,7 @@ export function OutlinerEditor() {
   // Whether the project has any boneRole-tagged groups. Drives the
   // Skeleton-tab disabled state + the empty-state message.
   const hasArmature = useMemo(
-    () => nodes.some((n) => n?.type === 'group' && n?.boneRole),
+    () => nodes.some((n) => isBoneGroup(n)),
     [nodes],
   );
 
@@ -225,8 +226,7 @@ export function OutlinerEditor() {
       // Synthetic Armature drop: route to first top-level bone, or
       // drop to root if the dragged child is itself the first bone.
       if (newParentId === '__armature_root__') {
-        const isBone = child.type === 'group' && !!child.boneRole;
-        if (!isBone) return; // armature only owns bones
+        if (!isBoneGroup(child)) return; // armature only owns bones
         // For now, drop to root — the user can re-drop onto a specific
         // bone for nesting. Avoids guessing which top-level bone.
         reparentNode(childId, null);

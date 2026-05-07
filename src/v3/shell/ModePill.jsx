@@ -33,19 +33,32 @@ import { useEditorStore } from '../../store/editorStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import {
+  getMesh,
+  isMeshedPart,
+  isBoneGroup,
+  getDataKind,
+} from '../../store/objectDataAccess.js';
+import {
+  modeCompatTest,
+  MODE_EDIT_MESH,
+  MODE_POSE,
+  MODE_WEIGHT_PAINT,
+  MODE_BLEND_SHAPE,
+} from '../../modes/modeCompat.js';
 
 /** Resolve the active selection's project node + the modes it supports. */
 function describeSelection() {
   const active = useSelectionStore.getState().getActive();
-  if (!active) return { active: null, node: null, kind: 'none', hasWeights: false };
+  if (!active) return { active: null, node: null, kind: 'none', dataKind: null, hasWeights: false };
   const project = useProjectStore.getState().project;
   const node = project.nodes.find((n) => n.id === active.id) ?? null;
-  if (!node) return { active, node: null, kind: 'unknown', hasWeights: false };
+  if (!node) return { active, node: null, kind: 'unknown', dataKind: null, hasWeights: false };
   // V4 Phase 4b — meshed parts with bone-binding data (legacy
   // `boneWeights` / `jointBoneId` from auto-rig OR modern `weightGroups`)
   // qualify for Weight Paint. Surface as a separate flag so the
   // dropdown can enable Edit Mode AND Weight Paint independently.
-  const mesh = node?.mesh;
+  const mesh = getMesh(node, project);
   const hasWeights = !!(
     mesh && (
       mesh.boneWeights
@@ -53,9 +66,15 @@ function describeSelection() {
       || (mesh.weightGroups && Object.keys(mesh.weightGroups).length > 0)
     )
   );
-  if (active.type === 'part' && node.mesh) return { active, node, kind: 'meshedPart', hasWeights };
-  if (active.type === 'group' && node.boneRole) return { active, node, kind: 'boneGroup', hasWeights: false };
-  return { active, node, kind: 'other', hasWeights: false };
+  // Phase 2 — `dataKind` is the canonical Blender-shape classifier;
+  // `kind` is the legacy SS string kept for narrower copy switches
+  // (e.g. distinguishing "meshed yet?" from "is part?"). Both stay
+  // through the migration; `dataKind` drives modeCompatTest, `kind`
+  // drives ModePill's hint copy.
+  const dataKind = getDataKind(node, project);
+  if (isMeshedPart(node, project)) return { active, node, kind: 'meshedPart', dataKind, hasWeights };
+  if (isBoneGroup(node))           return { active, node, kind: 'boneGroup', dataKind, hasWeights: false };
+  return { active, node, kind: 'other', dataKind, hasWeights: false };
 }
 
 const MODE_META = {
@@ -107,7 +126,7 @@ export function ModePill() {
   // user picks a different node.
   useSelectionStore((s) => s.items);
 
-  const { active, node, kind, hasWeights } = describeSelection();
+  const { active, node, kind, dataKind, hasWeights } = describeSelection();
   const ensureWeightGroupsForPart = useProjectStore((s) => s.ensureWeightGroupsForPart);
 
   const meta = MODE_META[editMode ?? 'null'] ?? MODE_META.null;
@@ -202,11 +221,18 @@ export function ModePill() {
           icon={Pencil}
           label="Edit Mode"
           checked={editMode === 'mesh'}
-          disabled={kind !== 'meshedPart'}
+          disabled={!modeCompatTest(dataKind, MODE_EDIT_MESH)}
           hint={
             kind === 'meshedPart'
               ? 'Edit vertex positions / UVs of the selected part'
-              : 'Select a meshed part to enter Edit Mode'
+              : kind === 'boneGroup'
+                // Edit Mode is mesh-only post-consolidation (9df561f).
+                // Bones edit through Pose Mode now (Apply Pose As Rest
+                // bakes pose → rest), so direct the user there rather
+                // than saying "select a meshed part" which they didn't
+                // ask to do.
+                ? 'Edit Mode is for meshes — use Pose Mode for bones'
+                : 'Select a meshed part to enter Edit Mode'
           }
           onSelect={enterMesh}
         />
@@ -214,7 +240,7 @@ export function ModePill() {
           icon={Bone}
           label="Pose Mode"
           checked={editMode === 'skeleton'}
-          disabled={kind !== 'boneGroup'}
+          disabled={!modeCompatTest(dataKind, MODE_POSE)}
           hint={
             kind === 'boneGroup'
               ? 'Pose bones — drag joints / rotate. Writes to node.pose.*. Apply Pose As Rest available.'
@@ -226,7 +252,7 @@ export function ModePill() {
           icon={Brush}
           label="Weight Paint"
           checked={editMode === 'weightPaint'}
-          disabled={kind !== 'meshedPart' || !hasWeights}
+          disabled={!modeCompatTest(dataKind, MODE_WEIGHT_PAINT) || !hasWeights}
           hint={
             kind !== 'meshedPart'
               ? 'Select a meshed part to paint weights'

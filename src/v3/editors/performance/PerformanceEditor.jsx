@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Activity } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 export function PerformanceEditor() {
   const project = useProjectStore((s) => s.project);
@@ -176,8 +177,9 @@ function collectStats(project, rigSpec) {
   let heaviestVerts = 0;
   for (const node of project.nodes ?? []) {
     if (node.type !== 'part') continue;
-    const verts = node.mesh?.vertices?.length ?? 0;
-    const tris = node.mesh?.triangles ? node.mesh.triangles.length / 3 : 0;
+    const mesh = getMesh(node, project);
+    const verts = mesh?.vertices?.length ?? 0;
+    const tris = mesh?.triangles ? mesh.triangles.length / 3 : 0;
     vertCount += verts;
     triCount += tris;
     if (verts > heaviestVerts) {

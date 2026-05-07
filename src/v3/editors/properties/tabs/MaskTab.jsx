@@ -22,6 +22,7 @@ import { Layers, Plus, X } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
 import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
+import { getMesh, isMeshedPart } from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -78,8 +79,9 @@ export function MaskTab({ nodeId }) {
       proj.maskConfigs = (proj.maskConfigs ?? []).filter((c) => (c.maskMeshIds ?? []).length > 0);
       // Also clean legacy node-level reference.
       const n = proj.nodes.find((nn) => nn.id === nodeId);
-      if (n?.mesh?.maskMeshIds) {
-        n.mesh.maskMeshIds = n.mesh.maskMeshIds.filter((id) => id !== mid);
+      const nMesh = getMesh(n, proj);
+      if (nMesh?.maskMeshIds) {
+        nMesh.maskMeshIds = nMesh.maskMeshIds.filter((id) => id !== mid);
       }
     });
   }
@@ -87,7 +89,7 @@ export function MaskTab({ nodeId }) {
   // Candidates for adding: every other meshed part not already a mask.
   const usedMaskIds = new Set(masks.map((m) => m.id));
   const candidates = project.nodes
-    .filter((n) => n.type === 'part' && n.id !== nodeId && n.mesh && !usedMaskIds.has(n.id))
+    .filter((n) => isMeshedPart(n, project) && n.id !== nodeId && !usedMaskIds.has(n.id))
     .map((n) => ({ id: n.id, name: n.name ?? n.id }));
 
   return (
@@ -175,7 +177,8 @@ function collectMasks(project, maskedId) {
   }
   // Legacy: node.mesh.maskMeshIds
   const node = project.nodes.find((n) => n.id === maskedId);
-  for (const mid of node?.mesh?.maskMeshIds ?? []) {
+  const nodeMesh = getMesh(node, project);
+  for (const mid of nodeMesh?.maskMeshIds ?? []) {
     const n = project.nodes.find((nn) => nn.id === mid);
     if (n) out.set(n.id, { id: n.id, name: n.name ?? n.id });
   }
@@ -197,7 +200,8 @@ function collectMaskedBy(project, maskId) {
   }
   for (const n of project.nodes ?? []) {
     if (n.type !== 'part') continue;
-    if ((n.mesh?.maskMeshIds ?? []).includes(maskId)) {
+    const m = getMesh(n, project);
+    if ((m?.maskMeshIds ?? []).includes(maskId)) {
       out.set(n.id, { id: n.id, name: n.name ?? n.id });
     }
   }

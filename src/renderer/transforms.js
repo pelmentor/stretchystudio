@@ -10,6 +10,8 @@
  *  [2]   [5]   [8]   row 2
  */
 
+import { isBoneGroup } from '../store/objectDataAccess.js';
+
 /** Identity matrix */
 export function mat3Identity() {
   return new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
@@ -149,7 +151,7 @@ export function computeWorldMatrices(nodes) {
 
   function resolve(node) {
     if (worldMap.has(node.id)) return worldMap.get(node.id);
-    const isBone = node.type === 'group' && !!node.boneRole;
+    const isBone = isBoneGroup(node);
     const local = isBone
       ? makeBoneLocalMatrix(node.transform, node.pose)
       : makeLocalMatrix(node.transform);

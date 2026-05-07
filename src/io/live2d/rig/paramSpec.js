@@ -14,6 +14,7 @@
  */
 import { variantParamId, matchTag } from '../../psdOrganizer.js';
 import { sanitisePartName } from '../../../lib/partId.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {Object} ParamSpec
@@ -308,6 +309,9 @@ export function buildParameterSpec(input = {}) {
     for (const g of groups) {
       if (!g?.id) continue;
       if (seenBones.has(g.id)) continue;       // bones got bone params above
+      // `groups` here is a lite shape `{id, name, boneRole}` — not a full
+      // project node — so we read `boneRole` directly rather than going
+      // through `getBoneRole(node)` (which gates on `type === 'group'`).
       if (g.boneRole && SKIP_ROTATION_ROLES.has(g.boneRole)) continue;
       // PP2-005 — same heuristic name filter as the bone-param pass above.
       if (subsystems) {
@@ -367,7 +371,7 @@ export function indexParamSpec(specs) {
  */
 export function seedParameters(project, mode = 'replace') {
   const meshNodes = (project.nodes ?? []).filter(
-    (n) => n.type === 'part' && n.mesh && n.visible !== false
+    (n) => n.type === 'part' && getMesh(n, project) && n.visible !== false
   );
   const groupNodes = (project.nodes ?? []).filter((n) => n.type === 'group');
 
@@ -403,13 +407,16 @@ export function seedParameters(project, mode = 'replace') {
 
   const spec = buildParameterSpec({
     baseParameters: [],
-    meshes: meshNodes.map((n) => ({
-      tag: n.tag ?? matchTag(n.name ?? ''),
-      variantSuffix: n.variantSuffix ?? null,
-      variantRole: n.variantRole ?? null,
-      jointBoneId: n.mesh?.jointBoneId ?? null,
-      boneWeights: n.mesh?.boneWeights ?? null,
-    })),
+    meshes: meshNodes.map((n) => {
+      const m = getMesh(n, project);
+      return {
+        tag: n.tag ?? matchTag(n.name ?? ''),
+        variantSuffix: n.variantSuffix ?? null,
+        variantRole: n.variantRole ?? null,
+        jointBoneId: m?.jointBoneId ?? null,
+        boneWeights: m?.boneWeights ?? null,
+      };
+    }),
     groups: groupNodes,
     generateRig: true,
     subsystems,

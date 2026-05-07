@@ -19,9 +19,13 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
-import { synthesizeDeformerNodesFromSidetables } from './deformerNodeSync.js';
+import { synthesizeDeformerNodesFromSidetables, synthesizeModifierStacks } from './deformerNodeSync.js';
+import { migrateModifierModeFlags } from './migrations/v21_modifier_mode_flags.js';
+import { migrateNodeTreeRigTree } from './migrations/v22_nodetree_rigtree.js';
+import { migrateNodeTreeDriverTree } from './migrations/v23_nodetree_drivertree.js';
+import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animationtree.js';
 
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 24;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -300,6 +304,303 @@ const MIGRATIONS = {
     delete project.faceParallax;
     delete project.bodyWarp;
     delete project.rigWarps;
+    return project;
+  },
+
+  // v20 — Blender Parity Refactor Phase 3: per-Object modifier stack.
+  //
+  // Pre-v20 each part's modifier chain was an implicit walk through the
+  // deformer-node tree: `part.rigParent` → `deformer.parent` → ... up
+  // to root. That works at evaluation time but it's not the Blender
+  // shape, where each Object carries an explicit ordered
+  // `Object.modifiers[]` list (`ListBase<ModifierData>` in DNA).
+  //
+  // v20 derives the explicit per-part modifier stack as a forward-
+  // compatible storage flip. Today's chainEval still walks the tree;
+  // this migration just materialises the stack so:
+  //   - future readers (modifier-stack UI, Cycles-style stack-evaluator)
+  //     can iterate without re-walking
+  //   - the data model matches Blender's per-Object stack convention
+  //
+  // Each modifier record on `part.modifiers[]` carries:
+  //   - `type`: matches `deformer.deformerKind` ('warp' | 'rotation')
+  //   - `deformerId`: pointer to the deformer node holding the actual data
+  //   - `enabled`: true (Blender ModifierData has per-modifier disable;
+  //     SS doesn't expose per-warp disable in the chain today, so this
+  //     is reserved)
+  //
+  // Lossless and idempotent — derives from `part.rigParent` + deformer
+  // parent links, replaces any prior `part.modifiers` value, drops the
+  // field entirely when the stack would be empty (sparse JSON).
+  20: (project) => {
+    synthesizeModifierStacks(project);
+    return project;
+  },
+
+  // v21 — Blender Parity V2 Phase 0.1: modifier mode flags + body-warp
+  // fallback. Extends every modifier record with `{mode, enabled,
+  // showInEditor}` per `DNA_modifier_types.h:131-144`, and writes a
+  // synthetic body-warp modifier into every part that today rides the
+  // body-warp chain implicitly (no `rigParent`). The synthetic insert
+  // closes the gap that the V2 depgraph kernel (Phase D-3a) would
+  // otherwise see — it iterates `Object.modifiers[]` and would silently
+  // drop body-driven parts.
+  //
+  // See `src/store/migrations/v21_modifier_mode_flags.js` for the body
+  // of the migration and the exact mode-bitmask values.
+  21: (project) => {
+    migrateModifierModeFlags(project);
+    return project;
+  },
+
+  // v22 — Blender Parity V2 Phase N-1: RigTree datablock migration.
+  // Lifts every part's `modifiers[]` into a derived `RigTree` stored
+  // on `project.nodeTrees.rig[partId]`. Modifier stack stays canonical
+  // for one release; the tree is the dual-write shadow rendered by
+  // the Phase N-4 visual editor.
+  //
+  // See `src/store/migrations/v22_nodetree_rigtree.js`.
+  22: (project) => {
+    migrateNodeTreeRigTree(project);
+    return project;
+  },
+
+  // v23 — Blender Parity V2 Phase N-2: DriverTree datablock migration.
+  // Lifts every parameter's `driver` record into a derived
+  // `DriverTree` stored on `project.nodeTrees.driver[paramId]`. The
+  // compile pass parses the scripted-driver expression into a Math /
+  // Compare / Constant / ParamInput / DriverOutput subgraph. Unparseable
+  // expressions fall back to a single `ScriptedExpression` node that
+  // wraps `evaluateDriver`.
+  //
+  // See `src/store/migrations/v23_nodetree_drivertree.js`.
+  23: (project) => {
+    migrateNodeTreeDriverTree(project);
+    return project;
+  },
+
+  // v24 — Blender Parity V2 Phase N-3: AnimationTree datablock
+  // migration. Lifts every animation clip into an `AnimationTree`
+  // stored on `project.nodeTrees.animation[clipId]`. Each tree has
+  // one `FCurveStrip` per track + a `TimelineOutput` sink.
+  //
+  // See `src/store/migrations/v24_nodetree_animationtree.js`.
+  24: (project) => {
+    migrateNodeTreeAnimationTree(project);
+    return project;
+  },
+
+  // v19 — Blender Parity Refactor Phase 1C: bone-as-Armature split.
+  //
+  // Pre-v19 every bone was a flat `group + boneRole` node carrying its
+  // own `transform.pivotX/pivotY` (the rest pivot) and inline `pose`
+  // (the user's pose deltas). That conflates the Blender notion of
+  // `Armature` (the data block holding rest hierarchy) with `Object`
+  // (the transform container) AND mixes rest data with pose deltas at
+  // the field level on the same node.
+  //
+  // v19 splits each cluster of `group + boneRole` nodes into:
+  //   - One `meshData`-style data node per top-level bone tree,
+  //     `{type: 'armatureData', id: '<treeRootId>__armature', bones: BoneRecord[]}`.
+  //     Each `BoneRecord` carries `{id, name, role, parent, restPivot}` —
+  //     that is, the REST data only. Pose data lives on the corresponding
+  //     `Object` (the bone group node, type stays 'group') in
+  //     `node.pose.channels` keyed by bone id (replacing today's flat
+  //     `node.pose`).
+  //   - The original bone-group node KEEPS `type: 'group', boneRole`
+  //     for backward compat — readers haven't migrated to look up bones
+  //     via the armature data block yet. The new `dataId` pointer on
+  //     the TOP-LEVEL bone of each tree links to the synthesised
+  //     `armatureData` node so `getArmature(project)` can resolve via
+  //     it. Lower bones still discover via their own boneRole field.
+  //
+  // This is **forward-compat only**: helpers (`getArmature`,
+  // `getBoneByRole`, `getBoneByName`, `getBonesIn`, `getBonePose`,
+  // `getBoneRestPivot`) are already v17/v18-shape aware and will be
+  // updated to read v19 shape post-migration. Schema migration runs
+  // ONLY when CURRENT_SCHEMA_VERSION reaches 19, which this session
+  // doesn't do — the migration is registered for the gated rollout.
+  //
+  // # Design notes
+  //
+  // - Today's `node.pose` (flat) carries one PoseChannel-equivalent per
+  //   bone group. Migration aggregates them into the Object's
+  //   `pose.channels: {[boneId]: {rotation, x, y, scaleX, scaleY}}`
+  //   sub-object. Today the Object IS the bone-group, so each Object
+  //   has at most one channel; post-flip the multi-bone Object will
+  //   carry one channel per bone in its armature.
+  // - Idempotent: skips bones already migrated (data node exists).
+  // - Lossless: every field on the legacy bone-group migrates
+  //   verbatim. Rest pivot stays on `node.transform.pivotX/pivotY` for
+  //   one release (until the bone-group → Object proper rewrite ships
+  //   in a follow-up phase) so Phase 1C-flip readers can still find
+  //   them; the new `armatureData.bones[].restPivot` is the canonical
+  //   destination.
+  19: (project) => {
+    if (!Array.isArray(project.nodes)) return project;
+    const existingIds = new Set();
+    for (const n of project.nodes) {
+      if (n?.id) existingIds.add(n.id);
+    }
+    // Find top-level bone groups (parent is null OR parent is a non-bone).
+    // Each top-level bone defines an armature tree.
+    /** @type {Array<object>} */
+    const topLevelBones = [];
+    /** @type {Set<string>} */
+    const boneIds = new Set();
+    for (const n of project.nodes) {
+      if (!n || n.type !== 'group' || !n.boneRole) continue;
+      boneIds.add(n.id);
+    }
+    for (const n of project.nodes) {
+      if (!boneIds.has(n.id)) continue;
+      const parentIsBone = n.parent && boneIds.has(n.parent);
+      if (!parentIsBone) topLevelBones.push(n);
+    }
+    if (topLevelBones.length === 0) return project;
+
+    /** @type {Array<object>} */
+    const newDataNodes = [];
+    /**
+     * Walk the bone subtree rooted at `root` and return a flat list of
+     * BoneRecord entries (rest data only).
+     */
+    const collectBones = (root) => {
+      /** @type {Array<{id:string, name:string, role:string|null, parent:string|null, restPivot:{x:number, y:number}}>} */
+      const out = [];
+      const stack = [root];
+      while (stack.length > 0) {
+        const cur = stack.pop();
+        const t = cur.transform ?? null;
+        out.push({
+          id: cur.id,
+          name: cur.name ?? cur.id,
+          role: cur.boneRole ?? null,
+          parent: (cur.parent && boneIds.has(cur.parent)) ? cur.parent : null,
+          restPivot: { x: t?.pivotX ?? 0, y: t?.pivotY ?? 0 },
+        });
+        for (const child of project.nodes) {
+          if (child.parent === cur.id && boneIds.has(child.id)) {
+            stack.push(child);
+          }
+        }
+      }
+      return out;
+    };
+
+    for (const root of topLevelBones) {
+      // Skip already-migrated trees — top-level bone has dataId set
+      // and a matching `armatureData` node exists.
+      if (typeof root.dataId === 'string' && existingIds.has(root.dataId)) continue;
+      let dataId = `${root.id}__armature`;
+      if (existingIds.has(dataId)) {
+        let i = 2;
+        while (existingIds.has(`${root.id}__armature${i}`)) i++;
+        dataId = `${root.id}__armature${i}`;
+      }
+      existingIds.add(dataId);
+      const bones = collectBones(root);
+      newDataNodes.push({
+        id: dataId,
+        type: 'armatureData',
+        bones,
+      });
+      root.dataId = dataId;
+    }
+
+    // Migrate flat `node.pose` → `Object.pose.channels[boneId]` shape on
+    // every bone group. Today each bone-group node IS the Object that
+    // owns the pose for itself, so `pose.channels` carries exactly one
+    // entry keyed by the same node's id. The next-phase rewrite will
+    // collapse these into per-armature-Object channel maps.
+    for (const n of project.nodes) {
+      if (!boneIds.has(n.id)) continue;
+      const flatPose = n.pose;
+      if (flatPose && typeof flatPose === 'object' && !flatPose.channels) {
+        n.pose = {
+          channels: { [n.id]: flatPose },
+        };
+      }
+    }
+
+    if (newDataNodes.length > 0) {
+      project.nodes.push(...newDataNodes);
+    }
+    return project;
+  },
+
+  // v18 — Blender Parity Refactor Phase 1: Object / ObjectData split for
+  // meshes (bone armature split deferred to Phase 1C).
+  //
+  // Pre-v18 every `part` node carried its mesh payload inline as
+  // `node.mesh = { vertices, uvs, triangles, edgeIndices, blendShapes?,
+  // blendShapeValues?, boneWeights?, jointBoneId?, weightGroups?, ... }`.
+  // That conflates the Blender notion of `Object` (transform + draw_order
+  // container) with `ObjectData` (the geometry payload), which blocks
+  // multi-object edit, instancing, and clean modifier-stack semantics.
+  //
+  // v18 splits each part with mesh data into TWO nodes:
+  //   - The `part` node keeps its `id, type, name, parent, transform,
+  //     draw_order, opacity, visible, clip_mask, blendShapes,
+  //     blendShapeValues, ...` (everything that's container-y), gains a
+  //     new `dataId: '<meshData-id>'` pointer, and DROPS its inline
+  //     `node.mesh`.
+  //   - A new `{type: 'meshData', id: '<part-id>__data', ...}` node holds
+  //     the geometry payload (vertices, uvs, triangles, edgeIndices,
+  //     boneWeights, jointBoneId, weightGroups, activeWeightGroup,
+  //     maskMeshIds, textureId).
+  //
+  // Idempotent: skips parts that already carry `dataId` and a matching
+  // `meshData` node. Lossless for the migrated fields — every field on
+  // the old `node.mesh` lands on the new data node verbatim.
+  //
+  // Reader contract: `getMesh(node, project)` resolves either shape — if
+  // `node.dataId` is set and a matching `meshData` node exists, return
+  // it; otherwise fall back to `node.mesh`. Callers don't change.
+  //
+  // Bones (`group + boneRole`) are NOT migrated to Armature shape in
+  // v18 — that's deferred to Phase 1C because it touches every bone
+  // hit-test, pose write, SkeletonOverlay drag, and rig-pipeline reader,
+  // and warrants its own schema bump + dedicated round-trip sweep.
+  18: (project) => {
+    if (!Array.isArray(project.nodes)) return project;
+    const existingIds = new Set();
+    for (const n of project.nodes) {
+      if (n?.id) existingIds.add(n.id);
+    }
+    /** @type {Array<object>} */
+    const newDataNodes = [];
+    for (const node of project.nodes) {
+      if (!node || node.type !== 'part') continue;
+      // Skip already-migrated parts.
+      if (typeof node.dataId === 'string' && existingIds.has(node.dataId)) continue;
+      const mesh = node.mesh;
+      if (!mesh || typeof mesh !== 'object') continue;
+      // Pick a stable id for the data node. Suffix `__data` is reserved
+      // for migrated meshData entries; collision-defend by appending an
+      // index if the id is already taken (e.g. user-named node landed on
+      // the suffix).
+      let dataId = `${node.id}__data`;
+      if (existingIds.has(dataId)) {
+        let i = 2;
+        while (existingIds.has(`${node.id}__data${i}`)) i++;
+        dataId = `${node.id}__data${i}`;
+      }
+      existingIds.add(dataId);
+      // Hoist every property of the inline mesh to the new data node.
+      // Spread preserves Float32Array / Set / etc. references — JSON
+      // re-serialisation downstream handles encoding for save.
+      newDataNodes.push({
+        ...mesh,
+        id: dataId,
+        type: 'meshData',
+      });
+      node.dataId = dataId;
+      delete node.mesh;
+    }
+    if (newDataNodes.length > 0) {
+      project.nodes.push(...newDataNodes);
+    }
     return project;
   },
 

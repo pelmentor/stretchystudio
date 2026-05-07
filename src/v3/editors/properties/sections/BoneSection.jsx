@@ -14,6 +14,7 @@
 import { Bone } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
+import { isBoneGroup, getBoneRole } from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -24,12 +25,12 @@ export function BoneSection({ nodeId }) {
     s.project.nodes.find((n) => n.id === nodeId) ?? null,
   );
 
-  if (!node || node.type !== 'group' || !node.boneRole) return null;
+  if (!isBoneGroup(node)) return null;
 
   return (
     <SectionShell id="bone" label="Bone" icon={<Bone size={11} />}>
       <Row label="Role">
-        <code className="text-xs text-foreground">{node.boneRole}</code>
+        <code className="text-xs text-foreground">{getBoneRole(node)}</code>
       </Row>
       {typeof node.boneSegmentIndex === 'number' ? (
         <Row label="Segment">

@@ -18,6 +18,8 @@
  * @module io/exportValidation
  */
 
+import { getMesh } from '../store/objectDataAccess.js';
+
 /**
  * @typedef {Object} ValidationIssue
  * @property {string} code
@@ -63,7 +65,8 @@ export function validateProjectForExport(project) {
 
   // ── Per-part geometry checks ─────────────────────────────────────
   for (const p of parts) {
-    if (!p.mesh || !Array.isArray(p.mesh.vertices) || p.mesh.vertices.length < 3) {
+    const pMesh = getMesh(p, project);
+    if (!pMesh || !Array.isArray(pMesh.vertices) || pMesh.vertices.length < 3) {
       errors.push({
         code: 'PART_NO_MESH',
         level: 'error',
@@ -72,7 +75,7 @@ export function validateProjectForExport(project) {
       });
       continue;
     }
-    if (!Array.isArray(p.mesh.triangles) || p.mesh.triangles.length === 0) {
+    if (!Array.isArray(pMesh.triangles) || pMesh.triangles.length === 0) {
       errors.push({
         code: 'PART_NO_TRIS',
         level: 'error',
@@ -80,7 +83,7 @@ export function validateProjectForExport(project) {
         nodeId: p.id,
       });
     }
-    if (!p.mesh.uvs || p.mesh.uvs.length !== p.mesh.vertices.length) {
+    if (!pMesh.uvs || pMesh.uvs.length !== pMesh.vertices.length) {
       warnings.push({
         code: 'PART_UV_LENGTH',
         level: 'warning',
@@ -88,7 +91,7 @@ export function validateProjectForExport(project) {
         nodeId: p.id,
       });
     }
-    if (!p.textureId && !p.mesh.textureId) {
+    if (!p.textureId && !pMesh.textureId) {
       warnings.push({
         code: 'PART_NO_TEXTURE',
         level: 'warning',
@@ -169,7 +172,7 @@ export function validateProjectForExport(project) {
   const textures = Array.isArray(project.textures) ? project.textures : [];
   const textureIds = new Set(textures.map((t) => t.id));
   for (const p of parts) {
-    const tid = p.textureId ?? p.mesh?.textureId;
+    const tid = p.textureId ?? getMesh(p, project)?.textureId;
     if (tid && !textureIds.has(tid)) {
       errors.push({
         code: 'TEXTURE_MISSING',

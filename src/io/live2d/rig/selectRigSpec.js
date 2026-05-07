@@ -45,6 +45,7 @@
 
 import { resolvePhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /** Reusable frozen empty arrays so the selector returns the same
  * objects across calls when a section has no data. Lets shallow-equal
@@ -413,13 +414,17 @@ function _computeRotationCanvasPivotAtRest(rotation, warpRest, rotationRest) {
  *     pass through).
  */
 function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, innermostBodyWarpId }) {
-  const parts = (project.nodes ?? []).filter((n) => n?.type === 'part' && n.mesh && Array.isArray(n.mesh.vertices) && n.mesh.vertices.length > 0);
+  const parts = (project.nodes ?? []).filter((n) => {
+    const m = getMesh(n, project);
+    return !!m && Array.isArray(m.vertices) && m.vertices.length > 0;
+  });
   if (parts.length === 0) return EMPTY_ARTMESHES;
   const out = [];
   for (const part of parts) {
-    const verts = part.mesh.vertices;
-    const tris = part.mesh.triangles ?? [];
-    const uvs = part.mesh.uvs ?? [];
+    const partMesh = getMesh(part, project);
+    const verts = partMesh.vertices;
+    const tris  = partMesh.triangles ?? [];
+    const uvs   = partMesh.uvs ?? [];
 
     let parentRef = { type: 'root', id: null };
     const targetParentId =

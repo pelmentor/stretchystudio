@@ -21,6 +21,7 @@ import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store
 import { computePoseOverrides, applyOverrideToNode, readPoseValue, writePoseValues } from '@/renderer/animationEngine';
 import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/transforms';
 import { beginBatch, endBatch } from '@/store/undoHistory';
+import { getMesh } from '@/store/objectDataAccess';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
@@ -118,10 +119,11 @@ export function GizmoOverlay() {
 
   function traverse(node) {
     if (node.type === 'part') {
-      if (node.mesh?.vertices) {
+      const nMesh = getMesh(node);
+      if (nMesh?.vertices) {
         // Use mesh vertices for bounding box
         const nwm = worldMap.get(node.id) ?? mat3Identity();
-        for (const v of node.mesh.vertices) {
+        for (const v of nMesh.vertices) {
           const wx = nwm[0] * v.x + nwm[3] * v.y + nwm[6];
           const wy = nwm[1] * v.x + nwm[4] * v.y + nwm[7];
           pushPoint(wx, wy);

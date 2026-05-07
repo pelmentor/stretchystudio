@@ -13,6 +13,7 @@
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { SectionShell } from './SectionShell.jsx';
+import { getMesh } from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -33,6 +34,8 @@ export function PartInfoSection({ nodeId }) {
     });
   }
 
+  const mesh = getMesh(node);
+
   return (
     <SectionShell id="partInfo" label="Part Info">
       <div className="flex items-center gap-2 text-xs h-7">
@@ -50,13 +53,13 @@ export function PartInfoSection({ nodeId }) {
       <div className="flex items-center gap-2 text-xs h-6">
         <span className="w-20 shrink-0 text-muted-foreground">Vertices</span>
         <span className="text-xs text-foreground tabular-nums">
-          {node.mesh?.vertices?.length ?? 0}
+          {mesh?.vertices?.length ?? 0}
         </span>
       </div>
       <div className="flex items-center gap-2 text-xs h-6">
         <span className="w-20 shrink-0 text-muted-foreground">Triangles</span>
         <span className="text-xs text-foreground tabular-nums">
-          {node.mesh?.triangles ? node.mesh.triangles.length / 3 : 0}
+          {mesh?.triangles ? mesh.triangles.length / 3 : 0}
         </span>
       </div>
     </SectionShell>

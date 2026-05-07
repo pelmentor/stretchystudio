@@ -24,6 +24,7 @@ import { resolvePhysicsRules } from '../../../../io/live2d/rig/physicsConfig.js'
 import { parsePhysics3Json } from '../../../../io/live2d/physics3jsonImport.js';
 import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
 import { runStage } from '../../../../services/RigService.js';
+import { getBoneRole } from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -120,7 +121,7 @@ function PhysicsTabBody({ node }) {
           <span className="text-xs text-foreground truncate">{groupName || '—'}</span>
         </Row>
         <Row label="Bone role">
-          <span className="text-xs font-mono text-foreground">{node.boneRole ?? '—'}</span>
+          <span className="text-xs font-mono text-foreground">{getBoneRole(node) ?? '—'}</span>
         </Row>
         <Row label="Rules">
           <span className="text-xs text-foreground tabular-nums">

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from './undoHistory.js';
+import { useParamValuesStore } from './paramValuesStore.js';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from './projectMigrations.js';
 import { seedParameters as seedParametersFn } from '../io/live2d/rig/paramSpec.js';
 import { seedMaskConfigs as seedMaskConfigsFn } from '../io/live2d/rig/maskConfigs.js';
@@ -29,10 +30,18 @@ import {
   applyWeightStroke,
 } from '../io/live2d/rig/meshSync.js';
 import {
+  getMesh,
+  isMeshedPart,
+  isBoneGroup,
+  setObjectMode,
+} from './objectDataAccess.js';
+import {
   rotationSpecToDeformerNode,
   warpSpecToDeformerNode,
   upsertDeformerNode,
   removeAllRotationDeformerNodes,
+  synthesizeModifierStacks,
+  synthesizeDeformerParents,
 } from './deformerNodeSync.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
@@ -285,9 +294,10 @@ export const useProjectStore = create((set, get) => {
   createBlendShape: (nodeId, name) => set(produce((state) => {
     state.hasUnsavedChanges = true;
     const node = state.project.nodes.find(n => n.id === nodeId);
-    if (!node || !node.mesh) return;
+    const mesh = getMesh(node, state.project);
+    if (!mesh) return;
     const id = uid();
-    const deltas = node.mesh.vertices.map(() => ({ dx: 0, dy: 0 }));
+    const deltas = mesh.vertices.map(() => ({ dx: 0, dy: 0 }));
     if (!node.blendShapes) node.blendShapes = [];
     if (!node.blendShapeValues) node.blendShapeValues = {};
     node.blendShapes.push({ id, name: name ?? 'Key', deltas });
@@ -551,10 +561,11 @@ export const useProjectStore = create((set, get) => {
   ensureWeightGroupsForPart: (partId) => set(produce((state) => {
     state.hasUnsavedChanges = true;
     const node = state.project.nodes.find((n) => n?.id === partId);
-    if (!node?.mesh) return;
+    const mesh = getMesh(node, state.project);
+    if (!mesh) return;
     const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-    if (ensureWeightGroups(node.mesh, boneGroups)) {
-      syncBoneWeightsFromActive(node.mesh, boneGroups);
+    if (ensureWeightGroups(mesh, boneGroups)) {
+      syncBoneWeightsFromActive(mesh, boneGroups);
     }
   })),
 
@@ -566,13 +577,47 @@ export const useProjectStore = create((set, get) => {
   setActiveWeightGroup: (partId, groupName) => set(produce((state) => {
     state.hasUnsavedChanges = true;
     const node = state.project.nodes.find((n) => n?.id === partId);
-    if (!node?.mesh) return;
+    const mesh = getMesh(node, state.project);
+    if (!mesh) return;
     const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-    ensureWeightGroups(node.mesh, boneGroups);
-    if (typeof groupName !== 'string' || !node.mesh.weightGroups?.[groupName]) return;
-    node.mesh.activeWeightGroup = groupName;
-    syncBoneWeightsFromActive(node.mesh, boneGroups);
+    ensureWeightGroups(mesh, boneGroups);
+    if (typeof groupName !== 'string' || !mesh.weightGroups?.[groupName]) return;
+    mesh.activeWeightGroup = groupName;
+    syncBoneWeightsFromActive(mesh, boneGroups);
   })),
+
+  /**
+   * Phase 2b storage flip — write the per-object `Object.mode` field on
+   * the named node (Blender-compatible per-object mode storage; today's
+   * `editorStore.editMode` slot remains the read source-of-truth, but
+   * this dual-write means project state carries the mode record so
+   * future readers can switch over without a data migration).
+   *
+   * Pass `null` to clear the field (= Object Mode, the default).
+   * Caller is editorStore's `enterEditMode` / `exitEditMode`. No-op when
+   * nodeId is missing, or when the node is gone (deleted between
+   * selection and call). Snapshots for undo via `projectMutator`-style
+   * inline ritual — the immer recipe pushes the snapshot before mutation.
+   *
+   * Note: this action does NOT bump versionControl counters because the
+   * Object.mode field doesn't influence geometry, params, or rig output;
+   * it's pure UI state mirrored into the project for persistence.
+   *
+   * @param {string|null} nodeId
+   * @param {*} mode  see modeCompat.js for valid values
+   */
+  setActiveObjectMode: (nodeId, mode) => {
+    if (typeof nodeId !== 'string' || nodeId.length === 0) return;
+    set((state) => {
+      if (!isBatching()) pushSnapshot(state.project);
+      return produce(state, (draft) => {
+        const node = draft.project.nodes.find((n) => n?.id === nodeId);
+        if (!node) return;
+        setObjectMode(node, mode);
+        draft.hasUnsavedChanges = true;
+      });
+    });
+  },
 
   /**
    * Apply a brush stroke's per-vertex updates to the active weight
@@ -586,10 +631,11 @@ export const useProjectStore = create((set, get) => {
     set(produce((state) => {
       state.hasUnsavedChanges = true;
       const node = state.project.nodes.find((n) => n?.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, state.project);
+      if (!mesh) return;
       const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-      ensureWeightGroups(node.mesh, boneGroups);
-      applyWeightStroke(node.mesh, updates, boneGroups);
+      ensureWeightGroups(mesh, boneGroups);
+      applyWeightStroke(mesh, updates, boneGroups);
       // NOTE: do NOT bump geometryVersion here. Weights are not geometry —
       // bumping it invalidates rigSpec on every paint commit, which makes
       // the live-preview physics tick rebuild physicsState every frame
@@ -687,7 +733,8 @@ export const useProjectStore = create((set, get) => {
     state.versionControl.geometryVersion++;
   })),
 
-  applyPoseAsRest: () => set(produce((state) => {
+  applyPoseAsRest: () => {
+    set(produce((state) => {
     const project = state.project;
     const nodes = project.nodes ?? [];
     if (nodes.length === 0) return;
@@ -699,7 +746,8 @@ export const useProjectStore = create((set, get) => {
     //    so this captures the cumulative transform in canvas-space.
     let bakedAnything = false;
     for (const n of nodes) {
-      if (n?.type !== 'part' || !n.mesh || !Array.isArray(n.mesh.vertices)) continue;
+      const nMesh = getMesh(n, project);
+      if (!isMeshedPart(n, project) || !nMesh || !Array.isArray(nMesh.vertices)) continue;
       const m = worldMap.get(n.id);
       if (!m) continue;
       // Skip if the matrix is identity — nothing to bake on this part.
@@ -708,7 +756,7 @@ export const useProjectStore = create((set, get) => {
         && Math.abs(m[3])     < 1e-6 && Math.abs(m[4] - 1) < 1e-6
         && Math.abs(m[6])     < 1e-6 && Math.abs(m[7])     < 1e-6;
       if (isIdentity) continue;
-      for (const v of n.mesh.vertices) {
+      for (const v of nMesh.vertices) {
         if (!v) continue;
         const rx = (typeof v.restX === 'number') ? v.restX : v.x;
         const ry = (typeof v.restY === 'number') ? v.restY : v.y;
@@ -731,7 +779,7 @@ export const useProjectStore = create((set, get) => {
     //    Therefore the new pivot in parent's frame = the pivot's
     //    canvas position with pre-bake poses.
     for (const n of nodes) {
-      if (n?.type !== 'group' || !n.boneRole) continue;
+      if (!isBoneGroup(n)) continue;
       const m = worldMap.get(n.id);
       if (!m) continue;
       // Apply the bone's WORLD matrix to its own pivot. The pivot is
@@ -750,7 +798,7 @@ export const useProjectStore = create((set, get) => {
 
     // 3. Zero all bone poses simultaneously.
     for (const n of nodes) {
-      if (n?.type !== 'group' || !n.boneRole) continue;
+      if (!isBoneGroup(n)) continue;
       if (!n.pose) {
         n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
       } else {
@@ -766,7 +814,14 @@ export const useProjectStore = create((set, get) => {
       state.versionControl.geometryVersion++;
     }
     state.hasUnsavedChanges = true;
-  })),
+    }));
+    // Bone-mirror sync: applyPoseAsRest just zeroed every bone's
+    // pose.rotation, but `paramValuesStore.values[ParamRotation_<bone>]`
+    // is a separate map kept consistent via the bone-mirror intercept.
+    // Direct bone mutations (like the produce block above) bypass the
+    // intercept, so we re-read the bones into the values map here.
+    useParamValuesStore.getState().syncFromProject();
+  },
 
   /** Reset project to empty state */
   resetProject: () => {
@@ -822,7 +877,7 @@ export const useProjectStore = create((set, get) => {
               orphans.push({ nodeId: n.id, parameterId: b.parameterId });
             }
           }
-        } else if (n?.type === 'part' && n.mesh?.vertices) {
+        } else if (n?.type === 'part' && getMesh(n, projectData)?.vertices) {
           partWithMeshCount++;
         }
       }
@@ -1178,6 +1233,19 @@ export const useProjectStore = create((set, get) => {
           return p._userAuthored === true;
         });
       }
+      // Phase 3 storage flip — re-derive each part's modifier stack
+      // after the full seed pass. The seedXxx fns each run synthesize
+      // individually, but NeckWarp + rotation deformer upserts happen
+      // AFTER seedRigWarps so the rigWarps' chain ancestors aren't
+      // visible at synthesize time. Re-run once at the end so every
+      // part's `Object.modifiers[]` reflects the final tree shape.
+      synthesizeModifierStacks(proj);
+      // V2 Phase 0.3 — modifier stacks are now canonical; parent-link
+      // shape (`deformer.parent` + `part.rigParent`) is a derived mirror
+      // for cmo3writer. Run inverse synth after every forward synth so
+      // any future caller can mutate stacks alone and trust the mirror
+      // to stay consistent. See `synthesizeDeformerParents` doc header.
+      synthesizeDeformerParents(proj);
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.
       // ISO timestamp; readable in logs / debug if needed.
@@ -1235,9 +1303,10 @@ export const useProjectStore = create((set, get) => {
     }
     const boneOrphans = [];
     for (const n of postSeedProject.nodes ?? []) {
-      if (n?.type !== 'part' || !n.mesh?.jointBoneId) continue;
-      if (!groupIds.has(n.mesh.jointBoneId)) {
-        boneOrphans.push({ partId: n.id, partName: n.name, jointBoneId: n.mesh.jointBoneId });
+      const m = getMesh(n, postSeedProject);
+      if (!m?.jointBoneId) continue;
+      if (!groupIds.has(m.jointBoneId)) {
+        boneOrphans.push({ partId: n.id, partName: n.name, jointBoneId: m.jointBoneId });
       }
     }
     if (boneOrphans.length > 0) {

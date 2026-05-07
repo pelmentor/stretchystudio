@@ -44,6 +44,8 @@
  * @module io/meshSignature
  */
 
+import { getMesh } from '../store/objectDataAccess.js';
+
 /**
  * @typedef {Object} MeshSignature
  *   Per-mesh fingerprint. Compares with `signaturesEqual`. Stable
@@ -136,8 +138,9 @@ export function computeProjectSignatures(project) {
   if (!project || !Array.isArray(project.nodes)) return out;
   for (const node of project.nodes) {
     if (!node || node.type !== 'part') continue;
-    if (!node.mesh) continue;
-    out[node.id] = meshSignature(node.mesh);
+    const mesh = getMesh(node, project);
+    if (!mesh) continue;
+    out[node.id] = meshSignature(mesh);
   }
   return out;
 }

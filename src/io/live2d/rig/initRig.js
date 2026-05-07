@@ -45,6 +45,7 @@ import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
 import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
 import { evalRig } from '../runtime/evaluator/chainEval.js';
+import { getBoneRole } from '../../../store/objectDataAccess.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = new Set(['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp']);
@@ -550,7 +551,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     id: g.id,
     name: g.name ?? g.id,
     parent: g.parent ?? null,
-    boneRole: g.boneRole ?? null,
+    boneRole: getBoneRole(g),
     transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
   }));
 

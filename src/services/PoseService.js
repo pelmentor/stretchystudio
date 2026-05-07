@@ -24,6 +24,11 @@ import { useProjectStore } from '../store/projectStore.js';
 import { useAnimationStore } from '../store/animationStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { logger } from '../lib/logger.js';
+import {
+  isBoneGroup,
+  getMesh,
+  getBonePose,
+} from '../store/objectDataAccess.js';
 
 /**
  * Animation-mode reset: clears the transient pose-edit overlay only.
@@ -77,8 +82,8 @@ export function capturePose() {
   const bonePoses = {};
   const proj = useProjectStore.getState().project;
   for (const n of proj?.nodes ?? []) {
-    if (n?.type !== 'group' || !n.boneRole) continue;
-    const p = n.pose;
+    if (!isBoneGroup(n)) continue;
+    const p = getBonePose(n);
     bonePoses[n.id] = {
       rotation: p?.rotation ?? 0,
       x:        p?.x ?? 0,
@@ -114,7 +119,7 @@ export function restorePose(snapshot) {
   // 3. Restore per-bone-group pose offsets (schema v17+).
   useProjectStore.getState().updateProject((p) => {
     for (const n of p.nodes ?? []) {
-      if (n?.type !== 'group' || !n.boneRole) continue;
+      if (!isBoneGroup(n)) continue;
       const saved = snapshot.bonePoses?.[n.id];
       if (!saved) continue;
       if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
@@ -154,7 +159,7 @@ export function resetToRestPose() {
     for (const n of p.nodes ?? []) {
       // Bone-group poses (schema v17+). Rest layout (pivot) is left
       // untouched — that's rig anatomy, not pose.
-      if (n?.type === 'group' && n.boneRole) {
+      if (isBoneGroup(n)) {
         if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
         else {
           n.pose.rotation = 0;
@@ -173,8 +178,9 @@ export function resetToRestPose() {
       // restX/restY — those define the rest pose itself, so a vert that's
       // BEEN edited in mesh-edit mode (where restX/restY updates alongside
       // x/y) is already at rest by definition.
-      if (n?.type === 'part' && n.mesh && Array.isArray(n.mesh.vertices)) {
-        for (const v of n.mesh.vertices) {
+      const mesh = getMesh(n, p);
+      if (mesh && Array.isArray(mesh.vertices)) {
+        for (const v of mesh.vertices) {
           if (!v) continue;
           if (typeof v.restX === 'number') v.x = v.restX;
           if (typeof v.restY === 'number') v.y = v.restY;

@@ -32,6 +32,16 @@ import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
+import {
+  getMesh,
+  getDataKind,
+} from '../../store/objectDataAccess.js';
+import {
+  modeCompatTest,
+  MODE_EDIT_MESH,
+  MODE_POSE,
+  MODE_WEIGHT_PAINT,
+} from '../../modes/modeCompat.js';
 
 /**
  * @typedef {Object} OperatorContext
@@ -459,38 +469,46 @@ function registerBuiltins() {
       const node = project.nodes.find((n) => n.id === active.id);
       if (!node) return;
 
-      if (active.type === 'part' && node.mesh) {
-        // Mesh edit needs the part selected in editorStore so scene
-        // dimming / brush / wireframe-on-selected pick it up. Sync
-        // selection from the universal store to the legacy string[]
-        // selection.
+      // Phase 2 — route mode entry through `modeCompatTest(dataKind, mode)`
+      // instead of the legacy `if (active.type === 'part') ...` chain. Adding
+      // a new editable data kind (e.g. an Armature Edit recovery, sculpt mode)
+      // becomes a one-line table edit in `src/modes/modeCompat.js`; this
+      // dispatcher picks it up automatically.
+      const dataKind = getDataKind(node, project);
+      const mesh = getMesh(node, project);
+
+      if (modeCompatTest(dataKind, MODE_EDIT_MESH) && mesh) {
+        // Mesh Edit Mode requires real mesh data (a meshed part). Pre-mesh
+        // PSD layers fall through to the no-edit-mode toast below.
         useEditorStore.getState().setSelection([active.id]);
         ed.enterEditMode('mesh');
-      } else if (active.type === 'part'
-                 && (node.mesh?.boneWeights || node.mesh?.jointBoneId
-                     || (node.mesh?.weightGroups && Object.keys(node.mesh.weightGroups).length > 0))) {
-        // V4 Phase 4b — Tab on a weight-bound part with no mesh
-        // (shouldn't really happen but defensive) goes to weight paint.
-        // The primary entry point for weight paint is the Vertex
-        // Groups section's "Edit Weights" button; Tab with mesh+weights
-        // still enters mesh edit per the branch above (Blender's pattern
-        // is one-mode-per-Tab, dedicated cycle for Weight Paint).
-        useEditorStore.getState().setSelection([active.id]);
-        useProjectStore.getState().ensureWeightGroupsForPart(active.id);
-        ed.enterEditMode('weightPaint');
-      } else if (active.type === 'group' && node.boneRole) {
+      } else if (modeCompatTest(dataKind, MODE_POSE)) {
         // Skeleton edit needs the overlay visible (drag targets are
         // the joint circles). Auto-enable rather than fail silently.
         if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
         ed.enterEditMode('skeleton');
+      } else if (modeCompatTest(dataKind, MODE_WEIGHT_PAINT)
+                 && (mesh?.boneWeights || mesh?.jointBoneId
+                     || (mesh?.weightGroups && Object.keys(mesh.weightGroups).length > 0))) {
+        // V4 Phase 4b — Tab on a weight-bound part with no mesh data falls
+        // here only when the mesh edit branch above was rejected. The primary
+        // entry point for weight paint is the Vertex Groups section's "Edit
+        // Weights" button; Tab with mesh+weights still enters mesh edit per
+        // the branch above (Blender's one-mode-per-Tab pattern, dedicated
+        // cycle for Weight Paint).
+        useEditorStore.getState().setSelection([active.id]);
+        useProjectStore.getState().ensureWeightGroupsForPart(active.id);
+        ed.enterEditMode('weightPaint');
       } else {
         toast({
           title: 'No edit mode for this selection',
-          description: active.type === 'part'
+          description: dataKind === 'mesh'
             ? 'This part has no mesh — generate one before entering Edit Mode.'
-            : active.type === 'group'
-              ? 'This group has no bone role — only bone-role groups support Skeleton Edit.'
-              : `Selection type "${active.type}" has no edit context.`,
+            : dataKind === 'empty'
+              ? 'Plain groups have no edit mode — bone-role groups enter Pose Mode.'
+              : dataKind === 'deformer'
+                ? 'Deformers are edited via the Properties panel, not Edit Mode.'
+                : `Selection type "${active.type}" has no edit context.`,
         });
       }
     },

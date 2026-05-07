@@ -56,6 +56,14 @@ import {
 import { hitTestParts } from '@/io/hitTest';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
+  isBoneGroup,
+  isMeshedPart,
+  getMesh,
+  setMesh,
+  clearMesh,
+  getBoneRole,
+} from '@/store/objectDataAccess';
+import {
   getOrBuildAdjacency,
   computeProportionalWeights,
   nextFalloff,
@@ -332,8 +340,9 @@ export default function CanvasViewport({
 
       // 2. Mesh Sync
       if (!scene.parts.hasMesh(node.id)) {
-        if (node.mesh) {
-          scene.parts.uploadMesh(node.id, node.mesh);
+        const nodeMesh = getMesh(node, project);
+        if (nodeMesh) {
+          scene.parts.uploadMesh(node.id, nodeMesh);
           isDirtyRef.current = true;
         } else if (node.imageWidth && node.imageHeight) {
           scene.parts.uploadQuadFallback(node.id, node.imageWidth, node.imageHeight);
@@ -452,7 +461,12 @@ export default function CanvasViewport({
             }
             valuesForEval = merged;
             if (Object.keys(updates).length > 0) {
-              useParamValuesStore.getState().setMany(updates);
+              // Animation playback: write to values map only; don't fan
+              // out to bone.pose.rotation. Per-frame projectStore churn
+              // would re-render every node-subscriber. Bone canonical
+              // truth lives in pose.rotation when user authors; playback
+              // just animates the deformer-facing param mirror.
+              useParamValuesStore.getState().setMany(updates, { skipBoneMirror: true });
               isDirtyRef.current = true;
             }
           }
@@ -571,7 +585,14 @@ export default function CanvasViewport({
         lastPhysicsTimestampRef.current = timestamp;
 
         if (Object.keys(updates).length > 0) {
-          useParamValuesStore.getState().setMany(updates);
+          // Live preview tick (physics + breath/look): write to values
+          // map only; skipBoneMirror so per-frame physics output doesn't
+          // mutate projectStore each frame and force every node-subscriber
+          // to re-render. Mesh deformation comes from chainEval reading
+          // the values map; bone visual handle stays at its authored
+          // pose, which is the right thing for runtime physics (it's
+          // not user authoring).
+          useParamValuesStore.getState().setMany(updates, { skipBoneMirror: true });
           isDirtyRef.current = true;
         }
       } else {
@@ -722,7 +743,7 @@ export default function CanvasViewport({
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) continue;
             const node = projectRef.current.nodes.find(n => n.id === f.id);
-            if (!node?.mesh) {
+            if (!getMesh(node, projectRef.current)) {
               // Phase -1D: log once per missing partId in dev so the
               // crisis class (frame.id ≠ any node.id) stops being
               // silent. Production builds skip without noise.
@@ -773,7 +794,7 @@ export default function CanvasViewport({
         // active because it reverts the rig deformation.
         const ed = editorRef.current;
         for (const node of projectRef.current.nodes) {
-          if (node.type !== 'part' || !node.mesh || !node.blendShapes?.length) continue;
+          if (!isMeshedPart(node, projectRef.current) || !node.blendShapes?.length) continue;
           const draft = anim.draftPose.get(node.id);
           const kfOv = poseOverrides?.get(node.id);
 
@@ -793,7 +814,7 @@ export default function CanvasViewport({
           if (!hasInfluence) continue;
 
           // Read current verts (rig-eval / draft / etc.) or fall back to rest.
-          const baseVerts = kfOv?.mesh_verts ?? node.mesh.vertices;
+          const baseVerts = kfOv?.mesh_verts ?? getMesh(node, projectRef.current).vertices;
           const blendedVerts = baseVerts.map((v, i) => {
             let bx = v.x ?? v.restX;
             let by = v.y ?? v.restY;
@@ -824,8 +845,9 @@ export default function CanvasViewport({
             if (!ov.mesh_verts) continue;
             newMeshOverridden.add(nodeId);
             const node = projectRef.current.nodes.find(n => n.id === nodeId);
-            if (node?.mesh) {
-              sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(node.mesh.uvs));
+            const m = getMesh(node, projectRef.current);
+            if (m) {
+              sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(m.uvs));
             }
           }
         }
@@ -833,8 +855,9 @@ export default function CanvasViewport({
           if (!newMeshOverridden.has(nodeId)) {
             // Override removed — restore base mesh from projectStore
             const node = projectRef.current.nodes.find(n => n.id === nodeId);
-            if (node?.mesh) {
-              sceneRef.current.parts.uploadPositions(nodeId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
+            const m = getMesh(node, projectRef.current);
+            if (m) {
+              sceneRef.current.parts.uploadPositions(nodeId, m.vertices, new Float32Array(m.uvs));
             }
           }
         }
@@ -1032,9 +1055,10 @@ export default function CanvasViewport({
       const extraIds = new Set();
       for (const selectedId of selectedIds) {
         const node = proj.nodes.find(n => n.id === selectedId);
-        if (node && JSKinningRoles.has(node.boneRole)) {
+        if (node && JSKinningRoles.has(getBoneRole(node))) {
           for (const pt of proj.nodes) {
-            if (pt.type === 'part' && pt.mesh?.jointBoneId === selectedId) {
+            const ptMesh = getMesh(pt, proj);
+            if (ptMesh?.jointBoneId === selectedId) {
               extraIds.add(pt.id);
             }
           }
@@ -1098,14 +1122,15 @@ export default function CanvasViewport({
           // Only create/update if the node actually has a mesh deform in draft,
           // or if a mesh_verts track already exists. This prevents accidental
           // mesh_verts keyframes from blocking blend shape animation.
-          if (node.type === 'part' && node.mesh) {
+          const nodeMesh = getMesh(node, p);
+          if (node.type === 'part' && nodeMesh) {
             const hasMeshDeform = draft?.mesh_verts !== undefined;
             let meshTrack = animation.tracks.find(t => t.nodeId === nodeId && t.property === 'mesh_verts');
 
             if (hasMeshDeform || meshTrack) {
               const meshVerts = draft?.mesh_verts
                 ?? kfValues?.mesh_verts
-                ?? node.mesh.vertices.map(v => ({ x: v.x, y: v.y }));
+                ?? nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
 
               const isNewMeshTrack = !meshTrack;
               if (!meshTrack) {
@@ -1115,7 +1140,7 @@ export default function CanvasViewport({
 
               // Auto-insert base-mesh keyframe at startFrame if this is the first keyframe
               if (isNewMeshTrack && currentTimeMs > startMs) {
-                const baseVerts = node.mesh.vertices.map(v => ({ x: v.x, y: v.y }));
+                const baseVerts = nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
                 upsertKeyframe(meshTrack.keyframes, startMs, baseVerts, 'linear');
               }
 
@@ -1187,16 +1212,17 @@ export default function CanvasViewport({
             node.blendShapeValues = {};
           }
 
-          node.mesh = { vertices, uvs: Array.from(uvs), triangles, edgeIndices };
+          setMesh(node, { vertices, uvs: Array.from(uvs), triangles, edgeIndices }, proj);
 
           // Compute skin weights if this part belongs to a limb.
           const parentGroup = proj.nodes.find(n => n.id === node.parent);
-          const childRole = childBoneRoleFor(parentGroup?.boneRole);
+          const childRole = childBoneRoleFor(getBoneRole(parentGroup));
           if (childRole && parentGroup) {
-            const jointBone = proj.nodes.find(n => n.parent === parentGroup.id && n.boneRole === childRole);
-            if (jointBone) {
-              node.mesh.boneWeights = computeSkinWeights(vertices, parentGroup, jointBone);
-              node.mesh.jointBoneId = jointBone.id;
+            const jointBone = proj.nodes.find(n => n.parent === parentGroup.id && getBoneRole(n) === childRole);
+            const newMesh = getMesh(node, proj);
+            if (jointBone && newMesh) {
+              newMesh.boneWeights = computeSkinWeights(vertices, parentGroup, jointBone);
+              newMesh.jointBoneId = jointBone.id;
               console.log(`[Skinning] ${node.name} → ${childRole} (${vertices.length} verts)`);
             }
           }
@@ -1245,7 +1271,7 @@ export default function CanvasViewport({
   /* ── Auto-mesh all unmeshed parts with smart sizing ─────────────────────── */
   const autoMeshAllParts = useCallback(() => {
     const proj = projectRef.current;
-    const parts = proj.nodes.filter(n => n.type === 'part' && !n.mesh);
+    const parts = proj.nodes.filter(n => n.type === 'part' && !getMesh(n, proj));
     for (const node of parts) {
       const opts = computeSmartMeshOpts(node.imageBounds);
       remeshPart(node.id, opts);
@@ -1260,7 +1286,7 @@ export default function CanvasViewport({
     // Clear mesh from project store
     updateProject((p) => {
       const n = p.nodes.find(x => x.id === partId);
-      if (n) n.mesh = null;
+      if (n) clearMesh(n, p);
     });
   }, [updateProject]);
 
@@ -1487,8 +1513,9 @@ export default function CanvasViewport({
         if (images.has(node.id)) {
           sceneRef.current?.parts.uploadTexture(node.id, images.get(node.id));
         }
-        if (node.mesh) {
-          sceneRef.current?.parts.uploadMesh(node.id, node.mesh);
+        const loadedMesh = getMesh(node, loadedProject);
+        if (loadedMesh) {
+          sceneRef.current?.parts.uploadMesh(node.id, loadedMesh);
         } else if (node.imageWidth && node.imageHeight) {
           sceneRef.current?.parts.uploadQuadFallback(node.id, node.imageWidth, node.imageHeight);
         }
@@ -1791,7 +1818,7 @@ export default function CanvasViewport({
     // select doesn't fight for the same gesture. In Object Mode, the
     // overlay only claims its own painted handles via stopPropagation,
     // so clicks elsewhere fall through to click-to-select below.
-    const hasArmature = proj.nodes.some(n => n.type === 'group' && n.boneRole);
+    const hasArmature = proj.nodes.some(n => isBoneGroup(n));
     if (editorRef.current.editMode === 'skeleton' && hasArmature) return;
 
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
@@ -1842,21 +1869,22 @@ export default function CanvasViewport({
     const meshEditActive = editMode === 'mesh' || editMode === 'blendShape';
     const currentSelection = editorRef.current.selection ?? [];
     if (meshEditActive && currentSelection.length > 0) {
-      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && n.type === 'part' && n.mesh);
-      if (selNode) {
+      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
+      const selMesh = selNode ? getMesh(selNode, proj) : null;
+      if (selNode && selMesh) {
         const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
         const iwm = mat3Inverse(wm);
         const [lx, ly] = worldToLocal(worldX, worldY, iwm);
 
         if (toolMode === 'add_vertex') {
           // Compute new mesh data first, then upload and persist atomically
-          const newVerts = [...selNode.mesh.vertices, { x: lx, y: ly, restX: lx, restY: ly }];
-          const oldUvs = selNode.mesh.uvs;
+          const newVerts = [...selMesh.vertices, { x: lx, y: ly, restX: lx, restY: ly }];
+          const oldUvs = selMesh.uvs;
           const newUvs = new Float32Array(oldUvs.length + 2);
           newUvs.set(oldUvs);
           newUvs[oldUvs.length] = lx / (selNode.imageWidth ?? 1);
           newUvs[oldUvs.length + 1] = ly / (selNode.imageHeight ?? 1);
-          const result = retriangulate(newVerts, newUvs, selNode.mesh.edgeIndices);
+          const result = retriangulate(newVerts, newUvs, selMesh.edgeIndices);
 
           // Upload to GPU immediately (no stale ref)
           sceneRef.current?.parts.uploadMesh(selNode.id, {
@@ -1870,22 +1898,23 @@ export default function CanvasViewport({
           // Persist to store
           updateProject((proj2) => {
             const node = proj2.nodes.find(n => n.id === selNode.id);
-            if (!node?.mesh) return;
-            node.mesh.vertices = result.vertices;
-            node.mesh.uvs = Array.from(result.uvs);
-            node.mesh.triangles = result.triangles;
+            const m = getMesh(node, proj2);
+            if (!m) return;
+            m.vertices = result.vertices;
+            m.uvs = Array.from(result.uvs);
+            m.triangles = result.triangles;
           });
 
         } else if (toolMode === 'remove_vertex') {
-          const idx = findNearestVertex(selNode.mesh.vertices, lx, ly, 14 / view.zoom);
-          if (idx >= 0 && selNode.mesh.vertices.length > 3) {
+          const idx = findNearestVertex(selMesh.vertices, lx, ly, 14 / view.zoom);
+          if (idx >= 0 && selMesh.vertices.length > 3) {
             // Compute new mesh data first
-            const newVerts = selNode.mesh.vertices.filter((_, i) => i !== idx);
-            const oldUvs = selNode.mesh.uvs;
+            const newVerts = selMesh.vertices.filter((_, i) => i !== idx);
+            const oldUvs = selMesh.uvs;
             const newUvs = new Float32Array(oldUvs.length - 2);
             for (let i = 0; i < idx; i++) { newUvs[i * 2] = oldUvs[i * 2]; newUvs[i * 2 + 1] = oldUvs[i * 2 + 1]; }
             for (let i = idx; i < newVerts.length; i++) { newUvs[i * 2] = oldUvs[(i + 1) * 2]; newUvs[i * 2 + 1] = oldUvs[(i + 1) * 2 + 1]; }
-            const oldEdge = selNode.mesh.edgeIndices ?? new Set();
+            const oldEdge = selMesh.edgeIndices ?? new Set();
             const newEdge = new Set();
             for (const ei of oldEdge) {
               if (ei < idx) newEdge.add(ei);
@@ -1905,11 +1934,12 @@ export default function CanvasViewport({
             // Persist to store
             updateProject((proj2) => {
               const node = proj2.nodes.find(n => n.id === selNode.id);
-              if (!node?.mesh) return;
-              node.mesh.vertices = result.vertices;
-              node.mesh.uvs = Array.from(result.uvs);
-              node.mesh.triangles = result.triangles;
-              node.mesh.edgeIndices = newEdge;
+              const m = getMesh(node, proj2);
+              if (!m) return;
+              m.vertices = result.vertices;
+              m.uvs = Array.from(result.uvs);
+              m.triangles = result.triangles;
+              m.edgeIndices = newEdge;
             });
           }
         } else {
@@ -1922,13 +1952,13 @@ export default function CanvasViewport({
           let effectiveVerts =
             animNow.draftPose.get(selNode.id)?.mesh_verts
             ?? kfOverrides?.get(selNode.id)?.mesh_verts
-            ?? selNode.mesh.vertices;
+            ?? selMesh.vertices;
 
           // In blend shape edit mode, apply existing deltas (active shape at full influence)
           // so each drag continues from the visually correct position, not from rest.
           if (editorRef.current.editMode === 'blendShape' && selNode.blendShapes?.length) {
             const activeShapeId = editorRef.current.activeBlendShapeId;
-            effectiveVerts = selNode.mesh.vertices.map((v, i) => {
+            effectiveVerts = selMesh.vertices.map((v, i) => {
               let bx = v.restX, by = v.restY;
               for (const shape of selNode.blendShapes) {
                 const d = shape.deltas[i];
@@ -1960,7 +1990,7 @@ export default function CanvasViewport({
               startWorldY: worldY,
               // Snapshot of effective vertex positions at drag start
               verticesSnap: effectiveVerts.map(v => ({ ...v })),
-              allUvs: new Float32Array(selNode.mesh.uvs),
+              allUvs: new Float32Array(selMesh.uvs),
               imageWidth: selNode.imageWidth,
               imageHeight: selNode.imageHeight,
               affected,
@@ -2218,14 +2248,15 @@ export default function CanvasViewport({
         const shapeId = editorRef.current.activeBlendShapeId;
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === partId);
+          const m = getMesh(node, proj);
           const shape = node?.blendShapes?.find(s => s.id === shapeId);
-          if (!shape) return;
+          if (!shape || !m) return;
           for (const { index, weight } of affected) {
             const nx = verticesSnap[index].x + localDx * weight;
             const ny = verticesSnap[index].y + localDy * weight;
             shape.deltas[index] = {
-              dx: nx - node.mesh.vertices[index].restX,
-              dy: ny - node.mesh.vertices[index].restY,
+              dx: nx - m.vertices[index].restX,
+              dy: ny - m.vertices[index].restY,
             };
           }
         });
@@ -2242,15 +2273,16 @@ export default function CanvasViewport({
       // Staging mode (or adjust sub-mode): persist directly to the base mesh
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === partId);
-        if (!node?.mesh) return;
+        const m = getMesh(node, proj);
+        if (!m) return;
         for (const { index, startX, startY, weight } of affected) {
           const nx = startX + localDx * weight;
           const ny = startY + localDy * weight;
-          node.mesh.vertices[index].x = nx;
-          node.mesh.vertices[index].y = ny;
+          m.vertices[index].x = nx;
+          m.vertices[index].y = ny;
           if (meshSubMode === 'adjust') {
-            node.mesh.uvs[index * 2] = nx / (imageWidth ?? 1);
-            node.mesh.uvs[index * 2 + 1] = ny / (imageHeight ?? 1);
+            m.uvs[index * 2] = nx / (imageWidth ?? 1);
+            m.uvs[index * 2 + 1] = ny / (imageHeight ?? 1);
           }
         }
       });
@@ -2274,11 +2306,12 @@ export default function CanvasViewport({
       const newLocalY = startLocalY + localDy;
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === partId);
-        if (!node?.mesh) return;
-        node.mesh.vertices[vertexIndex].x = newLocalX;
-        node.mesh.vertices[vertexIndex].y = newLocalY;
-        node.mesh.uvs[vertexIndex * 2] = newLocalX / (imageWidth ?? 1);
-        node.mesh.uvs[vertexIndex * 2 + 1] = newLocalY / (imageHeight ?? 1);
+        const m = getMesh(node, proj);
+        if (!m) return;
+        m.vertices[vertexIndex].x = newLocalX;
+        m.vertices[vertexIndex].y = newLocalY;
+        m.uvs[vertexIndex * 2] = newLocalX / (imageWidth ?? 1);
+        m.uvs[vertexIndex * 2 + 1] = newLocalY / (imageHeight ?? 1);
       });
     } else if (proportional) {
       // GAP-015 — pull every affected vertex along with its captured
@@ -2289,8 +2322,9 @@ export default function CanvasViewport({
       // re-renders.
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === partId);
-        if (!node?.mesh) return;
-        const verts = node.mesh.vertices;
+        const m = getMesh(node, proj);
+        if (!m) return;
+        const verts = m.vertices;
         for (const a of proportional.affected) {
           verts[a.index].x = a.startX + localDx * a.weight;
           verts[a.index].y = a.startY + localDy * a.weight;
@@ -2299,17 +2333,19 @@ export default function CanvasViewport({
     } else {
       updateProject((proj) => {
         const node = proj.nodes.find(n => n.id === partId);
-        if (!node?.mesh) return;
-        node.mesh.vertices[vertexIndex].x = startLocalX + localDx;
-        node.mesh.vertices[vertexIndex].y = startLocalY + localDy;
+        const m = getMesh(node, proj);
+        if (!m) return;
+        m.vertices[vertexIndex].x = startLocalX + localDx;
+        m.vertices[vertexIndex].y = startLocalY + localDy;
       });
     }
 
     const scene = sceneRef.current;
     if (scene) {
       const node = projectRef.current.nodes.find(n => n.id === partId);
-      if (node?.mesh) {
-        scene.parts.uploadPositions(partId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
+      const m = getMesh(node, projectRef.current);
+      if (m) {
+        scene.parts.uploadPositions(partId, m.vertices, new Float32Array(m.uvs));
         isDirtyRef.current = true;
       }
     }
@@ -2503,7 +2539,7 @@ export default function CanvasViewport({
 
       {/* Transform gizmo SVG overlay — hidden when skeleton is showing AND exists. */}
       {/* GAP-010 — never on the Live Preview surface; preview is read-only. */}
-      {!previewMode && (!editorState.viewLayers.skeleton || !project.nodes.some(n => n.type === 'group' && n.boneRole)) && <GizmoOverlay />}
+      {!previewMode && (!editorState.viewLayers.skeleton || !project.nodes.some(n => isBoneGroup(n))) && <GizmoOverlay />}
 
       {/* Armature skeleton overlay (staging mode, when rig exists). */}
       {/* GAP-010 — never on the Live Preview surface.

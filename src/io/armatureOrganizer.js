@@ -10,6 +10,11 @@
  */
 
 import { extractVariant } from './psdOrganizer.js';
+import {
+  isBoneGroup,
+  getBoneRole,
+  getBoneRestPivot,
+} from '../store/objectDataAccess.js';
 
 
 // Lazy-loaded onnxruntime-web
@@ -619,11 +624,10 @@ export const SKELETON_CONNECTIONS = [
 export function getSkeletonFromNodes(nodes) {
   const result = {};
   for (const node of nodes) {
-    if (node.type === 'group' && node.boneRole) {
-      result[node.boneRole] = {
-        x: node.transform.pivotX,
-        y: node.transform.pivotY,
-      };
+    if (isBoneGroup(node)) {
+      const role = getBoneRole(node);
+      const pivot = getBoneRestPivot(node);
+      result[role] = { x: pivot?.x ?? 0, y: pivot?.y ?? 0 };
     }
   }
   return result;

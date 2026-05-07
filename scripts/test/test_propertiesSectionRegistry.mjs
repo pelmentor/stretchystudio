@@ -27,6 +27,14 @@ const SECTIONS = [
     isVisible: ({ active }) => active.type === 'part',
   },
   {
+    id: 'modifierStack',
+    isVisible: ({ active, project }) => {
+      if (active.type !== 'part') return false;
+      const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
+      return Array.isArray(node?.modifiers) && node.modifiers.length > 0;
+    },
+  },
+  {
     id: 'mesh',
     isVisible: ({ active, project }) => {
       if (active.type !== 'part') return false;
@@ -185,6 +193,46 @@ function ids(ctx) {
   });
   assert(JSON.stringify(got) === '["transform","visibility","partInfo","mask","rigStages"]',
     'unmeshed part: Mesh + Shape Keys drop, Mask + Rig Stages stay');
+}
+
+// ── V2 Phase D-5: modifierStack section visibility ───────────────────
+
+{
+  // Empty modifiers[] → modifierStack hidden.
+  const got = ids({
+    active: { type: 'part', id: 'p1' },
+    project: { nodes: [{ id: 'p1', type: 'part', modifiers: [] }] },
+  });
+  assert(!got.includes('modifierStack'),
+    'modifierStack: empty stack → hidden');
+}
+
+{
+  // Non-empty modifiers[] → modifierStack visible BETWEEN partInfo and mesh.
+  const got = ids({
+    active: { type: 'part', id: 'p1' },
+    project: { nodes: [{
+      id: 'p1', type: 'part',
+      mesh: { vertices: [] },
+      modifiers: [{ type: 'warp', deformerId: 'BodyXWarp', enabled: true }],
+    }] },
+  });
+  assert(JSON.stringify(got) ===
+    '["transform","visibility","partInfo","modifierStack","mesh","vertexGroups","shapeKeys","mask","rigStages"]',
+    'modifierStack: visible between partInfo and mesh when stack non-empty');
+}
+
+{
+  // Synthetic body-warp insert (v21 migration) → still visible.
+  const got = ids({
+    active: { type: 'part', id: 'p1' },
+    project: { nodes: [{
+      id: 'p1', type: 'part',
+      modifiers: [{ type: 'warp', deformerId: 'BodyXWarp', enabled: true, synthetic: true }],
+    }] },
+  });
+  assert(got.includes('modifierStack'),
+    'modifierStack: visible even when only entry is synthetic v21 fallback');
 }
 
 // ── Deformer selection: only Deformer trio ──────────────────────────

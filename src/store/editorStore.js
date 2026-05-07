@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { usePreferencesStore } from './preferencesStore.js';
+import { useProjectStore } from './projectStore.js';
 
 // Editor state (UI state, selection, view transform, drag state)
 export const useEditorStore = create((set) => ({
@@ -210,6 +211,24 @@ export const useEditorStore = create((set) => ({
     // No lock (or no editMode active): selection-head change drops
     // any active edit mode — the new selection's edit context is
     // unrelated.
+    //
+    // Phase 2b storage flip — clear the prior active object's stored
+    // mode so per-object record + global slot stay consistent (both
+    // null after a selection-clearing transition). The new active
+    // object gets a fresh start: editMode null in both stores until
+    // the user Tab's into something.
+    const priorActive = state.selection[0];
+    if (priorActive && state.editMode) {
+      useProjectStore.getState().setActiveObjectMode(priorActive, null);
+    }
+    const newActive = nodeIds[0];
+    if (newActive && newActive !== priorActive) {
+      // Defensive: if the new active object happens to carry a stale
+      // `mode` field (from a prior session before this dual-write
+      // shipped, or from a side-channel write), clear it so the global
+      // null is the source of truth on entry.
+      useProjectStore.getState().setActiveObjectMode(newActive, null);
+    }
     return {
       selection: nodeIds,
       editMode: null,
@@ -247,6 +266,17 @@ export const useEditorStore = create((set) => ({
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
     }
+    // Phase 2b storage flip — mirror the new mode onto the active
+    // object's `Object.mode` field. Project state is now the canonical
+    // record; the editorStore.editMode slot remains the authoritative
+    // read for now (subscribers across CanvasViewport / SkeletonOverlay
+    // / GizmoOverlay / ModePill all subscribe here), but the per-object
+    // record means future readers can switch over without a data
+    // migration. No-op when nothing is selected.
+    const activeId = state.selection[0];
+    if (activeId) {
+      useProjectStore.getState().setActiveObjectMode(activeId, kind);
+    }
     return {
       editMode: kind,
       activeBlendShapeId: kind === 'blendShape' ? opts.blendShapeId : null,
@@ -265,11 +295,19 @@ export const useEditorStore = create((set) => ({
    *  Does NOT restore keyform from snapshot — that's `cancelKeyformEdit`'s
    *  job. Calling `exitEditMode` while in keyform mode commits whatever
    *  the user has dragged so far (Apply semantics). */
-  exitEditMode: () => set({
-    editMode: null,
-    activeBlendShapeId: null,
-    keyformEdit: null,
-    toolMode: 'select',
+  exitEditMode: () => set((state) => {
+    // Phase 2b storage flip — clear the active object's stored mode
+    // so the per-object record matches "this object is in Object Mode".
+    const activeId = state.selection[0];
+    if (activeId) {
+      useProjectStore.getState().setActiveObjectMode(activeId, null);
+    }
+    return {
+      editMode: null,
+      activeBlendShapeId: null,
+      keyformEdit: null,
+      toolMode: 'select',
+    };
   }),
 
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
@@ -302,6 +340,12 @@ export const useEditorStore = create((set) => ({
     // off implicitly drops the user out of skeleton edit mode.
     if ('skeleton' in partial && !partial.skeleton
         && state.editMode === 'skeleton') {
+      // Phase 2b — keep the per-object mode record in sync with the
+      // global slot.
+      const activeId = state.selection[0];
+      if (activeId) {
+        useProjectStore.getState().setActiveObjectMode(activeId, null);
+      }
       return { viewLayers: next, editMode: null };
     }
     return { viewLayers: next };

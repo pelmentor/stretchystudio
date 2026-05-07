@@ -5,6 +5,7 @@
  */
 import { computeWorldMatrices } from '../renderer/transforms.js';
 import { uid } from '../lib/ids.js';
+import { getMesh } from '../store/objectDataAccess.js';
 
 /**
  * Main entry point for Spine export.
@@ -179,11 +180,12 @@ function buildSpineJson(project) {
       height: part.imageHeight ?? canvasH,
     };
 
-    if (part.mesh) {
+    const partMesh = getMesh(part, project);
+    if (partMesh) {
       attachment.type = "mesh";
-      attachment.vertices = part.mesh.vertices;
-      attachment.uvs = part.mesh.uvs;
-      attachment.triangles = part.mesh.triangles;
+      attachment.vertices = partMesh.vertices;
+      attachment.uvs = partMesh.uvs;
+      attachment.triangles = partMesh.triangles;
     }
 
     const slotKey = sanitizeName(part.name);

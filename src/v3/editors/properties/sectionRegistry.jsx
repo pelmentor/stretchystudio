@@ -35,6 +35,7 @@
 import { TransformSection } from './sections/TransformSection.jsx';
 import { VisibilitySection } from './sections/VisibilitySection.jsx';
 import { PartInfoSection } from './sections/PartInfoSection.jsx';
+import { ModifierStackSection } from './sections/ModifierStackSection.jsx';
 import { BoneSection } from './sections/BoneSection.jsx';
 import { DeformerInfoSection } from './sections/DeformerInfoSection.jsx';
 import { DeformerBindingsSection } from './sections/DeformerBindingsSection.jsx';
@@ -49,6 +50,7 @@ import {
   ParameterSection,
   RigStagesSection,
 } from './sections/WrappedTabSections.jsx';
+import { getMesh, isBoneGroup } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {Object} SectionContext
@@ -83,12 +85,22 @@ export const PROPERTIES_SECTIONS = [
     render: ({ active }) => <PartInfoSection nodeId={active.id} />,
   },
   {
+    id: 'modifierStack',
+    label: 'Modifier Stack',
+    isVisible: ({ active, project }) => {
+      if (active.type !== 'part') return false;
+      const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
+      return Array.isArray(node?.modifiers) && node.modifiers.length > 0;
+    },
+    render: ({ active }) => <ModifierStackSection nodeId={active.id} />,
+  },
+  {
     id: 'mesh',
     label: 'Mesh',
     isVisible: ({ active, project }) => {
       if (active.type !== 'part') return false;
       const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return !!node?.mesh;
+      return !!getMesh(node, project);
     },
     render: ({ active }) => <MeshSection nodeId={active.id} />,
   },
@@ -104,7 +116,7 @@ export const PROPERTIES_SECTIONS = [
     isVisible: ({ active, project }) => {
       if (active.type !== 'part') return false;
       const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return !!node?.mesh;
+      return !!getMesh(node, project);
     },
     render: ({ active }) => <VertexGroupsSection nodeId={active.id} />,
   },
@@ -114,7 +126,7 @@ export const PROPERTIES_SECTIONS = [
     isVisible: ({ active, project }) => {
       if (active.type !== 'part') return false;
       const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return !!node?.mesh;
+      return !!getMesh(node, project);
     },
     render: ({ active }) => <ShapeKeysSection nodeId={active.id} />,
   },
@@ -143,7 +155,7 @@ export const PROPERTIES_SECTIONS = [
     isVisible: ({ active, project }) => {
       if (active.type !== 'group') return false;
       const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return !!node?.boneRole;
+      return isBoneGroup(node);
     },
     render: ({ active }) => <BoneSection nodeId={active.id} />,
   },
@@ -153,7 +165,7 @@ export const PROPERTIES_SECTIONS = [
     isVisible: ({ active, project }) => {
       if (active.type !== 'group') return false;
       const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return !!node?.boneRole;
+      return isBoneGroup(node);
     },
     render: ({ active }) => <PhysicsSection nodeId={active.id} />,
   },

@@ -21,6 +21,7 @@
  */
 
 import { computePoseOverrides } from '../../../renderer/animationEngine.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {Object} CaptureOptions
@@ -115,7 +116,8 @@ export function captureExportFrame(ctx, opts) {
       poseOverrides = computePoseOverrides(anim, timeMs, loopKeyframes, anim.duration ?? 0);
 
       for (const node of exportProject.nodes) {
-        if (node.type !== 'part' || !node.mesh) continue;
+        const mesh = getMesh(node, exportProject);
+        if (node.type !== 'part' || !mesh) continue;
 
         /** @type {Array<{x: number, y: number}>|null} */
         let currentMeshVerts = null;
@@ -127,7 +129,7 @@ export function captureExportFrame(ctx, opts) {
             return poseOverrides.get(node.id)?.[prop] ?? node.blendShapeValues?.[shape.id] ?? 0;
           });
           if (influences.some((v) => v !== 0)) {
-            currentMeshVerts = node.mesh.vertices.map((v, i) => {
+            currentMeshVerts = mesh.vertices.map((v, i) => {
               let bx = v.restX;
               let by = v.restY;
               for (let j = 0; j < node.blendShapes.length; j++) {
@@ -158,8 +160,9 @@ export function captureExportFrame(ctx, opts) {
     for (const [nodeId, ov] of poseOverrides) {
       if (!ov.mesh_verts) continue;
       const node = exportProject.nodes.find((n) => n.id === nodeId);
-      if (node?.mesh) {
-        scene.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(node.mesh.uvs));
+      const m = getMesh(node, exportProject);
+      if (m) {
+        scene.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(m.uvs));
         exportMeshOverridden.push(nodeId);
       }
     }
@@ -197,8 +200,9 @@ export function captureExportFrame(ctx, opts) {
   // render sees the correct rest verts.
   for (const nodeId of exportMeshOverridden) {
     const node = exportProject.nodes.find((n) => n.id === nodeId);
-    if (node?.mesh) {
-      scene.parts.uploadPositions(nodeId, node.mesh.vertices, new Float32Array(node.mesh.uvs));
+    const m = getMesh(node, exportProject);
+    if (m) {
+      scene.parts.uploadPositions(nodeId, m.vertices, new Float32Array(m.uvs));
     }
   }
 

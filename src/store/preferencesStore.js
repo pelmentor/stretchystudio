@@ -30,6 +30,11 @@ const PE_KEY = 'v3.prefs.proportionalEdit';
 const VLP_KEY = 'v3.prefs.viewLayerPresets';
 const LOM_KEY = 'v3.prefs.lockObjectModes';
 const LTM_KEY = 'v3.prefs.lastToolByMode';
+/** V2 Phase D-5 — eval-engine selector. `'classic'` (default) routes
+ *  CanvasViewport through `chainEval`; `'depgraph'` routes through
+ *  the Phase D-* depgraph. Default stays `'classic'` until manual
+ *  Shelby byte-fidelity sweep validates the new path (Phase D-6). */
+const EVAL_KEY = 'v3.prefs.evalEngine';
 
 const PE_DEFAULT = Object.freeze({
   enabled:       false,
@@ -110,6 +115,16 @@ export const usePreferencesStore = create((set, get) => ({
    *  See `editorStore.enterEditMode` (reads on entry) and
    *  `editorStore.setToolMode` (writes on every tool flip). */
   lastToolByMode: loadJson(LTM_KEY, LTM_DEFAULT),
+  /** V2 Phase D-5 evalEngine selector — `'classic' | 'depgraph'`.
+   *  Default `'classic'` (chainEval). Flag flips to `'depgraph'` after
+   *  Phase D-6 manual Shelby byte-fidelity sweep. */
+  evalEngine: (loadJson(EVAL_KEY, 'classic') === 'depgraph') ? 'depgraph' : 'classic',
+
+  setEvalEngine(v) {
+    const next = v === 'depgraph' ? 'depgraph' : 'classic';
+    saveJson(EVAL_KEY, next);
+    set({ evalEngine: next });
+  },
 
   setMlEnabled(v) {
     const next = !!v;

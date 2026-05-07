@@ -13,6 +13,7 @@
 
 import { matchTag } from '../../armatureOrganizer.js';
 import { mergeAuthoredByStage } from './userAuthorMarkers.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * Tag → mask tag. A mesh whose tag is a key here gets clipped by the
@@ -43,7 +44,7 @@ export const CLIP_RULES = Object.freeze({
  */
 function visibleMeshNodes(project) {
   return (project.nodes ?? []).filter(
-    (n) => n && n.type === 'part' && n.mesh && n.visible !== false
+    (n) => n && n.type === 'part' && getMesh(n, project) && n.visible !== false,
   );
 }
 

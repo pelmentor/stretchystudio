@@ -40,6 +40,11 @@
 
 import { mat3Identity, mat3Mul, makeBoneLocalMatrix } from './transforms.js';
 import { sanitisePartName } from '../lib/partId.js';
+import {
+  isBoneGroup,
+  isMeshedPart,
+  getBoneRole,
+} from '../store/objectDataAccess.js';
 
 /** Local-matrix epsilon. Below this every component is considered
  *  zero and the matrix is treated as identity (skip multiplication). */
@@ -94,7 +99,7 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
   }
   function isRigDriven(boneNode) {
     if (driverParamIds.size === 0) return false;
-    const role = boneNode?.boneRole;
+    const role = getBoneRole(boneNode);
     if (!role) return false;
     const candidate = `ParamRotation_${sanitisePartName(boneNode.name || role)}`;
     return driverParamIds.has(candidate);
@@ -144,7 +149,7 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
     // Walk to nearest bone-group ancestor; non-bone groups (e.g. plain
     // organisational folders) are skipped — they don't carry pose.
     let parent = boneNode.parent ? byId.get(boneNode.parent) : null;
-    while (parent && !(parent.type === 'group' && parent.boneRole)) {
+    while (parent && !isBoneGroup(parent)) {
       parent = parent.parent ? byId.get(parent.parent) : null;
     }
     if (parent) {
@@ -159,15 +164,15 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
 
   // Resolve every bone first so the caches are warm.
   for (const n of nodes) {
-    if (n?.type === 'group' && n.boneRole) resolveBoneWorld(n);
+    if (isBoneGroup(n)) resolveBoneWorld(n);
   }
 
   // For every art mesh part, find its nearest bone-group ancestor and
   // attach that bone's overlay matrix.
   for (const n of nodes) {
-    if (n?.type !== 'part' || !n.mesh) continue;
+    if (!isMeshedPart(n)) continue;
     let cur = n.parent ? byId.get(n.parent) : null;
-    while (cur && !(cur.type === 'group' && cur.boneRole)) {
+    while (cur && !isBoneGroup(cur)) {
       cur = cur.parent ? byId.get(cur.parent) : null;
     }
     if (!cur) continue;

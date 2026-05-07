@@ -19,6 +19,7 @@ import { useProjectStore } from '../../../../store/projectStore.js';
 import { useCaptureStore } from '../../../../store/captureStore.js';
 import { Button as ButtonImpl } from '../../../../components/ui/button.jsx';
 import { NumberField } from '../fields/NumberField.jsx';
+import { getMesh } from '../../../../store/objectDataAccess.js';
 
 // shadcn/ui's Button is a forwardRef without exported JSDoc, so tsc
 // can't see its props. Cast to permissive — runtime stays the same
@@ -43,7 +44,7 @@ export function MeshTab({ nodeId }) {
     );
   }
 
-  const mesh = node.mesh ?? null;
+  const mesh = getMesh(node);
   const vertexCount = mesh?.vertices?.length ?? 0;
   const triangleCount = mesh?.triangles ? mesh.triangles.length / 3 : 0;
   // gridSpacing is the per-part remesh knob: larger = coarser grid.

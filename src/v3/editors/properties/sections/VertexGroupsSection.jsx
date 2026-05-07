@@ -29,6 +29,7 @@ import { useProjectStore } from '../../../../store/projectStore.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { SectionShell } from './SectionShell.jsx';
 import { buildVertexGroupSummaries } from './vertexGroupsLayout.js';
+import { getMesh } from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -65,7 +66,8 @@ export function VertexGroupsSection({ nodeId }) {
     [node, boneGroups],
   );
 
-  const totalVertices = node?.mesh?.vertices?.length ?? 0;
+  const nodeMesh = getMesh(node);
+  const totalVertices = nodeMesh?.vertices?.length ?? 0;
   const isPainting =
     editMode === 'weightPaint' && editorSelection?.[0] === nodeId;
 
@@ -110,7 +112,7 @@ export function VertexGroupsSection({ nodeId }) {
 
       {summaries.length === 0 ? (
         <div className="text-xs text-muted-foreground italic">
-          {node?.mesh?.jointBoneId
+          {nodeMesh?.jointBoneId
             ? 'Bone is bound but no weights painted yet. Click "edit weights" to start painting.'
             : 'No vertex groups.'}
         </div>

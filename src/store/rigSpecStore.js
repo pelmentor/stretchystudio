@@ -6,7 +6,9 @@ import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { loadProjectTextures } from '../io/imageHelpers.js';
+import { sanitisePartName } from '../lib/partId.js';
 import { logger } from '../lib/logger.js';
+import { getMesh } from './objectDataAccess.js';
 
 /**
  * v2 R1 — RigSpec session cache.
@@ -143,15 +145,65 @@ function _isComplete(rigSpec, project) {
 }
 
 /**
+ * Build the bone-mirror registry: every `ParamRotation_<sanitisedBoneName>`
+ * whose corresponding bone has skinning data (jointBoneId on a mesh) maps
+ * to its bone group's id. After this runs, `setParamValue` /
+ * `setMany` fan out to `bone.pose.rotation`, and `syncFromProject` can
+ * reconcile after direct bone mutations.
+ *
+ * Includes only the per-bone rotation params (paramSpec.js section 5 —
+ * limb bones with skinning data). Per-group rotation params (section 6 —
+ * front_hair, top_wear etc.) drive non-skeletal rotation deformers and
+ * have no bone counterpart; left out of the registry intentionally.
+ */
+function _buildBoneMirrorEntries(project) {
+  const nodes = project?.nodes ?? [];
+  const params = project?.parameters ?? [];
+  const paramIds = new Set(params.map((p) => p?.id).filter(Boolean));
+  /** @type {Set<string>} */
+  const boneIdsWithSkinning = new Set();
+  for (const n of nodes) {
+    if (n?.type !== 'part') continue;
+    const m = getMesh(n, project);
+    if (m?.jointBoneId && m?.boneWeights) {
+      boneIdsWithSkinning.add(m.jointBoneId);
+    }
+  }
+  const entries = [];
+  for (const boneId of boneIdsWithSkinning) {
+    const bone = nodes.find((n) => n.id === boneId);
+    if (!bone) continue;
+    const sanitised = sanitisePartName(bone.name || bone.id);
+    const paramId = `ParamRotation_${sanitised}`;
+    if (paramIds.has(paramId)) entries.push({ paramId, boneId });
+  }
+  return entries;
+}
+
+/**
  * Seed any params with non-zero defaults so the chain evaluator
  * doesn't read undefined for `ParamEyeLOpen=1` etc. (closes the
  * "freshly-loaded project: eyes closed" footgun). Doesn't overwrite
  * existing values.
+ *
+ * Also rebuilds the bone-mirror registry and syncs `bone.pose.rotation`
+ * back into the values map. Both calls are idempotent — running them
+ * on every rig-build settle point is fine.
  */
 function _seedDefaultsForRig(rigSpec, project) {
   const params = rigSpec?.parameters?.length ? rigSpec.parameters : (project.parameters ?? []);
   if (params.length > 0) {
     useParamValuesStore.getState().seedMissingDefaults(params);
+  }
+  // Bone-mirror: rebuild from the current project shape, then pull each
+  // bone's pose.rotation into the values map. After this returns,
+  // chainEval reads paramValues for `ParamRotation_<bone>` and gets the
+  // bone's actual rotation — even on a fresh load where the values map
+  // had defaulted to 0 while bones carried real rotations from save.
+  const entries = _buildBoneMirrorEntries(project);
+  useParamValuesStore.getState().setBoneMirrorRegistry(entries);
+  if (entries.length > 0) {
+    useParamValuesStore.getState().syncFromProject();
   }
 }
 

@@ -22,6 +22,11 @@ import { useEditorStore } from '../../../../store/editorStore.js';
 import { Plus, Trash2, Sparkles, Brush, Square } from 'lucide-react';
 import { TextField } from '../fields/TextField.jsx';
 import { NumberField } from '../fields/NumberField.jsx';
+import {
+  getMesh,
+  getBlendShapes,
+  getBlendShapeValues,
+} from '../../../../store/objectDataAccess.js';
 
 /**
  * @param {Object} props
@@ -58,7 +63,7 @@ export function BlendShapeTab({ nodeId }) {
       </div>
     );
   }
-  if (!node.mesh) {
+  if (!getMesh(node)) {
     return (
       <div className="p-3 text-xs text-muted-foreground">
         Part has no mesh — generate one before adding blend shapes.
@@ -66,8 +71,8 @@ export function BlendShapeTab({ nodeId }) {
     );
   }
 
-  const shapes = node.blendShapes ?? [];
-  const values = node.blendShapeValues ?? {};
+  const shapes = getBlendShapes(node) ?? [];
+  const values = getBlendShapeValues(node) ?? {};
 
   /** @param {string|null} shapeId */
   function armForPaint(shapeId) {

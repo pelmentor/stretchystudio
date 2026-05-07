@@ -28,6 +28,12 @@ import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
 import { logger } from '@/lib/logger';
+import {
+  isBoneGroup,
+  isMeshedPart,
+  getMesh,
+  getBoneRole,
+} from '@/store/objectDataAccess';
 
 // Colour palette
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
@@ -116,6 +122,16 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   // CanvasViewport's part-click handler. Read both so a click in
   // EITHER surface highlights the matching joint dot.
   const selectionStoreItems = useSelectionStore(s => s.items);
+
+  // Bone-selection writer: updates BOTH stores so ModePill (universal)
+  // and legacy consumers (Properties / Gizmo) agree. Every selection
+  // surface in this overlay must call through here — direct
+  // `setSelection([id])` only writes the legacy store, leaving Pose Mode
+  // greyed out in ModePill (which subscribes to universal only).
+  const selectBoneInBothStores = useCallback((nodeId) => {
+    setSelection([nodeId]);
+    useSelectionStore.getState().select({ type: 'group', id: nodeId }, 'replace');
+  }, [setSelection]);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
@@ -149,11 +165,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     if (selection.length !== 1) return;
     const nodeId = selection[0];
     const node = nodes.find(n => n.id === nodeId);
-    if (!node || node.type !== 'group' || !node.boneRole) return;
+    if (!isBoneGroup(node)) return;
 
     const JSKinningRoles = new Set(['leftElbow', 'rightElbow', 'leftKnee', 'rightKnee']);
-    if (JSKinningRoles.has(node.boneRole)) {
-      const hasDependent = nodes.some(n => n.type === 'part' && n.mesh?.jointBoneId === node.id);
+    if (JSKinningRoles.has(getBoneRole(node))) {
+      const hasDependent = nodes.some(n => isMeshedPart(n) && getMesh(n)?.jointBoneId === node.id);
       if (!hasDependent) {
         toast({
           title: "Limb mesh required",
@@ -189,7 +205,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   const boneNodes = React.useMemo(() => {
     const map = {};
     for (const n of effectiveNodes) {
-      if (n.type === 'group' && n.boneRole) map[n.boneRole] = n;
+      if (isBoneGroup(n)) map[getBoneRole(n)] = n;
     }
     return map;
   }, [effectiveNodes]);
@@ -260,7 +276,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         isAnimMode: editorModeRef.current === 'animation',
       };
 
-      setSelection([nodeId]);
+      // Mirror to BOTH stores so ModePill enables Pose Mode for the
+      // selected bone; legacy `setSelection` alone leaves universal
+      // selection empty and ModePill stays greyed out.
+      selectBoneInBothStores(nodeId);
 
       if (editorModeRef.current === 'staging') {
         beginBatch(useProjectStore.getState().project);
@@ -332,32 +351,34 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
       const JSKinningRoles = new Set(['leftElbow', 'rightElbow', 'leftKnee', 'rightKnee']);
       const dependentParts = [];
-      if (JSKinningRoles.has(node.boneRole)) {
+      const boneRole = getBoneRole(node);
+      if (JSKinningRoles.has(boneRole)) {
         const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
         const endMs = (animEndFrame / animFps) * 1000;
         const overrides = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
         for (const pt of effectiveNodes) {
-          if (pt.type === 'part' && pt.mesh?.jointBoneId === node.id) {
-            let startVerts = pt.mesh.vertices;
+          const ptMesh = getMesh(pt);
+          if (ptMesh?.jointBoneId === node.id) {
+            let startVerts = ptMesh.vertices;
             if (editorModeRef.current === 'animation') {
-               startVerts = animDraftPose.get(pt.id)?.mesh_verts ?? overrides?.get(pt.id)?.mesh_verts ?? pt.mesh.vertices;
+               startVerts = animDraftPose.get(pt.id)?.mesh_verts ?? overrides?.get(pt.id)?.mesh_verts ?? ptMesh.vertices;
             }
             dependentParts.push({
               partId: pt.id,
               startVerts: startVerts.map(v => ({...v})),
-              boneWeights: pt.mesh.boneWeights,
+              boneWeights: ptMesh.boneWeights,
               imgPivotX: node.transform.pivotX,
               imgPivotY: node.transform.pivotY,
             });
           }
         }
         if (dependentParts.length === 0) {
-          console.warn(`[SkeletonOverlay] ${node.boneRole} has no dependent parts. Re-generate arm/leg mesh after rigging.`);
+          console.warn(`[SkeletonOverlay] ${boneRole} has no dependent parts. Re-generate arm/leg mesh after rigging.`);
           // Debug: show all parts and their jointBoneIds
-          const armParts = effectiveNodes.filter(n => n.type === 'part' && n.mesh);
-          console.log('[SkeletonOverlay] Parts with meshes:', armParts.map(p => ({ name: p.name, jointBoneId: p.mesh.jointBoneId })));
+          const armParts = effectiveNodes.filter(n => isMeshedPart(n));
+          console.log('[SkeletonOverlay] Parts with meshes:', armParts.map(p => ({ name: p.name, jointBoneId: getMesh(p)?.jointBoneId })));
         } else {
-          console.log(`[SkeletonOverlay] ${node.boneRole}: driving ${dependentParts.length} part(s), pivot=(${node.transform.pivotX.toFixed(0)},${node.transform.pivotY.toFixed(0)})`);
+          console.log(`[SkeletonOverlay] ${boneRole}: driving ${dependentParts.length} part(s), pivot=(${node.transform.pivotX.toFixed(0)},${node.transform.pivotY.toFixed(0)})`);
         }
       }
 
@@ -385,7 +406,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         if (typeof paramSpec.min === 'number') rotationParamMin = paramSpec.min;
         if (typeof paramSpec.max === 'number') rotationParamMax = paramSpec.max;
       } else {
-        const fallbackId = BONE_ROLE_FALLBACK_PARAM[node.boneRole];
+        const fallbackId = BONE_ROLE_FALLBACK_PARAM[getBoneRole(node)];
         const fallbackSpec = fallbackId ? params.find(p => p.id === fallbackId) : null;
         if (fallbackSpec) {
           rotationParamId = fallbackId;
@@ -400,12 +421,13 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // level so anyone investigating a downstream rig issue can still
       // grep the Logs panel for it, but stop calling it a warning.
       if (!rotationParamId) {
+        const role = getBoneRole(node);
         logger.debug('boneNoDriverParam',
-          `Bone "${node.name ?? node.id}" (role=${node.boneRole ?? 'none'}) has no rig driver param — rotation composes via the post-rig overlay matrix on node.transform.rotation.`,
+          `Bone "${node.name ?? node.id}" (role=${role ?? 'none'}) has no rig driver param — rotation composes via the post-rig overlay matrix on node.transform.rotation.`,
           {
             nodeId,
             nodeName: node.name ?? null,
-            boneRole: node.boneRole ?? null,
+            boneRole: role ?? null,
             triedCandidate: candidateId,
           });
       }
@@ -435,14 +457,15 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         rotationParamMax,
       };
 
-      // Select the bone so GizmoOverlay appears
-      setSelection([nodeId]);
+      // Select the bone so GizmoOverlay appears, ModePill un-greys
+      // Pose Mode, and Properties shows the bone tab.
+      selectBoneInBothStores(nodeId);
 
       if (editorModeRef.current === 'staging') {
         beginBatch(useProjectStore.getState().project);
       }
     }
-  }, [skeletonEditMode, effectiveNodes, setSelection, animations, animActiveAnimationId, animCurrentTime, animDraftPose]);
+  }, [skeletonEditMode, effectiveNodes, setSelection, selectBoneInBothStores, animations, animActiveAnimationId, animCurrentTime, animDraftPose]);
 
   const onPointerMove = useCallback((e) => {
     const drag = dragRef.current;
@@ -642,7 +665,8 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
           if (latestVerts) {
             updateProject(proj => {
               const pt = proj.nodes.find(n => n.id === dep.partId);
-              if (pt?.mesh) pt.mesh.vertices = latestVerts.map(v => ({ ...v }));
+              const ptMesh = getMesh(pt, proj);
+              if (ptMesh) ptMesh.vertices = latestVerts.map(v => ({ ...v }));
             });
           }
         }
@@ -711,27 +735,19 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   const circles = [];
   for (const [role, node] of Object.entries(boneNodes)) {
-    // Root is the canvas-level pivot — no rotation arc, no skinning.
-    // Previously skipped entirely, so clicking root in the outliner
-    // produced zero on-canvas feedback. Render a small dot so selection
-    // is visible; arc rendering further down still skips root.
+    // Root is the canvas-level pivot — no rotation arc, no skinning,
+    // but it IS a bone in the outliner so it needs a canvas dot too.
+    // Renders half-size so it reads as the structural pivot it is
+    // rather than a draggable joint.
     const isRoot = role === 'root';
     const [cx, cy] = pivotScreenPos(node);
     const isDragging = dragRef.current?.nodeId === node.id;
     const isSelected = selectionSet.has(node.id);
-    // Drag wins over selection so the active gesture always reads as
-    // cyan; otherwise selection wins over edit-mode/normal — that way
-    // a click in Outliner→Skeleton picks a bone and the canvas
-    // immediately confirms which one.
     const fill = isDragging
       ? COLOUR_DRAG
       : isSelected
         ? COLOUR_SELECTED
         : (skeletonEditMode ? COLOUR_EDIT : COLOUR_NORMAL);
-    // Root dot is half-size and only renders in edit mode or when the
-    // user has it selected — full-size always-on would clutter the
-    // canvas with a permanent dot at the pivot.
-    if (isRoot && !isSelected && !skeletonEditMode) continue;
     const dotRadius = isRoot ? Math.max(3, radius * 0.6) : radius;
     if (isSelected && !isDragging) {
       // Soft halo ring — same accent at low opacity, fattens to
@@ -752,13 +768,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
         onClick={() => {
           if (skeletonEditMode) return;
-          // Mirror to BOTH stores — same dual-write pattern CanvasViewport
-          // uses for part picks (line ~1984). Outliner Skeleton tab
-          // subscribes to selectionStore; legacy consumers (Properties,
-          // Gizmo) read editorStore.selection. Either way the user sees
-          // the bone highlighted everywhere it appears.
-          setSelection([node.id]);
-          useSelectionStore.getState().select({ type: 'group', id: node.id }, 'replace');
+          selectBoneInBothStores(node.id);
         }}
       />
     );

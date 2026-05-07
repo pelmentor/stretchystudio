@@ -10,6 +10,8 @@
 
 import { useEditorStore } from '../../src/store/editorStore.js';
 import { usePreferencesStore } from '../../src/store/preferencesStore.js';
+import { useProjectStore } from '../../src/store/projectStore.js';
+import { getObjectMode } from '../../src/store/objectDataAccess.js';
 
 let passed = 0;
 let failed = 0;
@@ -442,6 +444,115 @@ reset();
   const refAfterFirst = get().expandedGroups;
   get().expandGroup('g1');
   assert(get().expandedGroups === refAfterFirst, 'expandGroup: idempotent (same ref)');
+}
+
+// ── Phase 2b storage flip — per-object mode dual-write ────────────
+// enterEditMode / exitEditMode / setSelection mirror the global slot
+// onto the active node's `Object.mode` field. Project state is the
+// canonical record; the editorStore.editMode slot remains the
+// authoritative read.
+
+function seedProject(nodes) {
+  useProjectStore.setState({
+    project: {
+      ...useProjectStore.getState().project,
+      nodes,
+    },
+  });
+}
+
+function projectNode(id) {
+  return useProjectStore.getState().project.nodes.find((n) => n?.id === id);
+}
+
+{
+  reset();
+  seedProject([
+    { id: 'part-A', type: 'part', name: 'A' },
+    { id: 'part-B', type: 'part', name: 'B' },
+  ]);
+  useEditorStore.setState({ selection: ['part-A'] });
+  get().enterEditMode('mesh');
+  assert(getObjectMode(projectNode('part-A')) === 'mesh',
+    'Phase 2b: enterEditMode mirrors mode onto active object');
+  assert(getObjectMode(projectNode('part-B')) === null,
+    'Phase 2b: enterEditMode does NOT touch other objects');
+}
+
+{
+  reset();
+  seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
+  useEditorStore.setState({ selection: ['part-A'] });
+  get().enterEditMode('mesh');
+  get().exitEditMode();
+  assert(getObjectMode(projectNode('part-A')) === null,
+    'Phase 2b: exitEditMode clears active object mode');
+  assert(!('mode' in projectNode('part-A')),
+    'Phase 2b: exitEditMode removes the field entirely (not just sets null)');
+}
+
+{
+  reset();
+  seedProject([
+    { id: 'part-A', type: 'part', name: 'A' },
+    { id: 'part-B', type: 'part', name: 'B' },
+  ]);
+  useEditorStore.setState({ selection: ['part-A'] });
+  get().enterEditMode('mesh');
+  assert(getObjectMode(projectNode('part-A')) === 'mesh',
+    'Phase 2b: A mode set before selection change');
+
+  // Lock OFF — selection-head change to B clears A's stored mode.
+  usePreferencesStore.setState({ lockObjectModes: false });
+  get().setSelection(['part-B']);
+  assert(getObjectMode(projectNode('part-A')) === null,
+    'Phase 2b: prior active object mode cleared on selection change (lock off)');
+  assert(get().editMode === null,
+    'Phase 2b: editMode cleared on selection change (lock off)');
+
+  usePreferencesStore.setState({ lockObjectModes: true });
+}
+
+{
+  reset();
+  // setSelection clearing to empty also clears prior active object mode.
+  seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
+  useEditorStore.setState({ selection: ['part-A'] });
+  get().enterEditMode('mesh');
+  get().setSelection([]);
+  assert(getObjectMode(projectNode('part-A')) === null,
+    'Phase 2b: empty selection clears prior active object mode');
+}
+
+{
+  reset();
+  // Switching between edit modes overwrites the per-object record.
+  seedProject([{ id: 'part-A', type: 'part', name: 'A' }]);
+  useEditorStore.setState({ selection: ['part-A'] });
+  get().enterEditMode('mesh');
+  get().enterEditMode('blendShape', { blendShapeId: 'shape-1' });
+  assert(getObjectMode(projectNode('part-A')) === 'blendShape',
+    'Phase 2b: switching edit modes overwrites per-object record');
+}
+
+{
+  reset();
+  // setViewLayers({skeleton:false}) auto-exit also clears per-object mode.
+  seedProject([{ id: 'bone-A', type: 'group', name: 'A', boneRole: 'head' }]);
+  useEditorStore.setState({
+    selection: ['bone-A'],
+    editMode: 'skeleton',
+    viewLayers: { ...get().viewLayers, skeleton: true },
+  });
+  // Manually mirror, since we set editMode via setState (bypassing enterEditMode).
+  useProjectStore.getState().setActiveObjectMode('bone-A', 'skeleton');
+  assert(getObjectMode(projectNode('bone-A')) === 'skeleton',
+    'Phase 2b setup: bone-A in skeleton');
+  get().setViewLayers({ skeleton: false });
+  assert(get().editMode === null,
+    'Phase 2b: skeleton-layer toggle exits editMode');
+  assert(getObjectMode(projectNode('bone-A')) === null,
+    'Phase 2b: skeleton-layer toggle clears per-object mode');
 }
 
 console.log(`editorStore: ${passed} passed, ${failed} failed`);

@@ -26,6 +26,7 @@
 import { PHYSICS_RULES } from '../cmo3/physics.js';
 import { sanitisePartName } from '../../../lib/partId.js';
 import { mergeAuthoredByStage } from './userAuthorMarkers.js';
+import { getBoneRole, isBoneGroup } from '../../../store/objectDataAccess.js';
 
 /**
  * Re-export of the baseline rules. Stored as the seed source. New rules
@@ -68,7 +69,8 @@ function resolveRuleOutputs(rule, groups) {
   if (rule.boneOutputs && rule.boneOutputs.length > 0 && Array.isArray(groups)) {
     const byRole = new Map();
     for (const g of groups) {
-      if (g && g.boneRole) byRole.set(g.boneRole, g);
+      const role = getBoneRole(g);
+      if (role) byRole.set(role, g);
     }
     for (const b of rule.boneOutputs) {
       const g = byRole.get(b.boneRole);

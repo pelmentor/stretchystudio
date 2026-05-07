@@ -53,6 +53,14 @@ function captureSnapshotIfNeeded() {
  *  accumulated during the wizard. Same cleanup BUG-012 added to the
  *  prior in-CanvasViewport handlers. */
 function resetInteractionState() {
+  // Phase 2b storage flip — mirror the global slot drop onto the
+  // prior active object's per-object mode field. Safe when the prior
+  // active node was replaced by PSD import (setActiveObjectMode
+  // no-ops on missing ids).
+  const prior = useEditorStore.getState().selection[0];
+  if (prior) {
+    useProjectStore.getState().setActiveObjectMode(prior, null);
+  }
   useEditorStore.setState({
     selection: [],
     editMode: null,

@@ -42,6 +42,15 @@ export default [
         'warn',
         { allowConstantExport: true },
       ],
+      // Honour the underscore-prefix convention for "intentionally
+      // unused" parameters (e.g. scaffold signatures reserved for a
+      // future caller; placeholder error-position args; caught errors
+      // we don't bind). Standard JS convention.
+      'no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
     },
   },
 ]

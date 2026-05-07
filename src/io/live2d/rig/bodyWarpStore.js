@@ -38,6 +38,8 @@ import {
   warpSpecToDeformerNode,
   upsertDeformerNode,
   removeBodyWarpChainNodes,
+  synthesizeModifierStacks,
+  synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
 import {
   getBodyWarpChainNodes,
@@ -259,6 +261,13 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
     layout: stored.layout,
     debug: stored.debug,
   };
+  // Phase 3 storage flip — body warp parents are ancestors of every
+  // rigWarp, so re-deriving the modifier stacks picks up chain shape
+  // changes (BodyXWarp present/absent toggles whether parts include
+  // BX in their stack).
+  synthesizeModifierStacks(project);
+  // V2 Phase 0.3 — modifier stacks are canonical; mirror to parent links.
+  synthesizeDeformerParents(project);
   return stored;
 }
 
@@ -272,6 +281,10 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
 export function clearBodyWarp(project) {
   if (Array.isArray(project.nodes)) {
     removeBodyWarpChainNodes(project.nodes);
+    // Phase 3 storage flip — chain ancestors gone, every part's stack
+    // truncates to whatever's left from rigParent down.
+    synthesizeModifierStacks(project);
+    synthesizeDeformerParents(project);
   }
   project.bodyWarpLayout = null;
 }

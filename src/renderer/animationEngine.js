@@ -9,6 +9,8 @@
  *   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity' | 'visible' | 'mesh_verts' | 'blendShape:{id}'
  */
 
+import { isBoneGroup } from '../store/objectDataAccess.js';
+
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
@@ -262,7 +264,7 @@ export const PROP_LABELS = {
  * (parts, plain groups, deformers) keep everything on `transform`.
  */
 function isBoneNode(node) {
-  return node?.type === 'group' && !!node?.boneRole;
+  return isBoneGroup(node);
 }
 
 /**

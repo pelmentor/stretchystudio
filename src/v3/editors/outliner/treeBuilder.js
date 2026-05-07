@@ -40,6 +40,8 @@
  * @module v3/editors/outliner/treeBuilder
  */
 
+import { isBoneGroup, getBoneRole } from '../../../store/objectDataAccess.js';
+
 /**
  * Subset of project node fields the outliner consumes.
  *
@@ -263,7 +265,7 @@ function buildHierarchyTree(nodes) {
     // in skeleton mode), so the unified "View Layer" tree shows the
     // bone icon inline. The flag is type-orthogonal — selectionStore
     // still treats them as `type:'group'`.
-    const isBone = n.type === 'group' && !!n.boneRole;
+    const isBone = isBoneGroup(n);
     // Phase 4 — deformers get the `isDeformer` flag (+ `deformerKind`
     // for icon picking). Same idea: the type stays `'deformer'` so
     // selection routing works; the flag is for TreeNode rendering.
@@ -358,8 +360,7 @@ function buildSkeletonTree(nodes) {
   const bonesById = new Map();
   for (const n of nodes) {
     if (!n || typeof n.id !== 'string' || n.id === '') continue;
-    if (n.type !== 'group') continue;
-    if (!n.boneRole) continue;
+    if (!isBoneGroup(n)) continue;
     bonesById.set(n.id, n);
   }
   if (bonesById.size === 0) return [];
@@ -389,9 +390,10 @@ function buildSkeletonTree(nodes) {
    * @returns {OutlinerNode}
    */
   function build(bone) {
+    const role = getBoneRole(bone);
     if (onPath.has(bone.id)) {
       return {
-        id: bone.id, type: 'group', name: bone.boneRole ?? bone.name,
+        id: bone.id, type: 'group', name: role ?? bone.name,
         parent: null, children: [], visible: bone.visible !== false,
         sortKey: 0, isBone: true,
       };
@@ -406,7 +408,7 @@ function buildSkeletonTree(nodes) {
       // Surface boneRole as the row label — auto-rig conventions
       // (`head`, `leftArm`, `bothLegs`) read better than the auto-
       // generated group name which often duplicates the role.
-      name: bone.boneRole ?? bone.name,
+      name: role ?? bone.name,
       parent: bone.parent && bonesById.has(bone.parent) ? bone.parent : null,
       children: kids,
       visible: bone.visible !== false,

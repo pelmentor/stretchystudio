@@ -27,6 +27,7 @@ import {
 import { generatePhysics3Json } from '../../src/io/live2d/physics3json.js';
 import { generateCdi3Json } from '../../src/io/live2d/cdi3json.js';
 import { migrateProject } from '../../src/store/projectMigrations.js';
+import { getMesh } from '../../src/store/objectDataAccess.js';
 
 let passed = 0;
 let failed = 0;
@@ -130,20 +131,25 @@ function buildSyntheticProject() {
 // Only the JSON outputs that are pure-JS (no browser deps).
 
 function computeOutputs(project) {
-  const meshes = project.nodes.filter(n => n.type === 'part' && n.mesh && n.visible !== false);
+  const meshes = project.nodes.filter(
+    (n) => n.type === 'part' && getMesh(n, project) && n.visible !== false,
+  );
   const groups = project.nodes.filter(n => n.type === 'group');
   const boneCfg = resolveBoneConfig(project);
   const rotCfg  = resolveRotationDeformerConfig(project);
 
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
-    meshes: meshes.map(n => ({
-      tag: n.tag,
-      variantSuffix: n.variantSuffix,
-      variantRole: n.variantRole,
-      jointBoneId: n.mesh?.jointBoneId,
-      boneWeights: n.mesh?.boneWeights,
-    })),
+    meshes: meshes.map((n) => {
+      const m = getMesh(n, project);
+      return {
+        tag: n.tag,
+        variantSuffix: n.variantSuffix,
+        variantRole: n.variantRole,
+        jointBoneId: m?.jointBoneId,
+        boneWeights: m?.boneWeights,
+      };
+    }),
     groups,
     generateRig: true,
     bakedKeyformAngles: boneCfg.bakedKeyformAngles,

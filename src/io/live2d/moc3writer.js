@@ -34,6 +34,7 @@ import { buildKeyformBindings } from './moc3/keyformBindings.js';
 import { emitKeyformAndDeformerSections } from './moc3/keyformAndDeformerSections.js';
 import { buildMeshDeformerParents } from './moc3/meshDeformerParent.js';
 import { buildUvAndIndices } from './moc3/uvAndIndices.js';
+import { getMesh } from '../../store/objectDataAccess.js';
 import { serializeMoc3 } from './moc3/binarySerialize.js';
 
 
@@ -97,11 +98,16 @@ function buildSectionData(input) {
 
   // Collect art meshes (parts with meshes → Live2D ArtMeshes).
   // Sort by draw_order (descending) to maintain correct depth ordering (upstream fix).
+  // Phase 1B v18 compat: resolve `node.mesh` once per filter pass via the
+  // helper, then attach the resolved mesh to each part entry. Sub-modules
+  // (`uvAndIndices`, `meshBindingPlan`, `keyformAndDeformerSections`,
+  // `meshDeformerParent`) iterate `meshParts[i].mesh.*` directly, so the
+  // attachment keeps them working under both v17 (inline) and v18
+  // (data-node) shapes without per-call helper plumbing.
   const meshParts = project.nodes
-    .filter(n =>
-      n.type === 'part' && n.mesh && n.visible !== false && regions.has(n.id)
-    )
-    .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
+    .filter((n) => n.type === 'part' && getMesh(n, project) && n.visible !== false && regions.has(n.id))
+    .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0))
+    .map((n) => ({ ...n, mesh: getMesh(n, project) }));
 
   // Build parameter list via the shared spec (same source of truth cmo3writer
   // uses). Used to live as `project.parameters ?? []` here, which evaluated
@@ -109,9 +115,8 @@ function buildSectionData(input) {
   // ParamOpacity and breaking cursor tracking / blink / variant fades.
   //
   // paramSpec expects mesh-shaped objects with bone/variant fields hoisted
-  // to the top level (matching cmo3writer's pre-mapped meshes). Raw project
-  // nodes nest those under `node.mesh.*`, so we adapt here before the call.
-  const meshesForSpec = meshParts.map(n => ({
+  // to the top level (matching cmo3writer's pre-mapped meshes).
+  const meshesForSpec = meshParts.map((n) => ({
     tag: matchTag(n.name ?? ''),
     variantSuffix: n.variantSuffix ?? null,
     variantRole: n.variantRole ?? null,

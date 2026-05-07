@@ -36,6 +36,8 @@
  * @module store/deformerNodeSync
  */
 
+import { DEFAULT_MIGRATED_MODE } from './migrations/v21_modifier_mode_flags.js';
+
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'];
 
@@ -294,6 +296,176 @@ export function synthesizeDeformerNodesFromSidetables(project) {
       if (partNode && typeof spec.id === 'string') {
         partNode.rigParent = spec.id;
       }
+    }
+  }
+}
+
+/**
+ * Phase 3 storage flip — derive each part's `Object.modifiers[]` stack
+ * from the existing deformer-node tree. Pure derivation: reads only
+ * `project.nodes` (deformer parent links + part.rigParent), writes to
+ * `part.modifiers`.
+ *
+ * V2 Phase 0.3 update — modifier stacks are now CANONICAL; parent-link
+ * shape (`deformer.parent` + `part.rigParent`) is a derived mirror.
+ * `synthesizeModifierStacks` is called wherever the parent-link shape
+ * has been freshly mutated (today's seed pipeline still mutates parent
+ * links first because the harvest produces parent-keyed specs); the
+ * companion `synthesizeDeformerParents` mirrors back. Future callers
+ * should mutate stacks directly and trust the inverse synth to
+ * maintain the parent-link mirror.
+ *
+ * The Blender modifier stack is a per-Object ordered list. SS today
+ * encodes the equivalent via implicit chain traversal: a part's
+ * `rigParent` points at the leaf deformer, which carries `parent` up to
+ * the next deformer, up to root. Walking that chain in leaf-to-root
+ * order yields the part's modifier stack.
+ *
+ * Each modifier record carries:
+ *   - `type`: matches `deformer.deformerKind` ('warp' | 'rotation')
+ *   - `deformerId`: pointer to the deformer node holding the actual data
+ *   - `enabled`: true (Blender ModifierData has a per-modifier disable;
+ *     reserved for future use — chainEval evaluates unconditionally)
+ *   - `mode`: bitmask mirroring `ModifierData.mode` from
+ *     `reference/blender/source/blender/makesdna/DNA_modifier_types.h:131-144`.
+ *     Default `MODE_REALTIME | MODE_RENDER` — visible in viewport and
+ *     included in export, matching today's always-on behaviour.
+ *     Schema v21+.
+ *   - `showInEditor`: true. Reserved for the v21+ Properties panel
+ *     modifier-stack section to gate UI expansion.
+ *
+ * Today's chainEval path still reads `deformer.parent` directly — this
+ * derivation is dual-write storage so future readers (e.g. a `Cycles`-
+ * style stack-evaluator, or the modifier-stack UI) can iterate the
+ * stack without re-walking the tree. When parent links change, callers
+ * (rigWarpsStore.seedRigWarps, clearRigWarps, etc.) re-run this to
+ * keep the stacks fresh.
+ *
+ * Idempotent and lossless: a missing rigParent yields an empty stack;
+ * an empty stack drops the field entirely so the JSON stays compact.
+ *
+ * # Parts without rigParent
+ *
+ * A part without rigWarps coverage (no per-part rigWarp seeded → no
+ * `rigParent`) ends up with an empty stack. At evaluation time today
+ * (`selectRigSpec._buildArtMeshes`) such a part falls back to the
+ * `innermostBodyWarpId` derived from the body warp chain. This implicit
+ * fallback is NOT mirrored into `Object.modifiers[]` because:
+ *   - `innermostBodyWarpId` is computed dynamically per chain shape;
+ *     storing it would duplicate state that the chain already
+ *     authoritatively carries.
+ *   - Blender's modifier stack convention treats parent transforms +
+ *     armature chains separately from modifiers — modifiers are the
+ *     PER-OBJECT geometry transformations; "this object lives under
+ *     the body rig" is parent/armature relationship, not a modifier.
+ * Future readers iterating `Object.modifiers[]` should treat the empty
+ * stack as "no per-part modifiers; rig flow handles deformation."
+ *
+ * @param {object} project - mutated in place
+ */
+export function synthesizeModifierStacks(project) {
+  if (!project) return;
+  if (!Array.isArray(project.nodes)) return;
+  const byId = new Map();
+  for (const n of project.nodes) {
+    if (n?.id) byId.set(n.id, n);
+  }
+  for (const part of project.nodes) {
+    if (!part || part.type !== 'part') continue;
+    const stack = [];
+    const seen = new Set();
+    let cur = typeof part.rigParent === 'string' && part.rigParent.length > 0
+      ? part.rigParent
+      : null;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const def = byId.get(cur);
+      if (!def || def.type !== 'deformer') break;
+      stack.push({
+        type: def.deformerKind ?? 'warp',
+        deformerId: def.id,
+        enabled: true,
+        mode: DEFAULT_MIGRATED_MODE,
+        showInEditor: true,
+      });
+      cur = typeof def.parent === 'string' && def.parent.length > 0
+        ? def.parent
+        : null;
+    }
+    if (stack.length > 0) {
+      part.modifiers = stack;
+    } else if ('modifiers' in part) {
+      delete part.modifiers;
+    }
+  }
+}
+
+/**
+ * Inverse synth — derive `deformer.parent` and `part.rigParent` from
+ * the per-part `Object.modifiers[]` stacks. Counterpart to
+ * `synthesizeModifierStacks`.
+ *
+ * Phase 0.2 of the V2 plan. Once Init Rig writes modifier stacks
+ * directly (Phase 0.3), `cmo3writer.js` still reads `node.parent` for
+ * the deformer chain; this function maintains that mirror as a derived
+ * view of the canonical stack.
+ *
+ * # Contract
+ *
+ * For every part with a non-empty `modifiers[]`:
+ *   - `part.rigParent` = `modifiers[0].deformerId` (the leaf deformer).
+ *   - For every consecutive `(modifiers[i], modifiers[i+1])` pair, set
+ *     `nodes[modifiers[i].deformerId].parent = modifiers[i+1].deformerId`.
+ *   - The last modifier's deformer parent is NOT touched — what comes
+ *     above the modifier stack (a non-deformer, root, or null) cannot
+ *     be derived from the stack alone, so it stays as the project's
+ *     existing value.
+ *
+ * For parts with empty / missing `modifiers[]`, this function is a
+ * no-op — `part.rigParent` and any deformer parent links are left
+ * exactly as they were.
+ *
+ * # Round-trip invariant (test-pinned)
+ *
+ *   `synthesizeModifierStacks(p)` then
+ *   `synthesizeDeformerParents(p)` →
+ *   identical `node.parent` and `part.rigParent` to the original
+ *   (modulo synthetic body-warp inserts produced by v21).
+ *
+ * # Conflicting stacks
+ *
+ * Two parts may share a deformer leaf but have different upstream
+ * parent chains; this is malformed input — the deformer parent is
+ * single-valued. Last-write-wins; no validation is performed here. A
+ * future audit can add a divergence detector if the malformed-input
+ * case becomes load-bearing.
+ *
+ * @param {object} project - mutated in place
+ */
+export function synthesizeDeformerParents(project) {
+  if (!project) return;
+  if (!Array.isArray(project.nodes)) return;
+  const byId = new Map();
+  for (const n of project.nodes) {
+    if (n?.id) byId.set(n.id, n);
+  }
+  for (const part of project.nodes) {
+    if (!part || part.type !== 'part') continue;
+    const stack = Array.isArray(part.modifiers) ? part.modifiers : null;
+    if (!stack || stack.length === 0) continue;
+
+    const leafId = stack[0]?.deformerId;
+    if (typeof leafId === 'string' && leafId.length > 0) {
+      part.rigParent = leafId;
+    }
+
+    for (let i = 0; i < stack.length - 1; i++) {
+      const curId = stack[i]?.deformerId;
+      const nextId = stack[i + 1]?.deformerId;
+      if (typeof curId !== 'string' || typeof nextId !== 'string') continue;
+      const def = byId.get(curId);
+      if (!def || def.type !== 'deformer') continue;
+      def.parent = nextId;
     }
   }
 }

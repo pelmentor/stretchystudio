@@ -38,15 +38,15 @@ import { memo, useEffect, useMemo, useRef } from 'react';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { beginBatch, endBatch } from '../../../../store/undoHistory.js';
+import { getMesh } from '../../../../store/objectDataAccess.js';
 
 export function WeightPaintOverlay() {
   const editMode = useEditorStore((s) => s.editMode);
   const selection = useEditorStore((s) => s.selection);
   const view = useEditorStore((s) => s.viewByMode.viewport);
   const brushSize = useEditorStore((s) => s.brushSize);
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n?.id === selection?.[0]) ?? null,
-  );
+  const project = useProjectStore((s) => s.project);
+  const node = project.nodes.find((n) => n?.id === selection?.[0]) ?? null;
   const paintWeightStroke = useProjectStore((s) => s.paintWeightStroke);
 
   // Imperative cursor refs — bypass React state to avoid re-rendering
@@ -72,18 +72,19 @@ export function WeightPaintOverlay() {
   // Bail unless the overlay should be visible. All hooks (above + the
   // useMemo / useEffect below) ran unconditionally so React's call
   // order stays stable across renders.
-  const active = editMode === 'weightPaint' && node?.mesh;
+  const nodeMesh = node ? getMesh(node, project) : null;
+  const active = editMode === 'weightPaint' && !!nodeMesh;
 
   const vertices = active
-    ? /** @type {Array<{x:number,y:number}>} */ (node.mesh.vertices ?? [])
+    ? /** @type {Array<{x:number,y:number}>} */ (nodeMesh.vertices ?? [])
     : EMPTY_ARRAY;
   const triangles = active
-    ? /** @type {number[]} */ (node.mesh.triangles ?? [])
+    ? /** @type {number[]} */ (nodeMesh.triangles ?? [])
     : EMPTY_ARRAY;
-  const activeName = active ? node.mesh.activeWeightGroup : null;
-  const weightArr = active && activeName && node.mesh.weightGroups?.[activeName]
-    ? node.mesh.weightGroups[activeName]
-    : (active ? (node.mesh.boneWeights ?? EMPTY_ARRAY) : EMPTY_ARRAY);
+  const activeName = active ? nodeMesh.activeWeightGroup : null;
+  const weightArr = active && activeName && nodeMesh.weightGroups?.[activeName]
+    ? nodeMesh.weightGroups[activeName]
+    : (active ? (nodeMesh.boneWeights ?? EMPTY_ARRAY) : EMPTY_ARRAY);
 
   // Precompute projected screen-space positions whenever vertices or
   // view (zoom/pan) change. Stable across paint commits that don't

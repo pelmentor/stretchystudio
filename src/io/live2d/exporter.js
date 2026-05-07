@@ -31,6 +31,7 @@ import { resolveRigWarps } from './rig/rigWarpsStore.js';
 import { initializeRigFromProject } from './rig/initRig.js';
 import { matchTag } from '../armatureOrganizer.js';
 import { extractVariant } from '../psdOrganizer.js';
+import { getMesh } from '../../store/objectDataAccess.js';
 import { EYE_SOURCE_TAGS } from './cmo3/eyeTags.js';
 import { BODY_ANALYSIS_TAGS } from './bodyAnalyzer.js';
 
@@ -77,7 +78,7 @@ export async function exportLive2D(project, images, opts = {}) {
   // pull from this list — replaces the empty `project.parameters ?? []`
   // reads that left the runtime model with no rig at all.
   const meshNodesForSpec = project.nodes.filter(n =>
-    n.type === 'part' && n.mesh && n.visible !== false
+    n.type === 'part' && getMesh(n, project) && n.visible !== false
   );
   const groupNodesForSpec = project.nodes.filter(n => n.type === 'group');
   const boneConfigResolved = resolveBoneConfig(project);
@@ -95,13 +96,16 @@ export async function exportLive2D(project, images, opts = {}) {
   } = await resolveAllKeyformSpecs(project, images, { forceRegenerate });
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
-    meshes: meshNodesForSpec.map(n => ({
-      tag: matchTag(n.name ?? ''),
-      variantSuffix: n.variantSuffix ?? null,
-      variantRole: n.variantRole ?? null,
-      jointBoneId: n.mesh?.jointBoneId ?? null,
-      boneWeights: n.mesh?.boneWeights ?? null,
-    })),
+    meshes: meshNodesForSpec.map(n => {
+      const m = getMesh(n, project);
+      return {
+        tag: matchTag(n.name ?? ''),
+        variantSuffix: n.variantSuffix ?? null,
+        variantRole: n.variantRole ?? null,
+        jointBoneId: m?.jointBoneId ?? null,
+        boneWeights: m?.boneWeights ?? null,
+      };
+    }),
     groups: groupNodesForSpec,
     generateRig: true,
     bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
@@ -201,7 +205,7 @@ export async function exportLive2D(project, images, opts = {}) {
     parameterMap.set(`${g.id}.rotation`, `ParamRotation_${sanitized}`);
   }
   // Warp deformer parameters for mesh_verts tracks
-  const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && n.mesh);
+  const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && getMesh(n, project));
   for (const p of meshPartsWithMesh) {
     const sanitized = sanitisePartName(p.name || p.id);
     parameterMap.set(`${p.id}.mesh_verts`, `ParamDeform_${sanitized}`);
@@ -225,7 +229,7 @@ export async function exportLive2D(project, images, opts = {}) {
   onProgress('Generating display info...');
   const groups = project.nodes.filter(n => n.type === 'group');
   const meshParts = project.nodes.filter(n =>
-    n.type === 'part' && n.mesh && n.visible !== false && regions.has(n.id)
+    n.type === 'part' && getMesh(n, project) && n.visible !== false && regions.has(n.id)
   );
 
   const cdi3 = generateCdi3Json({
@@ -392,7 +396,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
   // Sort by draw_order (descending) to maintain correct depth ordering (upstream fix).
   const meshParts = project.nodes
     .filter(n =>
-      n.type === 'part' && n.mesh && n.visible !== false
+      n.type === 'part' && getMesh(n, project) && n.visible !== false
     )
     .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
@@ -410,7 +414,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
   const meshes = [];
   for (let i = 0; i < meshParts.length; i++) {
     const part = meshParts[i];
-    const mesh = part.mesh;
+    const mesh = getMesh(part, project);
     const meshName = part.name || `ArtMesh${i}`;
 
     // Find image for this part
@@ -734,12 +738,12 @@ export async function buildMeshesForRig(project, images) {
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
   const meshParts = project.nodes
-    .filter(n => n.type === 'part' && n.mesh && n.visible !== false)
+    .filter(n => n.type === 'part' && getMesh(n, project) && n.visible !== false)
     .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
   const meshes = [];
   for (let i = 0; i < meshParts.length; i++) {
     const part = meshParts[i];
-    const mesh = part.mesh;
+    const mesh = getMesh(part, project);
     const meshName = part.name || `ArtMesh${i}`;
     // Flatten vertices using rest positions (same convention as exportLive2DProject).
     const vertices = [];

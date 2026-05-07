@@ -35,6 +35,8 @@ import {
   warpSpecToDeformerNode,
   upsertDeformerNode,
   removeFaceParallaxNode,
+  synthesizeModifierStacks,
+  synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
 import {
   getFaceParallaxNode,
@@ -162,6 +164,11 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
   // the storage surface.
   if (Array.isArray(project.nodes)) {
     upsertDeformerNode(project.nodes, warpSpecToDeformerNode(stored));
+    // Phase 3 storage flip — face parallax is an ancestor of any
+    // face-tagged part's chain; refresh stacks to pick up the change.
+    synthesizeModifierStacks(project);
+    // V2 Phase 0.3 — modifier stacks are canonical; mirror to parent links.
+    synthesizeDeformerParents(project);
   }
   return stored;
 }
@@ -176,5 +183,7 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
 export function clearFaceParallax(project) {
   if (Array.isArray(project.nodes)) {
     removeFaceParallaxNode(project.nodes);
+    synthesizeModifierStacks(project);
+    synthesizeDeformerParents(project);
   }
 }

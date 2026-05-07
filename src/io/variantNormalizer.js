@@ -20,6 +20,7 @@
 
 import { extractVariant } from './psdOrganizer.js';
 import { logger } from '../lib/logger.js';
+import { getMesh } from '../store/objectDataAccess.js';
 
 /**
  * @typedef {Object} VariantPairing
@@ -41,7 +42,7 @@ import { logger } from '../lib/logger.js';
  * comparison to be forgiving (`foo.Smile` still pairs with `foo`). Excludes
  * the variant node itself and any other variant-named parts.
  */
-function findBasePart(variantNode, baseName, allParts) {
+function findBasePart(variantNode, baseName, allParts, project) {
   const needle = baseName.toLowerCase().trim();
   let best = null;
   for (const n of allParts) {
@@ -54,8 +55,8 @@ function findBasePart(variantNode, baseName, allParts) {
     if (otherVariant) continue;
     // Prefer the visible / meshed candidate over a stray hidden one
     if (!best) { best = n; continue; }
-    const bestScore = (best.visible !== false ? 1 : 0) + (best.mesh ? 1 : 0);
-    const thisScore = (n.visible !== false ? 1 : 0) + (n.mesh ? 1 : 0);
+    const bestScore = (best.visible !== false ? 1 : 0) + (getMesh(best, project) ? 1 : 0);
+    const thisScore = (n.visible !== false ? 1 : 0) + (getMesh(n, project) ? 1 : 0);
     if (thisScore > bestScore) best = n;
   }
   return best;
@@ -109,7 +110,7 @@ export function normalizeVariants(project) {
       if (node.variantSuffix !== undefined) delete node.variantSuffix;
       continue;
     }
-    const base = findBasePart(node, baseName, parts);
+    const base = findBasePart(node, baseName, parts, project);
     if (!base) {
       orphans.push(node);
       // Best-effort: keep the previous pairing fields clean

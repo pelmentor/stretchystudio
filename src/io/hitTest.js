@@ -26,6 +26,7 @@
  */
 
 import { mat3Inverse, mat3Identity } from '../renderer/transforms.js';
+import { getMesh, isMeshedPart } from '../store/objectDataAccess.js';
 
 /**
  * Sign of triangle (ax,ay)→(bx,by)→(cx,cy)→(ax,ay) used for
@@ -157,9 +158,10 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   // (in that priority); post-mesh parts use the triangulation as before.
   const parts = (project?.nodes ?? []).filter((n) => {
     if (!n || n.type !== 'part' || n.visible === false) return false;
-    const hasTris = n.mesh
-      && Array.isArray(n.mesh.triangles)
-      && n.mesh.triangles.length > 0;
+    const m = getMesh(n, project);
+    const hasTris = m
+      && Array.isArray(m.triangles)
+      && m.triangles.length > 0;
     const hasBounds = n.imageBounds
       && typeof n.imageBounds.minX === 'number'
       && typeof n.imageBounds.maxX === 'number'
@@ -174,7 +176,8 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   parts.sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
   for (const part of parts) {
-    const tris = part.mesh?.triangles ?? null;
+    const partMesh = getMesh(part, project);
+    const tris = partMesh?.triangles ?? null;
     const rigVerts = frameMap.get(part.id);
     if (rigVerts && tris && tris.length > 0) {
       if (pointInAnyTriangle(rigVerts, tris, worldX, worldY)) return part.id;
@@ -191,7 +194,7 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
 
     // Triangulated mesh path: rest verts in local space.
     if (tris && tris.length > 0) {
-      const local = part.mesh.vertices;
+      const local = partMesh?.vertices;
       if (Array.isArray(local) && local.length > 0
           && pointInAnyTriangleObjs(local, tris, lx, ly)) {
         return part.id;
