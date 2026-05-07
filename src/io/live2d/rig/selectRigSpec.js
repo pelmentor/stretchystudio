@@ -46,6 +46,7 @@
 import { resolvePhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import { synthesizeDeformerNodesForExport } from './synthesizeDeformerNodesForExport.js';
 
 /** Reusable frozen empty arrays so the selector returns the same
  * objects across calls when a section has no data. Lets shallow-equal
@@ -111,11 +112,24 @@ function _buildRigSpec(project) {
     if (n && typeof n.id === 'string') nodeById.set(n.id, n);
   }
 
-  const warpNodes = nodes.filter(
-    (n) => n?.type === 'deformer' && n.deformerKind === 'warp'
+  // BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.B — read deformers via the
+  // synth that walks `Object.modifiers[]` (with `modifier.data` from
+  // Phase 3.A's v28 migration) rather than filtering `project.nodes`
+  // directly. Pre-flight confirmed synth ≡ node-filter on the user's
+  // Shelby (27/27 deformers, 0 field diffs, 0 binding/keyform diffs).
+  // `includeOrphans: true` (default) preserves orphan deformer nodes
+  // until Phase 3.C deletes them from `project.nodes` entirely.
+  const synthesizedDeformers = synthesizeDeformerNodesForExport(project);
+  // Mirror synth nodes into the index so `_resolveParentRef` lookups
+  // reach them (the lookup is by id, not by reference).
+  for (const n of synthesizedDeformers) {
+    if (n && typeof n.id === 'string') nodeById.set(n.id, n);
+  }
+  const warpNodes = synthesizedDeformers.filter(
+    (n) => n?.deformerKind === 'warp'
   );
-  const rotationNodes = nodes.filter(
-    (n) => n?.type === 'deformer' && n.deformerKind === 'rotation'
+  const rotationNodes = synthesizedDeformers.filter(
+    (n) => n?.deformerKind === 'rotation'
   );
 
   // Topo-sort by parent: parents before children. Same Kahn-style walk
