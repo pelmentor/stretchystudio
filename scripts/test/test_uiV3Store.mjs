@@ -60,8 +60,14 @@ function reset() {
     'rightTop single tab = parameters');
 
   const rightBottom = ws.areas.find((a) => a.id === 'rightBottom');
-  assert(rightBottom?.tabs.length === 1 && rightBottom.tabs[0].editorType === 'properties',
-    'rightBottom single tab = properties');
+  // V2 final wire (2026-05-07) — NodeTree joined Properties as a
+  // second tab so the user can inspect RigTree / DriverTree /
+  // AnimationTree datablocks alongside Properties.
+  assert(rightBottom?.tabs.length === 2, 'rightBottom now has 2 tabs');
+  assert(rightBottom?.tabs[0].editorType === 'properties',
+    'rightBottom tab[0] = properties');
+  assert(rightBottom?.tabs[1].editorType === 'nodeTree',
+    'rightBottom tab[1] = nodeTree');
 }
 
 // ── Animation workspace adds timeline; center hosts the same 2 tabs ─
@@ -82,11 +88,12 @@ function reset() {
   assert(c?.tabs[0].editorType === 'viewport' && c?.tabs[1].editorType === 'livePreview',
     'animation center tabs = [viewport, livePreview]');
   // rightBottom in animation workspace pairs Animations + Properties.
+  // V2 final wire (2026-05-07) — NodeTree appended as a third tab.
   const rb = anim.areas.find((a) => a.id === 'rightBottom');
-  assert(rb?.tabs.length === 2, 'animation rightBottom has 2 tabs');
+  assert(rb?.tabs.length === 3, 'animation rightBottom has 3 tabs');
   const rbTypes = rb.tabs.map((t) => t.editorType);
-  assert(JSON.stringify(rbTypes) === '["animations","properties"]',
-    'animation rightBottom = [animations, properties]');
+  assert(JSON.stringify(rbTypes) === '["animations","properties","nodeTree"]',
+    'animation rightBottom = [animations, properties, nodeTree]');
 }
 
 // ── No workspace ships a centerRight slot — single canvas, tabbed swap ──
@@ -229,9 +236,10 @@ function reset() {
   reset();
   useUIV3Store.getState().addTab('rightBottom', 'parameters');
   const rb = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
-  assert(rb.tabs.length === 2, 'addTab appended');
-  assert(rb.tabs[1].editorType === 'parameters', 'new tab type correct');
-  assert(rb.activeTabId === rb.tabs[1].id, 'new tab is active');
+  // rightBottom starts with [properties, nodeTree]; addTab appends parameters.
+  assert(rb.tabs.length === 3, 'addTab appended');
+  assert(rb.tabs[2].editorType === 'parameters', 'new tab type correct');
+  assert(rb.activeTabId === rb.tabs[2].id, 'new tab is active');
 }
 
 // ── removeTab keeps single-tab areas alive ──────────────────────────
@@ -250,13 +258,15 @@ function reset() {
   reset();
   useUIV3Store.getState().addTab('rightBottom', 'parameters');
   const rightBottom = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
-  const paramsTab = rightBottom.tabs[1];
+  // rightBottom starts with [properties, nodeTree]; addTab appended parameters at index 2.
+  const paramsTab = rightBottom.tabs[2];
   useUIV3Store.getState().setAreaActiveTab('rightBottom', paramsTab.id);
   useUIV3Store.getState().removeTab('rightBottom', paramsTab.id);
   const after = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'rightBottom');
-  assert(after.tabs.length === 1, 'tab removed');
-  assert(after.activeTabId === after.tabs[0].id,
-    'active fell back to remaining tab');
+  assert(after.tabs.length === 2, 'tab removed');
+  // Removed tab was at index 2; left neighbour was nodeTree (index 1).
+  assert(after.activeTabId === after.tabs[1].id,
+    'active fell back to left-neighbour tab');
 }
 
 // ── resetWorkspace restores defaults ────────────────────────────────

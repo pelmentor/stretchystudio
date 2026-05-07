@@ -49,7 +49,7 @@ import { useAnimationStore } from './animationStore.js';
  *    keyframing.
  *
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview'|'nodeTree')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -124,7 +124,10 @@ const DEFAULT_AREAS = () => [
   buildArea('leftBottom',  [e('logs')]),
   buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
-  buildArea('rightBottom', [e('properties')]),
+  // V2 final wire (2026-05-07) — NodeTree tab joins Properties so the
+  // user can inspect RigTree / DriverTree / AnimationTree datablocks
+  // alongside the Properties panel without leaving the workspace.
+  buildArea('rightBottom', [e('properties'), e('nodeTree')]),
 ];
 
 /**
@@ -141,7 +144,7 @@ const ANIMATION_AREAS = () => [
   buildArea('leftBottom',  [e('logs')]),
   buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
-  buildArea('rightBottom', [e('animations'), e('properties')]),
+  buildArea('rightBottom', [e('animations'), e('properties'), e('nodeTree')]),
   buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve')]),
 ];
 

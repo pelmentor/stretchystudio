@@ -77,18 +77,46 @@ re-running the chain produces identical state.
 
 ## What's NOT shipped (deliberately)
 
-1. **CanvasViewport tick path actually using the depgraph** — gated
-   behind `evalEngine: 'depgraph'`. Currently dormant code; default
-   stays `'classic'`.
-2. **NodeTreeEditor wired into the app shell** — component exists at
-   `src/v3/editors/nodetree/NodeTreeEditor.jsx` but no mode pill / tab
-   integration. Visual UI work needs in-browser verification.
-3. **`cmo3writer` / `moc3writer` reading from RigTree directly** —
+1. **CanvasViewport tick path actually using the depgraph for
+   rendering** — visual tick stays on `chainEval`. The depgraph runs
+   in **shadow** alongside chainEval when `evalEngine === 'depgraph'`
+   (see "Shadow validator wire" below). A render-side flip needs an
+   art-mesh keyform kernel + frame collection — out of scope for V2.
+2. **`cmo3writer` / `moc3writer` reading from RigTree directly** —
    still reads parent-link mirror via `selectRigSpec`. Switching
    readers is the cleanup phase.
-4. **Cleanup phase deletions** — `chainEval.js`, `selectRigSpec.js`,
+3. **Cleanup phase deletions** — `chainEval.js`, `selectRigSpec.js`,
    `synthesizeDeformerParents`, dual-write `synthesizeModifierStacks`,
-   `'classic'` flag. Per plan: gated on D-6 user gate + 2-week soak.
+   `'classic'` flag. Per plan: gated on a clean shadow soak under
+   `evalEngine: 'depgraph'`.
+
+## Shadow validator wire (2026-05-07)
+
+`src/anim/depgraph/shadowValidate.js` — `runShadowDepgraphTick`
+runs the depgraph against the same project + paramValues snapshot
+that `evalRig` just consumed, then diffs per-warp lifted grids
+against the chainEval map collected via
+`evalRig({ out: { liftedGrids } })`. Throttled to ~1 Hz; flares the
+first divergence per session via `logger.warn('depgraphShadowDivergence', …)`,
+clears + re-flares when the user toggles `evalEngine`.
+
+Called from `CanvasViewport.jsx` inside the existing eval-cache miss
+path, gated on `usePreferencesStore.getState().evalEngine === 'depgraph'`.
+Visual rendering continues from chainEval — shadow-only — so the
+worst-case impact of a divergence is a Logs-panel flag, never a
+visible regression.
+
+Test: `scripts/test/test_depgraphShadow.mjs` (17 assertions).
+
+## NodeTreeEditor app-shell wire (2026-05-07)
+
+`src/v3/editors/nodetree/NodeTreeArea.jsx` — host component that
+owns the local mode pill (Rig / Driver / Animation) and routes the
+active selection's tree into `NodeTreeEditor`. Registered as the
+`nodeTree` editor type in `editorRegistry.js`. Pre-wired into both
+default and animation workspaces' `rightBottom` area as a tab next
+to Properties / Animations. Read-only — Phase N-5 edit ops gate
+behind a future `riggingPath` flag flip.
 
 ## User gates pending
 
