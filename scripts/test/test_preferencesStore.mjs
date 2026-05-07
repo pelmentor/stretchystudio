@@ -213,23 +213,24 @@ function get() { return usePreferencesStore.getState(); }
 // ── V2 Phase D-5: evalEngine flag ─────────────────────────────────
 
 {
-  // Default classic.
+  // Default flipped to 'depgraph' on 2026-05-07 — shadow validator
+  // runs alongside chainEval; visual rendering still chainEval.
+  assert(get().evalEngine === 'depgraph',
+    'evalEngine: defaults to depgraph (shadow validator on)');
+  // Opt-out path.
+  get().setEvalEngine('classic');
   assert(get().evalEngine === 'classic',
-    'evalEngine: defaults to classic (chainEval)');
-  // Setter writes through.
+    'setEvalEngine(classic): in-memory updated (shadow off)');
+  assert(_store.get('v3.prefs.evalEngine') === '"classic"',
+    'setEvalEngine: localStorage written as JSON-quoted string');
+  // Flip back.
   get().setEvalEngine('depgraph');
   assert(get().evalEngine === 'depgraph',
     'setEvalEngine(depgraph): in-memory updated');
-  assert(_store.get('v3.prefs.evalEngine') === '"depgraph"',
-    'setEvalEngine: localStorage written as JSON-quoted string');
-  // Flip back.
-  get().setEvalEngine('classic');
-  assert(get().evalEngine === 'classic',
-    'setEvalEngine(classic): in-memory updated');
-  // Garbage input clamped to classic.
+  // Garbage input clamped to the default (depgraph).
   get().setEvalEngine('garbage');
   assert(get().evalEngine === 'classic',
-    'setEvalEngine: unknown value defaults back to classic (defensive guard)');
+    'setEvalEngine: unknown value normalises to classic (defensive guard)');
 }
 
 console.log(`\npreferencesStore: ${passed} passed, ${failed} failed`);
