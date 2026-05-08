@@ -29,6 +29,10 @@ import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold
 import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
 import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js';
 import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
+// v30 — Phase 3.C strip is staged at `migrations/v30_strip_deformer_nodes.js`
+// but NOT YET registered. Activating it requires updating ~20 test fixtures
+// to add referencing parts so deformer data lives on `modifier.data` post-
+// strip. Pending dedicated session for test infrastructure refactor.
 
 export const CURRENT_SCHEMA_VERSION = 29;
 

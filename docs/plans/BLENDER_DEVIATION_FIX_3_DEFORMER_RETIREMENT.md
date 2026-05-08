@@ -88,12 +88,67 @@ Each phase is its own commit + tests + push. Total estimated time: 3 working ses
     (CModelGuid, CPartGuid, CDeformerGuid, CFormGuid, etc.) — pre-existing
     non-determinism, NOT a Phase 3.B regression.
 
-**Phase 3.C BLOCKED on "neck gone before re-init" investigation.**
+**Phase 3.C UNBLOCKED 2026-05-08, prep work shipped, activation deferred.**
 
-User reported 2026-05-07: loading their Shelby project from IndexedDB
-cache, the neck mesh wasn't rendering until they clicked "Re-initialize
-Rig". After re-init it worked, and that's the state used for the byte-
-diff above.
+The "neck gone before re-init" blocker was root-caused in commit `02e7425`:
+silent `Array.isArray(x) ? x.slice() : []` returned `false` for
+`Float64Array`, dropping `baseGrid` + keyform `positions` for NeckWarp +
+RigWarp_neck on every Init Rig. Eliminated via `coerceNumberArray` /
+`coerceFloat64Array` helpers in `src/lib/numberArrayCoerce.js` —
+type-aware coercion that throws on garbage instead of dropping.
+
+**Prep work shipped (this session):**
+- `src/io/live2d/rig/deformerLookup.js` — `findDeformerById` /
+  `listDeformers` / `updateDeformerData` / `findRigWarpForPart`. Reads
+  exclusively from `modifier.data`. UI readers + store mutators flip to
+  these helpers as the single source of truth.
+- `src/store/migrations/v30_strip_deformer_nodes.js` — idempotent v30
+  migration that runs the v28 fold first (safety-net for drifted
+  modifier.data), detects + warns on never-in-stack orphans, then
+  strips `type:'deformer'` from `project.nodes`. **Not yet registered**
+  — `CURRENT_SCHEMA_VERSION` stays at 29.
+
+**Why activation is deferred:**
+A first-pass attempt to flip the schema to v30 + add seedAllRig strip
+revealed that ~20 test files (test_migrations.mjs alone has 24
+assertions on `n.type === 'deformer'`) need referencing-part fixtures
+to keep deformer data live post-strip. Many tests construct sidetables
+or deformer nodes WITHOUT parts — post-strip, those fixtures lose all
+deformer data because there's nowhere for `modifier.data` to live.
+
+The fix (per Blender's mental model — orphan modifiers are dropped):
+update each test fixture to add minimal referencing parts. That's a
+mechanical sweep across 20+ files, more than fits this session.
+
+**Activation plan (next session):**
+1. Sweep test fixtures: add `{type:'part', rigParent:<deformerId>}`
+   stubs to each fixture missing them; flip assertions to use
+   `findDeformerById(p, id)` instead of `p.nodes.find(...)`.
+2. Update UI readers (Outliner tree builder, KeyformGraphEditor,
+   WarpDeformerOverlay, RotationDeformerOverlay, DeformerKeyformsSection,
+   DeformerBindingsSection, DeformerInfoSection) to use the new lookup
+   helpers — preserves UX exactly, switches storage shape underneath.
+3. Update `projectStore.js` mutators (lines 1219-1280: NeckWarp +
+   rotation deformer dual-writes) to write to `modifier.data` via
+   `updateDeformerData` rather than to deformer nodes.
+4. Bump `CURRENT_SCHEMA_VERSION` to 30; register the v30 migration; add
+   the `seedAllRig` strip step at end of `seedAllRig`.
+5. Refactor seeders (faceParallaxStore / bodyWarpStore / rigWarpsStore)
+   to write directly to `part.modifiers[].data`. Delete
+   `synthesizeModifierStacks` / `synthesizeDeformerParents` /
+   `synthesizeDeformerNodesFromSidetables` once unreferenced.
+6. Byte-fidelity sweep on Shelby — the cmo3/moc3 export pipeline reads
+   via `selectRigSpec` → `synthesizeDeformerNodesForExport` (already
+   modifier.data-driven via Phase 3.B), so byte-identical output
+   should be the gate that confirms the refactor preserves semantics.
+
+The blocker (test infrastructure refactor) is now the SOLE remaining
+work for Phase 3.C. Mechanical and well-scoped; just needs a dedicated
+session.
+
+# Pre-flight artifact (kept from 2026-05-07)
+
+
 
 Root-cause investigation (`scripts/byteFidelity/inspect_neck_state.mjs`)
 on the saved `.stretch` showed the file is fully populated: schemaVersion=28,
