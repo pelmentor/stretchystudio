@@ -19,9 +19,11 @@
 import {
   applyWeightedSkinning,
   applyWeightedSkinningObj,
+  applyTwoBoneSkinning,
+  applyTwoBoneSkinningObj,
   isIdentityMatrix,
 } from '../../src/renderer/boneSkinning.js';
-import { computeBoneWorldMatrices } from '../../src/renderer/boneOverlayMatrix.js';
+import { computeBoneWorldMatrices, computeBoneParentMap } from '../../src/renderer/boneOverlayMatrix.js';
 import { mat3Identity } from '../../src/renderer/transforms.js';
 
 let passed = 0;
@@ -232,6 +234,166 @@ function arrEq(a, b, eps = 1e-5) {
   applyWeightedSkinning(positions, rotMatrix, [1]);
   assert(arrEq(Array.from(positions), before),
     'weights shorter than positions → no-op (defensive against malformed input)');
+}
+
+// ── 11. Two-bone LBS — weight=0 follows PARENT, weight=1 follows CHILD ─
+
+{
+  // Setup: parent (leftArm) rotates 90° around (0,0). Child (leftElbow)
+  // has identity pose, so child.world = parent.world.
+  const nodes = [
+    { id: 'leftArm', type: 'group', boneRole: 'leftArm',
+      transform: { pivotX: 0, pivotY: 0 },
+      pose: { rotation: 90, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+    { id: 'leftElbow', type: 'group', boneRole: 'leftElbow', parent: 'leftArm',
+      transform: { pivotX: 100, pivotY: 0 },
+      pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+  ];
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  const armW = boneWorld.get('leftArm');
+  const elbowW = boneWorld.get('leftElbow');
+
+  // Critical case: weight=0 vertex must rotate by parent (was the bug).
+  const verts = [{ x: 1, y: 0 }];
+  applyTwoBoneSkinningObj(verts, armW, elbowW, [0]);
+  assert(approx(verts[0].x, 0) && approx(verts[0].y, 1),
+    'twoBone weight=0: follows PARENT (1,0) → (0,1) under leftArm 90°');
+}
+
+{
+  // Same setup; weight=1 should also rotate (child.world = parent.world
+  // when child.local is identity, so the result is the same).
+  const nodes = [
+    { id: 'leftArm', type: 'group', boneRole: 'leftArm',
+      transform: { pivotX: 0, pivotY: 0 },
+      pose: { rotation: 90, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+    { id: 'leftElbow', type: 'group', boneRole: 'leftElbow', parent: 'leftArm',
+      transform: { pivotX: 100, pivotY: 0 },
+      pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+  ];
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  const verts = [{ x: 1, y: 0 }];
+  applyTwoBoneSkinningObj(verts, boneWorld.get('leftArm'), boneWorld.get('leftElbow'), [1]);
+  assert(approx(verts[0].x, 0) && approx(verts[0].y, 1),
+    'twoBone weight=1: follows CHILD (= parent when child.local=I) → (0,1)');
+}
+
+{
+  // Mid-weight verifies LERP. Both bones equal here, so verts at any
+  // weight should land at (0,1).
+  const nodes = [
+    { id: 'leftArm', type: 'group', boneRole: 'leftArm',
+      transform: { pivotX: 0, pivotY: 0 },
+      pose: { rotation: 90, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+    { id: 'leftElbow', type: 'group', boneRole: 'leftElbow', parent: 'leftArm',
+      transform: { pivotX: 100, pivotY: 0 },
+      pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+  ];
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  const verts = [{ x: 1, y: 0 }];
+  applyTwoBoneSkinningObj(verts, boneWorld.get('leftArm'), boneWorld.get('leftElbow'), [0.5]);
+  assert(approx(verts[0].x, 0) && approx(verts[0].y, 1),
+    'twoBone w=0.5: lerp of equal matrices = either');
+}
+
+// ── 12. Two-bone — child has its OWN pose (proper bend) ────────────
+
+{
+  // Parent at rest, child rotates 90° around its own pivot (100,0).
+  // weight=0 vert at (1,0) should stay at (1,0). weight=1 at (200,0)
+  // should rotate 90° around (100,0) → (100, 100).
+  const nodes = [
+    { id: 'leftArm', type: 'group', boneRole: 'leftArm',
+      transform: { pivotX: 0, pivotY: 0 },
+      pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+    { id: 'leftElbow', type: 'group', boneRole: 'leftElbow', parent: 'leftArm',
+      transform: { pivotX: 100, pivotY: 0 },
+      pose: { rotation: 90, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+    },
+  ];
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  const armW = boneWorld.get('leftArm');
+  const elbowW = boneWorld.get('leftElbow');
+  const verts = [
+    { x: 1, y: 0 },     // weight=0 → stays (parent at rest)
+    { x: 200, y: 0 },   // weight=1 → rotated by elbow
+  ];
+  applyTwoBoneSkinningObj(verts, armW, elbowW, [0, 1]);
+  assert(approx(verts[0].x, 1) && approx(verts[0].y, 0),
+    'twoBone parent-rest weight=0: vert stays put');
+  assert(approx(verts[1].x, 100) && approx(verts[1].y, 100),
+    'twoBone parent-rest weight=1: vert rotates 90° around elbow pivot (100,0) → (100,100)');
+}
+
+// ── 13. Two-bone — both at rest is no-op ────────────────────────────
+
+{
+  const verts = [{ x: 50, y: 75 }];
+  applyTwoBoneSkinningObj(verts, mat3Identity(), mat3Identity(), [0.5]);
+  assert(approx(verts[0].x, 50) && approx(verts[0].y, 75),
+    'twoBone both-identity: no-op regardless of weight');
+}
+
+// ── 14. Two-bone — null parent treated as identity (root bone case) ─
+
+{
+  // Root bone has no parent in skeleton. weight=0 should keep vert at
+  // canvas-rest (parent=identity). weight=1 should apply child.
+  const child = new Float32Array([Math.cos(Math.PI / 2), Math.sin(Math.PI / 2), 0,
+                                   -Math.sin(Math.PI / 2), Math.cos(Math.PI / 2), 0,
+                                   0, 0, 1]);
+  const verts = [
+    { x: 10, y: 0 },
+    { x: 10, y: 0 },
+  ];
+  applyTwoBoneSkinningObj(verts, null, child, [0, 1]);
+  assert(approx(verts[0].x, 10) && approx(verts[0].y, 0),
+    'twoBone null-parent weight=0: stays at rest');
+  assert(approx(verts[1].x, 0) && approx(verts[1].y, 10),
+    'twoBone null-parent weight=1: rotated by child');
+}
+
+// ── 15. Two-bone — flat array variant matches obj variant ───────────
+
+{
+  // 90° rotation as the parent.
+  const rad = Math.PI / 2;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const parent = new Float32Array([cos, sin, 0, -sin, cos, 0, 0, 0, 1]);
+  const positions = new Float32Array([10, 0, 0, 10, 5, 5]);
+  const expected = [
+    { x: 10, y: 0 }, { x: 0, y: 10 }, { x: 5, y: 5 },
+  ];
+  // Apply via obj variant for reference.
+  applyTwoBoneSkinningObj(expected, parent, mat3Identity(), [1, 1, 1]);
+  // Apply via flat variant.
+  applyTwoBoneSkinning(positions, parent, mat3Identity(), [1, 1, 1]);
+  for (let i = 0; i < 3; i++) {
+    assert(approx(positions[i * 2], expected[i].x) && approx(positions[i * 2 + 1], expected[i].y),
+      `twoBone flat==obj variant vert ${i}`);
+  }
+}
+
+// ── 16. computeBoneParentMap returns nearest bone-group ancestor ────
+
+{
+  const nodes = [
+    { id: 'root', type: 'group', boneRole: 'root', transform: { pivotX: 0, pivotY: 0 }, pose: {} },
+    { id: 'arm', type: 'group', boneRole: 'leftArm', parent: 'root', transform: { pivotX: 0, pivotY: 0 }, pose: {} },
+    { id: 'folder', type: 'group', parent: 'arm', transform: { pivotX: 0, pivotY: 0 } },
+    { id: 'elbow', type: 'group', boneRole: 'leftElbow', parent: 'folder', transform: { pivotX: 0, pivotY: 0 }, pose: {} },
+  ];
+  const m = computeBoneParentMap(nodes);
+  assert(m.get('root') === null, 'parentMap: root has null parent (top of skeleton)');
+  assert(m.get('arm') === 'root', 'parentMap: arm.parent = root');
+  assert(m.get('elbow') === 'arm', 'parentMap: elbow.parent = arm (skipped non-bone folder)');
 }
 
 console.log(`boneSkinning: ${passed} passed, ${failed} failed`);

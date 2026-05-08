@@ -127,3 +127,140 @@ export function applyWeightedSkinningObj(verts, matrix, weights) {
   }
   return verts;
 }
+
+/**
+ * Two-bone linear blend skinning. Each vertex receives a weighted blend
+ * between two bone matrices: the PARENT bone (e.g. leftArm/shoulder) and
+ * the CHILD bone (e.g. leftElbow). Weight 0 → vertex follows parent,
+ * weight 1 → vertex follows child, mid-values produce the natural
+ * shoulder→elbow bend along a limb.
+ *
+ * Algebra:
+ *   pos = (1-w) · parentWorld · v + w · childWorld · v
+ *
+ * Mirrors Blender's `pchan_bone_deform` accumulating two bones'
+ * contributions into one output vertex
+ * (`reference/blender/source/blender/blenkernel/intern/armature_deform.cc`).
+ *
+ * **Why this exists.** SS's `mesh.boneWeights` array carries a single
+ * scalar per vertex along the limb axis. The single-matrix skinning
+ * (`applyWeightedSkinningObj` above) treats weight=0 as "vertex stays
+ * at rest in canvas-space" — which is wrong when the PARENT bone is
+ * the one being rotated (rotating leftArm with leftElbow at rest must
+ * still drag the upper-arm vertices weighted to leftArm). Two-bone
+ * skinning fixes this: weight=0 verts follow parentWorld instead of
+ * the canvas frame.
+ *
+ * **Edge case — child.local = identity.** When the child bone has rest
+ * pose (the user only rotated the parent), childWorld = parentWorld
+ * (because childWorld = parentWorld × childLocal). The lerp between
+ * two equal matrices collapses, so every vertex transforms by
+ * parentWorld regardless of weight. The whole limb rotates rigidly,
+ * which is what "rotate the upper-arm bone" should look like.
+ *
+ * **Edge case — parentWorld = identity.** When the parent bone is at
+ * rest (only the child is rotated), weight=0 verts stay at canvas-rest
+ * (parentWorld·v = v) and weight=1 verts rotate by childWorld. That's
+ * the correct elbow-only bend.
+ *
+ * In place. No-op when either matrix is missing or weights is shorter
+ * than verts.
+ *
+ * @param {Array<{x: number, y: number}>} verts
+ * @param {Float32Array|null|undefined} parentMatrix - parent bone WORLD (3×3 column-major)
+ * @param {Float32Array|null|undefined} childMatrix  - child  bone WORLD (3×3 column-major)
+ * @param {ArrayLike<number>|null|undefined} weights - per-vertex weights, [0,1]
+ */
+export function applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, weights) {
+  if (!weights) return verts;
+  if (weights.length < verts.length) return verts;
+  const pIdent = !parentMatrix || isIdentityMatrix(parentMatrix);
+  const cIdent = !childMatrix  || isIdentityMatrix(childMatrix);
+  // Both at rest → no work to do.
+  if (pIdent && cIdent) return verts;
+  // Pull parent matrix coefficients (or identity).
+  const p0 = pIdent ? 1 : parentMatrix[0];
+  const p1 = pIdent ? 0 : parentMatrix[1];
+  const p3 = pIdent ? 0 : parentMatrix[3];
+  const p4 = pIdent ? 1 : parentMatrix[4];
+  const p6 = pIdent ? 0 : parentMatrix[6];
+  const p7 = pIdent ? 0 : parentMatrix[7];
+  // Pull child matrix coefficients (or identity).
+  const c0 = cIdent ? 1 : childMatrix[0];
+  const c1 = cIdent ? 0 : childMatrix[1];
+  const c3 = cIdent ? 0 : childMatrix[3];
+  const c4 = cIdent ? 1 : childMatrix[4];
+  const c6 = cIdent ? 0 : childMatrix[6];
+  const c7 = cIdent ? 0 : childMatrix[7];
+  for (let i = 0; i < verts.length; i++) {
+    const w = weights[i] ?? 0;
+    const v = verts[i];
+    const x = v.x;
+    const y = v.y;
+    const px = p0 * x + p3 * y + p6;
+    const py = p1 * x + p4 * y + p7;
+    if (w === 0) {
+      v.x = px;
+      v.y = py;
+    } else if (w === 1) {
+      v.x = c0 * x + c3 * y + c6;
+      v.y = c1 * x + c4 * y + c7;
+    } else {
+      const cx = c0 * x + c3 * y + c6;
+      const cy = c1 * x + c4 * y + c7;
+      v.x = px + (cx - px) * w;
+      v.y = py + (cy - py) * w;
+    }
+  }
+  return verts;
+}
+
+/**
+ * Flat-array variant of `applyTwoBoneSkinningObj`. Same math, operates
+ * on `[x0, y0, x1, y1, ...]`.
+ *
+ * @param {Float32Array} positions
+ * @param {Float32Array|null|undefined} parentMatrix
+ * @param {Float32Array|null|undefined} childMatrix
+ * @param {ArrayLike<number>|null|undefined} weights
+ */
+export function applyTwoBoneSkinning(positions, parentMatrix, childMatrix, weights) {
+  if (!weights) return positions;
+  const n = positions.length >> 1;
+  if (weights.length < n) return positions;
+  const pIdent = !parentMatrix || isIdentityMatrix(parentMatrix);
+  const cIdent = !childMatrix  || isIdentityMatrix(childMatrix);
+  if (pIdent && cIdent) return positions;
+  const p0 = pIdent ? 1 : parentMatrix[0];
+  const p1 = pIdent ? 0 : parentMatrix[1];
+  const p3 = pIdent ? 0 : parentMatrix[3];
+  const p4 = pIdent ? 1 : parentMatrix[4];
+  const p6 = pIdent ? 0 : parentMatrix[6];
+  const p7 = pIdent ? 0 : parentMatrix[7];
+  const c0 = cIdent ? 1 : childMatrix[0];
+  const c1 = cIdent ? 0 : childMatrix[1];
+  const c3 = cIdent ? 0 : childMatrix[3];
+  const c4 = cIdent ? 1 : childMatrix[4];
+  const c6 = cIdent ? 0 : childMatrix[6];
+  const c7 = cIdent ? 0 : childMatrix[7];
+  for (let i = 0; i < n; i++) {
+    const w = weights[i] ?? 0;
+    const x = positions[i * 2];
+    const y = positions[i * 2 + 1];
+    const px = p0 * x + p3 * y + p6;
+    const py = p1 * x + p4 * y + p7;
+    if (w === 0) {
+      positions[i * 2]     = px;
+      positions[i * 2 + 1] = py;
+    } else if (w === 1) {
+      positions[i * 2]     = c0 * x + c3 * y + c6;
+      positions[i * 2 + 1] = c1 * x + c4 * y + c7;
+    } else {
+      const cx = c0 * x + c3 * y + c6;
+      const cy = c1 * x + c4 * y + c7;
+      positions[i * 2]     = px + (cx - px) * w;
+      positions[i * 2 + 1] = py + (cy - py) * w;
+    }
+  }
+  return positions;
+}

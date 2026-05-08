@@ -136,6 +136,35 @@ export function computeBoneWorldMatrices(nodes) {
   return boneWorld;
 }
 
+/**
+ * Map each bone-group node to its NEAREST bone-group ANCESTOR (parent
+ * bone in the skeleton). Non-bone-group ancestors (visual folders) are
+ * skipped — only true bones contribute to the chain. Returns `null` for
+ * bones whose chain terminates without another bone (e.g. root).
+ *
+ * Used by two-bone LBS skinning: a part weighted to leftElbow needs
+ * leftElbow's parent bone (leftArm) as the parent matrix so weight=0
+ * verts follow the upper arm rotation.
+ *
+ * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string}>} nodes
+ * @returns {Map<string, string|null>} boneId → parentBoneId (or null)
+ */
+export function computeBoneParentMap(nodes) {
+  /** @type {Map<string, string|null>} */
+  const out = new Map();
+  if (!Array.isArray(nodes) || nodes.length === 0) return out;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const n of nodes) {
+    if (!isBoneGroup(n)) continue;
+    let cur = n.parent ? byId.get(n.parent) : null;
+    while (cur && !isBoneGroup(cur)) {
+      cur = cur.parent ? byId.get(cur.parent) : null;
+    }
+    out.set(n.id, cur ? cur.id : null);
+  }
+  return out;
+}
+
 export function computeBoneOverlayMatrices(nodes) {
   /** @type {Map<string, Float32Array>} */
   const out = new Map();

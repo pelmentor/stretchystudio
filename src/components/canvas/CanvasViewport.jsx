@@ -77,8 +77,8 @@ import {
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
-import { computeBoneOverlayMatrices, computeBoneWorldMatrices, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
-import { applyWeightedSkinningObj } from '@/renderer/boneSkinning';
+import { computeBoneOverlayMatrices, computeBoneWorldMatrices, computeBoneParentMap, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
+import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -771,6 +771,11 @@ export default function CanvasViewport({
           // leftElbow's WORLD includes leftArm's pose. Reading the
           // bone's own pose alone misses ancestor rotations.
           const boneWorld = computeBoneWorldMatrices(projectRef.current.nodes);
+          // Per-bone PARENT bone id map. Two-bone LBS needs the joint
+          // bone's parent so weight=0 verts follow the parent's rotation
+          // (e.g. rotating leftArm drags the upper-arm vertices weighted
+          // to leftArm even though jointBoneId=leftElbow).
+          const boneParents = computeBoneParentMap(projectRef.current.nodes);
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) continue;
@@ -816,13 +821,20 @@ export default function CanvasViewport({
             const partBoneId = partMesh?.jointBoneId;
             const partWeights = partMesh?.boneWeights;
             if (partBoneId && Array.isArray(partWeights) && partWeights.length > 0) {
-              // Weighted skinning: use the joint bone's WORLD matrix
-              // (composed through bone-group ancestors) so rotating
-              // leftArm correctly drives parts weighted to leftElbow.
-              applyWeightedSkinningObj(verts, boneWorld.get(partBoneId), partWeights);
+              // Two-bone LBS (mirrors Blender pchan_bone_deform): the
+              // joint bone (leftElbow) is the CHILD; its bone-tree parent
+              // (leftArm) is the PARENT. weight=0 → parent.world,
+              // weight=1 → child.world, mid → lerp. Single-bone skinning
+              // anchored weight=0 verts to canvas rest, so rotating the
+              // parent bone alone produced little visible motion on
+              // limb meshes — replaced 2026-05-08.
+              const childMatrix = boneWorld.get(partBoneId);
+              const parentBoneId = boneParents.get(partBoneId) ?? null;
+              const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
+              applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partWeights);
             } else {
-              // No weighted skinning — fall back to the per-part overlay
-              // matrix. No-op when the bone chain is at rest.
+              // No weighted skinning — per-part overlay matrix. No-op
+              // when the bone chain is at rest.
               applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
             }
             if (!poseOverrides) poseOverrides = new Map();

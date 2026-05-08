@@ -27,7 +27,6 @@ import { computePoseOverrides, applyOverrideToNode } from '@/renderer/animationE
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
-import { logger } from '@/lib/logger';
 import {
   isBoneGroup,
   isMeshedPart,
