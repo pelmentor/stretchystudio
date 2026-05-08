@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { PropertyRow } from '../primitives/PropertyRow.jsx';
 
 /**
  * @param {Object} props
@@ -24,6 +25,7 @@ import { useState, useEffect, useRef } from 'react';
  * @param {number=}  props.max
  * @param {number=}  props.precision   - decimals shown when not focused (default 2)
  * @param {boolean=} props.disabled
+ * @param {string=}  props.title       - tooltip for the label cell
  */
 export function NumberField({
   label,
@@ -34,6 +36,7 @@ export function NumberField({
   max,
   precision = 2,
   disabled,
+  title,
 }) {
   const [draft, setDraft] = useState(formatValue(value, precision));
   const [editing, setEditing] = useState(false);
@@ -63,8 +66,7 @@ export function NumberField({
   }
 
   return (
-    <label className="flex items-center gap-2 text-xs h-7">
-      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+    <PropertyRow label={label} title={title}>
       <input
         ref={inputRef}
         type="number"
@@ -73,7 +75,7 @@ export function NumberField({
         max={max}
         value={draft}
         disabled={disabled}
-        className="flex-1 h-6 px-1.5 rounded bg-muted/40 border border-border text-foreground tabular-nums focus:outline-none focus:border-primary"
+        className="w-full h-6 px-1.5 rounded bg-muted/40 border border-border text-foreground tabular-nums focus:outline-none focus:border-primary"
         onChange={(e) => {
           setEditing(true);
           setDraft(e.target.value);
@@ -90,7 +92,7 @@ export function NumberField({
           }
         }}
       />
-    </label>
+    </PropertyRow>
   );
 }
 

@@ -19,6 +19,7 @@
  * @module v3/editors/properties/sections/ModifierStackSection
  */
 
+import { Wrench } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
@@ -88,7 +89,7 @@ export function ModifierStackSection({ nodeId }) {
   }
 
   return (
-    <SectionShell id="modifierStack" label="Modifier Stack">
+    <SectionShell id="modifierStack" label="Modifier Stack" icon={<Wrench size={11} />}>
       <div className="text-[11px] text-muted-foreground mb-1">
         Leaf-first order — modifiers[0] is the innermost / closest to the part.
       </div>

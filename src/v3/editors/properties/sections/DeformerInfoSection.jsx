@@ -15,6 +15,7 @@ import { Box, RotateCw, Lock, Unlock } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import * as SelectImpl from '../../../../components/ui/select.jsx';
 import { SectionShell } from './SectionShell.jsx';
+import { PropertyRow } from '../primitives/PropertyRow.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
 const Sel = /** @type {any} */ (SelectImpl);
@@ -75,15 +76,15 @@ export function DeformerInfoSection({ deformerId }) {
       label={kind === 'warp' ? 'Warp Deformer' : 'Rotation Deformer'}
       icon={kind === 'warp' ? <Box size={11} /> : <RotateCw size={11} />}
     >
-      <Row label="ID">
-        <code className="text-xs text-foreground truncate" title={node.id}>{node.id}</code>
-      </Row>
-      <Row label="Name">
-        <span className="text-xs text-foreground truncate">{node.name ?? node.id}</span>
-      </Row>
-      <Row label="Parent">
+      <PropertyRow label="ID">
+        <code className="text-[11px] text-foreground truncate" title={node.id}>{node.id}</code>
+      </PropertyRow>
+      <PropertyRow label="Name">
+        <span className="text-[11px] text-foreground truncate">{node.name ?? node.id}</span>
+      </PropertyRow>
+      <PropertyRow label="Parent">
         <Select value={node.parent ?? PARENT_ROOT} onValueChange={handleParentChange}>
-          <SelectTrigger className="h-6 text-xs px-2 py-0">
+          <SelectTrigger className="h-6 text-xs px-2 py-0 w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -94,7 +95,7 @@ export function DeformerInfoSection({ deformerId }) {
             ))}
           </SelectContent>
         </Select>
-      </Row>
+      </PropertyRow>
 
       {kind === 'warp' ? <WarpDetails spec={node} /> : <RotationDetails spec={node} />}
 
@@ -164,16 +165,16 @@ function WarpDetails({ spec }) {
   const positionsLen = firstKf?.positions?.length ?? 0;
   return (
     <>
-      <Row label="Grid">
-        <span className="text-xs text-foreground tabular-nums font-mono">
+      <PropertyRow label="Grid">
+        <span className="text-[11px] text-foreground tabular-nums font-mono">
           {gridSize ? `${gridSize.cols} × ${gridSize.rows}` : '—'}
         </span>
-      </Row>
-      <Row label="Vertices">
-        <span className="text-xs text-foreground tabular-nums">
+      </PropertyRow>
+      <PropertyRow label="Vertices">
+        <span className="text-[11px] text-foreground tabular-nums">
           {positionsLen / 2}
         </span>
-      </Row>
+      </PropertyRow>
     </>
   );
 }
@@ -189,25 +190,16 @@ function RotationDetails({ spec }) {
     : `${Math.min(...angles)}° → ${Math.max(...angles)}°`;
   return (
     <>
-      <Row label="Origin">
-        <span className="text-xs text-foreground tabular-nums font-mono">
+      <PropertyRow label="Origin">
+        <span className="text-[11px] text-foreground tabular-nums font-mono">
           {firstKf
             ? `${(firstKf.originX ?? 0).toFixed(2)}, ${(firstKf.originY ?? 0).toFixed(2)}`
             : '—'}
         </span>
-      </Row>
-      <Row label="Angle range">
-        <span className="text-xs text-foreground tabular-nums font-mono">{angleSummary}</span>
-      </Row>
+      </PropertyRow>
+      <PropertyRow label="Angle range">
+        <span className="text-[11px] text-foreground tabular-nums font-mono">{angleSummary}</span>
+      </PropertyRow>
     </>
-  );
-}
-
-function Row({ label, children }) {
-  return (
-    <div className="flex items-center gap-2 text-xs h-6">
-      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-      <div className="flex-1 flex items-center min-w-0">{children}</div>
-    </div>
   );
 }

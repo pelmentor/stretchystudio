@@ -1,35 +1,74 @@
 // @ts-check
 
 /**
- * V4 Phase 1 — Properties editor with stacked, contextual sections.
+ * Blender-port — Properties editor with a tab axis (`space_buttons`
+ * pattern from `source/blender/editors/space_buttons/space_buttons.cc`).
  *
- * Replaces the per-Properties tab strip with a Blender-style scrollable
- * column of collapsible sections. Visibility per section is decided
- * via `sectionRegistry.sectionsFor(ctx)`; all visible sections render
- * simultaneously so the user can see Transform + Mesh + Shape Keys at
- * a glance instead of tabbing between them.
+ * Layout:
+ *   [breadcrumb header           ]
+ *   [tab bar | tab content scroll]
  *
- * Header row at the top: a one-line breadcrumb naming the active node
- * and its type (Blender's Properties Editor mirrors this with an icon
- * + name + parent jump).
+ * Tab axis is the left-side icon strip (`PropertiesTabBar`). The active
+ * tab determines which sections from `sectionRegistry` render in the
+ * scroll area on the right. Sections inside a tab still use
+ * `SectionShell` for collapse — Blender's nested-panel pattern (a tab
+ * shows several panels, each individually collapsible).
+ *
+ * Sticky-tab semantics: the user's chosen tab persists across selection
+ * changes. When the current tab is no longer visible for the new
+ * selection, we fall forward to the first visible tab without mutating
+ * the sticky preference — re-selecting a node of the original kind
+ * brings the user's preferred tab back.
  *
  * @module v3/editors/properties/PropertiesEditor
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
-import { sectionsFor } from './sectionRegistry.jsx';
+import { useEditorStore } from '../../../store/editorStore.js';
+import { PropertiesTabBar } from './PropertiesTabBar.jsx';
+import { tabsFor, sectionsForTab } from './propertiesTabRegistry.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
   const project = useProjectStore((s) => s.project);
+  const stickyTab = useEditorStore((s) => s.propertiesActiveTab);
+  const setActiveTab = useEditorStore((s) => s.setPropertiesActiveTab);
 
   const active = items.length > 0 ? items[items.length - 1] : null;
 
-  const sections = useMemo(
-    () => (active ? sectionsFor({ active, project }) : []),
+  const visibleTabs = useMemo(
+    () => (active ? tabsFor({ active, project }) : []),
     [active, project],
+  );
+
+  // Effective active tab — the sticky pref if it's still visible,
+  // otherwise fall forward to the first visible tab (Blender behaviour
+  // when context changes; the sticky pref isn't overwritten so coming
+  // back to the original selection kind restores it).
+  const effectiveTab = useMemo(() => {
+    if (visibleTabs.length === 0) return null;
+    if (visibleTabs.some((t) => t.id === stickyTab)) return stickyTab;
+    return visibleTabs[0].id;
+  }, [visibleTabs, stickyTab]);
+
+  // When the user moves to a new selection where the sticky tab is
+  // hidden, surface the fall-forward tab as the active selection so a
+  // subsequent click on a tab button still feels coherent (without this,
+  // clicking the same tab the user can already "see active" would do
+  // nothing because the slot already had a different value).
+  useEffect(() => {
+    if (effectiveTab && effectiveTab !== stickyTab) {
+      setActiveTab(effectiveTab);
+    }
+  }, [effectiveTab, stickyTab, setActiveTab]);
+
+  // Hooks must run before any conditional return — `visibleTabIds`
+  // is consumed by the JSX below the `if (!active)` early-out path.
+  const visibleTabIds = useMemo(
+    () => new Set(visibleTabs.map((t) => t.id)),
+    [visibleTabs],
   );
 
   if (!active) {
@@ -51,6 +90,10 @@ export function PropertiesEditor() {
     ? 'rotation'
     : active.type;
 
+  const sections = effectiveTab
+    ? sectionsForTab({ active, project }, effectiveTab)
+    : [];
+
   return (
     <div className="h-full w-full flex flex-col">
       <div className="px-2 py-1 border-b border-border bg-muted/20 shrink-0">
@@ -66,18 +109,19 @@ export function PropertiesEditor() {
         ) : null}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto flex flex-col">
-        {sections.length === 0 ? (
-          <div className="p-3 text-xs text-muted-foreground">
-            Properties for type{' '}
-            <code className="text-foreground">{active.type}</code> coming in
-            a later phase.
-          </div>
-        ) : (
-          sections.map((sec) => (
-            <div key={sec.id}>{sec.render({ active, project })}</div>
-          ))
-        )}
+      <div className="flex-1 min-h-0 flex flex-row">
+        <PropertiesTabBar visibleTabIds={visibleTabIds} />
+        <div className="flex-1 min-w-0 overflow-auto flex flex-col">
+          {sections.length === 0 ? (
+            <div className="p-3 text-xs text-muted-foreground">
+              No properties to show for this tab.
+            </div>
+          ) : (
+            sections.map((sec) => (
+              <div key={sec.id}>{sec.render({ active, project })}</div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

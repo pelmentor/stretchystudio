@@ -18,7 +18,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Link2, Plus, Trash2 } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import * as SelectImpl from '../../../../components/ui/select.jsx';
 import { SectionShell } from './SectionShell.jsx';
@@ -85,6 +85,7 @@ export function DeformerBindingsSection({ deformerId }) {
     <SectionShell
       id="deformerBindings"
       label={bindings.length > 0 ? `Bindings (${bindings.length})` : 'Bindings'}
+      icon={<Link2 size={11} />}
     >
       {bindings.length === 0 ? (
         <div className="text-xs text-muted-foreground italic">No parameter bindings.</div>

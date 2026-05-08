@@ -10,9 +10,11 @@
  * @module v3/editors/properties/sections/PartInfoSection
  */
 
+import { Info } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { SectionShell } from './SectionShell.jsx';
+import { PropertyRow } from '../primitives/PropertyRow.jsx';
 import { getMesh } from '../../../../store/objectDataAccess.js';
 
 /**
@@ -37,31 +39,24 @@ export function PartInfoSection({ nodeId }) {
   const mesh = getMesh(node);
 
   return (
-    <SectionShell id="partInfo" label="Part Info">
-      <div className="flex items-center gap-2 text-xs h-7">
-        <span className="w-20 shrink-0 text-muted-foreground">Draw order</span>
-        <div className="flex-1 flex items-center">
-          <NumberField
-            label=""
-            value={typeof node.draw_order === 'number' ? node.draw_order : 0}
-            step={1}
-            precision={0}
-            onCommit={(v) => patch((n) => { n.draw_order = v; })}
-          />
-        </div>
-      </div>
-      <div className="flex items-center gap-2 text-xs h-6">
-        <span className="w-20 shrink-0 text-muted-foreground">Vertices</span>
-        <span className="text-xs text-foreground tabular-nums">
+    <SectionShell id="partInfo" label="Part Info" icon={<Info size={11} />}>
+      <NumberField
+        label="Draw order"
+        value={typeof node.draw_order === 'number' ? node.draw_order : 0}
+        step={1}
+        precision={0}
+        onCommit={(v) => patch((n) => { n.draw_order = v; })}
+      />
+      <PropertyRow label="Vertices">
+        <span className="text-[11px] text-foreground tabular-nums">
           {mesh?.vertices?.length ?? 0}
         </span>
-      </div>
-      <div className="flex items-center gap-2 text-xs h-6">
-        <span className="w-20 shrink-0 text-muted-foreground">Triangles</span>
-        <span className="text-xs text-foreground tabular-nums">
+      </PropertyRow>
+      <PropertyRow label="Triangles">
+        <span className="text-[11px] text-foreground tabular-nums">
           {mesh?.triangles ? mesh.triangles.length / 3 : 0}
         </span>
-      </div>
+      </PropertyRow>
     </SectionShell>
   );
 }

@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { PropertyRow } from '../primitives/PropertyRow.jsx';
 
 /**
  * @param {Object} props
@@ -17,8 +18,9 @@ import { useState, useEffect, useRef } from 'react';
  * @param {string}   props.value
  * @param {(v:string) => void} props.onCommit
  * @param {boolean=} props.disabled
+ * @param {string=}  props.title
  */
-export function TextField({ label, value, onCommit, disabled }) {
+export function TextField({ label, value, onCommit, disabled, title }) {
   const [draft, setDraft] = useState(value ?? '');
   const [editing, setEditing] = useState(false);
   const inputRef = useRef(/** @type {HTMLInputElement|null} */ (null));
@@ -35,14 +37,13 @@ export function TextField({ label, value, onCommit, disabled }) {
   }
 
   return (
-    <label className="flex items-center gap-2 text-xs h-7">
-      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+    <PropertyRow label={label} title={title}>
       <input
         ref={inputRef}
         type="text"
         value={draft}
         disabled={disabled}
-        className="flex-1 h-6 px-1.5 rounded bg-muted/40 border border-border text-foreground focus:outline-none focus:border-primary"
+        className="w-full h-6 px-1.5 rounded bg-muted/40 border border-border text-foreground focus:outline-none focus:border-primary"
         onChange={(e) => {
           setEditing(true);
           setDraft(e.target.value);
@@ -59,6 +60,6 @@ export function TextField({ label, value, onCommit, disabled }) {
           }
         }}
       />
-    </label>
+    </PropertyRow>
   );
 }

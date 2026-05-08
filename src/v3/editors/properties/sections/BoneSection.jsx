@@ -14,6 +14,7 @@
 import { Bone } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
+import { PropertyRow } from '../primitives/PropertyRow.jsx';
 import { isBoneGroup, getBoneRole } from '../../../../store/objectDataAccess.js';
 
 /**
@@ -29,32 +30,23 @@ export function BoneSection({ nodeId }) {
 
   return (
     <SectionShell id="bone" label="Bone" icon={<Bone size={11} />}>
-      <Row label="Role">
-        <code className="text-xs text-foreground">{getBoneRole(node)}</code>
-      </Row>
+      <PropertyRow label="Role">
+        <code className="text-[11px] text-foreground">{getBoneRole(node)}</code>
+      </PropertyRow>
       {typeof node.boneSegmentIndex === 'number' ? (
-        <Row label="Segment">
-          <span className="text-xs text-foreground tabular-nums">
+        <PropertyRow label="Segment">
+          <span className="text-[11px] text-foreground tabular-nums">
             {node.boneSegmentIndex}
           </span>
-        </Row>
+        </PropertyRow>
       ) : null}
       {node.parent ? (
-        <Row label="Parent">
-          <span className="text-xs text-foreground truncate" title={node.parent}>
+        <PropertyRow label="Parent">
+          <span className="text-[11px] text-foreground truncate" title={node.parent}>
             {node.parent}
           </span>
-        </Row>
+        </PropertyRow>
       ) : null}
     </SectionShell>
-  );
-}
-
-function Row({ label, children }) {
-  return (
-    <div className="flex items-center gap-2 text-xs h-6">
-      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-      <div className="flex-1 flex items-center min-w-0">{children}</div>
-    </div>
   );
 }

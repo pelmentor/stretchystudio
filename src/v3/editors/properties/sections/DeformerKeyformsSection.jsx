@@ -33,7 +33,7 @@
  */
 
 import { useMemo, useEffect, useCallback } from 'react';
-import { Pencil, Check, X } from 'lucide-react';
+import { Diamond, Pencil, Check, X } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../../store/paramValuesStore.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
@@ -167,6 +167,7 @@ export function DeformerKeyformsSection({ deformerId }) {
     <SectionShell
       id="deformerKeyforms"
       label={totalKeyforms > 0 ? `Keyforms (${totalKeyforms})` : 'Keyforms'}
+      icon={<Diamond size={11} />}
     >
       {isEditingThisDeformer ? (
         <div className="flex items-center justify-between gap-2 mb-1 p-1.5 rounded border border-primary/40 bg-primary/15">

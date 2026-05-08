@@ -169,6 +169,19 @@ export const useEditorStore = create((set) => ({
    *  Outliner. Sparse: missing entry = expanded (default). */
   propertiesSectionsCollapsed: new Set(),
 
+  /** Blender-port — active tab id in the Properties editor. Maps to
+   *  Blender's `space_buttons.mainb` (`source/blender/editors/space_buttons/space_buttons.cc:76`,
+   *  default `BCONTEXT_OBJECT`). Sticky across selections; if the user
+   *  picks the Modifiers tab on one part it stays Modifiers when they
+   *  click the next part — matches Blender. When the sticky tab isn't
+   *  applicable to the new selection (e.g. a parameter selected after
+   *  a part), `PropertiesEditor` falls forward to the first visible
+   *  tab via a useEffect; it does NOT mutate this slot, so re-selecting
+   *  the original kind brings the user's preferred tab back.
+   *
+   *  Default `'item'` mirrors Blender's default Object tab. */
+  propertiesActiveTab: 'item',
+
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to
    *  match Blender (canonical "explicit `K` to insert" path; the red
@@ -446,5 +459,10 @@ export const useEditorStore = create((set) => ({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     return { propertiesSectionsCollapsed: next };
+  }),
+  setPropertiesActiveTab: (id) => set((s) => {
+    if (typeof id !== 'string' || id.length === 0) return s;
+    if (s.propertiesActiveTab === id) return s;
+    return { propertiesActiveTab: id };
   }),
 }));

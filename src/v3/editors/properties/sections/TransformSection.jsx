@@ -14,7 +14,7 @@
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { TextField } from '../fields/TextField.jsx';
-import { RotateCcw } from 'lucide-react';
+import { Move, RotateCcw } from 'lucide-react';
 import { SectionShell } from './SectionShell.jsx';
 
 /** Identity transform — `node.transform` value after Reset Transform. */
@@ -47,7 +47,7 @@ export function TransformSection({ nodeId }) {
   const t = node.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
 
   return (
-    <SectionShell id="transform" label="Transform">
+    <SectionShell id="transform" label="Transform" icon={<Move size={11} />}>
       <TextField
         label="Name"
         value={node.name ?? ''}
