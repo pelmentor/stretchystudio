@@ -5,45 +5,35 @@
  *
  * **Why this exists.** `chainEval` produces canvas-space vertex positions
  * for every rig-driven art mesh by walking the warp + rotation deformer
- * chain. That output ignores the editor's bone-group `node.transform`
- * entirely, so dragging the torso / neck / bothLegs / root arc (or any
- * bone that has no `ParamRotation_<role>` deformer) was visually
- * dead post-Init-Rig. Adding fallback writes to `ParamBodyAngleZ` etc.
- * was a band-aid — it surprised users by routing torso drags into a
- * body-wide param.
+ * chain. That output ignores the editor's bone-group `node.pose`
+ * entirely. The overlay matrix here folds each bone's pose into its
+ * descendant parts' verts at render time — Blender's "Armature modifier
+ * on top of shape keys" composition.
  *
- * **The Blender-style fix.** Treat each bone-group's `node.transform`
- * as a *pose offset* that composes ON TOP of rig output. For every art
- * mesh, walk its parent chain, collect the bone-group ancestors, and
- * multiply their local transforms (root → leaf) into a single overlay
- * matrix. Apply that matrix to the rig's canvas-space verts.
+ * **Independence from `ParamRotation_<bone>`** (BONE_ARMATURE_INDEPENDENCE
+ * plan, 2026-05-08). Pre-2026-05-08 this module force-zeroed the
+ * overlay matrix for any bone whose `ParamRotation_<sanitisedName>`
+ * existed in `project.parameters`, on the assumption that
+ * `SkeletonOverlay` would never write the bone's `pose.rotation` for
+ * those bones (it secretly wrote the param instead — the
+ * "rotating-an-arm-bone-just-drags-the-slider" hack the user rejected).
+ * That guard is gone: every bone-group's `pose.{rotation,x,y,scaleX,
+ * scaleY}` folds into the overlay uniformly. Bone gesture and
+ * `ParamRotation_<bone>` slider are now independent control surfaces
+ * — both can be non-zero, both compose at render time. Same as Blender:
+ * shape keys produce one deformation, armature modifier composes
+ * another on top.
  *
- * **No double-rotation.** Bones whose rotation IS rig-driven (arms /
- * elbows / head — they have `ParamRotation_<role>` deformers) keep
- * their `node.transform.rotation` at zero by contract: SkeletonOverlay
- * writes to the param only, never the transform, when a driver param
- * exists. Their local matrix is identity here, so they contribute
- * nothing to the overlay — the rig deformer already moved the verts.
- *
- * Bones with no driver param (torso / neck / bothLegs / root) are the
- * only contributors to a non-identity overlay. Dragging them now
- * translates / rotates everything beneath, exactly as in Blender pose
- * mode. Pre-Init-Rig the rig output is missing entirely and the regular
- * `worldMatrix` path drives the canvas; this overlay is a no-op then.
- *
- * **Translation is composable too.** `node.transform.x` / `.y` are
- * baked into the local matrix, so future bone-translate gestures work
- * without further plumbing.
+ * **Translation is composable too.** `node.pose.x` / `.y` are baked
+ * into the local matrix.
  *
  * @module renderer/boneOverlayMatrix
  */
 
 import { mat3Identity, mat3Mul, makeBoneLocalMatrix } from './transforms.js';
-import { sanitisePartName } from '../lib/partId.js';
 import {
   isBoneGroup,
   isMeshedPart,
-  getBoneRole,
 } from '../store/objectDataAccess.js';
 
 /** Local-matrix epsilon. Below this every component is considered
@@ -65,70 +55,50 @@ function isIdentityLike(m) {
 /**
  * Build per-part bone overlay matrices.
  *
- * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string, name?:string, transform?:any, mesh?:any}>} nodes
+ * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string, name?:string, transform?:any, pose?:any, mesh?:any}>} nodes
  *        Flat project node array.
- * @param {Array<{id:string}>|null|undefined} [parameters]
- *        Project parameter spec. When present, any bone whose
- *        `ParamRotation_<sanitised(name)>` exists is treated as
- *        identity here — its rotation is the rig's responsibility,
- *        and folding it in again would double-rotate. Pre-Init-Rig
- *        callers can pass `null` (or an empty array) to apply every
- *        bone's transform.
  * @returns {Map<string, Float32Array>}
  *        Map from `partId` → 3×3 column-major canvas-space overlay
  *        matrix. Only contains entries for parts whose ancestor bone
- *        chain has at least one non-identity bone transform.
+ *        chain has at least one non-identity bone pose.
  */
-export function computeBoneOverlayMatrices(nodes, parameters = null) {
-  /** @type {Map<string, Float32Array>} */
-  const out = new Map();
-  if (!Array.isArray(nodes) || nodes.length === 0) return out;
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  // Set of `ParamRotation_<sanitised>` ids — bones whose rotation is
-  // owned by the rig. Their `node.transform.rotation` is contractually
-  // zero (SkeletonOverlay writes the param only when a driver exists);
-  // we still defensively zero them here to survive legacy projects
-  // saved before the single-writer contract landed.
-  const driverParamIds = new Set();
-  if (Array.isArray(parameters)) {
-    for (const p of parameters) {
-      if (p?.id && typeof p.id === 'string' && p.id.startsWith('ParamRotation_')) {
-        driverParamIds.add(p.id);
-      }
-    }
-  }
-  function isRigDriven(boneNode) {
-    if (driverParamIds.size === 0) return false;
-    const role = getBoneRole(boneNode);
-    if (!role) return false;
-    const candidate = `ParamRotation_${sanitisePartName(boneNode.name || role)}`;
-    return driverParamIds.has(candidate);
-  }
-
-  // Per-bone composed world matrix (only over bone-group ancestors).
-  // Cached so that siblings of the same bone don't recompose the chain.
+/**
+ * Per-bone composed-world matrix map. For every bone-group node, walks
+ * up the bone-group ancestor chain (non-bone groups are skipped — they
+ * don't carry pose) and multiplies each ancestor's pose-around-pivot
+ * matrix into the bone's own. Result is the bone's WORLD matrix —
+ * what the renderer needs to land vertices that are weighted to that
+ * bone in canvas space.
+ *
+ * Critical for weighted skinning: a part rigged to `leftElbow` whose
+ * parent in the bone hierarchy is `leftArm` must follow leftArm
+ * rotations. `leftElbow.pose` may be identity, but `leftElbow.world`
+ * = `leftArm.world * leftElbow.pose` is non-identity when leftArm
+ * rotates. Reading the bone's own pose alone misses this.
+ *
+ * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string, name?:string, transform?:any, pose?:any}>} nodes
+ * @returns {Map<string, Float32Array>} boneId → 3×3 column-major world matrix
+ */
+export function computeBoneWorldMatrices(nodes) {
   /** @type {Map<string, Float32Array>} */
   const boneWorld = new Map();
-  /** @type {Set<string>} */
-  const boneIsIdentity = new Set();
+  if (!Array.isArray(nodes) || nodes.length === 0) return boneWorld;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
 
   function resolveBoneWorld(boneNode) {
     const cached = boneWorld.get(boneNode.id);
     if (cached) return cached;
-    // Rig-driven bones contribute identity here — the rig deformer
-    // already moved their descendants. Use identity instead of the
-    // bone's actual rest+pose so legacy values don't double-compose.
+    // BONE_ARMATURE_INDEPENDENCE (2026-05-08): every bone contributes
+    // its POSE matrix (around its rest pivot). The rest matrix is
+    // identity-modulo-pivot since v17 reserves the bone's transform
+    // pose-fields at zero. Rig output (chainEval) already lives in
+    // the bone's rest frame, so applying rest again would shift it.
+    // Pose alone is the additive offset.
     //
-    // Non-rig-driven bones contribute their POSE matrix only (the rest
-    // matrix is identity-modulo-pivot since v17 reserves bone-transform
-    // pose-fields at zero; rest-around-pivot doesn't move points). The
-    // rig framework's deformers and verts ALREADY live in the bone's
-    // rest frame post-init-rig, so applying rest again would shift
-    // them. Pose alone is the additive offset, which is what we want.
+    // Bone gesture writes `pose.rotation`; `ParamRotation_<bone>`
+    // slider writes paramValues independently. Both compose.
     let local;
-    if (isRigDriven(boneNode)) {
-      local = mat3Identity();
-    } else {
+    {
       const p = boneNode.pose;
       const r = p?.rotation ?? 0;
       const px = p?.x ?? 0;
@@ -138,7 +108,6 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
       if (r === 0 && px === 0 && py === 0 && sx === 1 && sy === 1) {
         local = mat3Identity();
       } else {
-        // Pose-only matrix around the rest pivot.
         local = makeBoneLocalMatrix({
           pivotX: boneNode.transform?.pivotX ?? 0,
           pivotY: boneNode.transform?.pivotY ?? 0,
@@ -146,8 +115,8 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
       }
     }
     let world;
-    // Walk to nearest bone-group ancestor; non-bone groups (e.g. plain
-    // organisational folders) are skipped — they don't carry pose.
+    // Walk to nearest bone-group ancestor; non-bone groups (visual
+    // folders) are skipped — they don't carry pose.
     let parent = boneNode.parent ? byId.get(boneNode.parent) : null;
     while (parent && !isBoneGroup(parent)) {
       parent = parent.parent ? byId.get(parent.parent) : null;
@@ -158,13 +127,26 @@ export function computeBoneOverlayMatrices(nodes, parameters = null) {
       world = local;
     }
     boneWorld.set(boneNode.id, world);
-    if (isIdentityLike(world)) boneIsIdentity.add(boneNode.id);
     return world;
   }
 
-  // Resolve every bone first so the caches are warm.
   for (const n of nodes) {
     if (isBoneGroup(n)) resolveBoneWorld(n);
+  }
+  return boneWorld;
+}
+
+export function computeBoneOverlayMatrices(nodes) {
+  /** @type {Map<string, Float32Array>} */
+  const out = new Map();
+  if (!Array.isArray(nodes) || nodes.length === 0) return out;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  /** @type {Set<string>} */
+  const boneIsIdentity = new Set();
+  for (const [boneId, m] of boneWorld) {
+    if (isIdentityLike(m)) boneIsIdentity.add(boneId);
   }
 
   // For every art mesh part, find its nearest bone-group ancestor and

@@ -1,6 +1,23 @@
-# Bone Rotation Canonical — Plan
+# Bone Rotation Canonical — Plan (SUPERSEDED)
 
-**Status:** Plan (no code yet) · **Drafted:** 2026-05-06 · **Owner:** pelmentor
+**Status:** REJECTED 2026-05-08 by user. Superseded by [BONE_ARMATURE_INDEPENDENCE.md](BONE_ARMATURE_INDEPENDENCE.md), shipped same day.
+**Drafted:** 2026-05-06 · **Owner:** pelmentor
+
+## Why superseded
+
+This plan proposed a **mirror** between `bone.pose.rotation` and `paramValues.ParamRotation_<bone>` — write to one, the other auto-syncs, single source of truth via `paramValuesStore` interceptor. The user explicitly rejected that direction 2026-05-08:
+
+> "I don't want when you rotate arm bones it just activates param baked arm rotation, I want bones to ACT LIKE BONES, no hacky drivers to params, and I want for example arm rotate params and arm bone rotation to COEXIST like BLENDER STYLE."
+
+A mirror is still a driver — bone gesture would write to the param, the param would still drive baked keyforms. From the user's perspective, dragging a bone would still feel like dragging a slider via remote control.
+
+The shipped design (BONE_ARMATURE_INDEPENDENCE) instead treats bone gesture and `ParamRotation_<bone>` slider as **independent control surfaces** that compose at render time — Blender's Armature modifier on top of shape keys. Bone gesture writes `node.pose.rotation` only; slider writes `paramValues` only; both compose visually. No mirroring, no fan-out, no cross-pollution.
+
+---
+
+## Original plan below (preserved for record)
+
+
 
 ## Problem
 

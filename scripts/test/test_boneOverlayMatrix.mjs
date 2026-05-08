@@ -115,11 +115,13 @@ function applyMat(m, x, y) {
   assert(nearlyEq(ny, 300.41, 0.5), `Test 3: composed y ≈ 300.41 (got ${ny.toFixed(2)})`);
 }
 
-// ── Test 4: Rig-driven bone contributes identity even with pose ───
+// ── Test 4: BONE_ARMATURE_INDEPENDENCE (2026-05-08) — bones with a
+// matching ParamRotation_<name> param NOW contribute to the overlay.
+// Pre-2026-05-08 the overlay force-zeroed these bones to avoid double-
+// rotation under the legacy "bone gesture writes the param" hack. That
+// hack is gone (SkeletonOverlay always writes pose.rotation now); the
+// overlay matrix and the param slider are independent control surfaces.
 {
-  // Driver param exists → bone treated as identity defensively.
-  // sanitisePartName('arm') → 'arm' (no special chars), candidate
-  // would be 'ParamRotation_arm'.
   const nodes = [
     { id: 'b-arm', type: 'group', boneRole: 'leftArm', name: 'arm',
       transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 700, pivotY: 600 },
@@ -129,11 +131,19 @@ function applyMat(m, x, y) {
       mesh: { vertices: [{ x: 800, y: 600 }] },
     },
   ];
-  const params = [{ id: 'ParamRotation_arm' }];
-  const out = computeBoneOverlayMatrices(nodes, params);
-  // The rig-driven bone is treated as identity — the overlay should
-  // produce no entry (since the chain reduces to identity).
-  assert(out.size === 0, 'Test 4: rig-driven bone with pose contributes identity (no overlay entry)');
+  // Note: even with a matching ParamRotation_arm param in the project,
+  // the overlay no longer force-zeroes this bone. The function now
+  // takes `nodes` only — no `parameters` argument.
+  const out = computeBoneOverlayMatrices(nodes);
+  const m = out.get('p-handwear');
+  assert(!!m, 'Test 4: arm bone with ParamRotation_arm STILL produces overlay (independence)');
+  // 45° rotation around (700, 600) applied to (800, 600).
+  // R = [[cos45, -sin45], [sin45, cos45]]; v - P = (100, 0);
+  // R·(v - P) = (100·cos45, 100·sin45) ≈ (70.71, 70.71);
+  // out = R·(v - P) + P ≈ (770.71, 670.71).
+  const [nx, ny] = applyMat(m, 800, 600);
+  assert(nearlyEq(nx, 770.71, 0.1), `Test 4: x ≈ 770.71 (got ${nx.toFixed(2)})`);
+  assert(nearlyEq(ny, 670.71, 0.1), `Test 4: y ≈ 670.71 (got ${ny.toFixed(2)})`);
 }
 
 // ── Test 5: Identity pose under non-driver chain still no entry ───

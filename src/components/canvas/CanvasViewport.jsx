@@ -77,7 +77,8 @@ import {
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
-import { computeBoneOverlayMatrices, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
+import { computeBoneOverlayMatrices, computeBoneWorldMatrices, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
+import { applyWeightedSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 import { saveProject, loadProject } from '@/io/projectFile';
@@ -757,14 +758,19 @@ export default function CanvasViewport({
           // any bone (with or without a `ParamRotation_<role>` deformer)
           // moves its descendants. Bones whose rotation IS rig-driven
           // keep their `node.transform.rotation` at zero by contract
-          // (SkeletonOverlay only writes the param when a driver exists),
-          // so they contribute identity here — no double-rotation.
-          // Empty map when no bone has a non-rest transform; the
-          // overlay loop short-circuits and we pay nothing.
-          const boneOverlay = computeBoneOverlayMatrices(
-            projectRef.current.nodes,
-            projectRef.current.parameters,
-          );
+          // BONE_ARMATURE_INDEPENDENCE (2026-05-08): every bone's pose
+          // contributes here — including bones that ALSO have a
+          // `ParamRotation_<bone>` slider. Bone gesture and slider are
+          // independent control surfaces; both compose. Empty map when
+          // no bone has a non-rest pose; the overlay loop short-circuits
+          // and we pay nothing.
+          const boneOverlay = computeBoneOverlayMatrices(projectRef.current.nodes);
+          // Per-bone WORLD matrix map (composed through bone-group
+          // ancestors). Skinning looks up by `jointBoneId` so a part
+          // weighted to leftElbow follows leftArm rotations too —
+          // leftElbow's WORLD includes leftArm's pose. Reading the
+          // bone's own pose alone misses ancestor rotations.
+          const boneWorld = computeBoneWorldMatrices(projectRef.current.nodes);
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) continue;
@@ -787,9 +793,38 @@ export default function CanvasViewport({
             for (let i = 0; i < verts.length; i++) {
               verts[i] = { x: f.vertexPositions[i * 2], y: f.vertexPositions[i * 2 + 1] };
             }
-            // Apply post-rig bone overlay (Blender-style pose offset).
-            // No-op when `boneOverlay.get(f.id)` is undefined.
-            applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
+            // BONE_ARMATURE_INDEPENDENCE (2026-05-08) — composition path:
+            //   1. Per-vertex weighted skinning when the part has
+            //      `mesh.boneWeights + jointBoneId`. Reads `pose.rotation`
+            //      from the joint bone, scales by per-vertex weight.
+            //      Subsumes the overlay path (weight-1.0 matches the
+            //      overlay's effect exactly), so the overlay loop below
+            //      is GATED on `!boneWeights` to avoid double-rotation.
+            //   2. Per-part overlay matrix for parts WITHOUT weighted
+            //      skinning. Walks the bone-group ancestor chain and
+            //      composes pose matrices into one canvas-space matrix
+            //      per part.
+            //
+            // Both paths read `node.pose.{rotation,x,y,scaleX,scaleY}`.
+            // The bone gesture (SkeletonOverlay) writes pose.rotation;
+            // `ParamRotation_<bone>` slider stays independent — its
+            // effect is already baked into chainEval's frame output via
+            // cellSelect over the param-driven keyforms. So skinning
+            // composes ON TOP of param-driven deformation. Same as
+            // Blender's Armature modifier on top of shape keys.
+            const partMesh = getMesh(node, projectRef.current);
+            const partBoneId = partMesh?.jointBoneId;
+            const partWeights = partMesh?.boneWeights;
+            if (partBoneId && Array.isArray(partWeights) && partWeights.length > 0) {
+              // Weighted skinning: use the joint bone's WORLD matrix
+              // (composed through bone-group ancestors) so rotating
+              // leftArm correctly drives parts weighted to leftElbow.
+              applyWeightedSkinningObj(verts, boneWorld.get(partBoneId), partWeights);
+            } else {
+              // No weighted skinning — fall back to the per-part overlay
+              // matrix. No-op when the bone chain is at rest.
+              applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
+            }
             if (!poseOverrides) poseOverrides = new Map();
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;

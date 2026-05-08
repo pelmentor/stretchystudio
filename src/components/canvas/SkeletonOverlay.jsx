@@ -51,37 +51,13 @@ const JOINT_RADIUS_EDIT   = 8;
 // Arc handle constants
 const ARC_BONE_ROLES = new Set(['torso', 'neck', 'head', 'leftArm', 'rightArm', 'leftElbow', 'rightElbow', 'bothArms', 'leftLeg', 'rightLeg', 'leftKnee', 'rightKnee', 'bothLegs']);
 
-/**
- * PP2-006 — fallback mapping from `boneRole` to a canonical Live2D
- * parameter ID. Used when the bone has no `ParamRotation_<sanitisedName>`
- * (the auto-rig's `SKIP_ROTATION_ROLES` set: torso/eyes/neck) — these
- * trunk segments are warp-driven by the standard ParamAngle / ParamBodyAngle
- * set, not by per-bone rotation params.
- *
- * The user's rotation gesture is a single in-plane arc, so we map to the
- * Z-axis equivalent (in-plane rotation):
- *   - neck / head → `ParamAngleZ` (head spin)
- *   - torso       → `ParamBodyAngleZ` (body lean)
- *
- * X / Y axes (3D look-around) need a different gesture (e.g. drag-and-pull
- * on the bone tip) — out of scope for this entry.
- */
-const BONE_ROLE_FALLBACK_PARAM = Object.freeze({
-  // Head drives ParamAngleZ; the NeckWarp deformer also responds to
-  // ParamAngleZ (it tilts the neck region as the head turns), so the
-  // neck bone deliberately has NO fallback — dragging it would write
-  // ParamAngleZ in conflict with the head arc. Leaving it out makes
-  // the neck arc a no-op driver-wise (logs `boneNoDriverParam`); the
-  // user drags the head when they want a head/neck tilt.
-  //
-  // Torso similarly has NO fallback — Cubism models torso rotation as
-  // ParamBodyAngleZ (body lean), but that's structurally body-wide,
-  // not torso-local. Routing the torso bone arc to ParamBodyAngleZ
-  // surprised users ("why does dragging torso lean the whole body?").
-  // Drag the ParamBodyAngleZ slider directly when you want a body
-  // lean; the torso bone is just a structural pivot.
-  head:  'ParamAngleZ',
-});
+// BLENDER-STYLE BONE INDEPENDENCE (2026-05-08): the
+// BONE_ROLE_FALLBACK_PARAM map (was here) is gone. Bone arc gestures
+// always write `node.pose.rotation` regardless of whether a matching
+// rig param exists. The Parameters panel slider for `ParamRotation_<bone>`
+// / `ParamAngleZ` / `ParamBodyAngleZ` remains as the export-driving
+// control surface; bone rotation composes on top of it via the render-
+// loop bone overlay matrix + per-vertex skinning.
 const ARC_RADIUS = 28;      // screen px
 const ARC_SWEEP_DEG = 270;  // coverage
 const ARC_COLOUR = 'rgba(251,191,36,0.55)';
@@ -349,100 +325,27 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       const dx = cssX - pivotScreenX;
       const dy = cssY - pivotScreenY;
 
-      const JSKinningRoles = new Set(['leftElbow', 'rightElbow', 'leftKnee', 'rightKnee']);
+      // BLENDER-STYLE BONE INDEPENDENCE (2026-05-08): no in-drag
+      // per-vertex JS skinning. Render-loop applies skinning every
+      // frame from `node.pose.rotation` + `mesh.boneWeights` via
+      // `renderer/boneSkinning.js`. The previous in-drag path
+      // committed deformed verts to `mesh.vertices` on drag end —
+      // destructive baking the user explicitly didn't want. The render-
+      // loop path keeps `mesh.vertices` (rest geometry) untouched.
       const dependentParts = [];
-      const boneRole = getBoneRole(node);
-      if (JSKinningRoles.has(boneRole)) {
-        const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
-        const endMs = (animEndFrame / animFps) * 1000;
-        const overrides = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
-        for (const pt of effectiveNodes) {
-          const ptMesh = getMesh(pt);
-          if (ptMesh?.jointBoneId === node.id) {
-            let startVerts = ptMesh.vertices;
-            if (editorModeRef.current === 'animation') {
-               startVerts = animDraftPose.get(pt.id)?.mesh_verts ?? overrides?.get(pt.id)?.mesh_verts ?? ptMesh.vertices;
-            }
-            dependentParts.push({
-              partId: pt.id,
-              startVerts: startVerts.map(v => ({...v})),
-              boneWeights: ptMesh.boneWeights,
-              imgPivotX: node.transform.pivotX,
-              imgPivotY: node.transform.pivotY,
-            });
-          }
-        }
-        if (dependentParts.length === 0) {
-          console.warn(`[SkeletonOverlay] ${boneRole} has no dependent parts. Re-generate arm/leg mesh after rigging.`);
-          // Debug: show all parts and their jointBoneIds
-          const armParts = effectiveNodes.filter(n => isMeshedPart(n));
-          console.log('[SkeletonOverlay] Parts with meshes:', armParts.map(p => ({ name: p.name, jointBoneId: getMesh(p)?.jointBoneId })));
-        } else {
-          console.log(`[SkeletonOverlay] ${boneRole}: driving ${dependentParts.length} part(s), pivot=(${node.transform.pivotX.toFixed(0)},${node.transform.pivotY.toFixed(0)})`);
-        }
-      }
 
-      // PP1-001 — bones drive rig deformers via `ParamRotation_<sanitisedName>`
-      // (auto-rig convention from paramSpec.js). Capture the param id + range
-      // up-front so the move handler can route the dragged angle through both
-      // node.transform.rotation (worldMatrix path, non-rig parts) AND the
-      // matching parameter (chainEval path, rig-driven parts) — without it,
-      // rig-driven layers don't move until some other dispatch triggers a
-      // re-render, producing the catch-up snap users were seeing.
+      // BLENDER-STYLE BONE INDEPENDENCE (BONE_ARMATURE_INDEPENDENCE plan,
+      // 2026-05-08): bone arc gestures write `node.pose.rotation`,
+      // never `paramValues.ParamRotation_<bone>`. The param remains a
+      // first-class control surface (Parameters slider, animation tracks,
+      // Cubism export) but is no longer secretly driven by the bone
+      // gesture. Bones and params COEXIST and COMPOSE — bone overlay/
+      // skinning multiplies on top of the chainEval output, exactly like
+      // Blender's Armature modifier on top of shape keys.
       //
-      // PP2-006 — when no `ParamRotation_<bone>` exists (trunk bones in the
-      // auto-rig's SKIP_ROTATION_ROLES set: torso/eyes/neck), fall back to
-      // the canonical standard param for that role. ParamAngleZ / ParamBodyAngleZ
-      // is in-plane rotation, exactly what the bone arc gesture produces.
-      let rotationParamId = null;
-      let rotationParamMin = -90;
-      let rotationParamMax = 90;
-      const sanitised = sanitisePartName(node.name || node.id);
-      const candidateId = `ParamRotation_${sanitised}`;
-      const params = useProjectStore.getState().project.parameters ?? [];
-      const paramSpec = params.find(p => p.id === candidateId);
-      if (paramSpec) {
-        rotationParamId = candidateId;
-        if (typeof paramSpec.min === 'number') rotationParamMin = paramSpec.min;
-        if (typeof paramSpec.max === 'number') rotationParamMax = paramSpec.max;
-      } else {
-        const fallbackId = BONE_ROLE_FALLBACK_PARAM[getBoneRole(node)];
-        const fallbackSpec = fallbackId ? params.find(p => p.id === fallbackId) : null;
-        if (fallbackSpec) {
-          rotationParamId = fallbackId;
-          if (typeof fallbackSpec.min === 'number') rotationParamMin = fallbackSpec.min;
-          if (typeof fallbackSpec.max === 'number') rotationParamMax = fallbackSpec.max;
-        }
-      }
-
-      // No-driver bones are no longer a UX dead-end: their rotation
-      // composes via the post-rig bone overlay matrix
-      // (renderer/boneOverlayMatrix.js). Keep the diagnostic at debug
-      // level so anyone investigating a downstream rig issue can still
-      // grep the Logs panel for it, but stop calling it a warning.
-      if (!rotationParamId) {
-        const role = getBoneRole(node);
-        logger.debug('boneNoDriverParam',
-          `Bone "${node.name ?? node.id}" (role=${role ?? 'none'}) has no rig driver param — rotation composes via the post-rig overlay matrix on node.transform.rotation.`,
-          {
-            nodeId,
-            nodeName: node.name ?? null,
-            boneRole: role ?? null,
-            triedCandidate: candidateId,
-          });
-      }
-
-      // Drag start rotation: read from whichever side owns it.
-      //  - Bones with a driver param store rotation in the param value
-      //    (Blender-style pose offset on top of rig output). Their
-      //    `node.pose.rotation` stays at zero so the post-rig
-      //    overlay matrix doesn't double-apply.
-      //  - Bones without a driver param store rotation in
-      //    `node.pose.rotation`; the overlay matrix folds it into
-      //    canvas-space verts on every frame.
-      const startRotation = rotationParamId
-        ? (useParamValuesStore.getState().values?.[rotationParamId] ?? 0)
-        : (node.pose?.rotation ?? 0);
+      // The previous "if rotationParamId then write paramValue" branch
+      // was the bait-and-switch the user explicitly rejected.
+      const startRotation = node.pose?.rotation ?? 0;
       dragRef.current = {
         type: 'rotate',
         nodeId,
@@ -452,9 +355,6 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         pivotScreenY,
         isAnimMode: editorModeRef.current === 'animation',
         dependentParts,
-        rotationParamId,
-        rotationParamMin,
-        rotationParamMax,
       };
 
       // Select the bone so GizmoOverlay appears, ModePill un-greys
@@ -525,35 +425,18 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // Shift modifier for 15-degree snapping
       if (e.shiftKey) delta = Math.round(delta / 15) * 15;
 
-      // PP2-006 — when the bone drives a rig parameter, clamp the visual
-      // bone rotation to the param range too. Otherwise the SVG arc
-      // overshoots the param's [-30, +30] (etc.) ceiling and the user
-      // sees the bone keep rotating while the deformation stops, which
-      // misreads as "the rig is broken". Clamping in lockstep makes the
-      // arc handle a faithful indicator of the underlying param value.
-      // The JS-skinning path below uses `delta` directly to rotate
-      // weighted verts, so re-derive it from the clamped rotation to
-      // keep transform / param / skinning in sync.
-      let newRotation = drag.startRotation + delta;
-      if (drag.rotationParamId) {
-        newRotation = Math.max(drag.rotationParamMin, Math.min(drag.rotationParamMax, newRotation));
-        delta = newRotation - drag.startRotation;
-      }
-      // Single-writer commit. With a driver param the rotation lives in
-      // `paramValuesStore` and chainEval folds it into rig output; with
-      // no driver, it lives in `node.pose.rotation` and the post-rig
-      // bone overlay matrix folds it into canvas-space verts. Writing
-      // BOTH would double-rotate after Init Rig (rig deformer + overlay).
-      if (drag.rotationParamId) {
-        if (drag.isAnimMode) {
-          // Anim mode still wants `draftPose.rotation` for the auto-keyframe
-          // capture path that watches transform-shape props; the bone
-          // overlay matrix reads `node.pose`, so this draft is a
-          // keyframe-capture concern, not a renderer one.
-          setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
-        }
-        useParamValuesStore.getState().setParamValue(drag.rotationParamId, newRotation);
-      } else if (drag.isAnimMode) {
+      // BLENDER-STYLE BONE INDEPENDENCE: single source of truth is
+      // `node.pose.rotation`. The bone is unbounded — clamp the
+      // associated `ParamRotation_<bone>` slider via its own min/max
+      // when the user drags THE SLIDER, not when they drag the bone.
+      // Bones rotate freely (Blender pose mode never clamps a bone
+      // rotation by an unrelated shape-key range).
+      const newRotation = drag.startRotation + delta;
+
+      // Animation mode auto-keyframe capture path: setDraftPose so the
+      // K-keyframe trigger picks up the rotation channel. Pose Mode
+      // (staging) writes directly to project.nodes for live render.
+      if (drag.isAnimMode) {
         setDraftPoseRef.current(drag.nodeId, { rotation: newRotation });
       } else {
         updateProject((proj) => {
@@ -564,34 +447,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         }, { skipHistory: true });
       }
 
-      // Apply JS vertex skinning if there are dependent parts.
-      // Always use setDraftPose so the GPU upload path in the rAF tick fires
-      // regardless of editor mode (staging or animation).
-      if (drag.dependentParts && drag.dependentParts.length > 0) {
-        const rad = delta * (Math.PI / 180);
-        for (const dep of drag.dependentParts) {
-          const newVerts = dep.startVerts.map((v, i) => {
-            const w = dep.boneWeights?.[i] ?? 0;
-            if (w === 0) return { ...v };
-
-            const dxV = v.x - dep.imgPivotX;
-            const dyV = v.y - dep.imgPivotY;
-
-            const wRad = rad * w;
-            const wCos = Math.cos(wRad);
-            const wSin = Math.sin(wRad);
-
-            const rx = dxV * wCos - dyV * wSin;
-            const ry = dxV * wSin + dyV * wCos;
-
-            return { ...v, x: dep.imgPivotX + rx, y: dep.imgPivotY + ry };
-          });
-
-          // Both staging and animation mode: go through draftPose so the
-          // staging-mode GPU upload block in CanvasViewport tick picks it up.
-          setDraftPoseRef.current(dep.partId, { mesh_verts: newVerts });
-        }
-      }
+      // BLENDER-STYLE BONE INDEPENDENCE (2026-05-08): the in-drag
+      // mesh_verts skinning that used to live here is gone. Render-loop
+      // applies per-vertex weighted skinning from `node.pose.rotation`
+      // (set by `updateProject` above) every frame via
+      // `renderer/boneSkinning.js`.
     } else if (drag.type === 'trackpad') {
       const cssX = e.clientX - rect.left;
       const cssY = e.clientY - rect.top;
@@ -641,38 +501,12 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     const drag = dragRef.current;
     dragRef.current = null;
 
-    // Commit skinning draft pose on drag end
-    if (drag?.type === 'rotate' && drag.dependentParts?.length > 0) {
-      if (!drag.isAnimMode) {
-        // Staging mode commit: write the deformed verts into the part's
-        // base mesh so the next drag starts from the new pose AND the
-        // saved project reflects the user's edit.
-        //
-        // 2026-04-29 fix: the draft pose is intentionally LEFT in place
-        // (was previously cleared on release). Clearing it caused a
-        // one-frame "rest pose" flash because the rig evaluator runs
-        // every frame and — when no draft override is present —
-        // overwrites poseOverrides.mesh_verts with rigSpec-baked rest
-        // verts (rigSpec.artMeshes is not re-baked by a single bone-skin
-        // commit). Leaving the draft means CanvasViewport's tick keeps
-        // the new verts in poseOverrides, chainEval respects them, and
-        // the visual stays continuous across release. Re-running
-        // Initialize Rig later rebuilds rigSpec from the committed
-        // mesh.vertices and resets paramValues; the lingering draft is
-        // safe because its mesh_verts match the new rest.
-        for (const dep of drag.dependentParts) {
-          const latestVerts = useAnimationStore.getState().draftPose.get(dep.partId)?.mesh_verts;
-          if (latestVerts) {
-            updateProject(proj => {
-              const pt = proj.nodes.find(n => n.id === dep.partId);
-              const ptMesh = getMesh(pt, proj);
-              if (ptMesh) ptMesh.vertices = latestVerts.map(v => ({ ...v }));
-            });
-          }
-        }
-      }
-      // Animation mode: leave draft pose in place — user commits with K key
-    }
+    // BLENDER-STYLE BONE INDEPENDENCE (2026-05-08): no destructive
+    // mesh.vertices bake on drag end. `node.pose.rotation` carries the
+    // rotation; render-loop skinning in `renderer/boneSkinning.js`
+    // applies it every frame. Rest geometry stays untouched until the
+    // user explicitly invokes `applyPoseAsRest`. Mirrors Blender Pose
+    // Mode → Apply Pose As Rest Pose (Ctrl+A → "Apply Pose as Rest").
 
     // Auto Keyframe trigger
     if (drag && (drag.type === 'rotate' || drag.type === 'trackpad')) {
