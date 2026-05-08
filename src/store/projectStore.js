@@ -772,6 +772,75 @@ export const useProjectStore = create((set, get) => {
       bakedAnything = true;
     }
 
+    // 1b. Bake the cumulative bone-chain pose into mesh.runtime.keyforms.
+    //
+    // Bone-baked parts (handwear-l, legwear-*, etc.) carry per-paramRotation
+    // keyforms in `mesh.runtime.keyforms[i].vertexPositions`. chainEval
+    // reads from those (NOT from `mesh.vertices`) and emits canvas-px via
+    // the part's parent rotation deformer. Stored frame: rotation-pivot-
+    // relative canvas-px (verified via selectRigSpec.js:600-606).
+    //
+    // Without baking these here, zeroing the bone poses below leaves the
+    // keyforms encoding the OLD un-rotated rest, so chainEval emits
+    // canvas-rest = visual snap-back to the un-posed state (BUG-027).
+    //
+    // The transform to apply in pivot-relative frame is the LINEAR PART
+    // of the joint bone's world matrix. Derivation: a vert v in
+    // pivot-relative frame becomes canvas (pivot + v); after the world
+    // matrix it's (M·pivot + linear·v) = (new_pivot + linear·v); so the
+    // new pivot-relative position is `linear · v`. This composes all
+    // ancestor poses automatically (computeWorldMatrices walks the
+    // bone hierarchy and includes pose for bone groups).
+    for (const n of nodes) {
+      if (n.type !== 'part') continue;
+      const meshN = getMesh(n, project);
+      const runtime = meshN?.runtime ?? null;
+      const keyforms = Array.isArray(runtime?.keyforms) ? runtime.keyforms : null;
+      if (!keyforms || keyforms.length === 0) continue;
+      // Skip parts whose Armature modifier has been Applied — their
+      // keyforms are already baked to the visible position by
+      // `applyArmatureModifier`. Re-baking here would double-rotate.
+      // The discriminator: a bone-rigged part without an active
+      // `armature` modifier in its stack has been Applied (or is
+      // unrigged); either way, the keyforms must not be touched.
+      const hasArmatureMod = Array.isArray(n.modifiers)
+        && n.modifiers.some((m) => m?.type === 'armature' && m.enabled !== false);
+      if (!hasArmatureMod) continue;
+      // Pick the bone whose pivot the keyforms are relative to. For
+      // bone-baked parts that's the joint bone (= mesh.jointBoneId).
+      // Fall back to the nearest project-tree bone ancestor for
+      // legacy projects without runtime + jointBoneId.
+      let jointBoneId = typeof meshN.jointBoneId === 'string' && meshN.jointBoneId.length > 0
+        ? meshN.jointBoneId : null;
+      if (!jointBoneId) {
+        let cur = n.parent ? nodes.find((nn) => nn.id === n.parent) : null;
+        while (cur && !isBoneGroup(cur)) {
+          cur = cur.parent ? nodes.find((nn) => nn.id === cur.parent) : null;
+        }
+        if (!cur) continue;
+        jointBoneId = cur.id;
+      }
+      const M = worldMap.get(jointBoneId);
+      if (!M) continue;
+      const m0 = M[0], m1 = M[1], m3 = M[3], m4 = M[4];
+      // Skip identity-linear cheaply — it leaves keyforms unchanged.
+      if (
+        Math.abs(m0 - 1) < 1e-6 && Math.abs(m1)     < 1e-6
+        && Math.abs(m3)     < 1e-6 && Math.abs(m4 - 1) < 1e-6
+      ) continue;
+      for (const kf of keyforms) {
+        const vp = kf?.vertexPositions;
+        if (!vp || typeof vp.length !== 'number') continue;
+        for (let i = 0; i < vp.length; i += 2) {
+          const x = vp[i];
+          const y = vp[i + 1];
+          vp[i]     = m0 * x + m3 * y;
+          vp[i + 1] = m1 * x + m4 * y;
+        }
+      }
+      bakedAnything = true;
+    }
+
     // 2. Update each bone's pivot to its visually-current canvas
     //    position. We compute this in the bone's PARENT's frame: the
     //    pivot is stored relative to the parent's coordinate system,

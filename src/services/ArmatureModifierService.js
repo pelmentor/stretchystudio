@@ -126,6 +126,30 @@ export function applyArmatureModifier(partId) {
   // Write the baked verts into mesh.vertices and remove the Armature
   // modifier. Atomically, in a single updateProject so undo captures
   // both halves of the operation.
+  // Bone-baked parts also carry per-paramRotation keyforms in
+  // `mesh.runtime.keyforms[i].vertexPositions` (rotation-pivot-
+  // relative canvas-px frame, per `selectRigSpec.js:600-606`).
+  // chainEval reads from those, NOT from `mesh.vertices`. The bake
+  // must transform every keyform by the cumulative ancestor-bone
+  // pose so zeroing the bone pose later (Apply Pose As Rest) doesn't
+  // emit the un-posed rest geometry (BUG-027 snap-back).
+  //
+  // The right matrix is the joint bone's WORLD matrix (which already
+  // composes all ancestor poses). In pivot-relative frame, only the
+  // LINEAR part affects the keyform — the translation column moves
+  // the pivot itself, which the keyform encoding subtracts out.
+  const jointWorldMatrix = boneWorld.get(jointBoneId) ?? null;
+  const havePoseToBake = !!jointWorldMatrix && !(
+    Math.abs(jointWorldMatrix[0] - 1) < 1e-6
+    && Math.abs(jointWorldMatrix[1])     < 1e-6
+    && Math.abs(jointWorldMatrix[3])     < 1e-6
+    && Math.abs(jointWorldMatrix[4] - 1) < 1e-6
+  );
+  const m0 = jointWorldMatrix?.[0] ?? 1;
+  const m1 = jointWorldMatrix?.[1] ?? 0;
+  const m3 = jointWorldMatrix?.[3] ?? 0;
+  const m4 = jointWorldMatrix?.[4] ?? 1;
+
   projectState.updateProject((proj) => {
     const target = proj.nodes.find((n) => n.id === partId);
     if (!target || target.type !== 'part' || !target.mesh) return;
@@ -140,6 +164,24 @@ export function applyArmatureModifier(partId) {
       const idx = target.modifiers.findIndex((m) => m?.type === 'armature');
       if (idx >= 0) target.modifiers.splice(idx, 1);
       if (target.modifiers.length === 0) delete target.modifiers;
+    }
+    // Bake the bone-baked keyforms so chainEval emits the posed
+    // geometry without needing the bone pose to still be active.
+    if (havePoseToBake) {
+      const runtime = target.mesh.runtime ?? null;
+      const keyforms = Array.isArray(runtime?.keyforms) ? runtime.keyforms : null;
+      if (keyforms) {
+        for (const kf of keyforms) {
+          const vp = kf?.vertexPositions;
+          if (!vp || typeof vp.length !== 'number') continue;
+          for (let i = 0; i < vp.length; i += 2) {
+            const x = vp[i];
+            const y = vp[i + 1];
+            vp[i]     = m0 * x + m3 * y;
+            vp[i + 1] = m1 * x + m4 * y;
+          }
+        }
+      }
     }
     // Vertex group data (`mesh.boneWeights` + `mesh.jointBoneId`)
     // STAYS on the mesh datablock — same as Blender. Apply Modifier
