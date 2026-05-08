@@ -12,12 +12,13 @@ Each entry is short and self-contained — anyone reading should be able to pick
 - **When triaging** — fill in any missing **Repro** steps the moment you learn them. Empty Repro = guesswork.
 - **Header marker** — `✅` prefix means fix shipped (visual scrub may still be pending — see entry body).
 
-## Status snapshot (2026-05-06)
+## Status snapshot (2026-05-08)
 
 | Status | Entries |
 |--------|---------|
 | ✅ Fixed / Superseded | BUG-001 (tab-switch remount), BUG-002 (eye-closure parabola), BUG-004 (Init Rig armature/mesh sync via resetToRestPose), BUG-005 (Opacity slider — was NumberField spinner that didn't commit on ▲/▼; replaced with Radix Slider, fires onValueChange on every drag tick), BUG-006 (warp extrapolation, superseded by Cubism warp port Phase 1), BUG-007 (variant visibility), BUG-008 (Init Rig + bone-move sister), BUG-009 (eyes closed after Init Rig), BUG-010 (Iris Offset sister), BUG-011 (seedAllRig get-throw), BUG-012 (wizard selection leak + workspace viz policy), BUG-013 (wizard char vanishes on viewport↔livePreview toggle), BUG-014 (legwear stretched / Body Angle unresponsive — bottom-band virtual cell inverted in cubismWarpEval port), BUG-016 (iris controller dead after Init Rig — trackpad now writes ParamEyeBallX/Y in addition to node.transform.x/y), BUG-017 (character disappears forever on layout↔animation switch — centerColumn JSX shape stabilized in AreaTree), BUG-018 (front-hair / shirt / pants frozen in rest pose — `seedParameters` was reading `n.tag` directly while every other consumer derives via `matchTag(n.name)`; fixed via `n.tag ?? matchTag(n.name)`), BUG-019 (Wireframe overlay never visible — `drawWireframe` called `gl.drawElements(gl.LINES, indexCount, ...)` against the triangle IBO, producing incoherent line segments; fixed by building a proper edge-pair IBO at upload time + binding it in drawWireframe) |
 | 🔬 Instrumented (awaiting repro) | BUG-015 (BodyAngle in Live Preview — `paramSet` log NOT firing on user drag → slider→store path broken; UI gate hypothesis confirmed primary), BUG-023 (save→load breaks most params — instrumentation shipped 2026-05-06: `loadProject` summary + `paramOrphans` walk + `rigSpecPostLoad` auto-fill OK/SKIPPED log; needs `.stretch` repro from a save that breaks) |
+| Recently fixed (2026-05-08) | BUG-025 (anime-PSD legs fly off canvas after Init Rig — `LEG_ROLES` skip in `structuralChainEmit.js` left leg rotation deformers with their initial parent set to `GroupRotation_<g.parent>` (from `rotationDeformerEmit.js:160-162`) but origin in canvas-px. The skip suppressed origin conversion; chainEval's setup-baked rotation then composed the canvas-px pivot through the parent's matrix, double-applying the parent's pivot displacement → ~640 px (canvasW/2) leg deviation. Fixed by removing the LEG_ROLES skip; dead leg deformers still get pruned by `pruneOrphanRotationDeformers`. Sister fix in `artMeshSourceEmit.js`: `else if (jointBoneId && deformerWorldOrigins.has(jointBoneId))` was setting `artParent.id = jointBoneId` (a bone id, not a deformer id) — fixed to use `groupDeformerGuids.has` and prefix `GroupRotation_`.) |
 | Recently fixed (2026-05-04) | BUG-022 (hair tilted under `hairRig:false` — `applySubsystemOptOutToRigSpec` was picking `keyforms[0]` as rest, but cartesian-product order makes it the swung-`k=-1` keyform; fixed to find the all-zero `keyTuple`). BUG-024 (wizard reorder click-select dead — POLISH-PASS-002 quad fallback hit every layer because PSD parts have `imageWidth = psdW`; fixed via alpha-sample of cached `imageData` first, then `imageBounds`, then full quad). Plus dead `ParamRotation_root` / `ParamRotation_bothLegs` ghost sliders pruned via new `pruneOrphanRotationDeformers` (post-harvest reachability walk drops rotation deformers no mesh chain passes through, plus their `ParamRotation_<g>` entries). `rigInitIdentityDiag` log fires unconditionally now (was gated on disabled subsystems) so future rest-pose drift surfaces in the Logs panel without toggling a flag. |
 | ⏳ Open | (none — BUG-015 + BUG-023 are instrumented and waiting on user-side Logs / `.stretch` repro; they'll move to Investigating once repro data lands) |
 | Recently fixed (2026-05-06) | BUG-005 (Opacity slider was edit-and-commit NumberField spinner; clicking ▲/▼ updated input visually but didn't commit until blur. Replaced with Radix `<Slider>` in `VisibilitySection.jsx` — `onValueChange` fires on every drag tick) |
@@ -104,6 +105,49 @@ Also useful: a `.stretch` blob from a save that breaks on reload — that lets t
 
 ---
 
+### ✅ BUG-025 — Anime PSD legs fly off canvas after Init Rig (~640 px deviation)
+
+- **Severity:** high (blocks rigging anime characters with nested leg bones) · **Reported:** 2026-05-08 (user, on `test_image4.psd`) · **Fixed:** 2026-05-08
+
+**Repro:** Import an anime-style PSD where leg groups are nested bones (e.g. `torso → rightLeg → rightKnee` all have `boneRole`, with skinned legwear meshes underneath). After Init Rig, the legwear layers render off-canvas to the bottom-right at roughly `(canvasW/2, canvasH/2)` away from where they should sit. Pose Mode interaction on a leg bone "snaps them back" because the pose update triggers `selectRigSpec` to recompute and the second compute happens to mask the symptom.
+
+`rigInitIdentityDiag` confirmed it: `Init Rig rest-divergence: max 641.00 px across 23 parts; 8 offenders > 1 px`.
+
+**Root cause:** two-layer interaction in the cmo3 rig harvest:
+
+1. **`rotationDeformerEmit.js:160-162`** sets each group rotation deformer's *initial* parent to its parent group's rotation deformer when one exists:
+   ```js
+   if (g.parent && groupDeformerGuids.has(g.parent)) {
+     _grpRotSpec.parent = { type: 'rotation', id: `GroupRotation_${g.parent}` };
+   }
+   ```
+   For a leg group (`rightLeg`) whose parent is a non-bone group (`torso` with rotation deformer), this gives `GroupRotation_rightLeg.parent = GroupRotation_torso`.
+
+2. **`structuralChainEmit.js`** had a `LEG_ROLES` skip (`['leftLeg', 'rightLeg', 'bothLegs', 'leftKnee', 'rightKnee']`) that `continue`d past leg roles, suppressing both re-parenting AND origin conversion. Origin stays at the initial canvas-px value from `buildGroupRotationSpec`.
+
+Result: parent ref says `GroupRotation_torso` (which expects torso-pivot-relative-px input) but `originX/Y` is canvas-px. chainEval's `getRotationSetup` probes the parent at the authored pivot → `evalChainAtPoint(GroupRotation_torso, 650, 800)` interprets `(650, 800)` as torso-pivot-relative-px → output = `torso_pivot + (650, 800)` ≈ `(1300, 1600)` instead of `(650, 800)`. canvasFinalPivot is doubled. Every legwear vertex shifts by torso's pivot magnitude.
+
+**Why shelby was fine:** shelby's `Rotation_bothLegs` is a dead orphan (no mesh chain passes through it because legwear meshes have `RigWarp_legwear` re-parented directly to BodyXWarp at `structuralChainEmit:218`). `pruneOrphanRotationDeformers` drops it. The frame mismatch was inert.
+
+**Why test_image4 broke:** anime PSDs with nested leg bones don't get `RigWarp_*` for legwear (perPartRigWarps logs `skip(baked)` because `pm.hasBakedKeyforms = true`). Legwear meshes go through the `GroupRotation_<bone-or-leg>` chain — exposing the broken frame.
+
+**Fix 1: remove the LEG_ROLES skip** ([src/io/live2d/cmo3/structuralChainEmit.js](src/io/live2d/cmo3/structuralChainEmit.js)). Leg rotation deformers now go through normal re-parent (only when initial parent is root) + origin conversion. Dead leg deformers still get dropped by `pruneOrphanRotationDeformers`, so removing the skip doesn't resurrect anything that wasn't already alive.
+
+**Fix 2: align `artMeshSourceEmit.js` artParent with cmo3 emit's targetDeformerGuid resolution** ([src/io/live2d/cmo3/artMeshSourceEmit.js](src/io/live2d/cmo3/artMeshSourceEmit.js)). The non-baked-rigged-to-bone branch (line 345 pre-fix) was setting `artParent = { type: 'rotation', id: jointBoneId }` — but `jointBoneId` is a bone id, and bones never get rotation deformers (`rotationDeformerEmit.js:115` skips them). chainEval couldn't resolve the parent and left vertices in pivot-relative-px (a parallel form of the same flying-mesh symptom). Fixed by:
+- `else if (jointBoneId && groupDeformerGuids.has(jointBoneId))` — only emit a rotation parent when the group ACTUALLY has a rotation deformer; prefix `GroupRotation_`.
+- `else if (dfOwner && groupDeformerGuids.has(dfOwner))` — fall through to the parent-group's deformer when jointBone is a bone but dfOwner has one (mirrors cmo3 emit branch 4).
+- `else { artParent = root; bakedReencodeToCanvas = !!dfOrigin; }` — when no rotation-deformer ancestor exists, render at canvas-px under root and re-encode pivot-relative verts to canvas-px (same `bakedReencodeToCanvas` flag the bone-baked-no-deformer fallback already used). New `toRigFrame` helper handles the re-encoding for every non-baked keyform branch (eyelid closure, neck corner, variant, base fade, single-keyform).
+
+**Files touched:**
+- [src/io/live2d/cmo3/structuralChainEmit.js](src/io/live2d/cmo3/structuralChainEmit.js) — removed LEG_ROLES skip + constant
+- [src/io/live2d/cmo3/artMeshSourceEmit.js](src/io/live2d/cmo3/artMeshSourceEmit.js) — artParent decision aligned with `groupDeformerGuids`; `toRigFrame` helper
+- [scripts/test/test_artMeshParentBoneRig.mjs](../scripts/test/test_artMeshParentBoneRig.mjs) — three regression cases (Case A: non-baked rigged-to-bone, Case B: bone-baked nested leg bones — the test_image4 reproducer, Case C: non-baked rigged-to-non-bone-group)
+- [package.json](../package.json) — wired `test:artMeshParentBoneRig` into the aggregate suite
+
+**Verification:** Pre-fix, Case B asserted `chainEval rest ≡ verticesCanvas within 1 px` failed with `max=800.00 px on 'legwear-r'`. Post-fix passes. Full suite green: `shelbyByteFidelity` (23/23), `e2e` (27/27), `breathFidelity` (66/66), `initRig` (60/60), `chainEval`, typecheck.
+
+---
+
 ### ✅ BUG-024 — Wizard step 2 "Reorder Layers": clicks on canvas don't select pieces
 
 - **Severity:** medium · **Reported:** 2026-05-04 (user) · **Fixed:** 2026-05-04
@@ -161,7 +205,7 @@ Verified post-fix: front-hair and back-hair drop out of `rigInitIdentityDiag` of
 **Root cause:** the cmo3 generator emits a `GroupRotation_<g>` per non-bone, non-skipped group + a matching `ParamRotation_<g>` param. Three independent reasons make `Rotation_root` and `Rotation_bothLegs` dead-end orphans on shelby:
 
 - `Rotation_root`: `structuralChainEmit:150-205` re-parents every non-leg group rotation to BodyXWarp, so `Rotation_root` ends up a sibling rather than ancestor of the other rotations. Its only descendant in shelby is `Rotation_bothLegs`, itself dead.
-- `Rotation_bothLegs`: `LEG_ROLES` skip in `structuralChainEmit:150-205` keeps it parented at root with no pivot conversion, AND every legwear mesh gets `RigWarp_legwear` re-parented to BodyXWarp at line 218, bypassing `Rotation_bothLegs` entirely. No mesh chain passes through it.
+- `Rotation_bothLegs`: every legwear mesh gets `RigWarp_legwear` re-parented to BodyXWarp at `structuralChainEmit:~218`, bypassing `Rotation_bothLegs` entirely. No mesh chain passes through it. (Pre-2026-05-08 there was also a `LEG_ROLES` skip earlier in the file that left leg rotation deformers parented at root with no origin conversion. That skip was removed when fixing BUG-025 — it caused a frame mismatch on anime PSDs whose legwear DOES go through `GroupRotation_<leg>`. `pruneOrphanRotationDeformers` still drops `Rotation_bothLegs` because nothing references it; shelby behaviour preserved.)
 
 **Fix:** new `pruneOrphanRotationDeformers(rigSpec)` in [initRig.js](src/io/live2d/rig/initRig.js) walks every art mesh's parent chain, marks every reachable deformer id, then drops any rotation deformer not in the marked set. Drops the matching `ParamRotation_<g>` from `rigSpec.parameters` only when no surviving spec still binds it (defensive against shared params). Also threaded into `seedAllRig` so the dropped param ids are removed from `project.parameters` post-seed — the slider never appears in the UI.
 

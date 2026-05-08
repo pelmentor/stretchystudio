@@ -321,20 +321,29 @@ export function emitArtMeshSources(ctx, opts) {
     // resolves into rigSpec.warpDeformers via lookup.
     const _artSanitizedName = sanitisePartName(pm.meshName || pm.partId);
     let artParent;
-    // Tracks whether the bone-baked branch fell back to root because the
-    // arm group itself has no rotation deformer (e.g. shelby's leftArm
-    // is also a bone). When true the keyform emission below re-encodes
-    // pivot-relative verts back to canvas-px for the rigSpec only — XML
-    // emission keeps its own (separate) coord-space convention.
+    // Tracks whether the artParent fell back to root despite a non-null
+    // dfOrigin (the part's vertex frame is pivot-relative-px from a
+    // group whose chain has no rotation deformer ancestor). When true,
+    // the keyform emission below re-encodes pivot-relative verts back
+    // to canvas-px for the rigSpec only — XML emission keeps its own
+    // (separate) deformer-local coord-space convention.
+    //
+    // Two cases hit this fallback:
+    //   1. Bone-baked: bone's parent group is itself a bone (no group
+    //      deformer) — e.g. shelby's leftArm-as-bone.
+    //   2. Non-baked rigged-to-bone: the joint bone has no group
+    //      rotation deformer (bones never do) AND no non-bone ancestor
+    //      with one — e.g. test_image4's legwear rigged to a leg bone
+    //      whose parent chain is also bones.
     let bakedReencodeToCanvas = false;
     if (rwBox) {
       artParent = { type: 'warp', id: `RigWarp_${_artSanitizedName}` };
     } else if (pm.hasBakedKeyforms) {
-      // Bone-baked meshes (arms/legs/hands): the bone group itself never
-      // gets a rotation deformer (skipped at section 3b because it lives
-      // in `boneParamGuids`). Mirror the XML fallback: parent to the arm
-      // group's `GroupRotation_<id>` deformer when present; else root
-      // with canvas-px verts (chainEval can't walk a missing parent).
+      // Bone-baked meshes (arms/legs/hands): the bone itself never gets
+      // a rotation deformer (rotationDeformerEmit.js:~115 skips
+      // `boneParamGuids`). Parent to the bone's parent group's
+      // `GroupRotation_<id>` when that ancestor has one; else root with
+      // canvas-px verts (chainEval can't walk a missing parent).
       if (dfOwner && groupDeformerGuids.has(dfOwner)) {
         artParent = { type: 'rotation', id: `GroupRotation_${dfOwner}` };
       } else {
@@ -342,13 +351,43 @@ export function emitArtMeshSources(ctx, opts) {
         artLocalFrame = 'canvas-px';
         bakedReencodeToCanvas = !!dfOrigin;
       }
-    } else if (jointBoneId && deformerWorldOrigins.has(jointBoneId)) {
-      artParent = { type: 'rotation', id: jointBoneId };
-    } else if (dfOwner) {
-      artParent = { type: 'warp', id: dfOwner };
+    } else if (jointBoneId && groupDeformerGuids.has(jointBoneId)) {
+      // Non-baked rigged-to-non-bone-group: the joint group has its own
+      // rotation deformer (i.e., it's NOT a bone — bones are skipped in
+      // groupDeformerGuids). Parent to its `GroupRotation_<id>`. Mirrors
+      // cmo3 targetDeformerGuid resolution (line ~285).
+      artParent = { type: 'rotation', id: `GroupRotation_${jointBoneId}` };
+    } else if (dfOwner && groupDeformerGuids.has(dfOwner)) {
+      // Non-baked rigged-to-bone where the bone has no rotation deformer
+      // but `meshParentGroup` (or some other dfOwner choice) does.
+      artParent = { type: 'rotation', id: `GroupRotation_${dfOwner}` };
     } else {
+      // No rotation-deformer ancestor at all. Render at canvas-px under
+      // root. If verts were encoded pivot-relative (dfOrigin non-null),
+      // re-encode them back to canvas-px for the rigSpec — same flag as
+      // the bone-baked-no-deformer fallback above. Without this, chainEval
+      // outputs pivot-relative pixels verbatim → mesh shifts off-canvas
+      // by the bone's pivot magnitude (the test_image4 leg-fly bug).
       artParent = { type: 'root', id: null };
+      artLocalFrame = 'canvas-px';
+      bakedReencodeToCanvas = !!dfOrigin;
     }
+
+    // Re-encoder for the rigSpec keyform vertex push. When
+    // `bakedReencodeToCanvas` is set, lifts the (pivot-relative-px)
+    // vertex array back to canvas-px so the rigSpec frame matches
+    // `artParent = root`. No-op when artParent expects pivot-relative
+    // (rotation parent) or 0..1 (warp parent).
+    const toRigFrame = (bakedReencodeToCanvas && dfOrigin)
+      ? (local) => {
+          const out = new Array(local.length);
+          for (let i = 0; i < local.length; i += 2) {
+            out[i]     = local[i]     + dfOrigin.x;
+            out[i + 1] = local[i + 1] + dfOrigin.y;
+          }
+          return out;
+        }
+      : (local) => local;
 
     // Keyforms — baked bone-weight keyforms or single rest-pose keyform
     // Helper to emit one CArtMeshForm
@@ -439,20 +478,13 @@ export function emitArtMeshSources(ctx, opts) {
         const positions = (ang === 0) ? verts : computeBakedPositions(ang);
         emitArtMeshForm(kfList, pidForm, positions);
         if (_bonePm) {
-          // rigSpec parent fell back to root (arm group has no deformer) →
-          // re-encode pivot-relative verts back to canvas-px for chainEval.
-          let rigPositions = positions;
-          if (bakedReencodeToCanvas) {
-            const reenc = new Array(positions.length);
-            for (let pi = 0; pi < positions.length; pi += 2) {
-              reenc[pi]     = positions[pi]     + dfOrigin.x;
-              reenc[pi + 1] = positions[pi + 1] + dfOrigin.y;
-            }
-            rigPositions = reenc;
-          }
+          // rigSpec parent fell back to root (no rotation-deformer
+          // ancestor) → re-encode pivot-relative verts back to canvas-px
+          // for chainEval via `toRigFrame` (no-op when artParent is a
+          // rotation deformer).
           artKeyforms.push({
             keyTuple: [ang],
-            vertexPositions: new Float32Array(rigPositions),
+            vertexPositions: new Float32Array(toRigFrame(positions)),
             opacity: 1.0,
           });
         }
@@ -511,10 +543,10 @@ export function emitArtMeshSources(ctx, opts) {
         if (variantParamIdStr) {
           artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
           artBindings.push({ parameterId: variantParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
-          artKeyforms.push({ keyTuple: [0, 0], vertexPositions: new Float32Array(closedVerts), opacity: αN });
-          artKeyforms.push({ keyTuple: [1, 0], vertexPositions: new Float32Array(verts),       opacity: αN });
-          artKeyforms.push({ keyTuple: [0, 1], vertexPositions: new Float32Array(closedVerts), opacity: αV });
-          artKeyforms.push({ keyTuple: [1, 1], vertexPositions: new Float32Array(verts),       opacity: αV });
+          artKeyforms.push({ keyTuple: [0, 0], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αN });
+          artKeyforms.push({ keyTuple: [1, 0], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αN });
+          artKeyforms.push({ keyTuple: [0, 1], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αV });
+          artKeyforms.push({ keyTuple: [1, 1], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αV });
         }
       } else {
         // Standalone 1D closure: 2 keyforms [closed, open].
@@ -524,8 +556,8 @@ export function emitArtMeshSources(ctx, opts) {
 
         const closureParamIdStr = pm.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
         artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
-        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(closedVerts), opacity: 1.0 });
-        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts),       opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: 1.0 });
       }
     } else if (pm.hasNeckCornerShapekeys) {
       // 3 keyforms on ParamAngleX: −30 (keyIndex 0), 0 rest (1), +30 (2).
@@ -601,9 +633,9 @@ export function emitArtMeshSources(ctx, opts) {
       emitArtMeshForm(kfList, pm.neckCornerFormGuids[1], posVerts); // +30
 
       artBindings.push({ parameterId: 'ParamAngleX', keys: [-30, 0, 30], interpolation: 'LINEAR' });
-      artKeyforms.push({ keyTuple: [-30], vertexPositions: new Float32Array(negVerts), opacity: 1.0 });
-      artKeyforms.push({ keyTuple: [0],   vertexPositions: new Float32Array(verts),    opacity: 1.0 });
-      artKeyforms.push({ keyTuple: [30],  vertexPositions: new Float32Array(posVerts), opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [-30], vertexPositions: new Float32Array(toRigFrame(negVerts)), opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [0],   vertexPositions: new Float32Array(toRigFrame(verts)),    opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [30],  vertexPositions: new Float32Array(toRigFrame(posVerts)), opacity: 1.0 });
     } else if (pm.hasEmotionVariantOnly) {
       // 2 forms matching 2 keyforms on ParamSmile — simple 0→1 opacity fade.
       //   [0] Smile=0 : hidden (opacity 0) — variant fully transparent
@@ -618,8 +650,8 @@ export function emitArtMeshSources(ctx, opts) {
       const sfx = pm.variantSuffixForMesh;
       if (sfx) {
         artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
-        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(verts), opacity: 0.0 });
-        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts), opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 0.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 1.0 });
       }
     } else if (pm.hasBaseFadeOnly) {
       // 2 forms matching the 2-keyform linear fade on Param<Suffix>:
@@ -633,8 +665,8 @@ export function emitArtMeshSources(ctx, opts) {
       const sfx = pm.baseFadeSuffix;
       if (sfx) {
         artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
-        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(verts), opacity: 1.0 });
-        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(verts), opacity: 0.0 });
+        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 1.0 });
+        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 0.0 });
       }
     } else {
       // Single keyform at rest position
@@ -644,7 +676,7 @@ export function emitArtMeshSources(ctx, opts) {
       // Default: 1-keyform plan on ParamOpacity[1.0] — mirrors moc3writer's
       // per-mesh default (`meshBindingPlan` line ~624).
       artBindings.push({ parameterId: 'ParamOpacity', keys: [1.0], interpolation: 'LINEAR' });
-      artKeyforms.push({ keyTuple: [1.0], vertexPositions: new Float32Array(verts), opacity: 1.0 });
+      artKeyforms.push({ keyTuple: [1.0], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 1.0 });
     }
 
     // v2 R1.b — push the captured spec into the rigCollector so the editor

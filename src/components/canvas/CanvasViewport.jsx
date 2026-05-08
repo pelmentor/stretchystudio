@@ -19,6 +19,7 @@ import {
   tickPhysics,
   buildParamSpecs,
 } from '@/io/live2d/runtime/physicsTick';
+import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
 import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
 import { importPsd } from '@/io/psd';
@@ -232,6 +233,17 @@ export default function CanvasViewport({
   // `BREATH_CYCLE_SEC` and feeds `0.5 + 0.5*sin(phase)` into ParamBreath.
   // lookRef tracks LMB-cursor position for the same tick.
   const breathPhaseRef = useRef(0);
+  // Cubism eye-blink driver — port of `CubismEyeBlink` from the Web
+  // Framework. Live Preview ticks it on every rAF frame and writes the
+  // resulting ParamEyeLOpen / ParamEyeROpen values into the values
+  // map. Default state machine: Interval → Closing → Closed → Opening
+  // → Interval; ~3.5s mean wait between blinks. Re-armed via
+  // `.reset()` whenever the surface re-mounts in livePreview mode so
+  // the next blink fires within a few seconds of entering the tab.
+  const eyeBlinkRef = useRef(/** @type {EyeBlinkDriver|null} */ (null));
+  if (eyeBlinkRef.current === null) {
+    eyeBlinkRef.current = new EyeBlinkDriver();
+  }
   const lookRef = useRef({ active: false, clientX: 0, clientY: 0 });
   // Cubism-style damped follow target. CubismTargetPoint pattern:
   // when LMB is held, target = normalized cursor; on release, target
@@ -489,6 +501,20 @@ export default function CanvasViewport({
         }
         const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
         updates.ParamBreath = breathV;
+
+        // Eye blink — Cubism Web Framework's `CubismEyeBlink`. Drives
+        // `ParamEyeLOpen` / `ParamEyeROpen` (or whatever the project's
+        // `groups.EyeBlink` table names) on a periodic state machine.
+        // `dtBlink` shares the same physics-clock derivation so the
+        // first frame is dt=0 (no jump on entry to Live Preview).
+        const dtBlink = lastPhysicsTimestampRef.current !== 0
+          ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
+          : 0;
+        const blinkValue = eyeBlinkRef.current.tick(dtBlink);
+        const blinkParamIds = resolveEyeBlinkParamIds(projectRef.current);
+        for (const paramId of blinkParamIds) {
+          updates[paramId] = blinkValue;
+        }
 
         // Cursor look — Cubism-style damped follow. CubismTargetPoint:
         // target = normalized cursor while LMB is held, target = (0,0)

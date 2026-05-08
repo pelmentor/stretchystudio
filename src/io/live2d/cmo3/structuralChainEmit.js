@@ -51,8 +51,6 @@ import { emitFaceParallax } from './faceParallax.js';
  * @module io/live2d/cmo3/structuralChainEmit
  */
 
-const LEG_ROLES = new Set(['leftLeg', 'rightLeg', 'bothLegs', 'leftKnee', 'rightKnee']);
-
 /**
  * @param {Object} x
  * @param {Object} opts
@@ -149,7 +147,20 @@ export function emitStructuralChainAndReparent(x, opts) {
 
   for (const [gid, targetNode] of rotDeformerTargetNodes) {
     const group = groupMap.get(gid);
-    if (group && LEG_ROLES.has(group.boneRole)) continue;
+    // Pre-2026-05-08: leg roles (leftLeg/rightLeg/bothLegs/leftKnee/rightKnee)
+    // were skipped here, leaving their rotation deformers parented to
+    // their initial assignment (root or `GroupRotation_<g.parent>` from
+    // rotationDeformerEmit:~160-162) with origin in canvas-px. The intent
+    // was to keep `Rotation_bothLegs`-style dead deformers isolated. But
+    // when a leg group has a parent group with a rotation deformer (e.g.
+    // legBone → torso), the initial parent is `GroupRotation_torso` AND
+    // the LEG_ROLES skip suppresses origin conversion → the leg
+    // deformer's authored pivot gets interpreted as torso-pivot-relative-
+    // px instead of canvas-px, displacing legwear meshes by the torso
+    // pivot magnitude (~640 px in test_image4.psd, the "legs fly out of
+    // canvas after Init Rig" bug). Dead deformers are dropped by
+    // `pruneOrphanRotationDeformers` regardless, so removing the skip
+    // doesn't resurrect anything that wasn't already alive.
 
     if (targetNode.attrs['xs.ref'] === pidDeformerRoot) {
       targetNode.attrs['xs.ref'] = pidReparentTarget;
