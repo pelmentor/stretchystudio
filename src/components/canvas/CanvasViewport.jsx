@@ -78,6 +78,7 @@ import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
 import { computeBoneOverlayMatrices, computeBoneWorldMatrices, computeBoneParentMap, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
+import { pickBonePostChainComposition } from '@/renderer/bonePostChainComposition';
 import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
@@ -826,13 +827,8 @@ export default function CanvasViewport({
             // composes ON TOP of param-driven deformation. Same as
             // Blender's Armature modifier on top of shape keys.
             const partMesh = getMesh(node, projectRef.current);
-            const armatureMod = Array.isArray(node.modifiers)
-              ? node.modifiers.find((m) => m?.type === 'armature' && m.enabled !== false
-                  && ((typeof m.mode === 'number' ? m.mode : 3) & 1) !== 0)
-              : null;
-            const partBoneId = armatureMod?.data?.jointBoneId ?? partMesh?.jointBoneId ?? null;
-            const partWeights = partMesh?.boneWeights;
-            if (armatureMod && partBoneId && Array.isArray(partWeights) && partWeights.length > 0) {
+            const composition = pickBonePostChainComposition(node, partMesh);
+            if (composition.kind === 'lbs') {
               // Two-bone LBS (mirrors Blender pchan_bone_deform): the
               // joint bone (leftElbow) is the CHILD; its bone-tree parent
               // (leftArm) is the PARENT. weight=0 → parent.world,
@@ -840,16 +836,28 @@ export default function CanvasViewport({
               // anchored weight=0 verts to canvas rest, so rotating the
               // parent bone alone produced little visible motion on
               // limb meshes — replaced 2026-05-08.
-              const childMatrix = boneWorld.get(partBoneId);
-              const parentBoneId = armatureMod.data?.parentBoneId ?? boneParents.get(partBoneId) ?? null;
+              const childMatrix = boneWorld.get(composition.jointBoneId);
+              const parentBoneId = composition.parentBoneId
+                ?? boneParents.get(composition.jointBoneId) ?? null;
               const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
-              applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partWeights);
-            } else {
-              // No active Armature modifier — fall back to the per-part
-              // overlay matrix (rigid bone-follow). No-op when the bone
-              // chain is at rest.
+              applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partMesh.boneWeights);
+            } else if (composition.kind === 'overlay') {
+              // PAROBJECT_BONE rigid-follow path. Used by parts that
+              // have NEVER been bound to the armature (no `boneWeights`).
+              // No-op when the nearest bone ancestor's world matrix is
+              // identity.
               applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
             }
+            // composition.kind === 'none'  →  "Apply Modifier" was used
+            // (vertex groups stay on the mesh; the modifier is gone).
+            // Decoupled from the armature — mirrors Blender's Apply
+            // behavior, where the modifier was the binding and its
+            // removal ends bone influence. The part renders at its baked
+            // keyform geometry (BUG-027 bake pass already transformed the
+            // keyforms by the joint bone's world matrix linear part, so
+            // post-Apply geometry shows the posed pose). Re-bind via
+            // "Add Modifier → Armature" (or re-run Init Rig) to resume
+            // bone-follow.
             if (!poseOverrides) poseOverrides = new Map();
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;
