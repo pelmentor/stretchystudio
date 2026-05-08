@@ -124,14 +124,19 @@ function setupArmedHandwear() {
   assert(!hasArmature, 'Test 2: Armature modifier removed after Apply');
 }
 
-// ── Test 3: boneWeights + jointBoneId dropped (no double-LBS at render) ─
+// ── Test 3: vertex group data PERSISTS on the mesh after Apply ────────
 
 {
+  // Mirrors Blender — Apply Modifier doesn't touch `me->dvert`. Vertex
+  // groups stay on the Mesh datablock so the next modifier add (or
+  // re-init) re-binds automatically. Render-loop skinning is gated on
+  // the modifier's presence, NOT on boneWeights, so no double-apply.
   setupArmedHandwear();
   applyArmatureModifier('handwear-l');
   const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
-  assert(after.mesh.boneWeights === undefined, 'Test 3: mesh.boneWeights dropped');
-  assert(after.mesh.jointBoneId === undefined, 'Test 3: mesh.jointBoneId dropped');
+  assert(Array.isArray(after.mesh.boneWeights), 'Test 3: mesh.boneWeights PERSISTS after apply (vertex group data)');
+  assert(after.mesh.boneWeights.length === 2, 'Test 3: mesh.boneWeights length unchanged');
+  assert(after.mesh.jointBoneId === 'leftElbow', 'Test 3: mesh.jointBoneId PERSISTS (vertex group binding)');
 }
 
 // ── Test 4: no-op when part has no Armature modifier ─────────────────
@@ -171,6 +176,28 @@ function setupArmedHandwear() {
   const result = applyArmatureModifier('does-not-exist');
   assert(result.baked === false, 'Test 6: missing partId → baked=false');
   assert(result.reason === 'not-a-part', 'Test 6: reason=not-a-part');
+}
+
+// ── Test 7a: re-bind round-trip — apply, then re-synth puts modifier back ─
+
+{
+  // Blender-style workflow: Apply removes the modifier but keeps
+  // vertex groups; next modifier-add (or our synth-on-Init-Rig)
+  // re-emits an Armature against the still-present groups.
+  setupArmedHandwear();
+  applyArmatureModifier('handwear-l');
+  const before = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+  assert(!before.modifiers || !before.modifiers.some((m) => m?.type === 'armature'),
+    'Test 7a: post-apply has no armature modifier');
+  // Re-run the synth (what seedAllRig does on Init Rig).
+  const { synthesizeModifierStacks } = await import('../../src/store/deformerNodeSync.js');
+  useProjectStore.getState().updateProject((proj) => {
+    synthesizeModifierStacks(proj);
+  });
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+  const armature = (after.modifiers ?? []).find((m) => m?.type === 'armature');
+  assert(!!armature, 'Test 7a: re-synth re-emits Armature modifier (bind picks up persistent boneWeights)');
+  assert(armature?.data?.jointBoneId === 'leftElbow', 'Test 7a: re-bound to the same joint bone');
 }
 
 // ── Test 7: bake preserves visual position (LBS-equivalence) ─────────

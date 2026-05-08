@@ -141,13 +141,14 @@ export function applyArmatureModifier(partId) {
       if (idx >= 0) target.modifiers.splice(idx, 1);
       if (target.modifiers.length === 0) delete target.modifiers;
     }
-    // After bake, the part's rest geometry IS the posed geometry.
-    // Drop the boneWeights / jointBoneId so the render-loop skinning
-    // path doesn't re-apply the LBS on top of the now-baked verts
-    // (which would double-rotate). Mirrors Blender: applying the
-    // modifier removes the binding.
-    delete target.mesh.boneWeights;
-    delete target.mesh.jointBoneId;
+    // Vertex group data (`mesh.boneWeights` + `mesh.jointBoneId`)
+    // STAYS on the mesh datablock — same as Blender. Apply Modifier
+    // removes the binding (the modifier entry above) but keeps the
+    // vertex groups so the next modifier add re-binds automatically
+    // (`object_modifier.cc` apply path doesn't touch `me->dvert`).
+    // Render-loop skinning is gated on the modifier's presence
+    // (CanvasViewport: armatureMod check), not on boneWeights — so
+    // there's no double-apply concern.
   });
 
   logger.info(

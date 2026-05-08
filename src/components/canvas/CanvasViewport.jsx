@@ -799,16 +799,18 @@ export default function CanvasViewport({
               verts[i] = { x: f.vertexPositions[i * 2], y: f.vertexPositions[i * 2 + 1] };
             }
             // BONE_ARMATURE_INDEPENDENCE (2026-05-08) — composition path:
-            //   1. Per-vertex weighted skinning when the part has
-            //      `mesh.boneWeights + jointBoneId`. Reads `pose.rotation`
-            //      from the joint bone, scales by per-vertex weight.
-            //      Subsumes the overlay path (weight-1.0 matches the
-            //      overlay's effect exactly), so the overlay loop below
-            //      is GATED on `!boneWeights` to avoid double-rotation.
-            //   2. Per-part overlay matrix for parts WITHOUT weighted
-            //      skinning. Walks the bone-group ancestor chain and
-            //      composes pose matrices into one canvas-space matrix
-            //      per part.
+            //   1. Per-vertex weighted skinning when the part carries an
+            //      enabled `Armature` modifier in `node.modifiers[]`. The
+            //      modifier is the BIND; vertex group data
+            //      (`mesh.boneWeights` + `mesh.jointBoneId`) persists on
+            //      the mesh and is reused on re-bind. Mirrors Blender:
+            //      Apply Modifier removes the binding but keeps the
+            //      vertex groups on the Mesh datablock so the next
+            //      modifier add picks them up automatically.
+            //   2. Per-part overlay matrix for parts whose nearest bone
+            //      ancestor is posed but which DON'T have an Armature
+            //      modifier (rigid follow — entire part rotates as a
+            //      block).
             //
             // Both paths read `node.pose.{rotation,x,y,scaleX,scaleY}`.
             // The bone gesture (SkeletonOverlay) writes pose.rotation;
@@ -818,9 +820,13 @@ export default function CanvasViewport({
             // composes ON TOP of param-driven deformation. Same as
             // Blender's Armature modifier on top of shape keys.
             const partMesh = getMesh(node, projectRef.current);
-            const partBoneId = partMesh?.jointBoneId;
+            const armatureMod = Array.isArray(node.modifiers)
+              ? node.modifiers.find((m) => m?.type === 'armature' && m.enabled !== false
+                  && ((typeof m.mode === 'number' ? m.mode : 3) & 1) !== 0)
+              : null;
+            const partBoneId = armatureMod?.data?.jointBoneId ?? partMesh?.jointBoneId ?? null;
             const partWeights = partMesh?.boneWeights;
-            if (partBoneId && Array.isArray(partWeights) && partWeights.length > 0) {
+            if (armatureMod && partBoneId && Array.isArray(partWeights) && partWeights.length > 0) {
               // Two-bone LBS (mirrors Blender pchan_bone_deform): the
               // joint bone (leftElbow) is the CHILD; its bone-tree parent
               // (leftArm) is the PARENT. weight=0 → parent.world,
@@ -829,12 +835,13 @@ export default function CanvasViewport({
               // parent bone alone produced little visible motion on
               // limb meshes — replaced 2026-05-08.
               const childMatrix = boneWorld.get(partBoneId);
-              const parentBoneId = boneParents.get(partBoneId) ?? null;
+              const parentBoneId = armatureMod.data?.parentBoneId ?? boneParents.get(partBoneId) ?? null;
               const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
               applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partWeights);
             } else {
-              // No weighted skinning — per-part overlay matrix. No-op
-              // when the bone chain is at rest.
+              // No active Armature modifier — fall back to the per-part
+              // overlay matrix (rigid bone-follow). No-op when the bone
+              // chain is at rest.
               applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
             }
             if (!poseOverrides) poseOverrides = new Map();
