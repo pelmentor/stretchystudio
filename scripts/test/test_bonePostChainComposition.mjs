@@ -64,9 +64,15 @@ function assert(cond, name) {
   assert(result.reason === 'applied', `Test 2: reason === 'applied' (got ${result.reason})`);
 }
 
-// ── Test 3: unweighted → overlay (rigid bone-follow) ─────────────────
+// ── Test 3: unweighted → none/unbound (Cubism Adapter Phase 2) ─────────
 
 {
+  // Pre-Phase-2 this returned 'overlay' (rigid bone-follow). Post-Phase-2
+  // every meshed part with a bone-group ancestor has weights via
+  // `seedDefaultRigidWeights`, so reaching the no-weights branch means
+  // the part is legitimately unbound (no bone ancestor) OR the project
+  // predates v31 and hasn't been re-Init-Rigged. Either way: no
+  // composition runs.
   const node = {
     id: 'topwear',
     type: 'part',
@@ -76,7 +82,8 @@ function assert(cond, name) {
     // No boneWeights — never bound to armature
   };
   const result = pickBonePostChainComposition(node, mesh);
-  assert(result.kind === 'overlay', `Test 3: kind === 'overlay' (got ${result.kind})`);
+  assert(result.kind === 'none', `Test 3: kind === 'none' (got ${result.kind})`);
+  assert(result.reason === 'unbound', `Test 3: reason === 'unbound' (got ${result.reason})`);
 }
 
 // ── Test 4: weighted + DISABLED modifier → none/applied ─────────────
@@ -150,21 +157,22 @@ function assert(cond, name) {
   assert(result.jointBoneId === 'leftElbow', 'Test 6: falls back to mesh.jointBoneId');
 }
 
-// ── Test 7: no mesh at all → overlay (defensive) ────────────────────
+// ── Test 7: no mesh at all → none/unbound (defensive) ──────────────
 
 {
   const node = { id: 'empty', type: 'part', modifiers: [] };
   const result = pickBonePostChainComposition(node, null);
-  assert(result.kind === 'overlay', `Test 7: kind === 'overlay' (got ${result.kind})`);
+  assert(result.kind === 'none', `Test 7: kind === 'none' (got ${result.kind})`);
+  assert(result.reason === 'unbound', `Test 7: reason === 'unbound'`);
 }
 
-// ── Test 8: empty boneWeights array → overlay ───────────────────────
+// ── Test 8: empty boneWeights array → none/unbound ─────────────────
 
 {
   const node = { id: 'p', type: 'part' };
   const mesh = { boneWeights: [], jointBoneId: 'leftElbow' };
   const result = pickBonePostChainComposition(node, mesh);
-  assert(result.kind === 'overlay', `Test 8: empty array → overlay (got ${result.kind})`);
+  assert(result.kind === 'none', `Test 8: empty array → 'none' (got ${result.kind})`);
 }
 
 // ── Test 9: mode field absent → defaults to REALTIME|RENDER ─────────

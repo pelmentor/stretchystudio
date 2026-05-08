@@ -77,7 +77,7 @@ import {
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
-import { computeBoneOverlayMatrices, computeBoneWorldMatrices, computeBoneParentMap, applyOverlayMatrixObj } from '@/renderer/boneOverlayMatrix';
+import { computeBoneWorldMatrices, computeBoneParentMap } from '@/renderer/boneOverlayMatrix';
 import { pickBonePostChainComposition } from '@/renderer/bonePostChainComposition';
 import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
@@ -760,18 +760,6 @@ export default function CanvasViewport({
             (_ed_mesh.editMode === 'edit' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
               ? _ed_mesh.selection[0]
               : null;
-          // Blender-style bone overlay. Composes ancestor bone-group
-          // `node.transform` matrices on top of rig output so dragging
-          // any bone (with or without a `ParamRotation_<role>` deformer)
-          // moves its descendants. Bones whose rotation IS rig-driven
-          // keep their `node.transform.rotation` at zero by contract
-          // BONE_ARMATURE_INDEPENDENCE (2026-05-08): every bone's pose
-          // contributes here — including bones that ALSO have a
-          // `ParamRotation_<bone>` slider. Bone gesture and slider are
-          // independent control surfaces; both compose. Empty map when
-          // no bone has a non-rest pose; the overlay loop short-circuits
-          // and we pay nothing.
-          const boneOverlay = computeBoneOverlayMatrices(projectRef.current.nodes);
           // Per-bone WORLD matrix map (composed through bone-group
           // ancestors). Skinning looks up by `jointBoneId` so a part
           // weighted to leftElbow follows leftArm rotations too —
@@ -832,32 +820,33 @@ export default function CanvasViewport({
               // Two-bone LBS (mirrors Blender pchan_bone_deform): the
               // joint bone (leftElbow) is the CHILD; its bone-tree parent
               // (leftArm) is the PARENT. weight=0 → parent.world,
-              // weight=1 → child.world, mid → lerp. Single-bone skinning
-              // anchored weight=0 verts to canvas rest, so rotating the
-              // parent bone alone produced little visible motion on
-              // limb meshes — replaced 2026-05-08.
+              // weight=1 → child.world, mid → lerp. Cubism Adapter Phase
+              // 1 (v31) ensures every meshed part with a bone-group
+              // ancestor has weights so this is the SOLE composition
+              // path on properly-migrated projects (rigid-follow parts
+              // ride here with all-1.0 weights, equivalent to the legacy
+              // overlay-matrix path but cleaner).
               const childMatrix = boneWorld.get(composition.jointBoneId);
               const parentBoneId = composition.parentBoneId
                 ?? boneParents.get(composition.jointBoneId) ?? null;
               const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
               applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partMesh.boneWeights);
-            } else if (composition.kind === 'overlay') {
-              // PAROBJECT_BONE rigid-follow path. Used by parts that
-              // have NEVER been bound to the armature (no `boneWeights`).
-              // No-op when the nearest bone ancestor's world matrix is
-              // identity.
-              applyOverlayMatrixObj(verts, boneOverlay.get(f.id));
             }
-            // composition.kind === 'none'  →  "Apply Modifier" was used
-            // (vertex groups stay on the mesh; the modifier is gone).
-            // Decoupled from the armature — mirrors Blender's Apply
-            // behavior, where the modifier was the binding and its
-            // removal ends bone influence. The part renders at its baked
-            // keyform geometry (BUG-027 bake pass already transformed the
-            // keyforms by the joint bone's world matrix linear part, so
-            // post-Apply geometry shows the posed pose). Re-bind via
-            // "Add Modifier → Armature" (or re-run Init Rig) to resume
-            // bone-follow.
+            // composition.kind === 'none'  →  no bone-pose composition.
+            // Two reasons:
+            //   - 'applied': "Apply Modifier" was used. Vertex groups
+            //     persist on the mesh datablock; the modifier removal
+            //     ends bone influence (Blender semantic). Part renders
+            //     at its baked keyform geometry (BUG-027 bake pass
+            //     transformed the keyforms by the joint bone's world
+            //     matrix linear part, so post-Apply geometry shows the
+            //     posed pose). Re-bind via "Add Modifier → Armature"
+            //     or re-run Init Rig.
+            //   - 'unbound': part has no bone-group ancestor or weights.
+            //     No bone-pose composition needed. Pre-v31 projects
+            //     loaded but not re-Init-Rigged would land here; v31
+            //     migration runs `seedDefaultRigidWeights` on load so
+            //     this should not fire on normally-loaded projects.
             if (!poseOverrides) poseOverrides = new Map();
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;

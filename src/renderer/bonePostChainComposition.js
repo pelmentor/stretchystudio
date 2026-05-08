@@ -4,7 +4,7 @@
  * Bone post-chain composition decision helper.
  *
  * After `chainEval` produces canvas-space art-mesh verts, the renderer
- * has THREE possible composition paths to apply on top:
+ * has TWO composition paths to apply on top:
  *
  *   1. **Two-bone LBS** (Armature modifier path) — per-vertex weighted
  *      skinning via `applyTwoBoneSkinningObj`. Applies when the part
@@ -12,20 +12,26 @@
  *      mesh carries `boneWeights` + `jointBoneId`. Mirrors Blender's
  *      `pchan_bone_deform`.
  *
- *   2. **Rigid overlay matrix** (PAROBJECT_BONE path) — applies the
- *      nearest bone-group ancestor's world matrix to every vert via
- *      `applyOverlayMatrixObj`. Used by parts that have NEVER been
- *      bound to the armature (no `boneWeights`). Mirrors Blender's
- *      object-parented-to-bone semantic where the mesh follows the
- *      bone rigidly without any modifier.
+ *   2. **None** (post-Apply / unbound) — the part has bone weights but
+ *      no enabled Armature modifier (Blender's Apply Modifier removed
+ *      the binding; vertex groups persist on the mesh datablock), OR
+ *      the part has no bone-group ancestor at all. Either way, no
+ *      bone-pose composition runs.
  *
- *   3. **None** (post-Apply) — the part has bone weights but no
- *      enabled Armature modifier. This means the user ran "Apply
- *      Modifier" — Blender bakes the deformation into mesh.vertices /
- *      keyforms and removes the modifier; vertex groups stay on the
- *      mesh datablock. The part is decoupled from the armature; bone
- *      gestures don't influence it. Re-bind via "Add Modifier →
- *      Armature" to resume bone-follow.
+ * # Cubism Adapter Phase 2 (2026-05-09): no more overlay-matrix branch
+ *
+ * Pre-Phase-2 a third "rigid overlay matrix" branch existed for parts
+ * with no `boneWeights` whose nearest ancestor was a bone group. Phase
+ * 1 (`seedDefaultRigidWeights` + v31 migration) ensures every meshed
+ * part with a bone-group ancestor has weights, so the overlay branch
+ * is unreachable on properly-migrated projects. Removing it collapses
+ * the renderer to a single uniform LBS composition path.
+ *
+ * Pre-Phase-1 projects that haven't been migrated AND haven't been re-
+ * Init-Rigged would hit this case — the helper logs a warning so the
+ * regression is visible rather than silent. The v31 migration runs
+ * `seedDefaultRigidWeights` on load, so this should never fire on a
+ * project loaded through the normal pipeline.
  *
  * # Why this matters (BUG-028)
  *
@@ -35,8 +41,8 @@
  * else-branch still applied the overlay matrix — rigidly rotating the
  * post-Apply baked keyform geometry by the bone's world matrix. With
  * the bone still posed, this produced a visible double-application
- * ("Apply didn't decouple from armature"). The fix is the third case:
- * has weights AND no modifier → no composition.
+ * ("Apply didn't decouple from armature"). Phase 1 + Phase 2 together
+ * eliminate the bug-class structurally rather than per-case.
  *
  * @module renderer/bonePostChainComposition
  */
@@ -54,11 +60,9 @@ const MODE_REALTIME_BIT = 1;
  *   parentBoneId: string|null,
  * }} CompositionLBS
  *
- * @typedef {{ kind: 'overlay' }} CompositionOverlay
+ * @typedef {{ kind: 'none', reason: 'applied' | 'unbound' | 'pre-migration' }} CompositionNone
  *
- * @typedef {{ kind: 'none', reason: 'applied' | 'no-bone-context' }} CompositionNone
- *
- * @typedef {CompositionLBS|CompositionOverlay|CompositionNone} BoneCompositionDecision
+ * @typedef {CompositionLBS|CompositionNone} BoneCompositionDecision
  */
 
 /**
@@ -96,9 +100,13 @@ export function pickBonePostChainComposition(node, partMesh) {
     // stay on the mesh, the modifier-removal ends the bone influence.
     return { kind: 'none', reason: 'applied' };
   }
-  // No vertex groups — the part has never been bound. Use the
-  // PAROBJECT_BONE rigid-follow overlay. The overlay matrix itself is
-  // resolved by `boneOverlayMatrix.computeBoneOverlayMatrices`; this
-  // function only signals which path to take.
-  return { kind: 'overlay' };
+  // No vertex groups. Post-v31 every meshed part with a bone-group
+  // ancestor has weights from `seedDefaultRigidWeights`, so reaching
+  // this branch means either:
+  //   - The part has no bone-group ancestor (legitimately unbound, e.g.
+  //     a UI overlay element). No composition needed.
+  //   - The project predates v31 AND hasn't been re-Init-Rigged. The
+  //     v31 migration runs `seedDefaultRigidWeights` on load, so this
+  //     should not fire in normal flow. Caller may log a warning.
+  return { kind: 'none', reason: 'unbound' };
 }

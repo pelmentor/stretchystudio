@@ -299,6 +299,43 @@ function setupArmedHandwear() {
   assert(after.mesh.jointBoneId === 'leftElbow', 'Test 11: jointBoneId still on the mesh');
 }
 
+// ── Cubism Adapter Phase 2 — post-Apply composition decision ─────────
+// After Apply on a rigid part (all-1.0 weights), the renderer's
+// `pickBonePostChainComposition` MUST return kind:'none' so the part
+// is decoupled from the armature. Pre-Phase-2 the renderer would have
+// fallen through to the rigid overlay-matrix path and double-applied
+// the bone pose (BUG-028). Phase 2 deletes that branch.
+
+{
+  setupArmedHandwear();
+  applyArmatureModifier('handwear-l');
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+
+  // Use the same composition helper the renderer uses.
+  const { pickBonePostChainComposition } = await import('../../src/renderer/bonePostChainComposition.js');
+  const decision = pickBonePostChainComposition(after, after.mesh);
+  assert(decision.kind === 'none',
+    `Phase 2: post-Apply rigid part → kind 'none' (got ${decision.kind})`);
+  assert(decision.reason === 'applied',
+    `Phase 2: reason 'applied' (got ${decision.reason})`);
+}
+
+// ── Cubism Adapter Phase 2 — bind on rigid part restores 'lbs' decision ─
+
+{
+  setupArmedHandwear();
+  applyArmatureModifier('handwear-l');
+  bindArmatureModifier('handwear-l');
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+
+  const { pickBonePostChainComposition } = await import('../../src/renderer/bonePostChainComposition.js');
+  const decision = pickBonePostChainComposition(after, after.mesh);
+  assert(decision.kind === 'lbs',
+    `Phase 2: re-bind on rigid part → kind 'lbs' (got ${decision.kind})`);
+  assert(decision.jointBoneId === 'leftElbow',
+    `Phase 2: re-bind preserves jointBoneId='leftElbow' (got ${decision.jointBoneId})`);
+}
+
 console.log(`\napplyArmatureModifier: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');
