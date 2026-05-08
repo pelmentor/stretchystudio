@@ -617,24 +617,38 @@ export function buildArmatureNodes(skeleton, groups, layers, partIds, uidFn) {
 /* ─── Skeleton topology (for SkeletonOverlay) ──────────────────────────────── */
 
 /**
- * Lines to draw connecting bone joints.
- * Each entry is [fromBoneRole, toBoneRole].
+ * Lines to draw connecting bone joints. Each entry is
+ * [parentBoneRole, childBoneRole]. Mirrors the `parentBone` map above
+ * exactly, so every bone in the armature is visually connected to its
+ * parent — Blender draws every Armature bone as a segment between its
+ * head and tail. Without root → torso / root → leg edges the root
+ * bone reads as an orphan dot at the hip pivot, easy to miss against
+ * busy body geometry (BLENDER_DEVIATION_AUDIT Fix 1 — root visibility).
+ *
+ * Lines are drawn only for pairs where BOTH bones exist on the
+ * current character. Fallback parent links (e.g. `head → torso` when
+ * `neck` is absent) are NOT enumerated here; the renderer skips any
+ * (from, to) pair where either side is missing.
  */
 export const SKELETON_CONNECTIONS = [
+  // Root → direct children
+  ['root',  'torso'],
+  ['root',  'leftLeg'],
+  ['root',  'rightLeg'],
+  ['root',  'bothLegs'],
+  // Spine
   ['torso', 'neck'],
   ['neck',  'head'],
   ['head',  'eyes'],
+  // Arms
   ['torso', 'leftArm'],
   ['torso', 'rightArm'],
-  ['leftArm', 'leftElbow'],
+  ['leftArm',  'leftElbow'],
   ['rightArm', 'rightElbow'],
-  ['torso',  'leftLeg'],
-  ['torso',  'rightLeg'],
-  ['leftLeg', 'leftKnee'],
-  ['rightLeg', 'rightKnee'],
-  // merged variants
   ['torso', 'bothArms'],
-  ['torso',  'bothLegs'],
+  // Legs
+  ['leftLeg',  'leftKnee'],
+  ['rightLeg', 'rightKnee'],
 ];
 
 /**

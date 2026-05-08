@@ -40,6 +40,7 @@ import {
 } from '../../components/ui/alert-dialog.jsx';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useCaptureStore } from '../../store/captureStore.js';
+import { logger } from '../../lib/logger.js';
 import {
   serializeProject,
   saveProjectRecord,
@@ -86,8 +87,24 @@ export function SaveModal({ open, onOpenChange }) {
   async function executeSave(idToUse, nameToUse, mode) {
     setIsSaving(true);
     setError(null);
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const project = useProjectStore.getState().project;
+    // Capture state snapshot BEFORE serialization. Mirrors the
+    // structural shape `loadProject` logs (nodes/parts/deformers/params/
+    // initRigDone) so we can cross-reference any post-load issue
+    // (BUG-NECK_NULL_BBOX, BUG-ARMS-PHYS, etc.) against the actual
+    // state that hit disk.
+    const _nodes = Array.isArray(project?.nodes) ? project.nodes : [];
+    const partsArr = _nodes.filter((n) => n?.type === 'part');
+    const deformersArr = _nodes.filter((n) => n?.type === 'deformer');
+    const partsWithRuntime = partsArr.filter((p) =>
+      p?.mesh?.runtime && Array.isArray(p.mesh.runtime.keyforms)
+    );
+    const partsWithBakedKeyforms = partsArr.filter((p) => {
+      const kfs = p?.mesh?.runtime?.keyforms;
+      return Array.isArray(kfs) && kfs.length > 1;
+    });
     try {
-      const project = useProjectStore.getState().project;
       const blob = await serializeProject(project);
 
       if (mode === 'download') {
@@ -107,8 +124,36 @@ export function SaveModal({ open, onOpenChange }) {
         useProjectStore.setState({ hasUnsavedChanges: false, currentLibraryId: savedId });
         onOpenChange(false);
       }
+      const elapsedMs = Math.round(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
+      logger.info(
+        'saveProject',
+        `${mode} OK: ${partsArr.length}p / ${deformersArr.length}d / ${project?.parameters?.length ?? 0}params, ${partsWithRuntime.length}/${partsArr.length} runtime-rig'd`,
+        {
+          mode,
+          name: nameToUse?.trim?.() ?? nameToUse,
+          schemaVersion: project?.schemaVersion ?? null,
+          parts: partsArr.length,
+          deformers: deformersArr.length,
+          params: project?.parameters?.length ?? 0,
+          lastInitRigCompletedAt: project?.lastInitRigCompletedAt ?? null,
+          partsWithRuntimeData: partsWithRuntime.length,
+          partsWithBakedKeyforms: partsWithBakedKeyforms.length,
+          blobSizeBytes: blob.size,
+          elapsedMs,
+        },
+      );
     } catch (err) {
-      console.error('[SaveModal] save failed:', err);
+      logger.warn(
+        'saveProject',
+        `${mode} FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        {
+          mode,
+          name: nameToUse?.trim?.() ?? nameToUse,
+          schemaVersion: project?.schemaVersion ?? null,
+          parts: partsArr.length,
+          deformers: deformersArr.length,
+        },
+      );
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSaving(false);

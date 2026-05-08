@@ -737,8 +737,9 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   for (const [role, node] of Object.entries(boneNodes)) {
     // Root is the canvas-level pivot — no rotation arc, no skinning,
     // but it IS a bone in the outliner so it needs a canvas dot too.
-    // Renders half-size so it reads as the structural pivot it is
-    // rather than a draggable joint.
+    // Renders LARGER than joint dots (Blender's Armature root marker
+    // is the biggest bone icon by convention) so it doesn't disappear
+    // into busy geometry at the hip pivot.
     const isRoot = role === 'root';
     const [cx, cy] = pivotScreenPos(node);
     const isDragging = dragRef.current?.nodeId === node.id;
@@ -748,7 +749,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       : isSelected
         ? COLOUR_SELECTED
         : (skeletonEditMode ? COLOUR_EDIT : COLOUR_NORMAL);
-    const dotRadius = isRoot ? Math.max(3, radius * 0.6) : radius;
+    const dotRadius = isRoot ? Math.max(7, radius * 1.4) : radius;
     if (isSelected && !isDragging) {
       // Soft halo ring — same accent at low opacity, fattens to
       // ~2x the joint radius. Drawn first so the solid dot paints on top.
