@@ -34,6 +34,10 @@ import { extractVariant } from '../psdOrganizer.js';
 import { getMesh } from '../../store/objectDataAccess.js';
 import { EYE_SOURCE_TAGS } from './cmo3/eyeTags.js';
 import { BODY_ANALYSIS_TAGS } from './bodyAnalyzer.js';
+import {
+  extractMeshExportStruct,
+  indexProjectNodesById,
+} from './extractMeshExportStruct.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -411,6 +415,10 @@ export async function exportLive2DProject(project, images, opts = {}) {
     transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
   }));
 
+  // Index project nodes once for the per-part bone-binding extract +
+  // structural-parent walk (cubismAdapter rigid-strip path).
+  const nodesById = indexProjectNodesById(project);
+
   const meshes = [];
   for (let i = 0; i < meshParts.length; i++) {
     const part = meshParts[i];
@@ -458,18 +466,15 @@ export async function exportLive2DProject(project, images, opts = {}) {
       uvs.push(u, vv);
     }
 
-    // Bone weight data for baked keyforms
-    const boneWeights = mesh.boneWeights ?? null;
-    const jointBoneId = mesh.jointBoneId ?? null;
-    // Find the elbow pivot in canvas space (jointBone's transform.pivotX/Y)
-    let jointPivotX = null, jointPivotY = null;
-    if (jointBoneId && boneWeights) {
-      const jointBone = project.nodes.find(n => n.id === jointBoneId);
-      if (jointBone?.transform) {
-        jointPivotX = jointBone.transform.pivotX ?? 0;
-        jointPivotY = jointBone.transform.pivotY ?? 0;
-      }
-    }
+    // Bone weight data for baked keyforms. The Cubism Adapter
+    // (`extractMeshExportStruct`) strips rigid-intent weights (all-1.0
+    // to the structural-parent bone) so cmo3 emits the legacy non-
+    // weighted shape. Bone-routing-intent weights (e.g. hand sub-meshes
+    // with jointBoneId='leftElbow' under a leftArm parent) pass through
+    // unchanged.
+    const {
+      boneWeights, jointBoneId, jointPivotX, jointPivotY,
+    } = extractMeshExportStruct(mesh, part, nodesById, mesh.vertices.length);
 
     // variantSuffix is the source of truth, written by variantNormalizer at
     // import time. Fall back to the name-based detection for defensive
@@ -740,6 +745,8 @@ export async function buildMeshesForRig(project, images) {
   const meshParts = project.nodes
     .filter(n => n.type === 'part' && getMesh(n, project) && n.visible !== false)
     .sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
+  // Index nodes once for the per-part bone-binding extract (cubismAdapter).
+  const nodesById = indexProjectNodesById(project);
   const meshes = [];
   for (let i = 0; i < meshParts.length; i++) {
     const part = meshParts[i];
@@ -756,16 +763,13 @@ export async function buildMeshesForRig(project, images) {
       const vv = Math.max(0, Math.min(1, (v.restY ?? v.y) / canvasH));
       uvs.push(u, vv);
     }
-    const boneWeights = mesh.boneWeights ?? null;
-    const jointBoneId = mesh.jointBoneId ?? null;
-    let jointPivotX = null, jointPivotY = null;
-    if (jointBoneId && boneWeights) {
-      const jointBone = project.nodes.find(n => n.id === jointBoneId);
-      if (jointBone?.transform) {
-        jointPivotX = jointBone.transform.pivotX ?? 0;
-        jointPivotY = jointBone.transform.pivotY ?? 0;
-      }
-    }
+    // Cubism Adapter: rigid-intent weights (all-1.0 to structural-parent
+    // bone) get stripped here so cmo3 emits the legacy non-weighted shape.
+    // Bone-routing-intent weights (jointBoneId differs from nearest bone
+    // ancestor) pass through unchanged.
+    const {
+      boneWeights, jointBoneId, jointPivotX, jointPivotY,
+    } = extractMeshExportStruct(mesh, part, nodesById, mesh.vertices.length);
     const variantSuffix =
       part.variantSuffix ?? extractVariant(meshName).variant ?? null;
 

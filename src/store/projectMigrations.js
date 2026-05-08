@@ -33,8 +33,16 @@ import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_p
 // but NOT YET registered. Activating it requires updating ~20 test fixtures
 // to add referencing parts so deformer data lives on `modifier.data` post-
 // strip. Pending dedicated session for test infrastructure refactor.
+//
+// NOTE — the migration map below skips v30 on purpose: CURRENT_SCHEMA_VERSION
+// jumps from 29 → 31. The `for (let v = fromVersion + 1; v <= CURRENT;
+// v++)` walk in `migrateProject` will look for a `MIGRATIONS[30]` entry,
+// not find one, and pass through (the same way an absent intermediate
+// migration always behaves). When Phase 3.C is ready to ship, registering
+// the v30 entry retroactively will pick it up cleanly without renumbering.
+import { migrateDefaultRigidWeights } from './migrations/v31_default_rigid_weights.js';
 
-export const CURRENT_SCHEMA_VERSION = 29;
+export const CURRENT_SCHEMA_VERSION = 31;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -458,6 +466,31 @@ const MIGRATIONS = {
   // the existing nodes is preserved by `seedAllRig`'s merge semantics.
   29: (project) => {
     migrateArtMeshRuntimePersist(project);
+    return project;
+  },
+
+  // v30 — RESERVED for BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.C (strip
+  // type:'deformer' entries from project.nodes). The migration file is
+  // staged at `migrations/v30_strip_deformer_nodes.js` but activating
+  // it requires updating ~20 test fixtures (see
+  // BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md §"Activation plan").
+  //
+  // Until Phase 3.C activates, v30 is a no-op shim — keeps the schema
+  // version space consistent with the staged migration's number, so
+  // when Phase 3.C ships, registration is a 1-line swap.
+  30: (project) => project,
+
+  // v31 — Cubism Adapter Phase 1: default rigid vertex weights for
+  // parts under bones. Every meshed part with a bone-group ancestor
+  // gets `mesh.boneWeights = [1.0, ...]` + `mesh.jointBoneId =
+  // <nearest isBoneGroup ancestor>` (when missing). Renderer composes
+  // through LBS uniformly; cmo3/moc3 export strips rigid-intent weights
+  // via `extractMeshExportStruct` to preserve byte-fidelity.
+  //
+  // See `src/store/migrations/v31_default_rigid_weights.js` and
+  // `docs/plans/CUBISM_ADAPTER_PATTERN.md` Phase 1.
+  31: (project) => {
+    migrateDefaultRigidWeights(project);
     return project;
   },
 
