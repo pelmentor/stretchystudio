@@ -18,7 +18,7 @@
 
 import { useProjectStore } from '../../src/store/projectStore.js';
 import { useParamValuesStore } from '../../src/store/paramValuesStore.js';
-import { applyArmatureModifier } from '../../src/services/ArmatureModifierService.js';
+import { applyArmatureModifier, bindArmatureModifier } from '../../src/services/ArmatureModifierService.js';
 import {
   computeBoneWorldMatrices,
 } from '../../src/renderer/boneOverlayMatrix.js';
@@ -228,6 +228,75 @@ function setupArmedHandwear() {
       `Test 7: v${i} baked rest == previous visual`,
     );
   }
+}
+
+// ── Test 8: bindArmatureModifier — adds modifier from persistent groups ─
+
+{
+  setupArmedHandwear();
+  // Apply first to get into "vertex groups present, no modifier" state.
+  applyArmatureModifier('handwear-l');
+  const result = bindArmatureModifier('handwear-l');
+  assert(result.bound === true, 'Test 8: bind returns bound=true');
+  assert(result.jointBoneId === 'leftElbow', 'Test 8: bind reports jointBoneId');
+  assert(result.parentBoneId === 'leftArm', 'Test 8: bind reports parentBoneId');
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+  const armature = (after.modifiers ?? []).find((m) => m?.type === 'armature');
+  assert(!!armature, 'Test 8: Armature modifier added to stack');
+  assert(armature?.data?.jointBoneId === 'leftElbow', 'Test 8: bound to correct joint');
+  assert(armature?.data?.parentBoneRole === 'leftArm', 'Test 8: parent bone role recorded');
+  assert(armature?.enabled === true, 'Test 8: bound modifier is enabled');
+}
+
+// ── Test 9: bind is idempotent — returns already-bound on second call ─
+
+{
+  setupArmedHandwear(); // already has Armature modifier
+  const result = bindArmatureModifier('handwear-l');
+  assert(result.bound === false, 'Test 9: second bind returns bound=false');
+  assert(result.reason === 'already-bound', 'Test 9: reason=already-bound');
+}
+
+// ── Test 10: bind requires vertex group data ──────────────────────────
+
+{
+  setupArmedHandwear();
+  // Strip the modifier AND the vertex groups (simulates a part that was
+  // never bone-rigged or had its groups manually cleared).
+  useProjectStore.getState().updateProject((p) => {
+    const part = p.nodes.find((n) => n.id === 'handwear-l');
+    delete part.modifiers;
+    delete part.mesh.boneWeights;
+    delete part.mesh.jointBoneId;
+  });
+  const result = bindArmatureModifier('handwear-l');
+  assert(result.bound === false, 'Test 10: no boneWeights → bound=false');
+  assert(result.reason === 'missing-vertex-groups', 'Test 10: reason=missing-vertex-groups');
+}
+
+// ── Test 11: Apply → Bind round-trip — bake survives, modifier returns ─
+
+{
+  setupArmedHandwear();
+  // Capture the rest verts (visible deformation will be baked into them).
+  const rest0 = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices.map((v) => ({ x: v.x, y: v.y }));
+  applyArmatureModifier('handwear-l');
+  const baked = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices.map((v) => ({ x: v.x, y: v.y }));
+  // Bake should differ from rest under a 90° pose.
+  assert(!approx(baked[0].x, rest0[0].x) || !approx(baked[0].y, rest0[0].y),
+    'Test 11: bake actually modified verts (rest 90° pose → non-zero delta)');
+  bindArmatureModifier('handwear-l');
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+  const armature = (after.modifiers ?? []).find((m) => m?.type === 'armature');
+  assert(!!armature, 'Test 11: Armature modifier re-bound after Apply');
+  // Mesh.vertices is still the BAKED state — bind doesn't unbake anything.
+  assert(approx(after.mesh.vertices[0].x, baked[0].x), 'Test 11: mesh.vertices stays baked');
+  assert(approx(after.mesh.vertices[0].y, baked[0].y), 'Test 11: mesh.vertices stays baked (y)');
+  // Vertex groups are still present.
+  assert(Array.isArray(after.mesh.boneWeights), 'Test 11: vertex groups still on the mesh');
+  assert(after.mesh.jointBoneId === 'leftElbow', 'Test 11: jointBoneId still on the mesh');
 }
 
 console.log(`\napplyArmatureModifier: ${passed} passed, ${failed} failed`);

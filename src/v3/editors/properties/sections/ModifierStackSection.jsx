@@ -27,7 +27,7 @@ import {
   MODIFIER_MODE_RENDER,
   MODIFIER_MODE_EDITMODE,
 } from '../../../../store/migrations/v21_modifier_mode_flags.js';
-import { applyArmatureModifier } from '../../../../services/ArmatureModifierService.js';
+import { applyArmatureModifier, bindArmatureModifier } from '../../../../services/ArmatureModifierService.js';
 
 /**
  * @param {Object} props
@@ -41,7 +41,20 @@ export function ModifierStackSection({ nodeId }) {
 
   if (!node || node.type !== 'part') return null;
   const stack = Array.isArray(node.modifiers) ? node.modifiers : [];
-  if (stack.length === 0) return null;
+  // Vertex group data sitting on the mesh — present iff the part was
+  // ever bone-rigged. The "Add Armature" button surfaces below when
+  // the data exists but no Armature modifier is bound (Blender:
+  // applying then re-adding the modifier is the canonical re-bind
+  // flow). Keep section visible in that case so the user has a one-
+  // click path back to a bound state.
+  const meshJointBoneId = typeof node.mesh?.jointBoneId === 'string' && node.mesh.jointBoneId.length > 0
+    ? node.mesh.jointBoneId : null;
+  const meshBoneWeights = Array.isArray(node.mesh?.boneWeights) ? node.mesh.boneWeights : null;
+  const canBindArmature = !!meshJointBoneId
+    && !!meshBoneWeights
+    && meshBoneWeights.length > 0
+    && !stack.some((m) => m?.type === 'armature');
+  if (stack.length === 0 && !canBindArmature) return null;
 
   /** @param {(modifiers: Array<any>) => void} fn */
   function patchModifiers(fn) {
@@ -94,6 +107,16 @@ export function ModifierStackSection({ nodeId }) {
       <div className="text-[11px] text-muted-foreground mb-1">
         Leaf-first order — modifiers[0] is the innermost / closest to the part.
       </div>
+      {canBindArmature && (
+        <button
+          type="button"
+          className="w-full px-2 h-6 mb-1 text-[11px] border border-primary/60 rounded bg-primary/10 hover:bg-primary/20 text-foreground text-left"
+          title={`Add an Armature modifier bound to the persistent vertex groups (${meshBoneWeights.length} weights → bone ${meshJointBoneId}). Mirrors Blender's "Add Modifier → Armature".`}
+          onClick={() => bindArmatureModifier(nodeId)}
+        >
+          + Add Armature
+        </button>
+      )}
       {stack.map((mod, idx) => {
         const mode = typeof mod.mode === 'number'
           ? mod.mode
