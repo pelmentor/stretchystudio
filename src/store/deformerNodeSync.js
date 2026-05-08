@@ -440,6 +440,59 @@ export function synthesizeModifierStacks(project) {
         ? def.parent
         : null;
     }
+    // BONE_ARMATURE_INDEPENDENCE Phase A (2026-05-08) — append an
+    // Armature modifier when the part is bone-weighted. Mirrors
+    // Blender's `ArmatureModifierData`
+    // (`reference/blender/source/blender/makesdna/DNA_modifier_types.h:851`):
+    // every rigged mesh carries the modifier so the user can later
+    // "Apply" it (bake the LBS into mesh.vertices) and re-add it
+    // against the new rest pose.
+    //
+    // Placement: AFTER the deformer chain. SS evaluates modifiers
+    // leaf-to-root via `chainEval`, then runs two-bone LBS on top
+    // (`renderer/boneSkinning.js`). The Armature entry sits at the
+    // end of the array to mirror that "applied last" semantic and
+    // to keep `synthesizeDeformerParents`' rigParent leaf invariant
+    // pointing at the deformer leaf, not at the bone.
+    const mesh = part.mesh ?? null;
+    const jointBoneId = typeof mesh?.jointBoneId === 'string' && mesh.jointBoneId.length > 0
+      ? mesh.jointBoneId : null;
+    const boneWeights = Array.isArray(mesh?.boneWeights) ? mesh.boneWeights : null;
+    if (jointBoneId && boneWeights && boneWeights.length > 0) {
+      const jointBone = byId.get(jointBoneId);
+      if (jointBone && jointBone.type === 'group' && jointBone.boneRole) {
+        // Walk to nearest bone-group ancestor (the parent bone in the
+        // armature). Non-bone group nodes are skipped — only true
+        // bones contribute to the LBS chain. Mirrors the parent-walk
+        // in `renderer/boneOverlayMatrix.computeBoneParentMap`.
+        let parent = jointBone.parent ? byId.get(jointBone.parent) : null;
+        while (parent && !(parent.type === 'group' && parent.boneRole)) {
+          parent = parent.parent ? byId.get(parent.parent) : null;
+        }
+        stack.push({
+          type: 'armature',
+          // Mirrors `ArmatureModifierData.object` — the armature being
+          // bound to. SS has a single armature per project, so we
+          // store the joint bone id directly; the armature is the
+          // bone tree it lives in.
+          deformerId: jointBoneId,
+          enabled: true,
+          mode: DEFAULT_MIGRATED_MODE,
+          showInEditor: true,
+          data: {
+            jointBoneId,
+            jointBoneRole: jointBone.boneRole,
+            parentBoneId: parent?.id ?? null,
+            parentBoneRole: parent?.boneRole ?? null,
+            // ARM_DEF_VGROUP — vertex group bound deformation. SS
+            // stores the group as a flat `mesh.boneWeights` array,
+            // not a named group, so vertexGroupName is empty.
+            deformFlag: 1,
+            vertexGroupName: '',
+          },
+        });
+      }
+    }
     if (stack.length > 0) {
       part.modifiers = stack;
     } else if ('modifiers' in part) {
@@ -502,14 +555,23 @@ export function synthesizeDeformerParents(project) {
     const stack = Array.isArray(part.modifiers) ? part.modifiers : null;
     if (!stack || stack.length === 0) continue;
 
-    const leafId = stack[0]?.deformerId;
+    // Filter to deformer-backed entries (`type: 'warp' | 'rotation'`).
+    // The Armature modifier (`type: 'armature'`, BONE_ARMATURE_INDEPENDENCE
+    // Phase A) has no deformer node — it shouldn't participate in the
+    // rigParent / deformer-parent invariant.
+    const deformerStack = stack.filter(
+      (m) => m && (m.type === 'warp' || m.type === 'rotation'),
+    );
+    if (deformerStack.length === 0) continue;
+
+    const leafId = deformerStack[0]?.deformerId;
     if (typeof leafId === 'string' && leafId.length > 0) {
       part.rigParent = leafId;
     }
 
-    for (let i = 0; i < stack.length - 1; i++) {
-      const curId = stack[i]?.deformerId;
-      const nextId = stack[i + 1]?.deformerId;
+    for (let i = 0; i < deformerStack.length - 1; i++) {
+      const curId = deformerStack[i]?.deformerId;
+      const nextId = deformerStack[i + 1]?.deformerId;
       if (typeof curId !== 'string' || typeof nextId !== 'string') continue;
       const def = byId.get(curId);
       if (!def || def.type !== 'deformer') continue;

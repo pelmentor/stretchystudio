@@ -27,6 +27,7 @@ import {
   MODIFIER_MODE_RENDER,
   MODIFIER_MODE_EDITMODE,
 } from '../../../../store/migrations/v21_modifier_mode_flags.js';
+import { applyArmatureModifier } from '../../../../services/ArmatureModifierService.js';
 
 /**
  * @param {Object} props
@@ -98,6 +99,20 @@ export function ModifierStackSection({ nodeId }) {
           ? mod.mode
           : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
         const enabled = mod.enabled !== false;
+        const isArmature = mod.type === 'armature';
+        // Armature rows display the joint bone role (e.g. "leftElbow")
+        // and the parent bone role (e.g. "leftArm" → leftElbow) instead
+        // of raw bone GUIDs. Mirrors Blender's modifier panel which
+        // shows the bound armature Object's name.
+        const labelText = (() => {
+          if (mod.type === 'armature') {
+            const j = mod.data?.jointBoneRole ?? 'bone';
+            const p = mod.data?.parentBoneRole;
+            return p ? `${p} → ${j}` : j;
+          }
+          return mod.deformerId ?? '<missing>';
+        })();
+        const typeBadge = isArmature ? 'Armature' : (mod.type ?? '—');
         return (
           <div
             key={`${mod.deformerId ?? 'unk'}-${idx}`}
@@ -111,11 +126,11 @@ export function ModifierStackSection({ nodeId }) {
             >
               {enabled ? '✓' : '×'}
             </button>
-            <span className="text-[10px] w-12 shrink-0 text-muted-foreground uppercase">
-              {mod.type ?? '—'}
+            <span className={`text-[10px] w-12 shrink-0 uppercase ${isArmature ? 'text-foreground font-semibold' : 'text-muted-foreground'}`}>
+              {typeBadge}
             </span>
             <span className="text-xs flex-1 truncate font-mono" title={mod.deformerId}>
-              {mod.deformerId ?? '<missing>'}
+              {labelText}
             </span>
             {mod.synthetic === true && (
               <span
@@ -143,24 +158,37 @@ export function ModifierStackSection({ nodeId }) {
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_EDITMODE)}
               title="Edit Mode (EDITMODE)"
             />
-            <button
-              type="button"
-              className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
-              title="Move up (toward leaf)"
-              disabled={idx === 0}
-              onClick={() => moveUp(idx)}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
-              title="Move down (toward root)"
-              disabled={idx === stack.length - 1}
-              onClick={() => moveDown(idx)}
-            >
-              ↓
-            </button>
+            {isArmature ? (
+              <button
+                type="button"
+                className="px-1 h-5 shrink-0 text-[10px] border border-primary/60 rounded bg-primary/20 text-foreground hover:bg-primary/30"
+                title="Apply Armature modifier — bake the current pose into mesh.vertices and remove the modifier (mirrors Blender's modifier dropdown → Apply)"
+                onClick={() => applyArmatureModifier(nodeId)}
+              >
+                Apply
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
+                  title="Move up (toward leaf)"
+                  disabled={idx === 0}
+                  onClick={() => moveUp(idx)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
+                  title="Move down (toward root)"
+                  disabled={idx === stack.length - 1}
+                  onClick={() => moveDown(idx)}
+                >
+                  ↓
+                </button>
+              </>
+            )}
           </div>
         );
       })}
