@@ -223,12 +223,87 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
   let bufA = meshState.vertexPositions;
   let bufB = null;  // lazy-alloc; only created if chain has ≥1 parent
 
-  // Step 2: walk parent chain. `read` is the current input; `write`
-  // is where we put output. After each step they swap.
-  let parent = meshSpec.parent;
-  let safety = 32; // hard guard against cycle bugs
   // Local reusable scratch — JIT keeps this on stack, no GC.
   const tmp0 = [0, 0];
+
+  // Per-part modifier chain (Blender semantic). When `meshSpec.modifierChain`
+  // is present, walk THAT explicit list instead of following the
+  // deformer's GLOBAL `parent` pointers — which is the only way to
+  // honour middle-of-stack disables when shared deformers (BodyXWarp
+  // etc.) appear in multiple parts' stacks with different enable
+  // states.
+  if (Array.isArray(meshSpec.modifierChain)) {
+    const chain = meshSpec.modifierChain;
+    if (chain.length === 0) {
+      // All modifiers disabled — selectRigSpec already re-projected
+      // vertexPositions to canvas-px during _buildArtMeshes, so the
+      // mesh state's positions are renderable as-is.
+      return {
+        id: meshSpec.id,
+        vertexPositions: bufA,
+        opacity: meshState.opacity,
+        drawOrder: meshState.drawOrder,
+      };
+    }
+    for (let i = 0; i < chain.length; i++) {
+      const stepRef = chain[i];
+      if (!stepRef || !stepRef.id) break;
+      const stepSpec = deformerIndex ? deformerIndex.get(stepRef.id) : null;
+      if (!stepSpec) break;
+      const state = cache.getState(stepSpec);
+      if (!state) continue;
+      if (bufB === null) bufB = new Float32Array(len);
+      const read = bufA;
+      const write = bufB;
+      if (state.kind === 'warp') {
+        // Lifted grid composed through THIS PART's chain prefix above
+        // the warp — distinct from the global lifted grid when other
+        // parts' chains diverge.
+        const chainAbove = chain.slice(i + 1);
+        const lifted = cache.getLiftedGridForChain(stepSpec, chainAbove);
+        if (lifted) {
+          evalWarpKernelCubism(
+            lifted, stepSpec.gridSize, stepSpec.isQuadTransform === true,
+            read, write, len >> 1,
+          );
+          bufA = bufB;
+          bufB = read;
+          break; // canvas-final
+        }
+        // Fallback: unlifted current-frame grid; continue walking.
+        evalWarpKernelCubism(
+          state.grid, state.gridSize, state.isQuadTransform === true,
+          read, write, len >> 1,
+        );
+      } else if (state.kind === 'rotation') {
+        const m = state.mat;
+        for (let v = 0; v < len; v += 2) {
+          applyMat3ToPoint(m, read[v], read[v + 1], tmp0);
+          write[v] = tmp0[0];
+          write[v + 1] = tmp0[1];
+        }
+        if (state.isCanvasFinal) {
+          bufA = bufB;
+          bufB = read;
+          break;
+        }
+      }
+      bufA = bufB;
+      bufB = read;
+    }
+    return {
+      id: meshSpec.id,
+      vertexPositions: bufA,
+      opacity: meshState.opacity,
+      drawOrder: meshState.drawOrder,
+    };
+  }
+
+  // Legacy / pre-rig fallback — walk parent chain via global pointers.
+  // `read` is the current input; `write` is where we put output. After
+  // each step they swap.
+  let parent = meshSpec.parent;
+  let safety = 32; // hard guard against cycle bugs
   while (parent && parent.type !== 'root' && safety-- > 0) {
     if (!parent.id) break;
     const parentSpec = deformerIndex ? deformerIndex.get(parent.id) : null;
@@ -388,6 +463,18 @@ export class DeformerStateCache {
     // non-identity.
     /** @type {Map<string, Float64Array|null>} */
     this._liftedById = new Map();
+    /**
+     * Per-part chain lifted-grid cache. Keyed by
+     * `${warpId}|${chainAbove[0].type}:${chainAbove[0].id}>...`. Entries
+     * are populated by `getLiftedGridForChain` when an artMesh walk
+     * provides an explicit `modifierChain`. Distinct from `_liftedById`
+     * (which uses the global parent-pointer chain) — same warp id can
+     * have multiple lifts when different parts compose it through
+     * different chain prefixes.
+     *
+     * @type {Map<string, Float64Array|null>}
+     */
+    this._liftedByChainKey = new Map();
     /**
      * Phase 3 — set of warp ids currently mid-recursion in
      * `getLiftedGrid`. Used purely to detect cycles in the lift chain
@@ -572,6 +659,101 @@ export class DeformerStateCache {
     }
 
     this._liftedById.set(warpSpec.id, positions);
+    if (this._trace) this._trace.recordLiftedGrid(warpSpec, positions);
+    return positions;
+  }
+
+  /**
+   * Per-part chain variant of `getLiftedGrid`. Composes the warp's
+   * grid through an explicit `chainAbove` (ordered list of deformer
+   * refs above this warp in the part's modifier stack) instead of
+   * following the deformer's GLOBAL `parent` pointer.
+   *
+   * Cache keyed by warp id + chain-above signature so divergent chains
+   * (e.g. topwear without BreathWarp vs face with all five body warps)
+   * each get their own composition without crosstalk. Cost is
+   * proportional to the number of *distinct* chain prefixes used in
+   * the rig — for shelby with all-enabled stacks that's 1; for one
+   * part with a middle-disable that's 2.
+   *
+   * @param {import('../../rig/rigSpec.js').WarpDeformerSpec} warpSpec
+   * @param {Array<{type: string, id: string}>} chainAbove
+   * @returns {Float64Array|null}
+   */
+  getLiftedGridForChain(warpSpec, chainAbove) {
+    if (!warpSpec?.id) return null;
+    const key = chainAbove.length === 0
+      ? `${warpSpec.id}|`
+      : `${warpSpec.id}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+    if (this._liftedByChainKey.has(key)) return this._liftedByChainKey.get(key);
+
+    const state = this.getState(warpSpec);
+    if (!state || state.kind !== 'warp') {
+      this._liftedByChainKey.set(key, null);
+      return null;
+    }
+
+    const grid = state.grid;
+    const gridSize = state.gridSize;
+    const nPts = (gridSize.rows + 1) * (gridSize.cols + 1);
+
+    // No chain above this warp — its grid is the chain's outermost
+    // frame (canvas-px when the part's effective root is the global
+    // canvas). Return the current-frame grid directly; matches what
+    // _computeLiftedGrid does for a global root warp.
+    if (chainAbove.length === 0) {
+      this._liftedByChainKey.set(key, grid);
+      if (this._trace) this._trace.recordLiftedGrid(warpSpec, grid);
+      return grid;
+    }
+
+    // Compose grid through the explicit chain prefix.
+    let positions = new Float64Array(nPts * 2);
+    for (let i = 0; i < nPts * 2; i++) positions[i] = grid[i];
+
+    const tmp = [0, 0];
+    for (let stepIdx = 0; stepIdx < chainAbove.length; stepIdx++) {
+      const stepRef = chainAbove[stepIdx];
+      if (!stepRef || !stepRef.id) break;
+      const stepSpec = this._specById.get(stepRef.id);
+      if (!stepSpec) break;
+      if (stepRef.type === 'warp') {
+        // Recurse: lift this step's grid through the rest of the
+        // chain, then apply its bilinear at every control point.
+        // Output is canvas-px (from this step's lifted grid), so the
+        // composition is done — break.
+        const subChain = chainAbove.slice(stepIdx + 1);
+        const stepLifted = this.getLiftedGridForChain(stepSpec, subChain);
+        if (!stepLifted) break;
+        const vertsIn = new Float32Array(nPts * 2);
+        for (let i = 0; i < nPts * 2; i++) vertsIn[i] = positions[i];
+        const vertsOut = new Float32Array(nPts * 2);
+        evalWarpKernelCubism(
+          stepLifted,
+          stepSpec.gridSize,
+          stepSpec.isQuadTransform === true,
+          vertsIn,
+          vertsOut,
+          nPts,
+        );
+        for (let i = 0; i < nPts * 2; i++) positions[i] = vertsOut[i];
+        break;
+      } else if (stepRef.type === 'rotation') {
+        const stepState = this.getState(stepSpec);
+        if (!stepState || stepState.kind !== 'rotation') break;
+        const m = stepState.mat;
+        for (let i = 0; i < nPts; i++) {
+          applyMat3ToPoint(m, positions[i * 2], positions[i * 2 + 1], tmp);
+          positions[i * 2] = tmp[0];
+          positions[i * 2 + 1] = tmp[1];
+        }
+        if (stepState.isCanvasFinal) break;
+      } else {
+        break;
+      }
+    }
+
+    this._liftedByChainKey.set(key, positions);
     if (this._trace) this._trace.recordLiftedGrid(warpSpec, positions);
     return positions;
   }

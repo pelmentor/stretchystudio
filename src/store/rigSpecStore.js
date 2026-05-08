@@ -226,24 +226,30 @@ useProjectStore.subscribe((state) => {
   }
 });
 
-// Phase 3 — auto-populate `rigSpec` from `selectRigSpec(project)` when
-// the project mutates and the deformer graph is complete. Runs ONCE
-// per project identity (the WeakMap inside selectRigSpec memoizes,
-// so the same project re-tested across many renders is cheap).
+// Phase 3 — auto-populate `rigSpec` from `selectRigSpec(project)` on
+// every project mutation. `selectRigSpec` is memoized by project
+// identity (WeakMap) so re-running it across renders that don't
+// change the project is O(1); for genuine mutations the recompute is
+// the price of correctness.
 //
-// This is what closes the "click Init Rig to rebuild after load" gap:
-// project load → projectStore subscribe fires → if the loaded project
-// already has rotation + warp + part-mesh nodes (= Init Rig was run
-// in a previous session post Phase 3), rigSpec auto-fills with no
-// async pass.
+// Pre-2026-05-08 this subscriber was one-shot — it bailed out when
+// rigSpec was already set, which closed the "click Init Rig to
+// rebuild after load" gap but ALSO meant any post-Init-Rig project
+// mutation that doesn't bump `versionControl.geometryVersion`
+// (modifier toggle, mode-bit chip, modifier reorder, binding edit,
+// parameter add) silently failed to refresh the cached rigSpec. Live
+// Preview kept showing the stale chain. Lifting the guard lets the
+// modifier-disable + mode-bitmask gating in `synthesizeDeformerNodesForExport`
+// + `selectRigSpec._buildArtMeshes` actually reach the renderer.
 let _lastSeenProject = null;
 let _lastSkipReasonsKey = null;
+let _lastOkSignature = null;
 useProjectStore.subscribe((state) => {
   const project = state.project;
   if (project === _lastSeenProject) return;
   _lastSeenProject = project;
-  const { rigSpec, isBuilding } = useRigSpecStore.getState();
-  if (rigSpec || isBuilding) return;
+  const { isBuilding } = useRigSpecStore.getState();
+  if (isBuilding) return;
   const fast = selectRigSpec(project);
   // BUG-023 instrumentation — log why the auto-fill skipped vs populated
   // so we can diagnose post-load "rig is dead" reports without ambiguity.
@@ -276,10 +282,18 @@ useProjectStore.subscribe((state) => {
     error: null,
   });
   _seedDefaultsForRig(fast, project);
-  logger.info('rigSpecPostLoad', `auto-fill OK: ${fast.warpDeformers.length}w/${fast.rotationDeformers.length}r/${fast.artMeshes.length}m`, {
-    warpCount: fast.warpDeformers.length,
-    rotationCount: fast.rotationDeformers.length,
-    artMeshCount: fast.artMeshes.length,
-    paramCount: fast.parameters?.length ?? 0,
-  });
+  // Log only when the rig's structural signature changes — this
+  // subscriber fires on every project mutation (slider drag, mesh
+  // edit, etc.) post the 2026-05-08 lift of the one-shot guard, and
+  // logging every tick would flood the panel.
+  const okSig = `${fast.warpDeformers.length}w/${fast.rotationDeformers.length}r/${fast.artMeshes.length}m/${fast.parameters?.length ?? 0}p`;
+  if (okSig !== _lastOkSignature) {
+    _lastOkSignature = okSig;
+    logger.info('rigSpecPostLoad', `auto-fill OK: ${okSig}`, {
+      warpCount: fast.warpDeformers.length,
+      rotationCount: fast.rotationDeformers.length,
+      artMeshCount: fast.artMeshes.length,
+      paramCount: fast.parameters?.length ?? 0,
+    });
+  }
 });

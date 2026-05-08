@@ -48,11 +48,21 @@ import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 import { synthesizeDeformerNodesForExport } from './synthesizeDeformerNodesForExport.js';
 import {
+  MODIFIER_MODE_REALTIME,
+  MODIFIER_MODE_RENDER,
+} from '../../../store/migrations/v21_modifier_mode_flags.js';
+import {
   coerceNumberArray,
   coerceFloat64Array,
   coerceFloat32Array,
   coerceUint16Array,
 } from '../../../lib/numberArrayCoerce.js';
+
+/** Live-render eval context — Blender's MODE_REALTIME for the
+ *  viewport / Live Preview tick. The `selectRigSpec` selector feeds
+ *  `chainEval` for the live render path; export bakes go through
+ *  `generateCmo3` instead and don't read this constant. */
+const LIVE_RENDER_REQUIRED_MODE = MODIFIER_MODE_REALTIME;
 
 /** Reusable frozen empty arrays so the selector returns the same
  * objects across calls when a section has no data. Lets shallow-equal
@@ -458,26 +468,84 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
     // side.
     const runtime = partMesh.runtime;
     if (runtime && Array.isArray(runtime.keyforms) && runtime.keyforms.length > 0) {
-      const parent = (runtime.parent && typeof runtime.parent === 'object')
+      const cachedParent = (runtime.parent && typeof runtime.parent === 'object')
         ? { type: runtime.parent.type ?? 'root', id: runtime.parent.id ?? null }
         : { type: 'root', id: null };
+
+      // Modifier-toggle live read (Blender's `BKE_modifier_is_enabled`).
+      // The runtime cache was baked at Init Rig time when all modifiers
+      // were enabled; if the user has since disabled any modifier, the
+      // cache's `parent` may not reflect the *current* effective leaf.
+      // Walk the part's modifier stack — first enabled entry wins. If
+      // the effective parent differs from the cached one, re-project
+      // every keyform's `vertexPositions` from the cached parent's
+      // local frame to the effective parent's, so chainEval's chain
+      // walk lands the geometry in the right space.
+      const stackLeaf = _resolveEffectiveLeafModifier(part, nodeById);
+      // Bone-baked-path bypass — bone-baked parts (legwear etc.) have
+      // an IMPLICIT `GroupRotation_<bone>` parent stored in
+      // `runtime.parent` but NOT in `part.modifiers[]` (v21
+      // `synthesizeModifierStacks` only inserts body-warp synthetics,
+      // not bone rotations). For those parts the modifier stack is
+      // incomplete — chainEval has to fall back to the legacy global
+      // parent-pointer walk to land the geometry correctly. Detection:
+      // if `runtime.parent.id` exists but isn't referenced by any
+      // entry in `part.modifiers[]`, the stack doesn't represent the
+      // full chain. Modifier toggles still work for parts whose stack
+      // IS complete (regular parts with rigWarps).
+      const cachedRefInModifiers = !!(
+        cachedParent.id
+        && Array.isArray(part.modifiers)
+        && part.modifiers.some((m) => m && m.deformerId === cachedParent.id)
+      );
+      const modifierStackComplete = !stackLeaf.hasModifiers
+        || !cachedParent.id
+        || cachedRefInModifiers;
+      const effectiveParent = (stackLeaf.hasModifiers && modifierStackComplete)
+        ? stackLeaf.effectiveParent
+        : cachedParent;
+      const needsReproject = modifierStackComplete
+        && !_parentRefsEqual(cachedParent, effectiveParent);
+
       const bindings = Array.isArray(runtime.bindings) ? runtime.bindings.map((b, i) => ({
         parameterId: b.parameterId,
         keys: coerceNumberArray(b.keys, `selectRigSpec.artMesh[${part.id}].runtime.bindings[${i}].keys`),
         interpolation: b.interpolation ?? 'LINEAR',
       })) : [];
-      const keyforms = runtime.keyforms.map((k, i) => /** @type {object} */ ({
-        keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].keyTuple`),
-        vertexPositions: coerceFloat32Array(k.vertexPositions,
-          `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].vertexPositions`),
-        opacity: typeof k.opacity === 'number' ? k.opacity : 1,
-        ...(typeof k.drawOrder === 'number' ? { drawOrder: k.drawOrder } : {}),
-      }));
+      const keyforms = runtime.keyforms.map((k, i) => {
+        const cachedVerts = coerceFloat32Array(
+          k.vertexPositions,
+          `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].vertexPositions`,
+        );
+        const vertexPositions = needsReproject
+          ? _reprojectKeyformVerts(cachedVerts, cachedParent, effectiveParent, warpRestById, rotationRestById)
+          : cachedVerts;
+        return /** @type {object} */ ({
+          keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].keyTuple`),
+          vertexPositions,
+          opacity: typeof k.opacity === 'number' ? k.opacity : 1,
+          ...(typeof k.drawOrder === 'number' ? { drawOrder: k.drawOrder } : {}),
+        });
+      });
       const flatVerts = _toFlatNumberArray(verts);
       out.push({
         id: part.id,
         name: part.name ?? part.id,
-        parent,
+        parent: effectiveParent,
+        // Per-part modifier chain (Blender semantic — modifier disable
+        // skips that deformer for THIS part only, even when other parts
+        // keep it active). chainEval walks this list explicitly when
+        // present, instead of following the deformer's GLOBAL parent
+        // pointer (which can't express divergent per-part chains for
+        // shared deformers).
+        //
+        // Suppressed (= null) for parts whose modifier stack is
+        // incomplete (bone-baked: cachedParent isn't in modifiers[]) —
+        // chainEval falls back to the global parent-pointer walk for
+        // those, preserving legacy correctness.
+        modifierChain: (stackLeaf.hasModifiers && modifierStackComplete)
+          ? stackLeaf.chain
+          : null,
         verticesCanvas: new Float32Array(flatVerts),
         triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
         uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
@@ -544,10 +612,14 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
     }
 
+    // Pre-rig fallback path doesn't have a modifier stack to walk —
+    // chainEval falls back to the GLOBAL parent-pointer walk, which is
+    // correct for projects that haven't run Init Rig yet.
     out.push({
       id: part.id,
       name: part.name ?? part.id,
       parent: parentRef,
+      modifierChain: null,
       verticesCanvas: new Float32Array(flatVerts),
       triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
       uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
@@ -566,6 +638,200 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
     });
   }
   return out;
+}
+
+/**
+ * Walk a part's modifier stack post-`enabled` filter and return the
+ * RigSpec-shaped parent ref for the first enabled modifier (the
+ * effective leaf for chainEval). Mirrors Blender's
+ * `BKE_modifier_is_enabled` — a disabled modifier is invisible to the
+ * renderer.
+ *
+ * Output shape:
+ *   - `hasModifiers: false`  → part has no `modifiers[]`. Caller falls
+ *     back to the runtime cache or pre-rig fallback.
+ *   - `hasModifiers: true, allDisabled: true`  → every modifier is
+ *     disabled. Effective parent = root (the part renders with its
+ *     canvas-px geometry, no chain applied).
+ *   - `hasModifiers: true, effectiveParent: {type:'warp'|'rotation', id}`
+ *     → at least one enabled modifier; that's the chain leaf for this
+ *     part.
+ *
+ * @param {object} part
+ * @param {Map<string, object>} nodeById
+ * @returns {{hasModifiers: boolean, allDisabled: boolean, effectiveParent: {type:string,id:string|null}}}
+ */
+function _resolveEffectiveLeafModifier(part, nodeById) {
+  const chain = _resolveModifierChain(part, nodeById);
+  if (chain === null) {
+    return { hasModifiers: false, allDisabled: false, effectiveParent: { type: 'root', id: null }, chain: [] };
+  }
+  if (chain.length === 0) {
+    return { hasModifiers: true, allDisabled: true, effectiveParent: { type: 'root', id: null }, chain };
+  }
+  return {
+    hasModifiers: true,
+    allDisabled: false,
+    effectiveParent: chain[0],
+    chain,
+  };
+}
+
+/**
+ * Resolve a part's *active* modifier chain (post-`enabled` + mode-bitmask
+ * filter), leaf-first. Returns:
+ *   - `null` if the part has no `modifiers[]` at all (caller falls back
+ *     to runtime cache or pre-rig fallback).
+ *   - `[]` if every modifier is hidden under the live-render context.
+ *   - non-empty `[{type, id}, ...]` otherwise.
+ *
+ * This is the per-part chain that `chainEval` walks for this artMesh.
+ * Replaces the global `parent`-pointer walk for parts whose modifier
+ * stack diverges from the natural topology — needed because a shared
+ * deformer (BodyXWarp etc.) cannot have different `parent` edges per
+ * part, but disabling a *middle* modifier (BreathWarp on topwear) means
+ * topwear's chain genuinely skips it while face's chain still includes
+ * it.
+ *
+ * @param {object} part
+ * @param {Map<string, object>} nodeById
+ * @returns {Array<{type: string, id: string}>|null}
+ */
+function _resolveModifierChain(part, nodeById) {
+  if (!part || !Array.isArray(part.modifiers) || part.modifiers.length === 0) {
+    return null;
+  }
+  /** @type {Array<{type: string, id: string}>} */
+  const chain = [];
+  for (const mod of part.modifiers) {
+    if (!mod || typeof mod.deformerId !== 'string') continue;
+    if (mod.enabled === false) continue;
+    const mode = typeof mod.mode === 'number'
+      ? mod.mode
+      : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
+    if ((mode & LIVE_RENDER_REQUIRED_MODE) === 0) continue;
+    const target = nodeById.get(mod.deformerId);
+    if (!target || target.type !== 'deformer') continue;
+    const type = target.deformerKind === 'rotation' ? 'rotation' : 'warp';
+    chain.push({ type, id: mod.deformerId });
+  }
+  return chain;
+}
+
+/**
+ * Structural equality on RigSpec parent refs.
+ *
+ * @param {{type?:string,id?:string|null}|null|undefined} a
+ * @param {{type?:string,id?:string|null}|null|undefined} b
+ */
+function _parentRefsEqual(a, b) {
+  const at = a?.type ?? 'root';
+  const bt = b?.type ?? 'root';
+  const ai = a?.id ?? null;
+  const bi = b?.id ?? null;
+  return at === bt && ai === bi;
+}
+
+/**
+ * Re-project a flat vertex buffer from `fromParent`'s local frame to
+ * `toParent`'s. Used when the user toggles a modifier off and the
+ * runtime-cached `parent` no longer matches the modifier stack's
+ * effective leaf — the cached `vertexPositions` are in the *cached*
+ * parent's frame and need lifting to canvas-px before being
+ * normalised back into the new parent's frame.
+ *
+ * Frame definitions match `runtime/evaluator/frameConvert.js`:
+ *   - root parent       → canvas-px verbatim
+ *   - warp parent       → 0..1 normalised over the parent's REST canvas bbox
+ *   - rotation parent   → canvas-px offsets from the parent's pivot
+ *
+ * Falls back to passing the buffer through unchanged when either side's
+ * rest state is unavailable (defensive — the chain renders with
+ * mild geometric drift rather than throwing).
+ *
+ * @param {Float32Array | ArrayLike<number>} verts
+ * @param {{type:string,id:string|null}} fromParent
+ * @param {{type:string,id:string|null}} toParent
+ * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
+ * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
+ * @returns {Float32Array}
+ */
+function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotationRestById) {
+  const fromCtx = _buildFrameCtx(fromParent, warpRestById, rotationRestById);
+  const toCtx = _buildFrameCtx(toParent, warpRestById, rotationRestById);
+  if (fromCtx === null || toCtx === null) {
+    // One side has no rest state — defensive passthrough.
+    const out = new Float32Array(verts.length);
+    for (let i = 0; i < verts.length; i++) out[i] = verts[i];
+    return out;
+  }
+  const out = new Float32Array(verts.length);
+  for (let i = 0; i < verts.length; i += 2) {
+    const lx = verts[i];
+    const ly = verts[i + 1];
+    // Step 1: cached-frame local → canvas-px (rest configuration —
+    // we use the parent's REST canvas bbox / REST pivot, NOT the
+    // deformed grid; chainEval applies the deformation downstream).
+    let cx, cy;
+    if (fromCtx.kind === 'canvas') {
+      cx = lx; cy = ly;
+    } else if (fromCtx.kind === 'warp') {
+      cx = fromCtx.minX + lx * fromCtx.W;
+      cy = fromCtx.minY + ly * fromCtx.H;
+    } else /* rotation */ {
+      cx = fromCtx.pivotX + lx;
+      cy = fromCtx.pivotY + ly;
+    }
+    // Step 2: canvas-px → effective-frame local.
+    let nx, ny;
+    if (toCtx.kind === 'canvas') {
+      nx = cx; ny = cy;
+    } else if (toCtx.kind === 'warp') {
+      nx = toCtx.W > 0 ? (cx - toCtx.minX) / toCtx.W : 0;
+      ny = toCtx.H > 0 ? (cy - toCtx.minY) / toCtx.H : 0;
+    } else /* rotation */ {
+      nx = cx - toCtx.pivotX;
+      ny = cy - toCtx.pivotY;
+    }
+    out[i] = nx;
+    out[i + 1] = ny;
+  }
+  return out;
+}
+
+/**
+ * Build a frame conversion context for a parent ref. Returns `null`
+ * iff the parent is a warp/rotation but its rest state hasn't been
+ * computed (broken chain). Root parent always succeeds with
+ * `{kind:'canvas'}`.
+ *
+ * @param {{type:string,id:string|null}} parent
+ * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
+ * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
+ */
+function _buildFrameCtx(parent, warpRestById, rotationRestById) {
+  if (!parent || parent.type === 'root' || !parent.id) {
+    return { kind: 'canvas' };
+  }
+  if (parent.type === 'warp') {
+    const restState = warpRestById.get(parent.id);
+    if (!restState?.bbox) return null;
+    const { minX, minY, maxX, maxY } = restState.bbox;
+    return {
+      kind: 'warp',
+      minX, minY,
+      W: (maxX - minX) || 1,
+      H: (maxY - minY) || 1,
+    };
+  }
+  if (parent.type === 'rotation') {
+    const restState = rotationRestById.get(parent.id);
+    if (!restState?.pivot) return null;
+    return { kind: 'rotation', pivotX: restState.pivot.x, pivotY: restState.pivot.y };
+  }
+  // part / group — treat as canvas (chainEval treats unresolved
+  // parents as root).
+  return { kind: 'canvas' };
 }
 
 function _toFlatNumberArray(verts) {
