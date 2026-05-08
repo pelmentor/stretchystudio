@@ -19,7 +19,8 @@
  * @module v3/editors/properties/sections/ModifierStackSection
  */
 
-import { Wrench } from 'lucide-react';
+import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
@@ -104,18 +105,16 @@ export function ModifierStackSection({ nodeId }) {
 
   return (
     <SectionShell id="modifierStack" label="Modifier Stack" icon={<Wrench size={11} />}>
-      <div className="text-[11px] text-muted-foreground mb-1">
-        Leaf-first order — modifiers[0] is the innermost / closest to the part.
-      </div>
-      {canBindArmature && (
-        <button
-          type="button"
-          className="w-full px-2 h-6 mb-1 text-[11px] border border-primary/60 rounded bg-primary/10 hover:bg-primary/20 text-foreground text-left"
-          title={`Add an Armature modifier bound to the persistent vertex groups (${meshBoneWeights.length} weights → bone ${meshJointBoneId}). Mirrors Blender's "Add Modifier → Armature".`}
-          onClick={() => bindArmatureModifier(nodeId)}
-        >
-          + Add Armature
-        </button>
+      <AddModifierButton
+        canBindArmature={canBindArmature}
+        weightCount={meshBoneWeights?.length ?? 0}
+        jointBoneId={meshJointBoneId}
+        onAddArmature={() => bindArmatureModifier(nodeId)}
+      />
+      {stack.length > 0 && (
+        <div className="text-[11px] text-muted-foreground mb-1 mt-1">
+          Leaf-first order — modifiers[0] is the innermost / closest to the part.
+        </div>
       )}
       {stack.map((mod, idx) => {
         const mode = typeof mod.mode === 'number'
@@ -163,55 +162,41 @@ export function ModifierStackSection({ nodeId }) {
                 synth
               </span>
             )}
-            <ModeBitChip
-              label="VP"
+            {/*
+              Display-mode toggles. Match Blender's modifier panel
+              icons (`reference/blender/scripts/startup/bl_ui/properties_data_modifier.py`):
+                - Eye (RESTRICT_VIEW_OFF) → show in viewport
+                - Camera (RESTRICT_RENDER_OFF) → use during render
+                - Pencil (EDITMODE_HLT) → display in Edit Mode
+              Tooltips mirror Blender's exact strings.
+            */}
+            <ModeBitIcon
+              icon={<Eye size={11} />}
               active={(mode & MODIFIER_MODE_REALTIME) !== 0}
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_REALTIME)}
-              title="Viewport (REALTIME)"
+              title="Display modifier in viewport"
             />
-            <ModeBitChip
-              label="EX"
+            <ModeBitIcon
+              icon={<Camera size={11} />}
               active={(mode & MODIFIER_MODE_RENDER) !== 0}
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_RENDER)}
-              title="Export (RENDER)"
+              title="Use modifier during render"
             />
-            <ModeBitChip
-              label="ED"
+            <ModeBitIcon
+              icon={<Pencil size={11} />}
               active={(mode & MODIFIER_MODE_EDITMODE) !== 0}
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_EDITMODE)}
-              title="Edit Mode (EDITMODE)"
+              title="Display modifier in Edit Mode"
             />
-            {isArmature ? (
-              <button
-                type="button"
-                className="px-1 h-5 shrink-0 text-[10px] border border-primary/60 rounded bg-primary/20 text-foreground hover:bg-primary/30"
-                title="Apply Armature modifier — bake the current pose into mesh.vertices and remove the modifier (mirrors Blender's modifier dropdown → Apply)"
-                onClick={() => applyArmatureModifier(nodeId)}
-              >
-                Apply
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
-                  title="Move up (toward leaf)"
-                  disabled={idx === 0}
-                  onClick={() => moveUp(idx)}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="w-5 h-5 shrink-0 text-[10px] border border-border rounded bg-transparent hover:bg-muted disabled:opacity-30"
-                  title="Move down (toward root)"
-                  disabled={idx === stack.length - 1}
-                  onClick={() => moveDown(idx)}
-                >
-                  ↓
-                </button>
-              </>
-            )}
+            <ModifierRowMenu
+              isArmature={isArmature}
+              canMoveUp={idx > 0}
+              canMoveDown={idx < stack.length - 1}
+              onApply={isArmature ? () => applyArmatureModifier(nodeId) : null}
+              onMoveUp={() => moveUp(idx)}
+              onMoveDown={() => moveDown(idx)}
+              onDelete={() => patchModifiers((mods) => { mods.splice(idx, 1); })}
+            />
           </div>
         );
       })}
@@ -220,17 +205,155 @@ export function ModifierStackSection({ nodeId }) {
 }
 
 /**
- * @param {{label: string, active: boolean, onClick: () => void, title: string}} props
+ * Display-mode icon toggle. Mirrors Blender's modifier panel where
+ * each modifier row exposes Eye / Camera / Edit-mode icons for its
+ * `show_viewport` / `show_render` / `show_in_editmode` flags
+ * (`reference/blender/scripts/startup/bl_ui/properties_data_modifier.py`).
+ *
+ * @param {{icon: import('react').ReactElement, active: boolean, onClick: () => void, title: string}} props
  */
-function ModeBitChip({ label, active, onClick, title }) {
+function ModeBitIcon({ icon, active, onClick, title }) {
   return (
     <button
       type="button"
-      className={`w-7 h-5 shrink-0 text-[9px] font-mono rounded border ${active ? 'bg-primary/30 border-primary text-foreground' : 'bg-transparent border-border text-muted-foreground'}`}
+      className={`w-5 h-5 shrink-0 inline-flex items-center justify-center rounded border ${active ? 'bg-primary/30 border-primary text-foreground' : 'bg-transparent border-border text-muted-foreground'}`}
       title={title}
       onClick={onClick}
     >
-      {label}
+      {icon}
     </button>
+  );
+}
+
+/**
+ * Per-modifier dropdown menu — the kebab on the right of each row.
+ * Mirrors Blender's modifier dropdown (caret in the panel header)
+ * which exposes Apply / Duplicate / Move / Delete. SS today supports:
+ *   - Apply (Armature only — the only modifier with a deform-bake)
+ *   - Move up / down
+ *   - Delete
+ *
+ * Outside-click dismiss: a window-level pointerdown listener that
+ * closes the menu when the user clicks anywhere outside the menu's
+ * own subtree. Standard popover pattern.
+ */
+function ModifierRowMenu({ isArmature, canMoveUp, canMoveDown, onApply, onMoveUp, onMoveDown, onDelete }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (ev) => {
+      const target = ev.target;
+      if (!(target instanceof Element)) { setOpen(false); return; }
+      if (!target.closest('[data-modifier-row-menu="open"]')) setOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onDown, { capture: true });
+  }, [open]);
+  return (
+    <div className="relative" data-modifier-row-menu={open ? 'open' : 'closed'}>
+      <button
+        type="button"
+        className="w-5 h-5 shrink-0 inline-flex items-center justify-center rounded border border-border bg-transparent hover:bg-muted text-muted-foreground"
+        title="Modifier menu"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <MoreVertical size={11} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-50 min-w-[10rem] rounded border border-border bg-popover shadow-md py-1 text-xs">
+          {isArmature && onApply && (
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 hover:bg-muted"
+              title="Bake the current pose into mesh.vertices and remove the modifier (vertex groups stay; mirrors Blender's modifier dropdown → Apply)"
+              onClick={() => { setOpen(false); onApply(); }}
+            >
+              Apply
+            </button>
+          )}
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            disabled={!canMoveUp}
+            onClick={() => { setOpen(false); onMoveUp(); }}
+          >
+            Move up
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            disabled={!canMoveDown}
+            onClick={() => { setOpen(false); onMoveDown(); }}
+          >
+            Move down
+          </button>
+          <div className="my-1 h-px bg-border" />
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 hover:bg-destructive/20 text-destructive flex items-center gap-1"
+            onClick={() => { setOpen(false); onDelete(); }}
+          >
+            <Trash2 size={11} />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Add Modifier" button at the top of the stack section. Blender
+ * shows a popover listing every available modifier type
+ * (`ModifierAddMenu` in `properties_data_modifier.py`). SS today only
+ * supports Armature as a manually-addable type — warps/rotations
+ * come from rig synth — so the popover collapses to a single entry.
+ *
+ * Visible iff the part has bind data (`canBindArmature`). Disabled-
+ * gated when no addable type is available so the affordance is
+ * always present in the panel chrome (the user knows where Add
+ * Modifier lives even when they can't currently add one).
+ */
+function AddModifierButton({ canBindArmature, weightCount, jointBoneId, onAddArmature }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (ev) => {
+      const target = ev.target;
+      if (!(target instanceof Element)) { setOpen(false); return; }
+      if (!target.closest('[data-add-modifier-popover="open"]')) setOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onDown, { capture: true });
+  }, [open]);
+  const enabled = canBindArmature;
+  return (
+    <div className="relative" data-add-modifier-popover={open ? 'open' : 'closed'}>
+      <button
+        type="button"
+        className={`w-full px-2 h-6 text-[11px] border rounded text-left inline-flex items-center gap-1 ${enabled ? 'border-primary/60 bg-primary/10 hover:bg-primary/20 text-foreground' : 'border-border bg-transparent text-muted-foreground cursor-not-allowed'}`}
+        title={enabled
+          ? 'Add a modifier from the list below (mirrors Blender Properties → Modifiers → Add Modifier)'
+          : 'No addable modifier types — the part has no vertex group data, and warp/rotation modifiers come from rig synth'}
+        disabled={!enabled}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Plus size={11} />
+        Add Modifier
+      </button>
+      {open && enabled && (
+        <div className="absolute left-0 right-0 top-7 z-50 rounded border border-border bg-popover shadow-md py-1 text-xs">
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 hover:bg-muted inline-flex items-center gap-2"
+            title={`Bind an Armature modifier to the persistent vertex groups (${weightCount} weights → bone ${jointBoneId}).`}
+            onClick={() => { setOpen(false); onAddArmature(); }}
+          >
+            <Wrench size={11} />
+            Armature
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
