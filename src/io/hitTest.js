@@ -112,14 +112,22 @@ function pointInAnyTriangleObjs(verts, tris, px, py) {
  * inside any triangle of its triangulation. First hit wins.
  *
  * Vertex source per part (in priority order):
- *   1. `frames` entry from evalRig — already in canvas-px, no
- *      worldMatrix application needed.
- *   2. Rest mesh + `opts.worldMatrices.get(partId)` — for parts the
+ *   1. `opts.finalVertsByPartId` entry — the FINAL per-part verts the
+ *      renderer last drew (chainEval + two-bone LBS + blend shapes
+ *      composed). Match the user's visible geometry exactly. Set by
+ *      `CanvasViewport`'s render loop after the GPU upload pass.
+ *   2. `frames` entry from evalRig — chainEval canvas-px output. Used
+ *      when the final-verts snapshot doesn't have an entry (e.g. a
+ *      part that wasn't drawn this frame, or a fresh rig before the
+ *      first render). Doesn't include the bone overlay / LBS pass —
+ *      a posed limb tests against its rest position via this path.
+ *   3. Rest mesh + `opts.worldMatrices.get(partId)` — for parts the
  *      rig doesn't drive (PSDs not run through Init Rig yet, group
  *      children that didn't enter the chain). The world-space click
  *      is inverse-transformed into the part's local space and tested
- *      against rest vertices.
- *   3. Rest mesh in canvas-px — final fallback; matches what the
+ *      against rest vertices. World matrix DOES include bone pose
+ *      (`computeWorldMatrices` calls `makeBoneLocalMatrix`).
+ *   4. Rest mesh in canvas-px — final fallback; matches what the
  *      renderer falls back to when no worldMatrix is available.
  *
  * Pre-mesh parts (PSD-imported, not yet auto-meshed — wizard reorder
@@ -136,7 +144,7 @@ function pointInAnyTriangleObjs(verts, tris, px, py) {
  * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
  * @param {number} worldX
  * @param {number} worldY
- * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, {data: Uint8ClampedArray, width: number, height: number}> | null}} [opts]
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, {data: Uint8ClampedArray, width: number, height: number}> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
  * @returns {string | null}
  */
 export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
@@ -151,6 +159,7 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   }
   const worldMatrices = opts.worldMatrices ?? null;
   const imageDataMap = opts.imageDataMap ?? null;
+  const finalVertsByPartId = opts.finalVertsByPartId ?? null;
 
   // Include parts with a triangulated mesh OR raw image-only parts (no
   // mesh yet — e.g. fresh PSD imports during the wizard's Reorder step).
@@ -178,6 +187,17 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   for (const part of parts) {
     const partMesh = getMesh(part, project);
     const tris = partMesh?.triangles ?? null;
+    // Priority 1: final composed verts (post chainEval + LBS + blends)
+    // — what the renderer actually drew. Selectable at the visible
+    // location even when the part is posed via two-bone LBS or has a
+    // blend shape active. Format: Array<{x,y}>.
+    const finalVerts = finalVertsByPartId?.get(part.id) ?? null;
+    if (finalVerts && finalVerts.length > 0 && tris && tris.length > 0) {
+      if (pointInAnyTriangleObjs(finalVerts, tris, worldX, worldY)) return part.id;
+      continue;
+    }
+    // Priority 2: chainEval rig frames in canvas-px. Used when
+    // finalVerts is unavailable (e.g. fresh rig before first render).
     const rigVerts = frameMap.get(part.id);
     if (rigVerts && tris && tris.length > 0) {
       if (pointInAnyTriangle(rigVerts, tris, worldX, worldY)) return part.id;

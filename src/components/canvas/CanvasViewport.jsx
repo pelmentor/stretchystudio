@@ -267,6 +267,12 @@ export default function CanvasViewport({
   // pair is identity-stable since the last evalRig call, reuse the
   // cached frames and skip the recompute.
   const lastEvalCacheRef = useRef({ rigSpec: null, paramValues: null, frames: null });
+  // Latest per-part FINAL canvas-px verts (post chainEval + two-bone
+  // LBS + blend shapes), keyed by partId. Stashed so the click-to-
+  // select hit-test (`hitTestParts`) can match against the same
+  // geometry the renderer just drew. Without this, a click on a
+  // posed limb falls through because hit-test sees the rest mesh.
+  const lastFinalVertsRef = useRef(/** @type {Map<string, Array<{x:number,y:number}>>} */(new Map()));
   // BUG-015 instrumentation — throttle for the BodyAngle eval-watch log.
   const lastBodyAngleLogTimestampRef = useRef(0);
 
@@ -921,10 +927,17 @@ export default function CanvasViewport({
         // for one frame (visible as a flicker when selection changes triggered
         // additional redraws).
         const newMeshOverridden = new Set();
+        // Snapshot for the click-to-select hit-test. Same final verts
+        // the renderer is about to draw — without this snapshot,
+        // hit-test would see chainEval rest geometry while the user
+        // sees the LBS-deformed limb (BUG-026, 2026-05-08).
+        const finalVerts = lastFinalVertsRef.current;
+        finalVerts.clear();
         if (poseOverrides) {
           for (const [nodeId, ov] of poseOverrides) {
             if (!ov.mesh_verts) continue;
             newMeshOverridden.add(nodeId);
+            finalVerts.set(nodeId, ov.mesh_verts);
             const node = projectRef.current.nodes.find(n => n.id === nodeId);
             const m = getMesh(node, projectRef.current);
             if (m) {
@@ -2112,7 +2125,16 @@ export default function CanvasViewport({
       cachedFrames,
       worldX,
       worldY,
-      { worldMatrices, imageDataMap: imageDataMapRef.current },
+      {
+        worldMatrices,
+        imageDataMap: imageDataMapRef.current,
+        // Final per-part verts the renderer last drew. Includes
+        // chainEval + two-bone LBS + blend shapes — i.e. what the
+        // user actually sees. Hit-test prefers these over chainEval
+        // frames so a posed limb is selectable at its visible
+        // location (BUG-026 fix, 2026-05-08).
+        finalVertsByPartId: lastFinalVertsRef.current,
+      },
     );
     const isMulti = e.shiftKey;
     if (hitId) {
