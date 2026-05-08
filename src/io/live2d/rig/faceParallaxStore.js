@@ -38,6 +38,7 @@ import {
   synthesizeModifierStacks,
   synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
+import { coerceNumberArray } from '../../../lib/numberArrayCoerce.js';
 import {
   getFaceParallaxNode,
   nodeToWarpSpec,
@@ -96,14 +97,14 @@ export function deserializeFaceParallaxSpec(stored) {
     gridSize:   stored.gridSize ?? { rows: 5, cols: 5 },
     baseGrid:   new Float64Array(stored.baseGrid),
     localFrame: stored.localFrame ?? 'pivot-relative',
-    bindings:   (stored.bindings ?? []).map(b => ({
+    bindings:   (stored.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `faceParallaxStored.bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms:   stored.keyforms.map(k => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: new Float64Array(k.positions ?? []),
+    keyforms:   stored.keyforms.map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `faceParallaxStored.keyforms[${i}].keyTuple`),
+      positions: new Float64Array(coerceNumberArray(k.positions, `faceParallaxStored.keyforms[${i}].positions`)),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isVisible:       stored.isVisible       ?? true,

@@ -1,5 +1,7 @@
 // @ts-check
 
+import { coerceNumberArray } from '../../../../lib/numberArrayCoerce.js';
+
 /**
  * V4 Phase 3a — Keyform grid layout helper.
  *
@@ -74,7 +76,7 @@ export function buildKeyformGridLayout(bindings, keyforms, paramValues) {
 
   if (binds.length === 1) {
     const b = binds[0];
-    const keys = Array.isArray(b.keys) ? b.keys.slice() : [];
+    const keys = coerceNumberArray(b.keys, `keyformGrid[${b.parameterId}].keys`);
     /** @type {GridCell[]} */
     const cells = keys.map((k) => {
       const matched = findKeyform(kfs, [k]);
@@ -88,8 +90,8 @@ export function buildKeyformGridLayout(bindings, keyforms, paramValues) {
 
   if (binds.length === 2) {
     const [bX, bY] = binds;
-    const keysX = Array.isArray(bX.keys) ? bX.keys.slice() : [];
-    const keysY = Array.isArray(bY.keys) ? bY.keys.slice() : [];
+    const keysX = coerceNumberArray(bX.keys, `keyformGrid[${bX.parameterId}].keys`);
+    const keysY = coerceNumberArray(bY.keys, `keyformGrid[${bY.parameterId}].keys`);
     /** @type {GridCell[][]} */
     const rows = keysY.map((ky) =>
       keysX.map((kx) => {
@@ -153,7 +155,7 @@ export function computeActiveKeyTuple(bindings, paramValues) {
   for (const b of bindings) {
     const cur = paramValues?.[b?.parameterId];
     if (typeof cur !== 'number' || !Number.isFinite(cur)) return null;
-    const keys = Array.isArray(b.keys) ? b.keys : [];
+    const keys = coerceNumberArray(b.keys, `computeActiveKeyTuple[${b?.parameterId}].keys`);
     const hit = keys.find((k) => approxEq(k, cur));
     if (hit === undefined) return null;
     out.push(hit);

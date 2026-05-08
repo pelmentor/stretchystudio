@@ -18,6 +18,23 @@ if (neckNode) {
   console.log(`  parent: ${neckNode.parent}`);
   console.log(`  keyforms: ${neckNode.keyforms?.length ?? 0}`);
   console.log(`  bindings: ${neckNode.bindings?.length ?? 0}`);
+  // BUG-NECK_NULL_BBOX: pre-fix, baseGrid + keyform.positions silently
+  // dropped to []. Post-fix, they should carry the full grid data
+  // (gridSize.rows+1)*(gridSize.cols+1)*2 numbers.
+  const expectedLen = (
+    (neckNode.gridSize?.rows ?? 0) + 1
+  ) * (
+    (neckNode.gridSize?.cols ?? 0) + 1
+  ) * 2;
+  console.log(`  gridSize: ${JSON.stringify(neckNode.gridSize)} (expected len: ${expectedLen})`);
+  console.log(`  baseGrid: length=${neckNode.baseGrid?.length ?? 0}${neckNode.baseGrid?.length === 0 ? ' ⚠️  EMPTY' : ''}`);
+  if (Array.isArray(neckNode.keyforms)) {
+    for (let i = 0; i < neckNode.keyforms.length; i++) {
+      const kf = neckNode.keyforms[i];
+      const empty = !Array.isArray(kf.positions) || kf.positions.length === 0;
+      console.log(`  keyform[${i}].positions: length=${kf.positions?.length ?? 0}${empty ? ' ⚠️  EMPTY' : ''} keyTuple=${JSON.stringify(kf.keyTuple)}`);
+    }
+  }
 }
 
 const parts = (proj.nodes ?? []).filter((n) => n?.type === 'part' && Array.isArray(n.modifiers));
@@ -76,4 +93,33 @@ if (missingByDeformerId.size > 0) {
   for (const [id, count] of missingByDeformerId) {
     console.log(`  ${id}: ${count} stack-entry(ies)`);
   }
+}
+
+// BUG-NECK_NULL_BBOX: scan ALL warp deformer nodes for empty
+// baseGrid / keyform.positions. Pre-fix any warp that went through
+// `warpSpecToDeformerNode(harvest.X)` silently dropped Float64Array
+// data to []. Post-fix this list should be empty.
+console.log();
+console.log('Scanning ALL warp deformer nodes for empty baseGrid / positions:');
+let emptyWarpCount = 0;
+for (const n of (proj.nodes ?? [])) {
+  if (!n || n.type !== 'deformer' || n.deformerKind !== 'warp') continue;
+  const baseEmpty = !Array.isArray(n.baseGrid) || n.baseGrid.length === 0;
+  const kfs = Array.isArray(n.keyforms) ? n.keyforms : [];
+  const kfsEmpty = kfs.length > 0 && kfs.every((kf) =>
+    !Array.isArray(kf?.positions) || kf.positions.length === 0,
+  );
+  if (baseEmpty || kfsEmpty) {
+    emptyWarpCount++;
+    const flags = [];
+    if (baseEmpty) flags.push('baseGrid=empty');
+    if (kfsEmpty)  flags.push(`all ${kfs.length} keyform.positions=empty`);
+    console.log(`  ⚠️  ${n.id}: ${flags.join(', ')}`);
+  }
+}
+if (emptyWarpCount === 0) {
+  console.log('  ✓ No warp nodes with empty data — BUG-NECK_NULL_BBOX would not bite this file.');
+} else {
+  console.log(`  ${emptyWarpCount} warp node(s) with empty data → "X gone" symptom on load.`);
+  console.log('  Re-run Init Rig with the post-fix code to repair.');
 }

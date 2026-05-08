@@ -37,6 +37,7 @@
  */
 
 import { DEFAULT_MIGRATED_MODE } from './migrations/v21_modifier_mode_flags.js';
+import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'];
@@ -92,13 +93,13 @@ export function rotationSpecToDeformerNode(spec) {
     name: spec.name ?? spec.id,
     parent: parentSpecToNodeId(spec.parent),
     visible: spec.isVisible !== false,
-    bindings: (spec.bindings ?? []).map((b) => ({
+    bindings: (spec.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `rotationSpec.bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (spec.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
+    keyforms: (spec.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `rotationSpec.keyforms[${i}].keyTuple`),
       angle: typeof k.angle === 'number' ? k.angle : 0,
       originX: typeof k.originX === 'number' ? k.originX : 0,
       originY: typeof k.originY === 'number' ? k.originY : 0,
@@ -150,16 +151,16 @@ export function warpSpecToDeformerNode(stored) {
       rows: stored.gridSize?.rows ?? 5,
       cols: stored.gridSize?.cols ?? 5,
     },
-    baseGrid: Array.isArray(stored.baseGrid) ? stored.baseGrid.slice() : [],
+    baseGrid: coerceNumberArray(stored.baseGrid, `warpSpec[${stored.id}].baseGrid`),
     localFrame: stored.localFrame ?? 'canvas-px',
-    bindings: (stored.bindings ?? []).map((b) => ({
+    bindings: (stored.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `warpSpec[${stored.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (stored.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: Array.isArray(k.positions) ? k.positions.slice() : [],
+    keyforms: (stored.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `warpSpec[${stored.id}].keyforms[${i}].keyTuple`),
+      positions: coerceNumberArray(k.positions, `warpSpec[${stored.id}].keyforms[${i}].positions`),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isLocked: stored.isLocked === true,

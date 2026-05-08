@@ -47,6 +47,12 @@ import { resolvePhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 import { synthesizeDeformerNodesForExport } from './synthesizeDeformerNodesForExport.js';
+import {
+  coerceNumberArray,
+  coerceFloat64Array,
+  coerceFloat32Array,
+  coerceUint16Array,
+} from '../../../lib/numberArrayCoerce.js';
 
 /** Reusable frozen empty arrays so the selector returns the same
  * objects across calls when a section has no data. Lets shallow-equal
@@ -494,8 +500,8 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       name: part.name ?? part.id,
       parent: parentRef,
       verticesCanvas: new Float32Array(flatVerts),
-      triangles: _toUint16Array(tris),
-      uvs: _toFloat32Array(uvs),
+      triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
+      uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
       variantSuffix: part.variantSuffix ?? null,
       textureId: part.id ?? null,
       bindings: [],
@@ -505,7 +511,7 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         opacity: 1,
         drawOrder: typeof part.draw_order === 'number' ? part.draw_order : 0,
       }],
-      maskMeshIds: Array.isArray(part.maskMeshIds) ? part.maskMeshIds.slice() : [],
+      maskMeshIds: Array.isArray(part.maskMeshIds) ? part.maskMeshIds.slice() : [], // string IDs, not numbers — coerce helper not applicable
       isVisible: part.visible !== false,
       drawOrder: typeof part.draw_order === 'number' ? part.draw_order : 0,
     });
@@ -529,18 +535,6 @@ function _toFlatNumberArray(verts) {
   return Array.from(verts);
 }
 
-function _toFloat32Array(arr) {
-  if (arr instanceof Float32Array) return arr;
-  if (Array.isArray(arr) || ArrayBuffer.isView(arr)) return new Float32Array(arr);
-  return new Float32Array(0);
-}
-
-function _toUint16Array(arr) {
-  if (arr instanceof Uint16Array) return arr;
-  if (Array.isArray(arr) || ArrayBuffer.isView(arr)) return new Uint16Array(arr);
-  return new Uint16Array(0);
-}
-
 /**
  * Convert a `type:'deformer', deformerKind:'warp'` node back to a
  * `WarpDeformerSpec`. Re-inflates the flat `parent: nodeId|null` into
@@ -558,16 +552,16 @@ function _warpNodeToSpec(node, nodeById) {
       rows: node.gridSize?.rows ?? 5,
       cols: node.gridSize?.cols ?? 5,
     },
-    baseGrid: _toFloat64(node.baseGrid),
+    baseGrid: coerceFloat64Array(node.baseGrid, `selectRigSpec.warp[${node.id}].baseGrid`),
     localFrame: node.localFrame ?? 'canvas-px',
-    bindings: (node.bindings ?? []).map((b) => ({
+    bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `selectRigSpec.warp[${node.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (node.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: _toFloat64(k.positions),
+    keyforms: (node.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.warp[${node.id}].keyforms[${i}].keyTuple`),
+      positions: coerceFloat64Array(k.positions, `selectRigSpec.warp[${node.id}].keyforms[${i}].positions`),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isVisible: node.visible !== false,
@@ -591,13 +585,13 @@ function _rotationNodeToSpec(node, nodeById) {
     id: node.id,
     name: node.name ?? node.id,
     parent: _resolveParentRef(node.parent, nodeById),
-    bindings: (node.bindings ?? []).map((b) => ({
+    bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `selectRigSpec.rotation[${node.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (node.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
+    keyforms: (node.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.rotation[${node.id}].keyforms[${i}].keyTuple`),
       angle: k.angle ?? 0,
       originX: k.originX ?? 0,
       originY: k.originY ?? 0,
@@ -729,8 +723,3 @@ function _deriveInnermostBodyClosures(warpNodes, allDeformerNodes, warpRestById)
   };
 }
 
-function _toFloat64(arr) {
-  if (arr instanceof Float64Array) return arr;
-  if (Array.isArray(arr)) return new Float64Array(arr);
-  return new Float64Array(0);
-}

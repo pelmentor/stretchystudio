@@ -427,6 +427,70 @@ function assertEq(actual, expected, name) {
   assertEq(nodes.map((n) => n.id), ['P1', 'BX', 'BZ'], 'removeRotations: only rotations removed');
 }
 
+// ── BUG-NECK_NULL_BBOX regression: Float64Array positions survive ────
+// Live harvest specs (buildNeckWarpSpec / perPartRigWarps) hand
+// Float64Array directly to warpSpecToDeformerNode without going through
+// a serializer first. Pre-fix this dropped to []. Post-fix the helper
+// `coerceNumberArray` preserves the values.
+
+{
+  const stored = {
+    id: 'NeckWarp',
+    name: 'NeckWarp',
+    parent: { type: 'warp', id: 'BodyXWarp' },
+    gridSize: { rows: 5, cols: 5 },
+    baseGrid: new Float64Array([10, 20, 30, 40]),
+    localFrame: 'canvas-px',
+    bindings: [{ parameterId: 'ParamAngleZ', keys: new Float64Array([-30, 0, 30]), interpolation: 'LINEAR' }],
+    keyforms: [
+      { keyTuple: new Float64Array([-30]), positions: new Float64Array([1.5, 2.5, 3.5, 4.5]), opacity: 1 },
+      { keyTuple: new Float64Array([0]),   positions: new Float64Array([5, 6, 7, 8]),         opacity: 1 },
+      { keyTuple: new Float64Array([30]),  positions: new Float64Array([9, 10, 11, 12]),      opacity: 1 },
+    ],
+    isVisible: true, isLocked: false, isQuadTransform: false,
+  };
+  const node = warpSpecToDeformerNode(stored);
+  assertEq(node.baseGrid, [10, 20, 30, 40],
+    'BUG-NECK_NULL_BBOX: Float64Array baseGrid coerced to plain Array (not silently dropped)');
+  assert(Array.isArray(node.baseGrid), 'baseGrid is plain Array post-coerce');
+  assertEq(node.bindings[0].keys, [-30, 0, 30],
+    'BUG-NECK_NULL_BBOX: Float64Array binding.keys coerced');
+  assertEq(node.keyforms[0].keyTuple, [-30],
+    'BUG-NECK_NULL_BBOX: Float64Array keyform.keyTuple coerced');
+  assertEq(node.keyforms[0].positions, [1.5, 2.5, 3.5, 4.5],
+    'BUG-NECK_NULL_BBOX: Float64Array keyform.positions coerced (the actual neck-gone bug)');
+  assertEq(node.keyforms[2].positions, [9, 10, 11, 12],
+    'BUG-NECK_NULL_BBOX: third keyform positions coerced');
+  // JSON round-trip: typed-array-derived values survive serialisation
+  const jsonNode = JSON.parse(JSON.stringify(node));
+  assertEq(jsonNode.keyforms[0].positions, [1.5, 2.5, 3.5, 4.5],
+    'BUG-NECK_NULL_BBOX: positions survive JSON round-trip');
+  assertEq(jsonNode.baseGrid, [10, 20, 30, 40],
+    'BUG-NECK_NULL_BBOX: baseGrid survives JSON round-trip');
+}
+
+// Defensive: garbage in throws (rule №1 — no silent bad-input fallback)
+{
+  let threw = false;
+  try {
+    warpSpecToDeformerNode({
+      id: 'BadWarp',
+      name: 'BadWarp',
+      parent: null,
+      gridSize: { rows: 5, cols: 5 },
+      baseGrid: 'not an array',
+      localFrame: 'canvas-px',
+      bindings: [],
+      keyforms: [],
+      isVisible: true, isLocked: false, isQuadTransform: false,
+    });
+  } catch (e) {
+    threw = String(e.message).includes('BadWarp')
+      && String(e.message).includes('baseGrid');
+  }
+  assert(threw, 'warpSpecToDeformerNode throws on garbage baseGrid (no silent [] fallback)');
+}
+
 // ── Round-trip: synthesize → JSON → parse → identical deformer nodes ──
 
 {

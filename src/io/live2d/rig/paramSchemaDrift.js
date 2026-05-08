@@ -1,5 +1,7 @@
 // @ts-check
 
+import { coerceNumberArray } from '../../../lib/numberArrayCoerce.js';
+
 /**
  * Hole I-2 — Binding-vs-param schema drift detection.
  *
@@ -78,8 +80,8 @@ export function findBindingSchemaDrift(project) {
       if (!paramId) continue;
       const param = paramById.get(paramId);
       if (!param) continue; // dangling — Hole I-3 handles it
-      const bKeys = Array.isArray(binding.keys) ? binding.keys : [];
-      const pKeys = Array.isArray(param.keys) ? param.keys : [];
+      const bKeys = coerceNumberArray(binding.keys, `paramSchemaDrift.binding[${bi}].keys`);
+      const pKeys = coerceNumberArray(param.keys, `paramSchemaDrift.param[${paramId}].keys`);
       /** @type {Array<'keys-mismatch'|'out-of-range'>} */
       const kinds = [];
 

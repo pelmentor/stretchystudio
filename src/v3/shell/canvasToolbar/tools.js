@@ -176,13 +176,9 @@ export const TOOLS_BY_MODE = {
  * @returns {ToolEntry[]}
  */
 export function toolsFor(editMode, activeBlendShapeId = null) {
-  // Legacy alias 'mesh' kept for any unmigrated caller.
-  if (editMode === 'edit' || editMode === 'mesh') {
+  if (editMode === 'edit') {
     return activeBlendShapeId ? TOOLS_BY_MODE.blendShape : TOOLS_BY_MODE.mesh;
   }
-  // Legacy alias 'skeleton' (renamed → 'pose' 2026-05-07).
-  if (editMode === 'pose' || editMode === 'skeleton') return TOOLS_BY_MODE.skeleton;
-  // Legacy 'blendShape' editMode — folded into Edit Mode 2026-05-07.
-  if (editMode === 'blendShape') return TOOLS_BY_MODE.blendShape;
+  if (editMode === 'pose') return TOOLS_BY_MODE.skeleton;
   return TOOLS_BY_MODE.object;
 }

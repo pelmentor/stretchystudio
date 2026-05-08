@@ -47,6 +47,7 @@ import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
+import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 import { computeWorldMatrices } from '../renderer/transforms.js';
 
 /**
@@ -378,7 +379,7 @@ export const useProjectStore = create((set, get) => {
       const min = typeof spec.min === 'number' ? spec.min : 0;
       const max = typeof spec.max === 'number' ? spec.max : 1;
       const def = typeof spec.default === 'number' ? spec.default : Math.min(Math.max(0, min), max);
-      const keys = Array.isArray(spec.keys) ? spec.keys.slice() : [];
+      const keys = coerceNumberArray(spec.keys, `addParameter[${spec.id}].keys`);
       state.project.parameters = state.project.parameters ?? [];
       state.project.parameters.push({
         id:   spec.id,
@@ -495,13 +496,13 @@ export const useProjectStore = create((set, get) => {
     const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
     if (!param) return;
     const EPS = 1e-6;
-    const keys = Array.isArray(param.keys) ? param.keys.slice() : [];
+    const keys = coerceNumberArray(param.keys, `addParamKey[${paramId}].param.keys`);
     if (!keys.some((k) => Math.abs(k - value) < EPS)) {
       keys.push(value);
       keys.sort((a, b) => a - b);
       param.keys = keys;
     }
-    const userKeys = Array.isArray(param._userAuthoredKeys) ? param._userAuthoredKeys.slice() : [];
+    const userKeys = coerceNumberArray(param._userAuthoredKeys, `addParamKey[${paramId}].param._userAuthoredKeys`);
     if (!userKeys.some((k) => Math.abs(k - value) < EPS)) {
       userKeys.push(value);
       userKeys.sort((a, b) => a - b);

@@ -25,6 +25,8 @@
  * @module io/live2d/rig/deformerNodeReaders
  */
 
+import { coerceNumberArray, coerceFloat64Array } from '../../../lib/numberArrayCoerce.js';
+
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_NODE_IDS = Object.freeze(['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp']);
 
@@ -70,16 +72,16 @@ export function nodeToWarpSpec(node, nodeById) {
       rows: node.gridSize?.rows ?? 5,
       cols: node.gridSize?.cols ?? 5,
     },
-    baseGrid: _toFloat64(node.baseGrid),
+    baseGrid: coerceFloat64Array(node.baseGrid, `warpNode[${node.id}].baseGrid`),
     localFrame: node.localFrame ?? 'canvas-px',
-    bindings: (node.bindings ?? []).map((b) => ({
+    bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `warpNode[${node.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (node.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: _toFloat64(k.positions),
+    keyforms: (node.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `warpNode[${node.id}].keyforms[${i}].keyTuple`),
+      positions: coerceFloat64Array(k.positions, `warpNode[${node.id}].keyforms[${i}].positions`),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isVisible: node.visible !== false,
@@ -114,13 +116,13 @@ export function nodeToRotationSpec(node, nodeById) {
     id: node.id,
     name: node.name ?? node.id,
     parent: inflateParentRef(node.parent, nodeById),
-    bindings: (node.bindings ?? []).map((b) => ({
+    bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `rotationNode[${node.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (node.keyforms ?? []).map((k) => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
+    keyforms: (node.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `rotationNode[${node.id}].keyforms[${i}].keyTuple`),
       angle: typeof k.angle === 'number' ? k.angle : 0,
       originX: typeof k.originX === 'number' ? k.originX : 0,
       originY: typeof k.originY === 'number' ? k.originY : 0,
@@ -209,8 +211,3 @@ export function getRigWarpNodes(project) {
   return out;
 }
 
-function _toFloat64(arr) {
-  if (arr instanceof Float64Array) return arr;
-  if (Array.isArray(arr)) return new Float64Array(arr);
-  return new Float64Array(0);
-}

@@ -41,6 +41,7 @@ import {
   synthesizeModifierStacks,
   synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
+import { coerceNumberArray } from '../../../lib/numberArrayCoerce.js';
 import {
   getBodyWarpChainNodes,
   nodeToWarpSpec,
@@ -101,14 +102,14 @@ function _deserializeSpec(stored) {
     gridSize: stored.gridSize ?? { rows: 5, cols: 5 },
     baseGrid: new Float64Array(stored.baseGrid),
     localFrame: stored.localFrame,
-    bindings: (stored.bindings ?? []).map(b => ({
+    bindings: (stored.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `bodyWarpStored[${stored.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (stored.keyforms ?? []).map(k => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: new Float64Array(k.positions ?? []),
+    keyforms: (stored.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `bodyWarpStored[${stored.id}].keyforms[${i}].keyTuple`),
+      positions: new Float64Array(coerceNumberArray(k.positions, `bodyWarpStored[${stored.id}].keyforms[${i}].positions`)),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isVisible: stored.isVisible ?? true,
@@ -171,7 +172,7 @@ export function deserializeBodyWarpChain(stored) {
       HIP_FRAC: typeof debug.HIP_FRAC === 'number' ? debug.HIP_FRAC : 0.45,
       FEET_FRAC: typeof debug.FEET_FRAC === 'number' ? debug.FEET_FRAC : 0.75,
       bodyFracSource: debug.bodyFracSource ?? 'stored',
-      spineCfShifts: Array.isArray(debug.spineCfShifts) ? debug.spineCfShifts.slice() : [],
+      spineCfShifts: coerceNumberArray(debug.spineCfShifts, 'bodyWarp.debug.spineCfShifts'),
     },
   };
 }
@@ -212,7 +213,7 @@ export function resolveBodyWarp(project) {
       HIP_FRAC: typeof debug.HIP_FRAC === 'number' ? debug.HIP_FRAC : 0.45,
       FEET_FRAC: typeof debug.FEET_FRAC === 'number' ? debug.FEET_FRAC : 0.75,
       bodyFracSource: debug.bodyFracSource ?? 'stored',
-      spineCfShifts: Array.isArray(debug.spineCfShifts) ? debug.spineCfShifts.slice() : [],
+      spineCfShifts: coerceNumberArray(debug.spineCfShifts, 'bodyWarp.debug.spineCfShifts'),
     },
   };
 }

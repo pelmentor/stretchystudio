@@ -53,6 +53,7 @@ import {
   synthesizeModifierStacks,
   synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
+import { coerceNumberArray } from '../../../lib/numberArrayCoerce.js';
 import {
   getRigWarpNodes,
   nodeToWarpSpec,
@@ -120,14 +121,14 @@ function _deserializeRigWarpSpec(stored) {
     gridSize: stored.gridSize ?? { rows: 2, cols: 2 },
     baseGrid: new Float64Array(stored.baseGrid ?? []),
     localFrame: stored.localFrame ?? 'normalized-0to1',
-    bindings: (stored.bindings ?? []).map(b => ({
+    bindings: (stored.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
-      keys: Array.isArray(b.keys) ? b.keys.slice() : [],
+      keys: coerceNumberArray(b.keys, `rigWarpStored[${stored.id}].bindings[${i}].keys`),
       interpolation: b.interpolation ?? 'LINEAR',
     })),
-    keyforms: (stored.keyforms ?? []).map(k => ({
-      keyTuple: Array.isArray(k.keyTuple) ? k.keyTuple.slice() : [],
-      positions: new Float64Array(k.positions ?? []),
+    keyforms: (stored.keyforms ?? []).map((k, i) => ({
+      keyTuple: coerceNumberArray(k.keyTuple, `rigWarpStored[${stored.id}].keyforms[${i}].keyTuple`),
+      positions: new Float64Array(coerceNumberArray(k.positions, `rigWarpStored[${stored.id}].keyforms[${i}].positions`)),
       opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     isVisible: stored.isVisible ?? true,

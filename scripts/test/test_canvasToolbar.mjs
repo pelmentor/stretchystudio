@@ -16,13 +16,13 @@ function assert(cond, name) {
 
 // ── toolsFor resolves to the right table per editMode ───────────────
 
-assert(toolsFor(null)         === TOOLS_BY_MODE.object,    'null  → object table');
-assert(toolsFor('mesh')       === TOOLS_BY_MODE.mesh,      'mesh  → mesh table');
-assert(toolsFor('skeleton')   === TOOLS_BY_MODE.skeleton,  'skel  → skeleton table');
-assert(toolsFor('blendShape') === TOOLS_BY_MODE.blendShape,'blend → blendShape table');
+assert(toolsFor(null)              === TOOLS_BY_MODE.object,     'null  → object table');
+assert(toolsFor('edit')            === TOOLS_BY_MODE.mesh,       'edit (no shape)  → mesh table');
+assert(toolsFor('edit', 'shape-1') === TOOLS_BY_MODE.blendShape, 'edit + shape ptr → blendShape table');
+assert(toolsFor('pose')            === TOOLS_BY_MODE.skeleton,   'pose  → skeleton table');
 // Unknown values fall back to object table (defensive).
-assert(toolsFor('unknown')    === TOOLS_BY_MODE.object,    'unknown → object table');
-assert(toolsFor(undefined)    === TOOLS_BY_MODE.object,    'undef   → object table');
+assert(toolsFor('unknown')         === TOOLS_BY_MODE.object,     'unknown → object table');
+assert(toolsFor(undefined)         === TOOLS_BY_MODE.object,     'undef   → object table');
 
 // ── every entry has the required shape ─────────────────────────────
 
