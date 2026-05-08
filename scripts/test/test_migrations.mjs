@@ -96,11 +96,26 @@ function assertThrows(fn, name) {
 }
 
 {
-  // v13: existing lastInitRigCompletedAt preserved (idempotent).
+  // v13: existing lastInitRigCompletedAt preserved through v13..v28.
+  // v29 INTENTIONALLY clears it: pre-v29 projects must re-run Init Rig
+  // so `seedAllRig` populates the new `part.mesh.runtime` field. This
+  // is the proper behaviour — the alternative (silent rig-data
+  // mismatch) is what bit BUG-NECK and BUG-ARMS-PHYS.
   const ts = '2026-05-01T17:42:00.000Z';
   const p = { schemaVersion: 13, lastInitRigCompletedAt: ts };
   migrateProject(p);
-  assertEq(p.lastInitRigCompletedAt, ts, 'v13 idempotent: existing timestamp preserved');
+  assertEq(p.lastInitRigCompletedAt, null,
+    'v29: pre-v29 timestamps cleared so re-Init Rig populates mesh.runtime');
+}
+
+{
+  // v29-or-later: existing lastInitRigCompletedAt preserved (idempotent
+  // — the migration only fires once when crossing v28 → v29).
+  const ts = '2026-05-08T12:00:00.000Z';
+  const p = { schemaVersion: 29, lastInitRigCompletedAt: ts };
+  migrateProject(p);
+  assertEq(p.lastInitRigCompletedAt, ts,
+    'v29 idempotent: post-v29 timestamps preserved');
 }
 
 {

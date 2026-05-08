@@ -446,6 +446,55 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
     const tris  = partMesh.triangles ?? [];
     const uvs   = partMesh.uvs ?? [];
 
+    // Schema v29 fast path — `seedAllRig` persists `rigSpec.artMeshes[i]`
+    // (bindings + keyforms + parent) into `part.mesh.runtime` so this
+    // selector produces the SAME art-mesh output `generateCmo3` does.
+    // Without this branch, bone-baked handwear angles, eye-closure
+    // curves, neck-corner offsets, and variant fades all silently
+    // collapse to a single rest keyform with zero bindings — and the
+    // auto-fill subscriber overwrites the full rigSpec from
+    // `initializeRigFromProject`, so the gap bites immediately post
+    // Init Rig. See `src/store/artMeshRuntimeSync.js` for the writer
+    // side.
+    const runtime = partMesh.runtime;
+    if (runtime && Array.isArray(runtime.keyforms) && runtime.keyforms.length > 0) {
+      const parent = (runtime.parent && typeof runtime.parent === 'object')
+        ? { type: runtime.parent.type ?? 'root', id: runtime.parent.id ?? null }
+        : { type: 'root', id: null };
+      const bindings = Array.isArray(runtime.bindings) ? runtime.bindings.map((b, i) => ({
+        parameterId: b.parameterId,
+        keys: coerceNumberArray(b.keys, `selectRigSpec.artMesh[${part.id}].runtime.bindings[${i}].keys`),
+        interpolation: b.interpolation ?? 'LINEAR',
+      })) : [];
+      const keyforms = runtime.keyforms.map((k, i) => /** @type {object} */ ({
+        keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].keyTuple`),
+        vertexPositions: coerceFloat32Array(k.vertexPositions,
+          `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].vertexPositions`),
+        opacity: typeof k.opacity === 'number' ? k.opacity : 1,
+        ...(typeof k.drawOrder === 'number' ? { drawOrder: k.drawOrder } : {}),
+      }));
+      const flatVerts = _toFlatNumberArray(verts);
+      out.push({
+        id: part.id,
+        name: part.name ?? part.id,
+        parent,
+        verticesCanvas: new Float32Array(flatVerts),
+        triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
+        uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
+        variantSuffix: part.variantSuffix ?? null,
+        textureId: part.id ?? null,
+        bindings,
+        keyforms,
+        maskMeshIds: Array.isArray(part.maskMeshIds) ? part.maskMeshIds.slice() : [],
+        isVisible: part.visible !== false,
+        drawOrder: typeof part.draw_order === 'number' ? part.draw_order : 0,
+      });
+      continue;
+    }
+
+    // Pre-rig fallback — synthesise a single canvas-px rest keyform
+    // with zero bindings. Used only by projects that haven't run Init
+    // Rig yet (no `mesh.runtime` populated).
     let parentRef = { type: 'root', id: null };
     const targetParentId =
       part.rigParent && nodeById.has(part.rigParent) ? part.rigParent

@@ -28,8 +28,9 @@ import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename
 import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold.js';
 import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
 import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js';
+import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
 
-export const CURRENT_SCHEMA_VERSION = 28;
+export const CURRENT_SCHEMA_VERSION = 29;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -435,6 +436,24 @@ const MIGRATIONS = {
   // See `src/store/migrations/v28_modifier_data_fold.js`.
   28: (project) => {
     migrateModifierDataFold(project);
+    return project;
+  },
+
+  // v29 — persist `rigSpec.artMeshes` runtime data (bindings + keyforms
+  // + parent) into `project.nodes[i].mesh.runtime`. Pre-v29 the runtime
+  // rigSpec rebuilt via `selectRigSpec(project)` lost per-art-mesh
+  // bindings + keyforms (handwear bone-baked angles, eye-closure
+  // curves, neck-corner offsets, variant fades) — they only existed
+  // inside `generateCmo3.result.rigSpec` and were dropped on save+load
+  // (and even immediately post Init Rig, when the auto-fill subscriber
+  // overwrote the full rigSpec with the fast one).
+  //
+  // The migration clears `lastInitRigCompletedAt` so the next render
+  // forces an async Init Rig that populates the new field via
+  // `seedAllRig`'s persistence pass. User-authored deformer state on
+  // the existing nodes is preserved by `seedAllRig`'s merge semantics.
+  29: (project) => {
+    migrateArtMeshRuntimePersist(project);
     return project;
   },
 

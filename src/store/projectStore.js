@@ -43,6 +43,7 @@ import {
   synthesizeModifierStacks,
   synthesizeDeformerParents,
 } from './deformerNodeSync.js';
+import { persistArtMeshRuntime } from './artMeshRuntimeSync.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
@@ -1247,6 +1248,16 @@ export const useProjectStore = create((set, get) => {
       // any future caller can mutate stacks alone and trust the mirror
       // to stay consistent. See `synthesizeDeformerParents` doc header.
       synthesizeDeformerParents(proj);
+      // Schema v29 — persist `rigSpec.artMeshes` runtime data (bindings
+      // + keyforms + parent) into `project.nodes[i].mesh.runtime` so
+      // `selectRigSpec(project)` produces an art-mesh tree equivalent
+      // to `generateCmo3.result.rigSpec.artMeshes` post save+load and
+      // post auto-fill. Without this, bone-baked handwear keyforms +
+      // eye-closure curves + neck-corner offsets + variant fades all
+      // silently disappear from the live preview.
+      if (harvest?.rigSpec) {
+        persistArtMeshRuntime(proj, harvest.rigSpec, mode);
+      }
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.
       // ISO timestamp; readable in logs / debug if needed.
