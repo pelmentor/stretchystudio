@@ -85,6 +85,7 @@
     "test:selectRigSpec": "node scripts/test/test_selectRigSpec.mjs",
     "test:xmlbuilder": "node scripts/test/test_xmlbuilder.mjs",
     "test:meshSample": "node scripts/test/test_meshSample.mjs",
+    "test:spatialHash": "node scripts/test/test_spatialHash.mjs",
     "test:armatureOrganizer": "node scripts/test/test_armatureOrganizer.mjs",
     "test:motionLib": "node scripts/test/test_motionLib.mjs",
     "test:rotationDeformers": "node scripts/test/test_rotationDeformers.mjs",

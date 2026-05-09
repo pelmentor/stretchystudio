@@ -2,6 +2,8 @@
  * Interior point sampling — pure, no DOM.
  */
 
+import { SpatialHash } from './spatialHash.js';
+
 /**
  * Sample interior points using stratified random sampling (jittered grid).
  *
@@ -32,7 +34,10 @@ export function sampleInterior(data, width, height, alphaThreshold = 5, gridSpac
 }
 
 /**
- * Remove interior points that are within `minDistance` of any edge point.
+ * Remove interior points that are within `minDistance` of any edge
+ * point. Uses a spatial hash (cellSize = minDistance) so each query
+ * checks ~9 buckets instead of every edge point — O(interior +
+ * edge) total instead of the prior O(interior × edge).
  *
  * @param {Array<[number,number]>} interiorPts
  * @param {Array<[number,number]>} edgePts
@@ -40,13 +45,11 @@ export function sampleInterior(data, width, height, alphaThreshold = 5, gridSpac
  * @returns {Array<[number,number]>}
  */
 export function filterByEdgePadding(interiorPts, edgePts, minDistance) {
-  const minDist2 = minDistance * minDistance;
-  return interiorPts.filter(pt => {
-    for (const ep of edgePts) {
-      const dx = pt[0] - ep[0];
-      const dy = pt[1] - ep[1];
-      if (dx * dx + dy * dy < minDist2) return false;
-    }
-    return true;
-  });
+  // minDistance <= 0 means "no padding needed" — return interior points
+  // unchanged. The hash requires a positive cellSize, so short-circuit
+  // before constructing it.
+  if (edgePts.length === 0 || minDistance <= 0) return interiorPts;
+  const hash = new SpatialHash(minDistance);
+  hash.addAll(edgePts);
+  return interiorPts.filter(([x, y]) => !hash.hasWithin(x, y, minDistance));
 }

@@ -9,6 +9,7 @@
 import { dilateAlphaMask, traceAllContours, resampleContour, smoothContour } from './contour.js';
 import { sampleInterior, filterByEdgePadding } from './sample.js';
 import { triangulate } from './delaunay.js';
+import { SpatialHash } from './spatialHash.js';
 
 /**
  * Re-triangulate existing vertices without changing them.
@@ -100,24 +101,23 @@ export function generateMesh(data, width, height, opts = {}) {
     interiorPts = filterByEdgePadding(interiorPts, edgePts, edgePadding);
   }
 
-  // 5. Combine & deduplicate
+  // 5. Combine & deduplicate via spatial hash — O(N) total instead of
+  //    the prior O(N²) scan against the growing accumulator. cellSize
+  //    matches MIN_DIST so the 3×3 query covers every candidate
+  //    duplicate.
   const allPts = [...edgePts, ...interiorPts];
   const rawEdgeCount = edgePts.length;
   const deduped = [];
   const edgeSet = new Set();
-  const MIN_DIST2 = 4;
+  const MIN_DIST = 2;
+  const hash = new SpatialHash(MIN_DIST);
 
   for (let i = 0; i < allPts.length; i++) {
     const [px, py] = allPts[i];
-    let dup = false;
-    for (const [dx, dy] of deduped) {
-      const ex = px - dx, ey = py - dy;
-      if (ex * ex + ey * ey < MIN_DIST2) { dup = true; break; }
-    }
-    if (!dup) {
-      if (i < rawEdgeCount) edgeSet.add(deduped.length);
-      deduped.push([px, py]);
-    }
+    if (hash.hasWithin(px, py, MIN_DIST)) continue;
+    if (i < rawEdgeCount) edgeSet.add(deduped.length);
+    deduped.push([px, py]);
+    hash.add(px, py);
   }
 
   // 6. Triangulate
