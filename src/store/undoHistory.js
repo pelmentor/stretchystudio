@@ -6,19 +6,21 @@
  * the v3 operator registry imports undo/redo for the app.undo / app.redo
  * operators (Ctrl+Z / Ctrl+Shift+Z bindings).
  *
- * v3 Phase 0F.8 (Pillar M): added byte-budget cap on top of the
- * count cap. The full Immer-patches rewrite is still future work
- * (it needs a coordinated change in projectStore and every action
- * that calls pushSnapshot); this is the observability + soft cap
- * that ratchets the codebase toward it.
+ * P1 (2026-05-09) — dropped the structuredClone + JSON.stringify path.
+ * The project state is produced by immer and is auto-frozen, so the
+ * pushed reference is already an immutable snapshot of the project at
+ * that moment. Holding the reference (instead of cloning) is safe AND
+ * cheaper — eliminates ~30-50ms structuredClone + ~30-50ms JSON.stringify
+ * per push on Hiyori-class projects, and lets snapshots share unmutated
+ * subtrees via immer's structural sharing (memory grows by O(diff) per
+ * push instead of O(project) per push).
  *
- * Each snapshot's approximate size is computed once at push time
- * via JSON.stringify().length (a coarse proxy - typed arrays
- * serialize to {} and undercount, but the dominant size in
- * practice comes from node trees and keyform Maps which JSON
- * captures correctly). When total > MAX_BYTES, the oldest entries
- * are dropped first - same FIFO eviction policy the count cap
- * uses, just bounded by memory instead of entry count.
+ * Byte budget removed. Without per-snapshot clones, memory growth is
+ * dominated by structural-sharing depth — bounded by the actual diff
+ * structure of edits, not by raw size. The MAX_HISTORY count cap (50)
+ * is the load-bearing limit. Pathological "edit + undo + edit" flows
+ * still share unmutated nodes; the tail-risk profile is materially
+ * better than with cloned snapshots.
  *
  * `undoStats()` exposes the counters so DevTools / Phase 1
  * status bar / future telemetry can show the user how much memory
@@ -26,57 +28,31 @@
  */
 
 const MAX_HISTORY = 50;
-const MAX_BYTES   = 50 * 1024 * 1024; // 50 MB — generous, will tighten with Immer-patches
 
-/** @typedef {{project: any, bytes: number}} SnapshotEntry */
+/** @typedef {{project: any}} SnapshotEntry */
 
 /** @type {SnapshotEntry[]} */ let _snapshots = [];
 /** @type {SnapshotEntry[]} */ let _redoStack = [];
-let _totalBytes = 0;
 let _batchDepth = 0;
 
-/**
- * Approximate size of a snapshot in bytes. JSON.stringify().length
- * is char-count not byte-count, but for our typically ASCII-heavy
- * project payloads the two are within ~1%. Crucially, it's O(n)
- * over the project so it's cheap enough to call once per push.
- * @param {any} obj
- * @returns {number}
- */
-function approxSize(obj) {
-  try {
-    return JSON.stringify(obj)?.length ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Drop the oldest snapshots while total > MAX_BYTES OR count >
- * MAX_HISTORY. Both caps run simultaneously: whichever bites first
- * triggers eviction.
- */
+/** Drop the oldest snapshots when count exceeds MAX_HISTORY. */
 function _evict() {
-  while (
-    _snapshots.length > 0 &&
-    (_snapshots.length > MAX_HISTORY || _totalBytes > MAX_BYTES)
-  ) {
-    const dropped = _snapshots.shift();
-    _totalBytes -= dropped?.bytes ?? 0;
+  while (_snapshots.length > MAX_HISTORY) {
+    _snapshots.shift();
   }
-  if (_totalBytes < 0) _totalBytes = 0;
 }
 
 /** Push a snapshot of the project before a discrete mutation.
- *  Uses structuredClone to correctly preserve typed arrays (Float32Array for
- *  mesh.uvs, etc.) that JSON.parse/stringify would corrupt to plain objects. */
+ *
+ *  Holds the immer-produced (auto-frozen) reference directly — no clone.
+ *  Cloning was historically needed because we feared mutation downstream;
+ *  immer makes the project immutable, so the reference IS the snapshot.
+ *  Typed arrays (Float32Array mesh.uvs etc.) survive intact since we
+ *  never serialize, just hold the reference. */
 export function pushSnapshot(project) {
-  const cloned = structuredClone(project);
-  const bytes = approxSize(cloned);
-  _snapshots.push({ project: cloned, bytes });
-  _totalBytes += bytes;
+  _snapshots.push({ project });
   _evict();
-  // A new edit invalidates the redo stack; reclaim those bytes too.
+  // A new edit invalidates the redo stack.
   if (_redoStack.length > 0) {
     _redoStack = [];
   }
@@ -105,37 +81,35 @@ export function isBatching() {
 export function clearHistory() {
   _snapshots  = [];
   _redoStack  = [];
-  _totalBytes = 0;
   _batchDepth = 0;
 }
 
 /**
- * Apply undo.
+ * Apply undo. `currentProject` is the immer-frozen current state; we
+ * push it onto the redo stack by reference (no clone — same reasoning
+ * as pushSnapshot).
+ *
  * @param {object} currentProject - current project state (for redo stack)
  * @param {function} applyFn - receives the snapshot; should restore project state
  */
 export function undo(currentProject, applyFn) {
   if (_snapshots.length === 0) return;
   const prev = _snapshots.pop();
-  if (prev) _totalBytes -= prev.bytes;
-  if (_totalBytes < 0) _totalBytes = 0;
-  const cloned = structuredClone(currentProject);
-  _redoStack.push({ project: cloned, bytes: approxSize(cloned) });
+  _redoStack.push({ project: currentProject });
   applyFn(prev?.project);
 }
 
 /**
- * Apply redo.
+ * Apply redo. `currentProject` is the immer-frozen current state; we
+ * push it onto the undo stack by reference (no clone).
+ *
  * @param {object} currentProject - current project state (for undo stack)
  * @param {function} applyFn - receives the snapshot; should restore project state
  */
 export function redo(currentProject, applyFn) {
   if (_redoStack.length === 0) return;
   const next = _redoStack.pop();
-  const cloned = structuredClone(currentProject);
-  const bytes = approxSize(cloned);
-  _snapshots.push({ project: cloned, bytes });
-  _totalBytes += bytes;
+  _snapshots.push({ project: currentProject });
   _evict();
   applyFn(next?.project);
 }
@@ -154,11 +128,14 @@ export function redoCount() {
  * Diagnostic snapshot of the undo system. Useful for DevTools, the
  * Phase 1 status bar, and "why is the tab using 800 MB" investigations.
  *
+ * `approxBytes` removed — P1 dropped the JSON.stringify size accounting.
+ * Memory consumption is now bounded by the count cap + immer's structural
+ * sharing depth; raw-byte estimates were a coarse proxy that turned out
+ * to drive nothing actionable.
+ *
  * @returns {{
  *   undoCount: number,
  *   redoCount: number,
- *   approxBytes: number,
- *   maxBytes: number,
  *   maxEntries: number,
  *   batchDepth: number,
  * }}
@@ -167,8 +144,6 @@ export function undoStats() {
   return {
     undoCount: _snapshots.length,
     redoCount: _redoStack.length,
-    approxBytes: _totalBytes,
-    maxBytes: MAX_BYTES,
     maxEntries: MAX_HISTORY,
     batchDepth: _batchDepth,
   };

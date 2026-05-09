@@ -91,7 +91,6 @@ function reset() {
   clearHistory();
   assert(undoCount() === 0, 'clearHistory: undoCount = 0');
   assert(redoCount() === 0, 'clearHistory: redoCount = 0');
-  assert(undoStats().approxBytes === 0, 'clearHistory: bytes = 0');
 }
 
 // ── undoStats returns sane values ──────────────────────────────────
@@ -101,32 +100,12 @@ function reset() {
   const s0 = undoStats();
   assert(s0.undoCount === 0, 'stats: empty undoCount');
   assert(s0.redoCount === 0, 'stats: empty redoCount');
-  assert(s0.approxBytes === 0, 'stats: empty bytes');
-  assert(s0.maxBytes > 0, 'stats: maxBytes set');
   assert(s0.maxEntries > 0, 'stats: maxEntries set');
 
-  // After a push, bytes should grow
+  // After a push, undoCount should grow
   pushSnapshot({ x: 'a'.repeat(1000) });
   const s1 = undoStats();
   assert(s1.undoCount === 1, 'stats: undoCount tracks pushes');
-  assert(s1.approxBytes > 0, 'stats: bytes grow with push');
-  assert(s1.approxBytes >= 1000, 'stats: bytes ≥ payload size');
-}
-
-// ── Byte budget evicts oldest first ────────────────────────────────
-
-{
-  reset();
-  // Push payloads totaling more than the cap. We don't know the cap
-  // exactly without importing it, but we can detect eviction by
-  // seeing the count drop below what we pushed.
-  const big = { x: 'a'.repeat(5_000_000) }; // ~5 MB per snapshot
-  for (let i = 0; i < 20; i++) pushSnapshot({ ...big, i });
-
-  const s = undoStats();
-  // 20 × 5 MB = 100 MB > 50 MB cap → at least half should be evicted
-  assert(s.approxBytes <= s.maxBytes, 'byte budget: total <= cap');
-  assert(s.undoCount < 20, 'byte budget: count below pushes (eviction kicked in)');
 }
 
 // ── Count cap (MAX_HISTORY = 50) ───────────────────────────────────
@@ -138,21 +117,27 @@ function reset() {
   assert(undoCount() <= 50, 'count cap: <= MAX_HISTORY');
 }
 
-// ── Snapshots are deep-cloned (mutating original doesn't leak) ─────
+// ── Snapshot reference contract (P1 — immer-frozen states) ─────────
+
+// P1 contract: pushSnapshot holds the immer-frozen reference; production
+// code always passes an auto-frozen `state.project`. With a frozen
+// snapshot, downstream mutation cannot leak (it throws or silently
+// fails). Test fixtures emulate that by passing plain objects we
+// promise not to mutate after push.
 
 {
   reset();
-  const proj = { v: 0, nested: { count: 1 } };
+  const proj = Object.freeze({ v: 0, nested: Object.freeze({ count: 1 }) });
   pushSnapshot(proj);
-
-  // Mutate the original; the snapshot should be unaffected
-  proj.v = 999;
-  proj.nested.count = 999;
 
   let captured = null;
   undo({ v: 'new' }, (snap) => { captured = snap; });
-  assert(captured.v === 0, 'snapshot deep-cloned: top-level field');
-  assert(captured.nested.count === 1, 'snapshot deep-cloned: nested field');
+  // The snapshot is the same reference we pushed.
+  assert(captured === proj, 'snapshot held by reference (P1)');
+  // The frozen guarantees no leak from outside; the reference still
+  // shows the values we expect.
+  assert(captured.v === 0, 'snapshot value: top-level');
+  assert(captured.nested.count === 1, 'snapshot value: nested');
 }
 
 console.log(`undoHistory: ${passed} passed, ${failed} failed`);
