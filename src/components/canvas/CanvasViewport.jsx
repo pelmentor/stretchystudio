@@ -1463,6 +1463,16 @@ export default function CanvasViewport({
           }
         }
       });
+
+      // M7a — drop the imageDataMapRef entry now that this part has a
+      // triangulated mesh. hitTest.js prioritises the triangle path
+      // ([line 188](../../io/hitTest.js#L188)) over the alpha-sample
+      // path; once mesh exists, the imageData entry is dead weight
+      // memory (~64 MB per 4K-canvas part). The wizard reorder/adjust
+      // step still uses the entry for parts that haven't been meshed
+      // yet — those entries persist until their part also gets
+      // auto-meshed (at wizard finalize → autoMeshAllParts).
+      imageDataMapRef.current.delete(partId);
     }).catch((err) => {
       console.error('[MeshWorker]', err);
     });
