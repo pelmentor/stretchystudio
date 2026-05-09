@@ -215,6 +215,7 @@ function buildSectionData(input) {
     meshParts, groups, rigSpec,
     bakedKeyformAngles,
     backdropTagsSet: BACKDROP_TAGS_SET_MOC3,
+    project,
   });
 
 

@@ -52,10 +52,27 @@ function setupChain() {
         },
         {
           id: 'p-shirt', type: 'part', parent: 'b-torso',
-          mesh: { vertices: [
-            { x: 600, y: 800, restX: 600, restY: 800 },
-            { x: 600, y: 700, restX: 600, restY: 700 },
-          ] },
+          // Cubism Adapter post-Phase-2 (2026-05-09): only parts with
+          // an active Armature modifier visually follow the bone via
+          // the LBS overlay (`CanvasViewport.jsx:817-834`); parts
+          // without a modifier render at chainEval canvas-px verbatim
+          // and the bone pose doesn't move them. So `applyPoseAsRest`
+          // only rebases mesh.vertices for armature-modifier parts.
+          // The shirt-under-torso fixture must carry the modifier to
+          // exercise the bake path.
+          mesh: {
+            vertices: [
+              { x: 600, y: 800, restX: 600, restY: 800 },
+              { x: 600, y: 700, restX: 600, restY: 700 },
+            ],
+            jointBoneId: 'b-torso',
+            boneWeights: [1, 1],
+          },
+          modifiers: [
+            { type: 'armature', deformerId: 'b-torso', enabled: true, mode: 3,
+              data: { jointBoneId: 'b-torso', jointBoneRole: 'torso',
+                      parentBoneId: null, parentBoneRole: null } },
+          ],
         },
       ],
       animations: [], parameters: [], physics_groups: [],

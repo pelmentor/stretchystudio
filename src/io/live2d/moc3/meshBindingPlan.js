@@ -47,6 +47,7 @@
 import { variantParamId } from '../../psdOrganizer.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { sanitisePartName } from '../../../lib/partId.js';
+import { extractMeshExportStruct, indexProjectNodesById } from '../extractMeshExportStruct.js';
 
 /**
  * @typedef {Object} MeshBindingPlanEntry
@@ -63,6 +64,11 @@ import { sanitisePartName } from '../../../lib/partId.js';
  * @param {*} opts.rigSpec
  * @param {number[]} opts.bakedKeyformAngles
  * @param {Set<string>} opts.backdropTagsSet
+ * @param {object} [opts.project]
+ *   The full project (for `extractMeshExportStruct` — needs `byId` index
+ *   to resolve the part's structural-parent bone for the rigid-intent
+ *   guard). When omitted, the bone-baked branch reads `mesh.boneWeights`
+ *   raw — used only by tests that don't carry a project.
  * @returns {{
  *   meshBindingPlan: MeshBindingPlanEntry[],
  *   meshKeyformBeginIndex: number[],
@@ -71,7 +77,15 @@ import { sanitisePartName } from '../../../lib/partId.js';
  * }}
  */
 export function buildMeshBindingPlan(opts) {
-  const { meshParts, groups, rigSpec, bakedKeyformAngles, backdropTagsSet } = opts;
+  const { meshParts, groups, rigSpec, bakedKeyformAngles, backdropTagsSet, project } = opts;
+  // Cubism Adapter strip — same chokepoint cmo3 already uses in
+  // exporter.js. Without this, rigid-intent parts (all-1.0 weights to
+  // structural-parent bone, seeded by `seedDefaultRigidWeights`) hit
+  // the bone-baked branch below, emit 5 keyforms on a `ParamRotation_*`
+  // that may not exist in `project.parameters`, and `keyformBindings.js`
+  // silently drops the orphan binding leaving 5 unbound art-mesh
+  // keyforms in band 0 — the broken-moc3 leak observed 2026-05-09.
+  const byId = project ? indexProjectNodesById(project) : null;
 
   // Build base.partId → [variantSuffix] map for the base-fade-out branch.
   /** @type {Map<string, string[]>} */
@@ -89,8 +103,20 @@ export function buildMeshBindingPlan(opts) {
   /** @type {MeshBindingPlanEntry[]} */
   const meshBindingPlan = meshParts.map(part => {
     const mesh = part.mesh;
-    const boneWeights = mesh?.boneWeights ?? null;
-    const jointBoneId = mesh?.jointBoneId ?? null;
+    // Route through the Cubism Adapter strip when project is available
+    // (production path). The strip returns null/null for rigid-intent
+    // parts, so they fall through to the default 1-keyform/ParamOpacity
+    // branch — same shape cmo3's `extractMeshExportStruct` produces.
+    let boneWeights, jointBoneId;
+    if (byId) {
+      const vertCount = Array.isArray(mesh?.vertices) ? mesh.vertices.length : 0;
+      const stripped = extractMeshExportStruct(mesh, part, byId, vertCount);
+      boneWeights = stripped.boneWeights;
+      jointBoneId = stripped.jointBoneId;
+    } else {
+      boneWeights = mesh?.boneWeights ?? null;
+      jointBoneId = mesh?.jointBoneId ?? null;
+    }
     if (boneWeights && jointBoneId) {
       // Bone-baked keyforms.
       const boneGroup = groups.find(g => g.id === jointBoneId);

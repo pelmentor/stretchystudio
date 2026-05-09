@@ -85,59 +85,89 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
   useParamValuesStore.setState({ values: {} });
 }
 
-// ── Test 1: applyPoseAsRest bakes keyforms — chainEval would emit posed ─
+// ── Test 1: applyPoseAsRest rebases mesh.vertices + clears runtime ─
+// 2026-05-09 contract change: applyPoseAsRest no longer mutates
+// `mesh.runtime.keyforms` in place. Step 1 rebases `mesh.vertices` by
+// the bone's world matrix; Step 1b drops the runtime cache so
+// `selectRigSpec` regenerates a single rest keyform from the new
+// `mesh.vertices` on the next chainEval pass — same approach Apply
+// Modifier uses, no frame-translation guesswork.
 
 {
   setupBoneBakedHandwear({ poseDeg: 90 });
-  // Snapshot the keyform's pre-bake vertex.
-  const beforeKf = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  assert(beforeKf[0] === 100 && beforeKf[1] === 0, 'Test 1: pre-bake keyform at (100,0)');
-  // Before bake, we render via the Armature modifier (or worldMatrix
-  // overlay) which rotates (100,0) by 90° around (0,0) → (0, 100).
+  const before = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l');
+  assert(before.mesh.vertices[0].x === 100 && before.mesh.vertices[0].y === 0,
+    'Test 1: pre-bake mesh.vertices[0] at (100, 0)');
+  assert(before.mesh.runtime !== undefined, 'Test 1: pre-bake runtime present');
+  // Before bake the visual is at (0, 100) (LBS via Armature modifier
+  // composing 90° around bone pivot 0,0 → (100,0) → (0, 100)).
   useProjectStore.getState().applyPoseAsRest();
-  // Post-bake: bone pose zeroed; keyform must now encode the posed
-  // position so chainEval reproduces (0, 100) at param=0 +
-  // T(pivot=0,0).
-  const afterKf = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  assert(approx(afterKf[0], 0), `Test 1: post-bake keyform.x ≈ 0 (got ${afterKf[0]})`);
-  assert(approx(afterKf[1], 100), `Test 1: post-bake keyform.y ≈ 100 (got ${afterKf[1]})`);
+  const after = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l');
+  // Step 1 rebased mesh.vertices to absorb the bone pose.
+  assert(approx(after.mesh.vertices[0].x, 0),
+    `Test 1: post-bake mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
+  assert(approx(after.mesh.vertices[0].y, 100),
+    `Test 1: post-bake mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
+  // Step 1b cleared runtime cache.
+  assert(after.mesh.runtime === undefined,
+    'Test 1: post-bake runtime cleared (chainEval falls back to mesh.vertices)');
 }
 
-// ── Test 2: applyArmatureModifier ALSO bakes the keyforms ─────────────
+// ── Test 2: applyArmatureModifier clears mesh.runtime and bakes verts ──
+// 2026-05-09 contract change: applyArmatureModifier no longer mutates
+// `mesh.runtime.keyforms` in place (the prior linear-only bake had a
+// frame bug for parts whose parent deformer pivot didn't coincide
+// with the joint bone pivot — handwear under non-limb parents snapped
+// to the wrong position). New contract mirrors Blender's
+// `modifier_apply_obdata`: bake `mesh.vertices` from the LBS output,
+// remove the modifier entry, drop the runtime cache. `selectRigSpec`'s
+// pre-rig fallback regenerates a single rest keyform from the new
+// `mesh.vertices` on the next chainEval pass.
 
 {
   setupBoneBakedHandwear({ poseDeg: 90 });
   applyArmatureModifier('handwear-l');
-  const afterKf = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  assert(approx(afterKf[0], 0), `Test 2: keyform.x ≈ 0 (got ${afterKf[0]})`);
-  assert(approx(afterKf[1], 100), `Test 2: keyform.y ≈ 100 (got ${afterKf[1]})`);
+  const after = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l');
+  // mesh.vertices baked: (100, 0) rotated 90° around leftArm pivot → (0, 100)
+  assert(approx(after.mesh.vertices[0].x, 0),
+    `Test 2: post-Apply mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
+  assert(approx(after.mesh.vertices[0].y, 100),
+    `Test 2: post-Apply mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
+  // runtime cache cleared so chainEval falls back to mesh.vertices
+  // (Blender-parity Apply behaviour).
+  assert(after.mesh.runtime === undefined,
+    'Test 2: post-Apply mesh.runtime cleared (no stale bone-baked cache)');
+  // Modifier removed.
+  assert(!after.modifiers || !after.modifiers.find((m) => m?.type === 'armature'),
+    'Test 2: post-Apply Armature modifier removed');
 }
 
 // ── Test 3: Apply Modifier → Apply Pose As Rest produces no double-bake ─
 
 {
-  // Apply Modifier removes the armature entry from node.modifiers and
-  // bakes the keyform. applyPoseAsRest must NOT re-bake the keyform on
-  // this part — it gates on the modifier's presence. Discriminator: a
-  // bone-rigged part without an active armature modifier has been
-  // Applied (or is unrigged); either way, keyforms are already final.
+  // Apply Modifier removes the armature entry from node.modifiers,
+  // bakes mesh.vertices, and clears runtime. applyPoseAsRest then
+  // walks the bones and zeroes their pose; with the modifier gone +
+  // runtime cleared there's nothing to re-bake. mesh.vertices stays
+  // at the post-Apply baked position.
   setupBoneBakedHandwear({ poseDeg: 90 });
   applyArmatureModifier('handwear-l');
-  // Pre-applyPoseAsRest snapshot: keyform should now be (0, 100).
-  const midKf = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  assert(approx(midKf[0], 0) && approx(midKf[1], 100),
-    `Test 3: post-Apply keyform = (${midKf[0]}, ${midKf[1]}); expected (0, 100)`);
+  const midVerts = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices;
+  assert(approx(midVerts[0].x, 0) && approx(midVerts[0].y, 100),
+    `Test 3: post-Apply mesh.vertices[0] ≈ (0, 100); got (${midVerts[0].x}, ${midVerts[0].y})`);
   useProjectStore.getState().applyPoseAsRest();
-  const afterKf = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  // After Apply→Apply Pose As Rest, keyform must still be (0, 100) —
-  // applyPoseAsRest skipped the bake because no armature modifier.
-  assert(approx(afterKf[0], 0), `Test 3: post-Apply+PoseAsRest keyform.x ≈ 0 (got ${afterKf[0]})`);
-  assert(approx(afterKf[1], 100), `Test 3: post-Apply+PoseAsRest keyform.y ≈ 100 (got ${afterKf[1]})`);
+  const after = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l');
+  assert(approx(after.mesh.vertices[0].x, 0),
+    `Test 3: post-Apply+PoseAsRest mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
+  assert(approx(after.mesh.vertices[0].y, 100),
+    `Test 3: post-Apply+PoseAsRest mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
+  assert(after.mesh.runtime === undefined,
+    'Test 3: runtime stays cleared through applyPoseAsRest');
   // Bones zeroed.
   const leftArm = useProjectStore.getState().project.nodes.find((n) => n.id === 'leftArm');
   assert(leftArm.pose.rotation === 0, 'Test 3: leftArm.pose.rotation zeroed by applyPoseAsRest');
@@ -175,25 +205,31 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
   assert(after.mesh.runtime === undefined, 'Test 4: applyPoseAsRest does not invent runtime block');
 }
 
-// ── Test 5: keyform with multiple verts is rotated as a rigid block ──
+// ── Test 5: rebase rotates multi-vert mesh.vertices as a rigid block ──
 
 {
   setupBoneBakedHandwear({ poseDeg: 90 });
-  // Replace single-vert keyform with a 3-vert one.
+  // Replace single-vert mesh with a 3-vert one (mesh.vertices, not the
+  // runtime cache — that gets dropped by Step 1b regardless).
   useProjectStore.getState().updateProject((p) => {
     const part = p.nodes.find((n) => n.id === 'handwear-l');
-    part.mesh.runtime.keyforms[0].vertexPositions = new Float32Array([
-      100, 0,    // (100, 0) → (0, 100)
-      0, 100,    // (0, 100) → (-100, 0)
-      50, 50,    // (50, 50) → (-50, 50)
-    ]);
+    part.mesh.vertices = [
+      { x: 100, y: 0 },    // → (0, 100)
+      { x: 0, y: 100 },    // → (-100, 0)
+      { x: 50, y: 50 },    // → (-50, 50)
+    ];
+    // Match boneWeights length so seedAllRig-style guards stay sane.
+    part.mesh.boneWeights = [1, 1, 1];
   });
   useProjectStore.getState().applyPoseAsRest();
-  const vp = useProjectStore.getState().project.nodes
-    .find((n) => n.id === 'handwear-l').mesh.runtime.keyforms[0].vertexPositions;
-  assert(approx(vp[0], 0)   && approx(vp[1], 100), `Test 5: v0 (100,0) → (0,100)`);
-  assert(approx(vp[2], -100) && approx(vp[3], 0),  `Test 5: v1 (0,100) → (-100,0)`);
-  assert(approx(vp[4], -50) && approx(vp[5], 50),  `Test 5: v2 (50,50) → (-50,50)`);
+  const verts = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices;
+  assert(approx(verts[0].x, 0)    && approx(verts[0].y, 100),
+    `Test 5: v0 (100,0) → (${verts[0].x}, ${verts[0].y}); expected (0, 100)`);
+  assert(approx(verts[1].x, -100) && approx(verts[1].y, 0),
+    `Test 5: v1 (0,100) → (${verts[1].x}, ${verts[1].y}); expected (-100, 0)`);
+  assert(approx(verts[2].x, -50)  && approx(verts[2].y, 50),
+    `Test 5: v2 (50,50) → (${verts[2].x}, ${verts[2].y}); expected (-50, 50)`);
 }
 
 console.log(`\nkeyformPoseBake: ${passed} passed, ${failed} failed`);
