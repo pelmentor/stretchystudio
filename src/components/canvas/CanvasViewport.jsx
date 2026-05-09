@@ -686,8 +686,30 @@ export default function CanvasViewport({
           // the values map; bone visual handle stays at its authored
           // pose, which is the right thing for runtime physics (it's
           // not user authoring).
-          useParamValuesStore.getState().setMany(updates, { skipBoneMirror: true });
-          isDirtyRef.current = true;
+          //
+          // Filter out keys whose value is bit-identical to (or sub-
+          // perceptibly close to) the current store value. Without this
+          // gate, every breath/blink/look/physics tick fanned out a
+          // setMany even when no value actually changed (e.g. when
+          // breath sat at peak with dt < 1ms, or when the user paused
+          // the live preview). The eval cache below also keys on the
+          // valuesForEval object identity, so unconditional setMany
+          // forced a fresh object every frame and made the cache hit
+          // path unreachable.
+          const PARAM_DELTA_EPSILON = 1e-4;
+          const realUpdates = {};
+          let realCount = 0;
+          for (const k of Object.keys(updates)) {
+            const prev = paramValuesRef.current[k] ?? 0;
+            if (Math.abs(updates[k] - prev) > PARAM_DELTA_EPSILON) {
+              realUpdates[k] = updates[k];
+              realCount++;
+            }
+          }
+          if (realCount > 0) {
+            useParamValuesStore.getState().setMany(realUpdates, { skipBoneMirror: true });
+            isDirtyRef.current = true;
+          }
         }
       } else {
         // Edit mode — reset physics state + clock so a future toggle
@@ -833,17 +855,20 @@ export default function CanvasViewport({
           const boneParents = computeBoneParentMap(projectRef.current.nodes);
           // Per-part overlay matrix map for the rigid-follow path
           // (parts with NO vertex groups + NO Armature modifier whose
-          // nearest ancestor is a bone group). Reinstated 2026-05-09
-          // afternoon when the Cubism Adapter pattern was reverted
-          // toward Blender parity. The map only contains entries for
-          // parts whose nearest bone has non-identity pose; identity-
-          // pose bones produce no map entry, so the overlay branch
-          // is naturally a no-op for un-posed bones.
-          const boneOverlay = computeBoneOverlayMatrices(projectRef.current.nodes);
+          // nearest ancestor is a bone group). Reuses the boneWorld
+          // map computed above instead of rebuilding it (which is what
+          // the bare `computeBoneOverlayMatrices(nodes)` form does).
+          const boneOverlay = computeBoneOverlayMatrices(projectRef.current.nodes, boneWorld);
+          // Map of nodes by id, used for the per-frame `node` lookup
+          // below. Replaces a `projectRef.current.nodes.find(...)` per
+          // art mesh per frame (~10k linear comparisons on a 100-part
+          // rig); single Map.get is O(1).
+          const nodesById = new Map();
+          for (const _n of projectRef.current.nodes) nodesById.set(_n.id, _n);
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) continue;
-            const node = projectRef.current.nodes.find(n => n.id === f.id);
+            const node = nodesById.get(f.id);
             if (!getMesh(node, projectRef.current)) {
               // Phase -1D: log once per missing partId in dev so the
               // crisis class (frame.id ≠ any node.id) stops being

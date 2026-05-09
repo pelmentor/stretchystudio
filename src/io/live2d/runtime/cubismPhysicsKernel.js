@@ -427,14 +427,19 @@ function initializeParticles(rig) {
 
 /**
  * @typedef {Object} KernelState
- * @property {object} rig                       — flat Cubism-shape rig
+ * @property {object} rig                       - flat Cubism-shape rig
  * @property {Map<string, number>} ruleIdToSettingIndex
  * @property {Array<{outputs: number[]}>} currentRigOutputs
  * @property {Array<{outputs: number[]}>} previousRigOutputs
- * @property {number} currentRemainTime         — accumulator from last evaluate
+ * @property {number} currentRemainTime         - accumulator from last evaluate
  * @property {Float32Array|null} parameterCaches
  * @property {Float32Array|null} parameterInputCaches
- * @property {string[]} paramIds                — stable index order
+ * @property {Float32Array|null} [parameterValues]
+ * @property {Float32Array|null} [parameterMinimumValues]
+ * @property {Float32Array|null} [parameterMaximumValues]
+ * @property {Float32Array|null} [parameterDefaultValues]
+ * @property {Map<string,{min:number,max:number,default:number}>|null} [lastParamSpecsRef]
+ * @property {string[]} paramIds                - stable index order
  * @property {{gravity:{x:number,y:number}, wind:{x:number,y:number}}} options
  */
 
@@ -503,18 +508,37 @@ export function kernelTick(state, paramValues, paramSpecs, dtSeconds) {
 
   // 2. Materialise per-tick float arrays from paramValues + paramSpecs.
   //    These mirror Cubism's parameterValues / parameterMaximumValues / etc.
-  const parameterValues = new Float32Array(N);
-  const parameterMinimumValues = new Float32Array(N);
-  const parameterMaximumValues = new Float32Array(N);
-  const parameterDefaultValues = new Float32Array(N);
+  //    Buffers live on `state` so we don't allocate four Float32Arrays
+  //    per tick; min/max/default are rebuilt only when paramSpecs
+  //    identity flips (typically once per Init Rig), parameterValues
+  //    is overwritten in-place every tick.
+  if (!state.parameterValues || state.parameterValues.length !== N) {
+    state.parameterValues = new Float32Array(N);
+    state.parameterMinimumValues = new Float32Array(N);
+    state.parameterMaximumValues = new Float32Array(N);
+    state.parameterDefaultValues = new Float32Array(N);
+    state.lastParamSpecsRef = null;
+  }
+  if (state.lastParamSpecsRef !== paramSpecs) {
+    for (let i = 0; i < N; i++) {
+      const id = state.paramIds[i];
+      const spec = paramSpecs.get(id) ?? { min: -1, max: 1, default: 0 };
+      state.parameterMinimumValues[i] = spec.min;
+      state.parameterMaximumValues[i] = spec.max;
+      state.parameterDefaultValues[i] = spec.default;
+    }
+    state.lastParamSpecsRef = paramSpecs;
+  }
+  const parameterValues = state.parameterValues;
+  const parameterMinimumValues = state.parameterMinimumValues;
+  const parameterMaximumValues = state.parameterMaximumValues;
+  const parameterDefaultValues = state.parameterDefaultValues;
   for (let i = 0; i < N; i++) {
     const id = state.paramIds[i];
-    const spec = paramSpecs.get(id) ?? { min: -1, max: 1, default: 0 };
     const raw = paramValues[id];
-    parameterValues[i] = (typeof raw === 'number' && Number.isFinite(raw)) ? raw : (spec.default ?? 0);
-    parameterMinimumValues[i] = spec.min;
-    parameterMaximumValues[i] = spec.max;
-    parameterDefaultValues[i] = spec.default;
+    parameterValues[i] = (typeof raw === 'number' && Number.isFinite(raw))
+      ? raw
+      : parameterDefaultValues[i];
   }
 
   // Lazy-init param caches.

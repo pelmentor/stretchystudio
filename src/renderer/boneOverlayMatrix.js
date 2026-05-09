@@ -180,16 +180,21 @@ export function computeBoneParentMap(nodes) {
  * weights, no modifier, but has bone-group ancestor).
  *
  * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string, name?:string, transform?:any, pose?:any, mesh?:any}>} nodes
+ * @param {Map<string, Float32Array>} [precomputedBoneWorld] - optional
+ *   pre-computed bone-world map (from `computeBoneWorldMatrices(nodes)`).
+ *   The CanvasViewport rAF tick already calls that function directly,
+ *   so passing the result back in avoids a second walk + a second
+ *   `byId` Map allocation per frame.
  * @returns {Map<string, Float32Array>} partId → bone world matrix (only
  *          for parts whose nearest bone ancestor has non-identity pose)
  */
-export function computeBoneOverlayMatrices(nodes) {
+export function computeBoneOverlayMatrices(nodes, precomputedBoneWorld) {
   /** @type {Map<string, Float32Array>} */
   const out = new Map();
   if (!Array.isArray(nodes) || nodes.length === 0) return out;
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
-  const boneWorld = computeBoneWorldMatrices(nodes);
+  const boneWorld = precomputedBoneWorld ?? computeBoneWorldMatrices(nodes);
   /** @type {Set<string>} */
   const boneIsIdentity = new Set();
   for (const [boneId, m] of boneWorld) {
