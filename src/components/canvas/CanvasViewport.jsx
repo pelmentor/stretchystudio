@@ -679,11 +679,14 @@ export default function CanvasViewport({
               }
             }
           }
-          valuesForEval = working;
+          // R12: `valuesForEval` is no longer assigned here — it's
+          // always `paramValuesRef.current` after the R1 epsilon
+          // filter advances the ref below. `working` was a fresh
+          // object every frame and made the eval cache (line 802
+          // identity check) unreachable in livePreview.
         } else {
-          // No physics rules — just merge the breath/look updates into
-          // the eval snapshot for this frame.
-          valuesForEval = { ...paramValuesRef.current, ...updates };
+          // No physics rules path. Same R12 invariant — no
+          // `valuesForEval` assignment here either.
           physicsRigSpecRef.current = null;
           physicsStateRef.current = null;
         }
@@ -720,9 +723,22 @@ export default function CanvasViewport({
           }
           if (realCount > 0) {
             useParamValuesStore.getState().setMany(realUpdates, { skipBoneMirror: true });
+            // R12: advance the ref synchronously to match the
+            // just-written store state. React's re-render commit
+            // hasn't fired yet within this rAF tick, so the existing
+            // ref-update path lags by one frame; the eval cache fill
+            // below stores `paramValues: paramValuesRef.current` and
+            // needs the ref to point at the post-setMany values for
+            // the next idle frame's identity check to hit.
+            paramValuesRef.current = useParamValuesStore.getState().values;
             isDirtyRef.current = true;
           }
         }
+        // R12: `valuesForEval` is always `paramValuesRef.current`
+        // (post-setMany on real-change frames, unchanged on idle
+        // frames). The eval cache below (line ~802) keys on this
+        // identity, so idle frames hit the cache and skip evalRig.
+        valuesForEval = paramValuesRef.current;
       } else {
         // Edit mode — reset physics state + clock so a future toggle
         // back to live preview starts clean (no accumulated dt jump).
