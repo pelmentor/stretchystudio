@@ -21,6 +21,12 @@ import {
 } from '@/io/live2d/runtime/physicsTick';
 import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
 import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
+// Phase 0.B of Animation Blender-Parity Plan (2026-05-09) — driver pass.
+// `evaluateProjectDrivers` walks every `param.driver` (and future
+// `node.transformDrivers`) and returns a Map<rnaPath, value>. Phase 0
+// scope: only param drivers reach the eval substrate; transform-driver
+// wiring lands with the depgraph default-flip in Phase 0.D.0.
+import { evaluateProjectDrivers, driverOverridesToParamMap } from '@/anim/driverPass';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -572,6 +578,44 @@ export default function CanvasViewport({
               isDirtyRef.current = true;
             }
           }
+        }
+      }
+
+      // Phase 0.B of Animation Blender-Parity Plan (2026-05-09) —
+      // project-wide driver pass. Walks every `project.parameters[i].driver`
+      // (and reserved-for-Phase-1 `node.transformDrivers[<field>]`) and
+      // computes their values from `valuesForEval`. Driver outputs override
+      // both slider state AND animation keyframes — drivers are the most
+      // explicit user authoring. Cheap when there are no drivers
+      // (collectDrivers returns []).
+      //
+      // Phase 0 scope: only param drivers reach the eval substrate. The
+      // returned map is projected to `paramId → value` via
+      // `driverOverridesToParamMap` and merged into `valuesForEval`.
+      // Transform drivers (which would mutate `node.transform.<field>`
+      // per-frame) are deferred to the depgraph default-flip (Phase 0.D.0)
+      // because the classic engine's per-tick `proj.nodes` reads happen in
+      // multiple call sites; centralised eval-graph wiring is cleaner than
+      // shotgunning every consumer.
+      const _projForDrivers = projectRef.current;
+      const _driverOverrides = evaluateProjectDrivers(_projForDrivers, {
+        project: _projForDrivers,
+        currentValues: valuesForEval,
+      });
+      if (_driverOverrides.size > 0) {
+        const _paramDriverMap = driverOverridesToParamMap(_driverOverrides);
+        const _driverParamIds = Object.keys(_paramDriverMap);
+        if (_driverParamIds.length > 0) {
+          const _merged = { ...valuesForEval };
+          for (const pid of _driverParamIds) {
+            _merged[pid] = _paramDriverMap[pid];
+          }
+          valuesForEval = _merged;
+          // Mirror to paramValuesStore so the ParametersEditor sliders
+          // visualise driver-driven values (parity with animation
+          // playback's slider mirror above; same `skipBoneMirror` rule).
+          useParamValuesStore.getState().setMany(_paramDriverMap, { skipBoneMirror: true });
+          isDirtyRef.current = true;
         }
       }
 
