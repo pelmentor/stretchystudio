@@ -65,6 +65,12 @@ const ModalTransformOverlay = lazy(() =>
 const PsdImportWizard = lazy(() =>
   import('./PsdImportWizard.jsx').then((m) => ({ default: m.PsdImportWizard }))
 );
+// Phase A2 PWA — service-worker registrar with an opt-in update toast.
+// Lazy so the SW glue stays out of the boot bundle (gets pulled in only
+// when an update is detected on a return visit).
+const ServiceWorkerUpdater = lazy(() =>
+  import('../../lib/swRegister.jsx').then((m) => ({ default: m.ServiceWorkerUpdater }))
+);
 
 export function AppShell() {
   useEffect(() => mountOperatorDispatcher(), []);
@@ -103,6 +109,9 @@ export function AppShell() {
               shell (above the AreaTree); the review/dwpose modals use
               `fixed inset-0` to take over the viewport. */}
           {wizardStep && <PsdImportWizard />}
+        </Suspense>
+        <Suspense fallback={null}>
+          <ServiceWorkerUpdater />
         </Suspense>
       </div>
     </ErrorBoundary>
