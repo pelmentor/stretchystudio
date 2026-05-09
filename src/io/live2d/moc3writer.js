@@ -36,7 +36,6 @@ import { buildMeshDeformerParents } from './moc3/meshDeformerParent.js';
 import { buildUvAndIndices } from './moc3/uvAndIndices.js';
 import { getMesh } from '../../store/objectDataAccess.js';
 import { serializeMoc3 } from './moc3/binarySerialize.js';
-import { extractMeshExportStruct, indexProjectNodesById } from './extractMeshExportStruct.js';
 
 
 // ---------------------------------------------------------------------------
@@ -116,27 +115,21 @@ function buildSectionData(input) {
   // ParamOpacity and breaking cursor tracking / blink / variant fades.
   //
   // paramSpec expects mesh-shaped objects with bone/variant fields hoisted
-  // to the top level (matching cmo3writer's pre-mapped meshes). The
-  // jointBoneId/boneWeights fields are routed through the Cubism Adapter
-  // strip (`extractMeshExportStruct`) FIRST — same chokepoint cmo3 uses.
-  // Without this strip, every rigid-intent face/torso part contributes
-  // its `jointBoneId` to paramSpec's bone-rotation-param generator and
-  // emits a useless `ParamRotation_<face>`/`ParamRotation_<torso>`
-  // slider that drives nothing. The contamination class fixed for the
-  // cmo3 path in commit `5db54c9` was missed here — moc3 builds its
-  // own paramSpec from a separate raw-project walk.
-  const moc3WriterByIdForSpec = indexProjectNodesById(project);
-  const meshesForSpec = meshParts.map((n) => {
-    const vertCount = Array.isArray(n.mesh?.vertices) ? n.mesh.vertices.length : 0;
-    const stripped = extractMeshExportStruct(n.mesh, n, moc3WriterByIdForSpec, vertCount);
-    return {
-      tag: matchTag(n.name ?? ''),
-      variantSuffix: n.variantSuffix ?? null,
-      variantRole: n.variantRole ?? null,
-      jointBoneId: stripped.jointBoneId,
-      boneWeights: stripped.boneWeights,
-    };
-  });
+  // to the top level (matching cmo3writer's pre-mapped meshes). Post-
+  // revert (2026-05-09 afternoon — Cubism Adapter pattern reverted toward
+  // Blender parity), no rigid-intent contamination exists in
+  // `mesh.boneWeights`/`jointBoneId` — only truly skinned parts and
+  // bone-routing-intent sub-meshes carry these fields. paramSpec's
+  // bone-rotation-param generator emits a `ParamRotation_<bone>` for
+  // each unique jointBoneId; that's correct for both real-skinning and
+  // bone-routing cases.
+  const meshesForSpec = meshParts.map((n) => ({
+    tag: matchTag(n.name ?? ''),
+    variantSuffix: n.variantSuffix ?? null,
+    variantRole: n.variantRole ?? null,
+    jointBoneId: n.mesh?.jointBoneId ?? null,
+    boneWeights: n.mesh?.boneWeights ?? null,
+  }));
   const params = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshesForSpec,
@@ -229,7 +222,6 @@ function buildSectionData(input) {
     meshParts, groups, rigSpec,
     bakedKeyformAngles,
     backdropTagsSet: BACKDROP_TAGS_SET_MOC3,
-    project,
   });
 
 

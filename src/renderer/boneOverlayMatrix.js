@@ -31,7 +31,7 @@
  */
 
 import { mat3Identity, mat3Mul, makeBoneLocalMatrix } from './transforms.js';
-import { isBoneGroup } from '../store/objectDataAccess.js';
+import { isBoneGroup, isMeshedPart } from '../store/objectDataAccess.js';
 
 /** Local-matrix epsilon. Below this every component is considered
  *  zero and the matrix is treated as identity (skip multiplication). */
@@ -162,13 +162,93 @@ export function computeBoneParentMap(nodes) {
   return out;
 }
 
-// `computeBoneOverlayMatrices`, `applyOverlayMatrixFlat`, and
-// `applyOverlayMatrixObj` were the rigid-bone-follow path used by
-// CanvasViewport for parts without bone weights. Cubism Adapter Phase
-// 2 (commit `333fccc`+) collapsed the renderer to a single LBS path
-// — every meshed part with a bone-group ancestor now has weights via
-// `seedDefaultRigidWeights`, so the overlay path is unreachable.
-// Removed here; the tests for it (test_boneOverlayMatrix.mjs) are
-// retired in the same commit. Surviving exports
-// (`computeBoneWorldMatrices`, `computeBoneParentMap`) are still used
-// by the LBS path in CanvasViewport.
+/**
+ * Per-part bone overlay matrices for rigid-follow parts. Reinstated
+ * 2026-05-09 (afternoon) when the Cubism Adapter pattern was reverted
+ * back toward Blender parity (see
+ * `docs/plans/CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md`). Phase 2 of
+ * the Adapter (commit `3c08290`) had deleted these helpers under the
+ * assumption that every meshed part with a bone-group ancestor would
+ * carry vertex groups via `seedDefaultRigidWeights` — but that
+ * conflated "follows bone" with "is per-vertex skinned" (anti-Blender,
+ * source of three regression bugs in two days). The Blender-correct
+ * model has TWO separate mechanisms: vertex-groups + Armature
+ * modifier (LBS) for true skinning, and parent-chain transform for
+ * rigid follow. This module's `applyOverlayMatrixObj` IS the rigid-
+ * follow path, called from `CanvasViewport.jsx` when
+ * `pickBonePostChainComposition` returns `kind: 'overlay'` (no
+ * weights, no modifier, but has bone-group ancestor).
+ *
+ * @param {Array<{id:string, type?:string, parent?:string|null, boneRole?:string, name?:string, transform?:any, pose?:any, mesh?:any}>} nodes
+ * @returns {Map<string, Float32Array>} partId → bone world matrix (only
+ *          for parts whose nearest bone ancestor has non-identity pose)
+ */
+export function computeBoneOverlayMatrices(nodes) {
+  /** @type {Map<string, Float32Array>} */
+  const out = new Map();
+  if (!Array.isArray(nodes) || nodes.length === 0) return out;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+
+  const boneWorld = computeBoneWorldMatrices(nodes);
+  /** @type {Set<string>} */
+  const boneIsIdentity = new Set();
+  for (const [boneId, m] of boneWorld) {
+    if (isIdentityLike(m)) boneIsIdentity.add(boneId);
+  }
+
+  // For every art mesh part, find its nearest bone-group ancestor and
+  // attach that bone's overlay matrix.
+  for (const n of nodes) {
+    if (!isMeshedPart(n)) continue;
+    let cur = n.parent ? byId.get(n.parent) : null;
+    while (cur && !isBoneGroup(cur)) {
+      cur = cur.parent ? byId.get(cur.parent) : null;
+    }
+    if (!cur) continue;
+    if (boneIsIdentity.has(cur.id)) continue;
+    const m = boneWorld.get(cur.id);
+    if (m) out.set(n.id, m);
+  }
+  return out;
+}
+
+/**
+ * Apply an overlay matrix to a flat `[x0, y0, x1, y1, ...]` Float32Array
+ * in place. Caller decides whether the result is the new GPU upload or
+ * a copy. No-op when `m` is null/undefined.
+ *
+ * @param {Float32Array} positions
+ * @param {Float32Array|null|undefined} m
+ */
+export function applyOverlayMatrixFlat(positions, m) {
+  if (!m) return positions;
+  const m0 = m[0], m1 = m[1], m3 = m[3], m4 = m[4], m6 = m[6], m7 = m[7];
+  for (let i = 0; i < positions.length; i += 2) {
+    const x = positions[i];
+    const y = positions[i + 1];
+    positions[i]     = m0 * x + m3 * y + m6;
+    positions[i + 1] = m1 * x + m4 * y + m7;
+  }
+  return positions;
+}
+
+/**
+ * Object-vert variant: `[{x, y}, ...]` in place. Same math as the flat
+ * variant; matches the per-frame shape `CanvasViewport` produces just
+ * before the GPU upload pass.
+ *
+ * @param {Array<{x:number, y:number}>} verts
+ * @param {Float32Array|null|undefined} m
+ */
+export function applyOverlayMatrixObj(verts, m) {
+  if (!m) return verts;
+  const m0 = m[0], m1 = m[1], m3 = m[3], m4 = m[4], m6 = m[6], m7 = m[7];
+  for (let i = 0; i < verts.length; i++) {
+    const v = verts[i];
+    const x = v.x;
+    const y = v.y;
+    v.x = m0 * x + m3 * y + m6;
+    v.y = m1 * x + m4 * y + m7;
+  }
+  return verts;
+}

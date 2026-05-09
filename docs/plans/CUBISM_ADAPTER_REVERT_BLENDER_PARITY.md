@@ -1,9 +1,10 @@
 # Cubism Adapter Revert — Toward Blender Parity
 
-**Status:** DRAFT — pending user sign-off
+**Status:** SHIPPED 2026-05-09 (afternoon)
 **Date:** 2026-05-09 (afternoon, post arm-disappear sweep)
 **Predecessors:** `CUBISM_ADAPTER_PATTERN.md` (shipped, but architecturally wrong)
 **Drives:** `feedback_blender_reference_strict.md` ("never invent modes/datablocks/concepts. Check `reference/blender/source/blender/` first.")
+**User invoked Rule №2:** no migration baggage — dead/staged migration files deleted
 
 ---
 

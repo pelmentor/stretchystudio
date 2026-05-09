@@ -29,20 +29,9 @@ import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold
 import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
 import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js';
 import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
-// v30 — Phase 3.C strip is staged at `migrations/v30_strip_deformer_nodes.js`
-// but NOT YET registered. Activating it requires updating ~20 test fixtures
-// to add referencing parts so deformer data lives on `modifier.data` post-
-// strip. Pending dedicated session for test infrastructure refactor.
-//
-// NOTE — the migration map below skips v30 on purpose: CURRENT_SCHEMA_VERSION
-// jumps from 29 → 31. The `for (let v = fromVersion + 1; v <= CURRENT;
-// v++)` walk in `migrateProject` will look for a `MIGRATIONS[30]` entry,
-// not find one, and pass through (the same way an absent intermediate
-// migration always behaves). When Phase 3.C is ready to ship, registering
-// the v30 entry retroactively will pick it up cleanly without renumbering.
-import { migrateDefaultRigidWeights } from './migrations/v31_default_rigid_weights.js';
+import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_default_weights.js';
 
-export const CURRENT_SCHEMA_VERSION = 31;
+export const CURRENT_SCHEMA_VERSION = 32;
 
 /** Identity pose offset for a bone group. */
 function identityPose() {
@@ -469,28 +458,33 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v30 — RESERVED for BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.C (strip
-  // type:'deformer' entries from project.nodes). The migration file is
-  // staged at `migrations/v30_strip_deformer_nodes.js` but activating
-  // it requires updating ~20 test fixtures (see
-  // BLENDER_DEVIATION_FIX_3_DEFORMER_RETIREMENT.md §"Activation plan").
-  //
-  // Until Phase 3.C activates, v30 is a no-op shim — keeps the schema
-  // version space consistent with the staged migration's number, so
-  // when Phase 3.C ships, registration is a 1-line swap.
+  // v30 — no-op shim. Required by the migration walker's
+  // contiguous-version invariant.
   30: (project) => project,
 
-  // v31 — Cubism Adapter Phase 1: default rigid vertex weights for
-  // parts under bones. Every meshed part with a bone-group ancestor
-  // gets `mesh.boneWeights = [1.0, ...]` + `mesh.jointBoneId =
-  // <nearest isBoneGroup ancestor>` (when missing). Renderer composes
-  // through LBS uniformly; cmo3/moc3 export strips rigid-intent weights
-  // via `extractMeshExportStruct` to preserve byte-fidelity.
+  // v31 — RETIRED. Used to run `seedDefaultRigidWeights` (Cubism
+  // Adapter Pattern Phase 1, anti-Blender). Reverted same day; v32
+  // strips contamination from saves stamped at v31. v31 entry stays
+  // as a no-op shim only because the migration walker insists on
+  // contiguous version numbers — pre-v31 saves walk through
+  // 30→31→32 in one load pass with v31 as a passthrough.
+  31: (project) => project,
+
+  // v32 — Cubism Adapter REVERT toward Blender parity. Strips the
+  // rigid-1.0 vertex groups that v31 wrote onto parts that follow a
+  // bone but don't need per-vertex skinning. Post-v32 those parts
+  // render via the overlay-matrix path
+  // (`pickBonePostChainComposition` returning `kind: 'overlay'`) —
+  // same as Blender's "child of bone, no Armature modifier".
   //
-  // See `src/store/migrations/v31_default_rigid_weights.js` and
-  // `docs/plans/CUBISM_ADAPTER_PATTERN.md` Phase 1.
-  31: (project) => {
-    migrateDefaultRigidWeights(project);
+  // Bone-routing intent (Audit Issue 8 — hand-only sub-meshes) is
+  // preserved by the 4-arg `isRigidVertexGroup` predicate. Truly
+  // skinned limb meshes (variable per-vertex weights from
+  // `computeSkinWeights`) keep their weights.
+  //
+  // See `docs/plans/CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md`.
+  32: (project) => {
+    migrateStripRigidDefaultWeights(project);
     return project;
   },
 

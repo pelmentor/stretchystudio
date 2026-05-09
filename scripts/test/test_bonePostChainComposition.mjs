@@ -64,15 +64,18 @@ function assert(cond, name) {
   assert(result.reason === 'applied', `Test 2: reason === 'applied' (got ${result.reason})`);
 }
 
-// ── Test 3: unweighted → none/unbound (Cubism Adapter Phase 2) ─────────
+// ── Test 3: unweighted under bone → overlay (rigid-follow path) ─────────
 
 {
-  // Pre-Phase-2 this returned 'overlay' (rigid bone-follow). Post-Phase-2
-  // every meshed part with a bone-group ancestor has weights via
-  // `seedDefaultRigidWeights`, so reaching the no-weights branch means
-  // the part is legitimately unbound (no bone ancestor) OR the project
-  // predates v31 and hasn't been re-Init-Rigged. Either way: no
-  // composition runs.
+  // 2026-05-09 (afternoon) — Cubism Adapter revert restored the 3-state
+  // composition. Parts with NO vertex groups but a bone-group ancestor
+  // are the rigid-follow case (Blender's "child of bone, no Armature
+  // modifier"). The renderer applies `applyOverlayMatrixObj` with the
+  // bone's world matrix uniformly to all the part's verts — same
+  // semantics Blender uses for parent-chain transform. The overlay
+  // matrix is only present in `computeBoneOverlayMatrices`'s output
+  // when the bone has non-identity pose, so identity-pose bones
+  // produce a no-op render-side.
   const node = {
     id: 'topwear',
     type: 'part',
@@ -82,8 +85,7 @@ function assert(cond, name) {
     // No boneWeights — never bound to armature
   };
   const result = pickBonePostChainComposition(node, mesh);
-  assert(result.kind === 'none', `Test 3: kind === 'none' (got ${result.kind})`);
-  assert(result.reason === 'unbound', `Test 3: reason === 'unbound' (got ${result.reason})`);
+  assert(result.kind === 'overlay', `Test 3: kind === 'overlay' (got ${result.kind})`);
 }
 
 // ── Test 4: weighted + DISABLED modifier → none/applied ─────────────
@@ -157,22 +159,28 @@ function assert(cond, name) {
   assert(result.jointBoneId === 'leftElbow', 'Test 6: falls back to mesh.jointBoneId');
 }
 
-// ── Test 7: no mesh at all → none/unbound (defensive) ──────────────
+// ── Test 7: no mesh at all → overlay (no boneWeights, defensive) ──────
 
 {
+  // No mesh is a degenerate case; treats as "no weights" → overlay
+  // signal. The renderer's overlay map won't contain this part's id
+  // (no bone ancestor), so the lookup returns undefined and the
+  // overlay application is a no-op.
   const node = { id: 'empty', type: 'part', modifiers: [] };
   const result = pickBonePostChainComposition(node, null);
-  assert(result.kind === 'none', `Test 7: kind === 'none' (got ${result.kind})`);
-  assert(result.reason === 'unbound', `Test 7: reason === 'unbound'`);
+  assert(result.kind === 'overlay', `Test 7: kind === 'overlay' (got ${result.kind})`);
 }
 
-// ── Test 8: empty boneWeights array → none/unbound ─────────────────
+// ── Test 8: empty boneWeights array → overlay (no real skinning) ───────
 
 {
+  // Empty weights array == no weights for our purposes (not skinned);
+  // overlay signal. As Test 7, the overlay map lookup is the
+  // gate — the helper just signals "consider the rigid-follow path."
   const node = { id: 'p', type: 'part' };
   const mesh = { boneWeights: [], jointBoneId: 'leftElbow' };
   const result = pickBonePostChainComposition(node, mesh);
-  assert(result.kind === 'none', `Test 8: empty array → 'none' (got ${result.kind})`);
+  assert(result.kind === 'overlay', `Test 8: empty array → 'overlay' (got ${result.kind})`);
 }
 
 // ── Test 9: mode field absent → defaults to REALTIME|RENDER ─────────

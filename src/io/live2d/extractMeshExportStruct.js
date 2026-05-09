@@ -1,108 +1,63 @@
 // @ts-check
 
 /**
- * Mesh-export-struct extraction with the Cubism Adapter Pattern.
+ * Mesh-export-struct extraction — bone binding + joint pivot lookup.
  *
  * Both `exportLive2DProject` and `buildMeshesForRig` in `exporter.js`
- * historically duplicated the bone-binding extraction:
+ * historically duplicated the bone-binding extraction. This module
+ * deduplicates that block.
  *
- *   const boneWeights = mesh.boneWeights ?? null;
- *   const jointBoneId = mesh.jointBoneId ?? null;
- *   let jointPivotX = null, jointPivotY = null;
- *   if (jointBoneId && boneWeights) {
- *     const jointBone = project.nodes.find(n => n.id === jointBoneId);
- *     if (jointBone?.transform) {
- *       jointPivotX = jointBone.transform.pivotX ?? 0;
- *       jointPivotY = jointBone.transform.pivotY ?? 0;
- *     }
- *   }
+ * # 2026-05-09 (afternoon) — Cubism Adapter strip removed
  *
- * This module deduplicates that block AND adds the Cubism-export
- * adapter step inline: when `mesh.boneWeights` is **rigid intent**
- * (all-1.0 to the part's structural-parent bone), strip
- * `boneWeights` + `jointBoneId` from the export-bound copy. The cmo3 /
- * moc3 wire format then emits the legacy non-weighted shape, keeping
- * the byte output identical to pre-rigid-weight authoring.
+ * Pre-revert this module also performed a "rigid-intent" strip: when
+ * `mesh.boneWeights` was all-1.0 AND `jointBoneId === structural-
+ * parent bone`, both fields were nulled out before being written to
+ * the cmo3/moc3 wire format. The strip's purpose was to clean up
+ * contamination data written by `seedDefaultRigidWeights` — every
+ * meshed part with a bone-group ancestor got rigid-1.0 weights so the
+ * renderer could compose through a single LBS path.
  *
- * # Why this lives here, not in a separate "adapter" module
+ * The Cubism Adapter pattern was reverted toward Blender parity (see
+ * `docs/plans/CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md`). Rigid-follow
+ * parts no longer carry vertex groups at all — they render via the
+ * reinstated overlay-matrix path. Per-vertex skinning (limb meshes)
+ * carries variable weights that aren't rigid-intent. Bone-routing
+ * intent (Audit Issue 8 — hand-only sub-meshes whose
+ * `computeSkinWeights` clamped to 1.0 with `jointBoneId !== nearest`)
+ * has `jointBoneId !== nearest` so a strip-on-rigid-intent rule
+ * wouldn't fire on it anyway.
  *
- * The mesh-struct construction in `exporter.js` is itself the
- * project-tree → flat-export-struct translator. The Cubism adapter is
- * a 3-line conditional inside that translator, not a second pure-
- * function pass over the whole project. Extracting the shared block
- * here gives both extraction sites the same behaviour without a
- * separate module hierarchy.
- *
- * # The adapter rule
- *
- * `isRigidVertexGroup(boneWeights, vertCount, jointBoneId,
- * nearestBoneAncestorId)` returns `true` only when the weights are
- * indistinguishable from "no weights, structurally parented to
- * `jointBoneId`." See `src/lib/vertexGroupVariance.js` for the full
- * decision matrix (including the bone-routing-intent guard for
- * hand-only sub-meshes).
+ * Conclusion: post-revert no project carries data the strip would
+ * remove, so the strip is dead code. This module simplifies to a
+ * basic bone-binding + joint-pivot extractor.
  *
  * @module io/live2d/extractMeshExportStruct
  */
 
-import { isBoneGroup } from '../../store/objectDataAccess.js';
-import {
-  isRigidVertexGroup,
-  nearestBoneAncestorId,
-} from '../../lib/vertexGroupVariance.js';
-
 /**
  * @typedef {Object} BoneBindingExtract
- * @property {string|null} jointBoneId   — null when stripped (rigid-intent) or absent
- * @property {number[]|null} boneWeights — null when stripped or absent
+ * @property {string|null} jointBoneId
+ * @property {number[]|null} boneWeights
  * @property {number|null} jointPivotX
  * @property {number|null} jointPivotY
- * @property {boolean} stripped          — true if rigid-intent weights were stripped (debugging / logging)
  */
 
 /**
- * Extract bone-binding fields for a part's export struct, applying the
- * Cubism Adapter rigid-strip rule.
+ * Extract bone-binding fields for a part's export struct.
  *
  * Pure: doesn't mutate input. Resolves the joint bone via the indexed
- * project nodes for O(1) lookup. The `vertCount` argument is the part's
- * mesh.vertices.length — passed in by the caller because we don't need
- * to re-iterate.
+ * project nodes for O(1) lookup.
  *
  * @param {object} mesh        — the part's mesh datablock (resolved via getMesh)
- * @param {object} part        — the part node
+ * @param {object} _part       — the part node (unused post-revert; kept for caller stability)
  * @param {Map<string, object>} byId — project.nodes indexed by id
- * @param {number} vertCount   — mesh.vertices.length
+ * @param {number} _vertCount  — mesh.vertices.length (unused post-revert; kept for caller stability)
  * @returns {BoneBindingExtract}
  */
-export function extractMeshExportStruct(mesh, part, byId, vertCount) {
-  const rawBoneWeights = mesh?.boneWeights ?? null;
-  const rawJointBoneId = mesh?.jointBoneId ?? null;
+export function extractMeshExportStruct(mesh, _part, byId, _vertCount) {
+  const boneWeights = mesh?.boneWeights ?? null;
+  const jointBoneId = mesh?.jointBoneId ?? null;
 
-  // Compute structural-parent bone once for the rigid-intent guard.
-  // nearestBoneAncestorId walks node.parent → first isBoneGroup ancestor.
-  const nearestBoneId = nearestBoneAncestorId(part, byId, isBoneGroup);
-
-  let stripped = false;
-  let boneWeights = rawBoneWeights;
-  let jointBoneId = rawJointBoneId;
-
-  // Cubism Adapter rule: strip if rigid-intent (all weights ≈ 1.0 AND
-  // jointBoneId === structural-parent bone). Mismatch (e.g. hand-only
-  // sub-mesh under leftArm with jointBoneId='leftElbow') is bone-routing
-  // intent and MUST be preserved.
-  if (
-    Array.isArray(rawBoneWeights)
-    && rawBoneWeights.length > 0
-    && isRigidVertexGroup(rawBoneWeights, vertCount, rawJointBoneId, nearestBoneId)
-  ) {
-    boneWeights = null;
-    jointBoneId = null;
-    stripped = true;
-  }
-
-  // Joint pivot is only meaningful when boneWeights are present and
-  // active. Post-strip, jointBoneId is null → no pivot lookup.
   let jointPivotX = null, jointPivotY = null;
   if (jointBoneId && boneWeights) {
     const jointBone = byId.get(jointBoneId);
@@ -112,7 +67,7 @@ export function extractMeshExportStruct(mesh, part, byId, vertCount) {
     }
   }
 
-  return { jointBoneId, boneWeights, jointPivotX, jointPivotY, stripped };
+  return { jointBoneId, boneWeights, jointPivotX, jointPivotY };
 }
 
 /**

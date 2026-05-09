@@ -44,7 +44,6 @@ import {
   synthesizeDeformerParents,
 } from './deformerNodeSync.js';
 import { persistArtMeshRuntime } from './artMeshRuntimeSync.js';
-import { seedDefaultRigidWeights } from './seedDefaultRigidWeights.js';
 import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
@@ -1313,17 +1312,17 @@ export const useProjectStore = create((set, get) => {
           return p._userAuthored === true;
         });
       }
-      // Cubism Adapter Phase 1 — fill rigid vertex weights
-      // (`mesh.boneWeights = [1.0, …]` + `mesh.jointBoneId =
-      // <nearest isBoneGroup ancestor>`) for every meshed part under
-      // a bone that doesn't already have weights from
-      // `computeSkinWeights` or user paint. Idempotent and lossless
-      // — limb skinning + user-painted weights are preserved. The
-      // synth below sees the new weights and adds Armature modifiers
-      // automatically; the cmo3/moc3 export adapter
-      // (`extractMeshExportStruct`) strips rigid-intent weights at
-      // serialization to keep wire format byte-identical to pre-v31.
-      seedDefaultRigidWeights(proj);
+      // 2026-05-09 (afternoon) — `seedDefaultRigidWeights(proj)` was
+      // removed when the Cubism Adapter pattern was reverted toward
+      // Blender parity. See
+      // `docs/plans/CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md`. Parts
+      // that need true skinning (limbs) get their weights from
+      // `computeSkinWeights` upstream of seedAllRig; parts that
+      // rigid-follow a bone don't get weights at all — they render
+      // via the overlay-matrix path (`pickBonePostChainComposition`
+      // returning `kind: 'overlay'`). This matches Blender's split:
+      // vertex groups + Armature modifier for true skinning,
+      // parent-chain transform for rigid follow.
       // Phase 3 storage flip — re-derive each part's modifier stack
       // after the full seed pass. The seedXxx fns each run synthesize
       // individually, but NeckWarp + rotation deformer upserts happen
