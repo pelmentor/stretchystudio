@@ -1,10 +1,22 @@
 # Animation Blender-Parity Plan
 
-Status: **DRAFT** — pending two-agent audit (per user direction)
+Status: **REFINED v2** — incorporates 2-agent audit feedback (architecture + Blender-fidelity), 2026-05-09
 Owner: pelmentor
 Date opened: 2026-05-09
-Target: ~6–10 weeks of focused work, 8 phases, schemas v33 → v40
+Target: ~7–11 weeks of focused work, 7 phases, schemas v33 → v36
 Working rule: **RULE №1 — no quick-and-dirty fixes**. **RULE №2 — no migration baggage**.
+
+Audit-driven changes from v1:
+- Phase 0 expanded with explicit `0.D.0 viewport wire-up` step (audit caught: depgraph default flip is a no-op without it)
+- Phase 1 expanded with explicit `1.B.1 consumer enumeration` (audit caught: 8 production consumers of `project.animations[]` were missing from migration scope)
+- Phase 1 absorbs NodeTree retirement (audit: deferring it to Phase 8 is migration baggage per Rule №2)
+- Phase 2 absorbs `motion3jsonImport.js` upgrade to preserve bezier control points (audit caught: importer-discards-controls makes the migration lossy at the gate)
+- Phase 3 dropped invented `extrapolate` Cycles mode; Cycles ships 4 modes matching Blender; Generator `polynomial_factorised` replaces invented `expanded`; FN_GENERATOR + Smooth modifiers documented as deferred; Noise gains `lacunarity` + `roughness`
+- Phase 4 NLA `combine` mode REMOVED (audit: Rule №1 violation — silently degrading to `replace` for non-rotation hides intent); shipped blend list = replace/add/subtract/multiply only; combine deferred to v2
+- Phase 5 Graph Editor uses canvas-2D for keyframes/handles from day 1, SVG only for static curve background (audit: SVG breaks at >200 keyframes; real characters have 1200+)
+- Phase 8 trimmed (NodeTrees retired in Phase 1; ms canonical declared in Phase 0)
+- ms is canonical time unit throughout; seconds appear only at motion3.json export boundary (audit: depgraph would bake ms by Phase 0 default-flip; Phase 8 audit was too late)
+- DNA-name fixes: `FRAME_RANGE_LOCKED` → `FRAME_RANGE`; `ANIM_TWEAK_MODE` → `ADT_NLA_EDIT_ON`; AnimData gains `tmpact` + `act_blendmode` + `act_extendmode`
 
 ---
 
@@ -212,23 +224,29 @@ opt-out, then is removed in Phase 8.
 
 ---
 
-## 4. Phase order
+## 4. Phase order (v2, audit-refined — 7 phases)
 
 ```
 Phase 0 ── Phase 1 ── Phase 2 ── Phase 3 ── Phase 4
               ║          ║          ║          ║
               ╚══════════╩══════════╩══════════╝
                             │
-                Phase 5 ─── Phase 6 ─── Phase 7
-                            │
-                         Phase 8
+                       Phase 5 ── Phase 6
+                                     │
+                                  Phase 7
+                              (close-out)
 ```
 
 Phases 1–4 stack: Action ⊂ FCurve handles ⊂ FModifiers ⊂ NLA. Phase 5
 (Graph Editor write-mode) comes after 1–4 because the editor needs the
-final FCurve+handle+modifier shape to draw against. Phase 6 (Dopesheet)
-and Phase 7 (Insert Keyframe) can land in parallel after Phase 5. Phase
-8 is the close-out sweep.
+final FCurve+handle+modifier shape to draw against. Phase 6 merges
+Dopesheet write-mode + Insert Keyframe + Keying Sets (the audit's
+implicit suggestion: these tightly share infrastructure — Insert
+Keyframe operators are evaluated in Dopesheet exactly like in
+TimelineEditor). Phase 7 is the audit-trimmed close-out.
+
+(v1 had Phase 6 = Dopesheet, Phase 7 = Insert Keyframe, Phase 8 =
+close-out. v2 merges 6+7 → Phase 6 and renames close-out to Phase 7.)
 
 Each phase is independently shippable, with:
 
@@ -241,10 +259,41 @@ Each phase is independently shippable, with:
 
 ## 5. Phases
 
-### Phase 0 — Wire what already exists (3–5 days)
+### Phase 0 — Wire what already exists (5–7 days)
 
 **Goal.** Stop running phantom code. The DepGraph works; the driver
 sandbox works; constraints work; the only thing missing is the wire.
+
+The audit caught two false assumptions in v1: (a) the gridLift fix is
+*not* the singular blocker for default-on — `CanvasViewport.jsx` does
+not currently read `preferencesStore.evalEngine` at all; flipping the
+default has zero observable effect without first wiring the rAF
+callback to branch on the flag. (b) Time unit canonicalization in
+Phase 8 is too late — once depgraph goes production with ms-shaped
+inputs, every kernel bakes the assumption. Both are addressed in
+Phase 0 below.
+
+#### 0.0 — Declare canonical time unit (1 hour, but write it down)
+
+The codebase has 4 different time units in different subsystems:
+ms (`animationStore.currentTime`, `interpolateTrack`, track keyframes),
+seconds (Phase 5 scaffold `fcurve.js`, depgraph `EvalContext.time`),
+frames (Cubism segment encoder), ticks (physics).
+
+**Decision (audit-recommended Option A):** **milliseconds (ms) is canonical
+throughout the eval substrate.** Seconds are used at exactly two
+external boundaries:
+- `motion3.json` export: convert ms → seconds at the writer (single line)
+- `motion3.json` import: convert seconds → ms at the reader (single line)
+
+All other code reads/writes ms. The Phase 5 scaffold's seconds-shaped
+`FCurve.keyforms[].time` field is migrated to ms in Phase 1's v33
+migration (a one-line `* 1000` per keyform). The depgraph's
+`EvalContext.time` field is renamed `timeMs` and rebased.
+
+This is recorded as a memory entry: *"ms is canonical animation time
+across SS"*. Future contributors check the memory before adding new
+unit-conversion logic.
 
 #### 0.A — gridLift RigWarp_* coordinate-frame fix
 
@@ -309,11 +358,41 @@ poseSeed, project)` before composing the world matrix.
 - Test: `test_constraints_integration.mjs` covering all four types
   end-to-end through a depgraph eval.
 
+#### 0.D.0 — Wire depgraph into the production rAF callback (audit-required)
+
+`CanvasViewport.jsx` does not currently read `preferencesStore.evalEngine`.
+The viewport tick calls `computeParamOverrides` + `evalRig` directly.
+Phase 0.D.0 adds a branch that routes through `evalDepGraph` when the
+flag is `'depgraph'`:
+
+```js
+// CanvasViewport.jsx tick
+const evalEngine = useEvalEngine();
+if (evalEngine === 'depgraph') {
+  const ctx = { timeMs: animationStore.currentTime, ... };
+  const result = evalDepGraph(buildDepGraph(project), ctx);
+  // result.paramValues + result.poseOverrides feed evalRig
+} else {
+  // legacy path
+}
+```
+
+The branch is introduced explicitly so 0.D's default flip actually
+takes effect. Without 0.D.0, the depgraph stays in `sideBySide.js`
+(test-only) and the default flip is cosmetic.
+
+**Deliverable:**
+- `CanvasViewport.jsx` reads `preferencesStore.evalEngine` per tick
+- Branch routes through `evalDepGraph` when `'depgraph'`
+- Both branches produce identical output on Shelby + Hiyori (this is the
+  byte-fidelity gate — same gate as 0.D but proves the wire actually fires)
+
 #### 0.D — DepGraph default flip
 
-After 0.A–0.C land green, change [preferencesStore.js](../../src/store/preferencesStore.js)
+After 0.A–0.C + 0.D.0 land green, change [preferencesStore.js](../../src/store/preferencesStore.js)
 default `evalEngine` from `'classic'` to `'depgraph'`. Keep the
-`'classic'` opt-out for one release; remove in Phase 8.
+`'classic'` opt-out for one release; remove in Phase 7 (final close-out
+phase, formerly Phase 8).
 
 **Deliverable:**
 
@@ -321,34 +400,37 @@ default `evalEngine` from `'classic'` to `'depgraph'`. Keep the
 - One byte-fidelity sweep on Shelby + Hiyori with depgraph default.
 - Memory entry: *"DepGraph is the production tick"*.
 
-#### 0.E — AnimationTree dual-write
+#### 0.E — (REMOVED v2) AnimationTree dual-write
 
-The v24 migration builds AnimationTrees from
-`project.animations[].tracks[]` once, then never re-builds them.
-Authoring in TimelineEditor does not update the AnimationTree, so the
-NodeTreeEditor shows stale data. Fix: every TimelineEditor mutation that
-touches a track also runs the v24 builder for that animation only.
+Originally v1 had a Phase 0.E to fix the AnimationTree shadow-write
+bug. Audit feedback: this is migration baggage (Rule №2). The fix is
+to delete the AnimationTree entirely in Phase 1's v33 migration, not
+to repair its dual-write here. Phase 0 stays focused on wiring the
+existing eval substrate; 0.E is dropped.
 
-**Deliverable:**
-
-- A keyframe added in TimelineEditor immediately appears in the
-  AnimationTree NodeTreeEditor view.
-- Test: `test_animationTree_dualwrite.mjs` covering insert / delete /
-  drag-time / change-easing.
-
-**Phase 0 sum:** ~3–5 days. Schema unchanged. No new datablock types.
-Closes: 7 of the 17 Section 1 grievances (drivers theatre, constraints
-theatre, depgraph not in production, AnimationTree shadow, gridLift bug,
-no driver-aware UI today, no constraint-aware UI today).
+**Phase 0 sum:** ~5–7 days (was 3–5 in v1; expanded for 0.0 + 0.D.0).
+Schema unchanged. No new datablock types. Closes: 7 of the 17 Section
+1 grievances (drivers theatre, constraints theatre, depgraph not in
+production, gridLift bug, no driver-aware UI today, no
+constraint-aware UI today, time-unit ambiguity).
 
 ---
 
-### Phase 1 — `Action` datablock (1–1.5 weeks, schema v33)
+### Phase 1 — `Action` datablock + NodeTree retirement (2 weeks, schema v33)
 
 **Goal.** Move animation data out of `project.animations[].tracks[]`
 (a project-level flat list) into `project.actions[].fcurves[]` (a
 project-level keyed datablock list), and bind actions to objects via
 `AnimData` ([src/store/migrations/v33_action_datablock.js]).
+
+**Audit-driven changes from v1:**
+- Phase 1 absorbs NodeTree retirement (was Phase 8.C in v1). Per audit
+  Rule №2 finding, dual-writing AnimationTree/RigTree/DriverTree
+  through 8 phases is migration baggage; the v33 migration retires
+  them in one go.
+- Sub-step 1.B.1 enumerates every production consumer of
+  `project.animations[]` so the migration covers them. The audit
+  identified 8 hidden consumers that v1 missed.
 
 #### 1.A — Schema v33
 
@@ -362,7 +444,7 @@ project-level keyed datablock list), and bind actions to objects via
   frameEnd: number,            // ms
   fps: number,                 // canonical 60 (was 24 in legacy clips)
   audioTracks: AudioTrack[],   // moved verbatim from animations[]
-  flag: number,                // CYCLIC | MUTED | FRAME_RANGE_LOCKED
+  flag: number,                // CYCLIC | MUTED | FRAME_RANGE  (matches Blender ACT_CYCLIC | ACT_MUTED | ACT_FRAME_RANGE)
   meta: { createdAt, modifiedAt, source: 'authored' | 'imported_motion3' | 'idle_generator' }
 }
 
@@ -377,13 +459,24 @@ project-level keyed datablock list), and bind actions to objects via
   extrapolation: 'constant'    // Phase 3 adds 'linear' / 'cyclic'
 }
 
-// node.animData (per-Object)
+// node.animData (per-Object) — Blender DNA_anim_types.h:664-740 parity
 {
-  actionId: string | null,     // active action; null = no animation
-  actionInfluence: number,     // 0..1, default 1
-  slotHandle?: number,         // reserved; always 0 in Phase 1
+  actionId: string | null,     // active action; null = no animation (Blender: action pointer)
+  actionInfluence: number,     // 0..1, default 1 (Blender: AnimData.act_influence)
+  actionBlendmode: 'replace'|'add'|'subtract'|'multiply',  // (Blender: act_blendmode) — for active-action overlay onto NLA stack
+  actionExtendmode: 'nothing'|'hold'|'hold_forward',       // (Blender: act_extendmode)
+  slotHandle?: number,         // reserved; always 0 in Phase 1 (Blender: slot_handle)
+  // Tweak-mode backup (Blender: tmpact / tmp_slot_handle / tmp_last_slot_identifier):
+  tmpActionId?: string | null, // pre-tweak action; restored on Cancel
+  tmpSlotHandle?: number,
+  // Runtime tweak pointers (Blender: act_track / actstrip):
+  tweakTrackId?: string | null,
+  tweakStripId?: string | null,
+  // NLA + drivers:
   nlaTracks: [],               // Phase 4 populates
-  drivers: FCurve[]            // object-level standalone drivers (no action)
+  drivers: FCurve[],           // object-level standalone drivers (no action)
+  // Flag bitmask (Blender eAnimData_Flag values used):
+  flag: number                 // ADT_NLA_EDIT_ON | ADT_NLA_SOLO_TRACK | ADT_NLA_EVAL_OFF | ADT_CURVES_NOT_VISIBLE
 }
 ```
 
@@ -397,11 +490,39 @@ In-place migration:
 - Legacy `track.nodeId + property` becomes `fcurve.rnaPath = 'objects[<nodeId>].<property>'`.
 - Each Object that was the *only* one targeted by a clip gets `node.animData.actionId = action.id` (most clips animate the whole project, so the project gets a notional `__sceneObject__` AnimData with the action — see 1.D).
 - `project.animations[]` is deleted (Rule №2 — no migration baggage).
+- `project.nodeTrees.{rig,driver,animation}` is deleted (audit-driven: NodeTrees retired here, not deferred to Phase 8). The NodeTreeEditor is refactored to render `selectRigSpec(project)` directly — read-only, no datablock.
 
 Reversibility: the v32→v33 migration is one-way by design. v33 is a
-strict superset; rolling back would lose the `animData` distinction
-(which actions go on which objects). We accept the irreversibility
-because v33 is deliberately not interoperable with v32.
+strict superset of the data needed; rolling back would lose the
+`animData` distinction (which actions go on which objects) and the
+NodeTree shape. We accept the irreversibility because v33 is
+deliberately not interoperable with v32.
+
+#### 1.B.1 — Consumer enumeration (audit-required gate)
+
+The v1 plan listed only 3 files as Phase-1-modified, missing 8 hidden
+consumers of `project.animations[]`. **Phase 1 cannot exit until every
+consumer below has been migrated to `project.actions[]`:**
+
+| File | Current behaviour | Phase 1 fix |
+|------|-------------------|-------------|
+| [src/io/projectFile.js](../../src/io/projectFile.js) (line ~54) | save/load serialiser walks `project.animations` directly; reads/writes `serializedAnimations` | rewire to `project.actions` + `node.animData` |
+| [src/io/live2d/exporter.js](../../src/io/live2d/exporter.js) (lines 219, 223, 535, 562) | iterates `project.animations` to emit motion3 / can3 files | iterate `project.actions` |
+| [src/io/exportSpine.js](../../src/io/exportSpine.js) (line ~201) | reads `project.animations` for Spine export | rewire |
+| [src/io/exportValidation.js](../../src/io/exportValidation.js) (line ~187) | validation walks `project.animations` | rewire |
+| [src/io/live2d/motion3jsonImport.js](../../src/io/live2d/motion3jsonImport.js) (line ~9) | imports motion3 by pushing into `project.animations` | push into `project.actions` |
+| [src/io/live2d/idle/builder.js](../../src/io/live2d/idle/builder.js) (line ~308) | idle generator pushes into `project.animations` | push into `project.actions` |
+| [src/v3/editors/animations/AnimationsEditor.jsx](../../src/v3/editors/animations/AnimationsEditor.jsx) | renamed to ActionsEditor (existing v1 plan item) | already in scope |
+| [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (line ~553) | reads `_proj.animations.find(...)` for the active animation | read `project.actions` + active object's `animData.actionId` |
+| [src/components/canvas/GizmoOverlay.jsx](../../src/components/canvas/GizmoOverlay.jsx) | reads animations for gizmo state | rewire |
+| [src/components/canvas/SkeletonOverlay.jsx](../../src/components/canvas/SkeletonOverlay.jsx) | reads animations for skeleton overlay | rewire |
+| [src/store/animationStore.js](../../src/store/animationStore.js) | mid-tier coordinator | rewire all reads to actions+animData |
+
+**Process:**
+1. Before writing the v33 migration, grep `\bproject\.animations\b` and `\.animations\.` across the entire repo (including tests).
+2. Each match becomes a migration line item.
+3. The Phase 1 exit gate fails if any production code still reads `project.animations` after migration.
+4. Test fixtures using the old shape are updated to the new shape (this is a one-shot conversion — Rule №2: no compatibility shim).
 
 #### 1.C — `actionRegistry.js`
 
@@ -466,20 +587,25 @@ Editor (Phase 5).
 
 ```js
 // FCurve.keyforms[i] (was: { time, value, easing })
+// Blender DNA_curve_types.h:83-117 (BezTriple) + DNA_curve_enums.h:180-225
 {
-  time: number,
+  time: number,                    // ms (canonical per Phase 0.0)
   value: number,
-  // Tangent representation (Blender BezTriple parity):
-  handleLeft: { time, value },     // pre-keyframe handle (in same units as time/value)
+  // Tangent representation (Blender BezTriple.vec[0]/[1]/[2] parity):
+  handleLeft: { time, value },     // pre-keyframe handle
   handleRight: { time, value },    // post-keyframe handle
   handleType: {
     left: 'free' | 'aligned' | 'vector' | 'auto' | 'auto_clamped',
     right: 'free' | 'aligned' | 'vector' | 'auto' | 'auto_clamped'
   },
+  // Auto-handle algorithm flag (Blender BezTriple.auto_handle_type, eBezTriple_Auto_Type):
+  autoHandleType?: 'normal' | 'locked_final',
   interpolation: 'constant' | 'linear' | 'bezier' |
                  'sine' | 'quad' | 'cubic' | 'quart' | 'quint' | 'expo' |
                  'circ' | 'back' | 'bounce' | 'elastic',
-  easeMode?: 'in' | 'out' | 'inout',  // for non-bezier easings (sine, quad, etc.)
+  // Easing mode for named easings (Blender BezTriple.easing, eBezTriple_Easing).
+  // IGNORED when interpolation === 'constant' | 'linear' | 'bezier'.
+  easeMode?: 'auto' | 'in' | 'out' | 'inout',  // 'auto' = Blender's BEZT_IPO_EASE_AUTO default
   flag: number    // SELECTED (left/right/handle) | LOCKED | MUTED
 }
 ```
@@ -553,6 +679,32 @@ encoding has linear (segment type 0), bezier (1), stepped (2). Map:
 
 `.can3` already takes bezier control points, so it gets handles for free.
 
+#### 2.G.1 — motion3jsonImport.js upgrade (audit-required)
+
+The audit caught a critical lossiness gate: **today's
+[motion3jsonImport.js](../../src/io/live2d/motion3jsonImport.js)
+discards Cubism bezier control points** (lines 20-34 document the
+deferral). Every Cubism `.motion3.json` imported into SS today is
+flattened to `easing: 'ease-both'` regardless of the original curve.
+
+Phase 2's "round-trip byte-identical on 6 Cubism samples" exit gate
+is vacuous unless the importer is upgraded *first* — otherwise the
+v34 migration is migrating already-flattened data.
+
+**Phase 2.G.1 ships before the byte-fidelity sweep:**
+
+- Decode Cubism segment type 1 (bezier) into `BezTriple` with
+  `handleLeft.time/value = (cx1*duration + t0, cy1*range + v0)` and
+  `handleRight.time/value = (cx2*duration + t0, cy2*range + v0)`,
+  matching Cubism's per-segment cubic Bezier definition.
+- Decode segment type 0 (linear) → `interpolation: 'linear'`,
+  `handleType: 'vector'/'vector'`.
+- Decode segment type 2 (stepped) → `interpolation: 'constant'`,
+  `handleType: 'vector'/'vector'`.
+- Round-trip test: import Hiyori's idle motion3 → export → diff against
+  the original. Bytes must match. The plan ships this test as
+  `test_motion3jsonImportExport_roundtrip.mjs`.
+
 #### 2.H — Phase exit gate
 
 - Round-trip `import motion3.json → save → load → export motion3.json`
@@ -566,19 +718,41 @@ handles).
 
 ---
 
-### Phase 3 — F-Curve modifiers (1 week, schema v35)
+### Phase 3 — F-Curve modifiers (1 week, schema v34)
 
 **Goal.** Procedural post-processing on FCurves. A 4-keyframe loop
 becomes infinite via `Cycles`; jitter via `Noise`; polynomial via
 `Generator`; etc.
 
-#### 3.A — Schema v35
+**Audit-driven changes from v1:**
+- Cycles ships **4** modes (`none`, `repeat`, `repeat_offset`,
+  `mirror`) matching Blender's `eFMod_Cycling_Modes`. The invented
+  `extrapolate` mode is dropped — FCurve-level extrapolation
+  (`linear`/`constant`) is a separate per-FCurve field, not a Cycles
+  mode. The plan already had `FCurve.extrapolation` (line 378 in v1);
+  we keep it for that purpose.
+- Generator's second mode is **`polynomial_factorised`**, not invented
+  `expanded`. Coefficient semantics: factorised form is
+  `(c0 + c1*x) * (c2 + c3*x) * ...`, not the same as polynomial.
+- Noise gains **`lacunarity`** and **`roughness`** (Blender ships them
+  in modern Noise; v1 omitted).
+- Two Blender modifier types are **deferred to a follow-up plan**:
+  `function_generator` (sin/cos/sqrt/ln/sinc — niche; SS use case is
+  thin) and `smooth` (Gaussian smoothing — overlaps with FCurve
+  re-key tools that already exist via the Graph Editor write-mode in
+  Phase 5). Documenting deferral here so the absence is explicit, not
+  an oversight.
+
+#### 3.A — Schema v34 (was v35; renumbered after NodeTree retirement absorbed into v33)
 
 ```js
 // FCurve.modifiers[]
+// Blender DNA_anim_enums.h:25-35 (eFModifier_Types)
 {
   id: string,
+  // 6 modifier types ship in Phase 3:
   type: 'cycles' | 'noise' | 'generator' | 'limits' | 'stepped' | 'envelope',
+  // Deferred to follow-up: 'function_generator', 'smooth'
   influence: number,           // 0..1 blend
   flag: number,                // MUTED | EXPANDED | DISABLED
   useRange: boolean,           // restrict effect to [sfra, efra]
@@ -591,30 +765,36 @@ becomes infinite via `Cycles`; jitter via `Noise`; polynomial via
 Per-type data shapes:
 
 ```js
-// cycles
-{ before: 'none' | 'repeat' | 'repeat_offset' | 'mirror' | 'extrapolate',
-  after:  'none' | 'repeat' | 'repeat_offset' | 'mirror' | 'extrapolate',
+// cycles — Blender eFMod_Cycling_Modes (4 values, NOT 5)
+{ before: 'none' | 'repeat' | 'repeat_offset' | 'mirror',
+  after:  'none' | 'repeat' | 'repeat_offset' | 'mirror',
   beforeCycles: number,        // 0 = infinite
   afterCycles: number }
+// Note: linear/constant extrapolation lives on FCurve.extrapolation,
+// not as a Cycles mode. Audit-driven correction.
 
-// noise
+// noise — Blender FMod_Noise (DNA_anim_types.h)
 { size: number,                // wavelength in ms
   strength: number,            // amplitude in value-units
   phase: number,               // ms offset
   offset: number,              // value bias
   blendType: 'replace' | 'add' | 'subtract' | 'multiply',
-  depth: number }              // octaves (1..6)
+  depth: number,               // octaves (Blender uses short, no hard cap; we use 1..8)
+  lacunarity: number,          // frequency multiplier per octave (Blender default 2.0)
+  roughness: number }          // amplitude multiplier per octave (Blender default 0.5)
 
-// generator
-{ mode: 'polynomial' | 'expanded',
-  coefficients: number[],      // c0 + c1*x + c2*x^2 + ...
+// generator — Blender eFMod_Generator_Modes
+{ mode: 'polynomial' | 'polynomial_factorised',  // (was 'expanded' in v1; corrected)
+  coefficients: number[],
+  // For 'polynomial': c0 + c1*x + c2*x^2 + ...
+  // For 'polynomial_factorised': (c0 + c1*x) * (c2 + c3*x) * (c4 + c5*x) * ...
   blendType: 'replace' | 'add' | 'subtract' | 'multiply' }
 
 // limits
 { useMinX, useMaxX, useMinY, useMaxY: boolean,
   minX, maxX, minY, maxY: number }
 
-// stepped
+// stepped — Blender FMod_Stepped (uses bitmask flag in Blender; we use booleans for clarity)
 { stepSize: number,            // hold for N ms
   offset: number,
   useStartFrame, useEndFrame: boolean,
@@ -696,12 +876,27 @@ FModifiers).
 
 ---
 
-### Phase 4 — NLA stack (1.5 weeks, schema v36)
+### Phase 4 — NLA stack (1.5 weeks, schema v35)
 
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-#### 4.A — Schema v36
+**Audit-driven changes from v1:**
+- `combine` blend mode is **REMOVED from Phase 4**. The audit caught
+  Rule №1 violation: silently degrading `combine` to `replace` for
+  non-rotation channels (because SS uses Euler not quaternions) is
+  exactly the silent-fallback the rule prohibits. Either implement
+  proper Euler-via-quaternion-intermediary composition (which is real
+  work, not in scope here), or don't ship `combine` until then.
+  Phase 4 ships the 4 unambiguous modes; `combine` is documented in
+  §2.2 (out of scope) as a deferred follow-up.
+- `ANIM_TWEAK_MODE` flag renamed to **`ADT_NLA_EDIT_ON`** matching
+  Blender DNA_anim_enums.h:553-587 (`eAnimData_Flag`).
+- AnimData backup pointers (`tmpActionId` / `tmpSlotHandle` /
+  `tweakTrackId` / `tweakStripId`) are part of Phase 1's animData
+  shape (now expanded above) — Phase 4 wires them.
+
+#### 4.A — Schema v35 (was v36 in v1; renumbered after NodeTree absorption into v33)
 
 ```js
 // node.animData.nlaTracks[]
@@ -713,7 +908,7 @@ and tweak-mode push.
   index: number                // bottom-to-top order (0 is bottom)
 }
 
-// NlaStrip
+// NlaStrip — Blender DNA_anim_types.h NlaStrip parity
 {
   id: string,
   name: string,
@@ -725,7 +920,10 @@ and tweak-mode push.
   actend: number,              // ms
   repeat: number,              // 1.0 = no repeat
   scale: number,               // 1.0 = no time scale
-  blendmode: 'replace' | 'add' | 'subtract' | 'multiply' | 'combine',
+  // Blend modes — 4 ship, matching Blender NLASTRIP_MODE_REPLACE/ADD/SUBTRACT/MULTIPLY.
+  // 'combine' (Blender NLASTRIP_MODE_COMBINE) deferred until proper Euler-via-quat composition lands.
+  blendmode: 'replace' | 'add' | 'subtract' | 'multiply',
+  // Extend mode — Blender eNlaStrip_Extrapolate_Mode (3 values) MATCHES.
   extendmode: 'nothing' | 'hold' | 'hold_forward',
   influence: number,           // 0..1 baseline
   blendin: number, blendout: number,  // ms ramp
@@ -764,9 +962,12 @@ Blend modes match Blender's
 - `'add'` → `out = out + in * inf`
 - `'subtract'` → `out = out - in * inf`
 - `'multiply'` → `out = lerp(out, out * in, inf)`
-- `'combine'` → quaternion-aware (rotation only); for non-rotation it
-  falls back to `replace`. SS uses Euler rotations so `combine` reduces
-  to `replace` for `.rotation` channels and a noop for others.
+- `'combine'` — **DEFERRED** (audit-driven, Rule №1). Implementing it
+  properly requires Euler ↔ quaternion ↔ Euler composition for
+  rotation channels and a separate path for additive non-rotation
+  channels. Shipping a `combine` that silently degrades to `replace`
+  for non-rotation hides intent. Plan to add in a follow-up plan with
+  proper coverage.
 
 #### 4.C — Tweak mode
 
@@ -778,8 +979,14 @@ below is rendered as the underlay.
 UI: an "Edit Action" button on a selected strip in the NLAEditor
 toggles tweak. Visual indication: the strip border turns yellow.
 
-Implementation: `animData.flag |= ANIM_TWEAK_MODE` + a pointer to the
-tweak strip. Eval branches on this flag.
+Implementation: `animData.flag |= ADT_NLA_EDIT_ON` (Blender-faithful
+flag name; v1's `ANIM_TWEAK_MODE` was invented). Tweak entry stores
+the pre-tweak action in `animData.tmpActionId` (and `tmpSlotHandle`)
+so Cancel restores cleanly. Runtime tweak strip pointer:
+`animData.tweakStripId`. Eval branches on `ADT_NLA_EDIT_ON`. Wired
+helpers parallel Blender's `BKE_nla_tweakmode_enter` /
+`BKE_nla_tweakmode_exit` / `BKE_nla_tweakmode_clear_flags` (in
+`BKE_nla.hh`).
 
 #### 4.D — NLAEditor (new editor surface)
 
@@ -838,22 +1045,40 @@ grievance (no NLA stack).
 
 ---
 
-### Phase 5 — Graph Editor write-mode (1 week)
+### Phase 5 — Graph Editor write-mode (1.5 weeks)
 
 **Goal.** Make [FCurveEditor.jsx](../../src/v3/editors/fcurve/FCurveEditor.jsx)
 interactive. Every BezTriple handle becomes draggable; box-select +
 grab/scale work on keyframe groups.
 
+**Audit-driven change from v1:** v1 said "Phase 5 keeps SVG; migrate
+to canvas-2D if profiling shows it's needed." Audit caught: typical SS
+character has 20+ params × 60+ keyframes per Action = 1200+ keyframes,
+which is 6× the SVG-with-React-reconciliation degradation threshold
+(~200 keyframes). Profiling will always show it's needed. Shipping
+SVG-only first means immediately re-doing it. Phase 5 ships canvas-2D
+for the keyframe diamonds + handle dots from day 1.
+
 #### 5.A — Editor architecture
 
-The current editor is an SVG `<path>` plot. Phase 5 keeps SVG (no
-canvas2d migration) but adds:
+Two-layer composition:
 
-- Keyframe diamonds as `<rect>` elements with hit-test
-- Handle dots as `<circle>` elements with hit-test
-- Interaction state machine: idle / picking / dragging-keyframe /
-  dragging-handle / box-selecting
-- Snap-to-frame (toggleable, default on)
+- **Background layer (SVG):** static curve `<path>` per FCurve.
+  Cheap, scales with FCurve count not keyframe count, plays well with
+  CSS theming and the existing FCurveEditor render. SVG path is
+  generated by sampling the FCurve at fixed pixel intervals.
+- **Foreground layer (canvas-2D):** keyframe diamonds, handle dots,
+  selection box, snap indicator. Hit-test via spatial hash on
+  keyframe positions (built once per FCurve mutation).
+
+Interaction state machine: idle / picking / dragging-keyframe /
+dragging-handle / box-selecting / scaling. Mouse events bound to the
+canvas overlay; SVG underneath is `pointer-events: none` so events
+only land where the diamonds are.
+
+Snap-to-frame (toggleable, default on); imports
+`snapToIncrement(value, increment)` from the toolset plan's
+`src/lib/snap.js` (cross-plan coordination).
 
 #### 5.B — Operator set
 
@@ -1059,70 +1284,64 @@ Closes: 1 grievance (no Insert Keyframe).
 
 ---
 
-### Phase 8 — Close-out, deprecations, telemetry, baggage sweep (3–5 days)
+### Phase 7 — Close-out, deprecations, telemetry, baggage sweep (3–5 days)
+
+(Was Phase 8 in v1; renumbered after Phase 7's "Insert Keyframe" stays
+as Phase 6 was originally — see §4 Phase order. The Insert Keyframe
+operator is now Phase 6.5; the close-out is Phase 7.)
 
 **Goal.** Rule №2 — no migration baggage. Tidy up.
 
-#### 8.A — Remove `evalEngine: 'classic'` opt-out
+**Audit-driven changes from v1:**
+- Phase 1 absorbed the NodeTree retirement. v1's 8.C section is gone.
+- Phase 0.0 declared ms canonical. v1's 8.E was about deciding ms vs
+  seconds; that decision is now front-loaded.
+- Net: Phase 7 (close-out) is materially smaller than v1's Phase 8.
 
-After Phase 0 flipped the default, Phase 8 removes the legacy code
+#### 7.A — Remove `evalEngine: 'classic'` opt-out
+
+After Phase 0 flipped the default, Phase 7 removes the legacy code
 path entirely. [src/renderer/animationEngine.js](../../src/renderer/animationEngine.js)
 `computeParamOverrides` / `computePoseOverrides` are deleted; the
 DepGraph is the only path.
 
-#### 8.B — Remove legacy `project.animations[]` reader
+#### 7.B — Verify `project.animations[]` reader removal
 
-Phase 1 migration deleted the writes; Phase 8 deletes the reader paths
-in tests and any compatibility shims that were left in place during
-phases 1–4.
+Phase 1 migration deleted the writes; Phase 1.B.1 enumerated and
+migrated all 8 known consumers. Phase 7 grep-verifies no reader paths
+remain (this is a paranoia gate, not new work — anything that grep
+catches here is a Phase 1 bug to fix in retroactive cleanup).
 
-#### 8.C — AnimationTree, RigTree, DriverTree dual-write retirement
-
-The NodeTrees were authored as a parallel data model. After Phase 0.E
-they dual-write; Phase 8 evaluates whether they are now the canonical
-source (preferred) or shadow (in which case they should be deleted per
-Rule №2). Decision criterion: if the NodeTreeEditor write path is
-shipped (it isn't in this plan — it's a v3 editor), keep the NodeTrees;
-otherwise retire the v22/v23/v24 datablocks and reduce to the
-Action/AnimData/NLA model.
-
-This is a real architectural call. The default expectation: **retire
-the NodeTrees** because Phase 1's Action/AnimData supersedes
-AnimationTree, Phase 4's NLA strip composition supersedes the
-TimelineOutput sink, and DriverTree's role is filled by Object-level
-`animData.drivers[]`. The RigTree is the only tree that arguably has
-ongoing value (it represents the deformer parent chain explicitly),
-but it duplicates `selectRigSpec` and is a maintenance liability.
-
-The retirement migration v37 deletes `project.nodeTrees.{rig, driver,
-animation}` and refactors the NodeTreeEditor to render
-`selectRigSpec(project)` directly — read-only, no datablock.
-
-#### 8.D — Deprecate `easing: string` per-segment
+#### 7.C — Deprecate `easing: string` per-segment
 
 Phase 2 migrated to BezTriple but the legacy `easing` field stayed on
-keyforms for round-trip safety. Phase 8 removes the field and the
+keyforms for round-trip safety. Phase 7 removes the field and the
 parser branches that handled it.
 
-#### 8.E — `paramValuesStore.values` audit
+#### 7.D — `paramValuesStore.values` audit
 
 Many code paths still read directly from `paramValuesStore.values`,
-bypassing the FCurve evaluator. Phase 8 audits and replaces with
+bypassing the FCurve evaluator. Phase 7 audits and replaces with
 `evaluateRnaPath(project, 'objects[__params__].values[<paramId>]')`
 calls — except for the bone-mirror sync path, which is the canonical
 exception.
 
-#### 8.F — Documentation
+#### 7.E — Documentation
 
 - Update [docs/V3_WORKSPACES.md](../V3_WORKSPACES.md) animation
   workspace section.
 - New: docs/ANIMATION_GLOSSARY.md mapping Blender terms ↔ SS terms ↔
-  Cubism Editor terms.
+  Cubism Editor terms. Includes the deliberate divergences:
+  - SS RNA path uses `.x` component access; Blender uses `[0]`. Same
+    semantics, different syntax. The glossary documents the choice;
+    `evaluateRnaPath` parses both.
+  - JS-subset expression sandbox vs Python (per §9.A).
+  - `combine` blend mode deferred (per §2.2).
 - New: docs/ANIMATION_AUTHORING_FLOWS.md covering the three primary
   authoring patterns (action assigned to scene, action assigned to
   object, NLA blend).
 
-#### 8.G — Telemetry
+#### 7.F — Telemetry
 
 Add to [lib/logger.js](../../src/lib/logger.js):
 - Per-tick: count of FCurve evaluations, driver evaluations,
@@ -1131,18 +1350,18 @@ Add to [lib/logger.js](../../src/lib/logger.js):
   action, presence of FModifiers.
 - On NLA bake: input strip count, output FCurve count, time taken.
 
-#### 8.H — Memory audit
+#### 7.G — Memory audit
 
 Update auto-memory entries:
 - Mark the Phase 5 scaffolds memory entry as "Wired in Phase 0 of
   Animation Blender Parity Plan".
-- Mark the V2 NodeTree memory entry as "RigTree retired in Phase 8
-  v37 migration".
+- Mark the V2 NodeTree memory entry as "Retired in Phase 1 v33
+  migration".
 - Add new memory entries per phase shipped (one-line index entry +
   topic file).
 
-**Phase 8 sum:** ~3–5 days. Schema v37 (NodeTree retirement). No new
-features. Closes: the rest of the grievances (5 polish-tier).
+**Phase 7 sum:** ~3–5 days. No new schema. No new features. Closes:
+the rest of the grievances (5 polish-tier).
 
 ---
 
@@ -1150,13 +1369,23 @@ features. Closes: the rest of the grievances (5 polish-tier).
 
 | v | Phase | What |
 |---|-------|------|
-| v33 | Phase 1 | `Action` datablock; `AnimData` per Object; `__scene__` pseudo-Object; legacy `animations[]` deleted |
-| v34 | Phase 2 | BezTriple keyform shape; `easing` field deprecated (kept for one release) |
-| v35 | Phase 3 | `FCurve.modifiers[]`; modifier types `cycles` / `noise` / `generator` / `limits` / `stepped` / `envelope` |
-| v36 | Phase 4 | `AnimData.nlaTracks[]`; NlaStrip with blend modes |
-| v37 | Phase 8 | NodeTrees retired (`project.nodeTrees.{rig,driver,animation}` deleted); legacy `easing` field deleted |
+| v33 | Phase 1 | `Action` datablock; `AnimData` per Object; `__scene__` pseudo-Object; legacy `animations[]` deleted; **NodeTrees retired** (audit-driven absorption from former Phase 8.C) |
+| v34 | Phase 3 | `FCurve.modifiers[]`; modifier types `cycles` / `noise` / `generator` / `limits` / `stepped` / `envelope` (was v35 in v1) |
+| v35 | Phase 4 | `AnimData.nlaTracks[]`; NlaStrip with 4 blend modes (was v36 in v1) |
 
-(Schema v32 is current. v38 onwards reserved for follow-up plans.)
+(Schema v32 is current. Phase 2 BezTriple migration runs as a
+non-bumping in-place transformation: a v33 project's FCurves get their
+keyforms upgraded to BezTriple shape during the v33 migration step, so
+no separate v34-for-BezTriple bump. Phase 7 close-out has no schema
+bump — the legacy `easing` field is removed from FCurve keyform shape
+in code; data files have already migrated through Phase 2.)
+
+**Audit-driven schema-numbering compaction:** v1 had 5 schema bumps
+(v33–v37). Refined v2 has 3 (v33–v35) by absorbing NodeTree retirement
+into v33 (Rule №2: no dual-write phase) and the BezTriple shape change
+into v33 alongside the Action migration. The Action migration already
+walks every keyform; doing the BezTriple shape transformation in the
+same pass is free.
 
 ---
 
@@ -1352,27 +1581,35 @@ reason.
 
 ## 11. Estimate
 
-Phase-by-phase, optimistic / realistic / pessimistic:
+Phase-by-phase, optimistic / realistic / pessimistic. Audit-revised
+upward where the audit caught hidden work.
 
 | Phase | Optimistic | Realistic | Pessimistic |
 |-------|-----------|-----------|-------------|
-| 0 — Wire | 3 days | 5 days | 8 days |
-| 1 — Action datablock | 7 days | 10 days | 14 days |
-| 2 — BezTriple | 5 days | 7 days | 10 days |
-| 3 — FModifiers | 5 days | 7 days | 10 days |
-| 4 — NLA | 8 days | 11 days | 16 days |
-| 5 — Graph Editor write-mode | 5 days | 7 days | 10 days |
-| 6 — Dopesheet write-mode | 3 days | 4 days | 7 days |
-| 7 — Insert Keyframe + Keying Sets | 3 days | 5 days | 8 days |
-| 8 — Close-out | 3 days | 5 days | 8 days |
-| **Total** | **42 days (~6 wk)** | **61 days (~9 wk)** | **91 days (~13 wk)** |
+| 0 — Wire (incl. 0.0 ms-canonical, 0.D.0 viewport wire-up) | 5 days | 7 days | 10 days |
+| 1 — Action datablock + NodeTree retirement + 8-consumer migration | 10 days | 14 days | 20 days |
+| 2 — BezTriple + motion3jsonImport upgrade | 5 days | 8 days | 12 days |
+| 3 — FModifiers (6 types, post-audit) | 5 days | 7 days | 10 days |
+| 4 — NLA (4 blend modes; combine deferred) | 8 days | 11 days | 16 days |
+| 5 — Graph Editor write-mode (canvas-2D from day 1) | 6 days | 9 days | 13 days |
+| 6 — Dopesheet write-mode + Insert Keyframe + Keying Sets (merged) | 6 days | 8 days | 12 days |
+| 7 — Close-out (audit-trimmed) | 2 days | 4 days | 6 days |
+| **Total** | **47 days (~7 wk)** | **68 days (~10 wk)** | **99 days (~14 wk)** |
 
-Realistic estimate: **~9 weeks** of focused work, single-author. The
-plan is internally sequenced so partial delivery is shippable: stopping
-after Phase 4 still gets us NLA. Stopping after Phase 7 still gets us
-Graph + Dopesheet + Insert Keyframe; only Phase 8 (close-out) is
-strictly optional in the sense that not running it leaves migration
-baggage but does not break user-visible features.
+Realistic: **~10 weeks** of focused work, single-author (audit-revised
+upward from v1's 9-week estimate; the architecture audit flagged
+Phase 1 underestimated by ~50% due to the missed consumers, and the
+fidelity audit flagged Phase 2 underestimated for the importer
+upgrade).
+
+The plan is internally sequenced so partial delivery is shippable.
+Stopping after Phase 4 still gets us NLA. Stopping after Phase 6 still
+gets us Graph + Dopesheet + Insert Keyframe; only Phase 7 (close-out)
+is strictly optional in the sense that not running it leaves
+migration baggage (Rule №2 violation) but does not break user-visible
+features.
+
+**Pessimistic 14 weeks is the number to commit to externally.**
 
 ---
 

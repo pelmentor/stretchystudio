@@ -1,11 +1,29 @@
 # Toolset Blender-Parity Plan
 
-Status: **DRAFT** — pending two-agent audit
+Status: **REFINED v2** — incorporates 2-agent audit feedback (architecture + Blender-fidelity), 2026-05-09
 Owner: pelmentor
 Date opened: 2026-05-09
-Target: ~5–7 weeks of focused work, 8 phases
+Target: ~7–11 weeks of focused work, 8 phases
 Scope rule: **per user — only the most important Blender tools, not all of them; AND coverage spans all modes (Object / Edit / Pose / Weight Paint / Sculpt), not just Edit**.
 Working rule: **RULE №1 — no quick-and-dirty fixes**. **RULE №2 — no migration baggage**.
+
+Audit-driven changes from v1:
+- **Schema numbers**: vTB+1 / vTB+2 placeholder tokens; canonical numbers assigned from `projectMigrations.js` header at ship time (audit caught: v33/v34 collision with the animation plan was real Rule №2 baggage)
+- **§7.A scope trim** — dropped per audit simplifications: `Origin to Geometry`, `Make Single User`, `Apply Visual Transform`, `Lock Weights` (orphan with no spec)
+- **§7.A added** — `Origin to Center of Mass (Surface)` (area-weighted centroid; useful on long thin parts like tails / hair)
+- **§7.B Sample Weight** moved from `Ctrl+LMB` to **`Shift+X`** (audit-HIGH: `Ctrl+LMB` collides with Blender invert-paint chord)
+- **§7.B Normalize All** **drops the `Ctrl+N` chord** (audit-HIGH: Blender `Ctrl+N` = File New globally; binding to Normalize would cause file-loss surprise). Menu-only access matches Blender.
+- **§7.C Mirror Pose** moves from `Ctrl+Shift+M` to **`Ctrl+Shift+V`** (audit-HIGH: `Ctrl+Shift+M` is Blender's `pose.select_mirror`; pose-mirror in Blender is `Ctrl+Shift+V` = paste-flipped). `Ctrl+Shift+M` is reserved for select-mirror partner-extension (additional Phase 7.C operator).
+- **§7.C Clear All Pose** clarified to **3 separate chords** `Alt+Shift+G` / `Alt+Shift+R` / `Alt+Shift+S` (audit-CRITICAL: the v1 plan had 3 different answers in 3 places; Blender ships them per-axis, no combined chord)
+- **§0.B Ctrl+LMB "spatial-nearest"** replaced with **topology shortest-path** via BFS on `buildVertexAdjacency` (audit-HIGH: spatial-nearest is invented; Blender does topology shortest-path)
+- **§3 Sculpt Inflate** swapped for **Sculpt Pinch** (audit-MEDIUM: Blender's Inflate is normal-based and degenerate on flat 2D meshes; Pinch is more useful for 2D rigging)
+- **§4.C Subdivide** gains **`smoothness` slider** (audit-MEDIUM: important for organic 2D shapes; ~15 LOC addition)
+- **§4.A Dissolve** specified to use **Meisters–Chazelle ear-clip** (audit-HIGH: handles non-convex polygons correctly; standard ear-clip silently fails on Live2D-typical concave silhouettes)
+- **§5.A Extrude** boundary detection guarded against **degenerate seam triangles** (audit-HIGH: zero-area triangles falsely look like single-incident-triangle boundary)
+- **§7.C.5 Mirror Pose role detection** narrowed to **`left*`/`right*` camelCase prefix only** (audit-MEDIUM: matches actual SS auto-rig boneRoles; suffix-based detection deferred without a real spec)
+- **§4 Phase order** diagram updated to make **Phase 0 → Phase 1 dependency explicit**
+- **Risk register** gains **3 missed risks**: topology-op snapshot-undo memory pressure; selection persistence on part-switch; sculpt-brush + Armature-modifier interaction
+- **Estimate** revised upward: ~9–10 weeks realistic (was ~7.5 in v1; audit found Phase 7 mirror-vertex-map work underestimated 2–3×)
 
 ---
 
@@ -124,19 +142,32 @@ Pose, not just Edit**. Phase 7 covers the per-mode gaps:
 | Mirror selected | `Ctrl+M` then `X`/`Y` | Mirror selected parts across an axis through the median pivot |
 | Parent | `Ctrl+P` | Parent active selection to last-clicked object (sets `node.parent`) |
 | Clear Parent | `Alt+P` | Submenu: clear, clear & keep transform, clear inverse |
-| Set Origin | (right-click → Set Origin) | Submenu: origin to median, origin to cursor, origin to bounding box center |
-| Make Single User | (right-click) | If a part shares mesh data with another (rare but possible after Duplicate-Linked), break the share and make a true copy |
+| Set Origin | (right-click → Set Origin) | Submenu: origin to median, origin to cursor, origin to bounding box center, **origin to center of mass (surface)** (audit-added: area-weighted centroid; gives better pivots on tails / hair locks where median or AABB-center are off-target) |
+
+(v1 also listed *Origin to Geometry* and *Make Single User*. Audit
+simplifications: Origin to Geometry is a Blender direction-inverse op
+unrelated to centroid types; dropped to reduce confusion. Make Single
+User has no current data model to act on — SS doesn't share mesh
+data between nodes — and was Rule №2 spec-without-purpose; deferred
+until a real Duplicate-Linked feature ships.)
 
 **Weight Paint Mode (Phase 7.B):**
 
 | Tool | Hotkey | Why |
 |------|--------|-----|
-| Sample Weight | `Ctrl+LMB` | Pick the weight value at a vertex (set as current brush weight). Blender's eyedropper for paint. |
+| Sample Weight | **`Shift+X`** (audit-fixed; was `Ctrl+LMB`) | Pick the weight value at a vertex (set as current brush weight). `Ctrl+LMB` is reserved for Blender's invert-paint chord; do not bind it for sample. |
 | Blur brush | (brush dropdown) | Smooth weights between neighbours. Companion to existing Add brush. |
-| Mirror Weights | (right-click → Mirror) | Mirror weights across X-axis (or any axis); requires symmetrical mesh topology to be useful but works on any |
-| X-Axis Mirror toggle | (N-panel) | Live mirror — paint on one side, the symmetric side updates simultaneously. Matches Blender's per-mode toggle. |
-| Lock weights per group | (Properties → VertexGroups) | Padlock icon per group; prevents accidental painting. Already partially modeled (UI gap) |
-| Normalize all | `Ctrl+N` | Per-vertex sum of weights = 1.0 across all unlocked groups |
+| Mirror Weights | (right-click → Mirror) | Mirror weights across X-axis (or any axis); supports both **position-based** and **name-based** flips (e.g. `Group.L` ↔ `Group.R`) per Blender `OBJECT_OT_vertex_group_mirror`. |
+| X-Axis Mirror toggle | (N-panel) | Live mirror — paint on one side, the symmetric side updates simultaneously. Matches Blender's per-Mesh symmetry. |
+| Normalize all | (right-click → Normalize All) **no chord** (audit-fixed; was `Ctrl+N`) | Per-vertex sum of weights = 1.0 across all unlocked groups. **`Ctrl+N` is Blender's File New globally; binding it would cause file-loss surprise.** Menu-only, matching Blender. |
+
+(v1 also listed *Lock weights per group* as `(UI gap)` orphan — audit
+flagged it as a Rule №2 transition diagnostic; either fully spec
+(per-group locked: boolean + lock-respecting normalize logic) or drop
+from scope. Deferred to a follow-up plan because the lock-respecting
+logic in §7.B.5 already handles the runtime side; the UI surface for
+toggling locks is the only missing piece and falls naturally into a
+Properties-section polish pass.)
 
 **Pose Mode (Phase 7.C):**
 
@@ -145,8 +176,9 @@ Pose, not just Edit**. Phase 7 covers the per-mode gaps:
 | Clear Pose Location | `Alt+G` | Reset pose translation on selected bones to (0, 0) |
 | Clear Pose Rotation | `Alt+R` | Reset pose rotation on selected bones to 0 |
 | Clear Pose Scale | `Alt+S` | Reset pose scale on selected bones to (1, 1) |
-| Clear All Pose | `Alt+Shift+G/R/S` | Combined |
-| Mirror Pose | `Ctrl+Shift+M` | Mirror selected bone poses across X-axis (paired with `boneRole` symmetry, e.g. `leftElbow` ↔ `rightElbow`) |
+| Clear All Pose (per-axis) | **`Alt+Shift+G` / `Alt+Shift+R` / `Alt+Shift+S`** (audit-fixed) | **3 separate chords**, one per axis (matches Blender; v1 had three different answers in three places) |
+| Select Mirror | `Ctrl+Shift+M` (audit: this is Blender's chord) | Extends selection to the mirror partner of each selected bone (matches Blender `pose.select_mirror`). |
+| Mirror Pose | **`Ctrl+Shift+V`** (audit-fixed; was `Ctrl+Shift+M`) | Pastes a previously-copied pose flipped across X (matches Blender's `pose.paste(flipped=true)`). Pair with Copy Pose first. The single-step "mirror selected bones' pose without copy" workflow lives in the Pose menu without a chord (also Blender-faithful). |
 | Copy / Paste Pose | `Ctrl+C` / `Ctrl+V` | Copy current pose of selected bones; paste onto matching boneRoles. Foundation for a future Pose Library. |
 
 ### 2.2 Out of scope (deliberately not Top-12)
@@ -226,29 +258,42 @@ No new undo machinery.
 
 ---
 
-## 4. Phase order
+## 4. Phase order (audit-fixed: explicit dependencies)
 
 ```
-Phase 0 ─── Phase 1 ─── Phase 2 ─── Phase 3 ─── Phase 4 ─── Phase 5
-                            ║                       ║
-                            ╚═══════════════════════╝
-                                       │
-                                   Phase 6
-                                       │
-                                   Phase 7
-                              (per-mode polish)
+Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4 ──→ Phase 5
+   │           ║                                    ║
+   │           ╚════════════════════════════════════╝
+   │                            │
+   └─→ (Phase 0 is foundation for every Edit-Mode op below)
+                                │
+                          Phase 6
+                                │
+                          Phase 7
+                     (per-mode polish)
 ```
+
+**Audit-driven dependency clarification:** Phase 1's Edit-Mode path
+*requires* Phase 0's `selectedVertexIndices`. Phase 1's Object-Mode
+path is independent but ships together. Phases 4 (Merge/Dissolve/
+Subdivide) and 5 (Extrude) directly require Phase 0's selection set.
+This was implicit in v1; the diagram now shows it explicitly so future
+work can't extract Phase 1 Object-Mode early and leave the Edit-Mode
+path unfinished.
 
 Phases 0 and 1 are foundations. Phase 2 (snap) is mostly independent
 and could land anywhere after Phase 0 — schedule it after Phase 1 to
 let users get box-select first. Phase 3 (sculpt) is independent of
 Phases 1–2 but shares mode infrastructure with Phase 0. Phase 4 (merge
-/ dissolve / subdivide) and Phase 5 (extrude) need both Phase 0 (vertex
-selection) and Phase 2 (snap, used by extrude modal). Phase 6 picks up
-small adjacent wins. Phase 7 closes per-mode coverage (Object / Weight
-Paint / Pose) — these tools are mostly independent of each other and
-could ship in any internal order, but they all benefit from Phase 0's
-selection-aware foundations and Phase 2's snap module.
+/ dissolve / subdivide) and Phase 5 (extrude) need both Phase 0
+(vertex selection) and Phase 2 (snap, used by extrude modal). Phase 6
+picks up small adjacent wins. Phase 7 closes per-mode coverage
+(Object / Weight Paint / Pose) — these tools are mostly independent
+of each other and could ship in any internal order, but they all
+benefit from Phase 0's selection-aware foundations and Phase 2's snap
+module. **Cross-plan note:** Phase 2's `src/lib/snap.js` exposes
+`snapToIncrement(value, increment)` which the animation plan's Phase
+5 Graph Editor imports for snap-to-frame.
 
 Each phase is independently shippable.
 
@@ -286,8 +331,7 @@ getAllSelectedVertices(partId) → number[]
 
 - LMB on a vertex → select that vertex (replace previous selection)
 - Shift+LMB on a vertex → toggle that vertex
-- Ctrl+LMB on a vertex → add range from active to clicked (Blender does
-  this for sequential indices; we do it for spatial-nearest path)
+- **Ctrl+LMB on a vertex → topology shortest-path** from active to clicked, via BFS on `buildVertexAdjacency` (audit-fixed: this matches Blender's `mesh.shortest_path_pick`; v1's "spatial-nearest path" was invented and would confuse Blender users). Selects all verts on the shortest connectivity path. ~30 LOC.
 - LMB on empty space → deselect all (same as Object Mode)
 
 The vertex-hit-test is a new helper: [src/io/hitTest.js](../../src/io/hitTest.js)
@@ -513,9 +557,19 @@ Edit / Pose / Weight Paint).
 export const SCULPT_BRUSHES = [
   { id: 'grab',    label: 'Grab',    impl: grabBrush },
   { id: 'smooth',  label: 'Smooth',  impl: smoothBrush },
-  { id: 'inflate', label: 'Inflate', impl: inflateBrush },
+  { id: 'pinch',   label: 'Pinch',   impl: pinchBrush },  // (audit-swap: was 'inflate')
 ];
 ```
+
+**Audit-driven swap:** v1 shipped Inflate. Blender's Inflate moves
+verts along the per-vertex *normal*, which on a flat 2D mesh is
+degenerate (all parallel to canvas Z; produces zero displacement).
+The math v1 proposed (sum-of-edge-gradients) was a 2D reinvention
+that doesn't match Blender's Inflate at all. **Pinch** is more useful
+for 2D rigging (sharpening contour points, tightening hair tips, eye
+corners) and has a Blender-faithful implementation that translates
+cleanly to 2D: each affected vertex moves toward (or away from, with
+Ctrl) the brush center.
 
 Each brush exports:
 - `tick(state, dt) → updatedVerts: Map<vertIndex, { x, y }>`
@@ -565,18 +619,26 @@ for (vert of affectedIndices) {
 Two iterations per tick gives a smoother result; one is faster. Default
 1, configurable in N-panel.
 
-#### 3.E — Inflate brush
+#### 3.E — Pinch brush (audit-swap; v1 was Inflate)
 
-Per-vertex displacement along the local edge gradient sum (the 2D
-analogue of Blender's normal-direction inflate). For a vertex with
-neighbours `N`:
+Each affected vertex moves toward the brush center, weighted by
+falloff and stroke strength. Faithful 2D port of Blender's Pinch:
 
 ```js
-gradient = sum over n in N of (verts[vert] - verts[n])
-newVert = verts[vert] + normalize(gradient) * strength * falloffWeight
+const center = state.cursor;
+for (vert of affectedIndices) {
+  const dir = subtract(center, verts[vert]);
+  const dist = length(dir);
+  if (dist < EPS) continue;  // already at center
+  const w = falloffWeight(dist, state.size, state.falloff) * state.strength;
+  // Push toward center; magnitude proportional to falloff+strength.
+  newVerts[vert] = add(verts[vert], scale(normalize(dir), w * dist * 0.5));
+}
 ```
 
-Strength sign flips on Ctrl-hold (deflate).
+Strength sign flips on Ctrl-hold (Magnify — push verts *away* from
+center, the inverse of Pinch). This matches Blender's Pinch/Magnify
+modal toggle.
 
 #### 3.F — Brush settings UI (N-panel)
 
@@ -654,10 +716,22 @@ Menu options:
   hole
 - **Dissolve Faces** — N/A in SS (no face selection model)
 
-For Dissolve Vertices: ear-clip retriangulation of the polygon formed
-by removing the selected vert from each adjacent triangle.
+For Dissolve Vertices: **Meisters–Chazelle ear-clip** retriangulation
+of the polygon formed by removing the selected vert from each adjacent
+triangle (audit-fixed: standard ear-clip silently fails on non-convex
+polygons; Live2D character art is routinely concave). Algorithm:
 
-Implementation: [src/v3/operators/edit/dissolve.js].
+1. Build the surrounding ring as an ordered polygon
+2. For each candidate ear-vertex `e_i`:
+   - Test `(e_{i-1}, e_i, e_{i+1})` for **convex** (positive 2D cross
+     product, given a known outward winding)
+   - Test that no other polygon vertex lies **inside** that triangle
+     (Meisters–Chazelle's correctness condition)
+3. Cut the ear, advance, repeat
+4. Final polygon is degenerate (3 verts) → emit one triangle
+
+Implementation: [src/v3/operators/edit/dissolve.js]. Tests cover
+convex (happy path) and concave (star-shaped ring) fixtures.
 
 #### 4.C — Subdivide operator
 
@@ -675,9 +749,25 @@ For a triangle with vertices `(A, B, C)` and edges `(AB, BC, CA)`:
 If only some verts are selected, subdivide only triangles where ≥2
 selected verts span an edge (matches Blender behaviour).
 
-Modifier modal: a single-field popup for "Number of Cuts" (default 1).
-Each cut subdivides the *current* mesh, so 2 cuts → 4× density per
-selected triangle.
+Modifier modal: a popup with two fields (audit-added `smoothness`):
+
+- **Number of Cuts** (1..6, default 1) — each cut subdivides the
+  *current* mesh, so 2 cuts → 4× density per selected triangle.
+- **Smoothness** (0..1, default 0) — pulls new midpoint verts toward
+  a Catmull-Clark smoothed position. Useful for organic shapes (faces,
+  hair) — exactly the 2D rigging case. Blender's `MESH_OT_subdivide`
+  ships this; v1 dropped it. ~15 LOC additional in `subdivide.js`:
+  ```js
+  if (smoothness > 0) {
+    for (newMidpoint of newMidpoints) {
+      const target = catmullClarkSmooth(newMidpoint, originalRing);
+      newMidpoint = lerp(newMidpoint, target, smoothness);
+    }
+  }
+  ```
+
+(Blender's `subdivide` also has `fractal` + `fractal_along_normal`
+options. Both are 3D-specific and not useful for 2D; keep dropped.)
 
 Implementation: [src/v3/operators/edit/subdivide.js].
 
@@ -725,8 +815,36 @@ A boundary edge is one referenced by exactly one triangle in the mesh.
 Boundary vertex = a vertex incident on at least one boundary edge.
 Selected boundary subset = boundary verts that are also selected.
 
+**Audit-driven hardening** against degenerate seam triangles:
+
+A triangle with zero area (three collinear or coincident verts) is
+typically used in Live2D meshes as a UV / clip-mask seam separator.
+Its edges are referenced by only the degenerate triangle and one
+neighbour, **misclassifying as boundary** under the naive rule. Phase
+5 boundary detection filters as follows:
+
+```js
+function getBoundaryVerts(mesh) {
+  const edgeUseCount = new Map();
+  for (const tri of mesh.triangles) {
+    if (isDegenerate(tri, mesh.vertices, EPS_AREA)) continue;
+    incrementEdgeUseCount(edgeUseCount, tri);
+  }
+  // Boundary edges = used by exactly one *non-degenerate* triangle
+  const boundaryVerts = new Set();
+  for (const [edge, count] of edgeUseCount) {
+    if (count === 1) {
+      boundaryVerts.add(edge[0]);
+      boundaryVerts.add(edge[1]);
+    }
+  }
+  return boundaryVerts;
+}
+```
+
 Implementation: [src/io/meshTopology.js] gains `getBoundaryVerts(mesh)
-→ Set<vertIndex>` (cached).
+→ Set<vertIndex>` (cached, with epsilon-area degenerate filter).
+Test fixture covers a mesh with internal seam triangles.
 
 #### 5.B — Extrude operator
 
@@ -804,7 +922,12 @@ Modal menu (Pop-up) with applicable items based on selection:
   projectStore.js); make it Operator-level + bind here
 - **Apply Modifier** — submenu listing each modifier on the active
   object; calls `applyArmatureModifier` etc.
-- **Apply Visual Transform** — bake current transform into rest
+
+(Audit simplification: v1 also listed *Apply Visual Transform*. SS
+has no parent-transform stack for non-bone nodes — `node.transform` IS
+the visual transform — so there is no "visual" vs "local" split to
+collapse. Speccing it would be Rule №2 baggage. Deferred until a real
+parent-transform stack is in scope.)
 
 Implementation: [src/v3/operators/apply/menu.js] + register existing
 operators with proper IDs.
@@ -1033,19 +1156,35 @@ Same shape, sets `node.pose.scaleX = 1`, `node.pose.scaleY = 1`.
 
 Combined Loc + Rot + Scale clear. Single operator, single batch.
 
-##### 7.C.5 — Mirror Pose (`Ctrl+Shift+M`)
+##### 7.C.5 — Select Mirror (`Ctrl+Shift+M`) + Mirror Pose (`Ctrl+Shift+V`)
 
-For each selected bone with a `boneRole` like `leftElbow`, find the
-mirror bone (`rightElbow`) and apply the mirrored pose to it. The
-mirror operation:
+**Audit-driven split into two operators:**
+
+1. **Select Mirror** (`Ctrl+Shift+M`) — extends the current bone
+   selection to include the mirror partner of each selected bone (per
+   Blender `pose.select_mirror`). v1's plan put pose-mirroring on
+   this chord, which collides with Blender muscle memory.
+
+2. **Mirror Pose** (`Ctrl+Shift+V`) — pastes a previously-copied
+   pose flipped across X (per Blender `pose.paste(flipped=true)`).
+   Requires a copied pose (use Ctrl+C first); pastes to selected
+   bones with mirror-role partner detection.
+
+Mirror operation (used by both operators when finding partners):
 
 - `pose.x` → `-pose.x` (X-axis mirror)
 - `pose.rotation` → `-pose.rotation`
 - `pose.scaleX` / `pose.scaleY` unchanged
 
-Naming convention parsed from `boneRole`: detect `left*` / `right*`
-prefix, map to opposite. If no mirror exists, skip with a toast
-"<role> has no mirror partner".
+**Naming convention** (audit-narrowed): detect **`left*` / `right*`
+camelCase prefix only** (matches 100% of current SS auto-rig roles
+per [armatureOrganizer.js](../../src/io/armatureOrganizer.js):
+`leftElbow`, `rightElbow`, `leftArm`, `rightArm`, `leftLeg`,
+`rightLeg`, `leftKnee`, `rightKnee`).
+
+If no mirror exists, skip with a toast `"<role> has no mirror
+partner"`. Suffix-based `*.L` / `*.R` is **not implemented** in this
+phase — it can be added by a follow-up plan with a real spec.
 
 ##### 7.C.6 — Copy / Paste Pose (`Ctrl+C` / `Ctrl+V` in Pose Mode)
 
@@ -1086,28 +1225,37 @@ new store (`poseClipboardStore`) + 1 new editorStore field
 
 ## 6. Schema bumps
 
-This plan adds **two small project-schema changes**, both for Phase 7:
+This plan adds **two small project-schema changes**, both for Phase 7.
+**Schema numbers are placeholders (vTB+1 / vTB+2) until ship time** —
+audit caught a real Rule №2 collision with the animation plan if both
+plans land staged versions.
 
 | v | Phase | What |
 |---|-------|------|
-| v33 (toolset) | 7.A.1 | `project.cursor: { x, y }` (canvas-space 3D-cursor analog for Snap menu); default = canvas centre |
-| v34 (toolset) | 7.B.4 | `node.weightPaintSettings: { xMirror: boolean, ... }` per-Object weight-paint preferences (Blender stores this on the Object) |
+| `vTB+1` | 7.A.1 | `project.cursor: { x, y }` (canvas-space 3D-cursor analog for Snap menu); default = canvas centre |
+| `vTB+2` | 7.B.4 | `node.weightPaintSettings: { xMirror: boolean, ... }` per-Object weight-paint preferences |
 
-(These reuse the next-available schema numbers from the animation
-plan's namespace if we ship interleaved; if the animation plan ships
-first the toolset schema bumps shift to v38/v39. The plan reviewer
-should pick the canonical numbering based on actual ship order.)
+**Resolution gate at ship time** (audit-fixed; v1 said "the plan
+reviewer should pick canonical numbering" which is itself the
+deferral the audit flagged):
 
-All other state additions are in `editorStore` (in-memory editor state,
-not persisted), `preferencesStore` (persisted to localStorage, not
-project), `poseClipboardStore` (new, in-memory only), and
+When Phase 7.A is ready to ship, read the next-available schema number
+from `projectMigrations.js` header (call it `N`), update the migration
+filename to `vN_toolset_cursor.js`, and write the migration directly.
+Same for Phase 7.B. **Do not pre-allocate version numbers that might
+collide with sibling plans.** This is mechanical at ship time and
+removes the planning-document collision entirely.
+
+Architectural rationale: the project's mesh/topology format already
+supports the output of every Phase 0–6 operator (vertices + triangles
++ UVs + weight groups + blendShapes). Phase 7's two schema additions
+are for *authoring affordances* (cursor position, X-mirror toggle)
+that Blender persists per-document and we should too.
+
+All other state additions are in `editorStore` (in-memory editor
+state, not persisted), `preferencesStore` (persisted to localStorage,
+not project), `poseClipboardStore` (new, in-memory only), and
 operator/tool-internal state.
-
-Reasoning: the project's mesh/topology format already supports the
-output of every Phase 0–6 operator (vertices + triangles + UVs +
-weight groups + blendShapes). Phase 7's two schema additions are for
-*authoring affordances* (cursor position, X-mirror toggle) that
-Blender persists per-document and we should too.
 
 ---
 
@@ -1139,7 +1287,8 @@ triangles, would break the sweep — the writer asserts both.
 | Chord | Operator | Phase | Notes |
 |-------|----------|-------|-------|
 | `B` | `selection.boxSelect` | 1 | Object + Edit modes |
-| `Ctrl+drag` | `selection.lassoSelect` | 1 | Modal capture |
+| `Ctrl+drag` | `selection.lassoSelect` (ADD) | 1 | Modal capture |
+| `Ctrl+Shift+drag` | `selection.lassoSelect` (SUB) | 1 | Audit-added: Blender canonical SUB modifier |
 | `C` | `selection.circleSelect` | 6 | Modal capture |
 | `L` | `selection.linkedAtCursor` | 6 | Edit mode |
 | `Ctrl+L` | `selection.linkedFromSelection` | 6 | Edit mode |
@@ -1160,25 +1309,31 @@ triangles, would break the sweep — the writer asserts both.
 | `Alt+P` | `object.parent.clearMenu` |
 | (right-click → Set Origin) | `object.setOrigin.<mode>` |
 
-### Phase 7 — Weight Paint
+(v1's outdated Weight Paint table replaced; see audit-fixed table
+below.)
+
+### Phase 7 — Weight Paint (audit-fixed bindings)
 
 | Chord | Operator |
 |-------|----------|
-| `Ctrl+LMB` | `weightPaint.sample` |
+| **`Shift+X`** | `weightPaint.sample` (audit-fixed; was `Ctrl+LMB`) |
 | (brush dropdown) | `weightPaint.brush.blur` |
 | (right-click → Mirror) | `weightPaint.mirror.<axis>` |
 | (N-panel toggle) | `weightPaint.xMirror.toggle` |
-| `Ctrl+N` | `weightPaint.normalizeAll` |
+| **(menu only — no chord)** | `weightPaint.normalizeAll` (audit-fixed; was `Ctrl+N`; conflicts with Blender File New) |
 
-### Phase 7 — Pose Mode
+### Phase 7 — Pose Mode (audit-fixed bindings)
 
 | Chord | Operator |
 |-------|----------|
 | `Alt+G` | `pose.clearLocation` |
 | `Alt+R` | `pose.clearRotation` |
 | `Alt+S` | `pose.clearScale` |
-| `Alt+Shift+R` | `pose.clearAll` |
-| `Ctrl+Shift+M` | `pose.mirror` |
+| **`Alt+Shift+G`** | `pose.clearAllLocation` (audit-fixed: 3 separate chords, one per axis) |
+| **`Alt+Shift+R`** | `pose.clearAllRotation` |
+| **`Alt+Shift+S`** | `pose.clearAllScale` |
+| `Ctrl+Shift+M` | `pose.selectMirror` (audit-fixed: this is Blender's chord for select-mirror, NOT pose-mirror) |
+| **`Ctrl+Shift+V`** | `pose.mirrorPose` (audit-fixed: paste-flipped, Blender's actual mirror-pose chord) |
 | `Ctrl+C` (in Pose) | `pose.copy` |
 | `Ctrl+V` (in Pose) | `pose.paste` |
 
@@ -1371,24 +1526,32 @@ machinery; no new bugs.
 | 13 | Phase 7.B Mirror Weights position-based mirror picks the wrong vertex on near-degenerate symmetric topology | Medium | Use ε = 1px snap threshold; if multiple verts within ε, prefer the one whose mesh-distance (adjacency) is shortest. Document edge case. |
 | 14 | Phase 7.A Set Origin breaks vertex weights / blendShapes that are stored in object-local frame | High | Origin operations rebase mesh data into the new frame: `vertex_new = vertex_old + (originOld - originNew)`. Test fixture covers a part with weight groups + blendShapes. Byte-fidelity sweep gates the phase. |
 | 15 | Phase 7.B X-Axis Mirror toggle confuses users when their topology isn't symmetric | Medium | Surface an indicator on the toggle (green dot = symmetric topology detected; yellow dot = partial; red dot = asymmetric). Cheap to compute via the mirror-vertex-map cardinality. |
+| 16 | Phase 4 topology-op snapshot-undo memory pressure on high-vertex meshes (audit-added) | High-impact / Low-likelihood | `beginBatch / endBatch` writes a full project snapshot per topology op. For a 5000-vert mesh that's ~2 MB per undo entry × 50 entries = 100 MB. Mitigation: defer to a follow-up plan that ships delta-based undo for topology ops; for now, document the memory budget and warn on Logs panel when undo stack memory exceeds 200 MB. |
+| 17 | Phase 0 selection persistence cleared on active-part-switch surprises users (audit-added) | Medium | The plan §0.F clears selection on switching active part. Users with a "select-verts → switch parts to check → switch back" workflow lose selection. Mitigation: per Blender behaviour we keep this clearance; document in onboarding toast; multi-Object Edit Mode is a follow-up plan that would lift this. |
+| 18 | Phase 3 Sculpt brush + Armature modifier interaction (audit-added) | Medium | Sculpt brushes write directly to rest-position verts. If the part has an active Armature modifier, sculpting rest verts while in Sculpt Mode produces a confusing mismatch (rest changed but posed position computed from the modified rest). Mitigation: detect active Armature modifier on entry to Sculpt Mode; if present, surface a one-time toast: "Sculpt edits rest position; Armature modifier output reflects the new rest". Optional advanced UX: an `editorStore.sculptOnPosed` flag that sculpts the posed verts and bakes the delta back to rest via inverse Armature transform — defer to a follow-up. |
 
 ---
 
-## 12. Estimate
+## 12. Estimate (audit-revised)
 
 | Phase | Optimistic | Realistic | Pessimistic |
 |-------|-----------|-----------|-------------|
-| 0 — Vertex selection foundation | 4 days | 6 days | 9 days |
-| 1 — Box / Lasso select | 5 days | 7 days | 10 days |
-| 2 — Snap | 3 days | 4 days | 6 days |
-| 3 — Sculpt mode + brushes | 5 days | 7 days | 10 days |
-| 4 — Merge / Dissolve / Subdivide | 5 days | 7 days | 10 days |
-| 5 — Extrude | 3 days | 4 days | 6 days |
+| 0 — Vertex selection foundation (incl. topology shortest-path) | 4 days | 7 days | 10 days |
+| 1 — Box / Lasso select (incl. SUB modifier) | 5 days | 7 days | 10 days |
+| 2 — Snap (also exposes `snapToIncrement` for animation plan) | 3 days | 4 days | 6 days |
+| 3 — Sculpt mode + Grab/Smooth/**Pinch** brushes (audit-swap) | 5 days | 7 days | 10 days |
+| 4 — Merge / Dissolve (Meisters–Chazelle) / Subdivide (smoothness) | 6 days | 9 days | 13 days |
+| 5 — Extrude (with degenerate-seam guard) | 3 days | 5 days | 7 days |
 | 6 — Linked / Duplicate / Apply / Circle | 5 days | 7 days | 10 days |
-| 7 — Per-mode (Object + Weight Paint + Pose) | 8 days | 12 days | 16 days |
-| **Total** | **38 days (~5.4 wk)** | **54 days (~7.7 wk)** | **77 days (~11 wk)** |
+| 7 — Per-mode (Object + Weight Paint + Pose; audit-trimmed scope) | 10 days | 16 days | 22 days |
+| **Total** | **41 days (~5.9 wk)** | **62 days (~8.9 wk)** | **88 days (~12.6 wk)** |
 
-Realistic: **~7.5 weeks** of focused work.
+Realistic: **~9 weeks** of focused work (audit-revised upward from
+v1's 7.5; the audit found Phase 7 mirror-vertex-map work
+underestimated 2–3× because position-based mirror on irregular meshes
+surfaces topology anomalies that need defensive handling).
+
+**Pessimistic ~13 weeks is the number to commit to externally.**
 
 The plan is internally sequenced so partial delivery is shippable:
 stopping after Phase 1 still gets us box / lasso select on top of the
