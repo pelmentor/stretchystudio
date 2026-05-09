@@ -48,6 +48,31 @@ import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
 import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
+
+/**
+ * Revoke every `blob:` URL the project owns — texture sources +
+ * audio track sourceUrls. Run BEFORE overwriting `state.project` in
+ * `resetProject` / `loadProject` so the previous project's blobs are
+ * released back to the browser; otherwise Chrome holds an entire
+ * PSD-worth of texture blobs (50-200 MB) per project switch.
+ *
+ * Non-blob sources (data:, https://, file paths in pre-loaded
+ * snapshots) are left alone — `URL.revokeObjectURL` no-ops on those
+ * but we skip the call to avoid the warning noise.
+ */
+function disposeProjectResources(project) {
+  if (!project) return;
+  const revoke = (url) => {
+    if (typeof url === 'string' && url.startsWith('blob:')) {
+      try { URL.revokeObjectURL(url); }
+      catch { /* defensive — revoke shouldn't throw, but non-fatal */ }
+    }
+  };
+  for (const tex of project.textures ?? []) revoke(tex?.source);
+  for (const anim of project.animations ?? []) {
+    for (const track of anim.audioTracks ?? []) revoke(track?.sourceUrl);
+  }
+}
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 import { computeWorldMatrices } from '../renderer/transforms.js';
 
@@ -904,6 +929,7 @@ export const useProjectStore = create((set, get) => {
 
   /** Reset project to empty state */
   resetProject: () => {
+    disposeProjectResources(useProjectStore.getState().project);
     clearHistory();
     return set(produce((state) => {
       state.project.canvas   = { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' };
@@ -936,6 +962,7 @@ export const useProjectStore = create((set, get) => {
 
   /** Load a deserialized project from file */
   loadProject: (projectData) => {
+    disposeProjectResources(useProjectStore.getState().project);
     // Idempotent — the file loader (projectFile.loadProject) has already
     // migrated, but call again here to defend against direct callers.
     migrateProject(projectData);

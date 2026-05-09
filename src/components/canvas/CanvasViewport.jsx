@@ -378,6 +378,25 @@ export default function CanvasViewport({
         }
       }
     }
+
+    // 3. GPU resource prune — release VAO/VBO/IBO/texture for any part
+    //    no longer present in `project.nodes`. Without this the
+    //    PartRenderer's `_parts` Map grows for the lifetime of the
+    //    WebGL context (50 imports × 4k texture = ~12 GB GPU pressure
+    //    over a session). Same prune for the alpha-picking ImageData
+    //    cache and the texture-source memo.
+    const liveIds = new Set();
+    for (const node of project.nodes) {
+      if (node.type === 'part') liveIds.add(node.id);
+    }
+    for (const partId of [...scene.parts.partIds()]) {
+      if (!liveIds.has(partId)) {
+        scene.parts.destroyPart(partId);
+        imageDataMapRef.current.delete(partId);
+        lastUploadedSourcesRef.current.delete(partId);
+        isDirtyRef.current = true;
+      }
+    }
   }, [project.nodes, project.textures, versionControl.textureVersion]);
 
   const centerView = useCallback((contentW, contentH) => {
@@ -1010,6 +1029,14 @@ export default function CanvasViewport({
         scene: !!sceneRef.current,
       });
       cancelAnimationFrame(rafRef.current);
+      // Mesh workers are spawned per-part by `dispatchMeshWorker`; if
+      // the viewport unmounts mid-meshing they keep running with their
+      // full triangulation state. Terminate them so a remount starts
+      // clean.
+      for (const w of workersRef.current.values()) {
+        try { w.terminate(); } catch { /* worker already gone */ }
+      }
+      workersRef.current.clear();
       sceneRef.current?.destroy();
       sceneRef.current = null;
     };

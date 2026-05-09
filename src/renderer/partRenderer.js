@@ -28,6 +28,12 @@ export class PartRenderer {
   hasTexture(partId) { return !!this._parts.get(partId)?.texture; }
   hasMesh(partId) { return !!this._parts.get(partId)?.vao; }
 
+  /** Iterable of every partId currently holding GPU state. Used by the
+   *  CanvasViewport sync effect to detect parts that were deleted from
+   *  `project.nodes` so their VAO/VBO/IBO/texture can be released
+   *  rather than leaking until full teardown. */
+  partIds() { return this._parts.keys(); }
+
   // ── Upload ─────────────────────────────────────────────────────────────────
 
   /**

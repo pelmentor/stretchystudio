@@ -50,13 +50,13 @@ export async function loadSession(payload) {
 }
 
 /**
- * Drop the cached session. Called when load fails so a retry triggers
- * a fresh download instead of returning a broken session, and on
- * out-of-memory disposal in the future.
+ * Drop the cached session, releasing the underlying ONNX WASM heap
+ * (~70-200 MB for DWPose-384). Async because `InferenceSession.release`
+ * is async; callers that don't need to block can omit `await`.
  */
-export function clearSession() {
+export async function clearSession() {
   _session = null;
-  _clearDWPoseSession();
+  await _clearDWPoseSession();
 }
 
 /** True if a session is currently loaded. Used by the wizard to label

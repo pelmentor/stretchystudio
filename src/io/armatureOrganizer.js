@@ -278,8 +278,18 @@ export async function loadDWPoseSession(payload) {
   return _cachedSession;
 }
 
-/** Discard the cached session (e.g. on error). */
-export function clearDWPoseSession() { _cachedSession = null; }
+/** Discard the cached session, releasing the WASM heap holding the
+ *  ~70-200 MB DWPose model. ONNX `InferenceSession.release()` is async;
+ *  callers should await it for full cleanup, but callers that don't
+ *  need to block (typical UI close path) can fire-and-forget. */
+export async function clearDWPoseSession() {
+  const session = _cachedSession;
+  _cachedSession = null;
+  if (session && typeof session.release === 'function') {
+    try { await session.release(); }
+    catch (err) { console.warn('[clearDWPoseSession] release failed', err); }
+  }
+}
 
 /**
  * Composite all PSD layers onto a single canvas and run DWPose inference.
