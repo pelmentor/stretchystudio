@@ -23,12 +23,35 @@
 import { useRigSpecStore } from '../store/rigSpecStore.js';
 import { useProjectStore } from '../store/projectStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
-import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
+// Phase A2 (2026-05-09) — `initializeRigFromProject` and
+// `loadProjectTextures` are loaded dynamically inside the action
+// functions below. RigService itself is reachable from StaleRigBanner
+// (eager via AppShell), but the heavy rig pipeline (cmo3/moc3/can3
+// writers + exporter graph) only loads when a user actually triggers
+// initializeRig / runStage / refitAll.
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
-import { loadProjectTextures } from '../io/imageHelpers.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
 import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
+
+/**
+ * Lazy-loader for the rig harvest pipeline. Memoised so concurrent
+ * callers within the same session share a single import promise.
+ * @returns {Promise<{ initializeRigFromProject: typeof import('../io/live2d/rig/initRig.js').initializeRigFromProject, loadProjectTextures: typeof import('../io/imageHelpers.js').loadProjectTextures }>}
+ */
+let _harvestPipelinePromise = null;
+function _harvestPipeline() {
+  if (!_harvestPipelinePromise) {
+    _harvestPipelinePromise = Promise.all([
+      import('../io/live2d/rig/initRig.js'),
+      import('../io/imageHelpers.js'),
+    ]).then(([initRigMod, imageHelpersMod]) => ({
+      initializeRigFromProject: initRigMod.initializeRigFromProject,
+      loadProjectTextures: imageHelpersMod.loadProjectTextures,
+    }));
+  }
+  return _harvestPipelinePromise;
+}
 
 /**
  * P4 — harvestAll memo across rig stages.
@@ -67,11 +90,17 @@ let _harvestCacheMisses = 0;
  * Memoised wrapper around `initializeRigFromProject`. See the
  * `_harvestCache` doc above for the cache-correctness argument.
  *
+ * The harvest pipeline is dynamically imported on first call (Phase A2),
+ * memoised at module scope inside `_harvestPipeline()`. The first
+ * harvest pays the import cost; subsequent calls share the resolved
+ * module.
+ *
  * @param {object} project
  * @param {Map<string, HTMLImageElement>} images
  * @returns {Promise<any>}
  */
 async function memoInitializeRigFromProject(project, images) {
+  const { initializeRigFromProject } = await _harvestPipeline();
   if (!project) return initializeRigFromProject(project, images);
   if (_harvestCache.has(project)) {
     _harvestCacheHits++;
@@ -234,6 +263,7 @@ export async function initializeRig() {
     // Load textures so eye-source meshes get real PNG bytes for the
     // closure parabola fit. Failure here is non-fatal — rig init still
     // works without PNGs, just falls back to mesh bin-max sampling.
+    const { loadProjectTextures } = await _harvestPipeline();
     let images = new Map();
     try {
       images = await loadProjectTextures(project);
@@ -408,6 +438,7 @@ export async function runStage(stage, opts = {}) {
       try {
         resetToRestPose();
         const project = useProjectStore.getState().project;
+        const { loadProjectTextures } = await _harvestPipeline();
         let images = new Map();
         try { images = await loadProjectTextures(project); }
         catch (_err) { /* textures missing → fall back to mesh bin-max */ }
@@ -507,6 +538,7 @@ export async function refitAll(opts = {}) {
   try {
     resetToRestPose();
     const project = useProjectStore.getState().project;
+    const { loadProjectTextures } = await _harvestPipeline();
     let images = new Map();
     try { images = await loadProjectTextures(project); }
     catch (_err) { /* textures missing — proceed without */ }

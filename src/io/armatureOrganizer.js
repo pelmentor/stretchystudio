@@ -16,6 +16,16 @@ import {
   getBoneRestPivot,
 } from '../store/objectDataAccess.js';
 import { logger } from '../lib/logger.js';
+// Phase A2 (2026-05-09) — boot-light metadata lives in armatureMeta.js;
+// re-exported here so existing call sites keep working unchanged. New
+// callers should import from `@/io/armatureMeta` directly to skip the
+// heavy DWPose / bone-tree-builder graph.
+export {
+  KNOWN_TAGS,
+  matchTag,
+  detectCharacterFormat,
+  SKELETON_CONNECTIONS,
+} from './armatureMeta.js';
 
 
 // Lazy-loaded onnxruntime-web
@@ -38,22 +48,8 @@ async function _ensureOrt() {
 }
 
 
-/* ─── Tag sets ──────────────────────────────────────────────────────────────── */
-
-export const KNOWN_TAGS = [
-  'back hair', 'front hair', 'headwear', 'face',
-  'irides', 'irides-l', 'irides-r',
-  'eyebrow', 'eyebrow-l', 'eyebrow-r',
-  'eyewhite', 'eyewhite-l', 'eyewhite-r',
-  'eyelash', 'eyelash-l', 'eyelash-r',
-  'eyewear', 'ears', 'ears-l', 'ears-r', 'earwear',
-  'nose', 'mouth', 'neck', 'neckwear', 'topwear',
-  'handwear', 'handwear-l', 'handwear-r',
-  'bottomwear',
-  'legwear', 'legwear-l', 'legwear-r',
-  'footwear', 'footwear-l', 'footwear-r',
-  'tail', 'wings', 'objects',
-];
+// `KNOWN_TAGS`, `matchTag`, `detectCharacterFormat`, `SKELETON_CONNECTIONS`
+// are re-exported above from `armatureMeta.js` (Phase A2 split).
 
 // Tags whose layers follow the neck bone.
 const NECK_TAGS = new Set([
@@ -78,33 +74,6 @@ export const IRIS_TAGS = new Set([
   // V1/V2: the whole eye layer acts as an iris
   'eyes', 'eyel', 'eyer',
 ]);
-
-/* ─── Layer tag matching ────────────────────────────────────────────────────── */
-
-/** Returns the canonical tag for a layer name, or null if unrecognised. */
-export function matchTag(name) {
-  // Variants pair with their base tag (e.g. "mouth.smile" → "mouth").
-  const { baseName } = extractVariant(name);
-  const lower = baseName.toLowerCase().trim();
-  // Exact match first — prevents 'handwear' from matching 'handwear-l', etc.
-  for (const tag of KNOWN_TAGS) {
-    if (lower === tag) return tag;
-  }
-  // Then prefix match (e.g. 'front hair 2' → 'front hair')
-  for (const tag of KNOWN_TAGS) {
-    if (
-      lower.startsWith(tag + '-') ||
-      lower.startsWith(tag + ' ') ||
-      lower.startsWith(tag + '_')
-    ) return tag;
-  }
-  return null;
-}
-
-/** True if ≥4 layers match known character-part tags. */
-export function detectCharacterFormat(layers) {
-  return layers.filter(l => matchTag(l.name) !== null).length >= 4;
-}
 
 /* ─── Group analysis ────────────────────────────────────────────────────────── */
 
@@ -624,42 +593,7 @@ export function buildArmatureNodes(skeleton, groups, layers, partIds, uidFn) {
   return { groupDefs, assignments };
 }
 
-/* ─── Skeleton topology (for SkeletonOverlay) ──────────────────────────────── */
-
-/**
- * Lines to draw connecting bone joints. Each entry is
- * [parentBoneRole, childBoneRole]. Mirrors the `parentBone` map above
- * exactly, so every bone in the armature is visually connected to its
- * parent — Blender draws every Armature bone as a segment between its
- * head and tail. Without root → torso / root → leg edges the root
- * bone reads as an orphan dot at the hip pivot, easy to miss against
- * busy body geometry (BLENDER_DEVIATION_AUDIT Fix 1 — root visibility).
- *
- * Lines are drawn only for pairs where BOTH bones exist on the
- * current character. Fallback parent links (e.g. `head → torso` when
- * `neck` is absent) are NOT enumerated here; the renderer skips any
- * (from, to) pair where either side is missing.
- */
-export const SKELETON_CONNECTIONS = [
-  // Root → direct children
-  ['root',  'torso'],
-  ['root',  'leftLeg'],
-  ['root',  'rightLeg'],
-  ['root',  'bothLegs'],
-  // Spine
-  ['torso', 'neck'],
-  ['neck',  'head'],
-  ['head',  'eyes'],
-  // Arms
-  ['torso', 'leftArm'],
-  ['torso', 'rightArm'],
-  ['leftArm',  'leftElbow'],
-  ['rightArm', 'rightElbow'],
-  ['torso', 'bothArms'],
-  // Legs
-  ['leftLeg',  'leftKnee'],
-  ['rightLeg', 'rightKnee'],
-];
+// `SKELETON_CONNECTIONS` is re-exported from `armatureMeta.js` (Phase A2).
 
 /**
  * Given the current project nodes, extract a keypoints dict suitable for

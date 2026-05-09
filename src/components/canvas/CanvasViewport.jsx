@@ -25,7 +25,7 @@ import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
 // the user actually drops a PSD onto the canvas.
-import { detectCharacterFormat } from '@/io/armatureOrganizer';
+import { detectCharacterFormat } from '@/io/armatureMeta';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import { ViewLayersPopover } from '@/v3/shell/ViewLayersPopover';
 import { useWizardStore } from '@/store/wizardStore';

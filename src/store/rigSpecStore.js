@@ -2,10 +2,14 @@ import { create } from 'zustand';
 import { useProjectStore } from './projectStore.js';
 import { useParamValuesStore } from './paramValuesStore.js';
 import { useRigEvalStore } from './rigEvalStore.js';
-import { initializeRigFromProject } from '../io/live2d/rig/initRig.js';
+// Phase A2 (2026-05-09) — `initializeRigFromProject` and `loadProjectTextures`
+// are dynamically imported inside `buildRigSpec` so the eager bundle stops
+// dragging the cmo3/moc3/can3 binary writers + exporter graph (~60-80 kB
+// gzip). The fast-path `selectRigSpec(project)` covers loaded projects
+// without needing the heavy harvest at all; the async path is the
+// fallback for fresh PSDs that haven't been Init-Rig'd yet.
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
-import { loadProjectTextures } from '../io/imageHelpers.js';
 import { sanitisePartName } from '../lib/partId.js';
 import { logger } from '../lib/logger.js';
 import { getMesh } from './objectDataAccess.js';
@@ -76,6 +80,16 @@ export const useRigSpecStore = create((set, get) => ({
     set({ isBuilding: true, error: null });
     try {
       const project = useProjectStore.getState().project;
+      // Phase A2 — dynamic imports keep the eager bundle off the .cmo3
+      // writer / exporter graph; this path runs only for fresh PSDs
+      // that haven't been Init-Rig'd yet.
+      const [
+        { initializeRigFromProject },
+        { loadProjectTextures },
+      ] = await Promise.all([
+        import('../io/live2d/rig/initRig.js'),
+        import('../io/imageHelpers.js'),
+      ]);
       // Load textures so eye-source meshes get real PNG bytes for the
       // closure parabola fit. Non-fatal on failure.
       let images = new Map();

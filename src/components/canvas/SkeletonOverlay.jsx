@@ -18,7 +18,7 @@ import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useSelectionStore } from '@/store/selectionStore';
-import { SKELETON_CONNECTIONS } from '@/io/armatureOrganizer';
+import { SKELETON_CONNECTIONS } from '@/io/armatureMeta';
 import {
   computeWorldMatrices, mat3Identity,
   preparePoseTranslate, applyPoseTranslate,
