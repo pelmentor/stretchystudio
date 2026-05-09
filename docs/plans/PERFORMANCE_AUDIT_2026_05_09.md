@@ -29,7 +29,7 @@ signal). The synthesised punch list lives below.
 ## Punch-list status
 
 Format: `[STATUS] ID — short` (file:line) — note. STATUS is one of
-`SHIPPED` / `DEFERRED`. Commit refs link to the five Phase commits.
+`SHIPPED` / `⏳DEFERRED⏳`. Commit refs link to the five Phase commits.
 
 ### Phase A — loading wins (commit `6653926`)
 
@@ -57,8 +57,9 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | M4 | Orphaned VAO/VBO/IBO/textures on node delete (~64 MB texture each) | [src/renderer/partRenderer.js](../../src/renderer/partRenderer.js), [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (sync effect) | SHIPPED |
 | M5 | Texture + audio blob URLs never revoked on project swap (50-200 MB per swap) | [src/store/projectStore.js](../../src/store/projectStore.js) (`disposeProjectResources`) | SHIPPED |
 | M6 | Mesh workers leaked on viewport unmount | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (cleanup return) | SHIPPED |
-| M7 | `imageDataMapRef` retains full-res ImageData per part (~200 MB) for alpha hit-test | [src/components/canvas/CanvasViewport.jsx:124](../../src/components/canvas/CanvasViewport.jsx#L124) | DEFERRED |
-| M9 | `pendingPsd.layers` retains every layer's full RGBA (~3 GB peak on 4K × 50 layers) | [src/store/wizardStore.js](../../src/store/wizardStore.js) | DEFERRED |
+| M7a | Prune `imageDataMapRef` entries when their part transitions to a triangulated mesh (entries are dead weight after triangle hit-test path takes over) | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (mesh worker success handler) | SHIPPED `be6cd84` |
+| M7b | Downsample remaining wizard-window entries to 256² alpha mask | [src/components/canvas/CanvasViewport.jsx:124](../../src/components/canvas/CanvasViewport.jsx#L124) | ⏳DEFERRED⏳ |
+| M9 | `pendingPsd.layers` retains every layer's full RGBA — re-analysed 2026-05-09: needs UX redesign (back→re-finalize uses layers) | [src/store/wizardStore.js](../../src/store/wizardStore.js) | ⏳DEFERRED⏳ pending wizard-surface round |
 
 ### Phase C — render thrash (commit `a21fc2e`)
 
@@ -70,7 +71,7 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | S5 | `buildParamGroups(params)` un-memoed | [src/v3/editors/parameters/ParametersEditor.jsx](../../src/v3/editors/parameters/ParametersEditor.jsx) | SHIPPED |
 | S6 | TreeNode + ParamRow not React.memo | [TreeNode.jsx](../../src/v3/editors/outliner/TreeNode.jsx), [ParamRow.jsx](../../src/v3/editors/parameters/ParamRow.jsx) | SHIPPED |
 | S7 | ParamRow per-row activeId scan → lifted to ParametersEditor | [ParamRow.jsx](../../src/v3/editors/parameters/ParamRow.jsx) | SHIPPED |
-| S2 | PropertiesEditor whole-`project` subscription | [PropertiesEditor.jsx:35](../../src/v3/editors/properties/PropertiesEditor.jsx#L35) | DEFERRED |
+| S2 | PropertiesEditor whole-`project` subscription (per-section subs already shipped via S4) | [PropertiesEditor.jsx:35](../../src/v3/editors/properties/PropertiesEditor.jsx#L35) | ⏳DEFERRED⏳ |
 
 ### Phase D — runtime hot path (commit `805f2cc`)
 
@@ -80,10 +81,11 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | R5 | `computeBoneWorldMatrices` runs twice per frame → accept pre-computed bonework | [src/renderer/boneOverlayMatrix.js](../../src/renderer/boneOverlayMatrix.js) | SHIPPED |
 | R6 | `cubismPhysicsKernel` allocates 4 fresh Float32Array(N) per tick → state-resident reuse | [src/io/live2d/runtime/cubismPhysicsKernel.js:506-518](../../src/io/live2d/runtime/cubismPhysicsKernel.js#L506-L518) | SHIPPED |
 | R7 | `nodes.find` per art-mesh per frame (~10k linear comparisons) → O(1) Map lookup | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (rAF tick) | SHIPPED |
-| R2 | `setLiftedGrids` Zustand-broadcasts a fresh Map per frame | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (line ~726), [src/store/rigEvalStore.js](../../src/store/rigEvalStore.js) | DEFERRED |
-| R3+M1+M2 | chainEval / cellSelect / artMeshEval / warpEval / rotationEval typed-array allocation storm (~6-10k allocs/sec) | [src/io/live2d/runtime/evaluator/](../../src/io/live2d/runtime/evaluator/) | DEFERRED |
-| R4 | `mat3Mul` allocates fresh Float32Array(9) per multiply | [src/renderer/transforms.js:23](../../src/renderer/transforms.js#L23) | DEFERRED |
-| R12 | livePreview eval cache key churns (fresh object each frame) | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) | DEFERRED |
+| R12 | livePreview eval cache key churns (fresh object each frame) → coordinate paramValuesRef with setMany | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) | SHIPPED `c7726bb` |
+| R4 | `mat3Mul` allocates fresh Float32Array(9) per multiply → mat3MulInto + scratch reuse | [src/renderer/transforms.js:23](../../src/renderer/transforms.js#L23) | SHIPPED `9485a26` |
+| R3 (narrow) | chainEval ping-pong `bufB` Float32Array allocation → rigSpec-keyed pool | [src/io/live2d/runtime/evaluator/typedArrayPool.js](../../src/io/live2d/runtime/evaluator/typedArrayPool.js), [chainEval.js](../../src/io/live2d/runtime/evaluator/chainEval.js) | SHIPPED narrow scope |
+| R3 wider (M1+M2) | evalArtMesh `out` + lifted-grid Float64Arrays + chain-walk scratches | [src/io/live2d/runtime/evaluator/](../../src/io/live2d/runtime/evaluator/) | ⏳DEFERRED⏳ — narrow R3 covered ping-pong only |
+| R2 | `setLiftedGrids` Zustand-broadcasts a fresh Map per frame → revision counter + module-scope ref | [src/store/rigEvalStore.js](../../src/store/rigEvalStore.js), [WarpDeformerOverlay.jsx](../../src/v3/editors/viewport/overlays/WarpDeformerOverlay.jsx) | SHIPPED `03b060b` |
 
 ### Phase E — pipeline (commit `bd6db98`)
 
@@ -94,11 +96,11 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | P7 | `saveProject` serial texture/audio fetch → `Promise.all` | [src/io/projectFile.js](../../src/io/projectFile.js) | SHIPPED |
 | P8 | `loadProject` serial texture decode → `Promise.all` | [src/io/projectFile.js](../../src/io/projectFile.js) | SHIPPED |
 | - | Drop `JSON.stringify(..., null, 2)` indent (.stretch is gzipped anyway) | [src/io/projectFile.js](../../src/io/projectFile.js) | SHIPPED |
-| P1 | Undo `structuredClone` + `JSON.stringify` per push (~50ms + tens of MB per snapshot) → immer `produceWithPatches` | [src/store/undoHistory.js:73-78](../../src/store/undoHistory.js#L73-L78) | DEFERRED |
-| P2 | `finalizePsdImport` allocates N full-canvas ImageData on main thread inside one immer commit | [src/components/canvas/CanvasViewport.jsx:1497-1550](../../src/components/canvas/CanvasViewport.jsx#L1497-L1550) | DEFERRED |
-| P4 | `runStage` re-runs full `initializeRigFromProject` per stage (~3× pipeline cost) | [src/services/RigService.js:326-361](../../src/services/RigService.js#L326-L361) | DEFERRED |
-| P6 | `generate.js` mesh dedup is O(N²) over deduped points → spatial hash | [src/mesh/generate.js:107-121](../../src/mesh/generate.js#L107-L121) | DEFERRED |
-| P10 | `importPsd` (`readPsd`) runs synchronously on main thread; locks UI for seconds on big PSDs | [src/io/psd.js:28-29](../../src/io/psd.js#L28-L29) | DEFERRED |
+| P6 | `generate.js` mesh dedup is O(N²) over deduped points → spatial hash | [src/mesh/spatialHash.js](../../src/mesh/spatialHash.js), [generate.js](../../src/mesh/generate.js), [sample.js](../../src/mesh/sample.js) | SHIPPED |
+| P10 | `importPsd` (`readPsd`) runs synchronously on main thread → worker (no sync fallback) | [src/io/psd.worker.js](../../src/io/psd.worker.js), [src/io/psd.js](../../src/io/psd.js) | SHIPPED `cc700f8` |
+| P1 | Undo `structuredClone` + `JSON.stringify` per push (~50ms + tens of MB per snapshot) → immer `produceWithPatches` | [src/store/undoHistory.js:73-78](../../src/store/undoHistory.js#L73-L78) | ⏳DEFERRED⏳ |
+| P2 | `finalizePsdImport` allocates N full-canvas ImageData on main thread inside one immer commit | [src/components/canvas/CanvasViewport.jsx:1497-1550](../../src/components/canvas/CanvasViewport.jsx#L1497-L1550) | ⏳DEFERRED⏳ |
+| P4 | `runStage` re-runs full `initializeRigFromProject` per stage (~3× pipeline cost) | [src/services/RigService.js:326-361](../../src/services/RigService.js#L326-L361) | ⏳DEFERRED⏳ |
 
 ## Validation
 
@@ -113,6 +115,29 @@ fidelity / shelby byte fidelity) all stayed green throughout.
 | C | clean | clean | editorStore 87/87, propertiesSectionRegistry 19/19, outlinerTreeBuilder 109/109 |
 | D | clean | clean | chainEval 25/25, cubismWarpEval 29/29, cubismRotationEval 57/57, cubismPhysicsKernel 15/15, **cubismPhysicsOracle worst 1e-5 vs Web SDK**, physicsTick 44/44, bonePostChainComposition 13/13, boneSkinning 35/35, armatureModifier 23/23, **breathFidelity 66/66**, **shelbyByteFidelity 23/23** |
 | E | clean | clean | projectRoundTrip 41/41, saveLoadRigSpec 19/19, services 26/26 |
+
+## Implementation pass 2026-05-09 (afternoon)
+
+After the planning + review cycle, an implementation pass shipped
+the following deferred items in commit order:
+
+| Commit | Item | Notes |
+|---|---|---|
+| `c7726bb` | R12 | Eval cache idle hit (paramValuesRef coordinated with setMany) |
+| `3-files` | P6 | Mesh dedup spatial hash (O(N²) → O(N)) + new `test:spatialHash` |
+| `9485a26` | R4 | mat3MulInto + scratch matrix reuse |
+| `cc700f8` | P10 | readPsd in worker (no sync fallback) |
+| `R3 narrow` | R3 (ping-pong only) | rigSpec-keyed typed-array pool for chainEval bufB; new `test:typedArrayPool` |
+| `be6cd84` | M7a | Prune `imageDataMapRef` on auto-mesh completion |
+| `03b060b` | R2 | `setLiftedGrids` revision-counter gate (no per-frame broadcast) |
+
+Validation: byte-fidelity gates (cubismPhysicsOracle worst 1e-5,
+breathFidelity 66/66, shelbyByteFidelity 23/23) green throughout
+each commit. tsc + vite build green at every step.
+
+M9 was attempted and deferred-pending-redesign — the audit's
+"step 'review' is the last consumer" claim doesn't hold against
+the back-from-adjust → re-finalize path; needs UX work.
 
 ## Deferred work — recommended order
 
