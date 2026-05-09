@@ -650,9 +650,17 @@ export class DeformerStateCache {
         // out of the lifting loop.
         const curParentLifted = this.getLiftedGrid(curParentSpec);
         if (!curParentLifted) break;
-        const vertsIn = new Float32Array(nPts * 2);
+        // R3 wider — vertsIn/vertsOut are INTERNAL: read from `positions`,
+        // written into `positions` after the bilinear; never escape the
+        // method. Pool keyed by warp id so each warp's scratches are
+        // reused across evals (vertex counts are stable within a rigSpec).
+        const vertsIn = this._pool
+          ? this._pool.acquireFloat32(`lift:${warpSpec.id}:vertsIn`, nPts * 2)
+          : new Float32Array(nPts * 2);
+        const vertsOut = this._pool
+          ? this._pool.acquireFloat32(`lift:${warpSpec.id}:vertsOut`, nPts * 2)
+          : new Float32Array(nPts * 2);
         for (let i = 0; i < nPts * 2; i++) vertsIn[i] = positions[i];
-        const vertsOut = new Float32Array(nPts * 2);
         evalWarpKernelCubism(
           curParentLifted,
           curParentSpec.gridSize,
@@ -755,9 +763,17 @@ export class DeformerStateCache {
         const subChain = chainAbove.slice(stepIdx + 1);
         const stepLifted = this.getLiftedGridForChain(stepSpec, subChain);
         if (!stepLifted) break;
-        const vertsIn = new Float32Array(nPts * 2);
+        // R3 wider — vertsIn/vertsOut INTERNAL. Pool keyed by chain key
+        // so divergent chains (one part with middle-disable, others
+        // without) each get stable scratches reused across evals.
+        const scratchKey = `liftChain:${key}`;
+        const vertsIn = this._pool
+          ? this._pool.acquireFloat32(`${scratchKey}:vertsIn`, nPts * 2)
+          : new Float32Array(nPts * 2);
+        const vertsOut = this._pool
+          ? this._pool.acquireFloat32(`${scratchKey}:vertsOut`, nPts * 2)
+          : new Float32Array(nPts * 2);
         for (let i = 0; i < nPts * 2; i++) vertsIn[i] = positions[i];
-        const vertsOut = new Float32Array(nPts * 2);
         evalWarpKernelCubism(
           stepLifted,
           stepSpec.gridSize,
@@ -819,8 +835,14 @@ export class DeformerStateCache {
     let cur = parent;
     let safety = 32;
     const tmp = out ?? [0, 0];
-    const inBuf = new Float32Array(2);
-    const outBuf = new Float32Array(2);
+    // R3 wider — these tiny 2-float scratches stay alive only inside
+    // this method; pool with a single fixed key (one bucket per pool).
+    const inBuf = this._pool
+      ? this._pool.acquireFloat32('chainPoint:inBuf', 2)
+      : new Float32Array(2);
+    const outBuf = this._pool
+      ? this._pool.acquireFloat32('chainPoint:outBuf', 2)
+      : new Float32Array(2);
     while (cur && cur.type !== 'root' && safety-- > 0) {
       if (!cur.id) break;
       const parentSpec = this._specById.get(cur.id);
@@ -1012,6 +1034,11 @@ export class DeformerStateCache {
       } else if (first && (typeof first.angle === 'number' || typeof first.originX === 'number')) {
         const r = evalRotation(spec, cell);
         if (r) {
+          // R3 wider — rotation matrices are INTERNAL: stored in `state.mat`
+          // and read by `evalArtMeshFrame`/`evalChainAtPoint` within the
+          // current eval, never escape past the cache lifetime. Pool by
+          // spec id so the Float64Array(9) is reused across evals.
+          const matBuf = this._pool ? this._pool.acquireFloat64(`rot:${spec.id}:mat`, 9) : null;
           if (this._kernel === 'cubism-setup') {
             // Phase 2b — Setup-baked canvas-final matrix. FD-probes the
             // parent at the rotation's authored pivot to pick up the
@@ -1024,7 +1051,7 @@ export class DeformerStateCache {
             state = setup
               ? {
                   kind: 'rotation',
-                  mat: buildRotationMat3CanvasFinal(setup),
+                  mat: buildRotationMat3CanvasFinal(setup, matBuf),
                   isCanvasFinal: true,
                   setup,
                 }
@@ -1040,7 +1067,7 @@ export class DeformerStateCache {
             const isWarpParent = spec.parent?.type === 'warp';
             const sx = isWarpParent ? this._warpSlopeX : 1;
             const sy = isWarpParent ? this._warpSlopeY : 1;
-            state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy) };
+            state = { kind: 'rotation', mat: buildRotationMat3Aniso(r, sx, sy, matBuf) };
           }
         }
       }
@@ -1069,8 +1096,8 @@ export class DeformerStateCache {
  * @param {number} extraSy
  * @returns {Float64Array}
  */
-function buildRotationMat3Aniso(r, extraSx, extraSy) {
-  if (extraSx === 1 && extraSy === 1) return buildRotationMat3(r);
+function buildRotationMat3Aniso(r, extraSx, extraSy, out) {
+  if (extraSx === 1 && extraSy === 1) return buildRotationMat3(r, out);
   const angleDeg = r?.angleDeg ?? 0;
   const ox = r?.originX ?? 0;
   const oy = r?.originY ?? 0;
@@ -1087,7 +1114,7 @@ function buildRotationMat3Aniso(r, extraSx, extraSy) {
   const b = extraSx * (-sn) * s * ry;
   const d = extraSy * sn * s * rx;
   const e = extraSy * cs * s * ry;
-  const m = new Float64Array(9);
+  const m = out ?? new Float64Array(9);
   m[0] = a; m[1] = b; m[2] = ox;
   m[3] = d; m[4] = e; m[5] = oy;
   m[6] = 0; m[7] = 0; m[8] = 1;
@@ -1112,7 +1139,7 @@ function buildRotationMat3Aniso(r, extraSx, extraSy) {
  * @param {{canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean}} setup
  * @returns {Float64Array}
  */
-function buildRotationMat3CanvasFinal(setup) {
+function buildRotationMat3CanvasFinal(setup, out) {
   const angleDeg = setup?.effectiveAngleDeg ?? 0;
   const s = setup?.scale ?? 1;
   const rx = setup?.reflectX ? -1 : 1;
@@ -1124,7 +1151,7 @@ function buildRotationMat3CanvasFinal(setup) {
   const b = -sn * s * ry;
   const d = sn * s * rx;
   const e = cs * s * ry;
-  const m = new Float64Array(9);
+  const m = out ?? new Float64Array(9);
   m[0] = a; m[1] = b; m[2] = setup?.canvasFinalPivot?.[0] ?? 0;
   m[3] = d; m[4] = e; m[5] = setup?.canvasFinalPivot?.[1] ?? 0;
   m[6] = 0; m[7] = 0; m[8] = 1;

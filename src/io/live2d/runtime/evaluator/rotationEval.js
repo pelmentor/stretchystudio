@@ -106,11 +106,15 @@ export function evalRotation(spec, cellInfo) {
  * Returned as a 9-element `Float64Array` so the consumer can compose
  * matrices via `mat3Multiply` without converting array shapes.
  *
+ * Pass an optional `out` Float64Array(9) to write into a caller-owned
+ * buffer (R3 wider — pooled per spec id by the eval cache).
+ *
  * @param {{angleDeg:number, originX:number, originY:number, scale?:number,
  *          reflectX?:boolean, reflectY?:boolean}} state
+ * @param {Float64Array} [out]
  * @returns {Float64Array}
  */
-export function buildRotationMat3(state) {
+export function buildRotationMat3(state, out) {
   const angleDeg = state?.angleDeg ?? 0;
   const ox = state?.originX ?? 0;
   const oy = state?.originY ?? 0;
@@ -131,7 +135,7 @@ export function buildRotationMat3(state) {
   const d = sn * s * rx;
   const e = cs * s * ry;
 
-  const m = new Float64Array(9);
+  const m = out ?? new Float64Array(9);
   m[0] = a; m[1] = b; m[2] = ox;
   m[3] = d; m[4] = e; m[5] = oy;
   m[6] = 0; m[7] = 0; m[8] = 1;
