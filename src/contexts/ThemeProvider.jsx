@@ -23,14 +23,24 @@ const DEFAULT_FONT_SIZE = 16;
 // arrives (fontsource defaults to font-display: swap). Loaded families
 // stay registered for the rest of the session, so subsequent flips are
 // a no-op past the first call.
+//
+// Phase A2 (2026-05-09) — subset to `latin` only. The default
+// `@fontsource/<family>` entry pulls 8 subsets (latin, latin-ext,
+// cyrillic, cyrillic-ext, greek, greek-ext, vietnamese) ×2 (normal +
+// italic) per family — ~7 MB unused WOFF2s in `dist/`. UI strings are
+// English/Russian; Inter's `latin` is sufficient for the active UI text
+// (Russian users can still type into inputs — system fonts cover input
+// rendering when the WOFF2 doesn't carry the glyph). If we ever need
+// full Cyrillic UI rendering, swap a single family back to its default
+// entry.
 const FONT_LOADERS = {
-  'Inter':         () => import('@fontsource/inter'),
-  'Roboto':        () => import('@fontsource/roboto'),
-  'Open Sans':     () => import('@fontsource/open-sans'),
-  'Lato':          () => import('@fontsource/lato'),
-  'Montserrat':    () => import('@fontsource/montserrat'),
-  'Source Sans 3': () => import('@fontsource/source-sans-3'),
-  'Poppins':       () => import('@fontsource/poppins'),
+  'Inter':         () => import('@fontsource/inter/latin.css'),
+  'Roboto':        () => import('@fontsource/roboto/latin.css'),
+  'Open Sans':     () => import('@fontsource/open-sans/latin.css'),
+  'Lato':          () => import('@fontsource/lato/latin.css'),
+  'Montserrat':    () => import('@fontsource/montserrat/latin.css'),
+  'Source Sans 3': () => import('@fontsource/source-sans-3/latin.css'),
+  'Poppins':       () => import('@fontsource/poppins/latin.css'),
 };
 const _loadedFonts = new Set();
 function loadFontFamily(id) {

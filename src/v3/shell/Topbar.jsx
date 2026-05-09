@@ -15,7 +15,7 @@
  * @module v3/shell/Topbar
  */
 
-import { useState } from 'react';
+import { useState, lazy, Suspense } from 'react';
 import {
   FilePlus, Save, FolderOpen, Download, Settings2,
   SquareChartGantt, Undo2, Redo2, Link2, Unlink,
@@ -33,8 +33,18 @@ import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
-import { PreferencesModal } from './PreferencesModal.jsx';
-import { NewProjectDialog } from './NewProjectDialog.jsx';
+
+// Phase A2 (2026-05-09) — `PreferencesModal` (themePresets + KeymapModal
+// + i18n graph) and `NewProjectDialog` (projectTemplates) are open-gated
+// + lazy. Mount only when their open flag flips true; until then they
+// don't ship in the eager chunk. CanvasPropertiesPopover stays eager —
+// its graph is already in the eager bundle (Popover + form primitives).
+const PreferencesModal = lazy(() =>
+  import('./PreferencesModal.jsx').then((m) => ({ default: m.PreferencesModal })),
+);
+const NewProjectDialog = lazy(() =>
+  import('./NewProjectDialog.jsx').then((m) => ({ default: m.NewProjectDialog })),
+);
 
 /** @typedef {{ id: string, label: string, tip: string }} WorkspaceTab */
 
@@ -299,8 +309,16 @@ export function Topbar() {
         Scroll to zoom · Alt+drag to pan
       </span>
 
-      <PreferencesModal  open={prefsOpen}  onOpenChange={setPrefsOpen} />
-      <NewProjectDialog  open={confirmNew} onOpenChange={setConfirmNew} />
+      {prefsOpen ? (
+        <Suspense fallback={null}>
+          <PreferencesModal open={prefsOpen} onOpenChange={setPrefsOpen} />
+        </Suspense>
+      ) : null}
+      {confirmNew ? (
+        <Suspense fallback={null}>
+          <NewProjectDialog open={confirmNew} onOpenChange={setConfirmNew} />
+        </Suspense>
+      ) : null}
     </header>
   );
 }

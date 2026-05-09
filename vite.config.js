@@ -45,8 +45,25 @@ function chunkFor(id) {
   return 'vendor';
 }
 
+// Phase A2 (2026-05-09) — onnxruntime-web ships several `ort-wasm*.wasm`
+// binaries that Vite emits into `dist/assets/` (~25 MB total). At
+// runtime the app calls `instance.env.wasm.wasmPaths = <CDN URL>` in
+// `armatureOrganizer._ensureOrt`, so the runtime fetches WASM from the
+// CDN — the local copies are never used. They still bloat deploy
+// artifacts. Drop them at the bundle stage.
+const dropOrtWasm = {
+  name: 'drop-ort-wasm-emit',
+  generateBundle(_options, bundle) {
+    for (const fileName of Object.keys(bundle)) {
+      if (/ort-wasm.*\.(wasm|mjs|js)$/.test(fileName)) {
+        delete bundle[fileName];
+      }
+    }
+  },
+};
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), dropOrtWasm],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

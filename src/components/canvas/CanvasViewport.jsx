@@ -30,7 +30,10 @@ import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import { ViewLayersPopover } from '@/v3/shell/ViewLayersPopover';
 import { useWizardStore } from '@/store/wizardStore';
 import { useCaptureStore } from '@/store/captureStore';
-import * as PsdImportService from '@/services/PsdImportService';
+// Phase A2 (2026-05-09) — PsdImportService is only reached on a PSD
+// drop event. The service itself imports projectStore + wizardStore +
+// captureStore + variantNormalizer + applySplits + rigGroupCleanup;
+// dynamic-import keeps that whole graph off the eager path.
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1833,6 +1836,7 @@ export default function CanvasViewport({
       if (detectCharacterFormat(layers)) {
         // See-through character detected → open import wizard.
         // GAP-001 — wizard mounts at AppShell level; we just kick it off.
+        const PsdImportService = await import('@/services/PsdImportService');
         PsdImportService.start({ psdW, psdH, layers, partIds });
       } else {
         await finalizePsdImport(psdW, psdH, layers, partIds, [], null);
