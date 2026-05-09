@@ -27,6 +27,7 @@
 
 import { mat3Inverse, mat3Identity } from '../renderer/transforms.js';
 import { getMesh, isMeshedPart } from '../store/objectDataAccess.js';
+import { sampleAlphaMask } from '../components/canvas/viewport/alphaMask.js';
 
 /**
  * Sign of triangle (ax,ay)→(bx,by)→(cx,cy)→(ax,ay) used for
@@ -144,7 +145,7 @@ function pointInAnyTriangleObjs(verts, tris, px, py) {
  * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
  * @param {number} worldX
  * @param {number} worldY
- * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, {data: Uint8ClampedArray, width: number, height: number}> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, import('../components/canvas/viewport/alphaMask.js').AlphaMaskRecord> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
  * @returns {string | null}
  */
 export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
@@ -237,19 +238,14 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
     //       at its PSD position), so this branch is always-hit and only
     //       useful when neither imageData nor imageBounds is available.
     //
-    // imageData was painted in canvas space at PSD import (`drawImage(tmp,
-    // layer.x, layer.y)`), so we sample at (worldX, worldY) directly.
-    // imageBounds is also canvas-space. For the wizard scenario, parts'
-    // worldMatrices are identity so canvas == local; once auto-mesh runs
-    // and rigs are applied, the triangulation path (above) takes over.
-    const imgData = imageDataMap?.get(part.id) ?? null;
-    if (imgData && imgData.data && imgData.width > 0) {
-      const ix = Math.floor(worldX);
-      const iy = Math.floor(worldY);
-      if (ix >= 0 && ix < imgData.width && iy >= 0 && iy < imgData.height) {
-        const alpha = imgData.data[(iy * imgData.width + ix) * 4 + 3];
-        if (alpha > 0) return part.id;
-      }
+    // M7b — alphaMask record is the 256² downsample of the layer's
+    // canvas-painted alpha. `sampleAlphaMask` maps (worldX, worldY) →
+    // mask cell → 0..255. Same pre-mesh-only contract as before; once
+    // a part has triangles the priority-2 rigVerts path takes over.
+    const maskRec = imageDataMap?.get(part.id) ?? null;
+    if (maskRec && maskRec.w > 0) {
+      const alpha = sampleAlphaMask(maskRec, worldX, worldY);
+      if (alpha > 0) return part.id;
       continue;
     }
 

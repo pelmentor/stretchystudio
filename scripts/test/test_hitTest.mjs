@@ -211,6 +211,16 @@ function makeAlphaImageData(box) {
   return { data, width: 100, height: 100 };
 }
 
+// M7b — wrap the test imageData into the AlphaMaskRecord shape that
+// hitTestParts now consumes. Identity downsample (mask = source alpha
+// channel at 100×100) keeps the existing assertions valid.
+function makeAlphaMaskRecord(box) {
+  const src = makeAlphaImageData(box);
+  const mask = new Uint8Array(src.width * src.height);
+  for (let i = 0; i < mask.length; i++) mask[i] = src.data[i * 4 + 3];
+  return { mask, w: src.width, h: src.height, srcW: src.width, srcH: src.height };
+}
+
 {
   // Two overlapping pre-mesh layers: face (60×60 centered at 50,50),
   // hair (40×35 in the upper-left quadrant). At (60,60) only face is
@@ -219,8 +229,8 @@ function makeAlphaImageData(box) {
   const hair = makePremeshPart('hair', 1, { minX: 10, minY: 5,  maxX: 50, maxY: 40 });
   const project = { nodes: [face, hair] };
   const imageDataMap = new Map([
-    ['face', makeAlphaImageData({ x0: 20, y0: 20, x1: 80, y1: 80 })],
-    ['hair', makeAlphaImageData({ x0: 10, y0: 5,  x1: 50, y1: 40 })],
+    ['face', makeAlphaMaskRecord({ x0: 20, y0: 20, x1: 80, y1: 80 })],
+    ['hair', makeAlphaMaskRecord({ x0: 10, y0: 5,  x1: 50, y1: 40 })],
   ]);
 
   // Alpha sampling distinguishes layers by actual opaque pixels.

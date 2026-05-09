@@ -79,6 +79,7 @@ import {
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
+import { downsampleAlphaMask } from '@/components/canvas/viewport/alphaMask';
 import {
   computeBoneWorldMatrices,
   computeBoneParentMap,
@@ -129,7 +130,11 @@ export default function CanvasViewport({
   const meshPoolRef = useRef(/** @type {ReturnType<typeof createMeshWorkerPool>|null} */ (null));
   const meshDispatchSeqRef = useRef(/** @type {Map<string, number>} */ (new Map()));
   const lastUploadedSourcesRef = useRef(new Map()); // Map<partId, string> (source URI)
-  const imageDataMapRef = useRef(new Map()); // Map<partId, ImageData> for alpha-based picking
+  // M7b — pre-mesh alpha hit-test now uses 256² downsampled `Uint8Array`
+  // masks (~64 KB each) instead of canvas-sized RGBA `ImageData`
+  // (~64 MB at 4K). Wizard reorder/adjust hit-test reads
+  // `sampleAlphaMask(record, x, y)`.
+  const imageDataMapRef = useRef(new Map()); // Map<partId, AlphaMaskRecord>
   const dragRef = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
   const panRef = useRef(null);   // { startX, startY, panX0, panY0 }
   // Phase 5 touch+pen — multi-pointer tracking. activePointersRef holds every
@@ -392,12 +397,14 @@ export default function CanvasViewport({
                 sceneRef.current.parts.uploadTexture(node.id, img);
                 lastUploadedSourcesRef.current.set(node.id, sourceToUpload);
                 
-                // Maintain imageDataMapRef for alpha picking
+                // Maintain imageDataMapRef for alpha picking (M7b: downsampled mask)
                 const off = document.createElement('canvas');
                 off.width = img.width; off.height = img.height;
                 const ctx = off.getContext('2d');
                 ctx.drawImage(img, 0, 0);
-                imageDataMapRef.current.set(node.id, ctx.getImageData(0, 0, img.width, img.height));
+                imageDataMapRef.current.set(node.id, downsampleAlphaMask(
+                  ctx.getImageData(0, 0, img.width, img.height),
+                ));
                 
                 isDirtyRef.current = true;
               }
@@ -1537,8 +1544,8 @@ export default function CanvasViewport({
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, img.width, img.height);
 
-      // Store imageData for alpha-based picking
-      imageDataMapRef.current.set(partId, imageData);
+      // M7b — store downsampled alpha mask for alpha-based picking
+      imageDataMapRef.current.set(partId, downsampleAlphaMask(imageData));
 
       // Compute bounding box from opaque pixels
       const imageBounds = computeImageBounds(imageData);
@@ -1628,8 +1635,8 @@ export default function CanvasViewport({
         ctx.drawImage(tmp, layer.x, layer.y);
         const fullImageData = ctx.getImageData(0, 0, psdW, psdH);
 
-        // Store imageData synchronously for alpha-based picking
-        imageDataMapRef.current.set(partId, fullImageData);
+        // M7b — store downsampled alpha mask for alpha-based picking
+        imageDataMapRef.current.set(partId, downsampleAlphaMask(fullImageData));
 
         // Compute bounding box from opaque pixels
         const imageBounds = computeImageBounds(fullImageData);
@@ -1739,7 +1746,8 @@ export default function CanvasViewport({
         const ctx = off.getContext('2d');
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, img.width, img.height);
-        imageDataMapRef.current.set(partId, imageData);
+        // M7b — store downsampled alpha mask for alpha-based picking
+        imageDataMapRef.current.set(partId, downsampleAlphaMask(imageData));
       }
 
       // Re-upload to GPU
