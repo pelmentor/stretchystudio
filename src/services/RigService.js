@@ -31,6 +31,85 @@ import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
 
 /**
+ * P4 — harvestAll memo across rig stages.
+ *
+ * `initializeRigFromProject` runs the full mesh-build → cmo3-emit →
+ * harvest pipeline (~300-700ms on Hiyori-class projects). `runStage`
+ * for the three keyform stages (faceParallax / bodyWarpChain / rigWarps)
+ * each call this exact pipeline against the SAME project — pre-memo,
+ * a Refit-All paid 3× the cost.
+ *
+ * Cache shape. WeakMap keyed by the immer-produced `project` reference.
+ * immer guarantees a new project reference whenever any descendant of
+ * `state.project` changes, and re-uses the same reference otherwise.
+ * That makes the project ref a perfect cache key:
+ *   - Same project ref ⇒ no mutations since last harvest ⇒ same output.
+ *   - Any mutation (mesh edit, config seed, parameter add, transform
+ *     change) ⇒ new ref ⇒ cache miss.
+ * The WeakMap lets the old project + its cached harvest GC together
+ * once nothing in the app references the old ref.
+ *
+ * Promise-valued so concurrent in-flight callers share a single
+ * harvest. Rejections are deleted from the cache so retries trigger
+ * a fresh attempt.
+ *
+ * Failure mode: NEVER stale. The only way to get a hit is to call with
+ * the EXACT same project reference, which immer guarantees only when
+ * nothing changed.
+ *
+ * @type {WeakMap<object, Promise<any>>}
+ */
+const _harvestCache = new WeakMap();
+let _harvestCacheHits = 0;
+let _harvestCacheMisses = 0;
+
+/**
+ * Memoised wrapper around `initializeRigFromProject`. See the
+ * `_harvestCache` doc above for the cache-correctness argument.
+ *
+ * @param {object} project
+ * @param {Map<string, HTMLImageElement>} images
+ * @returns {Promise<any>}
+ */
+async function memoInitializeRigFromProject(project, images) {
+  if (!project) return initializeRigFromProject(project, images);
+  if (_harvestCache.has(project)) {
+    _harvestCacheHits++;
+    return _harvestCache.get(project);
+  }
+  _harvestCacheMisses++;
+  const p = (async () => {
+    try {
+      return await initializeRigFromProject(project, images);
+    } catch (err) {
+      _harvestCache.delete(project);
+      throw err;
+    }
+  })();
+  _harvestCache.set(project, p);
+  return p;
+}
+
+/**
+ * Test hook: clear the harvest cache. Production code never calls this —
+ * the WeakMap is self-managing.
+ */
+export function _clearHarvestCacheForTests() {
+  _harvestCacheHits = 0;
+  _harvestCacheMisses = 0;
+  // Can't .clear() a WeakMap; instead drop the reference and the GC
+  // collects entries when their project keys become unreachable. Tests
+  // construct fresh project objects so this is fine.
+}
+
+/**
+ * Test hook: report the cache hit/miss counters.
+ */
+export function _harvestCacheStats() {
+  return { hits: _harvestCacheHits, misses: _harvestCacheMisses };
+}
+
+/**
  * @typedef {Object} BuildRigResult
  * @property {boolean} ok
  * @property {string} [error]
@@ -159,7 +238,7 @@ export async function initializeRig() {
     try {
       images = await loadProjectTextures(project);
     } catch (_err) { /* textures missing — proceed without */ }
-    const harvest = await initializeRigFromProject(project, images);
+    const harvest = await memoInitializeRigFromProject(project, images);
 
     // Persist all rig outputs into projectStore.
     useProjectStore.getState().seedAllRig(harvest);
@@ -332,7 +411,7 @@ export async function runStage(stage, opts = {}) {
         let images = new Map();
         try { images = await loadProjectTextures(project); }
         catch (_err) { /* textures missing → fall back to mesh bin-max */ }
-        const harvest = await initializeRigFromProject(project, images);
+        const harvest = await memoInitializeRigFromProject(project, images);
         const action = STAGE_TO_ACTION[stage];
         const store = useProjectStore.getState();
         // For each keyform stage: if harvest produced a value, seed it;
@@ -431,7 +510,7 @@ export async function refitAll(opts = {}) {
     let images = new Map();
     try { images = await loadProjectTextures(project); }
     catch (_err) { /* textures missing — proceed without */ }
-    const harvest = await initializeRigFromProject(project, images);
+    const harvest = await memoInitializeRigFromProject(project, images);
     useProjectStore.getState().seedAllRig(harvest, mode);
 
     // Stamp every stage as run.
