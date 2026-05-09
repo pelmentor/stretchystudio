@@ -32,14 +32,27 @@ import { tabsFor, sectionsForTab } from './propertiesTabRegistry.jsx';
 
 export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
-  const project = useProjectStore((s) => s.project);
+  // S2 — narrow subscription. Predicates in `sectionRegistry.jsx` only
+  // ever read `project.nodes` (verified by audit 2026-05-09); section
+  // render fns read `active` only and do their own store hooks. By
+  // subscribing to nodes alone, unrelated mutations (paramValues writes,
+  // `project.parameters`/`physicsRules`/`autoRigConfig` edits) stop
+  // re-rendering the whole properties stack.
+  const nodes = useProjectStore((s) => s.project.nodes);
   const stickyTab = useEditorStore((s) => s.propertiesActiveTab);
 
   const active = items.length > 0 ? items[items.length - 1] : null;
 
+  // Stable ctx so memo deps below are deterministic — `nodes` identity
+  // changes only when the array's reference changes (immer per-mutation).
+  const ctx = useMemo(
+    () => ({ active, project: { nodes } }),
+    [active, nodes],
+  );
+
   const visibleTabs = useMemo(
-    () => (active ? tabsFor({ active, project }) : []),
-    [active, project],
+    () => (active ? tabsFor(ctx) : []),
+    [active, ctx],
   );
 
   // Effective active tab — the sticky pref if it's still visible,
@@ -71,7 +84,7 @@ export function PropertiesEditor() {
   }
 
   const activeNode = active.type === 'part' || active.type === 'group' || active.type === 'deformer'
-    ? (project?.nodes ?? []).find((n) => n?.id === active.id) ?? null
+    ? (nodes ?? []).find((n) => n?.id === active.id) ?? null
     : null;
   const headerName =
     active.type === 'parameter'
@@ -82,7 +95,7 @@ export function PropertiesEditor() {
     : active.type;
 
   const sections = effectiveTab
-    ? sectionsForTab({ active, project }, effectiveTab)
+    ? sectionsForTab(ctx, effectiveTab)
     : [];
 
   return (
@@ -109,7 +122,7 @@ export function PropertiesEditor() {
             </div>
           ) : (
             sections.map((sec) => (
-              <div key={sec.id}>{sec.render({ active, project })}</div>
+              <div key={sec.id}>{sec.render(ctx)}</div>
             ))
           )}
         </div>
