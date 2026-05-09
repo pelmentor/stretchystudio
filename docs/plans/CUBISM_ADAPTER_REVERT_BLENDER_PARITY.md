@@ -254,3 +254,55 @@ The "Add Modifier" tooltip differentiates the two cases: shows "Re-bind Armature
 | `src/services/ArmatureModifierService.js` | `bindArmatureModifier` resolves `jointBoneId` from `mesh.jointBoneId` OR nearest bone-group ancestor. Removed `missing-vertex-groups` failure (replaced with `no-bone-ancestor` for the no-target case). |
 | `src/v3/editors/properties/sections/ModifierStackSection.jsx` | Section visible for any meshed part with bone-group ancestor (was gated on existing weights). `canBindArmature` predicate widened. Tooltip differentiates re-bind vs fresh-bind. |
 | `scripts/test/test_applyArmatureModifier.mjs` | Test 10 contract update + Test 10b added: rigid-follow part → bind succeeds with empty modifier; truly-no-bone-ancestor case fails cleanly. 47/47 green. |
+
+---
+
+## §11 Properties panel UX polish (commit `18f88ca` + `79f8026`)
+
+After the §10 flows shipped, the user reported two follow-up gaps that broke the Blender feel:
+
+### Bug 1 — wrench tab disappeared for parts with no modifiers (commit `18f88ca`)
+
+User: *"I DON'T KNOW how to apply ARMATURE MODIFIER BACK - THE MODIFIER ICON TAB IN PROPERTIES FOR SOME FUCKING REASON DISAPPEARS - THAT'S NOT HOW BLENDER WORKS"*
+
+Right — Blender's wrench tab is on every mesh, regardless of stack state, because it's the **Add Modifier** entry point. SS was hiding the entire tab when the part had zero modifiers (`sectionRegistry.jsx:88-94` gated `modifierStack` section's `isVisible` on `node.modifiers.length > 0`). Combined with `tabsFor`'s tab-visibility-from-section-visibility logic, no modifiers → no section → no tab → no way to add the first modifier.
+
+**Fix (two-layer):**
+- `sectionRegistry.jsx`: section visible for any part, regardless of modifiers count.
+- `ModifierStackSection.jsx`: never returns null for a meshed part. Empty-stack case renders the Add Modifier button + an informative hint (different copy depending on whether a bone-group ancestor exists).
+
+### Bug 2 — Properties tab jumped on selection change (commit `79f8026`)
+
+User: *"WHEN SELECTING ANOTHER OBJECT WHY THE FUCK PROPERTIES TAB JUMPS BACK TO ANOTHER TAB - THATS NOT BLENDER BEHAVIOUR - IT SHOULD BE LIKE THIS: if I had modifiers open while selecting one object and then I decided to select another one - the modifier tab should be still opened"*
+
+Right — Blender keeps the user's tab choice across selection changes, restoring it whenever the user lands back on a selection where the tab is visible. SS was OVERWRITING the sticky pref on every context change where the tab was hidden.
+
+**Pre-fix `PropertiesEditor.jsx:61-65`:**
+```js
+useEffect(() => {
+  if (effectiveTab && effectiveTab !== stickyTab) {
+    setActiveTab(effectiveTab);   // ← destroyed user's choice
+  }
+}, [effectiveTab, stickyTab, setActiveTab]);
+```
+
+The effect's stated purpose ("make a subsequent click on the already-active tab feel coherent") was based on a flawed premise — clicking a tab DOES fire setActiveTab regardless of previous state. The effect was unnecessary AND broke the sticky-tab behavior.
+
+**Fix:**
+- Deleted the effect entirely. Sticky pref is now ONLY written by explicit user clicks on a tab button.
+- `PropertiesTabBar` now receives `effectiveTab` as a prop and highlights what's actually showing — avoids the visual mismatch where the tab bar said one thing was active while content showed another.
+
+**New behavior:**
+- Click Modifier tab on object A → sticky = `'modifiers'`.
+- Select object B (has modifier tab) → still on Modifier tab. ✓
+- Select object C (no modifier tab) → falls forward to first visible tab. Sticky stays `'modifiers'`.
+- Select back to A or B → restored to Modifier tab automatically. ✓
+
+### Implementation summary
+
+| File | Change |
+|---|---|
+| `src/v3/editors/properties/sectionRegistry.jsx` | `modifierStack` `isVisible` widened to any part (was gated on `node.modifiers.length > 0`). |
+| `src/v3/editors/properties/sections/ModifierStackSection.jsx` | Never returns null for a meshed part. Empty-stack hint added (3 variants based on bone-ancestor + modifier state). |
+| `src/v3/editors/properties/PropertiesEditor.jsx` | Removed the `setActiveTab(effectiveTab)` effect. `useEffect` import dropped. |
+| `src/v3/editors/properties/PropertiesTabBar.jsx` | Accepts `effectiveTab` prop; highlight uses it for active-state instead of raw sticky pref. |
