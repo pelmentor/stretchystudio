@@ -59,7 +59,7 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | M6 | Mesh workers leaked on viewport unmount | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (cleanup return) | SHIPPED |
 | M7a | Prune `imageDataMapRef` entries when their part transitions to a triangulated mesh (entries are dead weight after triangle hit-test path takes over) | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (mesh worker success handler) | SHIPPED `be6cd84` |
 | M7b | Downsample remaining wizard-window entries to 256² alpha mask | [src/components/canvas/viewport/alphaMask.js](../../src/components/canvas/viewport/alphaMask.js), [hitTest.js](../../src/io/hitTest.js) | SHIPPED `b068ed7` |
-| M9 | `pendingPsd.layers` retains every layer's full RGBA — re-analysed 2026-05-09: needs UX redesign (back→re-finalize uses layers) | [src/store/wizardStore.js](../../src/store/wizardStore.js) | ⏳DEFERRED⏳ pending wizard-surface round |
+| M9 | `pendingPsd.layers` retains every layer's full RGBA | [src/store/wizardStore.js](../../src/store/wizardStore.js) | CLOSED — not actionable (see below) |
 
 ### Phase C — render thrash (commit `a21fc2e`)
 
@@ -162,9 +162,21 @@ boneSkinning 35/35, armatureModifier 23/23, transforms 34/34. New
 test suites: alphaMask 21/21, harvestCache 11/11. typecheck clean
 at every step.
 
-**Remaining deferred:**
-- **M9** — `pendingPsd.layers` retention. Needs UX redesign of
-  the back→re-finalize path; out of scope for a perf sweep.
+**M9 closed as non-actionable (2026-05-09 verdict):**
+
+The audit's 3.2 GB projection assumed layers were canvas-sized RGBA;
+they're actually layer-sized (region-of-opacity), totaling tens of
+MB on typical character PSDs. Retention is only across an ACTIVE
+wizard session — `wizardStore.reset()` drops everything on Complete,
+Skip, or Cancel. The back-from-adjust → review → re-finalize path
+legitimately needs the layers; eliminating retention would either
+(a) require a UX change (drop the back button) or (b) introduce
+a metadata-only fallback that reloads ImageData from texture URLs
+on the back path, both of which add code complexity for a perf
+issue that doesn't actually bite. Per Rule №1 — no fake fix for
+a non-issue.
+
+**Sweep complete.** Every audit-listed item is now SHIPPED or CLOSED.
 
 ## Deferred work — recommended order
 
