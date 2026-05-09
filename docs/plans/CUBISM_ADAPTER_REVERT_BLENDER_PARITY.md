@@ -197,8 +197,60 @@ Modules are dead. Drop them.
 
 ---
 
-## §9 Decision log placeholder
+## §9 Decision log
 
 | Date | Decision | Rationale |
 |---|---|---|
-| 2026-05-09 | Revert proposed | Three bugs in two days; both audit agents independently flagged `seedDefaultRigidWeights` as the architectural mistake. Reverting is more Blender-like. |
+| 2026-05-09 (afternoon) | Revert proposed | Three bugs in two days; both audit agents independently flagged `seedDefaultRigidWeights` as the architectural mistake. Reverting is more Blender-like. |
+| 2026-05-09 (afternoon) | All 6 phases shipped (commits `67578ac`, follow-up `b293c9e`) | User confirmed visual works post-revert ("It works, very nice"). |
+| 2026-05-09 (afternoon) | User invoked **Rule №2** — no migration baggage | Deleted `seedDefaultRigidWeights.js`, `v31_default_rigid_weights.js`, `v30_strip_deformer_nodes.js` (staged Phase 3.C, never registered), `deformerLookup.js` (Phase 3.C helpers, no callers), `test_cubismAdapter_renderEquivalence.mjs` (proved equivalence of the rejected adapter), `test_meshBindingPlan_rigidStrip.mjs` (tested removed strip). Net −1029 lines. |
+| 2026-05-09 (afternoon) | Add Modifier > Armature now works without vertex groups (commit `b293c9e`) | User asked: "How do I add modifier back to the piece — what's the best blender approach here and user friendly?" Pre-fix, the section was hidden when no vertex groups existed → no way to start painting weights to promote a rigid-follow part to per-vertex skinning. Post-fix, `bindArmatureModifier` resolves jointBoneId from nearest bone ancestor when missing on the mesh; section is visible for any meshed part with bone-group ancestor. |
+
+---
+
+## §10 The shipped UX — three Blender-parity flows
+
+After all phases of the revert, users have three discrete, Blender-parity flows for managing Armature modifiers on a part. Each flow is one or more user actions; no hidden auto-magic, no contamination data.
+
+### Flow 1 — Bone follow (most common)
+
+**Use case:** the user just wants the part to visually rotate when a bone is posed.
+
+**User action:** none. The mesh is parented to the bone via `node.parent`; the overlay-matrix render path applies the bone's world matrix uniformly to the part's verts every frame. Mirrors Blender's "child of bone, no Armature modifier" semantics (the standard rigid-follow rendering Blender does via parent-chain composition).
+
+**Render decision:** `pickBonePostChainComposition` returns `kind: 'overlay'`; `CanvasViewport` calls `applyOverlayMatrixObj(verts, boneOverlayMap.get(node.id))`. Identity-pose bones produce no map entry → no-op overlay → zero cost.
+
+### Flow 2 — Per-vertex skinning (paint weights)
+
+**Use case:** the user wants partial influence (limb blend zone, sleeve crease, etc.) where different vertices follow different bones with different weights.
+
+**User actions:**
+1. **Properties panel → Add Modifier → Armature.** Empty modifier added with target = nearest bone-group ancestor (resolved from `node.parent` chain when `mesh.jointBoneId` is absent). The mesh continues to rigid-follow via overlay path because `mesh.boneWeights` is still empty.
+2. **Tab → Weight Paint mode** (V4 Phase 4 shipped 2026-05-05).
+3. **Paint weights.** Once any vertex has a non-zero weight, `pickBonePostChainComposition` flips from `'overlay'` to `'lbs'` and `applyTwoBoneSkinningObj` takes over.
+
+**Render decision flips automatically** based on `(hasModifier && hasWeights)` evaluating to true.
+
+### Flow 3 — Re-bind after Apply
+
+**Use case:** the user previously had a per-vertex skinned part (e.g. an arm with limb blend), clicked Apply Modifier to bake the current pose into rest geometry, and now wants to resume LBS skinning (e.g. to pose the bone differently).
+
+**Blender semantics preserved:** Apply Modifier removes the modifier entry from `node.modifiers[]` but keeps vertex groups (`me->dvert` is not touched by `OBJECT_OT_modifier_apply`). The mesh's vertex group data is therefore still on `mesh.boneWeights` + `mesh.jointBoneId` post-Apply.
+
+**User actions:**
+1. **Properties panel → Add Modifier → Armature.** `bindArmatureModifier` sees the existing `mesh.jointBoneId` and uses it directly (no need to walk the ancestor chain). Modifier added with the previous binding target. LBS resumes immediately.
+
+The "Add Modifier" tooltip differentiates the two cases: shows "Re-bind Armature modifier to existing vertex groups (N weights → bone X)" when weights exist, "Add empty Armature modifier (target bone: X). The part rigid-follows … until you paint vertex weights" when empty.
+
+### What was deliberately NOT added
+
+- **"Bind with Auto Weights" one-click operator.** Tempting to add (Blender precedent: `Object > Parent > Armature Deform With Automatic Weights`), but in Blender it's a parent-time convenience, not a modifier-time one. SS already has `computeSkinWeights` running in the wizard for limbs. Empty modifier + Weight Paint covers the same surface in two clicks. Can be added later if user requests.
+- **Auto-promote on Weight Paint.** Painting weights into an empty modifier could automatically populate `mesh.boneWeights`. Not implemented — the Weight Paint UI's existing flow is the canonical surface, and the modifier's `data.jointBoneId` is the auto-target for any new weight a user paints.
+
+### Implementation summary
+
+| File | Change |
+|---|---|
+| `src/services/ArmatureModifierService.js` | `bindArmatureModifier` resolves `jointBoneId` from `mesh.jointBoneId` OR nearest bone-group ancestor. Removed `missing-vertex-groups` failure (replaced with `no-bone-ancestor` for the no-target case). |
+| `src/v3/editors/properties/sections/ModifierStackSection.jsx` | Section visible for any meshed part with bone-group ancestor (was gated on existing weights). `canBindArmature` predicate widened. Tooltip differentiates re-bind vs fresh-bind. |
+| `scripts/test/test_applyArmatureModifier.mjs` | Test 10 contract update + Test 10b added: rigid-follow part → bind succeeds with empty modifier; truly-no-bone-ancestor case fails cleanly. 47/47 green. |
