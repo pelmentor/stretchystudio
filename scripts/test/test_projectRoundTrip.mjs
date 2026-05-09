@@ -277,7 +277,7 @@ async function saveAndReload(project) {
     const { useProjectStore } = await import('../../src/store/projectStore.js');
     const original = makeFixtureProject();
     const { project: reloaded } = await saveAndReload(original);
-    useProjectStore.getState().loadProject(reloaded);
+    await useProjectStore.getState().loadProject(reloaded);
     const storeState = useProjectStore.getState();
     const stored = storeState.project;
 

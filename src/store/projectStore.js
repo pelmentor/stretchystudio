@@ -2,36 +2,23 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from './undoHistory.js';
 import { useParamValuesStore } from './paramValuesStore.js';
-import { CURRENT_SCHEMA_VERSION, migrateProject } from './projectMigrations.js';
-// Phase A2 (2026-05-09) — 11 seed modules (~hundred kB gzip total)
-// dynamically loaded on first seed-action call. See `projectStoreSeeds.js`.
-// Production paths that need seeds (Init Rig, Refit All, runStage) are
-// all on already-lazy code paths, so the import naturally lands when the
-// user starts the work that needs it.
+// Phase A2 (2026-05-09) — `CURRENT_SCHEMA_VERSION` lives in a tiny
+// side-effect-free file so reading the constant doesn't drag the 11
+// migration modules onto the eager path. `migrateProject` itself is
+// loaded via `loadRigPeers` only on `loadProject`.
+import { CURRENT_SCHEMA_VERSION } from './projectSchemaVersion.js';
+// Phase A2 — seed modules + rig-peer modules dynamically loaded on
+// first action call. See `projectStoreSeeds.js` + `projectStoreRigPeers.js`.
+// All production paths reaching these (seedAllRig / loadProject /
+// weight paint) are async, so awaiting the import is mechanical.
 import { loadSeedModule } from './projectStoreSeeds.js';
-import { computeProjectSignatures } from '../io/meshSignature.js';
-import {
-  ensureWeightGroups,
-  syncBoneWeightsFromActive,
-  applyWeightStroke,
-} from '../io/live2d/rig/meshSync.js';
+import { loadRigPeers } from './projectStoreRigPeers.js';
 import {
   getMesh,
   isMeshedPart,
   isBoneGroup,
   setObjectMode,
 } from './objectDataAccess.js';
-import {
-  rotationSpecToDeformerNode,
-  warpSpecToDeformerNode,
-  upsertDeformerNode,
-  removeAllRotationDeformerNodes,
-  synthesizeModifierStacks,
-  synthesizeDeformerParents,
-} from './deformerNodeSync.js';
-import { persistArtMeshRuntime } from './artMeshRuntimeSync.js';
-import { findOrphanReferences } from '../io/live2d/rig/paramReferences.js';
-import { findBindingSchemaDrift } from '../io/live2d/rig/paramSchemaDrift.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
 
@@ -571,33 +558,39 @@ export const useProjectStore = create((set, get) => {
    * brush has something to paint into) and by `setActiveWeightGroup`
    * before swapping the active.
    */
-  ensureWeightGroupsForPart: (partId) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find((n) => n?.id === partId);
-    const mesh = getMesh(node, state.project);
-    if (!mesh) return;
-    const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-    if (ensureWeightGroups(mesh, boneGroups)) {
-      syncBoneWeightsFromActive(mesh, boneGroups);
-    }
-  })),
+  ensureWeightGroupsForPart: async (partId) => {
+    const peers = await loadRigPeers();
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const node = state.project.nodes.find((n) => n?.id === partId);
+      const mesh = getMesh(node, state.project);
+      if (!mesh) return;
+      const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
+      if (peers.ensureWeightGroups(mesh, boneGroups)) {
+        peers.syncBoneWeightsFromActive(mesh, boneGroups);
+      }
+    }));
+  },
 
   /**
    * Switch the active weight group on a part. Auto-migrates if needed
    * (so the user can pick "set active" before painting). Mirrors the
    * new active group into legacy `mesh.boneWeights`.
    */
-  setActiveWeightGroup: (partId, groupName) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find((n) => n?.id === partId);
-    const mesh = getMesh(node, state.project);
-    if (!mesh) return;
-    const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-    ensureWeightGroups(mesh, boneGroups);
-    if (typeof groupName !== 'string' || !mesh.weightGroups?.[groupName]) return;
-    mesh.activeWeightGroup = groupName;
-    syncBoneWeightsFromActive(mesh, boneGroups);
-  })),
+  setActiveWeightGroup: async (partId, groupName) => {
+    const peers = await loadRigPeers();
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const node = state.project.nodes.find((n) => n?.id === partId);
+      const mesh = getMesh(node, state.project);
+      if (!mesh) return;
+      const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
+      peers.ensureWeightGroups(mesh, boneGroups);
+      if (typeof groupName !== 'string' || !mesh.weightGroups?.[groupName]) return;
+      mesh.activeWeightGroup = groupName;
+      peers.syncBoneWeightsFromActive(mesh, boneGroups);
+    }));
+  },
 
   /**
    * Phase 2b storage flip — write the per-object `Object.mode` field on
@@ -639,16 +632,17 @@ export const useProjectStore = create((set, get) => {
    * each call is one immer commit (undo restores per-stroke
    * granularity).
    */
-  paintWeightStroke: (partId, updates) => {
+  paintWeightStroke: async (partId, updates) => {
     if (!Array.isArray(updates) || updates.length === 0) return;
+    const peers = await loadRigPeers();
     set(produce((state) => {
       state.hasUnsavedChanges = true;
       const node = state.project.nodes.find((n) => n?.id === partId);
       const mesh = getMesh(node, state.project);
       if (!mesh) return;
       const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
-      ensureWeightGroups(mesh, boneGroups);
-      applyWeightStroke(mesh, updates, boneGroups);
+      peers.ensureWeightGroups(mesh, boneGroups);
+      peers.applyWeightStroke(mesh, updates, boneGroups);
       // NOTE: do NOT bump geometryVersion here. Weights are not geometry —
       // bumping it invalidates rigSpec on every paint commit, which makes
       // the live-preview physics tick rebuild physicsState every frame
@@ -947,11 +941,15 @@ export const useProjectStore = create((set, get) => {
   },
 
   /** Load a deserialized project from file */
-  loadProject: (projectData) => {
+  loadProject: async (projectData) => {
     disposeProjectResources(useProjectStore.getState().project);
+    // Phase A2 — `migrateProject` + `findBindingSchemaDrift` come from
+    // the lazy rig-peers loader. Project loads happen on user gesture
+    // (file pick / drag-drop), so awaiting the import is mechanical.
+    const peers = await loadRigPeers();
     // Idempotent — the file loader (projectFile.loadProject) has already
     // migrated, but call again here to defend against direct callers.
-    migrateProject(projectData);
+    peers.migrateProject(projectData);
     clearHistory();
     // BUG-023 instrumentation — surface paramOrphans + deformer/part counts
     // at load time so when the user reports "rig dead after reload" we
@@ -987,7 +985,7 @@ export const useProjectStore = create((set, get) => {
       // keys fall outside the param's [min, max] range. Drift can sit
       // in a saved project when the user edited a param via V4 Track 2
       // and saved without re-running Init Rig.
-      const drift = findBindingSchemaDrift(projectData);
+      const drift = peers.findBindingSchemaDrift(projectData);
       if (drift.length > 0) {
         logger.warn(
           'paramSchemaDrift',
@@ -1199,10 +1197,13 @@ export const useProjectStore = create((set, get) => {
    * @param {'replace'|'merge'} [mode='replace']
    */
   seedAllRig: async (harvest, mode = 'replace') => {
-    // Phase A2 — pre-load the seed module BEFORE the immer recipe runs.
-    // immer's `produce` recipes must be sync; we resolve all seed
-    // functions up front and then call them inside the recipe.
-    const seeds = await loadSeedModule();
+    // Phase A2 — pre-load the seed module + rig peers BEFORE the immer
+    // recipe runs. immer's `produce` recipes must be sync; we resolve
+    // all needed functions up front and then call them inside the recipe.
+    const [seeds, peers] = await Promise.all([
+      loadSeedModule(),
+      loadRigPeers(),
+    ]);
     set((state) => {
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
@@ -1252,7 +1253,7 @@ export const useProjectStore = create((set, get) => {
               (n) => n && n.id === harvest.neckWarpSpec.id && n.type === 'deformer'
             );
             if (!prior || prior._userAuthored !== true) {
-              upsertDeformerNode(proj.nodes, warpSpecToDeformerNode(harvest.neckWarpSpec));
+              peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
             }
           } else {
             upsertDeformerNode(proj.nodes, warpSpecToDeformerNode(harvest.neckWarpSpec));
@@ -1283,7 +1284,7 @@ export const useProjectStore = create((set, get) => {
       const rotationDeformers = harvest?.rigSpec?.rotationDeformers ?? [];
       if (Array.isArray(proj.nodes)) {
         if (mode === 'replace') {
-          removeAllRotationDeformerNodes(proj.nodes);
+          peers.removeAllRotationDeformerNodes(proj.nodes);
         } else {
           // Merge mode: drop only the rotations being overwritten;
           // _userAuthored survivors stay in place.
@@ -1304,7 +1305,7 @@ export const useProjectStore = create((set, get) => {
             );
             if (prior && prior._userAuthored === true) continue;
           }
-          upsertDeformerNode(proj.nodes, rotationSpecToDeformerNode(spec));
+          peers.upsertDeformerNode(proj.nodes, peers.rotationSpecToDeformerNode(spec));
         }
       }
       // GAP-012 Phase A — capture per-mesh fingerprint at seed time so
@@ -1313,7 +1314,7 @@ export const useProjectStore = create((set, get) => {
       // positional indexing of `keyform.positions`). Detection only:
       // `validateProjectSignatures(project)` returns the divergence
       // report; consumer (UI banner) decides what to do.
-      proj.meshSignatures = computeProjectSignatures(proj);
+      proj.meshSignatures = peers.computeProjectSignatures(proj);
       // Drop `ParamRotation_<g>` entries whose owning rotation deformer
       // was pruned as a dead-end orphan in `pruneOrphanRotationDeformers`
       // (initRig.js). seedParameters above synthesises one per non-bone,
@@ -1350,13 +1351,13 @@ export const useProjectStore = create((set, get) => {
       // AFTER seedRigWarps so the rigWarps' chain ancestors aren't
       // visible at synthesize time. Re-run once at the end so every
       // part's `Object.modifiers[]` reflects the final tree shape.
-      synthesizeModifierStacks(proj);
+      peers.synthesizeModifierStacks(proj);
       // V2 Phase 0.3 — modifier stacks are now canonical; parent-link
       // shape (`deformer.parent` + `part.rigParent`) is a derived mirror
       // for cmo3writer. Run inverse synth after every forward synth so
       // any future caller can mutate stacks alone and trust the mirror
       // to stay consistent. See `synthesizeDeformerParents` doc header.
-      synthesizeDeformerParents(proj);
+      peers.synthesizeDeformerParents(proj);
       // Schema v29 — persist `rigSpec.artMeshes` runtime data (bindings
       // + keyforms + parent) into `project.nodes[i].mesh.runtime` so
       // `selectRigSpec(project)` produces an art-mesh tree equivalent
@@ -1365,7 +1366,7 @@ export const useProjectStore = create((set, get) => {
       // eye-closure curves + neck-corner offsets + variant fades all
       // silently disappear from the live preview.
       if (harvest?.rigSpec) {
-        persistArtMeshRuntime(proj, harvest.rigSpec, mode);
+        peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
       }
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.
@@ -1384,7 +1385,7 @@ export const useProjectStore = create((set, get) => {
     // findOrphanReferences reads the post-seed project; the `set` above
     // committed before this returns.
     const postSeedProject = get().project;
-    const orphans = findOrphanReferences(postSeedProject);
+    const orphans = peers.findOrphanReferences(postSeedProject);
     const orphanIds = Object.keys(orphans);
     if (orphanIds.length > 0) {
       logger.warn(
@@ -1405,7 +1406,7 @@ export const useProjectStore = create((set, get) => {
     // the V4 Track 2 param editor mutates a param's range / keys without
     // a follow-up Init Rig — bindings still carry the old schema.
     // Detection only; "you have stale rig wiring" UI banner deferred.
-    const drift = findBindingSchemaDrift(postSeedProject);
+    const drift = peers.findBindingSchemaDrift(postSeedProject);
     if (drift.length > 0) {
       logger.warn(
         'paramSchemaDrift',

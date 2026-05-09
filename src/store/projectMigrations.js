@@ -19,6 +19,13 @@
  *   4. Add a test in `scripts/test_migrations.mjs`.
  */
 
+// CURRENT_SCHEMA_VERSION lives in `projectSchemaVersion.js` (tiny file,
+// no peer imports) so projectStore can read the constant without
+// dragging this whole migrations graph onto the eager path.
+// Imported here for in-module use AND re-exported for back-compat.
+import { CURRENT_SCHEMA_VERSION } from './projectSchemaVersion.js';
+export { CURRENT_SCHEMA_VERSION };
+
 import { synthesizeDeformerNodesFromSidetables, synthesizeModifierStacks } from './deformerNodeSync.js';
 import { migrateModifierModeFlags } from './migrations/v21_modifier_mode_flags.js';
 import { migrateNodeTreeRigTree } from './migrations/v22_nodetree_rigtree.js';
@@ -31,7 +38,9 @@ import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js'
 import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
 import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_default_weights.js';
 
-export const CURRENT_SCHEMA_VERSION = 32;
+// CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
+// — the constant lives there in a tiny side-effect-free file so eager
+// importers can read it without pulling the migration graph.
 
 /** Identity pose offset for a bone group. */
 function identityPose() {

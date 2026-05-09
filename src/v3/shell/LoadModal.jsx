@@ -42,7 +42,7 @@ export function LoadModal({ open, onOpenChange }) {
       const full = await loadProjectRecord(rec.id);
       if (!full?.blob) return;
       const { project } = await deserializeProject(full.blob);
-      useProjectStore.getState().loadProject(project);
+      await useProjectStore.getState().loadProject(project);
       // Re-anchor to this library record so a subsequent save
       // overwrites it (matches upstream's setCurrentDbProjectId flow).
       useProjectStore.setState({ currentLibraryId: rec.id });
@@ -55,7 +55,7 @@ export function LoadModal({ open, onOpenChange }) {
   async function loadFromFile(file) {
     try {
       const { project } = await deserializeProject(file);
-      useProjectStore.getState().loadProject(project);
+      await useProjectStore.getState().loadProject(project);
       // Disk-loaded projects start unlinked — loadProject already
       // cleared currentLibraryId; leave it that way.
       onOpenChange(false);

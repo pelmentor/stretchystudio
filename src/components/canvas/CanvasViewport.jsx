@@ -1769,8 +1769,8 @@ export default function CanvasViewport({
         sceneRef.current.parts.destroyAll();
       }
 
-      // Load project into store
-      useProjectStore.getState().loadProject(loadedProject);
+      // Load project into store (Phase A2 — async; lazy-loads migrations)
+      await useProjectStore.getState().loadProject(loadedProject);
 
       // Rebuild imageDataMapRef from loaded textures
       imageDataMapRef.current.clear();

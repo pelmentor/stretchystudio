@@ -69,7 +69,7 @@ export function Cmo3InspectModal() {
     setImporting(true);
     try {
       const { project, warnings, stats } = await importCmo3(bytes);
-      useProjectStore.getState().loadProject(project);
+      await useProjectStore.getState().loadProject(project);
 
       // Auto-build the rigSpec so the v3 viewport picks up parameter
       // bindings immediately — without this the user would see a static

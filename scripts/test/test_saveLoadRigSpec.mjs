@@ -179,7 +179,7 @@ function makeRiggedFixture() {
     'Test 1: part mesh.vertices preserved (9 verts)');
 
   // Now simulate LoadModal.loadFromRecord — calls loadProject on store.
-  useProjectStore.getState().loadProject(reloaded);
+  await useProjectStore.getState().loadProject(reloaded);
 
   // Subscriber #1 (geometry version) fires synchronously inside loadProject
   // (via the immer set), so by the time loadProject returns, both subs
@@ -209,7 +209,7 @@ function makeRiggedFixture() {
 
   const original = makeRiggedFixture();
   const { project: reloaded } = await saveAndReload(original);
-  useProjectStore.getState().loadProject(reloaded);
+  await useProjectStore.getState().loadProject(reloaded);
 
   const values = useParamValuesStore.getState().values;
   assert(values.ParamAngleX === 0,         `Test 2: ParamAngleX seeded to 0 (got ${values.ParamAngleX})`);
@@ -226,7 +226,7 @@ function makeRiggedFixture() {
 
   const original = makeRiggedFixture();
   const { project: reloaded } = await saveAndReload(original);
-  useProjectStore.getState().loadProject(reloaded);
+  await useProjectStore.getState().loadProject(reloaded);
 
   const proj = useProjectStore.getState().project;
   const paramIds = new Set((proj.parameters ?? []).map((p) => p.id));
@@ -269,7 +269,7 @@ function makeRiggedFixture() {
   // First load
   const proj1 = makeRiggedFixture();
   const { project: r1 } = await saveAndReload(proj1);
-  useProjectStore.getState().loadProject(r1);
+  await useProjectStore.getState().loadProject(r1);
   const spec1 = useRigSpecStore.getState().rigSpec;
   assert(spec1 !== null, 'Test 5: first load populates rigSpec');
 
@@ -279,7 +279,7 @@ function makeRiggedFixture() {
     n.id === 'FaceParallax' ? { ...n, name: 'FaceParallax_v2' } : n
   );
   const { project: r2 } = await saveAndReload(proj2);
-  useProjectStore.getState().loadProject(r2);
+  await useProjectStore.getState().loadProject(r2);
   const spec2 = useRigSpecStore.getState().rigSpec;
   assert(spec2 !== null, 'Test 5: second load re-populates rigSpec');
   assert(spec2 !== spec1, 'Test 5: rigSpec identity changed between loads');
