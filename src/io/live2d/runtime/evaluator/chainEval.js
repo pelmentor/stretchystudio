@@ -39,6 +39,7 @@ import { evalWarpGrid } from './warpEval.js';
 import { evalWarpKernelCubism } from './cubismWarpEval.js';
 import { evalRotation, buildRotationMat3, applyMat3ToPoint } from './rotationEval.js';
 import { logger } from '../../../../lib/logger.js';
+import { getPoolForRigSpec } from './typedArrayPool.js';
 
 /**
  * Module-level WeakSet of rigSpecs we've already emitted a Phase 3
@@ -96,7 +97,11 @@ export function evalRig(rigSpec, paramValues, options) {
   // has settled and no regression reports come in.
   const kernel = options?.kernel === 'v3-legacy' ? 'v3-legacy' : 'cubism-setup';
   const trace = options?.trace ?? null;
-  const cache = new DeformerStateCache(rigSpec, paramValues, { kernel, trace });
+  // R3 — typed-array pool keyed by rigSpec identity. Survives across
+  // evalRig calls so the per-art-mesh ping-pong buffers don't burn a
+  // fresh Float32Array allocation per frame.
+  const pool = getPoolForRigSpec(rigSpec);
+  const cache = new DeformerStateCache(rigSpec, paramValues, { kernel, trace, pool });
   // R10 — pre-build a deformer-id → spec map once per evalRig call so
   // the chain walk does O(1) lookups instead of double linear scans
   // through warpDeformers + rotationDeformers per parent step. With a
@@ -252,7 +257,17 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
       if (!stepSpec) break;
       const state = cache.getState(stepSpec);
       if (!state) continue;
-      if (bufB === null) bufB = new Float32Array(len);
+      // R3 — pool the ping-pong buffer per meshSpec.id. Survives across
+      // evalRig calls; mesh vertex counts are stable within a rigSpec
+      // so no buffer-grow happens mid-rigSpec. The cache hit path in
+      // CanvasViewport reads `frames` synchronously inside the same
+      // tick as the eval-or-cache decision, so the buffer-aliasing
+      // window is closed.
+      if (bufB === null) {
+        bufB = cache._pool
+          ? cache._pool.acquireFloat32(`mesh:${meshSpec.id}:bufB`, len)
+          : new Float32Array(len);
+      }
       const read = bufA;
       const write = bufB;
       if (state.kind === 'warp') {
@@ -316,7 +331,13 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
     }
 
     // Lazy-allocate the swap buffer the first time we need it.
-    if (bufB === null) bufB = new Float32Array(len);
+    // R3 — pool keyed on meshSpec.id; same buffer reused across evalRig
+    // calls within a rigSpec.
+    if (bufB === null) {
+      bufB = cache._pool
+        ? cache._pool.acquireFloat32(`mesh:${meshSpec.id}:bufB:legacy`, len)
+        : new Float32Array(len);
+    }
     const read = bufA;
     const write = bufB;
 
@@ -435,6 +456,15 @@ export class DeformerStateCache {
      * @type {TraceCollector|null}
      */
     this._trace = options?.trace ?? null;
+    /**
+     * R3 — typed-array pool, keyed externally by rigSpec identity. Each
+     * (key, length) gets a stable buffer that survives across evalRig
+     * calls. Producers in `evalArtMeshFrame` use it to retire the
+     * per-art-mesh `Float32Array` ping-pong allocations. Optional —
+     * unit tests construct caches directly without a pool.
+     * @type {import('./typedArrayPool.js').BufferPool|null}
+     */
+    this._pool = options?.pool ?? null;
     this._byId = new Map();
     // Build a deformer-id → spec map once. Phase 2b's chain-walk helper
     // needs O(1) parent lookups; building it here is the same map

@@ -34,6 +34,7 @@
     "test:cubismRotationEval": "node scripts/test/test_cubismRotationEval.mjs",
     "test:artMeshEval": "node scripts/test/test_artMeshEval.mjs",
     "test:chainEval": "node scripts/test/test_chainEval.mjs",
+    "test:typedArrayPool": "node scripts/test/test_typedArrayPool.mjs",
     "test:maskStencil": "node scripts/test/test_maskStencil.mjs",
     "test:physicsTick": "node scripts/test/test_physicsTick.mjs",
     "test:cubismPhysicsKernel": "node scripts/test/test_cubismPhysicsKernel.mjs",
