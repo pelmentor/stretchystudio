@@ -30,7 +30,7 @@
 import { useRef } from 'react';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useRigSpecStore } from '../../../../store/rigSpecStore.js';
-import { useRigEvalStore } from '../../../../store/rigEvalStore.js';
+import { useRigEvalStore, getLiftedGrids } from '../../../../store/rigEvalStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../../store/paramValuesStore.js';
@@ -46,7 +46,14 @@ export function WarpDeformerOverlay() {
   // Lets us render nested warps (hair/eye/clothing under FaceParallax /
   // body chain) that the Phase-1 overlay skipped because their
   // keyform positions were in normalised-0to1 of a parent.
-  const liftedGrids = useRigEvalStore((s) => s.liftedGrids);
+  // R2 (2026-05-09) — subscribe to the revision counter; the actual
+  // grids live in a module-scope ref read via `getLiftedGrids()`. The
+  // revision only bumps when control points have moved by more than
+  // CONTROL_POINT_EPSILON, so this overlay stops re-rendering at 60Hz
+  // when the eval cache misses but produces the same output (idle
+  // breath, sub-pixel jitter, etc.).
+  useRigEvalStore((s) => s.liftedGridsRevision);
+  const liftedGrids = getLiftedGrids();
   // GAP-010 Phase B — deformer overlays only mount on the edit
   // Viewport (CanvasArea gates them on `!isPreview`), so always read
   // the viewport tab's view.
