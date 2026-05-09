@@ -31,7 +31,9 @@ import { SquareChartGantt } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 
 export function CanvasPropertiesPopover({ children }) {
-  const canvas = useProjectStore((s) => s.project?.canvas ?? {});
+  // `project.canvas` is always populated (initial state + migration);
+  // the prior `?? {}` returned a fresh empty object on every snapshot.
+  const canvas = useProjectStore((s) => s.project.canvas);
   const updateCanvas = useProjectStore((s) => s.updateCanvas);
 
   const trigger = children ?? (

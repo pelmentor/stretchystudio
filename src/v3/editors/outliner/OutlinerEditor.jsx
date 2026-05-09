@@ -73,8 +73,9 @@ export function OutlinerEditor() {
 
   // PP2-010(b) — per-warp visibility map. Rig-mode warp rows surface
   // an eye icon that flips this entry; WarpDeformerOverlay reads the
-  // map to filter which lattices it paints.
-  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility ?? {});
+  // map to filter which lattices it paints. `viewLayers.warpGridVisibility`
+  // is always populated as `{}` in editorStore initial state.
+  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility);
   const toggleWarpGridVisibility = useEditorStore((s) => s.toggleWarpGridVisibility);
 
   /** @type {[import('./treeBuilder.js').OutlinerDisplayMode, Function]} */

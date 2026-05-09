@@ -14,6 +14,7 @@
  * @module v3/editors/outliner/TreeNode
  */
 
+import { memo } from 'react';
 import {
   ChevronRight, ChevronDown,
   Folder, Image as ImageIcon, Eye, EyeOff,
@@ -40,7 +41,7 @@ const GUIDE_LINE_PX = INDENT_PX;
  *   drag-reparent (drag a row onto another row → set the dragged
  *   node's parent to the drop target).
  */
-export function TreeNode({
+function TreeNodeImpl({
   node,
   depth,
   expanded,
@@ -181,3 +182,9 @@ export function TreeNode({
     </div>
   );
 }
+
+// React.memo skips re-renders when row props are shallow-equal —
+// matters because OutlinerEditor rebuilds its `rows` list on every
+// expand/collapse/selection change but most rows' (node, depth,
+// expanded, selected, active) props stay equal.
+export const TreeNode = memo(TreeNodeImpl);

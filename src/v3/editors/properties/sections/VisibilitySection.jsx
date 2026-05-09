@@ -9,6 +9,7 @@
  * @module v3/editors/properties/sections/VisibilitySection
  */
 
+import { useMemo } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { Slider as SliderImpl } from '../../../../components/ui/slider.jsx';
@@ -26,8 +27,10 @@ const Slider = /** @type {any} */ (SliderImpl);
  * @param {string} props.nodeId
  */
 export function VisibilitySection({ nodeId }) {
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
   const updateProject = useProjectStore((s) => s.updateProject);
 

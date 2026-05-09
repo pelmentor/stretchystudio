@@ -54,7 +54,10 @@ export function WarpDeformerOverlay() {
   const warpGridsOn = useEditorStore((s) => s.viewLayers.warpGrids ?? true);
   const warpGridsOpacity = useEditorStore((s) => s.viewLayers.warpGridsOpacity ?? 0.25);
   // PP2-010(b) — per-warp visibility map (sparse: missing key = visible).
-  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility ?? {});
+  // `viewLayers.warpGridVisibility` is always populated as `{}` in the
+  // editorStore initial state; the prior `?? {}` returned a fresh
+  // empty object on every snapshot.
+  const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility);
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {

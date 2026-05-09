@@ -42,7 +42,10 @@ const {
 } = AD;
 
 export function AnimationsEditor() {
-  const animations = useProjectStore((s) => s.project.animations ?? []);
+  // `project.animations` is always an array (default state +
+  // migration guarantee); the prior `?? []` returned a fresh empty
+  // array on every snapshot, breaking the useSyncExternalStore cache.
+  const animations = useProjectStore((s) => s.project.animations);
   const createAnimation = useProjectStore((s) => s.createAnimation);
   const renameAnimation = useProjectStore((s) => s.renameAnimation);
   const deleteAnimation = useProjectStore((s) => s.deleteAnimation);

@@ -17,6 +17,7 @@
  * @module v3/editors/properties/tabs/BlendShapeTab
  */
 
+import { useMemo } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { Plus, Trash2, Sparkles, Brush, Square } from 'lucide-react';
@@ -42,8 +43,10 @@ export function BlendShapeTab({ nodeId }) {
   // "has mesh" branches changes the hook count → React loops trying
   // to reconcile. Moving the hook calls above the early returns
   // pins the count.
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
   const updateProject     = useProjectStore((s) => s.updateProject);
   const createBlendShape  = useProjectStore((s) => s.createBlendShape);

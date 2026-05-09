@@ -20,7 +20,7 @@
  */
 
 import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
@@ -35,8 +35,10 @@ import { applyArmatureModifier, bindArmatureModifier } from '../../../../service
  * @param {string} props.nodeId
  */
 export function ModifierStackSection({ nodeId }) {
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
   const updateProject = useProjectStore((s) => s.updateProject);
 

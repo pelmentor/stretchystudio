@@ -10,6 +10,7 @@
  * @module v3/editors/properties/sections/PartInfoSection
  */
 
+import { useMemo } from 'react';
 import { Info } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
@@ -22,8 +23,15 @@ import { getMesh } from '../../../../store/objectDataAccess.js';
  * @param {string} props.nodeId
  */
 export function PartInfoSection({ nodeId }) {
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  // Subscribe to the nodes array reference (immer keeps it stable
+  // across mutations that don't touch nodes); derive the node via
+  // useMemo. The prior `nodes.find(...)` inside the selector ran on
+  // every projectStore snapshot — 7 always-mounted sections × ~100
+  // nodes = ~700 find iterations per project mutation.
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
   const updateProject = useProjectStore((s) => s.updateProject);
 

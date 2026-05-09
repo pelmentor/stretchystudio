@@ -162,14 +162,42 @@ export default function CanvasViewport({
   const versionControl = useProjectStore(s => s.versionControl);
   const updateProject = useProjectStore(s => s.updateProject);
   const resetProject = useProjectStore(s => s.resetProject);
-  const editorState = useEditorStore();
-  const setBrush = useEditorStore(s => s.setBrush);
-  const { setSelection } = editorState;
 
   // GAP-010 Phase B — `view` is per-mode. CanvasViewport derives its
   // mode from the `previewMode` prop and routes every read/write
   // through `viewByMode[modeKey]` / `setView(modeKey, partial)`.
   const modeKey = previewMode ? 'livePreview' : 'viewport';
+
+  // Field-level subscriptions — replaces a whole-store `useEditorStore()`
+  // that re-rendered this 2700-line component on every editor mutation
+  // (brush-stroke draft, hover state, gizmo handle drag, etc.). Now we
+  // only re-render when one of these specific fields changes.
+  const view = useEditorStore((s) => s.viewByMode[modeKey]);
+  const selection = useEditorStore((s) => s.selection);
+  const viewLayers = useEditorStore((s) => s.viewLayers);
+  const editMode = useEditorStore((s) => s.editMode);
+  const activeBlendShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  const brushSize = useEditorStore((s) => s.brushSize);
+  const meshSubMode = useEditorStore((s) => s.meshSubMode);
+  const setViewAction = useEditorStore((s) => s.setView);
+  const setSelection = useEditorStore((s) => s.setSelection);
+  const setBrush = useEditorStore((s) => s.setBrush);
+
+  // Render-time facade so existing `editorState.xxx` references in the
+  // JSX tail continue to resolve to the subscribed values. Reference
+  // equality of `editorState` itself is not checked anywhere (verified
+  // via grep), so rebuilding the object each render is safe.
+  const editorState = {
+    viewByMode: { [modeKey]: view },
+    selection,
+    viewLayers,
+    editMode,
+    activeBlendShapeId,
+    brushSize,
+    meshSubMode,
+    setSelection,
+    setView: setViewAction,
+  };
   // PP2-007 — the WebGL init `useEffect(..., [])` captures `modeKey`
   // in its rAF-tick closure once at mount. CanvasArea reuses the same
   // CanvasViewport instance for both Viewport and Live Preview tabs
@@ -181,17 +209,22 @@ export default function CanvasViewport({
   // re-read the current key on every frame.
   const modeKeyRef = useRef(modeKey);
   modeKeyRef.current = modeKey;
-  const view = editorState.viewByMode[modeKey];
   /** @param {{zoom?:number,panX?:number,panY?:number}} partial */
   const setView = useCallback(
-    (partial) => editorState.setView(modeKey, partial),
-    [modeKey, editorState.setView],
+    (partial) => setViewAction(modeKey, partial),
+    [modeKey, setViewAction],
   );
   const { themeMode, osTheme } = useTheme();
 
-  const animStore = useAnimationStore();
-  const animRef = useRef(animStore);
-  animRef.current = animStore;
+  // Animation store — subscribe to ONLY the two fields that need to
+  // mark the rAF dirty. The rAF tick reads everything else through
+  // `animRef.current`, kept current by a subscribe-effect that does
+  // NOT trigger React re-renders. Was `useAnimationStore()` (whole
+  // store) which re-rendered on every animation tick.
+  const currentTime = useAnimationStore((s) => s.currentTime);
+  const draftPose = useAnimationStore((s) => s.draftPose);
+  const animRef = useRef(useAnimationStore.getState());
+  useEffect(() => useAnimationStore.subscribe((s) => { animRef.current = s; }), []);
 
   // R0 — live param values from the rig evaluator (drives the test slider).
   // Consumed by the tick directly via ref; effect below marks dirty on change.
@@ -1044,8 +1077,7 @@ export default function CanvasViewport({
 
   /* ── Mark dirty when editor view / viewLayers / selection changes ──── */
   useEffect(() => { isDirtyRef.current = true; },
-    [view, editorState.selection, editorState.viewLayers,
-    editorState.editMode, editorState.activeBlendShapeId]);
+    [view, selection, viewLayers, editMode, activeBlendShapeId]);
 
   /* ── PP2-007 — mark dirty when the canvas tab toggles (modeKey flips).
        The shared CanvasViewport instance has a different `view` slot per
@@ -1058,8 +1090,8 @@ export default function CanvasViewport({
   useEffect(() => { isDirtyRef.current = true; }, [activeWorkspace]);
 
   /* ── Mark dirty when animation time or draft pose changes ───────────── */
-  useEffect(() => { isDirtyRef.current = true; }, [animStore.currentTime]);
-  useEffect(() => { isDirtyRef.current = true; }, [animStore.draftPose]);
+  useEffect(() => { isDirtyRef.current = true; }, [currentTime]);
+  useEffect(() => { isDirtyRef.current = true; }, [draftPose]);
 
   /* ── [ / ] brush size shortcuts (only in deform edit mode or blend shape edit mode) ────────────── */
   useEffect(() => {
@@ -1083,14 +1115,14 @@ export default function CanvasViewport({
 
   /* ── PP1-008(b) — exit F-mode radius adjust when leaving mesh edit ── */
   useEffect(() => {
-    if (editorState.editMode !== 'mesh' && radiusAdjustModeRef.current.active) {
+    if (editMode !== 'mesh' && radiusAdjustModeRef.current.active) {
       radiusAdjustModeRef.current.active = false;
       radiusAdjustModeRef.current.startRadius = null;
       radiusAdjustModeRef.current.anchorClientX = null;
       radiusAdjustModeRef.current.anchorClientY = null;
       isDirtyRef.current = true;
     }
-  }, [editorState.editMode]);
+  }, [editMode]);
 
   /* ── GAP-015 — Blender-style proportional-edit hotkeys ───────────────── */
   // O           — toggle proportional editing on/off

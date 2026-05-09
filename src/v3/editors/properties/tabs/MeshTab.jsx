@@ -13,7 +13,7 @@
  * @module v3/editors/properties/tabs/MeshTab
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Loader2, Triangle } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useCaptureStore } from '../../../../store/captureStore.js';
@@ -32,7 +32,11 @@ const Button = /** @type {any} */ (ButtonImpl);
  * @param {string} props.nodeId
  */
 export function MeshTab({ nodeId }) {
-  const node = useProjectStore((s) => s.project.nodes.find((n) => n.id === nodeId) ?? null);
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
+  );
   const updateProject = useProjectStore((s) => s.updateProject);
   const [busy, setBusy] = useState(false);
 

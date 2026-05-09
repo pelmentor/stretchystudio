@@ -11,6 +11,7 @@
  * @module v3/editors/properties/sections/BoneSection
  */
 
+import { useMemo } from 'react';
 import { Bone } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { SectionShell } from './SectionShell.jsx';
@@ -22,8 +23,10 @@ import { isBoneGroup, getBoneRole } from '../../../../store/objectDataAccess.js'
  * @param {string} props.nodeId
  */
 export function BoneSection({ nodeId }) {
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
 
   if (!isBoneGroup(node)) return null;

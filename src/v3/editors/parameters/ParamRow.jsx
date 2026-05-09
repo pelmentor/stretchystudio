@@ -14,7 +14,7 @@
  * @module v3/editors/parameters/ParamRow
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Trash2, Check, X } from 'lucide-react';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
@@ -41,22 +41,16 @@ const Slider = /** @type {any} */ (SliderImpl);
 /**
  * @param {Object} props
  * @param {import('./groupBuilder.js').ParamSpecLike} props.param
+ * @param {boolean} props.selected - lifted from ParametersEditor; lets
+ *   `React.memo` skip rerenders when neither this row's param value
+ *   nor its selected flag changed (e.g. an unrelated row was selected).
  */
-export function ParamRow({ param }) {
+function ParamRowImpl({ param, selected }) {
   const value = useParamValuesStore((s) => s.values[param.id] ?? param.default ?? 0);
   const setParamValue = useParamValuesStore((s) => s.setParamValue);
   const select = useSelectionStore((s) => s.select);
   const removeParameter = useProjectStore((s) => s.removeParameter);
   const [pendingDelete, setPendingDelete] = useState(false);
-  // Treat the active selection's id as "selected" for this row.
-  const activeId = useSelectionStore((s) => {
-    const items = s.items;
-    for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i].type === 'parameter') return items[i].id;
-    }
-    return null;
-  });
-  const selected = activeId === param.id;
 
   const min = param.min ?? 0;
   const max = param.max ?? 1;
@@ -193,3 +187,5 @@ export function ParamRow({ param }) {
     </div>
   );
 }
+
+export const ParamRow = memo(ParamRowImpl);

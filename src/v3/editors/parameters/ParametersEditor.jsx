@@ -17,7 +17,7 @@
  * @module v3/editors/parameters/ParametersEditor
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw, Wand2, Sparkles, Plus, X } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
@@ -30,7 +30,11 @@ import { InitRigOptionsPopover } from './InitRigOptionsPopover.jsx';
 import { IdleMotionDialog } from '../animations/IdleMotionDialog.jsx';
 
 export function ParametersEditor() {
-  const params = useProjectStore((s) => s.project.parameters ?? []);
+  // `project.parameters` is always an array (default state + migration
+  // guarantee); the prior `?? []` returned a fresh empty array on
+  // every snapshot, which broke React's `useSyncExternalStore` cache
+  // and triggered re-render loops on adjacent store mutations.
+  const params = useProjectStore((s) => s.project.parameters);
   const addParameter = useProjectStore((s) => s.addParameter);
   const select = useSelectionStore((s) => s.select);
   // Initialize Rig must NOT be available while the PSD import wizard
@@ -40,7 +44,19 @@ export function ParametersEditor() {
   // closed (step === null).
   const wizardStep = useWizardStore((s) => s.step);
   const wizardOpen = wizardStep !== null;
-  const groups = buildParamGroups(params);
+  const groups = useMemo(() => buildParamGroups(params), [params]);
+
+  // Active param id — surfaced once at the editor level + drilled into
+  // each ParamRow as a `selected` boolean so the row's `React.memo`
+  // shallow-compare actually skips re-renders. Lifting the selection
+  // scan here also avoids the prior O(rows × items) work pattern.
+  const activeParamId = useSelectionStore((s) => {
+    const items = s.items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'parameter') return items[i].id;
+    }
+    return null;
+  });
 
   // Collapse state per group key — local to the editor, not persisted.
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
@@ -237,7 +253,7 @@ export function ParametersEditor() {
               {!isCollapsed ? (
                 <div className="flex flex-col gap-0.5 py-1">
                   {g.params.map((p) => (
-                    <ParamRow key={p.id} param={p} />
+                    <ParamRow key={p.id} param={p} selected={activeParamId === p.id} />
                   ))}
                 </div>
               ) : null}

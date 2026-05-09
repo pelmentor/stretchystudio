@@ -11,6 +11,7 @@
  * @module v3/editors/properties/sections/TransformSection
  */
 
+import { useMemo } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { NumberField } from '../fields/NumberField.jsx';
 import { TextField } from '../fields/TextField.jsx';
@@ -29,8 +30,10 @@ const IDENTITY_TRANSFORM = Object.freeze({
  * @param {string} props.nodeId
  */
 export function TransformSection({ nodeId }) {
-  const node = useProjectStore((s) =>
-    s.project.nodes.find((n) => n.id === nodeId) ?? null,
+  const nodes = useProjectStore((s) => s.project.nodes);
+  const node = useMemo(
+    () => nodes.find((n) => n.id === nodeId) ?? null,
+    [nodes, nodeId],
   );
   const updateProject = useProjectStore((s) => s.updateProject);
 
