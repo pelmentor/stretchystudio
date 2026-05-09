@@ -128,35 +128,58 @@ export function applyArmatureModifier(partId) {
   const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
   applyTwoBoneSkinningObj(baseVerts, parentMatrix, childMatrix, partWeights);
 
+  // NaN guard — degenerate bone matrices (zero scale, infinite values)
+  // propagate NaN through `applyTwoBoneSkinningObj` and would corrupt
+  // mesh.vertices silently. Refuse to write; surface via logger.
+  // Rule №1 fix: never persist NaN through Apply.
+  for (let i = 0; i < baseVerts.length; i++) {
+    if (!Number.isFinite(baseVerts[i].x) || !Number.isFinite(baseVerts[i].y)) {
+      logger.error(
+        'armatureModifierApplyNaN',
+        `LBS bake produced non-finite vertex on "${part.name ?? partId}" — Apply aborted`,
+        { partId, jointBoneId, parentBoneId, vertIndex: i,
+          x: baseVerts[i].x, y: baseVerts[i].y },
+      );
+      return { baked: false, vertCount: 0, reason: 'lbs-bake-nan' };
+    }
+  }
+
   // Write the baked verts into mesh.vertices, remove the Armature
-  // modifier, and clear `mesh.runtime`. Atomically, in a single
-  // updateProject so undo captures the whole operation.
+  // modifier, and replace `mesh.runtime` with a minimal canvas-px
+  // entry. Atomically, in a single updateProject so undo captures
+  // the whole operation.
   //
-  // # Why we clear `mesh.runtime`
+  // # Why we WRITE a minimal runtime instead of deleting it
   //
-  // `mesh.runtime.keyforms[]` is the cached art-mesh runtime spec
-  // produced by `_buildArtMeshes` at Init Rig time. For bone-rigged
-  // parts that cache holds keyforms tied to `ParamRotation_<bone>` —
-  // chainEval reads them on every frame and applies the slider's
-  // current value. After Apply, the part is no longer skinned to the
-  // armature, so those bone-baked keyforms must NOT keep responding
-  // to the slider (the user's reported "after Apply on handwear it
-  // still got affected by armature even without modifiers" symptom,
-  // 2026-05-09). Clearing `runtime` forces `selectRigSpec` to fall
-  // back to the pre-rig path, which synthesises a single rest
-  // keyform from the just-baked `mesh.vertices` — exactly the post-
-  // Apply behaviour Blender's `modifier_apply_obdata` produces.
+  // 2026-05-09 (later same day): the prior version of this code
+  // deleted `mesh.runtime` to "let `selectRigSpec`'s pre-rig fallback
+  // rebuild." But the pre-rig fallback (`selectRigSpec.js:563-638`)
+  // was designed for fresh-import projects whose `mesh.vertices` are
+  // in REST canvas-px. After Apply, mesh.vertices is in POSED
+  // canvas-px (LBS bake output). The fallback reads `part.rigParent`
+  // (still pointing at a body warp from synthesizeDeformerParents
+  // pre-Apply) and frame-converts the verts into the warp's
+  // [0..1] normalised space using the warp's REST bbox — but the
+  // posed verts can lie far outside the rest bbox, producing
+  // localVerts well above 1.0 or below 0. chainEval bilinearly
+  // extrapolates outside the warp grid and the part renders far
+  // off-canvas — the user's reported "arm disappeared" symptom.
   //
-  // Earlier this block tried to bake the keyforms in place via
-  // `vp[i] = m0*x + m3*y; vp[i+1] = m1*x + m4*y` (linear-only
-  // rotation by the joint bone's world matrix). That assumed
-  // keyforms were in the JOINT BONE's pivot-relative frame, but
-  // they are actually in the PARENT DEFORMER's local frame
-  // (`selectRigSpec.js:580-613`). For limbs the two coincide; for
-  // handwear under a non-coincident parent the linear-only formula
-  // rotates around the wrong center and snaps the visual to a
-  // different position. Clearing the cache and rebuilding is the
-  // structurally correct fix — no frame-translation guesswork.
+  // The structurally correct fix: write a runtime entry that
+  // declares parent=root + a single rest keyform with the baked
+  // canvas-px verts verbatim. selectRigSpec's runtime-cache fast
+  // path then sees parent=root (no warp normalization), keyform
+  // vertices in canvas-px, and chainEval emits them directly to
+  // the renderer. Per-bone-angle keyforms (the 5-keyform multi-
+  // angle cache) are intentionally collapsed to 1: Apply means
+  // "this part is no longer skinned"; slider effects on this
+  // part should stop, exactly mirroring Blender's
+  // `modifier_apply_obdata` semantics.
+  const flatBaked = new Float32Array(baseVerts.length * 2);
+  for (let i = 0; i < baseVerts.length; i++) {
+    flatBaked[i * 2]     = baseVerts[i].x;
+    flatBaked[i * 2 + 1] = baseVerts[i].y;
+  }
   projectState.updateProject((proj) => {
     const target = proj.nodes.find((n) => n.id === partId);
     if (!target || target.type !== 'part' || !target.mesh) return;
@@ -172,7 +195,15 @@ export function applyArmatureModifier(partId) {
       if (idx >= 0) target.modifiers.splice(idx, 1);
       if (target.modifiers.length === 0) delete target.modifiers;
     }
-    if (target.mesh.runtime) delete target.mesh.runtime;
+    target.mesh.runtime = {
+      bindings: [],
+      keyforms: [{
+        keyTuple: [],
+        vertexPositions: Array.from(flatBaked),
+        opacity: 1,
+      }],
+      parent: { type: 'root', id: null },
+    };
     // Vertex group data (`mesh.boneWeights` + `mesh.jointBoneId`)
     // STAYS on the mesh datablock — same as Blender. Apply Modifier
     // removes the binding (the modifier entry above) but keeps the

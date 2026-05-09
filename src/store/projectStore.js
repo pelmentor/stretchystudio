@@ -795,30 +795,35 @@ export const useProjectStore = create((set, get) => {
       bakedAnything = true;
     }
 
-    // 1b. Clear `mesh.runtime` on armature-mod parts whose mesh.vertices
-    //     just got rebased.
+    // 1b. Replace `mesh.runtime` with a minimal canvas-px entry on
+    //     armature-mod parts whose mesh.vertices Step 1 just rebased.
     //
-    // Without baking the runtime cache, chainEval continues to read the
-    // OLD pre-rebase keyform vertex positions (snap-back bug class —
-    // pre-2026-05-09 BUG-027). Pre-2026-05-09 we did this in place via
-    // a linear-only matrix bake (`vp[i] = m0*x + m3*y;`), but that
-    // assumed keyforms were stored in joint-bone-pivot-relative frame
-    // — they're actually in PARENT-DEFORMER-LOCAL frame
+    // 2026-05-09 (afternoon): an earlier version of this code did a
+    // linear-only in-place bake (`vp[i] = m0*x + m3*y`) which assumed
+    // keyforms were in joint-bone-pivot-relative frame — they're
+    // actually in PARENT-DEFORMER-LOCAL frame
     // (`selectRigSpec.js:580-613`). Linear-only is correct only when
     // the parent deformer's pivot coincides with the joint bone's
     // pivot (limb case). For non-limb rigid-intent parts (handwear,
     // face-region under a non-coincident parent), the formula rotated
     // around the wrong center.
     //
-    // The structurally correct fix: drop the cache so `selectRigSpec`'s
-    // pre-rig fallback regenerates a single rest keyform from the new
-    // mesh.vertices on the next chainEval pass. Same approach as
-    // `ArmatureModifierService.applyArmatureModifier` (2026-05-09):
-    // no frame-translation guesswork, just rebuild from the fresh
-    // canonical source. Per-param bone-baked keyforms (limb
-    // skinning's 5-keyform cache) are recovered on the next Init Rig
-    // — Apply Pose As Rest is a destructive bake; runtime caches are
-    // expected to be regenerated.
+    // The very next iteration tried `delete meshN.runtime` so
+    // `selectRigSpec`'s pre-rig fallback would regenerate. But that
+    // path frame-converts the rebased canvas-px verts into the
+    // warp's [0..1] normalised space using the warp's REST bbox —
+    // posed verts can land far outside [0..1], producing the
+    // user-reported "arm disappears" bug.
+    //
+    // Structurally correct fix (same as `applyArmatureModifier`
+    // 2026-05-09): write a minimal runtime entry with `parent=root`
+    // and a single rest keyform holding the baked canvas-px verts
+    // verbatim. selectRigSpec's runtime-cache fast path emits them
+    // directly with no frame conversion. Multi-angle bone-baked
+    // keyforms collapse to 1 — Apply Pose As Rest is destructive
+    // (the user's choice to bake the pose into rest), so per-slider
+    // animation curves are intentionally lost; recover via
+    // re-Init-Rig.
     for (const n of nodes) {
       if (n.type !== 'part') continue;
       const meshN = getMesh(n, project);
@@ -826,7 +831,22 @@ export const useProjectStore = create((set, get) => {
       const hasArmatureMod = Array.isArray(n.modifiers)
         && n.modifiers.some((m) => m?.type === 'armature' && m.enabled !== false);
       if (!hasArmatureMod) continue;
-      delete meshN.runtime;
+      const verts = Array.isArray(meshN.vertices) ? meshN.vertices : null;
+      if (!verts || verts.length === 0) continue;
+      const flat = new Array(verts.length * 2);
+      for (let i = 0; i < verts.length; i++) {
+        flat[i * 2]     = verts[i].x;
+        flat[i * 2 + 1] = verts[i].y;
+      }
+      meshN.runtime = {
+        bindings: [],
+        keyforms: [{
+          keyTuple: [],
+          vertexPositions: flat,
+          opacity: 1,
+        }],
+        parent: { type: 'root', id: null },
+      };
       bakedAnything = true;
     }
 

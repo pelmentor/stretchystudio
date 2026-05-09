@@ -85,13 +85,14 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
   useParamValuesStore.setState({ values: {} });
 }
 
-// ── Test 1: applyPoseAsRest rebases mesh.vertices + clears runtime ─
-// 2026-05-09 contract change: applyPoseAsRest no longer mutates
-// `mesh.runtime.keyforms` in place. Step 1 rebases `mesh.vertices` by
-// the bone's world matrix; Step 1b drops the runtime cache so
-// `selectRigSpec` regenerates a single rest keyform from the new
-// `mesh.vertices` on the next chainEval pass — same approach Apply
-// Modifier uses, no frame-translation guesswork.
+// ── Test 1: applyPoseAsRest rebases mesh.vertices + replaces runtime ─
+// 2026-05-09 (afternoon) contract: Step 1 rebases `mesh.vertices` by
+// the bone's world matrix; Step 1b replaces `mesh.runtime` with a
+// minimal canvas-px entry (`parent: root`, single keyform with the
+// rebased verts verbatim). Avoids the frame-mismatch the prior
+// "delete + let pre-rig fallback rebuild" approach produced — the
+// fallback would have normalized rebased canvas-px verts into the
+// warp's [0..1] rest bbox and rendered the part off-canvas.
 
 {
   setupBoneBakedHandwear({ poseDeg: 90 });
@@ -100,8 +101,6 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
   assert(before.mesh.vertices[0].x === 100 && before.mesh.vertices[0].y === 0,
     'Test 1: pre-bake mesh.vertices[0] at (100, 0)');
   assert(before.mesh.runtime !== undefined, 'Test 1: pre-bake runtime present');
-  // Before bake the visual is at (0, 100) (LBS via Armature modifier
-  // composing 90° around bone pivot 0,0 → (100,0) → (0, 100)).
   useProjectStore.getState().applyPoseAsRest();
   const after = useProjectStore.getState().project.nodes
     .find((n) => n.id === 'handwear-l');
@@ -110,21 +109,29 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
     `Test 1: post-bake mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
   assert(approx(after.mesh.vertices[0].y, 100),
     `Test 1: post-bake mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
-  // Step 1b cleared runtime cache.
-  assert(after.mesh.runtime === undefined,
-    'Test 1: post-bake runtime cleared (chainEval falls back to mesh.vertices)');
+  // Step 1b replaced runtime with minimal canvas-px entry.
+  assert(after.mesh.runtime !== undefined && after.mesh.runtime !== null,
+    'Test 1: post-bake runtime present (minimal canvas-px replacement)');
+  assert(after.mesh.runtime.parent && after.mesh.runtime.parent.type === 'root',
+    `Test 1: runtime.parent.type === 'root' (got ${after.mesh.runtime.parent?.type})`);
+  assert(Array.isArray(after.mesh.runtime.keyforms) && after.mesh.runtime.keyforms.length === 1,
+    `Test 1: runtime has 1 keyform (got ${after.mesh.runtime.keyforms?.length})`);
+  const kf = after.mesh.runtime.keyforms[0];
+  assert(approx(kf.vertexPositions[0], 0) && approx(kf.vertexPositions[1], 100),
+    `Test 1: runtime keyform[0].vertexPositions = (0, 100) (got (${kf.vertexPositions[0]}, ${kf.vertexPositions[1]}))`);
 }
 
-// ── Test 2: applyArmatureModifier clears mesh.runtime and bakes verts ──
-// 2026-05-09 contract change: applyArmatureModifier no longer mutates
-// `mesh.runtime.keyforms` in place (the prior linear-only bake had a
-// frame bug for parts whose parent deformer pivot didn't coincide
-// with the joint bone pivot — handwear under non-limb parents snapped
-// to the wrong position). New contract mirrors Blender's
-// `modifier_apply_obdata`: bake `mesh.vertices` from the LBS output,
-// remove the modifier entry, drop the runtime cache. `selectRigSpec`'s
-// pre-rig fallback regenerates a single rest keyform from the new
-// `mesh.vertices` on the next chainEval pass.
+// ── Test 2: applyArmatureModifier writes minimal canvas-px runtime ──
+// 2026-05-09 (afternoon) contract: applyArmatureModifier writes
+// `mesh.runtime` to a minimal canvas-px entry (`parent: root`,
+// single keyform with baked verts) instead of deleting it. The
+// earlier "delete and let pre-rig fallback rebuild" approach
+// triggered a frame mismatch in the fallback path: the fallback
+// reads stale `part.rigParent` (still pointing to a body warp from
+// pre-Apply synth) and normalizes the just-baked posed-canvas-px
+// verts into the warp's REST bbox — posed verts can land outside
+// [0..1], producing the user-reported "arm disappeared" symptom.
+// Writing parent=root short-circuits the warp normalization.
 
 {
   setupBoneBakedHandwear({ poseDeg: 90 });
@@ -136,10 +143,16 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
     `Test 2: post-Apply mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
   assert(approx(after.mesh.vertices[0].y, 100),
     `Test 2: post-Apply mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
-  // runtime cache cleared so chainEval falls back to mesh.vertices
-  // (Blender-parity Apply behaviour).
-  assert(after.mesh.runtime === undefined,
-    'Test 2: post-Apply mesh.runtime cleared (no stale bone-baked cache)');
+  // Minimal runtime present (parent: root, single keyform canvas-px).
+  assert(after.mesh.runtime && after.mesh.runtime.parent
+    && after.mesh.runtime.parent.type === 'root',
+    `Test 2: runtime.parent.type === 'root' (got ${after.mesh.runtime?.parent?.type})`);
+  assert(Array.isArray(after.mesh.runtime.keyforms)
+    && after.mesh.runtime.keyforms.length === 1,
+    `Test 2: 1 keyform in minimal runtime (got ${after.mesh.runtime?.keyforms?.length})`);
+  const kf = after.mesh.runtime.keyforms[0];
+  assert(approx(kf.vertexPositions[0], 0) && approx(kf.vertexPositions[1], 100),
+    `Test 2: keyform.vertexPositions = (0, 100); got (${kf.vertexPositions[0]}, ${kf.vertexPositions[1]})`);
   // Modifier removed.
   assert(!after.modifiers || !after.modifiers.find((m) => m?.type === 'armature'),
     'Test 2: post-Apply Armature modifier removed');
@@ -148,11 +161,12 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
 // ── Test 3: Apply Modifier → Apply Pose As Rest produces no double-bake ─
 
 {
-  // Apply Modifier removes the armature entry from node.modifiers,
-  // bakes mesh.vertices, and clears runtime. applyPoseAsRest then
-  // walks the bones and zeroes their pose; with the modifier gone +
-  // runtime cleared there's nothing to re-bake. mesh.vertices stays
-  // at the post-Apply baked position.
+  // Apply Modifier writes a minimal canvas-px runtime (parent: root).
+  // applyPoseAsRest then walks bones, zeroes their pose. The handwear
+  // part has no armature modifier anymore (removed by Apply), so
+  // applyPoseAsRest's hasArmatureMod gate skips both Step 1 and 1b
+  // for it. mesh.vertices stays at the post-Apply baked position;
+  // runtime stays at the minimal canvas-px shape.
   setupBoneBakedHandwear({ poseDeg: 90 });
   applyArmatureModifier('handwear-l');
   const midVerts = useProjectStore.getState().project.nodes
@@ -166,8 +180,8 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
     `Test 3: post-Apply+PoseAsRest mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
   assert(approx(after.mesh.vertices[0].y, 100),
     `Test 3: post-Apply+PoseAsRest mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
-  assert(after.mesh.runtime === undefined,
-    'Test 3: runtime stays cleared through applyPoseAsRest');
+  assert(after.mesh.runtime && after.mesh.runtime.parent.type === 'root',
+    'Test 3: minimal runtime preserved through applyPoseAsRest (modifier already gone)');
   // Bones zeroed.
   const leftArm = useProjectStore.getState().project.nodes.find((n) => n.id === 'leftArm');
   assert(leftArm.pose.rotation === 0, 'Test 3: leftArm.pose.rotation zeroed by applyPoseAsRest');

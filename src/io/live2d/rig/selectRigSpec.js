@@ -57,6 +57,22 @@ import {
   coerceFloat32Array,
   coerceUint16Array,
 } from '../../../lib/numberArrayCoerce.js';
+import { logger } from '../../../lib/logger.js';
+
+/**
+ * Once-per-process Set of `<partId>|<reason>` keys for diagnostic
+ * dedup. Pre-rig fallback's silent-passthrough branches log once
+ * per (part, reason) so a stale `rigParent` gets surfaced exactly
+ * once per session — chainEval re-runs every frame and an unbounded
+ * stream would flood the Logs panel. Lives at module scope so the
+ * dedup persists across re-renders.
+ */
+const _selectRigSpecWarnedKeys = new Set();
+function _warnOncePerPart(key, fn) {
+  if (_selectRigSpecWarnedKeys.has(key)) return;
+  _selectRigSpecWarnedKeys.add(key);
+  fn();
+}
 
 /** Live-render eval context — Blender's MODE_REALTIME for the
  *  viewport / Live Preview tick. The `selectRigSpec` selector feeds
@@ -595,7 +611,19 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
           localVerts[v + 1] = (flatVerts[v + 1] - minY) / dh;
         }
       } else {
+        // Stale rigParent — points at a warp deformer that no longer
+        // has a rest state (deformer was removed, or rigParent was
+        // never re-synthed after a structural edit). Falling through
+        // to verbatim canvas-px values is wrong for downstream
+        // bilinear extrapolation but won't crash; surface for triage.
         for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
+        _warnOncePerPart(`${part.id}|warpRestMissing`, () => {
+          logger.warn(
+            'selectRigSpecPreRigFallbackOrphanWarp',
+            `pre-rig fallback for "${part.name ?? part.id}" — rigParent points at warp ${parentRef.id} but no rest state (stale rigParent or removed deformer)`,
+            { partId: part.id, partName: part.name, warpId: parentRef.id },
+          );
+        });
       }
     } else if (parentRef.type === 'rotation') {
       const restState = rotationRestById.get(parentRef.id);
@@ -607,6 +635,13 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         }
       } else {
         for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
+        _warnOncePerPart(`${part.id}|rotationRestMissing`, () => {
+          logger.warn(
+            'selectRigSpecPreRigFallbackOrphanRotation',
+            `pre-rig fallback for "${part.name ?? part.id}" — rigParent points at rotation deformer ${parentRef.id} but no rest state`,
+            { partId: part.id, partName: part.name, rotationId: parentRef.id },
+          );
+        });
       }
     } else {
       for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
