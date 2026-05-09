@@ -42,18 +42,27 @@ export function ModifierStackSection({ nodeId }) {
 
   if (!node || node.type !== 'part') return null;
   const stack = Array.isArray(node.modifiers) ? node.modifiers : [];
-  // Vertex group data sitting on the mesh — present iff the part was
-  // ever bone-rigged. The "Add Armature" button surfaces below when
-  // the data exists but no Armature modifier is bound (Blender:
-  // applying then re-adding the modifier is the canonical re-bind
-  // flow). Keep section visible in that case so the user has a one-
-  // click path back to a bound state.
+  // Cubism Adapter REVERT (2026-05-09 afternoon): "Add Modifier →
+  // Armature" is now offered for ANY meshed part with a bone-group
+  // ancestor (mirrors Blender — adding an Armature modifier to a
+  // mesh is always legal regardless of whether the mesh has vertex
+  // groups yet). With no vertex groups the modifier renders as a
+  // no-op (the part rigid-follows via the overlay-matrix path); once
+  // the user paints weights via Weight Paint mode, the composition
+  // decision flips from `'overlay'` to `'lbs'` and LBS activates.
+  const project = useProjectStore.getState().project;
+  const nearestBoneAncestor = (() => {
+    const byId = new Map(project.nodes.map((n) => [n.id, n]));
+    let cur = node.parent ? byId.get(node.parent) : null;
+    while (cur && !(cur.type === 'group' && cur.boneRole)) {
+      cur = cur.parent ? byId.get(cur.parent) : null;
+    }
+    return cur ?? null;
+  })();
   const meshJointBoneId = typeof node.mesh?.jointBoneId === 'string' && node.mesh.jointBoneId.length > 0
     ? node.mesh.jointBoneId : null;
   const meshBoneWeights = Array.isArray(node.mesh?.boneWeights) ? node.mesh.boneWeights : null;
-  const canBindArmature = !!meshJointBoneId
-    && !!meshBoneWeights
-    && meshBoneWeights.length > 0
+  const canBindArmature = !!nearestBoneAncestor
     && !stack.some((m) => m?.type === 'armature');
   if (stack.length === 0 && !canBindArmature) return null;
 
@@ -108,7 +117,8 @@ export function ModifierStackSection({ nodeId }) {
       <AddModifierButton
         canBindArmature={canBindArmature}
         weightCount={meshBoneWeights?.length ?? 0}
-        jointBoneId={meshJointBoneId}
+        jointBoneId={meshJointBoneId ?? nearestBoneAncestor?.id ?? null}
+        jointBoneRole={nearestBoneAncestor?.boneRole ?? null}
         onAddArmature={() => bindArmatureModifier(nodeId)}
       />
       {stack.length > 0 && (
@@ -314,7 +324,7 @@ function ModifierRowMenu({ isArmature, canMoveUp, canMoveDown, onApply, onMoveUp
  * always present in the panel chrome (the user knows where Add
  * Modifier lives even when they can't currently add one).
  */
-function AddModifierButton({ canBindArmature, weightCount, jointBoneId, onAddArmature }) {
+function AddModifierButton({ canBindArmature, weightCount, jointBoneId, jointBoneRole, onAddArmature }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
@@ -334,7 +344,7 @@ function AddModifierButton({ canBindArmature, weightCount, jointBoneId, onAddArm
         className={`w-full px-2 h-6 text-[11px] border rounded text-left inline-flex items-center gap-1 ${enabled ? 'border-primary/60 bg-primary/10 hover:bg-primary/20 text-foreground' : 'border-border bg-transparent text-muted-foreground cursor-not-allowed'}`}
         title={enabled
           ? 'Add a modifier from the list below (mirrors Blender Properties → Modifiers → Add Modifier)'
-          : 'No addable modifier types — the part has no vertex group data, and warp/rotation modifiers come from rig synth'}
+          : 'No addable modifier types — the part has no bone-group ancestor, and warp/rotation modifiers come from rig synth'}
         disabled={!enabled}
         onClick={() => setOpen((v) => !v)}
       >
@@ -346,7 +356,9 @@ function AddModifierButton({ canBindArmature, weightCount, jointBoneId, onAddArm
           <button
             type="button"
             className="w-full text-left px-2 py-1 hover:bg-muted inline-flex items-center gap-2"
-            title={`Bind an Armature modifier to the persistent vertex groups (${weightCount} weights → bone ${jointBoneId}).`}
+            title={weightCount > 0
+              ? `Re-bind Armature modifier to existing vertex groups (${weightCount} weights → bone ${jointBoneRole ?? jointBoneId}).`
+              : `Add empty Armature modifier (target bone: ${jointBoneRole ?? jointBoneId}). The part rigid-follows the bone via the overlay path until you paint vertex weights via Weight Paint mode — then LBS activates.`}
             onClick={() => { setOpen(false); onAddArmature(); }}
           >
             <Wrench size={11} />

@@ -257,12 +257,17 @@ function setupArmedHandwear() {
   assert(result.reason === 'already-bound', 'Test 9: reason=already-bound');
 }
 
-// ── Test 10: bind requires vertex group data ──────────────────────────
+// ── Test 10: bind on a rigid-follow part adds empty modifier ──────────
+// 2026-05-09 (afternoon) — Cubism Adapter revert. Adding an Armature
+// modifier to a mesh without vertex groups is legal (mirrors Blender's
+// "Add Modifier → Armature" UX). The modifier resolves jointBoneId
+// from the part's nearest bone-group ancestor; the mesh continues
+// to rigid-follow via the overlay path until the user paints weights.
 
 {
   setupArmedHandwear();
-  // Strip the modifier AND the vertex groups (simulates a part that was
-  // never bone-rigged or had its groups manually cleared).
+  // Strip the modifier AND vertex groups (simulates a rigid-follow
+  // part that's never had per-vertex skinning).
   useProjectStore.getState().updateProject((p) => {
     const part = p.nodes.find((n) => n.id === 'handwear-l');
     delete part.modifiers;
@@ -270,8 +275,40 @@ function setupArmedHandwear() {
     delete part.mesh.jointBoneId;
   });
   const result = bindArmatureModifier('handwear-l');
-  assert(result.bound === false, 'Test 10: no boneWeights → bound=false');
-  assert(result.reason === 'missing-vertex-groups', 'Test 10: reason=missing-vertex-groups');
+  assert(result.bound === true, 'Test 10: rigid-follow part + bind → bound=true (empty modifier)');
+  // handwear-l.parent is leftArm (a bone) — walked via ancestor chain.
+  assert(result.jointBoneId === 'leftArm',
+    `Test 10: jointBoneId resolved to nearest bone ancestor (got ${result.jointBoneId})`);
+  // Modifier is on the stack with the resolved jointBoneId.
+  const after = useProjectStore.getState().project.nodes.find((n) => n.id === 'handwear-l');
+  const arm = (after.modifiers ?? []).find((m) => m?.type === 'armature');
+  assert(!!arm, 'Test 10: Armature modifier added');
+  assert(arm.data.jointBoneId === 'leftArm',
+    `Test 10: modifier.data.jointBoneId === 'leftArm' (got ${arm.data.jointBoneId})`);
+}
+
+// ── Test 10b: bind fails when there's no bone-group ancestor ──────────
+
+{
+  // Part with no bone in its ancestry → bind has no target. Fails
+  // cleanly with `no-bone-ancestor` reason.
+  useProjectStore.setState({
+    project: {
+      version: '0.1', schemaVersion: 29,
+      canvas: { width: 1280, height: 1280 },
+      textures: [],
+      nodes: [
+        { id: 'plain-folder', type: 'group', name: 'folder', parent: null,
+          transform: { pivotX: 0, pivotY: 0 } },
+        { id: 'orphan-mesh', type: 'part', name: 'orphan', parent: 'plain-folder',
+          mesh: { vertices: [{ x: 0, y: 0 }], triangles: [] } },
+      ],
+    },
+  });
+  const result = bindArmatureModifier('orphan-mesh');
+  assert(result.bound === false, 'Test 10b: no bone ancestor → bound=false');
+  assert(result.reason === 'no-bone-ancestor',
+    `Test 10b: reason='no-bone-ancestor' (got ${result.reason})`);
 }
 
 // ── Test 11: Apply → Bind round-trip — bake survives, modifier returns ─

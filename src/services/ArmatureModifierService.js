@@ -230,14 +230,25 @@ export function applyArmatureModifier(partId) {
 }
 
 /**
- * Bind (re-add) an Armature modifier to a part. Inverse of `applyArmatureModifier`.
- * Mirrors Blender's "Add Modifier → Armature" dropdown — appends an
- * Armature entry to `node.modifiers[]` using the part's existing
- * vertex group data (`mesh.jointBoneId` + `mesh.boneWeights`). If
- * those are missing the operator fails (Blender behaves the same:
- * adding an Armature modifier to a mesh without vertex groups is
- * legal but produces no deformation; we return an error so the user
- * gets immediate feedback rather than a silent no-op).
+ * Bind (add) an Armature modifier to a part. Inverse of `applyArmatureModifier`.
+ * Mirrors Blender's "Properties → Modifiers → Add Modifier → Armature":
+ * adding an Armature modifier to a mesh is always legal regardless of
+ * whether the mesh has vertex groups yet. With no vertex groups the
+ * modifier is render-side a no-op (no per-vertex skinning), but the
+ * mesh still rigid-follows its parent bone via the overlay-matrix
+ * path. Once the user paints weights via Weight Paint mode the
+ * composition decision flips from `'overlay'` to `'lbs'` and LBS
+ * activates.
+ *
+ * Resolves `jointBoneId` in this order:
+ *   1. `mesh.jointBoneId` if present (post-Apply re-bind path —
+ *      Blender keeps `me->dvert` on Apply so the previous binding
+ *      target is reused).
+ *   2. Nearest `isBoneGroup` ancestor in `node.parent` chain
+ *      (fresh-bind path on a rigid-follow part).
+ *
+ * If neither resolves (no bone ancestor), the operator fails — there's
+ * no armature to bind to.
  *
  * Idempotent: returns `{bound: false, reason: 'already-bound'}` when
  * an Armature modifier is already on the stack.
@@ -257,20 +268,29 @@ export function bindArmatureModifier(partId) {
     return { bound: false, reason: 'already-bound' };
   }
   const mesh = part.mesh ?? null;
-  const jointBoneId = typeof mesh?.jointBoneId === 'string' && mesh.jointBoneId.length > 0
+
+  // Resolve jointBoneId: prefer `mesh.jointBoneId` (post-Apply re-bind
+  // path), fall back to nearest bone-group ancestor (fresh-bind path).
+  let jointBoneId = typeof mesh?.jointBoneId === 'string' && mesh.jointBoneId.length > 0
     ? mesh.jointBoneId : null;
-  const boneWeights = Array.isArray(mesh?.boneWeights) ? mesh.boneWeights : null;
-  if (!jointBoneId || !boneWeights || boneWeights.length === 0) {
-    return { bound: false, reason: 'missing-vertex-groups' };
+  const byId = new Map(project.nodes.map((n) => [n.id, n]));
+  if (!jointBoneId) {
+    let cur = part.parent ? byId.get(part.parent) : null;
+    while (cur && !(cur.type === 'group' && cur.boneRole)) {
+      cur = cur.parent ? byId.get(cur.parent) : null;
+    }
+    if (cur) jointBoneId = cur.id;
   }
-  const jointBone = project.nodes.find((n) => n.id === jointBoneId) ?? null;
+  if (!jointBoneId) {
+    return { bound: false, reason: 'no-bone-ancestor' };
+  }
+  const jointBone = byId.get(jointBoneId) ?? null;
   if (!jointBone || jointBone.type !== 'group' || !jointBone.boneRole) {
     return { bound: false, reason: 'jointBoneId-not-a-bone' };
   }
-  // Walk to nearest bone-group ancestor — same logic as
-  // `boneOverlayMatrix.computeBoneParentMap` and the synth in
+  // Resolve parent bone — walks past plain (non-bone) groups. Same
+  // logic as `boneOverlayMatrix.computeBoneParentMap` and the synth in
   // `deformerNodeSync.synthesizeModifierStacks`.
-  const byId = new Map(project.nodes.map((n) => [n.id, n]));
   let parent = jointBone.parent ? byId.get(jointBone.parent) : null;
   while (parent && !(parent.type === 'group' && parent.boneRole)) {
     parent = parent.parent ? byId.get(parent.parent) : null;
@@ -280,9 +300,6 @@ export function bindArmatureModifier(partId) {
   projectState.updateProject((proj) => {
     const target = proj.nodes.find((n) => n.id === partId);
     if (!target || target.type !== 'part') return;
-    const targetMesh = target.mesh;
-    const targetJoint = byId.get(targetMesh?.jointBoneId);
-    if (!targetJoint) return;
     if (!Array.isArray(target.modifiers)) target.modifiers = [];
     // Place AFTER any existing deformer chain (same convention as
     // `synthesizeModifierStacks`). Mirrors Blender's "Add Modifier"
@@ -297,7 +314,7 @@ export function bindArmatureModifier(partId) {
       showInEditor: true,
       data: {
         jointBoneId,
-        jointBoneRole: targetJoint.boneRole,
+        jointBoneRole: jointBone.boneRole,
         parentBoneId,
         parentBoneRole: parent?.boneRole ?? null,
         deformFlag: 1,
