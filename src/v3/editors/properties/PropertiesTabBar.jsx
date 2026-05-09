@@ -29,16 +29,25 @@ import { PROPERTIES_TABS } from './propertiesTabRegistry.jsx';
  *                                            current selection so we
  *                                            don't subscribe to project
  *                                            state in this leaf.
+ * @param {string|null} [props.effectiveTab]  The currently-rendered tab.
+ *                                            Falls back to the sticky
+ *                                            pref when the parent's
+ *                                            sticky tab is hidden in
+ *                                            the current context.
+ *                                            Highlight follows what's
+ *                                            ACTUALLY showing, not what
+ *                                            the user previously clicked.
  */
-export function PropertiesTabBar({ visibleTabIds }) {
-  const activeTab = useEditorStore((s) => s.propertiesActiveTab);
+export function PropertiesTabBar({ visibleTabIds, effectiveTab }) {
+  const stickyTab = useEditorStore((s) => s.propertiesActiveTab);
   const setActiveTab = useEditorStore((s) => s.setPropertiesActiveTab);
+  const highlightTab = effectiveTab ?? stickyTab;
 
   return (
     <div className="w-8 shrink-0 border-r border-border bg-muted/20 flex flex-col items-stretch py-1 gap-0.5">
       {PROPERTIES_TABS.map((tab) => {
         if (!visibleTabIds.has(tab.id)) return null;
-        const isActive = tab.id === activeTab;
+        const isActive = tab.id === highlightTab;
         return (
           <button
             key={tab.id}

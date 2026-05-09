@@ -23,7 +23,7 @@
  * @module v3/editors/properties/PropertiesEditor
  */
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
@@ -34,7 +34,6 @@ export function PropertiesEditor() {
   const items = useSelectionStore((s) => s.items);
   const project = useProjectStore((s) => s.project);
   const stickyTab = useEditorStore((s) => s.propertiesActiveTab);
-  const setActiveTab = useEditorStore((s) => s.setPropertiesActiveTab);
 
   const active = items.length > 0 ? items[items.length - 1] : null;
 
@@ -44,25 +43,17 @@ export function PropertiesEditor() {
   );
 
   // Effective active tab — the sticky pref if it's still visible,
-  // otherwise fall forward to the first visible tab (Blender behaviour
-  // when context changes; the sticky pref isn't overwritten so coming
-  // back to the original selection kind restores it).
+  // otherwise fall forward to the first visible tab. The sticky pref
+  // is NEVER overwritten by selection-driven context changes —
+  // Blender keeps the user's tab choice across selections, restoring
+  // it whenever the user lands back on a selection where the tab is
+  // visible. Only an explicit tab click (PropertiesTabBar) writes
+  // back to the store via `setPropertiesActiveTab`.
   const effectiveTab = useMemo(() => {
     if (visibleTabs.length === 0) return null;
     if (visibleTabs.some((t) => t.id === stickyTab)) return stickyTab;
     return visibleTabs[0].id;
   }, [visibleTabs, stickyTab]);
-
-  // When the user moves to a new selection where the sticky tab is
-  // hidden, surface the fall-forward tab as the active selection so a
-  // subsequent click on a tab button still feels coherent (without this,
-  // clicking the same tab the user can already "see active" would do
-  // nothing because the slot already had a different value).
-  useEffect(() => {
-    if (effectiveTab && effectiveTab !== stickyTab) {
-      setActiveTab(effectiveTab);
-    }
-  }, [effectiveTab, stickyTab, setActiveTab]);
 
   // Hooks must run before any conditional return — `visibleTabIds`
   // is consumed by the JSX below the `if (!active)` early-out path.
@@ -110,7 +101,7 @@ export function PropertiesEditor() {
       </div>
 
       <div className="flex-1 min-h-0 flex flex-row">
-        <PropertiesTabBar visibleTabIds={visibleTabIds} />
+        <PropertiesTabBar visibleTabIds={visibleTabIds} effectiveTab={effectiveTab} />
         <div className="flex-1 min-w-0 overflow-auto flex flex-col">
           {sections.length === 0 ? (
             <div className="p-3 text-xs text-muted-foreground">
