@@ -271,7 +271,8 @@ export async function initializeRig() {
     const harvest = await memoInitializeRigFromProject(project, images);
 
     // Persist all rig outputs into projectStore.
-    useProjectStore.getState().seedAllRig(harvest);
+    // Phase A2 — seedAllRig is async (lazy-loads the seed module).
+    await useProjectStore.getState().seedAllRig(harvest);
 
     // Cache the rigSpec for the live evaluator. Bypass buildRigSpec()
     // because it would re-run the harvest a second time. Also attach
@@ -450,23 +451,24 @@ export async function runStage(stage, opts = {}) {
         // `else if (mode === 'replace') clearXxx()` branches in
         // `seedAllRig`). MERGE mode preserves the existing stored value
         // when harvest is null — by design.
+        // Phase A2 — store actions are now async (lazy-loaded seeds).
         if (stage === 'faceParallax') {
           if (harvest?.faceParallaxSpec) {
-            store[action](harvest.faceParallaxSpec, mode);
+            await store[action](harvest.faceParallaxSpec, mode);
           } else if (mode === 'replace') {
-            store.clearFaceParallax();
+            await store.clearFaceParallax();
           }
         } else if (stage === 'bodyWarpChain') {
           if (harvest?.bodyWarpChain) {
-            store[action](harvest.bodyWarpChain, mode);
+            await store[action](harvest.bodyWarpChain, mode);
           } else if (mode === 'replace') {
-            store.clearBodyWarp();
+            await store.clearBodyWarp();
           }
         } else if (stage === 'rigWarps') {
           if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
-            store[action](harvest.rigWarps, mode);
+            await store[action](harvest.rigWarps, mode);
           } else if (mode === 'replace') {
-            store.clearRigWarps();
+            await store.clearRigWarps();
           }
         }
       } finally {
@@ -478,8 +480,10 @@ export async function runStage(stage, opts = {}) {
       // Stages 1-8: direct seed call. Most accept (mode); some are
       // pure-defaults (parameters, boneConfig, variantFadeRules,
       // eyeClosureConfig, rotationDeformerConfig) and ignore extra args.
+      // Phase A2 — seed actions are async; await before stamping
+      // telemetry inside the same batch.
       const action = STAGE_TO_ACTION[stage];
-      useProjectStore.getState()[action](mode);
+      await useProjectStore.getState()[action](mode);
     }
 
     // Stamp telemetry inside the same batch → folds into the seeder's
@@ -543,7 +547,7 @@ export async function refitAll(opts = {}) {
     try { images = await loadProjectTextures(project); }
     catch (_err) { /* textures missing — proceed without */ }
     const harvest = await memoInitializeRigFromProject(project, images);
-    useProjectStore.getState().seedAllRig(harvest, mode);
+    await useProjectStore.getState().seedAllRig(harvest, mode);
 
     // Stamp every stage as run.
     const isoNow = new Date().toISOString();

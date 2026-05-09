@@ -3,26 +3,12 @@ import { produce } from 'immer';
 import { pushSnapshot, isBatching, clearHistory } from './undoHistory.js';
 import { useParamValuesStore } from './paramValuesStore.js';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from './projectMigrations.js';
-import { seedParameters as seedParametersFn } from '../io/live2d/rig/paramSpec.js';
-import { seedMaskConfigs as seedMaskConfigsFn } from '../io/live2d/rig/maskConfigs.js';
-import { seedPhysicsRules as seedPhysicsRulesFn } from '../io/live2d/rig/physicsConfig.js';
-import { seedBoneConfig as seedBoneConfigFn } from '../io/live2d/rig/boneConfig.js';
-import { seedVariantFadeRules as seedVariantFadeRulesFn } from '../io/live2d/rig/variantFadeRules.js';
-import { seedEyeClosureConfig as seedEyeClosureConfigFn } from '../io/live2d/rig/eyeClosureConfig.js';
-import { seedRotationDeformerConfig as seedRotationDeformerConfigFn } from '../io/live2d/rig/rotationDeformerConfig.js';
-import { seedAutoRigConfig as seedAutoRigConfigFn } from '../io/live2d/rig/autoRigConfig.js';
-import {
-  seedFaceParallax as seedFaceParallaxFn,
-  clearFaceParallax as clearFaceParallaxFn,
-} from '../io/live2d/rig/faceParallaxStore.js';
-import {
-  seedBodyWarpChain as seedBodyWarpChainFn,
-  clearBodyWarp as clearBodyWarpFn,
-} from '../io/live2d/rig/bodyWarpStore.js';
-import {
-  seedRigWarps as seedRigWarpsFn,
-  clearRigWarps as clearRigWarpsFn,
-} from '../io/live2d/rig/rigWarpsStore.js';
+// Phase A2 (2026-05-09) — 11 seed modules (~hundred kB gzip total)
+// dynamically loaded on first seed-action call. See `projectStoreSeeds.js`.
+// Production paths that need seeds (Init Rig, Refit All, runStage) are
+// all on already-lazy code paths, so the import naturally lands when the
+// user starts the work that needs it.
+import { loadSeedModule } from './projectStoreSeeds.js';
 import { computeProjectSignatures } from '../io/meshSignature.js';
 import {
   ensureWeightGroups,
@@ -1063,48 +1049,52 @@ export const useProjectStore = create((set, get) => {
    *
    * Snapshots history so the user can undo.
    */
-  seedParameters:             projectMutator(seedParametersFn),
+  // Phase A2 — async wrappers. Each lazy-loads the seed module on first
+  // call; subsequent calls share the resolved import via the memo in
+  // `projectStoreSeeds.loadSeedModule`. RigService.runStage already
+  // awaits these via `store[action](...)` since runStage itself is async.
+  seedParameters:             async (...args) => projectMutator((await loadSeedModule()).seedParameters)(...args),
 
   /**
    * Seed `project.maskConfigs` from the auto-rig heuristic (Stage 3).
    * Iris↔eyewhite pairings (variant-aware) are baked into project state.
    * Destructive: overwrites whatever was there.
    */
-  seedMaskConfigs:            projectMutator(seedMaskConfigsFn),
+  seedMaskConfigs:            async (...args) => projectMutator((await loadSeedModule()).seedMaskConfigs)(...args),
 
   /**
    * Seed `project.physicsRules` from DEFAULT_PHYSICS_RULES (Stage 6).
    * boneOutputs are resolved against the project's groups (boneRole
    * lookup) and flattened into outputs[]. Destructive.
    */
-  seedPhysicsRules:           projectMutator(seedPhysicsRulesFn),
+  seedPhysicsRules:           async (...args) => projectMutator((await loadSeedModule()).seedPhysicsRules)(...args),
 
   /**
    * Seed `project.boneConfig` from defaults (Stage 7). Currently sets
    * `bakedKeyformAngles` to [-90, -45, 0, 45, 90]. Destructive.
    */
-  seedBoneConfig:             projectMutator(seedBoneConfigFn),
+  seedBoneConfig:             async (...args) => projectMutator((await loadSeedModule()).seedBoneConfig)(...args),
 
   /**
    * Seed `project.variantFadeRules` from defaults (Stage 5). Currently
    * sets `backdropTags` to the canonical Hiyori-style list (face, ears,
    * front+back hair). Destructive.
    */
-  seedVariantFadeRules:       projectMutator(seedVariantFadeRulesFn),
+  seedVariantFadeRules:       async (...args) => projectMutator((await loadSeedModule()).seedVariantFadeRules)(...args),
 
   /**
    * Seed `project.eyeClosureConfig` from defaults (Stage 5). Currently
    * sets per-side eyelash/eyewhite/irides closureTags + lashStripFrac=0.06
    * + binCount=6. Destructive.
    */
-  seedEyeClosureConfig:       projectMutator(seedEyeClosureConfigFn),
+  seedEyeClosureConfig:       async (...args) => projectMutator((await loadSeedModule()).seedEyeClosureConfig)(...args),
 
   /**
    * Seed `project.rotationDeformerConfig` from defaults (Stage 8). Sets
    * `skipRotationRoles=['torso','eyes','neck']`, `paramAngleRange=±30`,
    * `groupRotation` 1:1 ±30, `faceRotation` ±10° on ±30 keys. Destructive.
    */
-  seedRotationDeformerConfig: projectMutator(seedRotationDeformerConfigFn),
+  seedRotationDeformerConfig: async (...args) => projectMutator((await loadSeedModule()).seedRotationDeformerConfig)(...args),
 
   /**
    * Seed `project.autoRigConfig` from defaults (Stage 2). Three sections —
@@ -1112,7 +1102,7 @@ export const useProjectStore = create((set, get) => {
    * faceParallax (depth coefficients, protection per tag, eye/squash amps,
    * super-groups), neckWarp (tilt fraction). Destructive.
    */
-  seedAutoRigConfig:          projectMutator(seedAutoRigConfigFn),
+  seedAutoRigConfig:          async (...args) => projectMutator((await loadSeedModule()).seedAutoRigConfig)(...args),
 
   /**
    * Upsert the FaceParallax warp deformer node in `project.nodes`
@@ -1124,14 +1114,14 @@ export const useProjectStore = create((set, get) => {
    * BFA-006 Phase 6 — formerly wrote `project.faceParallax`; the
    * legacy sidetable was deleted by migration v16.
    */
-  seedFaceParallax:           projectMutator(seedFaceParallaxFn),
+  seedFaceParallax:           async (...args) => projectMutator((await loadSeedModule()).seedFaceParallax)(...args),
 
   /**
    * Remove the FaceParallax warp deformer node from `project.nodes`.
    * Use after PSD reimport invalidates stored vertex deltas — the
    * heuristic generator will re-synthesise it on the next Init Rig.
    */
-  clearFaceParallax:          projectMutator(clearFaceParallaxFn),
+  clearFaceParallax:          async (...args) => projectMutator((await loadSeedModule()).clearFaceParallax)(...args),
 
   /**
    * Upsert the body warp chain (BZ → BY → Breath → optional BX) into
@@ -1147,7 +1137,7 @@ export const useProjectStore = create((set, get) => {
    * sidetable since the closures need ranges that can't be recovered
    * from chained `baseGrid`s alone.
    */
-  seedBodyWarp:               projectMutator(seedBodyWarpChainFn),
+  seedBodyWarp:               async (...args) => projectMutator((await loadSeedModule()).seedBodyWarpChain)(...args),
 
   /**
    * Remove all body-warp-chain deformer nodes from `project.nodes`
@@ -1155,7 +1145,7 @@ export const useProjectStore = create((set, get) => {
    * invalidates stored vertex deltas or body silhouette anchors —
    * the heuristic generator will rebuild on the next Init Rig.
    */
-  clearBodyWarp:              projectMutator(clearBodyWarpFn),
+  clearBodyWarp:              async (...args) => projectMutator((await loadSeedModule()).clearBodyWarp)(...args),
 
   /**
    * Upsert per-mesh rigWarp deformer nodes (those with
@@ -1172,7 +1162,7 @@ export const useProjectStore = create((set, get) => {
    * runtime selector (`selectRigSpec`) resolves the per-part chain
    * without walking rigSpec.
    */
-  seedRigWarps:               projectMutator(seedRigWarpsFn),
+  seedRigWarps:               async (...args) => projectMutator((await loadSeedModule()).seedRigWarps)(...args),
 
   /**
    * Remove all rigWarp deformer nodes (those with `targetPartId`)
@@ -1180,7 +1170,7 @@ export const useProjectStore = create((set, get) => {
    * Use after PSD reimport invalidates stored per-vertex deltas or
    * any binding-axis change.
    */
-  clearRigWarps:              projectMutator(clearRigWarpsFn),
+  clearRigWarps:              async (...args) => projectMutator((await loadSeedModule()).clearRigWarps)(...args),
 
   /**
    * Stage 1b — orchestrator that seeds every native-rig store from a
@@ -1208,40 +1198,44 @@ export const useProjectStore = create((set, get) => {
    * }} harvest
    * @param {'replace'|'merge'} [mode='replace']
    */
-  seedAllRig: (harvest, mode = 'replace') => {
+  seedAllRig: async (harvest, mode = 'replace') => {
+    // Phase A2 — pre-load the seed module BEFORE the immer recipe runs.
+    // immer's `produce` recipes must be sync; we resolve all seed
+    // functions up front and then call them inside the recipe.
+    const seeds = await loadSeedModule();
     set((state) => {
     if (!isBatching()) pushSnapshot(state.project);
     return produce(state, (draft) => {
       const proj = draft.project;
       // Config-only seeders (no keyforms). Pure defaults; merge==replace.
-      // V4 Phase 2 — `seedParametersFn` honours `mode` so user-authored
+      // V4 Phase 2 — `seedParameters` honours `mode` so user-authored
       // params + user-added keys survive Init Rig 'merge'.
-      seedParametersFn(proj, mode);
-      seedMaskConfigsFn(proj, mode);
-      seedPhysicsRulesFn(proj, mode);
-      seedBoneConfigFn(proj);
-      seedVariantFadeRulesFn(proj);
-      seedEyeClosureConfigFn(proj);
-      seedRotationDeformerConfigFn(proj);
-      seedAutoRigConfigFn(proj, mode);
+      seeds.seedParameters(proj, mode);
+      seeds.seedMaskConfigs(proj, mode);
+      seeds.seedPhysicsRules(proj, mode);
+      seeds.seedBoneConfig(proj);
+      seeds.seedVariantFadeRules(proj);
+      seeds.seedEyeClosureConfig(proj);
+      seeds.seedRotationDeformerConfig(proj);
+      seeds.seedAutoRigConfig(proj, mode);
       // Keyform-bearing seeders. Each only fires when the harvester
       // actually produced a value — buildBodyWarpChain returns null for
       // models without ParamBodyAngleZ/Y, faceParallax is null when no
       // face-tagged meshes exist, etc.
       if (harvest?.faceParallaxSpec) {
-        seedFaceParallaxFn(proj, harvest.faceParallaxSpec, mode);
+        seeds.seedFaceParallax(proj, harvest.faceParallaxSpec, mode);
       } else if (mode === 'replace') {
-        clearFaceParallaxFn(proj);
+        seeds.clearFaceParallax(proj);
       }
       if (harvest?.bodyWarpChain) {
-        seedBodyWarpChainFn(proj, harvest.bodyWarpChain, mode);
+        seeds.seedBodyWarpChain(proj, harvest.bodyWarpChain, mode);
       } else if (mode === 'replace') {
-        clearBodyWarpFn(proj);
+        seeds.clearBodyWarp(proj);
       }
       if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
-        seedRigWarpsFn(proj, harvest.rigWarps, mode);
+        seeds.seedRigWarps(proj, harvest.rigWarps, mode);
       } else if (mode === 'replace') {
-        clearRigWarpsFn(proj);
+        seeds.clearRigWarps(proj);
       }
       // BFA-006 Phase 6 fallout — NeckWarp dual-write. Pre-Phase-6
       // the NeckWarp deformer was dropped on the floor (lived only
@@ -1479,15 +1473,19 @@ export const useProjectStore = create((set, get) => {
    * inline heuristics. Config-only seeded fields (parameters, masks,
    * physics rules, etc.) are left intact.
    */
-  clearRigKeyforms: () => set((state) => {
-    if (!isBatching()) pushSnapshot(state.project);
-    return produce(state, (draft) => {
-      clearFaceParallaxFn(draft.project);
-      clearBodyWarpFn(draft.project);
-      clearRigWarpsFn(draft.project);
-      draft.hasUnsavedChanges = true;
+  clearRigKeyforms: async () => {
+    // Phase A2 — pre-load seed module before the sync immer recipe.
+    const seeds = await loadSeedModule();
+    set((state) => {
+      if (!isBatching()) pushSnapshot(state.project);
+      return produce(state, (draft) => {
+        seeds.clearFaceParallax(draft.project);
+        seeds.clearBodyWarp(draft.project);
+        seeds.clearRigWarps(draft.project);
+        draft.hasUnsavedChanges = true;
+      });
     });
-  }),
+  },
 
   /** Update canvas properties */
   updateCanvas: (partial) => set(produce((state) => {
