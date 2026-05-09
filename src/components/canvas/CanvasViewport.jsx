@@ -1586,7 +1586,7 @@ export default function CanvasViewport({
   }, [updateProject, centerView]);
 
   /* ── PSD import: finalize (shared by all import paths) ──────────────────── */
-  const finalizePsdImport = useCallback((psdW, psdH, layers, partIds, groupDefs, assignments) => {
+  const finalizePsdImport = useCallback(async (psdW, psdH, layers, partIds, groupDefs, assignments) => {
     const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
     const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
 
@@ -1594,6 +1594,53 @@ export default function CanvasViewport({
     if (groupDefs.length > 0) {
       setExpandedGroups(groupDefs.map(g => g.id));
       setActiveLayerTab('groups');
+    }
+
+    // P2 — per-layer compositing + PNG encoding moved to a worker pool.
+    // Each worker computes the alpha mask + opaque-pixel bounds inside
+    // and returns only those + the PNG buffer (transferable). The
+    // canvas-sized RGBA never crosses the main-thread boundary.
+    //
+    // Layer buffers are CLONED at dispatch (not transferred) because
+    // back→re-finalize re-reads pendingPsd.layers; transferring would
+    // empty those buffers for the second pass. Clone cost is contained
+    // (per-layer-sized, parallelized across workers).
+    const { createPsdFinalizeWorkerPool } = await import('@/io/psdFinalizeWorkerPool');
+    const pool = createPsdFinalizeWorkerPool();
+    /** @type {Array<{layerIndex:number, alphaMask:any, imageBounds:any, url:string}>} */
+    const composited = new Array(layers.length);
+    try {
+      const dispatches = layers.map((layer, i) => {
+        const layerData = new Uint8ClampedArray(layer.imageData.data).buffer;
+        return pool.enqueue({
+          layerData,
+          layerW: layer.imageData.width,
+          layerH: layer.imageData.height,
+          layerX: layer.x,
+          layerY: layer.y,
+          psdW,
+          psdH,
+          layerIndex: i,
+        }).then((res) => {
+          const blob = new Blob([res.pngBuffer], { type: 'image/png' });
+          composited[res.layerIndex] = {
+            layerIndex: res.layerIndex,
+            alphaMask: res.alphaMask,
+            imageBounds: res.imageBounds,
+            url: URL.createObjectURL(blob),
+          };
+        });
+      });
+      await Promise.all(dispatches);
+    } finally {
+      pool.destroy();
+    }
+
+    // Populate alpha-mask cache up front. Hit-test (wizard reorder/
+    // adjust steps) reads this map directly.
+    for (const c of composited) {
+      const partId = partIds[c.layerIndex];
+      imageDataMapRef.current.set(partId, c.alphaMask);
     }
 
     updateProject((proj, ver) => {
@@ -1626,41 +1673,9 @@ export default function CanvasViewport({
 
       layers.forEach((layer, i) => {
         const partId = partIds[i];
-        const off = document.createElement('canvas');
-        off.width = psdW; off.height = psdH;
-        const ctx = off.getContext('2d');
-        const tmp = document.createElement('canvas');
-        tmp.width = layer.width; tmp.height = layer.height;
-        tmp.getContext('2d').putImageData(layer.imageData, 0, 0);
-        ctx.drawImage(tmp, layer.x, layer.y);
-        const fullImageData = ctx.getImageData(0, 0, psdW, psdH);
-
-        // M7b — store downsampled alpha mask for alpha-based picking
-        imageDataMapRef.current.set(partId, downsampleAlphaMask(fullImageData));
-
-        // Compute bounding box from opaque pixels
-        const imageBounds = computeImageBounds(fullImageData);
-
-        off.toBlob((blob) => {
-          const url = URL.createObjectURL(blob);
-          updateProject((p2) => {
-            const t = p2.textures.find(t => t.id === partId);
-            if (t) t.source = url;
-          });
-          const img2 = new Image();
-          img2.onload = () => {
-            const scene = sceneRef.current;
-            if (scene) {
-              scene.parts.uploadTexture(partId, img2);
-              scene.parts.uploadQuadFallback(partId, psdW, psdH);
-              isDirtyRef.current = true;
-            }
-          };
-          img2.src = url;
-        }, 'image/png');
-
+        const c = composited[i];
         const assignment = assignments?.get(i);
-        proj.textures.push({ id: partId, source: '' });
+        proj.textures.push({ id: partId, source: c.url });
         proj.nodes.push({
           id: partId,
           type: 'part',
@@ -1675,7 +1690,7 @@ export default function CanvasViewport({
           mesh: null,
           imageWidth: psdW,
           imageHeight: psdH,
-          imageBounds: imageBounds || { minX: 0, minY: 0, maxX: psdW, maxY: psdH },
+          imageBounds: c.imageBounds || { minX: 0, minY: 0, maxX: psdW, maxY: psdH },
         });
       });
 
@@ -1686,6 +1701,23 @@ export default function CanvasViewport({
 
       ver.textureVersion++;
     });
+
+    // GL upload runs after the project commit so the renderer doesn't
+    // try to draw against a not-yet-committed texture entry. Loads in
+    // parallel — `Image.onload` fires whenever each PNG decode lands.
+    for (const c of composited) {
+      const partId = partIds[c.layerIndex];
+      const img2 = new Image();
+      img2.onload = () => {
+        const scene = sceneRef.current;
+        if (scene) {
+          scene.parts.uploadTexture(partId, img2);
+          scene.parts.uploadQuadFallback(partId, psdW, psdH);
+          isDirtyRef.current = true;
+        }
+      };
+      img2.src = c.url;
+    }
 
     centerView(psdW, psdH);
   }, [updateProject, centerView]);
@@ -1803,7 +1835,7 @@ export default function CanvasViewport({
         // GAP-001 — wizard mounts at AppShell level; we just kick it off.
         PsdImportService.start({ psdW, psdH, layers, partIds });
       } else {
-        finalizePsdImport(psdW, psdH, layers, partIds, [], null);
+        await finalizePsdImport(psdW, psdH, layers, partIds, [], null);
       }
     });
   }, [finalizePsdImport]);

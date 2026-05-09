@@ -79,13 +79,16 @@ export function cancel() {
  *  Runs the canvas-side `finalizePsdImport` to mutate project.nodes,
  *  then transitions the wizard to the `adjust` step where the user
  *  can drag joints. */
-export function finalize(groupDefs, assignments, meshAllParts) {
+export async function finalize(groupDefs, assignments, meshAllParts) {
   const wiz = useWizardStore.getState();
   const psd = wiz.pendingPsd;
   if (!psd) return;
   captureSnapshotIfNeeded();
   const fpi = useCaptureStore.getState().finalizePsdImport;
-  if (fpi) fpi(psd.psdW, psd.psdH, psd.layers, psd.partIds, groupDefs, assignments);
+  // P2 — finalizePsdImport runs the per-layer compositing in a worker
+  // pool; await before transitioning the wizard step so the next step
+  // (adjust) renders against the committed project.
+  if (fpi) await fpi(psd.psdW, psd.psdH, psd.layers, psd.partIds, groupDefs, assignments);
   wiz.setMeshAllParts(meshAllParts);
   useEditorStore.getState().setViewLayers({ skeleton: true });
   // Wizard adjust step is rest-pivot placement, NOT pose. Skeleton edit
@@ -102,13 +105,13 @@ export function finalize(groupDefs, assignments, meshAllParts) {
 /** Enter the "reorder" step. Imports the layers as parts (no rig)
  *  so the user can drag-reorder them in the Outliner before joining
  *  the wizard's adjust step. */
-export function reorder() {
+export async function reorder() {
   const wiz = useWizardStore.getState();
   const psd = wiz.pendingPsd;
   if (!psd) return;
   captureSnapshotIfNeeded();
   const fpi = useCaptureStore.getState().finalizePsdImport;
-  if (fpi) fpi(psd.psdW, psd.psdH, psd.layers, psd.partIds, [], null);
+  if (fpi) await fpi(psd.psdW, psd.psdH, psd.layers, psd.partIds, [], null);
   wiz.setStep('reorder');
 }
 
@@ -168,22 +171,17 @@ export function applyRig(groupDefs, assignments, meshAllParts) {
 
 /** Skip rigging entirely — finalize as flat parts and mesh-all if
  *  requested. Wizard closes immediately. */
-export function skip(meshAllParts) {
+export async function skip(meshAllParts) {
   const wiz = useWizardStore.getState();
   const psd = wiz.pendingPsd;
   if (!psd) return;
   const cs = useCaptureStore.getState();
   if (cs.finalizePsdImport) {
-    cs.finalizePsdImport(psd.psdW, psd.psdH, psd.layers, psd.partIds, [], null);
+    await cs.finalizePsdImport(psd.psdW, psd.psdH, psd.layers, psd.partIds, [], null);
   }
-  if (meshAllParts && cs.autoMeshAllParts) {
-    // Auto-mesh runs after texture uploads complete; let the
-    // finalizePsdImport batch flush before kicking it off.
-    setTimeout(() => {
-      const fn = useCaptureStore.getState().autoMeshAllParts;
-      if (fn) fn();
-    }, 100);
-  }
+  // P2 — auto-mesh now runs after the awaited finalize, no setTimeout
+  // gymnastics needed. Project + textures are committed by this point.
+  if (meshAllParts && cs.autoMeshAllParts) cs.autoMeshAllParts();
   wiz.reset();
   resetInteractionState();
 }

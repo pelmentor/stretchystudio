@@ -33,7 +33,7 @@ import { create } from 'zustand';
  * @property {(fn: ((partId:string, opts?:any) => void)|null) => void} setRemeshPart
  *
  * @property {((psdW:number, psdH:number, layers:any[], partIds:string[],
- *             groupDefs:any[], assignments:Map<number,any>|null) => void)|null} finalizePsdImport
+ *             groupDefs:any[], assignments:Map<number,any>|null) => Promise<void>)|null} finalizePsdImport
  *   GAP-001 — Wizard-side bridge. Mutates project.nodes from the parsed
  *   PSD payload, uploads textures + alpha-data to the WebGL scene, and
  *   centres the viewport on the imported character. Lives in

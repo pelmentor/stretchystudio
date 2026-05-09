@@ -99,7 +99,7 @@ const samplePsd = () => ({
   installBridges();
   const psd = samplePsd();
   PsdImportService.start(psd);
-  PsdImportService.finalize([{ id: 'g1', name: 'body' }], new Map(), true);
+  await PsdImportService.finalize([{ id: 'g1', name: 'body' }], new Map(), true);
   assert(finalizeCalls.length === 1, 'finalize: bridge called once');
   const args = finalizeCalls[0];
   assert(args[0] === psd.psdW && args[1] === psd.psdH,
@@ -131,7 +131,7 @@ const samplePsd = () => ({
   resetAllStores();
   installBridges();
   PsdImportService.start(samplePsd());
-  PsdImportService.reorder();
+  await PsdImportService.reorder();
   const snap1 = useWizardStore.getState().preImportSnapshot;
   assert(useWizardStore.getState().step === 'reorder', 'reorder: step=reorder');
   assert(snap1 != null, 'reorder: snapshot captured');
@@ -142,7 +142,7 @@ const samplePsd = () => ({
       nodes: [{ id: 'mutated', type: 'part' }],
     },
   });
-  PsdImportService.finalize([], new Map(), true);
+  await PsdImportService.finalize([], new Map(), true);
   const snap2 = useWizardStore.getState().preImportSnapshot;
   assert(snap2 === snap1,
     'finalize after reorder: original snapshot preserved (not re-captured)');
@@ -156,7 +156,7 @@ const samplePsd = () => ({
   PsdImportService.start(samplePsd());
   // Pre-finalize state.
   const originalNodes = useProjectStore.getState().project.nodes;
-  PsdImportService.finalize([], new Map(), true);
+  await PsdImportService.finalize([], new Map(), true);
   // Pretend the canvas added some nodes (which finalize would normally do).
   useProjectStore.setState({
     project: {
@@ -189,7 +189,7 @@ const samplePsd = () => ({
     activeBlendShapeId: 'shape-1',
   });
   PsdImportService.start(samplePsd());
-  PsdImportService.skip(false);
+  await PsdImportService.skip(false);
   assert(finalizeCalls.length === 1, 'skip: bridge called for finalize');
   assert(useWizardStore.getState().step === null, 'skip: wizard reset');
   assert(useEditorStore.getState().editMode === null,
@@ -203,15 +203,15 @@ const samplePsd = () => ({
   uninstallBridges();
 }
 
-// ── skip(true): triggers autoMesh after a tick ────────────────────
+// ── skip(true): triggers autoMesh after finalize awaits ───────────
 {
   resetAllStores();
   installBridges();
   PsdImportService.start(samplePsd());
-  PsdImportService.skip(true);
-  // The service uses setTimeout to give finalize a tick to flush.
-  await new Promise((r) => setTimeout(r, 150));
-  assert(autoMeshCalls.length === 1, 'skip(true): autoMesh called after tick');
+  // P2 — finalize is now async; auto-mesh runs synchronously after the
+  // awaited finalize. No setTimeout gymnastics.
+  await PsdImportService.skip(true);
+  assert(autoMeshCalls.length === 1, 'skip(true): autoMesh called after finalize');
   uninstallBridges();
 }
 
@@ -221,7 +221,7 @@ const samplePsd = () => ({
   installBridges();
   PsdImportService.start(samplePsd());
   // Walk through finalize → adjust to set up state.
-  PsdImportService.finalize([], new Map(), true);
+  await PsdImportService.finalize([], new Map(), true);
   // User clicks Finish; meshAllParts arg overrides stored value.
   PsdImportService.complete(false);
   assert(autoMeshCalls.length === 0,
