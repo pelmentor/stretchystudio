@@ -113,9 +113,34 @@ output. `npm run test:PsdImportService`.
 
 ---
 
-## Plan: M9 — null `pendingPsd.layers` after consume
+## Plan: M9 — null `pendingPsd.layers` after consume — DEFERRED 2026-05-09
 
-**Root cause.** [src/store/wizardStore.js:43-46](../../src/store/wizardStore.js#L43-L46)
+**Implementation attempt 2026-05-09 found this needs a deeper
+redesign than the plan covered.** The audit's claim that
+"step 'review' is the last consumer" turned out wrong: while
+adjust/reorder/dwpose don't read `psd.layers` directly,
+`back()` from adjust → review allows the user to re-finalize
+with a different rig, and `finalize` calls
+`fpi(psd.psdW, psd.psdH, psd.layers, ...)` — pixel data needed
+again.
+
+Plus the duplicate-storage analysis was off: `pendingPsd.layers[i].imageData`
+is **layer-sized** RGBA (region of opacity), not canvas-sized.
+For a typical character PSD with many small region layers the
+total is in the tens of MB, not the 3.2 GB the audit projected.
+The bigger waste is `imageDataMapRef`'s **canvas-sized** entries
+(M7a + M7b cover that — see those plans).
+
+**Proper fix would require a UX change** (e.g. forbid back from
+adjust → review unless the user explicitly re-imports the PSD,
+or share the layer ImageData buffer between `pendingPsd.layers`
+and the upload pipeline so there's no duplicate at all). Either
+approach is out of scope for a pure perf sweep; defer until the
+wizard surface gets a dedicated round.
+
+**Original plan kept below for reference.**
+
+**Root cause (original).** [src/store/wizardStore.js:43-46](../../src/store/wizardStore.js#L43-L46)
 holds `pendingPsd.layers`: every layer's full RGBA pixel data.
 For a 4K × 50-layer PSD that's 50 × 64 MB ≈ 3.2 GB peak retention
 across the wizard's lifetime, even after the layers have been

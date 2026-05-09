@@ -1,10 +1,14 @@
 /**
- * PSD import — wraps ag-psd to produce a flat list of layers.
+ * PSD import — wraps ag-psd's `readPsd` to produce a flat list of
+ * layers. Returns only rasterised layers (those with pixel data);
+ * group/folder nodes are walked but not emitted as parts.
  *
- * Returns only rasterized layers (those with pixel data). Group/folder nodes
- * are walked but not emitted as parts (M3 will add hierarchy).
+ * Decompression runs in a dedicated one-shot worker
+ * ([src/io/psd.worker.js](./psd.worker.js)) so the seconds-long RLE
+ * decode for big PSDs stays off the main thread.
+ *
+ * @module io/psd
  */
-import { readPsd } from 'ag-psd';
 
 /**
  * @typedef {Object} PsdLayer
@@ -13,69 +17,37 @@ import { readPsd } from 'ag-psd';
  * @property {number}    y         - top offset in PSD canvas space
  * @property {number}    width
  * @property {number}    height
- * @property {ImageData} imageData - full-canvas-size imageData (pre-composited into PSD space)
+ * @property {ImageData} imageData - layer-local pixel data
  * @property {string}    blendMode
  * @property {number}    opacity   - 0-1
  * @property {boolean}   visible
  */
 
 /**
- * Parse an ArrayBuffer containing a PSD file.
+ * Parse a PSD ArrayBuffer in a worker.
  *
  * @param {ArrayBuffer} buffer
- * @returns {{ width: number, height: number, layers: PsdLayer[] }}
+ * @returns {Promise<{ width: number, height: number, layers: PsdLayer[] }>}
  */
 export function importPsd(buffer) {
-  const psd = readPsd(buffer, { skipLayerImageData: false, useImageData: true });
-
-  const layers = [];
-
-  function walk(children) {
-    if (!children) return;
-    for (const layer of children) {
-      if (layer.children) {
-        // group — recurse, skip as a part for now
-        walk(layer.children);
-        continue;
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL('./psd.worker.js', import.meta.url),
+      { type: 'module' },
+    );
+    worker.onmessage = (e) => {
+      const data = e.data;
+      worker.terminate();
+      if (!data?.ok) {
+        reject(new Error(data?.error ?? 'PSD worker failed'));
+        return;
       }
-      // Only emit layers that have pixel content
-      if (!layer.canvas && !layer.imageData) continue;
-
-      const left   = layer.left   ?? 0;
-      const top    = layer.top    ?? 0;
-      const right  = layer.right  ?? psd.width;
-      const bottom = layer.bottom ?? psd.height;
-      const w = right  - left;
-      const h = bottom - top;
-      if (w <= 0 || h <= 0) continue;
-
-      // Get imageData from the layer's canvas (ag-psd provides this)
-      let imageData;
-      if (layer.canvas) {
-        const ctx = layer.canvas.getContext('2d');
-        imageData = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
-      } else {
-        imageData = layer.imageData;
-      }
-
-      layers.push({
-        name:      layer.name || `Layer ${layers.length + 1}`,
-        x:         left,
-        y:         top,
-        width:     w,
-        height:    h,
-        imageData,
-        blendMode: layer.blendMode ?? 'normal',
-        opacity:   layer.opacity !== undefined ? layer.opacity : 1,
-        visible:   !layer.hidden,
-      });
-    }
-  }
-
-  walk(psd.children);
-
-  // Reverse so bottom PSD layer → lowest draw_order (drawn first)
-  layers.reverse();
-
-  return { width: psd.width, height: psd.height, layers };
+      resolve({ width: data.width, height: data.height, layers: data.layers });
+    };
+    worker.onerror = (err) => {
+      worker.terminate();
+      reject(err);
+    };
+    worker.postMessage({ buffer });
+  });
 }

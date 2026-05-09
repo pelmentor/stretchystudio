@@ -1772,7 +1772,7 @@ export default function CanvasViewport({
     file.arrayBuffer().then(async (buffer) => {
       const { importPsd } = await import('@/io/psd');
       let parsed;
-      try { parsed = importPsd(buffer); }
+      try { parsed = await importPsd(buffer); }
       catch (err) { console.error('[PSD Import]', err); return; }
 
       const { width: psdW, height: psdH, layers } = parsed;
