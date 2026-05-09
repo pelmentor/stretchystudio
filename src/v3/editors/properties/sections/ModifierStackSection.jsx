@@ -50,6 +50,12 @@ export function ModifierStackSection({ nodeId }) {
   // no-op (the part rigid-follows via the overlay-matrix path); once
   // the user paints weights via Weight Paint mode, the composition
   // decision flips from `'overlay'` to `'lbs'` and LBS activates.
+  //
+  // Section is now ALWAYS rendered for parts (mirrors Blender — the
+  // wrench tab on every mesh is the "Add Modifier" entry point).
+  // The Add Modifier button below is enabled when there's a bone-
+  // group ancestor; otherwise it's disabled with an explanatory
+  // tooltip. Never returns null for a meshed part.
   const project = useProjectStore.getState().project;
   const nearestBoneAncestor = (() => {
     const byId = new Map(project.nodes.map((n) => [n.id, n]));
@@ -64,7 +70,6 @@ export function ModifierStackSection({ nodeId }) {
   const meshBoneWeights = Array.isArray(node.mesh?.boneWeights) ? node.mesh.boneWeights : null;
   const canBindArmature = !!nearestBoneAncestor
     && !stack.some((m) => m?.type === 'armature');
-  if (stack.length === 0 && !canBindArmature) return null;
 
   /** @param {(modifiers: Array<any>) => void} fn */
   function patchModifiers(fn) {
@@ -121,6 +126,15 @@ export function ModifierStackSection({ nodeId }) {
         jointBoneRole={nearestBoneAncestor?.boneRole ?? null}
         onAddArmature={() => bindArmatureModifier(nodeId)}
       />
+      {stack.length === 0 && (
+        <div className="text-[11px] text-muted-foreground mt-1">
+          {canBindArmature
+            ? 'No modifiers yet. Use Add Modifier above to bind an Armature.'
+            : nearestBoneAncestor
+              ? 'Armature already bound on this part.'
+              : 'No bone-group ancestor — Armature modifier needs a bone to follow.'}
+        </div>
+      )}
       {stack.length > 0 && (
         <div className="text-[11px] text-muted-foreground mb-1 mt-1">
           Leaf-first order — modifiers[0] is the innermost / closest to the part.

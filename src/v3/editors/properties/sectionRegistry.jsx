@@ -87,11 +87,12 @@ export const PROPERTIES_SECTIONS = [
   {
     id: 'modifierStack',
     label: 'Modifier Stack',
-    isVisible: ({ active, project }) => {
-      if (active.type !== 'part') return false;
-      const node = (project?.nodes ?? []).find((n) => n?.id === active.id);
-      return Array.isArray(node?.modifiers) && node.modifiers.length > 0;
-    },
+    // Always visible for parts (mirrors Blender — the wrench tab is
+    // present on every mesh, regardless of whether the stack has any
+    // modifiers yet, because that's the "Add Modifier" entry point).
+    // The section's own render decides whether to show an empty-state
+    // hint or the actual stack.
+    isVisible: ({ active }) => active.type === 'part',
     render: ({ active }) => <ModifierStackSection nodeId={active.id} />,
   },
   {
