@@ -28,12 +28,17 @@ import {
 } from '../io/projectDb.js';
 
 /**
- * @typedef {Object} ProjectRecord
+ * @typedef {Object} ProjectRecordMeta
  * @property {string} id
  * @property {string} name
- * @property {Blob} blob
  * @property {string} thumbnail
  * @property {number} updatedAt
+ *
+ * @typedef {ProjectRecordMeta & { blob: Blob | null }} ProjectRecord
+ *
+ * Note: `listSavedProjects` returns `ProjectRecordMeta[]` (no blob);
+ * the gallery card UI doesn't need the actual project bytes. Use
+ * `loadProjectRecord(id)` to fetch the full record including the blob.
  */
 
 /**
@@ -62,7 +67,7 @@ export function deserializeProject(fileOrBlob) {
 // ── IndexedDB-backed project library ─────────────────────────────────
 
 /**
- * @returns {Promise<ProjectRecord[]>}  most-recent first
+ * @returns {Promise<ProjectRecordMeta[]>}  most-recent first
  */
 export function listSavedProjects() {
   return listProjects();

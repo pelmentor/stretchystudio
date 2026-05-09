@@ -88,6 +88,7 @@ import {
 import { pickBonePostChainComposition } from '@/renderer/bonePostChainComposition';
 import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
+import { createMeshWorkerPool } from '@/mesh/workerPool';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
 // `saveProject` / `loadProject` are dynamic-imported inside the save
 // and load handlers — keeps jszip out of the boot bundle.
@@ -119,7 +120,14 @@ export default function CanvasViewport({
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
   const rafRef = useRef(null);
-  const workersRef = useRef(new Map());  // Map<partId, Worker> for concurrent mesh generation
+  // Mesh worker pool — long-lived workers reused across remesh calls.
+  // Was a Map<partId, Worker> with `new Worker(...)` per-call which on
+  // `autoMeshAllParts` spawned N simultaneous workers competing for
+  // one CPU and re-parsing the mesh module N times. The per-partId
+  // sequence Map drops stale results when a part is remeshed twice
+  // before the first job finishes.
+  const meshPoolRef = useRef(/** @type {ReturnType<typeof createMeshWorkerPool>|null} */ (null));
+  const meshDispatchSeqRef = useRef(/** @type {Map<string, number>} */ (new Map()));
   const lastUploadedSourcesRef = useRef(new Map()); // Map<partId, string> (source URI)
   const imageDataMapRef = useRef(new Map()); // Map<partId, ImageData> for alpha-based picking
   const dragRef = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
@@ -487,6 +495,10 @@ export default function CanvasViewport({
       console.error('[CanvasViewport] ScenePass init failed:', err);
       return;
     }
+
+    // Mesh worker pool — long-lived workers shared across remesh calls.
+    // Lifetime matches the WebGL context (mounted/destroyed together).
+    if (!meshPoolRef.current) meshPoolRef.current = createMeshWorkerPool();
 
     // BUG-001 instrumentation — log GL context init + cleanup so the
     // recurring "character disappears on workspace switch" report can
@@ -1087,14 +1099,15 @@ export default function CanvasViewport({
         scene: !!sceneRef.current,
       });
       cancelAnimationFrame(rafRef.current);
-      // Mesh workers are spawned per-part by `dispatchMeshWorker`; if
-      // the viewport unmounts mid-meshing they keep running with their
-      // full triangulation state. Terminate them so a remount starts
-      // clean.
-      for (const w of workersRef.current.values()) {
-        try { w.terminate(); } catch { /* worker already gone */ }
+      // Tear down the mesh worker pool. Without this, terminated
+      // CanvasViewport mounts (workspace switch, tab swap) would leave
+      // their POOL_SIZE workers running indefinitely with their full
+      // triangulation state pinned in memory.
+      if (meshPoolRef.current) {
+        meshPoolRef.current.destroy();
+        meshPoolRef.current = null;
       }
-      workersRef.current.clear();
+      meshDispatchSeqRef.current.clear();
       sceneRef.current?.destroy();
       sceneRef.current = null;
     };
@@ -1382,16 +1395,16 @@ export default function CanvasViewport({
 
   /* ── Mesh worker dispatch ────────────────────────────────────────────── */
   const dispatchMeshWorker = useCallback((partId, imageData, opts) => {
-    // Terminate any previous worker for this part
-    const existingWorker = workersRef.current.get(partId);
-    if (existingWorker) existingWorker.terminate();
+    if (!meshPoolRef.current) return;
+    // Per-partId sequence — drop stale results if the user remeshes a
+    // part twice before the first job completes (can happen when
+    // imageBounds changes mid-meshing).
+    const seq = (meshDispatchSeqRef.current.get(partId) ?? 0) + 1;
+    meshDispatchSeqRef.current.set(partId, seq);
 
-    const worker = new Worker(new URL('@/mesh/worker.js', import.meta.url), { type: 'module' });
-    workersRef.current.set(partId, worker);
-
-    worker.onmessage = (e) => {
-      if (!e.data.ok) { console.error('[MeshWorker]', e.data.error); return; }
-      const { vertices, uvs, triangles, edgeIndices } = e.data;
+    meshPoolRef.current.enqueue(partId, imageData, opts).then((data) => {
+      if (meshDispatchSeqRef.current.get(partId) !== seq) return;
+      const { vertices, uvs, triangles, edgeIndices } = data;
 
       const scene = sceneRef.current;
       if (scene) {
@@ -1434,12 +1447,9 @@ export default function CanvasViewport({
           }
         }
       });
-
-      // Clean up the worker from the map when done
-      workersRef.current.delete(partId);
-    };
-
-    worker.postMessage({ imageData, opts });
+    }).catch((err) => {
+      console.error('[MeshWorker]', err);
+    });
   }, [updateProject]);
 
   /* ── Remesh selected part with given opts ────────────────────────────── */
