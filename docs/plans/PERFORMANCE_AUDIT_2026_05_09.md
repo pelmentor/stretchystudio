@@ -58,7 +58,7 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | M5 | Texture + audio blob URLs never revoked on project swap (50-200 MB per swap) | [src/store/projectStore.js](../../src/store/projectStore.js) (`disposeProjectResources`) | SHIPPED |
 | M6 | Mesh workers leaked on viewport unmount | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (cleanup return) | SHIPPED |
 | M7a | Prune `imageDataMapRef` entries when their part transitions to a triangulated mesh (entries are dead weight after triangle hit-test path takes over) | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) (mesh worker success handler) | SHIPPED `be6cd84` |
-| M7b | Downsample remaining wizard-window entries to 256² alpha mask | [src/components/canvas/CanvasViewport.jsx:124](../../src/components/canvas/CanvasViewport.jsx#L124) | ⏳DEFERRED⏳ |
+| M7b | Downsample remaining wizard-window entries to 256² alpha mask | [src/components/canvas/viewport/alphaMask.js](../../src/components/canvas/viewport/alphaMask.js), [hitTest.js](../../src/io/hitTest.js) | SHIPPED `b068ed7` |
 | M9 | `pendingPsd.layers` retains every layer's full RGBA — re-analysed 2026-05-09: needs UX redesign (back→re-finalize uses layers) | [src/store/wizardStore.js](../../src/store/wizardStore.js) | ⏳DEFERRED⏳ pending wizard-surface round |
 
 ### Phase C — render thrash (commit `a21fc2e`)
@@ -71,7 +71,7 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | S5 | `buildParamGroups(params)` un-memoed | [src/v3/editors/parameters/ParametersEditor.jsx](../../src/v3/editors/parameters/ParametersEditor.jsx) | SHIPPED |
 | S6 | TreeNode + ParamRow not React.memo | [TreeNode.jsx](../../src/v3/editors/outliner/TreeNode.jsx), [ParamRow.jsx](../../src/v3/editors/parameters/ParamRow.jsx) | SHIPPED |
 | S7 | ParamRow per-row activeId scan → lifted to ParametersEditor | [ParamRow.jsx](../../src/v3/editors/parameters/ParamRow.jsx) | SHIPPED |
-| S2 | PropertiesEditor whole-`project` subscription (per-section subs already shipped via S4) | [PropertiesEditor.jsx:35](../../src/v3/editors/properties/PropertiesEditor.jsx#L35) | ⏳DEFERRED⏳ |
+| S2 | PropertiesEditor whole-`project` subscription (per-section subs already shipped via S4) | [PropertiesEditor.jsx:35](../../src/v3/editors/properties/PropertiesEditor.jsx#L35) | SHIPPED `b0c0579` |
 
 ### Phase D — runtime hot path (commit `805f2cc`)
 
@@ -84,7 +84,7 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | R12 | livePreview eval cache key churns (fresh object each frame) → coordinate paramValuesRef with setMany | [src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx) | SHIPPED `c7726bb` |
 | R4 | `mat3Mul` allocates fresh Float32Array(9) per multiply → mat3MulInto + scratch reuse | [src/renderer/transforms.js:23](../../src/renderer/transforms.js#L23) | SHIPPED `9485a26` |
 | R3 (narrow) | chainEval ping-pong `bufB` Float32Array allocation → rigSpec-keyed pool | [src/io/live2d/runtime/evaluator/typedArrayPool.js](../../src/io/live2d/runtime/evaluator/typedArrayPool.js), [chainEval.js](../../src/io/live2d/runtime/evaluator/chainEval.js) | SHIPPED narrow scope |
-| R3 wider (M1+M2) | evalArtMesh `out` + lifted-grid Float64Arrays + chain-walk scratches | [src/io/live2d/runtime/evaluator/](../../src/io/live2d/runtime/evaluator/) | ⏳DEFERRED⏳ — narrow R3 covered ping-pong only |
+| R3 wider (M1+M2) | chain-walk scratches + rotation matrices via the typed-array pool | [src/io/live2d/runtime/evaluator/](../../src/io/live2d/runtime/evaluator/) | SHIPPED `7532637` — partial: lifted-grid Float64 stays unpooled (R2 dependency) |
 | R2 | `setLiftedGrids` Zustand-broadcasts a fresh Map per frame → revision counter + module-scope ref | [src/store/rigEvalStore.js](../../src/store/rigEvalStore.js), [WarpDeformerOverlay.jsx](../../src/v3/editors/viewport/overlays/WarpDeformerOverlay.jsx) | SHIPPED `03b060b` |
 
 ### Phase E — pipeline (commit `bd6db98`)
@@ -98,9 +98,9 @@ wasm, `jszip.min` 30 kB gzip, plus 11 editor chunks + 8 modal chunks.
 | - | Drop `JSON.stringify(..., null, 2)` indent (.stretch is gzipped anyway) | [src/io/projectFile.js](../../src/io/projectFile.js) | SHIPPED |
 | P6 | `generate.js` mesh dedup is O(N²) over deduped points → spatial hash | [src/mesh/spatialHash.js](../../src/mesh/spatialHash.js), [generate.js](../../src/mesh/generate.js), [sample.js](../../src/mesh/sample.js) | SHIPPED |
 | P10 | `importPsd` (`readPsd`) runs synchronously on main thread → worker (no sync fallback) | [src/io/psd.worker.js](../../src/io/psd.worker.js), [src/io/psd.js](../../src/io/psd.js) | SHIPPED `cc700f8` |
-| P1 | Undo `structuredClone` + `JSON.stringify` per push (~50ms + tens of MB per snapshot) → immer `produceWithPatches` | [src/store/undoHistory.js:73-78](../../src/store/undoHistory.js#L73-L78) | ⏳DEFERRED⏳ |
-| P2 | `finalizePsdImport` allocates N full-canvas ImageData on main thread inside one immer commit | [src/components/canvas/CanvasViewport.jsx:1497-1550](../../src/components/canvas/CanvasViewport.jsx#L1497-L1550) | ⏳DEFERRED⏳ |
-| P4 | `runStage` re-runs full `initializeRigFromProject` per stage (~3× pipeline cost) | [src/services/RigService.js:326-361](../../src/services/RigService.js#L326-L361) | ⏳DEFERRED⏳ |
+| P1 | Undo `structuredClone` + `JSON.stringify` per push (~50ms + tens of MB per snapshot) → drop clone, hold immer-frozen reference (memory profile equals immer-patches via structural sharing) | [src/store/undoHistory.js](../../src/store/undoHistory.js) | SHIPPED `cbcd761` |
+| P2 | `finalizePsdImport` allocates N full-canvas ImageData on main thread inside one immer commit → worker pool composites + alpha-mask + bounds + PNG, only small results cross the boundary | [src/io/psdFinalize.worker.js](../../src/io/psdFinalize.worker.js), [src/io/psdFinalizeWorkerPool.js](../../src/io/psdFinalizeWorkerPool.js) | SHIPPED `47da983` |
+| P4 | `runStage` re-runs full `initializeRigFromProject` per stage (~3× pipeline cost) → memo on project reference (immer auto-invalidation) | [src/services/RigService.js](../../src/services/RigService.js) | SHIPPED `77fb887` |
 
 ## Validation
 
@@ -138,6 +138,33 @@ each commit. tsc + vite build green at every step.
 M9 was attempted and deferred-pending-redesign — the audit's
 "step 'review' is the last consumer" claim doesn't hold against
 the back-from-adjust → re-finalize path; needs UX work.
+
+## Implementation pass 2026-05-09 (continuation)
+
+A second implementation pass closed five of the remaining six
+deferred items (M9 stays deferred-pending-redesign per the note
+above). Commit order:
+
+| Commit | Item | Notes |
+|---|---|---|
+| `7532637` | R3 wider | chain-walk scratch + rotation matrix pooling. Lifted-grid Float64 stays unpooled — pooling would break R2's `gridsContentEqual` content-equality gate (same buffer instance → comparison short-circuits → revision never bumps → overlay stops updating). |
+| `b068ed7` | M7b | 256² aspect-preserving alpha mask via new `alphaMask.js`. ~64× memory drop on the wizard window. New `test:alphaMask` (21/21). |
+| `b0c0579` | S2 | PropertiesEditor narrows to `s.project.nodes`. Audited `sectionRegistry.jsx`: every predicate reads at most `project.nodes`; renders read only `active`. Behaviour identical, sub gates on actual node mutations only. |
+| `47da983` | P2 | `finalizePsdImport` per-layer compositing in `psdFinalize.worker.js` pool. Layer ImageData CLONED at dispatch (back→re-finalize re-reads). Worker computes alpha mask + bounds + PNG INSIDE; only small results cross back. PsdImportService.finalize/.reorder/.skip turned async + await. |
+| `77fb887` | P4 | `memoInitializeRigFromProject` keyed on the immer-produced `project` reference. Same ref ⇒ same harvest (correct by immer's structural-sharing contract). Single-flight via Promise-valued WeakMap. New `test:harvestCache` (11/11). |
+| `cbcd761` | P1 | undoHistory drops the per-push `structuredClone` + `JSON.stringify`. Immer auto-freezes produced state, so pushing the reference IS the snapshot. Memory profile equals immer-patches via structural sharing — same outcome via reference reuse instead of explicit patch records. |
+
+Validation: byte-fidelity gates green throughout — chainEval 25/25,
+cubismWarpEval 29/29, cubismRotationEval 57/57, cubismPhysicsKernel
+15/15, cubismPhysicsOracle worst 1e-5, breathFidelity 66/66,
+shelbyByteFidelity 23/23, bonePostChainComposition 13/13,
+boneSkinning 35/35, armatureModifier 23/23, transforms 34/34. New
+test suites: alphaMask 21/21, harvestCache 11/11. typecheck clean
+at every step.
+
+**Remaining deferred:**
+- **M9** — `pendingPsd.layers` retention. Needs UX redesign of
+  the back→re-finalize path; out of scope for a perf sweep.
 
 ## Deferred work — recommended order
 
