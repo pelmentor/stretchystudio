@@ -19,7 +19,7 @@
  * @module v3/shell/Area
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, Suspense } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { AreaTabBar } from './AreaTabBar.jsx';
 import { EDITOR_REGISTRY } from './editorRegistry.js';
@@ -92,7 +92,9 @@ export function Area({ area }) {
           {isCanvasTab ? (
             <CanvasArea mode={/** @type {'viewport'|'livePreview'} */ (tab.editorType)} />
           ) : Body ? (
-            <Body />
+            <Suspense fallback={null}>
+              <Body />
+            </Suspense>
           ) : (
             <div className="p-2 text-xs text-destructive">unknown editor type: {tab?.editorType ?? '?'}</div>
           )}

@@ -19,33 +19,64 @@
  *   - Mounting the operator dispatcher's global event listeners
  *     (Phase 0A.4)
  *
- * Deliberately small — most of the UX lives in subcomponents and
- * stores.  The shell's job is to compose them.
+ * Modals are `React.lazy` and only mount when their gate-store flag
+ * is open. That keeps the export/import/inspect/help/cmdk module
+ * graphs out of the boot bundle entirely; the chunk is fetched on
+ * first open and cached for the rest of the session.
  *
  * @module v3/shell/AppShell
  */
 
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { Topbar } from './Topbar.jsx';
 import { StaleRigBanner } from './StaleRigBanner.jsx';
 import { AreaTree } from './AreaTree.jsx';
-import { SaveModal } from './SaveModal.jsx';
-import { LoadModal } from './LoadModal.jsx';
-import { ExportModal } from './ExportModal.jsx';
-import { CommandPalette } from './CommandPalette.jsx';
-import { HelpModal } from './HelpModal.jsx';
-import { Cmo3InspectModal } from './Cmo3InspectModal.jsx';
-import { ModalTransformOverlay } from './ModalTransformOverlay.jsx';
-import { PsdImportWizard } from './PsdImportWizard.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
+import { useExportModalStore } from '../../store/exportModalStore.js';
+import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
+import { useHelpModalStore } from '../../store/helpModalStore.js';
+import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
+import { useModalTransformStore } from '../../store/modalTransformStore.js';
+import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
+
+const SaveModal = lazy(() =>
+  import('./SaveModal.jsx').then((m) => ({ default: m.SaveModal }))
+);
+const LoadModal = lazy(() =>
+  import('./LoadModal.jsx').then((m) => ({ default: m.LoadModal }))
+);
+const ExportModal = lazy(() =>
+  import('./ExportModal.jsx').then((m) => ({ default: m.ExportModal }))
+);
+const CommandPalette = lazy(() =>
+  import('./CommandPalette.jsx').then((m) => ({ default: m.CommandPalette }))
+);
+const HelpModal = lazy(() =>
+  import('./HelpModal.jsx').then((m) => ({ default: m.HelpModal }))
+);
+const Cmo3InspectModal = lazy(() =>
+  import('./Cmo3InspectModal.jsx').then((m) => ({ default: m.Cmo3InspectModal }))
+);
+const ModalTransformOverlay = lazy(() =>
+  import('./ModalTransformOverlay.jsx').then((m) => ({ default: m.ModalTransformOverlay }))
+);
+const PsdImportWizard = lazy(() =>
+  import('./PsdImportWizard.jsx').then((m) => ({ default: m.PsdImportWizard }))
+);
 
 export function AppShell() {
   useEffect(() => mountOperatorDispatcher(), []);
 
-  const mode  = useLibraryDialogStore((s) => s.mode);
-  const close = useLibraryDialogStore((s) => s.close);
+  const libraryMode = useLibraryDialogStore((s) => s.mode);
+  const closeLibrary = useLibraryDialogStore((s) => s.close);
+  const exportOpen = useExportModalStore((s) => s.open);
+  const cmdkOpen = useCommandPaletteStore((s) => s.open);
+  const helpOpen = useHelpModalStore((s) => s.open);
+  const inspectOpen = useCmo3InspectStore((s) => s.open);
+  const modalKind = useModalTransformStore((s) => s.kind);
+  const wizardStep = useWizardStore((s) => s.step);
 
   return (
     <ErrorBoundary label="AppShell">
@@ -53,20 +84,26 @@ export function AppShell() {
         <Topbar />
         <StaleRigBanner />
         <AreaTree />
-        <SaveModal open={mode === 'save'} onOpenChange={(o) => { if (!o) close(); }} />
-        <LoadModal open={mode === 'load'} onOpenChange={(o) => { if (!o) close(); }} />
-        <ExportModal />
-        <CommandPalette />
-        <HelpModal />
-        <Cmo3InspectModal />
-        <ModalTransformOverlay />
-        {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
-            wizardStore for current step + pending PSD; renders nothing
-            when no wizard run is in flight. The reorder/adjust banners
-            attach `top-0 inset-x-0` so they sit at the top of the
-            shell (above the AreaTree); the review/dwpose modals use
-            `fixed inset-0` to take over the viewport. */}
-        <PsdImportWizard />
+        <Suspense fallback={null}>
+          {libraryMode === 'save' && (
+            <SaveModal open onOpenChange={(o) => { if (!o) closeLibrary(); }} />
+          )}
+          {libraryMode === 'load' && (
+            <LoadModal open onOpenChange={(o) => { if (!o) closeLibrary(); }} />
+          )}
+          {exportOpen && <ExportModal />}
+          {cmdkOpen && <CommandPalette />}
+          {helpOpen && <HelpModal />}
+          {inspectOpen && <Cmo3InspectModal />}
+          {modalKind && <ModalTransformOverlay />}
+          {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
+              wizardStore for current step + pending PSD; renders nothing
+              when no wizard run is in flight. The reorder/adjust banners
+              attach `top-0 inset-x-0` so they sit at the top of the
+              shell (above the AreaTree); the review/dwpose modals use
+              `fixed inset-0` to take over the viewport. */}
+          {wizardStep && <PsdImportWizard />}
+        </Suspense>
       </div>
     </ErrorBoundary>
   );

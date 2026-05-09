@@ -22,7 +22,9 @@ import {
 import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
 import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { ScenePass } from '@/renderer/scenePass';
-import { importPsd } from '@/io/psd';
+// `importPsd` is dynamic-imported inside `processPsdFile` — keeps
+// ag-psd (and its inflate dependency) out of the boot bundle until
+// the user actually drops a PSD onto the canvas.
 import { detectCharacterFormat } from '@/io/armatureOrganizer';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
 import { ViewLayersPopover } from '@/v3/shell/ViewLayersPopover';
@@ -87,7 +89,8 @@ import { pickBonePostChainComposition } from '@/renderer/bonePostChainCompositio
 import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
-import { saveProject, loadProject } from '@/io/projectFile';
+// `saveProject` / `loadProject` are dynamic-imported inside the save
+// and load handlers — keeps jszip out of the boot bundle.
 import { normalizeVariants } from '@/io/variantNormalizer';
 import { resetPoseDraft, resetToRestPose } from '@/services/PoseService';
 import { Button } from '@/components/ui/button';
@@ -1578,6 +1581,7 @@ export default function CanvasViewport({
   /* ── Save/Load project ────────────────────────────────────────────────── */
   const handleSave = useCallback(async () => {
     try {
+      const { saveProject } = await import('@/io/projectFile');
       const blob = await saveProject(projectRef.current);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1595,6 +1599,7 @@ export default function CanvasViewport({
   const handleLoadProject = useCallback(async (file) => {
     if (!file) return;
     try {
+      const { loadProject } = await import('@/io/projectFile');
       const { project: loadedProject, images } = await loadProject(file);
 
       // Destroy all GPU resources
@@ -1654,7 +1659,8 @@ export default function CanvasViewport({
 
   /* ── PSD import helper ───────────────────────────────────────────────── */
   const processPsdFile = useCallback((file) => {
-    file.arrayBuffer().then((buffer) => {
+    file.arrayBuffer().then(async (buffer) => {
+      const { importPsd } = await import('@/io/psd');
       let parsed;
       try { parsed = importPsd(buffer); }
       catch (err) { console.error('[PSD Import]', err); return; }

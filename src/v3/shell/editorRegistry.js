@@ -8,9 +8,11 @@
  * add new editor types in one place without touching the shell, and
  * gives the area-header dropdown a single source of truth.
  *
- * Intentionally small at this stage - Phase 1+ replaces the stub
- * components with real implementations and adds new entries here
- * (Sequencer, Driver Editor, Mask Editor, …).
+ * Each editor is `React.lazy` so its module graph (TimelineEditor's
+ * recharts-adjacent code, NodeTreeArea's depgraph evaluator, the
+ * keyform graph's curve fitter, etc.) ships in its own chunk and
+ * downloads only when the user actually picks that tab. `label`
+ * stays synchronous for AreaTabBar's dropdown.
  *
  * `viewport` and `livePreview` carry `component: null` — Area.jsx
  * routes both through the shared `<CanvasArea>` host so toggling
@@ -20,17 +22,41 @@
  * @module v3/shell/editorRegistry
  */
 
-import { TimelineEditor } from '../editors/timeline/TimelineEditor.jsx';
-import { OutlinerEditor } from '../editors/outliner/OutlinerEditor.jsx';
-import { PropertiesEditor } from '../editors/properties/PropertiesEditor.jsx';
-import { ParametersEditor } from '../editors/parameters/ParametersEditor.jsx';
-import { AnimationsEditor } from '../editors/animations/AnimationsEditor.jsx';
-import { PerformanceEditor } from '../editors/performance/PerformanceEditor.jsx';
-import { DopesheetEditor } from '../editors/dopesheet/DopesheetEditor.jsx';
-import { FCurveEditor } from '../editors/fcurve/FCurveEditor.jsx';
-import { KeyformGraphEditor } from '../editors/keyformGraph/KeyformGraphEditor.jsx';
-import { LogsEditor } from '../editors/logs/LogsEditor.jsx';
-import { NodeTreeArea } from '../editors/nodetree/NodeTreeArea.jsx';
+import { lazy } from 'react';
+
+const TimelineEditor = lazy(() =>
+  import('../editors/timeline/TimelineEditor.jsx').then((m) => ({ default: m.TimelineEditor }))
+);
+const OutlinerEditor = lazy(() =>
+  import('../editors/outliner/OutlinerEditor.jsx').then((m) => ({ default: m.OutlinerEditor }))
+);
+const PropertiesEditor = lazy(() =>
+  import('../editors/properties/PropertiesEditor.jsx').then((m) => ({ default: m.PropertiesEditor }))
+);
+const ParametersEditor = lazy(() =>
+  import('../editors/parameters/ParametersEditor.jsx').then((m) => ({ default: m.ParametersEditor }))
+);
+const AnimationsEditor = lazy(() =>
+  import('../editors/animations/AnimationsEditor.jsx').then((m) => ({ default: m.AnimationsEditor }))
+);
+const PerformanceEditor = lazy(() =>
+  import('../editors/performance/PerformanceEditor.jsx').then((m) => ({ default: m.PerformanceEditor }))
+);
+const DopesheetEditor = lazy(() =>
+  import('../editors/dopesheet/DopesheetEditor.jsx').then((m) => ({ default: m.DopesheetEditor }))
+);
+const FCurveEditor = lazy(() =>
+  import('../editors/fcurve/FCurveEditor.jsx').then((m) => ({ default: m.FCurveEditor }))
+);
+const KeyformGraphEditor = lazy(() =>
+  import('../editors/keyformGraph/KeyformGraphEditor.jsx').then((m) => ({ default: m.KeyformGraphEditor }))
+);
+const LogsEditor = lazy(() =>
+  import('../editors/logs/LogsEditor.jsx').then((m) => ({ default: m.LogsEditor }))
+);
+const NodeTreeArea = lazy(() =>
+  import('../editors/nodetree/NodeTreeArea.jsx').then((m) => ({ default: m.NodeTreeArea }))
+);
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType

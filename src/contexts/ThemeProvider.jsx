@@ -17,6 +17,30 @@ export const AVAILABLE_FONTS = [
 const DEFAULT_FONT_FAMILY = AVAILABLE_FONTS[0].id;
 const DEFAULT_FONT_SIZE = 16;
 
+// Lazy font loaders — Vite needs literal `import()` strings so the
+// chunker can split each family. Fire-and-forget on the active font
+// when ThemeProvider applies it; the browser swaps once the WOFF2
+// arrives (fontsource defaults to font-display: swap). Loaded families
+// stay registered for the rest of the session, so subsequent flips are
+// a no-op past the first call.
+const FONT_LOADERS = {
+  'Inter':         () => import('@fontsource/inter'),
+  'Roboto':        () => import('@fontsource/roboto'),
+  'Open Sans':     () => import('@fontsource/open-sans'),
+  'Lato':          () => import('@fontsource/lato'),
+  'Montserrat':    () => import('@fontsource/montserrat'),
+  'Source Sans 3': () => import('@fontsource/source-sans-3'),
+  'Poppins':       () => import('@fontsource/poppins'),
+};
+const _loadedFonts = new Set();
+function loadFontFamily(id) {
+  if (_loadedFonts.has(id)) return;
+  const loader = FONT_LOADERS[id];
+  if (!loader) return;
+  _loadedFonts.add(id);
+  loader().catch(() => { _loadedFonts.delete(id); });
+}
+
 
 export const ThemeProvider = ({ children }) => {
   const [themeMode, setThemeMode] = useState('system'); // 'light', 'dark', or 'system'
@@ -84,6 +108,7 @@ export const ThemeProvider = ({ children }) => {
 
     // Apply font family and font size
     const selectedFont = AVAILABLE_FONTS.find(f => f.id === fontFamily) || AVAILABLE_FONTS[0];
+    loadFontFamily(selectedFont.id);
     document.documentElement.style.setProperty('--font-sans', selectedFont.stack);
     document.documentElement.style.setProperty('font-size', `${fontSize}px`);
 
