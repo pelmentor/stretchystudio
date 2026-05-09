@@ -20,7 +20,7 @@
     <title>Stretchy Studio | Rig & Animate SOTA Character Models</title>
     <meta name="description" content="The fastest way to rig and animate 'See-Through' SOTA character models. Transform static layers into expressive, mesh-deformed animations with AI-powered auto-rigging." />
     <meta name="keywords" content="2D animation, mesh deformation, auto-rigging, SOTA models, See-Through, character rigging, DWPose, WebGL" />
-    
+
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://stretchy.studio/" />
@@ -34,9 +34,117 @@
     <meta property="twitter:title" content="Stretchy Studio | Rig & Animate SOTA Character Models" />
     <meta property="twitter:description" content="The fastest way to rig and animate 'See-Through' SOTA character models. Transform static layers into expressive, mesh-deformed animations with AI-powered auto-rigging." />
     <meta property="twitter:image" content="https://stretchy.studio/og-image.png" />
+
+    <!--
+      Phase A2 (2026-05-09) — pre-React shell.
+      Inline minimal CSS + the dark-mode class resolver + a placeholder
+      DOM structure inside `#root`. Browser shows the shell ~150ms after
+      HTML parse instead of ~1.5-3s after the JS bundle finishes
+      evaluating. React's createRoot replaces `#root`'s children on
+      first commit, so the shell vanishes the instant the real UI is
+      ready.
+    -->
+    <style>
+      :root {
+        --background: 0 0% 100%;
+        --foreground: 222.2 84% 4.9%;
+        --border: 214.3 31.8% 91.4%;
+        --muted: 210 40% 96.1%;
+        --muted-foreground: 215.4 16.3% 46.9%;
+      }
+      .dark {
+        --background: 222.2 84% 4.9%;
+        --foreground: 210 40% 98%;
+        --border: 217.2 32.6% 17.5%;
+        --muted: 217.2 32.6% 17.5%;
+        --muted-foreground: 215 20.2% 65.1%;
+      }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      #root { height: 100%; }
+      /* Pre-React shell: matches the AppShell layout coarsely so the
+         visual transition to the real UI is minimal. Each piece uses
+         CSS variables that survive the React mount. */
+      .ss-bootshell { display: flex; flex-direction: column; height: 100%; }
+      .ss-bootshell-topbar {
+        height: 40px;
+        border-bottom: 1px solid hsl(var(--border));
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .ss-bootshell-version {
+        font-size: 11px;
+        font-weight: 400;
+        color: hsl(var(--muted-foreground));
+        padding: 2px 6px;
+        border: 1px solid hsl(var(--border));
+        border-radius: 3px;
+      }
+      .ss-bootshell-main { flex: 1; display: flex; min-height: 0; }
+      .ss-bootshell-side {
+        width: 240px;
+        border-right: 1px solid hsl(var(--border));
+        flex-shrink: 0;
+      }
+      .ss-bootshell-canvas {
+        flex: 1;
+        position: relative;
+        overflow: hidden;
+        /* Subtle checker pattern signals "this is the canvas area",
+           dimmed enough to not distract from the loading state. */
+        background-image:
+          linear-gradient(45deg, hsl(var(--muted)) 25%, transparent 25%, transparent 75%, hsl(var(--muted)) 75%),
+          linear-gradient(45deg, hsl(var(--muted)) 25%, transparent 25%, transparent 75%, hsl(var(--muted)) 75%);
+        background-size: 24px 24px;
+        background-position: 0 0, 12px 12px;
+        opacity: 0.5;
+      }
+      .ss-bootshell-right {
+        width: 320px;
+        border-left: 1px solid hsl(var(--border));
+        flex-shrink: 0;
+      }
+    </style>
+    <script>
+      // Apply the user's saved theme synchronously so the shell paints
+      // in the right colours (no dark-mode flash). ThemeProvider re-applies
+      // the same class on mount; this is just the pre-mount handoff.
+      (function () {
+        try {
+          var raw = localStorage.getItem('theme_mode');
+          var mode = raw ? JSON.parse(raw) : 'system';
+          var dark = mode === 'dark'
+            || (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (_) { /* default light */ }
+      })();
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="ss-bootshell">
+        <div class="ss-bootshell-topbar">
+          Stretchy Studio
+          <span class="ss-bootshell-version">loading…</span>
+        </div>
+        <div class="ss-bootshell-main">
+          <div class="ss-bootshell-side"></div>
+          <div class="ss-bootshell-canvas"></div>
+          <div class="ss-bootshell-right"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
