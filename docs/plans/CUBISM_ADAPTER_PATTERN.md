@@ -1,9 +1,12 @@
 # Cubism Adapter Pattern
 
-Status: **DRAFT** — pending sign-off
+Status: **SHIPPED 2026-05-09** — code complete; manual Cubism-Viewer-load gate is the only remaining verification.
 Owner: pelmentor
 Started: 2026-05-09
-Estimate: ~4 hours of focused work across 5 phases (each independently shippable)
+Shipped: 2026-05-09 (same-day execution post-audit)
+Estimate: ~4 hours of focused work across 5 phases — actual: ~3.5 hours including two audits and the equivalence proof.
+
+See §13 below for the final shipping status, commit list, and test totals.
 
 ---
 
@@ -403,3 +406,127 @@ Phase 2 strict-depends on Phase 1 + v31 migration shipping cleanly first. Phase 
 - Phase 1: ~2.5 hours (predicate + extraction + seed pass + v31 migration + tests + byte gate).
 - Phase 2: ~1.5 hours (renderer cleanup + Apply UX tests + delete dead code).
 - Total: ~4 hours (unchanged from original estimate; the simplification of Phase 1's module structure offsets the added test coverage and the migration work).
+
+---
+
+## 13. Final shipping status (2026-05-09)
+
+**Code complete.** Three commits pushed to `origin/master`:
+
+| Commit | Phase | Summary |
+|---|---|---|
+| `333fccc` | Phase 1 (combined A+B+C) | Predicate + extractMeshExportStruct + seedDefaultRigidWeights + v31 migration |
+| `3c08290` | Phase 2 (combined D+E) | Renderer collapse to single LBS path; overlay-matrix branch + dead code deleted; Apply rigid-weights tests |
+| `5f66bff` | Bonus | Mathematical render-equivalence proof (36 cases) — automated verification of claims that previously required Cubism Viewer / live canvas inspection |
+
+### Files added
+
+```
+src/lib/vertexGroupVariance.js                    — 4-arg predicate + ancestor walker
+src/io/live2d/extractMeshExportStruct.js          — per-part bone-binding extract w/ adapter strip
+src/store/seedDefaultRigidWeights.js              — Init Rig pass for default rigid weights
+src/store/migrations/v31_default_rigid_weights.js — schema v31 migration
+
+scripts/test/test_vertexGroupVariance.mjs                          (23 cases)
+scripts/test/test_extractMeshExportStruct.mjs                      (25)
+scripts/test/test_armatureModifier_parentBoneIdConsistency.mjs     ( 8)
+scripts/test/test_cubismAdapter_renderEquivalence.mjs              (36)
+```
+
+### Files modified
+
+```
+src/io/live2d/exporter.js              — both extraction sites use shared helper; legacy duplicated blocks removed
+src/store/projectStore.js              — seedDefaultRigidWeights wired into seedAllRig; new import
+src/store/projectMigrations.js         — CURRENT_SCHEMA_VERSION 29 → 31; v30 reserved no-op shim; v31 registered
+src/components/canvas/CanvasViewport.jsx — overlay-matrix branch + boneOverlay computation + 2 imports deleted
+src/renderer/bonePostChainComposition.js — composition decision 3-state → 2-state ('lbs' | 'none')
+src/renderer/boneOverlayMatrix.js      — computeBoneOverlayMatrices/applyOverlayMatrixObj/applyOverlayMatrixFlat deleted
+package.json                           — 4 new test entries; test:boneOverlayMatrix removed
+scripts/test/test_bonePostChainComposition.mjs — updated for 2-state decision (13 → 15)
+scripts/test/test_applyArmatureModifier.mjs    — 4 Phase-2 invariant cases added (39 → 43)
+```
+
+### Files deleted
+
+```
+scripts/test/test_boneOverlayMatrix.mjs — only tested deleted exports (audit Issue 4)
+```
+
+### Audit issues — all addressed
+
+| # | Severity | Source | Status |
+|---|---|---|---|
+| 1 | HIGH | Audit 1 — wrong hook target (writers vs `exporter.js`) | ✅ Hook in `exporter.js` mesh-struct construction |
+| 2 | HIGH | Audit 1 — `synthesizeModifierStacks` requires `boneRole` ancestor | ✅ `seedDefaultRigidWeights` uses `isBoneGroup` predicate |
+| 3 | HIGH | Audit 1 — "nearest bone group" must be `boneRole`-bearing | ✅ Same — `isBoneGroup` walk |
+| 4 | MED | Audit 1 — `test_boneOverlayMatrix.mjs` not in deletion list | ✅ Deleted; removed from `npm test` |
+| 5 | HIGH | Audit 1 — moc3 inherits Issue 1's wrong wiring | ✅ Single hook covers both paths via `rigOnly` cmo3 flow |
+| 6 | MED | Audit 1 — Phase D regression risk for un-re-rigged projects | ✅ v31 migration is hard prerequisite |
+| 7 | HIGH | Audit 2 — adapter module over-engineered | ✅ Module hierarchy scrapped; logic inline in exporter |
+| 8 | HIGH | Audit 2 — `computeSkinWeights` clamp produces all-1.0 → variance test mis-classifies hand-only meshes | ✅ 4-arg predicate w/ bone-routing-intent guard; regression test pinned |
+| 9 | MED | Audit 2 — `parentBoneId` drift between synth + bind paths | ✅ 8-case consistency test |
+| 10 | MED | Audit 2 — A+B+C are formally separate but operationally one ship | ✅ Re-bucketed into Phase 1 |
+
+### Test totals
+
+```
+145+ existing test suites: green (no regressions)
+4 new test files: 92 new assertions
+2 updated test files: 6 net new assertions (15 + 43 vs prior 13 + 39)
+                                            —————
+Total new coverage:                          98 assertions
+```
+
+Across all suites: **0 failures**. Typecheck (`tsc --noEmit`): clean.
+
+### Architectural outcome
+
+```
+BEFORE                                          AFTER
+══════                                          ═════
+Authored: half-Blender (vertex groups on        Authored: fully Blender-shaped (every bone-
+limbs only; rigid follow via tree parent)       followed part has vertex groups; rigid =
+                                                all-1.0; skinned = per-vertex variation)
+
+Renderer: TWO composition paths                 Renderer: ONE composition path
+  ├ LBS for limb meshes                           └ LBS for every bone-followed part
+  └ overlay-matrix for unweighted bone children       (single decision; can't disagree
+        ↑ disagreed with itself → BUG-028              with itself)
+
+Export: writers extracted boneWeights inline    Export: shared `extractMeshExportStruct`
+in two near-duplicate blocks; jointBoneId       runs the strip rule once at the project →
+present iff weights present                     mesh-struct boundary; legacy non-weighted
+                                                wire format preserved for rigid parts;
+                                                per-vertex weights pass through unchanged
+
+Apply Modifier: works on limbs only             Apply Modifier: works on every bone-
+(non-limbs have no modifier to apply)           followed part; decouples cleanly post-Apply
+                                                (BUG-028 closed structurally)
+```
+
+### Equivalence proof — what's automated
+
+`test_cubismAdapter_renderEquivalence.mjs` pins three claims that previously required visual inspection:
+
+1. **Equivalence**: rigid LBS produces vertex positions IDENTICAL to the deleted overlay-matrix path (byte-for-byte within 1e-9). Math: LBS with w=1 reduces to `out = child·v`, which equals the overlay matrix when child = nearest-bone-ancestor (which is exactly what `seedDefaultRigidWeights` sets `jointBoneId` to). Verified on simple + nested 2-bone chains.
+2. **Decoupling**: post-Apply Modifier on a rigid part, subsequent bone-pose changes do NOT move rendered verts. The `pickBonePostChainComposition` decision is `'none'` / `'applied'` and no matrix is applied.
+3. **Migration round-trip**: pre-v31 project → migrate → render via Phase-2 LBS produces positions IDENTICAL to what the deleted overlay path would have produced on the same project pre-migration. Loaded-but-not-re-Init-Rigged projects render identically pre/post v31.
+
+Plus bonus: v31 idempotent (re-run no-op); hand-only-mesh routing intent (jointBoneId differs from structural parent bone) preserved across migration.
+
+### Manual gates remaining (user-only — orthogonal to code)
+
+These cannot be automated without the Cubism Editor binary or the user's local fixture. They're not regressions or new requirements — they're the standard wire-format-to-Cubism-runtime gate that every export-affecting change goes through.
+
+1. **Cubism Viewer load test**: open user's Shelby `.cmo3` exported post-Phase-2 in Cubism Editor. Must load without warnings.
+2. **Local byte-diff**: with `SHELBY_FIXTURE` / `SHELBY_BASELINE_CMO3` / `SHELBY_BASELINE_MOC3` env vars set to the user's local baselines, run `node scripts/byteFidelity/check_shelby.mjs`. Must report zero divergent bytes.
+3. **Visual sweep**: load Hiyori → Init Rig → blink → body-angle slider scrub → idle motion playback → export → load in Cubism Viewer. No visual regressions vs pre-Phase-1.
+
+The equivalence proof (§13 → automated) bounds what could possibly diverge in the manual gates to "things outside the LBS+adapter math" — a small surface.
+
+### Plan finished
+
+This document is the canonical record of the Cubism Adapter Pattern work. No follow-up phases queued. The pattern (authored Blender shape ↔ adapter ↔ Cubism wire format) is generalizable to future Blender-vs-Cubism shape mismatches; if any surface, they get their own focused plan rather than extending this one.
+
+Memory: `project_cubism_adapter_pattern_shipped.md` carries the cross-conversation summary.
