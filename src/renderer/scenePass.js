@@ -12,7 +12,7 @@ import { createProgram } from './program.js';
 import { MESH_VERT, MESH_FRAG, WIRE_VERT, WIRE_FRAG } from './shaders/mesh.js';
 import { PartRenderer } from './partRenderer.js';
 import { BackgroundRenderer } from './backgroundRenderer.js';
-import { computeWorldMatrices, computeEffectiveProps, mat3Mul } from './transforms.js';
+import { computeWorldMatrices, computeEffectiveProps, mat3MulInto } from './transforms.js';
 import { applyOverrideToNode } from './animationEngine.js';
 import { resolveMaskConfigs } from '../io/live2d/rig/maskConfigs.js';
 import { allocateMaskStencils } from './maskStencil.js';
@@ -59,6 +59,12 @@ export class ScenePass {
     this.partRenderer = new PartRenderer(gl, this.meshProgram, this.wireProgram);
 
     this.uIsPointLoc = gl.getUniformLocation(this.wireProgram, 'u_is_point');
+
+    // Per-draw scratch for `mat3MulInto(scratch, camera, worldMatrix)`.
+    // Reused across every part in both the textured-mesh pass and the
+    // overlay pass — drawPart consumes the matrix into a uniform and
+    // doesn't retain it past the call, so reuse is safe within a frame.
+    this._partMvpScratch = new Float32Array(9);
 
     this.gl.enable(gl.BLEND);
     this.gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -225,7 +231,7 @@ export class ScenePass {
         const isRigDriven = rigDrivenParts?.has(part.id);
         const partMvp     = isRigDriven
           ? camera
-          : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
+          : (worldMatrix ? mat3MulInto(this._partMvpScratch, camera, worldMatrix) : camera);
 
         const baseOpacity = opMap.get(part.id) ?? 1;
         const dimmed = dimUnselected && !selectionSet.has(part.id)
@@ -290,7 +296,7 @@ export class ScenePass {
         const isRigDriven = rigDrivenParts?.has(part.id);
         const partMvp     = isRigDriven
           ? camera
-          : (worldMatrix ? mat3Mul(camera, worldMatrix) : camera);
+          : (worldMatrix ? mat3MulInto(this._partMvpScratch, camera, worldMatrix) : camera);
 
         gl.uniform1i(this.uIsPointLoc, 0); // not a point
 

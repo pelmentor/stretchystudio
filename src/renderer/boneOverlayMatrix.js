@@ -30,7 +30,7 @@
  * @module renderer/boneOverlayMatrix
  */
 
-import { mat3Identity, mat3Mul, makeBoneLocalMatrix } from './transforms.js';
+import { mat3Identity, mat3MulInto, makeBoneLocalMatrix } from './transforms.js';
 import { isBoneGroup, isMeshedPart } from '../store/objectDataAccess.js';
 
 /** Local-matrix epsilon. Below this every component is considered
@@ -119,7 +119,10 @@ export function computeBoneWorldMatrices(nodes) {
       parent = parent.parent ? byId.get(parent.parent) : null;
     }
     if (parent) {
-      world = mat3Mul(resolveBoneWorld(parent), local);
+      // Compose into `local` (we own it — fresh from
+      // makeBoneLocalMatrix or mat3Identity). Saves one Float32Array(9)
+      // allocation per bone per frame for the world-matrix product.
+      world = mat3MulInto(local, resolveBoneWorld(parent), local);
     } else {
       world = local;
     }

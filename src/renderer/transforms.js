@@ -18,19 +18,41 @@ export function mat3Identity() {
 }
 
 /**
- * Multiply two column-major 3×3 matrices: C = A × B
+ * Multiply two column-major 3×3 matrices into a caller-supplied
+ * output buffer: out = a × b. Reads every input cell BEFORE writing
+ * to `out` so aliasing (`out === a` or `out === b`) is safe.
+ *
+ * @param {Float32Array} out
+ * @param {Float32Array} a
+ * @param {Float32Array} b
+ * @returns {Float32Array} the same `out` buffer for convenience.
+ */
+export function mat3MulInto(out, a, b) {
+  const a0 = a[0], a1 = a[1], a2 = a[2];
+  const a3 = a[3], a4 = a[4], a5 = a[5];
+  const a6 = a[6], a7 = a[7], a8 = a[8];
+  const b0 = b[0], b1 = b[1], b2 = b[2];
+  const b3 = b[3], b4 = b[4], b5 = b[5];
+  const b6 = b[6], b7 = b[7], b8 = b[8];
+  out[0] = a0 * b0 + a3 * b1 + a6 * b2;
+  out[1] = a1 * b0 + a4 * b1 + a7 * b2;
+  out[2] = a2 * b0 + a5 * b1 + a8 * b2;
+  out[3] = a0 * b3 + a3 * b4 + a6 * b5;
+  out[4] = a1 * b3 + a4 * b4 + a7 * b5;
+  out[5] = a2 * b3 + a5 * b4 + a8 * b5;
+  out[6] = a0 * b6 + a3 * b7 + a6 * b8;
+  out[7] = a1 * b6 + a4 * b7 + a7 * b8;
+  out[8] = a2 * b6 + a5 * b7 + a8 * b8;
+  return out;
+}
+
+/**
+ * Allocating wrapper for callers that need a fresh result. Hot paths
+ * should use `mat3MulInto(scratch, a, b)` to avoid the per-call
+ * Float32Array(9) allocation.
  */
 export function mat3Mul(a, b) {
-  const c = new Float32Array(9);
-  for (let col = 0; col < 3; col++) {
-    for (let row = 0; row < 3; row++) {
-      c[col * 3 + row] =
-        a[row]     * b[col * 3]     +
-        a[3 + row] * b[col * 3 + 1] +
-        a[6 + row] * b[col * 3 + 2];
-    }
-  }
-  return c;
+  return mat3MulInto(new Float32Array(9), a, b);
 }
 
 /**
@@ -131,7 +153,9 @@ export function makeBoneLocalMatrix(transform, pose) {
     pivotX: transform?.pivotX ?? 0,
     pivotY: transform?.pivotY ?? 0,
   });
-  return mat3Mul(restM, poseM);
+  // Compose into restM (we own it — fresh from makeLocalMatrix).
+  // Saves one Float32Array(9) allocation per posed bone per frame.
+  return mat3MulInto(restM, restM, poseM);
 }
 
 /**
@@ -155,9 +179,15 @@ export function computeWorldMatrices(nodes) {
     const local = isBone
       ? makeBoneLocalMatrix(node.transform, node.pose)
       : makeLocalMatrix(node.transform);
-    const world = (node.parent && nodeMap.has(node.parent))
-      ? mat3Mul(resolve(nodeMap.get(node.parent)), local)
-      : local;
+    let world;
+    if (node.parent && nodeMap.has(node.parent)) {
+      // Compose into `local` (we own it — fresh from makeLocalMatrix /
+      // makeBoneLocalMatrix). Saves one Float32Array(9) allocation per
+      // node per frame for the world-matrix product.
+      world = mat3MulInto(local, resolve(nodeMap.get(node.parent)), local);
+    } else {
+      world = local;
+    }
     worldMap.set(node.id, world);
     return world;
   }
