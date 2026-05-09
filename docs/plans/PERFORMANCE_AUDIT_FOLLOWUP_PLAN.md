@@ -18,10 +18,10 @@ groups landing.
 
 | Order | Group | Items | Why this order |
 |---|---|---|---|
-| **1** | Mechanical | P6, P10, M9, R4 | Pure algorithm/refactor wins. Each is one focused commit, low byte-fidelity risk. P10 unblocks P2's worker-pool reuse. |
-| **2** | Eval-graph alloc surgery | R3 + M1 + M2, R12 | Single typed-array pool fix retires the chainEval/kernel allocation storm. R12 piggy-backs because it shares the eval-cache surface. **Byte-fidelity-critical** — runs the full oracle + breath + shelby gate. |
+| **1** | Mechanical | P6, P10, M9, R4, **R12** | Pure algorithm/refactor wins. Each is one focused commit, low byte-fidelity risk. P10 unblocks P2's worker-pool reuse. R12 moves here from Group 2 — review found it independent of R3 once R3's external-buffer invariant is enforced (see G1). |
+| **2** | Eval-graph alloc surgery | R3 + M1 + M2 | Single typed-array pool fix retires the chainEval/kernel allocation storm. **Byte-fidelity-critical** — runs the full oracle + breath + shelby gate. **Hard invariant**: pool buckets backing externally-returned `frames[i].vertexPositions` MUST NOT be recycled within the pool — otherwise R12's cache hit path (which holds prior `frames` refs) gets silently corrupted on the next eval. |
 | **3** | Subscription tightening | R2, S2 | Both touch React subscription patterns. Independent of eval-graph work but cleaner to land after the renderer settles. |
-| **4** | Memory ceilings | M7 | Hit-test downsample. Needs UX validation against real PSDs; ship after the eval-graph work so test conditions are stable. |
+| **4** | Memory ceilings | M7a + M7b | Two-step: M7a prunes `imageDataMapRef` entries on auto-mesh completion (where the entries become dead weight); M7b downsamples the remaining wizard-window entries to a 256² alpha mask. Most of the 200 MB win is M7a. |
 | **5** | Pipeline refactors | P4, P1, P2 | The three biggest single rewrites. Each its own multi-day plan; no shared dependency between them so order is by impact-vs-risk. |
 
 ## Plan: P6 — mesh dedup spatial hash
@@ -81,15 +81,21 @@ result back via transferable `ArrayBuffer`s — every layer's
    - listens for `{buffer}`, calls `readPsd(buffer, { skipLayerImageData: false })`
    - posts back `{width, height, layers}` with a `transfer:` array
      containing every layer's `imageData.data.buffer`
-2. `src/io/psd.js`: keep `importPsd` as the synchronous fallback
-   (some test paths use it), add `importPsdAsync(buffer)` that
-   creates a one-shot worker, posts the buffer (transferable),
-   awaits result. Module-level reuse is overkill — PSD imports are
-   rare.
-3. `src/components/canvas/CanvasViewport.jsx`'s `processPsdFile`
-   already does dynamic `await import('@/io/psd')`; switch to
-   `importPsdAsync(buffer)` and remove the sync wrapper.
-4. The wizard's `dwposeService` consumes `psd.layers` directly — no
+2. `src/io/psd.js`: **replace** the synchronous `importPsd` export
+   with `importPsd(buffer): Promise<{...}>` that creates a one-shot
+   worker, posts the buffer (transferable), awaits result. **No
+   synchronous fallback path** — Rule №2 prohibits keeping a
+   transition shim alongside the proper implementation.
+3. Test environment without `Worker`: add a tiny inline shim in
+   `scripts/test/_workerShim.mjs` that executes the worker module's
+   message handler directly when `Worker` is undefined. Tests then
+   `await importPsd(buffer)` exactly like production code; the
+   shim is invisible to call sites.
+4. `src/components/canvas/CanvasViewport.jsx`'s `processPsdFile`
+   already does dynamic `await import('@/io/psd')` then
+   `importPsd(buffer)` — change is just the result type
+   becoming async; one `await` added.
+5. The wizard's `dwposeService` consumes `psd.layers` directly — no
    change needed; the layers arrive via the regular path.
 
 **Gates.** Visual: drop a 4K × 100-layer PSD, confirm UI stays
@@ -208,39 +214,58 @@ rig at 60 fps this is ~600k allocations/sec — a sawtooth GC pattern
 visible as frame-pacing jitter during slider drags.
 
 **Proper fix.** Eval-scoped typed-array pool owned by the existing
-`DeformerStateCache`. Each eval requests buffers via
-`pool.getOrAlloc(key, ctor, length)`; the pool grows lazily, never
-shrinks, keeps buffers alive across evals so subsequent evals hit
-zero-alloc.
+`DeformerStateCache`, with a strict **two-class** distinction:
 
-Buffer lifetime: a buffer issued for `(specId, "lifted-x")` belongs
-to the eval that owns the spec. ChainEval doesn't currently leak
-buffers to consumers across eval boundaries (the `frames` array
-contains independently-allocated `vertexPositions`); pool keys are
-internal to the eval and don't change that contract. The
-externally-returned `vertexPositions` stays freshly-allocated for
-now (R3 does NOT change the public contract).
+- **INTERNAL** buffers: scratch/intermediate buffers that never leave
+  the eval (rotation matrices, `bufB` ping-pong, lifted-grid
+  composition scratches, cellSelect work arrays). These are
+  recycled freely across evals — the pool re-issues the same
+  buffer for the same `(key, length)` on the next eval.
+- **EXTERNAL** buffers: any buffer that becomes the public
+  `frames[i].vertexPositions` returned to the caller. These
+  **MUST NOT be recycled** — `lastEvalCacheRef.current.frames`
+  retains references across tick boundaries (R12 makes the cache
+  hit path read these), and recycling would silently corrupt the
+  cached frames on the next eval.
+
+The hard invariant: if a buffer's contents end up referenced by
+the eval's return value, it was allocated outside the pool. The
+plan keeps the existing `new Float32Array(...)` allocation site
+for `vertexPositions` and converts only the demonstrably-internal
+allocation sites to pool acquires.
 
 **Steps.**
 1. New helper `src/io/live2d/runtime/evaluator/typedArrayPool.js`
    — minimal `Pool` class with `getOrAlloc(key, ctor, length)`
    that returns a stable buffer per (key, length); resizes on
-   length growth.
+   length growth. JSDoc explicitly forbids passing buffers
+   acquired here back through the eval's return value.
 2. Hang a `pool` instance off `DeformerStateCache`; expose it on
    the cache instance for chainEval/warpEval/artMeshEval/rotationEval/cellSelect.
-3. Refactor `chainEval.js`'s allocation sites (lines 255, 319, 607,
-   623, 624, 711, 728, 730, 792, 793, 1060, 1097 — see the audit's
-   full list) to call `cache.pool.getOrAlloc(...)` with stable
-   string keys describing the slot.
-4. Same for `warpEval.js:40`, `artMeshEval.js:45`,
-   `rotationEval.js:134, 172`, and the 5 alloc sites in
-   `cellSelect.js`.
-5. Verify no consumer holds a returned buffer past the next eval
-   call; the cache rotates ownership on the next acquire of the
-   same key. The current code does not — consumers either consume
-   inline or copy. Add a JSDoc on the pool API stating this contract.
+3. **Audit each allocation site** in `chainEval.js` (lines 255,
+   319, 607, 623, 624, 711, 728, 730, 792, 793, 1060, 1097)
+   and tag each as INTERNAL or EXTERNAL. Specifically: any
+   buffer that ends up in `meshState.vertexPositions` or
+   gets returned via the `frames` array is EXTERNAL. The
+   ping-pong `bufA`/`bufB` is tricky — if the chain length
+   is even, the final result is in the original `bufA` (which
+   is `meshState.vertexPositions`, EXTERNAL); if odd, it's in
+   `bufB` and gets copied back. Either way, the externally-
+   visible buffer must not come from the pool. Convert ONLY
+   the INTERNAL sites.
+4. Same INTERNAL-only conversion for `warpEval.js:40`,
+   `artMeshEval.js:45`, `rotationEval.js:134, 172`, and the 5
+   alloc sites in `cellSelect.js`.
+5. Add an **assertion test** at
+   `scripts/test/test_typedArrayPoolAliasing.mjs`: run two
+   back-to-back evals on the same rigSpec, capture
+   `frames1[0].vertexPositions` from the first call, then run
+   the second, and assert that the captured reference's
+   contents are unchanged (or that the captured reference is
+   not Object.is to any buffer the second eval used). Pins
+   the EXTERNAL invariant.
 6. New unit test `scripts/test/test_typedArrayPool.mjs` —
-   acquire/release/grow correctness.
+   acquire/grow correctness.
 
 **Gates.** **All** byte-fidelity tests:
 - `npm run test:cubismPhysicsOracle` (worst-case must stay ≤ 1e-4)
@@ -266,56 +291,90 @@ defence; oracle round before merge.
 
 ---
 
-## Plan: R12 — eval cache content-hash
+## Plan: R12 — eval cache reuses paramValues identity across idle frames
 
-**Root cause.** [src/components/canvas/CanvasViewport.jsx:597,619,713](../../src/components/canvas/CanvasViewport.jsx#L597)
-livePreview branch builds `valuesForEval = { ...paramValuesRef.current, ...updates }`
-fresh every frame. The eval cache hit-check is
-`cache.paramValues === valuesForEval` (identity), so the cache hit
-path is **always** false in livePreview — the eval re-runs every
-frame even when no input changed.
+**Root cause.** [src/components/canvas/CanvasViewport.jsx:682,686](../../src/components/canvas/CanvasViewport.jsx#L682)
+sets `valuesForEval` BEFORE R1's epsilon-filter runs (lines 711-720).
+The two assignments — `valuesForEval = working` (with-physics) and
+`valuesForEval = { ...paramValuesRef.current, ...updates }` (no-physics) —
+both produce a fresh object every frame. The cache fill at line ~802
+stores `paramValues: valuesForEval`, and the cache check uses
+identity. So `cache.paramValues === valuesForEval` is always false
+in livePreview — the eval re-runs every frame even when no input
+changed.
 
-**Proper fix.** Pair with R1's epsilon gate: if `realCount === 0`
-(no driver value actually changed), set
-`valuesForEval = paramValuesRef.current` (the existing snapshot
-that the cache last saw). The cache hit path then matches.
+**Why the naive "single-line `if (realCount === 0) valuesForEval = paramValuesRef.current`" is wrong.**
+1. The insertion point implied by the original plan (line 720 area)
+   is downstream of where `valuesForEval` is set — the override
+   would shadow the assignment, but only if inserted explicitly
+   AFTER `realCount` is computed.
+2. More subtly: when `realCount === 0`, the breath/look/blink
+   updates ARE present in `updates` but each was within
+   `PARAM_DELTA_EPSILON` of the prior store value. So
+   `working = { ...paramValuesRef.current, ...updates }` is NOT
+   bit-equal to `paramValuesRef.current` — the merged-in updates
+   are sub-epsilon different. Substituting `paramValuesRef.current`
+   yields `valuesForEval` that is identity-equal to a stable ref
+   but VALUE-different from the prior frame's `working`. That's
+   correct (sub-epsilon is by definition negligible), but it must
+   be paired with an updated `paramValuesRef.current` after every
+   `setMany` so the cache holds the right reference.
 
-Physics outputs that mutated already get folded into `updates`
-(line 661-669); the realCount check captures them, so the only
-case that takes the new branch is "all drivers + physics produced
-identical output" — which is the truly-idle case.
+**Proper fix.** Coordinate three things in lockstep:
+1. After `setMany(realUpdates, ...)` fires, **manually advance
+   `paramValuesRef.current`** to the post-setMany store state.
+   Without this, the ref lags one frame behind setMany (React's
+   re-render hasn't committed yet within the rAF tick).
+2. **Always set `valuesForEval = paramValuesRef.current`** —
+   independent of physics / no-physics branch, independent of
+   realCount. The merged-in `updates` for a real-change frame are
+   already in the store after setMany, so paramValuesRef.current
+   reflects them.
+3. Cache fill stores `paramValues: paramValuesRef.current` (which
+   equals `valuesForEval`). On the next idle frame,
+   `paramValuesRef.current` is unchanged — identity-equal to the
+   cached ref → cache hit.
 
 **Steps.**
-1. After R1's epsilon-filter at the bottom of the livePreview
-   branch (where `realCount` is computed), add:
-   ```js
-   if (realCount === 0) {
-     // Drivers + physics produced no real delta vs the existing
-     // store snapshot. Reuse the existing values reference so the
-     // eval cache hit-check below succeeds and chainEval does not
-     // re-run.
-     valuesForEval = paramValuesRef.current;
-   }
-   ```
-   Existing `else` branch (realCount > 0) keeps `valuesForEval = working`.
-2. Verify the cache hit path at line 714 area matches — should
-   short-circuit `evalRig` invocation on real idle.
+1. Replace `valuesForEval = working` (line 682) and
+   `valuesForEval = { ...paramValuesRef.current, ...updates }`
+   (line 686) with a single `valuesForEval = paramValuesRef.current`
+   moved to AFTER the R1 filter block (line 725 area). Physics
+   internally uses `working` to compute outputs into `updates` —
+   that flow is unchanged.
+2. After the `if (realCount > 0)` block calls `setMany`, add
+   `paramValuesRef.current = useParamValuesStore.getState().values`
+   so the ref tracks the just-written state synchronously.
+3. Verify the cache fill at line ~802 stores
+   `paramValues: paramValuesRef.current` (already does in spirit —
+   `valuesForEval` was the local name; the fix just makes that
+   ref the same object as `paramValuesRef.current`).
+4. Verify the cache hit path at line ~803 uses `===` against
+   `paramValuesRef.current` (or the cached `paramValues` slot).
+   The cache key check is already identity; nothing to change.
 
-**Gates.** Visual: livePreview at idle (cursor parked, no input)
-→ Performance editor / instrumentation should show eval cache
-hits; CPU drops to ~0 between physics ticks. `npm run test:chainEval`.
+**Gates.** Visual: livePreview at idle (cursor parked, no input
+crossed epsilon) → instrument the cache hit path with a counter;
+should hit > 95% of frames. `npm run test:chainEval`,
+`npm run test:cubismWarpEval`, `npm run test:bonePostChainComposition`,
+`npm run test:breathFidelity`. Note: `test:breathFidelity` is the
+key gate because breath continuously cycles; verify the cache
+miss is correctly triggered when breath crosses epsilon.
 
-**Dependencies.** Pairs with R1 (already shipped) and benefits
-from R3 (full alloc-free idle path). Can ship before R3 — without
-R3 the cache hit still skips `evalRig` entirely, which is the
-biggest win.
+**Dependencies.** Built on R1 (Phase D, already shipped). **Does
+NOT depend on R3** — R3's external-buffer invariant (see G1 in
+R3's plan) makes R12 safe to ship first. R12 ships in Group 1.
 
-**Risk.** Low. Single-line change at the gate; physics outputs
-already covered by R1's filter.
+**Risk.** Low-medium. The setMany→ref-advance coordination is
+the load-bearing piece; if `paramValuesRef.current` lags setMany
+by even one frame, the cache fill stores a stale ref and the
+next idle frame misses (no correctness bug, just lost perf).
+Add a one-line assertion in dev mode: after every cache fill,
+verify `paramValuesRef.current === useParamValuesStore.getState().values`.
 
-**Effort.** 1–2h.
+**Effort.** 2–3h.
 
-**Commit shape.** Single commit: `perf(eval): reuse paramValues snapshot when livePreview is idle`.
+**Commit shape.** Single commit: `perf(eval): paramValuesRef coordinated with setMany so livePreview idle hits the eval cache`.
 
 ---
 
@@ -367,46 +426,89 @@ bump on key-set change" path.
 
 ---
 
-## Plan: M7 — downsample `imageDataMapRef` alpha mask
+## Plan: M7 — `imageDataMapRef` two-step (prune + downsample)
 
 **Root cause.** [src/components/canvas/CanvasViewport.jsx:124](../../src/components/canvas/CanvasViewport.jsx#L124)
-keeps a `Map<partId, ImageData>` of full-resolution layer pixels
-for click-to-select alpha picking. 50 parts × 1024² × RGBA = 200 MB
-JS heap, never freed (only `clear()` on full reset).
+keeps a `Map<partId, ImageData>` of full-resolution layer pixels.
+50 parts × 1024² × RGBA = 200 MB JS heap, never freed (only
+`clear()` on full reset).
 
-**Proper fix.** Replace each ImageData with a fixed-size 256×256
-`Uint8Array` of alpha-only samples. Hit-test maps part-local
-coordinates to the down-sampled grid. 256×256 × 1 byte per part
-= 64 KB; 50 parts = 3.2 MB total.
+**Audit correction:** [src/io/hitTest.js:245](../../src/io/hitTest.js#L245)
+only reads from `imageDataMap` for **pre-mesh PSD parts** (the
+wizard reorder/adjust window before auto-mesh runs). Once a part
+has a triangulated mesh, the triangle path at line 188 takes over
+and the ImageData entry is **dead weight memory** — never read
+again until the part is deleted (Phase B prunes those).
 
-**Steps.**
+**Proper fix — two phases.**
+
+### M7a — Prune entries on auto-mesh completion
+
+The cleanest fix for ~95% of the memory waste: when a part
+transitions from pre-mesh to meshed (the mesh worker pool's
+result lands), **delete its entry from `imageDataMapRef`**. The
+entry is unreachable for hit-test from that point on; keeping it
+around is the leak.
+
+**Steps (M7a).**
+1. In `dispatchMeshWorker`'s success handler ([src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx)):
+   after `setMesh(node, ...)` commits, `imageDataMapRef.current.delete(partId)`.
+2. Verify the wizard's reorder/adjust step happens BEFORE
+   auto-mesh runs (per the existing comment at hitTest.js:225).
+   Confirmed by grep: `autoMeshAllParts` is called from the
+   wizard's `complete` action, after reorder/adjust.
+
+**Gates (M7a).** `npm run test:hitTest` (existing), wizard E2E
+(drop PSD → reorder → adjust → finish → click-select on a meshed
+part still works via the triangle path).
+
+**Effort (M7a).** 1h.
+
+### M7b — Downsample remaining wizard-window entries
+
+For the wizard reorder/adjust window where parts aren't yet
+meshed and `imageDataMap` IS read for hit-test: replace each
+ImageData with a 256×256 `Uint8Array` alpha-only mask. 256×256
+× 1 byte per part = 64 KB; 50 parts in the wizard window = 3.2 MB.
+
+256² is sufficient: the wizard's reorder/adjust is a coarse
+positional operation (click to select layer for reordering /
+joint placement), not a precision pixel-pick — the user clicks
+on broad regions, not single-pixel features. The 256² grid
+samples each ~16 px on a 4K canvas — well within the user's
+mouse-target tolerance.
+
+**Steps (M7b).**
 1. New helper `src/components/canvas/viewport/alphaMask.js`:
-   - `downsampleAlphaMask(imageData, targetSize=256) → Uint8Array`
-   - `sampleAlphaMask(mask, w, h, x, y) → number` (bilinear)
-2. `CanvasViewport.jsx` upload site (around line 354-359): store
-   `downsampleAlphaMask(...)` instead of the raw ImageData.
-3. Audit hit-test consumers (currently
-   `src/components/canvas/viewport/helpers.js`'s `pickPartAtPoint`
-   or similar): replace ImageData reads with alpha-mask reads.
-4. New unit test `scripts/test/test_alphaMask.mjs`: round-trip
-   correctness on a known PSD layer (alpha-edge accuracy within
-   downsample tolerance).
-5. Visual smoke: pick parts at every part's edge / interior on a
-   test PSD; verify hit-test still feels right.
+   - `downsampleAlphaMask(imageData, srcW, srcH, target=256) → {mask: Uint8Array, w: number, h: number}` (nearest-neighbor, alpha channel only — bilinear is overkill for this use)
+   - `sampleAlphaMask(maskRecord, srcCanvasX, srcCanvasY) → number` (maps canvas-px to mask cell, returns alpha)
+2. `CanvasViewport.jsx` upload site: store
+   `downsampleAlphaMask(imageData, ...)` instead of raw ImageData
+   in `imageDataMapRef`.
+3. `src/io/hitTest.js:245-253`: replace direct
+   `imgData.data[(iy * imgData.width + ix) * 4 + 3]` with
+   `sampleAlphaMask(maskRecord, worldX, worldY)`.
+4. New unit test `scripts/test/test_alphaMask.mjs`: downsample
+   correctness on a known PSD layer (alpha-edge classification
+   matches full-res for ≥ 95% of canvas-px samples).
 
-**Gates.** `npm run test:alphaMask` (new), `npm run test:hitTest`,
-`npm run test:viewportHelpers`. Visual: extensive click-through
-on Shelby (test character).
+**Gates (M7b).** `npm run test:alphaMask` (new),
+`npm run test:hitTest`. Visual: drop a PSD → wizard reorder
+step → click-select every layer → verify selection lands on
+the visible layer.
 
-**Dependencies.** None.
+**Dependencies (M7).** None.
 
-**Risk.** Medium. Hit-test threshold may need tuning at 256×256
-for narrow features; user is precise about this surface. Run on
-test character (Shelby) before declaring done.
+**Risk.** Low for M7a (pure dispose). Medium for M7b — the
+nearest-neighbor 256² downsample may misclassify clicks at
+sub-cell precision near layer edges; mitigate with a 2-cell
+"any-alpha" check (touch detection at cell boundaries).
 
-**Effort.** 3–4h.
+**Effort (M7).** M7a 1h, M7b 3-4h. Total 4-5h.
 
-**Commit shape.** Single commit: `perf(memory): 256x256 alpha mask replaces full-res ImageData hit-test`.
+**Commit shape.** Two commits:
+1. `perf(memory): drop imageDataMapRef entries on auto-mesh completion`
+2. `perf(memory): downsample wizard-window alpha mask to 256x256`
 
 ---
 
@@ -479,28 +581,69 @@ Refit-three-stages pays 3× the cost; nothing is shared.
 **Proper fix.** A single `harvestAll(project, images)` runs the
 heavy stuff once and returns
 `{faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps}`.
-`runStage` requests its slice. The result is memoised on
-`(versionControl.geometryVersion, configHash)` so the second and
-third stage hit the cache.
+Each stage's result is memoised under a **per-stage compound key**
+that is the conjunction of:
+
+- `versionControl.geometryVersion` (geometry inputs), AND
+- a **per-stage config-subset hash** that depends ONLY on the
+  config records the stage actually consumes.
+
+**Critical: `geometryVersion` does NOT bump on config mutations.**
+Verified against [src/store/projectStore.js](../../src/store/projectStore.js) — the
+10 `geometryVersion++` writers (lines 332, 346, 355, 367, 760,
+918, 953, 1050, 1572, 1619) are all geometry-side mutations
+(mesh edits, blend-shape ops, pivot, reset/load, splits). Config
+seed actions (`seedAutoRigConfig`, `seedBoneConfig`,
+`seedEyeClosureConfig`, …) deliberately don't bump it — that's
+correct semantics (geometryVersion is geometry-specific). The
+config-subset hash is therefore the **load-bearing** half of the
+cache key for config-only changes.
+
+**Per-stage subset definition** (avoids cross-stage cache
+invalidation when only one stage's config changes):
+
+| Stage | Config slice in hash |
+|---|---|
+| `faceParallax` | `autoRigConfig.faceParallax`, `eyeClosureConfig`, `rotationDeformerConfig` |
+| `bodyWarpChain` | `autoRigConfig.bodyWarp`, `boneConfig`, `bodyWarpLayout` |
+| `rigWarps` (per-part) | `autoRigConfig.rigWarps`, `variantFadeRules`, `rigWarps[partId]` |
+| `neckWarp` | `autoRigConfig.neckWarp`, `boneConfig` (neck role) |
+
+Each stage's cache check is the literal conjunction:
+```js
+const cacheKey = `${stage}:${geometryVersion}:${configSubsetHash(stage, project)}`;
+if (cache.get(cacheKey) === undefined) cache.set(cacheKey, harvestAll(project, images, stage));
+return cache.get(cacheKey);
+```
+Both halves change → cache miss. Either half stable → check the
+other half. The cache stores per-stage entries, not a single
+global entry, so changing only `faceParallax` config doesn't
+invalidate the `bodyWarpChain` entry.
 
 **Steps.**
 1. Read [src/io/live2d/rig/initRig.js](../../src/io/live2d/rig/initRig.js)
-   `initializeRigFromProject` — what does it return? Does it
-   already produce all four spec slices, or are they generated
-   per-stage?
-2. Refactor into:
-   - `harvestAll(project, images, {subsystems})` returns all slices.
-   - `runStage(stageName)` calls `harvestAll(...)` (cached) and picks
-     the relevant slice; commits via existing per-stage merge.
-3. Cache key derivation: `versionControl.geometryVersion` plus
-   per-subsystem config hash (`autoRigConfig`, `boneConfig`,
-   `eyeClosureConfig`, `rotationDeformerConfig`,
-   `variantFadeRules`). Hash function = stable JSON stringify of
-   those records.
-4. Cache lives in `RigService` module scope (one cache entry,
-   refreshed on key change).
-5. Tests: update `test:runStageIntegration` to verify cache hits
-   on second-stage call within the same key.
+   `initializeRigFromProject` — confirm it can be split into a
+   single per-project shared phase (texture load, mesh build,
+   chain emit) plus per-stage spec generators. Map each `runStage`
+   call to its current code path so the refactor is mechanical.
+2. Build the shared phase as `harvestShared(project, images)` —
+   returns the heavy invariant (chain emit, mesh artifacts).
+3. Build per-stage spec generators that take `harvestShared`
+   output + the relevant config slice → returns the spec.
+4. `runStage(stageName)` calls `harvestShared` (memoised on
+   geometryVersion alone — geometry-only stage-independent), then
+   the per-stage generator (memoised on the full per-stage key).
+5. Cache lives in `RigService` module scope as a `Map<string, any>`.
+   On `versionControl.geometryVersion` change, drop all entries
+   whose key prefix matches old version (or just clear — easier).
+6. New unit test `scripts/test/test_harvestAllCache.mjs` —
+   construct three runStage scenarios:
+   (a) same stage twice → second is cache hit
+   (b) edit faceParallax config, run faceParallax → miss
+   (c) edit faceParallax config, run bodyWarpChain → hit (different
+       per-stage subset)
+7. Update `test:runStageIntegration` to verify byte-identical output
+   pre vs post refactor.
 
 **Gates.** `npm run test:runStageIntegration`,
 `npm run test:rigStageOps`, `npm run test:initRig`,
@@ -525,12 +668,19 @@ Oracle round + manual byte-diff before merge.
 
 ## Plan: P1 — undo via immer `produceWithPatches`
 
-**Root cause.** [src/store/undoHistory.js:73-78](../../src/store/undoHistory.js#L73-L78)
-`pushSnapshot` does `structuredClone(project)` + `JSON.stringify`
-on every push (the JSON is for size-budget enforcement). Tens of
-MB per snapshot; 50 entries pin 1-2 GB. The clone alone is ~50ms
-on Hiyori-class projects, fired on every drag's first frame via
-`beginBatch` and on every `updateProject` outside batches.
+**Root cause.** Three `structuredClone(project)` sites in
+[src/store/undoHistory.js](../../src/store/undoHistory.js):
+- line 74 — `pushSnapshot` (every push)
+- line 122 — `undo()` clones current project to push onto the
+  redo stack before applying
+- line 135 — `redo()` clones current project to push onto the
+  undo stack before applying
+
+`pushSnapshot` also `JSON.stringify`s for size-budget enforcement.
+Tens of MB per snapshot; 50 entries pin 1-2 GB. The clone alone
+is ~50ms on Hiyori-class projects, fired on every drag's first
+frame via `beginBatch` and on every `updateProject` outside
+batches. Every undo and redo invocation pays the clone cost again.
 
 **Proper fix.** immer `produceWithPatches` already runs inside
 `updateProject`. Capture the patches + inverse-patches and store
@@ -539,28 +689,36 @@ current state; `redo()` applies patches. No snapshots, no JSON.
 
 **Steps.**
 1. Read [src/store/undoHistory.js](../../src/store/undoHistory.js)
-   fully.
+   fully — three clone sites (lines 74, 122, 135), all need
+   replacement.
 2. Read `updateProject` in [src/store/projectStore.js](../../src/store/projectStore.js)
-   — confirm every mutator goes through `produce`. Audit for any
-   direct mutation paths that bypass immer.
+   — confirm every mutator goes through `produce`. **Hand-audit
+   for direct `state.project.X = Y` mutations outside `produce`
+   recipes** — those will silently break with patches. Grep
+   `state\.project\.\w+\s*=` across `src/store/`.
 3. Refactor `updateProject`:
    - call `produceWithPatches(state, recipe)` instead of `produce`
+   - capture `[nextState, patches, inversePatches]`
    - `pushSnapshot(patches, inversePatches)` replaces the existing
      snapshot push
 4. Refactor `undoHistory.js`:
    - `pushSnapshot(patches, inversePatches)` appends a tuple
-   - `undo()`: `applyPatches(currentProject, lastInverse)`,
-     move pointer
-   - `redo()`: `applyPatches(currentProject, lastPatches)`,
-     move pointer
-   - drop size-budget enforcement (patch length is O(delta), no
-     budget needed for typical edit volumes)
-5. Hand-audit every store action that sets `pushSnapshot`: replace
-   with patch-based equivalent.
+     (no clone, no JSON.stringify)
+   - `undo()`: pop the (patches, inversePatches) pair, advance
+     the pointer, apply `inversePatches` to `state.project` via
+     immer's `applyPatches`. **No clone of the prior state** — the
+     redo direction is the patches we already have on the stack.
+   - `redo()`: symmetric — apply `patches` to advance forward.
+   - drop the `JSON.stringify` size-budget enforcement (patch
+     length is O(delta), no budget needed for typical edit
+     volumes)
+5. Hand-audit every action in `projectStore.js` that calls
+   `pushSnapshot` directly — replace with patch-based path
+   (or convert to `updateProject` if not already).
 6. Verify `clearHistory()` semantics carry over.
-7. Existing `test:undoHistory` passes; add patch-specific tests
-   covering `applyPatches` round-trip on every undoable mutation
-   shape.
+7. New tests `scripts/test/test_undoPatches.mjs`: applyPatches
+   round-trip on every undoable mutation shape. Existing
+   `test:undoHistory` regression run.
 
 **Gates.** `npm run test:undoHistory`,
 `npm run test:projectRoundTrip`, `npm run test:saveLoadRigSpec`.
@@ -638,11 +796,16 @@ byte-identical for the byte-fidelity tests downstream.
 
 ## Notes for the implementer
 
-- **R1's gate makes R12 single-line.** Phase D shipped R1's
-  epsilon-filter; the only remaining edit for R12 is the
-  `if (realCount === 0) valuesForEval = paramValuesRef.current`
-  short-circuit. Land R12 even before R3 — it's the biggest
-  user-visible perf win at the lowest risk.
+- **R12 is more involved than the original draft suggested.**
+  The reviewer-pass (2026-05-09) found that `valuesForEval` is
+  set BEFORE R1's `realCount` is computed and that `working`
+  is sub-epsilon different from `paramValuesRef.current` even
+  on idle frames. R12's plan now specifies the proper fix:
+  always set `valuesForEval = paramValuesRef.current`, and
+  manually advance `paramValuesRef.current` after every
+  `setMany` so the cache fill stores the right reference.
+  Still ships in Group 1 (low risk, high impact), but it's a
+  3-touch coordinated change, not a one-liner.
 - **The byte-fidelity gates are the only defence on eval-graph
   work.** `test:cubismPhysicsOracle`, `test:breathFidelity`,
   `test:shelbyByteFidelity`, plus the 4 cubism* tests. Run all
@@ -662,3 +825,35 @@ byte-identical for the byte-fidelity tests downstream.
   - `feedback_filter_in_selector.md` (S2)
   - `feedback_post_ship_audit.md` (every multi-phase plan)
   - `feedback_two_views_one_host.md` (R2)
+
+## Audit trail
+
+This plan was reviewed by a code-reviewer agent on 2026-05-09
+after the first draft. Eight substantive findings were folded
+back in:
+
+- **B1** (P4 cache-key blocker) — `geometryVersion` does NOT bump
+  on config seed actions, so the configHash half of the cache key
+  is load-bearing. Per-stage subset hashing added so cross-stage
+  config edits don't invalidate sibling caches.
+- **B2** (R12 insertion-point blocker) — `valuesForEval` is set
+  upstream of R1's `realCount`, and `working` is sub-epsilon
+  different from `paramValuesRef.current` even when realCount=0.
+  Plan rewrites R12 as a 3-touch coordinated change.
+- **W1** (M7 wrong scope) — `imageDataMapRef` only used pre-mesh.
+  Plan now splits into M7a (prune on auto-mesh, ~95% of win) and
+  M7b (downsample wizard window).
+- **W2** (P10 sync fallback) — Rule №2 violation. Plan now
+  replaces the synchronous export entirely; test environment uses
+  an inline worker shim, not a production sync fallback.
+- **G1** (R3 buffer-aliasing risk) — frames refs held by R12's
+  cache get corrupted if pool recycles backing buffers. Plan now
+  defines INTERNAL vs EXTERNAL pool buckets with a hard invariant
+  and a regression-pinning aliasing test.
+- **D1** (R12 → Group 1) — sequencing moved; R12 ships before R3.
+- **A1** (P1 undo/redo clones) — added; the original P1 only
+  named the `pushSnapshot` clone but `undo()` and `redo()` also
+  clone.
+- **A2** (P4 config-hash granularity) — per-stage subset hashing
+  replaces the monolithic `autoRigConfig` hash so a faceParallax
+  edit doesn't unnecessarily invalidate the bodyWarpChain cache.
