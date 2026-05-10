@@ -63,6 +63,11 @@ export const DEFAULT_KEYMAP = {
   // so it works on the canvas without needing focus.
   'KeyA': 'selection.selectAllToggle',
 
+  // Toolset Phase 0.C — Alt+A: Blender's "deselect all" companion to
+  // KeyA's toggle. Mode-aware (handler scopes to vertex set in Edit
+  // Mode + select tool, else falls through to object deselect).
+  'Alt+KeyA': 'selection.deselectAll',
+
   // Delete selected project nodes. Both Delete and Backspace are
   // common muscle memory; bind both. (Backspace alone fires inside
   // editable inputs anyway, but the dispatcher's editable-target

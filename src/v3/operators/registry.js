@@ -164,10 +164,35 @@ function registerBuiltins() {
   // visible meshed part. Mirrors the result into the legacy
   // editorStore.selection slot so Properties panes / GizmoOverlay
   // pick up the active head.
+  //
+  // Toolset Phase 0.C — when Edit Mode is active on a meshed part with
+  // the `select` tool, A scopes to that part's vertex set instead
+  // (Blender pattern: A in Edit Mode toggles ALL the active mesh's
+  // vertices). Object selection is left alone in that branch.
   registerOperator({
     id: 'selection.selectAllToggle',
     label: 'Select All / Deselect All',
     exec: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'edit' && editor.toolMode === 'select') {
+        const activePartId = editor.selection?.[0];
+        if (typeof activePartId !== 'string' || activePartId.length === 0) return;
+        const project = useProjectStore.getState().project;
+        const node = project?.nodes?.find((n) => n?.id === activePartId);
+        if (!node || node.type !== 'part') return;
+        // Vertex count is the mesh's authored rest array length — what
+        // every Edit-Mode op dispatches against. Avoid pulling chainEval
+        // here; the rest mesh is the canonical edit-mode target.
+        const vertCount = Array.isArray(node.mesh?.vertices) ? node.mesh.vertices.length : 0;
+        if (vertCount === 0) return;
+        const cur = editor.selectedVertexIndices.get(activePartId);
+        if (cur && cur.size > 0) {
+          editor.deselectAllVertices(activePartId);
+        } else {
+          editor.selectAllVertices(activePartId, vertCount);
+        }
+        return;
+      }
       const sel = useSelectionStore.getState();
       if (sel.items.length > 0) {
         sel.clear();
@@ -182,6 +207,31 @@ function registerBuiltins() {
       sel.select(partIds.map((id) => ({ type: 'part', id })), 'replace');
       // Legacy slot tracks the active head only.
       useEditorStore.getState().setSelection([partIds[partIds.length - 1]]);
+    },
+  });
+
+  // Toolset Phase 0.C — Alt+A "deselect all" (Blender pattern).
+  // Mode-aware: in Edit Mode + select tool clears the vertex selection
+  // for the active part; otherwise clears object selection (mirrors
+  // Escape, but the Blender muscle memory expects Alt+A specifically).
+  registerOperator({
+    id: 'selection.deselectAll',
+    label: 'Deselect All',
+    exec: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'edit' && editor.toolMode === 'select') {
+        const activePartId = editor.selection?.[0];
+        if (typeof activePartId === 'string' && activePartId.length > 0) {
+          editor.deselectAllVertices(activePartId);
+        } else {
+          editor.clearAllVertexSelections();
+        }
+        return;
+      }
+      const sel = useSelectionStore.getState();
+      if (sel.items.length === 0 && (editor.selection?.length ?? 0) === 0) return;
+      sel.clear();
+      editor.setSelection([]);
     },
   });
 

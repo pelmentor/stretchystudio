@@ -70,7 +70,7 @@ import {
   computeSmartMeshOpts,
   zoomAroundCursor,
 } from '@/components/canvas/viewport/helpers';
-import { hitTestParts } from '@/io/hitTest';
+import { hitTestParts, hitTestVertices, buildVertexAdjacency, shortestPathBetweenVertices } from '@/io/hitTest';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
   isBoneGroup,
@@ -2208,7 +2208,9 @@ export default function CanvasViewport({
 
     // ── Mesh / blendShape edit: vertex drag scoped to the selected
     //    part. Tool dispatch via `toolMode`:
-    //      'brush' (default)  → multi-vertex deform (or UV adjust
+    //      'select' (default)  → vertex selection (LMB / Shift-LMB /
+    //                            Ctrl-LMB shortest path / empty deselect)
+    //      'brush'             → multi-vertex deform (or UV adjust
     //                            when meshSubMode === 'adjust')
     //      'add_vertex'        → click adds a vertex at cursor
     //      'remove_vertex'     → click removes the nearest vertex
@@ -2226,6 +2228,60 @@ export default function CanvasViewport({
         const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
         const iwm = mat3Inverse(wm);
         const [lx, ly] = worldToLocal(worldX, worldY, iwm);
+
+        if (toolMode === 'select') {
+          // Toolset Phase 0.B — vertex selection.
+          // Threshold: 6px scaled by zoom (matches Blender's vertex
+          // pick threshold; same constant the Weight Paint overlay uses
+          // for vertex hits at the brush boundary).
+          const threshold = 6 / view.zoom;
+          // Selection is computed against rest verts in LOCAL space —
+          // matches the renderer's vertex render-out, which the next
+          // sub-step (VertexSelectionOverlay) projects through the same
+          // worldMatrix the user is clicking through. Edits don't move
+          // verts under the cursor (Edit Mode shows the rest mesh).
+          const verts = selMesh.vertices;
+          const idx = hitTestVertices(verts, lx, ly, threshold);
+          const editorActions = useEditorStore.getState();
+          if (idx < 0) {
+            // LMB on empty space → deselect all for this part. Matches
+            // Object Mode click-to-deselect behaviour. Shift+LMB on
+            // empty space is a no-op (don't accidentally drop a careful
+            // multi-select build).
+            if (!e.shiftKey) editorActions.deselectAllVertices(selNode.id);
+            return;
+          }
+          if (e.ctrlKey || e.metaKey) {
+            // Ctrl+LMB → shortest topology path from active to clicked.
+            // Mirrors Blender `mesh.shortest_path_pick`. When there's no
+            // active vertex yet, fall through to plain select (treat the
+            // first Ctrl-click as setting the seed).
+            const av = editorActions.activeVertex;
+            if (av && av.partId === selNode.id && av.vertIndex !== idx) {
+              const tris = selMesh.triangles ?? [];
+              const adj = buildVertexAdjacency(tris, verts.length);
+              const path = shortestPathBetweenVertices(adj, av.vertIndex, idx);
+              if (path) {
+                const cur = editorActions.selectedVertexIndices.get(selNode.id);
+                const merged = new Set(cur ?? []);
+                for (const p of path) merged.add(p);
+                editorActions.setVertexSelectionForPart(selNode.id, merged);
+                editorActions.selectVertex(selNode.id, idx, /* additive */ true);
+                return;
+              }
+              // Disconnected mesh components → fall back to plain select
+              // (Blender does the same when shortest-path is unreachable).
+            }
+            editorActions.selectVertex(selNode.id, idx, /* additive */ false);
+            return;
+          }
+          if (e.shiftKey) {
+            editorActions.toggleVertexSelection(selNode.id, idx);
+            return;
+          }
+          editorActions.selectVertex(selNode.id, idx, /* additive */ false);
+          return;
+        }
 
         if (toolMode === 'add_vertex') {
           // Compute new mesh data first, then upload and persist atomically
@@ -2255,6 +2311,11 @@ export default function CanvasViewport({
             m.uvs = Array.from(result.uvs);
             m.triangles = result.triangles;
           });
+          // Toolset Phase 0.F — topology changed (vertex count grew).
+          // Existing selection indices are still valid (added vertex is
+          // appended, prior indices unchanged), but the safe contract
+          // is to invalidate so callers don't accumulate stale state.
+          useEditorStore.getState().invalidateVertexSelectionForPart(selNode.id);
 
         } else if (toolMode === 'remove_vertex') {
           const idx = findNearestVertex(selMesh.vertices, lx, ly, 14 / view.zoom);
@@ -2292,6 +2353,11 @@ export default function CanvasViewport({
               m.triangles = result.triangles;
               m.edgeIndices = newEdge;
             });
+            // Toolset Phase 0.F — topology changed (vertex count
+            // shrank; the removed index made every higher index shift
+            // by one). Invalidate so the selection set doesn't point
+            // at the wrong vertex after the renumber.
+            useEditorStore.getState().invalidateVertexSelectionForPart(selNode.id);
           }
         } else {
           // Default select tool in deform mode: brush-based multi-vertex drag

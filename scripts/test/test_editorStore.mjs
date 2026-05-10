@@ -425,11 +425,14 @@ reset();
     'enterEditMode(skeleton): restores joint_drag');
 
   // Empty / malformed prefs → falls through to canonical defaults.
+  // Toolset Phase 0.E flipped Edit Mode's default to `'select'`
+  // (Blender pattern: Edit Mode opens with the Select tool active,
+  // not the Brush). Brush stays available via T-panel + sticky-prefs.
   reset();
   usePreferencesStore.setState({ lastToolByMode: {} });
   get().enterEditMode('edit');
-  assert(get().toolMode === 'brush',
-    'enterEditMode(mesh) with empty prefs: falls back to brush');
+  assert(get().toolMode === 'select',
+    'enterEditMode(mesh) with empty prefs: falls back to select');
 }
 
 // ── toggleGroupExpand ─────────────────────────────────────────────

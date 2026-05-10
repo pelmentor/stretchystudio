@@ -109,6 +109,17 @@ export const TOOLS_BY_MODE = {
   ],
 
   mesh: [
+    // Toolset Phase 0.E — Select is the new default Edit-Mode tool
+    // (Blender pattern). LMB picks a vertex, Shift+LMB toggles, Ctrl+LMB
+    // selects shortest topology path, empty-canvas LMB deselects all.
+    {
+      id: 'select',
+      kind: 'tool',
+      toolModeId: 'select',
+      label: 'Select',
+      icon: MousePointer2,
+      hint: 'Click vertices to select (Shift toggle, Ctrl shortest path, A select-all)',
+    },
     {
       id: 'brush',
       kind: 'tool',

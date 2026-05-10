@@ -30,6 +30,7 @@ import CanvasViewport from '../../components/canvas/CanvasViewport.jsx';
 import { WarpDeformerOverlay } from '../editors/viewport/overlays/WarpDeformerOverlay.jsx';
 import { RotationDeformerOverlay } from '../editors/viewport/overlays/RotationDeformerOverlay.jsx';
 import { WeightPaintOverlay } from '../editors/viewport/overlays/WeightPaintOverlay.jsx';
+import { VertexSelectionOverlay } from '../editors/viewport/overlays/VertexSelectionOverlay.jsx';
 import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { ModePill } from './ModePill.jsx';
@@ -106,6 +107,13 @@ export function CanvasArea({ mode }) {
           `editorStore.editMode === 'weightPaint'` so it only mounts
           when the user is actively painting; no view-layer toggle. */}
       {!isPreview && <WeightPaintOverlay />}
+      {/* Toolset Phase 0.D — vertex selection overlay self-gates on
+          `editorStore.editMode === 'edit' && toolMode === 'select'`,
+          so dots only appear when the user is in Edit Mode with the
+          select tool active. Read-only — pointer events pass through
+          (`pointerEvents: 'none'`) so CanvasViewport keeps single-
+          source pointer dispatch. */}
+      {!isPreview && <VertexSelectionOverlay />}
       {/* Mode pill (Blender-style) — top-left canvas overlay.
           Surfaces the contextual edit mode for the active selection.
           Edit Viewport only; Live Preview is read-only. */}

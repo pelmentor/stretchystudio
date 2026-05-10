@@ -14,8 +14,12 @@ export const useEditorStore = create((set) => ({
    *      'select'         — default (click-to-select; topmost wins)
    *
    *    Edit Mode on mesh data (editMode === 'edit', dataKind === 'mesh'):
-   *      'brush'          — default (multi-vertex deform brush; UV
-   *                          adjust when `meshSubMode === 'adjust'`)
+   *      'select'         — default (Toolset Phase 0; Blender pattern):
+   *                          LMB picks a vertex, Shift+LMB toggles,
+   *                          Ctrl+LMB selects shortest topology path,
+   *                          empty-canvas LMB deselects all
+   *      'brush'          — multi-vertex deform brush (or UV adjust
+   *                          when `meshSubMode === 'adjust'`)
    *      'add_vertex'     — click adds a vertex at the cursor
    *      'remove_vertex'  — click removes the nearest vertex
    *
@@ -207,6 +211,34 @@ export const useEditorStore = create((set) => ({
    *  Fix 1; v26 migration). */
   activeBlendShapeId: null,
 
+  /** Toolset Phase 0 — Edit-Mode vertex selection set.
+   *
+   *  Per-part selection: each part owns its own selection (Blender's
+   *  Edit Mode model: selection lives on the `Mesh` datablock, not
+   *  globally). Switching active part doesn't merge sets across parts.
+   *
+   *  Persistence rules (Phase 0.F):
+   *    - Survives mode-switch out and back (Tab → Pose → Tab → Edit
+   *      keeps your selection).
+   *    - Cleared on Object-Mode entry (per Blender semantics).
+   *    - Cleared on switching to a DIFFERENT active part.
+   *    - Cleared per-part on mesh topology change (vertex count differs;
+   *      the `invalidateVertexSelectionForPart` hook handles the
+   *      add_vertex / remove_vertex / retriangulate paths).
+   *
+   *  Map keys are part ids (`projectStore.project.nodes[i].id`) for
+   *  meshed parts. Set values are 0-based vertex indices into the
+   *  part's `mesh.vertices[]`. */
+  selectedVertexIndices: /** @type {Map<string, Set<number>>} */ (new Map()),
+
+  /** Toolset Phase 0 — last-clicked vertex (Blender's "active element").
+   *  Renders with a white-bordered orange dot on top of the regular
+   *  selected dot. Cleared with `clearAllVertexSelections` and on
+   *  Edit Mode exit. Pair (partId, vertIndex) so the active element
+   *  scopes to its part — when the user switches to another part, the
+   *  active vertex naturally goes inactive. */
+  activeVertex: /** @type {{ partId: string, vertIndex: number } | null} */ (null),
+
   /** V4 Phase 3b — Keyform edit mode payload. Only meaningful when
    *  `editMode === 'keyform'`.
    *
@@ -275,6 +307,11 @@ export const useEditorStore = create((set) => ({
       editMode: null,
       activeBlendShapeId: null,
       keyformEdit: null,
+      // Toolset Phase 0.F — selection-head change drops Edit Mode →
+      // dropping out of Edit Mode clears the vertex selection (matches
+      // Blender: leaving Edit Mode discards the per-part selection set).
+      selectedVertexIndices: new Map(),
+      activeVertex: null,
     };
   }),
 
@@ -317,7 +354,13 @@ export const useEditorStore = create((set) => ({
     const persisted = usePreferencesStore.getState().lastToolByMode ?? {};
     let toolMode = persisted[kind];
     if (typeof toolMode !== 'string' || toolMode.length === 0) {
-      if (kind === 'edit' || kind === 'weightPaint') toolMode = 'brush';
+      // Toolset Phase 0.E — Edit Mode now defaults to `'select'`
+      // (Blender pattern: Edit Mode opens with the Select tool active,
+      // not Brush). Brush remains available via the T-panel for soft
+      // proportional-edit drag. Weight Paint stays on `'brush'`
+      // because painting IS the primary action for that mode.
+      if (kind === 'edit') toolMode = 'select';
+      else if (kind === 'weightPaint') toolMode = 'brush';
       else if (kind === 'pose') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
       else toolMode = 'select';
@@ -374,6 +417,10 @@ export const useEditorStore = create((set) => ({
       activeBlendShapeId: null,
       keyformEdit: null,
       toolMode: 'select',
+      // Toolset Phase 0.F — leaving Edit Mode for Object Mode drops the
+      // vertex selection set (Blender semantics).
+      selectedVertexIndices: new Map(),
+      activeVertex: null,
     };
   }),
 
@@ -464,5 +511,137 @@ export const useEditorStore = create((set) => ({
     if (typeof id !== 'string' || id.length === 0) return s;
     if (s.propertiesActiveTab === id) return s;
     return { propertiesActiveTab: id };
+  }),
+
+  // ── Toolset Phase 0 — vertex selection actions ──────────────────────
+  //
+  // Per Blender Edit Mode semantics: each part owns its own selection
+  // set; the active vertex (last clicked) carries the white-bordered
+  // active mark. Mutations all return a fresh top-level Map so React
+  // subscribers re-render even though Set itself is mutable.
+
+  /** Replace the part's selection with a single vertex. When `additive`
+   *  is true, ADD the vertex to the existing set instead. Sets the
+   *  active vertex to (partId, vertIndex). */
+  selectVertex: (partId, vertIndex, additive = false) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!Number.isInteger(vertIndex) || vertIndex < 0) return s;
+    const next = new Map(s.selectedVertexIndices);
+    if (additive) {
+      const prior = next.get(partId);
+      const merged = prior ? new Set(prior) : new Set();
+      merged.add(vertIndex);
+      next.set(partId, merged);
+    } else {
+      next.set(partId, new Set([vertIndex]));
+    }
+    return { selectedVertexIndices: next, activeVertex: { partId, vertIndex } };
+  }),
+
+  /** Remove a single vertex from the part's selection. No-op when the
+   *  vertex isn't selected. Clears `activeVertex` when it pointed at
+   *  the removed vertex. */
+  deselectVertex: (partId, vertIndex) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!Number.isInteger(vertIndex) || vertIndex < 0) return s;
+    const cur = s.selectedVertexIndices.get(partId);
+    if (!cur || !cur.has(vertIndex)) return s;
+    const next = new Map(s.selectedVertexIndices);
+    const fresh = new Set(cur);
+    fresh.delete(vertIndex);
+    if (fresh.size === 0) next.delete(partId);
+    else next.set(partId, fresh);
+    const av = s.activeVertex;
+    const activeVertex = (av && av.partId === partId && av.vertIndex === vertIndex)
+      ? null : av;
+    return { selectedVertexIndices: next, activeVertex };
+  }),
+
+  /** Toggle one vertex's membership. Sets the active vertex to the
+   *  toggled (partId, vertIndex) when adding; clears it when removing
+   *  the active vertex. */
+  toggleVertexSelection: (partId, vertIndex) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!Number.isInteger(vertIndex) || vertIndex < 0) return s;
+    const next = new Map(s.selectedVertexIndices);
+    const cur = next.get(partId);
+    if (cur && cur.has(vertIndex)) {
+      const fresh = new Set(cur);
+      fresh.delete(vertIndex);
+      if (fresh.size === 0) next.delete(partId);
+      else next.set(partId, fresh);
+      const av = s.activeVertex;
+      const activeVertex = (av && av.partId === partId && av.vertIndex === vertIndex)
+        ? null : av;
+      return { selectedVertexIndices: next, activeVertex };
+    }
+    const fresh = cur ? new Set(cur) : new Set();
+    fresh.add(vertIndex);
+    next.set(partId, fresh);
+    return { selectedVertexIndices: next, activeVertex: { partId, vertIndex } };
+  }),
+
+  /** Replace the part's selection with the union of `vertIndices`.
+   *  Used by box/lasso/shortest-path (Phase 1+). Active vertex stays
+   *  put unless explicitly cleared. */
+  setVertexSelectionForPart: (partId, vertIndices) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    const next = new Map(s.selectedVertexIndices);
+    const set = new Set();
+    if (vertIndices && typeof vertIndices[Symbol.iterator] === 'function') {
+      for (const v of vertIndices) {
+        if (Number.isInteger(v) && v >= 0) set.add(v);
+      }
+    }
+    if (set.size === 0) next.delete(partId);
+    else next.set(partId, set);
+    return { selectedVertexIndices: next };
+  }),
+
+  /** Add every vertex of `partId` to the selection — caller passes the
+   *  total count (kept dependency-free of project state). Active vertex
+   *  unchanged. */
+  selectAllVertices: (partId, vertCount) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!Number.isInteger(vertCount) || vertCount <= 0) return s;
+    const next = new Map(s.selectedVertexIndices);
+    const fresh = new Set();
+    for (let i = 0; i < vertCount; i++) fresh.add(i);
+    next.set(partId, fresh);
+    return { selectedVertexIndices: next };
+  }),
+
+  /** Drop the part's selection entirely. Clears the active vertex when
+   *  it pointed at this part. */
+  deselectAllVertices: (partId) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!s.selectedVertexIndices.has(partId)) return s;
+    const next = new Map(s.selectedVertexIndices);
+    next.delete(partId);
+    const av = s.activeVertex;
+    const activeVertex = (av && av.partId === partId) ? null : av;
+    return { selectedVertexIndices: next, activeVertex };
+  }),
+
+  /** Drop every selection across every part. Used on Object-Mode entry
+   *  (per Blender) and Edit-Mode exit. */
+  clearAllVertexSelections: () => set((s) => {
+    if (s.selectedVertexIndices.size === 0 && s.activeVertex === null) return s;
+    return { selectedVertexIndices: new Map(), activeVertex: null };
+  }),
+
+  /** Topology-change invalidation: drop the part's selection because
+   *  vertex indices no longer refer to the same vertices. Called by
+   *  add_vertex / remove_vertex / retriangulate paths in CanvasViewport.
+   *  Pure re-export of `deselectAllVertices(partId)` semantics — kept
+   *  as a separate name so call-sites read self-documenting. */
+  invalidateVertexSelectionForPart: (partId) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!s.selectedVertexIndices.has(partId) && (!s.activeVertex || s.activeVertex.partId !== partId)) return s;
+    const next = new Map(s.selectedVertexIndices);
+    next.delete(partId);
+    const av = s.activeVertex;
+    const activeVertex = (av && av.partId === partId) ? null : av;
+    return { selectedVertexIndices: next, activeVertex };
   }),
 }));

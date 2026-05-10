@@ -264,6 +264,156 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   return null;
 }
 
+/**
+ * Toolset Phase 0.B — vertex hit-test for Edit Mode click-to-select.
+ *
+ * Given a part's frame-of-reference vertex positions and a world-space
+ * point, returns the index of the vertex within `threshold` distance,
+ * or `-1` when no vertex is within range. The threshold is the
+ * world-space radius — callers compute it as a fixed pixel distance
+ * (typically 6) divided by `view.zoom` so the hit area stays visually
+ * constant across zoom levels (matches Blender's vertex pick threshold).
+ *
+ * Ties (multiple vertices within threshold): nearest wins. When two
+ * vertices are equidistant, lower index wins (deterministic).
+ *
+ * @param {ArrayLike<number> | ReadonlyArray<{x:number,y:number}>} verts
+ *   - flat `[x0, y0, x1, y1, ...]` OR Array<{x,y}> form. Both are
+ *   supported because chainEval emits the flat shape and the rest
+ *   `mesh.vertices` ships the object shape.
+ * @param {number} worldX
+ * @param {number} worldY
+ * @param {number} threshold - world-space radius
+ * @returns {number} vertex index or -1
+ */
+export function hitTestVertices(verts, worldX, worldY, threshold) {
+  if (!verts || threshold <= 0) return -1;
+  const t2 = threshold * threshold;
+  let bestIdx = -1;
+  let bestD2 = Infinity;
+  // Object-shape branch: Array<{x, y}>. Cast through `any` because the
+  // union type doesn't narrow via property probe.
+  const probe = /** @type {any} */ (verts[0]);
+  if (probe && typeof probe.x === 'number') {
+    /** @type {ReadonlyArray<{x:number,y:number}>} */
+    const arr = /** @type {any} */ (verts);
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      const dx = v.x - worldX;
+      const dy = v.y - worldY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2 && d2 <= t2) {
+        bestD2 = d2;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+  // Flat-array branch: [x0, y0, x1, y1, ...].
+  /** @type {ArrayLike<number>} */
+  const flat = /** @type {any} */ (verts);
+  const n = flat.length >> 1;
+  for (let i = 0; i < n; i++) {
+    const dx = flat[i * 2] - worldX;
+    const dy = flat[i * 2 + 1] - worldY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2 && d2 <= t2) {
+      bestD2 = d2;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+/**
+ * Toolset Phase 0.B — build a vertex adjacency map from a triangle
+ * index list. Used by `Ctrl+LMB` shortest-path selection (BFS on
+ * `mesh.shortest_path_pick` semantics — see `reference/blender/source/blender/editors/mesh/editmesh_select.cc`).
+ *
+ * Each vertex maps to the set of vertex indices it shares an edge with.
+ * Triangles are interpreted as three pairwise edges (i,j), (j,k), (k,i).
+ * Output map keys are vertex indices; values are `Set<number>`.
+ *
+ * @param {ReadonlyArray<number>} triangles - flat `[i, j, k, i, j, k, ...]`
+ * @param {number} vertCount - total vertex count (for prealloc)
+ * @returns {Map<number, Set<number>>}
+ */
+export function buildVertexAdjacency(triangles, vertCount) {
+  /** @type {Map<number, Set<number>>} */
+  const adj = new Map();
+  if (!Array.isArray(triangles) && !(triangles instanceof Uint32Array || triangles instanceof Uint16Array)) {
+    return adj;
+  }
+  const ensure = (i) => {
+    let s = adj.get(i);
+    if (!s) { s = new Set(); adj.set(i, s); }
+    return s;
+  };
+  const n = triangles.length;
+  for (let t = 0; t < n; t += 3) {
+    const i = triangles[t];
+    const j = triangles[t + 1];
+    const k = triangles[t + 2];
+    if (i < 0 || j < 0 || k < 0 || i >= vertCount || j >= vertCount || k >= vertCount) continue;
+    ensure(i).add(j); ensure(i).add(k);
+    ensure(j).add(i); ensure(j).add(k);
+    ensure(k).add(i); ensure(k).add(j);
+  }
+  return adj;
+}
+
+/**
+ * Toolset Phase 0.B — BFS shortest path from `fromIdx` to `toIdx` on
+ * the vertex adjacency graph. Returns the path as an array of vertex
+ * indices INCLUDING both endpoints, or `null` when unreachable
+ * (disconnected mesh components) or when either endpoint is missing
+ * from the graph.
+ *
+ * Mirrors Blender's `mesh.shortest_path_pick`: the user clicks the
+ * active vertex, Ctrl+clicks a target, every vertex along the
+ * connectivity path joins the selection. Pure topology (uses edge
+ * count as the distance metric, not Euclidean) — same as Blender's
+ * default behaviour.
+ *
+ * @param {Map<number, Set<number>>} adjacency
+ * @param {number} fromIdx
+ * @param {number} toIdx
+ * @returns {number[] | null}
+ */
+export function shortestPathBetweenVertices(adjacency, fromIdx, toIdx) {
+  if (!adjacency || !Number.isInteger(fromIdx) || !Number.isInteger(toIdx)) return null;
+  if (fromIdx === toIdx) return [fromIdx];
+  if (!adjacency.has(fromIdx) || !adjacency.has(toIdx)) return null;
+  /** @type {Map<number, number>} */
+  const cameFrom = new Map();
+  cameFrom.set(fromIdx, -1);
+  const queue = [fromIdx];
+  let head = 0;
+  while (head < queue.length) {
+    const cur = queue[head++];
+    if (cur === toIdx) break;
+    const nbrs = adjacency.get(cur);
+    if (!nbrs) continue;
+    for (const n of nbrs) {
+      if (cameFrom.has(n)) continue;
+      cameFrom.set(n, cur);
+      if (n === toIdx) {
+        // Reconstruct + return.
+        const path = [n];
+        let p = cameFrom.get(n) ?? -1;
+        while (p !== -1) {
+          path.push(p);
+          p = cameFrom.get(p) ?? -1;
+        }
+        path.reverse();
+        return path;
+      }
+      queue.push(n);
+    }
+  }
+  return null;
+}
+
 // Re-export mat3Identity for tests that want to construct identity-only
 // worldMatrices maps without pulling in the renderer module.
 export { mat3Identity };

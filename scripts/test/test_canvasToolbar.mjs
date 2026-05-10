@@ -80,15 +80,20 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   assert(ops.includes('transform.scale'),     'object includes transform.scale');
 }
 
-// ── Mesh: brush is default (first); add/remove vertex are tools.
+// ── Mesh: select is default (first), then brush, then add/remove.
+//        Toolset Phase 0.E flipped the default to `'select'` (Blender
+//        pattern: Edit Mode opens with Select active). Brush stays
+//        available behind select.
 //        PP1-008(c) — proportional-edit toggle relocated out of the
 //        T-panel into ModePill (sibling of the edit-mode picker), so
 //        the mesh tool list has no toggle entries anymore.
 
 {
   const mesh = TOOLS_BY_MODE.mesh;
-  assert(mesh[0]?.toolModeId === 'brush', 'mesh[0] = brush');
+  assert(mesh[0]?.toolModeId === 'select', 'mesh[0] = select (Toolset Phase 0.E)');
   const tids = mesh.filter((t) => t.kind === 'tool').map((t) => t.toolModeId);
+  assert(tids.includes('select'),        'mesh includes select');
+  assert(tids.includes('brush'),         'mesh includes brush');
   assert(tids.includes('add_vertex'),    'mesh includes add_vertex');
   assert(tids.includes('remove_vertex'), 'mesh includes remove_vertex');
   const toggles = mesh.filter((t) => t.kind === 'toggle');
