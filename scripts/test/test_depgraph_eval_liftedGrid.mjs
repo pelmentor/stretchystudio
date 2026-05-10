@@ -67,7 +67,7 @@ function chainEvalLiftedGrids(project, paramValues) {
 function depgraphLiftedGrids(project, paramValues) {
   const graph = buildDepGraph(project, {});
   const overrides = new Map(Object.entries(paramValues ?? {}));
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: overrides });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: overrides });
   const out = new Map();
   for (const [name, value] of ctx.outputs) {
     if (!name.endsWith('/GEOMETRY/GRID_LIFT_TO_PARENT')) continue;

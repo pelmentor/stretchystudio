@@ -3,11 +3,10 @@
 /**
  * Toolset Phase 1.A — Modal box / lasso select state.
  *
- * Activated by `selection.boxSelect` (B chord) or
- * `selection.lassoSelect` (Ctrl+LMB-drag from CanvasViewport). The
- * overlays mounted at AppShell level (`BoxSelectOverlay`,
- * `LassoSelectOverlay`) read this store to render the in-progress
- * shape and run the actual selection on commit.
+ * Activated by `selection.boxSelect` (B chord) or by the Ctrl+LMB-drag
+ * gesture in CanvasViewport (lasso). The `BoxSelectOverlay` mounted
+ * at AppShell level reads this store to render the in-progress shape
+ * and run the actual selection on commit.
  *
  * Two kinds — `'box'` for axis-aligned rectangle drag,
  * `'lasso'` for freehand polygon drag.
@@ -20,6 +19,11 @@
  *   - `editPartId`      — when mode === 'edit', the part whose vertex
  *                         set we're editing. Captured at begin so a
  *                         selection change mid-drag doesn't redirect.
+ *   - `gestureModifier` — modifier captured at gesture start. Used by
+ *                         lasso (Ctrl is the gesture-starter so it
+ *                         can't double as a commit-time modifier);
+ *                         null for box (modifier read at release).
+ *                         `'add' | 'subtract' | null`.
  *
  * Box-only slots:
  *   - `startClient`     — viewport-px start of the rect
@@ -31,7 +35,8 @@
  *                         `begin`. Closed automatically on commit.
  *
  * Modal contract:
- *   - `begin({kind, mode, editPartId, startClient})` opens the modal
+ *   - `begin({kind, mode, editPartId, startClient, gestureModifier?})`
+ *     opens the modal
  *   - `update(client)` updates currentClient (box) or appends to path (lasso)
  *   - `commit()` clears the modal — the consumer (overlay) does the
  *     actual selection write before calling commit
@@ -45,6 +50,7 @@ import { create } from 'zustand';
 /**
  * @typedef {('box'|'lasso')} SelectKind
  * @typedef {('object'|'edit')} SelectMode
+ * @typedef {('add'|'subtract'|null)} GestureModifier
  *
  * @typedef {Object} BoxSelectState
  * @property {SelectKind|null} kind
@@ -53,7 +59,8 @@ import { create } from 'zustand';
  * @property {{x:number, y:number}|null} startClient
  * @property {{x:number, y:number}|null} currentClient
  * @property {Array<{x:number, y:number}>} pathClient
- * @property {(args: {kind: SelectKind, mode: SelectMode, editPartId: string|null, startClient: {x:number,y:number}}) => void} begin
+ * @property {GestureModifier} gestureModifier
+ * @property {(args: {kind: SelectKind, mode: SelectMode, editPartId: string|null, startClient: {x:number,y:number}, gestureModifier?: GestureModifier}) => void} begin
  * @property {(client: {x:number, y:number}) => void} update
  * @property {() => void} commit
  * @property {() => void} cancel
@@ -67,14 +74,16 @@ export const useBoxSelectStore = create((set) => ({
   startClient: null,
   currentClient: null,
   pathClient: [],
+  gestureModifier: null,
 
-  begin: ({ kind, mode, editPartId, startClient }) => set({
+  begin: ({ kind, mode, editPartId, startClient, gestureModifier = null }) => set({
     kind,
     mode,
     editPartId,
     startClient,
     currentClient: { x: startClient.x, y: startClient.y },
     pathClient: kind === 'lasso' ? [{ x: startClient.x, y: startClient.y }] : [],
+    gestureModifier,
   }),
 
   update: (client) => set((s) => {
@@ -100,10 +109,12 @@ export const useBoxSelectStore = create((set) => ({
   commit: () => set({
     kind: null, mode: null, editPartId: null,
     startClient: null, currentClient: null, pathClient: [],
+    gestureModifier: null,
   }),
 
   cancel: () => set({
     kind: null, mode: null, editPartId: null,
     startClient: null, currentClient: null, pathClient: [],
+    gestureModifier: null,
   }),
 }));

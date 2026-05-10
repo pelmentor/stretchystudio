@@ -30,10 +30,12 @@ const PE_KEY = 'v3.prefs.proportionalEdit';
 const VLP_KEY = 'v3.prefs.viewLayerPresets';
 const LOM_KEY = 'v3.prefs.lockObjectModes';
 const LTM_KEY = 'v3.prefs.lastToolByMode';
-/** V2 Phase D-5 — eval-engine selector. `'classic'` (default) is the
- *  only engine that drives the viewport tick today. `'depgraph'` is
- *  retained as opt-in for future render-side wiring; it has no
- *  production effect under the current flag-gated reads. */
+/** Animation Plan Phase 0.D.0 — eval-engine selector. `'classic'`
+ *  (default) routes the viewport tick through chainEval's `evalRig`.
+ *  `'depgraph'` routes through `evalProjectFrameViaDepgraph` (Phase
+ *  0.D.0 wire-in + Phase 0.D armature port). Default flip from
+ *  `'classic'` → `'depgraph'` is gated on the user-side manual byte-
+ *  fidelity sweep on Shelby + test_image4 PSDs. */
 const EVAL_KEY = 'v3.prefs.evalEngine';
 
 const PE_DEFAULT = Object.freeze({
@@ -153,10 +155,12 @@ export const usePreferencesStore = create((set, get) => ({
     }
     return loaded;
   })(),
-  /** V2 Phase D-5 evalEngine selector — `'classic' | 'depgraph'`.
-   *  Default `'classic'` (chainEval is the production engine). The
-   *  `'depgraph'` opt-in has no production-side reader today; it
-   *  remains as a hook for future render-side wiring. */
+  /** Animation Plan Phase 0.D.0 evalEngine selector — `'classic' | 'depgraph'`.
+   *  Default `'classic'` (chainEval). `'depgraph'` is fully wired into
+   *  the viewport tick (CanvasViewport → `evalProjectFrameViaDepgraph`)
+   *  with bone post-chain skinning + ART_MESH_EVAL kernel; flipping the
+   *  default to `'depgraph'` is the Phase 0.D exit gate, blocked on a
+   *  user-side manual byte-fidelity sweep against Shelby + test_image4. */
   evalEngine: (loadJsonScalar(EVAL_KEY, 'classic') === 'depgraph') ? 'depgraph' : 'classic',
 
   setEvalEngine(v) {

@@ -72,8 +72,8 @@ import { create } from 'zustand';
  *     frames: ReadonlyArray<{id?:string, vertexPositions?:Float32Array|number[]}>|null,
  *     finalVertsByPartId: Map<string, ReadonlyArray<{x:number,y:number}>>|null,
  *   }|null)|null} getCanvasHitContext
- *   Toolset Phase 1.A — bridge for the AppShell-mounted box / lasso
- *   select overlays. CanvasViewport stashes the latest chainEval frames
+ *   Toolset Phase 1.A — bridge for the AppShell-mounted BoxSelectOverlay
+ *   (which handles both box + lasso). CanvasViewport stashes the latest chainEval frames
  *   + composed verts in private refs each render; the overlay reads
  *   them through this bridge to project the modal rect / polygon
  *   through what the user actually sees, not the rest mesh. Returns

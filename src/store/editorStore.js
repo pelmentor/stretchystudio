@@ -644,4 +644,33 @@ export const useEditorStore = create((set) => ({
     const activeVertex = (av && av.partId === partId) ? null : av;
     return { selectedVertexIndices: next, activeVertex };
   }),
+
+  // ── Toolset Phase 0.A — read-only convenience helpers ───────────────
+  // Sugar over `state.selectedVertexIndices.get(partId)?.has(idx)` etc.
+  // Phase 4/5/6 consumers (merge / extrude / select linked) read these
+  // many times per dispatch; the helpers keep call sites tidy and are
+  // a single grep-target if the per-part Map shape ever changes.
+
+  /** True iff `partId` has `vertIndex` selected. Defensive on bad input. */
+  isVertexSelected: (partId, vertIndex) => {
+    if (typeof partId !== 'string' || !Number.isInteger(vertIndex)) return false;
+    const set = useEditorStore.getState().selectedVertexIndices.get(partId);
+    return set ? set.has(vertIndex) : false;
+  },
+
+  /** Number of selected vertices on `partId`. 0 when none. */
+  getSelectedVertexCount: (partId) => {
+    if (typeof partId !== 'string') return 0;
+    const set = useEditorStore.getState().selectedVertexIndices.get(partId);
+    return set ? set.size : 0;
+  },
+
+  /** Snapshot of selected vertex indices for `partId` as a sorted array.
+   *  Returns a fresh array each call — safe to mutate by the caller. */
+  getAllSelectedVertices: (partId) => {
+    if (typeof partId !== 'string') return [];
+    const set = useEditorStore.getState().selectedVertexIndices.get(partId);
+    if (!set || set.size === 0) return [];
+    return [...set].sort((a, b) => a - b);
+  },
 }));

@@ -106,7 +106,7 @@ function runDepgraphEval(project, paramInputs, dt) {
     const overrides = new Map(Object.entries(paramInputs));
     const ctx = evalDepGraph(graph, {
       project,
-      time: f * dt,
+      timeMs: f * dt * 1000,
       paramOverrides: overrides,
       // Provide physics ctx for kernel.
       ...({ physics: { state, paramSpecs, dtSeconds: dt } }),

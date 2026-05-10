@@ -46,7 +46,7 @@ function assertNear(a, b, eps, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 0]]) });
   const setup = ctx.outputs.get('R/GEOMETRY/ROTATION_SETUP_PROBE');
   assert(setup != null, 'root: setup produced');
@@ -96,7 +96,7 @@ function makeIdentityWarp(id, parent, w = 800, h = 600) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 0]]) });
   const setup = ctx.outputs.get('R/GEOMETRY/ROTATION_SETUP_PROBE');
   assert(setup != null, 'warp parent: setup produced');
@@ -128,7 +128,7 @@ function makeIdentityWarp(id, parent, w = 800, h = 600) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 1]]) });
   const matrix = ctx.outputs.get('R/GEOMETRY/MATRIX_BUILD');
   assert(matrix != null, 'matrix produced');
@@ -171,7 +171,7 @@ function makeIdentityWarp(id, parent, w = 800, h = 600) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 0]]) });
   const setup = ctx.outputs.get('C_rot/GEOMETRY/ROTATION_SETUP_PROBE');
   assert(setup != null, 'rotation-parented setup produced');

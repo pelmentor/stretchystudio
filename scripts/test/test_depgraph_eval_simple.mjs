@@ -45,11 +45,11 @@ function assertEq(actual, expected, name) {
 {
   const project = { parameters: [], nodes: [], animations: [], physicsRules: [] };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 1.5 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 1500 });
   // Find the TIME_TICK op output.
   for (const [name, value] of ctx.outputs) {
     if (name.startsWith('__time__/PARAMETERS/TIME_TICK')) {
-      assertEq(value, 1.5, 'TIME_TICK returns ctx.time');
+      assertEq(value, 1500, 'TIME_TICK returns ctx.timeMs');
     }
   }
 }
@@ -65,7 +65,7 @@ function assertEq(actual, expected, name) {
     nodes: [], animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   // Look up by op name suffix.
   let found = 0;
   for (const [name, value] of ctx.outputs) {
@@ -115,7 +115,7 @@ function assertEq(actual, expected, name) {
     nodes: [], animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   // Driver should compute B = A * 2 = 5 * 2 = 10. Then PARAM_EVAL B
   // picks up the override.
   let foundB = false;
@@ -152,7 +152,7 @@ function assertEq(actual, expected, name) {
     nodes: [], animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   // Issue: the driver kernel calls evaluateDriver which calls
   // resolveVariables → evaluateRnaPath (project, ...) → reads from
   // project.parameters[i].default. To make the cascade work the
@@ -193,8 +193,8 @@ function assertEq(actual, expected, name) {
     }],
   };
   const graph = buildDepGraph(project, { animation });
-  const ctx = evalDepGraph(graph, { project, time: 0.5, animation });
-  // FCurve at t=0.5 lerps 0→10 → 5.
+  const ctx = evalDepGraph(graph, { project, timeMs: 500, animation });
+  // FCurve at t=0.5s lerps 0→10 → 5 (timeMs=500 → 0.5s at FCurve boundary).
   for (const [name, value] of ctx.outputs) {
     if (name.includes('/PARAM_EVAL:P')) {
       assertNear(value, 5, 1e-6, 'PARAM_EVAL P = fcurve(t=0.5) = 5');
@@ -223,7 +223,7 @@ function assertEq(actual, expected, name) {
     nodes: [], animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   // Both PARAM_EVAL ops should still produce a value (cycle-broken
   // edges contribute nothing, so each driver sees the OTHER param's
   // default 1 from rnaPath → driver = 1 + 1 = 2).

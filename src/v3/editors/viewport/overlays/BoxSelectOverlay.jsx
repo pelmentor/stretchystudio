@@ -60,15 +60,16 @@ function clientToCanvas(rect, view, clientX, clientY) {
 }
 
 export function BoxSelectOverlay() {
-  const kind          = useBoxSelectStore((s) => s.kind);
-  const mode          = useBoxSelectStore((s) => s.mode);
-  const editPartId    = useBoxSelectStore((s) => s.editPartId);
-  const startClient   = useBoxSelectStore((s) => s.startClient);
-  const currentClient = useBoxSelectStore((s) => s.currentClient);
-  const pathClient    = useBoxSelectStore((s) => s.pathClient);
-  const update        = useBoxSelectStore((s) => s.update);
-  const commit        = useBoxSelectStore((s) => s.commit);
-  const cancel        = useBoxSelectStore((s) => s.cancel);
+  const kind            = useBoxSelectStore((s) => s.kind);
+  const mode            = useBoxSelectStore((s) => s.mode);
+  const editPartId      = useBoxSelectStore((s) => s.editPartId);
+  const startClient     = useBoxSelectStore((s) => s.startClient);
+  const currentClient   = useBoxSelectStore((s) => s.currentClient);
+  const pathClient      = useBoxSelectStore((s) => s.pathClient);
+  const gestureModifier = useBoxSelectStore((s) => s.gestureModifier);
+  const update          = useBoxSelectStore((s) => s.update);
+  const commit          = useBoxSelectStore((s) => s.commit);
+  const cancel          = useBoxSelectStore((s) => s.cancel);
 
   // Snapshot view for projection at commit. The store reads viewByMode
   // by ref so the overlay sees the same numbers CanvasViewport draws
@@ -90,11 +91,18 @@ export function BoxSelectOverlay() {
     function onMouseUp(e) {
       if (e.button !== 0) return;
       e.preventDefault();
+      // Phase 1.B-fix — for lasso, Ctrl is the gesture-starter so it
+      // can't double as a commit-time modifier. Use the modifier
+      // captured at gesture start (`gestureModifier`); fall back to
+      // commit-time read for box (where modifiers are pure compose).
+      const modifier = kind === 'lasso'
+        ? (gestureModifier ?? (e.shiftKey ? 'add' : 'replace'))
+        : (e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace');
       runCommit({
         kind, mode, editPartId, startClient,
         endClient: { x: e.clientX, y: e.clientY },
         pathClient,
-        modifier: e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace',
+        modifier,
       });
       commit();
     }
@@ -107,6 +115,17 @@ export function BoxSelectOverlay() {
     function onKeyDown(e) {
       if (e.key === 'Escape') {
         e.preventDefault();
+        cancel();
+        return;
+      }
+      // Toolset Phase 1.A — mid-drag A toggles "select all under" semantics
+      // (Blender pattern). Object Mode → select every visible part; Edit
+      // Mode → select every vertex of the active part. Modifier respected
+      // (Shift = add to existing selection; Ctrl = subtract from it).
+      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const selectAllModifier = e.shiftKey ? 'add' : 'replace';
+        runSelectAllUnder({ mode, editPartId, modifier: selectAllModifier });
         cancel();
       }
     }
@@ -340,13 +359,43 @@ function applyEditVertexSelection(partId, pickedIdx, modifier) {
   }
   editor.setVertexSelectionForPart(partId, next);
   // Active vertex: prefer the last picked when add/replace; on
-  // subtract, drop active if it was removed.
+  // subtract, drop active if it was just removed (deselectVertex
+  // is the only action that touches activeVertex on its own — the
+  // bulk setVertexSelectionForPart leaves activeVertex untouched).
   if (modifier !== 'subtract' && pickedIdx.length > 0) {
     editor.selectVertex(partId, pickedIdx[pickedIdx.length - 1], /* additive */ true);
   } else if (modifier === 'subtract'
              && editor.activeVertex?.partId === partId
              && !next.has(editor.activeVertex.vertIndex)) {
-    // setVertexSelectionForPart already cleared activeVertex when the
-    // active was filtered out — no-op here, kept for symmetry.
+    editor.deselectVertex(partId, editor.activeVertex.vertIndex);
   }
+}
+
+/**
+ * Toolset Phase 1.A — mid-drag `A` "select all under" semantics.
+ * Object Mode → every visible meshed part; Edit Mode → every vertex
+ * of the active part. Modifier composes against the existing
+ * selection (Shift = add; default = replace).
+ *
+ * @param {Object} args
+ * @param {'object'|'edit'} args.mode
+ * @param {string|null} args.editPartId
+ * @param {'replace'|'add'} args.modifier
+ */
+function runSelectAllUnder({ mode, editPartId, modifier }) {
+  const project = useProjectStore.getState().project;
+  if (mode === 'object') {
+    const ids = (project?.nodes ?? [])
+      .filter((n) => n?.type === 'part' && n.visible !== false)
+      .map((n) => n.id);
+    applyObjectSelection(ids, modifier);
+    return;
+  }
+  if (!editPartId) return;
+  const node = project.nodes.find((n) => n?.id === editPartId);
+  if (!node) return;
+  const mesh = getMesh(node, project);
+  if (!mesh || !Array.isArray(mesh.vertices) || mesh.vertices.length === 0) return;
+  const allIdx = Array.from({ length: mesh.vertices.length }, (_, i) => i);
+  applyEditVertexSelection(editPartId, allIdx, modifier);
 }

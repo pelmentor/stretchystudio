@@ -54,7 +54,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['ParamAngleZ', 15]]) });
   // KEYFORM_EVAL output: angle interpolated 0→30 at t=0.5 → 15.
   for (const [name, value] of ctx.outputs) {
@@ -85,7 +85,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 0]]) });
   for (const [name, value] of ctx.outputs) {
     if (name.includes('R/GEOMETRY/MATRIX_BUILD')) {
@@ -118,7 +118,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 1]]) });
   for (const [name, value] of ctx.outputs) {
     if (name.includes('R90/GEOMETRY/MATRIX_BUILD')) {
@@ -159,7 +159,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0,
+  const ctx = evalDepGraph(graph, { project, timeMs: 0,
     paramOverrides: new Map([['P', 0]]) });
   let geomOutput = null;
   for (const [name, value] of ctx.outputs) {
@@ -190,7 +190,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   for (const [name, value] of ctx.outputs) {
     if (name.includes('detached/GEOMETRY/GEOMETRY_EVAL_DEFORMED')) {
       assertEq(value?.modifierTrace?.length, 0, 'empty stack → empty trace');

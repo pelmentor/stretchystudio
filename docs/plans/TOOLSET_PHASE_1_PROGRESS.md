@@ -13,12 +13,68 @@ gesture, not just per-click.
 
 | Sub | What | Status |
 |-----|------|--------|
-| 1.A | `selection.boxSelect` (B chord) — modal rect; replace / Shift add / Ctrl subtract; works in Object + Edit Mode | ✅ SHIPPED (2026-05-10) |
-| 1.B | Lasso Select (`Ctrl+LMB-drag`) — modal polygon; even-odd fill rule; same modifiers; deferred dispatch preserves Edit-Mode shortest-path-pick on Ctrl+LMB-click | ✅ SHIPPED (2026-05-10) |
+| 1.A | `selection.boxSelect` (B chord) — modal rect; replace / Shift add / Ctrl subtract; mid-drag `A` = "select all under"; works in Object + Edit Mode | ✅ SHIPPED (2026-05-10) |
+| 1.B | Lasso Select (`Ctrl+LMB-drag`) — modal polygon; even-odd fill rule; modifier captured at gesture start (`gestureModifier`); deferred dispatch preserves Edit-Mode shortest-path-pick on Ctrl+LMB-click; works from empty Edit canvas | ✅ SHIPPED (2026-05-10) |
 | 1.C | Edit-Mode optimization for >5000 verts (quadtree) | ⏳ DEFERRED — current impl is O(n) per call. Will revisit when a real char hits the threshold |
 | 1.D | `BoxSelectOverlay.jsx` mounted in `CanvasArea` (handles both kinds via `boxSelectStore.kind`) | ✅ SHIPPED (2026-05-10) |
-| 1.E | 4 test files: object-mode AABB, edit-mode vertex-in-rect, lasso winding, modifier composition (65 assertions total) | ✅ SHIPPED (2026-05-10) |
+| 1.E | 4 test files + audit-fix regression suite: object-mode AABB, edit-mode vertex-in-rect, lasso winding, modifier composition, audit fixes (88 assertions total) | ✅ SHIPPED (2026-05-10) |
 | 1.F | Manual exit gate (browser-side; verified by user) | ⏳ PENDING |
+
+## Audit-driven follow-up (2026-05-10)
+
+After Phase 1 shipped, an independent audit caught 3 HIGH-severity
+bugs that have been fixed in a follow-up sweep:
+
+- **Lasso always-subtracted** — Ctrl was the gesture-starter and still
+  held at commit, so `e.ctrlKey` at release time always read true →
+  modifier always evaluated to `'subtract'`. Fixed by capturing the
+  modifier intent at gesture start (`gestureModifier`) in the lasso-
+  candidate setup, propagating through `boxSelectStore.begin`, and
+  preferring it on commit. Lasso default is now `'replace'`;
+  `Shift+Ctrl+LMB-drag` = `'add'`. Box-select still reads modifiers at
+  commit (Ctrl/Shift are pure compose modifiers there).
+- **Edit-Mode lasso-from-empty-canvas** — Ctrl+LMB on empty Edit canvas
+  fell into the `idx === -1` deselect-all branch BEFORE reaching the
+  lasso-candidate setup. Fixed by hoisting the Ctrl+LMB candidate setup
+  ABOVE the empty-canvas deselect; click fallback for empty-canvas Ctrl+
+  click is now a no-op (don't deselect a careful selection because the
+  user might be starting a lasso-add).
+- **`dispatchMeshWorker` missing invalidation** — `setMesh()` after a
+  mesh-worker remesh changes vertex count + indexing without invalidating
+  `selectedVertexIndices`. After a remesh, stale entries pointed at
+  random vertices. Fixed by adding `invalidateVertexSelectionForPart`
+  to the setMesh path.
+- **Mid-drag `A` toggle** — Plan §1.A explicitly named "Mid-drag: A
+  toggles 'select all under' semantics" but the `onKeyDown` handler
+  only handled Escape. Added: KeyA = select-all-under (Object Mode →
+  every visible meshed part; Edit Mode → every vertex of active part);
+  Shift+A = add-all-under to existing selection.
+- **3 read-only editorStore helpers** — `isVertexSelected`,
+  `getSelectedVertexCount`, `getAllSelectedVertices` named in plan §0.A
+  were missing entirely. Implemented; sugar over the per-part
+  `Map<partId, Set<number>>` for Phase 4/5/6 consumers.
+- **Doc drift** — stale `LassoSelectOverlay` plural references in
+  CanvasViewport + captureStore comments updated; lying "active vertex
+  cleared" comment in BoxSelectOverlay's subtract branch replaced with
+  an actual `deselectVertex` call.
+- **Plan checklist drift** — Animation plan exit checklist + grievance
+  map updated to drop the removed Phase 0.E AnimationTree dual-write
+  references.
+- **Animation `EvalContext.time` rename** — promised in plan §0.0 +
+  §0.D.0 example code, never done. Renamed to `timeMs` per Phase 0.0
+  canonical-ms declaration; kernels (TIME_TICK, FCURVE_EVAL,
+  ANIMATION_TRACK_EVAL) rebased; `evalProjectFrameViaDepgraph` now
+  accepts `{timeMs, animation}` and CanvasViewport passes the live
+  playhead + active anim through, so the depgraph branch's animation
+  kernels actually fire (were dead code at `time: 0`).
+- **Animation bone-target-bone pivot doubling** — `transformCompose`'s
+  `overlayTransform()` wrote `pose.x = composed.x` for bones, but
+  `composed.x = pivotX + pose.x_original`, so chained constraint
+  targets doubled the pivot. Fixed by subtracting pivot before writing
+  pose. Pinned by audit-fix regression test.
+
+Audit doc: [AUDIT_2026_05_10_TOOLSET.md](./AUDIT_2026_05_10_TOOLSET.md).
+Sister animation audit: [AUDIT_2026_05_10_ANIMATION.md](./AUDIT_2026_05_10_ANIMATION.md).
 
 ## What landed
 

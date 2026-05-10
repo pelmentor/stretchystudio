@@ -83,7 +83,11 @@ const KERNELS = {
 /**
  * @typedef {object} EvalContext
  * @property {object}  project    - projectStore.project snapshot
- * @property {number}  time       - current playhead time (seconds)
+ * @property {number}  timeMs     - current playhead time, milliseconds.
+ *   Phase 0.0 declared ms canonical throughout the eval substrate;
+ *   seconds appear only at the motion3.json + physics dt boundaries
+ *   (per `feedback_ms_canonical_animation_time` memory). Kernels that
+ *   need seconds compute `timeMs / 1000` at the call site.
  * @property {Map<string, number>} [paramOverrides] - per-param overrides
  *   that take precedence over `project.parameters[i].default`. Drivers
  *   write here so downstream PARAM_EVAL ops pick up the override.
@@ -124,7 +128,7 @@ export function evalDepGraph(graph, ctxIn) {
   /** @type {EvalContext} */
   const ctx = {
     project: ctxIn.project,
-    time: ctxIn.time ?? 0,
+    timeMs: ctxIn.timeMs ?? 0,
     paramOverrides: ctxIn.paramOverrides ?? new Map(),
     outputs: ctxIn.outputs ?? new Map(),
     animation: ctxIn.animation,

@@ -352,7 +352,7 @@ export default function CanvasViewport({
   // no-op). Stash the candidate; threshold-cross in onPointerMove
   // promotes to the lasso modal, pointerup-without-cross runs the
   // click fallback.
-  const lassoCandidateRef = useRef(/** @type {null | {startClient:{x:number,y:number}, mode:'object'|'edit', editPartId:string|null, onClickFallback:(()=>void)|null}} */ (null));
+  const lassoCandidateRef = useRef(/** @type {null | {startClient:{x:number,y:number}, mode:'object'|'edit', editPartId:string|null, onClickFallback:(()=>void)|null, gestureModifier:'add'|'subtract'|null}} */ (null));
 
   // Stable refs for imperative callbacks
   const editorRef = useRef(editorState);
@@ -895,7 +895,16 @@ export default function CanvasViewport({
             // shape so the rest of the tick is engine-agnostic.
             const _evalEngine = usePreferencesStore.getState().evalEngine;
             if (_evalEngine === 'depgraph') {
-              frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval);
+              // Audit fix (G-8) — propagate animation + currentTime so the
+              // depgraph's ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see
+              // the playhead. Without these the depgraph would always
+              // evaluate at t=0 and the depgraph branch's animation
+              // kernels would be dead code (still evaluating, but never
+              // producing keyframe-driven values).
+              frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval, {
+                animation: activeAnim,
+                timeMs: anim.currentTime,
+              });
             } else {
               frames = evalRig(_rigSpec, valuesForEval, evalOut ? { out: evalOut } : undefined);
             }
@@ -1526,6 +1535,14 @@ export default function CanvasViewport({
           }
 
           setMesh(node, { vertices, uvs: Array.from(uvs), triangles, edgeIndices }, proj);
+
+          // Toolset Phase 0.F — topology change. Vertex count + indexing
+          // change completely on remesh; existing `selectedVertexIndices`
+          // entries would point at random vertices. Invalidate before the
+          // user sees stale selection (audit fix: this path was missing
+          // the invalidation hook the add_vertex / remove_vertex paths
+          // already use).
+          useEditorStore.getState().invalidateVertexSelectionForPart(partId);
 
           // Compute skin weights if this part belongs to a limb.
           const parentGroup = proj.nodes.find(n => n.id === node.parent);
@@ -2252,48 +2269,64 @@ export default function CanvasViewport({
           const verts = selMesh.vertices;
           const idx = hitTestVertices(verts, lx, ly, threshold);
           const editorActions = useEditorStore.getState();
+          // Toolset Phase 1.B — Ctrl+LMB is the lasso gesture-starter.
+          // Defer dispatch so onPointerMove can promote on threshold
+          // cross. The click fallback runs at onPointerUp:
+          //   - vertex hit + active vertex set → BFS shortest-path-pick
+          //   - vertex hit + no active or unreachable → plain select
+          //   - empty canvas → no-op (don't deselect; user might be
+          //     starting a lasso to ADD verts to the selection)
+          //
+          // CRITICAL: this branch runs BEFORE the `idx < 0` deselect
+          // path so empty-canvas Ctrl+LMB-drag opens the lasso modal
+          // (audit fix: Edit-Mode lasso-from-empty-canvas was blocked
+          // by deselect-all swallowing the gesture).
+          if (e.ctrlKey || e.metaKey) {
+            const partId = selNode.id;
+            const verts0 = verts;
+            const tris0 = selMesh.triangles ?? [];
+            const clickedIdx = idx;
+            const onClickFallback = clickedIdx < 0
+              ? null  // empty-canvas Ctrl+click is a no-op (cancelled gesture)
+              : () => {
+                  const ed = useEditorStore.getState();
+                  const av = ed.activeVertex;
+                  if (av && av.partId === partId && av.vertIndex !== clickedIdx) {
+                    const adj = buildVertexAdjacency(tris0, verts0.length);
+                    const path = shortestPathBetweenVertices(adj, av.vertIndex, clickedIdx);
+                    if (path) {
+                      const cur = ed.selectedVertexIndices.get(partId);
+                      const merged = new Set(cur ?? []);
+                      for (const p of path) merged.add(p);
+                      ed.setVertexSelectionForPart(partId, merged);
+                      ed.selectVertex(partId, clickedIdx, /* additive */ true);
+                      return;
+                    }
+                  }
+                  ed.selectVertex(partId, clickedIdx, /* additive */ false);
+                };
+            lassoCandidateRef.current = {
+              startClient: { x: e.clientX, y: e.clientY },
+              mode: 'edit',
+              editPartId: partId,
+              onClickFallback,
+              // Toolset Phase 1.B-fix — Ctrl is the gesture-starter for
+              // lasso so it can't double as a commit-time modifier.
+              // Capture intent at pointerdown: Shift held alongside Ctrl
+              // → 'add'; Ctrl-only → null (defaults to 'replace' on
+              // commit). 'subtract' lasso isn't reachable in Edit Mode
+              // (Alt+LMB is pan); use box-Ctrl for that semantic.
+              gestureModifier: e.shiftKey ? 'add' : null,
+            };
+            canvas.setPointerCapture(e.pointerId);
+            return;
+          }
           if (idx < 0) {
             // LMB on empty space → deselect all for this part. Matches
             // Object Mode click-to-deselect behaviour. Shift+LMB on
             // empty space is a no-op (don't accidentally drop a careful
             // multi-select build).
             if (!e.shiftKey) editorActions.deselectAllVertices(selNode.id);
-            return;
-          }
-          if (e.ctrlKey || e.metaKey) {
-            // Toolset Phase 1.B — Ctrl+LMB is overloaded: a click runs
-            // Blender `mesh.shortest_path_pick` (BFS path from active
-            // to clicked); a drag opens the lasso modal. Defer dispatch
-            // so onPointerMove can promote on threshold cross and
-            // onPointerUp can run the click fallback below.
-            const partId = selNode.id;
-            const verts0 = verts;
-            const tris0 = selMesh.triangles ?? [];
-            const clickedIdx = idx;
-            const onClickFallback = () => {
-              const ed = useEditorStore.getState();
-              const av = ed.activeVertex;
-              if (av && av.partId === partId && av.vertIndex !== clickedIdx) {
-                const adj = buildVertexAdjacency(tris0, verts0.length);
-                const path = shortestPathBetweenVertices(adj, av.vertIndex, clickedIdx);
-                if (path) {
-                  const cur = ed.selectedVertexIndices.get(partId);
-                  const merged = new Set(cur ?? []);
-                  for (const p of path) merged.add(p);
-                  ed.setVertexSelectionForPart(partId, merged);
-                  ed.selectVertex(partId, clickedIdx, /* additive */ true);
-                  return;
-                }
-              }
-              ed.selectVertex(partId, clickedIdx, /* additive */ false);
-            };
-            lassoCandidateRef.current = {
-              startClient: { x: e.clientX, y: e.clientY },
-              mode: 'edit',
-              editPartId: partId,
-              onClickFallback,
-            };
-            canvas.setPointerCapture(e.pointerId);
             return;
           }
           if (e.shiftKey) {
@@ -2451,12 +2484,17 @@ export default function CanvasViewport({
     // Mode, so the click fallback is a no-op — pure additive behaviour
     // for a previously ignored modifier). Threshold-cross in
     // onPointerMove promotes to the lasso modal.
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+    //
+    // Phase 1.B-fix — Shift held alongside Ctrl is captured as
+    // `gestureModifier: 'add'`; Ctrl-only defaults to 'replace' at
+    // commit. Alt is excluded (Alt+LMB is pan).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       lassoCandidateRef.current = {
         startClient: { x: e.clientX, y: e.clientY },
         mode: 'object',
         editPartId: null,
         onClickFallback: null,
+        gestureModifier: e.shiftKey ? 'add' : null,
       };
       canvas.setPointerCapture(e.pointerId);
       return;
@@ -2531,6 +2569,7 @@ export default function CanvasViewport({
           mode: lc.mode,
           editPartId: lc.editPartId,
           startClient: lc.startClient,
+          gestureModifier: lc.gestureModifier ?? null,
         });
         // Replay the move so the path picks up where we left off.
         useBoxSelectStore.getState().update({ x: e.clientX, y: e.clientY });
@@ -2989,14 +3028,15 @@ export default function CanvasViewport({
 
   useEffect(() => { if (exportCaptureRef) exportCaptureRef.current = captureExportFrame; }, [exportCaptureRef, captureExportFrame]);
 
-  /* ── Hit-context bridge for box / lasso select overlays ─────────────── */
-  // Toolset Phase 1.A — the AppShell-mounted BoxSelectOverlay /
-  // LassoSelectOverlay need the latest chainEval frames + composed
-  // verts to project their modal rect / polygon through what the user
-  // actually sees. Refs are component-internal so we publish a getter
-  // closure (returns fresh values on each call) into captureStore.
-  // CanvasArea wires this through hitContextRef same shape as
-  // exportCaptureRef so unmount cleanup is symmetric.
+  /* ── Hit-context bridge for the box / lasso select overlay ──────────── */
+  // Toolset Phase 1.A — the AppShell-mounted `BoxSelectOverlay`
+  // (handles both kinds via boxSelectStore.kind) needs the latest
+  // chainEval frames + composed verts to project its modal rect /
+  // polygon through what the user actually sees. Refs are component-
+  // internal so we publish a getter closure (returns fresh values on
+  // each call) into captureStore. CanvasArea wires this through
+  // hitContextRef same shape as exportCaptureRef so unmount cleanup
+  // is symmetric.
   const getHitContext = useCallback(() => ({
     canvasEl: canvasRef.current,
     frames: lastEvalCacheRef.current?.frames ?? null,

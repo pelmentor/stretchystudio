@@ -1640,9 +1640,10 @@ Phase 0:
   [ ] driverPass wired into tick; integration test green
   [ ] constraints wired into matrix kernel; integration test green
   [ ] depgraph default flipped; classic kept as opt-out
-  [ ] AnimationTree dual-write; test_animationTree_dualwrite green
   [ ] Memory entry: 'DepGraph is production'
   [ ] Byte-fidelity sweep green
+  (AnimationTree dual-write entry removed — Phase 0.E was dropped in v2
+   per audit "migration baggage" feedback; see §Phase 0.E for rationale.)
 
 Phase 1:
   [ ] Schema v33; migration v32→v33 round-trip
@@ -1730,7 +1731,7 @@ Phase 8:
 | K — No per-FCurve extrapolation mode | Phase 3 (Cycles) + Phase 5 (UI) |
 | L — No channel grouping / filter in Timeline | Phase 6 (Dopesheet) |
 | M — No animation preview separation | Phase 0 (DepGraph eval result map) |
-| N — AnimationTree shadow copy | Phase 0.E (dual-write) + Phase 8 (retire) |
+| N — AnimationTree shadow copy | Phase 8 (retire) — Phase 0.E dual-write was dropped in v2 audit as migration baggage |
 | O — No "what drives this" UI | Phase 5 (Graph Editor driver banner) |
 | P — Keyform vs animation conflated | Phase 1 (RNA-path namespace separation in actionData) |
 | Q — Time unit inconsistency | Phase 8 (audit + canonical seconds throughout) |

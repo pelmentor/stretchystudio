@@ -109,8 +109,9 @@ export function buildNodes(graph, project, opts) {
   }
 
   // Per-part IDNodes. GEOMETRY_EVAL_DEFORMED iterates the modifier
-  // stack at eval time. TRANSFORM op reserved for parts that have
-  // bone-driven transforms (Phase D-3a will populate it).
+  // stack at eval time. The TRANSFORM op for parts/groups is added
+  // separately below at lines 124-135 (Phase 0.C — TRANSFORM_COMPOSE
+  // for constraints).
   // Phase 0.D.0 — ART_MESH_EVAL is the production-shape op that emits
   // {id, vertexPositions, opacity, drawOrder} matching evalRig.
   for (const node of project.nodes ?? []) {

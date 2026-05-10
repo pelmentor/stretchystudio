@@ -38,7 +38,7 @@ function readCompose(ctx, ownerId, ownerType = 'group') {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: new Map() });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: new Map() });
   const out = readCompose(ctx, 'A');
   assert(out, 'passthrough: TRANSFORM_COMPOSE produced an output');
   assert(out && approx(out.transform.x, 100), 'passthrough: x=100');
@@ -67,7 +67,7 @@ function readCompose(ctx, ownerId, ownerType = 'group') {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: new Map() });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: new Map() });
   const out = readCompose(ctx, 'owner');
   assert(out && approx(out.transform.x, 250), 'COPY_LOCATION: x copied from target');
   assert(out && approx(out.transform.y, 175), 'COPY_LOCATION: y copied from target');
@@ -101,7 +101,7 @@ function readCompose(ctx, ownerId, ownerType = 'group') {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: new Map() });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: new Map() });
   const outA = readCompose(ctx, 'A');
   const outB = readCompose(ctx, 'B');
   assert(outB && approx(outB.transform.x, 999), 'chain: B inherits 999 from C');
@@ -126,7 +126,7 @@ function readCompose(ctx, ownerId, ownerType = 'group') {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: new Map() });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: new Map() });
   const out = readCompose(ctx, 'limited');
   assert(out && approx(out.transform.rotation, 0.5),
     'LIMIT_ROTATION: 1.5 clamped to max 0.5',
@@ -153,7 +153,7 @@ function readCompose(ctx, ownerId, ownerType = 'group') {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0, paramOverrides: new Map() });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0, paramOverrides: new Map() });
   const out = readCompose(ctx, 'owner');
   assert(out && approx(out.transform.x, 7) && approx(out.transform.y, 8),
     'disabled constraint: authored transform passes through');

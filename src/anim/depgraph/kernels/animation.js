@@ -18,7 +18,7 @@
  * animation-track identifier (`<paramId>` for parameter tracks,
  * `<nodeId>/<property>` for pose tracks). The kernel reads the
  * matching track from `ctx.animation.tracks[]`, calls
- * `interpolateTrack` at `ctx.time`, and writes:
+ * `interpolateTrack` at `ctx.timeMs`, and writes:
  *
  *   - paramId track  → `ctx.paramOverrides.set(paramId, value)`.
  *     PARAM_EVAL kernel downstream picks this up.
@@ -65,15 +65,18 @@ export function kernelAnimationTrackEval(op, ctx) {
   if (track.property === 'mesh_verts') return undefined;
 
   // Track shape detection:
-  //   - SS animation track: `keyframes[] = [{time(ms), value, easing}]`
-  //   - FCurve (Phase 5 scaffold): `keyforms[] = [{time(s), value, type?}]`
-  // ctx.time is in seconds; SS animation engine works in ms.
+  //   - SS animation track: `keyframes[] = [{time(ms), value, easing}]` —
+  //     consumed natively in ms (no conversion needed; ctx.timeMs is ms)
+  //   - FCurve (Phase 5 scaffold): `keyforms[] = [{time(s), value, type?}]` —
+  //     boundary conversion to seconds for evaluateFCurve, which expects
+  //     seconds (motion3.json compatible). One of the two boundary points
+  //     declared canonical in Phase 0.0.
   let value;
   if (Array.isArray(track.keyframes)) {
-    const timeMs = (ctx.time ?? 0) * 1000;
-    value = interpolateTrack(track.keyframes, timeMs, false, 0);
+    value = interpolateTrack(track.keyframes, ctx.timeMs ?? 0, false, 0);
   } else if (Array.isArray(track.keyforms)) {
-    value = evaluateFCurve(track, ctx.time ?? 0, { project: ctx.project });
+    const timeSeconds = (ctx.timeMs ?? 0) / 1000;
+    value = evaluateFCurve(track, timeSeconds, { project: ctx.project });
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 

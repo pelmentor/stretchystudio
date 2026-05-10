@@ -61,7 +61,7 @@ function assertNear(a, b, eps, name) {
   };
   const graph2 = buildDepGraph(project, { animation: bridged });
   const ctx = evalDepGraph(graph2, {
-    project, time: timeMs / 1000, animation: bridged,
+    project, timeMs, animation: bridged,
   });
   const dep = ctx.paramOverrides.get('ParamSmile');
   assertNear(dep, refValue, 1e-6,
@@ -90,7 +90,7 @@ function assertNear(a, b, eps, name) {
   const graph = buildDepGraph(project, { animation: bridged });
   const poseOverrides = new Map();
   const ctx = evalDepGraph(graph, {
-    project, time: 0.5, animation: bridged, poseOverrides,
+    project, timeMs: 500, animation: bridged, poseOverrides,
   });
   const faceMap = poseOverrides.get('face');
   assert(faceMap instanceof Map, 'pose track: poseOverrides has face entry');
@@ -129,7 +129,7 @@ function assertNear(a, b, eps, name) {
   const graph = buildDepGraph(project, { animation: bridged });
   const poseOverrides = new Map();
   evalDepGraph(graph, {
-    project, time: 0.5, animation: bridged, poseOverrides,
+    project, timeMs: 500, animation: bridged, poseOverrides,
   });
   // ANIMATION_TRACK_EVAL skips mesh_verts (returns undefined).
   // poseOverrides.face should NOT carry the mesh_verts entry.

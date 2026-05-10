@@ -118,6 +118,14 @@ function makeProjectView(ctx, self) {
  * applicable) carries the depgraph-composed values. The clone is
  * read-only — we never write back to `ctx.project`.
  *
+ * For bones: the composed `t.x / t.y` is in canvas-pivot frame
+ * (`effectiveTransform` for a bone returns `pivotX + pose.x` — see
+ * constraints.js:171). To round-trip back to a pose-shape value we
+ * must SUBTRACT the pivot before writing pose.x/y; otherwise a
+ * downstream constraint that reads this overlaid node via
+ * `effectiveTransform` would re-add the pivot and double it
+ * (audit fix G-13: bone-target-bone constraint chain pivot doubling).
+ *
  * @param {object} node
  * @param {Transform2D} t
  * @returns {object}
@@ -125,9 +133,18 @@ function makeProjectView(ctx, self) {
 function overlayTransform(node, t) {
   const isBone = node.type === 'group' && typeof node.boneRole === 'string';
   if (isBone) {
+    const pivotX = node.transform?.pivotX ?? 0;
+    const pivotY = node.transform?.pivotY ?? 0;
     return {
       ...node,
-      pose: { ...(node.pose ?? {}), rotation: t.rotation, x: t.x, y: t.y, scaleX: t.scaleX, scaleY: t.scaleY },
+      pose: {
+        ...(node.pose ?? {}),
+        rotation: t.rotation,
+        x:        t.x - pivotX,
+        y:        t.y - pivotY,
+        scaleX:   t.scaleX,
+        scaleY:   t.scaleY,
+      },
     };
   }
   return {

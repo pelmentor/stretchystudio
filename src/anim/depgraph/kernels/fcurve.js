@@ -4,8 +4,10 @@
  * FCURVE_EVAL kernel.
  *
  * Phase D-2 of the V2 plan. Evaluates a single FCurve at the current
- * `ctx.time` and writes the result to `ctx.paramOverrides` so the
- * downstream PARAM_EVAL op picks it up.
+ * `ctx.timeMs` (converted to seconds at the call site — `evaluateFCurve`
+ * is the motion3.json boundary that consumes seconds) and writes the
+ * result to `ctx.paramOverrides` so the downstream PARAM_EVAL op picks
+ * it up.
  *
  * The op's `tag` carries the binding identity — for animation tracks
  * the convention is `<targetId>/<property>` (matches the
@@ -38,7 +40,8 @@ export function kernelFCurveEval(op, ctx) {
   const fcurve = tracks.find((t) =>
     t?.targetId === targetId && (t.property ?? 'value') === property);
   if (!fcurve) return NaN;
-  const v = evaluateFCurve(fcurve, ctx.time, { project: ctx.project });
+  const timeSeconds = (ctx.timeMs ?? 0) / 1000;
+  const v = evaluateFCurve(fcurve, timeSeconds, { project: ctx.project });
   if (typeof v === 'number' && Number.isFinite(v)) {
     ctx.paramOverrides?.set(targetId, v);
     return v;

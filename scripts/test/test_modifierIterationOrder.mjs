@@ -151,7 +151,7 @@ function assertEq(actual, expected, name) {
     animations: [], physicsRules: [],
   };
   const graph = buildDepGraph(project, {});
-  const ctx = evalDepGraph(graph, { project, time: 0 });
+  const ctx = evalDepGraph(graph, { project, timeMs: 0 });
   // GEOMETRY_EVAL_DEFORMED ran for face.
   let foundGeom = false;
   for (const [name, value] of ctx.outputs) {
