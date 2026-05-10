@@ -157,13 +157,31 @@ export const DEFAULT_KEYMAP = {
 
   // Toolset Phase 6.A — Select Linked. Bare `L` flood-fills from the
   // vertex under the cursor (Blender's `MESH_OT_select_linked_pick`,
-  // `editmesh_select.cc:5070+`). `Ctrl+L` expands the current selection
-  // to its full connected components (Blender's `MESH_OT_select_linked`,
-  // `editmesh_select.cc:5188+`). Both are Edit-Mode only — operator
+  // `editmesh_select.cc:4503-4536` operator def + `:4467-4501` exec
+  // + `:4383-4465` invoke / cursor hit-test path. Audit D-9 corrected
+  // a pre-existing wrong cite at `:5070+` which is the unrelated
+  // `bm_step_to_next_selected_vert_in_chain` deselect-walker helper).
+  // `Shift+L` deselects the linked region under the cursor (audit fix
+  // D-2 — `RNA_def_boolean(ot->srna, "deselect", false, …)` on the
+  // same operator at `editmesh_select.cc:4520`; Blender keymap binding
+  // at `blender_default.py:5557-5558`).
+  // `Ctrl+L` expands the current selection to its full connected
+  // components (Blender's `MESH_OT_select_linked`,
+  // `editmesh_select.cc:4226-4253`). Edit-Mode only — operator
   // availability gate handles the no-op case.
-  'KeyL':       'select.linked.cursor',
-  'Ctrl+KeyL':  'select.linked.expand',
-  'Meta+KeyL':  'select.linked.expand',
+  //
+  // Audit D-12 (DOCUMENT-AS-DEVIATION): Object Mode `Ctrl+L` in Blender
+  // opens `VIEW3D_MT_make_links` (`blender_default.py:4530`) — Link
+  // Object Data / Materials / Animation Data / Collection / Modifiers
+  // etc. SS does not implement Make Links; the chord silently no-ops
+  // outside Edit Mode. A Blender muscle-memory user pressing Ctrl+L in
+  // Object Mode will see no feedback. When the Make Links operator
+  // ships (post-Phase 6+), bind it here as the Object-Mode branch of
+  // `Ctrl+L`.
+  'KeyL':         'select.linked.cursor',
+  'Shift+KeyL':   'select.linked.cursor.deselect',
+  'Ctrl+KeyL':    'select.linked.expand',
+  'Meta+KeyL':    'select.linked.expand',
 
   // Toolset Phase 6.B — Duplicate. `Shift+D` is Blender's universal
   // "duplicate selection then translate" macro. Mode-aware dispatch
@@ -186,9 +204,18 @@ export const DEFAULT_KEYMAP = {
 
   // Toolset Phase 6.D — Circle Select. `C` chord opens the modal
   // cursor-circle paint selection (Blender's `VIEW3D_OT_select_circle`,
-  // `view3d_select.cc:3470+`). Wheel adjusts radius; LMB-drag paints;
-  // Shift+LMB-drag subtracts. Mode-aware: Edit Mode picks verts on the
-  // active part; Object Mode picks parts under the circle.
+  // audit D-10 cite fix: `view3d_select.cc:5706-5725` operator def +
+  // `:5596-5704` exec + `wm_gesture_ops.cc:349-447`
+  // `WM_gesture_circle_modal` for the modal lifecycle. Pre-fix cite at
+  // `:3470+` was grease-pencil curves selection, unrelated). Wheel
+  // adjusts radius (audit D-1 fix: wheel-up SHRINKS, wheel-down GROWS,
+  // matching Blender's `WHEELUPMOUSE = SUBTRACT` /
+  // `WHEELDOWNMOUSE = ADD` modal map at
+  // `blender_default.py:6241-6243`). LMB-drag paints; Shift+LMB-drag
+  // and MMB-drag both subtract (audit D-5 fix:
+  // `MIDDLEMOUSE = DESELECT` at `blender_default.py:6239`). Mode-aware:
+  // Edit Mode picks verts on the active part; Object Mode picks parts
+  // under the circle.
   'KeyC': 'selection.circleSelect',
 };
 

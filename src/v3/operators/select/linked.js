@@ -8,15 +8,25 @@
  * vertex-only mesh model:
  *
  *   - `selectLinkedFromVertex(mesh, originIdx)` — flood-fill from one
- *     vertex along edge-adjacency. Mirrors Blender's `select_linked_pick`
- *     (`reference/blender/source/blender/editors/mesh/editmesh_select.cc:5070+`)
- *     called via the `L` cursor chord. Pre-fix the user clicks on a
- *     mesh under the cursor; we hit-test for the nearest vertex first.
+ *     vertex along edge-adjacency. Mirrors Blender's
+ *     `MESH_OT_select_linked_pick` operator
+ *     (`reference/blender/source/blender/editors/mesh/editmesh_select.cc:4503-4536`
+ *     definition + `:4467-4501` exec callback `edbm_select_linked_pick_exec`
+ *     + `:4383-4465` invoke `edbm_select_linked_pick_invoke` which holds
+ *     the cursor hit-test path). Audit D-9 corrected a pre-existing
+ *     wrong cite at `:5070+`, which is `bm_step_to_next_selected_vert_in_chain`
+ *     (a deselect-nth walker helper, unrelated). The operator's
+ *     `deselect` RNA bool (`editmesh_select.cc:4520`) flips the BMW walker's
+ *     selection bit so the same flood-fill runs but inverted — that's
+ *     the Shift+L "deselect linked" path; SS exposes it via the
+ *     `select.linked.cursor.deselect` operator (audit fix D-2).
  *
  *   - `selectLinkedExpandSelection(mesh, currentSel)` — expand each
  *     vertex in the existing selection to its full connected component.
- *     Mirrors Blender's `MESH_OT_select_linked` (the `Ctrl+L` chord)
- *     which operates on the existing selection rather than the cursor.
+ *     Mirrors Blender's `MESH_OT_select_linked`
+ *     (`editmesh_select.cc:4226-4253` operator def + `:4016+` exec) —
+ *     the `Ctrl+L` chord, operates on the existing selection rather
+ *     than the cursor.
  *
  * **Adjacency.** Re-uses `buildVertexAdjacency` from
  * [src/io/hitTest.js](../../../io/hitTest.js) which interprets each
@@ -34,6 +44,31 @@
  * them as connected (no area threshold in `select_linked_walk`). A
  * Live2D seam triangle linking two halves of a clip mask would, in
  * Blender, propagate the L-chord across the seam, and we mirror that.
+ *
+ * **Audit D-3 (DOCUMENT-AS-DEVIATION) — `delimit` enum unsupported.**
+ * Blender's `MESH_OT_select_linked` exposes a `delimit` enum-flag RNA
+ * property (`editmesh_select.cc:4242-4252`, defaulting to `BMO_DELIM_SEAM`)
+ * that stops the BFS at edges marked SEAM / SHARP / NORMAL (above an
+ * angle threshold) / MATERIAL boundary / UV island boundary. The walker
+ * `select_linked_delimit_test` (`editmesh_select.cc:3903`) implements
+ * the per-edge filter. Live2D meshes have NO per-edge marks (no SEAM /
+ * SHARP / NORMAL / MATERIAL flags exist in the data model; UV islands
+ * are present in `mesh.uvs` but the art-mesh model doesn't track per-
+ * edge UV breaks), so the entire `delimit` mechanism has no analogue.
+ * SS's "connected component = single BFS reachable set" is fundamentally
+ * simpler because the data model is simpler. Once shape-key / UV-seam
+ * concepts land (post-Phase 6+), revisit and add per-flag delimit.
+ *
+ * **Audit D-4 (DOCUMENT-AS-DEVIATION) — vert-only cursor hit-test.**
+ * Blender's `edbm_select_linked_pick_invoke`
+ * (`editmesh_select.cc:4383-4465`) calls `unified_findnearest`
+ * (`:4427`) which returns the closest BMVert / BMEdge / BMFace under
+ * the cursor based on the active `em->selectmode`, then
+ * `EDBM_elem_from_selectmode` (`:4444`) picks the appropriate seed.
+ * SS hit-tests verts only because there is no edge or face select mode
+ * yet (vertex-only). When edge / face select mode lands (Phase 6+ in
+ * the larger plan), the seed hit-test will need a multi-element
+ * variant.
  *
  * **Triangle storage shape.** SS meshes store triangles as either a
  * flat `[i, j, k, i, j, k, …]` indices array or as nested

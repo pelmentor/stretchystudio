@@ -45,9 +45,20 @@ import {
 } from './select/linked.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
-import { discardBatch } from '../../store/undoHistory.js';
+import { discardBatch, endBatch } from '../../store/undoHistory.js';
 import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
 import { hitTestVertices } from '../../io/hitTest.js';
+import { clientToCanvasXY } from '../editors/viewport/viewportMath.js';
+// Audit fix G-1 — eager-import the Armature Modifier service so
+// `apply.armatureModifier`'s exec is synchronous. Pre-fix the dynamic
+// `await import(...)` made the operator async; the dispatcher fires
+// `op.exec(...)` without await, so any error after the await would be
+// an unhandled rejection invisible to the user. Eager-import keeps the
+// dispatcher's existing try/catch in scope and removes a foot-gun.
+// Bundle-weight cost is the service's transitive imports (selectRigSpec
+// + chainEval + boneOverlayMatrix + boneSkinning) which are already
+// pulled in by CanvasViewport's eager import path — net no new chunks.
+import { applyArmatureModifier } from '../../services/ArmatureModifierService.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
 import {
@@ -977,7 +988,12 @@ function registerBuiltins() {
   /** Translate a client-px point to canvas-local coords using the
    *  active viewport's pan + zoom. Returns null when the canvas DOM
    *  isn't available (test environment) or the viewport view slot is
-   *  missing. Centralizes the same pattern used by edit.mergeMenu. */
+   *  missing. Centralizes the same pattern used by edit.mergeMenu.
+   *
+   *  Audit fix G-8 — math itself is delegated to `clientToCanvasXY`
+   *  in `viewportMath.js`. This wrapper only handles the DOM/store
+   *  query the math helper deliberately doesn't depend on (so the
+   *  math stays unit-testable without DOM). */
   function clientToCanvas(client) {
     if (typeof document === 'undefined') return null;
     const canvas = /** @type {HTMLCanvasElement|null} */ (document.querySelector('canvas'));
@@ -985,47 +1001,80 @@ function registerBuiltins() {
     const rect = canvas.getBoundingClientRect();
     const view = useEditorStore.getState().viewByMode?.viewport;
     if (!view) return null;
-    return {
-      x: (client.x - rect.left - view.panX) / view.zoom,
-      y: (client.y - rect.top  - view.panY) / view.zoom,
-    };
+    const [x, y] = clientToCanvasXY(rect, view, client.x, client.y);
+    return { x, y };
   }
 
   // Phase 6.A — Select Linked (cursor): hit-test the nearest vert from
   // the cursor on the active edit part, then flood-fill from it.
-  // Mirrors Blender's `MESH_OT_select_linked_pick` (`L` chord).
+  // Mirrors Blender's `MESH_OT_select_linked_pick`
+  // (audit D-9 cite fix: `editmesh_select.cc:4503-4536` operator def +
+  // `:4467-4501` exec + `:4383-4465` invoke / cursor hit-test path).
   // Threshold uses the same world-space radius as Phase 0.B's vertex
   // click hit-test (so the user-tunable selection feels consistent).
+  //
+  // Audit fix D-2 — `runSelectLinkedCursor(deselect)` factors the
+  // common path so the `L` (select) and `Shift+L` (deselect) chords
+  // share one implementation. Mirrors Blender's
+  // `RNA_def_boolean(ot->srna, "deselect", false, …)` on the same
+  // `MESH_OT_select_linked_pick` operator (`editmesh_select.cc:4520`).
+  function runSelectLinkedCursor(deselect) {
+    const partId = activeEditPart();
+    if (!partId) return;
+    const project = useProjectStore.getState().project;
+    const node = project.nodes.find((n) => n.id === partId);
+    if (!node?.mesh) return;
+    const canvasCursor = clientToCanvas(lastMousePos());
+    if (!canvasCursor) return;
+    const view = useEditorStore.getState().viewByMode?.viewport;
+    const zoom = view?.zoom ?? 1;
+    const threshold = 16 / zoom;
+    const seedIdx = hitTestVertices(node.mesh.vertices, canvasCursor.x, canvasCursor.y, threshold);
+    if (seedIdx < 0) {
+      toast({
+        title: 'No vertex under cursor',
+        description: deselect
+          ? 'Hover near a vertex on the active mesh, then press Shift+L.'
+          : 'Hover near a vertex on the active mesh, then press L.',
+      });
+      return;
+    }
+    const linked = selectLinkedFromVertex(node.mesh, seedIdx);
+    if (!linked || linked.size === 0) return;
+    const editor = useEditorStore.getState();
+    if (deselect) {
+      // Subtract `linked` from the current selection. Mirrors Blender's
+      // `edbm_select_linked_pick_ex` flipping `sel` in the BMW walker.
+      const cur = editor.selectedVertexIndices.get(partId) ?? new Set();
+      const next = new Set(cur);
+      for (const i of linked) next.delete(i);
+      editor.setVertexSelectionForPart(partId, next);
+      // Active vert: drop if it was in the deselected ring.
+      if (editor.activeVertex?.partId === partId
+          && linked.has(editor.activeVertex.vertIndex)) {
+        editor.deselectVertex(partId, editor.activeVertex.vertIndex);
+      }
+      return;
+    }
+    editor.setVertexSelectionForPart(partId, linked);
+    editor.selectVertex(partId, seedIdx, /* additive */ true);
+  }
+
   registerOperator({
     id: 'select.linked.cursor',
     label: 'Select Linked (under cursor) (L)',
     available: () => activeEditPart() !== null,
-    exec: () => {
-      const partId = activeEditPart();
-      if (!partId) return;
-      const project = useProjectStore.getState().project;
-      const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
-      const canvasCursor = clientToCanvas(lastMousePos());
-      if (!canvasCursor) return;
-      // Threshold: 16 canvas-px, divided by view zoom (so the
-      // user-perceived hit-radius stays constant in screen-space).
-      const view = useEditorStore.getState().viewByMode?.viewport;
-      const zoom = view?.zoom ?? 1;
-      const threshold = 16 / zoom;
-      const seedIdx = hitTestVertices(node.mesh.vertices, canvasCursor.x, canvasCursor.y, threshold);
-      if (seedIdx < 0) {
-        toast({
-          title: 'No vertex under cursor',
-          description: 'Hover near a vertex on the active mesh, then press L.',
-        });
-        return;
-      }
-      const linked = selectLinkedFromVertex(node.mesh, seedIdx);
-      if (!linked || linked.size === 0) return;
-      useEditorStore.getState().setVertexSelectionForPart(partId, linked);
-      useEditorStore.getState().selectVertex(partId, seedIdx, /* additive */ true);
-    },
+    exec: () => runSelectLinkedCursor(/* deselect */ false),
+  });
+
+  // Audit fix D-2 — Blender binds Shift+L to the same operator with
+  // `deselect=True`. Sibling operator here keeps the chord-to-operator
+  // mapping straightforward (one chord = one operator id).
+  registerOperator({
+    id: 'select.linked.cursor.deselect',
+    label: 'Deselect Linked (under cursor) (Shift+L)',
+    available: () => activeEditPart() !== null,
+    exec: () => runSelectLinkedCursor(/* deselect */ true),
   });
 
   // Phase 6.A — Select Linked (expand): expand each vertex in the
@@ -1058,6 +1107,25 @@ function registerBuiltins() {
   //     Blender's `OBJECT_OT_duplicate_move` macro semantics: Esc
   //     during translate keeps the duplicates, drops just the drag.
   //     User Ctrl+Z again to remove the dups.
+  //
+  // ┌──────────────┬──────────────────────────────────┬──────────────────────────────┐
+  // │ Mode         │ Esc-mid-translate behaviour      │ Source                       │
+  // ├──────────────┼──────────────────────────────────┼──────────────────────────────┤
+  // │ Edit Mode    │ Rolls back BOTH dup AND drag     │ SS Phase 5 D-1 atomic deviation │
+  // │ Object Mode  │ Keeps dup, drops drag only       │ Blender macro semantics      │
+  // └──────────────┴──────────────────────────────────┴──────────────────────────────┘
+  //
+  // Audit D-6 (DOCUMENT-AS-DEVIATION) — the cross-mode INCONSISTENCY
+  // is deliberate but will surprise Blender users who hit Esc-mid-
+  // translate in one mode after using the other. Edit Mode atomic was
+  // the Phase 5 D-1 call ("aborting a single intentional gesture");
+  // Object Mode non-atomic matches Blender's macro
+  // (`mesh_ops.cc:235-242` + `object_ops.cc:306-314`). Both are valid;
+  // the asymmetry is the cost of mixing Phase 5's UX choice with
+  // Blender parity here. Bringing Object Mode into the atomic camp would
+  // need `rollbackOnCancel` on `modalTransformStore` (currently only
+  // exists on `modalVertexTransformStore`). Deferred — the data-loss
+  // cost of "keeps dup" is one Ctrl+Z away.
   registerOperator({
     id: 'edit.duplicate',
     label: 'Duplicate (Shift+D)',
@@ -1214,6 +1282,15 @@ function registerBuiltins() {
     id: 'apply.poseAsRest',
     label: 'Apply Pose As Rest',
     available: () => {
+      // Audit fix G-2 — animation mode guard. Pre-fix the legacy UI
+      // button at CanvasViewport.jsx:3531-3534 had this check; the Phase
+      // 6 operator did not. `Ctrl+A` at a non-zero scrubber position
+      // bakes the motion3.json-offset pose into rest, corrupting rest
+      // positions permanently — and combined with G-6 (no undo path),
+      // this was a silent data-loss vector reachable from the default
+      // keymap. Refuse the op when an animation is being scrubbed.
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'animation') return false;
       // Available iff there's at least one bone in the project (so the
       // op has something to bake). Same check the existing UI button uses.
       const project = useProjectStore.getState().project;
@@ -1222,7 +1299,21 @@ function registerBuiltins() {
       );
     },
     exec: () => {
-      useProjectStore.getState().applyPoseAsRest();
+      // Audit fix G-6 — wrap in beginBatch/endBatch so the operation is
+      // undo-able. Pre-fix `applyPoseAsRest()` set state via a direct
+      // immer.produce call (bypassing updateProject), so no snapshot was
+      // pushed and Ctrl+Z post-Apply was a no-op. The legacy UI button
+      // had the same gap, but Phase 6 made it reachable from a keymap
+      // chord without any modal confirmation. Wrapping at the operator
+      // level (rather than touching applyPoseAsRest itself) keeps the
+      // store function unchanged for the legacy callers.
+      const project = useProjectStore.getState().project;
+      beginBatch(project);
+      try {
+        useProjectStore.getState().applyPoseAsRest();
+      } finally {
+        endBatch();
+      }
       toast({
         title: 'Pose applied as rest',
         description: 'Bone pose channels zeroed; rest geometry now reflects the posed shape.',
@@ -1244,7 +1335,7 @@ function registerBuiltins() {
           && node.modifiers.some((m) => m?.type === 'armature');
       });
     },
-    exec: async () => {
+    exec: () => {
       const items = useSelectionStore.getState().items;
       const project = useProjectStore.getState().project;
       const targetIds = items
@@ -1256,13 +1347,20 @@ function registerBuiltins() {
         })
         .map((it) => it.id);
       if (targetIds.length === 0) return;
-      // Lazy-import to keep registry weight down — the service pulls in
-      // the runtime evaluator chain for the bake step.
-      const { applyArmatureModifier } = await import('../../services/ArmatureModifierService.js');
+      // Audit fix G-7 — wrap the per-part loop in a single batch so
+      // multi-part bakes collapse to ONE undo entry. Pre-fix each
+      // applyArmatureModifier(id) was its own snapshot; undoing a 3-part
+      // bake required 3× Ctrl+Z. Single batch matches Edit Mode duplicate
+      // pattern and Blender's macro semantics.
+      beginBatch(project);
       let bakedCount = 0;
-      for (const id of targetIds) {
-        const result = applyArmatureModifier(id);
-        if (result.baked) bakedCount++;
+      try {
+        for (const id of targetIds) {
+          const result = applyArmatureModifier(id);
+          if (result.baked) bakedCount++;
+        }
+      } finally {
+        endBatch();
       }
       toast({
         title: bakedCount === targetIds.length

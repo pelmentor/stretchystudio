@@ -48,16 +48,7 @@ import {
 } from '../../../../io/hitTest.js';
 import { computeWorldMatrices, mat3Inverse, mat3Identity } from '../../../../renderer/transforms.js';
 import { getMesh, isMeshedPart } from '../../../../store/objectDataAccess.js';
-
-/** Convert a viewport-px point to canvas-space using a canvas bounding
- *  rect + (zoom, pan). Mirrors `clientToCanvasSpace` from viewport
- *  helpers but takes a precomputed rect so we can call it many times
- *  during a lasso run without re-querying the DOM. */
-function clientToCanvas(rect, view, clientX, clientY) {
-  const cx = (clientX - rect.left) / view.zoom - view.panX / view.zoom;
-  const cy = (clientY - rect.top)  / view.zoom - view.panY / view.zoom;
-  return [cx, cy];
-}
+import { clientToCanvasXY as clientToCanvas } from '../viewportMath.js';
 
 export function BoxSelectOverlay() {
   const kind            = useBoxSelectStore((s) => s.kind);

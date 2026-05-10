@@ -8,24 +8,62 @@
  * true. Renders a cursor-following circle at the current radius and
  * runs paint-time selection on every mousemove while LMB is held.
  *
- * Mirrors Blender's `VIEW3D_OT_select_circle` (`reference/blender/source/blender/editors/space_view3d/view3d_select.cc:3470+`).
+ * Mirrors Blender's `VIEW3D_OT_select_circle`
+ * (`reference/blender/source/blender/editors/space_view3d/view3d_select.cc:5706-5725`
+ * operator def + `:5596-5704` exec callback). Audit fix D-10 corrected
+ * a pre-existing wrong cite at `:3470+` (which is grease-pencil curves
+ * selection, unrelated). Modal lifecycle (mouse handling, radius adjust)
+ * lives in
+ * `reference/blender/source/blender/windowmanager/intern/wm_gesture_ops.cc:349-447`
+ * (`WM_gesture_circle_modal`); the `View3D Gesture Circle` modal map is
+ * defined in `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:6232-6246`.
+ *
  * Modal interaction:
  *
  *   - mousemove                 → update cursor circle position; if
- *                                 LMB-held, pick verts/parts under the
- *                                 circle and add/subtract per paint mode
+ *                                 LMB/MMB-held, pick verts/parts under
+ *                                 the circle and add/subtract per stroke
  *   - LMB-down                  → start a paint stroke (default add;
  *                                 Shift+LMB-down → subtract)
- *   - LMB-up                    → end the stroke; modal stays active
+ *   - MMB-down                  → start a subtract paint stroke (audit
+ *                                 D-5 — pen-tablet-friendly subtract;
+ *                                 mirrors `blender_default.py:6239`
+ *                                 `MIDDLEMOUSE` → `DESELECT` in the
+ *                                 `View3D Gesture Circle` modal map)
+ *   - LMB/MMB-up                → end the stroke; modal stays active
  *                                 for further strokes (matches Blender)
- *   - mousewheel                → adjust radius (Blender pattern)
+ *   - mousewheel                → adjust radius. Audit D-1 fix: wheel-up
+ *                                 SHRINKS, wheel-down GROWS — matches
+ *                                 Blender's `WHEELUPMOUSE = SUBTRACT`
+ *                                 binding (`blender_default.py:6241-6243`)
+ *                                 and `WM_gesture_circle_modal`'s
+ *                                 SUB/ADD application
+ *                                 (`wm_gesture_ops.cc:383-390`).
+ *                                 Pre-fix the JSDoc claimed the opposite
+ *                                 ("Blender convention: wheel up = larger
+ *                                 radius"); both the JSDoc claim AND the
+ *                                 implementation were wrong.
  *   - Esc / RMB / Enter         → exit the modal
+ *   - bare `C`                  → SS-only off-toggle (audit D-8) — exits
+ *                                 the modal. Blender's modal map has no
+ *                                 `C` binding; the user must press ESC
+ *                                 / RIGHTMOUSE / RET. SS adds the
+ *                                 affordance to match the activation
+ *                                 chord's "toggle" feel. Documented as
+ *                                 a deliberate UX deviation per Rule №1.
  *
  * **Per-paint-tick hit-test.** Project the cursor + radius back to
  * canvas-space using the canvas DOM rect + the active edit Viewport's
  * (zoom, pan). For Edit Mode, also project through the part's inverse
  * world matrix to mesh-local space (so the radius scales with the
  * part's transform, just like vertex-click hit-test does).
+ *
+ * **Audit fix G-3 — paint-stroke caches.** Pre-fix `runPaintTick`
+ * called `computeWorldMatrices(project.nodes)` and built a fresh
+ * `frameMap` on every mousemove. On a 200-node project at 60 Hz drag
+ * that was 60 full tree-walks per second. The matrices are constant
+ * within a paint stroke (project not mutated mid-stroke), so we cache
+ * them in refs at `startPaint` time and clear at `endPaint`.
  *
  * **No selection rollback on Esc.** Unlike Box Select where Esc cancels
  * everything, Blender's circle select keeps any selection changes made
@@ -51,14 +89,7 @@ import {
   mat3Identity,
 } from '../../../../renderer/transforms.js';
 import { getMesh, isMeshedPart } from '../../../../store/objectDataAccess.js';
-
-/** Convert a viewport-px point to canvas-space using a canvas bounding
- *  rect + (zoom, pan). Mirrors `BoxSelectOverlay`'s helper. */
-function clientToCanvas(rect, view, clientX, clientY) {
-  const cx = (clientX - rect.left) / view.zoom - view.panX / view.zoom;
-  const cy = (clientY - rect.top)  / view.zoom - view.panY / view.zoom;
-  return [cx, cy];
-}
+import { clientToCanvasXY as clientToCanvas } from '../viewportMath.js';
 
 const WHEEL_RADIUS_STEP_PX = 4;
 
@@ -86,6 +117,16 @@ export function CircleSelectOverlay() {
   paintModeRef.current = paintMode;
   radiusRef.current    = radiusPx;
 
+  // Audit fix G-3 — per-stroke caches. `worldMatricesRef` and `frameMapRef`
+  // are populated on `startPaint` (mousedown) and cleared on `endPaint`
+  // (mouseup). Mid-stroke ticks reuse them instead of rebuilding per
+  // mousemove. The project ref is captured too so we can short-circuit if
+  // something replaces the project mid-stroke (defensive — shouldn't
+  // happen, but cheap to check).
+  const worldMatricesRef = useRef(/** @type {Map<string, Float32Array | number[]> | null} */ (null));
+  const frameMapRef      = useRef(/** @type {Map<string, Float32Array | number[]> | null} */ (null));
+  const cachedProjectRef = useRef(/** @type {any} */ (null));
+
   useEffect(() => {
     if (!active) return;
 
@@ -97,47 +138,84 @@ export function CircleSelectOverlay() {
           cursorClient: { x: e.clientX, y: e.clientY },
           radiusPx: radiusRef.current,
           paintMode: paintModeRef.current ?? 'add',
+          worldMatricesRef, frameMapRef, cachedProjectRef,
         });
       }
     }
 
-    function onMouseDown(e) {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      // Shift held at LMB-down → subtract for the duration of the stroke.
-      // Plain LMB-down → add. Captured at stroke start so a mid-stroke
-      // Shift release doesn't switch the mode.
-      const pm = e.shiftKey ? 'subtract' : 'add';
+    function beginPaintStroke(pm, e) {
+      // Audit fix G-3 — populate the per-stroke caches once. Subsequent
+      // mousemove ticks read these refs instead of rebuilding.
+      cachedProjectRef.current = useProjectStore.getState().project;
+      worldMatricesRef.current = computeWorldMatrices(cachedProjectRef.current.nodes);
+      // frameMap is built lazily in `runPaintTick` when frames are
+      // available; for a stroke that runs entirely without a frame
+      // dictionary (e.g. test environments), null is the correct value.
+      frameMapRef.current = null;
       startPaint(pm);
-      // Fire one immediate tick so a click without drag still selects
-      // under the circle.
       runPaintTick({
         mode, editPartId,
         cursorClient: { x: e.clientX, y: e.clientY },
         radiusPx: radiusRef.current,
         paintMode: pm,
+        worldMatricesRef, frameMapRef, cachedProjectRef,
       });
     }
 
-    function onMouseUp(e) {
-      if (e.button !== 0) return;
+    function endPaintStroke() {
+      // Clear caches so a stale matrix doesn't leak into the next stroke
+      // if the project mutated between strokes (defensive — Modal G is
+      // the only other Edit-Mode mutator and it can't run while a circle
+      // select stroke is in flight, but cheap to be paranoid).
+      worldMatricesRef.current = null;
+      frameMapRef.current = null;
+      cachedProjectRef.current = null;
+      endPaint();
+    }
+
+    function onMouseDown(e) {
+      // Audit fix D-5 — accept LMB (button 0) AND MMB (button 1).
+      // MMB starts a subtract stroke directly (Blender's pen-tablet
+      // friendly subtract path: `blender_default.py:6239`
+      // `MIDDLEMOUSE` → `DESELECT`). LMB respects Shift for subtract.
+      let pm;
+      if (e.button === 0)      pm = e.shiftKey ? 'subtract' : 'add';
+      else if (e.button === 1) pm = 'subtract';
+      else                     return;
       e.preventDefault();
       e.stopPropagation();
-      endPaint();
+      beginPaintStroke(pm, e);
+    }
+
+    function onMouseUp(e) {
+      if (e.button !== 0 && e.button !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      endPaintStroke();
     }
 
     function onWheel(e) {
       e.preventDefault();
       e.stopPropagation();
-      // Blender convention: wheel up = larger radius, wheel down =
-      // smaller. `deltaY < 0` is wheel up on most browsers.
-      const dir = e.deltaY < 0 ? +1 : -1;
+      // Audit fix D-1 — Blender's `View3D Gesture Circle` modal map
+      // binds `WHEELUPMOUSE = SUBTRACT` (shrink) and
+      // `WHEELDOWNMOUSE = ADD` (grow). Pre-fix this overlay implemented
+      // the OPPOSITE (wheel-up grew the circle), with a comment falsely
+      // claiming the opposite-of-Blender was "Blender convention". Both
+      // the comment and the implementation were wrong.
+      // `deltaY < 0` is wheel-up on most browsers → SHRINK.
+      const dir = e.deltaY < 0 ? -1 : +1;
       setRadius(radiusRef.current + dir * WHEEL_RADIUS_STEP_PX);
     }
 
     function onContextMenu(e) {
+      // Audit fix G-5 — preventDefault was already there; stopPropagation
+      // was missing. Without it, any future bubble-phase right-click
+      // listener fires after `cancel()` has closed the modal, seeing
+      // stale state. All sibling handlers (mousedown/up/wheel) call
+      // stopPropagation; this was the exception.
       e.preventDefault();
+      e.stopPropagation();
       cancel();
     }
 
@@ -148,13 +226,22 @@ export function CircleSelectOverlay() {
         cancel();
         return;
       }
-      // Match Blender: bare `C` re-toggles out of Circle Select.
+      // SS-only off-toggle (audit D-8): bare `C` re-toggles Circle
+      // Select OFF. Blender's modal map has no `C` binding — but the
+      // affordance matches the activation chord's "toggle" feel.
       if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         cancel();
         return;
       }
+      // Audit fix G-4 — catch-all swallow for any chord that would
+      // otherwise leak through to the dispatcher's bubble listener and
+      // mount a competing modal (G/E/R/S/B/M etc. would all open
+      // ModalTransform / extrude / BoxSelect / Merge popover on top of
+      // the active circle-select). Same pattern as Phase 5 G-4 fix
+      // applied to ModalVertexTransformOverlay.
+      e.stopPropagation();
     }
 
     window.addEventListener('mousemove', onMouseMove, { capture: true });
@@ -207,14 +294,27 @@ export function CircleSelectOverlay() {
  * Run one paint tick: pick verts (Edit Mode) or parts (Object Mode) under
  * the cursor circle and apply per `paintMode` ('add' or 'subtract').
  *
+ * Audit fix G-3 — accepts per-stroke caches (`worldMatricesRef`,
+ * `frameMapRef`, `cachedProjectRef`) so the mid-stroke ticks reuse the
+ * matrices computed at stroke-start instead of re-walking the node tree
+ * per mousemove. Defensive fallback: if the cached project ref doesn't
+ * match the live project (something replaced the project mid-stroke),
+ * recompute on the fly.
+ *
  * @param {Object} args
  * @param {'object'|'edit'} args.mode
  * @param {string|null} args.editPartId
  * @param {{x:number, y:number}} args.cursorClient
  * @param {number} args.radiusPx           - viewport-px
  * @param {'add'|'subtract'} args.paintMode
+ * @param {{current:Map<string, Float32Array|number[]>|null}} [args.worldMatricesRef]
+ * @param {{current:Map<string, Float32Array|number[]>|null}} [args.frameMapRef]
+ * @param {{current:any}} [args.cachedProjectRef]
  */
-function runPaintTick({ mode, editPartId, cursorClient, radiusPx, paintMode }) {
+function runPaintTick({
+  mode, editPartId, cursorClient, radiusPx, paintMode,
+  worldMatricesRef, frameMapRef, cachedProjectRef,
+}) {
   const ctxBridge = useCaptureStore.getState().getCanvasHitContext;
   const ctx = typeof ctxBridge === 'function' ? ctxBridge() : null;
   const canvasEl = ctx?.canvasEl ?? null;
@@ -225,6 +325,18 @@ function runPaintTick({ mode, editPartId, cursorClient, radiusPx, paintMode }) {
   const frames = ctx?.frames ?? null;
   const finalVertsByPartId = ctx?.finalVertsByPartId ?? null;
 
+  // Audit fix G-3 — read worldMatrices from the stroke cache when
+  // available + the cached project still matches the live project.
+  // Otherwise compute fresh (covers test paths and the defensive
+  // mid-stroke project-replacement case).
+  const cacheValid = cachedProjectRef?.current === project;
+  let worldMatrices = (cacheValid && worldMatricesRef?.current) ? worldMatricesRef.current : null;
+  if (!worldMatrices) {
+    worldMatrices = computeWorldMatrices(project.nodes);
+    if (worldMatricesRef) worldMatricesRef.current = worldMatrices;
+    if (cachedProjectRef) cachedProjectRef.current = project;
+  }
+
   const [cxCanvas, cyCanvas] = clientToCanvas(rect, view, cursorClient.x, cursorClient.y);
   // viewport-px radius → canvas-px radius: divide by zoom (matches box
   // select's coord transform; both convert width-like quantities by /zoom).
@@ -233,7 +345,7 @@ function runPaintTick({ mode, editPartId, cursorClient, radiusPx, paintMode }) {
   if (mode === 'object') {
     const pickedIds = partsInCircle(
       project, frames, cxCanvas, cyCanvas, radiusCanvas,
-      { worldMatrices: computeWorldMatrices(project.nodes), finalVertsByPartId },
+      { worldMatrices, finalVertsByPartId },
     );
     if (pickedIds.length === 0) return;
     applyObjectSelectionDelta(pickedIds, paintMode);
@@ -246,7 +358,7 @@ function runPaintTick({ mode, editPartId, cursorClient, radiusPx, paintMode }) {
   if (!node || !isMeshedPart(node, project)) return;
   const mesh = getMesh(node, project);
   if (!mesh || !Array.isArray(mesh.vertices) || mesh.vertices.length === 0) return;
-  const wm = computeWorldMatrices(project.nodes).get(editPartId) ?? mat3Identity();
+  const wm = worldMatrices.get(editPartId) ?? mat3Identity();
   const iwm = mat3Inverse(wm);
   // Project canvas-space center to mesh-local space.
   const lx = iwm[0] * cxCanvas + iwm[3] * cyCanvas + iwm[6];
