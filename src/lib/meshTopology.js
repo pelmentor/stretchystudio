@@ -56,9 +56,12 @@
  *   selection verbatim (instead of the survivor + growth remap). Phase 5
  *   Extrude uses this — Blender's E selects the freshly-duplicated verts
  *   only; the originals stay UNselected so the user immediately drags the
- *   new strip. The growth pass would otherwise leave the source verts
- *   selected (they were selected pre-op + their `vertexSources` entry is
- *   length-1).
+ *   new strip. Audit fix G-12 (2026-05-10) — the pre-fix comment said
+ *   "the growth pass would otherwise leave source verts selected"; that
+ *   was wrong (growth pass skips length-1 sources at
+ *   `applyTopologyOp.js:212`). The actual issue is the SURVIVOR pass:
+ *   `vertexIndexRemap` returns identity for the originals, so they
+ *   would stay selected without the override.
  * @property {boolean}                        retriangulated
  */
 
@@ -402,6 +405,23 @@ export function pointInTriangleStrict(p, a, b, c) {
  * boundary, producing a phantom interior boundary that the Extrude op
  * would then duplicate from. Filtering degenerate tris before counting
  * matches the "real geometric perimeter" the user sees in the viewport.
+ *
+ * Audit D-7 (2026-05-10): the area-based filter is an SS extension
+ * over Blender's `BM_edge_is_boundary`
+ * (`bmesh/intern/bmesh_query_inline.hh:111-115`), which checks
+ * loop-radial only without an area gate:
+ *
+ *   ```cpp
+ *   ATTR_WARN_UNUSED_RESULT BLI_INLINE bool BM_edge_is_boundary(const BMEdge *e) {
+ *     const BMLoop *l = e->l;
+ *     return (l && (l->radial_next == l));
+ *   }
+ *   ```
+ *
+ * Native Blender content rarely produces zero-area faces because
+ * Blender's mesh tools auto-prune them; Live2D content frequently
+ * does (clip-mask seams from PSD imports). The filter is a domain
+ * adaptation, not a Blender-port discrepancy.
  *
  * Caching: boundary detection is O(triangles) per call. Phase 5's
  * extrude operator reads the boundary set ONCE per click (not per

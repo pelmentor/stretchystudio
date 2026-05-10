@@ -109,12 +109,21 @@ export function endBatch() {
  */
 export function discardBatch(applyFn) {
   if (_batchDepth === 0) return;
-  if (_batchDepth === 1 && _snapshots.length > 0) {
-    const snap = _snapshots.pop();
-    if (typeof applyFn === 'function') applyFn(snap?.project);
-    // Restore the redo stack to its pre-batch state. The batch's
-    // `beginBatch` cleared redo via `pushSnapshot`'s edit-invalidates-
-    // redo rule; on cancel that clear is wrong (no edit happened).
+  if (_batchDepth === 1) {
+    // Pop + restore project snapshot ONLY if one is on the stack —
+    // `clearHistory()` mid-batch (via `resetProject` / project load)
+    // wipes `_snapshots` but leaves `_batchDepth` intact, so the
+    // snapshot may be missing here without it being a bug.
+    if (_snapshots.length > 0) {
+      const snap = _snapshots.pop();
+      if (typeof applyFn === 'function') applyFn(snap?.project);
+    }
+    // Audit fix G-8 — restore + null `_redoStackBeforeBatch`
+    // UNCONDITIONALLY when depth → 0, so the backup doesn't leak
+    // across the snapshots-empty edge (clearHistory mid-batch).
+    // Pre-fix the backup persisted past depth 0 and would re-emerge
+    // on the next discardBatch, restoring a stale post-clearHistory
+    // redo stack that no longer matched the project.
     if (_redoStackBeforeBatch !== null) {
       _redoStack = _redoStackBeforeBatch;
       _redoStackBeforeBatch = null;

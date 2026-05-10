@@ -143,13 +143,16 @@ export const DEFAULT_KEYMAP = {
   // the entire op including the topology change).
   //
   // Blender chord parity: `KeyE` = `MESH_OT_extrude_region` for vertex
-  // select mode (`editmesh_extrude.cc:507-585`). Blender's keymap
-  // routes Alt+E to a "wave" pop-up menu of extrude variants; SS direct
-  // dispatch ships only the region variant in v1 (Phase 6+ may add
-  // `MESH_OT_extrude_verts_indiv` for interior-vert extrusion as a
-  // separate operator, in which case the binding here may move to a
-  // dispatcher that picks based on whether selection has any boundary
-  // verts).
+  // select mode (`editmesh_extrude.cc:430-456` exec callback +
+  // `editmesh_extrude.cc:358-427` dispatch logic). Audit D-9 corrected
+  // a pre-existing wrong cite that pointed at `:507-585`. Blender's
+  // keymap routes Alt+E to a "wave" pop-up menu of extrude variants
+  // (`scripts/presets/keyconfig/keymap_data/blender_default.py:5571`);
+  // SS direct dispatch ships only the region variant in v1 (Phase 6+
+  // may add `MESH_OT_extrude_verts_indiv` for interior-vert extrusion
+  // — bmop at `bmesh/operators/bmo_extrude.cc:236-284` — as a separate
+  // operator, in which case the binding here may move to a dispatcher
+  // that picks based on whether selection has any boundary verts).
   'KeyE': 'edit.extrude',
 };
 

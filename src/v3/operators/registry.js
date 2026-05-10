@@ -39,6 +39,7 @@ import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
+import { discardBatch } from '../../store/undoHistory.js';
 import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
@@ -879,11 +880,19 @@ function registerBuiltins() {
       if (!sel || sel.size === 0) return;
       // Diagnose first so we toast cleanly instead of silently no-opping
       // when the user has only interior verts selected.
+      //
+      // Audit fix D-2 — toast wording was previously "Cannot extrude",
+      // misleadingly suggesting extrude is broken. Blender's
+      // `edbm_extrude_mesh:373-378` would dispatch interior-only
+      // selections to `extrude_verts_indiv` (wire-edge extension),
+      // but Live2D meshes are triangle-only so wire-edges are
+      // unusable downstream — this is a Live2D data-model
+      // limitation, NOT an SS bug. Reword to make that explicit.
       const boundaryCount = countSelectedBoundary(node.mesh, sel);
       if (boundaryCount === 0) {
         toast({
-          title: 'Cannot extrude',
-          description: 'Extrude needs selected boundary verts. Select a vertex on the mesh’s outer edge.',
+          title: 'Interior-vert extrude not supported',
+          description: 'Live2D meshes need triangles, so wire-edge extrusion (Blender\'s MESH_OT_extrude_verts_indiv) doesn\'t apply. Select a vertex on the mesh\'s outer boundary.',
         });
         return;
       }
@@ -894,9 +903,18 @@ function registerBuiltins() {
       // one swoop (no redo-stack pollution).
       beginBatch(project);
 
-      // Apply the topology op INSIDE the batch — its updateProject call
-      // is suppressed from snapshotting (isBatching() is true).
-      applyTopologyOp(partId, result);
+      // Audit fix G-2 — `applyTopologyOp` returns false when the part
+      // disappears between the gate check and the dispatch (defensive
+      // — not reachable today, but a future async mutator could trigger
+      // it). Pre-fix: the batch was left dangling (no endBatch / no
+      // discardBatch), and the snapshot pushed by `beginBatch` would
+      // surface as a stale undo entry on the next user undo. Drop the
+      // batch via `discardBatch` so the snapshot pops cleanly.
+      const ok = applyTopologyOp(partId, result);
+      if (!ok) {
+        discardBatch(() => {});
+        return;
+      }
 
       // Capture original positions for the new verts (== source vert
       // positions, since extrude duplicates at the same coords). The
@@ -906,7 +924,12 @@ function registerBuiltins() {
       const newProject = useProjectStore.getState().project;
       const newNode = newProject.nodes.find((n) => n.id === partId);
       const newMesh = newNode?.mesh;
-      if (!newMesh) return;
+      if (!newMesh) {
+        // Same defensive close as above — between applyTopologyOp and
+        // here, the part could in theory vanish. Discard the batch.
+        discardBatch(() => {});
+        return;
+      }
       /** @type {Map<number, {x:number,y:number,restX:number,restY:number}>} */
       const original = new Map();
       const overrideSel = result.selectionOverride ?? new Set();

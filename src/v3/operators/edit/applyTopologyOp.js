@@ -174,7 +174,7 @@ export function applyTopologyOp(partId, result) {
   // Apply selection — `selectionOverride` (Phase 5) wins over the
   // survivor + growth remap; otherwise, run the standard remap.
   if (result.selectionOverride instanceof Set) {
-    overrideSelectionForPart(partId, result.selectionOverride);
+    overrideSelectionForPart(partId, result.selectionOverride, result.vertexSources, priorActive);
   } else {
     remapSelectionForPart(partId, result, priorSelection, priorActive);
   }
@@ -249,25 +249,54 @@ function remapSelectionForPart(partId, result, priorSelection, priorActive) {
 /**
  * Phase 5 — selection override path. Replaces the editor selection
  * for `partId` with the given Set verbatim, then re-points
- * `activeVertex` at one of the new verts (Blender's E sets the active
- * vertex to the most-recently-duplicated, but SS uses Set iteration
- * order as the proxy — same compromise as `mergeAtFirst`).
+ * `activeVertex` at one of the new verts.
+ *
+ * Audit fix D-8 — Blender's `BMO_mesh_selected_remap`
+ * (`bmesh/intern/bmesh_operators.cc:582-624`) walks the entire
+ * `selected.{first..last}` history and rewrites every entry from source
+ * elem to its duplicate. SS doesn't track selection-history per vert
+ * (same compromise as `mergeAtFirst` — Phase 4 audit D-3), but for the
+ * specific case of Extrude we CAN preserve the active-vert mapping by
+ * checking whether the prior active's duplicate is in the override
+ * set. When found, prefer it over `Set.values().next()` (insertion-
+ * order proxy). This brings SS one step closer to Blender's behaviour
+ * for the typical case "user clicks vert 5, then E to extrude" — post
+ * extrude, the active vert is the duplicate of vert 5, not the
+ * duplicate of whichever vert happened to be added to the selection
+ * Set first.
  *
  * @param {string} partId
  * @param {Set<number>} override
+ * @param {Map<number, number[]>} vertexSources
+ * @param {{partId:string, vertIndex:number}|null} priorActive
  */
-function overrideSelectionForPart(partId, override) {
+function overrideSelectionForPart(partId, override, vertexSources, priorActive) {
   const editor = useEditorStore.getState();
   if (override.size === 0) {
     editor.deselectAllVertices(partId);
     return;
   }
   editor.setVertexSelectionForPart(partId, override);
-  // Bump activeVertex to the first new vert so downstream consumers
-  // (e.g. Mesh Edit Mode tools that read activeVertex) have a sensible
-  // reference. selectVertex additive preserves the override set.
-  const first = override.values().next().value;
-  if (typeof first === 'number') {
-    editor.selectVertex(partId, first, /* additive */ true);
+
+  // Audit fix D-8 — prefer the duplicate of the prior active vert as
+  // the new active. Walk vertexSources for entries whose sources[0]
+  // matches priorActive.vertIndex (single-source duplicates).
+  /** @type {number|null} */
+  let preferredActive = null;
+  if (priorActive && priorActive.partId === partId && vertexSources) {
+    for (const [newIdx, sources] of vertexSources) {
+      if (!override.has(newIdx)) continue;
+      if (sources && sources.length === 1 && sources[0] === priorActive.vertIndex) {
+        preferredActive = newIdx;
+        break;
+      }
+    }
+  }
+  // Fall back to insertion-order proxy when prior-active mapping
+  // doesn't yield a candidate (e.g. priorActive was on a different
+  // part, or its duplicate isn't in the override).
+  const newActive = preferredActive ?? override.values().next().value;
+  if (typeof newActive === 'number') {
+    editor.selectVertex(partId, newActive, /* additive */ true);
   }
 }

@@ -15,6 +15,10 @@
  *     / scale of the freshly-extruded ring) is Phase 6+ — needs an
  *     anchor / pivot model that only makes sense once a real pivot
  *     mode (median / individual / cursor) lands per-edit-mode.
+ *     Audit D-3: Blender's `TRANSFORM_OT_translate` accepts
+ *     `TFM_MODAL_ROTATE` / `TFM_MODAL_RESIZE` mid-modal switches (see
+ *     `editors/transform/transform.cc:693-742` for the modal-key
+ *     dispatcher). Documented as deferred deviation.
  *   - One part at a time. Multi-part vertex selections aren't a thing
  *     today (editorStore.selectedVertexIndices is per-part); when they
  *     become one, this store generalises to `Map<partId, Set<vertIdx>>`.
@@ -27,6 +31,17 @@
  * `applyTopologyOp`, then opens the modal — Esc has to roll back BOTH
  * the topology and the drag). The overlay drives the discardBatch
  * call so this store stays free of cross-module imports.
+ *
+ * **Audit D-1 — Esc-cancel rolls back the topology too. Blender
+ * differs.** Blender's `MESH_OT_extrude_region_move` is a macro
+ * operator: extrude exec finishes BEFORE translate begins, then
+ * `wm_macro_end` (`windowmanager/intern/wm_operator_type.cc:308-328`)
+ * converts the macro return CANCELLED → FINISHED whenever any prior
+ * sub-op finished. Result: in Blender, Esc-mid-translate leaves the
+ * extruded geometry on top of the source verts (a "doubled-vert"
+ * state recoverable via M-menu). SS deliberately diverges so the
+ * gesture is atomic (one Esc = "abort the whole thing"). Blender
+ * users need to be aware that SS Esc is more aggressive.
  *
  * @module store/modalVertexTransformStore
  */

@@ -31,7 +31,23 @@
  *
  * **Translate-only in v1.** Blender's E + R/S mid-modal switch (rotate
  * / scale of the freshly-extruded ring around the selection's pivot)
- * is Phase 6+; needs a real per-edit-mode pivot model.
+ * is Phase 6+; needs a real per-edit-mode pivot model. See audit
+ * D-3 — `editors/transform/transform.cc:693-742`.
+ *
+ * **Audit D-6 — RMB-to-cancel matches Blender's LMB-select preset.**
+ * Blender's modal cancel chord depends on the active keyconfig:
+ * default LMB-select preset → RMB cancels; legacy RMB-select preset
+ * → LMB cancels. SS unconditionally maps RMB to cancel which matches
+ * the modern (default since 2.8) LMB-select preset. When SS gains a
+ * keymap-preset switch (Phase 7+ "Industry-Compatible" mode), this
+ * binding will need to read `select_mouse` like
+ * `editors/transform/transform.cc` does.
+ *
+ * **Audit D-1 — Esc rolls back the topology change too.** Blender's
+ * macro semantics keep the extrude on Esc-mid-translate (see
+ * `modalVertexTransformStore.js` banner). SS's `discardBatch`-driven
+ * cancel rolls back BOTH the topology AND the drag — atomic gesture
+ * behaviour, deliberate UX deviation per Rule №1.
  *
  * @module v3/shell/ModalVertexTransformOverlay
  */
@@ -77,6 +93,10 @@ export function ModalVertexTransformOverlay() {
   const snapHashRef = useRef(/** @type {any} */ (null));
   const anchorVertsRef = useRef(/** @type {any[]} */ ([]));
   const ctrlHeldRef = useRef(false);
+  // Audit fix G-5 — cache the Float32Array UVs at modal entry. UVs
+  // don't change during a vertex translate (only positions do), so the
+  // per-tick re-allocation was pure GC pressure.
+  const uvsArrRef = useRef(/** @type {Float32Array|null} */ (null));
 
   useEffect(() => {
     if (!kind || !partId || !startMouse) return;
@@ -88,6 +108,11 @@ export function ModalVertexTransformOverlay() {
     // Build snap hash + anchor verts on entry. Exclude the dragged
     // vert positions from the snap hash by passing `excludeVertIndices`
     // — a fresh mode that the snap module honours per-call.
+    //
+    // Audit fix G-6 — moved out of the per-axis-change reactive path
+    // by removing `axis` from the useEffect deps below. Snap-hash
+    // build is ~30 ms on Hiyori-class projects; pre-fix the user saw
+    // visible jank on every X / Y axis-toggle press.
     {
       const project = useProjectStore.getState().project;
       const editor = useEditorStore.getState();
@@ -101,6 +126,14 @@ export function ModalVertexTransformOverlay() {
         activeVertex: editor.activeVertex,
         selectedVertexIndices: editor.selectedVertexIndices,
       });
+      // Audit fix G-5 — snapshot UVs once. Mesh UVs are immutable
+      // during a vertex translate (only positions move).
+      const node = project?.nodes?.find((n) => n.id === partId);
+      const mesh = node ? getMesh(node, project) : null;
+      const meshUvs = mesh?.uvs;
+      uvsArrRef.current = meshUvs instanceof Float32Array
+        ? meshUvs
+        : new Float32Array(meshUvs ?? []);
     }
 
     function parseTyped(buf) {
@@ -110,13 +143,18 @@ export function ModalVertexTransformOverlay() {
     }
 
     function applyDelta(currentX, currentY, shift, ctrl) {
+      // Audit fix G-6 — read axis from the store rather than closing
+      // over the prop. Pre-fix the prop was a useEffect dep, so every
+      // axis-toggle press re-mounted the listeners + rebuilt the snap
+      // hash (~30 ms jank on Hiyori).
+      const curAxis = useModalVertexTransformStore.getState().axis;
       const ed = useEditorStore.getState();
       const view = ed.viewByMode?.viewport ?? { zoom: 1, panX: 0, panY: 0 };
       const zoom = view.zoom || 1;
       let dxView = currentX - startMouse.x;
       let dyView = currentY - startMouse.y;
-      if (axis === 'x') dyView = 0;
-      if (axis === 'y') dxView = 0;
+      if (curAxis === 'x') dyView = 0;
+      if (curAxis === 'y') dxView = 0;
       let dxCanvas = dxView / zoom;
       let dyCanvas = dyView / zoom;
 
@@ -159,8 +197,8 @@ export function ModalVertexTransformOverlay() {
           );
           dxCanvas = hit.x - anchor.x;
           dyCanvas = hit.y - anchor.y;
-          if (axis === 'x') dyCanvas = 0;
-          if (axis === 'y') dxCanvas = 0;
+          if (curAxis === 'x') dyCanvas = 0;
+          if (curAxis === 'y') dxCanvas = 0;
           useSnapStore.getState().setSnapTarget(hit);
           snapVertexHit = true;
         }
@@ -189,13 +227,29 @@ export function ModalVertexTransformOverlay() {
         dyCanvas = p.y;
       }
 
+      // Audit fix G-7 — early-return if the store was committed/cancelled
+      // since this listener fired (queued mousemoves in the event loop
+      // can outlast `commit()` / `cancel()` by ~one frame). Without this,
+      // those queued events would re-mutate verts via the now-stale
+      // closure references to `original` / `vertIndices`.
+      if (useModalVertexTransformStore.getState().kind === null) return;
+
       // Live mutation: write new positions to mesh.vertices for the
       // dragged set, then GPU-upload via sceneRegistry. The same pattern
       // sculpt brushes use (sceneRef.parts.uploadPositions) so the
       // viewport sees the move immediately, no React render cycle wait.
+      //
+      // Audit fix G-1 — write BOTH pose (`x`/`y`) AND rest (`restX`/
+      // `restY`). Edit-Mode-driven vertex transforms operate on the rest
+      // mesh; if rest stays at the source position, chainEval (Pose Mode
+      // preview, animation playback, export, even an Object Mode tab
+      // switch) reads rest = source and snaps the dragged dups back on
+      // top of their sources. Pre-fix: extrude drag was silently
+      // invisible to the rig. Matches `merge.js:99-102` and `add_vertex`
+      // (`CanvasViewport.jsx:2487`), both of which write rest = pose at
+      // creation/edit time.
       const updateProject = useProjectStore.getState().updateProject;
       /** @type {any} */ let postMeshVerts = null;
-      /** @type {any} */ let postMeshUvs = null;
       updateProject((proj) => {
         const node = proj.nodes.find((n) => n.id === partId);
         if (!node) return;
@@ -205,19 +259,23 @@ export function ModalVertexTransformOverlay() {
           const orig = original.get(idx);
           if (!orig) continue;
           if (idx >= 0 && idx < mesh.vertices.length) {
-            mesh.vertices[idx].x = orig.x + dxCanvas;
-            mesh.vertices[idx].y = orig.y + dyCanvas;
+            const v = mesh.vertices[idx];
+            v.x = orig.x + dxCanvas;
+            v.y = orig.y + dyCanvas;
+            v.restX = (orig.restX ?? orig.x) + dxCanvas;
+            v.restY = (orig.restY ?? orig.y) + dyCanvas;
           }
         }
         postMeshVerts = mesh.vertices;
-        postMeshUvs = mesh.uvs;
       }, { skipHistory: true });
 
       const scene = getSceneRef();
       if (scene && scene.parts && postMeshVerts) {
-        const uvsArr = postMeshUvs instanceof Float32Array
-          ? postMeshUvs
-          : new Float32Array(postMeshUvs ?? []);
+        // Audit fix G-5 — UVs don't change during a vertex translate.
+        // Cache the Float32Array at modal entry (`uvsArrRef`) instead of
+        // re-allocating per tick. 60 Hz * 2 * vertCount floats = ~1.4
+        // MB/sec GC pressure on Hiyori-class meshes pre-fix.
+        const uvsArr = uvsArrRef.current ?? new Float32Array(0);
         scene.parts.uploadPositions(partId, postMeshVerts, uvsArr);
         if (typeof scene._markDirty === 'function') scene._markDirty();
       }
@@ -230,6 +288,7 @@ export function ModalVertexTransformOverlay() {
     }
     function onClick(e) {
       e.preventDefault();
+      e.stopPropagation();
       if (e.button === 2) {
         rollbackThenCancel();
       } else {
@@ -238,23 +297,50 @@ export function ModalVertexTransformOverlay() {
     }
     function onContextMenu(e) {
       e.preventDefault();
+      e.stopPropagation();
       rollbackThenCancel();
     }
     function onKeyDown(e) {
+      // Audit fix G-3 + G-4 — stopPropagation on every key while modal
+      // is active. Pre-fix, Escape leaked through to the dispatcher's
+      // bubble-phase listener (which fired `selection.clear`,
+      // surprising users by losing their object selection). Other
+      // operator chords (E / G / R / S / B / M) leaked through and
+      // mounted nested modals on top of the active vertex modal.
+      // Swallowing every key here is the simplest correct gate; the
+      // small set of chords we DO want to forward (none today) would
+      // need explicit allow-listing.
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         rollbackThenCancel();
         return;
       }
       if (e.key === 'Enter') {
         e.preventDefault();
+        e.stopPropagation();
         commitInternal();
         return;
       }
-      if (e.code === 'KeyX') { e.preventDefault(); setAxis(axis === 'x' ? null : 'x'); return; }
-      if (e.code === 'KeyY') { e.preventDefault(); setAxis(axis === 'y' ? null : 'y'); return; }
+      if (e.code === 'KeyX') {
+        e.preventDefault();
+        e.stopPropagation();
+        // Audit fix G-6 — read axis from store, not closure (closure
+        // axis would force this useEffect to re-run on every press).
+        const cur = useModalVertexTransformStore.getState().axis;
+        setAxis(cur === 'x' ? null : 'x');
+        return;
+      }
+      if (e.code === 'KeyY') {
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = useModalVertexTransformStore.getState().axis;
+        setAxis(cur === 'y' ? null : 'y');
+        return;
+      }
       if (e.key === 'Backspace') {
         e.preventDefault();
+        e.stopPropagation();
         popTyped();
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
@@ -266,6 +352,7 @@ export function ModalVertexTransformOverlay() {
         || e.key === '.'
       )) {
         e.preventDefault();
+        e.stopPropagation();
         appendTyped(e.key);
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
@@ -285,6 +372,11 @@ export function ModalVertexTransformOverlay() {
         applyDelta(cur.x, cur.y, e.type === 'keydown', ctrlHeldRef.current);
         return;
       }
+      // Catch-all: any OTHER chord (KeyE, KeyG, KeyR, KeyS, KeyB,
+      // KeyM, etc.) gets swallowed so it doesn't leak to the
+      // dispatcher and open a competing modal.
+      e.preventDefault();
+      e.stopPropagation();
     }
     function onKeyUp(e) {
       if (e.key === 'Control' || e.key === 'Meta') {
@@ -303,7 +395,9 @@ export function ModalVertexTransformOverlay() {
     }
 
     /** Restore vert positions to originals via skipHistory write. Used
-     *  by the cancel path before discardBatch fires. */
+     *  by the non-rollback cancel path. Audit fix G-1 — rest values
+     *  also restore so the rig sees the pre-drag state (mirrors the
+     *  per-tick write that updates both pose AND rest). */
     function revertVerts() {
       const updateProject = useProjectStore.getState().updateProject;
       updateProject((proj) => {
@@ -315,8 +409,11 @@ export function ModalVertexTransformOverlay() {
           const orig = original.get(idx);
           if (!orig) continue;
           if (idx >= 0 && idx < mesh.vertices.length) {
-            mesh.vertices[idx].x = orig.x;
-            mesh.vertices[idx].y = orig.y;
+            const v = mesh.vertices[idx];
+            v.x = orig.x;
+            v.y = orig.y;
+            v.restX = orig.restX ?? orig.x;
+            v.restY = orig.restY ?? orig.y;
           }
         }
       }, { skipHistory: true });
@@ -404,7 +501,7 @@ export function ModalVertexTransformOverlay() {
       window.removeEventListener('keyup',   onKeyUp,   { capture: true });
       useSnapStore.getState().clearSnapTarget();
     };
-  }, [kind, partId, axis, startMouse, original, vertIndices, rollbackOnCancel,
+  }, [kind, partId, startMouse, original, vertIndices, rollbackOnCancel,
       setAxis, appendTyped, popTyped, commit, cancel]);
 
   if (!kind) return null;
