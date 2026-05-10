@@ -118,6 +118,19 @@ export function buildNodes(graph, project, opts) {
     geom.addOperation(OperationCode.GEOMETRY_EVAL_DEFORMED);
   }
 
+  // Phase 0.C — Object IDNodes carrying TRANSFORM_COMPOSE. Every
+  // node that can hold a transform (parts + groups) gets one. Bones
+  // are `type: 'group'` with `boneRole`; the kernel reads pose vs
+  // transform based on that flag. Constraints can reference both
+  // kinds, so we wire all of them uniformly.
+  for (const node of project.nodes ?? []) {
+    if (!node) continue;
+    if (node.type !== 'part' && node.type !== 'group') continue;
+    const idNode = graph.addIdNode(node.id, node.type);
+    const xform = idNode.addComponent(NodeType.TRANSFORM);
+    xform.addOperation(OperationCode.TRANSFORM_COMPOSE);
+  }
+
   // FCurve / Driver / Animation operations — only when an active
   // animation is provided.
   const anim = opts.animation;
@@ -166,6 +179,46 @@ export function buildRelations(graph, project, opts) {
   buildDeformerChainRelations(graph, project, opts);
   buildPartModifierRelations(graph, project, opts);
   buildPhysicsRelations(graph, project, opts);
+  buildConstraintRelations(graph, project, opts);
+}
+
+/**
+ * Phase 0.C — Per-Object TRANSFORM_COMPOSE relations. Each constraint
+ * that references a `targetId` adds a `target.TRANSFORM_COMPOSE → owner.TRANSFORM_COMPOSE`
+ * edge so the depgraph topology guarantees target-first ordering. The
+ * kernel substitutes the target's composed transform when the
+ * constraint evaluator reads the target node — matching Blender's
+ * `BKE_constraints_solve` iteration where each Object resolves
+ * against already-resolved targets.
+ *
+ * Cycle case: when two objects' constraints reference each other, the
+ * cycle detector flags the offending edges. Eval falls back to the
+ * authored transform (constraint evaluator passes through unchanged
+ * if its target output isn't yet in `ctx.outputs`).
+ */
+function buildConstraintRelations(graph, project, opts) {
+  for (const node of project.nodes ?? []) {
+    if (!node) continue;
+    if (node.type !== 'part' && node.type !== 'group') continue;
+    const ownerId = graph.findIdNode(node.id, node.type);
+    const ownerXform = ownerId?.findComponent(NodeType.TRANSFORM);
+    const ownerCompose = ownerXform?.findOperation(OperationCode.TRANSFORM_COMPOSE);
+    if (!ownerCompose) continue;
+    const constraints = Array.isArray(node.constraints) ? node.constraints : [];
+    for (const con of constraints) {
+      const targetId = con?.payload?.targetId;
+      if (typeof targetId !== 'string' || targetId.length === 0) continue;
+      // Look up the target's TRANSFORM_COMPOSE op. The target may be
+      // a part or a group; try both.
+      const targetIdNodePart  = graph.findIdNode(targetId, 'part');
+      const targetIdNodeGroup = graph.findIdNode(targetId, 'group');
+      const targetIdNode = targetIdNodePart ?? targetIdNodeGroup;
+      const targetXform = targetIdNode?.findComponent(NodeType.TRANSFORM);
+      const targetCompose = targetXform?.findOperation(OperationCode.TRANSFORM_COMPOSE);
+      if (!targetCompose) continue;
+      graph.addRelation(targetCompose, ownerCompose, 'constraint target -> owner');
+    }
+  }
 }
 
 /**

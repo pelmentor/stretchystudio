@@ -45,6 +45,7 @@ import { kernelGridLiftToParent } from './kernels/gridLift.js';
 import { kernelRotationSetupProbe } from './kernels/rotationSetup.js';
 import { kernelPhysicsEval } from './kernels/physics.js';
 import { kernelAnimationTrackEval } from './kernels/animation.js';
+import { kernelTransformCompose } from './kernels/transformCompose.js';
 
 /**
  * Dispatch table — opcode → kernel function. Phase D-2 ships the four
@@ -72,6 +73,8 @@ const KERNELS = {
   [OperationCode.ROTATION_SETUP_PROBE]: kernelRotationSetupProbe,
   // Phase D-4 — physics.
   [OperationCode.PHYSICS_EVAL]: kernelPhysicsEval,
+  // Phase 0.C — Object transform compose (constraints).
+  [OperationCode.TRANSFORM_COMPOSE]: kernelTransformCompose,
 };
 
 /**

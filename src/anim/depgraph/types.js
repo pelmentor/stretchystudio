@@ -103,6 +103,20 @@ export const OperationCode = Object.freeze({
   ROTATION_SETUP_PROBE:   'ROTATION_SETUP_PROBE',
   PHYSICS_EVAL:           'PHYSICS_EVAL',
   ANIMATION_TRACK_EVAL:   'ANIMATION_TRACK_EVAL',
+  // Phase 0.C — per-Object transform composition. Reads the owner's
+  // authored transform/pose, runs every entry in `Object.constraints[]`
+  // (COPY_LOCATION / COPY_ROTATION / LIMIT_ROTATION / TRACK_TO), emits
+  // the composed `{x, y, rotation, scaleX, scaleY}`. Mirrors Blender's
+  // `BKE_constraints_solve` stage in the depsgraph pipeline (constraints
+  // run AFTER the modifier stack, BEFORE the world matrix).
+  TRANSFORM_COMPOSE:      'TRANSFORM_COMPOSE',
+  // Phase 0.D.0 — per-art-mesh frame composition. Ports
+  // `chainEval.evalArtMeshFrame` into the depgraph: cellSelect on the
+  // mesh's bindings, blend keyforms to source verts, walk the part's
+  // modifierChain, emit `{positions, opacity, drawOrder}`. The output
+  // shape matches `evalRig`'s ArtMeshFrame so downstream consumers can
+  // swap engines without altering the renderer.
+  ART_MESH_EVAL:          'ART_MESH_EVAL',
 });
 
 /** Relation flag bitmask per `depsgraph_relation.hh:17-32`. */
