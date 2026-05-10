@@ -72,6 +72,7 @@ import {
   zoomAroundCursor,
 } from '@/components/canvas/viewport/helpers';
 import { hitTestParts, hitTestVertices, buildVertexAdjacency, shortestPathBetweenVertices } from '@/io/hitTest';
+import { meshSignature, signaturesEqual } from '@/io/meshSignature';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
   isBoneGroup,
@@ -148,6 +149,13 @@ export default function CanvasViewport({
   const meshPoolRef = useRef(/** @type {ReturnType<typeof createMeshWorkerPool>|null} */ (null));
   const meshDispatchSeqRef = useRef(/** @type {Map<string, number>} */ (new Map()));
   const lastUploadedSourcesRef = useRef(new Map()); // Map<partId, string> (source URI)
+  // Toolset Phase 4 audit fix G-3 — per-part mesh-signature cache so the
+  // mesh sync re-uploads when topology changes (Phase 4 ops, undo of a
+  // topology op, save+load round-trip). The pre-fix `!hasMesh()` guard
+  // skipped re-upload after undo because the GPU still HAS a mesh —
+  // just a stale one with the post-op IBO. Signature comparison catches
+  // every divergence via `meshSignature(mesh) === lastUploaded`.
+  const lastUploadedMeshSigRef = useRef(new Map()); // Map<partId, MeshSignature>
   // M7b — pre-mesh alpha hit-test now uses 256² downsampled `Uint8Array`
   // masks (~64 KB each) instead of canvas-sized RGBA `ImageData`
   // (~64 MB at 4K). Wizard reorder/adjust hit-test reads
@@ -453,16 +461,28 @@ export default function CanvasViewport({
         }
       }
 
-      // 2. Mesh Sync
-      if (!scene.parts.hasMesh(node.id)) {
-        const nodeMesh = getMesh(node, project);
-        if (nodeMesh) {
+      // 2. Mesh Sync — re-upload when the GPU has no mesh OR when the
+      // mesh signature has diverged from what we last uploaded. The
+      // signature compares vertexCount + triCount + a positional UV
+      // hash, so any topology mutation (Phase 4 Merge/Dissolve/Subdivide,
+      // add_vertex, remove_vertex, undo of any of them, save+load
+      // round-trip) trips the divergence and triggers a re-upload.
+      // Audit fix G-3 — pre-fix the guard was `!hasMesh()` which only
+      // fired on first upload, leaving stale GPU geometry after undo
+      // of a topology op.
+      const nodeMesh = getMesh(node, project);
+      const hasMeshGpu = scene.parts.hasMesh(node.id);
+      if (nodeMesh) {
+        const lastSig = lastUploadedMeshSigRef.current.get(node.id);
+        const curSig = meshSignature(nodeMesh);
+        if (!hasMeshGpu || !signaturesEqual(curSig, lastSig)) {
           scene.parts.uploadMesh(node.id, nodeMesh);
-          isDirtyRef.current = true;
-        } else if (node.imageWidth && node.imageHeight) {
-          scene.parts.uploadQuadFallback(node.id, node.imageWidth, node.imageHeight);
+          lastUploadedMeshSigRef.current.set(node.id, curSig);
           isDirtyRef.current = true;
         }
+      } else if (!hasMeshGpu && node.imageWidth && node.imageHeight) {
+        scene.parts.uploadQuadFallback(node.id, node.imageWidth, node.imageHeight);
+        isDirtyRef.current = true;
       }
     }
 
@@ -481,6 +501,7 @@ export default function CanvasViewport({
         scene.parts.destroyPart(partId);
         imageDataMapRef.current.delete(partId);
         lastUploadedSourcesRef.current.delete(partId);
+        lastUploadedMeshSigRef.current.delete(partId);
         isDirtyRef.current = true;
       }
     }
@@ -545,9 +566,15 @@ export default function CanvasViewport({
     // Phase 4 — register the scene with the global registry so keymap
     // operators (Merge / Dissolve / Subdivide) can re-upload mesh data
     // after a topology mutation. Cleanup below clears the registration.
+    // `_recordMeshUpload` lets applyTopologyOp seed the sig cache after
+    // its post-op upload so the sync-useEffect doesn't double-upload
+    // (audit fix G-3 sister).
     setSceneRef({
       parts:       sceneRef.current.parts,
       _markDirty:  () => { isDirtyRef.current = true; },
+      _recordMeshUpload: (partId, sig) => {
+        lastUploadedMeshSigRef.current.set(partId, sig);
+      },
     });
 
     // Mesh worker pool — long-lived workers shared across remesh calls.

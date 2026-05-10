@@ -26,12 +26,23 @@ import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { getOperator } from '../operators/registry.js';
 
+// Audit fix D-3 — order matches Blender's `MESH_MT_merge` (At First, At
+// Last, At Center, At Cursor, Collapse, By Distance).
+//
+// Audit note D-5 — Blender's "By Distance" is a separate operator
+// (`MESH_OT_remove_doubles`), not a sub-item of merge. SS keeps it as
+// a sub-item of M-menu for muscle-memory locality (one menu instead of
+// two operator searches). Functional difference: ours ignores Blender's
+// `use_unselected` (merge selected against unselected) and
+// `use_centroid` (merge to vert vs centroid). Documented as v1
+// simplification in plan §Phase 4.
 const MENU_ITEMS = [
+  { id: 'edit.merge.atFirst',     label: 'At First',    chord: '' },
+  { id: 'edit.merge.atLast',      label: 'At Last',     chord: '' },
   { id: 'edit.merge.atCenter',    label: 'At Center',   chord: '' },
   { id: 'edit.merge.atCursor',    label: 'At Cursor',   chord: '' },
-  { id: 'edit.merge.atLast',      label: 'At Last',     chord: '' },
-  { id: 'edit.merge.byDistance',  label: 'By Distance', chord: '' },
   { id: 'edit.merge.collapse',    label: 'Collapse',    chord: '' },
+  { id: 'edit.merge.byDistance',  label: 'By Distance', chord: '' },
 ];
 
 export function MergeMenu() {
@@ -69,8 +80,12 @@ export function MergeMenu() {
 
   function run(itemId) {
     const op = getOperator(itemId);
-    // Close BEFORE exec so the merge.atCursor branch reads the
-    // canvasCursor we stashed at open time (close clears it).
+    // Audit fix G-7 — exec MUST run BEFORE close() because the
+    // merge.atCursor operator reads `canvasCursor` from editMenuStore
+    // at exec time, and close() clears it. The prior comment had this
+    // backwards — currently safe because the order matches the
+    // requirement, but a future "always-close-on-click" refactor would
+    // silently break atCursor without any failure signal.
     const ctx = { editorType: 'viewport' };
     if (op?.available && !op.available(ctx)) {
       close();

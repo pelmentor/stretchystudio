@@ -119,10 +119,20 @@ export const DEFAULT_KEYMAP = {
   'KeyN': 'panel.toolSettingsToggle',
 
   // Toolset Phase 4 — topology operators. M opens the Merge popover
-  // (5 variants); Ctrl+X dissolves selected vertices in place. The
-  // operators' availability gates ensure they no-op outside Edit Mode
-  // on a meshed part. Blender uses the same chords (`MESH_OT_merge`,
-  // `MESH_OT_dissolve_verts`).
+  // (6 variants — D-3 added At First); Ctrl+X dissolves selected
+  // vertices in place. The operators' availability gates ensure they
+  // no-op outside Edit Mode on a meshed part.
+  //
+  // Blender chord parity:
+  //   - `KeyM` = `MESH_OT_merge` (matches us — opens the M-menu).
+  //   - `Ctrl+KeyX` in Blender is `MESH_OT_dissolve_mode`, a context-
+  //     sensitive dispatch that calls vert / edge / face dissolve
+  //     based on `tool_settings->selectmode` (audit note D-8 from
+  //     `editmesh_tools.cc:6281`, `blender_default.py:5605`). SS is
+  //     vertex-only today so `Ctrl+X` fires `edit.dissolveVerts`
+  //     directly. When edge / face select modes land (Phase 6+),
+  //     this binding will need a dispatch wrapper that reads the
+  //     active select mode and routes accordingly.
   'KeyM':       'edit.mergeMenu',
   'Ctrl+KeyX':  'edit.dissolveVerts',
   'Meta+KeyX':  'edit.dissolveVerts',

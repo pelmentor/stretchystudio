@@ -1,10 +1,13 @@
-// Toolset Plan Phase 4.C — Subdivide N-cuts composition.
+// Toolset Plan Phase 4.C — Subdivide N-cuts (Blender single-pass).
 //
-// Verifies: cuts=2..6 compose correctly (each cut subdivides the prior
-// mesh), final vertexSources references the ORIGINAL mesh's verts (so
-// per-vertex blendShape data can be remapped), max-cuts (6) clamping,
-// growing-selection rule (new midpoints with both-selected endpoints
-// join the next-cut selection).
+// Verifies: Blender's `MESH_OT_subdivide` semantic where cuts=N means
+// N midpoints per edge in a single pass → (N+1)^2 sub-triangles per
+// parent. Audit fix D-1 — pre-fix we iterated single-cuts (4^cuts
+// sub-tris); now we match Blender's `bm_subdivide_multicut` exactly.
+//
+// Verifies: cuts=2 → 9 sub-tris per parent (NOT 16); cuts=3 → 16
+// (NOT 64); vertexSources references ORIGINAL mesh's verts (NOT
+// intermediate); max-cuts (6) clamping; growing-selection rule.
 //
 // Run: node scripts/test/test_subdivide_n_cuts.mjs
 
@@ -18,10 +21,9 @@ function assert(cond, name) {
   console.error(`FAIL: ${name}`);
 }
 
-// 1. cuts=2 on a single tri: cuts=1 → 6 verts, 4 tris.
-//    cuts=2 → each of 4 sub-tris subdivides → 16 tris, ~12 verts unique
-//    (3 corners + 3 first-cut midpoints + new midpoints on the 9 new
-//    edges of the 4 sub-tris, with shared edges deduped).
+// 1. cuts=2 on a single tri: 9 sub-tris per parent, triangular grid
+//    with 3 segments per edge → (3+1)(3+2)/2 = 10 grid points
+//    (3 corners + 6 edge midpoints + 1 interior centroid).
 {
   const mesh = {
     vertices: [
@@ -33,13 +35,20 @@ function assert(cond, name) {
   };
   const r = subdivide(mesh, [0, 1, 2], { cuts: 2, smoothness: 0 });
   assert(r !== null, 'cuts=2 → result');
-  assert(r.triangles.length === 16, `cuts=2 → 16 tris (4 × 4), got ${r.triangles.length}`);
-  // Vert count: corners (3) + first cut midpoints (3) + second cut
-  // midpoints (each sub-tri's 3 edges, shared via dedup). For a triangle
-  // subdivided twice, the result is a regular triangular grid with
-  // (n+1)(n+2)/2 verts where n = 2² = 4 → 15 verts. Our triangle starts
-  // with the corner+midpoint topology so the count is 15.
-  assert(r.vertices.length === 15, `cuts=2 → 15 verts (regular grid), got ${r.vertices.length}`);
+  assert(r.triangles.length === 9, `cuts=2 → 9 tris (Blender single-pass), got ${r.triangles.length}`);
+  // 3 corners + 3 edges × 2 midpoints/edge + 1 interior centroid = 10
+  assert(r.vertices.length === 10, `cuts=2 → 10 verts (3 + 6 + 1), got ${r.vertices.length}`);
+  // Verify the interior vert is the centroid via vertexSources/Weights.
+  let foundCentroid = false;
+  for (let i = 3; i < 10; i++) {
+    const sources = r.vertexSources.get(i);
+    const weights = r.vertexWeights?.get(i);
+    if (sources?.length === 3 && weights) {
+      const allEqual = weights.every((w) => Math.abs(w - 1/3) < 1e-9);
+      if (allEqual) { foundCentroid = true; break; }
+    }
+  }
+  assert(foundCentroid, 'cuts=2 has 1 interior vert at centroid (α=β=γ=1/3)');
 }
 
 // 2. Composed vertexSources for cuts=2 — every newIdx maps to
@@ -63,7 +72,8 @@ function assert(cond, name) {
   }
 }
 
-// 3. cuts=7 clamps to cuts=6 (Blender UI cap).
+// 3. cuts=7 clamps to cuts=6 (Blender UI cap). cuts=6 → triangular grid
+//    with 7 segments per edge → (7+1)(7+2)/2 = 36 verts; (6+1)^2 = 49 tris.
 {
   const mesh = {
     vertices: [{ x:0,y:0 }, { x:10,y:0 }, { x:5,y:10 }],
@@ -71,7 +81,6 @@ function assert(cond, name) {
     triangles: [[0,1,2]],
     edgeIndices: null,
   };
-  // cuts=6: triangular grid with (2^6 + 1)*(2^6 + 2)/2 = 65 * 66 / 2 = 2145 verts.
   const rClamped = subdivide(mesh, [0, 1, 2], { cuts: 99, smoothness: 0 });
   const rExplicit = subdivide(mesh, [0, 1, 2], { cuts: 6, smoothness: 0 });
   assert(rClamped !== null && rExplicit !== null, 'cuts=99/6 → result');
@@ -79,6 +88,10 @@ function assert(cond, name) {
     `cuts=99 clamps to cuts=6 (vert count match): ${rClamped.vertices.length} vs ${rExplicit.vertices.length}`);
   assert(rClamped.triangles.length === rExplicit.triangles.length,
     'cuts=99 clamps to cuts=6 (tri count match)');
+  assert(rExplicit.triangles.length === 49,
+    `cuts=6 → 49 tris ((6+1)^2), got ${rExplicit.triangles.length}`);
+  assert(rExplicit.vertices.length === 36,
+    `cuts=6 → 36 verts ((7)(8)/2), got ${rExplicit.vertices.length}`);
 }
 
 // 4. cuts=-5 clamps to cuts=1 (no-op floor).

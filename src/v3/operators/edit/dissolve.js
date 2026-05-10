@@ -30,13 +30,37 @@
  *
  * Open rings (boundary vertex was dissolved) are NOT closed — we just
  * drop the incident triangles and don't synthesize a fill polygon.
+ * Audit note D-6: Blender's `MESH_OT_dissolve_verts` exposes
+ * `use_boundary_tear` (pre-splits incident faces so a boundary
+ * dissolve closes cleanly) + `use_face_split` (prevents post-dissolve
+ * degenerate faces, `bmo_dissolve.cc:695-801`). Neither is implemented
+ * in v1; the documented behaviour is "boundary dissolve drops the
+ * incident triangles + leaves a hole; a subsequent Remesh closes it".
  *
  * Blender source reference: `editors/mesh/editmesh_tools.cc` ⟶
- * `MESH_OT_dissolve_verts` ⟶ `bmesh_dissolve_verts` ⟶
- * `BM_face_split_n` which uses BMesh's polygon-fill (constrained
- * Delaunay, a stronger algorithm than ear-clip). For Phase 4 we use
- * Meisters–Chazelle as a simpler-but-correct stand-in; full constrained
- * Delaunay is a Phase 6+ enhancement if rings get larger.
+ * `MESH_OT_dissolve_verts` ⟶ `bmo_dissolve.cc` ⟶ `BM_face_split_n`
+ * which uses `BLI_polyfill_calc_arena` from `blenlib/intern/polyfill_2d.cc`.
+ * That file's banner explicitly calls itself "An ear clipping algorithm"
+ * with a KD-tree for performance — NOT constrained Delaunay (a prior
+ * version of this comment claimed Delaunay; audit fix D-7 corrected
+ * the attribution). The KD-tree variant is faster on large rings; for
+ * SS's typically-small one-rings (4-8 verts) Meisters–Chazelle's O(n²)
+ * containment test is equivalent in correctness and simpler to audit.
+ *
+ * **Connected dissolved clusters (v1 simplification).** When two
+ * adjacent selected verts share a triangle, the per-centre ring
+ * detection sees the OTHER dissolved vert in its ring and silently
+ * declines to refill (line ~190). The triangles incident to BOTH
+ * dissolved verts are still removed; nothing fills the resulting hole.
+ * Audit fix G-4 corrected the misleading "will be re-fed when we
+ * process their centre" comment — the bucketing puts each shared
+ * triangle in just ONE centre's bucket, so the second centre's ring
+ * is incomplete and would need BFS-merging across the cluster to
+ * recover. That cluster-fix is queued for Phase 6+ (Blender does it
+ * via `BM_faces_join_pair` in `bmo_dissolve.cc:762-778`); for v1, the
+ * documented behaviour is "boundary verts and adjacent-pair clusters
+ * leave holes — exit Edit Mode and reuse the existing remesh path
+ * if you need a closed mesh".
  *
  * @module v3/operators/edit/dissolve
  */
@@ -44,7 +68,7 @@
 import {
   enumerateOneRingPolygon,
   cross2, pointInTriangleStrict,
-  removeDegenerateTriangles, identityVertexSources,
+  removeDegenerateTriangles,
 } from '../../../lib/meshTopology.js';
 
 /** @typedef {import('../../../lib/meshTopology.js').TopologyOpResult} TopologyOpResult */
@@ -189,11 +213,20 @@ export function dissolveVertices(mesh, selection) {
   for (const [centre, incident] of incidentByCenter) {
     const ringInfo = enumerateOneRingPolygon(incident, centre);
     if (!ringInfo) continue;
-    // Reject rings that include other dissolved verts — those collapse
-    // into a multi-vert hole that the simple per-centre ear-clip can't
-    // handle correctly. The tris incident to those will be re-fed when
-    // we process *their* centre. (Future: BFS-merge connected dissolved
-    // clusters into a single ring; for now we keep the v1 simple.)
+    // Audit fix G-4 — when adjacent verts are both dissolved, the
+    // triangle bucketing above puts the shared triangle in just ONE
+    // centre's bucket (`for ... break` hits the first dissolved vert
+    // it sees). When we hit the OTHER centre, its ring will be
+    // incomplete (missing the shared triangle) AND will contain the
+    // first dissolved vert — both reasons to skip refill. The prior
+    // "will be re-fed" comment was wrong: the shared tri is NOT
+    // re-fed because it's already in the first bucket.
+    //
+    // For v1, both centres skip → triangles incident to both
+    // dissolved verts are removed but no refill occurs (hole left).
+    // Phase 6+ will BFS-merge connected dissolved clusters into a
+    // single combined ring before ear-clip (mirroring Blender's
+    // `BM_faces_join_pair` per edge, `bmo_dissolve.cc:762-778`).
     const ringHasOtherDissolved = ringInfo.ring.some((v) => sel.has(v));
     if (ringHasOtherDissolved) continue;
     const refill = earClipTriangulate(ringInfo.ring, mesh.vertices, ringInfo.closed);

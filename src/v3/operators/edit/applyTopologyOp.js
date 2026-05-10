@@ -39,6 +39,7 @@ import {
   remapPerVertexArray, averageDeltas, averageNumbers,
 } from '../../../lib/meshTopology.js';
 import { getSceneRef } from '../../../lib/sceneRegistry.js';
+import { meshSignature } from '../../../io/meshSignature.js';
 
 /** @typedef {import('../../../lib/meshTopology.js').TopologyOpResult} TopologyOpResult */
 
@@ -70,6 +71,12 @@ export function applyTopologyOp(partId, result) {
   const priorActive = editor.activeVertex;
 
   // Pre-compute per-vertex remapped side-data using the OLD mesh.
+  // Pass `result.vertexWeights` (when present) so Subdivide's barycentric
+  // / lerp interpolation uses weighted averages — without weights, every
+  // edge midpoint and interior vert would snap to the unweighted source
+  // mean (centroid for 3-source interior, midpoint regardless of cut
+  // parameter for 2-source edge mids).
+  const vw = result.vertexWeights ?? null;
   /** @type {Array<{dx:number, dy:number}|null>[]|null} */
   const remappedShapeDeltas = node.blendShapes?.length
     ? node.blendShapes.map((shape) =>
@@ -78,6 +85,7 @@ export function applyTopologyOp(partId, result) {
           result.vertexSources,
           result.vertices.length,
           averageDeltas,
+          vw,
         ),
       )
     : null;
@@ -92,6 +100,7 @@ export function applyTopologyOp(partId, result) {
         result.vertexSources,
         result.vertices.length,
         averageNumbers,
+        vw,
       );
     }
   }
@@ -103,6 +112,7 @@ export function applyTopologyOp(partId, result) {
         result.vertexSources,
         result.vertices.length,
         averageNumbers,
+        vw,
       )
     : null;
 
@@ -123,23 +133,36 @@ export function applyTopologyOp(partId, result) {
     }
     if (remappedWeightGroups) m.weightGroups = remappedWeightGroups;
     if (remappedBoneWeights)  m.boneWeights  = remappedBoneWeights;
+    // Audit fix G-1 — `mesh.runtime.keyforms[i].vertexPositions` is
+    // positionally-indexed at the OLD vertex count. After topology
+    // change it stays at `2 * N_old`; `artMeshEval` reads that length
+    // as authoritative `len` and emits wrong-sized buffers (or filters
+    // out the keyform entirely). The runtime is rebuilt by the next
+    // Init Rig pass — clearing here matches the existing pattern at
+    // `ArmatureModifierService.js:155` and `artMeshRuntimeSync.js:175`.
+    if (m.runtime) delete m.runtime;
   });
 
   // GPU re-upload — match the existing add_vertex / remove_vertex paths
   // in CanvasViewport (uploadMesh + isDirtyRef.current = true). The
   // sceneRegistry handles the dirty flag bump as part of uploadMesh.
+  // Record the post-op signature so CanvasViewport's sync-useEffect
+  // doesn't double-upload after the React render cycle (audit fix G-3
+  // — the sync compares signatures, so seeding the cache prevents the
+  // redundant second upload).
   const scene = getSceneRef();
   if (scene && scene.parts) {
-    scene.parts.uploadMesh(partId, {
+    const meshLike = {
       vertices:    result.vertices,
       uvs:         result.uvs,
       triangles:   result.triangles,
       edgeIndices: result.edgeIndices,
-    });
-    // Trigger a render via the registered dirty marker (CanvasViewport's
-    // rAF loop reads this).
-    const markDirty = scene._markDirty;
-    if (typeof markDirty === 'function') markDirty();
+    };
+    scene.parts.uploadMesh(partId, meshLike);
+    if (typeof scene._recordMeshUpload === 'function') {
+      scene._recordMeshUpload(partId, meshSignature(meshLike));
+    }
+    if (typeof scene._markDirty === 'function') scene._markDirty();
   }
 
   // Apply vertexIndexRemap to the editor selection.

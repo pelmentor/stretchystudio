@@ -20,19 +20,25 @@
  * @module lib/sceneRegistry
  */
 
-/** @type {{ parts?: any, _markDirty?: () => void } | null} */
+/** @type {{ parts?: any, _markDirty?: () => void, _recordMeshUpload?: (partId:string, sig:any) => void } | null} */
 let _scene = null;
 
 /**
  * Register the scene. CanvasViewport calls this on mount.
  *
- * Pass `{ parts: sceneRef.current.parts, _markDirty: () => isDirtyRef.current = true }`
- * — the dirty marker is split out as its own callback so the registry
- * doesn't have to know about CanvasViewport's render-loop internals.
+ * Shape:
+ *   - `parts` — the WebGL parts renderer (`scene.parts`)
+ *   - `_markDirty()` — triggers a render-loop tick
+ *   - `_recordMeshUpload(partId, sig)` — records the just-uploaded mesh
+ *     signature so the sync useEffect doesn't double-upload after the
+ *     React render cycle. Required for Phase 4 audit fix G-3 (sig-
+ *     tracked sync re-uploads on divergence; without this hook,
+ *     applyTopologyOp's explicit upload would always be followed by a
+ *     redundant sync-effect upload).
  *
  * Pass `null` to clear (CanvasViewport's effect cleanup).
  *
- * @param {{ parts?: any, _markDirty?: () => void } | null} scene
+ * @param {{ parts?: any, _markDirty?: () => void, _recordMeshUpload?: (partId:string, sig:any) => void } | null} scene
  */
 export function setSceneRef(scene) {
   _scene = scene ?? null;

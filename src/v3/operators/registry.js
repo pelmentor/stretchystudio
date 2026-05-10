@@ -33,7 +33,7 @@ import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useBoxSelectStore } from '../../store/boxSelectStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useSubdivideStore } from '../../store/subdivideStore.js';
-import { mergeAtCenter, mergeAtCursor, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
+import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
 import { dissolveVertices } from './edit/dissolve.js';
 import { subdivide } from './edit/subdivide.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
@@ -739,6 +739,28 @@ function registerBuiltins() {
       const av = useEditorStore.getState().activeVertex;
       if (!av) return;
       runMergeVariant((mesh, sel) => mergeAtLast(mesh, sel, av.vertIndex));
+    },
+  });
+
+  // Audit fix D-3 — `MERGE_FIRST` ("At First") matches Blender's M-menu.
+  // SS doesn't track per-vert selection-history, so "first" = first
+  // entry in Set iteration order. Set iteration is insertion-order, so
+  // for click-built selections the order matches click history; for
+  // box/lasso-built selections it matches geometry-scan order. This is
+  // a v1 deviation — Blender's `em->bm->selected.first` is strict
+  // selection-history. Documented in `mergeAtFirst` JSDoc.
+  registerOperator({
+    id: 'edit.merge.atFirst',
+    label: 'Merge — At First',
+    available: () => topologyAvailable(2),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size < 2) return;
+      const firstVertIdx = sel.values().next().value;
+      if (typeof firstVertIdx !== 'number') return;
+      runMergeVariant((mesh, s) => mergeAtFirst(mesh, s, firstVertIdx));
     },
   });
 

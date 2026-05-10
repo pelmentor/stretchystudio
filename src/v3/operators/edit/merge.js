@@ -210,6 +210,16 @@ export function mergeAtCursor(mesh, selection, cursor) {
  * Merge → active vertex's position. All selected verts collapse to
  * the active vertex.
  *
+ * **Active vertex semantics.** Blender's `MESH_OT_merge` `MERGE_LAST`
+ * mode reads `em->bm->selected.last` — the most recently added selection
+ * entry, in selection-history order. Our `editorStore.activeVertex`
+ * tracks the same thing (writes to `activeVertex` happen on every
+ * `selectVertex` / `toggleVertexSelection` add path). Callers should
+ * pass `editorStore.activeVertex.vertIndex` here so the operator
+ * matches Blender's "merge to most-recently-picked vert" semantic; an
+ * arbitrary selection-membership index would silently diverge (audit
+ * fix D-4).
+ *
  * @param {Object} mesh
  * @param {Array<VertexLike>} mesh.vertices
  * @param {Float32Array|number[]} mesh.uvs
@@ -231,11 +241,53 @@ export function mergeAtLast(mesh, selection, activeVertIdx) {
 }
 
 /**
+ * Merge → first-picked vertex's position. Blender's `MESH_OT_merge`
+ * `MERGE_FIRST` reads `em->bm->selected.first` (the OLDEST selection
+ * entry in history order). All selected verts collapse to its
+ * position. Audit fix D-3 — pre-fix only `MERGE_LAST` was exposed;
+ * Blender's M-menu shows both First and Last and a power user can
+ * reach for either depending on which end of the lasso they want
+ * preserved.
+ *
+ * @param {Object} mesh
+ * @param {Array<VertexLike>} mesh.vertices
+ * @param {Float32Array|number[]} mesh.uvs
+ * @param {Array<[number,number,number]>} mesh.triangles
+ * @param {Set<number>|undefined|null} [mesh.edgeIndices]
+ * @param {Iterable<number>} selection
+ * @param {number} firstVertIdx
+ * @returns {TopologyOpResult|null}
+ */
+export function mergeAtFirst(mesh, selection, firstVertIdx) {
+  const sel = new Set(Array.from(selection).filter((i) => Number.isInteger(i) && i >= 0 && i < mesh.vertices.length));
+  if (sel.size < 2) return null;
+  if (!Number.isInteger(firstVertIdx) || firstVertIdx < 0 || firstVertIdx >= mesh.vertices.length) return null;
+  if (!sel.has(firstVertIdx)) return null;
+  const target = mesh.vertices[firstVertIdx];
+  const overridePos = { x: target.x, y: target.y };
+  const mergeMap = singleGroupForSelection(mesh.vertices.length, sel);
+  return buildResult(mesh, mergeMap, overridePos, sel);
+}
+
+/**
  * Merge → by distance (Blender's "Remove Doubles"). Verts within
  * `threshold` collapse pairwise. Threshold is in mesh-local units
  * (canvas px for our 2D meshes). Operates on the SELECTED verts only
  * — the canonical Blender semantic ("Merge by Distance" needs you to
  * Select All first).
+ *
+ * **Taxonomy deviation (audit D-5).** Blender exposes this as a separate
+ * operator (`MESH_OT_remove_doubles`, `editmesh_tools.cc:3647-3783`),
+ * not a sub-item of `MESH_OT_merge`. SS keeps it under the M-menu for
+ * muscle-memory locality (one menu instead of two operator searches).
+ *
+ * **Missing Blender features (v1 simplifications):**
+ *   - `use_unselected` — Blender lets you merge selected verts against
+ *     unselected ones (snap selected to nearest unselected within
+ *     threshold). SS only merges selected↔selected.
+ *   - `use_centroid=false` — Blender lets you collapse pairs to one
+ *     specific endpoint (lowest-index wins). SS always uses the
+ *     centroid of the merged group.
  *
  * Algorithm: union-find with O(N²) candidate scan inside the selection.
  * For typical Phase 4 selections (a few dozen verts) this is fine; if

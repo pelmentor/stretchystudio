@@ -42,6 +42,15 @@
  * @property {Set<number>}                    edgeIndices
  * @property {Map<number, number|null>}       vertexIndexRemap
  * @property {Map<number, number[]>}          vertexSources
+ *   newIdx → array of OLD vertex indices that contributed. Length 1 = straight
+ *   copy. Length N = average (or weighted average if `vertexWeights` is set).
+ * @property {Map<number, number[]>}          [vertexWeights]
+ *   Optional. Parallel to vertexSources — `vertexWeights[i][k]` is the weight
+ *   for `vertexSources[i][k]`. When absent, all sources weighted equally
+ *   (arithmetic mean). Used by Subdivide to carry barycentric weights for
+ *   interior verts and lerp-parameter weights for edge midpoints, so per-
+ *   vertex data interpolates linearly along the source-vert positions
+ *   instead of snapping to the unweighted mean.
  * @property {boolean}                        retriangulated
  */
 
@@ -98,14 +107,16 @@ export function removeDegenerateTriangles(triangles) {
 }
 
 /**
- * Slice a flat UV buffer down to the survivors of a vertex compaction.
+ * Slice a flat UV buffer down to the survivors of a vertex compaction,
+ * using `vertexSources` (and optional `vertexWeights` for weighted lerp).
  *
  * @param {Float32Array|number[]} oldUvs
  * @param {Map<number, number[]>} vertexSources    - newIdx → oldIdx[]
  * @param {number} newCount
+ * @param {Map<number, number[]>} [vertexWeights]  - optional parallel weights
  * @returns {Float32Array}
  */
-export function remapUvs(oldUvs, vertexSources, newCount) {
+export function remapUvs(oldUvs, vertexSources, newCount, vertexWeights = null) {
   const out = new Float32Array(newCount * 2);
   for (let i = 0; i < newCount; i++) {
     const sources = vertexSources.get(i) ?? [i];
@@ -114,13 +125,17 @@ export function remapUvs(oldUvs, vertexSources, newCount) {
       out[i * 2]     = oldUvs[s * 2]     ?? 0;
       out[i * 2 + 1] = oldUvs[s * 2 + 1] ?? 0;
     } else {
-      let su = 0, sv = 0;
-      for (const s of sources) {
-        su += oldUvs[s * 2]     ?? 0;
-        sv += oldUvs[s * 2 + 1] ?? 0;
+      const weights = vertexWeights ? vertexWeights.get(i) : null;
+      let su = 0, sv = 0, totW = 0;
+      for (let k = 0; k < sources.length; k++) {
+        const s = sources[k];
+        const w = weights ? (weights[k] ?? 1) : 1;
+        su += (oldUvs[s * 2]     ?? 0) * w;
+        sv += (oldUvs[s * 2 + 1] ?? 0) * w;
+        totW += w;
       }
-      out[i * 2]     = su / sources.length;
-      out[i * 2 + 1] = sv / sources.length;
+      out[i * 2]     = totW > 0 ? su / totW : 0;
+      out[i * 2 + 1] = totW > 0 ? sv / totW : 0;
     }
   }
   return out;
@@ -129,34 +144,52 @@ export function remapUvs(oldUvs, vertexSources, newCount) {
 /**
  * Generic per-vertex array remap. Each new vertex pulls from one or
  * more old indices (`vertexSources[newIdx]`), and the caller-supplied
- * `combine` function reduces multiple sources into a single value
- * (typically arithmetic mean). When sources.length === 1 the original
- * value is passed through unchanged (`combine` is bypassed).
+ * `combine` function reduces multiple sources into a single value.
+ * When sources.length === 1 the original value is passed through
+ * unchanged (`combine` is bypassed).
+ *
+ * Combine is invoked as `combine(values, weights)` — `weights` is null
+ * when no `vertexWeights` is provided (callers should treat as
+ * arithmetic mean), or a parallel number[] when weights are present
+ * (callers should treat as weighted mean — Subdivide uses this for
+ * barycentric / lerp interpolation).
+ *
+ * Note: `values` and `weights` arrays exclude null/undefined source
+ * entries (so a sparse blendShape delta map doesn't drag the average
+ * toward zero); a caller's combine function must NOT assume the
+ * arrays match `sources` length.
  *
  * Used by:
- *   - blendShape deltas (combine = average of dx/dy)
- *   - weightGroup weights (combine = arithmetic mean)
+ *   - blendShape deltas (combine = weighted average of dx/dy)
+ *   - weightGroup weights (combine = weighted arithmetic mean)
  *
  * @template T
  * @param {ArrayLike<T>} oldArr
  * @param {Map<number, number[]>} vertexSources
  * @param {number} newCount
- * @param {(values: T[]) => T} combine
+ * @param {(values: T[], weights: number[]|null) => T} combine
+ * @param {Map<number, number[]>} [vertexWeights]
  * @returns {T[]}
  */
-export function remapPerVertexArray(oldArr, vertexSources, newCount, combine) {
+export function remapPerVertexArray(oldArr, vertexSources, newCount, combine, vertexWeights = null) {
   const out = new Array(newCount);
   for (let i = 0; i < newCount; i++) {
     const sources = vertexSources.get(i) ?? [i];
     if (sources.length === 1) {
       out[i] = oldArr[sources[0]];
     } else {
+      const weightsRaw = vertexWeights ? vertexWeights.get(i) : null;
+      /** @type {T[]} */
       const values = [];
-      for (const s of sources) {
-        const v = oldArr[s];
-        if (v !== undefined && v !== null) values.push(v);
+      /** @type {number[]} */
+      const weights = [];
+      for (let k = 0; k < sources.length; k++) {
+        const v = oldArr[sources[k]];
+        if (v === undefined || v === null) continue;
+        values.push(v);
+        weights.push(weightsRaw ? (weightsRaw[k] ?? 1) : 1);
       }
-      out[i] = values.length === 0 ? oldArr[sources[0]] : combine(values);
+      out[i] = values.length === 0 ? oldArr[sources[0]] : combine(values, weightsRaw ? weights : null);
     }
   }
   return out;
@@ -166,33 +199,41 @@ export function remapPerVertexArray(oldArr, vertexSources, newCount, combine) {
  * Average reducer for `{dx, dy}` blendShape delta entries. Skips
  * `null` entries so a merged vert dragged by some shapes but not
  * others doesn't get its delta yanked toward zero by null neighbours.
+ * When `weights` is non-null, computes a weighted mean (used by
+ * Subdivide's barycentric / lerp data interpolation).
  *
  * @param {Array<{dx:number, dy:number}|null>} values
+ * @param {number[]|null} [weights]
  */
-export function averageDeltas(values) {
-  let dx = 0, dy = 0, n = 0;
-  for (const v of values) {
+export function averageDeltas(values, weights = null) {
+  let dx = 0, dy = 0, totW = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
     if (!v) continue;
-    dx += v.dx ?? 0;
-    dy += v.dy ?? 0;
-    n += 1;
+    const w = weights ? (weights[i] ?? 1) : 1;
+    dx += (v.dx ?? 0) * w;
+    dy += (v.dy ?? 0) * w;
+    totW += w;
   }
-  return n === 0 ? null : { dx: dx / n, dy: dy / n };
+  return totW === 0 ? null : { dx: dx / totW, dy: dy / totW };
 }
 
 /**
  * Average reducer for numeric weight values.
  *
  * @param {number[]} values
+ * @param {number[]|null} [weights]
  */
-export function averageNumbers(values) {
-  let s = 0, n = 0;
-  for (const v of values) {
+export function averageNumbers(values, weights = null) {
+  let s = 0, totW = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
     if (typeof v !== 'number' || Number.isNaN(v)) continue;
-    s += v;
-    n += 1;
+    const w = weights ? (weights[i] ?? 1) : 1;
+    s += v * w;
+    totW += w;
   }
-  return n === 0 ? 0 : s / n;
+  return totW === 0 ? 0 : s / totW;
 }
 
 /**
@@ -348,7 +389,13 @@ export function pointInTriangleStrict(p, a, b, c) {
  * Returns the ring as an ordered array of vertex indices (CCW or CW
  * depending on triangulation winding) plus a `closed` flag — true when
  * the ring forms a closed loop (interior vertex), false when it's an
- * open path (boundary vertex).
+ * open path (boundary vertex). Returns null when the centre has no
+ * incident non-degenerate triangle, OR when the local topology is
+ * non-manifold (two separate fans connected only at the centre — a
+ * "butterfly"). Audit fix G-6: pre-fix the duplicate `next.set(u, v)`
+ * silently overwrote, producing a corrupted ring; now we detect and
+ * bail so the caller can fall back to dropping the incident triangles
+ * without refill.
  *
  * Algorithm: for each triangle (a, b, c) where `centerIdx` ∈ {a,b,c},
  * record the directed edge between the OTHER two verts using the
@@ -360,6 +407,8 @@ export function pointInTriangleStrict(p, a, b, c) {
  * @returns {{ring: number[], closed: boolean}|null}  null when centre
  *                                                     has no incident
  *                                                     non-degenerate tri
+ *                                                     OR topology is
+ *                                                     non-manifold
  */
 export function enumerateOneRingPolygon(triangles, centerIdx) {
   /** @type {Map<number, number>} */
@@ -374,6 +423,12 @@ export function enumerateOneRingPolygon(triangles, centerIdx) {
     else if (b === centerIdx) { u = c; v = a; }
     else if (c === centerIdx) { u = a; v = b; }
     else continue;
+    // Audit fix G-6 — if two triangles around the centre produce the
+    // same outgoing edge u→? with different `v`, the local topology
+    // is non-manifold (two separate fans joined only at centre). The
+    // prior `next.set(u, v)` silently overwrote, corrupting the ring
+    // walk. Bail here so the caller treats it as "no refill possible".
+    if (next.has(u) || prev.has(v)) return null;
     next.set(u, v);
     prev.set(v, u);
   }
