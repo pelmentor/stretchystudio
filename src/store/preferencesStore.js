@@ -49,40 +49,49 @@ const PE_DEFAULT = Object.freeze({
   connectedOnly: false,
 });
 
-/** Toolset Plan Phase 2 — snap config defaults.
+/** Toolset Plan Phase 2 — snap config defaults (audit-fixed 2026-05-10).
  *
- *  - `enabled` (master toggle, default false): when true, vertex snap
- *    auto-engages while the modal G drag is unshifted; the magenta
- *    snap-target dot renders. When false, vertex snap is suppressed
- *    and Shift+modal still engages grid/increment snap (matches
- *    pre-Phase-2 behaviour with the new configurable increments).
- *  - `modes.grid` (default `enabled:true, increment:16`): Shift+modal-G
- *    snaps the canvas-px delta to multiples of `increment`. Default 16
- *    matches Blender's default grid; v1 hardcoded 10. When
- *    `grid.enabled` is false, Shift+modal-G falls back to free
- *    translation (no snap), matching "I want fine input only".
- *  - `modes.vertex` (default `enabled:true, threshold:8`): when master
- *    is on AND not Shift, the cursor's nearest project-rest-vertex
- *    within `threshold` canvas-px wins; the modal delta becomes
- *    `(snappedVert - originalCursor)` (per Phase 2.C). Threshold is in
- *    canvas-px so it tracks zoom (the cursor→vert distance is
- *    measured in canvas space).
- *  - `modes.increment` (default `enabled:false, value:15`): when
- *    `enabled` is true, replaces the legacy 15° (rotate) and 0.1
- *    (scale) Shift snaps. `value` is the rotation step in degrees;
- *    scale uses `value/100` as the multiplier step (so 15 → 0.15,
- *    matching Blender's 1° = 0.01× convention).
- *  - `target` (`'closest' | 'center' | 'median' | 'active'`, default
- *    `'closest'`): Phase 2.C — selects which point of the active
- *    selection lands ON the snap vertex. `closest` = the cursor IS the
- *    anchor (simplest, Blender's default). The others compute the
- *    anchor from the selection geometry; see `lib/snap/snapMath.js`. */
+ *  Gesture model is Blender-faithful:
+ *    - Master `enabled` (the "magnet" toggle): when true, snap auto-
+ *      engages during modal G/R/S — no Shift required to engage. When
+ *      false, no snap of any kind (modal is free-transform).
+ *    - Shift (during modal): MOD_PRECISION — fine-grained input.
+ *      Free-transform * 0.1; snap math uses the per-mode `precision`
+ *      value instead of the regular value/increment/threshold.
+ *    - Ctrl (during modal): MOD_SNAP_INVERT — temporarily flips the
+ *      master state for the duration of the press (master on + Ctrl
+ *      held = no snap that frame; master off + Ctrl held = snap fires).
+ *    - Modes coexist: with both vertex + grid enabled, vertex snap
+ *      wins when cursor is within threshold; otherwise grid applies.
+ *
+ *  Per-mode defaults (SS choices, NOT claimed Blender parity):
+ *    - `modes.grid` (`enabled:true, increment:16, precision:1.6`):
+ *      Modal G delta rounded to multiples of `increment`; Shift uses
+ *      `precision` instead. (Blender's 2D grid is adaptive `1/pixel_width`;
+ *      16 px is a SS pick because the prior hardcode was 10 px and the
+ *      bump aligns better with typical PSD pixel budgets.)
+ *    - `modes.vertex` (`enabled:true, threshold:8`): auto-engages
+ *      when cursor is within `threshold` canvas-px of a project rest
+ *      vertex (or evaluated-vertex in Pose Mode — see snapHash.js).
+ *      Threshold is canvas-px so it tracks zoom. No precision field
+ *      because Blender's vertex snap doesn't have one either.
+ *    - `modes.increment` (`enabled:false, value:5, precision:1`):
+ *      Modal R rotation snap step in degrees; Shift uses `precision`.
+ *      Defaults match Blender 1:1 (`snap_angle_increment_2d = 5°`,
+ *      `_precision = 1°` from `DNA_scene_types.h:2430`). Modal S
+ *      snap step is `value/100` (5° → 0.05× per-Shift), Shift
+ *      precision = `precision/100`.
+ *    - `target` (`'closest' | 'center' | 'median' | 'active'`):
+ *      Selects which point of the active selection lands ON the snap
+ *      target. `closest` = nearest selected vertex (Edit Mode) /
+ *      bbox corner (Object Mode) to the snap target — Blender-faithful
+ *      semantics from `transform_snap.cc:snap_source_closest_fn`. */
 const SNAP_DEFAULT = Object.freeze({
   enabled: false,
   modes: Object.freeze({
-    grid:      Object.freeze({ enabled: true,  increment: 16 }),
-    vertex:    Object.freeze({ enabled: true,  threshold: 8  }),
-    increment: Object.freeze({ enabled: false, value:     15 }),
+    grid:      Object.freeze({ enabled: true,  increment: 16, precision: 1.6 }),
+    vertex:    Object.freeze({ enabled: true,  threshold:   8 }),
+    increment: Object.freeze({ enabled: false, value:       5, precision: 1   }),
   }),
   target: 'closest',
 });
@@ -91,9 +100,15 @@ const SNAP_DEFAULT = Object.freeze({
  *  `loadJson` merge in this file collapses nested `modes.{grid|vertex|
  *  increment}` if the saved blob is missing one — clobbering the
  *  defaults with `undefined`. This recursive helper preserves any
- *  per-mode subkey that wasn't persisted (e.g. on schema bumps). */
+ *  per-mode subkey that wasn't persisted (e.g. on schema bumps).
+ *
+ *  Audit-fix 2026-05-10 — also picks up the new `precision` fields on
+ *  grid / increment without dropping a saved blob from before that
+ *  field existed. */
 function mergeSnap(saved) {
-  if (!saved || typeof saved !== 'object') return { ...SNAP_DEFAULT };
+  if (!saved || typeof saved !== 'object') {
+    return JSON.parse(JSON.stringify(SNAP_DEFAULT));
+  }
   const modes = saved.modes && typeof saved.modes === 'object' ? saved.modes : {};
   return {
     enabled: typeof saved.enabled === 'boolean' ? saved.enabled : SNAP_DEFAULT.enabled,

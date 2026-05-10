@@ -163,19 +163,11 @@ function SnapSection() {
             snap={snap}
             setSnap={setSnap}
           />
-          {/* Increment snap (engages on Shift during Modal R + S; degrees
-              for rotation, value/100 for scale). */}
-          <SnapModeRow
-            label="Increment"
-            mode="increment"
-            valueKey="value"
-            valueLabel="°"
-            min={1}
-            max={90}
-            step={1}
-            snap={snap}
-            setSnap={setSnap}
-          />
+          {/* Increment snap drives Modal R (degrees) AND Modal S
+              (value/100 = scale step). Audit fix G-8: surface BOTH
+              bindings in the same row so editing "5°" also visibly sets
+              "0.05× scale step". */}
+          <SnapIncrementRow snap={snap} setSnap={setSnap} />
 
           <label className="flex items-center gap-2 text-[11px] py-0.5">
             <span className="w-20 text-muted-foreground select-none">Target</span>
@@ -192,6 +184,42 @@ function SnapSection() {
           </label>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Audit fix G-8 — Increment row surfaces BOTH the rotation step (in
+ *  degrees) and the derived scale step (`value/100 ×`) so editing the
+ *  value doesn't silently change scale behaviour. */
+function SnapIncrementRow({ snap, setSnap }) {
+  const cfg = snap?.modes?.increment ?? {};
+  const enabled = !!cfg.enabled;
+  const value = cfg.value ?? 5;
+  const scaleStep = (value / 100).toFixed(2);
+  return (
+    <div className="flex items-center gap-2 text-[11px] py-0.5">
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={(e) => setSnap({ modes: { increment: { enabled: e.target.checked } } })}
+        className="h-3 w-3"
+      />
+      <span className="w-16 text-muted-foreground select-none">Increment</span>
+      <input
+        type="number"
+        min={1}
+        max={90}
+        step={1}
+        value={value}
+        disabled={!enabled}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (!Number.isFinite(n)) return;
+          setSnap({ modes: { increment: { value: n } } });
+        }}
+        className="w-14 h-6 bg-background border border-border rounded px-1 text-[11px] tabular-nums"
+      />
+      <span className="text-muted-foreground/70">°R · ×{scaleStep}S</span>
     </div>
   );
 }

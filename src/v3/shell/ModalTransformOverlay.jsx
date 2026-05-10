@@ -37,23 +37,34 @@ import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { useSelectionStore } from '../../store/selectionStore.js';
+import { useCaptureStore } from '../../store/captureStore.js';
 import { endBatch } from '../../store/undoHistory.js';
 import { writePoseValues } from '../../renderer/animationEngine.js';
 import {
-  findNearestVertex,
+  buildSnapHash,
+  enumerateSelectionAnchorVerts,
+  pickSelectionAnchor,
   snapDeltaToGrid,
   snapAngleToIncrement,
   snapScaleToIncrement,
+  applyPrecisionToDelta,
+  applyPrecisionToAngle,
+  applyPrecisionToScale,
   useSnapStore,
 } from '../../lib/snap/index.js';
 
-/** Toolset Phase 2 — legacy fallback snaps when `snap.modes.grid` is
- *  disabled or the increment slot is empty. Match the pre-Phase-2
- *  hard-coded values (G:10px, R:15°, S:0.1) so disabling the mode
- *  preserves the historic behaviour exactly. */
-const LEGACY_SNAP_GRID_INCREMENT       = 10;            // px in canvas space
-const LEGACY_SNAP_ROTATE_INCREMENT_DEG = 15;
-const LEGACY_SNAP_SCALE_INCREMENT_DEG  = 10;            // 10° → 0.1× via snapScaleToIncrement
+/** Phase 2 audit fix (D-1) — Shift acts as Blender's `MOD_PRECISION`
+ *  during modal G/R/S. Multiplier matches Blender's translate
+ *  precision (0.1 = 10× finer). Per `transform_snap.cc:1726` the snap
+ *  precision factor is `t->increment[i] * t->increment_precision`,
+ *  which for 2D scenes is `5° * (1°/5°) = 1°` — i.e. 0.2× for rotation.
+ *  We use 0.1× across the board for translate as the most common
+ *  interpretation; rotation/scale precision use the per-mode
+ *  `precision` slot (defaults to 1° for rotate, 0.01× for scale). */
+const PRECISION_FREE_TRANSLATE = 0.1;
+const PRECISION_FREE_ROTATE    = 0.1;
+const PRECISION_FREE_SCALE     = 0.1;
 
 export function ModalTransformOverlay() {
   const kind        = useModalTransformStore((s) => s.kind);
@@ -79,13 +90,60 @@ export function ModalTransformOverlay() {
   // zero-offset rect if no canvas is mounted (snap will degrade to
   // pure-zoom math, still finite — never crashes).
   const canvasRectRef = useRef(null);
+  // Phase 2 audit fix (D-3, D-4) — built fresh per modal session. Hash
+  // takes ~1 ms for ~5000 verts; modal-only lifetime sidesteps the
+  // staleness-cache + global-invalidation pattern that the prior
+  // approach used (see `lib/snap/snapHash.js` jsdoc).
+  const snapHashRef = useRef(null);
+  const anchorVertsRef = useRef([]);
+  const ctrlHeldRef = useRef(false);
 
   useEffect(() => {
     if (!kind || !startMouse || !pivotCanvas) return;
-    canvasRectRef.current = document.querySelector('canvas')?.getBoundingClientRect() ?? null;
+    const canvasEl = document.querySelector('canvas');
+    canvasRectRef.current = canvasEl?.getBoundingClientRect() ?? null;
     // Clear any leftover snap-target on entry so the dot from a prior
     // drag doesn't render until the first snap engages.
     useSnapStore.getState().clearSnapTarget();
+    ctrlHeldRef.current = false;
+
+    // Phase 2 audit fix (D-3, D-4) — build the snap hash + selection
+    // anchors at modal entry. In Pose Mode, route the hash over the
+    // post-skinning evaluated verts (via `getCanvasHitContext` →
+    // `frames`) so the snap target tracks what's visibly on screen,
+    // not the rest geometry hidden under the deformation.
+    {
+      const project = useProjectStore.getState().project;
+      const editor = useEditorStore.getState();
+      const selection = useSelectionStore.getState().items ?? [];
+      const inPoseMode = editor.editMode === 'pose';
+      let frames = null;
+      if (inPoseMode) {
+        const ctxFn = useCaptureStore.getState().getCanvasHitContext;
+        const ctx = typeof ctxFn === 'function' ? ctxFn() : null;
+        frames = ctx?.frames ?? null;
+      }
+      // Object-Mode dragged-part exclusion (audit fix G-2): when there's
+      // exactly one node in the selection, skip its own verts so the
+      // snap dot is attracted to OTHER parts. Multi-select and Edit
+      // Mode bypass — Edit Mode's modal G is a vertex edit (snap-to-
+      // own-other-verts is a feature), and multi-select implies the
+      // user wants between-parts snap.
+      const excludePartId = (!inPoseMode && editor.editMode !== 'edit'
+                             && selection.length === 1)
+        ? selection[0]?.id ?? null
+        : null;
+      snapHashRef.current = buildSnapHash(project, {
+        cellSize: 64,   // covers up to ~64-px threshold without rebuild
+        frames,
+        excludePartId,
+      });
+      anchorVertsRef.current = enumerateSelectionAnchorVerts(project, selection, {
+        editMode: editor.editMode,
+        activeVertex: editor.activeVertex,
+        selectedVertexIndices: editor.selectedVertexIndices,
+      });
+    }
 
     /**
      * BVR-005 — Parse the typed buffer to a finite number, or NaN if
@@ -98,10 +156,13 @@ export function ModalTransformOverlay() {
       return Number.isFinite(n) ? n : NaN;
     }
 
-    function applyDelta(currentX, currentY, shift) {
+    function applyDelta(currentX, currentY, shift, ctrl) {
       const ed = useEditorStore.getState();
-      const zoom = ed.view.zoom || 1;
-      const view = ed.view;
+      // GAP-010 Phase B — view state is keyed by mode now (`viewByMode.viewport`
+      // for the edit canvas). Modal G/R/S only fires from the viewport tab,
+      // never from livePreview, so reading `viewport` directly is correct.
+      const view = ed.viewByMode?.viewport ?? { zoom: 1, panX: 0, panY: 0 };
+      const zoom = view.zoom || 1;
       // viewport→canvas delta: divide by zoom. Pan doesn't move with
       // the cursor so we ignore it for delta math.
       let dxView = currentX - startMouse.x;
@@ -129,19 +190,25 @@ export function ModalTransformOverlay() {
         else              { dxCanvas = typed; dyCanvas = 0;     }
       }
 
-      // Toolset Plan Phase 2.B/C — snap config. Read fresh each tick
-      // so toggles in the N-panel mid-drag take effect immediately.
+      // Phase 2 audit fix (D-1, D-2) — Blender-faithful gesture model.
+      //   - master `enabled`: the magnet toggle. ON → snap auto-engages.
+      //   - Shift: MOD_PRECISION (fine-grained input; never engages snap).
+      //   - Ctrl:  MOD_SNAP_INV (XOR'd against master so user can flip
+      //            mid-drag).
+      // Read fresh each tick so toggles in the N-panel mid-drag take
+      // effect immediately.
       const snap = usePreferencesStore.getState().snap;
-      const project = useProjectStore.getState().project;
+      const masterOn = !!snap?.enabled;
+      const effSnap = ctrl ? !masterOn : masterOn;
       let snapVertexHit = false;
 
-      // Phase 2.C — snap-to-vertex (Modal G only, unshifted, master on,
-      // mode on). Overrides the mouse-driven dxCanvas/dyCanvas so the
-      // anchor (cursor under 'closest' target) lands exactly on the
-      // snap vertex. Typed input takes precedence — typed numeric goes
-      // to the requested value verbatim.
-      if (kind === 'translate' && !useTyped && !shift && snap?.enabled
-          && snap.modes?.vertex?.enabled && project) {
+      if (kind === 'translate' && !useTyped && effSnap && snap?.modes?.vertex?.enabled) {
+        // Phase 2.C — snap-to-vertex (auto-engages whenever cursor
+        // enters threshold). Shift doesn't gate this — it's MOD_PRECISION,
+        // not a snap-engagement modifier. Anchor + delta math via
+        // pickSelectionAnchor so the user's `snap.target` (closest /
+        // center / median / active) actually drives where the selection
+        // lands on the snap vertex.
         const rect = canvasRectRef.current;
         const cursorCanvasX = rect
           ? (currentX - rect.left) / zoom - view.panX / zoom
@@ -149,45 +216,54 @@ export function ModalTransformOverlay() {
         const cursorCanvasY = rect
           ? (currentY - rect.top)  / zoom - view.panY / zoom
           : currentY / zoom;
-        const startCanvasX = rect
-          ? (startMouse.x - rect.left) / zoom - view.panX / zoom
-          : startMouse.x / zoom;
-        const startCanvasY = rect
-          ? (startMouse.y - rect.top)  / zoom - view.panY / zoom
-          : startMouse.y / zoom;
-        // 'closest' target: the cursor IS the anchor. Other target modes
-        // (center/median/active) override the anchor with selection
-        // geometry; deferred to a follow-up — modal currently uses
-        // 'closest' regardless. The math path is unit-tested via
-        // computeSelectionAnchor.
-        const hit = findNearestVertex(
-          project, cursorCanvasX, cursorCanvasY, snap.modes.vertex.threshold,
-        );
+        const threshold = snap.modes.vertex.threshold > 0
+          ? snap.modes.vertex.threshold
+          : 8;
+        const hash = snapHashRef.current;
+        const hit = hash
+          ? hash.findNearest(cursorCanvasX, cursorCanvasY, threshold)
+          : null;
         if (hit) {
-          dxCanvas = hit.x - startCanvasX;
-          dyCanvas = hit.y - startCanvasY;
+          const anchor = pickSelectionAnchor(
+            anchorVertsRef.current,
+            snap.target ?? 'closest',
+            { snapTarget: hit, cursor: { x: cursorCanvasX, y: cursorCanvasY } },
+          );
+          dxCanvas = hit.x - anchor.x;
+          dyCanvas = hit.y - anchor.y;
           if (axis === 'x') dyCanvas = 0;
           if (axis === 'y') dxCanvas = 0;
           useSnapStore.getState().setSnapTarget(hit);
           snapVertexHit = true;
-        } else {
-          useSnapStore.getState().clearSnapTarget();
         }
-      } else {
+      }
+
+      if (!snapVertexHit && useSnapStore.getState().target !== null) {
         useSnapStore.getState().clearSnapTarget();
       }
 
-      // Phase 2.B — Shift+G snaps the delta to grid increments. Reads
-      // `snap.modes.grid.increment` (default 16); falls back to legacy
-      // 10px when the mode is disabled. Vertex snap (above) wins —
-      // Shift inverts intent so they don't both apply on the same tick.
-      if (kind === 'translate' && !useTyped && shift && !snapVertexHit) {
-        const gridInc = snap?.modes?.grid?.enabled
-          ? (snap.modes.grid.increment > 0 ? snap.modes.grid.increment : LEGACY_SNAP_GRID_INCREMENT)
-          : LEGACY_SNAP_GRID_INCREMENT;
-        const snapped = snapDeltaToGrid({ x: dxCanvas, y: dyCanvas }, gridInc);
+      // Grid snap — auto-engages when master + grid enabled. Shift
+      // selects the precision increment instead of the regular one.
+      if (kind === 'translate' && !useTyped && effSnap && !snapVertexHit
+          && snap?.modes?.grid?.enabled) {
+        const grid = snap.modes.grid;
+        const inc = shift
+          ? (grid.precision > 0 ? grid.precision : (grid.increment > 0 ? grid.increment / 10 : 1.6))
+          : (grid.increment > 0 ? grid.increment : 16);
+        const snapped = snapDeltaToGrid({ x: dxCanvas, y: dyCanvas }, inc);
         dxCanvas = snapped.x;
         dyCanvas = snapped.y;
+      }
+
+      // Free-transform precision when no snap engages (Blender's
+      // MOD_PRECISION). Multiplies the raw delta by 0.1 — finer cursor
+      // input. NOT applied when typed-buffer is active (typed values
+      // are exact).
+      if (kind === 'translate' && !useTyped && shift && !snapVertexHit
+          && (!effSnap || !snap?.modes?.grid?.enabled)) {
+        const p = applyPrecisionToDelta({ x: dxCanvas, y: dyCanvas }, PRECISION_FREE_TRANSLATE);
+        dxCanvas = p.x;
+        dyCanvas = p.y;
       }
 
       const updateProject = useProjectStore.getState().updateProject;
@@ -213,14 +289,18 @@ export function ModalTransformOverlay() {
               const ax1 = currentX / zoom - pivotCanvas.x;
               const ay1 = currentY / zoom - pivotCanvas.y;
               dRot = Math.atan2(ay1, ax1) - Math.atan2(ay0, ax0);
-              if (shift) {
-                // Phase 2.D — rotation snap. Reads
-                // `snap.modes.increment.value` when the mode is
-                // enabled; legacy 15° otherwise.
-                const incDeg = snap?.modes?.increment?.enabled
-                  ? (snap.modes.increment.value > 0 ? snap.modes.increment.value : LEGACY_SNAP_ROTATE_INCREMENT_DEG)
-                  : LEGACY_SNAP_ROTATE_INCREMENT_DEG;
-                dRot = snapAngleToIncrement(dRot, incDeg);
+              // Phase 2.D — rotation snap is auto-engaging when master
+              // + increment.enabled. Shift = precision (Blender's 5°→1°
+              // = `precision`). Without snap, Shift = MOD_PRECISION
+              // applied to the raw rotation delta.
+              if (effSnap && snap?.modes?.increment?.enabled) {
+                const inc = snap.modes.increment;
+                const stepDeg = shift
+                  ? (inc.precision > 0 ? inc.precision : 1)
+                  : (inc.value > 0 ? inc.value : 5);
+                dRot = snapAngleToIncrement(dRot, stepDeg);
+              } else if (shift) {
+                dRot = applyPrecisionToAngle(dRot, PRECISION_FREE_ROTATE);
               }
             }
             writer(node, { rotation: (orig.rotation ?? 0) + dRot });
@@ -239,15 +319,16 @@ export function ModalTransformOverlay() {
               );
               s = d1 / d0;
               if (!Number.isFinite(s) || s <= 0) s = 1;
-              if (shift) {
-                // Phase 2.D — scale snap. `increment.value` is in
-                // degrees per the SNAP_DEFAULT jsdoc convention; scale
-                // step is `value/100`. Legacy 0.1× preserved when the
-                // mode is disabled (10°/100 = 0.1×).
-                const incDeg = snap?.modes?.increment?.enabled
-                  ? (snap.modes.increment.value > 0 ? snap.modes.increment.value : LEGACY_SNAP_SCALE_INCREMENT_DEG)
-                  : LEGACY_SNAP_SCALE_INCREMENT_DEG;
-                s = snapScaleToIncrement(s, incDeg);
+              // Scale snap — sister of rotation. `increment.value` is
+              // in degrees; scale step = value/100 (so 5° → 0.05×).
+              if (effSnap && snap?.modes?.increment?.enabled) {
+                const inc = snap.modes.increment;
+                const stepDeg = shift
+                  ? (inc.precision > 0 ? inc.precision : 1)
+                  : (inc.value > 0 ? inc.value : 5);
+                s = snapScaleToIncrement(s, stepDeg);
+              } else if (shift) {
+                s = applyPrecisionToScale(s, PRECISION_FREE_SCALE);
               }
             }
             const sx = axis === 'y' ? 1 : s;
@@ -263,7 +344,8 @@ export function ModalTransformOverlay() {
 
     function onMouseMove(e) {
       lastMouse.current = { x: e.clientX, y: e.clientY };
-      applyDelta(e.clientX, e.clientY, e.shiftKey);
+      ctrlHeldRef.current = e.ctrlKey || e.metaKey;
+      applyDelta(e.clientX, e.clientY, e.shiftKey, ctrlHeldRef.current);
     }
     function onClick(e) {
       // left click commits, right click cancels
@@ -314,7 +396,7 @@ export function ModalTransformOverlay() {
         e.preventDefault();
         popTyped();
         const cur = lastMouse.current;
-        applyDelta(cur.x, cur.y, e.shiftKey);
+        applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
         return;
       }
       if (e.key.length === 1 && (
@@ -325,7 +407,42 @@ export function ModalTransformOverlay() {
         e.preventDefault();
         appendTyped(e.key);
         const cur = lastMouse.current;
-        applyDelta(cur.x, cur.y, e.shiftKey);
+        applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
+        return;
+      }
+      // Phase 2 audit fix (D-1) — Ctrl is MOD_SNAP_INV in Blender. Re-
+      // fire applyDelta on Ctrl press/release so the snap state flips
+      // immediately instead of waiting for the next mousemove.
+      if (e.key === 'Control' || e.key === 'Meta') {
+        const next = e.type === 'keydown';
+        if (next !== ctrlHeldRef.current) {
+          ctrlHeldRef.current = next;
+          const cur = lastMouse.current;
+          applyDelta(cur.x, cur.y, e.shiftKey, next);
+        }
+        return;
+      }
+      // Same for Shift — re-fire so MOD_PRECISION engages immediately.
+      if (e.key === 'Shift') {
+        const cur = lastMouse.current;
+        applyDelta(cur.x, cur.y, e.type === 'keydown', ctrlHeldRef.current);
+        return;
+      }
+    }
+    function onKeyUp(e) {
+      // Mirror onKeyDown for Ctrl + Shift release so the modal updates
+      // when the user lets go of MOD_PRECISION / MOD_SNAP_INV.
+      if (e.key === 'Control' || e.key === 'Meta') {
+        if (ctrlHeldRef.current) {
+          ctrlHeldRef.current = false;
+          const cur = lastMouse.current;
+          applyDelta(cur.x, cur.y, e.shiftKey, false);
+        }
+        return;
+      }
+      if (e.key === 'Shift') {
+        const cur = lastMouse.current;
+        applyDelta(cur.x, cur.y, false, ctrlHeldRef.current);
         return;
       }
     }
@@ -351,11 +468,17 @@ export function ModalTransformOverlay() {
     window.addEventListener('mousedown', onClick, { capture: true });
     window.addEventListener('contextmenu', onContextMenu, { capture: true });
     window.addEventListener('keydown', onKeyDown, { capture: true });
+    window.addEventListener('keyup',   onKeyUp,   { capture: true });
     return () => {
       window.removeEventListener('mousemove', onMouseMove, { capture: true });
       window.removeEventListener('mousedown', onClick, { capture: true });
       window.removeEventListener('contextmenu', onContextMenu, { capture: true });
       window.removeEventListener('keydown', onKeyDown, { capture: true });
+      window.removeEventListener('keyup',   onKeyUp,   { capture: true });
+      // Phase 2.C audit fix — abnormal exits (parent unmount mid-drag,
+      // workspace switch, page navigation) bypass commit/cancel. Clear
+      // the snap target here so the magenta dot doesn't stick around.
+      useSnapStore.getState().clearSnapTarget();
     };
   }, [kind, axis, startMouse, pivotCanvas, original, setAxis, appendTyped, popTyped, commit, cancel]);
 
@@ -398,7 +521,7 @@ function SnapTargetDot({ kind }) {
   if (!target || kind !== 'translate') return null;
   // Re-derive the canvas rect each render so the dot follows pan/zoom
   // changes (paranoid; both are stable during a modal drag, but cheap).
-  const view = useEditorStore.getState().view;
+  const view = useEditorStore.getState().viewByMode?.viewport ?? { zoom: 1, panX: 0, panY: 0 };
   const zoom = view.zoom || 1;
   const canvas = document.querySelector('canvas');
   const rect = canvas?.getBoundingClientRect();

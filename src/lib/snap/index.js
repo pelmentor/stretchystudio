@@ -19,15 +19,22 @@ export {
   snapDeltaToGrid,
   snapAngleToIncrement,
   snapScaleToIncrement,
+  applyPrecisionToDelta,
+  applyPrecisionToAngle,
+  applyPrecisionToScale,
+  pickSelectionAnchor,
+  enumerateSelectionAnchorVerts,
+  // Legacy export — kept for one release as a passthrough for older
+  // tests; deprecated in favour of `pickSelectionAnchor` (which takes
+  // a snap-target so 'closest' actually means Blender's "closest to
+  // target" not "the cursor IS the anchor").
   computeSelectionAnchor,
 } from './snapMath.js';
 
 export {
+  VertexSnapHash,
   buildSnapHash,
-  getOrBuildSnapHash,
   findNearestVertex,
-  invalidateSnapHash,
-  _resetSnapHashForTests,
 } from './snapHash.js';
 
 /** Transient store for the per-drag snap-target overlay.

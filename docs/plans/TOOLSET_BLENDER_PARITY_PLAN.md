@@ -462,8 +462,12 @@ Closes: Top-12 #2 + #4.
 
 ### Phase 2 — Snap to grid / vertex (3–4 days)
 
-**Goal.** Modal G transform respects snap modes. Snap-to-grid by
-default, snap-to-vertex when held shift+drag near a vertex.
+**Goal.** Modal G/R/S respects a configurable snap system. Gesture
+vocabulary follows Blender's (`reference/blender/source/blender/editors/transform/transform_snap*.cc`):
+master "magnet" toggle = snap is always-on when ON; **Shift = MOD_PRECISION**
+(fine-grained input, never engages snap); **Ctrl = MOD_SNAP_INV**
+(temporarily flips master state). Vertex + grid + increment modes
+coexist; vertex within threshold wins per tick.
 
 #### 2.A — Snap preference store
 
@@ -471,65 +475,93 @@ default, snap-to-vertex when held shift+drag near a vertex.
 
 ```js
 snap: {
-  enabled: false,                  // master toggle
+  enabled: false,                                  // master "magnet" toggle
   modes: {
-    grid: { enabled: true, increment: 16 },     // canvas-px
-    vertex: { enabled: true, threshold: 8 },    // canvas-px
-    increment: { enabled: false, value: 1 },    // for rotation/scale
+    grid:      { enabled: true,  increment: 16, precision: 1.6 },
+    vertex:    { enabled: true,  threshold:   8 },
+    increment: { enabled: false, value:       5, precision:   1 },
   },
   target: 'closest',  // 'closest' | 'center' | 'median' | 'active'
 }
 ```
 
+Defaults — `value: 5`, `precision: 1` for increment match Blender 1:1
+(`DNA_scene_types.h:2430` — `snap_angle_increment_2d = DEG2RADF(5.0f)`,
+`_precision = 1.0f`). Grid `increment: 16` is a SS choice (Blender's
+2D grid is adaptive `1/pixel_width`). Scale step = `value/100`.
+
 #### 2.B — Snap-to-grid in Modal G
 
 [ModalTransformOverlay.jsx](../../src/v3/shell/ModalTransformOverlay.jsx)
-`applyDelta()` consults `snapState`:
-
-- If snap.modes.grid.enabled and Shift held: snap delta to nearest grid
-  multiple. Replaces the current `Math.round(delta / 10) * 10` line
-  with `Math.round(delta / snap.grid.increment) * snap.grid.increment`.
-- A small visual indicator (faint dotted grid) renders when snap is
-  active.
+`applyDelta()` auto-engages grid snap when master + grid.enabled.
+Shift selects `precision` instead of `increment`. When master OFF,
+Shift = pure precision multiplier (×0.1) on the free-transform delta.
 
 #### 2.C — Snap-to-vertex in Modal G
 
-A spatial hash over all rest verts in the project (cached and
-invalidated on topology change). Lookup: nearest vert within
-`snap.modes.vertex.threshold` from the current pointer position. If
-found, snap delta = (vert - originalCursor).
+`buildSnapHash(project, opts?)` — vertex-identity spatial hash with
+`(x, y, partId, vertIndex)` tuples. Built once per modal session at
+mount (no module-level cache; ~1 ms for ~5000 verts is negligible
+vs. the maintenance burden of a global cache + topology-invalidation
+hooks). `opts.frames` overrides the rest verts with post-skinning
+deformed verts in Pose Mode (so the magenta dot tracks the visible
+mesh, not the hidden rest).
+
+`pickSelectionAnchor(anchorVerts, target, opts)` — finds the
+selection anchor. `'closest'` matches Blender's `SCE_SNAP_SOURCE_CLOSEST`
+(`transform_snap.cc:1481-1588`): nearest selection vertex / bbox
+corner to the snap target, NOT "the cursor IS the anchor".
+
+`enumerateSelectionAnchorVerts(project, selection, editorState)` —
+yields the candidate anchors per Blender semantics: bbox corners +
+centroid for Object-Mode parts, bone pivot for bone groups, selected
+verts (active first) for Edit Mode.
 
 A small magenta dot renders on the snap target during modal drag.
 
-#### 2.D — Snap-to-grid in Modal R
+#### 2.D — Snap-to-increment in Modal R + S
 
-Rotation snaps to `snap.modes.increment.value` degrees when Shift held
-(currently fixed at 15°; preference makes it user-configurable).
+Rotation: snaps to `snap.modes.increment.value` degrees when master
+ON + increment.enabled. Shift selects `precision` (default 1°,
+matching Blender). Default 5° step = Blender's 2D scene default.
+
+Scale: snaps to `value/100` step (5° → 0.05× per tick); Shift uses
+`precision/100`.
+
+When master OFF, Shift on R/S = MOD_PRECISION applied to the raw
+rotation/scale (× 0.1 / relative-to-1 × 0.1 respectively).
 
 #### 2.E — N-panel snap section
 
 The N-panel gains a Snap section visible in all modes:
-- Master enable toggle
-- Per-mode toggle (grid / vertex / increment)
-- Per-mode value input
+- Master magnet toggle
+- Per-mode toggle (vertex / grid / increment)
+- Per-mode value + precision inputs
+- Increment row labels rotation step + scale step in one row to
+  surface the dual binding (audit fix G-8)
 - Target dropdown
 
 #### 2.F — Tests
 
 | Test | What |
 |------|------|
-| `test_snap_grid_translate.mjs` | Snap math at various increments |
-| `test_snap_vertex_threshold.mjs` | Snap engages within threshold, releases beyond |
-| `test_snap_rotation_increment.mjs` | Rotation snap math |
-| `test_snap_target_modes.mjs` | closest / center / median / active |
+| `test_snap_grid_translate.mjs` | Grid snap math at various increments |
+| `test_snap_vertex_threshold.mjs` | Snap engages within threshold, releases beyond; `excludePartId` build-time filter; `frames` override (Pose Mode) |
+| `test_snap_rotation_increment.mjs` | Rotation/scale snap math + 3 precision helpers |
+| `test_snap_target_modes.mjs` | `pickSelectionAnchor` (closest/center/median/active) + `enumerateSelectionAnchorVerts` (Object/Edit/bone) |
+| `test_snap_gesture_model.mjs` | Master/Shift/Ctrl combinations across translate/rotate/scale; SNAP_INV; MOD_PRECISION |
 
 #### 2.G — Phase exit gate
 
 - All snap tests green.
-- Manual: G then Shift held → cursor snaps to grid increments.
-- Manual: G near a vertex → magenta dot appears, drag snaps to it.
+- Manual: G with master off → free transform; Shift = 10× finer (precision).
+- Manual: G with master on → snap fires when cursor near vertex; magenta dot lands on it; selection's nearest anchor lands on the dot.
+- Manual: Ctrl held mid-drag → snap toggles immediately (master on → off, master off → on).
+- Manual: R + Shift with snap on + increment.enabled → 1° step (precision).
+- Manual: G in Pose Mode with master on → magenta dot tracks visible deformed mesh, not rest geometry.
 
-**Phase 2 sum:** ~3–4 days. New: snap module + UI. Closes: Top-12 #5.
+**Phase 2 sum:** ~3–4 days + audit-fix sweep. New: snap module + UI.
+Closes: Top-12 #5.
 
 ---
 
@@ -1606,12 +1638,13 @@ Phase 1:
   [ ] Memory entry: 'Box / Lasso select'
 
 Phase 2:
-  [x] preferencesStore.snap shipped
+  [x] preferencesStore.snap shipped (master + 3 modes + precision + target)
   [x] snap.js + spatial hash (lib/snap/{snapMath,snapHash,index}.js)
-  [x] ModalTransformOverlay consults snap state (G/R/S all wired)
-  [x] N-panel snap section (visible all modes)
-  [x] All snap tests green (80 assertions across 4 suites)
-  [ ] Manual: G + Shift snaps to grid; near vertex snaps to vert
+  [x] ModalTransformOverlay consults snap state (G/R/S all wired, Blender-faithful gesture vocab)
+  [x] N-panel snap section (visible all modes; Increment row dual rotate/scale label)
+  [x] All snap tests green (133 assertions across 5 suites incl. gesture model)
+  [x] Audit-fix sweep: G-1 view slot crash, G-2 Object Mode self-snap, D-1/D-2/D-7 gesture model, D-3 Closest semantics, D-4 Pose Mode deformed verts, D-5 5° default
+  [ ] Manual: G with master on → vertex snap fires; G+Shift = grid step; G+Ctrl = SNAP_INV; G no master + Shift = precision
   [ ] Memory entry: 'Snap during transform'
 
 Phase 3:

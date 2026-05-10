@@ -6,7 +6,13 @@
 //
 // Run: node scripts/test/test_snap_rotation_increment.mjs
 
-import { snapAngleToIncrement, snapScaleToIncrement } from '../../src/lib/snap/snapMath.js';
+import {
+  snapAngleToIncrement,
+  snapScaleToIncrement,
+  applyPrecisionToDelta,
+  applyPrecisionToAngle,
+  applyPrecisionToScale,
+} from '../../src/lib/snap/snapMath.js';
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +85,50 @@ const D2R = Math.PI / 180;
   assert(close(snapScaleToIncrement(1, 0),  1),  'inc 0  → identity');
   assert(close(snapScaleToIncrement(1, -5), 1),  'inc <0 → identity');
   assert(Number.isNaN(snapScaleToIncrement(NaN, 10)), 'NaN passthrough');
+}
+
+// ── 7: applyPrecisionToDelta (Blender's MOD_PRECISION for translate) ─
+{
+  const r = applyPrecisionToDelta({ x: 100, y: 200 }, 0.1);
+  assert(r.x === 10 && r.y === 20, 'delta * 0.1 → (10, 20)');
+  const r2 = applyPrecisionToDelta({ x: 17, y: -3 }, 0.5);
+  assert(close(r2.x, 8.5) && close(r2.y, -1.5), 'delta * 0.5 → (8.5, -1.5)');
+  // Bad factor → identity
+  const r3 = applyPrecisionToDelta({ x: 5, y: 7 }, 0);
+  assert(r3.x === 5 && r3.y === 7, 'factor 0 → identity');
+  const r4 = applyPrecisionToDelta(null, 0.1);
+  assert(r4.x === 0 && r4.y === 0, 'null delta → origin');
+  // NaN x coerces to 0
+  const r5 = applyPrecisionToDelta({ x: NaN, y: 100 }, 0.1);
+  assert(r5.x === 0 && r5.y === 10, 'NaN x → 0; y unaffected');
+}
+
+// ── 8: applyPrecisionToAngle ─────────────────────────────────────────
+{
+  assert(close(applyPrecisionToAngle(D2R * 30, 0.1), D2R * 3),
+    '30° * 0.1 → 3°');
+  assert(close(applyPrecisionToAngle(D2R * 90, 0.5), D2R * 45),
+    '90° * 0.5 → 45°');
+  assert(close(applyPrecisionToAngle(0, 0.1), 0), '0 → 0');
+  assert(applyPrecisionToAngle(D2R * 30, 0) === D2R * 30,
+    'factor 0 → identity');
+  assert(Number.isNaN(applyPrecisionToAngle(NaN, 0.1)), 'NaN passthrough');
+}
+
+// ── 9: applyPrecisionToScale (relative-to-1 factor) ──────────────────
+{
+  // s=1.5, factor=0.1 → 1 + (1.5-1)*0.1 = 1.05
+  assert(close(applyPrecisionToScale(1.5, 0.1), 1.05),
+    '1.5 with 0.1 precision → 1.05 (relative-to-1)');
+  // s=0.5, factor=0.1 → 1 + (-0.5)*0.1 = 0.95
+  assert(close(applyPrecisionToScale(0.5, 0.1), 0.95),
+    '0.5 with 0.1 precision → 0.95');
+  // s=1, factor=0.1 → 1 (no change at unity)
+  assert(close(applyPrecisionToScale(1, 0.1), 1),
+    'unity scale unchanged by precision');
+  // factor=0 → identity (bad input)
+  assert(applyPrecisionToScale(1.5, 0) === 1.5, 'factor 0 → identity');
+  assert(Number.isNaN(applyPrecisionToScale(NaN, 0.1)), 'NaN passthrough');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

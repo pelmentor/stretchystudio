@@ -7,21 +7,18 @@
  * but stores `(x, y, partId, vertIndex)` per point so the modal can
  * return the snap target's identity, not just its position.
  *
- * Lifecycle:
+ * Lifecycle (audit-revised 2026-05-10):
  *
- *   1. Modal G enters → `getOrBuildSnapHash(project)` — returns the
- *      cached hash if `_version` matches; rebuilds otherwise.
- *   2. Modal G tick → `findNearestVertex(hash, x, y, threshold)` —
- *      O(k) where k is local density (typically <10).
- *   3. Topology change anywhere in the project (mesh-worker remesh,
- *      add_vertex, remove_vertex, dispatchMeshWorker) →
- *      `invalidateSnapHash()` bumps the version stamp; next get
- *      rebuilds.
- *
- * "Rest verts" means `node.mesh.vertices` (canvas-px), not the live
- * deformed verts. Per plan §2.C — snap-to-rest is the contract;
- * snap-to-deformed is a future follow-up if Pose Mode use cases
- * demand it.
+ *   - **No module-level cache.** Each Modal G entry builds a fresh
+ *     hash (~1 ms per ~5000 verts; negligible for SS-scale projects).
+ *     This sidesteps the invalidation-hook maintenance burden that the
+ *     prior cache imposed (3 sites in CanvasViewport + 2 missing-MED
+ *     gaps the audit found in `applyPoseAsRest` / `resetToRestPose`)
+ *     in exchange for the build cost.
+ *   - **Pose Mode override.** Pass `opts.frames` (the live `chainEval` /
+ *     depgraph result map keyed by partId) to build over post-skinning
+ *     deformed verts instead of `node.mesh.vertices` rest data. Modal
+ *     callsite consults `editorStore.editMode === 'pose'` to decide.
  *
  * Threshold parameter is in canvas-px; cellSize matches threshold so
  * the 3×3 neighbour-cell scan covers the search radius.
@@ -31,31 +28,9 @@
 
 import { getMeshVertices } from '../../store/objectDataAccess.js';
 
-/** Module-scoped singleton — one hash per build, keyed by version
- *  bump AND by project identity. Project identity catches whole-store
- *  swaps (PSD import, project load, undo to a prior snapshot) without
- *  any external invalidation hook. The version stamp catches
- *  in-place mutations to a project we've already cached. */
-let _hash = null;
-let _version = 0;
-let _builtVersion = -1;
-let _builtProjectRef = null;
-
-/** Bump the version stamp. Next `getOrBuildSnapHash` call rebuilds. */
-export function invalidateSnapHash() {
-  _version += 1;
-}
-
-/** Test-only — drop the cached hash and reset version stamps. */
-export function _resetSnapHashForTests() {
-  _hash = null;
-  _version = 0;
-  _builtVersion = -1;
-  _builtProjectRef = null;
-}
-
-/** Coerce mixed vertex shapes (`Array<{x,y}>` or flat `[x,y,...]`) to
- *  `Array<{x,y}>`. Returns null if the input isn't usable.
+/** Coerce mixed vertex shapes (`Array<{x,y}>` or flat `[x,y,...]` /
+ *  `Float32Array`) to `Array<{x,y}>`. Returns null if the input
+ *  isn't usable.
  *
  *  @param {any} verts
  *  @returns {Array<{x:number,y:number}>|null}
@@ -83,7 +58,7 @@ function normaliseVerts(verts) {
   return null;
 }
 
-class VertexSnapHash {
+export class VertexSnapHash {
   /** @param {number} cellSize */
   constructor(cellSize) {
     if (!(cellSize > 0)) throw new Error(`VertexSnapHash: cellSize must be > 0, got ${cellSize}`);
@@ -107,14 +82,15 @@ class VertexSnapHash {
   }
 
   /** Returns the nearest vertex within `dist` of (x, y), or null.
-   *  `dist` MUST be <= `cellSize` (caller responsibility). */
+   *  `dist` MUST be <= `cellSize` (caller responsibility).
+   *
+   *  `opts.excludePartId` — skip every vertex of this part. */
   findNearest(x, y, dist, opts) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     const dist2 = dist * dist;
     const cx = Math.floor(x / this.cellSize);
     const cy = Math.floor(y / this.cellSize);
     const excludePartId = opts?.excludePartId ?? null;
-    const excludeVertSet = opts?.excludeVertSet ?? null;
     let best = null;
     let bestD2 = dist2;
     for (let dy = -1; dy <= 1; dy++) {
@@ -123,9 +99,7 @@ class VertexSnapHash {
         if (!arr) continue;
         for (let i = 0; i < arr.length; i++) {
           const v = arr[i];
-          if (excludePartId && v.partId === excludePartId) {
-            if (!excludeVertSet || excludeVertSet.has(v.vertIndex)) continue;
-          }
+          if (excludePartId && v.partId === excludePartId) continue;
           const ex = v.x - x;
           const ey = v.y - y;
           const d2 = ex * ex + ey * ey;
@@ -140,15 +114,46 @@ class VertexSnapHash {
   }
 }
 
-/** Rebuild from the current project. `cellSize` is the largest
- *  threshold the caller will query with; default 32 px gives plenty
- *  of headroom for the 8 px default + room for raised user values. */
-export function buildSnapHash(project, cellSize = 32) {
+/** Resolve the vertex source for a given part. Pose-Mode override
+ *  (`opts.frames[partId].finalVerts`) wins when present so the snap
+ *  target tracks the deformed visible mesh. Falls back to rest verts
+ *  otherwise. */
+function getSnapVerts(node, project, frames) {
+  if (frames) {
+    const frame = frames.get?.(node.id) ?? frames[node.id];
+    if (frame?.finalVerts) {
+      const norm = normaliseVerts(frame.finalVerts);
+      if (norm) return norm;
+    }
+  }
+  return normaliseVerts(getMeshVertices(node, project));
+}
+
+/** Build a fresh snap hash from the current project state.
+ *
+ *  @param {object} project
+ *  @param {object} [opts]
+ *  @param {number} [opts.cellSize]  Default 32; must be >= the largest
+ *    threshold the caller will query with.
+ *  @param {Map<string, {finalVerts?: any}>|object} [opts.frames]
+ *    When provided, uses `frames[partId].finalVerts` (deformed verts
+ *    in canvas-px) per part instead of rest verts. For Pose Mode.
+ *  @param {string|null} [opts.excludePartId]  Skip every vertex of
+ *    this part during the build (Object Mode: don't snap the dragged
+ *    part to its own verts). Sister to `findNearest({excludePartId})`
+ *    but here it's a build-time filter so excluded verts never enter
+ *    the hash, which is faster than per-query filtering.
+ */
+export function buildSnapHash(project, opts = {}) {
+  const cellSize = opts.cellSize ?? 32;
   const hash = new VertexSnapHash(cellSize);
   if (!project || !Array.isArray(project.nodes)) return hash;
+  const frames = opts.frames ?? null;
+  const exclude = opts.excludePartId ?? null;
   for (const node of project.nodes) {
     if (!node || node.type !== 'part') continue;
-    const verts = normaliseVerts(getMeshVertices(node, project));
+    if (exclude && node.id === exclude) continue;
+    const verts = getSnapVerts(node, project, frames);
     if (!verts) continue;
     for (let i = 0; i < verts.length; i++) {
       const v = verts[i];
@@ -159,36 +164,24 @@ export function buildSnapHash(project, cellSize = 32) {
   return hash;
 }
 
-/** Cached build. Rebuilds if (a) `invalidateSnapHash` has been called
- *  since the last build, (b) the project identity has changed since
- *  the last build (whole-store swap), or (c) the requested cellSize
- *  exceeds the cached hash's cellSize. */
-export function getOrBuildSnapHash(project, cellSize = 32) {
-  if (_hash
-      && _builtVersion === _version
-      && _builtProjectRef === project
-      && _hash.cellSize >= cellSize) {
-    return _hash;
-  }
-  _hash = buildSnapHash(project, cellSize);
-  _builtVersion = _version;
-  _builtProjectRef = project;
-  return _hash;
-}
-
-/** Convenience reader — returns the snap target identity + position
- *  if any rest vertex lies within `threshold` of (x, y), else null.
+/** One-shot convenience reader. Builds a fresh hash, queries, returns
+ *  the hit (or null). Use this for occasional / test queries; for the
+ *  modal G inner loop, build the hash once (`buildSnapHash`) at modal
+ *  mount, hold the reference, and call `hash.findNearest` directly.
  *
  *  @param {object} project
  *  @param {number} x  canvas-px
  *  @param {number} y  canvas-px
  *  @param {number} threshold canvas-px
- *  @param {{ excludePartId?: string|null, excludeVertSet?: Set<number>|null }} [opts]
+ *  @param {{ excludePartId?: string|null, frames?: any }} [opts]
  */
 export function findNearestVertex(project, x, y, threshold, opts) {
   if (!Number.isFinite(threshold) || threshold <= 0) return null;
-  const cellSize = Math.max(threshold, 32);
-  const hash = getOrBuildSnapHash(project, cellSize);
+  const hash = buildSnapHash(project, {
+    cellSize: Math.max(threshold, 32),
+    frames: opts?.frames,
+    excludePartId: opts?.excludePartId,
+  });
   if (hash.count === 0) return null;
-  return hash.findNearest(x, y, threshold, opts);
+  return hash.findNearest(x, y, threshold);
 }

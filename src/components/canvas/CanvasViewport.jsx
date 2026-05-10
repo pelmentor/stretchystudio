@@ -10,10 +10,6 @@ import { useRigEvalStore } from '@/store/rigEvalStore';
 import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
 import { useBoxSelectStore } from '@/store/boxSelectStore';
-// Toolset Plan Phase 2.C — snap-to-vertex spatial hash. Topology-change
-// callsites below sister the existing invalidateVertexSelectionForPart
-// hooks so the snap hash rebuilds on next modal G entry.
-import { invalidateSnapHash } from '@/lib/snap';
 // Workspace policy module deleted 2026-05-02 — workspaces no longer
 // gate modes or visualizations (Blender pattern: workspace = layout
 // preset + default editorMode, nothing more). `editor.editMode` and
@@ -1547,10 +1543,6 @@ export default function CanvasViewport({
           // the invalidation hook the add_vertex / remove_vertex paths
           // already use).
           useEditorStore.getState().invalidateVertexSelectionForPart(partId);
-          // Toolset Phase 2.C — sister hook: snap-to-vertex hash holds
-          // (x, y, partId, vertIndex) tuples; the new mesh has different
-          // verts at different positions, so the hash is stale.
-          invalidateSnapHash();
 
           // Compute skin weights if this part belongs to a limb.
           const parentGroup = proj.nodes.find(n => n.id === node.parent);
@@ -2378,8 +2370,6 @@ export default function CanvasViewport({
           // appended, prior indices unchanged), but the safe contract
           // is to invalidate so callers don't accumulate stale state.
           useEditorStore.getState().invalidateVertexSelectionForPart(selNode.id);
-          // Toolset Phase 2.C — sister hook (see dispatchMeshWorker site).
-          invalidateSnapHash();
 
         } else if (toolMode === 'remove_vertex') {
           const idx = findNearestVertex(selMesh.vertices, lx, ly, 14 / view.zoom);
@@ -2422,8 +2412,6 @@ export default function CanvasViewport({
             // by one). Invalidate so the selection set doesn't point
             // at the wrong vertex after the renumber.
             useEditorStore.getState().invalidateVertexSelectionForPart(selNode.id);
-            // Toolset Phase 2.C — sister hook (see dispatchMeshWorker site).
-            invalidateSnapHash();
           }
         } else {
           // Default select tool in deform mode: brush-based multi-vertex drag
