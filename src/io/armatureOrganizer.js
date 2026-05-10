@@ -20,6 +20,11 @@ import { logger } from '../lib/logger.js';
 // re-exported here so existing call sites keep working unchanged. New
 // callers should import from `@/io/armatureMeta` directly to skip the
 // heavy DWPose / bone-tree-builder graph.
+//
+// `matchTag` is also a LOCAL dependency (used by `autoRearrangeLayers`
+// below); the bare re-export doesn't add it to this module's scope, so
+// it needs its own import line.
+import { matchTag } from './armatureMeta.js';
 export {
   KNOWN_TAGS,
   matchTag,
