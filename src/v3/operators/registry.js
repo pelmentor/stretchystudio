@@ -31,16 +31,23 @@ import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useBoxSelectStore } from '../../store/boxSelectStore.js';
+import { useCircleSelectStore } from '../../store/circleSelectStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
 import { dissolveVertices } from './edit/dissolve.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
+import { duplicate } from './edit/duplicate.js';
+import {
+  selectLinkedFromVertex,
+  selectLinkedExpandSelection,
+} from './select/linked.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
 import { discardBatch } from '../../store/undoHistory.js';
 import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
+import { hitTestVertices } from '../../io/hitTest.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
 import {
@@ -959,6 +966,330 @@ function registerBuiltins() {
         original,
         vertIndices: new Set(overrideSel),
         rollbackOnCancel: true,
+      });
+    },
+  });
+
+  // ── Toolset Phase 6 — Select Linked / Duplicate / Apply / Circle ──
+  // Cluster of small cross-mode wins that share the existing operator
+  // + popover + modal-overlay infrastructure.
+
+  /** Translate a client-px point to canvas-local coords using the
+   *  active viewport's pan + zoom. Returns null when the canvas DOM
+   *  isn't available (test environment) or the viewport view slot is
+   *  missing. Centralizes the same pattern used by edit.mergeMenu. */
+  function clientToCanvas(client) {
+    if (typeof document === 'undefined') return null;
+    const canvas = /** @type {HTMLCanvasElement|null} */ (document.querySelector('canvas'));
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const view = useEditorStore.getState().viewByMode?.viewport;
+    if (!view) return null;
+    return {
+      x: (client.x - rect.left - view.panX) / view.zoom,
+      y: (client.y - rect.top  - view.panY) / view.zoom,
+    };
+  }
+
+  // Phase 6.A — Select Linked (cursor): hit-test the nearest vert from
+  // the cursor on the active edit part, then flood-fill from it.
+  // Mirrors Blender's `MESH_OT_select_linked_pick` (`L` chord).
+  // Threshold uses the same world-space radius as Phase 0.B's vertex
+  // click hit-test (so the user-tunable selection feels consistent).
+  registerOperator({
+    id: 'select.linked.cursor',
+    label: 'Select Linked (under cursor) (L)',
+    available: () => activeEditPart() !== null,
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const canvasCursor = clientToCanvas(lastMousePos());
+      if (!canvasCursor) return;
+      // Threshold: 16 canvas-px, divided by view zoom (so the
+      // user-perceived hit-radius stays constant in screen-space).
+      const view = useEditorStore.getState().viewByMode?.viewport;
+      const zoom = view?.zoom ?? 1;
+      const threshold = 16 / zoom;
+      const seedIdx = hitTestVertices(node.mesh.vertices, canvasCursor.x, canvasCursor.y, threshold);
+      if (seedIdx < 0) {
+        toast({
+          title: 'No vertex under cursor',
+          description: 'Hover near a vertex on the active mesh, then press L.',
+        });
+        return;
+      }
+      const linked = selectLinkedFromVertex(node.mesh, seedIdx);
+      if (!linked || linked.size === 0) return;
+      useEditorStore.getState().setVertexSelectionForPart(partId, linked);
+      useEditorStore.getState().selectVertex(partId, seedIdx, /* additive */ true);
+    },
+  });
+
+  // Phase 6.A — Select Linked (expand): expand each vertex in the
+  // current selection to its full connected component. Mirrors
+  // Blender's `MESH_OT_select_linked` (`Ctrl+L` chord, no popup).
+  registerOperator({
+    id: 'select.linked.expand',
+    label: 'Select Linked (expand selection) (Ctrl+L)',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size === 0) return;
+      const expanded = selectLinkedExpandSelection(node.mesh, sel);
+      if (!expanded) return;
+      useEditorStore.getState().setVertexSelectionForPart(partId, expanded);
+    },
+  });
+
+  // Phase 6.B — Duplicate (`Shift+D`). Mode-aware dispatch:
+  //   - Edit Mode + selected verts → topology op (atomic with modal G,
+  //     same pattern as Phase 5 extrude). `discardBatch` rolls back
+  //     BOTH the topology change AND the drag on Esc.
+  //   - Object Mode + selected nodes → recursive `duplicateNode` × N,
+  //     then start node-level Modal G translate. NON-atomic per
+  //     Blender's `OBJECT_OT_duplicate_move` macro semantics: Esc
+  //     during translate keeps the duplicates, drops just the drag.
+  //     User Ctrl+Z again to remove the dups.
+  registerOperator({
+    id: 'edit.duplicate',
+    label: 'Duplicate (Shift+D)',
+    available: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'edit') {
+        return topologyAvailable(1);
+      }
+      // Object Mode: needs at least one part / group selected.
+      return useSelectionStore.getState().items.some(
+        (it) => it.type === 'part' || it.type === 'group',
+      );
+    },
+    exec: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'edit') {
+        // ── Edit Mode branch ──
+        const partId = activeEditPart();
+        if (!partId) return;
+        const project = useProjectStore.getState().project;
+        const node = project.nodes.find((n) => n.id === partId);
+        if (!node?.mesh) return;
+        const sel = editor.selectedVertexIndices.get(partId);
+        if (!sel || sel.size === 0) return;
+        const result = duplicate(node.mesh, sel);
+        if (!result) return;
+        beginBatch(project);
+        const ok = applyTopologyOp(partId, result);
+        if (!ok) {
+          discardBatch(() => {});
+          return;
+        }
+        // Capture original positions for the new dup verts. Same pattern
+        // as Phase 5 extrude: dups start at source positions, modal G
+        // translates them away.
+        const newProject = useProjectStore.getState().project;
+        const newNode = newProject.nodes.find((n) => n.id === partId);
+        const newMesh = newNode?.mesh;
+        if (!newMesh) {
+          discardBatch(() => {});
+          return;
+        }
+        /** @type {Map<number, {x:number,y:number,restX:number,restY:number}>} */
+        const original = new Map();
+        const overrideSel = result.selectionOverride ?? new Set();
+        for (const idx of overrideSel) {
+          const v = newMesh.vertices[idx];
+          if (!v) continue;
+          original.set(idx, {
+            x:     v.x,
+            y:     v.y,
+            restX: v.restX ?? v.x,
+            restY: v.restY ?? v.y,
+          });
+        }
+        let cx = 0, cy = 0, n = 0;
+        for (const o of original.values()) { cx += o.x; cy += o.y; n++; }
+        const pivot = n > 0 ? { x: cx / n, y: cy / n } : { x: 0, y: 0 };
+        useModalVertexTransformStore.getState().begin({
+          kind: 'translate',
+          partId,
+          startMouse: lastMousePos(),
+          pivotCanvas: pivot,
+          original,
+          vertIndices: new Set(overrideSel),
+          rollbackOnCancel: true,
+        });
+        return;
+      }
+
+      // ── Object Mode branch ──
+      const items = useSelectionStore.getState().items;
+      const targetIds = items
+        .filter((it) => it.type === 'part' || it.type === 'group')
+        .map((it) => it.id);
+      if (targetIds.length === 0) return;
+      const projectStore = useProjectStore.getState();
+      // Snapshot pre-dup node ids so we can identify the new ones via
+      // diff (`duplicateNode` doesn't return a mapping, and refactoring
+      // it to return one would touch a much larger surface). `nodes` is
+      // an Array — Set membership is O(1), the diff is one pass.
+      const preIds = new Set(projectStore.project.nodes.map((n) => n.id));
+      for (const id of targetIds) {
+        projectStore.duplicateNode(id);
+      }
+      const postNodes = useProjectStore.getState().project.nodes;
+      /** @type {string[]} */
+      const newIds = [];
+      for (const n of postNodes) {
+        if (!preIds.has(n.id)) newIds.push(n.id);
+      }
+      if (newIds.length === 0) return;
+      // Filter to "root" duplicates — those whose parent is NOT itself
+      // a freshly-duplicated node. Children inherit the move via the
+      // parent transform; selecting only the roots avoids a Modal G
+      // double-applying the delta to grandchildren.
+      const newIdSet = new Set(newIds);
+      const rootDupIds = newIds.filter((id) => {
+        const node = postNodes.find((nn) => nn.id === id);
+        return !node?.parent || !newIdSet.has(node.parent);
+      });
+      if (rootDupIds.length === 0) return;
+      // Selection update: replace with the root duplicates so Modal G
+      // operates on them. Mirror the result into both the new
+      // selectionStore (canonical) and the legacy editorStore.selection
+      // slot (for Properties pane heads).
+      useSelectionStore.getState().select(
+        rootDupIds.map((id) => {
+          const node = postNodes.find((nn) => nn.id === id);
+          return { type: node?.type ?? 'part', id };
+        }),
+        'replace',
+      );
+      useEditorStore.getState().setSelection(rootDupIds);
+      // Hand off to Modal G translate. This opens its own batch — the
+      // duplicateNode mutations are already persisted (one undo entry
+      // each, before the batch), and the translate becomes a separate
+      // undo entry on commit. Matches Blender's `OBJECT_OT_duplicate_move`
+      // macro: Esc-mid-drag keeps the dups, Ctrl+Z reverses the dup.
+      beginModalTransform('translate');
+    },
+  });
+
+  // Phase 6.C — Apply menu (`Ctrl+A`). Opens the Apply popover anchored
+  // at the cursor. Items dispatch to existing operators; the menu just
+  // lists what's currently applicable and routes the click.
+  //
+  // Mirrors Blender's `OBJECT_MT_object_apply` / `VIEW3D_MT_object_apply`
+  // popups (`reference/blender/scripts/startup/bl_ui/space_view3d.py:6280+`).
+  // The available items differ per mode; the menu component reads
+  // operator availability and greys non-applicable rows.
+  registerOperator({
+    id: 'apply.menu',
+    label: 'Apply… (Ctrl+A)',
+    available: () => {
+      const editor = useEditorStore.getState();
+      // Pose Mode → Apply Pose As Rest is the canonical use.
+      if (editor.editMode === 'pose') return true;
+      // Object Mode → Apply Modifier on a selected part with modifiers.
+      const items = useSelectionStore.getState().items;
+      const project = useProjectStore.getState().project;
+      return items.some((it) => {
+        if (it.type !== 'part') return false;
+        const node = project.nodes.find((n) => n.id === it.id);
+        return Array.isArray(node?.modifiers) && node.modifiers.length > 0;
+      });
+    },
+    exec: () => {
+      useEditMenuStore.getState().openApply({ cursor: lastMousePos() });
+    },
+  });
+
+  registerOperator({
+    id: 'apply.poseAsRest',
+    label: 'Apply Pose As Rest',
+    available: () => {
+      // Available iff there's at least one bone in the project (so the
+      // op has something to bake). Same check the existing UI button uses.
+      const project = useProjectStore.getState().project;
+      return (project?.nodes ?? []).some(
+        (n) => n.type === 'group' && !!n.boneRole,
+      );
+    },
+    exec: () => {
+      useProjectStore.getState().applyPoseAsRest();
+      toast({
+        title: 'Pose applied as rest',
+        description: 'Bone pose channels zeroed; rest geometry now reflects the posed shape.',
+      });
+    },
+  });
+
+  registerOperator({
+    id: 'apply.armatureModifier',
+    label: 'Apply Armature Modifier',
+    available: () => {
+      // Available iff at least one selected part has an armature modifier.
+      const items = useSelectionStore.getState().items;
+      const project = useProjectStore.getState().project;
+      return items.some((it) => {
+        if (it.type !== 'part') return false;
+        const node = project.nodes.find((n) => n.id === it.id);
+        return Array.isArray(node?.modifiers)
+          && node.modifiers.some((m) => m?.type === 'armature');
+      });
+    },
+    exec: async () => {
+      const items = useSelectionStore.getState().items;
+      const project = useProjectStore.getState().project;
+      const targetIds = items
+        .filter((it) => it.type === 'part')
+        .filter((it) => {
+          const node = project.nodes.find((n) => n.id === it.id);
+          return Array.isArray(node?.modifiers)
+            && node.modifiers.some((m) => m?.type === 'armature');
+        })
+        .map((it) => it.id);
+      if (targetIds.length === 0) return;
+      // Lazy-import to keep registry weight down — the service pulls in
+      // the runtime evaluator chain for the bake step.
+      const { applyArmatureModifier } = await import('../../services/ArmatureModifierService.js');
+      let bakedCount = 0;
+      for (const id of targetIds) {
+        const result = applyArmatureModifier(id);
+        if (result.baked) bakedCount++;
+      }
+      toast({
+        title: bakedCount === targetIds.length
+          ? `Applied Armature modifier on ${bakedCount} part(s)`
+          : `Applied on ${bakedCount} of ${targetIds.length} part(s)`,
+        description: 'Posed deformation baked into rest mesh; modifier removed.',
+      });
+    },
+  });
+
+  // Phase 6.D — Circle Select (`C`). Modal cursor-circle paint
+  // selection. Mirrors Blender's `VIEW3D_OT_select_circle` (default
+  // keymap: `C` chord). The overlay (`CircleSelectOverlay`) owns the
+  // mouse + key lifecycle from here; this op just seeds the modal.
+  registerOperator({
+    id: 'selection.circleSelect',
+    label: 'Circle Select (C)',
+    available: () => true,
+    exec: () => {
+      const editor = useEditorStore.getState();
+      const isEditModeOnPart = editor.editMode === 'edit'
+        && typeof editor.selection?.[0] === 'string'
+        && editor.selection[0].length > 0;
+      useCircleSelectStore.getState().begin({
+        mode: isEditModeOnPart ? 'edit' : 'object',
+        editPartId: isEditModeOnPart ? editor.selection[0] : null,
+        cursorClient: lastMousePos(),
       });
     },
   });

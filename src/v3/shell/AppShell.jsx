@@ -40,6 +40,7 @@ import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
+import { useCircleSelectStore } from '../../store/circleSelectStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
@@ -70,6 +71,14 @@ const ModalVertexTransformOverlay = lazy(() =>
 const MergeMenu = lazy(() =>
   import('./MergeMenu.jsx').then((m) => ({ default: m.MergeMenu }))
 );
+const ApplyMenu = lazy(() =>
+  import('./ApplyMenu.jsx').then((m) => ({ default: m.ApplyMenu }))
+);
+const CircleSelectOverlay = lazy(() =>
+  import('../editors/viewport/overlays/CircleSelectOverlay.jsx').then(
+    (m) => ({ default: m.CircleSelectOverlay }),
+  )
+);
 const PsdImportWizard = lazy(() =>
   import('./PsdImportWizard.jsx').then((m) => ({ default: m.PsdImportWizard }))
 );
@@ -92,6 +101,7 @@ export function AppShell() {
   const modalKind = useModalTransformStore((s) => s.kind);
   const vertexModalKind = useModalVertexTransformStore((s) => s.kind);
   const editMenuKind = useEditMenuStore((s) => s.kind);
+  const circleSelectActive = useCircleSelectStore((s) => s.active);
   const wizardStep = useWizardStore((s) => s.step);
 
   return (
@@ -114,6 +124,8 @@ export function AppShell() {
           {modalKind && <ModalTransformOverlay />}
           {vertexModalKind && <ModalVertexTransformOverlay />}
           {editMenuKind === 'merge' && <MergeMenu />}
+          {editMenuKind === 'apply' && <ApplyMenu />}
+          {circleSelectActive && <CircleSelectOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
               when no wizard run is in flight. The reorder/adjust banners

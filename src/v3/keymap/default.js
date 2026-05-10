@@ -154,6 +154,42 @@ export const DEFAULT_KEYMAP = {
   // operator, in which case the binding here may move to a dispatcher
   // that picks based on whether selection has any boundary verts).
   'KeyE': 'edit.extrude',
+
+  // Toolset Phase 6.A — Select Linked. Bare `L` flood-fills from the
+  // vertex under the cursor (Blender's `MESH_OT_select_linked_pick`,
+  // `editmesh_select.cc:5070+`). `Ctrl+L` expands the current selection
+  // to its full connected components (Blender's `MESH_OT_select_linked`,
+  // `editmesh_select.cc:5188+`). Both are Edit-Mode only — operator
+  // availability gate handles the no-op case.
+  'KeyL':       'select.linked.cursor',
+  'Ctrl+KeyL':  'select.linked.expand',
+  'Meta+KeyL':  'select.linked.expand',
+
+  // Toolset Phase 6.B — Duplicate. `Shift+D` is Blender's universal
+  // "duplicate selection then translate" macro. Mode-aware dispatch
+  // inside the operator: Edit Mode = topology dup + atomic modal G;
+  // Object Mode = `duplicateNode` + non-atomic modal G (matches
+  // Blender's `OBJECT_OT_duplicate_move` macro semantics).
+  //
+  // Blender source: `OBJECT_OT_duplicate_move` is defined in
+  // `editors/object/object_add.cc:1968+`; the `MESH_OT_duplicate_move`
+  // macro lives at `editors/mesh/editmesh_add.cc:780+`. Both compose
+  // their respective duplicate ops with `TRANSFORM_OT_translate`.
+  'Shift+KeyD': 'edit.duplicate',
+
+  // Toolset Phase 6.C — Apply menu. `Ctrl+A` opens the Apply popover
+  // (Blender's `OBJECT_MT_object_apply`). The menu shows applicable
+  // items based on selection (Apply Pose As Rest in Pose Mode; Apply
+  // Armature Modifier when a selected part has one).
+  'Ctrl+KeyA':  'apply.menu',
+  'Meta+KeyA':  'apply.menu',
+
+  // Toolset Phase 6.D — Circle Select. `C` chord opens the modal
+  // cursor-circle paint selection (Blender's `VIEW3D_OT_select_circle`,
+  // `view3d_select.cc:3470+`). Wheel adjusts radius; LMB-drag paints;
+  // Shift+LMB-drag subtracts. Mode-aware: Edit Mode picks verts on the
+  // active part; Object Mode picks parts under the circle.
+  'KeyC': 'selection.circleSelect',
 };
 
 /**

@@ -608,6 +608,95 @@ export function partsInRect(project, frames, rectMinX, rectMinY, rectMaxX, rectM
  * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
  * @returns {string[]}
  */
+/**
+ * Toolset Phase 6.D — vertices inside a circle (in mesh-local space).
+ * Used by Edit-Mode Circle Select. Returns indices of every vertex
+ * whose `(x, y)` lies within `radius` of `(centerX, centerY)`.
+ *
+ * Mirrors `verticesInRect`'s shape — accepts either flat
+ * `[x0, y0, x1, y1, …]` or `Array<{x, y}>` and ignores out-of-range.
+ *
+ * @param {ArrayLike<number> | ReadonlyArray<{x:number,y:number}>} verts
+ * @param {number} centerX
+ * @param {number} centerY
+ * @param {number} radius
+ * @returns {number[]} matching vertex indices (ascending order)
+ */
+export function verticesInCircle(verts, centerX, centerY, radius) {
+  /** @type {number[]} */
+  const out = [];
+  if (!verts || !(radius > 0)) return out;
+  const r2 = radius * radius;
+  const probe = /** @type {any} */ (verts[0]);
+  if (probe && typeof probe.x === 'number') {
+    /** @type {ReadonlyArray<{x:number,y:number}>} */
+    const arr = /** @type {any} */ (verts);
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      const dx = v.x - centerX;
+      const dy = v.y - centerY;
+      if (dx * dx + dy * dy <= r2) out.push(i);
+    }
+    return out;
+  }
+  /** @type {ArrayLike<number>} */
+  const flat = /** @type {any} */ (verts);
+  const n = flat.length >> 1;
+  for (let i = 0; i < n; i++) {
+    const dx = flat[i * 2] - centerX;
+    const dy = flat[i * 2 + 1] - centerY;
+    if (dx * dx + dy * dy <= r2) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Toolset Phase 6.D — parts whose AABB intersects a circle, in canvas
+ * space. Used by Object-Mode Circle Select.
+ *
+ * Tests via the standard "closest point on AABB to circle center" trick:
+ * a circle intersects an AABB iff the distance from the circle center to
+ * the closest AABB-clamped point is ≤ radius. O(parts) with cheap math
+ * per part — same complexity profile as `partsInRect`.
+ *
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
+ * @param {number} centerX
+ * @param {number} centerY
+ * @param {number} radius
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
+ * @returns {string[]} part ids whose AABB intersects the circle
+ */
+export function partsInCircle(project, frames, centerX, centerY, radius, opts = {}) {
+  /** @type {string[]} */
+  const out = [];
+  if (!(radius > 0)) return out;
+  const r2 = radius * radius;
+  const worldMatrices = opts.worldMatrices ?? null;
+  const finalVertsByPartId = opts.finalVertsByPartId ?? null;
+  /** @type {Map<string, Float32Array | number[]>} */
+  const frameMap = new Map();
+  if (frames && typeof frames[Symbol.iterator] === 'function') {
+    for (const f of frames) {
+      if (f && typeof f.id === 'string' && f.vertexPositions) {
+        frameMap.set(f.id, f.vertexPositions);
+      }
+    }
+  }
+  for (const part of project?.nodes ?? []) {
+    if (!part || part.type !== 'part' || part.visible === false) continue;
+    const aabb = computePartAabbCanvas(part, project, frameMap, worldMatrices, finalVertsByPartId);
+    if (!aabb) continue;
+    // Closest point on AABB to circle center.
+    const closestX = Math.max(aabb.minX, Math.min(centerX, aabb.maxX));
+    const closestY = Math.max(aabb.minY, Math.min(centerY, aabb.maxY));
+    const dx = centerX - closestX;
+    const dy = centerY - closestY;
+    if (dx * dx + dy * dy <= r2) out.push(part.id);
+  }
+  return out;
+}
+
 export function partsInPolygon(project, frames, polyXs, polyYs, opts = {}) {
   const np = Math.min(polyXs?.length ?? 0, polyYs?.length ?? 0);
   /** @type {string[]} */
