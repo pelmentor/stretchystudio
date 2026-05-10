@@ -100,6 +100,12 @@ export const DEFAULT_KEYMAP = {
   'KeyR': 'transform.rotate',
   'KeyS': 'transform.scale',
 
+  // Toolset Phase 1.A — `B` chord opens the modal box-select. Mode-
+  // aware: in Object Mode selects parts whose AABB intersects the
+  // rect; in Edit Mode selects verts inside the rect for the active
+  // part. The overlay (BoxSelectOverlay) owns mouse + key from there.
+  'KeyB': 'selection.boxSelect',
+
   // Edit-mode refactor — Tab toggles into a contextual edit mode based
   // on the active selection's type (Blender pattern). Meshed part →
   // mesh edit. Bone-role group → skeleton edit. Already in edit mode

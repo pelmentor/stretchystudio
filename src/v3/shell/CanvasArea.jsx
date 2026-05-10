@@ -31,6 +31,7 @@ import { WarpDeformerOverlay } from '../editors/viewport/overlays/WarpDeformerOv
 import { RotationDeformerOverlay } from '../editors/viewport/overlays/RotationDeformerOverlay.jsx';
 import { WeightPaintOverlay } from '../editors/viewport/overlays/WeightPaintOverlay.jsx';
 import { VertexSelectionOverlay } from '../editors/viewport/overlays/VertexSelectionOverlay.jsx';
+import { BoxSelectOverlay } from '../editors/viewport/overlays/BoxSelectOverlay.jsx';
 import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { ModePill } from './ModePill.jsx';
@@ -54,6 +55,7 @@ export function CanvasArea({ mode }) {
   const resetRef = useRef(null);
   const exportCaptureRef = useRef(null);
   const thumbCaptureRef = useRef(null);
+  const hitContextRef = useRef(null);
 
   // Phase 5 — publish viewport ref-bridges (thumbnail capture, remesh)
   // into captureStore so editors mounted at the AppShell level
@@ -70,10 +72,16 @@ export function CanvasArea({ mode }) {
     // exported. Last-mounted wins; that's fine because the edit tab
     // and preview tab share project state and share a renderer.
     useCaptureStore.getState().setCaptureExportFrame((opts) => exportCaptureRef.current?.(opts) ?? null);
+    // Toolset Phase 1.A — bridge canvas hit-context (latest chainEval
+    // frames + composed verts) so AppShell-mounted box / lasso select
+    // overlays can project their modal rect / polygon through what the
+    // user sees rendered.
+    useCaptureStore.getState().setGetCanvasHitContext(() => hitContextRef.current?.() ?? null);
     return () => {
       useCaptureStore.getState().setCaptureThumbnail(null);
       useCaptureStore.getState().setRemeshPart(null);
       useCaptureStore.getState().setCaptureExportFrame(null);
+      useCaptureStore.getState().setGetCanvasHitContext(null);
     };
   }, []);
 
@@ -92,6 +100,7 @@ export function CanvasArea({ mode }) {
         resetRef={resetRef}
         exportCaptureRef={exportCaptureRef}
         thumbCaptureRef={thumbCaptureRef}
+        hitContextRef={hitContextRef}
       />
       {/* Edit-only overlays. Hidden in preview mode (read-only surface).
           CoordSpaceOverlay (chains-bar + dump button) was removed 2026-05-02
@@ -114,6 +123,12 @@ export function CanvasArea({ mode }) {
           (`pointerEvents: 'none'`) so CanvasViewport keeps single-
           source pointer dispatch. */}
       {!isPreview && <VertexSelectionOverlay />}
+      {/* Toolset Phase 1 — modal box / lasso select overlay. Self-
+          gates on `boxSelectStore.kind` so it only renders the in-
+          progress shape during a B-drag or Ctrl+LMB-drag. Pointer
+          events stay non-interactive (`pointer-events: none`) — the
+          overlay's window listeners drive commit / cancel. */}
+      {!isPreview && <BoxSelectOverlay />}
       {/* Mode pill (Blender-style) — top-left canvas overlay.
           Surfaces the contextual edit mode for the active selection.
           Edit Viewport only; Live Preview is read-only. */}

@@ -30,6 +30,7 @@ import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
+import { useBoxSelectStore } from '../../store/boxSelectStore.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
 import {
@@ -588,6 +589,35 @@ function registerBuiltins() {
     ),
     exec: () => beginModalTransform('scale'),
   });
+  // Toolset Phase 1.A — `B` chord opens the modal box-select overlay.
+  // The overlay (`BoxSelectOverlay`) owns mouse + key handling until
+  // commit / cancel; this operator just seeds the modal store with
+  // the captured starting cursor + the mode (object vs edit + active
+  // partId, captured at activation so a mode-switch mid-drag doesn't
+  // redirect the eventual commit).
+  //
+  // Available from any context — Blender's `B` works in Object Mode
+  // (selects parts), Edit Mode (selects verts), and even Pose Mode
+  // (selects bones; not implemented in this phase). When no editor
+  // can consume the selection, the overlay no-ops on commit.
+  registerOperator({
+    id: 'selection.boxSelect',
+    label: 'Box Select (B)',
+    available: () => true,
+    exec: () => {
+      const editor = useEditorStore.getState();
+      const isEditModeOnPart = editor.editMode === 'edit'
+        && typeof editor.selection?.[0] === 'string'
+        && editor.selection[0].length > 0;
+      useBoxSelectStore.getState().begin({
+        kind: 'box',
+        mode: isEditModeOnPart ? 'edit' : 'object',
+        editPartId: isEditModeOnPart ? editor.selection[0] : null,
+        startClient: lastMousePos(),
+      });
+    },
+  });
+
   // BVR-007 — N-panel toggle. Blender's `N` keybind shows / hides the
   // right-edge tool-settings panel. Always available (no selection
   // gate); the panel itself decides what to render based on mode.

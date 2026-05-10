@@ -66,6 +66,19 @@ import { create } from 'zustand';
  *   calls this once per frame spec when running a PNG sequence /
  *   single-frame export. Mirrors the `captureThumbnail` pattern.
  * @property {(fn: any|null) => void} setCaptureExportFrame
+ *
+ * @property {(() => {
+ *     canvasEl: HTMLCanvasElement|null,
+ *     frames: ReadonlyArray<{id?:string, vertexPositions?:Float32Array|number[]}>|null,
+ *     finalVertsByPartId: Map<string, ReadonlyArray<{x:number,y:number}>>|null,
+ *   }|null)|null} getCanvasHitContext
+ *   Toolset Phase 1.A — bridge for the AppShell-mounted box / lasso
+ *   select overlays. CanvasViewport stashes the latest chainEval frames
+ *   + composed verts in private refs each render; the overlay reads
+ *   them through this bridge to project the modal rect / polygon
+ *   through what the user actually sees, not the rest mesh. Returns
+ *   null when no viewport is mounted yet.
+ * @property {(fn: any|null) => void} setGetCanvasHitContext
  */
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<CaptureStore>>} */
@@ -80,4 +93,6 @@ export const useCaptureStore = create((set) => ({
   setAutoMeshAllParts: (fn) => set({ autoMeshAllParts: fn }),
   captureExportFrame: null,
   setCaptureExportFrame: (fn) => set({ captureExportFrame: fn }),
+  getCanvasHitContext: null,
+  setGetCanvasHitContext: (fn) => set({ getCanvasHitContext: fn }),
 }));

@@ -414,6 +414,347 @@ export function shortestPathBetweenVertices(adjacency, fromIdx, toIdx) {
   return null;
 }
 
+/**
+ * Toolset Phase 1.A — vertices-in-rect for Edit Mode box select.
+ *
+ * Iterates a part's local-space rest verts and returns the indices of
+ * every vertex inside the local-space rectangle `[minX,maxX]×[minY,maxY]`.
+ * The caller is expected to inverse-transform the canvas-space rect
+ * corners through the part's worldMatrix into local space before
+ * calling — same pattern the click-to-select path uses for hit-test.
+ *
+ * Both flat `[x0,y0,x1,y1,...]` and `Array<{x,y}>` shapes accepted.
+ * Inclusive on edges so a vert exactly on the rect boundary counts as
+ * inside (Blender's box-select also includes boundary verts).
+ *
+ * @param {ArrayLike<number> | ReadonlyArray<{x:number,y:number}>} verts
+ * @param {number} minX
+ * @param {number} minY
+ * @param {number} maxX
+ * @param {number} maxY
+ * @returns {number[]} matching vertex indices (ascending order)
+ */
+export function verticesInRect(verts, minX, minY, maxX, maxY) {
+  /** @type {number[]} */
+  const out = [];
+  if (!verts) return out;
+  if (minX > maxX) { const t = minX; minX = maxX; maxX = t; }
+  if (minY > maxY) { const t = minY; minY = maxY; maxY = t; }
+  const probe = /** @type {any} */ (verts[0]);
+  if (probe && typeof probe.x === 'number') {
+    /** @type {ReadonlyArray<{x:number,y:number}>} */
+    const arr = /** @type {any} */ (verts);
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (v.x >= minX && v.x <= maxX && v.y >= minY && v.y <= maxY) out.push(i);
+    }
+    return out;
+  }
+  /** @type {ArrayLike<number>} */
+  const flat = /** @type {any} */ (verts);
+  const n = flat.length >> 1;
+  for (let i = 0; i < n; i++) {
+    const x = flat[i * 2];
+    const y = flat[i * 2 + 1];
+    if (x >= minX && x <= maxX && y >= minY && y <= maxY) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Toolset Phase 1.B — vertices-in-polygon for Edit Mode lasso select.
+ *
+ * Returns indices of every vertex inside the polygon defined by
+ * `polyXs[]` / `polyYs[]` (parallel arrays in local space — same frame
+ * as `verts`). Uses the standard ray-cast / crossings test (more
+ * compact than winding number, and matches Blender's lasso behaviour
+ * for the common simple-polygon case).
+ *
+ * Polygon edges are closed automatically (last → first). Self-
+ * intersecting paths follow the even-odd fill rule, which matches
+ * Blender's lasso (a figure-8 lasso selects the "outer" lobes only —
+ * the centre cross-over is "outside" by even-odd, same as Blender).
+ *
+ * @param {ArrayLike<number> | ReadonlyArray<{x:number,y:number}>} verts
+ * @param {ReadonlyArray<number>} polyXs
+ * @param {ReadonlyArray<number>} polyYs
+ * @returns {number[]} matching vertex indices (ascending order)
+ */
+export function verticesInPolygon(verts, polyXs, polyYs) {
+  /** @type {number[]} */
+  const out = [];
+  if (!verts || !polyXs || !polyYs) return out;
+  const np = Math.min(polyXs.length, polyYs.length);
+  if (np < 3) return out;
+  const probe = /** @type {any} */ (verts[0]);
+  /** @param {number} px @param {number} py */
+  const inside = (px, py) => pointInPolygon(px, py, polyXs, polyYs);
+  if (probe && typeof probe.x === 'number') {
+    /** @type {ReadonlyArray<{x:number,y:number}>} */
+    const arr = /** @type {any} */ (verts);
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (inside(v.x, v.y)) out.push(i);
+    }
+    return out;
+  }
+  /** @type {ArrayLike<number>} */
+  const flat = /** @type {any} */ (verts);
+  const n = flat.length >> 1;
+  for (let i = 0; i < n; i++) {
+    if (inside(flat[i * 2], flat[i * 2 + 1])) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Even-odd point-in-polygon test (ray-cast / crossings).
+ *
+ * Self-intersecting polygons follow the even-odd fill rule (figure-8
+ * lasso selects outer lobes only) — matches Blender's lasso semantics.
+ *
+ * @param {number} px
+ * @param {number} py
+ * @param {ReadonlyArray<number>} polyXs
+ * @param {ReadonlyArray<number>} polyYs
+ * @returns {boolean}
+ */
+export function pointInPolygon(px, py, polyXs, polyYs) {
+  const n = Math.min(polyXs.length, polyYs.length);
+  if (n < 3) return false;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polyXs[i], yi = polyYs[i];
+    const xj = polyXs[j], yj = polyYs[j];
+    // Ray cast east from (px, py); count edge crossings.
+    const intersect = ((yi > py) !== (yj > py))
+      && (px < (xj - xi) * (py - yi) / ((yj - yi) || Number.EPSILON) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Toolset Phase 1.A — part-AABB-vs-rect intersection for Object Mode
+ * box select.
+ *
+ * Returns `true` when the part's canvas-space mesh AABB intersects the
+ * canvas-space rectangle. Uses `finalVertsByPartId` when supplied
+ * (matches what the user sees rendered, including chainEval + LBS +
+ * blends), then `frames` (chainEval-only), then rest mesh in
+ * canvas-px via the part's worldMatrix.
+ *
+ * Standard separating-axis test: two AABBs intersect iff their
+ * intervals overlap on both X and Y. Inclusive on edges so a part
+ * grazing the rect counts as hit.
+ *
+ * Pre-mesh PSD-imported parts (no triangles yet) fall back to
+ * `imageBounds` when present, then to the full canvas-quad
+ * (`imageWidth`/`imageHeight` in local space) — same priority order
+ * as `hitTestParts`.
+ *
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
+ * @param {number} rectMinX
+ * @param {number} rectMinY
+ * @param {number} rectMaxX
+ * @param {number} rectMaxY
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
+ * @returns {string[]} part ids whose AABB intersects the rect
+ */
+export function partsInRect(project, frames, rectMinX, rectMinY, rectMaxX, rectMaxY, opts = {}) {
+  if (rectMinX > rectMaxX) { const t = rectMinX; rectMinX = rectMaxX; rectMaxX = t; }
+  if (rectMinY > rectMaxY) { const t = rectMinY; rectMinY = rectMaxY; rectMaxY = t; }
+  const worldMatrices = opts.worldMatrices ?? null;
+  const finalVertsByPartId = opts.finalVertsByPartId ?? null;
+  /** @type {Map<string, Float32Array | number[]>} */
+  const frameMap = new Map();
+  if (frames && typeof frames[Symbol.iterator] === 'function') {
+    for (const f of frames) {
+      if (f && typeof f.id === 'string' && f.vertexPositions) {
+        frameMap.set(f.id, f.vertexPositions);
+      }
+    }
+  }
+  /** @type {string[]} */
+  const out = [];
+  for (const part of project?.nodes ?? []) {
+    if (!part || part.type !== 'part' || part.visible === false) continue;
+    const aabb = computePartAabbCanvas(part, project, frameMap, worldMatrices, finalVertsByPartId);
+    if (!aabb) continue;
+    if (aabb.maxX < rectMinX || aabb.minX > rectMaxX) continue;
+    if (aabb.maxY < rectMinY || aabb.minY > rectMaxY) continue;
+    out.push(part.id);
+  }
+  return out;
+}
+
+/**
+ * Toolset Phase 1.B — parts whose AABB centroid (or any vertex) falls
+ * inside a polygon, in canvas space. Used by Object-Mode lasso select.
+ *
+ * To match Blender's behaviour (a part is "inside" when its origin
+ * passes the lasso, not just its bbox), we test the AABB centre and
+ * any of the four AABB corners. A part is considered inside when at
+ * least one of those five points is inside the polygon. This is more
+ * permissive than centre-only (lassoes that clip a part still pick it
+ * up) but doesn't degenerate to whole-mesh-inside as a strict bounds
+ * test would.
+ *
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
+ * @param {ReadonlyArray<number>} polyXs
+ * @param {ReadonlyArray<number>} polyYs
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
+ * @returns {string[]}
+ */
+export function partsInPolygon(project, frames, polyXs, polyYs, opts = {}) {
+  const np = Math.min(polyXs?.length ?? 0, polyYs?.length ?? 0);
+  /** @type {string[]} */
+  const out = [];
+  if (np < 3) return out;
+  const worldMatrices = opts.worldMatrices ?? null;
+  const finalVertsByPartId = opts.finalVertsByPartId ?? null;
+  /** @type {Map<string, Float32Array | number[]>} */
+  const frameMap = new Map();
+  if (frames && typeof frames[Symbol.iterator] === 'function') {
+    for (const f of frames) {
+      if (f && typeof f.id === 'string' && f.vertexPositions) {
+        frameMap.set(f.id, f.vertexPositions);
+      }
+    }
+  }
+  for (const part of project?.nodes ?? []) {
+    if (!part || part.type !== 'part' || part.visible === false) continue;
+    const aabb = computePartAabbCanvas(part, project, frameMap, worldMatrices, finalVertsByPartId);
+    if (!aabb) continue;
+    const cx = (aabb.minX + aabb.maxX) / 2;
+    const cy = (aabb.minY + aabb.maxY) / 2;
+    if (pointInPolygon(cx, cy, polyXs, polyYs)
+      || pointInPolygon(aabb.minX, aabb.minY, polyXs, polyYs)
+      || pointInPolygon(aabb.maxX, aabb.minY, polyXs, polyYs)
+      || pointInPolygon(aabb.minX, aabb.maxY, polyXs, polyYs)
+      || pointInPolygon(aabb.maxX, aabb.maxY, polyXs, polyYs)) {
+      out.push(part.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Compute a part's canvas-space mesh AABB. Returns `null` when the
+ * part has no geometry to bound against.
+ *
+ * Vertex source priority mirrors `hitTestParts`:
+ *   1. `finalVertsByPartId` — composed verts the renderer drew
+ *   2. `frameMap` (chainEval canvas-px output)
+ *   3. rest mesh transformed through the part's worldMatrix
+ *   4. pre-mesh PSD parts: `imageBounds` (canvas-px)
+ *   5. `imageWidth`/`imageHeight` rectangle through worldMatrix
+ *
+ * @param {any} part
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {Map<string, Float32Array | number[]>} frameMap
+ * @param {Map<string, Float32Array | number[]> | null} worldMatrices
+ * @param {Map<string, ReadonlyArray<{x:number,y:number}>> | null} finalVertsByPartId
+ * @returns {{minX:number, minY:number, maxX:number, maxY:number} | null}
+ */
+function computePartAabbCanvas(part, project, frameMap, worldMatrices, finalVertsByPartId) {
+  const partMesh = getMesh(part, project);
+
+  // Priority 1 — final composed verts (already in canvas-px).
+  const finalVerts = finalVertsByPartId?.get(part.id) ?? null;
+  if (finalVerts && finalVerts.length > 0) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const v of finalVerts) {
+      if (v.x < minX) minX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y > maxY) maxY = v.y;
+    }
+    if (minX === Infinity) return null;
+    return { minX, minY, maxX, maxY };
+  }
+
+  // Priority 2 — chainEval frames (canvas-px, flat array).
+  const rigVerts = frameMap.get(part.id);
+  if (rigVerts && rigVerts.length >= 2) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const n = rigVerts.length >> 1;
+    for (let i = 0; i < n; i++) {
+      const x = rigVerts[i * 2];
+      const y = rigVerts[i * 2 + 1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    if (minX === Infinity) return null;
+    return { minX, minY, maxX, maxY };
+  }
+
+  // Priority 3 — rest mesh transformed through worldMatrix.
+  const wm = worldMatrices?.get(part.id) ?? null;
+  if (partMesh?.vertices && partMesh.vertices.length > 0) {
+    const verts = partMesh.vertices;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    if (wm) {
+      for (let i = 0; i < verts.length; i++) {
+        const v = verts[i];
+        const lx = v?.x ?? v?.restX ?? 0;
+        const ly = v?.y ?? v?.restY ?? 0;
+        const wx = wm[0] * lx + wm[3] * ly + wm[6];
+        const wy = wm[1] * lx + wm[4] * ly + wm[7];
+        if (wx < minX) minX = wx;
+        if (wy < minY) minY = wy;
+        if (wx > maxX) maxX = wx;
+        if (wy > maxY) maxY = wy;
+      }
+    } else {
+      for (let i = 0; i < verts.length; i++) {
+        const v = verts[i];
+        const x = v?.x ?? v?.restX ?? 0;
+        const y = v?.y ?? v?.restY ?? 0;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    if (minX === Infinity) return null;
+    return { minX, minY, maxX, maxY };
+  }
+
+  // Priority 4 — pre-mesh PSD: imageBounds in canvas space.
+  const bb = part.imageBounds;
+  if (bb && typeof bb.minX === 'number' && bb.maxX > bb.minX) {
+    return { minX: bb.minX, minY: bb.minY, maxX: bb.maxX, maxY: bb.maxY };
+  }
+
+  // Priority 5 — pre-mesh PSD: full image quad via worldMatrix.
+  const w = part.imageWidth, h = part.imageHeight;
+  if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
+    if (wm) {
+      const cs = [
+        [0, 0], [w, 0], [0, h], [w, h],
+      ];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const [lx, ly] of cs) {
+        const wx = wm[0] * lx + wm[3] * ly + wm[6];
+        const wy = wm[1] * lx + wm[4] * ly + wm[7];
+        if (wx < minX) minX = wx;
+        if (wy < minY) minY = wy;
+        if (wx > maxX) maxX = wx;
+        if (wy > maxY) maxY = wy;
+      }
+      return { minX, minY, maxX, maxY };
+    }
+    return { minX: 0, minY: 0, maxX: w, maxY: h };
+  }
+
+  return null;
+}
+
 // Re-export mat3Identity for tests that want to construct identity-only
 // worldMatrices maps without pulling in the renderer module.
 export { mat3Identity };
