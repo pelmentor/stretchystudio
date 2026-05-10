@@ -134,7 +134,10 @@ function SculptSection() {
   const isSmooth = activeBrush === 'smooth';
   return (
     <div>
-      <SectionHeader label="Sculpt" />
+      {/* Audit D-12: Blender's Sculpt-brush settings panel is labelled
+          "Brush Settings" (`scripts/startup/bl_ui/space_view3d_toolbar.py:325,
+          1566, 1626, 1802`); SS's prior "Sculpt" was a drift. */}
+      <SectionHeader label="Brush Settings" />
       <div className="px-2 py-2 flex flex-col gap-1.5">
         <label className="flex items-center gap-2 text-[11px] py-0.5">
           <span className="w-20 text-muted-foreground select-none">Brush</span>

@@ -34,28 +34,42 @@ import { pinchTick }  from './pinch.js';
 
 /**
  * Per-tick brush call options. All brushes accept this superset; brush
- * impls ignore the fields they don't use (e.g. Grab ignores
- * `iterations`; Smooth uses it).
+ * impls ignore the fields they don't use (e.g. Smooth ignores
+ * `prevCursor`, Pinch ignores `origVerts`).
  *
  * @typedef {Object} BrushTickOpts
- * @property {ArrayLike<{x:number, y:number}>} verts  - CURRENT vertex
- *   positions in mesh-local coords (the brush mutates from here)
- * @property {{x:number, y:number}}            cursor      - cursor in mesh-local
- * @property {{x:number, y:number}|null}       prevCursor  - cursor at previous
- *   tick (null on first tick); Grab needs this for delta
- * @property {number}                          size        - mesh-local radius
- * @property {number}                          strength    - 0..1
+ * @property {ArrayLike<{x:number, y:number}>} verts       - CURRENT vertex
+ *   positions in mesh-local coords (read by Smooth/Pinch — the
+ *   live-cursor brushes — to compute deltas off the present state)
+ * @property {ArrayLike<{x:number, y:number}>} [origVerts] - STROKE-BEGIN
+ *   snapshot of vertex positions. Required by anchored brushes (Grab —
+ *   Blender semantic: verts are repositioned to `orig + total_delta *
+ *   weight` each tick, NOT incrementally mutated)
+ * @property {{x:number, y:number}}            cursor       - cursor in mesh-local
+ * @property {{x:number, y:number}|null}       [anchorCursor] - cursor at
+ *   stroke begin. Anchored brushes (Grab) compute the brush footprint
+ *   AND total delta against this; live-cursor brushes ignore.
+ * @property {{x:number, y:number}|null}       prevCursor   - cursor at previous
+ *   tick (null on first tick); Pinch reads this for grab_delta direction
+ * @property {{x:number, y:number}}            [startCursor] - alias for
+ *   anchorCursor; reserved for future per-brush variants
+ * @property {number}                          size         - mesh-local radius
+ * @property {number}                          strength     - 0..1
  * @property {FalloffKind}                     falloff
- * @property {boolean}                         [ctrl]      - modal toggle
- *   (Pinch flips to Magnify when held)
- * @property {Array<Set<number>>}              [adjacency] - required for
+ * @property {boolean}                         [ctrl]       - locked at stroke
+ *   begin via `dragRef.ctrlAtStart` (audit D-4 — Blender's
+ *   `paint_stroke.cc:868` reads operator's `mode` enum once at LMB-press,
+ *   not per-tick). Pinch flips to Magnify when true.
+ * @property {Array<Set<number>>}              [adjacency]  - required for
  *   Smooth (Laplacian neighbours) AND for connectedOnly mode on any
  *   brush
- * @property {boolean}                         [connectedOnly]
- * @property {number|null}                     [originIdx] - vertex index
+ * @property {boolean}                         [connectedOnly] - SS-invented
+ *   per-brush enhancement (Blender's `BRUSH_USE_CONNECTED_ONLY` only
+ *   affects the Pose brush — `editors/sculpt_paint/mesh/sculpt_pose.cc:1931`)
+ * @property {number|null}                     [originIdx]  - vertex index
  *   under the cursor at stroke start; required for connectedOnly BFS
  * @property {number}                          [iterations] - Smooth
- *   only; default 1
+ *   only; SS-invented direct slider (Blender derives from strength × 4)
  */
 
 /**

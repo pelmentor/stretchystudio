@@ -33,6 +33,7 @@ import { useEditorStore } from '../../store/editorStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { useUIV3Store, selectEditorMode } from '../../store/uiV3Store.js';
 import {
   getMesh,
   isMeshedPart,
@@ -123,6 +124,13 @@ export function ModePill() {
 
   const lockObjectModes = usePreferencesStore((s) => s.lockObjectModes);
   const setLockObjectModes = usePreferencesStore((s) => s.setLockObjectModes);
+
+  // Toolset Phase 3 audit-fix G-2: Sculpt mutates the rest mesh; in
+  // Animation editor mode that mutation would corrupt rest pose
+  // permanently (no draftPose route — sculpt is a rest-mesh operation,
+  // not a per-keyframe deformation). Disable the row with a clear hint.
+  const editorMode = useUIV3Store(selectEditorMode);
+  const sculptBlockedByAnimMode = editorMode === 'animation';
 
   // Subscribe to selectionStore so the dropdown re-renders when the
   // user picks a different node.
@@ -276,11 +284,13 @@ export function ModePill() {
           icon={Hand}
           label="Sculpt Mode"
           checked={editMode === 'sculpt'}
-          disabled={!modeCompatTest(dataKind, MODE_SCULPT)}
+          disabled={!modeCompatTest(dataKind, MODE_SCULPT) || sculptBlockedByAnimMode}
           hint={
-            kind !== 'meshedPart'
-              ? 'Select a meshed part to sculpt'
-              : 'Brush deform — Grab / Smooth / Pinch (Ctrl: Magnify) over mesh vertices'
+            sculptBlockedByAnimMode
+              ? 'Sculpt edits the rest mesh — exit the Animation editor first (sculpt mutations during animation would corrupt rest pose)'
+              : kind !== 'meshedPart'
+                ? 'Select a meshed part to sculpt'
+                : 'Brush deform — Grab / Smooth / Pinch (Ctrl: Magnify) over mesh vertices'
           }
           onSelect={enterSculpt}
         />

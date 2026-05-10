@@ -355,19 +355,33 @@ export default function CanvasViewport({
   // click fallback.
   const lassoCandidateRef = useRef(/** @type {null | {startClient:{x:number,y:number}, mode:'object'|'edit', editPartId:string|null, onClickFallback:(()=>void)|null, gestureModifier:'add'|'subtract'|null}} */ (null));
 
-  // Stable refs for imperative callbacks
-  const editorRef = useRef(editorState);
+  // Stable refs for imperative callbacks.
+  //
+  // editorRef carries the FULL editor store (not the partial render-time
+  // `editorState` facade) so event handlers can read any store field
+  // without the facade needing to know about it. Subscription pattern
+  // mirrors `animRef` above (L256-257). Critical: facade-only mode
+  // ("editorRef.current = editorState") was the root cause of a Phase 3
+  // arch-audit HIGH (sculpt UI was dead because facade missed `sculpt`),
+  // and silently broke Phase 0 toolMode reads + Edit-Mode brushHardness
+  // + autoKeyframe — all four fixed in one shot by switching here.
+  const editorRef = useRef(useEditorStore.getState());
   const projectRef = useRef(project);
   const isDark = themeMode === 'system' ? osTheme === 'dark' : themeMode === 'dark';
   const isDarkRef = useRef(isDark);
 
   // Update refs synchronously in render to ensure event handlers see latest state
-  editorRef.current = editorState;
   projectRef.current = project;
   isDarkRef.current = isDark;
 
   useEffect(() => { isDirtyRef.current = true; }, [project, isDark]);
   useEffect(() => { isDirtyRef.current = true; }, [paramValues]);
+  // Subscribe-driven editorRef — keeps the ref pointing at the live
+  // store snapshot regardless of which fields React renders react to.
+  // Without this, event handlers read whatever subset the render-time
+  // facade carries, missing any field added since the facade was last
+  // updated (Phase 3 arch-audit G-1).
+  useEffect(() => useEditorStore.subscribe((s) => { editorRef.current = s; }), []);
   useEffect(() => {
     isDirtyRef.current = true;
     // Phase -1D: reset the missing-frame warning dedupe so a fresh
@@ -2252,10 +2266,18 @@ export default function CanvasViewport({
     // Toolset Plan Phase 3 — Sculpt Mode stroke begin. Sibling to the
     // Edit-Mode brush dispatch below; sculpt brushes operate on the same
     // mesh data but with cursor-centered falloff (vs Edit-Mode brush's
-    // anchor-from-pickeed-vertex). LMB starts a stroke; pointermove
+    // anchor-from-picked-vertex). LMB starts a stroke; pointermove
     // accumulates per-tick brush displacements; pointerup commits one
     // undo entry for the whole stroke.
-    if (editMode === 'sculpt' && currentSelection.length > 0 && e.button === 0) {
+    //
+    // Safety net (audit G-2): sculpt mutates the rest mesh. The ModePill
+    // row already disables Sculpt entry while in Animation editor mode,
+    // but if a stale editMode='sculpt' carries over into animation
+    // editor (workspace switch keeps editMode), refuse the stroke here.
+    if (editMode === 'sculpt'
+        && currentSelection.length > 0
+        && e.button === 0
+        && getEditorMode() !== 'animation') {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
       const selMesh = selNode ? getMesh(selNode, proj) : null;
       if (selNode && selMesh) {
@@ -2294,20 +2316,35 @@ export default function CanvasViewport({
           adjacency,
           originIdx:      originIdx >= 0 ? originIdx : null,
           prevCursor:     null,
+          // Stroke-begin cursor in mesh-local. Used by anchored brushes
+          // (Grab — Blender semantic: brush radius stays anchored at
+          // the click point even as the cursor drags off it) AND by
+          // every brush as the source of "total delta since stroke
+          // begin" (for `cache->grab_delta` style accumulation).
+          startCursor:    { x: lx, y: ly },
           firstTick:      true,
-          imageWidth:     selNode.imageWidth,
-          imageHeight:    selNode.imageHeight,
+          // Snapshot of vertex positions at stroke begin. Anchored
+          // brushes (Blender Grab) read these — verts are repositioned
+          // to `orig + total_delta * falloff` each tick, NOT
+          // incrementally mutated. Live-cursor brushes (Smooth/Pinch)
+          // ignore this and read `mesh.vertices` directly.
+          origVerts:      mesh.vertices.map((v) => ({ x: v.x, y: v.y })),
+          // UVs don't change during a sculpt stroke (sculpt is
+          // position-only). Snapshot once at stroke begin so per-tick
+          // GPU upload doesn't allocate a fresh Float32Array each move.
+          allUvs:         new Float32Array(selMesh.uvs),
           // Cache the inverse world matrix at stroke begin — onPointerMove
           // converts cursor world→local on every tick, and recomputing
           // worldMatrices per move is expensive (chains the whole tree).
-          // This stays accurate for the duration of the stroke since the
-          // part's transform doesn't move while the user is dragging in it.
+          // Stays accurate for the duration of the stroke since the
+          // part's transform doesn't move while the user is dragging.
           iwm,
-          // Captured at stroke begin; used per-tick to convert
-          // canvas-px brush size to mesh-local. Snapshot avoids
-          // mid-stroke zoom changes shrinking/growing the brush
-          // footprint unexpectedly.
-          startZoom:      view.zoom,
+          // Ctrl-at-press is locked for the whole stroke. Blender's
+          // `paint_stroke.cc:868` reads `RNA_enum_get(op->ptr, "mode")`
+          // ONCE at LMB-press; the modal handler doesn't toggle invert
+          // mid-stroke. Audit D-4: SS pre-fix was reading e.ctrlKey
+          // per-tick which let users flip Pinch ↔ Magnify mid-drag.
+          ctrlAtStart:    e.ctrlKey || e.metaKey,
           startSizeLocal: sizeLocal,
         };
         canvas.setPointerCapture(e.pointerId);
@@ -2819,12 +2856,23 @@ export default function CanvasViewport({
 
     // ── Sculpt stroke (Sculpt Mode brush dispatch) ─────────────────────────
     // Toolset Plan Phase 3.I — read the active brush impl from the
-    // sculpt registry, build per-tick options from the live editor +
-    // current mesh state, dispatch the brush, write returned positions.
-    // Per-tick writes use `skipHistory: true` after the first tick so
-    // the whole stroke collapses into one undo entry (the first tick's
-    // pre-mutation snapshot).
+    // sculpt registry, build per-tick options, dispatch the brush, write
+    // returned positions. Per-tick writes use `skipHistory: true` after
+    // the first non-empty tick so the whole stroke collapses into one
+    // undo entry (the first tick's pre-mutation snapshot).
+    //
+    // GPU upload pattern (audit G-3): build `newVerts` in-memory, apply
+    // brush deltas, upload to GPU, THEN call updateProject. Reading
+    // back from `projectRef.current` after updateProject would be one
+    // render behind (projectRef is assigned at render, not at set()),
+    // introducing a 1-frame visual lag.
     if (dragRef.current.mode === 'sculpt') {
+      // Mode-change abort (audit G-4): if the user Tab'd out of Sculpt
+      // mid-stroke, drop any further brush ticks even though the
+      // pointermove still fires (pointer capture is still on the
+      // canvas). The pointerup cleanup zeroes dragRef anyway; this just
+      // stops the brush from mutating verts during the orphan window.
+      if (editorRef.current.editMode !== 'sculpt') return;
       const drag = dragRef.current;
       const sculptCfg = editorRef.current.sculpt ?? {};
       const brush = getBrushById(sculptCfg.activeBrush ?? 'grab');
@@ -2836,13 +2884,20 @@ export default function CanvasViewport({
       const [lx, ly] = worldToLocal(worldX, worldY, drag.iwm);
 
       // Brush footprint in mesh-local units. Use the start-of-stroke
-      // size so mid-stroke zoom doesn't stretch the brush — Blender's
-      // sculpt brush size is locked at stroke begin too.
+      // size so mid-stroke zoom doesn't stretch the brush — matches
+      // Blender's sculpt brush size lock at stroke begin.
       const sizeLocal = drag.startSizeLocal;
 
       const tickResult = brush.tick({
         verts:         mesh.vertices,
+        // Grab brush requires the original verts (anchored Blender
+        // semantics — see lib/sculpt/grab.js); other brushes ignore.
+        origVerts:     drag.origVerts,
         cursor:        { x: lx, y: ly },
+        // For Grab: total accumulated delta from stroke start (not
+        // per-tick). Blender's `cache->grab_delta` is the running total
+        // since stroke begin, applied to ORIG positions each tick.
+        startCursor:   drag.startCursor,
         prevCursor:    drag.prevCursor,
         size:          sizeLocal,
         strength:      sculptCfg.strength ?? 0.5,
@@ -2851,15 +2906,38 @@ export default function CanvasViewport({
         connectedOnly: !!sculptCfg.connectedOnly,
         originIdx:     drag.originIdx,
         iterations:    sculptCfg.iterations ?? 1,
-        ctrl:          e.ctrlKey || e.metaKey,
+        // Ctrl is locked at stroke begin (audit D-4 — Blender's
+        // `toggle_settings.invert` is set ONCE at LMB-press, not
+        // re-read per-tick). Mid-stroke key changes are ignored.
+        ctrl:          drag.ctrlAtStart,
+        // Anchored brushes (Grab) recenter the brush radius at the
+        // start cursor; live-cursor brushes (Smooth/Pinch) read this
+        // as null and use `cursor` instead.
+        anchorCursor:  drag.startCursor,
       });
       drag.prevCursor = { x: lx, y: ly };
 
       if (tickResult.size === 0) return;
 
-      // First tick: write WITH history (push pre-stroke snapshot once).
-      // Subsequent ticks: skipHistory so the whole stroke collapses to
-      // one undo entry restoring the pre-stroke verts.
+      // Build new verts in-memory and upload to GPU first, then
+      // updateProject. Avoids the projectRef-stale-until-render lag.
+      const newVerts = mesh.vertices.map((v) => ({ ...v }));
+      for (const [idx, p] of tickResult) {
+        if (idx >= 0 && idx < newVerts.length) {
+          newVerts[idx].x = p.x;
+          newVerts[idx].y = p.y;
+        }
+      }
+      sceneRef.current?.parts.uploadPositions(drag.partId, newVerts, drag.allUvs);
+      isDirtyRef.current = true;
+
+      // First non-empty tick: write WITH history (push pre-stroke
+      // snapshot once). Subsequent ticks: skipHistory:true so the
+      // whole stroke collapses to one undo entry restoring pre-stroke
+      // verts. Note: Grab brush's first tick is empty (no prevCursor),
+      // so this fires on the SECOND pointermove for Grab — the
+      // pre-stroke verts are unchanged at that point so the snapshot
+      // captures the right baseline.
       const skipHistory = !drag.firstTick;
       drag.firstTick = false;
       updateProject((proj2) => {
@@ -2873,18 +2951,6 @@ export default function CanvasViewport({
           }
         }
       }, { skipHistory });
-
-      // GPU upload — immediate visible feedback. Re-read from the
-      // freshly-written project ref so what we upload matches the store.
-      const scene = sceneRef.current;
-      if (scene) {
-        const nAfter = projectRef.current.nodes.find((nn) => nn.id === drag.partId);
-        const mAfter = getMesh(nAfter, projectRef.current);
-        if (mAfter) {
-          scene.parts.uploadPositions(drag.partId, mAfter.vertices, new Float32Array(mAfter.uvs));
-          isDirtyRef.current = true;
-        }
-      }
       return;
     }
 
@@ -3067,9 +3133,16 @@ export default function CanvasViewport({
       return;
     }
     if (dragRef.current) {
+      // Audit G-7: sculpt strokes don't go through draftPose (sculpt is
+      // a rest-mesh edit; G-2 blocks animation-mode entry). The
+      // synthetic K dispatch is the Edit-Mode brush's "auto-commit
+      // draftPose to keyframe" path; sculpt has no draftPose to commit.
+      const wasSculpt = dragRef.current.mode === 'sculpt';
       dragRef.current = null;
       canvas.style.cursor = '';
-      if (editorRef.current.autoKeyframe && getEditorMode() === 'animation') {
+      if (!wasSculpt
+          && editorRef.current.autoKeyframe
+          && getEditorMode() === 'animation') {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
       }
     }

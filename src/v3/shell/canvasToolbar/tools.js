@@ -39,8 +39,8 @@ import {
   Bone,
   Sparkles,
   Hand,
-  Smile,
-  Minimize,
+  Waves,
+  ChevronsLeftRight,
 } from 'lucide-react';
 
 /**
@@ -200,7 +200,10 @@ export const TOOLS_BY_MODE = {
       kind: 'sculpt_brush',
       sculptBrushId: 'smooth',
       label: 'Smooth',
-      icon: Smile,
+      // Audit D-10: prior Smile icon read as facial expression, not as
+      // averaging / smoothing. Waves visually conveys the noise → flat
+      // semantic.
+      icon: Waves,
       hint: 'Laplacian smoothing — verts move toward the average of their neighbours',
     },
     {
@@ -208,8 +211,11 @@ export const TOOLS_BY_MODE = {
       kind: 'sculpt_brush',
       sculptBrushId: 'pinch',
       label: 'Pinch',
-      icon: Minimize,
-      hint: 'Pull verts toward the cursor (Ctrl: Magnify — push away from cursor)',
+      // Audit D-10: prior Minimize icon read as window-collapse control.
+      // ChevronsLeftRight literally points two arrows toward each other
+      // (= squeeze/pinch).
+      icon: ChevronsLeftRight,
+      hint: 'Stroke-aligned squeeze — verts pull perpendicular to stroke direction (Ctrl: Magnify)',
     },
   ],
 };

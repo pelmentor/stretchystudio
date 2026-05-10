@@ -9,17 +9,25 @@
  *   newPos = lerp(oldPos, avgOfNeighbours, falloffWeight × strength)
  *
  * This is one Laplacian-smoothing iteration, weighted by the brush's
- * cursor-centered falloff so the smoothing tapers at the rim. Two
- * iterations per tick (configurable via `opts.iterations`) gives a
- * heavier smoothing pass for the same stroke; 1 is faster.
+ * cursor-centered falloff so the smoothing tapers at the rim. The
+ * `iterations` slider (1–10) chains additional Laplacian passes per
+ * tick.
  *
- * The brush READS the current vertex positions and computes the new
- * positions for the affected set in a single pass — neighbours that
- * also fall inside the radius use their CURRENT (un-smoothed) value
+ * **Audit-flagged SS deviation (D-5).** Blender's standard Smooth
+ * brush has NO iteration slider — it derives iteration count from
+ * `strength`: `int(strength * 4)` full passes plus one partial
+ * (`editors/sculpt_paint/mesh/brushes/smooth.cc:34-48`). SS exposes
+ * iterations directly because that's more discoverable for character
+ * rigging users (no need to internalise "strength × 4 = iters" math).
+ * Documented as INTENTIONAL deviation, not a Blender port.
+ *
+ * **Reading current positions vs ORIG.** The brush reads
+ * `mesh.vertices` (the current store state) and writes new positions
+ * for the affected set in a single pass — neighbours that also fall
+ * inside the radius use their CURRENT (un-smoothed-this-iter) value
  * for the same iteration, then the iteration commits all moves at
  * once. Successive iterations chain through the just-smoothed values.
- * This matches Blender's `SCULPT_brush_strokes` jitter-free behaviour
- * for symmetric Smooth.
+ * Matches Blender's `do_smooth_brush` per-PBVH-node behaviour.
  *
  * Vertices with no neighbours (orphan verts not referenced by any
  * triangle) are skipped — there's nothing to average toward.

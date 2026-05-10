@@ -565,12 +565,20 @@ Closes: Top-12 #5.
 
 ---
 
-### Phase 3 — Sculpt mode + brushes (1 week) ✅ SHIPPED 2026-05-10
+### Phase 3 — Sculpt mode + brushes (1 week) ✅ SHIPPED 2026-05-10 + AUDIT-FIXED same day
 
 Progress doc: [TOOLSET_PHASE_3_PROGRESS.md](./TOOLSET_PHASE_3_PROGRESS.md).
-Pinch substituted for Inflate per audit (flat-mesh Inflate is degenerate).
-91-assertion test suite (sculpt_grab + sculpt_smooth + sculpt_pinch +
-sculpt_store). Manual gate (Phase 3.J) remains user-side.
+Audits: [AUDIT_2026_05_10_TOOLSET_PHASE3_ARCH.md](./AUDIT_2026_05_10_TOOLSET_PHASE3_ARCH.md) (12 gaps, 3 HIGH addressed) + [AUDIT_2026_05_10_TOOLSET_PHASE3_BLENDER.md](./AUDIT_2026_05_10_TOOLSET_PHASE3_BLENDER.md) (15 gaps, 4 HIGH addressed).
+
+**Audit-revised semantics:**
+- **Grab**: anchored radius (Blender's `need_delta_from_anchored_origin = true`); brush footprint locks at click; verts repositioned to `orig + total_delta * weight` each tick (NOT per-tick incremental from prev cursor — that was Nudge semantics). Wandering cursor doesn't pick up new verts.
+- **Pinch**: stroke-aligned 2D squeeze (Blender's stroke matrix X-axis = perpendicular to grab_delta; Z-axis projection drops to 0 in 2D plane). Stationary cursor → no pinch (no stroke direction to align to). Verts pinch perpendicular to stroke direction.
+- **Magnify** (Ctrl-during-Pinch): 0.25× weaker than Pinch + sign flip. Asymmetric per Blender's `mesh/sculpt.cc:2433-2439`.
+- **Ctrl locked at LMB-press** (not per-tick): mid-stroke key changes are ignored. Matches Blender's `paint_stroke.cc:868`.
+
+**Pre-existing facade gap fixed in same sweep**: `editorRef.current` migrated to `useEditorStore.subscribe()`-driven full-store ref (sister to `animRef`). Closes Phase 0 toolMode reads, Edit-Mode brushHardness slider, animation autoKeyframe — all silently broken since perf commit `a21fc2e` (2026-05-09).
+
+112-assertion test suite (sculpt_grab 26 + sculpt_smooth 20 + sculpt_pinch 20 + sculpt_store 35 + sculpt_undo 11). Manual gate (Phase 3.J) is user-side.
 
 **Goal.** A new edit-mode `'sculpt'` with three brushes that reuse
 the proportional-edit + weight-paint brush infrastructure.
