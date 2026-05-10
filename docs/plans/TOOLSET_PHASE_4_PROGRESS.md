@@ -146,12 +146,104 @@ User-side browser sweep, queued alongside Phase 0.H + 1.F + 2.G + 3.J:
   part: re-export cmo3, load in Cubism Viewer → still loads + still
   deforms.
 
-## Audit-fix sweep status
+## Audit-fix sweep — SHIPPED (commit `4347926`)
 
-Two parallel agents (architecture + Blender-fidelity) running per the
-established Phase 0/1/2/3 pattern. Audit docs to land at:
+Two independent agents (architecture + Blender-fidelity) audited
+`428bcdf` and surfaced 19 gaps total — **5 HIGH** (3 arch + 2 Blender),
+**9 MED**, **5 LOW**. All HIGH addressed; MED/LOW either fixed or
+DOCUMENTED-AS-DEVIATION per Rule №1.
 
-- `docs/plans/AUDIT_2026_05_10_TOOLSET_PHASE4_ARCH.md`
-- `docs/plans/AUDIT_2026_05_10_TOOLSET_PHASE4_BLENDER.md`
+### Architecture HIGH (audit doc: `AUDIT_2026_05_10_TOOLSET_PHASE4_ARCH.md`)
 
-Audit-fix sweep commit + close-out doc to follow.
+- **G-1** — `mesh.runtime` not cleared after topology op. `artMeshEval`
+  read `runtime.keyforms[i].vertexPositions.length` as authoritative;
+  stale `2 * N_old` length corrupted output buffers for every rigged
+  part. Fix: `delete m.runtime` in the updateProject recipe.
+- **G-2** — `subdivide.js:206` crashed with TypeError after save+load
+  because `projectFile.js:214` leaves `edgeIndices` as plain Array.
+  Fix: query the local Set built at line 203.
+- **G-3** — Pre-fix `if (!hasMesh())` mesh-sync guard skipped re-upload
+  after undo of a topology op (GPU still HAS a mesh). Fix: per-part
+  `meshSignature` cache; re-upload on signature divergence. Catches
+  first upload + topology op + undo + save+load. `sceneRegistry`
+  extended with `_recordMeshUpload` so explicit upload seeds the cache
+  and the sync doesn't double-upload.
+
+### Blender-fidelity HIGH (audit doc: `AUDIT_2026_05_10_TOOLSET_PHASE4_BLENDER.md`)
+
+- **D-1** — Pre-fix `cuts > 1` iterated single-cuts → `4^cuts` sub-tris
+  per parent (16 at cuts=2, 64 at cuts=3). Blender's
+  `bm_subdivide_multicut` does single-pass `(cuts+1)^2` (9 at cuts=2,
+  16 at cuts=3). Rewrote as single-pass triangular grid: `cuts`
+  midpoints per edge (cached for adjacent-parent sharing) + barycentric
+  interior verts. Extended `TopologyOpResult` with `vertexWeights`
+  parallel map + `remapPerVertexArray`/`averageDeltas`/`averageNumbers`
+  to consume it, so blendShape/weightGroup data interpolates linearly
+  along source verts (NOT snap to unweighted mean).
+- **D-2** — Smoothness pull is Loop-style (neighbour avg); Blender
+  uses normal-guided slerp which is a no-op on flat 2D meshes. SS
+  keeps Loop-style as a deliberate deviation (visible 2D smoothness
+  IS useful for character editing). DOCUMENT-AS-DEVIATION via
+  module banner.
+
+### MED
+
+- **G-4** — Dissolve cluster comment was wrong ("will be re-fed");
+  fixed comment + JSDoc, behaviour stays as v1 simplification.
+- **G-5** — Smoothness pull was baking smoothed pose into restX/restY;
+  fix: rest preserved (geometric midpoint), only pose-space x/y pulled.
+- **G-6** — `enumerateOneRingPolygon` silently overwrote next[u] on
+  non-manifold topology; fix: detect duplicate u, return null.
+- **G-7** — MergeMenu exec/close comment was reversed; behaviour was
+  correct, comment fixed.
+- **G-8** — Dead imports of identityVertexSources/identityVertexIndexRemap
+  removed.
+- **D-3** — Added `mergeAtFirst` (Blender's MERGE_FIRST). 6-button
+  menu now matches Blender's MESH_MT_merge order.
+- **D-4** — JSDoc documents mergeAtLast active-vert-history requirement.
+- **D-5** — JSDoc documents mergeByDistance taxonomy + missing
+  `use_unselected` / `use_centroid=false` Blender features.
+- **D-6** — JSDoc documents boundary dissolve leaves hole + missing
+  `use_boundary_tear` / `use_face_split` features.
+
+### LOW
+
+- **D-7** — dissolve.js doc claim "constrained Delaunay" replaced with
+  accurate "ear-clip with KD-tree" Blender source citation.
+- **D-8** — keymap comment documents Blender's `Ctrl+X` =
+  `MESH_OT_dissolve_mode` (context-sensitive); SS direct dispatch
+  needs re-routing when edge/face select modes land.
+- **D-9** — (no D-9 in this audit; gap numbering jumped per
+  Blender-fidelity audit's internal numbering)
+- **D-10** — Cluster doc consistent across module banner + inline +
+  JSDoc.
+- **G-9** — MergeMenu lazy-load null flash. DEFERRED (cosmetic).
+- **G-10** — `window.prompt` for By Distance. DEFERRED (already
+  documented as v1 simplification).
+
+### Audit-fix regression-pin tests
+
+`test_audit_fixes_2026_05_10_phase4.mjs` (18 assertions):
+- D-1 cuts=2 → 9 sub-tris (NOT 16); cuts=2 vert count = 10
+- D-1b vertexWeights set with [1-t, t] for edge midpoints
+- D-2 module doc grep for "Loop-subdivision-style" + SS deviation
+- D-3 mergeAtFirst behaves like mergeAtLast modulo target vert
+- G-1 applyTopologyOp clears node.mesh.runtime
+- G-2 subdivide tolerates plain-Array edgeIndices
+- G-5 smoothness leaves restX/restY untouched
+- G-6 enumerateOneRingPolygon returns null on non-manifold
+
+## Tests post-audit-fix
+
+| Suite | Assertions |
+|-------|------------|
+| `test_merge_center`                                                   | 43 |
+| `test_merge_byDistance`                                               | 22 |
+| `test_dissolve_verts_eartrip`                                         | 23 |
+| `test_subdivide_one_cut`                                              | 24 |
+| `test_subdivide_n_cuts` (rebased for Blender semantic)                | 35 |
+| `test_topology_op_selection_remap`                                    | 19 |
+| **`test_audit_fixes_2026_05_10_phase4` (NEW)**                        | **18** |
+| **Phase 4 total post-audit-fix**                                      | **184** |
+
+All 144 sister suites green; typecheck clean.
