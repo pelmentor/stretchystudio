@@ -5,6 +5,45 @@ Plan: [ANIMATION_BLENDER_PARITY_PLAN.md](./ANIMATION_BLENDER_PARITY_PLAN.md)
 Goal: wire already-shipped scaffolds (FCurve / Driver / RNAPath /
 Constraints / DepGraph) into the production hot path.
 
+## Resume entry point (handoff for next session)
+
+Phase 0 is **5 of 6 sub-phases shipped** (0.0/0.A/0.B/0.C/0.D.0).
+0.D — flag flip — has two gates:
+
+1. **Port `boneSkinning.js` LBS into a depgraph kernel.**
+   `kernelArtMeshEval` ([src/anim/depgraph/kernels/artMesh.js](../../src/anim/depgraph/kernels/artMesh.js))
+   currently passes through `type:'armature'` modifiers. Under the
+   `'depgraph'` flag every bone-rigged part loses its skinning. The
+   port:
+   - Add `kernelArmatureDeform` reading bone group transforms (from
+     `TRANSFORM_COMPOSE` outputs, which already exist post-0.C) and
+     applying two-bone LBS to the part's verts. Mirrors
+     [src/renderer/boneSkinning.js](../../src/renderer/boneSkinning.js).
+   - Wire it into `kernelArtMeshEval`'s modifier loop (the branch
+     `if (mod.type === 'armature') ...`).
+   - Add parity tests against `evalRig` + `boneSkinning` composition
+     on a bone-rigged synthetic project (single bone first, then a
+     2-bone elbow chain).
+2. **Manual byte-fidelity sweep.** User-side gate. Toggle
+   `preferencesStore.evalEngine = 'depgraph'`, load
+   `shelby_neutral_ok.psd` (Western) + `test_image4.psd` (anime),
+   verify visually + export `.cmo3` and byte-diff against the
+   `'classic'` baseline. Both must produce identical bytes (or
+   pixel-equivalent visual output, since the .cmo3 export path
+   doesn't currently consume depgraph outputs — see Phase 1.B.1).
+
+Once both gates pass: change [preferencesStore.js:160](../../src/store/preferencesStore.js#L160)
+default from `'classic'` to `'depgraph'`. Keep the `'classic'`
+opt-out for one release; remove in Phase 7 close-out.
+
+After 0.D, **Phase 1 is the next ~1.5-week chunk** — Action datablock
++ NodeTree retirement + 11-consumer migration of `project.animations[]`.
+See [ANIMATION_BLENDER_PARITY_PLAN.md §Phase 1](./ANIMATION_BLENDER_PARITY_PLAN.md)
+(line 419+). Entry point: grep `\bproject\.animations\b` to seed the
+consumer list, then write `migrations/v33_action_datablock.js`.
+
+---
+
 ## Sub-phase status
 
 | Sub | What | Status |
