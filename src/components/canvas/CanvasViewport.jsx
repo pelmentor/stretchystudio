@@ -87,6 +87,7 @@ import {
   nextFalloff,
 } from '@/lib/proportionalEdit';
 import { getBrushById } from '@/lib/sculpt';
+import { setSceneRef } from '@/lib/sceneRegistry';
 import {
   childBoneRoleFor,
   computeSkinWeights,
@@ -540,6 +541,14 @@ export default function CanvasViewport({
       console.error('[CanvasViewport] ScenePass init failed:', err);
       return;
     }
+
+    // Phase 4 — register the scene with the global registry so keymap
+    // operators (Merge / Dissolve / Subdivide) can re-upload mesh data
+    // after a topology mutation. Cleanup below clears the registration.
+    setSceneRef({
+      parts:       sceneRef.current.parts,
+      _markDirty:  () => { isDirtyRef.current = true; },
+    });
 
     // Mesh worker pool — long-lived workers shared across remesh calls.
     // Lifetime matches the WebGL context (mounted/destroyed together).
@@ -1237,6 +1246,9 @@ export default function CanvasViewport({
       meshDispatchSeqRef.current.clear();
       sceneRef.current?.destroy();
       sceneRef.current = null;
+      // Phase 4 — clear the global scene registry so a stale `parts`
+      // pointer doesn't survive the WebGL context teardown.
+      setSceneRef(null);
     };
   }, []);
 

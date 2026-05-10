@@ -23,8 +23,10 @@
 import { ChevronRight, ChevronLeft, Magnet } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { SCULPT_BRUSHES } from '../../lib/sculpt/index.js';
 import { FALLOFF_CYCLE } from '../../lib/proportionalEdit.js';
+import { getOperator } from '../operators/registry.js';
 
 /** Section header — same band style as Properties SectionShell. */
 function SectionHeader({ label }) {
@@ -98,7 +100,15 @@ function ModeHint({ title, body }) {
 }
 
 function ContentForMode({ editMode }) {
-  if (editMode === 'edit' || editMode === 'weightPaint') {
+  if (editMode === 'edit') {
+    return (
+      <>
+        <BrushSection />
+        <TopologySection />
+      </>
+    );
+  }
+  if (editMode === 'weightPaint') {
     return <BrushSection />;
   }
   if (editMode === 'sculpt') {
@@ -116,6 +126,112 @@ function ContentForMode({ editMode }) {
     <div className="px-2 py-3 text-[11px] text-muted-foreground/80 leading-snug">
       Tool settings appear here when an edit mode is active. Press Tab on a
       meshed part or bone-role group to enter one.
+    </div>
+  );
+}
+
+/** Toolset Plan Phase 4 — Topology section.
+ *
+ *  Surfaces the Merge / Dissolve / Subdivide ops + Subdivide settings
+ *  (Cuts + Smoothness) in the Edit Mode N-panel. The hotkey path is
+ *  the primary affordance (M opens the merge popover, Ctrl+X dissolves);
+ *  the buttons are here for discoverability and for the Subdivide op
+ *  which deliberately has no hotkey (right-click → menu in Blender;
+ *  v1 SS uses the N-panel button until the context menu lands).
+ *
+ *  Each button reads `op.available` per-render so it greys out when
+ *  the selection / mode preconditions aren't met. */
+function TopologySection() {
+  const cuts = useSubdivideStore((s) => s.cuts);
+  const smoothness = useSubdivideStore((s) => s.smoothness);
+  const setSubdivide = useSubdivideStore((s) => s.setSubdivide);
+  // Re-render when selection or mesh count changes so op.available
+  // reflects the latest state. selectedVertexIndices is a Map; the
+  // selectorBumps when its reference changes (set actions return a
+  // new Map).
+  useEditorStore((s) => s.selectedVertexIndices);
+  useEditorStore((s) => s.editMode);
+
+  function runOp(id) {
+    const op = getOperator(id);
+    if (!op || !op.exec) return;
+    if (op.available && !op.available({ editorType: 'viewport' })) return;
+    op.exec({ editorType: 'viewport' });
+  }
+  function isAvail(id) {
+    const op = getOperator(id);
+    if (!op) return false;
+    if (!op.available) return true;
+    return op.available({ editorType: 'viewport' });
+  }
+
+  const mergeAvail = isAvail('edit.mergeMenu');
+  const dissolveAvail = isAvail('edit.dissolveVerts');
+  const subdivAvail = isAvail('edit.subdivide');
+  return (
+    <div>
+      <SectionHeader label="Topology" />
+      <div className="px-2 py-2 flex flex-col gap-1.5">
+        <button
+          type="button"
+          disabled={!mergeAvail}
+          onClick={() => runOp('edit.mergeMenu')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (mergeAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Merge selected vertices (M)"
+        >
+          Merge…  <span className="text-muted-foreground/70 float-right">M</span>
+        </button>
+        <button
+          type="button"
+          disabled={!dissolveAvail}
+          onClick={() => runOp('edit.dissolveVerts')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (dissolveAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Dissolve selected vertices (Ctrl+X)"
+        >
+          Dissolve  <span className="text-muted-foreground/70 float-right">Ctrl+X</span>
+        </button>
+        <div className="h-px bg-border my-1" />
+        <NumberSlider
+          label="Cuts"
+          value={cuts}
+          min={1}
+          max={6}
+          step={1}
+          onChange={(v) => setSubdivide({ cuts: v })}
+        />
+        <NumberSlider
+          label="Smoothness"
+          value={smoothness}
+          min={0}
+          max={1}
+          step={0.05}
+          onChange={(v) => setSubdivide({ smoothness: v })}
+        />
+        <button
+          type="button"
+          disabled={!subdivAvail}
+          onClick={() => runOp('edit.subdivide')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (subdivAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Subdivide selected triangles"
+        >
+          Subdivide
+        </button>
+      </div>
     </div>
   );
 }

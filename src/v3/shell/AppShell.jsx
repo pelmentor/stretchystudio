@@ -38,6 +38,7 @@ import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
+import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 
@@ -62,6 +63,9 @@ const Cmo3InspectModal = lazy(() =>
 const ModalTransformOverlay = lazy(() =>
   import('./ModalTransformOverlay.jsx').then((m) => ({ default: m.ModalTransformOverlay }))
 );
+const MergeMenu = lazy(() =>
+  import('./MergeMenu.jsx').then((m) => ({ default: m.MergeMenu }))
+);
 const PsdImportWizard = lazy(() =>
   import('./PsdImportWizard.jsx').then((m) => ({ default: m.PsdImportWizard }))
 );
@@ -82,6 +86,7 @@ export function AppShell() {
   const helpOpen = useHelpModalStore((s) => s.open);
   const inspectOpen = useCmo3InspectStore((s) => s.open);
   const modalKind = useModalTransformStore((s) => s.kind);
+  const editMenuKind = useEditMenuStore((s) => s.kind);
   const wizardStep = useWizardStore((s) => s.step);
 
   return (
@@ -102,6 +107,7 @@ export function AppShell() {
           {helpOpen && <HelpModal />}
           {inspectOpen && <Cmo3InspectModal />}
           {modalKind && <ModalTransformOverlay />}
+          {editMenuKind === 'merge' && <MergeMenu />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
               when no wizard run is in flight. The reorder/adjust banners

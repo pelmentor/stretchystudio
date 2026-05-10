@@ -31,6 +31,13 @@ import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useBoxSelectStore } from '../../store/boxSelectStore.js';
+import { useEditMenuStore } from '../../store/editMenuStore.js';
+import { useSubdivideStore } from '../../store/subdivideStore.js';
+import { mergeAtCenter, mergeAtCursor, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
+import { dissolveVertices } from './edit/dissolve.js';
+import { subdivide } from './edit/subdivide.js';
+import { applyTopologyOp } from './edit/applyTopologyOp.js';
+import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
 import {
@@ -626,6 +633,207 @@ function registerBuiltins() {
     label: 'Toggle Tool Settings (N)',
     available: () => true,
     exec: () => useEditorStore.getState().toggleToolPanel(),
+  });
+
+  // ── Toolset Phase 4 — Topology operators ─────────────────────────
+  // Merge / Dissolve / Subdivide require Edit Mode + a meshed-part
+  // selection + (for merge/subdivide) a non-empty vertex selection.
+  // The five merge variants all share the `editModeWithSelectedVerts`
+  // gate; the dispatch logic differs per mode (centroid / cursor /
+  // active vert / threshold / connected component).
+
+  /** Returns the meshed-part id we should operate on, or null. */
+  function activeEditPart() {
+    const editor = useEditorStore.getState();
+    if (editor.editMode !== 'edit') return null;
+    const partId = editor.selection?.[0];
+    if (typeof partId !== 'string' || partId.length === 0) return null;
+    const project = useProjectStore.getState().project;
+    const node = project?.nodes?.find((n) => n.id === partId);
+    if (!node || node.type !== 'part' || !node.mesh) return null;
+    return partId;
+  }
+
+  /** Available iff we have an Edit Mode part with ≥`min` selected verts. */
+  function topologyAvailable(min) {
+    const partId = activeEditPart();
+    if (!partId) return false;
+    const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+    return !!sel && sel.size >= min;
+  }
+
+  registerOperator({
+    id: 'edit.mergeMenu',
+    label: 'Merge… (M)',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      // Open the popover at the current mouse position (client-px).
+      // canvasCursor is the same point translated to canvas-local px so
+      // the "At Cursor" branch can target it later.
+      const partId = activeEditPart();
+      if (!partId) return;
+      const client = lastMousePos();
+      // Translate client → canvas-local using the canvas DOM rect +
+      // current view (panX, panY, zoom). The first canvas wins (matches
+      // view.frameSelected).
+      const canvas = typeof document !== 'undefined'
+        ? /** @type {HTMLCanvasElement|null} */ (document.querySelector('canvas'))
+        : null;
+      let canvasCursor = null;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const editor = useEditorStore.getState();
+        const view = editor.viewByMode.viewport;
+        const cx = (client.x - rect.left - view.panX) / view.zoom;
+        const cy = (client.y - rect.top  - view.panY) / view.zoom;
+        canvasCursor = { x: cx, y: cy };
+      }
+      useEditMenuStore.getState().openMerge({ cursor: client, canvasCursor });
+    },
+  });
+
+  /** Run a merge variant on the active edit part. The variant
+   *  function returns a TopologyOpResult (or null if there's nothing
+   *  to merge); we apply it via the shared dispatcher. */
+  function runMergeVariant(variantFn) {
+    const partId = activeEditPart();
+    if (!partId) return;
+    const project = useProjectStore.getState().project;
+    const node = project.nodes.find((n) => n.id === partId);
+    if (!node?.mesh) return;
+    const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+    if (!sel || sel.size === 0) return;
+    const result = variantFn(node.mesh, sel);
+    if (!result) return;
+    applyTopologyOp(partId, result);
+  }
+
+  registerOperator({
+    id: 'edit.merge.atCenter',
+    label: 'Merge — At Center',
+    available: () => topologyAvailable(2),
+    exec: () => runMergeVariant((mesh, sel) => mergeAtCenter(mesh, sel)),
+  });
+
+  registerOperator({
+    id: 'edit.merge.atCursor',
+    label: 'Merge — At Cursor',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      const cursor = useEditMenuStore.getState().canvasCursor;
+      if (!cursor) return;
+      runMergeVariant((mesh, sel) => mergeAtCursor(mesh, sel, cursor));
+    },
+  });
+
+  registerOperator({
+    id: 'edit.merge.atLast',
+    label: 'Merge — At Last',
+    available: () => {
+      if (!topologyAvailable(2)) return false;
+      const av = useEditorStore.getState().activeVertex;
+      const partId = activeEditPart();
+      return !!av && av.partId === partId;
+    },
+    exec: () => {
+      const av = useEditorStore.getState().activeVertex;
+      if (!av) return;
+      runMergeVariant((mesh, sel) => mergeAtLast(mesh, sel, av.vertIndex));
+    },
+  });
+
+  registerOperator({
+    id: 'edit.merge.byDistance',
+    label: 'Merge — By Distance',
+    available: () => topologyAvailable(2),
+    exec: () => {
+      // v1 simplification: prompt for a threshold via window.prompt.
+      // The proper threshold-modal popup is a Phase 4 follow-on
+      // (mirroring Blender's redo-panel pattern). Default value
+      // matches Blender's `MERGE_DIST` of 0.0001 in Blender units —
+      // we use 1.0 px since SS meshes operate on canvas px.
+      const input = typeof window !== 'undefined'
+        ? window.prompt('Merge distance (canvas px):', '1.0')
+        : '1.0';
+      if (input == null) return; // user cancelled
+      const threshold = parseFloat(input);
+      if (!Number.isFinite(threshold) || threshold <= 0) return;
+      runMergeVariant((mesh, sel) => mergeByDistance(mesh, sel, threshold));
+    },
+  });
+
+  registerOperator({
+    id: 'edit.merge.collapse',
+    label: 'Merge — Collapse',
+    available: () => topologyAvailable(2),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const adj = buildVertexAdjacency(
+        node.mesh.triangles.flat(),
+        node.mesh.vertices.length,
+      );
+      runMergeVariant((mesh, sel) => mergeCollapse(mesh, sel, adj));
+    },
+  });
+
+  // Dissolve Vertices — single-button op (Blender's menu has only
+  // one valid item in our model since faces aren't a thing in SS).
+  registerOperator({
+    id: 'edit.dissolveVerts',
+    label: 'Dissolve Vertices (Ctrl+X)',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size === 0) return;
+      const result = dissolveVertices(node.mesh, sel);
+      if (!result) {
+        toast({
+          title: 'Cannot dissolve',
+          description: 'Selection would leave fewer than 3 vertices, or no triangles to refill.',
+        });
+        return;
+      }
+      applyTopologyOp(partId, result);
+    },
+  });
+
+  // Subdivide selected triangles. Reads `cuts` + `smoothness` from
+  // `subdivideStore` (driven by the N-panel sliders). v1 doesn't
+  // ship the post-op modifier panel — settings are sticky between
+  // invocations instead. The user picks values, presses Subdivide,
+  // and the op runs once with those settings.
+  registerOperator({
+    id: 'edit.subdivide',
+    label: 'Subdivide Selected',
+    available: () => topologyAvailable(2),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size === 0) return;
+      const { cuts, smoothness } = useSubdivideStore.getState();
+      const result = subdivide(node.mesh, sel, { cuts, smoothness });
+      if (!result) {
+        toast({
+          title: 'Nothing to subdivide',
+          description: 'No triangle has ≥2 selected vertices.',
+        });
+        return;
+      }
+      applyTopologyOp(partId, result);
+    },
   });
 }
 

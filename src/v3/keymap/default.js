@@ -117,6 +117,15 @@ export const DEFAULT_KEYMAP = {
   // canonical "show/hide N-panel" gesture. Bare N (no modifier) so it
   // doesn't collide with Ctrl+N (file.new).
   'KeyN': 'panel.toolSettingsToggle',
+
+  // Toolset Phase 4 — topology operators. M opens the Merge popover
+  // (5 variants); Ctrl+X dissolves selected vertices in place. The
+  // operators' availability gates ensure they no-op outside Edit Mode
+  // on a meshed part. Blender uses the same chords (`MESH_OT_merge`,
+  // `MESH_OT_dissolve_verts`).
+  'KeyM':       'edit.mergeMenu',
+  'Ctrl+KeyX':  'edit.dissolveVerts',
+  'Meta+KeyX':  'edit.dissolveVerts',
 };
 
 /**
