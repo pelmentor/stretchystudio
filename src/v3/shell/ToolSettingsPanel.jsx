@@ -20,8 +20,9 @@
  * @module v3/shell/ToolSettingsPanel
  */
 
-import { ChevronRight, ChevronLeft } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Magnet } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore.js';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
 
 /** Section header — same band style as Properties SectionShell. */
 function SectionHeader({ label }) {
@@ -114,6 +115,123 @@ function ContentForMode({ editMode }) {
   );
 }
 
+/** Toolset Plan Phase 2.E — Snap section. Visible in all modes since
+ *  modal G/R/S is reachable from Object Mode + every Edit Mode (Blender
+ *  parity). Master toggle + per-mode toggles + value inputs + target
+ *  dropdown. Each control writes through `setSnap` (deep-merge). */
+function SnapSection() {
+  const snap = usePreferencesStore((s) => s.snap);
+  const setSnap = usePreferencesStore((s) => s.setSnap);
+  const masterOn = !!snap?.enabled;
+  return (
+    <div>
+      <SectionHeader label="Snap" />
+      <div className="px-2 py-2 flex flex-col gap-1.5">
+        <label className="flex items-center gap-2 text-[11px] py-0.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={masterOn}
+            onChange={(e) => setSnap({ enabled: e.target.checked })}
+            className="h-3 w-3"
+          />
+          <Magnet className="h-3 w-3 text-foreground/70" />
+          <span className="font-medium text-foreground">Snap During Transform</span>
+        </label>
+
+        <div className={`flex flex-col gap-1.5 mt-1 ${masterOn ? '' : 'opacity-60'}`}>
+          {/* Vertex snap (auto-engages during Modal G when master on). */}
+          <SnapModeRow
+            label="Vertex"
+            mode="vertex"
+            valueKey="threshold"
+            valueLabel="px"
+            min={1}
+            max={64}
+            step={1}
+            snap={snap}
+            setSnap={setSnap}
+          />
+          {/* Grid snap (engages on Shift during Modal G). */}
+          <SnapModeRow
+            label="Grid"
+            mode="grid"
+            valueKey="increment"
+            valueLabel="px"
+            min={1}
+            max={256}
+            step={1}
+            snap={snap}
+            setSnap={setSnap}
+          />
+          {/* Increment snap (engages on Shift during Modal R + S; degrees
+              for rotation, value/100 for scale). */}
+          <SnapModeRow
+            label="Increment"
+            mode="increment"
+            valueKey="value"
+            valueLabel="°"
+            min={1}
+            max={90}
+            step={1}
+            snap={snap}
+            setSnap={setSnap}
+          />
+
+          <label className="flex items-center gap-2 text-[11px] py-0.5">
+            <span className="w-20 text-muted-foreground select-none">Target</span>
+            <select
+              value={snap?.target ?? 'closest'}
+              onChange={(e) => setSnap({ target: e.target.value })}
+              className="flex-1 h-6 bg-background border border-border rounded px-1 text-[11px]"
+            >
+              <option value="closest">Closest</option>
+              <option value="center">Center</option>
+              <option value="median">Median</option>
+              <option value="active">Active</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Per-mode snap row — checkbox + numeric value. The mode key is the
+ *  child of `snap.modes`; valueKey selects which numeric prop to edit
+ *  (`threshold` for vertex, `increment` for grid, `value` for
+ *  increment). */
+function SnapModeRow({ label, mode, valueKey, valueLabel, min, max, step, snap, setSnap }) {
+  const cfg = snap?.modes?.[mode] ?? {};
+  const enabled = !!cfg.enabled;
+  const value = cfg[valueKey] ?? min;
+  return (
+    <div className="flex items-center gap-2 text-[11px] py-0.5">
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={(e) => setSnap({ modes: { [mode]: { enabled: e.target.checked } } })}
+        className="h-3 w-3"
+      />
+      <span className="w-16 text-muted-foreground select-none">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={!enabled}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (!Number.isFinite(n)) return;
+          setSnap({ modes: { [mode]: { [valueKey]: n } } });
+        }}
+        className="w-14 h-6 bg-background border border-border rounded px-1 text-[11px] tabular-nums"
+      />
+      <span className="text-muted-foreground/70">{valueLabel}</span>
+    </div>
+  );
+}
+
 export function ToolSettingsPanel() {
   const visible  = useEditorStore((s) => s.toolPanelVisible);
   const editMode = useEditorStore((s) => s.editMode);
@@ -161,6 +279,7 @@ export function ToolSettingsPanel() {
         </button>
       </div>
       <div className="flex-1 min-h-0 overflow-auto flex flex-col">
+        <SnapSection />
         <ContentForMode editMode={editMode} />
       </div>
     </div>

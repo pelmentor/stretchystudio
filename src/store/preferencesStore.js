@@ -37,6 +37,10 @@ const LTM_KEY = 'v3.prefs.lastToolByMode';
  *  `'classic'` → `'depgraph'` is gated on the user-side manual byte-
  *  fidelity sweep on Shelby + test_image4 PSDs. */
 const EVAL_KEY = 'v3.prefs.evalEngine';
+/** Toolset Plan Phase 2 — snap config (modal G / R / S). Persisted as
+ *  one JSON blob keyed `v3.prefs.snap`. See SNAP_DEFAULT below for
+ *  schema; Phase 2.A. */
+const SNAP_KEY = 'v3.prefs.snap';
 
 const PE_DEFAULT = Object.freeze({
   enabled:       false,
@@ -44,6 +48,74 @@ const PE_DEFAULT = Object.freeze({
   falloff:       'smooth',
   connectedOnly: false,
 });
+
+/** Toolset Plan Phase 2 — snap config defaults.
+ *
+ *  - `enabled` (master toggle, default false): when true, vertex snap
+ *    auto-engages while the modal G drag is unshifted; the magenta
+ *    snap-target dot renders. When false, vertex snap is suppressed
+ *    and Shift+modal still engages grid/increment snap (matches
+ *    pre-Phase-2 behaviour with the new configurable increments).
+ *  - `modes.grid` (default `enabled:true, increment:16`): Shift+modal-G
+ *    snaps the canvas-px delta to multiples of `increment`. Default 16
+ *    matches Blender's default grid; v1 hardcoded 10. When
+ *    `grid.enabled` is false, Shift+modal-G falls back to free
+ *    translation (no snap), matching "I want fine input only".
+ *  - `modes.vertex` (default `enabled:true, threshold:8`): when master
+ *    is on AND not Shift, the cursor's nearest project-rest-vertex
+ *    within `threshold` canvas-px wins; the modal delta becomes
+ *    `(snappedVert - originalCursor)` (per Phase 2.C). Threshold is in
+ *    canvas-px so it tracks zoom (the cursor→vert distance is
+ *    measured in canvas space).
+ *  - `modes.increment` (default `enabled:false, value:15`): when
+ *    `enabled` is true, replaces the legacy 15° (rotate) and 0.1
+ *    (scale) Shift snaps. `value` is the rotation step in degrees;
+ *    scale uses `value/100` as the multiplier step (so 15 → 0.15,
+ *    matching Blender's 1° = 0.01× convention).
+ *  - `target` (`'closest' | 'center' | 'median' | 'active'`, default
+ *    `'closest'`): Phase 2.C — selects which point of the active
+ *    selection lands ON the snap vertex. `closest` = the cursor IS the
+ *    anchor (simplest, Blender's default). The others compute the
+ *    anchor from the selection geometry; see `lib/snap/snapMath.js`. */
+const SNAP_DEFAULT = Object.freeze({
+  enabled: false,
+  modes: Object.freeze({
+    grid:      Object.freeze({ enabled: true,  increment: 16 }),
+    vertex:    Object.freeze({ enabled: true,  threshold: 8  }),
+    increment: Object.freeze({ enabled: false, value:     15 }),
+  }),
+  target: 'closest',
+});
+
+/** Deep-merge a saved snap blob over `SNAP_DEFAULT`. The shallow
+ *  `loadJson` merge in this file collapses nested `modes.{grid|vertex|
+ *  increment}` if the saved blob is missing one — clobbering the
+ *  defaults with `undefined`. This recursive helper preserves any
+ *  per-mode subkey that wasn't persisted (e.g. on schema bumps). */
+function mergeSnap(saved) {
+  if (!saved || typeof saved !== 'object') return { ...SNAP_DEFAULT };
+  const modes = saved.modes && typeof saved.modes === 'object' ? saved.modes : {};
+  return {
+    enabled: typeof saved.enabled === 'boolean' ? saved.enabled : SNAP_DEFAULT.enabled,
+    modes: {
+      grid: {
+        ...SNAP_DEFAULT.modes.grid,
+        ...(modes.grid && typeof modes.grid === 'object' ? modes.grid : {}),
+      },
+      vertex: {
+        ...SNAP_DEFAULT.modes.vertex,
+        ...(modes.vertex && typeof modes.vertex === 'object' ? modes.vertex : {}),
+      },
+      increment: {
+        ...SNAP_DEFAULT.modes.increment,
+        ...(modes.increment && typeof modes.increment === 'object' ? modes.increment : {}),
+      },
+    },
+    target: typeof saved.target === 'string' && ['closest', 'center', 'median', 'active'].includes(saved.target)
+      ? saved.target
+      : SNAP_DEFAULT.target,
+  };
+}
 
 /** Last-used tool per `editMode`. Keys mirror `editorStore.editMode`
  *  values: `null` is encoded as `'object'`. Reseeded by
@@ -167,6 +239,31 @@ export const usePreferencesStore = create((set, get) => ({
     const next = v === 'depgraph' ? 'depgraph' : 'classic';
     saveJson(EVAL_KEY, next);
     set({ evalEngine: next });
+  },
+
+  /** Toolset Plan Phase 2.A — modal G/R/S snap config. See SNAP_DEFAULT
+   *  jsdoc above for per-field semantics. */
+  snap: mergeSnap(loadJson(SNAP_KEY, SNAP_DEFAULT)),
+
+  /** Partial-merge update. Accepts any depth of `{ enabled, modes:
+   *  { grid: {...}, vertex: {...}, increment: {...} }, target }` —
+   *  passes through `mergeSnap` to keep schema valid. Intentionally
+   *  re-runs the merge so callers can pass `{ modes: { grid: { increment: 32 } } }`
+   *  without spelling out the rest. */
+  setSnap(partial) {
+    if (!partial || typeof partial !== 'object') return;
+    const cur = get().snap;
+    const merged = mergeSnap({
+      enabled: 'enabled' in partial ? partial.enabled : cur.enabled,
+      modes: {
+        grid:      { ...cur.modes.grid,      ...(partial.modes?.grid      ?? {}) },
+        vertex:    { ...cur.modes.vertex,    ...(partial.modes?.vertex    ?? {}) },
+        increment: { ...cur.modes.increment, ...(partial.modes?.increment ?? {}) },
+      },
+      target: 'target' in partial ? partial.target : cur.target,
+    });
+    saveJson(SNAP_KEY, merged);
+    set({ snap: merged });
   },
 
   setMlEnabled(v) {

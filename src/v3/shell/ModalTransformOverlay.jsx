@@ -36,12 +36,24 @@ import { useEffect, useRef } from 'react';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
 import { endBatch } from '../../store/undoHistory.js';
 import { writePoseValues } from '../../renderer/animationEngine.js';
+import {
+  findNearestVertex,
+  snapDeltaToGrid,
+  snapAngleToIncrement,
+  snapScaleToIncrement,
+  useSnapStore,
+} from '../../lib/snap/index.js';
 
-const SNAP_TRANSLATE = 10;       // px in canvas space
-const SNAP_ROTATE    = 15 * Math.PI / 180;
-const SNAP_SCALE     = 0.1;
+/** Toolset Phase 2 — legacy fallback snaps when `snap.modes.grid` is
+ *  disabled or the increment slot is empty. Match the pre-Phase-2
+ *  hard-coded values (G:10px, R:15°, S:0.1) so disabling the mode
+ *  preserves the historic behaviour exactly. */
+const LEGACY_SNAP_GRID_INCREMENT       = 10;            // px in canvas space
+const LEGACY_SNAP_ROTATE_INCREMENT_DEG = 15;
+const LEGACY_SNAP_SCALE_INCREMENT_DEG  = 10;            // 10° → 0.1× via snapScaleToIncrement
 
 export function ModalTransformOverlay() {
   const kind        = useModalTransformStore((s) => s.kind);
@@ -61,8 +73,19 @@ export function ModalTransformOverlay() {
   // startMouse (or origin) so the first typed digit lands immediately.
   const lastMouse = useRef({ x: 0, y: 0 });
 
+  // Phase 2 — snap-to-vertex needs client→canvas-px conversion. Capture
+  // the canvas rect once at modal mount; the canvas doesn't move during
+  // a drag, so a single snapshot is correct + cheap. Falls back to a
+  // zero-offset rect if no canvas is mounted (snap will degrade to
+  // pure-zoom math, still finite — never crashes).
+  const canvasRectRef = useRef(null);
+
   useEffect(() => {
     if (!kind || !startMouse || !pivotCanvas) return;
+    canvasRectRef.current = document.querySelector('canvas')?.getBoundingClientRect() ?? null;
+    // Clear any leftover snap-target on entry so the dot from a prior
+    // drag doesn't render until the first snap engages.
+    useSnapStore.getState().clearSnapTarget();
 
     /**
      * BVR-005 — Parse the typed buffer to a finite number, or NaN if
@@ -78,6 +101,7 @@ export function ModalTransformOverlay() {
     function applyDelta(currentX, currentY, shift) {
       const ed = useEditorStore.getState();
       const zoom = ed.view.zoom || 1;
+      const view = ed.view;
       // viewport→canvas delta: divide by zoom. Pan doesn't move with
       // the cursor so we ignore it for delta math.
       let dxView = currentX - startMouse.x;
@@ -105,6 +129,67 @@ export function ModalTransformOverlay() {
         else              { dxCanvas = typed; dyCanvas = 0;     }
       }
 
+      // Toolset Plan Phase 2.B/C — snap config. Read fresh each tick
+      // so toggles in the N-panel mid-drag take effect immediately.
+      const snap = usePreferencesStore.getState().snap;
+      const project = useProjectStore.getState().project;
+      let snapVertexHit = false;
+
+      // Phase 2.C — snap-to-vertex (Modal G only, unshifted, master on,
+      // mode on). Overrides the mouse-driven dxCanvas/dyCanvas so the
+      // anchor (cursor under 'closest' target) lands exactly on the
+      // snap vertex. Typed input takes precedence — typed numeric goes
+      // to the requested value verbatim.
+      if (kind === 'translate' && !useTyped && !shift && snap?.enabled
+          && snap.modes?.vertex?.enabled && project) {
+        const rect = canvasRectRef.current;
+        const cursorCanvasX = rect
+          ? (currentX - rect.left) / zoom - view.panX / zoom
+          : currentX / zoom;
+        const cursorCanvasY = rect
+          ? (currentY - rect.top)  / zoom - view.panY / zoom
+          : currentY / zoom;
+        const startCanvasX = rect
+          ? (startMouse.x - rect.left) / zoom - view.panX / zoom
+          : startMouse.x / zoom;
+        const startCanvasY = rect
+          ? (startMouse.y - rect.top)  / zoom - view.panY / zoom
+          : startMouse.y / zoom;
+        // 'closest' target: the cursor IS the anchor. Other target modes
+        // (center/median/active) override the anchor with selection
+        // geometry; deferred to a follow-up — modal currently uses
+        // 'closest' regardless. The math path is unit-tested via
+        // computeSelectionAnchor.
+        const hit = findNearestVertex(
+          project, cursorCanvasX, cursorCanvasY, snap.modes.vertex.threshold,
+        );
+        if (hit) {
+          dxCanvas = hit.x - startCanvasX;
+          dyCanvas = hit.y - startCanvasY;
+          if (axis === 'x') dyCanvas = 0;
+          if (axis === 'y') dxCanvas = 0;
+          useSnapStore.getState().setSnapTarget(hit);
+          snapVertexHit = true;
+        } else {
+          useSnapStore.getState().clearSnapTarget();
+        }
+      } else {
+        useSnapStore.getState().clearSnapTarget();
+      }
+
+      // Phase 2.B — Shift+G snaps the delta to grid increments. Reads
+      // `snap.modes.grid.increment` (default 16); falls back to legacy
+      // 10px when the mode is disabled. Vertex snap (above) wins —
+      // Shift inverts intent so they don't both apply on the same tick.
+      if (kind === 'translate' && !useTyped && shift && !snapVertexHit) {
+        const gridInc = snap?.modes?.grid?.enabled
+          ? (snap.modes.grid.increment > 0 ? snap.modes.grid.increment : LEGACY_SNAP_GRID_INCREMENT)
+          : LEGACY_SNAP_GRID_INCREMENT;
+        const snapped = snapDeltaToGrid({ x: dxCanvas, y: dyCanvas }, gridInc);
+        dxCanvas = snapped.x;
+        dyCanvas = snapped.y;
+      }
+
       const updateProject = useProjectStore.getState().updateProject;
       updateProject((proj) => {
         for (const [nodeId, orig] of original) {
@@ -115,12 +200,8 @@ export function ModalTransformOverlay() {
           // for non-bones).
           const writer = writePoseValues;
           if (kind === 'translate') {
-            let nx = (orig.x ?? 0) + dxCanvas;
-            let ny = (orig.y ?? 0) + dyCanvas;
-            if (!useTyped && shift) {
-              nx = Math.round(nx / SNAP_TRANSLATE) * SNAP_TRANSLATE;
-              ny = Math.round(ny / SNAP_TRANSLATE) * SNAP_TRANSLATE;
-            }
+            const nx = (orig.x ?? 0) + dxCanvas;
+            const ny = (orig.y ?? 0) + dyCanvas;
             writer(node, { x: nx, y: ny });
           } else if (kind === 'rotate') {
             let dRot;
@@ -132,7 +213,15 @@ export function ModalTransformOverlay() {
               const ax1 = currentX / zoom - pivotCanvas.x;
               const ay1 = currentY / zoom - pivotCanvas.y;
               dRot = Math.atan2(ay1, ax1) - Math.atan2(ay0, ax0);
-              if (shift) dRot = Math.round(dRot / SNAP_ROTATE) * SNAP_ROTATE;
+              if (shift) {
+                // Phase 2.D — rotation snap. Reads
+                // `snap.modes.increment.value` when the mode is
+                // enabled; legacy 15° otherwise.
+                const incDeg = snap?.modes?.increment?.enabled
+                  ? (snap.modes.increment.value > 0 ? snap.modes.increment.value : LEGACY_SNAP_ROTATE_INCREMENT_DEG)
+                  : LEGACY_SNAP_ROTATE_INCREMENT_DEG;
+                dRot = snapAngleToIncrement(dRot, incDeg);
+              }
             }
             writer(node, { rotation: (orig.rotation ?? 0) + dRot });
           } else if (kind === 'scale') {
@@ -150,7 +239,16 @@ export function ModalTransformOverlay() {
               );
               s = d1 / d0;
               if (!Number.isFinite(s) || s <= 0) s = 1;
-              if (shift) s = Math.max(SNAP_SCALE, Math.round(s / SNAP_SCALE) * SNAP_SCALE);
+              if (shift) {
+                // Phase 2.D — scale snap. `increment.value` is in
+                // degrees per the SNAP_DEFAULT jsdoc convention; scale
+                // step is `value/100`. Legacy 0.1× preserved when the
+                // mode is disabled (10°/100 = 0.1×).
+                const incDeg = snap?.modes?.increment?.enabled
+                  ? (snap.modes.increment.value > 0 ? snap.modes.increment.value : LEGACY_SNAP_SCALE_INCREMENT_DEG)
+                  : LEGACY_SNAP_SCALE_INCREMENT_DEG;
+                s = snapScaleToIncrement(s, incDeg);
+              }
             }
             const sx = axis === 'y' ? 1 : s;
             const sy = axis === 'x' ? 1 : s;
@@ -173,9 +271,11 @@ export function ModalTransformOverlay() {
       if (e.button === 2) {
         revert();
         endBatch();
+        useSnapStore.getState().clearSnapTarget();
         cancel();
       } else {
         endBatch();
+        useSnapStore.getState().clearSnapTarget();
         commit();
       }
     }
@@ -184,6 +284,7 @@ export function ModalTransformOverlay() {
       e.preventDefault();
       revert();
       endBatch();
+      useSnapStore.getState().clearSnapTarget();
       cancel();
     }
     function onKeyDown(e) {
@@ -191,12 +292,14 @@ export function ModalTransformOverlay() {
         e.preventDefault();
         revert();
         endBatch();
+        useSnapStore.getState().clearSnapTarget();
         cancel();
         return;
       }
       if (e.key === 'Enter') {
         e.preventDefault();
         endBatch();
+        useSnapStore.getState().clearSnapTarget();
         commit();
         return;
       }
@@ -265,17 +368,55 @@ export function ModalTransformOverlay() {
   const unit = kind === 'rotate' ? '°' : kind === 'scale' ? '×' : 'px';
   const showTyped = (typedBuffer ?? '').length > 0;
   return (
-    <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[200] pointer-events-none flex items-center gap-2 px-3 py-1.5 bg-popover/95 border border-border rounded text-xs font-mono shadow-lg">
-      <span className="text-primary uppercase tracking-wider">{kind}</span>
-      {axis ? <span className="text-amber-500">axis: {axis.toUpperCase()}</span> : null}
-      {showTyped ? (
-        <span className="text-foreground">
-          {typedBuffer}<span className="text-muted-foreground/70">{unit}</span>
+    <>
+      <SnapTargetDot kind={kind} />
+      <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[200] pointer-events-none flex items-center gap-2 px-3 py-1.5 bg-popover/95 border border-border rounded text-xs font-mono shadow-lg">
+        <span className="text-primary uppercase tracking-wider">{kind}</span>
+        {axis ? <span className="text-amber-500">axis: {axis.toUpperCase()}</span> : null}
+        {showTyped ? (
+          <span className="text-foreground">
+            {typedBuffer}<span className="text-muted-foreground/70">{unit}</span>
+          </span>
+        ) : null}
+        <span className="text-muted-foreground">
+          Type a value · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = snap
         </span>
-      ) : null}
-      <span className="text-muted-foreground">
-        Type a value · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = snap
-      </span>
-    </div>
+      </div>
+    </>
+  );
+}
+
+/** Toolset Phase 2.C — magenta dot rendered at the active snap target.
+ *
+ *  Subscribes to `useSnapStore` so the dot follows the live snap target
+ *  per modal tick. Mounted only while the modal is active (kind set);
+ *  Modal G is the only kind that engages snap-to-vertex but the
+ *  component is kind-agnostic so a future Modal R/S vertex-snap (if
+ *  ever shipped) gets the dot for free. */
+function SnapTargetDot({ kind }) {
+  const target = useSnapStore((s) => s.target);
+  if (!target || kind !== 'translate') return null;
+  // Re-derive the canvas rect each render so the dot follows pan/zoom
+  // changes (paranoid; both are stable during a modal drag, but cheap).
+  const view = useEditorStore.getState().view;
+  const zoom = view.zoom || 1;
+  const canvas = document.querySelector('canvas');
+  const rect = canvas?.getBoundingClientRect();
+  if (!rect) return null;
+  const screenX = rect.left + (target.x * zoom + view.panX);
+  const screenY = rect.top  + (target.y * zoom + view.panY);
+  return (
+    <div
+      className="fixed z-[201] pointer-events-none"
+      style={{
+        left: screenX - 6,
+        top:  screenY - 6,
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        background: 'magenta',
+        boxShadow: '0 0 6px rgba(255, 0, 255, 0.85), 0 0 1px white inset',
+      }}
+    />
   );
 }

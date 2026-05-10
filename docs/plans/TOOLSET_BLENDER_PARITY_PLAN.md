@@ -1606,11 +1606,11 @@ Phase 1:
   [ ] Memory entry: 'Box / Lasso select'
 
 Phase 2:
-  [ ] preferencesStore.snap shipped
-  [ ] snap.js + spatial hash
-  [ ] ModalTransformOverlay consults snap state
-  [ ] N-panel snap section
-  [ ] All snap tests green
+  [x] preferencesStore.snap shipped
+  [x] snap.js + spatial hash (lib/snap/{snapMath,snapHash,index}.js)
+  [x] ModalTransformOverlay consults snap state (G/R/S all wired)
+  [x] N-panel snap section (visible all modes)
+  [x] All snap tests green (80 assertions across 4 suites)
   [ ] Manual: G + Shift snaps to grid; near vertex snaps to vert
   [ ] Memory entry: 'Snap during transform'
 
