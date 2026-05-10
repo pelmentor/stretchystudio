@@ -494,6 +494,60 @@ function buildPartModifierRelations(graph, project, opts) {
         }
       }
     }
+    // Phase 0.D — bone post-chain composition reads bone WORLD matrices
+    // built from TRANSFORM_COMPOSE outputs along the bone parent chain.
+    // Add an edge from every relevant bone's TRANSFORM_COMPOSE op to
+    // this part's ART_MESH_EVAL so eval order materialises the inputs
+    // the kernel will read at runtime.
+    //
+    // "Relevant" bones for a part:
+    //   1. Every bone-group ancestor in the project tree (covers the
+    //      rigid-follow / overlay path: parts whose nearest ancestor is
+    //      a bone group, no Armature modifier, no boneWeights).
+    //   2. The Armature modifier's `data.jointBoneId` + the joint's
+    //      bone-group ancestor chain (covers the LBS path: parts with
+    //      `boneWeights` + an enabled Armature modifier; the joint may
+    //      not be the part's project-tree ancestor when the part hangs
+    //      off a non-bone group).
+    //   3. The Armature modifier's `data.parentBoneId` (typically the
+    //      joint's parent — already covered by #2 when the bone tree
+    //      has them stacked, but defensive in case the user wired an
+    //      unrelated parent).
+    if (artMeshOp) {
+      const seenBoneIds = new Set();
+      const addBoneAndAncestors = (startBoneId) => {
+        let cur = startBoneId;
+        let safety = 32;
+        while (cur && safety-- > 0) {
+          if (seenBoneIds.has(cur)) break;
+          const node = project.nodes?.find((n) => n?.id === cur);
+          if (!node) break;
+          if (node.type !== 'group' || !node.boneRole) {
+            // Walk up through visual folders without recording them.
+            cur = typeof node.parent === 'string' ? node.parent : null;
+            continue;
+          }
+          seenBoneIds.add(cur);
+          const boneIdNode = graph.findIdNode(cur, 'group');
+          const boneXform = boneIdNode?.findComponent(NodeType.TRANSFORM);
+          const boneCompose = boneXform?.findOperation(OperationCode.TRANSFORM_COMPOSE);
+          if (boneCompose) {
+            graph.addRelation(boneCompose, artMeshOp, `bone ${cur} -> art mesh`);
+          }
+          cur = typeof node.parent === 'string' ? node.parent : null;
+        }
+      };
+      addBoneAndAncestors(part.parent);
+      for (const mod of stack) {
+        if (!mod || mod.type !== 'armature' || mod.enabled === false) continue;
+        const jointBoneId = mod.data?.jointBoneId
+          ?? part?.mesh?.jointBoneId
+          ?? null;
+        if (jointBoneId) addBoneAndAncestors(jointBoneId);
+        const parentBoneId = mod.data?.parentBoneId ?? null;
+        if (parentBoneId) addBoneAndAncestors(parentBoneId);
+      }
+    }
   }
 }
 

@@ -101,6 +101,16 @@ const KERNELS = {
  * @property {Map<string, Map<string, number>>} [poseOverrides]
  *   Pose track overrides keyed by `nodeId → {property → value}`. Phase
  *   D-5+ wires part TRANSFORM ops to read these.
+ * @property {Map<string, object>} [_artMeshByIdCache] - kernel-private
+ *   per-eval `nodeId → projectNode` index built lazily by
+ *   `kernelArtMeshEval` so each part's bone-post-chain pass doesn't
+ *   re-scan `project.nodes`. Populated on first part eval; reset every
+ *   time `evalDepGraph` makes a fresh ctx.
+ * @property {Map<string, Float32Array>} [_artMeshBoneWorldCache] -
+ *   kernel-private per-eval `boneId → WORLD matrix` cache. Same
+ *   lifetime as `_artMeshByIdCache`. Mirrors the per-frame cache the
+ *   renderer rebuilds via `computeBoneWorldMatrices` outside the
+ *   depgraph.
  */
 
 /**

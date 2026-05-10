@@ -1015,26 +1015,33 @@ export default function CanvasViewport({
             // cellSelect over the param-driven keyforms. So bone-pose
             // composition runs ON TOP of param-driven deformation.
             const partMesh = getMesh(node, projectRef.current);
-            const composition = pickBonePostChainComposition(node, partMesh);
-            if (composition.kind === 'lbs') {
-              // Two-bone LBS (mirrors Blender pchan_bone_deform): the
-              // joint bone (leftElbow) is the CHILD; its bone-tree parent
-              // (leftArm) is the PARENT. weight=0 → parent.world,
-              // weight=1 → child.world, mid → lerp.
-              const childMatrix = boneWorld.get(composition.jointBoneId);
-              const parentBoneId = composition.parentBoneId
-                ?? boneParents.get(composition.jointBoneId) ?? null;
-              const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
-              applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partMesh.boneWeights);
-            } else if (composition.kind === 'overlay') {
-              // Rigid follow — uniform world-matrix multiplication for
-              // parts that follow a bone via parent-chain transform but
-              // aren't per-vertex skinned. The overlay map only contains
-              // entries for parts whose nearest bone has non-identity
-              // pose; identity-pose bones produce a no-op
-              // `Map.get(node.id) === undefined` and `applyOverlayMatrixObj`
-              // bails on the null-matrix early return.
-              applyOverlayMatrixObj(verts, boneOverlay.get(node.id) ?? null);
+            // Phase 0.D — when the depgraph engine produced `frames`,
+            // bone post-chain composition (LBS / overlay) already ran
+            // inside `kernelArtMeshEval` against TRANSFORM_COMPOSE
+            // outputs. Re-applying here would double-compose. Classic
+            // engine emits PRE-skin verts and still needs this pass.
+            if (_evalEngine !== 'depgraph') {
+              const composition = pickBonePostChainComposition(node, partMesh);
+              if (composition.kind === 'lbs') {
+                // Two-bone LBS (mirrors Blender pchan_bone_deform): the
+                // joint bone (leftElbow) is the CHILD; its bone-tree parent
+                // (leftArm) is the PARENT. weight=0 → parent.world,
+                // weight=1 → child.world, mid → lerp.
+                const childMatrix = boneWorld.get(composition.jointBoneId);
+                const parentBoneId = composition.parentBoneId
+                  ?? boneParents.get(composition.jointBoneId) ?? null;
+                const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
+                applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partMesh.boneWeights);
+              } else if (composition.kind === 'overlay') {
+                // Rigid follow — uniform world-matrix multiplication for
+                // parts that follow a bone via parent-chain transform but
+                // aren't per-vertex skinned. The overlay map only contains
+                // entries for parts whose nearest bone has non-identity
+                // pose; identity-pose bones produce a no-op
+                // `Map.get(node.id) === undefined` and `applyOverlayMatrixObj`
+                // bails on the null-matrix early return.
+                applyOverlayMatrixObj(verts, boneOverlay.get(node.id) ?? null);
+              }
             }
             // composition.kind === 'none' → no bone-pose composition.
             // Two reasons:

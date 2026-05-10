@@ -7,32 +7,18 @@ Constraints / DepGraph) into the production hot path.
 
 ## Resume entry point (handoff for next session)
 
-Phase 0 is **5 of 6 sub-phases shipped** (0.0/0.A/0.B/0.C/0.D.0).
-0.D — flag flip — has two gates:
+Phase 0 is **5 of 6 sub-phases shipped + the armature-port gate
+closed** (0.0/0.A/0.B/0.C/0.D.0/0.D armature). The remaining gate
+before flipping the default is user-side:
 
-1. **Port `boneSkinning.js` LBS into a depgraph kernel.**
-   `kernelArtMeshEval` ([src/anim/depgraph/kernels/artMesh.js](../../src/anim/depgraph/kernels/artMesh.js))
-   currently passes through `type:'armature'` modifiers. Under the
-   `'depgraph'` flag every bone-rigged part loses its skinning. The
-   port:
-   - Add `kernelArmatureDeform` reading bone group transforms (from
-     `TRANSFORM_COMPOSE` outputs, which already exist post-0.C) and
-     applying two-bone LBS to the part's verts. Mirrors
-     [src/renderer/boneSkinning.js](../../src/renderer/boneSkinning.js).
-   - Wire it into `kernelArtMeshEval`'s modifier loop (the branch
-     `if (mod.type === 'armature') ...`).
-   - Add parity tests against `evalRig` + `boneSkinning` composition
-     on a bone-rigged synthetic project (single bone first, then a
-     2-bone elbow chain).
-2. **Manual byte-fidelity sweep.** User-side gate. Toggle
-   `preferencesStore.evalEngine = 'depgraph'`, load
-   `shelby_neutral_ok.psd` (Western) + `test_image4.psd` (anime),
-   verify visually + export `.cmo3` and byte-diff against the
-   `'classic'` baseline. Both must produce identical bytes (or
-   pixel-equivalent visual output, since the .cmo3 export path
-   doesn't currently consume depgraph outputs — see Phase 1.B.1).
+**Manual byte-fidelity sweep.** Toggle `preferencesStore.evalEngine =
+'depgraph'`, load `shelby_neutral_ok.psd` (Western) + `test_image4.psd`
+(anime), verify visually + export `.cmo3` and byte-diff against the
+`'classic'` baseline. Both must produce identical bytes (or
+pixel-equivalent visual output, since the .cmo3 export path doesn't
+currently consume depgraph outputs — see Phase 1.B.1).
 
-Once both gates pass: change [preferencesStore.js:160](../../src/store/preferencesStore.js#L160)
+Once that passes: change [preferencesStore.js:160](../../src/store/preferencesStore.js#L160)
 default from `'classic'` to `'depgraph'`. Keep the `'classic'`
 opt-out for one release; remove in Phase 7 close-out.
 
@@ -53,7 +39,8 @@ consumer list, then write `migrations/v33_action_datablock.js`.
 | 0.B | Wire `evaluateProjectDrivers` into CanvasViewport tick (param drivers) | ✅ SHIPPED |
 | 0.C | Wire `evaluateConstraints` into pose composition | ✅ SHIPPED (2026-05-10) |
 | 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ✅ SHIPPED (2026-05-10) |
-| 0.D | Flip `evalEngine` default to `depgraph` | ⏳ GATED on armature port + manual byte-fidelity sweep |
+| 0.D armature | Bone post-chain LBS / overlay inside `kernelArtMeshEval` | ✅ SHIPPED (2026-05-10) |
+| 0.D flip | Flip `evalEngine` default to `depgraph` | ⏳ GATED on manual byte-fidelity sweep |
 
 ## 0.0 — Canonical time unit (SHIPPED)
 
@@ -283,6 +270,66 @@ pin `evalProjectFrameViaDepgraph` against `evalRig`: root-only,
 single-rotation parent, parameter-driven keyform blend at three values
 (0, 0.5, 1). All pass at <1e-4 px delta.
 
+## 0.D armature port — bone post-chain inside ART_MESH_EVAL (SHIPPED 2026-05-10)
+
+Closes one of the two prerequisites for the 0.D default-flip. The
+depgraph engine now applies bone post-chain composition (LBS + rigid
+overlay) inside [`kernelArtMeshEval`](../../src/anim/depgraph/kernels/artMesh.js)
+using bone WORLD matrices composed from `TRANSFORM_COMPOSE` outputs,
+mirroring the renderer's pre-Phase-0.D post-loop. Constraint-composed
+pose feeds skinning — Blender's depsgraph order: solve constraints
+then armature deform.
+
+**Three pieces:**
+
+1. **`bonePostChain.js`** ([src/anim/depgraph/kernels/bonePostChain.js](../../src/anim/depgraph/kernels/bonePostChain.js))
+   — extract bone WORLD from the depgraph's TRANSFORM_COMPOSE outputs,
+   walk the bone parent chain (skipping non-bone visual folders),
+   apply two-bone LBS or rigid overlay in place. Memoises bone WORLD
+   matrices per-eval on `ctx._artMeshBoneWorldCache` so chains shared
+   between sibling parts walk the bone hierarchy once. Decision logic
+   reuses `pickBonePostChainComposition` so LBS / overlay / none gate
+   identically to the renderer.
+
+2. **`kernelArtMeshEval` extension**
+   ([src/anim/depgraph/kernels/artMesh.js](../../src/anim/depgraph/kernels/artMesh.js)).
+   After the modifier-chain walk, the kernel calls
+   `applyBonePostChainSkin(part, mesh, bufA, ctx, byId, cache)`. The
+   armature-modifier branch in the modifier loop stays a no-op so the
+   chain keeps walking past it; skinning runs once on the final
+   buffer.
+
+3. **Build relations**
+   ([src/anim/depgraph/build.js](../../src/anim/depgraph/build.js)
+   `buildPartModifierRelations`). Every relevant bone's
+   `TRANSFORM_COMPOSE` op gets an edge into the part's `ART_MESH_EVAL`.
+   "Relevant" = the project-tree bone-group ancestor chain plus, for
+   parts with an Armature modifier, the modifier's `data.jointBoneId`
+   chain + `data.parentBoneId`.
+
+**CanvasViewport gating.**
+[CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx)
+now gates the post-loop `applyTwoBoneSkinningObj` /
+`applyOverlayMatrixObj` on `_evalEngine !== 'depgraph'`. Classic
+emits PRE-skin verts and still needs the post-loop; depgraph emits
+POST-skin verts because the kernel did the work. Same `ArtMeshFrame[]`
+shape so downstream rendering stays engine-agnostic.
+
+**Tests pinned.**
+[scripts/test/test_depgraph_armature.mjs](../../scripts/test/test_depgraph_armature.mjs)
+covers five cases:
+- Single bone, weight=1.0 (rigid follow via LBS).
+- Single bone, weight=0.0 (parent fallback — top-level bone → identity →
+  verts at rest).
+- Two-bone elbow chain with mixed weights (0 / 0.33 / 0.66 / 1).
+- Overlay rigid-follow path (no Armature modifier, no boneWeights, has
+  bone-group ancestor).
+- LIMIT_ROTATION constraint clamps pose pre-skin (depgraph diverges
+  from unclamped, matches hand-built clamped reference).
+
+All five compare byte-equal (<1e-4 px delta) against
+`evalRig + applyClassicPostSkin`. 9 assertions, all green.
+
 ## 0.C — Constraint wire-up analysis (HISTORICAL)
 
 [src/anim/constraints.js](../../src/anim/constraints.js) ships four
@@ -324,23 +371,20 @@ tested). No production-side change in this Phase 0 deliverable.
 - 0.A — gridLift / depgraph build-relation fix (2026-05-10)
 - 0.C — TRANSFORM_COMPOSE op for constraint composition (2026-05-10)
 - 0.D.0 — ART_MESH_EVAL kernel + evalProjectFrameViaDepgraph helper + CanvasViewport branch on `preferencesStore.evalEngine` (2026-05-10)
+- 0.D armature — bone post-chain LBS / overlay inside `kernelArtMeshEval`, fed by TRANSFORM_COMPOSE; CanvasViewport post-loop gates skinning on engine (2026-05-10)
 
 **Pending:**
-- 0.D — depgraph default flip. Two prerequisites:
-  1. **Armature modifier port.** `kernelArtMeshEval` currently passes
-     through `type:'armature'` modifiers — every bone-rigged project
-     loses its skinning under the depgraph branch. Need a
-     depgraph-side equivalent of `boneSkinning.js` LBS pass before
-     the flip is safe.
-  2. **Manual byte-fidelity sweep.** Run both engines side-by-side
-     on `shelby_neutral_ok.psd` (Western) + `test_image4.psd` (anime)
-     in the actual app. Compare visual + exported `.cmo3` bytes.
+- 0.D flip — flip `preferencesStore.evalEngine` default from `'classic'`
+  to `'depgraph'`. One prerequisite remains:
+  - **Manual byte-fidelity sweep.** Run both engines side-by-side on
+    `shelby_neutral_ok.psd` (Western) + `test_image4.psd` (anime) in
+    the actual app. Compare visual + exported `.cmo3` bytes. User-side
+    gate.
 
-This means **Phase 0 is partially shipped**. The user-visible win is
-that authored param drivers now affect the live preview / animation
-playback — which closes one of the 17 grievances from the audit
-("drivers theatre"). The depgraph default-flip and gridLift fix are
-the next significant chunk and require dedicated session work.
+This means **Phase 0 is one user-side gate from full-shipped**. Param
+drivers + constraints + bone skinning all participate in the depgraph
+under the `'depgraph'` flag. Once the byte-fidelity sweep clears, the
+flip lands and Phase 1 (Action datablock + NodeTree retirement) opens.
 
 ## Tests
 
@@ -354,6 +398,9 @@ the next significant chunk and require dedicated session work.
 | initRig | 60 | 60 |
 | projectRoundTrip | 41 | 41 |
 | chainEval | 25 | 25 |
-| **TOTAL** | **370** | **370** |
+| depgraph_armature | — | 9 (new) |
+| **TOTAL** | **370** | **379** |
 
-No regressions. Typecheck clean.
+No regressions across the depgraph + bone + chainEval + constraints +
+animation regression sweep (28 suites, 821 assertions). Typecheck
+clean.

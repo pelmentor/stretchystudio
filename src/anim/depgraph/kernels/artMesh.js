@@ -22,9 +22,26 @@
  *        GRID_LIFT_TO_PARENT output (canvas-px). Canvas-final → break.
  *      - `type:'rotation'` → apply that rotation's MATRIX_BUILD output.
  *        `isCanvasFinal` → break.
- *      - `type:'armature'` → not yet ported here; the depgraph routes
- *        bone skinning through a separate path. Pass-through.
- * 4. Output `{id, vertexPositions, opacity, drawOrder}` matching the
+ *      - `type:'armature'` → handled by the post-chain skin pass below
+ *        (Phase 0.D). The modifier-loop branch is a no-op so the chain
+ *        keeps walking past it; weighted skinning then runs once on the
+ *        final buffer using bone WORLD matrices composed from
+ *        TRANSFORM_COMPOSE outputs.
+ * 4. Post-chain bone composition (Phase 0.D armature port). Mirrors
+ *    the renderer's `pickBonePostChainComposition` step
+ *    (`renderer/bonePostChainComposition.js`):
+ *      - LBS: parts with `boneWeights` + enabled Armature modifier
+ *        receive two-bone linear blend skinning using the joint and
+ *        parent bone WORLD matrices.
+ *      - Overlay: parts with no weights but a bone-group ancestor get
+ *        a uniform world-matrix multiplication (rigid-follow).
+ *      - None: parts with weights but no modifier (post-Apply state)
+ *        skip composition.
+ *    Bone WORLD matrices come from `kernels/bonePostChain.js`, which
+ *    walks the bone parent chain reading TRANSFORM_COMPOSE outputs.
+ *    The renderer's post-loop skips skinning when the depgraph engine
+ *    is selected so this pass owns the work end-to-end.
+ * 5. Output `{id, vertexPositions, opacity, drawOrder}` matching the
  *    `ArtMeshFrame` shape in [chainEval.js].
  *
  * # Where this differs from `kernelGeometryEvalDeformed`
@@ -42,6 +59,7 @@
 import { cellSelect } from '../../../io/live2d/runtime/evaluator/cellSelect.js';
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
+import { applyBonePostChainSkin } from './bonePostChain.js';
 import { OperationCode, NodeType } from '../types.js';
 
 /**
@@ -126,10 +144,33 @@ export function kernelArtMeshEval(op, ctx) {
       const swap = bufA; bufA = bufB; bufB = swap;
       if (matState.isCanvasFinal) break;
     }
-    // Other modifier types (armature, etc.) pass through here — the
-    // depgraph wires LBS / bone skinning via the part TRANSFORM
-    // pipeline, not the art-mesh kernel.
+    // Armature modifiers fall through here intentionally. Bone
+    // skinning runs as a single post-chain pass below — once per part,
+    // using the joint + parent bone WORLD matrices composed from
+    // TRANSFORM_COMPOSE outputs. Mirrors the renderer's three-state
+    // composition (`renderer/bonePostChainComposition.js`).
   }
+
+  // Phase 0.D — bone post-chain composition. Caches per-eval bone
+  // WORLD matrices on `ctx` so chains shared between sibling parts (a
+  // limb's two parts both ride leftElbow) only walk the bone hierarchy
+  // once. The byId map is also memoised because every part eval would
+  // otherwise rebuild it.
+  let byId = ctx._artMeshByIdCache;
+  if (!byId) {
+    byId = new Map();
+    const projNodes = Array.isArray(ctx.project?.nodes) ? ctx.project.nodes : [];
+    for (const n of projNodes) {
+      if (n?.id) byId.set(n.id, n);
+    }
+    ctx._artMeshByIdCache = byId;
+  }
+  let boneWorldCache = ctx._artMeshBoneWorldCache;
+  if (!boneWorldCache) {
+    boneWorldCache = new Map();
+    ctx._artMeshBoneWorldCache = boneWorldCache;
+  }
+  applyBonePostChainSkin(part, part.mesh ?? null, bufA, ctx, byId, boneWorldCache);
 
   return {
     id: partId,
