@@ -37,6 +37,7 @@ import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_r
 import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js';
 import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
 import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_default_weights.js';
+import { migrateProjectCursor } from './migrations/v33_project_cursor.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -494,6 +495,16 @@ const MIGRATIONS = {
   // See `docs/plans/CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md`.
   32: (project) => {
     migrateStripRigidDefaultWeights(project);
+    return project;
+  },
+
+  // v33 — Toolset Plan Phase 7.A.1 — `project.cursor: {x, y}` (canvas-
+  // space 3D-cursor analog for the Snap menu, Blender's
+  // `Scene.cursor.location` per `DNA_scene_types.h:2300`). Default =
+  // canvas centre. Persisted per-project so save+load preserves cursor
+  // position (a pointless menu otherwise — every save would reset it).
+  33: (project) => {
+    migrateProjectCursor(project);
     return project;
   },
 

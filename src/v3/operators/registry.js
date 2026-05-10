@@ -38,6 +38,13 @@ import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistanc
 import { dissolveVertices } from './edit/dissolve.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
+// Phase 7.A — Object Mode tools (Snap / Mirror / Parent / Set Origin).
+// Eager-import per audit lesson G-1 (`async exec` leaks unhandled rejections
+// when the dispatcher fires `op.exec(...)` non-await).
+import * as objectSnap from './object/snap.js';
+import * as objectMirror from './object/mirror.js';
+import * as objectParent from './object/parent.js';
+import * as objectSetOrigin from './object/setOrigin.js';
 import { duplicate } from './edit/duplicate.js';
 import {
   selectLinkedFromVertex,
@@ -1389,6 +1396,145 @@ function registerBuiltins() {
         editPartId: isEditModeOnPart ? editor.selection[0] : null,
         cursorClient: lastMousePos(),
       });
+    },
+  });
+
+  // ── Toolset Phase 7.A — Object Mode tools ──────────────────────────
+
+  // 7.A.1 — Snap menu (`Shift+S`). Opens the SnapMenu popover anchored
+  // at the mouse cursor; click an item to commit. Blender's
+  // `VIEW3D_MT_snap_pie` (`scripts/startup/bl_ui/space_view3d.py:6377+`).
+  registerOperator({
+    id: 'object.snap.menu',
+    label: 'Snap Menu (Shift+S)',
+    exec: () => {
+      useEditMenuStore.getState().openSnap({ cursor: lastMousePos() });
+    },
+  });
+
+  // The 9 individual snap operators. Each is also command-palette callable.
+  registerOperator({
+    id: 'object.snap.selectionToCursor',
+    label: 'Selection to Cursor',
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    exec: () => objectSnap.snapSelectionToCursor(),
+  });
+  registerOperator({
+    id: 'object.snap.selectionToCursorKeepOffset',
+    label: 'Selection to Cursor (Keep Offset)',
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    exec: () => objectSnap.snapSelectionToCursorKeepOffset(),
+  });
+  registerOperator({
+    id: 'object.snap.selectionToGrid',
+    label: 'Selection to Grid',
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    exec: () => objectSnap.snapSelectionToGrid(),
+  });
+  registerOperator({
+    id: 'object.snap.selectionToWorldOrigin',
+    label: 'Selection to World Origin',
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    exec: () => objectSnap.snapSelectionToWorldOrigin(),
+  });
+  registerOperator({
+    id: 'object.snap.selectionToActive',
+    label: 'Selection to Active',
+    available: () => {
+      const sel = objectSnap.eligibleSelection();
+      return sel.nodeIds.length >= 2 && sel.activeId !== null;
+    },
+    exec: () => objectSnap.snapSelectionToActive(),
+  });
+  registerOperator({
+    id: 'object.snap.cursorToWorldOrigin',
+    label: 'Cursor to World Origin',
+    exec: () => objectSnap.snapCursorToWorldOrigin(),
+  });
+  registerOperator({
+    id: 'object.snap.cursorToSelected',
+    label: 'Cursor to Selected',
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    exec: () => objectSnap.snapCursorToSelected(),
+  });
+  registerOperator({
+    id: 'object.snap.cursorToGrid',
+    label: 'Cursor to Grid',
+    exec: () => objectSnap.snapCursorToGrid(),
+  });
+  registerOperator({
+    id: 'object.snap.cursorToActive',
+    label: 'Cursor to Active',
+    available: () => objectSnap.eligibleSelection().activeId !== null,
+    exec: () => objectSnap.snapCursorToActive(),
+  });
+
+  // 7.A.2 — Mirror selected (`Ctrl+M` → axis-pick popover → X/Y/Z).
+  // Two-step modal: chord opens MirrorAxisMenu; click or bare-letter
+  // X/Y/Z commits via mirrorSelected(axis).
+  registerOperator({
+    id: 'object.mirror.menu',
+    label: 'Mirror Menu (Ctrl+M)',
+    exec: () => {
+      useEditMenuStore.getState().openMirrorAxis({ cursor: lastMousePos() });
+    },
+  });
+  registerOperator({
+    id: 'object.mirror.x',
+    label: 'Mirror Selected (X axis)',
+    exec: () => objectMirror.mirrorSelected('x'),
+  });
+  registerOperator({
+    id: 'object.mirror.y',
+    label: 'Mirror Selected (Y axis)',
+    exec: () => objectMirror.mirrorSelected('y'),
+  });
+
+  // 7.A.3 — Set Parent (`Ctrl+P`). Active = LAST selected; every other
+  // selected node gets re-parented to active. Reuses `reparentNode`'s
+  // cycle + type validation. Keeps visual transform by default.
+  registerOperator({
+    id: 'object.parent.set',
+    label: 'Set Parent (Ctrl+P)',
+    available: () => {
+      const items = useSelectionStore.getState().items ?? [];
+      return items.filter((it) => it?.type === 'part' || it?.type === 'group').length >= 2;
+    },
+    exec: () => {
+      const r = objectParent.setParent({ keepTransform: true });
+      if (r.parented === 0 && r.skipped > 0) {
+        toast({ title: 'No valid parent target',
+                description: 'Cycle / type-mismatch rejected the reparent.' });
+      }
+    },
+  });
+
+  // 7.A.4 — Clear Parent (`Alt+P`). Opens the three-option popover
+  // (Clear / Clear and Keep Transform / Clear Inverse).
+  registerOperator({
+    id: 'object.parent.clearMenu',
+    label: 'Clear Parent (Alt+P)',
+    available: () => {
+      const items = useSelectionStore.getState().items ?? [];
+      return items.some((it) => it?.type === 'part' || it?.type === 'group');
+    },
+    exec: () => {
+      useEditMenuStore.getState().openClearParent({ cursor: lastMousePos() });
+    },
+  });
+
+  // 7.A.5 — Set Origin (right-click submenu). Surfaced via ContextMenu
+  // (Object Mode → Set Origin). Could also bind a chord later; Blender
+  // exposes it via Object → Set Origin only (no default chord).
+  registerOperator({
+    id: 'object.setOrigin.menu',
+    label: 'Set Origin Menu',
+    available: () => {
+      const items = useSelectionStore.getState().items ?? [];
+      return items.some((it) => it?.type === 'part');
+    },
+    exec: () => {
+      useEditMenuStore.getState().openSetOrigin({ cursor: lastMousePos() });
     },
   });
 }

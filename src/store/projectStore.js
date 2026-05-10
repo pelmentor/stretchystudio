@@ -102,6 +102,11 @@ export const useProjectStore = create((set, get) => {
     version: "0.1",
     schemaVersion: CURRENT_SCHEMA_VERSION,
     canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' },
+    /** Toolset Phase 7.A.1 (schema v33) — canvas-space 3D-cursor for the
+     *  Snap menu (`Shift+S`). Default = canvas centre. Read+written by
+     *  `object.snap.*` operators. Persisted per-project (Blender stores it
+     *  on `Scene.cursor.location`; SS does the same on `project.cursor`). */
+    cursor: { x: 400, y: 300 },
     textures: [],     // { id, source (data URI or Blob URL) }
     nodes: [],        // flat array — see node schemas below
     /*
@@ -1493,6 +1498,20 @@ export const useProjectStore = create((set, get) => {
     state.hasUnsavedChanges = true;
     Object.assign(state.project.canvas, partial);
   })),
+
+  /** Toolset Phase 7.A.1 — write the canvas-space 3D-cursor (Snap menu).
+   *  Snapshots for undo via the standard `projectMutator` path so Ctrl+Z
+   *  reverses cursor moves (Blender's `Scene.cursor` writes go through
+   *  the operator system → undo stack the same way). */
+  setProjectCursor: (x, y) => set((state) => {
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      if (!draft.project.cursor) draft.project.cursor = { x: 0, y: 0 };
+      draft.project.cursor.x = x;
+      draft.project.cursor.y = y;
+      draft.hasUnsavedChanges = true;
+    });
+  }),
 
   /**
    * Recursively duplicate a node and its children.

@@ -74,6 +74,18 @@ const MergeMenu = lazy(() =>
 const ApplyMenu = lazy(() =>
   import('./ApplyMenu.jsx').then((m) => ({ default: m.ApplyMenu }))
 );
+const SnapMenu = lazy(() =>
+  import('./SnapMenu.jsx').then((m) => ({ default: m.SnapMenu }))
+);
+const MirrorAxisMenu = lazy(() =>
+  import('./MirrorAxisMenu.jsx').then((m) => ({ default: m.MirrorAxisMenu }))
+);
+const ClearParentMenu = lazy(() =>
+  import('./ClearParentMenu.jsx').then((m) => ({ default: m.ClearParentMenu }))
+);
+const SetOriginMenu = lazy(() =>
+  import('./SetOriginMenu.jsx').then((m) => ({ default: m.SetOriginMenu }))
+);
 const CircleSelectOverlay = lazy(() =>
   import('../editors/viewport/overlays/CircleSelectOverlay.jsx').then(
     (m) => ({ default: m.CircleSelectOverlay }),
@@ -125,6 +137,10 @@ export function AppShell() {
           {vertexModalKind && <ModalVertexTransformOverlay />}
           {editMenuKind === 'merge' && <MergeMenu />}
           {editMenuKind === 'apply' && <ApplyMenu />}
+          {editMenuKind === 'snap' && <SnapMenu />}
+          {editMenuKind === 'mirrorAxis' && <MirrorAxisMenu />}
+          {editMenuKind === 'clearParent' && <ClearParentMenu />}
+          {editMenuKind === 'setOrigin' && <SetOriginMenu />}
           {circleSelectActive && <CircleSelectOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
