@@ -34,7 +34,7 @@
  */
 
 import { selectRigSpec } from '../../io/live2d/rig/selectRigSpec.js';
-import { evalRig } from '../../io/live2d/runtime/evaluator/chainEval.js';
+import { evalRig, DeformerStateCache } from '../../io/live2d/runtime/evaluator/chainEval.js';
 import { buildDepGraph } from './build.js';
 import { evalDepGraph } from './eval.js';
 
@@ -152,27 +152,41 @@ function floatArrayMaxAbsDelta(a, b) {
 }
 
 /**
+ * Collect the per-rotation `mat` (Float64Array(9)) from chainEval. The
+ * matrices are produced lazily by `cache.getState()` during artMesh
+ * eval; calling getState directly here force-touches each rotation so
+ * we can diff against the depgraph's `MATRIX_BUILD` outputs.
+ *
+ * Phase 0.A — closes a stub gap: previously this returned an empty Map,
+ * which surfaced every depgraph rotation as `maxAbsDelta=Infinity` in
+ * the report. The lifted-grid diff was the bug indicator; the matrix
+ * diff was just noise.
+ *
  * @param {import('../../io/live2d/rig/rigSpec.js').RigSpec} rigSpec
  * @param {Record<string, number>} paramValues
  * @returns {Map<string, Float64Array>}
  */
 function collectChainMatrices(rigSpec, paramValues) {
-  // chainEval doesn't expose matrices via `out:` — re-build a cache and
-  // read state for each rotation deformer. Cheap (no side effects).
   const out = new Map();
-  // Lazy import to avoid pulling DeformerStateCache when caller doesn't
-  // need matrix diffing (the import is local-scoped here on purpose).
-  // eslint-disable-next-line import/no-extraneous-dependencies
-  // The cache is re-built fresh per call; same paramValues → same state.
   const rotations = Array.isArray(rigSpec.rotationDeformers)
     ? rigSpec.rotationDeformers : [];
   if (rotations.length === 0) return out;
-  // Build a new cache via evalRig's facade. evalRig populates state
-  // lazily during artMesh eval; force-touch each rotation by walking
-  // the chain for its keyform. For Phase D-6 we just need the matrix
-  // for each rotation; chainEval's getState returns it.
-  // Trade-off: this re-runs evalRig once more, which is fine for a
-  // diff helper.
+  // Spin up a fresh cache on the same rigSpec + paramValues. Matrices
+  // are a pure function of those inputs, so the result is bytewise
+  // identical to what evalRig's internal cache would produce.
+  // Default kernel matches evalRig's default (`cubism-setup` since
+  // 2026-05-03). If the production kernel ever changes, mirror it
+  // here so the diff stays apples-to-apples.
+  const cache = new DeformerStateCache(rigSpec, paramValues, { kernel: 'cubism-setup' });
+  for (const r of rotations) {
+    if (!r?.id) continue;
+    const state = cache.getState(r);
+    if (state?.kind === 'rotation' && state.mat) {
+      // Copy to a stable Float64Array — pool buffers in the cache may
+      // get reused across calls and would mutate under the diff caller.
+      out.set(r.id, Float64Array.from(state.mat));
+    }
+  }
   return out;
 }
 

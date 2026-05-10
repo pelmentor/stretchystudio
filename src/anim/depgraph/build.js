@@ -325,13 +325,43 @@ function buildDeformerChainRelations(graph, project, opts) {
       const liftOp = geom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
       if (liftOp) {
         graph.addRelation(keyformOp, liftOp, 'keyform -> grid lift');
-        if (typeof node.parent === 'string' && node.parent.length > 0) {
-          const parentId = graph.findIdNode(node.parent, 'deformer');
-          const parentGeom = parentId?.findComponent(NodeType.GEOMETRY);
-          const parentLift = parentGeom?.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
-          if (parentLift) {
-            graph.addRelation(parentLift, liftOp, 'parent lift -> child lift');
+        // The kernel walks the project parent chain at eval time
+        // (gridLift.js): for each rotation ancestor it reads MATRIX_BUILD
+        // and continues up; for each warp ancestor it reads
+        // GRID_LIFT_TO_PARENT and breaks. Mirror that walk in the build
+        // so topological order materialises every dependency the kernel
+        // will read. Without these edges, MATRIX_BUILD can run AFTER the
+        // child lift and the kernel falls through to "no matrix yet" →
+        // returns the unlifted pivot-relative grid (V2 close-out bug:
+        // per-part RigWarp_* diverges by ~canvasW/2).
+        let cursorId = typeof node.parent === 'string' ? node.parent : null;
+        let safety = 32;
+        while (cursorId && safety-- > 0) {
+          const ancestor = project.nodes?.find((n) => n?.id === cursorId);
+          if (!ancestor || ancestor.type !== 'deformer') break;
+          const ancestorIdNode = graph.findIdNode(cursorId, 'deformer');
+          const ancestorGeom = ancestorIdNode?.findComponent(NodeType.GEOMETRY);
+          if (!ancestorGeom) break;
+          if (ancestor.deformerKind === 'warp') {
+            const ancestorLift = ancestorGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
+            if (ancestorLift) {
+              graph.addRelation(ancestorLift, liftOp, 'parent lift -> child lift');
+            }
+            break; // warp ancestor's lifted grid collapses the chain
           }
+          if (ancestor.deformerKind === 'rotation') {
+            const ancestorMatrix = ancestorGeom.findOperation(OperationCode.MATRIX_BUILD);
+            if (ancestorMatrix) {
+              graph.addRelation(ancestorMatrix, liftOp, 'rotation matrix -> child lift');
+            }
+            // Continue walking up: the kernel keeps applying rotation
+            // matrices until it finds a canvas-final break or a warp
+            // ancestor. We can't know `isCanvasFinal` at build time, so
+            // walk conservatively to the first warp ancestor or root.
+            cursorId = typeof ancestor.parent === 'string' ? ancestor.parent : null;
+            continue;
+          }
+          break;
         }
       }
     }

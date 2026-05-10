@@ -10,11 +10,11 @@ Constraints / DepGraph) into the production hot path.
 | Sub | What | Status |
 |-----|------|--------|
 | 0.0 | Declare ms canonical time unit | ✅ SHIPPED |
-| 0.A | gridLift RigWarp_* coordinate-frame fix | ⏳ DEFERRED — analysis below |
+| 0.A | gridLift RigWarp_* coordinate-frame fix | ✅ SHIPPED (2026-05-10) |
 | 0.B | Wire `evaluateProjectDrivers` into CanvasViewport tick (param drivers) | ✅ SHIPPED |
 | 0.C | Wire `evaluateConstraints` into pose composition | ⏳ DEFERRED — analysis below |
-| 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ⏳ Pending 0.A |
-| 0.D | Flip `evalEngine` default to `depgraph` | ⏳ Pending 0.A + 0.D.0 |
+| 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ⏳ Pending |
+| 0.D | Flip `evalEngine` default to `depgraph` | ⏳ Pending 0.D.0 |
 
 ## 0.0 — Canonical time unit (SHIPPED)
 
@@ -71,7 +71,7 @@ live-preview values will resolve correctly only after the depgraph
 default-flip in 0.D.0 (depgraph evaluates everything in topological
 order).
 
-## 0.A — gridLift bug analysis (DEFERRED)
+## 0.A — gridLift fix SHIPPED (2026-05-10)
 
 The V2 close-out doc
 ([BLENDER_PARITY_V2_SHIPPED.md](./BLENDER_PARITY_V2_SHIPPED.md):92-94)
@@ -79,7 +79,40 @@ documented: *"per-part `RigWarp_*` lifted grids diverged by ~`canvasW/2`
 — pivot-relative vs TL-origin coordinate-frame mismatch in
 `kernels/gridLift.js`"*.
 
-**Investigation summary** (Phase 0 read pass):
+**Root cause found** (not in `kernels/gridLift.js` — the kernel math
+was correct). The defect was a missing build-time relation in
+[`src/anim/depgraph/build.js`](../../src/anim/depgraph/build.js):
+when a warp's parent was a rotation deformer, `buildDeformerChainRelations`
+added no edge from the parent's `MATRIX_BUILD` to the child's
+`GRID_LIFT_TO_PARENT`. Topological order was therefore free to evaluate
+the child lift BEFORE the parent matrix; the kernel called
+`findOpForDeformer(ctx, curId, MATRIX_BUILD)` and found nothing
+(`ctx.outputs.has(...)` returns `false` until the matrix actually runs);
+the loop broke and returned the unmodified pivot-relative grid.
+
+For `Rotation_face` at canvas pivot (400, 300), that produced lifted
+grid coordinates centred at (0, 0) in pivot-relative frame instead of
+(400, 300) in canvas-px — exactly the ~`canvasW/2` divergence the V2
+doc reported.
+
+**Fix.** The warp branch of `buildDeformerChainRelations` now mirrors
+the kernel's eval-time chain walk at build time: it follows
+`def.parent` through the project-node parent strings, adding a
+relation for every ancestor's `MATRIX_BUILD` (rotation) or
+`GRID_LIFT_TO_PARENT` (warp), and breaks at the first warp ancestor or
+root. Conservative against `isCanvasFinal` (unknown at build time):
+the extra edges constrain topological order without changing
+correctness.
+
+Pinned by [`scripts/test/test_depgraphSideBySide_rotationParent.mjs`](../../scripts/test/test_depgraphSideBySide_rotationParent.mjs)
+— exercises single-rotation-parent (rest + 30° rotated) and a dual-
+rotation chain. All three cases now report `identical: true` from
+`runSideBySide`. The matrix-collection stub in
+[`src/anim/depgraph/sideBySide.js`](../../src/anim/depgraph/sideBySide.js)
+was also closed in the same change (was a no-op map causing every
+matrix diff to surface as `maxAbsDelta=Infinity`).
+
+**Investigation summary** (kept for posterity):
 
 The depgraph's `kernelGridLiftToParent`
 ([src/anim/depgraph/kernels/gridLift.js](../../src/anim/depgraph/kernels/gridLift.js):108-122)
@@ -198,16 +231,16 @@ tested). No production-side change in this Phase 0 deliverable.
 
 ## What's shipping vs. what's pending
 
-**Shipped this session:**
+**Shipped:**
 - 0.0 — ms canonical declaration (memory entry)
 - 0.B — driver pass wired into CanvasViewport tick
+- 0.A — gridLift / depgraph build-relation fix (2026-05-10)
 
 **Deferred with analysis (this doc):**
-- 0.A — gridLift fix (needs side-by-side fixture work)
 - 0.C — constraint wire-up (waits for 0.D.0 architectural decision)
 
 **Pending downstream:**
-- 0.D.0 — depgraph viewport wire-up (gated on 0.A)
+- 0.D.0 — depgraph viewport wire-up
 - 0.D — depgraph default flip (gated on 0.D.0)
 
 This means **Phase 0 is partially shipped**. The user-visible win is
