@@ -38,28 +38,37 @@ import {
   MinusCircle,
   Bone,
   Sparkles,
+  Hand,
+  Smile,
+  Minimize,
 } from 'lucide-react';
 
 /**
  * @typedef {('select' | 'add_vertex' | 'remove_vertex' | 'brush' | 'joint_drag')} ToolModeId
  *
- * Three button kinds:
- *   - `tool`     — sticky, writes to `editorStore.toolMode`. Mutually
- *                   exclusive within the mode list.
- *   - `operator` — momentary, fires a v3 registry operator on click.
- *                   Active state never sticks.
- *   - `toggle`   — sticky boolean orthogonal to the active tool.
- *                   `toggleId` names the preference slot the toolbar
- *                   reads/writes (see `CanvasToolbar`'s switch). Used
- *                   for state that stacks on top of any tool, e.g.
- *                   Blender's proportional-edit `O` mode.
+ * Four button kinds:
+ *   - `tool`         — sticky, writes to `editorStore.toolMode`. Mutually
+ *                       exclusive within the mode list.
+ *   - `operator`     — momentary, fires a v3 registry operator on click.
+ *                       Active state never sticks.
+ *   - `toggle`       — sticky boolean orthogonal to the active tool.
+ *                       `toggleId` names the preference slot the toolbar
+ *                       reads/writes (see `CanvasToolbar`'s switch). Used
+ *                       for state that stacks on top of any tool, e.g.
+ *                       Blender's proportional-edit `O` mode.
+ *   - `sculpt_brush` — sticky, writes to `editorStore.sculpt.activeBrush`.
+ *                       Mutually exclusive within the Sculpt-mode entry
+ *                       list. `toolMode` stays at `'brush'` for the whole
+ *                       mode; the brush id is a sub-state. Mirrors
+ *                       Blender's brush-tool list in Sculpt Mode header.
  *
  * @typedef {Object} ToolEntry
  * @property {string}                          id        - unique within the mode list
- * @property {'tool'|'operator'|'toggle'}      kind
- * @property {ToolModeId | string}             [toolModeId] - for kind='tool'
- * @property {string}                          [operatorId] - for kind='operator'
- * @property {string}                          [toggleId]   - for kind='toggle'
+ * @property {'tool'|'operator'|'toggle'|'sculpt_brush'} kind
+ * @property {ToolModeId | string}             [toolModeId]   - for kind='tool'
+ * @property {string}                          [operatorId]   - for kind='operator'
+ * @property {string}                          [toggleId]     - for kind='toggle'
+ * @property {string}                          [sculptBrushId] - for kind='sculpt_brush'
  * @property {string}                          label
  * @property {React.ComponentType<any>}        icon
  * @property {string}                          [hotkey]   - display only
@@ -67,7 +76,7 @@ import {
  * @property {boolean}                         [divider]  - render a divider above this entry
  */
 
-/** @type {Record<'object'|'mesh'|'skeleton'|'blendShape', ToolEntry[]>} */
+/** @type {Record<'object'|'mesh'|'skeleton'|'blendShape'|'sculpt', ToolEntry[]>} */
 export const TOOLS_BY_MODE = {
   object: [
     {
@@ -172,6 +181,37 @@ export const TOOLS_BY_MODE = {
       hint: 'Paint deltas onto the active blend shape',
     },
   ],
+
+  sculpt: [
+    // Toolset Plan Phase 3 — three Blender-faithful sculpt brushes.
+    // Each entry writes `editorStore.sculpt.activeBrush`; the canvas
+    // pointer dispatch reads that field to pick the brush impl. The
+    // `toolMode` slot stays at `'brush'` for the entire Sculpt Mode.
+    {
+      id: 'sculpt.grab',
+      kind: 'sculpt_brush',
+      sculptBrushId: 'grab',
+      label: 'Grab',
+      icon: Hand,
+      hint: 'Drag verts within the brush radius — falloff feathers the rim',
+    },
+    {
+      id: 'sculpt.smooth',
+      kind: 'sculpt_brush',
+      sculptBrushId: 'smooth',
+      label: 'Smooth',
+      icon: Smile,
+      hint: 'Laplacian smoothing — verts move toward the average of their neighbours',
+    },
+    {
+      id: 'sculpt.pinch',
+      kind: 'sculpt_brush',
+      sculptBrushId: 'pinch',
+      label: 'Pinch',
+      icon: Minimize,
+      hint: 'Pull verts toward the cursor (Ctrl: Magnify — push away from cursor)',
+    },
+  ],
 };
 
 /**
@@ -182,7 +222,7 @@ export const TOOLS_BY_MODE = {
  * pointer); when null, the mesh-vertex tools (brush / add / remove)
  * apply.
  *
- * @param {null | 'edit' | 'pose'} editMode
+ * @param {null | 'edit' | 'pose' | 'sculpt' | 'weightPaint'} editMode
  * @param {string | null} [activeBlendShapeId]
  * @returns {ToolEntry[]}
  */
@@ -190,6 +230,7 @@ export function toolsFor(editMode, activeBlendShapeId = null) {
   if (editMode === 'edit') {
     return activeBlendShapeId ? TOOLS_BY_MODE.blendShape : TOOLS_BY_MODE.mesh;
   }
-  if (editMode === 'pose') return TOOLS_BY_MODE.skeleton;
+  if (editMode === 'pose')   return TOOLS_BY_MODE.skeleton;
+  if (editMode === 'sculpt') return TOOLS_BY_MODE.sculpt;
   return TOOLS_BY_MODE.object;
 }

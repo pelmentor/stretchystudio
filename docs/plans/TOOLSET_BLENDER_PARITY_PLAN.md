@@ -565,7 +565,12 @@ Closes: Top-12 #5.
 
 ---
 
-### Phase 3 — Sculpt mode + brushes (1 week)
+### Phase 3 — Sculpt mode + brushes (1 week) ✅ SHIPPED 2026-05-10
+
+Progress doc: [TOOLSET_PHASE_3_PROGRESS.md](./TOOLSET_PHASE_3_PROGRESS.md).
+Pinch substituted for Inflate per audit (flat-mesh Inflate is degenerate).
+91-assertion test suite (sculpt_grab + sculpt_smooth + sculpt_pinch +
+sculpt_store). Manual gate (Phase 3.J) remains user-side.
 
 **Goal.** A new edit-mode `'sculpt'` with three brushes that reuse
 the proportional-edit + weight-paint brush infrastructure.

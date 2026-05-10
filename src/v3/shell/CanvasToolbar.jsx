@@ -65,6 +65,11 @@ export function CanvasToolbar() {
   const toolMode = useEditorStore((s) => s.toolMode);
   const setToolMode = useEditorStore((s) => s.setToolMode);
   const activeBlendShapeId = useEditorStore((s) => s.activeBlendShapeId);
+  // Toolset Plan Phase 3 — Sculpt-mode brush picker reads/writes the
+  // sculpt slot. Subscribe so the active-state ring updates immediately
+  // when another control (N-panel) changes the brush.
+  const activeSculptBrush = useEditorStore((s) => s.sculpt?.activeBrush);
+  const setSculpt = useEditorStore((s) => s.setSculpt);
 
   const tools = toolsFor(editMode, activeBlendShapeId);
   if (!tools || tools.length === 0) return null;
@@ -74,6 +79,10 @@ export function CanvasToolbar() {
       // Click-active again is a no-op in Blender. We emulate by writing
       // the same value (Zustand short-circuits identical updates).
       setToolMode(entry.toolModeId);
+      return;
+    }
+    if (entry.kind === 'sculpt_brush' && entry.sculptBrushId) {
+      setSculpt({ activeBrush: entry.sculptBrushId });
       return;
     }
     if (entry.kind === 'operator' && entry.operatorId) {
@@ -100,6 +109,9 @@ export function CanvasToolbar() {
         let active = false;
         if (entry.kind === 'tool') {
           active = entry.toolModeId === toolMode;
+        }
+        if (entry.kind === 'sculpt_brush') {
+          active = entry.sculptBrushId === activeSculptBrush;
         }
         // Disable operator buttons whose operator isn't available
         // (e.g. transform.translate when nothing is selected). Tool

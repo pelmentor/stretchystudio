@@ -23,6 +23,8 @@
 import { ChevronRight, ChevronLeft, Magnet } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { SCULPT_BRUSHES } from '../../lib/sculpt/index.js';
+import { FALLOFF_CYCLE } from '../../lib/proportionalEdit.js';
 
 /** Section header — same band style as Properties SectionShell. */
 function SectionHeader({ label }) {
@@ -99,6 +101,9 @@ function ContentForMode({ editMode }) {
   if (editMode === 'edit' || editMode === 'weightPaint') {
     return <BrushSection />;
   }
+  if (editMode === 'sculpt') {
+    return <SculptSection />;
+  }
   if (editMode === 'pose') {
     return (
       <ModeHint
@@ -111,6 +116,87 @@ function ContentForMode({ editMode }) {
     <div className="px-2 py-3 text-[11px] text-muted-foreground/80 leading-snug">
       Tool settings appear here when an edit mode is active. Press Tab on a
       meshed part or bone-role group to enter one.
+    </div>
+  );
+}
+
+/** Toolset Plan Phase 3.F — Sculpt Mode brush settings.
+ *
+ *  Brush picker mirrors the T-panel toolbar (clicking either updates
+ *  `sculpt.activeBrush`). Size / Strength / Falloff are shared across
+ *  all three brushes; Iterations is Smooth-only and hides for the
+ *  others. Connected-only toggles BFS-restricted radius (Blender's
+ *  "Use Connected Only" sculpt option). */
+function SculptSection() {
+  const sculpt = useEditorStore((s) => s.sculpt);
+  const setSculpt = useEditorStore((s) => s.setSculpt);
+  const activeBrush = sculpt?.activeBrush ?? 'grab';
+  const isSmooth = activeBrush === 'smooth';
+  return (
+    <div>
+      <SectionHeader label="Sculpt" />
+      <div className="px-2 py-2 flex flex-col gap-1.5">
+        <label className="flex items-center gap-2 text-[11px] py-0.5">
+          <span className="w-20 text-muted-foreground select-none">Brush</span>
+          <select
+            value={activeBrush}
+            onChange={(e) => setSculpt({ activeBrush: e.target.value })}
+            className="flex-1 h-6 bg-background border border-border rounded px-1 text-[11px]"
+          >
+            {SCULPT_BRUSHES.map((b) => (
+              <option key={b.id} value={b.id}>{b.label}</option>
+            ))}
+          </select>
+        </label>
+        <NumberSlider
+          label="Size"
+          value={sculpt?.size ?? 80}
+          min={5}
+          max={300}
+          step={1}
+          unit="px"
+          onChange={(v) => setSculpt({ size: v })}
+        />
+        <NumberSlider
+          label="Strength"
+          value={sculpt?.strength ?? 0.5}
+          min={0}
+          max={1}
+          step={0.05}
+          onChange={(v) => setSculpt({ strength: v })}
+        />
+        <label className="flex items-center gap-2 text-[11px] py-0.5">
+          <span className="w-20 text-muted-foreground select-none">Falloff</span>
+          <select
+            value={sculpt?.falloff ?? 'smooth'}
+            onChange={(e) => setSculpt({ falloff: e.target.value })}
+            className="flex-1 h-6 bg-background border border-border rounded px-1 text-[11px]"
+          >
+            {FALLOFF_CYCLE.map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+        </label>
+        {isSmooth && (
+          <NumberSlider
+            label="Iterations"
+            value={sculpt?.iterations ?? 1}
+            min={1}
+            max={10}
+            step={1}
+            onChange={(v) => setSculpt({ iterations: v })}
+          />
+        )}
+        <label className="flex items-center gap-2 text-[11px] py-0.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={!!sculpt?.connectedOnly}
+            onChange={(e) => setSculpt({ connectedOnly: e.target.checked })}
+            className="h-3 w-3"
+          />
+          <span className="text-foreground/85">Connected only</span>
+        </label>
+      </div>
     </div>
   );
 }

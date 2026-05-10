@@ -30,8 +30,8 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
   assert(Array.isArray(tools) && tools.length > 0, `${modeKey}: non-empty list`);
   for (const t of tools) {
     assert(typeof t.id === 'string' && t.id.length > 0, `${modeKey}.${t.id}: id`);
-    assert(t.kind === 'tool' || t.kind === 'operator' || t.kind === 'toggle',
-      `${modeKey}.${t.id}: kind ∈ {tool,operator,toggle}`);
+    assert(t.kind === 'tool' || t.kind === 'operator' || t.kind === 'toggle' || t.kind === 'sculpt_brush',
+      `${modeKey}.${t.id}: kind ∈ {tool,operator,toggle,sculpt_brush}`);
     assert(typeof t.label === 'string' && t.label.length > 0, `${modeKey}.${t.id}: label`);
     assert(typeof t.icon === 'function' || typeof t.icon === 'object',
       `${modeKey}.${t.id}: icon component`);
@@ -41,6 +41,9 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
     } else if (t.kind === 'operator') {
       assert(typeof t.operatorId === 'string' && t.operatorId.length > 0,
         `${modeKey}.${t.id}: operatorId required for kind=operator`);
+    } else if (t.kind === 'sculpt_brush') {
+      assert(typeof t.sculptBrushId === 'string' && t.sculptBrushId.length > 0,
+        `${modeKey}.${t.id}: sculptBrushId required for kind=sculpt_brush`);
     } else {
       assert(typeof t.toggleId === 'string' && t.toggleId.length > 0,
         `${modeKey}.${t.id}: toggleId required for kind=toggle`);

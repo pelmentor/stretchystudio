@@ -25,7 +25,7 @@
  * @module v3/shell/ModePill
  */
 
-import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle, Brush } from 'lucide-react';
+import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle, Brush, Hand } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.jsx';
 import { Button } from '../../components/ui/button.jsx';
 import { Checkbox } from '../../components/ui/checkbox.jsx';
@@ -45,6 +45,7 @@ import {
   MODE_POSE,
   MODE_WEIGHT_PAINT,
   MODE_BLEND_SHAPE,
+  MODE_SCULPT,
 } from '../../modes/modeCompat.js';
 
 /** Resolve the active selection's project node + the modes it supports. */
@@ -82,6 +83,7 @@ const MODE_META = {
   edit:         { label: 'Edit Mode',      icon: Pencil },
   pose:         { label: 'Pose Mode',      icon: Bone },
   weightPaint:  { label: 'Weight Paint',   icon: Brush },
+  sculpt:       { label: 'Sculpt Mode',    icon: Hand },
 };
 
 function ModeRow({ icon: Icon, label, checked, onSelect, disabled, hint }) {
@@ -166,6 +168,11 @@ export function ModePill() {
     // brush has somewhere to write into.
     ensureWeightGroupsForPart(active.id);
     enterEditMode('weightPaint');
+  }
+  function enterSculpt() {
+    if (!active) return;
+    setSelection([active.id]);
+    enterEditMode('sculpt');
   }
 
   const blendShapes = (kind === 'meshedPart' && Array.isArray(node?.blendShapes))
@@ -264,6 +271,18 @@ export function ModePill() {
                 : 'Paint per-vertex weights for the active vertex group'
           }
           onSelect={enterWeightPaint}
+        />
+        <ModeRow
+          icon={Hand}
+          label="Sculpt Mode"
+          checked={editMode === 'sculpt'}
+          disabled={!modeCompatTest(dataKind, MODE_SCULPT)}
+          hint={
+            kind !== 'meshedPart'
+              ? 'Select a meshed part to sculpt'
+              : 'Brush deform — Grab / Smooth / Pinch (Ctrl: Magnify) over mesh vertices'
+          }
+          onSelect={enterSculpt}
         />
 
         {/* Active shape-key picker — Blender pattern: shape painting

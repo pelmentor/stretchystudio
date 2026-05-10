@@ -160,6 +160,34 @@ export const useEditorStore = create((set) => ({
   brushSize:     50,  // screen-space radius in pixels
   brushHardness: 0.5, // 0 = smooth cosine falloff, 1 = uniform hard
 
+  /** Toolset Plan Phase 3 — Sculpt mode brush settings. Independent of
+   *  the deform-mode `brushSize`/`brushHardness` so the user's Edit-Mode
+   *  brush size is preserved when they Tab into Sculpt and back. Reads
+   *  by `SculptSection` (N-panel) and by `CanvasViewport`'s sculpt stroke
+   *  dispatch.
+   *
+   *    activeBrush     — id from `SCULPT_BRUSHES` registry
+   *                      (`'grab' | 'smooth' | 'pinch'`)
+   *    size            — screen-space radius in pixels (mesh-local
+   *                      computed from view.zoom at stroke start)
+   *    strength        — 0..1 stroke intensity per tick
+   *    falloff         — falloff curve id (matches Blender's set —
+   *                      `'smooth' | 'sphere' | 'root' | 'linear' |
+   *                       'sharp' | 'invSquare' | 'constant'`)
+   *    iterations      — Smooth brush only; Laplacian passes per tick
+   *    connectedOnly   — if true, brush only affects verts reachable
+   *                      via triangle adjacency from the vert under the
+   *                      cursor at stroke start (Blender's "Use Connected
+   *                      Only" sculpt option). */
+  sculpt: {
+    activeBrush:   'grab',
+    size:          80,
+    strength:      0.5,
+    falloff:       'smooth',
+    iterations:    1,
+    connectedOnly: false,
+  },
+
   // GAP-015 Phase B — proportional-edit settings live in
   // `preferencesStore.proportionalEdit` so they persist across
   // sessions. Don't duplicate them here.
@@ -342,7 +370,8 @@ export const useEditorStore = create((set) => ({
       kind = 'edit';
     }
     if (kind !== 'edit' && kind !== 'pose'
-        && kind !== 'keyform' && kind !== 'weightPaint') return state;
+        && kind !== 'keyform' && kind !== 'weightPaint'
+        && kind !== 'sculpt') return state;
     if (kind === 'keyform') {
       if (!opts.deformerId || typeof opts.keyformIndex !== 'number') return state;
       if (!Array.isArray(opts.keyTuple) || !opts.snapshot) return state;
@@ -363,6 +392,7 @@ export const useEditorStore = create((set) => ({
       else if (kind === 'weightPaint') toolMode = 'brush';
       else if (kind === 'pose') toolMode = 'joint_drag';
       else if (kind === 'keyform') toolMode = 'select';
+      else if (kind === 'sculpt') toolMode = 'brush';
       else toolMode = 'select';
     }
     // Phase 2b storage flip — mirror the new mode onto the active
@@ -426,6 +456,10 @@ export const useEditorStore = create((set) => ({
 
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),
+  /** Toolset Plan Phase 3 — partial-merge writer for Sculpt brush
+   *  settings. `setSculpt({ size: 120 })` updates only `sculpt.size`;
+   *  every other field is preserved. */
+  setSculpt:            (partial)  => set((s) => ({ sculpt: { ...s.sculpt, ...(partial ?? {}) } })),
   /** GAP-010 Phase B — first arg is the mode key, second is the
    *  partial view update. `setView('viewport', { zoom: 2 })` updates
    *  just the viewport tab's view and leaves livePreview's untouched. */

@@ -86,6 +86,7 @@ import {
   computeProportionalWeights,
   nextFalloff,
 } from '@/lib/proportionalEdit';
+import { getBrushById } from '@/lib/sculpt';
 import {
   childBoneRoleFor,
   computeSkinWeights,
@@ -2247,6 +2248,74 @@ export default function CanvasViewport({
     // so the OR-with-'blendShape' is gone — single check suffices.
     const meshEditActive = editMode === 'edit';
     const currentSelection = editorRef.current.selection ?? [];
+
+    // Toolset Plan Phase 3 — Sculpt Mode stroke begin. Sibling to the
+    // Edit-Mode brush dispatch below; sculpt brushes operate on the same
+    // mesh data but with cursor-centered falloff (vs Edit-Mode brush's
+    // anchor-from-pickeed-vertex). LMB starts a stroke; pointermove
+    // accumulates per-tick brush displacements; pointerup commits one
+    // undo entry for the whole stroke.
+    if (editMode === 'sculpt' && currentSelection.length > 0 && e.button === 0) {
+      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
+      const selMesh = selNode ? getMesh(selNode, proj) : null;
+      if (selNode && selMesh) {
+        const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
+        const iwm = mat3Inverse(wm);
+        const [lx, ly] = worldToLocal(worldX, worldY, iwm);
+        const sculptCfg = editorRef.current.sculpt ?? {};
+        // Convert canvas-px brush size to mesh-local (≈ world) units.
+        // SS parts typically have identity scale on their worldMatrix,
+        // so world ≈ local; for the rare scaled part this drifts but
+        // stays usable. Same convention as the Edit-Mode brush.
+        const sizeLocal = (sculptCfg.size ?? 80) / view.zoom;
+        // Adjacency reused via WeakMap cache on the indices array
+        // (proportionalEdit.getOrBuildAdjacency); same path Edit-Mode
+        // proportional editing uses, so successive Sculpt strokes on the
+        // same part hit the cache after the first build.
+        const adjacency = getOrBuildAdjacency(selMesh.triangles ?? [], selMesh.vertices.length);
+        // Origin vertex (closest to cursor) drives connectedOnly BFS.
+        // Walking once at stroke start matches Blender's "Use Connected
+        // Only" — the brush footprint is anchored to the start picked
+        // patch even if the user drags off it.
+        let originIdx = -1;
+        let bestDist = Infinity;
+        for (let i = 0; i < selMesh.vertices.length; i++) {
+          const dx = selMesh.vertices[i].x - lx;
+          const dy = selMesh.vertices[i].y - ly;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestDist) {
+            bestDist = d2;
+            originIdx = i;
+          }
+        }
+        dragRef.current = {
+          mode:           'sculpt',
+          partId:         selNode.id,
+          adjacency,
+          originIdx:      originIdx >= 0 ? originIdx : null,
+          prevCursor:     null,
+          firstTick:      true,
+          imageWidth:     selNode.imageWidth,
+          imageHeight:    selNode.imageHeight,
+          // Cache the inverse world matrix at stroke begin — onPointerMove
+          // converts cursor world→local on every tick, and recomputing
+          // worldMatrices per move is expensive (chains the whole tree).
+          // This stays accurate for the duration of the stroke since the
+          // part's transform doesn't move while the user is dragging in it.
+          iwm,
+          // Captured at stroke begin; used per-tick to convert
+          // canvas-px brush size to mesh-local. Snapshot avoids
+          // mid-stroke zoom changes shrinking/growing the brush
+          // footprint unexpectedly.
+          startZoom:      view.zoom,
+          startSizeLocal: sizeLocal,
+        };
+        canvas.setPointerCapture(e.pointerId);
+        canvas.style.cursor = 'crosshair';
+      }
+      return;
+    }
+
     if (meshEditActive && currentSelection.length > 0) {
       const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
       const selMesh = selNode ? getMesh(selNode, proj) : null;
@@ -2747,6 +2816,77 @@ export default function CanvasViewport({
     const [worldX, worldY] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
 
     const { meshSubMode } = editorRef.current;
+
+    // ── Sculpt stroke (Sculpt Mode brush dispatch) ─────────────────────────
+    // Toolset Plan Phase 3.I — read the active brush impl from the
+    // sculpt registry, build per-tick options from the live editor +
+    // current mesh state, dispatch the brush, write returned positions.
+    // Per-tick writes use `skipHistory: true` after the first tick so
+    // the whole stroke collapses into one undo entry (the first tick's
+    // pre-mutation snapshot).
+    if (dragRef.current.mode === 'sculpt') {
+      const drag = dragRef.current;
+      const sculptCfg = editorRef.current.sculpt ?? {};
+      const brush = getBrushById(sculptCfg.activeBrush ?? 'grab');
+      const proj = projectRef.current;
+      const node = proj.nodes.find((n) => n.id === drag.partId);
+      const mesh = getMesh(node, proj);
+      if (!node || !mesh) return;
+
+      const [lx, ly] = worldToLocal(worldX, worldY, drag.iwm);
+
+      // Brush footprint in mesh-local units. Use the start-of-stroke
+      // size so mid-stroke zoom doesn't stretch the brush — Blender's
+      // sculpt brush size is locked at stroke begin too.
+      const sizeLocal = drag.startSizeLocal;
+
+      const tickResult = brush.tick({
+        verts:         mesh.vertices,
+        cursor:        { x: lx, y: ly },
+        prevCursor:    drag.prevCursor,
+        size:          sizeLocal,
+        strength:      sculptCfg.strength ?? 0.5,
+        falloff:       sculptCfg.falloff ?? 'smooth',
+        adjacency:     drag.adjacency,
+        connectedOnly: !!sculptCfg.connectedOnly,
+        originIdx:     drag.originIdx,
+        iterations:    sculptCfg.iterations ?? 1,
+        ctrl:          e.ctrlKey || e.metaKey,
+      });
+      drag.prevCursor = { x: lx, y: ly };
+
+      if (tickResult.size === 0) return;
+
+      // First tick: write WITH history (push pre-stroke snapshot once).
+      // Subsequent ticks: skipHistory so the whole stroke collapses to
+      // one undo entry restoring the pre-stroke verts.
+      const skipHistory = !drag.firstTick;
+      drag.firstTick = false;
+      updateProject((proj2) => {
+        const n2 = proj2.nodes.find((nn) => nn.id === drag.partId);
+        const m2 = getMesh(n2, proj2);
+        if (!m2) return;
+        for (const [idx, p] of tickResult) {
+          if (idx >= 0 && idx < m2.vertices.length) {
+            m2.vertices[idx].x = p.x;
+            m2.vertices[idx].y = p.y;
+          }
+        }
+      }, { skipHistory });
+
+      // GPU upload — immediate visible feedback. Re-read from the
+      // freshly-written project ref so what we upload matches the store.
+      const scene = sceneRef.current;
+      if (scene) {
+        const nAfter = projectRef.current.nodes.find((nn) => nn.id === drag.partId);
+        const mAfter = getMesh(nAfter, projectRef.current);
+        if (mAfter) {
+          scene.parts.uploadPositions(drag.partId, mAfter.vertices, new Float32Array(mAfter.uvs));
+          isDirtyRef.current = true;
+        }
+      }
+      return;
+    }
 
     // ── Brush deform (edit mode, deform sub-mode) ──────────────────────────
     if (dragRef.current.mode === 'brush') {
