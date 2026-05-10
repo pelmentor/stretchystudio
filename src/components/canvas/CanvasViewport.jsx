@@ -14,6 +14,11 @@ import { useSelectionStore } from '@/store/selectionStore';
 // preset + default editorMode, nothing more). `editor.editMode` and
 // `editor.viewLayers` are read directly.
 import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
+// Phase 0.D.0 of Animation Blender-Parity Plan (2026-05-10) — depgraph
+// production wire-in. `evalProjectFrameViaDepgraph` is a drop-in for
+// evalRig that routes every art mesh through the depgraph's
+// ART_MESH_EVAL op. Selected via `preferencesStore.evalEngine`.
+import { evalProjectFrameViaDepgraph } from '@/anim/depgraph/evalProjectFrame';
 import {
   createPhysicsState,
   tickPhysics,
@@ -593,10 +598,11 @@ export default function CanvasViewport({
       // returned map is projected to `paramId → value` via
       // `driverOverridesToParamMap` and merged into `valuesForEval`.
       // Transform drivers (which would mutate `node.transform.<field>`
-      // per-frame) are deferred to the depgraph default-flip (Phase 0.D.0)
-      // because the classic engine's per-tick `proj.nodes` reads happen in
-      // multiple call sites; centralised eval-graph wiring is cleaner than
-      // shotgunning every consumer.
+      // per-frame) flow through the depgraph branch below — the
+      // production wire landed in Phase 0.D.0 (2026-05-10) — so when
+      // `evalEngine === 'depgraph'`, transform drivers are picked up
+      // via the depgraph's TRANSFORM_COMPOSE op rather than this
+      // pre-evalRig merge.
       const _projForDrivers = projectRef.current;
       const _driverOverrides = evaluateProjectDrivers(_projForDrivers, {
         project: _projForDrivers,
@@ -873,7 +879,17 @@ export default function CanvasViewport({
             frames = cache.frames;
           } else {
             const evalOut = _wantLifted ? { liftedGrids: new Map() } : null;
-            frames = evalRig(_rigSpec, valuesForEval, evalOut ? { out: evalOut } : undefined);
+            // Phase 0.D.0 — branch on `preferencesStore.evalEngine`.
+            // `'depgraph'` routes through `evalProjectFrameViaDepgraph`
+            // (kernels port `evalArtMeshFrame`); `'classic'` keeps
+            // chainEval's evalRig. Both produce the same `ArtMeshFrame[]`
+            // shape so the rest of the tick is engine-agnostic.
+            const _evalEngine = usePreferencesStore.getState().evalEngine;
+            if (_evalEngine === 'depgraph') {
+              frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval);
+            } else {
+              frames = evalRig(_rigSpec, valuesForEval, evalOut ? { out: evalOut } : undefined);
+            }
             lastEvalCacheRef.current = {
               rigSpec: _rigSpec, paramValues: valuesForEval, frames,
               liftedGrids: evalOut?.liftedGrids ?? null,
@@ -881,7 +897,8 @@ export default function CanvasViewport({
             // Publish to rigEvalStore so WarpDeformerOverlay sees the
             // current-frame lattice positions for every warp (including
             // nested normalised-0to1 ones, which the Phase 1 overlay
-            // skipped entirely).
+            // skipped entirely). depgraph branch leaves liftedGrids
+            // null for now — overlay falls back to its own probe path.
             useRigEvalStore.getState().setLiftedGrids(evalOut?.liftedGrids ?? null);
             // BUG-015 instrumentation — once-per-second snapshot of the
             // ParamBodyAngle{X,Y,Z} values that just went into evalRig +

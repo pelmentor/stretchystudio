@@ -111,11 +111,14 @@ export function buildNodes(graph, project, opts) {
   // Per-part IDNodes. GEOMETRY_EVAL_DEFORMED iterates the modifier
   // stack at eval time. TRANSFORM op reserved for parts that have
   // bone-driven transforms (Phase D-3a will populate it).
+  // Phase 0.D.0 — ART_MESH_EVAL is the production-shape op that emits
+  // {id, vertexPositions, opacity, drawOrder} matching evalRig.
   for (const node of project.nodes ?? []) {
     if (!node || node.type !== 'part') continue;
     const idNode = graph.addIdNode(node.id, 'part');
     const geom = idNode.addComponent(NodeType.GEOMETRY);
     geom.addOperation(OperationCode.GEOMETRY_EVAL_DEFORMED);
+    geom.addOperation(OperationCode.ART_MESH_EVAL);
   }
 
   // Phase 0.C — Object IDNodes carrying TRANSFORM_COMPOSE. Every
@@ -443,7 +446,8 @@ function buildPartModifierRelations(graph, project, opts) {
     const partId = graph.findIdNode(part.id, 'part');
     const partGeom = partId?.findComponent(NodeType.GEOMETRY);
     const evalOp = partGeom?.findOperation(OperationCode.GEOMETRY_EVAL_DEFORMED);
-    if (!evalOp) continue;
+    const artMeshOp = partGeom?.findOperation(OperationCode.ART_MESH_EVAL);
+    if (!evalOp && !artMeshOp) continue;
     const stack = Array.isArray(part.modifiers) ? part.modifiers : [];
     for (const mod of stack) {
       if (!mod?.deformerId || mod.enabled === false) continue;
@@ -454,7 +458,40 @@ function buildPartModifierRelations(graph, project, opts) {
         ? defGeom.findOperation(OperationCode.MATRIX_BUILD)
         : defGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
       if (defOp) {
-        graph.addRelation(defOp, evalOp, `modifier ${mod.deformerId} -> part`);
+        if (evalOp) {
+          graph.addRelation(defOp, evalOp, `modifier ${mod.deformerId} -> part`);
+        }
+        if (artMeshOp) {
+          graph.addRelation(defOp, artMeshOp, `modifier ${mod.deformerId} -> art mesh`);
+        }
+      }
+      // Phase 0.D.0 — ART_MESH_EVAL also reads KEYFORM_EVAL when the
+      // chain is broken (warp's lifted grid is null) so depend on it
+      // too. Cheap because it's the same defGeom we already looked up.
+      if (artMeshOp) {
+        const keyOp = defGeom.findOperation(OperationCode.KEYFORM_EVAL);
+        if (keyOp) {
+          graph.addRelation(keyOp, artMeshOp, `modifier ${mod.deformerId} keyform -> art mesh`);
+        }
+      }
+    }
+    // Phase 0.D.0 — every PARAM_EVAL feeds ART_MESH_EVAL via the
+    // mesh's own bindings (cellSelect on runtime.bindings). Adding a
+    // blanket edge from the param component would create one
+    // dependency per param; cheaper to gate by `runtime.bindings[].parameterId`.
+    if (artMeshOp) {
+      const paramIdNode = graph.findIdNode(PARAM_ID_REF, 'params');
+      const paramComp = paramIdNode?.findComponent(NodeType.PARAMETERS);
+      const meshBindings = Array.isArray(part.mesh?.runtime?.bindings)
+        ? part.mesh.runtime.bindings : [];
+      const seenParamIds = new Set();
+      for (const b of meshBindings) {
+        if (!b?.parameterId || seenParamIds.has(b.parameterId)) continue;
+        seenParamIds.add(b.parameterId);
+        const paramOp = paramComp?.findOperation(OperationCode.PARAM_EVAL, b.parameterId);
+        if (paramOp) {
+          graph.addRelation(paramOp, artMeshOp, `param ${b.parameterId} -> art mesh`);
+        }
       }
     }
   }

@@ -46,6 +46,7 @@ import { kernelRotationSetupProbe } from './kernels/rotationSetup.js';
 import { kernelPhysicsEval } from './kernels/physics.js';
 import { kernelAnimationTrackEval } from './kernels/animation.js';
 import { kernelTransformCompose } from './kernels/transformCompose.js';
+import { kernelArtMeshEval } from './kernels/artMesh.js';
 
 /**
  * Dispatch table — opcode → kernel function. Phase D-2 ships the four
@@ -75,6 +76,8 @@ const KERNELS = {
   [OperationCode.PHYSICS_EVAL]: kernelPhysicsEval,
   // Phase 0.C — Object transform compose (constraints).
   [OperationCode.TRANSFORM_COMPOSE]: kernelTransformCompose,
+  // Phase 0.D.0 — production-shape art-mesh frame eval.
+  [OperationCode.ART_MESH_EVAL]: kernelArtMeshEval,
 };
 
 /**

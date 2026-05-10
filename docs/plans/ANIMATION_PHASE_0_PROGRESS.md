@@ -12,9 +12,9 @@ Constraints / DepGraph) into the production hot path.
 | 0.0 | Declare ms canonical time unit | ✅ SHIPPED |
 | 0.A | gridLift RigWarp_* coordinate-frame fix | ✅ SHIPPED (2026-05-10) |
 | 0.B | Wire `evaluateProjectDrivers` into CanvasViewport tick (param drivers) | ✅ SHIPPED |
-| 0.C | Wire `evaluateConstraints` into pose composition | ⏳ DEFERRED — analysis below |
-| 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ⏳ Pending |
-| 0.D | Flip `evalEngine` default to `depgraph` | ⏳ Pending 0.D.0 |
+| 0.C | Wire `evaluateConstraints` into pose composition | ✅ SHIPPED (2026-05-10) |
+| 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ✅ SHIPPED (2026-05-10) |
+| 0.D | Flip `evalEngine` default to `depgraph` | ⏳ GATED on armature port + manual byte-fidelity sweep |
 
 ## 0.0 — Canonical time unit (SHIPPED)
 
@@ -196,7 +196,55 @@ Fixture coverage must include **both** user test PSDs (per
 Estimated effort: 1–3 days once both fixtures are wired into a
 test harness.
 
-## 0.C — Constraint wire-up analysis (DEFERRED)
+## 0.C — Constraint wire-up SHIPPED (2026-05-10)
+
+`TRANSFORM_COMPOSE` op landed: per-Object kernel
+([src/anim/depgraph/kernels/transformCompose.js](../../src/anim/depgraph/kernels/transformCompose.js))
+runs `evaluateConstraints` against the owner's authored transform/pose
+and emits the composed `{x, y, rotation, scaleX, scaleY}`. Build pass
+adds target-first relations so chained constraints (A→B→C) resolve in
+the correct order.
+
+12 tests pin the kernel: passthrough, COPY_LOCATION, three-deep chain
+(C→B→A), LIMIT_ROTATION clamp, disabled-constraint passthrough.
+
+**Production consumers (`renderer/boneOverlayMatrix.js`,
+`renderer/boneSkinning.js`, `selectRigSpec.js`) still read
+`node.pose` / `node.transform` directly.** Phase 0.D's flag flip is
+when the production tick reads from `TRANSFORM_COMPOSE` instead. Until
+then, the kernel runs in the depgraph but doesn't affect rendering.
+
+## 0.D.0 — Production wire-in SHIPPED (2026-05-10)
+
+Three pieces landed:
+
+1. **`ART_MESH_EVAL` kernel**
+   ([src/anim/depgraph/kernels/artMesh.js](../../src/anim/depgraph/kernels/artMesh.js)).
+   Ports `chainEval.evalArtMeshFrame`: cellSelect on
+   `mesh.runtime.bindings`, blend `runtime.keyforms[].vertexPositions`,
+   walk `part.modifiers[]` reading `GRID_LIFT_TO_PARENT` /
+   `MATRIX_BUILD` / `KEYFORM_EVAL` outputs. Emits
+   `{id, vertexPositions, opacity, drawOrder}` matching `evalRig`'s
+   `ArtMeshFrame`.
+2. **`evalProjectFrameViaDepgraph` helper**
+   ([src/anim/depgraph/evalProjectFrame.js](../../src/anim/depgraph/evalProjectFrame.js)).
+   Drop-in for `evalRig`. Builds the depgraph, evaluates with
+   paramOverrides seeded from the caller's `paramValues`, collects
+   every part's `ART_MESH_EVAL` output into the `ArtMeshFrame[]` array.
+3. **CanvasViewport branch**
+   ([src/components/canvas/CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx)).
+   Reads `usePreferencesStore.getState().evalEngine` per tick; when
+   `'depgraph'`, calls `evalProjectFrameViaDepgraph(projectRef.current,
+   valuesForEval)` instead of `evalRig(...)`. Both paths produce the
+   same `ArtMeshFrame` shape so the rest of the tick is engine-agnostic.
+
+13 parity tests
+([scripts/test/test_depgraph_eval_artMesh.mjs](../../scripts/test/test_depgraph_eval_artMesh.mjs))
+pin `evalProjectFrameViaDepgraph` against `evalRig`: root-only,
+single-rotation parent, parameter-driven keyform blend at three values
+(0, 0.5, 1). All pass at <1e-4 px delta.
+
+## 0.C — Constraint wire-up analysis (HISTORICAL)
 
 [src/anim/constraints.js](../../src/anim/constraints.js) ships four
 constraint types (COPY_LOCATION, COPY_ROTATION, LIMIT_ROTATION,
@@ -235,13 +283,19 @@ tested). No production-side change in this Phase 0 deliverable.
 - 0.0 — ms canonical declaration (memory entry)
 - 0.B — driver pass wired into CanvasViewport tick
 - 0.A — gridLift / depgraph build-relation fix (2026-05-10)
+- 0.C — TRANSFORM_COMPOSE op for constraint composition (2026-05-10)
+- 0.D.0 — ART_MESH_EVAL kernel + evalProjectFrameViaDepgraph helper + CanvasViewport branch on `preferencesStore.evalEngine` (2026-05-10)
 
-**Deferred with analysis (this doc):**
-- 0.C — constraint wire-up (waits for 0.D.0 architectural decision)
-
-**Pending downstream:**
-- 0.D.0 — depgraph viewport wire-up
-- 0.D — depgraph default flip (gated on 0.D.0)
+**Pending:**
+- 0.D — depgraph default flip. Two prerequisites:
+  1. **Armature modifier port.** `kernelArtMeshEval` currently passes
+     through `type:'armature'` modifiers — every bone-rigged project
+     loses its skinning under the depgraph branch. Need a
+     depgraph-side equivalent of `boneSkinning.js` LBS pass before
+     the flip is safe.
+  2. **Manual byte-fidelity sweep.** Run both engines side-by-side
+     on `shelby_neutral_ok.psd` (Western) + `test_image4.psd` (anime)
+     in the actual app. Compare visual + exported `.cmo3` bytes.
 
 This means **Phase 0 is partially shipped**. The user-visible win is
 that authored param drivers now affect the live preview / animation
