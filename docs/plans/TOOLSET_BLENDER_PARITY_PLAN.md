@@ -1267,16 +1267,20 @@ Every phase ships:
 - **Integration test** — at least one `test_*_integration.mjs`
   exercising the full path from operator dispatch through state
   mutation to UI render
-- **Byte-fidelity sweep** — Hiyori .moc3 + Shelby .cmo3 re-export →
-  byte-identical to baseline. Phase 4 and 5 add a Hiyori-with-edited-
-  topology re-export to ensure topology ops don't break the writer.
+- **Byte-fidelity sweep** — covers BOTH user E2E test PSDs (Western + anime topology) plus Hiyori reference:
+  - **Shelby** (`shelby_neutral_ok.psd`) → Init Rig → export → diff against `shelby.cmo3` baseline. Regression-grade.
+  - **test_image4** (anime) → Init Rig → export → smoke-load in Cubism Viewer. Anime topology has historically exposed bugs Shelby's Western fixture missed (BUG-025 leg-roles fly was anime-only). No byte baseline; gated on Viewer load + visual sanity.
+  - **Hiyori** moc3 byte-diff against canonical reference (no PSD source; gate on exported artefact).
+  Phase 4 + 5 (topology ops) add a Shelby-with-edited-topology AND a test_image4-with-edited-topology re-export.
 - **Manual verification** — at least one screenshot or short-form GIF
   in the changelog
 - **Memory entry** — auto-memory file added, MEMORY.md updated
 
 The byte-fidelity sweep gate is hard. A topology op that produces a
 non-fan-triangulated mesh, or an extrude that leaves degenerate
-triangles, would break the sweep — the writer asserts both.
+triangles, would break the sweep — the writer asserts both. Anime-only
+or Western-only regressions are explicit blockers — neither can be
+silently shipped because the other topology passed.
 
 ---
 

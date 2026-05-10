@@ -1395,20 +1395,23 @@ Every phase ships:
 
 - **Unit tests** (per the per-phase tables above)
 - **Integration test** — at least one `test_*_integration.mjs` exercising the full path from project schema through the eval to a deterministic output map
-- **Byte-fidelity sweep** — Hiyori .moc3 + Shelby .cmo3 + each Cubism sample re-export → byte-identical to baseline (this is the gate that has historically caught real regressions; it gates every phase)
+- **Byte-fidelity sweep** — covers BOTH user E2E test PSDs (Western + anime topology) plus Hiyori reference. This is the gate that has historically caught real regressions; it gates every phase.
 - **Manual verification** — at least one screenshot or short-form GIF in the changelog, demonstrating the user-facing behaviour
 - **Memory entry** — auto-memory file added, MEMORY.md updated
 
 The **byte-fidelity sweep** runs as `pnpm test:exportFidelity` and must
 pass with the new schema before phase exit. The sweep covers:
 
-- moc3 export of Hiyori (canonical reference)
-- cmo3 export of Shelby (canonical reference)
+- **Shelby (Western)** — `shelby_neutral_ok.psd → Init Rig → export → diff against shelby.cmo3 baseline (SS v0.2)`. Regression-grade gate.
+- **test_image4 (anime)** — `test_image4.psd → Init Rig → export → smoke-load in Cubism Viewer`. Anime topology has historically exposed bugs the Western fixture missed (BUG-025 leg-roles fly was anime-only). No baseline cmo3 — gated on Cubism Viewer load + visual sanity, not byte-diff.
+- **Hiyori (reference)** — Cubism's official sample. moc3 byte-diff against the canonical reference. User has no PSD source, so this gate is on the *exported* artefact, not a re-import + re-export round-trip.
 - motion3.json export of one keyframed Action per phase
 - can3 export of one keyframed Action per phase
 - model3.json + cdi3.json + physics3.json full-bundle export
 
-Any regression on any of these blocks the phase merge.
+Any regression on any of these blocks the phase merge. Anime-only or
+Western-only regressions are explicit blockers — neither category can
+be silently shipped because a fixture in one style passed.
 
 ---
 

@@ -154,7 +154,13 @@ each step's intermediate outputs. The existing `sideBySide.js` test
 covers warp-warp chains and root-warp; doesn't cover the per-part
 `RigWarp_*` shape that triggers the divergence.
 
-Estimated effort: 1–3 days once a Shelby fixture is wired into a
+Fixture coverage must include **both** user test PSDs (per
+[feedback_test_character_is_shelby.md](../../C:/Users/Alexgrv/.claude/projects/d--Projects-Programming-stretchystudio/memory/feedback_test_character_is_shelby.md)):
+- `shelby_neutral_ok.psd` (Western topology, regression baseline)
+- `test_image4.psd` (anime topology — historically exposed bugs
+  Western fixture missed, e.g. BUG-025 leg-roles fly)
+
+Estimated effort: 1–3 days once both fixtures are wired into a
 test harness.
 
 ## 0.C — Constraint wire-up analysis (DEFERRED)
