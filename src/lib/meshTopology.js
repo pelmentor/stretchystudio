@@ -51,6 +51,14 @@
  *   interior verts and lerp-parameter weights for edge midpoints, so per-
  *   vertex data interpolates linearly along the source-vert positions
  *   instead of snapping to the unweighted mean.
+ * @property {Set<number>}                    [selectionOverride]
+ *   Optional. When set, the dispatcher uses this Set as the post-op vertex
+ *   selection verbatim (instead of the survivor + growth remap). Phase 5
+ *   Extrude uses this — Blender's E selects the freshly-duplicated verts
+ *   only; the originals stay UNselected so the user immediately drags the
+ *   new strip. The growth pass would otherwise leave the source verts
+ *   selected (they were selected pre-op + their `vertexSources` entry is
+ *   length-1).
  * @property {boolean}                        retriangulated
  */
 
@@ -379,6 +387,93 @@ export function pointInTriangleStrict(p, a, b, c) {
   const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
   const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
   return !(hasNeg && hasPos);
+}
+
+/**
+ * Toolset Plan Phase 5.A — boundary-vertex detection.
+ *
+ * A boundary edge is one referenced by exactly one *non-degenerate*
+ * triangle. A boundary vertex is incident on at least one boundary edge.
+ *
+ * The non-degenerate filter is load-bearing: Live2D meshes commonly
+ * include zero-area "seam" triangles (UV / clip-mask separators) whose
+ * collinear edges are referenced by only the seam tri + one neighbour.
+ * The naive `count === 1` test would misclassify those edges as
+ * boundary, producing a phantom interior boundary that the Extrude op
+ * would then duplicate from. Filtering degenerate tris before counting
+ * matches the "real geometric perimeter" the user sees in the viewport.
+ *
+ * Caching: boundary detection is O(triangles) per call. Phase 5's
+ * extrude operator reads the boundary set ONCE per click (not per
+ * mousemove), so we don't bother caching here — the dispatcher's call
+ * site only fires on the operator entry point. Callers that need to
+ * walk the boundary repeatedly within the same gesture should cache
+ * the Set themselves.
+ *
+ * @param {Object} mesh
+ * @param {Array<VertexLike>} mesh.vertices
+ * @param {Array<TriIndex>} mesh.triangles
+ * @param {Object} [opts]
+ * @param {number} [opts.epsArea=1e-9]   - degenerate-tri area threshold
+ * @returns {Set<number>}                 - boundary vertex indices
+ */
+export function getBoundaryVerts(mesh, opts = {}) {
+  const eps = opts.epsArea ?? 1e-9;
+  /** @type {Map<string, number>} */
+  const edgeUseCount = new Map();
+  for (const tri of mesh.triangles) {
+    if (isDegenerateTri(tri, mesh.vertices, eps)) continue;
+    const [a, b, c] = tri;
+    edgeUseCount.set(edgeKey(a, b), (edgeUseCount.get(edgeKey(a, b)) ?? 0) + 1);
+    edgeUseCount.set(edgeKey(b, c), (edgeUseCount.get(edgeKey(b, c)) ?? 0) + 1);
+    edgeUseCount.set(edgeKey(c, a), (edgeUseCount.get(edgeKey(c, a)) ?? 0) + 1);
+  }
+  /** @type {Set<number>} */
+  const boundary = new Set();
+  for (const [key, count] of edgeUseCount) {
+    if (count !== 1) continue;
+    const [u, v] = key.split(',').map(Number);
+    boundary.add(u);
+    boundary.add(v);
+  }
+  return boundary;
+}
+
+/**
+ * Toolset Plan Phase 5.A — boundary-edge enumeration.
+ *
+ * Returns the set of boundary edges as `[u, v]` pairs (with u < v),
+ * filtered the same way as `getBoundaryVerts`. Phase 5's Extrude needs
+ * the actual edges (not just vertex membership) to decide where to
+ * link new triangles between the duplicate strip and the original
+ * boundary.
+ *
+ * @param {Object} mesh
+ * @param {Array<VertexLike>} mesh.vertices
+ * @param {Array<TriIndex>} mesh.triangles
+ * @param {Object} [opts]
+ * @param {number} [opts.epsArea=1e-9]
+ * @returns {Array<[number, number]>}    - sorted (u, v) pairs, u < v
+ */
+export function getBoundaryEdges(mesh, opts = {}) {
+  const eps = opts.epsArea ?? 1e-9;
+  /** @type {Map<string, number>} */
+  const edgeUseCount = new Map();
+  for (const tri of mesh.triangles) {
+    if (isDegenerateTri(tri, mesh.vertices, eps)) continue;
+    const [a, b, c] = tri;
+    edgeUseCount.set(edgeKey(a, b), (edgeUseCount.get(edgeKey(a, b)) ?? 0) + 1);
+    edgeUseCount.set(edgeKey(b, c), (edgeUseCount.get(edgeKey(b, c)) ?? 0) + 1);
+    edgeUseCount.set(edgeKey(c, a), (edgeUseCount.get(edgeKey(c, a)) ?? 0) + 1);
+  }
+  /** @type {Array<[number, number]>} */
+  const out = [];
+  for (const [key, count] of edgeUseCount) {
+    if (count !== 1) continue;
+    const [u, v] = key.split(',').map(Number);
+    out.push([u, v]);
+  }
+  return out;
 }
 
 /**

@@ -143,6 +143,14 @@ function getSnapVerts(node, project, frames) {
  *    part to its own verts). Sister to `findNearest({excludePartId})`
  *    but here it's a build-time filter so excluded verts never enter
  *    the hash, which is faster than per-query filtering.
+ *  @param {Map<string, Set<number>>} [opts.excludeVertIndicesByPart]
+ *    Phase 5 — per-part vertex exclusion for the modal-G vertex-translate
+ *    overlay. Excluded verts never enter the hash, so the dragged
+ *    extruded-duplicate verts don't auto-snap to themselves at t=0
+ *    (where they sit on top of their source verts). Verts NOT in the
+ *    exclusion set still enter the hash — including OTHER verts of the
+ *    same part — so the user can snap an extruded boundary to a
+ *    specific anchor vert on the same mesh.
  */
 export function buildSnapHash(project, opts = {}) {
   const cellSize = opts.cellSize ?? 32;
@@ -150,14 +158,17 @@ export function buildSnapHash(project, opts = {}) {
   if (!project || !Array.isArray(project.nodes)) return hash;
   const frames = opts.frames ?? null;
   const exclude = opts.excludePartId ?? null;
+  const excludeIdx = opts.excludeVertIndicesByPart ?? null;
   for (const node of project.nodes) {
     if (!node || node.type !== 'part') continue;
     if (exclude && node.id === exclude) continue;
     const verts = getSnapVerts(node, project, frames);
     if (!verts) continue;
+    const skipSet = excludeIdx ? excludeIdx.get?.(node.id) ?? null : null;
     for (let i = 0; i < verts.length; i++) {
       const v = verts[i];
       if (!v) continue;
+      if (skipSet && skipSet.has(i)) continue;
       hash.add(v.x, v.y, node.id, i);
     }
   }

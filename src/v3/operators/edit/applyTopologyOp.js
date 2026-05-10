@@ -49,6 +49,12 @@ import { meshSignature } from '../../../io/meshSignature.js';
  * and re-uploads the mesh to the WebGL scene (when a scene is
  * registered).
  *
+ * Phase 5 — when `result.selectionOverride` is set, the editor
+ * selection is replaced wholesale with the override (instead of the
+ * survivor + growth remap). Used by Extrude to select only the freshly-
+ * duplicated verts (Blender's E pattern: source ring stays unselected
+ * post-extrude so modal G drags the duplicates).
+ *
  * @param {string} partId
  * @param {TopologyOpResult} result
  * @returns {boolean}  true on success, false when the project node is
@@ -165,8 +171,13 @@ export function applyTopologyOp(partId, result) {
     if (typeof scene._markDirty === 'function') scene._markDirty();
   }
 
-  // Apply vertexIndexRemap to the editor selection.
-  remapSelectionForPart(partId, result, priorSelection, priorActive);
+  // Apply selection — `selectionOverride` (Phase 5) wins over the
+  // survivor + growth remap; otherwise, run the standard remap.
+  if (result.selectionOverride instanceof Set) {
+    overrideSelectionForPart(partId, result.selectionOverride);
+  } else {
+    remapSelectionForPart(partId, result, priorSelection, priorActive);
+  }
 
   return true;
 }
@@ -232,5 +243,31 @@ function remapSelectionForPart(partId, result, priorSelection, priorActive) {
       // additive to bump active without losing the set.
       editor.selectVertex(partId, ne, /* additive */ true);
     }
+  }
+}
+
+/**
+ * Phase 5 — selection override path. Replaces the editor selection
+ * for `partId` with the given Set verbatim, then re-points
+ * `activeVertex` at one of the new verts (Blender's E sets the active
+ * vertex to the most-recently-duplicated, but SS uses Set iteration
+ * order as the proxy — same compromise as `mergeAtFirst`).
+ *
+ * @param {string} partId
+ * @param {Set<number>} override
+ */
+function overrideSelectionForPart(partId, override) {
+  const editor = useEditorStore.getState();
+  if (override.size === 0) {
+    editor.deselectAllVertices(partId);
+    return;
+  }
+  editor.setVertexSelectionForPart(partId, override);
+  // Bump activeVertex to the first new vert so downstream consumers
+  // (e.g. Mesh Edit Mode tools that read activeVertex) have a sensible
+  // reference. selectVertex additive preserves the override set.
+  const first = override.values().next().value;
+  if (typeof first === 'number') {
+    editor.selectVertex(partId, first, /* additive */ true);
   }
 }

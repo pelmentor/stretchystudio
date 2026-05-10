@@ -36,7 +36,9 @@ import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
 import { dissolveVertices } from './edit/dissolve.js';
 import { subdivide } from './edit/subdivide.js';
+import { extrude, countSelectedBoundary } from './edit/extrude.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
+import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
 import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
 import { computeWorldMatrices } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
@@ -855,6 +857,86 @@ function registerBuiltins() {
         return;
       }
       applyTopologyOp(partId, result);
+    },
+  });
+
+  // ── Toolset Phase 5 — Extrude ────────────────────────────────────
+  // Blender's `E` chord. Duplicates the selected boundary verts +
+  // bridges them with quad strips, then enters Modal G in vertex mode
+  // so the user drags the new strip to its final position. Esc cancels
+  // the entire op (including the topology change) via discardBatch.
+  registerOperator({
+    id: 'edit.extrude',
+    label: 'Extrude (E)',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size === 0) return;
+      // Diagnose first so we toast cleanly instead of silently no-opping
+      // when the user has only interior verts selected.
+      const boundaryCount = countSelectedBoundary(node.mesh, sel);
+      if (boundaryCount === 0) {
+        toast({
+          title: 'Cannot extrude',
+          description: 'Extrude needs selected boundary verts. Select a vertex on the mesh’s outer edge.',
+        });
+        return;
+      }
+      const result = extrude(node.mesh, sel);
+      if (!result) return;
+      // Open a batch so the topology change + the modal drag collapse
+      // to ONE undo entry. discardBatch on cancel rolls back BOTH in
+      // one swoop (no redo-stack pollution).
+      beginBatch(project);
+
+      // Apply the topology op INSIDE the batch — its updateProject call
+      // is suppressed from snapshotting (isBatching() is true).
+      applyTopologyOp(partId, result);
+
+      // Capture original positions for the new verts (== source vert
+      // positions, since extrude duplicates at the same coords). The
+      // modal needs these to revert on Esc-mid-drag (before discardBatch
+      // wipes the entire batch — discardBatch handles cancellation, the
+      // original Map handles per-frame delta math).
+      const newProject = useProjectStore.getState().project;
+      const newNode = newProject.nodes.find((n) => n.id === partId);
+      const newMesh = newNode?.mesh;
+      if (!newMesh) return;
+      /** @type {Map<number, {x:number,y:number,restX:number,restY:number}>} */
+      const original = new Map();
+      const overrideSel = result.selectionOverride ?? new Set();
+      for (const idx of overrideSel) {
+        const v = newMesh.vertices[idx];
+        if (!v) continue;
+        original.set(idx, {
+          x:     v.x,
+          y:     v.y,
+          restX: v.restX ?? v.x,
+          restY: v.restY ?? v.y,
+        });
+      }
+
+      // Pivot center for the modal HUD = centroid of new verts.
+      let cx = 0, cy = 0, n = 0;
+      for (const o of original.values()) { cx += o.x; cy += o.y; n++; }
+      const pivot = n > 0
+        ? { x: cx / n, y: cy / n }
+        : { x: 0, y: 0 };
+
+      useModalVertexTransformStore.getState().begin({
+        kind: 'translate',
+        partId,
+        startMouse: lastMousePos(),
+        pivotCanvas: pivot,
+        original,
+        vertIndices: new Set(overrideSel),
+        rollbackOnCancel: true,
+      });
     },
   });
 }

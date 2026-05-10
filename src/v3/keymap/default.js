@@ -136,6 +136,21 @@ export const DEFAULT_KEYMAP = {
   'KeyM':       'edit.mergeMenu',
   'Ctrl+KeyX':  'edit.dissolveVerts',
   'Meta+KeyX':  'edit.dissolveVerts',
+
+  // Toolset Phase 5 — Extrude. `E` chord on selected boundary verts:
+  // duplicates them, bridges with quad strips, hands off to Modal G in
+  // vertex mode (drag the new strip, click to commit, Esc to roll back
+  // the entire op including the topology change).
+  //
+  // Blender chord parity: `KeyE` = `MESH_OT_extrude_region` for vertex
+  // select mode (`editmesh_extrude.cc:507-585`). Blender's keymap
+  // routes Alt+E to a "wave" pop-up menu of extrude variants; SS direct
+  // dispatch ships only the region variant in v1 (Phase 6+ may add
+  // `MESH_OT_extrude_verts_indiv` for interior-vert extrusion as a
+  // separate operator, in which case the binding here may move to a
+  // dispatcher that picks based on whether selection has any boundary
+  // verts).
+  'KeyE': 'edit.extrude',
 };
 
 /**

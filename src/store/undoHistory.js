@@ -34,6 +34,11 @@ const MAX_HISTORY = 50;
 /** @type {SnapshotEntry[]} */ let _snapshots = [];
 /** @type {SnapshotEntry[]} */ let _redoStack = [];
 let _batchDepth = 0;
+/** Snapshot of the redo stack as it was when the outermost batch began.
+ *  Restored by `discardBatch` so a cancelled batch doesn't accidentally
+ *  invalidate the user's redo history (which `pushSnapshot`'s edit-clears
+ *  -redo behaviour did at `beginBatch` time). Null when no batch is open. */
+/** @type {SnapshotEntry[]|null} */ let _redoStackBeforeBatch = null;
 
 /** Drop the oldest snapshots when count exceeds MAX_HISTORY. */
 function _evict() {
@@ -61,14 +66,60 @@ export function pushSnapshot(project) {
 /**
  * Call at the start of a continuous gesture (drag, slider scrub).
  * Captures one pre-gesture snapshot and suppresses per-frame snapshots.
+ *
+ * Side-saves the redo stack so a subsequent `discardBatch` (cancel)
+ * can restore it — `pushSnapshot` clears redo unconditionally, which
+ * is correct on commit (a real edit invalidates redo) but wrong on
+ * cancel (no edit happened). Saved only at depth 0; nested begins
+ * piggyback on the outer's saved state.
  */
 export function beginBatch(project) {
-  if (_batchDepth === 0) pushSnapshot(project);
+  if (_batchDepth === 0) {
+    _redoStackBeforeBatch = _redoStack.slice();
+    pushSnapshot(project);
+  }
   _batchDepth++;
 }
 
 /** Call at the end of a continuous gesture. */
 export function endBatch() {
+  _batchDepth = Math.max(0, _batchDepth - 1);
+  if (_batchDepth === 0) {
+    // Commit: the redo-clear performed by `pushSnapshot` at beginBatch
+    // is the correct behaviour for a real edit (a new edit invalidates
+    // redo). Drop the saved backup.
+    _redoStackBeforeBatch = null;
+  }
+}
+
+/**
+ * Cancel the outermost batch — pop the snapshot pushed by `beginBatch`
+ * and restore it via `applyFn`, WITHOUT pushing the discarded current
+ * state to the redo stack. Used by modal flows that decide to revert
+ * (Phase 5 — Esc-cancel of an extrude + modal-G session: the topology
+ * change AND the partial drag both vanish; redo stack stays clean).
+ *
+ * At depth > 1 (nested batches), the inner cancel is a no-op
+ * decrement; the outer caller decides the final outcome. Mirrors the
+ * fact that nested `beginBatch` calls don't push additional snapshots.
+ *
+ * @param {function(any): void} applyFn  - receives the popped snapshot
+ *                                          (== pre-batch state); should
+ *                                          restore project state.
+ */
+export function discardBatch(applyFn) {
+  if (_batchDepth === 0) return;
+  if (_batchDepth === 1 && _snapshots.length > 0) {
+    const snap = _snapshots.pop();
+    if (typeof applyFn === 'function') applyFn(snap?.project);
+    // Restore the redo stack to its pre-batch state. The batch's
+    // `beginBatch` cleared redo via `pushSnapshot`'s edit-invalidates-
+    // redo rule; on cancel that clear is wrong (no edit happened).
+    if (_redoStackBeforeBatch !== null) {
+      _redoStack = _redoStackBeforeBatch;
+      _redoStackBeforeBatch = null;
+    }
+  }
   _batchDepth = Math.max(0, _batchDepth - 1);
 }
 
@@ -82,6 +133,7 @@ export function clearHistory() {
   _snapshots  = [];
   _redoStack  = [];
   _batchDepth = 0;
+  _redoStackBeforeBatch = null;
 }
 
 /**
