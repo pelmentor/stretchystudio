@@ -15,7 +15,7 @@ import { useSelectionStore } from '../../src/store/selectionStore.js';
 import { usePreferencesStore } from '../../src/store/preferencesStore.js';
 import {
   readCursor, snapToGrid, getGridStep, eligibleSelection,
-  nodeWorldOrigin, medianOfOrigins,
+  nodeWorldOrigin, meanOfOrigins,
   snapSelectionToCursor, snapSelectionToCursorKeepOffset,
   snapSelectionToGrid, snapSelectionToWorldOrigin, snapSelectionToActive,
   snapCursorToWorldOrigin, snapCursorToSelected, snapCursorToGrid, snapCursorToActive,
@@ -266,7 +266,9 @@ function selectIds(ids) {
   assert(c.x === 700 && c.y === 800, `cursor → p2 origin, got (${c.x},${c.y})`);
 }
 
-// ── 15. medianOfOrigins handles odd vs even counts ─────────────────
+// ── 15. meanOfOrigins (audit fix D-2 — was medianOfOrigins) ────────
+//      Arithmetic mean per Blender's `view3d_snap.cc:910-1013` (sum
+//      then divide by count). Per-axis statistical median was a misport.
 {
   seed({
     nodes: [
@@ -276,12 +278,16 @@ function selectIds(ids) {
     ],
   });
   const wm = computeWorldMatrices(useProjectStore.getState().project.nodes);
-  const med3 = medianOfOrigins(['p1', 'p2', 'p3'], wm);
-  assert(med3.x === 30 && med3.y === 100, `odd count median, got (${med3.x},${med3.y})`);
-  const med2 = medianOfOrigins(['p1', 'p3'], wm);
-  assert(med2.x === 30 && med2.y === 150, `even count median (avg of mids), got (${med2.x},${med2.y})`);
-  const medEmpty = medianOfOrigins([], wm);
-  assert(medEmpty === null, 'empty → null');
+  const mean3 = meanOfOrigins(['p1', 'p2', 'p3'], wm);
+  // Mean of (10,100), (30,50), (50,200) = (30, 350/3 ≈ 116.667).
+  // Pre-D-2 statistical median per-axis would have given (30, 100) — DIFFERENT.
+  assert(mean3.x === 30 && nearlyEq(mean3.y, 350 / 3, 1e-6),
+    `3-element mean = (30, ~116.67), got (${mean3.x},${mean3.y})`);
+  const mean2 = meanOfOrigins(['p1', 'p3'], wm);
+  assert(mean2.x === 30 && mean2.y === 150,
+    `2-element mean (avg) = (30, 150), got (${mean2.x},${mean2.y})`);
+  const meanEmpty = meanOfOrigins([], wm);
+  assert(meanEmpty === null, 'empty → null');
 }
 
 // ── 16. nodeWorldOrigin reads m[6], m[7] ───────────────────────────

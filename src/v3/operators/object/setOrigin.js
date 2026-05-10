@@ -5,7 +5,9 @@
  * submenu).
  *
  * Implements the relevant subset of Blender's `OBJECT_OT_origin_set`
- * (`reference/blender/source/blender/editors/object/object_transform.cc:760+`).
+ * (`reference/blender/source/blender/editors/object/object_transform.cc:1873`
+ * — operator registration; audit fix D-4 corrected a pre-existing wrong
+ * cite at `:760+` which is inside the unrelated Apply Transform exec).
  * Four modes (Blender RNA `type` enum values):
  *
  *   - 'median'      = ORIGIN_TO_GEOMETRY (centroid)
@@ -102,7 +104,16 @@ function vertexAccessor(verts) {
 }
 
 /**
- * Median (centroid) of mesh vertices in mesh-local coords.
+ * Median (centroid) of mesh vertices in mesh-local coords. Used by the
+ * "Origin to Geometry" mode.
+ *
+ * Audit D-10 (DOCUMENT-AS-DEVIATION): Blender's `ORIGIN_GEOMETRY` reads
+ * `scene->toolsettings->transform_pivot_point`
+ * (`object_transform.cc:1315-1330`) and switches between median + bbox
+ * center based on the user's pivot setting. SS has no persistent
+ * transform-pivot setting, so we hardcode arithmetic mean (== Blender's
+ * default Median Point). Fix would require a new pivot-mode setting
+ * across the whole modal G/R/S surface — out of scope for this phase.
  *
  * @param {any} verts
  * @returns {{x:number, y:number} | null}
@@ -120,7 +131,17 @@ export function meshMedian(verts) {
 }
 
 /**
- * AABB centre of mesh vertices in mesh-local coords.
+ * AABB centre of mesh vertices in mesh-local coords. Used by the
+ * "Origin to Center of Mass (Surface)" mode.
+ *
+ * Audit D-11 (DOCUMENT-AS-DEVIATION): Blender's `ORIGIN_CENTER_OF_MASS_SURFACE`
+ * uses `BKE_mesh_center_of_surface` (`object_transform.cc:1463-1464`)
+ * which iterates triangulated faces and weights each face centroid by
+ * its area. SS approximates with the AABB midpoint. Implementing
+ * area-weighted centroid in 2D requires per-triangle area calculation
+ * across the whole mesh; the bbox approximation is reasonable for the
+ * 2D polygon shapes used in Live2D rigging. Label retained as
+ * "Surface" for muscle memory; menu comment clarifies the approximation.
  *
  * @param {any} verts
  * @returns {{x:number, y:number} | null}
@@ -263,7 +284,8 @@ export function setOriginForSelection(mode) {
   const cursor = readCursor(project);
   let moved = 0;
   let skipped = 0;
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` for a real snapshot.
+  beginBatch(project);
   try {
     for (const it of items) {
       if (it?.type !== 'part') { skipped++; continue; }

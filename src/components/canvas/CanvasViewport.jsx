@@ -156,6 +156,16 @@ export default function CanvasViewport({
   // just a stale one with the post-op IBO. Signature comparison catches
   // every divergence via `meshSignature(mesh) === lastUploaded`.
   const lastUploadedMeshSigRef = useRef(new Map()); // Map<partId, MeshSignature>
+  // Phase 7.A audit fix G-2 — `meshSignature` hashes vertex COUNT + tri count
+  // + UV hash but not vertex XY positions, so an in-place positional shift
+  // (e.g. `applySetOrigin` rewriting `mesh.vertices` to compensate for a
+  // gizmo move) leaves `signaturesEqual` returning true → no re-upload. We
+  // track `versionControl.geometryVersion` per part as a side channel:
+  // when the project's counter has advanced past what we last uploaded,
+  // bypass the signature guard. Mutators that change vertex positions
+  // already bump `vc.geometryVersion++` (applySetOrigin, dispatchMeshWorker,
+  // applyTopologyOp), so this is a tap on the existing signal.
+  const lastUploadedGeomVersionRef = useRef(new Map()); // Map<partId, number>
   // M7b — pre-mesh alpha hit-test now uses 256² downsampled `Uint8Array`
   // masks (~64 KB each) instead of canvas-sized RGBA `ImageData`
   // (~64 MB at 4K). Wizard reorder/adjust hit-test reads
@@ -475,9 +485,18 @@ export default function CanvasViewport({
       if (nodeMesh) {
         const lastSig = lastUploadedMeshSigRef.current.get(node.id);
         const curSig = meshSignature(nodeMesh);
-        if (!hasMeshGpu || !signaturesEqual(curSig, lastSig)) {
+        // Audit fix G-2 — also bypass signature guard when the project's
+        // geometry version has advanced past what we last uploaded for
+        // this part. Catches in-place vertex-position mutations
+        // (Set Origin's vertex compensation) that don't change the
+        // signature shape.
+        const lastGv = lastUploadedGeomVersionRef.current.get(node.id) ?? -1;
+        const gvNow = versionControl.geometryVersion ?? 0;
+        const gvAdvanced = gvNow !== lastGv;
+        if (!hasMeshGpu || !signaturesEqual(curSig, lastSig) || gvAdvanced) {
           scene.parts.uploadMesh(node.id, nodeMesh);
           lastUploadedMeshSigRef.current.set(node.id, curSig);
+          lastUploadedGeomVersionRef.current.set(node.id, gvNow);
           isDirtyRef.current = true;
         }
       } else if (!hasMeshGpu && node.imageWidth && node.imageHeight) {
@@ -502,10 +521,11 @@ export default function CanvasViewport({
         imageDataMapRef.current.delete(partId);
         lastUploadedSourcesRef.current.delete(partId);
         lastUploadedMeshSigRef.current.delete(partId);
+        lastUploadedGeomVersionRef.current.delete(partId);
         isDirtyRef.current = true;
       }
     }
-  }, [project.nodes, project.textures, versionControl.textureVersion]);
+  }, [project.nodes, project.textures, versionControl.textureVersion, versionControl.geometryVersion]);
 
   const centerView = useCallback((contentW, contentH) => {
     const canvas = canvasRef.current;

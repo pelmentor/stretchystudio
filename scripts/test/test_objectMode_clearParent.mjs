@@ -80,7 +80,13 @@ function seed(nodes) {
     `local kept (50,60), got (${child.transform.x},${child.transform.y})`);
 }
 
-// ── 3. 'inverse' mode: same as 'clear' in SS ──────────────────────
+// ── 3. 'inverse' mode (audit fix D-1): no-op + toast; KEEPS parent ─
+//      Pre-fix this fell through to plain clear, silently unparenting
+//      the child — the OPPOSITE of what Blender does. Per
+//      `reference/blender/source/blender/editors/object/object_relations.cc:411-420`,
+//      `CLEAR_PARENT_INVERSE` keeps `ob->parent` intact and only resets
+//      `ob->parentinv`. SS has no parentinv field, so the operator is
+//      a no-op now (with a toast surfacing why).
 {
   seed([
     { id: 'parent', type: 'group', parent: null,
@@ -90,10 +96,12 @@ function seed(nodes) {
       mesh: { vertices: [] } },
   ]);
   useSelectionStore.setState({ items: [{ type: 'part', id: 'child' }] });
-  clearParent('inverse');
+  const r = clearParent('inverse');
+  assert(r.cleared === 0, `inverse mode is no-op (cleared=0), got ${r.cleared}`);
+  assert(r.inverseUnsupported === true, 'reports inverseUnsupported=true');
   const child = useProjectStore.getState().project.nodes.find((n) => n.id === 'child');
-  assert((child.parent ?? null) === null, 'parent cleared (inverse alias)');
-  assert(nearlyEq(child.transform.x, 50), 'inverse falls through to clear (no compensation)');
+  assert(child.parent === 'parent', 'inverse mode KEEPS parent (Blender-faithful)');
+  assert(child.transform.x === 50 && child.transform.y === 60, 'transform untouched');
 }
 
 // ── 4. Already-rootless: counted as skipped ───────────────────────

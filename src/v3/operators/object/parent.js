@@ -4,8 +4,11 @@
  * Toolset Plan Phase 7.A.3 — Set Parent (`Ctrl+P`).
  *
  * Implements Blender's `OBJECT_OT_parent_set` (`reference/blender/source/
- * blender/editors/object/object_relations.cc:475+`). Hotkey: `Ctrl+P`
- * per `blender_default.py:4546` (Object Mode keymap).
+ * blender/editors/object/object_relations.cc:1100` — operator registration;
+ * audit fix D-8 corrected a pre-existing wrong cite at `:475+` which is
+ * inside the `parent_set()` data helper, not the operator def). Hotkey:
+ * `Ctrl+P` per `blender_default.py:4509` (audit fix D-5 corrected a
+ * pre-existing wrong cite at `:4546`).
  *
  * Selection semantics:
  *   - Active = LAST entry in `selectionStore.items` (Blender pattern).
@@ -45,6 +48,7 @@ import { useSelectionStore } from '../../../store/selectionStore.js';
 import { computeWorldMatrices } from '../../../renderer/transforms.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import { worldToParentLocal, nodeWorldOrigin } from './snap.js';
+import { toast } from '../../../hooks/use-toast.js';
 
 /**
  * Set parent of every non-active selected node to active's id.
@@ -76,7 +80,8 @@ export function setParent({ keepTransform = true } = {}) {
     ? computeWorldMatrices(project.nodes)
     : null;
 
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` for a real snapshot.
+  beginBatch(project);
   let parented = 0;
   let skipped = 0;
   try {
@@ -120,21 +125,41 @@ export function setParent({ keepTransform = true } = {}) {
 /**
  * Clear parent on every selected node.
  *
- * Three modes (Blender's `OBJECT_OT_parent_clear` — `object_relations.cc:294+`):
+ * Three modes mirroring Blender's `OBJECT_OT_parent_clear`
+ * (`reference/blender/source/blender/editors/object/object_relations.cc:444`
+ * — operator registration; enum starts at `:315`):
  *
  *   - 'clear'              — set parent=null; child world position changes
- *                             (matches Blender's CLEAR_PARENT_KEEP_TRANSFORM=False).
+ *                             (matches Blender's `CLEAR_PARENT_ALL`).
  *   - 'keepTransform'      — set parent=null + write transform.x/y so
  *                             child stays visually in place. Default.
- *   - 'inverse'            — placeholder for Blender's CLEAR_PARENT_INVERSE
- *                             (kept for API parity; behaves like 'clear'
- *                             in SS because we don't store an inverse-stored
- *                             transform separately from `transform.x/y`).
+ *                             (Blender's `CLEAR_PARENT_KEEP_TRANSFORM`).
+ *   - 'inverse'            — Blender's `CLEAR_PARENT_INVERSE`
+ *                             (`object_relations.cc:411-420`): keeps the
+ *                             object PARENTED but resets `parentinv` to
+ *                             identity. SS does not model `parentinv` as
+ *                             a separate field, so we cannot replicate
+ *                             this exactly. Audit fix D-1: emit a toast
+ *                             and exit WITHOUT touching `node.parent`
+ *                             (pre-fix this fell through to plain clear,
+ *                             which silently unparented the child — a
+ *                             destructive surprise to Blender users).
  *
  * @param {'clear' | 'keepTransform' | 'inverse'} mode
- * @returns {{ cleared: number, skipped: number, mode: string }}
+ * @returns {{ cleared: number, skipped: number, mode: string, inverseUnsupported?: boolean }}
  */
 export function clearParent(mode = 'keepTransform') {
+  // Audit fix D-1 — 'inverse' mode is a no-op with a toast in SS. Blender
+  // keeps the parent intact and resets `parentinv`; SS has no parentinv
+  // store, so silently falling through to plain clear (pre-fix behaviour)
+  // would unparent the child — the OPPOSITE of what the user expects.
+  if (mode === 'inverse') {
+    toast({
+      title: 'Clear Parent Inverse not supported',
+      description: 'SS has no parentInv store. Use "Clear Parent" or "Clear and Keep Transform" instead.',
+    });
+    return { cleared: 0, skipped: 0, mode, inverseUnsupported: true };
+  }
   const items = useSelectionStore.getState().items ?? [];
   const eligible = items.filter((it) => it?.type === 'part' || it?.type === 'group');
   if (eligible.length === 0) {
@@ -146,7 +171,8 @@ export function clearParent(mode = 'keepTransform') {
     ? computeWorldMatrices(project.nodes)
     : null;
 
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` for a real snapshot.
+  beginBatch(project);
   let cleared = 0;
   let skipped = 0;
   try {
@@ -169,7 +195,6 @@ export function clearParent(mode = 'keepTransform') {
           if (vc) vc.transformVersion++;
         });
       }
-      // 'inverse' falls through to plain clear (no separate inverse store).
       cleared++;
     }
   } finally {

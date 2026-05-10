@@ -8,12 +8,14 @@
  * the user clicks `X`, `Y`, or `Z` (or presses the matching key) to
  * commit. Z is accepted gracefully (no-op in 2D with a toast).
  *
- * Blender source: `editors/transform/transform_ops.cc:1047+`
- * (`TRANSFORM_OT_mirror`); the keymap binding is in
- * `blender_default.py:4544` (Object Mode `Ctrl+M`). Blender's actual
- * mirror is single-shot via the transform constraint system; the
- * axis-pick popover is SS-specific UX glue (Blender uses inline modal
- * key capture for axis selection — same UX pattern, different surface).
+ * Blender source: `editors/transform/transform_ops.cc:1172`
+ * (`TRANSFORM_OT_mirror`; audit fix D-9 corrected a pre-existing wrong
+ * cite at `:1047+`). Keymap binding: `blender_default.py:4512` via
+ * `_template_items_transform_actions` (audit fix D-5 corrected a
+ * pre-existing wrong cite at `:4544`). Blender's actual mirror is
+ * single-shot via the transform constraint system; the axis-pick popover
+ * is SS-specific UX glue (Blender uses inline modal key capture for axis
+ * selection — same UX pattern, different surface).
  *
  * @module v3/shell/MirrorAxisMenu
  */

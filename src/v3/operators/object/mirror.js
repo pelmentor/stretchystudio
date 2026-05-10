@@ -5,10 +5,13 @@
  *
  * Implements a 2D analog of Blender's `OBJECT_OT_transform_apply` +
  * `TRANSFORM_OT_mirror` (`reference/blender/source/blender/editors/
- * transform/transform_ops.cc:1047+` for `TRANSFORM_OT_mirror` def;
- * the `proportional`/`constraint_axis` plumbing is in
- * `transform_generics.cc`). Hotkey: `Ctrl+M` opens the axis-pick
- * popover per `blender_default.py:4544` (Object Mode keymap).
+ * transform/transform_ops.cc:1172` for `TRANSFORM_OT_mirror` def; audit
+ * fix D-9 corrected a pre-existing wrong cite at `:1047+` which is inside
+ * `TRANSFORM_OT_bend`, unrelated). The `proportional`/`constraint_axis`
+ * plumbing is in `transform_generics.cc`. Hotkey: `Ctrl+M` opens the
+ * axis-pick popover per `blender_default.py:4512` (via
+ * `_template_items_transform_actions`; audit fix D-5 corrected a
+ * pre-existing wrong cite at `:4544`).
  *
  * Mirror geometry:
  *   - Axis = X: world X mirrors across the selection's median X.
@@ -45,7 +48,7 @@ import { useSelectionStore } from '../../../store/selectionStore.js';
 import { computeWorldMatrices } from '../../../renderer/transforms.js';
 import { isBoneGroup } from '../../../store/objectDataAccess.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
-import { eligibleSelection, nodeWorldOrigin, worldToParentLocal, medianOfOrigins } from './snap.js';
+import { eligibleSelection, nodeWorldOrigin, worldToParentLocal, meanOfOrigins } from './snap.js';
 
 /**
  * Mirror every selected non-bone node's transform across `axis` ('x'|'y')
@@ -80,10 +83,11 @@ export function mirrorSelected(axis) {
     return { mirrored: 0, skippedBones, axis };
   }
   const worldMatrices = computeWorldMatrices(project.nodes);
-  const median = medianOfOrigins(eligibleIds, worldMatrices);
+  const median = meanOfOrigins(eligibleIds, worldMatrices);
   if (!median) return { mirrored: 0, skippedBones, axis };
 
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` for a real snapshot.
+  beginBatch(project);
   let mirrored = 0;
   try {
     for (const id of eligibleIds) {

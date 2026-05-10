@@ -4,11 +4,16 @@
  * Toolset Plan Phase 7.A.1 — Snap menu operators (`Shift+S`).
  *
  * Implements Blender's `VIEW3D_MT_snap_pie` (`reference/blender/scripts/
- * startup/bl_ui/space_view3d.py:6377-6411` for the pie menu definition;
- * the actual operators live in `editors/object/object_transform.cc:760+`
- * for `OBJECT_OT_*` and `editors/space_view3d/view3d_view.cc` for the
- * cursor-side ones). Hotkey: `Shift+S` per `blender_default.py:4527`
- * (Object Mode keymap).
+ * startup/bl_ui/space_view3d.py:6181-6203` for the pie menu definition;
+ * audit fix D-6 corrected a pre-existing wrong cite at `:6377-6411`).
+ * The actual snap operators live in `editors/space_view3d/view3d_snap.cc`
+ * (lines 271-1121 cover both `VIEW3D_OT_snap_selected_*` and
+ * `VIEW3D_OT_snap_cursor_*`; audit fix D-4 corrected a pre-existing wrong
+ * cite at `editors/object/object_transform.cc:760+` which is the Apply
+ * Transform exec body, unrelated). Hotkey: `Shift+S` per
+ * `blender_default.py:1833` (`km_view3d_generic` — applies to all 3D
+ * View modes; audit fix D-5 corrected a pre-existing wrong cite at
+ * `:4527` which is `object.delete`).
  *
  * Two columns:
  *
@@ -56,6 +61,14 @@ import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 /**
  * Read the current 3D-cursor (canvas-space). Falls back to canvas
  * centre if the field is missing (pre-v33 saves before migration runs).
+ *
+ * Audit D-13 (DOCUMENT-AS-DEVIATION): Blender's `View3DCursor.location`
+ * defaults to (0, 0, 0) (world origin) per
+ * `reference/blender/source/blender/makesdna/DNA_view3d_types.h:567-568`.
+ * SS defaults to canvas centre because in a top-left-origin canvas
+ * coordinate system, (0, 0) is the top-left corner — not a useful default
+ * for a rigging tool where all content is near the canvas centre.
+ * The deviation is intentional and user-friendly.
  *
  * @param {any} project
  * @returns {{x:number, y:number}}
@@ -113,10 +126,17 @@ export function nodeWorldOrigin(nodeId, worldMatrices) {
 }
 
 /**
- * Median of selected nodes' world origins. Used as the anchor for
- * "Selection to Cursor (Keep Offset)" and "Cursor to Selected". Median
- * (not centroid) matches Blender — it shrugs off outliers more cleanly
- * for a multi-selection.
+ * Arithmetic mean of selected nodes' world origins. Used as the anchor
+ * for "Selection to Cursor (Keep Offset)" and "Cursor to Selected".
+ *
+ * Audit fix D-2: pre-fix this computed the statistical median (sort each
+ * axis independently, pick middle element). Blender's
+ * `snap_curs_to_sel_ex` (`reference/blender/source/blender/editors/
+ * space_view3d/view3d_snap.cc:910-1013`) uses arithmetic mean
+ * (`add_v3_v3(centroid, vec)` then `mul_v3_fl(centroid, 1.0f / count)`).
+ * Statistical median per-axis produces a different point for any 3+
+ * selection in non-symmetric configurations (e.g. for origins (0,0)
+ * (100,0) (200,100) — median was (100,0) but mean is (100, 33.3)).
  *
  * Returns null when no node has a resolved world matrix.
  *
@@ -124,24 +144,20 @@ export function nodeWorldOrigin(nodeId, worldMatrices) {
  * @param {Map<string, Float32Array>} worldMatrices
  * @returns {{x:number, y:number} | null}
  */
-export function medianOfOrigins(nodeIds, worldMatrices) {
-  const xs = [];
-  const ys = [];
+export function meanOfOrigins(nodeIds, worldMatrices) {
+  let sx = 0, sy = 0, count = 0;
   for (const id of nodeIds) {
     const o = nodeWorldOrigin(id, worldMatrices);
     if (o) {
-      xs.push(o.x);
-      ys.push(o.y);
+      sx += o.x;
+      sy += o.y;
+      count++;
     }
   }
-  if (xs.length === 0) return null;
-  xs.sort((a, b) => a - b);
-  ys.sort((a, b) => a - b);
-  const mid = Math.floor(xs.length / 2);
-  const px = xs.length % 2 === 0 ? (xs[mid - 1] + xs[mid]) / 2 : xs[mid];
-  const py = ys.length % 2 === 0 ? (ys[mid - 1] + ys[mid]) / 2 : ys[mid];
-  return { x: px, y: py };
+  if (count === 0) return null;
+  return { x: sx / count, y: sy / count };
 }
+
 
 /** Snap a value to the nearest multiple of `step`. */
 export function snapToGrid(v, step) {
@@ -227,7 +243,9 @@ export function snapSelectionToWorldPoint(targetWX, targetWY) {
   if (nodeIds.length === 0) return;
   const project = useProjectStore.getState().project;
   const worldMatrices = computeWorldMatrices(project.nodes);
-  beginBatch();
+  // Audit fix G-1 — pass project to beginBatch so the pre-gesture
+  // snapshot is real (was undefined → Ctrl+Z was silent no-op).
+  beginBatch(project);
   try {
     for (const id of nodeIds) {
       const node = project.nodes.find((n) => n?.id === id);
@@ -254,12 +272,14 @@ export function snapSelectionToWorldPointKeepOffset(targetWX, targetWY) {
   if (nodeIds.length === 0) return;
   const project = useProjectStore.getState().project;
   const worldMatrices = computeWorldMatrices(project.nodes);
-  const median = medianOfOrigins(nodeIds, worldMatrices);
+  const median = meanOfOrigins(nodeIds, worldMatrices);
   if (!median) return;
   const dx = targetWX - median.x;
   const dy = targetWY - median.y;
   if (dx === 0 && dy === 0) return;
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` so the pre-gesture
+  // snapshot is real (was undefined → Ctrl+Z silent no-op).
+  beginBatch(project);
   try {
     for (const id of nodeIds) {
       const node = project.nodes.find((n) => n?.id === id);
@@ -298,7 +318,9 @@ export function snapSelectionToGrid() {
   const project = useProjectStore.getState().project;
   const worldMatrices = computeWorldMatrices(project.nodes);
   const step = getGridStep();
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` so the pre-gesture
+  // snapshot is real (was undefined → Ctrl+Z silent no-op).
+  beginBatch(project);
   try {
     for (const id of nodeIds) {
       const node = project.nodes.find((n) => n?.id === id);
@@ -330,7 +352,9 @@ export function snapSelectionToActive() {
   const worldMatrices = computeWorldMatrices(project.nodes);
   const target = nodeWorldOrigin(activeId, worldMatrices);
   if (!target) return;
-  beginBatch();
+  // Audit fix G-1 — beginBatch needs `project` so the pre-gesture
+  // snapshot is real (was undefined → Ctrl+Z silent no-op).
+  beginBatch(project);
   try {
     for (const id of nodeIds) {
       if (id === activeId) continue;
@@ -359,7 +383,7 @@ export function snapCursorToSelected() {
   if (nodeIds.length === 0) return;
   const project = useProjectStore.getState().project;
   const worldMatrices = computeWorldMatrices(project.nodes);
-  const median = medianOfOrigins(nodeIds, worldMatrices);
+  const median = meanOfOrigins(nodeIds, worldMatrices);
   if (!median) return;
   useProjectStore.getState().setProjectCursor(median.x, median.y);
 }

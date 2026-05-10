@@ -12,21 +12,33 @@
  * Blender source: `editors/object/object_transform.cc:760+`.
  * Submenu items:
  *
- *   - Geometry to Origin           — moves geometry to gizmo (NOT shipped;
- *                                     would require origin-stays-put
+ *   - Geometry to Origin           — moves geometry to gizmo (NOT shipped
+ *                                     in v1; would require origin-stays-put
  *                                     plumbing — opposite of what
- *                                     `applySetOrigin` does)
- *   - Origin to Geometry (Median)  — `setOriginForSelection('median')`
+ *                                     `applySetOrigin` does. Audit D-12
+ *                                     (DOCUMENT-AS-DEVIATION): Blender's
+ *                                     `GEOMETRY_TO_ORIGIN` is the FIRST
+ *                                     enum item per
+ *                                     `object_transform.cc:1876-1880`.
+ *                                     Blender users' muscle-memory click
+ *                                     position will land on "Origin to
+ *                                     Geometry" instead — close enough
+ *                                     for the common case but wrong for
+ *                                     the centering-on-existing-pivot use)
+ *   - Origin to Geometry (Median)  — `setOriginForSelection('median')`.
+ *                                     Audit D-10 (DOCUMENT-AS-DEVIATION):
+ *                                     Blender respects `transform_pivot_point`
+ *                                     (median vs bounds); SS hardcodes mean.
  *   - Origin to 3D Cursor           — `setOriginForSelection('cursor')`
- *   - Origin to Center of Mass (Surface) — `setOriginForSelection('bboxCenter')`
- *                                     (SS approximates with bbox; Blender
- *                                     uses surface-area-weighted centroid
- *                                     which requires triangulated 3D mesh
- *                                     theory — overkill for 2D)
- *   - Origin to Center of Mass (Volume)  — `setOriginForSelection('weightedGeom')`
- *                                     (SS uses bone-weight weighted
- *                                     centroid; 2D analogue of Blender's
- *                                     volume-weighted)
+ *   - Origin to Center of Mass (Surface) — `setOriginForSelection('bboxCenter')`.
+ *                                     Audit D-11 (DOCUMENT-AS-DEVIATION):
+ *                                     SS approximates with AABB midpoint.
+ *                                     Blender uses area-weighted centroid
+ *                                     via `BKE_mesh_center_of_surface`
+ *                                     (`object_transform.cc:1463-1464`).
+ *   - Origin to Center of Mass (Volume)  — `setOriginForSelection('weightedGeom')`.
+ *                                     SS uses bone-weight weighted centroid;
+ *                                     2D analogue of Blender's volume-weighted.
  *
  * @module v3/shell/SetOriginMenu
  */
@@ -63,7 +75,10 @@ export function SetOriginMenu() {
     }
     function onKey(e) {
       if (e.key === 'Escape') {
+        // Audit fix G-3 — stopPropagation so the bubble-phase dispatcher
+        // doesn't fire `selection.clear` after every Esc-dismiss.
         e.preventDefault();
+        e.stopPropagation();
         close();
       }
     }

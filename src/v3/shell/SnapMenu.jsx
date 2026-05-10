@@ -10,9 +10,12 @@
  * outside-click also closes (no operator runs).
  *
  * Mirrors Blender's `VIEW3D_MT_snap_pie` (`reference/blender/scripts/
- * startup/bl_ui/space_view3d.py:6377-6411`). Pie menus in SS are
- * rectangular popovers (no radial layout), but the item set is 1:1.
- * Keymap: `Shift+S` per `blender_default.py:4527` (Object Mode).
+ * startup/bl_ui/space_view3d.py:6181-6203` — audit fix D-6 corrected a
+ * pre-existing wrong cite at `:6377-6411` which is `VIEW3D_PT_view3d_properties`,
+ * unrelated). Pie menus in SS are rectangular popovers (no radial layout),
+ * but the item set is 1:1. Keymap: `Shift+S` per `blender_default.py:1833`
+ * (`km_view3d_generic` — applies to all 3D View modes; audit fix D-5
+ * corrected a pre-existing wrong cite at `:4527` which is `object.delete`).
  *
  * Sister to `MergeMenu` + `ApplyMenu` (single popover infrastructure
  * via `editMenuStore.kind`).
@@ -24,11 +27,17 @@ import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { getOperator } from '../operators/registry.js';
 
+// Audit fix D-3 — Blender's `VIEW3D_MT_snap_pie`
+// (`reference/blender/scripts/startup/bl_ui/space_view3d.py:6181-6203`)
+// has exactly 8 items: 4 Selection-to + 4 Cursor-to. Pre-fix the LEFT
+// column had 5 items including "Selection to World Origin", which has no
+// counterpart in Blender's pie. The underlying `object.snap.selectionToWorldOrigin`
+// operator stays registered (command-palette callable) but is removed
+// from the menu surface for parity.
 const COLUMN_LEFT = [
   { id: 'object.snap.selectionToCursor',           label: 'Cursor' },
   { id: 'object.snap.selectionToCursorKeepOffset', label: 'Cursor (Keep Offset)' },
   { id: 'object.snap.selectionToGrid',             label: 'Grid' },
-  { id: 'object.snap.selectionToWorldOrigin',      label: 'World Origin' },
   { id: 'object.snap.selectionToActive',           label: 'Active' },
 ];
 
@@ -52,7 +61,12 @@ export function SnapMenu() {
     }
     function onKey(e) {
       if (e.key === 'Escape') {
+        // Audit fix G-3 — stopPropagation so the bubble-phase operator
+        // dispatcher doesn't see Escape and fire `selection.clear` after
+        // every menu-dismiss. Same fix in ClearParentMenu + SetOriginMenu;
+        // MirrorAxisMenu was already immunized.
         e.preventDefault();
+        e.stopPropagation();
         close();
       }
     }

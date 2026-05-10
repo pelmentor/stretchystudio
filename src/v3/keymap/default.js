@@ -220,32 +220,49 @@ export const DEFAULT_KEYMAP = {
 
   // Toolset Phase 7.A.1 — Snap menu (`Shift+S`). Opens the SnapMenu
   // popover anchored at cursor. Mirrors Blender's `VIEW3D_MT_snap_pie`
-  // (`scripts/startup/bl_ui/space_view3d.py:6377-6411`); Object Mode
-  // chord at `scripts/presets/keyconfig/keymap_data/blender_default.py:4527`.
-  // No prior SS binding (verified — `Shift+S` was unbound; the close-out
-  // collision flag from Phase 6 was stale).
+  // (`scripts/startup/bl_ui/space_view3d.py:6181-6203`; audit fix D-6
+  // corrected a pre-existing wrong cite at `:6377-6411`). Bound via
+  // `blender_default.py:1833` in `km_view3d_generic` — applies to all
+  // 3D View modes (audit fix D-5 corrected a pre-existing wrong cite at
+  // `:4527` which is `object.delete`). No prior SS binding.
+  //
+  // G-4 (DOCUMENT-AS-DEVIATION) — Blender's `Shift+S` in Edit Mode opens
+  // a separate `VIEW3D_MT_snap` for vertex/edge/face snapping. SS serves
+  // the Object Mode menu in all modes (no Edit Mode vertex-snap shipped).
+  // Phase 7.B (mesh/vertex snap) will gate `object.snap.menu` to non-Edit
+  // modes and route Edit Mode `Shift+S` to the vertex snap menu when it
+  // ships. Until then, snap ops in Edit Mode are data-safe (filter to
+  // non-vertex selections) but show the wrong menu for Blender muscle
+  // memory.
   'Shift+KeyS': 'object.snap.menu',
 
   // Toolset Phase 7.A.2 — Mirror selected (`Ctrl+M`). Opens the axis-
   // pick popover (X / Y / Z); X+Y commit a mirror through the selection
-  // median; Z is a 2D no-op with toast. Blender source:
-  // `editors/transform/transform_ops.cc:1047+` (`TRANSFORM_OT_mirror`);
-  // Object-Mode keymap at `blender_default.py:4544`.
+  // mean; Z is a 2D no-op with toast. Blender source:
+  // `editors/transform/transform_ops.cc:1172` (`TRANSFORM_OT_mirror`;
+  // audit fix D-9 corrected pre-existing `:1047+` which is `TRANSFORM_OT_bend`).
+  // Keymap binding at `blender_default.py:4512` via
+  // `_template_items_transform_actions` (audit fix D-5 corrected
+  // pre-existing `:4544`).
   'Ctrl+KeyM': 'object.mirror.menu',
   'Meta+KeyM': 'object.mirror.menu',
 
   // Toolset Phase 7.A.3 — Set Parent (`Ctrl+P`). Active = LAST selected;
   // every other selected node is reparented to active (cycle + type
   // validation by `reparentNode`). Blender:
-  // `editors/object/object_relations.cc:475+` (`OBJECT_OT_parent_set`);
-  // Object-Mode keymap at `blender_default.py:4546`.
+  // `editors/object/object_relations.cc:1100` (`OBJECT_OT_parent_set`;
+  // audit fix D-8 corrected pre-existing `:475+` which is the
+  // `parent_set()` data helper, not the operator def). Keymap binding at
+  // `blender_default.py:4509` (audit fix D-5 corrected pre-existing `:4546`).
   'Ctrl+KeyP': 'object.parent.set',
   'Meta+KeyP': 'object.parent.set',
 
   // Toolset Phase 7.A.4 — Clear Parent (`Alt+P`). Opens the three-mode
-  // popover. Blender: `editors/object/object_relations.cc:294+`
-  // (`OBJECT_OT_parent_clear`); Object-Mode keymap at
-  // `blender_default.py:4548`.
+  // popover. Blender: `editors/object/object_relations.cc:444`
+  // (`OBJECT_OT_parent_clear`; enum at `:315`. Audit fix D-7 corrected
+  // pre-existing `:294+` which is `OBJECT_OT_vertex_parent_set`).
+  // Keymap binding at `blender_default.py:4510` (audit fix D-5 corrected
+  // pre-existing `:4548`).
   'Alt+KeyP': 'object.parent.clearMenu',
 };
 

@@ -5,9 +5,12 @@
  * Toolset Plan Phase 7.A.4 — Clear Parent popover.
  *
  * Mirrors Blender's `OBJECT_OT_parent_clear` (`reference/blender/source/
- * blender/editors/object/object_relations.cc:294+`). Hotkey: `Alt+P`
- * per `blender_default.py:4548` (Object Mode keymap). Three options
- * matching Blender's `type` enum:
+ * blender/editors/object/object_relations.cc:444` — operator registration;
+ * the `type` enum starts at `:315`. Audit fix D-7 corrected a pre-existing
+ * wrong cite at `:294+` which is `OBJECT_OT_vertex_parent_set`, unrelated).
+ * Hotkey: `Alt+P` per `blender_default.py:4510` (audit fix D-5 corrected a
+ * pre-existing wrong cite at `:4548`). Three options matching Blender's
+ * `type` enum:
  *
  *   - Clear Parent             (CLEAR_PARENT_ALL)
  *   - Clear and Keep Transform (CLEAR_PARENT_KEEP_TRANSFORM)  ← default
@@ -44,7 +47,10 @@ export function ClearParentMenu() {
     }
     function onKey(e) {
       if (e.key === 'Escape') {
+        // Audit fix G-3 — stopPropagation so the bubble-phase dispatcher
+        // doesn't fire `selection.clear` after every Esc-dismiss.
         e.preventDefault();
+        e.stopPropagation();
         close();
       }
     }
