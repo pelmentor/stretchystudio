@@ -165,6 +165,22 @@ function defaultAnimData() {
  * out-of-spec for the rnaPath grammar's scene addresses (which only
  * resolve through `animData.actionId`).
  *
+ * **DEVIATION FROM BLENDER (Audit-fix D-3 Stage 1.F):** Blender's
+ * Scene datablock (`reference/blender/source/blender/makesdna/DNA_scene_types.h`)
+ * has NO `parent` field at all — Scene is a root datablock, peer of
+ * Object via the ID system. The closest analog is `Scene *set` (the
+ * "background scene" pointer used for compositing inheritance), but
+ * that's not a parent in the tree-traversal sense. SS adds the
+ * explicit `parent: null` field here to make `__scene__` walkable by
+ * the tree-traversal helpers in `actionRegistry.js` /
+ * `outlinerTreeBuilder.js` etc. that expect every node to declare its
+ * parent. The migration's repair branch (below) force-corrects
+ * `parent` to null because a hand-edited project might set
+ * `parent: 'someNode'` and that would break those cascade walks. Net
+ * effect: Blender Scene has no parent field at all, SS bridges this
+ * with the explicit-null convention used by other root-level
+ * synthetics.
+ *
  * @returns {object}
  */
 export function makeSceneNode() {

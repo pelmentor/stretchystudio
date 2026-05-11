@@ -184,12 +184,26 @@ assert(
   const c3 = cloneAction(proj, 'a1');
   assert(c3?.name === 'Idle.003', 'D-6: third clone of "Idle" → "Idle.003"');
 }
+// D-6 citation updated by Stage 1.F audit-fix D-1:
+// the citation moved from `BKE_main_namemap_get_unique_name:450` (which
+// pointed inside `id_name_final_build`'s body, not the public API) to
+// the corrected pair: `id_name_final_build` (`main_namemap.cc:441` —
+// the actual algorithmic mirror) + `BKE_main_namemap_get_unique_name`
+// (`main_namemap.cc:582` — the public API entry point). The pin now
+// asserts BOTH citations are present.
 assert(
   fileFlatMatches(
     'src/anim/actionRegistry.js',
-    /BKE_main_namemap_get_unique_name.*main_namemap\.cc:450/,
+    /id_name_final_build[\s\S]{0,100}main_namemap\.cc:441/,
   ),
-  'D-6: actionRegistry.nextDotNNNName JSDoc cites BKE_main_namemap_get_unique_name',
+  'D-6: actionRegistry.nextDotNNNName JSDoc cites id_name_final_build at main_namemap.cc:441 (Stage 1.F audit-fix D-1)',
+);
+assert(
+  fileFlatMatches(
+    'src/anim/actionRegistry.js',
+    /BKE_main_namemap_get_unique_name[\s\S]{0,100}main_namemap\.cc:582/,
+  ),
+  'D-6a: actionRegistry.nextDotNNNName JSDoc cites public API at main_namemap.cc:582 (Stage 1.F audit-fix D-1)',
 );
 
 // D-5 — ActionsEditor JSDoc on Duplicate deviation

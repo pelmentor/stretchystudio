@@ -23,6 +23,27 @@
  *
  * Reference: reference/live2d-sample/Hiyori/runtime/motion/hiyori_m01.motion3.json
  *
+ * # Loop semantics — Blender deviation (Stage 1.F audit-fix D-2)
+ *
+ * Blender's `bAction` carries an `ACT_CYCLIC` flag bit (`(1 << 13)` per
+ * `reference/blender/source/blender/makesdna/DNA_action_types.h:385-386`)
+ * that signals the Action is intended to loop. Per the bit's doccomment,
+ * `ACT_CYCLIC` requires `ACT_FRAME_RANGE` to also be set (the cycle
+ * boundaries come from the explicit frame range).
+ *
+ * SS does NOT honor `action.flag & ACT_CYCLIC` today. Live2D motions
+ * loop by convention (Hiyori's reference motion3 files all have
+ * `Loop: true`); Stage 1.F ships hardcoded `Loop: true` to preserve the
+ * existing exporter behavior. The ACT_CYCLIC integration is deferred to
+ * Phase 6 (or whichever phase ships a Cyclic-toggle UI in
+ * `ActionsEditor`); the field is reserved on the Action shape (see
+ * `v36_action_datablock.js:273-281` ACT_CYCLIC bit set) but not yet
+ * read here. **No `opts.loop` parameter** — the prior version exposed
+ * one but no caller passed it (Rule №2: callable-by-no-one is a Rule
+ * №1 anti-pattern). When the Cyclic toggle ships, the contract becomes:
+ * `Loop = (action.flag & ACT_CYCLIC) !== 0`, no opts override, and the
+ * exporter reads from canonical action state.
+ *
  * @module io/live2d/motion3json
  */
 
@@ -33,12 +54,14 @@ import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
  *
  * @param {object} action - From project.actions[]
  * @param {object} [opts]
- * @param {boolean} [opts.loop=true] - Whether the motion should loop
  * @param {Map<string, string>} [opts.parameterMap] - nodeId+property → Live2D parameter ID
  * @returns {object} JSON-serializable .motion3.json structure
  */
 export function generateMotion3Json(action, opts = {}) {
-  const { loop = true, parameterMap = new Map() } = opts;
+  const { parameterMap = new Map() } = opts;
+  // Loop = true (hardcoded). See module JSDoc "Loop semantics" deviation
+  // — ACT_CYCLIC integration deferred to Cyclic-toggle UI.
+  const loop = true;
 
   const durationSec = (action.duration ?? 2000) / 1000;
   const fps = action.fps ?? 24;

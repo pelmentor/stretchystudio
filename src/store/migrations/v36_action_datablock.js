@@ -39,7 +39,10 @@
  *
  *   - `animation` → `action`: spread fields verbatim, rename `tracks` →
  *     `fcurves` via `trackToFCurveInline`, default `flag = 0`, default
- *     `meta = { source: 'authored' }`.
+ *     `meta = { source: 'authored' }` (Stage 1.F audit-fix D-10
+ *     deviation: `meta` is SS-specific; Blender's `bAction` has no
+ *     `meta` field — see `actionRegistry.js#cloneAction` Audit-fix
+ *     D-7 from Stage 1.E for the per-clone semantic).
  *   - `track.paramId='X'` → `fcurve.rnaPath='objects["__params__"].values["X"]'`.
  *   - `track.nodeId='Y' + property='Z'` → `fcurve.rnaPath='objects["Y"].Z'`.
  *     Bracket-string keys use double-quotes to match Blender's RNA
@@ -64,6 +67,31 @@
  * to double-quoted. This is idempotent (re-running on already-double
  * paths is a no-op) and keeps the strict-double decoder safe — by the
  * time the runtime decoder sees a project, every fcurve is canonical.
+ *
+ * # SS-specific shape deviations from Blender `bAction`
+ *
+ * **`action.id` vs Blender `ID.name = "AC<actionname>"` (Stage 1.F audit-fix D-8):**
+ * Blender's `bAction` carries `ID id` as its first field (per
+ * `DNA_action_types.h:1059-1060`); the ID name carries a 2-char type
+ * prefix (`"AC"` for Actions; sister to `ID_SCE = MAKE_ID2('S', 'C')`
+ * in `DNA_ID_enums.h:133` for Scene's "SC" prefix). A Blender Action
+ * created with `BKE_action_add(&bmain, "Idle")` ends up with
+ * `id.name == "ACIdle"`. SS uses TWO separate fields: `id` (UUID-style
+ * stable identifier, never user-edited) + `name` (display string,
+ * user-editable). The id is stable across renames in SS; in Blender
+ * renaming an Action also rewrites `id.name`. Stage 1.E's rename UX
+ * relies on this distinction — a Blender-trained dev should not
+ * confuse `action.id` with the display name.
+ *
+ * **`audioTracks` SS-only field (Stage 1.F audit-fix D-9):** Blender's
+ * `bAction` (`DNA_action_types.h:1053-1126`) has NO `audioTracks` field
+ * — audio in Blender is the Sequencer's domain (separate datablocks:
+ * `Sequence`/`SoundStrip` in `DNA_sequence_types.h`); Actions don't
+ * own audio. SS preserves `audioTracks` through this migration verbatim
+ * to keep the legacy idle-generator's audio-cue contract working
+ * (per the Lossless guarantee below — every legacy field carries
+ * forward). Phase 6+ (or whichever phase ships a Sequencer-equivalent)
+ * may rehome this field then.
  *
  * # Out of scope (later stages)
  *
@@ -233,8 +261,31 @@ function normalizeRnaPathQuotes(rna) {
  *     (`DNA_anim_enums.h:386` — `eNlaStrip_Extrapolate_Mode`). Same
  *     shared-enum story.
  *   - `slotHandle = 0`: AnimData.slot_handle initial = 0 (= "unassigned"
- *     sentinel; Blender 4.4+ slot system).
+ *     sentinel; Blender 4.4+ slot system). Stage 1.F audit-fix D-11
+ *     deviation: SS doesn't have a slot table at all (`bAction.slot_array`
+ *     is unimplemented in Phase 1); `slotHandle: 0` is reserved for
+ *     the future slot table and effectively a no-op pointer today.
+ *     Phase 4 NLA work will introduce real slots.
  *   - `flag = 0`: AnimData.flag bitmask zero-init.
+ *
+ * # `actionInfluence = 1` BKE-runtime override deviation (Stage 1.F audit-fix D-4)
+ *
+ * The `1.0f` value is NOT what the DNA struct initialises to. Blender's
+ * `AnimData` struct value-inits `act_influence` to `0.0f`
+ * (`DNA_anim_types.h:737`), and the runtime override to `1.0f` happens
+ * inside `BKE_animdata_ensure_id` (`anim_data.cc:105-129`) — which is
+ * called LAZILY by `BKE_animdata_from_id` on first access for Blender
+ * IDs that don't already have an `adt`.
+ *
+ * SS adopts the BKE-runtime default (`1.0f`) directly because we
+ * eagerly create AnimData on every Object node (`type ∈ {'part',
+ * 'group'}`) at migration time — there's no lazy-create path through
+ * `BKE_animdata_ensure_id` to apply the override later. Without the
+ * override, SS Objects would default to "no influence" rather than
+ * "fully influencing," which is wrong for the user-facing semantic
+ * ("a bound action plays"). Sister deviation in v37 (`__scene__`
+ * pseudo-Object) uses identical reasoning — see
+ * `v37_scene_anim_data.js:77-85` for the parallel writeup.
  *
  * @returns {object}
  */

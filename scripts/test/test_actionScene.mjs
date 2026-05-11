@@ -141,6 +141,23 @@ function makeProject() {
 }
 
 // ── 4. getActiveSceneAction prefers scene binding over fallback ────────────
+//
+// DEVIATION FROM BLENDER (Stage 1.F audit-fix D-6):
+// Blender does NOT auto-compose "scene's action OR editor's pinned
+// action." Each consumer reads its own slot directly:
+//   - Exporter reads `BKE_animdata_from_id(&scene->id)->action`
+//   - Action Editor reads its own pinned-slot pointer
+//   - Object animation reads `BKE_animdata_from_id(&object->id)->action`
+//
+// SS's "scene wins over UI fallback" composition is a Phase-1 BRIDGE
+// for legacy UI behaviour (pre-Stage-1.E consumers that read
+// `useAnimationStore.activeActionId`). Phase 1.E callers that own the
+// bound-action UX should consume `getSceneAction(project)` directly
+// (no fallback) and reserve `getActiveSceneAction` for shared transport
+// widgets that legitimately want either. See `sceneAction.js:148-164`
+// for the Phase-scope warning that applies once per-Object adt
+// evaluation lands (Phase 2+ skeletal animation alongside scene-bound
+// facial expression action).
 
 {
   const project = makeProject();
@@ -176,32 +193,42 @@ function makeProject() {
   assertEq(p1.animData.actionId, null, '5c: p1 binding nulled by cascade');
 }
 
-// ── 6. Exporter equivalence: motion3 export is identical regardless of binding
+// ── 6. Exporter equivalence: motion3 carries no __scene__ leakage ──────────
+//
+// Stage 1.F audit-fix G-5 reframe: byte-identity here is near-tautological
+// — both calls feed the same `action` object to a pure function (the
+// migration is idempotent, both projects are deep-equal). The non-trivial
+// claim worth pinning is the ABSENCE OF LEAKAGE — that no scene-special
+// metadata (`__scene__` markers, scene-binding flags, etc.) appears in
+// the motion3.json output regardless of which node holds the binding.
+// If a future refactor accidentally piped binding state into the
+// generator (e.g. as an "is scene action?" flag affecting Loop), this
+// would catch it.
 
 {
-  // Bind to scene.
   const projectScene = makeProject();
   assignAction(projectScene, '__scene__', 'idle');
   const sceneAction = projectScene.actions.find((a) => a.id === 'idle');
 
-  // Bind to regular Object.
   const projectObj = makeProject();
   assignAction(projectObj, 'p1', 'idle');
   const objAction = projectObj.actions.find((a) => a.id === 'idle');
 
-  // The action object itself is identical post-migration; the binding
-  // ONLY affects the UI's "active" pointer, never the action contents.
-  // Rendering motion3 from each yields identical JSON.
   const m1 = generateMotion3Json(sceneAction);
   const m2 = generateMotion3Json(objAction);
-  assertEq(m1, m2,
-    '6: motion3 from scene-bound vs object-bound action is byte-identical');
 
-  // No scene-special metadata leaked into either.
+  // The non-trivial assertion: NO leakage of binding state into output.
   assert(!JSON.stringify(m1).includes('__scene__'),
-    '6a: motion3 carries no __scene__ marker');
+    '6: motion3 (scene-bound action) has no __scene__ leakage');
   assert(!JSON.stringify(m2).includes('__scene__'),
-    '6b: motion3 (object-bound) has no leakage either');
+    '6a: motion3 (object-bound action) has no __scene__ leakage');
+  // Sanity: structural shape matches across both (since both pull from
+  // the same migration output). Not a tautology guarantee — pinned for
+  // signal that the binding-agnostic invariant didn't drift mid-refactor.
+  assertEq(m1.Curves.length, m2.Curves.length,
+    '6b: motion3 curve count is binding-agnostic');
+  assertEq(m1.Meta.Fps, m2.Meta.Fps,
+    '6c: motion3 Meta.Fps is binding-agnostic');
 }
 
 // ── 7. Exporter input is binding-agnostic: project.actions[] structural eq ─

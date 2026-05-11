@@ -31,6 +31,22 @@ import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
  * Both kinds may coexist within the same action; the writer collects the union
  * of paramIds across all sources and emits one CMvAttrF per param per scene.
  *
+ * # Per-param range resolution (Stage 1.F audit-fix G-2)
+ *
+ * `paramInfoList` carries the {min, max, rest} that the per-paramfcurve
+ * range slider in Cubism Editor reads. Three sources, in priority order:
+ *   1. `deformerParamMap` entry (rotation deformers — known min/max from
+ *      the deformer config).
+ *   2. `parameters` array entry (`project.parameters[]` — the canonical
+ *      param spec that cmo3writer + cdi3writer also use; Stage 1.F
+ *      closes the previous hardcoded `-1..1` fallback gap so
+ *      idle-generator / AI-motion params get their actual ranges).
+ *   3. Cubism standard fallback `{min: -1, max: 1, rest: 0}` — the
+ *      default range for an unrecognised paramId. Should NOT trigger
+ *      for any production export (idle gen explicitly registers params
+ *      in `project.parameters[]`); fires only for synthetic test
+ *      fixtures or hand-edited projects with un-registered fcurves.
+ *
  * @param {object} input
  * @param {object[]} input.actions - SS actions [{name, duration, fps, fcurves, ...}]
  * @param {Map<string, {paramId, min, max, rest?}>} input.deformerParamMap - groupId → param info
@@ -38,6 +54,9 @@ import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
  * @param {number} input.canvasW
  * @param {number} input.canvasH
  * @param {string} [input.modelName]
+ * @param {Array<{id: string, min?: number, max?: number, defaultVal?: number}>} [input.parameters] -
+ *   `project.parameters[]` — used to resolve per-param ranges for fcurves
+ *   targeting params that aren't in `deformerParamMap`. Default `[]`.
  * @returns {Promise<Uint8Array>} .can3 CAFF archive
  */
 export async function generateCan3(input) {
@@ -45,7 +64,12 @@ export async function generateCan3(input) {
     actions, deformerParamMap,
     cmo3FileName, canvasW, canvasH,
     modelName = 'StretchyStudio Export',
+    parameters = [],
   } = input;
+  const paramSpecById = new Map();
+  for (const p of parameters) {
+    if (p && typeof p.id === 'string') paramSpecById.set(p.id, p);
+  }
 
   const x = new XmlBuilder();
 
@@ -87,16 +111,18 @@ export async function generateCan3(input) {
       if (!target || target.kind !== 'param') continue;
       if (seenParamIds.has(target.paramId)) continue;
       seenParamIds.add(target.paramId);
-      // FCurves don't carry per-curve range metadata; fall back to the
-      // standard Cubism range. Per-param overrides come from `paramSpec`
-      // via the `deformerParamMap` entries above. The action's own range
-      // info, if needed in future, would be sourced from
-      // `project.parameters[].{min,max,defaultVal}`.
+      // FCurves don't carry per-curve range metadata. Resolve from
+      // `project.parameters[]` (Stage 1.F audit-fix G-2 — closes the
+      // previous hardcoded `-1..1` fallback that surfaced as wrong-range
+      // sliders in Cubism Editor for idle-generator / AI-motion params).
+      // Cubism standard `-1..1, rest:0` is the absolute fallback when
+      // the param is registered nowhere.
+      const spec = paramSpecById.get(target.paramId);
       paramInfoList.push({
         paramId: target.paramId,
-        min: -1,
-        max: 1,
-        rest: 0,
+        min: typeof spec?.min === 'number' ? spec.min : -1,
+        max: typeof spec?.max === 'number' ? spec.max : 1,
+        rest: typeof spec?.defaultVal === 'number' ? spec.defaultVal : 0,
       });
     }
   }

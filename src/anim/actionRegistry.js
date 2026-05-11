@@ -97,17 +97,37 @@ import { uid } from '../lib/ids.js';
 /**
  * Compute Blender-faithful `.NNN` suffix for a clone's display name.
  *
- * Mirrors `BKE_main_namemap_get_unique_name`
- * (`reference/blender/source/blender/blenkernel/intern/main_namemap.cc:450`):
- * scans `actions[]` for siblings already matching `${base}\.(\d{3})`,
- * picks `max(NNN) + 1`, zero-pads to three digits. When no `.NNN`
- * sibling exists yet, returns `${base}.001`. (Audit-fix D-6 Stage 1.E
- * — replaces the prior ` Copy` suffix to match Blender's convention.)
+ * Mirrors the algorithmic shape of Blender's `id_name_final_build`
+ * (`reference/blender/source/blender/blenkernel/intern/main_namemap.cc:441`),
+ * the static helper that produces the `.NNN` suffix string. The public
+ * API entry point is `BKE_main_namemap_get_unique_name`
+ * (`main_namemap.cc:582`), which calls through to `id_name_final_build`
+ * via the `namemap_get_name` orchestrator (`:516`). The format
+ * `fmt::format("{}.{:03}", base_name, number)` lives at the bottom of
+ * `id_name_final_build` and encodes the same `name.NNN` convention SS
+ * implements here: scan siblings for the matching base, pick
+ * `max(NNN) + 1`, zero-pad to three digits, fallback to `${base}.001`
+ * when no `.NNN` sibling exists yet. (Audit-fix D-6 Stage 1.E —
+ * replaces the prior ` Copy` suffix to match Blender's convention;
+ * Audit-fix D-1 Stage 1.F — corrects the prior citation that
+ * referenced `BKE_main_namemap_get_unique_name:450` — line 450 is
+ * inside `id_name_final_build`'s static body, not the public API.)
  *
- * The `base` value is the source's `name` verbatim — we don't strip an
- * existing trailing `.NNN`, matching Blender's behavior of producing
- * `Foo.001.001` when the user duplicates `Foo.001` (then on the next
- * dup `Foo.001.002`, etc.). Surprising but consistent with Blender.
+ * **Deviations from Blender:**
+ *   - SS scans only the `actions[]` array passed in. Blender's
+ *     `BKE_main_namemap_get_unique_name` walks the entire `Main`
+ *     namemap covering ALL ID types, since Action names must be unique
+ *     across the whole `Main->actions` ListBase (no per-collection
+ *     scoping). SS today has only a single `project.actions[]`
+ *     collection so the per-array scan is functionally equivalent.
+ *   - SS does NOT strip an existing trailing `.NNN` from `base`. The
+ *     `base` value is the source's `name` verbatim — duplicating
+ *     `Foo.001` produces `Foo.001.001` (then `Foo.001.002` on the
+ *     next dup). Blender's `id_name_final_build` ALSO doesn't strip
+ *     in the typical clone path (see `:441-516` — the suffix-stripping
+ *     logic in the `Main`-walker is for collision avoidance during
+ *     fresh-name generation, not duplication). Surprising but
+ *     consistent with Blender.
  *
  * @param {Array<{name?: string}>} actions
  * @param {string} base

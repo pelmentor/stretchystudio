@@ -1,6 +1,24 @@
 // Animation Phase 1 Stage 1.F — Action datablock migration smoke pin.
 //
-// `test_migration_v36.mjs` carries the deep coverage (47 assertions) of
+// # Role of this test (Stage 1.F audit-fix G-7)
+//
+// The plan §1.F test list names this entry explicitly
+// (`test_actionDatablock_migration.mjs`); the implementation reuses the
+// existing `test_migration_v36.mjs` deep-coverage suite (56 assertions
+// over 10 cases) for everything *inside* the v36 conversion. This file
+// is intentionally kept as a thin **smoke pin** at the Phase-1 exit gate
+// level: it asserts that the v36 conversion's high-level invariants are
+// reachable through `migrateProject` (the public entry point that the
+// project loader uses) — NOT just the lower-level `migrateActionDatablock`
+// function. The redundancy is deliberate: a refactor that leaves
+// `migrateActionDatablock` working but breaks its registration in
+// `projectMigrations.js`'s walker would pass the deep test (which
+// imports the function directly) but fail this smoke pin (which goes
+// through the walker). Sister: `test_migration_v37.mjs` covers the
+// `__scene__` pseudo-Object insertion in detail; the §4 chained walk
+// here pins that v37 chains correctly after v36 through the walker.
+//
+// `test_migration_v36.mjs` carries the deep coverage (56 assertions) of
 // the v35→v36 conversion; this test is the Phase-1-exit-gate smoke pin
 // that locks down the high-level invariants surfaced by the plan
 // (`docs/plans/ANIMATION_BLENDER_PARITY_PLAN.md` §1.F):
@@ -145,6 +163,38 @@ function assertEq(actual, expected, name) {
     '3: param rnaPath uses double-quoted keys');
   assertEq(nodeFc.rnaPath, 'objects["leftArm"].rotation',
     '3a: node rnaPath uses double-quoted nodeId key');
+}
+
+// ── 3b. Escape-grammar contract — Stage 1.F audit-fix D-5 ─────────────────
+
+{
+  // Blender's RNA tokenizer (`rna_path.cc:99-191`) supports escaped
+  // double-quotes inside bracket-string keys (`["Some\"Quote"]` →
+  // `Some"Quote`). SS does NOT — `decodeFCurveTarget` uses `[^"]+`
+  // greedy regex which would silently mis-tokenise. SS validates id
+  // namespaces to `[a-zA-Z0-9_-]+`-ish at id-construction time, so the
+  // gap is latent today. This test pins the contract: a paramId
+  // containing `"` (constructed via hand-edited project — bypassing
+  // validators) decodes as the truncated prefix, NOT the escaped form.
+  const { decodeFCurveTarget } = await import('../../src/anim/animationFCurve.js');
+  // A hand-edited rnaPath with embedded `"` — what Blender would
+  // accept as `Some"Quote`, SS mis-tokenises. Param-pattern fails
+  // (the inner `"` closes the bracket-string early; remaining `Quote"]`
+  // doesn't match `"]$`). Node-pattern then captures `__params__` as
+  // nodeId and `values["Some"Quote"]` as property — silent mis-routing
+  // to the wrong target kind. Worse than null because callers see
+  // `kind: 'node'` and try to look up `__params__` as an Object.
+  const malformed = decodeFCurveTarget({
+    rnaPath: 'objects["__params__"].values["Some"Quote"]',
+  });
+  assert(malformed?.kind === 'node',
+    '3b: rnaPath with embedded `"` mis-tokenises as node-target (latent gap; SS validators reject `"` in ids today so this can\'t happen via normal paths)');
+  assertEq(malformed.nodeId, '__params__',
+    '3c: malformed path yields wrong nodeId (would target __params__ instead of param)');
+  // The take-away: if SS ever loosens id grammar to permit `"`, the
+  // `decodeFCurveTarget` regex MUST be updated to escape-aware
+  // tokenisation per Blender's rna_path.cc:99-191 — flagged in the
+  // function's JSDoc.
 }
 
 // ── 4. v17 → CURRENT chain: full migration walk lands at current ──────────

@@ -143,6 +143,25 @@ export function buildNodeFCurve(nodeId, property, keyforms, opts = {}) {
  * `duplicateNode` / `deleteNode`, and any UI that wants to know "what
  * does this fcurve animate?".
  *
+ * # Escape grammar — Blender deviation (Stage 1.F audit-fix D-5)
+ *
+ * SS rnaPath bracket-string keys do NOT support embedded double-quotes
+ * — the regex `[^"]+` greedily matches anything-but-quote. Blender's
+ * RNA tokenizer DOES support escaped quotes inside bracket-string
+ * keys: see `reference/blender/source/blender/makesrna/intern/rna_path.cc:99-191`
+ * (`rna_path_token_in_brackets`), which uses
+ * `BLI_str_unescape` + `BLI_str_escape_find_quote` (lines 130, 170)
+ * to handle `["Some\"Quote"]` → `Some"Quote`.
+ *
+ * SS id namespaces are validated to a strict charset
+ * (`[a-zA-Z0-9_-]+`-ish) at id-construction time — paramId validators
+ * in projectStore + nodeId validators in nodeOps both reject characters
+ * that would need escaping. Therefore the simpler regex is sufficient
+ * for SS today. **If SS ever loosens id grammar to permit `"` in ids,
+ * this decoder + the v36 migration's `normalizeRnaPathQuotes` helper
+ * MUST adopt the escape-aware Blender path** — the `[^"]+` regex would
+ * silently mis-tokenise an id like `'foo"bar'` as just `'foo'`.
+ *
  * @param {FCurve} fcurve
  * @returns {{kind:'param', paramId:string} | {kind:'node', nodeId:string, property:string} | null}
  */

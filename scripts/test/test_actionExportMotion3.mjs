@@ -28,6 +28,20 @@
 //   - The byte-fidelity gate vs. Hiyori reference → that's the manual
 //     Cubism Viewer .moc3/.motion3 round-trip in Phase 1.G
 //
+// # PHASE-SCOPE WARNING (Stage 1.F audit-fix D-7 — Phase 4 NLA prep)
+//
+// Today's "per-Action contract — each Action exports INDEPENDENTLY" is
+// correct for Phase 1's single-Action-at-a-time playback model AND for
+// the Live2D motion3.json file format (one motion = one file). Once
+// Phase 4 lands NLA strips (Blender `NlaStrip` per `DNA_anim_types.h:425-499`
+// — blendmode / extendmode / start / end / repeat / scale / influence),
+// an Action may be sliced/blended across multiple strips before export,
+// and a single motion3.json may aggregate multiple Action contributions
+// through the AnimData.nla_tracks stack. Sister marker on the can3 side
+// (test_actionExportCan3.mjs) and on `animationCompile.js` (Stage 1.F-pre
+// audit-fix D-4). The "one Action → one motion3" assertions WILL change
+// shape; update this test in lockstep with the Phase 4 exporter rewire.
+//
 // Run: node scripts/test/test_actionExportMotion3.mjs
 
 import { generateMotion3Json } from '../../src/io/live2d/motion3json.js';
@@ -53,14 +67,14 @@ function near(a, b, eps = 1e-9) { return Math.abs(a - b) <= eps; }
 /**
  * Build a minimal action with given fcurves[] and metadata.
  */
-function makeAction({ id = 'a1', name = 'A1', fps = 30, duration = 1000, fcurves = [] } = {}) {
+function makeAction({ id = 'a1', name = 'A1', fps = 30, duration = 1000, fcurves = [], flag = 0 } = {}) {
   return {
     id, name, fps, duration,
     fcurves: fcurves.map((fc) => ({
       arrayIndex: 0, modifiers: [], extrapolation: 'constant',
       ...fc,
     })),
-    audioTracks: [], flag: 0, meta: { source: 'authored' },
+    audioTracks: [], flag, meta: { source: 'authored' },
   };
 }
 
@@ -175,14 +189,32 @@ function nodeFcurve(nodeId, property, kfs) {
     '4b: TotalPointCount sums across curves (3+2)');
 }
 
-// ── 5. Loop flag override via opts ─────────────────────────────────────────
+// ── 5. Loop = true hardcoded (Stage 1.F audit-fix D-2 deviation) ──────────
 
 {
-  const action = makeAction({ fcurves: [paramFcurve('P', [{ time: 0, value: 0 }])] });
-  const looped = generateMotion3Json(action, { loop: true });
-  const oneshot = generateMotion3Json(action, { loop: false });
-  assertEq(looped.Meta.Loop, true, '5: loop=true honoured');
-  assertEq(oneshot.Meta.Loop, false, '5a: loop=false honoured');
+  // Per `motion3json.js` module JSDoc "Loop semantics — Blender deviation":
+  // SS does NOT honor `action.flag & ACT_CYCLIC` today. Live2D motions loop
+  // by convention; the Cyclic toggle is deferred to a future UI phase.
+  // The prior `opts.loop` parameter was dropped (Rule №2: callable-by-no-one
+  // is a Rule №1 anti-pattern — no production caller ever passed it).
+  const action = makeAction({
+    flag: 0,                                        // ACT_CYCLIC bit NOT set
+    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }])],
+  });
+  const m = generateMotion3Json(action);
+  assertEq(m.Meta.Loop, true,
+    '5: Loop=true hardcoded (ACT_CYCLIC integration deferred to Cyclic-toggle UI)');
+
+  // Even with ACT_CYCLIC bit set, today's Loop is unchanged from the
+  // hardcoded default. When the Cyclic UI ships, this assertion flips to
+  // assert that `flag & ACT_CYCLIC` drives Loop.
+  const cyclic = makeAction({
+    flag: 1 << 13,                                  // ACT_CYCLIC = (1 << 13)
+    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }])],
+  });
+  const m2 = generateMotion3Json(cyclic);
+  assertEq(m2.Meta.Loop, true,
+    '5a: Loop=true regardless of ACT_CYCLIC bit (deferred integration)');
 }
 
 // ── 6. Empty action → valid skeleton with zero curves ──────────────────────
@@ -236,6 +268,14 @@ function nodeFcurve(nodeId, property, kfs) {
     '8a: single-kf segment array = [time, value] (2 floats)');
   assert(near(m.Curves[0].Segments[0], 0.5), '8b: time in seconds (500ms→0.5)');
   assert(near(m.Curves[0].Segments[1], 0.7), '8c: value preserved');
+  // Stage 1.F audit-fix G-11: lock down the segments-vs-points contract
+  // for 1-kf curves. Per `countSegmentsAndPoints` (motion3json.js:231),
+  // a 2-float array has 0 segment-types (segCount=0) and 1 anchor point
+  // (ptCount=1). Phase 1.G byte-fidelity gate cares about Meta accuracy.
+  assertEq(m.Meta.TotalSegmentCount, 0,
+    '8d: single-kf curve contributes 0 segments (no segment-type byte)');
+  assertEq(m.Meta.TotalPointCount, 1,
+    '8e: single-kf curve contributes 1 anchor point');
 }
 
 // ── 9. Untargetable fcurve dropped: rnaPath malformed → null target ────────

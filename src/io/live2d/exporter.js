@@ -622,6 +622,10 @@ export async function exportLive2DProject(project, images, opts = {}) {
       onProgress('Generating .can3 animation...');
       const can3 = await generateCan3({
         actions, deformerParamMap, cmo3FileName, canvasW, canvasH, modelName,
+        // Stage 1.F audit-fix G-2: pass param spec so fcurve-only paths
+        // (idle generator / AI-motion params) get their actual ranges
+        // instead of the hardcoded `-1..1` fallback.
+        parameters: paramSpec,
       });
       zip.file(`${modelName}.can3`, can3);
     }
