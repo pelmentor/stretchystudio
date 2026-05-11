@@ -12,7 +12,7 @@ remain user-side). Branch ahead of `origin/master` by 34 commits at HEAD
 
 | Commit  | What |
 |---------|------|
-| _pending_ | Phase 7.D — wire 11 orphan test files into `npm test`, resolve `vTB+1`/`vTB+2` schema placeholders to v33/v34 (+ note v35 sister), mark Top-12 + per-mode coverage as ✅ shipped, mark Phase 0–7.C exit checklists complete. |
+| `59fedac` | Phase 7.D — wire 11 orphan test files into `npm test`, resolve `vTB+1`/`vTB+2` schema placeholders to v33/v34 (+ note v35 sister), mark Top-12 + per-mode coverage as ✅ shipped, mark Phase 0–7.C exit checklists complete. |
 
 (Close-out doc commit follows separately.)
 
@@ -137,7 +137,7 @@ Phase 7.D added no new hotkeys (substrate fix + docs, not feature).
 | Order | Commit  | What |
 |-------|---------|------|
 | ...   | (33 from earlier 2026-05-11 close-outs) | Phases 0-7.C ship + 9 audit-fix sweeps + close-outs + Phase 8 (initial + audit-fix + close-out) |
-| 34    | _pending_ | Phase 7.D — wire 11 orphan test files + resolve plan §6 placeholders + mark §14 + §15 shipped |
+| 34    | `59fedac` | Phase 7.D — wire 11 orphan test files + resolve plan §6 placeholders + mark §14 + §15 shipped |
 
 ## Schemas after Phase 7.D
 

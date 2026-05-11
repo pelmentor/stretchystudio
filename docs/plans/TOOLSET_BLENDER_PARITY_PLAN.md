@@ -223,7 +223,8 @@ selectMode operators (box / circle / lasso)
                                     ^ Phase 1 + Phase 6; consume vertex selection in Edit Mode,
                                       part list in Object Mode
 
-src/lib/snap.js                     ^ Phase 2; spatial hash on rest verts;
+src/lib/snap/                       ^ Phase 2; index.js + snapHash.js + snapMath.js;
+                                      spatial hash on rest verts;
                                       consumed by ModalTransformOverlay
 
 src/lib/sculpt/
@@ -291,7 +292,7 @@ picks up small adjacent wins. Phase 7 closes per-mode coverage
 (Object / Weight Paint / Pose) — these tools are mostly independent
 of each other and could ship in any internal order, but they all
 benefit from Phase 0's selection-aware foundations and Phase 2's snap
-module. **Cross-plan note:** Phase 2's `src/lib/snap.js` exposes
+module. **Cross-plan note:** Phase 2's `src/lib/snap/snapMath.js` exposes
 `snapToIncrement(value, increment)` which the animation plan's Phase
 5 Graph Editor imports for snap-to-frame.
 
@@ -887,7 +888,7 @@ function getBoundaryVerts(mesh) {
 }
 ```
 
-Implementation: [src/io/meshTopology.js] gains `getBoundaryVerts(mesh)
+Implementation: [src/lib/meshTopology.js] gains `getBoundaryVerts(mesh)
 → Set<vertIndex>` (cached, with epsilon-area degenerate filter).
 Test fixture covers a mesh with internal seam triangles.
 
@@ -974,8 +975,9 @@ the visual transform — so there is no "visual" vs "local" split to
 collapse. Speccing it would be Rule №2 baggage. Deferred until a real
 parent-transform stack is in scope.)
 
-Implementation: [src/v3/operators/apply/menu.js] + register existing
-operators with proper IDs.
+Implementation (post-ship): operators registered inline in
+[src/v3/operators/registry.js] (`apply.poseAsRest` + `apply.armatureModifier`);
+UI popover at [src/v3/shell/ApplyMenu.jsx] backed by `applyMenuStore.js`.
 
 #### 6.D — Circle Select (`C`)
 
@@ -986,8 +988,11 @@ Modes:
 - LMB-drag: add to selection
 - Shift+LMB-drag: subtract from selection
 
-Implementation: [src/v3/operators/select/circle.js] + overlay,
-~150 LOC.
+Implementation (post-ship): `selection.circleSelect` registered inline in
+[src/v3/operators/registry.js]; modal overlay at
+[src/v3/editors/viewport/overlays/CircleSelectOverlay.jsx]; modal state in
+[src/store/circleSelectStore.js]; hit-test helpers `verticesInCircle` +
+`partsInCircle` in [src/io/hitTest.js].
 
 #### 6.E — Tests
 
@@ -1084,7 +1089,9 @@ Three options menu:
   keeps the parent relationship (rarely useful in 2D; included for
   parity)
 
-Implementation: [src/v3/operators/object/clearParent.js], ~70 LOC.
+Implementation (post-ship): `object.clearParent.{clear,clearKeepTransform,clearInverse}`
+operators registered inline in [src/v3/operators/registry.js]; `Alt+P`
+popover at [src/v3/shell/ClearParentMenu.jsx].
 
 ##### 7.A.5 — Set Origin (right-click → Set Origin)
 
@@ -1405,51 +1412,55 @@ below.)
 
 ## 9. File index
 
-### New files
+### New files (post-ship reality, audit-fixed 2026-05-11 Phase 7.D sweep)
+
+The original plan envisioned a per-operator file split (`select/box.js`,
+`select/lasso.js`, `pose/clearLocation.js`, etc.). At ship time many
+small operators were inlined directly into `src/v3/operators/registry.js`
+or co-located with related ops, and several overlays moved from
+`src/v3/shell/` to `src/v3/editors/viewport/overlays/`. The table below
+reflects what actually shipped, not the original paper plan.
 
 | Path | Phase | What |
 |------|-------|------|
 | src/v3/editors/viewport/overlays/VertexSelectionOverlay.jsx | 0 | Selected vert dots |
-| src/v3/operators/select/box.js | 1 | Box select |
-| src/v3/operators/select/lasso.js | 1 | Lasso select |
-| src/v3/operators/select/circle.js | 6 | Circle select |
-| src/v3/operators/select/linked.js | 6 | Select linked |
-| src/v3/shell/BoxSelectOverlay.jsx | 1 | Modal capture overlay |
-| src/v3/shell/LassoSelectOverlay.jsx | 1 | Modal capture overlay |
-| src/v3/shell/CircleSelectOverlay.jsx | 6 | Modal capture overlay |
-| src/lib/snap.js | 2 | Spatial hash + snap math |
+| src/v3/operators/registry.js (inline `selection.boxSelect`, `selection.lassoSelect`, `selection.circleSelect`) | 1, 6 | Box / Lasso / Circle select operators (registered inline) |
+| src/v3/operators/select/linked.js | 6 | Select Linked (cursor flood-fill + selection expand) |
+| src/v3/editors/viewport/overlays/BoxSelectOverlay.jsx | 1 | Modal capture overlay (renders BOTH box + lasso gestures) |
+| src/v3/editors/viewport/overlays/CircleSelectOverlay.jsx | 6 | Modal capture overlay |
+| src/store/boxSelectStore.js | 1 | Box/lasso modal state |
+| src/store/circleSelectStore.js | 6 | Circle modal state |
+| src/lib/snap/index.js + snapHash.js + snapMath.js | 2 | Spatial hash + snap math + entry point |
 | src/lib/sculpt/index.js | 3 | Brush registry |
-| src/lib/sculpt/grab.js | 3 | Grab brush |
+| src/lib/sculpt/grab.js | 3 | Grab brush (anchored per audit) |
 | src/lib/sculpt/smooth.js | 3 | Smooth brush |
-| src/lib/sculpt/inflate.js | 3 | Inflate brush |
-| src/v3/editors/viewport/overlays/SculptCursorOverlay.jsx | 3 | Cursor circle render |
+| src/lib/sculpt/pinch.js | 3 | Pinch brush (renamed from `inflate.js` per Phase 3 audit D-7) |
+| (sculpt cursor) | 3 | Rendered inline in `src/components/canvas/CanvasViewport.jsx` (no separate overlay file) |
 | src/v3/operators/edit/merge.js | 4 | Merge operators |
 | src/v3/operators/edit/dissolve.js | 4 | Dissolve operators |
 | src/v3/operators/edit/subdivide.js | 4 | Subdivide |
 | src/v3/operators/edit/extrude.js | 5 | Extrude |
 | src/v3/operators/edit/duplicate.js | 6 | Duplicate |
-| src/v3/operators/apply/menu.js | 6 | Apply menu |
-| src/io/meshTopology.js | 5 | Boundary detection (and shared topology helpers) |
-| src/v3/operators/object/snap.js | 7.A | Object Mode Snap menu |
+| src/v3/shell/ApplyMenu.jsx + applyMenuStore.js | 6 | Apply menu popover (UI; ops registered inline in registry.js) |
+| src/lib/meshTopology.js | 5 | Boundary detection (and shared topology helpers) — under `lib/` not `io/` |
+| src/v3/operators/object/snap.js | 7.A | Object Mode Snap menu ops |
 | src/v3/shell/SnapMenu.jsx | 7.A | Snap menu pop-up overlay |
 | src/v3/operators/object/mirror.js | 7.A | Mirror selected (Ctrl+M) |
 | src/v3/operators/object/parent.js | 7.A | Parent (Ctrl+P) |
-| src/v3/operators/object/clearParent.js | 7.A | Clear Parent (Alt+P) |
 | src/v3/operators/object/setOrigin.js | 7.A | Set Origin submenu |
-| src/lib/weightPaint/blur.js | 7.B | Blur brush |
-| src/v3/operators/weightPaint/sample.js | 7.B | Ctrl+LMB sample |
-| src/v3/operators/weightPaint/mirror.js | 7.B | Mirror Weights |
-| src/v3/operators/weightPaint/normalize.js | 7.B | Normalize All (Ctrl+N) |
-| src/lib/weightPaint/mirrorMap.js | 7.B | Position-based mirror-vertex map |
-| src/v3/operators/pose/clearLocation.js | 7.C | Alt+G |
-| src/v3/operators/pose/clearRotation.js | 7.C | Alt+R |
-| src/v3/operators/pose/clearScale.js | 7.C | Alt+S |
-| src/v3/operators/pose/clearAll.js | 7.C | Alt+Shift+R |
-| src/v3/operators/pose/mirror.js | 7.C | Mirror Pose (Ctrl+Shift+M) |
-| src/v3/operators/pose/copyPaste.js | 7.C | Pose copy/paste |
+| (object/clearParent) | 7.A | Inlined in `src/v3/operators/registry.js` (Alt+P with 3-mode popover) |
+| src/lib/weightPaint/blur.js + index.js | 7.B | Blur brush (face-loop algo per audit D-1) + entry |
+| src/v3/operators/weightPaint/sample.js | 7.B | Shift+X sample (chord moved per audit) |
+| src/v3/operators/weightPaint/mirror.js | 7.B | Mirror Weights (Position + By Name) |
+| src/v3/operators/weightPaint/normalize.js | 7.B | Normalize All (menu only; `Ctrl+N` collides with file.new) |
+| (mirror-vertex map) | 7.B | Inline within `weightPaint/mirror.js` operator (no separate `mirrorMap.js`) |
+| src/v3/operators/pose/clearTransform.js | 7.C | Clear Loc/Rot/Scale + Clear All (Alt+G/R/S, Shift+Alt+G/R/S) |
+| src/v3/operators/pose/mirror.js | 7.C | Select Mirror (Ctrl+Shift+M) + Mirror Pose (Ctrl+Shift+V) + Copy/Paste |
 | src/store/poseClipboardStore.js | 7.C | Pose clipboard (in-memory) |
-| src/store/migrations/v33_toolset_cursor.js | 7.A | `project.cursor` field |
-| src/store/migrations/v34_toolset_xMirror.js | 7.B | `node.weightPaintSettings` |
+| src/store/migrations/v33_project_cursor.js | 7.A | `project.cursor` field |
+| src/store/migrations/v34_weight_paint_settings.js | 7.B | `node.weightPaintSettings` |
+| src/store/migrations/v35_pose_shape_repair.js | 8 (sister) | Mixed-state pose corruption repair (Phase 8) |
+| src/store/objectDataAccess.js (helpers added) | 8 (sister) | `ensureBonePoseChannel` / `setBonePoseField` / `setBonePose` |
 
 ### Modified entry-point files
 
