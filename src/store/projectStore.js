@@ -29,6 +29,7 @@ import {
   renameFCurveNode,
   decodeFCurveTarget,
 } from '../anim/animationFCurve.js';
+import { deleteAction as registryDeleteAction } from '../anim/actionRegistry.js';
 
 /**
  * Revoke every `blob:` URL the project owns — texture sources +
@@ -282,9 +283,13 @@ export const useProjectStore = create((set, get) => {
    * Pre-v36 these mutated `project.animations[]` and were named
    * createAnimation / renameAnimation / deleteAnimation. The schema
    * flip renamed the slot to `project.actions[]`; the methods follow
-   * suit. Stage 1.C will introduce richer `actionRegistry` helpers
-   * (assignAction, cloneAction, getActionUsers); these three remain
-   * the basic create/rename/delete primitives.
+   * suit. Stage 1.C added `src/anim/actionRegistry.js` for the
+   * reference-style helpers (assignAction, unassignAction, cloneAction,
+   * getActionUsers, deleteAction); `deleteAction` here delegates to
+   * the registry so the cascade to `node.animData.actionId` runs no
+   * matter how the deletion is dispatched. Stage 1.E adds projectStore
+   * wrappers for the assign/clone helpers when ActionsEditor is the
+   * caller.
    */
   createAction: (name) => set(produce((state) => {
     state.hasUnsavedChanges = true;
@@ -309,7 +314,7 @@ export const useProjectStore = create((set, get) => {
 
   deleteAction: (id) => set(produce((state) => {
     state.hasUnsavedChanges = true;
-    state.project.actions = state.project.actions.filter(a => a.id !== id);
+    registryDeleteAction(state.project, id);
   })),
 
   /** Create a new blend shape on a part node */
