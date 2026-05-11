@@ -680,6 +680,50 @@ callers read `adt->action` directly — same shape as
   silently swallowing — `deleteAction` cascade should prevent this,
   loud-error so the next bug-author finds the cascade gap fast.
 
+#### 1.F-pre — NodeTree retirement (schema v38)
+
+**SHIPPED 2026-05-11** (commits `ba20ef7` substrate + `7c023b3` audit-fix
+sweep). Resume-path A from Stage 1.E close-out — the prerequisite that
+removes the v24-shadow code path from the 1.F test matrix.
+
+- ✅ `project.nodeTrees.{rig, driver, animation}` deleted. v38
+  migration (`src/store/migrations/v38_nodetree_retirement.js`)
+  idempotently strips the field from old saves.
+- ✅ v22 / v23 / v24 migration MODULES deleted from disk; entries in
+  `projectMigrations.js` become no-op shims (`N: (project) => project,`)
+  per the contiguous-version walker invariant. Sister to v30/v31
+  retirement pattern.
+- ✅ `NodeTreeArea.jsx` refactored to derive trees on-the-fly per mode:
+  - rig: `buildRigTreeForPart(part)` walks `part.modifiers[]`.
+  - driver: `compileDriverTree(paramId, driver)` parses expression.
+  - animation: `compileAnimationTree(action)` walks `action.fcurves[]`
+    (scene-bound action wins via `getActiveSceneAction`).
+- ✅ `FCurveStrip` executor's legacy `storage.track` shadow branch
+  deleted (reachable only via the now-gone v24 `compileLegacyAnimationTree`).
+- ✅ Audit-fix sweep: dead-write helpers
+  (`buildRigTreesForProject` / `buildNodeTreesFromProject` /
+  `evalAllRigTrees`) deleted from `build.js` + `eval.js` — they were
+  the actual production reads/writes of `project.nodeTrees` that the
+  substrate commit left behind (audit-fix G-1+G-2+D-1 HIGH).
+- ✅ NodeTreeArea mode pill labels rewritten with canonical-source
+  hints: `Rig (Modifiers)` / `Driver (Expression)` / `Animation (FCurves)`
+  — surface read-only-by-design discoverability (audit-fix D-7).
+- ✅ Blender deviation docs added throughout: D-2 (v38 cites
+  `ID_NT` datablock deviation), D-6 (NodeTreeEditor read-only),
+  D-8 (NodeTreeType post-v38 visualisation-only), D-9
+  (`projectMigrations` walker contiguous-version vs Blender
+  `MAIN_VERSION_FILE_ATLEAST`). D-4: `animationCompile` Phase 4 NLA
+  TODO marker citing `NlaStrip` (`DNA_anim_types.h:425-499`).
+- ✅ Audit-pin `test_nodetree_retirement.mjs` (68 assertions) — schema
+  bump, migration delete + idempotency + e2e walk, no-op shim
+  source-grep, disk-presence gate, repo-wide `project.nodeTrees`
+  grep (v38 exempt), production-code grep for deleted branches,
+  JSDoc presence checks for every deviation citation, useMemo
+  dep-array regex verification.
+
+See close-out:
+[SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F_PRE.md](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F_PRE.md).
+
 #### 1.F — Tests
 
 | Test | What |
