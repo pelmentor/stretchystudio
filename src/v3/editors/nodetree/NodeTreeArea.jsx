@@ -11,8 +11,10 @@
  * # Post-v38 retirement
  *
  * Pre-v38 the area read the `nodeTrees` shadow on the project root —
- * a dual-write shadow populated by v22 / v23 / v24 migrations. Post-v38
- * (Animation Phase 1 Stage 1.F pre-exit) the persisted shadow is gone;
+ * a dual-write shadow populated by v22 / v23 / v24 migrations (modules
+ * + dispatch entries deleted in the v38 retirement + Stage 1.F-post
+ * walker refactor). Post-v38 (Animation Phase 1 Stage 1.F pre-exit)
+ * the persisted shadow is gone;
  * each mode derives its tree on-the-fly from canonical state:
  *
  *  - rig:       `buildRigTreeForPart(part)` walks `part.modifiers[]`
@@ -67,9 +69,9 @@ import { NodeTreeEditor } from './NodeTreeEditor.jsx';
 
 // Side-effect imports: register the driver + animation node types so
 // `NodeTreeEditor`'s `getNodeType` calls resolve their labels. Pre-v38
-// these were side-effect-imported by v23 + v24 migrations; post-v38
-// the migrations are gone, and the editor area is the canonical
-// consumer entrypoint.
+// these were side-effect-imported by v23 + v24 migrations (modules
+// deleted in v38). The editor area is the canonical consumer
+// entrypoint post-v38.
 import '../../../anim/nodetree/nodes/drivers.js';
 import '../../../anim/nodetree/nodes/animation.js';
 

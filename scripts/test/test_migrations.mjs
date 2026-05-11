@@ -794,6 +794,45 @@ function assertThrows(fn, name) {
     'Stage 1.F-post: v29 fixture walks across v30/v31 gap to CURRENT');
 }
 
+{
+  // Project at CURRENT_SCHEMA_VERSION is a no-op walk — fromVersion+1 >
+  // CURRENT means the for-loop body never runs. The schemaVersion stays.
+  const p = {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    nodes: [], parameters: [], physics_groups: [],
+    actions: [], canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+  };
+  // Mark the project so we can prove migrations did not run.
+  p._test_sentinel = 'unchanged';
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION,
+    'Stage 1.F-post: fromVersion === CURRENT is a no-op walk');
+  assertEq(p._test_sentinel, 'unchanged',
+    'Stage 1.F-post: fromVersion === CURRENT does not mutate project');
+}
+
+{
+  // schemaVersion-bumped-on-missing invariant: starting at v23 with
+  // only the v24 gap remaining is impossible (v24 was the retirement
+  // boundary), but starting at v21 and partially walking exposes the
+  // invariant — the walker bumps even when MIGRATIONS[v] is absent.
+  // We can't intercept the walker mid-flight from outside, so instead
+  // exercise the integration: a v21 project lands at CURRENT, AND the
+  // v25 entry (immediately after the v22/v23/v24 gap) must have run
+  // for the v25 editMode slot rename to take effect.
+  const p = {
+    schemaVersion: 21,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    nodes: [{ id: 'face', type: 'part', mode: 'mesh' }],  // v25 should rewrite 'mesh' → 'edit'
+    parameters: [], physics_groups: [],
+  };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION,
+    'Stage 1.F-post: v21 fixture lands at CURRENT after v22/v23/v24 gap traversal');
+  assertEq(p.nodes[0].mode, 'edit',
+    'Stage 1.F-post: v25 ran AFTER the v22/v23/v24 gap (mode mesh → edit)');
+}
+
 // ---- Summary ----
 
 console.log(`migrations: ${passed} passed, ${failed} failed`);

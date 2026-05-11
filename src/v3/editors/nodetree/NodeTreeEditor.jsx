@@ -164,9 +164,10 @@ export function NodeTreeEditor({ tree, title, activeNodeId, onSelectNode }) {
  *
  * Post-v38: legacy `s.track` branch (from the v24 migration's
  * `compileLegacyAnimationTree`) deleted with the NodeTree retirement.
- * The post-v36 `s.fcurve` storage carries an rnaPath that already
- * conveys the target via the type label; no extra subtitle needed
- * for FCurveStrip nodes.
+ * v24 module + dispatch entry are both gone (gap-tolerant walker
+ * iterates v22/v23/v24 as no-ops). The post-v36 `s.fcurve` storage
+ * carries an rnaPath that already conveys the target via the type
+ * label; no extra subtitle needed for FCurveStrip nodes.
  *
  * @param {import('../../../anim/nodetree/types.js').NodeTreeNode} node
  * @returns {string}

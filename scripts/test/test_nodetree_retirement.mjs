@@ -5,11 +5,7 @@
 //   2. v38 migration deletes `project.nodeTrees` from older saves
 //      idempotently.
 //   3. v22 / v23 / v24 entries are ABSENT from MIGRATIONS table
-//      (Animation Phase 1 Stage 1.F-post — gap-tolerant walker).
-//      Pre-Stage-1.F-post these stayed as no-op shims because the
-//      walker required contiguous keys; now the walker tolerates
-//      gaps (mirror of Blender's MAIN_VERSION_FILE_ATLEAST) and the
-//      shims are deleted as Rule №2 baggage.
+//      (gap-tolerant walker per Blender's MAIN_VERSION_FILE_ATLEAST).
 //   4. Source-grep gates: NodeTreeArea.jsx no longer reads
 //      `project.nodeTrees`; FCurveStrip executor no longer carries
 //      the legacy `storage.track` shadow branch; v22/v23/v24
@@ -175,19 +171,18 @@ assertEq(CURRENT_SCHEMA_VERSION, 38,
   const rawSrc = readSrc('src/store/projectMigrations.js');
   const src = stripComments(rawSrc);
   // v22 / v23 / v24 must NOT appear as keys in the MIGRATIONS dispatch
-  // table after Stage 1.F-post (gap-tolerant walker). The entries were
-  // previously `N: (project) => project` no-op shims; now they're gone.
+  // table — gap-tolerant walker iterates them as no-ops.
   assert(!/^\s*22:\s*[(\w]/m.test(src),
-    'v22 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+    'v22 entry: ABSENT from MIGRATIONS (gap-tolerant walker)');
   assert(!/^\s*23:\s*[(\w]/m.test(src),
-    'v23 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+    'v23 entry: ABSENT from MIGRATIONS (gap-tolerant walker)');
   assert(!/^\s*24:\s*[(\w]/m.test(src),
-    'v24 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+    'v24 entry: ABSENT from MIGRATIONS (gap-tolerant walker)');
   // Sister: v30 / v31 (rigid-default-weights retirement) — also gap.
   assert(!/^\s*30:\s*[(\w]/m.test(src),
-    'v30 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+    'v30 entry: ABSENT from MIGRATIONS (gap-tolerant walker)');
   assert(!/^\s*31:\s*[(\w]/m.test(src),
-    'v31 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+    'v31 entry: ABSENT from MIGRATIONS (gap-tolerant walker)');
   // v38 entry must call migrateNodeTreeRetirement.
   assert(/38:\s*\(project\)\s*=>\s*\{\s*migrateNodeTreeRetirement\(project\);/.test(rawSrc),
     'v38 entry: dispatches to migrateNodeTreeRetirement');

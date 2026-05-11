@@ -9,25 +9,54 @@
  * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` →
  * "Cross-cutting invariants → Schema versioning" for rationale.
  *
- * # Blender alignment (Animation Phase 1 Stage 1.F-post — walker refactor)
+ * # Blender alignment
  *
  * The walker (`migrateProject` below) iterates each version `v` from
  * `(file.schemaVersion + 1)` up to `CURRENT_SCHEMA_VERSION` and runs
  * `MIGRATIONS[v]` IF defined; missing entries are silently skipped
- * (the schemaVersion still bumps each iteration). This mirrors
- * Blender's `MAIN_VERSION_FILE_ATLEAST(bmain, X, Y)` field-level
- * predicates (`reference/blender/source/blender/blenkernel/BKE_main.hh:855`):
- * Blender's `versioning_NNN.cc` files contain `if (!ATLEAST(...))`
- * blocks for SOME version pairs but not others — the walker tolerates
- * gaps because each block is a self-contained fixup keyed by the
- * version it makes the file at-least equal to.
+ * (the schemaVersion still bumps each iteration). The gap-tolerant
+ * dispatch is spiritually aligned with Blender's
+ * `MAIN_VERSION_FILE_ATLEAST(main, ver, subver)` macro family
+ * (`reference/blender/source/blender/blenkernel/BKE_main.hh:855-865`
+ * — the ATLEAST / OLDER / OLDER_OR_EQUAL variants): both let any
+ * specific version pair carry a fixup or not, with the load path
+ * tolerating absence. Blender's release-cycle retirement of obsolete
+ * fixups (e.g. pre-2.50 blocks isolated in `versioning_legacy.cc`)
+ * is the Blender-history precedent for the SS shim-free retirement
+ * playbook below.
  *
- * Pre-Stage-1.F-post the walker REQUIRED contiguous keys (threw on
- * missing entries), forcing every retired migration to leave behind
- * a `N: (project) => project` no-op shim (Rule №2 baggage). The
- * gap-tolerant walker drops the requirement and the shims (v22 /
- * v23 / v24 from NodeTree retirement; v30 / v31 from rigid-default-
- * weights retirement) are deleted entirely.
+ * # Known deviations from Blender
+ *
+ *   1. **Single integer vs. major.minor**: SS uses a single monotonic
+ *      `schemaVersion` integer; Blender carries `(versionfile,
+ *      subversionfile)` (`BKE_main.hh:265`) with the latest values
+ *      `(BLENDER_FILE_VERSION, BLENDER_FILE_SUBVERSION)` declared in
+ *      `BKE_blender_version.h:32-33`. SS's `v` is the spiritual analog
+ *      of `(ver, subver)` flattened into one space.
+ *   2. **Dispatcher-level vs. predicate-level gap-tolerance**: Blender
+ *      dispatches at the file-version-major level (`readfile.cc:3755+`
+ *      always calls `blo_do_versions_500`, `_510`, etc. unconditionally);
+ *      the `MAIN_VERSION_FILE_ATLEAST` predicate gates individual
+ *      fixups INSIDE each dispatcher function. SS gates at the dispatch
+ *      table level (`MIGRATIONS[v]` present or absent). Same Rule №2
+ *      spirit ("don't carry no-op baggage"), different layer.
+ *   3. **Per-step version bump**: SS writes `project.schemaVersion = v`
+ *      every loop iteration. Blender sets `bmain->versionfile` ONCE at
+ *      file load (`readfile.cc:4166`) and never mutates it during the
+ *      do_versions cascade — Blender's fixups self-guard via the macro,
+ *      so they don't need the version to move underneath them. The
+ *      consequence: SS migrations MUST be idempotent because a crashed
+ *      mid-cascade leaves the project at the last successful step;
+ *      Blender's whole cascade is re-runnable from `versionfile`.
+ *   4. **No DNA_DEFAULTS / DNA_DEPRECATED_ALLOW substrate**: Blender's
+ *      `#define DNA_DEPRECATED_ALLOW` (`versioning_500.cc:9`,
+ *      `versioning_legacy.cc:21`, `versioning_xxx_template.cc:23`) lets
+ *      fixups legitimately touch deprecated DNA fields; the
+ *      `DNA_DEFAULTS` machinery auto-fills new struct fields when
+ *      reading old files. SS migrations carry the explicit-init burden
+ *      that Blender offloads — every SS entry MANUALLY initialises
+ *      added fields. SS's per-version entries are correspondingly
+ *      heavier than Blender's tiny per-fixup blocks.
  *
  * Adding a migration:
  *   1. Bump CURRENT_SCHEMA_VERSION.
@@ -38,11 +67,13 @@
  *      writes it after each step.
  *   4. Add a test in `scripts/test/test_migrations.mjs`.
  *
- * Retiring a migration (post-Stage-1.F-post — shim-free):
+ * Retiring a migration (gap-tolerant walker — shim-free):
  *   1. Add a cleanup migration at CURRENT_SCHEMA_VERSION+1 that
  *      strips the now-stale field (mirror v38 → `project.nodeTrees`).
  *   2. DELETE the original entry from MIGRATIONS — no shim required.
- *   3. DELETE the migration MODULE from disk.
+ *   3. DELETE the migration MODULE from disk (mirrors Blender's
+ *      `versioning_xxx_template.cc:14-20` install playbook in reverse:
+ *      drop call sites + CMakeList entry + file).
  *   4. Remove the module's import from this file.
  */
 
@@ -398,16 +429,14 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v22 / v23 / v24 — RETIRED in v38 (NodeTree dual-write shadow).
-  // Migration MODULES deleted from disk; the entries are deleted from
-  // this table too as of Animation Phase 1 Stage 1.F-post (gap-tolerant
-  // walker). v22 lifted `part.modifiers[]` into `project.nodeTrees.rig`;
-  // v23 lifted `param.driver` into `project.nodeTrees.driver`; v24
-  // lifted `project.animations[i]` into `project.nodeTrees.animation`
-  // via `compileLegacyAnimationTree`. The NodeTreeArea editor now
-  // derives all three on-the-fly (`buildRigTreeForPart` /
-  // `compileDriverTree` / `compileAnimationTree`); v38 strips the
-  // persisted shadow from old saves. The walker tolerates the gap.
+  // v22 / v23 / v24 — gap in dispatch table. v22 lifted `part.modifiers[]`
+  // into `project.nodeTrees.rig`; v23 lifted `param.driver` into
+  // `project.nodeTrees.driver`; v24 lifted `project.animations[i]` into
+  // `project.nodeTrees.animation` via `compileLegacyAnimationTree`.
+  // All three are retired (NodeTreeArea derives on-the-fly via
+  // `buildRigTreeForPart` / `compileDriverTree` / `compileAnimationTree`);
+  // v38 strips the persisted shadow from old saves. Modules + dispatch
+  // entries deleted; gap-tolerant walker iterates across as no-ops.
 
   // v25 — Blender Armature Alignment Phase 2: rename the editMode
   // slot value `'mesh'` → `'edit'` to match Blender's universal
@@ -471,12 +500,11 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v30 / v31 — RETIRED. v30 was reserved (no-op from inception); v31
-  // ran `seedDefaultRigidWeights` (Cubism Adapter Pattern Phase 1,
-  // anti-Blender) and was reverted same day. v32 strips the residue
-  // from saves stamped at v31. Both entries deleted from this table
-  // as of Animation Phase 1 Stage 1.F-post (gap-tolerant walker); the
-  // walker iterates v30 / v31 as no-ops without entries.
+  // v30 / v31 — gap in dispatch table. v30 was reserved (no-op from
+  // inception); v31 ran `seedDefaultRigidWeights` (Cubism Adapter
+  // Pattern Phase 1, anti-Blender) and was reverted same day. v32
+  // strips the residue from saves stamped at v31. Modules + dispatch
+  // entries deleted; gap-tolerant walker iterates across as no-ops.
 
   // v32 — Cubism Adapter REVERT toward Blender parity. Strips the
   // rigid-1.0 vertex groups that v31 wrote onto parts that follow a
@@ -924,16 +952,13 @@ export function migrateProject(project) {
     );
   }
 
-  // Gap-tolerant walker. Mirrors Blender's MAIN_VERSION_FILE_ATLEAST
-  // pattern — each version may or may not carry a fixup entry; missing
-  // entries are silently skipped, the schemaVersion still bumps each
-  // iteration so the file lands at CURRENT_SCHEMA_VERSION cleanly.
-  // Pre-Stage-1.F-post the walker threw on missing entries, forcing
-  // every retired migration to leave a `N: (project) => project`
-  // no-op shim. Those shims are gone now.
+  // Gap-tolerant walker. See header "Blender alignment" + "Known
+  // deviations from Blender" for the full citation. `typeof` guard
+  // (not `if (migrate)`) catches accidental non-function dispatch
+  // values (typo'd `25: someExpr` that resolves truthy but uncallable).
   for (let v = fromVersion + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
     const migrate = MIGRATIONS[v];
-    if (migrate) {
+    if (typeof migrate === 'function') {
       migrate(project);
     }
     project.schemaVersion = v;

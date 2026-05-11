@@ -41,10 +41,13 @@
  *   revert plan this migration implements.
  * - `src/lib/vertexGroupVariance.js` — `isRigidVertexGroup` predicate
  *   (4-arg form preserves bone-routing intent).
- * - v31 migration (`v31_default_rigid_weights.js`) — what this
- *   reverts. After v32 ships, the v31 migration becomes a no-op for
- *   already-migrated projects but stays in place for projects loaded
- *   from older saves (v30 → v31 → v32 walks idempotently).
+ * - v31 migration — what this reverts. Module + dispatch entry have
+ *   both been deleted (gap-tolerant walker iterates v30/v31 as no-ops);
+ *   v32 still runs because a v29-stamped save that had been migrated
+ *   to v31 on an earlier build can carry the rigid-1.0 weights forward
+ *   even after v31's module disappears. v32 is idempotent — a v29-or-
+ *   later fresh save walks 29 → 32 (across the v30/v31 gap) without
+ *   incident.
  *
  * @module store/migrations/v32_strip_rigid_default_weights
  */

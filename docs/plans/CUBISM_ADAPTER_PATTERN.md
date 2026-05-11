@@ -1,5 +1,7 @@
 # Cubism Adapter Pattern
 
+> **PATTERN REVERTED 2026-05-09** — see [CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md](./CUBISM_ADAPTER_REVERT_BLENDER_PARITY.md) for the revert plan + v32 cleanup. v31 ran for hours before the revert landed; v32 still ships to clean up rigid-weight residue from saves stamped at v31 on earlier builds. This doc is preserved for historical context; live state is the revert plan + the v32 migration.
+
 Status: **SHIPPED 2026-05-09** — code complete; manual Cubism-Viewer-load gate is the only remaining verification.
 Owner: pelmentor
 Started: 2026-05-09
@@ -438,7 +440,7 @@ scripts/test/test_cubismAdapter_renderEquivalence.mjs              (36)
 ```
 src/io/live2d/exporter.js              — both extraction sites use shared helper; legacy duplicated blocks removed
 src/store/projectStore.js              — seedDefaultRigidWeights wired into seedAllRig; new import
-src/store/projectMigrations.js         — CURRENT_SCHEMA_VERSION 29 → 31; v30 reserved no-op shim; v31 registered
+src/store/projectMigrations.js         — CURRENT_SCHEMA_VERSION 29 → 31; v30 reserved no-op shim; v31 registered [BOTH ENTRIES DELETED post-2026-05-12 walker refactor — gap-tolerant walker iterates the v30/v31 gap as no-ops; v32 still picks up rigid-weight residue from saves stamped at v31 on earlier builds]
 src/components/canvas/CanvasViewport.jsx — overlay-matrix branch + boneOverlay computation + 2 imports deleted
 src/renderer/bonePostChainComposition.js — composition decision 3-state → 2-state ('lbs' | 'none')
 src/renderer/boneOverlayMatrix.js      — computeBoneOverlayMatrices/applyOverlayMatrixObj/applyOverlayMatrixFlat deleted

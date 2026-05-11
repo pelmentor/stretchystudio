@@ -689,10 +689,15 @@ removes the v24-shadow code path from the 1.F test matrix.
 - ✅ `project.nodeTrees.{rig, driver, animation}` deleted. v38
   migration (`src/store/migrations/v38_nodetree_retirement.js`)
   idempotently strips the field from old saves.
-- ✅ v22 / v23 / v24 migration MODULES deleted from disk; entries in
-  `projectMigrations.js` become no-op shims (`N: (project) => project,`)
-  per the contiguous-version walker invariant. Sister to v30/v31
-  retirement pattern.
+- ✅ v22 / v23 / v24 migration MODULES deleted from disk; dispatch
+  entries left as no-op shims (`N: (project) => project,`) — the
+  walker required contiguous version keys at that point. Sister to
+  v30/v31 retirement pattern.
+  **Stage 1.F-post follow-up (2026-05-12):** Audit-fix D-9 was lifted
+  by refactoring the walker to be gap-tolerant (mirror of Blender's
+  `MAIN_VERSION_FILE_ATLEAST` macro family, `BKE_main.hh:855-865`);
+  v22/v23/v24 + v30/v31 dispatch entries DELETED entirely. See
+  [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1F_POST.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1F_POST.md).
 - ✅ `NodeTreeArea.jsx` refactored to derive trees on-the-fly per mode:
   - rig: `buildRigTreeForPart(part)` walks `part.modifiers[]`.
   - driver: `compileDriverTree(paramId, driver)` parses expression.
