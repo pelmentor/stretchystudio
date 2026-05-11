@@ -17,12 +17,14 @@
 //
 // Run: node scripts/test/test_nodetree_retirement.mjs
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { CURRENT_SCHEMA_VERSION, migrateProject } from '../../src/store/projectMigrations.js';
 import { migrateNodeTreeRetirement } from '../../src/store/migrations/v38_nodetree_retirement.js';
+import * as buildModule from '../../src/anim/nodetree/build.js';
+import * as evalModule from '../../src/anim/nodetree/eval.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -55,6 +57,25 @@ function stripComments(src) {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     // Line comments: // ... up to EOL
     .replace(/\/\/[^\n]*/g, '');
+}
+
+// Recursive walker for repo-wide grep. Yields .js / .jsx file paths
+// under the given root. Skips node_modules / .git / build artifacts.
+function* walkJsFiles(root) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    const st = statSync(cur);
+    if (st.isDirectory()) {
+      const base = cur.split(/[\\/]/).pop();
+      if (base === 'node_modules' || base === '.git' || base === 'dist' || base === 'build') continue;
+      for (const entry of readdirSync(cur)) {
+        stack.push(join(cur, entry));
+      }
+    } else if (st.isFile()) {
+      if (/\.(js|jsx)$/.test(cur)) yield cur;
+    }
+  }
 }
 
 // ---- 1. Schema version bumped to 38 ----
@@ -251,6 +272,154 @@ assert(existsSync(join(REPO, 'src/store/migrations/v38_nodetree_retirement.js'))
     'package.json: test:nodetreeRetirement script added');
   assert(/test:animationTreeCompile/.test(pkg),
     'package.json: test:animationTreeCompile script added');
+}
+
+// ---- 10. Audit-fix G-1 + G-2 + D-1: dead-write helpers deleted ----
+
+{
+  // build.js: buildRigTreesForProject + buildNodeTreesFromProject gone
+  assert(typeof buildModule.buildRigTreeForPart === 'function',
+    'build.js: buildRigTreeForPart export preserved (used by NodeTreeArea)');
+  assert(typeof buildModule.buildRigTreesForProject === 'undefined',
+    'audit-fix G-1: buildRigTreesForProject export deleted');
+  assert(typeof buildModule.buildNodeTreesFromProject === 'undefined',
+    'audit-fix G-1: buildNodeTreesFromProject export deleted');
+  // eval.js: evalAllRigTrees gone; evalNodeTree preserved (test harness)
+  assert(typeof evalModule.evalNodeTree === 'function',
+    'eval.js: evalNodeTree export preserved (test harness)');
+  assert(typeof evalModule.evalAllRigTrees === 'undefined',
+    'audit-fix G-2: evalAllRigTrees export deleted');
+}
+
+// ---- 11. Audit-fix G-3: NodeTreeEditor s.track branch deleted ----
+
+{
+  const rawSrc = readSrc('src/v3/editors/nodetree/NodeTreeEditor.jsx');
+  const src = stripComments(rawSrc);
+  assert(!/s\.track/.test(src) && !/s\.track\?\./.test(src),
+    'audit-fix G-3: NodeTreeEditor.nodeSubtitle has no `s.track` branch');
+  assert(!/track\.paramId/.test(src) && !/track\.property/.test(src) && !/track\.nodeId/.test(src),
+    'audit-fix G-3: NodeTreeEditor has no legacy track field reads');
+  // Post-fix the new branch reads s.fcurve.rnaPath.
+  assert(/s\.fcurve\?\.rnaPath/.test(src),
+    'audit-fix G-3: NodeTreeEditor.nodeSubtitle reads s.fcurve.rnaPath (post-v36 shape)');
+}
+
+// ---- 12. Audit-fix G-4: repo-wide grep finds zero production `project.nodeTrees` reads ----
+
+{
+  const srcRoot = join(REPO, 'src');
+  // The v38 retirement migration itself contains `delete project.nodeTrees`
+  // by design — that's the cleanup operation. Exempt it from the grep.
+  const EXEMPT = new Set([
+    join('src', 'store', 'migrations', 'v38_nodetree_retirement.js'),
+  ].map((p) => p.replace(/[\\/]/g, '/')));
+  /** @type {string[]} */
+  const offenders = [];
+  for (const file of walkJsFiles(srcRoot)) {
+    const relPath = relative(REPO, file).replace(/[\\/]/g, '/');
+    if (EXEMPT.has(relPath)) continue;
+    const raw = readFileSync(file, 'utf8');
+    const code = stripComments(raw);
+    if (/project\.nodeTrees|project\?\.nodeTrees|_proj\.nodeTrees|_project\.nodeTrees/.test(code)) {
+      offenders.push(relPath);
+    }
+  }
+  assert(offenders.length === 0,
+    `audit-fix G-4: repo-wide grep finds zero \`project.nodeTrees\` reads in src/ (v38 retirement migration exempt) — offenders: ${offenders.join(', ') || '(none)'}`);
+}
+
+// ---- 13. Audit-fix D-2: v38 retirement migration cites Blender deviation ----
+
+{
+  const src = readSrc('src/store/migrations/v38_nodetree_retirement.js');
+  assert(/ID_NT|first-class.+datablock|DNA_node_types\.h/.test(src),
+    'audit-fix D-2: v38 migration JSDoc cites Blender ID_NT datablock deviation');
+}
+
+// ---- 14. Audit-fix D-3: build.js JSDoc reframed (canonical-modifier-stack framing) ----
+
+{
+  const src = readSrc('src/anim/nodetree/build.js');
+  // Post-fix the JSDoc claims the modifier stack is canonical (not a
+  // shadow), the rig tree is a visualisation only, and the V2 "flip
+  // canonical → tree" bet is retired.
+  assert(/SS-(?:specific|invented).+visualisation|synthesises.+visualisation|read-only graph/i.test(src),
+    'audit-fix D-3: build.js JSDoc frames as SS-specific visualisation of canonical modifier stack');
+  assert(/modifier stack stays canonical|canonical source|canonical.+permanently/i.test(src),
+    'audit-fix D-3: build.js JSDoc declares modifier stack canonical (no flip pending)');
+  assert(/V2 bet was retired|that bet was retired|V2 plan.+retired|retired with v38/i.test(src),
+    'audit-fix D-3: build.js JSDoc notes the V2 architectural bet was retired with v38');
+}
+
+// ---- 15. Audit-fix D-4: animationCompile NLA Phase 4 TODO marker ----
+
+{
+  const src = readSrc('src/anim/nodetree/animationCompile.js');
+  assert(/Phase 4|NLA/i.test(src),
+    'audit-fix D-4: animationCompile JSDoc carries Phase 4 / NLA TODO marker');
+  assert(/NlaStrip|DNA_anim_types\.h/.test(src),
+    'audit-fix D-4: animationCompile JSDoc cites Blender NlaStrip / DNA_anim_types.h');
+  assert(/rewrite|REWRITE/.test(src),
+    'audit-fix D-4: animationCompile JSDoc warns Phase 4 needs REWRITE not extension');
+}
+
+// ---- 16. Audit-fix D-6: NodeTreeEditor read-only deviation note ----
+
+{
+  const src = readSrc('src/v3/editors/nodetree/NodeTreeEditor.jsx');
+  assert(/read-only by design|Read-only by design/i.test(src),
+    'audit-fix D-6: NodeTreeEditor JSDoc carries "Read-only by design" deviation note');
+  assert(/space_node|node_edit\.cc/.test(src),
+    'audit-fix D-6: NodeTreeEditor JSDoc cites Blender space_node / node_edit.cc');
+}
+
+// ---- 17. Audit-fix D-7: mode pill labels carry canonical-source hints ----
+
+{
+  const src = readSrc('src/v3/editors/nodetree/NodeTreeArea.jsx');
+  assert(/Rig \(Modifiers\)/.test(src),
+    'audit-fix D-7: rig mode pill label "Rig (Modifiers)"');
+  assert(/Driver \(Expression\)/.test(src),
+    'audit-fix D-7: driver mode pill label "Driver (Expression)"');
+  assert(/Animation \(FCurves\)/.test(src),
+    'audit-fix D-7: animation mode pill label "Animation (FCurves)"');
+}
+
+// ---- 18. Audit-fix D-8: NodeTreeType post-v38 deviation note ----
+
+{
+  const src = readSrc('src/anim/nodetree/types.js');
+  assert(/visualisation discriminators|NOT schema-bound|not schema-bound/i.test(src),
+    'audit-fix D-8: NodeTreeType JSDoc carries post-v38 deviation note');
+}
+
+// ---- 19. Audit-fix D-9: migration walker contiguous-version invariant documented ----
+
+{
+  const src = readSrc('src/store/projectMigrations.js');
+  assert(/contiguous version|MAIN_VERSION_FILE_ATLEAST/.test(src),
+    'audit-fix D-9: projectMigrations header documents contiguous-version invariant + Blender deviation');
+  assert(/Retiring a migration/.test(src),
+    'audit-fix D-9: projectMigrations header documents the retirement playbook');
+}
+
+// ---- 20. Audit-fix G-5: tree useMemo deps trimmed ----
+
+{
+  const rawSrc = readSrc('src/v3/editors/nodetree/NodeTreeArea.jsx');
+  // Find the tree useMemo's dep array. The deps are stamped on a single
+  // line ending with the close-bracket; assert `driverIds` is NOT in
+  // that array.
+  const m = rawSrc.match(/const tree = useMemo\([\s\S]*?\}, \[([^\]]+)\]\)/);
+  assert(m != null, 'audit-fix G-5: tree useMemo found');
+  if (m) {
+    const deps = m[1];
+    assert(!/\bdriverIds\b/.test(deps),
+      'audit-fix G-5: tree useMemo deps no longer include driverIds');
+    assert(/project\.parameters/.test(deps),
+      'audit-fix G-5: tree useMemo deps still include project.parameters');
+  }
 }
 
 // ---- Result ----

@@ -10,7 +10,7 @@
  *
  * # Post-v38 retirement
  *
- * Pre-v38 the area read `project.nodeTrees.{rig,driver,animation}` —
+ * Pre-v38 the area read the `nodeTrees` shadow on the project root —
  * a dual-write shadow populated by v22 / v23 / v24 migrations. Post-v38
  * (Animation Phase 1 Stage 1.F pre-exit) the persisted shadow is gone;
  * each mode derives its tree on-the-fly from canonical state:
@@ -29,12 +29,28 @@
  * canonical source changes. Cheap — even a 100-part project rebuilds
  * one rig tree per render (linear in modifier count, ~20 nodes max).
  *
- * # Read-only surface
+ * # Documented Blender deviations
  *
- * No edit ops — the visual editor is a read-only inspector for the
- * three derived graphs. Edits flow back through the canonical sources
- * (modifier-stack mutations on parts, driver-expression edits on
- * parameters, fcurve edits in DopesheetEditor / FCurveEditor).
+ * - **Datablock vs derived view (Audit-fix D-2)**: Blender treats
+ *   `bNodeTree` as a first-class `ID_NT` datablock peer of `ID_OB`
+ *   (`reference/blender/source/blender/makesdna/DNA_node_types.h:1879-1882`)
+ *   so it can drive undo, library linking, and library overrides per
+ *   datablock. SS treats RigTree / DriverTree / AnimationTree as
+ *   derived render-time views because none of those Blender features
+ *   apply to a read-only inspector — undo flows through canonical
+ *   source mutations, no library system, no overrides.
+ * - **Read-only surface (Audit-fix D-6)**: see `NodeTreeEditor.jsx`
+ *   module JSDoc — Blender's `space_node` is edit-capable; SS edits
+ *   flow through the canonical sources (modifier-stack mutations on
+ *   parts, driver-expression edits on parameters, fcurve edits in
+ *   DopesheetEditor / FCurveEditor).
+ * - **Mode-pill labels carry canonical-source hints (Audit-fix D-7)**:
+ *   labels read `'Rig (Modifiers)'` / `'Driver (Expression)'` /
+ *   `'Animation (FCurves)'` to nudge the user toward the right
+ *   edit surfaces. Blender's NodeEditor `tree_type` enum
+ *   (`DNA_node_types.h:274-283`) names types but doesn't disclose
+ *   edit surfaces because the editor IS edit-capable — SS extends
+ *   the labels because the surface here is read-only.
  *
  * @module v3/editors/nodetree/NodeTreeArea
  */
@@ -57,11 +73,19 @@ import { NodeTreeEditor } from './NodeTreeEditor.jsx';
 import '../../../anim/nodetree/nodes/drivers.js';
 import '../../../anim/nodetree/nodes/animation.js';
 
-/** @type {Array<{ id: 'rig'|'driver'|'animation', label: string }>} */
+/**
+ * Mode-pill labels carry canonical-source hints (Audit-fix D-7).
+ * Blender's NodeEditor `tree_type` enum (`DNA_node_types.h:274-283`)
+ * names types but doesn't disclose edit surfaces because the editor
+ * IS edit-capable. SS's NodeTreeArea is read-only — the hints make
+ * "where do I edit this?" discoverable from the pill itself.
+ *
+ * @type {Array<{ id: 'rig'|'driver'|'animation', label: string }>}
+ */
 const MODES = [
-  { id: 'rig',       label: 'Rig' },
-  { id: 'driver',    label: 'Driver' },
-  { id: 'animation', label: 'Animation' },
+  { id: 'rig',       label: 'Rig (Modifiers)' },
+  { id: 'driver',    label: 'Driver (Expression)' },
+  { id: 'animation', label: 'Animation (FCurves)' },
 ];
 
 export function NodeTreeArea() {
@@ -91,6 +115,9 @@ export function NodeTreeArea() {
   }, [project.parameters]);
 
   // Derive the active tree on the fly from canonical sources.
+  // Audit-fix G-5: `driverIds` removed from deps — it's already a
+  // memoised derivative of `project.parameters` (which IS in the deps),
+  // so listing both is redundant.
   const tree = useMemo(() => {
     if (mode === 'rig') {
       if (!selectionHead) return null;
@@ -105,7 +132,7 @@ export function NodeTreeArea() {
           ? selectionHead
           : (driverFallbackId && params.some((p) => p?.id === driverFallbackId && p?.driver))
             ? driverFallbackId
-            : driverIds[0] ?? null;
+            : params.find((p) => p?.driver)?.id ?? null;
       if (!pickId) return null;
       const param = params.find((p) => p?.id === pickId);
       if (!param || !param.driver) return null;
@@ -122,7 +149,7 @@ export function NodeTreeArea() {
       return compileAnimationTree(action);
     }
     return null;
-  }, [mode, project.nodes, project.parameters, project.actions, selectionHead, activeActionId, driverFallbackId, driverIds]);
+  }, [mode, project.nodes, project.parameters, project.actions, selectionHead, activeActionId, driverFallbackId]);
 
   const subtitle = useMemo(() => {
     if (mode === 'rig') {

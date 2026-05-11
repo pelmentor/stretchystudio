@@ -12,6 +12,16 @@
  * derives trees on-the-fly via `buildRigTreeForPart` /
  * `compileDriverTree` / `compileAnimationTree`.
  *
+ * # Blender deviation (Audit-fix D-2)
+ *
+ * Blender treats `bNodeTree` as a first-class `ID_NT` datablock peer
+ * of `ID_OB` (`reference/blender/source/blender/makesdna/DNA_node_types.h:1879-1882`)
+ * because Blender needs per-NodeTree undo, library linking, and
+ * library overrides. SS's NodeTreeArea is read-only — undo flows
+ * through canonical-source mutations, no library system, no
+ * overrides. The retirement is semantically safe BECAUSE the
+ * Blender-specific reasons to keep the datablock don't apply to SS.
+ *
  * # The retirement
  *
  * - `project.nodeTrees.rig`       — was dual-write of `part.modifiers[]`.

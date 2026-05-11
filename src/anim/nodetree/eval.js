@@ -3,10 +3,26 @@
 /**
  * NodeTree eval — topo-sorted dispatch over a single tree.
  *
- * Phase N-1 of the V2 plan. The depgraph's NODETREE_NODE_EVAL
- * kernel will eventually wrap this (Phase N-2/3 wiring), but for
- * Phase N-1 the eval pass is direct: caller passes a tree + ctx,
- * gets back a Map<nodeId, anyOutput>.
+ * # Schema state
+ *
+ * Post-v38 NodeTree retirement: this is a TEST-ONLY harness. The
+ * pre-v38 framing claimed the depgraph's NODETREE_NODE_EVAL kernel
+ * would wrap it; that wiring never landed (Stage 1.D shipped
+ * depgraph-driven action eval through `evaluateActionFCurves`
+ * directly). Audit-fix G-2 from the retirement audit narrowed this
+ * to a single-tree harness — the multi-tree `evalAllRigTrees` (which
+ * read `project.nodeTrees.rig`) was deleted with v38.
+ *
+ * # Why preserved
+ *
+ * `evalNodeTree(tree, ctx)` is generic over node `typeInfo.execute`
+ * functions; the byte-equivalence tests for `compileAnimationTree` →
+ * `interpolateTrack` (`scripts/test/test_animationTree_compile.mjs`)
+ * + `compileDriverTree` → `evaluateDriver`
+ * (`scripts/test/test_driverTree_eval.mjs`) drive node executors
+ * through this harness. Deleting it would force rewrites of those
+ * tests to dispatch executors directly (no behavioural gain, churn
+ * for churn).
  *
  * # Eval order
  *
@@ -21,9 +37,9 @@
  * # SS deviation
  *
  * Blender's node eval is a lazy-function graph (compiled per tree).
- * SS V2 does an eager pass — simpler to debug, fast enough for
- * thousands of nodes. The lazy compilation can land later if perf
- * profiling shows it matters.
+ * SS does an eager pass — simpler to debug, fast enough for the
+ * test surface. Production runtime evaluation lives in the
+ * depgraph kernels, not here.
  *
  * @module anim/nodetree/eval
  */
@@ -82,29 +98,4 @@ export function evalNodeTree(tree, ctx) {
   }
 
   return outputs;
-}
-
-/**
- * Convenience: evaluate every RigTree on a project and return a Map
- * keyed by partId → final positions (PartOutput's input).
- *
- * @param {object} project
- * @param {object} ctx
- * @returns {Map<string, any>}
- */
-export function evalAllRigTrees(project, ctx) {
-  /** @type {Map<string, any>} */
-  const partOutputs = new Map();
-  const rigMap = project?.nodeTrees?.rig ?? {};
-  for (const [partId, tree] of Object.entries(rigMap)) {
-    const partVertices = ctx?.partVertices?.[partId] ?? null;
-    const treeCtx = { ...ctx, partVertices };
-    const outputs = evalNodeTree(tree, treeCtx);
-    // PartOutput is the sink — find it and lift its input value.
-    const sinkNode = (tree.nodes ?? []).find((n) => n.typeId === 'PartOutput');
-    if (sinkNode) {
-      partOutputs.set(partId, outputs.get(sinkNode.id) ?? null);
-    }
-  }
-  return partOutputs;
 }

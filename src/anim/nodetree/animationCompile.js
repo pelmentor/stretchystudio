@@ -16,6 +16,23 @@
  * shadow is gone; `NodeTreeArea` invokes this compile on-the-fly for
  * the active action when rendering the read-only Animation graph.
  *
+ * # Phase 4 NLA gap (Audit-fix D-4)
+ *
+ * Today this emits `[FCurveStrip] × N + TimelineOutput`, with only the
+ * LAST strip linked into the sink ("cosmetic" — see lines below).
+ * Blender's `NlaStrip` (`reference/blender/source/blender/makesdna/DNA_anim_types.h:425-499`)
+ * carries `blendmode` (replace/add/subtract/multiply per
+ * `eNlaStrip_Blend_Mode`), `extendmode` (nothing/hold/hold_forward),
+ * `start`/`end`, `actframestart`/`actframeend`, `repeat`, `scale`,
+ * `influence`, `strip_time`, and `strips: ListBase<NlaStrip>` for
+ * nested meta-strips. Plan §1.A (line 466-467) already stamps
+ * `actionBlendmode` + `actionExtendmode` on `node.animData`. When
+ * Plan §Phase 4 lands NLA tracks, this compile pass will need a
+ * REWRITE (not an extension) to walk `nlaTracks[i].strips[]` instead
+ * of `action.fcurves[]`, and every NLA strip needs to blend into
+ * the sink (not just the last). The single-link wiring below is a
+ * read-only-display approximation, NOT a runtime model.
+ *
  * @module anim/nodetree/animationCompile
  */
 

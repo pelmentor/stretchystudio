@@ -54,7 +54,17 @@ export const SocketInOut = Object.freeze({
   OUTPUT: 'output',
 });
 
-/** NodeTree types — SS V2 subset of `eNodeTree_Type` (DNA:274). */
+/**
+ * NodeTree types — SS V2 subset of `eNodeTree_Type` (DNA:274).
+ *
+ * Post-v38 NodeTree retirement (Audit-fix D-8): these strings are
+ * pure visualisation discriminators on the in-memory derived tree
+ * objects consumed by `NodeTreeEditor`. They are NOT schema-bound —
+ * no save-on-disk field carries them anymore. The Stage 1.E audit-fix
+ * G-5 stalemate (`'animation'` lagged the rename because the
+ * underlying tree datablock was still `animation`-named) is dissolved
+ * — there's no datablock to rename anymore.
+ */
 export const NodeTreeType = Object.freeze({
   RIG:       'rig',
   DRIVER:    'driver',

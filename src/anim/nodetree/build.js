@@ -1,13 +1,30 @@
 // @ts-check
 
 /**
- * NodeTree builder — derive RigTree / DriverTree / AnimationTree
- * datablocks from the project.
+ * RigTree visualisation builder — synthesises a SS-specific node-graph
+ * view of a part's canonical Blender-style modifier stack.
  *
- * Phase N-1 of the V2 plan. Loose port of Blender's
- * `node_tree_runtime.cc` build flow + the migration shape from
- * `versioning_*.cc` files (where module-level migrations lift older
- * data into the current NodeTree shape).
+ * # Schema state
+ *
+ * Post-v38 NodeTree retirement (Animation Phase 1 Stage 1.F pre-exit):
+ * the canonical source is `part.modifiers[]` (Blender-shaped
+ * `Object.modifiers` — `ListBase<ModifierData>` per
+ * `reference/blender/source/blender/makesdna/DNA_modifier_types.h:169`).
+ * This module derives a one-shot read-only graph for the
+ * `NodeTreeArea` editor surface ONLY; nothing else consumes the
+ * synthesised tree. Audit-fix D-3 from the retirement audit dropped
+ * the pre-v38 framing that positioned this as a shadow data store
+ * which a future migration would flip to canonical — that V2 bet was
+ * retired with v38; the modifier stack stays canonical permanently.
+ *
+ * # SS-specific deviation
+ *
+ * Blender does not represent the modifier stack as a node tree —
+ * Geometry Nodes is a separate `NodesModifierData` wrapper around its
+ * own `bNodeTree`. `buildRigTreeForPart` synthesises a SS-invented
+ * visualisation that has no Blender datablock counterpart. The
+ * synthesised tree is purely a render-time aid; edits flow through
+ * `part.modifiers[]` mutations on the canonical source.
  *
  * # RigTree shape (per part)
  *
@@ -22,16 +39,7 @@
  *
  * Calling `buildRigTreeForPart` twice on the same part yields a
  * structurally identical tree (same node ids, same link tuples).
- * That makes the migration safe to re-run — Phase N-2's `riggingPath`
- * flag flip won't double-write.
- *
- * # Dual-write
- *
- * Phase N-1 ships in dual-write mode: `part.modifiers[]` STAYS the
- * canonical source. The RigTree is a derived view rebuilt by
- * `buildNodeTreesFromProject` whenever the canonical shape changes.
- * Phase N-2 will flip canonical → tree (after Refactor 1's flag flip,
- * per Rule 3).
+ * Pure function of `part.modifiers[]`.
  *
  * @module anim/nodetree/build
  */
@@ -124,43 +132,4 @@ export function buildRigTreeForPart(part) {
   });
 
   return tree;
-}
-
-/**
- * Walk every part in `project.nodes`, derive a RigTree, and store the
- * collection on `project.nodeTrees.rig` keyed by part id.
- *
- * Idempotent: existing entries are overwritten with freshly-built
- * trees so the dual-write stays consistent with `part.modifiers[]`.
- *
- * @param {object} project - mutated in place
- * @returns {Record<string, import('./types.js').NodeTree>}
- */
-export function buildRigTreesForProject(project) {
-  if (!project || !Array.isArray(project.nodes)) return {};
-  /** @type {Record<string, import('./types.js').NodeTree>} */
-  const rig = {};
-  for (const node of project.nodes) {
-    if (!node || node.type !== 'part') continue;
-    rig[node.id] = buildRigTreeForPart(node);
-  }
-  if (!project.nodeTrees || typeof project.nodeTrees !== 'object') {
-    project.nodeTrees = { rig: {}, driver: {}, animation: {} };
-  }
-  project.nodeTrees.rig = rig;
-  return rig;
-}
-
-/**
- * Convenience: build all node trees for the project. Phase N-1 only
- * populates rig trees; N-2/N-3 extend driver/animation.
- *
- * @param {object} project
- */
-export function buildNodeTreesFromProject(project) {
-  if (!project || !Array.isArray(project.nodes)) return;
-  if (!project.nodeTrees || typeof project.nodeTrees !== 'object') {
-    project.nodeTrees = { rig: {}, driver: {}, animation: {} };
-  }
-  buildRigTreesForProject(project);
 }

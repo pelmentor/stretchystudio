@@ -1,12 +1,14 @@
-// Phase N-1 — NodeTree eval pass tests.
+// Phase N-1 + Phase 1 Stage 1.F (post-NodeTree-retirement) —
+// NodeTree eval harness tests.
 //
 // Validates that `evalNodeTree(tree, ctx)` walks the graph in
 // topological order, resolves input sockets via incoming links, and
 // dispatches each node's `execute` callback.
 //
-// Plus: verify that a built RigTree's evaluation reads the depgraph's
-// outputs map at the right keys (mirrors what Phase D-3b already
-// does, just through the nodetree dispatch).
+// Post-v38: this is a TEST-ONLY harness (audit-fix G-2 narrowed
+// `eval.js` to a single-tree form). The pre-v38 `evalAllRigTrees`
+// + `buildRigTreesForProject` exports were deleted because they wrote
+// the now-retired `project.nodeTrees` field.
 //
 // Run: node scripts/test/test_nodetree_eval.mjs
 
@@ -14,7 +16,7 @@ import {
   makeNodeTree, addNodeToTree, addLinkToTree, NodeTreeType,
 } from '../../src/anim/nodetree/types.js';
 import { registerNodeType, getNodeType } from '../../src/anim/nodetree/registry.js';
-import { evalNodeTree, evalAllRigTrees } from '../../src/anim/nodetree/eval.js';
+import { evalNodeTree } from '../../src/anim/nodetree/eval.js';
 import { buildRigTreeForPart } from '../../src/anim/nodetree/build.js';
 
 let passed = 0;
@@ -122,36 +124,6 @@ registerNodeType({
   const warpOut = out.get('face__mod_0');
   assert(warpOut?.lifted instanceof Float64Array,
     'RigTree eval: WarpModifier read depgraph output');
-}
-
-// ---- evalAllRigTrees: per-part outputs ----
-
-{
-  const project = {
-    nodes: [
-      { id: 'face', type: 'part', modifiers: [] },
-      { id: 'shirt', type: 'part', modifiers: [] },
-    ],
-    nodeTrees: {
-      rig: {
-        face: buildRigTreeForPart({
-          id: 'face', type: 'part', modifiers: [],
-        }),
-        shirt: buildRigTreeForPart({
-          id: 'shirt', type: 'part', modifiers: [],
-        }),
-      },
-    },
-  };
-  const partVerts = {
-    face:  new Float32Array([1, 1]),
-    shirt: new Float32Array([2, 2]),
-  };
-  const out = evalAllRigTrees(project, { partVertices: partVerts });
-  assertEq(Array.from(out.get('face') ?? []), [1, 1],
-    'evalAllRigTrees: face output = its partVertices (empty stack passthrough)');
-  assertEq(Array.from(out.get('shirt') ?? []), [2, 2],
-    'evalAllRigTrees: shirt output = its partVertices (empty stack passthrough)');
 }
 
 // ---- Cycle tolerance: eval doesn't infinite-loop ----

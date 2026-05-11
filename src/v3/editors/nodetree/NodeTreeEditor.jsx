@@ -5,12 +5,25 @@
  *
  * Renders a single NodeTree (RigTree / DriverTree / AnimationTree)
  * as an SVG graph: rectangles for nodes, cubic Bézier paths for
- * links. Read-only in N-4 — Phase N-5 adds drag/connect/delete.
+ * links.
  *
- * Mode pill switches between the three tree types:
- *   - 'rig'      → renders the active part's RigTree.
- *   - 'driver'   → renders the active parameter's DriverTree.
- *   - 'animation'→ renders the active animation's AnimationTree.
+ * # Read-only by design (Audit-fix D-6, NodeTree retirement)
+ *
+ * Blender's `space_node` editor (`reference/blender/source/blender/
+ * editors/space_node/node_edit.cc:85-115`) is mode-edit-capable —
+ * it carries `node_add` / `node_link_modal` / `node_delete` /
+ * `node_join` operators. SS deviates: edits flow through the
+ * canonical sources (`part.modifiers[]` for rig, `param.driver` for
+ * driver, `action.fcurves[]` for animation), NOT through this
+ * surface. Pre-v38 the JSDoc said "Phase N-5 adds drag/connect/delete";
+ * Phase N-5 was V2 plan and was retired with the NodeTree datablocks
+ * (Animation Phase 1 absorbs the V2 work; see plan §9.E).
+ *
+ * # Mode pill (NodeTreeArea)
+ *
+ *   - 'rig'      → renders the active part's RigTree (derived from modifiers).
+ *   - 'driver'   → renders the active parameter's DriverTree (derived from driver expr).
+ *   - 'animation'→ renders the active action's AnimationTree (derived from fcurves).
  *
  * Empty-state when no tree exists for the active selection (e.g.
  * driver mode while the active parameter has no driver).
@@ -149,6 +162,12 @@ export function NodeTreeEditor({ tree, title, activeNodeId, onSelectNode }) {
 /**
  * Subtitle line under the node label — surfaces type-specific info.
  *
+ * Post-v38: legacy `s.track` branch (from the v24 migration's
+ * `compileLegacyAnimationTree`) deleted with the NodeTree retirement.
+ * The post-v36 `s.fcurve` storage carries an rnaPath that already
+ * conveys the target via the type label; no extra subtitle needed
+ * for FCurveStrip nodes.
+ *
  * @param {import('../../../anim/nodetree/types.js').NodeTreeNode} node
  * @returns {string}
  */
@@ -160,6 +179,6 @@ function nodeSubtitle(node) {
   if (typeof s.value === 'number') return String(s.value);
   if (typeof s.op === 'string') return s.op;
   if (s.driver?.expression) return String(s.driver.expression).slice(0, 30);
-  if (s.track) return s.track.paramId ?? `${s.track.nodeId}.${s.track.property}`;
+  if (s.fcurve?.rnaPath) return String(s.fcurve.rnaPath).slice(0, 40);
   return '';
 }

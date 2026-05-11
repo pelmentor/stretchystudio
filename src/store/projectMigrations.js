@@ -9,6 +9,19 @@
  * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` →
  * "Cross-cutting invariants → Schema versioning" for rationale.
  *
+ * # Blender deviation (Audit-fix D-9, NodeTree retirement)
+ *
+ * The migration walker (`migrateProject` below) requires contiguous
+ * version numbers — when version N is retired, the entry stays as
+ * `N: (project) => project` (no-op shim) so v0 → CURRENT walks
+ * monotonically. Examples: v22 / v23 / v24 (NodeTree migrations
+ * retired in v38); v30 / v31 (rigid-default-weights retired in v32).
+ * Blender's `versioning_*.cc` files don't have this constraint
+ * because Blender uses `MAIN_VERSION_FILE_ATLEAST(bmain, X, Y)`
+ * field-level predicates, not a contiguous-walk dispatcher. SS
+ * adopts the dispatcher pattern for migration simplicity; the
+ * no-op shims are the trade-off cost.
+ *
  * Adding a migration:
  *   1. Bump CURRENT_SCHEMA_VERSION.
  *   2. Add an entry to MIGRATIONS keyed by the new version number.
@@ -17,6 +30,13 @@
  *      project.schemaVersion inside the migration — `migrateProject`
  *      writes it after each step.
  *   4. Add a test in `scripts/test_migrations.mjs`.
+ *
+ * Retiring a migration:
+ *   1. Add a cleanup migration at CURRENT_SCHEMA_VERSION+1 that
+ *      strips the now-stale field (mirror v38 → `project.nodeTrees`).
+ *   2. Replace the original entry with `N: (project) => project,`.
+ *   3. Delete the migration MODULE from disk.
+ *   4. Remove the module's import from this file.
  */
 
 // CURRENT_SCHEMA_VERSION lives in `projectSchemaVersion.js` (tiny file,
