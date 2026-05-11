@@ -164,9 +164,9 @@ function assertThrows(fn, name) {
   migrateProject(p);
   assert(!('puppetWarp' in p.nodes[0]), 'v11: node puppetWarp deleted');
   // v11 strips the puppet_pins track BEFORE v36 lifts clips → actions.
-  // After v36 the surviving track is an fcurve with rnaPath `objects['a'].x`.
+  // After v36 the surviving track is an fcurve with rnaPath `objects["a"].x`.
   assertEq(p.actions[0].fcurves.length, 1, 'v11→v36: puppet_pins fcurve removed; non-puppet survives');
-  assertEq(p.actions[0].fcurves[0].rnaPath, "objects['a'].x",
+  assertEq(p.actions[0].fcurves[0].rnaPath, 'objects["a"].x',
     'v11→v36: surviving fcurve targets node a.x');
 }
 

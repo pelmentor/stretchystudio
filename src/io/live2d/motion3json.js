@@ -2,8 +2,8 @@
  * Generate .motion3.json files from Stretchy Studio actions.
  *
  * v36 actions hold FCurves keyed by rnaPath. Each fcurve targets either
- * a parameter (`objects['__params__'].values['<paramId>']`) or an object
- * property (`objects['<nodeId>'].<property>`). decodeFCurveTarget recovers
+ * a parameter (`objects["__params__"].values["<paramId>"]`) or an object
+ * property (`objects["<nodeId>"].<property>`). decodeFCurveTarget recovers
  * the legacy paramId / nodeId+property fields for the segment encoder.
  *
  * Live2D .motion3.json animates Parameters and Part opacities via "Curves"

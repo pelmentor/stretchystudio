@@ -110,7 +110,7 @@ export function IdleMotionDialog({ open, onOpenChange }) {
       }
 
       // Convert paramKeyframes (Map<paramId, [{time:ms, value, easing}]>)
-      // into FCurves targeting `objects['__params__'].values['<paramId>']`.
+      // into FCurves targeting `objects["__params__"].values["<paramId>"]`.
       // `buildParamFCurve` normalises keyforms (defaults easing → 'linear',
       // derives `type` from easing) and returns null on empty input.
       const fcurves = [];

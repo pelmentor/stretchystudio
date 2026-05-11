@@ -8,7 +8,7 @@
  * interpolation) as a continuous curve. Picks the fcurve based on
  * the active selection — currently:
  *
- *   - selection.parameter → fcurve targeting `objects['__params__'].values['<id>']`
+ *   - selection.parameter → fcurve targeting `objects["__params__"].values["<id>"]`
  *   - selection.part / group → first fcurve with `kind:'node', nodeId === id`
  *     (the "first" picks the earliest property arbitrarily; user can
  *     scroll for more in a future polish pass)

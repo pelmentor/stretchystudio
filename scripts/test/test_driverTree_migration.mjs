@@ -29,7 +29,7 @@ function assertNear(a, b, eps, name) {
 }
 
 function rnaPathFor(id) {
-  return `objects['__params__'].values['${id}']`;
+  return `objects["__params__"].values["${id}"]`;
 }
 
 // ---- 1. `a * 2` compiles to Math node with ParamInput + Constant inputs ----

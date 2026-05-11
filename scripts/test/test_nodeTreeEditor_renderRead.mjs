@@ -78,8 +78,8 @@ function assertEq(a, b, name) {
   const driver = {
     type: 'scripted', expression: '(a + b) / 2',
     variables: [
-      { name: 'a', target: { rnaPath: "objects['__params__'].values['A']" } },
-      { name: 'b', target: { rnaPath: "objects['__params__'].values['B']" } },
+      { name: 'a', target: { rnaPath: 'objects["__params__"].values["A"]' } },
+      { name: 'b', target: { rnaPath: 'objects["__params__"].values["B"]' } },
     ],
   };
   const tree = compileDriverTree('Avg', driver);
@@ -103,13 +103,13 @@ function assertEq(a, b, name) {
   const action = {
     id: 'idle',
     fcurves: [
-      { id: 'param:P1', rnaPath: "objects['__params__'].values['P1']",
+      { id: 'param:P1', rnaPath: 'objects["__params__"].values["P1"]',
         arrayIndex: 0, modifiers: [], extrapolation: 'constant',
         keyforms: [
           { time: 0, value: 0, easing: 'linear', type: 'linear' },
           { time: 1000, value: 1, easing: 'linear', type: 'linear' },
         ] },
-      { id: 'param:P2', rnaPath: "objects['__params__'].values['P2']",
+      { id: 'param:P2', rnaPath: 'objects["__params__"].values["P2"]',
         arrayIndex: 0, modifiers: [], extrapolation: 'constant',
         keyforms: [
           { time: 0, value: 0, easing: 'linear', type: 'linear' },

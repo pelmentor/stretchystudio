@@ -49,9 +49,10 @@ import { evaluateDriver } from './driver.js';
  *
  * # Sources scanned
  *
- *   - `project.parameters[i].driver` → rnaPath = `__params__['<id>']`
+ *   - `project.parameters[i].driver` → rnaPath
+ *     `objects["__params__"].values["<id>"]`
  *   - `project.nodes[i].transformDrivers[<field>]` → rnaPath
- *     `objects['<id>'].transform.<field>`
+ *     `objects["<id>"].transform.<field>`
  *
  * @param {object} project
  * @returns {Array<{ rnaPath: string, driver: object }>}
@@ -65,7 +66,7 @@ export function collectDrivers(project) {
       if (!p || typeof p.id !== 'string') continue;
       if (p.driver && typeof p.driver === 'object') {
         out.push({
-          rnaPath: `objects['__params__'].values['${p.id}']`,
+          rnaPath: `objects["__params__"].values["${p.id}"]`,
           driver: p.driver,
         });
       }
@@ -80,7 +81,7 @@ export function collectDrivers(project) {
         const driver = td[field];
         if (!driver || typeof driver !== 'object') continue;
         out.push({
-          rnaPath: `objects['${n.id}'].transform.${field}`,
+          rnaPath: `objects["${n.id}"].transform.${field}`,
           driver,
         });
       }
@@ -129,7 +130,7 @@ export function driverOverridesToParamMap(driverOverrides) {
   const out = {};
   if (!driverOverrides) return out;
   for (const [path, v] of driverOverrides) {
-    const m = path.match(/^objects\['__params__'\]\.values\['([^']+)'\]$/);
+    const m = path.match(/^objects\["__params__"\]\.values\["([^"]+)"\]$/);
     if (m) out[m[1]] = v;
   }
   return out;

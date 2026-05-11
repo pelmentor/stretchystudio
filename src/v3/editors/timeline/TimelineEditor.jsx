@@ -1285,9 +1285,9 @@ export function TimelineEditor() {
   }, [selectedKeyframes, deleteSelectedKeyframes, anim.activeActionId, update]);
 
   /* ── Build track rows ────────────────────────────────────────────────── */
-  // Rows include both NODE-targeted fcurves (objects['<nodeId>'].<prop>:
+  // Rows include both NODE-targeted fcurves (objects["<nodeId>"].<prop>:
   // x/y/rotation/scaleX/scaleY/opacity/mesh_verts/blendShape) and
-  // PARAM-targeted fcurves (objects['__params__'].values['<paramId>'] —
+  // PARAM-targeted fcurves (objects["__params__"].values["<paramId>"] —
   // Live2D parameter animation, the v3 main goal). Each row carries
   // `rowKey` (`node:<id>` or `param:<id>`) and `kind` (`'node'|'param'`);
   // all downstream handlers dispatch on these so a single drag-select

@@ -22,9 +22,9 @@ import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
  * Generate a .can3 animation archive.
  *
  * Each action's fcurves may target either:
- *   - a node property — `objects['<nodeId>'].rotation` etc. — mapped to a
+ *   - a node property — `objects["<nodeId>"].rotation` etc. — mapped to a
  *     Live2D parameter via `deformerParamMap` (groupId → {paramId, min, max, rest?}).
- *   - a parameter — `objects['__params__'].values['<paramId>']` — first-class
+ *   - a parameter — `objects["__params__"].values["<paramId>"]` — first-class
  *     Live2D parameter animation, used by the idle generator and any future
  *     AI-driven motion. No `deformerParamMap` entry required.
  *

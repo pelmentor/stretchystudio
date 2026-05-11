@@ -6,8 +6,8 @@
  *     fcurves: [{ rnaPath, keyforms: [{ time (ms), value, easing, type }] }] }
  *
  * Targets (decoded via `decodeFCurveTarget` from `anim/animationFCurve.js`):
- *   - param target  → `objects['__params__'].values['<paramId>']`
- *   - node property → `objects['<nodeId>'].<property>` where
+ *   - param target  → `objects["__params__"].values["<paramId>"]`
+ *   - node property → `objects["<nodeId>"].<property>` where
  *     property ∈ 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity' |
  *                'visible' | 'mesh_verts' | 'blendShape:{id}'
  */
@@ -492,7 +492,7 @@ export function setParamKeyframeAt(action, paramId, timeMs, value, easing = 'eas
       // the empty fcurve directly so the upsert below can populate it.
       fc = {
         id: `param:${paramId}`,
-        rnaPath: `objects['__params__'].values['${paramId}']`,
+        rnaPath: `objects["__params__"].values["${paramId}"]`,
         arrayIndex: 0,
         keyforms: [],
         modifiers: [],

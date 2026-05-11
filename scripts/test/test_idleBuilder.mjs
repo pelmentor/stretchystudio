@@ -169,7 +169,7 @@ assertThrows(() => buildMotion3({ paramIds: [], durationSec: NaN }),
     // canonical {id, rnaPath, arrayIndex, keyforms, modifiers, extrapolation}.
     if (typeof fc.id !== 'string' ||
         typeof fc.rnaPath !== 'string' ||
-        !fc.rnaPath.startsWith("objects['__params__'].values[") ||
+        !fc.rnaPath.startsWith('objects["__params__"].values[') ||
         !Array.isArray(fc.keyforms)) {
       failed++; console.error(`FAIL: ssAction fcurve shape — ${JSON.stringify(fc)}`);
       break;

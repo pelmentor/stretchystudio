@@ -385,7 +385,7 @@ function nextId(ctx, prefix) {
 /**
  * Extract paramId from a driver variable's target rnaPath.
  *
- *   `objects['__params__'].values['<paramId>']` → `<paramId>`
+ *   `objects["__params__"].values["<paramId>"]` → `<paramId>`
  *
  * @param {{target?: {rnaPath?: string}}} v
  * @returns {string | null}
@@ -393,6 +393,6 @@ function nextId(ctx, prefix) {
 function extractParamIdFromVarTarget(v) {
   const path = v?.target?.rnaPath;
   if (typeof path !== 'string') return null;
-  const m = /objects\['__params__'\]\.values\['([^']+)'\]/.exec(path);
+  const m = /objects\["__params__"\]\.values\["([^"]+)"\]/.exec(path);
   return m ? m[1] : null;
 }

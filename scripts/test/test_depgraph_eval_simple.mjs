@@ -109,7 +109,7 @@ function assertEq(actual, expected, name) {
           type: 'scripted',
           expression: 'A * 2',
           variables: [{ name: 'A',
-            target: { rnaPath: "objects['__params__'].values['A']" } }],
+            target: { rnaPath: 'objects["__params__"].values["A"]' } }],
         } },
     ],
     nodes: [], animations: [], physicsRules: [],
@@ -140,13 +140,13 @@ function assertEq(actual, expected, name) {
         driver: {
           type: 'scripted', expression: 'X * 4',
           variables: [{ name: 'X',
-            target: { rnaPath: "objects['__params__'].values['X']" } }],
+            target: { rnaPath: 'objects["__params__"].values["X"]' } }],
         } },
       { id: 'Z', default: 0,
         driver: {
           type: 'scripted', expression: 'Y * 5',
           variables: [{ name: 'Y',
-            target: { rnaPath: "objects['__params__'].values['Y']" } }],
+            target: { rnaPath: 'objects["__params__"].values["Y"]' } }],
         } },
     ],
     nodes: [], animations: [], physicsRules: [],
@@ -189,7 +189,7 @@ function assertEq(actual, expected, name) {
   const action = {
     fcurves: [{
       id: 'param:P',
-      rnaPath: "objects['__params__'].values['P']",
+      rnaPath: 'objects["__params__"].values["P"]',
       arrayIndex: 0,
       keyforms: [
         { time: 0,    value: 0,  easing: 'linear', type: 'linear' },
@@ -218,13 +218,13 @@ function assertEq(actual, expected, name) {
         driver: {
           type: 'scripted', expression: 'B + 1',
           variables: [{ name: 'B',
-            target: { rnaPath: "objects['__params__'].values['B']" } }],
+            target: { rnaPath: 'objects["__params__"].values["B"]' } }],
         } },
       { id: 'B', default: 1,
         driver: {
           type: 'scripted', expression: 'A + 1',
           variables: [{ name: 'A',
-            target: { rnaPath: "objects['__params__'].values['A']" } }],
+            target: { rnaPath: 'objects["__params__"].values["A"]' } }],
         } },
     ],
     nodes: [], animations: [], physicsRules: [],

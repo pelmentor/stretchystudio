@@ -40,14 +40,30 @@
  *   - `animation` → `action`: spread fields verbatim, rename `tracks` →
  *     `fcurves` via `trackToFCurveInline`, default `flag = 0`, default
  *     `meta = { source: 'authored' }`.
- *   - `track.paramId='X'` → `fcurve.rnaPath='objects[\'__params__\'].values[\'X\']'`.
- *   - `track.nodeId='Y' + property='Z'` → `fcurve.rnaPath='objects[\'Y\'].Z'`.
+ *   - `track.paramId='X'` → `fcurve.rnaPath='objects["__params__"].values["X"]'`.
+ *   - `track.nodeId='Y' + property='Z'` → `fcurve.rnaPath='objects["Y"].Z'`.
+ *     Bracket-string keys use double-quotes to match Blender's RNA
+ *     tokenizer (`reference/blender/source/blender/makesrna/intern/rna_path.cc:127`
+ *     — `if (*p == '"')` is the only branch recognising a quoted string
+ *     key; single-quoted keys would tokenise as the unquoted numeric
+ *     branch and parse-fail).
  *   - `track.keyframes[]` → `fcurve.keyforms[]` (verbatim — Phase 2 promotes
  *     to BezTriples; Phase 1 keeps `{time, value, easing}` shape).
  *   - `track.driver` (already supported as a per-track driver) → `fcurve.driver`.
  *   - Every Object node (`type === 'part' || type === 'group'`) gains
  *     `node.animData = defaultAnimData()`.
  *   - `project.animations` is deleted (Rule №2 — no migration baggage).
+ *
+ * # Pre-fix v36 save normalisation (2026-05-11 audit-fix sweep)
+ *
+ * v36 shipped earlier on 2026-05-11 with single-quoted rnaPaths
+ * (`objects['__params__'].values['X']`). The same-day audit-fix sweep
+ * normalised the grammar to double-quotes for Blender compatibility.
+ * The migration's idempotency guard now also walks pre-existing
+ * `project.actions[].fcurves[]` and rewrites any single-quoted rnaPath
+ * to double-quoted. This is idempotent (re-running on already-double
+ * paths is a no-op) and keeps the strict-double decoder safe — by the
+ * time the runtime decoder sees a project, every fcurve is canonical.
  *
  * # Out of scope (later stages)
  *
@@ -117,19 +133,27 @@ function trackToFCurveInline(track) {
   let rnaPath;
   let id;
   if (typeof track.paramId === 'string' && track.paramId.length > 0) {
-    rnaPath = `objects['__params__'].values['${track.paramId}']`;
+    rnaPath = `objects["__params__"].values["${track.paramId}"]`;
     id = `param:${track.paramId}`;
   } else if (
     typeof track.nodeId === 'string' && track.nodeId.length > 0
     && typeof track.property === 'string' && track.property.length > 0
   ) {
-    rnaPath = `objects['${track.nodeId}'].${track.property}`;
+    rnaPath = `objects["${track.nodeId}"].${track.property}`;
     id = `${track.nodeId}.${track.property}`;
   } else {
     return null;
   }
   const keyforms = [];
   for (const kf of kfs) {
+    // `mesh_verts` keyforms carry array-shaped values (per-vertex
+    // displacement). They are silently dropped here because Phase 1's
+    // keyform shape is scalar-only ({time, value: number, easing,
+    // type}); Phase 2's BezTriple migration (v37) does NOT extend this
+    // — array-valued keyforms remain a separate concern owned by the
+    // shape-key / vertex-animation pipeline (Phase 4+). Until then,
+    // mesh_verts animation tracks are non-persistent through this
+    // migration. Tracked in plan §Phase 4 (mesh deformation).
     if (typeof kf?.time !== 'number' || typeof kf?.value !== 'number') continue;
     const easing = typeof kf.easing === 'string' ? kf.easing : 'linear';
     keyforms.push({
@@ -153,7 +177,14 @@ function trackToFCurveInline(track) {
     arrayIndex: 0,
     keyforms,
     modifiers: [],
-    extrapolation: HOLD_EASINGS.has(keyforms[keyforms.length - 1].easing) ? 'constant' : 'constant',
+    // Blender's `eFCurve_Extend` (DNA_anim_enums.h:335-339) defaults to
+    // `FCURVE_EXTRAPOLATE_CONSTANT = 0` (zero-init). Hold-easing
+    // terminator preserves constant; linear-terminator falls through
+    // to 'linear' so Phase 2's extrapolation-honouring evaluator picks
+    // up the correct sentinel. Pre-audit-fix the false branch returned
+    // 'constant' (dead ternary), suppressing any future linear-extrap
+    // semantics.
+    extrapolation: HOLD_EASINGS.has(keyforms[keyforms.length - 1].easing) ? 'constant' : 'linear',
   };
   if (track.driver && typeof track.driver === 'object') {
     fcurve.driver = track.driver;
@@ -162,9 +193,45 @@ function trackToFCurveInline(track) {
 }
 
 /**
- * Default `node.animData` slot — Blender's `AnimData` defaults per
- * `DNA_anim_types.h` (act_influence=1.0, act_blendmode=ACT_BLEND_REPLACE,
- * act_extendmode=ACT_EXTEND_HOLD).
+ * Rewrite any single-quoted rnaPath bracket-string key to double-quoted
+ * to match Blender's RNA tokenizer (`rna_path.cc:127`). Idempotent
+ * (already-double paths return verbatim). Used by the v36 idempotency
+ * guard to normalise pre-audit-fix v36 saves on next load.
+ *
+ * @param {string} rna
+ * @returns {string}
+ */
+function normalizeRnaPathQuotes(rna) {
+  if (typeof rna !== 'string') return rna;
+  // Replace any `[' ... ']` with `[" ... "]`. The bracket grammar is
+  // tight enough that a literal-character substitution is safe; the
+  // single-quote character does not appear inside a Live2D paramId or
+  // SS nodeId (validated at id-construction time), so the inner content
+  // never contains a `'` to confuse the substitution.
+  return rna.replace(/\['([^']*)'\]/g, '["$1"]');
+}
+
+/**
+ * Default `node.animData` slot — Blender's `AnimData` defaults.
+ *
+ * Field provenance (Blender source):
+ *   - `actionInfluence = 1.0`: DNA struct value-inits to 0
+ *     (`DNA_anim_types.h:737` — `float act_influence = 0;`), but
+ *     `BKE_animdata_create` overrides to `1.0f` at runtime
+ *     (`reference/blender/source/blender/blenkernel/intern/anim_data.cc:123`
+ *     — `adt->act_influence = 1.0f;`). The 1.0 default is the canonical
+ *     "fully-influencing" value; SS adopts the BKE-runtime default.
+ *   - `actionBlendmode = 'replace'`: matches `NLASTRIP_MODE_REPLACE = 0`
+ *     (`DNA_anim_enums.h:375` — `eNlaStrip_Blend_Mode`). Action blend
+ *     modes share the NLASTRIP_MODE_* enum since 4.0; the action-blend
+ *     -mode field on AnimData (`act_blendmode`) is read with the same
+ *     enum.
+ *   - `actionExtendmode = 'hold'`: matches `NLASTRIP_EXTEND_HOLD = 0`
+ *     (`DNA_anim_enums.h:386` — `eNlaStrip_Extrapolate_Mode`). Same
+ *     shared-enum story.
+ *   - `slotHandle = 0`: AnimData.slot_handle initial = 0 (= "unassigned"
+ *     sentinel; Blender 4.4+ slot system).
+ *   - `flag = 0`: AnimData.flag bitmask zero-init.
  *
  * @returns {object}
  */
@@ -200,6 +267,14 @@ function animationToAction(anim) {
     fps: typeof anim.fps === 'number' ? anim.fps : 24,
     audioTracks: Array.isArray(anim.audioTracks) ? anim.audioTracks : [],
     fcurves,
+    // Blender's `eAction_Flags` (DNA_action_types.h:374-387) bit set:
+    //   ACT_COLLAPSED   = (1 << 0)  — UI collapsed in Outliner
+    //   ACT_SELECTED    = (1 << 1)  — selected in Outliner
+    //   ACT_MUTED       = (1 << 9)  — runtime-disabled
+    //   ACT_FRAME_RANGE = (1 << 12) — manual frame-range override
+    //   ACT_CYCLIC      = (1 << 13) — loops between frame_start/end
+    // Default 0 = none of the above. Stage 1.E (ActionsEditor UI) will
+    // surface these as toggles.
     flag: 0,
     meta: {
       createdAt: anim.createdAt ?? null,
@@ -221,9 +296,18 @@ export function migrateActionDatablock(project) {
   if (!project) return { actionsCreated: 0, animDataAdded: 0 };
 
   // Idempotency guard: pre-existing v36+ project has `actions` and no
-  // `animations` — skip the conversion and preserve in place.
+  // `animations` — skip the conversion and preserve in place. ALSO
+  // normalise rnaPath quote grammar (single → double) for any pre-fix
+  // v36 saves shipped before the 2026-05-11 audit-fix sweep.
   if (Array.isArray(project.actions) && !Array.isArray(project.animations)) {
-    // Still ensure animData scaffolding (a partial v36 save mid-flight).
+    for (const action of project.actions) {
+      const fcs = Array.isArray(action?.fcurves) ? action.fcurves : [];
+      for (const fc of fcs) {
+        if (fc && typeof fc.rnaPath === 'string') {
+          fc.rnaPath = normalizeRnaPathQuotes(fc.rnaPath);
+        }
+      }
+    }
   } else {
     const animations = Array.isArray(project.animations) ? project.animations : [];
     /** @type {object[]} */

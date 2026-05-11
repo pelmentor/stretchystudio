@@ -56,7 +56,7 @@ function assertEq(actual, expected, name) {
   assertEq(action.duration, 2000, '1f: duration preserved');
   assert(action.fcurves.length === 1, '1g: 1 fcurve');
   const fc = action.fcurves[0];
-  assertEq(fc.rnaPath, "objects['__params__'].values['ParamAngleX']", '1h: param rnaPath shape');
+  assertEq(fc.rnaPath, 'objects["__params__"].values["ParamAngleX"]', '1h: param rnaPath shape');
   assertEq(fc.id, 'param:ParamAngleX', '1i: param id naming');
   assert(fc.keyforms.length === 2, '1j: 2 keyforms');
   assertEq(fc.keyforms[0], { time: 0, value: 0, easing: 'linear', type: 'linear' }, '1k: kf0 verbatim + type derived');
@@ -94,7 +94,7 @@ function assertEq(actual, expected, name) {
   const action = project.actions[0];
   assert(action.fcurves.length === 1, '2a: 1 fcurve');
   const fc = action.fcurves[0];
-  assertEq(fc.rnaPath, "objects['p1'].opacity", '2b: node rnaPath shape');
+  assertEq(fc.rnaPath, 'objects["p1"].opacity', '2b: node rnaPath shape');
   assertEq(fc.id, 'p1.opacity', '2c: node id naming');
   // Easing defaults to 'linear' for kf0 since no easing field; kf1 'constant', kf2 'linear'
   assertEq(fc.keyforms[0].easing, 'linear', '2d: missing easing defaults to linear');

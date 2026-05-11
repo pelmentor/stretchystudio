@@ -13,8 +13,15 @@
  *
  * # rnaPath conventions (per `anim/rnaPath.js`)
  *
- *   - Parameter target:  `objects['__params__'].values['<paramId>']`
- *   - Object property:   `objects['<nodeId>'].<property>`
+ *   - Parameter target:  `objects["__params__"].values["<paramId>"]`
+ *   - Object property:   `objects["<nodeId>"].<property>`
+ *
+ * The bracket-string syntax uses double-quotes to match Blender's RNA
+ * tokenizer (`reference/blender/source/blender/makesrna/intern/rna_path.cc:127`
+ * — `if (*p == '"')` is the only branch that recognises a quoted string
+ * key). Single-quoted bracket strings would tokenise as the unquoted
+ * numeric branch in Blender and parse-fail. Phase 1 audit-fix sweep
+ * 2026-05-11 normalised the project-wide grammar.
  *
  * # Easing → type mapping
  *
@@ -92,7 +99,7 @@ export function buildParamFCurve(paramId, keyforms, opts = {}) {
   /** @type {FCurve} */
   const fc = {
     id: `param:${paramId}`,
-    rnaPath: `objects['__params__'].values['${paramId}']`,
+    rnaPath: `objects["__params__"].values["${paramId}"]`,
     arrayIndex: 0,
     keyforms: kfs,
     modifiers: [],
@@ -119,7 +126,7 @@ export function buildNodeFCurve(nodeId, property, keyforms, opts = {}) {
   /** @type {FCurve} */
   const fc = {
     id: `${nodeId}.${property}`,
-    rnaPath: `objects['${nodeId}'].${property}`,
+    rnaPath: `objects["${nodeId}"].${property}`,
     arrayIndex: typeof opts.arrayIndex === 'number' ? opts.arrayIndex : 0,
     keyforms: kfs,
     modifiers: [],
@@ -142,9 +149,9 @@ export function buildNodeFCurve(nodeId, property, keyforms, opts = {}) {
 export function decodeFCurveTarget(fcurve) {
   const rna = fcurve?.rnaPath;
   if (typeof rna !== 'string') return null;
-  const paramMatch = /^objects\['__params__'\]\.values\['([^']+)'\]$/.exec(rna);
+  const paramMatch = /^objects\["__params__"\]\.values\["([^"]+)"\]$/.exec(rna);
   if (paramMatch) return { kind: 'param', paramId: paramMatch[1] };
-  const nodeMatch = /^objects\['([^']+)'\]\.(.+)$/.exec(rna);
+  const nodeMatch = /^objects\["([^"]+)"\]\.(.+)$/.exec(rna);
   if (nodeMatch) return { kind: 'node', nodeId: nodeMatch[1], property: nodeMatch[2] };
   return null;
 }
@@ -180,7 +187,7 @@ export function fcurveTargetsNode(fcurve, nodeId) {
 export function renameFCurveParam(fcurve, oldParamId, newParamId) {
   if (!fcurveTargetsParam(fcurve, oldParamId)) return;
   fcurve.id = `param:${newParamId}`;
-  fcurve.rnaPath = `objects['__params__'].values['${newParamId}']`;
+  fcurve.rnaPath = `objects["__params__"].values["${newParamId}"]`;
 }
 
 /**
@@ -196,7 +203,7 @@ export function renameFCurveNode(fcurve, oldNodeId, newNodeId) {
   const t = decodeFCurveTarget(fcurve);
   if (!t || t.kind !== 'node') return;
   fcurve.id = `${newNodeId}.${t.property}`;
-  fcurve.rnaPath = `objects['${newNodeId}'].${t.property}`;
+  fcurve.rnaPath = `objects["${newNodeId}"].${t.property}`;
 }
 
 /**
@@ -210,15 +217,20 @@ export function renameFCurveNode(fcurve, oldNodeId, newNodeId) {
  * `evalContext` is forwarded to `evaluateFCurve`.
  *
  * @param {{fcurves: FCurve[]}|null|undefined} action
- * @param {number} time
+ * @param {number} timeMs - canonical animation-time unit per memory
+ *   `feedback_ms_canonical_animation_time.md`. Keyforms are stored in
+ *   ms; `evaluateFCurve` is unit-agnostic so the caller's unit must
+ *   match the keyform unit. Naming this `timeMs` documents the contract
+ *   and prevents the unit-confusion bug pattern that caught the
+ *   Phase D-2 FCURVE_EVAL kernel pre-audit-fix.
  * @param {object} [evalContext]
  * @returns {Map<string, number>}
  */
-export function evaluateActionFCurves(action, time, evalContext = {}) {
+export function evaluateActionFCurves(action, timeMs, evalContext = {}) {
   const out = new Map();
   if (!action || !Array.isArray(action.fcurves)) return out;
   for (const fc of action.fcurves) {
-    const v = evaluateFCurve(fc, time, evalContext);
+    const v = evaluateFCurve(fc, timeMs, evalContext);
     if (Number.isFinite(v)) out.set(fc.rnaPath, v);
   }
   return out;

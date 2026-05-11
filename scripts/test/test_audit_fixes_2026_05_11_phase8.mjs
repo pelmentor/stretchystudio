@@ -85,13 +85,13 @@ function near(a, b, eps = 1e-6) { return Math.abs(a - b) <= eps; }
       pose: { channels: { 'bone-rna': { rotation: 0.42, x: 7, y: 0, scaleX: 1, scaleY: 1 } } },
     }],
   };
-  const rot = evaluateRnaPath(project, "objects['bone-rna'].pose.rotation");
+  const rot = evaluateRnaPath(project, 'objects["bone-rna"].pose.rotation');
   assert(near(rot, 0.42), `G-3/D-4: read channels-shape rotation via rnaPath → ${rot}`);
-  const x = evaluateRnaPath(project, "objects['bone-rna'].pose.x");
+  const x = evaluateRnaPath(project, 'objects["bone-rna"].pose.x');
   assert(near(x, 7), `G-3/D-4a: read channels-shape x via rnaPath → ${x}`);
 
   // Write via rnaPath: should hit the helper, not corrupt envelope.
-  const ok = setRnaPath(project, "objects['bone-rna'].pose.rotation", 0.9);
+  const ok = setRnaPath(project, 'objects["bone-rna"].pose.rotation', 0.9);
   assert(ok === true, 'G-3/D-4b: setRnaPath returns true on bone pose path');
   assert(project.nodes[0].pose.rotation === undefined,
     'G-3/D-4c: write did NOT create mixed-state (no flat field on envelope)');

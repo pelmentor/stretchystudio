@@ -22,7 +22,7 @@ function assertNear(a, b, eps, name) {
 }
 
 function rnaPathFor(id) {
-  return `objects['__params__'].values['${id}']`;
+  return `objects["__params__"].values["${id}"]`;
 }
 
 /**

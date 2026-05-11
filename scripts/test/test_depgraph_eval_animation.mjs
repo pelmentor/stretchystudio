@@ -106,7 +106,7 @@ function assertNear(a, b, eps, name) {
   const action = {
     fcurves: [{
       id: 'face.mesh_verts',
-      rnaPath: "objects['face'].mesh_verts",
+      rnaPath: 'objects["face"].mesh_verts',
       arrayIndex: 0,
       keyforms: [
         { time: 0,    value: 0, easing: 'linear', type: 'linear' },

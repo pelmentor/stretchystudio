@@ -13,8 +13,8 @@
  * SS actions store `fcurves: [{ rnaPath, keyforms: [{time, value, easing, type}] }]`.
  * The rnaPath decodes (via `decodeFCurveTarget`) to either:
  *
- *   - param target  → `objects['__params__'].values['<paramId>']`
- *   - node property → `objects['<nodeId>'].<property>`
+ *   - param target  → `objects["__params__"].values["<paramId>"]`
+ *   - node property → `objects["<nodeId>"].<property>`
  *
  * The D-1 build pass emits one ANIMATION_TRACK_EVAL op per fcurve,
  * tagged with the fcurve's rnaPath. The kernel looks up the fcurve

@@ -1504,7 +1504,7 @@ export default function CanvasViewport({
             if (!fc) {
               fc = buildNodeFCurve(nodeId, prop, []) ?? {
                 id: `${nodeId}.${prop}`,
-                rnaPath: `objects['${nodeId}'].${prop}`,
+                rnaPath: `objects["${nodeId}"].${prop}`,
                 arrayIndex: 0,
                 keyforms: [],
                 modifiers: [],
@@ -1542,7 +1542,7 @@ export default function CanvasViewport({
               if (!meshFC) {
                 meshFC = buildNodeFCurve(nodeId, 'mesh_verts', []) ?? {
                   id: `${nodeId}.mesh_verts`,
-                  rnaPath: `objects['${nodeId}'].mesh_verts`,
+                  rnaPath: `objects["${nodeId}"].mesh_verts`,
                   arrayIndex: 0,
                   keyforms: [],
                   modifiers: [],
@@ -1572,7 +1572,7 @@ export default function CanvasViewport({
               if (!fc) {
                 fc = buildNodeFCurve(nodeId, prop, []) ?? {
                   id: `${nodeId}.${prop}`,
-                  rnaPath: `objects['${nodeId}'].${prop}`,
+                  rnaPath: `objects["${nodeId}"].${prop}`,
                   arrayIndex: 0,
                   keyforms: [],
                   modifiers: [],

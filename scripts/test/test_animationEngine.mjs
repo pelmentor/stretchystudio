@@ -179,14 +179,14 @@ function near(a, b, eps = 1e-3) {
   const action = {
     fcurves: [
       {
-        id: 'a.x', rnaPath: "objects['a'].x", arrayIndex: 0, modifiers: [],
+        id: 'a.x', rnaPath: 'objects["a"].x', arrayIndex: 0, modifiers: [],
         keyforms: [
           { time: 0, value: 0, easing: 'linear', type: 'linear' },
           { time: 100, value: 100, easing: 'linear', type: 'linear' },
         ],
       },
       {
-        id: 'a.opacity', rnaPath: "objects['a'].opacity", arrayIndex: 0, modifiers: [],
+        id: 'a.opacity', rnaPath: 'objects["a"].opacity', arrayIndex: 0, modifiers: [],
         keyforms: [
           { time: 0, value: 1, easing: 'linear', type: 'linear' },
           { time: 100, value: 0, easing: 'linear', type: 'linear' },

@@ -306,8 +306,8 @@ function buildDriverRelations(graph, project, opts) {
     for (const v of param.driver.variables ?? []) {
       const rnaPath = v?.target?.rnaPath ?? '';
       // Phase D-1 only handles the canonical params bag rnaPath shape:
-      //   `objects['__params__'].values['<id>']`
-      const m = /objects\['__params__'\]\.values\['([^']+)'\]/.exec(rnaPath);
+      //   `objects["__params__"].values["<id>"]`
+      const m = /objects\["__params__"\]\.values\["([^"]+)"\]/.exec(rnaPath);
       if (!m) continue;
       const sourceParamId = m[1];
       const sourceOp = paramComp.findOperation(OperationCode.PARAM_EVAL, sourceParamId);

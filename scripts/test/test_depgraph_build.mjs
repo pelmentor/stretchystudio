@@ -148,7 +148,7 @@ function makeShelbyLite() {
     fcurves: [
       {
         id: 'param:ParamSmile',
-        rnaPath: "objects['__params__'].values['ParamSmile']",
+        rnaPath: 'objects["__params__"].values["ParamSmile"]',
         arrayIndex: 0,
         keyforms: [],
         modifiers: [],
@@ -160,7 +160,7 @@ function makeShelbyLite() {
   const animId = graph.findIdNode(ACTION_ID_REF, 'action');
   const animComp = animId?.findComponent(NodeType.ANIMATION);
   assert(animComp?.findOperation(OperationCode.ANIMATION_TRACK_EVAL,
-    "objects['__params__'].values['ParamSmile']") !== null,
+    'objects["__params__"].values["ParamSmile"]') !== null,
     'ANIMATION_TRACK_EVAL with rnaPath tag');
 }
 
@@ -233,7 +233,7 @@ function makeShelbyLite() {
     fcurves: [
       {
         id: 'param:ParamBreath',
-        rnaPath: "objects['__params__'].values['ParamBreath']",
+        rnaPath: 'objects["__params__"].values["ParamBreath"]',
         arrayIndex: 0,
         keyforms: [],
         modifiers: [],
@@ -245,7 +245,7 @@ function makeShelbyLite() {
   const trackOp = graph.findIdNode(ACTION_ID_REF, 'action')
     ?.findComponent(NodeType.ANIMATION)
     ?.findOperation(OperationCode.ANIMATION_TRACK_EVAL,
-      "objects['__params__'].values['ParamBreath']");
+      'objects["__params__"].values["ParamBreath"]');
   const paramOp = graph.findIdNode(PARAM_ID_REF, 'params')
     ?.findComponent(NodeType.PARAMETERS)
     ?.findOperation(OperationCode.PARAM_EVAL, 'ParamBreath');
@@ -270,7 +270,7 @@ function makeShelbyLite() {
           expression: 'ParamA * 2',
           variables: [{ name: 'ParamA',
             target: { id: 'ParamA',
-              rnaPath: "objects['__params__'].values['ParamA']" } }],
+              rnaPath: 'objects["__params__"].values["ParamA"]' } }],
         } },
     ],
     nodes: [],
@@ -297,13 +297,13 @@ function makeShelbyLite() {
         driver: {
           type: 'scripted', expression: 'B * 2',
           variables: [{ name: 'B',
-            target: { rnaPath: "objects['__params__'].values['B']" } }],
+            target: { rnaPath: 'objects["__params__"].values["B"]' } }],
         } },
       { id: 'B', default: 0,
         driver: {
           type: 'scripted', expression: 'A * 2',
           variables: [{ name: 'A',
-            target: { rnaPath: "objects['__params__'].values['A']" } }],
+            target: { rnaPath: 'objects["__params__"].values["A"]' } }],
         } },
     ],
     nodes: [],

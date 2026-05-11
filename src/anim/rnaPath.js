@@ -11,17 +11,27 @@
  * collection iteration -- none of which we need for FCurve / Driver
  * targets. We cover the property-slot subset only.
  *
- *   - `objects['<id>'].transform.rotation`
- *   - `objects['<id>'].transform.pivotX`
- *   - `objects['<id>'].pose.rotation`              (bone groups)
- *   - `objects['<id>'].pose.x`                     (bone groups)
- *   - `objects['<id>'].opacity`
- *   - `objects['<id>'].visible`
- *   - `objects['<id>'].mesh.vertices[<i>].x`       (mesh vertex coords)
- *   - `objects['<id>'].blendShapeValues['<sid>']`
- *   - `objects['<id>'].modifiers[<i>].payload.<field>`  (Phase 3+)
- *   - `objects['<id>'].constraints[<i>].influence`     (Phase 4+)
- *   - `objects['__params__'].values['ParamAngleZ']`     (Live2D params)
+ *   - `objects["<id>"].transform.rotation`
+ *   - `objects["<id>"].transform.pivotX`
+ *   - `objects["<id>"].pose.rotation`              (bone groups)
+ *   - `objects["<id>"].pose.x`                     (bone groups)
+ *   - `objects["<id>"].opacity`
+ *   - `objects["<id>"].visible`
+ *   - `objects["<id>"].mesh.vertices[<i>].x`       (mesh vertex coords)
+ *   - `objects["<id>"].blendShapeValues["<sid>"]`
+ *   - `objects["<id>"].modifiers[<i>].payload.<field>`  (Phase 3+)
+ *   - `objects["<id>"].constraints[<i>].influence`     (Phase 4+)
+ *   - `objects["__params__"].values["ParamAngleZ"]`     (Live2D params)
+ *
+ * Bracket-string keys use **double quotes** to match Blender's RNA
+ * tokenizer (`makesrna/intern/rna_path.cc:127` — only the `*p == '"'`
+ * branch recognises a quoted string key; single-quoted keys would
+ * tokenise as the unquoted numeric branch and parse-fail). The
+ * tokenizer in this module accepts both single and double quotes for
+ * legacy/test-fixture compatibility (`['"]` regex), but every emitter
+ * in production code (constructors in `animationFCurve.js`, the v36
+ * migration `trackToFCurveInline`, drivers, motion3 import, etc.) is
+ * canonical-double after the 2026-05-11 audit-fix sweep.
  *
  * Audit-fix G-12 (Phase 8 sweep): removed an aspirational
  * `__armature__` pose-channel path from the supported list because
@@ -52,6 +62,30 @@
  * The synthetic `__params__` and `__armature__` ids resolve via the
  * existing helpers (`paramValuesStore`, `getArmature`).
  *
+ * # Synthetic Object IDs (SS-specific, no Blender analogue)
+ *
+ *   - `__params__` — the Live2D-flavoured parameter namespace. Routes
+ *     through `_paramsView(project)` to expose `project.parameters`
+ *     defaults under a `{ values: { paramId: number } }` view. There
+ *     is no direct Blender equivalent; Blender stores per-property
+ *     scalars as ID-properties on a Scene/Object datablock addressed
+ *     by `["Custom Property"]` syntax. `__params__` is documented as
+ *     SS-specific because the Live2D semantic (a flat global param
+ *     pool consumed by both rig and animation systems) is structurally
+ *     different from Blender's per-datablock custom-property pattern.
+ *   - `__armature__` — the synthetic ArmatureView from
+ *     `getArmature(project)`. SS-specific because SS's bone hierarchy
+ *     is flat-on-`project.nodes` rather than being held inside an
+ *     `Armature` datablock as Blender does.
+ *   - `__scene__` (Stage 1.D, deferred) — will carry project-wide
+ *     `animData` for actions that animate the whole project (typical
+ *     Cubism character motion). When introduced, `__scene__` will be
+ *     a peer of `__params__` / `__armature__` (resolves through its
+ *     own helper, does NOT shadow `__params__` lookups). The active-
+ *     action selector will shift from `useAnimationStore.activeActionId`
+ *     to `getActiveActionForScene(project)` with the UI store as
+ *     fallback for projects without a `__scene__` binding.
+ *
  * @module anim/rnaPath
  */
 
@@ -61,7 +95,7 @@ import { getMesh, getArmature, getBonePose, setBonePoseField, isBoneGroup } from
 const POSE_FIELDS = new Set(['rotation', 'x', 'y', 'scaleX', 'scaleY']);
 
 /**
- * Tokenise a path like `objects['p1'].transform.rotation` or
+ * Tokenise a path like `objects["p1"].transform.rotation` or
  * `modifiers[0].payload.amount` into segments.
  *
  * Returns `null` on malformed input (caller logs / falls back).
@@ -216,7 +250,7 @@ export function setRnaPath(project, path, value) {
   let cur = resolveObjectId(project, objectId);
   if (!cur) return false;
 
-  // Audit-fix G-3/D-4 (Phase 8 sweep): `objects['<bone>'].pose.<field>`
+  // Audit-fix G-3/D-4 (Phase 8 sweep): `objects["<bone>"].pose.<field>`
   // writes must go through `setBonePoseField` so v19 channels-shape
   // bones receive the write inside `pose.channels[node.id]` instead of
   // creating mixed-state corruption (flat field on the channels

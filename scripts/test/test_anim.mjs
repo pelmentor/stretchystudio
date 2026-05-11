@@ -46,7 +46,7 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     'parse single field',
   );
   assertEq(
-    parseRnaPath("objects['p1']"),
+    parseRnaPath('objects["p1"]'),
     [
       { kind: 'field', value: 'objects' },
       { kind: 'key', value: 'p1' },
@@ -54,7 +54,7 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     'parse single key',
   );
   assertEq(
-    parseRnaPath("objects['p1'].transform.rotation"),
+    parseRnaPath('objects["p1"].transform.rotation'),
     [
       { kind: 'field', value: 'objects' },
       { kind: 'key', value: 'p1' },
@@ -64,7 +64,7 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     'parse object/key/field/field',
   );
   assertEq(
-    parseRnaPath("objects['p1'].mesh.vertices[3].x"),
+    parseRnaPath('objects["p1"].mesh.vertices[3].x'),
     [
       { kind: 'field', value: 'objects' },
       { kind: 'key', value: 'p1' },
@@ -106,33 +106,33 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     parameters: [{ id: 'ParamAngleZ', default: 0 }, { id: 'ParamSmile', default: 0.5 }],
   };
 
-  assertEq(evaluateRnaPath(project, "objects['p1'].opacity"), 0.7, 'read opacity');
-  assertEq(evaluateRnaPath(project, "objects['p1'].transform.rotation"), 30, 'read transform.rotation');
-  assertEq(evaluateRnaPath(project, "objects['p1'].mesh.vertices[1].x"), 3, 'read mesh.vertices[1].x via getMesh');
+  assertEq(evaluateRnaPath(project, 'objects["p1"].opacity'), 0.7, 'read opacity');
+  assertEq(evaluateRnaPath(project, 'objects["p1"].transform.rotation'), 30, 'read transform.rotation');
+  assertEq(evaluateRnaPath(project, 'objects["p1"].mesh.vertices[1].x'), 3, 'read mesh.vertices[1].x via getMesh');
   assertEq(
-    evaluateRnaPath(project, "objects['p1'].blendShapeValues['smile']"),
+    evaluateRnaPath(project, 'objects["p1"].blendShapeValues["smile"]'),
     0.4,
     'read blendShapeValues key',
   );
-  assertEq(evaluateRnaPath(project, "objects['g1'].pose.rotation"), 5, 'read bone pose');
+  assertEq(evaluateRnaPath(project, 'objects["g1"].pose.rotation'), 5, 'read bone pose');
 
   // Synthetic __params__ resolves to the parameters defaults map.
   assertEq(
-    evaluateRnaPath(project, "objects['__params__'].values['ParamSmile']"),
+    evaluateRnaPath(project, 'objects["__params__"].values["ParamSmile"]'),
     0.5,
     'read __params__ default',
   );
 
   // Synthetic __armature__ resolves to ArmatureView.
   assertEq(
-    evaluateRnaPath(project, "objects['__armature__'].id"),
+    evaluateRnaPath(project, 'objects["__armature__"].id'),
     '__armature__',
     'read __armature__.id',
   );
 
   // Missing object / field → undefined.
-  assert(evaluateRnaPath(project, "objects['nonexistent'].opacity") === undefined, 'unknown id → undefined');
-  assert(evaluateRnaPath(project, "objects['p1'].nonexistent") === undefined, 'unknown field → undefined');
+  assert(evaluateRnaPath(project, 'objects["nonexistent"].opacity') === undefined, 'unknown id → undefined');
+  assert(evaluateRnaPath(project, 'objects["p1"].nonexistent') === undefined, 'unknown field → undefined');
 }
 
 // ── setRnaPath ──
@@ -143,21 +143,21 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     ],
   };
 
-  assert(setRnaPath(project, "objects['p1'].transform.rotation", 45) === true, 'set rotation');
+  assert(setRnaPath(project, 'objects["p1"].transform.rotation', 45) === true, 'set rotation');
   assertEq(project.nodes[0].transform.rotation, 45, 'rotation written');
 
   // Creating a missing nested field works.
-  assert(setRnaPath(project, "objects['p1'].newField", 'hello') === true, 'set new field');
+  assert(setRnaPath(project, 'objects["p1"].newField', 'hello') === true, 'set new field');
   assertEq(project.nodes[0].newField, 'hello', 'new field exists');
 
   // Unknown object id fails.
-  assert(setRnaPath(project, "objects['ghost'].opacity", 1) === false, 'unknown id rejected');
+  assert(setRnaPath(project, 'objects["ghost"].opacity', 1) === false, 'unknown id rejected');
 }
 
 // ── upsertKeyframe / evaluateFCurve ──
 {
   /** @type {{id:string, rnaPath:string, keyforms:any[]}} */
-  const fc = { id: 'fc1', rnaPath: "objects['p1'].opacity", keyforms: [] };
+  const fc = { id: 'fc1', rnaPath: 'objects["p1"].opacity', keyforms: [] };
 
   upsertKeyframe(fc, 0, 0);
   upsertKeyframe(fc, 10, 1);
@@ -210,8 +210,8 @@ function assertClose(actual, expected, name, eps = 1e-6) {
   };
 
   const variables = [
-    { name: 'a', target: { rnaPath: "objects['p1'].opacity" } },
-    { name: 'b', target: { rnaPath: "objects['p2'].opacity" } },
+    { name: 'a', target: { rnaPath: 'objects["p1"].opacity' } },
+    { name: 'b', target: { rnaPath: 'objects["p2"].opacity' } },
   ];
 
   assertClose(evaluateDriver({ type: 'sum', variables }, { project }), 1.0, 'sum');
@@ -235,8 +235,8 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     ],
   };
   const variables = [
-    { name: 'rot1', target: { rnaPath: "objects['p1'].transform.rotation" } },
-    { name: 'rot2', target: { rnaPath: "objects['p2'].transform.rotation" } },
+    { name: 'rot1', target: { rnaPath: 'objects["p1"].transform.rotation' } },
+    { name: 'rot2', target: { rnaPath: 'objects["p2"].transform.rotation' } },
   ];
 
   assertClose(
@@ -311,7 +311,7 @@ function assertClose(actual, expected, name, eps = 1e-6) {
     driver: {
       type: 'scripted',
       expression: 'a * 2',
-      variables: [{ name: 'a', target: { rnaPath: "objects['p1'].opacity" } }],
+      variables: [{ name: 'a', target: { rnaPath: 'objects["p1"].opacity' } }],
     },
   };
   // Without driver: keyframe interpolation gives 0.5 at t=5.

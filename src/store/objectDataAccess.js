@@ -509,7 +509,7 @@ export function setBonePose(node, partialPose) {
  * still has flat `group + boneRole` nodes in `project.nodes`; this
  * helper presents that flat list as a synthetic Armature view so future
  * callers (constraint editors, Outliner armature drill-down, FCurve RNA
- * paths like `objects['armature'].pose.channels[0].rotation_euler`) can
+ * paths like `objects["armature"].pose.channels[0].rotation_euler`) can
  * be authored against the eventual Phase 1C-flip schema without breaking
  * today's reader contract.
  *

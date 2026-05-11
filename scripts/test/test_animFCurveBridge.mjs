@@ -50,7 +50,7 @@ function assertNear(actual, expected, eps, name) {
     { time: 0, value: 0, easing: 'linear' },
     { time: 1000, value: 30, easing: 'ease-both' },
   ]);
-  assertEq(fc.rnaPath, "objects['__params__'].values['ParamAngleX']",
+  assertEq(fc.rnaPath, 'objects["__params__"].values["ParamAngleX"]',
     'param rnaPath canonical');
   assertEq(fc.id, 'param:ParamAngleX', 'param id naming');
   assertEq(fc.arrayIndex, 0, 'arrayIndex defaults to 0');
@@ -68,7 +68,7 @@ function assertNear(actual, expected, eps, name) {
     { time: 0, value: 0 },
     { time: 500, value: 1.5, easing: 'hold' },
   ]);
-  assertEq(fc.rnaPath, "objects['partA'].rotation", 'node rnaPath canonical');
+  assertEq(fc.rnaPath, 'objects["partA"].rotation', 'node rnaPath canonical');
   assertEq(fc.id, 'partA.rotation', 'node id naming');
   assertEq(fc.keyforms[1].type, 'constant', 'hold easing → type constant');
 }
@@ -124,24 +124,24 @@ function assertNear(actual, expected, eps, name) {
 {
   const fc = buildParamFCurve('Old', [{ time: 0, value: 1 }]);
   renameFCurveParam(fc, 'Old', 'New');
-  assertEq(fc.rnaPath, "objects['__params__'].values['New']", 'param rnaPath rewritten');
+  assertEq(fc.rnaPath, 'objects["__params__"].values["New"]', 'param rnaPath rewritten');
   assertEq(fc.id, 'param:New', 'param id rewritten');
   // No-op when target doesn't match
   const fc2 = buildParamFCurve('OtherParam', [{ time: 0, value: 1 }]);
   renameFCurveParam(fc2, 'NotMatching', 'NewName');
-  assertEq(fc2.rnaPath, "objects['__params__'].values['OtherParam']", 'no-op when not matching');
+  assertEq(fc2.rnaPath, 'objects["__params__"].values["OtherParam"]', 'no-op when not matching');
 }
 
 // ── renameFCurveNode: rewrites rnaPath + id, preserves property ───────────
 {
   const fc = buildNodeFCurve('oldId', 'opacity', [{ time: 0, value: 1 }]);
   renameFCurveNode(fc, 'oldId', 'newId');
-  assertEq(fc.rnaPath, "objects['newId'].opacity", 'node rnaPath rewritten');
+  assertEq(fc.rnaPath, 'objects["newId"].opacity', 'node rnaPath rewritten');
   assertEq(fc.id, 'newId.opacity', 'node id rewritten');
   // Property suffix preserved
   const fc2 = buildNodeFCurve('a', 'transform.rotation', [{ time: 0, value: 0 }]);
   renameFCurveNode(fc2, 'a', 'b');
-  assertEq(fc2.rnaPath, "objects['b'].transform.rotation", 'compound property preserved');
+  assertEq(fc2.rnaPath, 'objects["b"].transform.rotation', 'compound property preserved');
 }
 
 // ── evaluateActionFCurves: produces rnaPath → value map ───────────────────
@@ -154,9 +154,9 @@ function assertNear(actual, expected, eps, name) {
     ],
   };
   const out = evaluateActionFCurves(action, 500);
-  assertNear(out.get("objects['__params__'].values['P1']"), 5, 1e-9, 'P1 lerps to 5');
-  assertNear(out.get("objects['__params__'].values['P2']"), 5, 1e-9, 'P2 holds first');
-  assertNear(out.get("objects['partA'].x"), 50, 1e-9, 'partA.x lerps to 50');
+  assertNear(out.get('objects["__params__"].values["P1"]'), 5, 1e-9, 'P1 lerps to 5');
+  assertNear(out.get('objects["__params__"].values["P2"]'), 5, 1e-9, 'P2 holds first');
+  assertNear(out.get('objects["partA"].x'), 50, 1e-9, 'partA.x lerps to 50');
 }
 
 // ── evaluateActionFCurves: empty / null inputs → empty map ────────────────
@@ -185,9 +185,9 @@ function assertNear(actual, expected, eps, name) {
   assertEq(drivers.length, 3, 'collectDrivers: 3 records');
   const paths = drivers.map((d) => d.rnaPath).sort();
   assertEq(paths, [
-    "objects['__params__'].values['PA']",
-    "objects['partA'].transform.rotation",
-    "objects['partA'].transform.x",
+    'objects["__params__"].values["PA"]',
+    'objects["partA"].transform.rotation',
+    'objects["partA"].transform.x',
   ], 'collectDrivers: rnaPaths assembled correctly');
 }
 
@@ -198,7 +198,7 @@ function assertNear(actual, expected, eps, name) {
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
-  assertNear(out.get("objects['__params__'].values['PA']"), 0, 1e-9, 'sum no-vars → 0');
+  assertNear(out.get('objects["__params__"].values["PA"]'), 0, 1e-9, 'sum no-vars → 0');
 }
 
 // ── evaluateProjectDrivers: scripted driver returning constant ────────────
@@ -208,7 +208,7 @@ function assertNear(actual, expected, eps, name) {
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
-  assertNear(out.get("objects['__params__'].values['PB']"), 10, 1e-9, 'scripted constant → 10');
+  assertNear(out.get('objects["__params__"].values["PB"]'), 10, 1e-9, 'scripted constant → 10');
 }
 
 // ── evaluateProjectDrivers: scripted with variable resolves through rnaPath
@@ -222,7 +222,7 @@ function assertNear(actual, expected, eps, name) {
           type: 'scripted',
           expression: 'a * 2',
           variables: [
-            { name: 'a', target: { rnaPath: "objects['__params__'].values['P_INPUT']" } },
+            { name: 'a', target: { rnaPath: 'objects["__params__"].values["P_INPUT"]' } },
           ],
         },
       },
@@ -230,7 +230,7 @@ function assertNear(actual, expected, eps, name) {
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
-  assertNear(out.get("objects['__params__'].values['P_OUTPUT']"), 10, 1e-9,
+  assertNear(out.get('objects["__params__"].values["P_OUTPUT"]'), 10, 1e-9,
     'scripted: var resolved + multiplied');
 }
 
@@ -244,16 +244,16 @@ function assertNear(actual, expected, eps, name) {
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
-  assert(!out.has("objects['__params__'].values['PA']"), 'bad driver swallowed');
-  assertNear(out.get("objects['__params__'].values['PB']"), 10, 1e-9, 'good driver still resolves');
+  assert(!out.has('objects["__params__"].values["PA"]'), 'bad driver swallowed');
+  assertNear(out.get('objects["__params__"].values["PB"]'), 10, 1e-9, 'good driver still resolves');
 }
 
 // ── driverOverridesToParamMap projection ──────────────────────────────────
 {
   const ov = new Map([
-    ["objects['__params__'].values['ParamA']", 1.5],
-    ["objects['__params__'].values['ParamB']", -2.0],
-    ["objects['partA'].transform.rotation", 0.7],
+    ['objects["__params__"].values["ParamA"]', 1.5],
+    ['objects["__params__"].values["ParamB"]', -2.0],
+    ['objects["partA"].transform.rotation', 0.7],
   ]);
   const paramMap = driverOverridesToParamMap(ov);
   assertEq(paramMap, { ParamA: 1.5, ParamB: -2.0 }, 'projection extracts params only');

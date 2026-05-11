@@ -55,7 +55,7 @@ import {
  * @typedef {Object} ReferenceReport
  * @property {ParamReference[]} actionFCurves
  *   FCurves in `project.actions[]` that target this parameter's
- *   `objects['__params__'].values['<paramId>']` rnaPath.
+ *   `objects["__params__"].values["<paramId>"]` rnaPath.
  * @property {ParamReference[]} bindings
  *   Combined faceParallax + bodyWarp + rigWarps binding refs.
  * @property {ParamReference[]} physicsInputs
