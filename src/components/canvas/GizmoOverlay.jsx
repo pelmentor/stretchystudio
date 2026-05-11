@@ -22,6 +22,7 @@ import { computePoseOverrides, applyOverrideToNode, readPoseValue, writePoseValu
 import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/transforms';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { getMesh } from '@/store/objectDataAccess';
+import { getActiveSceneAction } from '@/anim/sceneAction';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
@@ -65,7 +66,9 @@ export function GizmoOverlay() {
   // bones, `transform` for non-bones (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
-    const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
+    // Stage 1.E: scene-bound action wins over UI-store fallback. Partial-project
+    // shape `{nodes, actions}` suffices — `getActiveSceneAction` only reads those.
+    const activeAction = getActiveSceneAction({ nodes, actions }, animActiveActionId);
     const endMs = (animEndFrame / animFps) * 1000;
     const overrides  = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;

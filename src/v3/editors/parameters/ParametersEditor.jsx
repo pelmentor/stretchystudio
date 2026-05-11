@@ -27,7 +27,7 @@ import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
 import { InitRigOptionsPopover } from './InitRigOptionsPopover.jsx';
-import { IdleMotionDialog } from '../animations/IdleMotionDialog.jsx';
+import { IdleMotionDialog } from '../actions/IdleMotionDialog.jsx';
 
 export function ParametersEditor() {
   // `project.parameters` is always an array (default state + migration
@@ -66,7 +66,7 @@ export function ParametersEditor() {
   const [draftId, setDraftId] = useState(/** @type {string|null} */ (null));
   // GAP-017 Phase B — surface idle-motion generation right next to Init
   // Rig so the natural "rig → animate" workflow doesn't require a
-  // workspace switch. Same dialog AnimationsEditor mounts; either
+  // workspace switch. Same dialog ActionsEditor mounts; either
   // call-site wins, since IdleMotionDialog routes to the Animation
   // workspace + activates the new animation on success.
   const [showIdleDialog, setShowIdleDialog] = useState(false);

@@ -73,7 +73,10 @@
  *     AnimData. Until then, no Object's `animData.actionId` is auto-bound;
  *     consumers continue to pick the active action via the UI store
  *     (`useAnimationStore.activeActionId`, renamed from `activeAnimationId`).
- *   - Stage 1.E — `AnimationsEditor` → `ActionsEditor` UI rename.
+ *   - Stage 1.E (SHIPPED 2026-05-11) — `AnimationsEditor` → `ActionsEditor`
+ *     UI rename + 11-file `activeActionId` consumer rewire through
+ *     `getActiveSceneAction(project, fallback)` so scene-bound actions
+ *     win over UI-store fallback throughout the editor.
  *   - NodeTree retirement (`project.nodeTrees.{rig,driver,animation}`).
  *     The nodetree shadow trees stay populated for now; they're retired
  *     alongside this migration in a follow-up commit so the rewire vs.

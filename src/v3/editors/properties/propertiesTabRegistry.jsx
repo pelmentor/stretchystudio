@@ -61,7 +61,11 @@ export const PROPERTIES_TABS = [
     id: 'item',
     label: 'Item',
     icon: <Box size={14} />,
-    sectionIds: ['transform', 'visibility', 'partInfo'],
+    // Stage 1.E — `animData` lives under Item (the Object-level
+    // metadata tab) so per-Object Action bindings appear alongside
+    // transform / visibility / part info. Stays at the bottom because
+    // it's a project-data binding rather than an Object-shape property.
+    sectionIds: ['transform', 'visibility', 'partInfo', 'animData'],
   },
   {
     id: 'modifiers',

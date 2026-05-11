@@ -36,8 +36,8 @@ const PropertiesEditor = lazy(() =>
 const ParametersEditor = lazy(() =>
   import('../editors/parameters/ParametersEditor.jsx').then((m) => ({ default: m.ParametersEditor }))
 );
-const AnimationsEditor = lazy(() =>
-  import('../editors/animations/AnimationsEditor.jsx').then((m) => ({ default: m.AnimationsEditor }))
+const ActionsEditor = lazy(() =>
+  import('../editors/actions/ActionsEditor.jsx').then((m) => ({ default: m.ActionsEditor }))
 );
 const PerformanceEditor = lazy(() =>
   import('../editors/performance/PerformanceEditor.jsx').then((m) => ({ default: m.PerformanceEditor }))
@@ -75,7 +75,7 @@ export const EDITOR_REGISTRY = {
   properties:  { label: 'Properties',   component: PropertiesEditor },
   parameters:  { label: 'Parameters',   component: ParametersEditor },
   timeline:    { label: 'Timeline',     component: TimelineEditor },
-  animations:  { label: 'Animations',   component: AnimationsEditor },
+  actions:     { label: 'Actions',      component: ActionsEditor },
   performance: { label: 'Performance',  component: PerformanceEditor },
   dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor },
   fcurve:      { label: 'F-curve',      component: FCurveEditor },

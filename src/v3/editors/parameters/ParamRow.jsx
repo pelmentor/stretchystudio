@@ -23,6 +23,7 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { getEditorMode } from '../../../store/uiV3Store.js';
 import { setParamKeyframeAt } from '../../../renderer/animationEngine.js';
+import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 import { logger } from '../../../lib/logger.js';
 
@@ -176,7 +177,8 @@ function ParamRowImpl({ param, selected }) {
           if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
           const an = useAnimationStore.getState();
           const proj = useProjectStore.getState().project;
-          const activeAction = proj.actions.find((a) => a.id === an.activeActionId);
+          // Stage 1.E: scene-bound action wins over UI-store fallback.
+          const activeAction = getActiveSceneAction(proj, an.activeActionId);
           if (!activeAction) return;
           useProjectStore.getState().updateProject((p) => {
             const a = p.actions.find((aa) => aa.id === activeAction.id);

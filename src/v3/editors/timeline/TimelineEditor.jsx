@@ -13,6 +13,7 @@ import {
   fcurveTargetsParam,
   fcurveTargetsNode,
 } from '@/anim/animationFCurve';
+import { getActiveSceneAction, getSceneAction } from '@/anim/sceneAction';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -128,9 +129,12 @@ function NumField({ label, value, onChange, min, max, step = 1, className = '', 
 /* ──────────────────────────────────────────────────────────────────────────
    useAudioSync — Web Audio API playback sync
 
-   Key design: effect only watches isPlaying / activeActionId, NOT currentTime.
+   Key design: effect only watches isPlaying / animation.id, NOT currentTime.
    currentTime is read via ref so it's fresh at the moment play is pressed
-   without causing the effect to re-fire every rAF frame.
+   without causing the effect to re-fire every rAF frame. Watching the
+   resolved animation's id (rather than the raw UI-store activeActionId)
+   covers Stage 1.E scene-binding changes — the user binding a different
+   action to `__scene__` flips animation.id and restarts audio cleanly.
 ────────────────────────────────────────────────────────────────────────── */
 function useAudioSync(animation, animStore) {
   const audioCtxRef    = useRef(null);
@@ -226,7 +230,7 @@ function useAudioSync(animation, animStore) {
     startAll().catch(e => console.error('Audio startAll error:', e));
     return () => { stopAll(); };
   // loopCount increments in animationStore.tick on each loop — causes audio restart from top
-  }, [animStore.isPlaying, animStore.activeActionId, animStore.loopCount, stopAll]); // NOT animation, NOT currentTime
+  }, [animStore.isPlaying, animation?.id, animStore.loopCount, stopAll]); // NOT animation, NOT currentTime
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -724,9 +728,13 @@ export function TimelineEditor() {
   });
 
   /* ── Active action object ───────────────────────────────────────────── */
+  // Stage 1.E: scene-bound action wins over UI-store fallback. Once the
+  // user binds an action to `__scene__` via the Actions panel, the timeline
+  // focuses on that action — the UI store is only consulted when the
+  // scene has no binding (most projects pre-Stage-1.E start state).
   const animation = useMemo(
-    () => proj.actions.find(a => a.id === anim.activeActionId) ?? null,
-    [proj.actions, anim.activeActionId]
+    () => getActiveSceneAction(proj, anim.activeActionId),
+    [proj.nodes, proj.actions, anim.activeActionId]
   );
 
   /* ── Derived values ─────────────────────────────────────────────────── */
@@ -738,14 +746,18 @@ export function TimelineEditor() {
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
   /* ── Auto-select action when one exists ──────────────────────────────── */
+  // Stage 1.E: only auto-select when neither scene-binding nor UI-store
+  // resolves an action. If the scene is already bound, that wins — no
+  // need to write the UI store too (its purpose is the fallback when no
+  // scene binding exists).
   useEffect(() => {
-    if (!anim.activeActionId && proj.actions.length > 0) {
-      anim.setActiveActionId(proj.actions[0].id);
-      const a = proj.actions[0];
-      anim.setFps(a.fps ?? 24);
-      anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
-    }
-  }, [proj.actions, anim.activeActionId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (animation) return;
+    if (proj.actions.length === 0) return;
+    anim.setActiveActionId(proj.actions[0].id);
+    const a = proj.actions[0];
+    anim.setFps(a.fps ?? 24);
+    anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
+  }, [proj.actions, animation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Create a default action if none ────────────────────────────────── */
   const ensureAnimation = useCallback(() => {
@@ -931,7 +943,7 @@ export function TimelineEditor() {
       if (dragFrameDelta !== 0) {
         let nextSel = new Set();
         update((p) => {
-          const a = p.actions.find(x => x.id === anim.activeActionId);
+          const a = getActiveSceneAction(p, anim.activeActionId);
           if (!a) return;
           for (const item of dragCtx.current.origKeyframes) {
             const fc = item.paramId
@@ -1129,7 +1141,7 @@ export function TimelineEditor() {
     if (!clipboard || !animation) return;
 
     update((p) => {
-      const a = p.actions.find(x => x.id === anim.activeActionId);
+      const a = getActiveSceneAction(p, anim.activeActionId);
       if (!a) return;
       const timeMs = anim.currentTime;
 
@@ -1198,7 +1210,7 @@ export function TimelineEditor() {
     if (selectedKeyframes.size === 0) return;
 
     update((p) => {
-      const a = p.actions.find(x => x.id === anim.activeActionId);
+      const a = getActiveSceneAction(p, anim.activeActionId);
       if (!a) return;
       for (const fc of a.fcurves) {
         const target = decodeFCurveTarget(fc);
@@ -1246,7 +1258,7 @@ export function TimelineEditor() {
     const targetId = `${rowKey}:${timeMs}`;
     const applyTo = selectedKeyframes.has(targetId) ? selectedKeyframes : new Set([targetId]);
     update((p) => {
-      const a = p.actions.find(x => x.id === anim.activeActionId);
+      const a = getActiveSceneAction(p, anim.activeActionId);
       if (!a) return;
       for (const fc of a.fcurves) {
         const target = decodeFCurveTarget(fc);
@@ -1268,7 +1280,7 @@ export function TimelineEditor() {
       deleteSelectedKeyframes();
     } else {
       update((p) => {
-        const a = p.actions.find(x => x.id === anim.activeActionId);
+        const a = getActiveSceneAction(p, anim.activeActionId);
         if (!a) return;
         const wantParam = rowKey.startsWith('param:');
         const lookupId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
@@ -1514,7 +1526,7 @@ export function TimelineEditor() {
             const name = window.prompt('Audio track name:', `Audio ${(animation?.audioTracks?.length ?? 0) + 1}`);
             if (name) {
               update((p) => {
-                const a = p.actions.find(x => x.id === anim.activeActionId);
+                const a = getActiveSceneAction(p, anim.activeActionId);
                 if (a) {
                   a.audioTracks.push({
                     id: uid(),
@@ -1541,11 +1553,19 @@ export function TimelineEditor() {
             A/B between motions for multi-motion preview. */}
         {hasAnimation ? (
           <select
-            value={anim.activeActionId ?? ''}
+            value={animation?.id ?? ''}
             onChange={(e) => {
               const id = e.target.value;
               const a = proj.actions.find((x) => x.id === id);
               anim.setActiveActionId(id);
+              // Stage 1.E: when the scene is bound to an action, the
+              // picker's pick treats that bind as user intent — re-bind
+              // scene to the new id so the dropdown's value isn't
+              // silently overridden by the scene-resolution gate. When
+              // no scene binding exists, the UI-store update is enough.
+              if (getSceneAction(proj)) {
+                useProjectStore.getState().assignAction('__scene__', id, 0);
+              }
               if (a) {
                 const f = a.fps ?? 24;
                 anim.setFps(f);
@@ -1554,7 +1574,7 @@ export function TimelineEditor() {
               }
             }}
             className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
-            title="Active action — switch to preview a different motion."
+            title="Active action — switch to preview a different motion. (Re-binds Scene when one is bound.)"
           >
             {proj.actions.map((a) => (
               <option key={a.id} value={a.id}>

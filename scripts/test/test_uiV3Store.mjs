@@ -87,13 +87,14 @@ function reset() {
   assert(c?.tabs.length === 2, 'animation center has 2 tabs');
   assert(c?.tabs[0].editorType === 'viewport' && c?.tabs[1].editorType === 'livePreview',
     'animation center tabs = [viewport, livePreview]');
-  // rightBottom in animation workspace pairs Animations + Properties.
+  // rightBottom in animation workspace pairs Actions + Properties.
   // V2 final wire (2026-05-07) — NodeTree appended as a third tab.
+  // Stage 1.E (2026-05-11) — `animations` editor type renamed to `actions`.
   const rb = anim.areas.find((a) => a.id === 'rightBottom');
   assert(rb?.tabs.length === 3, 'animation rightBottom has 3 tabs');
   const rbTypes = rb.tabs.map((t) => t.editorType);
-  assert(JSON.stringify(rbTypes) === '["animations","properties","nodeTree"]',
-    'animation rightBottom = [animations, properties, nodeTree]');
+  assert(JSON.stringify(rbTypes) === '["actions","properties","nodeTree"]',
+    'animation rightBottom = [actions, properties, nodeTree]');
 }
 
 // ── No workspace ships a centerRight slot — single canvas, tabbed swap ──

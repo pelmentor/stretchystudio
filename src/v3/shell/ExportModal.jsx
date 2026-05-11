@@ -48,6 +48,7 @@ import {
   exportFrames,
 } from '../../io/exportAnimation.js';
 import { generateMotion3Json } from '../../io/live2d/motion3json.js';
+import { getActiveSceneAction } from '../../anim/sceneAction.js';
 
 /**
  * Format options grouped by section. Each `groupId` clusters cards
@@ -202,7 +203,15 @@ export function ExportModal() {
   // hasUnsavedChanges flag flips on every edit so this is essentially
   // free.
   const project = useProjectStore((s) => s.project);
-  const activeActionId = useAnimationStore((s) => s.activeActionId);
+  const uiActiveActionId = useAnimationStore((s) => s.activeActionId);
+  // Stage 1.E: scene-bound action wins over UI-store fallback. The
+  // exporter's "Current" target ('current' animTarget) follows whichever
+  // action the user has bound to `__scene__`; falls back to the UI's
+  // last-selected id when no scene binding exists.
+  const activeActionId = useMemo(
+    () => getActiveSceneAction(project, uiActiveActionId)?.id ?? null,
+    [project, uiActiveActionId],
+  );
   const [format, setFormat] = useState('live2d-full');
   const [dataLayer, setDataLayer] = useState('project');  // GAP-009
   const [busy, setBusy] = useState(false);

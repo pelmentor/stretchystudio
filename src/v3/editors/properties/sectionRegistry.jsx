@@ -41,6 +41,7 @@ import { DeformerInfoSection } from './sections/DeformerInfoSection.jsx';
 import { DeformerBindingsSection } from './sections/DeformerBindingsSection.jsx';
 import { DeformerKeyformsSection } from './sections/DeformerKeyformsSection.jsx';
 import { VertexGroupsSection } from './sections/VertexGroupsSection.jsx';
+import { AnimDataSection } from './sections/AnimDataSection.jsx';
 import {
   MeshSection,
   ShapeKeysSection,
@@ -199,6 +200,18 @@ export const PROPERTIES_SECTIONS = [
     label: 'Rig Stages',
     isVisible: ({ active }) => active.type === 'part' || active.type === 'group',
     render: () => <RigStagesSection />,
+  },
+  {
+    // Stage 1.E — per-Object AnimData binding to an Action datablock.
+    // Visible for parts + groups (the Object types per Stage 1.A
+    // `objectDataAccess.isObject(node)`); scene binding is intentionally
+    // surfaced via the ActionsEditor instead (Stage 1.D Audit-fix G-16:
+    // `selectionStore.SelectableType` excludes 'scene' so the scene
+    // cannot reach the Properties panel).
+    id: 'animData',
+    label: 'Animation Data',
+    isVisible: ({ active }) => active.type === 'part' || active.type === 'group',
+    render: ({ active }) => <AnimDataSection nodeId={active.id} />,
   },
 ];
 

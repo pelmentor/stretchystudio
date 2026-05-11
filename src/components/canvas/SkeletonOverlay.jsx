@@ -24,6 +24,7 @@ import {
   preparePoseTranslate, applyPoseTranslate,
 } from '@/renderer/transforms';
 import { computePoseOverrides, applyOverrideToNode } from '@/renderer/animationEngine';
+import { getActiveSceneAction } from '@/anim/sceneAction';
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
@@ -162,7 +163,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   // bone groups, transform for everything else (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
-    const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
+    // Stage 1.E: scene-bound action wins over UI-store fallback. The
+    // partial-project shape `{nodes, actions}` is enough — `getActiveSceneAction`
+    // only touches `.nodes` (for `__scene__` lookup) and `.actions` (for resolution).
+    const activeAction = getActiveSceneAction({ nodes, actions }, animActiveActionId);
     const endMs = (animEndFrame / animFps) * 1000;
     const overrides  = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;
@@ -190,7 +194,8 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
 
   /* ── Compute keyform overrides (before pointer handlers) ── */
 
-  const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
+  // Stage 1.E: scene-bound action wins over UI-store fallback (see effectiveNodes above).
+  const activeAction = getActiveSceneAction({ nodes, actions }, animActiveActionId);
   const endMs = (animEndFrame / animFps) * 1000;
   const keyframeOverrides = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
 

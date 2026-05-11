@@ -47,7 +47,7 @@ import * as SelectImpl from '../../../components/ui/select.jsx';
 // shadcn/ui Select parts are forwardRefs without JSX-typed declarations —
 // tsc can't see their props (children, className). Cast through one alias
 // so the dropdown JSX below stays permissive at runtime they're the same.
-// (Same pattern AnimationsEditor + IdleMotionDialog use for AlertDialog.)
+// (Same pattern ActionsEditor + IdleMotionDialog use for AlertDialog.)
 /** @type {Record<string, React.ComponentType<any>>} */
 const Sel = /** @type {any} */ (SelectImpl);
 const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } = Sel;

@@ -33,6 +33,7 @@ import {
   decodeFCurveTarget,
   fcurveTargetsParam,
 } from '../../../anim/animationFCurve.js';
+import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { Activity } from 'lucide-react';
 
 const SAMPLES = 240;
@@ -47,9 +48,12 @@ export function FCurveEditor() {
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
   const selection = useSelectionStore((s) => s.items);
 
+  // Stage 1.E: scene-bound action wins over UI-store fallback. Dep on
+  // `project.nodes` covers the `__scene__` lookup; `project.actions`
+  // covers id resolution.
   const action = useMemo(
-    () => (project.actions ?? []).find((a) => a.id === activeActionId) ?? null,
-    [project.actions, activeActionId],
+    () => getActiveSceneAction(project, activeActionId),
+    [project.nodes, project.actions, activeActionId],
   );
 
   const picked = useMemo(() => pickFCurve(action, selection), [action, selection]);
@@ -62,7 +66,7 @@ export function FCurveEditor() {
   if (!action) {
     return (
       <Wrapper title="F-curve" subtitle="No animation active">
-        <Empty msg="Create or select an animation in the Animations panel." />
+        <Empty msg="Create or select an action in the Actions panel." />
       </Wrapper>
     );
   }

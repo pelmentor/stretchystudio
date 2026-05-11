@@ -14,7 +14,8 @@
  *    (UX limitation in v1: selecting a parameter is a Parameters-panel
  *     concern that landed post-N-4. Until that lands, the user picks
  *     a paramId from a small dropdown sourced from `nodeTrees.driver`.)
- *  - Animation: `animationStore.activeActionId`.
+ *  - Animation: scene-bound action wins, falling back to
+ *    `animationStore.activeActionId` (Stage 1.E rewire 2026-05-11).
  *
  * No edit ops yet — the underlying datablocks are still derived from
  * the legacy mirrors (modifiers / drivers / animations). Phase N-5
@@ -27,6 +28,7 @@ import { useMemo, useState } from 'react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
+import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { NodeTreeEditor } from './NodeTreeEditor.jsx';
 
 /** @type {Array<{ id: 'rig'|'driver'|'animation', label: string }>} */
@@ -41,7 +43,16 @@ export function NodeTreeArea() {
 
   const project = useProjectStore((s) => s.project);
   const selectionHead = useEditorStore((s) => (Array.isArray(s.selection) && s.selection.length > 0 ? s.selection[0] : null));
-  const activeActionId = useAnimationStore((s) => s.activeActionId);
+  const uiActiveActionId = useAnimationStore((s) => s.activeActionId);
+  // Stage 1.E: scene-bound action wins over UI-store fallback. The
+  // legacy `project.nodeTrees.animation` shadow trees are keyed by
+  // action id; resolution order is identical to the rest of the
+  // editor surface — `__scene__.animData.actionId` first, then the
+  // UI store's last-clicked id.
+  const activeActionId = useMemo(
+    () => getActiveSceneAction(project, uiActiveActionId)?.id ?? null,
+    [project.nodes, project.actions, uiActiveActionId],
+  );
 
   // Driver mode — when selection isn't a paramId, fall back to the
   // first driverTree key so the user sees a non-empty graph instead

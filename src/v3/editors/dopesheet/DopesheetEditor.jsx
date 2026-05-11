@@ -26,6 +26,7 @@ import { useMemo, useRef } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
+import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { Film } from 'lucide-react';
 
 const LABEL_W = 180;
@@ -38,9 +39,12 @@ export function DopesheetEditor() {
   const currentTime  = useAnimationStore((s) => s.currentTime);
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
 
+  // Stage 1.E: scene-bound action wins over UI-store fallback. Dep on
+  // `project.nodes` covers the `__scene__` lookup; `project.actions`
+  // covers id resolution.
   const action = useMemo(
-    () => (project.actions ?? []).find((a) => a.id === activeActionId) ?? null,
-    [project.actions, activeActionId],
+    () => getActiveSceneAction(project, activeActionId),
+    [project.nodes, project.actions, activeActionId],
   );
 
   const rows = useMemo(() => buildRows(action, project), [action, project]);
@@ -51,7 +55,7 @@ export function DopesheetEditor() {
       <div className="flex flex-col h-full bg-card overflow-hidden">
         <DopeHeader title="Dopesheet" subtitle="No animation active" />
         <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground italic">
-          Create or select an animation in the Animations panel.
+          Create or select an action in the Actions panel.
         </div>
       </div>
     );

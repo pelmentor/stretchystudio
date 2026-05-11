@@ -28,6 +28,7 @@ import {
 import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
 import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
 import { buildNodeFCurve, decodeFCurveTarget, fcurveTargetsNode } from '@/anim/animationFCurve';
+import { getActiveSceneAction } from '@/anim/sceneAction';
 // Phase 0.B of Animation Blender-Parity Plan (2026-05-09) — driver pass.
 // `evaluateProjectDrivers` walks every `param.driver` (and future
 // `node.transformDrivers`) and returns a Map<rnaPath, value>. Phase 0
@@ -643,7 +644,8 @@ export default function CanvasViewport({
       if (getEditorMode() === 'animation') {
         const _anim = animRef.current;
         const _proj = projectRef.current;
-        const _activeAction = _proj.actions.find((a) => a.id === _anim.activeActionId) ?? null;
+        // Stage 1.E: scene-bound action wins over UI-store fallback.
+        const _activeAction = getActiveSceneAction(_proj, _anim.activeActionId);
         if (_activeAction) {
           const _endMs = (_anim.endFrame / _anim.fps) * 1000;
           const paramOv = computeParamOverrides(_activeAction, _anim.currentTime, _anim.loopKeyframes, _endMs);
@@ -893,7 +895,8 @@ export default function CanvasViewport({
         // Compute pose overrides from current animation state
         const anim = animRef.current;
         const proj = projectRef.current;
-        const activeAction = proj.actions.find(a => a.id === anim.activeActionId) ?? null;
+        // Stage 1.E: scene-bound action wins over UI-store fallback.
+        const activeAction = getActiveSceneAction(proj, anim.activeActionId);
 
         let poseOverrides = null;
         if (getEditorMode() === 'animation') {
@@ -1442,7 +1445,9 @@ export default function CanvasViewport({
       const proj = projectRef.current;
       if (proj.actions.length === 0) return;
 
-      const actionId = anim.activeActionId ?? proj.actions[0]?.id;
+      // Stage 1.E: scene-bound action wins over UI-store fallback;
+      // only fall back to first action when neither resolves.
+      const actionId = getActiveSceneAction(proj, anim.activeActionId)?.id ?? proj.actions[0]?.id;
       if (!actionId) return;
 
       let selectedIds = ed.selection;
@@ -2299,8 +2304,9 @@ export default function CanvasViewport({
     // and vertex positions match what is visually displayed on the canvas.
     const animNow = animRef.current;
     const isAnimMode = getEditorMode() === 'animation';
+    // Stage 1.E: scene-bound action wins over UI-store fallback.
     const activeAction = isAnimMode
-      ? (proj.actions.find(a => a.id === animNow.activeActionId) ?? null)
+      ? getActiveSceneAction(proj, animNow.activeActionId)
       : null;
     const kfOverrides = isAnimMode ? computePoseOverrides(activeAction, animNow.currentTime) : null;
     const ANIM_TRANSFORM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];

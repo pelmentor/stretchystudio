@@ -49,7 +49,7 @@ import { useAnimationStore } from './animationStore.js';
  *    keyframing.
  *
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'animations'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview'|'nodeTree')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'actions'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview'|'nodeTree')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -132,8 +132,8 @@ const DEFAULT_AREAS = () => [
 
 /**
  * Animation workspace adds a Timeline area below the center and an
- * Animations list tab alongside Properties (in rightBottom) so the
- * user can browse / create / switch animations without leaving the
+ * Actions list tab alongside Properties (in rightBottom) so the
+ * user can browse / create / switch actions without leaving the
  * workspace. Inherits the [Viewport, Live Preview] center tabs from
  * DEFAULT_AREAS.
  *
@@ -144,7 +144,7 @@ const ANIMATION_AREAS = () => [
   buildArea('leftBottom',  [e('logs')]),
   buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
-  buildArea('rightBottom', [e('animations'), e('properties'), e('nodeTree')]),
+  buildArea('rightBottom', [e('actions'), e('properties'), e('nodeTree')]),
   buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve')]),
 ];
 

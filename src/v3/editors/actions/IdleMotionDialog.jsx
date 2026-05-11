@@ -16,7 +16,7 @@
  *   - `paramKeyframes` from buildMotion3 is already in ms (motionLib uses
  *     durationMs everywhere) so no time conversion needed.
  *
- * @module v3/editors/animations/IdleMotionDialog
+ * @module v3/editors/actions/IdleMotionDialog
  */
 
 import { useState } from 'react';
@@ -33,7 +33,7 @@ import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS } from '../../
 import { buildParamFCurve } from '../../../anim/animationFCurve.js';
 
 // shadcn/ui forwardRef components ship without JSX-typed declarations — cast
-// via `any` so tsc accepts children/className. Same pattern as AnimationsEditor's
+// via `any` so tsc accepts children/className. Same pattern as ActionsEditor's
 // AlertDialog import.
 /** @type {Record<string, React.ComponentType<any>>} */
 const D = /** @type {any} */ (DialogImpl);
