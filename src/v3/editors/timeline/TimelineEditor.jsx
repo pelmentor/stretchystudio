@@ -1443,7 +1443,7 @@ export function TimelineEditor() {
             anim.setEndFrame(v);
             if (animation) {
               update((p) => {
-                const a = p.actions.find(x => x.id === animation.id);
+                const a = getActiveSceneAction(p, anim.activeActionId);
                 if (a) a.duration = (v / (a.fps ?? 24)) * 1000;
               });
             }
@@ -1462,7 +1462,7 @@ export function TimelineEditor() {
             anim.setFps(v);
             if (animation) {
               update((p) => {
-                const a = p.actions.find(x => x.id === animation.id);
+                const a = getActiveSceneAction(p, anim.activeActionId);
                 if (a) {
                   const oldFps = a.fps ?? 24;
                   a.fps = v;
@@ -1563,6 +1563,22 @@ export function TimelineEditor() {
               // scene to the new id so the dropdown's value isn't
               // silently overridden by the scene-resolution gate. When
               // no scene binding exists, the UI-store update is enough.
+              //
+              // **Blender-fidelity rationale (Audit-fix D-7 Stage 1.E
+              // — kept as-is, NOT removed.)** Blender's
+              // `template_action(animated_id, ...)` writes ONLY to
+              // `animated_id.animation_data.action`
+              // (`scripts/startup/bl_ui/space_dopesheet.py:313`). For
+              // SS, the timeline picker's "pinned" datablock IS the
+              // scene when the scene is bound — `getActiveSceneAction`
+              // resolves to scene's action. So picking a different id
+              // here writing to scene's adt mirrors Blender's
+              // template_action writing to its pinned datablock; it is
+              // NOT the auto-broadcast `ANIM_OT_replace_action` op
+              // (`anim_ops.cc:1389`) which Blender exposes as a
+              // separate explicit operator. The audit tagged this as
+              // unexpected-magic but the actual semantic IS Blender-
+              // faithful for the project's "currently-pinned" context.
               if (getSceneAction(proj)) {
                 useProjectStore.getState().assignAction('__scene__', id, 0);
               }

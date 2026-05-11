@@ -209,7 +209,7 @@ export const PROPERTIES_SECTIONS = [
     // `selectionStore.SelectableType` excludes 'scene' so the scene
     // cannot reach the Properties panel).
     id: 'animData',
-    label: 'Animation Data',
+    label: 'Animation',
     isVisible: ({ active }) => active.type === 'part' || active.type === 'group',
     render: ({ active }) => <AnimDataSection nodeId={active.id} />,
   },

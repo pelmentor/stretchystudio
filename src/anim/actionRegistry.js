@@ -95,6 +95,41 @@
 import { uid } from '../lib/ids.js';
 
 /**
+ * Compute Blender-faithful `.NNN` suffix for a clone's display name.
+ *
+ * Mirrors `BKE_main_namemap_get_unique_name`
+ * (`reference/blender/source/blender/blenkernel/intern/main_namemap.cc:450`):
+ * scans `actions[]` for siblings already matching `${base}\.(\d{3})`,
+ * picks `max(NNN) + 1`, zero-pads to three digits. When no `.NNN`
+ * sibling exists yet, returns `${base}.001`. (Audit-fix D-6 Stage 1.E
+ * — replaces the prior ` Copy` suffix to match Blender's convention.)
+ *
+ * The `base` value is the source's `name` verbatim — we don't strip an
+ * existing trailing `.NNN`, matching Blender's behavior of producing
+ * `Foo.001.001` when the user duplicates `Foo.001` (then on the next
+ * dup `Foo.001.002`, etc.). Surprising but consistent with Blender.
+ *
+ * @param {Array<{name?: string}>} actions
+ * @param {string} base
+ * @returns {string}
+ */
+function nextDotNNNName(actions, base) {
+  const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${escapedBase}\\.(\\d{3})$`);
+  let max = 0;
+  for (const a of actions) {
+    if (!a || typeof a.name !== 'string') continue;
+    const m = a.name.match(re);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  const next = (max + 1).toString().padStart(3, '0');
+  return `${base}.${next}`;
+}
+
+/**
  * Find every Object node whose `animData.actionId` points at the given
  * action.
  *
@@ -326,7 +361,7 @@ export function cloneAction(project, actionId, newName) {
   const name =
     typeof newName === 'string' && newName.length > 0
       ? newName
-      : `${src.name ?? 'Action'} Copy`;
+      : nextDotNNNName(actions, src.name ?? 'Action');
 
   const fcurves = Array.isArray(src.fcurves) ? src.fcurves : [];
   /** @type {object[]} */
@@ -418,12 +453,12 @@ export function cloneAction(project, actionId, newName) {
  * **Cross-store cascade (Audit-fix G-3):** the projectStore.deleteAction
  * thunk additionally resets `useAnimationStore.activeActionId` if it
  * matches the deleted id — every UI consumer of `activeActionId`
- * (Timeline / Dopesheet / FCurve / Animations / param row / canvas /
+ * (Timeline / Dopesheet / FCurve / Actions / param row / canvas /
  * gizmo / skeleton overlays / export modal / nodetree area) reads
- * through `proj.actions.find(a => a.id === activeActionId)`, which
- * would silently return `undefined` on a stale id. The registry
- * doesn't know about the animation UI store; the thunk owns the
- * cross-store coordination.
+ * through `getActiveSceneAction(project, activeActionId)` (post-Stage-1.E
+ * scene-aware lookup), which would silently return null on a stale id.
+ * The registry doesn't know about the animation UI store; the thunk
+ * owns the cross-store coordination.
  *
  * @param {object} project - mutated in place
  * @param {string} actionId

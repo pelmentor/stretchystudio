@@ -18,13 +18,44 @@
  *     animation" — the scene cannot be selected through the Outliner
  *     (Stage 1.D `selectionStore.SelectableType` excludes 'scene'), so
  *     the actions panel owns the scene-binding UI surface.
+ *
+ *     **Blender-fidelity deviation (Audit-fix D-12 Stage 1.E):** in
+ *     Blender, the per-Scene Action picker lives in the Properties
+ *     Editor's Scene tab (`SCENE_PT_animation`,
+ *     `reference/blender/scripts/startup/bl_ui/properties_scene.py:452`).
+ *     SS lacks a Scene tab today (Stage 1.D Audit-fix G-16 — scene
+ *     isn't a `SelectableType`), so the affordance lives here as a
+ *     pragmatic SS choice. When SS adds a Scene tab in some future
+ *     phase, this header MUST move (Rule №2 — no migration baggage).
+ *
  *   - **Per-action "Used by" strip.** Each action row shows the
  *     (truncated) list of Objects + Scene that have the action assigned
- *     via `getActionUsers(project, action.id)`. Mirrors Blender's
- *     Action Editor user-count pip.
+ *     via `getActionUsers(project, action.id)`.
+ *
+ *     **Blender-fidelity deviation (Audit-fix D-11 Stage 1.E):** this
+ *     is an EXTENSION of Blender's pattern, not a mirror. Blender shows
+ *     ONLY a numeric `(N)` user-count pip on the `template_id`
+ *     selector (`interface_template_id.cc:1267`); the named-list UI
+ *     does not exist in stock Blender. The named list is more
+ *     discoverable for SS's small action counts (typically 1–3 per
+ *     character) so we surface user names directly.
+ *
  *   - **Duplicate command.** New per-row Copy button calls the Stage
  *     1.C `cloneAction` thunk — the clone lands at the end of the list
  *     and becomes the active action.
+ *
+ *     **Blender-fidelity deviation (Audit-fix D-5 Stage 1.E):** Blender
+ *     has no explicit "Duplicate Action" command for the datablock
+ *     itself — `ACTION_OT_duplicate` (`action_edit.cc:1097`) duplicates
+ *     KEYFRAMES, not the Action ID. The datablock-copy surface in
+ *     Blender is the `(N)` user-count pip on `template_id`
+ *     (`interface_template_id.cc:1284`), called "Make Single User"
+ *     in tooltips — but that's only enabled when `users > 1`. SS's
+ *     explicit per-row Copy button is a discoverability win for the
+ *     common single-user case where Blender's pip is invisible.
+ *     Cloned names use Blender's `.001` convention (Audit-fix D-6 Stage
+ *     1.E — implemented in `actionRegistry.cloneAction` via
+ *     `nextDotNNNName`).
  *
  * Mounts as the `actions` editor type (renamed from `animations` in
  * `editorRegistry.js` + `uiV3Store.EditorType`). The animation
@@ -57,6 +88,7 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { getActionUsers } from '../../../anim/actionRegistry.js';
 import { getSceneAction, getSceneNode } from '../../../anim/sceneAction.js';
+import { toast } from '../../../hooks/use-toast.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
 import { IdleMotionDialog } from './IdleMotionDialog.jsx';
 
@@ -145,20 +177,32 @@ export function ActionsEditor() {
 
   function confirmDelete() {
     if (!deleteId) return;
+    // Audit-fix G-3 Stage 1.E: capture pre-delete user list so the
+    // post-delete toast can name what got unbound. Without this, scene-
+    // bound actions delete silently — the user clicks Delete on
+    // "Used by: Scene" and the scene's `animData.actionId` nulls with no
+    // visible feedback.
+    const cascadedUsers = formatUsedBy(getActionUsers(project, deleteId));
     deleteAction(deleteId);
     if (deleteId === activeId) {
       const remaining = actions.filter((a) => a.id !== deleteId);
       switchAction(remaining[0] ?? null);
+    }
+    if (cascadedUsers) {
+      toast({
+        title: 'Action deleted',
+        description: `Unbound from: ${cascadedUsers}`,
+      });
     }
     setDeleteId(null);
   }
 
   /** @param {{id: string, name?: string}} action */
   function duplicate(action) {
-    const newId = cloneAction(action.id);
-    if (!newId) return;
-    const list = useProjectStore.getState().project.actions ?? [];
-    const created = list.find((a) => a.id === newId);
+    // Audit-fix G-10 Stage 1.E: thunk now returns the full cloned
+    // action object (matching the registry's Audit-fix G-5 contract);
+    // no extra `actions.find(...)` scan needed.
+    const created = cloneAction(action.id);
     if (created) switchAction(created);
   }
 
@@ -391,6 +435,18 @@ export function ActionsEditor() {
             <AlertDialogDescription>
               This removes the action and all of its fcurves. Cannot be undone via this dialog;
               use Ctrl+Z afterwards if you change your mind.
+              {deleteId
+                ? (() => {
+                    // Audit-fix G-3 Stage 1.E: surface bindings BEFORE
+                    // delete so the user sees what will be unbound.
+                    // Mirrors Blender's "users" pip on the Action ID
+                    // template (`interface_template_id.cc:1267`).
+                    const users = formatUsedBy(getActionUsers(project, deleteId));
+                    return users
+                      ? <span className="block mt-2 text-foreground">Currently bound to: {users}.</span>
+                      : null;
+                  })()
+                : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

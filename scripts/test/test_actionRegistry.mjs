@@ -251,7 +251,7 @@ function makeProject() {
 {
   const project = makeProject();
   const clone = cloneAction(project, 'action-1');
-  assert(clone.name === 'Idle Copy', 'cloneAction: defaults to "<source.name> Copy"');
+  assert(clone.name === 'Idle.001', 'cloneAction: defaults to "<source.name>.NNN" (Audit-fix D-6 Stage 1.E — Blender naming)');
 }
 
 {

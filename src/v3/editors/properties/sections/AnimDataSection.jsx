@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * Animation Phase 1 Stage 1.E — AnimData section.
+ * Animation Phase 1 Stage 1.E — Animation section (per-Object AnimData).
  *
  * Surfaces the per-Object `animData.actionId` slot in the Properties
  * panel — the binding between this Object and an `Action` datablock.
@@ -30,6 +30,33 @@
  * - Writes: `assignAction(objectId, actionId)` /
  *   `unassignAction(objectId)` — Stage 1.C `actionRegistry` lifecycle
  *   helpers exposed as `projectStore` thunks.
+ *
+ * # Blender-fidelity scope (Audit-fix D-10 Stage 1.E)
+ *
+ * The section surfaces ONLY the Action picker + a derived FCurves
+ * count, mirroring Blender's `draw_action_and_slot_selector_for_id`
+ * (`reference/blender/scripts/startup/bl_ui/anim.py:8-30`). The other
+ * `AnimData` fields available in the schema (`actionInfluence`,
+ * `actionBlendmode`, `actionExtendmode` — all v36 defaults from
+ * `defaultAnimData()`) live in Blender's NLA Editor, not the per-
+ * datablock Animation panel. They are reserved for Phase 4's NLA work
+ * to keep the Stage-1.E surface honest.
+ *
+ * # Section label (Audit-fix D-2 Stage 1.E)
+ *
+ * Label is "Animation" (not "Animation Data") to match Blender's
+ * `bl_label = "Animation"` on `PropertiesAnimationMixin`
+ * (`scripts/startup/bl_ui/space_properties.py:135`). The `AnimData`
+ * struct name is internal-only.
+ *
+ * # Default-collapsed (Audit-fix D-3 Stage 1.E)
+ *
+ * Section ships in the `editorStore.propertiesSectionsCollapsed`
+ * initial set so it's collapsed by default — matches Blender's
+ * `bl_options = {'DEFAULT_CLOSED'}` on `PropertiesAnimationMixin`
+ * (`scripts/startup/bl_ui/space_properties.py:136`). Per-Object
+ * bindings rarely change post-import; expanded-by-default would
+ * clutter the Item tab on every selection.
  *
  * @module v3/editors/properties/sections/AnimDataSection
  */
@@ -83,7 +110,7 @@ export function AnimDataSection({ nodeId }) {
   }
 
   return (
-    <SectionShell id="animData" label="Animation Data" icon={<Film size={11} />}>
+    <SectionShell id="animData" label="Animation" icon={<Film size={11} />}>
       <PropertyRow label="Action" title="Action datablock driving this Object's animation">
         {actions.length === 0 ? (
           <span className="text-[10.5px] text-muted-foreground italic">

@@ -39,7 +39,7 @@ const WORKSPACES = [
   { label: 'Modeling', body: 'Edit meshes, blend shapes, masks per part. Properties tabs gain Mesh / Mask / BlendShape.' },
   { label: 'Rigging',  body: 'Build the warp / rotation deformer chain + parameters. Auto-rig button regenerates from PSD tags.' },
   { label: 'Pose',     body: 'Single-keyframe authoring of one expression. Animation mode is on so param changes auto-keyframe.' },
-  { label: 'Animation', body: 'Multi-keyframe motion3 timeline with the Animations list. Auto-keyframes write at playhead time.' },
+  { label: 'Animation', body: 'Multi-keyframe motion3 timeline with the Actions panel. Auto-keyframes write at playhead time.' },
 ];
 
 /** @type {Array<{chord:string, what:string}>} */

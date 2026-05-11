@@ -367,19 +367,32 @@ export const useProjectStore = create((set, get) => {
   })),
 
   /**
-   * Clone an action via the registry; returns the new id (or null on
-   * miss) so callers can immediately make it active. The full cloned
-   * action object is reachable via `state.project.actions.find(a =>
-   * a.id === newId)` post-set.
+   * Clone an action via the registry; returns the FULL cloned action
+   * object (or null on miss) so callers don't need an extra
+   * `actions.find(...)` scan post-set. (Audit-fix G-10 Stage 1.E —
+   * pre-fix the thunk discarded the registry's full-object return
+   * shape and returned only the id, contradicting the registry's own
+   * Audit-fix G-5 Stage 1.C which lifted the return shape from id →
+   * object precisely to spare callers that scan.)
+   *
+   * The clone the thunk returns is the immer-finalised object (not the
+   * draft proxy) so it is safe to capture in React state and persists
+   * after the `produce` callback completes.
    */
   cloneAction: (actionId, newName) => {
-    let newId = null;
+    /** @type {object|null} */
+    let createdId = null;
     set(produce((state) => {
       state.hasUnsavedChanges = true;
       const clone = registryCloneAction(state.project, actionId, newName);
-      newId = clone ? clone.id : null;
+      createdId = clone ? clone.id : null;
     }));
-    return newId;
+    if (createdId === null) return null;
+    // Re-resolve the post-finalised entry from the freshly-set state
+    // so the returned reference is NOT the immer draft (which is
+    // revoked after `produce` returns).
+    const finalActions = get().project.actions ?? [];
+    return finalActions.find((a) => a && a.id === createdId) ?? null;
   },
 
   /** Create a new blend shape on a part node */

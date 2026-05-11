@@ -75,6 +75,13 @@ export const EDITOR_REGISTRY = {
   properties:  { label: 'Properties',   component: PropertiesEditor },
   parameters:  { label: 'Parameters',   component: ParametersEditor },
   timeline:    { label: 'Timeline',     component: TimelineEditor },
+  // Stage 1.E: editor-type id is plural `actions` to match the panel's
+  // user-facing label "Actions" (the noun for a list-of-actions view).
+  // Blender's space-type enum uses singular `SPACE_ACTION`
+  // (`reference/blender/source/blender/makesdna/DNA_space_enums.h:1161`)
+  // since it identifies the editor space, not the panel content. SS's
+  // ids are panel-scoped here, so the deviation is documented rather
+  // than aligned (Audit-fix D-9 Stage 1.E).
   actions:     { label: 'Actions',      component: ActionsEditor },
   performance: { label: 'Performance',  component: PerformanceEditor },
   dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor },

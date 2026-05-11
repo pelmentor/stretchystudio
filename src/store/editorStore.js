@@ -229,8 +229,16 @@ export const useEditorStore = create((set) => ({
   /** V4 Properties reform — collapse state per Properties section, by
    *  registry id. Persists across selections so the user's "I never
    *  want Rig Stages expanded" preference survives clicking around the
-   *  Outliner. Sparse: missing entry = expanded (default). */
-  propertiesSectionsCollapsed: new Set(),
+   *  Outliner. Sparse: missing entry = expanded (default).
+   *
+   *  Stage 1.E (Audit-fix D-3): `'animData'` ships in the initial set
+   *  so the Animation section is collapsed by default, mirroring
+   *  Blender's `bl_options = {'DEFAULT_CLOSED'}` on `PropertiesAnimationMixin`
+   *  (`reference/blender/scripts/startup/bl_ui/space_properties.py:136`).
+   *  Per-Object Action bindings are rarely changed (Cubism characters
+   *  bind once at import, never again) and would clutter the panel
+   *  expanded by default. */
+  propertiesSectionsCollapsed: new Set(['animData']),
 
   /** Blender-port — active tab id in the Properties editor. Maps to
    *  Blender's `space_buttons.mainb` (`source/blender/editors/space_buttons/space_buttons.cc:76`,

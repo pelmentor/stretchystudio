@@ -64,6 +64,7 @@
  */
 
 import { isSceneNode } from '../store/migrations/v37_scene_anim_data.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * Look up the `__scene__` node, if present.
@@ -108,7 +109,21 @@ export function getSceneAction(project) {
   if (!ad || typeof ad !== 'object') return null;
   if (typeof ad.actionId !== 'string' || ad.actionId.length === 0) return null;
   const actions = Array.isArray(project?.actions) ? project.actions : [];
-  return actions.find((a) => a && a.id === ad.actionId) ?? null;
+  const found = actions.find((a) => a && a.id === ad.actionId) ?? null;
+  if (!found) {
+    // Audit-fix G-9 Stage 1.E: surface orphan scene-bindings instead of
+    // silently swallowing them. Stage 1.C `deleteAction`'s cascade
+    // (`projectStore.deleteAction` thunk) nulls `__scene__.animData.actionId`
+    // when the bound action is deleted; an orphan id reaching here means
+    // the cascade missed (project edited outside the thunk, save-load
+    // race, etc.) and the rest of the editor would silently fall back
+    // to the UI store as if no scene-binding existed. Loud-error so the
+    // bug-author can find it; consumer behaviour stays the same.
+    logger.error('sceneAction', `orphan __scene__.animData.actionId — `
+      + `${ad.actionId} not found in project.actions[]`,
+      { actionId: ad.actionId });
+  }
+  return found;
 }
 
 /**
@@ -129,6 +144,24 @@ export function getSceneAction(project) {
  * this selector so the project's bound action takes priority. The
  * fallback exists for the (common) case where the user hasn't yet
  * bound an action to the scene but is editing one through the UI.
+ *
+ * # Phase-scope warning (Audit-fix D-8 Stage 1.E)
+ *
+ * The "scene wins" semantic is a UI-bridging convenience, NOT a
+ * runtime parity claim. In Blender, `BKE_animdata_from_id(&scene->id)`
+ * and `BKE_animdata_from_id(&object->id)` are read INDEPENDENTLY by
+ * the depsgraph — both adts evaluate every frame; neither "wins."
+ * Scene's adt drives world / scene-frame state; Object's adt drives
+ * Object transform / shape keys / etc.
+ *
+ * Phase 1 ships with one action playing at a time (motion3.json exports
+ * one action per file), so the bridge is harmless TODAY. Phase 2+
+ * consumers that introduce per-Object adt evaluation (skeletal animation
+ * driving an Armature Object alongside the scene's facial-expression
+ * action, for example) MUST NOT route through this selector — they need
+ * to read `node.animData.actionId` directly per Blender's per-datablock
+ * adt semantic. Use `getSceneAction(project)` for the scene-only read,
+ * or read `node.animData` directly for per-Object reads.
  *
  * @param {object|null|undefined} project
  * @param {string|null|undefined} fallbackActionId

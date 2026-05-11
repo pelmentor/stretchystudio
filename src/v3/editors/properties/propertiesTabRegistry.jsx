@@ -65,6 +65,20 @@ export const PROPERTIES_TABS = [
     // metadata tab) so per-Object Action bindings appear alongside
     // transform / visibility / part info. Stays at the bottom because
     // it's a project-data binding rather than an Object-shape property.
+    //
+    // **Blender-fidelity deviation (Audit-fix D-1 Stage 1.E):** in
+    // Blender the Animation panel lives under the **Data** tab via
+    // `PropertiesAnimationMixin.bl_context = "data"`
+    // (`reference/blender/scripts/startup/bl_ui/space_properties.py:124`)
+    // — registered for mesh / armature / curve / world / scene / etc.
+    // tab variants. SS's `data` tab today is parts-only (mesh /
+    // vertexGroups / shapeKeys / mask predicates all gate on
+    // `getMesh(node)`), so moving `animData` there would HIDE it for
+    // bone groups (which need binding too). The cleaner long-term
+    // fix is a dedicated "Animation" tab (peer of Item / Modifiers
+    // / Object Data) per Blender's `bl_order = PropertyPanel.bl_order
+    // - 1` positioning convention. Queued behind broader Properties
+    // tab refactor; see Stage 1.F + Phase 2 entry-gate.
     sectionIds: ['transform', 'visibility', 'partInfo', 'animData'],
   },
   {

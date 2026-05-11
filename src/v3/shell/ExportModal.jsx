@@ -208,9 +208,14 @@ export function ExportModal() {
   // exporter's "Current" target ('current' animTarget) follows whichever
   // action the user has bound to `__scene__`; falls back to the UI's
   // last-selected id when no scene binding exists.
+  // Audit-fix G-1 Stage 1.E: narrow dep to the two slices the helper
+  // actually reads (`__scene__` lookup + actions resolution), matching
+  // the canonical pattern used in FCurveEditor / DopesheetEditor /
+  // NodeTreeArea / TimelineEditor. The previous `[project, ...]`
+  // dep would re-memo on unrelated mutations (parameters, physics, etc).
   const activeActionId = useMemo(
     () => getActiveSceneAction(project, uiActiveActionId)?.id ?? null,
-    [project, uiActiveActionId],
+    [project.nodes, project.actions, uiActiveActionId],
   );
   const [format, setFormat] = useState('live2d-full');
   const [dataLayer, setDataLayer] = useState('project');  // GAP-009
@@ -997,7 +1002,7 @@ function Motion3ExportControls({ project, animTarget, setAnimTarget }) {
       </div>
       <div className="text-[10px] text-muted-foreground leading-snug">
         {targetCount === 0
-          ? 'No animations in this project yet — create one in the Animation workspace.'
+          ? 'No actions in this project yet — create one in the Actions panel.'
           : `Project has ${targetCount} animation${targetCount === 1 ? '' : 's'}. One animation → direct .motion3.json download. Multiple → zip.`}
       </div>
     </div>
