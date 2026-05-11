@@ -1270,26 +1270,30 @@ new store (`poseClipboardStore`) + 1 new editorStore field
 
 ## 6. Schema bumps
 
-This plan adds **two small project-schema changes**, both for Phase 7.
-**Schema numbers are placeholders (vTB+1 / vTB+2) until ship time** —
-audit caught a real Rule №2 collision with the animation plan if both
-plans land staged versions.
+This plan added **two small project-schema changes** for Phase 7. The
+audit-flagged Rule №2 collision with the animation plan was avoided by
+the resolution gate (read next-available number at ship time).
 
 | v | Phase | What |
 |---|-------|------|
-| `vTB+1` | 7.A.1 | `project.cursor: { x, y }` (canvas-space 3D-cursor analog for Snap menu); default = canvas centre |
-| `vTB+2` | 7.B.4 | `node.weightPaintSettings: { xMirror: boolean, ... }` per-Object weight-paint preferences |
+| `v33` | 7.A.1 | `project.cursor: { x, y }` (canvas-space 3D-cursor analog for Snap menu); default = canvas centre |
+| `v34` | 7.B.4 | `node.weightPaintSettings: { xMirror: boolean }` per-Object weight-paint preferences |
 
-**Resolution gate at ship time** (audit-fixed; v1 said "the plan
-reviewer should pick canonical numbering" which is itself the
-deferral the audit flagged):
+**Sister Phase 8 schema**: `v35` (`v35_pose_shape_repair.js`) shipped
+2026-05-11 — repairs mixed-state pose corruption introduced by pre-Phase-8
+writers stamping flat fields on the v19 channels envelope. Not strictly a
+toolset Phase 7 schema, but it lives in the same day's commit chain because
+Phase 7.C audit-fix G-2 surfaced the cross-cutting writer-class disagreement
+that Phase 8 closed (one helper consolidation pass routed all 7 writers
+through `setBonePoseField` / `setBonePose`; v35 repairs already-corrupted
+projects).
 
-When Phase 7.A is ready to ship, read the next-available schema number
-from `projectMigrations.js` header (call it `N`), update the migration
-filename to `vN_toolset_cursor.js`, and write the migration directly.
-Same for Phase 7.B. **Do not pre-allocate version numbers that might
-collide with sibling plans.** This is mechanical at ship time and
-removes the planning-document collision entirely.
+**Migration filenames on disk:**
+- `src/store/migrations/v33_project_cursor.js`
+- `src/store/migrations/v34_weight_paint_settings.js`
+- `src/store/migrations/v35_pose_shape_repair.js` (Phase 8 sister)
+
+`CURRENT_SCHEMA_VERSION = 35` as of 2026-05-11.
 
 Architectural rationale: the project's mesh/topology format already
 supports the output of every Phase 0–6 operator (vertices + triangles
@@ -1633,22 +1637,22 @@ breadth that completes Object / Weight Paint / Pose coverage.
 
 ```
 Phase 0:
-  [ ] editorStore.selectedVertexIndices + actions shipped
-  [ ] hitTestVertices in hitTest.js
-  [ ] LMB / Shift+LMB / A semantics in CanvasViewport
-  [ ] VertexSelectionOverlay renders
-  [ ] T-panel `Select` tool entry
-  [ ] All vertex-selection tests green
-  [ ] Manual: click-toggle-A on Hiyori works as expected
-  [ ] Memory entry: 'Vertex selection model'
+  [x] editorStore.selectedVertexIndices + actions shipped
+  [x] hitTestVertices in hitTest.js
+  [x] LMB / Shift+LMB / A semantics in CanvasViewport
+  [x] VertexSelectionOverlay renders
+  [x] T-panel `Select` tool entry
+  [x] All vertex-selection tests green
+  [ ] Manual: click-toggle-A on Hiyori works as expected     ← user-side gate 0.H
+  [x] Memory entry: 'Vertex selection model'
 
 Phase 1:
-  [ ] Box select operator + overlay
-  [ ] Lasso select operator + overlay
-  [ ] B / Ctrl+drag bound
-  [ ] All select tests green
-  [ ] Manual: B-drag selects parts in Object Mode and verts in Edit Mode
-  [ ] Memory entry: 'Box / Lasso select'
+  [x] Box select operator + overlay
+  [x] Lasso select operator + overlay
+  [x] B / Ctrl+drag bound
+  [x] All select tests green
+  [ ] Manual: B-drag selects parts in Object Mode and verts in Edit Mode    ← user-side gate 1.F
+  [x] Memory entry: 'Box / Lasso select'
 
 Phase 2:
   [x] preferencesStore.snap shipped (master + 3 modes + precision + target)
@@ -1657,72 +1661,90 @@ Phase 2:
   [x] N-panel snap section (visible all modes; Increment row dual rotate/scale label)
   [x] All snap tests green (133 assertions across 5 suites incl. gesture model)
   [x] Audit-fix sweep: G-1 view slot crash, G-2 Object Mode self-snap, D-1/D-2/D-7 gesture model, D-3 Closest semantics, D-4 Pose Mode deformed verts, D-5 5° default
-  [ ] Manual: G with master on → vertex snap fires; G+Shift = grid step; G+Ctrl = SNAP_INV; G no master + Shift = precision
-  [ ] Memory entry: 'Snap during transform'
+  [ ] Manual: G with master on → vertex snap fires; G+Shift = grid step; G+Ctrl = SNAP_INV; G no master + Shift = precision    ← user-side gate 2.G
+  [x] Memory entry: 'Snap during transform'
 
 Phase 3:
-  [ ] sculpt mode entry in ModePill
-  [ ] T-panel sculpt tools
-  [ ] N-panel brush settings
-  [ ] Grab / Smooth / Inflate brushes shipped
-  [ ] All sculpt tests green
-  [ ] Manual: each brush behaves as expected on Hiyori
-  [ ] Memory entry: 'Sculpt mode + 3 brushes'
+  [x] sculpt mode entry in ModePill
+  [x] T-panel sculpt tools
+  [x] N-panel brush settings
+  [x] Grab / Smooth / Pinch brushes shipped (Inflate→Pinch per audit D-7)
+  [x] All sculpt tests green
+  [ ] Manual: each brush behaves as expected on Hiyori    ← user-side gate 3.J
+  [x] Memory entry: 'Sculpt mode + 3 brushes'
 
 Phase 4:
-  [ ] Merge operator + M-menu
-  [ ] Dissolve operator + Ctrl+X menu
-  [ ] Subdivide operator + right-click menu
-  [ ] Vertex index remap on topology change
-  [ ] All Phase 4 tests green
-  [ ] Manual: each op + retriangulate works on Hiyori
-  [ ] Byte-fidelity: edited Hiyori cmo3 still loads in Cubism Viewer
-  [ ] Memory entry: 'Merge / Dissolve / Subdivide'
+  [x] Merge operator + M-menu
+  [x] Dissolve operator + Ctrl+X menu
+  [x] Subdivide operator + right-click menu
+  [x] Vertex index remap on topology change
+  [x] All Phase 4 tests green
+  [ ] Manual: each op + retriangulate works on Hiyori    ← user-side gate 4.J
+  [ ] Byte-fidelity: edited Hiyori cmo3 still loads in Cubism Viewer    ← user-side gate 4.J
+  [x] Memory entry: 'Merge / Dissolve / Subdivide'
 
 Phase 5:
-  [ ] Boundary detection helper
-  [ ] Extrude operator (E)
-  [ ] All extrude tests green
-  [ ] Manual: extrude Hiyori hair tip works
-  [ ] Byte-fidelity: extruded Hiyori cmo3 still loads
-  [ ] Memory entry: 'Extrude'
+  [x] Boundary detection helper
+  [x] Extrude operator (E)
+  [x] All extrude tests green
+  [ ] Manual: extrude Hiyori hair tip works    ← user-side gate 5.E
+  [ ] Byte-fidelity: extruded Hiyori cmo3 still loads    ← user-side gate 5.E
+  [x] Memory entry: 'Extrude'
 
 Phase 6:
-  [ ] Select Linked (L / Ctrl+L)
-  [ ] Duplicate (Shift+D)
-  [ ] Apply menu (Ctrl+A)
-  [ ] Circle select (C)
-  [ ] All Phase 6 tests green
-  [ ] Manual: each op works on Hiyori
-  [ ] Memory entry: 'Select Linked / Duplicate / Apply / Circle'
+  [x] Select Linked (L / Ctrl+L / Shift+L)
+  [x] Duplicate (Shift+D)
+  [x] Apply menu (Ctrl+A)
+  [x] Circle select (C)
+  [x] All Phase 6 tests green
+  [ ] Manual: each op works on Hiyori    ← user-side gate 6.F
+  [x] Memory entry: 'Select Linked / Duplicate / Apply / Circle'
 
 Phase 7.A — Object Mode:
-  [ ] project.cursor schema bump + migration
-  [ ] Snap menu (Shift+S) with all 9 targets
-  [ ] Mirror selected (Ctrl+M, X/Y axis)
-  [ ] Parent (Ctrl+P)
-  [ ] Clear Parent (Alt+P) — three modes
-  [ ] Set Origin submenu — four modes
-  [ ] All Phase 7.A tests green
-  [ ] Memory entry: 'Object Mode toolbox'
+  [x] project.cursor schema bump + migration (v33)
+  [x] Snap menu (Shift+S) with all 8 targets (one removed per audit D-3)
+  [x] Mirror selected (Ctrl+M, X/Y axis)
+  [x] Parent (Ctrl+P)
+  [x] Clear Parent (Alt+P) — three modes
+  [x] Set Origin submenu — four modes
+  [x] All Phase 7.A tests green
+  [ ] Manual: each Object-Mode tool on Hiyori multi-part selection    ← user-side gate 7.A.6
+  [x] Memory entry: 'Object Mode toolbox'
 
 Phase 7.B — Weight Paint:
-  [ ] node.weightPaintSettings schema bump + migration
-  [ ] Sample Weight (Ctrl+LMB)
-  [ ] Blur brush
-  [ ] Mirror Weights (right-click → Mirror, X/Y/by-name)
-  [ ] X-Axis Mirror live toggle (N-panel)
-  [ ] Normalize All (Ctrl+N)
-  [ ] All Phase 7.B tests green
-  [ ] Memory entry: 'Weight Paint completion'
+  [x] node.weightPaintSettings schema bump + migration (v34)
+  [x] Sample Weight (Shift+X) — chord moved per audit-fix
+  [x] Blur brush (face-loop algo per Blender D-1 fix)
+  [x] Mirror Weights (right-click → Mirror, Position + By Name)
+  [x] X-Axis Mirror live toggle (N-panel)
+  [x] Normalize All (menu only — Ctrl+N collides with file.new)
+  [x] All Phase 7.B tests green
+  [ ] Manual: each Weight Paint tool works on a weighted Hiyori arm    ← user-side gate 7.B.6
+  [x] Memory entry: 'Weight Paint completion'
 
 Phase 7.C — Pose Mode:
-  [ ] Clear Pose Loc/Rot/Scale (Alt+G/R/S)
-  [ ] Clear All Pose (Alt+Shift+R)
-  [ ] Mirror Pose (Ctrl+Shift+M) with role-based partner detection
-  [ ] poseClipboardStore + Copy/Paste Pose (Ctrl+C/V in Pose Mode)
-  [ ] All Phase 7.C tests green
-  [ ] Memory entry: 'Pose Mode toolbox'
+  [x] Clear Pose Loc/Rot/Scale (Alt+G/R/S)
+  [x] Clear All Pose per-axis (Shift+Alt+G/R/S — chord-order audit-fix G-1)
+  [x] Select Mirror (Ctrl+Shift+M) + Mirror Pose (Ctrl+Shift+V) — split per audit
+  [x] poseClipboardStore + Copy/Paste Pose (Ctrl+C/V in Pose Mode only)
+  [x] All Phase 7.C tests green
+  [ ] Manual: each Pose Mode tool works on Hiyori arm pose    ← user-side gate 7.C.7
+  [x] Memory entry: 'Pose Mode toolbox'
+
+Phase 7.D — Phase 7 exit gate:
+  [x] All Phase 7.A/B/C tests green (full `npm test` chain green; 11 orphan test files wired in same Phase 7.D ship)
+  [ ] Manual: each Object-Mode tool works on Hiyori multi-part selection    ← user-side
+  [ ] Manual: each Weight Paint tool works on a weighted Hiyori arm    ← user-side
+  [ ] Manual: each Pose Mode tool works on Hiyori arm pose    ← user-side
+  [x] Memory entries for each sub-phase (`project_blender_parity_plans_in_flight.md`)
+
+Phase 8 — Pose Read/Write Canonicalisation (sister to Phase 7.C, closes 7.C audit-fix G-2):
+  [x] 3 helpers in `objectDataAccess.js` (`ensureBonePoseChannel` / `setBonePoseField` / `setBonePose`)
+  [x] 7 writers + 5 readers consolidated through helpers
+  [x] Schema v35 migration `v35_pose_shape_repair.js` (mixed-state corruption repair)
+  [x] All Phase 8 tests green (169 assertions across 4 suites — pose_writer_helpers 72, pose_write_v19_shape 46, migration_v35 25, audit_fixes_2026_05_11_phase8 26)
+  [x] Audit-fix sweep #10: 3 HIGH (G-1/D-1 bonePostChain + G-2/D-2 transformCompose + D-3 v35 repair) + 5 MED + 4 LOW
+  [x] Memory entry updated
 ```
 
 ---
@@ -1731,47 +1753,59 @@ Phase 7.C — Pose Mode:
 
 ### Top-12 from the audit (Phases 0–6)
 
-| # | Tool | Phase |
-|---|------|-------|
-| 1 | Vertex selection model (foundation) | Phase 0 |
-| 2 | Box Select | Phase 1 |
-| 3 | Circle Select | Phase 6 |
-| 4 | Lasso Select | Phase 1 |
-| 5 | Snap to grid / vertex | Phase 2 |
-| 6 | Sculpt Grab | Phase 3 |
-| 7 | Sculpt Smooth | Phase 3 |
-| 8 | Sculpt Inflate | Phase 3 |
-| 9 | Merge | Phase 4 |
-| 10 | Subdivide | Phase 4 |
-| 11 | Extrude | Phase 5 |
-| 12 | Select Linked | Phase 6 |
+| # | Tool | Phase | Status |
+|---|------|-------|--------|
+| 1 | Vertex selection model (foundation) | Phase 0 | ✅ shipped 2026-05-10 (`4a59d62`) |
+| 2 | Box Select | Phase 1 | ✅ shipped 2026-05-10 (`f7fba11`) |
+| 3 | Circle Select | Phase 6 | ✅ shipped 2026-05-10 (`f44a1b0`) |
+| 4 | Lasso Select | Phase 1 | ✅ shipped 2026-05-10 (`f7fba11`) |
+| 5 | Snap to grid / vertex | Phase 2 | ✅ shipped 2026-05-10 (`5b81205`) |
+| 6 | Sculpt Grab | Phase 3 | ✅ shipped 2026-05-10 (`fa17a46`) |
+| 7 | Sculpt Smooth | Phase 3 | ✅ shipped 2026-05-10 (`fa17a46`) |
+| 8 | Sculpt Inflate→**Pinch** (audit-revised D-7) | Phase 3 | ✅ shipped 2026-05-10 (`fa17a46`) |
+| 9 | Merge | Phase 4 | ✅ shipped 2026-05-10 (`428bcdf`) |
+| 10 | Subdivide | Phase 4 | ✅ shipped 2026-05-10 (`428bcdf`) |
+| 11 | Extrude | Phase 5 | ✅ shipped 2026-05-10 (`ea590ac`) |
+| 12 | Select Linked | Phase 6 | ✅ shipped 2026-05-10 (`f44a1b0`) |
 
 Bonus closures (small wins along the way):
 
-| Tool | Phase |
-|------|-------|
-| Dissolve verts | Phase 4 |
-| Duplicate (Object + Edit) | Phase 6 |
-| Apply menu (Ctrl+A) | Phase 6 |
+| Tool | Phase | Status |
+|------|-------|--------|
+| Dissolve verts | Phase 4 | ✅ shipped 2026-05-10 (`428bcdf`) |
+| Duplicate (Object + Edit) | Phase 6 | ✅ shipped 2026-05-10 (`f44a1b0`) |
+| Apply menu (Ctrl+A) | Phase 6 | ✅ shipped 2026-05-10 (`f44a1b0`) |
 
 ### Per-mode coverage (Phase 7)
 
-| Mode | Tool | Sub-phase |
-|------|------|-----------|
-| Object | Snap menu (Shift+S) | 7.A.1 |
-| Object | Mirror (Ctrl+M) | 7.A.2 |
-| Object | Parent (Ctrl+P) | 7.A.3 |
-| Object | Clear Parent (Alt+P) | 7.A.4 |
-| Object | Set Origin submenu | 7.A.5 |
-| Weight Paint | Sample Weight (Ctrl+LMB) | 7.B.1 |
-| Weight Paint | Blur brush | 7.B.2 |
-| Weight Paint | Mirror Weights | 7.B.3 |
-| Weight Paint | X-Axis Mirror live toggle | 7.B.4 |
-| Weight Paint | Normalize All (Ctrl+N) | 7.B.5 |
-| Pose | Clear Pose Loc/Rot/Scale (Alt+G/R/S) | 7.C.1–3 |
-| Pose | Clear All Pose (Alt+Shift+R) | 7.C.4 |
-| Pose | Mirror Pose (Ctrl+Shift+M) | 7.C.5 |
-| Pose | Copy/Paste Pose (Ctrl+C/V) | 7.C.6 |
+| Mode | Tool | Sub-phase | Status |
+|------|------|-----------|--------|
+| Object | Snap menu (Shift+S) | 7.A.1 | ✅ shipped 2026-05-11 (`cdd3c93`) |
+| Object | Mirror (Ctrl+M) | 7.A.2 | ✅ shipped 2026-05-11 (`cdd3c93`) |
+| Object | Parent (Ctrl+P) | 7.A.3 | ✅ shipped 2026-05-11 (`cdd3c93`) |
+| Object | Clear Parent (Alt+P) | 7.A.4 | ✅ shipped 2026-05-11 (`cdd3c93`) |
+| Object | Set Origin submenu | 7.A.5 | ✅ shipped 2026-05-11 (`cdd3c93`) |
+| Weight Paint | Sample Weight (`Shift+X`) — chord moved per audit-fix | 7.B.1 | ✅ shipped 2026-05-11 (`9489177`) |
+| Weight Paint | Blur brush (face-loop algo per Blender D-1 fix) | 7.B.2 | ✅ shipped 2026-05-11 (`9489177`) |
+| Weight Paint | Mirror Weights (Position + By Name) | 7.B.3 | ✅ shipped 2026-05-11 (`9489177`) |
+| Weight Paint | X-Axis Mirror live toggle | 7.B.4 | ✅ shipped 2026-05-11 (`9489177`) |
+| Weight Paint | Normalize All (menu only — Ctrl+N collides) | 7.B.5 | ✅ shipped 2026-05-11 (`9489177`) |
+| Pose | Clear Pose Loc/Rot/Scale (Alt+G/R/S) | 7.C.1–3 | ✅ shipped 2026-05-11 (`fbf7f82`) |
+| Pose | Clear All Pose per-axis (`Shift+Alt+G/R/S` — chord-order audit-fix G-1) | 7.C.4 | ✅ shipped 2026-05-11 (`fbf7f82`) |
+| Pose | Select Mirror (Ctrl+Shift+M) + Mirror Pose (Ctrl+Shift+V) — split per audit | 7.C.5 | ✅ shipped 2026-05-11 (`fbf7f82`) |
+| Pose | Copy/Paste Pose (Ctrl+C/V Pose Mode only) | 7.C.6 | ✅ shipped 2026-05-11 (`fbf7f82`) |
+
+### Phase 7.D — Phase 7 exit gate
+
+| Item | Status |
+|------|--------|
+| All Phase 7.A/B/C tests green | ✅ confirmed 2026-05-11 (full `npm test` chain green; 11 orphan test files wired in same Phase 7.D ship — see close-out doc) |
+| Manual: each Object-Mode tool works on Hiyori multi-part selection | ⏳ user-side (Phase 7.A.6 manual gate) |
+| Manual: each Weight Paint tool works on a weighted Hiyori arm | ⏳ user-side (Phase 7.B.6 manual gate) |
+| Manual: each Pose Mode tool works on Hiyori arm pose | ⏳ user-side (Phase 7.C.7 manual gate) |
+| Memory entries for each sub-phase | ✅ captured in `project_blender_parity_plans_in_flight.md` |
+
+**Phase 7.D autonomous closure shipped 2026-05-11** — the in-band substrate work (test wiring + plan doc updates) closes; the 3 browser-side manual gates remain queued for the user. Phase 1C-flip groundwork is now substrate-unblocked from Phase 8 helper consolidation but unscheduled. After Phase 7 ships fully (all 3 manual gates pass), Animation Phase 1 (Action datablock retirement) is the next chunk.
 
 ---
 
