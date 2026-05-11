@@ -114,9 +114,12 @@ export function mirrorSelected(axis) {
           const sy = typeof target.transform.scaleY === 'number' ? target.transform.scaleY : 1;
           target.transform.scaleY = -sy;
         }
-        // For non-bone groups + parts, pose data may not exist. If it
-        // does (legacy bone groups still carry it), flip the matching
-        // pose axis so the bone follows the mirror.
+        // Audit-fix G-10/D-7 (Phase 8 sweep): bone groups are filtered
+        // out at line 79 (`isBoneGroup → skippedBones++`) so this
+        // branch never runs on a bone. Kept for non-bone groups that
+        // may have inherited a stray `pose` slot from earlier schema
+        // shapes. Direct flat-field reads are safe here because non-
+        // bones never carry the v19 channels envelope.
         if (target.pose) {
           if (axis === 'x' && typeof target.pose.x === 'number') target.pose.x = -target.pose.x;
           if (axis === 'y' && typeof target.pose.y === 'number') target.pose.y = -target.pose.y;

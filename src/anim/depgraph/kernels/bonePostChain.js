@@ -27,7 +27,7 @@
  * @module anim/depgraph/kernels/bonePostChain
  */
 
-import { isBoneGroup } from '../../../store/objectDataAccess.js';
+import { isBoneGroup, getBonePose } from '../../../store/objectDataAccess.js';
 import { makeBoneLocalMatrix, mat3Identity, mat3MulInto } from '../../../renderer/transforms.js';
 import { applyTwoBoneSkinning, applyWeightedSkinning, isIdentityMatrix } from '../../../renderer/boneSkinning.js';
 import { applyOverlayMatrixFlat } from '../../../renderer/boneOverlayMatrix.js';
@@ -96,8 +96,19 @@ function composedTransformToBonePose(bone, composed) {
 /**
  * Resolve a single bone's WORLD matrix (canvas-space) by reading
  * TRANSFORM_COMPOSE outputs along the bone parent chain. Falls back to
- * `node.pose` when the depgraph hasn't computed a value (only relevant
+ * `node.pose` (via `getBonePose` for v17/v18-flat / v19+-channels
+ * compat) when the depgraph hasn't computed a value (only relevant
  * for partial graphs / tests that bypass the build pass).
+ *
+ * Audit-fix G-13 (Phase 8 sweep) — partial-graph fallback contract:
+ * if the depgraph build pass starts skipping bones (a future
+ * optimization that prunes "no constraints, no animation" bones), the
+ * fallback would become production-reachable for those bones. The
+ * fallback path is shape-aware via `getBonePose` so it stays correct
+ * regardless of when it fires; the test scoreboard for the depgraph
+ * build pass should pin "every bone gets a TRANSFORM_COMPOSE node
+ * unless explicitly skipped" so the fallback's reachability is
+ * documented, not accidental.
  *
  * Memoised in the supplied `cache` so the chain walk is amortised
  * across all parts that share ancestor bones.
@@ -119,7 +130,14 @@ export function resolveBoneWorldFromCtx(boneId, ctx, byId, cache) {
   }
 
   const composed = readComposedTransform(ctx, boneId);
-  const pose = composed ? composedTransformToBonePose(bone, composed) : (bone.pose ?? null);
+  // Audit-fix G-1/D-1 (Phase 8 sweep): the partial-graph fallback
+  // previously read `bone.pose` directly, which returns the v19
+  // channels envelope (`{channels:{...}}`) — pose-field reads then
+  // resolve to undefined → identity, dropping every pose delta.
+  // Route through `getBonePose` so v17/v18 flat AND v19 channels
+  // shapes both yield the canonical flat `{rotation, x, y, scaleX,
+  // scaleY}` contract `makeBoneLocalMatrix` expects.
+  const pose = composed ? composedTransformToBonePose(bone, composed) : getBonePose(bone);
   const r = pose?.rotation ?? 0;
   const px = pose?.x ?? 0;
   const py = pose?.y ?? 0;

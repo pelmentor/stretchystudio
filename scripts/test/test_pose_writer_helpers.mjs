@@ -314,6 +314,88 @@ function nonBone(id = 'p1') {
   assert(!isBoneGroup(nonBone('s4')), '23c: non-bone NOT identified');
 }
 
+// ── Audit-fix G-4: empty-write guard ─────────────────────────────────────────
+
+// 24. setBonePose(poseLessBone, {}) does NOT mutate the bone (post-fix).
+{
+  const b = poseLessBone('b24');
+  setBonePose(b, {});
+  assert(b.pose === undefined, '24: empty {} write does NOT initialise pose-less bone');
+  setBonePose(b, null);
+  assert(b.pose === undefined, '24a: null write does NOT initialise');
+  setBonePose(b, undefined);
+  assert(b.pose === undefined, '24b: undefined write does NOT initialise');
+  setBonePose(b, { foo: 5, bar: 'baz' });  // junk fields, no pose channels
+  assert(b.pose === undefined, '24c: junk-field write does NOT initialise');
+}
+
+// 25. setBonePose with only one valid field DOES initialise + write that field.
+{
+  const b = poseLessBone('b25');
+  setBonePose(b, { rotation: 0.5 });
+  assert(b.pose !== undefined, '25: single-field write initialises pose');
+  assertEq(b.pose.rotation, 0.5, '25a: rotation written');
+  assertEq(b.pose.x, 0, '25b: x defaulted to 0');
+}
+
+// ── Audit-fix G-5/G-6: array-shape typeof guards ────────────────────────────
+
+// 26. Malformed `node.pose = []` (array): ensureBonePoseChannel re-inits to flat.
+{
+  const b = {
+    id: 'b26', type: 'group', boneRole: 'leftElbow',
+    transform: { pivotX: 0, pivotY: 0 },
+    pose: [],  // malformed
+  };
+  const ch = ensureBonePoseChannel(b);
+  assert(!Array.isArray(b.pose), '26: array-shape pose replaced with object');
+  assertEq(b.pose, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, '26a: identity init');
+  assert(ch === b.pose, '26b: returns the new flat pose by reference');
+}
+
+// 27. Malformed `pose.channels = []` (array): treated as not-channels-shape, fills flat.
+{
+  const b = {
+    id: 'b27', type: 'group', boneRole: 'leftElbow',
+    transform: { pivotX: 0, pivotY: 0 },
+    pose: { channels: [], rotation: 1 },  // malformed channels + flat field
+  };
+  const ch = ensureBonePoseChannel(b);
+  // Falls through to the flat-shape branch since channels is not a real object map.
+  assertEq(ch.rotation, 1, '27: existing flat rotation preserved');
+}
+
+// 28. Array on channels[id]: re-creates the inner channel.
+{
+  const b = {
+    id: 'b28', type: 'group', boneRole: 'leftElbow',
+    transform: { pivotX: 0, pivotY: 0 },
+    pose: { channels: { 'b28': [] } },  // malformed inner
+  };
+  const ch = ensureBonePoseChannel(b);
+  assert(!Array.isArray(b.pose.channels['b28']), '28: array channel replaced with object');
+  assertEq(ch, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, '28a: identity init');
+}
+
+// 29. node.pose = null: re-inits to flat.
+{
+  const b = {
+    id: 'b29', type: 'group', boneRole: 'leftElbow',
+    transform: { pivotX: 0, pivotY: 0 },
+    pose: null,
+  };
+  const ch = ensureBonePoseChannel(b);
+  assert(b.pose !== null, '29: null pose replaced');
+  assertEq(b.pose, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 }, '29a: identity init');
+}
+
+// 30. partialPose array → silent no-op.
+{
+  const b = flatBone('b30', { rotation: 5 });
+  setBonePose(b, [1, 2, 3]);
+  assertEq(b.pose.rotation, 5, '30: array partialPose rejected');
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);

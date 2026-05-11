@@ -22,7 +22,13 @@
  *   - `objects['<id>'].modifiers[<i>].payload.<field>`  (Phase 3+)
  *   - `objects['<id>'].constraints[<i>].influence`     (Phase 4+)
  *   - `objects['__params__'].values['ParamAngleZ']`     (Live2D params)
- *   - `objects['__armature__'].pose.channels['<role>'].rotation`
+ *
+ * Audit-fix G-12 (Phase 8 sweep): removed an aspirational
+ * `__armature__` pose-channel path from the supported list because
+ * `__armature__` resolves to the synthetic ArmatureView from
+ * `getArmature(project)` (exposes `bones[]` keyed by index, not the
+ * armature-object pose-channel map that Phase 1C-flip would ship).
+ * Readers and writers don't implement it today.
  *
  * Indexing is bracket-style; field access is dot-style. The grammar is
  * deliberately small -- no ternary, no function calls, no method chains.
@@ -49,7 +55,10 @@
  * @module anim/rnaPath
  */
 
-import { getMesh, getArmature } from '../store/objectDataAccess.js';
+import { getMesh, getArmature, getBonePose, setBonePoseField, isBoneGroup } from '../store/objectDataAccess.js';
+
+/** Pose-channel field names for the `pose.<field>` shape-aware route. */
+const POSE_FIELDS = new Set(['rotation', 'x', 'y', 'scaleX', 'scaleY']);
 
 /**
  * Tokenise a path like `objects['p1'].transform.rotation` or
@@ -156,12 +165,21 @@ export function evaluateRnaPath(project, path) {
 
   // Special-case: `mesh` field on a part -- route through `getMesh`
   // so v18 dataId resolution works.
+  // Special-case: `pose.<field>` on a bone group -- route through
+  // `getBonePose` so v17/v18 flat AND v19+ channels shapes both
+  // resolve to the canonical flat `{rotation, x, y, scaleX, scaleY}`.
+  // Audit-fix G-3/D-4 (Phase 8 sweep) — pre-fix the naive walk read
+  // `cur.pose.rotation` directly, returning undefined for channels-
+  // shape bones and breaking every driver / FCurve target on a v19
+  // bone pose channel.
   for (let i = 2; i < segs.length; i++) {
     const seg = segs[i];
     if (cur == null) return undefined;
     if (seg.kind === 'field') {
       if (seg.value === 'mesh' && cur.type === 'part') {
         cur = getMesh(cur, project);
+      } else if (seg.value === 'pose' && isBoneGroup(cur)) {
+        cur = getBonePose(cur);
       } else {
         cur = cur[seg.value];
       }
@@ -197,6 +215,22 @@ export function setRnaPath(project, path, value) {
   const objectId = String(second.value);
   let cur = resolveObjectId(project, objectId);
   if (!cur) return false;
+
+  // Audit-fix G-3/D-4 (Phase 8 sweep): `objects['<bone>'].pose.<field>`
+  // writes must go through `setBonePoseField` so v19 channels-shape
+  // bones receive the write inside `pose.channels[node.id]` instead of
+  // creating mixed-state corruption (flat field on the channels
+  // envelope). Drivers and FCurves are the production callers.
+  if (
+    rest.length === 2
+    && rest[0].kind === 'field' && rest[0].value === 'pose'
+    && rest[1].kind === 'field' && POSE_FIELDS.has(/** @type {string} */ (rest[1].value))
+    && isBoneGroup(cur)
+  ) {
+    setBonePoseField(cur, /** @type {string} */ (rest[1].value), value);
+    return true;
+  }
+
   for (let i = 0; i < rest.length - 1; i++) {
     const seg = rest[i];
     let next;

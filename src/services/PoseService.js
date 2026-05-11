@@ -118,8 +118,14 @@ export function restorePose(snapshot) {
   }
   useAnimationStore.setState({ draftPose: restored });
   // 3. Restore per-bone-group pose offsets (schema v17+).
+  // Audit-fix G-11 (Phase 8 sweep): kept the isBoneGroup early-out so
+  // a non-bone collision in `snapshot.bonePoses` (key matching by id
+  // happenstance) cannot route through `setBonePose` — even though
+  // setBonePose silently no-ops on non-bones, the explicit guard
+  // documents the bone-only contract at the call site.
   useProjectStore.getState().updateProject((p) => {
     for (const n of p.nodes ?? []) {
+      if (!isBoneGroup(n)) continue;
       const saved = snapshot.bonePoses?.[n.id];
       if (!saved) continue;
       setBonePose(n, saved);

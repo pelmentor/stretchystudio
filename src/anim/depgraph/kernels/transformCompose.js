@@ -47,6 +47,7 @@
 
 import { evaluateConstraints } from '../../constraints.js';
 import { OperationCode, NodeType } from '../types.js';
+import { getBonePose } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {{x:number, y:number, rotation:number, scaleX:number, scaleY:number}} Transform2D
@@ -135,10 +136,16 @@ function overlayTransform(node, t) {
   if (isBone) {
     const pivotX = node.transform?.pivotX ?? 0;
     const pivotY = node.transform?.pivotY ?? 0;
+    // Audit-fix G-2/D-2 (Phase 8 sweep): synthetic pose bases off
+    // `getBonePose` so v17/v18 flat AND v19+ channels shapes both
+    // resolve to the canonical flat contract. A naive spread of
+    // `node.pose` would leak the v19 channels envelope as a sibling
+    // to the composed flat fields, creating mixed-state corruption
+    // that downstream `getBonePose` reads as stale.
     return {
       ...node,
       pose: {
-        ...(node.pose ?? {}),
+        ...(getBonePose(node) ?? {}),
         rotation: t.rotation,
         x:        t.x - pivotX,
         y:        t.y - pivotY,

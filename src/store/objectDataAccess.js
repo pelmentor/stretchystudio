@@ -326,6 +326,19 @@ export function getBoneRestPivot(node) {
  * Returns null for non-bones; returns identity-pose for bones missing
  * a pose object (legacy projects mid-migration).
  *
+ * # Audit-fix D-6 (Phase 8 sweep) — null-vs-identity contract
+ *
+ * Returning identity-pose for "no authored pose" conflates two
+ * semantically distinct states: (1) the bone is at rest because the
+ * user hasn't posed it; (2) the bone is at rest because the user
+ * explicitly cleared its pose to identity. Render paths don't care —
+ * both states produce the same visual output. Driver / FCurve
+ * evaluators that need to distinguish "no value yet" from "value 0"
+ * should call `node.pose` directly (and handle both shapes), or
+ * convert this contract to nullable with a separate audit pass. Today
+ * no caller cares, so the simpler "always return a pose" contract
+ * stays.
+ *
  * @param {object|null|undefined} node
  * @returns {{rotation:number,x:number,y:number,scaleX:number,scaleY:number}|null}
  */
@@ -333,11 +346,16 @@ export function getBonePose(node) {
   if (!isBoneGroup(node)) return null;
   const raw = node.pose;
   // v19 shape: `pose.channels[boneId]` is the per-bone PoseChannel.
+  // Audit-fix G-5/G-6 (Phase 8 sweep): tightened typeof checks with
+  // `!Array.isArray(...)` — a malformed array on `pose` or
+  // `pose.channels` previously slipped through the `typeof === 'object'`
+  // guard and masked the corruption.
   let p = raw;
-  if (raw && typeof raw === 'object' && raw.channels && typeof raw.channels === 'object') {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)
+      && raw.channels && typeof raw.channels === 'object' && !Array.isArray(raw.channels)) {
     p = raw.channels[node.id];
   }
-  if (!p || typeof p !== 'object') {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) {
     return { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
   }
   return {
@@ -371,6 +389,16 @@ const POSE_CHANNEL_FIELDS = new Set(['rotation', 'x', 'y', 'scaleX', 'scaleY']);
  * Returns null for non-bone nodes — callers should treat that as a
  * silent no-op (consistent with `getBonePose`'s null contract).
  *
+ * # Audit-fix D-5 (Phase 8 sweep) — foreign channels untouched
+ *
+ * If a bone's `pose.channels` carries entries for OTHER bones (`{[other.id]:
+ * {...}}`), this helper reads/creates only the self-keyed channel
+ * (`channels[node.id]`) and leaves foreign entries alone. Today no code
+ * path produces foreign channels (bone-group IS Object → 1:1), so this
+ * is purely defensive for the eventual Phase 1C-flip where one armature
+ * Object may own N bone channels. Pruning would be premature
+ * canonicalisation that breaks 1C-flip's intent.
+ *
  * @param {object|null|undefined} node
  * @returns {{rotation:number,x:number,y:number,scaleX:number,scaleY:number}|null}
  */
@@ -379,7 +407,11 @@ export function ensureBonePoseChannel(node) {
 
   // No pose at all → init flat (matches today's bone-group-IS-Object
   // reality; v19 migration channelises on next save+load if needed).
-  if (!node.pose || typeof node.pose !== 'object') {
+  // Audit-fix G-5/G-6 (Phase 8 sweep): tightened the typeof check
+  // with `!Array.isArray(...)` so a malformed `node.pose = []` (or
+  // any array) doesn't slip past the guard and get decorated with
+  // named pose fields.
+  if (!node.pose || typeof node.pose !== 'object' || Array.isArray(node.pose)) {
     node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
     return node.pose;
   }
@@ -387,9 +419,9 @@ export function ensureBonePoseChannel(node) {
   // v19+ channels shape — drill into channels[node.id], creating if
   // missing. Preserves the channels envelope so the v19 reader path
   // stays valid.
-  if (node.pose.channels && typeof node.pose.channels === 'object') {
+  if (node.pose.channels && typeof node.pose.channels === 'object' && !Array.isArray(node.pose.channels)) {
     let ch = node.pose.channels[node.id];
-    if (!ch || typeof ch !== 'object') {
+    if (!ch || typeof ch !== 'object' || Array.isArray(ch)) {
       ch = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
       node.pose.channels[node.id] = ch;
       return ch;
@@ -442,7 +474,20 @@ export function setBonePoseField(node, field, value) {
  * @param {Partial<{rotation:number,x:number,y:number,scaleX:number,scaleY:number}>} partialPose
  */
 export function setBonePose(node, partialPose) {
-  if (!partialPose || typeof partialPose !== 'object') return;
+  // Audit-fix G-4 (Phase 8 sweep): early-return BEFORE
+  // `ensureBonePoseChannel` if `partialPose` carries no numeric pose
+  // fields. The previous version would init `node.pose = {identity}`
+  // on a pose-less bone for an empty/null/junk write — surprising
+  // mutation that masked caller bugs. Now: only mutate when there's
+  // actually something to write.
+  if (!partialPose || typeof partialPose !== 'object' || Array.isArray(partialPose)) return;
+  const hasAnyField =
+       typeof partialPose.rotation === 'number'
+    || typeof partialPose.x        === 'number'
+    || typeof partialPose.y        === 'number'
+    || typeof partialPose.scaleX   === 'number'
+    || typeof partialPose.scaleY   === 'number';
+  if (!hasAnyField) return;
   const ch = ensureBonePoseChannel(node);
   if (!ch) return;
   if (typeof partialPose.rotation === 'number') ch.rotation = partialPose.rotation;

@@ -39,6 +39,7 @@ import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_p
 import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_default_weights.js';
 import { migrateProjectCursor } from './migrations/v33_project_cursor.js';
 import { migrateWeightPaintSettings } from './migrations/v34_weight_paint_settings.js';
+import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -517,6 +518,65 @@ const MIGRATIONS = {
   // behaviour). User opts in per-part via the N-panel toggle.
   34: (project) => {
     migrateWeightPaintSettings(project);
+    return project;
+  },
+
+  // v35 — Pose Read/Write Canonicalisation Plan audit-fix D-3 — repair
+  // mixed-state pose corruption introduced by pre-Phase-8 writers.
+  //
+  // # The corruption
+  //
+  // Phase 8 routed every writer through `setBonePose`/`setBonePoseField`
+  // helpers that detect v17/v18 flat shape vs v19+ channels shape and
+  // write into the correct slot. Pre-Phase-8 writers (specifically the
+  // depgraph kernels `bonePostChain.js` + `transformCompose.js` reached
+  // via Phase 0.D.0's `c8f86f3` rAF wiring, and `rnaPath.setRnaPath`
+  // for FCurve / driver writes) wrote flat fields onto the channels
+  // envelope WITHOUT updating the inner channel:
+  //
+  //     // Pre-Phase-8 corrupt write:
+  //     node.pose = { channels: { 'b1': {rotation: 0.5} } };  // v19 shape
+  //     node.pose.rotation = 1.2;                              // bad write
+  //     // Result: { rotation: 1.2, channels: { 'b1': {rotation: 0.5} } }
+  //
+  // `getBonePose` reads `channels[node.id].rotation = 0.5` (the STALE
+  // value), and the user's actual pose (1.2) is shown only via the
+  // direct flat-field reads that Phase 8 audit just removed. Net effect
+  // for the user: composed transforms silently drop on every load.
+  //
+  // The v19 migration's idempotency guard (`!flatPose.channels`)
+  // PERMANENTLY locks corrupt mixed-state bones in unreadable form —
+  // re-running v19 on a corrupted project skips them. Without v35,
+  // there's no recovery path.
+  //
+  // # The repair
+  //
+  // For every bone-group node whose `pose` has BOTH `channels` AND any
+  // flat pose field (`rotation`/`x`/`y`/`scaleX`/`scaleY`):
+  //   1. Move flat fields INTO `channels[node.id]` (latest-wins
+  //      semantics — the flat field is the value the post-corruption
+  //      writer intended; the stale channels value pre-dates that).
+  //   2. Delete the flat fields from `node.pose`, leaving only the
+  //      `channels` envelope intact.
+  //
+  // Lossless-by-design: bones with PURE channels-shape OR PURE flat
+  // shape are untouched. Only the mixed-state bones get repaired.
+  //
+  // Idempotent: post-repair `node.pose` has either {channels} OR
+  // {rotation, x, y, ...} — never both. Re-running v35 on a v35+
+  // project is a no-op.
+  //
+  // # Why a migration vs. shell-only fix
+  //
+  // The Phase 8 helpers prevent FUTURE corruption, but cannot detect
+  // PAST corruption: by the time `getBonePose` reads the mixed-state
+  // bone, the stale value is the only authoritative one in the
+  // codebase. The flat field is data corruption that's impossible to
+  // distinguish from "user wrote this just now" without timestamp
+  // metadata. We trust the flat field as latest-write because that's
+  // what every pre-Phase-8 writer intended to commit.
+  35: (project) => {
+    migratePoseShapeRepair(project);
     return project;
   },
 
