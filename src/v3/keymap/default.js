@@ -307,10 +307,14 @@ export const DEFAULT_KEYMAP = {
   //                       reference/blender/source/blender/editors/armature/
   //                       pose_transform.cc:1129/1138/1147)
   //
-  //   Alt+Shift+G/R/S  → clear ALL bones loc/rot/scale (3 separate chords —
+  //   Shift+Alt+G/R/S  → clear ALL bones loc/rot/scale (3 separate chords —
   //                      audit-CRITICAL fix: plan v1 had three different
   //                      answers in three places; per Blender each axis
-  //                      ships per-axis with no combined chord)
+  //                      ships per-axis with no combined chord. Audit-fix
+  //                      G-1/D-1: keymap key order is `Shift+Alt+` not
+  //                      `Alt+Shift+` because chordOf below builds
+  //                      modifiers in `Ctrl+Shift+Alt+Meta+` order — the
+  //                      lookup must match the canonical order)
   //
   //   Ctrl+Shift+M     → pose.selectMirror (Blender's POSE_OT_select_mirror,
   //                      pose_select.cc:1080-1132)
@@ -326,9 +330,9 @@ export const DEFAULT_KEYMAP = {
   'Alt+KeyG':         'pose.clearLocation',
   'Alt+KeyR':         'pose.clearRotation',
   'Alt+KeyS':         'pose.clearScale',
-  'Alt+Shift+KeyG':   'pose.clearAllLocation',
-  'Alt+Shift+KeyR':   'pose.clearAllRotation',
-  'Alt+Shift+KeyS':   'pose.clearAllScale',
+  'Shift+Alt+KeyG':   'pose.clearAllLocation',
+  'Shift+Alt+KeyR':   'pose.clearAllRotation',
+  'Shift+Alt+KeyS':   'pose.clearAllScale',
   'Ctrl+Shift+KeyM':  'pose.selectMirror',
   'Meta+Shift+KeyM':  'pose.selectMirror',
   'Ctrl+Shift+KeyV':  'pose.mirrorPose',

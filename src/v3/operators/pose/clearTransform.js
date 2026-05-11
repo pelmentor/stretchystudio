@@ -3,24 +3,31 @@
 /**
  * Toolset Plan Phase 7.C.1-4 — Clear Pose Loc / Rot / Scale operators.
  *
- * Implements Blender's pose-clear-transforms trio:
+ * Implements Blender's pose-clear-transforms trio. All three delegate
+ * through `pose_clear_transform_generic_exec`
+ * (`reference/blender/source/blender/editors/armature/pose_transform.cc:1262`)
+ * which iterates the selected pose-channel bones and calls a per-axis
+ * helper:
  *
  *   - `pose.clearLocation` (`Alt+G`) — per `POSE_OT_loc_clear`
- *     (`reference/blender/source/blender/editors/armature/pose_transform.cc:1129`,
- *     exec body at `:1085-1127`). Zeros `pose.x` + `pose.y`.
+ *     (registration at `pose_transform.cc:1404`; helper
+ *     `pchan_clear_loc` at `:1085-1127`). Zeros `pose.x` + `pose.y`.
  *   - `pose.clearRotation` (`Alt+R`) — per `POSE_OT_rot_clear`
- *     (`pose_transform.cc:1138`). Zeros `pose.rotation`. Blender's
- *     version operates on quaternion/Euler/axis-angle channels per
- *     `BoneChannel.rotmode` — SS bones are 2D, single-axis rotation only.
+ *     (registration at `pose_transform.cc:1377`; helper
+ *     `pchan_clear_rot` at `:1129-1242`). Zeros `pose.rotation`.
+ *     Blender's version operates on quaternion/Euler/axis-angle
+ *     channels per `BoneChannel.rotmode` — SS bones are 2D,
+ *     single-axis rotation only.
  *   - `pose.clearScale` (`Alt+S`) — per `POSE_OT_scale_clear`
- *     (`pose_transform.cc:1147`). Sets `pose.scaleX` + `pose.scaleY`
- *     to 1.0.
+ *     (registration at `pose_transform.cc:1350`; helper
+ *     `pchan_clear_scale` at `:1244-1250`). Sets `pose.scaleX` +
+ *     `pose.scaleY` to 1.0.
  *
- * Plus three per-axis "clear all" variants (`Alt+Shift+G/R/S`) that
+ * Plus three per-axis "clear all" variants (`Shift+Alt+G/R/S`) that
  * apply the same clear to EVERY bone in the rig, not just selection.
- * Audit-fixed binding split — the plan v1 had a single combined
- * `Alt+Shift+R` chord; per Blender, each axis has its own chord and
- * applies to all bones of the active armature.
+ * Audit-fixed binding split (G-1/D-1) — the plan v1 had a single
+ * combined `Alt+Shift+R` chord; per Blender, each axis has its own
+ * chord and applies to all bones of the active armature.
  *
  * # Selection semantics
  *
@@ -30,8 +37,30 @@
  * convention).
  *
  * "Clear All" variants ignore selection — they walk every
- * `isBoneGroup(n)` node in the project. Matches Blender's
- * `POSE_OT_clear_user_transform` (`pose_transform.cc:1163-1191`).
+ * `isBoneGroup(n)` node in the project. Audit-fix D-2: this is an
+ * SS-specific extension with no direct Blender counterpart. The
+ * closest Blender analogues are:
+ *   - `POSE_OT_transforms_clear` (`pose_transform.cc:1431`) — clears
+ *     loc + rot + scale of SELECTED bones via `pchan_clear_transforms`
+ *     at `:1252-1257`. Selection-scoped, not all-bones.
+ *   - `POSE_OT_user_transforms_clear` (`pose_transform.cc:1517`,
+ *     exec `pose_clear_user_transforms_exec` at `:1453-1515`) —
+ *     restores bones to their KEYFRAMED state (or rest pose if no
+ *     action). Semantically opposite to identity-zero.
+ *
+ * # Audit-fix G-2 (DOCUMENT-AS-DEVIATION) — flat pose write convention
+ *
+ * `applyClear` writes directly to `node.pose.{x, y, rotation, scaleX,
+ * scaleY}` — flat shape. The v19 schema migration
+ * (`projectMigrations.js:641-654`) wraps flat pose into
+ * `node.pose.channels[node.id]` for any project saved pre-v19. Every
+ * pose writer in the codebase (PoseService.restorePose,
+ * SkeletonOverlay drag, Phase 7.C operators) writes flat — only
+ * `getBonePose` reads channels-shape. The cross-cutting fix (a
+ * single-source-of-truth `setBonePoseField` helper, OR a v35 migration
+ * that re-flattens) is deferred to a follow-up plan; Phase 7.C ships
+ * matching the prevailing convention to avoid having three classes of
+ * writers disagree about pose shape.
  *
  * # Undo
  *

@@ -7,16 +7,16 @@
  *
  *   1. `pose.selectMirror` (`Ctrl+Shift+M`) — extends the current bone
  *      selection to include the mirror partner of each selected bone.
- *      Mirror of `POSE_OT_select_mirror` (`reference/blender/source/
- *      blender/editors/armature/pose_select.cc:1080-1132`, exec at
- *      `:1011-1078`). Per Blender's keymap (`blender_default.py`
- *      reserved range; the pose-select mirror chord is `Ctrl+Shift+M`
- *      in the default keyconfig — bound at the canonical pose-mode
- *      block alongside `Shift+L` select-linked-bones).
+ *      Mirror of `POSE_OT_select_mirror` (registration at
+ *      `reference/blender/source/blender/editors/armature/pose_select.cc:1470`,
+ *      exec `pose_select_mirror_exec` at `:1392`). Per Blender's
+ *      keymap (`blender_default.py` ~line 4672), the pose-select
+ *      mirror chord is `Ctrl+Shift+M` in the default keyconfig.
  *
  *   2. `pose.mirrorPose` (`Ctrl+Shift+V`) — pastes a previously-copied
  *      pose with X-axis flip. Mirror of `POSE_OT_paste(flipped=True)`
- *      (`pose_transform.cc:805-859` exec body, RNA flag at `:899`).
+ *      (registration at `pose_transform.cc:1015`, exec
+ *      `pose_paste_exec` at `:861`, `flipped` RNA boolean at `:1032`).
  *      The Blender single-step `pose.copy()` + `pose.paste(flipped=True)`
  *      composition is what the user gets via Ctrl+C → Ctrl+Shift+V.
  *
@@ -27,11 +27,15 @@
  *   - `pose.rotation` → `-pose.rotation`
  *   - `pose.scaleX` / `pose.scaleY` unchanged
  *
- * Blender's `flip_pose_data` (`pose_transform.cc:660-803`) does the
- * same X-flip for translation + rotation; SS skips Blender's quaternion
- * Y/Z flips because the 2D rig has no Y/Z axes. Scale stays untouched
- * because mirroring across X doesn't reflect the magnitude — only the
- * sign of position + rotation.
+ * Blender's flip logic is INLINED inside `pose_bone_do_paste`
+ * (`pose_transform.cc:625-777` function body; X-flip block at
+ * `:720-750`) — there is no standalone helper function for the
+ * flip in Blender (audit-fix D-5). SS's `flipPoseX` negates
+ * `pose.x` and `pose.rotation` (Z-Euler for 2D), which is correct for
+ * a single-axis 2D rig; Blender additionally negates `eul[1]`
+ * (Y-Euler) which is irrelevant in 2D. Scale stays untouched because
+ * mirroring across X doesn't reflect the magnitude — only the sign of
+ * position + rotation.
  *
  * # Role-based partner detection (audit-narrowed)
  *
@@ -72,14 +76,32 @@ import { eligibleBones, IDENTITY_POSE } from './clearTransform.js';
  * etc. Roles not starting with `left`/`right` (e.g. `'torso'`, `'head'`,
  * `'root'`) have no mirror and return null.
  *
- * Why prefix-only: Blender's `BLI_string_flip_side_name` ports a 3-pass
- * detector (suffix single-char, prefix single-char, word-at-start-or-end)
- * for general bone names. SS auto-rig produces a closed set of role
- * strings that all use the camelCase-prefix pattern — porting the full
- * 3-pass detector would handle no SS-existing bone names. When manual
- * bone-naming UX lands and users author bones with `arm.L`-style names,
- * a follow-up plan can swap this for the `flipSideName` helper that
- * already exists in `src/v3/operators/weightPaint/mirror.js`.
+ * Why prefix-only: Blender's `BLI_string_flip_side_name`
+ * (`reference/blender/source/blender/blenlib/intern/string_utils.cc:297-413`)
+ * ports a 3-pass detector (suffix single-char, prefix single-char,
+ * word-at-start-or-end) for general bone names. (Audit-fix D-9: the
+ * pre-fix start cite at `:243` was `is_char_sep`, a file-local helper —
+ * the public function actually starts at `:297`; same wrong cite was
+ * fixed in Phase 7.B D-4 for the weight-paint mirror module.) SS
+ * auto-rig produces a closed set of role strings that all use the
+ * camelCase-prefix pattern — porting the full 3-pass detector would
+ * handle no SS-existing bone names. When manual bone-naming UX lands
+ * and users author bones with `arm.L`-style names, a follow-up plan
+ * can swap this for the `flipSideName` helper that already exists in
+ * `src/v3/operators/weightPaint/mirror.js`.
+ *
+ * # Audit-fix D-8 (DOCUMENT-AS-DEVIATION) — additive vs swap selection
+ *
+ * `poseSelectMirror` calls `selStore.select(toAdd, 'add')` — mirror
+ * partners are ADDED without removing the originals (Blender's
+ * `extend=true` equivalent). Blender's default `POSE_OT_select_mirror`
+ * call (no properties) uses `extend=false` per the RNA default at
+ * `pose_select.cc:1486`, which SWAPS each bone's selection state with
+ * its mirror's state — left-side selection transfers to right side
+ * with left deselected. SS's additive default matches the broader SS
+ * selection UX (Phase 7.A boxSelect adds by default, not replaces);
+ * Blender's swap-by-default only intuits when paired with an active-
+ * bone affordance which SS doesn't surface.
  *
  * @param {string|null|undefined} role
  * @returns {string|null}
@@ -178,12 +200,17 @@ export function poseSelectMirror() {
  * role). A bone without a role isn't a bone in SS today — it's a plain
  * organisational group, filtered out before we get here.
  *
+ * Audit-fix G-3: empty-selection is a silent no-op (Blender semantics
+ * — `pose.copy` on no-selection does NOT clear the clipboard). The
+ * pre-fix branch eagerly cleared the clipboard, which would silently
+ * destroy a valid clipboard for any caller invoking `poseCopy()`
+ * defensively before checking availability.
+ *
  * @returns {{copied: number}}
  */
 export function poseCopy() {
   const { boneIds } = eligibleBones();
   if (boneIds.length === 0) {
-    usePoseClipboardStore.getState().clear();
     return { copied: 0 };
   }
   const project = useProjectStore.getState().project;

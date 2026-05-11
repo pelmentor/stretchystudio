@@ -1713,7 +1713,7 @@ function registerBuiltins() {
 
   registerOperator({
     id: 'pose.clearAllLocation',
-    label: 'Clear All Pose Locations (Alt+Shift+G)',
+    label: 'Clear All Pose Locations (Shift+Alt+G)',
     available: () => inPoseMode() && poseClear.hasAnyBones(),
     exec: () => {
       const r = poseClear.clearAllPose('location');
@@ -1727,7 +1727,7 @@ function registerBuiltins() {
 
   registerOperator({
     id: 'pose.clearAllRotation',
-    label: 'Clear All Pose Rotations (Alt+Shift+R)',
+    label: 'Clear All Pose Rotations (Shift+Alt+R)',
     available: () => inPoseMode() && poseClear.hasAnyBones(),
     exec: () => {
       const r = poseClear.clearAllPose('rotation');
@@ -1741,7 +1741,7 @@ function registerBuiltins() {
 
   registerOperator({
     id: 'pose.clearAllScale',
-    label: 'Clear All Pose Scales (Alt+Shift+S)',
+    label: 'Clear All Pose Scales (Shift+Alt+S)',
     available: () => inPoseMode() && poseClear.hasAnyBones(),
     exec: () => {
       const r = poseClear.clearAllPose('scale');
@@ -1764,10 +1764,19 @@ function registerBuiltins() {
           title: 'Select Mirror — no bones selected',
           description: 'Select bone(s) in Pose Mode first.',
         });
-      } else if (r.added === 0 && r.missing.length > 0) {
+        return;
+      }
+      // Audit-fix G-5: surface missing partners on partial success too.
+      // Pre-fix this branch only fired when `added === 0` — when SOME
+      // partners were added and others were missing, the missing roles
+      // were silently dropped. Mirrors Blender's POSE_OT_select_mirror
+      // which reports missing partners regardless of partial success.
+      if (r.missing.length > 0) {
         toast({
-          title: 'Select Mirror — no mirror partners found',
-          description: `Bone role(s) without mirror: ${r.missing.slice(0, 3).join(', ')}${r.missing.length > 3 ? '…' : ''}`,
+          title: r.added > 0
+            ? 'Select Mirror — some partners missing'
+            : 'Select Mirror — no mirror partners found',
+          description: `Role(s) without mirror: ${r.missing.slice(0, 3).join(', ')}${r.missing.length > 3 ? '…' : ''}`,
         });
       }
     },

@@ -26,13 +26,24 @@
  *
  * # Why in-memory (not persisted)
  *
- * Blender's pose clipboard is a runtime singleton (`Scene.tool_settings.
- * use_keyframe_insert_auto`-adjacent storage in `editors/space_view3d/
- * view3d_buttons.cc:2018+`); it does NOT persist across sessions. SS
- * follows the same UX: copy / paste is a within-session affordance, and
- * the future Pose Library (per plan §7.C.6 close note) is the persistent
- * surface. Keeping the clipboard in-memory means no schema bump required
- * for Phase 7.C, no migration risk for Rule №2.
+ * Blender's pose clipboard is a partial `.blend` file written to a
+ * temp path: `pose_copy_exec`
+ * (`reference/blender/source/blender/editors/armature/pose_transform.cc:785`)
+ * obtains the path via `pose_copybuffer_filepath_get` and writes the
+ * selected bones' pose data; `pose_paste_exec` (`:861`) reads it back
+ * via `BKE_copybuffer_read`. The clipboard is a file on disk, not an
+ * in-memory store, but it does NOT persist across sessions in any
+ * user-discoverable way (the file lives in OS temp and is recreated
+ * per copy).
+ *
+ * SS uses an in-memory Zustand store instead — no need for file I/O in
+ * the browser context, and the within-session UX is identical. Keeping
+ * the clipboard in-memory means no schema bump required for Phase 7.C,
+ * no migration risk for Rule №2. The future Pose Library (per plan
+ * §7.C.6 close note) is the persistent surface.
+ *
+ * Audit-fix D-7: cite corrected from the unrelated quaternion-lock UI
+ * panel to the actual disk-clipboard mechanism above.
  *
  * # Shape
  *
