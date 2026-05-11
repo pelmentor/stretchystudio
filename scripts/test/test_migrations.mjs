@@ -40,7 +40,9 @@ function assertThrows(fn, name) {
   assert(p.canvas && p.canvas.width === 800, 'v0 empty: canvas defaults filled');
   assertEq(p.textures, [], 'v0 empty: textures []');
   assertEq(p.nodes, [], 'v0 empty: nodes []');
-  assertEq(p.animations, [], 'v0 empty: animations []');
+  // v36 deletes `project.animations` after lifting clips into `project.actions`.
+  assert(p.animations === undefined, 'v0→current: animations field deleted by v36');
+  assertEq(p.actions, [], 'v0→current: actions [] (post-v36)');
   assertEq(p.parameters, [], 'v0 empty: parameters []');
   assertEq(p.physics_groups, [], 'v0 empty: physics_groups []');
 }
@@ -153,16 +155,19 @@ function assertThrows(fn, name) {
       {
         id: 'anim1',
         tracks: [
-          { nodeId: 'a', property: 'puppet_pins', keyframes: [] },
-          { nodeId: 'a', property: 'x', keyframes: [] },
+          { nodeId: 'a', property: 'puppet_pins', keyframes: [{ time: 0, value: 0 }] },
+          { nodeId: 'a', property: 'x', keyframes: [{ time: 0, value: 5 }] },
         ],
       },
     ],
   };
   migrateProject(p);
   assert(!('puppetWarp' in p.nodes[0]), 'v11: node puppetWarp deleted');
-  assertEq(p.animations[0].tracks.length, 1, 'v11: puppet_pins track removed');
-  assertEq(p.animations[0].tracks[0].property, 'x', 'v11: non-puppet track preserved');
+  // v11 strips the puppet_pins track BEFORE v36 lifts clips → actions.
+  // After v36 the surviving track is an fcurve with rnaPath `objects['a'].x`.
+  assertEq(p.actions[0].fcurves.length, 1, 'v11→v36: puppet_pins fcurve removed; non-puppet survives');
+  assertEq(p.actions[0].fcurves[0].rnaPath, "objects['a'].x",
+    'v11→v36: surviving fcurve targets node a.x');
 }
 
 {
@@ -179,18 +184,22 @@ function assertThrows(fn, name) {
 }
 
 {
-  // Animations: ensure audioTracks + tracks arrays exist.
+  // Actions (post-v36): ensure audioTracks + fcurves arrays exist.
+  // Pre-v36 the legacy `tracks` shape went through the v36 conversion;
+  // empty / no-keyframes tracks drop. The 'wave' clip's `{nodeId: 'x'}`
+  // track has no keyframes → dropped during v36.
   const p = {
     animations: [
       { id: 'a1', name: 'idle' },                              // missing both
-      { id: 'a2', name: 'wave', tracks: [{ nodeId: 'x' }] },   // has tracks, missing audioTracks
+      { id: 'a2', name: 'wave', tracks: [{ nodeId: 'x' }] },   // missing property + keyframes → dropped
     ],
   };
   migrateProject(p);
-  assertEq(p.animations[0].tracks, [], 'animation 0: tracks default');
-  assertEq(p.animations[0].audioTracks, [], 'animation 0: audioTracks default');
-  assertEq(p.animations[1].tracks, [{ nodeId: 'x' }], 'animation 1: existing tracks preserved');
-  assertEq(p.animations[1].audioTracks, [], 'animation 1: audioTracks default');
+  assert(p.animations === undefined, 'v36: legacy animations field deleted');
+  assertEq(p.actions[0].fcurves, [], 'action 0: fcurves [] (no source tracks)');
+  assertEq(p.actions[0].audioTracks, [], 'action 0: audioTracks default');
+  assertEq(p.actions[1].fcurves, [], 'action 1: untargeted track dropped → fcurves []');
+  assertEq(p.actions[1].audioTracks, [], 'action 1: audioTracks default');
 }
 
 // ---- Idempotence: running migration twice is a no-op ----
@@ -214,7 +223,7 @@ function assertThrows(fn, name) {
     canvas: { width: 100, height: 50, x: 10, y: 20, bgEnabled: true, bgColor: '#abcdef' },
     textures: [{ id: 't1', source: 'tx.png' }],
     nodes: [],
-    animations: [],
+    actions: [],
     parameters: [{ id: 'ParamFoo', min: 0, max: 1, default: 0.5 }],
     physics_groups: [],
   };
@@ -650,7 +659,7 @@ function assertThrows(fn, name) {
   const p = {
     schemaVersion: 16,
     canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
-    textures: [], animations: [], parameters: [], physics_groups: [],
+    textures: [], animations: [], parameters: [], physics_groups: [],  // pre-v36 fixture; v36 migrates animations → actions
     nodes: [
       {
         id: 'bone-arm', type: 'group', name: 'arm', boneRole: 'leftArm',
@@ -709,7 +718,7 @@ function assertThrows(fn, name) {
   const make = () => ({
     schemaVersion: 16,
     canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
-    textures: [], animations: [], parameters: [], physics_groups: [],
+    textures: [], animations: [], parameters: [], physics_groups: [],  // pre-v36 fixture; v36 migrates animations → actions
     nodes: [{
       id: 'b', type: 'group', boneRole: 'torso',
       transform: { x: 7, y: 0, rotation: 15, scaleX: 1, scaleY: 1, pivotX: 100, pivotY: 200 },
@@ -725,7 +734,7 @@ function assertThrows(fn, name) {
   const p = {
     schemaVersion: 17,
     canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
-    textures: [], animations: [], parameters: [], physics_groups: [],
+    textures: [], animations: [], parameters: [], physics_groups: [],  // pre-v36 fixture; v36 migrates animations → actions
     nodes: [{
       id: 'b', type: 'group', boneRole: 'leftArm',
       transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 50, pivotY: 60 },

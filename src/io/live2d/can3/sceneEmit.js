@@ -2,7 +2,7 @@
 /**
  * Per-scene CSceneSource emission for .can3.
  *
- * Each animation in the input becomes one CSceneSource holding a Root
+ * Each action in the input becomes one CSceneSource holding a Root
  * CMvTrack_Group_Source + a child CMvTrack_Live2DModel_Source. The model
  * track aggregates five effects in Hiyori's order:
  *   1. CMvEffect_EyeBlink (empty stub)
@@ -26,10 +26,11 @@
 import { uuid } from '../xmlbuilder.js';
 import { emitMutableSequence } from './keyframeSequence.js';
 import { buildTrackAttrFactories } from './trackAttrs.js';
+import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
 
 /**
  * @param {object} x XmlBuilder
- * @param {object[]} animations Array of SS animations [{name, duration, fps, tracks}]
+ * @param {object[]} actions Array of SS actions [{name, duration, fps, fcurves, ...}]
  * @param {object} deps Shared pids + paramInfoList
  * @param {string|number} deps.pidAdaptRel
  * @param {string|number} deps.pidEffIdParam
@@ -49,7 +50,7 @@ import { buildTrackAttrFactories } from './trackAttrs.js';
  *   sceneAnimPlaceholders: Array<{scene:object, placeholder:object}>,
  * }}
  */
-export function emitAllScenes(x, animations, deps) {
+export function emitAllScenes(x, actions, deps) {
   const {
     pidAdaptRel, pidEffIdParam, pidEffIdParts, pidEffIdVisual,
     pidRootTrackGuid, pidResourceGuid,
@@ -61,12 +62,12 @@ export function emitAllScenes(x, animations, deps) {
   const sceneGuids = [];
   const sceneAnimPlaceholders = [];
 
-  for (let si = 0; si < animations.length; si++) {
-    const anim = animations[si];
-    const fps = anim.fps ?? 30;
-    const durationMs = anim.duration ?? 2000;
+  for (let si = 0; si < actions.length; si++) {
+    const action = actions[si];
+    const fps = action.fps ?? 30;
+    const durationMs = action.duration ?? 2000;
     const durationFrames = Math.round(durationMs * fps / 1000);
-    const sceneName = (anim.name ?? `anim_${si}`).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sceneName = (action.name ?? `anim_${si}`).replace(/[^a-zA-Z0-9_-]/g, '_');
 
     const [, pidSceneGuid] = x.shared('CSceneGuid', { uuid: uuid(), note: sceneName });
     sceneGuids.push(pidSceneGuid);
@@ -76,22 +77,24 @@ export function emitAllScenes(x, animations, deps) {
 
     const paramAttrPids = [];
 
-    const rotationTracksByNodeId = new Map();
-    const paramTracksByParamId = new Map();
-    for (const track of (anim.tracks ?? [])) {
-      if (track.paramId) {
-        if (!paramTracksByParamId.has(track.paramId)) {
-          paramTracksByParamId.set(track.paramId, track);
+    const rotationFCurvesByNodeId = new Map();
+    const paramFCurvesByParamId = new Map();
+    for (const fc of (action.fcurves ?? [])) {
+      const target = decodeFCurveTarget(fc);
+      if (!target) continue;
+      if (target.kind === 'param') {
+        if (!paramFCurvesByParamId.has(target.paramId)) {
+          paramFCurvesByParamId.set(target.paramId, fc);
         }
-      } else if (track.property === 'rotation' && deformerParamMap.has(track.nodeId)) {
-        rotationTracksByNodeId.set(track.nodeId, track);
+      } else if (target.property === 'rotation' && deformerParamMap.has(target.nodeId)) {
+        rotationFCurvesByNodeId.set(target.nodeId, fc);
       }
     }
 
     for (const info of paramInfoList) {
-      const track = info.sourceGroupId
-        ? (rotationTracksByNodeId.get(info.sourceGroupId) ?? paramTracksByParamId.get(info.paramId) ?? null)
-        : (paramTracksByParamId.get(info.paramId) ?? null);
+      const fcurve = info.sourceGroupId
+        ? (rotationFCurvesByNodeId.get(info.sourceGroupId) ?? paramFCurvesByParamId.get(info.paramId) ?? null)
+        : (paramFCurvesByParamId.get(info.paramId) ?? null);
 
       const [attrF, pidAttrF] = x.shared('CMvAttrF');
       paramAttrPids.push(pidAttrF);
@@ -110,8 +113,8 @@ export function emitAllScenes(x, animations, deps) {
       x.sub(optParams, 's', { 'xs.n': 'KEY_PARAM_ID' }).text = `live2dParam:${info.paramId}`;
       x.subRef(attrSup, 'CMvTrack_Live2DModel_Source', pidModelTrack, { 'xs.n': 'track' });
 
-      if (track && track.keyframes?.length > 0) {
-        const kfs = [...track.keyframes].sort((a, b) => a.time - b.time);
+      if (fcurve && fcurve.keyforms?.length > 0) {
+        const kfs = [...fcurve.keyforms].sort((a, b) => a.time - b.time);
         emitMutableSequence(x, attrF, pidAttrF, kfs, fps, info.min, info.max);
       } else {
         emitMutableSequence(

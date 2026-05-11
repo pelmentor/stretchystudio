@@ -1,13 +1,17 @@
 // @ts-check
 
 /**
- * Animation-clip → AnimationTree builder.
+ * Action → AnimationTree builder.
  *
- * Phase N-3 of the V2 plan. One AnimationTree per clip; one
- * `FCurveStrip` node per track in the clip; one `TimelineOutput`
+ * Phase N-3 of the V2 plan. One AnimationTree per action; one
+ * `FCurveStrip` node per fcurve in the action; one `TimelineOutput`
  * sink that collects every strip's output.
  *
- * Tree id convention: `'animation:<animationId>'`.
+ * Tree id convention: `'animation:<actionId>'`.
+ *
+ * NOTE: NodeTree retirement is a separate follow-up commit (per the
+ * post-v36 rewire plan); this compile pass stays alive but rewired
+ * to walk `action.fcurves` instead of legacy `animation.tracks`.
  *
  * @module anim/nodetree/animationCompile
  */
@@ -15,16 +19,16 @@
 import { addNodeToTree, addLinkToTree, makeNodeTree, NodeTreeType } from './types.js';
 
 /**
- * @param {object} animation - SS animation clip ({id, tracks: [...]})
+ * @param {object} action - SS action datablock ({id, fcurves: [...]})
  * @returns {import('./types.js').NodeTree}
  */
-export function compileAnimationTree(animation) {
-  const animId = animation?.id ?? 'untitled';
-  const tree = makeNodeTree(`animation:${animId}`, NodeTreeType.ANIMATION, {
-    animationId: animId,
+export function compileAnimationTree(action) {
+  const actionId = action?.id ?? 'untitled';
+  const tree = makeNodeTree(`animation:${actionId}`, NodeTreeType.ANIMATION, {
+    actionId,
   });
 
-  const outputId = `${animId}__output`;
+  const outputId = `${actionId}__output`;
   addNodeToTree(tree, {
     id: outputId,
     typeId: 'TimelineOutput',
@@ -33,22 +37,22 @@ export function compileAnimationTree(animation) {
     position: [600, 0],
   });
 
-  const tracks = Array.isArray(animation?.tracks) ? animation.tracks : [];
+  const fcurves = Array.isArray(action?.fcurves) ? action.fcurves : [];
   let xPos = 0;
   let yPos = 0;
   let lastStripId = null;
-  for (let i = 0; i < tracks.length; i++) {
-    const track = tracks[i];
-    if (!track) continue;
-    const stripId = `${animId}__strip_${i}`;
+  for (let i = 0; i < fcurves.length; i++) {
+    const fc = fcurves[i];
+    if (!fc) continue;
+    const stripId = `${actionId}__strip_${i}`;
     addNodeToTree(tree, {
       id: stripId,
       typeId: 'FCurveStrip',
       inputs: [],
       outputs: [{ identifier: 'value', name: 'Value', type: 'value', inOut: 'output' }],
-      // Store the full track record so eval can dispatch through the
-      // same code path as the existing animationEngine.
-      storage: { track },
+      // Store the full fcurve record so eval can dispatch through the
+      // same code path as `evaluateActionFCurves` / `evaluateFCurve`.
+      storage: { fcurve: fc },
       position: [xPos, yPos],
     });
     yPos += 80;

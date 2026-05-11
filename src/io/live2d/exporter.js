@@ -15,7 +15,7 @@ import { generateMoc3 } from './moc3writer.js';
 import { packTextureAtlas } from './textureAtlas.js';
 import { generateCmo3 } from './cmo3writer.js';
 import { generateCan3 } from './can3writer.js';
-import { buildMotion3, PRESETS, resultToSsAnimation } from './idle/builder.js';
+import { buildMotion3, PRESETS, resultToSsAction } from './idle/builder.js';
 import { buildParameterSpec } from './rig/paramSpec.js';
 import { resolveMaskConfigs } from './rig/maskConfigs.js';
 import { resolvePhysicsRules } from './rig/physicsConfig.js';
@@ -43,7 +43,7 @@ import {
  * @typedef {Object} ExportOptions
  * @property {string}   modelName   - Base name (e.g. "character")
  * @property {number}   [atlasSize=2048] - Texture atlas size
- * @property {boolean}  [exportMotions=true] - Whether to include .motion3.json files from project.animations
+ * @property {boolean}  [exportMotions=true] - Whether to include .motion3.json files from project.actions
  * @property {boolean}  [generatePhysics=true] - Emit `physics3.json` from PHYSICS_RULES
  * @property {string[]} [physicsDisabledCategories=null] - Category names to suppress (`'hair'`, `'clothing'`, `'bust'`, `'arms'`)
  * @property {Array<string | {preset:string, personality?:string, durationSec?:number, seed?:number}>} [motionPresets]
@@ -158,7 +158,7 @@ export async function exportLive2D(project, images, opts = {}) {
       meshes: meshesForRig,
       groups: groupsForRig,
       parameters: project.parameters ?? [],
-      animations: [],
+      actions: [],
       modelName,
       generateRig: true,
       generatePhysics: false,
@@ -208,7 +208,7 @@ export async function exportLive2D(project, images, opts = {}) {
     const sanitized = sanitisePartName(g.name || g.id);
     parameterMap.set(`${g.id}.rotation`, `ParamRotation_${sanitized}`);
   }
-  // Warp deformer parameters for mesh_verts tracks
+  // Warp deformer parameters for mesh_verts fcurves
   const meshPartsWithMesh = project.nodes.filter(n => n.type === 'part' && getMesh(n, project));
   for (const p of meshPartsWithMesh) {
     const sanitized = sanitisePartName(p.name || p.id);
@@ -216,14 +216,14 @@ export async function exportLive2D(project, images, opts = {}) {
   }
 
   const motionFiles = [];
-  if (exportMotions && project.animations?.length > 0) {
+  if (exportMotions && project.actions?.length > 0) {
     onProgress('Generating motion files...');
     const motionFolder = zip.folder('motion');
 
-    for (const anim of project.animations) {
-      const sanitized = sanitizeName(anim.name);
+    for (const action of project.actions) {
+      const sanitized = sanitizeName(action.name);
       const filename = `${sanitized}.motion3.json`;
-      const motion = generateMotion3Json(anim, { parameterMap });
+      const motion = generateMotion3Json(action, { parameterMap });
       motionFolder.file(filename, JSON.stringify(motion, null, '\t'));
       motionFiles.push(`motion/${filename}`);
     }
@@ -320,9 +320,9 @@ export async function exportLive2D(project, images, opts = {}) {
         const groupName = PRESETS[preset].label.replace(/\s+/g, '');
         if (!motionsByGroup[groupName]) motionsByGroup[groupName] = [];
         motionsByGroup[groupName].push({ File: `motion/${filename}` });
-        // Keep resultToSsAnimation reachable for future bidirectional flows
+        // Keep resultToSsAction reachable for future bidirectional flows
         // (e.g. wiring back into a .can3 if we ever bundle one alongside).
-        void resultToSsAnimation;
+        void resultToSsAction;
       } catch (err) {
         console.warn(`[exportLive2D] ${preset}: synthesis failed:`, err.message);
       }
@@ -532,7 +532,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     meshes,
     groups,
     parameters: project.parameters ?? [],
-    animations: project.animations ?? [],
+    actions: project.actions ?? [],
     modelName,
     generateRig,
     generatePhysics,
@@ -550,8 +550,8 @@ export async function exportLive2DProject(project, images, opts = {}) {
   });
 
   // --- Motion synthesis (optional) ---
-  // Each requested preset becomes a parameter-track SS animation appended to
-  // `animations`. Flowing through generateCan3 emits a .can3 scene with bezier
+  // Each requested preset becomes a parameter-fcurve SS action appended to
+  // `actions`. Flowing through generateCan3 emits a .can3 scene with bezier
   // keyframes on each Standard Parameter, directly editable in Cubism Editor
   // (open .cmo3 → Animation workspace → File → Open the .can3 → pick scene
   // from list). The user then re-exports runtime files from Editor, which
@@ -559,7 +559,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
   // so we deliberately don't ship runtime motion3 here.
   //
   // Presets currently available: idle, listening, talkingIdle, embarrassedHold.
-  let animations = project.animations ?? [];
+  let actions = project.actions ?? [];
   if (Array.isArray(motionPresets) && motionPresets.length > 0) {
     // Use the same paramSpec the cmo3 writer just built — `project.parameters`
     // is empty for fresh PSD imports, so motion presets used to silently skip
@@ -600,18 +600,18 @@ export async function exportLive2DProject(project, images, opts = {}) {
           console.warn(`[exportLive2DProject] ${preset}: 0 curves (no Standard Parameters present), skipping`);
           continue;
         }
-        const { animation } = resultToSsAnimation(result);
-        animations = [...animations, animation];
+        const { action } = resultToSsAction(result);
+        actions = [...actions, action];
       } catch (err) {
         console.warn(`[exportLive2DProject] ${preset}: synthesis failed:`, err.message);
       }
     }
   }
 
-  const hasAnimations = animations.length > 0 && deformerParamMap.size > 0;
+  const hasAnimations = actions.length > 0 && deformerParamMap.size > 0;
   const hasRigDebug = !!rigDebugLog;
 
-  // Bundle into ZIP when we have animations OR rig debug log.
+  // Bundle into ZIP when we have actions OR rig debug log.
   if (hasAnimations || hasRigDebug) {
     const cmo3FileName = `${modelName}.cmo3`;
     const { default: JSZip } = await import('jszip');
@@ -621,7 +621,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     if (hasAnimations) {
       onProgress('Generating .can3 animation...');
       const can3 = await generateCan3({
-        animations, deformerParamMap, cmo3FileName, canvasW, canvasH, modelName,
+        actions, deformerParamMap, cmo3FileName, canvasW, canvasH, modelName,
       });
       zip.file(`${modelName}.can3`, can3);
     }

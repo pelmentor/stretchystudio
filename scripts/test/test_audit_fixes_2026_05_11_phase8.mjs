@@ -53,8 +53,14 @@ function near(a, b, eps = 1e-6) { return Math.abs(a - b) <= eps; }
 
 // ── D-3: v35 migration repairs mixed-state pose corruption ──────────────────
 {
-  assert(CURRENT_SCHEMA_VERSION === 35,
-    `D-3: schema bumped to 35, got ${CURRENT_SCHEMA_VERSION}`);
+  // Audit-pin's original assertion was `CURRENT_SCHEMA_VERSION === 35`,
+  // pinning the v35 ship. Subsequent migrations (v36 Action datablock,
+  // 2026-05-11) bumped it further. The functional invariant — that
+  // v35 still runs and repairs mixed-state pose — is what the pin
+  // really cares about; the version-equality check is replaced by
+  // "v35 is still in the migration walker's path".
+  assert(CURRENT_SCHEMA_VERSION >= 35,
+    `D-3: schema is at v35 or later (got ${CURRENT_SCHEMA_VERSION})`);
   // Functional repair test
   const project = {
     schemaVersion: 34,

@@ -119,7 +119,7 @@ function ParamRowImpl({ param, selected }) {
               <button
                 type="button"
                 className="p-0.5 rounded hover:bg-destructive/30 text-destructive"
-                title="Confirm delete (cascades through bindings, tracks, physics inputs)"
+                title="Confirm delete (cascades through bindings, fcurves, physics inputs)"
                 onClick={(e) => {
                   e.stopPropagation();
                   removeParameter(param.id);
@@ -168,18 +168,18 @@ function ParamRowImpl({ param, selected }) {
             logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
           }
           setParamValue(param.id, v);
-          // Auto-keyframe in animation mode: write a keyframe on the
-          // parameter track at the current playhead time. The
-          // animation tick reads `paramId` tracks via
-          // `computeParamOverrides` and feeds them into chainEval.
+          // Auto-keyframe in animation mode: write a keyform on the
+          // param-targeted FCurve at the current playhead time. The
+          // animation tick evaluates these fcurves via
+          // `evaluateActionFCurves` and feeds them into chainEval.
           const ed = useEditorStore.getState();
           if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
           const an = useAnimationStore.getState();
           const proj = useProjectStore.getState().project;
-          const activeAnim = proj.animations.find((a) => a.id === an.activeAnimationId);
-          if (!activeAnim) return;
+          const activeAction = proj.actions.find((a) => a.id === an.activeActionId);
+          if (!activeAction) return;
           useProjectStore.getState().updateProject((p) => {
-            const a = p.animations.find((aa) => aa.id === activeAnim.id);
+            const a = p.actions.find((aa) => aa.id === activeAction.id);
             if (a) setParamKeyframeAt(a, param.id, an.currentTime, v, 'ease-both');
           });
         }}

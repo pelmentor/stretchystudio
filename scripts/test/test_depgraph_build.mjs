@@ -14,7 +14,7 @@ import {
   buildRelations,
   TIME_ID_REF,
   PARAM_ID_REF,
-  ANIMATION_ID_REF,
+  ACTION_ID_REF,
 } from '../../src/anim/depgraph/build.js';
 import {
   NodeType,
@@ -142,17 +142,26 @@ function makeShelbyLite() {
     animations: [],
     physicsRules: [],
   };
-  const anim = {
-    tracks: [
-      { targetId: 'ParamSmile', property: 'value', keyframes: [] },
+  // Post-v36: action carries fcurves with rnaPath; build pass tags
+  // each ANIMATION_TRACK_EVAL op with the fcurve's rnaPath verbatim.
+  const action = {
+    fcurves: [
+      {
+        id: 'param:ParamSmile',
+        rnaPath: "objects['__params__'].values['ParamSmile']",
+        arrayIndex: 0,
+        keyforms: [],
+        modifiers: [],
+        extrapolation: 'constant',
+      },
     ],
   };
-  buildNodes(graph, project, { animation: anim });
-  const animId = graph.findIdNode(ANIMATION_ID_REF, 'animation');
+  buildNodes(graph, project, { action });
+  const animId = graph.findIdNode(ACTION_ID_REF, 'action');
   const animComp = animId?.findComponent(NodeType.ANIMATION);
   assert(animComp?.findOperation(OperationCode.ANIMATION_TRACK_EVAL,
-    'ParamSmile/value') !== null,
-    'ANIMATION_TRACK_EVAL with param/property tag');
+    "objects['__params__'].values['ParamSmile']") !== null,
+    'ANIMATION_TRACK_EVAL with rnaPath tag');
 }
 
 // ---- buildRelations: param → keyform ----
@@ -218,20 +227,30 @@ function makeShelbyLite() {
 
 {
   const project = makeShelbyLite();
-  const anim = {
-    tracks: [
-      { targetId: 'ParamBreath', property: 'value', keyframes: [] },
+  // Post-v36: fcurve rnaPath is the op tag; the build pass wires the
+  // rnaPath-tagged TRACK_EVAL op as upstream of the matching PARAM_EVAL op.
+  const action = {
+    fcurves: [
+      {
+        id: 'param:ParamBreath',
+        rnaPath: "objects['__params__'].values['ParamBreath']",
+        arrayIndex: 0,
+        keyforms: [],
+        modifiers: [],
+        extrapolation: 'constant',
+      },
     ],
   };
-  const graph = buildDepGraph(project, { animation: anim });
-  const trackOp = graph.findIdNode(ANIMATION_ID_REF, 'animation')
+  const graph = buildDepGraph(project, { action });
+  const trackOp = graph.findIdNode(ACTION_ID_REF, 'action')
     ?.findComponent(NodeType.ANIMATION)
-    ?.findOperation(OperationCode.ANIMATION_TRACK_EVAL, 'ParamBreath/value');
+    ?.findOperation(OperationCode.ANIMATION_TRACK_EVAL,
+      "objects['__params__'].values['ParamBreath']");
   const paramOp = graph.findIdNode(PARAM_ID_REF, 'params')
     ?.findComponent(NodeType.PARAMETERS)
     ?.findOperation(OperationCode.PARAM_EVAL, 'ParamBreath');
   assert(trackOp.outlinks.some((r) => r.to === paramOp),
-    'track -> param edge present');
+    'fcurve -> param edge present');
   // Time → track also wired.
   const timeOp = graph.timeSource?.findComponent(NodeType.PARAMETERS)
     ?.findOperation(OperationCode.TIME_TICK);

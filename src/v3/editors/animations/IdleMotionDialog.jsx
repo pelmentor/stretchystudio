@@ -4,15 +4,15 @@
  *
  * Modal that wraps `io/live2d/idle/builder.js:buildMotion3` with a tiny form
  * (preset, personality, duration, fps, seed). On submit it produces a fresh
- * v3 animation populated with parameter tracks and switches to it.
+ * v3 action populated with parameter fcurves and switches to it.
  *
  * Plan: docs/FEATURE_GAPS.md → GAP-017. Backend was Phase 0 (motion3 builder
  * is pure JS); this surface puts it inside SS so the user no longer needs to
  * run `/idle` slash command + import.
  *
- * Output → v3 animation tracks:
- *   - One track per animated paramId.
- *   - Track shape: `{ paramId, keyframes: [{time:ms, value, easing}] }`.
+ * Output → v3 action fcurves:
+ *   - One FCurve per animated paramId, built via `buildParamFCurve`.
+ *   - Keyform shape: `{time:ms, value, easing, type}` (normalised by helper).
  *   - `paramKeyframes` from buildMotion3 is already in ms (motionLib uses
  *     durationMs everywhere) so no time conversion needed.
  *
@@ -30,6 +30,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS } from '../../../io/live2d/idle/builder.js';
+import { buildParamFCurve } from '../../../anim/animationFCurve.js';
 
 // shadcn/ui forwardRef components ship without JSX-typed declarations — cast
 // via `any` so tsc accepts children/className. Same pattern as AnimationsEditor's
@@ -109,53 +110,49 @@ export function IdleMotionDialog({ open, onOpenChange }) {
       }
 
       // Convert paramKeyframes (Map<paramId, [{time:ms, value, easing}]>)
-      // into v3 animation tracks.
-      const tracks = [];
+      // into FCurves targeting `objects['__params__'].values['<paramId>']`.
+      // `buildParamFCurve` normalises keyforms (defaults easing → 'linear',
+      // derives `type` from easing) and returns null on empty input.
+      const fcurves = [];
       for (const id of result.animatedIds) {
         const kfs = result.paramKeyframes.get(id);
         if (!kfs || kfs.length < 2) continue;
-        tracks.push({
-          paramId: id,
-          keyframes: kfs.map((kf) => ({
-            time: kf.time,
-            value: kf.value,
-            easing: kf.easing ?? 'linear',
-          })),
-        });
+        const fc = buildParamFCurve(id, kfs);
+        if (fc) fcurves.push(fc);
       }
 
-      // Create the animation, then update its tracks via the store. Two-step
-      // because createAnimation only takes a name argument.
+      // Create the action, then update its fcurves via the store. Two-step
+      // because createAction only takes a name argument.
       const presetLabel = PRESETS[preset]?.label ?? preset;
       const name = `${presetLabel} (${personality})`;
-      const beforeIds = new Set((project.animations ?? []).map((a) => a.id));
+      const beforeIds = new Set((project.actions ?? []).map((a) => a.id));
 
-      useProjectStore.getState().createAnimation(name);
+      useProjectStore.getState().createAction(name);
 
       const projectAfter = useProjectStore.getState().project;
-      const created = (projectAfter.animations ?? []).find((a) => !beforeIds.has(a.id));
-      if (!created) throw new Error('createAnimation did not produce a new entry');
+      const created = (projectAfter.actions ?? []).find((a) => !beforeIds.has(a.id));
+      if (!created) throw new Error('createAction did not produce a new entry');
 
-      // Patch tracks + duration directly via produce-style update.
+      // Patch fcurves + duration directly via produce-style update.
       useProjectStore.setState((s) => ({
         ...s,
         project: {
           ...s.project,
-          animations: s.project.animations.map((a) =>
+          actions: s.project.actions.map((a) =>
             a.id === created.id
-              ? { ...a, tracks, duration: durationSec * 1000, fps }
+              ? { ...a, fcurves, duration: durationSec * 1000, fps }
               : a
           ),
-          // Don't bump hasUnsavedChanges separately — createAnimation
+          // Don't bump hasUnsavedChanges separately — createAction
           // already did, and the patch is part of the same logical action.
         },
       }));
 
-      // Switch to the new animation + route to Animation workspace.
+      // Switch to the new action + route to Animation workspace.
       // (BFA-001: editorMode is derived from activeWorkspace; setWorkspace
       // captures the rest pose on the staging→animation transition.)
-      const finalAnimation = useProjectStore.getState().project.animations.find((a) => a.id === created.id);
-      if (finalAnimation) useAnimationStore.getState().switchAnimation(finalAnimation);
+      const finalAction = useProjectStore.getState().project.actions.find((a) => a.id === created.id);
+      if (finalAction) useAnimationStore.getState().switchAction(finalAction);
       useUIV3Store.getState().setWorkspace('animation');
 
       reset();
@@ -176,7 +173,7 @@ export function IdleMotionDialog({ open, onOpenChange }) {
           </DialogTitle>
           <DialogDescription>
             Synthesises a procedural Live2D motion (head wander, breath, blinks…) and
-            adds it as a new animation.
+            adds it as a new action.
           </DialogDescription>
         </DialogHeader>
 

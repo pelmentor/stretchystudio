@@ -93,8 +93,8 @@ const KERNELS = {
  *   write here so downstream PARAM_EVAL ops pick up the override.
  * @property {Map<string, any>} outputs - per-op output store, keyed by
  *   `op.name`. Populated by the eval pass.
- * @property {object} [animation] - active animation clip; FCurve kernel
- *   resolves its tracks here.
+ * @property {object} [action] - active action datablock; FCurve and
+ *   ANIMATION_TRACK_EVAL kernels resolve their fcurves here.
  * @property {number} [requiredMode] - Modifier mode bitmask (REALTIME |
  *   RENDER | EDITMODE). Default REALTIME (viewport tick). Export bake
  *   passes RENDER. See `anim/modifierTypeInfo.js` `isModifierEnabled`.
@@ -131,7 +131,7 @@ export function evalDepGraph(graph, ctxIn) {
     timeMs: ctxIn.timeMs ?? 0,
     paramOverrides: ctxIn.paramOverrides ?? new Map(),
     outputs: ctxIn.outputs ?? new Map(),
-    animation: ctxIn.animation,
+    action: ctxIn.action,
     requiredMode: ctxIn.requiredMode,
     physics: ctxIn.physics,
     poseOverrides: ctxIn.poseOverrides ?? new Map(),

@@ -99,14 +99,25 @@ function assertEq(a, b, name) {
 // ---- AnimationTree compile → layout ----
 
 {
-  const anim = {
+  // Post-v36: compileAnimationTree expects an action with fcurves.
+  const action = {
     id: 'idle',
-    tracks: [
-      { paramId: 'P1', keyframes: [{ time: 0, value: 0 }, { time: 1000, value: 1 }] },
-      { paramId: 'P2', keyframes: [{ time: 0, value: 0 }, { time: 1000, value: 1 }] },
+    fcurves: [
+      { id: 'param:P1', rnaPath: "objects['__params__'].values['P1']",
+        arrayIndex: 0, modifiers: [], extrapolation: 'constant',
+        keyforms: [
+          { time: 0, value: 0, easing: 'linear', type: 'linear' },
+          { time: 1000, value: 1, easing: 'linear', type: 'linear' },
+        ] },
+      { id: 'param:P2', rnaPath: "objects['__params__'].values['P2']",
+        arrayIndex: 0, modifiers: [], extrapolation: 'constant',
+        keyforms: [
+          { time: 0, value: 0, easing: 'linear', type: 'linear' },
+          { time: 1000, value: 1, easing: 'linear', type: 'linear' },
+        ] },
     ],
   };
-  const tree = compileAnimationTree(anim);
+  const tree = compileAnimationTree(action);
   const layout = layoutTree(tree);
   assertEq(layout.nodes.length, 3,
     'AnimationTree 2-track: 3 layout rects (2 strips + output)');

@@ -7,6 +7,13 @@ import { cn } from '@/lib/utils';
 import { Disc, RotateCcw, Repeat, SkipBack, SkipForward, Copy, Clipboard, Trash2, Music, X, Settings, Upload } from 'lucide-react';
 import { parseMotion3Json } from '@/io/live2d/motion3jsonImport';
 import {
+  buildParamFCurve,
+  buildNodeFCurve,
+  decodeFCurveTarget,
+  fcurveTargetsParam,
+  fcurveTargetsNode,
+} from '@/anim/animationFCurve';
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -121,7 +128,7 @@ function NumField({ label, value, onChange, min, max, step = 1, className = '', 
 /* ──────────────────────────────────────────────────────────────────────────
    useAudioSync — Web Audio API playback sync
 
-   Key design: effect only watches isPlaying / activeAnimationId, NOT currentTime.
+   Key design: effect only watches isPlaying / activeActionId, NOT currentTime.
    currentTime is read via ref so it's fresh at the moment play is pressed
    without causing the effect to re-fire every rAF frame.
 ────────────────────────────────────────────────────────────────────────── */
@@ -219,7 +226,7 @@ function useAudioSync(animation, animStore) {
     startAll().catch(e => console.error('Audio startAll error:', e));
     return () => { stopAll(); };
   // loopCount increments in animationStore.tick on each loop — causes audio restart from top
-  }, [animStore.isPlaying, animStore.activeAnimationId, animStore.loopCount, stopAll]); // NOT animation, NOT currentTime
+  }, [animStore.isPlaying, animStore.activeActionId, animStore.loopCount, stopAll]); // NOT animation, NOT currentTime
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -244,9 +251,9 @@ function AudioTrackModal({ track, animation, update, isOpen, onClose }) {
 
   const handleSave = () => {
     update(p => {
-      const anim = p.animations.find(a => a.id === animation.id);
-      if (anim) {
-        const t = anim.audioTracks.find(at => at.id === track.id);
+      const act = p.actions.find(a => a.id === animation.id);
+      if (act) {
+        const t = act.audioTracks.find(at => at.id === track.id);
         if (t) {
           t.name = name || 'Untitled Audio';
           t.timelineStartMs = Math.round(Math.max(0, startOffset));
@@ -439,9 +446,9 @@ function AudioTrackRow({
       const clipEndMs = Math.min(audioDurationMs, timelineEndMs);
 
       update(p => {
-        const anim = p.animations.find(a => a.id === animation.id);
-        if (anim) {
-          const t = anim.audioTracks.find(at => at.id === track.id);
+        const act = p.actions.find(a => a.id === animation.id);
+        if (act) {
+          const t = act.audioTracks.find(at => at.id === track.id);
           if (t) {
             t.sourceUrl = url;
             t.mimeType = file.type;
@@ -475,9 +482,9 @@ function AudioTrackRow({
       const deltaMs = frameToMs(frameDelta, fps);
 
       update(p => {
-        const anim = p.animations.find(a => a.id === animation.id);
-        if (anim) {
-          const t = anim.audioTracks.find(at => at.id === track.id);
+        const act = p.actions.find(a => a.id === animation.id);
+        if (act) {
+          const t = act.audioTracks.find(at => at.id === track.id);
           if (t) {
             const minDelta = Math.max(-origTimelineStart, -origStart); // keep both ≥ 0
             const maxDelta = (t.audioEndMs ?? t.audioDurationMs) - origStart - 100;
@@ -516,9 +523,9 @@ function AudioTrackRow({
       const deltaMs = frameToMs(frameDelta, fps);
 
       update(p => {
-        const anim = p.animations.find(a => a.id === animation.id);
-        if (anim) {
-          const t = anim.audioTracks.find(at => at.id === track.id);
+        const act = p.actions.find(a => a.id === animation.id);
+        if (act) {
+          const t = act.audioTracks.find(at => at.id === track.id);
           if (t) {
             const audioStart = t.audioStartMs ?? 0;
             const maxEnd = t.audioDurationMs ?? 0;
@@ -557,9 +564,9 @@ function AudioTrackRow({
       const deltaMs = frameToMs(frameDelta, fps);
 
       update(p => {
-        const anim = p.animations.find(a => a.id === animation.id);
-        if (anim) {
-          const t = anim.audioTracks.find(at => at.id === track.id);
+        const act = p.actions.find(a => a.id === animation.id);
+        if (act) {
+          const t = act.audioTracks.find(at => at.id === track.id);
           if (t) {
             t.timelineStartMs = Math.max(0, origStart + deltaMs);
           }
@@ -592,9 +599,9 @@ function AudioTrackRow({
 
   const deleteTrack = () => {
     update(p => {
-      const anim = p.animations.find(a => a.id === animation.id);
-      if (anim) {
-        anim.audioTracks = anim.audioTracks.filter(at => at.id !== track.id);
+      const act = p.actions.find(a => a.id === animation.id);
+      if (act) {
+        act.audioTracks = act.audioTracks.filter(at => at.id !== track.id);
       }
     });
   };
@@ -716,10 +723,10 @@ export function TimelineEditor() {
     origKeyframes: [], // [{ nodeId, origTimeMs, props: [{propName, origTimeMs}] }]
   });
 
-  /* ── Active animation object ────────────────────────────────────────── */
+  /* ── Active action object ───────────────────────────────────────────── */
   const animation = useMemo(
-    () => proj.animations.find(a => a.id === anim.activeAnimationId) ?? null,
-    [proj.animations, anim.activeAnimationId]
+    () => proj.actions.find(a => a.id === anim.activeActionId) ?? null,
+    [proj.actions, anim.activeActionId]
   );
 
   /* ── Derived values ─────────────────────────────────────────────────── */
@@ -730,37 +737,39 @@ export function TimelineEditor() {
   const totalFrames = Math.max(endFrame - startFrame, 1);
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
-  /* ── Auto-select animation when one exists ───────────────────────────── */
+  /* ── Auto-select action when one exists ──────────────────────────────── */
   useEffect(() => {
-    if (!anim.activeAnimationId && proj.animations.length > 0) {
-      anim.setActiveAnimationId(proj.animations[0].id);
-      const a = proj.animations[0];
+    if (!anim.activeActionId && proj.actions.length > 0) {
+      anim.setActiveActionId(proj.actions[0].id);
+      const a = proj.actions[0];
       anim.setFps(a.fps ?? 24);
       anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
     }
-  }, [proj.animations, anim.activeAnimationId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [proj.actions, anim.activeActionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── Create a default animation if none ─────────────────────────────── */
+  /* ── Create a default action if none ────────────────────────────────── */
   const ensureAnimation = useCallback(() => {
-    if (proj.animations.length > 0) return proj.animations[0].id;
+    if (proj.actions.length > 0) return proj.actions[0].id;
     const id = uid();
     update((p) => {
-      p.animations.push({
+      p.actions.push({
         id,
-        name: 'Animation 1',
+        name: 'Action 1',
         duration: 2000,
         fps: 24,
-        tracks: [],
+        fcurves: [],
         audioTracks: [],
+        flag: 0,
+        meta: { createdAt: null, modifiedAt: null, source: 'authored' },
       });
     });
-    anim.setActiveAnimationId(id);
+    anim.setActiveActionId(id);
     anim.setFps(24);
     anim.setEndFrame(48);
     return id;
-  }, [proj.animations, update, anim]);
+  }, [proj.actions, update, anim]);
 
-  /* ── Import .motion3.json as a new animation clip ───────────────────── */
+  /* ── Import .motion3.json as a new action clip ──────────────────────── */
   const importMotionFile = useCallback((file) => {
     if (!file) return;
     const reader = new FileReader();
@@ -773,19 +782,19 @@ export function TimelineEditor() {
         // Default the clip name to the file's basename so the switcher
         // dropdown shows something recognisable instead of "Imported motion".
         const baseName = file.name.replace(/\.motion3\.json$/i, '').replace(/\.json$/i, '');
-        const { animation, warnings } = parseMotion3Json(text, { uid, name: baseName });
+        const { action, warnings } = parseMotion3Json(text, { uid, name: baseName });
         update((p) => {
-          p.animations.push(animation);
+          p.actions.push(action);
         });
-        anim.setActiveAnimationId(animation.id);
-        anim.setFps(animation.fps);
-        anim.setEndFrame(Math.round((animation.duration / 1000) * animation.fps));
+        anim.setActiveActionId(action.id);
+        anim.setFps(action.fps);
+        anim.setEndFrame(Math.round((action.duration / 1000) * action.fps));
         anim.seekFrame(0);
         if (warnings.length > 0) {
           // Soft fail: surface decode warnings so the user knows we dropped
           // something, but still let the import succeed.
           window.alert(
-            `Imported "${animation.name}" with ${animation.tracks.length} track(s).\n` +
+            `Imported "${action.name}" with ${action.fcurves.length} fcurve(s).\n` +
             `${warnings.length} warning(s):\n` +
             warnings.slice(0, 6).join('\n') +
             (warnings.length > 6 ? `\n…+${warnings.length - 6} more` : '')
@@ -798,26 +807,28 @@ export function TimelineEditor() {
     reader.readAsText(file);
   }, [update, anim]);
 
-  /* ── Create a fresh animation regardless of existing ones ───────────── */
+  /* ── Create a fresh action regardless of existing ones ──────────────── */
   const createAnimation = useCallback(() => {
     const id = uid();
-    const n = proj.animations.length + 1;
+    const n = proj.actions.length + 1;
     update((p) => {
-      p.animations.push({
+      p.actions.push({
         id,
-        name: `Animation ${n}`,
+        name: `Action ${n}`,
         duration: 2000,
         fps: 24,
-        tracks: [],
+        fcurves: [],
         audioTracks: [],
+        flag: 0,
+        meta: { createdAt: null, modifiedAt: null, source: 'authored' },
       });
     });
-    anim.setActiveAnimationId(id);
+    anim.setActiveActionId(id);
     anim.setFps(24);
     anim.setEndFrame(48);
     anim.seekFrame(0);
     return id;
-  }, [proj.animations.length, update, anim]);
+  }, [proj.actions.length, update, anim]);
 
   // Audio sync hook
   useAudioSync(animation, anim);
@@ -888,16 +899,18 @@ export function TimelineEditor() {
       }
     }
 
-    // Prepare drag context — store enough info to re-find each track.
+    // Prepare drag context — store enough info to re-find each fcurve.
     const orig = [];
     if (animation) {
-      for (const track of animation.tracks) {
-        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
-        for (const kf of track.keyframes) {
-          if (newSel.has(`${trackRowKey}:${kf.time}`)) {
-            orig.push(track.paramId
-              ? { rowKey: trackRowKey, paramId: track.paramId, origTimeMs: kf.time }
-              : { rowKey: trackRowKey, trackNodeId: track.nodeId, prop: track.property, origTimeMs: kf.time }
+      for (const fc of animation.fcurves) {
+        const target = decodeFCurveTarget(fc);
+        if (!target) continue;
+        const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        for (const kf of fc.keyforms) {
+          if (newSel.has(`${fcurveRowKey}:${kf.time}`)) {
+            orig.push(target.kind === 'param'
+              ? { rowKey: fcurveRowKey, paramId: target.paramId, origTimeMs: kf.time }
+              : { rowKey: fcurveRowKey, trackNodeId: target.nodeId, prop: target.property, origTimeMs: kf.time }
             );
           }
         }
@@ -918,14 +931,17 @@ export function TimelineEditor() {
       if (dragFrameDelta !== 0) {
         let nextSel = new Set();
         update((p) => {
-          const a = p.animations.find(x => x.id === anim.activeAnimationId);
+          const a = p.actions.find(x => x.id === anim.activeActionId);
           if (!a) return;
           for (const item of dragCtx.current.origKeyframes) {
-            const track = item.paramId
-              ? a.tracks.find(t => t.paramId === item.paramId)
-              : a.tracks.find(t => t.nodeId === item.trackNodeId && t.property === item.prop);
-            if (track) {
-              const kf = track.keyframes.find(k => k.time === item.origTimeMs);
+            const fc = item.paramId
+              ? a.fcurves.find(f => fcurveTargetsParam(f, item.paramId))
+              : a.fcurves.find(f => {
+                  const t = decodeFCurveTarget(f);
+                  return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
+                });
+            if (fc) {
+              const kf = fc.keyforms.find(k => k.time === item.origTimeMs);
               if (kf) {
                 const newFrame = Math.max(0, msToFrame(item.origTimeMs, fps) + dragFrameDelta);
                 kf.time = frameToMs(newFrame, fps);
@@ -933,8 +949,8 @@ export function TimelineEditor() {
               }
             }
           }
-          // Sort tracks by time to ensure play engine doesn't trip up
-          a.tracks.forEach(t => t.keyframes.sort((k1, k2) => k1.time - k2.time));
+          // Sort fcurves by time to ensure play engine doesn't trip up
+          a.fcurves.forEach(f => f.keyforms.sort((k1, k2) => k1.time - k2.time));
         }, { skipHistory: true });
 
         // Update selection to match new times
@@ -958,7 +974,7 @@ export function TimelineEditor() {
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
 
-  }, [selectedKeyframes, animation, anim.activeAnimationId, fps, xToFrame, update]);
+  }, [selectedKeyframes, animation, anim.activeActionId, fps, xToFrame, update]);
 
   // Box Selection
   const onTrackAreaPointerDown = useCallback((e) => {
@@ -1028,8 +1044,10 @@ export function TimelineEditor() {
             // matches what the user sees.
             const orderedRowKeys = [];
             const seen = new Set();
-            for (const t of animation.tracks) {
-              const k = t.paramId ? `param:${t.paramId}` : `node:${t.nodeId}`;
+            for (const fc of animation.fcurves) {
+              const target = decodeFCurveTarget(fc);
+              if (!target) continue;
+              const k = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
               if (!seen.has(k)) { seen.add(k); orderedRowKeys.push(k); }
             }
 
@@ -1038,10 +1056,16 @@ export function TimelineEditor() {
               const rowY = RULER_H + (rIndex * ROW_H);
 
               if (rowY + ROW_H > prevBox.y && rowY < prevBox.y + prevBox.h) {
-                const tracksForRow = rowKey.startsWith('param:')
-                  ? animation.tracks.filter(t => `param:${t.paramId}` === rowKey)
-                  : animation.tracks.filter(t => `node:${t.nodeId}` === rowKey);
-                const times = [...new Set(tracksForRow.flatMap(t => t.keyframes.map(k => k.time)))];
+                const wantParam = rowKey.startsWith('param:');
+                const targetId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
+                const fcurvesForRow = animation.fcurves.filter(fc => {
+                  const target = decodeFCurveTarget(fc);
+                  if (!target) return false;
+                  return wantParam
+                    ? target.kind === 'param' && target.paramId === targetId
+                    : target.kind === 'node' && target.nodeId === targetId;
+                });
+                const times = [...new Set(fcurvesForRow.flatMap(fc => fc.keyforms.map(k => k.time)))];
 
                 for (const timeMs of times) {
                   const frame = msToFrame(timeMs, fps);
@@ -1078,8 +1102,8 @@ export function TimelineEditor() {
     if (!animation) return;
     if (rowKey.startsWith('param:')) {
       const paramId = rowKey.slice('param:'.length);
-      const track = animation.tracks.find(t => t.paramId === paramId);
-      const kf = track?.keyframes.find(k => k.time === timeMs);
+      const fc = animation.fcurves.find(f => fcurveTargetsParam(f, paramId));
+      const kf = fc?.keyforms.find(k => k.time === timeMs);
       if (!kf) return;
       setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.easing ?? 'linear' });
       return;
@@ -1087,11 +1111,12 @@ export function TimelineEditor() {
     const nodeId = rowKey.slice('node:'.length);
     const props = {};
     let easing = 'linear';
-    for (const track of animation.tracks) {
-      if (track.nodeId !== nodeId) continue;
-      const kf = track.keyframes.find(k => k.time === timeMs);
+    for (const fc of animation.fcurves) {
+      const target = decodeFCurveTarget(fc);
+      if (!target || target.kind !== 'node' || target.nodeId !== nodeId) continue;
+      const kf = fc.keyforms.find(k => k.time === timeMs);
       if (kf) {
-        props[track.property] = kf.value;
+        props[target.property] = kf.value;
         easing = kf.easing ?? 'linear';
       }
     }
@@ -1104,23 +1129,32 @@ export function TimelineEditor() {
     if (!clipboard || !animation) return;
 
     update((p) => {
-      const a = p.animations.find(x => x.id === anim.activeAnimationId);
+      const a = p.actions.find(x => x.id === anim.activeActionId);
       if (!a) return;
       const timeMs = anim.currentTime;
 
       if (clipboard.kind === 'param') {
-        let track = a.tracks.find(t => t.paramId === clipboard.paramId);
-        if (!track) {
-          track = { paramId: clipboard.paramId, keyframes: [] };
-          a.tracks.push(track);
+        let fc = a.fcurves.find(f => fcurveTargetsParam(f, clipboard.paramId));
+        if (!fc) {
+          fc = buildParamFCurve(clipboard.paramId, [
+            { time: timeMs, value: clipboard.value, easing: clipboard.easing },
+          ]);
+          if (fc) a.fcurves.push(fc);
+          return;
         }
-        const existingIdx = track.keyframes.findIndex(kf => kf.time === timeMs);
+        const existingIdx = fc.keyforms.findIndex(kf => kf.time === timeMs);
         if (existingIdx >= 0) {
-          track.keyframes[existingIdx].value = clipboard.value;
-          track.keyframes[existingIdx].easing = clipboard.easing;
+          fc.keyforms[existingIdx].value = clipboard.value;
+          fc.keyforms[existingIdx].easing = clipboard.easing;
+          fc.keyforms[existingIdx].type = clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear';
         } else {
-          track.keyframes.push({ time: timeMs, value: clipboard.value, easing: clipboard.easing });
-          track.keyframes.sort((a, b) => a.time - b.time);
+          fc.keyforms.push({
+            time: timeMs,
+            value: clipboard.value,
+            easing: clipboard.easing,
+            type: clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear',
+          });
+          fc.keyforms.sort((a, b) => a.time - b.time);
         }
         return;
       }
@@ -1129,39 +1163,53 @@ export function TimelineEditor() {
       if (sel.length === 0) return;
       for (const nodeId of sel) {
         for (const [prop, value] of Object.entries(clipboard.properties ?? {})) {
-          let track = a.tracks.find(t => t.nodeId === nodeId && t.property === prop);
-          if (!track) {
-            track = { nodeId, property: prop, keyframes: [] };
-            a.tracks.push(track);
+          let fc = a.fcurves.find(f => {
+            const t = decodeFCurveTarget(f);
+            return t?.kind === 'node' && t.nodeId === nodeId && t.property === prop;
+          });
+          if (!fc) {
+            fc = buildNodeFCurve(nodeId, prop, [
+              { time: timeMs, value, easing: clipboard.easing },
+            ]);
+            if (fc) a.fcurves.push(fc);
+            continue;
           }
-          const existingIdx = track.keyframes.findIndex(kf => kf.time === timeMs);
+          const existingIdx = fc.keyforms.findIndex(kf => kf.time === timeMs);
           if (existingIdx >= 0) {
-            track.keyframes[existingIdx].value = value;
-            track.keyframes[existingIdx].easing = clipboard.easing;
+            fc.keyforms[existingIdx].value = value;
+            fc.keyforms[existingIdx].easing = clipboard.easing;
+            fc.keyforms[existingIdx].type = clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear';
           } else {
-            track.keyframes.push({ time: timeMs, value, easing: clipboard.easing });
-            track.keyframes.sort((a, b) => a.time - b.time);
+            fc.keyforms.push({
+              time: timeMs,
+              value,
+              easing: clipboard.easing,
+              type: clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear',
+            });
+            fc.keyforms.sort((a, b) => a.time - b.time);
           }
         }
       }
     });
-  }, [clipboard, animation, sel, anim.currentTime, anim.activeAnimationId, update]);
+  }, [clipboard, animation, sel, anim.currentTime, anim.activeActionId, update]);
 
   /* ── Delete Selection ────────────────────────────────────────────────── */
   const deleteSelectedKeyframes = useCallback(() => {
     if (selectedKeyframes.size === 0) return;
 
     update((p) => {
-      const a = p.animations.find(x => x.id === anim.activeAnimationId);
+      const a = p.actions.find(x => x.id === anim.activeActionId);
       if (!a) return;
-      for (const track of a.tracks) {
-        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
-        track.keyframes = track.keyframes.filter(kf => !selectedKeyframes.has(`${trackRowKey}:${kf.time}`));
+      for (const fc of a.fcurves) {
+        const target = decodeFCurveTarget(fc);
+        if (!target) continue;
+        const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        fc.keyforms = fc.keyforms.filter(kf => !selectedKeyframes.has(`${fcurveRowKey}:${kf.time}`));
       }
-      a.tracks = a.tracks.filter(t => t.keyframes.length > 0);
+      a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
     });
     setSelectedKeyframes(new Set());
-  }, [update, anim.activeAnimationId, selectedKeyframes]);
+  }, [update, anim.activeActionId, selectedKeyframes]);
 
   // Keybindings
   useEffect(() => {
@@ -1198,18 +1246,21 @@ export function TimelineEditor() {
     const targetId = `${rowKey}:${timeMs}`;
     const applyTo = selectedKeyframes.has(targetId) ? selectedKeyframes : new Set([targetId]);
     update((p) => {
-      const a = p.animations.find(x => x.id === anim.activeAnimationId);
+      const a = p.actions.find(x => x.id === anim.activeActionId);
       if (!a) return;
-      for (const track of a.tracks) {
-        const trackRowKey = track.paramId ? `param:${track.paramId}` : `node:${track.nodeId}`;
-        for (const kf of track.keyframes) {
-          if (applyTo.has(`${trackRowKey}:${kf.time}`)) {
+      for (const fc of a.fcurves) {
+        const target = decodeFCurveTarget(fc);
+        if (!target) continue;
+        const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        for (const kf of fc.keyforms) {
+          if (applyTo.has(`${fcurveRowKey}:${kf.time}`)) {
             kf.easing = easingType;
+            kf.type = easingType === 'constant' || easingType === 'hold' ? 'constant' : 'linear';
           }
         }
       }
     });
-  }, [selectedKeyframes, anim.activeAnimationId, update]);
+  }, [selectedKeyframes, anim.activeActionId, update]);
 
   const removeKeyframeAt = useCallback((rowKey, timeMs) => {
     const targetId = `${rowKey}:${timeMs}`;
@@ -1217,30 +1268,31 @@ export function TimelineEditor() {
       deleteSelectedKeyframes();
     } else {
       update((p) => {
-        const a = p.animations.find(x => x.id === anim.activeAnimationId);
+        const a = p.actions.find(x => x.id === anim.activeActionId);
         if (!a) return;
         const wantParam = rowKey.startsWith('param:');
-        const targetId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
-        for (const track of a.tracks) {
+        const lookupId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
+        for (const fc of a.fcurves) {
           const matches = wantParam
-            ? track.paramId === targetId
-            : track.nodeId === targetId;
+            ? fcurveTargetsParam(fc, lookupId)
+            : fcurveTargetsNode(fc, lookupId);
           if (!matches) continue;
-          track.keyframes = track.keyframes.filter(kf => kf.time !== timeMs);
+          fc.keyforms = fc.keyforms.filter(kf => kf.time !== timeMs);
         }
-        a.tracks = a.tracks.filter(t => t.keyframes.length > 0);
+        a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
       });
     }
-  }, [selectedKeyframes, deleteSelectedKeyframes, anim.activeAnimationId, update]);
+  }, [selectedKeyframes, deleteSelectedKeyframes, anim.activeActionId, update]);
 
   /* ── Build track rows ────────────────────────────────────────────────── */
-  // 2026-04-29: rows include both NODE-targeted tracks (legacy
+  // Rows include both NODE-targeted fcurves (objects['<nodeId>'].<prop>:
   // x/y/rotation/scaleX/scaleY/opacity/mesh_verts/blendShape) and
-  // PARAM-targeted tracks (track.paramId set — Live2D parameter
-  // animation, the v3 main goal). Each row carries `rowKey`
-  // (`node:<id>` or `param:<id>`) and `kind` (`'node'|'param'`); all
-  // downstream handlers dispatch on these so a single drag-select
-  // machinery covers both.
+  // PARAM-targeted fcurves (objects['__params__'].values['<paramId>'] —
+  // Live2D parameter animation, the v3 main goal). Each row carries
+  // `rowKey` (`node:<id>` or `param:<id>`) and `kind` (`'node'|'param'`);
+  // all downstream handlers dispatch on these so a single drag-select
+  // machinery covers both. fcurve targets are decoded via
+  // `decodeFCurveTarget` (see anim/animationFCurve.js).
   const trackRows = useMemo(() => {
     if (!animation) return [];
     const nodeMap = new Map(proj.nodes.map(n => [n.id, n]));
@@ -1248,40 +1300,42 @@ export function TimelineEditor() {
     const byNode = new Map();
     const byParam = new Map();
 
-    for (const track of animation.tracks) {
-      if (track.paramId) {
-        if (!byParam.has(track.paramId)) byParam.set(track.paramId, []);
-        byParam.get(track.paramId).push(track);
+    for (const fc of animation.fcurves) {
+      const target = decodeFCurveTarget(fc);
+      if (!target) continue;
+      if (target.kind === 'param') {
+        if (!byParam.has(target.paramId)) byParam.set(target.paramId, []);
+        byParam.get(target.paramId).push(fc);
       } else {
-        if (!byNode.has(track.nodeId)) byNode.set(track.nodeId, []);
-        byNode.get(track.nodeId).push(track);
+        if (!byNode.has(target.nodeId)) byNode.set(target.nodeId, []);
+        byNode.get(target.nodeId).push(fc);
       }
     }
 
-    function buildRow(rowKey, kind, name, tracks) {
-      const times = [...new Set(tracks.flatMap(t => t.keyframes.map(kf => kf.time)))].sort((a, b) => a - b);
+    function buildRow(rowKey, kind, name, fcurves) {
+      const times = [...new Set(fcurves.flatMap(f => f.keyforms.map(kf => kf.time)))].sort((a, b) => a - b);
       const easingByTime = {};
       for (const time of times) {
-        for (const t of tracks) {
-          const kf = t.keyframes.find(k => k.time === time);
+        for (const f of fcurves) {
+          const kf = f.keyforms.find(k => k.time === time);
           if (kf) { easingByTime[time] = kf.easing || 'ease-both'; break; }
         }
       }
-      return { rowKey, kind, name, tracks, times, easingByTime };
+      return { rowKey, kind, name, fcurves, times, easingByTime };
     }
 
     const nodeRows = Array.from(byNode.entries()).map(
-      ([nodeId, tracks]) => buildRow(
+      ([nodeId, fcurves]) => buildRow(
         `node:${nodeId}`, 'node',
         nodeMap.get(nodeId)?.name ?? nodeId,
-        tracks,
+        fcurves,
       ),
     );
     const paramRows = Array.from(byParam.entries()).map(
-      ([paramId, tracks]) => buildRow(
+      ([paramId, fcurves]) => buildRow(
         `param:${paramId}`, 'param',
         paramMap.get(paramId)?.name ?? paramId,
-        tracks,
+        fcurves,
       ),
     );
     // Param rows above node rows so the rig animation surface is
@@ -1313,8 +1367,8 @@ export function TimelineEditor() {
     return ticks;
   }, [startFrame, endFrame]);
 
-  /* ── No animation state ──────────────────────────────────────────────── */
-  const hasAnimation = proj.animations.length > 0;
+  /* ── No action state ─────────────────────────────────────────────────── */
+  const hasAnimation = proj.actions.length > 0;
 
   return (
     <div className="flex flex-col h-full select-none text-xs">
@@ -1377,7 +1431,7 @@ export function TimelineEditor() {
             anim.setEndFrame(v);
             if (animation) {
               update((p) => {
-                const a = p.animations.find(x => x.id === animation.id);
+                const a = p.actions.find(x => x.id === animation.id);
                 if (a) a.duration = (v / (a.fps ?? 24)) * 1000;
               });
             }
@@ -1396,7 +1450,7 @@ export function TimelineEditor() {
             anim.setFps(v);
             if (animation) {
               update((p) => {
-                const a = p.animations.find(x => x.id === animation.id);
+                const a = p.actions.find(x => x.id === animation.id);
                 if (a) {
                   const oldFps = a.fps ?? 24;
                   a.fps = v;
@@ -1460,7 +1514,7 @@ export function TimelineEditor() {
             const name = window.prompt('Audio track name:', `Audio ${(animation?.audioTracks?.length ?? 0) + 1}`);
             if (name) {
               update((p) => {
-                const a = p.animations.find(x => x.id === anim.activeAnimationId);
+                const a = p.actions.find(x => x.id === anim.activeActionId);
                 if (a) {
                   a.audioTracks.push({
                     id: uid(),
@@ -1487,11 +1541,11 @@ export function TimelineEditor() {
             A/B between motions for multi-motion preview. */}
         {hasAnimation ? (
           <select
-            value={anim.activeAnimationId ?? ''}
+            value={anim.activeActionId ?? ''}
             onChange={(e) => {
               const id = e.target.value;
-              const a = proj.animations.find((x) => x.id === id);
-              anim.setActiveAnimationId(id);
+              const a = proj.actions.find((x) => x.id === id);
+              anim.setActiveActionId(id);
               if (a) {
                 const f = a.fps ?? 24;
                 anim.setFps(f);
@@ -1500,9 +1554,9 @@ export function TimelineEditor() {
               }
             }}
             className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
-            title="Active animation — switch to preview a different motion."
+            title="Active action — switch to preview a different motion."
           >
-            {proj.animations.map((a) => (
+            {proj.actions.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name ?? a.id}
               </option>

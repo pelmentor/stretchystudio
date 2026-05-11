@@ -4,18 +4,18 @@
 /**
  * v3 Phase 3D — Animation F-curve editor.
  *
- * Plots one track's value over TIME (motion3 model, not keyform
- * interpolation) as a continuous curve. Picks the track based on
+ * Plots one fcurve's value over TIME (motion3 model, not keyform
+ * interpolation) as a continuous curve. Picks the fcurve based on
  * the active selection — currently:
  *
- *   - selection.parameter → animation track with `paramId === id`
- *   - selection.part / group → first track with `nodeId === id`
- *     (the "first" picks `x` arbitrarily; user can scroll for more
- *     in a future polish pass)
+ *   - selection.parameter → fcurve targeting `objects['__params__'].values['<id>']`
+ *   - selection.part / group → first fcurve with `kind:'node', nodeId === id`
+ *     (the "first" picks the earliest property arbitrarily; user can
+ *     scroll for more in a future polish pass)
  *
- * Shows the easing curve interpolated between every keyframe via
+ * Shows the easing curve interpolated between every keyform via
  * the live `interpolateTrack()` helper, so easing changes in
- * Timeline reflect here on the next render. Click a keyframe
+ * Timeline reflect here on the next render. Click a keyform
  * diamond to seek; click anywhere on the curve area to seek too.
  *
  * Read-only first cut. Drag-handle bezier editing is the polish
@@ -29,6 +29,10 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
+import {
+  decodeFCurveTarget,
+  fcurveTargetsParam,
+} from '../../../anim/animationFCurve.js';
 import { Activity } from 'lucide-react';
 
 const SAMPLES = 240;
@@ -38,24 +42,24 @@ const PAD_BOTTOM = 18;
 
 export function FCurveEditor() {
   const project = useProjectStore((s) => s.project);
-  const activeAnimId = useAnimationStore((s) => s.activeAnimationId);
+  const activeActionId = useAnimationStore((s) => s.activeActionId);
   const currentTime  = useAnimationStore((s) => s.currentTime);
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
   const selection = useSelectionStore((s) => s.items);
 
-  const anim = useMemo(
-    () => (project.animations ?? []).find((a) => a.id === activeAnimId) ?? null,
-    [project.animations, activeAnimId],
+  const action = useMemo(
+    () => (project.actions ?? []).find((a) => a.id === activeActionId) ?? null,
+    [project.actions, activeActionId],
   );
 
-  const track = useMemo(() => pickTrack(anim, selection), [anim, selection]);
-  const duration = Math.max(1, anim?.duration ?? 1000);
+  const picked = useMemo(() => pickFCurve(action, selection), [action, selection]);
+  const duration = Math.max(1, action?.duration ?? 1000);
   const sampled = useMemo(
-    () => (track?.keyframes?.length ? sampleCurve(track, duration) : null),
-    [track, duration],
+    () => (picked?.keyforms?.length ? sampleCurve(picked, duration) : null),
+    [picked, duration],
   );
 
-  if (!anim) {
+  if (!action) {
     return (
       <Wrapper title="F-curve" subtitle="No animation active">
         <Empty msg="Create or select an animation in the Animations panel." />
@@ -63,9 +67,9 @@ export function FCurveEditor() {
     );
   }
 
-  if (!track || !track.keyframes || track.keyframes.length === 0 || !sampled) {
-    const sub = track
-      ? 'Track is empty — drop a keyframe in the Timeline first.'
+  if (!picked || !picked.keyforms || picked.keyforms.length === 0 || !sampled) {
+    const sub = picked
+      ? 'F-curve is empty — drop a keyframe in the Timeline first.'
       : 'Select a parameter or part with keyframes to plot.';
     return (
       <Wrapper title="F-curve" subtitle={describeSelection(selection, project)}>
@@ -77,11 +81,11 @@ export function FCurveEditor() {
   return (
     <Wrapper
       title="F-curve"
-      subtitle={`${track.label} · ${track.keyframes.length} keyframes · ${(duration / 1000).toFixed(1)}s`}
+      subtitle={`${picked.label} · ${picked.keyforms.length} keyframes · ${(duration / 1000).toFixed(1)}s`}
     >
       <Plot
         sampled={sampled}
-        keyframes={track.keyframes}
+        keyforms={picked.keyforms}
         duration={duration}
         currentTime={currentTime}
         onSeek={setCurrentTime}
@@ -113,7 +117,7 @@ function Empty({ msg }) {
   );
 }
 
-function Plot({ sampled, keyframes, duration, currentTime, onSeek }) {
+function Plot({ sampled, keyforms, duration, currentTime, onSeek }) {
   const { values, minV, maxV } = sampled;
 
   // Map (time, value) → svg coords. SVG is laid out via 100% width /
@@ -186,8 +190,8 @@ function Plot({ sampled, keyframes, duration, currentTime, onSeek }) {
           strokeWidth={1.5}
         />
 
-        {/* keyframe diamonds */}
-        {keyframes.map((kf, i) => {
+        {/* keyform diamonds */}
+        {keyforms.map((kf, i) => {
           if (typeof kf.value !== 'number') return null;
           const x = tx(kf.time);
           const y = ty(kf.value);
@@ -224,20 +228,27 @@ function Plot({ sampled, keyframes, duration, currentTime, onSeek }) {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function pickTrack(anim, selection) {
-  if (!anim?.tracks) return null;
+function pickFCurve(action, selection) {
+  if (!action?.fcurves) return null;
 
   // Walk most-recent selection first so a fresh click overrides
   // whatever was selected before.
   for (let i = selection.length - 1; i >= 0; i--) {
     const sel = selection[i];
     if (sel.type === 'parameter') {
-      const t = anim.tracks.find((tr) => tr.paramId === sel.id);
-      if (t) return { ...t, label: `param:${sel.id}` };
+      const fc = action.fcurves.find((f) => fcurveTargetsParam(f, sel.id));
+      if (fc) return { ...fc, label: `param:${sel.id}` };
     }
     if (sel.type === 'part' || sel.type === 'group') {
-      const t = anim.tracks.find((tr) => tr.nodeId === sel.id);
-      if (t) return { ...t, label: `${sel.type}:${sel.id} · ${t.property}` };
+      const fc = action.fcurves.find((f) => {
+        const t = decodeFCurveTarget(f);
+        return t?.kind === 'node' && t.nodeId === sel.id;
+      });
+      if (fc) {
+        const t = decodeFCurveTarget(fc);
+        const property = t?.kind === 'node' ? t.property : '?';
+        return { ...fc, label: `${sel.type}:${sel.id} · ${property}` };
+      }
     }
   }
   return null;
@@ -257,13 +268,13 @@ function describeSelection(selection, project) {
   return last.type;
 }
 
-function sampleCurve(track, duration) {
+function sampleCurve(fcurve, duration) {
   const values = [];
   let minV = Infinity;
   let maxV = -Infinity;
   for (let i = 0; i <= SAMPLES; i++) {
     const t = (i / SAMPLES) * duration;
-    const v = interpolateTrack(track.keyframes, t);
+    const v = interpolateTrack(fcurve.keyforms, t);
     if (typeof v !== 'number') continue;
     values.push({ t, v });
     if (v < minV) minV = v;

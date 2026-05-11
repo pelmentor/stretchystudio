@@ -2,12 +2,22 @@ import { create } from 'zustand';
 
 /**
  * AnimationStore — playback state, separate from projectStore.
- * The animation DATA (tracks, keyframes) lives in project.animations.
- * This store holds the runtime playback state and pose overrides.
+ *
+ * The animation DATA (action datablocks + fcurves + keyforms) lives
+ * in `project.actions[]` (post-v36 — pre-v36 it was `project.animations`).
+ * This store holds the runtime playback state, the active-action
+ * selection, the rest-pose snapshot, and the in-flight draft pose.
+ *
+ * The slot is named `activeActionId` post-v36 (was `activeAnimationId`).
+ * Stage 1.D will replace this UI-store-level pointer with a per-Object
+ * `node.animData.actionId` lookup keyed off the `__scene__` pseudo-
+ * Object for the typical "one project-wide action" case; the field
+ * here remains as the canonical "what is the user currently editing /
+ * playing back" pointer.
  */
 export const useAnimationStore = create((set, get) => ({
-  /** ID of the currently active animation clip */
-  activeAnimationId: null,
+  /** ID of the currently active action (the one the user is editing or playing back). */
+  activeActionId: null,
 
   /** Playhead position in milliseconds */
   currentTime: 0,
@@ -58,7 +68,7 @@ export const useAnimationStore = create((set, get) => ({
 
   // ── Setters ──────────────────────────────────────────────────────────────
 
-  setActiveAnimationId: (id) => set({ activeAnimationId: id }),
+  setActiveActionId: (id) => set({ activeActionId: id }),
 
   /**
    * Snapshot every node's transform + opacity.  Call this when entering
@@ -177,13 +187,13 @@ export const useAnimationStore = create((set, get) => ({
   },
 
   /**
-   * Switch to a new animation clip and reset playback state.
+   * Switch to a new action and reset playback state.
    */
-  switchAnimation: (anim) => {
-    if (!anim) return;
+  switchAction: (action) => {
+    if (!action) return;
     set({
-      activeAnimationId: anim.id,
-      fps:               anim.fps ?? 24,
+      activeActionId: action.id,
+      fps:               action.fps ?? 24,
       currentTime:       0,
       isPlaying:         false,
       _lastTimestamp:    null,
@@ -191,13 +201,13 @@ export const useAnimationStore = create((set, get) => ({
       loopCount:         0,
       // start/end frames derived from duration if not present
       startFrame:        0,
-      endFrame:          Math.round(((anim.duration ?? 2000) / 1000) * (anim.fps ?? 24)),
+      endFrame:          Math.round(((action.duration ?? 2000) / 1000) * (action.fps ?? 24)),
     });
   },
 
   /** Reset playback state to default */
   resetPlayback: () => set({
-    activeAnimationId: null,
+    activeActionId: null,
     currentTime:       0,
     isPlaying:         false,
     _lastTimestamp:    null,

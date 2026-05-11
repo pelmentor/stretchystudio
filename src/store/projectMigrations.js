@@ -40,6 +40,7 @@ import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_de
 import { migrateProjectCursor } from './migrations/v33_project_cursor.js';
 import { migrateWeightPaintSettings } from './migrations/v34_weight_paint_settings.js';
 import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
+import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -577,6 +578,27 @@ const MIGRATIONS = {
   // what every pre-Phase-8 writer intended to commit.
   35: (project) => {
     migratePoseShapeRepair(project);
+    return project;
+  },
+
+  // v36 — Animation Phase 1 Stage 1.A + 1.B: `Action` datablock + per-
+  // Object `AnimData` from legacy `project.animations[]`. Splits the
+  // pre-v36 flat animations list into:
+  //   - `project.actions[i]` (Blender Action datablock — fcurves +
+  //     metadata + audioTracks); fcurves carry rnaPath strings instead of
+  //     paramId/nodeId/property fields.
+  //   - `node.animData` per Object (parts + bone groups) — Blender
+  //     AnimData slot for binding an Object to one Action. Stage 1.D
+  //     adds the __scene__ pseudo-Object for project-wide actions; until
+  //     then no actionId is auto-bound.
+  //
+  // `project.animations` deleted (Rule №2 — no migration baggage).
+  // `project.nodeTrees` retirement deferred to a follow-up commit so
+  // the rewire vs. retirement diffs stay separable.
+  //
+  // See `src/store/migrations/v36_action_datablock.js`.
+  36: (project) => {
+    migrateActionDatablock(project);
     return project;
   },
 

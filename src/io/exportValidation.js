@@ -183,13 +183,13 @@ export function validateProjectForExport(project) {
     }
   }
 
-  // ── Animations: empty motion3 export = silent failure ────────────
-  for (const a of project.animations ?? []) {
-    if (!Array.isArray(a.tracks) || a.tracks.length === 0) {
+  // ── Actions: empty motion3 export = silent failure ───────────────
+  for (const a of project.actions ?? []) {
+    if (!Array.isArray(a.fcurves) || a.fcurves.length === 0) {
       warnings.push({
         code: 'ANIM_EMPTY',
         level: 'warning',
-        message: `Animation "${a.name ?? a.id}" has no tracks.`,
+        message: `Action "${a.name ?? a.id}" has no fcurves.`,
       });
     }
   }

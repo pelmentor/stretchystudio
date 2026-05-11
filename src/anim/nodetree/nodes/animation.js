@@ -25,6 +25,7 @@
 import { registerNodeType } from '../registry.js';
 import { SocketType, SocketInOut } from '../types.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
+import { decodeFCurveTarget } from '../../animationFCurve.js';
 
 registerNodeType({
   typeId: 'FCurveStrip',
@@ -34,19 +35,46 @@ registerNodeType({
     { identifier: 'value', name: 'Value',
       type: SocketType.VALUE, inOut: SocketInOut.OUTPUT },
   ],
-  // storage = { track: <SS animation track record> }
-  // ctx.time is in seconds (matches EvalContext); SS tracks use
-  // milliseconds internally. interpolateTrack handles ms.
+  // storage = { fcurve: <v36 FCurve> } (post-v36 compileAnimationTree)
+  // OR     = { track:  <legacy SS track> } (v24 migration shadow)
+  //
+  // ctx.time is in seconds (motion3.json boundary); the keyforms /
+  // keyframes use milliseconds internally. `interpolateTrack` handles
+  // ms uniformly across both shapes.
   execute: (node, ctx) => {
+    const timeMs = (ctx?.time ?? 0) * 1000;
+
+    // Post-v36 path: storage.fcurve carries an FCurve with rnaPath.
+    const fcurve = node.storage?.fcurve;
+    if (fcurve) {
+      const target = decodeFCurveTarget(fcurve);
+      if (!target) return undefined;
+      if (target.kind === 'node' && target.property === 'mesh_verts') return undefined;
+      const value = interpolateTrack(fcurve.keyforms ?? [], timeMs, false, 0);
+      if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+
+      if (target.kind === 'param') {
+        ctx?.paramOverrides?.set?.(target.paramId, value);
+      } else if (target.kind === 'node') {
+        const poseOverrides = ctx?.poseOverrides;
+        if (poseOverrides instanceof Map) {
+          let entry = poseOverrides.get(target.nodeId);
+          if (!entry) { entry = new Map(); poseOverrides.set(target.nodeId, entry); }
+          entry.set(target.property, value);
+        }
+      }
+      return value;
+    }
+
+    // v24 shadow path: storage.track carries a legacy SS track. The v24
+    // shadow is stale snapshot data (NodeTree retirement is in flight),
+    // but eval is preserved for the read-only NodeTreeEditor surface.
     const track = node.storage?.track;
     if (!track) return undefined;
-    if (track.property === 'mesh_verts') return undefined; // deferred
-    const timeMs = (ctx?.time ?? 0) * 1000;
+    if (track.property === 'mesh_verts') return undefined;
     const value = interpolateTrack(track.keyframes ?? [], timeMs, false, 0);
     if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 
-    // Write back to overrides — same convention as
-    // `kernels/animation.js` in Phase D-4.
     if (track.paramId) {
       ctx?.paramOverrides?.set?.(track.paramId, value);
     } else if (track.nodeId) {

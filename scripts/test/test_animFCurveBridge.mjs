@@ -1,12 +1,21 @@
-// Tests for the Phase 5 wire-in bridge (animation tracks → FCurves and
-// project-wide driver pass).
+// Tests for the FCurve construction + helper module + project-wide
+// driver pass. Post-v36 the legacy track-shape bridge is gone; what
+// remains is the canonical fcurve constructor (used by the idle
+// generator and motion3 import) plus the rnaPath identity helpers
+// (used by paramReferences + projectStore mutations).
 //
 // Run: node scripts/test/test_animFCurveBridge.mjs
 
 import {
-  trackToFCurve,
-  tracksToFCurves,
-  evaluateAnimationFCurves,
+  buildParamFCurve,
+  buildNodeFCurve,
+  decodeFCurveTarget,
+  fcurveTargetsParam,
+  fcurveTargetsNode,
+  renameFCurveParam,
+  renameFCurveNode,
+  evaluateActionFCurves,
+  normalizeKeyforms,
 } from '../../src/anim/animationFCurve.js';
 import {
   collectDrivers,
@@ -35,124 +44,145 @@ function assertNear(actual, expected, eps, name) {
   console.error(`FAIL: ${name}\n  expected: ${expected}\n  actual:   ${actual}`);
 }
 
-// ── trackToFCurve: param track → objects[__params__] rnaPath ──
+// ── buildParamFCurve: assembles canonical param-target fcurve ─────────────
 {
-  const track = {
-    paramId: 'ParamAngleX',
-    keyframes: [
-      { time: 0, value: 0, easing: 'linear' },
-      { time: 1000, value: 30, easing: 'ease-both' },
-    ],
-  };
-  const fc = trackToFCurve(track);
+  const fc = buildParamFCurve('ParamAngleX', [
+    { time: 0, value: 0, easing: 'linear' },
+    { time: 1000, value: 30, easing: 'ease-both' },
+  ]);
   assertEq(fc.rnaPath, "objects['__params__'].values['ParamAngleX']",
-    'param track rnaPath uses canonical objects[__params__].values shape');
-  assertEq(fc.id, 'param:ParamAngleX', 'param track id');
-  assertEq(fc.keyforms.length, 2, 'param track keyforms preserved');
-  assertEq(fc.keyforms[0].type, 'linear', 'easing linear → linear');
+    'param rnaPath canonical');
+  assertEq(fc.id, 'param:ParamAngleX', 'param id naming');
+  assertEq(fc.arrayIndex, 0, 'arrayIndex defaults to 0');
+  assertEq(fc.modifiers, [], 'modifiers empty');
+  assertEq(fc.extrapolation, 'constant', 'extrapolation defaults to constant');
+  assertEq(fc.keyforms.length, 2, 'keyforms preserved');
+  assertEq(fc.keyforms[0].easing, 'linear', 'kf0 easing preserved');
+  assertEq(fc.keyforms[0].type, 'linear', 'kf0 type derived from easing');
+  assertEq(fc.keyforms[1].type, 'linear', 'ease-both → linear (not constant)');
 }
 
-// ── trackToFCurve: node track → objects[id].field rnaPath ──
+// ── buildNodeFCurve: assembles canonical node-target fcurve ───────────────
 {
-  const track = {
-    nodeId: 'partA',
-    property: 'rotation',
-    keyframes: [
-      { time: 0, value: 0 },
-      { time: 500, value: 1.5, easing: 'hold' },
+  const fc = buildNodeFCurve('partA', 'rotation', [
+    { time: 0, value: 0 },
+    { time: 500, value: 1.5, easing: 'hold' },
+  ]);
+  assertEq(fc.rnaPath, "objects['partA'].rotation", 'node rnaPath canonical');
+  assertEq(fc.id, 'partA.rotation', 'node id naming');
+  assertEq(fc.keyforms[1].type, 'constant', 'hold easing → type constant');
+}
+
+// ── builders return null for unaddressable / empty input ──────────────────
+{
+  assert(buildParamFCurve(null, [{ time: 0, value: 0 }]) === null, 'null paramId → null');
+  assert(buildParamFCurve('', [{ time: 0, value: 0 }]) === null, 'empty paramId → null');
+  assert(buildParamFCurve('P', []) === null, 'empty keyforms → null');
+  assert(buildParamFCurve('P', null) === null, 'null keyforms → null');
+  assert(buildNodeFCurve('A', null, [{ time: 0, value: 0 }]) === null, 'null property → null');
+  assert(buildNodeFCurve('A', '', [{ time: 0, value: 0 }]) === null, 'empty property → null');
+}
+
+// ── normalizeKeyforms: filters malformed entries; defaults easing ─────────
+{
+  const kfs = normalizeKeyforms([
+    { time: 0, value: 1 },                   // missing easing → default linear
+    { time: 'bad', value: 2 },               // bad time → drop
+    { time: 100, value: 'bad' },             // bad value → drop
+    { time: 200, value: 3, easing: 'hold' }, // hold → type constant
+  ]);
+  assertEq(kfs.length, 2, 'malformed entries dropped');
+  assertEq(kfs[0].easing, 'linear', 'missing easing defaults to linear');
+  assertEq(kfs[1].easing, 'hold', 'hold easing preserved');
+  assertEq(kfs[1].type, 'constant', 'hold → constant');
+}
+
+// ── decodeFCurveTarget: recognises both target shapes ─────────────────────
+{
+  const paramFc = buildParamFCurve('PA', [{ time: 0, value: 1 }]);
+  const t1 = decodeFCurveTarget(paramFc);
+  assertEq(t1, { kind: 'param', paramId: 'PA' }, 'param decode');
+  const nodeFc = buildNodeFCurve('partB', 'opacity', [{ time: 0, value: 1 }]);
+  const t2 = decodeFCurveTarget(nodeFc);
+  assertEq(t2, { kind: 'node', nodeId: 'partB', property: 'opacity' }, 'node decode');
+  assert(decodeFCurveTarget(null) === null, 'null fc → null');
+  assert(decodeFCurveTarget({ rnaPath: 'malformed' }) === null, 'malformed rnaPath → null');
+}
+
+// ── fcurveTargetsParam / fcurveTargetsNode predicates ─────────────────────
+{
+  const fc = buildParamFCurve('ParamA', [{ time: 0, value: 1 }]);
+  assert(fcurveTargetsParam(fc, 'ParamA') === true, 'positive param match');
+  assert(fcurveTargetsParam(fc, 'ParamB') === false, 'negative param mismatch');
+  assert(fcurveTargetsNode(fc, 'ParamA') === false, 'param fcurve is NOT node target');
+  const nodeFc = buildNodeFCurve('p1', 'x', [{ time: 0, value: 0 }]);
+  assert(fcurveTargetsNode(nodeFc, 'p1') === true, 'positive node match');
+  assert(fcurveTargetsNode(nodeFc, 'p2') === false, 'negative node mismatch');
+}
+
+// ── renameFCurveParam: rewrites rnaPath + id ──────────────────────────────
+{
+  const fc = buildParamFCurve('Old', [{ time: 0, value: 1 }]);
+  renameFCurveParam(fc, 'Old', 'New');
+  assertEq(fc.rnaPath, "objects['__params__'].values['New']", 'param rnaPath rewritten');
+  assertEq(fc.id, 'param:New', 'param id rewritten');
+  // No-op when target doesn't match
+  const fc2 = buildParamFCurve('OtherParam', [{ time: 0, value: 1 }]);
+  renameFCurveParam(fc2, 'NotMatching', 'NewName');
+  assertEq(fc2.rnaPath, "objects['__params__'].values['OtherParam']", 'no-op when not matching');
+}
+
+// ── renameFCurveNode: rewrites rnaPath + id, preserves property ───────────
+{
+  const fc = buildNodeFCurve('oldId', 'opacity', [{ time: 0, value: 1 }]);
+  renameFCurveNode(fc, 'oldId', 'newId');
+  assertEq(fc.rnaPath, "objects['newId'].opacity", 'node rnaPath rewritten');
+  assertEq(fc.id, 'newId.opacity', 'node id rewritten');
+  // Property suffix preserved
+  const fc2 = buildNodeFCurve('a', 'transform.rotation', [{ time: 0, value: 0 }]);
+  renameFCurveNode(fc2, 'a', 'b');
+  assertEq(fc2.rnaPath, "objects['b'].transform.rotation", 'compound property preserved');
+}
+
+// ── evaluateActionFCurves: produces rnaPath → value map ───────────────────
+{
+  const action = {
+    fcurves: [
+      buildParamFCurve('P1', [{ time: 0, value: 0 }, { time: 1000, value: 10 }]),
+      buildParamFCurve('P2', [{ time: 0, value: 5, easing: 'hold' }, { time: 1000, value: 20 }]),
+      buildNodeFCurve('partA', 'x', [{ time: 0, value: 0 }, { time: 1000, value: 100 }]),
     ],
   };
-  const fc = trackToFCurve(track);
-  assertEq(fc.rnaPath, "objects['partA'].rotation", 'node track rnaPath');
-  assertEq(fc.id, 'partA.rotation', 'node track id');
-  assertEq(fc.keyforms[1].type, 'constant', 'hold easing → constant');
-}
-
-// ── trackToFCurve: empty / malformed inputs ──
-{
-  assert(trackToFCurve(null) === null, 'null track → null');
-  assert(trackToFCurve({}) === null, 'empty track → null');
-  assert(trackToFCurve({ paramId: 'P', keyframes: [] }) === null,
-    'param track no keyframes → null');
-  assert(trackToFCurve({ nodeId: 'A', keyframes: [{ time: 0, value: 1 }] }) === null,
-    'node track no property → null');
-}
-
-// ── trackToFCurve: invalid keyframe records dropped silently ──
-{
-  const track = {
-    paramId: 'P',
-    keyframes: [
-      { time: 0, value: 1 },
-      { time: 'bad', value: 2 },
-      { time: 100, value: 'bad' },
-      { time: 200, value: 3 },
-    ],
-  };
-  const fc = trackToFCurve(track);
-  assertEq(fc.keyforms.length, 2, 'malformed keyframes filtered out');
-  assertEq(fc.keyforms[1].time, 200, 'remaining keyforms preserve order');
-}
-
-// ── tracksToFCurves: skips bad tracks ──
-{
-  const animation = {
-    tracks: [
-      { paramId: 'A', keyframes: [{ time: 0, value: 1 }] },
-      null,
-      {},
-      { nodeId: 'p', property: 'x', keyframes: [{ time: 0, value: 5 }] },
-    ],
-  };
-  const fcs = tracksToFCurves(animation);
-  assertEq(fcs.length, 2, 'tracksToFCurves filters bad tracks');
-  assertEq(fcs[0].id, 'param:A', 'first surviving FCurve');
-  assertEq(fcs[1].id, 'p.x', 'second surviving FCurve');
-}
-
-// ── evaluateAnimationFCurves: produces rnaPath → value map ──
-{
-  const animation = {
-    tracks: [
-      { paramId: 'P1', keyframes: [{ time: 0, value: 0 }, { time: 1000, value: 10 }] },
-      { paramId: 'P2', keyframes: [{ time: 0, value: 5, easing: 'hold' }, { time: 1000, value: 20 }] },
-      { nodeId: 'partA', property: 'x',
-        keyframes: [{ time: 0, value: 0 }, { time: 1000, value: 100 }] },
-    ],
-  };
-  const out = evaluateAnimationFCurves(animation, 500);
-  assertNear(out.get("objects['__params__'].values['P1']"), 5, 1e-9,
-    'P1 lerps to 5 at 500ms');
-  assertNear(out.get("objects['__params__'].values['P2']"), 5, 1e-9,
-    'P2 holds first value (hold easing)');
+  const out = evaluateActionFCurves(action, 500);
+  assertNear(out.get("objects['__params__'].values['P1']"), 5, 1e-9, 'P1 lerps to 5');
+  assertNear(out.get("objects['__params__'].values['P2']"), 5, 1e-9, 'P2 holds first');
   assertNear(out.get("objects['partA'].x"), 50, 1e-9, 'partA.x lerps to 50');
 }
 
-// ── evaluateAnimationFCurves: empty animation → empty map ──
+// ── evaluateActionFCurves: empty / null inputs → empty map ────────────────
 {
-  const out1 = evaluateAnimationFCurves(null, 0);
-  assertEq(out1.size, 0, 'null animation → empty map');
-  const out2 = evaluateAnimationFCurves({ tracks: [] }, 0);
-  assertEq(out2.size, 0, 'empty tracks → empty map');
+  assertEq(evaluateActionFCurves(null, 0).size, 0, 'null action → empty map');
+  assertEq(evaluateActionFCurves({ fcurves: [] }, 0).size, 0, 'empty fcurves → empty map');
+  assertEq(evaluateActionFCurves({}, 0).size, 0, 'no fcurves field → empty map');
 }
 
-// ── collectDrivers: param + transform driver discovery ──
+// ── collectDrivers: param + transform driver discovery ────────────────────
 {
   const project = {
     parameters: [
       { id: 'PA', driver: { type: 'sum', variables: [] } },
-      { id: 'PB' }, // no driver
+      { id: 'PB' },
     ],
     nodes: [
       { id: 'partA', type: 'part', transformDrivers: {
         rotation: { type: 'sum', variables: [] },
         x: { type: 'avg', variables: [] },
       }},
-      { id: 'partB', type: 'part' }, // no transformDrivers
+      { id: 'partB', type: 'part' },
     ],
   };
   const drivers = collectDrivers(project);
-  assertEq(drivers.length, 3, 'collectDrivers: 3 records (1 param + 2 transform)');
+  assertEq(drivers.length, 3, 'collectDrivers: 3 records');
   const paths = drivers.map((d) => d.rnaPath).sort();
   assertEq(paths, [
     "objects['__params__'].values['PA']",
@@ -161,40 +191,28 @@ function assertNear(actual, expected, eps, name) {
   ], 'collectDrivers: rnaPaths assembled correctly');
 }
 
-// ── evaluateProjectDrivers: sum type with constant variables ──
+// ── evaluateProjectDrivers: sum type with no variables ────────────────────
 {
-  // Driver with a 'sum' aggregator over two static expressions —
-  // since `evaluateDriver`'s sum walks variables[].targets[].rnaPath
-  // through evaluateRnaPath, we just verify a no-variables driver
-  // returns 0 (Blender's behaviour).
   const project = {
-    parameters: [
-      { id: 'PA', driver: { type: 'sum', variables: [] } },
-    ],
+    parameters: [{ id: 'PA', driver: { type: 'sum', variables: [] } }],
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
   assertNear(out.get("objects['__params__'].values['PA']"), 0, 1e-9, 'sum no-vars → 0');
 }
 
-// ── evaluateProjectDrivers: scripted driver returning constant ──
+// ── evaluateProjectDrivers: scripted driver returning constant ────────────
 {
   const project = {
-    parameters: [
-      { id: 'PB', driver: { type: 'scripted', expression: '7 + 3', variables: [] } },
-    ],
+    parameters: [{ id: 'PB', driver: { type: 'scripted', expression: '7 + 3', variables: [] } }],
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
   assertNear(out.get("objects['__params__'].values['PB']"), 10, 1e-9, 'scripted constant → 10');
 }
 
-// ── evaluateProjectDrivers: scripted with variable resolves through rnaPath ──
+// ── evaluateProjectDrivers: scripted with variable resolves through rnaPath
 {
-  // The rnaPath resolver routes `objects['__params__'].values['<id>']`
-  // through `_paramsView`, which reads `parameters[i].default`. So the
-  // variable's `rnaPath` reads the param's default; setting
-  // `default: 5` makes the resolved value 5.
   const project = {
     parameters: [
       { id: 'P_INPUT', default: 5 },
@@ -216,7 +234,7 @@ function assertNear(actual, expected, eps, name) {
     'scripted: var resolved + multiplied');
 }
 
-// ── evaluateProjectDrivers: bad scripted expression doesn't crash pass ──
+// ── evaluateProjectDrivers: bad scripted expression doesn't crash pass ────
 {
   const project = {
     parameters: [
@@ -226,13 +244,11 @@ function assertNear(actual, expected, eps, name) {
     nodes: [],
   };
   const out = evaluateProjectDrivers(project);
-  assert(!out.has("objects['__params__'].values['PA']"),
-    'bad driver swallowed (no entry in map)');
-  assertNear(out.get("objects['__params__'].values['PB']"), 10, 1e-9,
-    'good driver still resolves');
+  assert(!out.has("objects['__params__'].values['PA']"), 'bad driver swallowed');
+  assertNear(out.get("objects['__params__'].values['PB']"), 10, 1e-9, 'good driver still resolves');
 }
 
-// ── driverOverridesToParamMap projection ──
+// ── driverOverridesToParamMap projection ──────────────────────────────────
 {
   const ov = new Map([
     ["objects['__params__'].values['ParamA']", 1.5],

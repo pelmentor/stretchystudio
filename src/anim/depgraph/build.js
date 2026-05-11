@@ -38,17 +38,18 @@ import {
   OperationCode,
   RelationFlag,
 } from './types.js';
+import { decodeFCurveTarget } from '../animationFCurve.js';
 
 /** Synthetic IDNode ids for the depgraph's bookkeeping IDs. */
 export const TIME_ID_REF = '__time__';
 export const PARAM_ID_REF = '__params__';
-export const ANIMATION_ID_REF = '__animation__';
+export const ACTION_ID_REF = '__action__';
 
 /**
  * @typedef {object} BuildOptions
- * @property {object|null} [animation] - active animation clip
- *   (project.animations[i]) — used to wire ANIMATION_TRACK_EVAL nodes.
- *   Pass null for static-rig graphs.
+ * @property {object|null} [action] - active action datablock
+ *   (project.actions[i]) — used to wire ANIMATION_TRACK_EVAL nodes,
+ *   one per fcurve. Pass null for static-rig graphs.
  */
 
 /**
@@ -136,15 +137,16 @@ export function buildNodes(graph, project, opts) {
   }
 
   // FCurve / Driver / Animation operations — only when an active
-  // animation is provided.
-  const anim = opts.animation;
-  if (anim) {
-    const animIdNode = graph.addIdNode(ANIMATION_ID_REF, 'animation');
+  // action is provided. One ANIMATION_TRACK_EVAL op per fcurve, tagged
+  // by the fcurve's rnaPath so the kernel can match by string equality
+  // (post-v36 the rnaPath IS the canonical target identifier).
+  const action = opts.action;
+  if (action) {
+    const animIdNode = graph.addIdNode(ACTION_ID_REF, 'action');
     const animComp = animIdNode.addComponent(NodeType.ANIMATION);
-    for (const track of anim.tracks ?? []) {
-      if (!track?.targetId) continue;
-      const tag = `${track.targetId}/${track.property ?? 'value'}`;
-      animComp.addOperation(OperationCode.ANIMATION_TRACK_EVAL, tag);
+    for (const fc of action.fcurves ?? []) {
+      if (typeof fc?.rnaPath !== 'string' || fc.rnaPath.length === 0) continue;
+      animComp.addOperation(OperationCode.ANIMATION_TRACK_EVAL, fc.rnaPath);
     }
   }
 
@@ -235,21 +237,21 @@ function buildTimeRelations(graph, project, opts) {
   const timeOp = graph.timeSource?.findComponent(NodeType.PARAMETERS)
     ?.findOperation(OperationCode.TIME_TICK);
   if (!timeOp) return;
-  const animIdNode = graph.findIdNode(ANIMATION_ID_REF, 'animation');
+  const animIdNode = graph.findIdNode(ACTION_ID_REF, 'action');
   if (!animIdNode) return;
   const animComp = animIdNode.findComponent(NodeType.ANIMATION);
   if (!animComp) return;
   for (const op of animComp.operations.values()) {
     if (op.opcode === OperationCode.ANIMATION_TRACK_EVAL ||
         op.opcode === OperationCode.FCURVE_EVAL) {
-      graph.addRelation(timeOp, op, 'time -> track');
+      graph.addRelation(timeOp, op, 'time -> fcurve');
     }
   }
 }
 
 /**
  * ANIMATION_TRACK_EVAL → target's PARAM_EVAL (or part's TRANSFORM,
- * for pose tracks). Each track outputs a value that overrides the
+ * for pose fcurves). Each fcurve outputs a value that overrides the
  * downstream eval.
  *
  * Adapted from `build_animdata_action` —
@@ -258,24 +260,26 @@ function buildTimeRelations(graph, project, opts) {
  * driven property's owner Component).
  */
 function buildAnimationRelations(graph, project, opts) {
-  const anim = opts.animation;
-  if (!anim) return;
-  const animIdNode = graph.findIdNode(ANIMATION_ID_REF, 'animation');
+  const action = opts.action;
+  if (!action) return;
+  const animIdNode = graph.findIdNode(ACTION_ID_REF, 'action');
   if (!animIdNode) return;
   const animComp = animIdNode.findComponent(NodeType.ANIMATION);
   if (!animComp) return;
   const paramComp = graph.findIdNode(PARAM_ID_REF, 'params')?.findComponent(NodeType.PARAMETERS);
-  for (const track of anim.tracks ?? []) {
-    if (!track?.targetId) continue;
-    const tag = `${track.targetId}/${track.property ?? 'value'}`;
-    const trackOp = animComp.findOperation(OperationCode.ANIMATION_TRACK_EVAL, tag);
+  for (const fc of action.fcurves ?? []) {
+    if (typeof fc?.rnaPath !== 'string' || fc.rnaPath.length === 0) continue;
+    const trackOp = animComp.findOperation(OperationCode.ANIMATION_TRACK_EVAL, fc.rnaPath);
     if (!trackOp) continue;
-    // Target is a parameter? wire to PARAM_EVAL.
-    const paramOp = paramComp?.findOperation(OperationCode.PARAM_EVAL, track.targetId);
-    if (paramOp) {
-      graph.addRelation(trackOp, paramOp, 'track -> param');
+    const target = decodeFCurveTarget(fc);
+    if (!target) continue;
+    if (target.kind === 'param') {
+      const paramOp = paramComp?.findOperation(OperationCode.PARAM_EVAL, target.paramId);
+      if (paramOp) {
+        graph.addRelation(trackOp, paramOp, 'fcurve -> param');
+      }
     }
-    // TRANSFORM target — Phase D-3a will wire pose tracks into
+    // TRANSFORM target — Phase D-3a will wire pose fcurves into
     // per-part TRANSFORM ops once they exist.
   }
 }

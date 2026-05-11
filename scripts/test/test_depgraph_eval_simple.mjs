@@ -180,24 +180,31 @@ function assertEq(actual, expected, name) {
 {
   const project = {
     parameters: [{ id: 'P', default: 0 }],
-    nodes: [], animations: [], physicsRules: [],
+    nodes: [], actions: [], physicsRules: [],
   };
-  const animation = {
-    tracks: [{
-      targetId: 'P',
-      property: 'value',
+  // Post-v36: action with fcurves (rnaPath addressing). Canonical time
+  // unit is ms — both keyforms and ctx.timeMs are in ms. The kernel
+  // dispatches via `interpolateTrack` which reads ms natively (no
+  // seconds conversion at this boundary).
+  const action = {
+    fcurves: [{
+      id: 'param:P',
+      rnaPath: "objects['__params__'].values['P']",
+      arrayIndex: 0,
       keyforms: [
-        { time: 0, value: 0 },
-        { time: 1, value: 10 },
+        { time: 0,    value: 0,  easing: 'linear', type: 'linear' },
+        { time: 1000, value: 10, easing: 'linear', type: 'linear' },
       ],
+      modifiers: [],
+      extrapolation: 'constant',
     }],
   };
-  const graph = buildDepGraph(project, { animation });
-  const ctx = evalDepGraph(graph, { project, timeMs: 500, animation });
-  // FCurve at t=0.5s lerps 0→10 → 5 (timeMs=500 → 0.5s at FCurve boundary).
+  const graph = buildDepGraph(project, { action });
+  const ctx = evalDepGraph(graph, { project, timeMs: 500, action });
+  // Lerp 0→10 at midpoint of the 1000 ms span → 5.
   for (const [name, value] of ctx.outputs) {
     if (name.includes('/PARAM_EVAL:P')) {
-      assertNear(value, 5, 1e-6, 'PARAM_EVAL P = fcurve(t=0.5) = 5');
+      assertNear(value, 5, 1e-6, 'PARAM_EVAL P = action.fcurve(timeMs=500) = 5');
     }
   }
 }

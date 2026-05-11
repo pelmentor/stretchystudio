@@ -22,6 +22,13 @@ import {
 } from './objectDataAccess.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
+import {
+  fcurveTargetsParam,
+  fcurveTargetsNode,
+  renameFCurveParam,
+  renameFCurveNode,
+  decodeFCurveTarget,
+} from '../anim/animationFCurve.js';
 
 /**
  * Revoke every `blob:` URL the project owns — texture sources +
@@ -43,8 +50,8 @@ function disposeProjectResources(project) {
     }
   };
   for (const tex of project.textures ?? []) revoke(tex?.source);
-  for (const anim of project.animations ?? []) {
-    for (const track of anim.audioTracks ?? []) revoke(track?.sourceUrl);
+  for (const action of project.actions ?? []) {
+    for (const track of action.audioTracks ?? []) revoke(track?.sourceUrl);
   }
 }
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
@@ -143,7 +150,7 @@ export const useProjectStore = create((set, get) => {
     */
     parameters: [],
     physics_groups: [],
-    animations: [],
+    actions: [],
     maskConfigs: [],
     physicsRules: [],
     boneConfig: null,
@@ -270,30 +277,39 @@ export const useProjectStore = create((set, get) => {
     });
   }),
   /**
-   * Animation CRUD
+   * Action CRUD (v36 Action datablock — Animation Phase 1).
+   *
+   * Pre-v36 these mutated `project.animations[]` and were named
+   * createAnimation / renameAnimation / deleteAnimation. The schema
+   * flip renamed the slot to `project.actions[]`; the methods follow
+   * suit. Stage 1.C will introduce richer `actionRegistry` helpers
+   * (assignAction, cloneAction, getActionUsers); these three remain
+   * the basic create/rename/delete primitives.
    */
-  createAnimation: (name) => set(produce((state) => {
+  createAction: (name) => set(produce((state) => {
     state.hasUnsavedChanges = true;
     const id = uid();
-    state.project.animations.push({
+    state.project.actions.push({
       id,
-      name:        name ?? `Animation ${state.project.animations.length + 1}`,
+      name:        name ?? `Action ${state.project.actions.length + 1}`,
       duration:    2000,
       fps:         24,
-      tracks:      [],
+      fcurves:     [],
       audioTracks: [],
+      flag:        0,
+      meta:        { createdAt: null, modifiedAt: null, source: 'authored' },
     });
   })),
 
-  renameAnimation: (id, newName) => set(produce((state) => {
+  renameAction: (id, newName) => set(produce((state) => {
     state.hasUnsavedChanges = true;
-    const anim = state.project.animations.find(a => a.id === id);
-    if (anim) anim.name = newName;
+    const action = state.project.actions.find(a => a.id === id);
+    if (action) action.name = newName;
   })),
 
-  deleteAnimation: (id) => set(produce((state) => {
+  deleteAction: (id) => set(produce((state) => {
     state.hasUnsavedChanges = true;
-    state.project.animations = state.project.animations.filter(a => a.id !== id);
+    state.project.actions = state.project.actions.filter(a => a.id !== id);
   })),
 
   /** Create a new blend shape on a part node */
@@ -420,9 +436,9 @@ export const useProjectStore = create((set, get) => {
       if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
       n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
     }
-    for (const anim of proj.animations ?? []) {
-      if (!Array.isArray(anim?.tracks)) continue;
-      anim.tracks = anim.tracks.filter((t) => t?.paramId !== paramId);
+    for (const action of proj.actions ?? []) {
+      if (!Array.isArray(action?.fcurves)) continue;
+      action.fcurves = action.fcurves.filter((fc) => !fcurveTargetsParam(fc, paramId));
     }
     for (const rule of proj.physicsRules ?? []) {
       if (!Array.isArray(rule?.inputs)) continue;
@@ -455,9 +471,9 @@ export const useProjectStore = create((set, get) => {
           if (b?.parameterId === oldId) b.parameterId = newId;
         }
       }
-      for (const anim of proj.animations ?? []) {
-        for (const t of anim?.tracks ?? []) {
-          if (t?.paramId === oldId) t.paramId = newId;
+      for (const action of proj.actions ?? []) {
+        for (const fc of action?.fcurves ?? []) {
+          renameFCurveParam(fc, oldId, newId);
         }
       }
       for (const rule of proj.physicsRules ?? []) {
@@ -1002,7 +1018,7 @@ export const useProjectStore = create((set, get) => {
       state.project.nodes    = [];
       state.project.parameters = [];
       state.project.physics_groups = [];
-      state.project.animations = [];
+      state.project.actions = [];
       state.project.maskConfigs = [];
       state.project.physicsRules = [];
       state.project.boneConfig = null;
@@ -1085,7 +1101,7 @@ export const useProjectStore = create((set, get) => {
       state.project.canvas = projectData.canvas;
       state.project.textures = projectData.textures;
       state.project.nodes = projectData.nodes;
-      state.project.animations = projectData.animations;
+      state.project.actions = projectData.actions;
       state.project.parameters = projectData.parameters;
       state.project.physics_groups = projectData.physics_groups;
       state.project.maskConfigs = projectData.maskConfigs;
@@ -1653,15 +1669,17 @@ export const useProjectStore = create((set, get) => {
 
       doDuplicate(nodeId, rootNode.parent);
 
-      // Duplicate animation tracks for all duplicated nodes
+      // Duplicate fcurves targeting the duplicated node ids onto the new
+      // ids. Preserves rnaPath property suffix; only rewrites the node-id
+      // segment via `renameFCurveNode` semantics.
       for (const [oldId, newId] of idsToMap) {
-        for (const anim of proj.animations) {
-          const tracks = anim.tracks.filter(t => t.nodeId === oldId);
-          for (const track of tracks) {
-            anim.tracks.push({
-              ...deepClone(track),
-              nodeId: newId,
-            });
+        for (const action of proj.actions ?? []) {
+          if (!Array.isArray(action.fcurves)) continue;
+          const matching = action.fcurves.filter(fc => fcurveTargetsNode(fc, oldId));
+          for (const fc of matching) {
+            const cloned = deepClone(fc);
+            renameFCurveNode(cloned, oldId, newId);
+            action.fcurves.push(cloned);
           }
         }
       }
@@ -1699,9 +1717,14 @@ export const useProjectStore = create((set, get) => {
       // Remove textures
       proj.textures = proj.textures.filter(t => !idsToDelete.has(t.id));
 
-      // Remove animation tracks
-      for (const anim of proj.animations) {
-        anim.tracks = anim.tracks.filter(t => !idsToDelete.has(t.nodeId));
+      // Remove fcurves targeting deleted nodes (rnaPath includes the
+      // node id; decode + filter).
+      for (const action of proj.actions ?? []) {
+        if (!Array.isArray(action.fcurves)) continue;
+        action.fcurves = action.fcurves.filter((fc) => {
+          const t = decodeFCurveTarget(fc);
+          return !(t?.kind === 'node' && idsToDelete.has(t.nodeId));
+        });
       }
 
       // Re-normalize draw_order for remaining parts to ensure no gaps (optional but clean)

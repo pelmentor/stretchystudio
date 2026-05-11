@@ -3,16 +3,17 @@
 /**
  * FCURVE_EVAL kernel.
  *
- * Phase D-2 of the V2 plan. Evaluates a single FCurve at the current
- * `ctx.timeMs` (converted to seconds at the call site — `evaluateFCurve`
- * is the motion3.json boundary that consumes seconds) and writes the
- * result to `ctx.paramOverrides` so the downstream PARAM_EVAL op picks
- * it up.
+ * Phase D-2 of the V2 plan, post-v36 rewire. Evaluates a single FCurve
+ * at the current `ctx.timeMs` (converted to seconds at the call site —
+ * `evaluateFCurve` is the motion3.json boundary that consumes seconds)
+ * and writes the result to `ctx.paramOverrides` so the downstream
+ * PARAM_EVAL op picks it up.
  *
- * The op's `tag` carries the binding identity — for animation tracks
- * the convention is `<targetId>/<property>` (matches the
- * ANIMATION_TRACK_EVAL tag from `build.js`). The kernel locates the
- * track on `ctx.animation.tracks[]` and dispatches `evaluateFCurve`.
+ * The op's `tag` IS the fcurve's rnaPath (the build pass writes
+ * `fc.rnaPath` as the op tag, since post-v36 the rnaPath IS the
+ * canonical target identifier). The kernel locates the fcurve on
+ * `ctx.action.fcurves[]` by exact rnaPath match and dispatches
+ * `evaluateFCurve`.
  *
  * Adapted from Blender's `evaluate_fcurve`
  * (`reference/blender/source/blender/blenkernel/intern/fcurve.cc`).
@@ -24,6 +25,7 @@
  */
 
 import { evaluateFCurve } from '../../fcurve.js';
+import { decodeFCurveTarget } from '../../animationFCurve.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -33,17 +35,16 @@ import { evaluateFCurve } from '../../fcurve.js';
 export function kernelFCurveEval(op, ctx) {
   const tag = op.tag;
   if (!tag) return NaN;
-  const slash = tag.indexOf('/');
-  const targetId = slash >= 0 ? tag.slice(0, slash) : tag;
-  const property = slash >= 0 ? tag.slice(slash + 1) : 'value';
-  const tracks = ctx.animation?.tracks ?? [];
-  const fcurve = tracks.find((t) =>
-    t?.targetId === targetId && (t.property ?? 'value') === property);
-  if (!fcurve) return NaN;
+  const fcurves = ctx.action?.fcurves ?? [];
+  const fc = fcurves.find((f) => f?.rnaPath === tag);
+  if (!fc) return NaN;
   const timeSeconds = (ctx.timeMs ?? 0) / 1000;
-  const v = evaluateFCurve(fcurve, timeSeconds, { project: ctx.project });
+  const v = evaluateFCurve(fc, timeSeconds, { project: ctx.project });
   if (typeof v === 'number' && Number.isFinite(v)) {
-    ctx.paramOverrides?.set(targetId, v);
+    const target = decodeFCurveTarget(fc);
+    if (target?.kind === 'param') {
+      ctx.paramOverrides?.set(target.paramId, v);
+    }
     return v;
   }
   return NaN;

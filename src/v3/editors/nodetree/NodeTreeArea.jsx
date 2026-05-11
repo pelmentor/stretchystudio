@@ -14,7 +14,7 @@
  *    (UX limitation in v1: selecting a parameter is a Parameters-panel
  *     concern that landed post-N-4. Until that lands, the user picks
  *     a paramId from a small dropdown sourced from `nodeTrees.driver`.)
- *  - Animation: `animationStore.activeAnimationId`.
+ *  - Animation: `animationStore.activeActionId`.
  *
  * No edit ops yet — the underlying datablocks are still derived from
  * the legacy mirrors (modifiers / drivers / animations). Phase N-5
@@ -41,7 +41,7 @@ export function NodeTreeArea() {
 
   const project = useProjectStore((s) => s.project);
   const selectionHead = useEditorStore((s) => (Array.isArray(s.selection) && s.selection.length > 0 ? s.selection[0] : null));
-  const activeAnimationId = useAnimationStore((s) => s.activeAnimationId);
+  const activeActionId = useAnimationStore((s) => s.activeActionId);
 
   // Driver mode — when selection isn't a paramId, fall back to the
   // first driverTree key so the user sees a non-empty graph instead
@@ -66,12 +66,12 @@ export function NodeTreeArea() {
     }
     if (mode === 'animation') {
       const dict = trees.animation ?? {};
-      if (activeAnimationId && dict[activeAnimationId]) return dict[activeAnimationId];
+      if (activeActionId && dict[activeActionId]) return dict[activeActionId];
       const firstKey = Object.keys(dict)[0];
       return firstKey ? dict[firstKey] : null;
     }
     return null;
-  }, [trees, mode, selectionHead, activeAnimationId, driverFallbackId]);
+  }, [trees, mode, selectionHead, activeActionId, driverFallbackId]);
 
   const subtitle = useMemo(() => {
     if (mode === 'rig') {
@@ -87,12 +87,12 @@ export function NodeTreeArea() {
     }
     if (mode === 'animation') {
       const dict = trees?.animation ?? {};
-      const id = (activeAnimationId && dict[activeAnimationId])
-        ? activeAnimationId : Object.keys(dict)[0] ?? null;
+      const id = (activeActionId && dict[activeActionId])
+        ? activeActionId : Object.keys(dict)[0] ?? null;
       return id ? `AnimationTree · ${id}` : 'No animations';
     }
     return '';
-  }, [mode, trees, selectionHead, activeAnimationId, driverFallbackId]);
+  }, [mode, trees, selectionHead, activeActionId, driverFallbackId]);
 
   const driverIds = useMemo(() => Object.keys(trees?.driver ?? {}), [trees]);
 

@@ -62,14 +62,14 @@ function makeProject() {
         transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
       },
     ],
-    animations: [
+    actions: [
       {
         // Audio track without sourceUrl - we want to verify the
         // serializer doesn't reach into it for fetch (otherwise the
         // stub would throw). Tracks with sourceUrl are exercised by
         // the integration tests when a real .stretch save happens
         // in the browser.
-        id: 'anim-1', name: 'idle', tracks: [],
+        id: 'anim-1', name: 'idle', fcurves: [], flag: 0, meta: {},
         audioTracks: [{ id: 'aud-1' }],
       },
     ],
@@ -113,11 +113,11 @@ function fingerprint(obj) {
   const proj = makeProject();
   const nodesRef = proj.nodes;
   const meshRef = proj.nodes[0].mesh;
-  const audioTrackRef = proj.animations[0].audioTracks[0];
+  const audioTrackRef = proj.actions[0].audioTracks[0];
   await saveProject(proj);
   assert(proj.nodes === nodesRef, 'nodes array reference unchanged');
   assert(proj.nodes[0].mesh === meshRef, 'mesh reference unchanged');
-  assert(proj.animations[0].audioTracks[0] === audioTrackRef, 'audio track reference unchanged');
+  assert(proj.actions[0].audioTracks[0] === audioTrackRef, 'audio track reference unchanged');
 }
 
 // ── Test 3: TypedArrays still TypedArrays after save ───────────────
@@ -134,11 +134,11 @@ function fingerprint(obj) {
 
 {
   const proj = makeProject();
-  proj.animations[0].audioTracks[0].name = 'should-survive';
+  proj.actions[0].audioTracks[0].name = 'should-survive';
   await saveProject(proj);
-  assert(proj.animations[0].audioTracks[0].name === 'should-survive',
+  assert(proj.actions[0].audioTracks[0].name === 'should-survive',
     'audio track properties preserved on input');
-  assert(!('_sourceBlob' in proj.animations[0].audioTracks[0]),
+  assert(!('_sourceBlob' in proj.actions[0].audioTracks[0]),
     'no _sourceBlob placeholder leaks back to input');
 }
 

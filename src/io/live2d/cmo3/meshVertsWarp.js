@@ -2,14 +2,15 @@
 
 import { uuid } from '../xmlbuilder.js';
 import { sanitisePartName } from '../../../lib/partId.js';
+import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
 
 /**
  * Section 3b CWarpDeformerSource (per mesh with mesh_verts animation).
  *
  * Lifted out of cmo3writer.js (Phase 6 god-class breakup, sweep #31).
  *
- * For every mesh that has an animated `mesh_verts` track in any of
- * the project animations, emit a `CWarpDeformerSource` whose grid
+ * For every mesh that has an animated `mesh_verts` fcurve in any of
+ * the project actions, emit a `CWarpDeformerSource` whose grid
  * keyforms are computed from the per-vertex deltas via Inverse
  * Distance Weighting. The deformer is bound to a per-mesh
  * `ParamDeform_<sanitisedName>` ranging `[0, numKf-1]`.
@@ -109,21 +110,23 @@ function propagateDeltasToGrid(restGrid, restVerts, deltas) {
 }
 
 /**
- * Extract `mesh_verts` keyframe tracks per partId from the project
- * animations array. First animation wins when multiple animations
- * touch the same part.
+ * Extract `mesh_verts` keyform fcurves per nodeId from the project
+ * actions array. First action wins when multiple actions touch the
+ * same part.
  *
- * @param {Array} animations
+ * @param {Array} actions
  * @returns {Map<string, Array<{time:number, value:Array<{x:number,y:number}>}>>}
  */
-function buildMeshVertsMap(animations) {
+function buildMeshVertsMap(actions) {
   const meshVertsMap = new Map();
-  for (const anim of animations) {
-    for (const track of (anim.tracks ?? [])) {
-      if (track.property === 'mesh_verts' && track.keyframes?.length >= 2) {
-        if (!meshVertsMap.has(track.nodeId)) {
-          meshVertsMap.set(track.nodeId, track.keyframes);
-        }
+  for (const action of actions) {
+    for (const fc of (action.fcurves ?? [])) {
+      const target = decodeFCurveTarget(fc);
+      if (!target || target.kind !== 'node') continue;
+      if (target.property !== 'mesh_verts') continue;
+      if (!Array.isArray(fc.keyforms) || fc.keyforms.length < 2) continue;
+      if (!meshVertsMap.has(target.nodeId)) {
+        meshVertsMap.set(target.nodeId, fc.keyforms);
       }
     }
   }
@@ -136,7 +139,7 @@ function buildMeshVertsMap(animations) {
  *
  * @param {Object} x
  * @param {Object} opts
- * @param {Array} opts.animations
+ * @param {Array} opts.actions
  * @param {Array} opts.meshes
  * @param {Array} opts.perMesh
  * @param {Map<string, {x:number, y:number}>} opts.deformerWorldOrigins
@@ -153,14 +156,14 @@ function buildMeshVertsMap(animations) {
  */
 export function emitMeshVertsWarpDeformers(x, opts) {
   const {
-    animations, meshes, perMesh,
+    actions, meshes, perMesh,
     deformerWorldOrigins, groupDeformerGuids, groupPartGuids,
     groupParts, rootPart,
     allDeformerSources, paramDefs, deformerParamMap,
     pidPartGuid, pidDeformerRoot,
   } = opts;
 
-  const meshVertsMap = buildMeshVertsMap(animations);
+  const meshVertsMap = buildMeshVertsMap(actions);
   const meshWarpDeformerGuids = new Map();
 
   for (const pm of perMesh) {

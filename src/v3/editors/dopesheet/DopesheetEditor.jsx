@@ -4,10 +4,10 @@
 /**
  * v3 Phase 3B — Dopesheet editor.
  *
- * Sibling to TimelineEditor, focused on keyframe DENSITY rather than
- * playback scrubbing. One row per track, ticks at the times their
- * keyframes live. Click a tick to jump the playhead. Read-only on
- * the keyframe values themselves — editing still happens through
+ * Sibling to TimelineEditor, focused on keyform DENSITY rather than
+ * playback scrubbing. One row per fcurve, ticks at the times their
+ * keyforms live. Click a tick to jump the playhead. Read-only on
+ * the keyform values themselves — editing still happens through
  * the timeline / animation mode + auto-keyframe.
  *
  * The point of this view is "what does this animation actually do at
@@ -15,8 +15,8 @@
  * and end? Are the params evenly distributed? You can answer those
  * questions in 0.5s here vs. scrolling through Timeline's 22px rows.
  *
- * Track ordering: parameter tracks first (alphabetical by id), then
- * node tracks grouped by node, then by property within node. That
+ * Row ordering: parameter fcurves first (alphabetical by id), then
+ * node fcurves grouped by node, then by property within node. That
  * groups everything driving the same dial together.
  *
  * @module v3/editors/dopesheet/DopesheetEditor
@@ -25,6 +25,7 @@
 import { useMemo, useRef } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
+import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
 import { Film } from 'lucide-react';
 
 const LABEL_W = 180;
@@ -33,19 +34,19 @@ const RULER_H = 16;
 
 export function DopesheetEditor() {
   const project = useProjectStore((s) => s.project);
-  const activeAnimId = useAnimationStore((s) => s.activeAnimationId);
+  const activeActionId = useAnimationStore((s) => s.activeActionId);
   const currentTime  = useAnimationStore((s) => s.currentTime);
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
 
-  const anim = useMemo(
-    () => (project.animations ?? []).find((a) => a.id === activeAnimId) ?? null,
-    [project.animations, activeAnimId],
+  const action = useMemo(
+    () => (project.actions ?? []).find((a) => a.id === activeActionId) ?? null,
+    [project.actions, activeActionId],
   );
 
-  const rows = useMemo(() => buildRows(anim, project), [anim, project]);
+  const rows = useMemo(() => buildRows(action, project), [action, project]);
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
-  if (!anim) {
+  if (!action) {
     return (
       <div className="flex flex-col h-full bg-card overflow-hidden">
         <DopeHeader title="Dopesheet" subtitle="No animation active" />
@@ -56,13 +57,13 @@ export function DopesheetEditor() {
     );
   }
 
-  const duration = Math.max(1, anim.duration ?? 1000);
+  const duration = Math.max(1, action.duration ?? 1000);
 
   return (
     <div className="flex flex-col h-full bg-card overflow-hidden">
       <DopeHeader
         title="Dopesheet"
-        subtitle={`${anim.name ?? '(unnamed)'} · ${rows.length} tracks · ${(duration / 1000).toFixed(1)}s`}
+        subtitle={`${action.name ?? '(unnamed)'} · ${rows.length} fcurves · ${(duration / 1000).toFixed(1)}s`}
       />
 
       <div className="flex-1 overflow-auto">
@@ -75,7 +76,7 @@ export function DopesheetEditor() {
           <div ref={trackAreaRef}>
             {rows.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground italic">
-                Animation has no tracks yet — drop into the Timeline + use auto-keyframe.
+                Action has no fcurves yet — drop into the Timeline + use auto-keyframe.
               </div>
             ) : (
               rows.map((row) => (
@@ -165,7 +166,7 @@ function Row({ row, duration, currentTime, onSeek }) {
           aria-hidden
         />
         <span className="truncate">{row.label}</span>
-        <span className="text-muted-foreground tabular-nums ml-auto">{row.keyframes.length}</span>
+        <span className="text-muted-foreground tabular-nums ml-auto">{row.keyforms.length}</span>
       </div>
       <div
         className="relative flex-1 h-full"
@@ -175,7 +176,7 @@ function Row({ row, duration, currentTime, onSeek }) {
           onSeek((x / rect.width) * duration);
         }}
       >
-        {row.keyframes.map((kf, i) => {
+        {row.keyforms.map((kf, i) => {
           const left = (kf.time / duration) * 100;
           const isHot = Math.abs(kf.time - currentTime) < 1;
           return (
@@ -203,30 +204,32 @@ function Row({ row, duration, currentTime, onSeek }) {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function buildRows(anim, project) {
-  if (!anim?.tracks) return [];
+function buildRows(action, project) {
+  if (!action?.fcurves) return [];
   const nodeNameById = new Map((project.nodes ?? []).map((n) => [n.id, n.name ?? n.id]));
   const paramNameById = new Map((project.parameters ?? []).map((p) => [p.id, p.name ?? p.id]));
 
   const paramRows = [];
   const nodeRows = [];
-  for (const t of anim.tracks) {
-    const kfs = (t.keyframes ?? []).map((kf) => ({ time: kf.time ?? 0, value: kf.value }));
-    if (t.paramId) {
+  for (const fc of action.fcurves) {
+    const target = decodeFCurveTarget(fc);
+    if (!target) continue;
+    const kfs = (fc.keyforms ?? []).map((kf) => ({ time: kf.time ?? 0, value: kf.value }));
+    if (target.kind === 'param') {
       paramRows.push({
-        key: `param:${t.paramId}`,
-        label: paramNameById.get(t.paramId) ?? t.paramId,
-        tooltip: `Parameter ${t.paramId}`,
+        key: `param:${target.paramId}`,
+        label: paramNameById.get(target.paramId) ?? target.paramId,
+        tooltip: `Parameter ${target.paramId}`,
         kindColor: 'bg-purple-500',
-        keyframes: kfs,
+        keyforms: kfs,
       });
-    } else if (t.nodeId) {
+    } else if (target.kind === 'node') {
       nodeRows.push({
-        key: `node:${t.nodeId}:${t.property}`,
-        label: `${nodeNameById.get(t.nodeId) ?? t.nodeId} · ${t.property}`,
-        tooltip: `Node ${t.nodeId} · ${t.property}`,
+        key: `node:${target.nodeId}:${target.property}`,
+        label: `${nodeNameById.get(target.nodeId) ?? target.nodeId} · ${target.property}`,
+        tooltip: `Node ${target.nodeId} · ${target.property}`,
         kindColor: 'bg-cyan-500',
-        keyframes: kfs,
+        keyforms: kfs,
       });
     }
   }

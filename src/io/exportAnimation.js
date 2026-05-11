@@ -1,21 +1,21 @@
 import { computeWorldMatrices, computeEffectiveProps } from '../renderer/transforms.js';
 
 /**
- * Compute frame specifications for export based on type, animations, and timing.
+ * Compute frame specifications for export based on type, actions, and timing.
  * Returns array of { animId, animName, frameIndex, timeMs } for each frame to render.
  */
-export function computeExportFrameSpecs({ type, animsToExport, exportFps, frameIndex }) {
+export function computeExportFrameSpecs({ type, actionsToExport, exportFps, frameIndex }) {
   const specs = [];
 
-  for (const anim of animsToExport) {
-    const durationMs = anim.duration ?? 2000;
-    const sanitized = sanitizeName(anim.name);
+  for (const action of actionsToExport) {
+    const durationMs = action.duration ?? 2000;
+    const sanitized = sanitizeName(action.name);
 
     if (type === 'single_frame') {
-      // Single frame per animation at given frameIndex/fps
+      // Single frame per action at given frameIndex/fps
       const timeMs = (frameIndex / exportFps) * 1000;
       specs.push({
-        animId: anim.id,
+        animId: action.id,
         animName: sanitized,
         frameIndex: frameIndex,
         timeMs: Math.min(timeMs, durationMs),
@@ -26,7 +26,7 @@ export function computeExportFrameSpecs({ type, animsToExport, exportFps, frameI
       for (let f = 0; f < totalFrames; f++) {
         const timeMs = (f / exportFps) * 1000;
         specs.push({
-          animId: anim.id,
+          animId: action.id,
           animName: sanitized,
           frameIndex: f,
           timeMs,
@@ -95,19 +95,19 @@ export function computeAnalyticalBounds(project) {
 }
 
 /**
- * Resolve which animations to export based on animTarget.
+ * Resolve which actions to export based on animTarget.
  */
-export function resolveAnimations(animations, animTarget, activeAnimationId) {
+export function resolveActions(actions, animTarget, activeActionId) {
   if (animTarget === 'staging') {
     return [{ id: 'staging', name: 'staging', duration: 0 }];
   }
   if (animTarget === 'current') {
-    const active = animations.find(a => a.id === activeAnimationId) ?? animations[0];
+    const active = actions.find(a => a.id === activeActionId) ?? actions[0];
     return active ? [active] : [];
   }
-  if (animTarget === 'all') return animations;
-  // Specific animation ID
-  const specific = animations.find(a => a.id === animTarget);
+  if (animTarget === 'all') return actions;
+  // Specific action ID
+  const specific = actions.find(a => a.id === animTarget);
   return specific ? [specific] : [];
 }
 

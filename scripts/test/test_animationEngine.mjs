@@ -173,20 +173,28 @@ function near(a, b, eps = 1e-3) {
 }
 
 {
-  // Animation with one node having two tracks
-  const anim = {
-    tracks: [
-      { nodeId: 'a', property: 'x', keyframes: [
-        { time: 0, value: 0, easing: 'linear' },
-        { time: 100, value: 100, easing: 'linear' },
-      ]},
-      { nodeId: 'a', property: 'opacity', keyframes: [
-        { time: 0, value: 1, easing: 'linear' },
-        { time: 100, value: 0, easing: 'linear' },
-      ]},
+  // Action with two fcurves on the same node — post-v36 shape.
+  // computePoseOverrides accepts an action with `fcurves[]` carrying
+  // rnaPath addressing.
+  const action = {
+    fcurves: [
+      {
+        id: 'a.x', rnaPath: "objects['a'].x", arrayIndex: 0, modifiers: [],
+        keyforms: [
+          { time: 0, value: 0, easing: 'linear', type: 'linear' },
+          { time: 100, value: 100, easing: 'linear', type: 'linear' },
+        ],
+      },
+      {
+        id: 'a.opacity', rnaPath: "objects['a'].opacity", arrayIndex: 0, modifiers: [],
+        keyforms: [
+          { time: 0, value: 1, easing: 'linear', type: 'linear' },
+          { time: 100, value: 0, easing: 'linear', type: 'linear' },
+        ],
+      },
     ],
   };
-  const overrides = computePoseOverrides(anim, 50);
+  const overrides = computePoseOverrides(action, 50);
   assert(overrides.size === 1, 'one node with overrides');
   const a = overrides.get('a');
   assert(a.x === 50, 'pose: x interpolated');

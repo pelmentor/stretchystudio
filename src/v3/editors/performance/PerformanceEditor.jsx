@@ -97,7 +97,7 @@ export function PerformanceEditor() {
           <Row label="Parts" value={(project.nodes ?? []).filter((n) => n.type === 'part').length} />
           <Row label="Groups" value={(project.nodes ?? []).filter((n) => n.type === 'group').length} />
           <Row label="Textures" value={project.textures?.length ?? 0} />
-          <Row label="Animations" value={project.animations?.length ?? 0} />
+          <Row label="Actions" value={project.actions?.length ?? 0} />
           <Row label="Parameters" value={project.parameters?.length ?? 0} />
           <Row label="Mask configs" value={project.maskConfigs?.length ?? 0} />
           <Row label="Physics rules" value={project.physicsRules?.length ?? 0} />

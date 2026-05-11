@@ -6,7 +6,7 @@
  * v3 Phase 5 — pairs with the multi-motion timeline switcher: a user can
  * load a `.motion3.json` from disk (idle generator output, Cubism Editor
  * export, anything Live2D-shaped) into the project as a brand-new entry
- * in `project.animations`, then preview it via the transport-bar dropdown.
+ * in `project.actions`, then preview it via the transport-bar dropdown.
  *
  * Segment encoding (mirrors `motion3json.js`):
  *   - First two values:  [startTime, startValue]
@@ -24,6 +24,11 @@
  * @module io/live2d/motion3jsonImport
  */
 
+import {
+  buildParamFCurve,
+  buildNodeFCurve,
+} from '../../anim/animationFCurve.js';
+
 const SEG_LINEAR = 0;
 const SEG_BEZIER = 1;
 const SEG_STEPPED = 2;
@@ -38,12 +43,12 @@ const SEG_TO_EASING = {
 
 /**
  * @typedef {Object} ParsedMotion
- * @property {Object} animation - SS animation object ready to push into `project.animations`
+ * @property {Object} action - SS action object ready to push into `project.actions`
  * @property {string[]} warnings — non-fatal issues (skipped curves, unknown segment types)
  */
 
 /**
- * Parse a `.motion3.json` text payload into a Stretchy Studio animation
+ * Parse a `.motion3.json` text payload into a Stretchy Studio action
  * object. Throws on malformed JSON or unsupported Version.
  *
  * @param {string} jsonText
@@ -80,7 +85,7 @@ export function parseMotion3Json(jsonText, opts) {
 
   /** @type {string[]} */
   const warnings = [];
-  const tracks = [];
+  const fcurves = [];
 
   for (let ci = 0; ci < doc.Curves.length; ci++) {
     const curve = doc.Curves[ci];
@@ -95,25 +100,18 @@ export function parseMotion3Json(jsonText, opts) {
       continue;
     }
 
-    const keyframes = decodeSegmentsToKeyframes(curve.Segments, warnings, `Curve "${id}"`);
-    if (keyframes.length < 2) {
+    const keyforms = decodeSegmentsToKeyframes(curve.Segments, warnings, `Curve "${id}"`);
+    if (keyforms.length < 2) {
       warnings.push(`Curve "${id}": skipped (< 2 keyframes after decode)`);
       continue;
     }
 
     if (target === 'Parameter') {
-      tracks.push({
-        id: opts.uid(),
-        paramId: id,
-        keyframes,
-      });
+      const fc = buildParamFCurve(id, keyforms);
+      if (fc) fcurves.push(fc);
     } else if (target === 'PartOpacity') {
-      tracks.push({
-        id: opts.uid(),
-        nodeId: id,
-        property: 'opacity',
-        keyframes,
-      });
+      const fc = buildNodeFCurve(id, 'opacity', keyforms);
+      if (fc) fcurves.push(fc);
     } else if (target === 'Model') {
       warnings.push(`Curve "${id}": Model-target curves not supported, skipped`);
     } else {
@@ -121,16 +119,22 @@ export function parseMotion3Json(jsonText, opts) {
     }
   }
 
-  const animation = {
+  const action = {
     id: opts.uid(),
     name: opts.name ?? 'Imported motion',
     duration: durationMs,
     fps,
-    tracks,
+    fcurves,
     audioTracks: [],
+    flag: 0,
+    meta: {
+      createdAt: null,
+      modifiedAt: null,
+      source: 'imported_motion3',
+    },
   };
 
-  return { animation, warnings };
+  return { action, warnings };
 }
 
 /**

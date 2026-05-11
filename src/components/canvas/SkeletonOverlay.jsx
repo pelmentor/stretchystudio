@@ -86,7 +86,7 @@ function arcPath(cx, cy, r, startDeg, sweepDeg) {
 export default function SkeletonOverlay({ view, editorMode, showSkeleton, skeletonEditMode }) {
   const updateProject  = useProjectStore(s => s.updateProject);
   const nodes          = useProjectStore(s => s.project.nodes);
-  const animations     = useProjectStore(s => s.project.animations);
+  const actions        = useProjectStore(s => s.project.actions);
 
   const selection      = useEditorStore(s => s.selection);
   const setSelection   = useEditorStore(s => s.setSelection);
@@ -111,7 +111,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     useSelectionStore.getState().select({ type: 'group', id: nodeId }, 'replace');
   }, [setSelection]);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
-  const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
+  const animActiveActionId    = useAnimationStore(s => s.activeActionId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
   const animLoopKeyframes     = useAnimationStore(s => s.loopKeyframes);
   const animFps               = useAnimationStore(s => s.fps);
@@ -162,23 +162,23 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   // bone groups, transform for everything else (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
-    const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
+    const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
     const endMs = (animEndFrame / animFps) * 1000;
-    const overrides  = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
+    const overrides  = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;
     if (!overrides.size && !hasDraft) return nodes;
     return nodes.map(node => {
       const ov = overrides.get(node.id);
       const dr = animDraftPose.get(node.id);
       if (!ov && !dr) return node;
-      // Compose: keyframe value first, draft on top (drag overrides
-      // keyframe). Both flow through the same bone-aware merge.
+      // Compose: keyform value first, draft on top (drag overrides
+      // keyform). Both flow through the same bone-aware merge.
       let n = node;
       if (ov) n = applyOverrideToNode(n, ov);
       if (dr) n = applyOverrideToNode(n, dr);
       return n;
     });
-  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
+  }, [editorMode, nodes, actions, animActiveActionId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
   const boneNodes = React.useMemo(() => {
     const map = {};
@@ -188,11 +188,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     return map;
   }, [effectiveNodes]);
 
-  /* ── Compute keyframe overrides (before pointer handlers) ── */
+  /* ── Compute keyform overrides (before pointer handlers) ── */
 
-  const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
+  const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
   const endMs = (animEndFrame / animFps) * 1000;
-  const keyframeOverrides = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
+  const keyframeOverrides = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
 
   /* ── Pointer handlers — defined unconditionally (Rules of Hooks) ── */
 
@@ -368,7 +368,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         beginBatch(useProjectStore.getState().project);
       }
     }
-  }, [skeletonEditMode, effectiveNodes, setSelection, selectBoneInBothStores, animations, animActiveAnimationId, animCurrentTime, animDraftPose]);
+  }, [skeletonEditMode, effectiveNodes, setSelection, selectBoneInBothStores, actions, animActiveActionId, animCurrentTime, animDraftPose]);
 
   const onPointerMove = useCallback((e) => {
     const drag = dragRef.current;

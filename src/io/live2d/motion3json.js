@@ -1,15 +1,17 @@
 /**
- * Generate .motion3.json files from Stretchy Studio animations.
+ * Generate .motion3.json files from Stretchy Studio actions.
  *
- * Stretchy Studio tracks animate node properties (x, y, rotation, scaleX,
- * scaleY, opacity, mesh_verts) with keyframes at specific times.
+ * v36 actions hold FCurves keyed by rnaPath. Each fcurve targets either
+ * a parameter (`objects['__params__'].values['<paramId>']`) or an object
+ * property (`objects['<nodeId>'].<property>`). decodeFCurveTarget recovers
+ * the legacy paramId / nodeId+property fields for the segment encoder.
  *
  * Live2D .motion3.json animates Parameters and Part opacities via "Curves"
  * with a flat segment-encoded array.
  *
- * For MVP, we convert simple property tracks (opacity) to Live2D curves.
- * Vertex-level animation (mesh_verts) requires parameter-based keyforms in
- * the .moc3, which is handled separately by the moc3 writer.
+ * For MVP, we convert simple object-property fcurves (opacity) to Live2D
+ * curves. Vertex-level animation (mesh_verts) requires parameter-based
+ * keyforms in the .moc3, which is handled separately by the moc3 writer.
  *
  * Segment encoding:
  *   - First two values: [startTime, startValue]
@@ -24,50 +26,55 @@
  * @module io/live2d/motion3json
  */
 
+import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
+
 /**
- * Convert a Stretchy Studio animation to .motion3.json format.
+ * Convert a Stretchy Studio action to .motion3.json format.
  *
- * @param {object} animation - From project.animations[]
+ * @param {object} action - From project.actions[]
  * @param {object} [opts]
  * @param {boolean} [opts.loop=true] - Whether the motion should loop
  * @param {Map<string, string>} [opts.parameterMap] - nodeId+property → Live2D parameter ID
  * @returns {object} JSON-serializable .motion3.json structure
  */
-export function generateMotion3Json(animation, opts = {}) {
+export function generateMotion3Json(action, opts = {}) {
   const { loop = true, parameterMap = new Map() } = opts;
 
-  const durationSec = (animation.duration ?? 2000) / 1000;
-  const fps = animation.fps ?? 24;
+  const durationSec = (action.duration ?? 2000) / 1000;
+  const fps = action.fps ?? 24;
 
   const curves = [];
   let totalSegmentCount = 0;
   let totalPointCount = 0;
 
-  for (const track of (animation.tracks ?? [])) {
-    // Parameter tracks (paramId set) — first-class Live2D parameter animation,
-    // emitted directly without going through the SS node→param mapping. Used
-    // by the idle generator and any AI-driven motion that targets standard
+  for (const fcurve of (action.fcurves ?? [])) {
+    const target = decodeFCurveTarget(fcurve);
+    if (!target) continue;
+
+    // Parameter fcurves — first-class Live2D parameter animation, emitted
+    // directly without going through the SS node→param mapping. Used by
+    // the idle generator and any AI-driven motion that targets standard
     // Live2D parameters (ParamAngleX, ParamBreath, etc.) by ID.
-    if (track.paramId) {
-      const segments = encodeKeyframesToSegments(track.keyframes ?? [], durationSec);
+    if (target.kind === 'param') {
+      const segments = encodeKeyframesToSegments(fcurve.keyforms ?? [], durationSec);
       if (segments.length === 0) continue;
       const segInfo = countSegmentsAndPoints(segments);
       totalSegmentCount += segInfo.segments;
       totalPointCount += segInfo.points;
-      curves.push({ Target: 'Parameter', Id: track.paramId, Segments: segments });
+      curves.push({ Target: 'Parameter', Id: target.paramId, Segments: segments });
       continue;
     }
 
-    // mesh_verts tracks → parameter curve driving warp deformer keyform index
-    if (track.property === 'mesh_verts') {
-      const key = `${track.nodeId}.mesh_verts`;
+    // mesh_verts fcurves → parameter curve driving warp deformer keyform index
+    if (target.property === 'mesh_verts') {
+      const key = `${target.nodeId}.mesh_verts`;
       if (!parameterMap.has(key)) continue;
       const paramId = parameterMap.get(key);
-      const kfs = track.keyframes;
+      const kfs = fcurve.keyforms;
       if (!kfs || kfs.length < 2) continue;
 
-      // Convert time-based keyframes to index-based segments:
-      // keyframe[0] at its time → value 0, keyframe[1] at its time → value 1, etc.
+      // Convert time-based keyforms to index-based segments:
+      // keyform[0] at its time → value 0, keyform[1] at its time → value 1, etc.
       const indexKeyframes = kfs.map((kf, idx) => ({
         time: kf.time,
         value: idx,
@@ -84,12 +91,12 @@ export function generateMotion3Json(animation, opts = {}) {
       continue;
     }
 
-    // Determine the Live2D target and ID for this track
-    const mapping = resolveTrackMapping(track, parameterMap);
+    // Determine the Live2D target and ID for this fcurve
+    const mapping = resolveFCurveMapping(target, parameterMap);
     if (!mapping) continue;
 
-    const { target, id } = mapping;
-    const segments = encodeKeyframesToSegments(track.keyframes, durationSec);
+    const { target: live2dTarget, id } = mapping;
+    const segments = encodeKeyframesToSegments(fcurve.keyforms, durationSec);
 
     if (segments.length === 0) continue;
 
@@ -99,7 +106,7 @@ export function generateMotion3Json(animation, opts = {}) {
     totalPointCount += segInfo.points;
 
     curves.push({
-      Target: target,
+      Target: live2dTarget,
       Id: id,
       Segments: segments,
     });
@@ -123,14 +130,14 @@ export function generateMotion3Json(animation, opts = {}) {
 }
 
 /**
- * Map a Stretchy Studio track to a Live2D curve target + ID.
+ * Map a decoded node-target FCurve to a Live2D curve target + ID.
  *
- * @param {object} track - { nodeId, property, keyframes }
+ * @param {{kind:'node', nodeId:string, property:string}} target
  * @param {Map<string, string>} parameterMap
  * @returns {{ target: string, id: string } | null}
  */
-function resolveTrackMapping(track, parameterMap) {
-  const key = `${track.nodeId}.${track.property}`;
+function resolveFCurveMapping(target, parameterMap) {
+  const key = `${target.nodeId}.${target.property}`;
 
   // Check explicit mapping first
   if (parameterMap.has(key)) {
@@ -138,8 +145,8 @@ function resolveTrackMapping(track, parameterMap) {
   }
 
   // Default mapping: opacity → Part opacity
-  if (track.property === 'opacity') {
-    return { target: 'PartOpacity', id: track.nodeId };
+  if (target.property === 'opacity') {
+    return { target: 'PartOpacity', id: target.nodeId };
   }
 
   // Properties like x, y, rotation, scaleX, scaleY need explicit parameterMap

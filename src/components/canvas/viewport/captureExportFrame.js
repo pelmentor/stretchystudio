@@ -25,7 +25,7 @@ import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {Object} CaptureOptions
- * @property {string|null} [animId]            - active animation id, or null for rest pose
+ * @property {string|null} [actionId]          - active action id, or null for rest pose
  * @property {number} [timeMs=0]
  * @property {boolean} [bgEnabled=false]
  * @property {string} [bgColor]                - composited under transparent render when bgEnabled
@@ -60,7 +60,7 @@ export function captureExportFrame(ctx, opts) {
   if (!canvas || !scene) return null;
 
   const {
-    animId = null,
+    actionId = null,
     timeMs = 0,
     bgEnabled = false,
     bgColor,
@@ -110,10 +110,10 @@ export function captureExportFrame(ctx, opts) {
   // deformations into mesh_verts so the GPU sees the right vertices.
   /** @type {Map<string, any>|null} */
   let poseOverrides = null;
-  if (animId) {
-    const anim = exportProject.animations.find((a) => a.id === animId);
-    if (anim) {
-      poseOverrides = computePoseOverrides(anim, timeMs, loopKeyframes, anim.duration ?? 0);
+  if (actionId) {
+    const action = exportProject.actions.find((a) => a.id === actionId);
+    if (action) {
+      poseOverrides = computePoseOverrides(action, timeMs, loopKeyframes, action.duration ?? 0);
 
       for (const node of exportProject.nodes) {
         const mesh = getMesh(node, exportProject);

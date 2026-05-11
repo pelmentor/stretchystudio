@@ -27,6 +27,7 @@ import {
 } from '@/io/live2d/runtime/physicsTick';
 import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
 import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
+import { buildNodeFCurve, decodeFCurveTarget, fcurveTargetsNode } from '@/anim/animationFCurve';
 // Phase 0.B of Animation Blender-Parity Plan (2026-05-09) — driver pass.
 // `evaluateProjectDrivers` walks every `param.driver` (and future
 // `node.transformDrivers`) and returns a Map<rnaPath, value>. Phase 0
@@ -633,18 +634,19 @@ export default function CanvasViewport({
 
       // Animation mode — overlay parameter keyforms from the timeline
       // BEFORE live-preview drivers run. computeParamOverrides walks
-      // tracks where `paramId` is set (Live2D parameter curves —
-      // motion3json + can3writer already export these); the result is
-      // merged into the working values so chainEval sees the animated
-      // dial position. We also push the merged values into
-      // paramValuesStore so the ParametersEditor sliders track playback.
+      // fcurves whose rnaPath decodes to a parameter target (Live2D
+      // parameter curves — motion3json + can3writer already export
+      // these); the result is merged into the working values so
+      // chainEval sees the animated dial position. We also push the
+      // merged values into paramValuesStore so the ParametersEditor
+      // sliders track playback.
       if (getEditorMode() === 'animation') {
         const _anim = animRef.current;
         const _proj = projectRef.current;
-        const _activeAnim = _proj.animations.find((a) => a.id === _anim.activeAnimationId) ?? null;
-        if (_activeAnim) {
+        const _activeAction = _proj.actions.find((a) => a.id === _anim.activeActionId) ?? null;
+        if (_activeAction) {
           const _endMs = (_anim.endFrame / _anim.fps) * 1000;
-          const paramOv = computeParamOverrides(_activeAnim, _anim.currentTime, _anim.loopKeyframes, _endMs);
+          const paramOv = computeParamOverrides(_activeAction, _anim.currentTime, _anim.loopKeyframes, _endMs);
           if (paramOv.size > 0) {
             const merged = { ...valuesForEval };
             const updates = {};
@@ -891,13 +893,13 @@ export default function CanvasViewport({
         // Compute pose overrides from current animation state
         const anim = animRef.current;
         const proj = projectRef.current;
-        const activeAnim = proj.animations.find(a => a.id === anim.activeAnimationId) ?? null;
+        const activeAction = proj.actions.find(a => a.id === anim.activeActionId) ?? null;
 
         let poseOverrides = null;
         if (getEditorMode() === 'animation') {
-          // Base: keyframe-interpolated values
+          // Base: keyform-interpolated values
           const endMs = (anim.endFrame / anim.fps) * 1000;
-          poseOverrides = computePoseOverrides(activeAnim, anim.currentTime, anim.loopKeyframes, endMs);
+          poseOverrides = computePoseOverrides(activeAction, anim.currentTime, anim.loopKeyframes, endMs);
           // Overlay: draftPose (uncommitted drag) takes priority
           if (anim.draftPose.size > 0) {
             poseOverrides = new Map(poseOverrides);
@@ -966,14 +968,14 @@ export default function CanvasViewport({
             // shape so the rest of the tick is engine-agnostic.
             const _evalEngine = usePreferencesStore.getState().evalEngine;
             if (_evalEngine === 'depgraph') {
-              // Audit fix (G-8) — propagate animation + currentTime so the
+              // Audit fix (G-8) — propagate action + currentTime so the
               // depgraph's ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see
               // the playhead. Without these the depgraph would always
               // evaluate at t=0 and the depgraph branch's animation
               // kernels would be dead code (still evaluating, but never
-              // producing keyframe-driven values).
+              // producing keyform-driven values).
               frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval, {
-                animation: activeAnim,
+                action: activeAction,
                 timeMs: anim.currentTime,
               });
             } else {
@@ -1438,10 +1440,10 @@ export default function CanvasViewport({
       if (getEditorMode() !== 'animation') return;
 
       const proj = projectRef.current;
-      if (proj.animations.length === 0) return;
+      if (proj.actions.length === 0) return;
 
-      const animId = anim.activeAnimationId ?? proj.animations[0]?.id;
-      if (!animId) return;
+      const actionId = anim.activeActionId ?? proj.actions[0]?.id;
+      if (!actionId) return;
 
       let selectedIds = ed.selection;
       if (selectedIds.length === 0) return;
@@ -1467,14 +1469,15 @@ export default function CanvasViewport({
       const currentTimeMs = anim.currentTime;
 
       // Pre-compute effective values for each selected node:
-      // draftPose (drag) > current keyframe > node.transform
-      const activeAnimObj = proj.animations.find(a => a.id === animId) ?? null;
+      // draftPose (drag) > current keyform > node.transform
+      const activeActionObj = proj.actions.find(a => a.id === actionId) ?? null;
       const endMs = (anim.endFrame / anim.fps) * 1000;
-      const keyframeOverrides = computePoseOverrides(activeAnimObj, currentTimeMs, anim.loopKeyframes, endMs);
+      const keyframeOverrides = computePoseOverrides(activeActionObj, currentTimeMs, anim.loopKeyframes, endMs);
 
       updateProject((p) => {
-        const animation = p.animations.find(a => a.id === animId);
-        if (!animation) return;
+        const action = p.actions.find(a => a.id === actionId);
+        if (!action) return;
+        if (!Array.isArray(action.fcurves)) action.fcurves = [];
 
         for (const nodeId of selectedIds) {
           const node = p.nodes.find(n => n.id === nodeId);
@@ -1486,7 +1489,7 @@ export default function CanvasViewport({
           const kfValues = keyframeOverrides.get(nodeId);
 
           for (const prop of KEYFRAME_PROPS) {
-            // Read value from highest-priority source: draft > current keyframe > base transform
+            // Read value from highest-priority source: draft > current keyform > base transform
             let value;
             if (draft && draft[prop] !== undefined) {
               value = draft[prop];
@@ -1496,73 +1499,94 @@ export default function CanvasViewport({
               value = getNodePropertyValue(node, prop);
             }
 
-            let track = animation.tracks.find(t => t.nodeId === nodeId && t.property === prop);
-            const isNewTrack = !track;
-            if (!track) {
-              track = { nodeId, property: prop, keyframes: [] };
-              animation.tracks.push(track);
+            let fc = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === prop);
+            const isNewFCurve = !fc;
+            if (!fc) {
+              fc = buildNodeFCurve(nodeId, prop, []) ?? {
+                id: `${nodeId}.${prop}`,
+                rnaPath: `objects['${nodeId}'].${prop}`,
+                arrayIndex: 0,
+                keyforms: [],
+                modifiers: [],
+                extrapolation: 'constant',
+              };
+              action.fcurves.push(fc);
             }
 
-            // Auto-insert a rest-pose keyframe at startFrame when this is the
-            // first keyframe for this track and we're past the start.
-            if (isNewTrack && currentTimeMs > startMs && rest) {
+            // Auto-insert a rest-pose keyform at startFrame when this is the
+            // first keyform for this fcurve and we're past the start.
+            if (isNewFCurve && currentTimeMs > startMs && rest) {
               const baseVal = prop === 'opacity' ? (rest.opacity ?? 1)
                 : (rest[prop] ?? (prop === 'scaleX' || prop === 'scaleY' ? 1 : 0));
-              upsertKeyframe(track.keyframes, startMs, baseVal, 'linear');
+              upsertKeyframe(fc.keyforms, startMs, baseVal, 'linear');
             }
 
-            upsertKeyframe(track.keyframes, currentTimeMs, value, 'linear');
+            upsertKeyframe(fc.keyforms, currentTimeMs, value, 'linear');
           }
 
-          // ── mesh_verts keyframe (deform mode) ───────────────────────────
+          // ── mesh_verts keyform (deform mode) ───────────────────────────
           // Only create/update if the node actually has a mesh deform in draft,
-          // or if a mesh_verts track already exists. This prevents accidental
-          // mesh_verts keyframes from blocking blend shape animation.
+          // or if a mesh_verts fcurve already exists. This prevents accidental
+          // mesh_verts keyforms from blocking blend shape animation.
           const nodeMesh = getMesh(node, p);
           if (node.type === 'part' && nodeMesh) {
             const hasMeshDeform = draft?.mesh_verts !== undefined;
-            let meshTrack = animation.tracks.find(t => t.nodeId === nodeId && t.property === 'mesh_verts');
+            let meshFC = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === 'mesh_verts');
 
-            if (hasMeshDeform || meshTrack) {
+            if (hasMeshDeform || meshFC) {
               const meshVerts = draft?.mesh_verts
                 ?? kfValues?.mesh_verts
                 ?? nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
 
-              const isNewMeshTrack = !meshTrack;
-              if (!meshTrack) {
-                meshTrack = { nodeId, property: 'mesh_verts', keyframes: [] };
-                animation.tracks.push(meshTrack);
+              const isNewMeshFC = !meshFC;
+              if (!meshFC) {
+                meshFC = buildNodeFCurve(nodeId, 'mesh_verts', []) ?? {
+                  id: `${nodeId}.mesh_verts`,
+                  rnaPath: `objects['${nodeId}'].mesh_verts`,
+                  arrayIndex: 0,
+                  keyforms: [],
+                  modifiers: [],
+                  extrapolation: 'constant',
+                };
+                action.fcurves.push(meshFC);
               }
 
-              // Auto-insert base-mesh keyframe at startFrame if this is the first keyframe
-              if (isNewMeshTrack && currentTimeMs > startMs) {
+              // Auto-insert base-mesh keyform at startFrame if this is the first keyform
+              if (isNewMeshFC && currentTimeMs > startMs) {
                 const baseVerts = nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
-                upsertKeyframe(meshTrack.keyframes, startMs, baseVerts, 'linear');
+                upsertKeyframe(meshFC.keyforms, startMs, baseVerts, 'linear');
               }
 
-              upsertKeyframe(meshTrack.keyframes, currentTimeMs, meshVerts, 'linear');
+              upsertKeyframe(meshFC.keyforms, currentTimeMs, meshVerts, 'linear');
             }
           }
 
-          // ── blend shape influence keyframes ───────────────────────────────
+          // ── blend shape influence keyforms ───────────────────────────────
           if (node.type === 'part' && node.blendShapes?.length) {
             for (const shape of node.blendShapes) {
               const prop = `blendShape:${shape.id}`;
               const value = draft?.[prop] ?? kfValues?.[prop] ?? node.blendShapeValues?.[shape.id] ?? 0;
 
-              let track = animation.tracks.find(t => t.nodeId === nodeId && t.property === prop);
-              const isNewTrack = !track;
-              if (!track) {
-                track = { nodeId, property: prop, keyframes: [] };
-                animation.tracks.push(track);
+              let fc = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === prop);
+              const isNewFCurve = !fc;
+              if (!fc) {
+                fc = buildNodeFCurve(nodeId, prop, []) ?? {
+                  id: `${nodeId}.${prop}`,
+                  rnaPath: `objects['${nodeId}'].${prop}`,
+                  arrayIndex: 0,
+                  keyforms: [],
+                  modifiers: [],
+                  extrapolation: 'constant',
+                };
+                action.fcurves.push(fc);
               }
 
-              // Auto-insert rest-pose keyframe at startFrame if this is the first keyframe
-              if (isNewTrack && currentTimeMs > startMs && rest) {
-                upsertKeyframe(track.keyframes, startMs, node.blendShapeValues?.[shape.id] ?? 0, 'linear');
+              // Auto-insert rest-pose keyform at startFrame if this is the first keyform
+              if (isNewFCurve && currentTimeMs > startMs && rest) {
+                upsertKeyframe(fc.keyforms, startMs, node.blendShapeValues?.[shape.id] ?? 0, 'linear');
               }
 
-              upsertKeyframe(track.keyframes, currentTimeMs, value, 'linear');
+              upsertKeyframe(fc.keyforms, currentTimeMs, value, 'linear');
             }
           }
 
@@ -2275,10 +2299,10 @@ export default function CanvasViewport({
     // and vertex positions match what is visually displayed on the canvas.
     const animNow = animRef.current;
     const isAnimMode = getEditorMode() === 'animation';
-    const activeAnim = isAnimMode
-      ? (proj.animations.find(a => a.id === animNow.activeAnimationId) ?? null)
+    const activeAction = isAnimMode
+      ? (proj.actions.find(a => a.id === animNow.activeActionId) ?? null)
       : null;
-    const kfOverrides = isAnimMode ? computePoseOverrides(activeAnim, animNow.currentTime) : null;
+    const kfOverrides = isAnimMode ? computePoseOverrides(activeAction, animNow.currentTime) : null;
     const ANIM_TRANSFORM_KEYS = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 
     const effectiveNodes = (isAnimMode && (kfOverrides?.size || animNow.draftPose.size))

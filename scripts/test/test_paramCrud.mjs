@@ -2,7 +2,7 @@
 //
 // Covers:
 //   - addParameter (id collision, fresh add, defaults, _userAuthored stamp)
-//   - removeParameter (cascade through deformer bindings, animation tracks,
+//   - removeParameter (cascade through deformer bindings, action fcurves,
 //     physics rule inputs)
 //   - renameParameter (cascade rename, id collision rejection)
 //   - patchParameter (whitelist enforcement, _userAuthored stamp)
@@ -10,9 +10,18 @@
 //   - setParameterUserAuthored (lock toggle)
 //   - seedParameters('merge') preserves _userAuthored params + user-added keys
 //
+// Note: post-v36 the cascade walks `project.actions[].fcurves[]` and uses
+// the rnaPath identity helpers (`fcurveTargetsParam`, `renameFCurveParam`)
+// instead of the legacy `project.animations[].tracks[].paramId` field.
+//
 // Run: node scripts/test/test_paramCrud.mjs
 
 import { seedParameters } from '../../src/io/live2d/rig/paramSpec.js';
+import {
+  buildParamFCurve,
+  fcurveTargetsParam,
+  renameFCurveParam,
+} from '../../src/anim/animationFCurve.js';
 
 let passed = 0;
 let failed = 0;
@@ -32,7 +41,7 @@ function emptyProject() {
   return {
     parameters: [],
     nodes: [],
-    animations: [],
+    actions: [],
     physicsRules: [],
     autoRigConfig: null,
   };
@@ -69,9 +78,9 @@ function removeParameter(proj, paramId) {
     if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
     n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
   }
-  for (const anim of proj.animations ?? []) {
-    if (!Array.isArray(anim?.tracks)) continue;
-    anim.tracks = anim.tracks.filter((t) => t?.paramId !== paramId);
+  for (const action of proj.actions ?? []) {
+    if (!Array.isArray(action?.fcurves)) continue;
+    action.fcurves = action.fcurves.filter((fc) => !fcurveTargetsParam(fc, paramId));
   }
   for (const rule of proj.physicsRules ?? []) {
     if (!Array.isArray(rule?.inputs)) continue;
@@ -95,9 +104,9 @@ function renameParameter(proj, oldId, newId) {
       if (b?.parameterId === oldId) b.parameterId = newId;
     }
   }
-  for (const anim of proj.animations ?? []) {
-    for (const t of anim?.tracks ?? []) {
-      if (t?.paramId === oldId) t.paramId = newId;
+  for (const action of proj.actions ?? []) {
+    for (const fc of action?.fcurves ?? []) {
+      renameFCurveParam(fc, oldId, newId);
     }
   }
   for (const rule of proj.physicsRules ?? []) {
@@ -210,11 +219,11 @@ function removeParamKey(proj, paramId, value) {
     ],
     keyforms: [],
   });
-  p.animations.push({
+  p.actions.push({
     id: 'A1',
-    tracks: [
-      { paramId: 'ParamCustom', keyframes: [] },
-      { paramId: 'ParamOther',  keyframes: [] },
+    fcurves: [
+      buildParamFCurve('ParamCustom', [{ time: 0, value: 0 }]),
+      buildParamFCurve('ParamOther',  [{ time: 0, value: 0 }]),
     ],
   });
   p.physicsRules.push({
@@ -232,9 +241,9 @@ function removeParamKey(proj, paramId, value) {
   assert(p.nodes[0].bindings.length === 1, 'removeParameter: dropped binding');
   assert(p.nodes[0].bindings[0].parameterId === 'ParamOther',
     'removeParameter: kept other bindings');
-  assert(p.animations[0].tracks.length === 1, 'removeParameter: dropped animation track');
-  assert(p.animations[0].tracks[0].paramId === 'ParamOther',
-    'removeParameter: kept other tracks');
+  assert(p.actions[0].fcurves.length === 1, 'removeParameter: dropped action fcurve');
+  assert(fcurveTargetsParam(p.actions[0].fcurves[0], 'ParamOther'),
+    'removeParameter: kept other fcurves');
   assert(p.physicsRules[0].inputs.length === 1, 'removeParameter: dropped physics input');
   assert(p.physicsRules[0].inputs[0].paramId === 'ParamOther',
     'removeParameter: kept other physics inputs');
@@ -249,9 +258,9 @@ function removeParamKey(proj, paramId, value) {
     id: 'Warp1', type: 'deformer', deformerKind: 'warp',
     bindings: [{ parameterId: 'ParamFoo', keys: [0, 1] }],
   });
-  p.animations.push({
+  p.actions.push({
     id: 'A1',
-    tracks: [{ paramId: 'ParamFoo', keyframes: [] }],
+    fcurves: [buildParamFCurve('ParamFoo', [{ time: 0, value: 0 }])],
   });
   p.physicsRules.push({
     id: 'R1',
@@ -265,8 +274,8 @@ function removeParamKey(proj, paramId, value) {
     'renameParameter: stamps _userAuthored');
   assert(p.nodes[0].bindings[0].parameterId === 'ParamBar',
     'renameParameter: cascade through deformer bindings');
-  assert(p.animations[0].tracks[0].paramId === 'ParamBar',
-    'renameParameter: cascade through animation tracks');
+  assert(fcurveTargetsParam(p.actions[0].fcurves[0], 'ParamBar'),
+    'renameParameter: cascade through action fcurves');
   assert(p.physicsRules[0].inputs[0].paramId === 'ParamBar',
     'renameParameter: cascade through physics inputs');
 }

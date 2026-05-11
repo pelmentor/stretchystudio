@@ -9,7 +9,7 @@
 import {
   buildMotion3,
   buildIdleMotion3,
-  resultToSsAnimation,
+  resultToSsAction,
   validateMotion3,
 } from '../../src/io/live2d/idle/builder.js';
 
@@ -143,7 +143,7 @@ assertThrows(() => buildMotion3({ paramIds: [], durationSec: NaN }),
     'validate: CurveCount mismatch flagged');
 }
 
-// ── resultToSsAnimation ──────────────────────────────────────────
+// ── resultToSsAction ──────────────────────────────────────────
 
 {
   const result = buildMotion3({
@@ -151,25 +151,27 @@ assertThrows(() => buildMotion3({ paramIds: [], durationSec: NaN }),
     durationSec: 8,
     fps: 30,
   });
-  const { animation } = resultToSsAnimation(result);
+  const { action } = resultToSsAction(result);
 
-  assert(typeof animation.id === 'string' && animation.id.startsWith('__motion_idle'),
-    'ssAnim: id has motion_idle prefix');
-  assert(typeof animation.name === 'string' && animation.name.length > 0,
-    'ssAnim: name set');
-  assert(animation.duration === 8000, 'ssAnim: duration in ms');
-  assert(animation.fps === 30, 'ssAnim: fps preserved');
-  assert(Array.isArray(animation.tracks), 'ssAnim: tracks array');
-  assert(animation.tracks.length === result.animatedIds.length,
-    'ssAnim: 1 track per animated param');
+  assert(typeof action.id === 'string' && action.id.startsWith('__motion_idle'),
+    'ssAction: id has motion_idle prefix');
+  assert(typeof action.name === 'string' && action.name.length > 0,
+    'ssAction: name set');
+  assert(action.duration === 8000, 'ssAction: duration in ms');
+  assert(action.fps === 30, 'ssAction: fps preserved');
+  assert(Array.isArray(action.fcurves), 'ssAction: fcurves array');
+  assert(action.fcurves.length === result.animatedIds.length,
+    'ssAction: 1 fcurve per animated param');
 
-  for (const t of animation.tracks) {
-    if (typeof t.paramId !== 'string' ||
-        typeof t.min !== 'number' ||
-        typeof t.max !== 'number' ||
-        typeof t.rest !== 'number' ||
-        !Array.isArray(t.keyframes)) {
-      failed++; console.error(`FAIL: ssAnim track shape — ${JSON.stringify(t)}`);
+  for (const fc of action.fcurves) {
+    // v36 fcurve shape: rnaPath addressing, no per-curve min/max/rest
+    // (those moved to project.parameters[]). The fcurve carries the
+    // canonical {id, rnaPath, arrayIndex, keyforms, modifiers, extrapolation}.
+    if (typeof fc.id !== 'string' ||
+        typeof fc.rnaPath !== 'string' ||
+        !fc.rnaPath.startsWith("objects['__params__'].values[") ||
+        !Array.isArray(fc.keyforms)) {
+      failed++; console.error(`FAIL: ssAction fcurve shape — ${JSON.stringify(fc)}`);
       break;
     }
   }
@@ -179,9 +181,9 @@ assertThrows(() => buildMotion3({ paramIds: [], durationSec: NaN }),
 {
   // Custom name override
   const result = buildMotion3({ paramIds: [], durationSec: 8 });
-  const { animation } = resultToSsAnimation(result, { name: 'CustomName', fps: 60 });
-  assert(animation.name === 'CustomName', 'ssAnim: name override');
-  assert(animation.fps === 60, 'ssAnim: fps override');
+  const { action } = resultToSsAction(result, { name: 'CustomName', fps: 60 });
+  assert(action.name === 'CustomName', 'ssAction: name override');
+  assert(action.fps === 60, 'ssAction: fps override');
 }
 
 console.log(`idleBuilder: ${passed} passed, ${failed} failed`);

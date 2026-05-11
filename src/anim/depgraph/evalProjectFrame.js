@@ -49,16 +49,16 @@ import { OperationCode, NodeType } from './types.js';
  * @param {object} project
  * @param {Record<string, number>} paramValues
  * @param {object} [opts]
- * @param {object|null} [opts.animation] - active animation clip; when set,
- *   the depgraph's ANIMATION_TRACK_EVAL kernel evaluates tracks at
- *   `opts.timeMs`. Pass null when no animation is active.
+ * @param {object|null} [opts.action] - active action datablock; when set,
+ *   the depgraph's ANIMATION_TRACK_EVAL kernel evaluates fcurves at
+ *   `opts.timeMs`. Pass null when no action is active.
  * @param {number} [opts.timeMs] - playhead time in milliseconds
  *   (Phase 0.0 canonical unit). Defaults to 0.
  * @param {number} [opts.requiredMode] - modifier mode bitmask
  * @returns {ArtMeshFrame[]}
  */
 export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
-  const graph = buildDepGraph(project, opts.animation ? { animation: opts.animation } : {});
+  const graph = buildDepGraph(project, opts.action ? { action: opts.action } : {});
   const overrides = new Map();
   if (paramValues && typeof paramValues === 'object') {
     for (const k of Object.keys(paramValues)) {
@@ -70,7 +70,7 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
     project,
     timeMs: opts.timeMs ?? 0,
     paramOverrides: overrides,
-    animation: opts.animation ?? null,
+    action: opts.action ?? null,
     requiredMode: opts.requiredMode,
   });
   /** @type {ArtMeshFrame[]} */

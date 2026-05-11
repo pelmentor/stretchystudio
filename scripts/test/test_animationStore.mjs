@@ -32,7 +32,7 @@ function reset() { get().resetPlayback(); }
 reset();
 {
   const s = get();
-  assert(s.activeAnimationId === null, 'initial: no active animation');
+  assert(s.activeActionId === null, 'initial: no active animation');
   assert(s.currentTime === 0, 'initial: time = 0');
   assert(s.isPlaying === false, 'initial: not playing');
   assert(s.fps === 24, 'initial: fps = 24');
@@ -225,22 +225,22 @@ reset();
   assert(get().tick(1000) === false, 'tick: not playing → false');
 }
 
-// ── switchAnimation ───────────────────────────────────────────────
+// ── switchAction ───────────────────────────────────────────────
 
 {
   reset();
-  get().switchAnimation({ id: 'a1', fps: 30, duration: 4000 });
-  assert(get().activeAnimationId === 'a1', 'switchAnimation: id set');
-  assert(get().fps === 30, 'switchAnimation: fps set');
-  assert(get().endFrame === 120, 'switchAnimation: endFrame from duration (4000ms @ 30fps = 120)');
-  assert(get().currentTime === 0, 'switchAnimation: time reset');
-  assert(get().isPlaying === false, 'switchAnimation: paused');
-  assert(get().draftPose.size === 0, 'switchAnimation: draftPose cleared');
+  get().switchAction({ id: 'a1', fps: 30, duration: 4000 });
+  assert(get().activeActionId === 'a1', 'switchAction: id set');
+  assert(get().fps === 30, 'switchAction: fps set');
+  assert(get().endFrame === 120, 'switchAction: endFrame from duration (4000ms @ 30fps = 120)');
+  assert(get().currentTime === 0, 'switchAction: time reset');
+  assert(get().isPlaying === false, 'switchAction: paused');
+  assert(get().draftPose.size === 0, 'switchAction: draftPose cleared');
 
   // null/undefined is no-op
-  const before = get().activeAnimationId;
-  get().switchAnimation(null);
-  assert(get().activeAnimationId === before, 'switchAnimation: null is no-op');
+  const before = get().activeActionId;
+  get().switchAction(null);
+  assert(get().activeActionId === before, 'switchAction: null is no-op');
 }
 
 console.log(`animationStore: ${passed} passed, ${failed} failed`);

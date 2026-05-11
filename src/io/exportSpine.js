@@ -1,11 +1,12 @@
 /**
  * exportSpine.js
- * 
+ *
  * Logic to export the Stretchy Studio project to Spine 4.0 JSON format.
  */
 import { computeWorldMatrices } from '../renderer/transforms.js';
 import { uid } from '../lib/ids.js';
 import { getMesh } from '../store/objectDataAccess.js';
+import { decodeFCurveTarget } from '../anim/animationFCurve.js';
 
 /**
  * Main entry point for Spine export.
@@ -198,18 +199,21 @@ function buildSpineJson(project) {
   // ── 5. Animations ─────────────────────────────────────────────────────────
   const animations = {};
 
-  for (const anim of project.animations) {
-    const animName = sanitizeName(anim.name);
+  for (const action of project.actions) {
+    const animName = sanitizeName(action.name);
     const spineAnim = { bones: {}, slots: {} };
 
-    // Group tracks by node
-    const tracksByNode = {};
-    for (const track of anim.tracks) {
-      if (!tracksByNode[track.nodeId]) tracksByNode[track.nodeId] = [];
-      tracksByNode[track.nodeId].push(track);
+    // Group node-target fcurves by node id (parameter-target fcurves don't
+    // map to any Spine concept yet, so they're skipped here).
+    const fcurvesByNode = {};
+    for (const fc of action.fcurves) {
+      const target = decodeFCurveTarget(fc);
+      if (!target || target.kind !== 'node') continue;
+      if (!fcurvesByNode[target.nodeId]) fcurvesByNode[target.nodeId] = [];
+      fcurvesByNode[target.nodeId].push({ fcurve: fc, property: target.property });
     }
 
-    for (const [nodeId, nodeTracks] of Object.entries(tracksByNode)) {
+    for (const [nodeId, nodeFCurves] of Object.entries(fcurvesByNode)) {
       const node = nodes.find(n => n.id === nodeId);
       if (!node) continue;
 
@@ -220,35 +224,35 @@ function buildSpineJson(project) {
         if (!spineAnim.bones[targetName]) spineAnim.bones[targetName] = {};
         const boneEntry = spineAnim.bones[targetName];
 
-        for (const track of nodeTracks) {
-          if (track.property === 'x' || track.property === 'y') {
+        for (const { fcurve, property } of nodeFCurves) {
+          if (property === 'x' || property === 'y') {
             if (!boneEntry.translate) boneEntry.translate = [];
-            for (const kf of track.keyframes) {
+            for (const kf of fcurve.keyforms) {
               const time = kf.time / 1000;
               let entry = boneEntry.translate.find(e => Math.abs(e.time - time) < 0.001);
               if (!entry) { entry = { time, x: 0, y: 0 }; boneEntry.translate.push(entry); }
-              const setup = node.transform[track.property] ?? 0;
+              const setup = node.transform[property] ?? 0;
               const delta = kf.value - setup;
-              if (track.property === 'x') entry.x = delta;
+              if (property === 'x') entry.x = delta;
               else entry.y = -delta;
               applySpineCurve(entry, kf);
             }
-          } else if (track.property === 'rotation') {
+          } else if (property === 'rotation') {
             if (!boneEntry.rotate) boneEntry.rotate = [];
-            for (const kf of track.keyframes) {
+            for (const kf of fcurve.keyforms) {
               const setup = node.transform.rotation ?? 0;
               const entry = { time: kf.time / 1000, value: -(kf.value - setup) };
               applySpineCurve(entry, kf);
               boneEntry.rotate.push(entry);
             }
-          } else if (track.property === 'scaleX' || track.property === 'scaleY') {
+          } else if (property === 'scaleX' || property === 'scaleY') {
             if (!boneEntry.scale) boneEntry.scale = [];
-            for (const kf of track.keyframes) {
+            for (const kf of fcurve.keyforms) {
               const time = kf.time / 1000;
               let entry = boneEntry.scale.find(e => Math.abs(e.time - time) < 0.001);
               if (!entry) { entry = { time, x: 1, y: 1 }; boneEntry.scale.push(entry); }
-              const setup = node.transform[track.property] ?? 1;
-              if (track.property === 'scaleX') entry.x = kf.value / setup;
+              const setup = node.transform[property] ?? 1;
+              if (property === 'scaleX') entry.x = kf.value / setup;
               else entry.y = kf.value / setup;
               applySpineCurve(entry, kf);
             }
@@ -265,10 +269,10 @@ function buildSpineJson(project) {
         if (!spineAnim.slots[targetName]) spineAnim.slots[targetName] = {};
         const slotEntry = spineAnim.slots[targetName];
 
-        for (const track of nodeTracks) {
-          if (track.property === 'opacity') {
+        for (const { fcurve, property } of nodeFCurves) {
+          if (property === 'opacity') {
             if (!slotEntry.rgba) slotEntry.rgba = [];
-            for (const kf of track.keyframes) {
+            for (const kf of fcurve.keyforms) {
               const hexA = Math.round(kf.value * 255).toString(16).padStart(2, '0');
               const entry = { time: kf.time / 1000, color: `ffffff${hexA}` };
               applySpineCurve(entry, kf);

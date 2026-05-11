@@ -1,12 +1,16 @@
 // @ts-check
 
 /**
- * v3 Phase 3 — Animations list panel.
+ * v3 Phase 3 — Animations list panel (Action datablock list).
  *
- * Lists every animation on the project, with create / rename /
+ * Lists every action on the project, with create / rename /
  * delete actions and click-to-switch. Mirrors upstream's
  * `AnimationListPanel.jsx` behaviour: editing a name is inline,
  * deleting prompts via AlertDialog, the active row is highlighted.
+ *
+ * Post-v36 the underlying slot is `project.actions[]` (Blender's Action
+ * datablock); this panel still surfaces them under the historical
+ * "Animations" label since that's the workspace name the user knows.
  *
  * Mounted as its own editor (`animations` in editorRegistry) so the
  * Animation workspace can show it next to the Timeline. The default
@@ -42,16 +46,16 @@ const {
 } = AD;
 
 export function AnimationsEditor() {
-  // `project.animations` is always an array (default state +
+  // `project.actions` is always an array (default state +
   // migration guarantee); the prior `?? []` returned a fresh empty
   // array on every snapshot, breaking the useSyncExternalStore cache.
-  const animations = useProjectStore((s) => s.project.animations);
-  const createAnimation = useProjectStore((s) => s.createAnimation);
-  const renameAnimation = useProjectStore((s) => s.renameAnimation);
-  const deleteAnimation = useProjectStore((s) => s.deleteAnimation);
+  const actions = useProjectStore((s) => s.project.actions);
+  const createAction = useProjectStore((s) => s.createAction);
+  const renameAction = useProjectStore((s) => s.renameAction);
+  const deleteAction = useProjectStore((s) => s.deleteAction);
 
-  const activeId = useAnimationStore((s) => s.activeAnimationId);
-  const switchAnimation = useAnimationStore((s) => s.switchAnimation);
+  const activeId = useAnimationStore((s) => s.activeActionId);
+  const switchAction = useAnimationStore((s) => s.switchAction);
 
   const [editingId, setEditingId] = useState(/** @type {string|null} */ (null));
   const [editValue, setEditValue] = useState('');
@@ -63,7 +67,7 @@ export function AnimationsEditor() {
     setEditValue(a.name ?? '');
   }
   function commitEdit() {
-    if (editingId && editValue.trim()) renameAnimation(editingId, editValue.trim());
+    if (editingId && editValue.trim()) renameAction(editingId, editValue.trim());
     setEditingId(null);
   }
   function cancelEdit() {
@@ -73,10 +77,10 @@ export function AnimationsEditor() {
 
   function confirmDelete() {
     if (!deleteId) return;
-    deleteAnimation(deleteId);
+    deleteAction(deleteId);
     if (deleteId === activeId) {
-      const remaining = animations.filter((a) => a.id !== deleteId);
-      switchAnimation(remaining[0] ?? null);
+      const remaining = actions.filter((a) => a.id !== deleteId);
+      switchAction(remaining[0] ?? null);
     }
     setDeleteId(null);
   }
@@ -88,7 +92,7 @@ export function AnimationsEditor() {
           <div className="flex items-center gap-1.5">
             <Film size={11} className="text-muted-foreground" />
             <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Animations ({animations.length})
+              Animations ({actions.length})
             </h2>
           </div>
           <div className="flex items-center gap-0.5">
@@ -105,18 +109,18 @@ export function AnimationsEditor() {
               type="button"
               className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
               onClick={() => {
-                // After creating, the new animation lands at the end of
-                // project.animations. Pick it up from the freshly-read
-                // store and dispatch switchAnimation so playback +
+                // After creating, the new action lands at the end of
+                // project.actions. Pick it up from the freshly-read
+                // store and dispatch switchAction so playback +
                 // timeline focus on it. Also route to the Animation
                 // workspace so the user sees the timeline they just made.
                 // (BFA-001: editorMode is derived from activeWorkspace,
                 // and setWorkspace itself captures the rest pose on the
                 // staging→animation transition.)
-                createAnimation();
-                const list = useProjectStore.getState().project.animations ?? [];
+                createAction();
+                const list = useProjectStore.getState().project.actions ?? [];
                 const created = list[list.length - 1];
-                if (created) switchAnimation(created);
+                if (created) switchAction(created);
                 useUIV3Store.getState().setWorkspace('animation');
               }}
               title="Create new animation"
@@ -128,7 +132,7 @@ export function AnimationsEditor() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-1">
-          {animations.length === 0 ? (
+          {actions.length === 0 ? (
             <div className="p-4 text-center">
               <p className="text-[10px] text-muted-foreground italic">
                 No animations. Click + to create one.
@@ -136,19 +140,19 @@ export function AnimationsEditor() {
             </div>
           ) : (
             <ul className="space-y-px">
-              {animations.map((anim) => {
-                const isActive = anim.id === activeId;
-                const isEditing = anim.id === editingId;
+              {actions.map((action) => {
+                const isActive = action.id === activeId;
+                const isEditing = action.id === editingId;
                 return (
                   <li
-                    key={anim.id}
+                    key={action.id}
                     className={
                       'group flex items-center px-3 py-1.5 cursor-pointer transition-colors ' +
                       (isActive
                         ? 'bg-primary/10 border-l-2 border-primary'
                         : 'hover:bg-muted/40 border-l-2 border-transparent')
                     }
-                    onClick={() => !isEditing && switchAnimation(anim)}
+                    onClick={() => !isEditing && switchAction(action)}
                   >
                     {isEditing ? (
                       <div className="flex items-center gap-1 flex-1" onClick={(e) => e.stopPropagation()}>
@@ -181,16 +185,16 @@ export function AnimationsEditor() {
                       </div>
                     ) : (
                       <>
-                        <span className="flex-1 truncate text-xs text-foreground" title={anim.name ?? anim.id}>
-                          {anim.name ?? '(unnamed)'}
+                        <span className="flex-1 truncate text-xs text-foreground" title={action.name ?? action.id}>
+                          {action.name ?? '(unnamed)'}
                         </span>
                         <span className="text-[10px] text-muted-foreground tabular-nums mr-2">
-                          {Math.round((anim.duration ?? 0) / 1000 * 10) / 10}s
+                          {Math.round((action.duration ?? 0) / 1000 * 10) / 10}s
                         </span>
                         <button
                           type="button"
                           className="h-5 w-5 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-muted/60 rounded transition"
-                          onClick={(e) => { e.stopPropagation(); startEdit(anim); }}
+                          onClick={(e) => { e.stopPropagation(); startEdit(action); }}
                           aria-label="Rename animation"
                         >
                           <Pencil size={10} />
@@ -198,7 +202,7 @@ export function AnimationsEditor() {
                         <button
                           type="button"
                           className="h-5 w-5 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition"
-                          onClick={(e) => { e.stopPropagation(); setDeleteId(anim.id); }}
+                          onClick={(e) => { e.stopPropagation(); setDeleteId(action.id); }}
                           aria-label="Delete animation"
                         >
                           <Trash2 size={10} />
@@ -220,7 +224,7 @@ export function AnimationsEditor() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete animation?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the animation and all of its tracks. Cannot be undone via this dialog;
+              This removes the animation and all of its fcurves. Cannot be undone via this dialog;
               use Ctrl+Z afterwards if you change your mind.
             </AlertDialogDescription>
           </AlertDialogHeader>

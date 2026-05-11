@@ -1,6 +1,10 @@
 // Phase D-4 — depgraph ANIMATION_TRACK_EVAL kernel byte-fidelity vs
 // `computeParamOverrides` + `computePoseOverrides` from animationEngine.
 //
+// Post-v36: actions carry fcurves with rnaPath addressing instead of
+// legacy paramId/nodeId/property fields. The kernel matches fcurves by
+// rnaPath and dispatches param vs node target via decodeFCurveTarget.
+//
 // Run: node scripts/test/test_depgraph_eval_animation.mjs
 
 import {
@@ -9,6 +13,7 @@ import {
 } from '../../src/renderer/animationEngine.js';
 import { buildDepGraph } from '../../src/anim/depgraph/build.js';
 import { evalDepGraph } from '../../src/anim/depgraph/eval.js';
+import { buildParamFCurve, buildNodeFCurve } from '../../src/anim/animationFCurve.js';
 
 let passed = 0;
 let failed = 0;
@@ -25,111 +30,96 @@ function assertNear(a, b, eps, name) {
   console.error(`FAIL: ${name} (|${a} - ${b}| > ${eps})`);
 }
 
-// ---- Param track byte-fidelity ----
+// ---- Param fcurve byte-fidelity ----
 
 {
   const project = {
     parameters: [{ id: 'ParamSmile', default: 0 }],
-    nodes: [], animations: [], physicsRules: [],
+    nodes: [], actions: [], physicsRules: [],
   };
-  const animation = {
-    tracks: [{
-      paramId: 'ParamSmile',
-      keyframes: [
-        { time: 0,    value: 0,   easing: 'linear' },
-        { time: 1000, value: 1,   easing: 'linear' },
-      ],
-    }],
+  const action = {
+    fcurves: [buildParamFCurve('ParamSmile', [
+      { time: 0,    value: 0, easing: 'linear' },
+      { time: 1000, value: 1, easing: 'linear' },
+    ])],
   };
   const timeMs = 500;
-  const ref = computeParamOverrides(animation, timeMs, false, 0);
+  const ref = computeParamOverrides(action, timeMs, false, 0);
   const refValue = ref.get('ParamSmile');
   assert(typeof refValue === 'number', 'reference: param produced number');
 
-  const graph = buildDepGraph(project, { animation });
-  // The build pass needs the track for tag generation. Convert
-  // paramId-track to the SS-canonical {targetId, property} the build
-  // pass expects (currently it reads track.targetId).
-  // We work around: pass a bridged animation using paramId AS targetId.
-  const bridged = {
-    tracks: [{
-      targetId: 'ParamSmile',
-      property: 'value',
-      paramId: 'ParamSmile',
-      keyframes: animation.tracks[0].keyframes,
-    }],
-  };
-  const graph2 = buildDepGraph(project, { animation: bridged });
-  const ctx = evalDepGraph(graph2, {
-    project, timeMs, animation: bridged,
-  });
+  const graph = buildDepGraph(project, { action });
+  const ctx = evalDepGraph(graph, { project, timeMs, action });
   const dep = ctx.paramOverrides.get('ParamSmile');
   assertNear(dep, refValue, 1e-6,
-    'depgraph param track: byte-equal to computeParamOverrides');
+    'depgraph param fcurve: byte-equal to computeParamOverrides');
 }
 
-// ---- Pose track ends up in poseOverrides map ----
+// ---- Pose fcurve ends up in poseOverrides map ----
 
 {
   const project = {
     parameters: [],
     nodes: [{ id: 'face', type: 'group' }],
-    animations: [], physicsRules: [],
+    actions: [], physicsRules: [],
   };
-  const bridged = {
-    tracks: [{
-      targetId: 'face',
-      property: 'rotation',
-      nodeId: 'face',
-      keyframes: [
-        { time: 0,    value: 0,  easing: 'linear' },
-        { time: 1000, value: 30, easing: 'linear' },
-      ],
-    }],
+  const action = {
+    fcurves: [buildNodeFCurve('face', 'rotation', [
+      { time: 0,    value: 0,  easing: 'linear' },
+      { time: 1000, value: 30, easing: 'linear' },
+    ])],
   };
-  const graph = buildDepGraph(project, { animation: bridged });
+  const graph = buildDepGraph(project, { action });
   const poseOverrides = new Map();
-  const ctx = evalDepGraph(graph, {
-    project, timeMs: 500, animation: bridged, poseOverrides,
+  evalDepGraph(graph, {
+    project, timeMs: 500, action, poseOverrides,
   });
   const faceMap = poseOverrides.get('face');
-  assert(faceMap instanceof Map, 'pose track: poseOverrides has face entry');
+  assert(faceMap instanceof Map, 'pose fcurve: poseOverrides has face entry');
   const rot = faceMap?.get('rotation');
   assertNear(rot, 15, 1e-6,
-    'pose track: rotation lerps 0→30 at t=0.5 → 15');
+    'pose fcurve: rotation lerps 0→30 at t=0.5 → 15');
 
   // Reference computePoseOverrides also produces 15.
-  const ref = computePoseOverrides(bridged, 500, false, 0);
+  const ref = computePoseOverrides(action, 500, false, 0);
   const refRot = ref.get('face')?.rotation;
   assertNear(refRot, 15, 1e-6,
     'reference computePoseOverrides: matches');
   assertNear(rot, refRot, 1e-6,
-    'depgraph pose track: byte-equal to computePoseOverrides');
+    'depgraph pose fcurve: byte-equal to computePoseOverrides');
 }
 
-// ---- mesh_verts track returns undefined (deferred to Phase N-3) ----
+// ---- mesh_verts fcurve returns undefined (deferred to Phase N-3) ----
+//
+// Note: the v36 migration drops mesh_verts keyforms (their value is an
+// array, not a number — see v36_action_datablock.js HOLD_EASINGS path).
+// To exercise the kernel's mesh_verts skip we construct an fcurve
+// directly bypassing the migration; this is artificial but pins the
+// kernel's behaviour for when mesh_verts authoring resumes.
 
 {
   const project = {
     parameters: [],
     nodes: [{ id: 'face', type: 'part' }],
-    animations: [], physicsRules: [],
+    actions: [], physicsRules: [],
   };
-  const bridged = {
-    tracks: [{
-      targetId: 'face',
-      property: 'mesh_verts',
-      nodeId: 'face',
-      keyframes: [
-        { time: 0,    value: [{ x: 0, y: 0 }] },
-        { time: 1000, value: [{ x: 1, y: 1 }] },
+  const action = {
+    fcurves: [{
+      id: 'face.mesh_verts',
+      rnaPath: "objects['face'].mesh_verts",
+      arrayIndex: 0,
+      keyforms: [
+        { time: 0,    value: 0, easing: 'linear', type: 'linear' },
+        { time: 1000, value: 1, easing: 'linear', type: 'linear' },
       ],
+      modifiers: [],
+      extrapolation: 'constant',
     }],
   };
-  const graph = buildDepGraph(project, { animation: bridged });
+  const graph = buildDepGraph(project, { action });
   const poseOverrides = new Map();
   evalDepGraph(graph, {
-    project, timeMs: 500, animation: bridged, poseOverrides,
+    project, timeMs: 500, action, poseOverrides,
   });
   // ANIMATION_TRACK_EVAL skips mesh_verts (returns undefined).
   // poseOverrides.face should NOT carry the mesh_verts entry.

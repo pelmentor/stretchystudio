@@ -1,15 +1,19 @@
 /**
- * Animation engine — keyframe interpolation utilities.
+ * Animation engine — keyform interpolation utilities.
  *
- * Animation data model (stored in project.animations):
+ * Action data model (stored in project.actions, post-v36):
  *   { id, name, duration (ms), fps,
- *     tracks: [{ nodeId, property, keyframes: [{ time (ms), value, easing }] }] }
+ *     fcurves: [{ rnaPath, keyforms: [{ time (ms), value, easing, type }] }] }
  *
- * Supported properties:
- *   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity' | 'visible' | 'mesh_verts' | 'blendShape:{id}'
+ * Targets (decoded via `decodeFCurveTarget` from `anim/animationFCurve.js`):
+ *   - param target  → `objects['__params__'].values['<paramId>']`
+ *   - node property → `objects['<nodeId>'].<property>` where
+ *     property ∈ 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity' |
+ *                'visible' | 'mesh_verts' | 'blendShape:{id}'
  */
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
+import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve } from '../anim/animationFCurve.js';
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -70,8 +74,18 @@ export function evaluateEasing(t, easing) {
 }
 
 /**
- * Interpolate a single track's keyframes at the given time (ms).
- * Returns undefined if no keyframes.
+ * Interpolate a single fcurve's keyforms at the given time (ms).
+ * Returns undefined if no keyforms. Operates directly on the
+ * `{time, value, easing, type}` array (post-v36 keyform shape) — the
+ * accessor surface (`kf.time` / `kf.value` / `kf.easing`) is unchanged
+ * from the legacy keyframe shape so the primitive's signature stays
+ * stable across the v36 rewire.
+ *
+ * Function name kept as `interpolateTrack` (rather than
+ * `interpolateFCurve`) to avoid colliding with the rich
+ * `evaluateFCurve` in `anim/fcurve.js` which handles BezTriples,
+ * extrapolation modes, modifiers etc. — this is the lighter ms-native
+ * interpolator the legacy SS animation engine ships with.
  */
 export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
   if (!keyframes || keyframes.length === 0) return undefined;
@@ -157,39 +171,42 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
 }
 
 /**
- * Compute pose overrides for all tracks in an animation at the given time.
+ * Compute pose overrides for all node-targeted fcurves in an action at
+ * the given time.
  *
- * Walks node-targeted tracks only — tracks carrying `paramId` (Live2D
- * parameter curves consumed by motion3json + can3writer + chainEval)
- * are handled separately by `computeParamOverrides`. Existing callers
- * (CanvasViewport / SkeletonOverlay / GizmoOverlay) consume only node
- * overrides so this split keeps them working unchanged.
+ * Walks node-targeted fcurves only — fcurves whose rnaPath decodes to a
+ * parameter target (Live2D parameter curves consumed by motion3json +
+ * can3writer + chainEval) are handled separately by
+ * `computeParamOverrides`. Existing callers (CanvasViewport /
+ * SkeletonOverlay / GizmoOverlay) consume only node overrides so this
+ * split keeps them working unchanged.
  *
- * @param {Object|null} animation  - single animation object (project.animations[i])
+ * @param {Object|null} action     - single action object (project.actions[i])
  * @param {number}      timeMs     - current playhead position in milliseconds
  * @returns {Map<string, Object>}  nodeId → {
  *   x?, y?, rotation?, scaleX?, scaleY?, opacity?,
  *   mesh_verts?: [{x,y},...]
  * }
  */
-export function computePoseOverrides(animation, timeMs, loopKeyframes = false, endMs = 0) {
+export function computePoseOverrides(action, timeMs, loopKeyframes = false, endMs = 0) {
   const overrides = new Map();
-  if (!animation) return overrides;
+  if (!action || !Array.isArray(action.fcurves)) return overrides;
 
-  for (const track of animation.tracks) {
-    // Skip parameter tracks — those go through computeParamOverrides.
-    if (track.paramId) continue;
+  for (const fc of action.fcurves) {
+    const target = decodeFCurveTarget(fc);
+    // Skip parameter targets — those go through computeParamOverrides.
+    if (!target || target.kind !== 'node') continue;
 
     let value;
-    if (track.property === 'mesh_verts') {
-      value = interpolateMeshVerts(track.keyframes, timeMs, loopKeyframes, endMs);
+    if (target.property === 'mesh_verts') {
+      value = interpolateMeshVerts(fc.keyforms, timeMs, loopKeyframes, endMs);
     } else {
-      value = interpolateTrack(track.keyframes, timeMs, loopKeyframes, endMs);
+      value = interpolateTrack(fc.keyforms, timeMs, loopKeyframes, endMs);
     }
     if (value === undefined) continue;
 
-    if (!overrides.has(track.nodeId)) overrides.set(track.nodeId, {});
-    overrides.get(track.nodeId)[track.property] = value;
+    if (!overrides.has(target.nodeId)) overrides.set(target.nodeId, {});
+    overrides.get(target.nodeId)[target.property] = value;
   }
 
   return overrides;
@@ -197,7 +214,8 @@ export function computePoseOverrides(animation, timeMs, loopKeyframes = false, e
 
 /**
  * Compute Live2D parameter value overrides at the given time. Mirrors
- * `computePoseOverrides` but for tracks with `track.paramId` set.
+ * `computePoseOverrides` but for fcurves whose rnaPath decodes to a
+ * parameter target.
  *
  * The CanvasViewport tick merges this map into `valuesForEval` BEFORE
  * chainEval runs, so the rig evaluator sees the animated parameter
@@ -205,38 +223,45 @@ export function computePoseOverrides(animation, timeMs, loopKeyframes = false, e
  * (breath, cursor look, physics) write on top of this so user-played
  * animations can still co-exist with physics jitter.
  *
- * @param {Object|null} animation
+ * @param {Object|null} action
  * @param {number}      timeMs
  * @param {boolean}     loopKeyframes
  * @param {number}      endMs
  * @returns {Map<string, number>}  paramId → value
  */
-export function computeParamOverrides(animation, timeMs, loopKeyframes = false, endMs = 0) {
+export function computeParamOverrides(action, timeMs, loopKeyframes = false, endMs = 0) {
   const overrides = new Map();
-  if (!animation) return overrides;
+  if (!action || !Array.isArray(action.fcurves)) return overrides;
 
-  for (const track of animation.tracks) {
-    if (!track.paramId) continue;
-    const v = interpolateTrack(track.keyframes, timeMs, loopKeyframes, endMs);
+  for (const fc of action.fcurves) {
+    const target = decodeFCurveTarget(fc);
+    if (!target || target.kind !== 'param') continue;
+    const v = interpolateTrack(fc.keyforms, timeMs, loopKeyframes, endMs);
     if (v === undefined) continue;
-    overrides.set(track.paramId, v);
+    overrides.set(target.paramId, v);
   }
 
   return overrides;
 }
 
 /**
- * Insert or update a keyframe in a track's keyframe array (mutates in place).
- * Keeps keyframes sorted by time.
+ * Insert or update a keyform in an fcurve's keyforms array (mutates in
+ * place). Keeps keyforms sorted by time. Derives `type` from `easing`
+ * the same way `animationFCurve.normalizeKeyforms` does so a freshly
+ * authored keyform evaluates identically to one minted by the v36
+ * migration.
  */
-export function upsertKeyframe(keyframes, timeMs, value, easing = 'ease-both') {
-  const existing = keyframes.find(kf => kf.time === timeMs);
+const HOLD_EASINGS_FOR_UPSERT = new Set(['constant', 'hold']);
+export function upsertKeyframe(keyforms, timeMs, value, easing = 'ease-both') {
+  const type = HOLD_EASINGS_FOR_UPSERT.has(easing) ? 'constant' : 'linear';
+  const existing = keyforms.find(kf => kf.time === timeMs);
   if (existing) {
     existing.value  = value;
     existing.easing = easing;
+    existing.type   = type;
   } else {
-    keyframes.push({ time: timeMs, value, easing });
-    keyframes.sort((a, b) => a.time - b.time);
+    keyforms.push({ time: timeMs, value, easing, type });
+    keyforms.sort((a, b) => a.time - b.time);
   }
 }
 
@@ -441,25 +466,40 @@ export function writeRestValues(node, updates) {
 }
 
 /**
- * Insert/update a parameter keyframe at the given time.  Finds the
- * existing param track in `animation.tracks` (by `paramId`), creates
- * one if missing, and upserts a keyframe at `timeMs`. Mutates the
- * animation in place — callers wrap in `updateProject` to snapshot
- * undo.
+ * Insert/update a parameter keyform at the given time.  Finds the
+ * existing param fcurve in `action.fcurves` (by rnaPath decoded
+ * paramId), creates one via `buildParamFCurve` if missing, and upserts
+ * a keyform at `timeMs`. Mutates the action in place — callers wrap
+ * in `updateProject` to snapshot undo.
  *
- * @param {Object} animation - mutable animation object
+ * @param {Object} action - mutable action object
  * @param {string} paramId
  * @param {number} timeMs
  * @param {number} value
  * @param {string} [easing='ease-both']
  */
-export function setParamKeyframeAt(animation, paramId, timeMs, value, easing = 'ease-both') {
-  if (!animation || !paramId) return;
-  if (!Array.isArray(animation.tracks)) animation.tracks = [];
-  let track = animation.tracks.find((t) => t.paramId === paramId);
-  if (!track) {
-    track = { paramId, keyframes: [] };
-    animation.tracks.push(track);
+export function setParamKeyframeAt(action, paramId, timeMs, value, easing = 'ease-both') {
+  if (!action || !paramId) return;
+  if (!Array.isArray(action.fcurves)) action.fcurves = [];
+  let fc = action.fcurves.find((f) => {
+    const t = decodeFCurveTarget(f);
+    return t?.kind === 'param' && t.paramId === paramId;
+  });
+  if (!fc) {
+    fc = buildParamFCurve(paramId, [], { });
+    if (!fc) {
+      // buildParamFCurve refuses an empty keyforms array; construct
+      // the empty fcurve directly so the upsert below can populate it.
+      fc = {
+        id: `param:${paramId}`,
+        rnaPath: `objects['__params__'].values['${paramId}']`,
+        arrayIndex: 0,
+        keyforms: [],
+        modifiers: [],
+        extrapolation: 'constant',
+      };
+    }
+    action.fcurves.push(fc);
   }
-  upsertKeyframe(track.keyframes, timeMs, value, easing);
+  upsertKeyframe(fc.keyforms, timeMs, value, easing);
 }

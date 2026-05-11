@@ -12,8 +12,8 @@
  * drops it because its tag no longer appears in the project), every
  * place that referenced it stays in the project as a dangling string:
  *
- *   - `project.animations[].tracks[].paramId` — motion3.json output
- *     references a property path that no parameter resolves
+ *   - `project.actions[].fcurves[]` rnaPath references — motion3.json
+ *     output references a property path that no parameter resolves
  *   - `bindings[].parameterId` inside `faceParallax`, `bodyWarp`,
  *     `rigWarps` keyform records — deformer reads default value 0
  *     silently, keyform interpolation broken
@@ -27,15 +27,20 @@
  * @module io/live2d/rig/paramReferences
  */
 
+import {
+  decodeFCurveTarget,
+  fcurveTargetsParam,
+} from '../../../anim/animationFCurve.js';
+
 /**
  * @typedef {Object} ParamReference
- * @property {('animationTrack'|'binding'|'physicsInput')} kind
+ * @property {('actionFCurve'|'binding'|'physicsInput')} kind
  *   What references the parameter — one of the three categories
  *   above.
  * @property {string} location
  *   Human-readable pointer that uniquely identifies this reference,
  *   for use in UI ("Delete this parameter? It's used in: ..."):
- *     - animation tracks: `"animation:<animId>:track[<index>]"`
+ *     - action fcurves: `"action:<actionId>:fcurve[<index>]"`
  *     - face parallax bindings: `"faceParallax:bindings[<i>]"`
  *     - body warp bindings: `"bodyWarp:specs[<i>]:bindings[<j>]"`
  *     - rig warp bindings: `"rigWarps[<partId>]:bindings[<i>]"`
@@ -48,7 +53,9 @@
 
 /**
  * @typedef {Object} ReferenceReport
- * @property {ParamReference[]} animationTracks
+ * @property {ParamReference[]} actionFCurves
+ *   FCurves in `project.actions[]` that target this parameter's
+ *   `objects['__params__'].values['<paramId>']` rnaPath.
  * @property {ParamReference[]} bindings
  *   Combined faceParallax + bodyWarp + rigWarps binding refs.
  * @property {ParamReference[]} physicsInputs
@@ -58,7 +65,7 @@
 
 function emptyReport() {
   return {
-    animationTracks: [],
+    actionFCurves: [],
     bindings: [],
     physicsInputs: [],
     total: 0,
@@ -67,7 +74,7 @@ function emptyReport() {
 
 function pushTotal(report) {
   report.total =
-    report.animationTracks.length +
+    report.actionFCurves.length +
     report.bindings.length +
     report.physicsInputs.length;
   return report;
@@ -87,18 +94,18 @@ export function findReferences(project, paramId) {
   const report = emptyReport();
   if (!project || typeof paramId !== 'string') return pushTotal(report);
 
-  // Animation tracks: track.paramId is the param reference (other
-  // tracks like 'x'/'rotation' use track.property and don't touch
-  // parameters at all).
-  for (const anim of project.animations ?? []) {
-    const tracks = anim?.tracks;
-    if (!Array.isArray(tracks)) continue;
-    for (let i = 0; i < tracks.length; i++) {
-      const track = tracks[i];
-      if (track?.paramId === paramId) {
-        report.animationTracks.push({
-          kind: 'animationTrack',
-          location: `animation:${anim.id}:track[${i}]`,
+  // Action fcurves: `fcurveTargetsParam` decodes the rnaPath and matches
+  // parameter-target fcurves only; node-target fcurves (rotation, x, …)
+  // address node properties and don't touch parameters at all.
+  for (const action of project.actions ?? []) {
+    const fcurves = action?.fcurves;
+    if (!Array.isArray(fcurves)) continue;
+    for (let i = 0; i < fcurves.length; i++) {
+      const fc = fcurves[i];
+      if (fcurveTargetsParam(fc, paramId)) {
+        report.actionFCurves.push({
+          kind: 'actionFCurve',
+          location: `action:${action.id}:fcurve[${i}]`,
         });
       }
     }
@@ -168,9 +175,10 @@ export function findOrphanReferences(project) {
 
   /** Helper: collect param ids referenced anywhere. */
   const referenced = new Set();
-  for (const anim of project.animations ?? []) {
-    for (const t of anim?.tracks ?? []) {
-      if (t?.paramId) referenced.add(t.paramId);
+  for (const action of project.actions ?? []) {
+    for (const fc of action?.fcurves ?? []) {
+      const target = decodeFCurveTarget(fc);
+      if (target?.kind === 'param') referenced.add(target.paramId);
     }
   }
   // BFA-006 Phase 6 — deformer bindings live on nodes now.

@@ -51,9 +51,9 @@ export async function saveProject(project, opts = {}) {
   }
 
   // Serialize audio tracks: fetch blob URL → store in audios/ folder
-  const serializedAnimations = project.animations.map(anim => ({
-    ...anim,
-    audioTracks: (anim.audioTracks ?? []).map(track => {
+  const serializedActions = (project.actions ?? []).map(action => ({
+    ...action,
+    audioTracks: (action.audioTracks ?? []).map(track => {
       const t = { ...track };
       if (track.sourceUrl) {
         const ext = track.mimeType ? track.mimeType.split('/')[1] : 'wav';
@@ -71,8 +71,8 @@ export async function saveProject(project, opts = {}) {
 
   // Audio blobs in parallel — same rationale as textures.
   const audioFetches = [];
-  for (const anim of serializedAnimations) {
-    for (const track of anim.audioTracks) {
+  for (const action of serializedActions) {
+    for (const track of action.audioTracks) {
       if (track._sourceBlob) {
         audioFetches.push((async () => {
           try {
@@ -115,7 +115,7 @@ export async function saveProject(project, opts = {}) {
     canvas: project.canvas,
     textures: serializedTextures,
     nodes: serializedNodes,
-    animations: serializedAnimations,
+    actions: serializedActions,
     parameters: project.parameters ?? [],
     physics_groups: project.physics_groups ?? [],
     maskConfigs: project.maskConfigs ?? [],
@@ -215,10 +215,12 @@ export async function loadProject(file, opts = {}) {
     }
   }
 
-  // Audio tracks in parallel — same rationale.
+  // Audio tracks in parallel — same rationale. Post-v36 the field is
+  // `project.actions` (Action datablocks); older saves are migrated by
+  // `migrateProject` above before we get here.
   const audioRestores = [];
-  for (const anim of project.animations) {
-    for (const track of anim.audioTracks) {
+  for (const action of project.actions ?? []) {
+    for (const track of action.audioTracks ?? []) {
       if (track.source) {
         audioRestores.push((async () => {
           try {

@@ -97,7 +97,7 @@ export async function generateCmo3(input) {
   const {
     canvasW, canvasH, meshes,
     groups = [], parameters = [],
-    animations = [],
+    actions = [],
     modelName = 'StretchyStudio Export',
     generateRig = false,
     // Physics: emits CPhysicsSettingsSourceSet (hair/skirt pendulums). Off by
@@ -224,7 +224,7 @@ export async function generateCmo3(input) {
   const ctx = createEmitContext({
     x,
     canvasW, canvasH, meshes,
-    groups, parameters, animations,
+    groups, parameters, actions,
     modelName, generateRig, rigOnly,
     maskConfigs, physicsRules,
     bakedKeyformAngles, autoRigConfig,
@@ -632,7 +632,7 @@ export async function generateCmo3(input) {
   // Weighting. Returns the partId → pidWarpDfGuid map that section 4
   // consults when routing meshes to their own warp parent.
   const { meshWarpDeformerGuids } = emitMeshVertsWarpDeformers(x, {
-    animations, meshes, perMesh,
+    actions, meshes, perMesh,
     deformerWorldOrigins, groupDeformerGuids, groupPartGuids,
     groupParts, rootPart,
     allDeformerSources, paramDefs, deformerParamMap,

@@ -44,7 +44,7 @@ import { validateProjectForExport } from '../../io/exportValidation.js';
 import {
   computeExportFrameSpecs,
   computeAnalyticalBounds,
-  resolveAnimations,
+  resolveActions,
   exportFrames,
 } from '../../io/exportAnimation.js';
 import { generateMotion3Json } from '../../io/live2d/motion3json.js';
@@ -202,7 +202,7 @@ export function ExportModal() {
   // hasUnsavedChanges flag flips on every edit so this is essentially
   // free.
   const project = useProjectStore((s) => s.project);
-  const activeAnimationId = useAnimationStore((s) => s.activeAnimationId);
+  const activeActionId = useAnimationStore((s) => s.activeActionId);
   const [format, setFormat] = useState('live2d-full');
   const [dataLayer, setDataLayer] = useState('project');  // GAP-009
   const [busy, setBusy] = useState(false);
@@ -238,8 +238,8 @@ export function ExportModal() {
 
   // Frame-range derivation for the single-frame slider.
   const targetAnims = useMemo(
-    () => resolveAnimations(project.animations ?? [], animTarget, activeAnimationId),
-    [project.animations, animTarget, activeAnimationId],
+    () => resolveActions(project.actions ?? [], animTarget, activeActionId),
+    [project.actions, animTarget, activeActionId],
   );
   const maxDuration = targetAnims.length > 0
     ? Math.max(...targetAnims.map((a) => a.duration ?? 2000))
@@ -261,17 +261,17 @@ export function ExportModal() {
     setError(null);
     setOverrideErrors(false);
     setProgress(null);
-    if ((project.animations ?? []).length === 0) {
+    if ((project.actions ?? []).length === 0) {
       setAnimTarget('staging');
     }
-    const activeAnim = (project.animations ?? []).find((a) => a.id === activeAnimationId);
-    if (activeAnim?.fps && Number.isFinite(activeAnim.fps)) {
-      setExportFps(activeAnim.fps);
+    const activeAction = (project.actions ?? []).find((a) => a.id === activeActionId);
+    if (activeAction?.fps && Number.isFinite(activeAction.fps)) {
+      setExportFps(activeAction.fps);
     }
     const hasBg = project.canvas?.bgEnabled === true;
     setBgMode(hasBg ? 'custom' : 'transparent');
     setBgColor(project.canvas?.bgColor ?? '#ffffff');
-  }, [open, project, activeAnimationId]);
+  }, [open, project, activeActionId]);
 
   async function handleExport() {
     if (isFrameFormat) {
@@ -325,7 +325,7 @@ export function ExportModal() {
   /**
    * 2026-05-05 — frame export handler. Mirrors the upstream
    * `handleExport` flow for type='sequence' / type='single_frame':
-   *   1. Resolve animations to render via `resolveAnimations`.
+   *   1. Resolve animations to render via `resolveActions`.
    *   2. Compute frame specs (one per (anim, frameIndex)).
    *   3. Compute output canvas size from `imageContains` + `outputScale`.
    *   4. For each spec, call `captureStore.captureExportFrame` to
@@ -347,10 +347,10 @@ export function ExportModal() {
         setProgress(null);
         return;
       }
-      const animsToExport = resolveAnimations(
-        proj.animations ?? [], animTarget, activeAnimationId,
+      const actionsToExport = resolveActions(
+        proj.actions ?? [], animTarget, activeActionId,
       );
-      if (animsToExport.length === 0) {
+      if (actionsToExport.length === 0) {
         setError('No animations selected to export.');
         setBusy(false);
         setProgress(null);
@@ -358,7 +358,7 @@ export function ExportModal() {
       }
       const specs = computeExportFrameSpecs({
         type: isSingleFrame ? 'single_frame' : 'sequence',
-        animsToExport,
+        actionsToExport,
         exportFps,
         frameIndex,
       });
@@ -433,7 +433,7 @@ export function ExportModal() {
    * `<sanitizedAnimName>.motion3.json` files.
    *
    * No rig writer involved — pure conversion of the project's
-   * animation tracks into Cubism's segment-encoded curve format.
+   * action fcurves into Cubism's segment-encoded curve format.
    * If the user picked a single animation and only one survives the
    * generator, we download it directly instead of zipping.
    */
@@ -443,11 +443,11 @@ export function ExportModal() {
     setProgress({ current: 0, total: 1, label: 'Resolving animations…' });
     try {
       const proj = useProjectStore.getState().project;
-      const animsToExport = resolveAnimations(
-        proj.animations ?? [], animTarget, activeAnimationId,
-      ).filter((a) => a && a.id !== 'staging');  // staging has no tracks; skip
+      const actionsToExport = resolveActions(
+        proj.actions ?? [], animTarget, activeActionId,
+      ).filter((a) => a && a.id !== 'staging');  // staging has no fcurves; skip
 
-      if (animsToExport.length === 0) {
+      if (actionsToExport.length === 0) {
         setError('No animations to export. Create one first or pick a different target.');
         setBusy(false);
         setProgress(null);
@@ -461,8 +461,8 @@ export function ExportModal() {
         .replace(/^_+|_+$/g, '');
 
       // Single anim → direct download.
-      if (animsToExport.length === 1) {
-        const anim = animsToExport[0];
+      if (actionsToExport.length === 1) {
+        const anim = actionsToExport[0];
         setProgress({ current: 1, total: 1, label: `Generating ${anim.name}…` });
         const json = generateMotion3Json(anim);
         const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
@@ -476,19 +476,19 @@ export function ExportModal() {
       // Multi-anim → zip.
       const { default: JSZip } = await import('jszip');
       const zip = new JSZip();
-      for (let i = 0; i < animsToExport.length; i++) {
-        const anim = animsToExport[i];
+      for (let i = 0; i < actionsToExport.length; i++) {
+        const anim = actionsToExport[i];
         setProgress({
           current: i + 1,
-          total: animsToExport.length,
-          label: `Generating ${anim.name} (${i + 1}/${animsToExport.length})`,
+          total: actionsToExport.length,
+          label: `Generating ${anim.name} (${i + 1}/${actionsToExport.length})`,
         });
         const json = generateMotion3Json(anim);
         zip.file(`${safe(anim.name)}.motion3.json`, JSON.stringify(json, null, 2));
         // Yield to the browser so the progress bar paints.
         await new Promise((r) => setTimeout(r, 0));
       }
-      setProgress({ current: animsToExport.length, total: animsToExport.length, label: 'Generating zip…' });
+      setProgress({ current: actionsToExport.length, total: actionsToExport.length, label: 'Generating zip…' });
       const blob = await zip.generateAsync({ type: 'blob' });
       triggerDownload(blob, `${baseName}_motions.zip`);
 
@@ -761,7 +761,7 @@ function IssueRow({ issue, onJump }) {
 /**
  * 2026-05-05 — Frame export option panel. Surfaces:
  *   - Animation target (current / all / staging) + per-anim picker
- *     when project.animations has more than one animation.
+ *     when project.actions has more than one action.
  *   - FPS (sequence only).
  *   - Frame index slider (single-frame only).
  *   - Output framing (canvas-area vs tight-crop).
@@ -790,7 +790,7 @@ function FrameExportControls(props) {
     exportDest, setExportDest,
   } = props;
 
-  const animations = project.animations ?? [];
+  const animations = project.actions ?? [];
   const hasFolderPicker = typeof window !== 'undefined'
     && typeof window.showDirectoryPicker === 'function';
 
@@ -964,7 +964,7 @@ function FrameExportControls(props) {
  * }} props
  */
 function Motion3ExportControls({ project, animTarget, setAnimTarget }) {
-  const animations = project.animations ?? [];
+  const animations = project.actions ?? [];
   const targetCount = animations.length;
   return (
     <div className="border border-border rounded p-3 mt-1 flex flex-col gap-2">

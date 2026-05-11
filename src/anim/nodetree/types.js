@@ -89,7 +89,7 @@ export const NodeTreeType = Object.freeze({
  * @property {NodeTreeNode[]} nodes
  * @property {Link[]} links
  * @property {string} [partId]    - for RigTree: the part this tree belongs to
- * @property {string} [animationId] - for AnimationTree: the clip
+ * @property {string} [actionId] - for AnimationTree: the action
  */
 
 /**

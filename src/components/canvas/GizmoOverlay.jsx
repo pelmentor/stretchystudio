@@ -40,10 +40,10 @@ export function GizmoOverlay() {
   // so always read the viewport tab's view.
   const view          = useEditorStore(s => s.viewByMode.viewport);
   const nodes         = useProjectStore(s => s.project.nodes);
-  const animations    = useProjectStore(s => s.project.animations);
+  const actions       = useProjectStore(s => s.project.actions);
   const updateProject = useProjectStore(s => s.updateProject);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
-  const animActiveAnimationId = useAnimationStore(s => s.activeAnimationId);
+  const animActiveActionId    = useAnimationStore(s => s.activeActionId);
   const animDraftPose         = useAnimationStore(s => s.draftPose);
   const animLoopKeyframes     = useAnimationStore(s => s.loopKeyframes);
   const animFps               = useAnimationStore(s => s.fps);
@@ -65,9 +65,9 @@ export function GizmoOverlay() {
   // bones, `transform` for non-bones (schema v17+).
   const effectiveNodes = useMemo(() => {
     if (editorMode !== 'animation') return nodes;
-    const activeAnim = animations.find(a => a.id === animActiveAnimationId) ?? null;
+    const activeAction = actions.find(a => a.id === animActiveActionId) ?? null;
     const endMs = (animEndFrame / animFps) * 1000;
-    const overrides  = computePoseOverrides(activeAnim, animCurrentTime, animLoopKeyframes, endMs);
+    const overrides  = computePoseOverrides(activeAction, animCurrentTime, animLoopKeyframes, endMs);
     const hasDraft   = animDraftPose.size > 0;
     if (!overrides.size && !hasDraft) return nodes;
     return nodes.map(node => {
@@ -79,7 +79,7 @@ export function GizmoOverlay() {
       if (dr) n = applyOverrideToNode(n, dr);
       return n;
     });
-  }, [editorMode, nodes, animations, animActiveAnimationId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
+  }, [editorMode, nodes, actions, animActiveActionId, animCurrentTime, animDraftPose, animLoopKeyframes, animFps, animEndFrame]);
 
   // Only show in select mode with exactly one selection
   const selectedNode = (toolMode === 'select' && selection.length === 1)

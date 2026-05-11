@@ -234,8 +234,8 @@ export function ParameterTab({ parameterId }) {
           {refs.bindings.length > 0 ? (
             <RefList title="Deformer bindings" refs={refs.bindings} />
           ) : null}
-          {refs.animationTracks.length > 0 ? (
-            <RefList title="Animation tracks" refs={refs.animationTracks} />
+          {refs.actionFCurves.length > 0 ? (
+            <RefList title="Action FCurves" refs={refs.actionFCurves} />
           ) : null}
           {refs.physicsInputs.length > 0 ? (
             <RefList title="Physics inputs" refs={refs.physicsInputs} />

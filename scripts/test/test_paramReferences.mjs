@@ -1,7 +1,7 @@
 // GAP-013 / Hole I-3 — paramReferences module unit tests.
 //
 // Verifies:
-//   - findReferences enumerates the three categories (animationTracks,
+//   - findReferences enumerates the three categories (actionFCurves,
 //     bindings, physicsInputs) correctly
 //   - empty/malformed inputs return empty report without throwing
 //   - findOrphanReferences detects references with no matching parameter
@@ -10,12 +10,16 @@
 //   - unconditional standard params + ParamRotation_* prefix ARE
 //     allowlisted
 //
+// Post-v36: walks `project.actions[].fcurves[]` (with rnaPath addressing)
+// instead of legacy `project.animations[].tracks[].paramId`.
+//
 // Run: node scripts/test/test_paramReferences.mjs
 
 import {
   findReferences,
   findOrphanReferences,
 } from '../../src/io/live2d/rig/paramReferences.js';
+import { buildParamFCurve, buildNodeFCurve } from '../../src/anim/animationFCurve.js';
 
 let passed = 0;
 let failed = 0;
@@ -28,25 +32,27 @@ function assert(cond, name) {
   console.error(`FAIL: ${name}`);
 }
 
-// ── findReferences: animation tracks ───────────────────────────────
+// ── findReferences: action fcurves ─────────────────────────────────
 {
   const project = {
-    animations: [
+    actions: [
       {
         id: 'anim1',
-        tracks: [
-          { nodeId: 'g1', property: 'x' },                    // not a param ref
-          { paramId: 'ParamAngleX' },                         // hit
-          { paramId: 'ParamSmile' },                          // not the target
-          { paramId: 'ParamAngleX' },                         // second hit
+        fcurves: [
+          buildNodeFCurve('g1', 'x', [{ time: 0, value: 0 }]),                // not a param ref
+          buildParamFCurve('ParamAngleX', [{ time: 0, value: 0 }]),           // hit
+          buildParamFCurve('ParamSmile', [{ time: 0, value: 0 }]),            // not the target
+          buildParamFCurve('ParamAngleX', [{ time: 0, value: 0 }]),           // second hit
         ],
       },
     ],
   };
   const r = findReferences(project, 'ParamAngleX');
-  assert(r.animationTracks.length === 2, 'animationTracks: 2 hits for ParamAngleX');
-  assert(r.animationTracks[0].location === 'animation:anim1:track[1]', 'first hit at track[1]');
-  assert(r.animationTracks[1].location === 'animation:anim1:track[3]', 'second hit at track[3]');
+  assert(r.actionFCurves.length === 2, `actionFCurves: 2 hits for ParamAngleX (got ${r.actionFCurves.length})`);
+  assert(r.actionFCurves[0].location === 'action:anim1:fcurve[1]',
+    `first hit at fcurve[1] (got ${r.actionFCurves[0].location})`);
+  assert(r.actionFCurves[1].location === 'action:anim1:fcurve[3]',
+    `second hit at fcurve[3] (got ${r.actionFCurves[1].location})`);
   assert(r.bindings.length === 0, 'no binding hits');
   assert(r.physicsInputs.length === 0, 'no physics hits');
   assert(r.total === 2, 'total = 2');
@@ -54,8 +60,6 @@ function assert(cond, name) {
 
 // ── findReferences: bindings on deformer nodes (BFA-006 Phase 6) ─────
 {
-  // Bindings live on `project.nodes` deformer entries; locations are
-  // reported as `deformer[<id>]:bindings[<idx>]`.
   const project = {
     nodes: [
       { id: 'FaceParallax', type: 'deformer', deformerKind: 'warp',
@@ -102,7 +106,7 @@ function assert(cond, name) {
           { paramId: 'ParamAngleX', weight: 60 },
           { paramId: 'ParamAngleZ', weight: 60 },
         ],
-        outputs: ['hair-front-1'],  // outputs are bone names, not params
+        outputs: ['hair-front-1'],
       },
       {
         inputs: [{ paramId: 'ParamAngleX', weight: 100 }],
@@ -126,25 +130,22 @@ function assert(cond, name) {
 {
   const project = {
     parameters: [
-      { id: 'ParamMyCustom' },                                // exists
-      // ParamSmile NOT in list → orphan if referenced
-      // ParamHairFront NOT in list (tag gating dropped it) → orphan
-      // ParamAngleX NOT in list → but allowlisted as unconditional standard
+      { id: 'ParamMyCustom' },
     ],
-    animations: [
+    actions: [
       {
         id: 'anim1',
-        tracks: [
-          { paramId: 'ParamMyCustom' },                       // OK
-          { paramId: 'ParamSmile' },                          // ORPHAN
-          { paramId: 'ParamAngleX' },                         // unconditional standard — NOT orphan
-          { paramId: 'ParamHairFront' },                      // tag-gated standard — IS orphan
-          { paramId: 'ParamRotation_neck' },                  // bone rot prefix — NOT orphan
+        fcurves: [
+          buildParamFCurve('ParamMyCustom', [{ time: 0, value: 0 }]),         // OK
+          buildParamFCurve('ParamSmile', [{ time: 0, value: 0 }]),            // ORPHAN
+          buildParamFCurve('ParamAngleX', [{ time: 0, value: 0 }]),           // unconditional standard — NOT orphan
+          buildParamFCurve('ParamHairFront', [{ time: 0, value: 0 }]),        // tag-gated standard — IS orphan
+          buildParamFCurve('ParamRotation_neck', [{ time: 0, value: 0 }]),    // bone rot prefix — NOT orphan
         ],
       },
     ],
     physicsRules: [
-      { inputs: [{ paramId: 'ParamPhantomDriver' }] },        // ORPHAN
+      { inputs: [{ paramId: 'ParamPhantomDriver' }] },
     ],
   };
   const orphans = findOrphanReferences(project);
@@ -157,7 +158,7 @@ function assert(cond, name) {
   assert(!ids.includes('ParamMyCustom'), 'present ParamMyCustom NOT orphan');
   assert(!ids.includes('ParamRotation_neck'), 'ParamRotation_* NOT orphan');
 
-  assert(orphans.ParamSmile.animationTracks.length === 1, 'ParamSmile orphan has its animation ref');
+  assert(orphans.ParamSmile.actionFCurves.length === 1, 'ParamSmile orphan has its action ref');
   assert(orphans.ParamPhantomDriver.physicsInputs.length === 1, 'ParamPhantomDriver has its physics ref');
 }
 
@@ -165,8 +166,11 @@ function assert(cond, name) {
 {
   const project = {
     parameters: [{ id: 'ParamX' }],
-    animations: [
-      { id: 'a1', tracks: [{ paramId: 'ParamX' }, { paramId: 'ParamAngleX' }] },
+    actions: [
+      { id: 'a1', fcurves: [
+        buildParamFCurve('ParamX', [{ time: 0, value: 0 }]),
+        buildParamFCurve('ParamAngleX', [{ time: 0, value: 0 }]),
+      ] },
     ],
   };
   const orphans = findOrphanReferences(project);

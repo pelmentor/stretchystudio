@@ -19,6 +19,7 @@ import {
 import {
   encodeKeyframesToSegments, countSegmentsAndPoints,
 } from '../motion3json.js';
+import { buildParamFCurve } from '../../../anim/animationFCurve.js';
 
 export { PERSONALITY_PRESETS, PRESET_NAMES, PRESETS, isImplicitlySkipped };
 
@@ -301,24 +302,26 @@ export function buildIdleMotion3(opts) {
 }
 
 
-/* ── SS animation conversion ─────────────────────────────────────────── */
+/* ── SS action conversion ────────────────────────────────────────────── */
 
 /**
- * Convert a `buildMotion3` result into a Stretchy Studio animation shape that
- * drops straight into `project.animations` (or an analogous array passed to
- * `generateCan3` / `generateMotion3Json`).
+ * Convert a `buildMotion3` result into a Stretchy Studio v36 action shape
+ * that drops straight into `project.actions` (or an analogous array passed
+ * to `generateCan3` / `generateMotion3Json`).
  *
- * Tracks use the first-class `parameter` track shape:
- *   `{ paramId, min, max, rest, keyframes }`
+ * Each animated paramId becomes one parameter-target FCurve via
+ * `buildParamFCurve`. Per-param min/max/rest ranges live on `paramRanges`
+ * in the returned object (no longer attached per-curve — the v36 Action /
+ * FCurve schema doesn't carry per-curve range metadata).
  *
  * @param {BuildMotionResult} result
  * @param {object} [opts]
- * @param {string} [opts.name]         - Scene/animation name; defaults to the preset's `label`
+ * @param {string} [opts.name]         - Scene/action name; defaults to the preset's `label`
  * @param {number} [opts.durationMs]   - Override duration; defaults to result motion3 duration × 1000
  * @param {number} [opts.fps]          - Override fps; defaults to result motion3 fps
- * @returns {{animation: object}}
+ * @returns {{action: object}}
  */
-export function resultToSsAnimation(result, opts = {}) {
+export function resultToSsAction(result, opts = {}) {
   const presetEntry = PRESETS[result.preset];
   const defaultName = presetEntry?.label ?? result.preset ?? 'Motion';
   const {
@@ -327,31 +330,26 @@ export function resultToSsAnimation(result, opts = {}) {
     fps = result.motion3.Meta.Fps ?? 30,
   } = opts;
 
-  const tracks = [];
+  const fcurves = [];
   for (const [paramId, kfs] of result.paramKeyframes) {
-    const range = result.paramRanges.get(paramId);
-    if (!range) continue;
-    tracks.push({
-      paramId,
-      min: range.min,
-      max: range.max,
-      rest: range.rest,
-      keyframes: kfs,
-    });
+    const fc = buildParamFCurve(paramId, kfs);
+    if (fc) fcurves.push(fc);
   }
 
-  const animation = {
+  const action = {
     id: `__motion_${result.preset}_${Date.now()}`,
     name,
     duration: durationMs,
     fps,
-    tracks,
+    fcurves,
+    audioTracks: [],
+    flag: 0,
+    meta: {
+      createdAt: null,
+      modifiedAt: null,
+      source: 'idle_generator',
+    },
   };
 
-  return { animation };
-}
-
-/** Backwards-compatible alias. */
-export function idleResultToSsAnimation(result, opts = {}) {
-  return resultToSsAnimation(result, opts);
+  return { action };
 }

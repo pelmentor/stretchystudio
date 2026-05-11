@@ -1,6 +1,6 @@
 // v3 Phase 0F.34 - tests for the pure helpers in src/io/exportAnimation.js
 //
-// computeExportFrameSpecs / computeAnalyticalBounds / resolveAnimations
+// computeExportFrameSpecs / computeAnalyticalBounds / resolveActions
 // are pure planners for the animation export pipeline. exportFrames
 // itself uses DOM (document.createElement, JSZip) and is skipped here.
 //
@@ -9,7 +9,7 @@
 import {
   computeExportFrameSpecs,
   computeAnalyticalBounds,
-  resolveAnimations,
+  resolveActions,
 } from '../../src/io/exportAnimation.js';
 
 let passed = 0;
@@ -30,7 +30,7 @@ function near(a, b, eps = 1e-6) {
 {
   const specs = computeExportFrameSpecs({
     type: 'single_frame',
-    animsToExport: [{ id: 'a1', name: 'Wave', duration: 2000 }],
+    actionsToExport: [{ id: 'a1', name: 'Wave', duration: 2000 }],
     exportFps: 30,
     frameIndex: 15,
   });
@@ -44,7 +44,7 @@ function near(a, b, eps = 1e-6) {
   // Beyond duration — clamp to duration
   const specs = computeExportFrameSpecs({
     type: 'single_frame',
-    animsToExport: [{ id: 'a1', name: 'Short', duration: 1000 }],
+    actionsToExport: [{ id: 'a1', name: 'Short', duration: 1000 }],
     exportFps: 30,
     frameIndex: 100,  // 3.33s, beyond the 1s duration
   });
@@ -55,7 +55,7 @@ function near(a, b, eps = 1e-6) {
   // Multiple animations
   const specs = computeExportFrameSpecs({
     type: 'single_frame',
-    animsToExport: [
+    actionsToExport: [
       { id: 'a1', name: 'A', duration: 2000 },
       { id: 'a2', name: 'B', duration: 1000 },
     ],
@@ -70,7 +70,7 @@ function near(a, b, eps = 1e-6) {
 {
   const specs = computeExportFrameSpecs({
     type: 'sequence',
-    animsToExport: [{ id: 'a1', name: 'Loop', duration: 1000 }],
+    actionsToExport: [{ id: 'a1', name: 'Loop', duration: 1000 }],
     exportFps: 24,
   });
   // 1000ms × 24fps = 24 frames
@@ -87,7 +87,7 @@ function near(a, b, eps = 1e-6) {
   // Default duration = 2000 when missing
   const specs = computeExportFrameSpecs({
     type: 'sequence',
-    animsToExport: [{ id: 'a1', name: 'NoDuration' }],
+    actionsToExport: [{ id: 'a1', name: 'NoDuration' }],
     exportFps: 30,
   });
   // 2000ms × 30fps = 60 frames
@@ -98,7 +98,7 @@ function near(a, b, eps = 1e-6) {
   // Multi-anim sequence
   const specs = computeExportFrameSpecs({
     type: 'sequence',
-    animsToExport: [
+    actionsToExport: [
       { id: 'a1', name: 'A', duration: 1000 },
       { id: 'a2', name: 'B', duration: 500 },
     ],
@@ -119,9 +119,9 @@ function near(a, b, eps = 1e-6) {
 
 {
   const specs = computeExportFrameSpecs({
-    type: 'sequence', animsToExport: [], exportFps: 30,
+    type: 'sequence', actionsToExport: [], exportFps: 30,
   });
-  assert(specs.length === 0, 'empty animsToExport → 0 specs');
+  assert(specs.length === 0, 'empty actionsToExport → 0 specs');
 }
 
 // ── computeAnalyticalBounds: empty / null project ────────────────
@@ -217,7 +217,7 @@ function near(a, b, eps = 1e-6) {
   assert(b.width === 60 && b.height === 40, 'bounds: zero-dim parts skipped');
 }
 
-// ── resolveAnimations ────────────────────────────────────────────
+// ── resolveActions ────────────────────────────────────────────
 
 {
   const anims = [
@@ -226,29 +226,29 @@ function near(a, b, eps = 1e-6) {
   ];
 
   // 'staging' → synthesised single entry
-  const stage = resolveAnimations(anims, 'staging', null);
+  const stage = resolveActions(anims, 'staging', null);
   assert(stage.length === 1 && stage[0].id === 'staging', 'resolve: staging → synth entry');
 
   // 'current' → activeId match, fallback to anims[0]
-  const cur1 = resolveAnimations(anims, 'current', 'a2');
+  const cur1 = resolveActions(anims, 'current', 'a2');
   assert(cur1[0].id === 'a2', 'resolve: current → match by activeId');
-  const cur2 = resolveAnimations(anims, 'current', null);
+  const cur2 = resolveActions(anims, 'current', null);
   assert(cur2[0].id === 'a1', 'resolve: current with null activeId → anims[0]');
-  const cur3 = resolveAnimations(anims, 'current', 'a-missing');
+  const cur3 = resolveActions(anims, 'current', 'a-missing');
   assert(cur3[0].id === 'a1', 'resolve: current with missing activeId → anims[0]');
-  const cur4 = resolveAnimations([], 'current', 'a1');
+  const cur4 = resolveActions([], 'current', 'a1');
   assert(cur4.length === 0, 'resolve: current with empty anims → []');
 
   // 'all'
-  const all = resolveAnimations(anims, 'all');
+  const all = resolveActions(anims, 'all');
   assert(all.length === 2, 'resolve: all → all anims');
 
   // Specific id
-  const spec = resolveAnimations(anims, 'a1', null);
+  const spec = resolveActions(anims, 'a1', null);
   assert(spec.length === 1 && spec[0].id === 'a1', 'resolve: specific id');
 
   // Missing specific id → []
-  const missing = resolveAnimations(anims, 'a-missing', null);
+  const missing = resolveActions(anims, 'a-missing', null);
   assert(missing.length === 0, 'resolve: missing specific → []');
 }
 
