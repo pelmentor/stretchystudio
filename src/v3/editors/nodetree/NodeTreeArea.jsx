@@ -1,25 +1,40 @@
 // @ts-check
 
 /**
- * V2 Phase N-4 / final wire (2026-05-07) — NodeTree editor area host.
+ * V2 Phase N-4 / Stage 1.F (pre-exit) — NodeTree editor area host.
  *
  * Mounted as the `nodeTree` editor type (see `editorRegistry.js`).
  * Owns the local mode pill that flips between RigTree / DriverTree /
  * AnimationTree views and routes the active selection's tree into
  * the shared, read-only `NodeTreeEditor` SVG renderer.
  *
- * Selection sources:
- *  - Rig: `editorStore.selection[0]` interpreted as a partId.
- *  - Driver: `editorStore.selection[0]` interpreted as a paramId.
- *    (UX limitation in v1: selecting a parameter is a Parameters-panel
- *     concern that landed post-N-4. Until that lands, the user picks
- *     a paramId from a small dropdown sourced from `nodeTrees.driver`.)
- *  - Animation: scene-bound action wins, falling back to
- *    `animationStore.activeActionId` (Stage 1.E rewire 2026-05-11).
+ * # Post-v38 retirement
  *
- * No edit ops yet — the underlying datablocks are still derived from
- * the legacy mirrors (modifiers / drivers / animations). Phase N-5
- * lands edit ops behind a separate flag (`riggingPath: 'nodeTree'`).
+ * Pre-v38 the area read `project.nodeTrees.{rig,driver,animation}` —
+ * a dual-write shadow populated by v22 / v23 / v24 migrations. Post-v38
+ * (Animation Phase 1 Stage 1.F pre-exit) the persisted shadow is gone;
+ * each mode derives its tree on-the-fly from canonical state:
+ *
+ *  - rig:       `buildRigTreeForPart(part)` walks `part.modifiers[]`
+ *               (the canonical post-v20 Blender-style modifier stack).
+ *  - driver:    `compileDriverTree(paramId, param.driver)` parses the
+ *               driver's expression into a graph.
+ *  - animation: `compileAnimationTree(action)` walks the action's
+ *               `fcurves[]` (the canonical post-v36 Action datablock
+ *               shape; scene-bound action wins via
+ *               `getActiveSceneAction`, UI store fallback).
+ *
+ * The compile passes are pure functions; the area memoises per-mode
+ * via `useMemo` with narrow deps so the tree only rebuilds when its
+ * canonical source changes. Cheap — even a 100-part project rebuilds
+ * one rig tree per render (linear in modifier count, ~20 nodes max).
+ *
+ * # Read-only surface
+ *
+ * No edit ops — the visual editor is a read-only inspector for the
+ * three derived graphs. Edits flow back through the canonical sources
+ * (modifier-stack mutations on parts, driver-expression edits on
+ * parameters, fcurve edits in DopesheetEditor / FCurveEditor).
  *
  * @module v3/editors/nodetree/NodeTreeArea
  */
@@ -29,7 +44,18 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
+import { buildRigTreeForPart } from '../../../anim/nodetree/build.js';
+import { compileDriverTree } from '../../../anim/nodetree/driverCompile.js';
+import { compileAnimationTree } from '../../../anim/nodetree/animationCompile.js';
 import { NodeTreeEditor } from './NodeTreeEditor.jsx';
+
+// Side-effect imports: register the driver + animation node types so
+// `NodeTreeEditor`'s `getNodeType` calls resolve their labels. Pre-v38
+// these were side-effect-imported by v23 + v24 migrations; post-v38
+// the migrations are gone, and the editor area is the canonical
+// consumer entrypoint.
+import '../../../anim/nodetree/nodes/drivers.js';
+import '../../../anim/nodetree/nodes/animation.js';
 
 /** @type {Array<{ id: 'rig'|'driver'|'animation', label: string }>} */
 const MODES = [
@@ -44,45 +70,59 @@ export function NodeTreeArea() {
   const project = useProjectStore((s) => s.project);
   const selectionHead = useEditorStore((s) => (Array.isArray(s.selection) && s.selection.length > 0 ? s.selection[0] : null));
   const uiActiveActionId = useAnimationStore((s) => s.activeActionId);
-  // Stage 1.E: scene-bound action wins over UI-store fallback. The
-  // legacy `project.nodeTrees.animation` shadow trees are keyed by
-  // action id; resolution order is identical to the rest of the
-  // editor surface — `__scene__.animData.actionId` first, then the
-  // UI store's last-clicked id.
+
+  // Stage 1.E rewire: scene-bound action wins over UI-store fallback.
+  // Resolution is the same as every other editor surface —
+  // `__scene__.animData.actionId` first, then the UI store's last-clicked id.
   const activeActionId = useMemo(
     () => getActiveSceneAction(project, uiActiveActionId)?.id ?? null,
     [project.nodes, project.actions, uiActiveActionId],
   );
 
   // Driver mode — when selection isn't a paramId, fall back to the
-  // first driverTree key so the user sees a non-empty graph instead
-  // of the "No tree" empty-state.
+  // first driven param so the user sees a non-empty graph instead of
+  // the "No tree" empty-state.
   const [driverFallbackId, setDriverFallbackId] = useState(/** @type {string|null} */ (null));
 
-  const trees = project?.nodeTrees ?? null;
+  // Enumerate driven parameter ids on the fly (no persisted shadow).
+  const driverIds = useMemo(() => {
+    const params = Array.isArray(project?.parameters) ? project.parameters : [];
+    return params.filter((p) => p && p.driver).map((p) => p.id);
+  }, [project.parameters]);
 
+  // Derive the active tree on the fly from canonical sources.
   const tree = useMemo(() => {
-    if (!trees) return null;
     if (mode === 'rig') {
-      const dict = trees.rig ?? {};
-      if (selectionHead && dict[selectionHead]) return dict[selectionHead];
-      return null;
+      if (!selectionHead) return null;
+      const part = (project?.nodes ?? []).find((n) => n?.id === selectionHead && n?.type === 'part');
+      if (!part) return null;
+      return buildRigTreeForPart(part);
     }
     if (mode === 'driver') {
-      const dict = trees.driver ?? {};
-      if (selectionHead && dict[selectionHead]) return dict[selectionHead];
-      if (driverFallbackId && dict[driverFallbackId]) return dict[driverFallbackId];
-      const firstKey = Object.keys(dict)[0];
-      return firstKey ? dict[firstKey] : null;
+      const params = Array.isArray(project?.parameters) ? project.parameters : [];
+      const pickId =
+        (selectionHead && params.some((p) => p?.id === selectionHead && p?.driver))
+          ? selectionHead
+          : (driverFallbackId && params.some((p) => p?.id === driverFallbackId && p?.driver))
+            ? driverFallbackId
+            : driverIds[0] ?? null;
+      if (!pickId) return null;
+      const param = params.find((p) => p?.id === pickId);
+      if (!param || !param.driver) return null;
+      return compileDriverTree(pickId, param.driver);
     }
     if (mode === 'animation') {
-      const dict = trees.animation ?? {};
-      if (activeActionId && dict[activeActionId]) return dict[activeActionId];
-      const firstKey = Object.keys(dict)[0];
-      return firstKey ? dict[firstKey] : null;
+      const actions = Array.isArray(project?.actions) ? project.actions : [];
+      const pickId = activeActionId && actions.some((a) => a?.id === activeActionId)
+        ? activeActionId
+        : actions[0]?.id ?? null;
+      if (!pickId) return null;
+      const action = actions.find((a) => a?.id === pickId);
+      if (!action) return null;
+      return compileAnimationTree(action);
     }
     return null;
-  }, [trees, mode, selectionHead, activeActionId, driverFallbackId]);
+  }, [mode, project.nodes, project.parameters, project.actions, selectionHead, activeActionId, driverFallbackId, driverIds]);
 
   const subtitle = useMemo(() => {
     if (mode === 'rig') {
@@ -90,22 +130,15 @@ export function NodeTreeArea() {
       return `RigTree · part ${selectionHead}`;
     }
     if (mode === 'driver') {
-      const dict = trees?.driver ?? {};
-      const id = (selectionHead && dict[selectionHead]) ? selectionHead
-        : (driverFallbackId && dict[driverFallbackId]) ? driverFallbackId
-        : Object.keys(dict)[0] ?? null;
+      const id = tree?.id?.replace(/^driver:/, '') ?? null;
       return id ? `DriverTree · ${id}` : 'No driven parameters';
     }
     if (mode === 'animation') {
-      const dict = trees?.animation ?? {};
-      const id = (activeActionId && dict[activeActionId])
-        ? activeActionId : Object.keys(dict)[0] ?? null;
-      return id ? `AnimationTree · ${id}` : 'No animations';
+      const id = tree?.actionId ?? null;
+      return id ? `AnimationTree · ${id}` : 'No actions';
     }
     return '';
-  }, [mode, trees, selectionHead, activeActionId, driverFallbackId]);
-
-  const driverIds = useMemo(() => Object.keys(trees?.driver ?? {}), [trees]);
+  }, [mode, selectionHead, tree]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -130,7 +163,8 @@ export function NodeTreeArea() {
         {mode === 'driver' && driverIds.length > 0 && (
           <select
             className="text-xs ml-2 bg-muted text-foreground rounded px-1 py-0.5"
-            value={(selectionHead && (trees?.driver ?? {})[selectionHead]) ? selectionHead
+            value={(selectionHead && driverIds.includes(selectionHead))
+              ? selectionHead
               : (driverFallbackId ?? driverIds[0])}
             onChange={(e) => setDriverFallbackId(e.target.value)}
           >

@@ -9,9 +9,12 @@
  *
  * Tree id convention: `'animation:<actionId>'`.
  *
- * NOTE: NodeTree retirement is a separate follow-up commit (per the
- * post-v36 rewire plan); this compile pass stays alive but rewired
- * to walk `action.fcurves` instead of legacy `animation.tracks`.
+ * # Schema state
+ *
+ * Post-v38 NodeTree retirement (Animation Phase 1 Stage 1.F pre-exit):
+ * this is the SOLE compile path. The persisted `project.nodeTrees.animation`
+ * shadow is gone; `NodeTreeArea` invokes this compile on-the-fly for
+ * the active action when rendering the read-only Animation graph.
  *
  * @module anim/nodetree/animationCompile
  */

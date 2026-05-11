@@ -1,16 +1,20 @@
-// Phase N-3 — AnimationTree migration tests + eval byte-equivalence
-// vs `computeParamOverrides` / `computePoseOverrides`.
+// Phase N-3 + Phase 1 Stage 1.F (post-NodeTree-retirement) —
+// AnimationTree compile + eval byte-equivalence vs `computeParamOverrides`
+// / `computePoseOverrides`.
 //
-// Post-v36: `compileAnimationTree` operates on the action shape
-// (fcurves + rnaPath addressing). The v24 migration's strip storage
-// (legacy track shape) is exercised separately via the migration tests
-// at the bottom — v24 runs at schema 24 BEFORE v36 lifts animations →
-// actions, so the legacy shape is what v24 actually sees.
+// Post-v38: `compileAnimationTree(action)` is the SOLE compile path
+// for the animation node graph; the v24 migration's
+// `compileLegacyAnimationTree` (which carried legacy track shape via
+// `storage.track`) is gone. This test pins the post-v36 fcurve shape
+// (`storage.fcurve` carrying rnaPath strings) + asserts byte-equivalence
+// with the canonical `interpolateTrack`-driven animationEngine path.
 //
-// Run: node scripts/test/test_animationTree_migration.mjs
+// Replaces the deleted `test_animationTree_migration.mjs` from before
+// the NodeTree retirement (Animation Phase 1 Stage 1.F pre-exit).
+//
+// Run: node scripts/test/test_animationTree_compile.mjs
 
 import { compileAnimationTree } from '../../src/anim/nodetree/animationCompile.js';
-import { migrateNodeTreeAnimationTree } from '../../src/store/migrations/v24_nodetree_animationtree.js';
 import { evalNodeTree } from '../../src/anim/nodetree/eval.js';
 import {
   computeParamOverrides,
@@ -62,6 +66,24 @@ function assertNear(a, b, eps, name) {
   assert(types.filter((t) => t === 'FCurveStrip').length === 2,
     '2 FCurveStrip nodes for 2 fcurves');
   assert(types.includes('TimelineOutput'), 'TimelineOutput present');
+}
+
+// ---- Strip shape: every strip carries storage.fcurve (post-v38) ----
+
+{
+  const action = {
+    id: 'a',
+    fcurves: [buildParamFCurve('P', [
+      { time: 0, value: 0, easing: 'linear' },
+    ])],
+  };
+  const tree = compileAnimationTree(action);
+  const strip = tree.nodes.find((n) => n.typeId === 'FCurveStrip');
+  assert(strip != null, 'strip emitted');
+  assert(strip.storage?.fcurve != null,
+    'strip carries storage.fcurve (post-v36 shape)');
+  assert(strip.storage?.track == null,
+    'strip does NOT carry storage.track (legacy v24 shape — retired in v38)');
 }
 
 // ---- Eval byte-equivalence: param fcurve ----
@@ -147,46 +169,7 @@ function assertNear(a, b, eps, name) {
     'mesh_verts: deferred (no entry in poseOverrides)');
 }
 
-// ---- v24 migration walks every clip (legacy shape — v24 runs PRE-v36) ----
-
-{
-  const project = {
-    parameters: [{ id: 'ParamSmile', default: 0 }],
-    nodes: [],
-    animations: [
-      { id: 'idle', tracks: [{ paramId: 'ParamSmile', keyframes: [
-        { time: 0, value: 0 }, { time: 1000, value: 1 },
-      ] }] },
-      { id: 'wave', tracks: [] },
-    ],
-  };
-  migrateNodeTreeAnimationTree(project);
-  assert(project.nodeTrees?.animation?.idle != null,
-    'v24: idle has AnimationTree');
-  assert(project.nodeTrees?.animation?.wave != null,
-    'v24: wave has AnimationTree (even with empty tracks)');
-}
-
-// ---- v24 Migration is idempotent ----
-
-{
-  const project = {
-    animations: [
-      { id: 'a', tracks: [
-        { paramId: 'P', keyframes: [{ time: 0, value: 0 }] },
-      ] },
-    ],
-    nodes: [],
-  };
-  migrateNodeTreeAnimationTree(project);
-  const len1 = project.nodeTrees.animation.a.nodes.length;
-  migrateNodeTreeAnimationTree(project);
-  const len2 = project.nodeTrees.animation.a.nodes.length;
-  assert(len1 === len2,
-    'v24 idempotent: re-run produces same node count');
-}
-
 // ---- Result ----
 
-console.log(`animationTree_migration: ${passed} passed, ${failed} failed`);
+console.log(`animationTree_compile: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -28,9 +28,6 @@ export { CURRENT_SCHEMA_VERSION };
 
 import { synthesizeDeformerNodesFromSidetables, synthesizeModifierStacks } from './deformerNodeSync.js';
 import { migrateModifierModeFlags } from './migrations/v21_modifier_mode_flags.js';
-import { migrateNodeTreeRigTree } from './migrations/v22_nodetree_rigtree.js';
-import { migrateNodeTreeDriverTree } from './migrations/v23_nodetree_drivertree.js';
-import { migrateNodeTreeAnimationTree } from './migrations/v24_nodetree_animationtree.js';
 import { migrateEditModeSlotRename } from './migrations/v25_editmode_slot_rename.js';
 import { migrateBlendShapeModeFold } from './migrations/v26_blendshape_mode_fold.js';
 import { migrateSkeletonToPoseRename } from './migrations/v27_skeleton_to_pose_rename.js';
@@ -42,6 +39,7 @@ import { migrateWeightPaintSettings } from './migrations/v34_weight_paint_settin
 import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
 import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
 import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
+import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -373,42 +371,36 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v22 — Blender Parity V2 Phase N-1: RigTree datablock migration.
-  // Lifts every part's `modifiers[]` into a derived `RigTree` stored
-  // on `project.nodeTrees.rig[partId]`. Modifier stack stays canonical
-  // for one release; the tree is the dual-write shadow rendered by
-  // the Phase N-4 visual editor.
+  // v22 — RETIRED in v38. Used to lift `part.modifiers[]` into a
+  // derived `RigTree` shadow on `project.nodeTrees.rig[partId]`. The
+  // NodeTreeArea editor surface now derives the rig tree on-the-fly
+  // via `buildRigTreeForPart(part)`; the persisted shadow is gone.
+  // No-op shim — required by the migration walker's contiguous-version
+  // invariant (mirrors the v30/v31 retirement pattern).
   //
-  // See `src/store/migrations/v22_nodetree_rigtree.js`.
-  22: (project) => {
-    migrateNodeTreeRigTree(project);
-    return project;
-  },
+  // See `src/store/migrations/v38_nodetree_retirement.js` for the
+  // cleanup that strips `project.nodeTrees` from old saves.
+  22: (project) => project,
 
-  // v23 — Blender Parity V2 Phase N-2: DriverTree datablock migration.
-  // Lifts every parameter's `driver` record into a derived
-  // `DriverTree` stored on `project.nodeTrees.driver[paramId]`. The
-  // compile pass parses the scripted-driver expression into a Math /
-  // Compare / Constant / ParamInput / DriverOutput subgraph. Unparseable
-  // expressions fall back to a single `ScriptedExpression` node that
-  // wraps `evaluateDriver`.
+  // v23 — RETIRED in v38. Used to lift `param.driver` into a derived
+  // `DriverTree` shadow on `project.nodeTrees.driver[paramId]`. The
+  // NodeTreeArea editor surface now derives the driver tree on-the-fly
+  // via `compileDriverTree(paramId, driver)`; the persisted shadow is
+  // gone. No-op shim.
   //
-  // See `src/store/migrations/v23_nodetree_drivertree.js`.
-  23: (project) => {
-    migrateNodeTreeDriverTree(project);
-    return project;
-  },
+  // See `src/store/migrations/v38_nodetree_retirement.js`.
+  23: (project) => project,
 
-  // v24 — Blender Parity V2 Phase N-3: AnimationTree datablock
-  // migration. Lifts every animation clip into an `AnimationTree`
-  // stored on `project.nodeTrees.animation[clipId]`. Each tree has
-  // one `FCurveStrip` per track + a `TimelineOutput` sink.
+  // v24 — RETIRED in v38. Used to lift `project.animations[i]` (pre-v36
+  // legacy clip shape) into a derived `AnimationTree` shadow on
+  // `project.nodeTrees.animation[clipId]` via an inlined
+  // `compileLegacyAnimationTree`. Post-v36 the actions/fcurves shape
+  // is canonical; the NodeTreeArea editor surface now derives the
+  // animation tree on-the-fly via `compileAnimationTree(action)`.
+  // No-op shim.
   //
-  // See `src/store/migrations/v24_nodetree_animationtree.js`.
-  24: (project) => {
-    migrateNodeTreeAnimationTree(project);
-    return project;
-  },
+  // See `src/store/migrations/v38_nodetree_retirement.js`.
+  24: (project) => project,
 
   // v25 — Blender Armature Alignment Phase 2: rename the editMode
   // slot value `'mesh'` → `'edit'` to match Blender's universal
@@ -614,6 +606,25 @@ const MIGRATIONS = {
   // See `src/store/migrations/v37_scene_anim_data.js`.
   37: (project) => {
     migrateSceneAnimData(project);
+    return project;
+  },
+
+  // v38 — Animation Phase 1 Stage 1.F (pre-exit): NodeTree retirement.
+  // Strips `project.nodeTrees.{rig, driver, animation}` from old saves.
+  // The NodeTreeArea editor now derives trees on-the-fly via
+  // `buildRigTreeForPart` / `compileDriverTree` / `compileAnimationTree`,
+  // so the persisted shadow is no longer used by any reader.
+  //
+  // Sister cleanups in this same commit:
+  //   - v22 / v23 / v24 entries above are no-op shims (migration MODULES
+  //     deleted from disk; entries kept for the contiguous-version
+  //     invariant).
+  //   - `FCurveStrip` executor's legacy `storage.track` shadow branch
+  //     deleted (was reachable only via v24's `compileLegacyAnimationTree`).
+  //
+  // See `src/store/migrations/v38_nodetree_retirement.js`.
+  38: (project) => {
+    migrateNodeTreeRetirement(project);
     return project;
   },
 

@@ -5,11 +5,11 @@
  *
  * Phase N-3 of the V2 plan. Adds:
  *
- *   - `FCurveStrip`     — wraps a single SS animation track. Reads
- *                         time from ctx, interpolates the track's
- *                         keyframes, writes the result to either
- *                         `ctx.paramOverrides` (param tracks) or
- *                         `ctx.poseOverrides` (pose tracks).
+ *   - `FCurveStrip`     — wraps a single SS Action FCurve. Reads time
+ *                         from ctx, interpolates the fcurve's keyforms,
+ *                         writes the result to either
+ *                         `ctx.paramOverrides` (param fcurves) or
+ *                         `ctx.poseOverrides` (object fcurves).
  *   - `TimelineOutput`  — sink that aggregates per-strip outputs into
  *                         a single observable summary. Mostly cosmetic
  *                         in N-3; future-proofs for NLA strip-blending
@@ -18,6 +18,15 @@
  * Adapted from Blender's NLA strip nodes
  * (`reference/blender/source/blender/makesdna/DNA_anim_types.h`
  * `NlaStrip` / `NlaTrack`).
+ *
+ * # Schema state
+ *
+ * Post-v38 NodeTree retirement: the only producer of FCurveStrip nodes
+ * is `compileAnimationTree(action)` which always carries `storage.fcurve`
+ * (v36 FCurve with rnaPath). The pre-v38 v24 migration's
+ * `compileLegacyAnimationTree` (which carried `storage.track` legacy
+ * shape) is gone — that branch in `execute` was deleted with the
+ * retirement.
  *
  * @module anim/nodetree/nodes/animation
  */
@@ -35,54 +44,28 @@ registerNodeType({
     { identifier: 'value', name: 'Value',
       type: SocketType.VALUE, inOut: SocketInOut.OUTPUT },
   ],
-  // storage = { fcurve: <v36 FCurve> } (post-v36 compileAnimationTree)
-  // OR     = { track:  <legacy SS track> } (v24 migration shadow)
+  // storage = { fcurve: <v36 FCurve> } from compileAnimationTree.
   //
-  // ctx.time is in seconds (motion3.json boundary); the keyforms /
-  // keyframes use milliseconds internally. `interpolateTrack` handles
-  // ms uniformly across both shapes.
+  // ctx.time is in seconds (motion3.json boundary); the keyforms use
+  // milliseconds internally. `interpolateTrack` handles ms uniformly.
   execute: (node, ctx) => {
     const timeMs = (ctx?.time ?? 0) * 1000;
-
-    // Post-v36 path: storage.fcurve carries an FCurve with rnaPath.
     const fcurve = node.storage?.fcurve;
-    if (fcurve) {
-      const target = decodeFCurveTarget(fcurve);
-      if (!target) return undefined;
-      if (target.kind === 'node' && target.property === 'mesh_verts') return undefined;
-      const value = interpolateTrack(fcurve.keyforms ?? [], timeMs, false, 0);
-      if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-
-      if (target.kind === 'param') {
-        ctx?.paramOverrides?.set?.(target.paramId, value);
-      } else if (target.kind === 'node') {
-        const poseOverrides = ctx?.poseOverrides;
-        if (poseOverrides instanceof Map) {
-          let entry = poseOverrides.get(target.nodeId);
-          if (!entry) { entry = new Map(); poseOverrides.set(target.nodeId, entry); }
-          entry.set(target.property, value);
-        }
-      }
-      return value;
-    }
-
-    // v24 shadow path: storage.track carries a legacy SS track. The v24
-    // shadow is stale snapshot data (NodeTree retirement is in flight),
-    // but eval is preserved for the read-only NodeTreeEditor surface.
-    const track = node.storage?.track;
-    if (!track) return undefined;
-    if (track.property === 'mesh_verts') return undefined;
-    const value = interpolateTrack(track.keyframes ?? [], timeMs, false, 0);
+    if (!fcurve) return undefined;
+    const target = decodeFCurveTarget(fcurve);
+    if (!target) return undefined;
+    if (target.kind === 'node' && target.property === 'mesh_verts') return undefined;
+    const value = interpolateTrack(fcurve.keyforms ?? [], timeMs, false, 0);
     if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 
-    if (track.paramId) {
-      ctx?.paramOverrides?.set?.(track.paramId, value);
-    } else if (track.nodeId) {
+    if (target.kind === 'param') {
+      ctx?.paramOverrides?.set?.(target.paramId, value);
+    } else if (target.kind === 'node') {
       const poseOverrides = ctx?.poseOverrides;
       if (poseOverrides instanceof Map) {
-        let entry = poseOverrides.get(track.nodeId);
-        if (!entry) { entry = new Map(); poseOverrides.set(track.nodeId, entry); }
-        entry.set(track.property ?? 'value', value);
+        let entry = poseOverrides.get(target.nodeId);
+        if (!entry) { entry = new Map(); poseOverrides.set(target.nodeId, entry); }
+        entry.set(target.property, value);
       }
     }
     return value;
