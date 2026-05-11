@@ -726,13 +726,16 @@ See close-out:
 
 #### 1.F — Tests
 
-| Test | What |
-|------|------|
-| `test_actionDatablock_migration.mjs` | v32→v33 migration round-trip |
-| `test_actionRegistry.mjs` | Registry CRUD + assignAction / cloneAction |
-| `test_actionScene.mjs` | `__scene__` AnimData treated like Object AnimData by exporter |
-| `test_actionExportMotion3.mjs` | Each Action exports to one motion3.json (current path) |
-| `test_actionExportCan3.mjs` | Each Action exports to one .can3 |
+**SHIPPED 2026-05-11** — substrate commit landed the 4 missing test
+suites; `test_actionRegistry.mjs` was already shipped in Stage 1.C+1.D.
+
+| Test | What | Status |
+|------|------|--------|
+| `test_actionDatablock_migration.mjs` | v32→v36 round-trip smoke pin (deep coverage in `test_migration_v36.mjs`) | ✅ 30 assertions |
+| `test_actionRegistry.mjs` | Registry CRUD + assignAction / cloneAction | ✅ 95 assertions (Stage 1.C+1.D) |
+| `test_actionScene.mjs` | `__scene__` AnimData treated like Object AnimData by exporter | ✅ 36 assertions |
+| `test_actionExportMotion3.mjs` | Each Action exports to one motion3.json (per-Action contract) | ✅ 37 assertions |
+| `test_actionExportCan3.mjs` | Each Action exports to one CSceneSource (multiple actions in one .can3) | ✅ 26 assertions |
 
 #### 1.G — Phase exit gate
 
