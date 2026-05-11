@@ -760,6 +760,40 @@ function assertThrows(fn, name) {
   assertThrows(() => migrateProject(p), 'future schema version rejected');
 }
 
+// ---- Stage 1.F-post: gap-tolerant walker (mirror MAIN_VERSION_FILE_ATLEAST) ----
+//
+// The walker iterates v from (fromVersion+1)..CURRENT_SCHEMA_VERSION and runs
+// MIGRATIONS[v] IF defined; missing entries (gaps from retirement) are
+// silently skipped while schemaVersion still bumps each iteration. Mirror of
+// Blender's `MAIN_VERSION_FILE_ATLEAST(bmain, X, Y)` (BKE_main.hh:855) — each
+// version may or may not have a fixup, the walker tolerates either.
+
+{
+  // Project at v21 walks cleanly across v22/v23/v24 retirement gap to v38.
+  // Pre-Stage-1.F-post the walker would have thrown on missing entries; now
+  // it iterates through them as no-ops.
+  const p = {
+    schemaVersion: 21,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    nodes: [], parameters: [], physics_groups: [],
+  };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION,
+    'Stage 1.F-post: v21 fixture walks across v22/v23/v24 gap to CURRENT');
+}
+
+{
+  // Project at v29 walks cleanly across v30/v31 retirement gap to v38.
+  const p = {
+    schemaVersion: 29,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    nodes: [], parameters: [], physics_groups: [],
+  };
+  migrateProject(p);
+  assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION,
+    'Stage 1.F-post: v29 fixture walks across v30/v31 gap to CURRENT');
+}
+
 // ---- Summary ----
 
 console.log(`migrations: ${passed} passed, ${failed} failed`);

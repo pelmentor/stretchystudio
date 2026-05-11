@@ -4,10 +4,12 @@
 //   1. CURRENT_SCHEMA_VERSION = 38 (the retirement bump).
 //   2. v38 migration deletes `project.nodeTrees` from older saves
 //      idempotently.
-//   3. v22 / v23 / v24 entries in projectMigrations.js are no-op
-//      shims (the migration MODULES are deleted from disk per
-//      Rule №2; the entries stay only for the contiguous-version
-//      walker invariant).
+//   3. v22 / v23 / v24 entries are ABSENT from MIGRATIONS table
+//      (Animation Phase 1 Stage 1.F-post — gap-tolerant walker).
+//      Pre-Stage-1.F-post these stayed as no-op shims because the
+//      walker required contiguous keys; now the walker tolerates
+//      gaps (mirror of Blender's MAIN_VERSION_FILE_ATLEAST) and the
+//      shims are deleted as Rule №2 baggage.
 //   4. Source-grep gates: NodeTreeArea.jsx no longer reads
 //      `project.nodeTrees`; FCurveStrip executor no longer carries
 //      the legacy `storage.track` shadow branch; v22/v23/v24
@@ -167,26 +169,34 @@ assertEq(CURRENT_SCHEMA_VERSION, 38,
     'v37 → v38 fixture: nodeTrees field stripped on migration');
 }
 
-// ---- 3. v22 / v23 / v24 entries are no-op shims ----
+// ---- 3. v22 / v23 / v24 entries are ABSENT from MIGRATIONS (gap-tolerant walker) ----
 
 {
-  const src = readSrc('src/store/projectMigrations.js');
-  // v22 — should be `22: (project) => project,`
-  assert(/22:\s*\(project\)\s*=>\s*project,/.test(src),
-    'v22 entry: no-op shim `22: (project) => project,`');
-  assert(/23:\s*\(project\)\s*=>\s*project,/.test(src),
-    'v23 entry: no-op shim `23: (project) => project,`');
-  assert(/24:\s*\(project\)\s*=>\s*project,/.test(src),
-    'v24 entry: no-op shim `24: (project) => project,`');
+  const rawSrc = readSrc('src/store/projectMigrations.js');
+  const src = stripComments(rawSrc);
+  // v22 / v23 / v24 must NOT appear as keys in the MIGRATIONS dispatch
+  // table after Stage 1.F-post (gap-tolerant walker). The entries were
+  // previously `N: (project) => project` no-op shims; now they're gone.
+  assert(!/^\s*22:\s*[(\w]/m.test(src),
+    'v22 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+  assert(!/^\s*23:\s*[(\w]/m.test(src),
+    'v23 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+  assert(!/^\s*24:\s*[(\w]/m.test(src),
+    'v24 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+  // Sister: v30 / v31 (rigid-default-weights retirement) — also gap.
+  assert(!/^\s*30:\s*[(\w]/m.test(src),
+    'v30 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
+  assert(!/^\s*31:\s*[(\w]/m.test(src),
+    'v31 entry: ABSENT from MIGRATIONS (Stage 1.F-post — no shim)');
   // v38 entry must call migrateNodeTreeRetirement.
-  assert(/38:\s*\(project\)\s*=>\s*\{\s*migrateNodeTreeRetirement\(project\);/.test(src),
+  assert(/38:\s*\(project\)\s*=>\s*\{\s*migrateNodeTreeRetirement\(project\);/.test(rawSrc),
     'v38 entry: dispatches to migrateNodeTreeRetirement');
   // The deleted migration imports must NOT appear.
-  assert(!/migrateNodeTreeRigTree/.test(src),
+  assert(!/migrateNodeTreeRigTree/.test(rawSrc),
     'projectMigrations: no import of migrateNodeTreeRigTree');
-  assert(!/migrateNodeTreeDriverTree/.test(src),
+  assert(!/migrateNodeTreeDriverTree/.test(rawSrc),
     'projectMigrations: no import of migrateNodeTreeDriverTree');
-  assert(!/migrateNodeTreeAnimationTree/.test(src),
+  assert(!/migrateNodeTreeAnimationTree/.test(rawSrc),
     'projectMigrations: no import of migrateNodeTreeAnimationTree');
 }
 
@@ -394,14 +404,25 @@ assert(existsSync(join(REPO, 'src/store/migrations/v38_nodetree_retirement.js'))
     'audit-fix D-8: NodeTreeType JSDoc carries post-v38 deviation note');
 }
 
-// ---- 19. Audit-fix D-9: migration walker contiguous-version invariant documented ----
+// ---- 19. Audit-fix D-9 follow-up (Stage 1.F-post): walker is gap-tolerant + Blender mirror ----
 
 {
   const src = readSrc('src/store/projectMigrations.js');
-  assert(/contiguous version|MAIN_VERSION_FILE_ATLEAST/.test(src),
-    'audit-fix D-9: projectMigrations header documents contiguous-version invariant + Blender deviation');
+  // The Blender MAIN_VERSION_FILE_ATLEAST citation must survive the
+  // shape change (it's the Blender pattern the walker now mirrors).
+  assert(/MAIN_VERSION_FILE_ATLEAST/.test(src),
+    'audit-fix D-9 follow-up: projectMigrations header cites Blender MAIN_VERSION_FILE_ATLEAST');
+  // Header must document the new shim-free retirement playbook.
   assert(/Retiring a migration/.test(src),
-    'audit-fix D-9: projectMigrations header documents the retirement playbook');
+    'audit-fix D-9 follow-up: projectMigrations header documents the retirement playbook');
+  assert(/shim-free|no shim required|DELETE the original entry/i.test(src),
+    'audit-fix D-9 follow-up: retirement playbook explicitly drops the shim step');
+  // Walker comment cites the gap-tolerant behaviour.
+  assert(/gap-tolerant|silently skip|missing entries/i.test(src),
+    'audit-fix D-9 follow-up: walker documents gap-tolerant iteration');
+  // Walker no longer throws on missing entries.
+  assert(!/throw new Error\(`No migration registered for schema/.test(src),
+    'audit-fix D-9 follow-up: walker no longer throws on missing entries');
 }
 
 // ---- 20. Audit-fix G-5: tree useMemo deps trimmed ----

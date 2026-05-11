@@ -9,18 +9,25 @@
  * See `docs/archive/plans-shipped/NATIVE_RIG_REFACTOR.md` →
  * "Cross-cutting invariants → Schema versioning" for rationale.
  *
- * # Blender deviation (Audit-fix D-9, NodeTree retirement)
+ * # Blender alignment (Animation Phase 1 Stage 1.F-post — walker refactor)
  *
- * The migration walker (`migrateProject` below) requires contiguous
- * version numbers — when version N is retired, the entry stays as
- * `N: (project) => project` (no-op shim) so v0 → CURRENT walks
- * monotonically. Examples: v22 / v23 / v24 (NodeTree migrations
- * retired in v38); v30 / v31 (rigid-default-weights retired in v32).
- * Blender's `versioning_*.cc` files don't have this constraint
- * because Blender uses `MAIN_VERSION_FILE_ATLEAST(bmain, X, Y)`
- * field-level predicates, not a contiguous-walk dispatcher. SS
- * adopts the dispatcher pattern for migration simplicity; the
- * no-op shims are the trade-off cost.
+ * The walker (`migrateProject` below) iterates each version `v` from
+ * `(file.schemaVersion + 1)` up to `CURRENT_SCHEMA_VERSION` and runs
+ * `MIGRATIONS[v]` IF defined; missing entries are silently skipped
+ * (the schemaVersion still bumps each iteration). This mirrors
+ * Blender's `MAIN_VERSION_FILE_ATLEAST(bmain, X, Y)` field-level
+ * predicates (`reference/blender/source/blender/blenkernel/BKE_main.hh:855`):
+ * Blender's `versioning_NNN.cc` files contain `if (!ATLEAST(...))`
+ * blocks for SOME version pairs but not others — the walker tolerates
+ * gaps because each block is a self-contained fixup keyed by the
+ * version it makes the file at-least equal to.
+ *
+ * Pre-Stage-1.F-post the walker REQUIRED contiguous keys (threw on
+ * missing entries), forcing every retired migration to leave behind
+ * a `N: (project) => project` no-op shim (Rule №2 baggage). The
+ * gap-tolerant walker drops the requirement and the shims (v22 /
+ * v23 / v24 from NodeTree retirement; v30 / v31 from rigid-default-
+ * weights retirement) are deleted entirely.
  *
  * Adding a migration:
  *   1. Bump CURRENT_SCHEMA_VERSION.
@@ -29,13 +36,13 @@
  *      mutates / returns it at the new version. Don't bump
  *      project.schemaVersion inside the migration — `migrateProject`
  *      writes it after each step.
- *   4. Add a test in `scripts/test_migrations.mjs`.
+ *   4. Add a test in `scripts/test/test_migrations.mjs`.
  *
- * Retiring a migration:
+ * Retiring a migration (post-Stage-1.F-post — shim-free):
  *   1. Add a cleanup migration at CURRENT_SCHEMA_VERSION+1 that
  *      strips the now-stale field (mirror v38 → `project.nodeTrees`).
- *   2. Replace the original entry with `N: (project) => project,`.
- *   3. Delete the migration MODULE from disk.
+ *   2. DELETE the original entry from MIGRATIONS — no shim required.
+ *   3. DELETE the migration MODULE from disk.
  *   4. Remove the module's import from this file.
  */
 
@@ -391,36 +398,16 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v22 — RETIRED in v38. Used to lift `part.modifiers[]` into a
-  // derived `RigTree` shadow on `project.nodeTrees.rig[partId]`. The
-  // NodeTreeArea editor surface now derives the rig tree on-the-fly
-  // via `buildRigTreeForPart(part)`; the persisted shadow is gone.
-  // No-op shim — required by the migration walker's contiguous-version
-  // invariant (mirrors the v30/v31 retirement pattern).
-  //
-  // See `src/store/migrations/v38_nodetree_retirement.js` for the
-  // cleanup that strips `project.nodeTrees` from old saves.
-  22: (project) => project,
-
-  // v23 — RETIRED in v38. Used to lift `param.driver` into a derived
-  // `DriverTree` shadow on `project.nodeTrees.driver[paramId]`. The
-  // NodeTreeArea editor surface now derives the driver tree on-the-fly
-  // via `compileDriverTree(paramId, driver)`; the persisted shadow is
-  // gone. No-op shim.
-  //
-  // See `src/store/migrations/v38_nodetree_retirement.js`.
-  23: (project) => project,
-
-  // v24 — RETIRED in v38. Used to lift `project.animations[i]` (pre-v36
-  // legacy clip shape) into a derived `AnimationTree` shadow on
-  // `project.nodeTrees.animation[clipId]` via an inlined
-  // `compileLegacyAnimationTree`. Post-v36 the actions/fcurves shape
-  // is canonical; the NodeTreeArea editor surface now derives the
-  // animation tree on-the-fly via `compileAnimationTree(action)`.
-  // No-op shim.
-  //
-  // See `src/store/migrations/v38_nodetree_retirement.js`.
-  24: (project) => project,
+  // v22 / v23 / v24 — RETIRED in v38 (NodeTree dual-write shadow).
+  // Migration MODULES deleted from disk; the entries are deleted from
+  // this table too as of Animation Phase 1 Stage 1.F-post (gap-tolerant
+  // walker). v22 lifted `part.modifiers[]` into `project.nodeTrees.rig`;
+  // v23 lifted `param.driver` into `project.nodeTrees.driver`; v24
+  // lifted `project.animations[i]` into `project.nodeTrees.animation`
+  // via `compileLegacyAnimationTree`. The NodeTreeArea editor now
+  // derives all three on-the-fly (`buildRigTreeForPart` /
+  // `compileDriverTree` / `compileAnimationTree`); v38 strips the
+  // persisted shadow from old saves. The walker tolerates the gap.
 
   // v25 — Blender Armature Alignment Phase 2: rename the editMode
   // slot value `'mesh'` → `'edit'` to match Blender's universal
@@ -484,17 +471,12 @@ const MIGRATIONS = {
     return project;
   },
 
-  // v30 — no-op shim. Required by the migration walker's
-  // contiguous-version invariant.
-  30: (project) => project,
-
-  // v31 — RETIRED. Used to run `seedDefaultRigidWeights` (Cubism
-  // Adapter Pattern Phase 1, anti-Blender). Reverted same day; v32
-  // strips contamination from saves stamped at v31. v31 entry stays
-  // as a no-op shim only because the migration walker insists on
-  // contiguous version numbers — pre-v31 saves walk through
-  // 30→31→32 in one load pass with v31 as a passthrough.
-  31: (project) => project,
+  // v30 / v31 — RETIRED. v30 was reserved (no-op from inception); v31
+  // ran `seedDefaultRigidWeights` (Cubism Adapter Pattern Phase 1,
+  // anti-Blender) and was reverted same day. v32 strips the residue
+  // from saves stamped at v31. Both entries deleted from this table
+  // as of Animation Phase 1 Stage 1.F-post (gap-tolerant walker); the
+  // walker iterates v30 / v31 as no-ops without entries.
 
   // v32 — Cubism Adapter REVERT toward Blender parity. Strips the
   // rigid-1.0 vertex groups that v31 wrote onto parts that follow a
@@ -942,12 +924,18 @@ export function migrateProject(project) {
     );
   }
 
+  // Gap-tolerant walker. Mirrors Blender's MAIN_VERSION_FILE_ATLEAST
+  // pattern — each version may or may not carry a fixup entry; missing
+  // entries are silently skipped, the schemaVersion still bumps each
+  // iteration so the file lands at CURRENT_SCHEMA_VERSION cleanly.
+  // Pre-Stage-1.F-post the walker threw on missing entries, forcing
+  // every retired migration to leave a `N: (project) => project`
+  // no-op shim. Those shims are gone now.
   for (let v = fromVersion + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
     const migrate = MIGRATIONS[v];
-    if (!migrate) {
-      throw new Error(`No migration registered for schema v${v}`);
+    if (migrate) {
+      migrate(project);
     }
-    migrate(project);
     project.schemaVersion = v;
   }
 

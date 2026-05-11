@@ -54,10 +54,14 @@
  *
  * # Companion clean-ups
  *
- * v22 / v23 / v24 entries in `projectMigrations.js` become no-op shims
- * (per the v30/v31 pattern) — the migration walker requires contiguous
- * versions. Their migration MODULES are deleted from disk; the entries
- * stay as pass-throughs so v0 → v38 pre-v38 saves walk cleanly.
+ * v22 / v23 / v24 migration MODULES were deleted from disk in this
+ * same commit (their pass-through entries in `projectMigrations.js`
+ * stayed as no-op shims because the original walker required
+ * contiguous versions). Animation Phase 1 Stage 1.F-post then made
+ * the walker gap-tolerant (mirror of Blender's
+ * `MAIN_VERSION_FILE_ATLEAST` field-level predicates) and DELETED
+ * those entries entirely — the walker iterates v22 / v23 / v24 as
+ * no-ops without entries, and Rule №2 baggage is gone.
  *
  * The `FCurveStrip` node-type executor's `storage.track` shadow branch
  * is deleted as part of this commit — that path was reachable only via
