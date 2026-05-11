@@ -625,14 +625,60 @@ callers read `adt->action` directly — same shape as
 
 #### 1.E — UI update
 
-[src/v3/editors/animations/AnimationsEditor.jsx](../../src/v3/editors/animations/AnimationsEditor.jsx)
-becomes `ActionsEditor.jsx`:
+**SHIPPED 2026-05-11** at
+[src/v3/editors/actions/ActionsEditor.jsx](../../src/v3/editors/actions/ActionsEditor.jsx)
+(commit `4d3892a` substrate + `45371d5` audit-fix sweep).
 
-- List all actions
-- Create / clone / rename / delete
-- Per-action: list of objects bound to it ("Used by: Hiyori, Hairtail")
-- Drag an action into an object's AnimData slot in the Properties panel
-- The Timeline focuses one Action at a time (action picker dropdown)
+- ✅ Renamed `AnimationsEditor.jsx` → `ActionsEditor.jsx`; full
+  directory move from `editors/animations/` → `editors/actions/`.
+- ✅ EditorRegistry `'animations'` → `'actions'` editor type;
+  `uiV3Store.EditorType` enum + animation workspace `rightBottom`
+  area updated.
+- ✅ Per-action "Used by" strip via `getActionUsers(project, action.id)`
+  + `formatUsedBy` helper. Audit-fix D-13 Stage 1.D: `__scene__`
+  rendered as "Scene" and pulled to the front. Audit-fix D-11 Stage
+  1.E: documented as discoverability EXTENSION over Blender's `(N)`
+  user-count pip on `template_id` (`interface_template_id.cc:1267`).
+- ✅ Duplicate command (per-row Copy icon) wires
+  `cloneAction` thunk; clone names use Blender's `.001` convention
+  via `nextDotNNNName` (Audit-fix D-6 Stage 1.E — mirrors
+  `BKE_main_namemap_get_unique_name` at `main_namemap.cc:450`).
+  Audit-fix G-10 Stage 1.E: thunk now returns the FULL cloned
+  action object (post-finalised, NOT the immer draft proxy) so the
+  caller doesn't need an extra `actions.find(...)` scan.
+- ✅ Scene-action header at top of ActionsEditor: bind/unbind via
+  `assignAction('__scene__', id)` / `unassignAction('__scene__')`.
+  Audit-fix D-12 Stage 1.E: documented as SS-specific deviation
+  because SS lacks a Scene tab in Properties; Blender's parallel is
+  `SCENE_PT_animation` (`properties_scene.py:452`).
+- ✅ Properties panel "Animation" section
+  ([AnimDataSection.jsx](../../src/v3/editors/properties/sections/AnimDataSection.jsx))
+  for per-Object AnimData binding. Visible for parts + groups.
+  Default-collapsed (Audit-fix D-3 — Blender
+  `bl_options = {'DEFAULT_CLOSED'}`); label "Animation" not
+  "Animation Data" (Audit-fix D-2 — Blender `bl_label = "Animation"`).
+  Sits in Item tab today (Audit-fix D-1 deferral — Blender's
+  Animation panel is in Data tab via `bl_context = "data"`; SS Data
+  tab is parts-only so a clean port awaits a dedicated "Animation"
+  tab in Stage 1.F + Phase 2 entry-gate).
+- ✅ Timeline action picker dropdown shows the resolved scene-aware id
+  (`animation?.id`); picking re-binds `__scene__` when scene already
+  bound (Audit-fix D-7 Stage 1.E: documented as Blender-faithful to
+  `template_action(animated_id, ...)` writing to its pinned datablock,
+  NOT the auto-broadcast `ANIM_OT_replace_action` operator).
+- ✅ 11-file `activeActionId` consumer rewire through
+  `getActiveSceneAction(project, fallback)`:
+  TimelineEditor (12 hits), DopesheetEditor (3), FCurveEditor (3),
+  ParamRow (1), NodeTreeArea (4), ExportModal (6), CanvasViewport
+  (4), GizmoOverlay (1), SkeletonOverlay (1). Closes Audit-fix D-9
+  Stage 1.D entry-gate enumeration.
+- ✅ G-3 Stage 1.E: ActionsEditor delete confirms surface "Currently
+  bound to: ..." pre-delete and toast "Unbound from: ..." post-delete
+  (no more silent scene-binding cascade on action deletion).
+- ✅ G-9 Stage 1.E: orphan `__scene__.animData.actionId` (when scene
+  references a deleted action) emits `logger.error(...)` instead of
+  silently swallowing — `deleteAction` cascade should prevent this,
+  loud-error so the next bug-author finds the cascade gap fast.
 
 #### 1.F — Tests
 
