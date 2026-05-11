@@ -287,6 +287,56 @@ export const DEFAULT_KEYMAP = {
   // and is always one click away. No SS chord reserved; pressing
   // `Ctrl+Shift+X` is silently inert.
   'Shift+KeyX': 'weightPaint.sample',
+
+  // ── Toolset Phase 7.C — Pose Mode tools ─────────────────────────────
+  //
+  // All chords below are mode-gated at the operator's `available` callback
+  // (`editorStore.editMode === 'pose'`). Outside Pose Mode the chord
+  // resolves but `available()` returns false and the dispatcher returns
+  // WITHOUT preventDefault — the browser's native handling kicks in
+  // (matters for Ctrl+C / Ctrl+V which fall through to text copy/paste
+  // in non-Pose contexts). The dispatcher's `isEditableTarget` guard
+  // already short-circuits before chord resolution when focus is in an
+  // <input> / <textarea> / contentEditable node, so typing Ctrl+C in a
+  // text field always works regardless of mode.
+  //
+  // Audit-fixed bindings (per plan §8 Phase 7 — Pose Mode table):
+  //
+  //   Alt+G/R/S        → clear SELECTED bones loc/rot/scale
+  //                      (Blender: POSE_OT_loc_clear / rot_clear / scale_clear,
+  //                       reference/blender/source/blender/editors/armature/
+  //                       pose_transform.cc:1129/1138/1147)
+  //
+  //   Alt+Shift+G/R/S  → clear ALL bones loc/rot/scale (3 separate chords —
+  //                      audit-CRITICAL fix: plan v1 had three different
+  //                      answers in three places; per Blender each axis
+  //                      ships per-axis with no combined chord)
+  //
+  //   Ctrl+Shift+M     → pose.selectMirror (Blender's POSE_OT_select_mirror,
+  //                      pose_select.cc:1080-1132)
+  //
+  //   Ctrl+Shift+V     → pose.mirrorPose — paste-flipped (Blender's actual
+  //                      mirror-pose chord; v1 misnamed Ctrl+Shift+M for this,
+  //                      audit-HIGH fix renamed to V to match Blender muscle
+  //                      memory; Blender: POSE_OT_paste(flipped=True),
+  //                      pose_transform.cc:805-859 + flag at :899)
+  //
+  //   Ctrl+C / Ctrl+V  → pose.copy / pose.paste (Pose Mode only; in Object
+  //                      Mode the chords fall through to browser default)
+  'Alt+KeyG':         'pose.clearLocation',
+  'Alt+KeyR':         'pose.clearRotation',
+  'Alt+KeyS':         'pose.clearScale',
+  'Alt+Shift+KeyG':   'pose.clearAllLocation',
+  'Alt+Shift+KeyR':   'pose.clearAllRotation',
+  'Alt+Shift+KeyS':   'pose.clearAllScale',
+  'Ctrl+Shift+KeyM':  'pose.selectMirror',
+  'Meta+Shift+KeyM':  'pose.selectMirror',
+  'Ctrl+Shift+KeyV':  'pose.mirrorPose',
+  'Meta+Shift+KeyV':  'pose.mirrorPose',
+  'Ctrl+KeyC':        'pose.copy',
+  'Meta+KeyC':        'pose.copy',
+  'Ctrl+KeyV':        'pose.paste',
+  'Meta+KeyV':        'pose.paste',
 };
 
 /**

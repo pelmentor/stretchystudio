@@ -51,6 +51,13 @@ import * as objectSetOrigin from './object/setOrigin.js';
 import * as wpSample from './weightPaint/sample.js';
 import * as wpMirror from './weightPaint/mirror.js';
 import * as wpNormalize from './weightPaint/normalize.js';
+// Phase 7.C — Pose Mode tools (Clear Loc/Rot/Scale, Clear All variants,
+// Select Mirror, Mirror Pose, Copy/Paste Pose). Same eager-import
+// discipline as 7.A/B (sister audit lesson G-1 — async exec leaks
+// unhandled rejections through the dispatcher's non-await
+// `op.exec(...)` call site).
+import * as poseClear from './pose/clearTransform.js';
+import * as poseMirror from './pose/mirror.js';
 import { duplicate } from './edit/duplicate.js';
 import {
   selectLinkedFromVertex,
@@ -1639,6 +1646,183 @@ function registerBuiltins() {
         toast({
           title: 'Normalize All — already normalized',
           description: `${r.zeroSumVerts ?? 0} zero-sum vertices skipped.`,
+        });
+      }
+    },
+  });
+
+  // ── Phase 7.C — Pose Mode tools ─────────────────────────────────────
+  //
+  // Mode-gated: every operator's `available` callback rejects unless
+  // `editorStore.editMode === 'pose'`. Outside Pose Mode, the chord
+  // silently no-ops (Blender pattern — chords are armed by mode and
+  // bare letters elsewhere don't shadow Pose-only chords).
+  //
+  // Audit-fixed bindings (per plan §8 Phase 7 — Pose Mode table):
+  //   Alt+G/R/S         → clear selected loc/rot/scale
+  //   Alt+Shift+G/R/S   → clear ALL bones loc/rot/scale (3 separate chords)
+  //   Ctrl+Shift+M      → select mirror partners
+  //   Ctrl+Shift+V      → mirror-paste (Blender's actual pose-mirror chord)
+  //   Ctrl+C / Ctrl+V   → copy / paste (Pose Mode only)
+  const inPoseMode = () => useEditorStore.getState().editMode === 'pose';
+
+  registerOperator({
+    id: 'pose.clearLocation',
+    label: 'Clear Pose Location (Alt+G)',
+    available: () => inPoseMode() && poseClear.hasSelectedBones(),
+    exec: () => {
+      const r = poseClear.clearPoseLocation();
+      if (r.skipped) {
+        toast({
+          title: 'Clear Pose Location — no bones selected',
+          description: 'Select bone(s) in Pose Mode first.',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.clearRotation',
+    label: 'Clear Pose Rotation (Alt+R)',
+    available: () => inPoseMode() && poseClear.hasSelectedBones(),
+    exec: () => {
+      const r = poseClear.clearPoseRotation();
+      if (r.skipped) {
+        toast({
+          title: 'Clear Pose Rotation — no bones selected',
+          description: 'Select bone(s) in Pose Mode first.',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.clearScale',
+    label: 'Clear Pose Scale (Alt+S)',
+    available: () => inPoseMode() && poseClear.hasSelectedBones(),
+    exec: () => {
+      const r = poseClear.clearPoseScale();
+      if (r.skipped) {
+        toast({
+          title: 'Clear Pose Scale — no bones selected',
+          description: 'Select bone(s) in Pose Mode first.',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.clearAllLocation',
+    label: 'Clear All Pose Locations (Alt+Shift+G)',
+    available: () => inPoseMode() && poseClear.hasAnyBones(),
+    exec: () => {
+      const r = poseClear.clearAllPose('location');
+      if (r.skipped) {
+        toast({
+          title: 'Clear All Pose Locations — no bones in project',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.clearAllRotation',
+    label: 'Clear All Pose Rotations (Alt+Shift+R)',
+    available: () => inPoseMode() && poseClear.hasAnyBones(),
+    exec: () => {
+      const r = poseClear.clearAllPose('rotation');
+      if (r.skipped) {
+        toast({
+          title: 'Clear All Pose Rotations — no bones in project',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.clearAllScale',
+    label: 'Clear All Pose Scales (Alt+Shift+S)',
+    available: () => inPoseMode() && poseClear.hasAnyBones(),
+    exec: () => {
+      const r = poseClear.clearAllPose('scale');
+      if (r.skipped) {
+        toast({
+          title: 'Clear All Pose Scales — no bones in project',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.selectMirror',
+    label: 'Select Mirror Bones (Ctrl+Shift+M)',
+    available: () => inPoseMode() && poseMirror.eligibleForSelectMirror(),
+    exec: () => {
+      const r = poseMirror.poseSelectMirror();
+      if (r.skipped) {
+        toast({
+          title: 'Select Mirror — no bones selected',
+          description: 'Select bone(s) in Pose Mode first.',
+        });
+      } else if (r.added === 0 && r.missing.length > 0) {
+        toast({
+          title: 'Select Mirror — no mirror partners found',
+          description: `Bone role(s) without mirror: ${r.missing.slice(0, 3).join(', ')}${r.missing.length > 3 ? '…' : ''}`,
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.copy',
+    label: 'Copy Pose (Ctrl+C)',
+    available: () => inPoseMode() && poseMirror.eligibleForCopy(),
+    exec: () => {
+      const r = poseMirror.poseCopy();
+      if (r.copied === 0) {
+        toast({
+          title: 'Copy Pose — no bones selected',
+          description: 'Select bone(s) in Pose Mode first.',
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.paste',
+    label: 'Paste Pose (Ctrl+V)',
+    available: () => inPoseMode() && poseMirror.eligibleForPaste({ flipped: false }),
+    exec: () => {
+      const r = poseMirror.posePaste({ flipped: false });
+      if (r.skipped) {
+        toast({
+          title: 'Paste Pose — clipboard empty or no bones selected',
+          description: 'Use Ctrl+C on a posed selection first.',
+        });
+      } else if (r.pasted === 0 && r.unmatchedRoles.length > 0) {
+        toast({
+          title: 'Paste Pose — no matching bone roles',
+          description: `Clipboard roles not found in selection: ${r.unmatchedRoles.slice(0, 3).join(', ')}${r.unmatchedRoles.length > 3 ? '…' : ''}`,
+        });
+      }
+    },
+  });
+
+  registerOperator({
+    id: 'pose.mirrorPose',
+    label: 'Mirror Pose (Ctrl+Shift+V)',
+    available: () => inPoseMode() && poseMirror.eligibleForPaste({ flipped: true }),
+    exec: () => {
+      const r = poseMirror.poseMirrorPaste();
+      if (r.skipped) {
+        toast({
+          title: 'Mirror Pose — clipboard empty or no mirrorable bones selected',
+          description: 'Copy a pose first, then select bone(s) with left*/right* roles.',
+        });
+      } else if (r.pasted === 0 && r.unmatchedRoles.length > 0) {
+        toast({
+          title: 'Mirror Pose — no matching mirror partners',
+          description: `Mirrored roles not in clipboard: ${r.unmatchedRoles.slice(0, 3).join(', ')}${r.unmatchedRoles.length > 3 ? '…' : ''}`,
         });
       }
     },
