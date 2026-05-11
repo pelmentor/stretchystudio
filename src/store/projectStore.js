@@ -29,7 +29,13 @@ import {
   renameFCurveNode,
   decodeFCurveTarget,
 } from '../anim/animationFCurve.js';
-import { deleteAction as registryDeleteAction } from '../anim/actionRegistry.js';
+import {
+  deleteAction as registryDeleteAction,
+  assignAction as registryAssignAction,
+  unassignAction as registryUnassignAction,
+  cloneAction as registryCloneAction,
+} from '../anim/actionRegistry.js';
+import { useAnimationStore } from './animationStore.js';
 
 /**
  * Revoke every `blob:` URL the project owns — texture sources +
@@ -285,11 +291,12 @@ export const useProjectStore = create((set, get) => {
    * flip renamed the slot to `project.actions[]`; the methods follow
    * suit. Stage 1.C added `src/anim/actionRegistry.js` for the
    * reference-style helpers (assignAction, unassignAction, cloneAction,
-   * getActionUsers, deleteAction); `deleteAction` here delegates to
-   * the registry so the cascade to `node.animData.actionId` runs no
-   * matter how the deletion is dispatched. Stage 1.E adds projectStore
-   * wrappers for the assign/clone helpers when ActionsEditor is the
-   * caller.
+   * getActionUsers, deleteAction). All write thunks here delegate to
+   * the registry so the project-shape cascades (assignAction's slot
+   * write, deleteAction's animData cascade) run unconditionally. The
+   * deleteAction thunk additionally resets
+   * `useAnimationStore.activeActionId` when the deleted id matches —
+   * audit-fix G-3 closing the cross-store dangling-pointer gap.
    */
   createAction: (name) => set(produce((state) => {
     state.hasUnsavedChanges = true;
@@ -312,10 +319,46 @@ export const useProjectStore = create((set, get) => {
     if (action) action.name = newName;
   })),
 
-  deleteAction: (id) => set(produce((state) => {
+  deleteAction: (id) => {
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      registryDeleteAction(state.project, id);
+    }));
+    // Audit-fix G-3: reset the UI store's active action when it
+    // pointed at the deleted id. Without this, every consumer of
+    // activeActionId (~10 surfaces — Timeline, Dopesheet, FCurve
+    // editor, etc.) would silently no-op on the stale id.
+    const animState = useAnimationStore.getState();
+    if (animState.activeActionId === id) {
+      animState.setActiveActionId(null);
+    }
+  },
+
+  assignAction: (objectId, actionId, slot = 0) => set(produce((state) => {
     state.hasUnsavedChanges = true;
-    registryDeleteAction(state.project, id);
+    registryAssignAction(state.project, objectId, actionId, slot);
   })),
+
+  unassignAction: (objectId) => set(produce((state) => {
+    state.hasUnsavedChanges = true;
+    registryUnassignAction(state.project, objectId);
+  })),
+
+  /**
+   * Clone an action via the registry; returns the new id (or null on
+   * miss) so callers can immediately make it active. The full cloned
+   * action object is reachable via `state.project.actions.find(a =>
+   * a.id === newId)` post-set.
+   */
+  cloneAction: (actionId, newName) => {
+    let newId = null;
+    set(produce((state) => {
+      state.hasUnsavedChanges = true;
+      const clone = registryCloneAction(state.project, actionId, newName);
+      newId = clone ? clone.id : null;
+    }));
+    return newId;
+  },
 
   /** Create a new blend shape on a part node */
   createBlendShape: (nodeId, name) => set(produce((state) => {

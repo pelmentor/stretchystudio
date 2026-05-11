@@ -15,6 +15,37 @@ close-out doc commit follows.
 | `229305a` | Animation Phase 1 Stage 1.A+1.B — Action datablock + per-Object AnimData. Schema bump v35→v36; ~30 consumer files rewired across save/load + export pipeline + runtime/canvas + editor UI; helper module refactored; store renames; 17 test files updated; 56 new migration assertions. |
 | `b6b6ac6` | docs(plan): Phase 1 Stage 1.A+1.B close-out — Action datablock ship + memory updates. |
 | `3339257` | fix(audit): Phase 1 Stage 1.A+1.B audit-fix sweep — 5 HIGH + 4 MED gaps. New audit-pin (47 assertions), 14 test fixtures rewritten for canonical double-quote rnaPath grammar, `package.json` wires new pin into `npm test`. Reverses the "Audit status" deferral noted below — the sweep ran in the next sub-session as Resume path A predicted. |
+| `d298bf5` | feat(anim): Phase 1 Stage 1.C — `actionRegistry` helpers. 5 lifecycle helpers (`getActionUsers` / `assignAction` / `unassignAction` / `cloneAction` / `deleteAction`) shipped as a pure-function module; `projectStore.deleteAction` delegates so the `node.animData.actionId` cascade runs unconditionally. New `test_actionRegistry.mjs` (65 assertions) wired into `npm test` after `test:animFCurveBridge`. Closes Resume path B. |
+| (next)    | fix(audit): Phase 1 Stage 1.C audit-fix sweep — 4 HIGH + 7 MED + 7 LOW gaps. Two parallel audit agents (architecture + Blender-fidelity) ran against `d298bf5`; all HIGH addressed in this sweep + audit-pin (57 assertions). |
+
+## Stage 1.C audit status
+
+Two parallel audit agents (architecture + Blender-fidelity) audited
+`d298bf5` post-substrate. 18 unique gaps surfaced (4 HIGH + 7 MED +
+7 LOW; 4 cross-audit duplicates compressed). All HIGH addressed in
+this sub-session + audit-pin test
+(`test_audit_fixes_2026_05_11_phase1_stage1c.mjs`, 57 assertions).
+
+| Gap | Severity | Lane | What |
+|-----|----------|------|------|
+| G-1/D-2 | HIGH | Cross-audit | `cloneAction` shallow-cloned `driver.variables` (and per-variable `target` objects). Mutating clone's driver path bled into source. Now deep-clones variables[] AND each variable's target — mirrors Blender `fcurve_copy_driver` (`fcurve_driver.cc:1075`). |
+| G-3 | HIGH | Architecture | `useAnimationStore.activeActionId` not cleared when its action was deleted; ~10 UI consumers (Timeline, Dopesheet, FCurve editor, etc.) silently no-op'd on the stale id. `projectStore.deleteAction` thunk now resets `activeActionId` to null when it matches the deleted id (cross-store cascade). |
+| G-4 | HIGH | Architecture | Substrate inert without projectStore wrappers — `assignAction` / `unassignAction` / `cloneAction` registry helpers couldn't be called via React-aware path. Per Rule №2, callable-by-no-one is the same anti-pattern as callable-but-no-op. Three minimal projectStore thunks shipped delegating to the registry. |
+| D-1 | HIGH | Blender-fidelity | `cloneAction` JSDoc claimed parity with `action_copy_data`, but Blender clones `fcurves` + `groups` + `markers` + `layers` + `slots` + `strip_keyframe_data` + `last_slot_handle`; SS clones `fcurves` + `audioTracks` + `meta` only. DOCUMENT-AS-DEVIATION with explicit Phase 4 / Phase 6 follow-up note. |
+| G-5 | MED | Architecture | `cloneAction` returned just the new id; every caller paid an `actions.find(...)` scan. Now returns the full clone object (matches Blender `bpy.data.actions["X"].copy()` Python parity). |
+| G-7 | MED | Architecture | `assignAction` doesn't reset `actionInfluence` / `actionBlendmode` / `actionExtendmode` (per-Object policy, not per-action). Symmetry note added to JSDoc — mirrors Blender `assign_action` which writes only `action` + `slot_handle` + `last_slot_identifier`. |
+| G-8 | MED | Architecture | 6 missing test scenarios: `getActionUsers` after delete, clone-of-bound-action, double-assign slot replacement, double-delete, deep-driver independence, integer-guard rejection. All added. |
+| D-3 | MED | Blender-fidelity | Plan §1.C signatures said `→ newProject` (clone said `→ { newProject, newActionId }`), but ship returns `boolean` / action object — MORE Blender-faithful than the plan. Plan doc updated to reflect shipped contract + cite Blender's `bool assign_action` / `bool unassign_action`. |
+| D-4 | MED | Blender-fidelity | `assignAction` JSDoc didn't enumerate Blender's `assign_action` skipped behaviours: `last_slot_identifier` mirror, NLA tweak-mode editability guard, datablock reference counting. DOCUMENT-AS-DEVIATION with Phase-4 follow-up note. |
+| D-5 | MED | Blender-fidelity | `unassignAction` returns `false` on already-null binding; Blender returns `true` ("postcondition holds"). Net effect on project shape identical, only caller-visible signal differs. DOCUMENT-AS-DEVIATION (UI-distinguishable no-op-vs-miss is intentional). |
+| D-6 | MED | Blender-fidelity | `slot` parameter unguarded; non-integer / negative values would corrupt project shape. Added `Number.isInteger(slot) && slot >= 0` guard per Blender's `slot_handle_t` (signed int32, `Slot::unassigned = 0`). |
+| G-2/D-8 | LOW | Cross-audit | `deleteAction` cascade walks `animData.actionId` only; future `nlaTracks[].strips[].actionId` (Phase 4) not covered. DOCUMENT-AS-DEVIATION with explicit Phase-4 follow-up TODO. |
+| G-6 | LOW | Architecture | `getActionUsers` returns live node references; mutating outside immer bypasses undo + `hasUnsavedChanges`. Stronger JSDoc warning + explicit "MUTATING outside `produce()`" callout. |
+| G-9 | LOW | Architecture | File header documented in-place mutation convention but didn't flag the cloneAction return-shape divergence from plan. Header rewritten with explicit "Return shapes follow the Blender helpers' contract rather than the plan's prose" section. |
+| G-10 | LOW | Architecture | Dead defensive re-bind block in `cloneAction` (line was unreachable because the missing-`actions` early return at `src` lookup fired first). Removed. |
+| D-7 | LOW | Blender-fidelity | `meta.source = 'authored'` on clone is SS-specific; Blender's Action has no `meta` field. DOCUMENT-AS-DEVIATION in cloneAction JSDoc (was only in module header). |
+| D-9 | LOW | Blender-fidelity | `__scene__` synthetic Object enumerated by `getActionUsers` but not yet a valid `assignAction` target until Stage 1.D. Read/write asymmetry documented in `getActionUsers` JSDoc. |
+| D-10 | LOW | Blender-fidelity | Plan §1.C missing "Stage 1.E entry gate" sub-section listing UI consumers Stage 1.E will rewire. Added (3 consumers: ActionsEditor, Properties panel AnimData section, per-action "Used by" strip). |
 
 ## What was the gap
 
@@ -214,21 +245,32 @@ This was the recommended next step at original close-out time, and it
 was executed: see "Audit status" above. 9 gaps surfaced + closed in
 one sweep. Phase 1 Stage 1.A+1.B substrate is now audit-clean.
 
-### B. Animation Phase 1 Stage 1.C — actionRegistry helpers
+### B. Animation Phase 1 Stage 1.C — actionRegistry helpers ~~(recommended next)~~ — SHIPPED `d298bf5`
 
-Per plan §1.C, ship `src/anim/actionRegistry.js`:
+Per plan §1.C, shipped `src/anim/actionRegistry.js`:
 
 ```js
-export function getActionUsers(project, actionId) → Object[]
-export function assignAction(project, objectId, actionId, slot=0) → newProject
-export function unassignAction(project, objectId) → newProject
-export function cloneAction(project, actionId, newName) → { newProject, newActionId }
-export function deleteAction(project, actionId) → newProject
+export function getActionUsers(project, actionId) -> Object[]
+export function assignAction(project, objectId, actionId, slot=0) -> boolean
+export function unassignAction(project, objectId) -> boolean
+export function cloneAction(project, actionId, newName) -> string | null
+export function deleteAction(project, actionId) -> { removed, cascaded }
 ```
 
-The `deleteAction` helper supersedes `projectStore.deleteAction` since
-it also unassigns from every Object's `animData.actionId`. Update the
-projectStore method to delegate.
+In-place mutation throughout (matches migrations + `objectDataAccess.js`
++ every projectStore `produce(...)` thunk). The plan's `-> newProject`
+annotation is JSDoc shorthand for "project state after the call".
+
+`projectStore.deleteAction` now delegates so the cascade to
+`node.animData.actionId` runs whether deletion came from the (current)
+Actions panel or future ActionsEditor (Stage 1.E). No projectStore
+wrappers shipped for `assignAction` / `unassignAction` / `cloneAction`
+yet — they land in Stage 1.E when ActionsEditor is the caller (per
+Rule №2: registered-but-unused thunks would be dead-code crutches).
+
+Test scoreboard: `test_actionRegistry.mjs` 65 assertions (registry CRUD
++ cascade + defensive shape checks + projectStore delegation pin via
+source-grep). Full `npm test` chain exits 0; typecheck clean.
 
 ### C. Animation Phase 1 Stage 1.D — `__scene__` pseudo-Object
 
@@ -269,7 +311,9 @@ with one keyframed Action. Required to declare Phase 1 fully shipped.
 | 39    | `229305a` | feat(anim): Phase 1 Stage 1.A+1.B — Action datablock + AnimData (v36) |
 | 40    | `b6b6ac6` | docs(plan): Phase 1 Stage 1.A+1.B close-out (initial doc) |
 | 41    | `3339257` | fix(audit): Phase 1 Stage 1.A+1.B audit-fix sweep — 5 HIGH + 4 MED |
-| 42    | (next)    | docs(plan): close-out audit-fix addendum (this update) |
+| 42    | `093a8dc` | docs(plan): Phase 1 Stage 1.A+1.B audit-fix close-out addendum |
+| 43    | `d298bf5` | feat(anim): Phase 1 Stage 1.C — `actionRegistry` helpers |
+| 44    | (next)    | fix(audit): Phase 1 Stage 1.C audit-fix sweep — 4 HIGH + 7 MED + 7 LOW (this update) |
 
 ## Schemas after Phase 1 Stage 1.A+1.B
 

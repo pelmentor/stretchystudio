@@ -232,35 +232,33 @@ function makeProject() {
 
 {
   const project = makeProject();
-  const newId = cloneAction(project, 'action-1');
-  assert(typeof newId === 'string' && newId.length > 0,
-    'cloneAction: returns a fresh string id');
-  assert(newId !== 'action-1', 'cloneAction: new id differs from source');
+  const clone = cloneAction(project, 'action-1');
+  assert(clone && typeof clone === 'object',
+    'cloneAction: returns the clone object');
+  assert(typeof clone.id === 'string' && clone.id !== 'action-1',
+    'cloneAction: clone has a fresh id');
   assert(project.actions.length === 3, 'cloneAction: appends to project.actions');
-  const clone = project.actions.find((a) => a.id === newId);
-  assert(clone, 'cloneAction: clone is locatable by returned id');
+  assert(project.actions[2] === clone,
+    'cloneAction: returned object IS the appended one (no extra find)');
 }
 
 {
   const project = makeProject();
-  const newId = cloneAction(project, 'action-1', 'Idle Variant');
-  const clone = project.actions.find((a) => a.id === newId);
+  const clone = cloneAction(project, 'action-1', 'Idle Variant');
   assert(clone.name === 'Idle Variant', 'cloneAction: passes newName through');
 }
 
 {
   const project = makeProject();
-  const newId = cloneAction(project, 'action-1');
-  const clone = project.actions.find((a) => a.id === newId);
+  const clone = cloneAction(project, 'action-1');
   assert(clone.name === 'Idle Copy', 'cloneAction: defaults to "<source.name> Copy"');
 }
 
 {
   // Deep-copy semantics: source and clone fcurves are separate objects
   const project = makeProject();
-  const newId = cloneAction(project, 'action-1');
+  const clone = cloneAction(project, 'action-1');
   const src = project.actions.find((a) => a.id === 'action-1');
-  const clone = project.actions.find((a) => a.id === newId);
   assert(src.fcurves[0] !== clone.fcurves[0],
     'cloneAction: fcurve objects are separate (no shared reference)');
   assert(src.fcurves[0].keyforms[0] !== clone.fcurves[0].keyforms[0],
@@ -277,22 +275,44 @@ function makeProject() {
 }
 
 {
-  // Driver clone: separate driver object on the clone
+  // Driver clone: separate driver object on the clone (audit-fix G-1/D-2)
   const project = makeProject();
-  const newId = cloneAction(project, 'action-2');
-  const src = project.actions.find((a) => a.id === 'action-2');
-  const clone = project.actions.find((a) => a.id === newId);
+  // Beef up action-2's driver with a variables array carrying nested
+  // target objects — verifies the deep clone reaches inside.
+  const action2 = project.actions.find((a) => a.id === 'action-2');
+  action2.fcurves[0].driver = {
+    expression: 'var',
+    variables: [
+      { name: 'var', type: 'SINGLE_PROP', target: { id: 'leftArm', rnaPath: 'pose.rotation' } },
+    ],
+  };
+  const clone = cloneAction(project, 'action-2');
+  const src = action2;
   assert(clone.fcurves[0].driver !== undefined,
     'cloneAction: driver carried onto clone');
   assert(src.fcurves[0].driver !== clone.fcurves[0].driver,
     'cloneAction: driver object reference is fresh');
+  // Audit-fix G-1/D-2 — variables array + per-variable target are deep-cloned
+  assert(src.fcurves[0].driver.variables !== clone.fcurves[0].driver.variables,
+    'cloneAction (G-1/D-2): driver.variables array reference is fresh');
+  assert(src.fcurves[0].driver.variables[0] !== clone.fcurves[0].driver.variables[0],
+    'cloneAction (G-1/D-2): per-variable object reference is fresh');
+  assert(src.fcurves[0].driver.variables[0].target !== clone.fcurves[0].driver.variables[0].target,
+    'cloneAction (G-1/D-2): per-variable target object reference is fresh');
+  // Mutating the clone's driver path does NOT bleed into source
+  clone.fcurves[0].driver.variables[0].target.rnaPath = 'pose.x';
+  assert(src.fcurves[0].driver.variables[0].target.rnaPath === 'pose.rotation',
+    'cloneAction (G-1/D-2): mutating clone driver target does not bleed into source');
+  // Mutating the clone's variables array (push/splice) does NOT bleed
+  clone.fcurves[0].driver.variables.push({ name: 'var2', type: 'SINGLE_PROP' });
+  assert(src.fcurves[0].driver.variables.length === 1,
+    'cloneAction (G-1/D-2): mutating clone driver.variables array does not bleed into source');
 }
 
 {
   // Meta normalisation: clone's meta.source = 'authored', timestamps null
   const project = makeProject();
-  const newId = cloneAction(project, 'action-2'); // source = 'imported_motion3'
-  const clone = project.actions.find((a) => a.id === newId);
+  const clone = cloneAction(project, 'action-2'); // source = 'imported_motion3'
   assert(clone.meta.source === 'authored',
     'cloneAction: meta.source forced to "authored" on clone');
   assert(clone.meta.createdAt === null && clone.meta.modifiedAt === null,
@@ -306,6 +326,88 @@ function makeProject() {
     'cloneAction: missing action → null');
   assert(cloneAction(makeProject(), '') === null,
     'cloneAction: empty actionId → null');
+  // Audit-fix G-10 — early-return on missing project.actions array
+  assert(cloneAction({}, 'action-1') === null,
+    'cloneAction: missing project.actions → null (no defensive re-bind needed)');
+}
+
+// ── G-8 missing scenarios + audit-fix coverage ──────────────────────────────
+
+{
+  // G-8a: getActionUsers after delete returns [] for the deleted id
+  const project = makeProject();
+  assignAction(project, 'leftArm', 'action-1');
+  assignAction(project, 'rightArm', 'action-1');
+  deleteAction(project, 'action-1');
+  assert(getActionUsers(project, 'action-1').length === 0,
+    'G-8a: getActionUsers returns [] for deleted id (cascade visible to readers)');
+}
+
+{
+  // G-8b: cloneAction of a bound action does NOT auto-bind the clone;
+  // source binding preserved.
+  const project = makeProject();
+  assignAction(project, 'leftArm', 'action-1');
+  const clone = cloneAction(project, 'action-1');
+  assert(getActionUsers(project, 'action-1').length === 1,
+    'G-8b: source action binding preserved after clone');
+  assert(getActionUsers(project, clone.id).length === 0,
+    'G-8b: clone has no auto-bound users');
+}
+
+{
+  // G-8c: assignAction twice on the same Object replaces slotHandle cleanly
+  const project = makeProject();
+  assignAction(project, 'leftArm', 'action-1', 3);
+  assignAction(project, 'leftArm', 'action-2', 7);
+  assert(project.nodes[0].animData.actionId === 'action-2',
+    'G-8c: second assign replaces actionId');
+  assert(project.nodes[0].animData.slotHandle === 7,
+    'G-8c: second assign replaces slotHandle');
+}
+
+{
+  // G-8d: deleteAction twice returns {removed:false} on second call
+  const project = makeProject();
+  const r1 = deleteAction(project, 'action-1');
+  assert(r1.removed === true, 'G-8d: first delete succeeds');
+  const r2 = deleteAction(project, 'action-1');
+  assert(r2.removed === false && r2.cascaded === 0,
+    'G-8d: second delete returns {removed:false, cascaded:0}');
+}
+
+{
+  // D-6: integer guard on slot
+  const project = makeProject();
+  assert(assignAction(project, 'leftArm', 'action-1', 1.5) === false,
+    'D-6: non-integer slot rejected');
+  assert(assignAction(project, 'leftArm', 'action-1', -1) === false,
+    'D-6: negative slot rejected');
+  assert(assignAction(project, 'leftArm', 'action-1', NaN) === false,
+    'D-6: NaN slot rejected');
+  assert(project.nodes[0].animData.actionId === null,
+    'D-6: rejected slot does not mutate animData');
+  // Valid integer slot works
+  assert(assignAction(project, 'leftArm', 'action-1', 0) === true,
+    'D-6: 0 slot accepted');
+  assert(assignAction(project, 'leftArm', 'action-1', 42) === true,
+    'D-6: positive integer slot accepted');
+}
+
+{
+  // G-7: assignAction preserves actionInfluence/Blendmode/Extendmode (per-Object policy)
+  const project = makeProject();
+  project.nodes[0].animData.actionInfluence = 0.5;
+  project.nodes[0].animData.actionBlendmode = 'add';
+  project.nodes[0].animData.actionExtendmode = 'nothing';
+  assignAction(project, 'leftArm', 'action-1');
+  const ad = project.nodes[0].animData;
+  assert(ad.actionInfluence === 0.5,
+    'G-7: assignAction preserves actionInfluence (per-Object policy)');
+  assert(ad.actionBlendmode === 'add',
+    'G-7: assignAction preserves actionBlendmode');
+  assert(ad.actionExtendmode === 'nothing',
+    'G-7: assignAction preserves actionExtendmode');
 }
 
 // ── deleteAction ────────────────────────────────────────────────────────────

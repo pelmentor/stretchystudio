@@ -526,15 +526,22 @@ consumer below has been migrated to `project.actions[]`:**
 
 #### 1.C — `actionRegistry.js`
 
-New module: [src/anim/actionRegistry.js].
+Module shipped 2026-05-11 at [src/anim/actionRegistry.js](../../src/anim/actionRegistry.js). Five lifecycle helpers, in-place mutation throughout (matches migrations + `objectDataAccess.js`). Return shapes follow the Blender helpers' `bool` contract rather than the prose `→ newProject` (audit-fix D-3):
 
 ```js
-export function getActionUsers(project, actionId) → Object[]
-export function assignAction(project, objectId, actionId, slot=0) → newProject
-export function unassignAction(project, objectId) → newProject
-export function cloneAction(project, actionId, newName) → { newProject, newActionId }
-export function deleteAction(project, actionId) → newProject  // also unassigns from all objects
+export function getActionUsers(project, actionId) → Object[]                  // live node refs
+export function assignAction(project, objectId, actionId, slot=0) → boolean   // matches Blender bool assign_action
+export function unassignAction(project, objectId) → boolean                    // matches Blender bool unassign_action
+export function cloneAction(project, actionId, newName) → object | null        // returns the cloned action object
+export function deleteAction(project, actionId) → { removed, cascaded }        // cascade telemetry
 ```
+
+`projectStore.deleteAction` delegates to `registryDeleteAction` AND resets `useAnimationStore.activeActionId` when it matches the deleted id (audit-fix G-3, cross-store cascade). Sister thunks `projectStore.assignAction` / `unassignAction` / `cloneAction` shipped to give the registry a React-aware path (audit-fix G-4 — substrate without thunks is itself a Rule №2 anti-pattern).
+
+**Stage 1.E entry gate (audit-fix D-10):** Stage 1.E will rewire these consumers to use the registry:
+- `AnimationsEditor.jsx` (rename to `ActionsEditor.jsx`) — currently calls `projectStore.deleteAction`/`renameAction`/`createAction` directly; will add `cloneAction` (Duplicate command) + `assignAction` (drag-to-bind from Properties panel).
+- `Properties` panel — new "AnimData" sub-section per Object surfacing the `actionId` slot with assign/unassign affordance.
+- Per-action "Used by: <objects>" strip — consumes `getActionUsers`.
 
 #### 1.D — Project-level "Scene" AnimData
 
