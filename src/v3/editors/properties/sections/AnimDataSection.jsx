@@ -37,35 +37,63 @@
  * file line 18) and `PropertiesAnimationMixin`. Blender registers the
  * Object-datablock's Animation panel on the **Object** tab — same role
  * as SS's "Item" tab — and SS's Item-tab placement of `animData` is
- * the direct mirror.
+ * the direct mirror. `OBJECT_PT_animation` sets
+ * `_animated_id_context_property = "object"` (`properties_object.py:619`),
+ * so `PropertiesAnimationMixin._animated_id` resolves
+ * `getattr(context, "object")` (`space_properties.py:142-149`) — the
+ * panel animates `context.object` (the Object ID). SS's per-Object
+ * `node.animData` is the same animatable target.
  *
  * `PropertiesAnimationMixin` (`space_properties.py:124`) is a mixin;
  * its default `bl_context = "data"` is overridden by every concrete
  * subclass via its ButtonsPanel base. The mixin's `bl_context` is a
- * placeholder, not the canonical mount-point. Per-datablock-type
- * subclasses register on different tabs:
+ * placeholder, not the canonical mount-point. (`bl_label = "Animation"`
+ * and `bl_options = {'DEFAULT_CLOSED'}` ARE inherited from the mixin —
+ * `bl_context` is the only field every subclass overrides.) Per-
+ * datablock-type subclasses register on different tabs (20 total
+ * across `properties_*.py`):
  *   - `OBJECT_PT_animation`        → Object tab (`bl_context="object"`)
  *   - `DATA_PT_armature_animation` → Data tab
+ *   - `DATA_PT_mesh_animation`     → Data tab
  *   - `MATERIAL_PT_animation`      → Material tab
+ *   - `WORLD_PT_animation`         → World tab
  *   - `SCENE_PT_animation`         → Scene tab
- *   - … (~16 subclasses across `properties_*.py`)
  * For SS Object selectables (parts + groups), `OBJECT_PT_animation` →
- * Item tab is the only Blender-faithful mount; `node.animData` lives
- * on the Object datablock and SS conflates Object + ObData (no
- * separate data-datablock layer for `DATA_PT_*_animation` to mirror).
- * See [propertiesTabRegistry.jsx](../propertiesTabRegistry.jsx) Item
- * tab block for the full multi-tab landscape.
+ * Item tab is the canonical mount; even where parts link to a
+ * `meshData` ID via v18+ `dataId`, animData lives on the part's Object
+ * node, not the linked meshData. See [propertiesTabRegistry.jsx](../propertiesTabRegistry.jsx)
+ * Item tab block for the full multi-tab landscape (with each
+ * subclass's ButtonsPanel base cited).
+ *
+ * # Bone-animation deviation
+ *
+ * SS surfaces per-bone-group `animData` via the same Item tab; in
+ * Blender, bones share one `animation_data` on the Armature ID
+ * (`DATA_PT_armature_animation`, Data tab,
+ * `_animated_id_context_property = "armature"`) and per-bone fcurves
+ * use `pose.bones["…"].…` paths against the Armature's action.
+ * SS's per-bone-group action binding lets each bone reference its own
+ * Action — this is Cubism-runtime-driven (param sliders) and
+ * intentionally diverges from Blender's per-Armature model. Phase 4
+ * NLA work may revisit this when slotted-actions parity arrives.
  *
  * # Blender-fidelity scope (Audit-fix D-10 Stage 1.E)
  *
- * The section surfaces ONLY the Action picker + a derived FCurves
- * count, mirroring Blender's `draw_action_and_slot_selector_for_id`
- * (`reference/blender/scripts/startup/bl_ui/anim.py:8-30`). The other
- * `AnimData` fields available in the schema (`actionInfluence`,
- * `actionBlendmode`, `actionExtendmode` — all v36 defaults from
- * `defaultAnimData()`) live in Blender's NLA Editor, not the per-
- * datablock Animation panel. They are reserved for Phase 4's NLA work
- * to keep the Stage-1.E surface honest.
+ * The section surfaces the Action picker + a derived FCurves count.
+ * The picker mirrors the `template_action` half of Blender's
+ * `draw_action_and_slot_selector_for_id`
+ * (`reference/blender/scripts/startup/bl_ui/anim.py:8-30`,
+ * `template_action` call at line 18). The `template_search` slot
+ * selector (anim.py:25-30, only drawn when an action is bound) is
+ * intentionally NOT mirrored — slotted-actions parity is deferred to
+ * Phase 4 (Blender 4.4+ multi-ID-per-Action sharing model). The
+ * FCurves count is an SS-only addition (not in
+ * `OBJECT_PT_animation`'s draw). The other `AnimData` fields available
+ * in the schema (`actionInfluence`, `actionBlendmode`,
+ * `actionExtendmode` — all v36 defaults from `defaultAnimData()`)
+ * live in Blender's NLA Editor, not the per-datablock Animation
+ * panel. They are reserved for Phase 4's NLA work to keep the
+ * Stage-1.E surface honest.
  *
  * # Section label (Audit-fix D-2 Stage 1.E)
  *

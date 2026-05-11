@@ -127,12 +127,16 @@ and returned just the id. The audit caught it; fixed in the same sweep.
 
 All HIGH addressed in CODE (not deferred); D-1 specifically gets a
 documented Stage 1.F + Phase 2 entry-gate deferral pending dedicated
-"Animation" Properties tab. All MED addressed in code or doc; LOW
-addressed via doc / cosmetic / loud-defensive refactor.
+"Animation" Properties tab. (D-1 RE-RESOLVED 2026-05-12 — the
+deferral premise was a misread of Blender; Item-tab placement IS
+the Blender mirror via `OBJECT_PT_animation`. See
+[SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).)
+All MED addressed in code or doc; LOW addressed via doc / cosmetic /
+loud-defensive refactor.
 
 | Gap | Severity | Lane | What |
 |-----|----------|------|------|
-| D-1 | HIGH→MED | Blender-fidelity | `animData` section in Item tab vs Blender Data tab. Doc the deviation; queue dedicated Animation tab for Stage 1.F + Phase 2 entry-gate. SS Data tab is parts-only today (mesh/shapeKeys gates), can't simply move. |
+| D-1 | HIGH→MED | Blender-fidelity | (Originally: `animData` section in Item tab vs Blender Data tab. Doc the deviation; queue dedicated Animation tab for Stage 1.F + Phase 2 entry-gate.) **RE-RESOLVED 2026-05-12** — the deferral premise was a misread; Blender's Animation panel registers per-datablock-type via `OBJECT_PT_animation` / `DATA_PT_*_animation` / `MATERIAL_PT_animation` / etc. on different tabs, with no dedicated Animation tab. Item-tab placement IS the Blender mirror via `OBJECT_PT_animation` (`properties_object.py:618`, `bl_context = "object"`). See [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md). |
 | D-2 | HIGH | Blender-fidelity | Section label "Animation Data" → "Animation" (mirrors Blender `bl_label = "Animation"` on `PropertiesAnimationMixin` at `space_properties.py:135`). Mechanical change in `AnimDataSection.jsx` + `sectionRegistry.jsx`. |
 | D-3 | HIGH | Blender-fidelity | `'animData'` added to `editorStore.propertiesSectionsCollapsed` initial Set — matches Blender `bl_options = {'DEFAULT_CLOSED'}` (`space_properties.py:136`). Per-Object bindings rarely change post-import; collapsed-by-default keeps Item tab compact. |
 | D-4 | HIGH | Blender-fidelity | `animData` LAST in Item tab `sectionIds` (matches Blender `bl_order = PropertyPanel.bl_order - 1` "just above Custom Properties"). |
@@ -255,41 +259,32 @@ Per plan §1.F + 1.G (lines 637-651):
 Required to declare Phase 1 fully shipped. NodeTree retirement should
 land first to keep the v24-shadow path out of the new test suites.
 
-### C. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+### C. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 
-> **Update 2026-05-12:** This Resume path's premise was a misread of
-> Blender. `PropertiesAnimationMixin.bl_context = "data"` is the
-> mixin's *default* — every concrete subclass overrides it via its
-> ButtonsPanel base. `OBJECT_PT_animation`
-> (`reference/blender/scripts/startup/bl_ui/properties_object.py:618`)
-> inherits `ObjectButtonsPanel.bl_context = "object"` and registers the
-> Object-datablock's Animation panel on the **Object** tab — same role
-> as SS's Item tab. SS's existing Item-tab placement IS the Blender-
-> faithful mirror; the dedicated-Animation-tab plan would have been
-> SS-invented (Blender has no dedicated Animation tab in its Properties
-> navigation). See
-> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
+This Resume path's premise was a misread of Blender.
+`PropertiesAnimationMixin.bl_context = "data"` is the mixin's
+*default* — every concrete subclass overrides it via its ButtonsPanel
+base. `OBJECT_PT_animation`
+(`reference/blender/scripts/startup/bl_ui/properties_object.py:618`)
+inherits `ObjectButtonsPanel.bl_context = "object"` and registers the
+Object-datablock's Animation panel on the **Object** tab — same role
+as SS's Item tab. SS's existing Item-tab placement IS the Blender-
+faithful mirror; the dedicated-Animation-tab plan would have been
+SS-invented (Blender has no dedicated Animation tab in its Properties
+navigation). See
+[SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
-Per Audit-fix D-1 deferral note in
-[propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):
-
-- Add a new top-level Properties tab `'animation'` (peer of `item` /
-  `modifiers` / `data` / etc.) holding the `'animData'` section.
-- Move `'animData'` out of the Item tab `sectionIds`.
-- Mirrors Blender's `PropertiesAnimationMixin.bl_context = "data"`
-  pattern more faithfully — Blender registers the Animation panel on
-  every datablock's Data tab; SS approximates with one peer tab since
-  parts and groups share the same node abstraction.
-
-Decoupled from the Phase 1 exit gate; could land alongside or after
-Stage 1.F/1.G.
+The original (now-rejected) plan called for adding a peer `'animation'`
+Properties tab and moving `animData` out of Item tab. **Do not do
+this** — the dedicated-tab framing is the SS-invented pattern that the
+RE-RESOLUTION rejects.
 
 ### Recommended order
 
-A → B → C. NodeTree retirement is the smallest decoupled chunk and
+A → B. NodeTree retirement is the smallest decoupled chunk and
 clears the v24-shadow code path that Phase 1's exit-gate test suites
 would otherwise need to assert against. Stage 1.F/1.G is the closing
-gate. Stage 1.E's D-1 deferral is a UX polish that can land any time.
+gate. (C is RE-RESOLVED — no follow-up needed.)
 
 ## Cross-references
 

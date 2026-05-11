@@ -257,28 +257,16 @@ Stage 1.F's automated tests cover everything that CAN be automated
 without a runtime Cubism Viewer / Editor. The 1.G gate is what
 closes Phase 1.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+### B. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 
-> **Update 2026-05-12:** This Resume path's premise was a misread of
-> Blender. The Item-tab placement IS the Blender mirror via
-> `OBJECT_PT_animation` (`properties_object.py:618`,
-> `bl_context = "object"`); Blender has no dedicated Animation tab.
-> See
-> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
-
-Per Audit-fix D-1 deferral note in
-[propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):
-
-- Add a new top-level Properties tab `'animation'` (peer of `item` /
-  `modifiers` / `data`) holding the `'animData'` section.
-- Move `'animData'` out of the Item tab `sectionIds`.
-- Mirrors Blender's `PropertiesAnimationMixin.bl_context = "data"`
-  more faithfully — Blender registers the Animation panel on every
-  datablock's Data tab; SS approximates with one peer tab since parts
-  and groups share the same node abstraction.
-
-Decoupled from the Phase 1 ship gate; could land alongside or
-immediately after Phase 1.G manual confirmation.
+This Resume path's premise was a misread of Blender. The Item-tab
+placement IS the Blender mirror via `OBJECT_PT_animation`
+(`properties_object.py:618`, `bl_context = "object"`); Blender has no
+dedicated Animation tab. The original (now-rejected) plan called for
+adding a peer `'animation'` tab and moving `animData` out of Item
+tab — **do not do this**, it is the SS-invented pattern that the
+RE-RESOLUTION rejects. See
+[SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 ### C. Migration walker contiguous-version refactor (Stage 1.F-pre audit-fix D-9 follow-up)
 
@@ -304,9 +292,9 @@ Blocks on Phase 1 ship gate (1.G manual confirmation).
 
 ### Recommended order
 
-A → (B || C) → D. Phase 1.G is the Phase 1 ship gate — everything
-else waits for it. B + C are decoupled polish; D is the next
-animation-substrate chunk.
+A → C → D. Phase 1.G is the Phase 1 ship gate — everything else
+waits for it. C is decoupled polish; D is the next animation-substrate
+chunk. (B is RE-RESOLVED — no follow-up needed.)
 
 ## Cross-references
 

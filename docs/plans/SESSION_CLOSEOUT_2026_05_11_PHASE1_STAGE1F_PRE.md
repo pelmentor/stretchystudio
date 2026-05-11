@@ -197,8 +197,10 @@ Keyframe) remains queued.
 
 ## Resume paths for fresh session
 
-The Phase 1 exit gate is the natural next chunk; D-1 follow-up
-(Properties dedicated Animation tab) remains queued from Stage 1.E.
+The Phase 1 exit gate is the natural next chunk. (Stage 1.E's D-1
+follow-up was RE-RESOLVED 2026-05-12 — Item-tab placement IS the
+Blender mirror via `OBJECT_PT_animation`; no implementation needed.
+See [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).)
 
 ### A. Stage 1.F + 1.G — Phase 1 exit gate (recommended next)
 
@@ -221,28 +223,16 @@ Per plan §1.F + 1.G (lines 637-651):
 NodeTree retirement (this sub-session) was the prerequisite that
 removed the v24-shadow code path from the test matrix.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+### B. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 
-> **Update 2026-05-12:** This Resume path's premise was a misread of
-> Blender. The Item-tab placement IS the Blender mirror via
-> `OBJECT_PT_animation` (`properties_object.py:618`,
-> `bl_context = "object"`); Blender has no dedicated Animation tab.
-> See
-> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
-
-Per Audit-fix D-1 deferral note in
-[propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):
-
-- Add a new top-level Properties tab `'animation'` (peer of `item` /
-  `modifiers` / `data`) holding the `'animData'` section.
-- Move `'animData'` out of the Item tab `sectionIds`.
-- Mirrors Blender's `PropertiesAnimationMixin.bl_context = "data"`
-  more faithfully — Blender registers the Animation panel on every
-  datablock's Data tab; SS approximates with one peer tab since parts
-  and groups share the same node abstraction.
-
-Decoupled from the Phase 1 exit gate; could land alongside or after
-Stage 1.F/1.G.
+This Resume path's premise was a misread of Blender. The Item-tab
+placement IS the Blender mirror via `OBJECT_PT_animation`
+(`properties_object.py:618`, `bl_context = "object"`); Blender has no
+dedicated Animation tab. The original (now-rejected) plan called for
+adding a peer `'animation'` tab and moving `animData` out of Item
+tab — **do not do this**, it is the SS-invented pattern that the
+RE-RESOLUTION rejects. See
+[SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 ### C. Stage 1.E audit-fix D-9 follow-up — projectMigrations walker refactor
 
@@ -258,9 +248,9 @@ testing.
 
 ### Recommended order
 
-A → B → C. The Phase 1 exit gate is the closing gate the entire
-animation Phase 1 lineage was building toward; B + C are decoupled
-polish that can wait.
+A → C. The Phase 1 exit gate is the closing gate the entire
+animation Phase 1 lineage was building toward; C is decoupled polish
+that can wait. (B is RE-RESOLVED — no follow-up needed.)
 
 ## Cross-references
 

@@ -63,10 +63,12 @@ export const PROPERTIES_TABS = [
     icon: <Box size={14} />,
     // Stage 1.E — `animData` lives under Item (the Object-level
     // metadata tab) so per-Object Action bindings appear alongside
-    // transform / visibility / part info. Last position because it
-    // mirrors Blender's `bl_order = PropertyPanel.bl_order - 1` —
-    // "just above the Custom Properties" panel (SS has no Custom
-    // Properties section, so last-in-tab is the equivalent slot).
+    // transform / visibility / part info. Last position because in
+    // Blender the Animation panel is second-to-last (`bl_order =
+    // PropertyPanel.bl_order - 1` = 999, with `OBJECT_PT_custom_props`
+    // last at 1000 — see `space_properties.py:137`); SS has no Custom
+    // Properties section so the equivalent slot collapses to last-in-
+    // tab.
     //
     // **Blender mirror (Audit-fix D-1 Stage 1.E — RE-RESOLVED
     // 2026-05-12).** The actual Blender mirror is `OBJECT_PT_animation`
@@ -76,29 +78,44 @@ export const PROPERTIES_TABS = [
     // Animation panel on the **Object** tab, not the Data tab. SS's
     // "Item" tab IS Blender's "Object" tab in everything but the label,
     // so Item-tab placement of `animData` is the direct Blender mirror.
+    // `OBJECT_PT_animation` sets `_animated_id_context_property =
+    // "object"` (`properties_object.py:619`), so the mixin's draw
+    // animates `context.object` — same animatable target as SS's
+    // per-Object `node.animData`.
     //
     // The mixin (`PropertiesAnimationMixin` at
     // `space_properties.py:124`) defaults to `bl_context = "data"`, but
     // every concrete subclass overrides `bl_context` via its
-    // ButtonsPanel base. The mixin's `bl_context` is a placeholder, not
-    // the canonical mount-point. Per-datablock-type subclasses:
-    //   - `OBJECT_PT_animation`           → Object tab (`bl_context="object"`)
-    //   - `DATA_PT_armature_animation`    → Data tab   (`bl_context="data"`)
-    //   - `DATA_PT_mesh_animation`        → Data tab
-    //   - `DATA_PT_camera_animation`      → Data tab
-    //   - `MATERIAL_PT_animation`         → Material tab
-    //   - `WORLD_PT_animation`            → World tab
-    //   - `SCENE_PT_animation`            → Scene tab
-    //   - … (~16 subclasses total across `properties_*.py`)
+    // ButtonsPanel base — the mixin's `bl_context` is a placeholder,
+    // not the canonical mount-point. (`bl_label = "Animation"` and
+    // `bl_options = {'DEFAULT_CLOSED'}` ARE inherited from the mixin
+    // — `bl_context` is the only field every subclass overrides.)
+    // Per-datablock-type subclasses (20 total across `properties_*.py`,
+    // 7 cited here):
+    //   - `OBJECT_PT_animation`           via `ObjectButtonsPanel`     → Object tab   (`bl_context="object"`)
+    //   - `DATA_PT_armature_animation`    via `ArmatureButtonsPanel`   → Data tab     (`bl_context="data"`)
+    //   - `DATA_PT_mesh_animation`        via `MeshButtonsPanel`       → Data tab
+    //   - `DATA_PT_camera_animation`      via `CameraButtonsPanel`     → Data tab
+    //   - `MATERIAL_PT_animation`         via `MaterialButtonsPanel`   → Material tab (`bl_context="material"`)
+    //   - `WORLD_PT_animation`            via `WorldButtonsPanel`      → World tab    (`bl_context="world"`)
+    //   - `SCENE_PT_animation`            via `SceneButtonsPanel`      → Scene tab    (`bl_context="scene"`)
     //
     // For SS, `node.animData` lives on the Object datablock (parts +
     // groups are Object selectables per Stage 1.A `objectDataAccess.
-    // isObject(node)`); there is no separate "data" datablock layer
-    // (SS conflates Object + ObData), so `OBJECT_PT_animation` →
-    // **Item tab** is the only Blender-faithful mount. The Stage 1.E
-    // close-out's "dedicated Animation tab" Resume path was based on
-    // a misread of the mixin default — Blender has no dedicated
-    // Animation tab in its Properties navigation.
+    // isObject(node)`); even where parts link to a `meshData` ID via
+    // v18+ `dataId`, animData lives on the part's Object node, not the
+    // linked meshData — so `OBJECT_PT_animation` → **Item tab** is the
+    // canonical mount for SS Object selectables. The Stage 1.E close-
+    // out's "dedicated Animation tab" Resume path was based on a
+    // misread of the mixin default — Blender has no dedicated Animation
+    // tab in its Properties navigation.
+    //
+    // **Latent Data-tab gap (future work):** if/when SS introduces an
+    // armatureData node in the Data tab (mirroring Blender's Armature
+    // ID), that tab's Animation section should mirror
+    // `DATA_PT_armature_animation` — bones share one animation_data on
+    // the Armature ID in Blender, with per-bone fcurves keyed via
+    // `pose.bones["…"].…` paths on the Armature's action.
     sectionIds: ['transform', 'visibility', 'partInfo', 'animData'],
   },
   {

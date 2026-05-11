@@ -240,24 +240,16 @@ Cubism Viewer 5.0 + Cubism Editor 5.0 → Animation workspace. Stage
 1.F's automated tests cover everything that CAN be automated; 1.G is
 the human-eyes Cubism load that closes Phase 1.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+### B. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 
-> **Update 2026-05-12:** This Resume path's premise was a misread of
-> Blender. The Item-tab placement IS the Blender mirror via
-> `OBJECT_PT_animation` (`properties_object.py:618`,
-> `bl_context = "object"`); Blender has no dedicated Animation tab.
-> See
-> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
-
-Per Audit-fix D-1 deferral note in Stage 1.E close-out:
-
-- Add a new top-level Properties tab `'animation'` (peer of `item` /
-  `modifiers` / `data`) holding the `'animData'` section.
-- Move `'animData'` out of the Item tab `sectionIds`.
-- Mirrors Blender's `PropertiesAnimationMixin.bl_context = "data"`
-  more faithfully.
-
-Decoupled from the Phase 1 ship gate.
+This Resume path's premise was a misread of Blender. The Item-tab
+placement IS the Blender mirror via `OBJECT_PT_animation`
+(`properties_object.py:618`, `bl_context = "object"`); Blender has no
+dedicated Animation tab. The original (now-rejected) plan called for
+adding a peer `'animation'` tab and moving `animData` out of Item
+tab — **do not do this**, it is the SS-invented pattern that the
+RE-RESOLUTION rejects. See
+[SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 ### C. Phase 2 — BezTriple handles (1 week, schema v39)
 
