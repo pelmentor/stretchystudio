@@ -13,7 +13,7 @@ the 3 manual gates remain user-side). Branch ahead of `origin/master` by
 | Commit  | What |
 |---------|------|
 | `59fedac` | Phase 7.D initial — wire 11 orphan test files into `npm test`, resolve `vTB+1`/`vTB+2` schema placeholders to v33/v34 (+ note v35 sister), mark Top-12 + per-mode coverage as ✅ shipped, mark Phase 0–7.C exit checklists complete. |
-| `6ef0bf5` | Phase 7.D audit-fix sweep — 1 HIGH arch (G-1: 2 more orphan tests `typedArrayPool` + `spatialHash`) + 2 HIGH docs (D-1: §9 fictional migration filenames; D-2: §9 fictional pose operator filenames + wrong chord) + sister-sweep MED-promoted-to-HIGH (full §9 file index rewrite — 11 of 41 rows wrong; 4 body-text implementation notes also corrected) + 2 LOW arch + 1 MED docs (`_pending_` → `59fedac` in close-out). 7 FIXes + 4 DOCUMENT-AS-DEVIATION. 42-assertion audit-pin test. |
+| `6ef0bf5` | Phase 7.D audit-fix sweep — 1 HIGH arch (G-1: 2 more orphan tests `typedArrayPool` + `spatialHash`) + 2 HIGH docs (D-1: §9 fictional migration filenames; D-2: §9 fictional pose operator filenames + wrong chord) + sister-sweep MED-promoted-to-HIGH (full §9 file index rewrite — 11 of 41 rows wrong; 4 body-text implementation notes also corrected) + 2 LOW arch + 1 MED docs (close-out commit-hash placeholder → real `59fedac`). 7 FIXes + 4 DOCUMENT-AS-DEVIATION. 42-assertion audit-pin test. |
 
 (Close-out doc commit follows separately.)
 
