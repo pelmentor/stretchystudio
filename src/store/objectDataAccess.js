@@ -349,6 +349,109 @@ export function getBonePose(node) {
   };
 }
 
+/** Pose-channel field names — strict guard for `setBonePoseField`. */
+const POSE_CHANNEL_FIELDS = new Set(['rotation', 'x', 'y', 'scaleX', 'scaleY']);
+
+/**
+ * Resolve a writable PoseChannel object on a bone-group node, mirroring
+ * `getBonePose`'s shape detection. Initialises missing fields to identity
+ * (`rotation:0, x:0, y:0, scaleX:1, scaleY:1`) so callers can always
+ * write into the returned object directly.
+ *
+ * Shape rules:
+ *   - v17/v18 flat shape (`node.pose = {rotation, x, ...}`): returns
+ *     `node.pose` itself.
+ *   - v19+ channels shape (`node.pose = { channels: { [boneId]: {...} } }`):
+ *     returns `node.pose.channels[node.id]`, creating the inner channel
+ *     entry if missing (preserves the channels-shape envelope intact).
+ *   - Missing pose entirely: creates flat shape (the safer default —
+ *     never spontaneously creates channels-shape, since that's the
+ *     v19 migration's job).
+ *
+ * Returns null for non-bone nodes — callers should treat that as a
+ * silent no-op (consistent with `getBonePose`'s null contract).
+ *
+ * @param {object|null|undefined} node
+ * @returns {{rotation:number,x:number,y:number,scaleX:number,scaleY:number}|null}
+ */
+export function ensureBonePoseChannel(node) {
+  if (!isBoneGroup(node)) return null;
+
+  // No pose at all → init flat (matches today's bone-group-IS-Object
+  // reality; v19 migration channelises on next save+load if needed).
+  if (!node.pose || typeof node.pose !== 'object') {
+    node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    return node.pose;
+  }
+
+  // v19+ channels shape — drill into channels[node.id], creating if
+  // missing. Preserves the channels envelope so the v19 reader path
+  // stays valid.
+  if (node.pose.channels && typeof node.pose.channels === 'object') {
+    let ch = node.pose.channels[node.id];
+    if (!ch || typeof ch !== 'object') {
+      ch = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+      node.pose.channels[node.id] = ch;
+      return ch;
+    }
+    if (typeof ch.rotation !== 'number') ch.rotation = 0;
+    if (typeof ch.x        !== 'number') ch.x        = 0;
+    if (typeof ch.y        !== 'number') ch.y        = 0;
+    if (typeof ch.scaleX   !== 'number') ch.scaleX   = 1;
+    if (typeof ch.scaleY   !== 'number') ch.scaleY   = 1;
+    return ch;
+  }
+
+  // v17/v18 flat shape — fill missing fields, return the pose object
+  // itself.
+  const p = node.pose;
+  if (typeof p.rotation !== 'number') p.rotation = 0;
+  if (typeof p.x        !== 'number') p.x        = 0;
+  if (typeof p.y        !== 'number') p.y        = 0;
+  if (typeof p.scaleX   !== 'number') p.scaleX   = 1;
+  if (typeof p.scaleY   !== 'number') p.scaleY   = 1;
+  return p;
+}
+
+/**
+ * Write a single pose-channel field on a bone-group node, routing
+ * through the shape-aware writer. Silent no-op for non-bones or for
+ * unknown field names (strict guard against typos like `'rot'` or
+ * `'translateX'`).
+ *
+ * Field names: `'rotation' | 'x' | 'y' | 'scaleX' | 'scaleY'`.
+ *
+ * @param {object|null|undefined} node
+ * @param {string} field
+ * @param {number} value
+ */
+export function setBonePoseField(node, field, value) {
+  if (!POSE_CHANNEL_FIELDS.has(field)) return;
+  if (typeof value !== 'number') return;
+  const ch = ensureBonePoseChannel(node);
+  if (!ch) return;
+  ch[field] = value;
+}
+
+/**
+ * Atomic multi-field write — sets every numeric field on `partialPose`
+ * onto the bone's PoseChannel. Unset fields keep their current values
+ * (so a `{x: 10, y: 5}` write doesn't accidentally zero rotation).
+ *
+ * @param {object|null|undefined} node
+ * @param {Partial<{rotation:number,x:number,y:number,scaleX:number,scaleY:number}>} partialPose
+ */
+export function setBonePose(node, partialPose) {
+  if (!partialPose || typeof partialPose !== 'object') return;
+  const ch = ensureBonePoseChannel(node);
+  if (!ch) return;
+  if (typeof partialPose.rotation === 'number') ch.rotation = partialPose.rotation;
+  if (typeof partialPose.x        === 'number') ch.x        = partialPose.x;
+  if (typeof partialPose.y        === 'number') ch.y        = partialPose.y;
+  if (typeof partialPose.scaleX   === 'number') ch.scaleX   = partialPose.scaleX;
+  if (typeof partialPose.scaleY   === 'number') ch.scaleY   = partialPose.scaleY;
+}
+
 // ── Armature data ─────────────────────────────────────────────────────────
 
 /**

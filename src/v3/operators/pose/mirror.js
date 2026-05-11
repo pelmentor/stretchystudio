@@ -62,6 +62,7 @@ import {
   getBoneRole,
   getBoneByRole,
   getBonesIn,
+  setBonePose,
 } from '../../../store/objectDataAccess.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import { eligibleBones, IDENTITY_POSE } from './clearTransform.js';
@@ -299,13 +300,7 @@ export function posePaste(opts = { flipped: false }) {
     useProjectStore.getState().updateProject((proj) => {
       for (const w of writes) {
         const node = proj.nodes.find((n) => n?.id === w.id);
-        if (!node || !isBoneGroup(node)) continue;
-        if (!node.pose) node.pose = { ...IDENTITY_POSE };
-        node.pose.rotation = w.pose.rotation;
-        node.pose.x        = w.pose.x;
-        node.pose.y        = w.pose.y;
-        node.pose.scaleX   = w.pose.scaleX;
-        node.pose.scaleY   = w.pose.scaleY;
+        setBonePose(node, w.pose);
       }
     });
   } finally {

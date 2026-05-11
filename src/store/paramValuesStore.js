@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { logger } from '../lib/logger.js';
 import { useProjectStore } from './projectStore.js';
+import { setBonePoseField, getBonePose } from './objectDataAccess.js';
 
 /**
  * R0 (Native rig render v2) — live parameter values driving in-editor evaluation.
@@ -78,9 +79,7 @@ export const useParamValuesStore = create((set, get) => ({
       // don't pollute undo.
       useProjectStore.getState().updateProject((proj) => {
         const bone = proj.nodes.find((n) => n.id === boneId);
-        if (!bone) return;
-        if (!bone.pose) bone.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-        bone.pose.rotation = value;
+        setBonePoseField(bone, 'rotation', value);
       }, { skipHistory: true });
     }
     set(state => ({ values: { ...state.values, [id]: value } }));
@@ -106,9 +105,7 @@ export const useParamValuesStore = create((set, get) => ({
         useProjectStore.getState().updateProject((proj) => {
           for (const { boneId, value } of boneFanOut) {
             const bone = proj.nodes.find((n) => n.id === boneId);
-            if (!bone) continue;
-            if (!bone.pose) bone.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-            bone.pose.rotation = value;
+            setBonePoseField(bone, 'rotation', value);
           }
         }, { skipHistory: true });
       }
@@ -204,7 +201,9 @@ export const useParamValuesStore = create((set, get) => ({
     let dirty = false;
     for (const [boneId, paramId] of byBone) {
       const bone = proj.nodes.find((n) => n.id === boneId);
-      const r = (typeof bone?.pose?.rotation === 'number') ? bone.pose.rotation : 0;
+      // getBonePose handles v17/v18 flat shape AND v19 channels shape;
+      // returns identity-pose for missing/unposed bones.
+      const r = getBonePose(bone)?.rotation ?? 0;
       if (next[paramId] !== r) {
         next[paramId] = r;
         dirty = true;

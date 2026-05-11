@@ -10,7 +10,7 @@
  *  [2]   [5]   [8]   row 2
  */
 
-import { isBoneGroup } from '../store/objectDataAccess.js';
+import { isBoneGroup, getBonePose } from '../store/objectDataAccess.js';
 
 /** Identity matrix */
 export function mat3Identity() {
@@ -176,8 +176,13 @@ export function computeWorldMatrices(nodes) {
   function resolve(node) {
     if (worldMap.has(node.id)) return worldMap.get(node.id);
     const isBone = isBoneGroup(node);
+    // Bones: route through `getBonePose` so v19 channels-shape resolves
+    // to the same flat `{rotation, x, y, scaleX, scaleY}` contract that
+    // `makeBoneLocalMatrix` reads. Synthetic effective-nodes from
+    // `applyOverrideToNode` already carry flat shape, so this works for
+    // both raw and effective node arrays.
     const local = isBone
-      ? makeBoneLocalMatrix(node.transform, node.pose)
+      ? makeBoneLocalMatrix(node.transform, getBonePose(node))
       : makeLocalMatrix(node.transform);
     let world;
     if (node.parent && nodeMap.has(node.parent)) {

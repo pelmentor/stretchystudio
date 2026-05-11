@@ -9,7 +9,7 @@
  *   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'opacity' | 'visible' | 'mesh_verts' | 'blendShape:{id}'
  */
 
-import { isBoneGroup } from '../store/objectDataAccess.js';
+import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -284,10 +284,10 @@ export function getNodePropertyValue(node, property) {
   // post-v17), so reading transform.rotation for a bone returns 0
   // regardless of pose. Route through `pose` for bones.
   if (isBoneNode(node) && (property === 'rotation' || property === 'x' || property === 'y' || property === 'scaleX' || property === 'scaleY')) {
-    if (property === 'scaleX' || property === 'scaleY') {
-      return node.pose?.[property] ?? 1;
-    }
-    return node.pose?.[property] ?? 0;
+    // getBonePose handles v17/v18 flat shape AND v19+ channels shape;
+    // returns identity-pose if pose is missing.
+    const p = getBonePose(node);
+    return p ? p[property] : ((property === 'scaleX' || property === 'scaleY') ? 1 : 0);
   }
   return node.transform?.[property] ?? 0;
 }
@@ -320,7 +320,11 @@ export function applyOverrideToNode(node, override) {
   for (const k of TRANSFORM_PROPS) {
     if (override[k] === undefined) continue;
     if (isBone) {
-      if (!pose) pose = { ...(node.pose ?? IDENTITY_POSE) };
+      // Base off `getBonePose` (shape-aware) so the synthetic pose is
+      // ALWAYS flat shape regardless of v19 channels-shape on the
+      // original. Downstream `computeWorldMatrices` reads the synthetic
+      // via flat-pose contract.
+      if (!pose) pose = { ...(getBonePose(node) ?? IDENTITY_POSE) };
       pose[k] = override[k];
     } else {
       if (!transform) transform = { ...(node.transform ?? {}) };
@@ -357,7 +361,11 @@ const IDENTITY_POSE = Object.freeze({ rotation: 0, x: 0, y: 0, scaleX: 1, scaleY
  */
 export function readPoseValue(node, key) {
   const dflt = (key === 'scaleX' || key === 'scaleY') ? 1 : 0;
-  if (isBoneNode(node)) return node.pose?.[key] ?? dflt;
+  if (isBoneNode(node)) {
+    // getBonePose is shape-aware (v17/v18 flat + v19 channels).
+    const p = getBonePose(node);
+    return p ? p[key] : dflt;
+  }
   return node.transform?.[key] ?? dflt;
 }
 
@@ -376,10 +384,10 @@ export function readPoseValue(node, key) {
  */
 export function writePoseValues(node, updates) {
   if (isBoneNode(node)) {
-    if (!node.pose) node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-    for (const k of TRANSFORM_PROPS) {
-      if (updates[k] !== undefined) node.pose[k] = updates[k];
-    }
+    // setBonePose handles v19 channels shape + flat shape and skips
+    // missing/non-numeric fields, so a translate-only commit doesn't
+    // accidentally reset rotation.
+    setBonePose(node, updates);
   } else {
     if (!node.transform) node.transform = { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 };
     for (const k of TRANSFORM_PROPS) {

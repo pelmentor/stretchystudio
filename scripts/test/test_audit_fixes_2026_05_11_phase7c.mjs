@@ -228,12 +228,14 @@ function seed() {
     'D-8: additive behavior labeled');
 
   const clearSrc = readFileSync(join(repoRoot, 'src/v3/operators/pose/clearTransform.js'), 'utf8');
-  assert(clearSrc.includes('Audit-fix G-2'),
-    'G-2: v19 channels-shape deviation documented in clearTransform.js');
-  assert(clearSrc.includes('cross-cutting'),
-    'G-2: cross-cutting nature documented');
-  assert(clearSrc.includes('setBonePoseField'),
-    'G-2: follow-up plan named (setBonePoseField helper)');
+  // G-2 was originally documented as DEVIATION here pending the
+  // Pose Read/Write Canonicalisation Plan. That plan shipped (helpers
+  // + writer/reader routing in objectDataAccess.js); the docstring now
+  // explains pose-shape ROUTING through `setBonePose`/`setBonePoseField`.
+  assert(clearSrc.includes('setBonePose') || clearSrc.includes('setBonePoseField'),
+    'G-2: clearTransform routes through canonical pose-write helper');
+  assert(clearSrc.includes('audit-fix G-2'),
+    'G-2: closure breadcrumb to original gap retained');
 }
 
 // ── Sister-suite invariants still hold (sanity) ────────────────────

@@ -48,19 +48,14 @@
  *     restores bones to their KEYFRAMED state (or rest pose if no
  *     action). Semantically opposite to identity-zero.
  *
- * # Audit-fix G-2 (DOCUMENT-AS-DEVIATION) — flat pose write convention
+ * # Pose-shape routing
  *
- * `applyClear` writes directly to `node.pose.{x, y, rotation, scaleX,
- * scaleY}` — flat shape. The v19 schema migration
- * (`projectMigrations.js:641-654`) wraps flat pose into
- * `node.pose.channels[node.id]` for any project saved pre-v19. Every
- * pose writer in the codebase (PoseService.restorePose,
- * SkeletonOverlay drag, Phase 7.C operators) writes flat — only
- * `getBonePose` reads channels-shape. The cross-cutting fix (a
- * single-source-of-truth `setBonePoseField` helper, OR a v35 migration
- * that re-flattens) is deferred to a follow-up plan; Phase 7.C ships
- * matching the prevailing convention to avoid having three classes of
- * writers disagree about pose shape.
+ * `applyClear` routes through `setBonePose` / `setBonePoseField` in
+ * `objectDataAccess.js`, which detect v17/v18 flat shape vs v19+
+ * channels shape (`node.pose.channels[node.id]`) and write into the
+ * correct slot. This closes the writer/reader shape gap from Phase 7.C
+ * audit-fix G-2 (formerly documented as deviation pending follow-up
+ * plan; closed by Pose Write Canonicalisation Plan).
  *
  * # Undo
  *
@@ -73,7 +68,7 @@
 
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
-import { isBoneGroup, getBonePose } from '../../../store/objectDataAccess.js';
+import { isBoneGroup, getBonePose, setBonePose, setBonePoseField } from '../../../store/objectDataAccess.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 
 /**
@@ -154,28 +149,18 @@ function applyClear(boneId, channel) {
   useProjectStore.getState().updateProject((proj) => {
     const node = proj.nodes.find((n) => n?.id === boneId);
     if (!node) return;
-    if (!isBoneGroup(node)) return;
-    if (!node.pose) {
-      node.pose = { ...IDENTITY_POSE };
-    }
     switch (channel) {
       case 'location':
-        node.pose.x = 0;
-        node.pose.y = 0;
+        setBonePose(node, { x: 0, y: 0 });
         break;
       case 'rotation':
-        node.pose.rotation = 0;
+        setBonePoseField(node, 'rotation', 0);
         break;
       case 'scale':
-        node.pose.scaleX = 1;
-        node.pose.scaleY = 1;
+        setBonePose(node, { scaleX: 1, scaleY: 1 });
         break;
       case 'all':
-        node.pose.rotation = 0;
-        node.pose.x = 0;
-        node.pose.y = 0;
-        node.pose.scaleX = 1;
-        node.pose.scaleY = 1;
+        setBonePose(node, IDENTITY_POSE);
         break;
     }
   });

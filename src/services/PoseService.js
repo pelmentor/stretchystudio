@@ -28,6 +28,7 @@ import {
   isBoneGroup,
   getMesh,
   getBonePose,
+  setBonePose,
 } from '../store/objectDataAccess.js';
 
 /**
@@ -119,15 +120,9 @@ export function restorePose(snapshot) {
   // 3. Restore per-bone-group pose offsets (schema v17+).
   useProjectStore.getState().updateProject((p) => {
     for (const n of p.nodes ?? []) {
-      if (!isBoneGroup(n)) continue;
       const saved = snapshot.bonePoses?.[n.id];
       if (!saved) continue;
-      if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-      n.pose.rotation = saved.rotation;
-      n.pose.x        = saved.x;
-      n.pose.y        = saved.y;
-      n.pose.scaleX   = saved.scaleX;
-      n.pose.scaleY   = saved.scaleY;
+      setBonePose(n, saved);
       // pivotX / pivotY (on transform) left as-is — rig anatomy, not pose.
     }
   });
@@ -160,14 +155,7 @@ export function resetToRestPose() {
       // Bone-group poses (schema v17+). Rest layout (pivot) is left
       // untouched — that's rig anatomy, not pose.
       if (isBoneGroup(n)) {
-        if (!n.pose) n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-        else {
-          n.pose.rotation = 0;
-          n.pose.x = 0;
-          n.pose.y = 0;
-          n.pose.scaleX = 1;
-          n.pose.scaleY = 1;
-        }
+        setBonePose(n, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 });
         continue;
       }
       // Mesh vertices that were displaced by JS-skinning during a bone

@@ -18,6 +18,7 @@ import {
   isMeshedPart,
   isBoneGroup,
   setObjectMode,
+  setBonePose,
 } from './objectDataAccess.js';
 import { logger } from '../lib/logger.js';
 import { uid } from '../lib/ids.js';
@@ -975,16 +976,7 @@ export const useProjectStore = create((set, get) => {
 
     // 3. Zero all bone poses simultaneously.
     for (const n of nodes) {
-      if (!isBoneGroup(n)) continue;
-      if (!n.pose) {
-        n.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-      } else {
-        n.pose.rotation = 0;
-        n.pose.x        = 0;
-        n.pose.y        = 0;
-        n.pose.scaleX   = 1;
-        n.pose.scaleY   = 1;
-      }
+      setBonePose(n, { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 });
     }
 
     if (bakedAnything) {

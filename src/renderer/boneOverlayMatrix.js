@@ -31,7 +31,7 @@
  */
 
 import { mat3Identity, mat3MulInto, makeBoneLocalMatrix } from './transforms.js';
-import { isBoneGroup, isMeshedPart } from '../store/objectDataAccess.js';
+import { isBoneGroup, isMeshedPart, getBonePose } from '../store/objectDataAccess.js';
 
 /** Local-matrix epsilon. Below this every component is considered
  *  zero and the matrix is treated as identity (skip multiplication). */
@@ -96,7 +96,10 @@ export function computeBoneWorldMatrices(nodes) {
     // slider writes paramValues independently. Both compose.
     let local;
     {
-      const p = boneNode.pose;
+      // getBonePose handles v17/v18 flat shape AND v19 channels shape;
+      // returns identity-pose if missing, so the early-exit branch
+      // below still triggers for un-posed bones.
+      const p = getBonePose(boneNode);
       const r = p?.rotation ?? 0;
       const px = p?.x ?? 0;
       const py = p?.y ?? 0;

@@ -32,6 +32,9 @@ import {
   isMeshedPart,
   getMesh,
   getBoneRole,
+  getBonePose,
+  setBonePose,
+  setBonePoseField,
 } from '@/store/objectDataAccess';
 
 // Colour palette
@@ -344,7 +347,8 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       //
       // The previous "if rotationParamId then write paramValue" branch
       // was the bait-and-switch the user explicitly rejected.
-      const startRotation = node.pose?.rotation ?? 0;
+      // Shape-aware read — handles v19 channels shape on raw nodes.
+      const startRotation = getBonePose(node)?.rotation ?? 0;
       dragRef.current = {
         type: 'rotate',
         nodeId,
@@ -396,12 +400,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         const { x: newPoseX, y: newPoseY } = applyPoseTranslate(drag.poseSetup, imgX, imgY);
         updateProject((proj) => {
           const node = proj.nodes.find((n) => n.id === drag.nodeId);
-          if (!node) return;
-          if (!node.pose) {
-            node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-          }
-          node.pose.x = newPoseX;
-          node.pose.y = newPoseY;
+          setBonePose(node, { x: newPoseX, y: newPoseY });
         }, { skipHistory: true });
       } else {
         updateProject((proj) => {
@@ -440,9 +439,7 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       } else {
         updateProject((proj) => {
           const node = proj.nodes.find(n => n.id === drag.nodeId);
-          if (!node) return;
-          if (!node.pose) node.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-          node.pose.rotation = newRotation;
+          setBonePoseField(node, 'rotation', newRotation);
         }, { skipHistory: true });
       }
 
@@ -480,13 +477,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       } else {
          updateProject((proj) => {
            const pn = proj.nodes.find(n => n.id === drag.nodeId);
-           if (!pn) return;
            // Eyes is a bone group → translation goes into pose, not transform.
            // Pre-Init-Rig the worldMatrix path reads pose-on-bones now; the
            // trackpad's visual feedback follows.
-           if (!pn.pose) pn.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
-           pn.pose.x = newX;
-           pn.pose.y = newY;
+           setBonePose(pn, { x: newX, y: newY });
          }, { skipHistory: true });
       }
     }
@@ -697,8 +691,10 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
         ex =  (paramEyeBallX ?? 0) * MAX_OFFSET;
         ey = -(paramEyeBallY ?? 0) * MAX_OFFSET;  // ParamEyeBallY positive = look up; screen-y inverts
       } else {
-        ex = node.pose?.x ?? 0;
-        ey = node.pose?.y ?? 0;
+        // Shape-aware read — handles v19 channels shape on raw nodes.
+        const eyePose = getBonePose(node);
+        ex = eyePose?.x ?? 0;
+        ey = eyePose?.y ?? 0;
       }
 
       const knobX = tpx + (ex / MAX_OFFSET) * half;
