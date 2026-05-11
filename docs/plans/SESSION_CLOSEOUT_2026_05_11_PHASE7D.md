@@ -2,17 +2,18 @@
 
 Continuation of [SESSION_CLOSEOUT_2026_05_11_PHASE8.md](./SESSION_CLOSEOUT_2026_05_11_PHASE8.md).
 This sub-session shipped **Toolset Phase 7.D — Phase 7 exit gate**
-(autonomous half: test-wiring + plan doc resolution; the 3 manual gates
-remain user-side). Branch ahead of `origin/master` by 34 commits at HEAD
-(close-out doc commit follows).
+(autonomous half: test-wiring + plan doc resolution + audit-fix sweep #11;
+the 3 manual gates remain user-side). Branch ahead of `origin/master` by
+35 commits at HEAD `6ef0bf5` (close-out doc commit follows).
 
-## What shipped this sub-session (1 commit)
+## What shipped this sub-session (2 commits)
 
-### Phase 7.D autonomous closure
+### Phase 7.D autonomous closure + audit-fix sweep #11
 
 | Commit  | What |
 |---------|------|
-| `59fedac` | Phase 7.D — wire 11 orphan test files into `npm test`, resolve `vTB+1`/`vTB+2` schema placeholders to v33/v34 (+ note v35 sister), mark Top-12 + per-mode coverage as ✅ shipped, mark Phase 0–7.C exit checklists complete. |
+| `59fedac` | Phase 7.D initial — wire 11 orphan test files into `npm test`, resolve `vTB+1`/`vTB+2` schema placeholders to v33/v34 (+ note v35 sister), mark Top-12 + per-mode coverage as ✅ shipped, mark Phase 0–7.C exit checklists complete. |
+| `6ef0bf5` | Phase 7.D audit-fix sweep — 1 HIGH arch (G-1: 2 more orphan tests `typedArrayPool` + `spatialHash`) + 2 HIGH docs (D-1: §9 fictional migration filenames; D-2: §9 fictional pose operator filenames + wrong chord) + sister-sweep MED-promoted-to-HIGH (full §9 file index rewrite — 11 of 41 rows wrong; 4 body-text implementation notes also corrected) + 2 LOW arch + 1 MED docs (`_pending_` → `59fedac` in close-out). 7 FIXes + 4 DOCUMENT-AS-DEVIATION. 42-assertion audit-pin test. |
 
 (Close-out doc commit follows separately.)
 
@@ -42,8 +43,11 @@ The 11 orphans:
 | 11 | `test_audit_fixes_2026_05_11_phase8.mjs` | 8 audit-pin |
 
 **363 assertions** were uncovered by the canonical chain pre-Phase-7.D.
-After wiring (this sub-session), the full `npm test` chain covers them
-all and exits 0; typecheck clean.
+After the initial wiring (`59fedac`), the full `npm test` chain covered
+them; the audit-fix sweep (`6ef0bf5`) added **2 more** orphan tests the
+initial sweep missed (`typedArrayPool` + `spatialHash`, +30 assertions)
+plus the audit-pin itself (+42 assertions). Total newly-wired assertion
+coverage: **435**. Full chain still exits 0; typecheck clean.
 
 ## Plan doc resolution
 
@@ -78,7 +82,10 @@ All Phase 7.A/B/C/D + Phase 8 suites green via canonical chain.
 | `test_pose_write_v19_shape`                                             | 46  |
 | `test_migration_v35`                                                    | 25  |
 | `test_audit_fixes_2026_05_11_phase8`                                    | 26  |
-| **Total newly-wired**                                                   | **363** |
+| `test_typedArrayPool` (audit-fix sweep G-1)                             | 15  |
+| `test_spatialHash` (audit-fix sweep G-1)                                | 15  |
+| `test_audit_fixes_2026_05_11_phase7d` (audit-fix sweep audit-pin)       | 42  |
+| **Total newly-wired**                                                   | **435** |
 
 Full chain exits 0; typecheck clean.
 
@@ -137,7 +144,8 @@ Phase 7.D added no new hotkeys (substrate fix + docs, not feature).
 | Order | Commit  | What |
 |-------|---------|------|
 | ...   | (33 from earlier 2026-05-11 close-outs) | Phases 0-7.C ship + 9 audit-fix sweeps + close-outs + Phase 8 (initial + audit-fix + close-out) |
-| 34    | `59fedac` | Phase 7.D — wire 11 orphan test files + resolve plan §6 placeholders + mark §14 + §15 shipped |
+| 34    | `59fedac` | Phase 7.D initial — wire 11 orphan test files + resolve plan §6 placeholders + mark §14 + §15 shipped |
+| 35    | `6ef0bf5` | audit-fix sweep #11 — Phase 7.D dual audit (1 HIGH arch + 2 HIGH docs + sister §9 cleanup) |
 
 ## Schemas after Phase 7.D
 
