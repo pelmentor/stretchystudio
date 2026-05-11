@@ -255,7 +255,20 @@ Per plan §1.F + 1.G (lines 637-651):
 Required to declare Phase 1 fully shipped. NodeTree retirement should
 land first to keep the v24-shadow path out of the new test suites.
 
-### C. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up)
+### C. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+
+> **Update 2026-05-12:** This Resume path's premise was a misread of
+> Blender. `PropertiesAnimationMixin.bl_context = "data"` is the
+> mixin's *default* — every concrete subclass overrides it via its
+> ButtonsPanel base. `OBJECT_PT_animation`
+> (`reference/blender/scripts/startup/bl_ui/properties_object.py:618`)
+> inherits `ObjectButtonsPanel.bl_context = "object"` and registers the
+> Object-datablock's Animation panel on the **Object** tab — same role
+> as SS's Item tab. SS's existing Item-tab placement IS the Blender-
+> faithful mirror; the dedicated-Animation-tab plan would have been
+> SS-invented (Blender has no dedicated Animation tab in its Properties
+> navigation). See
+> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 Per Audit-fix D-1 deferral note in
 [propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):

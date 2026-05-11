@@ -240,7 +240,14 @@ Cubism Viewer 5.0 + Cubism Editor 5.0 → Animation workspace. Stage
 1.F's automated tests cover everything that CAN be automated; 1.G is
 the human-eyes Cubism load that closes Phase 1.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up)
+### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+
+> **Update 2026-05-12:** This Resume path's premise was a misread of
+> Blender. The Item-tab placement IS the Blender mirror via
+> `OBJECT_PT_animation` (`properties_object.py:618`,
+> `bl_context = "object"`); Blender has no dedicated Animation tab.
+> See
+> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 Per Audit-fix D-1 deferral note in Stage 1.E close-out:
 
@@ -264,9 +271,9 @@ Blocks on Phase 1.G ship gate (1.G manual confirmation).
 
 ### Recommended order
 
-A → B → C. Phase 1.G is the Phase 1 ship gate — everything else
-waits for it. B is decoupled polish; C is the next animation-substrate
-chunk.
+A → C. Phase 1.G is the Phase 1 ship gate; B is RE-RESOLVED (no
+follow-up implementation needed — Item-tab placement IS the Blender
+mirror).
 
 ## Cross-references
 

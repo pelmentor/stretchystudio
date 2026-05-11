@@ -63,22 +63,42 @@ export const PROPERTIES_TABS = [
     icon: <Box size={14} />,
     // Stage 1.E — `animData` lives under Item (the Object-level
     // metadata tab) so per-Object Action bindings appear alongside
-    // transform / visibility / part info. Stays at the bottom because
-    // it's a project-data binding rather than an Object-shape property.
+    // transform / visibility / part info. Last position because it
+    // mirrors Blender's `bl_order = PropertyPanel.bl_order - 1` —
+    // "just above the Custom Properties" panel (SS has no Custom
+    // Properties section, so last-in-tab is the equivalent slot).
     //
-    // **Blender-fidelity deviation (Audit-fix D-1 Stage 1.E):** in
-    // Blender the Animation panel lives under the **Data** tab via
-    // `PropertiesAnimationMixin.bl_context = "data"`
-    // (`reference/blender/scripts/startup/bl_ui/space_properties.py:124`)
-    // — registered for mesh / armature / curve / world / scene / etc.
-    // tab variants. SS's `data` tab today is parts-only (mesh /
-    // vertexGroups / shapeKeys / mask predicates all gate on
-    // `getMesh(node)`), so moving `animData` there would HIDE it for
-    // bone groups (which need binding too). The cleaner long-term
-    // fix is a dedicated "Animation" tab (peer of Item / Modifiers
-    // / Object Data) per Blender's `bl_order = PropertyPanel.bl_order
-    // - 1` positioning convention. Queued behind broader Properties
-    // tab refactor; see Stage 1.F + Phase 2 entry-gate.
+    // **Blender mirror (Audit-fix D-1 Stage 1.E — RE-RESOLVED
+    // 2026-05-12).** The actual Blender mirror is `OBJECT_PT_animation`
+    // (`reference/blender/scripts/startup/bl_ui/properties_object.py:618`),
+    // which inherits `ObjectButtonsPanel` (`bl_context = "object"`,
+    // same file line 18) — Blender registers the Object-datablock's
+    // Animation panel on the **Object** tab, not the Data tab. SS's
+    // "Item" tab IS Blender's "Object" tab in everything but the label,
+    // so Item-tab placement of `animData` is the direct Blender mirror.
+    //
+    // The mixin (`PropertiesAnimationMixin` at
+    // `space_properties.py:124`) defaults to `bl_context = "data"`, but
+    // every concrete subclass overrides `bl_context` via its
+    // ButtonsPanel base. The mixin's `bl_context` is a placeholder, not
+    // the canonical mount-point. Per-datablock-type subclasses:
+    //   - `OBJECT_PT_animation`           → Object tab (`bl_context="object"`)
+    //   - `DATA_PT_armature_animation`    → Data tab   (`bl_context="data"`)
+    //   - `DATA_PT_mesh_animation`        → Data tab
+    //   - `DATA_PT_camera_animation`      → Data tab
+    //   - `MATERIAL_PT_animation`         → Material tab
+    //   - `WORLD_PT_animation`            → World tab
+    //   - `SCENE_PT_animation`            → Scene tab
+    //   - … (~16 subclasses total across `properties_*.py`)
+    //
+    // For SS, `node.animData` lives on the Object datablock (parts +
+    // groups are Object selectables per Stage 1.A `objectDataAccess.
+    // isObject(node)`); there is no separate "data" datablock layer
+    // (SS conflates Object + ObData), so `OBJECT_PT_animation` →
+    // **Item tab** is the only Blender-faithful mount. The Stage 1.E
+    // close-out's "dedicated Animation tab" Resume path was based on
+    // a misread of the mixin default — Blender has no dedicated
+    // Animation tab in its Properties navigation.
     sectionIds: ['transform', 'visibility', 'partInfo', 'animData'],
   },
   {

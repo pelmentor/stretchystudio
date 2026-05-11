@@ -257,7 +257,14 @@ Stage 1.F's automated tests cover everything that CAN be automated
 without a runtime Cubism Viewer / Editor. The 1.G gate is what
 closes Phase 1.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up)
+### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+
+> **Update 2026-05-12:** This Resume path's premise was a misread of
+> Blender. The Item-tab placement IS the Blender mirror via
+> `OBJECT_PT_animation` (`properties_object.py:618`,
+> `bl_context = "object"`); Blender has no dedicated Animation tab.
+> See
+> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 Per Audit-fix D-1 deferral note in
 [propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):

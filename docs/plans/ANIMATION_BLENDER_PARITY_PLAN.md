@@ -657,10 +657,17 @@ callers read `adt->action` directly — same shape as
   Default-collapsed (Audit-fix D-3 — Blender
   `bl_options = {'DEFAULT_CLOSED'}`); label "Animation" not
   "Animation Data" (Audit-fix D-2 — Blender `bl_label = "Animation"`).
-  Sits in Item tab today (Audit-fix D-1 deferral — Blender's
-  Animation panel is in Data tab via `bl_context = "data"`; SS Data
-  tab is parts-only so a clean port awaits a dedicated "Animation"
-  tab in Stage 1.F + Phase 2 entry-gate).
+  Sits in Item tab — direct mirror of Blender's `OBJECT_PT_animation`
+  (`properties_object.py:618`, inherits `ObjectButtonsPanel.bl_context
+  = "object"`). Audit-fix D-1 Stage 1.E RE-RESOLVED 2026-05-12: the
+  original deferral premise (Blender Animation panel "lives in Data
+  tab" / dedicated-Animation-tab as the clean port) was a misread of
+  `PropertiesAnimationMixin`'s default `bl_context`. Blender registers
+  per-datablock-type Animation subclasses across Object / Data /
+  Material / World / Scene / etc. tabs — there is no dedicated
+  Animation tab. SS Object selectables (parts + groups) ship on Item
+  tab via `OBJECT_PT_animation` parity. See
+  [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 - ✅ Timeline action picker dropdown shows the resolved scene-aware id
   (`animation?.id`); picking re-binds `__scene__` when scene already
   bound (Audit-fix D-7 Stage 1.E: documented as Blender-faithful to

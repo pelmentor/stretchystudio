@@ -85,13 +85,22 @@ function makeProjectWithSceneBound(actionId) {
 
 // ── HIGH gaps ──────────────────────────────────────────────────────────────
 
-// D-1 — Item-tab placement deferral note
+// D-1 — Item-tab placement Blender mirror
+//
+// RE-RESOLVED 2026-05-12 — the original deferral framing
+// ("PropertiesAnimationMixin.bl_context = 'data'", dedicated-tab as
+// the clean port) was a misread of Blender. The new framing cites
+// `OBJECT_PT_animation` (`properties_object.py:618`,
+// `bl_context = "object"`) as the actual Blender mirror; SS Item-tab
+// placement IS Blender-faithful. See
+// scripts/test/test_audit_fixes_2026_05_12_phase1_stage1e_d1_reresolution.mjs
+// for the full RE-RESOLUTION audit-pin.
 assert(
   fileFlatMatches(
     'src/v3/editors/properties/propertiesTabRegistry.jsx',
-    /Audit-fix D-1 Stage 1\.E.*PropertiesAnimationMixin\.bl_context/,
+    /Audit-fix D-1 Stage 1\.E.*RE-RESOLVED 2026-05-12.*OBJECT_PT_animation/,
   ),
-  'D-1: propertiesTabRegistry documents Item-tab placement as deviation from Blender Data tab',
+  'D-1: propertiesTabRegistry cites OBJECT_PT_animation as the Blender mirror (RE-RESOLVED 2026-05-12)',
 );
 
 // D-2 — Section label "Animation"

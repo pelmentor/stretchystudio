@@ -5,8 +5,6 @@
  *
  * Surfaces the per-Object `animData.actionId` slot in the Properties
  * panel — the binding between this Object and an `Action` datablock.
- * Mirrors Blender's "Animation" properties section (e.g. the cube's
- * Object Data tab → Animation > Action picker).
  *
  * # What this section is for
  *
@@ -30,6 +28,33 @@
  * - Writes: `assignAction(objectId, actionId)` /
  *   `unassignAction(objectId)` — Stage 1.C `actionRegistry` lifecycle
  *   helpers exposed as `projectStore` thunks.
+ *
+ * # Blender mirror (Audit-fix D-1 Stage 1.E RE-RESOLVED 2026-05-12)
+ *
+ * The actual Blender mirror is `OBJECT_PT_animation`
+ * (`reference/blender/scripts/startup/bl_ui/properties_object.py:618`),
+ * which inherits `ObjectButtonsPanel` (`bl_context = "object"`, same
+ * file line 18) and `PropertiesAnimationMixin`. Blender registers the
+ * Object-datablock's Animation panel on the **Object** tab — same role
+ * as SS's "Item" tab — and SS's Item-tab placement of `animData` is
+ * the direct mirror.
+ *
+ * `PropertiesAnimationMixin` (`space_properties.py:124`) is a mixin;
+ * its default `bl_context = "data"` is overridden by every concrete
+ * subclass via its ButtonsPanel base. The mixin's `bl_context` is a
+ * placeholder, not the canonical mount-point. Per-datablock-type
+ * subclasses register on different tabs:
+ *   - `OBJECT_PT_animation`        → Object tab (`bl_context="object"`)
+ *   - `DATA_PT_armature_animation` → Data tab
+ *   - `MATERIAL_PT_animation`      → Material tab
+ *   - `SCENE_PT_animation`         → Scene tab
+ *   - … (~16 subclasses across `properties_*.py`)
+ * For SS Object selectables (parts + groups), `OBJECT_PT_animation` →
+ * Item tab is the only Blender-faithful mount; `node.animData` lives
+ * on the Object datablock and SS conflates Object + ObData (no
+ * separate data-datablock layer for `DATA_PT_*_animation` to mirror).
+ * See [propertiesTabRegistry.jsx](../propertiesTabRegistry.jsx) Item
+ * tab block for the full multi-tab landscape.
  *
  * # Blender-fidelity scope (Audit-fix D-10 Stage 1.E)
  *

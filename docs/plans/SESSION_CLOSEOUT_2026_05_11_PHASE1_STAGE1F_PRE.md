@@ -221,7 +221,14 @@ Per plan §1.F + 1.G (lines 637-651):
 NodeTree retirement (this sub-session) was the prerequisite that
 removed the v24-shadow code path from the test matrix.
 
-### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up)
+### B. Properties dedicated "Animation" tab (Stage 1.E audit-fix D-1 follow-up) — RE-RESOLVED 2026-05-12
+
+> **Update 2026-05-12:** This Resume path's premise was a misread of
+> Blender. The Item-tab placement IS the Blender mirror via
+> `OBJECT_PT_animation` (`properties_object.py:618`,
+> `bl_context = "object"`); Blender has no dedicated Animation tab.
+> See
+> [SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md](./SESSION_CLOSEOUT_2026_05_12_PHASE1_STAGE1E_D1_RERESOLUTION.md).
 
 Per Audit-fix D-1 deferral note in
 [propertiesTabRegistry.jsx](../../src/v3/editors/properties/propertiesTabRegistry.jsx):
