@@ -1554,10 +1554,20 @@ function registerBuiltins() {
   registerOperator({
     id: 'weightPaint.sample',
     label: 'Sample Weight (Shift+X)',
+    // Audit fix G-6: was returning true for non-meshed parts (group
+    // node selected) — operator appeared callable in the command
+    // palette but always silently no-oped. Now matches sibling
+    // mirror/normalize gates: requires a meshed part.
     available: () => {
       const editor = useEditorStore.getState();
-      return editor.editMode === 'weightPaint'
-        && typeof editor.selection?.[0] === 'string';
+      const partId = editor.selection?.[0];
+      if (editor.editMode !== 'weightPaint') return false;
+      if (typeof partId !== 'string') return false;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n?.id === partId);
+      if (!node || node.type !== 'part') return false;
+      const mesh = getMesh(node, project);
+      return !!(mesh && Array.isArray(mesh.vertices) && mesh.vertices.length > 0);
     },
     exec: () => {
       wpSample.sampleWeightFromGlobalCursor(lastMousePos());
@@ -1569,12 +1579,18 @@ function registerBuiltins() {
   // `OBJECT_OT_vertex_group_mirror`
   // (`reference/blender/source/blender/editors/object/object_vgroup.cc:3707`).
   // No chord — surfaced via N-panel button + command palette.
+  // Audit fix D-3: pre-fix the operator id was `weightPaint.mirror.byTopology`
+  // and label "Mirror Weights (Topology, X axis)". Blender's `use_topology`
+  // flag is the OPPOSITE of position-match (true = graph walk; false =
+  // coordinate match). SS uses coordinate-match here, which is Blender's
+  // DEFAULT — so the correct name is `byPosition`. Per Rule №2 (no
+  // migration baggage) the old id is dropped without an alias.
   registerOperator({
-    id: 'weightPaint.mirror.byTopology',
-    label: 'Mirror Weights (Topology, X axis)',
-    available: () => wpMirror.eligibleForMirror(),
+    id: 'weightPaint.mirror.byPosition',
+    label: 'Mirror Weights (By Position, X axis)',
+    available: () => wpMirror.eligibleForMirror({ mode: 'position' }),
     exec: () => {
-      const r = wpMirror.mirrorWeights({ axis: 'x', mode: 'topology' });
+      const r = wpMirror.mirrorWeights({ axis: 'x', mode: 'position' });
       if (r.skipped || r.mirrored === 0) {
         toast({
           title: 'Mirror Weights — nothing to mirror',
@@ -1588,14 +1604,14 @@ function registerBuiltins() {
   registerOperator({
     id: 'weightPaint.mirror.byName',
     label: 'Mirror Weights (By Group Name, X axis)',
-    available: () => wpMirror.eligibleForMirror(),
+    available: () => wpMirror.eligibleForMirror({ mode: 'byName' }),
     exec: () => {
       const r = wpMirror.mirrorWeights({ axis: 'x', mode: 'byName' });
       if (r.skipped || r.mirrored === 0) {
         toast({
           title: 'Mirror Weights — no matching group pairs',
           description:
-            'Pair groups via L/R suffix (Group_L ↔ Group_R, .L ↔ .R, Left ↔ Right).',
+            'Pair groups via L/R marker (e.g. arm_L ↔ arm_R, L_arm ↔ R_arm, LEFT ↔ RIGHT).',
         });
       }
     },

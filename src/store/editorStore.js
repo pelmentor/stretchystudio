@@ -162,16 +162,26 @@ export const useEditorStore = create((set) => ({
 
   /** Toolset Plan Phase 7.B — Weight Paint brush settings.
    *
-   *    activeBrush  — id from `WEIGHT_BRUSHES` registry
+   *    weightPaintBrush — id from `WEIGHT_BRUSHES` registry
    *                   (`'draw' | 'blur'`). 'draw' lerps toward
    *                   `brushWeight` (or 0 with Shift held); 'blur'
    *                   averages each affected vertex's weight against
    *                   its neighbors' mean.
-   *    weight       — target weight value [0,1]; 'draw' brush lerps
+   *    brushWeight  — target weight value [0,1]; 'draw' brush lerps
    *                   each affected vertex toward this value (Shift
    *                   inverts toward 0). Updated by Sample Weight
    *                   (`Shift+X`, Phase 7.B.1) — eyedropper picks
    *                   the vertex's weight under the cursor.
+   *    brushStrength — per-tick lerp factor [0,1] (default 0.5).
+   *                   Same role as Blender's `brush.alpha *
+   *                   pressure_alpha` per `paint_weight.cc:1238`
+   *                   `final_alpha = factors[i] * brush_strength *
+   *                    brush_alpha_pressure`. Wired to BOTH draw and
+   *                   blur in WeightPaintOverlay's flushPaint. Audit-fix
+   *                   G-1 + G-4 + D-6: pre-fix the value was hardcoded
+   *                   `0.5` in the overlay; the N-panel surfaced a
+   *                   Hardness slider that wrote to `brushHardness`
+   *                   (deform-only — silent no-op for weight paint).
    *
    * Reads by WeightPaintOverlay's stroke dispatch + ToolSettingsPanel's
    * weightPaint section. Independent of `brushSize`/`brushHardness` so
@@ -179,6 +189,7 @@ export const useEditorStore = create((set) => ({
    * Blender's unified brush size). Hardness is deform-mode only today. */
   weightPaintBrush: 'draw',
   brushWeight:      1.0,
+  brushStrength:    0.5,
 
   /** Toolset Plan Phase 3 — Sculpt mode brush settings. Independent of
    *  the deform-mode `brushSize`/`brushHardness` so the user's Edit-Mode
@@ -490,6 +501,13 @@ export const useEditorStore = create((set) => ({
     const clamped = Math.max(0, Math.min(1, n));
     if (clamped === s.brushWeight) return s;
     return { brushWeight: clamped };
+  }),
+  setBrushStrength:     (str)      => set((s) => {
+    const n = Number(str);
+    if (!Number.isFinite(n)) return s;
+    const clamped = Math.max(0, Math.min(1, n));
+    if (clamped === s.brushStrength) return s;
+    return { brushStrength: clamped };
   }),
   /** Toolset Plan Phase 3 — partial-merge writer for Sculpt brush
    *  settings. `setSculpt({ size: 120 })` updates only `sculpt.size`;

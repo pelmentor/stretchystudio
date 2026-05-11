@@ -133,7 +133,7 @@ function seedSymmetric() {
 
 {
   seedSymmetric();
-  const r = mirrorWeights({ axis: 'x', mode: 'topology' });
+  const r = mirrorWeights({ axis: 'x', mode: 'position' });
   assert(!r.skipped, 'not skipped');
   assert(r.mirrored === 1, 'one group mirrored');
   assert(r.vertexPairs >= 4, `4 vertex pairs (incl self-pair singletons), got ${r.vertexPairs}`);
@@ -213,7 +213,7 @@ function seedSymmetric() {
 // ── 12. unsupported axis returns skipped ─────────────────────────
 {
   seedSymmetric();
-  const r = mirrorWeights({ axis: 'z', mode: 'topology' });
+  const r = mirrorWeights({ axis: 'z', mode: 'position' });
   assert(r.skipped === true, 'z axis skipped');
   assert(r.mirrored === 0, 'no mirror');
 }

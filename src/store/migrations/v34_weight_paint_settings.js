@@ -40,6 +40,21 @@
  * Other node types don't need it — adding it would clutter the JSON
  * with 50+ unused entries for a typical character.
  *
+ * # D-8 DOCUMENT-AS-DEVIATION (companion topology flag not modeled)
+ *
+ * Blender's mesh symmetry has a companion `use_mirror_topology` flag
+ * (separate from the vertex-group-mirror operator's `use_topology` —
+ * those are different things). The companion flag toggles between
+ * coordinate-position symmetry detection and topology-graph symmetry
+ * detection for the live paint mirror system. SS doesn't model it
+ * because:
+ *   1. SS uses `buildMirrorVertexMap` (coordinate-only) for live
+ *      stroke mirror, matching Blender's default
+ *   2. Topology-based mirror would require an edge-graph spatial
+ *      index, out of scope for v1
+ * Blender users wanting topology-based mirror would not get parity;
+ * coordinate-based mirror is the v1 contract.
+ *
  * # Cross-references
  *
  * - `docs/plans/TOOLSET_BLENDER_PARITY_PLAN.md` §7.B.4 — toggle spec

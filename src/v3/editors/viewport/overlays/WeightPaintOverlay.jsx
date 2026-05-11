@@ -62,9 +62,15 @@ export function WeightPaintOverlay() {
   const selection = useEditorStore((s) => s.selection);
   const view = useEditorStore((s) => s.viewByMode.viewport);
   const brushSize = useEditorStore((s) => s.brushSize);
-  // 7.B integration: brush type + target weight from editor store.
+  // 7.B integration: brush type + target weight + per-tick strength.
+  // Audit fix G-1 + G-4 + D-6: brushStrength replaces the hardcoded
+  // `0.5` constants the initial 7.B used in both branches; the N-panel
+  // Hardness slider was a misleading affordance (wrote to brushHardness,
+  // which is deform-mode only). Now Strength lives in editor state and
+  // both Draw + Blur read it.
   const weightPaintBrush = useEditorStore((s) => s.weightPaintBrush);
   const brushWeight = useEditorStore((s) => s.brushWeight);
+  const brushStrength = useEditorStore((s) => s.brushStrength);
   const project = useProjectStore((s) => s.project);
   const node = project.nodes.find((n) => n?.id === selection?.[0]) ?? null;
   // 7.B.4 — per-Object X-mirror toggle (schema v34).
@@ -222,17 +228,19 @@ export function WeightPaintOverlay() {
         currentWeights: weightArr,
         adjacency,
         affected,
-        strength: 0.5,
+        strength: brushStrength,
+        // Audit fix D-1: pass triangles so the math uses Blender's
+        // face-loop accumulation instead of a unique-neighbor mean.
+        triangles,
       });
     } else {
       // 'draw' (default). Lerp toward brushWeight (or 0 with Shift held).
-      const STRENGTH = 0.5;
       const target = erase ? 0 : Number(brushWeight);
       const t = Number.isFinite(target) ? Math.max(0, Math.min(1, target)) : 1;
       updates = [];
       for (const a of affected) {
         const cur = Number(weightArr[a.vertexIndex]) || 0;
-        const next = cur + (t - cur) * STRENGTH * a.falloff;
+        const next = cur + (t - cur) * brushStrength * a.falloff;
         updates.push({ vertexIndex: a.vertexIndex, weight: next });
       }
     }

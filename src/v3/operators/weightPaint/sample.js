@@ -128,6 +128,28 @@ export function sampleWeightAt({ clientX, clientY, rect, threshold }) {
  * the operator wrapper in `registry.js` uses that here. Returns the
  * same `{ sampled, weight, vertexIndex }` shape.
  *
+ * # G-3 DOCUMENT-AS-DEVIATION (singleton overlay assumption)
+ *
+ * `document.querySelector('svg[data-overlay="weightPaint"]')` returns
+ * the FIRST DOM match in document order. Today `CanvasArea.jsx`
+ * mounts `<WeightPaintOverlay />` only when `!isPreview`, so there's
+ * exactly one match in the production shell — this is safe in v1.
+ * If split-view (two CanvasArea instances) ships in a future phase,
+ * the eyedropper would project against the wrong viewport's bounding
+ * rect. Future fix: register the active overlay's rect via a
+ * module-level getter on mount/unmount and call it instead of
+ * querySelector. Tracked under audit fix G-3.
+ *
+ * # D-7 DOCUMENT-AS-DEVIATION (threshold tied to brushSize)
+ *
+ * Blender's `ED_MESH_PICK_DEFAULT_VERT_DIST = 25` px is a fixed
+ * constant per `reference/blender/source/blender/editors/include/ED_mesh.hh:662`.
+ * SS uses `max(8, brushSize/2)` (see `sampleWeightAt`) so the
+ * eyedropper feel scales with the brush cursor. Equals 25 at the
+ * default brushSize=50; diverges at brushSize<16 (floors to 8 →
+ * harder to land than Blender) and brushSize>50 (exceeds 25 → easier
+ * to land, may sample distant verts).
+ *
  * @param {{ x: number, y: number }} clientPoint
  * @returns {{ sampled: boolean, weight: number|null, vertexIndex: number|null }}
  */
@@ -135,10 +157,6 @@ export function sampleWeightFromGlobalCursor(clientPoint) {
   if (typeof window === 'undefined') {
     return { sampled: false, weight: null, vertexIndex: null };
   }
-  // Find the WeightPaintOverlay SVG to read its bounding rect. The
-  // overlay covers the canvas exactly so its rect doubles as the
-  // canvas projection origin. Fall back to the document body's rect
-  // if the overlay isn't in the DOM (returns `sampled:false`).
   const svg = document.querySelector('svg[data-overlay="weightPaint"]');
   if (svg && typeof svg.getBoundingClientRect === 'function') {
     const rect = svg.getBoundingClientRect();

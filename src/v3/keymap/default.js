@@ -272,11 +272,20 @@ export const DEFAULT_KEYMAP = {
   // invoke at `:172`). Keymap: `Shift+X` per `blender_default.py:5136`
   // (`("paint.weight_sample", {"type": 'X', "value": 'PRESS', "shift": True})`).
   // The operator's `available()` gates to weightPaint mode + a selected
-  // part — pressing `Shift+X` outside weight paint is a silent no-op.
+  // meshed part (audit fix G-6) — pressing `Shift+X` outside weight
+  // paint, or with no mesh, is a silent no-op.
   //
   // Plan §7.B.1 originally proposed `Ctrl+LMB` (browser-friendly
   // eyedropper) but the audit-fixed binding table bound `Shift+X` for
   // Blender muscle-memory parity.
+  //
+  // D-5 DOCUMENT-AS-DEVIATION: Blender's companion `Ctrl+Shift+X`
+  // (`paint.weight_sample_group` per `blender_default.py:5137`) pops a
+  // menu of weight groups present at the cursor and lets the user pick
+  // one to make active. SS does NOT bind it — the N-panel Vertex
+  // Groups dropdown serves the same active-group selection function
+  // and is always one click away. No SS chord reserved; pressing
+  // `Ctrl+Shift+X` is silently inert.
   'Shift+KeyX': 'weightPaint.sample',
 };
 

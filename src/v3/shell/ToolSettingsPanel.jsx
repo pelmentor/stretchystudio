@@ -113,7 +113,14 @@ function ContentForMode({ editMode }) {
   if (editMode === 'weightPaint') {
     return (
       <>
-        <BrushSection />
+        {/* Audit fix G-1: weight-paint mode used to render the deform-
+            mode `BrushSection` which surfaced a Hardness slider that
+            wrote to `brushHardness` — read only by deform-mode brushes,
+            so the slider was a Rule №1 violation (UI element with no
+            effect). The size-only section here keeps the unified Size
+            knob + omits Hardness entirely; Strength lives in
+            WeightPaintSection alongside Weight. */}
+        <WeightPaintBrushSizeSection />
         <WeightPaintSection />
       </>
     );
@@ -327,13 +334,44 @@ function SculptSection() {
   );
 }
 
+/** Audit fix G-1 — Size-only brush header for weight-paint mode.
+ *
+ *  Replaces the deform-mode `BrushSection` which also rendered a
+ *  Hardness slider (writes `editorStore.brushHardness`, read only by
+ *  CanvasViewport's deform brush). Brush Size is shared across
+ *  deform/sculpt/weight-paint per editor-store doc; that's intentional
+ *  Blender parity. Hardness is dropped entirely. Strength now lives
+ *  in `WeightPaintSection` (Audit fix G-4 + D-6). */
+function WeightPaintBrushSizeSection() {
+  const brushSize = useEditorStore((s) => s.brushSize);
+  const setBrush  = useEditorStore((s) => s.setBrush);
+  return (
+    <div>
+      <SectionHeader label="Brush" />
+      <div className="px-2 py-2 flex flex-col gap-1">
+        <NumberSlider
+          label="Size"
+          value={brushSize}
+          min={5}
+          max={300}
+          step={1}
+          unit="px"
+          onChange={(v) => setBrush({ brushSize: v })}
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Toolset Plan Phase 7.B — Weight Paint section.
  *
  *  Surfaces the brush picker (Draw / Blur), the eyedropper-driven
  *  Weight slider (`brushWeight`, written by `weightPaint.sample`
- *  / `Shift+X`), the per-Object X-Mirror toggle (schema v34
- *  `node.weightPaintSettings.xMirror`), the Mirror Weights buttons
- *  (Topology + By Name), and the Normalize All button.
+ *  / `Shift+X`), Strength slider (`brushStrength`, audit fix G-4 +
+ *  D-6 — wired to both Draw and Blur per-tick lerp), the per-Object
+ *  X-Mirror toggle (schema v34 `node.weightPaintSettings.xMirror`),
+ *  the Mirror Weights buttons (Topology + By Name), and the
+ *  Normalize All button.
  *
  *  Mode-gated by `ContentForMode` — only mounts when
  *  `editorStore.editMode === 'weightPaint'` and a part is selected.
@@ -345,6 +383,8 @@ function WeightPaintSection() {
   const setWeightPaintBrush = useEditorStore((s) => s.setWeightPaintBrush);
   const brushWeight = useEditorStore((s) => s.brushWeight);
   const setBrushWeight = useEditorStore((s) => s.setBrushWeight);
+  const brushStrength = useEditorStore((s) => s.brushStrength);
+  const setBrushStrength = useEditorStore((s) => s.setBrushStrength);
   const selection = useEditorStore((s) => s.selection);
   const project = useProjectStore((s) => s.project);
   const setWeightPaintXMirror = useProjectStore((s) => s.setWeightPaintXMirror);
@@ -369,9 +409,9 @@ function WeightPaintSection() {
     return op.available({ editorType: 'viewport' });
   }
 
-  const mirrorTopoAvail = isAvail('weightPaint.mirror.byTopology');
+  const mirrorPosAvail  = isAvail('weightPaint.mirror.byPosition');
   const mirrorNameAvail = isAvail('weightPaint.mirror.byName');
-  const normalizeAvail = isAvail('weightPaint.normalizeAll');
+  const normalizeAvail  = isAvail('weightPaint.normalizeAll');
 
   return (
     <div>
@@ -403,6 +443,20 @@ function WeightPaintSection() {
             onChange={(v) => setBrushWeight(v)}
           />
         )}
+        {/* Audit fix G-1 + G-4 + D-6 — Per-tick lerp factor. Matches
+            Blender `paint_weight.cc:1238` `final_alpha = factors[i] *
+            brush_strength * brush_alpha_pressure` (SS has no pressure;
+            Strength alone is the per-tick factor). Wired to BOTH Draw
+            (lerps target weight) and Blur (lerps toward neighbour
+            mean) in WeightPaintOverlay. */}
+        <NumberSlider
+          label="Strength"
+          value={brushStrength}
+          min={0}
+          max={1}
+          step={0.01}
+          onChange={(v) => setBrushStrength(v)}
+        />
         {/* Per-Object X-axis live mirror (schema v34). */}
         <label className={
           'flex items-center gap-2 text-[11px] py-0.5 select-none ' +
@@ -422,20 +476,22 @@ function WeightPaintSection() {
           <span className="text-foreground/85">X-Axis Mirror</span>
         </label>
         <div className="h-px bg-border my-1" />
-        {/* Mirror Weights — Topology + By Name. Both X-axis only. */}
+        {/* Mirror Weights — By Position + By Name. Both X-axis only.
+            Audit fix D-3: was "Topology" (Blender naming inversion);
+            By Position matches Blender's `use_topology=false`. */}
         <button
           type="button"
-          disabled={!mirrorTopoAvail}
-          onClick={() => runOp('weightPaint.mirror.byTopology')}
+          disabled={!mirrorPosAvail}
+          onClick={() => runOp('weightPaint.mirror.byPosition')}
           className={
             'h-6 text-[11px] rounded border border-border px-2 text-left ' +
-            (mirrorTopoAvail
+            (mirrorPosAvail
               ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
               : 'opacity-40 cursor-not-allowed')
           }
-          title="Mirror weights via vertex-position topology (X axis)"
+          title="Mirror weights via vertex coordinate position (X axis)"
         >
-          Mirror (Topology)
+          Mirror (By Position)
         </button>
         <button
           type="button"
