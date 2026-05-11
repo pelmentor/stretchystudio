@@ -726,16 +726,43 @@ See close-out:
 
 #### 1.F — Tests
 
-**SHIPPED 2026-05-11** — substrate commit landed the 4 missing test
-suites; `test_actionRegistry.mjs` was already shipped in Stage 1.C+1.D.
+**SHIPPED 2026-05-11** — substrate (`0ab8f2c`) + audit-fix sweep
+(`cdd92f9`). 4 new test files closing the missing entries from
+plan §1.F (`test_actionRegistry.mjs` was already shipped in Stage
+1.C+1.D). 138 substrate + 44 audit-pin = 182 assertions.
 
 | Test | What | Status |
 |------|------|--------|
-| `test_actionDatablock_migration.mjs` | v32→v36 round-trip smoke pin (deep coverage in `test_migration_v36.mjs`) | ✅ 30 assertions |
+| `test_actionDatablock_migration.mjs` | v32→v36 round-trip smoke pin (deep coverage in `test_migration_v36.mjs`); plus D-5 escape-grammar contract assertion | ✅ 32 assertions |
 | `test_actionRegistry.mjs` | Registry CRUD + assignAction / cloneAction | ✅ 95 assertions (Stage 1.C+1.D) |
-| `test_actionScene.mjs` | `__scene__` AnimData treated like Object AnimData by exporter | ✅ 36 assertions |
-| `test_actionExportMotion3.mjs` | Each Action exports to one motion3.json (per-Action contract) | ✅ 37 assertions |
-| `test_actionExportCan3.mjs` | Each Action exports to one CSceneSource (multiple actions in one .can3) | ✅ 26 assertions |
+| `test_actionScene.mjs` | `__scene__` AnimData treated like Object AnimData by exporter; D-6 phase-scope warning + G-5 leakage check | ✅ 37 assertions |
+| `test_actionExportMotion3.mjs` | Each Action exports to one motion3.json (per-Action contract); D-7 NLA TODO + G-11 single-kf Meta accounting | ✅ 39 assertions |
+| `test_actionExportCan3.mjs` | Each Action exports to one CSceneSource (multiple actions in one .can3); D-7 NLA TODO + G-2 paramSpec resolution + G-3+G-9 robust XML extraction | ✅ 30 assertions |
+| `test_audit_fixes_2026_05_11_phase1_stage1f.mjs` | Audit-pin: 11 dedup'd gap blocks (2 HIGH + 7 MED + 4 LOW) | ✅ 44 assertions |
+
+Audit-fix sweep also touched production code:
+- `motion3json.js`: dropped dead `opts.loop` parameter (Rule №2 / Rule №1
+  anti-pattern); added Loop-semantics deviation JSDoc citing
+  ACT_CYCLIC bit (`DNA_action_types.h:385-386`); ACT_CYCLIC integration
+  deferred to Phase 6+ Cyclic-toggle UI.
+- `can3writer.js`: plumbed `project.parameters[]` through, closing
+  hardcoded `-1..1` data gap for fcurve-only param ranges
+  (idle-generator / AI-motion params now get correct ranges).
+- `actionRegistry.js`: corrected
+  `BKE_main_namemap_get_unique_name:450` citation to dual cite
+  `id_name_final_build:441` (algorithmic mirror) +
+  `BKE_main_namemap_get_unique_name:582` (public API).
+- `v36_action_datablock.js`: pulled BKE-runtime override deviation
+  doc (sister to v37); added 4 SS-specific shape deviation notes
+  (action.id vs ID.name, audioTracks SS-only, meta SS-only,
+  slotHandle slot-table absence).
+- `v37_scene_anim_data.js`: documented `__scene__.parent: null`
+  Blender deviation.
+- `animationFCurve.js#decodeFCurveTarget`: documented escape-grammar
+  contract (SS regex `[^"]+` vs Blender escape-aware tokenizer).
+
+See close-out:
+[SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F.md](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F.md).
 
 #### 1.G — Phase exit gate
 
