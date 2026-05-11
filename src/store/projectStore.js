@@ -123,7 +123,29 @@ export const useProjectStore = create((set, get) => {
      *  on `Scene.cursor.location`; SS does the same on `project.cursor`). */
     cursor: { x: 400, y: 300 },
     textures: [],     // { id, source (data URI or Blob URL) }
-    nodes: [],        // flat array — see node schemas below
+    /** Animation Phase 1 Stage 1.D (schema v37) — fresh projects start
+     *  with the `__scene__` pseudo-Object pre-created so action-binding
+     *  works on day one (Init Rig is not a prerequisite). The shape
+     *  here MUST match `migrations/v37_scene_anim_data.makeSceneNode()`
+     *  — kept in sync with the migration's source-of-truth shape. */
+    nodes: [
+      {
+        id: '__scene__',
+        type: 'sceneObject',
+        name: 'Scene',
+        parent: null,
+        animData: {
+          actionId: null,
+          actionInfluence: 1,
+          actionBlendmode: 'replace',
+          actionExtendmode: 'hold',
+          slotHandle: 0,
+          nlaTracks: [],
+          drivers: [],
+          flag: 0,
+        },
+      },
+    ],
     /*
       Node schema (type === 'part'):
       {

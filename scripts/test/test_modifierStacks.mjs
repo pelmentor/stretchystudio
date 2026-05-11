@@ -175,11 +175,15 @@ function makeBodyChainProject() {
   assertEq(partA.modifiers.length, 5, 'v20: partA stack length');
 }
 
-// ── Empty project: migration is a no-op ──
+// ── Empty project: v20 migration is a no-op (scene node is added by v37) ──
 {
   const project = { schemaVersion: 19, canvas: { width: 800, height: 600 }, nodes: [] };
   migrateProject(project);
-  assertEq(project.nodes.length, 0, 'v20: empty project stays empty');
+  // v37 adds the `__scene__` synthetic Object on every project; a v19 project
+  // upgraded to current contains exactly that one synthetic. v20 itself adds
+  // nothing — modifier stacks only synthesise for parts with rigParent links.
+  assertEq(project.nodes.length, 1, 'v19→current: only the v37 __scene__ synthetic appears');
+  assertEq(project.nodes[0].id, '__scene__', 'v19→current: the lone node is __scene__');
 }
 
 console.log(`modifierStacks: ${passed} passed, ${failed} failed`);

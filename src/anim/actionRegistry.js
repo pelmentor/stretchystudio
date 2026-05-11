@@ -103,13 +103,14 @@ import { uid } from '../lib/ids.js';
  * Actions panel.
  *
  * Synthetic Objects (`__params__`, `__armature__`, `__scene__`) are
- * scanned along with regular Objects — `__scene__` (Stage 1.D) is the
- * typical project-wide animation host so it MUST appear in this list
- * when applicable. Audit-fix D-9: there is read/write asymmetry today
- * — `getActionUsers` enumerates `__scene__` if it has an `animData`
- * slot, but `assignAction` returns `false` for it until Stage 1.D
- * introduces the `__scene__` synthetic Object. Once Stage 1.D ships,
- * the asymmetry closes without code change here.
+ * scanned along with regular Objects — `__scene__` (Stage 1.D, schema
+ * v37) is the typical project-wide animation host so it MUST appear in
+ * this list when applicable. Audit-fix D-9 (Stage 1.C audit): the
+ * read/write asymmetry — `getActionUsers` enumerated `__scene__` here
+ * but `assignAction` rejected it for lacking an `animData` slot — is
+ * CLOSED by Stage 1.D's v37 migration, which gives `__scene__` the
+ * standard `animData` slot. Both helpers now treat the scene node as
+ * a first-class Object.
  *
  * **Mutation warning (Audit-fix G-6):** the returned references are
  * live `project.nodes[i]` pointers. Mutating them OUTSIDE a
@@ -203,10 +204,9 @@ export function assignAction(project, objectId, actionId, slot = 0) {
   if (!node) return false;
 
   // v36 guarantees Object nodes (type ∈ {'part','group'}) carry an
-  // animData slot. If the caller is binding to a synthetic node
-  // (`__scene__`, Stage 1.D) the slot may not exist yet — defer to that
-  // stage's introduction code; for now, only Objects with an existing
-  // slot are valid targets.
+  // animData slot; v37 added the `__scene__` synthetic node with the
+  // same slot shape (closing Audit-fix D-9). A node without an
+  // animData slot here is a project-shape bug — return false to flag.
   if (!node.animData || typeof node.animData !== 'object') return false;
 
   node.animData.actionId = actionId;

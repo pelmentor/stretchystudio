@@ -542,6 +542,7 @@ export function deleteAction(project, actionId) → { removed, cascaded }       
 - `AnimationsEditor.jsx` (rename to `ActionsEditor.jsx`) — currently calls `projectStore.deleteAction`/`renameAction`/`createAction` directly; will add `cloneAction` (Duplicate command) + `assignAction` (drag-to-bind from Properties panel).
 - `Properties` panel — new "AnimData" sub-section per Object surfacing the `actionId` slot with assign/unassign affordance.
 - Per-action "Used by: <objects>" strip — consumes `getActionUsers`.
+- Timeline / FCurve / Dopesheet editors — switch from `useAnimationStore.activeActionId` to `getActiveSceneAction(project, fallback)` (Stage 1.D, schema v37) so the scene's bound action wins over the UI pointer.
 
 #### 1.D — Project-level "Scene" AnimData
 
@@ -550,6 +551,25 @@ character motion). A project-level pseudo-Object (`__scene__`) carries
 an `animData` for these "scene" Actions. The exporter treats a
 `__scene__` AnimData identically to an Object AnimData — it walks the
 FCurves and writes them to motion3.json.
+
+**Shipped 2026-05-11 (schema v37).** The migration
+`src/store/migrations/v37_scene_anim_data.js` creates a synthetic
+`{id: '__scene__', type: 'sceneObject', name: 'Scene', parent: null,
+animData: defaultAnimData()}` node on every legacy v36 project (and on
+fresh projects via the projectStore initial state). The selector
+`getActiveSceneAction(project, fallbackActionId)` lives in
+`src/anim/sceneAction.js` — resolution order: scene's bound action
+wins; UI store's `activeActionId` is the fallback; null when neither
+resolves. Stage 1.E will route Timeline / FCurve editor / Dopesheet
+through this selector. The Stage 1.C audit-fix D-9 read/write
+asymmetry (`getActionUsers` enumerated `__scene__` but `assignAction`
+rejected it) closes naturally — both helpers now treat the scene as a
+first-class Object because v37 gives it the standard `animData` slot.
+
+Blender mirror: Scene datablock owns AnimData via `Scene.adt`
+(`reference/blender/source/blender/makesdna/DNA_scene_types.h:2225`).
+`BKE_animdata_id_action(&scene->id)` is the analog of `getSceneAction`
+(`reference/blender/source/blender/blenkernel/intern/anim_data.cc:282`).
 
 #### 1.E — UI update
 

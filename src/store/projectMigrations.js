@@ -41,6 +41,7 @@ import { migrateProjectCursor } from './migrations/v33_project_cursor.js';
 import { migrateWeightPaintSettings } from './migrations/v34_weight_paint_settings.js';
 import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
 import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
+import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -599,6 +600,20 @@ const MIGRATIONS = {
   // See `src/store/migrations/v36_action_datablock.js`.
   36: (project) => {
     migrateActionDatablock(project);
+    return project;
+  },
+
+  // v37 — Animation Phase 1 Stage 1.D: `__scene__` pseudo-Object node
+  // carrying project-wide AnimData. The synthetic node lives on
+  // `project.nodes` alongside regular Objects so the v36
+  // `actionRegistry` helpers walk it uniformly (closing the read/write
+  // asymmetry flagged by Audit-fix D-9 in the Stage 1.C audit). The
+  // exporter treats `__scene__`'s AnimData identically to an Object
+  // AnimData — it walks the FCurves and writes them to motion3.json.
+  //
+  // See `src/store/migrations/v37_scene_anim_data.js`.
+  37: (project) => {
+    migrateSceneAnimData(project);
     return project;
   },
 

@@ -492,6 +492,50 @@ function makeProject() {
     'projectStore.deleteAction: delegates to registryDeleteAction(state.project, id)');
 }
 
+// ── D-9 closure (Stage 1.D introduces __scene__) ──────────────────────────
+//
+// Audit-fix D-9 (Stage 1.C audit) flagged the read/write asymmetry:
+// `getActionUsers` enumerated `__scene__` (any node with animData was
+// scanned), but `assignAction` rejected it because v36 didn't give
+// `__scene__` an animData slot. Stage 1.D's v37 migration adds the
+// scene node WITH an animData slot, so both helpers now treat it as a
+// first-class Object. These tests pin the closure functionally —
+// future regressions that re-introduce the asymmetry surface here.
+
+{
+  const { makeSceneNode } = await import(
+    '../../src/store/migrations/v37_scene_anim_data.js'
+  );
+  const project = makeProject();
+  project.nodes.push(makeSceneNode());
+
+  // assignAction now accepts the scene node
+  assert(assignAction(project, '__scene__', 'action-1') === true,
+    'D-9 closure: assignAction(__scene__) returns true post-v37');
+  const scene = project.nodes.find((n) => n && n.id === '__scene__');
+  assert(scene.animData.actionId === 'action-1',
+    'D-9 closure: scene.animData.actionId set');
+
+  // getActionUsers enumerates the scene
+  const users = getActionUsers(project, 'action-1');
+  assert(users.some((u) => u.id === '__scene__'),
+    'D-9 closure: getActionUsers includes __scene__ when bound');
+
+  // unassignAction works on the scene
+  assert(unassignAction(project, '__scene__') === true,
+    'D-9 closure: unassignAction(__scene__) returns true');
+  assert(scene.animData.actionId === null,
+    'D-9 closure: scene.animData.actionId cleared');
+
+  // deleteAction cascades through the scene too
+  scene.animData.actionId = 'action-1';
+  const result = deleteAction(project, 'action-1');
+  assert(result.removed === true, 'D-9 closure: action removed');
+  assert(result.cascaded >= 1, 'D-9 closure: cascade walked __scene__');
+  assert(scene.animData.actionId === null,
+    'D-9 closure: scene cascade nulled actionId');
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);
