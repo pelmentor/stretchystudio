@@ -38,6 +38,7 @@ import { migrateModifierDataFold } from './migrations/v28_modifier_data_fold.js'
 import { migrateArtMeshRuntimePersist } from './migrations/v29_artmesh_runtime_persist.js';
 import { migrateStripRigidDefaultWeights } from './migrations/v32_strip_rigid_default_weights.js';
 import { migrateProjectCursor } from './migrations/v33_project_cursor.js';
+import { migrateWeightPaintSettings } from './migrations/v34_weight_paint_settings.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -505,6 +506,17 @@ const MIGRATIONS = {
   // position (a pointless menu otherwise — every save would reset it).
   33: (project) => {
     migrateProjectCursor(project);
+    return project;
+  },
+
+  // v34 — Toolset Plan Phase 7.B.4 — `node.weightPaintSettings: { xMirror }`
+  // for every part. Per-Object X-axis live mirror toggle for weight paint
+  // strokes. Blender stores the equivalent on `Mesh.symmetry & ME_SYMMETRY_X`
+  // per `reference/blender/source/blender/makesrna/intern/rna_mesh.cc:3243-3247`.
+  // Default `false` so pre-v34 projects open with the toggle off (today's
+  // behaviour). User opts in per-part via the N-panel toggle.
+  34: (project) => {
+    migrateWeightPaintSettings(project);
     return project;
   },
 

@@ -598,6 +598,94 @@ export const useProjectStore = create((set, get) => {
   },
 
   /**
+   * Toolset Plan Phase 7.B.4 — set the per-Object X-axis live mirror
+   * toggle. When on, paint strokes are reflected through the object's
+   * mid-X axis. Per `node.weightPaintSettings.xMirror` (schema v34;
+   * Blender stores the equivalent on `Mesh.symmetry & ME_SYMMETRY_X`).
+   *
+   * Snapshots for undo so toggle flips are reversible (Blender's
+   * `Mesh.use_mirror_x` is a property write that goes through the
+   * operator system → undo stack the same way).
+   *
+   * No-op when the part doesn't exist or already carries the requested
+   * value. weightPaintSettings is auto-created if missing (older v34
+   * loads with the field absent on a new node added post-migration).
+   */
+  setWeightPaintXMirror: (partId, value) => set((state) => {
+    const node = state.project.nodes.find((n) => n?.id === partId);
+    if (!node || node.type !== 'part') return state;
+    const cur = node.weightPaintSettings?.xMirror ?? false;
+    const next = !!value;
+    if (cur === next) return state;
+    if (!isBatching()) pushSnapshot(state.project);
+    return produce(state, (draft) => {
+      const target = draft.project.nodes.find((n) => n?.id === partId);
+      if (!target) return;
+      if (!target.weightPaintSettings || typeof target.weightPaintSettings !== 'object') {
+        target.weightPaintSettings = { xMirror: next };
+      } else {
+        target.weightPaintSettings.xMirror = next;
+      }
+      draft.hasUnsavedChanges = true;
+    });
+  }),
+
+  /**
+   * Toolset Plan Phase 7.B — bulk weight write. Replaces the named
+   * weight group's array with `nextWeights` (must be vertex-count long;
+   * mismatched lengths are ignored as a safety guard against caller
+   * bugs after a topology change). Used by the Mirror Weights operator
+   * (one snapshot for the whole mirror op rather than per-vertex
+   * `paintWeightStroke` calls) and Normalize All (writes multiple
+   * groups in sequence inside a beginBatch).
+   *
+   * Single immer commit; `pushSnapshot` runs unless inside a batch.
+   * If `groupName` is the active group, `mesh.boneWeights` is also
+   * mirrored so the cmo3 export pipeline picks up the change. The
+   * sync is inlined (sister to `peers.syncBoneWeightsFromActive`) so
+   * this stays synchronous — `mirrorWeights` and `normalizeAllWeights`
+   * are operator-dispatched without await, so they need the new state
+   * observable on the very next render.
+   *
+   * @param {string} partId
+   * @param {string} groupName  - which weight group to overwrite
+   * @param {number[]} nextWeights
+   */
+  setWeightGroup: (partId, groupName, nextWeights) => {
+    if (typeof partId !== 'string') return;
+    if (typeof groupName !== 'string') return;
+    if (!Array.isArray(nextWeights)) return;
+    set((state) => {
+      const node = state.project.nodes.find((n) => n?.id === partId);
+      const meshIn = getMesh(node, state.project);
+      if (!meshIn) return state;
+      const w = meshIn.weightGroups?.[groupName];
+      if (!Array.isArray(w) || w.length !== nextWeights.length) return state;
+      if (!isBatching()) pushSnapshot(state.project);
+      return produce(state, (draft) => {
+        const target = draft.project.nodes.find((n) => n?.id === partId);
+        const mesh = getMesh(target, draft.project);
+        if (!mesh) return;
+        const arr = mesh.weightGroups?.[groupName];
+        if (!Array.isArray(arr) || arr.length !== nextWeights.length) return;
+        for (let i = 0; i < arr.length; i++) {
+          let v = Number(nextWeights[i]);
+          if (!Number.isFinite(v)) v = 0;
+          if (v < 0) v = 0; if (v > 1) v = 1;
+          arr[i] = v;
+        }
+        if (mesh.activeWeightGroup === groupName) {
+          // Inline `syncBoneWeightsFromActive` (meshSync.js:102-115) so
+          // we don't need an async peers fetch — keeps setWeightGroup
+          // synchronous for operator-dispatched mirror/normalize callers.
+          mesh.boneWeights = arr.slice();
+        }
+        draft.hasUnsavedChanges = true;
+      });
+    });
+  },
+
+  /**
    * Phase 2b storage flip — write the per-object `Object.mode` field on
    * the named node (Blender-compatible per-object mode storage; today's
    * `editorStore.editMode` slot remains the read source-of-truth, but

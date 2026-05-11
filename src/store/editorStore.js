@@ -160,6 +160,26 @@ export const useEditorStore = create((set) => ({
   brushSize:     50,  // screen-space radius in pixels
   brushHardness: 0.5, // 0 = smooth cosine falloff, 1 = uniform hard
 
+  /** Toolset Plan Phase 7.B — Weight Paint brush settings.
+   *
+   *    activeBrush  — id from `WEIGHT_BRUSHES` registry
+   *                   (`'draw' | 'blur'`). 'draw' lerps toward
+   *                   `brushWeight` (or 0 with Shift held); 'blur'
+   *                   averages each affected vertex's weight against
+   *                   its neighbors' mean.
+   *    weight       — target weight value [0,1]; 'draw' brush lerps
+   *                   each affected vertex toward this value (Shift
+   *                   inverts toward 0). Updated by Sample Weight
+   *                   (`Shift+X`, Phase 7.B.1) — eyedropper picks
+   *                   the vertex's weight under the cursor.
+   *
+   * Reads by WeightPaintOverlay's stroke dispatch + ToolSettingsPanel's
+   * weightPaint section. Independent of `brushSize`/`brushHardness` so
+   * the size knob is shared across deform/sculpt/weight (matches
+   * Blender's unified brush size). Hardness is deform-mode only today. */
+  weightPaintBrush: 'draw',
+  brushWeight:      1.0,
+
   /** Toolset Plan Phase 3 — Sculpt mode brush settings. Independent of
    *  the deform-mode `brushSize`/`brushHardness` so the user's Edit-Mode
    *  brush size is preserved when they Tab into Sculpt and back. Reads
@@ -456,6 +476,21 @@ export const useEditorStore = create((set) => ({
 
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),
+  /** Toolset Plan Phase 7.B — partial-merge writers for the weight-paint
+   *  brush state. `setWeightPaintBrush('blur')` flips the active brush
+   *  type; `setBrushWeight(0.5)` updates the eyedropper-driven target
+   *  weight (clamped to [0,1]). */
+  setWeightPaintBrush:  (id)       => set((s) => {
+    if (typeof id !== 'string' || id === s.weightPaintBrush) return s;
+    return { weightPaintBrush: id };
+  }),
+  setBrushWeight:       (w)        => set((s) => {
+    const n = Number(w);
+    if (!Number.isFinite(n)) return s;
+    const clamped = Math.max(0, Math.min(1, n));
+    if (clamped === s.brushWeight) return s;
+    return { brushWeight: clamped };
+  }),
   /** Toolset Plan Phase 3 — partial-merge writer for Sculpt brush
    *  settings. `setSculpt({ size: 120 })` updates only `sculpt.size`;
    *  every other field is preserved. */

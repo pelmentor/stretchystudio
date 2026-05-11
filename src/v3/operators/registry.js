@@ -45,6 +45,12 @@ import * as objectSnap from './object/snap.js';
 import * as objectMirror from './object/mirror.js';
 import * as objectParent from './object/parent.js';
 import * as objectSetOrigin from './object/setOrigin.js';
+// Phase 7.B — Weight Paint tools (Sample / Mirror / Normalize). Same
+// eager-import discipline as 7.A — operator dispatcher fires
+// `op.exec(...)` without await.
+import * as wpSample from './weightPaint/sample.js';
+import * as wpMirror from './weightPaint/mirror.js';
+import * as wpNormalize from './weightPaint/normalize.js';
 import { duplicate } from './edit/duplicate.js';
 import {
   selectLinkedFromVertex,
@@ -1535,6 +1541,90 @@ function registerBuiltins() {
     },
     exec: () => {
       useEditMenuStore.getState().openSetOrigin({ cursor: lastMousePos() });
+    },
+  });
+
+  // ── Toolset Phase 7.B — Weight Paint tools ──────────────────────────
+
+  // 7.B.1 — Sample Weight (`Shift+X`). Eyedropper picks the closest
+  // vertex's weight in the active group → writes `editorStore.brushWeight`.
+  // Blender source: `PAINT_OT_weight_sample`
+  // (`reference/blender/source/blender/editors/sculpt_paint/mesh/paint_vertex_weight_ops.cc:278`,
+  // invoke at `:172`). Keymap: `Shift+X` per `blender_default.py:5136`.
+  registerOperator({
+    id: 'weightPaint.sample',
+    label: 'Sample Weight (Shift+X)',
+    available: () => {
+      const editor = useEditorStore.getState();
+      return editor.editMode === 'weightPaint'
+        && typeof editor.selection?.[0] === 'string';
+    },
+    exec: () => {
+      wpSample.sampleWeightFromGlobalCursor(lastMousePos());
+    },
+  });
+
+  // 7.B.3 — Mirror Weights. Two operators surface both pairing modes
+  // (topology + byName); both run on the active part. Blender source:
+  // `OBJECT_OT_vertex_group_mirror`
+  // (`reference/blender/source/blender/editors/object/object_vgroup.cc:3707`).
+  // No chord — surfaced via N-panel button + command palette.
+  registerOperator({
+    id: 'weightPaint.mirror.byTopology',
+    label: 'Mirror Weights (Topology, X axis)',
+    available: () => wpMirror.eligibleForMirror(),
+    exec: () => {
+      const r = wpMirror.mirrorWeights({ axis: 'x', mode: 'topology' });
+      if (r.skipped || r.mirrored === 0) {
+        toast({
+          title: 'Mirror Weights — nothing to mirror',
+          description: r.vertexPairs === 0
+            ? 'No mirror-vertex pairs found on the active mesh.'
+            : 'No active weight group / no eligible target.',
+        });
+      }
+    },
+  });
+  registerOperator({
+    id: 'weightPaint.mirror.byName',
+    label: 'Mirror Weights (By Group Name, X axis)',
+    available: () => wpMirror.eligibleForMirror(),
+    exec: () => {
+      const r = wpMirror.mirrorWeights({ axis: 'x', mode: 'byName' });
+      if (r.skipped || r.mirrored === 0) {
+        toast({
+          title: 'Mirror Weights — no matching group pairs',
+          description:
+            'Pair groups via L/R suffix (Group_L ↔ Group_R, .L ↔ .R, Left ↔ Right).',
+        });
+      }
+    },
+  });
+
+  // 7.B.5 — Normalize All Vertex Groups. Per-vertex divide by sum so all
+  // groups together total 1.0. Blender source:
+  // `OBJECT_OT_vertex_group_normalize_all`
+  // (`reference/blender/source/blender/editors/object/object_vgroup.cc:3219`,
+  // exec at `:3173`). Audit-fixed binding: NO chord (Blender's `Ctrl+N`
+  // collides with SS's `file.new`). Surfaced via N-panel button + command
+  // palette.
+  registerOperator({
+    id: 'weightPaint.normalizeAll',
+    label: 'Normalize All Vertex Groups',
+    available: () => wpNormalize.eligibleForNormalize(),
+    exec: () => {
+      const r = wpNormalize.normalizeAllWeights();
+      if (r.skipped) {
+        toast({
+          title: 'Normalize All — nothing to normalize',
+          description: 'Active part has no weight groups, or all weights are zero.',
+        });
+      } else if (r.normalized === 0) {
+        toast({
+          title: 'Normalize All — already normalized',
+          description: `${r.zeroSumVerts ?? 0} zero-sum vertices skipped.`,
+        });
+      }
     },
   });
 }

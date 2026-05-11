@@ -25,6 +25,20 @@
  * one per animation frame (~60Hz), and the per-stroke `beginBatch`
  * collapses the whole drag into a single undo entry.
  *
+ * **Toolset Phase 7.B integration.** Brush dispatch reads
+ * `editorStore.weightPaintBrush`:
+ *   - `'draw'` (default): lerp toward `editorStore.brushWeight` (Shift
+ *     inverts toward 0). Pre-7.B behaviour with the hard-coded `1.0`
+ *     replaced by the eyedropper-driven `brushWeight`.
+ *   - `'blur'`: lerp each affected vertex toward the mean of its
+ *     triangle neighbours' weights via `computeBlurUpdates`.
+ *
+ * X-axis mirror (`node.weightPaintSettings.xMirror`, schema v34) is
+ * applied per-tick: every paint update at vertex `v` also writes the
+ * same target weight to `mirror(v)` if a mirror pair exists. The
+ * mirror map is built once per stroke (cached in a ref) since topology
+ * is stable across pointer events.
+ *
  * Math:
  *   - Project canvas-px → screen-px via the same (zoom, panX, panY)
  *     CanvasViewport applies, so the heatmap pins to the GL canvas.
@@ -39,14 +53,22 @@ import { useEditorStore } from '../../../../store/editorStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { beginBatch, endBatch } from '../../../../store/undoHistory.js';
 import { getMesh } from '../../../../store/objectDataAccess.js';
+import { computeBlurUpdates } from '../../../../lib/weightPaint/index.js';
+import { buildVertexAdjacency } from '../../../../lib/proportionalEdit.js';
+import { buildMirrorVertexMap } from '../../../operators/weightPaint/mirror.js';
 
 export function WeightPaintOverlay() {
   const editMode = useEditorStore((s) => s.editMode);
   const selection = useEditorStore((s) => s.selection);
   const view = useEditorStore((s) => s.viewByMode.viewport);
   const brushSize = useEditorStore((s) => s.brushSize);
+  // 7.B integration: brush type + target weight from editor store.
+  const weightPaintBrush = useEditorStore((s) => s.weightPaintBrush);
+  const brushWeight = useEditorStore((s) => s.brushWeight);
   const project = useProjectStore((s) => s.project);
   const node = project.nodes.find((n) => n?.id === selection?.[0]) ?? null;
+  // 7.B.4 — per-Object X-mirror toggle (schema v34).
+  const xMirror = !!node?.weightPaintSettings?.xMirror;
   const paintWeightStroke = useProjectStore((s) => s.paintWeightStroke);
 
   // Imperative cursor refs — bypass React state to avoid re-rendering
@@ -68,6 +90,12 @@ export function WeightPaintOverlay() {
     (null),
   );
   const rafIdRef = useRef(/** @type {number|null} */ (null));
+
+  // Per-stroke caches: adjacency (for blur) + mirror vertex map (for
+  // xMirror) are stable across all ticks of a stroke since topology
+  // doesn't change. Built lazily on first tick that needs them.
+  const adjacencyRef = useRef(/** @type {Array<Set<number>>|null} */ (null));
+  const mirrorMapRef = useRef(/** @type {Map<number, number>|null} */ (null));
 
   // Bail unless the overlay should be visible. All hooks (above + the
   // useMemo / useEffect below) ran unconditionally so React's call
@@ -111,9 +139,71 @@ export function WeightPaintOverlay() {
     };
   }, []);
 
+  // Reset per-stroke caches when the active part / its mesh topology
+  // changes. Adjacency / mirror map both depend on `triangles` +
+  // `vertices`; clearing on identity change keeps a stale cache from
+  // surviving a part swap mid-mode.
+  useEffect(() => {
+    adjacencyRef.current = null;
+    mirrorMapRef.current = null;
+  }, [vertices, triangles]);
+
   if (!active) return null;
 
   // ── Brush stroke ──────────────────────────────────────────────────
+
+  function ensureAdjacency() {
+    if (!adjacencyRef.current) {
+      adjacencyRef.current = buildVertexAdjacency(triangles, vertices.length);
+    }
+    return adjacencyRef.current;
+  }
+
+  function ensureMirrorMap() {
+    if (!xMirror) return null;
+    if (!mirrorMapRef.current) {
+      mirrorMapRef.current = buildMirrorVertexMap(
+        /** @type {Array<{x:number,y:number}>} */ (/** @type {any} */ (vertices)),
+        'x',
+      );
+    }
+    return mirrorMapRef.current;
+  }
+
+  /** Compute the affected-vertex set for a brush dab at (sx, sy). */
+  function computeAffected(sx, sy) {
+    const r = brushSize;
+    const r2 = r * r;
+    /** @type {Array<{vertexIndex: number, falloff: number}>} */
+    const out = [];
+    for (let i = 0; i < projected.length; i++) {
+      const dx = projected[i].x - sx;
+      const dy = projected[i].y - sy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r2) continue;
+      const t = Math.sqrt(d2) / r;
+      const fall = (1 + Math.cos(t * Math.PI)) / 2;
+      out.push({ vertexIndex: i, falloff: fall });
+    }
+    return out;
+  }
+
+  /** Apply x-mirror to an `updates` list. For each `vertexIndex` with a
+   *  mirror pair, push the same `weight` at the mirrored index. Skips
+   *  self-mirrored verts (vertices on the axis) — they're already in. */
+  function withMirror(updates, mirrorMap) {
+    if (!mirrorMap || mirrorMap.size === 0) return updates;
+    const out = updates.slice();
+    const seen = new Set(updates.map((u) => u.vertexIndex));
+    for (const u of updates) {
+      const m = mirrorMap.get(u.vertexIndex);
+      if (m == null || m === u.vertexIndex) continue;
+      if (seen.has(m)) continue;
+      out.push({ vertexIndex: m, weight: u.weight });
+      seen.add(m);
+    }
+    return out;
+  }
 
   function flushPaint() {
     rafIdRef.current = null;
@@ -121,24 +211,35 @@ export function WeightPaintOverlay() {
     pendingPaintRef.current = null;
     if (!pending) return;
     const { sx, sy, erase } = pending;
-    const r = brushSize;
-    const r2 = r * r;
-    const updates = [];
-    for (let i = 0; i < projected.length; i++) {
-      const dx = projected[i].x - sx;
-      const dy = projected[i].y - sy;
-      const d2 = dx * dx + dy * dy;
-      if (d2 > r2) continue;
-      // Cosine falloff: weight at edge = 0, weight at center = full strength.
-      const t = Math.sqrt(d2) / r;
-      const fall = (1 + Math.cos(t * Math.PI)) / 2;
+    const affected = computeAffected(sx, sy);
+    if (affected.length === 0) return;
+
+    /** @type {Array<{vertexIndex: number, weight: number}>} */
+    let updates;
+    if (weightPaintBrush === 'blur') {
+      const adjacency = ensureAdjacency();
+      updates = computeBlurUpdates({
+        currentWeights: weightArr,
+        adjacency,
+        affected,
+        strength: 0.5,
+      });
+    } else {
+      // 'draw' (default). Lerp toward brushWeight (or 0 with Shift held).
       const STRENGTH = 0.5;
-      const cur = Number(weightArr[i]) || 0;
-      const target = erase ? 0 : 1;
-      const next = cur + (target - cur) * STRENGTH * fall;
-      updates.push({ vertexIndex: i, weight: next });
+      const target = erase ? 0 : Number(brushWeight);
+      const t = Number.isFinite(target) ? Math.max(0, Math.min(1, target)) : 1;
+      updates = [];
+      for (const a of affected) {
+        const cur = Number(weightArr[a.vertexIndex]) || 0;
+        const next = cur + (t - cur) * STRENGTH * a.falloff;
+        updates.push({ vertexIndex: a.vertexIndex, weight: next });
+      }
     }
-    if (updates.length > 0) paintWeightStroke(node.id, updates);
+
+    const mirrorMap = ensureMirrorMap();
+    const finalUpdates = withMirror(updates, mirrorMap);
+    if (finalUpdates.length > 0) paintWeightStroke(node.id, finalUpdates);
   }
 
   function schedulePaint(sx, sy, erase) {
@@ -214,6 +315,7 @@ export function WeightPaintOverlay() {
 
   return (
     <svg
+      data-overlay="weightPaint"
       className="absolute inset-0"
       style={{ width: '100%', height: '100%', pointerEvents: 'auto', cursor: 'none', touchAction: 'none' }}
       onPointerDown={handlePointerDown}
@@ -252,6 +354,9 @@ export function WeightPaintOverlay() {
         style={{ fontFamily: 'monospace', filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.8))' }}
       >
         weight paint · {activeName ?? '(no group)'}
+        {' · '}{weightPaintBrush}
+        {weightPaintBrush === 'draw' ? ` · w=${brushWeight.toFixed(2)}` : ''}
+        {xMirror ? ' · X-mirror' : ''}
         {' · '}drag = paint · shift+drag = erase
       </text>
     </svg>

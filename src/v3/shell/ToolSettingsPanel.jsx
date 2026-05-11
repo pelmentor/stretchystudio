@@ -22,9 +22,11 @@
 
 import { ChevronRight, ChevronLeft, Magnet } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore.js';
+import { useProjectStore } from '../../store/projectStore.js';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
 import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { SCULPT_BRUSHES } from '../../lib/sculpt/index.js';
+import { WEIGHT_BRUSHES } from '../../lib/weightPaint/index.js';
 import { FALLOFF_CYCLE } from '../../lib/proportionalEdit.js';
 import { getOperator } from '../operators/registry.js';
 
@@ -109,7 +111,12 @@ function ContentForMode({ editMode }) {
     );
   }
   if (editMode === 'weightPaint') {
-    return <BrushSection />;
+    return (
+      <>
+        <BrushSection />
+        <WeightPaintSection />
+      </>
+    );
   }
   if (editMode === 'sculpt') {
     return <SculptSection />;
@@ -315,6 +322,149 @@ function SculptSection() {
           />
           <span className="text-foreground/85">Connected only</span>
         </label>
+      </div>
+    </div>
+  );
+}
+
+/** Toolset Plan Phase 7.B — Weight Paint section.
+ *
+ *  Surfaces the brush picker (Draw / Blur), the eyedropper-driven
+ *  Weight slider (`brushWeight`, written by `weightPaint.sample`
+ *  / `Shift+X`), the per-Object X-Mirror toggle (schema v34
+ *  `node.weightPaintSettings.xMirror`), the Mirror Weights buttons
+ *  (Topology + By Name), and the Normalize All button.
+ *
+ *  Mode-gated by `ContentForMode` — only mounts when
+ *  `editorStore.editMode === 'weightPaint'` and a part is selected.
+ *  When no part is selected (selection is `[]`), the X-Mirror toggle
+ *  is disabled (no node to write the field on); Mirror / Normalize
+ *  buttons fall back to their op `available()` gates. */
+function WeightPaintSection() {
+  const weightPaintBrush = useEditorStore((s) => s.weightPaintBrush);
+  const setWeightPaintBrush = useEditorStore((s) => s.setWeightPaintBrush);
+  const brushWeight = useEditorStore((s) => s.brushWeight);
+  const setBrushWeight = useEditorStore((s) => s.setBrushWeight);
+  const selection = useEditorStore((s) => s.selection);
+  const project = useProjectStore((s) => s.project);
+  const setWeightPaintXMirror = useProjectStore((s) => s.setWeightPaintXMirror);
+
+  const partId = selection?.[0] ?? null;
+  const node = (typeof partId === 'string')
+    ? project.nodes.find((n) => n?.id === partId) ?? null
+    : null;
+  const xMirror = !!node?.weightPaintSettings?.xMirror;
+  const xMirrorEnabled = !!(node && node.type === 'part');
+
+  function runOp(id) {
+    const op = getOperator(id);
+    if (!op || !op.exec) return;
+    if (op.available && !op.available({ editorType: 'viewport' })) return;
+    op.exec({ editorType: 'viewport' });
+  }
+  function isAvail(id) {
+    const op = getOperator(id);
+    if (!op) return false;
+    if (!op.available) return true;
+    return op.available({ editorType: 'viewport' });
+  }
+
+  const mirrorTopoAvail = isAvail('weightPaint.mirror.byTopology');
+  const mirrorNameAvail = isAvail('weightPaint.mirror.byName');
+  const normalizeAvail = isAvail('weightPaint.normalizeAll');
+
+  return (
+    <div>
+      <SectionHeader label="Weight Paint" />
+      <div className="px-2 py-2 flex flex-col gap-1.5">
+        {/* Brush picker — Draw / Blur per WEIGHT_BRUSHES registry. */}
+        <label className="flex items-center gap-2 text-[11px] py-0.5">
+          <span className="w-20 text-muted-foreground select-none">Brush</span>
+          <select
+            value={weightPaintBrush}
+            onChange={(e) => setWeightPaintBrush(e.target.value)}
+            className="flex-1 h-6 bg-background border border-border rounded px-1 text-[11px]"
+          >
+            {WEIGHT_BRUSHES.map((b) => (
+              <option key={b.id} value={b.id}>{b.label}</option>
+            ))}
+          </select>
+        </label>
+        {/* Weight target — eyedroppered by `Shift+X`, lerps strokes
+            toward this value when the Draw brush is active. Hidden for
+            Blur (no target weight; Blur averages neighbours). */}
+        {weightPaintBrush === 'draw' && (
+          <NumberSlider
+            label="Weight"
+            value={brushWeight}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(v) => setBrushWeight(v)}
+          />
+        )}
+        {/* Per-Object X-axis live mirror (schema v34). */}
+        <label className={
+          'flex items-center gap-2 text-[11px] py-0.5 select-none ' +
+          (xMirrorEnabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-40')
+        }>
+          <input
+            type="checkbox"
+            checked={xMirror}
+            disabled={!xMirrorEnabled}
+            onChange={(e) => {
+              if (xMirrorEnabled && partId) {
+                setWeightPaintXMirror(partId, e.target.checked);
+              }
+            }}
+            className="h-3 w-3"
+          />
+          <span className="text-foreground/85">X-Axis Mirror</span>
+        </label>
+        <div className="h-px bg-border my-1" />
+        {/* Mirror Weights — Topology + By Name. Both X-axis only. */}
+        <button
+          type="button"
+          disabled={!mirrorTopoAvail}
+          onClick={() => runOp('weightPaint.mirror.byTopology')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (mirrorTopoAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Mirror weights via vertex-position topology (X axis)"
+        >
+          Mirror (Topology)
+        </button>
+        <button
+          type="button"
+          disabled={!mirrorNameAvail}
+          onClick={() => runOp('weightPaint.mirror.byName')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (mirrorNameAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Mirror weights between L/R groups (Group_L ↔ Group_R)"
+        >
+          Mirror (By Name)
+        </button>
+        <button
+          type="button"
+          disabled={!normalizeAvail}
+          onClick={() => runOp('weightPaint.normalizeAll')}
+          className={
+            'h-6 text-[11px] rounded border border-border px-2 text-left ' +
+            (normalizeAvail
+              ? 'hover:bg-accent hover:text-accent-foreground cursor-pointer'
+              : 'opacity-40 cursor-not-allowed')
+          }
+          title="Normalize all vertex groups so per-vertex sums = 1.0"
+        >
+          Normalize All
+        </button>
       </div>
     </div>
   );

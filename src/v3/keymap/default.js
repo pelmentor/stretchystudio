@@ -264,6 +264,20 @@ export const DEFAULT_KEYMAP = {
   // Keymap binding at `blender_default.py:4510` (audit fix D-5 corrected
   // pre-existing `:4548`).
   'Alt+KeyP': 'object.parent.clearMenu',
+
+  // Toolset Phase 7.B.1 — Sample Weight (`Shift+X`). Eyedropper that
+  // picks the weight under the cursor in the active group → writes
+  // `editorStore.brushWeight`. Blender source: `PAINT_OT_weight_sample`
+  // (`reference/blender/source/blender/editors/sculpt_paint/mesh/paint_vertex_weight_ops.cc:278`,
+  // invoke at `:172`). Keymap: `Shift+X` per `blender_default.py:5136`
+  // (`("paint.weight_sample", {"type": 'X', "value": 'PRESS', "shift": True})`).
+  // The operator's `available()` gates to weightPaint mode + a selected
+  // part — pressing `Shift+X` outside weight paint is a silent no-op.
+  //
+  // Plan §7.B.1 originally proposed `Ctrl+LMB` (browser-friendly
+  // eyedropper) but the audit-fixed binding table bound `Shift+X` for
+  // Blender muscle-memory parity.
+  'Shift+KeyX': 'weightPaint.sample',
 };
 
 /**
