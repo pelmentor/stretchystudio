@@ -25,13 +25,14 @@
  * # Blender mirror
  *
  * In Blender, the Scene datablock owns AnimData via `Scene.adt`
- * (`reference/blender/source/blender/makesdna/DNA_scene_types.h:2225`).
- * The "what action does this scene play?" lookup is
- * `BKE_animdata_id_action(&scene->id)` which returns `scene->adt->action`
- * (`reference/blender/source/blender/blenkernel/intern/anim_data.cc:282`).
- * SS approximates this via the synthetic `__scene__` node — the
- * `node.animData.actionId` lookup IS the equivalent of
- * `BKE_animdata_id_action`.
+ * (`reference/blender/source/blender/makesdna/DNA_scene_types.h:2813`).
+ * The "what AnimData does this ID have?" lookup is
+ * `BKE_animdata_from_id` (`anim_data.cc:91`); callers then read
+ * `adt->action` directly. SS's `getSceneAction` does the equivalent in
+ * one step: walk to the `__scene__` node, read `animData.actionId`,
+ * resolve in `project.actions[]`. There is no `BKE_animdata_id_action`
+ * function in Blender — only `BKE_animdata_from_id` plus the inline
+ * `adt->action` follow-up at every call site.
  *
  * The UI-store fallback (`useAnimationStore.activeActionId`) is the SS
  * analog of Blender's "Action Editor active slot" UI state. Blender
@@ -39,6 +40,16 @@
  * Action Editor can show / let you scrub an action that is not bound to
  * any datablock); SS does the same — UI state vs project data are
  * deliberately separate slots, and this selector composes them.
+ *
+ * **SS-specific composition (Audit-fix D-10 deviation):** Blender does
+ * NOT auto-resolve "scene's action OR editor's action." Each consumer
+ * reads what it needs — exporter reads `adt->action`, Action Editor
+ * reads its own pinned-slot pointer. The composition is a SS
+ * convenience to bridge legacy UI behaviour (pre-Stage-1.E consumers
+ * that read `useAnimationStore.activeActionId`); Stage 1.E callers
+ * should consume `getSceneAction` directly (no fallback) once they
+ * own the bound-action UX surface, and reserve `getActiveSceneAction`
+ * for shared transport widgets that legitimately want either.
  *
  * # Cross-references
  *

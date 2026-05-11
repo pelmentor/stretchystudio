@@ -102,15 +102,19 @@ import { uid } from '../lib/ids.js';
  * surfaces it as "Used by: <object names>" beside each row in the
  * Actions panel.
  *
- * Synthetic Objects (`__params__`, `__armature__`, `__scene__`) are
- * scanned along with regular Objects — `__scene__` (Stage 1.D, schema
- * v37) is the typical project-wide animation host so it MUST appear in
- * this list when applicable. Audit-fix D-9 (Stage 1.C audit): the
- * read/write asymmetry — `getActionUsers` enumerated `__scene__` here
- * but `assignAction` rejected it for lacking an `animData` slot — is
+ * The walk includes `__scene__` (Stage 1.D, schema v37 — `type:
+ * 'scene'`), the project-wide animation host. The other
+ * double-underscore-prefixed synthetics (`__params__`, `__armature__`)
+ * are VIRTUAL — they're never real entries in `project.nodes` (they're
+ * constructed on-the-fly by `rnaPath.js` and `getArmature(project)`
+ * respectively), so this walk does not see them. `__scene__` is the
+ * one synthetic that lives as a real node entry (Audit-fix G-3 / D-15
+ * Stage 1.D — convention break is intentional + documented in the v37
+ * migration). Audit-fix D-9 (Stage 1.C audit): the read/write
+ * asymmetry — `getActionUsers` enumerated `__scene__` here but
+ * `assignAction` rejected it for lacking an `animData` slot — is
  * CLOSED by Stage 1.D's v37 migration, which gives `__scene__` the
- * standard `animData` slot. Both helpers now treat the scene node as
- * a first-class Object.
+ * standard `animData` slot.
  *
  * **Mutation warning (Audit-fix G-6):** the returned references are
  * live `project.nodes[i]` pointers. Mutating them OUTSIDE a
@@ -156,15 +160,19 @@ export function getActionUsers(project, actionId) {
  * `deleteAction` exists to prevent. Returns false to flag the bad call
  * (caller's bug — not a silent no-op per Rule №1).
  *
- * **Skipped vs Blender (Audit-fix D-4):** Blender's `assign_action`
- * actually delegates to `generic_assign_action` (`:1276-1316`) which
- * ALSO updates `last_slot_identifier` (string mirror), runs the NLA
- * tweak-mode editability guard (`BKE_animdata_action_editable` —
- * `ADT_NLA_EDIT_ON` flag), and decrements/increments datablock
- * reference counts (`id.us`). SS skips all three: (1) no
- * `last_slot_identifier` field — single-slot system pre-Phase-4 NLA;
- * (2) no NLA tweak-mode pre-Phase-4; (3) no datablock reference
- * counting. Phase 4 must extend this helper for (1)+(2).
+ * **Skipped vs Blender (Audit-fix D-4 from Stage 1.C + D-11 from Stage
+ * 1.D):** Blender's `assign_action` delegates to `generic_assign_action`
+ * (`:1276-1316`) which ALSO (1) updates `last_slot_identifier` (string
+ * mirror), (2) runs the NLA tweak-mode editability guard
+ * (`BKE_animdata_action_editable` at `anim_data.cc:148-168` — rejects
+ * when `ADT_NLA_EDIT_ON` flag is set OR `actstrip != null` OR
+ * `tmpact != null`), and (3) decrements/increments datablock reference
+ * counts (`id.us`). SS skips all three: no `last_slot_identifier`
+ * field (single-slot system pre-Phase-4 NLA); no NLA tweak-mode
+ * editability guard (D-11 Stage 1.D — most relevant for `__scene__`
+ * since scene-bound actions are the prime tweak-mode target); no
+ * datablock reference counting. Phase 4 must extend this helper for
+ * (1) + (2).
  *
  * **Symmetry with unassignAction (Audit-fix G-7):** other animData
  * fields (`actionInfluence`, `actionBlendmode`, `actionExtendmode`)

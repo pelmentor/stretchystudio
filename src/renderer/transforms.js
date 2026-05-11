@@ -175,6 +175,14 @@ export function computeWorldMatrices(nodes) {
 
   function resolve(node) {
     if (worldMap.has(node.id)) return worldMap.get(node.id);
+    // Audit-fix G-11 (Stage 1.D): the v37 `__scene__` synthetic has no
+    // transform — `makeLocalMatrix(undefined)` defaults to identity, so
+    // the worldMap entry is benign (3×3 identity). No consumer reads
+    // it today, but the entry exists; iteration patterns like
+    // `for (const [id, mat] of worldMap)` will see `__scene__`. The
+    // canvas owns the world transform; the scene's identity matrix is
+    // semantically correct (the scene IS the world frame) and renderer
+    // code that filters by `node.type === 'part'` skips it naturally.
     const isBone = isBoneGroup(node);
     // Bones: route through `getBonePose` so v19 channels-shape resolves
     // to the same flat `{rotation, x, y, scaleX, scaleY}` contract that

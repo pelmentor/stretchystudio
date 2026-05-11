@@ -34,6 +34,16 @@ import { create } from 'zustand';
  * @typedef {Object} SelectableRef
  * @property {SelectableType} type
  * @property {string} id
+ *
+ * Audit-fix G-16 (Stage 1.D): the v37 `type: 'scene'` synthetic node
+ * (`__scene__`) is INTENTIONALLY NOT a SelectableType. The scene is the
+ * project root, not a peer of regular Objects — its animData binding is
+ * surfaced via the (Stage 1.E) Properties panel "AnimData" sub-section,
+ * not via Outliner selection. If a future code path tries to select
+ * `{type:'scene', id:'__scene__'}` it will silently insert into items[]
+ * (no validator runs) and downstream type-switching consumers will hit
+ * unhandled-case branches; reject at the call site or extend this enum
+ * deliberately if Stage 1.E adds a Scene root view.
  */
 
 /** @param {SelectableRef} a @param {SelectableRef} b */

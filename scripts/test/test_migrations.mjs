@@ -44,7 +44,7 @@ function assertThrows(fn, name) {
   // See `src/store/migrations/v37_scene_anim_data.js`.
   assert(Array.isArray(p.nodes) && p.nodes.length === 1,
     'v0 empty: nodes contains exactly the __scene__ synthetic (post-v37)');
-  assert(p.nodes[0] && p.nodes[0].id === '__scene__' && p.nodes[0].type === 'sceneObject',
+  assert(p.nodes[0] && p.nodes[0].id === '__scene__' && p.nodes[0].type === 'scene',
     'v0 empty: nodes[0] is the __scene__ pseudo-Object');
   // v36 deletes `project.animations` after lifting clips into `project.actions`.
   assert(p.animations === undefined, 'v0→current: animations field deleted by v36');

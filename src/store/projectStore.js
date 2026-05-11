@@ -131,7 +131,7 @@ export const useProjectStore = create((set, get) => {
     nodes: [
       {
         id: '__scene__',
-        type: 'sceneObject',
+        type: 'scene',
         name: 'Scene',
         parent: null,
         animData: {
@@ -1085,7 +1085,29 @@ export const useProjectStore = create((set, get) => {
     return set(produce((state) => {
       state.project.canvas   = { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' };
       state.project.textures = [];
-      state.project.nodes    = [];
+      // Audit-fix G-1 (Stage 1.D): the v37 `__scene__` synthetic must
+      // survive resetProject — without re-seeding it here, "File → New"
+      // leaves the project without a scene host until reload. Shape
+      // matches the initial-state literal at line ~135 (drift safety
+      // net at `scripts/test/test_migration_v37.mjs`).
+      state.project.nodes    = [
+        {
+          id: '__scene__',
+          type: 'scene',
+          name: 'Scene',
+          parent: null,
+          animData: {
+            actionId: null,
+            actionInfluence: 1,
+            actionBlendmode: 'replace',
+            actionExtendmode: 'hold',
+            slotHandle: 0,
+            nlaTracks: [],
+            drivers: [],
+            flag: 0,
+          },
+        },
+      ];
       state.project.parameters = [];
       state.project.physics_groups = [];
       state.project.actions = [];

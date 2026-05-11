@@ -538,11 +538,22 @@ export function deleteAction(project, actionId) → { removed, cascaded }       
 
 `projectStore.deleteAction` delegates to `registryDeleteAction` AND resets `useAnimationStore.activeActionId` when it matches the deleted id (audit-fix G-3, cross-store cascade). Sister thunks `projectStore.assignAction` / `unassignAction` / `cloneAction` shipped to give the registry a React-aware path (audit-fix G-4 — substrate without thunks is itself a Rule №2 anti-pattern).
 
-**Stage 1.E entry gate (audit-fix D-10):** Stage 1.E will rewire these consumers to use the registry:
+**Stage 1.E entry gate (audit-fix D-10 from Stage 1.C + D-9 from Stage 1.D):** Stage 1.E will rewire these consumers to use the registry + the scene-action selector:
 - `AnimationsEditor.jsx` (rename to `ActionsEditor.jsx`) — currently calls `projectStore.deleteAction`/`renameAction`/`createAction` directly; will add `cloneAction` (Duplicate command) + `assignAction` (drag-to-bind from Properties panel).
 - `Properties` panel — new "AnimData" sub-section per Object surfacing the `actionId` slot with assign/unassign affordance.
-- Per-action "Used by: <objects>" strip — consumes `getActionUsers`.
-- Timeline / FCurve / Dopesheet editors — switch from `useAnimationStore.activeActionId` to `getActiveSceneAction(project, fallback)` (Stage 1.D, schema v37) so the scene's bound action wins over the UI pointer.
+- Per-action "Used by: <objects>" strip — consumes `getActionUsers`. Audit-fix D-13 Stage 1.D: when `__scene__` is in the bound list, surface it as "Scene" (not "__scene__") to match Blender Outliner naming; consider grouping it visually distinct from per-Object users (Blender shows Scene actions under a separate root in the Outliner).
+- **Full `useAnimationStore.activeActionId` consumer rewire (D-9 Stage 1.D)** — Stage 1.D's audit identified 27 hits across 11 files reading `activeActionId` directly. Stage 1.E must rewire ALL of these to consume `getActiveSceneAction(project, fallback)`:
+  - `src/v3/editors/timeline/TimelineEditor.jsx`
+  - `src/v3/editors/dopesheet/DopesheetEditor.jsx`
+  - `src/v3/editors/fcurve/FCurveEditor.jsx`
+  - `src/v3/editors/animations/AnimationsEditor.jsx` (folded into the rename)
+  - `src/v3/editors/parameters/ParamRow.jsx` (line 179)
+  - `src/v3/editors/nodetree/NodeTreeArea.jsx`
+  - `src/v3/shell/ExportModal.jsx` (line 205)
+  - `src/components/canvas/CanvasViewport.jsx` (lines 646, 896, 1445, 2303)
+  - `src/components/canvas/GizmoOverlay.jsx` (line 46)
+  - `src/components/canvas/SkeletonOverlay.jsx` (line 114)
+  - `src/io/exportAnimation.js#resolveActions` (line 100-112) — exporter integration; this is the user-visible "current action" gate.
 
 #### 1.D — Project-level "Scene" AnimData
 
@@ -552,24 +563,65 @@ an `animData` for these "scene" Actions. The exporter treats a
 `__scene__` AnimData identically to an Object AnimData — it walks the
 FCurves and writes them to motion3.json.
 
-**Shipped 2026-05-11 (schema v37).** The migration
+**Substrate shipped 2026-05-11 (schema v37).** The migration
 `src/store/migrations/v37_scene_anim_data.js` creates a synthetic
-`{id: '__scene__', type: 'sceneObject', name: 'Scene', parent: null,
+`{id: '__scene__', type: 'scene', name: 'Scene', parent: null,
 animData: defaultAnimData()}` node on every legacy v36 project (and on
-fresh projects via the projectStore initial state). The selector
-`getActiveSceneAction(project, fallbackActionId)` lives in
-`src/anim/sceneAction.js` — resolution order: scene's bound action
+fresh projects via the projectStore initial state + `resetProject`).
+The selector `getActiveSceneAction(project, fallbackActionId)` lives
+in `src/anim/sceneAction.js` — resolution order: scene's bound action
 wins; UI store's `activeActionId` is the fallback; null when neither
-resolves. Stage 1.E will route Timeline / FCurve editor / Dopesheet
-through this selector. The Stage 1.C audit-fix D-9 read/write
-asymmetry (`getActionUsers` enumerated `__scene__` but `assignAction`
-rejected it) closes naturally — both helpers now treat the scene as a
+resolves. The Stage 1.C audit-fix D-9 read/write asymmetry
+(`getActionUsers` enumerated `__scene__` but `assignAction` rejected
+it) closes naturally — both helpers now treat the scene as a
 first-class Object because v37 gives it the standard `animData` slot.
 
+**Stage 1.D ship scope (substrate only).** The plan prose "the
+exporter treats `__scene__` AnimData identically to an Object
+AnimData — it walks the FCurves and writes them to motion3.json" is
+the EVENTUAL contract. Stage 1.D ships the substrate (migration,
+selector, registry close-of-D-9). The exporter rewire to actually
+read scene-bound actions is owned by Stage 1.E + Stage 1.F (Audit-fix
+D-7 + G-19 Stage 1.D — overclaiming-correction). Until Stage 1.E
+lands, the exporter at `src/io/live2d/exporter.js:219-223` and
+`src/io/live2d/motion3json.js:50` still walk `project.actions`
+directly with the UI-store `activeActionId` as the "current action"
+selector. No regression — they're behaviour-preserving relative to
+v36.
+
 Blender mirror: Scene datablock owns AnimData via `Scene.adt`
-(`reference/blender/source/blender/makesdna/DNA_scene_types.h:2225`).
-`BKE_animdata_id_action(&scene->id)` is the analog of `getSceneAction`
-(`reference/blender/source/blender/blenkernel/intern/anim_data.cc:282`).
+(`reference/blender/source/blender/makesdna/DNA_scene_types.h:2813`).
+`BKE_animdata_from_id(&scene->id)` is the AnimData getter
+(`reference/blender/source/blender/blenkernel/intern/anim_data.cc:91`);
+callers read `adt->action` directly — same shape as
+`getSceneAction(project)`.
+
+**Documented Blender deviations (Audit-fix Stage 1.D):**
+- D-3: SS uses `type: 'scene'` for the synthetic node. Blender's
+  Scene is its own ID datablock (peer of Object, not a kind of
+  Object); SS approximates via a node entry so existing
+  `actionRegistry` walks see it without modification.
+- D-5: SS pre-creates `actionInfluence: 1` (Blender's struct DNA
+  default is `0.0f`; the `1.0f` value comes from `BKE_animdata_ensure_id`
+  runtime override at `anim_data.cc:123`). SS adopts the runtime
+  default directly because we eagerly create AnimData (see D-6).
+- D-6: SS pre-creates the scene's animData on every project. Blender
+  starts scenes with `Scene.adt = nullptr` and lazy-creates via
+  `BKE_animdata_ensure_id` on first action assignment. Eager creation
+  trades minimal memory for first-class registry-walk uniformity.
+- D-10: `getActiveSceneAction(project, fallbackActionId)` composes
+  scene-binding + UI-store-pointer in one call. Blender has no
+  equivalent composition — every consumer reads what it needs.
+  SS-specific bridge for legacy UI behaviour (pre-Stage-1.E
+  consumers).
+- D-13: Stage 1.E "Used by: Scene" UI label should disambiguate
+  scene from regular Objects (Blender Outliner shows actions under
+  Scene as parent-child, not peer-of-Object). Cosmetic; flagged for
+  Stage 1.E label work.
+- D-15: `__scene__` is the FIRST double-underscore-prefixed
+  synthetic that lives as a real `project.nodes` entry (`__params__`
+  + `__armature__` are virtual, never in nodes). Convention break is
+  intentional (see Stage 1.D module JSDoc).
 
 #### 1.E — UI update
 

@@ -28,6 +28,15 @@
  * v17: `part` and `group` nodes are objects; `deformer` is not.
  * v18: `type === 'object'`.
  *
+ * v37 (Audit-fix G-8 Stage 1.D): the `type: 'scene'` synthetic node
+ * (`__scene__`) is INTENTIONALLY NOT an Object — Blender's Scene is a
+ * peer ID datablock, not a kind of Object (no `OB_SCENE` enum in
+ * `DNA_object_enums.h`). Consumers that need to know "is this the
+ * scene host?" should use `isSceneNode` from
+ * `src/store/migrations/v37_scene_anim_data.js`. Consumers that need
+ * "any node that holds AnimData" should walk `node.animData` directly
+ * (matches `actionRegistry.getActionUsers`).
+ *
  * @param {object|null|undefined} node
  * @returns {boolean}
  */

@@ -38,7 +38,7 @@ function deepEqual(a, b) {
 {
   const node = makeSceneNode();
   assert(node.id === '__scene__', 'makeSceneNode: id is __scene__');
-  assert(node.type === 'sceneObject', 'makeSceneNode: type is sceneObject');
+  assert(node.type === 'scene', 'makeSceneNode: type is "scene" (matches Blender Scene ID)');
   assert(node.name === 'Scene', 'makeSceneNode: name is Scene');
   assert(node.parent === null, 'makeSceneNode: parent is null');
   assert(typeof node.animData === 'object' && node.animData !== null,
@@ -64,7 +64,7 @@ function deepEqual(a, b) {
     'isSceneNode: true for makeSceneNode output');
   assert(isSceneNode({ id: '__scene__', type: 'group' }) === false,
     'isSceneNode: false for wrong type');
-  assert(isSceneNode({ id: 'leftArm', type: 'sceneObject' }) === false,
+  assert(isSceneNode({ id: 'leftArm', type: 'scene' }) === false,
     'isSceneNode: false for wrong id');
   assert(isSceneNode(null) === false, 'isSceneNode: false for null');
   assert(isSceneNode(undefined) === false, 'isSceneNode: false for undefined');
@@ -137,7 +137,7 @@ function deepEqual(a, b) {
     schemaVersion: 36,
     actions: [],
     nodes: [
-      { id: '__scene__', type: 'sceneObject', name: 'Scene', parent: null },
+      { id: '__scene__', type: 'scene', name: 'Scene', parent: null },
     ],
   };
   const result = migrateSceneAnimData(project);
@@ -150,6 +150,79 @@ function deepEqual(a, b) {
     'hand-edited: animData slot was added in place');
   assert(scene.animData.actionId === null,
     'hand-edited: added animData starts null');
+}
+
+// ── Hand-edited collision: __scene__ exists with WRONG type ────────────────
+// Audit-fix D-12 (Stage 1.D): the migration must force-correct the type
+// so the read/write asymmetry can't reopen via a hand-edited
+// `{id: '__scene__', type: 'group'}` collision.
+
+{
+  const project = {
+    schemaVersion: 36,
+    actions: [],
+    nodes: [
+      { id: '__scene__', type: 'group', parent: 'someParent' },
+    ],
+  };
+  migrateSceneAnimData(project);
+  const scene = project.nodes.find((n) => n && n.id === '__scene__');
+  assert(scene.type === 'scene',
+    'D-12: type force-corrected from "group" to "scene"');
+  assert(scene.name === 'Scene',
+    'D-12: missing name backfilled to "Scene"');
+  assert(scene.parent === null,
+    'D-12: foreign parent reset to null');
+  assert(scene.animData && scene.animData.actionId === null,
+    'D-12: animData added when missing');
+  assert(isSceneNode(scene),
+    'D-12: predicate now accepts the corrected node');
+}
+
+// ── Hand-edited corruption: animData is a non-object truthy value ──────────
+// Audit-fix D-16 (Stage 1.D): mirror Blender's `BKE_animdata_ensure_id`
+// strict contract — only repair when missing, fail loud for corrupt
+// truthy values rather than silently overwriting user data.
+
+{
+  const project = {
+    schemaVersion: 36,
+    actions: [],
+    nodes: [
+      { id: '__scene__', type: 'scene', name: 'Scene', parent: null, animData: 'broken' },
+    ],
+  };
+  let threw = false;
+  try {
+    migrateSceneAnimData(project);
+  } catch (e) {
+    threw = true;
+    assert(/corrupt animData/.test(String(e.message)),
+      'D-16: throws with a useful message about corrupt animData');
+  }
+  assert(threw, 'D-16: corrupt animData triggers a thrown Error (not silent overwrite)');
+}
+
+// ── Foreign-parent idempotency (Audit-fix G-17) ────────────────────────────
+// Tests the scenario flagged by G-17: a hand-edited project with
+// `{id:'__scene__', parent:'foreignNode'}` must end up with parent=null
+// after the D-12 force-correct.
+
+{
+  const project = {
+    schemaVersion: 36,
+    actions: [],
+    nodes: [
+      { id: 'foreignNode', type: 'group', parent: null },
+      { id: '__scene__', type: 'scene', name: 'Scene', parent: 'foreignNode',
+        animData: { actionId: null, actionInfluence: 1, actionBlendmode: 'replace',
+                    actionExtendmode: 'hold', slotHandle: 0, nlaTracks: [], drivers: [], flag: 0 } },
+    ],
+  };
+  migrateSceneAnimData(project);
+  const scene = project.nodes.find((n) => n && n.id === '__scene__');
+  assert(scene.parent === null,
+    'G-17: foreign parent reset to null even when animData already correct');
 }
 
 // ── Defensive shape checks ─────────────────────────────────────────────────
@@ -198,7 +271,7 @@ function deepEqual(a, b) {
   const ref = makeSceneNode();
   const checks = [
     `id: '__scene__'`,
-    `type: 'sceneObject'`,
+    `type: 'scene'`,
     `name: 'Scene'`,
     `actionId: null`,
     `actionInfluence: 1`,

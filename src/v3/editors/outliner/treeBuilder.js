@@ -212,6 +212,14 @@ function buildHierarchyTree(nodes) {
     // ship them as first-class entries on `project.nodes`; the
     // hierarchy walker below renders them under their `node.parent`
     // (chain parent for deformers).
+    //
+    // Audit-fix G-7 + D-4 (Stage 1.D): the `type: 'scene'` synthetic
+    // (v37 `__scene__`) is INTENTIONALLY excluded from the Object
+    // Outliner. Blender's Outliner shows scenes under a separate
+    // "Scenes" view (not under View Layer), and Stage 1.E owns the
+    // decision of whether SS gains an analogous Scene root. Until
+    // then, the scene's animData is reachable only via the
+    // Properties-panel AnimData section (Stage 1.E entry-gate item).
     if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer') continue;
     byId.set(n.id, n);
   }
