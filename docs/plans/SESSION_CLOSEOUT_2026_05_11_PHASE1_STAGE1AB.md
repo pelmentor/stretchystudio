@@ -7,14 +7,14 @@ tracking `_start.bat` (small ask the user folded in mid-session). One
 big substrate commit (`229305a`) + one chore commit (`0ccf985`); the
 close-out doc commit follows.
 
-## What shipped this sub-session (2 commits + close-out)
+## What shipped this sub-session (2 commits + close-out + audit-fix sweep)
 
 | Commit  | What |
 |---------|------|
 | `0ccf985` | chore: track `_start.bat` dev launcher (removed gitignore exception). Folded in mid-session per user request. |
 | `229305a` | Animation Phase 1 Stage 1.A+1.B — Action datablock + per-Object AnimData. Schema bump v35→v36; ~30 consumer files rewired across save/load + export pipeline + runtime/canvas + editor UI; helper module refactored; store renames; 17 test files updated; 56 new migration assertions. |
-
-(Close-out doc commit follows separately.)
+| `b6b6ac6` | docs(plan): Phase 1 Stage 1.A+1.B close-out — Action datablock ship + memory updates. |
+| `3339257` | fix(audit): Phase 1 Stage 1.A+1.B audit-fix sweep — 5 HIGH + 4 MED gaps. New audit-pin (47 assertions), 14 test fixtures rewritten for canonical double-quote rnaPath grammar, `package.json` wires new pin into `npm test`. Reverses the "Audit status" deferral noted below — the sweep ran in the next sub-session as Resume path A predicted. |
 
 ## What was the gap
 
@@ -159,19 +159,25 @@ Per Animation Plan §Phase 1.C–1.G (which §Phase 1 collectively covers):
 
 ### Audit status
 
-This sub-session ships **without** the established dual-audit pattern.
-Reasoning: the work was substantially performed by 5 parallel sub-agents
-(per-domain consumer rewires) and verified end-to-end via the full
-`npm test` chain (exit 0; typecheck clean). A dedicated dual audit
-(architecture + Blender-fidelity) is the appropriate next sub-session
-opening move — it would surface any drift the substrate verification
-missed (e.g. fcurve.id naming consistency, AnimData field defaults vs
-Blender, rnaPath grammar coverage).
+**UPDATE 2026-05-11 (post-close-out):** the dual audit was run in the
+next sub-session and shipped as `3339257`. Two parallel agents
+(architecture + Blender-fidelity) reviewed `229305a` and returned 9 gaps
+(5 HIGH + 4 MED). All fixed in one sweep + audit-pin test
+(`test_audit_fixes_2026_05_11_phase1_stage1ab.mjs`, 47 assertions).
 
-If the user wants the audit before merging downstream, run
-`/ultrareview` against `229305a` or open a dedicated audit sub-session.
-The audit-pin test convention (`test_audit_fixes_<date>_phase1_stage1ab.mjs`)
-slots in alongside the existing pins.
+| Gap | Severity | Lane | What |
+|-----|----------|------|------|
+| A-1 | HIGH | Architecture | `kernels/fcurve.js` divided ctx.timeMs by 1000 (legacy from pre-v36 seconds-shaped keyforms); FCURVE_EVAL would silently return first-keyform value because seconds always compared less than ms-shaped keyform times. Latent — current build pass emits ANIMATION_TRACK_EVAL not FCURVE_EVAL. |
+| A-2 | HIGH | Architecture | v36 migration `extrapolation` ternary collapsed to dead `'constant' : 'constant'`; fixed to `'constant' : 'linear'` so a linear-easing terminator migrates with linear extrap (matching Blender's `FCURVE_EXTRAPOLATE_LINEAR`). |
+| B-1 | HIGH | Blender-fidelity | rnaPath bracket-keys used single-quote (`objects['X']`); Blender's RNA tokenizer at `rna_path.cc:127` accepts only double-quote (`*p == '"'`). Single-quoted keys would fall to the unquoted numeric branch and parse-fail. Switched constructors + decoder regex + 4 production regexes + v36 migration emit + 14 test fixtures to canonical double-quote; v36 idempotency normalises pre-fix saves on load. |
+| B-2 | HIGH | Blender-fidelity | `defaultAnimData` cited non-existent enum names `ACT_BLEND_REPLACE`/`ACT_EXTEND_HOLD`; real names per `DNA_anim_enums.h:375,386` are `NLASTRIP_MODE_REPLACE`/`NLASTRIP_EXTEND_HOLD`. |
+| B-3 | HIGH | Blender-fidelity | `actionInfluence = 1.0` cited DNA struct (which value-inits to 0); real default lives in BKE constructor `anim_data.cc:123`. Citation corrected. |
+| A-3 | MED | Architecture | mesh_verts keyforms silently dropped during migration (array-shaped values not supported by Phase 1 scalar shape) — added drop-site comment + Phase 4 pointer. |
+| A-4 | MED | Architecture | `evaluateActionFCurves` `time` parameter renamed to `timeMs` (ms-canonical contract). |
+| B-4 | MED | Blender-fidelity | `eAction_Flag` comment expanded to enumerate all 5 bits per `DNA_action_types.h:374-387` (was only listing 3). |
+| B-5 | MED | Blender-fidelity | `rnaPath.js` documents `__params__`/`__armature__`/`__scene__` as SS-specific (no Blender analogue) + Stage 1.D coexistence rule. |
+
+Full `npm test` chain still exits 0 post-sweep; typecheck clean.
 
 ## Test scoreboard
 
@@ -202,25 +208,11 @@ suite shipped** in this sub-session (audit pattern deferred — see
 
 ## Resume paths for fresh session
 
-### A. Animation Phase 1 dual-audit + audit-fix sweep (recommended next)
+### A. Animation Phase 1 dual-audit + audit-fix sweep ~~(recommended next)~~ — SHIPPED `3339257`
 
-The established close-out rhythm pairs every substrate ship with a
-dual audit (architecture + Blender-fidelity) and an audit-fix sweep
-shipping in the same session. This sub-session deferred that step.
-
-A fresh session would:
-
-1. Spawn two parallel audit agents:
-   - **Architecture audit** — code quality, missed cleanups, latent
-     bugs in the data flow (especially the param-rename / node-duplicate
-     cascades which involve N×M iteration); rnaPath grammar edge cases;
-     consistency of fcurve.id naming across constructors.
-   - **Blender-fidelity audit** — Action shape vs `DNA_action_types.h`,
-     AnimData defaults vs `DNA_anim_types.h`, rnaPath grammar vs Blender's
-     RNA path semantics (`rna_path.cc`).
-2. Address all HIGH gaps in same-day fix sweep + audit-pin test
-   (`test_audit_fixes_2026_05_11_phase1_stage1ab.mjs`).
-3. Update the close-out + memory entry.
+This was the recommended next step at original close-out time, and it
+was executed: see "Audit status" above. 9 gaps surfaced + closed in
+one sweep. Phase 1 Stage 1.A+1.B substrate is now audit-clean.
 
 ### B. Animation Phase 1 Stage 1.C — actionRegistry helpers
 
@@ -275,7 +267,9 @@ with one keyframed Action. Required to declare Phase 1 fully shipped.
 | ...   | (37 from earlier 2026-05-11 close-outs through `51481dd`) | Phases 0–7.D ship + 11 audit-fix sweeps + 7 close-out docs + Phase 8 |
 | 38    | `0ccf985` | chore: track `_start.bat` dev launcher (gitignore exception removed) |
 | 39    | `229305a` | feat(anim): Phase 1 Stage 1.A+1.B — Action datablock + AnimData (v36) |
-| 40    | (next)    | docs(plan): Phase 1 Stage 1.A+1.B close-out (this doc) |
+| 40    | `b6b6ac6` | docs(plan): Phase 1 Stage 1.A+1.B close-out (initial doc) |
+| 41    | `3339257` | fix(audit): Phase 1 Stage 1.A+1.B audit-fix sweep — 5 HIGH + 4 MED |
+| 42    | (next)    | docs(plan): close-out audit-fix addendum (this update) |
 
 ## Schemas after Phase 1 Stage 1.A+1.B
 
