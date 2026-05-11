@@ -146,6 +146,8 @@ Phase 7.D added no new hotkeys (substrate fix + docs, not feature).
 | ...   | (33 from earlier 2026-05-11 close-outs) | Phases 0-7.C ship + 9 audit-fix sweeps + close-outs + Phase 8 (initial + audit-fix + close-out) |
 | 34    | `59fedac` | Phase 7.D initial — wire 11 orphan test files + resolve plan §6 placeholders + mark §14 + §15 shipped |
 | 35    | `6ef0bf5` | audit-fix sweep #11 — Phase 7.D dual audit (1 HIGH arch + 2 HIGH docs + sister §9 cleanup) |
+| 36    | `016492a` | Phase 7.D close-out doc extension (this doc) |
+| 37    | `ec0d156` | Phase 7.D close-out reword — satisfies D-3b audit-pin guard (no quoted pre-fix string) |
 
 ## Schemas after Phase 7.D
 
