@@ -185,8 +185,10 @@ Per Animation Plan §Phase 1.C–1.G (which §Phase 1 collectively covers):
   `selectRigSpec(project)` directly (read-only, no datablock).
 - **Stage 1.F + 1.G** — five new test suites (`test_actionDatablock_migration`,
   `test_actionRegistry`, `test_actionScene`, `test_actionExportMotion3`,
-  `test_actionExportCan3`) + Phase 1 exit gate (export byte-identity
-  via Cubism Viewer load on Hiyori).
+  `test_actionExportCan3`) + Phase 1 exit gate (Cubism Viewer
+  acceptance load on Shelby — Hiyori has no PSD source so can't host
+  the keyframed-Action test; Shelby is the canonical PSD test
+  character per memory `feedback_test_character_is_shelby.md`).
 
 ### Audit status
 
@@ -299,8 +301,11 @@ branch in `FCurveStrip` node-type executor. The post-v36
 
 ### F. Stage 1.F + 1.G — Phase 1 exit gate
 
-5 new test suites + manual Cubism Viewer byte-identity gate on Hiyori
-with one keyframed Action. Required to declare Phase 1 fully shipped.
+5 new test suites + manual Cubism Viewer acceptance gate on **Shelby**
+with one keyframed Action. Hiyori is reference-only with no PSD
+source (per memory `feedback_test_character_is_shelby.md`); Shelby
+is the canonical PSD test character. Required to declare Phase 1
+fully shipped.
 
 ## Day-end commit chain (cumulative across sub-sessions)
 

@@ -780,7 +780,16 @@ See close-out:
 
 - All export tests green: motion3, can3, cmo3, model3 byte-identical.
 - Round-trip: `project → save → load → save → load` produces identical bytes.
-- One Cubism Viewer .moc3 load on Hiyori with one keyframed Action.
+- One Cubism Viewer .moc3 acceptance load on **Shelby** (the user's
+  PSD-imported Western test character) with one keyframed Action via
+  ActionsEditor. Hiyori is reference-only with NO PSD source (see §11
+  lines 1617-1618); Shelby is the canonical test character per
+  memory `feedback_test_character_is_shelby.md` ("user imports Shelby
+  PSD for E2E tests; don't say 'load Hiyori' in test plans"). Gate
+  is acceptance (file loads, Action animates) — NOT byte-identity
+  (which is the §11-line-1618 separate Hiyori-reference gate run on
+  the exported .moc3 against `reference/live2d-sample/Hiyori/runtime/
+  hiyori_pro_t11.moc3`).
 
 **Phase 1 sum:** ~1–1.5 weeks. Schema v33. New: `Action` datablock,
 `AnimData` per Object, `__scene__` pseudo-Object, ActionsEditor UI.

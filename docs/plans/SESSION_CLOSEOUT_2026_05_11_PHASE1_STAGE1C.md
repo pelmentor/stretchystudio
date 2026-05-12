@@ -205,8 +205,10 @@ Per plan §1.F + 1.G:
   `test_actionRegistry` (already shipped, 87 assertions),
   `test_actionScene` (depends on Stage 1.D),
   `test_actionExportMotion3`, `test_actionExportCan3`
-- Manual Cubism Viewer byte-identity gate on Hiyori with one
-  keyframed Action
+- Manual Cubism Viewer acceptance gate on **Shelby** with one
+  keyframed Action (Hiyori is reference-only with no PSD source per
+  memory `feedback_test_character_is_shelby.md`; Shelby is the
+  canonical PSD test character)
 
 Required to declare Phase 1 fully shipped. Stage 1.D + 1.E should
 land first; this is the closing gate.

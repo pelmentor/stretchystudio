@@ -253,8 +253,11 @@ Per plan §1.F + 1.G (lines 637-651):
   - `test_actionExportMotion3.mjs` — each Action exports to one
     motion3.json (current path via `resolveActions`)
   - `test_actionExportCan3.mjs` — each Action exports to one .can3
-- Manual Cubism Viewer .moc3 byte-identity gate on Hiyori with one
-  keyframed Action (the user-gesture test that closes Phase 1).
+- Manual Cubism Viewer .moc3 acceptance gate on **Shelby** with one
+  keyframed Action (the user-gesture test that closes Phase 1 —
+  Hiyori is reference-only with no PSD source per memory
+  `feedback_test_character_is_shelby.md`; Shelby is the canonical
+  PSD test character).
 
 Required to declare Phase 1 fully shipped. NodeTree retirement should
 land first to keep the v24-shadow path out of the new test suites.
