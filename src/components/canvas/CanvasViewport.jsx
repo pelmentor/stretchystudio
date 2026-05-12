@@ -960,16 +960,20 @@ export default function CanvasViewport({
           // skipping when invisible avoids the per-frame allocation.
           const _wantLifted = !previewModeRef.current
             && (editorRef.current.viewLayers?.warpGrids ?? true);
+          // Phase 0.D.0 — branch on `preferencesStore.evalEngine`.
+          // `'depgraph'` routes through `evalProjectFrameViaDepgraph`
+          // (kernels port `evalArtMeshFrame`); `'classic'` keeps
+          // chainEval's evalRig. Both produce the same `ArtMeshFrame[]`
+          // shape so the rest of the tick is engine-agnostic.
+          // Hoisted above the cache-hit branch — the post-loop bone
+          // composition pass below also reads this to decide whether
+          // to double-compose, and cache-hit frames need the same
+          // gating as cache-miss frames.
+          const _evalEngine = usePreferencesStore.getState().evalEngine;
           if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null) {
             frames = cache.frames;
           } else {
             const evalOut = _wantLifted ? { liftedGrids: new Map() } : null;
-            // Phase 0.D.0 — branch on `preferencesStore.evalEngine`.
-            // `'depgraph'` routes through `evalProjectFrameViaDepgraph`
-            // (kernels port `evalArtMeshFrame`); `'classic'` keeps
-            // chainEval's evalRig. Both produce the same `ArtMeshFrame[]`
-            // shape so the rest of the tick is engine-agnostic.
-            const _evalEngine = usePreferencesStore.getState().evalEngine;
             if (_evalEngine === 'depgraph') {
               // Audit fix (G-8) — propagate action + currentTime so the
               // depgraph's ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see
