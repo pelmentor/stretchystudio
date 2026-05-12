@@ -1,4 +1,5 @@
 import { uidLong } from '../lib/ids.js';
+import { logger } from '../lib/logger.js';
 
 const DB_NAME = 'stretchystudio-db';
 const DB_VERSION = 2; // v2 (2026-05-09): split blob out of the meta store
@@ -106,13 +107,24 @@ export async function saveToDb(id, name, blob, thumbnail) {
   const db = await openDb();
   const currentId = id || newProjectId();
   const updatedAt = Date.now();
+  // Cover the IndexedDB write — dominant cost on large projects.
+  // `projectSave:full` only times the SaveModal flow up to blob creation;
+  // the actual IDB persist happens here and was uninstrumented.
+  logger.time('projectSave', 'indexedDbBlob');
+  const blobSizeBytes = blob?.size ?? 0;
 
   return new Promise((resolve, reject) => {
     const tx = db.transaction([META_STORE, BLOB_STORE], 'readwrite');
     tx.objectStore(META_STORE).put({ id: currentId, name, thumbnail, updatedAt });
     tx.objectStore(BLOB_STORE).put({ id: currentId, blob });
-    tx.oncomplete = () => resolve(currentId);
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => {
+      logger.timeEnd('projectSave', 'indexedDbBlob', { blobSizeBytes });
+      resolve(currentId);
+    };
+    tx.onerror = () => {
+      logger.timeEndIfRunning('projectSave', 'indexedDbBlob', { blobSizeBytes, error: tx.error?.message ?? String(tx.error) });
+      reject(tx.error);
+    };
   });
 }
 
@@ -123,6 +135,10 @@ export async function saveToDb(id, name, blob, thumbnail) {
  */
 export async function loadFromDb(id) {
   const db = await openDb();
+  // Cover the IndexedDB read — dominant cost on "Open from gallery"
+  // path (precedes `projectLoad:full` which only times the in-memory
+  // deserialize). Without this the gallery → load round-trip is invisible.
+  logger.time('projectLoad', 'indexedDbBlob');
   return new Promise((resolve, reject) => {
     const tx = db.transaction([META_STORE, BLOB_STORE], 'readonly');
     const metaReq = tx.objectStore(META_STORE).get(id);
@@ -130,10 +146,17 @@ export async function loadFromDb(id) {
     tx.oncomplete = () => {
       const meta = metaReq.result;
       const blobRec = blobReq.result;
-      if (!meta) return resolve(null);
+      if (!meta) {
+        logger.timeEnd('projectLoad', 'indexedDbBlob', { found: false });
+        return resolve(null);
+      }
+      logger.timeEnd('projectLoad', 'indexedDbBlob', { found: true, blobSizeBytes: blobRec?.blob?.size ?? 0 });
       resolve({ ...meta, blob: blobRec?.blob ?? null });
     };
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => {
+      logger.timeEndIfRunning('projectLoad', 'indexedDbBlob', { error: tx.error?.message ?? String(tx.error) });
+      reject(tx.error);
+    };
   });
 }
 

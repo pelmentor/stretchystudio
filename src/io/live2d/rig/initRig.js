@@ -488,6 +488,13 @@ export function pruneOrphanRotationDeformers(rigSpec) {
  */
 export async function initializeRigFromProject(project, images = new Map()) {
   logger.time('rigInit', 'full');
+  // Outer try/catch ensures `rigInit:full` (and the conditional
+  // `rigInit:authored-path`) cannot leak on throw — without this the next
+  // Init Rig call would WARN "timer already running" AND its reported ms
+  // would measure only the second invocation, silently invalidating
+  // baselines on any failure path. Sub-timers wrapped via `logger.timed`
+  // (`buildMeshes`, `heuristic-path-generateCmo3`) self-clean already.
+  try {
   const partCount = (project.nodes ?? []).filter(n => n.type === 'part').length;
   const groupCount = (project.nodes ?? []).filter(n => n.type === 'group').length;
   const variantCount = (project.nodes ?? []).filter(n => n.type === 'part' && n.variantSuffix).length;
@@ -682,4 +689,10 @@ export async function initializeRigFromProject(project, images = new Map()) {
     droppedParamIds: pruned.droppedParamIds,
     debug: result.rigDebugLog ?? null,
   };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.timeEndIfRunning('rigInit', 'authored-path', { error: errorMsg });
+    logger.timeEndIfRunning('rigInit', 'full', { error: errorMsg });
+    throw err;
+  }
 }

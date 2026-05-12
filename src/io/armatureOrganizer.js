@@ -38,17 +38,29 @@ let _ortPromise = null;
 
 async function _ensureOrt() {
   if (_ortPromise) return _ortPromise;
-  
+
   _ortPromise = (async () => {
-    const module = await import('onnxruntime-web');
-    // Support both namespace and default export styles depending on bundler behavior
-    const instance = module.env ? module : (module.default || module);
-    
-    // Point wasm runtime at CDN to avoid bundling the large .wasm files
-    instance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
-    return instance;
+    // First-call only — surfaces the import + WASM-warm cost of
+    // onnxruntime-web (the heaviest dynamic import in the codebase,
+    // mounted on the wizard's "Auto-organize" step). Subsequent calls
+    // share the resolved promise.
+    logger.time('lazyLoad', 'onnxruntime');
+    try {
+      const module = await import('onnxruntime-web');
+      // Support both namespace and default export styles depending on bundler behavior
+      const instance = module.env ? module : (module.default || module);
+
+      // Point wasm runtime at CDN to avoid bundling the large .wasm files
+      instance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
+      logger.timeEnd('lazyLoad', 'onnxruntime');
+      return instance;
+    } catch (err) {
+      logger.timeEndIfRunning('lazyLoad', 'onnxruntime', { error: err?.message ?? String(err) });
+      _ortPromise = null;
+      throw err;
+    }
   })();
-  
+
   return _ortPromise;
 }
 

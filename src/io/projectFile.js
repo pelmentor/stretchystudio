@@ -24,6 +24,11 @@ export async function saveProject(project, opts = {}) {
   // wraps the entire flow; these break it down so we can spot the
   // dominant cost (textures vs audio vs zip).
   logger.time('projectSave', 'serialize:full');
+  // Outer try/catch ensures all four serialize:* timers (full + textures
+  // + audio + zip) are cleaned up on throw — without this strict-mode
+  // failures would leak 4 timers and pollute the next save's baseline
+  // with "already running" WARNs.
+  try {
   const zip = new JSZip();
   const texturesFolder = zip.folder('textures');
   const audiosFolder = zip.folder('audios');
@@ -170,6 +175,18 @@ export async function saveProject(project, opts = {}) {
     blobSizeBytes: blob.size,
   });
   return blob;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // End any/all of the four save timers that may still be open.
+    // `timeEndIfRunning` is silent when the timer isn't running, so
+    // ending all four in any catch path is safe regardless of where
+    // the throw originated.
+    logger.timeEndIfRunning('projectSave', 'serialize:zip', { error: errorMsg });
+    logger.timeEndIfRunning('projectSave', 'serialize:audio', { error: errorMsg });
+    logger.timeEndIfRunning('projectSave', 'serialize:textures', { error: errorMsg });
+    logger.timeEndIfRunning('projectSave', 'serialize:full', { error: errorMsg });
+    throw err;
+  }
 }
 
 /**
@@ -190,6 +207,11 @@ export async function saveProject(project, opts = {}) {
 export async function loadProject(file, opts = {}) {
   const strict = opts.strict === true;
   logger.time('projectLoad', 'full');
+  // Outer try/catch ensures `projectLoad:full` + the conditional inner
+  // sub-timers (parseJson / textures / audio) cannot leak on throw.
+  // strict-mode failures and corrupt-zip throws would otherwise pollute
+  // the next load's baseline.
+  try {
   const zip = await logger.timed('projectLoad', 'unzip', () => JSZip.loadAsync(file));
 
   logger.time('projectLoad', 'parseJson');
@@ -274,4 +296,16 @@ export async function loadProject(file, opts = {}) {
   });
 
   return { project, images };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // `parseJson` is `time/timeEnd` paired tightly so it's typically
+    // already-ended when we reach here, but the others may be open. All
+    // four `timeEndIfRunning` calls are no-ops when the timer isn't
+    // running — safe to call unconditionally.
+    logger.timeEndIfRunning('projectLoad', 'audio', { error: errorMsg });
+    logger.timeEndIfRunning('projectLoad', 'textures', { error: errorMsg });
+    logger.timeEndIfRunning('projectLoad', 'parseJson', { error: errorMsg });
+    logger.timeEndIfRunning('projectLoad', 'full', { error: errorMsg });
+    throw err;
+  }
 }

@@ -1788,6 +1788,12 @@ export default function CanvasViewport({
   /* ── PSD import: finalize (shared by all import paths) ──────────────────── */
   const finalizePsdImport = useCallback(async (psdW, psdH, layers, partIds, groupDefs, assignments) => {
     logger.time('psdImport', 'finalize');
+    // Outer try/catch ensures `psdImport:finalize` (and the inner
+    // `workerPool:composite` if a worker rejects after pool dispatch)
+    // cannot leak on throw — PSD import is a high-likelihood failure
+    // path (huge files, OOM, worker crash) and a leaked timer would
+    // silently break the next import's baseline.
+    try {
     const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
     const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
 
@@ -1835,9 +1841,13 @@ export default function CanvasViewport({
       });
       await Promise.all(dispatches);
     } finally {
+      // End the composite timer in the SAME finally as pool.destroy so a
+      // worker rejection cleans both up before propagating to the outer
+      // catch. Previously this lived after the try block and leaked on
+      // dispatch failure.
+      logger.timeEndIfRunning('psdImport', 'workerPool:composite', { layers: layers.length });
       pool.destroy();
     }
-    logger.timeEnd('psdImport', 'workerPool:composite', { layers: layers.length });
 
     // Populate alpha-mask cache up front. Hit-test (wizard reorder/
     // adjust steps) reads this map directly.
@@ -1929,6 +1939,12 @@ export default function CanvasViewport({
       groups: groupDefs.length,
       assigned: assignments?.size ?? 0,
     });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.timeEndIfRunning('psdImport', 'workerPool:composite', { error: errorMsg });
+      logger.timeEndIfRunning('psdImport', 'finalize', { error: errorMsg });
+      throw err;
+    }
   }, [updateProject, centerView]);
 
   /* ── GAP-001 — Wizard handlers lifted out. The wizard mounts at

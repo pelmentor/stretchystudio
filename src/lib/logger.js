@@ -112,7 +112,8 @@ function emit(level, source, message, data) {
 /**
  * Start a timer. Pair with `logger.timeEnd(source, label, data?)`.
  * Per Rule №1: warns loudly if a timer with the same key is already
- * running (overwrites the start, but tells you).
+ * running (overwrites the start, but tells you AND reports the orphan
+ * age so triage can distinguish "race" from "leaked-since-page-load").
  *
  * @param {string} source
  * @param {string} label
@@ -120,7 +121,8 @@ function emit(level, source, message, data) {
 function time(source, label) {
   const key = `${source}:${label}`;
   if (_timers.has(key)) {
-    emit('warn', source, `time(${label}): timer already running — overwriting start`);
+    const orphanAgeMs = Math.round(_now() - _timers.get(key));
+    emit('warn', source, `time(${label}): timer already running — overwriting start`, { orphanAgeMs });
   }
   _timers.set(key, _now());
 }
@@ -135,11 +137,16 @@ function time(source, label) {
  * @param {string} source
  * @param {string} label
  * @param {object} [data]            Extra structured payload (counts, sizes, etc.)
- * @param {string} [customMessage]   Override the default `"<label>: <ms>ms"` —
- *                                   use when the panel benefits from rich
+ * @param {string} [customMessage]   Override the DEFAULT message text only —
+ *                                   the rendered Logs-panel line becomes
+ *                                   `<customMessage>` instead of `<label>: <ms>ms`.
+ *                                   The `ms` value is NOT auto-appended to the
+ *                                   custom string (it stays in `data`); if you
+ *                                   want it in the rendered text, include
+ *                                   `${ms}ms` yourself in `customMessage`.
+ *                                   Use when the panel benefits from rich
  *                                   human-readable text (e.g. "download OK:
- *                                   14p / 8d / 12params"). The `ms` value
- *                                   stays in `data` either way.
+ *                                   14p / 8d / 12params").
  * @returns {number|null}
  */
 function timeEnd(source, label, data, customMessage) {
@@ -153,6 +160,36 @@ function timeEnd(source, label, data, customMessage) {
   const ms = Math.round(_now() - t0);
   const message = customMessage ?? `${label}: ${ms}ms`;
   emit('info', source, message, data ? { ms, ...data } : { ms });
+  return ms;
+}
+
+/**
+ * Conditional `timeEnd` for catch handlers covering multiple sub-timers
+ * where some may not have been opened (e.g. `rigInit:authored-path` runs
+ * only on the cmo3-reimport branch but the catch needs to handle either
+ * branch failing).
+ *
+ * Returns `ms | null` SILENTLY when no matching timer exists — distinct
+ * from `timeEnd`, which WARNs in that case. Use ONLY for known-conditional
+ * sub-timers; the strict variant is correct for everything else.
+ *
+ * Per Rule №1: this is NOT a silent fallback for sloppy timer pairing —
+ * it is an explicit "I don't know if this was opened" intent. Strict
+ * `timeEnd` stays the default; this opt-in helper exists so catch handlers
+ * can clean up multiple optional timers without spamming false WARNs.
+ *
+ * @param {string} source
+ * @param {string} label
+ * @param {object} [data]
+ * @returns {number|null}
+ */
+function timeEndIfRunning(source, label, data) {
+  const key = `${source}:${label}`;
+  if (!_timers.has(key)) return null;
+  const t0 = _timers.get(key);
+  _timers.delete(key);
+  const ms = Math.round(_now() - t0);
+  emit('info', source, `${label}: ${ms}ms`, data ? { ms, ...data } : { ms });
   return ms;
 }
 
@@ -193,5 +230,6 @@ export const logger = {
   error(source, message, data) { emit('error', source, message, data); },
   time,
   timeEnd,
+  timeEndIfRunning,
   timed,
 };

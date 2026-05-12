@@ -75,6 +75,11 @@ export async function exportLive2D(project, images, opts = {}) {
   } = opts;
 
   logger.time('export', 'live2d:full');
+  // Outer try/catch — any throw between here and the final timeEnd would
+  // leak `live2d:full` and any open inner sub-timer (`live2d:generateMoc3`
+  // sync timer in particular). Self-cleaning logger.timed wrappers handle
+  // their own paths; only the explicit time/timeEnd pairs need this guard.
+  try {
   const { default: JSZip } = await logger.timed('export', 'live2d:lazyJSZip', () => import('jszip'));
   const zip = new JSZip();
 
@@ -191,19 +196,25 @@ export async function exportLive2D(project, images, opts = {}) {
   // EyeBlink, MouthOpen, …) plus auto-detected variant + bone params via the
   // shared paramSpec builder. rigSpec carries the warp + rotation deformers
   // and their keyforms — without it, moc3 ships mesh-only (legacy mode).
+  // try/finally so a throw from generateMoc3 ends the timer with byteSize=0
+  // before propagating to the outer catch — keeps per-substage data intact.
   logger.time('export', 'live2d:generateMoc3');
-  const moc3Buffer = generateMoc3({
-    project,
-    regions,
-    atlasSize,
-    numAtlases: atlases.length,
-    generateRig: true,
-    rigSpec,
-    bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
-    variantFadeRules: variantFadeRulesResolved,
-    rotationDeformerConfig: rotationDeformerConfigResolved,
-  });
-  logger.timeEnd('export', 'live2d:generateMoc3', { byteSize: moc3Buffer?.byteLength ?? 0 });
+  let moc3Buffer;
+  try {
+    moc3Buffer = generateMoc3({
+      project,
+      regions,
+      atlasSize,
+      numAtlases: atlases.length,
+      generateRig: true,
+      rigSpec,
+      bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
+      variantFadeRules: variantFadeRulesResolved,
+      rotationDeformerConfig: rotationDeformerConfigResolved,
+    });
+  } finally {
+    logger.timeEndIfRunning('export', 'live2d:generateMoc3', { byteSize: moc3Buffer?.byteLength ?? 0 });
+  }
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
   // --- Step 3: Generate .motion3.json files ---
@@ -370,6 +381,11 @@ export async function exportLive2D(project, images, opts = {}) {
     blobSizeBytes: blob.size,
   });
   return blob;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.timeEndIfRunning('export', 'live2d:full', { error: errorMsg });
+    throw err;
+  }
 }
 
 /**
@@ -410,6 +426,10 @@ export async function exportLive2DProject(project, images, opts = {}) {
   } = opts;
 
   logger.time('export', 'cmo3:full');
+  // Outer try/catch — same rationale as exportLive2D above. Without this
+  // a throw from cmo3writer / generateCan3 / zip.generateAsync would leak
+  // `cmo3:full` and silently invalidate the next export's baseline.
+  try {
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
 
@@ -676,6 +696,11 @@ export async function exportLive2DProject(project, images, opts = {}) {
     bare: true,
   });
   return bareBlob;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.timeEndIfRunning('export', 'cmo3:full', { error: errorMsg });
+    throw err;
+  }
 }
 
 /**
