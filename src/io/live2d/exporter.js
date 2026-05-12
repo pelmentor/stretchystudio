@@ -38,6 +38,7 @@ import {
   extractMeshExportStruct,
   indexProjectNodesById,
 } from './extractMeshExportStruct.js';
+import { logger } from '../../lib/logger.js';
 
 /**
  * @typedef {Object} ExportOptions
@@ -73,7 +74,8 @@ export async function exportLive2D(project, images, opts = {}) {
     forceRegenerate = false,  // GAP-009: ignore seeded rig, regenerate from PSD
   } = opts;
 
-  const { default: JSZip } = await import('jszip');
+  logger.time('export', 'live2d:full');
+  const { default: JSZip } = await logger.timed('export', 'live2d:lazyJSZip', () => import('jszip'));
   const zip = new JSZip();
 
   // --- Step 0: Build the canonical parameter spec ---
@@ -97,7 +99,8 @@ export async function exportLive2D(project, images, opts = {}) {
     faceParallaxSpec: faceParallaxSpecResolved,
     bodyWarpChain: bodyWarpChainResolved,
     rigWarps: rigWarpsResolved,
-  } = await resolveAllKeyformSpecs(project, images, { forceRegenerate });
+  } = await logger.timed('export', 'live2d:resolveKeyformSpecs',
+    () => resolveAllKeyformSpecs(project, images, { forceRegenerate }));
   const paramSpec = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshNodesForSpec.map(n => {
@@ -118,7 +121,8 @@ export async function exportLive2D(project, images, opts = {}) {
 
   // --- Step 1: Pack textures ---
   onProgress('Packing texture atlas...');
-  const { atlases, regions } = await packTextureAtlas(project, images, { atlasSize });
+  const { atlases, regions } = await logger.timed('export', 'live2d:packAtlas',
+    () => packTextureAtlas(project, images, { atlasSize }));
 
   // Write atlas PNGs
   const textureDir = `${modelName}.${atlasSize}`;
@@ -139,7 +143,8 @@ export async function exportLive2D(project, images, opts = {}) {
   // that spec into binary deformer sections so the runtime model actually
   // responds to ParamBodyAngleX/Y/Z, ParamBreath, and ParamAngleZ.
   onProgress('Building rig spec...');
-  const meshesForRig = await buildMeshesForRig(project, images);
+  const meshesForRig = await logger.timed('export', 'live2d:buildMeshesForRig',
+    () => buildMeshesForRig(project, images));
   const groupsForRig = project.nodes.filter(n => n.type === 'group').map(g => ({
     id: g.id,
     name: g.name ?? g.id,
@@ -152,28 +157,29 @@ export async function exportLive2D(project, images, opts = {}) {
   const variantFadeRulesResolved = resolveVariantFadeRules(project);
   const eyeClosureConfigResolved = resolveEyeClosureConfig(project);
   try {
-    const rigResult = await generateCmo3({
-      canvasW: project.canvas?.width ?? 800,
-      canvasH: project.canvas?.height ?? 600,
-      meshes: meshesForRig,
-      groups: groupsForRig,
-      parameters: project.parameters ?? [],
-      actions: [],
-      modelName,
-      generateRig: true,
-      generatePhysics: false,
-      physicsDisabledCategories,
-      rigOnly: true,
-      maskConfigs,
-      bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
-      variantFadeRules: variantFadeRulesResolved,
-      eyeClosureConfig: eyeClosureConfigResolved,
-      rotationDeformerConfig: rotationDeformerConfigResolved,
-      autoRigConfig: autoRigConfigResolved,
-      faceParallaxSpec: faceParallaxSpecResolved,
-      bodyWarpChain: bodyWarpChainResolved,
-      rigWarps: rigWarpsResolved,
-    });
+    const rigResult = await logger.timed('export', 'live2d:generateRigOnlyCmo3',
+      () => generateCmo3({
+        canvasW: project.canvas?.width ?? 800,
+        canvasH: project.canvas?.height ?? 600,
+        meshes: meshesForRig,
+        groups: groupsForRig,
+        parameters: project.parameters ?? [],
+        actions: [],
+        modelName,
+        generateRig: true,
+        generatePhysics: false,
+        physicsDisabledCategories,
+        rigOnly: true,
+        maskConfigs,
+        bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
+        variantFadeRules: variantFadeRulesResolved,
+        eyeClosureConfig: eyeClosureConfigResolved,
+        rotationDeformerConfig: rotationDeformerConfigResolved,
+        autoRigConfig: autoRigConfigResolved,
+        faceParallaxSpec: faceParallaxSpecResolved,
+        bodyWarpChain: bodyWarpChainResolved,
+        rigWarps: rigWarpsResolved,
+      }));
     rigSpec = rigResult.rigSpec;
   } catch (err) {
     console.warn('[exportLive2D] rigSpec build failed; runtime moc3 will ship without deformers:', err);
@@ -185,6 +191,7 @@ export async function exportLive2D(project, images, opts = {}) {
   // EyeBlink, MouthOpen, …) plus auto-detected variant + bone params via the
   // shared paramSpec builder. rigSpec carries the warp + rotation deformers
   // and their keyforms — without it, moc3 ships mesh-only (legacy mode).
+  logger.time('export', 'live2d:generateMoc3');
   const moc3Buffer = generateMoc3({
     project,
     regions,
@@ -196,6 +203,7 @@ export async function exportLive2D(project, images, opts = {}) {
     variantFadeRules: variantFadeRulesResolved,
     rotationDeformerConfig: rotationDeformerConfigResolved,
   });
+  logger.timeEnd('export', 'live2d:generateMoc3', { byteSize: moc3Buffer?.byteLength ?? 0 });
   zip.file(`${modelName}.moc3`, moc3Buffer);
 
   // --- Step 3: Generate .motion3.json files ---
@@ -353,7 +361,15 @@ export async function exportLive2D(project, images, opts = {}) {
 
   // --- Step 6: Package ZIP ---
   onProgress('Creating ZIP...');
-  return zip.generateAsync({ type: 'blob' });
+  const blob = await logger.timed('export', 'live2d:zip', () => zip.generateAsync({ type: 'blob' }));
+  logger.timeEnd('export', 'live2d:full', {
+    modelName,
+    atlases: atlases.length,
+    motions: motionFiles.length,
+    presets: motionPresets.length,
+    blobSizeBytes: blob.size,
+  });
+  return blob;
 }
 
 /**
@@ -393,6 +409,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     forceRegenerate = false,  // GAP-009: ignore seeded rig, regenerate from PSD
   } = opts;
 
+  logger.time('export', 'cmo3:full');
   const canvasW = project.canvas?.width ?? 800;
   const canvasH = project.canvas?.height ?? 600;
 
@@ -525,29 +542,31 @@ export async function exportLive2DProject(project, images, opts = {}) {
     faceParallaxSpec: faceParallaxSpecResolved,
     bodyWarpChain: bodyWarpChainResolved,
     rigWarps: rigWarpsResolved,
-  } = await resolveAllKeyformSpecs(project, images, { forceRegenerate });
-  const { cmo3, deformerParamMap, rigDebugLog } = await generateCmo3({
-    canvasW,
-    canvasH,
-    meshes,
-    groups,
-    parameters: project.parameters ?? [],
-    actions: project.actions ?? [],
-    modelName,
-    generateRig,
-    generatePhysics,
-    physicsDisabledCategories,
-    maskConfigs: resolveMaskConfigs(project),
-    physicsRules: resolvePhysicsRules(project),
-    bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
-    variantFadeRules: resolveVariantFadeRules(project),
-    eyeClosureConfig: resolveEyeClosureConfig(project),
-    rotationDeformerConfig: resolveRotationDeformerConfig(project),
-    autoRigConfig: resolveAutoRigConfig(project),
-    faceParallaxSpec: faceParallaxSpecResolved,
-    bodyWarpChain: bodyWarpChainResolved,
-    rigWarps: rigWarpsResolved,
-  });
+  } = await logger.timed('export', 'cmo3:resolveKeyformSpecs',
+    () => resolveAllKeyformSpecs(project, images, { forceRegenerate }));
+  const { cmo3, deformerParamMap, rigDebugLog } = await logger.timed('export', 'cmo3:generateCmo3',
+    () => generateCmo3({
+      canvasW,
+      canvasH,
+      meshes,
+      groups,
+      parameters: project.parameters ?? [],
+      actions: project.actions ?? [],
+      modelName,
+      generateRig,
+      generatePhysics,
+      physicsDisabledCategories,
+      maskConfigs: resolveMaskConfigs(project),
+      physicsRules: resolvePhysicsRules(project),
+      bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
+      variantFadeRules: resolveVariantFadeRules(project),
+      eyeClosureConfig: resolveEyeClosureConfig(project),
+      rotationDeformerConfig: resolveRotationDeformerConfig(project),
+      autoRigConfig: resolveAutoRigConfig(project),
+      faceParallaxSpec: faceParallaxSpecResolved,
+      bodyWarpChain: bodyWarpChainResolved,
+      rigWarps: rigWarpsResolved,
+    }));
 
   // --- Motion synthesis (optional) ---
   // Each requested preset becomes a parameter-fcurve SS action appended to
@@ -614,19 +633,19 @@ export async function exportLive2DProject(project, images, opts = {}) {
   // Bundle into ZIP when we have actions OR rig debug log.
   if (hasAnimations || hasRigDebug) {
     const cmo3FileName = `${modelName}.cmo3`;
-    const { default: JSZip } = await import('jszip');
+    const { default: JSZip } = await logger.timed('export', 'cmo3:lazyJSZip', () => import('jszip'));
     const zip = new JSZip();
     zip.file(cmo3FileName, cmo3);
 
     if (hasAnimations) {
       onProgress('Generating .can3 animation...');
-      const can3 = await generateCan3({
+      const can3 = await logger.timed('export', 'cmo3:generateCan3', () => generateCan3({
         actions, deformerParamMap, cmo3FileName, canvasW, canvasH, modelName,
         // Stage 1.F audit-fix G-2: pass param spec so fcurve-only paths
         // (idle generator / AI-motion params) get their actual ranges
         // instead of the hardcoded `-1..1` fallback.
         parameters: paramSpec,
-      });
+      }));
       zip.file(`${modelName}.can3`, can3);
     }
 
@@ -634,10 +653,29 @@ export async function exportLive2DProject(project, images, opts = {}) {
       zip.file(`${modelName}.rig.log.json`, JSON.stringify(rigDebugLog, null, 2));
     }
 
-    return zip.generateAsync({ type: 'blob' });
+    const blob = await logger.timed('export', 'cmo3:zip', () => zip.generateAsync({ type: 'blob' }));
+    logger.timeEnd('export', 'cmo3:full', {
+      modelName,
+      meshes: meshes.length,
+      groups: groups.length,
+      actions: actions.length,
+      hasRigDebug,
+      blobSizeBytes: blob.size,
+    });
+    return blob;
   }
 
-  return new Blob([cmo3], { type: 'application/octet-stream' });
+  const bareBlob = new Blob([cmo3], { type: 'application/octet-stream' });
+  logger.timeEnd('export', 'cmo3:full', {
+    modelName,
+    meshes: meshes.length,
+    groups: groups.length,
+    actions: 0,
+    hasRigDebug: false,
+    blobSizeBytes: bareBlob.size,
+    bare: true,
+  });
+  return bareBlob;
 }
 
 /**

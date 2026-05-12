@@ -98,6 +98,7 @@ import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
 import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
 import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
 import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.js';
+import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
 // — the constant lives there in a tiny side-effect-free file so eager
@@ -952,6 +953,15 @@ export function migrateProject(project) {
     );
   }
 
+  // Skip the timer + log entirely on no-op (already-current saves) so
+  // the Logs panel isn't cluttered for the common case.
+  if (fromVersion === CURRENT_SCHEMA_VERSION) {
+    return project;
+  }
+
+  logger.time('migrations', `walk:v${fromVersion}->v${CURRENT_SCHEMA_VERSION}`);
+  let stepsRun = 0;
+
   // Gap-tolerant walker. See header "Blender alignment" + "Known
   // deviations from Blender" for the full citation. `typeof` guard
   // (not `if (migrate)`) catches accidental non-function dispatch
@@ -960,9 +970,17 @@ export function migrateProject(project) {
     const migrate = MIGRATIONS[v];
     if (typeof migrate === 'function') {
       migrate(project);
+      stepsRun++;
     }
     project.schemaVersion = v;
   }
+
+  logger.timeEnd('migrations', `walk:v${fromVersion}->v${CURRENT_SCHEMA_VERSION}`, {
+    fromVersion,
+    toVersion: CURRENT_SCHEMA_VERSION,
+    stepsRun,
+    stepsSkipped: (CURRENT_SCHEMA_VERSION - fromVersion) - stepsRun,
+  });
 
   return project;
 }

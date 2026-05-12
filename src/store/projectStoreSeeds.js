@@ -28,6 +28,8 @@
  * @module store/projectStoreSeeds
  */
 
+import { logger } from '../lib/logger.js';
+
 /** @type {Promise<SeedModule> | null} */
 let _seedsPromise = null;
 
@@ -57,6 +59,9 @@ let _seedsPromise = null;
  */
 export function loadSeedModule() {
   if (!_seedsPromise) {
+    // First-call only — surfaces the import + module-eval cost of the
+    // 11 seed modules. Subsequent calls share the resolved promise.
+    logger.time('lazyLoad', 'seeds:11modules');
     _seedsPromise = Promise.all([
       import('../io/live2d/rig/paramSpec.js'),
       import('../io/live2d/rig/maskConfigs.js'),
@@ -73,22 +78,29 @@ export function loadSeedModule() {
       paramSpec, maskConfigs, physicsConfig, boneConfig,
       variantFadeRules, eyeClosureConfig, rotationDeformerConfig,
       autoRigConfig, faceParallaxStore, bodyWarpStore, rigWarpsStore,
-    ]) => ({
-      seedParameters: paramSpec.seedParameters,
-      seedMaskConfigs: maskConfigs.seedMaskConfigs,
-      seedPhysicsRules: physicsConfig.seedPhysicsRules,
-      seedBoneConfig: boneConfig.seedBoneConfig,
-      seedVariantFadeRules: variantFadeRules.seedVariantFadeRules,
-      seedEyeClosureConfig: eyeClosureConfig.seedEyeClosureConfig,
-      seedRotationDeformerConfig: rotationDeformerConfig.seedRotationDeformerConfig,
-      seedAutoRigConfig: autoRigConfig.seedAutoRigConfig,
-      seedFaceParallax: faceParallaxStore.seedFaceParallax,
-      clearFaceParallax: faceParallaxStore.clearFaceParallax,
-      seedBodyWarpChain: bodyWarpStore.seedBodyWarpChain,
-      clearBodyWarp: bodyWarpStore.clearBodyWarp,
-      seedRigWarps: rigWarpsStore.seedRigWarps,
-      clearRigWarps: rigWarpsStore.clearRigWarps,
-    })).catch((err) => {
+    ]) => {
+      logger.timeEnd('lazyLoad', 'seeds:11modules', { count: 11 });
+      return {
+        seedParameters: paramSpec.seedParameters,
+        seedMaskConfigs: maskConfigs.seedMaskConfigs,
+        seedPhysicsRules: physicsConfig.seedPhysicsRules,
+        seedBoneConfig: boneConfig.seedBoneConfig,
+        seedVariantFadeRules: variantFadeRules.seedVariantFadeRules,
+        seedEyeClosureConfig: eyeClosureConfig.seedEyeClosureConfig,
+        seedRotationDeformerConfig: rotationDeformerConfig.seedRotationDeformerConfig,
+        seedAutoRigConfig: autoRigConfig.seedAutoRigConfig,
+        seedFaceParallax: faceParallaxStore.seedFaceParallax,
+        clearFaceParallax: faceParallaxStore.clearFaceParallax,
+        seedBodyWarpChain: bodyWarpStore.seedBodyWarpChain,
+        clearBodyWarp: bodyWarpStore.clearBodyWarp,
+        seedRigWarps: rigWarpsStore.seedRigWarps,
+        clearRigWarps: rigWarpsStore.clearRigWarps,
+      };
+    }).catch((err) => {
+      // On import failure, also end the timer so we don't leak the registry
+      // entry; the WARN from the next call's `time()` would mask the actual
+      // failure cause.
+      logger.timeEnd('lazyLoad', 'seeds:11modules', { error: err?.message ?? String(err) });
       _seedsPromise = null;
       throw err;
     });

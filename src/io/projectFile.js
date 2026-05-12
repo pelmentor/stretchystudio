@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { CURRENT_SCHEMA_VERSION, migrateProject } from '../store/projectMigrations.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * Serialize the current project to a .stretch ZIP file.
@@ -19,6 +20,10 @@ import { CURRENT_SCHEMA_VERSION, migrateProject } from '../store/projectMigratio
  */
 export async function saveProject(project, opts = {}) {
   const strict = opts.strict === true;
+  // Per-step inner timers — the outer `projectSave` timer in SaveModal
+  // wraps the entire flow; these break it down so we can spot the
+  // dominant cost (textures vs audio vs zip).
+  logger.time('projectSave', 'serialize:full');
   const zip = new JSZip();
   const texturesFolder = zip.folder('textures');
   const audiosFolder = zip.folder('audios');
@@ -29,6 +34,7 @@ export async function saveProject(project, opts = {}) {
   // pipelined. For 50 textures over slow handlers that's the difference
   // between "save freezes the UI for seconds" and "save completes in one
   // round-trip's worth of time".
+  logger.time('projectSave', 'serialize:textures');
   const textureResults = await Promise.all(project.textures.map(async (tex) => {
     try {
       const response = await fetch(tex.source);
@@ -49,6 +55,7 @@ export async function saveProject(project, opts = {}) {
       serializedTextures.push({ id: r.id, source: '' });
     }
   }
+  logger.timeEnd('projectSave', 'serialize:textures', { count: textureResults.length });
 
   // Serialize audio tracks: fetch blob URL → store in audios/ folder
   const serializedActions = (project.actions ?? []).map(action => ({
@@ -70,6 +77,7 @@ export async function saveProject(project, opts = {}) {
   }));
 
   // Audio blobs in parallel — same rationale as textures.
+  logger.time('projectSave', 'serialize:audio');
   const audioFetches = [];
   for (const action of serializedActions) {
     for (const track of action.audioTracks) {
@@ -90,6 +98,7 @@ export async function saveProject(project, opts = {}) {
     }
   }
   await Promise.all(audioFetches);
+  logger.timeEnd('projectSave', 'serialize:audio', { count: audioFetches.length });
 
   // Serialize nodes: convert non-JSON types
   const serializedNodes = project.nodes.map(node => {
@@ -150,8 +159,17 @@ export async function saveProject(project, opts = {}) {
   // The .stretch wrapper is gzipped by JSZip; the pretty-printed
   // 2-space indent shaved zero compressed bytes but burned ~30% extra
   // CPU + allocations in JSON.stringify on big projects.
+  logger.time('projectSave', 'serialize:zip');
   zip.file('project.json', JSON.stringify(projectJson));
-  return zip.generateAsync({ type: 'blob' });
+  const blob = await zip.generateAsync({ type: 'blob' });
+  logger.timeEnd('projectSave', 'serialize:zip', { blobSizeBytes: blob.size });
+  logger.timeEnd('projectSave', 'serialize:full', {
+    textures: serializedTextures.length,
+    nodes: serializedNodes.length,
+    actions: serializedActions.length,
+    blobSizeBytes: blob.size,
+  });
+  return blob;
 }
 
 /**
@@ -171,20 +189,25 @@ export async function saveProject(project, opts = {}) {
  */
 export async function loadProject(file, opts = {}) {
   const strict = opts.strict === true;
-  const zip = await JSZip.loadAsync(file);
+  logger.time('projectLoad', 'full');
+  const zip = await logger.timed('projectLoad', 'unzip', () => JSZip.loadAsync(file));
 
+  logger.time('projectLoad', 'parseJson');
   const projectJsonStr = await zip.file('project.json').async('string');
   const project = JSON.parse(projectJsonStr);
+  logger.timeEnd('projectLoad', 'parseJson', { jsonSizeBytes: projectJsonStr.length });
 
   // Apply schema migrations before any consumer sees this project.
   // This replaces the scattered forward-compat field defaults that used
   // to live in this function and in projectStore.loadProject — they're
   // now centralised in projectMigrations.js (the v1 migration).
+  // (migrateProject has its own internal timer — see projectMigrations.js)
   migrateProject(project);
 
   // Restore textures in parallel: each (zip-extract → blob URL → Image)
   // chain is independent; previously this was a serial `for await` loop.
   // For 50 textures of ~1024² that's tens-of-seconds → ~one round trip.
+  logger.time('projectLoad', 'textures');
   const images = new Map();
   await Promise.all(project.textures.map(async (tex) => {
     if (!tex.source) return;
@@ -205,6 +228,7 @@ export async function loadProject(file, opts = {}) {
       console.error(`Failed to load texture ${tex.id}:`, err);
     }
   }));
+  logger.timeEnd('projectLoad', 'textures', { count: project.textures.length, decoded: images.size });
 
   // Restore mesh typed data. Field defaults (blendShapes, blendShapeValues,
   // audioTracks) are now handled by migrateProject above.
@@ -218,6 +242,7 @@ export async function loadProject(file, opts = {}) {
   // Audio tracks in parallel — same rationale. Post-v36 the field is
   // `project.actions` (Action datablocks); older saves are migrated by
   // `migrateProject` above before we get here.
+  logger.time('projectLoad', 'audio');
   const audioRestores = [];
   for (const action of project.actions ?? []) {
     for (const track of action.audioTracks ?? []) {
@@ -237,6 +262,16 @@ export async function loadProject(file, opts = {}) {
     }
   }
   await Promise.all(audioRestores);
+  logger.timeEnd('projectLoad', 'audio', { count: audioRestores.length });
+
+  logger.timeEnd('projectLoad', 'full', {
+    schemaVersion: project.schemaVersion ?? null,
+    nodes: project.nodes?.length ?? 0,
+    parts: (project.nodes ?? []).filter((n) => n?.type === 'part').length,
+    textures: project.textures?.length ?? 0,
+    actions: project.actions?.length ?? 0,
+    parameters: project.parameters?.length ?? 0,
+  });
 
   return { project, images };
 }

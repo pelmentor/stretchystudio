@@ -87,7 +87,7 @@ export function SaveModal({ open, onOpenChange }) {
   async function executeSave(idToUse, nameToUse, mode) {
     setIsSaving(true);
     setError(null);
-    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    logger.time('projectSave', mode);
     const project = useProjectStore.getState().project;
     // Capture state snapshot BEFORE serialization. Mirrors the
     // structural shape `loadProject` logs (nodes/parts/deformers/params/
@@ -124,10 +124,9 @@ export function SaveModal({ open, onOpenChange }) {
         useProjectStore.setState({ hasUnsavedChanges: false, currentLibraryId: savedId });
         onOpenChange(false);
       }
-      const elapsedMs = Math.round(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
-      logger.info(
-        'saveProject',
-        `${mode} OK: ${partsArr.length}p / ${deformersArr.length}d / ${project?.parameters?.length ?? 0}params, ${partsWithRuntime.length}/${partsArr.length} runtime-rig'd`,
+      logger.timeEnd(
+        'projectSave',
+        mode,
         {
           mode,
           name: nameToUse?.trim?.() ?? nameToUse,
@@ -139,13 +138,23 @@ export function SaveModal({ open, onOpenChange }) {
           partsWithRuntimeData: partsWithRuntime.length,
           partsWithBakedKeyforms: partsWithBakedKeyforms.length,
           blobSizeBytes: blob.size,
-          elapsedMs,
         },
+        `${mode} OK: ${partsArr.length}p / ${deformersArr.length}d / ${project?.parameters?.length ?? 0}params, ${partsWithRuntime.length}/${partsArr.length} runtime-rig'd`,
       );
     } catch (err) {
+      // End the timer so the next save doesn't trip the "already running"
+      // warn from logger.time. The success path's timeEnd above logs at
+      // INFO; the failure path needs its own WARN with the error context.
+      const ms = logger.timeEnd('projectSave', mode, {
+        mode,
+        name: nameToUse?.trim?.() ?? nameToUse,
+        schemaVersion: project?.schemaVersion ?? null,
+        parts: partsArr.length,
+        deformers: deformersArr.length,
+      });
       logger.warn(
-        'saveProject',
-        `${mode} FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        'projectSave',
+        `${mode} FAILED after ${ms ?? '?'}ms: ${err instanceof Error ? err.message : String(err)}`,
         {
           mode,
           name: nameToUse?.trim?.() ?? nameToUse,

@@ -1787,6 +1787,7 @@ export default function CanvasViewport({
 
   /* ── PSD import: finalize (shared by all import paths) ──────────────────── */
   const finalizePsdImport = useCallback(async (psdW, psdH, layers, partIds, groupDefs, assignments) => {
+    logger.time('psdImport', 'finalize');
     const setExpandedGroups = useEditorStore.getState().setExpandedGroups;
     const setActiveLayerTab = useEditorStore.getState().setActiveLayerTab;
 
@@ -1805,6 +1806,7 @@ export default function CanvasViewport({
     // back→re-finalize re-reads pendingPsd.layers; transferring would
     // empty those buffers for the second pass. Clone cost is contained
     // (per-layer-sized, parallelized across workers).
+    logger.time('psdImport', 'workerPool:composite');
     const { createPsdFinalizeWorkerPool } = await import('@/io/psdFinalizeWorkerPool');
     const pool = createPsdFinalizeWorkerPool();
     /** @type {Array<{layerIndex:number, alphaMask:any, imageBounds:any, url:string}>} */
@@ -1835,6 +1837,7 @@ export default function CanvasViewport({
     } finally {
       pool.destroy();
     }
+    logger.timeEnd('psdImport', 'workerPool:composite', { layers: layers.length });
 
     // Populate alpha-mask cache up front. Hit-test (wizard reorder/
     // adjust steps) reads this map directly.
@@ -1920,6 +1923,12 @@ export default function CanvasViewport({
     }
 
     centerView(psdW, psdH);
+    logger.timeEnd('psdImport', 'finalize', {
+      psd: { w: psdW, h: psdH },
+      layers: layers.length,
+      groups: groupDefs.length,
+      assigned: assignments?.size ?? 0,
+    });
   }, [updateProject, centerView]);
 
   /* ── GAP-001 — Wizard handlers lifted out. The wizard mounts at

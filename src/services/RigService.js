@@ -42,13 +42,20 @@ import { logger } from '../lib/logger.js';
 let _harvestPipelinePromise = null;
 function _harvestPipeline() {
   if (!_harvestPipelinePromise) {
+    // First-call only — surfaces the import + module-eval cost of the
+    // rig pipeline. Subsequent calls share the resolved promise and
+    // pay zero (no logger entry on cache hit).
+    logger.time('lazyLoad', 'rig:harvestPipeline');
     _harvestPipelinePromise = Promise.all([
       import('../io/live2d/rig/initRig.js'),
       import('../io/imageHelpers.js'),
-    ]).then(([initRigMod, imageHelpersMod]) => ({
-      initializeRigFromProject: initRigMod.initializeRigFromProject,
-      loadProjectTextures: imageHelpersMod.loadProjectTextures,
-    }));
+    ]).then(([initRigMod, imageHelpersMod]) => {
+      logger.timeEnd('lazyLoad', 'rig:harvestPipeline');
+      return {
+        initializeRigFromProject: initRigMod.initializeRigFromProject,
+        loadProjectTextures: imageHelpersMod.loadProjectTextures,
+      };
+    });
   }
   return _harvestPipelinePromise;
 }
@@ -426,7 +433,7 @@ export async function runStage(stage, opts = {}) {
   }
   const mode = opts.mode ?? 'merge';
   _runStageInFlight = true;
-  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  logger.time('rigStageRun', `runStage:${stage}`);
   // beginBatch + endBatch fold the seeder commit and the telemetry stamp
   // into ONE undo entry — Ctrl+Z reverts both together (one click in =
   // one click out). Without this the user has to undo twice to fully
@@ -497,11 +504,14 @@ export async function runStage(stage, opts = {}) {
       p.rigStageLastRunAt[stage] = isoNow;
     });
 
-    const dt = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
-    logger.info('rigStageRun', `runStage: ${stage} (${mode}) ${dt}ms`, { stage, mode, elapsedMs: dt });
+    logger.timeEnd('rigStageRun', `runStage:${stage}`, { stage, mode }, `runStage: ${stage} (${mode})`);
     return { ok: true };
   } catch (err) {
     const error = /** @type {any} */ (err)?.message ?? String(err);
+    // End the timer so the registry doesn't hold a stale entry; the WARN
+    // surfaces failure context with timing.
+    const ms = logger.timeEnd('rigStageRun', `runStage:${stage}`, { stage, mode, error });
+    logger.warn('rigStageRun', `runStage: ${stage} (${mode}) FAILED after ${ms ?? '?'}ms: ${error}`, { stage, mode, error });
     if (typeof console !== 'undefined') console.error('[RigService] runStage failed:', stage, err);
     return { ok: false, error };
   } finally {
@@ -535,7 +545,7 @@ export async function refitAll(opts = {}) {
   }
   const mode = opts.mode ?? 'merge';
   _runStageInFlight = true;
-  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  logger.time('rigStageRun', 'refitAll');
   const snapshot = capturePose();
   // Single undo entry — see runStage for rationale.
   beginBatch(useProjectStore.getState().project);
@@ -560,13 +570,14 @@ export async function refitAll(opts = {}) {
 
     restorePose(snapshot);
 
-    const dt = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
-    logger.info('rigStageRun', `refitAll (${mode}) ${dt}ms`, { mode, elapsedMs: dt });
+    logger.timeEnd('rigStageRun', 'refitAll', { mode }, `refitAll (${mode})`);
     return { ok: true };
   } catch (err) {
     // Best-effort restore even on failure.
     try { restorePose(snapshot); } catch (_e) { /* swallow */ }
     const error = /** @type {any} */ (err)?.message ?? String(err);
+    const ms = logger.timeEnd('rigStageRun', 'refitAll', { mode, error });
+    logger.warn('rigStageRun', `refitAll (${mode}) FAILED after ${ms ?? '?'}ms: ${error}`, { mode, error });
     if (typeof console !== 'undefined') console.error('[RigService] refitAll failed:', err);
     return { ok: false, error };
   } finally {

@@ -487,7 +487,7 @@ export function pruneOrphanRotationDeformers(rigSpec) {
  * }>}
  */
 export async function initializeRigFromProject(project, images = new Map()) {
-  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  logger.time('rigInit', 'full');
   const partCount = (project.nodes ?? []).filter(n => n.type === 'part').length;
   const groupCount = (project.nodes ?? []).filter(n => n.type === 'group').length;
   const variantCount = (project.nodes ?? []).filter(n => n.type === 'part' && n.variantSuffix).length;
@@ -500,7 +500,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     imagesAttached: images?.size ?? 0,
   });
 
-  const meshes = await buildMeshesForRig(project, images);
+  const meshes = await logger.timed('rigInit', 'buildMeshes', () => buildMeshesForRig(project, images));
 
   // **AUTHORED PATH** — projects loaded from cmo3 have the original rig
   // graph in `project._cmo3Scene`. Use `buildRigSpecFromCmo3` to assemble
@@ -510,7 +510,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // PARAM signal at AngleZ_pos30 by using the same rig values Cubism
   // does instead of regenerating them).
   if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {
-    const t0a = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    logger.time('rigInit', 'authored-path');
     const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
     const built = buildRigSpecFromCmo3({
       scene: project._cmo3Scene,
@@ -523,17 +523,17 @@ export async function initializeRigFromProject(project, images = new Map()) {
     const debug = built.debug;
     const pruned = pruneOrphanRotationDeformers(built.rigSpec);
     const rigSpec = pruned.rigSpec;
-    const dta = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0a;
     const disabled = subsystems
       ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
       : [];
-    logger.info('rigInit', 'Init Rig authored-path complete', {
-      elapsedMs: Math.round(dta),
+    logger.timeEnd('rigInit', 'authored-path', {
       ...debug,
       disabledSubsystems: disabled.length > 0 ? disabled : undefined,
       droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
       droppedOrphanParams: pruned.droppedParamIds.length || undefined,
-    });
+    }, 'Init Rig authored-path complete');
+    // Close the outer timer too — authored-path is an early-return.
+    logger.timeEnd('rigInit', 'full');
     // The authored path doesn't (yet) produce a separate faceParallaxSpec /
     // bodyWarpChain harvest — those are export-pipeline concerns. The
     // rigSpec itself is consumed by chainEval directly.
@@ -555,7 +555,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     transform: g.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
   }));
 
-  const result = await generateCmo3({
+  const result = await logger.timed('rigInit', 'heuristic-path-generateCmo3', () => generateCmo3({
     canvasW: project.canvas?.width ?? 800,
     canvasH: project.canvas?.height ?? 600,
     meshes,
@@ -578,7 +578,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     faceParallaxSpec: null,
     bodyWarpChain: null,
     rigWarps: null,
-  });
+  }));
 
   const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
   const { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps } = harvestSeedFromRigSpec(
@@ -603,15 +603,13 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // Parameters panel instead of sitting dead.
   const pruned = pruneOrphanRotationDeformers(filteredRigSpec);
 
-  const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   const rs = pruned.rigSpec;
   // GAP-008 — log which subsystems are off so the user sees in the Logs
   // panel that the opt-out worked end-to-end.
   const disabled = subsystems
     ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
     : [];
-  logger.info('rigInit', 'Init Rig harvest complete', {
-    elapsedMs: Math.round(dt),
+  logger.timeEnd('rigInit', 'full', {
     warpDeformers: rs?.warpDeformers?.length ?? 0,
     rotationDeformers: rs?.rotationDeformers?.length ?? 0,
     artMeshes: rs?.artMeshes?.length ?? 0,
@@ -622,7 +620,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
     droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
     droppedOrphanParams: pruned.droppedParamIds.length || undefined,
-  });
+  }, 'Init Rig harvest complete');
 
   // PP2-005b — identity-divergence diagnostic. The user's complaint is
   // that some parts visibly shift after Init Rig (hair sways/tilts
