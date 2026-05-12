@@ -214,13 +214,20 @@ Phase 1 stages shipped through this 2026-05-12 sub-session:
 | 1.F-pre | NodeTree retirement (v38 — V2 dual-write shadow gone) | 3 | [STAGE1F_PRE](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F_PRE.md) |
 | 1.F | 4 new test files (138 substrate + 44 audit-pin assertions) | 3 | [STAGE1F](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F.md) |
 | 1.F-post | Gap-tolerant walker + 5 shim deletions | 3 (this file) | (this file) |
-| 1.G | Manual Cubism Viewer .moc3 acceptance gate on Shelby | (owed to user) | — |
+| 1.G | Two Cubism Viewer .moc3 acceptance loads — **Shelby** (Western) + **test_image4** (anime) | (owed to user) | — |
 
-**Phase 1 ship gate** = 1.G manual acceptance test on **Shelby** with
-one keyframed Action (Hiyori is reference-only with no PSD source —
-see plan §11 lines 1617-1618 + memory `feedback_test_character_is_shelby.md`).
-Stage 1.F-post (this file) is decoupled polish that closes Rule №2
-baggage on the migration walker; doesn't move the Phase 1 ship gate.
+**Phase 1 ship gate** = 1.G manual acceptance tests on BOTH user E2E
+test PSDs — **Shelby** (Western, `shelby_neutral_ok.psd`) + **test_image4**
+(anime, `test_image4.psd`) — each with one keyframed Action. Per
+memory `feedback_test_character_is_shelby.md`: "the byte-fidelity gate
+must exercise **both** PSDs"; same dual-PSD policy in plan §11
+lines 1625-1626 + Phase 0.D flag-flip gate. Anime topology has
+historically exposed bugs the Western fixture missed (BUG-025 leg-
+roles fly was anime-only — see memory `project_legs_fly_bug_fix_shipped.md`).
+Hiyori is reference-only with no PSD source (plan §11 line 1627 +
+memory `feedback_test_character_is_shelby.md`). Stage 1.F-post (this
+file) is decoupled polish that closes Rule №2 baggage on the
+migration walker; doesn't move the Phase 1 ship gate.
 
 ## Resume paths for fresh session
 
@@ -229,20 +236,24 @@ sub-session was a decoupled cleanup that doesn't gate Phase 1. The
 recommended path remains 1.G manual gate; B + D from Stage 1.F's
 close-out are still queued.
 
-### A. Phase 1.G manual acceptance gate on Shelby (recommended next)
+### A. Phase 1.G manual acceptance gate on Shelby + test_image4 (recommended next)
 
 Per plan §1.G (line 783):
 
-  > One Cubism Viewer .moc3 acceptance load on Shelby (the user's
-  > PSD-imported Western test character) with one keyframed Action
-  > via ActionsEditor.
+  > Two Cubism Viewer .moc3 acceptance loads — covers BOTH user E2E
+  > test PSDs per memory `feedback_test_character_is_shelby.md`:
+  > Shelby (Western) + test_image4 (anime). Each with one keyframed
+  > Action via ActionsEditor.
 
-User-driven test: import Shelby PSD → Init Rig (Hiyori is reference-
-only with no PSD), create one Action via ActionsEditor, add keyframes,
-bind to `__scene__`, export, open in Cubism Viewer 5.0 + Cubism
-Editor 5.0 → Animation workspace. Stage 1.F's automated tests cover
-everything that CAN be automated; 1.G is the human-eyes Cubism load
-that closes Phase 1.
+User-driven test, run **once per PSD**: import the PSD → Init Rig,
+create one Action via ActionsEditor, add keyframes, bind to
+`__scene__`, export, open in Cubism Viewer 5.0 + Cubism Editor 5.0 →
+Animation workspace. Anime topology (test_image4) has historically
+exposed bugs the Western fixture (Shelby) missed — BUG-025 leg-roles
+fly was anime-only. Stage 1.F's automated tests cover everything that
+CAN be automated; 1.G is the human-eyes Cubism load × 2 PSDs that
+closes Phase 1. Hiyori is reference-only with no PSD source (plan §11
+line 1627).
 
 ### B. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 

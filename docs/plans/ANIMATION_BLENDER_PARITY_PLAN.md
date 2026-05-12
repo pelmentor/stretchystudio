@@ -780,16 +780,28 @@ See close-out:
 
 - All export tests green: motion3, can3, cmo3, model3 byte-identical.
 - Round-trip: `project → save → load → save → load` produces identical bytes.
-- One Cubism Viewer .moc3 acceptance load on **Shelby** (the user's
-  PSD-imported Western test character) with one keyframed Action via
-  ActionsEditor. Hiyori is reference-only with NO PSD source (see §11
-  lines 1617-1618); Shelby is the canonical test character per
-  memory `feedback_test_character_is_shelby.md` ("user imports Shelby
-  PSD for E2E tests; don't say 'load Hiyori' in test plans"). Gate
-  is acceptance (file loads, Action animates) — NOT byte-identity
-  (which is the §11-line-1618 separate Hiyori-reference gate run on
-  the exported .moc3 against `reference/live2d-sample/Hiyori/runtime/
-  hiyori_pro_t11.moc3`).
+- Two Cubism Viewer .moc3 acceptance loads — covers BOTH user E2E test
+  PSDs per memory `feedback_test_character_is_shelby.md` ("the byte-
+  fidelity gate must exercise **both** PSDs"; same dual-PSD policy
+  already in §11 lines 1625-1626 and Phase 0.D flag-flip gate):
+  - **Shelby (Western)** — `shelby_neutral_ok.psd → Init Rig →
+    ActionsEditor (one keyframed Action) → bind to __scene__ → export
+    → Cubism Viewer 5.0 + Cubism Editor 5.0 Animation workspace`. The
+    canonical Western test fixture; regression baseline carries over
+    from §11's `shelby.cmo3` (SS v0.2 export) byte-diff gate.
+  - **test_image4 (anime)** — same flow on `test_image4.psd`. Anime
+    topology has historically exposed bugs the Western fixture missed
+    (BUG-025 leg-roles fly was anime-only; see memory
+    `project_legs_fly_bug_fix_shipped.md`). No baseline cmo3 exists,
+    so the gate is acceptance (file loads, Action animates), not
+    byte-diff.
+  Hiyori is reference-only with NO PSD source (see §11 lines 1617-1618
+  + memory `feedback_test_character_is_shelby.md`: "user has Hiyori's
+  *exported* `.cmo3` … but does NOT have the Hiyori PSD source"). Gate
+  on both test PSDs is acceptance (file loads, Action animates) —
+  NOT byte-identity (which is the §11-line-1627 separate Hiyori-
+  reference gate run on the exported .moc3 against
+  `reference/live2d-sample/Hiyori/runtime/hiyori_pro_t11.moc3`).
 
 **Phase 1 sum:** ~1–1.5 weeks. Schema v33. New: `Action` datablock,
 `AnimData` per Object, `__scene__` pseudo-Object, ActionsEditor UI.

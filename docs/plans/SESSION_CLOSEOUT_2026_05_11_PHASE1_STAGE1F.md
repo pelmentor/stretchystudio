@@ -21,8 +21,9 @@ audit-fix sweep (`cdd92f9`). Both pushed to `origin/master`.
 
 The Stage 1.F-pre close-out (commit `f9d92d3`) queued Stage 1.F + 1.G
 test suites as **Resume path A** — the recommended next chunk before
-the manual Cubism Viewer .moc3 acceptance gate on Shelby (the
-Phase 1 ship gate; Hiyori is reference-only with no PSD source).
+the manual Cubism Viewer .moc3 acceptance gate on Shelby + test_image4
+(the Phase 1 ship gate; both PSDs per memory `feedback_test_character_is_shelby.md`;
+Hiyori is reference-only with no PSD source).
 
 Per plan §1.F (lines 727-735), the test matrix lists FIVE entries:
 `test_actionDatablock_migration.mjs`, `test_actionRegistry.mjs`,
@@ -224,28 +225,36 @@ Phase 1 stages shipped this 2026-05-11 marathon:
 | 1.E | ActionsEditor UI + 11-file activeActionId rewire | 3 | [STAGE1E](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1E.md) |
 | 1.F-pre | NodeTree retirement (v38 — V2 dual-write shadow gone) | 3 | [STAGE1F_PRE](./SESSION_CLOSEOUT_2026_05_11_PHASE1_STAGE1F_PRE.md) |
 | 1.F | 4 new test files (129 substrate + 44 audit-pin assertions) | 3 (this file) | (this file) |
-| 1.G | Manual Cubism Viewer .moc3 acceptance gate on Shelby | (owed to user) | — |
+| 1.G | Two Cubism Viewer .moc3 acceptance loads — **Shelby** (Western) + **test_image4** (anime) | (owed to user) | — |
 
-**Phase 1 ship gate** = 1.G manual acceptance test on **Shelby** with
-one keyframed Action (Hiyori is reference-only with no PSD source —
-see plan §11 lines 1617-1618 + memory `feedback_test_character_is_shelby.md`).
-Stage 1.F substrate (this file) closes the last automated test gap;
-everything left in Phase 1 is the human-eyes Cubism Viewer load.
+**Phase 1 ship gate** = 1.G manual acceptance tests on BOTH user E2E
+test PSDs — **Shelby** (Western, `shelby_neutral_ok.psd`) + **test_image4**
+(anime, `test_image4.psd`) — each with one keyframed Action. Per
+memory `feedback_test_character_is_shelby.md`: "the byte-fidelity gate
+must exercise **both** PSDs"; same dual-PSD policy in plan §11
+lines 1625-1626 + Phase 0.D flag-flip gate. Anime topology has
+historically exposed bugs the Western fixture missed (BUG-025 leg-
+roles fly was anime-only — see memory `project_legs_fly_bug_fix_shipped.md`).
+Hiyori is reference-only with no PSD source (plan §11 line 1627 +
+memory `feedback_test_character_is_shelby.md`). Stage 1.F substrate
+(this file) closes the last automated test gap; everything left in
+Phase 1 is the human-eyes Cubism Viewer load × 2 PSDs.
 
 ## Resume paths for fresh session
 
-### A. Phase 1.G manual acceptance gate on Shelby (recommended next)
+### A. Phase 1.G manual acceptance gate on Shelby + test_image4 (recommended next)
 
 The Phase 1 ship gate is the only unfinished work. Per plan §1.G
 (line 783):
 
-  > One Cubism Viewer .moc3 acceptance load on Shelby (the user's
-  > PSD-imported Western test character) with one keyframed Action
-  > via ActionsEditor.
+  > Two Cubism Viewer .moc3 acceptance loads — covers BOTH user E2E
+  > test PSDs per memory `feedback_test_character_is_shelby.md`:
+  > Shelby (Western) + test_image4 (anime). Each with one keyframed
+  > Action via ActionsEditor.
 
-This needs the user to:
-1. Import Shelby PSD via wizard → Init Rig (Hiyori is reference-only;
-   no PSD exists, so only Shelby can host the keyframed-Action test).
+This needs the user to run **once per PSD** (Shelby first, then
+test_image4):
+1. Import the PSD via wizard → Init Rig.
 2. Create one Action via `ActionsEditor` (Stage 1.E UI).
 3. Add a few keyframes via Timeline / Dopesheet.
 4. Bind Action to `__scene__` via the Stage 1.E "Scene action" header.
@@ -257,9 +266,12 @@ This needs the user to:
    File → Open → pick the scene → verify keyframes show on the
    timeline at the right times + values.
 
-Stage 1.F's automated tests cover everything that CAN be automated
-without a runtime Cubism Viewer / Editor. The 1.G gate is what
-closes Phase 1.
+Anime topology (test_image4) has historically exposed bugs the
+Western fixture (Shelby) missed (BUG-025 leg-roles fly was anime-only),
+so both PSDs are required. Hiyori is reference-only with no PSD source
+(plan §11 line 1627). Stage 1.F's automated tests cover everything
+that CAN be automated without a runtime Cubism Viewer / Editor. The
+1.G gate × 2 PSDs is what closes Phase 1.
 
 ### B. ~~Properties dedicated "Animation" tab~~ — RE-RESOLVED 2026-05-12 (no follow-up needed)
 

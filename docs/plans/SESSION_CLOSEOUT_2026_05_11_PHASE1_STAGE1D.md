@@ -214,11 +214,15 @@ Per plan §1.F + 1.G:
   `test_actionScene` (depends on Stage 1.D — now possible to write,
   treats `__scene__` AnimData identically to Object AnimData),
   `test_actionExportMotion3`, `test_actionExportCan3`
-- Manual Cubism Viewer acceptance gate on **Shelby** with one
-  keyframed Action (the user-gesture test that closes Phase 1 —
-  Hiyori is reference-only with no PSD source per memory
-  `feedback_test_character_is_shelby.md`; Shelby is the canonical
-  PSD test character).
+- Manual Cubism Viewer acceptance gates on **Shelby** + **test_image4**
+  — each PSD with one keyframed Action (the user-gesture test that
+  closes Phase 1). BOTH PSDs are required per memory
+  `feedback_test_character_is_shelby.md` ("the byte-fidelity gate must
+  exercise **both** PSDs"; same dual-PSD policy already in plan §11
+  lines 1625-1626 and Phase 0.D flag-flip gate). Anime topology
+  (test_image4) has historically exposed bugs the Western fixture
+  (Shelby) missed — BUG-025 leg-roles fly was anime-only. Hiyori is
+  reference-only with no PSD source.
 
 Required to declare Phase 1 fully shipped. Stage 1.E should land
 first; this is the closing gate.
