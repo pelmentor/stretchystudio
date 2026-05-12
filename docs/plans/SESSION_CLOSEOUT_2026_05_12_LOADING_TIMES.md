@@ -29,7 +29,7 @@ Five hand-rolled `performance.now()` callsites already existed in SaveModal / in
 - **`lib/logger.js`** — added `time(source, label)`, `timeEnd(source, label, data?, customMessage?)`, `timed(source, label, fn, data?)` helpers. Module-scope `_timers: Map<string, number>` keyed by `${source}:${label}`. Per Rule №1: explicit WARN on overlapping `time()` start; explicit WARN + `null` return on unmatched `timeEnd()` — no silent fallback. Default emit shape: `INFO [<source>] <label>: <ms>ms { ms, ...data }`. `customMessage` overrides the default text only (ms stays in data, NOT auto-appended to the rendered string).
 - **Existing callsites refactored** (SaveModal `executeSave`, initRig `initializeRigFromProject` outer + `rigInit:authored-path` inner + `rigInit:buildMeshes` + `rigInit:heuristic-path-generateCmo3`, RigService `runStage` + `refitAll`). The hand-rolled `t0 = performance.now()` boilerplate goes away; rich-message paths (SaveModal's "download OK: 14p / 8d / …") use `customMessage`.
 - **Six previously-uninstrumented paths instrumented**:
-  - `boot:moduleEval` + `boot:first frame painted` (main.jsx — moduleEval covers script eval to render return; rAF marker fires on first paint).
+  - `boot:reactRender` + `boot:firstPaint` (main.jsx) + `boot:idleDone` (idlePrefetch.js) — all milestones emitting `{ msSinceTimeOrigin }`. Bracket the full boot window: React render returns → first paint → idle-prefetch queue drained. (Note: prior `boot:moduleEval` interval timer was removed in the same sweep — it wrapped only the synchronous `createRoot().render()` dispatch, NOT actual module evaluation; honest milestone replaces it. See hotfix sweep `2026-05-12` for the rationale.)
   - `projectLoad:full` + `:unzip` + `:parseJson` + `:textures` + `:audio` (projectFile.js).
   - `projectSave:serialize:full` + `:textures` + `:audio` + `:zip` (inner timers; outer `projectSave:<mode>` stays in SaveModal).
   - `psdImport:finalize` + `psdImport:workerPool:composite` (CanvasViewport.jsx callback).
@@ -117,7 +117,7 @@ Phase 1.G manual Cubism Viewer .moc3 acceptance gates on **Shelby + test_image4*
 
 User opens the app, opens the Logs panel, runs the typical flow (cold-start → drop PSD → Init Rig → poke around → export → save → reload), captures the `{ ms }` numbers per source. Suggested capture sequence (from the conversation, copied here for resumability):
 
-1. Cold-start the app — note `boot:moduleEval` + `boot:first frame painted`.
+1. Cold-start the app — note `boot:reactRender`, `boot:firstPaint`, `boot:idleDone` (all milestones — `msSinceTimeOrigin` brackets the full perceived load window).
 2. Drop `shelby_neutral_ok.psd` — `psdImport:workerDecode` (NEW post-`8b99483`) → wizard → finalize → `psdImport:finalize` + `workerPool:composite`.
 3. Click Auto-organize (if used) — `lazyLoad:onnxruntime` (NEW, first time only).
 4. Init Rig — `rigInit:full` + `buildMeshes` + `heuristic-path-generateCmo3` (+ `lazyLoad:rig:harvestPipeline` on first ever invocation; + `lazyLoad:seeds:11modules` on first seed).

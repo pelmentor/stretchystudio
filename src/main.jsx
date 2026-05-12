@@ -10,12 +10,21 @@ import { logger } from './lib/logger.js'
 // `fontFamily` changes. Eager bare imports of all 7 families pulled
 // every WOFF2 into the boot bundle even though only one is rendered.
 
-// Boot timing — `moduleEval` measures from this script's first executable
-// line (after import resolution) to `createRoot.render` returning. The
-// `firstFrame` rAF marker fires after the browser paints React's first
-// commit, which is the user-perceived "app is up" moment. Together they
-// bound the boot window.
-logger.time('boot', 'moduleEval');
+// Boot timing — emitted as milestones (`msSinceTimeOrigin`) rather
+// than time/timeEnd intervals, because each marks a single point on
+// the page-navigation-relative timeline, not a duration we can bound
+// from inside the module. The full boot window is bracketed by:
+//
+//   reactRender   — `createRoot().render(...)` returned (React reconciler kicked)
+//   firstPaint    — first rAF after React's initial commit (user-perceived "UI is up")
+//   idleDone      — `kickIdlePrefetches()` queue drained (page is settled, no more JS scheduled)
+//
+// Note: "moduleEval" was previously emitted here via `logger.time/timeEnd`
+// wrapping the synchronous `render()` call — that's not module evaluation,
+// it's the React render dispatch (~2ms). Actual module evaluation finishes
+// before line 1 of this file runs (ESM imports are hoisted + awaited by
+// the runtime), so it can't be measured from inside the module. The
+// honest substitute is `reactRender` as a wall-time milestone.
 
 createRoot(document.getElementById('root')).render(
   <ThemeProvider>
@@ -23,10 +32,10 @@ createRoot(document.getElementById('root')).render(
   </ThemeProvider>
 )
 
-logger.timeEnd('boot', 'moduleEval');
+logger.info('boot', 'reactRender', { msSinceTimeOrigin: Math.round(performance.now()) });
 
 requestAnimationFrame(() => {
-  logger.info('boot', 'first frame painted', { msSinceTimeOrigin: Math.round(performance.now()) });
+  logger.info('boot', 'firstPaint', { msSinceTimeOrigin: Math.round(performance.now()) });
 });
 
 // Phase A2 (2026-05-09) — once React has flushed first paint, queue

@@ -7,7 +7,20 @@
 // One-shot: the spawning code creates a fresh worker per import and
 // terminates it after the result arrives.
 
-import { readPsd } from 'ag-psd';
+import { readPsd, initializeCanvas } from 'ag-psd';
+
+// ag-psd's default `createCanvas` throws unless `document` exists —
+// `helpers.js:319` only auto-installs the `document.createElement('canvas')`
+// factory in the main thread. Even with `useImageData: true`, ag-psd's
+// `createImageDataBitDepth` allocates the per-layer buffer through
+// `createImageData → createCanvas(1, 1)`, so the throw fires on the
+// very first non-zero-area layer. Wire OffscreenCanvas + the native
+// `ImageData` constructor (both worker-global) so ag-psd has the
+// allocators it expects.
+initializeCanvas(
+  (w, h) => /** @type {any} */ (new OffscreenCanvas(w, h)),
+  (w, h) => new ImageData(w, h),
+);
 
 self.onmessage = (e) => {
   const { buffer } = e.data || {};

@@ -1462,7 +1462,7 @@ export const useProjectStore = create((set, get) => {
               peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
             }
           } else {
-            upsertDeformerNode(proj.nodes, warpSpecToDeformerNode(harvest.neckWarpSpec));
+            peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
           }
         } else if (mode === 'replace') {
           // No NeckWarp this run (faceRig opt-out, or no neck-tagged
