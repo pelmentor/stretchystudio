@@ -58,6 +58,19 @@ const NodeTreeArea = lazy(() =>
   import('../editors/nodetree/NodeTreeArea.jsx').then((m) => ({ default: m.NodeTreeArea }))
 );
 
+// F-1 (2026-05-16 UI fidelity sweep) — per-area headers ABOVE the editor
+// body. Mirrors Blender's `*_HT_header` pattern (one header per area
+// type, e.g. `VIEW3D_HT_header` at `reference/blender/scripts/startup/
+// bl_ui/space_view3d.py:702` or `OUTLINER_HT_header` at
+// `space_outliner.py:22`). Header slot is optional — editors that
+// don't ship one render with the existing AreaTabBar-only chrome.
+const ViewportHeader = lazy(() =>
+  import('../headers/ViewportHeader.jsx').then((m) => ({ default: m.ViewportHeader }))
+);
+const OutlinerHeader = lazy(() =>
+  import('../headers/OutlinerHeader.jsx').then((m) => ({ default: m.OutlinerHeader }))
+);
+
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
  *
@@ -65,16 +78,21 @@ const NodeTreeArea = lazy(() =>
  * @property {string} label                - shown in the header dropdown
  * @property {React.ComponentType | null} component - null for canvas tabs (viewport/livePreview)
  *                                                    routed via CanvasArea in Area.jsx
+ * @property {React.ComponentType | null} [header]  - optional area-header chrome rendered ABOVE
+ *                                                    the editor body. Mirrors Blender's
+ *                                                    `*_HT_header` per-area pattern. When null
+ *                                                    the area renders only the AreaTabBar.
  */
 
 /** @type {Record<EditorType, EditorEntry>} */
 export const EDITOR_REGISTRY = {
-  viewport:    { label: 'Viewport',     component: null },
-  livePreview: { label: 'Live Preview', component: null },
-  outliner:    { label: 'Outliner',     component: OutlinerEditor },
-  properties:  { label: 'Properties',   component: PropertiesEditor },
-  parameters:  { label: 'Parameters',   component: ParametersEditor },
-  timeline:    { label: 'Timeline',     component: TimelineEditor },
+  viewport:    { label: 'Viewport',     component: null,             header: ViewportHeader },
+  // LivePreview is the read-only runtime view; no editor chrome.
+  livePreview: { label: 'Live Preview', component: null,             header: null },
+  outliner:    { label: 'Outliner',     component: OutlinerEditor,   header: OutlinerHeader },
+  properties:  { label: 'Properties',   component: PropertiesEditor, header: null },
+  parameters:  { label: 'Parameters',   component: ParametersEditor, header: null },
+  timeline:    { label: 'Timeline',     component: TimelineEditor,   header: null },
   // Stage 1.E: editor-type id is plural `actions` to match the panel's
   // user-facing label "Actions" (the noun for a list-of-actions view).
   // Blender's space-type enum uses singular `SPACE_ACTION`
@@ -82,13 +100,13 @@ export const EDITOR_REGISTRY = {
   // since it identifies the editor space, not the panel content. SS's
   // ids are panel-scoped here, so the deviation is documented rather
   // than aligned (Audit-fix D-9 Stage 1.E).
-  actions:     { label: 'Actions',      component: ActionsEditor },
-  performance: { label: 'Performance',  component: PerformanceEditor },
-  dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor },
-  fcurve:      { label: 'F-curve',      component: FCurveEditor },
-  keyformGraph:{ label: 'Keyform Graph', component: KeyformGraphEditor },
-  logs:        { label: 'Logs',         component: LogsEditor },
-  nodeTree:    { label: 'Node Tree',    component: NodeTreeArea },
+  actions:     { label: 'Actions',      component: ActionsEditor,    header: null },
+  performance: { label: 'Performance',  component: PerformanceEditor, header: null },
+  dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor,  header: null },
+  fcurve:      { label: 'F-curve',      component: FCurveEditor,     header: null },
+  keyformGraph:{ label: 'Keyform Graph', component: KeyformGraphEditor, header: null },
+  logs:        { label: 'Logs',         component: LogsEditor,       header: null },
+  nodeTree:    { label: 'Node Tree',    component: NodeTreeArea,     header: null },
 };
 
 /** Stable ordered list for header dropdowns. */

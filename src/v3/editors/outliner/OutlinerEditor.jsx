@@ -41,8 +41,7 @@
  * @module v3/editors/outliner/OutlinerEditor
  */
 
-import { useState, useMemo, useCallback } from 'react';
-import { Search, X, Filter } from 'lucide-react';
+import { useMemo, useCallback, useState } from 'react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
@@ -51,38 +50,12 @@ import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
 import { isBoneGroup } from '../../../store/objectDataAccess.js';
 import { filterOutlinerTree, filterOutlinerTreeByPredicate } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
-import * as SelectImpl from '../../../components/ui/select.jsx';
-import * as PopoverImpl from '../../../components/ui/popover.jsx';
-import * as CheckboxImpl from '../../../components/ui/checkbox.jsx';
-// shadcn/ui parts are forwardRefs without JSX-typed declarations; same
-// cast pattern as `Sel` above so PopoverContent / Checkbox accept their
-// runtime props (children, className, checked, onCheckedChange).
-/** @type {Record<string, React.ComponentType<any>>} */
-const Pop = /** @type {any} */ (PopoverImpl);
-/** @type {Record<string, React.ComponentType<any>>} */
-const Chk = /** @type {any} */ (CheckboxImpl);
-const { Popover, PopoverContent, PopoverTrigger } = Pop;
-const { Checkbox } = Chk;
 
-// shadcn/ui Select parts are forwardRefs without JSX-typed declarations —
-// tsc can't see their props (children, className). Cast through one alias
-// so the dropdown JSX below stays permissive at runtime they're the same.
-// (Same pattern ActionsEditor + IdleMotionDialog use for AlertDialog.)
-/** @type {Record<string, React.ComponentType<any>>} */
-const Sel = /** @type {any} */ (SelectImpl);
-const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } = Sel;
-
-/**
- * Header dropdown options. View Layer matches Blender's `SO_VIEW_LAYER`
- * (`DNA_space_enums.h:230`); Armature + Deformer Graph are SS-specific
- * tree shapes (deferred F-4 work folds Armature into a filter-axis
- * inside OUTLINER_PT_filter).
- */
-const MODES = /** @type {const} */ ([
-  { id: 'viewLayer', label: 'View Layer' },
-  { id: 'skeleton',  label: 'Armature' },
-  { id: 'rig',       label: 'Deformer Graph' },
-]);
+// F-1 sweep — header chrome (display-mode dropdown, search, filter
+// popover) lifted into `src/v3/headers/OutlinerHeader.jsx` and rendered
+// in the per-area Header slot. State source-of-truth is `editorStore`
+// (slots `outlinerMode`, `outlinerSearchQuery`, `outlinerShowSelectedOnly`,
+// `outlinerHideHidden`); both header and body subscribe independently.
 
 export function OutlinerEditor() {
   const nodes = useProjectStore((s) => s.project.nodes);
@@ -99,15 +72,16 @@ export function OutlinerEditor() {
   const warpGridVisibility = useEditorStore((s) => s.viewLayers.warpGridVisibility);
   const toggleWarpGridVisibility = useEditorStore((s) => s.toggleWarpGridVisibility);
 
-  /** @type {[import('./treeBuilder.js').OutlinerDisplayMode, Function]} */
-  const [mode, setMode] = useState(/** @type {any} */ ('viewLayer'));
+  // F-1 sweep — header state lifted to editorStore so the per-area
+  // OutlinerHeader can write while the body reads.
+  const mode = useEditorStore((s) => s.outlinerMode);
+  const query = useEditorStore((s) => s.outlinerSearchQuery);
+  const showSelectedOnly = useEditorStore((s) => s.outlinerShowSelectedOnly);
+  const hideHidden = useEditorStore((s) => s.outlinerHideHidden);
+  // Collapsed-set stays local — it's per-render-instance ephemeral
+  // (Blender's outliner restores expansion via the .blend file but
+  // SS doesn't persist UI tree state).
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
-  const [query, setQuery] = useState('');
-  // F-4 sweep — OUTLINER_PT_filter starter checkboxes. Local state for
-  // now (Blender persists the same flags on `SpaceOutliner`); promoting
-  // to editorStore is follow-on work once the filter set stabilizes.
-  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
-  const [hideHidden, setHideHidden] = useState(false);
 
   const roots = useMemo(() => {
     if (mode === 'rig') return buildOutlinerTree(rigSpec, { mode: 'rig' });
@@ -117,8 +91,9 @@ export function OutlinerEditor() {
     return buildOutlinerTree({ nodes, rigSpec }, { mode: 'viewLayer' });
   }, [mode, nodes, rigSpec]);
 
-  // Whether the project has any boneRole-tagged groups. Drives the
-  // Skeleton-tab disabled state + the empty-state message.
+  // Whether the project has any boneRole-tagged groups. Used by the
+  // empty-state message (the "skeleton mode disabled" hint lives in
+  // OutlinerHeader; this signal stays local for the empty-state copy).
   const hasArmature = useMemo(
     () => nodes.some((n) => isBoneGroup(n)),
     [nodes],
@@ -330,18 +305,6 @@ export function OutlinerEditor() {
 
   return (
     <div className="h-full w-full flex flex-col text-xs">
-      <Header
-        mode={mode}
-        onModeChange={setMode}
-        query={query}
-        onQueryChange={setQuery}
-        rigAvailable={!!rigSpec}
-        skeletonAvailable={hasArmature}
-        showSelectedOnly={showSelectedOnly}
-        setShowSelectedOnly={setShowSelectedOnly}
-        hideHidden={hideHidden}
-        setHideHidden={setHideHidden}
-      />
       {rows.length === 0 ? (
         <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasArmature={hasArmature} hasQuery={!!query.trim()} />
       ) : (
@@ -383,107 +346,6 @@ export function OutlinerEditor() {
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-function Header({
-  mode, onModeChange, query, onQueryChange,
-  rigAvailable, skeletonAvailable,
-  showSelectedOnly, setShowSelectedOnly, hideHidden, setHideHidden,
-}) {
-  const filterActive = showSelectedOnly || hideHidden;
-  return (
-    <div className="border-b border-border bg-muted/20 flex flex-col">
-      <div className="flex items-center px-1.5 pt-1.5">
-        {/* Blender-style scope dropdown — one tree, three filters.
-            Replaces the old 3-tab layout that broke Outliner muscle
-            memory by switching tree shape per click. */}
-        <Select value={mode} onValueChange={onModeChange}>
-          <SelectTrigger
-            className="h-6 px-2 text-[11px] gap-1 bg-transparent border-0
-                       hover:bg-background/50 focus:ring-0 focus:ring-offset-0
-                       w-auto min-w-[110px]"
-            aria-label="Outliner display scope"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="min-w-[180px]">
-            {MODES.map((m) => {
-              const disabled =
-                (m.id === 'rig' && !rigAvailable)
-                || (m.id === 'skeleton' && !skeletonAvailable);
-              return (
-                <SelectItem
-                  key={m.id}
-                  value={m.id}
-                  disabled={disabled}
-                  className="text-[11px]"
-                >
-                  {m.label}
-                  {disabled && m.id === 'rig' ? ' (no rig built)' : null}
-                  {disabled && m.id === 'skeleton' ? ' (no armature)' : null}
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="flex items-center px-2 py-1 gap-1.5">
-        <Search size={11} className="text-muted-foreground shrink-0" />
-        <input
-          type="text"
-          value={query}
-          placeholder="Search…"
-          onChange={(e) => onQueryChange(e.target.value)}
-          className="flex-1 h-6 px-1 bg-transparent border-0 text-[11px] focus:outline-none"
-        />
-        {query ? (
-          <button
-            type="button"
-            onClick={() => onQueryChange('')}
-            className="text-muted-foreground hover:text-foreground shrink-0"
-            aria-label="clear search"
-          >
-            <X size={11} />
-          </button>
-        ) : null}
-        {/* OUTLINER_PT_filter popover — funnel icon mirrors Blender's
-            `FILTER` icon at space_outliner.py:69. Active filters tint
-            the icon so the user sees at a glance that something's
-            narrowing the tree. */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label="Filter"
-              title="Filter"
-              className={`shrink-0 transition-colors ${
-                filterActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Filter size={11} />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-56 p-2 text-[11px]">
-            <div className="font-medium text-muted-foreground pb-1.5">Filter</div>
-            <label className="flex items-center gap-2 py-0.5 cursor-pointer">
-              <Checkbox
-                checked={showSelectedOnly}
-                onCheckedChange={(v) => setShowSelectedOnly(v === true)}
-              />
-              <span>Show Selected Only</span>
-            </label>
-            <label className="flex items-center gap-2 py-0.5 cursor-pointer">
-              <Checkbox
-                checked={hideHidden}
-                onCheckedChange={(v) => setHideHidden(v === true)}
-              />
-              <span>Hide Hidden</span>
-            </label>
-          </PopoverContent>
-        </Popover>
-      </div>
     </div>
   );
 }

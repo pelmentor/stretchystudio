@@ -256,6 +256,20 @@ export const useEditorStore = create((set) => ({
    *  Blender-fidelity sweep so the id matches the Blender enum name. */
   propertiesActiveTab: 'object',
 
+  /** F-1 sweep (2026-05-16) — Outliner header state lifted out of the
+   *  OutlinerEditor body so the header can render in the per-area
+   *  Header slot (`*_HT_header` Blender pattern) while the body stays
+   *  the tree. State stays UI-ephemeral (not persisted to the project
+   *  file). Mirrors the slots Blender keeps on `SpaceOutliner`:
+   *   - `outlinerMode` ↔ `space.display_mode`
+   *   - `outlinerSearchQuery` ↔ `space.filter_text`
+   *   - `outlinerShowSelectedOnly` ↔ `space.show_filter_state` (VIEW_LAYER mode)
+   *   - `outlinerHideHidden` ↔ `space.use_filter_hidden` */
+  outlinerMode: 'viewLayer',
+  outlinerSearchQuery: '',
+  outlinerShowSelectedOnly: false,
+  outlinerHideHidden: false,
+
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to
    *  match Blender (canonical "explicit `K` to insert" path; the red
@@ -610,6 +624,20 @@ export const useEditorStore = create((set) => ({
     if (s.propertiesActiveTab === id) return s;
     return { propertiesActiveTab: id };
   }),
+
+  // ── Outliner header state (F-1 sweep) ──────────────────────────────
+  setOutlinerMode: (mode) => set((s) => {
+    if (typeof mode !== 'string' || mode.length === 0) return s;
+    if (s.outlinerMode === mode) return s;
+    return { outlinerMode: mode };
+  }),
+  setOutlinerSearchQuery: (q) => set((s) => {
+    const next = typeof q === 'string' ? q : '';
+    if (s.outlinerSearchQuery === next) return s;
+    return { outlinerSearchQuery: next };
+  }),
+  setOutlinerShowSelectedOnly: (v) => set({ outlinerShowSelectedOnly: !!v }),
+  setOutlinerHideHidden:       (v) => set({ outlinerHideHidden: !!v }),
 
   // ── Toolset Phase 0 — vertex selection actions ──────────────────────
   //

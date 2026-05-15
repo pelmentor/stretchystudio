@@ -37,6 +37,7 @@ export function Area({ area }) {
   const tab = getActiveTab(area);
   const entry = tab ? EDITOR_REGISTRY[tab.editorType] : null;
   const Body = entry?.component;
+  const Header = entry?.header ?? null;
   const isCanvasTab = !!tab && CANVAS_TAB_TYPES.has(tab.editorType);
 
   // BUG-001 instrumentation — log transitions so the Logs panel can
@@ -84,7 +85,12 @@ export function Area({ area }) {
   return (
     <div className="flex flex-col h-full w-full bg-background">
       <AreaTabBar area={area} />
-      <div className="flex-1 min-h-0 min-w-0">
+      {Header && (
+        <Suspense fallback={null}>
+          <Header />
+        </Suspense>
+      )}
+      <div className="flex-1 min-h-0 min-w-0 relative">
         <ErrorBoundary
           key={boundaryKey}
           label={entry?.label ?? tab?.editorType ?? 'area'}
