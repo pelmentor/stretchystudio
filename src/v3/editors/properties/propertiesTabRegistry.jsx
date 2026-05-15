@@ -15,16 +15,21 @@
  * visible when at least one of its sections is visible. This keeps
  * the tab bar self-syncing as section predicates evolve.
  *
- * Tab ordering follows Blender's grouping:
- *   1. Item                          (Object — Transform / Visibility / Info)
- *   2. Modifiers                     (Modifier stack)
- *   3. Object Data                   (Mesh / Vertex Groups / Shape Keys / Mask)
- *   4. Variant                       (SS-specific — variant↔base linking)
- *   5. Bone                          (bone-group rest + pose)
- *   6. Physics                       (Cubism pendulum config)
- *   7. Deformer                      (info / bindings / keyforms)
- *   8. Parameter                     (range / default)
- *   9. Rig                           (rig stage runners)
+ * Tab ordering mirrors Blender's `BCONTEXT_*` enum
+ * (`reference/blender/source/blender/editors/space_buttons/space_buttons.cc:218-252`)
+ * for the Object-relevant subset, then a `BCONTEXT_SEPARATOR`-style
+ * divider, then the SS-specific tabs:
+ *
+ *   Object · Modifiers · Physics · Object Data · Bone        ← Blender-faithful (subset)
+ *   ── separator ──
+ *   Variant · Deformer · Parameter · Rig                     ← SS-specific
+ *
+ * Blender's full Object-subgroup is OBJECT MODIFIER SHADERFX PARTICLE
+ * PHYSICS CONSTRAINT DATA BONE BONE_CONSTRAINT MATERIAL — SS skips
+ * SHADERFX (no shader graph), PARTICLE (no particle system), MATERIAL
+ * (no material datablock), and currently CONSTRAINT / BONE_CONSTRAINT
+ * (constraint stack data layer not yet implemented — tracked as
+ * deferred audit finding F-8 in the 2026-05-16 UI fidelity sweep).
  *
  * @module v3/editors/properties/propertiesTabRegistry
  */
@@ -53,13 +58,19 @@ import { PROPERTIES_SECTIONS, sectionsFor } from './sectionRegistry.jsx';
  * @property {string[]} sectionIds      Ordered list of section ids that
  *                                      live under this tab. Render order
  *                                      matches.
+ * @property {boolean} [separatorBefore]  Render a Blender-style
+ *                                      BCONTEXT_SEPARATOR divider in the
+ *                                      nav strip immediately above this
+ *                                      tab. Used between the Blender-
+ *                                      faithful subgroup and SS-specific
+ *                                      tabs.
  */
 
 /** @type {TabDef[]} */
 export const PROPERTIES_TABS = [
   {
-    id: 'item',
-    label: 'Item',
+    id: 'object',
+    label: 'Object',
     icon: <Box size={14} />,
     // Stage 1.E — `animData` lives under Item (the Object-level
     // metadata tab) so per-Object Action bindings appear alongside
@@ -124,6 +135,15 @@ export const PROPERTIES_TABS = [
     icon: <Wrench size={14} />,
     sectionIds: ['modifierStack'],
   },
+  // Blender enum order: PHYSICS comes BEFORE CONSTRAINT (deferred F-8) and
+  // BEFORE DATA. Pre-2026-05-16 SS placed Physics after Bone; restored to
+  // Blender order so muscle-memory click-targets land correctly.
+  {
+    id: 'physics',
+    label: 'Physics',
+    icon: <Zap size={14} />,
+    sectionIds: ['physics'],
+  },
   {
     id: 'data',
     label: 'Object Data',
@@ -131,22 +151,20 @@ export const PROPERTIES_TABS = [
     sectionIds: ['mesh', 'vertexGroups', 'shapeKeys', 'mask'],
   },
   {
-    id: 'variant',
-    label: 'Variant',
-    icon: <UserCircle2 size={14} />,
-    sectionIds: ['variant'],
-  },
-  {
     id: 'bone',
     label: 'Bone',
     icon: <Bone size={14} />,
     sectionIds: ['bone'],
   },
+  // ── BCONTEXT_SEPARATOR ─────────────────────────────────────────────
+  // SS-specific tabs (no Blender enum equivalent) — kept in their own
+  // group so the divider above signals they're outside the standard set.
   {
-    id: 'physics',
-    label: 'Physics',
-    icon: <Zap size={14} />,
-    sectionIds: ['physics'],
+    id: 'variant',
+    label: 'Variant',
+    icon: <UserCircle2 size={14} />,
+    sectionIds: ['variant'],
+    separatorBefore: true,
   },
   {
     id: 'deformer',

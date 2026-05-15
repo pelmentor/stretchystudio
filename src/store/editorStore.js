@@ -250,8 +250,11 @@ export const useEditorStore = create((set) => ({
    *  tab via a useEffect; it does NOT mutate this slot, so re-selecting
    *  the original kind brings the user's preferred tab back.
    *
-   *  Default `'item'` mirrors Blender's default Object tab. */
-  propertiesActiveTab: 'item',
+   *  Default `'object'` mirrors Blender's default Object tab
+   *  (BCONTEXT_OBJECT — `space_buttons.cc:218`). Pre-2026-05-16 the
+   *  tab id was `'item'` (SS vocabulary); renamed during the UI
+   *  Blender-fidelity sweep so the id matches the Blender enum name. */
+  propertiesActiveTab: 'object',
 
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to

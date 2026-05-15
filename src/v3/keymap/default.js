@@ -108,7 +108,7 @@ export const DEFAULT_KEYMAP = {
 
   // Edit-mode refactor — Tab toggles into a contextual edit mode based
   // on the active selection's type (Blender pattern). Meshed part →
-  // mesh edit. Bone-role group → skeleton edit. Already in edit mode
+  // Edit Mode. Bone-role group → Pose Mode. Already in edit mode
   // → exit. BlendShape edit is entered from BlendShapeTab where the
   // user picks which shape to paint.
   'Tab': 'mode.editToggle',

@@ -19,6 +19,7 @@
  * @module v3/editors/properties/PropertiesTabBar
  */
 
+import { Fragment } from 'react';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { PROPERTIES_TABS } from './propertiesTabRegistry.jsx';
 
@@ -43,27 +44,41 @@ export function PropertiesTabBar({ visibleTabIds, effectiveTab }) {
   const setActiveTab = useEditorStore((s) => s.setPropertiesActiveTab);
   const highlightTab = effectiveTab ?? stickyTab;
 
+  // Track whether ANY visible tab has been rendered yet so a leading
+  // separator on a hidden subgroup doesn't ghost a divider above the
+  // first-visible tab (e.g. when the entire Blender-faithful subgroup
+  // is invisible for the current selection).
+  let renderedAny = false;
   return (
     <div className="w-8 shrink-0 border-r border-border bg-muted/20 flex flex-col items-stretch py-1 gap-0.5">
       {PROPERTIES_TABS.map((tab) => {
         if (!visibleTabIds.has(tab.id)) return null;
         const isActive = tab.id === highlightTab;
+        const showSeparator = tab.separatorBefore && renderedAny;
+        renderedAny = true;
         return (
-          <button
-            key={tab.id}
-            type="button"
-            title={tab.label}
-            onClick={() => setActiveTab(tab.id)}
-            className={
-              `mx-0.5 h-7 flex items-center justify-center rounded-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60 ${
-                isActive
-                  ? 'bg-primary/15 text-primary'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-              }`
-            }
-          >
-            {tab.icon}
-          </button>
+          <Fragment key={tab.id}>
+            {showSeparator && (
+              <div
+                aria-hidden="true"
+                className="mx-1.5 my-0.5 h-px bg-border/60"
+              />
+            )}
+            <button
+              type="button"
+              title={tab.label}
+              onClick={() => setActiveTab(tab.id)}
+              className={
+                `mx-0.5 h-7 flex items-center justify-center rounded-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60 ${
+                  isActive
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                }`
+              }
+            >
+              {tab.icon}
+            </button>
+          </Fragment>
         );
       })}
     </div>

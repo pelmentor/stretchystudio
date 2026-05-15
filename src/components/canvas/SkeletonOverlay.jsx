@@ -208,9 +208,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     e.currentTarget.setPointerCapture(e.pointerId);
 
     if (dragType === 'joint') {
-      // Joint drag — only active in skeleton edit mode (Pose or Armature
-      // Edit). For Pose Mode, capture the rest-world inverse + pivot so
-      // the move handler can compute pose.x/y in one matrix-point multiply.
+      // Joint drag — only active in Pose Mode. (Pre-2026-05-06 the
+      // "Armature Edit" alt-mode also enabled this; mode consolidation
+      // collapsed it into Pose Mode as the sole bone-edit surface.)
+      // Capture the rest-world inverse + pivot so the move handler can
+      // compute pose.x/y in one matrix-point multiply.
       if (!skeletonEditMode) return;
       const drag = { type: 'joint', nodeId };
       const ed = useEditorStore.getState();

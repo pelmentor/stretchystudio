@@ -115,8 +115,11 @@ export function OutlinerEditor() {
       if (mode === 'rig') {
         if (it.type === 'deformer' || it.type === 'part') s.add(it.id);
       } else if (mode === 'skeleton') {
-        // Skeleton view is bone-only; only group selections matter
+        // Armature-data view is bone-only; only group selections matter
         // here. (Bones are stored as `type:'group'` with `boneRole`.)
+        // F-4 sweep will replace this display-mode with an
+        // OUTLINER_PT_filter-style popover that filters the View Layer
+        // tree by Object type instead of branching on a separate enum.
         if (it.type === 'group') s.add(it.id);
       } else {
         // viewLayer: unified tree carries both project nodes and

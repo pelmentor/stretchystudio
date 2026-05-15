@@ -534,7 +534,7 @@ function registerBuiltins() {
 
   // Edit mode toggle. Tab — Blender's universal "enter / exit edit
   // mode" gesture. Selection-driven: a meshed part enters mesh edit, a
-  // bone-role group enters skeleton edit. Already in edit mode → exits.
+  // bone-role group enters pose mode. Already in edit mode → exits.
   // Workspace does NOT gate this (matches Blender — workspace is
   // layout-only). BlendShape edit needs to know which shape, so it's
   // NOT bound here; user enters from BlendShapeTab's Edit button.

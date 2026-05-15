@@ -2,7 +2,7 @@
 
 /**
  * ModePill — canvas top-left overlay surfacing the contextual edit
- * mode. Blender's pattern: Object Mode / Edit Mode / Skeleton Edit /
+ * mode. Blender's pattern: Object Mode / Edit Mode / Pose Mode /
  * Blend Shape Paint as a dropdown rooted at the active selection.
  *
  * The pill is the discoverable affordance for edit modes — Tab still
@@ -13,7 +13,9 @@
  * Selection drives which rows are enabled:
  *   - Object Mode      — always available
  *   - Edit Mode (mesh) — meshed part selected
- *   - Skeleton Edit    — bone-role group selected
+ *   - Pose Mode        — bone-role group selected (was "Skeleton Edit"
+ *                        pre-2026-05-06; renamed to match Blender's
+ *                        OB_MODE_POSE in `DNA_object_enums.h`)
  *   - Blend Shape Paint — meshed part with blendShapes (sub-list of
  *                          shapes; each one enters editMode='blendShape'
  *                          with that shape as activeBlendShapeId)
@@ -227,7 +229,7 @@ export function ModePill() {
                        bg-muted/30 border border-border/50 rounded
                        px-2 py-1.5 mb-1 leading-snug"
           >
-            Select a meshed part to enter Edit Mode, or a bone group for Skeleton Edit.
+            Select a meshed part to enter Edit Mode, or a bone group for Pose Mode.
           </div>
         )}
         <ModeRow

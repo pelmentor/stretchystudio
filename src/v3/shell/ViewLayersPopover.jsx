@@ -17,7 +17,7 @@
  * State source of truth: `editorStore.viewLayers` map for visualization
  * + `editorStore.editMode` for the contextual edit slot. Workspace
  * policy dims/disables rows the active workspace forbids (e.g.
- * wireframe in Layout/Animation/Pose, skeleton edit outside Rigging)
+ * wireframe in Layout/Animation/Pose, pose-mode bone edit outside Rigging)
  * without mutating stored values, so flipping back to a permissive
  * workspace restores the user's setup.
  *
