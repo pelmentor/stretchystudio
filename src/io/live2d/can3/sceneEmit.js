@@ -119,7 +119,7 @@ export function emitAllScenes(x, actions, deps) {
       } else {
         emitMutableSequence(
           x, attrF, pidAttrF,
-          [{ time: 0, value: info.rest, easing: 'linear' }],
+          [{ time: 0, value: info.rest, interpolation: 'linear' }],
           fps, info.min, info.max,
         );
       }

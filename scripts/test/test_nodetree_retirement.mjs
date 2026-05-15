@@ -76,10 +76,12 @@ function* walkJsFiles(root) {
   }
 }
 
-// ---- 1. Schema version bumped to 38 ----
+// ---- 1. Schema version is at least 38 (NodeTree retirement landed) ----
+// Pre-v39 (Animation Phase 2.A BezTriple) this asserted exact equality at 38.
+// Schema kept advancing; the test pins the floor instead.
 
-assertEq(CURRENT_SCHEMA_VERSION, 38,
-  'CURRENT_SCHEMA_VERSION = 38 (NodeTree retirement bump)');
+assert(CURRENT_SCHEMA_VERSION >= 38,
+  'CURRENT_SCHEMA_VERSION ≥ 38 (NodeTree retirement landed)');
 
 // ---- 2a. v38 migration deletes project.nodeTrees ----
 
@@ -140,9 +142,11 @@ assertEq(CURRENT_SCHEMA_VERSION, 38,
     parameters: [],
   };
   migrateProject(project);
-  assertEq(project.schemaVersion, 38, 'e2e: schemaVersion bumped to 38');
+  // After Phase 2.A landed v39, the e2e walks past v38; pin the floor + the
+  // retirement invariant (nodeTrees stripped by the v38 step).
+  assert(project.schemaVersion >= 38, 'e2e: schemaVersion ≥ 38 after migrate');
   assert(!('nodeTrees' in project),
-    'e2e v0 → v38: no nodeTrees field on the migrated project');
+    'e2e v0 → v3x: no nodeTrees field on the migrated project');
 }
 
 // ---- 2f. v38 e2e via migrateProject (v37 fixture WITH nodeTrees → v38) ----
@@ -160,9 +164,9 @@ assertEq(CURRENT_SCHEMA_VERSION, 38,
     actions: [],
   };
   migrateProject(project);
-  assertEq(project.schemaVersion, 38, 'v37 → v38 fixture: schemaVersion bumped');
+  assert(project.schemaVersion >= 38, 'v37 → v3x fixture: schemaVersion ≥ 38');
   assert(!('nodeTrees' in project),
-    'v37 → v38 fixture: nodeTrees field stripped on migration');
+    'v37 → v3x fixture: nodeTrees field stripped on migration');
 }
 
 // ---- 3. v22 / v23 / v24 entries are ABSENT from MIGRATIONS (gap-tolerant walker) ----

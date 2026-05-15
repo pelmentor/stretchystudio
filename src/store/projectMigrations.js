@@ -98,6 +98,7 @@ import { migratePoseShapeRepair } from './migrations/v35_pose_shape_repair.js';
 import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
 import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
 import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.js';
+import { migrateBezTripleKeyforms } from './migrations/v39_beztriple_keyforms.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -656,6 +657,19 @@ const MIGRATIONS = {
   // See `src/store/migrations/v38_nodetree_retirement.js`.
   38: (project) => {
     migrateNodeTreeRetirement(project);
+    return project;
+  },
+
+  // v39 — Animation Phase 2.A: BezTriple keyform shape.
+  // Replaces `{time, value, type?, easing?}` with the Blender-BezTriple
+  // shape `{time, value, handleLeft, handleRight, handleType, interpolation, flag}`.
+  // Drops the legacy `type` + `easing` fields per Rule №2 (no migration
+  // baggage). Both eval paths (`evaluateFCurve` + `interpolateTrack`)
+  // converge on `interpolation` post-v39.
+  //
+  // See `src/store/migrations/v39_beztriple_keyforms.js`.
+  39: (project) => {
+    migrateBezTripleKeyforms(project);
     return project;
   },
 

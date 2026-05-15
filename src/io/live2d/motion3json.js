@@ -101,7 +101,7 @@ export function generateMotion3Json(action, opts = {}) {
       const indexKeyframes = kfs.map((kf, idx) => ({
         time: kf.time,
         value: idx,
-        easing: kf.easing ?? 'linear',
+        interpolation: kf.interpolation ?? 'linear',
       }));
       const segments = encodeKeyframesToSegments(indexKeyframes, durationSec);
       if (segments.length === 0) continue;
@@ -178,9 +178,19 @@ function resolveFCurveMapping(target, parameterMap) {
 }
 
 /**
- * Encode keyframes into the flat segment array format used by .motion3.json.
+ * Encode v39 BezTriple keyframes into the flat segment array format
+ * used by .motion3.json.
  *
- * @param {Array<{time: number, value: number, easing?: string}>} keyframes
+ * Each segment in `.motion3.json` carries a 1-byte type code plus
+ * type-specific payload (linear=2 floats, bezier=6 floats, etc.).
+ *
+ * Slice 2.A reads the v39 `interpolation` field. Bezier segments still
+ * use the legacy 1/3-2/3 control-point approximation — Slice 2.G upgrades
+ * this branch to derive `cx1/cy1/cx2/cy2` from `kf.handleLeft` /
+ * `prevKf.handleRight` so round-tripped Cubism imports preserve their
+ * authored handle vectors.
+ *
+ * @param {Array<{time: number, value: number, interpolation?: string}>} keyframes
  * @param {number} durationSec - Total duration in seconds
  * @returns {number[]} Flat segment array
  */
@@ -198,14 +208,16 @@ export function encodeKeyframesToSegments(keyframes, durationSec) {
     const kf = sorted[i];
     const timeSec = kf.time / 1000;
 
-    // Determine segment type from easing
-    const segType = easingToSegmentType(kf.easing);
+    // The segment-type discriminator lives on the SEGMENT-START
+    // keyform's `interpolation` (Cubism convention; Blender does the
+    // same — `BezTriple.ipo` of keyform `i` controls the curve from
+    // `i` to `i+1`).
+    const prevKf = sorted[i - 1];
+    const segType = interpolationToSegmentType(prevKf.interpolation);
     segments.push(segType);
 
     if (segType === 1) {
-      // Bezier: compute control points
-      // For now, use simple cubic approximation (1/3, 2/3 rule)
-      const prevKf = sorted[i - 1];
+      // Bezier: 1/3-2/3 placeholder until Slice 2.G derives from handles.
       const prevTime = prevKf.time / 1000;
       const dt = timeSec - prevTime;
       const cx1 = prevTime + dt / 3;
@@ -223,23 +235,21 @@ export function encodeKeyframesToSegments(keyframes, durationSec) {
 }
 
 /**
- * Map Stretchy Studio easing names to Live2D segment type codes.
+ * Map a v39 `interpolation` enum to a Live2D segment type code.
+ * Named easings (sine/quad/...) get baked to bezier segments at export
+ * time per ANIMATION_BLENDER_PARITY_PLAN.md §2.G — Slice 2.G ships that.
  *
- * @param {string} [easing='linear']
+ * @param {string} [interpolation='linear']
  * @returns {number} 0=linear, 1=bezier, 2=stepped, 3=inverse-stepped
  */
-function easingToSegmentType(easing = 'linear') {
-  switch (easing) {
-    case 'ease-in':
-    case 'ease-out':
-    case 'ease-in-out':
+function interpolationToSegmentType(interpolation = 'linear') {
+  switch (interpolation) {
     case 'bezier':
+    case 'sine': case 'quad': case 'cubic': case 'quart': case 'quint':
+    case 'expo': case 'circ': case 'back': case 'bounce': case 'elastic':
       return 1;
-    case 'stepped':
-    case 'step':
+    case 'constant':
       return 2;
-    case 'inverse-stepped':
-      return 3;
     default:
       return 0; // linear
   }

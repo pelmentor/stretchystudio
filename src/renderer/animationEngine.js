@@ -1,9 +1,19 @@
 /**
  * Animation engine — keyform interpolation utilities.
  *
- * Action data model (stored in project.actions, post-v36):
+ * Action data model (stored in project.actions, post-v36 + v39 BezTriple):
  *   { id, name, duration (ms), fps,
- *     fcurves: [{ rnaPath, keyforms: [{ time (ms), value, easing, type }] }] }
+ *     fcurves: [{ rnaPath, keyforms: [
+ *       { time (ms), value,
+ *         handleLeft, handleRight, handleType,
+ *         interpolation,    // 'constant'|'linear'|'bezier'|<10 named easings>
+ *         easeMode?, autoHandleType?, flag } ] }] }
+ *
+ * Slice 2.A: 'bezier' interpolation uses the legacy ease-both preset
+ * (cubic-bezier 0.42, 0, 0.58, 1) so freshly migrated v39 keyforms
+ * evaluate identically to their pre-migration ease/ease-both behavior.
+ * Slice 2.C swaps the preset for per-keyform `handleLeft`/`handleRight`
+ * handle-derived control points + the 10 named easings.
  *
  * Targets (decoded via `decodeFCurveTarget` from `anim/animationFCurve.js`):
  *   - param target  → `objects["__params__"].values["<paramId>"]`
@@ -13,7 +23,7 @@
  */
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
-import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve } from '../anim/animationFCurve.js';
+import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -52,24 +62,29 @@ export function evaluateCubicBezier(x, cx1, cy1, cx2, cy2) {
 }
 
 /**
- * Evaluate a given easing shape
+ * Evaluate the parametric easing shape for a v39 BezTriple keyform.
+ *
+ * Slice 2.A wires the field rename: reads `interpolation` (post-v39)
+ * instead of `easing` (pre-v39). Behavior preserved for `'bezier'` via
+ * the legacy ease-both preset (0.42, 0, 0.58, 1) so freshly migrated
+ * keyforms evaluate identically to their pre-migration shape.
+ *
+ * Slice 2.C will replace the `'bezier'` branch with per-keyform
+ * `handleLeft`/`handleRight`-derived control points + add the 10 named
+ * easings (sine/quad/.../elastic).
+ *
+ * @param {number} t                            -- 0..1 segment parameter
+ * @param {string|undefined} interpolation      -- 'constant'|'linear'|'bezier'|<named easings>
+ * @returns {number}
  */
-export function evaluateEasing(t, easing) {
-  if (easing === 'linear') return t;
-  if (!easing || easing === 'ease' || easing === 'ease-both') {
-    // defaults to standard smooth curve (Ease Both)
+export function evaluateEasing(t, interpolation) {
+  if (interpolation === 'linear') return t;
+  if (interpolation === 'constant') return 0;
+  if (interpolation === 'bezier' || !interpolation) {
     return evaluateCubicBezier(t, 0.42, 0, 0.58, 1);
   }
-  if (easing === 'ease-in') {
-    return evaluateCubicBezier(t, 0.42, 0, 1, 1);
-  }
-  if (easing === 'ease-out') {
-    return evaluateCubicBezier(t, 0, 0, 0.58, 1);
-  }
-  if (easing === 'stepped') return 0;
-  if (Array.isArray(easing) && easing.length === 4) {
-    return evaluateCubicBezier(t, easing[0], easing[1], easing[2], easing[3]);
-  }
+  // Named easings (sine, quad, cubic, ...) ship in Slice 2.C.
+  // Until then they degrade to linear interpolation.
   return t;
 }
 
@@ -98,7 +113,7 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
       const kLast = keyframes[keyframes.length - 1];
       const kFirst = keyframes[0];
       const t = (timeMs - kLast.time) / (endMs - kLast.time);
-      const te = evaluateEasing(t, kLast.easing);
+      const te = evaluateEasing(t, kLast.interpolation);
       return lerp(kLast.value, kFirst.value, te);
     }
     return keyframes[keyframes.length - 1].value;
@@ -116,7 +131,7 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
   const kA = keyframes[lo];
   const kB = keyframes[lo + 1];
   const t  = (timeMs - kA.time) / (kB.time - kA.time);
-  const te = evaluateEasing(t, kA.easing); // Easing from the *start* keyframe of the segment
+  const te = evaluateEasing(t, kA.interpolation); // Interpolation from the *start* keyframe of the segment
 
   if (typeof kA.value === 'boolean') {
     // Discrete step interpolation for boolean properties like 'visible'
@@ -139,7 +154,7 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
       const kLast = keyframes[keyframes.length - 1];
       const kFirst = keyframes[0];
       const t = (timeMs - kLast.time) / (endMs - kLast.time);
-      const te = evaluateEasing(t, kLast.easing);
+      const te = evaluateEasing(t, kLast.interpolation);
 
       return kLast.value.map((vA, i) => {
         const vB = kFirst.value[i];
@@ -161,7 +176,7 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
   const kA = keyframes[lo];
   const kB = keyframes[lo + 1];
   const t  = (timeMs - kA.time) / (kB.time - kA.time);
-  const te = evaluateEasing(t, kA.easing); // Easing from the *start* keyframe of the segment
+  const te = evaluateEasing(t, kA.interpolation); // Interpolation from the *start* keyframe of the segment
 
   return kA.value.map((vA, i) => {
     const vB = kB.value[i];
@@ -245,22 +260,37 @@ export function computeParamOverrides(action, timeMs, loopKeyframes = false, end
 }
 
 /**
- * Insert or update a keyform in an fcurve's keyforms array (mutates in
- * place). Keeps keyforms sorted by time. Derives `type` from `easing`
- * the same way `animationFCurve.normalizeKeyforms` does so a freshly
- * authored keyform evaluates identically to one minted by the v36
- * migration.
+ * Insert or update a v39 BezTriple-shape keyform in an fcurve's
+ * keyforms array (mutates in place). Keeps keyforms sorted by time.
+ *
+ * The third argument is the LEGACY easing-name vocabulary the
+ * pre-v39 timeline UI dropdown emitted (`'ease-both'`, `'ease-in'`,
+ * `'stepped'`, `'constant'`, etc.). It is mapped to the v39
+ * `interpolation` enum + handle types via the same table used by the
+ * v39 migration. Pre-existing call-sites pass legacy strings; new
+ * call-sites can pass `'linear'|'constant'|'bezier'` directly (those
+ * are valid both as legacy easing names and v39 interpolation values).
+ *
+ * @param {Array<*>} keyforms
+ * @param {number} timeMs
+ * @param {number|boolean} value
+ * @param {string} [easing='ease-both']
  */
-const HOLD_EASINGS_FOR_UPSERT = new Set(['constant', 'hold']);
 export function upsertKeyframe(keyforms, timeMs, value, easing = 'ease-both') {
-  const type = HOLD_EASINGS_FOR_UPSERT.has(easing) ? 'constant' : 'linear';
-  const existing = keyforms.find(kf => kf.time === timeMs);
+  const kf = makeBezTripleKeyform({ time: timeMs, value, easing });
+  if (!kf) return;
+  const existing = keyforms.find(k => k.time === timeMs);
   if (existing) {
-    existing.value  = value;
-    existing.easing = easing;
-    existing.type   = type;
+    existing.value        = kf.value;
+    existing.handleLeft   = kf.handleLeft;
+    existing.handleRight  = kf.handleRight;
+    existing.handleType   = kf.handleType;
+    existing.interpolation = kf.interpolation;
+    existing.flag         = kf.flag;
+    delete existing.easing;
+    delete existing.type;
   } else {
-    keyforms.push({ time: timeMs, value, easing, type });
+    keyforms.push(kf);
     keyforms.sort((a, b) => a.time - b.time);
   }
 }

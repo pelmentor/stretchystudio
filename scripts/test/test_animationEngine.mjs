@@ -56,32 +56,29 @@ function near(a, b, eps = 1e-3) {
 // ── evaluateEasing ─────────────────────────────────────────────────
 
 {
+  // v39 BezTriple: evaluateEasing now reads `interpolation` (was `easing`).
   // Linear is identity
   for (const t of [0, 0.25, 0.5, 0.75, 1]) {
     assert(evaluateEasing(t, 'linear') === t, `linear: ${t} → ${t}`);
   }
 
-  // Stepped always returns 0 (until next keyframe)
-  assert(evaluateEasing(0.5, 'stepped') === 0, 'stepped: anywhere → 0');
-  assert(evaluateEasing(0.99, 'stepped') === 0, 'stepped: near 1 → 0');
+  // Constant always returns 0 (until next keyframe — caller picks left value)
+  assert(evaluateEasing(0.5, 'constant') === 0, 'constant: anywhere → 0');
+  assert(evaluateEasing(0.99, 'constant') === 0, 'constant: near 1 → 0');
 
-  // Default / undefined / 'ease' / 'ease-both' all use the standard ease curve
+  // Default / undefined / 'bezier' all use the legacy ease-both preset (Slice 2.A).
   const t = 0.3;
-  const std = evaluateEasing(t, 'ease');
-  assert(near(evaluateEasing(t, undefined), std), 'undefined → ease');
-  assert(near(evaluateEasing(t, null), std), 'null → ease');
-  assert(near(evaluateEasing(t, 'ease-both'), std), 'ease-both = ease');
+  const std = evaluateEasing(t, 'bezier');
+  assert(near(evaluateEasing(t, undefined), std), 'undefined → bezier preset');
+  assert(near(evaluateEasing(t, null), std), 'null → bezier preset');
 
-  // Custom 4-tuple easing accepted
-  const custom = evaluateEasing(0.5, [0, 0, 1, 1]); // y=x linear shape
-  assert(near(custom, 0.5), 'custom [0,0,1,1] linear control points');
-
-  // Unknown easing string falls back to t
-  assert(evaluateEasing(0.7, 'banana') === 0.7, 'unknown easing string → linear');
+  // Named easings (Slice 2.C) currently degrade to linear.
+  assert(evaluateEasing(0.5, 'sine') === 0.5, 'sine: degrades to linear in Slice 2.A');
+  assert(evaluateEasing(0.5, 'quad') === 0.5, 'quad: degrades to linear in Slice 2.A');
 
   // Boundary values
-  assert(evaluateEasing(0, 'ease') === 0, 'ease at 0 = 0');
-  assert(near(evaluateEasing(1, 'ease'), 1), 'ease at 1 = 1');
+  assert(evaluateEasing(0, 'bezier') === 0, 'bezier at 0 = 0');
+  assert(near(evaluateEasing(1, 'bezier'), 1), 'bezier at 1 = 1');
 }
 
 // ── interpolateTrack ───────────────────────────────────────────────
@@ -94,17 +91,17 @@ function near(a, b, eps = 1e-3) {
 
 {
   // Single keyframe: any time returns its value
-  const kfs = [{ time: 100, value: 42, easing: 'linear' }];
+  const kfs = [{ time: 100, value: 42, interpolation: 'linear' }];
   assert(interpolateTrack(kfs, 0) === 42, 'single kf: time before → value');
   assert(interpolateTrack(kfs, 100) === 42, 'single kf: time at → value');
   assert(interpolateTrack(kfs, 200) === 42, 'single kf: time after → value');
 }
 
 {
-  // Two-keyframe linear interp
+  // Two-keyframe linear interp (v39 BezTriple shape)
   const kfs = [
-    { time: 0,    value: 0,   easing: 'linear' },
-    { time: 100,  value: 100, easing: 'linear' },
+    { time: 0,    value: 0,   interpolation: 'linear' },
+    { time: 100,  value: 100, interpolation: 'linear' },
   ];
   assert(interpolateTrack(kfs, 50) === 50, 'linear midpoint');
   assert(interpolateTrack(kfs, 25) === 25, 'linear quarter');
@@ -117,9 +114,9 @@ function near(a, b, eps = 1e-3) {
 {
   // Three-keyframe lookup picks the right segment
   const kfs = [
-    { time: 0,   value: 0,   easing: 'linear' },
-    { time: 100, value: 50,  easing: 'linear' },
-    { time: 200, value: 0,   easing: 'linear' },
+    { time: 0,   value: 0,   interpolation: 'linear' },
+    { time: 100, value: 50,  interpolation: 'linear' },
+    { time: 200, value: 0,   interpolation: 'linear' },
   ];
   assert(interpolateTrack(kfs, 50)  === 25, 'segment 1: linear interp');
   assert(interpolateTrack(kfs, 100) === 50, 'at second kf');
@@ -129,8 +126,8 @@ function near(a, b, eps = 1e-3) {
 {
   // Loop wrap-around: at endMs the track should ramp back toward kf[0]
   const kfs = [
-    { time: 0,   value: 0,   easing: 'linear' },
-    { time: 100, value: 100, easing: 'linear' },
+    { time: 0,   value: 0,   interpolation: 'linear' },
+    { time: 100, value: 100, interpolation: 'linear' },
   ];
   // timeMs = 150 (between last kf and endMs=200); should ramp toward 0
   const v = interpolateTrack(kfs, 150, true, 200);
@@ -160,7 +157,12 @@ function near(a, b, eps = 1e-3) {
   assert(kfs.length === 3, 'upsert: same time → replace, no growth');
   const at100 = kfs.find(k => k.time === 100);
   assert(at100.value === 999, 'upsert: same time → new value');
-  assert(at100.easing === 'ease', 'upsert: same time → new easing');
+  // v39: legacy 'ease' string maps to interpolation='bezier' via the factory.
+  assert(at100.interpolation === 'bezier', 'upsert: legacy ease → interpolation=bezier');
+  assert(at100.handleType.left === 'auto' && at100.handleType.right === 'auto',
+    'upsert: ease → auto/auto handles');
+  assert(at100.easing === undefined, 'upsert: legacy easing field cleared');
+  assert(at100.type === undefined, 'upsert: legacy type field cleared');
 }
 
 // ── computePoseOverrides ───────────────────────────────────────────
@@ -181,15 +183,15 @@ function near(a, b, eps = 1e-3) {
       {
         id: 'a.x', rnaPath: 'objects["a"].x', arrayIndex: 0, modifiers: [],
         keyforms: [
-          { time: 0, value: 0, easing: 'linear', type: 'linear' },
-          { time: 100, value: 100, easing: 'linear', type: 'linear' },
+          { time: 0, value: 0, interpolation: 'linear' },
+          { time: 100, value: 100, interpolation: 'linear' },
         ],
       },
       {
         id: 'a.opacity', rnaPath: 'objects["a"].opacity', arrayIndex: 0, modifiers: [],
         keyforms: [
-          { time: 0, value: 1, easing: 'linear', type: 'linear' },
-          { time: 100, value: 0, easing: 'linear', type: 'linear' },
+          { time: 0, value: 1, interpolation: 'linear' },
+          { time: 100, value: 0, interpolation: 'linear' },
         ],
       },
     ],

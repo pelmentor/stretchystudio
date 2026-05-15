@@ -23,63 +23,169 @@
  * numeric branch in Blender and parse-fail. Phase 1 audit-fix sweep
  * 2026-05-11 normalised the project-wide grammar.
  *
- * # Easing → type mapping
+ * # Keyform shape (post-v39)
  *
- * The FCurve evaluator (`anim/fcurve.js#evaluateFCurve`) reads
- * `keyform.type ∈ {'linear', 'constant', 'bezier'}`. Phase 1 keyforms
- * still carry the legacy `easing` string for forward-compat with the
- * Phase 2 BezTriple migration; this module derives `type` from `easing`
- * the same way the v36 migration does. The two derivations MUST stay
- * in sync — either both branches treat 'constant'/'hold' as constant,
- * else the migration produces fcurves that don't evaluate the same as
- * fresh authored ones.
+ * Every keyform is Blender's `BezTriple` shape:
+ *   { time, value,
+ *     handleLeft:{time,value}, handleRight:{time,value},
+ *     handleType:{left,right},   // 'free'|'aligned'|'vector'|'auto'|'auto_clamped'
+ *     interpolation,             // 'constant'|'linear'|'bezier'|<10 named easings>
+ *     easeMode?, autoHandleType?, flag }
+ *
+ * The single `interpolation` field replaced the pre-v39 split between
+ * `easing` (read by `interpolateTrack`) and `type` (read by
+ * `evaluateFCurve`). Both evaluators converge on `interpolation` as the
+ * sole discriminator. See `store/migrations/v39_beztriple_keyforms.js`
+ * for the legacy → BezTriple field mapping.
+ *
+ * `normalizeKeyforms` is the canonical write-side factory: anything
+ * that constructs a fresh keyform should funnel through here so the new
+ * shape stays single-sourced. Loose `{time, value, easing}` input is
+ * accepted for back-compat with motion3json import + idle generator,
+ * which carry the legacy easing-name vocabulary.
  *
  * @module anim/animationFCurve
  */
 
 import { evaluateFCurve } from './fcurve.js';
 
-/** Easing values that collapse to constant-step keyforms. */
-const HOLD_EASINGS = new Set(['constant', 'hold']);
+/** Legacy easing names that collapse to constant-step keyforms. */
+const HOLD_EASINGS = new Set(['constant', 'hold', 'stepped', 'inverse-stepped']);
+/** Legacy easing names that map to 'bezier' interpolation. */
+const BEZIER_EASING_NAMES = new Set(['ease', 'ease-both', 'ease-in-out', 'bezier']);
+/** Legacy ease-in / ease-out get free-handle on the lopsided side. */
+const ASYMMETRIC_BEZIER_EASINGS = new Set(['ease-in', 'ease-out']);
 
 /**
+ * Map a legacy easing token (string OR `[c1,c2,c3,c4]` cubic-bezier
+ * coefficient array) plus a legacy type discriminator to the v39
+ * `interpolation` enum + handle-type pair.
+ *
+ * Mirrors `legacyToBezTripleShape` in the v39 migration; kept in sync
+ * by exporting a shared internal helper would couple the migration
+ * module to runtime code, which it shouldn't (migrations should be
+ * frozen at their shipping state). The two impls MUST agree on the
+ * mapping table.
+ *
+ * @param {string|number[]|undefined} legacyEasing
+ * @param {string|undefined} legacyType
+ * @returns {{
+ *   interpolation: 'constant'|'linear'|'bezier',
+ *   handleType: { left: string, right: string }
+ * }}
+ */
+function legacyEasingToInterpolation(legacyEasing, legacyType) {
+  if (legacyType === 'constant' || (typeof legacyEasing === 'string' && HOLD_EASINGS.has(legacyEasing))) {
+    return { interpolation: 'constant', handleType: { left: 'vector', right: 'vector' } };
+  }
+  if (Array.isArray(legacyEasing) && legacyEasing.length === 4) {
+    return { interpolation: 'bezier', handleType: { left: 'free', right: 'free' } };
+  }
+  if (legacyType === 'bezier' || (typeof legacyEasing === 'string' && BEZIER_EASING_NAMES.has(legacyEasing))) {
+    return { interpolation: 'bezier', handleType: { left: 'auto', right: 'auto' } };
+  }
+  if (typeof legacyEasing === 'string' && ASYMMETRIC_BEZIER_EASINGS.has(legacyEasing)) {
+    if (legacyEasing === 'ease-in') {
+      return { interpolation: 'bezier', handleType: { left: 'free', right: 'auto' } };
+    }
+    return { interpolation: 'bezier', handleType: { left: 'auto', right: 'free' } };
+  }
+  return { interpolation: 'linear', handleType: { left: 'vector', right: 'vector' } };
+}
+
+/**
+ * @typedef {Object} HandlePoint
+ * @property {number} time
+ * @property {number} value
+ *
+ * @typedef {Object} BezTripleKeyform
+ * @property {number} time
+ * @property {number} value
+ * @property {HandlePoint} handleLeft
+ * @property {HandlePoint} handleRight
+ * @property {{left:string, right:string}} handleType
+ * @property {('constant'|'linear'|'bezier'|'sine'|'quad'|'cubic'|'quart'|'quint'|'expo'|'circ'|'back'|'bounce'|'elastic')} interpolation
+ * @property {('auto'|'in'|'out'|'inout')} [easeMode]
+ * @property {('normal'|'locked_final')} [autoHandleType]
+ * @property {number} flag
+ *
  * @typedef {Object} KeyformLike
  * @property {number} time
  * @property {number} value
- * @property {string} [easing]
- * @property {('linear'|'constant'|'bezier')} [type]
+ * @property {string} [easing]                       -- legacy input: 'linear'|'ease'|'ease-both'|'ease-in'|'ease-out'|'stepped'|'constant'|'hold'|'inverse-stepped'|'bezier'
+ * @property {string} [type]                          -- legacy input: 'linear'|'constant'|'bezier'
+ * @property {string} [interpolation]                 -- v39+ input: passes through unchanged
+ * @property {HandlePoint} [handleLeft]
+ * @property {HandlePoint} [handleRight]
+ * @property {{left:string, right:string}} [handleType]
  *
  * @typedef {Object} FCurve
  * @property {string} id
  * @property {string} rnaPath
  * @property {number} arrayIndex
- * @property {Array<{time:number, value:number, easing:string, type:('linear'|'constant'|'bezier')}>} keyforms
+ * @property {BezTripleKeyform[]} keyforms
  * @property {Array<*>} modifiers
  * @property {string} extrapolation
  * @property {object} [driver]
  */
 
 /**
- * Build a kit of `{time, value, easing, type}` keyforms from a loose
- * input array. Drops malformed entries; defaults missing easing to
- * 'linear'; derives `type` per the easing → type mapping.
+ * Build a v39 BezTriple-shaped keyform from a loose record. Accepts
+ * legacy `{time, value, easing/type}` input (back-compat for motion3
+ * import + idle generator + UI menu strings) and emits a complete
+ * BezTriple. Pass-through on already-v39 input (idempotent).
+ *
+ * @param {KeyformLike} input
+ * @returns {BezTripleKeyform|null}
+ */
+export function makeBezTripleKeyform(input) {
+  if (!input || typeof input.time !== 'number' || typeof input.value !== 'number') return null;
+  // Already v39 shape — clone with field defaults filled in.
+  if (typeof input.interpolation === 'string') {
+    return {
+      time: input.time,
+      value: input.value,
+      handleLeft: input.handleLeft ?? { time: input.time, value: input.value },
+      handleRight: input.handleRight ?? { time: input.time, value: input.value },
+      handleType: input.handleType ?? { left: 'vector', right: 'vector' },
+      interpolation: /** @type {any} */ (input.interpolation),
+      flag: 0,
+    };
+  }
+  const { interpolation, handleType } = legacyEasingToInterpolation(input.easing, input.type);
+  // Default handle vectors at the keyform position (zero-length).
+  // Slice 2.D's auto-handle calculator computes proper neighbour-aware
+  // vectors when interpolation === 'bezier' and handleType.* === 'auto'.
+  let handleLeft = { time: input.time, value: input.value };
+  let handleRight = { time: input.time, value: input.value };
+  if (Array.isArray(input.easing) && input.easing.length === 4) {
+    handleRight = { time: input.easing[0], value: input.easing[1] };
+    handleLeft = { time: input.easing[2], value: input.easing[3] };
+  }
+  return {
+    time: input.time,
+    value: input.value,
+    handleLeft,
+    handleRight,
+    handleType,
+    interpolation,
+    flag: 0,
+  };
+}
+
+/**
+ * Build a kit of v39 BezTriple keyforms from a loose input array.
+ * Drops malformed entries.
  *
  * @param {Array<KeyformLike>} input
- * @returns {Array<{time:number, value:number, easing:string, type:('linear'|'constant'|'bezier')}>}
+ * @returns {BezTripleKeyform[]}
  */
 export function normalizeKeyforms(input) {
   const out = [];
   if (!Array.isArray(input)) return out;
   for (const kf of input) {
-    if (typeof kf?.time !== 'number' || typeof kf?.value !== 'number') continue;
-    const easing = typeof kf.easing === 'string' ? kf.easing
-                : (typeof kf.type === 'string' ? kf.type : 'linear');
-    out.push({
-      time: kf.time,
-      value: kf.value,
-      easing,
-      type: /** @type {'linear'|'constant'|'bezier'} */ (HOLD_EASINGS.has(easing) ? 'constant' : 'linear'),
-    });
+    const made = makeBezTripleKeyform(kf);
+    if (made) out.push(made);
   }
   return out;
 }

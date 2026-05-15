@@ -7,6 +7,11 @@
 // is what feeds Meta.TotalSegmentCount / TotalPointCount, which
 // Cubism Viewer validates strictly.
 //
+// Phase 2.A (v39): the segment-type discriminator now lives on the
+// SEGMENT-START keyform's `interpolation` field (was `easing` on the
+// segment-END pre-v39). This matches Blender's BezTriple convention
+// where `bezt.ipo` of keyform i controls the curve from i to i+1.
+//
 // Run: node scripts/test/test_motion3json.mjs
 
 import {
@@ -38,7 +43,7 @@ function near(a, b, eps = 1e-9) {
 {
   // Single keyframe: [time, value] only
   const segs = encodeKeyframesToSegments(
-    [{ time: 1000, value: 0.5, easing: 'linear' }], 8,
+    [{ time: 1000, value: 0.5, interpolation: 'linear' }], 8,
   );
   assert(segs.length === 2, 'encode: single keyframe = 2 floats');
   assert(near(segs[0], 1.0), 'encode: time in seconds (1000ms → 1.0)');
@@ -46,10 +51,10 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // Two linear keyframes
+  // Two linear keyforms (segment from kf0 to kf1, controlled by kf0.interpolation)
   const segs = encodeKeyframesToSegments([
-    { time: 0,    value: 0,   easing: 'linear' },
-    { time: 1000, value: 0.5, easing: 'linear' },
+    { time: 0,    value: 0,   interpolation: 'linear' },
+    { time: 1000, value: 0.5, interpolation: 'linear' },
   ], 8);
   // Expected: [0, 0, 0(linear), 1.0, 0.5]
   assert(segs.length === 5, 'encode: 2 linear kfs = 5 floats');
@@ -60,15 +65,15 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // Bezier segment uses 6 control floats
+  // Bezier segment uses 6 control floats. Discriminator on START keyform (kf0).
   const segs = encodeKeyframesToSegments([
-    { time: 0,    value: 0,   easing: 'linear' },
-    { time: 1000, value: 1.0, easing: 'bezier' },
+    { time: 0,    value: 0,   interpolation: 'bezier' },
+    { time: 1000, value: 1.0, interpolation: 'linear' },
   ], 8);
   // [0, 0, 1(bezier), cx1, cy1, cx2, cy2, time, value] = 9 floats
   assert(segs.length === 9, 'encode: 1 bezier segment = 9 floats');
   assert(segs[2] === 1, 'encode: bezier type = 1');
-  // Control points use 1/3, 2/3 rule between prev (0,0) and curr (1, 1)
+  // Slice 2.A: control points use 1/3, 2/3 placeholder until Slice 2.G derives from handles.
   assert(near(segs[3], 1 / 3), 'encode: bezier cx1');
   assert(near(segs[4], 0),     'encode: bezier cy1');
   assert(near(segs[5], 2 / 3), 'encode: bezier cx2');
@@ -78,63 +83,45 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // Stepped segment
+  // Constant segment (was 'stepped' pre-v39). Discriminator on START keyform.
   const segs = encodeKeyframesToSegments([
-    { time: 0,    value: 0,   easing: 'linear' },
-    { time: 500,  value: 1,   easing: 'stepped' },
+    { time: 0,    value: 0,   interpolation: 'constant' },
+    { time: 500,  value: 1,   interpolation: 'linear' },
   ], 8);
-  assert(segs[2] === 2, 'encode: stepped type = 2');
+  assert(segs[2] === 2, 'encode: constant interpolation → segment type = 2');
 }
 
 {
-  // 'step' alias for stepped
-  const segs = encodeKeyframesToSegments([
-    { time: 0, value: 0, easing: 'linear' },
-    { time: 500, value: 1, easing: 'step' },
-  ], 8);
-  assert(segs[2] === 2, 'encode: "step" alias = 2');
-}
-
-{
-  // 'inverse-stepped'
-  const segs = encodeKeyframesToSegments([
-    { time: 0, value: 0, easing: 'linear' },
-    { time: 500, value: 1, easing: 'inverse-stepped' },
-  ], 8);
-  assert(segs[2] === 3, 'encode: inverse-stepped = 3');
-}
-
-{
-  // ease-in / ease-out / ease-in-out all map to bezier (type 1)
-  for (const e of ['ease-in', 'ease-out', 'ease-in-out']) {
+  // Named easings (Slice 2.C ships their preset curves) all map to bezier (type 1).
+  for (const interp of ['sine', 'quad', 'cubic', 'expo', 'bounce']) {
     const segs = encodeKeyframesToSegments([
-      { time: 0, value: 0, easing: 'linear' },
-      { time: 500, value: 1, easing: e },
+      { time: 0, value: 0, interpolation: interp },
+      { time: 500, value: 1, interpolation: 'linear' },
     ], 8);
     if (segs[2] !== 1) {
-      failed++; console.error(`FAIL: ${e} should be bezier`); break;
+      failed++; console.error(`FAIL: ${interp} should be bezier (type 1)`); break;
     }
   }
   passed++;
 }
 
 {
-  // Unknown easing → linear (default)
+  // Unknown / missing interpolation → linear (default)
   const segs = encodeKeyframesToSegments([
-    { time: 0, value: 0, easing: 'linear' },
-    { time: 500, value: 1, easing: 'banana' },
+    { time: 0, value: 0 }, // no interpolation
+    { time: 500, value: 1, interpolation: 'linear' },
   ], 8);
-  assert(segs[2] === 0, 'encode: unknown easing → linear (0)');
+  assert(segs[2] === 0, 'encode: missing interpolation → linear (0)');
 }
 
 {
-  // Out-of-order keyframes get sorted
+  // Out-of-order keyforms get sorted
   const segs = encodeKeyframesToSegments([
-    { time: 1000, value: 1, easing: 'linear' },
-    { time: 0,    value: 0, easing: 'linear' },
+    { time: 1000, value: 1, interpolation: 'linear' },
+    { time: 0,    value: 0, interpolation: 'linear' },
   ], 8);
   // Should start with [0, 0, ...] (the time=0 kf)
-  assert(segs[0] === 0 && segs[1] === 0, 'encode: keyframes sorted by time');
+  assert(segs[0] === 0 && segs[1] === 0, 'encode: keyforms sorted by time');
   assert(near(segs[3], 1.0) && near(segs[4], 1.0), 'encode: sorted second kf');
 }
 
@@ -152,8 +139,8 @@ function near(a, b, eps = 1e-9) {
 {
   // Linear: 1 segment, 2 points (start + 1)
   const segs = encodeKeyframesToSegments([
-    { time: 0,    value: 0, easing: 'linear' },
-    { time: 1000, value: 1, easing: 'linear' },
+    { time: 0,    value: 0, interpolation: 'linear' },
+    { time: 1000, value: 1, interpolation: 'linear' },
   ], 8);
   const info = countSegmentsAndPoints(segs);
   assert(info.segments === 1, 'count: 1 linear segment');
@@ -163,8 +150,8 @@ function near(a, b, eps = 1e-9) {
 {
   // Bezier: 1 segment, 4 points (start + 3 bezier control/end)
   const segs = encodeKeyframesToSegments([
-    { time: 0, value: 0, easing: 'linear' },
-    { time: 1000, value: 1, easing: 'bezier' },
+    { time: 0, value: 0, interpolation: 'bezier' },
+    { time: 1000, value: 1, interpolation: 'linear' },
   ], 8);
   const info = countSegmentsAndPoints(segs);
   assert(info.segments === 1, 'count: 1 bezier segment');
@@ -172,11 +159,12 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // Mixed: 3 keyframes (linear, bezier) → 2 segments, 5 points
+  // Mixed: 3 keyforms (linear segment, bezier segment) → 2 segments, 5 points.
+  // Segment-from-kf0 is linear (kf0.interpolation), segment-from-kf1 is bezier.
   const segs = encodeKeyframesToSegments([
-    { time: 0,    value: 0, easing: 'linear' },
-    { time: 500,  value: 1, easing: 'linear' },
-    { time: 1000, value: 0, easing: 'bezier' },
+    { time: 0,    value: 0, interpolation: 'linear' },
+    { time: 500,  value: 1, interpolation: 'bezier' },
+    { time: 1000, value: 0, interpolation: 'linear' },
   ], 8);
   const info = countSegmentsAndPoints(segs);
   assert(info.segments === 2, 'count: 2 segments (linear + bezier)');
@@ -184,14 +172,14 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // 3 stepped keyframes → 2 segments, 3 points
+  // 3 constant keyforms → 2 segments, 3 points
   const segs = encodeKeyframesToSegments([
-    { time: 0,   value: 0, easing: 'linear' },
-    { time: 500, value: 1, easing: 'stepped' },
-    { time: 1000, value: 0, easing: 'stepped' },
+    { time: 0,   value: 0, interpolation: 'constant' },
+    { time: 500, value: 1, interpolation: 'constant' },
+    { time: 1000, value: 0, interpolation: 'linear' },
   ], 8);
   const info = countSegmentsAndPoints(segs);
-  assert(info.segments === 2, 'count: 2 stepped segments');
+  assert(info.segments === 2, 'count: 2 constant segments');
   assert(info.points === 3, 'count: 3 points');
 }
 

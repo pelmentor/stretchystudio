@@ -29,19 +29,26 @@
  *      mixes -- `influence` slider not modelled here yet).
  *   3. Apply mute / NLA / clamp options (deferred; SS doesn't have NLA).
  *
- * # Deviations from Blender
+ * # Phase 2.A: BezTriple keyform shape (post-v39)
  *
- * - Blender's FCurve stores keyframes as `BezTriple bezt[]` with
- *   left/right handle vectors per keyframe (full bezier interpolation,
- *   `eBezTriple_Interpolation` switching constant / linear / bezier /
- *   bounce / elastic / etc per-segment). SS today stores
- *   `keyforms[].{time, value, type?}` with `type ∈ {'linear', 'constant'}`
- *   only. Bezier-handle interpolation lands in Phase 5b along with the
- *   editor UI.
- * - Blender supports baked sample arrays (`fpt: FPoint[]`) for imported
- *   motions. SS doesn't -- every keyframe is user-edited.
- * - Blender's per-FCurve `modifiers: ListBaseT<FModifier>` (cyclic /
- *   noise / generator / envelope) isn't ported.
+ * Keyforms now carry the full Blender BezTriple record:
+ *   { time, value,
+ *     handleLeft:{time,value}, handleRight:{time,value},
+ *     handleType:{left,right},
+ *     interpolation,            // 'constant'|'linear'|'bezier'|<10 named easings>
+ *     easeMode?, autoHandleType?, flag }
+ *
+ * Slice 2.A wires the field rename only — `interpolation === 'bezier'`
+ * still falls back to linear interpolation here (Slice 2.C will add the
+ * cubic-bezier evaluator that consumes `handleLeft`/`handleRight`).
+ * The 10 named easings (sine/quad/.../elastic) likewise lerp until
+ * Slice 2.C ships their preset curves.
+ *
+ * # Other Blender deviations still in flight
+ * - Baked sample arrays (`fpt: FPoint[]` for imported motions) — SS
+ *   doesn't ship these; every keyform is user-authored or migrated.
+ * - Per-FCurve `modifiers: ListBaseT<FModifier>` (cyclic, noise,
+ *   generator, envelope) — Phase 3 of the Animation Blender-Parity Plan.
  *
  * @module anim/fcurve
  */
@@ -49,10 +56,20 @@
 import { evaluateDriver } from './driver.js';
 
 /**
- * @typedef {Object} Keyframe
- * @property {number} time      -- frame or seconds (caller decides; engine is unit-agnostic)
+ * @typedef {Object} HandlePoint
+ * @property {number} time
  * @property {number} value
- * @property {('linear'|'constant'|'bezier')} [type]   -- defaults 'linear'
+ *
+ * @typedef {Object} Keyframe
+ * @property {number} time
+ * @property {number} value
+ * @property {HandlePoint} [handleLeft]
+ * @property {HandlePoint} [handleRight]
+ * @property {{left:string, right:string}} [handleType]
+ * @property {('constant'|'linear'|'bezier'|'sine'|'quad'|'cubic'|'quart'|'quint'|'expo'|'circ'|'back'|'bounce'|'elastic')} [interpolation]
+ * @property {('auto'|'in'|'out'|'inout')} [easeMode]
+ * @property {('normal'|'locked_final')} [autoHandleType]
+ * @property {number} [flag]
  *
  * @typedef {Object} FCurve
  * @property {string} id
@@ -111,7 +128,9 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
         if (time >= a.time && time <= b.time) {
           const span = b.time - a.time;
           const t = span > 0 ? (time - a.time) / span : 0;
-          if (a.type === 'constant') {
+          // Slice 2.A: 'constant' holds; everything else lerps.
+          // Real bezier + named-easing eval lands in Slice 2.C.
+          if (a.interpolation === 'constant') {
             baseValue = a.value;
           } else {
             baseValue = lerp(a.value, b.value, t);
@@ -141,21 +160,35 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
  * @param {FCurve} fcurve
  * @param {number} time
  * @param {number} value
- * @param {Keyframe['type']} [type='linear']
+ * @param {('linear'|'constant'|'bezier')} [interpolation='linear']
  */
-export function upsertKeyframe(fcurve, time, value, type = 'linear') {
+export function upsertKeyframe(fcurve, time, value, interpolation = 'linear') {
   if (!fcurve) return;
   if (!Array.isArray(fcurve.keyforms)) fcurve.keyforms = [];
   const arr = fcurve.keyforms;
+  // BezTriple shape with vector handles at the keyform position.
+  // Slice 2.D's auto-handle calculator runs against bezier-typed
+  // handles; vector handles produce straight-line segments regardless.
+  const handleType = interpolation === 'bezier'
+    ? { left: 'auto', right: 'auto' }
+    : { left: 'vector', right: 'vector' };
+  const kf = {
+    time, value,
+    handleLeft: { time, value },
+    handleRight: { time, value },
+    handleType,
+    interpolation,
+    flag: 0,
+  };
   for (let i = 0; i < arr.length; i++) {
     if (Math.abs(arr[i].time - time) < 1e-6) {
-      arr[i] = { time, value, type };
+      arr[i] = kf;
       return;
     }
     if (arr[i].time > time) {
-      arr.splice(i, 0, { time, value, type });
+      arr.splice(i, 0, kf);
       return;
     }
   }
-  arr.push({ time, value, type });
+  arr.push(kf);
 }

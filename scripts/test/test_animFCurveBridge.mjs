@@ -57,9 +57,15 @@ function assertNear(actual, expected, eps, name) {
   assertEq(fc.modifiers, [], 'modifiers empty');
   assertEq(fc.extrapolation, 'constant', 'extrapolation defaults to constant');
   assertEq(fc.keyforms.length, 2, 'keyforms preserved');
-  assertEq(fc.keyforms[0].easing, 'linear', 'kf0 easing preserved');
-  assertEq(fc.keyforms[0].type, 'linear', 'kf0 type derived from easing');
-  assertEq(fc.keyforms[1].type, 'linear', 'ease-both → linear (not constant)');
+  assertEq(fc.keyforms[0].interpolation, 'linear', 'kf0 interpolation = linear');
+  assertEq(fc.keyforms[0].handleType, { left: 'vector', right: 'vector' }, 'kf0 vector handles for linear');
+  // ease-both → bezier (NOT linear) post-v39: the v39 mapping promotes the legacy
+  // 'ease-both' easing to interpolation=bezier so future per-keyform handle data
+  // (Slice 2.C/2.D) can carry the curve shape; pre-v39 'type' read 'linear'
+  // because the type discriminator only knew constant/linear/bezier and ease-both
+  // collapsed to linear under the legacy evaluator's lerp fallback.
+  assertEq(fc.keyforms[1].interpolation, 'bezier', 'ease-both → bezier (Slice 2.A field rename)');
+  assertEq(fc.keyforms[1].handleType, { left: 'auto', right: 'auto' }, 'ease-both → auto/auto handles');
 }
 
 // ── buildNodeFCurve: assembles canonical node-target fcurve ───────────────
@@ -70,7 +76,7 @@ function assertNear(actual, expected, eps, name) {
   ]);
   assertEq(fc.rnaPath, 'objects["partA"].rotation', 'node rnaPath canonical');
   assertEq(fc.id, 'partA.rotation', 'node id naming');
-  assertEq(fc.keyforms[1].type, 'constant', 'hold easing → type constant');
+  assertEq(fc.keyforms[1].interpolation, 'constant', 'hold easing → interpolation constant');
 }
 
 // ── builders return null for unaddressable / empty input ──────────────────
@@ -92,9 +98,9 @@ function assertNear(actual, expected, eps, name) {
     { time: 200, value: 3, easing: 'hold' }, // hold → type constant
   ]);
   assertEq(kfs.length, 2, 'malformed entries dropped');
-  assertEq(kfs[0].easing, 'linear', 'missing easing defaults to linear');
-  assertEq(kfs[1].easing, 'hold', 'hold easing preserved');
-  assertEq(kfs[1].type, 'constant', 'hold → constant');
+  assertEq(kfs[0].interpolation, 'linear', 'missing easing defaults to interpolation=linear');
+  assertEq(kfs[1].interpolation, 'constant', 'hold → interpolation constant');
+  assertEq(kfs[1].handleType, { left: 'vector', right: 'vector' }, 'hold → vector handles');
 }
 
 // ── decodeFCurveTarget: recognises both target shapes ─────────────────────

@@ -189,8 +189,8 @@ function assertClose(actual, expected, name, eps = 1e-6) {
 {
   const fc = {
     keyforms: [
-      { time: 0, value: 10, type: 'constant' },
-      { time: 10, value: 20 },
+      { time: 0, value: 10, interpolation: 'constant' },
+      { time: 10, value: 20, interpolation: 'linear' },
     ],
   };
   // Constant means hold the LEFT keyframe value through to the next.

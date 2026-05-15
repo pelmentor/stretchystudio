@@ -16,10 +16,13 @@
  *       2 (stepped):          type, time, value
  *       3 (inverse stepped):  type, time, value
  *
- * Bezier segments are decoded into a single SS keyframe at the segment
- * end-point with `easing: 'ease-both'`. Control points are not preserved
- * — the SS animation engine doesn't ingest per-segment cubic handles, and
- * round-tripping the same file would re-fit `1/3, 2/3` handles anyway.
+ * Slice 2.A: emits v39 BezTriple shape (`interpolation` field) for the
+ * type discriminator. Bezier control-point preservation (cx1/cy1/cx2/cy2
+ * → `handleLeft`/`handleRight`) lands in Slice 2.G.1 — until then we
+ * keep the segment endpoints with `interpolation: 'bezier'` and a
+ * default 1/3-2/3 handle approximation provided by the v39 keyform
+ * factory. Round-tripping a Cubism .motion3 will still re-fit handles
+ * to 1/3-2/3 in this slice.
  *
  * @module io/live2d/motion3jsonImport
  */
@@ -34,11 +37,15 @@ const SEG_BEZIER = 1;
 const SEG_STEPPED = 2;
 const SEG_INV_STEPPED = 3;
 
-const SEG_TO_EASING = {
+const SEG_TO_INTERPOLATION = {
   [SEG_LINEAR]: 'linear',
-  [SEG_BEZIER]: 'ease-both',
-  [SEG_STEPPED]: 'stepped',
-  [SEG_INV_STEPPED]: 'inverse-stepped',
+  [SEG_BEZIER]: 'bezier',
+  [SEG_STEPPED]: 'constant',
+  // No Blender equivalent for inverse-stepped (Cubism-only quirk where
+  // the value JUMPS at the start instead of the end of the segment).
+  // Degrade to 'constant' — round-trip parity for inverse-stepped is
+  // a follow-up; idle generator + most tooling never emit it.
+  [SEG_INV_STEPPED]: 'constant',
 };
 
 /**
@@ -138,13 +145,26 @@ export function parseMotion3Json(jsonText, opts) {
 }
 
 /**
- * Decode a flat `Segments[]` array into SS keyframes
- * (`{time: ms, value, easing}`). Skips malformed segments with a warning.
+ * Decode a flat `Segments[]` array into loose keyform records keyed by
+ * `interpolation` (the v39 BezTriple discriminator). Records flow
+ * through `buildParamFCurve` / `buildNodeFCurve` → `normalizeKeyforms`
+ * which mints proper BezTriple keyforms with default handles.
+ *
+ * In motion3.json the segment type is carried by the SEGMENT (start →
+ * end), but in the v39 BezTriple shape the discriminator lives on the
+ * START keyform. The decoder therefore writes `interpolation` to the
+ * keyform that PRECEDES each segment (i.e. `out[out.length - 1]` at the
+ * moment of decode).
+ *
+ * Slice 2.G.1 will preserve bezier control points (cx1/cy1/cx2/cy2) into
+ * `handleLeft`/`handleRight` for true round-trip fidelity. Today the
+ * endpoint is captured with `interpolation: 'bezier'` and the v39
+ * keyform factory plants 1/3-2/3 placeholder handles.
  *
  * @param {unknown} segs
  * @param {string[]} warnings
  * @param {string} ctx
- * @returns {Array<{time:number, value:number, easing:string}>}
+ * @returns {Array<{time:number, value:number, interpolation:string}>}
  */
 function decodeSegmentsToKeyframes(segs, warnings, ctx) {
   if (!Array.isArray(segs) || segs.length < 2) return [];
@@ -153,13 +173,21 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
   out.push({
     time: Math.round(numOr(segs[0], 0) * 1000),
     value: numOr(segs[1], 0),
-    easing: 'linear',
+    interpolation: 'linear', // patched once the next segment's type is known
   });
 
   let i = 2;
   while (i < segs.length) {
     const type = segs[i];
     i++;
+    const interp = SEG_TO_INTERPOLATION[type];
+    if (interp === undefined) {
+      warnings.push(`${ctx}: unknown segment type ${type}, aborting decode`);
+      break;
+    }
+    // Discriminator lives on the START keyform of the segment in v39.
+    if (out.length > 0) out[out.length - 1].interpolation = interp;
+
     if (type === SEG_LINEAR || type === SEG_STEPPED || type === SEG_INV_STEPPED) {
       if (i + 1 >= segs.length) {
         warnings.push(`${ctx}: truncated segment (type ${type})`);
@@ -168,7 +196,7 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
       out.push({
         time: Math.round(numOr(segs[i], 0) * 1000),
         value: numOr(segs[i + 1], 0),
-        easing: SEG_TO_EASING[type],
+        interpolation: 'linear', // tail; patched if a later segment follows
       });
       i += 2;
     } else if (type === SEG_BEZIER) {
@@ -176,16 +204,15 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
         warnings.push(`${ctx}: truncated bezier segment`);
         break;
       }
-      // Drop control points (cx1, cy1, cx2, cy2) — keep end point only.
+      // Slice 2.G.1: control points (cx1/cy1/cx2/cy2 = segs[i..i+3])
+      // will be preserved into handleLeft/handleRight here. For now the
+      // endpoint is captured with default v39 handles.
       out.push({
         time: Math.round(numOr(segs[i + 4], 0) * 1000),
         value: numOr(segs[i + 5], 0),
-        easing: SEG_TO_EASING[SEG_BEZIER],
+        interpolation: 'linear',
       });
       i += 6;
-    } else {
-      warnings.push(`${ctx}: unknown segment type ${type}, aborting decode`);
-      break;
     }
   }
 

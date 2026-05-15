@@ -304,19 +304,20 @@ function sanitizeName(name) {
 }
 
 function applySpineCurve(entry, kf) {
-  if (kf.easing === 'linear') return; 
-  if (kf.easing === 'stepped') {
+  // v39 BezTriple: read kf.interpolation (was kf.easing pre-v39).
+  // Slice 2.G will derive Spine's curve[] from kf.handleLeft / kf.handleRight
+  // for true per-keyform bezier export. Today bezier degrades to the
+  // legacy ease-both preset (matches pre-v39 default).
+  const interp = kf.interpolation;
+  if (interp === 'linear') return;
+  if (interp === 'constant') {
     entry.curve = 'stepped';
-  } else if (Array.isArray(kf.easing) && kf.easing.length === 4) {
-    entry.curve = kf.easing;
-  } else if (kf.easing === 'ease-in') {
-    entry.curve = [0.42, 0, 1, 1];
-  } else if (kf.easing === 'ease-out') {
-    entry.curve = [0, 0, 0.58, 1];
-  } else {
-    // Default or 'ease-both' / 'ease' -> Ease Both
-    entry.curve = [0.42, 0, 0.58, 1];
+    return;
   }
+  // 'bezier' or any named easing → preset cubic-bezier.
+  // Slice 2.C ships the per-easing preset table; Slice 2.G upgrades to
+  // handle-derived control points.
+  entry.curve = [0.42, 0, 0.58, 1];
 }
 
 

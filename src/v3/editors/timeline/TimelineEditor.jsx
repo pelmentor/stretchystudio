@@ -12,6 +12,7 @@ import {
   decodeFCurveTarget,
   fcurveTargetsParam,
   fcurveTargetsNode,
+  makeBezTripleKeyform,
 } from '@/anim/animationFCurve';
 import { getActiveSceneAction, getSceneAction } from '@/anim/sceneAction';
 import {
@@ -1117,7 +1118,7 @@ export function TimelineEditor() {
       const fc = animation.fcurves.find(f => fcurveTargetsParam(f, paramId));
       const kf = fc?.keyforms.find(k => k.time === timeMs);
       if (!kf) return;
-      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.easing ?? 'linear' });
+      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.interpolation ?? 'linear' });
       return;
     }
     const nodeId = rowKey.slice('node:'.length);
@@ -1129,7 +1130,7 @@ export function TimelineEditor() {
       const kf = fc.keyforms.find(k => k.time === timeMs);
       if (kf) {
         props[target.property] = kf.value;
-        easing = kf.easing ?? 'linear';
+        easing = kf.interpolation ?? 'linear';
       }
     }
     if (Object.keys(props).length > 0) {
@@ -1155,17 +1156,12 @@ export function TimelineEditor() {
           return;
         }
         const existingIdx = fc.keyforms.findIndex(kf => kf.time === timeMs);
+        const newKf = makeBezTripleKeyform({ time: timeMs, value: clipboard.value, easing: clipboard.easing });
+        if (!newKf) return;
         if (existingIdx >= 0) {
-          fc.keyforms[existingIdx].value = clipboard.value;
-          fc.keyforms[existingIdx].easing = clipboard.easing;
-          fc.keyforms[existingIdx].type = clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear';
+          fc.keyforms[existingIdx] = newKf;
         } else {
-          fc.keyforms.push({
-            time: timeMs,
-            value: clipboard.value,
-            easing: clipboard.easing,
-            type: clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear',
-          });
+          fc.keyforms.push(newKf);
           fc.keyforms.sort((a, b) => a.time - b.time);
         }
         return;
@@ -1187,17 +1183,12 @@ export function TimelineEditor() {
             continue;
           }
           const existingIdx = fc.keyforms.findIndex(kf => kf.time === timeMs);
+          const newKf = makeBezTripleKeyform({ time: timeMs, value, easing: clipboard.easing });
+          if (!newKf) continue;
           if (existingIdx >= 0) {
-            fc.keyforms[existingIdx].value = value;
-            fc.keyforms[existingIdx].easing = clipboard.easing;
-            fc.keyforms[existingIdx].type = clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear';
+            fc.keyforms[existingIdx] = newKf;
           } else {
-            fc.keyforms.push({
-              time: timeMs,
-              value,
-              easing: clipboard.easing,
-              type: clipboard.easing === 'constant' || clipboard.easing === 'hold' ? 'constant' : 'linear',
-            });
+            fc.keyforms.push(newKf);
             fc.keyforms.sort((a, b) => a.time - b.time);
           }
         }
@@ -1264,10 +1255,14 @@ export function TimelineEditor() {
         const target = decodeFCurveTarget(fc);
         if (!target) continue;
         const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
-        for (const kf of fc.keyforms) {
+        for (let i = 0; i < fc.keyforms.length; i++) {
+          const kf = fc.keyforms[i];
           if (applyTo.has(`${fcurveRowKey}:${kf.time}`)) {
-            kf.easing = easingType;
-            kf.type = easingType === 'constant' || easingType === 'hold' ? 'constant' : 'linear';
+            // Re-mint the keyform via the BezTriple factory so the
+            // legacy easing-name vocabulary the UI dropdown emits maps
+            // through the canonical legacy → interpolation table.
+            const next = makeBezTripleKeyform({ time: kf.time, value: kf.value, easing: easingType });
+            if (next) fc.keyforms[i] = next;
           }
         }
       }
@@ -1330,7 +1325,7 @@ export function TimelineEditor() {
       for (const time of times) {
         for (const f of fcurves) {
           const kf = f.keyforms.find(k => k.time === time);
-          if (kf) { easingByTime[time] = kf.easing || 'ease-both'; break; }
+          if (kf) { easingByTime[time] = kf.interpolation || 'bezier'; break; }
         }
       }
       return { rowKey, kind, name, fcurves, times, easingByTime };
@@ -1753,17 +1748,16 @@ export function TimelineEditor() {
                          
                          const easing = row.easingByTime[tA];
                          let pathD = `M ${Math.max(-10, perA)} 5 L ${Math.min(110, perB)} 5`; // simple fallback
-                         
-                         if (easing === 'stepped') {
+
+                         // v39 interpolation enum: 'constant'/'linear'/'bezier'.
+                         // Slice 2.D will read per-keyform handles to draw
+                         // proper asymmetric ease-in/ease-out glyphs again.
+                         if (easing === 'constant') {
                            pathD = `M ${perA} 8 L ${perB} 8 L ${perB} 2`;
                          } else if (easing === 'linear') {
                            pathD = `M ${perA} 8 L ${perB} 2`;
-                         } else if (easing === 'ease-in') {
-                           pathD = `M ${perA} 8 C ${perB} 8, ${perB} 8, ${perB} 2`;
-                         } else if (easing === 'ease-out') {
-                           pathD = `M ${perA} 8 C ${perA} 2, ${perA} 2, ${perB} 2`;
                          } else {
-                           // ease, ease-both, Array, or undefined defaults to smooth (ease-both)
+                           // 'bezier' (or unknown) defaults to smooth ease-both glyph
                            pathD = `M ${perA} 8 C ${perA + (perB-perA)*0.5} 8, ${perA + (perB-perA)*0.5} 2, ${perB} 2`;
                          }
                          
@@ -1782,18 +1776,14 @@ export function TimelineEditor() {
                         const perB = (fB - startFrame) / totalFrames * 100;
                         
                         // We wrap back to the value of the first keyframe (represented as height 2)
-                        const easing = row.easingByTime[tLast] || 'ease-both';
+                        const easing = row.easingByTime[tLast] || 'bezier';
                         let pathD;
-                        if (easing === 'stepped') {
+                        if (easing === 'constant') {
                           pathD = `M ${perA} 8 L ${perB} 8 L ${perB} 2`;
                         } else if (easing === 'linear') {
                           pathD = `M ${perA} 8 L ${perB} 2`;
-                        } else if (easing === 'ease-in') {
-                          pathD = `M ${perA} 8 C ${perB} 8, ${perB} 8, ${perB} 2`;
-                        } else if (easing === 'ease-out') {
-                          pathD = `M ${perA} 8 C ${perA} 2, ${perA} 2, ${perB} 2`;
                         } else {
-                          // ease, ease-both, Array, or undefined defaults to smooth (ease-both)
+                          // 'bezier' (or unknown) defaults to smooth ease-both glyph
                           pathD = `M ${perA} 8 C ${perA + (perB-perA)*0.5} 8, ${perA + (perB-perA)*0.5} 2, ${perB} 2`;
                         }
                         
