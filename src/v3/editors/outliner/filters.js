@@ -32,6 +32,41 @@ export function filterOutlinerTree(roots, query) {
 }
 
 /**
+ * F-4 sweep — predicate-based tree filter.
+ *
+ * Mirrors Blender's OUTLINER_PT_filter checkboxes (`reference/blender/
+ * scripts/startup/bl_ui/space_outliner.py:471-526`) which keep a node
+ * AND its ancestor chain when the predicate matches. Empty subtrees
+ * pruned.
+ *
+ * @param {OutlinerNode[]} roots
+ * @param {(node: OutlinerNode) => boolean} predicate
+ * @returns {OutlinerNode[]}
+ */
+export function filterOutlinerTreeByPredicate(roots, predicate) {
+  return roots
+    .map((r) => filterNodeByPredicate(r, predicate))
+    .filter((n) => n != null);
+}
+
+/**
+ * @param {OutlinerNode} node
+ * @param {(node: OutlinerNode) => boolean} predicate
+ * @returns {OutlinerNode|null}
+ */
+function filterNodeByPredicate(node, predicate) {
+  const selfMatches = predicate(node);
+  /** @type {OutlinerNode[]} */
+  const filteredChildren = [];
+  for (const c of node.children) {
+    const fc = filterNodeByPredicate(c, predicate);
+    if (fc) filteredChildren.push(fc);
+  }
+  if (!selfMatches && filteredChildren.length === 0) return null;
+  return { ...node, children: filteredChildren };
+}
+
+/**
  * @param {OutlinerNode} node
  * @param {string} q  - lower-cased non-empty query
  * @returns {OutlinerNode|null}

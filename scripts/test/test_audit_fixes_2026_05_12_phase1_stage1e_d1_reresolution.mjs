@@ -90,10 +90,11 @@ function flatJsdoc(src) {
     /sectionIds:\s*\[\s*'transform',\s*'visibility',\s*'partInfo',\s*'animData'\s*\]/.test(src),
     '1.A: Item tab sectionIds = [transform, visibility, partInfo, animData] (animData LAST)',
   );
-  // Defensive — pre-rewrite the line was identical, so this also
-  // proves the section list survived the doc-only rewrite.
-  assert(/id:\s*'item'/.test(src),
-    '1.B: PROPERTIES_TABS contains an "item" tab');
+  // Defensive — proves the Object tab survived the 2026-05-16 UI
+  // Blender-fidelity sweep that renamed the id from 'item' → 'object'
+  // (BCONTEXT_OBJECT canonical Blender enum name).
+  assert(/id:\s*'object'/.test(src),
+    '1.B: PROPERTIES_TABS contains an "object" tab (renamed from "item" in 2026-05-16 F-3 sweep)');
 }
 
 // ---- 2. NO dedicated 'animation' Properties tab ----
