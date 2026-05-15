@@ -21,11 +21,21 @@
 
 /** @type {Record<string, string>} */
 export const DEFAULT_KEYMAP = {
-  // Workspace switches - Ctrl+1..2 (5 → 3 collapse 2026-05-02 merging
-  // Layout / Modeling / Rigging into 'edit'; 3 → 2 collapse 2026-05-03
-  // merging 'edit' and 'pose' into 'default').
-  'Ctrl+Digit1': 'workspace.set.default',
-  'Ctrl+Digit2': 'workspace.set.animation',
+  // Workspace switches — Ctrl+1..6 mirrors Blender's per-workspace
+  // numbered chord pattern (no canonical Blender default but a common
+  // user-pref add-on). 6 workspaces shipped 2026-05-16 (audit F-2):
+  // layout / modeling / rigging / weightPaint / sculpt / animation.
+  'Ctrl+Digit1': 'workspace.set.layout',
+  'Ctrl+Digit2': 'workspace.set.modeling',
+  'Ctrl+Digit3': 'workspace.set.rigging',
+  'Ctrl+Digit4': 'workspace.set.weightPaint',
+  'Ctrl+Digit5': 'workspace.set.sculpt',
+  'Ctrl+Digit6': 'workspace.set.animation',
+
+  // Workspace cycle — Ctrl+PageUp / Ctrl+PageDown matches Blender's
+  // `screen.workspace_cycle` (`blender_default.py:823-825`).
+  'Ctrl+PageUp':   'workspace.cycle.prev',
+  'Ctrl+PageDown': 'workspace.cycle.next',
 
   // Layout reset - uncommon enough that Ctrl+Shift+Backspace is fine.
   'Ctrl+Shift+Backspace': 'workspace.reset',

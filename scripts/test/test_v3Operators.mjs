@@ -25,12 +25,14 @@ function assertThrows(fn, name) {
 // ── registry: built-ins exist ───────────────────────────────────────
 
 {
-  for (const ws of ['default', 'animation']) {
+  for (const ws of ['layout', 'modeling', 'rigging', 'weightPaint', 'sculpt', 'animation']) {
     const op = getOperator(`workspace.set.${ws}`);
     assert(op !== null, `built-in workspace.set.${ws} registered`);
     assert(op.label.includes(ws), `built-in workspace.set.${ws} label OK`);
   }
   assert(getOperator('workspace.reset') !== null, 'built-in workspace.reset registered');
+  assert(getOperator('workspace.cycle.next') !== null, 'built-in workspace.cycle.next registered');
+  assert(getOperator('workspace.cycle.prev') !== null, 'built-in workspace.cycle.prev registered');
 }
 
 // ── registry: duplicate id rejected ─────────────────────────────────
@@ -51,22 +53,22 @@ assertThrows(
 
 {
   const all = listOperators();
-  assert(all.length >= 3, 'listOperators returns ≥ 3 (2 workspaces + reset)');
+  assert(all.length >= 9, 'listOperators returns ≥ 9 (6 workspaces + reset + cycle.next + cycle.prev)');
   assert(all.every(o => typeof o.exec === 'function'), 'all ops have exec()');
 }
 
 // ── operator exec actually mutates store ────────────────────────────
 
 {
-  useUIV3Store.getState().setWorkspace('default');
+  useUIV3Store.getState().setWorkspace('layout');
   const before = useUIV3Store.getState().activeWorkspace;
-  assert(before === 'default', 'pre-exec: default');
+  assert(before === 'layout', 'pre-exec: layout');
 
   getOperator('workspace.set.animation').exec({ editorType: null });
   assert(useUIV3Store.getState().activeWorkspace === 'animation', 'exec: switched to animation');
 
-  getOperator('workspace.set.default').exec({ editorType: null });
-  assert(useUIV3Store.getState().activeWorkspace === 'default', 'exec: back to default');
+  getOperator('workspace.set.layout').exec({ editorType: null });
+  assert(useUIV3Store.getState().activeWorkspace === 'layout', 'exec: back to layout');
 }
 
 // ── keymap: chord builder ───────────────────────────────────────────

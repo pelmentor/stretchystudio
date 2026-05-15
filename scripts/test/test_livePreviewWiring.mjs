@@ -46,8 +46,12 @@ function assert(cond, name) {
 // ── 1. EVERY workspace's `center` area has tabs [viewport, livePreview] ─
 {
   const s = useUIV3Store.getState();
+  // F-2 sweep — every workspace whose center area carries a livePreview
+  // tab. After 2026-05-16 expansion only Layout + Animation include live
+  // preview (Modeling/Rigging/WeightPaint/Sculpt drop the second tab to
+  // reduce chrome — physics during those modes fights the operator).
   const ALL_WORKSPACES = /** @type {const} */ ([
-    'default', 'animation',
+    'layout', 'animation',
   ]);
   for (const wsKey of ALL_WORKSPACES) {
     const ws = s.workspaces[wsKey];
@@ -66,7 +70,7 @@ function assert(cond, name) {
 // ── 2. No workspace ships a centerRight slot (we don't split the canvas) ─
 {
   const s = useUIV3Store.getState();
-  for (const wsKey of /** @type {const} */ (['default', 'animation'])) {
+  for (const wsKey of /** @type {const} */ (['layout', 'animation'])) {
     const ws = s.workspaces[wsKey];
     const cr = ws.areas.find((a) => a.id === 'centerRight');
     assert(!cr, `${wsKey} workspace: no centerRight slot — center is single canvas with tabbed swap`);
@@ -88,22 +92,22 @@ function assert(cond, name) {
 // User clicks the Live Preview tab on the center area header → drivers run.
 // Clicking the Viewport tab → LivePreviewEditor unmounts, drivers stop.
 {
-  useUIV3Store.getState().setWorkspace('default');
+  useUIV3Store.getState().setWorkspace('layout');
   useUIV3Store.getState().resetWorkspace();
 
-  const initial = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'center');
+  const initial = useUIV3Store.getState().workspaces.layout.areas.find((a) => a.id === 'center');
   const livePreviewTabId = initial.tabs.find((t) => t.editorType === 'livePreview')?.id;
   const viewportTabId    = initial.tabs.find((t) => t.editorType === 'viewport')?.id;
   assert(!!livePreviewTabId && !!viewportTabId,
     'center area: both viewport and livePreview tabs exist');
 
   useUIV3Store.getState().setAreaActiveTab('center', livePreviewTabId);
-  const c = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'center');
+  const c = useUIV3Store.getState().workspaces.layout.areas.find((a) => a.id === 'center');
   assert(c.activeTabId === livePreviewTabId,
     'setAreaActiveTab(livePreview): center switches into live mode');
 
   useUIV3Store.getState().setAreaActiveTab('center', viewportTabId);
-  const c2 = useUIV3Store.getState().workspaces.default.areas.find((a) => a.id === 'center');
+  const c2 = useUIV3Store.getState().workspaces.layout.areas.find((a) => a.id === 'center');
   assert(c2.activeTabId === viewportTabId,
     'setAreaActiveTab(viewport): center switches back to default Viewport (drivers stop)');
 

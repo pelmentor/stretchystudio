@@ -29,16 +29,36 @@ import { useProjectStore } from './projectStore.js';
 import { useAnimationStore } from './animationStore.js';
 
 /**
- * @typedef {('default'|'animation')} WorkspaceId
+ * @typedef {('layout'|'modeling'|'rigging'|'weightPaint'|'sculpt'|'animation')} WorkspaceId
  *  Workspaces are layout-only presets (Blender-style). They DO NOT
  *  gate Blender-style edit modes (mesh / skeleton / blendShape) —
  *  `editorStore.editMode` is independent of workspace.
  *
- *  BFA-001 — the Setup/Animate axis is now DERIVED from the workspace
+ *  Mirrors Blender's General-template workspace tabs. SS ships the
+ *  subset that maps to a 2D rigging tool (no UV / Texture / Shading /
+ *  Compositing / Geometry Nodes / Scripting workspaces — those don't
+ *  apply to a Live2D pipeline).
+ *
+ *  BFA-001 — the Setup/Animate axis is DERIVED from the workspace
  *  (Animation → 'animation', everything else → 'staging' — see
- *  `selectEditorMode` / `getEditorMode`); there is no longer a separate
- *  `editorStore.editorMode` slot. The previous topbar Setup/Animate
- *  pill was a redundant second axis on the same decision and is gone.
+ *  `selectEditorMode` / `getEditorMode`).
+ *
+ *  - **layout** — generalist surface (was `default` pre-2026-05-16).
+ *    Outliner / Logs / Viewport+LivePreview / Parameters /
+ *    Properties+NodeTree. Default workspace.
+ *  - **modeling** — mesh-edit surface: Outliner left, Viewport
+ *    full-bleed center, Properties (Object Data tab) right. No Live
+ *    Preview / Logs / Parameters — focus on geometry authoring.
+ *  - **rigging** — bone-authoring surface: Outliner left, Viewport
+ *    center, Parameters + Properties right. Live Preview hidden so
+ *    the physics layer doesn't fight bone drag.
+ *  - **weightPaint** — weight-paint surface: Outliner left, Viewport
+ *    center, Properties right. Tool Settings (N-panel) carries the
+ *    brush config.
+ *  - **sculpt** — sculpt surface: Outliner left, Viewport full-bleed
+ *    center, Properties right.
+ *  - **animation** — adds Timeline / Dopesheet / FCurve at the bottom
+ *    for keyframing; promotes Actions+Properties to the right column.
  *
 
  *  - **default** — Outliner / Logs / Viewport / Parameters /
@@ -99,43 +119,94 @@ function buildArea(/** @type {string} */ id, /** @type {EditorType[]} */ editorT
 }
 
 /**
- * Default layout (2026-05-02 — Live Preview is a SECOND TAB in the
- * center area, not a side-by-side panel. Per direct user direction:
- * the preview is essentially a copy of the viewport surface; the user
- * clicks the tab to the right of "Viewport" and the same canvas swaps
- * into live mode (physics + breath + cursor look running). One canvas,
- * two tabs — no split.):
+ * Layout workspace (2026-05-16 expansion — was `default`):
+ * Generalist surface covering setup work + quick posing + the
+ * majority of routine editing.
  *
  *   Left column                Center                       Right column
  *   ─────────────────────────  ──────────────────────────   ───────────────────────────
  *   leftTop:    Outliner       tabs: [Viewport,             rightTop:    Parameters
- *   leftBottom: Logs                  Live Preview]         rightBottom: Properties
+ *   leftBottom: Logs                  Live Preview]         rightBottom: Properties / NodeTree
  *
- * Drivers are bound to LivePreviewEditor's mount lifetime — switching
- * the center tab back to Viewport unmounts the live editor and stops
- * drivers cleanly.
+ * Live Preview is a SECOND TAB in the center area, not a side-by-side
+ * panel: the preview is essentially a copy of the viewport surface
+ * with physics + breath + cursor look running. Drivers are bound to
+ * LivePreviewEditor's mount lifetime — swapping back to Viewport
+ * unmounts the live editor and stops drivers cleanly.
  *
  * AreaTree.jsx renders left/center/right as a horizontal PanelGroup.
  *
  * @returns {AreaSlot[]}
  */
-const DEFAULT_AREAS = () => [
+const LAYOUT_AREAS = () => [
   buildArea('leftTop',     [e('outliner')]),
   buildArea('leftBottom',  [e('logs')]),
   buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
-  // V2 final wire (2026-05-07) — NodeTree tab joins Properties so the
-  // user can inspect RigTree / DriverTree / AnimationTree datablocks
-  // alongside the Properties panel without leaving the workspace.
   buildArea('rightBottom', [e('properties'), e('nodeTree')]),
 ];
 
 /**
- * Animation workspace adds a Timeline area below the center and an
- * Actions list tab alongside Properties (in rightBottom) so the
- * user can browse / create / switch actions without leaving the
+ * Modeling workspace — focus on geometry / mesh editing. Outliner
+ * left, full-bleed Viewport center (no Live Preview tab — runtime
+ * physics during mesh edit fights the operator), Properties right.
+ * Logs / Parameters dropped: the surfaces an animator/rigger needs
+ * are not the surfaces a modeler needs.
+ *
+ * @returns {AreaSlot[]}
+ */
+const MODELING_AREAS = () => [
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('properties')]),
+];
+
+/**
+ * Rigging workspace — bone authoring + rig stage runners. Outliner
+ * left, Viewport center, Parameters + Properties right. Live Preview
+ * hidden so physics doesn't fight bone drag during pose-mode work.
+ *
+ * @returns {AreaSlot[]}
+ */
+const RIGGING_AREAS = () => [
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('parameters')]),
+  buildArea('rightBottom', [e('properties'), e('nodeTree')]),
+];
+
+/**
+ * Weight Paint workspace — focus on per-vertex weight authoring.
+ * Outliner left, Viewport center, Properties right. The Tool Settings
+ * (N-panel) is the primary brush-config surface (`N` toggles).
+ *
+ * @returns {AreaSlot[]}
+ */
+const WEIGHT_PAINT_AREAS = () => [
+  buildArea('leftTop',     [e('outliner')]),
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('properties')]),
+];
+
+/**
+ * Sculpt workspace — minimal chrome around a full-bleed canvas.
+ * Outliner + Properties stacked right; the user spends most time in
+ * the canvas with N-panel brush settings.
+ *
+ * @returns {AreaSlot[]}
+ */
+const SCULPT_AREAS = () => [
+  buildArea('center',      [e('viewport')]),
+  buildArea('rightTop',    [e('outliner')]),
+  buildArea('rightBottom', [e('properties')]),
+];
+
+/**
+ * Animation workspace — adds Timeline / Dopesheet / FCurve at the
+ * bottom for keyframing; promotes Actions+Properties+NodeTree to the
+ * right column so the user can switch actions without leaving the
  * workspace. Inherits the [Viewport, Live Preview] center tabs from
- * DEFAULT_AREAS.
+ * the Layout workspace.
  *
  * @returns {AreaSlot[]}
  */
@@ -149,26 +220,30 @@ const ANIMATION_AREAS = () => [
 ];
 
 /**
- * Per-workspace presets. Two workspaces — `default` / `animation`.
+ * Per-workspace presets. Six workspaces, mirroring the Blender General
+ * template's relevant subset:
+ *   layout · modeling · rigging · weightPaint · sculpt · animation
  *
- * Reduction history: the previous five-workspace shape (Layout /
- * Modeling / Rigging / Pose / Animation) collapsed to three on
- * 2026-05-02 (Layout / Modeling / Rigging were structurally identical,
- * folded into `edit`). On 2026-05-03 `edit` and `pose` merged into
- * `default` since they shared the same DEFAULT_AREAS layout — the
- * Setup/Animate distinction lives on its own topbar pill, so a
- * separate workspace for posing was redundant.
+ * Audit finding F-2 (2026-05-16 UI Blender-fidelity sweep): the
+ * pre-2026-05-16 2-workspace collapse (`default` / `animation`) was
+ * "structurally identical" because the workspaces didn't gate panel
+ * preset; expanded to 6 distinct layouts so each workspace is a real
+ * working-surface preset, not just a label.
  *
  * @returns {Record<WorkspaceId, WorkspacePreset>}
  */
 const initialWorkspaces = () => ({
-  default:   { areas: DEFAULT_AREAS() },
-  animation: { areas: ANIMATION_AREAS() },
+  layout:      { areas: LAYOUT_AREAS() },
+  modeling:    { areas: MODELING_AREAS() },
+  rigging:     { areas: RIGGING_AREAS() },
+  weightPaint: { areas: WEIGHT_PAINT_AREAS() },
+  sculpt:      { areas: SCULPT_AREAS() },
+  animation:   { areas: ANIMATION_AREAS() },
 });
 
 export const useUIV3Store = create((set) => ({
   /** @type {WorkspaceId} */
-  activeWorkspace: 'default',
+  activeWorkspace: 'layout',
 
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),

@@ -135,7 +135,7 @@ export function _resetOperatorsForTests() {
 
 // ── Built-in shell operators ─────────────────────────────────────────
 
-const WORKSPACE_IDS = ['default', 'animation'];
+const WORKSPACE_IDS = ['layout', 'modeling', 'rigging', 'weightPaint', 'sculpt', 'animation'];
 
 function registerBuiltins() {
   for (const id of WORKSPACE_IDS) {
@@ -150,6 +150,30 @@ function registerBuiltins() {
     id: 'workspace.reset',
     label: 'Reset active workspace layout',
     exec: () => useUIV3Store.getState().resetWorkspace(),
+  });
+
+  // F-2 sweep — Ctrl+PageUp / Ctrl+PageDown workspace cycle
+  // (Blender's `screen.workspace_cycle`, `blender_default.py:823-825`).
+  // Wraps both directions.
+  registerOperator({
+    id: 'workspace.cycle.next',
+    label: 'Next workspace',
+    exec: () => {
+      const cur = useUIV3Store.getState().activeWorkspace;
+      const idx = WORKSPACE_IDS.indexOf(cur);
+      const next = WORKSPACE_IDS[(idx + 1 + WORKSPACE_IDS.length) % WORKSPACE_IDS.length];
+      useUIV3Store.getState().setWorkspace(next);
+    },
+  });
+  registerOperator({
+    id: 'workspace.cycle.prev',
+    label: 'Previous workspace',
+    exec: () => {
+      const cur = useUIV3Store.getState().activeWorkspace;
+      const idx = WORKSPACE_IDS.indexOf(cur);
+      const prev = WORKSPACE_IDS[(idx - 1 + WORKSPACE_IDS.length) % WORKSPACE_IDS.length];
+      useUIV3Store.getState().setWorkspace(prev);
+    },
   });
 
   // Undo / redo. Wires through the operator dispatcher so future

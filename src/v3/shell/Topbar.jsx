@@ -49,11 +49,23 @@ const NewProjectDialog = lazy(() =>
 /** @typedef {{ id: string, label: string, tip: string }} WorkspaceTab */
 
 /** @type {WorkspaceTab[]} */
+// 6 workspaces shipped 2026-05-16 (audit F-2 expansion): mirrors the
+// Blender General-template workspace tabs minus the surfaces that don't
+// apply to a 2D rigging tool (no UV / Texture / Shading / Compositing
+// / Geometry Nodes / Scripting workspaces).
 const WORKSPACES = [
-  { id: 'default',   label: 'Default',
-    tip: 'Default — Outliner, Logs, Viewport, Parameters, Properties. Covers setup AND posing; switch to Animation for the timeline.' },
-  { id: 'animation', label: 'Animation',
-    tip: 'Animation — adds a timeline area at the bottom for keyframing.' },
+  { id: 'layout',      label: 'Layout',
+    tip: 'Layout — generalist surface: Outliner, Logs, Viewport (+Live Preview), Parameters, Properties.' },
+  { id: 'modeling',    label: 'Modeling',
+    tip: 'Modeling — mesh-edit focus: Outliner left, full-bleed Viewport, Properties right.' },
+  { id: 'rigging',     label: 'Rigging',
+    tip: 'Rigging — bone authoring: Outliner, Viewport, Parameters + Properties. No Live Preview.' },
+  { id: 'weightPaint', label: 'Weight',
+    tip: 'Weight Paint — vertex weight authoring: Outliner, Viewport, Properties. Brush settings live in N-panel.' },
+  { id: 'sculpt',      label: 'Sculpt',
+    tip: 'Sculpt — minimal chrome around full-bleed Viewport. Brush settings in N-panel.' },
+  { id: 'animation',   label: 'Animation',
+    tip: 'Animation — adds Timeline / Dopesheet / FCurve at the bottom for keyframing.' },
 ];
 
 export function Topbar() {

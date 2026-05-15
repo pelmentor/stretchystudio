@@ -823,12 +823,104 @@ export const discordDarkPreset = {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Blender — port of `U_theme_default` from
+//  `reference/blender/release/datafiles/userdef/userdef_default_theme.c`.
+//
+//  Source colors (HSL conversions of Blender's hex tokens):
+//    0x303030 — area background       → HSL(0, 0%, 19%)
+//    0x545454 — wcol_regular.inner    → HSL(0, 0%, 33%)
+//    0x4772b3 — wcol_*.inner_sel      → HSL(213, 44%, 49%)   ← Blender selection blue
+//    0x1d1d1d — header_back / wcol_text.inner / wcol_radio.item
+//                                       → HSL(0, 0%, 11%)
+//    0x282828 — wcol_toolbar_item.inner → HSL(0, 0%, 16%)
+//    0x3d3d3d — outline / panel_back    → HSL(0, 0%, 24%)
+//    0xe6e6e6 — wcol_*.text             → HSL(0, 0%, 90%)
+//    0xa9a9a9 — wcol_text dim text      → HSL(0, 0%, 66%)
+//
+//  Closes audit finding F-6 from the 2026-05-16 UI Blender-fidelity
+//  audit ("Theme tokens use shadcn/Tailwind palette, not Blender's
+//  bTheme — no Blender blue anywhere").
+// ─────────────────────────────────────────────────────────────────────────
+
+// Blender Light theme — port of `Blender_Light.xml`
+// (`reference/blender/scripts/presets/interface_theme/Blender_Light.xml`).
+// Source colors:
+//   0xcccccc — panel_back              → HSL(0, 0%, 80%)
+//   0xadadad — header_back             → HSL(0, 0%, 68%)
+//   0xdbdbdb — wcol_regular.inner      → HSL(0, 0%, 86%)
+//   0x668ccc — wcol_*.inner_sel        → HSL(218, 50%, 60%)   ← Blender Light selection blue
+//   0x4d4d4d — outline                 → HSL(0, 0%, 30%)
+//   0x1a1a1a — panel_text              → HSL(0, 0%, 10%)
+export const blenderLightPreset = {
+  id: 'blender-light',
+  name: 'Blender',
+  colors: {
+    'background':           '0 0% 80%',     // 0xcccccc — area background
+    'foreground':           '0 0% 10%',     // 0x1a1a1a — panel text
+    'card':                 '0 0% 86%',     // 0xdbdbdb — wcol_regular inner (raised)
+    'card-foreground':      '0 0% 10%',
+    'popover':              '0 0% 92%',     // slightly lighter than card for floating UI
+    'popover-foreground':   '0 0% 10%',
+    'primary':              '218 50% 60%',  // 0x668ccc — Blender Light selection blue
+    'primary-foreground':   '0 0% 100%',
+    'secondary':            '0 0% 86%',     // wcol_regular inner
+    'secondary-foreground': '0 0% 10%',
+    'muted':                '0 0% 68%',     // 0xadadad — header_back (dim panel)
+    'muted-foreground':     '0 0% 30%',     // 0x4d4d4d — dim text
+    'accent':               '218 50% 60%',  // selection blue
+    'accent-foreground':    '0 0% 100%',
+    'destructive':          '0 60% 45%',    // darker red so it reads on light bg
+    'destructive-foreground': '0 0% 100%',
+    'border':               '0 0% 30%',     // 0x4d4d4d — outline
+    'input':                '0 0% 86%',     // wcol_regular inner
+    'ring':                 '218 50% 60%',
+    'chart-1':              '218 50% 60%',
+    'chart-2':              '40 90% 45%',
+    'chart-3':              '120 40% 40%',
+    'chart-4':              '0 60% 45%',
+    'chart-5':              '280 50% 50%',
+  },
+};
+
+export const blenderDarkPreset = {
+  id: 'blender-dark',
+  name: 'Blender',
+  colors: {
+    'background':           '0 0% 19%',     // 0x303030 — area space
+    'foreground':           '0 0% 90%',     // 0xe6e6e6 — wcol text
+    'card':                 '0 0% 24%',     // 0x3d3d3d — panel_back
+    'card-foreground':      '0 0% 90%',
+    'popover':              '0 0% 11%',     // 0x1d1d1d — header_back / dropdown
+    'popover-foreground':   '0 0% 100%',    // 0xffffff — popover text_sel
+    'primary':              '213 44% 49%',  // 0x4772b3 — Blender selection blue
+    'primary-foreground':   '0 0% 100%',
+    'secondary':            '0 0% 16%',     // 0x282828 — toolbar item bg
+    'secondary-foreground': '0 0% 90%',
+    'muted':                '0 0% 16%',     // 0x282828 — same as secondary, Blender uses one dim slot
+    'muted-foreground':     '0 0% 66%',     // 0xa9a9a9 — dim labels
+    'accent':               '213 44% 49%',  // Blender uses selection blue for accent
+    'accent-foreground':    '0 0% 100%',
+    'destructive':          '0 60% 50%',    // 0xcc3333 vibe — Blender's report-error red
+    'destructive-foreground': '0 0% 100%',
+    'border':               '0 0% 24%',     // 0x3d3d3d — outline
+    'input':                '0 0% 11%',     // 0x1d1d1d — wcol_text inner
+    'ring':                 '213 44% 49%',  // Blender selection blue for focus rings
+    'chart-1':              '213 44% 49%',  // Blender blue
+    'chart-2':              '40 90% 55%',   // Blender amber (used for keyframe markers)
+    'chart-3':              '120 40% 50%',  // green for selected/active vertices
+    'chart-4':              '0 60% 50%',    // red for destructive / out-of-range
+    'chart-5':              '280 50% 60%',  // purple — driver/expression links
+  },
+};
+
 export const defaultLightPreset = sunsetHorizonDarkPreset;
 
 export const defaultDarkPreset = modernMinimalDarkPreset;
 
 export const lightThemePresets = [
   amethystHazeLightPreset,
+  blenderLightPreset,
   bubblegumLightPreset,
   caffeineLightPreset,
   candylandLightPreset,
@@ -845,6 +937,7 @@ export const lightThemePresets = [
 
 export const darkThemePresets = [
   amethystHazeDarkPreset,
+  blenderDarkPreset,
   bubblegumDarkPreset,
   caffeineDarkPreset,
   candylandDarkPreset,
