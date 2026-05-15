@@ -56,7 +56,9 @@ function near(a, b, eps = 1e-3) {
 // ── evaluateEasing ─────────────────────────────────────────────────
 
 {
-  // v39 BezTriple: evaluateEasing now reads `interpolation` (was `easing`).
+  // v39 BezTriple: evaluateEasing reads `interpolation` (Slice 2.C dispatches
+  // through the canonical fcurveEval primitives — same code path as `evaluateFCurve`).
+
   // Linear is identity
   for (const t of [0, 0.25, 0.5, 0.75, 1]) {
     assert(evaluateEasing(t, 'linear') === t, `linear: ${t} → ${t}`);
@@ -66,19 +68,27 @@ function near(a, b, eps = 1e-3) {
   assert(evaluateEasing(0.5, 'constant') === 0, 'constant: anywhere → 0');
   assert(evaluateEasing(0.99, 'constant') === 0, 'constant: near 1 → 0');
 
-  // Default / undefined / 'bezier' all use the legacy ease-both preset (Slice 2.A).
-  const t = 0.3;
-  const std = evaluateEasing(t, 'bezier');
-  assert(near(evaluateEasing(t, undefined), std), 'undefined → bezier preset');
-  assert(near(evaluateEasing(t, null), std), 'null → bezier preset');
+  // Undefined / null defaults to LINEAR (matches the v39 migration mapping —
+  // legacy unset easing → interpolation:'linear'). Pre-Slice-2.A the legacy
+  // animationEngine defaulted to ease-both; that quirk is gone post-migration.
+  assert(evaluateEasing(0.3, undefined) === 0.3, 'undefined → linear (matches v39 migration default)');
+  assert(evaluateEasing(0.3, null) === 0.3, 'null → linear');
 
-  // Named easings (Slice 2.C) currently degrade to linear.
-  assert(evaluateEasing(0.5, 'sine') === 0.5, 'sine: degrades to linear in Slice 2.A');
-  assert(evaluateEasing(0.5, 'quad') === 0.5, 'quad: degrades to linear in Slice 2.A');
-
+  // Bezier with default 1/3-2/3 handles produces a soft S-curve through (0,0)+(1,1).
+  // By symmetry t=0.5 → value=0.5 exactly.
+  assert(near(evaluateEasing(0.5, 'bezier'), 0.5), 'bezier at 0.5 = 0.5 (symmetric)');
   // Boundary values
-  assert(evaluateEasing(0, 'bezier') === 0, 'bezier at 0 = 0');
+  assert(near(evaluateEasing(0, 'bezier'), 0), 'bezier at 0 = 0');
   assert(near(evaluateEasing(1, 'bezier'), 1), 'bezier at 1 = 1');
+
+  // Slice 2.C named easings ship proper Penner/Blender preset curves.
+  // Sine ease_in (the default mode for 'sine') at t=0.5 → 1 - cos(π/4) ≈ 0.293.
+  assert(near(evaluateEasing(0.5, 'sine'), 1 - Math.cos(Math.PI / 4)),
+    'sine: default (in) at 0.5 = 1 - cos(π/4)');
+  // Quad ease_in (default mode for 'quad') at t=0.5 → 0.25.
+  assert(near(evaluateEasing(0.5, 'quad'), 0.25), 'quad: default (in) at 0.5 = 0.25');
+  // Cubic ease_in at t=0.5 → 0.125.
+  assert(near(evaluateEasing(0.5, 'cubic'), 0.125), 'cubic: default (in) at 0.5 = 0.125');
 }
 
 // ── interpolateTrack ───────────────────────────────────────────────

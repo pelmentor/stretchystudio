@@ -38,11 +38,14 @@
  *     interpolation,            // 'constant'|'linear'|'bezier'|<10 named easings>
  *     easeMode?, autoHandleType?, flag }
  *
- * Slice 2.A wires the field rename only — `interpolation === 'bezier'`
- * still falls back to linear interpolation here (Slice 2.C will add the
- * cubic-bezier evaluator that consumes `handleLeft`/`handleRight`).
- * The 10 named easings (sine/quad/.../elastic) likewise lerp until
- * Slice 2.C ships their preset curves.
+ * Slice 2.C ships the full evaluator: cubic-bezier inversion via
+ * Cardano's roots + per-keyform `handleLeft`/`handleRight` consumption,
+ * and the 10 named easings (sine/quad/cubic/quart/quint/expo/circ/back/
+ * bounce/elastic) × {in/out/inout} per Blender's `BLI_easing_*`
+ * functions. The dispatch lives in
+ * [fcurveEval.js](./fcurveEval.js)#evaluateBezTripleSegment so both
+ * `evaluateFCurve` and `interpolateTrack` (animationEngine path) use
+ * the same implementation.
  *
  * # Other Blender deviations still in flight
  * - Baked sample arrays (`fpt: FPoint[]` for imported motions) — SS
@@ -54,6 +57,7 @@
  */
 
 import { evaluateDriver } from './driver.js';
+import { evaluateBezTripleSegment } from './fcurveEval.js';
 
 /**
  * @typedef {Object} HandlePoint
@@ -78,18 +82,6 @@ import { evaluateDriver } from './driver.js';
  * @property {Keyframe[]} keyforms
  * @property {object} [driver]
  */
-
-/**
- * Linear interpolation between two scalars.
- *
- * @param {number} a
- * @param {number} b
- * @param {number} t   -- 0..1
- * @returns {number}
- */
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
 
 /**
  * Evaluate an FCurve at a given time. Returns the interpolated keyframe
@@ -126,15 +118,11 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
         const a = keyforms[i];
         const b = keyforms[i + 1];
         if (time >= a.time && time <= b.time) {
-          const span = b.time - a.time;
-          const t = span > 0 ? (time - a.time) / span : 0;
-          // Slice 2.A: 'constant' holds; everything else lerps.
-          // Real bezier + named-easing eval lands in Slice 2.C.
-          if (a.interpolation === 'constant') {
-            baseValue = a.value;
-          } else {
-            baseValue = lerp(a.value, b.value, t);
-          }
+          // Slice 2.C: full BezTriple evaluator — bezier (cubic-bezier
+          // inversion + value sampling), 10 named easings, plus the
+          // legacy linear/constant. Mirrors Blender's
+          // `fcurve_eval_keyframes_interpolate` (fcurve.cc:2026).
+          baseValue = evaluateBezTripleSegment(a, b, time);
           break;
         }
       }

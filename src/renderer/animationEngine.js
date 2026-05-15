@@ -24,10 +24,7 @@
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
 import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
-
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
+import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
 
 function bezier1D(t, startTension, endTension) {
   const t2 = t * t;
@@ -64,28 +61,36 @@ export function evaluateCubicBezier(x, cx1, cy1, cx2, cy2) {
 /**
  * Evaluate the parametric easing shape for a v39 BezTriple keyform.
  *
- * Slice 2.A wires the field rename: reads `interpolation` (post-v39)
- * instead of `easing` (pre-v39). Behavior preserved for `'bezier'` via
- * the legacy ease-both preset (0.42, 0, 0.58, 1) so freshly migrated
- * keyforms evaluate identically to their pre-migration shape.
- *
- * Slice 2.C will replace the `'bezier'` branch with per-keyform
- * `handleLeft`/`handleRight`-derived control points + add the 10 named
- * easings (sine/quad/.../elastic).
+ * Slice 2.A renamed the field (`easing` → `interpolation`). Slice 2.C
+ * replaces the local impl with the canonical
+ * [fcurveEval.js](../anim/fcurveEval.js)#evaluateBezTripleParam — same
+ * impl used by `evaluateFCurve`. This stub is preserved as a back-compat
+ * surface for any callers that still pass a raw `t ∈ [0,1]` + an
+ * interpolation enum (no segment context). It synthesizes a degenerate
+ * 0→1 / 0→1 segment to reuse the canonical evaluator.
  *
  * @param {number} t                            -- 0..1 segment parameter
  * @param {string|undefined} interpolation      -- 'constant'|'linear'|'bezier'|<named easings>
  * @returns {number}
  */
 export function evaluateEasing(t, interpolation) {
-  if (interpolation === 'linear') return t;
+  if (interpolation === 'linear' || !interpolation) return t;
   if (interpolation === 'constant') return 0;
-  if (interpolation === 'bezier' || !interpolation) {
-    return evaluateCubicBezier(t, 0.42, 0, 0.58, 1);
-  }
-  // Named easings (sine, quad, cubic, ...) ship in Slice 2.C.
-  // Until then they degrade to linear interpolation.
-  return t;
+  // Synthesize a degenerate (time:0..1, value:0..1) segment so the
+  // canonical evaluator can dispatch on `interpolation` per Blender's
+  // BEZT_IPO_* table, including bezier (with default handle positions)
+  // and the 10 named easings.
+  const prev = {
+    time: 0, value: 0,
+    handleLeft: { time: 0, value: 0 }, handleRight: { time: 1 / 3, value: 0 },
+    handleType: { left: 'auto', right: 'auto' }, interpolation,
+  };
+  const next = {
+    time: 1, value: 1,
+    handleLeft: { time: 2 / 3, value: 1 }, handleRight: { time: 1, value: 1 },
+    handleType: { left: 'auto', right: 'auto' }, interpolation: 'linear',
+  };
+  return evaluateBezTripleSegment(prev, next, t);
 }
 
 /**
@@ -107,14 +112,15 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
 
   // Clamp to edge values
   if (timeMs <= keyframes[0].time) return keyframes[0].value;
-  
+
   if (timeMs >= keyframes[keyframes.length - 1].time) {
     if (loopKeyframes && timeMs < endMs && keyframes.length > 0) {
+      // Loop wrap-around: synthesize a virtual closing segment from
+      // the last keyform back to a copy of the first at endMs.
       const kLast = keyframes[keyframes.length - 1];
       const kFirst = keyframes[0];
-      const t = (timeMs - kLast.time) / (endMs - kLast.time);
-      const te = evaluateEasing(t, kLast.interpolation);
-      return lerp(kLast.value, kFirst.value, te);
+      const virtualNext = { ...kFirst, time: endMs };
+      return evaluateBezTripleSegment(kLast, virtualNext, timeMs);
     }
     return keyframes[keyframes.length - 1].value;
   }
@@ -130,15 +136,15 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
 
   const kA = keyframes[lo];
   const kB = keyframes[lo + 1];
-  const t  = (timeMs - kA.time) / (kB.time - kA.time);
-  const te = evaluateEasing(t, kA.interpolation); // Interpolation from the *start* keyframe of the segment
 
   if (typeof kA.value === 'boolean') {
     // Discrete step interpolation for boolean properties like 'visible'
     return kA.value;
   }
 
-  return lerp(kA.value, kB.value, te);
+  // Slice 2.C: full BezTriple eval. Interpolation discriminator lives
+  // on the segment-START keyform per Blender (`prevbezt->ipo`).
+  return evaluateBezTripleSegment(kA, kB, timeMs);
 }
 
 /**
@@ -153,9 +159,13 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
     if (loopKeyframes && timeMs < endMs && keyframes.length > 0) {
       const kLast = keyframes[keyframes.length - 1];
       const kFirst = keyframes[0];
-      const t = (timeMs - kLast.time) / (endMs - kLast.time);
-      const te = evaluateEasing(t, kLast.interpolation);
-
+      const virtualNext = { ...kFirst, time: endMs, value: 0 };
+      // Mesh-vert keyforms hold {x,y} arrays for `value`. Use the
+      // canonical evaluator to derive the parametric `te ∈ [0,1]` from
+      // the segment shape (named easings + bezier all decompose to a
+      // single shared lerp factor for per-vertex interpolation; true
+      // per-vertex bezier handles aren't stored on mesh_verts today).
+      const te = evaluateBezTripleParam(kLast, virtualNext, timeMs);
       return kLast.value.map((vA, i) => {
         const vB = kFirst.value[i];
         if (!vB) return { x: vA.x, y: vA.y };
@@ -175,8 +185,7 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
 
   const kA = keyframes[lo];
   const kB = keyframes[lo + 1];
-  const t  = (timeMs - kA.time) / (kB.time - kA.time);
-  const te = evaluateEasing(t, kA.interpolation); // Interpolation from the *start* keyframe of the segment
+  const te = evaluateBezTripleParam(kA, kB, timeMs);
 
   return kA.value.map((vA, i) => {
     const vB = kB.value[i];
