@@ -97,6 +97,16 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *   `is_fcurve_evaluatable` pattern; `evaluateFCurve` itself stays a
  *   pure value function so the Graph Editor render path can still
  *   sample muted curves (drawn greyed).
+ * @property {number} [activeKeyformIndex] - Slice 5.H: per-FCurve
+ *   active-keyform index. Mirrors Blender's `active_keyframe_index`
+ *   on the FCurve struct (`DNA_anim_types.h:362-370`); sentinel
+ *   "none" is missing-or-`-1` (`FCURVE_ACTIVE_KEYFRAME_NONE` at
+ *   `DNA_anim_enums.h:299-300`). Sparse; missing means NONE. Read via
+ *   `getActiveKeyformIndex`, written via `setActiveKeyform` in
+ *   `anim/fcurveActiveKeyform.js`. The "must-be-selected" invariant
+ *   (Blender's `BLI_assert_msg` in `BKE_fcurve_active_keyframe_set`)
+ *   is enforced at the FCurveEditor click site since SS's keyform
+ *   selection lives in the editor-local `selectedHandles` Map.
  */
 
 /**

@@ -333,6 +333,14 @@ import {
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
 import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
+import {
+  getActiveKeyformIndex,
+  setActiveKeyform,
+  remapActiveKeyform,
+  captureActiveKeyformObject,
+  relocateActiveKeyformByObject,
+  FCURVE_ACTIVE_KEYFORM_NONE,
+} from '../../../anim/fcurveActiveKeyform.js';
 import { useTransformModalInput } from '../../../lib/modal/useTransformModalInput.js';
 import {
   keyEventToAction,
@@ -687,8 +695,24 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       if (d.fcurve.id !== activeFCurveId) continue;
       const sub = selectedHandles.get(d.fcurve.id);
       const muted = isFCurveMuted(d.fcurve);
+      // Slice 5.H — Blender's `draw_fcurve_active_vertex` three-condition
+      // gate (`graph_draw.cc:243-262`): (1) channel-active (only the
+      // active-channel branch reaches here), (2) `active_keyframe_index
+      // != FCURVE_ACTIVE_KEYFRAME_NONE`, (3) the indexed keyform is
+      // selected. Condition (3) is enforced here in render because SS's
+      // keyform selection lives editor-local (`selectedHandles`), not
+      // on the keyform record. See `fcurveActiveKeyform.js` module
+      // header for the split rationale.
+      const activeIdx = getActiveKeyformIndex(d.fcurve);
+      let activeIdxToDraw = FCURVE_ACTIVE_KEYFORM_NONE;
+      if (activeIdx !== FCURVE_ACTIVE_KEYFORM_NONE) {
+        const subEntry = sub?.get(activeIdx);
+        if (subEntry && (subEntry.center || subEntry.left || subEntry.right)) {
+          activeIdxToDraw = activeIdx;
+        }
+      }
       drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted);
-      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted);
+      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted, activeIdxToDraw);
     }
   }, [visible, selectedHandles, view, activeFCurveId]);
 
@@ -828,6 +852,43 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       } else {
         setSelectedHandles(new Map([[hit.fcurveId, subNext]]));
       }
+
+      // Slice 5.H — Blender's "may_activate" pattern for active keyform.
+      // Mirrors `mouse_graph_keys` at
+      // `reference/blender/source/blender/editors/space_graph/graph_select.cc:1789-1797`:
+      //
+      //   if (!run_modal && BEZT_ISSEL_ANY(bezt)) {
+      //     const bool may_activate = !already_selected ||
+      //                               BKE_fcurve_active_keyframe_index(...)
+      //                                   == FCURVE_ACTIVE_KEYFRAME_NONE;
+      //     if (may_activate) BKE_fcurve_active_keyframe_set(fcu, bezt);
+      //   }
+      //
+      // The `!already_selected || current == NONE` gate is the
+      // load-bearing detail: Shift-clicking an already-selected keyform
+      // when something is already active leaves the active pointer
+      // alone, so a multi-select extension doesn't steal focus from
+      // whatever the user was numerically editing.
+      const subPrevEntry = subPrev.get(hit.idx);
+      const wasAlreadySelected = !!subPrevEntry &&
+        (subPrevEntry.center || subPrevEntry.left || subPrevEntry.right);
+      const subNextEntry = subNext.get(hit.idx);
+      const isSelectedAfter = !!subNextEntry &&
+        (subNextEntry.center || subNextEntry.left || subNextEntry.right);
+      if (isSelectedAfter) {
+        const hitFC = visible.find((d) => d.fcurve.id === hit.fcurveId)?.fcurve;
+        const currentActive = getActiveKeyformIndex(hitFC);
+        const mayActivate = !wasAlreadySelected ||
+          currentActive === FCURVE_ACTIVE_KEYFORM_NONE;
+        if (mayActivate) {
+          update((p) => {
+            const a = getActiveSceneAction(p, activeActionId);
+            if (!a) return;
+            setActiveKeyform(a, hit.fcurveId, hit.idx);
+          });
+        }
+      }
+
       startKeyformDrag(e, hit.fcurveId, hit.idx);
       return;
     }
@@ -835,7 +896,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     if (!e.shiftKey) clearSelection();
     const ms = clamp(view.xToTime(x), 0, duration);
     onSeek(ms);
-  }, [visible, activeFCurveId, view, selectedHandles, duration, onSeek, onPickActiveByTarget]);
+  }, [visible, activeFCurveId, view, selectedHandles, duration, onSeek, onPickActiveByTarget, update, activeActionId]);
 
   // ── single-keyform drag (Slice 5.B) ─────────────────────────────────
 
@@ -883,7 +944,15 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
           dTime,
           dValue,
         );
+        // Slice 5.H — per-tick active tracking through sort (single-
+        // keyform drag variant). See bulk modal-grab onMove for the
+        // sister wiring. The captured object reference might be the
+        // same `k` if the user is dragging the active keyform, or a
+        // different kf if they're dragging a non-active one — either
+        // way the helper finds its post-sort position.
+        const capturedActiveTick = captureActiveKeyformObject(fc);
         fc.keyforms.sort((a, b) => a.time - b.time);
+        relocateActiveKeyformByObject(a, fcurveId, capturedActiveTick);
         const newIdx = fc.keyforms.indexOf(k);
         if (newIdx !== curIdx && newIdx >= 0) {
           dragIdxRef.current = newIdx;
@@ -906,8 +975,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         if (!fc) return;
         const curIdx = dragIdxRef.current;
         const sel = new Map([[curIdx, { center: true, left: true, right: true }]]);
+        // Slice 5.H — capture active object pre-merge so it tracks
+        // through the duplicate-collapse pass per Blender's invariant
+        // (`fcurve.cc:1768-1770` — deleting/merging the active keyform
+        // requires the index to be re-pointed or cleared).
+        const capturedActive = captureActiveKeyformObject(fc);
         const remap = mergeDuplicateTimeKeys(fc, sel);
         recalcKeyformHandles(fc.keyforms);
+        relocateActiveKeyformByObject(a, fcurveId, capturedActive);
         const finalIdx = remap.get(curIdx);
         if (typeof finalIdx === 'number' && finalIdx >= 0 && finalIdx !== curIdx) {
           queueMicrotask(() => {
@@ -1167,7 +1242,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             const k = fc.keyforms[curIdx];
             if (k) objsByOrigIdx.set(origIdx, k);
           }
+          // Slice 5.H — per-tick active tracking. The sort below may
+          // shift the active keyform's index; track by object so the
+          // highlight stays on the right vertex throughout the modal
+          // drag. (Without this, the highlight would jump to whatever
+          // kf happens to occupy the pre-sort active index.)
+          const capturedActiveTick = captureActiveKeyformObject(fc);
           fc.keyforms.sort((a, b) => a.time - b.time);
+          relocateActiveKeyformByObject(a, fcurveId, capturedActiveTick);
           const nextMap = new Map();
           for (const [origIdx, obj] of objsByOrigIdx) {
             const ni = fc.keyforms.indexOf(obj);
@@ -1242,8 +1324,13 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
               const curIdx = dragMap.get(origIdx);
               if (typeof curIdx === 'number') workSub.set(curIdx, parts);
             }
+            // Slice 5.H — capture pre-merge active object so it
+            // tracks through `mergeDuplicateTimeKeys` (Blender's per-
+            // op active-keyframe rebind, `fcurve.cc:1768-1770`).
+            const capturedActive = captureActiveKeyformObject(fc);
             const remap = mergeDuplicateTimeKeys(fc, workSub);
             recalcKeyformHandles(fc.keyforms);
+            relocateActiveKeyformByObject(a, fcurveId, capturedActive);
             remapsByFc.set(fcurveId, remap);
           }
           queueMicrotask(() => {
@@ -1555,6 +1642,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         if (fc.keyforms.length - liveWould < 1) continue;
         const remap = deleteKeyforms(fc, sub);
         recalcKeyformHandles(fc.keyforms);
+        // Slice 5.H — mirror `fcurve.cc:1768-1770`: if the active
+        // keyform was just deleted, clear active; otherwise shift
+        // its index through the remap.
+        remapActiveKeyform(a, fcurveId, remap);
         remapsByFc.set(fcurveId, remap);
       }
       queueMicrotask(() => {
@@ -1601,6 +1692,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
           const k = fc.keyforms[origIdx];
           if (k) objsByOrigIdx.set(origIdx, k);
         }
+        // Slice 5.H — capture pre-snap active object so it tracks
+        // through snap + sort + merge per Blender's invariant
+        // (`fcurve.cc:1313-1320` sort tracking + `:1768-1770` merge).
+        const capturedActive = captureActiveKeyformObject(fc);
         snapKeyformsToFrame(fc, sub, msPerFrame);
         fc.keyforms.sort((a, b) => a.time - b.time);
         const postSortSel = new Map();
@@ -1612,6 +1707,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         }
         const remap = mergeDuplicateTimeKeys(fc, postSortSel);
         recalcKeyformHandles(fc.keyforms);
+        relocateActiveKeyformByObject(a, fcurveId, capturedActive);
         resultByFc.set(fcurveId, { postSortSel, remap });
       }
       queueMicrotask(() => {
@@ -2212,8 +2308,13 @@ function drawHandles(ctx, keyforms, sub, view, isActive, isMuted = false) {
  * @param {boolean} isActive
  * @param {boolean} [isMuted] - Slice 5.G: dims diamond fill+stroke
  *   alpha to match the muted SVG curve stroke. Diamonds stay clickable.
+ * @param {number} [activeKfIdx] - Slice 5.H: index of the active
+ *   keyform to highlight with `TH_VERTEX_ACTIVE`-equivalent halo.
+ *   Pass `FCURVE_ACTIVE_KEYFORM_NONE` (-1) to disable. Caller is
+ *   responsible for enforcing Blender's three-condition gate
+ *   (`graph_draw.cc:243-262`); see canvas-render call site.
  */
-function drawKeyframes(ctx, keyforms, sub, view, isActive, isMuted = false) {
+function drawKeyframes(ctx, keyforms, sub, view, isActive, isMuted = false, activeKfIdx = -1) {
   for (let i = 0; i < keyforms.length; i++) {
     const kf = keyforms[i];
     if (typeof kf.value !== 'number') continue;
@@ -2239,6 +2340,30 @@ function drawKeyframes(ctx, keyforms, sub, view, isActive, isMuted = false) {
     ctx.stroke();
   }
   ctx.globalAlpha = 1.0;
+
+  // Slice 5.H — active-keyform halo drawn AFTER all diamonds so it
+  // sits on top and isn't dimmed by the muted alpha pass above.
+  // Mirrors `draw_fcurve_active_vertex` (`graph_draw.cc:241-262`),
+  // which paints the active vertex AFTER the regular vertex pass
+  // with `TH_VERTEX_ACTIVE` (default-theme bright white). SS uses a
+  // pale-yellow outline ring to stay distinguishable from the white
+  // stroke that already marks selected diamonds.
+  if (activeKfIdx >= 0 && activeKfIdx < keyforms.length) {
+    const kf = keyforms[activeKfIdx];
+    if (typeof kf?.value === 'number') {
+      const x = view.tx(kf.time);
+      const y = view.ty(kf.value);
+      const baseR = isActive ? 4 : 3;
+      const parts = sub?.get(activeKfIdx);
+      const sel = !!parts?.center;
+      const r = sel ? baseR + 1 : baseR;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 2.5, 0, Math.PI * 2);
+      ctx.strokeStyle = 'hsl(60 100% 75%)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
 }
 
 // ── HUD + Menu subcomponents ─────────────────────────────────────────
