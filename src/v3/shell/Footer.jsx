@@ -30,7 +30,8 @@
  * layout was too tight. Status text (`text-[11px]`) stays vertically
  * centered.
  *
- * Per-section sources:
+ * Per-section sources (Round 7 lift updated this list — pre-lift the
+ * center hosted only reports; reports now live in a CENTER-RIGHT slot):
  *
  *   - LEFT  — `formatInputStatus(...)` over `useModalTransformStore` +
  *             `useModalVertexTransformStore` + `useEditorStore.editMode`
@@ -41,12 +42,21 @@
  *             labels per active editor area) is NOT surfaced — SS has
  *             no cursor-area-zone keymap primitive. See module JSDoc
  *             in `footerStatusData.js` for the rationale.
- *   - CENTER — `countReports(...)` over `useLogsStore.entries`. Renders
- *              warn (yellow) + error (red) pills with counts; hidden
- *              when both are zero. Title attr names the entry kind +
- *              count for keyboard / screen-reader access. Deviation
- *              from Blender's `uiTemplateReportsBanner`: SS shows
- *              aggregate counts (permanent) instead of a timed
+ *   - CENTER — `<PlaybackControls />` (Round 7 FID-A.2 lift). Hosts the
+ *              transport bar lifted from `TimelineEditor.jsx`. Mirrors
+ *              Blender's `DOPESHEET_HT_playback_controls` +
+ *              `GRAPH_HT_playback_controls` with a documented region-
+ *              type deviation (Blender uses per-editor `bl_region_type =
+ *              'FOOTER'`; SS uses the global Footer). Wrapped in
+ *              `flex-1 min-w-0` so the transport shrinks gracefully on
+ *              narrow viewports; PlaybackControls' own `overflow-x-auto`
+ *              keeps controls reachable when the viewport is too narrow.
+ *   - CENTER-RIGHT — `countReports(...)` over `useLogsStore.entries`.
+ *              Renders warn (yellow) + error (red) pills with counts;
+ *              hidden when both are zero. Title attr names the entry
+ *              kind + count for keyboard / screen-reader access.
+ *              Deviation from Blender's `uiTemplateReportsBanner`: SS
+ *              shows aggregate counts (permanent) instead of a timed
  *              fade-out single-message banner.
  *   - RIGHT  — `formatStats(...)` over `useEditorStore.selection` +
  *              active-head dataKind + per-mode embellishments (vert

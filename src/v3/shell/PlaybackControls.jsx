@@ -39,26 +39,76 @@
  * preserves Blender's "transport lives at the bottom" intent without
  * inventing a new region primitive.
  *
- * SS-specific controls NOT in Blender's `playback_controls`:
+ * SS-specific controls NOT in Blender's `playback_controls` (audit-fix
+ * B1: Repeat / loop toggle added to this list — previously surfaced
+ * without acknowledgment, which `feedback_blender_reference_strict`
+ * forbids):
  *
- *   - FPS field (Blender keeps fps in scene props, exposed via
- *     `TIME_PT_playback` popover, not as a top-level transport
- *     control).
- *   - Speed slider (no Blender equivalent; SS playback-speed
- *     multiplier).
- *   - Loop Keyframes toggle (no Blender equivalent; interpolates
- *     last-kf back to first-kf for seamless loops).
- *   - Audio track button (Blender's audio is sequencer-only;
- *     SS supports per-action audio tracks).
- *   - Action picker / + New / Import (Blender's `template_action`
- *     lives in the dopesheet HEADER, not playback_controls; SS
- *     collapses both into one row for compactness).
- *   - K-hint pill (SS-specific keyboard discoverability affordance).
+ *   - **Repeat (loop toggle)** — no equivalent in
+ *     `playback_controls`; loop mode lives in the `TIME_PT_playback`
+ *     popover at `space_time.py:245`
+ *     (`col.prop(scene, "playback_loop_mode", text="Loop")`). SS surfaces
+ *     it as a top-level button for one-click access.
+ *   - **FPS field** — Blender keeps fps in scene props, exposed via
+ *     `TIME_PT_playback` popover, not as a top-level transport control.
+ *   - **Speed slider** — no Blender equivalent; SS playback-speed
+ *     multiplier.
+ *   - **Loop Keyframes toggle** — no Blender equivalent; interpolates
+ *     last-kf back to first-kf for seamless loops.
+ *   - **Audio track button** — Blender's audio is sequencer-only; SS
+ *     supports per-action audio tracks.
+ *   - **Action picker / + New / Import** — Blender's `template_action`
+ *     lives in the dopesheet HEADER
+ *     (`space_dopesheet.py:322` via `DOPESHEET_HT_editor_buttons`), not
+ *     in playback_controls. SS collapses both into one row for
+ *     compactness.
+ *   - **K-hint pill** — SS-specific keyboard discoverability affordance.
  *
- * All these are kept as part of the lift because they were
- * previously co-located in the same `TimelineEditor` transport row
- * and splitting them would scatter related controls. Documented as
- * a deliberate SS extension, not a Blender port omission.
+ * All these are kept as part of the lift because they were previously
+ * co-located in the same `TimelineEditor` transport row and splitting
+ * them would scatter related controls. Documented as deliberate SS
+ * extensions, NOT Blender port omissions.
+ *
+ * Blender controls in `playback_controls` (`space_time.py:40-136`) that
+ * are NOT ported (audit-fix B2-B8: all six absences now acknowledged
+ * per `feedback_blender_reference_strict` — silent omissions are the
+ * exact pattern that rule was written to forbid):
+ *
+ *   - **`TIME_PT_playback` leading popover** (`space_time.py:52-55`) —
+ *     Blender's first control in playback_controls. Hosts Limit-to-Frame-
+ *     Range, Allow-Preroll, Follow-Current-Frame, Play-In editor scoping.
+ *     SS has no equivalent surface; deliberate omission, no SS analog
+ *     planned today.
+ *   - **`TIME_PT_keyframing_settings` popover next to auto-key**
+ *     (`space_time.py:59-64`) — Blender renders a `KEYTYPE_{...}_VEC`
+ *     icon popover alongside the auto-key toggle for keyframe-type
+ *     selection. SS uses a single global keyframe type today; not
+ *     ported.
+ *   - **`TIME_PT_auto_keyframing` popover next to auto-key**
+ *     (`space_time.py:75-79`) — Blender's auto-key toggle is paired
+ *     with this popover (subordinate panel, `sub.active =
+ *     use_keyframe_insert_auto`). SS has only the toggle; not ported.
+ *   - **`screen.keyframe_jump` PREV/NEXT-keyframe** (`space_time.py:83`
+ *     + `:101`) — Blender's transport has FOUR jump controls (first,
+ *     prev-kf, next-kf, last); SS has only first + last. Adding prev/
+ *     next-kf requires a per-action keyframe-list iteration primitive in
+ *     animationStore; deferred.
+ *   - **Time-jump cluster** (`space_time.py:104-108`) — `screen.time_jump
+ *     backward=True/False` + `TIME_PT_jump` popover (step-N-frames). SS
+ *     uses scrubbing + Frame numeric field for the same workflow; the
+ *     fixed-step buttons are not ported.
+ *   - **Playhead-snap toggle** (`space_time.py:110-114`) —
+ *     `tool_settings.use_snap_playhead` + `TIME_PT_playhead_snapping`
+ *     popover. SS has no playhead-snap concept today; not ported.
+ *   - **`use_preview_range` toggle + dual binding**
+ *     (`space_time.py:127-136`) — Blender's Start/End fields switch
+ *     between scene range and preview range via a toggle. SS has a
+ *     single scene-range only; the SS Start/End fields always bind
+ *     scene range.
+ *   - **`PLAY_REVERSE`** (`space_time.py:94`) — Blender shows
+ *     PLAY_REVERSE + PLAY concurrently when stopped (except in JACK
+ *     A/V sync mode). SS has bidirectional Play/Pause only; reverse-
+ *     play requires a `playReverse` action on animationStore (deferred).
  *
  * Per Rule №1 (no quick-and-dirty fixes): behavior preserved
  * verbatim from the pre-lift implementation. No new abstractions
@@ -153,19 +203,36 @@ function NumField({ label, value, onChange, min, max, step = 1, className = '', 
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   PlaybackControls — main export. Subscribes to the same stores
-   `TimelineEditor` used for its transport row.
+   PlaybackControls — main export.
 
-   Subscription notes (per `feedback_filter_in_selector` rule):
-   `useAnimationStore()` without a selector returns the whole store —
-   this matches pre-lift behavior (TimelineEditor did the same). The
-   tighter selector forms aren't applied here because the transport
-   reads ~10 slots and a partial extraction would be harder to keep
-   in sync. Audit-fix sweep can narrow these if perf shows a real
-   issue.
+   **Audit-fix HIGH-A1 (Round 7 audit-fix sweep):** narrow primitive
+   subscriptions per slot. The pre-fix `useAnimationStore()` (no selector)
+   form caused a 60 Hz re-render of the WHOLE Footer + PlaybackControls
+   subtree during playback in EVERY workspace — because `animationStore.tick`
+   replaces `currentTime` / `_lastTimestamp` / `loopCount` every rAF frame,
+   and the lift moved this subscription from a workspace-gated mount
+   (TimelineEditor) into the always-mounted global Footer. The narrowed
+   subscriptions below pull only what the JSX renders, and method calls
+   reach `useAnimationStore.getState()` lazily inside callbacks (zustand
+   method refs are stable; getState returns the latest store state at
+   call time).
 ────────────────────────────────────────────────────────────────────────── */
 export function PlaybackControls() {
-  const anim = useAnimationStore();
+  // Primitive subscriptions — Object.is stable, re-render only on
+  // semantic change. `currentTime` IS one of the rAF-mutated slots,
+  // but we need it for the Frame field display, so re-renders during
+  // playback are intentional (and now scoped to PlaybackControls, not
+  // its parent Footer subtree).
+  const activeActionId = useAnimationStore(s => s.activeActionId);
+  const currentTime    = useAnimationStore(s => s.currentTime);
+  const isPlaying      = useAnimationStore(s => s.isPlaying);
+  const loop           = useAnimationStore(s => s.loop);
+  const loopKeyframes  = useAnimationStore(s => s.loopKeyframes);
+  const fps            = useAnimationStore(s => s.fps);
+  const animStartFrame = useAnimationStore(s => s.startFrame);
+  const animEndFrame   = useAnimationStore(s => s.endFrame);
+  const speed          = useAnimationStore(s => s.speed);
+
   const proj = useProjectStore(s => s.project);
   const update = useProjectStore(s => s.updateProject);
   const autoKeyframe = useEditorStore(s => s.autoKeyframe);
@@ -179,16 +246,19 @@ export function PlaybackControls() {
   // every render since this component re-subscribes to all the same
   // slots; useMemo would gain little and add a dep-array maintenance
   // burden.
-  const animation = getActiveSceneAction(proj, anim.activeActionId);
+  const animation = getActiveSceneAction(proj, activeActionId);
 
   /* ── Derived values ─────────────────────────────────────────────────── */
-  const fps = anim.fps;
-  const currentFrame = msToFrame(anim.currentTime, fps);
-  const endFrame = Math.max(1, anim.endFrame);
-  const startFrame = Math.max(0, anim.startFrame);
+  const currentFrame = msToFrame(currentTime, fps);
+  const endFrame = Math.max(1, animEndFrame);
+  const startFrame = Math.max(0, animStartFrame);
   const hasAnimation = proj.actions.length > 0;
 
   /* ── Create a default action if none ────────────────────────────────── */
+  // Audit-fix HIGH-A1: methods reached via `useAnimationStore.getState()`
+  // — zustand method refs are stable, so we don't add the store to
+  // useCallback deps (omitting it avoids re-creating these callbacks
+  // every time a subscribed slot changes).
   const ensureAnimation = useCallback(() => {
     if (proj.actions.length > 0) return proj.actions[0].id;
     const id = uid();
@@ -204,11 +274,12 @@ export function PlaybackControls() {
         meta: { createdAt: null, modifiedAt: null, source: 'authored' },
       });
     });
-    anim.setActiveActionId(id);
-    anim.setFps(24);
-    anim.setEndFrame(48);
+    const a = useAnimationStore.getState();
+    a.setActiveActionId(id);
+    a.setFps(24);
+    a.setEndFrame(48);
     return id;
-  }, [proj.actions, update, anim]);
+  }, [proj.actions, update]);
 
   /* ── Import .motion3.json as a new action clip ──────────────────────── */
   const importMotionFile = useCallback((file) => {
@@ -225,10 +296,11 @@ export function PlaybackControls() {
         update((p) => {
           p.actions.push(action);
         });
-        anim.setActiveActionId(action.id);
-        anim.setFps(action.fps);
-        anim.setEndFrame(Math.round((action.duration / 1000) * action.fps));
-        anim.seekFrame(0);
+        const a = useAnimationStore.getState();
+        a.setActiveActionId(action.id);
+        a.setFps(action.fps);
+        a.setEndFrame(Math.round((action.duration / 1000) * action.fps));
+        a.seekFrame(0);
         if (warnings.length > 0) {
           window.alert(
             `Imported "${action.name}" with ${action.fcurves.length} fcurve(s).\n` +
@@ -242,7 +314,7 @@ export function PlaybackControls() {
       }
     };
     reader.readAsText(file);
-  }, [update, anim]);
+  }, [update]);
 
   /* ── Create a fresh action regardless of existing ones ──────────────── */
   const createAnimation = useCallback(() => {
@@ -260,27 +332,29 @@ export function PlaybackControls() {
         meta: { createdAt: null, modifiedAt: null, source: 'authored' },
       });
     });
-    anim.setActiveActionId(id);
-    anim.setFps(24);
-    anim.setEndFrame(48);
-    anim.seekFrame(0);
+    const a = useAnimationStore.getState();
+    a.setActiveActionId(id);
+    a.setFps(24);
+    a.setEndFrame(48);
+    a.seekFrame(0);
     return id;
-  }, [proj.actions.length, update, anim]);
+  }, [proj.actions.length, update]);
 
   /* ── Transport callbacks ────────────────────────────────────────────── */
   const togglePlay = useCallback(() => {
     ensureAnimation();
-    if (anim.isPlaying) anim.pause();
-    else anim.play();
-  }, [anim, ensureAnimation]);
+    const a = useAnimationStore.getState();
+    if (a.isPlaying) a.pause();
+    else a.play();
+  }, [ensureAnimation]);
 
   const stop = useCallback(() => {
-    anim.stop();
-  }, [anim]);
+    useAnimationStore.getState().stop();
+  }, []);
 
   const lastFrame = useCallback(() => {
-    anim.seekFrame(endFrame);
-  }, [anim, endFrame]);
+    useAnimationStore.getState().seekFrame(endFrame);
+  }, [endFrame]);
 
   return (
     <div className="flex items-center gap-2 px-2 min-w-0 overflow-x-auto">
@@ -290,8 +364,8 @@ export function PlaybackControls() {
       </TransportBtn>
 
       {/* Play / Pause */}
-      <TransportBtn disabled={!hasAnimation} onClick={togglePlay} active={anim.isPlaying} title={anim.isPlaying ? 'Pause' : 'Play'}>
-        {anim.isPlaying ? (
+      <TransportBtn disabled={!hasAnimation} onClick={togglePlay} active={isPlaying} title={isPlaying ? 'Pause' : 'Play'}>
+        {isPlaying ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
             <rect x="1.5" y="1" width="2.5" height="8" rx="0.5" />
             <rect x="6" y="1" width="2.5" height="8" rx="0.5" />
@@ -309,7 +383,7 @@ export function PlaybackControls() {
       </TransportBtn>
 
       {/* Repeat */}
-      <TransportBtn disabled={!hasAnimation} onClick={() => anim.setLoop(!anim.loop)} active={anim.loop} title="Repeat">
+      <TransportBtn disabled={!hasAnimation} onClick={() => useAnimationStore.getState().setLoop(!loop)} active={loop} title="Repeat">
         <Repeat size={14} />
       </TransportBtn>
 
@@ -321,7 +395,7 @@ export function PlaybackControls() {
         value={currentFrame}
         min={startFrame}
         max={endFrame}
-        onChange={(v) => anim.seekFrame(v)}
+        onChange={(v) => useAnimationStore.getState().seekFrame(v)}
         tip="The current playback frame."
       />
       <NumField
@@ -329,7 +403,7 @@ export function PlaybackControls() {
         value={startFrame}
         min={0}
         max={endFrame - 1}
-        onChange={(v) => anim.setStartFrame(v)}
+        onChange={(v) => useAnimationStore.getState().setStartFrame(v)}
         tip="The first frame of the animation loop."
       />
       <NumField
@@ -337,10 +411,10 @@ export function PlaybackControls() {
         value={endFrame}
         min={startFrame + 1}
         onChange={(v) => {
-          anim.setEndFrame(v);
+          useAnimationStore.getState().setEndFrame(v);
           if (animation) {
             update((p) => {
-              const a = getActiveSceneAction(p, anim.activeActionId);
+              const a = getActiveSceneAction(p, activeActionId);
               if (a) a.duration = (v / (a.fps ?? 24)) * 1000;
             });
           }
@@ -356,10 +430,10 @@ export function PlaybackControls() {
         min={1}
         max={120}
         onChange={(v) => {
-          anim.setFps(v);
+          useAnimationStore.getState().setFps(v);
           if (animation) {
             update((p) => {
-              const a = getActiveSceneAction(p, anim.activeActionId);
+              const a = getActiveSceneAction(p, activeActionId);
               if (a) {
                 a.fps = v;
                 a.duration = (endFrame / v) * 1000;
@@ -378,11 +452,11 @@ export function PlaybackControls() {
           min={0}
           max={2}
           step={0.05}
-          value={anim.speed}
-          onChange={e => anim.setSpeed(parseFloat(e.target.value))}
+          value={speed}
+          onChange={e => useAnimationStore.getState().setSpeed(parseFloat(e.target.value))}
           className="w-16 h-1 accent-primary"
         />
-        <span className="text-[10px] text-muted-foreground w-6">{anim.speed.toFixed(1)}×</span>
+        <span className="text-[10px] text-muted-foreground w-6">{speed.toFixed(1)}×</span>
       </label>
 
       <div className="w-px h-4 bg-border mx-1" />
@@ -390,8 +464,11 @@ export function PlaybackControls() {
       {/* Loop Keyframes */}
       <TransportBtn
         disabled={!hasAnimation}
-        onClick={() => anim.setLoopKeyframes && anim.setLoopKeyframes(!anim.loopKeyframes)}
-        active={anim.loopKeyframes}
+        onClick={() => {
+          const a = useAnimationStore.getState();
+          if (a.setLoopKeyframes) a.setLoopKeyframes(!loopKeyframes);
+        }}
+        active={loopKeyframes}
         title="Loop Keyframes: When active, the animation will interpolate from the last keyframe back to the first keyframe for a seamless loop."
       >
         <RotateCcw size={14} />
@@ -418,7 +495,7 @@ export function PlaybackControls() {
           const name = window.prompt('Audio track name:', `Audio ${(animation?.audioTracks?.length ?? 0) + 1}`);
           if (name) {
             update((p) => {
-              const a = getActiveSceneAction(p, anim.activeActionId);
+              const a = getActiveSceneAction(p, activeActionId);
               if (a) {
                 a.audioTracks.push({
                   id: uid(),
@@ -441,26 +518,42 @@ export function PlaybackControls() {
 
       {/* Animation switcher — dropdown when ≥1 animation exists, lets user
           A/B between motions for multi-motion preview. Stage 1.E scene-
-          binding semantics preserved (writes both UI store + scene's
-          assignAction when scene is bound). See `TimelineEditor.jsx`'s
-          pre-lift comment for the full Blender-fidelity rationale
-          (template_action writes its pinned datablock; SS's "pinned"
-          datablock IS the scene when bound). */}
+          binding semantics: writes the UI-store activeActionId AND, when
+          the scene already binds an action via `__scene__`, re-binds the
+          scene to the new id so the picker's pick is treated as user
+          intent (otherwise the scene-resolution gate would silently
+          override it).
+
+          **Blender-fidelity rationale (Audit-fix D-7 Stage 1.E — kept
+          as-is, NOT removed).** Blender's `template_action(animated_id,
+          ...)` writes ONLY to `animated_id.animation_data.action`
+          (`reference/blender/scripts/startup/bl_ui/space_dopesheet.py:313`).
+          For SS, the timeline picker's "pinned" datablock IS the scene
+          when the scene is bound — `getActiveSceneAction` resolves to
+          scene's action. So picking a different id here writing to
+          scene's adt mirrors Blender's template_action writing to its
+          pinned datablock; it is NOT the auto-broadcast
+          `ANIM_OT_replace_action` op (`source/blender/editors/animation/
+          anim_ops.cc:1389`) which Blender exposes as a separate explicit
+          operator. Inlined here in audit-fix B9 — previously deferred to
+          a "see TimelineEditor.jsx's pre-lift comment" cite that no
+          longer exists after the row was lifted. */}
       {hasAnimation ? (
         <select
           value={animation?.id ?? ''}
           onChange={(e) => {
             const id = e.target.value;
             const a = proj.actions.find((x) => x.id === id);
-            anim.setActiveActionId(id);
+            const animApi = useAnimationStore.getState();
+            animApi.setActiveActionId(id);
             if (getSceneAction(proj)) {
               useProjectStore.getState().assignAction('__scene__', id, 0);
             }
             if (a) {
               const f = a.fps ?? 24;
-              anim.setFps(f);
-              anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
-              anim.seekFrame(0);
+              animApi.setFps(f);
+              animApi.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
+              animApi.seekFrame(0);
             }
           }}
           className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"

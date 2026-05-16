@@ -4,7 +4,7 @@ import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { cn } from '@/lib/utils';
-import { Copy, Clipboard, Trash2, Music, X, Settings, Upload } from 'lucide-react';
+import { Copy, Clipboard, Trash2, Music, X, Settings } from 'lucide-react';
 import {
   buildParamFCurve,
   buildNodeFCurve,
@@ -13,7 +13,7 @@ import {
   fcurveTargetsNode,
   makeBezTripleKeyform,
 } from '@/anim/animationFCurve';
-import { getActiveSceneAction, getSceneAction } from '@/anim/sceneAction';
+import { getActiveSceneAction } from '@/anim/sceneAction';
 import {
   ContextMenu,
   ContextMenuContent,
