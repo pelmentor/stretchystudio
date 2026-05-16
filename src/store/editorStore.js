@@ -270,6 +270,17 @@ export const useEditorStore = create((set) => ({
   outlinerShowSelectedOnly: false,
   outlinerHideHidden: false,
 
+  /** F2-1 sweep (2026-05-16) — NodeTree mode + driver fallback id lifted
+   *  out of `NodeTreeArea` local useState so the NodeTreeHeader can
+   *  drive them from the per-area Header slot. Mirrors Blender's
+   *  `SpaceNode.tree_type` (`source/blender/makesdna/DNA_space_types.h`
+   *  `bNodeTree::tree_type`). SS-specific: `nodeTreeDriverFallbackId`
+   *  holds the user's last picked driver when the global selection
+   *  doesn't point at a driven parameter — Blender has no direct analog
+   *  because its NodeEditor's id pointer IS the canonical fallback. */
+  nodeTreeMode: /** @type {'rig'|'driver'|'animation'} */ ('rig'),
+  nodeTreeDriverFallbackId: /** @type {string|null} */ (null),
+
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to
    *  match Blender (canonical "explicit `K` to insert" path; the red
@@ -638,6 +649,18 @@ export const useEditorStore = create((set) => ({
   }),
   setOutlinerShowSelectedOnly: (v) => set({ outlinerShowSelectedOnly: !!v }),
   setOutlinerHideHidden:       (v) => set({ outlinerHideHidden: !!v }),
+
+  // ── NodeTree header state (F2-1 sweep) ─────────────────────────────
+  setNodeTreeMode: (mode) => set((s) => {
+    if (mode !== 'rig' && mode !== 'driver' && mode !== 'animation') return s;
+    if (s.nodeTreeMode === mode) return s;
+    return { nodeTreeMode: mode };
+  }),
+  setNodeTreeDriverFallbackId: (id) => set((s) => {
+    const next = (typeof id === 'string' && id.length > 0) ? id : null;
+    if (s.nodeTreeDriverFallbackId === next) return s;
+    return { nodeTreeDriverFallbackId: next };
+  }),
 
   // ── Toolset Phase 0 — vertex selection actions ──────────────────────
   //

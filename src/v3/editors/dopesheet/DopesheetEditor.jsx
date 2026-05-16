@@ -27,7 +27,6 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
-import { Film } from 'lucide-react';
 
 const LABEL_W = 180;
 const ROW_H   = 18;
@@ -53,7 +52,6 @@ export function DopesheetEditor() {
   if (!action) {
     return (
       <div className="flex flex-col h-full bg-card overflow-hidden">
-        <DopeHeader title="Dopesheet" subtitle="No animation active" />
         <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground italic">
           Create or select an action in the Actions panel.
         </div>
@@ -65,11 +63,6 @@ export function DopesheetEditor() {
 
   return (
     <div className="flex flex-col h-full bg-card overflow-hidden">
-      <DopeHeader
-        title="Dopesheet"
-        subtitle={`${action.name ?? '(unnamed)'} · ${rows.length} fcurves · ${(duration / 1000).toFixed(1)}s`}
-      />
-
       <div className="flex-1 overflow-auto">
         <div className="flex flex-col">
           <Ruler
@@ -96,18 +89,6 @@ export function DopesheetEditor() {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function DopeHeader({ title, subtitle }) {
-  return (
-    <div className="px-3 py-2 border-b shrink-0 flex items-center gap-1.5 bg-muted/30">
-      <Film size={11} className="text-muted-foreground" />
-      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {title}
-      </h2>
-      <span className="text-[10px] text-muted-foreground/70 ml-2 truncate">{subtitle}</span>
     </div>
   );
 }

@@ -57,7 +57,7 @@
  * @module v3/editors/nodetree/NodeTreeArea
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
@@ -75,23 +75,12 @@ import { NodeTreeEditor } from './NodeTreeEditor.jsx';
 import '../../../anim/nodetree/nodes/drivers.js';
 import '../../../anim/nodetree/nodes/animation.js';
 
-/**
- * Mode-pill labels carry canonical-source hints (Audit-fix D-7).
- * Blender's NodeEditor `tree_type` enum (`DNA_node_types.h:274-283`)
- * names types but doesn't disclose edit surfaces because the editor
- * IS edit-capable. SS's NodeTreeArea is read-only — the hints make
- * "where do I edit this?" discoverable from the pill itself.
- *
- * @type {Array<{ id: 'rig'|'driver'|'animation', label: string }>}
- */
-const MODES = [
-  { id: 'rig',       label: 'Rig (Modifiers)' },
-  { id: 'driver',    label: 'Driver (Expression)' },
-  { id: 'animation', label: 'Animation (FCurves)' },
-];
-
 export function NodeTreeArea() {
-  const [mode, setMode] = useState(/** @type {'rig'|'driver'|'animation'} */ ('rig'));
+  // F2-1 sweep — mode + driver fallback id lifted to editorStore so
+  // NodeTreeHeader (per-area Header slot) and the body subscribe
+  // independently. Pre-lift these lived in NodeTreeArea local useState.
+  const mode = useEditorStore((s) => s.nodeTreeMode);
+  const driverFallbackId = useEditorStore((s) => s.nodeTreeDriverFallbackId);
 
   const project = useProjectStore((s) => s.project);
   const selectionHead = useEditorStore((s) => (Array.isArray(s.selection) && s.selection.length > 0 ? s.selection[0] : null));
@@ -104,17 +93,6 @@ export function NodeTreeArea() {
     () => getActiveSceneAction(project, uiActiveActionId)?.id ?? null,
     [project.nodes, project.actions, uiActiveActionId],
   );
-
-  // Driver mode — when selection isn't a paramId, fall back to the
-  // first driven param so the user sees a non-empty graph instead of
-  // the "No tree" empty-state.
-  const [driverFallbackId, setDriverFallbackId] = useState(/** @type {string|null} */ (null));
-
-  // Enumerate driven parameter ids on the fly (no persisted shadow).
-  const driverIds = useMemo(() => {
-    const params = Array.isArray(project?.parameters) ? project.parameters : [];
-    return params.filter((p) => p && p.driver).map((p) => p.id);
-  }, [project.parameters]);
 
   // Derive the active tree on the fly from canonical sources.
   // Audit-fix G-5: `driverIds` removed from deps — it's already a
@@ -171,38 +149,6 @@ export function NodeTreeArea() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-border">
-        {MODES.map((m) => {
-          const active = mode === m.id;
-          return (
-            <button
-              key={m.id}
-              onClick={() => setMode(m.id)}
-              className={
-                'text-xs px-2 py-0.5 rounded transition-colors ' +
-                (active
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted')
-              }
-            >
-              {m.label}
-            </button>
-          );
-        })}
-        {mode === 'driver' && driverIds.length > 0 && (
-          <select
-            className="text-xs ml-2 bg-muted text-foreground rounded px-1 py-0.5"
-            value={(selectionHead && driverIds.includes(selectionHead))
-              ? selectionHead
-              : (driverFallbackId ?? driverIds[0])}
-            onChange={(e) => setDriverFallbackId(e.target.value)}
-          >
-            {driverIds.map((id) => (
-              <option key={id} value={id}>{id}</option>
-            ))}
-          </select>
-        )}
-      </div>
       <NodeTreeEditor tree={tree} title={subtitle} />
     </div>
   );

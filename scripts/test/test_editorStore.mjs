@@ -571,5 +571,51 @@ function projectNode(id) {
     'Phase 2b: skeleton-layer toggle clears per-object mode');
 }
 
+// ── F2-1 sweep — nodeTreeMode + nodeTreeDriverFallbackId lifted ─────
+//
+// These slots back the NodeTreeHeader pill row (rig / driver / animation)
+// and the driver-mode parameter fallback dropdown. Pre-lift the state
+// lived in NodeTreeArea local useState; lifting it to the store lets
+// header (per-area Header slot) and body subscribe independently per
+// the same OutlinerHeader pattern.
+
+{
+  reset();
+  const s = get();
+  assert(s.nodeTreeMode === 'rig', 'nodeTree: initial mode = rig');
+  assert(s.nodeTreeDriverFallbackId === null, 'nodeTree: initial driverFallbackId = null');
+}
+
+{
+  reset();
+  get().setNodeTreeMode('driver');
+  assert(get().nodeTreeMode === 'driver', 'nodeTree: setMode driver');
+  get().setNodeTreeMode('animation');
+  assert(get().nodeTreeMode === 'animation', 'nodeTree: setMode animation');
+  get().setNodeTreeMode('rig');
+  assert(get().nodeTreeMode === 'rig', 'nodeTree: setMode rig');
+}
+
+{
+  reset();
+  // Invalid modes are rejected, current value preserved.
+  get().setNodeTreeMode('driver');
+  get().setNodeTreeMode('bogus');
+  assert(get().nodeTreeMode === 'driver', 'nodeTree: setMode rejects bogus value');
+  get().setNodeTreeMode(42);
+  assert(get().nodeTreeMode === 'driver', 'nodeTree: setMode rejects non-string');
+}
+
+{
+  reset();
+  get().setNodeTreeDriverFallbackId('param-x');
+  assert(get().nodeTreeDriverFallbackId === 'param-x', 'nodeTree: setDriverFallbackId stores');
+  get().setNodeTreeDriverFallbackId(null);
+  assert(get().nodeTreeDriverFallbackId === null, 'nodeTree: setDriverFallbackId(null) clears');
+  get().setNodeTreeDriverFallbackId('param-y');
+  get().setNodeTreeDriverFallbackId('');
+  assert(get().nodeTreeDriverFallbackId === null, 'nodeTree: empty-string clears');
+}
+
 console.log(`editorStore: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

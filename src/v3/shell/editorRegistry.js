@@ -70,6 +70,25 @@ const ViewportHeader = lazy(() =>
 const OutlinerHeader = lazy(() =>
   import('../headers/OutlinerHeader.jsx').then((m) => ({ default: m.OutlinerHeader }))
 );
+// F2-1 sweep (2026-05-16) — 4 animation-editor headers lifted into the
+// per-area Header slot (continuation of the F-1 architecture). Each
+// mirrors its Blender `*_HT_header` counterpart:
+//   - TimelineHeader  ↔ DOPESHEET_HT_header TIMELINE branch
+//   - DopesheetHeader ↔ DOPESHEET_HT_header (default branch)
+//   - FCurveHeader    ↔ GRAPH_HT_header
+//   - NodeTreeHeader  ↔ NODE_HT_header
+const TimelineHeader = lazy(() =>
+  import('../headers/TimelineHeader.jsx').then((m) => ({ default: m.TimelineHeader }))
+);
+const DopesheetHeader = lazy(() =>
+  import('../headers/DopesheetHeader.jsx').then((m) => ({ default: m.DopesheetHeader }))
+);
+const FCurveHeader = lazy(() =>
+  import('../headers/FCurveHeader.jsx').then((m) => ({ default: m.FCurveHeader }))
+);
+const NodeTreeHeader = lazy(() =>
+  import('../headers/NodeTreeHeader.jsx').then((m) => ({ default: m.NodeTreeHeader }))
+);
 
 /**
  * @typedef {import('../../store/uiV3Store.js').EditorType} EditorType
@@ -92,7 +111,7 @@ export const EDITOR_REGISTRY = {
   outliner:    { label: 'Outliner',     component: OutlinerEditor,   header: OutlinerHeader },
   properties:  { label: 'Properties',   component: PropertiesEditor, header: null },
   parameters:  { label: 'Parameters',   component: ParametersEditor, header: null },
-  timeline:    { label: 'Timeline',     component: TimelineEditor,   header: null },
+  timeline:    { label: 'Timeline',     component: TimelineEditor,   header: TimelineHeader },
   // Stage 1.E: editor-type id is plural `actions` to match the panel's
   // user-facing label "Actions" (the noun for a list-of-actions view).
   // Blender's space-type enum uses singular `SPACE_ACTION`
@@ -102,11 +121,11 @@ export const EDITOR_REGISTRY = {
   // than aligned (Audit-fix D-9 Stage 1.E).
   actions:     { label: 'Actions',      component: ActionsEditor,    header: null },
   performance: { label: 'Performance',  component: PerformanceEditor, header: null },
-  dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor,  header: null },
-  fcurve:      { label: 'F-curve',      component: FCurveEditor,     header: null },
+  dopesheet:   { label: 'Dopesheet',    component: DopesheetEditor,  header: DopesheetHeader },
+  fcurve:      { label: 'F-curve',      component: FCurveEditor,     header: FCurveHeader },
   keyformGraph:{ label: 'Keyform Graph', component: KeyformGraphEditor, header: null },
   logs:        { label: 'Logs',         component: LogsEditor,       header: null },
-  nodeTree:    { label: 'Node Tree',    component: NodeTreeArea,     header: null },
+  nodeTree:    { label: 'Node Tree',    component: NodeTreeArea,     header: NodeTreeHeader },
 };
 
 /** Stable ordered list for header dropdowns. */
