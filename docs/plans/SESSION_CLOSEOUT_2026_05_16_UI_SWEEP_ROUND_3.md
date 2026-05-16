@@ -1,19 +1,22 @@
 # Session close-out — 2026-05-16 (round 3)
-# UI Blender-fidelity sweep ROUND 3 — Audit 4 #3 (File menu) + Audit 4 #4 (Modal G/R/S chords)
+# UI Blender-fidelity sweep ROUND 3 — Audit 4 #3 (File menu) + Audit 4 #4 (Modal G/R/S chords) + post-ship dual-audit fix sweep
 
 ## Status
 
 Continuation of the 2026-05-16 master session. Resumed from `7961086`
-(`SESSION_CLOSEOUT_2026_05_16_FULL_UI_SWEEP.md`'s queued resume paths)
-and shipped the top 2 picks from the cross-audit priority list. **2
-commits**, 259 / 259 scripts green at HEAD, typecheck clean. Both
-commits pushed to `origin/master`.
+(`SESSION_CLOSEOUT_2026_05_16_FULL_UI_SWEEP.md`'s queued resume paths),
+shipped the top 2 picks from the cross-audit priority list, then ran
+the established dual-audit-after-phase-ship convention and closed 7
+findings in a single fix sweep. **4 commits**, 259 / 259 scripts green
+at HEAD, typecheck clean. All pushed to `origin/master`.
 
 | # | Commit | Thread | What landed |
 |---|--------|--------|-------------|
 | 1 | `f43efa9` | UI sweep R3 | Audit 4 #3 — File menu dropdown mirroring `INFO_MT_file` |
 | 2 | `86f2c2f` | UI sweep R3 | Audit 4 #4 — Modal G/R/S chord parity with Blender (4 sub-fixes) |
-| 3 | this    | docs       | Round 3 close-out |
+| 3 | `ab077cf` | docs       | Round 3 ship close-out (predecessor to this doc) |
+| 4 | `ebefde1` | audit-fix  | Post-ship dual-audit sweep — 7 findings closed (3 arch + 4 fidelity) |
+| 5 | this     | docs       | Round 3 close-out, updated with audit-fix sweep |
 
 ## Resume context
 
@@ -21,6 +24,16 @@ User typed `Go` after `/compact`. Per Rule №3 (question agents not user),
 no clarification asked — picked the doc's explicit recommendation: "Path
 B: UI sweep ROUND 3 — top picks Audit 4 #3 (file menu) + Audit 4 #4
 (modal chord fixes) for immediate muscle-memory wins."
+
+After shipping commits #1 + #2 and writing close-out commit #3, the
+user invoked the dual-audit rule:
+> "Did you audit new code? Thats a rule after shippin to audit code"
+
+Audit-fix sweep (#4) followed immediately. Memory entry
+`feedback_dual_audit_after_phase_ship.md` was already established as
+"established convention, not optional" — but the ship→close-out path
+slipped past it. Re-reading the memory at start of every ship would
+prevent this; mental note.
 
 ## Thread A — Audit 4 #3 (File menu dropdown)
 
@@ -157,13 +170,62 @@ Implementation: every `preventDefault()` in `onKeyDown` + the
 - backspace on empty buffer with numericMode true exits the mode
 - commit / cancel / reset all clear numericMode + liveDelta
 
+## Thread C — Post-ship dual-audit + fix sweep (commit `ebefde1`)
+
+Per `feedback_dual_audit_after_phase_ship.md` (established convention,
+not optional): spawned 2 parallel audit agents on commits `f43efa9` +
+`86f2c2f`:
+1. **Architecture audit** (`code-reviewer` agent) — 12 findings considered.
+2. **Blender-fidelity audit** (`general-purpose` agent) — 11 sections
+   covering each cited Blender source.
+
+**7 actionable findings closed in a single sweep commit:**
+
+### Architecture findings (3)
+
+| ID       | Severity | File:lines                                  | Fix |
+|----------|----------|---------------------------------------------|-----|
+| ARCH-1   | HIGH     | `registry.js:474-504` (file.importPsd)      | DOM leak on picker cancel. Browsers don't fire `change` on cancel → each cancel leaked one `<input>`. Three-path cleanup: `change` (happy path), `cancel` event (Chromium 113+), `window.focus` fallback with setTimeout-deferred no-file check (Firefox/Safari). |
+| ARCH-2   | HIGH     | `ModalTransformOverlay.jsx:584` (deps)      | useEffect deps array had 7 store action refs. Zustand actions are usually stable but a future middleware refactor could rebuild them, risking listener churn mid-drag. Hoisted actions to `getState()` inside effect; deps shrunk to data-only (`kind`, `axis`, `startMouse`, `pivotCanvas`, `original`). |
+| ARCH-3   | MEDIUM   | `FileMenu.jsx:117-131` (loadFromLibrary)    | `loadFromLibrary` flow duplicated inline in FileMenu + LoadModal with a self-admitted "stay in sync" comment — the canonical Rule №1 deferred-cleanup tell. Extracted to `services/projectLibrary.js` with 3 helpers: `loadFromLibrary(id)`, `loadFromBlob(blob)`, `saveLibraryRecord(idToUse, nameToUse)` (the third also used by FID-A.6 below). |
+
+Confirmed-clean (no action): hook ordering in FileMenu + ModalTransformOverlay,
+libraryDialogStore.saveAs reactive correctness, newProjectDialogStore
+fan-out, ZERO_DELTA sentinel referenced consistently, file.new dialog
+routing.
+
+Deferred (UX-only no-op, no rule violation): popTyped asymmetry edge
+case (#4); setLiveDelta 60fps re-render is expected for HUD subscribers
+and grep confirmed no other readers (#6); RecentSubmenu staleness
+within a single open session (#3).
+
+### Blender-fidelity findings (4)
+
+| ID       | Cited source                                                         | Fix |
+|----------|----------------------------------------------------------------------|-----|
+| FID-A.6  | `wm_files.cc:5007-5066` (`wm.save_mainfile` EXEC_AREA branch)        | `file.save` unconditionally opened modal — broke muscle memory. Now branches on `currentLibraryId`: silent overwrite via new `quickSaveLinked()` when linked, modal for unlinked / deleted-record fallback. |
+| FID-B.2  | `transform_mode_translate.cc:173` + `transform_mode.cc:564/870`      | Cited symbol `transform.cc:headerprint_*` doesn't exist. Real symbols are `headerTranslation`, `headerRotation`, `headerResize`. Citation fixed. HUD precision bumped: scale `.toFixed(3)` → `.toFixed(4)` (Blender's `%.4f`); translate `.toFixed(1)` → `.toFixed(2)` (Blender's precision=4 unit-scaled). |
+| FID-B.3  | `numinput.cc:369-378` (`NUM_EDIT_FULL` semantics)                    | `=` was toggle; Blender's `=` is ONE-WAY enable, `Ctrl+=` disables. Replaced `toggleNumericMode` with `enterNumericMode` / `exitNumericMode` pair; both idempotent. Keydown routes `Ctrl+=` to exit, bare `=` to enter. |
+| FID-B.4  | `ModalVertexTransformOverlay.jsx:291,378-379` (sister parity)        | Missing catch-all `preventDefault+stopPropagation` at end of `onKeyDown` AND missing `stopPropagation` on `onClick`. Stray KeyG/KeyR/KeyS mid-drag could start competing modal; commit-click could fall through to canvas re-select. Both added. |
+
+### Side-effects from extractions
+
+- `SaveModal.executeSave` shrunk 90 → 30 lines via delegation to `saveLibraryRecord` for the library path. Download path stays inline (different logging scope: `projectSave/download` vs `projectSave/library`).
+- `LoadModal.loadFromRecord` + `loadFromFile` shrunk by 19 lines (inline deserialize + loadProject + state-set replaced by 1-line helper calls).
+- `FileMenu.RecentSubmenu.handlePick` lost the "must stay in sync" comment — the helper IS the sync point now.
+
+### Tests for audit-fix sweep
+
+- `test_modalTransformTyped` — 24 → **26** passed (+2 idempotency assertions for `enterNumericMode` / `exitNumericMode` rename from `toggleNumericMode`).
+- 7 renames in existing assertions ("Audit 4 #4: toggleNumericMode" → "Audit FID-B.3: enterNumericMode/exitNumericMode").
+
 ## Test scoreboard
 
-- TSC clean across both commits.
-- Full suite via Node wrapper: 259 / 259 scripts green at HEAD.
+- TSC clean across all 4 code commits + 2 doc commits.
+- Full suite via Node wrapper: 259 / 259 scripts green at HEAD (`ebefde1`).
 - New / updated:
   - `test_v3Operators` — 112 → **124** passed (+12 from Audit 4 #3)
-  - `test_modalTransformTyped` — 11 → **24** passed (+13 from Audit 4 #4)
+  - `test_modalTransformTyped` — 11 → **26** passed (+15 from Audit 4 #4 + audit-fix sweep)
 
 ## Resume paths post-compact
 
@@ -190,7 +252,13 @@ Also queued from the master session:
 
 ## Memory updates this session
 
-None. All work in-scope of existing memories; no new rules surfaced.
+None added; one lesson reinforced. The dual-audit-after-phase-ship
+convention (`feedback_dual_audit_after_phase_ship.md`) was skipped on
+the initial round 3 ship and only run after user prompted. Memory
+already exists; no edit needed — the failure mode was the assistant
+forgetting to invoke the convention, not the convention being
+unclear. Future ships should re-read the memory before starting the
+close-out doc.
 
 ## Cross-references
 
