@@ -109,6 +109,44 @@
  *     "Deviations from Blender"); a driver either fully overrides or
  *     doesn't fire.
  *
+ *   **Deviations from Blender** (architectural, documented per audit-fix
+ *   MED-B1+MED-B2 on 2026-05-16):
+ *   - **Banner mode-split.** Blender splits keyframe vs driver editing
+ *     into separate Graph Editor modes: `SIPO_MODE_ANIMATION` and
+ *     `SIPO_MODE_DRIVERS`, switched at
+ *     `reference/blender/source/blender/editors/space_graph/space_graph.cc:244`
+ *     (and gated throughout `space_graph.cc:244,256,304`,
+ *     `graph_buttons.cc:737`, `graph_ops.cc`, `graph_edit.cc`). The
+ *     driver settings panel poll explicitly returns false outside
+ *     `SIPO_MODE_DRIVERS` at `graph_buttons.cc:733-742`. SS merges the
+ *     two modes into ONE editor and surfaces the driver UI as a banner
+ *     above the curve. Consequence: per-channel `hasDriver` gating in
+ *     drag-starters + operators is required to compensate (Blender
+ *     doesn't need it because drivers never coexist with keyframes in
+ *     the same channel list); see [driverGate.js](../../../anim/driverGate.js)
+ *     "Why a per-curve gate at all" for the full rationale.
+ *   - **"(D)" sidebar badge has no Blender precedent at the channel-row
+ *     level.** Blender's channel-list rendering at
+ *     `reference/blender/source/blender/editors/animation/anim_channels_defines.cc:1631`
+ *     uses `ICON_DRIVER` only for the "Drivers" GROUP-HEADER expander
+ *     in `SIPO_MODE_DRIVERS`, not as a per-fcurve indicator on
+ *     individual animated channels. SS's "(D)" text badge is an SS
+ *     invention to surface driven channels in the merged-mode sidebar
+ *     (since Blender's split-mode structure makes per-channel badges
+ *     unnecessary there).
+ *   - **`clearDriver` keeps the fcurve.** Blender's `ANIM_remove_driver`
+ *     at `reference/blender/source/blender/editors/animation/drivers.cc:511-544`
+ *     removes the entire FCurve from `adt->drivers` via
+ *     `BLI_remlink + BKE_fcurve_free` -- because Blender's driver-
+ *     FCurves live in a separate ListBase (`AnimData::drivers`) from
+ *     keyframe-FCurves (`AnimData::action->curves`) and a driver-FCurve
+ *     has no role outside being the driver. SS overlays the driver on
+ *     the same fcurve that owns `keyforms[]`, so clearing the driver
+ *     keeps the keyform-bearing fcurve in place (which is the whole
+ *     point of the "Clear Driver" button -- resume keyform editing).
+ *     See [driverGate.js](../../../anim/driverGate.js) `clearDriver`
+ *     doc-block for the full architectural deviation.
+ *
  * # Slice 5.C+ (prior commit) — multi-curve display
  *
  * Per plan §5.C: "Phase 5 supports displaying multiple FCurves at once
