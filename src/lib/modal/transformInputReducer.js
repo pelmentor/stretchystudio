@@ -48,6 +48,36 @@
  *     holding zero until Esc-cancel. SS allows one extra Backspace as
  *     an escape hatch.
  *
+ * # SS-deferred (audit-fix MED-B1, 2026-05-16)
+ *
+ * Blender's `numinput.cc:353-365` AUTO-enables `NUM_EDIT_FULL` when the
+ * first digit / operator character arrives -- BUT ONLY when the user
+ * preference `USER_FLAG_NUMINPUT_ADVANCED` (`DNA_userdef_types.h:34`)
+ * is set:
+ *
+ * ```c
+ *   if (U.flag & USER_FLAG_NUMINPUT_ADVANCED)
+ *   {
+ *     if (... && strchr("01234567890@%^&*-+/{}()[]<>.|", event_ascii)) {
+ *       if (!(n->flag & NUM_EDIT_FULL)) {
+ *         n->flag |= NUM_EDITED;
+ *         n->flag |= NUM_EDIT_FULL;
+ *         ...
+ *       }
+ *     }
+ *   }
+ * ```
+ *
+ * SS doesn't model `USER_FLAG_NUMINPUT_ADVANCED` as a preference, so
+ * `appendTyped` only accumulates into `typedBuffer` -- the user must
+ * press `=` explicitly to enter `numericMode`. With the pref OFF (the
+ * Blender default before the user opts in), Blender behaves the same
+ * way: digits accumulate without flipping NUM_EDIT_FULL. SS is therefore
+ * byte-faithful to the DEFAULT path; the advanced-pref auto-enable is
+ * a documented omission rather than a silent bug. A follow-on slice
+ * could add a `preferences.numericInputAdvanced` toggle and dispatch
+ * an extra `'enterNumericMode'` from `appendTyped` when on.
+ *
  * # API
  *
  *   - `INITIAL_STATE` — frozen `{axis:null, typedBuffer:'', numericMode:false}`.

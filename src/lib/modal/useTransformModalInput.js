@@ -55,7 +55,7 @@
  * @module lib/modal/useTransformModalInput
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   INITIAL_STATE,
   parseTyped,
@@ -93,5 +93,13 @@ export function useTransformModalInput() {
     setState(INITIAL_STATE);
   }, []);
 
-  return { state, stateRef, dispatch, reset, parseTyped };
+  // Audit-fix MED-A1 (2026-05-16) — memoize the return object so a
+  // future `useCallback` consumer can add `modalInput` to its deps
+  // without re-firing on every render. The shape changes ONLY when the
+  // underlying `state` transitions; `stateRef`, `dispatch`, `reset` are
+  // stable across renders, and `parseTyped` is a module-level export.
+  return useMemo(
+    () => ({ state, stateRef, dispatch, reset, parseTyped }),
+    [state, dispatch, reset],
+  );
 }

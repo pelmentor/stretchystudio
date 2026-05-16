@@ -2107,17 +2107,34 @@ function ModalHUD({ kind, axis, typedBuffer, numericMode }) {
   // same visual idiom as the viewport's `ModalTransformOverlay` HUD
   // (`src/v3/shell/ModalTransformOverlay.jsx:655-678`). Both modals
   // share the same input reducer so the displayed state is the same.
+  //
+  // Axis label wording matches Blender's 2D-editor convention at
+  // `reference/blender/source/blender/editors/transform/transform.cc:953,958`:
+  // `msg_2d = IFACE_("along X")` / `IFACE_("along Y")` (separate from the
+  // 3D-editor `msg_3d` strings that say e.g. "global X"). Audit-fix
+  // HIGH-B1 (2026-05-16) corrected the prior `"axis: X"` SS invention
+  // to match Blender exactly.
   const label = kind === 'g' ? 'GRAB' : 'SCALE';
   // Unit suffix matches the displayed axis labels: X = time (frames),
   // Y = raw value (no unit). Scale is unitless multiplier.
+  //
+  // SS-deferred (audit MED-B2, 2026-05-16): Blender's Graph Editor
+  // toggles between frame-units and seconds-units via the `SIPO_DRAWTIME`
+  // flag in space settings; `reference/blender/source/blender/editors/
+  // transform/transform_mode_translate.cc:606-608` reads
+  // `display_seconds = (sipo->mode == SIPO_MODE_ANIMATION) && (sipo->flag
+  // & SIPO_DRAWTIME)` and bases the typed-input unit on it. SS hardcodes
+  // frames because we haven't shipped a seconds/frames display-mode
+  // toggle yet (the Animation Editor surfaces only frame numbers); when
+  // the toggle ships, `unit` here should read the same flag.
   const unit = kind === 's' ? '×' : (axis === 'y' ? '' : 'f');
   const hasTyped = (typedBuffer ?? '').length > 0;
   return (
     <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none flex items-center gap-2 px-3 py-1 bg-popover/95 border border-border rounded text-[11px] font-mono shadow">
       <span className="text-primary uppercase tracking-wider">{label}</span>
       {axis ? (
-        <span className="text-amber-500" title={`Axis lock: ${axis === 'x' ? 'time' : 'value'}`}>
-          axis: {axis.toUpperCase()}
+        <span className="text-amber-500" title={`Constrained to ${axis === 'x' ? 'time' : 'value'} axis`}>
+          along {axis.toUpperCase()}
         </span>
       ) : null}
       {numericMode ? (
