@@ -21,7 +21,12 @@
  *     value/time labels, the curve `<path>`, zero-line, playhead.
  *   - **Foreground — canvas-2D** (receives all pointer events):
  *     keyframe diamonds, handle dots + handle lines (drawn only for
- *     SELECTED keyforms, matching Blender's Graph Editor convention).
+ *     SELECTED keyforms — this is Blender's `SIPO_SELVHANDLESONLY` mode,
+ *     not the default mode that draws handles for every keyframe; see
+ *     `reference/blender/source/blender/editors/space_graph/graph_draw.cc:469-476`.
+ *     SS ships SIPO_SELVHANDLESONLY by default because a 1200-keyform
+ *     curve with every-keyframe handles is visual noise; a toggle for
+ *     "all handles" lands with the V/T menu work in Slice 5.C).
  *
  * Both layers share a single `view` (px-space PAD + plotW/plotH +
  * tMin/tMax + vMin/vMax) derived from container dims via
@@ -38,17 +43,22 @@
  * absolute-handle-coordinate convention.
  *
  * Handle drag: mutates `kf.handleLeft` or `kf.handleRight`. On drag
- * start, if the side's handleType was `'auto'` or `'auto_clamped'`
- * (Slice 2.D's `recalcKeyformHandles` was recomputing it on every
- * insert/edit), it flips to `'free'` to preserve user intent. Mirrors
- * Blender's `BKE_nurb_handle_calc_simple_auto` (`reference/blender/source/blender/blenkernel/intern/curve.cc:3952-3961`),
- * which anchors HD_AUTO into HD_FREE the first time a user moves the
- * handle so the auto-recompute can't undo the edit.
+ * start, the handle-type conversions defined in
+ * `src/anim/graphEditOps.js` fire (HD_AUTO/HD_AUTO_ANIM → HD_ALIGN
+ * for both sides; HD_VECT → HD_FREE on the dragged side only). Matches
+ * Blender's `BKE_nurb_bezt_handle_test`
+ * (`reference/blender/source/blender/blenkernel/intern/curve.cc:4054-4084`),
+ * called from `testhandles_fcurve`
+ * (`reference/blender/source/blender/editors/transform/transform_convert_graph.cc:580`)
+ * per transform tick.
  *
- * Aligned mirror: if the OPPOSITE side is `'aligned'`, it gets
- * reflected through the keyform so the two handles stay collinear
- * (length preserved on the opposite side; direction reflected from the
- * dragged side). Matches Blender HD_ALIGN behaviour.
+ * Aligned mirror: if the OPPOSITE side is `'aligned'` (either pre-drag
+ * or via the AUTO→ALIGN conversion just above), it gets reflected
+ * through the keyform so the two handles stay collinear. The opposite
+ * handle's pre-drag length is preserved; only its direction is updated.
+ * Equivalent in end-behaviour to Blender's `calchandleNurb_intern`
+ * HD_ALIGN branch's `len_ratio` formula
+ * (`reference/blender/source/blender/blenkernel/intern/curve.cc:3242-3301`).
  *
  * # Undo wrapping
  *
@@ -173,6 +183,13 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, onSeek }
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [selected, setSelected] = useState(/** @type {Set<number>} */ (new Set()));
   const update = useProjectStore((s) => s.updateProject);
+  // Audit-fix HIGH-A1: track any in-flight drag so unmounting the editor
+  // mid-drag releases the window-level listeners + closes the open undo
+  // batch. Without this, switching tabs mid-drag leaves a dangling
+  // `endBatch()` un-called and `_batchDepth > 0` for the rest of the
+  // session — every subsequent drag pushes a deeper nested batch and
+  // the user's undo history silently stops growing.
+  const dragCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
 
   const { minV, maxV } = sampled;
 
@@ -195,6 +212,16 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, onSeek }
     });
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // Audit-fix HIGH-A1: unmount cleanup for any in-flight drag.
+  useEffect(() => {
+    return () => {
+      if (dragCleanupRef.current) {
+        dragCleanupRef.current();
+        dragCleanupRef.current = null;
+      }
+    };
   }, []);
 
   const view = useMemo(() => {
@@ -313,6 +340,19 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, onSeek }
     const origHandleLeft = { ...kf.handleLeft };
     const origHandleRight = { ...kf.handleRight };
     const fcurveId = fcurve.id;
+    // Audit-fix HIGH-B3: SS now allows keyframes to cross during a drag
+    // (matches Blender — `sort_time_fcurve` re-sorts post-transform,
+    // `BKE_fcurve_merge_duplicate_keys` collapses ties; see
+    // reference/blender/source/blender/blenkernel/intern/fcurve.cc:1293-1339
+    // + reference/blender/source/blender/editors/transform/transform_convert_graph.cc:950).
+    // Per-tick we re-sort the keyforms array and track the dragged
+    // keyform's new index via this ref so subsequent ticks keep mutating
+    // the correct entry.
+    const dragIdxRef = { current: kfIdx };
+    // The selection set holds the dragged kf's index — when the index
+    // re-maps post-sort we stash it and update React state outside the
+    // immer recipe (state setters can't fire from inside `produce`).
+    let pendingSelectionIdx = null;
 
     const move = (ev) => {
       const dx = ev.clientX - startClientX;
@@ -325,27 +365,43 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, onSeek }
         if (!a) return;
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) return;
-        const k = fc.keyforms[kfIdx];
+        const curIdx = dragIdxRef.current;
+        const k = fc.keyforms[curIdx];
         if (!k) return;
         applyKeyformDrag(
           k,
-          fc.keyforms[kfIdx - 1],
-          fc.keyforms[kfIdx + 1],
           origTime,
           origValue,
           origHandleLeft,
           origHandleRight,
           dTime,
           dValue,
-          duration,
         );
+        // Re-sort to maintain the time-ordered invariant (the BezTriple
+        // evaluator binary-searches by time). The dragged kf's object
+        // identity is preserved across `Array.prototype.sort`, so
+        // `indexOf(k)` finds it after the re-sort.
+        fc.keyforms.sort((a, b) => a.time - b.time);
+        const newIdx = fc.keyforms.indexOf(k);
+        if (newIdx !== curIdx && newIdx >= 0) {
+          dragIdxRef.current = newIdx;
+          pendingSelectionIdx = newIdx;
+        }
       }, { skipHistory: true });
+
+      if (pendingSelectionIdx !== null) {
+        setSelected(new Set([pendingSelectionIdx]));
+        pendingSelectionIdx = null;
+      }
     };
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       endBatch();
+      dragCleanupRef.current = null;
     };
+    const up = () => cleanup();
+    dragCleanupRef.current = cleanup;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   }
@@ -382,11 +438,14 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, onSeek }
         });
       }, { skipHistory: true });
     };
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       endBatch();
+      dragCleanupRef.current = null;
     };
+    const up = () => cleanup();
+    dragCleanupRef.current = cleanup;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   }

@@ -1,7 +1,10 @@
 // Animation Phase 5 — tests for src/anim/graphEditOps.js
 //
-// Validates the pure keyform-drag and handle-drag mutations the
-// FCurveEditor uses inside its `updateProject((p) => …)` immer draft.
+// Audit-fix sweep 2026-05-16: refreshed test suite reflects the Blender
+// reference (BKE_nurb_bezt_handle_test, curve.cc:4054-4084 + the HD_ALIGN
+// math at curve.cc:3242-3301). Earlier suite tested an SS-invented
+// HD_AUTO→HD_FREE conversion + a +1ms time-clamp; both were drift from
+// Blender.
 //
 // Run: node scripts/test/test_graphEditOps.mjs
 
@@ -21,9 +24,9 @@ function near(actual, expected, eps, name) {
   console.error(`FAIL: ${name}\n  expected: ${expected}\n  actual:   ${actual}`);
 }
 
-// ── applyKeyformDrag ────────────────────────────────────────────────
+// ── applyKeyformDrag — pure translation, no clamping ────────────────
 
-// Free drag (no neighbours) — value translates, handles ride along.
+// Free drag — value + handles translate by Δ.
 {
   const kf = {
     time: 100, value: 5,
@@ -31,22 +34,14 @@ function near(actual, expected, eps, name) {
     handleLeft:  { time: 80,  value: 4 },
     handleRight: { time: 120, value: 6 },
   };
-  const applied = applyKeyformDrag(
-    kf, null, null,
-    100, 5, { time: 80, value: 4 }, { time: 120, value: 6 },
-    50, 10,
-    1000,
-  );
-  assert(applied === 50, 'keyform-drag no-neighbours: applied dt equals requested dt');
+  applyKeyformDrag(kf, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 50, 10);
   assert(kf.time === 150, 'keyform-drag: time += dTime');
   assert(kf.value === 15, 'keyform-drag: value += dValue');
-  assert(kf.handleLeft.time === 130, 'keyform-drag: handleLeft.time rides along');
-  assert(kf.handleLeft.value === 14, 'keyform-drag: handleLeft.value rides along');
-  assert(kf.handleRight.time === 170, 'keyform-drag: handleRight.time rides along');
-  assert(kf.handleRight.value === 16, 'keyform-drag: handleRight.value rides along');
+  assert(kf.handleLeft.time === 130 && kf.handleLeft.value === 14, 'keyform-drag: handleLeft rides along');
+  assert(kf.handleRight.time === 170 && kf.handleRight.value === 16, 'keyform-drag: handleRight rides along');
 }
 
-// Negative-dt clamp against prev neighbour: keyform must not collide.
+// Negative Δ — keyform CAN cross past previous neighbour (Blender re-sorts post-tick).
 {
   const kf = {
     time: 100, value: 5,
@@ -54,20 +49,13 @@ function near(actual, expected, eps, name) {
     handleLeft:  { time: 90, value: 5 },
     handleRight: { time: 110, value: 5 },
   };
-  const prev = { time: 80 };
-  const applied = applyKeyformDrag(
-    kf, prev, null,
-    100, 5, { time: 90, value: 5 }, { time: 110, value: 5 },
-    -100, 0,  // requested dt would put kf at time=0, way past prev
-    1000,
-  );
-  assert(kf.time === 81, 'prev-clamp: time = prev.time + 1');
-  assert(applied === -19, 'prev-clamp: applied dt = clamped minus orig');
-  // Handles ride along with the CLAMPED delta, not the requested delta.
-  assert(kf.handleLeft.time === 71, 'prev-clamp: handles translate by applied dt');
+  applyKeyformDrag(kf, 100, 5, { time: 90, value: 5 }, { time: 110, value: 5 }, -120, 0);
+  // No clamp — kf.time can go negative-of-prev (or in this case, past 0 entirely).
+  assert(kf.time === -20, 'no-clamp: keyform-drag allows time < prev (Blender re-sort behaviour)');
+  assert(kf.handleLeft.time === -30, 'no-clamp: handles ride along with the unclamped Δ');
 }
 
-// Positive-dt clamp against next neighbour.
+// Positive Δ — keyform CAN cross past next neighbour.
 {
   const kf = {
     time: 100, value: 5,
@@ -75,41 +63,31 @@ function near(actual, expected, eps, name) {
     handleLeft:  { time: 95, value: 5 },
     handleRight: { time: 105, value: 5 },
   };
-  const next = { time: 120 };
-  applyKeyformDrag(
-    kf, null, next,
-    100, 5, { time: 95, value: 5 }, { time: 105, value: 5 },
-    1000, 0,
-    2000,
-  );
-  assert(kf.time === 119, 'next-clamp: time = next.time - 1');
-  assert(kf.handleRight.time === 124, 'next-clamp: handles translate by applied dt');
+  applyKeyformDrag(kf, 100, 5, { time: 95, value: 5 }, { time: 105, value: 5 }, 1000, 0);
+  assert(kf.time === 1100, 'no-clamp: keyform-drag allows time > next');
 }
 
-// Value drag is unrestricted (no value-axis neighbour concept).
+// Value drag — unrestricted (no value-axis neighbour concept exists).
 {
   const kf = { time: 100, value: 5, handleType: { left: 'free', right: 'free' }, handleLeft: { time: 80, value: 4 }, handleRight: { time: 120, value: 6 } };
-  applyKeyformDrag(kf, null, null, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 0, 999, 1000);
-  assert(kf.value === 1004, 'value-drag: no value-axis clamp');
+  applyKeyformDrag(kf, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 0, 999);
+  assert(kf.value === 1004, 'value-drag: unrestricted');
   assert(kf.handleLeft.value === 1003, 'value-drag: handles ride along on value');
 }
 
-// Original snapshot semantics: caller passes orig values so subsequent
-// drag-moves are computed against the start-of-drag baseline, not the
-// previous frame. Two-step replay.
+// Replay semantics — successive calls compute from the ORIG snapshot.
 {
   const kf = { time: 100, value: 5, handleType: { left: 'free', right: 'free' }, handleLeft: { time: 80, value: 4 }, handleRight: { time: 120, value: 6 } };
-  // First move: dt=10, dv=2
-  applyKeyformDrag(kf, null, null, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 10, 2, 1000);
-  assert(kf.time === 110 && kf.value === 7, 'replay step1: deltas applied');
-  // Second move: dt=30, dv=5 (computed against ORIG, not current)
-  applyKeyformDrag(kf, null, null, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 30, 5, 1000);
+  applyKeyformDrag(kf, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 10, 2);
+  assert(kf.time === 110 && kf.value === 7, 'replay step1');
+  applyKeyformDrag(kf, 100, 5, { time: 80, value: 4 }, { time: 120, value: 6 }, 30, 5);
   assert(kf.time === 130 && kf.value === 10, 'replay step2: absolute baseline, not relative');
   assert(kf.handleLeft.time === 110 && kf.handleLeft.value === 9, 'replay step2: handles use orig baseline');
 }
 
-// ── applyHandleDrag — auto → free conversion ────────────────────────
+// ── applyHandleDrag — HD_AUTO → HD_ALIGN on BOTH sides ──────────────
 
+// Both sides auto: BOTH convert to aligned.
 {
   const kf = {
     time: 100, value: 5,
@@ -118,23 +96,53 @@ function near(actual, expected, eps, name) {
     handleRight: { time: 120, value: 5 },
   };
   applyHandleDrag(kf, 'right', { time: 130, value: 8 });
-  assert(kf.handleType.right === 'free', 'auto-handle drag: right side flips to free');
-  assert(kf.handleType.left === 'auto', 'auto-handle drag: left side untouched');
-  assert(kf.handleRight.time === 130 && kf.handleRight.value === 8, 'auto-handle drag: new handle written');
+  assert(kf.handleType.right === 'aligned', 'auto+auto drag right: right flips to aligned');
+  assert(kf.handleType.left === 'aligned', 'auto+auto drag right: LEFT also flips to aligned (Blender both-sides rule)');
 }
 
+// auto_clamped + auto_clamped: both convert.
 {
   const kf = {
     time: 100, value: 5,
-    handleType: { left: 'auto_clamped', right: 'free' },
+    handleType: { left: 'auto_clamped', right: 'auto_clamped' },
     handleLeft:  { time: 80,  value: 5 },
     handleRight: { time: 120, value: 5 },
   };
   applyHandleDrag(kf, 'left', { time: 70, value: 3 });
-  assert(kf.handleType.left === 'free', 'auto_clamped drag: also flips to free');
+  assert(kf.handleType.left === 'aligned', 'auto_clamped drag: left → aligned');
+  assert(kf.handleType.right === 'aligned', 'auto_clamped drag: right → aligned (both sides)');
 }
 
-// Free → free (no flip needed; just update).
+// Only dragged side is auto, opposite is free: BOTH-sides rule says
+// only the auto-typed side flips. The free side stays free.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'free', right: 'auto' },
+    handleLeft:  { time: 80,  value: 5 },
+    handleRight: { time: 120, value: 5 },
+  };
+  applyHandleDrag(kf, 'right', { time: 130, value: 8 });
+  assert(kf.handleType.right === 'aligned', 'mixed free+auto drag right: right (was auto) → aligned');
+  assert(kf.handleType.left === 'free', 'mixed free+auto drag right: left (was free) stays free');
+}
+
+// Opposite is auto, dragged is free: opposite still converts because
+// the AUTO side needs to convert to ALIGN so the next recalc doesn't
+// override the dragged FREE side.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'free', right: 'auto' },
+    handleLeft:  { time: 80,  value: 5 },
+    handleRight: { time: 120, value: 5 },
+  };
+  applyHandleDrag(kf, 'left', { time: 70, value: 3 });
+  assert(kf.handleType.left === 'free', 'opp-auto drag left (free): left stays free');
+  assert(kf.handleType.right === 'aligned', 'opp-auto drag left (free): right (was auto) → aligned');
+}
+
+// Free on both sides: no conversion needed.
 {
   const kf = {
     time: 100, value: 5,
@@ -143,12 +151,12 @@ function near(actual, expected, eps, name) {
     handleRight: { time: 120, value: 6 },
   };
   applyHandleDrag(kf, 'left', { time: 60, value: 2 });
-  assert(kf.handleType.left === 'free', 'free drag: stays free');
+  assert(kf.handleType.left === 'free' && kf.handleType.right === 'free', 'free+free: no conversion');
   assert(kf.handleLeft.time === 60 && kf.handleLeft.value === 2, 'free drag: handle updated');
   assert(kf.handleRight.time === 120 && kf.handleRight.value === 6, 'free drag: opposite untouched');
 }
 
-// Missing handleType defaults to auto/auto and flips on edit.
+// Missing handleType defaults to auto/auto and triggers both-sides conversion.
 {
   const kf = {
     time: 100, value: 5,
@@ -156,38 +164,99 @@ function near(actual, expected, eps, name) {
     handleRight: { time: 120, value: 5 },
   };
   applyHandleDrag(kf, 'right', { time: 130, value: 8 });
-  assert(kf.handleType.right === 'free', 'missing handleType: defaults to auto → flips to free');
+  assert(kf.handleType.right === 'aligned', 'missing handleType: defaults to auto → flips to aligned');
+  assert(kf.handleType.left === 'aligned', 'missing handleType: left also flips');
 }
 
-// ── applyHandleDrag — aligned mirror ────────────────────────────────
+// ── applyHandleDrag — HD_VECT → HD_FREE on dragged side only ────────
 
-// Aligned opposite reflects through keyform, length preserved.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'vector', right: 'vector' },
+    handleLeft:  { time: 80,  value: 5 },
+    handleRight: { time: 120, value: 5 },
+  };
+  applyHandleDrag(kf, 'right', { time: 130, value: 8 });
+  assert(kf.handleType.right === 'free', 'vector+vector drag right: right (dragged) → free');
+  assert(kf.handleType.left === 'vector', 'vector+vector drag right: left (opposite) stays vector');
+}
+
+// HD_VECT side dragged when opposite is HD_AUTO: vector → free on
+// dragged side; AUTO side converts to ALIGN (per the both-sides rule).
+// Both rules fire independently.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'auto', right: 'vector' },
+    handleLeft:  { time: 80,  value: 5 },
+    handleRight: { time: 120, value: 5 },
+  };
+  applyHandleDrag(kf, 'right', { time: 130, value: 8 });
+  assert(kf.handleType.right === 'free', 'auto+vector drag right: vector → free on dragged');
+  assert(kf.handleType.left === 'aligned', 'auto+vector drag right: opp auto → aligned (both-sides AUTO rule applies because LEFT was auto)');
+}
+
+// ── applyHandleDrag — aligned mirror (length preservation) ──────────
+
+// Drag with pre-existing aligned opposite: aligned mirror fires.
 {
   const kf = {
     time: 100, value: 5,
     handleType: { left: 'aligned', right: 'free' },
-    // left is at (80, 5): 20 units left of keyform, 0 above.
-    // right is at (120, 5): 20 units right, 0 above.
-    handleLeft:  { time: 80,  value: 5 },
-    handleRight: { time: 120, value: 5 },
+    handleLeft:  { time: 80,  value: 5 },  // 20 units left, 0 above
+    handleRight: { time: 120, value: 5 },  // 20 units right, 0 above
   };
-  // Drag right to (130, 10) — direction (30, 5) from keyform, length √(900+25)=√925.
   applyHandleDrag(kf, 'right', { time: 130, value: 10 });
-  // Left should reflect through keyform: unit dir of right = (30/√925, 5/√925).
-  // Left = keyform - unit * oppLen. oppLen of left was 20.
-  // Reflected left = (100, 5) - (30/√925, 5/√925) * 20.
-  const oppLen = 20;
+  // newLen = √(30² + 5²) = √925
+  // Reflected left should be at kf - unit_right * oppLen.
   const newLen = Math.sqrt(925);
+  const oppLen = 20;
   const expLeftX = 100 - (30 / newLen) * oppLen;
   const expLeftY = 5 - (5 / newLen) * oppLen;
-  near(kf.handleLeft.time, expLeftX, 1e-6, 'aligned mirror: left.time reflected through keyform');
-  near(kf.handleLeft.value, expLeftY, 1e-6, 'aligned mirror: left.value reflected through keyform');
-  // Length preserved.
+  near(kf.handleLeft.time, expLeftX, 1e-6, 'aligned mirror: left.time reflected');
+  near(kf.handleLeft.value, expLeftY, 1e-6, 'aligned mirror: left.value reflected');
   const actualLen = Math.hypot(kf.handleLeft.time - kf.time, kf.handleLeft.value - kf.value);
-  near(actualLen, oppLen, 1e-6, 'aligned mirror: opposite handle length preserved');
+  near(actualLen, oppLen, 1e-6, 'aligned mirror: opposite handle length preserved (== Blender len_ratio formula end-state)');
 }
 
-// Opposite NOT aligned → no mirror.
+// Auto-converted-to-aligned: BOTH sides become aligned, so the mirror
+// triggers automatically — verifies the AUTO+ALIGN path produces the
+// same user-visible behaviour as the pure-ALIGN path above.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'auto', right: 'auto' },
+    handleLeft:  { time: 80,  value: 5 },  // 20 units left
+    handleRight: { time: 120, value: 5 },  // 20 units right
+  };
+  applyHandleDrag(kf, 'right', { time: 130, value: 10 });
+  // After step 1: both sides → aligned. After step 3: left mirrors right.
+  const newLen = Math.sqrt(925);
+  const oppLen = 20;
+  const expLeftX = 100 - (30 / newLen) * oppLen;
+  near(kf.handleLeft.time, expLeftX, 1e-6, 'AUTO+AUTO drag: triggers mirror via auto-converted aligned');
+  assert(kf.handleType.left === 'aligned' && kf.handleType.right === 'aligned', 'AUTO+AUTO drag: end-state has BOTH aligned');
+}
+
+// Verify Blender length-equivalence: opposite handle's NEW length
+// equals its pre-drag length, regardless of how far the dragged side
+// moves. This is the end-behaviour of Blender's `len = len_ratio` /
+// `p2_h1 = p2 + len * (p2 - p2_h2)` formula at curve.cc:3266-3282.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'aligned', right: 'free' },
+    handleLeft:  { time: 70,  value: 5 },  // 30 units left
+    handleRight: { time: 105, value: 5 },  // 5 units right
+  };
+  const preLeftLen = 30;
+  applyHandleDrag(kf, 'right', { time: 200, value: 5 });  // big drag
+  const postLeftLen = Math.hypot(kf.handleLeft.time - kf.time, kf.handleLeft.value - kf.value);
+  near(postLeftLen, preLeftLen, 1e-6, 'aligned mirror: opposite-length invariant across large drags');
+}
+
+// Opposite NOT aligned (no AUTO present) → no mirror.
 {
   const kf = {
     time: 100, value: 5,
@@ -199,7 +268,7 @@ function near(actual, expected, eps, name) {
   assert(kf.handleLeft.time === 80 && kf.handleLeft.value === 5, 'no-mirror: opposite untouched when not aligned');
 }
 
-// Zero-length newHandle: skip mirror (would divide by ~0).
+// Zero-length newHandle: mirror skipped.
 {
   const kf = {
     time: 100, value: 5,
@@ -208,11 +277,10 @@ function near(actual, expected, eps, name) {
     handleRight: { time: 120, value: 5 },
   };
   applyHandleDrag(kf, 'right', { time: 100, value: 5 });
-  // Mirror skipped — left preserved.
-  assert(kf.handleLeft.time === 80 && kf.handleLeft.value === 5, 'zero-length new: mirror skipped, left preserved');
+  assert(kf.handleLeft.time === 80 && kf.handleLeft.value === 5, 'zero-length new: mirror skipped');
 }
 
-// Zero-length opposite handle: skip mirror (preserved unchanged).
+// Zero-length opposite handle: mirror skipped.
 {
   const kf = {
     time: 100, value: 5,
@@ -224,23 +292,45 @@ function near(actual, expected, eps, name) {
   assert(kf.handleLeft.time === 100 && kf.handleLeft.value === 5, 'zero-length opp: mirror skipped');
 }
 
-// Auto + opposite aligned: auto flips, aligned still mirrors against
-// the NEW free position.
+// ── Re-edit cycle: drag → release → drag again ──────────────────────
+
+// First drag converts auto → aligned; second drag from the new pos
+// shouldn't re-convert (already aligned), and the mirror still fires.
 {
   const kf = {
     time: 100, value: 5,
-    handleType: { left: 'aligned', right: 'auto' },
+    handleType: { left: 'auto', right: 'auto' },
     handleLeft:  { time: 80,  value: 5 },
     handleRight: { time: 120, value: 5 },
   };
-  applyHandleDrag(kf, 'right', { time: 130, value: 10 });
-  assert(kf.handleType.right === 'free', 'auto + aligned opp: auto flips to free');
-  assert(kf.handleType.left === 'aligned', 'auto + aligned opp: opposite type unchanged');
-  // Left should be mirrored against the NEW right position.
-  const newLen = Math.sqrt(30 * 30 + 5 * 5);
-  const oppLen = 20;
-  const expLeftX = 100 - (30 / newLen) * oppLen;
-  near(kf.handleLeft.time, expLeftX, 1e-6, 'auto + aligned opp: mirror uses new right');
+  // First drag.
+  applyHandleDrag(kf, 'right', { time: 140, value: 5 });
+  assert(kf.handleType.left === 'aligned' && kf.handleType.right === 'aligned', 'first drag: both → aligned');
+  const lengthAfter1 = Math.hypot(kf.handleLeft.time - kf.time, kf.handleLeft.value - kf.value);
+  near(lengthAfter1, 20, 1e-6, 'first drag: left length preserved at 20');
+  // Second drag — start from new orig (the post-first-drag state).
+  // Mid-session re-edit: the orig snapshot is whatever the editor
+  // captured at THIS drag's start, so use the current handleRight.
+  const second_origRight = { time: kf.handleRight.time, value: kf.handleRight.value };
+  applyHandleDrag(kf, 'right', { time: second_origRight.time + 60, value: 0 });
+  assert(kf.handleType.right === 'aligned', 'second drag: already aligned, stays aligned (no re-flip)');
+  const lengthAfter2 = Math.hypot(kf.handleLeft.time - kf.time, kf.handleLeft.value - kf.value);
+  near(lengthAfter2, 20, 1e-6, 'second drag: left length STILL preserved at 20 (mirror is idempotent)');
+}
+
+// Re-edit a HD_VECT that flipped to HD_FREE: second drag stays free.
+{
+  const kf = {
+    time: 100, value: 5,
+    handleType: { left: 'vector', right: 'vector' },
+    handleLeft:  { time: 80,  value: 5 },
+    handleRight: { time: 120, value: 5 },
+  };
+  applyHandleDrag(kf, 'right', { time: 130, value: 8 });
+  assert(kf.handleType.right === 'free', 'vector first drag: → free');
+  applyHandleDrag(kf, 'right', { time: 140, value: 12 });
+  assert(kf.handleType.right === 'free', 'vector second drag: stays free');
+  assert(kf.handleRight.time === 140 && kf.handleRight.value === 12, 'second drag: handle updated');
 }
 
 // ── summary ─────────────────────────────────────────────────────────
