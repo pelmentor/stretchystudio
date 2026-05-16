@@ -30,6 +30,8 @@ import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
+import { useCaptureStore } from '../../store/captureStore.js';
+import { useNewProjectDialogStore } from '../../store/newProjectDialogStore.js';
 import { useBoxSelectStore } from '../../store/boxSelectStore.js';
 import { useCircleSelectStore } from '../../store/circleSelectStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
@@ -216,6 +218,18 @@ function registerBuiltins() {
     id: 'file.save',
     label: 'Save Project',
     exec: () => useLibraryDialogStore.getState().openSave(),
+  });
+
+  // File Save As — Ctrl+Shift+S (Blender's wm.save_as_mainfile,
+  // `space_topbar.py:176`). Opens the same Save modal but with the
+  // `saveAs` flag flipped: name field empty, the save always creates a
+  // new library record (ignores any current linkedId). Same overwrite-
+  // confirm prompt fires if the typed name collides with an existing
+  // record.
+  registerOperator({
+    id: 'file.saveAs',
+    label: 'Save Project As…',
+    exec: () => useLibraryDialogStore.getState().openSaveAs(),
   });
 
   // Selection: deselect-all. Esc is the universal Blender gesture
@@ -410,19 +424,17 @@ function registerBuiltins() {
     },
   });
 
-  // file.new — clear the current project to its empty initial state.
-  // Wraps `projectStore.resetProject` so the same code path that
-  // initializes the store at first load runs here. Selection is
-  // dropped; live param values are reset.
+  // file.new — opens the New Project template picker (mounts in
+  // Topbar.jsx, gated by `newProjectDialogStore.open`). The dialog
+  // owns reset + template-apply + dirty-warning UX. The chord
+  // (Ctrl+N), command palette, and File menu all route through here
+  // so the user always sees the same picker — fixes the pre-existing
+  // chord-vs-button asymmetry (chord used to silently `resetProject`
+  // and bypass the unsaved-changes warning).
   registerOperator({
     id: 'file.new',
     label: 'New Project',
-    exec: () => {
-      // reset rigSpec cache + paramValues so a stale rig from a prior
-      // session doesn't render against the empty project.
-      useSelectionStore.getState().clear();
-      useProjectStore.getState().resetProject();
-    },
+    exec: () => useNewProjectDialogStore.getState().openDialog(),
   });
 
   // Export. Phase 5 — opens the Export modal with format choices.
@@ -438,6 +450,60 @@ function registerBuiltins() {
       return partCount > 0;
     },
     exec: () => useExportModalStore.getState().openExport(),
+  });
+
+  // Import PSD. Spawns a transient `<input type="file" accept=".psd">`
+  // element, parses the chosen file, then routes either to the wizard
+  // (character-format PSDs — `detectCharacterFormat` true) or directly
+  // to `finalizePsdImport` (plain PSDs without skeleton tags). Mirrors
+  // the empty-canvas drop-zone code path in CanvasViewport's
+  // `processPsdFile` callback so the two entrypoints stay in sync.
+  //
+  // Available only when CanvasViewport has published its
+  // `finalizePsdImport` callback to captureStore — without that, the
+  // non-character path can't run. The character path doesn't strictly
+  // need it (PsdImportService.start drives the wizard) but we gate
+  // both branches uniformly to avoid surprising the user with a half-
+  // working menu entry.
+  registerOperator({
+    id: 'file.importPsd',
+    label: 'Import PSD…',
+    available: () => typeof useCaptureStore.getState().finalizePsdImport === 'function',
+    exec: () => {
+      if (typeof document === 'undefined') return;
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.psd';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        document.body.removeChild(input);
+        if (!file) return;
+        try {
+          const buffer = await file.arrayBuffer();
+          const [{ importPsd }, { detectCharacterFormat }, { uid }] = await Promise.all([
+            import('../../io/psd.js'),
+            import('../../io/armatureMeta.js'),
+            import('../../lib/ids.js'),
+          ]);
+          const parsed = await importPsd(buffer);
+          const { width: psdW, height: psdH, layers } = parsed;
+          if (!Array.isArray(layers) || layers.length === 0) return;
+          const partIds = layers.map(() => uid());
+          if (detectCharacterFormat(layers)) {
+            const { start } = await import('../../services/PsdImportService.js');
+            start({ psdW, psdH, layers, partIds });
+          } else {
+            const fpi = useCaptureStore.getState().finalizePsdImport;
+            if (fpi) await fpi(psdW, psdH, layers, partIds, [], null);
+          }
+        } catch (err) {
+          if (typeof console !== 'undefined') console.error('[file.importPsd]', err);
+        }
+      }, { once: true });
+      input.click();
+    },
   });
 
   // File load. Phase 5 — opens the Load modal (gallery + import-file

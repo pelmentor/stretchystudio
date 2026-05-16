@@ -55,6 +55,11 @@ export const DEFAULT_KEYMAP = {
   // dispatcher calls preventDefault before exec runs so we win.
   'Ctrl+KeyS': 'file.save',
   'Meta+KeyS': 'file.save',
+  // Save As — Blender's `wm.save_as_mainfile` chord (`space_topbar.py:176`).
+  // Opens the Save modal with `saveAs:true` so the typed name creates a
+  // new library record instead of overwriting the linked one.
+  'Ctrl+Shift+KeyS': 'file.saveAs',
+  'Meta+Shift+KeyS': 'file.saveAs',
   'Ctrl+KeyO': 'file.load',
   'Meta+KeyO': 'file.load',
 

@@ -144,5 +144,47 @@ assertThrows(
     'selection.clear empties the store');
 }
 
+// ── Audit 4 #3 — File menu ops + Save As keymap ────────────────────
+//
+// Audit 4 #3 (2026-05-16) added Save As (Ctrl+Shift+S) + Import PSD,
+// and routed `file.new` through the New Project dialog instead of
+// silently calling resetProject. Verify the chord wiring + the
+// libraryDialogStore + newProjectDialogStore deltas.
+
+{
+  // Save As keymap — both Ctrl + Meta variants per other file ops.
+  assert(DEFAULT_KEYMAP['Ctrl+Shift+KeyS'] === 'file.saveAs', 'Ctrl+Shift+S → file.saveAs');
+  assert(DEFAULT_KEYMAP['Meta+Shift+KeyS'] === 'file.saveAs', 'Meta+Shift+S → file.saveAs (mac)');
+
+  const saveAsOp = getOperator('file.saveAs');
+  assert(saveAsOp !== null, 'file.saveAs registered');
+
+  const importPsdOp = getOperator('file.importPsd');
+  assert(importPsdOp !== null, 'file.importPsd registered');
+
+  // file.saveAs flips libraryDialogStore.saveAs true; file.save leaves it false.
+  const { useLibraryDialogStore } = await import('../../src/store/libraryDialogStore.js');
+  saveAsOp.exec({ editorType: null });
+  let s = useLibraryDialogStore.getState();
+  assert(s.mode === 'save', 'file.saveAs sets dialog mode to save');
+  assert(s.saveAs === true, 'file.saveAs sets saveAs=true');
+  useLibraryDialogStore.getState().close();
+
+  getOperator('file.save').exec({ editorType: null });
+  s = useLibraryDialogStore.getState();
+  assert(s.mode === 'save', 'file.save sets dialog mode to save');
+  assert(s.saveAs === false, 'file.save leaves saveAs=false');
+  useLibraryDialogStore.getState().close();
+
+  // file.new opens the New Project dialog (no longer silent reset).
+  const { useNewProjectDialogStore } = await import('../../src/store/newProjectDialogStore.js');
+  useNewProjectDialogStore.getState().close();
+  assert(useNewProjectDialogStore.getState().open === false, 'newProjectDialog initially closed');
+  getOperator('file.new').exec({ editorType: null });
+  assert(useNewProjectDialogStore.getState().open === true,
+    'file.new opens the New Project dialog (no silent reset)');
+  useNewProjectDialogStore.getState().close();
+}
+
 console.log(`v3Operators: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

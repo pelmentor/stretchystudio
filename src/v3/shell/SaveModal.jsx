@@ -40,6 +40,7 @@ import {
 } from '../../components/ui/alert-dialog.jsx';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useCaptureStore } from '../../store/captureStore.js';
+import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { logger } from '../../lib/logger.js';
 import {
   serializeProject,
@@ -60,10 +61,21 @@ export function SaveModal({ open, onOpenChange }) {
   // name (if any) so re-saving on top of an existing record is the
   // one-click path. Falls back to the project's display name or a
   // timestamp if nothing else is available.
+  //
+  // Save As (Ctrl+Shift+S) skips the autofill so the user starts with
+  // an empty name field — matches Blender's wm.save_as_mainfile UX
+  // (`space_topbar.py:176`). `saveAs` is read non-reactively at open
+  // time; toggling it after the modal mounts has no effect (the modal
+  // is closed/reopened to switch modes).
   useEffect(() => {
     if (!open) return;
     setError(null);
     setIsSaving(false);
+    const saveAs = useLibraryDialogStore.getState().saveAs;
+    if (saveAs) {
+      setName('');
+      return;
+    }
     const linkedId = useProjectStore.getState().currentLibraryId;
     if (linkedId) {
       loadProjectRecord(linkedId).then((rec) => {
@@ -174,10 +186,15 @@ export function SaveModal({ open, onOpenChange }) {
     if (saveMode === 'library') {
       const trimmed = name.trim().toLowerCase();
       const existing = libraryProjects.find((p) => p.name.toLowerCase() === trimmed);
+      // Save As (Ctrl+Shift+S) ignores the linked record entirely — the
+      // save always creates a new entry under the typed name. Same-name
+      // collision still prompts the overwrite-confirm dialog so we never
+      // silently clobber an unrelated record.
+      const saveAs = useLibraryDialogStore.getState().saveAs;
+      const linkedId = saveAs ? null : useProjectStore.getState().currentLibraryId;
       // If a record with the same name already exists AND it isn't the
       // currently-linked one, prompt before overwriting. Re-saving on
       // top of the linked record is silent (Ctrl+S muscle memory).
-      const linkedId = useProjectStore.getState().currentLibraryId;
       if (existing && existing.id !== linkedId) {
         setOverwriteProject(existing);
         return;

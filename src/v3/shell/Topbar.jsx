@@ -2,12 +2,18 @@
  * v3 — top header bar.
  *
  * Single-row layout: left → bold "Stretchy Studio" + version badge
- * + file action strip (New / Save / Open / Export / Canvas Props /
- * Settings); center → workspace pills (Default / Animation), Undo /
- * Redo, Hot Reload pill; right → gesture hints + Reset Pose.
+ * + File menu dropdown + Canvas Properties popover; center → 6
+ * workspace pills (Layout / Modeling / Rigging / Weight / Sculpt /
+ * Animation) + Undo/Redo; right → Hot Reload pill + gesture hint.
+ *
+ * The 6-icon File strip (New / Save / Open / Export / Canvas Props /
+ * Settings) was replaced 2026-05-16 (audit 4 #3) with a structured
+ * `<FileMenu>` dropdown mirroring Blender's INFO_MT_file. Canvas
+ * Properties stays as a discrete icon — it's a render-context
+ * control, not a file-context one.
  *
  * Workspace pills are layout presets. The Setup/Animate axis is
- * derived from the active workspace (BFA-001 — Default → 'staging',
+ * derived from the active workspace (BFA-001 — Layout → 'staging',
  * Animation → 'animation'); the Blender-style edit slot (`editMode`:
  * mesh / skeleton / blendShape) lives on the canvas Mode pill, on
  * its own axis.
@@ -17,7 +23,6 @@
 
 import { useState, lazy, Suspense } from 'react';
 import {
-  FilePlus, Save, FolderOpen, Download, Settings2,
   SquareChartGantt, Undo2, Redo2, Link2, Unlink,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.jsx';
@@ -27,12 +32,14 @@ import {
 import { cn } from '../../lib/utils.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useUIV3Store } from '../../store/uiV3Store.js';
+import { useNewProjectDialogStore } from '../../store/newProjectDialogStore.js';
 import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { logger } from '../../lib/logger.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
+import { FileMenu } from './FileMenu.jsx';
 
 // Phase A2 (2026-05-09) — `PreferencesModal` (themePresets + KeymapModal
 // + i18n graph) and `NewProjectDialog` (projectTemplates) are open-gated
@@ -69,7 +76,6 @@ const WORKSPACES = [
 ];
 
 export function Topbar() {
-  const dirty            = useProjectStore((s) => s.hasUnsavedChanges);
   // Subscribing to `project` keeps undoCount() / redoCount() in sync —
   // every project mutation pushes a snapshot, so any time the stack
   // changes the project reference also changes and we re-render.
@@ -77,8 +83,9 @@ export function Topbar() {
   const activeWorkspace  = useUIV3Store((s) => s.activeWorkspace);
   const setWorkspace     = useUIV3Store((s) => s.setWorkspace);
   const hotReloadStatus  = useAssetHotReloadStore((s) => s.status);
+  const newProjectOpen   = useNewProjectDialogStore((s) => s.open);
+  const closeNewProject  = useNewProjectDialogStore((s) => s.close);
 
-  const [confirmNew, setConfirmNew] = useState(false);
   const [prefsOpen,  setPrefsOpen]  = useState(false);
 
   const canUndo = undoCount() > 0;
@@ -150,71 +157,29 @@ export function Topbar() {
     }
   }
 
-  const stripBtn = 'h-full w-9 rounded-none border-l hover:bg-muted';
-
   return (
     <header className="h-10 border-b flex items-center px-4 shrink-0 bg-card gap-3 relative">
-      {/* Left: logo + version badge + bordered file strip */}
+      {/* Left: logo + version badge + File menu + Canvas Properties.
+          The 6-icon strip was replaced 2026-05-16 (audit 4 #3) with a
+          structured dropdown mirroring Blender's INFO_MT_file. Canvas
+          Properties stays as a discrete icon — it's a render-context
+          control, not a file-context one (Blender keeps it in the
+          Render Properties tab). */}
       <div className="flex items-center gap-3 h-full">
         <span className="font-semibold text-sm select-none tracking-tight">Stretchy Studio</span>
         <span className="text-xs text-muted-foreground border border-border/50 px-1.5 py-0.5 font-mono">v0.3</span>
 
-        <div className="flex h-full items-stretch border-l border-r ml-1 mr-2">
-          <Button
-            variant="ghost" size="icon"
-            className="h-full w-9 rounded-none hover:bg-muted"
-            onClick={() => setConfirmNew(true)}
-            title="New project (Ctrl+N)"
-          >
-            <FilePlus className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost" size="icon"
-            className={cn(stripBtn, 'relative')}
-            onClick={() => runOp('file.save')}
-            title="Save project (Ctrl+S)"
-          >
-            <Save className="h-4 w-4" />
-            {dirty ? (
-              <span
-                aria-hidden
-                className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-primary"
-              />
-            ) : null}
-          </Button>
-          <Button
-            variant="ghost" size="icon"
-            className={stripBtn}
-            onClick={() => runOp('file.load')}
-            title="Open project (Ctrl+O)"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost" size="icon"
-            className={stripBtn}
-            onClick={() => runOp('file.export')}
-            title="Export Live2D (.cmo3 + rig) — Ctrl+E"
-          >
-            <Download className="h-4 w-4" />
-          </Button>
+        <div className="flex h-full items-stretch ml-1 mr-2">
+          <FileMenu onOpenPreferences={() => setPrefsOpen(true)} />
           <CanvasPropertiesPopover>
             <Button
               variant="ghost" size="icon"
-              className={stripBtn}
+              className="h-full w-9 rounded-none border-r hover:bg-muted"
               title="Canvas Properties"
             >
               <SquareChartGantt className="h-4 w-4" />
             </Button>
           </CanvasPropertiesPopover>
-          <Button
-            variant="ghost" size="icon"
-            className={stripBtn}
-            onClick={() => setPrefsOpen(true)}
-            title="Preferences"
-          >
-            <Settings2 className="h-4 w-4" />
-          </Button>
         </div>
       </div>
 
@@ -326,9 +291,12 @@ export function Topbar() {
           <PreferencesModal open={prefsOpen} onOpenChange={setPrefsOpen} />
         </Suspense>
       ) : null}
-      {confirmNew ? (
+      {newProjectOpen ? (
         <Suspense fallback={null}>
-          <NewProjectDialog open={confirmNew} onOpenChange={setConfirmNew} />
+          <NewProjectDialog
+            open={newProjectOpen}
+            onOpenChange={(o) => { if (!o) closeNewProject(); }}
+          />
         </Suspense>
       ) : null}
     </header>
