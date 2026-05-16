@@ -130,67 +130,78 @@ const fakePayload = {
     'Test 8: reset clears typedBuffer');
 }
 
-// ── Audit 4 #4 — numericMode flag + liveDelta ──────────────────────
+// ── Audit 4 #4 + audit-fix sweep — numericMode + liveDelta ─────────
 //
-// `=` toggles numericMode; with the buffer empty it suppresses mouse
-// delta (overlay treats typed value as 0). Backspace at an empty
-// buffer turns numericMode off so the user isn't stuck holding zero.
+// `=` is one-way enable (FID-B.3 audit-fix sweep — was toggle, now
+// enterNumericMode + exitNumericMode pair). With numericMode true and
+// the buffer empty, the overlay holds the transform at typed=0.
+// Backspace at empty buffer is an SS-specific escape hatch out of
+// numericMode (Blender's NUM_EDIT_FULL doesn't have it; users would
+// otherwise be stuck holding zero with no exit except Esc-cancel).
 // commit / cancel / reset / begin all clear the flag.
 
 {
   // begin seeds numericMode false + liveDelta zeroed
   useModalTransformStore.getState().begin(fakePayload);
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: begin seeds numericMode false');
+    'Audit: begin seeds numericMode false');
   const ld = useModalTransformStore.getState().liveDelta;
   assert(ld.dx === 0 && ld.dy === 0 && ld.dRot === 0 && ld.scale === 1,
-    'Audit 4 #4: begin seeds liveDelta zero');
+    'Audit: begin seeds liveDelta zero');
 
-  // toggleNumericMode flips it
-  useModalTransformStore.getState().toggleNumericMode();
+  // enterNumericMode → true; exitNumericMode → false (FID-B.3 — `=`
+  // is one-way enable, Ctrl+= disables; no toggle).
+  useModalTransformStore.getState().enterNumericMode();
   assert(useModalTransformStore.getState().numericMode === true,
-    'Audit 4 #4: toggleNumericMode → true');
-  useModalTransformStore.getState().toggleNumericMode();
+    'Audit FID-B.3: enterNumericMode → true');
+  // Second enter is idempotent (mirrors Blender: `=` again does nothing)
+  useModalTransformStore.getState().enterNumericMode();
+  assert(useModalTransformStore.getState().numericMode === true,
+    'Audit FID-B.3: enterNumericMode is idempotent');
+  useModalTransformStore.getState().exitNumericMode();
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: toggleNumericMode → false');
+    'Audit FID-B.3: exitNumericMode → false');
+  useModalTransformStore.getState().exitNumericMode();
+  assert(useModalTransformStore.getState().numericMode === false,
+    'Audit FID-B.3: exitNumericMode is idempotent');
 
   // setLiveDelta publishes; HUD subscribers re-render off this
   useModalTransformStore.getState().setLiveDelta({ dx: 12, dy: -4, dRot: 0.25, scale: 1.5 });
   const ld2 = useModalTransformStore.getState().liveDelta;
-  assert(ld2.dx === 12 && ld2.dy === -4, 'Audit 4 #4: setLiveDelta records translate values');
-  assert(ld2.dRot === 0.25, 'Audit 4 #4: setLiveDelta records rotation');
-  assert(ld2.scale === 1.5, 'Audit 4 #4: setLiveDelta records scale');
+  assert(ld2.dx === 12 && ld2.dy === -4, 'Audit: setLiveDelta records translate values');
+  assert(ld2.dRot === 0.25, 'Audit: setLiveDelta records rotation');
+  assert(ld2.scale === 1.5, 'Audit: setLiveDelta records scale');
 
   // Backspace at empty buffer with numericMode true also turns mode off
   useModalTransformStore.getState().begin(fakePayload);
-  useModalTransformStore.getState().toggleNumericMode();
+  useModalTransformStore.getState().enterNumericMode();
   assert(useModalTransformStore.getState().numericMode === true,
-    'Audit 4 #4: numericMode armed for backspace test');
+    'Audit: numericMode armed for backspace test');
   useModalTransformStore.getState().popTyped(); // empty buffer → also turns mode off
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: backspace on empty buffer exits numericMode');
+    'Audit: backspace on empty buffer exits numericMode');
 
   // commit / cancel / reset clear both flag and liveDelta
   useModalTransformStore.getState().begin(fakePayload);
-  useModalTransformStore.getState().toggleNumericMode();
+  useModalTransformStore.getState().enterNumericMode();
   useModalTransformStore.getState().setLiveDelta({ dx: 5, dy: 5, dRot: 1, scale: 2 });
   useModalTransformStore.getState().commit();
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: commit clears numericMode');
+    'Audit: commit clears numericMode');
   const ld3 = useModalTransformStore.getState().liveDelta;
-  assert(ld3.dx === 0 && ld3.scale === 1, 'Audit 4 #4: commit zeroes liveDelta');
+  assert(ld3.dx === 0 && ld3.scale === 1, 'Audit: commit zeroes liveDelta');
 
   useModalTransformStore.getState().begin(fakePayload);
-  useModalTransformStore.getState().toggleNumericMode();
+  useModalTransformStore.getState().enterNumericMode();
   useModalTransformStore.getState().cancel();
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: cancel clears numericMode');
+    'Audit: cancel clears numericMode');
 
   useModalTransformStore.getState().begin(fakePayload);
-  useModalTransformStore.getState().toggleNumericMode();
+  useModalTransformStore.getState().enterNumericMode();
   useModalTransformStore.getState().reset();
   assert(useModalTransformStore.getState().numericMode === false,
-    'Audit 4 #4: reset clears numericMode');
+    'Audit: reset clears numericMode');
 }
 
 console.log(`\nmodalTransformTyped: ${passed} passed, ${failed} failed`);

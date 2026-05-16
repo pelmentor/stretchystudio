@@ -67,11 +67,8 @@ const {
 import { getOperator } from '../operators/registry.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
-import {
-  listSavedProjects,
-  loadProjectRecord,
-  deserializeProject,
-} from '../../services/PersistenceService.js';
+import { listSavedProjects } from '../../services/PersistenceService.js';
+import { loadFromLibrary } from '../../services/projectLibrary.js';
 
 /** Max entries shown under "Open Recent ▶". Blender's default is 10
  *  (preferences `recent_files`); we keep it at 8 to stay short on a
@@ -117,15 +114,7 @@ function RecentSubmenu({ onClose }) {
   async function handlePick(rec) {
     onClose?.();
     try {
-      const full = await loadProjectRecord(rec.id);
-      if (!full?.blob) return;
-      const { project } = await deserializeProject(full.blob);
-      await useProjectStore.getState().loadProject(project);
-      // Re-anchor so a subsequent Ctrl+S overwrites this record. Mirrors
-      // LoadModal.loadFromRecord — the two paths must stay in sync; if
-      // a third entry ever needs the same flow, lift to a helper in
-      // `services/projectLibrary.js`.
-      useProjectStore.setState({ currentLibraryId: rec.id });
+      await loadFromLibrary(rec.id);
     } catch (err) {
       if (typeof console !== 'undefined') console.error('[FileMenu] open recent failed:', err);
     }

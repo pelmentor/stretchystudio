@@ -54,24 +54,43 @@ import {
   useSnapStore,
 } from '../../lib/snap/index.js';
 
-/** Audit 4 #4 — render the live delta for the HUD. Translate emits the
- *  signed canvas-px delta along the active axis (or the diagonal magnitude
- *  when both axes are free); rotate emits degrees; scale emits the
- *  multiplier. Mirrors Blender's `WM_OT_translate` / `WM_OT_rotate` /
- *  `WM_OT_resize` header echo (`transform.cc:headerprint_*`). */
+/** Render the live delta for the HUD. Mirrors Blender's transform-mode
+ *  header echo functions:
+ *    - translate → `headerTranslation`
+ *      (`reference/blender/source/blender/editors/transform/transform_mode_translate.cc:173`)
+ *    - rotate    → `headerRotation`
+ *      (`reference/blender/source/blender/editors/transform/transform_mode.cc:564`)
+ *    - scale     → `headerResize`
+ *      (`reference/blender/source/blender/editors/transform/transform_mode.cc:870`)
+ *
+ *  Audit-fix sweep (FID-B.2) — earlier banner cited "transform.cc:
+ *  headerprint_*" which doesn't exist. Updated to actual symbols.
+ *  Precisions bumped to match Blender:
+ *    - rotate: `%.2f` (`transform_mode.cc:579`)         → `.toFixed(2)` (was correct)
+ *    - scale:  `%.4f` (`transform_mode.cc:878-880`)     → `.toFixed(4)` (was 3)
+ *    - translate: per `transform_mode_translate.cc:168` Blender renders
+ *      4 decimal places via `BKE_unit_value_as_string_scaled` precision=4.
+ *      SS canvas-px is unitless, so we bump from 1 → 2 decimals (the SS
+ *      canvas is typically 1000–2000 px wide; sub-pixel precision is
+ *      meaningful at high zoom but 4 decimals is overkill at 1× zoom).
+ *      A future preference may expose this.
+ *
+ *  Translate unconstrained: `dx, dy` pair (Blender's "D: %s   D: %s" at
+ *  `transform_mode_translate.cc:185-192`).
+ */
 function formatLiveDelta(kind, axis, d) {
   if (kind === 'rotate') {
     const deg = (d.dRot ?? 0) * 180 / Math.PI;
     return deg.toFixed(2);
   }
   if (kind === 'scale') {
-    return (d.scale ?? 1).toFixed(3);
+    return (d.scale ?? 1).toFixed(4);
   }
   // translate
-  if (axis === 'x') return (d.dx ?? 0).toFixed(1);
-  if (axis === 'y') return (d.dy ?? 0).toFixed(1);
+  if (axis === 'x') return (d.dx ?? 0).toFixed(2);
+  if (axis === 'y') return (d.dy ?? 0).toFixed(2);
   // unconstrained: show as "x, y" pair
-  return `${(d.dx ?? 0).toFixed(1)}, ${(d.dy ?? 0).toFixed(1)} `;
+  return `${(d.dx ?? 0).toFixed(2)}, ${(d.dy ?? 0).toFixed(2)} `;
 }
 
 /** Phase 2 audit fix (D-1) — Shift acts as Blender's `MOD_PRECISION`
@@ -87,21 +106,25 @@ const PRECISION_FREE_ROTATE    = 0.1;
 const PRECISION_FREE_SCALE     = 0.1;
 
 export function ModalTransformOverlay() {
+  // Audit-fix sweep — subscribe ONLY to the data slots that gate the
+  // effect; read store actions inside the effect via `getState()` so
+  // they don't appear in the deps array. Zustand actions are stable
+  // refs in practice, but listing them as deps risks the entire
+  // global-listener rebind cycle re-firing if a future store refactor
+  // ever rebuilds the action set (e.g., via middleware). The data
+  // slots — `kind` / `axis` / `startMouse` / `pivotCanvas` / `original`
+  // — are the real triggers for setup; everything else is read
+  // dynamically per mousemove.
   const kind        = useModalTransformStore((s) => s.kind);
   const axis        = useModalTransformStore((s) => s.axis);
   const startMouse  = useModalTransformStore((s) => s.startMouse);
   const pivotCanvas = useModalTransformStore((s) => s.pivotCanvas);
   const original    = useModalTransformStore((s) => s.original);
+  // HUD-only subscriptions — these drive the render() body, not the
+  // effect.
   const typedBuffer = useModalTransformStore((s) => s.typedBuffer);
   const numericMode = useModalTransformStore((s) => s.numericMode);
   const liveDelta   = useModalTransformStore((s) => s.liveDelta);
-  const setAxis     = useModalTransformStore((s) => s.setAxis);
-  const appendTyped = useModalTransformStore((s) => s.appendTyped);
-  const popTyped    = useModalTransformStore((s) => s.popTyped);
-  const toggleNumericMode = useModalTransformStore((s) => s.toggleNumericMode);
-  const setLiveDelta = useModalTransformStore((s) => s.setLiveDelta);
-  const commit      = useModalTransformStore((s) => s.commit);
-  const cancel      = useModalTransformStore((s) => s.cancel);
 
   // Track last mouse position so typed-buffer keystrokes can re-apply
   // the modal effect without waiting for a mousemove. Initialised to
@@ -124,6 +147,15 @@ export function ModalTransformOverlay() {
 
   useEffect(() => {
     if (!kind || !startMouse || !pivotCanvas) return;
+    // Audit-fix sweep — pull action refs once at effect entry via
+    // `getState()` so the deps array can shrink to just data slots.
+    // These refs are captured by the inner handlers and stay valid
+    // for the lifetime of THIS modal session.
+    const {
+      setAxis, appendTyped, popTyped,
+      enterNumericMode, exitNumericMode, setLiveDelta,
+      commit, cancel,
+    } = useModalTransformStore.getState();
     const canvasEl = document.querySelector('canvas');
     canvasRectRef.current = canvasEl?.getBoundingClientRect() ?? null;
     // Clear any leftover snap-target on entry so the dot from a prior
@@ -403,8 +435,13 @@ export function ModalTransformOverlay() {
       applyDelta(e.clientX, e.clientY, e.shiftKey, ctrlHeldRef.current);
     }
     function onClick(e) {
-      // left click commits, right click cancels
+      // Audit-fix sweep (FID-B.4) — stopPropagation parity with the
+      // sister vertex modal (`ModalVertexTransformOverlay.jsx:291`).
+      // Without it, the click that commits the modal could also fall
+      // through to a click-select on the canvas, immediately re-selecting
+      // whatever was under the cursor.
       e.preventDefault();
+      e.stopPropagation();
       if (e.button === 2) {
         revert();
         endBatch();
@@ -472,16 +509,20 @@ export function ModalTransformOverlay() {
         setAxis(axis === 'y' ? null : 'y');
         return;
       }
-      // Audit 4 #4 — `=` toggles explicit numeric-input mode. Mirrors
-      // Blender's `NUM_EDIT_FULL` flag (`numinput.cc:367-380`). With it
-      // on, the modal holds at the typed value (default 0 / scale 1)
-      // regardless of mouse position; the user types digits to drive
-      // the transform precisely. Re-fire applyDelta so the HUD and the
-      // project reflect the new mode immediately.
+      // Audit-fix sweep (FID-B.3) — `=` is ONE-WAY enable; Ctrl+=
+      // disables. Mirrors Blender's `numinput.cc:369-378` semantics:
+      // pressing `=` with NUM_EDIT_FULL OFF turns it ON; pressing `=`
+      // again does nothing. Only `Ctrl+=` clears the flag. Re-fire
+      // applyDelta so the HUD and project reflect the change without
+      // waiting on a mousemove.
       if (e.key === '=') {
         e.preventDefault();
         e.stopPropagation();
-        toggleNumericMode();
+        if (e.ctrlKey || e.metaKey) {
+          exitNumericMode();
+        } else {
+          enterNumericMode();
+        }
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
         return;
@@ -529,6 +570,15 @@ export function ModalTransformOverlay() {
         applyDelta(cur.x, cur.y, e.type === 'keydown', ctrlHeldRef.current);
         return;
       }
+      // Audit-fix sweep (FID-B.4) — catch-all that swallows any
+      // unrecognised key while the modal is live. Mirrors the sister
+      // vertex modal's catch-all at `ModalVertexTransformOverlay.jsx:378-379`.
+      // Without this, a stray `KeyG` / `KeyR` / `KeyS` / `KeyE` /
+      // `KeyM` pressed mid-drag would bubble to the global dispatcher
+      // and start a competing modal — the exact bug fix G-3 + G-4 closed
+      // for the vertex sister.
+      e.preventDefault();
+      e.stopPropagation();
     }
     function onKeyUp(e) {
       // Mirror onKeyDown for Ctrl + Shift release so the modal updates
@@ -581,7 +631,12 @@ export function ModalTransformOverlay() {
       // the snap target here so the magenta dot doesn't stick around.
       useSnapStore.getState().clearSnapTarget();
     };
-  }, [kind, axis, startMouse, pivotCanvas, original, setAxis, appendTyped, popTyped, toggleNumericMode, setLiveDelta, commit, cancel]);
+    // Audit-fix sweep — deps array is now data-only. Store actions
+    // (setAxis, appendTyped, etc.) are read via `getState()` at effect
+    // entry and don't appear here; the effect re-binds only when the
+    // gesture's data slots change, not when an unrelated render churns
+    // the action selectors.
+  }, [kind, axis, startMouse, pivotCanvas, original]);
 
   if (!kind) return null;
 

@@ -211,13 +211,43 @@ function registerBuiltins() {
     },
   });
 
-  // File save. Phase 5 — opens the Save modal (gallery + library +
-  // download tab + thumbnail). The modal handles `.stretch` download
-  // and library overwrite paths; this operator just wakes it up.
+  // File save. Mirrors Blender's `wm.save_mainfile` two-path semantics
+  // (`wm_files.cc:5007-5066`): when the project is anchored to an
+  // existing library record (`currentLibraryId` set), Ctrl+S runs a
+  // SILENT overwrite via `quickSaveLinked()` — no modal pops. When
+  // unlinked (fresh project or freshly-loaded from disk), the modal
+  // opens for name entry. Audit-fix sweep (FID-A.6) — prior to this
+  // the modal always popped, which forced an extra click on every
+  // Ctrl+S and broke muscle memory for any user expecting one-keystroke
+  // overwrite.
   registerOperator({
     id: 'file.save',
     label: 'Save Project',
-    exec: () => useLibraryDialogStore.getState().openSave(),
+    exec: () => {
+      const linkedId = useProjectStore.getState().currentLibraryId;
+      if (linkedId) {
+        // Fire-and-log — quickSaveLinked owns the projectSave timer
+        // shape, so we don't await (lets the keystroke return
+        // immediately). Errors are surfaced via the logger.warn inside
+        // saveLibraryRecord's catch; the modal fallback below isn't
+        // triggered because a transient IndexedDB failure is the
+        // user's problem to retry, not auto-escalate to a name dialog.
+        //
+        // Returns false when the linked record was deleted out-from-
+        // under us by another tab — in that case fall back to the
+        // modal so the user can re-save under a new name.
+        import('../../services/projectLibrary.js').then(({ quickSaveLinked }) => {
+          quickSaveLinked().then((didSave) => {
+            if (!didSave) useLibraryDialogStore.getState().openSave();
+          }).catch(() => {
+            // Logging already happened inside saveLibraryRecord; the
+            // user sees a console warn. No modal escalation here.
+          });
+        });
+        return;
+      }
+      useLibraryDialogStore.getState().openSave();
+    },
   });
 
   // File Save As — Ctrl+Shift+S (Blender's wm.save_as_mainfile,
@@ -476,9 +506,45 @@ function registerBuiltins() {
       input.accept = '.psd';
       input.style.display = 'none';
       document.body.appendChild(input);
+
+      // Audit-fix sweep — the prior implementation only removed the
+      // input from the DOM inside the change handler, so a user who
+      // opened the picker then cancelled left an orphan `<input>`
+      // mounted forever (browsers don't fire `change` on cancel).
+      // Each subsequent invocation leaked another node.
+      //
+      // Cleanup now runs from THREE paths:
+      //   1. change   — the picked-a-file happy path
+      //   2. cancel   — modern Chromium fires this when the user
+      //                 dismisses the OS picker (Chrome 113+ / Edge /
+      //                 Brave; safe-no-op elsewhere)
+      //   3. window.focus fallback — fires when the browser regains
+      //                 focus after the picker closes. We schedule a
+      //                 setTimeout(0) so a same-tick `change` event
+      //                 wins (its handler removes the input first);
+      //                 otherwise the focus path catches the cancel
+      //                 case in Firefox / Safari that don't fire
+      //                 `cancel`.
+      let cleaned = false;
+      function cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        window.removeEventListener('focus', onFocus, true);
+        if (input.parentNode) input.parentNode.removeChild(input);
+      }
+      function onFocus() {
+        // Defer so a same-tick `change` event wins and removes the
+        // input via its own handler; we only run if no file was
+        // picked.
+        setTimeout(() => {
+          if (!cleaned && (!input.files || input.files.length === 0)) cleanup();
+        }, 0);
+      }
+      window.addEventListener('focus', onFocus, true);
+      input.addEventListener('cancel', cleanup, { once: true });
       input.addEventListener('change', async () => {
         const file = input.files?.[0];
-        document.body.removeChild(input);
+        cleanup();
         if (!file) return;
         try {
           const buffer = await file.arrayBuffer();

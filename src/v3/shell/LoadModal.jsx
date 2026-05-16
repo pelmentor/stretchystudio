@@ -27,11 +27,7 @@ import {
 } from '../../components/ui/dialog.jsx';
 import { ScrollArea } from '../../components/ui/scroll-area.jsx';
 import { Plus } from 'lucide-react';
-import { useProjectStore } from '../../store/projectStore.js';
-import {
-  deserializeProject,
-  loadProjectRecord,
-} from '../../services/PersistenceService.js';
+import { loadFromLibrary, loadFromBlob } from '../../services/projectLibrary.js';
 import { ProjectGallery } from './ProjectGallery.jsx';
 
 export function LoadModal({ open, onOpenChange }) {
@@ -39,13 +35,7 @@ export function LoadModal({ open, onOpenChange }) {
 
   async function loadFromRecord(rec) {
     try {
-      const full = await loadProjectRecord(rec.id);
-      if (!full?.blob) return;
-      const { project } = await deserializeProject(full.blob);
-      await useProjectStore.getState().loadProject(project);
-      // Re-anchor to this library record so a subsequent save
-      // overwrites it (matches upstream's setCurrentDbProjectId flow).
-      useProjectStore.setState({ currentLibraryId: rec.id });
+      await loadFromLibrary(rec.id);
       onOpenChange(false);
     } catch (err) {
       console.error('[LoadModal] failed to load record:', err);
@@ -54,10 +44,7 @@ export function LoadModal({ open, onOpenChange }) {
 
   async function loadFromFile(file) {
     try {
-      const { project } = await deserializeProject(file);
-      await useProjectStore.getState().loadProject(project);
-      // Disk-loaded projects start unlinked — loadProject already
-      // cleared currentLibraryId; leave it that way.
+      await loadFromBlob(file);
       onOpenChange(false);
     } catch (err) {
       console.error('[LoadModal] failed to load file:', err);

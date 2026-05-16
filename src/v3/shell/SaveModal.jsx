@@ -39,14 +39,13 @@ import {
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog.jsx';
 import { useProjectStore } from '../../store/projectStore.js';
-import { useCaptureStore } from '../../store/captureStore.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { logger } from '../../lib/logger.js';
 import {
   serializeProject,
-  saveProjectRecord,
   loadProjectRecord,
 } from '../../services/PersistenceService.js';
+import { saveLibraryRecord } from '../../services/projectLibrary.js';
 import { ProjectGallery } from './ProjectGallery.jsx';
 
 export function SaveModal({ open, onOpenChange }) {
@@ -87,39 +86,18 @@ export function SaveModal({ open, onOpenChange }) {
     }
   }, [open]);
 
-  function captureThumbnail() {
-    try {
-      return useCaptureStore.getState().captureThumbnail?.() ?? '';
-    } catch (err) {
-      console.error('[SaveModal] thumbnail capture failed:', err);
-      return '';
-    }
-  }
-
   async function executeSave(idToUse, nameToUse, mode) {
     setIsSaving(true);
     setError(null);
-    logger.time('projectSave', mode);
-    const project = useProjectStore.getState().project;
-    // Capture state snapshot BEFORE serialization. Mirrors the
-    // structural shape `loadProject` logs (nodes/parts/deformers/params/
-    // initRigDone) so we can cross-reference any post-load issue
-    // (BUG-NECK_NULL_BBOX, BUG-ARMS-PHYS, etc.) against the actual
-    // state that hit disk.
-    const _nodes = Array.isArray(project?.nodes) ? project.nodes : [];
-    const partsArr = _nodes.filter((n) => n?.type === 'part');
-    const deformersArr = _nodes.filter((n) => n?.type === 'deformer');
-    const partsWithRuntime = partsArr.filter((p) =>
-      p?.mesh?.runtime && Array.isArray(p.mesh.runtime.keyforms)
-    );
-    const partsWithBakedKeyforms = partsArr.filter((p) => {
-      const kfs = p?.mesh?.runtime?.keyforms;
-      return Array.isArray(kfs) && kfs.length > 1;
-    });
     try {
-      const blob = await serializeProject(project);
-
       if (mode === 'download') {
+        // Download path stays inline — it doesn't write to the library
+        // and has its own timer scope. saveLibraryRecord owns the
+        // `projectSave/library` logging shape; the download path uses
+        // its own `projectSave/download` timer right below.
+        logger.time('projectSave', 'download');
+        const project = useProjectStore.getState().project;
+        const blob = await serializeProject(project);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -129,52 +107,15 @@ export function SaveModal({ open, onOpenChange }) {
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1500);
         useProjectStore.setState({ hasUnsavedChanges: false });
-        onOpenChange(false);
+        logger.timeEnd('projectSave', 'download',
+          { mode: 'download', name: nameToUse?.trim?.() ?? nameToUse, blobSizeBytes: blob.size },
+          `download OK: ${nameToUse.trim()}.stretch`,
+        );
       } else {
-        const thumbnail = captureThumbnail();
-        const savedId = await saveProjectRecord(idToUse, nameToUse.trim(), blob, thumbnail);
-        useProjectStore.setState({ hasUnsavedChanges: false, currentLibraryId: savedId });
-        onOpenChange(false);
+        await saveLibraryRecord(idToUse, nameToUse);
       }
-      logger.timeEnd(
-        'projectSave',
-        mode,
-        {
-          mode,
-          name: nameToUse?.trim?.() ?? nameToUse,
-          schemaVersion: project?.schemaVersion ?? null,
-          parts: partsArr.length,
-          deformers: deformersArr.length,
-          params: project?.parameters?.length ?? 0,
-          lastInitRigCompletedAt: project?.lastInitRigCompletedAt ?? null,
-          partsWithRuntimeData: partsWithRuntime.length,
-          partsWithBakedKeyforms: partsWithBakedKeyforms.length,
-          blobSizeBytes: blob.size,
-        },
-        `${mode} OK: ${partsArr.length}p / ${deformersArr.length}d / ${project?.parameters?.length ?? 0}params, ${partsWithRuntime.length}/${partsArr.length} runtime-rig'd`,
-      );
+      onOpenChange(false);
     } catch (err) {
-      // End the timer so the next save doesn't trip the "already running"
-      // warn from logger.time. The success path's timeEnd above logs at
-      // INFO; the failure path needs its own WARN with the error context.
-      const ms = logger.timeEnd('projectSave', mode, {
-        mode,
-        name: nameToUse?.trim?.() ?? nameToUse,
-        schemaVersion: project?.schemaVersion ?? null,
-        parts: partsArr.length,
-        deformers: deformersArr.length,
-      });
-      logger.warn(
-        'projectSave',
-        `${mode} FAILED after ${ms ?? '?'}ms: ${err instanceof Error ? err.message : String(err)}`,
-        {
-          mode,
-          name: nameToUse?.trim?.() ?? nameToUse,
-          schemaVersion: project?.schemaVersion ?? null,
-          parts: partsArr.length,
-          deformers: deformersArr.length,
-        },
-      );
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSaving(false);

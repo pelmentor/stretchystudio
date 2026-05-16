@@ -68,7 +68,8 @@ import { create } from 'zustand';
  * @property {(ch: string) => void} appendTyped
  * @property {() => void} popTyped
  * @property {() => void} clearTyped
- * @property {() => void} toggleNumericMode
+ * @property {() => void} enterNumericMode
+ * @property {() => void} exitNumericMode
  * @property {(d: LiveDelta) => void} setLiveDelta
  * @property {() => void} commit
  * @property {() => void} cancel
@@ -132,12 +133,24 @@ export const useModalTransformStore = create((set) => ({
   }),
   clearTyped: () => set({ typedBuffer: '' }),
 
-  /** Audit 4 #4 — `=` toggles explicit numeric-input mode. Mirrors
-   *  Blender's `NUM_EDIT_FULL` flag from `numinput.cc:367-380`. With
-   *  numericMode true and an empty buffer, the transform is held at
-   *  the typed value (defaults to 0) instead of following the mouse;
-   *  the user types digits to drive the value precisely. */
-  toggleNumericMode: () => set((state) => ({ numericMode: !state.numericMode })),
+  /** Audit-fix sweep (FID-B.3) — `=` is ONE-WAY enable, Ctrl+= disables.
+   *  Mirrors Blender's `NUM_EDIT_FULL` flag from
+   *  `reference/blender/source/blender/editors/util/numinput.cc:369-378`:
+   *  pressing `=` with the flag OFF sets it ON; pressing `=` again
+   *  while ON does nothing (falls through). Only `Ctrl+=` clears it.
+   *  Earlier `toggleNumericMode` flipped the flag on every press —
+   *  fidelity gap closed.
+   *
+   *  With numericMode true and an empty buffer, the transform is held
+   *  at the typed value (defaults to 0 / scale 1) instead of following
+   *  the mouse; the user types digits to drive the value precisely.
+   *
+   *  popTyped on an empty buffer ALSO exits numericMode — that's an
+   *  SS UX addition (Blender's Backspace on empty doesn't exit
+   *  NUM_EDIT_FULL) so a user who pressed `=` accidentally isn't
+   *  stuck holding zero with no way out except Esc-cancel. */
+  enterNumericMode: () => set({ numericMode: true }),
+  exitNumericMode:  () => set({ numericMode: false }),
 
   /** Audit 4 #4 — applyDelta publishes the post-snap, post-precision
    *  delta here so the HUD can render it always-visible (not just when
