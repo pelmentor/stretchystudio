@@ -14,6 +14,10 @@
  *     (PSD reimport / mesh re-mesh invalidates seeded rig data).
  *     Hidden by default; renders only when divergence is real.
  *   - AreaTree in the rest of the viewport
+ *   - Footer status bar at the bottom — Audit 4 #1 (2026-05-16),
+ *     mirrors Blender's `STATUSBAR_HT_header`. Surfaces input
+ *     status (modal echo or mode label), reports count, and
+ *     selection stats.
  *   - Top-level ErrorBoundary as a last-resort net (the per-area
  *     boundaries inside Area.jsx catch the common case)
  *   - Mounting the operator dispatcher's global event listeners
@@ -32,6 +36,7 @@ import { ErrorBoundary } from './ErrorBoundary.jsx';
 import { Topbar } from './Topbar.jsx';
 import { StaleRigBanner } from './StaleRigBanner.jsx';
 import { AreaTree } from './AreaTree.jsx';
+import { Footer } from './Footer.jsx';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { useExportModalStore } from '../../store/exportModalStore.js';
 import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
@@ -125,6 +130,7 @@ export function AppShell() {
         <Topbar />
         <StaleRigBanner />
         <AreaTree />
+        <Footer />
         <Suspense fallback={null}>
           {libraryMode === 'save' && (
             <SaveModal open onOpenChange={(o) => { if (!o) closeLibrary(); }} />
