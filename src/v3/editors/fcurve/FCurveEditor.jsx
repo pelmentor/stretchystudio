@@ -256,12 +256,14 @@
  *     follow-on slice would add the schema field + the muted-grey
  *     branch together.
  *   - Channel-vs-keyform selection split — Blender keeps `FCURVE_SELECTED`
- *     (channels in the channel list) independent of per-keyform selection.
- *     SS collapses both onto the global `selectionStore` for the active
- *     curve choice + the local `selectedHandles` Map for keyform picks.
- *     Sidebar Shift-click for multi-channel-select is therefore not
- *     wired this slice (it would need a new graph-local "selected
- *     channels" set independent of `selectionStore`).
+ *     (channels in the channel list) independent of per-keyform selection
+ *     and of the single `FCURVE_ACTIVE` flag. Slice 5.F (2026-05-16)
+ *     lifted this by adding the sparse per-FCurve `selected` boolean +
+ *     sidebar Shift-click semantics. The helper lives at
+ *     [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js);
+ *     the active concept still resolves from `selectionStore` so
+ *     `pickFCurve(action, selection)` returns the "last clicked" curve
+ *     while `fcurve.selected` carries the multi-row state.
  *   - Active-keyform highlight (`draw_fcurve_active_vertex` at
  *     `graph_draw.cc:241-280`, the per-FCurve `BKE_fcurve_active_keyframe_index`
  *     concept). SS has no active-keyform field on FCurves; the highlight
@@ -326,6 +328,10 @@ import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
 import { fcurveColorCss } from '../../../anim/fcurveColor.js';
 import { hasDriver, clearDriver } from '../../../anim/driverGate.js';
 import { evaluateDriver } from '../../../anim/driver.js';
+import {
+  applyChannelSelect,
+  isFCurveSelected,
+} from '../../../anim/fcurveChannelSelect.js';
 import { useTransformModalInput } from '../../../lib/modal/useTransformModalInput.js';
 import {
   keyEventToAction,
@@ -1745,6 +1751,30 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     });
   }, []);
 
+  // Slice 5.F — channel selection (independent of "active").
+  //
+  // Writes the per-FCurve `selected` boolean into `project.actions[i]`
+  // via a batched `updateProject` so it lands as a single undo entry.
+  // Returns the helper's decision so the click handler can wire the
+  // out-of-action side-effects (set active, clear keyform selection).
+  //
+  // Mirrors Blender's `mouse_anim_channels_fcurve` at
+  // `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4223-4257`
+  // — see [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js)
+  // for the full provenance trace.
+  const applyChannelClick = useCallback((fcurveId, modifier) => {
+    const proj = useProjectStore.getState().project;
+    beginBatch(proj);
+    let decision = { makeActive: false, selectedNow: false };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      decision = applyChannelSelect(a, fcurveId, modifier);
+    });
+    endBatch();
+    return decision;
+  }, [activeActionId, update]);
+
   // For the menu, "current" needs to know the active fcurve to read
   // extrapolation; for handle type / interp we use the most-common value
   // across the WHOLE multi-curve selection.
@@ -1764,6 +1794,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         activeFCurveId={activeFCurveId}
         onToggleHidden={toggleHidden}
         onPickActiveByTarget={onPickActiveByTarget}
+        onApplyChannelClick={applyChannelClick}
         onClearKeyformSelection={clearSelection}
         selection={selectedHandles}
       />
@@ -1872,7 +1903,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, onClearKeyformSelection, selection }) {
+function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
@@ -1884,29 +1915,51 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
       {decoded.map((d) => {
         const isActive = d.fcurve.id === activeFCurveId;
         const isHidden = hidden.has(d.fcurve.id);
+        // Slice 5.F — `fcurve.selected` (Blender's FCURVE_SELECTED bit)
+        // surfaces multi-channel selection in the sidebar independent
+        // of the active concept. See
+        // [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js).
+        const isChannelSelected = isFCurveSelected(d.fcurve);
         const hasSelection = (selection.get(d.fcurve.id)?.size ?? 0) > 0;
         // Slice 5.D: "(D)" badge marks driver-locked rows so the user
         // spots them at a glance before clicking in.
         const driven = hasDriver(d.fcurve);
+        // Row tint: active (strongest) > selected-non-active (medium) >
+        // inactive (muted). Mirrors Blender's
+        // `acf_generic_channel_color` (anim_channels_defines.cc:178-210)
+        // which renders selected-non-active rows in a lighter shade of
+        // the active highlight.
+        const rowTint = isActive
+          ? 'bg-accent/60 text-foreground'
+          : isChannelSelected
+            ? 'bg-accent/25 text-foreground/90'
+            : 'text-muted-foreground';
         return (
           <div
             key={d.fcurve.id}
             className={
-              'group flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:bg-accent/40 ' +
-              (isActive ? 'bg-accent/60 text-foreground' : 'text-muted-foreground')
+              'group flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:bg-accent/40 '
+              + rowTint
             }
             onClick={(e) => {
               const t = decodeFCurveTarget(d.fcurve);
               if (!t) return;
-              // Audit-fix MED-B8 (2026-05-16): plain channel-click wipes
-              // keyform selection on non-clicked channels, matching
-              // Blender's `SELECT_REPLACE` semantic at
-              // `graph_select.cc:1741` (`deselect_graph_keys(ac, false,
-              // SELECT_SUBTRACT, true)` runs before the new selection).
-              // Shift-click would extend (omitted this slice — see the
-              // file-top deferral on channel-vs-keyform selection split).
+              // Slice 5.F — Shift-click toggles `fcurve.selected` only;
+              // active stays unless newly-selected (mirroring Blender's
+              // `anim_channels_edit.cc:4247` gate). Plain click clears
+              // every other curve's `selected` (SELECT_REPLACE per
+              // `anim_channels_edit.cc:4239-4243`).
+              //
+              // Plain-click also wipes keyform selection on other
+              // channels (audit-fix MED-B8 — Blender's
+              // `deselect_graph_keys(ac, false, SELECT_SUBTRACT, true)`
+              // at `graph_select.cc:1741`). Shift-click preserves it.
+              const decision = onApplyChannelClick(
+                d.fcurve.id,
+                e.shiftKey ? 'toggle' : 'replace',
+              );
               if (!e.shiftKey) onClearKeyformSelection();
-              onPickActiveByTarget(t);
+              if (decision.makeActive) onPickActiveByTarget(t);
             }}
             title={driven ? `${d.tooltip} (driver-locked)` : d.tooltip}
           >

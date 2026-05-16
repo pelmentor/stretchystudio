@@ -82,6 +82,12 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  * @property {number} [arrayIndex]
  * @property {Keyframe[]} keyforms
  * @property {object} [driver]
+ * @property {boolean} [selected] - Slice 5.F: per-FCurve "channel
+ *   selected" flag, independent of the "active FCurve" concept (resolved
+ *   from the global selectionStore). Sparse; missing means `false`.
+ *   Mirrors Blender's `FCURVE_SELECTED` bit
+ *   (`DNA_anim_enums.h:303-310`). Mutated via `applyChannelSelect` in
+ *   `anim/fcurveChannelSelect.js`.
  */
 
 /**
