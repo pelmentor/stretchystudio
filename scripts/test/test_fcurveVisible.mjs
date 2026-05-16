@@ -200,6 +200,32 @@ assert(toggleFCurveHidden(makeAction([makeFCurve('a', [0, 1])]), 'missing').hidd
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Multi-action isolation — same fcurveId in two actions
+//
+// Audit-fix MED-2 (Slice 5.I dual-audit 2026-05-17): explicit
+// regression for the case where two actions independently contain an
+// fcurve with the same `id` (possible if actions are cloned, or if
+// a future `uid()` collision occurs). Isolation is architecturally
+// guaranteed by `toggleFCurveHidden`'s signature (it operates on the
+// passed-in `action` object directly), but the test now pins the
+// guarantee.
+
+{
+  const fcA = makeFCurve('shared-id', [0, 1]);
+  const fcB = makeFCurve('shared-id', [0, 1]);
+  const actionA = makeAction([fcA]);
+  const actionB = makeAction([fcB]);
+
+  toggleFCurveHidden(actionA, 'shared-id');
+  assert(isFCurveHidden(fcA) === true,  'multi-action: actionA fcurve hidden');
+  assert(isFCurveHidden(fcB) === false, 'multi-action: actionB fcurve unaffected by toggle on A');
+
+  toggleFCurveHidden(actionB, 'shared-id');
+  assert(isFCurveHidden(fcB) === true,  'multi-action: actionB fcurve now hidden');
+  assert(isFCurveHidden(fcA) === true,  'multi-action: actionA fcurve STILL hidden (no spillback)');
+}
+
+// ─────────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

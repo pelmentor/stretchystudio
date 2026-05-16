@@ -78,6 +78,39 @@
  * sparse field when hiding. The hidden curve simply stops drawing;
  * if the user un-hides it later the same selection state returns.
  *
+ * The hidden curve also still appears in the sidebar (so the user can
+ * click the eye to un-hide). Blender's `ANIMFILTER_LIST_CHANNELS`
+ * filter intentionally omits `ANIMFILTER_CURVE_VISIBLE` for the same
+ * reason: the row stays, only the plot disappears. SS matches by
+ * mapping the sidebar over `decoded` (full list) but the plot +
+ * hit-tests over `visible` (filtered list).
+ *
+ * # SS-deferred Blender visibility operators
+ *
+ * Outside Slice 5.I's scope but documented here so the next
+ * "Graph Editor keymap parity" slice doesn't have to re-discover them:
+ *
+ *   - **`GRAPH_OT_hide`** (`space_graph/graph_ops.cc:226-337`) — H
+ *     keymap (hide selected curves), Shift+H (hide unselected via
+ *     `unselected=true` flag). Iterates filtered channels and clears
+ *     `FCURVE_VISIBLE` per-row.
+ *   - **`GRAPH_OT_reveal`** (`space_graph/graph_ops.cc:341-419`) —
+ *     Alt+H keymap (un-hide everything). Sets `FCURVE_VISIBLE` on
+ *     every curve in the channel list.
+ *   - **`setflag_anim_channels` with `ACHANNEL_SETTING_VISIBLE`** —
+ *     channel-group hierarchical flushing (parent group → children).
+ *     Gated on the not-yet-shipped FCurveGroup datablock; sister to
+ *     the `AGRP_MUTED` flush gap already documented in
+ *     [fcurveMute.js](./fcurveMute.js).
+ *   - **`deselect_all_fcurves(hide=true)`** — composite
+ *     deselect-and-hide already documented above.
+ *
+ * SS today only ships the per-row eye-toggle (the `ANIM_OT_channels_
+ * setting_toggle` equivalent). Bulk operators are deferred until
+ * sidebar selection state acquires a "selected channels" multi-pick
+ * (Slice 5.F shipped the bit, bulk operators are still pending in
+ * the resume queue).
+ *
  * # Schema & migration
  *
  * No migration ships with this slice. `fcurve.hide` is a sparse

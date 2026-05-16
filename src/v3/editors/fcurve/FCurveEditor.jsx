@@ -538,6 +538,16 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // Visible = decoded \ hidden. Hidden curves still register colour
   // (so eye-toggling doesn't reshuffle colours) but skip rendering.
   // Slice 5.I — `hide` is now read from the persisted FCurve field.
+  //
+  // Dep-array `[decoded]` is sufficient (no separate `hidden` Set dep
+  // anymore). Justification: `toggleFCurveHidden` mutates `fc.hide`
+  // through an immer draft → new `fc` reference → new `action.fcurves`
+  // array → new `project.actions` → outer-component `decoded` memo
+  // (dep `[action?.fcurves, labels]`) invalidates → the new `decoded`
+  // array prop reaches this `Plot` component → `visible` memo's
+  // reference-equality check on `decoded` fires. Audit-fix MED-1
+  // (Slice 5.I dual-audit 2026-05-17): documented so a future reader
+  // doesn't collapse the dep thinking it's redundant.
   const visible = useMemo(
     () => decoded.filter((d) => !isFCurveHidden(d.fcurve)),
     [decoded],
