@@ -22,6 +22,21 @@
  * header + transport row) reads cleaner at SS's narrower default
  * Timeline area width.
  *
+ * F-1 / Audit-4 #1 status-bar follow-on (FID-A.2): Blender also
+ * registers `DOPESHEET_HT_playback_controls` and
+ * `GRAPH_HT_playback_controls` as FOOTER-region headers (see
+ * `space_dopesheet.py:351-358` and `space_graph.py:113-124`). These
+ * are the natural target when SS's status bar / Footer.jsx lift lands
+ * — at that point the transport can move from the editor body into
+ * a footer region the AppShell owns, mirroring Blender's two-region
+ * model (HEADER on top, FOOTER on bottom).
+ *
+ * The View menu surfaces SS's unified `view.frameSelected` op
+ * (`registry.js:393`) — the analog of Blender's per-space
+ * `action.view_selected` / `graph.view_selected` / `node.view_selected`,
+ * consolidated into one because SS's frame target is a Part/Group bbox
+ * regardless of editor space (FID-A.1).
+ *
  * @module v3/headers/TimelineHeader
  */
 
@@ -30,7 +45,7 @@ import { Clock, ChevronDown } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useAnimationStore } from '../../store/animationStore.js';
 import { getActiveSceneAction } from '../../anim/sceneAction.js';
-import { getOperator } from '../operators/registry.js';
+import { makeHeaderOperators } from './headerOperators.js';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
@@ -42,21 +57,7 @@ const {
   DropdownMenuTrigger,
 } = Dd;
 
-function runOperator(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  const ctx = { editorType: 'timeline' };
-  if (op.available && !op.available(ctx)) return false;
-  try { op.exec(ctx); } catch { /* operator logs its own errors */ }
-  return true;
-}
-
-function isAvailable(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  if (!op.available) return true;
-  return op.available({ editorType: 'timeline' });
-}
+const { runOperator, isAvailable } = makeHeaderOperators('timeline');
 
 export function TimelineHeader() {
   const project = useProjectStore((s) => s.project);

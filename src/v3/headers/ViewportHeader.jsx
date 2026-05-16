@@ -29,7 +29,7 @@
 
 import { useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { getOperator } from '../operators/registry.js';
+import { makeHeaderOperators } from './headerOperators.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
@@ -43,42 +43,12 @@ const {
   DropdownMenuTrigger,
 } = Dd;
 
-/**
- * Run an operator by id. Returns whether the run actually fired (which
- * we use to dim disabled menu items via the operator's `available`).
- *
- * @param {string} opId
- * @returns {boolean}
- */
-function runOperator(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  // Header menus run in a UI context with `editorType='viewport'` so
-  // operators that gate on context can opt in. Dispatcher uses null
-  // for the global keymap path; we pass 'viewport' here so future
-  // header-scoped ops can disambiguate.
-  const ctx = { editorType: 'viewport' };
-  if (op.available && !op.available(ctx)) return false;
-  try {
-    op.exec(ctx);
-  } catch {
-    // Operators are responsible for their own error logging via
-    // logger.error — swallow here so a thrown menu click doesn't
-    // crash the header.
-  }
-  return true;
-}
-
-/**
- * Read whether an operator is currently available without running it.
- * @param {string} opId
- */
-function isAvailable(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  if (!op.available) return true;
-  return op.available({ editorType: 'viewport' });
-}
+// F2-1 audit-fix sweep (ARCH-3) — shared runOperator/isAvailable pair
+// bound to this editor's type. Pre-sweep this header inlined a verbatim
+// copy of the same helper functions; lifted into `headerOperators.js`
+// alongside the parallel copies in TimelineHeader / DopesheetHeader /
+// FCurveHeader so a single source defines the dispatch contract.
+const { runOperator, isAvailable } = makeHeaderOperators('viewport');
 
 const MODE_LABELS = {
   object:     'Object Mode',

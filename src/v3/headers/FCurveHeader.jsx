@@ -13,8 +13,13 @@
  * SS's F-curve editor is read-only (see `FCurveEditor.jsx` JSDoc —
  * "drag-handle bezier editing is the polish phase that earns
  * `v3-phase-3-complete`"). F2-1 lifts the inline `<Wrapper>` title
- * strip out of the body and ships a View menu with the operators we
- * have today. Channel / Key / Marker menus are deferred per Rule №1.
+ * strip out of the body and ships a View menu with the one operator
+ * SS already exposes — `view.frameSelected`, SS's unified analog of
+ * Blender's `graph.view_selected` (`space_graph.py:222` inside
+ * `GRAPH_MT_view`). SS consolidates Blender's three per-space "view
+ * selected" ops into one — see `registry.js:393` — because the
+ * frame target is a Part/Group bbox regardless of editor space
+ * (FID-A.1). Channel / Key / Marker menus are deferred per Rule №1.
  *
  * @module v3/headers/FCurveHeader
  */
@@ -29,7 +34,7 @@ import {
   decodeFCurveTarget,
   fcurveTargetsParam,
 } from '../../anim/animationFCurve.js';
-import { getOperator } from '../operators/registry.js';
+import { makeHeaderOperators } from './headerOperators.js';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
@@ -41,21 +46,7 @@ const {
   DropdownMenuTrigger,
 } = Dd;
 
-function runOperator(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  const ctx = { editorType: 'fcurve' };
-  if (op.available && !op.available(ctx)) return false;
-  try { op.exec(ctx); } catch { /* operator logs its own errors */ }
-  return true;
-}
-
-function isAvailable(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  if (!op.available) return true;
-  return op.available({ editorType: 'fcurve' });
-}
+const { runOperator, isAvailable } = makeHeaderOperators('fcurve');
 
 export function FCurveHeader() {
   const project = useProjectStore((s) => s.project);

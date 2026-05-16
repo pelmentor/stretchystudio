@@ -13,8 +13,14 @@
  * Blender's edit-side menus (Key / Channel / Marker) have no operators
  * to wire today. F2-1 lifts the inline `<DopeHeader>` title strip
  * (icon + name + subtitle) out of `DopesheetEditor.jsx`'s body and
- * adds a single View menu with the operators SS already exposes
- * (`view.frameSelected` per `space_dopesheet.py:446` `action.view_selected`).
+ * adds a single View menu with the one operator SS already exposes —
+ * `view.frameSelected`, which is SS's unified analog of Blender's
+ * per-space `action.view_selected` (surfaced from `DOPESHEET_MT_view`
+ * at `space_dopesheet.py:446`, not from `DOPESHEET_HT_header` itself).
+ * SS consolidates Blender's three per-space "view selected" ops
+ * (`action.view_selected` / `graph.view_selected` / `node.view_selected`)
+ * into one — see `registry.js:393` — because SS's frame target is a
+ * Part/Group bbox regardless of editor space (FID-A.1).
  *
  * Editor-specific frame fits (`action.view_all`, `action.view_frame`)
  * are deferred — they need a fcurve-coordinate viewport-fit handler
@@ -30,7 +36,7 @@ import { useProjectStore } from '../../store/projectStore.js';
 import { useAnimationStore } from '../../store/animationStore.js';
 import { getActiveSceneAction } from '../../anim/sceneAction.js';
 import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
-import { getOperator } from '../operators/registry.js';
+import { makeHeaderOperators } from './headerOperators.js';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
@@ -42,21 +48,7 @@ const {
   DropdownMenuTrigger,
 } = Dd;
 
-function runOperator(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  const ctx = { editorType: 'dopesheet' };
-  if (op.available && !op.available(ctx)) return false;
-  try { op.exec(ctx); } catch { /* operator logs its own errors */ }
-  return true;
-}
-
-function isAvailable(opId) {
-  const op = getOperator(opId);
-  if (!op) return false;
-  if (!op.available) return true;
-  return op.available({ editorType: 'dopesheet' });
-}
+const { runOperator, isAvailable } = makeHeaderOperators('dopesheet');
 
 export function DopesheetHeader() {
   const project = useProjectStore((s) => s.project);

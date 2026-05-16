@@ -28,9 +28,21 @@ import { useProjectStore } from '../../store/projectStore.js';
 
 /** Mode-pill labels carry canonical-source hints (Audit-fix D-7) — same
  *  set the body used pre-lift. Blender's NodeEditor `tree_type` enum
- *  (`DNA_node_types.h:274-283`) names types but doesn't disclose edit
- *  surfaces because the editor IS edit-capable; SS extends the labels
- *  because NodeTreeArea is read-only. */
+ *  (`reference/blender/source/blender/makesdna/DNA_node_types.h:275-283`
+ *  defining `NTREE_UNDEFINED` / `NTREE_CUSTOM` / `NTREE_SHADER` /
+ *  `NTREE_COMPOSIT` / `NTREE_TEXTURE` / `NTREE_GEOMETRY`) names types
+ *  but doesn't disclose edit surfaces because the editor IS
+ *  edit-capable; SS extends the labels because NodeTreeArea is
+ *  read-only.
+ *
+ *  Deliberate deviation per `feedback_blender_reference_strict.md`
+ *  (FID-A.3): SS's three modes (rig / driver / animation) are NOT
+ *  Blender's shader/compositor/geometry/texture trees — they share
+ *  only the NodeEditor chrome pattern (header pill row + tree-type
+ *  selector at the top of `NODE_HT_header`). The labels surface
+ *  SS-specific canonical-source hints because the editor's role is
+ *  inspection over derived views, not authoring node graphs against
+ *  a render pipeline. */
 const MODES = /** @type {const} */ ([
   { id: 'rig',       label: 'Rig (Modifiers)' },
   { id: 'driver',    label: 'Driver (Expression)' },
@@ -89,7 +101,15 @@ export function NodeTreeHeader() {
       {mode === 'driver' && driverIds.length > 0 ? (
         <select
           className="text-[11px] ml-2 bg-muted text-foreground rounded px-1 py-0.5"
-          value={driverPick ?? driverIds[0]}
+          // F2-1 audit-fix sweep (ARCH-2) — `driverPick` is guaranteed
+          // non-null while `driverIds.length > 0` (`useMemo` returns
+          // `driverIds[0]` as the final fallback inside its branch).
+          // Pre-sweep this had `?? driverIds[0]` which was dead today
+          // and a future stale-display trap if `driverPick` ever
+          // returned null while drivers exist — the dropdown would
+          // pin to driverIds[0] while the store still held the old
+          // `driverFallbackId`. Dead fallback removed.
+          value={driverPick}
           onChange={(e) => setDriverFallbackId(e.target.value)}
         >
           {driverIds.map((id) => (
