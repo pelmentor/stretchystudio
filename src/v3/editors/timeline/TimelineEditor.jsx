@@ -4,8 +4,7 @@ import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { cn } from '@/lib/utils';
-import { Disc, RotateCcw, Repeat, SkipBack, SkipForward, Copy, Clipboard, Trash2, Music, X, Settings, Upload } from 'lucide-react';
-import { parseMotion3Json } from '@/io/live2d/motion3jsonImport';
+import { Copy, Clipboard, Trash2, Music, X, Settings, Upload } from 'lucide-react';
 import {
   buildParamFCurve,
   buildNodeFCurve,
@@ -57,29 +56,6 @@ function msToFrame(ms, fps) { return Math.round((ms / 1000) * Math.max(1, fps));
 /** Time (ms) from frame number */
 function frameToMs(frame, fps) { return (frame / Math.max(1, fps)) * 1000; }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   Transport button (play/pause/stop/loop icons)
-────────────────────────────────────────────────────────────────────────── */
-function TransportBtn({ onClick, active, title, children, className = '', disabled }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-      className={cn(
-        'flex items-center justify-center w-6 h-6 rounded text-xs transition-colors',
-        active
-          ? (className.includes('bg-') ? '' : 'bg-primary text-primary-foreground')
-          : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-        disabled && 'opacity-30 cursor-not-allowed pointer-events-none',
-        className
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 const CurveIcon = ({ type, className = '' }) => {
   let pathD = '';
   if (type === 'linear') pathD = 'M 2 14 L 14 2';
@@ -94,38 +70,6 @@ const CurveIcon = ({ type, className = '' }) => {
     </svg>
   );
 };
-
-/* ──────────────────────────────────────────────────────────────────────────
-   Tiny numeric field (for frame/fps/speed inputs)
-────────────────────────────────────────────────────────────────────────── */
-function NumField({ label, value, onChange, min, max, step = 1, className = '', tip }) {
-  const [local, setLocal] = useState(String(value));
-
-  useEffect(() => { setLocal(String(value)); }, [value]);
-
-  const commit = () => {
-    const n = parseFloat(local);
-    if (!isNaN(n)) onChange(clamp(n, min ?? -Infinity, max ?? Infinity));
-    else setLocal(String(value));
-  };
-
-  return (
-    <label className={`flex items-center gap-1 ${className}`} title={tip}>
-      <span className="text-[10px] text-muted-foreground whitespace-nowrap select-none">{label}</span>
-      <input
-        type="number"
-        value={local}
-        min={min}
-        max={max}
-        step={step}
-        onChange={e => setLocal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={e => { if (e.key === 'Enter') commit(); }}
-        className="w-12 h-5 text-[11px] text-center bg-input border border-border rounded px-1 py-0 focus:outline-none focus:ring-1 focus:ring-ring"
-      />
-    </label>
-  );
-}
 
 /* ──────────────────────────────────────────────────────────────────────────
    useAudioSync — Web Audio API playback sync
@@ -694,23 +638,24 @@ function AudioTrackRow({
    TimelineEditor — main component (restored from upstream
    TimelinePanel.jsx, adapted for v3 shell — 2026-04-29).
 
-   Functionality kept verbatim: transport bar, drag-keyframe, multi-select
-   + box-select, copy/paste, easing context menu, audio tracks, loop
-   markers, auto-keyframe. Imports use the `@/` Vite alias same as
-   upstream. Exported as `TimelineEditor` (was `TimelinePanel`) so
-   the v3 editorRegistry mapping continues to work without renames.
+   Functionality kept verbatim: drag-keyframe, multi-select + box-select,
+   copy/paste, easing context menu, audio tracks, loop markers. The
+   transport bar (play/pause, frame/start/end/FPS fields, speed,
+   loop-keyframes, auto-key, audio-add, action picker, new/import,
+   K-hint) was lifted to the global Footer in Round 7 (FID-A.2,
+   2026-05-16) — see [`PlaybackControls.jsx`](../../shell/PlaybackControls.jsx).
+   Imports use the `@/` Vite alias same as upstream. Exported as
+   `TimelineEditor` (was `TimelinePanel`) so the v3 editorRegistry
+   mapping continues to work without renames.
 ────────────────────────────────────────────────────────────────────────── */
 export function TimelineEditor() {
   const anim = useAnimationStore();
   const proj = useProjectStore(s => s.project);
   const update = useProjectStore(s => s.updateProject);
   const sel = useEditorStore(s => s.selection);
-  const autoKeyframe = useEditorStore(s => s.autoKeyframe);
-  const setAutoKeyframe = useEditorStore(s => s.setAutoKeyframe);
 
   const trackAreaRef = useRef(null);
   const rulerRef = useRef(null);
-  const motionFileRef = useRef(null);
 
   // State for selection and clipboard
   const [selectedKeyframes, setSelectedKeyframes] = useState(new Set()); // Set of "nodeId:timeMs"
@@ -759,89 +704,6 @@ export function TimelineEditor() {
     anim.setFps(a.fps ?? 24);
     anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
   }, [proj.actions, animation]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ── Create a default action if none ────────────────────────────────── */
-  const ensureAnimation = useCallback(() => {
-    if (proj.actions.length > 0) return proj.actions[0].id;
-    const id = uid();
-    update((p) => {
-      p.actions.push({
-        id,
-        name: 'Action 1',
-        duration: 2000,
-        fps: 24,
-        fcurves: [],
-        audioTracks: [],
-        flag: 0,
-        meta: { createdAt: null, modifiedAt: null, source: 'authored' },
-      });
-    });
-    anim.setActiveActionId(id);
-    anim.setFps(24);
-    anim.setEndFrame(48);
-    return id;
-  }, [proj.actions, update, anim]);
-
-  /* ── Import .motion3.json as a new action clip ──────────────────────── */
-  const importMotionFile = useCallback((file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onerror = () => {
-      window.alert(`Could not read ${file.name}.`);
-    };
-    reader.onload = () => {
-      try {
-        const text = String(reader.result ?? '');
-        // Default the clip name to the file's basename so the switcher
-        // dropdown shows something recognisable instead of "Imported motion".
-        const baseName = file.name.replace(/\.motion3\.json$/i, '').replace(/\.json$/i, '');
-        const { action, warnings } = parseMotion3Json(text, { uid, name: baseName });
-        update((p) => {
-          p.actions.push(action);
-        });
-        anim.setActiveActionId(action.id);
-        anim.setFps(action.fps);
-        anim.setEndFrame(Math.round((action.duration / 1000) * action.fps));
-        anim.seekFrame(0);
-        if (warnings.length > 0) {
-          // Soft fail: surface decode warnings so the user knows we dropped
-          // something, but still let the import succeed.
-          window.alert(
-            `Imported "${action.name}" with ${action.fcurves.length} fcurve(s).\n` +
-            `${warnings.length} warning(s):\n` +
-            warnings.slice(0, 6).join('\n') +
-            (warnings.length > 6 ? `\n…+${warnings.length - 6} more` : '')
-          );
-        }
-      } catch (err) {
-        window.alert(`Import failed: ${(err && err.message) || err}`);
-      }
-    };
-    reader.readAsText(file);
-  }, [update, anim]);
-
-  /* ── Create a fresh action regardless of existing ones ──────────────── */
-  const createAnimation = useCallback(() => {
-    const id = uid();
-    const n = proj.actions.length + 1;
-    update((p) => {
-      p.actions.push({
-        id,
-        name: `Action ${n}`,
-        duration: 2000,
-        fps: 24,
-        fcurves: [],
-        audioTracks: [],
-        flag: 0,
-        meta: { createdAt: null, modifiedAt: null, source: 'authored' },
-      });
-    });
-    anim.setActiveActionId(id);
-    anim.setFps(24);
-    anim.setEndFrame(48);
-    anim.seekFrame(0);
-    return id;
-  }, [proj.actions.length, update, anim]);
 
   // Audio sync hook
   useAudioSync(animation, anim);
@@ -1350,21 +1212,6 @@ export function TimelineEditor() {
     return [...paramRows, ...nodeRows];
   }, [animation, proj.nodes, proj.parameters]);
 
-  /* ── Transport ───────────────────────────────────────────────────────── */
-  const togglePlay = useCallback(() => {
-    ensureAnimation();
-    if (anim.isPlaying) anim.pause();
-    else anim.play();
-  }, [anim, ensureAnimation]);
-
-  const stop = useCallback(() => {
-    anim.stop();
-  }, [anim]);
-
-  const lastFrame = useCallback(() => {
-    anim.seekFrame(endFrame);
-  }, [anim, endFrame]);
-
   /* ── Ruler tick marks ────────────────────────────────────────────────── */
   const rulerTicks = useMemo(() => {
     const ticks = [];
@@ -1380,261 +1227,12 @@ export function TimelineEditor() {
   return (
     <div className="flex flex-col h-full select-none text-xs">
 
-      {/* ── Transport bar ───────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-2 py-1 border-b border-border shrink-0 bg-card">
-        {/* First Frame */}
-        <TransportBtn disabled={!hasAnimation} onClick={stop} title="First Frame">
-          <SkipBack size={14} />
-        </TransportBtn>
-
-        {/* Play / Pause */}
-        <TransportBtn disabled={!hasAnimation} onClick={togglePlay} active={anim.isPlaying} title={anim.isPlaying ? 'Pause' : 'Play'}>
-          {anim.isPlaying ? (
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-              <rect x="1.5" y="1" width="2.5" height="8" rx="0.5" />
-              <rect x="6" y="1" width="2.5" height="8" rx="0.5" />
-            </svg>
-          ) : (
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-              <polygon points="2,1 9,5 2,9" />
-            </svg>
-          )}
-        </TransportBtn>
-
-        {/* Last Frame */}
-        <TransportBtn disabled={!hasAnimation} onClick={lastFrame} title="Last Frame">
-          <SkipForward size={14} />
-        </TransportBtn>
-
-        {/* Repeat */}
-        <TransportBtn disabled={!hasAnimation} onClick={() => anim.setLoop(!anim.loop)} active={anim.loop} title="Repeat">
-          <Repeat size={14} />
-        </TransportBtn>
-
-        <div className="w-px h-4 bg-border mx-1" />
-
-        {/* Frame fields */}
-        <NumField
-          label="Frame"
-          value={currentFrame}
-          min={startFrame}
-          max={endFrame}
-          onChange={(v) => anim.seekFrame(v)}
-          tip="The current playback frame."
-        />
-        <NumField
-          label="Start"
-          value={startFrame}
-          min={0}
-          max={endFrame - 1}
-          onChange={(v) => anim.setStartFrame(v)}
-          tip="The first frame of the animation loop."
-        />
-        <NumField
-          label="End"
-          value={endFrame}
-          min={startFrame + 1}
-          onChange={(v) => {
-            anim.setEndFrame(v);
-            if (animation) {
-              update((p) => {
-                const a = getActiveSceneAction(p, anim.activeActionId);
-                if (a) a.duration = (v / (a.fps ?? 24)) * 1000;
-              });
-            }
-          }}
-          tip="The last frame of the animation loop."
-        />
-
-        <div className="w-px h-4 bg-border mx-1" />
-
-        <NumField
-          label="FPS"
-          value={fps}
-          min={1}
-          max={120}
-          onChange={(v) => {
-            anim.setFps(v);
-            if (animation) {
-              update((p) => {
-                const a = getActiveSceneAction(p, anim.activeActionId);
-                if (a) {
-                  const oldFps = a.fps ?? 24;
-                  a.fps = v;
-                  // Update duration so total frames (duration/1000 * fps) stays somewhat consistent?
-                  // Or should duration in ms be the source of truth?
-                  // In this app, typically the user thinks in frames, so if they change FPS 
-                  // but keep the same number of frames, the duration in ms must change.
-                  a.duration = (endFrame / v) * 1000;
-                }
-              });
-            }
-          }}
-          tip="Frames per second — determines playback granularity."
-        />
-
-        {/* Speed slider */}
-        <label className="flex items-center gap-1 ml-1" title="Playback speed multiplier.">
-          <span className="text-[10px] text-muted-foreground whitespace-nowrap">Speed</span>
-          <input
-            type="range"
-            min={0}
-            max={2}
-            step={0.05}
-            value={anim.speed}
-            onChange={e => anim.setSpeed(parseFloat(e.target.value))}
-            className="w-16 h-1 accent-primary"
-          />
-          <span className="text-[10px] text-muted-foreground w-6">{anim.speed.toFixed(1)}×</span>
-        </label>
-
-        <div className="w-px h-4 bg-border mx-1" />
-
-        {/* Loop Keyframes */}
-        <TransportBtn
-          disabled={!hasAnimation}
-          onClick={() => anim.setLoopKeyframes && anim.setLoopKeyframes(!anim.loopKeyframes)}
-          active={anim.loopKeyframes}
-          title="Loop Keyframes: When active, the animation will interpolate from the last keyframe back to the first keyframe for a seamless loop."
-        >
-          <RotateCcw size={14} />
-        </TransportBtn>
-
-        {/* Auto Keyframe — Blender-style red record dot. Off by default
-            (BFA-002): the canonical insert path is the K shortcut; this
-            toggle opts the user into "any property change writes a key
-            at the playhead", matching Blender's Auto-Keying. */}
-        <TransportBtn
-          disabled={!hasAnimation}
-          onClick={() => setAutoKeyframe(!autoKeyframe)}
-          active={autoKeyframe}
-          className={autoKeyframe ? 'animate-recording' : ''}
-          title="Auto-Keying: when on, every property change writes a keyframe at the playhead. Off by default — press K to insert manually."
-        >
-          <Disc size={14} strokeWidth={2} />
-        </TransportBtn>
-
-        {/* Add Audio Track */}
-        <TransportBtn
-          disabled={!hasAnimation}
-          onClick={() => {
-            const name = window.prompt('Audio track name:', `Audio ${(animation?.audioTracks?.length ?? 0) + 1}`);
-            if (name) {
-              update((p) => {
-                const a = getActiveSceneAction(p, anim.activeActionId);
-                if (a) {
-                  a.audioTracks.push({
-                    id: uid(),
-                    name,
-                    sourceUrl: null,
-                    mimeType: '',
-                    audioDurationMs: 0,
-                    audioStartMs: 0,
-                    audioEndMs: null,
-                    timelineStartMs: 0,
-                  });
-                }
-              });
-            }
-          }}
-          title={!hasAnimation ? "Create an animation first to add audio" : "Add audio track"}
-        >
-          <Music size={14} />
-        </TransportBtn>
-
-        <span className="flex-1" />
-
-        {/* Animation switcher — dropdown when ≥1 animation exists, lets user
-            A/B between motions for multi-motion preview. */}
-        {hasAnimation ? (
-          <select
-            value={animation?.id ?? ''}
-            onChange={(e) => {
-              const id = e.target.value;
-              const a = proj.actions.find((x) => x.id === id);
-              anim.setActiveActionId(id);
-              // Stage 1.E: when the scene is bound to an action, the
-              // picker's pick treats that bind as user intent — re-bind
-              // scene to the new id so the dropdown's value isn't
-              // silently overridden by the scene-resolution gate. When
-              // no scene binding exists, the UI-store update is enough.
-              //
-              // **Blender-fidelity rationale (Audit-fix D-7 Stage 1.E
-              // — kept as-is, NOT removed.)** Blender's
-              // `template_action(animated_id, ...)` writes ONLY to
-              // `animated_id.animation_data.action`
-              // (`scripts/startup/bl_ui/space_dopesheet.py:313`). For
-              // SS, the timeline picker's "pinned" datablock IS the
-              // scene when the scene is bound — `getActiveSceneAction`
-              // resolves to scene's action. So picking a different id
-              // here writing to scene's adt mirrors Blender's
-              // template_action writing to its pinned datablock; it is
-              // NOT the auto-broadcast `ANIM_OT_replace_action` op
-              // (`anim_ops.cc:1389`) which Blender exposes as a
-              // separate explicit operator. The audit tagged this as
-              // unexpected-magic but the actual semantic IS Blender-
-              // faithful for the project's "currently-pinned" context.
-              if (getSceneAction(proj)) {
-                useProjectStore.getState().assignAction('__scene__', id, 0);
-              }
-              if (a) {
-                const f = a.fps ?? 24;
-                anim.setFps(f);
-                anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
-                anim.seekFrame(0);
-              }
-            }}
-            className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
-            title="Active action — switch to preview a different motion. (Re-binds Scene when one is bound.)"
-          >
-            {proj.actions.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name ?? a.id}
-              </option>
-            ))}
-          </select>
-        ) : null}
-
-        {/* New animation — always creates a fresh clip; existing ones remain
-            available via the switcher above. */}
-        <button
-          onClick={hasAnimation ? createAnimation : ensureAnimation}
-          className={
-            hasAnimation
-              ? 'text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors'
-              : 'text-[10px] px-2 py-0.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors'
-          }
-          title="Create a new empty animation clip"
-        >
-          + New
-        </button>
-
-        {/* Import .motion3.json — adds the file as a new clip and switches
-            the timeline to it. Warnings surfaced via alert. */}
-        <button
-          onClick={() => motionFileRef.current?.click()}
-          className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors inline-flex items-center gap-1"
-          title="Import a .motion3.json file as a new animation clip"
-        >
-          <Upload size={10} /> Import
-        </button>
-        <input
-          ref={motionFileRef}
-          type="file"
-          accept=".json,application/json"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) importMotionFile(f);
-            e.target.value = '';
-          }}
-          className="hidden"
-        />
-
-        {/* K key hint */}
-        <span className="text-[10px] text-muted-foreground border border-border/40 px-1 py-0.5 font-mono" title="Press K to keyframe selected nodes">
-          K
-        </span>
-      </div>
+      {/* Transport bar lifted to Footer's <PlaybackControls /> in
+          Round 7 (FID-A.2, 2026-05-16). All transport controls
+          (play/pause, frame/start/end fields, FPS, speed, loop,
+          auto-key, audio, action picker, new/import) now live in
+          the global Footer center spacer. TimelineEditor renders
+          only the track area below. */}
 
       <div
         className="flex-1 overflow-auto relative select-none"
@@ -1645,8 +1243,8 @@ export function TimelineEditor() {
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="text-[11px] text-muted-foreground/60">
               {hasAnimation
-                ? 'Select a node and press K to add keyframes or click 🎵 to add audio'
-                : 'Create an animation to begin'}
+                ? 'Select a node and press K to add keyframes or click 🎵 in the Footer to add audio'
+                : 'Click "+ New" in the Footer transport to create an animation'}
             </p>
           </div>
         ) : (

@@ -2,14 +2,33 @@
 /* eslint-disable react/prop-types */
 
 /**
- * Footer — Audit 4 #1 (2026-05-16) status bar.
+ * Footer — Audit 4 #1 (2026-05-16) status bar + Round 7 transport host.
  *
  * Bottom-of-shell row mirroring Blender's `STATUSBAR_HT_header`
  * (`reference/blender/scripts/startup/bl_ui/space_statusbar.py:8-31`):
  * three sections separated by spacers — input status (left), reports
- * banner (center), and stats info (right). Always mounted by
+ * banner (right of center), and stats info (right). Always mounted by
  * `AppShell.jsx`; never hides per workspace (Blender keeps the
  * status bar visible regardless of active screen).
+ *
+ * **Round 7 lift (FID-A.2, 2026-05-16):** the center section now hosts
+ * `<PlaybackControls />` — the transport bar lifted out of
+ * `TimelineEditor.jsx`'s top row. Mirrors Blender's
+ * `DOPESHEET_HT_playback_controls`
+ * (`reference/blender/scripts/startup/bl_ui/space_dopesheet.py:351-358`)
+ * + `GRAPH_HT_playback_controls`
+ * (`reference/blender/scripts/startup/bl_ui/space_graph.py:113-124`),
+ * with a documented deviation: Blender mounts those as per-editor
+ * `bl_region_type = 'FOOTER'` regions (visible only when the
+ * corresponding editor is active), whereas SS mounts them in the
+ * global Footer (always visible). Rationale + trade-offs detailed
+ * in `PlaybackControls.jsx`'s module JSDoc.
+ *
+ * Footer height bumped to `h-9` (36px) in the same lift — transport
+ * controls (`w-6 h-6` TransportBtn + `h-5` NumField + speed slider)
+ * need ~28px of vertical space; the prior `h-6` (24px) status-only
+ * layout was too tight. Status text (`text-[11px]`) stays vertically
+ * centered.
  *
  * Per-section sources:
  *
@@ -36,11 +55,6 @@
  *              level info rather than scene-level vert/edge/face
  *              counts (no scene-stats plumbing today).
  *
- * Future-target: when the F-1 follow-on transport-row lift lands
- * (`TimelineHeader.jsx:25-32` notes the plan), the center area can
- * host playback controls mirroring Blender's
- * `DOPESHEET_HT_playback_controls` + `GRAPH_HT_playback_controls` —
- * the spacer-flex layout is already shaped for that injection.
  *
  * Per Rule №1 (no quick-and-dirty fixes): NO interactive affordances
  * yet. Click-to-open-Logs would require either workspace mutation
@@ -65,6 +79,7 @@ import {
   formatStats,
   countReports,
 } from './footerStatusData.js';
+import { PlaybackControls } from './PlaybackControls.jsx';
 
 export function Footer() {
   // Modal subscriptions — narrow primitive selectors per
@@ -159,7 +174,7 @@ export function Footer() {
   const modalActive = !!modalKind || !!vModalKind;
 
   return (
-    <footer className="h-6 border-t shrink-0 bg-card flex items-center px-3 gap-3 text-[11px] text-muted-foreground select-none">
+    <footer className="h-9 border-t shrink-0 bg-card flex items-center px-3 gap-3 text-[11px] text-muted-foreground select-none">
       {/* LEFT — input status (modal echo or mode label).
           tabular-nums keeps the live delta from jittering width during
           drags; the foreground color flips while a modal is active to
@@ -173,10 +188,14 @@ export function Footer() {
         {inputStatus}
       </div>
 
-      {/* CENTER — flex spacer. Doubles as the future home for the
-          transport-row lift (DOPESHEET_HT_playback_controls). Today
-          it just pushes the reports + stats to the right edge. */}
-      <div className="flex-1" />
+      {/* CENTER — playback controls (lifted from TimelineEditor in
+          Round 7, FID-A.2). Flex-1 + min-w-0 lets the transport
+          shrink gracefully on narrow viewports; PlaybackControls'
+          own overflow-x-auto keeps controls reachable when the
+          viewport is too narrow to fit them all without wrapping. */}
+      <div className="flex-1 min-w-0 flex items-center justify-center">
+        <PlaybackControls />
+      </div>
 
       {/* CENTER-RIGHT — reports banner. Hidden when both warn + error
           are zero so the bar reads quiet at rest. */}
