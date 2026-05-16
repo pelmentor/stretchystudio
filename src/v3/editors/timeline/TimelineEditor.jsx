@@ -15,6 +15,10 @@ import {
 } from '@/anim/animationFCurve';
 import { getActiveSceneAction } from '@/anim/sceneAction';
 import {
+  captureActiveKeyformObject,
+  relocateActiveKeyformByObject,
+} from '@/anim/fcurveActiveKeyform';
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -824,8 +828,19 @@ export function TimelineEditor() {
               }
             }
           }
-          // Sort fcurves by time to ensure play engine doesn't trip up
-          a.fcurves.forEach(f => f.keyforms.sort((k1, k2) => k1.time - k2.time));
+          // Sort fcurves by time to ensure play engine doesn't trip up.
+          // Audit-fix HIGH-A3 (Slice 5.H dual-audit 2026-05-16) —
+          // per-tick sort across ALL fcurves used to drift
+          // `activeKeyformIndex` whenever a dragged kf crossed a
+          // neighbor; the Graph Editor highlight would jump to a
+          // different kf each pointer-move tick. Mirror the
+          // FCurveEditor capture/relocate pattern so the active
+          // index stays pinned to its object identity through reorder.
+          for (const f of a.fcurves) {
+            const capturedActive = captureActiveKeyformObject(f);
+            f.keyforms.sort((k1, k2) => k1.time - k2.time);
+            relocateActiveKeyformByObject(a, f.id, capturedActive);
+          }
         }, { skipHistory: true });
 
         // Update selection to match new times
@@ -1069,7 +1084,15 @@ export function TimelineEditor() {
         const target = decodeFCurveTarget(fc);
         if (!target) continue;
         const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        // Audit-fix HIGH-A2 (Slice 5.H dual-audit 2026-05-16) — capture
+        // active object pre-filter so it tracks through deletion. If the
+        // active kf was deleted, `relocateActiveKeyformByObject` clears
+        // the field; if it survived, the field re-points at the new
+        // index. Mirrors Blender's `fcurve.cc:1768-1770` per-deletion
+        // active-clear, applied as a single capture/relocate pair.
+        const capturedActive = captureActiveKeyformObject(fc);
         fc.keyforms = fc.keyforms.filter(kf => !selectedKeyframes.has(`${fcurveRowKey}:${kf.time}`));
+        relocateActiveKeyformByObject(a, fc.id, capturedActive);
       }
       a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
     });
@@ -1146,7 +1169,12 @@ export function TimelineEditor() {
             ? fcurveTargetsParam(fc, lookupId)
             : fcurveTargetsNode(fc, lookupId);
           if (!matches) continue;
+          // Audit-fix HIGH-A2 (Slice 5.H dual-audit 2026-05-16) —
+          // sister of the bulk-delete site above. Single-keyform
+          // delete must also track active through the filter.
+          const capturedActive = captureActiveKeyformObject(fc);
           fc.keyforms = fc.keyforms.filter(kf => kf.time !== timeMs);
+          relocateActiveKeyformByObject(a, fc.id, capturedActive);
         }
         a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
       });

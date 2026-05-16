@@ -696,22 +696,29 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       const sub = selectedHandles.get(d.fcurve.id);
       const muted = isFCurveMuted(d.fcurve);
       // Slice 5.H — Blender's `draw_fcurve_active_vertex` three-condition
-      // gate (`graph_draw.cc:243-262`): (1) channel-active (only the
+      // gate (`graph_draw.cc:241-262`): (1) channel-active (only the
       // active-channel branch reaches here), (2) `active_keyframe_index
-      // != FCURVE_ACTIVE_KEYFRAME_NONE`, (3) the indexed keyform is
-      // selected. Condition (3) is enforced here in render because SS's
-      // keyform selection lives editor-local (`selectedHandles`), not
-      // on the keyform record. See `fcurveActiveKeyform.js` module
-      // header for the split rationale.
+      // != FCURVE_ACTIVE_KEYFRAME_NONE`, (3) the indexed keyform's
+      // CENTER handle (f2) is selected — `graph_draw.cc:254` tests
+      // exactly `!(bezt->f2 & SELECT)`, NOT `BEZT_ISSEL_ANY`. The
+      // halo signals "this knot is numerically editable in the N-panel";
+      // when only a tangent handle is selected (no center), Blender
+      // hides the halo to avoid misleading the user.
+      // (Audit-fix MED-B1 2026-05-16: pre-fix gate was
+      // `center||left||right`; corrected to center-only.)
+      // Condition (3) is enforced here in render because SS's keyform
+      // selection lives editor-local (`selectedHandles`), not on the
+      // keyform record. See `fcurveActiveKeyform.js` module header for
+      // the split rationale.
       const activeIdx = getActiveKeyformIndex(d.fcurve);
       let activeIdxToDraw = FCURVE_ACTIVE_KEYFORM_NONE;
       if (activeIdx !== FCURVE_ACTIVE_KEYFORM_NONE) {
         const subEntry = sub?.get(activeIdx);
-        if (subEntry && (subEntry.center || subEntry.left || subEntry.right)) {
+        if (subEntry && subEntry.center) {
           activeIdxToDraw = activeIdx;
         }
       }
-      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted);
+      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted, activeIdxToDraw);
       drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted, activeIdxToDraw);
     }
   }, [visible, selectedHandles, view, activeFCurveId]);
@@ -788,6 +795,40 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       }
       if (e.shiftKey) setSubSelection(fcurveId, subNext);
       else            setSelectedHandles(new Map([[fcurveId, subNext]]));
+
+      // Audit-fix HIGH-B1 (Slice 5.H dual-audit 2026-05-16) — Blender's
+      // `may_activate` gate fires for ALL bezt hits (key, left handle,
+      // right handle), not just diamond hits. Per
+      // `graph_select.cc:1789-1797` the `if (nvi->bezt)` enclosing block
+      // covers `NEAREST_HANDLE_KEY` AND `NEAREST_HANDLE_LEFT` AND
+      // `NEAREST_HANDLE_RIGHT` (line 1761-1786). Pre-fix the SS handle-
+      // hit path returned at line 791 without firing the setter, so
+      // dragging a bezier handle dot left the active-keyform halo
+      // pinned to a stale keyform. Per-handle `already_selected` check
+      // matches Blender's per-side test at `graph_select.cc:1725-1728`.
+      const handleSubPrev = sub ?? new Map();
+      const handleSubPrevEntry = handleSubPrev.get(hitHandle.idx);
+      const handleWasAlreadySelected = !!handleSubPrevEntry && (
+        hitHandle.side === 'left' ? handleSubPrevEntry.left : handleSubPrevEntry.right
+      );
+      const handleSubNextEntry = subNext.get(hitHandle.idx);
+      const handleIsSelectedAfter = !!handleSubNextEntry && (
+        hitHandle.side === 'left' ? handleSubNextEntry.left : handleSubNextEntry.right
+      );
+      if (handleIsSelectedAfter) {
+        const handleFC = visible.find((d) => d.fcurve.id === fcurveId)?.fcurve;
+        const handleCurrentActive = getActiveKeyformIndex(handleFC);
+        const handleMayActivate = !handleWasAlreadySelected ||
+          handleCurrentActive === FCURVE_ACTIVE_KEYFORM_NONE;
+        if (handleMayActivate) {
+          update((p) => {
+            const a = getActiveSceneAction(p, activeActionId);
+            if (!a) return;
+            setActiveKeyform(a, fcurveId, hitHandle.idx);
+          });
+        }
+      }
+
       startHandleDrag(e, fcurveId, hitHandle.idx, hitHandle.side);
       return;
     }
@@ -869,12 +910,19 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // when something is already active leaves the active pointer
       // alone, so a multi-select extension doesn't steal focus from
       // whatever the user was numerically editing.
+      // Audit-fix MED-B3 (Slice 5.H dual-audit 2026-05-16): per
+      // `graph_select.cc:1725-1728` Blender's `already_selected` is
+      // a per-handle check — for `NEAREST_HANDLE_KEY` it tests
+      // `bezt->f2 & SELECT` (center only). The diamond hit path is
+      // SS's `NEAREST_HANDLE_KEY` equivalent, so the precondition
+      // should test only center. Pre-fix the helper checked ANY of
+      // center/left/right, so a sequence of "shift-click left handle
+      // → click center diamond" would mis-fire as already_selected
+      // and skip the active set even when an active was elsewhere.
       const subPrevEntry = subPrev.get(hit.idx);
-      const wasAlreadySelected = !!subPrevEntry &&
-        (subPrevEntry.center || subPrevEntry.left || subPrevEntry.right);
+      const wasAlreadySelected = !!subPrevEntry && subPrevEntry.center;
       const subNextEntry = subNext.get(hit.idx);
-      const isSelectedAfter = !!subNextEntry &&
-        (subNextEntry.center || subNextEntry.left || subNextEntry.right);
+      const isSelectedAfter = !!subNextEntry && subNextEntry.center;
       if (isSelectedAfter) {
         const hitFC = visible.find((d) => d.fcurve.id === hit.fcurveId)?.fcurve;
         const currentActive = getActiveKeyformIndex(hitFC);
@@ -1296,7 +1344,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             k.handleRight = { time: o.handleRight.time, value: o.handleRight.value };
             if (o.handleType) k.handleType = { left: o.handleType.left, right: o.handleType.right };
           }
+          // Audit-fix HIGH-A1 (Slice 5.H dual-audit 2026-05-16) —
+          // the revert restores keyform times, then re-sorts to
+          // re-establish original order. `activeKeyformIndex` holds
+          // the drag-final tracked index from onMove's last tick;
+          // after the times-restore + sort the indices shift back
+          // toward originals, and the field would point at the wrong
+          // object without this capture/relocate pair. Same pattern
+          // as the per-tick onMove sort + cleanup merge wirings.
+          const capturedActive = captureActiveKeyformObject(fc);
           fc.keyforms.sort((a, b) => a.time - b.time);
+          relocateActiveKeyformByObject(a, fcurveId, capturedActive);
         }
       }, { skipHistory: true });
       // Restore original selection.
@@ -2257,8 +2315,14 @@ function DriverBanner({ driver, value, color, label, onClear }) {
  * @param {boolean} [isMuted] - Slice 5.G: dims handle dots + tangent
  *   lines to match the muted SVG curve stroke. Handles stay clickable
  *   (mute is data-only; Blender allows editing muted curve keyframes).
+ * @param {number} [activeKfIdx] - Slice 5.H audit-fix MED-B2: index
+ *   of the active keyform whose left/right handle dots get a
+ *   TH_VERTEX_ACTIVE-equivalent outline ring per
+ *   `draw_fcurve_active_handle_vertices` (`graph_draw.cc:338-368`).
+ *   Pass -1 to disable. Caller is responsible for the three-condition
+ *   gate (same as `drawKeyframes`).
  */
-function drawHandles(ctx, keyforms, sub, view, isActive, isMuted = false) {
+function drawHandles(ctx, keyforms, sub, view, isActive, isMuted = false, activeKfIdx = -1) {
   if (!sub || sub.size === 0) return;
   // Context curve handles still draw, but dimmer.
   ctx.strokeStyle = isActive ? 'rgba(245, 158, 11, 0.55)' : 'rgba(245, 158, 11, 0.30)';
@@ -2297,6 +2361,49 @@ function drawHandles(ctx, keyforms, sub, view, isActive, isMuted = false) {
       ctx.fill();
     }
   }
+
+  // Audit-fix MED-B2 (Slice 5.H dual-audit 2026-05-16) — active-keyform
+  // handle-dot outline per `draw_fcurve_active_handle_vertices`
+  // (`graph_draw.cc:338-368`). Drawn AFTER the regular handle pass so
+  // it sits on top. Blender's per-side conditions:
+  //   - left handle: `left_bezt->ipo == BEZT_IPO_BEZ AND bezt->f1 & SELECT`
+  //     where `left_bezt = bezt[idx-1] if idx > 0 else bezt` (interpolation
+  //     for a kf's LEFT side comes from the PREVIOUS kf's `ipo` field).
+  //   - right handle: `bezt->ipo == BEZT_IPO_BEZ AND bezt->f3 & SELECT`.
+  // SS spells `kf.interpolation === 'bezier'`. The interpolation gates
+  // exist because Blender only draws handle dots for bezier segments;
+  // SS's drawHandles unconditionally draws if `kf.handleLeft/Right`
+  // exists (which is more permissive), so we mirror Blender's gate
+  // here to keep the active outline aligned with the dots themselves.
+  if (activeKfIdx >= 0 && activeKfIdx < keyforms.length) {
+    const kf = keyforms[activeKfIdx];
+    const parts = sub.get(activeKfIdx);
+    if (kf && parts) {
+      ctx.globalAlpha = priorAlpha;
+      ctx.strokeStyle = 'hsl(60 100% 75%)';
+      ctx.lineWidth = 1.5;
+      // Left handle outline.
+      const leftBezt = activeKfIdx > 0 ? keyforms[activeKfIdx - 1] : kf;
+      const leftIsBezier = (leftBezt?.interpolation ?? 'linear') === 'bezier';
+      if (kf.handleLeft && leftIsBezier && parts.left) {
+        const hx = view.tx(kf.handleLeft.time);
+        const hy = view.ty(kf.handleLeft.value);
+        ctx.beginPath();
+        ctx.arc(hx, hy, (parts.left ? 4 : 3) + 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // Right handle outline.
+      const rightIsBezier = (kf.interpolation ?? 'linear') === 'bezier';
+      if (kf.handleRight && rightIsBezier && parts.right) {
+        const hx = view.tx(kf.handleRight.time);
+        const hy = view.ty(kf.handleRight.value);
+        ctx.beginPath();
+        ctx.arc(hx, hy, (parts.right ? 4 : 3) + 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
   ctx.globalAlpha = priorAlpha;
 }
 

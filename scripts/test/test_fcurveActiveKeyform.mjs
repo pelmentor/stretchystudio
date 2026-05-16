@@ -323,5 +323,49 @@ assert(getActiveKeyformIndex({ activeKeyformIndex: 1, keyforms: [makeKf(0,0), ma
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Audit-fix HIGH-A2 (Slice 5.H dual-audit 2026-05-16) — verify the
+// capture+relocate pattern correctly handles the TimelineEditor delete
+// shape (`fc.keyforms = fc.keyforms.filter(...)`).
+
+{
+  // Active obj survives filter → index re-points correctly.
+  const a = { id: 'A', fcurves: [makeFCurve('x', [0, 1, 2, 3])] };
+  const fc = a.fcurves[0];
+  fc.activeKeyformIndex = 3; // points at time=3
+  const captured = captureActiveKeyformObject(fc);
+  // Delete kfs at time=1 and time=2.
+  fc.keyforms = fc.keyforms.filter(kf => kf.time !== 1 && kf.time !== 2);
+  relocateActiveKeyformByObject(a, 'x', captured);
+  assert(fc.activeKeyformIndex === 1,                 'audit-A2: active obj at time=3 now at idx 1');
+}
+
+{
+  // Active obj deleted → field cleared.
+  const a = { id: 'A', fcurves: [makeFCurve('x', [0, 1, 2, 3])] };
+  const fc = a.fcurves[0];
+  fc.activeKeyformIndex = 2;
+  const captured = captureActiveKeyformObject(fc);
+  fc.keyforms = fc.keyforms.filter(kf => kf.time !== 2); // delete the active kf
+  relocateActiveKeyformByObject(a, 'x', captured);
+  assert(!('activeKeyformIndex' in fc),               'audit-A2: deleted active obj clears field');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Audit-fix HIGH-A3 — per-tick sort tracking on Timeline drag.
+
+{
+  // Active obj at idx 0 (time=1). Move its time to 3 (past kf[1] at
+  // time=2). Sort produces [kf[1], kf[0]]. Relocate finds active at 1.
+  const a = { id: 'A', fcurves: [makeFCurve('x', [1, 2])] };
+  const fc = a.fcurves[0];
+  fc.activeKeyformIndex = 0;
+  const captured = captureActiveKeyformObject(fc);
+  fc.keyforms[0].time = 3; // simulate drag-past
+  fc.keyforms.sort((a, b) => a.time - b.time);
+  relocateActiveKeyformByObject(a, 'x', captured);
+  assert(fc.activeKeyformIndex === 1,                 'audit-A3: drag-past tracks active to new idx');
+}
+
+// ─────────────────────────────────────────────────────────────────────
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
