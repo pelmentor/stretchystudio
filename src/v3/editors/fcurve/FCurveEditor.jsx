@@ -38,11 +38,11 @@
  *   - **Post-release** — `mergeDuplicateTimeKeys` + `recalcKeyformHandles`.
  *   - **Lock-view-during-drag** — value range freezes during modal/drag.
  *
- *   **SS-deferred** (audit MED-B6, 2026-05-16): Modal G/S axis-lock (X/Y)
- *   and typed numeric input belong to a follow-on slice that will share
- *   its implementation with the viewport's `ModalTransformOverlay`.
+ *   **Lifted in Slice 5.E (2026-05-16):** modal G/S axis-lock (X/Y) and
+ *   typed numeric input now share the viewport's input reducer -- see
+ *   the Slice 5.E section below.
  *
- * # Slice 5.D (this commit) — driver banner + edit-disable gate
+ * # Slice 5.D — driver banner + edit-disable gate
  *
  * Per plan §5.D: "If the active FCurve has a `driver`, show the driver
  * expression as a banner above the curve and a '(D)' badge. Editing
@@ -146,6 +146,62 @@
  *     point of the "Clear Driver" button -- resume keyform editing).
  *     See [driverGate.js](../../../anim/driverGate.js) `clearDriver`
  *     doc-block for the full architectural deviation.
+ *
+ * # Slice 5.E (this commit) — axis-lock + typed numeric input
+ *
+ * Per close-out doc resume path #1: "Modal G/S axis-lock + typed
+ * numeric input. Should share implementation with the viewport's
+ * `ModalTransformOverlay`; a `useModalTransformInput()` hook extraction."
+ *
+ *   - **X / Y axis lock during modal G/S.** Pressing `X` constrains
+ *     the transform to the time axis (zero value-delta for G; only
+ *     time-scale for S). Pressing `Y` constrains to the value axis.
+ *     Pressing the same axis again clears the lock. Blender confirms
+ *     bare X/Y is valid in `T_2D_EDIT` editors at
+ *     `reference/blender/source/blender/editors/transform/transform.cc:655-670`
+ *     (only TFM_MODAL_AXIS_Z + plane locks are blocked in 2D; X/Y fall
+ *     through to the constraint check). Shift+X / Shift+Y is recognised
+ *     as a noop (preventDefault) per the 2D plane-lock block at
+ *     `transform.cc:660-662` so the chord doesn't fall through to
+ *     bare-axis toggle.
+ *   - **Typed numeric input.** Digits / `.` / leading `-` accumulate
+ *     into the input reducer's `typedBuffer`; the value drives the
+ *     transform exactly. For G: typed value is in FRAMES on the time
+ *     axis (matches the visible axis labels; converted to ms via
+ *     `msPerFrame`) and raw value units on the value axis. For S:
+ *     typed value is a scale multiplier. Backspace pops; `=` toggles
+ *     `numericMode` (Blender's `NUM_EDIT_FULL` flag from
+ *     `reference/blender/source/blender/editors/util/numinput.cc:369-378`
+ *     -- `=` is one-way enable, only `Ctrl+=` clears).
+ *   - **Shared reducer.** Both modals (viewport `ModalTransformOverlay`
+ *     and this fcurve modal) route axis / typed / numericMode
+ *     transitions through `transformInputReducer` at
+ *     [src/lib/modal/transformInputReducer.js](../../../lib/modal/transformInputReducer.js).
+ *     The viewport keeps its zustand store (Footer + overlay both
+ *     subscribe cross-component); this fcurve modal uses the
+ *     `useTransformModalInput()` hook (no Footer wiring, HUD is
+ *     plot-relative). Validation rules + `=`-toggle semantics live
+ *     in ONE place per Rule №1.
+ *   - **Units in HUD.** `f` suffix on the typed buffer for G when no
+ *     axis or X-axis is locked (time = frames); no suffix for G + Y-axis
+ *     (raw value); `×` for S (multiplier). Matches what the axes display
+ *     so the typed number reads as "5 frames" / "0.3 value units" /
+ *     "2.0× scale" intuitively.
+ *   - **Snap interaction.** Typed values DISABLE shift-precision +
+ *     ctrl-frame-snap (typed is exact). Same as the viewport modal at
+ *     `ModalTransformOverlay.jsx:253-260`.
+ *
+ *   **SS-deferred** (this slice):
+ *   - Per-keyform pivot for S (median vs cursor vs individual origins).
+ *     Currently uses the global median across all selected keyforms in
+ *     all selected fcurves. Blender's "Pivot Point" header dropdown
+ *     (median / cursor / individual / 3D cursor) is a per-editor setting
+ *     not yet ported to the fcurve editor.
+ *   - Mirror axis lock for the per-keyform DRAG path (startKeyformDrag /
+ *     startHandleDrag). Those use the freer applyKeyformDrag path
+ *     rather than the modal applyGrab, and don't open a HUD to display
+ *     axis state. A follow-on could route them through the same hook
+ *     when shift-locked.
  *
  * # Slice 5.C+ (prior commit) — multi-curve display
  *
@@ -270,6 +326,11 @@ import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
 import { fcurveColorCss } from '../../../anim/fcurveColor.js';
 import { hasDriver, clearDriver } from '../../../anim/driverGate.js';
 import { evaluateDriver } from '../../../anim/driver.js';
+import { useTransformModalInput } from '../../../lib/modal/useTransformModalInput.js';
+import {
+  keyEventToAction,
+  parseTyped,
+} from '../../../lib/modal/transformInputReducer.js';
 
 const CURVE_SAMPLES = 240;
 const PAD_L = 36;
@@ -429,6 +490,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [boxSelect, setBoxSelect] = useState(null);
   /** @type {[null | {kind:'handleType'|'interpolation'|'extrapolation', x:number, y:number}, Function]} */
   const [menu, setMenu] = useState(null);
+
+  // Slice 5.E — shared axis-lock + typed numeric input state. Routes
+  // through `transformInputReducer` (the same reducer the viewport
+  // modal's zustand store wraps) so validation rules + numericMode
+  // semantics stay identical across both modals. `stateRef` exposes
+  // the synchronous post-action value to the imperative `applyModal`
+  // closure inside `startModal`.
+  const modalInput = useTransformModalInput();
 
   const update = useProjectStore((s) => s.updateProject);
   // In-flight drag cleanup refs (Slices 5.B/5.C contract — unmount mid-
@@ -906,6 +975,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     beginBatch(proj);
     setViewLock({ minV: autoFit.minV, maxV: autoFit.maxV });
     setModal({ kind });
+    // Slice 5.E — clear axis-lock + typed buffer + numericMode for the
+    // new modal session. The hook's reset is referentially stable; this
+    // is a clean slate so the HUD doesn't show stale axis/typed text.
+    modalInput.reset();
 
     const snap = view;
 
@@ -968,12 +1041,44 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     }
 
     function applyModal(currentX, currentY, shiftKey, ctrlKey) {
+      // Slice 5.E — read axis-lock + typed-numeric state from the
+      // hook's synchronous ref. `onKey` updates the ref BEFORE calling
+      // applyModal so the post-keystroke value lands on this tick.
+      const { axis, typedBuffer, numericMode } = modalInput.stateRef.current;
+      const typed = parseTyped(typedBuffer);
+      const typedFinite = Number.isFinite(typed);
+      const useTyped = typedFinite || numericMode;
+
       const dxPx = currentX - startClientX;
       const dyPx = currentY - startClientY;
       let dTime = (dxPx / snap.plotW) * duration;
       let dValue = -(dyPx / snap.plotH) * snap.vSpan;
-      if (shiftKey) { dTime *= 0.1; dValue *= 0.1; }
-      if (kind === 'g' && ctrlKey && msPerFrame > 0) {
+
+      // Shift = MOD_PRECISION (Blender `transform_snap.cc:1726`). Typed
+      // values are exact -- precision multiplier doesn't apply there.
+      if (!useTyped && shiftKey) { dTime *= 0.1; dValue *= 0.1; }
+
+      // Typed override for G. Translates to canvas-frame units:
+      //   - axis 'x' or null: typed = frames on the time axis (default
+      //     to X per Blender's "G → type → axis defaults to X" at
+      //     `transform_input.cc:131-148`). For empty-buffer numericMode
+      //     `typed` is 0 -- modal holds at zero.
+      //   - axis 'y': typed = raw value units on the value axis.
+      // Frame-based units (not ms) match the user-visible axis labels;
+      // see file-header "Slice 5.E units" note.
+      if (useTyped && kind === 'g') {
+        const v = typedFinite ? typed : 0;
+        if (axis === 'y') {
+          dTime = 0;
+          dValue = v;
+        } else {
+          dTime = msPerFrame > 0 ? v * msPerFrame : v;
+          dValue = 0;
+        }
+      }
+
+      // Frame-snap (Ctrl) only when NOT typing -- typed values are exact.
+      if (!useTyped && kind === 'g' && ctrlKey && msPerFrame > 0) {
         // Audit-fix MED-B5 (2026-05-16): snap absolute final pivot time
         // to whole frames, then re-derive dTime as (snappedPivot -
         // origPivot). This mirrors Blender's modal-G + T_SNAP_KEYS
@@ -984,14 +1089,36 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         const wantPivot = Math.round((pivot.time + dTime) / msPerFrame) * msPerFrame;
         dTime = wantPivot - pivot.time;
       }
+
+      // Axis lock for G (post-typed, post-snap so it always wins). For
+      // 'x' axis: clamp value-delta to zero; for 'y': clamp time-delta.
+      // No-op for `useTyped` because the typed branch above already
+      // wrote a single-axis delta.
+      if (!useTyped && kind === 'g') {
+        if (axis === 'x') dValue = 0;
+        if (axis === 'y') dTime = 0;
+      }
+
       const curDist = Math.hypot(
         (rect ? currentX - rect.left : currentX) - pivotPxX,
         (rect ? currentY - rect.top  : currentY) - pivotPxY,
       );
       let scaleFactor = curDist / startDist;
       if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) scaleFactor = 1;
-      if (shiftKey) scaleFactor = 1 + 0.1 * (scaleFactor - 1);
-      if (kind === 's' && ctrlKey) scaleFactor = Math.round(scaleFactor * 10) / 10 || 0.1;
+      if (!useTyped && shiftKey) scaleFactor = 1 + 0.1 * (scaleFactor - 1);
+      if (!useTyped && kind === 's' && ctrlKey) {
+        scaleFactor = Math.round(scaleFactor * 10) / 10 || 0.1;
+      }
+      // Typed scale: multiplier directly. Empty-buffer numericMode = 1
+      // (identity) so the modal holds without growing/shrinking.
+      if (useTyped && kind === 's') {
+        scaleFactor = typedFinite ? typed : 1;
+        if (!Number.isFinite(scaleFactor) || scaleFactor === 0) scaleFactor = 1;
+      }
+      // Axis lock for S: apply scaleFactor to ONLY one axis, leave the
+      // other at 1. `applyScale`'s last two args are (scaleX, scaleY).
+      const scaleX = kind === 's' && axis === 'y' ? 1 : scaleFactor;
+      const scaleY = kind === 's' && axis === 'x' ? 1 : scaleFactor;
 
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
@@ -1017,7 +1144,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
           if (kind === 'g') {
             applyGrab(fc, workSelection, workOrigins, dTime, dValue);
           } else {
-            applyScale(fc, workSelection, workOrigins, pivot, scaleFactor, scaleFactor);
+            applyScale(fc, workSelection, workOrigins, pivot, scaleX, scaleY);
           }
           // Identity-track post-sort indices.
           /** @type {Map<number, any>} */
@@ -1129,6 +1256,11 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       endBatch();
       setViewLock(null);
       setModal(null);
+      // Slice 5.E — clear axis/typed/numericMode so a stale axis label
+      // doesn't surface on the NEXT modal session (which calls reset()
+      // at startup too, but a clean teardown is cheap and keeps the
+      // store/hook consistent between commits).
+      modalInput.reset();
       modalCleanupRef.current = null;
     }
 
@@ -1156,14 +1288,28 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       revert();
     }
     function onKey(ev) {
-      if (ev.key === 'Escape') {
-        ev.preventDefault(); ev.stopPropagation();
-        revert(); return;
+      // Slice 5.E — axis-lock + typed-numeric routed through the shared
+      // keyEventToAction helper so X/Y/=/digits/Backspace match the
+      // viewport modal exactly (single rules-source per Rule №1).
+      const action = keyEventToAction(ev);
+      if (action) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (action.type === 'cancel') { revert(); return; }
+        if (action.type === 'commit') { commit(); return; }
+        // `noop` (Shift+X/Y in 2D editors per `transform.cc:660-662`)
+        // and every state-transition action route through dispatch.
+        // dispatch updates `stateRef.current` synchronously BEFORE
+        // applyModal reads from it -- so the new axis/typed/numericMode
+        // value drives this tick, not the prior one.
+        modalInput.dispatch(action);
+        applyModal(lastX, lastY, shiftHeld, ctrlHeld);
+        return;
       }
-      if (ev.key === 'Enter') {
-        ev.preventDefault(); ev.stopPropagation();
-        commit(); return;
-      }
+      // Modifier-only re-tick: Shift/Ctrl press/release should re-apply
+      // immediately so MOD_PRECISION + frame-snap engage without waiting
+      // for a mousemove. Other unrecognised keys still preventDefault to
+      // keep global hotkeys (Tab / F-keys / etc.) from firing mid-modal.
       if (ev.key === 'Shift' || ev.key === 'Control' || ev.key === 'Meta') {
         shiftHeld = ev.shiftKey;
         ctrlHeld = ev.ctrlKey || ev.metaKey;
@@ -1698,7 +1844,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
           onPointerDown={onPointerDown}
         />
 
-        {modal ? <ModalHUD kind={modal.kind} /> : null}
+        {modal ? (
+          <ModalHUD
+            kind={modal.kind}
+            axis={modalInput.state.axis}
+            typedBuffer={modalInput.state.typedBuffer}
+            numericMode={modalInput.state.numericMode}
+          />
+        ) : null}
         {menu ? (
           <OperatorMenu
             menu={menu}
@@ -1949,12 +2102,35 @@ function drawKeyframes(ctx, keyforms, sub, view, isActive) {
 
 // ── HUD + Menu subcomponents ─────────────────────────────────────────
 
-function ModalHUD({ kind }) {
+function ModalHUD({ kind, axis, typedBuffer, numericMode }) {
+  // Slice 5.E — surfaces axis-lock + typed-numeric + numericMode in the
+  // same visual idiom as the viewport's `ModalTransformOverlay` HUD
+  // (`src/v3/shell/ModalTransformOverlay.jsx:655-678`). Both modals
+  // share the same input reducer so the displayed state is the same.
   const label = kind === 'g' ? 'GRAB' : 'SCALE';
+  // Unit suffix matches the displayed axis labels: X = time (frames),
+  // Y = raw value (no unit). Scale is unitless multiplier.
+  const unit = kind === 's' ? '×' : (axis === 'y' ? '' : 'f');
+  const hasTyped = (typedBuffer ?? '').length > 0;
   return (
     <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none flex items-center gap-2 px-3 py-1 bg-popover/95 border border-border rounded text-[11px] font-mono shadow">
       <span className="text-primary uppercase tracking-wider">{label}</span>
-      <span className="text-muted-foreground">Click/Enter confirm · Esc/RMB cancel · Shift fine · Ctrl snap</span>
+      {axis ? (
+        <span className="text-amber-500" title={`Axis lock: ${axis === 'x' ? 'time' : 'value'}`}>
+          axis: {axis.toUpperCase()}
+        </span>
+      ) : null}
+      {numericMode ? (
+        <span className="text-blue-400" title="Numeric input mode (=)">= </span>
+      ) : null}
+      {hasTyped ? (
+        <span className="text-foreground">
+          {typedBuffer}<span className="text-muted-foreground/70">{unit}</span>
+        </span>
+      ) : null}
+      <span className="text-muted-foreground">
+        Type · Enter/Click confirm · Esc cancel · X/Y axis · = numeric · Shift fine · Ctrl snap
+      </span>
     </div>
   );
 }

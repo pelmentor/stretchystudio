@@ -33,8 +33,20 @@
  */
 
 import { create } from 'zustand';
+import { transformInputReducer } from '../lib/modal/transformInputReducer.js';
 
 /**
+ * # Shared reducer wrapper (Slice 5.E, 2026-05-16)
+ *
+ * The `axis`, `typedBuffer`, `numericMode` fields and their setters are
+ * proxies for the shared state machine in
+ * [src/lib/modal/transformInputReducer.js](../lib/modal/transformInputReducer.js).
+ * Validation rules (single leading sign, single decimal, popping at empty
+ * exits numericMode, etc.) live there — this store only owns the
+ * cross-component publication (Footer + overlay subscribe here; the
+ * fcurve modal uses `useTransformModalInput()` for its own per-Plot
+ * state but routes through the same reducer).
+ *
  * @typedef {('translate'|'rotate'|'scale')} TransformKind
  *
  * @typedef {Object} LiveDelta
@@ -100,38 +112,22 @@ export const useModalTransformStore = create((set) => ({
       liveDelta: ZERO_DELTA,
     }),
 
-  setAxis: (axis) => set({ axis }),
+  /** Direct setter (accepts null). Routes through the shared reducer so
+   *  no-op writes return the same state object (skips re-renders for
+   *  Footer + overlay subscribers when nothing changed). */
+  setAxis: (axis) => set((state) => transformInputReducer(state, { type: 'setAxis', axis })),
 
-  /** Append a digit / sign / decimal-point. Validates so the buffer
-   *  always parses cleanly: at most one leading '-', at most one '.'. */
-  appendTyped: (ch) => set((state) => {
-    if (typeof ch !== 'string' || ch.length !== 1) return state;
-    const buf = state.typedBuffer ?? '';
-    if (ch === '-') {
-      if (buf.length > 0) return state; // sign only as leading char
-      return { typedBuffer: '-' };
-    }
-    if (ch === '.') {
-      if (buf.includes('.')) return state;
-      return { typedBuffer: buf.length === 0 ? '0.' : buf + '.' };
-    }
-    if (ch >= '0' && ch <= '9') {
-      return { typedBuffer: buf + ch };
-    }
-    return state;
-  }),
-  /** Backspace: drop last char. If buffer becomes empty AND numericMode
-   *  was set explicitly via `=`, also turn numericMode off so the modal
-   *  releases back to mouse-driven (one extra Backspace exits numeric
-   *  mode rather than leaving the user stuck with a 0-locked transform). */
-  popTyped: () => set((state) => {
-    const next = (state.typedBuffer ?? '').slice(0, -1);
-    if (next.length === 0 && state.numericMode) {
-      return { typedBuffer: '', numericMode: false };
-    }
-    return { typedBuffer: next };
-  }),
-  clearTyped: () => set({ typedBuffer: '' }),
+  /** Append a digit / sign / decimal-point. Validation rules (single
+   *  leading '-', single '.', '0.' for leading '.') live in
+   *  `transformInputReducer`. */
+  appendTyped: (ch) => set((state) => transformInputReducer(state, { type: 'appendTyped', ch })),
+
+  /** Backspace: drop last char. Pop on an empty buffer with numericMode
+   *  set ALSO exits numericMode — see reducer's `popTyped` doc-comment
+   *  for the SS-vs-Blender rationale. */
+  popTyped: () => set((state) => transformInputReducer(state, { type: 'popTyped' })),
+
+  clearTyped: () => set((state) => transformInputReducer(state, { type: 'clearTyped' })),
 
   /** Audit-fix sweep (FID-B.3) — `=` is ONE-WAY enable, Ctrl+= disables.
    *  Mirrors Blender's `NUM_EDIT_FULL` flag from
@@ -143,14 +139,9 @@ export const useModalTransformStore = create((set) => ({
    *
    *  With numericMode true and an empty buffer, the transform is held
    *  at the typed value (defaults to 0 / scale 1) instead of following
-   *  the mouse; the user types digits to drive the value precisely.
-   *
-   *  popTyped on an empty buffer ALSO exits numericMode — that's an
-   *  SS UX addition (Blender's Backspace on empty doesn't exit
-   *  NUM_EDIT_FULL) so a user who pressed `=` accidentally isn't
-   *  stuck holding zero with no way out except Esc-cancel. */
-  enterNumericMode: () => set({ numericMode: true }),
-  exitNumericMode:  () => set({ numericMode: false }),
+   *  the mouse; the user types digits to drive the value precisely. */
+  enterNumericMode: () => set((state) => transformInputReducer(state, { type: 'enterNumericMode' })),
+  exitNumericMode:  () => set((state) => transformInputReducer(state, { type: 'exitNumericMode' })),
 
   /** Audit 4 #4 — applyDelta publishes the post-snap, post-precision
    *  delta here so the HUD can render it always-visible (not just when
