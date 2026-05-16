@@ -67,8 +67,13 @@
  *     menus apply to every selected curve.
  *   - **Cross-curve click**: clicking a context-curve diamond switches
  *     active to that curve AND selects the kf. Mirrors Blender's
- *     `mouse_graph_keys` which calls `select_pchannel_keychannel_first`
- *     to elevate the clicked channel to active.
+ *     `mouse_graph_keys` at
+ *     `reference/blender/source/blender/editors/space_graph/graph_select.cc:1850`,
+ *     which calls `ANIM_set_active_channel` at
+ *     `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:237`
+ *     to elevate the clicked channel to active. Per audit-fix HIGH-B1
+ *     (2026-05-16): SS only elevates active for non-Shift clicks, matching
+ *     Blender's `select_mode != SELECT_INVERT` guard at `graph_select.cc:1843-1856`.
  *   - **View auto-fit** considers all visible curves' min/max value
  *     (not just the active curve), so context curves stay in-frame.
  *
@@ -84,6 +89,23 @@
  *   - F-Modifier-drawn curves — `(fcu->modifiers.first || FCURVE_INT_VALUES)`
  *     at `graph_draw.cc:1151-1153` triggers a sampled redraw; SS doesn't
  *     ship F-Modifiers (`Phase 3` plan item), so this branch isn't ported.
+ *   - Per-FCurve mute render (`FCURVE_MUTED` greyish hue at
+ *     `graph_draw.cc:1190-1200`) — SS doesn't ship `fcurve.mute` as a
+ *     schema field, so there's nothing to differentiate visually. A
+ *     follow-on slice would add the schema field + the muted-grey
+ *     branch together.
+ *   - Channel-vs-keyform selection split — Blender keeps `FCURVE_SELECTED`
+ *     (channels in the channel list) independent of per-keyform selection.
+ *     SS collapses both onto the global `selectionStore` for the active
+ *     curve choice + the local `selectedHandles` Map for keyform picks.
+ *     Sidebar Shift-click for multi-channel-select is therefore not
+ *     wired this slice (it would need a new graph-local "selected
+ *     channels" set independent of `selectionStore`).
+ *   - Active-keyform highlight (`draw_fcurve_active_vertex` at
+ *     `graph_draw.cc:241-280`, the per-FCurve `BKE_fcurve_active_keyframe_index`
+ *     concept). SS has no active-keyform field on FCurves; the highlight
+ *     is omitted. The TH_VERTEX_ACTIVE band of Blender's UX is a
+ *     follow-on once an active-keyform schema field exists.
  *
  * # Per-handle selection state (plan §5.B + §5.C)
  *
@@ -209,6 +231,28 @@ export function FCurveEditor() {
   // `pickFCurve` semantics preserved). May be null if no curves match.
   const activeFCurve = useMemo(() => pickFCurve(action, selection), [action, selection]);
 
+  // Audit-fix HIGH-A1 (2026-05-16): memoize `decoded`. Without this, a
+  // bare `decodeAllFCurves(action, labels)` would rerun on every render
+  // — including every `update(..., { skipHistory:true })` pointer-move
+  // tick during keyform drag — cascading into `visible`, `samples`,
+  // `autoFit`, `curvePaths` and the canvas redraw. With ~10 curves at
+  // 240 samples each, that's ~2400 fcurve evaluations PER pointer move.
+  const decoded = useMemo(
+    () => (action ? decodeAllFCurves(action, labels) : []),
+    [action?.fcurves, labels],
+  );
+
+  // Audit-fix MED-A3 (2026-05-16): stable callback identity so Plot's
+  // `onPointerDown` useCallback doesn't bust its cache on every parent
+  // render. `selectStore` is stable (Zustand store method).
+  const onPickActiveByTarget = useCallback((target) => {
+    if (target.kind === 'param') {
+      selectStore({ type: 'parameter', id: target.paramId }, 'replace');
+    } else if (target.kind === 'node') {
+      selectStore({ type: 'part', id: target.nodeId }, 'replace');
+    }
+  }, [selectStore]);
+
   if (!action) {
     return (
       <Wrapper>
@@ -216,7 +260,6 @@ export function FCurveEditor() {
       </Wrapper>
     );
   }
-  const decoded = decodeAllFCurves(action, labels);
   if (decoded.length === 0) {
     return (
       <Wrapper>
@@ -235,17 +278,7 @@ export function FCurveEditor() {
         currentTime={currentTime}
         fps={fps}
         onSeek={setCurrentTime}
-        onPickActiveByTarget={(target) => {
-          // Sidebar click → write into selectionStore so global state
-          // (and pickFCurve) flips active. Selection writes are 'replace'
-          // here because that's the Blender behaviour for clicking a
-          // channel header (vs Shift-click which would extend).
-          if (target.kind === 'param') {
-            selectStore({ type: 'parameter', id: target.paramId }, 'replace');
-          } else if (target.kind === 'node') {
-            selectStore({ type: 'part', id: target.nodeId }, 'replace');
-          }
-        }}
+        onPickActiveByTarget={onPickActiveByTarget}
       />
     </Wrapper>
   );
@@ -293,6 +326,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // Latest selection for handlers/effects that close over a ref.
   const selectionRef = useRef(selectedHandles);
   useEffect(() => { selectionRef.current = selectedHandles; }, [selectedHandles]);
+  // Audit-fix MED-A4 (2026-05-16): viewRef for box-select. `applyBoxSelect`
+  // is called from `onUp` which was registered with the THEN-current
+  // `view` closure; if `view` changes mid-box-select (container resize
+  // or eye-toggle changing autoFit), the closed-over `view` is stale.
+  // Sister to the existing modal pattern that doesn't have this problem
+  // because `applyModal` reads `snap` which is closed at modal-start and
+  // intentionally frozen (modal uses viewLock).
+  const viewRef = useRef(/** @type {any} */ (null));
 
   // Visible = decoded \ hidden. Hidden curves still register colour
   // (so eye-toggling doesn't reshuffle colours) but skip rendering.
@@ -394,6 +435,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     };
   }, [containerSize.w, containerSize.h, duration, minV, maxV]);
 
+  // Audit-fix MED-A4 (2026-05-16) — sync viewRef so `applyBoxSelect`'s
+  // `onUp` reads the live `view` even if container resized mid-drag.
+  useEffect(() => { viewRef.current = view; }, [view]);
+
   // SVG curve paths — one per visible FCurve. Built once when samples
   // or view change. Active curve drawn last (on top).
   const curvePaths = useMemo(() => {
@@ -474,35 +519,57 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // (1) Active curve's handles take priority (their selection is
-    // already exposed; user picks among them precisely).
-    if (activeFCurveId) {
-      const activeSub = selectedHandles.get(activeFCurveId);
-      const activeFC = visible.find((d) => d.fcurve.id === activeFCurveId)?.fcurve;
-      if (activeSub && activeFC) {
-        for (const [i] of activeSub) {
-          const kf = activeFC.keyforms[i];
-          if (!kf) continue;
-          if (kf.handleLeft && hitTest(x, y, view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value), HIT_HANDLE_R)) {
-            const subNext = e.shiftKey ? cloneSubSelection(activeSub) : new Map();
-            const cur = subNext.get(i) ?? { center: false, left: false, right: false };
-            if (!e.shiftKey) subNext.set(i, { center: false, left: true, right: false });
-            else subNext.set(i, { ...cur, left: true });
-            setSubSelection(activeFCurveId, subNext);
-            startHandleDrag(e, activeFCurveId, i, 'left');
-            return;
-          }
-          if (kf.handleRight && hitTest(x, y, view.tx(kf.handleRight.time), view.ty(kf.handleRight.value), HIT_HANDLE_R)) {
-            const subNext = e.shiftKey ? cloneSubSelection(activeSub) : new Map();
-            const cur = subNext.get(i) ?? { center: false, left: false, right: false };
-            if (!e.shiftKey) subNext.set(i, { center: false, left: false, right: true });
-            else subNext.set(i, { ...cur, right: true });
-            setSubSelection(activeFCurveId, subNext);
-            startHandleDrag(e, activeFCurveId, i, 'right');
-            return;
-          }
+    // (1) Handle dots take priority over keyform diamonds. Handles
+    // draw only for SELECTED keyforms (SIPO_SELVHANDLESONLY), so we
+    // walk every fcurve in the current selection — active first, then
+    // context curves with any selection — and test each handle dot.
+    // Audit-fix MED-B7 (2026-05-16): the prior pass tested ONLY the
+    // active curve's handle dots, so a shift-selected context-curve
+    // handle would draw but be unclickable (the click fell through to
+    // the keyform-diamond pass and started a kf-move on whatever was
+    // underneath). Mirrors Blender's `find_nearest_fcurve_vert` at
+    // `reference/blender/source/blender/editors/space_graph/graph_select.cc:1714-1788`,
+    // which walks ALL visible curves looking for nearest vert.
+    const handleHitOrder = activeFCurveId
+      ? [activeFCurveId, ...[...selectedHandles.keys()].filter((id) => id !== activeFCurveId)]
+      : [...selectedHandles.keys()];
+    for (const fcurveId of handleHitOrder) {
+      const sub = selectedHandles.get(fcurveId);
+      const fc = visible.find((d) => d.fcurve.id === fcurveId)?.fcurve;
+      if (!sub || !fc) continue;
+      let hitHandle = null;
+      for (const [i] of sub) {
+        const kf = fc.keyforms[i];
+        if (!kf) continue;
+        if (kf.handleLeft && hitTest(x, y, view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value), HIT_HANDLE_R)) {
+          hitHandle = { idx: i, side: 'left' };
+          break;
+        }
+        if (kf.handleRight && hitTest(x, y, view.tx(kf.handleRight.time), view.ty(kf.handleRight.value), HIT_HANDLE_R)) {
+          hitHandle = { idx: i, side: 'right' };
+          break;
         }
       }
+      if (!hitHandle) continue;
+      // Cross-curve handle pick → elevate to active (non-Shift only)
+      // for parity with the diamond-pick code path.
+      if (fcurveId !== activeFCurveId && !e.shiftKey) {
+        const target = decodeFCurveTarget(fc);
+        if (target) onPickActiveByTarget(target);
+      }
+      const subNext = e.shiftKey ? cloneSubSelection(sub) : new Map();
+      const cur = subNext.get(hitHandle.idx) ?? { center: false, left: false, right: false };
+      if (hitHandle.side === 'left') {
+        if (!e.shiftKey) subNext.set(hitHandle.idx, { center: false, left: true, right: false });
+        else             subNext.set(hitHandle.idx, { ...cur, left: true });
+      } else {
+        if (!e.shiftKey) subNext.set(hitHandle.idx, { center: false, left: false, right: true });
+        else             subNext.set(hitHandle.idx, { ...cur, right: true });
+      }
+      if (e.shiftKey) setSubSelection(fcurveId, subNext);
+      else            setSelectedHandles(new Map([[fcurveId, subNext]]));
+      startHandleDrag(e, fcurveId, hitHandle.idx, hitHandle.side);
+      return;
     }
 
     // (2) Keyform diamonds — walk ALL visible curves (active first).
@@ -537,13 +604,20 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     }
 
     if (hit) {
-      // Cross-curve click on a context curve → elevate to active first
-      // (Blender's `mouse_graph_keys` calls `select_pchannel_keychannel_first`
-      // at `graph_select.cc:368-387`).
-      if (!hit.isActive) {
+      // Cross-curve click on a context curve → elevate to active first.
+      // Mirrors `mouse_graph_keys` at
+      // `reference/blender/source/blender/editors/space_graph/graph_select.cc:1850`,
+      // which calls `ANIM_set_active_channel` at
+      // `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:237`.
+      // Audit-fix HIGH-B1 + MED-B4 (2026-05-16): citation corrected (the
+      // prior `select_pchannel_keychannel_first` symbol was fabricated and
+      // does not exist in Blender) AND the elevate now SKIPS on Shift,
+      // matching Blender's `select_mode != SELECT_INVERT` guard at
+      // `graph_select.cc:1843-1856` — Shift-click on a context-curve key
+      // extends the keyform selection without changing the active channel.
+      if (!hit.isActive && !e.shiftKey) {
         const target = decodeFCurveTarget(visible.find((d) => d.fcurve.id === hit.fcurveId)?.fcurve);
         if (target) {
-          // Elevate active via selectionStore (write happens via prop callback).
           onPickActiveByTarget(target);
         }
       }
@@ -777,7 +851,15 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       let dValue = -(dyPx / snap.plotH) * snap.vSpan;
       if (shiftKey) { dTime *= 0.1; dValue *= 0.1; }
       if (kind === 'g' && ctrlKey && msPerFrame > 0) {
-        dTime = Math.round(dTime / msPerFrame) * msPerFrame;
+        // Audit-fix MED-B5 (2026-05-16): snap absolute final pivot time
+        // to whole frames, then re-derive dTime as (snappedPivot -
+        // origPivot). This mirrors Blender's modal-G + T_SNAP_KEYS
+        // behaviour where the selection's reference point lands ON a
+        // frame regardless of where it started, vs the prior bug where
+        // snapping the DELTA preserved sub-frame offsets indefinitely
+        // (a kf starting at t=17ms would land on t=17+N*msPerFrame).
+        const wantPivot = Math.round((pivot.time + dTime) / msPerFrame) * msPerFrame;
+        dTime = wantPivot - pivot.time;
       }
       const curDist = Math.hypot(
         (rect ? currentX - rect.left : currentX) - pivotPxX,
@@ -1035,8 +1117,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
   // Cross-curve: iterate ALL visible FCurves, test each kf's centre +
   // both handle dots against the rect. `include_handles=true` matches
-  // Blender's `GRAPH_OT_select_box` default at `graph_select.cc:933-940`.
+  // Blender's `GRAPH_OT_select_box` default at `graph_select.cc:578-587`
+  // (`incl_handles=true` → `KEYFRAME_ITER_INCL_HANDLES`); each handle is
+  // INDEPENDENTLY tested at `keyframes_edit.cc:1527-1536` via the
+  // `KEYFRAME_OK_KEY/H1/H2` bits, then OR'd into BEZT's `f1/f2/f3` —
+  // SS mirrors that per-component test below. Audit-fix MED-A4: read
+  // view via viewRef so a mid-drag resize uses the live transform.
   function applyBoxSelect(x1, y1, x2, y2, modifier) {
+    const v = viewRef.current ?? view;
     const base = modifier === 'replace' ? new Map() : cloneFullSelection(selectionRef.current);
     const inRect = (px, py) => px >= x1 && px <= x2 && py >= y1 && py <= y2;
     for (const d of visible) {
@@ -1045,12 +1133,12 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (let i = 0; i < d.fcurve.keyforms.length; i++) {
         const kf = d.fcurve.keyforms[i];
         if (typeof kf.value !== 'number') continue;
-        const kx = view.tx(kf.time);
-        const ky = view.ty(kf.value);
+        const kx = v.tx(kf.time);
+        const ky = v.ty(kf.value);
         const cur = subNext.get(i) ?? { center: false, left: false, right: false };
         const centerIn = inRect(kx, ky);
-        const leftIn = kf.handleLeft && inRect(view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value));
-        const rightIn = kf.handleRight && inRect(view.tx(kf.handleRight.time), view.ty(kf.handleRight.value));
+        const leftIn = kf.handleLeft && inRect(v.tx(kf.handleLeft.time), v.ty(kf.handleLeft.value));
+        const rightIn = kf.handleRight && inRect(v.tx(kf.handleRight.time), v.ty(kf.handleRight.value));
         if (modifier === 'subtract') {
           const out = {
             center: cur.center && !centerIn,
@@ -1141,8 +1229,8 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     if (sel.size === 0) return;
     // Last-kf guard runs PER-CURVE — refuse to drop any FCurve's last
     // keyform (the Timeline shows ≥1-kf curves only). Audit-fix HIGH-A4
-    // from Slice 5.C: the guard fires BEFORE `beginBatch` so no phantom
-    // undo snapshot is pushed.
+    // from Slice 5.C: the FAST pre-batch guard fires BEFORE `beginBatch`
+    // so a no-op delete pushes no phantom undo snapshot.
     /** @type {Map<string, Map<number, any>>} */
     const toDelete = new Map();
     let anyDeletable = false;
@@ -1166,6 +1254,16 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (const [fcurveId, sub] of toDelete) {
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) continue;
+        // Audit-fix HIGH-A7 (2026-05-16): re-check the guard against
+        // the LIVE draft. The pre-batch guard reads from `action` (the
+        // memo snapshot from last render), so two rapid Delete presses
+        // both see the stale length. The second press would pass the
+        // pre-batch guard (length-N >= 1 against the original count)
+        // but the live draft already has N fewer keyforms from the
+        // first delete still settling — bypassing the guard could drop
+        // the FCurve's final keyform. Cheap defense: re-check inside.
+        const liveWould = countDeletableInSub(sub);
+        if (fc.keyforms.length - liveWould < 1) continue;
         const remap = deleteKeyforms(fc, sub);
         recalcKeyformHandles(fc.keyforms);
         remapsByFc.set(fcurveId, remap);
@@ -1312,7 +1410,11 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       else operatorSelectAll();
       return;
     }
-  }, [modal, menu, fps, view, visible, activeFCurveId]);
+    // Audit-fix HIGH-A5 (2026-05-16): include `activeActionId` so that
+    // switching the scene-bound action between keypresses doesn't leave
+    // `onKeyDown` closing over a stale id (which would silently no-op
+    // operators against the wrong action's getActiveSceneAction result).
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId]);
 
   // Sidebar action — toggle visibility.
   const toggleHidden = useCallback((fcurveId) => {
@@ -1343,6 +1445,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         activeFCurveId={activeFCurveId}
         onToggleHidden={toggleHidden}
         onPickActiveByTarget={onPickActiveByTarget}
+        onClearKeyformSelection={clearSelection}
         selection={selectedHandles}
       />
 
@@ -1431,7 +1534,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, selection }) {
+function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, onClearKeyformSelection, selection }) {
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
@@ -1451,9 +1554,18 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
               'group flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:bg-accent/40 ' +
               (isActive ? 'bg-accent/60 text-foreground' : 'text-muted-foreground')
             }
-            onClick={() => {
+            onClick={(e) => {
               const t = decodeFCurveTarget(d.fcurve);
-              if (t) onPickActiveByTarget(t);
+              if (!t) return;
+              // Audit-fix MED-B8 (2026-05-16): plain channel-click wipes
+              // keyform selection on non-clicked channels, matching
+              // Blender's `SELECT_REPLACE` semantic at
+              // `graph_select.cc:1741` (`deselect_graph_keys(ac, false,
+              // SELECT_SUBTRACT, true)` runs before the new selection).
+              // Shift-click would extend (omitted this slice — see the
+              // file-top deferral on channel-vs-keyform selection split).
+              if (!e.shiftKey) onClearKeyformSelection();
+              onPickActiveByTarget(t);
             }}
             title={d.tooltip}
           >
