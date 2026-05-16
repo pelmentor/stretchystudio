@@ -42,7 +42,74 @@
  *   and typed numeric input belong to a follow-on slice that will share
  *   its implementation with the viewport's `ModalTransformOverlay`.
  *
- * # Slice 5.C+ (this commit) — multi-curve display
+ * # Slice 5.D (this commit) — driver banner + edit-disable gate
+ *
+ * Per plan §5.D: "If the active FCurve has a `driver`, show the driver
+ * expression as a banner above the curve and a '(D)' badge. Editing
+ * handles is disabled when the driver is active (the driver overrides
+ * the curve); a button clears the driver to allow keyframe editing."
+ *
+ *   - **DriverBanner** above the canvas when the active FCurve has a
+ *     `driver` attached. Shows: "DRIVER" label + driver type (scripted/
+ *     sum/min/max/avg) + truncated expression (or `variables.length`
+ *     count for non-scripted types) + live evaluated value (re-evaluates
+ *     on `currentTime` change so it tracks the playhead) + "Clear
+ *     Driver" button (drops `fcurve.driver` via batched `updateProject`).
+ *   - **Edit-disabled gate (per-fcurve)** via `hasDriver` at
+ *     [src/anim/driverGate.js](../../../anim/driverGate.js). A driven
+ *     fcurve's keyform values are overridden by the driver output (see
+ *     `evaluateFCurve` step 2), so editing them is meaningless. The
+ *     gate is PER-CURVE so a cross-curve selection that mixes driven +
+ *     undriven curves keeps the undriven ones editable -- this mirrors
+ *     Blender's pattern of disabling the `Properties` panel's value
+ *     widget per channel rather than gating the whole editor.
+ *     Concretely the gate skips:
+ *       - `startKeyformDrag` / `startHandleDrag` (early return)
+ *       - `operatorSetHandleType` / `operatorSetInterpolation` /
+ *         `operatorSetExtrapolation` / `operatorSnapToFrame` /
+ *         `operatorDelete` (skip per-fcurve in the iteration loop)
+ *       - Modal G / S originals collection (skip driven fcurves so they
+ *         don't enter the pivot calculation; if NO mutable fcurves
+ *         remain, the modal bails via the existing `n === 0` guard).
+ *     Selection / box-select / sidebar click / seek / Home / A still
+ *     work against driven curves -- the user can still SELECT keyforms
+ *     to inspect timing, just not MUTATE them.
+ *   - **Sidebar "(D)" badge** on every row whose fcurve has a driver
+ *     (active or context), so the user can spot driven channels at a
+ *     glance before clicking into them.
+ *   - **Plot-area ResizeObserver** now observes the plot-rect (the
+ *     div directly hosting the SVG + canvas) instead of the outer
+ *     wrap. The Slice 5.D banner sits in the same vertical flex column
+ *     as the plot-rect, so the rect's height shrinks when the banner
+ *     mounts -- the canvas resizes naturally via the observer callback.
+ *     Side-effect: the prior pass observed the outer wrap (sidebar +
+ *     plot), so `view.w` was outer width and the canvas's `style.width`
+ *     overflowed the plot-rect by `SIDEBAR_W` to the right; that
+ *     overflow was clipped by the Wrapper's `overflow-hidden` but made
+ *     the rightmost ~180px of the curve never visible. Observing the
+ *     plot-rect makes `view.w` = plot-rect width, so the curve fills
+ *     the visible plot area exactly.
+ *
+ *   **SS-deferred** (this slice, documented explicitly):
+ *   - Driver variable list / expression editor in the banner. Blender's
+ *     Drivers Editor panel surfaces `variables[]` with type-specific
+ *     targets (single-prop / rot-diff / loc-diff / trans-channel /
+ *     context-prop). SS's `evaluateDriver` only handles `singleProp`
+ *     (see [driver.js](../../../anim/driver.js) "Deviations from
+ *     Blender"), and a UI to author variables doesn't exist yet -- the
+ *     banner shows the count read-only this slice and the user must
+ *     attach drivers via NodeTreeEditor / `driverCompile.js` paths.
+ *   - Driver invalid-flag display (`DRIVER_FLAG_INVALID` red_alert in
+ *     `graph_buttons.cc:1026-1031`). `evaluateDriver` returns NaN on
+ *     unsafe / failing expressions and the FCurve falls back to keyform
+ *     eval; there's no persisted invalid-flag on the driver object today
+ *     to surface as a red banner.
+ *   - Driver influence slider -- `ChannelDriver.influence` is not
+ *     modelled in SS yet (see [driver.js](../../../anim/driver.js)
+ *     "Deviations from Blender"); a driver either fully overrides or
+ *     doesn't fire.
+ *
+ * # Slice 5.C+ (prior commit) — multi-curve display
  *
  * Per plan §5.C: "Phase 5 supports displaying multiple FCurves at once
  * (one color each). The active FCurve is the one being edited; others
@@ -163,6 +230,8 @@ import {
 } from '../../../anim/graphEditOps.js';
 import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
 import { fcurveColorCss } from '../../../anim/fcurveColor.js';
+import { hasDriver, clearDriver } from '../../../anim/driverGate.js';
+import { evaluateDriver } from '../../../anim/driver.js';
 
 const CURVE_SAMPLES = 240;
 const PAD_L = 36;
@@ -302,6 +371,12 @@ function Empty({ msg }) {
 
 function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fps, onSeek, onPickActiveByTarget }) {
   const wrapRef = useRef(null);
+  // Slice 5.D: separate ref for the plot-rect (sibling of DriverBanner
+  // inside the right-side flex column). ResizeObserver watches THIS ref
+  // so canvas dims track the actual drawing area, not the outer wrap
+  // (which includes Sidebar + Banner -- see file-header "Plot-area
+  // ResizeObserver" note for the bug this also fixes incidentally).
+  const plotAreaRef = useRef(null);
   const canvasRef = useRef(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
@@ -388,7 +463,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   }, [decoded]);
 
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = plotAreaRef.current;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -647,6 +722,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     const initFC = action.fcurves.find((f) => f.id === fcurveId);
     const kf = initFC?.keyforms[kfIdx];
     if (!kf) return;
+    // Slice 5.D edit-disabled gate: driven curves never mutate via drag.
+    // The selection-set already happened in onPointerDown so the click
+    // still highlights the kf -- only the drag-then-mutate path bails.
+    if (hasDriver(initFC)) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     setViewLock({ minV: autoFit.minV, maxV: autoFit.maxV });
@@ -729,6 +808,8 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     const initFC = action.fcurves.find((f) => f.id === fcurveId);
     const kf = initFC?.keyforms[kfIdx];
     if (!kf) return;
+    // Slice 5.D edit-disabled gate: same as startKeyformDrag.
+    if (hasDriver(initFC)) return;
     const sourceHandle = side === 'left' ? kf.handleLeft : kf.handleRight;
     if (!sourceHandle) return;
     const proj = useProjectStore.getState().project;
@@ -802,6 +883,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     for (const [fcurveId, sub] of sel) {
       const fc = action.fcurves.find((f) => f.id === fcurveId);
       if (!fc) continue;
+      // Slice 5.D edit-disabled gate: skip driven curves so they don't
+      // enter the pivot OR get transformed. The n === 0 guard below
+      // bails the modal cleanly if EVERY selected curve is driven.
+      if (hasDriver(fc)) continue;
       const subOrigins = new Map();
       for (const [idx] of sub) {
         const k = fc.keyforms[idx];
@@ -1176,6 +1261,9 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (const [fcurveId, sub] of sel) {
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) continue;
+        // Slice 5.D edit-disabled gate: skip driven curves so a mixed
+        // selection still mutates the undriven ones.
+        if (hasDriver(fc)) continue;
         setHandleType(fc, sub, type, 'both');
         recalcKeyformHandles(fc.keyforms);
       }
@@ -1194,6 +1282,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (const [fcurveId, sub] of sel) {
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) continue;
+        if (hasDriver(fc)) continue; // Slice 5.D edit-disabled gate
         setInterpolation(fc, sub, interp);
         recalcKeyformHandles(fc.keyforms);
       }
@@ -1218,6 +1307,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (const fcurveId of targetIds) {
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) continue;
+        if (hasDriver(fc)) continue; // Slice 5.D edit-disabled gate
         setExtrapolation(fc, extrap);
       }
     });
@@ -1237,6 +1327,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     for (const [fcurveId, sub] of sel) {
       const fc = action.fcurves.find((f) => f.id === fcurveId);
       if (!fc) continue;
+      if (hasDriver(fc)) continue; // Slice 5.D edit-disabled gate
       const wouldDelete = countDeletableInSub(sub);
       if (wouldDelete === 0) continue;
       if (fc.keyforms.length - wouldDelete < 1) continue;
@@ -1304,6 +1395,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       for (const [fcurveId, sub] of sel) {
         const fc = a.fcurves.find((f) => f.id === fcurveId);
         if (!fc) continue;
+        if (hasDriver(fc)) continue; // Slice 5.D edit-disabled gate
         // Same identity-track pattern as Slice 5.C audit-fix HIGH-A1.
         /** @type {Map<number, any>} */
         const objsByOrigIdx = new Map();
@@ -1416,6 +1508,49 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // operators against the wrong action's getActiveSceneAction result).
   }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId]);
 
+  // ── Slice 5.D — driver banner + live value ──────────────────────────
+
+  // The active FCurve's driver (if any). Re-resolved per render because
+  // `activeFCurveDecoded` below is also per-render; cheap object lookup.
+  const activeDriver = useMemo(() => {
+    const fc = visible.find((d) => d.fcurve.id === activeFCurveId)?.fcurve;
+    return hasDriver(fc) ? fc.driver : null;
+  }, [visible, activeFCurveId]);
+
+  // Live-evaluate the driver at the current time so the banner tracks
+  // the playhead. `evaluateDriver`'s variable resolution reads project
+  // state via `evaluateRnaPath`, hence the project dep. `currentTime`
+  // is the only animation-time signal the driver expression sees today
+  // (Blender's `self` ref isn't implemented per driver.js "Deviations").
+  const project = useProjectStore((s) => s.project);
+  const driverValue = useMemo(() => {
+    if (!activeDriver) return null;
+    return evaluateDriver(activeDriver, { project });
+    // currentTime kept in deps so the banner re-renders on playhead
+    // movement even though the driver expression doesn't accept time
+    // directly -- driven RNA paths may resolve to time-varying values.
+  }, [activeDriver, project, currentTime]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear-driver action: drops `fcurve.driver` in a batched updateProject
+  // so it lands as one undo entry. After the mutation the curve becomes
+  // editable again (the per-fcurve gate inside operator handlers reads
+  // `hasDriver` per-call so the next G/S/V/T/Delete picks up the change
+  // without any extra plumbing). Mirrors Blender's
+  // `ANIM_OT_driver_button_remove`-style "remove driver" action.
+  const onClearActiveDriver = useCallback(() => {
+    if (!activeFCurveId) return;
+    const proj = useProjectStore.getState().project;
+    beginBatch(proj);
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      const fc = a.fcurves.find((f) => f.id === activeFCurveId);
+      if (!fc) return;
+      clearDriver(fc);
+    });
+    endBatch();
+  }, [activeFCurveId, activeActionId, update]);
+
   // Sidebar action — toggle visibility.
   const toggleHidden = useCallback((fcurveId) => {
     setHidden((prev) => {
@@ -1449,7 +1584,18 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         selection={selectedHandles}
       />
 
-      <div className="relative flex-1 min-w-0 h-full">
+      <div className="flex-1 min-w-0 h-full flex flex-col">
+        {activeDriver ? (
+          <DriverBanner
+            driver={activeDriver}
+            value={driverValue}
+            color={visible.find((d) => d.fcurve.id === activeFCurveId)?.color ?? null}
+            label={visible.find((d) => d.fcurve.id === activeFCurveId)?.label ?? ''}
+            onClear={onClearActiveDriver}
+          />
+        ) : null}
+
+        <div ref={plotAreaRef} className="relative flex-1 min-w-0">
         <svg
           width={view.w}
           height={view.h}
@@ -1527,6 +1673,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             onPickExtrapolation={operatorSetExtrapolation}
           />
         ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1547,6 +1694,9 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
         const isActive = d.fcurve.id === activeFCurveId;
         const isHidden = hidden.has(d.fcurve.id);
         const hasSelection = (selection.get(d.fcurve.id)?.size ?? 0) > 0;
+        // Slice 5.D: "(D)" badge marks driver-locked rows so the user
+        // spots them at a glance before clicking in.
+        const driven = hasDriver(d.fcurve);
         return (
           <div
             key={d.fcurve.id}
@@ -1567,7 +1717,7 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
               if (!e.shiftKey) onClearKeyformSelection();
               onPickActiveByTarget(t);
             }}
-            title={d.tooltip}
+            title={driven ? `${d.tooltip} (driver-locked)` : d.tooltip}
           >
             <button
               type="button"
@@ -1586,6 +1736,14 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
             <span className={'truncate flex-1 ' + (isHidden ? 'opacity-50 line-through' : '')}>
               {d.label}
             </span>
+            {driven ? (
+              <span
+                className="text-[9px] font-mono px-1 rounded bg-primary/20 text-primary"
+                title="Driver attached — keyforms are overridden"
+              >
+                D
+              </span>
+            ) : null}
             {hasSelection ? (
               <span className="text-[9px] font-mono text-amber-400" title="Has selection">
                 ●
@@ -1594,6 +1752,79 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── DriverBanner (Slice 5.D) ─────────────────────────────────────────
+
+/**
+ * Compact banner shown above the canvas when the active FCurve has a
+ * driver attached. Mirrors Blender's "Drivers Editor" panel header
+ * (`graph_buttons.cc:931-941` -- the "Driver" enable toggle + the
+ * `graph_draw_driver_settings_panel` summary at lines 972-1050) but
+ * collapsed to a single horizontal strip so it doesn't eat much of the
+ * curve drawing area.
+ *
+ * The "Clear Driver" button drops `fcurve.driver` via the parent's
+ * `onClear` callback, which goes through `clearDriver` from
+ * [src/anim/driverGate.js](../../../anim/driverGate.js) inside a
+ * batched `updateProject` -- one undo entry per click.
+ *
+ * @param {{
+ *   driver: { type:string, expression?:string, variables?:any[] },
+ *   value: number|null,
+ *   color: string|null,
+ *   label: string,
+ *   onClear: () => void,
+ * }} props
+ */
+function DriverBanner({ driver, value, color, label, onClear }) {
+  const type = driver?.type ?? 'scripted';
+  const expr = typeof driver?.expression === 'string' ? driver.expression : '';
+  const varCount = Array.isArray(driver?.variables) ? driver.variables.length : 0;
+  // Truncate long expressions in the strip (full expression lives in
+  // the NodeTreeEditor or graph_buttons-equivalent driver panel; this
+  // banner is a quick-look summary, not an editor).
+  const exprPreview = expr.length > 60 ? expr.slice(0, 57) + '...' : expr;
+  const valueText =
+    value === null ? '--'
+    : !Number.isFinite(value) ? 'NaN (fallback to keyforms)'
+    : value.toFixed(3);
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1 text-[11px] border-b border-border bg-popover/40 shadow-sm flex-shrink-0"
+      title={`Driver active on ${label} -- keyforms are overridden by the driver expression`}
+    >
+      <span
+        className="w-3 h-3 rounded-sm flex-shrink-0"
+        style={{ backgroundColor: color ?? 'currentColor' }}
+        aria-hidden
+      />
+      <span className="font-mono uppercase tracking-wider text-primary px-1.5 rounded bg-primary/15">
+        Driver
+      </span>
+      <span className="text-muted-foreground">{type}</span>
+      {type === 'scripted' ? (
+        <span className="font-mono text-foreground/80 truncate flex-1 min-w-0" title={expr}>
+          {exprPreview || <span className="italic text-muted-foreground">empty expression</span>}
+        </span>
+      ) : (
+        <span className="text-muted-foreground flex-1 min-w-0 truncate">
+          {varCount} variable{varCount === 1 ? '' : 's'}
+        </span>
+      )}
+      <span className="font-mono text-foreground/90 px-1.5 border border-border rounded flex-shrink-0">
+        = {valueText}
+      </span>
+      <button
+        type="button"
+        className="px-2 py-0.5 rounded border border-border bg-card hover:bg-accent text-foreground flex-shrink-0"
+        onClick={onClear}
+        title="Remove the driver to allow keyframe editing"
+      >
+        Clear Driver
+      </button>
     </div>
   );
 }
