@@ -48,6 +48,7 @@
  */
 
 import { evaluateFCurve } from './fcurve.js';
+import { isFCurveMuted } from './fcurveMute.js';
 import { recalcKeyformHandles } from './fcurveHandles.js';
 
 /** Legacy easing names that collapse to constant-step keyforms. */
@@ -363,6 +364,13 @@ export function evaluateActionFCurves(action, timeMs, evalContext = {}) {
   const out = new Map();
   if (!action || !Array.isArray(action.fcurves)) return out;
   for (const fc of action.fcurves) {
+    // Slice 5.G — Blender's eval-side mute gate per
+    // `is_fcurve_evaluatable` at `animrig/intern/evaluation.cc:345-356`.
+    // Skipping leaves the bound parameter at its prior value (the Map
+    // entry is simply absent for the downstream override merge).
+    // Caller-side gate so `evaluateFCurve` itself stays a pure value
+    // function — see helper module-header for the rationale.
+    if (isFCurveMuted(fc)) continue;
     const v = evaluateFCurve(fc, timeMs, evalContext);
     if (Number.isFinite(v)) out.set(fc.rnaPath, v);
   }

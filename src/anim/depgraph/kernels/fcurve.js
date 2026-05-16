@@ -35,6 +35,7 @@
 
 import { evaluateFCurve } from '../../fcurve.js';
 import { decodeFCurveTarget } from '../../animationFCurve.js';
+import { isFCurveMuted } from '../../fcurveMute.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -47,6 +48,12 @@ export function kernelFCurveEval(op, ctx) {
   const fcurves = ctx.action?.fcurves ?? [];
   const fc = fcurves.find((f) => f?.rnaPath === tag);
   if (!fc) return NaN;
+  // Slice 5.G — Blender's eval-side mute gate per
+  // `is_fcurve_evaluatable` (`animrig/intern/evaluation.cc:345-356`)
+  // and `BKE_animsys_eval_driver` (`blenkernel/intern/anim_sys.cc:4302`).
+  // Skipping returns NaN AND does NOT touch `ctx.paramOverrides`, so
+  // the downstream PARAM_EVAL op reads the unchanged store value.
+  if (isFCurveMuted(fc)) return NaN;
   const v = evaluateFCurve(fc, ctx.timeMs ?? 0, { project: ctx.project });
   if (typeof v === 'number' && Number.isFinite(v)) {
     const target = decodeFCurveTarget(fc);

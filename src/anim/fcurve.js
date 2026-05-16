@@ -88,6 +88,15 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *   Mirrors Blender's `FCURVE_SELECTED` bit
  *   (`DNA_anim_enums.h:303-310`). Mutated via `applyChannelSelect` in
  *   `anim/fcurveChannelSelect.js`.
+ * @property {boolean} [mute] - Slice 5.G: per-FCurve mute flag.
+ *   Sparse; missing means `false`. Mirrors Blender's `FCURVE_MUTED` bit
+ *   (`DNA_anim_enums.h:303-314`); RNA name `mute` (`rna_fcurve.cc:2690`).
+ *   Read via `isFCurveMuted`, toggled via `toggleFCurveMute` in
+ *   `anim/fcurveMute.js`. Eval-side gate lives at the caller
+ *   (`evaluateActionFCurves`, `kernelFCurveEval`) per Blender's
+ *   `is_fcurve_evaluatable` pattern; `evaluateFCurve` itself stays a
+ *   pure value function so the Graph Editor render path can still
+ *   sample muted curves (drawn greyed).
  */
 
 /**

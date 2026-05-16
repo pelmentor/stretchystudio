@@ -332,6 +332,7 @@ import {
   applyChannelSelect,
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
+import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
 import { useTransformModalInput } from '../../../lib/modal/useTransformModalInput.js';
 import {
   keyEventToAction,
@@ -644,6 +645,11 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         d: dPath,
         color: d.color,
         isActive: d.fcurve.id === activeFCurveId,
+        // Slice 5.G — Blender's `graph_draw.cc:1190-1194` greys the
+        // stroke (`immUniformThemeColorShade(TH_HEADER, 50)`) when
+        // muted. Surfaced here so the render branch picks neutral grey
+        // + lower opacity instead of the rainbow color.
+        isMuted: isFCurveMuted(d.fcurve),
       });
     }
     // Active last so it overdraws context curves.
@@ -673,14 +679,16 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     for (const d of visible) {
       if (d.fcurve.id === activeFCurveId) continue;
       const sub = selectedHandles.get(d.fcurve.id);
-      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false);
-      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false);
+      const muted = isFCurveMuted(d.fcurve);
+      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false, muted);
+      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false, muted);
     }
     for (const d of visible) {
       if (d.fcurve.id !== activeFCurveId) continue;
       const sub = selectedHandles.get(d.fcurve.id);
-      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true);
-      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true);
+      const muted = isFCurveMuted(d.fcurve);
+      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted);
+      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true, muted);
     }
   }, [visible, selectedHandles, view, activeFCurveId]);
 
@@ -1779,6 +1787,24 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return decision;
   }, [activeActionId, update]);
 
+  // Slice 5.G — channel mute toggle (Blender's FCURVE_MUTED bit).
+  //
+  // Unlike Slice 5.F's selection toggle, mute IS in the undo stack: it
+  // changes which curves drive properties, so it's data not view state.
+  // Blender records `ANIM_OT_channels_setting_toggle` writes in undo
+  // for the same reason. No `skipHistory:true` here.
+  //
+  // The eval-side gate lives at the caller (animationFCurve +
+  // depgraph/kernels/fcurve.js) per Blender's `is_fcurve_evaluatable`
+  // pattern. See [src/anim/fcurveMute.js](../../../anim/fcurveMute.js).
+  const onToggleMute = useCallback((fcurveId) => {
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      toggleFCurveMute(a, fcurveId);
+    });
+  }, [activeActionId, update]);
+
   // For the menu, "current" needs to know the active fcurve to read
   // extrapolation; for handle type / interp we use the most-common value
   // across the WHOLE multi-curve selection.
@@ -1797,6 +1823,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         hidden={hidden}
         activeFCurveId={activeFCurveId}
         onToggleHidden={toggleHidden}
+        onToggleMute={onToggleMute}
         onPickActiveByTarget={onPickActiveByTarget}
         onApplyChannelClick={applyChannelClick}
         onClearKeyformSelection={clearSelection}
@@ -1848,8 +1875,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
               key={cp.id}
               d={cp.d}
               fill="none"
-              stroke={cp.color}
-              strokeOpacity={cp.isActive ? 1.0 : CTX_ALPHA}
+              // Slice 5.G — muted curves draw in neutral grey at 0.35
+              // alpha. Mirrors Blender's `graph_draw.cc:1190-1194`
+              // (`immUniformThemeColorShade(TH_HEADER, 50)`). Active +
+              // muted still draws greyed (not the brighter active
+              // colour) — Blender does the same, mute wins over active
+              // for the stroke choice.
+              stroke={cp.isMuted ? 'hsl(0 0% 55%)' : cp.color}
+              strokeOpacity={cp.isMuted ? 0.35 : (cp.isActive ? 1.0 : CTX_ALPHA)}
               strokeWidth={cp.isActive ? 2.5 : 1.0}
             />
           ))}
@@ -1907,7 +1940,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
+function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
@@ -1924,6 +1957,10 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
         // of the active concept. See
         // [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js).
         const isChannelSelected = isFCurveSelected(d.fcurve);
+        // Slice 5.G — `fcurve.mute` (Blender's FCURVE_MUTED bit).
+        // Greyed text + speaker-off button. See
+        // [src/anim/fcurveMute.js](../../../anim/fcurveMute.js).
+        const isMuted = isFCurveMuted(d.fcurve);
         const hasSelection = (selection.get(d.fcurve.id)?.size ?? 0) > 0;
         // Slice 5.D: "(D)" badge marks driver-locked rows so the user
         // spots them at a glance before clicking in.
@@ -1996,12 +2033,28 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
             >
               {isHidden ? '○' : '●'}
             </button>
+            <button
+              type="button"
+              className={
+                'w-4 h-4 flex items-center justify-center text-[11px] leading-none '
+                + (isMuted ? 'text-muted-foreground/80' : 'text-muted-foreground/40 hover:text-foreground')
+              }
+              onClick={(e) => { e.stopPropagation(); onToggleMute(d.fcurve.id); }}
+              title={isMuted ? 'Unmute curve (resume evaluation)' : 'Mute curve (skip evaluation)'}
+              aria-label={isMuted ? 'Unmute curve' : 'Mute curve'}
+            >
+              {isMuted ? '\u{1F507}' : '\u{1F50A}'}
+            </button>
             <span
               className="w-3 h-3 rounded-sm flex-shrink-0"
-              style={{ backgroundColor: d.color, opacity: isHidden ? 0.3 : 1 }}
+              style={{ backgroundColor: d.color, opacity: isHidden || isMuted ? 0.3 : 1 }}
               aria-hidden
             />
-            <span className={'truncate flex-1 ' + (isHidden ? 'opacity-50 line-through' : '')}>
+            <span className={
+              'truncate flex-1 '
+              + (isHidden ? 'opacity-50 line-through' : '')
+              + (isMuted ? ' italic opacity-60' : '')
+            }>
               {d.label}
             </span>
             {driven ? (
@@ -2105,12 +2158,19 @@ function DriverBanner({ driver, value, color, label, onClear }) {
  * @param {Map<number, {center:boolean,left:boolean,right:boolean}>|undefined} sub
  * @param {{tx:(t:number)=>number, ty:(v:number)=>number}} view
  * @param {boolean} isActive
+ * @param {boolean} [isMuted] - Slice 5.G: dims handle dots + tangent
+ *   lines to match the muted SVG curve stroke. Handles stay clickable
+ *   (mute is data-only; Blender allows editing muted curve keyframes).
  */
-function drawHandles(ctx, keyforms, sub, view, isActive) {
+function drawHandles(ctx, keyforms, sub, view, isActive, isMuted = false) {
   if (!sub || sub.size === 0) return;
   // Context curve handles still draw, but dimmer.
   ctx.strokeStyle = isActive ? 'rgba(245, 158, 11, 0.55)' : 'rgba(245, 158, 11, 0.30)';
   ctx.lineWidth = 1;
+  // Slice 5.G — multiplicative alpha for muted overlay; restored at
+  // function exit so callers aren't surprised by leaked state.
+  const priorAlpha = ctx.globalAlpha;
+  if (isMuted) ctx.globalAlpha = priorAlpha * 0.4;
   for (const [i, parts] of sub) {
     const kf = keyforms[i];
     if (!kf) continue;
@@ -2141,6 +2201,7 @@ function drawHandles(ctx, keyforms, sub, view, isActive) {
       ctx.fill();
     }
   }
+  ctx.globalAlpha = priorAlpha;
 }
 
 /**
@@ -2149,8 +2210,10 @@ function drawHandles(ctx, keyforms, sub, view, isActive) {
  * @param {Map<number, {center:boolean,left:boolean,right:boolean}>|undefined} sub
  * @param {{tx:(t:number)=>number, ty:(v:number)=>number}} view
  * @param {boolean} isActive
+ * @param {boolean} [isMuted] - Slice 5.G: dims diamond fill+stroke
+ *   alpha to match the muted SVG curve stroke. Diamonds stay clickable.
  */
-function drawKeyframes(ctx, keyforms, sub, view, isActive) {
+function drawKeyframes(ctx, keyforms, sub, view, isActive, isMuted = false) {
   for (let i = 0; i < keyforms.length; i++) {
     const kf = keyforms[i];
     if (typeof kf.value !== 'number') continue;
@@ -2161,7 +2224,8 @@ function drawKeyframes(ctx, keyforms, sub, view, isActive) {
     // Context curve diamonds: smaller + dimmer to push them visually behind.
     const baseR = isActive ? 4 : 3;
     const r = sel ? baseR + 1 : baseR;
-    ctx.globalAlpha = isActive ? 1.0 : CTX_ALPHA;
+    const baseAlpha = isActive ? 1.0 : CTX_ALPHA;
+    ctx.globalAlpha = isMuted ? baseAlpha * 0.4 : baseAlpha;
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r, y);
