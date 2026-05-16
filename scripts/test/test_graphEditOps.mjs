@@ -338,6 +338,14 @@ function near(actual, expected, eps, name) {
 
 // ─────────────────────────────────────────────────────────────────────
 // Slice 5.C — testKeyformHandles (Blender BKE_nurb_bezt_handle_test)
+//
+// Audit-fix HIGH-B1 (2026-05-16) — VECT → FREE keys off the XOR
+// between each handle's flag and the centre flag (curve.cc:4074, 4079):
+//   left:  !(SEL_F1) != !(SEL_F2)    ↔   parts.left !== parts.center
+//   right: !(SEL_F3) != !(SEL_F2)    ↔   parts.right !== parts.center
+// The earlier port keyed off (left !== right) which mis-handled the
+// "handle moved together with centre" case (no conversion expected)
+// and the "centre selected alone" case (both VECT should convert).
 // ─────────────────────────────────────────────────────────────────────
 
 // Only-left selected: AUTO → ALIGN both sides.
@@ -347,12 +355,14 @@ function near(actual, expected, eps, name) {
   assert(kf.handleType.left === 'aligned' && kf.handleType.right === 'aligned', 'testHandles: only-left selected, AUTO → ALIGN both');
 }
 
-// Only-right selected, opposite VECT: AUTO→ALIGN AND right VECT untouched (right not selected; the VECT→FREE branch keys off the SELECTED side).
+// Only-right selected, opposite VECT: AUTO → ALIGN both; left VECT
+// untouched (the LEFT handle's XOR with centre is false === false; no
+// VECT→FREE fires on a handle that "agrees" with centre).
 {
   const kf = { time: 100, value: 5, handleType: { left: 'vector', right: 'auto' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
   testKeyformHandles(kf, { center: false, left: false, right: true });
   assert(kf.handleType.right === 'aligned', 'testHandles: only-right + right was auto → aligned');
-  assert(kf.handleType.left === 'vector', 'testHandles: only-right + left was vector → stays vector (VECT→FREE keys off the selected side)');
+  assert(kf.handleType.left === 'vector', 'testHandles: only-right + left was vector → stays vector (left XOR centre = false)');
 }
 
 // Selected-side VECT: VECT → FREE on dragged side only.
@@ -360,21 +370,63 @@ function near(actual, expected, eps, name) {
   const kf = { time: 100, value: 5, handleType: { left: 'vector', right: 'vector' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
   testKeyformHandles(kf, { center: false, left: true, right: false });
   assert(kf.handleType.left === 'free', 'testHandles: only-left VECT → FREE on left');
-  assert(kf.handleType.right === 'vector', 'testHandles: only-left VECT → opposite untouched');
+  assert(kf.handleType.right === 'vector', 'testHandles: only-left VECT → opposite untouched (right XOR centre = false)');
 }
 
-// Both handles selected (no center): NO conversion (Blender bails when flag1 === flag2).
+// Both handles selected (no center): PARTIAL selection per Blender;
+// AUTO → ALIGN both sides fires. VECT → FREE: left XOR centre =
+// true !== false = true → free. right XOR centre = true !== false =
+// true → free. (Audit-fix HIGH-B1 — old SS port bailed on
+// `flag1 === flag2`; that was wrong.)
 {
   const kf = { time: 100, value: 5, handleType: { left: 'auto', right: 'auto' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
   testKeyformHandles(kf, { center: false, left: true, right: true });
-  assert(kf.handleType.left === 'auto' && kf.handleType.right === 'auto', 'testHandles: both-handles selected (no center) → no conversion');
+  assert(kf.handleType.left === 'aligned' && kf.handleType.right === 'aligned', 'testHandles: both-handles no-centre → partial → AUTO → ALIGN both (Blender XOR with centre)');
+}
+{
+  const kf = { time: 100, value: 5, handleType: { left: 'vector', right: 'vector' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
+  testKeyformHandles(kf, { center: false, left: true, right: true });
+  assert(kf.handleType.left === 'free' && kf.handleType.right === 'free', 'testHandles: both-handles no-centre VECT → BOTH free (each handle XOR centre is true)');
 }
 
-// Center-grab: no per-handle flags → no conversion.
+// Center selected alone (rare but reachable via box-select hitting
+// just the diamond): PARTIAL selection. AUTO → ALIGN both. Each
+// handle's XOR with centre is false !== true = true → VECT → FREE.
 {
   const kf = { time: 100, value: 5, handleType: { left: 'auto', right: 'auto' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
   testKeyformHandles(kf, { center: true, left: false, right: false });
-  assert(kf.handleType.left === 'auto' && kf.handleType.right === 'auto', 'testHandles: center-grab → no conversion (handles ride along the whole keyform)');
+  assert(kf.handleType.left === 'aligned' && kf.handleType.right === 'aligned', 'testHandles: centre-only → AUTO → ALIGN both');
+}
+{
+  const kf = { time: 100, value: 5, handleType: { left: 'vector', right: 'vector' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
+  testKeyformHandles(kf, { center: true, left: false, right: false });
+  assert(kf.handleType.left === 'free' && kf.handleType.right === 'free', 'testHandles: centre-only VECT → both free (handle XOR centre = true)');
+}
+
+// All three selected (centre + both handles, e.g. click-on-centre):
+// no-op. flag == SEL_F1|SEL_F2|SEL_F3 trips Blender's "all selected"
+// guard at curve.cc:4065.
+{
+  const kf = { time: 100, value: 5, handleType: { left: 'auto', right: 'auto' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
+  testKeyformHandles(kf, { center: true, left: true, right: true });
+  assert(kf.handleType.left === 'auto' && kf.handleType.right === 'auto', 'testHandles: all-three selected → no conversion (Blender all-selected guard)');
+}
+
+// Nothing selected: no-op (flag === 0).
+{
+  const kf = { time: 100, value: 5, handleType: { left: 'auto', right: 'auto' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
+  testKeyformHandles(kf, { center: false, left: false, right: false });
+  assert(kf.handleType.left === 'auto' && kf.handleType.right === 'auto', 'testHandles: nothing selected → no conversion (Blender nothing-selected guard)');
+}
+
+// Centre + one handle (e.g. centre+right both selected):
+// PARTIAL. AUTO → ALIGN both. VECT → FREE: left XOR centre = false !== true = true → free.
+// right XOR centre = true !== true = false → STAYS vector.
+{
+  const kf = { time: 100, value: 5, handleType: { left: 'vector', right: 'vector' }, handleLeft: { time: 80, value: 5 }, handleRight: { time: 120, value: 5 } };
+  testKeyformHandles(kf, { center: true, left: false, right: true });
+  assert(kf.handleType.left === 'free', 'testHandles: centre+right VECT → left flips (left XOR centre = true)');
+  assert(kf.handleType.right === 'vector', 'testHandles: centre+right VECT → right stays (right XOR centre = false; rode along with centre)');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -626,7 +678,9 @@ function near(actual, expected, eps, name) {
 // Slice 5.C — mergeDuplicateTimeKeys (Blender BKE_fcurve_merge_duplicate_keys)
 // ─────────────────────────────────────────────────────────────────────
 
-// Single cluster of 3 identical-time selected kfs: averaged into LAST.
+// Single cluster of 3 identical-time selected kfs: averaged into FIRST
+// (audit-fix HIGH-B3 — Blender's reverse-sweep keeps the LOWEST-index
+// selected entry, fcurve.cc:1869-1899).
 {
   const fc = {
     keyforms: [
@@ -647,8 +701,8 @@ function near(actual, expected, eps, name) {
   assert(fc.keyforms[1].time === 100, 'merge: surviving kf at time 100');
   assert(fc.keyforms[1].value === 5, 'merge: surviving value is average (1+5+9)/3 = 5');
   assert(remap.get(0) === 0 && remap.get(4) === 2, 'merge: kfs outside cluster remap correctly');
-  assert(remap.get(3) === 1, 'merge: LAST selected entry survives at remapped index 1');
-  assert(remap.get(1) === -1 && remap.get(2) === -1, 'merge: earlier selected entries marked deleted');
+  assert(remap.get(1) === 1, 'merge HIGH-B3: FIRST selected entry survives at remapped index 1 (Blender reverse-sweep semantics)');
+  assert(remap.get(2) === -1 && remap.get(3) === -1, 'merge HIGH-B3: later selected entries marked deleted');
 }
 
 // Cluster with mix of selected + unselected: unselected always deleted; selected averaged.

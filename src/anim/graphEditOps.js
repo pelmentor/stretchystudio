@@ -91,11 +91,15 @@
  *     auto/aligned handles to match the new type.
  *
  *   - **Snap to current frame** —
- *     `reference/blender/source/blender/editors/space_graph/graph_edit.cc:2330-2418`
- *     (`snap_graph_keys`). Mode `SNAP_KEYS_HORIZONTAL` (the SS Ctrl+G)
- *     rounds each selected keyform's time to a whole frame, then
+ *     `reference/blender/source/blender/editors/space_graph/graph_edit.cc:2326-2418`
+ *     (`snap_graph_keys`). Mode `GRAPHKEYS_SNAP_NEAREST_FRAME`
+ *     (enum at `graph_intern.hh:163-170`; the SS Ctrl+G) rounds each
+ *     selected keyform's time to a whole frame, then
  *     `BKE_fcurve_handles_recalc` + `BKE_fcurve_merge_duplicate_keys`
- *     settle handles + collapse ties.
+ *     settle handles + collapse ties. Audit-fix HIGH-B2 (2026-05-16)
+ *     corrected the prior citation `SNAP_KEYS_HORIZONTAL`, which in
+ *     Blender is the "Flatten Handles" operator (sets handle Y to a
+ *     zero-slope), NOT the round-to-nearest-frame operator.
  *
  *   - **Delete selected keyframes** —
  *     `reference/blender/source/blender/blenkernel/intern/fcurve.cc:1450-1490`
@@ -408,42 +412,59 @@ export function applyScale(fcurve, selection, origins, pivot, sX, sY) {
 
 /**
  * Run Blender's `BKE_nurb_bezt_handle_test` on one keyform given its
- * per-part selection flags (`reference/blender/source/blender/blenkernel/intern/curve.cc:4054-4084`).
+ * per-part selection flags
+ * (`reference/blender/source/blender/blenkernel/intern/curve.cc:4054-4084`).
  *
- * Behaviour (NURB_HANDLE_TEST_EACH mode — SS's default since per-handle
- * selection is a real concept here):
+ * The function maps directly to Blender's three BezTriple selection
+ * bits — `parts.left ↔ SEL_F1`, `parts.center ↔ SEL_F2`,
+ * `parts.right ↔ SEL_F3` — and runs the conversion ONLY when the
+ * combined flag set is a "partial selection" (`curve.cc:4065` —
+ * `!ELEM(flag, 0, SEL_F1|SEL_F2|SEL_F3)`). Nothing-selected and
+ * everything-selected both skip; any subset of one-or-two flags fires
+ * the conversions below.
  *
- *   - When `parts.left !== parts.right` (one handle moved without the
- *     other):
- *     - `HD_AUTO` / `HD_AUTO_ANIM` → `HD_ALIGN` on BOTH sides if EITHER
- *       was auto (so the next recalc doesn't override the moved side
- *       via the AUTO neighbour slope; see `applyHandleDrag` doc above).
- *     - `HD_VECT` → `HD_FREE` on the moved side only.
+ *   - **HD_AUTO / HD_AUTO_ANIM → HD_ALIGN on BOTH sides** if EITHER was
+ *     auto (`curve.cc:4066-4071`). Unconditional once the partial-
+ *     selection guard passes.
  *
- *   - When `parts.left === parts.right` (both moved together OR neither
- *     moved independently — the center-grab case): no-op. The whole
- *     keyform translated as a unit; relative handle shapes are
- *     preserved and Blender's test_handles makes no change either.
+ *   - **HD_VECT → HD_FREE** when the handle's own selection flag
+ *     DIFFERS from the centre flag — Blender's XOR check at
+ *     `curve.cc:4074` (`!(flag & SEL_F1) != !(flag & SEL_F2)`) for h1,
+ *     `curve.cc:4079` for h2. Audit-fix HIGH-B1 (2026-05-16) corrected
+ *     the prior SS port which used a `flag1 !== flag2` (left-vs-right)
+ *     guard; that missed the case where a handle moves "with" the
+ *     centre (both selected) and over-converted in some cases /
+ *     under-converted in others.
  *
- * Note: `parts.center` is irrelevant to this test — it's the F1/F3
- * (handle-only) flags that drive the conversion. SS's center grabs do
- * NOT mark `left`/`right` true (the handles ride along under
- * `applyGrabToKeyform`'s center branch); so `testKeyformHandles` is a
- * no-op for them, matching Blender's KNOT_ONLY result.
+ * Practical SS interpretation:
+ *   - Click-on-centre selects all three parts → `(f1,f2,f3) = (1,1,1)`
+ *     → no conversion (whole keyform transformed as a unit).
+ *   - Click-on-handle selects only that handle → e.g. `(0,0,1)` →
+ *     partial. AUTO→ALIGN both; right-VECT→FREE if VECT.
+ *   - Box-select that catches only the centre dot → `(0,1,0)` →
+ *     partial. AUTO→ALIGN both; left + right VECT→FREE if VECT.
+ *     This is unusual but Blender-faithful — the user singled out the
+ *     centre, so the handles get re-positioned as ALIGN/FREE rather
+ *     than re-computed via AUTO neighbour slopes.
  *
  * @param {BezTripleLike} kf
  * @param {SelectionParts} parts
  */
 export function testKeyformHandles(kf, parts) {
-  const flag1 = !!parts.left;
-  const flag2 = !!parts.right;
-  if (flag1 === flag2) return;
+  const f1 = !!parts.left;
+  const f2 = !!parts.center;
+  const f3 = !!parts.right;
+  // Partial-selection guard (curve.cc:4065).
+  const noneSelected = !f1 && !f2 && !f3;
+  const allSelected = f1 && f2 && f3;
+  if (noneSelected || allSelected) return;
   const ht = kf.handleType ?? { left: 'auto', right: 'auto' };
   const next = { left: ht.left, right: ht.right };
   if (ht.left === 'auto' || ht.left === 'auto_clamped') next.left = 'aligned';
   if (ht.right === 'auto' || ht.right === 'auto_clamped') next.right = 'aligned';
-  if (flag1 && next.left === 'vector') next.left = 'free';
-  if (flag2 && next.right === 'vector') next.right = 'free';
+  // VECT→FREE XOR-with-centre (curve.cc:4074, 4079).
+  if (next.left === 'vector' && (f1 !== f2)) next.left = 'free';
+  if (next.right === 'vector' && (f3 !== f2)) next.right = 'free';
   kf.handleType = next;
 }
 
@@ -492,15 +513,20 @@ export function snapKeyformsToFrame(fcurve, selection, msPerFrame) {
  * and a downstream `BKE_fcurve_handles_recalc` pass re-positions
  * auto/aligned/vector handles to satisfy the new type.
  *
- * The `applySide` argument lets the caller scope the write to just the
- * dragged side when partial-selection semantics matter; the V menu
- * in the editor passes `'both'` (Blender's GRAPH_OT_handle_type
- * touches both sides because the menu sets the whole-keyform type).
+ * **SS extension** (audit-fix HIGH-B4 disclosure, 2026-05-16): the
+ * `applySide` parameter has no Blender counterpart. Blender's
+ * `GRAPH_OT_handle_type` always writes BOTH `h1` and `h2` because the
+ * V menu sets the whole-keyform type; per-side selective writes are
+ * not exposed in Blender's operator surface. SS exposes the option so
+ * a future "Set Just This Handle Type" affordance has a place to
+ * land, but every call site in the editor currently passes `'both'`
+ * (e.g. `FCurveEditor.jsx::operatorSetHandleType`), preserving 1:1
+ * Blender parity for the V-menu user-flow.
  *
  * @param {FCurveLike} fcurve
  * @param {Map<number, SelectionParts>} selection
  * @param {'free'|'aligned'|'vector'|'auto'|'auto_clamped'} type
- * @param {'left'|'right'|'both'} applySide
+ * @param {'left'|'right'|'both'} applySide  -- SS-only; Blender always 'both'
  */
 export function setHandleType(fcurve, selection, type, applySide = 'both') {
   for (const [idx] of selection) {
@@ -601,7 +627,14 @@ export function deleteKeyforms(fcurve, selection) {
  *
  *   - For each cluster of keyforms at the same time:
  *     - Average the values of the SELECTED keyforms in the cluster;
- *       write that average to the LAST selected keyform.
+ *       write that average to the FIRST selected keyform. Audit-fix
+ *       HIGH-B3 (2026-05-16) corrected the prior SS port which kept
+ *       the LAST-index entry; Blender's pass-2 loop walks
+ *       `i = totvert-1` down to 0 (`fcurve.cc:1869`) and writes the
+ *       average to the keyframe whose `del_count == tot_count - 1` —
+ *       which in a reverse sweep is the LOWEST-index entry. Higher-
+ *       index duplicates are deleted first; the survivor is at the
+ *       cluster's start. SS now matches by keying off `[0]`.
  *     - Delete every other selected keyform in the cluster.
  *     - Delete EVERY unselected keyform in the cluster (Blender's
  *       `BKE_fcurve_delete_key(fcu, i)` at `fcurve.cc:1902` —
@@ -662,11 +695,13 @@ export function mergeDuplicateTimeKeys(fcurve, selection, epsMs = 0.5) {
         i = j;
         continue;
       }
-      // Average the selected values; write to LAST selected.
+      // Average the selected values; write to FIRST selected (matches
+      // Blender's reverse-sweep "keep when del_count == tot_count - 1"
+      // semantic, fcurve.cc:1869-1899; audit-fix HIGH-B3).
       let sum = 0;
       for (const k of selectedInCluster) sum += kfs[k].value;
       const avg = sum / selectedInCluster.length;
-      const keepIdx = selectedInCluster[selectedInCluster.length - 1];
+      const keepIdx = selectedInCluster[0];
       kfs[keepIdx].value = avg;
       // Delete every other selected entry in the cluster.
       for (const k of selectedInCluster) {

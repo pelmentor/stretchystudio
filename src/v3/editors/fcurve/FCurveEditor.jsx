@@ -27,9 +27,18 @@
  *
  *   - **G** — modal grab over selected keyforms (per-part). Hold Ctrl to
  *     snap dTime to whole frames; Shift = 0.1× precision multiplier.
- *     LMB / Enter confirm; Esc / RMB cancel.
+ *     LMB / Enter confirm; Esc / RMB cancel. **SS-deferred** (audit-fix
+ *     MED-B6, 2026-05-16): Blender's modal transform also supports
+ *     axis-lock (X/Y) and typed numeric input
+ *     (`transform_mode.cc` numinput hooks). Both are unimplemented in
+ *     this slice; the 5.C ship deliberately scopes to the
+ *     pointer-driven path because axis lock + typed input belong to a
+ *     follow-on modal-typing slice that will share its implementation
+ *     with the viewport's `ModalTransformOverlay` (already wires axis
+ *     + typed-buffer for canvas G/R/S).
  *   - **S** — modal scale around the pivot (selection median time +
- *     median value). Same modifiers as G.
+ *     median value). Same modifiers as G. Same SS-deferred caveat re:
+ *     axis lock + typed numeric input.
  *   - **B** — box-select via local rubber-band rect. Replace by default;
  *     Shift = add; Ctrl = subtract.
  *   - **V** — handle-type menu (Free / Aligned / Vector / Auto /
@@ -246,6 +255,14 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   // Slice 5.C — modal G/S also opens an undo batch + window listeners
   // that need the same unmount-cleanup contract.
   const modalCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
+  // Audit-fix HIGH-A5 (2026-05-16) — box-select adds three window-level
+  // listeners (mousemove/mouseup/keydown). Without this cleanup ref,
+  // unmounting the editor mid-box-select left the listeners attached;
+  // every subsequent mousemove fired `setBoxSelect(...)` on the
+  // unmounted component until the user happened to release the mouse,
+  // generating React's "Can't perform a React state update on an
+  // unmounted component" warning and a slow leak.
+  const boxSelectCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
   // Track latest selectedHandles for handlers/effects that capture a ref;
   // React closes over the state at render time which is fine for the
   // first frame of a modal but stale by the next tick.
@@ -281,7 +298,8 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     return () => ro.disconnect();
   }, []);
 
-  // Audit-fix HIGH-A1: unmount cleanup for any in-flight drag/modal.
+  // Audit-fix HIGH-A1 (Slice 5.B) + HIGH-A5 (Slice 5.C audit) — unmount
+  // cleanup for any in-flight drag / modal / box-select.
   useEffect(() => {
     return () => {
       if (dragCleanupRef.current) {
@@ -291,6 +309,10 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       if (modalCleanupRef.current) {
         modalCleanupRef.current();
         modalCleanupRef.current = null;
+      }
+      if (boxSelectCleanupRef.current) {
+        boxSelectCleanupRef.current();
+        boxSelectCleanupRef.current = null;
       }
     };
   }, []);
@@ -618,16 +640,23 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
 
     const msPerFrame = fps > 0 ? 1000 / fps : 1000 / 24;
 
-    /** @type {Map<number, number>} kf-by-its-object-ref → its origin-key */
-    const liveOriginsByObject = new Map();
-    // Track post-sort index re-mapping by walking from the captured
-    // origins to current array positions via object identity.
+    // Audit-fix HIGH-A2 (2026-05-16) — replaced the prior reverse-scan
+    // `indexOfOriginMap(curIdx, dragIdxByOrigin)` with a forward
+    // object-identity lookup. The reverse scan returned the FIRST
+    // origIdx whose mapped value equalled `curIdx`; when two selected
+    // origins transiently shared the same `curIdx` (e.g., a prior
+    // tick's sort collapsed two crosses before merge ran), the scan
+    // collapsed them to the same origin and the other origin's
+    // tracking went stale for the rest of the modal session.
+    //
+    // The forward map is rebuilt every tick: we snapshot the kf object
+    // refs from the immer draft AFTER the grab/scale but BEFORE the
+    // sort, then walk the post-sort array and look each kf back up by
+    // identity. `Array.prototype.sort` permutes but never duplicates
+    // entries, so identity is a sound key.
     let dragIdxByOrigin = new Map(
       [...origins.keys()].map((idx) => [idx, idx]),
     );
-    // Stash kf object refs at modal-start so we can find their new
-    // positions post-sort. We grab them via the immer recipe (the
-    // current draft) so we always read the active project tree.
 
     function applyModal(currentX, currentY, shiftKey, ctrlKey) {
       const dxPx = currentX - startClientX;
@@ -677,19 +706,23 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
         } else {
           applyScale(fc, workSelection, workOrigins, pivot, scaleFactor, scaleFactor);
         }
-        // Record kf object refs so we can re-find them after the sort.
-        liveOriginsByObject.clear();
-        for (const [curIdx] of workSelection) {
+        // Snapshot origIdx → kfObject from the post-grab / pre-sort
+        // draft. We need the kf object refs BEFORE the sort so we can
+        // re-find each selected entry at its new index after the sort.
+        /** @type {Map<number, any>} */
+        const objsByOrigIdx = new Map();
+        for (const [origIdx, curIdx] of dragIdxByOrigin) {
           const k = fc.keyforms[curIdx];
-          if (k) liveOriginsByObject.set(k, indexOfOriginMap(curIdx, dragIdxByOrigin));
+          if (k) objsByOrigIdx.set(origIdx, k);
         }
         fc.keyforms.sort((a, b) => a.time - b.time);
-        // Re-map origins to new indices via object identity.
-        const nextMap = new Map(dragIdxByOrigin);
-        for (let i = 0; i < fc.keyforms.length; i++) {
-          const k = fc.keyforms[i];
-          const origKey = liveOriginsByObject.get(k);
-          if (typeof origKey === 'number') nextMap.set(origKey, i);
+        // Re-derive dragIdxByOrigin via identity (Array.prototype.sort
+        // permutes refs without duplication, so `indexOf` is sound and
+        // O(n) lookup is acceptable for SS-typical kf counts).
+        const nextMap = new Map();
+        for (const [origIdx, obj] of objsByOrigIdx) {
+          const ni = fc.keyforms.indexOf(obj);
+          if (ni >= 0) nextMap.set(origIdx, ni);
         }
         dragIdxByOrigin = nextMap;
       }, { skipHistory: true });
@@ -835,6 +868,11 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const startY = anchorClient.y - rect.top;
     setBoxSelect({ x: startX, y: startY, curX: startX, curY: startY, modifier: 'replace' });
 
+    function removeListeners() {
+      window.removeEventListener('mousemove', onMove, { capture: true });
+      window.removeEventListener('mouseup', onUp, { capture: true });
+      window.removeEventListener('keydown', onKey, { capture: true });
+    }
     function onMove(ev) {
       const r = canvasRef.current?.getBoundingClientRect();
       if (!r) return;
@@ -844,9 +882,8 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       setBoxSelect({ x: startX, y: startY, curX: cx, curY: cy, modifier });
     }
     function onUp(ev) {
-      window.removeEventListener('mousemove', onMove, { capture: true });
-      window.removeEventListener('mouseup', onUp, { capture: true });
-      window.removeEventListener('keydown', onKey, { capture: true });
+      removeListeners();
+      boxSelectCleanupRef.current = null;
       const r = canvasRef.current?.getBoundingClientRect();
       if (!r) { setBoxSelect(null); return; }
       const cx = ev.clientX - r.left;
@@ -864,17 +901,32 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     function onKey(ev) {
       if (ev.key === 'Escape') {
         ev.preventDefault();
-        window.removeEventListener('mousemove', onMove, { capture: true });
-        window.removeEventListener('mouseup', onUp, { capture: true });
-        window.removeEventListener('keydown', onKey, { capture: true });
+        removeListeners();
+        boxSelectCleanupRef.current = null;
         setBoxSelect(null);
       }
     }
     window.addEventListener('mousemove', onMove, { capture: true });
     window.addEventListener('mouseup', onUp, { capture: true });
     window.addEventListener('keydown', onKey, { capture: true });
+    // Audit-fix HIGH-A5 (2026-05-16): expose cleanup so an unmount
+    // mid-box-select releases the three window-level listeners and
+    // clears the in-flight rubberband. Sister of dragCleanupRef +
+    // modalCleanupRef from Slices 5.B/5.C.
+    boxSelectCleanupRef.current = () => {
+      removeListeners();
+      boxSelectCleanupRef.current = null;
+      setBoxSelect(null);
+    };
   }
 
+  // Audit-fix MED-B5 (2026-05-16) — SS unconditionally tests the
+  // keyform centre + both handle dots against the rect, matching
+  // Blender's `GRAPH_OT_select_box` default `include_handles = true`
+  // (`reference/blender/source/blender/editors/space_graph/graph_select.cc:933-940`).
+  // The `include_handles = false` mode (handles follow the centre's
+  // pick result instead of being tested individually) is unimplemented
+  // and a follow-on slice would expose it as an editor preference.
   function applyBoxSelect(x1, y1, x2, y2, modifier) {
     const next = modifier === 'replace' ? new Map() : cloneSelection(selectionRef.current);
     for (let i = 0; i < fcurve.keyforms.length; i++) {
@@ -961,11 +1013,19 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   function operatorDelete() {
     const sel = selectionRef.current;
     if (sel.size === 0) return;
-    // Don't delete if it would leave 0 keyforms — every FCurve in SS
-    // assumes ≥1 keyform (evaluator returns the lone value as the
-    // constant). Two-keyform-curves are valid; one-keyform-curves too;
-    // zero-keyform-curves are unrepresented (the Timeline shows them
-    // as missing and pickFCurve drops them).
+    // Audit-fix HIGH-A4 (2026-05-16) — the "would leave zero keyforms"
+    // guard now fires BEFORE `beginBatch`. The prior shape called
+    // `beginBatch` unconditionally and then bailed inside the recipe;
+    // every no-op delete then pushed a phantom snapshot onto the undo
+    // stack, so Ctrl+Z after a "can't delete the last keyform" attempt
+    // consumed an undo slot and restored the project to itself.
+    //
+    // The Timeline shows ≥1-keyform curves only; zero-keyform curves
+    // are unrepresented (pickFCurve drops them and the evaluator would
+    // return undefined). So we refuse to drop the curve's last entry.
+    const wouldDelete = countDeletable(sel);
+    if (wouldDelete === 0) return;
+    if (fcurve.keyforms.length - wouldDelete < 1) return;
     const fcurveId = fcurve.id;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
@@ -974,8 +1034,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       if (!a) return;
       const fc = a.fcurves.find((f) => f.id === fcurveId);
       if (!fc) return;
-      const wouldDelete = countDeletable(sel);
-      if (fc.keyforms.length - wouldDelete < 1) return;
       const remap = deleteKeyforms(fc, sel);
       recalcKeyformHandles(fc.keyforms);
       // Propagate remap to React state.
@@ -1004,10 +1062,36 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       if (!a) return;
       const fc = a.fcurves.find((f) => f.id === fcurveId);
       if (!fc) return;
+      // Audit-fix HIGH-A1 / MED-B7 (2026-05-16) — pre-snap the array
+      // is in time-order; post-snap the times have shifted and the
+      // sort may permute entries. We capture origIdx → kf object refs
+      // BEFORE the sort, then re-derive a post-sort selection via
+      // identity so `mergeDuplicateTimeKeys` is fed indices that
+      // actually point at the selected entries. Without this remap,
+      // the snap could silently merge the wrong keyform (collapsing
+      // an unselected entry against a selected one and dropping the
+      // user's snapped position).
+      /** @type {Map<number, any>} */
+      const objsByOrigIdx = new Map();
+      for (const [origIdx] of sel) {
+        const k = fc.keyforms[origIdx];
+        if (k) objsByOrigIdx.set(origIdx, k);
+      }
       snapKeyformsToFrame(fc, sel, msPerFrame);
       fc.keyforms.sort((a, b) => a.time - b.time);
-      mergeDuplicateTimeKeys(fc, sel);
+      /** @type {Map<number, {center:boolean,left:boolean,right:boolean}>} */
+      const postSortSel = new Map();
+      for (const [origIdx, parts] of sel) {
+        const obj = objsByOrigIdx.get(origIdx);
+        if (!obj) continue;
+        const ni = fc.keyforms.indexOf(obj);
+        if (ni >= 0) postSortSel.set(ni, parts);
+      }
+      const remap = mergeDuplicateTimeKeys(fc, postSortSel);
       recalcKeyformHandles(fc.keyforms);
+      queueMicrotask(() => {
+        setSelectedHandles(remapSelection(postSortSel, remap));
+      });
     });
     endBatch();
   }
@@ -1090,7 +1174,13 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       else operatorSelectAll();
       return;
     }
-  }, [modal, menu, fcurve, fps]);
+    // Audit-fix MED-A2 (2026-05-16) — `view` is in the dep array so
+    // `startModal`'s captured `snap` (= `view`) refreshes when the
+    // container resizes between hotkey presses. Without this, the
+    // first G after a resize used pre-resize `plotW`/`plotH` for
+    // dTime/dValue math; the cursor delta computed wrong magnitudes
+    // until the next render that touched `fcurve` or `fps`.
+  }, [modal, menu, fcurve, fps, view]);
 
   return (
     <div
@@ -1424,13 +1514,6 @@ function countDeletable(sel) {
   let n = 0;
   for (const [, parts] of sel) if (parts.center) n++;
   return n;
-}
-
-function indexOfOriginMap(curIdx, dragIdxByOrigin) {
-  for (const [origIdx, mapped] of dragIdxByOrigin) {
-    if (mapped === curIdx) return origIdx;
-  }
-  return -1;
 }
 
 function mostCommon(counts) {
