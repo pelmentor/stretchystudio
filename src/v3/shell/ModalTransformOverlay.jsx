@@ -54,6 +54,26 @@ import {
   useSnapStore,
 } from '../../lib/snap/index.js';
 
+/** Audit 4 #4 — render the live delta for the HUD. Translate emits the
+ *  signed canvas-px delta along the active axis (or the diagonal magnitude
+ *  when both axes are free); rotate emits degrees; scale emits the
+ *  multiplier. Mirrors Blender's `WM_OT_translate` / `WM_OT_rotate` /
+ *  `WM_OT_resize` header echo (`transform.cc:headerprint_*`). */
+function formatLiveDelta(kind, axis, d) {
+  if (kind === 'rotate') {
+    const deg = (d.dRot ?? 0) * 180 / Math.PI;
+    return deg.toFixed(2);
+  }
+  if (kind === 'scale') {
+    return (d.scale ?? 1).toFixed(3);
+  }
+  // translate
+  if (axis === 'x') return (d.dx ?? 0).toFixed(1);
+  if (axis === 'y') return (d.dy ?? 0).toFixed(1);
+  // unconstrained: show as "x, y" pair
+  return `${(d.dx ?? 0).toFixed(1)}, ${(d.dy ?? 0).toFixed(1)} `;
+}
+
 /** Phase 2 audit fix (D-1) — Shift acts as Blender's `MOD_PRECISION`
  *  during modal G/R/S. Multiplier matches Blender's translate
  *  precision (0.1 = 10× finer). Per `transform_snap.cc:1726` the snap
@@ -73,9 +93,13 @@ export function ModalTransformOverlay() {
   const pivotCanvas = useModalTransformStore((s) => s.pivotCanvas);
   const original    = useModalTransformStore((s) => s.original);
   const typedBuffer = useModalTransformStore((s) => s.typedBuffer);
+  const numericMode = useModalTransformStore((s) => s.numericMode);
+  const liveDelta   = useModalTransformStore((s) => s.liveDelta);
   const setAxis     = useModalTransformStore((s) => s.setAxis);
   const appendTyped = useModalTransformStore((s) => s.appendTyped);
   const popTyped    = useModalTransformStore((s) => s.popTyped);
+  const toggleNumericMode = useModalTransformStore((s) => s.toggleNumericMode);
+  const setLiveDelta = useModalTransformStore((s) => s.setLiveDelta);
   const commit      = useModalTransformStore((s) => s.commit);
   const cancel      = useModalTransformStore((s) => s.cancel);
 
@@ -177,9 +201,22 @@ export function ModalTransformOverlay() {
       // mouse-delta. Translate distributes the typed value along the
       // active axis (default X if no axis); rotate uses degrees;
       // scale uses the typed value as the multiplier.
+      //
+      // Audit 4 #4 — numeric-input mode (`=` toggle). When enabled,
+      // the modal HOLDS at the typed value (default 0) regardless of
+      // mouse position; this matches Blender's NUM_EDIT_FULL semantics
+      // where the typed string is the authoritative value. With an
+      // empty buffer we treat typed as 0.
       const tb = useModalTransformStore.getState().typedBuffer;
-      const typed = parseTyped(tb);
-      const useTyped = Number.isFinite(typed);
+      const numMode = useModalTransformStore.getState().numericMode;
+      let typed = parseTyped(tb);
+      let useTyped = Number.isFinite(typed);
+      if (numMode && !useTyped) {
+        // Numeric mode with empty buffer → hold at 0 (translate/rotate)
+        // or 1 (scale identity). Mouse delta is suppressed.
+        typed = kind === 'scale' ? 1 : 0;
+        useTyped = true;
+      }
 
       if (useTyped && kind === 'translate') {
         // Axis-locked typed translate: typed value goes on the locked
@@ -266,6 +303,63 @@ export function ModalTransformOverlay() {
         dyCanvas = p.y;
       }
 
+      // Audit 4 #4 — lift rotation / scale magnitude out of the per-node
+      // loop. Both are gesture-level (independent of which node the
+      // transform applies to), so computing them once per applyDelta tick
+      // lets us publish them to `liveDelta` for the always-visible HUD.
+      let dRot = 0;
+      let scaleMag = 1;
+      if (kind === 'rotate') {
+        if (useTyped) {
+          dRot = typed * Math.PI / 180; // typed is degrees
+        } else {
+          const ax0 = startMouse.x / zoom - pivotCanvas.x;
+          const ay0 = startMouse.y / zoom - pivotCanvas.y;
+          const ax1 = currentX / zoom - pivotCanvas.x;
+          const ay1 = currentY / zoom - pivotCanvas.y;
+          dRot = Math.atan2(ay1, ax1) - Math.atan2(ay0, ax0);
+          // Phase 2.D — rotation snap is auto-engaging when master
+          // + increment.enabled. Shift = precision (Blender's 5°→1°
+          // = `precision`). Without snap, Shift = MOD_PRECISION
+          // applied to the raw rotation delta.
+          if (effSnap && snap?.modes?.increment?.enabled) {
+            const inc = snap.modes.increment;
+            const stepDeg = shift
+              ? (inc.precision > 0 ? inc.precision : 1)
+              : (inc.value > 0 ? inc.value : 5);
+            dRot = snapAngleToIncrement(dRot, stepDeg);
+          } else if (shift) {
+            dRot = applyPrecisionToAngle(dRot, PRECISION_FREE_ROTATE);
+          }
+        }
+      } else if (kind === 'scale') {
+        if (useTyped) {
+          scaleMag = typed;
+        } else {
+          const d0 = Math.hypot(
+            startMouse.x / zoom - pivotCanvas.x,
+            startMouse.y / zoom - pivotCanvas.y,
+          ) || 1;
+          const d1 = Math.hypot(
+            currentX / zoom - pivotCanvas.x,
+            currentY / zoom - pivotCanvas.y,
+          );
+          scaleMag = d1 / d0;
+          if (!Number.isFinite(scaleMag) || scaleMag <= 0) scaleMag = 1;
+          // Scale snap — sister of rotation. `increment.value` is
+          // in degrees; scale step = value/100 (so 5° → 0.05×).
+          if (effSnap && snap?.modes?.increment?.enabled) {
+            const inc = snap.modes.increment;
+            const stepDeg = shift
+              ? (inc.precision > 0 ? inc.precision : 1)
+              : (inc.value > 0 ? inc.value : 5);
+            scaleMag = snapScaleToIncrement(scaleMag, stepDeg);
+          } else if (shift) {
+            scaleMag = applyPrecisionToScale(scaleMag, PRECISION_FREE_SCALE);
+          }
+        }
+      }
+
       const updateProject = useProjectStore.getState().updateProject;
       updateProject((proj) => {
         for (const [nodeId, orig] of original) {
@@ -280,59 +374,10 @@ export function ModalTransformOverlay() {
             const ny = (orig.y ?? 0) + dyCanvas;
             writer(node, { x: nx, y: ny });
           } else if (kind === 'rotate') {
-            let dRot;
-            if (useTyped) {
-              dRot = typed * Math.PI / 180; // typed is degrees
-            } else {
-              const ax0 = startMouse.x / zoom - pivotCanvas.x;
-              const ay0 = startMouse.y / zoom - pivotCanvas.y;
-              const ax1 = currentX / zoom - pivotCanvas.x;
-              const ay1 = currentY / zoom - pivotCanvas.y;
-              dRot = Math.atan2(ay1, ax1) - Math.atan2(ay0, ax0);
-              // Phase 2.D — rotation snap is auto-engaging when master
-              // + increment.enabled. Shift = precision (Blender's 5°→1°
-              // = `precision`). Without snap, Shift = MOD_PRECISION
-              // applied to the raw rotation delta.
-              if (effSnap && snap?.modes?.increment?.enabled) {
-                const inc = snap.modes.increment;
-                const stepDeg = shift
-                  ? (inc.precision > 0 ? inc.precision : 1)
-                  : (inc.value > 0 ? inc.value : 5);
-                dRot = snapAngleToIncrement(dRot, stepDeg);
-              } else if (shift) {
-                dRot = applyPrecisionToAngle(dRot, PRECISION_FREE_ROTATE);
-              }
-            }
             writer(node, { rotation: (orig.rotation ?? 0) + dRot });
           } else if (kind === 'scale') {
-            let s;
-            if (useTyped) {
-              s = typed;
-            } else {
-              const d0 = Math.hypot(
-                startMouse.x / zoom - pivotCanvas.x,
-                startMouse.y / zoom - pivotCanvas.y,
-              ) || 1;
-              const d1 = Math.hypot(
-                currentX / zoom - pivotCanvas.x,
-                currentY / zoom - pivotCanvas.y,
-              );
-              s = d1 / d0;
-              if (!Number.isFinite(s) || s <= 0) s = 1;
-              // Scale snap — sister of rotation. `increment.value` is
-              // in degrees; scale step = value/100 (so 5° → 0.05×).
-              if (effSnap && snap?.modes?.increment?.enabled) {
-                const inc = snap.modes.increment;
-                const stepDeg = shift
-                  ? (inc.precision > 0 ? inc.precision : 1)
-                  : (inc.value > 0 ? inc.value : 5);
-                s = snapScaleToIncrement(s, stepDeg);
-              } else if (shift) {
-                s = applyPrecisionToScale(s, PRECISION_FREE_SCALE);
-              }
-            }
-            const sx = axis === 'y' ? 1 : s;
-            const sy = axis === 'x' ? 1 : s;
+            const sx = axis === 'y' ? 1 : scaleMag;
+            const sy = axis === 'x' ? 1 : scaleMag;
             writer(node, {
               scaleX: (orig.scaleX ?? 1) * sx,
               scaleY: (orig.scaleY ?? 1) * sy,
@@ -340,6 +385,16 @@ export function ModalTransformOverlay() {
           }
         }
       }, { skipHistory: true });
+
+      // Audit 4 #4 — publish the live delta to the HUD. Frozen object
+      // so referential equality against ZERO_DELTA stays meaningful for
+      // selectors that bail on no-op reflows.
+      setLiveDelta(Object.freeze({
+        dx: dxCanvas,
+        dy: dyCanvas,
+        dRot,
+        scale: scaleMag,
+      }));
     }
 
     function onMouseMove(e) {
@@ -364,14 +419,22 @@ export function ModalTransformOverlay() {
     function onContextMenu(e) {
       // Right-click = cancel. Need to suppress browser menu.
       e.preventDefault();
+      e.stopPropagation();
       revert();
       endBatch();
       useSnapStore.getState().clearSnapTarget();
       cancel();
     }
     function onKeyDown(e) {
+      // Audit 4 #4 — stopPropagation on every modal key, mirroring the
+      // sister vertex modal (`ModalVertexTransformOverlay.jsx:304`'s
+      // audit fix G-3 + G-4). Without it, other window keydown
+      // listeners (command palette F3, AppShell global hotkeys) could
+      // see the modal-consumed event and fire spurious actions while
+      // the user is in the middle of a drag.
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         revert();
         endBatch();
         useSnapStore.getState().clearSnapTarget();
@@ -380,13 +443,49 @@ export function ModalTransformOverlay() {
       }
       if (e.key === 'Enter') {
         e.preventDefault();
+        e.stopPropagation();
         endBatch();
         useSnapStore.getState().clearSnapTarget();
         commit();
         return;
       }
-      if (e.code === 'KeyX') { e.preventDefault(); setAxis(axis === 'x' ? null : 'x'); return; }
-      if (e.code === 'KeyY') { e.preventDefault(); setAxis(axis === 'y' ? null : 'y'); return; }
+      // Audit 4 #4 — Shift+X / Shift+Y noop. Blender's `TFM_MODAL_PLANE_X`
+      // / `TFM_MODAL_PLANE_Y` chord is the 3D plane lock-out (orthogonal-
+      // axis exclusion); in 2D mode it's explicitly disabled at
+      // `transform.cc:660-662` (`if (t->flag & T_2D_EDIT) return false`).
+      // SS is a 2D editor, so the chord must be a noop instead of falling
+      // through to the bare-axis toggle below.
+      if (e.shiftKey && (e.code === 'KeyX' || e.code === 'KeyY')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.code === 'KeyX') {
+        e.preventDefault();
+        e.stopPropagation();
+        setAxis(axis === 'x' ? null : 'x');
+        return;
+      }
+      if (e.code === 'KeyY') {
+        e.preventDefault();
+        e.stopPropagation();
+        setAxis(axis === 'y' ? null : 'y');
+        return;
+      }
+      // Audit 4 #4 — `=` toggles explicit numeric-input mode. Mirrors
+      // Blender's `NUM_EDIT_FULL` flag (`numinput.cc:367-380`). With it
+      // on, the modal holds at the typed value (default 0 / scale 1)
+      // regardless of mouse position; the user types digits to drive
+      // the transform precisely. Re-fire applyDelta so the HUD and the
+      // project reflect the new mode immediately.
+      if (e.key === '=') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleNumericMode();
+        const cur = lastMouse.current;
+        applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
+        return;
+      }
       // BVR-005 — typed numeric input. Digits / sign / decimal point
       // accumulate into modalTransformStore.typedBuffer. Backspace
       // pops. The buffer is then read by the next applyDelta tick
@@ -394,6 +493,7 @@ export function ModalTransformOverlay() {
       // typed value without the user nudging the mouse).
       if (e.key === 'Backspace') {
         e.preventDefault();
+        e.stopPropagation();
         popTyped();
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
@@ -405,6 +505,7 @@ export function ModalTransformOverlay() {
         || e.key === '.'
       )) {
         e.preventDefault();
+        e.stopPropagation();
         appendTyped(e.key);
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
@@ -480,29 +581,42 @@ export function ModalTransformOverlay() {
       // the snap target here so the magenta dot doesn't stick around.
       useSnapStore.getState().clearSnapTarget();
     };
-  }, [kind, axis, startMouse, pivotCanvas, original, setAxis, appendTyped, popTyped, commit, cancel]);
+  }, [kind, axis, startMouse, pivotCanvas, original, setAxis, appendTyped, popTyped, toggleNumericMode, setLiveDelta, commit, cancel]);
 
   if (!kind) return null;
 
-  // Visible HUD: small badge at the top showing kind + axis + snap.
-  // BVR-005 — typed buffer surfaces here so the user sees what they're
-  // typing in real time. Unit suffix matches the operation: px (G),
-  // ° (R), × (S).
+  // Visible HUD: small badge at the top showing kind + axis + numeric
+  // mode + always-visible delta + typed buffer + hint strip.
+  //
+  // Audit 4 #4 — the prior HUD only showed a value when the user was
+  // typing. Now the live delta surfaces every frame so users can read
+  // the gesture's magnitude without committing. Typed buffer (when
+  // present) overrides the live readout — that's the user's intent.
+  // Numeric mode (`=`) shows a "= 0" hint when the buffer is empty so
+  // the user knows the modal is held at zero waiting for input.
   const unit = kind === 'rotate' ? '°' : kind === 'scale' ? '×' : 'px';
   const showTyped = (typedBuffer ?? '').length > 0;
+  const liveValueText = formatLiveDelta(kind, axis, liveDelta);
   return (
     <>
       <SnapTargetDot kind={kind} />
       <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[200] pointer-events-none flex items-center gap-2 px-3 py-1.5 bg-popover/95 border border-border rounded text-xs font-mono shadow-lg">
         <span className="text-primary uppercase tracking-wider">{kind}</span>
         {axis ? <span className="text-amber-500">axis: {axis.toUpperCase()}</span> : null}
+        {numericMode ? (
+          <span className="text-blue-400" title="Numeric input mode (=)">= </span>
+        ) : null}
         {showTyped ? (
           <span className="text-foreground">
             {typedBuffer}<span className="text-muted-foreground/70">{unit}</span>
           </span>
-        ) : null}
+        ) : (
+          <span className="text-foreground/80">
+            {liveValueText}<span className="text-muted-foreground/70">{unit}</span>
+          </span>
+        )}
         <span className="text-muted-foreground">
-          Type a value · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = snap
+          Type · Click/Enter confirm · Esc cancel · X/Y axis · = numeric · Shift snap
         </span>
       </div>
     </>

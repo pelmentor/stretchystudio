@@ -37,6 +37,12 @@ import { create } from 'zustand';
 /**
  * @typedef {('translate'|'rotate'|'scale')} TransformKind
  *
+ * @typedef {Object} LiveDelta
+ * @property {number} dx     - canvas-px translate X
+ * @property {number} dy     - canvas-px translate Y
+ * @property {number} dRot   - radians rotation
+ * @property {number} scale  - multiplier (1 = no change)
+ *
  * @typedef {Object} ModalTransformState
  * @property {TransformKind|null} kind
  * @property {('x'|'y'|null)} axis
@@ -45,15 +51,34 @@ import { create } from 'zustand';
  * @property {Map<string, any>} original           - nodeId → original transform clone
  * @property {boolean} committed
  * @property {string} typedBuffer
+ * @property {boolean} numericMode  - Audit 4 #4: `=` toggles explicit
+ *                                    numeric input mode; mouse delta is
+ *                                    suppressed (typed value drives the
+ *                                    transform, defaults to 0 if buffer
+ *                                    empty). Mirrors Blender's
+ *                                    `NUM_EDIT_FULL` flag toggled by `=`
+ *                                    in `numinput.cc:367-380`.
+ * @property {LiveDelta} liveDelta  - Audit 4 #4: HUD always-visible
+ *                                    delta. Updated per mousemove by the
+ *                                    overlay's applyDelta so the user
+ *                                    sees the live numeric value even
+ *                                    without typing.
  * @property {(args: {kind: TransformKind, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<string, any>}) => void} begin
  * @property {(axis: ('x'|'y'|null)) => void} setAxis
  * @property {(ch: string) => void} appendTyped
  * @property {() => void} popTyped
  * @property {() => void} clearTyped
+ * @property {() => void} toggleNumericMode
+ * @property {(d: LiveDelta) => void} setLiveDelta
  * @property {() => void} commit
  * @property {() => void} cancel
  * @property {() => void} reset
  */
+
+/** Frozen empty state for liveDelta — same instance reused so the
+ *  `useStore((s) => s.liveDelta)` selector returns a stable ref when
+ *  nothing is dragging. */
+const ZERO_DELTA = Object.freeze({ dx: 0, dy: 0, dRot: 0, scale: 1 });
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<ModalTransformState>>} */
 export const useModalTransformStore = create((set) => ({
@@ -64,9 +89,15 @@ export const useModalTransformStore = create((set) => ({
   original: new Map(),
   committed: false,
   typedBuffer: '',
+  numericMode: false,
+  liveDelta: ZERO_DELTA,
 
   begin: ({ kind, startMouse, pivotCanvas, original }) =>
-    set({ kind, axis: null, startMouse, pivotCanvas, original, committed: false, typedBuffer: '' }),
+    set({
+      kind, axis: null, startMouse, pivotCanvas, original,
+      committed: false, typedBuffer: '', numericMode: false,
+      liveDelta: ZERO_DELTA,
+    }),
 
   setAxis: (axis) => set({ axis }),
 
@@ -88,13 +119,44 @@ export const useModalTransformStore = create((set) => ({
     }
     return state;
   }),
-  /** Backspace: drop last char. */
-  popTyped: () => set((state) => ({
-    typedBuffer: (state.typedBuffer ?? '').slice(0, -1),
-  })),
+  /** Backspace: drop last char. If buffer becomes empty AND numericMode
+   *  was set explicitly via `=`, also turn numericMode off so the modal
+   *  releases back to mouse-driven (one extra Backspace exits numeric
+   *  mode rather than leaving the user stuck with a 0-locked transform). */
+  popTyped: () => set((state) => {
+    const next = (state.typedBuffer ?? '').slice(0, -1);
+    if (next.length === 0 && state.numericMode) {
+      return { typedBuffer: '', numericMode: false };
+    }
+    return { typedBuffer: next };
+  }),
   clearTyped: () => set({ typedBuffer: '' }),
 
-  commit: () => set({ committed: true, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
-  cancel: () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
-  reset:  () => set({ committed: false, kind: null, axis: null, startMouse: null, pivotCanvas: null, original: new Map(), typedBuffer: '' }),
+  /** Audit 4 #4 — `=` toggles explicit numeric-input mode. Mirrors
+   *  Blender's `NUM_EDIT_FULL` flag from `numinput.cc:367-380`. With
+   *  numericMode true and an empty buffer, the transform is held at
+   *  the typed value (defaults to 0) instead of following the mouse;
+   *  the user types digits to drive the value precisely. */
+  toggleNumericMode: () => set((state) => ({ numericMode: !state.numericMode })),
+
+  /** Audit 4 #4 — applyDelta publishes the post-snap, post-precision
+   *  delta here so the HUD can render it always-visible (not just when
+   *  the user is typing). Called per mousemove tick. */
+  setLiveDelta: (d) => set({ liveDelta: d }),
+
+  commit: () => set({
+    committed: true, kind: null, axis: null, startMouse: null,
+    pivotCanvas: null, original: new Map(), typedBuffer: '',
+    numericMode: false, liveDelta: ZERO_DELTA,
+  }),
+  cancel: () => set({
+    committed: false, kind: null, axis: null, startMouse: null,
+    pivotCanvas: null, original: new Map(), typedBuffer: '',
+    numericMode: false, liveDelta: ZERO_DELTA,
+  }),
+  reset: () => set({
+    committed: false, kind: null, axis: null, startMouse: null,
+    pivotCanvas: null, original: new Map(), typedBuffer: '',
+    numericMode: false, liveDelta: ZERO_DELTA,
+  }),
 }));
