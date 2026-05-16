@@ -17,13 +17,24 @@
  *             `useModalVertexTransformStore` + `useEditorStore.editMode`
  *             + active-head dataKind. Modal active → keybind + live
  *             delta (matches the on-canvas HUD). No modal → mode label.
+ *             Deviation from Blender's `uiTemplateInputStatus`: the
+ *             non-modal cursor-region keymap hint row (LMB/MMB/RMB
+ *             labels per active editor area) is NOT surfaced — SS has
+ *             no cursor-area-zone keymap primitive. See module JSDoc
+ *             in `footerStatusData.js` for the rationale.
  *   - CENTER — `countReports(...)` over `useLogsStore.entries`. Renders
  *              warn (yellow) + error (red) pills with counts; hidden
  *              when both are zero. Title attr names the entry kind +
- *              count for keyboard / screen-reader access.
+ *              count for keyboard / screen-reader access. Deviation
+ *              from Blender's `uiTemplateReportsBanner`: SS shows
+ *              aggregate counts (permanent) instead of a timed
+ *              fade-out single-message banner.
  *   - RIGHT  — `formatStats(...)` over `useEditorStore.selection` +
  *              active-head dataKind + per-mode embellishments (vert
- *              count in mesh-edit).
+ *              count in mesh-edit). Deviation from Blender's
+ *              `uiTemplateStatusInfo`: SS surfaces object-selection-
+ *              level info rather than scene-level vert/edge/face
+ *              counts (no scene-stats plumbing today).
  *
  * Future-target: when the F-1 follow-on transport-row lift lands
  * (`TimelineHeader.jsx:25-32` notes the plan), the center area can
@@ -70,26 +81,41 @@ export function Footer() {
   const vModalAxis  = useModalVertexTransformStore((s) => s.axis);
   const vModalTyped = useModalVertexTransformStore((s) => s.typedBuffer);
 
-  const editMode       = useEditorStore((s) => s.editMode);
-  const selection      = useEditorStore((s) => s.selection);
+  const editMode     = useEditorStore((s) => s.editMode);
+  // Audit-fix sweep (post-ship A1): narrow selection subscription to
+  // primitives the Footer actually reads. Subscribing to `s.selection`
+  // (the array ref) re-rendered Footer on every selection event even
+  // when only the array identity churned without a count or head
+  // change. `selection.length` + `selection[0]` are primitive
+  // selectors → Zustand's Object.is compare keeps the snapshot stable.
+  const selectionCount = useEditorStore((s) => s.selection.length);
+  const activeHead     = useEditorStore((s) => s.selection[0] ?? null);
   const vertexSelMap   = useEditorStore((s) => s.selectedVertexIndices);
 
-  const project = useProjectStore((s) => s.project);
+  // Audit-fix sweep (post-ship A3): subscribe only to `project.nodes`
+  // (the slot getDataKind reads) rather than the whole `project`. Any
+  // project mutation (transform writes, param changes, etc.) bumps
+  // `project` identity; narrowing to `nodes` means Footer re-renders
+  // only when the node list reshapes. The store doesn't expose a
+  // pre-derived nodes selector, so we keep the read inline.
+  const nodes = useProjectStore((s) => s.project?.nodes);
 
   // Subscribe to entries ref directly — countReports is the derive
   // step, kept in useMemo so re-renders only fire when entries changes
-  // (the LogsStore push always mutates the array reference).
+  // (the LogsStore.push reducer REPLACES the array reference via
+  // `[...arr, next]` spread on every push, so subscribing to the ref
+  // is the correct trigger for re-renders).
   const entries = useLogsStore((s) => s.entries);
   const reports = useMemo(() => countReports(entries), [entries]);
 
-  const activeHead = Array.isArray(selection) && selection.length > 0
-    ? selection[0]
-    : null;
   const headDataKind = useMemo(() => {
     if (!activeHead) return null;
-    const node = project?.nodes?.find((n) => n.id === activeHead);
-    return getDataKind(node, project);
-  }, [activeHead, project]);
+    const node = nodes?.find((n) => n.id === activeHead);
+    // getDataKind's second arg (`_project`) is unused today — pass
+    // null rather than reconstructing the project ref. If the signature
+    // ever lights up, narrow the subscription then.
+    return getDataKind(node, null);
+  }, [activeHead, nodes]);
 
   // Sum vertex selection across all parts. Edit Mode mesh-only stat;
   // ignored by formatStats for other modes.
@@ -121,7 +147,7 @@ export function Footer() {
   });
 
   const stats = formatStats({
-    selectionCount: Array.isArray(selection) ? selection.length : 0,
+    selectionCount,
     editMode,
     headDataKind,
     vertexSelectionCount,

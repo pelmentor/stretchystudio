@@ -18,21 +18,51 @@
  *      `template_running_jobs()`     — progress bar for background jobs
  *   3. `template_status_info()`      — selection + scene stats
  *
- * SS analogs surfaced this round:
+ * SS analogs surfaced this round (with deviations called out per
+ * `feedback_blender_reference_strict.md` — Blender source IS the
+ * source of truth, deviations must be honest, not silent):
  *
- *   - `formatInputStatus(...)`  ↔ template_input_status — when a modal
- *     G/R/S/V is running, render the gesture's keybind hint + live
- *     delta; otherwise fall back to a mode label so the bar always
- *     names what mode the user is in.
- *   - `countReports(entries)`   ↔ template_reports_banner — counts
- *     warn + error entries in the in-app logsStore ring buffer.
- *     Running-jobs progress bar is intentionally omitted: SS has no
- *     unified background-job system today (PSD wizard owns its own
- *     full-screen chrome; export modal stays open during work).
- *     Surfacing a single-line "PSD import 47%" would be a stub.
- *   - `formatStats(...)`        ↔ template_status_info — selection
- *     count + active head's dataKind + per-mode embellishments (vert
- *     count in mesh-edit).
+ *   - `formatInputStatus(...)`  ↔ template_input_status — Blender's
+ *     `uiTemplateInputStatus` (`reference/blender/source/blender/
+ *     editors/interface/interface_template_status.cc:267-375`)
+ *     shows TWO things depending on cursor-area context: (a) when
+ *     a modal operator is running, the operator's modal keymap
+ *     hint row; (b) when no modal is running, the active editor
+ *     area's cursor-region LMB/MMB/RMB keymap labels (e.g. "Click:
+ *     Select | Drag: Box Select | Click: Tweak"). SS surfaces only
+ *     the modal path here + falls back to a mode label when no
+ *     modal — SS has no cursor-region/area-zone keymap primitive,
+ *     so the non-modal cursor-keymap row is deliberately omitted.
+ *     Documented deviation, not silent gap.
+ *   - `countReports(entries)`   ↔ template_reports_banner — Blender's
+ *     `uiTemplateReportsBanner` (`interface_template_status.cc:45-151`)
+ *     shows ONLY the most-recent report as a timed fade-out banner
+ *     (`reports->reporttimer` drives the fade; auto-hides when the
+ *     timer expires). There is no per-report dismiss UI; the whole
+ *     banner just vanishes after a few seconds. SS surfaces an
+ *     aggregate warn/error pill count across the full logsStore ring
+ *     buffer instead — permanent visibility rather than transient
+ *     flash. Trade-off: SS misses Blender's single-message text
+ *     surface (the user has to open the Logs editor to read text);
+ *     Blender misses SS's "how many errors total" affordance. Both
+ *     justifiable; SS's choice favors a smaller status bar without
+ *     a fade animation primitive in the design system.
+ *     Running-jobs progress bar (`template_running_jobs`) is also
+ *     omitted: SS has no unified background-job system today (PSD
+ *     wizard owns its own full-screen chrome; export modal stays
+ *     open during work). Surfacing a single-line "PSD import 47%"
+ *     would be a Rule №1 stub.
+ *   - `formatStats(...)`        ↔ template_status_info — Blender's
+ *     `uiTemplateStatusInfo` (`interface_template_status.cc:408-622`,
+ *     dispatcher into `ED_info_statusbar_string_ex`) shows SCENE-LEVEL
+ *     stats: vertex/edge/face/tri counts (total + selected), memory
+ *     usage, scene duration, Blender version — all configurable via
+ *     `U.statusbar_flag`. SS surfaces OBJECT-SELECTION-LEVEL info
+ *     instead ("1 selected · Mesh · 142 verts") — SS has no scene
+ *     stats concept (no aggregate vert / face counts roll up to the
+ *     project today; rigPipeline could synthesize but that's
+ *     out-of-scope plumbing). Deviation: different layer of
+ *     granularity, same screen slot.
  *
  * Per Rule №1 — no quick-and-dirty fixes — every output is derived
  * from a live store slot; no fallback text papers over a missing
@@ -141,11 +171,13 @@ function modalKindLabel(kind) {
  *   4. Fallback              → "<Mode Label>"          (no modal)
  *
  * Numeric mode (`numericMode === true` on the node modal — Blender's
- * `NUM_EDIT_FULL` from `editors/util/numinput.cc:367-380`) replaces
- * the live-delta render with the typed buffer so the user sees their
- * keystrokes accumulate. Empty buffer in numeric mode shows `[ 0 ]`
- * (translate / rotate) or `[ 1 ]` (scale), matching the held-value
- * default Blender uses when the buffer is empty.
+ * `NUM_EDIT_FULL` flag, declared at `editors/util/numinput.cc:51` and
+ * triggered by digit entry at `:355-365`; the `=`/`*` keyboard-toggle
+ * fallback is at `:367-380`) replaces the live-delta render with the
+ * typed buffer so the user sees their keystrokes accumulate. Empty
+ * buffer in numeric mode shows `[ 0 ]` (translate / rotate) or `[ 1 ]`
+ * (scale), matching the held-value default Blender uses when the
+ * buffer is empty.
  *
  * @param {{
  *   modal?:       {kind: ModalKind, axis: AxisLock, typedBuffer?: string, numericMode?: boolean, liveDelta?: LiveDelta},
@@ -257,8 +289,15 @@ export function formatStats(input) {
   return baseText;
 }
 
-/** dataKind → display label. Mirrors the labels Blender uses in
- *  `space_outliner.py` / `space_view3d.py` Properties tabs.
+/** dataKind → display label. Labels chosen to match Blender's
+ *  object-data dropdown names (`space_properties.py` Object Data
+ *  Properties tab). Note: Blender's `template_status_info` does NOT
+ *  format selection as `"<n> selected · <DataKind>"` — that surface
+ *  doesn't exist in Blender; the status bar shows scene vert/edge/
+ *  face counts instead. SS surfaces selection-level data here as a
+ *  deliberate deviation (SS lacks scene-stats plumbing today; the
+ *  selection count + active dataKind is the most useful info SS can
+ *  give the user in the same screen slot).
  *
  *  - 'mesh'     → 'Mesh'      (Object.data of type MESH)
  *  - 'armature' → 'Armature'  (Object.data of type ARMATURE)
