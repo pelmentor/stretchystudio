@@ -1754,24 +1754,28 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // Slice 5.F — channel selection (independent of "active").
   //
   // Writes the per-FCurve `selected` boolean into `project.actions[i]`
-  // via a batched `updateProject` so it lands as a single undo entry.
-  // Returns the helper's decision so the click handler can wire the
+  // and returns the helper's decision so the click handler can wire the
   // out-of-action side-effects (set active, clear keyform selection).
   //
-  // Mirrors Blender's `mouse_anim_channels_fcurve` at
+  // Audit-fix HIGH-A1 (2026-05-16): `skipHistory: true` — channel
+  // selection is view state, not data. Blender doesn't record channel-
+  // selection changes in its undo stack either; pushing a snapshot per
+  // sidebar click would burn the 50-entry undo budget on UI navigation
+  // noise and evict real edit history. (Prior commit used
+  // `beginBatch`/`endBatch` which always pushes a snapshot at depth 0.)
+  //
+  // Mirrors Blender's `click_select_channel_fcurve` at
   // `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4223-4257`
-  // — see [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js)
+  // (dispatched from `mouse_anim_channels` at line 4475) — see
+  // [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js)
   // for the full provenance trace.
   const applyChannelClick = useCallback((fcurveId, modifier) => {
-    const proj = useProjectStore.getState().project;
-    beginBatch(proj);
     let decision = { makeActive: false, selectedNow: false };
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
       decision = applyChannelSelect(a, fcurveId, modifier);
-    });
-    endBatch();
+    }, { skipHistory: true });
     return decision;
   }, [activeActionId, update]);
 
@@ -1925,10 +1929,19 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
         // spots them at a glance before clicking in.
         const driven = hasDriver(d.fcurve);
         // Row tint: active (strongest) > selected-non-active (medium) >
-        // inactive (muted). Mirrors Blender's
-        // `acf_generic_channel_color` (anim_channels_defines.cc:178-210)
-        // which renders selected-non-active rows in a lighter shade of
-        // the active highlight.
+        // inactive (muted).
+        //
+        // Audit-fix MED-B2 (Slice 5.F dual-audit 2026-05-16): SS
+        // extension, not a Blender port. Blender's
+        // `acf_generic_channel_color` at
+        // `reference/blender/source/blender/editors/animation/anim_channels_defines.cc:185-194`
+        // is selection-agnostic — backdrop varies only by indent level
+        // (`colorOffset = 10 - 10 * indent`). Selection state surfaces
+        // ONLY through the per-row text color flip (TH_TEXT_HI vs
+        // TH_TEXT). SS adds the 3-tier accent tint so multi-channel
+        // selection is visible in the sidebar without forcing the user
+        // to read text-color shades; keep this as a documented
+        // divergence rather than a fake citation.
         const rowTint = isActive
           ? 'bg-accent/60 text-foreground'
           : isChannelSelected
@@ -1951,14 +1964,25 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActive
               // `anim_channels_edit.cc:4239-4243`).
               //
               // Plain-click also wipes keyform selection on other
-              // channels (audit-fix MED-B8 — Blender's
-              // `deselect_graph_keys(ac, false, SELECT_SUBTRACT, true)`
-              // at `graph_select.cc:1741`). Shift-click preserves it.
+              // channels. Audit-fix MED-B3 (2026-05-16, Slice 5.F dual-
+              // audit): this is an SS UX extension, not a Blender port —
+              // `graph_select.cc:1741`'s `deselect_graph_keys` lives in
+              // `graphkeys_mselect_invoke` (the graph-AREA click path),
+              // not the channel-list path. Blender's
+              // `click_select_channel_fcurve` doesn't touch keyforms.
+              // We keep the wipe because clicking a channel reads as
+              // "switch context, drop the previous keyform picks";
+              // Shift-click preserves the selection for cross-channel
+              // composition.
               const decision = onApplyChannelClick(
                 d.fcurve.id,
                 e.shiftKey ? 'toggle' : 'replace',
               );
-              if (!e.shiftKey) onClearKeyformSelection();
+              // Audit-fix MED-A1 (Slice 5.F): gate clear on
+              // `decision.selectedNow`. Without it, a click on a curve
+              // whose action lookup races to null silently wipes the
+              // user's keyform selection for no other effect.
+              if (!e.shiftKey && decision.selectedNow) onClearKeyformSelection();
               if (decision.makeActive) onPickActiveByTarget(t);
             }}
             title={driven ? `${d.tooltip} (driver-locked)` : d.tooltip}

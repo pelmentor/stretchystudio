@@ -161,6 +161,35 @@ assert(isFCurveSelected({ selected: 'yes' }) === false, 'isFCurveSelected: "yes"
   assert(a.fcurves[1].selected === true,        'guard: b still selected');
 }
 
+// Audit-fix LOW-A1 (Slice 5.F dual-audit): unknown modifier guard.
+// Earlier helper fell through to 'toggle'; that would silently mask a
+// future 'extend' wiring before its branch exists. Now an explicit
+// no-op return is the contract.
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelect(a, 'a', 'extend');
+  assert(r.makeActive === false && r.selectedNow === false,
+    'guard: unknown modifier "extend" → no-op');
+  assert(a.fcurves[0].selected === undefined || a.fcurves[0].selected === false,
+    'guard: unknown modifier doesn\'t mutate selected');
+}
+
+{
+  const a = makeAction(['a']);
+  a.fcurves[0].selected = true;
+  const r = applyChannelSelect(a, 'a', '');
+  assert(r.makeActive === false && r.selectedNow === false,
+    'guard: empty-string modifier → no-op');
+  assert(a.fcurves[0].selected === true,        'guard: empty modifier preserves prior state');
+}
+
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelect(a, 'a', null);
+  assert(r.makeActive === false && r.selectedNow === false,
+    'guard: null modifier → no-op');
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Multi-step scenarios — Blender-style user flows
 

@@ -19,9 +19,11 @@
  *
  * # Blender semantics ported
  *
- * `mouse_anim_channels_fcurve` at
+ * `click_select_channel_fcurve` at
  * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4223-4257`
- * dispatches on `selectmode`:
+ * (dispatched from `mouse_anim_channels` at line 4475, which switches
+ * on `ale->type` and routes each channel type to its own per-type click
+ * handler) dispatches on `selectmode`:
  *
  *   - **SELECT_REPLACE** (plain click) — line 4239-4243:
  *     `ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_CLEAR)` zeroes
@@ -38,6 +40,12 @@
  *     SS-deferred this slice (would need a stable channel-list index;
  *     `decodeAllFCurves` filters unresolvable targets so its index
  *     can't be the source of truth).
+ *
+ *     When EXTEND_RANGE eventually ships, also port the auto-downgrade
+ *     at `anim_channels_edit.cc:4517-4522`: if no channel of the same
+ *     type is active, Blender silently rewrites `selectmode` from
+ *     `SELECT_EXTEND_RANGE` to `SELECT_INVERT` so the click degrades
+ *     gracefully into a Shift-click toggle rather than a no-op.
  *
  * The "elevate active only when newly selected" rule (line 4247) is the
  * load-bearing detail that makes channel-selection feel right: Shift-
@@ -56,20 +64,38 @@
  *
  * # SS deviations from Blender
  *
- *   - **No "always at least one selected" implicit-selection.** Blender's
- *     UX never lets you reach zero selected channels; the active channel
- *     is rendered as selected even when nothing else is. SS treats the
- *     active concept as orthogonal: a fresh v39 save loads with every
- *     `selected:false`, and the active row is highlighted via a
- *     SEPARATE class (the existing `bg-accent/60`). The "selected non-
- *     active" row gets a weaker `bg-accent/30` so multi-select is
- *     visible. Equivalent UX outcome — different storage representation.
- *
  *   - **Plain-click also wipes keyform selection on other curves.**
- *     This part was already wired pre-Slice 5.F (audit-fix MED-B8,
- *     `2026-05-16`) to mirror Blender's `deselect_graph_keys(ac, false,
- *     SELECT_SUBTRACT, true)` at `graph_select.cc:1741`. Shift-click
- *     preserves keyform selection — Blender does the same.
+ *     This part was wired pre-Slice 5.F as audit-fix MED-B8
+ *     (2026-05-16) which mis-cited `graph_select.cc:1741` as the
+ *     authority — that line is in `graphkeys_mselect_invoke` (the
+ *     graph-AREA keyframe-click path), not the channel-list click.
+ *     Blender's `click_select_channel_fcurve` doesn't touch keyform
+ *     selection at all. SS keeps the wipe as a UX extension: clicking
+ *     a channel in the sidebar reads as "switch context, drop the
+ *     previous keyform picks". Shift-click preserves keyform selection.
+ *     Documented + verified in Slice 5.F dual-audit (audit-fix MED-B3).
+ *
+ *   - **Sidebar row backdrop is selection-aware (3-tier accent tint).**
+ *     Blender's `acf_generic_channel_color`
+ *     (`anim_channels_defines.cc:185-194`) is selection-agnostic —
+ *     backdrop varies only by indent level. Selection state surfaces
+ *     ONLY through Blender's per-row text color flip (`TH_TEXT_HI` vs
+ *     `TH_TEXT`). SS adds a 3-tier backdrop tint
+ *     (active=`bg-accent/60`, selected-non-active=`bg-accent/25`,
+ *     inactive=muted-foreground) so multi-channel selection is visible
+ *     without forcing the user to read text-color shades. Documented +
+ *     verified in Slice 5.F dual-audit (audit-fix MED-B2).
+ *
+ *   - **No "always at least one selected" Blender invariant exists.**
+ *     A prior draft of this header claimed Blender forces at least one
+ *     channel to remain selected via implicit active-as-selected. That
+ *     was unsupported by the source: Shift-clicking the sole selected
+ *     curve via line 4231-4234 (`fcu->flag ^= FCURVE_SELECTED`)
+ *     legitimately reaches zero `FCURVE_SELECTED` curves;
+ *     `ANIM_set_active_channel` only writes `FCURVE_ACTIVE`, never
+ *     `FCURVE_SELECTED`. SS's "active orthogonal to selected, both can
+ *     be empty" matches Blender — no deviation to document. Removed in
+ *     Slice 5.F dual-audit (audit-fix MED-B4).
  *
  * @module anim/fcurveChannelSelect
  */
@@ -97,6 +123,13 @@
  */
 export function applyChannelSelect(action, fcurveId, modifier) {
   if (!action || !Array.isArray(action.fcurves)) {
+    return { makeActive: false, selectedNow: false };
+  }
+  // Audit-fix LOW-A1 (Slice 5.F dual-audit): explicit modifier guard.
+  // Earlier draft fell through to 'toggle' on unknown values; that
+  // would have silently masked a future 'extend' wiring before its
+  // helper branch lands.
+  if (modifier !== 'replace' && modifier !== 'toggle') {
     return { makeActive: false, selectedNow: false };
   }
   const clicked = action.fcurves.find((f) => f && f.id === fcurveId);
