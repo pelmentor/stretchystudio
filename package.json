@@ -215,6 +215,7 @@
     "test:fcurveHandles": "node scripts/test/test_fcurveHandles.mjs",
     "test:motion3jsonRoundtrip": "node scripts/test/test_motion3jsonRoundtrip.mjs",
     "test:graphEditOps": "node scripts/test/test_graphEditOps.mjs",
+    "test:fcurveColor": "node scripts/test/test_fcurveColor.mjs",
     "test:weightPaintBlur": "node scripts/test/test_weightPaint_blur.mjs",
     "test:weightPaintSample": "node scripts/test/test_weightPaint_sample.mjs",
     "test:weightPaintMirror": "node scripts/test/test_weightPaint_mirror.mjs",

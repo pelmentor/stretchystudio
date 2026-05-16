@@ -2,13 +2,14 @@
 /* eslint-disable react/prop-types, react-hooks/exhaustive-deps */
 
 /**
- * Animation Phase 5 — F-Curve Graph Editor (write-mode, Slices 5.A + 5.B + 5.C).
+ * Animation Phase 5 — F-Curve Graph Editor (write-mode).
  *
  * Two-layer composition (plan §5.A): SVG background (axes + curve path
- * + zero-line + playhead) + canvas-2D foreground (keyframe diamonds +
- * handle dots; receives all pointer events). Both layers share a single
- * `view` derived from container dims via ResizeObserver and the
- * FCurve's auto-fit value range; the canvas is DPR-aware.
+ * per visible FCurve + zero-line + playhead) + canvas-2D foreground
+ * (keyframe diamonds + handle dots; receives all pointer events). Both
+ * layers share a single `view` derived from container dims via
+ * ResizeObserver and the auto-fit value range across all visible curves;
+ * the canvas is DPR-aware.
  *
  * # Slice 5.B (shipped 2026-05-16, `bd1e68b` + `feb4bde`)
  *
@@ -23,71 +24,92 @@
  *     `reference/blender/source/blender/blenkernel/intern/curve.cc:4054-4084`).
  *   - Click empty area → seek the playhead.
  *
- * # Slice 5.C (this commit) — operator pass
+ * # Slice 5.C (shipped 2026-05-16, `0d78ad3` + `213c748`) — operator pass
  *
- *   - **G** — modal grab over selected keyforms (per-part). Hold Ctrl to
- *     snap dTime to whole frames; Shift = 0.1× precision multiplier.
- *     LMB / Enter confirm; Esc / RMB cancel. **SS-deferred** (audit-fix
- *     MED-B6, 2026-05-16): Blender's modal transform also supports
- *     axis-lock (X/Y) and typed numeric input
- *     (`transform_mode.cc` numinput hooks). Both are unimplemented in
- *     this slice; the 5.C ship deliberately scopes to the
- *     pointer-driven path because axis lock + typed input belong to a
- *     follow-on modal-typing slice that will share its implementation
- *     with the viewport's `ModalTransformOverlay` (already wires axis
- *     + typed-buffer for canvas G/R/S).
- *   - **S** — modal scale around the pivot (selection median time +
- *     median value). Same modifiers as G. Same SS-deferred caveat re:
- *     axis lock + typed numeric input.
- *   - **B** — box-select via local rubber-band rect. Replace by default;
- *     Shift = add; Ctrl = subtract.
- *   - **V** — handle-type menu (Free / Aligned / Vector / Auto /
- *     Auto Clamped). Sets type on the dragged side of partial-selection
- *     entries; both sides for whole-keyform selections.
- *   - **T** — interpolation menu (Constant / Linear / Bezier + 10 named
- *     easings). Per-keyform write (Blender's segment-start convention).
- *   - **Shift+E** — extrapolation menu (Constant / Linear). Per-FCurve.
- *   - **Delete / X** — delete selected keyforms (handle-only entries
- *     left intact, matching Blender's GRAPH_OT_delete behaviour).
- *   - **Home** — re-fit view to FCurve range; also clears view-lock.
- *   - **Ctrl+G** — snap selected keyforms to nearest whole frame.
- *   - **Post-release** — `mergeDuplicateTimeKeys` collapses time ties
- *     produced by the drag/grab into one keyform per cluster (averaged
- *     value); `recalcKeyformHandles` re-positions auto/aligned handles.
- *     Mirrors `BKE_fcurve_merge_duplicate_keys` at
- *     `reference/blender/source/blender/blenkernel/intern/fcurve.cc:1801-1910`
- *     called from `transform_convert_graph.cc:1014`.
- *   - **Lock-view-during-drag** — the auto-fit value range freezes on
- *     drag-start and unfreezes on release/cancel (closes the 5.A wart
- *     where dragging a kf outside the range rescaled the y-axis mid-
- *     drag and made the diamond appear to drift).
+ *   - **G** — modal grab over selected keyforms (per-part). Ctrl-snap
+ *     dTime to whole frames; Shift = 0.1× precision multiplier.
+ *     LMB / Enter confirm; Esc / RMB cancel.
+ *   - **S** — modal scale around pivot (selection median).
+ *   - **B** — box-select via local rubber-band.
+ *   - **V / T / Shift+E** — handle-type / interpolation / extrapolation menus.
+ *   - **Delete / X** — delete selected keyforms (last-kf guard per curve).
+ *   - **Home** — clear view-lock + re-fit.
+ *   - **Ctrl+G** — snap selected keyform centres to whole frames.
+ *   - **Post-release** — `mergeDuplicateTimeKeys` + `recalcKeyformHandles`.
+ *   - **Lock-view-during-drag** — value range freezes during modal/drag.
  *
- * # Per-handle selection state (plan §5.B)
+ *   **SS-deferred** (audit MED-B6, 2026-05-16): Modal G/S axis-lock (X/Y)
+ *   and typed numeric input belong to a follow-on slice that will share
+ *   its implementation with the viewport's `ModalTransformOverlay`.
  *
- * Selection is keyed per-keyform with `{center, left, right}` booleans
- * mapping to Blender's `BEZT_SEL_F2 / F1 / F3` flags at
+ * # Slice 5.C+ (this commit) — multi-curve display
+ *
+ * Per plan §5.C: "Phase 5 supports displaying multiple FCurves at once
+ * (one color each). The active FCurve is the one being edited; others
+ * are background context. UI: a curve-list sidebar."
+ *
+ *   - **All FCurves in the active action render at once.** Each curve
+ *     gets a stable rainbow color via `getcolorFcurveRainbow` (port of
+ *     `reference/blender/source/blender/editors/animation/anim_ipo_utils.cc:311-346`
+ *     `FCURVE_COLOR_AUTO_RAINBOW`).
+ *   - **Active vs context** mirrors Blender's `FCURVE_ACTIVE` flag at
+ *     `reference/blender/source/blender/editors/space_graph/graph_draw.cc:1155-1161`:
+ *     active curve = stroke width 2.5px; context = 1.0px. Active curve
+ *     keyform diamonds render at full size; context curves at smaller
+ *     size + reduced opacity (matches Blender's `fcurve_display_alpha`
+ *     at `graph_draw.cc:50-57`).
+ *   - **Curve-list sidebar** (left edge): color swatch + label + eye
+ *     toggle + click-to-activate. Active row highlighted. Eye toggle is
+ *     session-local (no schema change this slice; see § "SS-deferred").
+ *   - **Selection lifted to `Map<fcurveId, Map<kfIdx, parts>>`** so a
+ *     box-select / shift-click can pick handles across multiple curves
+ *     at once. Modal G/S iterate the per-curve sub-selections; V/T/E
+ *     menus apply to every selected curve.
+ *   - **Cross-curve click**: clicking a context-curve diamond switches
+ *     active to that curve AND selects the kf. Mirrors Blender's
+ *     `mouse_graph_keys` which calls `select_pchannel_keychannel_first`
+ *     to elevate the clicked channel to active.
+ *   - **View auto-fit** considers all visible curves' min/max value
+ *     (not just the active curve), so context curves stay in-frame.
+ *
+ *   **SS-deferred** (this slice, documented explicitly):
+ *   - Persistent visibility flag — would need a `fcurve.visible` schema
+ *     field; the eye toggle is session-local for now. Switching tabs
+ *     resets visibility (Blender persists `FCURVE_VISIBLE` in `flag`).
+ *   - Per-FCurve `color_mode` selector — SS only ships AUTO_RAINBOW.
+ *     The Blender modes AUTO_RGB / AUTO_YRGB / CUSTOM (`DNA_anim_enums.h:344-351`)
+ *     are not exposed; they'd need both a schema field and a UI affordance.
+ *   - Channel groupings (`fcurve.grp` Action groups) — flat sidebar list
+ *     for now; group collapse / mute / solo is Phase 6 (Dopesheet) work.
+ *   - F-Modifier-drawn curves — `(fcu->modifiers.first || FCURVE_INT_VALUES)`
+ *     at `graph_draw.cc:1151-1153` triggers a sampled redraw; SS doesn't
+ *     ship F-Modifiers (`Phase 3` plan item), so this branch isn't ported.
+ *
+ * # Per-handle selection state (plan §5.B + §5.C)
+ *
+ * Selection is keyed per-FCurve, then per-keyform with `{center, left,
+ * right}` booleans mapping to Blender's `BEZT_SEL_F2 / F1 / F3` flags at
  * `reference/blender/source/blender/makesdna/DNA_curve_types.h:90-95`.
- * The selection store is local-React (`useState<Map<idx, parts>>`) —
- * graph-editor selection doesn't bleed into the global selectionStore
- * because the global store's identity is part / param / group, not
- * keyform index in an active FCurve.
+ *
+ *   `Map<fcurveId: string, Map<keyformIdx: number, {center, left, right}>>`
+ *
+ * The selection store is local-React — graph-editor selection doesn't
+ * bleed into the global selectionStore because the global store's
+ * identity is part/param/group, not keyform-index-in-an-active-FCurve.
  *
  * # SIPO_SELVHANDLESONLY
  *
  * Handles draw only for SELECTED keyforms — Blender's
  * `SIPO_SELVHANDLESONLY` mode at
- * `reference/blender/source/blender/editors/space_graph/graph_draw.cc:469-476`,
- * not the default mode that draws handles for every keyframe. SS ships
- * SIPO_SELVHANDLESONLY by default because a 1200-keyform curve with
- * every-keyframe handles is visual noise; a per-editor toggle for "all
- * handles" can land in Slice 5.C+.
+ * `reference/blender/source/blender/editors/space_graph/graph_draw.cc:469-476`.
+ * Cross-curve: handles draw for selected entries on ANY visible curve
+ * (Blender's `SIPO_SELVHANDLESONLY` is global, not per-curve).
  *
  * # Hotkey scoping
  *
- * The editor's wrap div is `tabIndex={0}` and auto-focuses on pointer
- * enter so hotkeys go to the editor under the cursor (Blender's
- * pattern). Modal G/S/B mount their own window-level capture listeners
- * so the user can drag past the editor's bounds without losing focus.
+ * Wrap div is `tabIndex={0}` and auto-focuses on pointer enter so
+ * hotkeys go to the editor under the cursor (Blender's pattern). Modal
+ * G/S/B mount window-level capture listeners so drag can leave bounds.
  *
  * @module v3/editors/fcurve/FCurveEditor
  */
@@ -118,16 +140,22 @@ import {
   remapSelection,
 } from '../../../anim/graphEditOps.js';
 import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
+import { fcurveColorCss } from '../../../anim/fcurveColor.js';
 
 const CURVE_SAMPLES = 240;
 const PAD_L = 36;
 const PAD_R = 12;
 const PAD_T = 12;
 const PAD_B = 22;
+const SIDEBAR_W = 168;
 
 // Hit-test radii (px, screen-space).
 const HIT_KEYFRAME_R = 7;
 const HIT_HANDLE_R = 6;
+
+// Alpha for context curves — mirrors Blender's `U.fcu_inactive_alpha`
+// default of 0.5 (`graph_draw.cc:54-57`). Active curve is always 1.0.
+const CTX_ALPHA = 0.5;
 
 const HANDLE_TYPES = /** @type {const} */ ([
   { key: 'free',         label: 'Free' },
@@ -167,18 +195,19 @@ export function FCurveEditor() {
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
   const fps = useAnimationStore((s) => s.fps);
   const selection = useSelectionStore((s) => s.items);
+  const selectStore = useSelectionStore((s) => s.select);
 
   const action = useMemo(
     () => getActiveSceneAction(project, activeActionId),
     [project.nodes, project.actions, activeActionId],
   );
 
-  const picked = useMemo(() => pickFCurve(action, selection), [action, selection]);
-  const duration = Math.max(1, action?.duration ?? 1000);
-  const sampled = useMemo(
-    () => (picked?.keyforms?.length ? sampleCurve(picked, duration) : null),
-    [picked, duration],
-  );
+  // Decoded label map for sidebar rows.
+  const labels = useMemo(() => buildLabelMaps(project), [project.nodes, project.parameters]);
+
+  // Active FCurve = the one global selection points at (existing
+  // `pickFCurve` semantics preserved). May be null if no curves match.
+  const activeFCurve = useMemo(() => pickFCurve(action, selection), [action, selection]);
 
   if (!action) {
     return (
@@ -187,13 +216,11 @@ export function FCurveEditor() {
       </Wrapper>
     );
   }
-  if (!picked || !picked.keyforms || picked.keyforms.length === 0 || !sampled) {
-    const sub = picked
-      ? 'F-curve is empty — drop a keyframe in the Timeline first.'
-      : 'Select a parameter or part with keyframes to plot.';
+  const decoded = decodeAllFCurves(action, labels);
+  if (decoded.length === 0) {
     return (
       <Wrapper>
-        <Empty msg={sub} />
+        <Empty msg="No F-curves in this action — drop a keyframe in the Timeline first." />
       </Wrapper>
     );
   }
@@ -201,13 +228,24 @@ export function FCurveEditor() {
   return (
     <Wrapper>
       <Plot
+        action={action}
         activeActionId={activeActionId}
-        fcurve={picked}
-        sampled={sampled}
-        duration={duration}
+        decoded={decoded}
+        activeFCurveId={activeFCurve?.id ?? null}
         currentTime={currentTime}
         fps={fps}
         onSeek={setCurrentTime}
+        onPickActiveByTarget={(target) => {
+          // Sidebar click → write into selectionStore so global state
+          // (and pickFCurve) flips active. Selection writes are 'replace'
+          // here because that's the Blender behaviour for clicking a
+          // channel header (vs Shift-click which would extend).
+          if (target.kind === 'param') {
+            selectStore({ type: 'parameter', id: target.paramId }, 'replace');
+          } else if (target.kind === 'node') {
+            selectStore({ type: 'part', id: target.nodeId }, 'replace');
+          }
+        }}
       />
     </Wrapper>
   );
@@ -229,12 +267,14 @@ function Empty({ msg }) {
   );
 }
 
-function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onSeek }) {
+function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fps, onSeek, onPickActiveByTarget }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
-  /** @type {[Map<number, {center:boolean,left:boolean,right:boolean}>, Function]} */
+  /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
   const [selectedHandles, setSelectedHandles] = useState(new Map());
+  /** @type {[Set<string>, Function]} */
+  const [hidden, setHidden] = useState(new Set());
   /** @type {[null | {minV:number, maxV:number}, Function]} */
   const [viewLock, setViewLock] = useState(null);
   /** @type {[null | {kind:'g'|'s'}, Function]} */
@@ -245,45 +285,66 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   const [menu, setMenu] = useState(null);
 
   const update = useProjectStore((s) => s.updateProject);
-  // Audit-fix HIGH-A1 (Slice 5.B): track any in-flight drag so unmounting
-  // the editor mid-drag releases the window-level listeners + closes the
-  // open undo batch. Without this, switching tabs mid-drag leaves a
-  // dangling `endBatch()` un-called and `_batchDepth > 0` for the rest
-  // of the session — every subsequent drag pushes a deeper nested batch
-  // and the user's undo history silently stops growing.
+  // In-flight drag cleanup refs (Slices 5.B/5.C contract — unmount mid-
+  // drag/modal/box-select releases listeners + closes the undo batch).
   const dragCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
-  // Slice 5.C — modal G/S also opens an undo batch + window listeners
-  // that need the same unmount-cleanup contract.
   const modalCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
-  // Audit-fix HIGH-A5 (2026-05-16) — box-select adds three window-level
-  // listeners (mousemove/mouseup/keydown). Without this cleanup ref,
-  // unmounting the editor mid-box-select left the listeners attached;
-  // every subsequent mousemove fired `setBoxSelect(...)` on the
-  // unmounted component until the user happened to release the mouse,
-  // generating React's "Can't perform a React state update on an
-  // unmounted component" warning and a slow leak.
   const boxSelectCleanupRef = useRef(/** @type {(() => void) | null} */ (null));
-  // Track latest selectedHandles for handlers/effects that capture a ref;
-  // React closes over the state at render time which is fine for the
-  // first frame of a modal but stale by the next tick.
+  // Latest selection for handlers/effects that close over a ref.
   const selectionRef = useRef(selectedHandles);
   useEffect(() => { selectionRef.current = selectedHandles; }, [selectedHandles]);
 
-  // View min/max — uses the locked snapshot during a modal/drag so the
-  // y-axis doesn't rescale as the user drags a kf outside its range
-  // (Slice 5.A UX wart, closed by 5.C). Lock is set at drag/modal start
-  // and cleared on release.
-  const minV = viewLock?.minV ?? sampled.minV;
-  const maxV = viewLock?.maxV ?? sampled.maxV;
+  // Visible = decoded \ hidden. Hidden curves still register colour
+  // (so eye-toggling doesn't reshuffle colours) but skip rendering.
+  const visible = useMemo(
+    () => decoded.filter((d) => !hidden.has(d.fcurve.id)),
+    [decoded, hidden],
+  );
 
-  // Reset selection when the active FCurve changes — index-based
-  // selection doesn't translate across FCurves.
+  // Per-curve sampled values + per-curve auto-fit min/max. Active curve's
+  // samples drive interactive overlays; context curves contribute to the
+  // global auto-fit so they stay in-frame.
+  const samples = useMemo(() => {
+    const out = new Map();
+    for (const d of visible) {
+      const s = sampleCurve(d.fcurve, action.duration ?? 1000);
+      out.set(d.fcurve.id, s);
+    }
+    return out;
+  }, [visible, action.duration]);
+
+  const autoFit = useMemo(() => {
+    let minV = Infinity, maxV = -Infinity;
+    for (const s of samples.values()) {
+      if (s.minV < minV) minV = s.minV;
+      if (s.maxV > maxV) maxV = s.maxV;
+    }
+    if (!Number.isFinite(minV)) { minV = 0; maxV = 1; }
+    if (minV === maxV) { minV -= 0.5; maxV += 0.5; }
+    return { minV, maxV };
+  }, [samples]);
+
+  const duration = Math.max(1, action.duration ?? 1000);
+
+  // View min/max — locked snapshot during a modal/drag so the y-axis
+  // doesn't rescale as the user drags a kf outside its range.
+  const minV = viewLock?.minV ?? autoFit.minV;
+  const maxV = viewLock?.maxV ?? autoFit.maxV;
+
+  // Wipe per-curve selection entries that point at curves no longer in
+  // the action (e.g., the user deleted a curve in the Timeline). Active
+  // curve change does NOT wipe (cross-curve selection is the whole
+  // point of 5.C+); only delete entries whose curve disappeared.
   useEffect(() => {
-    setSelectedHandles(new Map());
-    setViewLock(null);
-    setBoxSelect(null);
-    setMenu(null);
-  }, [fcurve.id]);
+    setSelectedHandles((prev) => {
+      const liveIds = new Set(decoded.map((d) => d.fcurve.id));
+      const next = new Map();
+      for (const [fid, sub] of prev) {
+        if (liveIds.has(fid)) next.set(fid, sub);
+      }
+      return next;
+    });
+  }, [decoded]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -298,8 +359,7 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     return () => ro.disconnect();
   }, []);
 
-  // Audit-fix HIGH-A1 (Slice 5.B) + HIGH-A5 (Slice 5.C audit) — unmount
-  // cleanup for any in-flight drag / modal / box-select.
+  // Unmount cleanup — release any in-flight listener bundles.
   useEffect(() => {
     return () => {
       if (dragCleanupRef.current) {
@@ -334,18 +394,33 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     };
   }, [containerSize.w, containerSize.h, duration, minV, maxV]);
 
-  // SVG curve path — sample-driven polyline.
-  const curvePath = useMemo(() => {
-    if (sampled.values.length === 0) return '';
-    let d = '';
-    for (let i = 0; i < sampled.values.length; i++) {
-      const p = sampled.values[i];
-      d += (i === 0 ? 'M' : 'L') + view.tx(p.t).toFixed(1) + ',' + view.ty(p.v).toFixed(2);
+  // SVG curve paths — one per visible FCurve. Built once when samples
+  // or view change. Active curve drawn last (on top).
+  const curvePaths = useMemo(() => {
+    const out = [];
+    for (const d of visible) {
+      const s = samples.get(d.fcurve.id);
+      if (!s || s.values.length === 0) continue;
+      let dPath = '';
+      for (let i = 0; i < s.values.length; i++) {
+        const p = s.values[i];
+        dPath += (i === 0 ? 'M' : 'L') + view.tx(p.t).toFixed(1) + ',' + view.ty(p.v).toFixed(2);
+      }
+      out.push({
+        id: d.fcurve.id,
+        d: dPath,
+        color: d.color,
+        isActive: d.fcurve.id === activeFCurveId,
+      });
     }
-    return d;
-  }, [sampled, view]);
+    // Active last so it overdraws context curves.
+    out.sort((a, b) => Number(a.isActive) - Number(b.isActive));
+    return out;
+  }, [visible, samples, view, activeFCurveId]);
 
-  // Imperative canvas redraw.
+  // Imperative canvas redraw — diamonds + handles for every visible
+  // curve. Active curve gets full-size diamonds + interactive hit area;
+  // context curves get smaller dimmer diamonds.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -361,9 +436,33 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, view.w, view.h);
 
-    drawHandles(ctx, fcurve.keyforms, selectedHandles, view);
-    drawKeyframes(ctx, fcurve.keyforms, selectedHandles, view);
-  }, [fcurve.keyforms, selectedHandles, view]);
+    // Context curves first (under) then active last (over).
+    for (const d of visible) {
+      if (d.fcurve.id === activeFCurveId) continue;
+      const sub = selectedHandles.get(d.fcurve.id);
+      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false);
+      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ false);
+    }
+    for (const d of visible) {
+      if (d.fcurve.id !== activeFCurveId) continue;
+      const sub = selectedHandles.get(d.fcurve.id);
+      drawHandles(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true);
+      drawKeyframes(ctx, d.fcurve.keyforms, sub, view, /*isActive*/ true);
+    }
+  }, [visible, selectedHandles, view, activeFCurveId]);
+
+  // ── helpers — selection-map mutation ────────────────────────────────
+
+  function setSubSelection(fcurveId, sub) {
+    setSelectedHandles((prev) => {
+      const next = new Map(prev);
+      if (!sub || sub.size === 0) next.delete(fcurveId);
+      else next.set(fcurveId, sub);
+      return next;
+    });
+  }
+
+  function clearSelection() { setSelectedHandles(new Map()); }
 
   // ── pointer handling (canvas) ───────────────────────────────────────
 
@@ -375,80 +474,108 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    const keyforms = fcurve.keyforms;
-
-    // (1) Foreground hit-test priority: handles of selected keyforms,
-    // then keyframe diamonds, then fall through to seek.
-    if (selectedHandles.size > 0) {
-      for (const [i, parts] of selectedHandles) {
-        const kf = keyforms[i];
-        if (!kf) continue;
-        // Hit-test handles regardless of per-part selection — the handle
-        // dot is visible when its keyform is selected (KNOT_ONLY mode),
-        // and clicking it grabs that side.
-        if (kf.handleLeft && hitTest(x, y, view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value), HIT_HANDLE_R)) {
-          // Click on handle dot → set selection to ONLY that handle
-          // (matches Blender's click semantics — clicking a handle
-          // deselects center + opposite). Shift adds to selection.
-          if (!e.shiftKey) {
-            setSelectedHandles(new Map([[i, { center: false, left: true, right: false }]]));
-          } else {
-            const next = cloneSelection(selectedHandles);
-            const cur = next.get(i) ?? { center: false, left: false, right: false };
-            next.set(i, { ...cur, left: true });
-            setSelectedHandles(next);
+    // (1) Active curve's handles take priority (their selection is
+    // already exposed; user picks among them precisely).
+    if (activeFCurveId) {
+      const activeSub = selectedHandles.get(activeFCurveId);
+      const activeFC = visible.find((d) => d.fcurve.id === activeFCurveId)?.fcurve;
+      if (activeSub && activeFC) {
+        for (const [i] of activeSub) {
+          const kf = activeFC.keyforms[i];
+          if (!kf) continue;
+          if (kf.handleLeft && hitTest(x, y, view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value), HIT_HANDLE_R)) {
+            const subNext = e.shiftKey ? cloneSubSelection(activeSub) : new Map();
+            const cur = subNext.get(i) ?? { center: false, left: false, right: false };
+            if (!e.shiftKey) subNext.set(i, { center: false, left: true, right: false });
+            else subNext.set(i, { ...cur, left: true });
+            setSubSelection(activeFCurveId, subNext);
+            startHandleDrag(e, activeFCurveId, i, 'left');
+            return;
           }
-          startHandleDrag(e, i, 'left');
-          return;
-        }
-        if (kf.handleRight && hitTest(x, y, view.tx(kf.handleRight.time), view.ty(kf.handleRight.value), HIT_HANDLE_R)) {
-          if (!e.shiftKey) {
-            setSelectedHandles(new Map([[i, { center: false, left: false, right: true }]]));
-          } else {
-            const next = cloneSelection(selectedHandles);
-            const cur = next.get(i) ?? { center: false, left: false, right: false };
-            next.set(i, { ...cur, right: true });
-            setSelectedHandles(next);
+          if (kf.handleRight && hitTest(x, y, view.tx(kf.handleRight.time), view.ty(kf.handleRight.value), HIT_HANDLE_R)) {
+            const subNext = e.shiftKey ? cloneSubSelection(activeSub) : new Map();
+            const cur = subNext.get(i) ?? { center: false, left: false, right: false };
+            if (!e.shiftKey) subNext.set(i, { center: false, left: false, right: true });
+            else subNext.set(i, { ...cur, right: true });
+            setSubSelection(activeFCurveId, subNext);
+            startHandleDrag(e, activeFCurveId, i, 'right');
+            return;
           }
-          startHandleDrag(e, i, 'right');
-          return;
         }
       }
     }
 
-    let hitKf = -1;
-    for (let i = 0; i < keyforms.length; i++) {
-      const kf = keyforms[i];
-      if (typeof kf.value !== 'number') continue;
-      if (hitTest(x, y, view.tx(kf.time), view.ty(kf.value), HIT_KEYFRAME_R)) {
-        hitKf = i;
-        break;
+    // (2) Keyform diamonds — walk ALL visible curves (active first).
+    /** @type {null | {fcurveId:string, idx:number, isActive:boolean}} */
+    let hit = null;
+    if (activeFCurveId) {
+      const activeFC = visible.find((d) => d.fcurve.id === activeFCurveId)?.fcurve;
+      if (activeFC) {
+        for (let i = 0; i < activeFC.keyforms.length; i++) {
+          const kf = activeFC.keyforms[i];
+          if (typeof kf.value !== 'number') continue;
+          if (hitTest(x, y, view.tx(kf.time), view.ty(kf.value), HIT_KEYFRAME_R)) {
+            hit = { fcurveId: activeFCurveId, idx: i, isActive: true };
+            break;
+          }
+        }
+      }
+    }
+    if (!hit) {
+      for (const d of visible) {
+        if (d.fcurve.id === activeFCurveId) continue;
+        for (let i = 0; i < d.fcurve.keyforms.length; i++) {
+          const kf = d.fcurve.keyforms[i];
+          if (typeof kf.value !== 'number') continue;
+          if (hitTest(x, y, view.tx(kf.time), view.ty(kf.value), HIT_KEYFRAME_R)) {
+            hit = { fcurveId: d.fcurve.id, idx: i, isActive: false };
+            break;
+          }
+        }
+        if (hit) break;
       }
     }
 
-    if (hitKf >= 0) {
-      // Whole-keyform select → all three parts (KNOT_ONLY semantic).
-      const nextSel = e.shiftKey
-        ? toggleKeyformSelection(selectedHandles, hitKf)
-        : new Map([[hitKf, { center: true, left: true, right: true }]]);
-      setSelectedHandles(nextSel);
-      startKeyformDrag(e, hitKf);
+    if (hit) {
+      // Cross-curve click on a context curve → elevate to active first
+      // (Blender's `mouse_graph_keys` calls `select_pchannel_keychannel_first`
+      // at `graph_select.cc:368-387`).
+      if (!hit.isActive) {
+        const target = decodeFCurveTarget(visible.find((d) => d.fcurve.id === hit.fcurveId)?.fcurve);
+        if (target) {
+          // Elevate active via selectionStore (write happens via prop callback).
+          onPickActiveByTarget(target);
+        }
+      }
+      const subPrev = selectedHandles.get(hit.fcurveId) ?? new Map();
+      const subNext = e.shiftKey
+        ? toggleKeyformInSub(subPrev, hit.idx)
+        : new Map([[hit.idx, { center: true, left: true, right: true }]]);
+      // Shift-click also leaves OTHER fcurves' selections intact;
+      // non-shift replaces the WHOLE selection.
+      if (e.shiftKey) {
+        setSubSelection(hit.fcurveId, subNext);
+      } else {
+        setSelectedHandles(new Map([[hit.fcurveId, subNext]]));
+      }
+      startKeyformDrag(e, hit.fcurveId, hit.idx);
       return;
     }
 
-    if (!e.shiftKey) setSelectedHandles(new Map());
+    if (!e.shiftKey) clearSelection();
     const ms = clamp(view.xToTime(x), 0, duration);
     onSeek(ms);
-  }, [fcurve, view, selectedHandles, duration, onSeek, activeActionId]);
+  }, [visible, activeFCurveId, view, selectedHandles, duration, onSeek, onPickActiveByTarget]);
 
   // ── single-keyform drag (Slice 5.B) ─────────────────────────────────
 
-  function startKeyformDrag(e, kfIdx) {
-    const kf = fcurve.keyforms[kfIdx];
+  function startKeyformDrag(e, fcurveId, kfIdx) {
+    const initFC = action.fcurves.find((f) => f.id === fcurveId);
+    const kf = initFC?.keyforms[kfIdx];
     if (!kf) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
-    setViewLock({ minV: sampled.minV, maxV: sampled.maxV });
+    setViewLock({ minV: autoFit.minV, maxV: autoFit.maxV });
     const startClientX = e.clientX;
     const startClientY = e.clientY;
     const snap = view;
@@ -456,7 +583,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const origValue = kf.value;
     const origHandleLeft = { ...kf.handleLeft };
     const origHandleRight = { ...kf.handleRight };
-    const fcurveId = fcurve.id;
     const dragIdxRef = { current: kfIdx };
     let pendingSelectionIdx = null;
 
@@ -492,16 +618,13 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       }, { skipHistory: true });
 
       if (pendingSelectionIdx !== null) {
-        setSelectedHandles(new Map([[pendingSelectionIdx, { center: true, left: true, right: true }]]));
+        setSelectedHandles(new Map([[fcurveId, new Map([[pendingSelectionIdx, { center: true, left: true, right: true }]])]]));
         pendingSelectionIdx = null;
       }
     };
     const cleanup = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      // Slice 5.C — post-release: merge duplicate-time keys + recalc
-      // handles, mirroring Blender's transform-confirm chain at
-      // `transform_convert_graph.cc:1014`.
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
@@ -513,10 +636,8 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
         recalcKeyformHandles(fc.keyforms);
         const finalIdx = remap.get(curIdx);
         if (typeof finalIdx === 'number' && finalIdx >= 0 && finalIdx !== curIdx) {
-          // Defer the state update to after the immer recipe; React
-          // setters from inside `produce` don't fire reliably.
           queueMicrotask(() => {
-            setSelectedHandles(new Map([[finalIdx, { center: true, left: true, right: true }]]));
+            setSelectedHandles(new Map([[fcurveId, new Map([[finalIdx, { center: true, left: true, right: true }]])]]));
           });
         }
       }, { skipHistory: true });
@@ -530,19 +651,19 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     window.addEventListener('pointerup', up);
   }
 
-  function startHandleDrag(e, kfIdx, side) {
-    const kf = fcurve.keyforms[kfIdx];
+  function startHandleDrag(e, fcurveId, kfIdx, side) {
+    const initFC = action.fcurves.find((f) => f.id === fcurveId);
+    const kf = initFC?.keyforms[kfIdx];
     if (!kf) return;
     const sourceHandle = side === 'left' ? kf.handleLeft : kf.handleRight;
     if (!sourceHandle) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
-    setViewLock({ minV: sampled.minV, maxV: sampled.maxV });
+    setViewLock({ minV: autoFit.minV, maxV: autoFit.maxV });
     const startClientX = e.clientX;
     const startClientY = e.clientY;
     const snap = view;
     const origHandle = { ...sourceHandle };
-    const fcurveId = fcurve.id;
 
     const move = (ev) => {
       const dx = ev.clientX - startClientX;
@@ -566,9 +687,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const cleanup = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      // Handle drag does not move the keyform's centre, so no merge
-      // pass is needed; but recalc auto/aligned/vector handles on any
-      // neighbouring AUTO entries that the moved handle's slope changed.
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
@@ -586,37 +704,40 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     window.addEventListener('pointerup', up);
   }
 
-  // ── modal G/S — Slice 5.C ───────────────────────────────────────────
+  // ── modal G/S — Slice 5.C, cross-curve in 5.C+ ──────────────────────
 
-  /**
-   * Open a modal grab (G) or scale (S) for the current selection.
-   * Captures origin snapshots + pivot up front so successive ticks
-   * compute from the start-of-modal baseline (matches Blender's
-   * `t->data[i].iloc`).
-   */
   function startModal(kind, anchorClient) {
     const sel = selectionRef.current;
     if (sel.size === 0) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
-    setViewLock({ minV: sampled.minV, maxV: sampled.maxV });
+    setViewLock({ minV: autoFit.minV, maxV: autoFit.maxV });
     setModal({ kind });
 
     const snap = view;
-    const fcurveId = fcurve.id;
 
-    /** @type {Map<number, ReturnType<typeof snapshotKeyform>>} */
-    const origins = new Map();
+    // Per-FCurve origins + per-FCurve dragIdxByOrigin. The cross-curve
+    // pivot is the median (time, value) across EVERY selected entry on
+    // ANY curve — Blender's `transform_convert_graph.cc:962-988` does
+    // the same (median pivot is global to the transform op).
+    /** @type {Map<string, Map<number, ReturnType<typeof snapshotKeyform>>>} */
+    const originsByFc = new Map();
     let pivotTime = 0;
     let pivotValue = 0;
     let n = 0;
-    for (const [idx] of sel) {
-      const k = fcurve.keyforms[idx];
-      if (!k) continue;
-      origins.set(idx, snapshotKeyform(k));
-      pivotTime += k.time;
-      pivotValue += k.value;
-      n++;
+    for (const [fcurveId, sub] of sel) {
+      const fc = action.fcurves.find((f) => f.id === fcurveId);
+      if (!fc) continue;
+      const subOrigins = new Map();
+      for (const [idx] of sub) {
+        const k = fc.keyforms[idx];
+        if (!k) continue;
+        subOrigins.set(idx, snapshotKeyform(k));
+        pivotTime += k.time;
+        pivotValue += k.value;
+        n++;
+      }
+      if (subOrigins.size > 0) originsByFc.set(fcurveId, subOrigins);
     }
     if (n === 0) {
       endBatch();
@@ -628,8 +749,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const startClientX = anchorClient.x;
     const startClientY = anchorClient.y;
 
-    // For scale: gesture distance reference (cursor distance from pivot
-    // in viewport-px at modal start).
     const pivotPxX = view.tx(pivot.time);
     const pivotPxY = view.ty(pivot.value);
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -640,38 +759,26 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
 
     const msPerFrame = fps > 0 ? 1000 / fps : 1000 / 24;
 
-    // Audit-fix HIGH-A2 (2026-05-16) — replaced the prior reverse-scan
-    // `indexOfOriginMap(curIdx, dragIdxByOrigin)` with a forward
-    // object-identity lookup. The reverse scan returned the FIRST
-    // origIdx whose mapped value equalled `curIdx`; when two selected
-    // origins transiently shared the same `curIdx` (e.g., a prior
-    // tick's sort collapsed two crosses before merge ran), the scan
-    // collapsed them to the same origin and the other origin's
-    // tracking went stale for the rest of the modal session.
-    //
-    // The forward map is rebuilt every tick: we snapshot the kf object
-    // refs from the immer draft AFTER the grab/scale but BEFORE the
-    // sort, then walk the post-sort array and look each kf back up by
-    // identity. `Array.prototype.sort` permutes but never duplicates
-    // entries, so identity is a sound key.
-    let dragIdxByOrigin = new Map(
-      [...origins.keys()].map((idx) => [idx, idx]),
-    );
+    // Per-FCurve dragIdxByOrigin: each FCurve's selected origins track
+    // their post-sort positions via object-identity (same pattern as
+    // Slice 5.C's audit-fix HIGH-A2).
+    /** @type {Map<string, Map<number, number>>} */
+    let dragIdxByOriginByFc = new Map();
+    for (const [fcurveId, subOrigins] of originsByFc) {
+      const m = new Map();
+      for (const [idx] of subOrigins) m.set(idx, idx);
+      dragIdxByOriginByFc.set(fcurveId, m);
+    }
 
     function applyModal(currentX, currentY, shiftKey, ctrlKey) {
       const dxPx = currentX - startClientX;
       const dyPx = currentY - startClientY;
       let dTime = (dxPx / snap.plotW) * duration;
       let dValue = -(dyPx / snap.plotH) * snap.vSpan;
-      if (shiftKey) {
-        dTime *= 0.1;
-        dValue *= 0.1;
-      }
-      // Ctrl-snap dTime to whole frames for grab; scale uses 0.1× steps.
+      if (shiftKey) { dTime *= 0.1; dValue *= 0.1; }
       if (kind === 'g' && ctrlKey && msPerFrame > 0) {
         dTime = Math.round(dTime / msPerFrame) * msPerFrame;
       }
-
       const curDist = Math.hypot(
         (rect ? currentX - rect.left : currentX) - pivotPxX,
         (rect ? currentY - rect.top  : currentY) - pivotPxY,
@@ -684,84 +791,88 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
-        const fc = a.fcurves.find((f) => f.id === fcurveId);
-        if (!fc) return;
-        // Build a working selection map keyed off the *current* indices
-        // (which may have shifted post-sort).
-        /** @type {Map<number, {center,left,right}>} */
-        const workSelection = new Map();
-        /** @type {Map<number, ReturnType<typeof snapshotKeyform>>} */
-        const workOrigins = new Map();
-        for (const [origIdx, parts] of sel) {
-          const curIdx = dragIdxByOrigin.get(origIdx);
-          if (typeof curIdx !== 'number') continue;
-          const k = fc.keyforms[curIdx];
-          if (!k) continue;
-          workSelection.set(curIdx, parts);
-          const o = origins.get(origIdx);
-          if (o) workOrigins.set(curIdx, o);
+        const nextMapByFc = new Map();
+        for (const [fcurveId, sub] of sel) {
+          const fc = a.fcurves.find((f) => f.id === fcurveId);
+          if (!fc) continue;
+          const dragMap = dragIdxByOriginByFc.get(fcurveId);
+          const origMap = originsByFc.get(fcurveId);
+          if (!dragMap || !origMap) continue;
+          const workSelection = new Map();
+          const workOrigins = new Map();
+          for (const [origIdx, parts] of sub) {
+            const curIdx = dragMap.get(origIdx);
+            if (typeof curIdx !== 'number') continue;
+            const k = fc.keyforms[curIdx];
+            if (!k) continue;
+            workSelection.set(curIdx, parts);
+            const o = origMap.get(origIdx);
+            if (o) workOrigins.set(curIdx, o);
+          }
+          if (kind === 'g') {
+            applyGrab(fc, workSelection, workOrigins, dTime, dValue);
+          } else {
+            applyScale(fc, workSelection, workOrigins, pivot, scaleFactor, scaleFactor);
+          }
+          // Identity-track post-sort indices.
+          /** @type {Map<number, any>} */
+          const objsByOrigIdx = new Map();
+          for (const [origIdx, curIdx] of dragMap) {
+            const k = fc.keyforms[curIdx];
+            if (k) objsByOrigIdx.set(origIdx, k);
+          }
+          fc.keyforms.sort((a, b) => a.time - b.time);
+          const nextMap = new Map();
+          for (const [origIdx, obj] of objsByOrigIdx) {
+            const ni = fc.keyforms.indexOf(obj);
+            if (ni >= 0) nextMap.set(origIdx, ni);
+          }
+          nextMapByFc.set(fcurveId, nextMap);
         }
-        if (kind === 'g') {
-          applyGrab(fc, workSelection, workOrigins, dTime, dValue);
-        } else {
-          applyScale(fc, workSelection, workOrigins, pivot, scaleFactor, scaleFactor);
-        }
-        // Snapshot origIdx → kfObject from the post-grab / pre-sort
-        // draft. We need the kf object refs BEFORE the sort so we can
-        // re-find each selected entry at its new index after the sort.
-        /** @type {Map<number, any>} */
-        const objsByOrigIdx = new Map();
-        for (const [origIdx, curIdx] of dragIdxByOrigin) {
-          const k = fc.keyforms[curIdx];
-          if (k) objsByOrigIdx.set(origIdx, k);
-        }
-        fc.keyforms.sort((a, b) => a.time - b.time);
-        // Re-derive dragIdxByOrigin via identity (Array.prototype.sort
-        // permutes refs without duplication, so `indexOf` is sound and
-        // O(n) lookup is acceptable for SS-typical kf counts).
-        const nextMap = new Map();
-        for (const [origIdx, obj] of objsByOrigIdx) {
-          const ni = fc.keyforms.indexOf(obj);
-          if (ni >= 0) nextMap.set(origIdx, ni);
-        }
-        dragIdxByOrigin = nextMap;
+        dragIdxByOriginByFc = nextMapByFc;
       }, { skipHistory: true });
 
-      // Reflect post-sort indices into React selection state so the
-      // canvas re-renders with the correct diamonds highlighted.
+      // Reflect post-sort indices to React selection state.
       const nextSel = new Map();
-      for (const [origIdx, parts] of sel) {
-        const newIdx = dragIdxByOrigin.get(origIdx);
-        if (typeof newIdx === 'number') nextSel.set(newIdx, parts);
+      for (const [fcurveId, sub] of sel) {
+        const dragMap = dragIdxByOriginByFc.get(fcurveId);
+        if (!dragMap) continue;
+        const subNext = new Map();
+        for (const [origIdx, parts] of sub) {
+          const newIdx = dragMap.get(origIdx);
+          if (typeof newIdx === 'number') subNext.set(newIdx, parts);
+        }
+        if (subNext.size > 0) nextSel.set(fcurveId, subNext);
       }
       setSelectedHandles(nextSel);
     }
 
-    function commit() {
-      cleanup(false);
-    }
+    function commit() { cleanup(false); }
     function revert() {
-      // Restore the originals into the (post-sort) positions.
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
-        const fc = a.fcurves.find((f) => f.id === fcurveId);
-        if (!fc) return;
-        for (const [origIdx, o] of origins) {
-          const curIdx = dragIdxByOrigin.get(origIdx);
-          if (typeof curIdx !== 'number') continue;
-          const k = fc.keyforms[curIdx];
-          if (!k) continue;
-          k.time = o.time;
-          k.value = o.value;
-          k.handleLeft = { time: o.handleLeft.time, value: o.handleLeft.value };
-          k.handleRight = { time: o.handleRight.time, value: o.handleRight.value };
-          if (o.handleType) k.handleType = { left: o.handleType.left, right: o.handleType.right };
+        for (const [fcurveId, subOrigins] of originsByFc) {
+          const fc = a.fcurves.find((f) => f.id === fcurveId);
+          if (!fc) continue;
+          const dragMap = dragIdxByOriginByFc.get(fcurveId);
+          if (!dragMap) continue;
+          for (const [origIdx, o] of subOrigins) {
+            const curIdx = dragMap.get(origIdx);
+            if (typeof curIdx !== 'number') continue;
+            const k = fc.keyforms[curIdx];
+            if (!k) continue;
+            k.time = o.time;
+            k.value = o.value;
+            k.handleLeft = { time: o.handleLeft.time, value: o.handleLeft.value };
+            k.handleRight = { time: o.handleRight.time, value: o.handleRight.value };
+            if (o.handleType) k.handleType = { left: o.handleType.left, right: o.handleType.right };
+          }
+          fc.keyforms.sort((a, b) => a.time - b.time);
         }
-        fc.keyforms.sort((a, b) => a.time - b.time);
       }, { skipHistory: true });
-      // Restore selection to original indices.
-      setSelectedHandles(cloneSelection(sel));
+      // Restore original selection.
+      setSelectedHandles(cloneFullSelection(sel));
       cleanup(true);
     }
     function cleanup(cancelled) {
@@ -770,29 +881,41 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       window.removeEventListener('contextmenu', onContextMenu, { capture: true });
       window.removeEventListener('keydown', onKey, { capture: true });
       if (!cancelled) {
-        // Post-confirm: merge duplicates + recalc handles.
         update((p) => {
           const a = getActiveSceneAction(p, activeActionId);
           if (!a) return;
-          const fc = a.fcurves.find((f) => f.id === fcurveId);
-          if (!fc) return;
-          const workSel = new Map();
-          for (const [origIdx, parts] of sel) {
-            const curIdx = dragIdxByOrigin.get(origIdx);
-            if (typeof curIdx === 'number') workSel.set(curIdx, parts);
+          /** @type {Map<string, Map<number, number>>} */
+          const remapsByFc = new Map();
+          for (const [fcurveId, sub] of sel) {
+            const fc = a.fcurves.find((f) => f.id === fcurveId);
+            if (!fc) continue;
+            const dragMap = dragIdxByOriginByFc.get(fcurveId);
+            if (!dragMap) continue;
+            const workSub = new Map();
+            for (const [origIdx, parts] of sub) {
+              const curIdx = dragMap.get(origIdx);
+              if (typeof curIdx === 'number') workSub.set(curIdx, parts);
+            }
+            const remap = mergeDuplicateTimeKeys(fc, workSub);
+            recalcKeyformHandles(fc.keyforms);
+            remapsByFc.set(fcurveId, remap);
           }
-          const remap = mergeDuplicateTimeKeys(fc, workSel);
-          recalcKeyformHandles(fc.keyforms);
-          // Propagate remap to React state.
           queueMicrotask(() => {
             const nextSel = new Map();
-            for (const [origIdx, parts] of sel) {
-              const curIdx = dragIdxByOrigin.get(origIdx);
-              if (typeof curIdx !== 'number') continue;
-              const finalIdx = remap.get(curIdx);
-              if (typeof finalIdx === 'number' && finalIdx >= 0) {
-                nextSel.set(finalIdx, parts);
+            for (const [fcurveId, sub] of sel) {
+              const dragMap = dragIdxByOriginByFc.get(fcurveId);
+              const remap = remapsByFc.get(fcurveId);
+              if (!dragMap || !remap) continue;
+              const subNext = new Map();
+              for (const [origIdx, parts] of sub) {
+                const curIdx = dragMap.get(origIdx);
+                if (typeof curIdx !== 'number') continue;
+                const finalIdx = remap.get(curIdx);
+                if (typeof finalIdx === 'number' && finalIdx >= 0) {
+                  subNext.set(finalIdx, parts);
+                }
               }
+              if (subNext.size > 0) nextSel.set(fcurveId, subNext);
             }
             setSelectedHandles(nextSel);
           });
@@ -829,23 +952,18 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     }
     function onKey(ev) {
       if (ev.key === 'Escape') {
-        ev.preventDefault();
-        ev.stopPropagation();
-        revert();
-        return;
+        ev.preventDefault(); ev.stopPropagation();
+        revert(); return;
       }
       if (ev.key === 'Enter') {
-        ev.preventDefault();
-        ev.stopPropagation();
-        commit();
-        return;
+        ev.preventDefault(); ev.stopPropagation();
+        commit(); return;
       }
       if (ev.key === 'Shift' || ev.key === 'Control' || ev.key === 'Meta') {
         shiftHeld = ev.shiftKey;
         ctrlHeld = ev.ctrlKey || ev.metaKey;
         applyModal(lastX, lastY, shiftHeld, ctrlHeld);
       }
-      // Eat every other key so modal G/S/B/V/T can't chain mid-modal.
       ev.preventDefault();
       ev.stopPropagation();
     }
@@ -855,11 +973,10 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     window.addEventListener('contextmenu', onContextMenu, { capture: true });
     window.addEventListener('keydown', onKey, { capture: true });
     modalCleanupRef.current = () => cleanup(true);
-    // Fire one tick at modal start so the HUD has something to show.
     applyModal(startClientX, startClientY, false, false);
   }
 
-  // ── Box-select (B) — Slice 5.C ──────────────────────────────────────
+  // ── Box-select (B) — Slice 5.C, cross-curve in 5.C+ ─────────────────
 
   function startBoxSelect(anchorClient) {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -909,10 +1026,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     window.addEventListener('mousemove', onMove, { capture: true });
     window.addEventListener('mouseup', onUp, { capture: true });
     window.addEventListener('keydown', onKey, { capture: true });
-    // Audit-fix HIGH-A5 (2026-05-16): expose cleanup so an unmount
-    // mid-box-select releases the three window-level listeners and
-    // clears the in-flight rubberband. Sister of dragCleanupRef +
-    // modalCleanupRef from Slices 5.B/5.C.
     boxSelectCleanupRef.current = () => {
       removeListeners();
       boxSelectCleanupRef.current = null;
@@ -920,61 +1033,64 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     };
   }
 
-  // Audit-fix MED-B5 (2026-05-16) — SS unconditionally tests the
-  // keyform centre + both handle dots against the rect, matching
-  // Blender's `GRAPH_OT_select_box` default `include_handles = true`
-  // (`reference/blender/source/blender/editors/space_graph/graph_select.cc:933-940`).
-  // The `include_handles = false` mode (handles follow the centre's
-  // pick result instead of being tested individually) is unimplemented
-  // and a follow-on slice would expose it as an editor preference.
+  // Cross-curve: iterate ALL visible FCurves, test each kf's centre +
+  // both handle dots against the rect. `include_handles=true` matches
+  // Blender's `GRAPH_OT_select_box` default at `graph_select.cc:933-940`.
   function applyBoxSelect(x1, y1, x2, y2, modifier) {
-    const next = modifier === 'replace' ? new Map() : cloneSelection(selectionRef.current);
-    for (let i = 0; i < fcurve.keyforms.length; i++) {
-      const kf = fcurve.keyforms[i];
-      if (typeof kf.value !== 'number') continue;
-      const kx = view.tx(kf.time);
-      const ky = view.ty(kf.value);
-      const cur = next.get(i) ?? { center: false, left: false, right: false };
-      const inRect = (px, py) => px >= x1 && px <= x2 && py >= y1 && py <= y2;
-      const centerIn = inRect(kx, ky);
-      const leftIn = kf.handleLeft && inRect(view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value));
-      const rightIn = kf.handleRight && inRect(view.tx(kf.handleRight.time), view.ty(kf.handleRight.value));
-      if (modifier === 'subtract') {
-        const out = {
-          center: cur.center && !centerIn,
-          left:   cur.left   && !leftIn,
-          right:  cur.right  && !rightIn,
-        };
-        if (out.center || out.left || out.right) next.set(i, out);
-        else next.delete(i);
-      } else {
-        // replace OR add — same writer; replace started from empty
-        const out = {
-          center: cur.center || centerIn,
-          left:   cur.left   || leftIn,
-          right:  cur.right  || rightIn,
-        };
-        if (out.center || out.left || out.right) next.set(i, out);
+    const base = modifier === 'replace' ? new Map() : cloneFullSelection(selectionRef.current);
+    const inRect = (px, py) => px >= x1 && px <= x2 && py >= y1 && py <= y2;
+    for (const d of visible) {
+      const subBase = base.get(d.fcurve.id) ?? new Map();
+      const subNext = new Map(subBase);
+      for (let i = 0; i < d.fcurve.keyforms.length; i++) {
+        const kf = d.fcurve.keyforms[i];
+        if (typeof kf.value !== 'number') continue;
+        const kx = view.tx(kf.time);
+        const ky = view.ty(kf.value);
+        const cur = subNext.get(i) ?? { center: false, left: false, right: false };
+        const centerIn = inRect(kx, ky);
+        const leftIn = kf.handleLeft && inRect(view.tx(kf.handleLeft.time), view.ty(kf.handleLeft.value));
+        const rightIn = kf.handleRight && inRect(view.tx(kf.handleRight.time), view.ty(kf.handleRight.value));
+        if (modifier === 'subtract') {
+          const out = {
+            center: cur.center && !centerIn,
+            left:   cur.left   && !leftIn,
+            right:  cur.right  && !rightIn,
+          };
+          if (out.center || out.left || out.right) subNext.set(i, out);
+          else subNext.delete(i);
+        } else {
+          const out = {
+            center: cur.center || centerIn,
+            left:   cur.left   || leftIn,
+            right:  cur.right  || rightIn,
+          };
+          if (out.center || out.left || out.right) subNext.set(i, out);
+        }
       }
+      if (subNext.size > 0) base.set(d.fcurve.id, subNext);
+      else base.delete(d.fcurve.id);
     }
-    setSelectedHandles(next);
+    setSelectedHandles(base);
   }
 
   // ── Operator handlers (V / T / Shift+E / Delete / Home / Ctrl+G) ───
+  // Per-curve iteration — operators apply to every FCurve in the selection.
 
   function operatorSetHandleType(type) {
     const sel = selectionRef.current;
     if (sel.size === 0) return;
-    const fcurveId = fcurve.id;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const fc = a.fcurves.find((f) => f.id === fcurveId);
-      if (!fc) return;
-      setHandleType(fc, sel, type, 'both');
-      recalcKeyformHandles(fc.keyforms);
+      for (const [fcurveId, sub] of sel) {
+        const fc = a.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        setHandleType(fc, sub, type, 'both');
+        recalcKeyformHandles(fc.keyforms);
+      }
     });
     endBatch();
   }
@@ -982,30 +1098,40 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   function operatorSetInterpolation(interp) {
     const sel = selectionRef.current;
     if (sel.size === 0) return;
-    const fcurveId = fcurve.id;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const fc = a.fcurves.find((f) => f.id === fcurveId);
-      if (!fc) return;
-      setInterpolation(fc, sel, interp);
-      recalcKeyformHandles(fc.keyforms);
+      for (const [fcurveId, sub] of sel) {
+        const fc = a.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        setInterpolation(fc, sub, interp);
+        recalcKeyformHandles(fc.keyforms);
+      }
     });
     endBatch();
   }
 
   function operatorSetExtrapolation(extrap) {
-    const fcurveId = fcurve.id;
+    // Extrapolation is a per-FCurve property; apply to every FCurve in
+    // the selection. If no selection but an active curve exists, fall
+    // back to it (Blender's behaviour for "operate on active").
+    const sel = selectionRef.current;
+    const targetIds = sel.size > 0
+      ? [...sel.keys()]
+      : (activeFCurveId ? [activeFCurveId] : []);
+    if (targetIds.length === 0) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const fc = a.fcurves.find((f) => f.id === fcurveId);
-      if (!fc) return;
-      setExtrapolation(fc, extrap);
+      for (const fcurveId of targetIds) {
+        const fc = a.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        setExtrapolation(fc, extrap);
+      }
     });
     endBatch();
   }
@@ -1013,40 +1139,56 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   function operatorDelete() {
     const sel = selectionRef.current;
     if (sel.size === 0) return;
-    // Audit-fix HIGH-A4 (2026-05-16) — the "would leave zero keyforms"
-    // guard now fires BEFORE `beginBatch`. The prior shape called
-    // `beginBatch` unconditionally and then bailed inside the recipe;
-    // every no-op delete then pushed a phantom snapshot onto the undo
-    // stack, so Ctrl+Z after a "can't delete the last keyform" attempt
-    // consumed an undo slot and restored the project to itself.
-    //
-    // The Timeline shows ≥1-keyform curves only; zero-keyform curves
-    // are unrepresented (pickFCurve drops them and the evaluator would
-    // return undefined). So we refuse to drop the curve's last entry.
-    const wouldDelete = countDeletable(sel);
-    if (wouldDelete === 0) return;
-    if (fcurve.keyforms.length - wouldDelete < 1) return;
-    const fcurveId = fcurve.id;
+    // Last-kf guard runs PER-CURVE — refuse to drop any FCurve's last
+    // keyform (the Timeline shows ≥1-kf curves only). Audit-fix HIGH-A4
+    // from Slice 5.C: the guard fires BEFORE `beginBatch` so no phantom
+    // undo snapshot is pushed.
+    /** @type {Map<string, Map<number, any>>} */
+    const toDelete = new Map();
+    let anyDeletable = false;
+    for (const [fcurveId, sub] of sel) {
+      const fc = action.fcurves.find((f) => f.id === fcurveId);
+      if (!fc) continue;
+      const wouldDelete = countDeletableInSub(sub);
+      if (wouldDelete === 0) continue;
+      if (fc.keyforms.length - wouldDelete < 1) continue;
+      toDelete.set(fcurveId, sub);
+      anyDeletable = true;
+    }
+    if (!anyDeletable) return;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const fc = a.fcurves.find((f) => f.id === fcurveId);
-      if (!fc) return;
-      const remap = deleteKeyforms(fc, sel);
-      recalcKeyformHandles(fc.keyforms);
-      // Propagate remap to React state.
+      /** @type {Map<string, Map<number, number>>} */
+      const remapsByFc = new Map();
+      for (const [fcurveId, sub] of toDelete) {
+        const fc = a.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        const remap = deleteKeyforms(fc, sub);
+        recalcKeyformHandles(fc.keyforms);
+        remapsByFc.set(fcurveId, remap);
+      }
       queueMicrotask(() => {
-        setSelectedHandles(remapSelection(sel, remap));
+        const nextSel = new Map();
+        for (const [fcurveId, sub] of sel) {
+          const remap = remapsByFc.get(fcurveId);
+          if (!remap) {
+            // Untouched FCurve — preserve its sub-selection as-is.
+            nextSel.set(fcurveId, cloneSubSelection(sub));
+            continue;
+          }
+          const remapped = remapSelection(sub, remap);
+          if (remapped.size > 0) nextSel.set(fcurveId, remapped);
+        }
+        setSelectedHandles(nextSel);
       });
     });
     endBatch();
   }
 
   function operatorHome() {
-    // Clear view-lock — `view` derives from `sampled.{minV,maxV}` when
-    // lock is null, so this auto-fits to the current curve range.
     setViewLock(null);
   }
 
@@ -1054,52 +1196,57 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     const sel = selectionRef.current;
     if (sel.size === 0) return;
     const msPerFrame = fps > 0 ? 1000 / fps : 1000 / 24;
-    const fcurveId = fcurve.id;
     const proj = useProjectStore.getState().project;
     beginBatch(proj);
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const fc = a.fcurves.find((f) => f.id === fcurveId);
-      if (!fc) return;
-      // Audit-fix HIGH-A1 / MED-B7 (2026-05-16) — pre-snap the array
-      // is in time-order; post-snap the times have shifted and the
-      // sort may permute entries. We capture origIdx → kf object refs
-      // BEFORE the sort, then re-derive a post-sort selection via
-      // identity so `mergeDuplicateTimeKeys` is fed indices that
-      // actually point at the selected entries. Without this remap,
-      // the snap could silently merge the wrong keyform (collapsing
-      // an unselected entry against a selected one and dropping the
-      // user's snapped position).
-      /** @type {Map<number, any>} */
-      const objsByOrigIdx = new Map();
-      for (const [origIdx] of sel) {
-        const k = fc.keyforms[origIdx];
-        if (k) objsByOrigIdx.set(origIdx, k);
+      /** @type {Map<string, {postSortSel:Map<number,any>, remap:Map<number,number>}>} */
+      const resultByFc = new Map();
+      for (const [fcurveId, sub] of sel) {
+        const fc = a.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        // Same identity-track pattern as Slice 5.C audit-fix HIGH-A1.
+        /** @type {Map<number, any>} */
+        const objsByOrigIdx = new Map();
+        for (const [origIdx] of sub) {
+          const k = fc.keyforms[origIdx];
+          if (k) objsByOrigIdx.set(origIdx, k);
+        }
+        snapKeyformsToFrame(fc, sub, msPerFrame);
+        fc.keyforms.sort((a, b) => a.time - b.time);
+        const postSortSel = new Map();
+        for (const [origIdx, parts] of sub) {
+          const obj = objsByOrigIdx.get(origIdx);
+          if (!obj) continue;
+          const ni = fc.keyforms.indexOf(obj);
+          if (ni >= 0) postSortSel.set(ni, parts);
+        }
+        const remap = mergeDuplicateTimeKeys(fc, postSortSel);
+        recalcKeyformHandles(fc.keyforms);
+        resultByFc.set(fcurveId, { postSortSel, remap });
       }
-      snapKeyformsToFrame(fc, sel, msPerFrame);
-      fc.keyforms.sort((a, b) => a.time - b.time);
-      /** @type {Map<number, {center:boolean,left:boolean,right:boolean}>} */
-      const postSortSel = new Map();
-      for (const [origIdx, parts] of sel) {
-        const obj = objsByOrigIdx.get(origIdx);
-        if (!obj) continue;
-        const ni = fc.keyforms.indexOf(obj);
-        if (ni >= 0) postSortSel.set(ni, parts);
-      }
-      const remap = mergeDuplicateTimeKeys(fc, postSortSel);
-      recalcKeyformHandles(fc.keyforms);
       queueMicrotask(() => {
-        setSelectedHandles(remapSelection(postSortSel, remap));
+        const nextSel = new Map();
+        for (const [fcurveId, { postSortSel, remap }] of resultByFc) {
+          const remapped = remapSelection(postSortSel, remap);
+          if (remapped.size > 0) nextSel.set(fcurveId, remapped);
+        }
+        setSelectedHandles(nextSel);
       });
     });
     endBatch();
   }
 
   function operatorSelectAll() {
+    // Select-all across ALL visible curves' ALL keyforms.
     const next = new Map();
-    for (let i = 0; i < fcurve.keyforms.length; i++) {
-      next.set(i, { center: true, left: true, right: true });
+    for (const d of visible) {
+      const sub = new Map();
+      for (let i = 0; i < d.fcurve.keyforms.length; i++) {
+        sub.set(i, { center: true, left: true, right: true });
+      }
+      if (sub.size > 0) next.set(d.fcurve.id, sub);
     }
     setSelectedHandles(next);
   }
@@ -1107,13 +1254,10 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
   // ── Hotkey dispatch ─────────────────────────────────────────────────
 
   const onKeyDown = useCallback((e) => {
-    if (modal) return; // Modal owns the keystrokes via its capture listener.
-    if (menu) return;  // Menu owns the keystrokes.
-    // Most operator hotkeys are single-letter; let the browser handle
-    // text-input keys outside our scope.
+    if (modal) return;
+    if (menu) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-    // Get cursor anchor for modal G/S — defaults to centre of canvas.
     const rect = canvasRef.current?.getBoundingClientRect();
     const anchor = rect
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
@@ -1132,11 +1276,6 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
     }
     if (e.code === 'KeyB') {
       e.preventDefault();
-      // For B-key, the box starts at the cursor's current position.
-      // We don't have a current cursor event here — use canvas centre
-      // as the anchor (Blender does the same: B opens a rubberband
-      // anchored at the cursor's current position, but we use centre
-      // as a safe default and the user can drag from there).
       startBoxSelect(anchor);
       return;
     }
@@ -1168,96 +1307,181 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
       return;
     }
     if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey) {
-      // Blender's A in space_graph = toggle-all (deselect if any selected).
       e.preventDefault();
-      if (selectionRef.current.size > 0) setSelectedHandles(new Map());
+      if (selectionRef.current.size > 0) clearSelection();
       else operatorSelectAll();
       return;
     }
-    // Audit-fix MED-A2 (2026-05-16) — `view` is in the dep array so
-    // `startModal`'s captured `snap` (= `view`) refreshes when the
-    // container resizes between hotkey presses. Without this, the
-    // first G after a resize used pre-resize `plotW`/`plotH` for
-    // dTime/dValue math; the cursor delta computed wrong magnitudes
-    // until the next render that touched `fcurve` or `fps`.
-  }, [modal, menu, fcurve, fps, view]);
+  }, [modal, menu, fps, view, visible, activeFCurveId]);
+
+  // Sidebar action — toggle visibility.
+  const toggleHidden = useCallback((fcurveId) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(fcurveId)) next.delete(fcurveId);
+      else next.add(fcurveId);
+      return next;
+    });
+  }, []);
+
+  // For the menu, "current" needs to know the active fcurve to read
+  // extrapolation; for handle type / interp we use the most-common value
+  // across the WHOLE multi-curve selection.
+  const activeFCurveDecoded = visible.find((d) => d.fcurve.id === activeFCurveId)?.fcurve ?? null;
 
   return (
     <div
       ref={wrapRef}
-      className="relative w-full h-full focus:outline-none"
+      className="relative w-full h-full flex focus:outline-none"
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPointerEnter={() => wrapRef.current?.focus({ preventScroll: true })}
     >
-      <svg
-        width={view.w}
-        height={view.h}
-        className="absolute inset-0 pointer-events-none"
-      >
-        <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={view.h - PAD_B}
-          stroke="currentColor" className="text-border" strokeWidth={1} />
-        <line x1={PAD_L} y1={view.h - PAD_B} x2={view.w - PAD_R} y2={view.h - PAD_B}
-          stroke="currentColor" className="text-border" strokeWidth={1} />
-
-        <text x={PAD_L - 4} y={PAD_T + 8} textAnchor="end" fontSize={10}
-          className="fill-muted-foreground font-mono">{maxV.toFixed(2)}</text>
-        <text x={PAD_L - 4} y={view.h - PAD_B} textAnchor="end" fontSize={10}
-          className="fill-muted-foreground font-mono">{minV.toFixed(2)}</text>
-
-        {[0, 0.33, 0.67, 1].map((p) => (
-          <text key={p}
-            x={view.tx(p * duration)} y={view.h - 4} textAnchor="middle" fontSize={10}
-            className="fill-muted-foreground font-mono">
-            {((p * duration) / 1000).toFixed(1)}s
-          </text>
-        ))}
-
-        {minV < 0 && maxV > 0 ? (
-          <line x1={PAD_L} y1={view.ty(0)} x2={view.w - PAD_R} y2={view.ty(0)}
-            stroke="currentColor" className="text-border/60" strokeDasharray="2 2" strokeWidth={1} />
-        ) : null}
-
-        <path d={curvePath} fill="none" stroke="currentColor"
-          className="text-primary" strokeWidth={1.5} />
-
-        <line x1={view.tx(currentTime)} y1={PAD_T}
-          x2={view.tx(currentTime)} y2={view.h - PAD_B}
-          stroke="currentColor" className="text-primary/70" strokeWidth={1} />
-
-        {boxSelect ? (
-          <rect
-            x={Math.min(boxSelect.x, boxSelect.curX)}
-            y={Math.min(boxSelect.y, boxSelect.curY)}
-            width={Math.abs(boxSelect.curX - boxSelect.x)}
-            height={Math.abs(boxSelect.curY - boxSelect.y)}
-            fill="hsl(25 95% 55% / 0.10)"
-            stroke="hsl(25 95% 55%)"
-            strokeWidth={1}
-            strokeDasharray="4 3"
-          />
-        ) : null}
-      </svg>
-
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 cursor-crosshair focus:outline-none"
-        tabIndex={-1}
-        onPointerDown={onPointerDown}
+      <Sidebar
+        decoded={decoded}
+        hidden={hidden}
+        activeFCurveId={activeFCurveId}
+        onToggleHidden={toggleHidden}
+        onPickActiveByTarget={onPickActiveByTarget}
+        selection={selectedHandles}
       />
 
-      {modal ? <ModalHUD kind={modal.kind} /> : null}
-      {menu ? (
-        <OperatorMenu
-          menu={menu}
-          fcurve={fcurve}
-          selection={selectedHandles}
-          onClose={() => setMenu(null)}
-          onPickHandleType={operatorSetHandleType}
-          onPickInterpolation={operatorSetInterpolation}
-          onPickExtrapolation={operatorSetExtrapolation}
+      <div className="relative flex-1 min-w-0 h-full">
+        <svg
+          width={view.w}
+          height={view.h}
+          className="absolute inset-0 pointer-events-none"
+        >
+          <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={view.h - PAD_B}
+            stroke="currentColor" className="text-border" strokeWidth={1} />
+          <line x1={PAD_L} y1={view.h - PAD_B} x2={view.w - PAD_R} y2={view.h - PAD_B}
+            stroke="currentColor" className="text-border" strokeWidth={1} />
+
+          <text x={PAD_L - 4} y={PAD_T + 8} textAnchor="end" fontSize={10}
+            className="fill-muted-foreground font-mono">{maxV.toFixed(2)}</text>
+          <text x={PAD_L - 4} y={view.h - PAD_B} textAnchor="end" fontSize={10}
+            className="fill-muted-foreground font-mono">{minV.toFixed(2)}</text>
+
+          {[0, 0.33, 0.67, 1].map((p) => (
+            <text key={p}
+              x={view.tx(p * duration)} y={view.h - 4} textAnchor="middle" fontSize={10}
+              className="fill-muted-foreground font-mono">
+              {((p * duration) / 1000).toFixed(1)}s
+            </text>
+          ))}
+
+          {minV < 0 && maxV > 0 ? (
+            <line x1={PAD_L} y1={view.ty(0)} x2={view.w - PAD_R} y2={view.ty(0)}
+              stroke="currentColor" className="text-border/60" strokeDasharray="2 2" strokeWidth={1} />
+          ) : null}
+
+          {curvePaths.map((cp) => (
+            <path
+              key={cp.id}
+              d={cp.d}
+              fill="none"
+              stroke={cp.color}
+              strokeOpacity={cp.isActive ? 1.0 : CTX_ALPHA}
+              strokeWidth={cp.isActive ? 2.5 : 1.0}
+            />
+          ))}
+
+          <line x1={view.tx(currentTime)} y1={PAD_T}
+            x2={view.tx(currentTime)} y2={view.h - PAD_B}
+            stroke="currentColor" className="text-primary/70" strokeWidth={1} />
+
+          {boxSelect ? (
+            <rect
+              x={Math.min(boxSelect.x, boxSelect.curX)}
+              y={Math.min(boxSelect.y, boxSelect.curY)}
+              width={Math.abs(boxSelect.curX - boxSelect.x)}
+              height={Math.abs(boxSelect.curY - boxSelect.y)}
+              fill="hsl(25 95% 55% / 0.10)"
+              stroke="hsl(25 95% 55%)"
+              strokeWidth={1}
+              strokeDasharray="4 3"
+            />
+          ) : null}
+        </svg>
+
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 cursor-crosshair focus:outline-none"
+          tabIndex={-1}
+          onPointerDown={onPointerDown}
         />
-      ) : null}
+
+        {modal ? <ModalHUD kind={modal.kind} /> : null}
+        {menu ? (
+          <OperatorMenu
+            menu={menu}
+            selection={selectedHandles}
+            action={action}
+            activeFCurve={activeFCurveDecoded}
+            onClose={() => setMenu(null)}
+            onPickHandleType={operatorSetHandleType}
+            onPickInterpolation={operatorSetInterpolation}
+            onPickExtrapolation={operatorSetExtrapolation}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
+
+function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onPickActiveByTarget, selection }) {
+  return (
+    <div
+      className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
+      style={{ width: SIDEBAR_W }}
+    >
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
+        F-Curves ({decoded.length})
+      </div>
+      {decoded.map((d) => {
+        const isActive = d.fcurve.id === activeFCurveId;
+        const isHidden = hidden.has(d.fcurve.id);
+        const hasSelection = (selection.get(d.fcurve.id)?.size ?? 0) > 0;
+        return (
+          <div
+            key={d.fcurve.id}
+            className={
+              'group flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:bg-accent/40 ' +
+              (isActive ? 'bg-accent/60 text-foreground' : 'text-muted-foreground')
+            }
+            onClick={() => {
+              const t = decodeFCurveTarget(d.fcurve);
+              if (t) onPickActiveByTarget(t);
+            }}
+            title={d.tooltip}
+          >
+            <button
+              type="button"
+              className="w-4 h-4 flex items-center justify-center text-[10px] hover:text-foreground"
+              onClick={(e) => { e.stopPropagation(); onToggleHidden(d.fcurve.id); }}
+              title={isHidden ? 'Show curve' : 'Hide curve'}
+              aria-label={isHidden ? 'Show curve' : 'Hide curve'}
+            >
+              {isHidden ? '○' : '●'}
+            </button>
+            <span
+              className="w-3 h-3 rounded-sm flex-shrink-0"
+              style={{ backgroundColor: d.color, opacity: isHidden ? 0.3 : 1 }}
+              aria-hidden
+            />
+            <span className={'truncate flex-1 ' + (isHidden ? 'opacity-50 line-through' : '')}>
+              {d.label}
+            </span>
+            {hasSelection ? (
+              <span className="text-[9px] font-mono text-amber-400" title="Has selection">
+                ●
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1267,14 +1491,16 @@ function Plot({ activeActionId, fcurve, sampled, duration, currentTime, fps, onS
 /**
  * @param {CanvasRenderingContext2D} ctx
  * @param {any[]} keyforms
- * @param {Map<number, {center:boolean,left:boolean,right:boolean}>} selectedHandles
+ * @param {Map<number, {center:boolean,left:boolean,right:boolean}>|undefined} sub
  * @param {{tx:(t:number)=>number, ty:(v:number)=>number}} view
+ * @param {boolean} isActive
  */
-function drawHandles(ctx, keyforms, selectedHandles, view) {
-  if (selectedHandles.size === 0) return;
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)'; // amber-500
+function drawHandles(ctx, keyforms, sub, view, isActive) {
+  if (!sub || sub.size === 0) return;
+  // Context curve handles still draw, but dimmer.
+  ctx.strokeStyle = isActive ? 'rgba(245, 158, 11, 0.55)' : 'rgba(245, 158, 11, 0.30)';
   ctx.lineWidth = 1;
-  for (const [i, parts] of selectedHandles) {
+  for (const [i, parts] of sub) {
     const kf = keyforms[i];
     if (!kf) continue;
     const kx = view.tx(kf.time);
@@ -1309,18 +1535,22 @@ function drawHandles(ctx, keyforms, selectedHandles, view) {
 /**
  * @param {CanvasRenderingContext2D} ctx
  * @param {any[]} keyforms
- * @param {Map<number, {center:boolean,left:boolean,right:boolean}>} selectedHandles
+ * @param {Map<number, {center:boolean,left:boolean,right:boolean}>|undefined} sub
  * @param {{tx:(t:number)=>number, ty:(v:number)=>number}} view
+ * @param {boolean} isActive
  */
-function drawKeyframes(ctx, keyforms, selectedHandles, view) {
+function drawKeyframes(ctx, keyforms, sub, view, isActive) {
   for (let i = 0; i < keyforms.length; i++) {
     const kf = keyforms[i];
     if (typeof kf.value !== 'number') continue;
     const x = view.tx(kf.time);
     const y = view.ty(kf.value);
-    const parts = selectedHandles.get(i);
+    const parts = sub?.get(i);
     const sel = !!parts?.center;
-    const r = sel ? 5 : 4;
+    // Context curve diamonds: smaller + dimmer to push them visually behind.
+    const baseR = isActive ? 4 : 3;
+    const r = sel ? baseR + 1 : baseR;
+    ctx.globalAlpha = isActive ? 1.0 : CTX_ALPHA;
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r, y);
@@ -1333,6 +1563,7 @@ function drawKeyframes(ctx, keyforms, selectedHandles, view) {
     ctx.lineWidth = sel ? 1.5 : 1;
     ctx.stroke();
   }
+  ctx.globalAlpha = 1.0;
 }
 
 // ── HUD + Menu subcomponents ─────────────────────────────────────────
@@ -1347,7 +1578,7 @@ function ModalHUD({ kind }) {
   );
 }
 
-function OperatorMenu({ menu, fcurve, selection, onClose, onPickHandleType, onPickInterpolation, onPickExtrapolation }) {
+function OperatorMenu({ menu, selection, action, activeFCurve, onClose, onPickHandleType, onPickInterpolation, onPickExtrapolation }) {
   const items = menu.kind === 'handleType' ? HANDLE_TYPES
               : menu.kind === 'interpolation' ? INTERPOLATION_TYPES
               : EXTRAPOLATION_TYPES;
@@ -1355,30 +1586,49 @@ function OperatorMenu({ menu, fcurve, selection, onClose, onPickHandleType, onPi
                : menu.kind === 'interpolation' ? onPickInterpolation
                : onPickExtrapolation;
 
-  // Detect the "current" choice for highlighting:
-  //   - handle type: most common type across selected entries' left side
-  //   - interpolation: most common across selected entries
-  //   - extrapolation: per-fcurve field
+  // "Current" highlighting now spans the multi-curve selection.
   const current = useMemo(() => {
-    if (menu.kind === 'extrapolation') return fcurve.extrapolation ?? 'constant';
+    if (menu.kind === 'extrapolation') {
+      // Per-FCurve property. Show the active curve's value (or null if
+      // every selected fcurve agrees / disagrees).
+      if (selection.size === 0) {
+        return activeFCurve?.extrapolation ?? 'constant';
+      }
+      const seen = new Set();
+      for (const [fcurveId] of selection) {
+        const fc = action.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        seen.add(fc.extrapolation ?? 'constant');
+        if (seen.size > 1) return null;
+      }
+      return [...seen][0] ?? null;
+    }
     if (menu.kind === 'handleType') {
       const counts = new Map();
-      for (const [idx] of selection) {
-        const kf = fcurve.keyforms[idx];
-        if (!kf?.handleType) continue;
-        counts.set(kf.handleType.left, (counts.get(kf.handleType.left) ?? 0) + 1);
+      for (const [fcurveId, sub] of selection) {
+        const fc = action.fcurves.find((f) => f.id === fcurveId);
+        if (!fc) continue;
+        for (const [idx] of sub) {
+          const kf = fc.keyforms[idx];
+          if (!kf?.handleType) continue;
+          counts.set(kf.handleType.left, (counts.get(kf.handleType.left) ?? 0) + 1);
+        }
       }
       return mostCommon(counts) ?? null;
     }
     // interpolation
     const counts = new Map();
-    for (const [idx] of selection) {
-      const kf = fcurve.keyforms[idx];
-      if (!kf?.interpolation) continue;
-      counts.set(kf.interpolation, (counts.get(kf.interpolation) ?? 0) + 1);
+    for (const [fcurveId, sub] of selection) {
+      const fc = action.fcurves.find((f) => f.id === fcurveId);
+      if (!fc) continue;
+      for (const [idx] of sub) {
+        const kf = fc.keyforms[idx];
+        if (!kf?.interpolation) continue;
+        counts.set(kf.interpolation, (counts.get(kf.interpolation) ?? 0) + 1);
+      }
     }
     return mostCommon(counts) ?? null;
-  }, [menu.kind, fcurve, selection]);
+  }, [menu.kind, selection, action, activeFCurve]);
 
   useEffect(() => {
     function onDocKey(ev) {
@@ -1387,7 +1637,6 @@ function OperatorMenu({ menu, fcurve, selection, onClose, onPickHandleType, onPi
         onClose();
         return;
       }
-      // 1..9 shortcuts: index into the menu items.
       const n = ev.key.charCodeAt(0) - '1'.charCodeAt(0);
       if (n >= 0 && n < items.length) {
         ev.preventDefault();
@@ -1453,6 +1702,46 @@ function pickFCurve(action, selection) {
   return null;
 }
 
+/**
+ * Build label maps once per project change. Used for sidebar rows.
+ */
+function buildLabelMaps(project) {
+  const nodeNameById = new Map((project.nodes ?? []).map((n) => [n.id, n.name ?? n.id]));
+  const paramNameById = new Map((project.parameters ?? []).map((p) => [p.id, p.name ?? p.id]));
+  return { nodeNameById, paramNameById };
+}
+
+/**
+ * Decode every FCurve in the action into a render row with stable
+ * color (Blender's `FCURVE_COLOR_AUTO_RAINBOW` via `getcolor_fcurve_rainbow`).
+ * Curves whose target doesn't resolve are skipped.
+ */
+function decodeAllFCurves(action, labels) {
+  const fcurves = action.fcurves ?? [];
+  // Filter to resolvable targets BEFORE assigning rainbow indices so
+  // the color count matches what actually renders (Blender does the
+  // same — `ANIMFILTER_FCURVESONLY` filter at `space_graph.cc:711`).
+  const resolved = [];
+  for (const fc of fcurves) {
+    const target = decodeFCurveTarget(fc);
+    if (!target) continue;
+    let label, tooltip;
+    if (target.kind === 'param') {
+      label = labels.paramNameById.get(target.paramId) ?? target.paramId;
+      tooltip = `Parameter ${target.paramId}`;
+    } else {
+      label = `${labels.nodeNameById.get(target.nodeId) ?? target.nodeId} · ${target.property}`;
+      tooltip = `Node ${target.nodeId} · ${target.property}`;
+    }
+    resolved.push({ fcurve: fc, target, label, tooltip });
+  }
+  const tot = resolved.length;
+  return resolved.map((r, i) => ({
+    ...r,
+    color: fcurveColorCss(i, tot, 1),
+  }));
+}
+
 function sampleCurve(fcurve, duration) {
   const values = [];
   let minV = Infinity;
@@ -1494,25 +1783,35 @@ function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-function cloneSelection(sel) {
+function cloneSubSelection(sub) {
   /** @type {Map<number, {center:boolean,left:boolean,right:boolean}>} */
   const next = new Map();
-  for (const [idx, parts] of sel) {
+  if (!sub) return next;
+  for (const [idx, parts] of sub) {
     next.set(idx, { center: parts.center, left: parts.left, right: parts.right });
   }
   return next;
 }
 
-function toggleKeyformSelection(sel, idx) {
-  const next = cloneSelection(sel);
+function cloneFullSelection(sel) {
+  /** @type {Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>} */
+  const next = new Map();
+  for (const [fid, sub] of sel) {
+    next.set(fid, cloneSubSelection(sub));
+  }
+  return next;
+}
+
+function toggleKeyformInSub(sub, idx) {
+  const next = cloneSubSelection(sub);
   if (next.has(idx)) next.delete(idx);
   else next.set(idx, { center: true, left: true, right: true });
   return next;
 }
 
-function countDeletable(sel) {
+function countDeletableInSub(sub) {
   let n = 0;
-  for (const [, parts] of sel) if (parts.center) n++;
+  for (const [, parts] of sub) if (parts.center) n++;
   return n;
 }
 
