@@ -32,6 +32,7 @@
 
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
 import { decodeFCurveTarget } from '../../animationFCurve.js';
+import { isFCurveMuted } from '../../fcurveMute.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -45,6 +46,12 @@ export function kernelAnimationTrackEval(op, ctx) {
   // Build pass writes tag = fc.rnaPath. Locate by exact match.
   const fc = fcurves.find((f) => f?.rnaPath === tag);
   if (!fc) return undefined;
+  // Audit-fix HIGH-A2 (Slice 5.G dual-audit 2026-05-16): mute gate.
+  // Sister to the same gate in `kernelFCurveEval`; ANIMATION_TRACK_EVAL
+  // is the depgraph's per-fcurve op for full action eval and was
+  // pre-fix ungated. Mirrors `is_fcurve_evaluatable` at
+  // `reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`.
+  if (isFCurveMuted(fc)) return undefined;
 
   const target = decodeFCurveTarget(fc);
   if (!target) return undefined;

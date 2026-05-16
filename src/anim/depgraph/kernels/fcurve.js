@@ -49,8 +49,10 @@ export function kernelFCurveEval(op, ctx) {
   const fc = fcurves.find((f) => f?.rnaPath === tag);
   if (!fc) return NaN;
   // Slice 5.G — Blender's eval-side mute gate per
-  // `is_fcurve_evaluatable` (`animrig/intern/evaluation.cc:345-356`)
+  // `is_fcurve_evaluatable` (`animrig/intern/evaluation.cc:95-111`)
   // and `BKE_animsys_eval_driver` (`blenkernel/intern/anim_sys.cc:4302`).
+  // (Audit-fix HIGH-B1 2026-05-16: evaluation.cc citation corrected
+  // from :345-356, which is the older anim_sys.cc copy.)
   // Skipping returns NaN AND does NOT touch `ctx.paramOverrides`, so
   // the downstream PARAM_EVAL op reads the unchanged store value.
   if (isFCurveMuted(fc)) return NaN;

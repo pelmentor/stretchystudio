@@ -365,7 +365,10 @@ export function evaluateActionFCurves(action, timeMs, evalContext = {}) {
   if (!action || !Array.isArray(action.fcurves)) return out;
   for (const fc of action.fcurves) {
     // Slice 5.G — Blender's eval-side mute gate per
-    // `is_fcurve_evaluatable` at `animrig/intern/evaluation.cc:345-356`.
+    // `is_fcurve_evaluatable` at `animrig/intern/evaluation.cc:95-111`
+    // (audit-fix HIGH-B1 2026-05-16: was mis-cited as :345-356, which
+    // is the older anim_sys.cc copy with group-mute + FCURVE_DISABLED
+    // checks SS doesn't need — see fcurveMute.js header for rationale).
     // Skipping leaves the bound parameter at its prior value (the Map
     // entry is simply absent for the downstream override merge).
     // Caller-side gate so `evaluateFCurve` itself stays a pure value

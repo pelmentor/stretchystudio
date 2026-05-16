@@ -13,12 +13,24 @@
  * The flag has two distinct caller sites:
  *
  *   - **Eval gate** — `is_fcurve_evaluatable` at
- *     `reference/blender/source/blender/animrig/intern/evaluation.cc:345-356`
- *     returns `false` when `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)`,
- *     short-circuiting the entire `calculate_fcurve` path. The animation
- *     evaluator (`animsys_eval_fcurves`, `evaluate_action_fcurves`) walks
- *     each curve and SKIPS muted curves — the bound property keeps its
- *     prior value rather than getting overwritten with anything.
+ *     `reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`
+ *     returns `false` when `fcu->flag & FCURVE_MUTED`, short-circuiting
+ *     the entire `calculate_fcurve` path. The animation evaluator
+ *     (`animsys_eval_fcurves`, `evaluate_action_fcurves`) walks each
+ *     curve and SKIPS muted curves — the bound property keeps its prior
+ *     value rather than getting overwritten with anything.
+ *
+ *     Audit note (Slice 5.G dual-audit 2026-05-16, HIGH-B1): SS mirrors
+ *     the **animrig** copy of `is_fcurve_evaluatable` (at evaluation.cc
+ *     line 95), NOT the older `blenkernel/intern/anim_sys.cc:345` copy.
+ *     The animrig version is documented as "Copy of the same-named
+ *     function in anim_sys.cc, with the check on action groups removed"
+ *     and per Blender issue #135666 the `FCURVE_DISABLED` check is also
+ *     intentionally excluded (those curves may still be evaluatable for
+ *     other users of the same slot). SS reaches the same outcome a
+ *     different way: `decodeAllFCurves` filters unresolvable targets at
+ *     decode time, so an SS equivalent of `FCURVE_DISABLED` isn't load-
+ *     bearing today.
  *
  *     Driver evaluation gates the same way at
  *     `blenkernel/intern/anim_sys.cc:916` and `:4302`
@@ -37,6 +49,24 @@
  *     wires `ACHANNEL_SETTING_MUTE` ↔ `FCURVE_MUTED` for the F-Curve
  *     channel type. The Python API spells it `fcurve.mute` per RNA
  *     (`rna_fcurve.cc:2690-2691`), which is the field name SS adopts.
+ *     The operator `ANIM_OT_channels_setting_toggle`
+ *     (`anim_channels_edit.cc:3105`) carries `OPTYPE_REGISTER |
+ *     OPTYPE_UNDO`, so Blender registers mute changes in its undo
+ *     stack — SS matches by calling `update(recipe)` without
+ *     `skipHistory:true`.
+ *
+ * # SS-deferred: group-level mute (`AGRP_MUTED`)
+ *
+ * Blender's older `is_fcurve_evaluatable` copy in
+ * `blenkernel/intern/anim_sys.cc:345-356` also short-circuits when
+ * `fcu->grp && (fcu->grp->flag & AGRP_MUTED)` — the FCurve's
+ * containing channel group is muted. SS does NOT implement this
+ * because the v40 schema has no FCurveGroup datablock yet (action
+ * groups will land with the Dopesheet channel-grouping phase). When
+ * groups ship, this header's eval gate needs to grow a sister check
+ * (`isFCurveGroupMuted(fc.grp)`) and the sidebar needs a per-group
+ * mute toggle. Documented as Slice 5.G dual-audit MED-B2 (2026-05-16)
+ * to keep the gap from silently persisting once groups arrive.
  *
  * # Eval gate placement — at the caller, not inside evaluateFCurve
  *

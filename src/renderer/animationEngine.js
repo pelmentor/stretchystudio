@@ -24,6 +24,7 @@
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
 import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
+import { isFCurveMuted } from '../anim/fcurveMute.js';
 import { recalcKeyformHandles } from '../anim/fcurveHandles.js';
 import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
 
@@ -218,6 +219,14 @@ export function computePoseOverrides(action, timeMs, loopKeyframes = false, endM
   if (!action || !Array.isArray(action.fcurves)) return overrides;
 
   for (const fc of action.fcurves) {
+    // Audit-fix HIGH-A1 (Slice 5.G dual-audit 2026-05-16): mute gate.
+    // Pre-fix the FCURVE_MUTED flag only took effect via the depgraph
+    // FCurve kernel + `evaluateActionFCurves`; this CanvasViewport-tick
+    // path (computePoseOverrides/computeParamOverrides) was ungated, so
+    // muting a curve in the sidebar had no effect on live viewport
+    // playback. Mirrors `is_fcurve_evaluatable` at
+    // `reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`.
+    if (isFCurveMuted(fc)) continue;
     const target = decodeFCurveTarget(fc);
     // Skip parameter targets — those go through computeParamOverrides.
     if (!target || target.kind !== 'node') continue;
@@ -259,6 +268,11 @@ export function computeParamOverrides(action, timeMs, loopKeyframes = false, end
   if (!action || !Array.isArray(action.fcurves)) return overrides;
 
   for (const fc of action.fcurves) {
+    // Audit-fix HIGH-A1 (Slice 5.G dual-audit 2026-05-16) — sister gate
+    // to the computePoseOverrides skip above. See its comment for the
+    // pre-fix breakage description; both paths must be gated together
+    // because the viewport tick calls them separately.
+    if (isFCurveMuted(fc)) continue;
     const target = decodeFCurveTarget(fc);
     if (!target || target.kind !== 'param') continue;
     const v = interpolateTrack(fc.keyforms, timeMs, loopKeyframes, endMs);

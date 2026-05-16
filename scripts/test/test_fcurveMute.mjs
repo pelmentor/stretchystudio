@@ -136,11 +136,12 @@ assert(isFCurveMuted({ mute: 'yes' }) === false, 'isFCurveMuted: "yes" → false
 // ─────────────────────────────────────────────────────────────────────
 // evaluateActionFCurves — eval gate at the caller (Blender pattern)
 //
-// Per `is_fcurve_evaluatable` at `animrig/intern/evaluation.cc:345-356`,
+// Per `is_fcurve_evaluatable` at `animrig/intern/evaluation.cc:95-111`,
 // muted curves are SKIPPED — the bound property keeps its previous
 // value. SS surfaces this as "rnaPath absent from the output Map" so
 // downstream caller (animationEngine.computeParamOverrides) doesn't
 // overwrite the existing value with the FCurve evaluation.
+// (Audit-fix HIGH-B1 2026-05-16: was mis-cited as :345-356.)
 
 {
   const action = {
@@ -192,36 +193,55 @@ assert(isFCurveMuted({ mute: 'yes' }) === false, 'isFCurveMuted: "yes" → false
   // FCURVE_MUTED). SS achieves this transitively: the caller skips the
   // whole `evaluateFCurve` call, which contains the inline driver
   // evaluation step.
-  const driverFired = { value: false };
-  const action = {
-    id: 'A',
-    fcurves: [{
-      id: 'd',
-      rnaPath: 'objects["__params__"].values["p"]',
-      keyforms: [],
-      driver: {
-        // Minimal driver shape: evaluateDriver tolerates {type:'AVERAGE',
-        // variables:[]} and similar; here a faulty driver expression
-        // means evaluateDriver throws — but the catch in evaluateFCurve
-        // swallows it and the keyframe-fallback is 0. To prove the
-        // driver was skipped we instrument the driver-variable list.
-        type: 'AVERAGE',
-        variables: [{
-          name: 'v',
-          // Variable resolution side-effect: read flag flips if eval
-          // walked into the variable list.
-          targets: [{
-            get id() { driverFired.value = true; return 'nope'; },
-            rnaPath: 'objects["__params__"].values["nope"]',
+  //
+  // Audit-fix MED-A3 (Slice 5.G dual-audit 2026-05-16): the prior test
+  // used `type: 'AVERAGE'` (uppercase) which falls through evaluateDriver's
+  // switch to `default: NaN` WITHOUT ever calling resolveVariables, so
+  // the variable-targets side-effect getter never fired — passing
+  // whether or not the mute gate existed. Fixed to `type: 'avg'` (SS's
+  // recognized lowercase enum) AND moved the getter onto `target.rnaPath`
+  // (the field resolveVariables actually reads — `targets[0].id` is
+  // legacy Blender shape, not SS's `{target:{rnaPath}}` shape). Both
+  // an unmuted positive control + a muted negative control now run, so
+  // the test would fail-loud if the eval gate regressed.
+  function makeDriverAction() {
+    const fired = { value: false };
+    const action = {
+      id: 'A',
+      fcurves: [{
+        id: 'd',
+        rnaPath: 'objects["__params__"].values["p"]',
+        keyforms: [],
+        driver: {
+          type: 'avg',
+          variables: [{
+            name: 'v',
+            target: {
+              get rnaPath() {
+                fired.value = true;
+                return 'objects["__params__"].values["nope"]';
+              },
+            },
           }],
-        }],
-        expression: '',
-      },
-    }],
-  };
-  action.fcurves[0].mute = true;
-  evaluateActionFCurves(action, 0, { project: { parameters: [], nodes: [] } });
-  assert(driverFired.value === false, 'eval muted-w/driver: driver did NOT fire');
+          expression: '',
+        },
+      }],
+    };
+    return { action, fired };
+  }
+  // Positive control: UNMUTED → driver MUST fire.
+  {
+    const { action, fired } = makeDriverAction();
+    evaluateActionFCurves(action, 0, { project: { parameters: [], nodes: [] } });
+    assert(fired.value === true, 'eval unmuted-w/driver: driver DID fire (control)');
+  }
+  // Negative case: MUTED → driver MUST NOT fire.
+  {
+    const { action, fired } = makeDriverAction();
+    action.fcurves[0].mute = true;
+    evaluateActionFCurves(action, 0, { project: { parameters: [], nodes: [] } });
+    assert(fired.value === false, 'eval muted-w/driver: driver did NOT fire');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────
