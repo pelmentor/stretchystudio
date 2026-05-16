@@ -107,6 +107,17 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *   (Blender's `BLI_assert_msg` in `BKE_fcurve_active_keyframe_set`)
  *   is enforced at the FCurveEditor click site since SS's keyform
  *   selection lives in the editor-local `selectedHandles` Map.
+ * @property {boolean} [hide] - Slice 5.I: per-FCurve hide flag
+ *   (negative of Blender's `FCURVE_VISIBLE` bit at
+ *   `DNA_anim_enums.h:303-305`; RNA name `fcurve.hide` via
+ *   `RNA_def_property_boolean_negative_sdna` at `rna_fcurve.cc:2696-2697`).
+ *   Sparse; missing means `false` = visible (matches Blender's
+ *   `BKE_fcurve_create` default `FCURVE_VISIBLE | FCURVE_SELECTED` at
+ *   `animrig/intern/fcurve.cc:62`). Read via `isFCurveHidden`, toggled
+ *   via `toggleFCurveHidden` in `anim/fcurveVisible.js`. Editor-only
+ *   gate (matches Blender's `is_fcurve_evaluatable` at
+ *   `evaluation.cc:95-111` which checks only mute) — hidden curves
+ *   still drive their bound properties at eval time.
  */
 
 /**

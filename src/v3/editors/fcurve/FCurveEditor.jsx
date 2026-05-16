@@ -333,6 +333,7 @@ import {
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
 import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
+import { isFCurveHidden, toggleFCurveHidden } from '../../../anim/fcurveVisible.js';
 import {
   getActiveKeyformIndex,
   setActiveKeyform,
@@ -495,8 +496,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
   const [selectedHandles, setSelectedHandles] = useState(new Map());
-  /** @type {[Set<string>, Function]} */
-  const [hidden, setHidden] = useState(new Set());
+  // Slice 5.I — visibility now persists on `fcurve.hide` (negative of
+  // Blender's FCURVE_VISIBLE). The prior local `useState(new Set())`
+  // was lost on editor unmount / save-load. See
+  // [src/anim/fcurveVisible.js](../../../anim/fcurveVisible.js).
   /** @type {[null | {minV:number, maxV:number}, Function]} */
   const [viewLock, setViewLock] = useState(null);
   /** @type {[null | {kind:'g'|'s'}, Function]} */
@@ -534,9 +537,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
   // Visible = decoded \ hidden. Hidden curves still register colour
   // (so eye-toggling doesn't reshuffle colours) but skip rendering.
+  // Slice 5.I — `hide` is now read from the persisted FCurve field.
   const visible = useMemo(
-    () => decoded.filter((d) => !hidden.has(d.fcurve.id)),
-    [decoded, hidden],
+    () => decoded.filter((d) => !isFCurveHidden(d.fcurve)),
+    [decoded],
   );
 
   // Per-curve sampled values + per-curve auto-fit min/max. Active curve's
@@ -1904,14 +1908,21 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   }, [activeFCurveId, activeActionId, update]);
 
   // Sidebar action — toggle visibility.
+  //
+  // Slice 5.I — writes the persisted `fcurve.hide` boolean (negative of
+  // Blender's `FCURVE_VISIBLE`). Like Slice 5.G's mute toggle, hide
+  // IS in the undo stack — Blender's
+  // `ANIM_OT_channels_setting_toggle` carries `OPTYPE_UNDO` at
+  // `anim_channels_edit.cc:3105`, and visibility is data not view
+  // state (survives editor remount, save/load, action switch).
+  // See [src/anim/fcurveVisible.js](../../../anim/fcurveVisible.js).
   const toggleHidden = useCallback((fcurveId) => {
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(fcurveId)) next.delete(fcurveId);
-      else next.add(fcurveId);
-      return next;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      toggleFCurveHidden(a, fcurveId);
     });
-  }, []);
+  }, [activeActionId, update]);
 
   // Slice 5.F — channel selection (independent of "active").
   //
@@ -1974,7 +1985,6 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     >
       <Sidebar
         decoded={decoded}
-        hidden={hidden}
         activeFCurveId={activeFCurveId}
         onToggleHidden={toggleHidden}
         onToggleMute={onToggleMute}
@@ -2094,7 +2104,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
+function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
@@ -2105,7 +2115,8 @@ function Sidebar({ decoded, hidden, activeFCurveId, onToggleHidden, onToggleMute
       </div>
       {decoded.map((d) => {
         const isActive = d.fcurve.id === activeFCurveId;
-        const isHidden = hidden.has(d.fcurve.id);
+        // Slice 5.I — read persisted `fcurve.hide` (was: local `hidden` Set).
+        const isHidden = isFCurveHidden(d.fcurve);
         // Slice 5.F — `fcurve.selected` (Blender's FCURVE_SELECTED bit)
         // surfaces multi-channel selection in the sidebar independent
         // of the active concept. See
