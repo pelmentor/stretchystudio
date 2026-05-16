@@ -24,6 +24,7 @@
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
 import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
+import { recalcKeyformHandles } from '../anim/fcurveHandles.js';
 import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
 
 function bezier1D(t, startTension, endTension) {
@@ -302,6 +303,14 @@ export function upsertKeyframe(keyforms, timeMs, value, easing = 'ease-both') {
     keyforms.push(kf);
     keyforms.sort((a, b) => a.time - b.time);
   }
+  // Slice 2.D — reify handles for the inserted key + its neighbours.
+  // Audit-fix HIGH-A1 (2026-05-16): this is the LIVE RECORDING write path
+  // (CanvasViewport.jsx → `upsertKeyframe` from animationEngine, NOT from
+  // anim/fcurve). Pre-fix it diverged silently from `anim/fcurve#upsertKeyframe`
+  // by skipping the recalc; every keyframe inserted via live recording
+  // got zero-length placeholder handles, leaking through to the exporter
+  // as flat cx1/cy1/cx2/cy2 at the keyform position.
+  recalcKeyformHandles(keyforms);
 }
 
 /** All keyframeable transform properties (in display order) */

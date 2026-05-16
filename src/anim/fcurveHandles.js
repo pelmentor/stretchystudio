@@ -222,7 +222,14 @@ export function calcHandleForKeyform(bezt, prev, next) {
 
       // Violation rebalance (curve.cc:3219-3231): when one side was
       // clamped, mirror the slope through the keyform onto the other side
-      // so the curve stays C1-continuous at the key.
+      // so the curve stays C1-continuous at the key. Blender uses an
+      // exclusive `if (leftviolate) { ... } else { ... }` so the
+      // rightviolate branch fires only when leftviolate is false (matches
+      // the C source). Audit-fix MED-B2 (2026-05-16): the prior
+      // `else if (h2_x !== 0)` collapsed two predicates into one, silently
+      // skipping the rightviolate rebalance if both flags were ever
+      // simultaneously set (a latent edge case after auto_clamped
+      // returns early on extrema, but still semantically divergent).
       if ((leftviolate || rightviolate) && bezt.handleLeft && bezt.handleRight) {
         const h1_x = bezt.handleLeft.time - bezt.time;
         const h2_x = bezt.time - bezt.handleRight.time;
@@ -232,9 +239,13 @@ export function calcHandleForKeyform(bezt, prev, next) {
             bezt.handleRight.value =
               bezt.value + ((bezt.value - bezt.handleLeft.value) / h1_x) * h2_x;
           }
-        } else if (h2_x !== 0) {
-          bezt.handleLeft.value =
-            bezt.value + ((bezt.value - bezt.handleRight.value) / h2_x) * h1_x;
+        } else {
+          // rightviolate branch (mirrors Blender's exclusive else at
+          // curve.cc:3228-3230). Guard div-by-zero on h2_x for symmetry.
+          if (h2_x !== 0) {
+            bezt.handleLeft.value =
+              bezt.value + ((bezt.value - bezt.handleRight.value) / h2_x) * h1_x;
+          }
         }
       }
     }
@@ -298,15 +309,75 @@ export function calcHandleForKeyform(bezt, prev, next) {
 /**
  * Recalculate handles for every keyform in an array. Mutates each
  * keyform's `handleLeft`, `handleRight`, and `autoHandleType` per
- * `calcHandleForKeyform`. Port of `BKE_fcurve_handles_recalc_ex` minus
- * the `auto_smoothing` second pass (SS ships SMOOTH_NONE) and minus the
- * cyclic-cycle support (no F-Modifiers Cycles in SS today — Phase 3
- * adds that).
+ * `calcHandleForKeyform`. Port of `BKE_fcurve_handles_recalc_ex`.
  *
  * Caller's responsibility: keyforms must be sorted by `time` ascending.
  * `buildParamFCurve` / `buildNodeFCurve` / `upsertKeyframe` all maintain
  * that invariant; the v39 migration accepts whatever order the legacy
  * data had (which was already sorted).
+ *
+ * # Blender behaviours intentionally OMITTED (audit-fix HIGH-B1, 2026-05-16)
+ *
+ * Per `feedback_blender_reference_strict.md`, every Blender control
+ * absent from a port must be cited + justified. The following branches
+ * of `BKE_fcurve_handles_recalc_ex` are NOT ported:
+ *
+ *   - **`auto_smoothing` second pass** (`fcurve.cc:1228-1230` +
+ *     `curve.cc:3897-3944` `BKE_nurb_handle_smooth_fcurve`). SS's default
+ *     for new FCurves is `FCURVE_SMOOTH_NONE` (matches Blender's
+ *     `DNA_anim_types.h` `eFCurve_Smoothing` default). When a future
+ *     Phase 5 UI exposes a per-FCurve smoothing toggle, this branch
+ *     needs porting.
+ *
+ *   - **Cyclic-cycle support** (`fcurve.cc:1130-1147` `cycle_offset_triple`
+ *     + 1162-1166 + 1177-1184 + 1199-1230 cyclic re-symmetrise). Requires
+ *     F-Modifier `Cycles` which is Phase 3 of this plan. Without cyclic
+ *     support, an Action with `ACT_CYCLIC` flag set won't have its first
+ *     and last handles cyclically blended.
+ *
+ *   - **Threshold X-clamp on handle.time** (`fcurve.cc:1191-1193`
+ *     `CLAMP_MAX(bezt->vec[0][0], decrement_ulp(bezt->vec[1][0] - threshold))`).
+ *     Blender clamps non-auto handles so their X-coord can't equal the
+ *     keyform's X-coord (`threshold = 0.001`). Without this, a user-set
+ *     `free` handle at `handleLeft.time === bezt.time` would produce a
+ *     zero-divide in the segment evaluator's `correctBezpart`. SS gets
+ *     away without this because `evaluateBezTripleSegment` already
+ *     guards `correctBezpart` against degenerate spans (via the
+ *     `findZero`-returns-0 fall-through to `prev.value`). When SS ships
+ *     a Graph Editor handle drag (Phase 5), this clamp must be added.
+ *
+ *   - **`FCURVE_EXTRAPOLATE_CONSTANT` end-handle flatten**
+ *     (`fcurve.cc:1199-1209`). When the FCurve's `extend` is
+ *     `EXTRAPOLATE_CONSTANT` (the SS default), Blender flattens the
+ *     first/last auto handle to be horizontal and marks it `LOCKED_FINAL`
+ *     so eval extrapolation past the curve range holds the keyform value.
+ *     SS's evaluator does this clamp INDEPENDENTLY (see `evaluateFCurve`
+ *     in fcurve.js: `time <= keyforms[0].time` and `time >= keyforms[N-1].time`
+ *     both fall through to constant extrapolation). The handle SHAPE
+ *     therefore doesn't matter for extrapolation behaviour. If SS ever
+ *     ships `EXTRAPOLATE_LINEAR` per Blender's other extrapolation
+ *     option, this branch needs porting so the linear extrapolation
+ *     reads the right slope from the end handles.
+ *
+ *   - **Duplicate-keyframe LOCKED_FINAL guard** (`fcurve.cc:1212-1214`).
+ *     When `prev->vec[1][0] >= bezt->vec[1][0]` (two keyforms at the same
+ *     time), Blender marks BOTH `LOCKED_FINAL`. SS's `upsertKeyframe`
+ *     paths dedupe at insert time (`Math.abs(arr[i].time - time) < 1e-6`)
+ *     so duplicates shouldn't reach the recalc; if they did, the
+ *     `len_a === 0` / `len_b === 0` guards in `calcHandleForKeyform`
+ *     fall back to `len = 1` which avoids div-by-zero but produces
+ *     unspecified handles. A direct port would be more honest.
+ *
+ *   - **Per-handle selection** (`bezt.f1 & SELECT` branches at
+ *     `curve.cc:3266 + 3284`). SS doesn't model interactive per-handle
+ *     selection; the aligned-handle order-of-calculation branch is
+ *     therefore moot. When Phase 5 ships handle drag, this needs porting
+ *     so the unselected handle aligns to the user-selected one.
+ *
+ *   - **`BKE_fcurve_update_handle_flag_from_opposite`** (`fcurve.cc:1233-1267`).
+ *     Helper for the Graph Editor's "set handle type" operator — it
+ *     normalises the opposite-side handle type when the user toggles
+ *     one side. Not in any code path SS exercises today.
  *
  * @param {BezTriple[]} keyforms
  */

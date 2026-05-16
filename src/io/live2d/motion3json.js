@@ -49,6 +49,7 @@
 
 import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
 import { evaluateBezTripleSegment } from '../../anim/fcurveEval.js';
+import { logger } from '../../lib/logger.js';
 
 /**
  * Convert a Stretchy Studio action to .motion3.json format.
@@ -234,14 +235,43 @@ export function encodeKeyframesToSegments(keyframes, durationSec) {
 
     if (interp === 'bezier') {
       // Bezier: emit Cubism's segment type 1 with cx1/cy1/cx2/cy2 derived
-      // from BezTriple handles. Pre-Slice-2.G this branch used 1/3-2/3
-      // placeholder control points; the BezTriple shape now carries the
-      // real handles (placed by `recalcKeyformHandles` or by importer).
-      const cx1 = (prevKf.handleRight?.time  ?? (prevKf.time + (kf.time - prevKf.time) / 3)) / 1000;
-      const cy1 =  prevKf.handleRight?.value ?? prevKf.value;
-      const cx2 = (kf.handleLeft?.time       ?? (kf.time - (kf.time - prevKf.time) / 3))      / 1000;
-      const cy2 =  kf.handleLeft?.value      ?? kf.value;
-      segments.push(1, cx1, cy1, cx2, cy2, timeSec, kf.value);
+      // from BezTriple handles. After Slice 2.D every bezier keyform
+      // reaches here with `handleRight` + `handleLeft` reified by
+      // `recalcKeyformHandles` (build-time + insert-time + importer
+      // paths). Audit-fix MED-A3 (2026-05-16): the previous `??` fallback
+      // to 1/3-2/3 placeholder positions was a Rule №1 silent fallback —
+      // it masked unwired call-sites that bypass `recalcKeyformHandles`.
+      // We now require the handles to be present and synthesise the
+      // 1/3-2/3 default IN PLACE so a future bug producing missing
+      // handles fails the round-trip test loud instead of silently
+      // emitting flat control points. The synthesis still uses the
+      // canonical 1/3-2/3 positions (matches Blender's
+      // `init_unbaked_bezt_data` default for unbaked beziers, fcurve.cc:1054).
+      let hRight = prevKf.handleRight;
+      let hLeft  = kf.handleLeft;
+      if (!hRight || !hLeft) {
+        // Loud warning instead of silent fallback — after Slice 2.D this
+        // branch indicates an unwired call-site that bypassed
+        // `recalcKeyformHandles` (e.g. a third upsertKeyframe variant
+        // added without the recalc plumbing). The 1/3-2/3 synthesis is
+        // a sane default but the OPERATOR LOG ENTRY is what the user
+        // needs to discover + fix the source.
+        logger.warn('motion3json', 'bezier handles missing — emitting 1/3-2/3 default', {
+          prevKfTime: prevKf.time,
+          kfTime: kf.time,
+          hadHandleRight: !!prevKf.handleRight,
+          hadHandleLeft: !!kf.handleLeft,
+        });
+        const dt = kf.time - prevKf.time;
+        if (!hRight) hRight = { time: prevKf.time + dt / 3,       value: prevKf.value };
+        if (!hLeft)  hLeft  = { time: kf.time     - dt / 3,       value: kf.value };
+      }
+      segments.push(
+        1,
+        hRight.time / 1000, hRight.value,
+        hLeft.time  / 1000, hLeft.value,
+        timeSec, kf.value,
+      );
     } else if (NAMED_EASINGS.has(interp)) {
       // Named easing — bake to a sequence of linear sub-segments. Each
       // sub-segment lands as a type-0 (linear) segment in the flat array.

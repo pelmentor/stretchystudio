@@ -227,6 +227,22 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
       // cx1/cy1 → segment START's right handle; cx2/cy2 → segment END's
       // left handle. Both keyforms get `handleType.{left,right} = 'free'`
       // so `recalcKeyformHandles` won't overwrite them.
+      //
+      // Audit-fix MED-B3 (2026-05-16): emit a per-segment warning when
+      // any of the 6 bezier payload floats are non-finite (NaN/Infinity).
+      // Previously the `numOr(v, 0)` silently substituted 0 with no
+      // signal — a malformed file would produce a geometrically wrong
+      // curve (handles collapsed to time=0) while passing fidelity tests
+      // that don't sample affected segments. The warning matches the
+      // module's existing truncation-warning pattern (see SEG_LINEAR /
+      // SEG_STEPPED branches above).
+      const bezPayload = [segs[i], segs[i + 1], segs[i + 2], segs[i + 3], segs[i + 4], segs[i + 5]];
+      if (bezPayload.some((v) => typeof v !== 'number' || !Number.isFinite(v))) {
+        warnings.push(
+          `${ctx}: bezier segment has non-finite control points `
+          + `[${bezPayload.map((v) => String(v)).join(', ')}], substituting 0`,
+        );
+      }
       const cx1 = Math.round(numOr(segs[i],     0) * 1000);
       const cy1 = numOr(segs[i + 1], 0);
       const cx2 = Math.round(numOr(segs[i + 2], 0) * 1000);

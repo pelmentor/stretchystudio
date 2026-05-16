@@ -176,10 +176,32 @@ for (const sampleRel of HIYORI_SAMPLES) {
   assert(reEx.Curves.length === orig.Curves.length,
     `${sampleName}: curve count preserved (${reEx.Curves.length} vs ${orig.Curves.length})`);
 
-  // Per-curve: segment array lengths must match. Drift would indicate a
-  // segment-type misclassification (e.g. bezier emitted as 2 linear hops
-  // or vice versa).
+  // Per-curve: segment array lengths must match (drift = segment-type
+  // misclassification) AND segment values must match within FP tolerance
+  // (drift = control-point swap, off-by-one, or coordinate-system bug).
+  // Audit-fix HIGH-A2 (2026-05-16): pre-fix this loop only checked
+  // length, not values — a bug that swapped cx1↔cx2 / cy1↔cy2 would
+  // silently pass. Now every float in the segment array is compared.
+  //
+  // EPS_TIME = 1ms — the canonical SS animation-time quantum per
+  // `feedback_ms_canonical_animation_time.md` (Phase 0.0 of the
+  // Animation Plan). Cubism's motion3.json carries fp64 seconds; SS
+  // imports via `Math.round(x * 1000)` which truncates to integer ms.
+  // Hiyori source files have sub-ms precision times (e.g. 1/30 sec =
+  // 33.333... ms truncating to 33 ms = 0.033 sec on re-export) so the
+  // round-trip can lose up to 0.5ms ≈ 5e-4 sec per time field. This is
+  // a DELIBERATE fidelity trade-off baked into the plan, not a bug —
+  // the §2.H exit gate's "byte-identical" promise is REINTERPRETED here
+  // as "within the ms-quantisation tolerance" since Phase 0.0 makes
+  // sub-ms time un-representable in the SS keyform shape.
+  //
+  // EPS_VALUE = 1e-6 — Cubism authors in fp32 but stores in JSON; the
+  // parse → re-encode path stays at fp64 throughout, so divergence here
+  // would be a real bug (not a precision artefact).
+  const EPS_TIME  = 1e-3;
+  const EPS_VALUE = 1e-6;
   let curveCheckedCount = 0;
+  let valueDivergenceMax = 0;
   for (let ci = 0; ci < Math.min(reEx.Curves.length, orig.Curves.length); ci++) {
     const rc = reEx.Curves[ci];
     const oc = orig.Curves[ci];
@@ -191,12 +213,57 @@ for (const sampleRel of HIYORI_SAMPLES) {
       );
       continue;
     }
+    // Walk the flat segment array, knowing the type-discriminator layout:
+    //   [t0, v0, type1, (payload1...), type2, (payload2...), ...]
+    // Bezier payload = 6 floats (cx1, cy1, cx2, cy2, t_end, v_end);
+    // linear/stepped payload = 2 floats (t_end, v_end). Floats at
+    // CX/T positions are time-axis; CY/V are value-axis. Type byte must
+    // match exactly.
+    let valueDivergedAt = -1;
+    const o = oc.Segments;
+    const r = rc.Segments;
+    if (Math.abs(r[0] - o[0]) > EPS_TIME) valueDivergedAt = 0;
+    if (Math.abs(r[1] - o[1]) > EPS_VALUE) valueDivergedAt = 1;
+    let i = 2;
+    while (i < o.length && valueDivergedAt < 0) {
+      if (r[i] !== o[i]) { valueDivergedAt = i; break; }  // type byte exact
+      const type = o[i];
+      i++;
+      if (type === 1) {
+        // bezier: cx1, cy1, cx2, cy2, t, v
+        if (Math.abs(r[i  ] - o[i  ]) > EPS_TIME)  { valueDivergedAt = i; break; }
+        if (Math.abs(r[i+1] - o[i+1]) > EPS_VALUE) { valueDivergedAt = i+1; break; }
+        if (Math.abs(r[i+2] - o[i+2]) > EPS_TIME)  { valueDivergedAt = i+2; break; }
+        if (Math.abs(r[i+3] - o[i+3]) > EPS_VALUE) { valueDivergedAt = i+3; break; }
+        if (Math.abs(r[i+4] - o[i+4]) > EPS_TIME)  { valueDivergedAt = i+4; break; }
+        if (Math.abs(r[i+5] - o[i+5]) > EPS_VALUE) { valueDivergedAt = i+5; break; }
+        valueDivergenceMax = Math.max(valueDivergenceMax,
+          Math.abs(r[i+1] - o[i+1]), Math.abs(r[i+3] - o[i+3]), Math.abs(r[i+5] - o[i+5]));
+        i += 6;
+      } else {
+        if (Math.abs(r[i  ] - o[i  ]) > EPS_TIME)  { valueDivergedAt = i; break; }
+        if (Math.abs(r[i+1] - o[i+1]) > EPS_VALUE) { valueDivergedAt = i+1; break; }
+        valueDivergenceMax = Math.max(valueDivergenceMax, Math.abs(r[i+1] - o[i+1]));
+        i += 2;
+      }
+    }
+    if (valueDivergedAt >= 0) {
+      failed++;
+      console.error(
+        `FAIL: ${sampleName}: curve[${ci}] (${oc.Id}) segment[${valueDivergedAt}] diverged: `
+        + `re-exported=${r[valueDivergedAt]}, original=${o[valueDivergedAt]}`,
+      );
+      continue;
+    }
     curveCheckedCount++;
   }
   if (curveCheckedCount === orig.Curves.length) {
     passed++;
     if (process.env.VERBOSE) {
-      console.log(`  ok: ${sampleName} (${orig.Curves.length} curves, all seg-lengths match)`);
+      console.log(
+        `  ok: ${sampleName} (${orig.Curves.length} curves, all seg-values match; `
+        + `max divergence ${valueDivergenceMax.toExponential(2)})`,
+      );
     }
   }
 }
