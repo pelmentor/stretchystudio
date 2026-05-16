@@ -48,6 +48,7 @@
  */
 
 import { evaluateFCurve } from './fcurve.js';
+import { recalcKeyformHandles } from './fcurveHandles.js';
 
 /** Legacy easing names that collapse to constant-step keyforms. */
 const HOLD_EASINGS = new Set(['constant', 'hold', 'stepped', 'inverse-stepped']);
@@ -187,6 +188,13 @@ export function normalizeKeyforms(input) {
     const made = makeBezTripleKeyform(kf);
     if (made) out.push(made);
   }
+  // Slice 2.D — reify auto/auto_clamped/vector/aligned handles in
+  // neighbour-aware positions. `makeBezTripleKeyform` plants degenerate
+  // zero-length handles by default; `recalcKeyformHandles` runs Blender's
+  // calchandleNurb_intern over the array so the exporter (Slice 2.G) and
+  // any UI reading `handleLeft`/`handleRight` see proper values without
+  // re-doing the calc inline.
+  recalcKeyformHandles(out);
   return out;
 }
 

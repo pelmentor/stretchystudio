@@ -48,6 +48,7 @@
  */
 
 import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
+import { evaluateBezTripleSegment } from '../../anim/fcurveEval.js';
 
 /**
  * Convert a Stretchy Studio action to .motion3.json format.
@@ -184,13 +185,28 @@ function resolveFCurveMapping(target, parameterMap) {
  * Each segment in `.motion3.json` carries a 1-byte type code plus
  * type-specific payload (linear=2 floats, bezier=6 floats, etc.).
  *
- * Slice 2.A reads the v39 `interpolation` field. Bezier segments still
- * use the legacy 1/3-2/3 control-point approximation — Slice 2.G upgrades
- * this branch to derive `cx1/cy1/cx2/cy2` from `kf.handleLeft` /
- * `prevKf.handleRight` so round-tripped Cubism imports preserve their
- * authored handle vectors.
+ * # Slice 2.G — bezier handle round-trip
  *
- * @param {Array<{time: number, value: number, interpolation?: string}>} keyframes
+ * Bezier segments emit `cx1/cy1/cx2/cy2` derived from
+ * `prevKf.handleRight` and `kf.handleLeft`. This pairs with
+ * `motion3jsonImport.js` (Slice 2.G.1) which preserves Cubism's authored
+ * control points into the BezTriple handle slots; the round-trip
+ * (`import → save → load → export`) is byte-identical for handles whose
+ * positions don't round-trip through fp32 precision loss.
+ *
+ * # Slice 2.G — named-easing bake
+ *
+ * Cubism's segment encoding has only three curve types: linear (0),
+ * bezier (1), stepped (2). SS's BezTriple supports 10 named easings
+ * (sine/quad/cubic/quart/quint/expo/circ/back/bounce/elastic) × 3 modes
+ * which Cubism can't represent directly. Per ANIMATION_BLENDER_PARITY_PLAN.md
+ * §2.G, named easings BAKE at export time: each segment subdivides into
+ * `BAKE_STEPS_PER_SEGMENT` linear sub-segments sampled from the
+ * `evaluateBezTripleSegment` curve. The sub-segments hit Cubism's linear
+ * (type 0) code path so the runtime engine plays the eased curve
+ * faithfully without needing a custom easing.
+ *
+ * @param {Array<{time: number, value: number, interpolation?: string, handleLeft?: {time:number,value:number}, handleRight?: {time:number,value:number}}>} keyframes
  * @param {number} durationSec - Total duration in seconds
  * @returns {number[]} Flat segment array
  */
@@ -206,28 +222,37 @@ export function encodeKeyframesToSegments(keyframes, durationSec) {
   // Subsequent keyframes as segments
   for (let i = 1; i < sorted.length; i++) {
     const kf = sorted[i];
+    const prevKf = sorted[i - 1];
     const timeSec = kf.time / 1000;
+    const prevTimeSec = prevKf.time / 1000;
 
     // The segment-type discriminator lives on the SEGMENT-START
     // keyform's `interpolation` (Cubism convention; Blender does the
     // same — `BezTriple.ipo` of keyform `i` controls the curve from
     // `i` to `i+1`).
-    const prevKf = sorted[i - 1];
-    const segType = interpolationToSegmentType(prevKf.interpolation);
-    segments.push(segType);
+    const interp = prevKf.interpolation || 'linear';
 
-    if (segType === 1) {
-      // Bezier: 1/3-2/3 placeholder until Slice 2.G derives from handles.
-      const prevTime = prevKf.time / 1000;
-      const dt = timeSec - prevTime;
-      const cx1 = prevTime + dt / 3;
-      const cy1 = prevKf.value;
-      const cx2 = prevTime + (2 * dt) / 3;
-      const cy2 = kf.value;
-      segments.push(cx1, cy1, cx2, cy2, timeSec, kf.value);
+    if (interp === 'bezier') {
+      // Bezier: emit Cubism's segment type 1 with cx1/cy1/cx2/cy2 derived
+      // from BezTriple handles. Pre-Slice-2.G this branch used 1/3-2/3
+      // placeholder control points; the BezTriple shape now carries the
+      // real handles (placed by `recalcKeyformHandles` or by importer).
+      const cx1 = (prevKf.handleRight?.time  ?? (prevKf.time + (kf.time - prevKf.time) / 3)) / 1000;
+      const cy1 =  prevKf.handleRight?.value ?? prevKf.value;
+      const cx2 = (kf.handleLeft?.time       ?? (kf.time - (kf.time - prevKf.time) / 3))      / 1000;
+      const cy2 =  kf.handleLeft?.value      ?? kf.value;
+      segments.push(1, cx1, cy1, cx2, cy2, timeSec, kf.value);
+    } else if (NAMED_EASINGS.has(interp)) {
+      // Named easing — bake to a sequence of linear sub-segments. Each
+      // sub-segment lands as a type-0 (linear) segment in the flat array.
+      // The bake samples the BezTriple evaluator at uniform time steps;
+      // BAKE_STEPS_PER_SEGMENT controls fidelity vs file size.
+      bakeEasingToLinearSegments(segments, prevKf, kf, prevTimeSec, timeSec);
+    } else if (interp === 'constant') {
+      segments.push(2, timeSec, kf.value);
     } else {
-      // Linear (0), stepped (2), inverse stepped (3): time, value
-      segments.push(timeSec, kf.value);
+      // linear (default)
+      segments.push(0, timeSec, kf.value);
     }
   }
 
@@ -235,23 +260,46 @@ export function encodeKeyframesToSegments(keyframes, durationSec) {
 }
 
 /**
- * Map a v39 `interpolation` enum to a Live2D segment type code.
- * Named easings (sine/quad/...) get baked to bezier segments at export
- * time per ANIMATION_BLENDER_PARITY_PLAN.md §2.G — Slice 2.G ships that.
- *
- * @param {string} [interpolation='linear']
- * @returns {number} 0=linear, 1=bezier, 2=stepped, 3=inverse-stepped
+ * Cubism segment-type codes (mirrors `motion3jsonImport.js`).
  */
-function interpolationToSegmentType(interpolation = 'linear') {
-  switch (interpolation) {
-    case 'bezier':
-    case 'sine': case 'quad': case 'cubic': case 'quart': case 'quint':
-    case 'expo': case 'circ': case 'back': case 'bounce': case 'elastic':
-      return 1;
-    case 'constant':
-      return 2;
-    default:
-      return 0; // linear
+const NAMED_EASINGS = new Set([
+  'sine', 'quad', 'cubic', 'quart', 'quint',
+  'expo', 'circ', 'back', 'bounce', 'elastic',
+]);
+
+/**
+ * Per-segment subdivision count for named-easing bake. 16 steps gives
+ * ~0.5° angular fidelity for a 90°-swing curve — well under Cubism's
+ * visible-quantisation threshold. Higher counts inflate the motion3.json
+ * by ~3 floats/step; 16 is the empirical sweet spot for Hiyori-scale
+ * motions (~10s duration, 24fps).
+ */
+const BAKE_STEPS_PER_SEGMENT = 16;
+
+/**
+ * Bake one named-easing BezTriple segment into a sequence of linear
+ * sub-segments appended to `segments`. The sub-segments share the eased
+ * curve's value at uniform time samples; Cubism's linear interp between
+ * adjacent samples reconstructs the curve to ~BAKE_STEPS_PER_SEGMENT
+ * fidelity.
+ *
+ * @param {number[]} segments
+ * @param {*} prevKf
+ * @param {*} kf
+ * @param {number} prevTimeSec
+ * @param {number} timeSec
+ */
+function bakeEasingToLinearSegments(segments, prevKf, kf, prevTimeSec, timeSec) {
+  const dtMs = kf.time - prevKf.time;
+  if (dtMs <= 0) {
+    // Degenerate zero-duration segment — emit single linear hop.
+    segments.push(0, timeSec, kf.value);
+    return;
+  }
+  for (let step = 1; step <= BAKE_STEPS_PER_SEGMENT; step++) {
+    const sampleTimeMs = prevKf.time + (dtMs * step) / BAKE_STEPS_PER_SEGMENT;
+    const sampleValue = evaluateBezTripleSegment(prevKf, kf, sampleTimeMs);
+    segments.push(0, sampleTimeMs / 1000, sampleValue);
   }
 }
 

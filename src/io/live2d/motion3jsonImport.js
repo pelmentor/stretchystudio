@@ -16,13 +16,17 @@
  *       2 (stepped):          type, time, value
  *       3 (inverse stepped):  type, time, value
  *
- * Slice 2.A: emits v39 BezTriple shape (`interpolation` field) for the
- * type discriminator. Bezier control-point preservation (cx1/cy1/cx2/cy2
- * → `handleLeft`/`handleRight`) lands in Slice 2.G.1 — until then we
- * keep the segment endpoints with `interpolation: 'bezier'` and a
- * default 1/3-2/3 handle approximation provided by the v39 keyform
- * factory. Round-tripping a Cubism .motion3 will still re-fit handles
- * to 1/3-2/3 in this slice.
+ * # Slice 2.G.1 — bezier handle round-trip
+ *
+ * Bezier segments (type 1) decode their `cx1/cy1/cx2/cy2` control points
+ * into the BezTriple handle slots:
+ *   - `prevKey.handleRight = { time: cx1*1000, value: cy1 }`
+ *   - `currKey.handleLeft  = { time: cx2*1000, value: cy2 }`
+ *
+ * Both handles are typed `'free'` so the post-import recalc in
+ * `normalizeKeyforms` (Slice 2.D) doesn't overwrite them. Paired with
+ * `motion3json.js`'s exporter (Slice 2.G) this gives a byte-identical
+ * round-trip on all curve types Cubism supports natively.
  *
  * @module io/live2d/motion3jsonImport
  */
@@ -156,24 +160,33 @@ export function parseMotion3Json(jsonText, opts) {
  * keyform that PRECEDES each segment (i.e. `out[out.length - 1]` at the
  * moment of decode).
  *
- * Slice 2.G.1 will preserve bezier control points (cx1/cy1/cx2/cy2) into
- * `handleLeft`/`handleRight` for true round-trip fidelity. Today the
- * endpoint is captured with `interpolation: 'bezier'` and the v39
- * keyform factory plants 1/3-2/3 placeholder handles.
+ * # Slice 2.G.1
+ *
+ *   - SEG_BEZIER: `cx1/cy1` → `prevKey.handleRight`, `cx2/cy2` →
+ *     `currKey.handleLeft`, with `handleType: 'free'/'free'` on both so
+ *     `recalcKeyformHandles` (the build-time reify in `normalizeKeyforms`)
+ *     leaves the imported control points untouched.
+ *   - SEG_LINEAR / SEG_STEPPED / SEG_INV_STEPPED: `handleType:
+ *     'vector'/'vector'` per ANIMATION_BLENDER_PARITY_PLAN.md §2.B.
  *
  * @param {unknown} segs
  * @param {string[]} warnings
  * @param {string} ctx
- * @returns {Array<{time:number, value:number, interpolation:string}>}
+ * @returns {Array<{time:number, value:number, interpolation:string, handleLeft?:{time:number,value:number}, handleRight?:{time:number,value:number}, handleType?:{left:string,right:string}}>}
  */
 function decodeSegmentsToKeyframes(segs, warnings, ctx) {
   if (!Array.isArray(segs) || segs.length < 2) return [];
 
   const out = [];
+  const firstTime = Math.round(numOr(segs[0], 0) * 1000);
+  const firstValue = numOr(segs[1], 0);
   out.push({
-    time: Math.round(numOr(segs[0], 0) * 1000),
-    value: numOr(segs[1], 0),
+    time: firstTime,
+    value: firstValue,
     interpolation: 'linear', // patched once the next segment's type is known
+    handleType: { left: 'vector', right: 'vector' },
+    handleLeft:  { time: firstTime, value: firstValue },
+    handleRight: { time: firstTime, value: firstValue },
   });
 
   let i = 2;
@@ -186,17 +199,23 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
       break;
     }
     // Discriminator lives on the START keyform of the segment in v39.
-    if (out.length > 0) out[out.length - 1].interpolation = interp;
+    const startKey = out[out.length - 1];
+    if (startKey) startKey.interpolation = interp;
 
     if (type === SEG_LINEAR || type === SEG_STEPPED || type === SEG_INV_STEPPED) {
       if (i + 1 >= segs.length) {
         warnings.push(`${ctx}: truncated segment (type ${type})`);
         break;
       }
+      const endTime = Math.round(numOr(segs[i], 0) * 1000);
+      const endValue = numOr(segs[i + 1], 0);
       out.push({
-        time: Math.round(numOr(segs[i], 0) * 1000),
-        value: numOr(segs[i + 1], 0),
+        time: endTime,
+        value: endValue,
         interpolation: 'linear', // tail; patched if a later segment follows
+        handleType: { left: 'vector', right: 'vector' },
+        handleLeft:  { time: endTime, value: endValue },
+        handleRight: { time: endTime, value: endValue },
       });
       i += 2;
     } else if (type === SEG_BEZIER) {
@@ -204,13 +223,28 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
         warnings.push(`${ctx}: truncated bezier segment`);
         break;
       }
-      // Slice 2.G.1: control points (cx1/cy1/cx2/cy2 = segs[i..i+3])
-      // will be preserved into handleLeft/handleRight here. For now the
-      // endpoint is captured with default v39 handles.
+      // Slice 2.G.1: preserve Cubism's authored control points.
+      // cx1/cy1 → segment START's right handle; cx2/cy2 → segment END's
+      // left handle. Both keyforms get `handleType.{left,right} = 'free'`
+      // so `recalcKeyformHandles` won't overwrite them.
+      const cx1 = Math.round(numOr(segs[i],     0) * 1000);
+      const cy1 = numOr(segs[i + 1], 0);
+      const cx2 = Math.round(numOr(segs[i + 2], 0) * 1000);
+      const cy2 = numOr(segs[i + 3], 0);
+      const endTime  = Math.round(numOr(segs[i + 4], 0) * 1000);
+      const endValue = numOr(segs[i + 5], 0);
+
+      if (startKey) {
+        startKey.handleRight = { time: cx1, value: cy1 };
+        startKey.handleType = { left: startKey.handleType?.left ?? 'free', right: 'free' };
+      }
       out.push({
-        time: Math.round(numOr(segs[i + 4], 0) * 1000),
-        value: numOr(segs[i + 5], 0),
-        interpolation: 'linear',
+        time: endTime,
+        value: endValue,
+        interpolation: 'linear', // tail
+        handleType: { left: 'free', right: 'vector' },
+        handleLeft:  { time: cx2, value: cy2 },
+        handleRight: { time: endTime, value: endValue },
       });
       i += 6;
     }

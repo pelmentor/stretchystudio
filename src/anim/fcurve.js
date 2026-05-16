@@ -58,6 +58,7 @@
 
 import { evaluateDriver } from './driver.js';
 import { evaluateBezTripleSegment } from './fcurveEval.js';
+import { recalcKeyformHandles } from './fcurveHandles.js';
 
 /**
  * @typedef {Object} HandlePoint
@@ -168,15 +169,26 @@ export function upsertKeyframe(fcurve, time, value, interpolation = 'linear') {
     interpolation,
     flag: 0,
   };
+  let inserted = false;
   for (let i = 0; i < arr.length; i++) {
     if (Math.abs(arr[i].time - time) < 1e-6) {
       arr[i] = kf;
-      return;
+      inserted = true;
+      break;
     }
     if (arr[i].time > time) {
       arr.splice(i, 0, kf);
-      return;
+      inserted = true;
+      break;
     }
   }
-  arr.push(kf);
+  if (!inserted) arr.push(kf);
+
+  // Slice 2.D — reify handles for the inserted key + its neighbours.
+  // Blender mirrors this via BKE_fcurve_handles_recalc after every
+  // ANIM_OT_keyframe_insert (`reference/blender/source/blender/editors/
+  // animation/keyframing.cc` → `BKE_fcurve_handles_recalc`). Without this
+  // the new key would carry zero-length default handles, leaking through
+  // to exporter (Slice 2.G) + UI (Phase 5 Graph Editor).
+  recalcKeyformHandles(arr);
 }

@@ -92,14 +92,29 @@ function near(a, b, eps = 1e-9) {
 }
 
 {
-  // Named easings (Slice 2.C ships their preset curves) all map to bezier (type 1).
+  // Slice 2.G: named easings BAKE to a sequence of linear sub-segments
+  // (Cubism's segment encoding has no sine/quad/etc., so we sample the
+  // BezTriple eval at uniform steps and emit each sample as type-0). The
+  // segment-type discriminator at index [2] therefore becomes 0 (linear)
+  // for the first sub-segment, NOT 1 (bezier).
   for (const interp of ['sine', 'quad', 'cubic', 'expo', 'bounce']) {
     const segs = encodeKeyframesToSegments([
       { time: 0, value: 0, interpolation: interp },
       { time: 500, value: 1, interpolation: 'linear' },
     ], 8);
-    if (segs[2] !== 1) {
-      failed++; console.error(`FAIL: ${interp} should be bezier (type 1)`); break;
+    if (segs[2] !== 0) {
+      failed++;
+      console.error(`FAIL: ${interp} bake should emit linear sub-segments (type 0), got ${segs[2]}`);
+      break;
+    }
+    // Bake fidelity: BAKE_STEPS_PER_SEGMENT = 16 sub-segments → 1 (initial
+    // point) + 16 sub-segments × 3 floats (type, t, v) = 49 floats total.
+    if (segs.length !== 1 + 1 + 16 * 3) {
+      failed++;
+      console.error(
+        `FAIL: ${interp} bake should produce 50 floats (2 init + 48 segs), got ${segs.length}`,
+      );
+      break;
     }
   }
   passed++;
