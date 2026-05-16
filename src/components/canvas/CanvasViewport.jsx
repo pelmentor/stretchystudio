@@ -10,6 +10,7 @@ import { useRigEvalStore } from '@/store/rigEvalStore';
 import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
 import { useBoxSelectStore } from '@/store/boxSelectStore';
+import { useEditMenuStore } from '@/store/editMenuStore';
 // Workspace policy module deleted 2026-05-02 — workspaces no longer
 // gate modes or visualizations (Blender pattern: workspace = layout
 // preset + default editorMode, nothing more). `editor.editMode` and
@@ -175,6 +176,25 @@ export default function CanvasViewport({
   const imageDataMapRef = useRef(new Map()); // Map<partId, AlphaMaskRecord>
   const dragRef = useRef(null);   // { partId, vertexIndex, startWorldX, startWorldY, startLocalX, startLocalY }
   const panRef = useRef(null);   // { startX, startY, panX0, panY0 }
+  // Audit 4 #2 (2026-05-16) — RMB context menu drag-vs-click discriminator.
+  // RMB-drag continues to pan (preserves SS muscle memory). RMB-press
+  // without motion opens the per-`editMode` context menu (Blender's
+  // `VIEW3D_MT_<mode>_context_menu` family). Without this ref the
+  // browser-`contextmenu` event — which fires *after* `pointerup` on
+  // Windows — can't distinguish "user finished panning" from "user
+  // clicked right mouse to summon menu". Threshold is 4 px (same
+  // drag-vs-click tolerance the box-select overlay uses).
+  //
+  // Deviation note per `feedback_blender_reference_strict.md`: Blender's
+  // modern default keymap (`left-select`, since 2.80) maps RMB → context
+  // menu and MMB-drag → pan. SS deviates by keeping RMB-drag = pan
+  // because (a) MMB isn't universally present on user mice (laptop
+  // trackpads, Apple Magic Mouse), and (b) pre-Audit-4 SS shipped with
+  // RMB-pan since v0.1, so changing the gesture would invalidate every
+  // user's muscle memory. The 4 px threshold is the compromise: a clean
+  // RMB click still summons the context menu, but a deliberate RMB-drag
+  // keeps panning.
+  const rmbDraggedRef = useRef(false);
   // Phase 5 touch+pen — multi-pointer tracking. activePointersRef holds every
   // pointer currently down (mouse / touch / pen) so we can detect 2-finger
   // pinch. gestureRef is non-null only while a multi-touch gesture is running.
@@ -2122,7 +2142,30 @@ export default function CanvasViewport({
 
   const onDragOver = useCallback((e) => { e.preventDefault(); }, []);
 
-  const onContextMenu = useCallback((e) => { e.preventDefault(); }, []);
+  // Audit 4 #2 (2026-05-16) — RMB context menu per `editMode`.
+  // - Always suppress the browser's default menu (we don't want it on
+  //   the canvas regardless of branch).
+  // - Suppress SS's menu on the Live Preview surface (GAP-010 — read-only).
+  // - Suppress SS's menu if the most recent RMB press was a drag (pan
+  //   gesture); the `rmbDraggedRef` flag was set in `onPointerMove`
+  //   above. Reset the flag after each `contextmenu` event so a brand
+  //   new RMB press starts clean.
+  // - Otherwise open `editMenuStore.canvasContextMenu` at the cursor;
+  //   `CanvasContextMenu.jsx` reads `editorStore.editMode` to dispatch
+  //   the per-mode item set (Object / Edit-mesh / Edit-armature / Pose
+  //   / Weight Paint) — analog of Blender's
+  //   `VIEW3D_MT_<mode>_context_menu` family.
+  const onContextMenu = useCallback((e) => {
+    e.preventDefault();
+    if (rmbDraggedRef.current) {
+      rmbDraggedRef.current = false;
+      return;
+    }
+    if (previewModeRef.current) return;
+    useEditMenuStore.getState().openCanvasContextMenu({
+      cursor: { x: e.clientX, y: e.clientY },
+    });
+  }, []);
 
   /* ── Wheel: zoom (or live-radius adjust during proportional drag) ──── */
   const onWheel = useCallback((e) => {
@@ -2267,15 +2310,26 @@ export default function CanvasViewport({
 
     // Middle mouse (1) or right mouse (2) or alt+left → pan / zoom
     if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
+      // Audit 4 #2 — reset the RMB drag-vs-click flag on every RMB press
+      // so a fresh `contextmenu` event sees a clean slate. The flag
+      // flips true only if the user moves > threshold below.
+      if (e.button === 2) rmbDraggedRef.current = false;
       if (e.ctrlKey) {
         // Ctrl + Middle/Right drag → Zoom
+        // Audit 4 #2 post-ship arch fix — `button: e.button` is required
+        // here too. The pointermove drag-detection guard reads
+        // `panRef.current.button === 2`; without it, Ctrl+RMB-zoom
+        // gestures never flip `rmbDraggedRef.current` and the trailing
+        // `contextmenu` event (fires after Ctrl+RMB release on Windows)
+        // would open the per-mode menu at the end of every zoom.
         panRef.current = {
           mode: 'zoom',
           startX: e.clientX,
           startY: e.clientY,
           zoom0: view.zoom,
           panX0: view.panX,
-          panY0: view.panY
+          panY0: view.panY,
+          button: e.button,
         };
       } else {
         // Regular Middle/Right drag → Pan
@@ -2284,7 +2338,10 @@ export default function CanvasViewport({
           startX: e.clientX,
           startY: e.clientY,
           panX0: view.panX,
-          panY0: view.panY
+          panY0: view.panY,
+          // Audit 4 #2 — record originating button so pointermove can
+          // tag RMB pans as "this was a drag" once motion crosses 4 px.
+          button: e.button,
         };
       }
       canvas.setPointerCapture(e.pointerId);
@@ -2856,6 +2913,14 @@ export default function CanvasViewport({
     if (panRef.current) {
       const dx = e.clientX - panRef.current.startX;
       const dy = e.clientY - panRef.current.startY;
+
+      // Audit 4 #2 — once RMB-originated motion crosses the drag-vs-click
+      // threshold, mark `rmbDraggedRef` so the trailing `contextmenu` event
+      // suppresses the per-mode menu (we treat this as a pan gesture).
+      if (panRef.current.button === 2 && !rmbDraggedRef.current
+          && Math.hypot(dx, dy) > 4) {
+        rmbDraggedRef.current = true;
+      }
 
       if (panRef.current.mode === 'zoom') {
         const { zoom0, panX0, panY0, startX, startY } = panRef.current;

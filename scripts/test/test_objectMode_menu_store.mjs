@@ -69,9 +69,21 @@ function assert(cond, name) {
   assert(s.cursor?.x === 20, 'new cursor');
 }
 
-// 6. close() resets across all 6 kinds
+// 6. Audit 4 #2 (2026-05-16) — openCanvasContextMenu
 {
-  for (const opener of ['openMerge', 'openApply', 'openSnap', 'openMirrorAxis', 'openClearParent', 'openSetOrigin']) {
+  useEditMenuStore.getState().close();
+  useEditMenuStore.getState().openCanvasContextMenu({ cursor: { x: 7, y: 8 } });
+  const s = useEditMenuStore.getState();
+  assert(s.kind === 'canvasContextMenu', `kind=canvasContextMenu, got ${s.kind}`);
+  assert(s.cursor?.x === 7 && s.cursor?.y === 8, 'cursor set');
+  assert(s.canvasCursor === null, 'canvasContextMenu has no canvasCursor');
+}
+
+// 7. close() resets across all 7 kinds
+{
+  const openers = ['openMerge', 'openApply', 'openSnap', 'openMirrorAxis',
+                   'openClearParent', 'openSetOrigin', 'openCanvasContextMenu'];
+  for (const opener of openers) {
     if (opener === 'openMerge') {
       useEditMenuStore.getState().openMerge({ cursor: { x: 0, y: 0 }, canvasCursor: { x: 0, y: 0 } });
     } else {
