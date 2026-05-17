@@ -19,14 +19,43 @@
  * node fcurves grouped by node, then by property within node. That
  * groups everything driving the same dial together.
  *
+ * # Slice 5.W — row-state styling
+ *
+ * Row data + filtering are extracted to [./dopesheetRows.js](./dopesheetRows.js)
+ * so the React tree only handles presentation. Per-row state:
+ *
+ *   - **Muted** (`isFCurveEffectivelyMuted` — per-fcurve OR group
+ *     cascade): label gets `italic opacity-60`; diamonds drop to
+ *     ~0.4 alpha. Sister to the FCurveEditor sidebar / plot styling
+ *     (see [src/v3/editors/fcurve/FCurveEditor.jsx:3172](../fcurve/FCurveEditor.jsx#L3172),
+ *     [:3328](../fcurve/FCurveEditor.jsx#L3328)). Matches Blender's
+ *     mute hint pattern at `graph_draw.cc:1190-1194` (colourless grey
+ *     replacement on the plot stroke) — SS uses alpha because the
+ *     dopesheet draws pips, not strokes; same visual signal in the
+ *     medium the surface actually uses.
+ *
+ *   - **Hidden** (`isFCurveEffectivelyHidden`): row is filtered out
+ *     of the rendered list entirely. Mirrors
+ *     `ANIMFILTER_CURVE_VISIBLE` at `anim_filter.cc:1287-1288`. To
+ *     un-hide, open FCurveEditor and click the eye glyph there —
+ *     same UX as Blender (the sidebar is the un-hide affordance).
+ *
+ *   - **Active keyform** (`fc.activeKeyformIndex`, Slice 5.H): the
+ *     specific keyform pin gets a pale-yellow ring + slight scale.
+ *     Mirrors `draw_fcurve_active_vertex` at `graph_draw.cc:241-262`
+ *     (`TH_VERTEX_ACTIVE` painted AFTER the regular vertex pass).
+ *     SS mirrors via z-ordering — the active diamond is rendered
+ *     LAST in each row's keyform loop so it sits on top of any
+ *     adjacent diamonds and never gets clipped.
+ *
  * @module v3/editors/dopesheet/DopesheetEditor
  */
 
 import { useMemo, useRef } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
-import { decodeFCurveTarget } from '../../../anim/animationFCurve.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
+import { buildDopesheetRows } from './dopesheetRows.js';
 
 const LABEL_W = 180;
 const ROW_H   = 18;
@@ -46,7 +75,7 @@ export function DopesheetEditor() {
     [project.nodes, project.actions, activeActionId],
   );
 
-  const rows = useMemo(() => buildRows(action, project), [action, project]);
+  const rows = useMemo(() => buildDopesheetRows(action, project), [action, project]);
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
   if (!action) {
@@ -136,18 +165,37 @@ function Ruler({ duration, currentTime, onSeek }) {
 }
 
 function Row({ row, duration, currentTime, onSeek }) {
+  const { isMuted, activeKfIdx } = row;
+  // Render the active keyform LAST so its halo sits on top of any
+  // adjacent diamonds and never gets clipped. Mirrors Blender's
+  // `draw_fcurve_active_vertex` two-pass order at `graph_draw.cc:241-262`.
+  const orderedIndices = useMemo(() => {
+    const n = row.keyforms.length;
+    if (activeKfIdx < 0 || activeKfIdx >= n) {
+      return Array.from({ length: n }, (_, i) => i);
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) if (i !== activeKfIdx) out.push(i);
+    out.push(activeKfIdx);
+    return out;
+  }, [row.keyforms.length, activeKfIdx]);
+
   return (
     <div
       className="flex items-center border-b border-border/40 hover:bg-muted/20"
       style={{ height: ROW_H }}
     >
       <div
-        className="shrink-0 px-2 truncate text-[10px] border-r flex items-center gap-1.5"
+        className={
+          'shrink-0 px-2 truncate text-[10px] border-r flex items-center gap-1.5 '
+          + (isMuted ? 'italic opacity-60' : '')
+        }
         style={{ width: LABEL_W }}
         title={row.tooltip}
       >
         <span
           className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${row.kindColor}`}
+          style={{ opacity: isMuted ? 0.4 : 1 }}
           aria-hidden
         />
         <span className="truncate">{row.label}</span>
@@ -155,24 +203,29 @@ function Row({ row, duration, currentTime, onSeek }) {
       </div>
       <div
         className="relative flex-1 h-full"
+        style={{ opacity: isMuted ? 0.4 : 1 }}
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
           onSeek((x / rect.width) * duration);
         }}
       >
-        {row.keyforms.map((kf, i) => {
+        {orderedIndices.map((i) => {
+          const kf = row.keyforms[i];
           const left = (kf.time / duration) * 100;
           const isHot = Math.abs(kf.time - currentTime) < 1;
+          const isActive = i === activeKfIdx;
           return (
             <span
               key={i}
               className={
-                'absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 ring-1 ring-card cursor-pointer ' +
-                (isHot ? 'bg-primary ring-primary/40' : 'bg-amber-500/80 hover:bg-amber-400')
+                'absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 cursor-pointer '
+                + (isActive
+                  ? 'ring-2 ring-yellow-300/90 bg-amber-300'
+                  : (isHot ? 'bg-primary ring-1 ring-primary/40' : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400'))
               }
               style={{ left: `calc(${left}% - 4px)` }}
-              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}`}
+              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActive ? ' · active' : ''}`}
               onClick={(e) => { e.stopPropagation(); onSeek(kf.time); }}
             />
           );
@@ -188,40 +241,6 @@ function Row({ row, duration, currentTime, onSeek }) {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
-
-function buildRows(action, project) {
-  if (!action?.fcurves) return [];
-  const nodeNameById = new Map((project.nodes ?? []).map((n) => [n.id, n.name ?? n.id]));
-  const paramNameById = new Map((project.parameters ?? []).map((p) => [p.id, p.name ?? p.id]));
-
-  const paramRows = [];
-  const nodeRows = [];
-  for (const fc of action.fcurves) {
-    const target = decodeFCurveTarget(fc);
-    if (!target) continue;
-    const kfs = (fc.keyforms ?? []).map((kf) => ({ time: kf.time ?? 0, value: kf.value }));
-    if (target.kind === 'param') {
-      paramRows.push({
-        key: `param:${target.paramId}`,
-        label: paramNameById.get(target.paramId) ?? target.paramId,
-        tooltip: `Parameter ${target.paramId}`,
-        kindColor: 'bg-purple-500',
-        keyforms: kfs,
-      });
-    } else if (target.kind === 'node') {
-      nodeRows.push({
-        key: `node:${target.nodeId}:${target.property}`,
-        label: `${nodeNameById.get(target.nodeId) ?? target.nodeId} · ${target.property}`,
-        tooltip: `Node ${target.nodeId} · ${target.property}`,
-        kindColor: 'bg-cyan-500',
-        keyforms: kfs,
-      });
-    }
-  }
-  paramRows.sort((a, b) => a.label.localeCompare(b.label));
-  nodeRows.sort((a, b) => a.label.localeCompare(b.label));
-  return [...paramRows, ...nodeRows];
-}
 
 function buildRulerTicks(duration) {
   // Aim for 5–10 labelled ticks regardless of duration.
