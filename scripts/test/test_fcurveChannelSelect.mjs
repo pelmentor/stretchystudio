@@ -1,4 +1,4 @@
-// Animation Phase 5 Slices 5.F + 5.J — tests for src/anim/fcurveChannelSelect.js
+// Animation Phase 5 Slices 5.F + 5.J + 5.K — tests for src/anim/fcurveChannelSelect.js
 //
 // Coverage:
 //   - applyChannelSelect('replace') clears all + sets clicked + reports
@@ -22,6 +22,7 @@
 
 import {
   applyChannelSelect,
+  applyChannelSelectAll,
   isFCurveSelected,
 } from '../../src/anim/fcurveChannelSelect.js';
 
@@ -441,6 +442,275 @@ assert(isFCurveSelected({ selected: 'yes' }) === false, 'isFCurveSelected: "yes"
   // in the ordered list AFTER null AND we're in range when we hit it.
   assert(a.fcurves[1].selected === true,        'range null-in-ordered: b selected (range continues past null)');
   assert(a.fcurves[2].selected === true,        'range null-in-ordered: c selected (bound)');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 5.K — applyChannelSelectAll(action, mode, ctx)
+// Ports ANIM_OT_channels_select_all (anim_channels_edit.cc:3521-3554).
+// Modes: toggle/add/clear/invert; scope = ctx.orderedIds; active-clearing
+// per line 728-732 "Only erase the ACTIVE flag when deselecting".
+
+// ── Guards ──────────────────────────────────────────────────────────
+
+{
+  const r = applyChannelSelectAll(null, 'toggle', { orderedIds: ['a'] });
+  assert(r.changed === false && r.clearActive === false && r.resultMode === null,
+    'selectAll guard: null action');
+}
+
+{
+  const r = applyChannelSelectAll({ fcurves: null }, 'toggle', { orderedIds: ['a'] });
+  assert(r.changed === false && r.resultMode === null,
+    'selectAll guard: null fcurves array');
+}
+
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelectAll(a, 'unknown-mode', { orderedIds: ['a'] });
+  assert(r.changed === false && r.resultMode === null,
+    'selectAll guard: unknown mode');
+  assert(a.fcurves[0].selected === undefined || a.fcurves[0].selected === false,
+    'selectAll guard: unknown mode doesn\'t mutate');
+}
+
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelectAll(a, 'toggle');
+  assert(r.changed === false && r.resultMode === null,
+    'selectAll guard: missing ctx');
+}
+
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelectAll(a, 'toggle', { orderedIds: [] });
+  assert(r.changed === false && r.resultMode === null,
+    'selectAll guard: empty orderedIds');
+}
+
+{
+  const a = makeAction(['a']);
+  const r = applyChannelSelectAll(a, 'toggle', { orderedIds: null });
+  assert(r.changed === false && r.resultMode === null,
+    'selectAll guard: null orderedIds');
+}
+
+// ── 'add' mode (SEL_SELECT) ────────────────────────────────────────
+
+{
+  // All-deselected → all selected, no active to clear.
+  const a = makeAction(['a', 'b', 'c']);
+  const r = applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.changed === true,                    'add fresh: changed=true');
+  assert(r.resultMode === 'add',                'add fresh: resultMode=add');
+  assert(r.selectedAfter === 3,                 'add fresh: selectedAfter=3');
+  assert(r.clearActive === false,               'add fresh: clearActive=false (no active in ctx)');
+  assert(a.fcurves[0].selected === true,        'add fresh: a selected');
+  assert(a.fcurves[1].selected === true,        'add fresh: b selected');
+  assert(a.fcurves[2].selected === true,        'add fresh: c selected');
+}
+
+{
+  // Already all-selected → changed=false, idempotent.
+  const a = makeAction(['a', 'b', 'c']);
+  for (const fc of a.fcurves) fc.selected = true;
+  const r = applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.changed === false,                   'add already-all: changed=false');
+  assert(r.selectedAfter === 3,                 'add already-all: selectedAfter=3');
+}
+
+{
+  // Active in scope + ADD → clearActive=false (active ends up selected).
+  const a = makeAction(['a', 'b']);
+  const r = applyChannelSelectAll(a, 'add',
+    { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === false,               'add active-in-scope: clearActive=false (Blender line 728-732 — active selected, not erased)');
+}
+
+// ── 'clear' mode (SEL_DESELECT) ────────────────────────────────────
+
+{
+  // All-selected → all deselected.
+  const a = makeAction(['a', 'b', 'c']);
+  for (const fc of a.fcurves) fc.selected = true;
+  const r = applyChannelSelectAll(a, 'clear', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.changed === true,                    'clear: changed=true');
+  assert(r.resultMode === 'clear',              'clear: resultMode=clear');
+  assert(r.selectedAfter === 0,                 'clear: selectedAfter=0');
+  assert(a.fcurves[0].selected === false,       'clear: a deselected');
+  assert(a.fcurves[1].selected === false,       'clear: b deselected');
+  assert(a.fcurves[2].selected === false,       'clear: c deselected');
+}
+
+{
+  // Already-all-deselected → changed=false (sparse-field, no `selected` key
+  // means nothing to clear — `before === false`, `after === false`).
+  const a = makeAction(['a', 'b']);
+  const r = applyChannelSelectAll(a, 'clear', { orderedIds: ['a', 'b'] });
+  assert(r.changed === false,                   'clear already-none: changed=false');
+  // Sparse-field: don't write `selected: false` when it was already missing.
+  assert(a.fcurves[0].selected === undefined,   'clear sparse: a.selected still missing');
+  assert(a.fcurves[1].selected === undefined,   'clear sparse: b.selected still missing');
+}
+
+{
+  // Active in scope + CLEAR → clearActive=true. Mirrors Blender
+  // anim_channels_edit.cc:728-732: after CLEAR, FCURVE_SELECTED is wiped
+  // to 0 unconditionally, so the "if (!selected && change_active)" branch
+  // fires regardless of prior state.
+  const a = makeAction(['a', 'b']);
+  a.fcurves[0].selected = true;
+  const r = applyChannelSelectAll(a, 'clear',
+    { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === true,                'clear active-in-scope: clearActive=true');
+}
+
+{
+  // Active NOT in scope + CLEAR → clearActive=false (active is in a
+  // different/hidden region; Blender's anim_channels_for_selection
+  // doesn't iterate it).
+  const a = makeAction(['a', 'b']);
+  a.fcurves[0].selected = true;
+  const r = applyChannelSelectAll(a, 'clear',
+    { orderedIds: ['b'], activeFCurveId: 'a' });
+  assert(r.clearActive === false,               'clear active-not-in-scope: clearActive=false');
+  assert(a.fcurves[0].selected === true,        'clear visible-scope: a (out of scope) preserved');
+}
+
+// ── 'invert' mode (SEL_INVERT) ─────────────────────────────────────
+
+{
+  // Mixed → flipped.
+  const a = makeAction(['a', 'b', 'c']);
+  a.fcurves[0].selected = true;
+  a.fcurves[2].selected = true;
+  const r = applyChannelSelectAll(a, 'invert', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.changed === true,                    'invert mixed: changed=true');
+  assert(r.resultMode === 'invert',             'invert mixed: resultMode=invert');
+  assert(r.selectedAfter === 1,                 'invert mixed: selectedAfter=1');
+  assert(a.fcurves[0].selected === false,       'invert: a flipped to false');
+  assert(a.fcurves[1].selected === true,        'invert: b flipped to true');
+  assert(a.fcurves[2].selected === false,       'invert: c flipped to false');
+}
+
+{
+  // Active in scope + was selected → flips to deselected → clearActive=true.
+  const a = makeAction(['a', 'b']);
+  a.fcurves[0].selected = true;
+  const r = applyChannelSelectAll(a, 'invert',
+    { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === true,                'invert active-was-selected: clearActive=true (now deselected)');
+}
+
+{
+  // Active in scope + was deselected → flips to selected → clearActive=false.
+  const a = makeAction(['a', 'b']);
+  // a was deselected; b was deselected. After invert: both selected.
+  const r = applyChannelSelectAll(a, 'invert',
+    { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === false,               'invert active-was-deselected: clearActive=false (now selected)');
+}
+
+// ── 'toggle' mode (SEL_TOGGLE) ─────────────────────────────────────
+// Resolver: `anim_channels_selection_flag_for_toggle` at
+// anim_channels_edit.cc:536-570 — first FCURVE_SELECTED found = CLEAR;
+// else ADD.
+
+{
+  // None selected → resolves to ADD.
+  const a = makeAction(['a', 'b', 'c']);
+  const r = applyChannelSelectAll(a, 'toggle', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.resultMode === 'add',                'toggle none-selected: resolves to add');
+  assert(r.selectedAfter === 3,                 'toggle none-selected: selectedAfter=3');
+  assert(a.fcurves[0].selected === true,        'toggle ADD path: a selected');
+  assert(a.fcurves[1].selected === true,        'toggle ADD path: b selected');
+}
+
+{
+  // Any selected → resolves to CLEAR.
+  const a = makeAction(['a', 'b', 'c']);
+  a.fcurves[1].selected = true; // just one
+  const r = applyChannelSelectAll(a, 'toggle', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.resultMode === 'clear',              'toggle one-selected: resolves to clear');
+  assert(r.selectedAfter === 0,                 'toggle one-selected: selectedAfter=0');
+  assert(a.fcurves[1].selected === false,       'toggle CLEAR path: b deselected');
+}
+
+{
+  // All selected → resolves to CLEAR.
+  const a = makeAction(['a', 'b']);
+  for (const fc of a.fcurves) fc.selected = true;
+  const r = applyChannelSelectAll(a, 'toggle', { orderedIds: ['a', 'b'] });
+  assert(r.resultMode === 'clear',              'toggle all-selected: resolves to clear');
+  assert(r.selectedAfter === 0,                 'toggle all-selected: selectedAfter=0');
+}
+
+{
+  // Toggle inherits active-clearing rule via its CLEAR resolution.
+  const a = makeAction(['a', 'b']);
+  a.fcurves[0].selected = true;
+  const r = applyChannelSelectAll(a, 'toggle',
+    { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === true,                'toggle→clear active-in-scope: clearActive=true');
+}
+
+// ── Scope correctness ──────────────────────────────────────────────
+
+{
+  // orderedIds restricts mutation; out-of-scope curves preserved.
+  const a = makeAction(['a', 'b', 'c', 'd']);
+  a.fcurves[3].selected = true; // 'd' is out of visible scope
+  const r = applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'b', 'c'] });
+  assert(r.changed === true,                    'scope: changed=true');
+  assert(r.selectedAfter === 3,                 'scope: selectedAfter counts only in-scope');
+  assert(a.fcurves[0].selected === true,        'scope: a (in-scope) selected');
+  assert(a.fcurves[3].selected === true,        'scope: d (out-of-scope) PRESERVED');
+}
+
+{
+  // Ghost id in orderedIds (id present in orderedIds but not in action.fcurves)
+  // is silently skipped — mirrors Slice 5.J's defensive `if (fc)` pattern.
+  const a = makeAction(['a', 'b']);
+  const r = applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'ghost', 'b'] });
+  assert(r.changed === true,                    'ghost: changed=true (real ids still selected)');
+  assert(r.selectedAfter === 2,                 'ghost: ghost not counted');
+  assert(a.fcurves[0].selected === true,        'ghost: a selected');
+  assert(a.fcurves[1].selected === true,        'ghost: b selected');
+}
+
+// ── Sister-field preservation ──────────────────────────────────────
+
+{
+  // hide / mute / activeKeyformIndex must NOT be touched by bulk select-all.
+  const a = makeAction(['a', 'b']);
+  a.fcurves[0].hide = true;
+  a.fcurves[0].mute = true;
+  a.fcurves[0].activeKeyformIndex = 2;
+  a.fcurves[1].mute = true;
+  applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'b'] });
+  assert(a.fcurves[0].hide === true,            'sister: a.hide preserved');
+  assert(a.fcurves[0].mute === true,            'sister: a.mute preserved');
+  assert(a.fcurves[0].activeKeyformIndex === 2, 'sister: a.activeKeyformIndex preserved');
+  assert(a.fcurves[1].mute === true,            'sister: b.mute preserved');
+  assert(a.fcurves[0].selected === true,        'sister: a.selected set');
+  assert(a.fcurves[1].selected === true,        'sister: b.selected set');
+}
+
+// ── Sparse-field invariant ─────────────────────────────────────────
+
+{
+  // CLEAR on a curve with no `selected` key must not write `selected: false`
+  // (keeps JSON minimal; reader treats missing-vs-false identically).
+  const a = makeAction(['a']);
+  // a.fcurves[0].selected is undefined
+  applyChannelSelectAll(a, 'clear', { orderedIds: ['a'] });
+  assert(a.fcurves[0].selected === undefined,   'sparse: clear on missing field doesn\'t write false');
+}
+
+{
+  // ADD on a curve with no `selected` key writes `selected: true`.
+  const a = makeAction(['a']);
+  applyChannelSelectAll(a, 'add', { orderedIds: ['a'] });
+  assert(a.fcurves[0].selected === true,        'sparse: add on missing field writes true');
 }
 
 // ─────────────────────────────────────────────────────────────────────

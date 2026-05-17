@@ -3,9 +3,16 @@
 /**
  * Animation Phase 5 Slice 5.F — Channel selection split helper.
  *
- * Pure mutation helper for the per-FCurve `selected` boolean — Blender's
+ * Pure mutation helpers for the per-FCurve `selected` boolean — Blender's
  * `FCURVE_SELECTED` bit (`DNA_anim_enums.h:303-310`) — kept INDEPENDENT
  * of the "active FCurve" concept (`FCURVE_ACTIVE`).
+ *
+ * Exports:
+ *   - `applyChannelSelect(action, fcurveId, modifier, ctx)` — click-driven
+ *     selection (replace / toggle / range). Slices 5.F + 5.J.
+ *   - `applyChannelSelectAll(action, mode, ctx)` — bulk select-all
+ *     operators (add / clear / invert / toggle). Slice 5.K (this slice).
+ *   - `isFCurveSelected(fc)` — read accessor.
  *
  * Pre-Slice 5.F the SS sidebar collapsed channel selection onto the
  * global `selectionStore` — exactly one FCurve was the "active" curve
@@ -160,6 +167,70 @@
  *     for diffing against Blender's behavior" sweep can remove the
  *     exit without changing semantics.
  *
+ * # Slice 5.K — bulk select-all (A / Alt+A / Ctrl+I)
+ *
+ * `applyChannelSelectAll(action, mode, ctx)` ports Blender's
+ * `ANIM_OT_channels_select_all` operator
+ * (`anim_channels_edit.cc:3521-3554`). The keymap binds three actions
+ * (`blender_default.py:3864` → `_template_items_select_actions` at
+ * `blender_default.py:420-439`):
+ *
+ *   - **A → TOGGLE** — `anim_channels_selection_flag_for_toggle` at
+ *     `anim_channels_edit.cc:536-570`: scan the visible list; if ANY
+ *     channel is selected, resolve to CLEAR; else resolve to ADD.
+ *   - **Alt+A → CLEAR** (DESELECT) — every visible channel `selected = false`.
+ *   - **Ctrl+I → INVERT** — per-channel flip of `selected`.
+ *
+ * The industry-compatible keymap remaps to **Ctrl+A → ADD**,
+ * **Ctrl+Shift+A → CLEAR**, **Ctrl+I → INVERT** (no TOGGLE);
+ * `industry_compatible_data.py:2345-2350`. SS implements the helper
+ * surface (the four modes); the FCurveEditor binds the default-keymap
+ * spelling A / Alt+A / Ctrl+I to match the user-installed Blender 5.1.
+ *
+ * Active-flag handling — Blender's per-channel rule at
+ * `anim_channels_edit.cc:728-732` ("Only erase the ACTIVE flag when
+ * deselecting"): after the per-channel `selected` is updated, if the
+ * channel ends up NOT selected AND we're in a mode that allows active
+ * to change (`change_active = sel != EXTEND_RANGE` at line 683), clear
+ * the channel's ACTIVE flag. Bulk select-all is always `change_active`
+ * (no EXTEND_RANGE mode), so the rule collapses to: clear active if
+ * the active channel ends up deselected.
+ *
+ * In SS the active id is global state, not a per-FCurve flag. The
+ * helper returns `{ clearActive: boolean }` so the caller (FCurveEditor)
+ * can clear `selectionStore.activeFCurveId` when appropriate. The
+ * decision matches Blender:
+ *   - ADD — active stays active (it ends up selected).
+ *   - CLEAR — active goes away if it was in the visible scope (line 728
+ *     fires unconditionally on CLEAR because FCURVE_SELECTED was just
+ *     wiped to 0). Active NOT in visible scope = untouched.
+ *   - INVERT — active goes away if it was in scope AND was selected
+ *     before the flip (so it's now deselected).
+ *
+ * Scope — every mode operates ONLY on `ctx.orderedIds` (the rendered
+ * sidebar list). FCurves filtered out of `decoded` by unresolvable
+ * rna_path keep their `selected` bit, matching Blender's
+ * `anim_channels_for_selection` scope at line 823.
+ *
+ * Region routing — SS uses a hover-tracked region ref in FCurveEditor
+ * to disambiguate KeyA: hover='sidebar' → channel select-all;
+ * hover='timeline' → existing keyform select-all (Slice 5.B's
+ * `operatorSelectAll`). Mirrors Blender's per-area keymap routing
+ * where the channels region and the graph region register independent
+ * KeyA bindings.
+ *
+ * # SS deviations from Blender (Slice 5.K)
+ *
+ *   - **One global active across regions.** Blender clears the
+ *     per-channel `FCURVE_ACTIVE` bit. SS clears the editor-store
+ *     `activeFCurveId`. Functionally identical for the
+ *     "deselecting drops active" case.
+ *   - **No `OPTYPE_REGISTER | OPTYPE_UNDO` flags ported.** Bulk
+ *     select-all skips the undo stack — matches Slice 5.F's
+ *     `skipHistory: true` for click-select. Channel-list selection
+ *     is UI state, not document state per the audit-fix MED-C2
+ *     rationale in Slice 5.F.
+ *
  * @module anim/fcurveChannelSelect
  */
 
@@ -298,6 +369,115 @@ export function applyChannelSelect(action, fcurveId, modifier, ctx) {
     makeActive: clicked.selected === true,
     selectedNow: clicked.selected === true,
   };
+}
+
+/**
+ * Apply a bulk select-all operation in-place on an action.
+ *
+ * Slice 5.K — ports Blender's `ANIM_OT_channels_select_all` operator
+ * (`anim_channels_edit.cc:3521-3554`). See module header for the full
+ * keymap / scope / active-flag-handling provenance.
+ *
+ * `mode`:
+ *   - 'toggle' — Blender's SEL_TOGGLE; resolves to 'add' if no channel
+ *     in scope is currently selected, else 'clear'. Matches
+ *     `anim_channels_selection_flag_for_toggle` at
+ *     `anim_channels_edit.cc:536-570`.
+ *   - 'add'    — SEL_SELECT / ACHANNEL_SETFLAG_ADD; set every visible
+ *     channel `selected = true`.
+ *   - 'clear'  — SEL_DESELECT / ACHANNEL_SETFLAG_CLEAR; set every
+ *     visible channel `selected = false`.
+ *   - 'invert' — SEL_INVERT / ACHANNEL_SETFLAG_INVERT; per-channel flip.
+ *
+ * `ctx.orderedIds` is the visible scope (sidebar `decoded.map(d => d.fcurve.id)`).
+ * `ctx.activeFCurveId` lets the helper compute `clearActive` per
+ * Blender's "Only erase the ACTIVE flag when deselecting" rule
+ * (`anim_channels_edit.cc:728-732`). Both are optional but required
+ * for meaningful work — an empty/missing `orderedIds` returns a no-op
+ * decision.
+ *
+ * @param {object} action — the Action datablock (mutated)
+ * @param {'toggle'|'add'|'clear'|'invert'} mode
+ * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
+ * @returns {{
+ *   changed: boolean,
+ *   clearActive: boolean,
+ *   resultMode: 'add'|'clear'|'invert'|null,
+ *   selectedAfter: number,
+ * }}
+ */
+export function applyChannelSelectAll(action, mode, ctx) {
+  if (!action || !Array.isArray(action.fcurves)) {
+    return { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
+  }
+  if (mode !== 'toggle' && mode !== 'add' && mode !== 'clear' && mode !== 'invert') {
+    return { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
+  }
+  const orderedIds = ctx && Array.isArray(ctx.orderedIds) ? ctx.orderedIds : null;
+  const activeFCurveId = ctx && typeof ctx.activeFCurveId === 'string' && ctx.activeFCurveId.length > 0
+    ? ctx.activeFCurveId
+    : null;
+  if (!orderedIds || orderedIds.length === 0) {
+    return { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
+  }
+
+  // Build the id-keyed map once. The walker skips `id` entries that
+  // are in `orderedIds` but missing from `action.fcurves` (ghosts —
+  // possible when a delete races a render). Matches the defensive
+  // pattern from Slice 5.J's range-select (audit-fix MED-A1).
+  const byId = new Map();
+  for (const fc of action.fcurves) {
+    if (fc && typeof fc.id === 'string') byId.set(fc.id, fc);
+  }
+
+  // Toggle resolver — Blender's `anim_channels_selection_flag_for_toggle`
+  // at `anim_channels_edit.cc:536-570`: scan visible channels; resolve
+  // to CLEAR on first selected found, else ADD. Same short-circuit.
+  /** @type {'add'|'clear'|'invert'} */
+  let resolved;
+  if (mode === 'toggle') {
+    let anySelected = false;
+    for (const id of orderedIds) {
+      const fc = byId.get(id);
+      if (fc && fc.selected === true) { anySelected = true; break; }
+    }
+    resolved = anySelected ? 'clear' : 'add';
+  } else {
+    resolved = mode;
+  }
+
+  // Per-channel mutation. Sparse-field invariant: only write `false`
+  // when transitioning from true (matches `applyChannelSelect` line 210).
+  let changed = false;
+  let selectedAfter = 0;
+  for (const id of orderedIds) {
+    const fc = byId.get(id);
+    if (!fc) continue;
+    const before = fc.selected === true;
+    let after;
+    if (resolved === 'add') after = true;
+    else if (resolved === 'clear') after = false;
+    else after = !before; // invert
+    if (after !== before) {
+      if (after) fc.selected = true;
+      else fc.selected = false;
+      changed = true;
+    }
+    if (after) selectedAfter++;
+  }
+
+  // Active-flag decision — mirror Blender's `if (!(fcu->flag &
+  // FCURVE_SELECTED) && change_active)` at `anim_channels_edit.cc:728-732`.
+  // Bulk select-all is always `change_active`, so the rule collapses to:
+  // "if active is in scope AND ends up deselected, clear it".
+  let clearActive = false;
+  if (activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
+    const fc = byId.get(activeFCurveId);
+    const activeAfter = fc ? fc.selected === true : false;
+    if (!activeAfter) clearActive = true;
+  }
+
+  return { changed, clearActive, resultMode: resolved, selectedAfter };
 }
 
 /**

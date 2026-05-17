@@ -330,6 +330,7 @@ import { hasDriver, clearDriver } from '../../../anim/driverGate.js';
 import { evaluateDriver } from '../../../anim/driver.js';
 import {
   applyChannelSelect,
+  applyChannelSelectAll,
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
 import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
@@ -493,6 +494,16 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // ResizeObserver" note for the bug this also fixes incidentally).
   const plotAreaRef = useRef(null);
   const canvasRef = useRef(null);
+  // Slice 5.K (2026-05-17) — region-routed KeyA. Tracks which sub-area
+  // the cursor is over so KeyA dispatches to the right scope:
+  //   - 'sidebar' → channel select-all (applyChannelSelectAll)
+  //   - 'timeline' (default) → keyform select-all (operatorSelectAll)
+  // Mirrors Blender's per-area keymap registration: the channels region
+  // (`SPACE_GRAPH`/`RGN_TYPE_CHANNELS`) and the graph region register
+  // independent KeyA bindings, with mouse position routing the event.
+  // Implemented as a ref (not state) so updates don't trigger re-renders;
+  // only `onKeyDown` reads it, on the same render cycle as the keypress.
+  const regionHoverRef = useRef('timeline');
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
   const [selectedHandles, setSelectedHandles] = useState(new Map());
@@ -1809,6 +1820,56 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
   // ── Hotkey dispatch ─────────────────────────────────────────────────
 
+  // Slice 5.K — bulk channel select-all dispatcher (A / Alt+A / Ctrl+I).
+  //
+  // Mirrors Blender's `ANIM_OT_channels_select_all`
+  // (`anim_channels_edit.cc:3521-3554`). The keymap binds the three
+  // canonical actions via `_template_items_select_actions`
+  // (`blender_default.py:420-439` registered at `blender_default.py:3864`).
+  //
+  // Like Slice 5.F's `applyChannelClick`, this skips undo: channel-list
+  // selection is UI state, not document state, so a bulk select-all
+  // shouldn't burn the 50-entry undo budget.
+  //
+  // `ctx` is built fresh per call so the helper sees the live `decoded`
+  // / `activeFCurveId` — same pattern as Slice 5.J's range-select; do
+  // not hoist `decoded.map(...)` into this callback's closure.
+  //
+  // Active-clearing note (Slice 5.K SS deviation): the helper returns
+  // `clearActive: boolean` matching Blender's `if (!selected && change_active)`
+  // rule at `anim_channels_edit.cc:728-732`. SS does NOT forward
+  // `clearActive` to `selectStore` today — clearing the global
+  // param/node selection from a sidebar Alt+A would have side-effects
+  // on the param editor + keyform editor's active-row. Documented +
+  // deferred to the day SS grows a per-fcurve ACTIVE slot (see the
+  // `project_ss_is_embryo` memory). The helper's decision is the truth;
+  // the caller's deferral is the deviation.
+  //
+  // Declaration order: this callback ships ABOVE `onKeyDown` (rather
+  // than alongside the related `applyChannelClick` further down) because
+  // `onKeyDown` references it; `const` is TDZ-blocked at the
+  // useCallback evaluation point, so co-locating with the other channel
+  // helpers below the keymap would crash with "used before declaration".
+  const applyChannelSelectAllOp = useCallback((mode) => {
+    let decision = { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      decision = applyChannelSelectAll(a, mode, {
+        orderedIds: decoded.map((d) => d.fcurve.id),
+        activeFCurveId,
+      });
+    }, { skipHistory: true });
+    return decision;
+  }, [activeActionId, update, decoded, activeFCurveId]);
+
+  // Hover region setters — Sidebar wires its outer div to these so
+  // `regionHoverRef.current` reflects which sub-area the cursor is over
+  // when KeyA / Alt+A / Ctrl+I fires. Stable identities keep Sidebar's
+  // mouse-enter/leave handlers from churning on parent re-renders.
+  const onSidebarEnter = useCallback(() => { regionHoverRef.current = 'sidebar'; }, []);
+  const onSidebarLeave = useCallback(() => { regionHoverRef.current = 'timeline'; }, []);
+
   const onKeyDown = useCallback((e) => {
     if (modal) return;
     if (menu) return;
@@ -1862,6 +1923,39 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       operatorHome();
       return;
     }
+    // Slice 5.K — region-routed channel select-all when the cursor is
+    // over the sidebar. Mirrors Blender's per-area keymap registration
+    // (channels region binds A / Alt+A / Ctrl+I to
+    // `ANIM_OT_channels_select_all`; graph region binds them
+    // independently). Checked BEFORE the timeline-scoped KeyA so the
+    // sidebar variant wins when hover='sidebar'.
+    //
+    // Default keymap (`blender_default.py:3864` →
+    // `_template_items_select_actions` at `blender_default.py:420-439`):
+    //   - A          → TOGGLE  (resolves to add/clear via current state)
+    //   - Alt+A      → CLEAR   (DESELECT)
+    //   - Ctrl+I     → INVERT
+    //
+    // Industry-compatible keymap (`industry_compatible_data.py:2345-2350`)
+    // remaps to Ctrl+A / Ctrl+Shift+A / Ctrl+I; not wired today (SS
+    // hasn't adopted the industry keymap variant elsewhere either).
+    if (regionHoverRef.current === 'sidebar') {
+      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        applyChannelSelectAllOp('toggle');
+        return;
+      }
+      if (e.code === 'KeyA' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        applyChannelSelectAllOp('clear');
+        return;
+      }
+      if (e.code === 'KeyI' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        applyChannelSelectAllOp('invert');
+        return;
+      }
+    }
     if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       if (selectionRef.current.size > 0) clearSelection();
@@ -1872,7 +1966,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // switching the scene-bound action between keypresses doesn't leave
     // `onKeyDown` closing over a stale id (which would silently no-op
     // operators against the wrong action's getActiveSceneAction result).
-  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId]);
+    // Slice 5.K: `applyChannelSelectAllOp` is the new dep; its own
+    // closure already includes `activeActionId` + `decoded` + `activeFCurveId`
+    // so adding it here covers all live state for the sidebar branch.
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp]);
 
   // ── Slice 5.D — driver banner + live value ──────────────────────────
 
@@ -2009,6 +2106,9 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         onPickActiveByTarget={onPickActiveByTarget}
         onApplyChannelClick={applyChannelClick}
         onClearKeyformSelection={clearSelection}
+        onSelectAll={applyChannelSelectAllOp}
+        onSidebarEnter={onSidebarEnter}
+        onSidebarLeave={onSidebarLeave}
         selection={selectedHandles}
       />
 
@@ -2122,14 +2222,50 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, selection }) {
+function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
       style={{ width: SIDEBAR_W }}
+      onPointerEnter={onSidebarEnter}
+      onPointerLeave={onSidebarLeave}
     >
-      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
-        F-Curves ({decoded.length})
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border flex items-center justify-between">
+        <span>F-Curves ({decoded.length})</span>
+        {/* Slice 5.K — bulk channel select-all triplet. Mirrors Blender's
+            three keymap entries (`blender_default.py:3864` →
+            `_template_items_select_actions`). Keep the buttons even
+            though the keymap exists: discoverable for users not in the
+            habit of Blender keybinds + works without sidebar-hover. */}
+        <span className="flex items-center gap-0.5">
+          <button
+            type="button"
+            className="px-1 py-0.5 text-[9px] uppercase tracking-tight rounded hover:bg-accent/60 hover:text-foreground"
+            onClick={() => onSelectAll('toggle')}
+            title="Toggle select all channels (A)"
+            aria-label="Toggle select all channels"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className="px-1 py-0.5 text-[9px] uppercase tracking-tight rounded hover:bg-accent/60 hover:text-foreground"
+            onClick={() => onSelectAll('clear')}
+            title="Deselect all channels (Alt+A)"
+            aria-label="Deselect all channels"
+          >
+            None
+          </button>
+          <button
+            type="button"
+            className="px-1 py-0.5 text-[9px] uppercase tracking-tight rounded hover:bg-accent/60 hover:text-foreground"
+            onClick={() => onSelectAll('invert')}
+            title="Invert channel selection (Ctrl+I)"
+            aria-label="Invert channel selection"
+          >
+            Inv
+          </button>
+        </span>
       </div>
       {decoded.map((d) => {
         const isActive = d.fcurve.id === activeFCurveId;
