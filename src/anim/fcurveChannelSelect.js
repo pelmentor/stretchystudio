@@ -37,15 +37,29 @@
  *   - **SELECT_EXTEND_RANGE** (Ctrl+click) — line 4235-4238: walks the
  *     channel list between last-active and clicked, range-selecting
  *     everything in between. Does NOT elevate active (line 4247 gate).
- *     SS-deferred this slice (would need a stable channel-list index;
- *     `decodeAllFCurves` filters unresolvable targets so its index
- *     can't be the source of truth).
+ *     SHIPPED in Slice 5.J as the `'range'` modifier — the caller passes
+ *     `{ activeFCurveId, orderedIds }` in `ctx`; `orderedIds` is the
+ *     sidebar-rendered fcurve-id list (i.e. `decoded.map(d => d.fcurve.id)`).
+ *     The walker reproduces `animchannel_select_range`
+ *     (`anim_channels_edit.cc:3984-4025`) byte-for-byte: iterate the
+ *     ordered list, flip `in_selection_range` at both the active and the
+ *     clicked element, select every element while in the range
+ *     (inclusive of both bounds), early-exit once both bounds have been
+ *     hit. Pre-walk clears every fcurve's `selected` bit — matches
+ *     Blender's `ANIM_anim_channels_select_set(EXTEND_RANGE)` call at
+ *     line 4236 which, per the load-bearing comment at
+ *     `anim_channels_edit.cc:662-669`, "uses [EXTEND_RANGE] to deselect
+ *     *everything* before `animchannel_select_range()` later does the
+ *     actual selection of the channels in the range".
  *
- *     When EXTEND_RANGE eventually ships, also port the auto-downgrade
- *     at `anim_channels_edit.cc:4517-4522`: if no channel of the same
- *     type is active, Blender silently rewrites `selectmode` from
- *     `SELECT_EXTEND_RANGE` to `SELECT_INVERT` so the click degrades
- *     gracefully into a Shift-click toggle rather than a no-op.
+ *     **Auto-downgrade** (Blender's `anim_channels_edit.cc:4517-4522`):
+ *     if no active channel of the same type exists, Blender silently
+ *     rewrites `selectmode` from `SELECT_EXTEND_RANGE` to `SELECT_INVERT`
+ *     so Ctrl+click degrades into a Shift+click toggle rather than a
+ *     no-op. SS mirrors this whenever (a) `activeFCurveId` is null /
+ *     undefined / missing in `orderedIds`, OR (b) the clicked fcurve
+ *     itself isn't in `orderedIds` (decoded filtered it out). The
+ *     helper short-circuits to the 'toggle' branch when downgraded.
  *
  * The "elevate active only when newly selected" rule (line 4247) is the
  * load-bearing detail that makes channel-selection feel right: Shift-
@@ -113,15 +127,19 @@
  *
  *   - 'replace' → SELECT_REPLACE (plain click)
  *   - 'toggle'  → SELECT_INVERT  (Shift+click)
- *
- * SELECT_EXTEND_RANGE (Ctrl+click) is deferred — see module header.
+ *   - 'range'   → SELECT_EXTEND_RANGE (Ctrl+click) — requires
+ *     `ctx.activeFCurveId` + `ctx.orderedIds`. Auto-downgrades to
+ *     'toggle' when no eligible active exists (see module header for
+ *     the full Blender `anim_channels_edit.cc:4517-4522` provenance).
  *
  * @param {object} action — the Action datablock (mutated)
  * @param {string} fcurveId — the id of the clicked FCurve
- * @param {'replace'|'toggle'} modifier
+ * @param {'replace'|'toggle'|'range'} modifier
+ * @param {{ activeFCurveId?: string|null, orderedIds?: string[] }} [ctx]
+ *   — required for `'range'`; ignored for `'replace'`/`'toggle'`.
  * @returns {{ makeActive: boolean, selectedNow: boolean }}
  */
-export function applyChannelSelect(action, fcurveId, modifier) {
+export function applyChannelSelect(action, fcurveId, modifier, ctx) {
   if (!action || !Array.isArray(action.fcurves)) {
     return { makeActive: false, selectedNow: false };
   }
@@ -129,7 +147,7 @@ export function applyChannelSelect(action, fcurveId, modifier) {
   // Earlier draft fell through to 'toggle' on unknown values; that
   // would have silently masked a future 'extend' wiring before its
   // helper branch lands.
-  if (modifier !== 'replace' && modifier !== 'toggle') {
+  if (modifier !== 'replace' && modifier !== 'toggle' && modifier !== 'range') {
     return { makeActive: false, selectedNow: false };
   }
   const clicked = action.fcurves.find((f) => f && f.id === fcurveId);
@@ -142,6 +160,67 @@ export function applyChannelSelect(action, fcurveId, modifier) {
     }
     clicked.selected = true;
     return { makeActive: true, selectedNow: true };
+  }
+
+  if (modifier === 'range') {
+    // Slice 5.J — SELECT_EXTEND_RANGE port. Blender's auto-downgrade at
+    // `anim_channels_edit.cc:4517-4522`: when no active channel of the
+    // matching type exists, rewrite selectmode → SELECT_INVERT. SS's
+    // single-channel-type universe simplifies "matching type" to
+    // "active id is in the visible ordered list". The clicked id must
+    // also be in the list (decoded may have filtered it out for an
+    // unresolvable rna_path; falling through to a single-cell range
+    // walk would silently no-op).
+    const activeFCurveId = ctx && ctx.activeFCurveId;
+    const orderedIds = ctx && Array.isArray(ctx.orderedIds) ? ctx.orderedIds : null;
+    const canRange =
+      orderedIds &&
+      typeof activeFCurveId === 'string' &&
+      activeFCurveId.length > 0 &&
+      orderedIds.indexOf(activeFCurveId) !== -1 &&
+      orderedIds.indexOf(fcurveId) !== -1;
+    if (!canRange) {
+      // Auto-downgrade to toggle — recurse with no ctx so the downgrade
+      // is single-level (toggle never re-enters this branch).
+      return applyChannelSelect(action, fcurveId, 'toggle');
+    }
+
+    // Pre-walk wipe — Blender's `ANIM_anim_channels_select_set(EXTEND_RANGE)`
+    // at line 4236 sets every channel's `selected` to false (see the
+    // comment at lines 662-669 explaining the deliberate misnomer).
+    for (const fc of action.fcurves) {
+      if (!fc) continue;
+      if (fc.selected) fc.selected = false;
+    }
+
+    // Walk the visible ordered list. Flip `inRange` at each of the two
+    // bounds (active + clicked); select every fcurve while inside the
+    // range; exit once both bounds have been hit. Mirrors
+    // `animchannel_select_range` at `anim_channels_edit.cc:3984-4025`.
+    let inRange = false;
+    const byId = new Map();
+    for (const fc of action.fcurves) {
+      if (fc && typeof fc.id === 'string') byId.set(fc.id, fc);
+    }
+    for (const id of orderedIds) {
+      const isActive = id === activeFCurveId;
+      const isCursor = id === fcurveId;
+      const fc = byId.get(id);
+      if (isActive || isCursor) {
+        if (fc) fc.selected = true;
+        inRange = !inRange;
+      } else if (inRange) {
+        if (fc) fc.selected = true;
+      }
+      if (isActive && isCursor) break; // single-cell range (active===cursor)
+      if (!inRange && (isActive || isCursor)) break; // closed the range
+    }
+
+    // Line 4247 gate: range-select does NOT elevate active. The clicked
+    // curve IS selected (it's one bound of the range) but the existing
+    // active stays active. Caller reads `makeActive: false` and does
+    // not call its onPickActive side-effect.
+    return { makeActive: false, selectedNow: true };
   }
 
   // 'toggle' — SELECT_INVERT per anim_channels_edit.cc:4231-4234.

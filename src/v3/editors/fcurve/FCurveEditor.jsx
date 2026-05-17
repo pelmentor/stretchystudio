@@ -1952,12 +1952,12 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // (dispatched from `mouse_anim_channels` at line 4475) — see
   // [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js)
   // for the full provenance trace.
-  const applyChannelClick = useCallback((fcurveId, modifier) => {
+  const applyChannelClick = useCallback((fcurveId, modifier, ctx) => {
     let decision = { makeActive: false, selectedNow: false };
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      decision = applyChannelSelect(a, fcurveId, modifier);
+      decision = applyChannelSelect(a, fcurveId, modifier, ctx);
     }, { skipHistory: true });
     return decision;
   }, [activeActionId, update]);
@@ -2175,6 +2175,19 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
               // every other curve's `selected` (SELECT_REPLACE per
               // `anim_channels_edit.cc:4239-4243`).
               //
+              // Slice 5.J — Ctrl/Cmd-click range-selects from the active
+              // channel through the clicked one (SELECT_EXTEND_RANGE per
+              // `anim_channels_edit.cc:4235-4238` + walker at
+              // `anim_channels_edit.cc:3984-4025`). Auto-downgrades to
+              // 'toggle' when no eligible active exists
+              // (`anim_channels_edit.cc:4517-4522`).
+              //
+              // Modifier precedence matches Blender's RNA processing at
+              // `anim_channels_edit.cc:4636-4641`: `extend` (Shift) wins
+              // over `extend_range` (Ctrl) — so Shift+Ctrl+click reads
+              // as Shift+click. We don't ship `children_only` since SS
+              // has no ActionGroup channel type yet.
+              //
               // Plain-click also wipes keyform selection on other
               // channels. Audit-fix MED-B3 (2026-05-16, Slice 5.F dual-
               // audit): this is an SS UX extension, not a Blender port —
@@ -2184,17 +2197,24 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
               // `click_select_channel_fcurve` doesn't touch keyforms.
               // We keep the wipe because clicking a channel reads as
               // "switch context, drop the previous keyform picks";
-              // Shift-click preserves the selection for cross-channel
+              // Shift/Ctrl-click preserves the selection for cross-channel
               // composition.
-              const decision = onApplyChannelClick(
-                d.fcurve.id,
-                e.shiftKey ? 'toggle' : 'replace',
-              );
+              const modifier = e.shiftKey
+                ? 'toggle'
+                : (e.ctrlKey || e.metaKey)
+                  ? 'range'
+                  : 'replace';
+              const ctx = modifier === 'range'
+                ? { activeFCurveId, orderedIds: decoded.map((x) => x.fcurve.id) }
+                : undefined;
+              const decision = onApplyChannelClick(d.fcurve.id, modifier, ctx);
               // Audit-fix MED-A1 (Slice 5.F): gate clear on
               // `decision.selectedNow`. Without it, a click on a curve
               // whose action lookup races to null silently wipes the
-              // user's keyform selection for no other effect.
-              if (!e.shiftKey && decision.selectedNow) onClearKeyformSelection();
+              // user's keyform selection for no other effect. Only the
+              // plain replace-click wipes — range + toggle preserve
+              // keyforms (cross-channel composition intent).
+              if (modifier === 'replace' && decision.selectedNow) onClearKeyformSelection();
               if (decision.makeActive) onPickActiveByTarget(t);
             }}
             title={driven ? `${d.tooltip} (driver-locked)` : d.tooltip}
