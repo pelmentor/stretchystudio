@@ -1,8 +1,8 @@
-// Animation Phase 5 Slice 5.G — tests for src/anim/fcurveMute.js +
+// Animation Phase 5 Slice 5.G + 5.O — tests for src/anim/fcurveMute.js +
 // caller-side eval gates (animationFCurve.evaluateActionFCurves +
 // depgraph kernel kernelFCurveEval).
 //
-// Coverage:
+// Slice 5.G coverage (single-curve + eval):
 //   - isFCurveMuted: sparse-field invariant (true / false / missing /
 //     null / undefined / truthy-but-not-true)
 //   - toggleFCurveMute: false→true→false; sparse→true
@@ -13,6 +13,20 @@
 //     to ctx.paramOverrides (mirror Blender's animsys_eval_fcurves skip)
 //   - Driver eval is gated transitively (muted curve with driver
 //     attached does not fire the driver)
+//
+// Slice 5.O coverage (bulk-mute on selected channels — Shift+W /
+// Ctrl+Shift+W / Alt+W):
+//   - applyChannelMuteSelected: ENABLE / DISABLE / TOGGLE modes,
+//     scan-first TOGGLE resolution, sparse-field preservation,
+//     hidden+selected curves still acted on (sidebar uses
+//     ANIMFILTER_LIST_VISIBLE not ANIMFILTER_CURVE_VISIBLE),
+//     driver-bearing curves mute-toggleable
+//   - wouldChannelMuteSelectedChange: preflight reader symmetric with
+//     the mutator (phantom-undo gate)
+//   - Guards: null action / fcurves / mode
+//
+// Audit-fix LOW-A2 (Slice 5.O dual-audit 2026-05-17): provenance tag
+// extended to include 5.O. Same fix as fcurveMute.js LOW-A1.
 //
 // Run: node scripts/test/test_fcurveMute.mjs
 

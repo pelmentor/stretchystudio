@@ -1,12 +1,21 @@
 // @ts-check
 
 /**
- * Animation Phase 5 Slice 5.G — Channel mute helper.
+ * Animation Phase 5 Slice 5.G + 5.O — Channel mute helpers.
  *
- * Pure mutation helper for the per-FCurve `mute` boolean — Blender's
+ * Slice 5.G shipped the single-curve primitives (`isFCurveMuted`,
+ * `toggleFCurveMute`) + caller-side eval gates. Slice 5.O extended
+ * the module with the bulk-mute substrate (`applyChannelMuteSelected`,
+ * `wouldChannelMuteSelectedChange`) backing the sidebar W keymap
+ * (Shift+W / Ctrl+Shift+W / Alt+W); the 5.O JSDoc lives on those
+ * exports below. Audit-fix LOW-A1 (Slice 5.O dual-audit 2026-05-17):
+ * the original 5.O substrate left this header tagged Slice 5.G-only,
+ * which would have misled future readers tracing module provenance.
+ *
+ * Pure mutation helpers for the per-FCurve `mute` boolean — Blender's
  * `FCURVE_MUTED` bit (`DNA_anim_enums.h:303-314`). Independent from
  * `FCURVE_SELECTED` (channel selection, Slice 5.F) and `FCURVE_VISIBLE`
- * (Graph Editor row eye-toggle, still local-React in SS).
+ * (Graph Editor row eye-toggle, Slice 5.I).
  *
  * # Blender semantics ported
  *
