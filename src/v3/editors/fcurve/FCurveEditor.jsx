@@ -342,6 +342,7 @@ import {
   formatActiveFCurveLabel,
 } from './fcurveFooterData.js';
 import { ActiveKeyformPanel } from './ActiveKeyformPanel.jsx';
+import { DriverBanner } from './DriverBanner.jsx';
 import {
   isFCurveMuted,
   toggleFCurveMute,
@@ -2638,6 +2639,8 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             value={driverValue}
             color={visible.find((d) => d.fcurve.id === activeFCurveId)?.color ?? null}
             label={visible.find((d) => d.fcurve.id === activeFCurveId)?.label ?? ''}
+            activeActionId={activeActionId}
+            activeFCurveId={activeFCurveId}
             onClear={onClearActiveDriver}
           />
         ) : null}
@@ -2965,79 +2968,6 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ── DriverBanner (Slice 5.D) ─────────────────────────────────────────
-
-/**
- * Compact banner shown above the canvas when the active FCurve has a
- * driver attached. Mirrors Blender's "Drivers Editor" panel header
- * (`graph_buttons.cc:931-941` -- the "Driver" enable toggle + the
- * `graph_draw_driver_settings_panel` summary at lines 972-1050) but
- * collapsed to a single horizontal strip so it doesn't eat much of the
- * curve drawing area.
- *
- * The "Clear Driver" button drops `fcurve.driver` via the parent's
- * `onClear` callback, which goes through `clearDriver` from
- * [src/anim/driverGate.js](../../../anim/driverGate.js) inside a
- * batched `updateProject` -- one undo entry per click.
- *
- * @param {{
- *   driver: { type:string, expression?:string, variables?:any[] },
- *   value: number|null,
- *   color: string|null,
- *   label: string,
- *   onClear: () => void,
- * }} props
- */
-function DriverBanner({ driver, value, color, label, onClear }) {
-  const type = driver?.type ?? 'scripted';
-  const expr = typeof driver?.expression === 'string' ? driver.expression : '';
-  const varCount = Array.isArray(driver?.variables) ? driver.variables.length : 0;
-  // Truncate long expressions in the strip (full expression lives in
-  // the NodeTreeEditor or graph_buttons-equivalent driver panel; this
-  // banner is a quick-look summary, not an editor).
-  const exprPreview = expr.length > 60 ? expr.slice(0, 57) + '...' : expr;
-  const valueText =
-    value === null ? '--'
-    : !Number.isFinite(value) ? 'NaN (fallback to keyforms)'
-    : value.toFixed(3);
-  return (
-    <div
-      className="flex items-center gap-2 px-3 py-1 text-[11px] border-b border-border bg-popover/40 shadow-sm flex-shrink-0"
-      title={`Driver active on ${label} -- keyforms are overridden by the driver expression`}
-    >
-      <span
-        className="w-3 h-3 rounded-sm flex-shrink-0"
-        style={{ backgroundColor: color ?? 'currentColor' }}
-        aria-hidden
-      />
-      <span className="font-mono uppercase tracking-wider text-primary px-1.5 rounded bg-primary/15">
-        Driver
-      </span>
-      <span className="text-muted-foreground">{type}</span>
-      {type === 'scripted' ? (
-        <span className="font-mono text-foreground/80 truncate flex-1 min-w-0" title={expr}>
-          {exprPreview || <span className="italic text-muted-foreground">empty expression</span>}
-        </span>
-      ) : (
-        <span className="text-muted-foreground flex-1 min-w-0 truncate">
-          {varCount} variable{varCount === 1 ? '' : 's'}
-        </span>
-      )}
-      <span className="font-mono text-foreground/90 px-1.5 border border-border rounded flex-shrink-0">
-        = {valueText}
-      </span>
-      <button
-        type="button"
-        className="px-2 py-0.5 rounded border border-border bg-card hover:bg-accent text-foreground flex-shrink-0"
-        onClick={onClear}
-        title="Remove the driver to allow keyframe editing"
-      >
-        Clear Driver
-      </button>
     </div>
   );
 }
