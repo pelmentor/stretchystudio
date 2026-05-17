@@ -6,9 +6,11 @@
  * Pure data module backing the FCurveEditor's per-editor footer
  * (rendered at the bottom of `<Wrapper>` in `FCurveEditor.jsx`).
  * Sister architecture to `v3/shell/footerStatusData.js` (global
- * statusbar formatters) and `v3/v3/editors/.../canvasContextMenuItems.js`
+ * statusbar formatters) and `v3/editors/viewport/canvasContextMenuItems.js`
  * — splits derive-state-from-store-snapshot away from the React
- * presentation so unit tests don't need a JSX runtime.
+ * presentation so unit tests don't need a JSX runtime. Audit-fix
+ * LOW-A1 (Slice 5.P dual-audit 2026-05-17): corrected the sister-path
+ * which had a doubled `v3/v3/` segment.
  *
  * # The Blender footer region this slot maps to
  *
@@ -136,9 +138,18 @@ export function countFCurveChannelStates(decoded) {
  *
  * Separator is U+00B7 MIDDLE DOT (` · `) matching `footerStatusData.js`'s
  * `formatStats`. Plural agreement only on `channels`; `selected /
- * hidden / muted` stay singular-form in both 1 and N cases (matches
- * Blender's status-bar terse style — `"1 sel"` vs `"3 sel"` in
- * `interface_template_status.cc:475` uses the same abbreviation).
+ * hidden / muted` stay singular-form in both 1 and N cases — SS
+ * internal style decision favoring brevity in the per-editor footer.
+ * Audit-fix MED-B1 (Slice 5.P dual-audit 2026-05-17): the original
+ * draft cited Blender's status-bar abbreviation as precedent at
+ * `interface_template_status.cc:475`, but the fidelity audit verified
+ * the file is at `editors/interface/templates/...` (note the
+ * `templates/` subdirectory) AND line 475 there is `int icon =
+ * ICON_INTERNET;` — extension-update icon code unrelated to any "sel"
+ * abbreviation. The fabricated citation was the kind of port-fab the
+ * `feedback_modifier_binding_check_keymap_first` discipline exists
+ * to catch (extended here from keymap citations to any Blender
+ * citation). The decision stands on its own SS-internal merit.
  *
  * @param {ChannelCounts} counts
  * @returns {string}
