@@ -221,10 +221,23 @@
  *
  * # SS deviations from Blender (Slice 5.K)
  *
- *   - **One global active across regions.** Blender clears the
- *     per-channel `FCURVE_ACTIVE` bit. SS clears the editor-store
- *     `activeFCurveId`. Functionally identical for the
- *     "deselecting drops active" case.
+ *   - **`clearActive` is computed but NOT forwarded today.** Audit-fix
+ *     MED-A1 (Slice 5.K dual-audit 2026-05-17): the helper returns
+ *     `clearActive: boolean` matching Blender's per-channel rule, but
+ *     the FCurveEditor caller does NOT wire it through to
+ *     `selectionStore` because `activeFCurveId` is derived from the
+ *     param/node selection there — clearing it would deselect the
+ *     active param in the param editor and drop the keyform editor's
+ *     active-row context (cross-editor side effect). The resulting
+ *     visible divergence: after Alt+A or A-resolves-to-clear, the
+ *     sidebar's active row STAYS highlighted with `bg-accent/60`
+ *     because the derived `activeFCurveId` is unchanged. In Blender
+ *     the highlight disappears (FCURVE_ACTIVE bit was cleared).
+ *     This is a known UX gap deferred to the day SS grows a per-
+ *     fcurve ACTIVE slot independent of the param/node store
+ *     (see the `project_ss_is_embryo` memory). An earlier draft of
+ *     this note called the SS behavior "functionally identical" —
+ *     that was wrong; the divergence is visible.
  *   - **No `OPTYPE_REGISTER | OPTYPE_UNDO` flags ported.** Bulk
  *     select-all skips the undo stack — matches Slice 5.F's
  *     `skipHistory: true` for click-select. Channel-list selection

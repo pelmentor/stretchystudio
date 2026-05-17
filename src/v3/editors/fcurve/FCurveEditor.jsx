@@ -1956,10 +1956,38 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         return;
       }
     }
-    if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey) {
+    // Audit-fix LOW-A1 (Slice 5.K dual-audit 2026-05-17, REVISED):
+    //
+    // Initial draft of this fix over-tightened with `!e.altKey` to make
+    // graph-region Alt+A a no-op — that INVERTED Blender's semantics.
+    // Blender's `km_graph_editor` at `blender_default.py:1975+` binds
+    // `*_template_items_select_actions(params, "graph.select_all")` at
+    // `:2010`, which expands to the SAME three actions as the channels
+    // region: A → TOGGLE, Alt+A → DESELECT, Ctrl+I → INVERT — but at
+    // the per-keyform layer (graph.select_all = GRAPH_OT_select_all),
+    // not the per-channel layer (anim.channels_select_all). Tightening
+    // would have broken Alt+A's "deselect all keyforms" expectation.
+    //
+    // Correct port: keep A → TOGGLE (existing — `if size>0 clear else
+    // selectAll` already implements TOGGLE). Add Alt+A → DESELECT
+    // unconditionally. Ctrl+I → INVERT requires a per-keyform invert
+    // helper that doesn't exist yet — DEFERRED to a future slice
+    // (queued resume path; no existing `operatorInvertSelection`).
+    if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       if (selectionRef.current.size > 0) clearSelection();
       else operatorSelectAll();
+      return;
+    }
+    if (e.code === 'KeyA' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      // Graph-region Alt+A → DESELECT all keyforms (unconditional).
+      // Mirrors `graph.select_all` keymap entry at
+      // `blender_default.py:2010` (= `*_template_items_select_actions(
+      // params, "graph.select_all")`) which expands to the default-
+      // keymap branch at `:437`: `{"type": 'A', "value": 'PRESS',
+      // "alt": True}, {"properties": [("action", 'DESELECT')]}`.
+      e.preventDefault();
+      clearSelection();
       return;
     }
     // Audit-fix HIGH-A5 (2026-05-16): include `activeActionId` so that
