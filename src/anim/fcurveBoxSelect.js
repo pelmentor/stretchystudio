@@ -25,18 +25,29 @@
  *      `extend = RNA_boolean_get("extend")` (`:3710`).
  *   2. If `!extend`, call `ANIM_anim_channels_select_set(ac,
  *      ACHANNEL_SETFLAG_CLEAR)` (`:3720-3722`) — wipes selection on the
- *      VISIBLE channel list (`anim_channels_for_selection` scope at
- *      `:823`). This pre-clear ALSO clears `FCURVE_ACTIVE` for every
- *      deselected fcurve via the per-channel cascade in
+ *      VISIBLE channel list. The set walks `anim_channels_for_selection`
+ *      (defn at `:523-534`, call-site `:823`), whose filter is
+ *      `ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_CHANNELS` —
+ *      explicitly NO `ANIMFILTER_LIST_VISIBLE` per the load-bearing
+ *      comment at `:528` ("no list visible, otherwise, we get
+ *      dangling"). So Blender's pre-clear scope INCLUDES fcurves under
+ *      collapsed groups. The pre-clear ALSO clears `FCURVE_ACTIVE` for
+ *      every deselected fcurve via the per-channel cascade in
  *      `anim_channels_select_set` ANIMTYPE_FCURVE case at `:728-732`
  *      ("Only erase the ACTIVE flag when deselecting").
  *   3. Compute `selectmode = select ? ACHANNEL_SETFLAG_ADD :
  *      ACHANNEL_SETFLAG_CLEAR` (`:3724-3729`).
  *   4. Call `box_select_anim_channels(&ac, rect, selectmode)` (`:3732`)
- *      which iterates `anim_channels_for_selection` visible channels
- *      (`:3596-3597`), and for each whose row-Y range intersects the
- *      drag rect (`:3619`), calls `ANIM_channel_setting_set(...,
- *      ACHANNEL_SETTING_SELECT, selectmode)` (`:3621-3622`).
+ *      which has its OWN filter call at `:3596-3597` with the WIDER set
+ *      `ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE |
+ *      ANIMFILTER_LIST_CHANNELS` (`:3594`) — note `LIST_VISIBLE` IS
+ *      included here, so the in-rect-loop scope EXCLUDES fcurves under
+ *      collapsed groups. For each visible channel whose row-Y range
+ *      intersects the drag rect (`:3619`), it calls
+ *      `ANIM_channel_setting_set(..., ACHANNEL_SETTING_SELECT,
+ *      selectmode)` (`:3621-3622`). The in-rect path does NOT trigger
+ *      the active-clear cascade — `ANIM_channel_setting_set` only flips
+ *      the SELECT bit, no callback into `anim_channels_select_set`.
  *   5. Box-select NEVER calls `ANIM_set_active_channel` — there is no
  *      active-elevation step. The active flag's only path to clear here
  *      is the pre-clear cascade in step 2.
@@ -119,15 +130,40 @@
  *      must use `update(..., { skipHistory: true })` to invoke this
  *      helper, just like the click-select and select-all paths.
  *
- *   3. **Visible scope = `ctx.orderedIds`.** Blender's
- *      `box_select_anim_channels` walks `anim_channels_for_selection`
- *      which respects `ANIMFILTER_LIST_VISIBLE | ANIMFILTER_LIST_CHANNELS`
- *      (`:3594`). SS's equivalent is the FCurveEditor's `decoded` list
- *      filtered through `isFCurveEffectivelyHidden`. The caller passes
- *      that filtered list as `ctx.orderedIds`; helper assumes it's
- *      already the correct visible scope. Out-of-scope (hidden /
- *      filtered) fcurves retain their `selected` bit just like Blender's
- *      `anim_channels_for_selection` skips them.
+ *   3. **Two distinct Blender scopes folded into one (`ctx.orderedIds`).**
+ *      Blender uses TWO different filter sets across the operator:
+ *        - **Pre-clear scope** (`anim_channels_for_selection` defn at
+ *          `:523-534`, called via `ANIM_anim_channels_select_set` at
+ *          `:821-826`): filter `ANIMFILTER_DATA_VISIBLE |
+ *          ANIMFILTER_LIST_CHANNELS`. Note the explicit comment at
+ *          `:528` ("no list visible, otherwise, we get dangling") —
+ *          this scope INCLUDES fcurves under collapsed groups.
+ *        - **In-rect-loop scope** (inline filter at `:3594` inside
+ *          `box_select_anim_channels`): filter
+ *          `ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE |
+ *          ANIMFILTER_LIST_CHANNELS`. With `LIST_VISIBLE` included,
+ *          this scope EXCLUDES fcurves under collapsed groups.
+ *
+ *      SS uses a single `ctx.orderedIds` (FCurveEditor's `decoded`
+ *      filtered through `isFCurveEffectivelyHidden`, narrowed further
+ *      by the Sidebar's `expanded ? ... : null` ternary) for BOTH the
+ *      pre-clear and in-rect-loop scopes. That matches the NARROWER
+ *      in-rect-loop scope, so SS is faithful to Blender on hit-test
+ *      semantics but DIVERGES on pre-clear: collapsed-group fcurves
+ *      keep their `selected` (and therefore `active`) in SS where
+ *      Blender would clear them.
+ *
+ *      The divergence is the documented SS UX choice — don't clear
+ *      stuff the user can't see in the sidebar. A future slice that
+ *      wants byte-faithful pre-clear semantics should split this
+ *      helper's `ctx` into `preClearIds` (wider) + `inRectIds` (the
+ *      hit-test scope) and have the caller compute both from the same
+ *      `decoded` source. Audit-fix MED-A1+A2 (Slice 5.Y fidelity audit
+ *      2026-05-17): the original Deviation 3 conflated the two scopes
+ *      into one cite and mis-attributed `:3594` to
+ *      `anim_channels_for_selection` (that function's defn is at
+ *      `:523`; `:3594` is the inline filter inside
+ *      `box_select_anim_channels`).
  *
  *   4. **Hit-test lives in the caller, not here.** The helper takes
  *      `idsInRect: string[]` — the hit-test against row bounding boxes

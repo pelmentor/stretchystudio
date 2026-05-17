@@ -2088,12 +2088,25 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // avoids subscribing the dispatcher to project state (matches
   // `applyHideOp` / `applyRevealOp` lines 2102+).
   const applyChannelBoxSelectOp = useCallback((idsInRect, modifier) => {
-    const ctx = {
-      orderedIds: decoded.map((d) => d.fcurve.id),
-      activeFCurveId,
-    };
     const liveProject = useProjectStore.getState().project;
     const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    // Audit-fix MED-1 (Slice 5.Y arch audit 2026-05-17): filter `decoded`
+    // by `isFCurveEffectivelyHidden` BEFORE building `orderedIds`. The
+    // helper's Deviation 3 contract specifies `orderedIds` as the
+    // visible-scope = "decoded filtered through isFCurveEffectivelyHidden"
+    // (mirroring Blender's in-rect-loop filter `ANIMFILTER_LIST_VISIBLE`
+    // at `anim_channels_edit.cc:3594`). The earlier dispatcher passed
+    // raw `decoded` which still includes hidden-but-rendered rows
+    // (sidebar shows them with line-through opacity:0.5 for the un-hide
+    // affordance) — so a `replace` drag-rect would clear `selected` on
+    // hidden rows in the SS rendering, deviating from the documented
+    // narrower in-rect-loop scope.
+    const orderedIds = liveAction
+      ? decoded
+          .filter((d) => !isFCurveEffectivelyHidden(d.fcurve, liveAction))
+          .map((d) => d.fcurve.id)
+      : [];
+    const ctx = { orderedIds, activeFCurveId };
     if (!wouldChannelBoxSelectChange(liveAction, idsInRect, modifier, ctx)) {
       return { changed: false, clearedActive: false, resultMode: modifier, selectedAfter: 0, touchedCount: 0 };
     }
@@ -2991,9 +3004,19 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
   // pointerup landing on the same wrapper). The latch tells the row click
   // to bail; cleared on the next pointerdown.
   //
-  // `DRAG_THRESHOLD_PX` (4) matches Blender's `WM_GESTURE_DRAG_THRESHOLD`
-  // (`reference/blender/source/blender/windowmanager/intern/wm_event_system.cc`)
-  // — pointer movement under 4px is treated as a click, not a drag.
+  // The 4px drag threshold is an SS approximation of Blender's user pref
+  // `U.drag_threshold_mouse` (default 3 px in `DNA_userdef_types.h:1191`),
+  // fetched per-event by `WM_event_drag_threshold` at
+  // `reference/blender/source/blender/windowmanager/intern/wm_event_query.cc:407-427`
+  // and scaled by `UI_SCALE_FAC`. SS hard-codes 4 (1px above Blender's
+  // default) because pointer-event tracking in the browser has no
+  // equivalent UserPref hook and the CSS-pixel basis differs from
+  // Blender's DPI scaling. Sub-threshold pointer movement is treated as
+  // a click, not a drag. Audit-fix HIGH-A1 (Slice 5.Y fidelity audit
+  // 2026-05-17): the earlier framing cited `WM_GESTURE_DRAG_THRESHOLD` —
+  // that symbol does NOT exist in the Blender source. Real symbol is
+  // `WM_event_drag_threshold` (function) reading `U.drag_threshold_mouse`
+  // (struct field).
   const containerRef = useRef(/** @type {HTMLDivElement|null} */ (null));
   const dragSessionRef = useRef(/** @type {null | {
     pointerId: number,
@@ -3006,6 +3029,20 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
   const [dragRect, setDragRect] = useState(/** @type {null | {x:number,y:number,w:number,h:number}} */ (null));
 
   const onSidebarPointerDown = useCallback((e) => {
+    // Audit-fix MED-3 (Slice 5.Y arch audit 2026-05-17): reset the
+    // click-suppression latch FIRST, before any early return. Otherwise
+    // a stale latch from a prior drag survives across pointerdowns that
+    // bail (button-child, non-primary button, second-touch). Race
+    // example: drag → land on row (latch=true, click eaten) → next press
+    // on a button child (early return, latch still true) → keyboard
+    // Enter on a row → row onClick reads stale latch=true and bails.
+    wasDragRef.current = false;
+    // Audit-fix MED-2 (Slice 5.Y arch audit 2026-05-17): guard against
+    // multi-touch hijack. On touch devices a second touch (different
+    // pointerId, same button=0) would otherwise overwrite the active
+    // drag session; move/up events filtered by pointerId then drop the
+    // first finger's events silently, leaving the marquee orphaned.
+    if (dragSessionRef.current !== null) return;
     // Only react to primary button. Ignore middle/right (browser context
     // menu, scroll, etc.) and any non-LMB pointer types.
     if (e.button !== 0) return;
@@ -3014,8 +3051,6 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
     // so nested icons inside the button still count as the button.
     const t = /** @type {HTMLElement} */ (e.target);
     if (t && t.closest && t.closest('button, a, input, textarea, select')) return;
-    // Reset the click-suppression latch on every fresh press.
-    wasDragRef.current = false;
     // Capture modifier state at press time. Blender's keymap (`blender_default.py:3866-3871`)
     // dispatches: plain→replace, Shift→extend, Ctrl→deselect. Modifiers are
     // read once at press; later modifier changes mid-drag are ignored to
@@ -3081,6 +3116,17 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
     // `box_select_anim_channels` row-Y-intersection at
     // `anim_channels_edit.cc:3619` (X-axis is full-width by design — the
     // operator is row-based, not pixel-grid based).
+    //
+    // Audit-fix LOW-2 (Slice 5.Y arch audit 2026-05-17): collapsed-group
+    // rows render `null` via the `expanded ? bucket.rows.map(...) : null`
+    // ternary, so they have no `[data-fcurve-id]` element in the DOM
+    // and are naturally excluded from this `querySelectorAll`. That
+    // matches Blender's in-rect-loop filter `ANIMFILTER_LIST_VISIBLE`
+    // at `anim_channels_edit.cc:3594` (which also excludes collapsed
+    // children). Effectively-hidden rows (`fcurve.hide=true`) DO render
+    // in the sidebar with line-through opacity:0.5 for the un-hide
+    // affordance, so they ARE in the DOM — but the helper filters them
+    // out via `orderedIds` (see `applyChannelBoxSelectOp` MED-1 fix).
     const container = containerRef.current;
     if (!container) return;
     const ids = [];

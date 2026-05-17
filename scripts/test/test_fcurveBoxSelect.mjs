@@ -279,6 +279,13 @@ function idsActive(action) {
 }
 
 // ── wouldChannelBoxSelectChange: matches setter (integration) ─────
+// Audit-fix MED-4 (Slice 5.Y arch audit 2026-05-17): the comparator
+// is `r.changed || r.clearedActive` because the helper's `changed`
+// field only reflects `selected` mutations — when the only mutation is
+// the active-clear cascade (selected unchanged, active dropped), the
+// preflight correctly returns true while `changed` stays false. The
+// dispatcher gates on the preflight, not on `changed`, so this is the
+// right equivalence to assert. See active-clear-only scenario below.
 {
   const scenarios = [
     () => ({
@@ -335,14 +342,43 @@ function idsActive(action) {
       mode: 'extend',
       ctx: { orderedIds: ['a', 'b', 'c'] },
     }),
+    // Audit-fix MED-4 scenario: only the active flag changes.
+    // a is NOT selected, IS active, NOT in rect, mode=replace.
+    // - Pre-clear: a.selected=false → nothing to flip.
+    // - In-rect: empty → nothing to add.
+    // - Active-clear: pre-clear ran AND active in scope → clearActiveFCurves.
+    // Setter returns changed=false (no `selected` flips) but clearedActive=true.
+    // Preflight correctly returns true (something mutates).
+    () => ({
+      action: makeAction([fc('a', { active: true })]),
+      ids: [],
+      mode: 'replace',
+      ctx: { orderedIds: ['a'], activeFCurveId: 'a' },
+    }),
   ];
   for (let i = 0; i < scenarios.length; i++) {
     const sA = scenarios[i]();
     const sB = scenarios[i]();
     const predicted = wouldChannelBoxSelectChange(sA.action, sA.ids, sA.mode, sA.ctx);
     const r = applyChannelBoxSelect(sB.action, sB.ids, sB.mode, sB.ctx);
-    eq(predicted, r.changed, `scenario ${i} (${sA.mode}): preflight matches setter`);
+    const anyMutation = r.changed || r.clearedActive;
+    eq(predicted, anyMutation, `scenario ${i} (${sA.mode}): preflight matches setter (changed||clearedActive)`);
   }
+}
+
+// ── MED-4 standalone: active-clear-only scenario detail ──────────
+{
+  const action = makeAction([fc('a', { active: true })]);
+  const predicted = wouldChannelBoxSelectChange(action, [], 'replace', {
+    orderedIds: ['a'], activeFCurveId: 'a',
+  });
+  eq(predicted, true, 'preflight: active-only mutation → true');
+  const r = applyChannelBoxSelect(action, [], 'replace', {
+    orderedIds: ['a'], activeFCurveId: 'a',
+  });
+  eq(r.changed, false, 'setter: changed=false (no `selected` flips)');
+  eq(r.clearedActive, true, 'setter: clearedActive=true');
+  eq(action.fcurves[0].active, undefined, 'a.active sparse-deleted');
 }
 
 // ── preflight guards mirror setter ────────────────────────────────
