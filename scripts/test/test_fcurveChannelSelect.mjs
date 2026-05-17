@@ -23,6 +23,8 @@
 import {
   applyChannelSelect,
   applyChannelSelectAll,
+  applyChannelDeleteSelected,
+  wouldChannelDeleteSelectedChange,
   isFCurveSelected,
 } from '../../src/anim/fcurveChannelSelect.js';
 
@@ -711,6 +713,190 @@ assert(isFCurveSelected({ selected: 'yes' }) === false, 'isFCurveSelected: "yes"
   const a = makeAction(['a']);
   applyChannelSelectAll(a, 'add', { orderedIds: ['a'] });
   assert(a.fcurves[0].selected === true,        'sparse: add on missing field writes true');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 5.N — applyChannelDeleteSelected + wouldChannelDeleteSelectedChange
+// Ports ANIM_OT_channels_delete (anim_channels_edit.cc:2739-2873).
+// Filter is ANIMFILTER_SEL — only `selected:true` curves are dropped.
+
+// Guards
+{
+  const r = applyChannelDeleteSelected(null);
+  assert(r.changed === false && r.deletedCount === 0 && r.deletedIds.length === 0,
+    'delete guard: null action');
+}
+{
+  const r = applyChannelDeleteSelected({});
+  assert(r.changed === false, 'delete guard: missing fcurves');
+}
+{
+  const r = applyChannelDeleteSelected({ fcurves: null });
+  assert(r.changed === false, 'delete guard: null fcurves');
+}
+{
+  const r = applyChannelDeleteSelected({ fcurves: [] });
+  assert(r.changed === false && r.deletedCount === 0, 'delete: empty fcurves no-op');
+}
+
+// wouldChannelDeleteSelectedChange — guards
+assert(wouldChannelDeleteSelectedChange(null) === false, 'wouldDelete: null action');
+assert(wouldChannelDeleteSelectedChange({}) === false, 'wouldDelete: missing fcurves');
+assert(wouldChannelDeleteSelectedChange({ fcurves: null }) === false, 'wouldDelete: null fcurves');
+assert(wouldChannelDeleteSelectedChange({ fcurves: [] }) === false, 'wouldDelete: empty');
+
+// No selected → no change
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: false, keyforms: [] },
+      { id: 'b', keyforms: [] }, // sparse-field: no selected key
+    ],
+  };
+  assert(wouldChannelDeleteSelectedChange(a) === false, 'wouldDelete: nothing selected → false');
+  const r = applyChannelDeleteSelected(a);
+  assert(r.changed === false && r.deletedCount === 0, 'delete: nothing selected → no-op');
+  assert(a.fcurves.length === 2, 'delete: array preserved (no mutation)');
+}
+
+// Single selected curve — drops it
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: false, keyforms: [] },
+      { id: 'b', selected: true,  keyforms: [] },
+      { id: 'c', selected: false, keyforms: [] },
+    ],
+  };
+  assert(wouldChannelDeleteSelectedChange(a) === true, 'wouldDelete: 1 selected → true');
+  const r = applyChannelDeleteSelected(a);
+  assert(r.changed === true,        'delete: changed');
+  assert(r.deletedCount === 1,      'delete: 1 deleted');
+  assert(r.deletedIds.length === 1 && r.deletedIds[0] === 'b', 'delete: id=b');
+  assert(a.fcurves.length === 2,    'delete: array now length 2');
+  assert(a.fcurves[0].id === 'a' && a.fcurves[1].id === 'c', 'delete: order preserved');
+}
+
+// Multiple selected — drops all of them
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true,  keyforms: [] },
+      { id: 'b', selected: false, keyforms: [] },
+      { id: 'c', selected: true,  keyforms: [] },
+      { id: 'd', selected: true,  keyforms: [] },
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 3, 'delete: 3 deleted');
+  assert(r.deletedIds.length === 3, 'delete: 3 ids');
+  assert(r.deletedIds.indexOf('a') !== -1 && r.deletedIds.indexOf('c') !== -1 && r.deletedIds.indexOf('d') !== -1,
+    'delete: ids include a/c/d');
+  assert(a.fcurves.length === 1 && a.fcurves[0].id === 'b', 'delete: only b survives');
+}
+
+// Delete ALL — action.fcurves can become empty (Blender allows)
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, keyforms: [] },
+      { id: 'b', selected: true, keyforms: [] },
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 2, 'delete-all: 2 deleted');
+  assert(a.fcurves.length === 0, 'delete-all: action.fcurves now empty (Blender allows)');
+}
+
+// Sparse-field defensive: `selected: undefined` ≠ true
+{
+  const a = {
+    fcurves: [
+      { id: 'a', keyforms: [] },                      // no selected key
+      { id: 'b', selected: undefined, keyforms: [] }, // explicit undefined
+      { id: 'c', selected: true, keyforms: [] },      // only this gets dropped
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 1 && r.deletedIds[0] === 'c', 'delete sparse: only true-flag curve dropped');
+  assert(a.fcurves.length === 2, 'delete sparse: 2 survive');
+}
+
+// Truthy-but-not-true `selected` values defensively ignored
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: 1,    keyforms: [] },    // truthy 1 — not deleted
+      { id: 'b', selected: 'yes',keyforms: [] },    // truthy string — not deleted
+      { id: 'c', selected: true, keyforms: [] },    // only this dropped
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 1 && r.deletedIds[0] === 'c',
+    'delete: strict === true filter (matches isFCurveSelected contract)');
+}
+
+// Driver-bearing curve IS deletable at channel layer (unlike keyform delete)
+{
+  const a = {
+    fcurves: [
+      { id: 'd1', selected: true, driver: { expression: 'foo' }, keyforms: [] },
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 1, 'delete: driver curve IS deletable at channel layer (Blender ED_anim_ale_fcurve_delete handles drivers)');
+  assert(a.fcurves.length === 0, 'delete: driver curve removed');
+}
+
+// Malformed fcurve entries skipped silently
+{
+  const a = {
+    fcurves: [
+      null,
+      undefined,
+      { id: 'a', selected: true, keyforms: [] },
+      { selected: true, keyforms: [] }, // no id — not deleted (no id to report)
+      { id: 42, selected: true, keyforms: [] }, // non-string id — not deleted
+    ],
+  };
+  const r = applyChannelDeleteSelected(a);
+  assert(r.deletedCount === 1 && r.deletedIds[0] === 'a',
+    'delete: only valid string-id selected curves deleted');
+}
+
+// Array reference preserved (in-place mutation)
+{
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, keyforms: [] },
+      { id: 'b', selected: false, keyforms: [] },
+    ],
+  };
+  const beforeRef = a.fcurves;
+  applyChannelDeleteSelected(a);
+  assert(a.fcurves === beforeRef, 'delete: action.fcurves array reference preserved (in-place splice)');
+}
+
+// preflight agrees with applyChannelDeleteSelected
+{
+  const a1 = { fcurves: [{ id: 'a', selected: false, keyforms: [] }] };
+  const a2 = { fcurves: [{ id: 'a', selected: false, keyforms: [] }] };
+  assert(wouldChannelDeleteSelectedChange(a1) === applyChannelDeleteSelected(a2).changed,
+    'preflight agrees with applyDelete on no-op');
+}
+{
+  const a1 = { fcurves: [{ id: 'a', selected: true, keyforms: [] }] };
+  const a2 = { fcurves: [{ id: 'a', selected: true, keyforms: [] }] };
+  assert(wouldChannelDeleteSelectedChange(a1) === applyChannelDeleteSelected(a2).changed,
+    'preflight agrees with applyDelete on positive case');
+}
+
+// preflight does NOT mutate
+{
+  const a = { fcurves: [{ id: 'a', selected: true, keyforms: [] }] };
+  wouldChannelDeleteSelectedChange(a);
+  assert(a.fcurves.length === 1, 'preflight does not mutate');
+  assert(a.fcurves[0].selected === true, 'preflight does not mutate fields');
 }
 
 // ─────────────────────────────────────────────────────────────────────

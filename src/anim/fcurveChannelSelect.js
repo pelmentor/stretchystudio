@@ -11,7 +11,11 @@
  *   - `applyChannelSelect(action, fcurveId, modifier, ctx)` — click-driven
  *     selection (replace / toggle / range). Slices 5.F + 5.J.
  *   - `applyChannelSelectAll(action, mode, ctx)` — bulk select-all
- *     operators (add / clear / invert / toggle). Slice 5.K (this slice).
+ *     operators (add / clear / invert / toggle). Slice 5.K.
+ *   - `applyChannelDeleteSelected(action)` — bulk delete selected
+ *     channels (sidebar X/Delete). Slice 5.N (this slice).
+ *   - `wouldChannelDeleteSelectedChange(action)` — read-only preflight
+ *     for the dispatcher's no-op gate. Slice 5.N.
  *   - `isFCurveSelected(fc)` — read accessor.
  *
  * Pre-Slice 5.F the SS sidebar collapsed channel selection onto the
@@ -502,4 +506,106 @@ export function applyChannelSelectAll(action, mode, ctx) {
  */
 export function isFCurveSelected(fcurve) {
   return !!(fcurve && fcurve.selected === true);
+}
+
+/**
+ * Bulk delete selected channels — port of `ANIM_OT_channels_delete`
+ * (`reference/blender/source/blender/editors/animation/anim_channels_edit.cc:2739-2873`).
+ *
+ * Keymap default (`blender_default.py:3873-3874`):
+ *   - **X** → `anim.channels_delete`
+ *   - **DEL** → `anim.channels_delete`
+ *
+ * Industry-Compatible (`industry_compatible_data.py:2357-2358`):
+ *   - **Backspace** → `anim.channels_delete`
+ *   - **DEL** → `anim.channels_delete`
+ *
+ * Blender's `animchannels_delete_exec` filters via `ANIMFILTER_SEL |
+ * ANIMFILTER_FOREDIT | ANIMFILTER_NODUPLIS | ANIMFILTER_LIST_VISIBLE`
+ * (`anim_channels_edit.cc:2767-2768`). For each FCurve in the result,
+ * `ED_anim_ale_fcurve_delete` (`:2692-2734`) removes it from its owner.
+ * SS's equivalent: walk `action.fcurves` once, drop entries with
+ * `selected === true`, in-place via `splice` / filter into a new array.
+ *
+ * # Driver semantics
+ *
+ * `ED_anim_ale_fcurve_delete` handles BOTH driver F-Curves and
+ * non-driver F-Curves uniformly — drivers ARE deletable at the
+ * channel layer. This is DIFFERENT from the keyform-delete path
+ * (Slice 5.D's per-curve driver gate in FCurveEditor's
+ * `operatorDelete` skips driver curves). The user-mental model is
+ * consistent: "delete keyforms of a driven curve" is meaningless
+ * (driver overrides keys); "delete the entire driven curve" is a
+ * valid destructive op. SS port matches: bulk channel delete drops
+ * every selected curve regardless of driver presence.
+ *
+ * # Side-effects the caller must handle
+ *
+ * The helper mutates `action.fcurves` only. The caller (FCurveEditor)
+ * MUST also:
+ *
+ *   - Drop `selectedHandles` Map entries keyed by deleted fcurve.id
+ *     (otherwise stale keyform-selection state lingers).
+ *   - Re-derive `activeFCurveId` if the active curve was deleted
+ *     (Blender re-resolves active per-render from the list; SS's
+ *     active is stored in `selectStore` and may now point at a
+ *     param whose underlying fcurve no longer exists).
+ *
+ * The helper returns the list of deleted ids so the caller can do
+ * both cleanups in one pass.
+ *
+ * # Last-curve guard?
+ *
+ * Blender allows deleting ALL fcurves — `action.fcurves` may end up
+ * empty; the Action itself survives. SS port matches: no minimum-
+ * curve guard. The keyform delete path has a per-curve "keep ≥1
+ * keyform" guard (Slice 5.C HIGH-A4) because an fcurve with zero
+ * keyforms is invalid; that doesn't apply here.
+ *
+ * @param {object} action — Action datablock (mutated in place)
+ * @returns {{ changed: boolean, deletedCount: number, deletedIds: string[] }}
+ */
+export function applyChannelDeleteSelected(action) {
+  const result = { changed: false, deletedCount: 0, deletedIds: /** @type {string[]} */ ([]) };
+  if (!action || !Array.isArray(action.fcurves)) return result;
+  const keep = [];
+  for (const fc of action.fcurves) {
+    if (fc && fc.selected === true && typeof fc.id === 'string') {
+      result.deletedIds.push(fc.id);
+      result.deletedCount++;
+      result.changed = true;
+      continue;
+    }
+    keep.push(fc);
+  }
+  if (result.changed) {
+    // In-place replacement — keep the same array reference so other
+    // memoised consumers that depend on `action.fcurves` identity see
+    // the same wrapper but the new contents. (Immer normally rewraps,
+    // but in-place splice keeps semantics consistent with Slice 5.C's
+    // `operatorDelete` path.)
+    action.fcurves.length = 0;
+    for (const fc of keep) action.fcurves.push(fc);
+  }
+  return result;
+}
+
+/**
+ * Read-only preflight for {@link applyChannelDeleteSelected}.
+ *
+ * Returns true iff calling `applyChannelDeleteSelected(action)` would
+ * mutate anything. Same undo-budget rationale as Slice 5.M's
+ * `wouldHideChangeFCurves`: dispatcher checks this before `update()`
+ * so a no-op X press doesn't burn a phantom undo slot
+ * (`projectStore.js:230-232` pushes the snapshot before the recipe).
+ *
+ * @param {object | null | undefined} action
+ * @returns {boolean}
+ */
+export function wouldChannelDeleteSelectedChange(action) {
+  if (!action || !Array.isArray(action.fcurves)) return false;
+  for (const fc of action.fcurves) {
+    if (fc && fc.selected === true) return true;
+  }
+  return false;
 }

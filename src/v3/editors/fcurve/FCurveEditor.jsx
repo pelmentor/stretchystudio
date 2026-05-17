@@ -331,6 +331,8 @@ import { evaluateDriver } from '../../../anim/driver.js';
 import {
   applyChannelSelect,
   applyChannelSelectAll,
+  applyChannelDeleteSelected,
+  wouldChannelDeleteSelectedChange,
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
@@ -1974,6 +1976,75 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return result;
   }, [activeActionId, update]);
 
+  // Slice 5.N — bulk channel delete dispatcher (sidebar X / Delete).
+  //
+  // Mirrors Blender's `ANIM_OT_channels_delete`
+  // (`anim_channels_edit.cc:2739-2873`) which deletes every selected
+  // F-Curve channel. Keymap default at `blender_default.py:3873-3874`
+  // (X / DEL); Industry-Compatible at `industry_compatible_data.py:2357-2358`
+  // (Backspace / DEL).
+  //
+  // Same preflight pattern as Slice 5.M's hide ops: read live state,
+  // ask the pure helper "would anything change?", short-circuit if
+  // not, so a no-op X press doesn't burn a phantom undo snapshot
+  // (`projectStore.js:230-232`).
+  //
+  // Side-effect cleanup beyond the pure helper:
+  //   1. Drop `selectedHandles` entries keyed by deleted fcurve ids —
+  //      otherwise stale keyform-selection state lingers in the
+  //      React-local state map even after the underlying fcurve is
+  //      gone (Slice 5.C precedent for keyform delete is the same:
+  //      clean up the local map post-mutation).
+  //   2. Clear the global selectStore active if the active param's
+  //      backing fcurve was deleted. Blender re-resolves active
+  //      from the channel list per-render; SS's active is stored
+  //      independently in selectStore and may now dangle.
+  //
+  // Driver-bearing curves ARE deletable at the channel layer (unlike
+  // the keyform-delete path which respects Slice 5.D's per-curve
+  // driver gate). Mirrors `ED_anim_ale_fcurve_delete`
+  // (`anim_channels_edit.cc:2692-2734`) which uniformly removes both
+  // driven and undriven curves.
+  const applyChannelDeleteOp = useCallback(() => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldChannelDeleteSelectedChange(liveAction)) {
+      return { changed: false, deletedCount: 0, deletedIds: [] };
+    }
+    let result = { changed: false, deletedCount: 0, deletedIds: /** @type {string[]} */ ([]) };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      result = applyChannelDeleteSelected(a);
+    });
+    if (result.changed && result.deletedIds.length > 0) {
+      // Side-effect 1: drop keyform-selection entries for deleted ids.
+      setSelectedHandles((curr) => {
+        if (!(curr instanceof Map) || curr.size === 0) return curr;
+        let anyHit = false;
+        for (const id of result.deletedIds) {
+          if (curr.has(id)) { anyHit = true; break; }
+        }
+        if (!anyHit) return curr;
+        const next = new Map(curr);
+        for (const id of result.deletedIds) next.delete(id);
+        return next;
+      });
+      // Side-effect 2: clear active if its backing fcurve was deleted.
+      // `activeFCurveId` is derived from `selectStore` via the
+      // active-param→fcurve resolver (top of Plot); if that id is in
+      // the deleted set, clear the global selection. Using
+      // `useSelectionStore.getState().clear()` (vs `select(null, ...)`
+      // which would put `null` into items[]) — no subscription needed
+      // for a single imperative call, mirrors the
+      // `useProjectStore.getState()` pattern in the preflight above.
+      if (activeFCurveId && result.deletedIds.indexOf(activeFCurveId) !== -1) {
+        useSelectionStore.getState().clear();
+      }
+    }
+    return result;
+  }, [activeActionId, update, activeFCurveId]);
+
   const onKeyDown = useCallback((e) => {
     if (modal) return;
     if (menu) return;
@@ -2018,8 +2089,30 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       return;
     }
     if (e.code === 'Delete' || e.code === 'KeyX') {
+      // Slice 5.N — region-aware delete dispatch.
+      //
+      // Blender's two delete operators:
+      //   - `anim.channels_delete` — sidebar region X/DEL; deletes
+      //     selected FCurves (channel layer; `anim_channels_edit.cc:2739`)
+      //   - keyframe.delete-equivalent — timeline region X/DEL;
+      //     deletes selected keyforms within fcurves (the existing
+      //     `operatorDelete` shipped by Slice 5.C)
+      //
+      // SS reads `regionHoverRef.current` to dispatch to the right
+      // op. The check fires INSIDE the existing X/DEL branch so the
+      // timeline-region default still applies if region routing is
+      // unset (e.g., the editor mounts with focus before any hover).
+      //
+      // Industry-Compatible keymap binds Backspace for channel delete
+      // (`industry_compatible_data.py:2357`) — not wired today. Per
+      // Slice 5.M Deviation 2 precedent, gated on an SS keymap-preset
+      // selector that doesn't exist yet.
       e.preventDefault();
-      operatorDelete();
+      if (regionHoverRef.current === 'sidebar') {
+        applyChannelDeleteOp();
+      } else {
+        operatorDelete();
+      }
       return;
     }
     if (e.code === 'Home') {
@@ -2154,7 +2247,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // Slice 5.K: `applyChannelSelectAllOp` is the new dep; its own
     // closure already includes `activeActionId` + `decoded` + `activeFCurveId`
     // so adding it here covers all live state for the sidebar branch.
-  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp]);
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp, applyChannelDeleteOp]);
 
   // ── Slice 5.D — driver banner + live value ──────────────────────────
 
