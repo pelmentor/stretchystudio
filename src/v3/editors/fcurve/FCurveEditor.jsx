@@ -364,6 +364,19 @@ import {
   wouldRevealChangeFCurves,
 } from '../../../anim/fcurveVisible.js';
 import {
+  getFCurveGroupById,
+  isFCurveGroupMuted,
+  isFCurveGroupHidden,
+  isFCurveGroupExpanded,
+  isFCurveEffectivelyHidden,
+  applyToggleFCurveGroupMute,
+  applyToggleFCurveGroupHidden,
+  applyToggleFCurveGroupExpanded,
+  wouldToggleFCurveGroupMuteChange,
+  wouldToggleFCurveGroupHiddenChange,
+  wouldToggleFCurveGroupExpandedChange,
+} from '../../../anim/fcurveGroups.js';
+import {
   getActiveKeyformIndex,
   setActiveKeyform,
   remapActiveKeyform,
@@ -654,8 +667,12 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // (Slice 5.I dual-audit 2026-05-17): documented so a future reader
   // doesn't collapse the dep thinking it's redundant.
   const visible = useMemo(
-    () => decoded.filter((d) => !isFCurveHidden(d.fcurve)),
-    [decoded],
+    // Slice 5.V — cascade group-hide via `isFCurveEffectivelyHidden`
+    // so a fcurve inside a hidden group disappears from the plot even
+    // when its own `hide` bit is false. Sidebar still renders the row
+    // (so the user can un-hide the group), but the plot does not.
+    () => decoded.filter((d) => !isFCurveEffectivelyHidden(d.fcurve, action)),
+    [decoded, action],
   );
 
   // Per-curve sampled values + per-curve auto-fit min/max. Active curve's
@@ -2632,6 +2649,50 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     });
   }, [activeActionId, update]);
 
+  // Slice 5.V — group-level mute / hide / expanded toggles. Mirror
+  // Blender's `ACHANNEL_SETTING_MUTE` / `_VISIBLE` / `_EXPAND`
+  // operators on bActionGroup
+  // (`reference/blender/source/blender/editors/animation/anim_channels_defines.cc:908-948`).
+  // All three route through the preflight pair in fcurveGroups.js so
+  // a no-op toggle skips the undo snapshot (Slice 5.M pattern).
+  const onToggleGroupMute = useCallback((groupId) => {
+    const liveAction = getActiveSceneAction(
+      useProjectStore.getState().project, activeActionId,
+    );
+    if (!wouldToggleFCurveGroupMuteChange(liveAction, groupId)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyToggleFCurveGroupMute(a, groupId);
+    });
+  }, [activeActionId, update]);
+
+  const onToggleGroupHide = useCallback((groupId) => {
+    const liveAction = getActiveSceneAction(
+      useProjectStore.getState().project, activeActionId,
+    );
+    if (!wouldToggleFCurveGroupHiddenChange(liveAction, groupId)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyToggleFCurveGroupHidden(a, groupId);
+    });
+  }, [activeActionId, update]);
+
+  const onToggleGroupExpanded = useCallback((groupId) => {
+    const liveAction = getActiveSceneAction(
+      useProjectStore.getState().project, activeActionId,
+    );
+    if (!wouldToggleFCurveGroupExpandedChange(liveAction, groupId)) return;
+    // Expanded is view state — bypass undo history (matches Blender's
+    // expand-toggle which doesn't push to the undo stack).
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyToggleFCurveGroupExpanded(a, groupId);
+    }, { skipHistory: true });
+  }, [activeActionId, update]);
+
   // For the menu, "current" needs to know the active fcurve to read
   // extrapolation; for handle type / interp we use the most-common value
   // across the WHOLE multi-curve selection.
@@ -2646,10 +2707,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       onPointerEnter={() => wrapRef.current?.focus({ preventScroll: true })}
     >
       <Sidebar
+        action={action}
         decoded={decoded}
         activeFCurveId={activeFCurveId}
         onToggleHidden={toggleHidden}
         onToggleMute={onToggleMute}
+        onToggleGroupMute={onToggleGroupMute}
+        onToggleGroupHide={onToggleGroupHide}
+        onToggleGroupExpanded={onToggleGroupExpanded}
         onPickActiveByTarget={onPickActiveByTarget}
         onApplyChannelClick={applyChannelClick}
         onClearKeyformSelection={clearSelection}
@@ -2805,7 +2870,60 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+  // Slice 5.V — bucket rows by groupId in the order they appear in
+  // `decoded`. Grouped buckets render first (each with a header
+  // showing expand/mute/hide); the ungrouped tail renders flat at
+  // the end. Mirrors Blender's Graph Editor channel filter pass
+  // `ANIM_animfilter_action_slot` at
+  // `reference/blender/source/blender/editors/animation/anim_filter.cc:1585`
+  // (the `for (bActionGroup *group : channelbag->channel_groups())`
+  // loop at line 1659 emits grouped channels first; the
+  // `drop_front(first_ungrouped_fcurve_index)` span at line 1673
+  // emits ungrouped fcurves last). Audit-fix Slice 5.V FAB-3
+  // (dual-audit 2026-05-17): previous cite named
+  // `ANIM_animdata_filter_action_slot` (extra `data` token); the
+  // actual function is `ANIM_animfilter_action_slot`.
+  //
+  // Audit-fix M2 (Slice 5.V dual-audit): when an fcurve's groupId
+  // points at a missing group (deleted from the action by some other
+  // path while this fcurve still carries the id), `getFCurveGroupById`
+  // returns null — the row collapses into the ungrouped tail instead
+  // of forming a null-headed bucket. Matches Blender's behavior where
+  // a dangling `fcu->grp` would never produce a header (header
+  // rendering iterates `channelbag->channel_groups()` directly).
+  const buckets = (() => {
+    const result = [];
+    /** @type {Map<string, {group: any, rows: any[]}>} */
+    const byGid = new Map();
+    /** @type {any[]} */
+    const ungrouped = [];
+    for (const row of decoded) {
+      const gid = row?.fcurve?.groupId;
+      if (typeof gid !== 'string' || gid.length === 0) {
+        ungrouped.push(row);
+        continue;
+      }
+      const groupObj = getFCurveGroupById(action, gid);
+      if (!groupObj) {
+        // Dangling groupId → render as ungrouped.
+        ungrouped.push(row);
+        continue;
+      }
+      let bucket = byGid.get(gid);
+      if (!bucket) {
+        bucket = { group: groupObj, rows: [] };
+        byGid.set(gid, bucket);
+        result.push(bucket);
+      }
+      bucket.rows.push(row);
+    }
+    if (ungrouped.length > 0) {
+      result.push({ group: null, rows: ungrouped });
+    }
+    return result;
+  })();
+
   return (
     <div
       className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
@@ -2850,7 +2968,64 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
           </button>
         </span>
       </div>
-      {decoded.map((d) => {
+      {buckets.map((bucket) => {
+        // Slice 5.V — render group header + (conditionally) child rows.
+        // Ungrouped tail bucket has no header and always renders.
+        // groupMuted / groupHidden are read here once per bucket so the
+        // per-row icons can cascade visually (the row STILL toggles its
+        // own bit; the cascade is purely "this curve is now silenced
+        // because its parent is, even though its own bit is off").
+        const group = bucket.group;
+        const expanded = group ? isFCurveGroupExpanded(group) : true;
+        const groupMuted = isFCurveGroupMuted(group);
+        const groupHidden = isFCurveGroupHidden(group);
+        const headerKey = group?.id ?? '__ungrouped__';
+        return (
+          <div key={headerKey}>
+            {group ? (
+              <div
+                className={
+                  'flex items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide '
+                  + 'bg-muted/40 border-b border-border/60 select-none '
+                  + (groupMuted ? 'text-muted-foreground/70 italic ' : 'text-muted-foreground ')
+                  + (groupHidden ? 'opacity-60 ' : '')
+                }
+              >
+                <button
+                  type="button"
+                  className="w-3 h-3 flex items-center justify-center text-[9px] hover:text-foreground"
+                  onClick={() => onToggleGroupExpanded(group.id)}
+                  title={expanded ? 'Collapse group' : 'Expand group'}
+                  aria-label={expanded ? 'Collapse group' : 'Expand group'}
+                >
+                  {expanded ? '▾' : '▸'}
+                </button>
+                <button
+                  type="button"
+                  className="w-4 h-4 flex items-center justify-center text-[10px] hover:text-foreground"
+                  onClick={() => onToggleGroupHide(group.id)}
+                  title={groupHidden ? 'Show group' : 'Hide group'}
+                  aria-label={groupHidden ? 'Show group' : 'Hide group'}
+                >
+                  {groupHidden ? '○' : '●'}
+                </button>
+                <button
+                  type="button"
+                  className={
+                    'w-4 h-4 flex items-center justify-center text-[11px] leading-none '
+                    + (groupMuted ? 'text-muted-foreground/80' : 'text-muted-foreground/40 hover:text-foreground')
+                  }
+                  onClick={() => onToggleGroupMute(group.id)}
+                  title={groupMuted ? 'Unmute group (resume evaluation of all curves)' : 'Mute group (skip evaluation of all curves)'}
+                  aria-label={groupMuted ? 'Unmute group' : 'Mute group'}
+                >
+                  {groupMuted ? '\u{1F507}' : '\u{1F50A}'}
+                </button>
+                <span className="truncate flex-1 font-semibold">{group.name}</span>
+                <span className="text-[9px] font-mono opacity-60">{bucket.rows.length}</span>
+              </div>
+            ) : null}
+            {expanded ? bucket.rows.map((d) => {
         const isActive = d.fcurve.id === activeFCurveId;
         // Slice 5.I — read persisted `fcurve.hide` (was: local `hidden` Set).
         const isHidden = isFCurveHidden(d.fcurve);
@@ -2886,11 +3061,15 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
           : isChannelSelected
             ? 'bg-accent/25 text-foreground/90'
             : 'text-muted-foreground';
+        // Slice 5.V — indent grouped rows so the group header
+        // visually parents them. Ungrouped rows keep `px-2`.
+        const inGroup = typeof d.fcurve.groupId === 'string' && d.fcurve.groupId.length > 0;
         return (
           <div
             key={d.fcurve.id}
             className={
-              'group flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:bg-accent/40 '
+              'group flex items-center gap-1 py-1 text-xs cursor-pointer hover:bg-accent/40 '
+              + (inGroup ? 'pl-5 pr-2 ' : 'px-2 ')
               + rowTint
             }
             onClick={(e) => {
@@ -2920,13 +3099,15 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
               //
               // Shift+Ctrl+click: Blender uses this for `children_only`
               // (ActionGroup-children select, see keymap line 3853-3854).
-              // SS has no FCurveGroup datablock yet, so we deliberately
-              // fall through to whichever modifier wins precedence — SS
-              // resolves Shift+Ctrl as 'range' (Shift comes first in the
-              // ternary). When the FCurveGroup datablock lands and the
-              // group-children select operator ships, replace the Shift
-              // arm with `e.shiftKey && !e.ctrlKey` and add an explicit
-              // Shift+Ctrl arm.
+              // Slice 5.V shipped the FCurveGroup datablock but NOT the
+              // group-children select operator, so we still fall through
+              // to whichever modifier wins precedence — SS resolves
+              // Shift+Ctrl as 'range' (Shift comes first in the
+              // ternary). When the group-children select operator
+              // ships (queued path after 5.V), replace the Shift arm
+              // with `e.shiftKey && !e.ctrlKey` and add an explicit
+              // Shift+Ctrl arm wired through `getFCurvesInGroup` →
+              // multi-select dispatch.
               //
               // Plain-click also wipes keyform selection on other
               // channels. Audit-fix MED-B3 (2026-05-16, Slice 5.F dual-
@@ -3005,6 +3186,9 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
                 ●
               </span>
             ) : null}
+          </div>
+        );
+      }) : null}
           </div>
         );
       })}

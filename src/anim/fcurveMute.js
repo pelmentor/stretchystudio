@@ -64,18 +64,19 @@
  *     stack — SS matches by calling `update(recipe)` without
  *     `skipHistory:true`.
  *
- * # SS-deferred: group-level mute (`AGRP_MUTED`)
+ * # Group-level mute (`AGRP_MUTED`) — CLOSED Slice 5.V (2026-05-17)
  *
  * Blender's older `is_fcurve_evaluatable` copy in
- * `blenkernel/intern/anim_sys.cc:345-356` also short-circuits when
- * `fcu->grp && (fcu->grp->flag & AGRP_MUTED)` — the FCurve's
- * containing channel group is muted. SS does NOT implement this
- * because the v40 schema has no FCurveGroup datablock yet (action
- * groups will land with the Dopesheet channel-grouping phase). When
- * groups ship, this header's eval gate needs to grow a sister check
- * (`isFCurveGroupMuted(fc.grp)`) and the sidebar needs a per-group
- * mute toggle. Documented as Slice 5.G dual-audit MED-B2 (2026-05-16)
- * to keep the gap from silently persisting once groups arrive.
+ * `blenkernel/intern/anim_sys.cc:347-352` short-circuits when EITHER
+ * `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)` (line 347, SS omits
+ * `FCURVE_DISABLED`) OR `fcu->grp && (fcu->grp->flag & AGRP_MUTED)`
+ * (line 350). Slice 5.V shipped the FCurveGroup datablock + the
+ * cascade helper [[../fcurveGroups.js.isFCurveEffectivelyMuted]],
+ * wired at all four eval call sites (animationFCurve.js,
+ * depgraph/kernels/{fcurve,animation}.js, animationEngine.js's
+ * computePoseOverrides + computeParamOverrides). Closes Slice 5.G
+ * dual-audit MED-B2 (the documented placeholder note that lived here
+ * since 2026-05-16).
  *
  * # Eval gate placement — at the caller, not inside evaluateFCurve
  *
@@ -293,10 +294,13 @@ export function wouldChannelMuteSelectedChange(action, mode) {
  * **Group flushing.** `setflag_anim_channels` at line 2994-2996 calls
  * `ANIM_flush_setting_anim_channels` after each per-channel write to
  * propagate the setting through FCurveGroup hierarchy (group toggle
- * cascades to children, etc.). SS has no FCurveGroup datablock yet
- * (sister to AGRP_MUTED gap in this same module's header) — flushing
- * is genuinely a no-op today, not a TODO. When groups ship, this
- * helper needs to grow a flush pass post-mutation.
+ * cascades to children, etc.). Slice 5.V shipped the FCurveGroup
+ * datablock + cascade reads — but per-channel WRITES still don't
+ * flush back to the parent group (e.g. muting every child fcurve
+ * individually doesn't auto-mute the parent group). Closure tied to
+ * a future "group flush" helper that re-derives parent flag state
+ * from children after each per-channel write. Documented as
+ * Deviation 3 below (post-5.V wording).
  *
  * **`tag_update_animation_element`.** Blender tags the data-block for
  * depgraph re-evaluation per channel touched (line 2991). SS achieves
@@ -318,8 +322,13 @@ export function wouldChannelMuteSelectedChange(action, mode) {
  * this is the SAME deviation as Slice 5.M Deviation 2 / Slice 5.N
  * Deviation 1 — gated on the not-yet-built SS keymap-preset selector.
  *
- * **Deviation 3 — no FCurveGroup flush.** See SS-skipped above. Sister
- * to AGRP_MUTED gap; closure tied to FCurveGroup datablock.
+ * **Deviation 3 — no group-flush from child writes (post-5.V).** The
+ * FCurveGroup datablock + cascade READ shipped in Slice 5.V; per-channel
+ * mute WRITES still don't flush back to the parent. Blender's
+ * `ANIM_flush_setting_anim_channels` derives the group's effective
+ * state from its children after each per-channel toggle. Closure tied
+ * to a future "group-flush" pass — `applyChannelMuteSelected` would
+ * call it post-mutation.
  *
  * # Why mute belongs to undo (not view state)
  *

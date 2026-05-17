@@ -99,6 +99,7 @@ import { migrateActionDatablock } from './migrations/v36_action_datablock.js';
 import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
 import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.js';
 import { migrateBezTripleKeyforms } from './migrations/v39_beztriple_keyforms.js';
+import { migrateActionGroups } from './migrations/v40_action_groups.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -670,6 +671,20 @@ const MIGRATIONS = {
   // See `src/store/migrations/v39_beztriple_keyforms.js`.
   39: (project) => {
     migrateBezTripleKeyforms(project);
+    return project;
+  },
+
+  // v40 — Animation Phase 5 Slice 5.V: action.groups[] + fcurve.groupId.
+  // Ports Blender's `bActionGroup` datablock
+  // (`reference/blender/source/blender/makesdna/DNA_action_types.h:993-1044`).
+  // Auto-populates groups from existing fcurve targets: node-targeting
+  // curves get `groupId = g_node_${nodeId}`; param-targeting curves
+  // stay ungrouped (Blender's "Ungrouped" tail bucket convention).
+  // Unblocks group-level mute + hide cascade in the eval gate.
+  //
+  // See `src/store/migrations/v40_action_groups.js`.
+  40: (project) => {
+    migrateActionGroups(project);
     return project;
   },
 

@@ -32,7 +32,7 @@
 
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
 import { decodeFCurveTarget } from '../../animationFCurve.js';
-import { isFCurveMuted } from '../../fcurveMute.js';
+import { isFCurveEffectivelyMuted } from '../../fcurveGroups.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -51,7 +51,11 @@ export function kernelAnimationTrackEval(op, ctx) {
   // is the depgraph's per-fcurve op for full action eval and was
   // pre-fix ungated. Mirrors `is_fcurve_evaluatable` at
   // `reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`.
-  if (isFCurveMuted(fc)) return undefined;
+  // Slice 5.V — also cascade group-mute per `anim_sys.cc:350-352`
+  // (full Blender per-curve gate at line 347 is
+  // `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)`; SS omits
+  // FCURVE_DISABLED by design — see fcurveMute.js header).
+  if (isFCurveEffectivelyMuted(fc, ctx.action)) return undefined;
 
   const target = decodeFCurveTarget(fc);
   if (!target) return undefined;

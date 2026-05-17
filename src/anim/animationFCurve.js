@@ -48,7 +48,7 @@
  */
 
 import { evaluateFCurve } from './fcurve.js';
-import { isFCurveMuted } from './fcurveMute.js';
+import { isFCurveEffectivelyMuted } from './fcurveGroups.js';
 import { recalcKeyformHandles } from './fcurveHandles.js';
 
 /** Legacy easing names that collapse to constant-step keyforms. */
@@ -369,11 +369,17 @@ export function evaluateActionFCurves(action, timeMs, evalContext = {}) {
     // (audit-fix HIGH-B1 2026-05-16: was mis-cited as :345-356, which
     // is the older anim_sys.cc copy with group-mute + FCURVE_DISABLED
     // checks SS doesn't need — see fcurveMute.js header for rationale).
+    // Slice 5.V — also cascade group-mute (Blender's anim_sys.cc:350-352
+    // `fcu->grp && (fcu->grp->flag & AGRP_MUTED) → return false`).
+    // (Audit-fix Slice 5.V Issue-1: Blender's full per-curve gate is
+    // `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)` at line 347; SS
+    // omits FCURVE_DISABLED by design.) `isFCurveEffectivelyMuted`
+    // short-circuits on the per-curve bit first; the per-fcurve
+    // `isFCurveMuted` is kept for callers that explicitly want the
+    // non-cascade read (e.g. sidebar toggle UI).
     // Skipping leaves the bound parameter at its prior value (the Map
     // entry is simply absent for the downstream override merge).
-    // Caller-side gate so `evaluateFCurve` itself stays a pure value
-    // function — see helper module-header for the rationale.
-    if (isFCurveMuted(fc)) continue;
+    if (isFCurveEffectivelyMuted(fc, action)) continue;
     const v = evaluateFCurve(fc, timeMs, evalContext);
     if (Number.isFinite(v)) out.set(fc.rnaPath, v);
   }

@@ -24,7 +24,7 @@
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
 import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
-import { isFCurveMuted } from '../anim/fcurveMute.js';
+import { isFCurveEffectivelyMuted } from '../anim/fcurveGroups.js';
 import { recalcKeyformHandles } from '../anim/fcurveHandles.js';
 import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
 
@@ -226,7 +226,11 @@ export function computePoseOverrides(action, timeMs, loopKeyframes = false, endM
     // muting a curve in the sidebar had no effect on live viewport
     // playback. Mirrors `is_fcurve_evaluatable` at
     // `reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`.
-    if (isFCurveMuted(fc)) continue;
+    // Slice 5.V — also cascade group-mute per `anim_sys.cc:350-352`.
+    // (Audit-fix Slice 5.V Issue-1: full per-curve Blender gate at line
+    // 347 is `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)`; SS omits
+    // FCURVE_DISABLED by design — see fcurveMute.js header.)
+    if (isFCurveEffectivelyMuted(fc, action)) continue;
     const target = decodeFCurveTarget(fc);
     // Skip parameter targets — those go through computeParamOverrides.
     if (!target || target.kind !== 'node') continue;
@@ -272,7 +276,10 @@ export function computeParamOverrides(action, timeMs, loopKeyframes = false, end
     // to the computePoseOverrides skip above. See its comment for the
     // pre-fix breakage description; both paths must be gated together
     // because the viewport tick calls them separately.
-    if (isFCurveMuted(fc)) continue;
+    // Slice 5.V — cascade group-mute (effective-mute helper). Sister to
+    // computePoseOverrides above; see that comment for the Blender
+    // FCURVE_DISABLED omission rationale.
+    if (isFCurveEffectivelyMuted(fc, action)) continue;
     const target = decodeFCurveTarget(fc);
     if (!target || target.kind !== 'param') continue;
     const v = interpolateTrack(fc.keyforms, timeMs, loopKeyframes, endMs);

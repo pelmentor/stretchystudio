@@ -94,10 +94,13 @@
  * # SS-deferred Blender visibility operators
  *
  *   - **`setflag_anim_channels` with `ACHANNEL_SETTING_VISIBLE`** —
- *     channel-group hierarchical flushing (parent group → children).
- *     Gated on the not-yet-shipped FCurveGroup datablock; sister to
- *     the `AGRP_MUTED` flush gap already documented in
- *     [fcurveMute.js](./fcurveMute.js).
+ *     channel-group hierarchical flushing (parent group → children
+ *     AND child → parent). Slice 5.V shipped the FCurveGroup
+ *     datablock + cascade READS (group `hide:true` → all children
+ *     effectively hidden). Per-channel hide WRITES still don't flush
+ *     back to the parent — sister deviation to fcurveMute.js's
+ *     post-5.V Deviation 3; closure tied to the same "group-flush"
+ *     helper.
  *   - **`deselect_all_fcurves(hide=true)`** — composite
  *     deselect-and-hide already documented above.
  *
@@ -185,15 +188,16 @@ export function toggleFCurveHidden(action, fcurveId) {
  * VISIBLE and SELECT to ADD. The effect: the user pressed Shift+H to
  * isolate their selection — after the visibility flip, their selected
  * curves are guaranteed visible+selected (in case Phase 1's flush
- * touched them through the group hierarchy SS doesn't have yet).
+ * touched them through the group hierarchy).
  *
  * # SS port
  *
- * SS has no `ANIMFILTER_LIST_CHANNELS` / `ANIM_flush_setting_anim_channels`
- * — there's no FCurveGroup datablock yet (cf. `fcurveMute.js`'s AGRP
- * deferral). Without group flushing, Phase 2's re-ensure step is a
- * defensive no-op: SS's Phase 1 only touches FCurves matching the
- * filter, so a selected curve cannot have been wrongly hidden. The
+ * Slice 5.V shipped the FCurveGroup datablock + cascade READS, but SS
+ * still has no `ANIM_flush_setting_anim_channels` equivalent that
+ * propagates per-channel hide writes back to the parent group. Without
+ * that flush, Phase 2's re-ensure step is a defensive no-op: SS's
+ * Phase 1 only touches FCurves matching the filter, so a selected
+ * curve cannot have been wrongly hidden by a child→parent cascade. The
  * helper still runs the Phase 2 re-ensure for byte-faithfulness — it
  * IS a no-op today (asserted in tests), and will start mattering when
  * group flush ships.
@@ -331,7 +335,9 @@ export function applyHideFCurves(action, opts) {
   }
 
   // Phase 2 (unselected=true only): re-ensure selected curves are
-  // visible+selected. Today a no-op without FCurveGroup flushing —
+  // visible+selected. Today a no-op because SS doesn't yet flush
+  // per-channel hide WRITES back to the parent FCurveGroup (Slice 5.V
+  // shipped the cascade READS but not the parent-derive helper) —
   // see module header / Phase 2 doc above.
   if (unselected) {
     for (const fc of action.fcurves) {

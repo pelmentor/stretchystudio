@@ -35,7 +35,7 @@
 
 import { evaluateFCurve } from '../../fcurve.js';
 import { decodeFCurveTarget } from '../../animationFCurve.js';
-import { isFCurveMuted } from '../../fcurveMute.js';
+import { isFCurveEffectivelyMuted } from '../../fcurveGroups.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -51,11 +51,15 @@ export function kernelFCurveEval(op, ctx) {
   // Slice 5.G — Blender's eval-side mute gate per
   // `is_fcurve_evaluatable` (`animrig/intern/evaluation.cc:95-111`)
   // and `BKE_animsys_eval_driver` (`blenkernel/intern/anim_sys.cc:4302`).
-  // (Audit-fix HIGH-B1 2026-05-16: evaluation.cc citation corrected
-  // from :345-356, which is the older anim_sys.cc copy.)
+  // Slice 5.V — also cascade group-mute (Blender's anim_sys.cc:350-352
+  // `fcu->grp && (fcu->grp->flag & AGRP_MUTED) → return false`). The
+  // action handle is on `ctx.action` so group lookup is free here.
+  // (Audit-fix Slice 5.V Issue-1: Blender's full per-curve gate is
+  // `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)` at anim_sys.cc:347;
+  // SS omits FCURVE_DISABLED by design.)
   // Skipping returns NaN AND does NOT touch `ctx.paramOverrides`, so
   // the downstream PARAM_EVAL op reads the unchanged store value.
-  if (isFCurveMuted(fc)) return NaN;
+  if (isFCurveEffectivelyMuted(fc, ctx.action)) return NaN;
   const v = evaluateFCurve(fc, ctx.timeMs ?? 0, { project: ctx.project });
   if (typeof v === 'number' && Number.isFinite(v)) {
     const target = decodeFCurveTarget(fc);

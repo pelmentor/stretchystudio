@@ -39,7 +39,11 @@
  *   - **Shift+click → `extend_range=true`** → SELECT_EXTEND_RANGE (range)
  *   - **Ctrl+click → `extend=true`** → SELECT_INVERT (toggle)
  *   - **Shift+Ctrl+click → `children_only=true`** (ActionGroup-only,
- *     SS-deferred — no FCurveGroup datablock yet)
+ *     SS-deferred — Slice 5.V shipped the FCurveGroup datablock but
+ *     not the group-children-select operator. Closure tied to a
+ *     future "group-children select" slice that walks
+ *     `getFCurvesInGroup(action, groupId)` and dispatches selection
+ *     to each.)
  *
  * Audit-fix HIGH-B1 (Slice 5.J dual-audit 2026-05-17): Slice 5.F's
  * original draft inverted Shift and Ctrl (Shift=toggle, Ctrl=nothing).
