@@ -337,6 +337,11 @@ import {
 } from '../../../anim/fcurveChannelSelect.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import {
+  countFCurveChannelStates,
+  formatFCurveChannelCounts,
+  formatActiveFCurveLabel,
+} from './fcurveFooterData.js';
+import {
   isFCurveMuted,
   toggleFCurveMute,
   applyChannelMuteSelected,
@@ -469,7 +474,7 @@ export function FCurveEditor() {
   }
 
   return (
-    <Wrapper>
+    <Wrapper footer={<FCurveFooter decoded={decoded} activeFCurveId={activeFCurve?.id ?? null} />}>
       <Plot
         action={action}
         activeActionId={activeActionId}
@@ -484,10 +489,11 @@ export function FCurveEditor() {
   );
 }
 
-function Wrapper({ children }) {
+function Wrapper({ children, footer = null }) {
   return (
     <div className="flex flex-col h-full bg-card overflow-hidden">
       <div className="flex-1 overflow-hidden">{children}</div>
+      {footer}
     </div>
   );
 }
@@ -496,6 +502,53 @@ function Empty({ msg }) {
   return (
     <div className="h-full flex items-center justify-center px-6 text-center text-xs text-muted-foreground italic">
       {msg}
+    </div>
+  );
+}
+
+/**
+ * FCurve Editor per-editor footer — Slice 5.P.
+ *
+ * Mounts at the bottom of the editor wrapper (sister vertical position
+ * to Blender's `RGN_TYPE_FOOTER` in `space_graph.cc:996-1005`). Shows
+ * channel-state summary + active-FCurve label. Data derivation lives
+ * in [`fcurveFooterData.js`](./fcurveFooterData.js); this component
+ * is presentation-only.
+ *
+ * Hidden by construction when `decoded.length === 0` — the parent
+ * branches to `<Empty msg=... />` without mounting the Wrapper's
+ * footer slot, so the empty-state has no footer at all.
+ *
+ * Styling matches the global Footer's terse-info row (`h-7` vs the
+ * global `h-9` — per-editor footer is thinner since it omits the
+ * tall transport-bar slot the global Footer carries).
+ *
+ * @param {{ decoded: ReadonlyArray<{fcurve:{id:string,selected?:boolean,hide?:boolean,mute?:boolean},label:string}>, activeFCurveId: string|null }} props
+ */
+function FCurveFooter({ decoded, activeFCurveId }) {
+  // Derive counts + active label per render. Both are O(N) walks over
+  // `decoded` which is already memoized at the outer component level,
+  // so this is cheap; no further memoization needed for typical
+  // channel counts (~10s of curves per action).
+  const counts = countFCurveChannelStates(decoded);
+  const countsText = formatFCurveChannelCounts(counts);
+  const activeLabel = formatActiveFCurveLabel(decoded, activeFCurveId);
+
+  return (
+    <div className="h-7 border-t shrink-0 bg-card flex items-center px-3 gap-3 text-[11px] text-muted-foreground select-none">
+      <div className="shrink-0 tabular-nums">
+        {countsText}
+      </div>
+      <div className="flex-1 min-w-0" />
+      {activeLabel ? (
+        <div
+          className="shrink min-w-0 truncate"
+          title={activeLabel}
+        >
+          <span className="text-muted-foreground/70">Active: </span>
+          <span className="text-foreground">{activeLabel}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
