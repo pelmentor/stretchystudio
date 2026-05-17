@@ -339,6 +339,10 @@ import {
   wouldChannelDeleteSelectedChange,
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
+import {
+  applyChannelBoxSelect,
+  wouldChannelBoxSelectChange,
+} from '../../../anim/fcurveBoxSelect.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import {
   countFCurveChannelStates,
@@ -2060,6 +2064,48 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return decision;
   }, [activeActionId, update, decoded, activeFCurveId]);
 
+  // Slice 5.Y — channel-list box (drag-rect) selection dispatcher.
+  //
+  // Mirrors Blender's `ANIM_OT_channels_select_box`
+  // (`reference/blender/source/blender/editors/animation/anim_channels_edit.cc:3740-3760`).
+  // The Sidebar owns the DOM drag-rect + per-row hit-test; this dispatcher
+  // wires the resulting `(idsInRect, modifier)` to the pure helper in
+  // [src/anim/fcurveBoxSelect.js](../../../anim/fcurveBoxSelect.js).
+  //
+  // `skipHistory:true` — same view-state-not-document rationale as
+  // Slice 5.F's `applyChannelClick` (HIGH-A1) and Slice 5.K's
+  // `applyChannelSelectAllOp`. Blender's box-select carries
+  // `OPTYPE_UNDO` (`:3756`) but that's a per-operator default we
+  // explicitly opt out of for channel selection in SS — channel
+  // selection lives outside the undo stack so users don't burn the
+  // 50-entry budget on UI navigation noise.
+  //
+  // Preflight via `wouldChannelBoxSelectChange` mirrors Slice 5.M's
+  // preflight pattern: an empty rect over an empty visible scope, or
+  // a rect that hits only already-correctly-selected rows, would
+  // otherwise still trigger an `update()` recipe and a React re-render
+  // for no semantic change. Reading via `useProjectStore.getState()`
+  // avoids subscribing the dispatcher to project state (matches
+  // `applyHideOp` / `applyRevealOp` lines 2102+).
+  const applyChannelBoxSelectOp = useCallback((idsInRect, modifier) => {
+    const ctx = {
+      orderedIds: decoded.map((d) => d.fcurve.id),
+      activeFCurveId,
+    };
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldChannelBoxSelectChange(liveAction, idsInRect, modifier, ctx)) {
+      return { changed: false, clearedActive: false, resultMode: modifier, selectedAfter: 0, touchedCount: 0 };
+    }
+    let decision = { changed: false, clearedActive: false, resultMode: modifier, selectedAfter: 0, touchedCount: 0 };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      decision = applyChannelBoxSelect(a, idsInRect, modifier, ctx);
+    }, { skipHistory: true });
+    return decision;
+  }, [activeActionId, update, decoded, activeFCurveId]);
+
   // Hover region setters — Sidebar wires its outer div to these so
   // `regionHoverRef.current` reflects which sub-area the cursor is over
   // when KeyA / Alt+A / Ctrl+I fires. Stable identities keep Sidebar's
@@ -2777,6 +2823,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         onToggleGroupExpanded={onToggleGroupExpanded}
         onPickActiveByTarget={onPickActiveByTarget}
         onApplyChannelClick={applyChannelClick}
+        onApplyChannelBoxSelect={applyChannelBoxSelectOp}
         onClearKeyformSelection={clearSelection}
         onSelectAll={applyChannelSelectAllOp}
         onSidebarEnter={onSidebarEnter}
@@ -2930,7 +2977,135 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+  // Slice 5.Y — drag-rect box-select state machine. Pointer events on the
+  // sidebar wrapper drive a small 3-state FSM (idle → pressed → dragging).
+  // On pointerup-after-drag, the hit-test queries every `[data-fcurve-id]`
+  // row and computes Y-axis intersection vs the drag rect (Blender's
+  // `box_select_anim_channels` at `anim_channels_edit.cc:3619` only tests
+  // `ymax >= rectf.ymin && ymin <= rectf.ymax`, NOT X). The collected
+  // ids + modifier go to `onApplyChannelBoxSelect`.
+  //
+  // `wasDragRef` is the click-suppression latch: when a drag completes,
+  // the row's onClick still fires (browser-synthesized from pointerdown +
+  // pointerup landing on the same wrapper). The latch tells the row click
+  // to bail; cleared on the next pointerdown.
+  //
+  // `DRAG_THRESHOLD_PX` (4) matches Blender's `WM_GESTURE_DRAG_THRESHOLD`
+  // (`reference/blender/source/blender/windowmanager/intern/wm_event_system.cc`)
+  // — pointer movement under 4px is treated as a click, not a drag.
+  const containerRef = useRef(/** @type {HTMLDivElement|null} */ (null));
+  const dragSessionRef = useRef(/** @type {null | {
+    pointerId: number,
+    startClientX: number,
+    startClientY: number,
+    isDragging: boolean,
+    modifier: 'replace' | 'extend' | 'deselect',
+  }} */ (null));
+  const wasDragRef = useRef(false);
+  const [dragRect, setDragRect] = useState(/** @type {null | {x:number,y:number,w:number,h:number}} */ (null));
+
+  const onSidebarPointerDown = useCallback((e) => {
+    // Only react to primary button. Ignore middle/right (browser context
+    // menu, scroll, etc.) and any non-LMB pointer types.
+    if (e.button !== 0) return;
+    // Ignore drags that start on an interactive child (button, etc.) —
+    // those have their own click semantics. The check uses `closest`
+    // so nested icons inside the button still count as the button.
+    const t = /** @type {HTMLElement} */ (e.target);
+    if (t && t.closest && t.closest('button, a, input, textarea, select')) return;
+    // Reset the click-suppression latch on every fresh press.
+    wasDragRef.current = false;
+    // Capture modifier state at press time. Blender's keymap (`blender_default.py:3866-3871`)
+    // dispatches: plain→replace, Shift→extend, Ctrl→deselect. Modifiers are
+    // read once at press; later modifier changes mid-drag are ignored to
+    // match the wmOperator gesture model.
+    const modifier = e.shiftKey
+      ? 'extend'
+      : (e.ctrlKey || e.metaKey)
+        ? 'deselect'
+        : 'replace';
+    dragSessionRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      isDragging: false,
+      modifier,
+    };
+  }, []);
+
+  const onSidebarPointerMove = useCallback((e) => {
+    const sess = dragSessionRef.current;
+    if (!sess || sess.pointerId !== e.pointerId) return;
+    const dx = e.clientX - sess.startClientX;
+    const dy = e.clientY - sess.startClientY;
+    if (!sess.isDragging) {
+      // 4px threshold — under this is a click, over is a drag.
+      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      sess.isDragging = true;
+      // Capture so subsequent move/up events route here even if the
+      // pointer exits the container. Browsers cancel capture on pointerup.
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* capture optional */ }
+    }
+    const x = Math.min(e.clientX, sess.startClientX);
+    const y = Math.min(e.clientY, sess.startClientY);
+    const w = Math.abs(e.clientX - sess.startClientX);
+    const h = Math.abs(e.clientY - sess.startClientY);
+    setDragRect({ x, y, w, h });
+  }, []);
+
+  const onSidebarPointerUp = useCallback((e) => {
+    const sess = dragSessionRef.current;
+    if (!sess || sess.pointerId !== e.pointerId) return;
+    dragSessionRef.current = null;
+    if (!sess.isDragging) {
+      // Sub-threshold movement — let the row click fire normally.
+      setDragRect(null);
+      return;
+    }
+    // Drag finished — set the click-suppression latch BEFORE the
+    // synthesized click event fires. The latch is read in the row's
+    // onClick handler and cleared there (one-shot semantics).
+    wasDragRef.current = true;
+
+    const rect = {
+      xmin: Math.min(e.clientX, sess.startClientX),
+      ymin: Math.min(e.clientY, sess.startClientY),
+      xmax: Math.max(e.clientX, sess.startClientX),
+      ymax: Math.max(e.clientY, sess.startClientY),
+    };
+    setDragRect(null);
+
+    // Hit-test: collect every row's `data-fcurve-id` whose bounding box
+    // intersects the drag rect on the Y axis. Matches Blender's
+    // `box_select_anim_channels` row-Y-intersection at
+    // `anim_channels_edit.cc:3619` (X-axis is full-width by design — the
+    // operator is row-based, not pixel-grid based).
+    const container = containerRef.current;
+    if (!container) return;
+    const ids = [];
+    const rows = container.querySelectorAll('[data-fcurve-id]');
+    for (let i = 0; i < rows.length; i++) {
+      const el = /** @type {HTMLElement} */ (rows[i]);
+      const r = el.getBoundingClientRect();
+      // Y-axis overlap test (matches Blender's row gate).
+      if (r.bottom >= rect.ymin && r.top <= rect.ymax) {
+        const id = el.dataset.fcurveId;
+        if (typeof id === 'string' && id.length > 0) ids.push(id);
+      }
+    }
+    onApplyChannelBoxSelect(ids, sess.modifier);
+  }, [onApplyChannelBoxSelect]);
+
+  const onSidebarPointerCancel = useCallback((e) => {
+    const sess = dragSessionRef.current;
+    if (!sess || sess.pointerId !== e.pointerId) return;
+    dragSessionRef.current = null;
+    // Don't latch wasDrag — a cancelled drag should NOT suppress the next
+    // click (the synthesized click won't fire after pointercancel anyway).
+    setDragRect(null);
+  }, []);
+
   // Slice 5.V — bucket rows by groupId in the order they appear in
   // `decoded`. Grouped buckets render first (each with a header
   // showing expand/mute/hide); the ungrouped tail renders flat at
@@ -2986,10 +3161,15 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
 
   return (
     <div
-      className="border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
+      ref={containerRef}
+      className="relative border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
       style={{ width: SIDEBAR_W }}
       onPointerEnter={onSidebarEnter}
       onPointerLeave={onSidebarLeave}
+      onPointerDown={onSidebarPointerDown}
+      onPointerMove={onSidebarPointerMove}
+      onPointerUp={onSidebarPointerUp}
+      onPointerCancel={onSidebarPointerCancel}
     >
       <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border flex items-center justify-between">
         <span>F-Curves ({decoded.length})</span>
@@ -3127,12 +3307,18 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
         return (
           <div
             key={d.fcurve.id}
+            data-fcurve-id={d.fcurve.id}
             className={
               'group flex items-center gap-1 py-1 text-xs cursor-pointer hover:bg-accent/40 '
               + (inGroup ? 'pl-5 pr-2 ' : 'px-2 ')
               + rowTint
             }
             onClick={(e) => {
+              // Slice 5.Y — click-suppression latch. When the user
+              // finishes a drag-rect, the browser still synthesizes a
+              // click event on the row landed on; bail here so the click
+              // doesn't double-fire with the box-select.
+              if (wasDragRef.current) { wasDragRef.current = false; return; }
               const t = decodeFCurveTarget(d.fcurve);
               if (!t) return;
               // Modifier mapping mirrors Blender's animation-channels
@@ -3252,6 +3438,24 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
           </div>
         );
       })}
+      {/* Slice 5.Y — drag-rect marquee. Fixed positioning + client coords
+          (the drag rect is captured in client space; mirrors the way
+          Blender's `WM_gesture_box_modal` paints the gesture overlay in
+          window-space, not view-space). z-30 keeps it above the row hover
+          tint but below absolutely-positioned modals. `pointer-events:none`
+          so the user's pointer never lands on the overlay itself. */}
+      {dragRect ? (
+        <div
+          aria-hidden
+          className="fixed pointer-events-none z-30 border border-amber-300/80 bg-amber-300/20"
+          style={{
+            left: dragRect.x,
+            top: dragRect.y,
+            width: dragRect.w,
+            height: dragRect.h,
+          }}
+        />
+      ) : null}
     </div>
   );
 }
