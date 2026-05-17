@@ -464,9 +464,17 @@ export function FCurveEditor() {
   // `setActiveFCurve` (wired into `applyChannelClick` + the keyform-
   // click branches) writes the explicit flag and the fallback retires
   // for that action. See module header for full provenance.
+  //
+  // Audit-fix HIGH-1 (Slice 5.X arch audit 2026-05-17): deps narrowed
+  // to `[action?.fcurves, selection]` — the memo only walks fcurves
+  // (getActiveFCurve) + selection (pickFCurve fallback). Depending on
+  // the full `action` ref would re-run on every unrelated mutation
+  // (action.duration tweak, action.groups edit, etc.), regressing the
+  // sister narrowing pattern established by Slice 5.W's H1 fix on
+  // DopesheetEditor + the `decoded` memo below at line ~478.
   const activeFCurve = useMemo(
     () => getActiveFCurve(action) ?? pickFCurve(action, selection),
-    [action, selection],
+    [action?.fcurves, selection],
   );
 
   // Audit-fix HIGH-A1 (2026-05-16): memoize `decoded`. Without this, a
@@ -974,13 +982,20 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             if (!a) return;
             setActiveKeyform(a, fcurveId, hitHandle.idx);
             // Slice 5.X: handle click promotes the parent fcurve to
-            // active. Sister to Blender's implicit chain — clicking a
-            // bezier handle in graph_select.cc selects + activates the
-            // keyform (active_keyframe_index) and the curve it belongs
-            // to (FCURVE_ACTIVE). The active-keyform halo gate (Slice
-            // 5.W HIGH-2) depends on this; without the write, clicking
-            // a handle on a non-active curve sets the keyform-active
-            // but the halo doesn't render (gate fails).
+            // active. Mirrors Blender's `mouse_graph_keys` two-site
+            // pattern — the keyform-active index is set at
+            // `reference/blender/source/blender/editors/space_graph/graph_select.cc:1790-1797`
+            // (`BKE_fcurve_active_keyframe_set` gated by `BEZT_ISSEL_ANY`
+            // + `may_activate`), and the parent FCURVE_ACTIVE is set
+            // SEPARATELY at `:1846-1856` (`ANIM_set_active_channel`
+            // gated by `!run_modal && (nvi->fcu->flag & FCURVE_SELECTED)
+            // && something_was_selected`). SS conflates the two writes
+            // into the same `update(...)` recipe because the SS modal
+            // path doesn't have Blender's `!run_modal` early gate.
+            // Audit-fix HIGH-1 (Slice 5.X fidelity audit 2026-05-17):
+            // the original substrate comment claimed both writes
+            // happen at `:1790-1797`, which is false — that line range
+            // is keyform-active only.
             setActiveFCurve(a, fcurveId);
           });
         }
@@ -1091,7 +1106,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             if (!a) return;
             setActiveKeyform(a, hit.fcurveId, hit.idx);
             // Slice 5.X: keyform click promotes the parent fcurve to
-            // active (same rationale as the handle-click branch above).
+            // active. Mirrors Blender's `mouse_graph_keys` two-site
+            // pattern (`graph_select.cc:1790-1797` keyform-active +
+            // `:1846-1856` parent FCURVE_ACTIVE); see the handle-click
+            // branch above for the full provenance trace.
             setActiveFCurve(a, hit.fcurveId);
           });
         }
@@ -2645,6 +2663,13 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // silently break range-select on action edits between renders. The
   // closure deps below intentionally include only `activeActionId` +
   // `update` because the helper is purely structural.
+  //
+  // Audit-fix HIGH-2 (Slice 5.X arch audit 2026-05-17): the same
+  // structural-purity rule applies to `setActiveFCurve(a, fcurveId)` —
+  // it walks `a.fcurves` only, takes `fcurveId` as a parameter, and
+  // mutates the immer draft in-place. Do not capture `activeFCurve`,
+  // `activeFCurveId`, or `selection` into this closure for any
+  // 5.X-style follow-up — the closure must stay structural-only.
   const applyChannelClick = useCallback((fcurveId, modifier, ctx) => {
     let decision = { makeActive: false, selectedNow: false };
     update((p) => {

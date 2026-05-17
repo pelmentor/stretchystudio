@@ -102,10 +102,16 @@ export function DopesheetEditor() {
   // actions that don't carry `fc.active` yet. See
   // [src/anim/fcurveActive.js](../../../anim/fcurveActive.js) module
   // header for the full precedence rationale (sister to FCurveEditor's
-  // `activeFCurve` memo at line ~459).
+  // `activeFCurve` memo at line ~467).
+  //
+  // Audit-fix HIGH-1 (Slice 5.X arch audit 2026-05-17): deps narrowed
+  // to `[action?.fcurves, selection]` so the memo only re-runs when
+  // either fcurves OR selection actually changes. Sister narrowing
+  // to FCurveEditor.jsx's activeFCurve memo. Mirrors Slice 5.W H1's
+  // narrowing convention on the `rows` memo below.
   const activeFCurveId = useMemo(
     () => getActiveFCurve(action)?.id ?? pickActiveFCurve(action, selection)?.id ?? null,
-    [action, selection],
+    [action?.fcurves, selection],
   );
 
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));

@@ -114,6 +114,37 @@ function fc(id, extras = {}) {
   eq(action.fcurves[1].active, true, 'target still active');
 }
 
+// ── setActiveFCurve: cleanup-during-already-active (audit-fix MED-3) ─
+// Target IS already active AND a sibling carries stale `active: false`.
+// Setter should normalise the sibling AND return changed=true (because
+// SOMETHING changed — the sibling normalisation). The target's
+// `active: true` field is unchanged.
+{
+  const action = makeAction([fc('a', { active: false }), fc('b', { active: true })]);
+  const r = setActiveFCurve(action, 'b');
+  eq(r.changed, true, 'cleanup-during-already-active → changed=true (because sibling normalised)');
+  eq(r.activeNow, 'b', 'target identity preserved');
+  eq(action.fcurves[1].active, true, 'target still carries active=true');
+  eq(Object.prototype.hasOwnProperty.call(action.fcurves[0], 'active'), false, 'sibling stale false deleted (sparse)');
+}
+
+// ── setActiveFCurve: ID-based compare survives non-immer call sites ──
+// Audit-fix MED-1 (Slice 5.X arch audit 2026-05-17): the implementation
+// uses `fc.id === fcurveId` (not reference identity), so passing a
+// fcurveId that matches `id` of an array element correctly finds the
+// target even if the caller wasn't inside an immer recipe.
+{
+  const action = makeAction([fc('a', { active: true }), fc('b'), fc('c')]);
+  // Deep clone, then set-active on the clone using just the string id
+  // — verifies no reference-identity coupling.
+  const cloned = JSON.parse(JSON.stringify(action));
+  const r = setActiveFCurve(cloned, 'c');
+  eq(r.activeNow, 'c', 'ID-based compare picks c in cloned action');
+  eq(r.changed, true, 'changed=true');
+  eq(cloned.fcurves[0].active, undefined, 'prior active (a) cleared');
+  eq(cloned.fcurves[2].active, true, 'new target (c) active');
+}
+
 // ── setActiveFCurve: null/empty/missing fcurveId → clears all ──────
 {
   const action = makeAction([fc('a', { active: true }), fc('b')]);

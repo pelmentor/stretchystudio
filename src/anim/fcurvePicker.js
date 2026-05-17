@@ -5,16 +5,31 @@
  *
  * Extracted from FCurveEditor.jsx's local `pickFCurve` helper so the
  * DopesheetEditor (Slice 5.W) can gate its active-keyform halo on the
- * same fcurve the FCurveEditor considers active. Until SS ships a
- * per-fcurve ACTIVE bit (queued Phase 5 path #11), `selection`-driven
- * picking is SS's stand-in for Blender's `FCURVE_ACTIVE` flag.
+ * same fcurve the FCurveEditor considers active. Pre-Slice 5.X this
+ * picker was SS's primary stand-in for Blender's `FCURVE_ACTIVE` flag.
  *
  * The picker walks `selection` from newest to oldest and returns the
  * first FCurve targeting the most-recent selected item (parameter →
  * `paramId` match; part/group → `nodeId` match via `decodeFCurveTarget`).
  *
- * Once path #11 lands, both editors switch to reading the persisted
- * `fcurve.active === true` flag and this picker can retire.
+ * # Status post-Slice 5.X — DEMOTED to bootstrap fallback
+ *
+ * Slice 5.X (2026-05-17) ported Blender's persisted `FCURVE_ACTIVE` bit
+ * as `fcurve.active` (see [./fcurveActive.js](./fcurveActive.js)). Both
+ * FCurveEditor and DopesheetEditor now consult `getActiveFCurve(action)`
+ * FIRST and fall back to this picker only when no fcurve in the action
+ * carries `active === true` — the bootstrap path for legacy saves that
+ * predate 5.X. After the user's first click in either editor,
+ * `setActiveFCurve` writes the persisted bit and the fallback retires
+ * for that action.
+ *
+ * The picker is NOT a retirement candidate; it carries the load on
+ * legacy data + on the moment between action-load and first-click. The
+ * audit-fix LOW-2 finding (Slice 5.X arch audit 2026-05-17) corrected
+ * the substrate's earlier "this picker can retire" framing to "demoted
+ * to bootstrap fallback" — sister to Rule №2's principled-fallback
+ * stance (no transitional shim; the fallback is intrinsic to the
+ * no-migration policy on the `fc.active` field).
  *
  * @module anim/fcurvePicker
  */
