@@ -200,11 +200,30 @@ export function toggleFCurveHidden(action, fcurveId) {
  *
  * # SS deviations
  *
- * **Deviation 1 — no "active curve" handling.** Blender's
- * `ANIM_channel_setting_set` with SELECT/CLEAR also implicitly clears
- * `FCURVE_ACTIVE` when the SELECT bit drops (via the keyframe-edit
- * path). SS has no per-FCurve ACTIVE slot (same deferral as Slice
- * 5.K MED-A1, 5.L Deviation 2 — tracked under `project_ss_is_embryo`).
+ * **Deviation 1 — no "active curve" handling.** SS has no per-FCurve
+ * ACTIVE slot (same deferral as Slice 5.K MED-A1, 5.L Deviation 2 —
+ * tracked under `project_ss_is_embryo`). Blender's `FCURVE_ACTIVE` is
+ * cleared by `ANIM_set_active_channel` and the composite
+ * `deselect_all_fcurves(hide=true)` path
+ * (`anim_channels_edit.cc:5411-5428`) — neither of which is called
+ * by `graphview_curves_hide_exec` itself. `ANIM_channel_setting_set`
+ * is a pure bit-flip (`anim_channels_defines.cc:4993-5041`) with no
+ * post-update callback for the FCurve type. So the operational gap
+ * here only manifests once SS ships the higher-level composite paths
+ * that DO clear ACTIVE; per-row hide today doesn't lose anything.
+ * Audit-fix LOW-B1 (Slice 5.M dual-audit 2026-05-17): tightened the
+ * causal attribution that was inaccurate in the original draft.
+ *
+ * **Deviation 2 — no Industry-Compatible keymap support.** SS hard-
+ * codes the Blender-default keymap bindings (bare H / Shift+H /
+ * Alt+H). The Industry-Compatible preset
+ * (`industry_compatible_data.py:919-923`) binds hide to **Ctrl+H**
+ * (not bare H), keeping Shift+H and Alt+H. Users on the IC preset
+ * pressing Ctrl+H expect hide; SS sees an unbound key. Documented
+ * but not wired — SS doesn't have a keymap-preset selector yet, so
+ * wiring both variants per Rule №2 would be migration baggage.
+ * Audit-fix MED-B1 (Slice 5.M dual-audit 2026-05-17): documented
+ * the divergence; closure pending an SS keymap-preset feature.
  *
  * @param {object} action — Action datablock (mutated in place)
  * @param {{ unselected: boolean }} opts
@@ -214,6 +233,78 @@ export function toggleFCurveHidden(action, fcurveId) {
  *   `selected` flipped true→false. `reShowCount` = Phase 2 curves
  *   re-shown (today always 0; will populate when group flush ships).
  */
+/**
+ * Read-only preflight for {@link applyHideFCurves}.
+ *
+ * Returns true iff calling `applyHideFCurves(action, opts)` would
+ * mutate any field. Mirrors the mutation logic exactly but without
+ * any writes. Audit-fix HIGH-A1 (Slice 5.M dual-audit 2026-05-17):
+ * the dispatcher in FCurveEditor.jsx now calls this BEFORE
+ * `update(recipe)` so a no-op H/Shift+H press doesn't burn a
+ * phantom undo slot (`updateProject` at `projectStore.js:230-232`
+ * pushes the snapshot unconditionally before the recipe runs).
+ *
+ * @param {object | null | undefined} action
+ * @param {{ unselected: boolean } | null | undefined} opts
+ * @returns {boolean}
+ */
+export function wouldHideChangeFCurves(action, opts) {
+  if (!action || !Array.isArray(action.fcurves)) return false;
+  if (!opts || typeof opts.unselected !== 'boolean') return false;
+  const unselected = opts.unselected;
+
+  // Phase 1 read: would any filtered curve flip a flag?
+  for (const fc of action.fcurves) {
+    if (!fc) continue;
+    if (isFCurveHidden(fc)) continue;
+    const sel = fc.selected === true;
+    const match = unselected ? !sel : sel;
+    if (!match) continue;
+    if (fc.hide !== true) return true;
+    if (fc.selected === true) return true;
+  }
+
+  // Phase 2 read (unselected=true only): would any selected curve
+  // need to be un-hidden? (Re-select branch is a no-op by
+  // construction — we filtered on `selected === true`.)
+  if (unselected) {
+    for (const fc of action.fcurves) {
+      if (!fc) continue;
+      if (fc.selected !== true) continue;
+      if (fc.hide === true) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Read-only preflight for {@link applyRevealFCurves}.
+ *
+ * Returns true iff calling `applyRevealFCurves(action, opts)` would
+ * mutate any field. Mirrors mutation logic without writes. Same
+ * undo-budget rationale as {@link wouldHideChangeFCurves}.
+ *
+ * @param {object | null | undefined} action
+ * @param {{ select: boolean } | null | undefined} opts
+ * @returns {boolean}
+ */
+export function wouldRevealChangeFCurves(action, opts) {
+  if (!action || !Array.isArray(action.fcurves)) return false;
+  if (!opts || typeof opts.select !== 'boolean') return false;
+  const select = opts.select;
+  const wantSelected = select === true;
+  for (const fc of action.fcurves) {
+    if (!fc) continue;
+    if (!isFCurveHidden(fc)) continue;
+    // Will flip hide false (always) and may flip selected (gated).
+    // Either side suffices to return true.
+    if (fc.hide === true) return true;
+    if ((fc.selected === true) !== wantSelected) return true;
+  }
+  return false;
+}
+
 export function applyHideFCurves(action, opts) {
   const result = { changed: false, hiddenCount: 0, deselectedCount: 0, reShowCount: 0 };
   if (!action || !Array.isArray(action.fcurves)) return result;
@@ -299,16 +390,15 @@ export function applyRevealFCurves(action, opts) {
     if (!fc) continue;
     const wasHidden = isFCurveHidden(fc);
     if (wasHidden) {
-      // Selection write is gated on previous hidden state — see
-      // graph_ops.cc:379-383. Setting `selected=false` explicitly when
-      // select=false is intentional (matches Blender's
-      // `ACHANNEL_SETFLAG_CLEAR` branch); does NOT drop selection of
-      // already-visible curves.
       // Selection write is gated on previous hidden state —
-      // `graph_ops.cc:379-383`. Sparse-field handled implicitly:
-      // `fc.selected === true` is false for both undefined and
-      // explicit false, so when wantSelected=false we don't
-      // unnecessarily write false onto an already-sparse field.
+      // `graph_ops.cc:379-383`. Setting `selected=false` explicitly
+      // when select=false matches Blender's `ACHANNEL_SETFLAG_CLEAR`
+      // branch; it does NOT drop selection of already-visible curves
+      // (those skip this branch via the `wasHidden` gate). Sparse-
+      // field handled implicitly: `fc.selected === true` is false
+      // for both undefined and explicit false, so when
+      // wantSelected=false we don't unnecessarily write false onto
+      // an already-sparse field.
       const wantSelected = select === true;
       if ((fc.selected === true) !== wantSelected) {
         fc.selected = wantSelected;

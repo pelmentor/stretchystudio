@@ -22,6 +22,8 @@ import {
   toggleFCurveHidden,
   applyHideFCurves,
   applyRevealFCurves,
+  wouldHideChangeFCurves,
+  wouldRevealChangeFCurves,
 } from '../../src/anim/fcurveVisible.js';
 import { isFCurveMuted } from '../../src/anim/fcurveMute.js';
 import { isFCurveSelected } from '../../src/anim/fcurveChannelSelect.js';
@@ -501,6 +503,99 @@ assert(applyRevealFCurves({ fcurves: [] }, { select: 1 }).changed === false, 're
   applyRevealFCurves(action, { select: true });
   assert(action.fcurves[0].hide === false && action.fcurves[1].hide === false, 'hide-then-reveal: both visible after reveal');
   assert(action.fcurves[0].selected === true && action.fcurves[1].selected === true, 'hide-then-reveal: both reselected after reveal');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Audit-fix HIGH-A1 (Slice 5.M dual-audit 2026-05-17) — preflight
+// readers MUST mirror the mutation logic exactly so the dispatcher's
+// "skip update() when nothing would change" gate doesn't lie.
+
+// wouldHideChangeFCurves — guards
+assert(wouldHideChangeFCurves(null, { unselected: false }) === false, 'wouldHide: null action');
+assert(wouldHideChangeFCurves({}, { unselected: false }) === false, 'wouldHide: missing fcurves');
+assert(wouldHideChangeFCurves({ fcurves: [] }, null) === false, 'wouldHide: null opts');
+assert(wouldHideChangeFCurves({ fcurves: [] }, {}) === false, 'wouldHide: missing unselected');
+assert(wouldHideChangeFCurves({ fcurves: [] }, { unselected: 'no' }) === false, 'wouldHide: non-bool unselected');
+
+// wouldHideChangeFCurves — empty fcurves, no selection, no visible match
+assert(wouldHideChangeFCurves({ fcurves: [] }, { unselected: false }) === false, 'wouldHide: empty fcurves');
+assert(wouldHideChangeFCurves({ fcurves: [{ id: 'a', selected: false, hide: false, keyforms: [] }] }, { unselected: false }) === false,
+  'wouldHide H: nothing selected → no change');
+assert(wouldHideChangeFCurves({ fcurves: [{ id: 'a', selected: true, hide: true, keyforms: [] }] }, { unselected: false }) === false,
+  'wouldHide H: only selected curve already hidden → no change (skipped by ANIMFILTER_CURVE_VISIBLE)');
+
+// wouldHideChangeFCurves — positive cases (each helper invariant true)
+assert(wouldHideChangeFCurves({ fcurves: [{ id: 'a', selected: true, hide: false, keyforms: [] }] }, { unselected: false }) === true,
+  'wouldHide H: selected + visible → change');
+assert(wouldHideChangeFCurves({ fcurves: [{ id: 'a', selected: false, hide: false, keyforms: [] }] }, { unselected: true }) === true,
+  'wouldHide Shift+H: unselected + visible → change');
+
+// wouldHideChangeFCurves — Phase 2 detection
+assert(wouldHideChangeFCurves({
+  fcurves: [
+    { id: 'a', selected: true, hide: true, keyforms: [] },  // Phase 2 would re-show
+    { id: 'b', selected: true, hide: false, keyforms: [] }, // skips Phase 1 (selected)
+  ],
+}, { unselected: true }) === true,
+  'wouldHide Phase 2: a selected+hidden would re-show → change');
+
+// wouldHideChangeFCurves — agrees with applyHideFCurves on no-op case
+{
+  const action = { id: 'A', fcurves: [{ id: 'a', selected: false, hide: false, keyforms: [] }] };
+  const wouldChange = wouldHideChangeFCurves(action, { unselected: false });
+  const actual = applyHideFCurves(action, { unselected: false });
+  assert(wouldChange === actual.changed, 'preflight agrees with applyHide on no-op');
+}
+
+// wouldHideChangeFCurves — agrees with applyHideFCurves on positive case
+{
+  const action = { id: 'A', fcurves: [{ id: 'a', selected: true, hide: false, keyforms: [] }] };
+  const wouldChange = wouldHideChangeFCurves(action, { unselected: false });
+  const action2 = { id: 'A', fcurves: [{ id: 'a', selected: true, hide: false, keyforms: [] }] };
+  const actual = applyHideFCurves(action2, { unselected: false });
+  assert(wouldChange === actual.changed && wouldChange === true, 'preflight agrees with applyHide on positive case');
+}
+
+// wouldRevealChangeFCurves — guards
+assert(wouldRevealChangeFCurves(null, { select: true }) === false, 'wouldReveal: null action');
+assert(wouldRevealChangeFCurves({ fcurves: [] }, null) === false, 'wouldReveal: null opts');
+assert(wouldRevealChangeFCurves({ fcurves: [] }, {}) === false, 'wouldReveal: missing select');
+assert(wouldRevealChangeFCurves({ fcurves: [] }, { select: 1 }) === false, 'wouldReveal: non-bool select');
+
+// wouldRevealChangeFCurves — empty / no-op
+assert(wouldRevealChangeFCurves({ fcurves: [] }, { select: true }) === false, 'wouldReveal: empty');
+assert(wouldRevealChangeFCurves({ fcurves: [{ id: 'a', hide: false, selected: false, keyforms: [] }] }, { select: true }) === false,
+  'wouldReveal: nothing hidden → no change');
+
+// wouldRevealChangeFCurves — positive cases
+assert(wouldRevealChangeFCurves({ fcurves: [{ id: 'a', hide: true, selected: false, keyforms: [] }] }, { select: true }) === true,
+  'wouldReveal: hidden curve → change');
+assert(wouldRevealChangeFCurves({ fcurves: [{ id: 'a', hide: true, selected: true, keyforms: [] }] }, { select: true }) === true,
+  'wouldReveal: hidden curve (already selected) → still change (hide flips)');
+
+// wouldRevealChangeFCurves — agrees with applyRevealFCurves
+{
+  const action = { id: 'A', fcurves: [{ id: 'a', hide: false, selected: true, keyforms: [] }] };
+  const wouldChange = wouldRevealChangeFCurves(action, { select: true });
+  const actual = applyRevealFCurves(action, { select: true });
+  assert(wouldChange === actual.changed && wouldChange === false, 'preflight agrees with applyReveal on no-op');
+}
+{
+  const action = { id: 'A', fcurves: [{ id: 'a', hide: true, selected: false, keyforms: [] }] };
+  const wouldChange = wouldRevealChangeFCurves(action, { select: true });
+  const action2 = { id: 'A', fcurves: [{ id: 'a', hide: true, selected: false, keyforms: [] }] };
+  const actual = applyRevealFCurves(action2, { select: true });
+  assert(wouldChange === actual.changed && wouldChange === true, 'preflight agrees with applyReveal on positive case');
+}
+
+// Preflight readers do NOT mutate
+{
+  const action = { id: 'A', fcurves: [{ id: 'a', selected: true, hide: false, keyforms: [] }] };
+  wouldHideChangeFCurves(action, { unselected: false });
+  assert(action.fcurves[0].hide === false, 'wouldHide does not mutate hide');
+  assert(action.fcurves[0].selected === true, 'wouldHide does not mutate selected');
+  wouldRevealChangeFCurves(action, { select: true });
+  assert(action.fcurves[0].hide === false, 'wouldReveal does not mutate hide');
 }
 
 // ─────────────────────────────────────────────────────────────────────

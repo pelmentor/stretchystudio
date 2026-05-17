@@ -340,6 +340,8 @@ import {
   toggleFCurveHidden,
   applyHideFCurves,
   applyRevealFCurves,
+  wouldHideChangeFCurves,
+  wouldRevealChangeFCurves,
 } from '../../../anim/fcurveVisible.js';
 import {
   getActiveKeyformIndex,
@@ -1925,25 +1927,49 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // H/Shift+H/Alt+H entries — Blender's per-row visibility toggle in
   // the sidebar is `W` via `anim.channels_setting_toggle`. So this
   // dispatcher is timeline-scoped only.
+  // Audit-fix HIGH-A1 (Slice 5.M dual-audit 2026-05-17): preflight
+  // before update(). Without it, pressing H with nothing selected
+  // pushes an undo snapshot anyway (`projectStore.js:230-232`
+  // unconditionally snapshots before invoking the recipe), giving
+  // the user a phantom Ctrl+Z that restores the same state to
+  // itself and consumes one undo slot. The preflight reader walks
+  // the same filter but doesn't write; if nothing would change we
+  // skip the `update()` call entirely. Reading via
+  // `useProjectStore.getState()` avoids subscribing the dispatcher
+  // to project state (the existing `useState`-driven keymap fires
+  // synchronously on keypress and reads the live state then; no
+  // need for a render-triggering subscription).
   const applyHideOp = useCallback((mode) => {
+    const opts = { unselected: mode === 'unselected' };
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldHideChangeFCurves(liveAction, opts)) {
+      return { changed: false, hiddenCount: 0, deselectedCount: 0, reShowCount: 0 };
+    }
     let result = { changed: false, hiddenCount: 0, deselectedCount: 0, reShowCount: 0 };
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      result = applyHideFCurves(a, { unselected: mode === 'unselected' });
+      result = applyHideFCurves(a, opts);
     });
     return result;
   }, [activeActionId, update]);
 
   const applyRevealOp = useCallback(() => {
+    // `select=true` matches Blender's RNA default at
+    // `graph_ops.cc:418`; the Alt+H keymap entry binds with no
+    // properties (`blender_default.py:463`), so the default applies.
+    const opts = { select: true };
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldRevealChangeFCurves(liveAction, opts)) {
+      return { changed: false, revealedCount: 0, selectedCount: 0 };
+    }
     let result = { changed: false, revealedCount: 0, selectedCount: 0 };
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      // `select=true` matches Blender's RNA default at
-      // `graph_ops.cc:418`; the Alt+H keymap entry binds with no
-      // properties (`blender_default.py:463`), so the default applies.
-      result = applyRevealFCurves(a, { select: true });
+      result = applyRevealFCurves(a, opts);
     });
     return result;
   }, [activeActionId, update]);
