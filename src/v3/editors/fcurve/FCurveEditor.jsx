@@ -333,6 +333,7 @@ import {
   applyChannelSelectAll,
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
+import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
 import { isFCurveHidden, toggleFCurveHidden } from '../../../anim/fcurveVisible.js';
 import {
@@ -1818,6 +1819,23 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     setSelectedHandles(next);
   }
 
+  function operatorInvertSelection() {
+    // Slice 5.L — Blender-faithful INVERT across all visible keyforms.
+    // Mirrors `graph.select_all` action='INVERT'
+    // (`graph_select.cc:451-453` → `deselect_graph_keys(.., SELECT_INVERT, ..)`).
+    // Pure mutation logic lives in `applyKeyformInvertSelection`; see
+    // that module's header for the `select_bezier_invert` rule (center
+    // flips per keyform, handles mirror new center).
+    //
+    // Visible curves are pulled from the `visible` memo (hidden curves
+    // are filtered out by `isFCurveHidden` — Slice 5.I) so this matches
+    // Blender's ANIMFILTER_CURVE_VISIBLE walk.
+    setSelectedHandles((curr) => applyKeyformInvertSelection(
+      visible.map((d) => d.fcurve),
+      curr,
+    ));
+  }
+
   // ── Hotkey dispatch ─────────────────────────────────────────────────
 
   // Slice 5.K — bulk channel select-all dispatcher (A / Alt+A / Ctrl+I).
@@ -1956,23 +1974,20 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         return;
       }
     }
-    // Audit-fix LOW-A1 (Slice 5.K dual-audit 2026-05-17, REVISED):
+    // Graph-region keymap parity with `blender_default.py:2010` (=
+    // `*_template_items_select_actions(params, "graph.select_all")`):
+    //   - A          → TOGGLE   (`:436` — existing branch below; `if
+    //                            size>0 clear else selectAll` is the
+    //                            same toggle resolution Blender uses)
+    //   - Alt+A      → DESELECT (`:437` — `clearSelection()` below)
+    //   - Ctrl+I     → INVERT   (`:438` — `operatorInvertSelection()`
+    //                            below; Slice 5.L)
     //
-    // Initial draft of this fix over-tightened with `!e.altKey` to make
-    // graph-region Alt+A a no-op — that INVERTED Blender's semantics.
-    // Blender's `km_graph_editor` at `blender_default.py:1975+` binds
-    // `*_template_items_select_actions(params, "graph.select_all")` at
-    // `:2010`, which expands to the SAME three actions as the channels
-    // region: A → TOGGLE, Alt+A → DESELECT, Ctrl+I → INVERT — but at
-    // the per-keyform layer (graph.select_all = GRAPH_OT_select_all),
-    // not the per-channel layer (anim.channels_select_all). Tightening
-    // would have broken Alt+A's "deselect all keyforms" expectation.
-    //
-    // Correct port: keep A → TOGGLE (existing — `if size>0 clear else
-    // selectAll` already implements TOGGLE). Add Alt+A → DESELECT
-    // unconditionally. Ctrl+I → INVERT requires a per-keyform invert
-    // helper that doesn't exist yet — DEFERRED to a future slice
-    // (queued resume path; no existing `operatorInvertSelection`).
+    // Slice 5.K shipped A and Alt+A; Ctrl+I was deferred pending the
+    // keyform-invert primitive (now in `fcurveKeyformSelect.js`).
+    // Audit-fix LOW-A1 (Slice 5.K dual-audit 2026-05-17) caught an
+    // earlier over-tightening with `!e.altKey` that would have inverted
+    // Alt+A — the fix preserved Blender semantics; see commit `dd1faf1`.
     if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       if (selectionRef.current.size > 0) clearSelection();
@@ -1988,6 +2003,21 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // "alt": True}, {"properties": [("action", 'DESELECT')]}`.
       e.preventDefault();
       clearSelection();
+      return;
+    }
+    if (e.code === 'KeyI' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      // Slice 5.L — Graph-region Ctrl+I → INVERT all keyforms.
+      // Mirrors `graph.select_all` keymap entry at
+      // `blender_default.py:2010` (= `*_template_items_select_actions(
+      // params, "graph.select_all")`) which expands to the default-
+      // keymap branch at `:438`: `{"type": 'I', "value": 'PRESS',
+      // "ctrl": True}, {"properties": [("action", 'INVERT')]}`.
+      //
+      // This branch is timeline-scoped (sidebar-region Ctrl+I is
+      // already handled above at the channel layer); region routing
+      // via `regionHoverRef.current` ensures only one fires per press.
+      e.preventDefault();
+      operatorInvertSelection();
       return;
     }
     // Audit-fix HIGH-A5 (2026-05-16): include `activeActionId` so that

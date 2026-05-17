@@ -219,6 +219,7 @@
     "test:fcurveColor": "node scripts/test/test_fcurveColor.mjs",
     "test:fcurveDriverGate": "node scripts/test/test_fcurveDriverGate.mjs",
     "test:fcurveChannelSelect": "node scripts/test/test_fcurveChannelSelect.mjs",
+    "test:fcurveKeyformSelect": "node scripts/test/test_fcurveKeyformSelect.mjs",
     "test:fcurveMute": "node scripts/test/test_fcurveMute.mjs",
     "test:fcurveActiveKeyform": "node scripts/test/test_fcurveActiveKeyform.mjs",
     "test:fcurveVisible": "node scripts/test/test_fcurveVisible.mjs",
