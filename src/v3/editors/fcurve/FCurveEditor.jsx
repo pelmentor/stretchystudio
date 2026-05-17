@@ -2011,12 +2011,53 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     if (!wouldChannelDeleteSelectedChange(liveAction)) {
       return { changed: false, deletedCount: 0, deletedIds: [] };
     }
+
+    // Pre-compute the deleted set + snapshot each global-selection
+    // item's resolved fcurve id BEFORE delete. Audit-fix HIGH-A1
+    // (Slice 5.N dual-audit 2026-05-17): the original draft called
+    // `useSelectionStore.getState().clear()` which nuked EVERY
+    // selection item (parts, params, groups) when ANY active-resolving
+    // item's backing fcurve was deleted. That overreached — Blender
+    // re-resolves active from the surviving channel list per-render
+    // and never touches unrelated selection state. Correct port:
+    // identify which selection items would dangle (resolve to a
+    // deleted fcurve) and remove ONLY those.
+    const deletedIdSet = new Set();
+    for (const fc of liveAction.fcurves) {
+      if (fc && fc.selected === true && typeof fc.id === 'string') {
+        deletedIdSet.add(fc.id);
+      }
+    }
+    const items = useSelectionStore.getState().items;
+    /** @type {Array<{type: string, id: string}>} */
+    const survivingItems = [];
+    let anyDangling = false;
+    for (const item of items) {
+      let resolvedFCId = null;
+      if (item && item.type === 'parameter') {
+        const fc = liveAction.fcurves.find((f) => fcurveTargetsParam(f, item.id));
+        if (fc) resolvedFCId = fc.id;
+      } else if (item && (item.type === 'part' || item.type === 'group')) {
+        const fc = liveAction.fcurves.find((f) => {
+          const t = decodeFCurveTarget(f);
+          return t?.kind === 'node' && t.nodeId === item.id;
+        });
+        if (fc) resolvedFCId = fc.id;
+      }
+      if (resolvedFCId && deletedIdSet.has(resolvedFCId)) {
+        anyDangling = true;
+      } else {
+        survivingItems.push(item);
+      }
+    }
+
     let result = { changed: false, deletedCount: 0, deletedIds: /** @type {string[]} */ ([]) };
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
       result = applyChannelDeleteSelected(a);
     });
+
     if (result.changed && result.deletedIds.length > 0) {
       // Side-effect 1: drop keyform-selection entries for deleted ids.
       setSelectedHandles((curr) => {
@@ -2030,20 +2071,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         for (const id of result.deletedIds) next.delete(id);
         return next;
       });
-      // Side-effect 2: clear active if its backing fcurve was deleted.
-      // `activeFCurveId` is derived from `selectStore` via the
-      // active-param→fcurve resolver (top of Plot); if that id is in
-      // the deleted set, clear the global selection. Using
-      // `useSelectionStore.getState().clear()` (vs `select(null, ...)`
-      // which would put `null` into items[]) — no subscription needed
-      // for a single imperative call, mirrors the
-      // `useProjectStore.getState()` pattern in the preflight above.
-      if (activeFCurveId && result.deletedIds.indexOf(activeFCurveId) !== -1) {
-        useSelectionStore.getState().clear();
+      // Side-effect 2: surgically remove only the dangling selection
+      // items (those that resolved to a deleted fcurve). Unrelated
+      // params/parts/groups stay selected. `select(targets, 'replace')`
+      // sets `items` to a copy of `targets`; passing an empty array
+      // is the equivalent of `clear()` and is safe.
+      if (anyDangling) {
+        useSelectionStore.getState().select(survivingItems, 'replace');
       }
     }
     return result;
-  }, [activeActionId, update, activeFCurveId]);
+  }, [activeActionId, update]);
 
   const onKeyDown = useCallback((e) => {
     if (modal) return;
@@ -2107,6 +2145,15 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // (`industry_compatible_data.py:2357`) — not wired today. Per
       // Slice 5.M Deviation 2 precedent, gated on an SS keymap-preset
       // selector that doesn't exist yet.
+      //
+      // Known limitation (Slice 5.N MED-A2, also affects Slice 5.K's
+      // A/Alt+A/Ctrl+I sidebar branches): `regionHoverRef.current`
+      // only updates on pointer enter/leave. Keyboard-only navigation
+      // (Tab into the FCurveEditor without moving the mouse, then X)
+      // falls through to the timeline-region default. Proper fix
+      // needs focus tracking on the sidebar container — would be the
+      // same lift across all region-aware keys, so deferred to a
+      // dedicated slice rather than expanding 5.N's scope.
       e.preventDefault();
       if (regionHoverRef.current === 'sidebar') {
         applyChannelDeleteOp();

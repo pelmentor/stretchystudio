@@ -848,20 +848,29 @@ assert(wouldChannelDeleteSelectedChange({ fcurves: [] }) === false, 'wouldDelete
   assert(a.fcurves.length === 0, 'delete: driver curve removed');
 }
 
-// Malformed fcurve entries skipped silently
+// Malformed-but-selected fcurve entries ARE dropped (audit-fix MED-A1):
+// idless/non-string-id selected entries can't be reported back via
+// deletedIds (there's no id to report) but they ARE dropped from
+// action.fcurves so they don't survive perpetually as undeletable
+// stale entries. Plain `null`/`undefined` array entries skipped.
 {
   const a = {
     fcurves: [
       null,
       undefined,
       { id: 'a', selected: true, keyforms: [] },
-      { selected: true, keyforms: [] }, // no id — not deleted (no id to report)
-      { id: 42, selected: true, keyforms: [] }, // non-string id — not deleted
+      { selected: true, keyforms: [] }, // no id — dropped, not reported
+      { id: 42, selected: true, keyforms: [] }, // non-string id — dropped, not reported
     ],
   };
   const r = applyChannelDeleteSelected(a);
-  assert(r.deletedCount === 1 && r.deletedIds[0] === 'a',
-    'delete: only valid string-id selected curves deleted');
+  assert(r.deletedCount === 3,
+    'delete: all 3 selected entries dropped (including idless/non-string-id)');
+  assert(r.deletedIds.length === 1 && r.deletedIds[0] === 'a',
+    'delete: only string-id curves reported in deletedIds (idless drops are silent)');
+  // null/undefined slots survive (they're not `selected:true`); the 3
+  // selected entries (with-id + idless + non-string-id) are all gone.
+  assert(a.fcurves.length === 2, 'delete: 2 non-selected slots (null/undefined) survive; 3 selected dropped');
 }
 
 // Array reference preserved (in-place mutation)

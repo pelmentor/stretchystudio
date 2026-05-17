@@ -570,8 +570,18 @@ export function applyChannelDeleteSelected(action) {
   if (!action || !Array.isArray(action.fcurves)) return result;
   const keep = [];
   for (const fc of action.fcurves) {
-    if (fc && fc.selected === true && typeof fc.id === 'string') {
-      result.deletedIds.push(fc.id);
+    // Audit-fix MED-A1 (Slice 5.N dual-audit 2026-05-17): drop ANY
+    // `selected:true` entry, including malformed ones without a
+    // string id. The original draft kept malformed `{selected:true}`
+    // entries in `keep` — a defensive footgun: if any future write
+    // path ever produces an idless selected entry, it would be
+    // perpetually undeletable. The user-intent gate is "selected
+    // means delete"; the id is just for reporting back to the
+    // caller. Idless drops happen silently (not pushed to
+    // deletedIds since there's no id to report — the caller's
+    // selection-store cleanup logic keys on ids).
+    if (fc && fc.selected === true) {
+      if (typeof fc.id === 'string') result.deletedIds.push(fc.id);
       result.deletedCount++;
       result.changed = true;
       continue;
