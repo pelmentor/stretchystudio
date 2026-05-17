@@ -26,6 +26,8 @@ import {
   applyChannelDeleteSelected,
   wouldChannelDeleteSelectedChange,
   isFCurveSelected,
+  applyGroupChildrenSelect,
+  wouldGroupChildrenSelectChange,
 } from '../../src/anim/fcurveChannelSelect.js';
 import {
   clearActiveFCurves,
@@ -958,6 +960,202 @@ assert(wouldChannelDeleteSelectedChange({ fcurves: [] }) === false, 'wouldDelete
   assert(r.clearActive === true, '5.Z: invert (active flips off) → clearActive=true');
   clearActiveFCurves(a);
   assert(isFCurveActive(a.fcurves[0]) === false, '5.Z: dispatcher wire-through clears active');
+}
+
+// ── Slice 5.BB — applyGroupChildrenSelect (Shift+Ctrl+click) ──────
+// Ports Blender's `selectmode = -1` branch of mouse_anim_channels at
+// `anim_channels_edit.cc:4163-4180`. Semantics:
+//   1. Pre-clear visible scope (orderedIds) — wipes `selected`
+//   2. Select every fcurve with `groupId === clickedGroupId`
+//   3. Set group's own `selected = true`
+//   4. Active-clear cascade if previously-active was in visible scope
+
+function makeActionWithGroups(groups, fcurves) {
+  return { id: 'a1', groups, fcurves };
+}
+
+// Guards ────────────────────────────────────────────────────────
+{
+  const r1 = applyGroupChildrenSelect(null, 'g1', { orderedIds: ['fc1'] });
+  assert(r1.changed === false, '5.BB: null action → no change');
+  assert(r1.selectedCount === 0, '5.BB: null action → selectedCount=0');
+
+  const r2 = applyGroupChildrenSelect({ fcurves: null }, 'g1', { orderedIds: ['fc1'] });
+  assert(r2.changed === false, '5.BB: action with null fcurves → no change');
+
+  const r3 = applyGroupChildrenSelect({ fcurves: [], groups: null }, 'g1', { orderedIds: [] });
+  assert(r3.changed === false, '5.BB: action with null groups → no change');
+
+  const r4 = applyGroupChildrenSelect(makeActionWithGroups([], []), '', { orderedIds: [] });
+  assert(r4.changed === false, '5.BB: empty groupId → no change');
+
+  const r5 = applyGroupChildrenSelect(makeActionWithGroups([{ id: 'gA' }], []), 'nonexistent', { orderedIds: [] });
+  assert(r5.changed === false, '5.BB: nonexistent groupId → no change');
+}
+
+// Happy path — pre-clear + select children + mark group selected ────
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', name: 'Group A' }, { id: 'gB', name: 'Group B' }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', groupId: 'gA', keyforms: [] },
+      { id: 'fc3', groupId: 'gB', selected: true, keyforms: [] },
+      { id: 'fc4', keyforms: [] },  // ungrouped
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1', 'fc2', 'fc3', 'fc4'],
+  });
+  assert(r.changed === true, '5.BB happy: changed=true');
+  assert(r.selectedCount === 2, '5.BB happy: selectedCount=2 (gA has 2 fcurves)');
+  assert(a.fcurves[0].selected === true, '5.BB happy: fc1 (gA child) selected');
+  assert(a.fcurves[1].selected === true, '5.BB happy: fc2 (gA child) selected');
+  assert(a.fcurves[2].selected === false, '5.BB happy: fc3 (gB child) DESELECTED via pre-clear');
+  assert(a.fcurves[3].selected === undefined, '5.BB happy: fc4 (ungrouped) unchanged sparse-false');
+  assert(a.groups[0].selected === true, '5.BB happy: gA group flagged selected');
+  assert(a.groups[1].selected !== true, '5.BB happy: gB group NOT flagged selected');
+}
+
+// Active-clear cascade — active in visible scope, not in clicked group
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB' }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, active: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gB', keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gB', {
+    orderedIds: ['fc1', 'fc2'],
+    activeFCurveId: 'fc1',
+  });
+  assert(r.changed === true, '5.BB active-out-of-group: changed');
+  assert(r.clearedActive === true, '5.BB active-out-of-group: clearedActive=true');
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.BB: fc1 no longer active (pre-clear cascade)');
+  assert(a.fcurves[0].selected === false, '5.BB: fc1 deselected too');
+  assert(a.fcurves[1].selected === true, '5.BB: fc2 (gB child) selected');
+}
+
+// Active-clear cascade — active IS in clicked group → still cleared (Blender no re-elevation)
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, active: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gA', keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1', 'fc2'],
+    activeFCurveId: 'fc1',
+  });
+  assert(r.changed === true, '5.BB active-in-group: changed');
+  assert(r.clearedActive === true, '5.BB active-in-group: clearedActive=true (no re-elevation)');
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.BB: fc1 lost active even though re-selected');
+  assert(a.fcurves[0].selected === true, '5.BB: fc1 re-selected (it IS a gA child)');
+  assert(a.fcurves[1].selected === true, '5.BB: fc2 selected');
+}
+
+// Active OUT of visible scope → preserved
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [
+      { id: 'fcHidden', groupId: 'gOther', active: true, keyforms: [] },  // hidden / out of orderedIds
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1'],  // fcHidden out of scope
+    activeFCurveId: 'fcHidden',
+  });
+  assert(r.clearedActive === false, '5.BB active-out-of-scope: preserved');
+  assert(isFCurveActive(a.fcurves[0]) === true, '5.BB: fcHidden still active');
+}
+
+// Hidden children of clicked group still get selected (SS Deviation 2)
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fcHidden', groupId: 'gA', hide: true, keyforms: [] },  // hidden
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1'],  // hidden child out of visible scope
+  });
+  assert(r.changed === true, '5.BB hidden-children: changed');
+  assert(r.selectedCount === 2, '5.BB hidden-children: BOTH children counted (intrinsic list)');
+  assert(a.fcurves[0].selected === true, '5.BB: visible child selected');
+  assert(a.fcurves[1].selected === true, '5.BB: HIDDEN child also selected (matches Blender agrp->channels)');
+}
+
+// Idempotent re-press → no change
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gA', selected: true, keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1', 'fc2'],
+  });
+  assert(r.changed === false, '5.BB idempotent: no change');
+  assert(r.selectedCount === 2, '5.BB idempotent: selectedCount still reports the 2 group members');
+}
+
+// Preflight matches setter ──────────────────────────────────────
+{
+  const scenarios = [
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }, { id: 'gB' }],
+        [
+          { id: 'fc1', groupId: 'gA', keyforms: [] },
+          { id: 'fc2', groupId: 'gB', selected: true, keyforms: [] },
+        ],
+      ),
+      gid: 'gA',
+      ctx: { orderedIds: ['fc1', 'fc2'] },
+    }),
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA', selected: true }],
+        [
+          { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
+        ],
+      ),
+      gid: 'gA',
+      ctx: { orderedIds: ['fc1'] },  // idempotent — predict false
+    }),
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }],
+        [
+          { id: 'fc1', groupId: 'gA', active: true, keyforms: [] },
+        ],
+      ),
+      gid: 'gA',
+      ctx: { orderedIds: ['fc1'], activeFCurveId: 'fc1' },  // active-only — predict true
+    }),
+    () => ({
+      action: makeActionWithGroups([], []),
+      gid: 'gA',
+      ctx: { orderedIds: [] },  // no groups — predict false
+    }),
+  ];
+  for (let i = 0; i < scenarios.length; i++) {
+    const sA = scenarios[i]();
+    const sB = scenarios[i]();
+    const predicted = wouldGroupChildrenSelectChange(sA.action, sA.gid, sA.ctx);
+    const r = applyGroupChildrenSelect(sB.action, sB.gid, sB.ctx);
+    const anyMutation = r.changed || r.clearedActive;
+    assert(predicted === anyMutation, `5.BB scenario ${i}: preflight matches setter (changed||clearedActive)`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────

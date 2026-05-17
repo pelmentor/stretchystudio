@@ -339,6 +339,8 @@ import {
   applyChannelDeleteSelected,
   wouldChannelDeleteSelectedChange,
   isFCurveSelected,
+  applyGroupChildrenSelect,
+  wouldGroupChildrenSelectChange,
 } from '../../../anim/fcurveChannelSelect.js';
 import {
   applyChannelBoxSelect,
@@ -2136,6 +2138,44 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return decision;
   }, [activeActionId, update, decoded, activeFCurveId]);
 
+  // Slice 5.BB — Shift+Ctrl+click → group-children-select dispatcher.
+  // Mirrors Blender's `selectmode = -1` branch in `mouse_anim_channels`
+  // (`reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4163-4180`),
+  // dispatched from `animchannels_mouseclick_invoke` at `:4642-4646`.
+  // Keymap: `blender_default.py:3853-3854`.
+  //
+  // SS extends Blender's "only group headers respond" rule: the Sidebar
+  // wires Shift+Ctrl+click on EITHER a group header OR an fcurve row
+  // (in which case the fcurve's `groupId` resolves the target group).
+  // Ungrouped fcurves no-op (matches Blender's `:4511-4515` early
+  // return for non-group channels). See `applyGroupChildrenSelect`
+  // module-header Deviation 1.
+  //
+  // `skipHistory: true` — channel selection is view state per the
+  // Slice 5.F/5.K convention. Preflight gates the no-op case so a
+  // re-Shift+Ctrl-click on the same group doesn't push a phantom
+  // undo snapshot.
+  const applyGroupChildrenSelectOp = useCallback((groupId) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    const orderedIds = liveAction
+      ? decoded
+          .filter((d) => !isFCurveEffectivelyHidden(d.fcurve, liveAction))
+          .map((d) => d.fcurve.id)
+      : [];
+    const ctx = { orderedIds, activeFCurveId };
+    if (!wouldGroupChildrenSelectChange(liveAction, groupId, ctx)) {
+      return { changed: false, clearedActive: false, selectedCount: 0 };
+    }
+    let decision = { changed: false, clearedActive: false, selectedCount: 0 };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      decision = applyGroupChildrenSelect(a, groupId, ctx);
+    }, { skipHistory: true });
+    return decision;
+  }, [activeActionId, update, decoded, activeFCurveId]);
+
   // Hover region setters — Sidebar wires its outer div to these so
   // `regionHoverRef.current` reflects which sub-area the cursor is over
   // when KeyA / Alt+A / Ctrl+I fires. Stable identities keep Sidebar's
@@ -2861,6 +2901,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         onPickActiveByTarget={onPickActiveByTarget}
         onApplyChannelClick={applyChannelClick}
         onApplyChannelBoxSelect={applyChannelBoxSelectOp}
+        onApplyGroupChildrenSelect={applyGroupChildrenSelectOp}
         onClearKeyformSelection={clearSelection}
         onSelectAll={applyChannelSelectAllOp}
         onSidebarEnter={onSidebarEnter}
@@ -3014,7 +3055,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onApplyGroupChildrenSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
   // Slice 5.Y — drag-rect box-select state machine. Pointer events on the
   // sidebar wrapper drive a small 3-state FSM (idle → pressed → dragging).
   // On pointerup-after-drag, the hit-test queries every `[data-fcurve-id]`
@@ -3331,7 +3372,25 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                 >
                   {groupMuted ? '\u{1F507}' : '\u{1F50A}'}
                 </button>
-                <span className="truncate flex-1 font-semibold">{group.name}</span>
+                {/* Slice 5.BB — group name is Shift+Ctrl+click target.
+                    Plain click is intentionally a no-op for this slice
+                    (Blender's `mouse_anim_channels` ANIMTYPE_GROUP branch
+                    at `anim_channels_edit.cc:4154-4180` ALSO handles
+                    SELECT_REPLACE / SELECT_INVERT / SELECT_EXTEND_RANGE
+                    on group headers, but path #35 scoped only the
+                    `children_only` (Shift+Ctrl) variant — plain/Ctrl/
+                    Shift group-header clicks are queued for a future
+                    slice). */}
+                <span
+                  className="truncate flex-1 font-semibold cursor-pointer hover:text-foreground"
+                  title="Shift+Ctrl+click to select all children"
+                  onClick={(e) => {
+                    const isChildrenOnly = (e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey);
+                    if (isChildrenOnly) onApplyGroupChildrenSelect(group.id);
+                  }}
+                >
+                  {group.name}
+                </span>
                 <span className="text-[9px] font-mono opacity-60">{bucket.rows.length}</span>
               </div>
             ) : null}
@@ -3413,29 +3472,41 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
               // at lines 4231-4243; active-elevation gate at line 4247
               // (range never elevates); auto-downgrade at lines 4517-4522.
               //
-              // Shift+Ctrl+click: Blender uses this for `children_only`
-              // (ActionGroup-children select, see keymap line 3853-3854).
-              // Slice 5.V shipped the FCurveGroup datablock but NOT the
-              // group-children select operator, so we still fall through
-              // to whichever modifier wins precedence — SS resolves
-              // Shift+Ctrl as 'range' (Shift comes first in the
-              // ternary). When the group-children select operator
-              // ships (queued path after 5.V), replace the Shift arm
-              // with `e.shiftKey && !e.ctrlKey` and add an explicit
-              // Shift+Ctrl arm wired through `getFCurvesInGroup` →
-              // multi-select dispatch.
+              // Slice 5.BB — Shift+Ctrl+click on an fcurve row now
+              // dispatches `applyGroupChildrenSelect` against the
+              // fcurve's parent group (SS extension over Blender's
+              // group-header-only behavior, see fcurveChannelSelect.js
+              // Deviation 1). Ungrouped fcurves no-op (no parent group
+              // to dispatch against). Closure of the queued-from-5.V
+              // comment that previously suggested
+              // `e.shiftKey && !e.ctrlKey + explicit Shift+Ctrl arm`.
               //
-              // Plain-click also wipes keyform selection on other
-              // channels. Audit-fix MED-B3 (2026-05-16, Slice 5.F dual-
-              // audit): this is an SS UX extension, not a Blender port —
-              // `graph_select.cc:1741`'s `deselect_graph_keys` lives in
-              // `graphkeys_mselect_invoke` (the graph-AREA click path),
-              // not the channel-list path. Blender's
-              // `click_select_channel_fcurve` doesn't touch keyforms.
-              // We keep the wipe because clicking a channel reads as
-              // "switch context, drop the previous keyform picks";
-              // Shift/Ctrl-click preserves the selection for cross-channel
-              // composition.
+              // Modifier resolution (post-5.BB):
+              //   - Shift+Ctrl (no alt)   → children_only (5.BB)
+              //   - Shift (no ctrl/meta)  → 'range' (5.J)
+              //   - Ctrl or Meta (no shift) → 'toggle' (5.F)
+              //   - neither               → 'replace' (5.F)
+              //
+              // Other documented bindings:
+              //   - Plain-click also wipes keyform selection on other
+              //     channels (SS UX extension; audit-fix MED-B3
+              //     2026-05-16, Slice 5.F dual-audit). Blender's
+              //     `click_select_channel_fcurve` doesn't touch
+              //     keyforms; SS treats plain-click as "switch
+              //     context, drop the previous keyform picks";
+              //     Shift/Ctrl-click preserves the selection for
+              //     cross-channel composition.
+              const isChildrenOnly = (e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey);
+              if (isChildrenOnly) {
+                const gid = typeof d.fcurve.groupId === 'string' && d.fcurve.groupId.length > 0
+                  ? d.fcurve.groupId
+                  : null;
+                if (gid !== null) onApplyGroupChildrenSelect(gid);
+                // Ungrouped fcurves: no-op per Blender's
+                // `anim_channels_edit.cc:4511-4515` early-return for
+                // non-group channels.
+                return;
+              }
               const modifier = e.shiftKey
                 ? 'range'
                 : (e.ctrlKey || e.metaKey)
