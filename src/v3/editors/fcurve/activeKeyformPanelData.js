@@ -140,12 +140,18 @@
  * rotation in radians, both displayed as-is). Closure tied to a
  * future parameter-units system.
  *
- * **Deviation 3 — frame field shows milliseconds (not frames).**
- * Blender's "co_ui" property is in frames (FPS-relative); SS's
- * canonical animation time is milliseconds throughout the eval
- * substrate (see [feedback_ms_canonical_animation_time]). The label
- * matches: "Time (ms)" instead of "Key Frame". Closure tied to
- * Phase 5 queued path #7 (SIPO_DRAWTIME seconds-vs-frames toggle).
+ * **Deviation 3 (CLOSED Slice 5.T) — frame field now tracks the
+ * View menu's "Use Timecode" toggle.** Blender's `co_ui` property is
+ * always in frames regardless of `SIPO_DRAWTIME` (only the X-axis
+ * grid changes). SS's Time row label + value flip together with the
+ * toggle: `showSeconds=false` → "Frame" with integer frames at the
+ * effective fps; `showSeconds=true` → "Time (s)" with decimal
+ * seconds. Canonical storage stays ms
+ * (see [feedback_ms_canonical_animation_time]); the display↔parse
+ * layer lives in [fcurveTimeFormat.js](./fcurveTimeFormat.js). The
+ * deviation that remains vs Blender is the field tracking the toggle
+ * (Blender keeps the field in frames always) — see Slice 5.T
+ * deviation 2 in `fcurveTimeFormat.js` for the rationale.
  *
  * **Deviation 4 — default-interpolation sparse-default 'linear'
  * (not Blender's BEZT_IPO_BEZ).** Blender's BezTriple default

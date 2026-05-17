@@ -281,6 +281,28 @@ export const useEditorStore = create((set) => ({
   nodeTreeMode: /** @type {'rig'|'driver'|'animation'} */ ('rig'),
   nodeTreeDriverFallbackId: /** @type {string|null} */ (null),
 
+  /** Animation Phase 5 Slice 5.T — F-Curve editor "show seconds" toggle.
+   *  Mirrors Blender's `SpaceGraph.flag & SIPO_DRAWTIME` bit
+   *  (`reference/blender/source/blender/makesdna/DNA_space_enums.h:293`,
+   *  RNA-exposed as `show_seconds` at
+   *  `reference/blender/source/blender/makesrna/intern/rna_space.cc:7218-7221`
+   *  with label "Use Timecode" and tooltip "Show timing as a timecode
+   *  instead of frames"). Surfaced in the View menu of the FCurve
+   *  header (Blender's `GRAPH_MT_view` at
+   *  `reference/blender/scripts/startup/bl_ui/space_graph.py:240`).
+   *
+   *  When `false`: X-axis ticks render as frame numbers; Time field
+   *  rows in the N-panel are labeled "Frame" with integer frame values.
+   *  When `true`: X-axis ticks render as seconds (e.g. "0.5s"); Time
+   *  field rows are labeled "Time (s)" with float second values.
+   *
+   *  Default `false` (frames) matches Blender's default — SS's prior
+   *  "Time (ms)" / "0.5s" axis labels were themselves a deviation
+   *  documented as Slice 5.Q Dev 3; this slot closes that deviation.
+   *  Underlying canonical storage stays ms regardless of toggle —
+   *  only the display + input-parse layer is affected. */
+  fcurveShowSeconds: false,
+
   /** BFA-002 — Auto-Keying. When true, property changes in animation mode
    *  automatically write keyframes at the playhead. Default `false` to
    *  match Blender (canonical "explicit `K` to insert" path; the red
@@ -661,6 +683,16 @@ export const useEditorStore = create((set) => ({
     if (s.nodeTreeDriverFallbackId === next) return s;
     return { nodeTreeDriverFallbackId: next };
   }),
+
+  // ── FCurveEditor show-seconds toggle (Slice 5.T) ───────────────────
+  /** Set the F-Curve editor's "show seconds" flag. Booleanises the
+   *  input. No-op when the value matches the current state. */
+  setFCurveShowSeconds: (v) => set((s) => {
+    const next = !!v;
+    if (s.fcurveShowSeconds === next) return s;
+    return { fcurveShowSeconds: next };
+  }),
+  toggleFCurveShowSeconds: () => set((s) => ({ fcurveShowSeconds: !s.fcurveShowSeconds })),
 
   // ── Toolset Phase 0 — vertex selection actions ──────────────────────
   //

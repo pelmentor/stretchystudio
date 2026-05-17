@@ -301,6 +301,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
+import { useEditorStore } from '../../../store/editorStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
@@ -343,6 +344,10 @@ import {
 } from './fcurveFooterData.js';
 import { ActiveKeyformPanel } from './ActiveKeyformPanel.jsx';
 import { DriverBanner } from './DriverBanner.jsx';
+import {
+  getEffectiveFps,
+  formatXTickLabel,
+} from './fcurveTimeFormat.js';
 import {
   isFCurveMuted,
   toggleFCurveMute,
@@ -556,6 +561,12 @@ function FCurveFooter({ decoded, activeFCurveId }) {
 }
 
 function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fps, onSeek, onPickActiveByTarget }) {
+  // Slice 5.T — Plot is the surface that paints the X-axis ticks AND
+  // hosts ActiveKeyformPanel. Both need `showSeconds`; subscribing here
+  // (rather than passing through from FCurveEditor) keeps Plot's prop
+  // contract narrow and matches how the existing edit-mode + tool-panel
+  // hooks subscribe directly from Plot's body.
+  const fcurveShowSeconds = useEditorStore((s) => s.fcurveShowSeconds);
   const wrapRef = useRef(null);
   // Slice 5.D: separate ref for the plot-rect (sibling of DriverBanner
   // inside the right-side flex column). ResizeObserver watches THIS ref
@@ -1302,21 +1313,29 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // values are exact -- precision multiplier doesn't apply there.
       if (!useTyped && shiftKey) { dTime *= 0.1; dValue *= 0.1; }
 
-      // Typed override for G. Translates to canvas-frame units:
-      //   - axis 'x' or null: typed = frames on the time axis (default
-      //     to X per Blender's "G → type → axis defaults to X" at
-      //     `transform_input.cc:131-148`). For empty-buffer numericMode
-      //     `typed` is 0 -- modal holds at zero.
+      // Typed override for G. Translates to ms (canonical):
+      //   - axis 'x' or null: typed unit follows the View menu's
+      //     "Use Timecode" toggle (Slice 5.T). When `fcurveShowSeconds`
+      //     is true, typed is decimal seconds and converts via *1000;
+      //     when false, typed is frames at the effective fps and
+      //     converts via *msPerFrame. Default-to-X matches Blender's
+      //     "G → type → axis defaults to X" at
+      //     `transform_input.cc:131-148`. Empty-buffer numericMode
+      //     leaves `typed` at 0 -- modal holds at zero.
       //   - axis 'y': typed = raw value units on the value axis.
-      // Frame-based units (not ms) match the user-visible axis labels;
-      // see file-header "Slice 5.E units" note.
+      // The display unit suffix in `ModalHUD` reads the same flag so
+      // the HUD text matches what the user is typing.
       if (useTyped && kind === 'g') {
         const v = typedFinite ? typed : 0;
         if (axis === 'y') {
           dTime = 0;
           dValue = v;
         } else {
-          dTime = msPerFrame > 0 ? v * msPerFrame : v;
+          if (fcurveShowSeconds) {
+            dTime = v * 1000;
+          } else {
+            dTime = msPerFrame > 0 ? v * msPerFrame : v;
+          }
           dValue = 0;
         }
       }
@@ -2661,13 +2680,23 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
           <text x={PAD_L - 4} y={view.h - PAD_B} textAnchor="end" fontSize={10}
             className="fill-muted-foreground font-mono">{minV.toFixed(2)}</text>
 
-          {[0, 0.33, 0.67, 1].map((p) => (
-            <text key={p}
-              x={view.tx(p * duration)} y={view.h - 4} textAnchor="middle" fontSize={10}
-              className="fill-muted-foreground font-mono">
-              {((p * duration) / 1000).toFixed(1)}s
-            </text>
-          ))}
+          {/* X-axis tick labels — Slice 5.T routes through `formatXTickLabel`
+              so the View menu's "Use Timecode" toggle (Blender's
+              `show_seconds` / `SIPO_DRAWTIME`) switches the labels
+              between frame numbers and seconds. Frame mode uses the
+              effective fps (action.fps overrides global fps), matching
+              `PlaybackControls.jsx` and Blender's per-scene fps source. */}
+          {(() => {
+            const xTickFps = getEffectiveFps(action, fps);
+            const xTickOpts = { showSeconds: fcurveShowSeconds, fps: xTickFps };
+            return [0, 0.33, 0.67, 1].map((p) => (
+              <text key={p}
+                x={view.tx(p * duration)} y={view.h - 4} textAnchor="middle" fontSize={10}
+                className="fill-muted-foreground font-mono">
+                {formatXTickLabel(p * duration, xTickOpts)}
+              </text>
+            ));
+          })()}
 
           {minV < 0 && maxV > 0 ? (
             <line x1={PAD_L} y1={view.ty(0)} x2={view.w - PAD_R} y2={view.ty(0)}
@@ -2722,6 +2751,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             axis={modalInput.state.axis}
             typedBuffer={modalInput.state.typedBuffer}
             numericMode={modalInput.state.numericMode}
+            showSeconds={fcurveShowSeconds}
           />
         ) : null}
         {menu ? (
@@ -2756,6 +2786,8 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             activeFCurveId={activeFCurveId}
             interpolationTypes={INTERPOLATION_TYPES}
             handleTypes={HANDLE_TYPES}
+            showSeconds={fcurveShowSeconds}
+            fps={getEffectiveFps(action, fps)}
           />
         </div>
       ) : null}
@@ -3143,7 +3175,7 @@ function drawKeyframes(ctx, keyforms, sub, view, isActive, isMuted = false, acti
 
 // ── HUD + Menu subcomponents ─────────────────────────────────────────
 
-function ModalHUD({ kind, axis, typedBuffer, numericMode }) {
+function ModalHUD({ kind, axis, typedBuffer, numericMode, showSeconds = false }) {
   // Slice 5.E — surfaces axis-lock + typed-numeric + numericMode in the
   // same visual idiom as the viewport's `ModalTransformOverlay` HUD
   // (`src/v3/shell/ModalTransformOverlay.jsx:655-678`). Both modals
@@ -3156,19 +3188,17 @@ function ModalHUD({ kind, axis, typedBuffer, numericMode }) {
   // HIGH-B1 (2026-05-16) corrected the prior `"axis: X"` SS invention
   // to match Blender exactly.
   const label = kind === 'g' ? 'GRAB' : 'SCALE';
-  // Unit suffix matches the displayed axis labels: X = time (frames),
-  // Y = raw value (no unit). Scale is unitless multiplier.
-  //
-  // SS-deferred (audit MED-B2, 2026-05-16): Blender's Graph Editor
-  // toggles between frame-units and seconds-units via the `SIPO_DRAWTIME`
-  // flag in space settings; `reference/blender/source/blender/editors/
-  // transform/transform_mode_translate.cc:606-608` reads
-  // `display_seconds = (sipo->mode == SIPO_MODE_ANIMATION) && (sipo->flag
-  // & SIPO_DRAWTIME)` and bases the typed-input unit on it. SS hardcodes
-  // frames because we haven't shipped a seconds/frames display-mode
-  // toggle yet (the Animation Editor surfaces only frame numbers); when
-  // the toggle ships, `unit` here should read the same flag.
-  const unit = kind === 's' ? '×' : (axis === 'y' ? '' : 'f');
+  // Unit suffix tracks the View menu's "Use Timecode" toggle
+  // (`fcurveShowSeconds` / Blender's `SIPO_DRAWTIME` at
+  // `reference/blender/source/blender/editors/transform/transform_mode_translate.cc:606-608`
+  // — `display_seconds = (sipo->mode == SIPO_MODE_ANIMATION) && (sipo->flag & SIPO_DRAWTIME)`).
+  // When seconds mode is active the X-axis displays "0.5s" and typed-G
+  // is interpreted as seconds; suffix is 's'. When off (default), X
+  // displays frame numbers and typed-G is frames; suffix is 'f'. Y axis
+  // is raw value (no unit). Scale is unitless multiplier.
+  // Closed Slice 5.T MED-B1 (was: "deferred until SIPO_DRAWTIME toggle
+  // ships").
+  const unit = kind === 's' ? '×' : (axis === 'y' ? '' : (showSeconds ? 's' : 'f'));
   const hasTyped = (typedBuffer ?? '').length > 0;
   return (
     <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none flex items-center gap-2 px-3 py-1 bg-popover/95 border border-border rounded text-[11px] font-mono shadow">

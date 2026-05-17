@@ -24,10 +24,12 @@
  *     parity with the existing T-menu's options. Audit-fix MED-B2
  *     (Slice 5.Q dual-audit 2026-05-17): original cite was off by
  *     one (started on the preceding comment line).
- *   - **Time (ms)** number input — Blender's "Key Frame" / `co_ui[0]`
- *     at `graph_buttons.cc:443-457`. SS labels as "Time (ms)" per the
- *     `feedback_ms_canonical_animation_time` rule (SS canonical unit
- *     is ms throughout the eval substrate).
+ *   - **Time / Frame** number input — Blender's "Key Frame" / `co_ui[0]`
+ *     at `graph_buttons.cc:443-457`. Slice 5.T routes the label + value
+ *     through `fcurveTimeFormat.js`: when `showSeconds` is true the
+ *     row is "Time (s)" with decimal seconds; when false it's "Frame"
+ *     with integer frame numbers at the effective fps. Canonical
+ *     storage stays ms (`feedback_ms_canonical_animation_time`).
  *   - **Value** number input — Blender's `co_ui[1]` at
  *     `graph_buttons.cc:460-475`.
  *
@@ -81,6 +83,11 @@ import { useCallback, useRef, useState } from 'react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import {
+  formatTimeFieldLabel,
+  formatTimeFieldValue,
+  parseTimeFieldValue,
+} from './fcurveTimeFormat.js';
+import {
   resolveActiveKeyformContext,
   wouldEditKeyformValueChange,
   applyEditKeyformValue,
@@ -130,6 +137,8 @@ const EASING_DIRECTIONS = /** @type {const} */ ([
  *   activeFCurveId: string | null,
  *   interpolationTypes: ReadonlyArray<{ key: string, label: string }>,
  *   handleTypes: ReadonlyArray<{ key: string, label: string }>,
+ *   showSeconds: boolean,
+ *   fps: number | null,
  * }} props
  */
 export function ActiveKeyformPanel({
@@ -138,6 +147,8 @@ export function ActiveKeyformPanel({
   activeFCurveId,
   interpolationTypes,
   handleTypes,
+  showSeconds,
+  fps,
 }) {
   // ALL hooks hoisted above any early return per
   // `feedback_hooks_before_early_return`. The empty-state branch
@@ -338,11 +349,15 @@ export function ActiveKeyformPanel({
           </>
         )}
 
-        <FieldRow label="Time (ms)">
+        {/* Slice 5.T — Time row label + display value + parse track the
+            View menu's "Use Timecode" toggle. The canonical store stays
+            in ms (`feedback_ms_canonical_animation_time`); only the
+            display↔parse layer flips. See `fcurveTimeFormat.js`. */}
+        <FieldRow label={formatTimeFieldLabel({ showSeconds })}>
           <NumberInput
-            value={ctx.kf.time}
-            onCommit={onEditFrame}
-            step={1}
+            value={formatTimeFieldValue(ctx.kf.time, { showSeconds, fps })}
+            onCommit={(v) => onEditFrame(parseTimeFieldValue(v, { showSeconds, fps }))}
+            step={showSeconds ? 0.01 : 1}
           />
         </FieldRow>
 
@@ -376,11 +391,11 @@ export function ActiveKeyformPanel({
                 ))}
               </select>
             </FieldRow>
-            <FieldRow label="L Time (ms)">
+            <FieldRow label={formatTimeFieldLabel({ showSeconds, side: 'left' })}>
               <NumberInput
-                value={leftHandle.time}
-                onCommit={(v) => onEditHandleCoord('left', 'time', v)}
-                step={1}
+                value={formatTimeFieldValue(leftHandle.time, { showSeconds, fps })}
+                onCommit={(v) => onEditHandleCoord('left', 'time', parseTimeFieldValue(v, { showSeconds, fps }))}
+                step={showSeconds ? 0.01 : 1}
               />
             </FieldRow>
             <FieldRow label="L Value">
@@ -408,11 +423,11 @@ export function ActiveKeyformPanel({
                 ))}
               </select>
             </FieldRow>
-            <FieldRow label="R Time (ms)">
+            <FieldRow label={formatTimeFieldLabel({ showSeconds, side: 'right' })}>
               <NumberInput
-                value={rightHandle.time}
-                onCommit={(v) => onEditHandleCoord('right', 'time', v)}
-                step={1}
+                value={formatTimeFieldValue(rightHandle.time, { showSeconds, fps })}
+                onCommit={(v) => onEditHandleCoord('right', 'time', parseTimeFieldValue(v, { showSeconds, fps }))}
+                step={showSeconds ? 0.01 : 1}
               />
             </FieldRow>
             <FieldRow label="R Value">

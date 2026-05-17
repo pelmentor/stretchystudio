@@ -28,6 +28,7 @@ import { useMemo } from 'react';
 import { Activity, ChevronDown } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useAnimationStore } from '../../store/animationStore.js';
+import { useEditorStore } from '../../store/editorStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { getActiveSceneAction } from '../../anim/sceneAction.js';
 import {
@@ -43,6 +44,8 @@ const {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } = Dd;
 
@@ -52,6 +55,8 @@ export function FCurveHeader() {
   const project = useProjectStore((s) => s.project);
   const activeActionId = useAnimationStore((s) => s.activeActionId);
   const selection = useSelectionStore((s) => s.items);
+  const fcurveShowSeconds = useEditorStore((s) => s.fcurveShowSeconds);
+  const toggleFCurveShowSeconds = useEditorStore((s) => s.toggleFCurveShowSeconds);
 
   const action = useMemo(
     () => getActiveSceneAction(project, activeActionId),
@@ -95,7 +100,7 @@ export function FCurveHeader() {
             <ChevronDown size={10} className="opacity-50" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[180px]">
+        <DropdownMenuContent align="end" className="min-w-[200px]">
           <DropdownMenuItem
             disabled={!isAvailable('view.frameSelected')}
             onSelect={() => runOperator('view.frameSelected')}
@@ -103,6 +108,21 @@ export function FCurveHeader() {
           >
             Frame Selected <kbd className="ml-auto opacity-60">.</kbd>
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* Blender's GRAPH_MT_view → `layout.prop(st, "show_seconds")`
+              at `reference/blender/scripts/startup/bl_ui/space_graph.py:240`.
+              The RNA prop label is "Use Timecode"
+              (`reference/blender/source/blender/makesrna/intern/rna_space.cc:7220`);
+              SS surfaces the literal label so users coming from Blender
+              find the same string. Tooltip text matches Blender's verbatim. */}
+          <DropdownMenuCheckboxItem
+            checked={fcurveShowSeconds}
+            onCheckedChange={() => toggleFCurveShowSeconds()}
+            className="text-[11px]"
+            title="Show timing as a timecode instead of frames"
+          >
+            Use Timecode
+          </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
