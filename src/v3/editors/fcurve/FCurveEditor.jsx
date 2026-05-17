@@ -302,6 +302,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
+import { usePreferencesStore } from '../../../store/preferencesStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
@@ -1576,7 +1577,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // Slice 5.E — axis-lock + typed-numeric routed through the shared
       // keyEventToAction helper so X/Y/=/digits/Backspace match the
       // viewport modal exactly (single rules-source per Rule №1).
-      const action = keyEventToAction(ev);
+      // Slice 5.U — pass the user's `USER_FLAG_NUMINPUT_ADVANCED`
+      // preference (`reference/blender/source/blender/makesdna/DNA_userdef_types.h:34`)
+      // so a digit/sign/dot keystroke auto-enters numericMode when the
+      // pref is ON. Reads through `getState()` to pick up live changes
+      // without requiring a modal restart (the pref is rarely toggled
+      // mid-modal but read-through is free and avoids stale closures).
+      const numericInputAdvanced = usePreferencesStore.getState().useNumericInputAdvanced;
+      const action = keyEventToAction(ev, { numericInputAdvanced });
       if (action) {
         ev.preventDefault();
         ev.stopPropagation();

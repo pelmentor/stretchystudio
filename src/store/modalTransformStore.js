@@ -78,6 +78,7 @@ import { transformInputReducer } from '../lib/modal/transformInputReducer.js';
  * @property {(args: {kind: TransformKind, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<string, any>}) => void} begin
  * @property {(axis: ('x'|'y'|null)) => void} setAxis
  * @property {(ch: string) => void} appendTyped
+ * @property {(ch: string) => void} appendTypedAuto
  * @property {() => void} popTyped
  * @property {() => void} clearTyped
  * @property {() => void} enterNumericMode
@@ -121,6 +122,11 @@ export const useModalTransformStore = create((set) => ({
    *  leading '-', single '.', '0.' for leading '.') live in
    *  `transformInputReducer`. */
   appendTyped: (ch) => set((state) => transformInputReducer(state, { type: 'appendTyped', ch })),
+
+  /** Slice 5.U — `appendTyped` + `enterNumericMode` atomic. Used by
+   *  callers when the `USER_FLAG_NUMINPUT_ADVANCED` preference is ON.
+   *  See `transformInputReducer.js` module JSDoc. */
+  appendTypedAuto: (ch) => set((state) => transformInputReducer(state, { type: 'appendTypedAuto', ch })),
 
   /** Backspace: drop last char. Pop on an empty buffer with numericMode
    *  set ALSO exits numericMode — see reducer's `popTyped` doc-comment

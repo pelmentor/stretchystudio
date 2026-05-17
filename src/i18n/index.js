@@ -115,6 +115,11 @@ const EN = {
   'prefs.ai':                       'AI features',
   'prefs.ai.enable':                'Enable AI auto-rig (DWPose)',
   'prefs.ai.note':                  'Off hides the AI Auto-Rig button and avoids loading the ~15 MB ONNX runtime + DWPose model. Manual rigging + heuristic skeleton estimation still work.',
+  // Slice 5.U — Blender's `use_numeric_input_advanced` pref. Label +
+  // note quoted verbatim from `rna_userdef.cc:6682-6684`.
+  'prefs.input':                    'Input',
+  'prefs.input.advancedNumeric':    'Default to Advanced Numeric Input',
+  'prefs.input.advancedNumericNote': 'When entering numbers while transforming, default to advanced mode for full math expression evaluation',
 };
 
 // Eagerly register every shipped non-English locale so a user

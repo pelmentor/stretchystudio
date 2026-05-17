@@ -30,6 +30,16 @@ const PE_KEY = 'v3.prefs.proportionalEdit';
 const VLP_KEY = 'v3.prefs.viewLayerPresets';
 const LOM_KEY = 'v3.prefs.lockObjectModes';
 const LTM_KEY = 'v3.prefs.lastToolByMode';
+/** Animation Phase 5 Slice 5.U — `USER_FLAG_NUMINPUT_ADVANCED` port.
+ *  Blender's `User.flag & USER_FLAG_NUMINPUT_ADVANCED` bit
+ *  (`reference/blender/source/blender/makesdna/DNA_userdef_types.h:34`),
+ *  exposed in Python as `user_preferences.inputs.use_numeric_input_advanced`
+ *  (`reference/blender/source/blender/makesrna/intern/rna_userdef.cc:6679-6684`,
+ *  label "Default to Advanced Numeric Input"). When ON, a digit/sign/dot
+ *  keystroke in a modal G/R/S immediately enters numericMode (Blender's
+ *  NUM_EDIT_FULL flip from `numinput.cc:352-365`); when OFF (Blender
+ *  default), the user must press `=` to enter numericMode. */
+const NIA_KEY = 'v3.prefs.useNumericInputAdvanced';
 /** Animation Plan Phase 0.D.0 — eval-engine selector. `'classic'`
  *  (default) routes the viewport tick through chainEval's `evalRig`.
  *  `'depgraph'` routes through `evalProjectFrameViaDepgraph` (Phase
@@ -211,6 +221,16 @@ export const usePreferencesStore = create((set, get) => ({
    *  selection-head changes auto-exit edit mode (the prior SS
    *  behaviour). */
   lockObjectModes: loadBool(LOM_KEY, true),
+
+  /** Slice 5.U — Blender's `USER_FLAG_NUMINPUT_ADVANCED`. Default `false`
+   *  matches Blender's default. Read by FCurveEditor's `keyEventToAction`
+   *  call site and by the viewport+vertex modal overlays' key handlers;
+   *  when ON, the first digit/sign/dot in a modal G/R/S enters numericMode
+   *  atomically (via the reducer's `appendTypedAuto` action) instead of
+   *  requiring an explicit `=` keystroke first. See
+   *  [lib/modal/transformInputReducer.js](../lib/modal/transformInputReducer.js)
+   *  module JSDoc "USER_FLAG_NUMINPUT_ADVANCED — CLOSED Slice 5.U". */
+  useNumericInputAdvanced: loadBool(NIA_KEY, false),
   /** Last-used tool per editMode (`'object' | 'edit' | 'skeleton' |
    *  'blendShape'`). Persisted across sessions so sticky tool choices
    *  (e.g. preferring `add_vertex` over the default `brush` in Edit
@@ -291,6 +311,12 @@ export const usePreferencesStore = create((set, get) => ({
     const next = !!v;
     saveBool(LOM_KEY, next);
     set({ lockObjectModes: next });
+  },
+
+  setUseNumericInputAdvanced(v) {
+    const next = !!v;
+    saveBool(NIA_KEY, next);
+    set({ useNumericInputAdvanced: next });
   },
 
   setProportionalEdit(partial) {

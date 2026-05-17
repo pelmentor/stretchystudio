@@ -204,6 +204,45 @@ const fakePayload = {
     'Audit: reset clears numericMode');
 }
 
+// ── Slice 5.U — `appendTypedAuto` store action ───────────────────────
+// Mirror of the reducer's atomic-action contract: a single dispatch
+// both appends the char AND flips numericMode in one tick. Validates
+// the store wrapper exposes the same atomicity as the underlying
+// reducer (caller's imperative read of state.numericMode immediately
+// after dispatch sees `true`, not `false`).
+{
+  useModalTransformStore.getState().begin(fakePayload);
+  assert(useModalTransformStore.getState().numericMode === false,
+    '5.U: begin seeds numericMode false');
+
+  // Plain digit + auto → buffer appended AND numericMode flipped
+  useModalTransformStore.getState().appendTypedAuto('5');
+  const after = useModalTransformStore.getState();
+  assert(after.typedBuffer === '5', '5.U: appendTypedAuto digit appended');
+  assert(after.numericMode === true, '5.U: appendTypedAuto flipped numericMode atomically');
+
+  // Subsequent appendTypedAuto stays in numericMode (idempotent on flip)
+  useModalTransformStore.getState().appendTypedAuto('3');
+  const after2 = useModalTransformStore.getState();
+  assert(after2.typedBuffer === '53', '5.U: appendTypedAuto chains buffer');
+  assert(after2.numericMode === true, '5.U: numericMode stays on after second appendTypedAuto');
+
+  // Invalid char: no flip, no buffer change
+  useModalTransformStore.getState().begin(fakePayload);
+  useModalTransformStore.getState().appendTypedAuto('a');
+  const afterBad = useModalTransformStore.getState();
+  assert(afterBad.typedBuffer === '', '5.U: appendTypedAuto invalid char no buffer change');
+  assert(afterBad.numericMode === false, '5.U: appendTypedAuto invalid char no flip');
+
+  // Rejected sign mid-buffer: no flip
+  useModalTransformStore.getState().begin(fakePayload);
+  useModalTransformStore.getState().appendTyped('1');
+  useModalTransformStore.getState().appendTypedAuto('-');
+  const afterReject = useModalTransformStore.getState();
+  assert(afterReject.typedBuffer === '1', '5.U: appendTypedAuto rejected sign mid-stream');
+  assert(afterReject.numericMode === false, '5.U: appendTypedAuto rejected sign no flip');
+}
+
 console.log(`\nmodalTransformTyped: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');

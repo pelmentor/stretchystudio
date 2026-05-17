@@ -30,7 +30,7 @@ import { Slider } from '../../components/ui/slider.jsx';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../../components/ui/select.jsx';
-import { Sun, Moon, Monitor, Palette, Settings2, Keyboard, Cpu, Languages } from 'lucide-react';
+import { Sun, Moon, Monitor, Palette, Settings2, Keyboard, Cpu, Languages, Calculator } from 'lucide-react';
 import { useTheme, AVAILABLE_FONTS } from '../../contexts/ThemeProvider.jsx';
 import { lightThemePresets, darkThemePresets } from '../../lib/themePresets.js';
 import { useState } from 'react';
@@ -49,6 +49,8 @@ export function PreferencesModal({ open, onOpenChange }) {
   const [keymapOpen, setKeymapOpen] = useState(false);
   const mlEnabled = usePreferencesStore((s) => s.mlEnabled);
   const setMlEnabled = usePreferencesStore((s) => s.setMlEnabled);
+  const useNumericInputAdvanced = usePreferencesStore((s) => s.useNumericInputAdvanced);
+  const setUseNumericInputAdvanced = usePreferencesStore((s) => s.setUseNumericInputAdvanced);
   const locale = useI18n((s) => s.locale);
   const setLocale = useI18n((s) => s.setLocale);
 
@@ -88,6 +90,9 @@ export function PreferencesModal({ open, onOpenChange }) {
     ai:                  useT('prefs.ai'),
     aiEnable:            useT('prefs.ai.enable'),
     aiNote:              useT('prefs.ai.note'),
+    input:               useT('prefs.input'),
+    inputAdvNumeric:     useT('prefs.input.advancedNumeric'),
+    inputAdvNumericNote: useT('prefs.input.advancedNumericNote'),
   };
 
   return (
@@ -213,6 +218,35 @@ export function PreferencesModal({ open, onOpenChange }) {
                 </span>
                 <span className="text-[10px] text-muted-foreground leading-snug">
                   {labels.aiNote}
+                </span>
+              </span>
+            </label>
+          </Section>
+
+          {/* Slice 5.U — Blender's `use_numeric_input_advanced` pref
+              (`reference/blender/source/blender/makesrna/intern/rna_userdef.cc:6679-6684`).
+              Label + description quoted verbatim from Blender's RNA def
+              ("Default to Advanced Numeric Input" / "When entering numbers
+              while transforming, default to advanced mode for full math
+              expression evaluation"). SS doesn't yet evaluate math
+              expressions (parseTyped is `Number(buf)`); the SS effect is
+              that a digit/sign/dot keystroke in a modal G/R/S enters
+              numericMode atomically — see 5.U close-out Deviation 1. */}
+          <Section label={labels.input}>
+            <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useNumericInputAdvanced}
+                onChange={(e) => setUseNumericInputAdvanced(e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 rounded border border-border"
+              />
+              <span className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Calculator size={12} className="text-muted-foreground" />
+                  {labels.inputAdvNumeric}
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-snug">
+                  {labels.inputAdvNumericNote}
                 </span>
               </span>
             </label>

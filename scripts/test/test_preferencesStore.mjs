@@ -160,6 +160,28 @@ function get() { return usePreferencesStore.getState(); }
   assert(get().lockObjectModes === true, 'setLockObjectModes("on"): coerced to true');
 }
 
+// ── useNumericInputAdvanced (Slice 5.U — Blender's USER_FLAG_NUMINPUT_ADVANCED) ──
+{
+  // Default is false (matches Blender's default).
+  const initial = get().useNumericInputAdvanced;
+  assert(typeof initial === 'boolean', 'useNumericInputAdvanced: type bool');
+  assert(initial === false, 'useNumericInputAdvanced: default false (Blender default)');
+
+  get().setUseNumericInputAdvanced(true);
+  assert(get().useNumericInputAdvanced === true, 'setUseNumericInputAdvanced(true): stored');
+  assert(_store.get('v3.prefs.useNumericInputAdvanced') === 'true',
+    'setUseNumericInputAdvanced: persisted to localStorage');
+
+  get().setUseNumericInputAdvanced(false);
+  assert(get().useNumericInputAdvanced === false, 'setUseNumericInputAdvanced(false): stored');
+
+  // Coerces non-bool inputs (mirror setMlEnabled / setLockObjectModes)
+  get().setUseNumericInputAdvanced(1);
+  assert(get().useNumericInputAdvanced === true, 'setUseNumericInputAdvanced(1): coerced to true');
+  get().setUseNumericInputAdvanced('');
+  assert(get().useNumericInputAdvanced === false, 'setUseNumericInputAdvanced(""): coerced to false');
+}
+
 // ── lastToolByMode: persistence per editMode ──────────────────────
 // Slot key 'mesh' renamed to 'edit' on 2026-05-07 (Blender universal
 // OB_MODE_EDIT taxonomy). preferencesStore normalises legacy 'mesh'

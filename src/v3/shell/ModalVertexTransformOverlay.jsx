@@ -353,6 +353,14 @@ export function ModalVertexTransformOverlay() {
       )) {
         e.preventDefault();
         e.stopPropagation();
+        // Slice 5.U deviation: vertex modal has NO `numericMode` slot
+        // in `modalVertexTransformStore`, so Blender's
+        // `USER_FLAG_NUMINPUT_ADVANCED` auto-enable behavior
+        // (`reference/blender/source/blender/editors/util/numinput.cc:352-365`)
+        // has nothing to enter. The pref is therefore deliberately NOT
+        // read here. If a future slice adds a numericMode flow to the
+        // vertex store, this site should branch on the pref like
+        // `ModalTransformOverlay.jsx` does.
         appendTyped(e.key);
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);

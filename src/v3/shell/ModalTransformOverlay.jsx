@@ -152,7 +152,7 @@ export function ModalTransformOverlay() {
     // These refs are captured by the inner handlers and stay valid
     // for the lifetime of THIS modal session.
     const {
-      setAxis, appendTyped, popTyped,
+      setAxis, appendTyped, appendTypedAuto, popTyped,
       enterNumericMode, exitNumericMode, setLiveDelta,
       commit, cancel,
     } = useModalTransformStore.getState();
@@ -547,7 +547,20 @@ export function ModalTransformOverlay() {
       )) {
         e.preventDefault();
         e.stopPropagation();
-        appendTyped(e.key);
+        // Slice 5.U — `USER_FLAG_NUMINPUT_ADVANCED`
+        // (`reference/blender/source/blender/makesdna/DNA_userdef_types.h:34`,
+        // `numinput.cc:352-365`): when the pref is ON the first eligible
+        // char enters numericMode atomically (Blender flips NUM_EDIT_FULL
+        // on the same tick); when OFF the user must press `=` explicitly.
+        // Read-through `getState()` so the user can toggle Preferences
+        // and have it take effect next keystroke without restarting the
+        // modal session.
+        const advanced = usePreferencesStore.getState().useNumericInputAdvanced;
+        if (advanced) {
+          appendTypedAuto(e.key);
+        } else {
+          appendTyped(e.key);
+        }
         const cur = lastMouse.current;
         applyDelta(cur.x, cur.y, e.shiftKey, ctrlHeldRef.current);
         return;

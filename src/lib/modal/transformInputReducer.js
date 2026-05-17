@@ -48,10 +48,10 @@
  *     holding zero until Esc-cancel. SS allows one extra Backspace as
  *     an escape hatch.
  *
- * # SS-deferred (audit-fix MED-B1, 2026-05-16)
+ * # USER_FLAG_NUMINPUT_ADVANCED — CLOSED Slice 5.U (2026-05-17)
  *
- * Blender's `numinput.cc:353-365` AUTO-enables `NUM_EDIT_FULL` when the
- * first digit / operator character arrives -- BUT ONLY when the user
+ * Blender's `numinput.cc:352-365` AUTO-enables `NUM_EDIT_FULL` when a
+ * digit / operator character arrives -- BUT ONLY when the user
  * preference `USER_FLAG_NUMINPUT_ADVANCED` (`DNA_userdef_types.h:34`)
  * is set:
  *
@@ -68,15 +68,39 @@
  *   }
  * ```
  *
- * SS doesn't model `USER_FLAG_NUMINPUT_ADVANCED` as a preference, so
- * `appendTyped` only accumulates into `typedBuffer` -- the user must
- * press `=` explicitly to enter `numericMode`. With the pref OFF (the
- * Blender default before the user opts in), Blender behaves the same
- * way: digits accumulate without flipping NUM_EDIT_FULL. SS is therefore
- * byte-faithful to the DEFAULT path; the advanced-pref auto-enable is
- * a documented omission rather than a silent bug. A follow-on slice
- * could add a `preferences.numericInputAdvanced` toggle and dispatch
- * an extra `'enterNumericMode'` from `appendTyped` when on.
+ * SS now models this preference as `preferencesStore.useNumericInputAdvanced`
+ * (RNA name `use_numeric_input_advanced` at
+ * `reference/blender/source/blender/makesrna/intern/rna_userdef.cc:6679-6684`,
+ * label "Default to Advanced Numeric Input"). When the pref is ON, a
+ * digit / sign / dot keystroke produces the `'appendTypedAuto'` action
+ * which appends the char AND enters `numericMode` atomically — same
+ * semantics as Blender setting `NUM_EDIT_FULL` on the first eligible
+ * char. When the pref is OFF (Blender default), the keystroke produces
+ * `'appendTyped'` which only accumulates the char; the user must press
+ * `=` explicitly to enter `numericMode`.
+ *
+ * Two SS deviations from Blender's exact `numinput.cc:352-365` block
+ * are intentional:
+ *
+ *   1. **Narrower char-acceptance set.** Blender's strchr() at
+ *      `numinput.cc:357` includes `@%^&*+/{}()[]<>|` operators that
+ *      auto-enable NUM_EDIT_FULL for math expression entry. SS's
+ *      `appendTyped`/`appendTypedAuto` validator only accepts digits,
+ *      `.`, and a leading `-` because `parseTyped` is `Number(buf)`
+ *      and doesn't yet evaluate expressions. Closure tied to a future
+ *      "math-expression numeric input" slice that ports the expression
+ *      evaluator from `numinput.cc:editstr_eval`.
+ *   2. **No Ctrl/Alt modifier gate.** Blender's `numinput.cc:356`
+ *      suppresses the auto-flip when `((event->modifier & (KM_CTRL |
+ *      KM_ALT)) == 0)` is false (Ctrl+digit or Alt+digit does NOT
+ *      flip NUM_EDIT_FULL). SS's `keyEventToAction` and
+ *      `ModalTransformOverlay`'s inline handler do NOT check Ctrl/Alt
+ *      on the digit branch — a hypothetical Ctrl+5 in a modal would
+ *      still emit `appendTypedAuto`. The gap is low-impact in practice
+ *      because browser-level Ctrl+digit chords (tab switching, etc.)
+ *      are intercepted before reaching the modal; closure would be a
+ *      one-line guard in each caller (and a `numericInputAdvanced`-
+ *      gated branch in `keyEventToAction`).
  *
  * # API
  *
@@ -105,6 +129,7 @@
  * @typedef {{type:'toggleAxis', axis:'x'|'y'}
  *   | {type:'setAxis', axis:AxisLock}
  *   | {type:'appendTyped', ch:string}
+ *   | {type:'appendTypedAuto', ch:string}
  *   | {type:'popTyped'}
  *   | {type:'clearTyped'}
  *   | {type:'enterNumericMode'}
@@ -119,6 +144,10 @@
  * @property {boolean} [axisAllowed]  - default true; set false for contexts
  *   that don't support axis lock (none exist today, but the option keeps the
  *   helper honest about its assumptions).
+ * @property {boolean} [numericInputAdvanced]  - default false. When true,
+ *   digit / sign / dot keys produce `'appendTypedAuto'` (append + enter
+ *   numericMode atomic) instead of `'appendTyped'`. Mirrors Blender's
+ *   `USER_FLAG_NUMINPUT_ADVANCED` semantics from `numinput.cc:352-365`.
  */
 
 /** @type {Readonly<TransformInputState>} */
@@ -172,6 +201,43 @@ export function transformInputReducer(state, action) {
         return { ...state, typedBuffer: buf + ch };
       }
       return state;
+    }
+    case 'appendTypedAuto': {
+      // Slice 5.U — `appendTyped` + `enterNumericMode` atomic. Mirrors
+      // Blender's `numinput.cc:352-365` block: when
+      // `USER_FLAG_NUMINPUT_ADVANCED` is set, the first eligible char
+      // both accumulates AND flips NUM_EDIT_FULL in one tick. Atomicity
+      // matters because the imperative `applyDelta` reads stateRef
+      // immediately after dispatch — a two-step dispatch (append then
+      // enter) would leave the first tick reading numericMode=false.
+      //
+      // Char validation is the same as `appendTyped` — invalid chars
+      // are no-ops and DO NOT flip numericMode (matches Blender, where
+      // the strchr() guard at `numinput.cc:357` runs before the
+      // NUM_EDIT_FULL flip at `numinput.cc:361`). Each rejection path
+      // returns `state` directly, so the post-branch return always sees
+      // a fresh nextBuf and can unconditionally set numericMode: true.
+      // Audit-fix MED-A1 (5.U dual-audit): removed an unreachable
+      // `if (nextBuf === buf && state.numericMode) return state;` guard
+      // — the per-branch returns above already guarantee no-flip on
+      // rejection, and the guard was dead-code (no valid char path
+      // leaves nextBuf === buf).
+      const ch = action.ch;
+      if (typeof ch !== 'string' || ch.length !== 1) return state;
+      const buf = state.typedBuffer ?? '';
+      let nextBuf;
+      if (ch === '-') {
+        if (buf.length > 0) return state;
+        nextBuf = '-';
+      } else if (ch === '.') {
+        if (buf.includes('.')) return state;
+        nextBuf = buf.length === 0 ? '0.' : buf + '.';
+      } else if (ch >= '0' && ch <= '9') {
+        nextBuf = buf + ch;
+      } else {
+        return state;
+      }
+      return { ...state, typedBuffer: nextBuf, numericMode: true };
     }
     case 'popTyped': {
       const next = (state.typedBuffer ?? '').slice(0, -1);
@@ -235,7 +301,7 @@ export function parseTyped(buf) {
  * @returns {TransformInputAction | null}
  */
 export function keyEventToAction(event, options = {}) {
-  const { axisAllowed = true } = options;
+  const { axisAllowed = true, numericInputAdvanced = false } = options;
 
   if (event.key === 'Escape') return { type: 'cancel' };
   if (event.key === 'Enter') return { type: 'commit' };
@@ -264,7 +330,12 @@ export function keyEventToAction(event, options = {}) {
     || event.key === '-'
     || event.key === '.'
   )) {
-    return { type: 'appendTyped', ch: event.key };
+    // Slice 5.U — when `USER_FLAG_NUMINPUT_ADVANCED` is set, dispatch
+    // the atomic `appendTypedAuto` so a single keystroke both
+    // accumulates AND flips numericMode. See module JSDoc.
+    return numericInputAdvanced
+      ? { type: 'appendTypedAuto', ch: event.key }
+      : { type: 'appendTyped', ch: event.key };
   }
 
   return null;

@@ -248,6 +248,85 @@ eq(keyEventToAction(fakeKey({ key: 'ArrowLeft' })), null, "'ArrowLeft' → null"
 // Multi-char `key` strings (e.g. 'F1') → null
 eq(keyEventToAction(fakeKey({ key: 'F1' })), null, "'F1' → null");
 
+// ── reducer: appendTypedAuto (Slice 5.U) ──────────────────────────────
+{
+  // Plain digit + auto: appends AND enters numericMode atomically
+  const s1 = transformInputReducer(INITIAL_STATE, { type: 'appendTypedAuto', ch: '5' });
+  eq(s1.typedBuffer, '5', 'appendTypedAuto: digit appended');
+  eq(s1.numericMode, true, 'appendTypedAuto: numericMode flipped on by atomic action');
+
+  // Sign + auto: same buffer rule as appendTyped, also enters numericMode
+  const s2 = transformInputReducer(INITIAL_STATE, { type: 'appendTypedAuto', ch: '-' });
+  eq(s2.typedBuffer, '-', "appendTypedAuto '-': leading sign accepted");
+  eq(s2.numericMode, true, "appendTypedAuto '-': numericMode flipped on");
+
+  // Leading dot + auto: yields '0.'
+  const s3 = transformInputReducer(INITIAL_STATE, { type: 'appendTypedAuto', ch: '.' });
+  eq(s3.typedBuffer, '0.', "appendTypedAuto leading '.': yields '0.'");
+  eq(s3.numericMode, true, "appendTypedAuto leading '.': numericMode flipped on");
+
+  // Invalid char: NO mutation, numericMode stays whatever it was
+  const sBad = transformInputReducer(INITIAL_STATE, { type: 'appendTypedAuto', ch: 'a' });
+  eq(sBad, INITIAL_STATE, 'appendTypedAuto invalid char: same identity (no flip)');
+
+  // Multi-char: rejected (same as appendTyped)
+  const sMulti = transformInputReducer(INITIAL_STATE, { type: 'appendTypedAuto', ch: '10' });
+  eq(sMulti, INITIAL_STATE, 'appendTypedAuto multi-char: same identity');
+
+  // Sign mid-buffer: rejected; no flip either (matches appendTyped)
+  const s4Pre = transformInputReducer(INITIAL_STATE, { type: 'appendTyped', ch: '1' });
+  const s4 = transformInputReducer(s4Pre, { type: 'appendTypedAuto', ch: '-' });
+  eq(s4.typedBuffer, '1', "appendTypedAuto '-' mid-stream: rejected");
+  eq(s4.numericMode, false, "appendTypedAuto '-' mid-stream: numericMode does NOT flip on rejection");
+
+  // Second dot: rejected; no flip either
+  const s5Pre = transformInputReducer(INITIAL_STATE, { type: 'appendTyped', ch: '1' });
+  const s5Pre2 = transformInputReducer(s5Pre, { type: 'appendTyped', ch: '.' });
+  const s5 = transformInputReducer(s5Pre2, { type: 'appendTypedAuto', ch: '.' });
+  eq(s5.typedBuffer, '1.', "appendTypedAuto second '.': rejected");
+  eq(s5.numericMode, false, "appendTypedAuto second '.': numericMode does NOT flip on rejection");
+
+  // Atomicity: a single dispatch yields BOTH transitions (caller's
+  // imperative read of stateRef sees numericMode=true on first tick)
+  let atomic = INITIAL_STATE;
+  atomic = transformInputReducer(atomic, { type: 'appendTypedAuto', ch: '7' });
+  eq(atomic.typedBuffer, '7', 'atomicity: buffer post-dispatch');
+  eq(atomic.numericMode, true, 'atomicity: numericMode post-dispatch (same tick)');
+
+  // Already in numericMode: only the buffer changes
+  const sPre = { ...INITIAL_STATE, numericMode: true };
+  const sPost = transformInputReducer(sPre, { type: 'appendTypedAuto', ch: '3' });
+  eq(sPost.typedBuffer, '3', 'appendTypedAuto in numericMode: buffer appended');
+  eq(sPost.numericMode, true, 'appendTypedAuto in numericMode: stays on');
+}
+
+// ── keyEventToAction with `numericInputAdvanced` (Slice 5.U) ──────────
+{
+  // OFF (default) -> appendTyped
+  deepEq(keyEventToAction(fakeKey({ key: '5' })),
+    { type: 'appendTyped', ch: '5' }, 'pref OFF: digit → appendTyped');
+  deepEq(keyEventToAction(fakeKey({ key: '5' }), { numericInputAdvanced: false }),
+    { type: 'appendTyped', ch: '5' }, 'pref OFF (explicit): digit → appendTyped');
+
+  // ON -> appendTypedAuto for digit / sign / dot
+  deepEq(keyEventToAction(fakeKey({ key: '5' }), { numericInputAdvanced: true }),
+    { type: 'appendTypedAuto', ch: '5' }, 'pref ON: digit → appendTypedAuto');
+  deepEq(keyEventToAction(fakeKey({ key: '-' }), { numericInputAdvanced: true }),
+    { type: 'appendTypedAuto', ch: '-' }, 'pref ON: sign → appendTypedAuto');
+  deepEq(keyEventToAction(fakeKey({ key: '.' }), { numericInputAdvanced: true }),
+    { type: 'appendTypedAuto', ch: '.' }, 'pref ON: dot → appendTypedAuto');
+
+  // ON does NOT change non-digit routings (X/Y/=/Backspace stay normal)
+  deepEq(keyEventToAction(fakeKey({ key: 'x', code: 'KeyX' }), { numericInputAdvanced: true }),
+    { type: 'toggleAxis', axis: 'x' }, 'pref ON: X still toggles axis');
+  deepEq(keyEventToAction(fakeKey({ key: '=' }), { numericInputAdvanced: true }),
+    { type: 'enterNumericMode' }, 'pref ON: = still enters numericMode (idempotent with auto)');
+  deepEq(keyEventToAction(fakeKey({ key: 'Backspace' }), { numericInputAdvanced: true }),
+    { type: 'popTyped' }, 'pref ON: Backspace still pops');
+  eq(keyEventToAction(fakeKey({ key: 'a' }), { numericInputAdvanced: true }),
+    null, 'pref ON: non-handled key still null');
+}
+
 // ── End-to-end: simulate a typed "12.5" then commit ──────────────────
 {
   let state = INITIAL_STATE;
