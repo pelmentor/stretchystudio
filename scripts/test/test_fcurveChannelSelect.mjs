@@ -27,6 +27,10 @@ import {
   wouldChannelDeleteSelectedChange,
   isFCurveSelected,
 } from '../../src/anim/fcurveChannelSelect.js';
+import {
+  clearActiveFCurves,
+  isFCurveActive,
+} from '../../src/anim/fcurveActive.js';
 
 let passed = 0;
 let failed = 0;
@@ -906,6 +910,54 @@ assert(wouldChannelDeleteSelectedChange({ fcurves: [] }) === false, 'wouldDelete
   wouldChannelDeleteSelectedChange(a);
   assert(a.fcurves.length === 1, 'preflight does not mutate');
   assert(a.fcurves[0].selected === true, 'preflight does not mutate fields');
+}
+
+// ── Slice 5.Z — `clearActive` wire-through integration ────────────
+// Verify the dispatcher's contract: when applyChannelSelectAll returns
+// clearActive=true, calling clearActiveFCurves(a) drops the fc.active
+// flag. The FCurveEditor dispatcher (applyChannelSelectAllOp) does this
+// inside the same update() closure, closing Slice 5.K's MED-A1
+// deviation that was unblocked by Slice 5.X's persisted fc.active bit.
+{
+  // mode 'clear' — active is in scope + ends up deselected → clearActive=true
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, active: true, keyforms: [] },
+      { id: 'b', selected: true, keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelectAll(a, 'clear', { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === true, '5.Z: clear → clearActive=true');
+  assert(isFCurveActive(a.fcurves[0]) === true, '5.Z: active still on a before dispatcher forwards');
+  // Dispatcher would now run `if (decision.clearActive) clearActiveFCurves(a)`
+  clearActiveFCurves(a);
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.Z: after wire-through, a is no longer active');
+  assert(a.fcurves[0].active === undefined, '5.Z: fc.active sparse-deleted (not set to false)');
+}
+{
+  // mode 'add' — active stays selected → clearActive=false → dispatcher does NOT clear
+  const a = {
+    fcurves: [
+      { id: 'a', selected: false, active: true, keyforms: [] },
+      { id: 'b', keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelectAll(a, 'add', { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === false, '5.Z: add → clearActive=false (active gets selected, not erased)');
+  assert(isFCurveActive(a.fcurves[0]) === true, '5.Z: active preserved on add (no dispatcher clear)');
+}
+{
+  // mode 'invert' — active flips from selected to deselected → clearActive=true
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, active: true, keyforms: [] },
+      { id: 'b', keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelectAll(a, 'invert', { orderedIds: ['a', 'b'], activeFCurveId: 'a' });
+  assert(r.clearActive === true, '5.Z: invert (active flips off) → clearActive=true');
+  clearActiveFCurves(a);
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.Z: dispatcher wire-through clears active');
 }
 
 // ─────────────────────────────────────────────────────────────────────

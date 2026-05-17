@@ -229,23 +229,21 @@
  *
  * # SS deviations from Blender (Slice 5.K)
  *
- *   - **`clearActive` is computed but NOT forwarded today.** Audit-fix
- *     MED-A1 (Slice 5.K dual-audit 2026-05-17): the helper returns
- *     `clearActive: boolean` matching Blender's per-channel rule, but
- *     the FCurveEditor caller does NOT wire it through to
- *     `selectionStore` because `activeFCurveId` is derived from the
- *     param/node selection there — clearing it would deselect the
- *     active param in the param editor and drop the keyform editor's
- *     active-row context (cross-editor side effect). The resulting
- *     visible divergence: after Alt+A or A-resolves-to-clear, the
- *     sidebar's active row STAYS highlighted with `bg-accent/60`
- *     because the derived `activeFCurveId` is unchanged. In Blender
- *     the highlight disappears (FCURVE_ACTIVE bit was cleared).
- *     This is a known UX gap deferred to the day SS grows a per-
- *     fcurve ACTIVE slot independent of the param/node store
- *     (see the `project_ss_is_embryo` memory). An earlier draft of
- *     this note called the SS behavior "functionally identical" —
- *     that was wrong; the divergence is visible.
+ *   - **`clearActive` decision wiring — RESOLVED 2026-05-17 (Slice 5.Z).**
+ *     This deviation existed because pre-Slice 5.X, SS had no per-fcurve
+ *     ACTIVE slot — `activeFCurveId` was derived from the param/node
+ *     selection store, so clearing it would have had cross-editor side
+ *     effects (deselect the active param in the param editor, drop the
+ *     keyform editor's active-row context). Slice 5.X shipped persisted
+ *     `fc.active` (sparse, EXCLUSIVE) via
+ *     [src/anim/fcurveActive.js](./fcurveActive.js), splitting the
+ *     ACTIVE concept from the global selection store. Slice 5.Z
+ *     (FCurveEditor.jsx ~2065) now forwards `decision.clearActive` to
+ *     `clearActiveFCurves(action)` inside the same `update()` closure
+ *     so the sidebar's `bg-accent/60` highlight drops the moment bulk
+ *     select-all clears the active channel's selection. Matches
+ *     Blender's per-channel `anim_channels_edit.cc:728-732` ("Only
+ *     erase the ACTIVE flag when deselecting") at the bulk-op level.
  *   - **No `OPTYPE_REGISTER | OPTYPE_UNDO` flags ported.** Bulk
  *     select-all skips the undo stack — matches Slice 5.F's
  *     `skipHistory: true` for click-select. Channel-list selection

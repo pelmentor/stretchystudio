@@ -312,7 +312,7 @@ import {
 } from '../../../anim/animationFCurve.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
-import { getActiveFCurve, setActiveFCurve } from '../../../anim/fcurveActive.js';
+import { getActiveFCurve, setActiveFCurve, clearActiveFCurves } from '../../../anim/fcurveActive.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import {
   applyKeyformDrag,
@@ -2051,6 +2051,19 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // `onKeyDown` references it; `const` is TDZ-blocked at the
   // useCallback evaluation point, so co-locating with the other channel
   // helpers below the keymap would crash with "used before declaration".
+  // Slice 5.Z — forward `applyChannelSelectAll`'s `clearActive` decision
+  // into Slice 5.X's `clearActiveFCurves(action)` so the FCURVE_ACTIVE
+  // bit drops when bulk select-all clears the active channel's
+  // selection. Closes Slice 5.K's MED-A1 deviation ("`clearActive` is
+  // computed but NOT forwarded today" — that gap was tied to the
+  // pre-5.X derived-active-from-param-selection design; Slice 5.X
+  // shipped the per-fcurve persisted ACTIVE bit, unblocking this
+  // wire-through). The helper returns `clearActive=true` per Blender's
+  // per-channel rule at `anim_channels_edit.cc:728-732` ("Only erase
+  // the ACTIVE flag when deselecting") when the active channel ends up
+  // deselected in scope; we now mirror that by calling
+  // `clearActiveFCurves(a)` inside the same `update()` closure so the
+  // sidebar's `bg-accent/60` highlight drops in lockstep.
   const applyChannelSelectAllOp = useCallback((mode) => {
     let decision = { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
     update((p) => {
@@ -2060,6 +2073,9 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         orderedIds: decoded.map((d) => d.fcurve.id),
         activeFCurveId,
       });
+      if (decision.clearActive) {
+        clearActiveFCurves(a);
+      }
     }, { skipHistory: true });
     return decision;
   }, [activeActionId, update, decoded, activeFCurveId]);
