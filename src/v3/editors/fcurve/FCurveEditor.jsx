@@ -341,6 +341,7 @@ import {
   formatFCurveChannelCounts,
   formatActiveFCurveLabel,
 } from './fcurveFooterData.js';
+import { ActiveKeyformPanel } from './ActiveKeyformPanel.jsx';
 import {
   isFCurveMuted,
   toggleFCurveMute,
@@ -587,6 +588,18 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [boxSelect, setBoxSelect] = useState(null);
   /** @type {[null | {kind:'handleType'|'interpolation'|'extrapolation', x:number, y:number}, Function]} */
   const [menu, setMenu] = useState(null);
+
+  // Slice 5.Q — N-panel visibility (right-side panel hosting the
+  // Active Keyframe editor). Mirrors Blender's
+  // `space_data.show_region_ui` toggle bound to N at
+  // `blender_default.py:1958-1962` (`_template_space_region_type_toggle`
+  // with `sidebar_key={"type": 'N', "value": 'PRESS'}` in
+  // `km_graph_editor_generic`). Default false — Blender's N-panel
+  // also defaults to hidden on a fresh editor instance.
+  // Audit note (Slice 5.Q dual-audit): local React state means
+  // visibility resets on editor unmount. Acceptable per the Blender
+  // analog being `ARegion->flag` view state (not persisted in saves).
+  const [npanelOpen, setNpanelOpen] = useState(false);
 
   // Slice 5.E — shared axis-lock + typed numeric input state. Routes
   // through `transformInputReducer` (the same reducer the viewport
@@ -2389,6 +2402,30 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       applyRevealOp();
       return;
     }
+    // Slice 5.Q — N key toggles the N-panel (right-side sidebar).
+    //
+    // Blender keymap (`blender_default.py:1958-1962` =
+    // `km_graph_editor_generic` window region) registers via the
+    // shared template `_template_space_region_type_toggle` with
+    // `sidebar_key={"type": 'N', "value": 'PRESS'}`. The template
+    // emits `wm.context_toggle` against
+    // `space_data.show_region_ui` (the N-panel visibility flag).
+    //
+    // Modifier requirements (verified against
+    // `_template_space_region_type_toggle` at
+    // `blender_default.py:355-369` — no shift/ctrl/alt in the
+    // `sidebar_key` keymap dict): bare N, no modifiers.
+    //
+    // Fires regardless of `regionHoverRef.current` — Blender's
+    // template is registered at the WINDOW region level
+    // (`km_graph_editor_generic`'s region_type='WINDOW') which
+    // matches both the timeline and the sidebar. SS does the same:
+    // no region gating on the N key.
+    if (e.code === 'KeyN' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      setNpanelOpen((v) => !v);
+      return;
+    }
     // Slice 5.O — bulk channel-mute keymap (sidebar region only).
     //
     // Blender keymap entries at `blender_default.py:3876-3878`:
@@ -2685,6 +2722,26 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         ) : null}
         </div>
       </div>
+
+      {/* Slice 5.Q — N-panel (right-side sidebar). Toggled by N key
+          on the FCurveEditor wrap div. Width fixed at 256px when
+          shown; hidden entirely when closed (no animation — Blender's
+          N-panel toggle is also instant). Future slices can host
+          additional panel sections below ActiveKeyformPanel — the
+          NPanel component is the host for the whole right sidebar.
+          Today only ActiveKeyformPanel mounts; future panels
+          (modifiers, view options, etc.) stack vertically inside the
+          same scrollable column. */}
+      {npanelOpen ? (
+        <div className="w-64 shrink-0 border-l bg-card overflow-y-auto h-full">
+          <ActiveKeyformPanel
+            action={action}
+            activeActionId={activeActionId}
+            activeFCurveId={activeFCurveId}
+            interpolationTypes={INTERPOLATION_TYPES}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
