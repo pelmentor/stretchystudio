@@ -17,7 +17,12 @@
 //
 // Run: node scripts/test/test_fcurveVisible.mjs
 
-import { isFCurveHidden, toggleFCurveHidden } from '../../src/anim/fcurveVisible.js';
+import {
+  isFCurveHidden,
+  toggleFCurveHidden,
+  applyHideFCurves,
+  applyRevealFCurves,
+} from '../../src/anim/fcurveVisible.js';
 import { isFCurveMuted } from '../../src/anim/fcurveMute.js';
 import { isFCurveSelected } from '../../src/anim/fcurveChannelSelect.js';
 import { getActiveKeyformIndex } from '../../src/anim/fcurveActiveKeyform.js';
@@ -223,6 +228,279 @@ assert(toggleFCurveHidden(makeAction([makeFCurve('a', [0, 1])]), 'missing').hidd
   toggleFCurveHidden(actionB, 'shared-id');
   assert(isFCurveHidden(fcB) === true,  'multi-action: actionB fcurve now hidden');
   assert(isFCurveHidden(fcA) === true,  'multi-action: actionA fcurve STILL hidden (no spillback)');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 5.M — applyHideFCurves: bulk hide of selected (H) or
+// unselected (Shift+H). Port of GRAPH_OT_hide.
+
+// Guards
+assert(applyHideFCurves(null, { unselected: false }).changed === false, 'hide: null action → no change');
+assert(applyHideFCurves({}, { unselected: false }).changed === false, 'hide: missing fcurves → no change');
+assert(applyHideFCurves({ fcurves: [] }, null).changed === false, 'hide: null opts → no change');
+assert(applyHideFCurves({ fcurves: [] }, {}).changed === false, 'hide: missing unselected → no change');
+assert(applyHideFCurves({ fcurves: [] }, { unselected: 'no' }).changed === false, 'hide: non-bool unselected → no change');
+
+// H (unselected=false): hide selected; deselect them
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true,  hide: false, keyforms: [] },
+      { id: 'b', selected: false, hide: false, keyforms: [] },
+      { id: 'c', selected: true,  hide: false, keyforms: [] },
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: false });
+  assert(r.changed === true,        'hide selected: changed');
+  assert(r.hiddenCount === 2,       'hide selected: hiddenCount=2');
+  assert(r.deselectedCount === 2,   'hide selected: deselectedCount=2');
+  assert(r.reShowCount === 0,       'hide selected: reShowCount=0 (no Phase 2 unless unselected=true)');
+  assert(action.fcurves[0].hide === true,  'hide selected: a hidden');
+  assert(action.fcurves[0].selected === false, 'hide selected: a deselected');
+  assert(action.fcurves[1].hide === false, 'hide selected: b NOT hidden (was unselected)');
+  assert(action.fcurves[1].selected === false, 'hide selected: b still unselected (no change)');
+  assert(action.fcurves[2].hide === true,  'hide selected: c hidden');
+}
+
+// H with no selection → no-op
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: false, hide: false, keyforms: [] },
+      { id: 'b', selected: false, hide: false, keyforms: [] },
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: false });
+  assert(r.changed === false, 'hide selected with nothing selected → no change');
+  assert(r.hiddenCount === 0, 'hide selected: 0 hidden');
+}
+
+// H skips already-hidden curves (ANIMFILTER_CURVE_VISIBLE)
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true, hide: true, keyforms: [] },  // already hidden, still selected
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: false });
+  assert(r.changed === false, 'hide selected: already-hidden curve skipped (ANIMFILTER_CURVE_VISIBLE)');
+  assert(action.fcurves[0].selected === true, 'hide selected: already-hidden curve NOT deselected');
+}
+
+// Shift+H (unselected=true): hide unselected; Phase 2 re-ensures
+// selected are visible+selected (no-op without group flush). Note
+// `deselectedCount` only counts true→false transitions — curves that
+// were already `selected: false` (matching the unselected filter)
+// don't trigger redundant writes.
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true,  hide: false, keyforms: [] },
+      { id: 'b', selected: false, hide: false, keyforms: [] },
+      { id: 'c', selected: false, hide: false, keyforms: [] },
+      { id: 'd', selected: true,  hide: false, keyforms: [] },
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: true });
+  assert(r.changed === true,      'hide unselected: changed');
+  assert(r.hiddenCount === 2,     'hide unselected: hiddenCount=2 (b,c)');
+  assert(r.deselectedCount === 0, 'hide unselected: deselectedCount=0 (b,c were already !selected)');
+  assert(action.fcurves[0].hide === false, 'hide unselected: a NOT hidden (was selected)');
+  assert(action.fcurves[1].hide === true,  'hide unselected: b hidden');
+  assert(action.fcurves[2].hide === true,  'hide unselected: c hidden');
+  assert(action.fcurves[3].hide === false, 'hide unselected: d NOT hidden (was selected)');
+  assert(action.fcurves[0].selected === true, 'hide unselected: a still selected');
+  assert(action.fcurves[3].selected === true, 'hide unselected: d still selected');
+}
+
+// Shift+H with a selected curve mixed in deselects nothing (selected
+// curves skip Phase 1 entirely); the deselectedCount should count
+// true→false transitions for unselected curves that have stale
+// selected=true (impossible by construction, so 0 in practice).
+// Adversarial test: what if a curve has selected:true but caller
+// claims it's unselected via the filter? Our filter reads selected
+// directly, not from caller — so this can't happen. Skip the
+// adversarial test.
+
+// Shift+H Phase 2 re-show check: a selected curve that was already
+// hidden gets re-shown (would happen via group-flush; today only via
+// the explicit phase-2 walk in our port)
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true,  hide: true,  keyforms: [] },  // selected + hidden → Phase 2 reveals
+      { id: 'b', selected: false, hide: false, keyforms: [] },  // hidden by Phase 1
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: true });
+  assert(r.reShowCount === 1,           'Phase 2: re-show count=1 (a was hidden+selected)');
+  assert(action.fcurves[0].hide === false, 'Phase 2: a un-hidden');
+  assert(action.fcurves[0].selected === true, 'Phase 2: a still selected');
+  assert(action.fcurves[1].hide === true,  'Phase 1: b hidden');
+}
+
+// Sparse-field defensive: missing `selected` treated as not-selected
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: false, keyforms: [] },   // missing selected
+      { id: 'b', selected: true, hide: false, keyforms: [] },
+    ],
+  };
+  const r = applyHideFCurves(action, { unselected: false });
+  assert(r.hiddenCount === 1, 'sparse: only b (selected=true) hidden, a treated as unselected');
+  assert(action.fcurves[0].hide === false, 'sparse: a unaffected');
+}
+
+// Input not corrupted on failure paths
+{
+  const action = { fcurves: [{ id: 'a', selected: true, hide: false, keyforms: [] }] };
+  applyHideFCurves(action, { unselected: 'bogus' });
+  assert(action.fcurves[0].hide === false, 'bad opts: action not mutated');
+  assert(action.fcurves[0].selected === true, 'bad opts: action not mutated (sel)');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 5.M — applyRevealFCurves: bulk reveal (Alt+H). Port of GRAPH_OT_reveal.
+
+// Guards
+assert(applyRevealFCurves(null, { select: true }).changed === false, 'reveal: null action → no change');
+assert(applyRevealFCurves({ fcurves: [] }, null).changed === false, 'reveal: null opts → no change');
+assert(applyRevealFCurves({ fcurves: [] }, {}).changed === false, 'reveal: missing select → no change');
+assert(applyRevealFCurves({ fcurves: [] }, { select: 1 }).changed === false, 'reveal: non-bool select → no change');
+
+// Default Alt+H: select=true → all hidden curves unhide AND become selected
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: true,  selected: false, keyforms: [] },
+      { id: 'b', hide: true,  selected: true,  keyforms: [] },   // already selected
+      { id: 'c', hide: false, selected: false, keyforms: [] },   // wasn't hidden
+    ],
+  };
+  const r = applyRevealFCurves(action, { select: true });
+  assert(r.changed === true,         'reveal: changed');
+  assert(r.revealedCount === 2,      'reveal: revealedCount=2 (a,b)');
+  assert(r.selectedCount === 1,      'reveal: selectedCount=1 (a flipped; b already true)');
+  assert(action.fcurves[0].hide === false, 'reveal: a unhidden');
+  assert(action.fcurves[0].selected === true, 'reveal: a now selected');
+  assert(action.fcurves[1].hide === false, 'reveal: b unhidden');
+  assert(action.fcurves[1].selected === true, 'reveal: b still selected');
+  assert(action.fcurves[2].hide === false, 'reveal: c untouched (was visible)');
+  assert(action.fcurves[2].selected === false, 'reveal: c NOT selected (was visible — selection gated on prev-hidden)');
+}
+
+// Reveal with select=false: hidden curves unhide AND become explicitly deselected
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: true,  selected: true,  keyforms: [] },  // was selected → cleared
+      { id: 'b', hide: true,  selected: false, keyforms: [] },  // stays !selected
+    ],
+  };
+  const r = applyRevealFCurves(action, { select: false });
+  assert(r.revealedCount === 2, 'reveal select=false: revealedCount=2');
+  assert(r.selectedCount === 1, 'reveal select=false: selectedCount=1 (a flipped true→false)');
+  assert(action.fcurves[0].selected === false, 'reveal select=false: a deselected');
+  assert(action.fcurves[1].selected === false, 'reveal select=false: b still deselected');
+}
+
+// Reveal with nothing hidden → no-op
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: false, selected: false, keyforms: [] },
+      { id: 'b', hide: false, selected: true,  keyforms: [] },
+    ],
+  };
+  const r = applyRevealFCurves(action, { select: true });
+  assert(r.changed === false, 'reveal: no hidden curves → no change');
+  assert(r.revealedCount === 0, 'reveal: 0 revealed');
+  assert(r.selectedCount === 0, 'reveal: 0 selection writes (gate held)');
+  assert(action.fcurves[1].selected === true, 'reveal: b still selected (untouched)');
+}
+
+// Sparse-field defensive: hidden curve with no `selected` field
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: true, keyforms: [] },  // no selected field
+    ],
+  };
+  const r = applyRevealFCurves(action, { select: true });
+  assert(r.revealedCount === 1, 'sparse reveal: 1 revealed');
+  assert(action.fcurves[0].selected === true, 'sparse reveal: now selected');
+}
+
+// Sparse-field defensive: hidden curve with no `selected`, select=false
+// (should NOT write false onto a sparse field — keeps the field sparse)
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: true, keyforms: [] },  // no selected field
+    ],
+  };
+  applyRevealFCurves(action, { select: false });
+  // `fc.selected === true` is false (undefined !== true), wantSelected
+  // is false → condition `false !== false` is false → no write.
+  assert(!('selected' in action.fcurves[0]) || action.fcurves[0].selected === undefined,
+    'sparse reveal select=false: field stays sparse (no spurious false write)');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Sister-field preservation — hide/reveal don't touch other slots
+
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true, hide: false, mute: true, activeKeyformIndex: 3, keyforms: [{}, {}, {}, {}] },
+    ],
+  };
+  applyHideFCurves(action, { unselected: false });
+  assert(action.fcurves[0].mute === true, 'hide: mute preserved');
+  assert(action.fcurves[0].activeKeyformIndex === 3, 'hide: activeKeyformIndex preserved');
+}
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', hide: true, mute: true, activeKeyformIndex: 2, keyforms: [{}, {}, {}] },
+    ],
+  };
+  applyRevealFCurves(action, { select: true });
+  assert(action.fcurves[0].mute === true, 'reveal: mute preserved');
+  assert(action.fcurves[0].activeKeyformIndex === 2, 'reveal: activeKeyformIndex preserved');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Involution-ish: hide then reveal puts curves back to visible+selected
+
+{
+  const action = {
+    id: 'A',
+    fcurves: [
+      { id: 'a', selected: true, hide: false, keyforms: [] },
+      { id: 'b', selected: true, hide: false, keyforms: [] },
+    ],
+  };
+  applyHideFCurves(action, { unselected: false });
+  assert(action.fcurves[0].hide === true && action.fcurves[1].hide === true, 'hide-then-reveal: both hidden after hide');
+  assert(action.fcurves[0].selected === false && action.fcurves[1].selected === false, 'hide-then-reveal: both deselected after hide');
+  applyRevealFCurves(action, { select: true });
+  assert(action.fcurves[0].hide === false && action.fcurves[1].hide === false, 'hide-then-reveal: both visible after reveal');
+  assert(action.fcurves[0].selected === true && action.fcurves[1].selected === true, 'hide-then-reveal: both reselected after reveal');
 }
 
 // ─────────────────────────────────────────────────────────────────────

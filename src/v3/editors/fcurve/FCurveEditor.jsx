@@ -335,7 +335,12 @@ import {
 } from '../../../anim/fcurveChannelSelect.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
-import { isFCurveHidden, toggleFCurveHidden } from '../../../anim/fcurveVisible.js';
+import {
+  isFCurveHidden,
+  toggleFCurveHidden,
+  applyHideFCurves,
+  applyRevealFCurves,
+} from '../../../anim/fcurveVisible.js';
 import {
   getActiveKeyformIndex,
   setActiveKeyform,
@@ -1900,6 +1905,49 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const onSidebarEnter = useCallback(() => { regionHoverRef.current = 'sidebar'; }, []);
   const onSidebarLeave = useCallback(() => { regionHoverRef.current = 'timeline'; }, []);
 
+  // Slice 5.M — bulk hide/reveal dispatcher (H / Shift+H / Alt+H).
+  //
+  // Mirrors Blender's `GRAPH_OT_hide` (`space_graph/graph_ops.cc:226-318`)
+  // and `GRAPH_OT_reveal` (`space_graph/graph_ops.cc:341-402`). Keymap
+  // at `blender_default.py:1967` → `_template_items_hide_reveal_actions`
+  // at `:461-466`.
+  //
+  // UNLIKE the select-all dispatcher above, hide/reveal go through
+  // normal undo history: both operators carry `OPTYPE_REGISTER |
+  // OPTYPE_UNDO` (`graph_ops.cc:332` and `:416`). `fcurve.hide` is
+  // a document-level concern that survives save/load (Slice 5.I), so
+  // undo coverage matters. `update(recipe)` without `skipHistory:true`
+  // is the right pattern — same as `toggleFCurveHidden`'s per-row
+  // path (Slice 5.I).
+  //
+  // The keymap binds these actions ONLY in `km_graph_editor` (the
+  // timeline region). `km_animation_channels` (sidebar) does NOT have
+  // H/Shift+H/Alt+H entries — Blender's per-row visibility toggle in
+  // the sidebar is `W` via `anim.channels_setting_toggle`. So this
+  // dispatcher is timeline-scoped only.
+  const applyHideOp = useCallback((mode) => {
+    let result = { changed: false, hiddenCount: 0, deselectedCount: 0, reShowCount: 0 };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      result = applyHideFCurves(a, { unselected: mode === 'unselected' });
+    });
+    return result;
+  }, [activeActionId, update]);
+
+  const applyRevealOp = useCallback(() => {
+    let result = { changed: false, revealedCount: 0, selectedCount: 0 };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      // `select=true` matches Blender's RNA default at
+      // `graph_ops.cc:418`; the Alt+H keymap entry binds with no
+      // properties (`blender_default.py:463`), so the default applies.
+      result = applyRevealFCurves(a, { select: true });
+    });
+    return result;
+  }, [activeActionId, update]);
+
   const onKeyDown = useCallback((e) => {
     if (modal) return;
     if (menu) return;
@@ -2042,6 +2090,37 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       operatorInvertSelection();
       return;
     }
+    // Slice 5.M — bulk hide/reveal (`graph.hide` + `graph.reveal`).
+    // Keymap at `blender_default.py:1967` →
+    // `_template_items_hide_reveal_actions` at `:461-466`:
+    //
+    //   - H        → `graph.hide` with `unselected=False` (`:464`)
+    //   - Shift+H  → `graph.hide` with `unselected=True`  (`:465`)
+    //   - Alt+H    → `graph.reveal` (no props → `select=true` default
+    //                from `graph_ops.cc:418`) (`:463`)
+    //
+    // These are timeline-region only. Blender's `km_animation_channels`
+    // (sidebar) does not bind H/Shift+H/Alt+H — sidebar visibility is
+    // toggled per-row via W (`anim.channels_setting_toggle`,
+    // `blender_default.py:3876`). So this dispatch path doesn't gate
+    // on `regionHoverRef.current === 'sidebar'`; it fires regardless
+    // of cursor region today. (If SS later mirrors Blender's W →
+    // setting_toggle in the sidebar, that's a separate slice.)
+    if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      applyHideOp('selected');
+      return;
+    }
+    if (e.code === 'KeyH' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      applyHideOp('unselected');
+      return;
+    }
+    if (e.code === 'KeyH' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      applyRevealOp();
+      return;
+    }
     // Audit-fix HIGH-A5 (2026-05-16): include `activeActionId` so that
     // switching the scene-bound action between keypresses doesn't leave
     // `onKeyDown` closing over a stale id (which would silently no-op
@@ -2049,7 +2128,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // Slice 5.K: `applyChannelSelectAllOp` is the new dep; its own
     // closure already includes `activeActionId` + `decoded` + `activeFCurveId`
     // so adding it here covers all live state for the sidebar branch.
-  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp]);
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp]);
 
   // ── Slice 5.D — driver banner + live value ──────────────────────────
 

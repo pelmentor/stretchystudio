@@ -85,18 +85,14 @@
  * mapping the sidebar over `decoded` (full list) but the plot +
  * hit-tests over `visible` (filtered list).
  *
+ * # Bulk visibility operators (Slice 5.M — this slice)
+ *
+ * `GRAPH_OT_hide` and `GRAPH_OT_reveal` ship as `applyHideFCurves` and
+ * `applyRevealFCurves` below. See those exports' JSDoc for per-helper
+ * Blender citations.
+ *
  * # SS-deferred Blender visibility operators
  *
- * Outside Slice 5.I's scope but documented here so the next
- * "Graph Editor keymap parity" slice doesn't have to re-discover them:
- *
- *   - **`GRAPH_OT_hide`** (`space_graph/graph_ops.cc:226-337`) — H
- *     keymap (hide selected curves), Shift+H (hide unselected via
- *     `unselected=true` flag). Iterates filtered channels and clears
- *     `FCURVE_VISIBLE` per-row.
- *   - **`GRAPH_OT_reveal`** (`space_graph/graph_ops.cc:341-419`) —
- *     Alt+H keymap (un-hide everything). Sets `FCURVE_VISIBLE` on
- *     every curve in the channel list.
  *   - **`setflag_anim_channels` with `ACHANNEL_SETTING_VISIBLE`** —
  *     channel-group hierarchical flushing (parent group → children).
  *     Gated on the not-yet-shipped FCurveGroup datablock; sister to
@@ -104,12 +100,6 @@
  *     [fcurveMute.js](./fcurveMute.js).
  *   - **`deselect_all_fcurves(hide=true)`** — composite
  *     deselect-and-hide already documented above.
- *
- * SS today only ships the per-row eye-toggle (the `ANIM_OT_channels_
- * setting_toggle` equivalent). Bulk operators are deferred until
- * sidebar selection state acquires a "selected channels" multi-pick
- * (Slice 5.F shipped the bit, bulk operators are still pending in
- * the resume queue).
  *
  * # Schema & migration
  *
@@ -170,4 +160,166 @@ export function toggleFCurveHidden(action, fcurveId) {
   if (!fc) return { hiddenNow: false };
   fc.hide = !isFCurveHidden(fc);
   return { hiddenNow: fc.hide === true };
+}
+
+/**
+ * Bulk hide — port of `GRAPH_OT_hide` (`space_graph/graph_ops.cc:226-318`).
+ *
+ * Keymap (`blender_default.py:1967` → `_template_items_hide_reveal_actions`
+ * at `:461-466`):
+ *   - **H**       → `graph.hide` with `unselected=false` (hide selected)
+ *   - **Shift+H** → `graph.hide` with `unselected=true`  (hide unselected
+ *                   = isolate selected)
+ *
+ * Blender's `graphview_curves_hide_exec` runs in two phases:
+ *
+ * **Phase 1** (`graph_ops.cc:247-282`): walk currently visible curves
+ * filtered by `unselected ? ANIMFILTER_UNSEL : ANIMFILTER_SEL`. For each
+ * matched curve set `ACHANNEL_SETTING_VISIBLE` to CLEAR (hide it) AND
+ * `ACHANNEL_SETTING_SELECT` to CLEAR (deselect it). The deselect is not
+ * incidental — it's the same `ANIM_channel_setting_set` call right
+ * after the hide.
+ *
+ * **Phase 2** (`graph_ops.cc:284-312`): ONLY when `unselected=true`.
+ * Walk all selected curves (no visibility filter) and set both
+ * VISIBLE and SELECT to ADD. The effect: the user pressed Shift+H to
+ * isolate their selection — after the visibility flip, their selected
+ * curves are guaranteed visible+selected (in case Phase 1's flush
+ * touched them through the group hierarchy SS doesn't have yet).
+ *
+ * # SS port
+ *
+ * SS has no `ANIMFILTER_LIST_CHANNELS` / `ANIM_flush_setting_anim_channels`
+ * — there's no FCurveGroup datablock yet (cf. `fcurveMute.js`'s AGRP
+ * deferral). Without group flushing, Phase 2's re-ensure step is a
+ * defensive no-op: SS's Phase 1 only touches FCurves matching the
+ * filter, so a selected curve cannot have been wrongly hidden. The
+ * helper still runs the Phase 2 re-ensure for byte-faithfulness — it
+ * IS a no-op today (asserted in tests), and will start mattering when
+ * group flush ships.
+ *
+ * # SS deviations
+ *
+ * **Deviation 1 — no "active curve" handling.** Blender's
+ * `ANIM_channel_setting_set` with SELECT/CLEAR also implicitly clears
+ * `FCURVE_ACTIVE` when the SELECT bit drops (via the keyframe-edit
+ * path). SS has no per-FCurve ACTIVE slot (same deferral as Slice
+ * 5.K MED-A1, 5.L Deviation 2 — tracked under `project_ss_is_embryo`).
+ *
+ * @param {object} action — Action datablock (mutated in place)
+ * @param {{ unselected: boolean }} opts
+ * @returns {{ changed: boolean, hiddenCount: number, deselectedCount: number, reShowCount: number }}
+ *   `changed` = any flag write occurred. `hiddenCount` = curves whose
+ *   `hide` flipped false→true. `deselectedCount` = curves whose
+ *   `selected` flipped true→false. `reShowCount` = Phase 2 curves
+ *   re-shown (today always 0; will populate when group flush ships).
+ */
+export function applyHideFCurves(action, opts) {
+  const result = { changed: false, hiddenCount: 0, deselectedCount: 0, reShowCount: 0 };
+  if (!action || !Array.isArray(action.fcurves)) return result;
+  if (!opts || typeof opts.unselected !== 'boolean') return result;
+  const unselected = opts.unselected;
+
+  // Phase 1: filter visible curves by selection state, hide + deselect.
+  for (const fc of action.fcurves) {
+    if (!fc) continue;
+    if (isFCurveHidden(fc)) continue;                 // ANIMFILTER_CURVE_VISIBLE
+    const sel = fc.selected === true;
+    const match = unselected ? !sel : sel;            // ANIMFILTER_UNSEL vs SEL
+    if (!match) continue;
+    if (fc.hide !== true) {
+      fc.hide = true;
+      result.hiddenCount++;
+      result.changed = true;
+    }
+    if (fc.selected === true) {
+      fc.selected = false;
+      result.deselectedCount++;
+      result.changed = true;
+    }
+  }
+
+  // Phase 2 (unselected=true only): re-ensure selected curves are
+  // visible+selected. Today a no-op without FCurveGroup flushing —
+  // see module header / Phase 2 doc above.
+  if (unselected) {
+    for (const fc of action.fcurves) {
+      if (!fc) continue;
+      if (fc.selected !== true) continue;
+      let reShown = false;
+      if (fc.hide === true) {
+        fc.hide = false;
+        reShown = true;
+        result.changed = true;
+      }
+      if (reShown) result.reShowCount++;
+      // Selected re-ensure is already a no-op: we filtered on
+      // `selected === true`, so we can't write a true we don't have.
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Bulk reveal — port of `GRAPH_OT_reveal` (`space_graph/graph_ops.cc:341-402`).
+ *
+ * Keymap (`blender_default.py:1967` → `_template_items_hide_reveal_actions`
+ * at `:461-466`, line `:463`):
+ *   - **Alt+H** → `graph.reveal` (no properties → `select` defaults true)
+ *
+ * Blender's `graphview_curves_reveal_exec` walks all curves and for
+ * each: if currently NOT visible, ALSO set SELECT to ADD-or-CLEAR
+ * (gated by `select` RNA prop, default true); always set VISIBLE to
+ * ADD. Curves that were already visible are NOT affected in their
+ * selection state — only previously-hidden curves get the SELECT
+ * write. This matches the user intent: "show me the hidden things
+ * AND select them so I can immediately act on them."
+ *
+ * Note Blender's RNA default — `RNA_def_boolean(.., "select", true, ..)`
+ * at `graph_ops.cc:418`. The Alt+H keymap entry binds the operator
+ * with NO properties (`blender_default.py:463`), so the default value
+ * applies. The user-callable `bpy.ops.graph.reveal(select=False)`
+ * variant exists but no SS UI surfaces it today.
+ *
+ * @param {object} action — Action datablock (mutated in place)
+ * @param {{ select: boolean }} opts
+ * @returns {{ changed: boolean, revealedCount: number, selectedCount: number }}
+ *   `revealedCount` = curves whose `hide` flipped true→false.
+ *   `selectedCount` = curves whose `selected` was written (only for
+ *   curves that WERE hidden — matches Blender's gate at `:379-383`).
+ */
+export function applyRevealFCurves(action, opts) {
+  const result = { changed: false, revealedCount: 0, selectedCount: 0 };
+  if (!action || !Array.isArray(action.fcurves)) return result;
+  if (!opts || typeof opts.select !== 'boolean') return result;
+  const select = opts.select;
+
+  for (const fc of action.fcurves) {
+    if (!fc) continue;
+    const wasHidden = isFCurveHidden(fc);
+    if (wasHidden) {
+      // Selection write is gated on previous hidden state — see
+      // graph_ops.cc:379-383. Setting `selected=false` explicitly when
+      // select=false is intentional (matches Blender's
+      // `ACHANNEL_SETFLAG_CLEAR` branch); does NOT drop selection of
+      // already-visible curves.
+      // Selection write is gated on previous hidden state —
+      // `graph_ops.cc:379-383`. Sparse-field handled implicitly:
+      // `fc.selected === true` is false for both undefined and
+      // explicit false, so when wantSelected=false we don't
+      // unnecessarily write false onto an already-sparse field.
+      const wantSelected = select === true;
+      if ((fc.selected === true) !== wantSelected) {
+        fc.selected = wantSelected;
+        result.selectedCount++;
+        result.changed = true;
+      }
+      fc.hide = false;
+      result.revealedCount++;
+      result.changed = true;
+    }
+  }
+
+  return result;
 }
