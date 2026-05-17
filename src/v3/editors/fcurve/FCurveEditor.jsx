@@ -2496,12 +2496,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // surface (graph.select_all has identical triplets to
     // anim.channels_select_all in BOTH presets).
     //
+    // Action mapping (per `resolveSelectAllAction`):
     //   - 'toggle' (default: A) → SS resolves locally as
     //     "if size>0 clear else selectAll" which matches Blender's
     //     `use_select_all_toggle=True` branch at `:436`. Default
     //     config sets `:115`=False which would emit SELECT at `:423`
     //     instead — SS picks the more common toggle preference.
-    //     Documented in Slice 5.K close-out.
+    //     Documented in Slice 5.K close-out + keymapPresets.js JSDoc
+    //     "Why two presets" deviation (audit-fix HIGH-A1 2026-05-17).
     //   - 'add' (IC: Ctrl+A) → unconditional `operatorSelectAll`
     //     (Blender's `:423` default-config behavior). No toggle on
     //     repeat press in IC preset.
@@ -2513,33 +2515,42 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     //     Default-keymap source: `:438` toggle / `:425` default. IC:
     //     `industry_compatible_data.py:966`.
     //
+    // Audit-fix MED-1 (Slice 5.AA arch audit 2026-05-17): the 'toggle'
+    // arm uses `selectionRef.current.size` (the count of selected
+    // KEYFORM HANDLES in this graph region) as the "any selected"
+    // signal — DIFFERENT from the sidebar branch's
+    // `applyChannelSelectAll(action, 'toggle', ctx)` which scans
+    // channel-level selection. The two regions operate on distinct
+    // selection states by design; both qualify as toggle semantics
+    // within their own region.
+    //
     // Region routing via `regionHoverRef.current` ensures the sidebar
     // branch above wins when cursor is on the channel list; this
     // graph branch fires only when hover='timeline'.
+    //
+    // Audit-fix MED-3 (Slice 5.AA arch audit 2026-05-17): collapsed
+    // the 4-arm if-chain (each with its own preventDefault + return)
+    // to a single null-gate matching the sidebar branch's shape, so
+    // adding new actions in future presets requires editing one
+    // dispatch table instead of duplicating preventDefault/return
+    // boilerplate.
     {
       const action = resolveSelectAllAction(
         usePreferencesStore.getState().keymapPreset,
         e,
       );
-      if (action === 'toggle') {
+      if (action !== null) {
         e.preventDefault();
-        if (selectionRef.current.size > 0) clearSelection();
-        else operatorSelectAll();
-        return;
-      }
-      if (action === 'add') {
-        e.preventDefault();
-        operatorSelectAll();
-        return;
-      }
-      if (action === 'clear') {
-        e.preventDefault();
-        clearSelection();
-        return;
-      }
-      if (action === 'invert') {
-        e.preventDefault();
-        operatorInvertSelection();
+        if (action === 'toggle') {
+          if (selectionRef.current.size > 0) clearSelection();
+          else operatorSelectAll();
+        } else if (action === 'add') {
+          operatorSelectAll();
+        } else if (action === 'clear') {
+          clearSelection();
+        } else { // 'invert'
+          operatorInvertSelection();
+        }
         return;
       }
     }

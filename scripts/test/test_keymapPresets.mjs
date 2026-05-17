@@ -88,6 +88,9 @@ function ev(code, modifiers = {}) {
   eq(resolveSelectAllAction('industry_compatible', ev('KeyA', { ctrl: true, shift: true })), 'clear', 'IC: Ctrl+Shift+A → clear');
   eq(resolveSelectAllAction('industry_compatible', ev('KeyA', { meta: true, shift: true })), 'clear', 'IC: Cmd+Shift+A (macOS) → clear');
   eq(resolveSelectAllAction('industry_compatible', ev('KeyI', { ctrl: true })), 'invert', 'IC: Ctrl+I → invert');
+  // Audit-fix LOW-1 (Slice 5.AA arch audit 2026-05-17): symmetry
+  // assertion for macOS Cmd path; default block already tests Cmd+I.
+  eq(resolveSelectAllAction('industry_compatible', ev('KeyI', { meta: true })), 'invert', 'IC: Cmd+I (macOS) → invert');
 }
 
 // ── IC preset rejects default-only bindings ─────────────────────

@@ -24,6 +24,7 @@
  */
 
 import { create } from 'zustand';
+import { coerceKeymapPreset } from '../anim/keymapPresets.js';
 
 const ML_KEY = 'v3.prefs.mlEnabled';
 const PE_KEY = 'v3.prefs.proportionalEdit';
@@ -52,8 +53,12 @@ const EVAL_KEY = 'v3.prefs.evalEngine';
  *  schema; Phase 2.A. */
 const SNAP_KEY = 'v3.prefs.snap';
 /** Animation Phase 5 Slice 5.AA — keymap-preset selector.
- *  Mirrors Blender's preference at Edit → Preferences → Keymap dropdown
- *  (Python source: `reference/blender/scripts/presets/keyconfig/keymap_data/`).
+ *  Mirrors Blender's preference at Edit → Preferences → Keymap dropdown.
+ *  Python sources:
+ *    - `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py`
+ *    - `reference/blender/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py`
+ *    - User-facing dropdown registered in
+ *      `reference/blender/scripts/presets/keyconfig/Blender.py`.
  *  SS supports the same two presets Blender ships by default:
  *    - `'default'`              — `keymap_data/blender_default.py`
  *    - `'industry_compatible'`  — `keymap_data/industry_compatible_data.py`
@@ -292,13 +297,17 @@ export const usePreferencesStore = create((set, get) => ({
    *  Blender's second-default preset). Read by
    *  `src/anim/keymapPresets.js::resolveSelectAllAction` (and any
    *  future preset-aware binding helper) to choose the binding map.
-   *  Default `'default'` matches Blender's out-of-the-box selection. */
-  keymapPreset: (loadJsonScalar(KMP_KEY, 'default') === 'industry_compatible')
-    ? 'industry_compatible'
-    : 'default',
+   *  Default `'default'` matches Blender's out-of-the-box selection.
+   *
+   *  Audit-fix MED-2 (Slice 5.AA arch audit 2026-05-17): the init +
+   *  setter both route through `coerceKeymapPreset` so all coercion
+   *  lives in one place. Adding a third preset later requires only
+   *  updating `KEYMAP_PRESETS` + `coerceKeymapPreset` in
+   *  `keymapPresets.js`; this store file stays untouched. */
+  keymapPreset: coerceKeymapPreset(loadJsonScalar(KMP_KEY, 'default')),
 
   setKeymapPreset(v) {
-    const next = v === 'industry_compatible' ? 'industry_compatible' : 'default';
+    const next = coerceKeymapPreset(v);
     saveJson(KMP_KEY, next);
     set({ keymapPreset: next });
   },

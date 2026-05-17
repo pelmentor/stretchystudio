@@ -18,8 +18,26 @@
  *
  * Blender ships two default keyconfigs:
  *
- *   - `keymap_data/blender_default.py` — historical Blender bindings
- *     (A toggles selection, Alt+A deselects, Ctrl+I inverts).
+ *   - `keymap_data/blender_default.py` — historical Blender bindings.
+ *     Blender's out-of-the-box default-config (`:115`
+ *     `use_select_all_toggle=False`) maps A → SELECT (`:423`), Alt+A →
+ *     DESELECT (`:424`), Ctrl+I → INVERT (`:425`), and A_DOUBLE_CLICK →
+ *     DESELECT (`:426`). The **opt-in** toggle branch at `:435-439`
+ *     (gated by `use_select_all_toggle=True`) emits A → TOGGLE,
+ *     Alt+A → DESELECT, Ctrl+I → INVERT.
+ *
+ *     **SS deviation** — `resolveSelectAllAction` returns the toggle
+ *     branch's mapping (A → 'toggle') under preset `'default'`,
+ *     because that matches FCurveEditor's pre-5.AA behavior (it
+ *     hand-rolled "A clears if anything selected, else select-all"
+ *     which is exactly the toggle semantic). Future slices that want
+ *     literal-default-config behavior would add a third preset
+ *     (`'default_no_toggle'`) or wire `use_select_all_toggle` through
+ *     as a sub-preference. Audit-fix HIGH-A1 (Slice 5.AA fidelity
+ *     audit 2026-05-17): this deviation was previously framed as if it
+ *     WERE Blender's out-of-the-box default — corrected here so future
+ *     readers don't propagate the misframing.
+ *
  *   - `keymap_data/industry_compatible_data.py` — Maya/Adobe-style
  *     bindings (Ctrl+A adds, Ctrl+Shift+A deselects, Ctrl+I inverts;
  *     no single-key toggle).
@@ -50,10 +68,18 @@
  * to different (key, modifier) combos:
  *
  *   - Default keymap (`blender_default.py:3864` via
- *     `_template_items_select_actions` at `:420-439`):
- *     - A          → TOGGLE
- *     - Alt+A      → CLEAR (DESELECT)
- *     - Ctrl+I     → INVERT
+ *     `_template_items_select_actions`; SS picks the toggle branch at
+ *     `:435-439`, NOT the default-config no-toggle branch at
+ *     `:422-427` — see "Why two presets" deviation note above):
+ *     - A          → TOGGLE   (`:436`)
+ *     - Alt+A      → CLEAR    (`:437`)
+ *     - Ctrl+I     → INVERT   (`:438`)
+ *
+ *     Audit-fix LOW-A1 (Slice 5.AA fidelity audit 2026-05-17): the
+ *     no-toggle branch also binds A_DOUBLE_CLICK → DESELECT (`:426`).
+ *     SS omits this because web KeyboardEvent has no clean
+ *     keyboard-double-press semantic — Blender's row only fires from
+ *     mouse double-click on macOS anyway.
  *
  *   - Industry-compatible keymap
  *     (`industry_compatible_data.py:2345-2350` for channels region;
@@ -86,7 +112,11 @@
  *   spreads `e` into this shape.
  * @property {string} code      — `e.code` (KeyboardEvent.code, e.g. 'KeyA')
  * @property {boolean} ctrlKey
- * @property {boolean} metaKey  — treated as Ctrl equivalent (macOS Cmd)
+ * @property {boolean} metaKey  — SS treats as Ctrl-equivalent on macOS
+ *                                (web/DOM convention; NOT a Blender port —
+ *                                Blender keeps `KM_CTRL` and `KM_OSKEY`
+ *                                as distinct modifiers per
+ *                                `wm_event_system.cc:2470-2471`).
  * @property {boolean} altKey
  * @property {boolean} shiftKey
  */
@@ -117,7 +147,16 @@ export function coerceKeymapPreset(value) {
  *
  * Treats `metaKey` as Ctrl-equivalent so macOS users get the same
  * bindings as Linux/Windows without per-platform branching at the
- * call site.
+ * call site. **SS deviation** — Blender's keymap matcher at
+ * `reference/blender/source/blender/windowmanager/intern/wm_event_system.cc:2470-2471`
+ * checks `KM_OSKEY` independently from `KM_CTRL`; macOS-specific
+ * keymap entries (when shipped) carry their own oskey flag rather
+ * than falling back to ctrl. SS collapses the two because (a) the
+ * browser surfaces metaKey separately and (b) Cmd-as-Ctrl is the
+ * established web/DOM convention for cross-platform shortcuts.
+ * Audit-fix HIGH-A2 (Slice 5.AA fidelity audit 2026-05-17): this
+ * deviation was previously framed as if it were a Blender port —
+ * corrected here.
  *
  * @param {KeymapPreset | string | null | undefined} preset
  * @param {EventLikeKeyState} e
@@ -129,10 +168,13 @@ export function resolveSelectAllAction(preset, e) {
   const ctrl = e.ctrlKey || e.metaKey;
 
   if (p === 'default') {
-    // `blender_default.py:3864` → `_template_items_select_actions` at `:420-439`.
-    // - A (no modifiers)        → TOGGLE
-    // - Alt+A (no ctrl/shift)   → CLEAR
-    // - Ctrl+I (no alt/shift)   → INVERT
+    // `blender_default.py:3864` → `_template_items_select_actions`
+    // toggle branch at `:435-439` (SS deviation from default-config
+    // no-toggle branch at `:422-427` — see module JSDoc "Why two
+    // presets" for rationale).
+    // - A (no modifiers)        → TOGGLE  (`:436`)
+    // - Alt+A (no ctrl/shift)   → CLEAR   (`:437`)
+    // - Ctrl+I (no alt/shift)   → INVERT  (`:438`)
     if (e.code === 'KeyA' && !ctrl && !e.altKey && !e.shiftKey) return 'toggle';
     if (e.code === 'KeyA' && !ctrl && e.altKey && !e.shiftKey) return 'clear';
     if (e.code === 'KeyI' && ctrl && !e.altKey && !e.shiftKey) return 'invert';
