@@ -2201,7 +2201,20 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const onKeyDown = useCallback((e) => {
     if (modal) return;
     if (menu) return;
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    // Audit-fix HIGH-A1 (Slice 5.Q dual-audit 2026-05-17): added
+    // HTMLSelectElement to the input-element guard. Slice 5.Q's
+    // ActiveKeyformPanel hosts an interpolation `<select>` dropdown
+    // inside the editor's wrap div; without the SelectElement guard,
+    // pressing N inside the dropdown bubbled up to onKeyDown and
+    // toggled the N-panel closed mid-selection. Every existing
+    // editor keybind (G, S, B, V, T, X, A, H, W…) is equally
+    // affected — fixing the guard once covers all current and
+    // future select-bearing surfaces.
+    if (
+      e.target instanceof HTMLInputElement
+      || e.target instanceof HTMLTextAreaElement
+      || e.target instanceof HTMLSelectElement
+    ) return;
 
     const rect = canvasRef.current?.getBoundingClientRect();
     const anchor = rect

@@ -45,9 +45,12 @@
  * # The active-keyform context resolution
  *
  * `resolveActiveKeyformContext(action, fcurveId)` mirrors Blender's
- * `get_active_fcurve_keyframe_edit` (`graph_buttons.cc:245-274`) which
+ * `get_active_fcurve_keyframe_edit` (`graph_buttons.cc:253-274`) which
  * resolves `(fcu, bezt, prevbezt)`. SS surfaces only `(fcurve, kf,
  * kfIndex)` for this slice — `prevKf` lookup ships when handles do.
+ * Audit-fix MED-B1 (Slice 5.Q dual-audit 2026-05-17): citation was
+ * originally `:245-274` (off by 8 lines into the preceding comment
+ * block); corrected to `:253-274` (function body start).
  *
  * The resolution chain:
  *   1. Find the FCurve by id (no match → null context).
@@ -56,34 +59,38 @@
  *   3. Sentinel `FCURVE_ACTIVE_KEYFORM_NONE` → null context.
  *   4. Otherwise return `{ fcurve, kfIndex, kf: fcurve.keyforms[kfIndex] }`.
  *
- * # Edit recipes — undo-coupled + sort-aware
+ * # Edit recipes — undo-coupled + sort-aware + auto-handle recalc
  *
  * Each edit is a mutator that runs inside `update(recipe)` (no
  * `skipHistory:true` — these are data writes, not view state; sister
  * to Slices 5.G/5.I/5.M/5.N/5.O/5.P which all flow through normal undo).
  *
- *   - **`applyEditKeyformValue`** — direct write to `kf.value`. No
- *     sort needed (time unchanged); no handle recalc needed for the
- *     MVP (handles are NOT auto-recalculated when value changes —
- *     Blender's `graphedit_activekey_update_cb` at `graph_buttons.cc:
- *     277-284` calls `sort_time_fcurve` + `BKE_fcurve_handles_recalc`
- *     unconditionally, but `sort_time_fcurve` is a no-op when time
- *     didn't change AND `handles_recalc` only matters for handles
- *     which this MVP doesn't expose). Future handle slice MUST add
- *     the recalc call back.
+ *   - **`applyEditKeyformValue`** — write `kf.value` THEN call
+ *     `recalcKeyformHandles(fcurve.keyforms)`. Audit-fix HIGH-B1
+ *     (Slice 5.Q dual-audit 2026-05-17): the initial substrate
+ *     omitted the recalc with a wrong rationale ("handles_recalc
+ *     only matters for handles which this MVP doesn't expose").
+ *     Reality: AUTO/AUTO_ANIM handles' STORED tangent positions
+ *     depend on neighboring keyframe values; skipping recalc on a
+ *     value edit leaves the tangents stale → curve shape between
+ *     this kf and its neighbors becomes wrong on AUTO-handle curves
+ *     even though the panel never showed handles. Mirrors Blender's
+ *     UNCONDITIONAL `BKE_fcurve_handles_recalc` call in
+ *     `graphedit_activekey_update_cb` at `graph_buttons.cc:283`.
  *
- *   - **`applyEditKeyformFrame`** — write to `kf.time` then re-sort
- *     the keyforms array by time AND relocate the active index via
- *     the existing `captureActiveKeyformObject` /
- *     `relocateActiveKeyformByObject` pair (Slice 5.H pattern). If
- *     the edit moves the keyform past a neighbor, the index changes;
- *     the helper handles it transparently. Mirrors Blender's
- *     `sort_time_fcurve` call at `graph_buttons.cc:282`.
+ *   - **`applyEditKeyformFrame`** — capture active kf object → write
+ *     `kf.time` → inline re-sort by time → relocate active index via
+ *     `captureActiveKeyformObject` / `relocateActiveKeyformByObject`
+ *     (Slice 5.H pattern) → recalc handles. Mirrors Blender's
+ *     `sort_time_fcurve` + `BKE_fcurve_handles_recalc` pair at
+ *     `graph_buttons.cc:282-283`.
  *
  *   - **`applyEditKeyformInterpolation`** — direct write to
- *     `kf.interpolation`. No sort, no handle recalc. The segment-level
- *     visual changes (the curve geometry between this kf and the next)
- *     update on re-render naturally via the `decoded` memo's
+ *     `kf.interpolation`. No sort, no handle recalc (interp type is
+ *     the segment-shape choice; it doesn't change tangent positions
+ *     and doesn't affect AUTO recalc inputs). The segment-level
+ *     visual changes (the curve geometry between this kf and the
+ *     next) update on re-render naturally via the `decoded` memo's
  *     `[action?.fcurves]` dep.
  *
  * # Preflight readers — phantom-undo gates
@@ -120,6 +127,24 @@
  * matches: "Time (ms)" instead of "Key Frame". Closure tied to
  * Phase 5 queued path #7 (SIPO_DRAWTIME seconds-vs-frames toggle).
  *
+ * **Deviation 4 — default-interpolation sparse-default 'linear'
+ * (not Blender's BEZT_IPO_BEZ).** Blender's BezTriple default
+ * interpolation is `BEZT_IPO_BEZ` (Bezier) — see
+ * `reference/blender/source/blender/animrig/intern/fcurve.cc:29`
+ * (`settings.interpolation = BEZT_IPO_BEZ`). SS treats a missing
+ * `interpolation` field as `'linear'` for compute + display + the
+ * preflight's same-value short-circuit. This divergence predates
+ * Slice 5.Q (the convention is established across `evaluateFCurve`,
+ * the timeline editor, and graphEditOps) but is surfaced explicitly
+ * here because it affects: (a) the panel dropdown's apparent
+ * "current" value for sparse keyforms, and (b) what counts as a no-
+ * op when the user picks 'linear' from the dropdown (sparse→linear =
+ * no-op; explicit bezier→linear = delete-the-field for sparse
+ * discipline). Audit-fix MED-B3 (Slice 5.Q dual-audit 2026-05-17):
+ * promoted from buried preflight comment to a named Deviation.
+ * Closure tied to a future "match Blender defaults" sweep; not
+ * gated on any single slice.
+ *
  * @module v3/editors/fcurve/activeKeyformPanelData
  */
 
@@ -129,6 +154,7 @@ import {
   captureActiveKeyformObject,
   relocateActiveKeyformByObject,
 } from '../../../anim/fcurveActiveKeyform.js';
+import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
 
 /**
  * @typedef {{
@@ -157,7 +183,7 @@ import {
  * Resolve `(fcurve, kfIndex, kf)` for the active keyform on the named
  * FCurve, or `null` if no active keyform exists.
  *
- * Mirrors `get_active_fcurve_keyframe_edit` (`graph_buttons.cc:245-274`)
+ * Mirrors `get_active_fcurve_keyframe_edit` (`graph_buttons.cc:253-274`)
  * minus the `prevbezt` field (deferred to Slice 5.R with handle editing).
  *
  * Null-returns when:
@@ -207,10 +233,14 @@ export function wouldEditKeyformValueChange(action, fcurveId, newValue) {
 /**
  * Apply a value edit to the active keyform.
  *
- * Direct write to `kf.value`. No sort needed (time unchanged), no
- * handle recalc needed (MVP doesn't expose handles; future handle
- * slice will add the recalc call per `graphedit_activekey_update_cb`
- * at `graph_buttons.cc:277-284`).
+ * Write `kf.value` then call `recalcKeyformHandles(fcurve.keyforms)`
+ * to recompute AUTO/AUTO_ANIM handle tangent positions (their stored
+ * positions depend on neighboring keyframe values). Mirrors Blender's
+ * UNCONDITIONAL `BKE_fcurve_handles_recalc` call in
+ * `graphedit_activekey_update_cb` at `graph_buttons.cc:283`. Audit-fix
+ * HIGH-B1 (Slice 5.Q dual-audit 2026-05-17): initial substrate omitted
+ * this with a wrong rationale; without it AUTO handles drift after
+ * value edits and curve shape evaluates incorrectly.
  *
  * @param {object} action — Action datablock (mutated)
  * @param {string} fcurveId
@@ -225,6 +255,7 @@ export function applyEditKeyformValue(action, fcurveId, newValue) {
   if (!ctx) return { changed: false };
   if (ctx.kf.value === newValue) return { changed: false };
   ctx.kf.value = newValue;
+  recalcKeyformHandles(ctx.fcurve.keyforms);
   return { changed: true };
 }
 
@@ -250,7 +281,7 @@ export function wouldEditKeyformFrameChange(action, fcurveId, newTimeMs) {
  * Apply a frame (time) edit to the active keyform.
  *
  * Mirrors `graphedit_activekey_update_cb` (`graph_buttons.cc:277-284`)
- * which sorts after every coord change:
+ * which sorts then recalcs handles after every coord change:
  *
  *   ```c
  *   sort_time_fcurve(*fcu);
@@ -263,6 +294,10 @@ export function wouldEditKeyformFrameChange(action, fcurveId, newTimeMs) {
  *   2. Write `kf.time = newTimeMs`.
  *   3. Re-sort `fcurve.keyforms` by ascending time.
  *   4. Re-find the active index via object identity.
+ *   5. Recalc handles (Audit-fix HIGH-B1 — see
+ *      {@link applyEditKeyformValue}'s recalc rationale; for time
+ *      edits the recalc matters even more because BOTH neighbors of
+ *      the moved keyform may have changed).
  *
  * The capture-and-relocate pattern is more robust than index
  * arithmetic when the moved keyform crosses multiple neighbors — see
@@ -298,6 +333,9 @@ export function applyEditKeyformFrame(action, fcurveId, newTimeMs) {
   // established pattern.
   ctx.fcurve.keyforms.sort((a, b) => a.time - b.time);
   const { activeNow } = relocateActiveKeyformByObject(action, fcurveId, captured);
+  // Audit-fix HIGH-B1: mirror Blender's `BKE_fcurve_handles_recalc`
+  // at `graph_buttons.cc:283` (unconditional post-coord-edit recalc).
+  recalcKeyformHandles(ctx.fcurve.keyforms);
   return { changed: true, newIndex: activeNow };
 }
 

@@ -20,8 +20,10 @@
  *
  *   - **Interpolation** dropdown — Blender's `bezt_ptr.prop("interpolation")`
  *     at `graph_buttons.cc:410`. SS uses the existing 13-entry
- *     `INTERPOLATION_TYPES` array (FCurveEditor.jsx:397-411) for
- *     parity with the existing T-menu's options.
+ *     `INTERPOLATION_TYPES` array (FCurveEditor.jsx:398-412) for
+ *     parity with the existing T-menu's options. Audit-fix MED-B2
+ *     (Slice 5.Q dual-audit 2026-05-17): original cite was off by
+ *     one (started on the preceding comment line).
  *   - **Time (ms)** number input — Blender's "Key Frame" / `co_ui[0]`
  *     at `graph_buttons.cc:443-457`. SS labels as "Time (ms)" per the
  *     `feedback_ms_canonical_animation_time` rule (SS canonical unit
