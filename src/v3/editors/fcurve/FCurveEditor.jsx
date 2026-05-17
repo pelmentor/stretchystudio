@@ -336,7 +336,12 @@ import {
   isFCurveSelected,
 } from '../../../anim/fcurveChannelSelect.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
-import { isFCurveMuted, toggleFCurveMute } from '../../../anim/fcurveMute.js';
+import {
+  isFCurveMuted,
+  toggleFCurveMute,
+  applyChannelMuteSelected,
+  wouldChannelMuteSelectedChange,
+} from '../../../anim/fcurveMute.js';
 import {
   isFCurveHidden,
   toggleFCurveHidden,
@@ -2083,6 +2088,50 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return result;
   }, [activeActionId, update]);
 
+  // Slice 5.O — bulk channel-mute dispatcher (sidebar Shift+W /
+  // Ctrl+Shift+W / Alt+W).
+  //
+  // Mirrors Blender's three operators wired through `setflag_anim_channels`
+  // (`anim_channels_edit.cc:2923-3001`) with setting=MUTE:
+  //
+  //   - Shift+W       → `anim.channels_setting_toggle` (mode='toggle')
+  //   - Ctrl+Shift+W  → `anim.channels_setting_enable` (mode='enable')
+  //   - Alt+W         → `anim.channels_setting_disable` (mode='disable')
+  //
+  // Keymap registration: `blender_default.py:3876-3878` (sidebar region,
+  // `km_animation_channels`). Like Slice 5.N's channel-delete this is
+  // a SIDEBAR-region binding only; the timeline-region keymap doesn't
+  // bind W to anything fcurve-related (W in timeline is a different
+  // op-set in other editors and unbound in Graph Editor proper).
+  //
+  // Preflight pattern: same as Slice 5.M's hide/reveal and Slice 5.N's
+  // channel-delete dispatchers — read live state, ask the pure helper
+  // "would anything change?", short-circuit if not. Prevents the
+  // `projectStore.js:230-232` unconditional pre-recipe snapshot from
+  // burning an undo slot when the user presses Shift+W with nothing
+  // selected (or with all selected curves already in the target state).
+  //
+  // SS-skipped Blender UI surface: the type-picker popup menu (Blender
+  // pops `{PROTECT, MUTE}` enum via `WM_menu_invoke`). SS only has
+  // `fcurve.mute` — `fcurve.protected` is not ported — so the menu
+  // would be degenerate (1 option). Routed directly to mute; see
+  // `applyChannelMuteSelected` JSDoc Deviation 1 for the closure
+  // condition (PROTECT slice + popup-menu primitive).
+  const applyChannelMuteOp = useCallback((mode) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldChannelMuteSelectedChange(liveAction, mode)) {
+      return { changed: false, mutedCount: 0, unmutedCount: 0, resolvedMode: null };
+    }
+    let result = { changed: false, mutedCount: 0, unmutedCount: 0, resolvedMode: /** @type {'enable'|'disable'|null} */ (null) };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      result = applyChannelMuteSelected(a, mode);
+    });
+    return result;
+  }, [activeActionId, update]);
+
   const onKeyDown = useCallback((e) => {
     if (modal) return;
     if (menu) return;
@@ -2287,6 +2336,47 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       applyRevealOp();
       return;
     }
+    // Slice 5.O — bulk channel-mute keymap (sidebar region only).
+    //
+    // Blender keymap entries at `blender_default.py:3876-3878`:
+    //   - Shift+W       → `anim.channels_setting_toggle`
+    //   - Ctrl+Shift+W  → `anim.channels_setting_enable`
+    //   - Alt+W         → `anim.channels_setting_disable`
+    //
+    // All three are bound in `km_animation_channels` (sidebar region)
+    // — `km_graph_editor` does NOT bind W to anything. So gating on
+    // `regionHoverRef.current === 'sidebar'` is mandatory: a Shift+W
+    // press over the timeline must NOT fire (would be a Blender
+    // divergence; user might be expecting some future timeline-W
+    // operator and silent capture would be worse than a noop).
+    //
+    // Modifier exclusivity matches the keymap exactly: Shift+W means
+    // SHIFT only (not Ctrl+Shift+W, not Alt+Shift+W); Ctrl+Shift+W
+    // means CTRL+SHIFT only; Alt+W means ALT only. This avoids
+    // ambiguity at the boundaries — Ctrl+Shift+W should NOT also
+    // fire the bare Shift+W branch.
+    //
+    // Same region-routing keyboard-nav limitation as Slice 5.N's X/DEL
+    // branch (MED-A2): `regionHoverRef.current` only updates on pointer
+    // events, so Tab-focused dispatch from a key-only navigation
+    // session falls through. Tracked as queued path #17.
+    if (regionHoverRef.current === 'sidebar') {
+      if (e.code === 'KeyW' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        applyChannelMuteOp('toggle');
+        return;
+      }
+      if (e.code === 'KeyW' && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        applyChannelMuteOp('enable');
+        return;
+      }
+      if (e.code === 'KeyW' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        applyChannelMuteOp('disable');
+        return;
+      }
+    }
     // Audit-fix HIGH-A5 (2026-05-16): include `activeActionId` so that
     // switching the scene-bound action between keypresses doesn't leave
     // `onKeyDown` closing over a stale id (which would silently no-op
@@ -2294,7 +2384,8 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // Slice 5.K: `applyChannelSelectAllOp` is the new dep; its own
     // closure already includes `activeActionId` + `decoded` + `activeFCurveId`
     // so adding it here covers all live state for the sidebar branch.
-  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp, applyChannelDeleteOp]);
+    // Slice 5.O: `applyChannelMuteOp` added (mode-keyed dispatcher).
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp, applyChannelDeleteOp, applyChannelMuteOp]);
 
   // ── Slice 5.D — driver banner + live value ──────────────────────────
 

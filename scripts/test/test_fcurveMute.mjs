@@ -16,7 +16,12 @@
 //
 // Run: node scripts/test/test_fcurveMute.mjs
 
-import { isFCurveMuted, toggleFCurveMute } from '../../src/anim/fcurveMute.js';
+import {
+  isFCurveMuted,
+  toggleFCurveMute,
+  applyChannelMuteSelected,
+  wouldChannelMuteSelectedChange,
+} from '../../src/anim/fcurveMute.js';
 import { evaluateActionFCurves } from '../../src/anim/animationFCurve.js';
 import { kernelFCurveEval } from '../../src/anim/depgraph/kernels/fcurve.js';
 
@@ -294,6 +299,291 @@ function makeCtx(action) {
   const ctx3 = makeCtx({ id: 'A', fcurves: [fc] });
   kernelFCurveEval({ tag: fc.rnaPath }, ctx3);
   assert(ctx3.paramOverrides.has('p'),                   'kernel unmuted: wrote again');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// applyChannelMuteSelected — bulk-mute on selected channels
+// (Slice 5.O: Shift+W / Ctrl+Shift+W / Alt+W in sidebar region)
+//
+// Mirrors `setflag_anim_channels` (`anim_channels_edit.cc:2923-3001`)
+// with `setting=ACHANNEL_SETTING_MUTE` and `onlysel=true`.
+
+function makeBulkAction() {
+  return {
+    id: 'A',
+    fcurves: [
+      makeFCurve('a', 'objects["__params__"].values["a"]', 1),
+      makeFCurve('b', 'objects["__params__"].values["b"]', 2),
+      makeFCurve('c', 'objects["__params__"].values["c"]', 3),
+    ],
+  };
+}
+
+// ── ENABLE (Ctrl+Shift+W) ───────────────────────────────────────────
+
+{
+  // 2 selected, all unmuted → both go to mute=true; unselected peer stays.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  a.fcurves[1].selected = true;
+  const r = applyChannelMuteSelected(a, 'enable');
+  assert(r.changed === true,              'enable: changed=true');
+  assert(r.mutedCount === 2,              'enable: mutedCount=2');
+  assert(r.unmutedCount === 0,            'enable: unmutedCount=0');
+  assert(r.resolvedMode === 'enable',     'enable: resolvedMode=enable');
+  assert(a.fcurves[0].mute === true,      'enable: a muted');
+  assert(a.fcurves[1].mute === true,      'enable: b muted');
+  assert(a.fcurves[2].mute === undefined, 'enable: c untouched (unselected)');
+}
+
+{
+  // All selected already muted → no change.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; a.fcurves[0].mute = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  const r = applyChannelMuteSelected(a, 'enable');
+  assert(r.changed === false,             'enable all-already-muted: changed=false');
+  assert(r.mutedCount === 0,              'enable all-already-muted: mutedCount=0');
+  assert(r.resolvedMode === 'enable',     'enable all-already-muted: resolvedMode=enable');
+  assert(a.fcurves[0].mute === true,      'enable all-already-muted: a stays muted');
+  assert(a.fcurves[1].mute === true,      'enable all-already-muted: b stays muted');
+}
+
+{
+  // Mixed: some muted, some not → mute the unmuted ones, leave muted ones.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  const r = applyChannelMuteSelected(a, 'enable');
+  assert(r.changed === true,              'enable mixed: changed=true');
+  assert(r.mutedCount === 1,              'enable mixed: mutedCount=1');
+  assert(r.unmutedCount === 0,            'enable mixed: unmutedCount=0');
+  assert(a.fcurves[0].mute === true,      'enable mixed: a now muted');
+  assert(a.fcurves[1].mute === true,      'enable mixed: b still muted');
+}
+
+// ── DISABLE (Alt+W) ─────────────────────────────────────────────────
+
+{
+  // 2 selected, all muted → both unmute; unselected muted peer stays.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; a.fcurves[0].mute = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  a.fcurves[2].mute = true; // unselected, muted
+  const r = applyChannelMuteSelected(a, 'disable');
+  assert(r.changed === true,              'disable: changed=true');
+  assert(r.unmutedCount === 2,            'disable: unmutedCount=2');
+  assert(r.mutedCount === 0,              'disable: mutedCount=0');
+  assert(r.resolvedMode === 'disable',    'disable: resolvedMode=disable');
+  assert(a.fcurves[0].mute === false,     'disable: a unmuted');
+  assert(a.fcurves[1].mute === false,     'disable: b unmuted');
+  assert(a.fcurves[2].mute === true,      'disable: c (unselected) untouched');
+}
+
+{
+  // All selected already unmuted (or sparse) → no change.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; // mute missing → counts as unmuted
+  a.fcurves[1].selected = true; a.fcurves[1].mute = false;
+  const r = applyChannelMuteSelected(a, 'disable');
+  assert(r.changed === false,             'disable all-already-unmuted: changed=false');
+  assert(r.unmutedCount === 0,            'disable all-already-unmuted: unmutedCount=0');
+  // Sparse field stays sparse — no explicit `mute=false` write onto missing.
+  assert(a.fcurves[0].mute === undefined, 'disable all-already-unmuted: sparse stays sparse');
+  assert(a.fcurves[1].mute === false,     'disable all-already-unmuted: explicit false stays');
+}
+
+// ── TOGGLE (Shift+W) — scan-first uniform-flip ──────────────────────
+
+{
+  // All selected unmuted → resolve to ENABLE → all flip to muted.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  a.fcurves[1].selected = true;
+  const r = applyChannelMuteSelected(a, 'toggle');
+  assert(r.changed === true,              'toggle all-unmuted: changed=true');
+  assert(r.resolvedMode === 'enable',     'toggle all-unmuted: resolved=enable');
+  assert(r.mutedCount === 2,              'toggle all-unmuted: mutedCount=2');
+  assert(a.fcurves[0].mute === true,      'toggle all-unmuted: a muted');
+  assert(a.fcurves[1].mute === true,      'toggle all-unmuted: b muted');
+}
+
+{
+  // All selected muted → resolve to DISABLE → all flip to unmuted.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; a.fcurves[0].mute = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  const r = applyChannelMuteSelected(a, 'toggle');
+  assert(r.changed === true,              'toggle all-muted: changed=true');
+  assert(r.resolvedMode === 'disable',    'toggle all-muted: resolved=disable');
+  assert(r.unmutedCount === 2,            'toggle all-muted: unmutedCount=2');
+  assert(a.fcurves[0].mute === false,     'toggle all-muted: a unmuted');
+  assert(a.fcurves[1].mute === false,     'toggle all-muted: b unmuted');
+}
+
+{
+  // Mixed (one muted) → resolve to DISABLE → muted flips to unmuted,
+  // unmuted stays unmuted.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;                                // unmuted
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;      // muted
+  a.fcurves[2].selected = true;                                // unmuted
+  const r = applyChannelMuteSelected(a, 'toggle');
+  assert(r.changed === true,              'toggle mixed: changed=true');
+  assert(r.resolvedMode === 'disable',    'toggle mixed: resolved=disable (Blender scan-first)');
+  assert(r.unmutedCount === 1,            'toggle mixed: only the previously-muted one flipped');
+  assert(r.mutedCount === 0,              'toggle mixed: no new mutes');
+  assert(a.fcurves[0].mute === undefined, 'toggle mixed: a stays sparse');
+  assert(a.fcurves[1].mute === false,     'toggle mixed: b unmuted');
+  assert(a.fcurves[2].mute === undefined, 'toggle mixed: c stays sparse');
+}
+
+// ── No-selection / null / invalid mode ──────────────────────────────
+
+{
+  // Zero selected → no-op for all modes.
+  const a = makeBulkAction();
+  for (const mode of /** @type {const} */ (['toggle', 'enable', 'disable'])) {
+    const r = applyChannelMuteSelected(a, mode);
+    assert(r.changed === false,           `no-sel ${mode}: changed=false`);
+    assert(r.resolvedMode === null,       `no-sel ${mode}: resolvedMode=null`);
+    assert(r.mutedCount === 0,            `no-sel ${mode}: mutedCount=0`);
+    assert(r.unmutedCount === 0,          `no-sel ${mode}: unmutedCount=0`);
+  }
+}
+
+{
+  // Guard: null action.
+  const r = applyChannelMuteSelected(null, 'toggle');
+  assert(r.changed === false,             'guard: null action');
+  assert(r.resolvedMode === null,         'guard: null action resolvedMode=null');
+}
+
+{
+  // Guard: null fcurves array.
+  const r = applyChannelMuteSelected({ fcurves: null }, 'toggle');
+  assert(r.changed === false,             'guard: null fcurves');
+}
+
+{
+  // Guard: unknown mode.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  // @ts-expect-error — testing runtime guard against invalid input.
+  const r = applyChannelMuteSelected(a, 'wat');
+  assert(r.changed === false,             'guard: unknown mode');
+  assert(a.fcurves[0].mute === undefined, 'guard: unknown mode no write');
+}
+
+// ── Sparse / null entries tolerated ─────────────────────────────────
+
+{
+  const a = {
+    id: 'A',
+    fcurves: [
+      null,
+      { ...makeFCurve('x', 'objects["__params__"].values["x"]', 1), selected: true },
+      undefined,
+      { ...makeFCurve('y', 'objects["__params__"].values["y"]', 2), selected: true, mute: true },
+    ],
+  };
+  const r = applyChannelMuteSelected(a, 'toggle');
+  // x unmuted, y muted → mixed → resolve to DISABLE.
+  assert(r.changed === true,              'sparse-tolerated: changed=true');
+  assert(r.resolvedMode === 'disable',    'sparse-tolerated: resolved=disable');
+  assert(a.fcurves[1].mute === undefined, 'sparse-tolerated: x stays sparse');
+  assert(a.fcurves[3].mute === false,     'sparse-tolerated: y unmuted');
+}
+
+// ── Peer-isolation: hidden + unselected curves untouched ────────────
+
+{
+  // Hidden + selected curve: STILL acted on (sidebar W ignores hide).
+  // Mirrors Blender's `ANIMFILTER_LIST_VISIBLE` (row-visible, not
+  // plot-visible) filter at `anim_channels_edit.cc:2956-2960`.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; a.fcurves[0].hide = true; // hidden but selected
+  a.fcurves[1].selected = true;
+  const r = applyChannelMuteSelected(a, 'enable');
+  assert(r.changed === true,              'hidden+selected acted: changed=true');
+  assert(r.mutedCount === 2,              'hidden+selected acted: both muted');
+  assert(a.fcurves[0].mute === true,      'hidden+selected acted: hidden one muted');
+}
+
+// ── wouldChannelMuteSelectedChange — preflight reader ───────────────
+//
+// Critical: must mirror applyChannelMuteSelected exactly (drift would
+// re-introduce Slice 5.M HIGH-A1 phantom-undo bug class).
+
+{
+  // No selection → all modes return false.
+  const a = makeBulkAction();
+  assert(wouldChannelMuteSelectedChange(a, 'toggle')  === false, 'pre: no-sel toggle');
+  assert(wouldChannelMuteSelectedChange(a, 'enable')  === false, 'pre: no-sel enable');
+  assert(wouldChannelMuteSelectedChange(a, 'disable') === false, 'pre: no-sel disable');
+}
+
+{
+  // Selected + all-already-muted: enable→false, disable→true, toggle→true.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true; a.fcurves[0].mute = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  assert(wouldChannelMuteSelectedChange(a, 'enable')  === false, 'pre: all-muted enable=false');
+  assert(wouldChannelMuteSelectedChange(a, 'disable') === true,  'pre: all-muted disable=true');
+  assert(wouldChannelMuteSelectedChange(a, 'toggle')  === true,  'pre: all-muted toggle=true (TOGGLE always flips when sel>0)');
+}
+
+{
+  // Selected + all-already-unmuted: enable→true, disable→false, toggle→true.
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  a.fcurves[1].selected = true;
+  assert(wouldChannelMuteSelectedChange(a, 'enable')  === true,  'pre: all-unmuted enable=true');
+  assert(wouldChannelMuteSelectedChange(a, 'disable') === false, 'pre: all-unmuted disable=false');
+  assert(wouldChannelMuteSelectedChange(a, 'toggle')  === true,  'pre: all-unmuted toggle=true');
+}
+
+{
+  // Mixed: enable→true (one to add), disable→true (one to clear),
+  // toggle→true (always flips when sel>0).
+  const a = makeBulkAction();
+  a.fcurves[0].selected = true;
+  a.fcurves[1].selected = true; a.fcurves[1].mute = true;
+  assert(wouldChannelMuteSelectedChange(a, 'enable')  === true,  'pre: mixed enable=true');
+  assert(wouldChannelMuteSelectedChange(a, 'disable') === true,  'pre: mixed disable=true');
+  assert(wouldChannelMuteSelectedChange(a, 'toggle')  === true,  'pre: mixed toggle=true');
+}
+
+{
+  // Guard: null action / invalid mode.
+  assert(wouldChannelMuteSelectedChange(null, 'toggle') === false,            'pre guard: null action');
+  assert(wouldChannelMuteSelectedChange({ fcurves: null }, 'toggle') === false,'pre guard: null fcurves');
+  // @ts-expect-error — testing runtime guard against invalid input.
+  assert(wouldChannelMuteSelectedChange(makeBulkAction(), 'wat') === false,   'pre guard: unknown mode');
+}
+
+// ── Driver-bearing curves ARE mute-toggleable ───────────────────────
+//
+// Mirrors Blender: `ANIM_channel_setting_set` for MUTE is a pure
+// flag-flip (`anim_channels_defines.cc:1124-1125`) — driver presence
+// does not gate the write. The DRIVER's evaluation is gated downstream
+// by `BKE_animsys_eval_driver` (`anim_sys.cc:4302`), which SS already
+// handles via the caller-side eval gate (test above).
+
+{
+  const a = {
+    id: 'A',
+    fcurves: [{
+      id: 'd',
+      rnaPath: 'objects["__params__"].values["p"]',
+      keyforms: [],
+      selected: true,
+      driver: { type: 'avg', variables: [], expression: '' },
+    }],
+  };
+  const r = applyChannelMuteSelected(a, 'enable');
+  assert(r.changed === true,              'driver mute-toggleable: changed=true');
+  assert(a.fcurves[0].mute === true,      'driver mute-toggleable: mute=true written');
 }
 
 // ─────────────────────────────────────────────────────────────────────

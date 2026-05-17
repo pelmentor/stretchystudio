@@ -149,3 +149,205 @@ export function toggleFCurveMute(action, fcurveId) {
   fc.mute = !isFCurveMuted(fc);
   return { mutedNow: fc.mute === true };
 }
+
+/**
+ * Resolve a TOGGLE bulk-mute mode against the current selection state.
+ *
+ * Mirrors Blender's scan-first TOGGLE branch in `setflag_anim_channels`
+ * at `anim_channels_edit.cc:2968-2980`:
+ *
+ *     if (mode == ACHANNEL_SETFLAG_TOGGLE) {
+ *       mode = ACHANNEL_SETFLAG_ADD;
+ *       for (bAnimListElem &ale : anim_data) {
+ *         if (ANIM_channel_setting_get(ac, &ale, setting) > 0) {
+ *           mode = ACHANNEL_SETFLAG_CLEAR;
+ *           break;
+ *         }
+ *       }
+ *     }
+ *
+ * The default direction is ADD (mute all); if any selected channel is
+ * already muted, the direction flips to CLEAR (unmute all). The result
+ * is uniform: after the operator, every selected channel is in the same
+ * mute state — either all muted or all unmuted. This is the standard
+ * Blender bulk-toggle convention (sister to box-select-toggle).
+ *
+ * Factored out so the preflight reader and the mutator share a single
+ * resolution function: drift between the two would re-introduce the
+ * Slice 5.M HIGH-A1 phantom-undo class of bug.
+ *
+ * @param {Array<object>} selectedFCurves
+ * @returns {'enable' | 'disable'}
+ */
+function resolveToggleDirection(selectedFCurves) {
+  for (const fc of selectedFCurves) {
+    if (isFCurveMuted(fc)) return 'disable';
+  }
+  return 'enable';
+}
+
+/**
+ * Collect every selected fcurve (`fc.selected === true`) into a flat
+ * array. Mirrors Blender's `ANIMFILTER_SEL` filter (added when
+ * `onlysel=true` at `anim_channels_edit.cc:2961-2963`).
+ *
+ * Note: NO `isFCurveHidden` skip here. The sidebar W keymap uses
+ * `ANIMFILTER_LIST_VISIBLE` (row-visible) not `ANIMFILTER_CURVE_VISIBLE`
+ * (plot-visible); hidden curves still appear in the sidebar and remain
+ * mutable via Shift+W. Confirmed against the sidebar's `km_animation_channels`
+ * filter resolution at `anim_channels_edit.cc:2956-2960`.
+ *
+ * @param {object} action
+ * @returns {Array<object>}
+ */
+function collectSelectedFCurves(action) {
+  const out = [];
+  if (!action || !Array.isArray(action.fcurves)) return out;
+  for (const fc of action.fcurves) {
+    if (fc && fc.selected === true) out.push(fc);
+  }
+  return out;
+}
+
+/**
+ * Read-only preflight for {@link applyChannelMuteSelected}.
+ *
+ * Returns true iff calling `applyChannelMuteSelected(action, mode)`
+ * would mutate any field. Mirrors the mutation logic exactly without
+ * writes. Same phantom-undo rationale as Slice 5.M's
+ * `wouldHideChangeFCurves`: `updateProject` at `projectStore.js:230-232`
+ * pushes the snapshot unconditionally before the recipe runs, so a no-op
+ * Shift+W with nothing selected (or with all selected curves already in
+ * the target state) would otherwise consume an undo slot.
+ *
+ * Important TOGGLE invariant: with at least one selected fcurve, TOGGLE
+ * is guaranteed to change at least one curve. The scan-first resolution
+ * picks the direction that OPPOSES at least one current state — uniform
+ * input flips all; mixed input flips the minority. So
+ * `wouldChannelMuteSelectedChange(action, 'toggle')` is equivalent to
+ * `collectSelectedFCurves(action).length > 0`.
+ *
+ * @param {object | null | undefined} action
+ * @param {'toggle' | 'enable' | 'disable'} mode
+ * @returns {boolean}
+ */
+export function wouldChannelMuteSelectedChange(action, mode) {
+  if (mode !== 'toggle' && mode !== 'enable' && mode !== 'disable') return false;
+  const selected = collectSelectedFCurves(action);
+  if (selected.length === 0) return false;
+  const effective = mode === 'toggle' ? resolveToggleDirection(selected) : mode;
+  const wantMuted = effective === 'enable';
+  for (const fc of selected) {
+    if (isFCurveMuted(fc) !== wantMuted) return true;
+  }
+  return false;
+}
+
+/**
+ * Bulk-mute every selected FCurve — port of `setflag_anim_channels`
+ * (`anim_channels_edit.cc:2923-3001`) parameterised for
+ * `ACHANNEL_SETTING_MUTE`. Backs the three sidebar keymap entries at
+ * `blender_default.py:3876-3878`:
+ *
+ *   - Shift+W       → `anim.channels_setting_toggle` → mode='toggle'
+ *   - Ctrl+Shift+W  → `anim.channels_setting_enable` → mode='enable'
+ *   - Alt+W         → `anim.channels_setting_disable` → mode='disable'
+ *
+ * # Three modes
+ *
+ * - **`'enable'`** (Ctrl+Shift+W) — set `mute=true` on every selected
+ *   curve. Mirrors `ACHANNEL_SETFLAG_ADD`. Curves already muted stay
+ *   muted (no spurious flag rewrite).
+ * - **`'disable'`** (Alt+W) — set `mute=false` on every selected curve.
+ *   Mirrors `ACHANNEL_SETFLAG_CLEAR`.
+ * - **`'toggle'`** (Shift+W) — scan-first resolution; see
+ *   {@link resolveToggleDirection}.
+ *
+ * # SS-skipped surfaces
+ *
+ * **The type-picker menu.** In Blender each of the three operators
+ * calls `WM_menu_invoke` which pops the `prop_animchannel_settings_types`
+ * enum picker (`anim_channels_edit.cc:2907-2911`): `{PROTECT, MUTE}`.
+ * The user selects which setting to act on, then the exec runs. SS
+ * has only `fcurve.mute` today — `fcurve.protected` is not ported (no
+ * keyform-edit-protection bit exists yet). The picker with one option
+ * is degenerate UX, so this slice routes Shift+W / Ctrl+Shift+W / Alt+W
+ * DIRECTLY to mute without intermediate UI. When PROTECT lands as its
+ * own slice, that slice must:
+ *   1. Build a popup menu primitive (no menu UI exists in
+ *      FCurveEditor today — context menus + handle-type-pick are
+ *      different patterns).
+ *   2. Re-route the W keymap branches through it.
+ *   3. Add a PROTECT row to the menu enum.
+ * Documented as Deviation 1 below to keep the gap from rotting.
+ *
+ * **Group flushing.** `setflag_anim_channels` at line 2994-2996 calls
+ * `ANIM_flush_setting_anim_channels` after each per-channel write to
+ * propagate the setting through FCurveGroup hierarchy (group toggle
+ * cascades to children, etc.). SS has no FCurveGroup datablock yet
+ * (sister to AGRP_MUTED gap in this same module's header) — flushing
+ * is genuinely a no-op today, not a TODO. When groups ship, this
+ * helper needs to grow a flush pass post-mutation.
+ *
+ * **`tag_update_animation_element`.** Blender tags the data-block for
+ * depgraph re-evaluation per channel touched (line 2991). SS achieves
+ * the same end via `updateProject` invalidating the action and the
+ * top-level depgraph recompute that follows. No per-channel tag call
+ * needed at the helper level — it's the dispatcher's responsibility.
+ *
+ * # SS deviations (cumulative — closes when conditions met)
+ *
+ * **Deviation 1 — no type-picker menu.** See SS-skipped above. Closure:
+ * SS ships PROTECT (fcurve.protected) AND a popup-menu primitive,
+ * THEN W keymap branches re-route through the menu. Tracked under
+ * `project_ss_is_embryo` (PROTECT) + the new Slice 5.O #18 queued
+ * path (popup-menu primitive).
+ *
+ * **Deviation 2 — no Industry-Compatible keymap support.** SS hard-codes
+ * the Blender-default W bindings. Industry-Compatible
+ * (`industry_compatible_data.py`) doesn't appear to remap W today, so
+ * this is the SAME deviation as Slice 5.M Deviation 2 / Slice 5.N
+ * Deviation 1 — gated on the not-yet-built SS keymap-preset selector.
+ *
+ * **Deviation 3 — no FCurveGroup flush.** See SS-skipped above. Sister
+ * to AGRP_MUTED gap; closure tied to FCurveGroup datablock.
+ *
+ * # Why mute belongs to undo (not view state)
+ *
+ * Mirrors the module header rationale: mute changes which curves drive
+ * properties, so it's data not view state. Blender registers
+ * `OPTYPE_UNDO` on all three operators (`anim_channels_edit.cc:3053`,
+ * `:3079`, `:3105`). SS calls `update(recipe)` WITHOUT `skipHistory:true`
+ * — same as the sister Slice 5.M / Slice 5.N dispatchers.
+ *
+ * @param {object} action — Action datablock (mutated in place)
+ * @param {'toggle' | 'enable' | 'disable'} mode
+ * @returns {{ changed: boolean, mutedCount: number, unmutedCount: number, resolvedMode: 'enable' | 'disable' | null }}
+ *   `changed` = any flag write occurred. `mutedCount` = curves whose
+ *   `mute` flipped (any non-true) → true. `unmutedCount` = curves whose
+ *   `mute` flipped true → false. `resolvedMode` = the post-resolution
+ *   direction actually applied (TOGGLE turns into 'enable' or 'disable';
+ *   null only when no selected curves / invalid mode).
+ */
+export function applyChannelMuteSelected(action, mode) {
+  /** @type {{ changed: boolean, mutedCount: number, unmutedCount: number, resolvedMode: 'enable' | 'disable' | null }} */
+  const result = { changed: false, mutedCount: 0, unmutedCount: 0, resolvedMode: null };
+  if (mode !== 'toggle' && mode !== 'enable' && mode !== 'disable') return result;
+  const selected = collectSelectedFCurves(action);
+  if (selected.length === 0) return result;
+
+  /** @type {'enable' | 'disable'} */
+  const effective = mode === 'toggle' ? resolveToggleDirection(selected) : mode;
+  result.resolvedMode = effective;
+  const wantMuted = effective === 'enable';
+
+  for (const fc of selected) {
+    const wasMuted = isFCurveMuted(fc);
+    if (wasMuted === wantMuted) continue;
+    fc.mute = wantMuted;
+    result.changed = true;
+    if (wantMuted) result.mutedCount++;
+    else result.unmutedCount++;
+  }
+  return result;
+}
