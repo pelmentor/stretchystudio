@@ -312,6 +312,7 @@ import {
 } from '../../../anim/animationFCurve.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
+import { getActiveFCurve, setActiveFCurve } from '../../../anim/fcurveActive.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import {
   applyKeyformDrag,
@@ -454,9 +455,19 @@ export function FCurveEditor() {
   // Decoded label map for sidebar rows.
   const labels = useMemo(() => buildLabelMaps(project), [project.nodes, project.parameters]);
 
-  // Active FCurve = the one global selection points at (existing
-  // `pickFCurve` semantics preserved). May be null if no curves match.
-  const activeFCurve = useMemo(() => pickFCurve(action, selection), [action, selection]);
+  // Slice 5.X: active fcurve precedence is now persisted-flag-first,
+  // selection-derived second. `getActiveFCurve` reads the per-fcurve
+  // `active` bit (Blender's FCURVE_ACTIVE port at
+  // [src/anim/fcurveActive.js](../../../anim/fcurveActive.js)); the
+  // `pickFCurve` fallback is the bootstrap heuristic for legacy saves
+  // that don't carry the bit yet. After the user's first click,
+  // `setActiveFCurve` (wired into `applyChannelClick` + the keyform-
+  // click branches) writes the explicit flag and the fallback retires
+  // for that action. See module header for full provenance.
+  const activeFCurve = useMemo(
+    () => getActiveFCurve(action) ?? pickFCurve(action, selection),
+    [action, selection],
+  );
 
   // Audit-fix HIGH-A1 (2026-05-16): memoize `decoded`. Without this, a
   // bare `decodeAllFCurves(action, labels)` would rerun on every render
@@ -962,6 +973,15 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             const a = getActiveSceneAction(p, activeActionId);
             if (!a) return;
             setActiveKeyform(a, fcurveId, hitHandle.idx);
+            // Slice 5.X: handle click promotes the parent fcurve to
+            // active. Sister to Blender's implicit chain — clicking a
+            // bezier handle in graph_select.cc selects + activates the
+            // keyform (active_keyframe_index) and the curve it belongs
+            // to (FCURVE_ACTIVE). The active-keyform halo gate (Slice
+            // 5.W HIGH-2) depends on this; without the write, clicking
+            // a handle on a non-active curve sets the keyform-active
+            // but the halo doesn't render (gate fails).
+            setActiveFCurve(a, fcurveId);
           });
         }
       }
@@ -1070,6 +1090,9 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             const a = getActiveSceneAction(p, activeActionId);
             if (!a) return;
             setActiveKeyform(a, hit.fcurveId, hit.idx);
+            // Slice 5.X: keyform click promotes the parent fcurve to
+            // active (same rationale as the handle-click branch above).
+            setActiveFCurve(a, hit.fcurveId);
           });
         }
       }
@@ -2628,6 +2651,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
       decision = applyChannelSelect(a, fcurveId, modifier, ctx);
+      // Slice 5.X: persist the active flag when applyChannelSelect's
+      // `makeActive` decision says so. Mirrors Blender's
+      // `graph_select.cc:466` (`fcu->flag |= (FCURVE_SELECTED |
+      // FCURVE_ACTIVE)`) — the SELECTED write already happened inside
+      // applyChannelSelect; the ACTIVE write is sister to it. Sharing
+      // the same `{ skipHistory: true }` update closure as channel
+      // selection per fcurveActive.js Deviation 3 (deliberate sister-UX
+      // choice to Slice 5.F's selection-as-view-state stance).
+      if (decision.makeActive) {
+        setActiveFCurve(a, fcurveId);
+      }
     }, { skipHistory: true });
     return decision;
   }, [activeActionId, update]);

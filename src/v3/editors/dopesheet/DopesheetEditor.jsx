@@ -40,14 +40,17 @@
  *
  *   - **Active keyform pin** (`fc.activeKeyformIndex`, Slice 5.H):
  *     pale-yellow ring + amber-300 fill, rendered LAST so it sits on
- *     top of adjacent diamonds. Audit-fix HIGH-2 (Slice 5.W fidelity
- *     audit 2026-05-17): gated additionally on `pickActiveFCurve` —
- *     SS's stand-in for Blender's `FCURVE_ACTIVE` per-channel flag at
- *     `graph_draw.cc:244` until Phase 5 path #11 ships the persisted
- *     flag. Without this gate, every row carrying `activeKeyformIndex`
- *     showed a halo (e.g. after the user clicked keys on multiple
- *     fcurves in FCurveEditor — `setActiveKeyform` doesn't clear sibling
- *     fcurves' `activeKeyformIndex`).
+ *     top of adjacent diamonds. Gated on `fc.active === true` (persisted
+ *     FCURVE_ACTIVE bit shipped in Slice 5.X at
+ *     [src/anim/fcurveActive.js](../../../anim/fcurveActive.js)), with
+ *     `pickActiveFCurve(action, selection)` as the bootstrap fallback
+ *     for legacy actions that haven't yet been clicked. Mirrors
+ *     `draw_fcurve_active_vertex` at `graph_draw.cc:244` (early-returns
+ *     on `!(fcu->flag & FCURVE_ACTIVE)`). Pre-5.X, the gate relied
+ *     solely on the selection-derived fallback (Slice 5.W audit-fix
+ *     HIGH-2) — without a persisted flag, every row carrying
+ *     `activeKeyformIndex` showed a halo (`setActiveKeyform` doesn't
+ *     clear sibling fcurves' indices).
  *
  * @module v3/editors/dopesheet/DopesheetEditor
  */
@@ -58,6 +61,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
+import { getActiveFCurve } from '../../../anim/fcurveActive.js';
 import { buildDopesheetRows, getKeyformRenderOrder } from './dopesheetRows.js';
 
 const LABEL_W = 180;
@@ -93,8 +97,14 @@ export function DopesheetEditor() {
     () => buildDopesheetRows(action, projectForBuild),
     [action, projectForBuild],
   );
+  // Slice 5.X: persisted FCURVE_ACTIVE flag is the source of truth;
+  // selection-derived picker is the bootstrap fallback for legacy
+  // actions that don't carry `fc.active` yet. See
+  // [src/anim/fcurveActive.js](../../../anim/fcurveActive.js) module
+  // header for the full precedence rationale (sister to FCurveEditor's
+  // `activeFCurve` memo at line ~459).
   const activeFCurveId = useMemo(
-    () => pickActiveFCurve(action, selection)?.id ?? null,
+    () => getActiveFCurve(action)?.id ?? pickActiveFCurve(action, selection)?.id ?? null,
     [action, selection],
   );
 
