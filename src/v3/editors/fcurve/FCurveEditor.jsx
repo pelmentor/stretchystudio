@@ -311,6 +311,7 @@ import {
   fcurveTargetsParam,
 } from '../../../anim/animationFCurve.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
+import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import {
   applyKeyformDrag,
@@ -3520,24 +3521,10 @@ function OperatorMenu({ menu, selection, action, activeFCurve, onClose, onPickHa
 
 // ── helpers ──────────────────────────────────────────────────────────
 
-function pickFCurve(action, selection) {
-  if (!action?.fcurves) return null;
-  for (let i = selection.length - 1; i >= 0; i--) {
-    const sel = selection[i];
-    if (sel.type === 'parameter') {
-      const fc = action.fcurves.find((f) => fcurveTargetsParam(f, sel.id));
-      if (fc) return fc;
-    }
-    if (sel.type === 'part' || sel.type === 'group') {
-      const fc = action.fcurves.find((f) => {
-        const t = decodeFCurveTarget(f);
-        return t?.kind === 'node' && t.nodeId === sel.id;
-      });
-      if (fc) return fc;
-    }
-  }
-  return null;
-}
+// Slice 5.W audit-fix: extracted to `src/anim/fcurvePicker.js` so
+// DopesheetEditor can gate its active-keyform halo on the same fcurve.
+// `pickFCurve` is now an alias kept for in-file call sites.
+const pickFCurve = pickActiveFCurve;
 
 /**
  * Build label maps once per project change. Used for sidebar rows.

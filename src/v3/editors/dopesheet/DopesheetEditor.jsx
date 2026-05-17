@@ -22,31 +22,32 @@
  * # Slice 5.W — row-state styling
  *
  * Row data + filtering are extracted to [./dopesheetRows.js](./dopesheetRows.js)
- * so the React tree only handles presentation. Per-row state:
+ * so the React tree only handles presentation. Per-row state (full
+ * rationale + Blender citations in that module's header):
  *
  *   - **Muted** (`isFCurveEffectivelyMuted` — per-fcurve OR group
- *     cascade): label gets `italic opacity-60`; diamonds drop to
- *     ~0.4 alpha. Sister to the FCurveEditor sidebar / plot styling
- *     (see [src/v3/editors/fcurve/FCurveEditor.jsx:3172](../fcurve/FCurveEditor.jsx#L3172),
- *     [:3328](../fcurve/FCurveEditor.jsx#L3328)). Matches Blender's
- *     mute hint pattern at `graph_draw.cc:1190-1194` (colourless grey
- *     replacement on the plot stroke) — SS uses alpha because the
- *     dopesheet draws pips, not strokes; same visual signal in the
- *     medium the surface actually uses.
+ *     cascade): label gets `italic opacity-60`; diamonds drop to 0.4
+ *     alpha. Per-row dot doesn't branch on hidden (audit-fix L4): hidden
+ *     rows are filtered out by the builder and never reach the renderer,
+ *     so the FCurveEditor sidebar's `opacity: isHidden || isMuted ? 0.3
+ *     : 1` (see [src/v3/editors/fcurve/FCurveEditor.jsx:3166](../fcurve/FCurveEditor.jsx#L3166))
+ *     collapses to just `isMuted` here.
  *
- *   - **Hidden** (`isFCurveEffectivelyHidden`): row is filtered out
- *     of the rendered list entirely. Mirrors
- *     `ANIMFILTER_CURVE_VISIBLE` at `anim_filter.cc:1287-1288`. To
- *     un-hide, open FCurveEditor and click the eye glyph there —
- *     same UX as Blender (the sidebar is the un-hide affordance).
+ *   - **Hidden** (`isFCurveEffectivelyHidden`): row filtered out
+ *     entirely. Deliberate SS deviation from Blender's Action Editor
+ *     (which keeps hidden rows visible in the channel sidebar); see
+ *     `dopesheetRows.js` Deviation 3 for the rationale.
  *
- *   - **Active keyform** (`fc.activeKeyformIndex`, Slice 5.H): the
- *     specific keyform pin gets a pale-yellow ring + slight scale.
- *     Mirrors `draw_fcurve_active_vertex` at `graph_draw.cc:241-262`
- *     (`TH_VERTEX_ACTIVE` painted AFTER the regular vertex pass).
- *     SS mirrors via z-ordering — the active diamond is rendered
- *     LAST in each row's keyform loop so it sits on top of any
- *     adjacent diamonds and never gets clipped.
+ *   - **Active keyform pin** (`fc.activeKeyformIndex`, Slice 5.H):
+ *     pale-yellow ring + amber-300 fill, rendered LAST so it sits on
+ *     top of adjacent diamonds. Audit-fix HIGH-2 (Slice 5.W fidelity
+ *     audit 2026-05-17): gated additionally on `pickActiveFCurve` —
+ *     SS's stand-in for Blender's `FCURVE_ACTIVE` per-channel flag at
+ *     `graph_draw.cc:244` until Phase 5 path #11 ships the persisted
+ *     flag. Without this gate, every row carrying `activeKeyformIndex`
+ *     showed a halo (e.g. after the user clicked keys on multiple
+ *     fcurves in FCurveEditor — `setActiveKeyform` doesn't clear sibling
+ *     fcurves' `activeKeyformIndex`).
  *
  * @module v3/editors/dopesheet/DopesheetEditor
  */
@@ -54,28 +55,49 @@
 import { useMemo, useRef } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
+import { useSelectionStore } from '../../../store/selectionStore.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
-import { buildDopesheetRows } from './dopesheetRows.js';
+import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
+import { buildDopesheetRows, getKeyformRenderOrder } from './dopesheetRows.js';
 
 const LABEL_W = 180;
 const ROW_H   = 18;
 const RULER_H = 16;
 
 export function DopesheetEditor() {
-  const project = useProjectStore((s) => s.project);
+  const projectNodes = useProjectStore((s) => s.project.nodes);
+  const projectParameters = useProjectStore((s) => s.project.parameters);
+  const projectActions = useProjectStore((s) => s.project.actions);
   const activeActionId = useAnimationStore((s) => s.activeActionId);
+  const selection = useSelectionStore((s) => s.items);
   const currentTime  = useAnimationStore((s) => s.currentTime);
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
 
-  // Stage 1.E: scene-bound action wins over UI-store fallback. Dep on
-  // `project.nodes` covers the `__scene__` lookup; `project.actions`
-  // covers id resolution.
+  // Stage 1.E: scene-bound action wins over UI-store fallback. Audit-fix
+  // H1 (Slice 5.W arch audit 2026-05-17): narrowed deps below from
+  // [action, project] to just the slices the builder reads — any
+  // unrelated `project` mutation (wizard step, vertex paint, etc.)
+  // would otherwise rebuild the entire row list.
   const action = useMemo(
-    () => getActiveSceneAction(project, activeActionId),
-    [project.nodes, project.actions, activeActionId],
+    () => getActiveSceneAction({ nodes: projectNodes, actions: projectActions }, activeActionId),
+    [projectNodes, projectActions, activeActionId],
   );
 
-  const rows = useMemo(() => buildDopesheetRows(action, project), [action, project]);
+  // Audit-fix H1: dep only on the narrow slices buildDopesheetRows
+  // actually reads. The picker (HIGH-2 gate) needs only `selection`.
+  const projectForBuild = useMemo(
+    () => ({ nodes: projectNodes, parameters: projectParameters }),
+    [projectNodes, projectParameters],
+  );
+  const rows = useMemo(
+    () => buildDopesheetRows(action, projectForBuild),
+    [action, projectForBuild],
+  );
+  const activeFCurveId = useMemo(
+    () => pickActiveFCurve(action, selection)?.id ?? null,
+    [action, selection],
+  );
+
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
   if (!action) {
@@ -111,6 +133,7 @@ export function DopesheetEditor() {
                   row={row}
                   duration={duration}
                   currentTime={currentTime}
+                  isActiveChannel={row.fcurveId !== '' && row.fcurveId === activeFCurveId}
                   onSeek={setCurrentTime}
                 />
               ))
@@ -164,21 +187,21 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ row, duration, currentTime, onSeek }) {
+function Row({ row, duration, currentTime, isActiveChannel, onSeek }) {
   const { isMuted, activeKfIdx } = row;
-  // Render the active keyform LAST so its halo sits on top of any
-  // adjacent diamonds and never gets clipped. Mirrors Blender's
-  // `draw_fcurve_active_vertex` two-pass order at `graph_draw.cc:241-262`.
-  const orderedIndices = useMemo(() => {
-    const n = row.keyforms.length;
-    if (activeKfIdx < 0 || activeKfIdx >= n) {
-      return Array.from({ length: n }, (_, i) => i);
-    }
-    const out = [];
-    for (let i = 0; i < n; i++) if (i !== activeKfIdx) out.push(i);
-    out.push(activeKfIdx);
-    return out;
-  }, [row.keyforms.length, activeKfIdx]);
+  // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
+  // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
+  const orderedIndices = useMemo(
+    () => getKeyformRenderOrder(row.keyforms.length, activeKfIdx),
+    [row.keyforms, activeKfIdx],
+  );
+
+  // Audit-fix HIGH-2: per-channel gate. Halo only fires when this row's
+  // fcurve is the currently active one (SS-equivalent of FCURVE_ACTIVE
+  // gate at `graph_draw.cc:244`). Until Phase 5 path #11 ships the
+  // persisted `fcurve.active` flag, `pickActiveFCurve(action, selection)`
+  // carries the same semantic via editor-local selection state.
+  const showActiveHalo = isActiveChannel && activeKfIdx >= 0 && activeKfIdx < row.keyforms.length;
 
   return (
     <div
@@ -214,18 +237,18 @@ function Row({ row, duration, currentTime, onSeek }) {
           const kf = row.keyforms[i];
           const left = (kf.time / duration) * 100;
           const isHot = Math.abs(kf.time - currentTime) < 1;
-          const isActive = i === activeKfIdx;
+          const isActiveHalo = showActiveHalo && i === activeKfIdx;
           return (
             <span
               key={i}
               className={
                 'absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 cursor-pointer '
-                + (isActive
+                + (isActiveHalo
                   ? 'ring-2 ring-yellow-300/90 bg-amber-300'
                   : (isHot ? 'bg-primary ring-1 ring-primary/40' : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400'))
               }
               style={{ left: `calc(${left}% - 4px)` }}
-              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActive ? ' · active' : ''}`}
+              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActiveHalo ? ' · active' : ''}`}
               onClick={(e) => { e.stopPropagation(); onSeek(kf.time); }}
             />
           );
@@ -254,6 +277,10 @@ function buildRulerTicks(duration) {
 }
 
 function formatValue(v) {
+  // Audit-fix L2: render null/undefined as the project's empty-value
+  // glyph instead of the literal strings "null"/"undefined" that the
+  // prior `String(v)` fallthrough produced.
+  if (v == null) return '—';
   if (typeof v === 'number') return v.toFixed(2);
   if (Array.isArray(v)) return `[${v.map((n) => Number(n).toFixed(2)).join(', ')}]`;
   return String(v);

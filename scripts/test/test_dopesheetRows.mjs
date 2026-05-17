@@ -16,7 +16,7 @@
 //
 // Run: node scripts/test/test_dopesheetRows.mjs
 
-import { buildDopesheetRows } from '../../src/v3/editors/dopesheet/dopesheetRows.js';
+import { buildDopesheetRows, getKeyformRenderOrder } from '../../src/v3/editors/dopesheet/dopesheetRows.js';
 
 let passed = 0;
 let failed = 0;
@@ -99,8 +99,9 @@ function makeProject(opts = {}) {
   });
   const rows = buildDopesheetRows(action, project);
   eq(rows.length, 4, 'all 4 fcurves produce rows');
-  eq(rows[0].key, 'param:paramA', 'param rows come first (alphabetical)');
-  eq(rows[1].key, 'param:paramB', 'second param row');
+  eq(rows[0].key, 'param:fc_param_paramA', 'param rows come first (alphabetical); fcurveId-based key');
+  eq(rows[1].key, 'param:fc_param_paramB', 'second param row');
+  eq(rows[0].fcurveId, 'fc_param_paramA', 'fcurveId carried for halo-gate match');
   eq(rows[0].label, 'ParamA', 'param row uses parameter name');
   eq(rows[1].label, 'ParamB', 'second param uses parameter name');
   eq(rows[2].label, 'Alice · rotation', 'node row uses Node name + property');
@@ -130,7 +131,7 @@ function makeProject(opts = {}) {
   ]);
   const rows = buildDopesheetRows(action, makeProject());
   eq(rows.length, 1, 'only the decodeable fcurve produces a row');
-  eq(rows[0].key, 'param:valid', 'valid row survives');
+  eq(rows[0].key, 'param:fc_param_valid', 'valid row survives with fcurveId-based key');
 }
 
 // ── keyforms sorted by time ─────────────────────────────────────────
@@ -157,6 +158,11 @@ function makeProject(opts = {}) {
   );
 }
 
+// Lookup helper for the post-audit-fix fcurveId-based key format.
+function byFcId(rows, id) {
+  return rows.find((r) => r.fcurveId === id);
+}
+
 // ── isMuted: per-fcurve ─────────────────────────────────────────────
 {
   const action = makeAction([
@@ -165,10 +171,9 @@ function makeProject(opts = {}) {
     paramFc('falseP', [{ time: 0, value: 0 }], { mute: false }),
   ]);
   const rows = buildDopesheetRows(action, makeProject());
-  const byKey = new Map(rows.map((r) => [r.key, r]));
-  eq(byKey.get('param:mutedP').isMuted, true, 'per-fcurve mute=true → isMuted=true');
-  eq(byKey.get('param:liveP').isMuted, false, 'missing mute field → isMuted=false');
-  eq(byKey.get('param:falseP').isMuted, false, 'mute=false → isMuted=false');
+  eq(byFcId(rows, 'fc_param_mutedP').isMuted, true, 'per-fcurve mute=true → isMuted=true');
+  eq(byFcId(rows, 'fc_param_liveP').isMuted, false, 'missing mute field → isMuted=false');
+  eq(byFcId(rows, 'fc_param_falseP').isMuted, false, 'mute=false → isMuted=false');
 }
 
 // ── isMuted: group cascade (Slice 5.V parity) ───────────────────────
@@ -184,10 +189,9 @@ function makeProject(opts = {}) {
   ], groups);
   const project = makeProject({ nodes: [{ id: 'n1', name: 'N1' }] });
   const rows = buildDopesheetRows(action, project);
-  const byKey = new Map(rows.map((r) => [r.key, r]));
-  eq(byKey.get('node:n1:x').isMuted, true, 'group-cascade mute via gMute');
-  eq(byKey.get('node:n1:y').isMuted, false, 'gLive (no mute) leaves child unmuted');
-  eq(byKey.get('node:n1:z').isMuted, false, 'ungrouped fcurve stays unmuted');
+  eq(byFcId(rows, 'fc_n1_x').isMuted, true, 'group-cascade mute via gMute');
+  eq(byFcId(rows, 'fc_n1_y').isMuted, false, 'gLive (no mute) leaves child unmuted');
+  eq(byFcId(rows, 'fc_n1_z').isMuted, false, 'ungrouped fcurve stays unmuted');
 }
 
 // ── hide filter: per-fcurve ─────────────────────────────────────────
@@ -198,7 +202,7 @@ function makeProject(opts = {}) {
   ]);
   const rows = buildDopesheetRows(action, makeProject());
   eq(rows.length, 1, 'hidden row filtered out');
-  eq(rows[0].key, 'param:shownP', 'only the shown row survives');
+  eq(rows[0].fcurveId, 'fc_param_shownP', 'only the shown row survives');
 }
 
 // ── hide filter: group cascade (Slice 5.V parity) ───────────────────
@@ -214,7 +218,7 @@ function makeProject(opts = {}) {
   const project = makeProject({ nodes: [{ id: 'n1', name: 'N1' }] });
   const rows = buildDopesheetRows(action, project);
   eq(rows.length, 1, 'group-hidden child filtered out');
-  eq(rows[0].key, 'node:n1:y', 'shown child survives');
+  eq(rows[0].fcurveId, 'fc_n1_y', 'shown child survives');
 }
 
 // ── activeKfIdx ─────────────────────────────────────────────────────
@@ -226,11 +230,10 @@ function makeProject(opts = {}) {
     paramFc('negActive', [{ time: 0, value: 0 }], { activeKeyformIndex: -1 }),
   ]);
   const rows = buildDopesheetRows(action, makeProject());
-  const byKey = new Map(rows.map((r) => [r.key, r]));
-  eq(byKey.get('param:noActive').activeKfIdx, -1, 'missing activeKeyformIndex → -1');
-  eq(byKey.get('param:hasActive').activeKfIdx, 1, 'in-bounds activeKeyformIndex preserved');
-  eq(byKey.get('param:oobActive').activeKfIdx, -1, 'out-of-bounds activeKeyformIndex → -1');
-  eq(byKey.get('param:negActive').activeKfIdx, -1, 'negative sentinel → -1');
+  eq(byFcId(rows, 'fc_param_noActive').activeKfIdx, -1, 'missing activeKeyformIndex → -1');
+  eq(byFcId(rows, 'fc_param_hasActive').activeKfIdx, 1, 'in-bounds activeKeyformIndex preserved');
+  eq(byFcId(rows, 'fc_param_oobActive').activeKfIdx, -1, 'out-of-bounds activeKeyformIndex → -1');
+  eq(byFcId(rows, 'fc_param_negActive').activeKfIdx, -1, 'negative sentinel → -1');
 }
 
 // ── activeKfIdx tracks sort order ───────────────────────────────────
@@ -280,6 +283,112 @@ function makeProject(opts = {}) {
   const rows = buildDopesheetRows(action, makeProject());
   eq(rows[0].tooltip, 'Parameter p1', 'param tooltip format');
   eq(rows[1].tooltip, 'Node n1 · rotation', 'node tooltip format');
+}
+
+// ── audit-fix L3: React-key collision uses fcurveId ─────────────────
+{
+  // Two fcurves targeting the same (nodeId, property) with DIFFERENT
+  // fcurve ids should now produce two rows (audit-fix L3 — pre-fix the
+  // shared key silently deduped via React).
+  const action = makeAction([
+    { id: 'fcA', rnaPath: 'objects["n1"].x', keyforms: [{ time: 0, value: 0 }] },
+    { id: 'fcB', rnaPath: 'objects["n1"].x', keyforms: [{ time: 100, value: 1 }] },
+  ]);
+  const rows = buildDopesheetRows(action, makeProject({ nodes: [{ id: 'n1', name: 'N1' }] }));
+  eq(rows.length, 2, 'duplicate targets but distinct ids → both rows');
+  // Keys differ (fcurveId-based)
+  assert(rows[0].key !== rows[1].key, 'rows have distinct React keys');
+}
+
+{
+  // Two fcurves sharing the SAME id are pathological — first wins, second
+  // dropped + logger warn. Smoke-test: only one row emerges.
+  const action = makeAction([
+    { id: 'dup', rnaPath: 'objects["__params__"].values["p"]', keyforms: [] },
+    { id: 'dup', rnaPath: 'objects["__params__"].values["q"]', keyforms: [] },
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(rows.length, 1, 'duplicate fcurve id → second dropped');
+}
+
+// ── audit-fix M1: non-numeric / non-finite times filtered ───────────
+{
+  const action = makeAction([
+    paramFc('p', [
+      { time: 100, value: 1 },
+      { time: 'bad', value: 0.5 },    // string time
+      { time: NaN, value: 0.3 },      // NaN
+      { time: Infinity, value: 0.4 }, // Infinity
+      { value: 0.2 },                  // missing time
+      { time: 0, value: 0 },           // good
+    ]),
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(rows[0].keyforms.length, 2, 'only 2 keyforms survive the finite-time filter');
+  deepEq(
+    rows[0].keyforms.map((k) => k.time),
+    [0, 100],
+    'surviving keyforms sorted by time',
+  );
+}
+
+// ── audit-fix HIGH-1: muted rows survive, not filtered ──────────────
+{
+  // Confirms mute is a STYLE flag (isMuted), not a filter — sister to
+  // hide which IS a filter. SS-original convention; documented Deviation 1.
+  const action = makeAction([
+    paramFc('m', [{ time: 0, value: 0 }], { mute: true }),
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(rows.length, 1, 'muted row still appears in output');
+  eq(rows[0].isMuted, true, '...with isMuted=true so renderer can dim it');
+}
+
+// ── audit-fix M2: getKeyformRenderOrder pure function ───────────────
+{
+  // Identity order when no active
+  deepEq(getKeyformRenderOrder(3, -1), [0, 1, 2], 'no active → identity order');
+  deepEq(getKeyformRenderOrder(3, 5), [0, 1, 2], 'OOB active → identity order');
+  deepEq(getKeyformRenderOrder(3, -2), [0, 1, 2], 'negative active sentinel → identity');
+
+  // Active last when in bounds
+  deepEq(getKeyformRenderOrder(3, 0), [1, 2, 0], 'active=0 → 0 moves to end');
+  deepEq(getKeyformRenderOrder(3, 1), [0, 2, 1], 'active=1 → 1 moves to end');
+  deepEq(getKeyformRenderOrder(3, 2), [0, 1, 2], 'active=last → already at end');
+  deepEq(getKeyformRenderOrder(5, 2), [0, 1, 3, 4, 2], '5 keyforms, active=2');
+
+  // Edge cases
+  deepEq(getKeyformRenderOrder(0, -1), [], 'empty list → empty');
+  deepEq(getKeyformRenderOrder(0, 0), [], 'empty list with active=0 → empty');
+  deepEq(getKeyformRenderOrder(1, 0), [0], 'single keyform, active=0');
+  deepEq(getKeyformRenderOrder(-1, 0), [], 'negative length → empty');
+  deepEq(getKeyformRenderOrder(2.5, 0), [], 'non-integer length → empty');
+  deepEq(getKeyformRenderOrder(3, 1.5), [0, 1, 2], 'non-integer active → identity');
+}
+
+// ── audit-fix M4: group lookup correctness preserved with inlined cascade ─
+// (Already covered by the per-fcurve mute + group-cascade mute + hide blocks
+// above; the M4 fix only changes IMPLEMENTATION to use a local Map, not
+// semantics. Add one assertion ensuring multi-group cascade still works.)
+{
+  const groups = [
+    { id: 'g1', name: 'G1', mute: true,  hide: false },
+    { id: 'g2', name: 'G2', mute: false, hide: true  },
+    { id: 'g3', name: 'G3' }, // no flags
+  ];
+  const action = makeAction([
+    nodeFc('n1', 'a', [{ time: 0, value: 0 }], { groupId: 'g1' }),
+    nodeFc('n1', 'b', [{ time: 0, value: 0 }], { groupId: 'g2' }),
+    nodeFc('n1', 'c', [{ time: 0, value: 0 }], { groupId: 'g3' }),
+    nodeFc('n1', 'd', [{ time: 0, value: 0 }], { groupId: 'gMissing' }),
+  ], groups);
+  const rows = buildDopesheetRows(action, makeProject({ nodes: [{ id: 'n1', name: 'N1' }] }));
+  // g2 hides 'b', so 3 rows survive (a, c, d)
+  eq(rows.length, 3, '3 rows after hide-filter (g2 hides b)');
+  const byProperty = new Map(rows.map((r) => [r.label.split(' · ')[1], r]));
+  eq(byProperty.get('a')?.isMuted, true,  'g1 cascade mutes a');
+  eq(byProperty.get('c')?.isMuted, false, 'g3 has no flags');
+  eq(byProperty.get('d')?.isMuted, false, 'missing-group fcurve treated as ungrouped (not muted)');
 }
 
 // ── final report ────────────────────────────────────────────────────
