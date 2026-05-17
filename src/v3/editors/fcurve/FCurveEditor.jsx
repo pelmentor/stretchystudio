@@ -2752,6 +2752,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             activeActionId={activeActionId}
             activeFCurveId={activeFCurveId}
             interpolationTypes={INTERPOLATION_TYPES}
+            handleTypes={HANDLE_TYPES}
           />
         </div>
       ) : null}

@@ -60,12 +60,27 @@ const DEFAULT_EASE_MODE = {
   sine:    'in',
 };
 
-/** Blender BezTriple BACK overshoot default (`bezt->back` field). */
+/**
+ * Blender BezTriple struct-initializer defaults. Reference:
+ * `reference/blender/source/blender/animrig/intern/fcurve.cc:338-345`:
+ *
+ *   beztr->back = 1.70158f;
+ *   beztr->amplitude = 0.8f;
+ *   beztr->period = 4.1f;
+ *
+ * Audit-fix HIGH-B1 (Slice 5.R dual-audit 2026-05-17): amplitude +
+ * period were `0` / `0` since Phase 2.C — degenerate ELASTIC curves
+ * (amp=0 zeros the sine envelope; period=0 forces div-by-zero
+ * protection paths). The fab was inherited from a documentation guess
+ * about Blender's BezTriple struct without opening
+ * `animrig/intern/fcurve.cc`; the audit-pin (`fcurve.cc:340/344/345`)
+ * is now the canonical source-of-truth cite. Values match Blender's
+ * "hand-optimized for a default duration of ~10 frames" comment at
+ * `fcurve.cc:343`.
+ */
 const DEFAULT_BACK_OVERSHOOT = 1.70158;
-/** Blender BezTriple ELASTIC amplitude default (`bezt->amplitude`). */
-const DEFAULT_ELASTIC_AMPLITUDE = 0;
-/** Blender BezTriple ELASTIC period default (`bezt->period`). */
-const DEFAULT_ELASTIC_PERIOD = 0;
+const DEFAULT_ELASTIC_AMPLITUDE = 0.8;
+const DEFAULT_ELASTIC_PERIOD = 4.1;
 
 /** EXPO easing magic constants (easing.cc:254-255). */
 const EXPO_POW_MIN = 0.0009765625;            // 2^(-10)

@@ -2,7 +2,7 @@
 /* eslint-disable react/prop-types */
 
 /**
- * Animation Phase 5 Slice 5.Q — Active Keyframe N-panel section.
+ * Animation Phase 5 Slices 5.Q + 5.R — Active Keyframe N-panel section.
  *
  * React rendering for the "Active Keyframe" panel inside the
  * FCurveEditor's N-panel (right sidebar). Pure presentation; all
@@ -16,7 +16,7 @@
  * registered as `GRAPH_PT_key_properties` with label `"Active Keyframe"`
  * (`graph_buttons.cc:1434-1438`).
  *
- * # Three editable fields (MVP)
+ * # 5.Q always-on fields
  *
  *   - **Interpolation** dropdown — Blender's `bezt_ptr.prop("interpolation")`
  *     at `graph_buttons.cc:410`. SS uses the existing 13-entry
@@ -31,9 +31,21 @@
  *   - **Value** number input — Blender's `co_ui[1]` at
  *     `graph_buttons.cc:460-475`.
  *
- * Handle editing rows (left handle, right handle, easing direction,
- * easing extras) are deferred to Slice 5.R — see
- * `activeKeyformPanelData.js` Deviation 1.
+ * # 5.R conditional sections (closes 5.Q Deviation 1)
+ *
+ *   - **Easing direction** dropdown when current's `ipo` is a named
+ *     easing (`shouldShowEasingDirection`) — Blender's
+ *     `bezt_ptr.prop("easing")` at `graph_buttons.cc:415`.
+ *   - **Easing extras** — `back` field for BACK; `amplitude` + `period`
+ *     for ELASTIC — Blender's `graph_buttons.cc:418-433`.
+ *   - **Left handle** (Type + Frame + Value) when previous kf is
+ *     bezier — Blender's `graph_buttons.cc:479-533`.
+ *   - **Right handle** (Type + Frame + Value) when current kf is
+ *     bezier — Blender's `graph_buttons.cc:536-591`.
+ *
+ * Render order matches Blender's panel order verbatim: interpolation →
+ * easing direction → easing extras → key frame coords → left handle →
+ * right handle.
  *
  * # Edit commit semantics
  *
@@ -76,7 +88,40 @@ import {
   applyEditKeyformFrame,
   wouldEditKeyformInterpolationChange,
   applyEditKeyformInterpolation,
+  shouldShowLeftHandleSection,
+  shouldShowRightHandleSection,
+  shouldShowEasingDirection,
+  shouldShowBackExtras,
+  shouldShowElasticExtras,
+  readHandleCoord,
+  wouldEditKeyformHandleTypeChange,
+  applyEditKeyformHandleType,
+  wouldEditKeyformHandleCoordChange,
+  applyEditKeyformHandleCoord,
+  wouldEditKeyformEaseModeChange,
+  applyEditKeyformEaseMode,
+  wouldEditKeyformEasingExtraChange,
+  applyEditKeyformEasingExtra,
 } from './activeKeyformPanelData.js';
+
+/**
+ * Easing-direction enum. Mirrors Blender's RNA enum
+ * `rna_enum_beztriple_interpolation_easing_items` at
+ * `reference/blender/source/blender/makesrna/intern/rna_fcurve.cc:118-143`.
+ * Labels reproduced verbatim from the Blender source ("Automatic
+ * Easing" / "Ease In" / "Ease Out" / "Ease In and Out"). SS surfaces
+ * 'auto' as the sparse default; the eval substrate at
+ * `fcurveEval.js:50-61` picks the per-easing-type curated default
+ * when easeMode is 'auto'. Audit-fix MED-B1 (Slice 5.R dual-audit
+ * 2026-05-17): the 'auto' label was "Automatic"; Blender's RNA item
+ * is "Automatic Easing" — corrected for parity.
+ */
+const EASING_DIRECTIONS = /** @type {const} */ ([
+  { key: 'auto',  label: 'Automatic Easing' },
+  { key: 'in',    label: 'Ease In' },
+  { key: 'out',   label: 'Ease Out' },
+  { key: 'inout', label: 'Ease In and Out' },
+]);
 
 /**
  * @param {{
@@ -84,6 +129,7 @@ import {
  *   activeActionId: string | null,
  *   activeFCurveId: string | null,
  *   interpolationTypes: ReadonlyArray<{ key: string, label: string }>,
+ *   handleTypes: ReadonlyArray<{ key: string, label: string }>,
  * }} props
  */
 export function ActiveKeyformPanel({
@@ -91,6 +137,7 @@ export function ActiveKeyformPanel({
   activeActionId,
   activeFCurveId,
   interpolationTypes,
+  handleTypes,
 }) {
   // ALL hooks hoisted above any early return per
   // `feedback_hooks_before_early_return`. The empty-state branch
@@ -137,6 +184,63 @@ export function ActiveKeyformPanel({
     });
   }, [activeActionId, activeFCurveId, update]);
 
+  const onEditEaseMode = useCallback((newMode) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditKeyformEaseModeChange(liveAction, activeFCurveId, newMode)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyEditKeyformEaseMode(a, activeFCurveId, newMode);
+    });
+  }, [activeActionId, activeFCurveId, update]);
+
+  /**
+   * @param {'back'|'amplitude'|'period'} field
+   * @param {number} newValue
+   */
+  const onEditEasingExtra = useCallback((field, newValue) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditKeyformEasingExtraChange(liveAction, activeFCurveId, field, newValue)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyEditKeyformEasingExtra(a, activeFCurveId, field, newValue);
+    });
+  }, [activeActionId, activeFCurveId, update]);
+
+  /**
+   * @param {'left'|'right'} side
+   * @param {string} newType
+   */
+  const onEditHandleType = useCallback((side, newType) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditKeyformHandleTypeChange(liveAction, activeFCurveId, side, newType)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyEditKeyformHandleType(a, activeFCurveId, side, newType);
+    });
+  }, [activeActionId, activeFCurveId, update]);
+
+  /**
+   * @param {'left'|'right'} side
+   * @param {'time'|'value'} axis
+   * @param {number} newScalar
+   */
+  const onEditHandleCoord = useCallback((side, axis, newScalar) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditKeyformHandleCoordChange(liveAction, activeFCurveId, side, axis, newScalar)) return;
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      applyEditKeyformHandleCoord(a, activeFCurveId, side, axis, newScalar);
+    });
+  }, [activeActionId, activeFCurveId, update]);
+
   const ctx = resolveActiveKeyformContext(action, activeFCurveId);
 
   if (!ctx) {
@@ -154,6 +258,27 @@ export function ActiveKeyformPanel({
   // Interpolation dropdown — sparse-default 'linear' surfaced as the
   // display value when the field is missing.
   const currentInterp = ctx.kf.interpolation ?? 'linear';
+  const currentEaseMode = ctx.kf.easeMode ?? 'auto';
+  const showEasingDir = shouldShowEasingDirection(ctx);
+  const showBack = shouldShowBackExtras(ctx);
+  const showElastic = shouldShowElasticExtras(ctx);
+  const showLeftHandle = shouldShowLeftHandleSection(ctx);
+  const showRightHandle = shouldShowRightHandleSection(ctx);
+  const leftHandle = showLeftHandle ? readHandleCoord(ctx, 'left') : null;
+  const rightHandle = showRightHandle ? readHandleCoord(ctx, 'right') : null;
+  const handleTypeLeft = ctx.kf.handleType?.left ?? 'auto';
+  const handleTypeRight = ctx.kf.handleType?.right ?? 'auto';
+
+  // Sparse-default for easing-extras display: match the data layer's
+  // EASING_EXTRA_DEFAULTS (sourced from Blender's BezTriple struct
+  // initializer at `animrig/intern/fcurve.cc:338-345`). Audit-fix
+  // HIGH-B1 (Slice 5.R dual-audit 2026-05-17): amplitude+period were
+  // hardcoded to 0 here (the pre-audit defaults); flipped to match
+  // Blender's hand-optimized 0.8 / 4.1 in the same sweep that
+  // corrected `fcurveEval.js`.
+  const currentBack = typeof ctx.kf.back === 'number' ? ctx.kf.back : 1.70158;
+  const currentAmplitude = typeof ctx.kf.amplitude === 'number' ? ctx.kf.amplitude : 0.8;
+  const currentPeriod = typeof ctx.kf.period === 'number' ? ctx.kf.period : 4.1;
 
   return (
     <PanelSection title="Active Keyframe">
@@ -170,6 +295,49 @@ export function ActiveKeyformPanel({
           </select>
         </FieldRow>
 
+        {showEasingDir && (
+          <FieldRow label="Easing">
+            <select
+              value={currentEaseMode}
+              onChange={(e) => onEditEaseMode(e.target.value)}
+              className="w-full h-6 px-1 text-[11px] bg-background border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {EASING_DIRECTIONS.map((d) => (
+                <option key={d.key} value={d.key}>{d.label}</option>
+              ))}
+            </select>
+          </FieldRow>
+        )}
+
+        {showBack && (
+          <FieldRow label="Back">
+            <NumberInput
+              value={currentBack}
+              onCommit={(v) => onEditEasingExtra('back', v)}
+              step={0.01}
+            />
+          </FieldRow>
+        )}
+
+        {showElastic && (
+          <>
+            <FieldRow label="Amplitude">
+              <NumberInput
+                value={currentAmplitude}
+                onCommit={(v) => onEditEasingExtra('amplitude', v)}
+                step={0.01}
+              />
+            </FieldRow>
+            <FieldRow label="Period">
+              <NumberInput
+                value={currentPeriod}
+                onCommit={(v) => onEditEasingExtra('period', v)}
+                step={0.01}
+              />
+            </FieldRow>
+          </>
+        )}
+
         <FieldRow label="Time (ms)">
           <NumberInput
             value={ctx.kf.time}
@@ -185,6 +353,77 @@ export function ActiveKeyformPanel({
             step={0.01}
           />
         </FieldRow>
+
+        {/* Audit-pin MED-A1 (5.R dual-audit 2026-05-17): the
+            `&& leftHandle` clause is defense-in-depth, not load-bearing
+            — when `showLeftHandle` is true (which requires ctx non-null
+            with a non-null prevKf), `readHandleCoord(ctx, 'left')` falls
+            through to the kf-coords default and returns a non-null
+            object. Kept as a TypeScript-narrowing aid so the `leftHandle.time`
+            reads below don't need optional chaining; audit-pinned so a
+            future change to `readHandleCoord`'s null contract surfaces
+            here. */}
+        {showLeftHandle && leftHandle && (
+          <>
+            <FieldRow label="Left Type">
+              <select
+                value={handleTypeLeft}
+                onChange={(e) => onEditHandleType('left', e.target.value)}
+                className="w-full h-6 px-1 text-[11px] bg-background border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                {handleTypes.map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </select>
+            </FieldRow>
+            <FieldRow label="L Time (ms)">
+              <NumberInput
+                value={leftHandle.time}
+                onCommit={(v) => onEditHandleCoord('left', 'time', v)}
+                step={1}
+              />
+            </FieldRow>
+            <FieldRow label="L Value">
+              <NumberInput
+                value={leftHandle.value}
+                onCommit={(v) => onEditHandleCoord('left', 'value', v)}
+                step={0.01}
+              />
+            </FieldRow>
+          </>
+        )}
+
+        {/* Audit-pin MED-A1 (5.R dual-audit 2026-05-17): see left-handle
+            comment above — same defense-in-depth pattern. */}
+        {showRightHandle && rightHandle && (
+          <>
+            <FieldRow label="Right Type">
+              <select
+                value={handleTypeRight}
+                onChange={(e) => onEditHandleType('right', e.target.value)}
+                className="w-full h-6 px-1 text-[11px] bg-background border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                {handleTypes.map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </select>
+            </FieldRow>
+            <FieldRow label="R Time (ms)">
+              <NumberInput
+                value={rightHandle.time}
+                onCommit={(v) => onEditHandleCoord('right', 'time', v)}
+                step={1}
+              />
+            </FieldRow>
+            <FieldRow label="R Value">
+              <NumberInput
+                value={rightHandle.value}
+                onCommit={(v) => onEditHandleCoord('right', 'value', v)}
+                step={0.01}
+              />
+            </FieldRow>
+          </>
+        )}
       </div>
     </PanelSection>
   );
