@@ -3375,16 +3375,29 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                 {/* Slice 5.BB — group name is Shift+Ctrl+click target.
                     Plain click is intentionally a no-op for this slice
                     (Blender's `mouse_anim_channels` ANIMTYPE_GROUP branch
-                    at `anim_channels_edit.cc:4154-4180` ALSO handles
-                    SELECT_REPLACE / SELECT_INVERT / SELECT_EXTEND_RANGE
+                    at `anim_channels_edit.cc:4154-4189` ALSO handles
+                    SELECT_INVERT (`:4155-4158`), SELECT_EXTEND_RANGE
+                    (`:4159-4162`), and SELECT_REPLACE (`:4181-4189`)
                     on group headers, but path #35 scoped only the
                     `children_only` (Shift+Ctrl) variant — plain/Ctrl/
                     Shift group-header clicks are queued for a future
-                    slice). */}
+                    slice). Audit-fix fidelity MED-1 (Slice 5.BB
+                    fidelity audit 2026-05-17): cite range corrected
+                    from `:4154-4180` (which omits the SELECT_REPLACE
+                    else-branch at `:4181-4189`). */}
                 <span
                   className="truncate flex-1 font-semibold cursor-pointer hover:text-foreground"
                   title="Shift+Ctrl+click to select all children"
                   onClick={(e) => {
+                    // Audit-fix LOW-1 (Slice 5.BB arch audit 2026-05-17):
+                    // honor `wasDragRef` latch from the Sidebar drag-rect
+                    // FSM (Slice 5.Y). Without this, a drag that started
+                    // on the group header span and released elsewhere
+                    // would leak its `wasDragRef = true` past a synthesized
+                    // click on this span (which has no other gate),
+                    // potentially suppressing the next legitimate
+                    // keyboard-initiated row click.
+                    if (wasDragRef.current) { wasDragRef.current = false; return; }
                     const isChildrenOnly = (e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey);
                     if (isChildrenOnly) onApplyGroupChildrenSelect(group.id);
                   }}

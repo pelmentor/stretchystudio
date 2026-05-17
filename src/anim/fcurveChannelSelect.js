@@ -659,14 +659,32 @@ export function wouldChannelDeleteSelectedChange(action) {
  *      through `anim_channels_select_set` ANIMTYPE_FCURVE case at
  *      `:723-734`: when an fcurve transitions to !FCURVE_SELECTED AND
  *      `change_active` is true (always true for CLEAR mode per `:683`),
- *      the cascade also clears FCURVE_ACTIVE. The children_only branch
- *      does NOT re-elevate any fcurve to active (no
- *      `ANIM_set_active_channel` call in the `:4163-4180` block). So
- *      even if the previously-active fcurve was IN the clicked group
- *      and gets re-selected in step 2, the ACTIVE flag stays cleared.
- *      SS port: `clearActiveFCurves(action)` runs unconditionally when
- *      the previously-active fcurve was in the visible scope, matching
+ *      the cascade also clears FCURVE_ACTIVE. Blender DOES re-elevate
+ *      the clicked GROUP to AGRP_ACTIVE in the post-branch
+ *      `ANIM_set_active_channel` call (`:4191-4200` — `selectmode !=
+ *      EXTEND_RANGE` passes for `selectmode = -1`), but
+ *      `ANIM_set_active_channel` only touches channels whose type
+ *      matches `channel_type=ANIMTYPE_GROUP` (defn at `:255-260`), so
+ *      FCURVE_ACTIVE on per-fcurve children is untouched by the
+ *      elevation. SS does NOT port AGRP_ACTIVE (inherited Slice 5.V
+ *      deviation — see `src/anim/fcurveGroups.js:17` for the bit defn
+ *      list noting AGRP_ACTIVE as Blender-only), so the group-level
+ *      re-elevation has no SS equivalent. The FCURVE_ACTIVE clearing
+ *      IS ported: `clearActiveFCurves(action)` runs when the
+ *      previously-active fcurve was in the visible scope, matching
  *      Slice 5.X EXCLUSIVE invariant + Slice 5.Y box-select pattern.
+ *
+ *      **Note on hidden-active edge case** (audit-fix fidelity MED-4
+ *      2026-05-17): Blender's pre-clear scope is broader than SS's
+ *      (Blender = `anim_channels_for_selection` at `:523-534` with
+ *      filter `DATA_VISIBLE | LIST_CHANNELS` — explicit comment at
+ *      `:528` "no list visible, otherwise, we get dangling"). SS uses
+ *      `orderedIds` which IS `LIST_VISIBLE`-narrowed (decoded ∩
+ *      !isFCurveEffectivelyHidden). A hidden-but-data-loaded
+ *      previously-active fcurve has its FCURVE_ACTIVE cleared by
+ *      Blender's broader cascade; SS preserves the active bit because
+ *      `orderedIds.indexOf(activeFCurveId) === -1`. Same conflation as
+ *      Slice 5.Y MED-1; deferred.
  *
  * # Non-group click — Blender returns early
  *
@@ -710,6 +728,25 @@ export function wouldChannelDeleteSelectedChange(action) {
  *      convention — channel selection is view state, not document state.
  *      Blender's `ANIM_OT_channels_click` carries `OPTYPE_UNDO`
  *      (`:4686`) but SS opts out for the channel-selection path family.
+ *
+ *   4. **macOS Cmd substitutes for Ctrl.** SS's dispatcher accepts
+ *      `e.ctrlKey || e.metaKey` so Cmd+Shift+click on macOS triggers
+ *      children_only. Blender's keymap binds `ctrl: True` only at
+ *      `blender_default.py:3853`; SS extends to Meta for cross-platform
+ *      parity with the rest of the editor's modifier handling
+ *      (sister to Slice 5.AA's metaKey-as-Ctrl-equivalent web/DOM
+ *      convention deviation). Audit-fix fidelity LOW-1 documents this.
+ *
+ *   5. **`agrp->channels` equivalence assumption.** SS's step 2 walks
+ *      `action.fcurves` filtering by `fc.groupId === groupId`. Blender
+ *      walks `agrp->channels.first; fcu && fcu->grp == agrp` — the
+ *      group's intrinsic linked list. The two are equivalent IF every
+ *      fcurve in `action.fcurves` with `groupId === X` is genuinely a
+ *      child of group X (no dangling groupId pointers). The v40
+ *      migration in `groupFCurvesByTarget` is the sole writer of
+ *      `groupId`; per Rule №1, fcurves with stale groupIds are an
+ *      upstream bug — this helper is not the place to defensively
+ *      filter. Audit-fix fidelity LOW-2 documents this invariant.
  *
  * @param {object} action — the Action datablock (mutated)
  * @param {string} groupId — id of the FCurveGroup to children-select
@@ -763,8 +800,7 @@ export function applyGroupChildrenSelect(action, groupId, ctx) {
   // producing the same NET state but with a transient flip. SS's
   // optimized version reports `changed=true` only when the net
   // selected state actually changes — keeps the preflight + setter
-  // change-decision identical (audit-fix MED-3 reasoning applied
-  // pre-substrate; no behavior divergence).
+  // change-decision identical (no behavior divergence).
   if (orderedIds) {
     for (const id of orderedIds) {
       const fc = byId.get(id);
@@ -772,6 +808,22 @@ export function applyGroupChildrenSelect(action, groupId, ctx) {
         fc.selected = false;
         result.changed = true;
       }
+    }
+  }
+
+  // Step 1b — clear `selected` on every OTHER group. Sister to the
+  // ANIMTYPE_GROUP case of Blender's `anim_channels_select_set` at
+  // `:714-722` which cascades AGRP_SELECTED on every visible group
+  // when `sel = CLEAR`. Audit-fix HIGH-1 + fidelity MED-2 (Slice 5.BB
+  // dual-audit 2026-05-17): without this loop, sibling groups retain
+  // a stale `selected: true` across consecutive children_only clicks
+  // on different groups — invariant breach that doesn't surface today
+  // (no consumer reads `isFCurveGroupSelected`) but will the moment
+  // group-header highlighting wires up.
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && g.selected === true) {
+      delete g.selected;
+      result.changed = true;
     }
   }
 
@@ -859,6 +911,12 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
       // for this id; otherwise net change is true.
       if (fc.groupId !== groupId) return true;
     }
+  }
+
+  // Step 1b — any sibling group with stale `selected: true`?
+  // (audit-fix HIGH-1 + fidelity MED-2 sister check)
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && g.selected === true) return true;
   }
 
   // Step 2 changes anything? Any fcurve in the group that isn't

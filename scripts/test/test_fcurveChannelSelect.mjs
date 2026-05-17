@@ -1108,6 +1108,59 @@ function makeActionWithGroups(groups, fcurves) {
   assert(r.selectedCount === 2, '5.BB idempotent: selectedCount still reports the 2 group members');
 }
 
+// Audit-fix HIGH-1 + fidelity MED-2 (2026-05-17): sibling group's
+// `selected` flag MUST be cleared on pre-clear. Matches Blender's
+// `anim_channels_select_set` ANIMTYPE_GROUP case at `:714-722`.
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA' },
+      { id: 'gB', selected: true },  // stale from prior children_only
+      { id: 'gC', selected: true },  // stale too
+    ],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', groupId: 'gB', keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', {
+    orderedIds: ['fc1', 'fc2'],
+  });
+  assert(r.changed === true, '5.BB sibling-group-clear: changed');
+  assert(a.groups[0].selected === true, '5.BB sibling-group-clear: gA newly selected');
+  assert(a.groups[1].selected === undefined, '5.BB sibling-group-clear: gB sparse-cleared');
+  assert(a.groups[2].selected === undefined, '5.BB sibling-group-clear: gC sparse-cleared');
+}
+
+// Audit-fix arch MED-2 (2026-05-17): ungrouped selected fcurve in
+// visible scope MUST be wiped by pre-clear (since `fc.groupId
+// (undefined) !== groupId` is true).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', selected: true, keyforms: [] },  // ungrouped + selected
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', { orderedIds: ['fc1', 'fc2'] });
+  assert(r.changed === true, '5.BB ungrouped-pre-clear: changed');
+  assert(a.fcurves[1].selected === false, '5.BB ungrouped-pre-clear: ungrouped selected fcurve wiped');
+}
+
+// Audit-fix arch MED-3 (2026-05-17): group exists but no children
+// (selectedCount=0). Group still gets selected=true.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gEmpty' }],
+    [{ id: 'fc1', keyforms: [] }],  // ungrouped — not a child of gEmpty
+  );
+  const r = applyGroupChildrenSelect(a, 'gEmpty', { orderedIds: ['fc1'] });
+  assert(r.selectedCount === 0, '5.BB empty-group: selectedCount=0 (no children)');
+  assert(r.changed === true, '5.BB empty-group: changed=true (group.selected written)');
+  assert(a.groups[0].selected === true, '5.BB empty-group: group marked selected');
+}
+
 // Preflight matches setter ──────────────────────────────────────
 {
   const scenarios = [
