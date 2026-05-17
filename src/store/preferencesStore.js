@@ -51,6 +51,17 @@ const EVAL_KEY = 'v3.prefs.evalEngine';
  *  one JSON blob keyed `v3.prefs.snap`. See SNAP_DEFAULT below for
  *  schema; Phase 2.A. */
 const SNAP_KEY = 'v3.prefs.snap';
+/** Animation Phase 5 Slice 5.AA — keymap-preset selector.
+ *  Mirrors Blender's preference at Edit → Preferences → Keymap dropdown
+ *  (Python source: `reference/blender/scripts/presets/keyconfig/keymap_data/`).
+ *  SS supports the same two presets Blender ships by default:
+ *    - `'default'`              — `keymap_data/blender_default.py`
+ *    - `'industry_compatible'`  — `keymap_data/industry_compatible_data.py`
+ *  Switching at runtime swaps the binding map consulted by
+ *  `src/anim/keymapPresets.js::resolveSelectAllAction` (the only call
+ *  site wired in 5.AA — future slices add their own preset-aware
+ *  bindings to the same module). */
+const KMP_KEY = 'v3.prefs.keymapPreset';
 
 const PE_DEFAULT = Object.freeze({
   enabled:       false,
@@ -274,6 +285,22 @@ export const usePreferencesStore = create((set, get) => ({
     const next = v === 'depgraph' ? 'depgraph' : 'classic';
     saveJson(EVAL_KEY, next);
     set({ evalEngine: next });
+  },
+
+  /** Slice 5.AA — keymap-preset selector. `'default'` (Blender default)
+   *  or `'industry_compatible'` (the Maya-style remapping shipped as
+   *  Blender's second-default preset). Read by
+   *  `src/anim/keymapPresets.js::resolveSelectAllAction` (and any
+   *  future preset-aware binding helper) to choose the binding map.
+   *  Default `'default'` matches Blender's out-of-the-box selection. */
+  keymapPreset: (loadJsonScalar(KMP_KEY, 'default') === 'industry_compatible')
+    ? 'industry_compatible'
+    : 'default',
+
+  setKeymapPreset(v) {
+    const next = v === 'industry_compatible' ? 'industry_compatible' : 'default';
+    saveJson(KMP_KEY, next);
+    set({ keymapPreset: next });
   },
 
   /** Toolset Plan Phase 2.A — modal G/R/S snap config. See SNAP_DEFAULT

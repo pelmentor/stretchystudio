@@ -261,6 +261,32 @@ function get() { return usePreferencesStore.getState(); }
     'setEvalEngine: unknown value defaults back to classic (defensive guard)');
 }
 
+// ── Slice 5.AA: keymapPreset selector ─────────────────────────────
+
+{
+  // Default 'default' — matches Blender's out-of-the-box selection.
+  assert(get().keymapPreset === 'default',
+    'keymapPreset: defaults to default');
+  // Setter writes through.
+  get().setKeymapPreset('industry_compatible');
+  assert(get().keymapPreset === 'industry_compatible',
+    'setKeymapPreset(industry_compatible): in-memory updated');
+  assert(_store.get('v3.prefs.keymapPreset') === '"industry_compatible"',
+    'setKeymapPreset: localStorage written as JSON-quoted string');
+  // Flip back.
+  get().setKeymapPreset('default');
+  assert(get().keymapPreset === 'default',
+    'setKeymapPreset(default): in-memory updated');
+  // Garbage input clamped to default.
+  get().setKeymapPreset('garbage');
+  assert(get().keymapPreset === 'default',
+    'setKeymapPreset: unknown value defaults back to default (defensive guard)');
+  // null/undefined clamped to default too.
+  get().setKeymapPreset(null);
+  assert(get().keymapPreset === 'default',
+    'setKeymapPreset(null): clamped to default');
+}
+
 console.log(`\npreferencesStore: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.error('FAILURES:');

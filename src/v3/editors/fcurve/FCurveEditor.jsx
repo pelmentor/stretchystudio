@@ -303,6 +303,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { usePreferencesStore } from '../../../store/preferencesStore.js';
+import { resolveSelectAllAction } from '../../../anim/keymapPresets.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
@@ -2457,94 +2458,90 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       operatorHome();
       return;
     }
-    // Slice 5.K — region-routed channel select-all when the cursor is
-    // over the sidebar. Mirrors Blender's per-area keymap registration
-    // (channels region binds A / Alt+A / Ctrl+I to
+    // Slice 5.K + 5.AA — region-routed channel select-all when the
+    // cursor is over the sidebar. Mirrors Blender's per-area keymap
+    // registration (channels region binds the select-all triplet to
     // `ANIM_OT_channels_select_all`; graph region binds them
     // independently). Checked BEFORE the timeline-scoped KeyA so the
     // sidebar variant wins when hover='sidebar'.
     //
-    // Default keymap (`blender_default.py:3864` →
-    // `_template_items_select_actions` at `blender_default.py:420-439`):
-    //   - A          → TOGGLE  (resolves to add/clear via current state)
-    //   - Alt+A      → CLEAR   (DESELECT)
-    //   - Ctrl+I     → INVERT
+    // Slice 5.AA: the modifier-to-action mapping is delegated to
+    // `resolveSelectAllAction(preset, e)` so both keymap presets are
+    // honored. The resolver returns:
+    //   - 'toggle' (default preset: A)
+    //   - 'add'    (industry_compatible preset: Ctrl+A)
+    //   - 'clear'  (default: Alt+A; IC: Ctrl+Shift+A)
+    //   - 'invert' (both presets: Ctrl+I)
+    //   - null     (no preset binding matches — fall through)
     //
-    // Industry-compatible keymap (`industry_compatible_data.py:2345-2350`)
-    // remaps to Ctrl+A / Ctrl+Shift+A / Ctrl+I; not wired today (SS
-    // hasn't adopted the industry keymap variant elsewhere either).
+    // Default keymap source: `blender_default.py:3864` →
+    // `_template_items_select_actions` at `:420-439`.
+    // Industry-compatible source: `industry_compatible_data.py:2345-2350`.
     if (regionHoverRef.current === 'sidebar') {
-      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const action = resolveSelectAllAction(
+        usePreferencesStore.getState().keymapPreset,
+        e,
+      );
+      if (action !== null) {
         e.preventDefault();
-        applyChannelSelectAllOp('toggle');
-        return;
-      }
-      if (e.code === 'KeyA' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        e.preventDefault();
-        applyChannelSelectAllOp('clear');
-        return;
-      }
-      if (e.code === 'KeyI' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        applyChannelSelectAllOp('invert');
+        applyChannelSelectAllOp(action);
         return;
       }
     }
     // Graph-region keymap parity with `blender_default.py:2010` (=
-    // `*_template_items_select_actions(params, "graph.select_all")`):
+    // `*_template_items_select_actions(params, "graph.select_all")`).
+    // Slice 5.AA: delegate the modifier-to-action mapping to
+    // `resolveSelectAllAction(preset, e)` so both default and
+    // industry-compatible presets are honored on the SAME operator
+    // surface (graph.select_all has identical triplets to
+    // anim.channels_select_all in BOTH presets).
     //
-    //   - A          → TOGGLE   (matches `use_select_all_toggle=True`
-    //                            branch at `:436`; default config sets
-    //                            `:115`=False which would emit SELECT
-    //                            at `:423` instead — SS picks the more
-    //                            common toggle preference. Below: `if
-    //                            size>0 clear else selectAll` is the
-    //                            same toggle resolution Blender uses.)
-    //   - Alt+A      → DESELECT (`:424` default branch / `:437` toggle
-    //                            branch — same in both)
-    //   - Ctrl+I     → INVERT   (`:425` default branch / `:438` toggle
-    //                            branch — same in both; Slice 5.L)
+    //   - 'toggle' (default: A) → SS resolves locally as
+    //     "if size>0 clear else selectAll" which matches Blender's
+    //     `use_select_all_toggle=True` branch at `:436`. Default
+    //     config sets `:115`=False which would emit SELECT at `:423`
+    //     instead — SS picks the more common toggle preference.
+    //     Documented in Slice 5.K close-out.
+    //   - 'add' (IC: Ctrl+A) → unconditional `operatorSelectAll`
+    //     (Blender's `:423` default-config behavior). No toggle on
+    //     repeat press in IC preset.
+    //   - 'clear' (default: Alt+A; IC: Ctrl+Shift+A) → `clearSelection`.
+    //     Default-keymap source: `:437` toggle branch / `:424` default
+    //     branch (both emit identical Alt+A row). IC source:
+    //     `industry_compatible_data.py:964-965`.
+    //   - 'invert' (both: Ctrl+I) → `operatorInvertSelection`.
+    //     Default-keymap source: `:438` toggle / `:425` default. IC:
+    //     `industry_compatible_data.py:966`.
     //
-    // Slice 5.K shipped A and Alt+A; Ctrl+I was deferred pending the
-    // keyform-invert primitive (now in `fcurveKeyformSelect.js`).
-    // Audit-fix LOW-A1 (Slice 5.K dual-audit 2026-05-17) caught an
-    // earlier over-tightening with `!e.altKey` that would have inverted
-    // Alt+A — the fix preserved Blender semantics; see commit `dd1faf1`.
-    // Audit-fix LOW-B1 (Slice 5.L dual-audit 2026-05-17) corrected the
-    // line citations above to distinguish the default-config branch
-    // from the toggle-preference branch (both emit identical Alt+A and
-    // Ctrl+I rows; only the A row differs).
-    if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      if (selectionRef.current.size > 0) clearSelection();
-      else operatorSelectAll();
-      return;
-    }
-    if (e.code === 'KeyA' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      // Graph-region Alt+A → DESELECT all keyforms (unconditional).
-      // Mirrors `graph.select_all` keymap entry at
-      // `blender_default.py:2010` (= `*_template_items_select_actions(
-      // params, "graph.select_all")`) which expands to the default-
-      // keymap branch at `:437`: `{"type": 'A', "value": 'PRESS',
-      // "alt": True}, {"properties": [("action", 'DESELECT')]}`.
-      e.preventDefault();
-      clearSelection();
-      return;
-    }
-    if (e.code === 'KeyI' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
-      // Slice 5.L — Graph-region Ctrl+I → INVERT all keyforms.
-      // Mirrors `graph.select_all` keymap entry at
-      // `blender_default.py:2010` (= `*_template_items_select_actions(
-      // params, "graph.select_all")`) which expands to the default-
-      // keymap branch at `:438`: `{"type": 'I', "value": 'PRESS',
-      // "ctrl": True}, {"properties": [("action", 'INVERT')]}`.
-      //
-      // This branch is timeline-scoped (sidebar-region Ctrl+I is
-      // already handled above at the channel layer); region routing
-      // via `regionHoverRef.current` ensures only one fires per press.
-      e.preventDefault();
-      operatorInvertSelection();
-      return;
+    // Region routing via `regionHoverRef.current` ensures the sidebar
+    // branch above wins when cursor is on the channel list; this
+    // graph branch fires only when hover='timeline'.
+    {
+      const action = resolveSelectAllAction(
+        usePreferencesStore.getState().keymapPreset,
+        e,
+      );
+      if (action === 'toggle') {
+        e.preventDefault();
+        if (selectionRef.current.size > 0) clearSelection();
+        else operatorSelectAll();
+        return;
+      }
+      if (action === 'add') {
+        e.preventDefault();
+        operatorSelectAll();
+        return;
+      }
+      if (action === 'clear') {
+        e.preventDefault();
+        clearSelection();
+        return;
+      }
+      if (action === 'invert') {
+        e.preventDefault();
+        operatorInvertSelection();
+        return;
+      }
     }
     // Slice 5.M — bulk hide/reveal (`graph.hide` + `graph.reveal`).
     // Keymap at `blender_default.py:1967` →
