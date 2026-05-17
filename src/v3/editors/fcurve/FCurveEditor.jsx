@@ -1952,6 +1952,14 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // (dispatched from `mouse_anim_channels` at line 4475) — see
   // [src/anim/fcurveChannelSelect.js](../../../anim/fcurveChannelSelect.js)
   // for the full provenance trace.
+  // Audit-fix LOW-A1 (Slice 5.J dual-audit 2026-05-17): `ctx` is fully
+  // built by the caller (Sidebar onClick) on each click so the helper
+  // sees a fresh `{activeFCurveId, orderedIds}` snapshot. Do not hoist
+  // the `decoded.map(...)` into this callback's closure — it would
+  // capture a stale `decoded` reference from the surrounding scope and
+  // silently break range-select on action edits between renders. The
+  // closure deps below intentionally include only `activeActionId` +
+  // `update` because the helper is purely structural.
   const applyChannelClick = useCallback((fcurveId, modifier, ctx) => {
     let decision = { makeActive: false, selectedNow: false };
     update((p) => {
@@ -2169,24 +2177,37 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
             onClick={(e) => {
               const t = decodeFCurveTarget(d.fcurve);
               if (!t) return;
-              // Slice 5.F — Shift-click toggles `fcurve.selected` only;
-              // active stays unless newly-selected (mirroring Blender's
-              // `anim_channels_edit.cc:4247` gate). Plain click clears
-              // every other curve's `selected` (SELECT_REPLACE per
-              // `anim_channels_edit.cc:4239-4243`).
+              // Modifier mapping mirrors Blender's animation-channels
+              // keymap at
+              // `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:3849-3854`
+              // (identical in `industry_compatible_data.py:2329-2334`):
               //
-              // Slice 5.J — Ctrl/Cmd-click range-selects from the active
-              // channel through the clicked one (SELECT_EXTEND_RANGE per
-              // `anim_channels_edit.cc:4235-4238` + walker at
-              // `anim_channels_edit.cc:3984-4025`). Auto-downgrades to
-              // 'toggle' when no eligible active exists
-              // (`anim_channels_edit.cc:4517-4522`).
+              //   - **Shift+click → extend_range** (SELECT_EXTEND_RANGE,
+              //     range walker — Slice 5.J). Walks the visible channel
+              //     list from active through clicked, inclusive.
+              //   - **Ctrl+click → extend** (SELECT_INVERT, toggle —
+              //     Slice 5.F. Audit-fix HIGH-B1 (Slice 5.J dual-audit
+              //     2026-05-17): Slice 5.F's original wiring put Shift
+              //     on toggle, which inverted Blender's mapping; this
+              //     is the corrected mapping.). XORs only the clicked
+              //     curve's `selected`.
+              //   - **Plain click → replace** (SELECT_REPLACE). Clears
+              //     every other curve's `selected`.
               //
-              // Modifier precedence matches Blender's RNA processing at
-              // `anim_channels_edit.cc:4636-4641`: `extend` (Shift) wins
-              // over `extend_range` (Ctrl) — so Shift+Ctrl+click reads
-              // as Shift+click. We don't ship `children_only` since SS
-              // has no ActionGroup channel type yet.
+              // Blender source citations: walker at
+              // `anim_channels_edit.cc:3984-4025`; per-modifier dispatch
+              // at lines 4231-4243; active-elevation gate at line 4247
+              // (range never elevates); auto-downgrade at lines 4517-4522.
+              //
+              // Shift+Ctrl+click: Blender uses this for `children_only`
+              // (ActionGroup-children select, see keymap line 3853-3854).
+              // SS has no FCurveGroup datablock yet, so we deliberately
+              // fall through to whichever modifier wins precedence — SS
+              // resolves Shift+Ctrl as 'range' (Shift comes first in the
+              // ternary). When the FCurveGroup datablock lands and the
+              // group-children select operator ships, replace the Shift
+              // arm with `e.shiftKey && !e.ctrlKey` and add an explicit
+              // Shift+Ctrl arm.
               //
               // Plain-click also wipes keyform selection on other
               // channels. Audit-fix MED-B3 (2026-05-16, Slice 5.F dual-
@@ -2200,9 +2221,9 @@ function Sidebar({ decoded, activeFCurveId, onToggleHidden, onToggleMute, onPick
               // Shift/Ctrl-click preserves the selection for cross-channel
               // composition.
               const modifier = e.shiftKey
-                ? 'toggle'
+                ? 'range'
                 : (e.ctrlKey || e.metaKey)
-                  ? 'range'
+                  ? 'toggle'
                   : 'replace';
               const ctx = modifier === 'range'
                 ? { activeFCurveId, orderedIds: decoded.map((x) => x.fcurve.id) }

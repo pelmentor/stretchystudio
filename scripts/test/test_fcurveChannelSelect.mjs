@@ -298,6 +298,46 @@ assert(isFCurveSelected({ selected: 'yes' }) === false, 'isFCurveSelected: "yes"
 }
 
 {
+  // Audit-fix MED-B1 (Slice 5.J dual-audit): pre-walk wipe scope is the
+  // FILTERED visible list, NOT the whole action. Mirrors Blender's
+  // `ANIM_anim_channels_select_set(EXTEND_RANGE)` at line 4236 iterating
+  // `anim_channels_for_selection(ac)` (the filtered visible list).
+  // fcurves filtered out of `decoded` (unresolvable rna_path) keep
+  // their `selected` bit on Shift+click range.
+  const a = makeAction(['a', 'b', 'c', 'invisible-d']);
+  a.fcurves[3].selected = true; // 'invisible-d' was selected via some
+                                // other code path (legacy persisted state,
+                                // direct mutation, etc.) but `decoded`
+                                // filtered it out.
+  const r = applyChannelSelect(a, 'c', 'range',
+    { activeFCurveId: 'a', orderedIds: ['a', 'b', 'c'] }); // 'invisible-d' NOT in ordered
+  assert(r.selectedNow === true,                'range visible-scope: selectedNow=true');
+  assert(a.fcurves[0].selected === true,        'range visible-scope: a (bound) selected');
+  assert(a.fcurves[1].selected === true,        'range visible-scope: b interior');
+  assert(a.fcurves[2].selected === true,        'range visible-scope: c (bound) selected');
+  assert(a.fcurves[3].selected === true,        'range visible-scope: invisible-d PRESERVED (not in visible list)');
+}
+
+{
+  // Audit-fix MED-A2 (Slice 5.J dual-audit): the active bound id is in
+  // `orderedIds` but missing from `action.fcurves` — possible if
+  // `decoded.map(...)` was computed in a render that saw `action.fcurves`
+  // before a delete landed. The `canRange` gate passes (both ids are in
+  // orderedIds), the walker runs, and the missing active bound is
+  // silently skipped by `if (fc) fc.selected = true`. The cursor bound
+  // (which IS in `action.fcurves` — guarded by the earlier `if (!clicked)
+  // return`) gets selected. The interior gets selected. `selectedNow:
+  // true` matches: the cursor bound IS now selected.
+  const a = makeAction(['b', 'c']); // 'a' is NOT in action.fcurves
+  const r = applyChannelSelect(a, 'c', 'range',
+    { activeFCurveId: 'a', orderedIds: ['a', 'b', 'c'] });
+  assert(r.makeActive === false,                'range orphan-active: makeActive=false');
+  assert(r.selectedNow === true,                'range orphan-active: selectedNow=true (cursor IS selected)');
+  assert(a.fcurves[0].selected === true,        'range orphan-active: b interior selected');
+  assert(a.fcurves[1].selected === true,        'range orphan-active: c cursor selected');
+}
+
+{
   // Auto-downgrade: no active → falls through to 'toggle' semantics.
   // Per Blender `anim_channels_edit.cc:4517-4522`.
   const a = makeAction(['a', 'b', 'c']);
