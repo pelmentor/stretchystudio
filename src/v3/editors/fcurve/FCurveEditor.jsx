@@ -1830,6 +1830,18 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // Visible curves are pulled from the `visible` memo (hidden curves
     // are filtered out by `isFCurveHidden` — Slice 5.I) so this matches
     // Blender's ANIMFILTER_CURVE_VISIBLE walk.
+    //
+    // Audit-fix MED-A1 (Slice 5.L dual-audit 2026-05-17): unlike sibling
+    // `operatorSelectAll` above (which writes `setSelectedHandles(next)`
+    // computed from `visible` alone), this op uses the FUNCTIONAL form
+    // `setSelectedHandles((curr) => ...)` because INVERT needs the
+    // previous selection state to flip per-keyform. `visible` itself is
+    // safely current via the `onKeyDown` closure (it's in onKeyDown's
+    // deps array on line ~2040, so when `visible` changes onKeyDown
+    // rebuilds and re-captures this fresh function). The functional
+    // form is required ONLY for the `curr` argument; do not collapse
+    // it back to the eager form, and do not extract `visible` outside
+    // the callback — both invariants matter.
     setSelectedHandles((curr) => applyKeyformInvertSelection(
       visible.map((d) => d.fcurve),
       curr,
@@ -1976,18 +1988,28 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     }
     // Graph-region keymap parity with `blender_default.py:2010` (=
     // `*_template_items_select_actions(params, "graph.select_all")`):
-    //   - A          → TOGGLE   (`:436` — existing branch below; `if
+    //
+    //   - A          → TOGGLE   (matches `use_select_all_toggle=True`
+    //                            branch at `:436`; default config sets
+    //                            `:115`=False which would emit SELECT
+    //                            at `:423` instead — SS picks the more
+    //                            common toggle preference. Below: `if
     //                            size>0 clear else selectAll` is the
-    //                            same toggle resolution Blender uses)
-    //   - Alt+A      → DESELECT (`:437` — `clearSelection()` below)
-    //   - Ctrl+I     → INVERT   (`:438` — `operatorInvertSelection()`
-    //                            below; Slice 5.L)
+    //                            same toggle resolution Blender uses.)
+    //   - Alt+A      → DESELECT (`:424` default branch / `:437` toggle
+    //                            branch — same in both)
+    //   - Ctrl+I     → INVERT   (`:425` default branch / `:438` toggle
+    //                            branch — same in both; Slice 5.L)
     //
     // Slice 5.K shipped A and Alt+A; Ctrl+I was deferred pending the
     // keyform-invert primitive (now in `fcurveKeyformSelect.js`).
     // Audit-fix LOW-A1 (Slice 5.K dual-audit 2026-05-17) caught an
     // earlier over-tightening with `!e.altKey` that would have inverted
     // Alt+A — the fix preserved Blender semantics; see commit `dd1faf1`.
+    // Audit-fix LOW-B1 (Slice 5.L dual-audit 2026-05-17) corrected the
+    // line citations above to distinguish the default-config branch
+    // from the toggle-preference branch (both emit identical Alt+A and
+    // Ctrl+I rows; only the A row differs).
     if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       if (selectionRef.current.size > 0) clearSelection();

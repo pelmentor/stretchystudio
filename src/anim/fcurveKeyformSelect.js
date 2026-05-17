@@ -20,6 +20,24 @@
  *
  * # Blender semantics ported
  *
+ * Keymap registration — `_template_items_select_actions` in
+ * `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:420-439`,
+ * registered for `graph.select_all` at `:2010` inside `km_graph_editor`.
+ *
+ * The default `Params` config sets `use_select_all_toggle=False` (line
+ * 115) → the `if not params.use_select_all_toggle` branch fires (lines
+ * 421-427), placing Ctrl+I → INVERT at **line 425**. The `else` branch
+ * (lines 434-439, when `use_select_all_toggle=True` user preference is
+ * set) emits the same Ctrl+I → INVERT at line 438. Both branches —
+ * along with the legacy branch's line 432 — agree on Ctrl+I semantics;
+ * the divergence between branches is only for the `A` key (SELECT vs
+ * TOGGLE). Audit-fix LOW-B1 (Slice 5.L dual-audit 2026-05-17) corrected
+ * an earlier citation that pointed at :438 alone — accurate, but in
+ * the wrong branch for the default config.
+ *
+ * The `industry_compatible_data.py` keymap at `:966` also binds Ctrl+I
+ * → INVERT for `graph.select_all`; both keymaps agree, no divergence.
+ *
  * Operator dispatch — `graphkeys_deselectall_exec` at
  * `reference/blender/source/blender/editors/space_graph/graph_select.cc:423-475`:
  *
