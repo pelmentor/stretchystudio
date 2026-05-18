@@ -59,13 +59,25 @@ const SNAP_KEY = 'v3.prefs.snap';
  *    - `reference/blender/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py`
  *    - User-facing dropdown registered in
  *      `reference/blender/scripts/presets/keyconfig/Blender.py`.
- *  SS supports the same two presets Blender ships by default:
+ *  Slice 5.GG (2026-05-18) extended to 3 presets (added byte-faithful
+ *  `'default_no_toggle'` closing Slice 5.AA Dev 1):
  *    - `'default'`              — `keymap_data/blender_default.py`
+ *                                  toggle branch at `:435-439` (A → TOGGLE;
+ *                                  SS-default-out-of-box because toggle UX
+ *                                  is more discoverable; SS deviation from
+ *                                  Blender's actual out-of-box default)
+ *    - `'default_no_toggle'`    — `keymap_data/blender_default.py` no-toggle
+ *                                  branch at `:422-427` (A → SELECT;
+ *                                  byte-faithful Blender out-of-box default
+ *                                  per `:115` `use_select_all_toggle=False`)
  *    - `'industry_compatible'`  — `keymap_data/industry_compatible_data.py`
+ *                                  (Ctrl+A SELECT / Ctrl+Shift+A DESELECT /
+ *                                  Ctrl+I INVERT; no single-key toggle)
  *  Switching at runtime swaps the binding map consulted by
  *  `src/anim/keymapPresets.js::resolveSelectAllAction` (the only call
  *  site wired in 5.AA — future slices add their own preset-aware
- *  bindings to the same module). */
+ *  bindings to the same module). All 3 presets coerced via the
+ *  single `coerceKeymapPreset` helper (Slice 5.AA arch audit-fix MED-2). */
 const KMP_KEY = 'v3.prefs.keymapPreset';
 
 const PE_DEFAULT = Object.freeze({

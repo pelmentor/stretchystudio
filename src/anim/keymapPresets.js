@@ -14,36 +14,44 @@
  * `usePreferencesStore.getState().keymapPreset` and pass it +
  * normalized event-key state to the resolver of their choice.
  *
- * # Why two presets
+ * # Why three presets
  *
- * Blender ships two default keyconfigs:
+ * Blender ships two default keyconfigs (`blender_default.py`,
+ * `industry_compatible_data.py`). SS adds a third preset slot to
+ * separate two distinct mappings of the `blender_default.py` file:
  *
- *   - `keymap_data/blender_default.py` — historical Blender bindings.
- *     Blender's out-of-the-box default-config (`:115`
- *     `use_select_all_toggle=False`) maps A → SELECT (`:423`), Alt+A →
- *     DESELECT (`:424`), Ctrl+I → INVERT (`:425`), and A_DOUBLE_CLICK →
- *     DESELECT (`:426`). The **opt-in** toggle branch at `:435-439`
- *     (gated by `use_select_all_toggle=True`) emits A → TOGGLE,
- *     Alt+A → DESELECT, Ctrl+I → INVERT.
+ *   - **`'default'` (SS preset; toggle-branch mapping)** —
+ *     `blender_default.py:3864` →
+ *     `_template_items_select_actions` toggle branch at `:435-439`
+ *     (gated by `use_select_all_toggle=True`): A → TOGGLE,
+ *     Alt+A → DESELECT, Ctrl+I → INVERT. Matches FCurveEditor's
+ *     pre-5.AA behavior (hand-rolled "A clears if anything selected,
+ *     else select-all" — exactly the toggle semantic). SS picks this
+ *     as the default-out-of-the-box preset for SS users because the
+ *     toggle UX is more discoverable than the SELECT-only no-toggle
+ *     UX. Note: this is an SS UX choice — Blender's actual
+ *     out-of-the-box default is `'default_no_toggle'` below.
  *
- *     **SS deviation** — `resolveSelectAllAction` returns the toggle
- *     branch's mapping (A → 'toggle') under preset `'default'`,
- *     because that matches FCurveEditor's pre-5.AA behavior (it
- *     hand-rolled "A clears if anything selected, else select-all"
- *     which is exactly the toggle semantic). Future slices that want
- *     literal-default-config behavior would add a third preset
- *     (`'default_no_toggle'`) or wire `use_select_all_toggle` through
- *     as a sub-preference. Audit-fix HIGH-A1 (Slice 5.AA fidelity
- *     audit 2026-05-17): this deviation was previously framed as if it
- *     WERE Blender's out-of-the-box default — corrected here so future
- *     readers don't propagate the misframing.
+ *   - **`'default_no_toggle'` (SS preset; Slice 5.GG 2026-05-18)** —
+ *     byte-faithful port of Blender's TRUE out-of-the-box default
+ *     config (`blender_default.py:115` `use_select_all_toggle=False`,
+ *     which gates the `:422-427` no-toggle branch): A → SELECT,
+ *     Alt+A → DESELECT, Ctrl+I → INVERT, A_DOUBLE_CLICK → DESELECT
+ *     (`:426`, web-omitted in SS). Closes Slice 5.AA Dev 1 deviation.
  *
- *   - `keymap_data/industry_compatible_data.py` — Maya/Adobe-style
- *     bindings (Ctrl+A adds, Ctrl+Shift+A deselects, Ctrl+I inverts;
- *     no single-key toggle).
+ *   - **`'industry_compatible'`** —
+ *     `keymap_data/industry_compatible_data.py` Maya/Adobe-style
+ *     bindings: Ctrl+A adds, Ctrl+Shift+A deselects, Ctrl+I inverts.
+ *     No single-key toggle.
  *
- * The choice is exposed in Blender's UI at Edit → Preferences →
- * Keymap. SS exposes the same toggle as `preferencesStore.keymapPreset`.
+ * The Blender `default` vs `industry_compatible` choice is exposed
+ * in Blender's UI at Edit → Preferences → Keymap. SS exposes the
+ * (extended) 3-option toggle as `preferencesStore.keymapPreset`.
+ *
+ * Audit-fix HIGH-A1 (Slice 5.AA fidelity audit 2026-05-17) corrected
+ * the original "two presets, default=toggle = Blender out-of-the-box"
+ * misframing in this section. Slice 5.GG (this slice) closes the
+ * follow-on deviation by adding the byte-faithful third preset.
  *
  * # What this module owns (and what it doesn't)
  *
@@ -63,34 +71,41 @@
  * # Slice 5.AA wired-today: `resolveSelectAllAction`
  *
  * The select-all triplet is the canonical "differs between presets"
- * binding family because both `default` and `industry_compatible` map
- * the same operator (`anim.channels_select_all` / `graph.select_all`)
- * to different (key, modifier) combos:
+ * binding family because the three SS presets map the same operator
+ * (`anim.channels_select_all` / `graph.select_all`) to different
+ * (key, modifier, action) combos:
  *
- *   - Default keymap (`blender_default.py:3864` via
- *     `_template_items_select_actions`; SS picks the toggle branch at
- *     `:435-439`, NOT the default-config no-toggle branch at
- *     `:422-427` — see "Why two presets" deviation note above):
+ *   - `'default'` (SS preset; toggle-branch mapping) —
+ *     `blender_default.py:3864` via `_template_items_select_actions`
+ *     toggle branch at `:435-439`:
  *     - A          → TOGGLE   (`:436`)
  *     - Alt+A      → CLEAR    (`:437`)
  *     - Ctrl+I     → INVERT   (`:438`)
  *
- *     Audit-fix LOW-A1 (Slice 5.AA fidelity audit 2026-05-17): the
- *     no-toggle branch also binds A_DOUBLE_CLICK → DESELECT (`:426`).
- *     SS omits this because web KeyboardEvent has no clean
- *     keyboard-double-press semantic — Blender's row only fires from
- *     mouse double-click on macOS anyway.
+ *   - `'default_no_toggle'` (SS preset; Slice 5.GG 2026-05-18) —
+ *     byte-faithful Blender out-of-the-box default at `:422-427`:
+ *     - A          → ADD      (`:423`)
+ *     - Alt+A      → CLEAR    (`:424`)
+ *     - Ctrl+I     → INVERT   (`:425`)
+ *     A_DOUBLE_CLICK → DESELECT (`:426`) is omitted (web KeyboardEvent
+ *     has no clean keyboard-double-press semantic; Blender's row only
+ *     fires from mouse double-click anyway). Audit-fix LOW-A1
+ *     (Slice 5.AA) noted this for the `'default'` preset; the same
+ *     omission applies here.
  *
- *   - Industry-compatible keymap
- *     (`industry_compatible_data.py:2345-2350` for channels region;
- *     `:963-966` for graph region — identical mapping in both):
+ *   - `'industry_compatible'` —
+ *     `industry_compatible_data.py:2345-2350` (channels region) +
+ *     `:963-966` (graph region — identical mapping in both):
  *     - Ctrl+A         → ADD (SELECT)
  *     - Ctrl+Shift+A   → CLEAR (DESELECT)
  *     - Ctrl+I         → INVERT
  *
- * Note `industry_compatible` has NO TOGGLE binding — the "toggle"
- * semantic doesn't exist in that preset. Callers that bind A in
- * default mode get `'toggle'`; in IC mode the same key is unbound.
+ * Note `industry_compatible` AND `default_no_toggle` both have NO
+ * TOGGLE binding — the "toggle" semantic exists ONLY in the
+ * `'default'` preset (SS's pre-5.AA behavior carried forward).
+ * Callers that bind A in `'default'` mode get `'toggle'`; in
+ * `'default_no_toggle'` they get `'add'`; in `'industry_compatible'`
+ * the bare A key is unbound (Ctrl+A binds to `'add'`).
  *
  * # No migration
  *
@@ -102,7 +117,7 @@
  */
 
 /**
- * @typedef {'default' | 'industry_compatible'} KeymapPreset
+ * @typedef {'default' | 'default_no_toggle' | 'industry_compatible'} KeymapPreset
  */
 
 /**
@@ -122,7 +137,7 @@
  */
 
 /** @type {readonly KeymapPreset[]} */
-export const KEYMAP_PRESETS = Object.freeze(['default', 'industry_compatible']);
+export const KEYMAP_PRESETS = Object.freeze(['default', 'default_no_toggle', 'industry_compatible']);
 
 /** @type {KeymapPreset} */
 export const KEYMAP_PRESET_DEFAULT = 'default';
@@ -133,11 +148,18 @@ export const KEYMAP_PRESET_DEFAULT = 'default';
  * already does this for stored values, but the resolvers also coerce
  * defensively in case a caller passes a stale or hand-crafted preset.
  *
+ * Slice 5.GG (2026-05-18): added `'default_no_toggle'` as the third
+ * valid preset — byte-faithful port of Blender's out-of-the-box
+ * default config (`blender_default.py:115` `use_select_all_toggle=False`).
+ * Closes Slice 5.AA Dev 1 deviation.
+ *
  * @param {unknown} value
  * @returns {KeymapPreset}
  */
 export function coerceKeymapPreset(value) {
-  return value === 'industry_compatible' ? 'industry_compatible' : 'default';
+  if (value === 'industry_compatible') return 'industry_compatible';
+  if (value === 'default_no_toggle') return 'default_no_toggle';
+  return 'default';
 }
 
 /**
@@ -170,12 +192,31 @@ export function resolveSelectAllAction(preset, e) {
   if (p === 'default') {
     // `blender_default.py:3864` → `_template_items_select_actions`
     // toggle branch at `:435-439` (SS deviation from default-config
-    // no-toggle branch at `:422-427` — see module JSDoc "Why two
-    // presets" for rationale).
+    // no-toggle branch at `:422-427` — see module JSDoc "Why three
+    // presets" for rationale; the byte-faithful no-toggle preset is
+    // available as `'default_no_toggle'`).
     // - A (no modifiers)        → TOGGLE  (`:436`)
     // - Alt+A (no ctrl/shift)   → CLEAR   (`:437`)
     // - Ctrl+I (no alt/shift)   → INVERT  (`:438`)
     if (e.code === 'KeyA' && !ctrl && !e.altKey && !e.shiftKey) return 'toggle';
+    if (e.code === 'KeyA' && !ctrl && e.altKey && !e.shiftKey) return 'clear';
+    if (e.code === 'KeyI' && ctrl && !e.altKey && !e.shiftKey) return 'invert';
+    return null;
+  }
+
+  if (p === 'default_no_toggle') {
+    // Slice 5.GG (2026-05-18) — byte-faithful Blender default-config.
+    // `blender_default.py:3864` → `_template_items_select_actions`
+    // no-toggle branch at `:422-427` (the `if (!params.use_select_all_toggle)`
+    // path; `use_select_all_toggle=False` is Blender's out-of-the-box
+    // default per `:115`).
+    // - A (no modifiers)        → ADD     (`:423` SELECT_ADD)
+    // - Alt+A (no ctrl/shift)   → CLEAR   (`:424` SELECT_DESELECT)
+    // - Ctrl+I (no alt/shift)   → INVERT  (`:425` SELECT_INVERT)
+    // - A_DOUBLE_CLICK omitted (`:426`) — SS has no clean keyboard-
+    //   double-press semantic in web KeyboardEvent (sister to Slice
+    //   5.AA module-header LOW-A1 note for `'default'` preset).
+    if (e.code === 'KeyA' && !ctrl && !e.altKey && !e.shiftKey) return 'add';
     if (e.code === 'KeyA' && !ctrl && e.altKey && !e.shiftKey) return 'clear';
     if (e.code === 'KeyI' && ctrl && !e.altKey && !e.shiftKey) return 'invert';
     return null;

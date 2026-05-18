@@ -44,8 +44,9 @@ function ev(code, modifiers = {}) {
 
 // ── Constants ────────────────────────────────────────────────────
 {
-  eq(KEYMAP_PRESETS.length, 2, 'KEYMAP_PRESETS has 2 entries');
+  eq(KEYMAP_PRESETS.length, 3, 'KEYMAP_PRESETS has 3 entries (added default_no_toggle in 5.GG)');
   eq(KEYMAP_PRESETS.includes('default'), true, 'KEYMAP_PRESETS includes default');
+  eq(KEYMAP_PRESETS.includes('default_no_toggle'), true, 'KEYMAP_PRESETS includes default_no_toggle');
   eq(KEYMAP_PRESETS.includes('industry_compatible'), true, 'KEYMAP_PRESETS includes industry_compatible');
   eq(KEYMAP_PRESET_DEFAULT, 'default', 'KEYMAP_PRESET_DEFAULT is default');
 }
@@ -53,6 +54,7 @@ function ev(code, modifiers = {}) {
 // ── coerceKeymapPreset ───────────────────────────────────────────
 {
   eq(coerceKeymapPreset('default'), 'default', 'coerce: default → default');
+  eq(coerceKeymapPreset('default_no_toggle'), 'default_no_toggle', 'coerce: default_no_toggle → default_no_toggle (5.GG)');
   eq(coerceKeymapPreset('industry_compatible'), 'industry_compatible', 'coerce: IC → IC');
   eq(coerceKeymapPreset('bogus'), 'default', 'coerce: unknown → default');
   eq(coerceKeymapPreset(null), 'default', 'coerce: null → default');
@@ -101,6 +103,50 @@ function ev(code, modifiers = {}) {
   eq(resolveSelectAllAction('industry_compatible', ev('KeyI')), null, 'IC: I (no modifiers) → null');
   eq(resolveSelectAllAction('industry_compatible', ev('KeyI', { alt: true })), null, 'IC: Alt+I → null');
   eq(resolveSelectAllAction('industry_compatible', ev('KeyI', { ctrl: true, shift: true })), null, 'IC: Ctrl+Shift+I → null');
+}
+
+// ── resolveSelectAllAction: default_no_toggle preset (Slice 5.GG) ─
+// Byte-faithful Blender no-toggle branch at `blender_default.py:422-427`
+// (`use_select_all_toggle=False` config at `:115` — Blender's true
+// out-of-the-box default). A → ADD (not TOGGLE). All other bindings
+// match `'default'`.
+{
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA')), 'add', 'no-toggle: A → add (Blender :423)');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { alt: true })), 'clear', 'no-toggle: Alt+A → clear (Blender :424)');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyI', { ctrl: true })), 'invert', 'no-toggle: Ctrl+I → invert (Blender :425)');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyI', { meta: true })), 'invert', 'no-toggle: Cmd+I (macOS) → invert');
+}
+
+// ── default_no_toggle rejects toggle + IC bindings ──────────────
+{
+  // Same shape as 'default' for negative space — Ctrl+A is IC-only;
+  // Shift-modifiers don't bind in default branches.
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { ctrl: true })), null, 'no-toggle: Ctrl+A → null (IC binding)');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { ctrl: true, shift: true })), null, 'no-toggle: Ctrl+Shift+A → null');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { shift: true })), null, 'no-toggle: Shift+A → null');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { alt: true, ctrl: true })), null, 'no-toggle: Alt+Ctrl+A → null');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyI')), null, 'no-toggle: I (no modifiers) → null');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyI', { alt: true })), null, 'no-toggle: Alt+I → null');
+}
+
+// ── Critical semantic check: 'default' vs 'default_no_toggle' on A ──
+// THE differentiator between the two presets — verify they diverge
+// on plain A and agree on everything else.
+{
+  eq(resolveSelectAllAction('default',          ev('KeyA')), 'toggle',
+    'differentiator: default A → toggle');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA')), 'add',
+    'differentiator: default_no_toggle A → add');
+  // Both agree on Alt+A
+  eq(resolveSelectAllAction('default',          ev('KeyA', { alt: true })), 'clear',
+    'agreement: default Alt+A → clear');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyA', { alt: true })), 'clear',
+    'agreement: default_no_toggle Alt+A → clear');
+  // Both agree on Ctrl+I
+  eq(resolveSelectAllAction('default',          ev('KeyI', { ctrl: true })), 'invert',
+    'agreement: default Ctrl+I → invert');
+  eq(resolveSelectAllAction('default_no_toggle', ev('KeyI', { ctrl: true })), 'invert',
+    'agreement: default_no_toggle Ctrl+I → invert');
 }
 
 // ── preset coercion in resolver: unknown falls back to default ──
