@@ -1,45 +1,58 @@
 // @ts-check
 
 /**
- * NLAEditor — Animation Phase 4 Slice 4.D (4.D.1 read-only + 4.D.2
- * drag interactions).
+ * NLAEditor — Animation Phase 4 Slice 4.D (4.D.1 read-only +
+ * 4.D.2 drag interactions + 4.D.2 audit-fix sweep).
  *
  * Surfaces the NLA stack (`animData.nlaTracks[]`) for every animData-
- * bearing Object in the project, mirroring Blender's NLA Editor space
- * (informational: Blender's NLA panel layout in `space_nla.cc` +
- * `space_nla.py`; SS structure is column-flex per-group, not a panel
- * tree).
+ * bearing Object in the project.
  *
  * # 4.D.1 (commit 5385734 + audit-fix 6f52410)
  *
  * Read-only render: track rows + strip rectangles + group headers +
  * ruler + two-state empty placeholder.
  *
- * # 4.D.2 (this slice)
+ * # 4.D.2 (substrate 151cea0 + audit-fix this commit)
  *
- * Drag interactions on strip rectangles + track reorder + ResizeObserver-
- * driven timeline width:
+ * Drag interactions on strip rectangles + track reorder via label
+ * column drag + ResizeObserver-driven timeline width:
  *
  *   - Strip body drag → translates strip (preserves duration)
- *   - Strip left-edge drag → resizes start
- *   - Strip right-edge drag → resizes end
- *   - Track header vertical drag → reorders track stack
- *   - ResizeObserver on the timeline-lane parent → drives pxWidth
- *     state (replaces the audit-fix-hoisted 800px const)
+ *   - Strip left-edge drag (6px invisible handle) → resizes start
+ *   - Strip right-edge drag (6px invisible handle) → resizes end
+ *   - Track label-column vertical drag → reorders track stack
+ *     (audit-fix HIGH-A5: was imported in substrate commit but JSX
+ *     handler was missing — wired here per Rule №1)
+ *   - ResizeObserver on the timeline-lane container via callback ref
+ *     so re-mount (empty-state → populated transition) re-attaches
+ *     observer (audit-fix MED-A6)
  *
  * Drag state buffered in local React state; commits to projectStore
- * only on pointerup (one undo snapshot per drag). Math lives in pure
- * `nlaEditorOps.js` (60 asserts pin contracts).
+ * only on pointerup (one undo snapshot per drag — matches Blender's
+ * modal-operator OPTYPE_UNDO single-step convention per
+ * `editors/space_nla/nla_select.cc:584` etc, audit-fix MED-F2 cite).
+ *
+ * **Drag-handle width** = 6px is an SS-original choice (audit-fix
+ * MED-F1). Blender's NLA editor has no separate edge-resize hitbox
+ * — resize uses the general transform modal (G/S keys); the closest
+ * Blender analog is the strip-pick tolerance ±7px at
+ * `nla_select.cc:280-285`. SS adds the edge-resize hitbox as a
+ * mouse-first UX affordance.
+ *
+ * **Dual-pane safety** (audit-fix MED-A7): each NLAEditor instance
+ * tracks its own drag via local state, but two instances mounted
+ * simultaneously would both install document pointerup listeners
+ * and both could try to commit a drag. Fix: gate commit on
+ * `currentDragInstanceId === thisInstanceId` via a module-level
+ * Symbol — only the instance that handled the pointerdown commits.
  *
  * # Deferred to later sub-slices
  *
  *   - 4.D.3: blend-mode dropdown + Mute/Solo toggles + Edit Action
  *     button (calls Slice 4.C enterTweakMode)
- *   - 4.D.4: Push Action Down operator + track/strip CRUD context menus
- *   - Ruler tick marks (basic ruler shipped in 4.D.1; tick marks
- *     deferred since they need a separate ms→tick layout helper)
- *   - Playhead (deferred to a later slice when scene-time integration
- *     for the NLA timeline is wired)
+ *   - 4.D.4: Push Action Down + track/strip CRUD context menus
+ *   - Ruler tick marks (basic ruler shipped 4.D.1)
+ *   - Playhead (deferred until scene-time integration)
  *
  * @module v3/editors/nla/NLAEditor
  */
@@ -53,6 +66,7 @@ import {
   BLENDMODE_COLORS,
 } from './nlaEditorData.js';
 import {
+  MIN_STRIP_MS,
   applyMoveStrip,
   applyResizeStripStart,
   applyResizeStripEnd,
@@ -65,10 +79,20 @@ const LABEL_W = 160;
 const ROW_H = 24;
 const RULER_H = 22;
 const GROUP_HEADER_H = 28;
-const RESIZE_HANDLE_W = 6;   // px — width of the invisible edge-grab zone
+const RESIZE_HANDLE_W = 6;
 
 /**
- * Convert ms to px along the timeline. Pure helper.
+ * Module-level drag-ownership token. Only the NLAEditor instance whose
+ * `instanceId` matches `currentDragOwner` commits on pointerup. Other
+ * instances see the pointerup but skip the commit. Prevents the dual-
+ * pane double-commit bug (audit-fix MED-A7).
+ *
+ * @type {symbol|null}
+ */
+let currentDragOwner = null;
+
+/**
+ * Convert ms to px along the timeline.
  *
  * @param {number} ms
  * @param {number} minMs
@@ -83,20 +107,29 @@ function msToPx(ms, minMs, maxMs, pxWidth) {
 
 /**
  * @typedef {Object} StripDragState
+ * @property {'strip'} kind
  * @property {string} objectId
  * @property {string} trackId
  * @property {string} stripId
  * @property {('move'|'resize-start'|'resize-end')} mode
- * @property {number} startPx              -- pointer X at drag start
- * @property {number} stripStartMs         -- strip.start at drag start
- * @property {number} stripEndMs           -- strip.end at drag start
- * @property {number} previewDeltaMs       -- live delta during drag
+ * @property {number} startPx
+ * @property {number} stripStartMs
+ * @property {number} stripEndMs
+ * @property {number} previewDeltaMs
+ *
+ * @typedef {Object} TrackDragState
+ * @property {'track'} kind
+ * @property {string} objectId
+ * @property {string} trackId
+ * @property {number} startY              -- pointer Y at drag start
+ * @property {number} originalIndex
+ * @property {number} previewIndex        -- live (snapped to row boundary)
+ *
+ * @typedef {StripDragState | TrackDragState | null} DragState
  */
 
 /**
- * Strip rectangle with pointer-event handlers for the 3 drag modes.
- * The body grabs `move`; invisible RESIZE_HANDLE_W-wide zones at the
- * left + right edges grab `resize-start` / `resize-end`.
+ * Strip rectangle with pointer handlers.
  *
  * @param {{
  *   strip: import('./nlaEditorData.js').NlaStripRow,
@@ -105,17 +138,15 @@ function msToPx(ms, minMs, maxMs, pxWidth) {
  *   minMs: number,
  *   maxMs: number,
  *   pxWidth: number,
- *   dragState: StripDragState | null,
+ *   dragState: DragState,
  *   onDragStart: (s: StripDragState) => void,
  * }} props
  */
 function StripRect({
   strip, objectId, trackId, minMs, maxMs, pxWidth, dragState, onDragStart,
 }) {
-  // Live preview: if THIS strip is being dragged, apply the preview
-  // delta to its visual position. The actual data isn't mutated until
-  // pointerup commits the drag.
   const isBeingDragged = dragState
+    && dragState.kind === 'strip'
     && dragState.objectId === objectId
     && dragState.trackId === trackId
     && dragState.stripId === strip.id;
@@ -123,14 +154,14 @@ function StripRect({
   let effectiveStart = strip.start;
   let effectiveEnd = strip.end;
   if (isBeingDragged) {
-    const d = dragState.previewDeltaMs;
+    const d = /** @type {StripDragState} */ (dragState).previewDeltaMs;
     if (dragState.mode === 'move') {
       effectiveStart = Math.max(0, strip.start + d);
       effectiveEnd = strip.end + (effectiveStart - strip.start);
     } else if (dragState.mode === 'resize-start') {
-      effectiveStart = Math.min(strip.end - 1, Math.max(0, strip.start + d));
+      effectiveStart = Math.min(strip.end - MIN_STRIP_MS, Math.max(0, strip.start + d));
     } else if (dragState.mode === 'resize-end') {
-      effectiveEnd = Math.max(strip.start + 1, strip.end + d);
+      effectiveEnd = Math.max(strip.start + MIN_STRIP_MS, strip.end + d);
     }
   }
 
@@ -144,6 +175,7 @@ function StripRect({
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     onDragStart({
+      kind: 'strip',
       objectId, trackId, stripId: strip.id, mode,
       startPx: e.clientX,
       stripStartMs: strip.start,
@@ -179,7 +211,6 @@ function StripRect({
       ].filter(Boolean).join('\n')}
       onPointerDown={handlePointerDown('move')}
     >
-      {/* Left resize handle — invisible click target */}
       <div
         className="absolute left-0 top-0 bottom-0 cursor-ew-resize"
         style={{ width: `${RESIZE_HANDLE_W}px` }}
@@ -188,7 +219,6 @@ function StripRect({
       <span className="truncate pointer-events-none">
         {strip.name}
       </span>
-      {/* Right resize handle */}
       <div
         className="absolute right-0 top-0 bottom-0 cursor-ew-resize"
         style={{ width: `${RESIZE_HANDLE_W}px` }}
@@ -208,19 +238,45 @@ function StripRect({
  *   maxMs: number,
  *   pxWidth: number,
  *   isTweakTrack: boolean,
- *   dragState: StripDragState | null,
+ *   dragState: DragState,
  *   onStripDragStart: (s: StripDragState) => void,
+ *   onTrackDragStart: (s: TrackDragState) => void,
+ *   trackOriginalIndex: number,
  * }} props
  */
 function TrackRow({
-  track, objectId, minMs, maxMs, pxWidth, isTweakTrack, dragState, onStripDragStart,
+  track, objectId, minMs, maxMs, pxWidth, isTweakTrack,
+  dragState, onStripDragStart, onTrackDragStart, trackOriginalIndex,
 }) {
+  // Live preview: this track is being dragged → highlight + offset
+  const isBeingTrackDragged = dragState
+    && dragState.kind === 'track'
+    && dragState.objectId === objectId
+    && dragState.trackId === track.id;
+
+  const handleTrackPointerDown = useCallback((e) => {
+    // Only initiate track drag from the label column itself, NOT
+    // from any of the flag-letter spans (those will become clickable
+    // toggles in Slice 4.D.3).
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    onTrackDragStart({
+      kind: 'track',
+      objectId, trackId: track.id,
+      startY: e.clientY,
+      originalIndex: trackOriginalIndex,
+      previewIndex: trackOriginalIndex,
+    });
+  }, [objectId, track.id, trackOriginalIndex, onTrackDragStart]);
+
   return (
     <div
       className={cn(
         'flex border-b border-zinc-800',
         track.disabled && 'bg-zinc-900/40',
         !track.enabled && !track.disabled && 'bg-zinc-900/20',
+        isBeingTrackDragged && 'opacity-70 bg-zinc-700/60',
       )}
       style={{ height: `${ROW_H}px` }}
     >
@@ -232,16 +288,18 @@ function TrackRow({
           likely move to Lucide icons matching the SS UI. */}
       <div
         className={cn(
-          'flex items-center gap-1 px-2 border-r border-zinc-800 text-xs',
+          'flex items-center gap-1 px-2 border-r border-zinc-800 text-xs cursor-grab active:cursor-grabbing',
           isTweakTrack && 'text-yellow-400',
           !track.enabled && 'text-zinc-500',
         )}
         style={{ width: `${LABEL_W}px`, minWidth: `${LABEL_W}px` }}
+        onPointerDown={handleTrackPointerDown}
+        title="Drag to reorder track within the stack"
       >
         <span className="text-zinc-500 text-[10px] tabular-nums w-4">
           {track.index}
         </span>
-        <span className="truncate flex-1" title={track.name}>
+        <span className="truncate flex-1">
           {track.name}
         </span>
         {track.solo && (
@@ -277,7 +335,6 @@ function TrackRow({
 }
 
 /**
- * Object-group header.
  * @param {{ group: import('./nlaEditorData.js').NlaObjectGroup }} props
  */
 function GroupHeader({ group }) {
@@ -298,7 +355,7 @@ function GroupHeader({ group }) {
       {group.tweakModeOn && (
         <span
           className="text-yellow-400 text-[10px] uppercase tracking-wider"
-          title="In NLA tweak mode — action edits go directly to the tweak strip's action"
+          title="In NLA tweak mode"
         >
           TWEAK
         </span>
@@ -316,7 +373,6 @@ function GroupHeader({ group }) {
 }
 
 /**
- * Empty-state placeholder.
  * @param {{ noAnimData: boolean }} props
  */
 function EmptyState({ noAnimData }) {
@@ -348,12 +404,17 @@ function EmptyState({ noAnimData }) {
   );
 }
 
-/**
- * The NLAEditor surface.
- */
 export function NLAEditor() {
   const project = useProjectStore((s) => s.project);
   const updateProject = useProjectStore((s) => s.updateProject);
+
+  // Instance identity for dual-pane drag-ownership gating
+  // (audit-fix MED-A7). Symbol ensures each NLAEditor instance has
+  // a unique reference-equal token.
+  const instanceIdRef = useRef(/** @type {symbol|null} */ (null));
+  if (instanceIdRef.current === null) {
+    instanceIdRef.current = Symbol('NLAEditor');
+  }
 
   const groups = useMemo(() => buildNlaEditorRows(project), [project]);
   const span = useMemo(() => computeTimelineSpan(groups), [groups]);
@@ -362,64 +423,112 @@ export function NLAEditor() {
     [groups],
   );
 
-  // ResizeObserver-driven timeline width. Replaces the 4.D.1 audit-fix-
-  // hoisted const. Fallback to 800px until the observer attaches.
-  const laneContainerRef = useRef(/** @type {HTMLDivElement|null} */ (null));
+  // ResizeObserver-driven timeline width via CALLBACK REF (audit-fix
+  // MED-A6). Callback ref fires on every mount/unmount of the container
+  // element — when the empty-state div is replaced with the main
+  // container or vice versa, the observer re-attaches automatically.
+  // Pre-fix the observer used a `useEffect([], [])` which only ran
+  // once on initial mount, so the empty-state → populated transition
+  // left the observer attached to the unmounted element and pxWidth
+  // stuck at the 800px fallback forever.
   const [pxWidth, setPxWidth] = useState(800);
-  useEffect(() => {
-    const el = laneContainerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const w = entry.contentRect.width - LABEL_W;
-        if (w > 0) setPxWidth(w);
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+  const observerRef = useRef(/** @type {ResizeObserver|null} */ (null));
+  const setContainerRef = useCallback((el) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+    if (el && typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const w = entry.contentRect.width - LABEL_W;
+          if (w > 0) setPxWidth(w);
+        }
+      });
+      ro.observe(el);
+      observerRef.current = ro;
+    }
+  }, []);
+  useEffect(() => () => {
+    if (observerRef.current) observerRef.current.disconnect();
   }, []);
 
-  // Drag state — null when idle.
-  const [dragState, setDragState] = useState(/** @type {StripDragState|null} */ (null));
+  const [dragState, setDragState] = useState(/** @type {DragState} */ (null));
 
   const handleStripDragStart = useCallback((/** @type {StripDragState} */ s) => {
+    currentDragOwner = instanceIdRef.current;
     setDragState(s);
   }, []);
 
-  // Global pointer-move + pointer-up handlers while dragging. Attached
-  // to the document so the drag survives the pointer leaving the strip
-  // rect. Pointer capture (set in onPointerDown) routes events back to
-  // the original element, but document-level listeners are belt + braces.
+  const handleTrackDragStart = useCallback((/** @type {TrackDragState} */ s) => {
+    currentDragOwner = instanceIdRef.current;
+    setDragState(s);
+  }, []);
+
   useEffect(() => {
     if (!dragState) return undefined;
 
     const handleMove = (e) => {
-      const deltaPx = e.clientX - dragState.startPx;
-      const deltaMs = pxDeltaToMs(deltaPx, span.minMs, span.maxMs, pxWidth);
-      setDragState((prev) => prev ? { ...prev, previewDeltaMs: deltaMs } : prev);
+      if (dragState.kind === 'strip') {
+        const deltaPx = e.clientX - dragState.startPx;
+        const deltaMs = pxDeltaToMs(deltaPx, span.minMs, span.maxMs, pxWidth);
+        setDragState((prev) => prev && prev.kind === 'strip'
+          ? { ...prev, previewDeltaMs: deltaMs } : prev);
+      } else {
+        // Track drag — convert pointer Y delta to index delta via ROW_H
+        const deltaY = e.clientY - dragState.startY;
+        const indexDelta = Math.round(deltaY / ROW_H);
+        // In SS rendering, INCREASING index = top of stack, but in the
+        // DOM tracks render TOP-DOWN with highest index at TOP. So a
+        // downward drag (positive deltaY) DECREASES the target index.
+        const previewIndex = Math.max(0, dragState.originalIndex - indexDelta);
+        setDragState((prev) => prev && prev.kind === 'track'
+          ? { ...prev, previewIndex } : prev);
+      }
     };
 
     const handleUp = () => {
-      // Commit the drag via projectStore — ONE undo snapshot per drag.
-      const finalDelta = dragState.previewDeltaMs;
-      if (Math.abs(finalDelta) > 1e-10) {
-        updateProject((proj) => {
-          const node = proj.nodes.find((n) => n && n.id === dragState.objectId);
-          if (!node || !node.animData) return;
-          let newAd;
-          if (dragState.mode === 'move') {
-            newAd = applyMoveStrip(node.animData, dragState.trackId, dragState.stripId, finalDelta);
-          } else if (dragState.mode === 'resize-start') {
-            newAd = applyResizeStripStart(node.animData, dragState.trackId, dragState.stripId,
-              dragState.stripStartMs + finalDelta);
-          } else if (dragState.mode === 'resize-end') {
-            newAd = applyResizeStripEnd(node.animData, dragState.trackId, dragState.stripId,
-              dragState.stripEndMs + finalDelta);
+      // Audit-fix MED-A7: only the instance that initiated the drag
+      // commits. Other instances (dual-pane) skip the commit but
+      // still clear their own local dragState.
+      const isOwner = currentDragOwner === instanceIdRef.current;
+      if (isOwner && dragState) {
+        if (dragState.kind === 'strip') {
+          const finalDelta = dragState.previewDeltaMs;
+          if (Math.abs(finalDelta) > 1e-10) {
+            updateProject((proj) => {
+              const node = proj.nodes.find((n) => n && n.id === dragState.objectId);
+              if (!node || !node.animData) return;
+              let newAd;
+              if (dragState.mode === 'move') {
+                newAd = applyMoveStrip(node.animData, dragState.trackId, dragState.stripId, finalDelta);
+              } else if (dragState.mode === 'resize-start') {
+                newAd = applyResizeStripStart(node.animData, dragState.trackId, dragState.stripId,
+                  dragState.stripStartMs + finalDelta);
+              } else if (dragState.mode === 'resize-end') {
+                newAd = applyResizeStripEnd(node.animData, dragState.trackId, dragState.stripId,
+                  dragState.stripEndMs + finalDelta);
+              }
+              if (newAd && newAd !== node.animData) {
+                node.animData = newAd;
+              }
+            });
           }
-          if (newAd && newAd !== node.animData) {
-            node.animData = newAd;
+        } else {
+          // Track reorder commit
+          const previewIndex = dragState.previewIndex;
+          if (previewIndex !== dragState.originalIndex) {
+            updateProject((proj) => {
+              const node = proj.nodes.find((n) => n && n.id === dragState.objectId);
+              if (!node || !node.animData) return;
+              const newAd = applyReorderTrack(node.animData, dragState.trackId, previewIndex);
+              if (newAd !== node.animData) {
+                node.animData = newAd;
+              }
+            });
           }
-        });
+        }
+        currentDragOwner = null;
       }
       setDragState(null);
     };
@@ -432,10 +541,10 @@ export function NLAEditor() {
     };
   }, [dragState, span.minMs, span.maxMs, pxWidth, updateProject]);
 
-  // EARLY RETURN guarded behind ALL hooks above (per feedback_hooks_before_early_return).
+  // All hooks above this line. Early return safe now.
   if (visibleGroups.length === 0) {
     return (
-      <div ref={laneContainerRef} className="h-full">
+      <div ref={setContainerRef} className="h-full">
         <EmptyState noAnimData={groups.length === 0} />
       </div>
     );
@@ -445,7 +554,7 @@ export function NLAEditor() {
 
   return (
     <div
-      ref={laneContainerRef}
+      ref={setContainerRef}
       className="flex flex-col h-full bg-zinc-950 text-zinc-300 overflow-auto"
     >
       <div
@@ -460,9 +569,14 @@ export function NLAEditor() {
         </div>
         <div className="px-2">
           {minMs.toFixed(0)} ms → {maxMs.toFixed(0)} ms
-          {dragState && (
+          {dragState && dragState.kind === 'strip' && (
             <span className="ml-3 text-yellow-400">
-              [dragging {dragState.mode}: Δ{dragState.previewDeltaMs.toFixed(0)} ms]
+              [drag {dragState.mode}: Δ{dragState.previewDeltaMs.toFixed(0)} ms]
+            </span>
+          )}
+          {dragState && dragState.kind === 'track' && (
+            <span className="ml-3 text-yellow-400">
+              [reorder: index {dragState.originalIndex} → {dragState.previewIndex}]
             </span>
           )}
         </div>
@@ -486,6 +600,8 @@ export function NLAEditor() {
               }
               dragState={dragState}
               onStripDragStart={handleStripDragStart}
+              onTrackDragStart={handleTrackDragStart}
+              trackOriginalIndex={track.index}
             />
           ))}
         </div>

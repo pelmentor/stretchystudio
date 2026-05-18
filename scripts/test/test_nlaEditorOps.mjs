@@ -258,6 +258,33 @@ function findStrip(ad, trackId, stripId) {
     '16: all 4 ops left the original animData byte-identical (immutability)');
 }
 
+// ── 16b. applyReorderTrack: drifted-index same-position restamps
+// (audit-fix verifies the documented contract: even on no-position
+// change, drifted indices get restamped to contiguous 0..n-1 because
+// drifted indices ARE a contract violation that must be repaired).
+{
+  // Setup: drifted indices [0, 5, 99]. User "moves" track at position
+  // 1 (index 5) to newIndex 5. The position doesn't change visually
+  // (it's already at the visual middle slot), but the index VALUE
+  // drifts. applyReorderTrack restamps to [0, 1, 2].
+  const ad = {
+    actionId: null, flag: 0,
+    nlaTracks: [
+      { ...makeNlaTrack('tA', 'A', { index: 0 }), strips: [] },
+      { ...makeNlaTrack('tB', 'B', { index: 5 }), strips: [] },
+      { ...makeNlaTrack('tC', 'C', { index: 99 }), strips: [] },
+    ],
+  };
+  // newIndex=1 (the actual visual middle slot) — tB is already there
+  // visually, but its stored index is 5
+  const out = applyReorderTrack(ad, 'tB', 1);
+  // After: tB stays at position 1, BUT its index is restamped 5 → 1
+  eq(out.nlaTracks[1].id, 'tB', '16b: tB still at position 1');
+  eq(out.nlaTracks[1].index, 1, '16b: tB index restamped 5 → 1 (drift repaired)');
+  eq(out.nlaTracks[0].index, 0, '16b: tA index 0');
+  eq(out.nlaTracks[2].index, 2, '16b: tC index restamped 99 → 2');
+}
+
 // ── 17. pxDeltaToMs + pxToMs ───────────────────────────────────────
 {
   // Span 0..1000ms over 800px → 1 px = 1.25 ms

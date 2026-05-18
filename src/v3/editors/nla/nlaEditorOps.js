@@ -38,12 +38,27 @@
  * Blender's `nlastrip_fix_resize_overlaps` (nla.cc:1616+) shifts
  * neighbor strips when a resize would cause overlap. SS does NOT
  * enforce no-overlap at the substrate level — overlapping strips
- * are evaluator-valid (the higher-track strip wins at the overlap
- * region via the bottom-to-top stack walk). The 4.D NLAEditor
- * surfaces overlaps visually (the top-track strip occludes the
- * underlying one); user can manually shift if they want clean
- * separation. Slice 4.D.4 may add an opt-in "auto-separate on drop"
- * checkbox if user feedback requests it.
+ * are evaluator-valid: per Slice 4.B `evaluateNla`
+ * (`src/anim/nlaEval.js` accumulator loop), each strip's
+ * contribution is blended via `applyBlendMode(lower, strip,
+ * blendmode, influence)` regardless of overlap. Cross-track:
+ * bottom-up accumulation per the track-index sort; upper REPLACE
+ * with influence=1 fully occludes lower, ADD/SUB/MUL or partial-
+ * influence compose per the kernel. Same-track overlap: strips
+ * iterate in array order, each calling `applyBlendMode` against
+ * the running accumulator — the last strip evaluated wins per its
+ * blendmode/influence (NOT a positional "left-to-right" rule).
+ *
+ * Audit-fix Slice 4.D.2 HIGH-F1: pre-fix rationale falsely claimed
+ * "higher-track strip wins at the overlap region via the bottom-to-
+ * top stack walk", which mischaracterized SS's evaluator (which
+ * goes through `applyBlendMode` uniformly — REPLACE-influence-1 is
+ * the only mode that fully occludes; other modes compose). Updated
+ * to accurately describe what `evaluateNla` does.
+ *
+ * The 4.D NLAEditor surfaces overlaps visually; user can manually
+ * shift if they want clean separation. Slice 4.D.4 may add opt-in
+ * "auto-separate on drop" if user feedback requests it.
  *
  * @module v3/editors/nla/nlaEditorOps
  */
