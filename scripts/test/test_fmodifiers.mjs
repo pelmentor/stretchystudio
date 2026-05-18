@@ -823,7 +823,7 @@ function approx(a, b, name, eps = 1e-6) {
   approx(evaluateFCurve(fc, 500), 50, '60: empty modifiers → identity');
 }
 
-// ── 3.F gap-fills (added 2026-05-18) ──────────────────────────────────────
+// ── 3.F gap-fills ─────────────────────────────────────────────────────────
 
 // ── 61. Generator degree 0 (constant): single coefficient ──────────────
 {
@@ -857,9 +857,14 @@ function approx(a, b, name, eps = 1e-6) {
 
 // ── 62. Noise frequency response — different `size` produces different output ─
 {
-  // size is the Perlin period in ms. size=10 (high frequency) and
-  // size=1000 (low frequency) over the same time domain produce
-  // distinguishable outputs (the high-frequency noise oscillates more).
+  // Per Blender's `fcm_noise_evaluate` at `fmodifier.cc:836`:
+  //   scale = 1.0 / data->size
+  //   x = (evaltime - offset) * scale + GOLDEN
+  // size=10 (high freq) advances x 100x faster than size=1000 over 0..1000ms.
+  // Audit-fix 3.F MED-2: replaced fragile zero-crossing heuristic with
+  // deterministic sample-difference check — directly tests "different
+  // size produces different output values" without relying on Perlin
+  // sign distribution.
   const fcHigh = {
     keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 0 }],
     modifiers: [{ type: 'noise', id: 'n1',
@@ -870,27 +875,22 @@ function approx(a, b, name, eps = 1e-6) {
     modifiers: [{ type: 'noise', id: 'n2',
       data: { size: 1000, strength: 1, phase: 1, blendType: 'replace' } }],
   };
-  // Sample at 16 positions across 0..1000ms; count how often consecutive
-  // samples have different signs (zero-crossings = oscillation frequency).
-  let highCrossings = 0;
-  let lowCrossings = 0;
-  let prevHigh = evaluateFCurve(fcHigh, 0);
-  let prevLow = evaluateFCurve(fcLow, 0);
-  for (let i = 1; i <= 16; i++) {
+  // Pick a fixed-grid sample set and require AT LEAST one position
+  // where the two outputs differ measurably. With high-freq scale=100x
+  // low-freq, the Perlin field is at a totally different position for
+  // most samples; we soft-pin "any sample differs by > 0.05" rather
+  // than overclaim distribution-level properties.
+  let maxDelta = 0;
+  for (let i = 0; i <= 16; i++) {
     const t = (i * 1000) / 16;
     const vh = evaluateFCurve(fcHigh, t);
     const vl = evaluateFCurve(fcLow, t);
-    if ((vh < 0) !== (prevHigh < 0)) highCrossings++;
-    if ((vl < 0) !== (prevLow < 0)) lowCrossings++;
-    prevHigh = vh;
-    prevLow = vl;
+    const d = Math.abs(vh - vl);
+    if (d > maxDelta) maxDelta = d;
   }
-  // High-frequency noise should cross zero more often than low-frequency.
-  // We don't pin exact counts (depends on phase + Perlin internals) —
-  // just that "different size ⇒ different observable structure".
-  if (highCrossings === lowCrossings) {
+  if (!(maxDelta > 0.05)) {
     failed++;
-    const msg = `62: noise frequency response — size variation produced same crossing count (${highCrossings} both); expected diverging`;
+    const msg = `62: noise frequency response — size=10 vs size=1000 produced near-identical samples (maxDelta=${maxDelta.toFixed(4)} ≤ 0.05); size axis input must affect output`;
     failures.push(msg);
     console.log(`FAIL: ${msg}`);
   } else {
@@ -901,7 +901,7 @@ function approx(a, b, name, eps = 1e-6) {
 // ── 63. Cycles + Noise + Limits 3-way composition (plan §3.F target) ───
 {
   // Single fcurve carries Cycles (head) + Noise + Limits. Per the
-  // forward-walk value pass (fmodifier.cc:1568-1569) the order is
+  // forward-walk value pass (fmodifier.cc:1567-1569) the order is
   // Cycles-time → sample → Cycles-value(+cycyofs) → Noise → Limits.
   // Limits.maxY=0.6 caps the final output regardless of Noise additions.
   const fc = {

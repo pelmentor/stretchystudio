@@ -13,6 +13,16 @@
 //   - Determinism across reconstruction: building the action twice +
 //     exporting twice yields literally-equal segment arrays.
 //
+// What this test does NOT gate (audit-fix 3.F LOW-2):
+//   - Blender-fidelity of the eval substrate. handBake calls
+//     evaluateFCurve which calls SS's own evaluateNoiseValue /
+//     evaluateCyclesTime / etc. Byte-identity here proves the bake
+//     helper is faithful to that pipeline; it does NOT prove the
+//     pipeline matches Blender. The Blender-fidelity gate lives in
+//     test_fmodifiers.mjs (102+ asserts pinning each per-type evaluator
+//     against fmodifier.cc semantics) and test_actionExportMotion3.mjs
+//     (action-level shape).
+//
 // Why a dedicated file:
 //   - test_motion3jsonNoiseExport.mjs §6 pins cross-run determinism but
 //     not byte-identity to a HAND-BAKE — that's a stronger property
@@ -54,12 +64,20 @@ function assertEq(actual, expected, name) {
  *
  * Returns the expected motion3 segment array as if encoded from the
  * baked linear keyforms.
+ *
+ * INVARIANT (audit-fix 3.F MED-1): the first sample's time is always
+ * `0` because `bakeFCurveModifiers` always starts sampling at `i=0 →
+ * time = 0 * stepMs = 0`. If a future refactor changes the bake start
+ * offset (e.g. aligning to the first keyform's time, or skipping the
+ * t=0 sample), `handBake` here must be updated in lockstep — the
+ * `firstMismatch` check below silently identifies the first divergent
+ * index but doesn't flag a semantic regression at the first sample.
  */
 function handBake(fcurve, durationMs, fps) {
   const stepMs = 1000 / fps;
   const sampleCount = Math.floor(durationMs / stepMs) + 1;
   const segs = [];
-  // First sample becomes [t0/1000, v0]
+  // First sample at t=0 (bake-spec invariant; see JSDoc).
   const t0 = 0;
   const v0 = evaluateFCurve(fcurve, t0);
   segs.push(t0 / 1000, v0);
@@ -166,7 +184,7 @@ function firstMismatch(a, b) {
 {
   // Cycles + Noise on the SAME fcurve. Per 3.E, Noise triggers bake
   // regardless of Loop. Hand-bake must apply both modifiers (forward-
-  // walk value pass per fmodifier.cc:1568-1569) — Cycles via time pass
+  // walk value pass per fmodifier.cc:1567-1569) — Cycles via time pass
   // first (reverse walk fmodifier.cc:1515-1517), then Noise on the
   // cycled value.
   const fc = paramFcurve('CycNoise',
@@ -314,14 +332,17 @@ function firstMismatch(a, b) {
   const actual = generateMotion3Json(action).Curves[0].Segments;
   assertEq(firstMismatch(expected, actual), -1,
     '8: driver-bearing bake byte-identical (driver applied before strip)');
-  // Sanity: the driver returns 42, so every baked value should be 42
-  // (driver overrides modifier output per evaluateFCurve:208-217).
-  for (let i = 1; i < actual.length; i += 3) {
-    // [type=0, time, value] tuples; skip first [t0, v0] pair via i=1 (v0)
-    // For i=1 we hit segs[1]=first value; for i>=2 indexing changes.
+  // Sanity sweep: the driver returns 42, so EVERY baked value should
+  // be 42 (driver overrides modifier output per evaluateFCurve:208-217).
+  // Audit-fix 3.F LOW-1: walk the segment array properly instead of
+  // checking only segs[1]. Segment shape: [t0, v0, type1, t1, v1, type2, t2, v2, ...]
+  // — first sample at indices 0/1, every subsequent triplet at 2+3k/3+3k/4+3k.
+  let allValuesAre42 = (actual[1] === 42);
+  for (let k = 0; (2 + 3 * k + 2) < actual.length; k++) {
+    if (actual[2 + 3 * k + 2] !== 42) { allValuesAre42 = false; break; }
   }
-  // Simpler check: pull the FIRST value (segs[1]) — must be 42.
-  assertEq(actual[1], 42, '8a: driver value (42) appears at first sample');
+  assert(allValuesAre42,
+    `8a: every baked sample value equals driver output (42); got first non-42 in segments array`);
 }
 
 console.log(`fmodifiers_export_bake: ${passed} passed, ${failed} failed`);
