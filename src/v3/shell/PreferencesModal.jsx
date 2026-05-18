@@ -36,6 +36,7 @@ import { lightThemePresets, darkThemePresets } from '../../lib/themePresets.js';
 import { useState } from 'react';
 import { KeymapModal } from './KeymapModal.jsx';
 import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { KEYMAP_PRESETS } from '../../anim/keymapPresets.js';
 import { useI18n, AVAILABLE_LOCALES, useT } from '../../i18n/index.js';
 
 export function PreferencesModal({ open, onOpenChange }) {
@@ -51,6 +52,13 @@ export function PreferencesModal({ open, onOpenChange }) {
   const setMlEnabled = usePreferencesStore((s) => s.setMlEnabled);
   const useNumericInputAdvanced = usePreferencesStore((s) => s.useNumericInputAdvanced);
   const setUseNumericInputAdvanced = usePreferencesStore((s) => s.setUseNumericInputAdvanced);
+  // Slice 5.HH — keymap-preset selector. Subscribes to the slot
+  // shipped by Slice 5.AA + extended to 3 options by Slice 5.GG. The
+  // single-coercion-point `setKeymapPreset` from preferencesStore
+  // handles validation (any non-`'default_no_toggle'` / non-`'industry_compatible'`
+  // value coerces to `'default'`).
+  const keymapPreset = usePreferencesStore((s) => s.keymapPreset);
+  const setKeymapPreset = usePreferencesStore((s) => s.setKeymapPreset);
   const locale = useI18n((s) => s.locale);
   const setLocale = useI18n((s) => s.setLocale);
 
@@ -93,6 +101,12 @@ export function PreferencesModal({ open, onOpenChange }) {
     input:               useT('prefs.input'),
     inputAdvNumeric:     useT('prefs.input.advancedNumeric'),
     inputAdvNumericNote: useT('prefs.input.advancedNumericNote'),
+    // Slice 5.HH — keymap-preset selector.
+    keymapPreset:                useT('prefs.keymapPreset'),
+    keymapPresetDefault:         useT('prefs.keymapPreset.option.default'),
+    keymapPresetDefaultNoToggle: useT('prefs.keymapPreset.option.defaultNoToggle'),
+    keymapPresetIndustry:        useT('prefs.keymapPreset.option.industryCompatible'),
+    keymapPresetNote:            useT('prefs.keymapPreset.note'),
   };
 
   return (
@@ -181,6 +195,39 @@ export function PreferencesModal({ open, onOpenChange }) {
               <Keyboard size={14} />
               {labels.viewShortcuts}
             </Button>
+          </Section>
+
+          {/* Slice 5.HH — keymap-preset selector. Surfaces the 3 presets
+              shipped in Slices 5.AA + 5.GG so users can flip between
+              "Blender Default (toggle)" / "Blender Default (no toggle —
+              byte-faithful)" / "Industry Compatible" without dev-console
+              access. Closes Slice 5.AA Dev 4 deviation. */}
+          <Section label={labels.keymapPreset}>
+            <Select value={keymapPreset} onValueChange={setKeymapPreset}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue>
+                  {keymapPreset === 'default_no_toggle'
+                    ? labels.keymapPresetDefaultNoToggle
+                    : keymapPreset === 'industry_compatible'
+                      ? labels.keymapPresetIndustry
+                      : labels.keymapPresetDefault}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {KEYMAP_PRESETS.map((p) => (
+                  <SelectItem key={p} value={p} className="text-xs">
+                    {p === 'default_no_toggle'
+                      ? labels.keymapPresetDefaultNoToggle
+                      : p === 'industry_compatible'
+                        ? labels.keymapPresetIndustry
+                        : labels.keymapPresetDefault}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-[10px] text-muted-foreground leading-snug">
+              {labels.keymapPresetNote}
+            </span>
           </Section>
 
           <Section label={labels.language}>

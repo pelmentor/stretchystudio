@@ -120,6 +120,14 @@ const EN = {
   'prefs.input':                    'Input',
   'prefs.input.advancedNumeric':    'Default to Advanced Numeric Input',
   'prefs.input.advancedNumericNote': 'When entering numbers while transforming, default to advanced mode for full math expression evaluation',
+  // Slice 5.HH — keymap-preset selector UI. Surfaces the 3 presets
+  // shipped in Slices 5.AA + 5.GG so users can flip without dev-console
+  // access. Closes Slice 5.AA Dev 4 deviation.
+  'prefs.keymapPreset':                           'Keymap preset',
+  'prefs.keymapPreset.option.default':            'Blender Default (toggle)',
+  'prefs.keymapPreset.option.defaultNoToggle':    'Blender Default (no toggle)',
+  'prefs.keymapPreset.option.industryCompatible': 'Industry Compatible',
+  'prefs.keymapPreset.note':                      'Controls the channels-region select-all triplet (A / Alt+A / Ctrl+I in the F-Curve sidebar). "Toggle" matches SS\'s pre-2026-05 behavior; "no toggle" is Blender\'s byte-faithful out-of-box default; "Industry Compatible" mirrors Maya-style Ctrl+A bindings.',
 };
 
 // Eagerly register every shipped non-English locale so a user

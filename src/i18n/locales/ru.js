@@ -85,4 +85,10 @@ export const RU = {
   'prefs.input':                    'Ввод',
   'prefs.input.advancedNumeric':    'По умолчанию — расширенный числовой ввод',
   'prefs.input.advancedNumericNote': 'При вводе чисел во время трансформации сразу включать продвинутый режим с поддержкой математических выражений',
+  // Slice 5.HH — клавиатурная схема (выбор раскладки).
+  'prefs.keymapPreset':                           'Клавиатурная схема',
+  'prefs.keymapPreset.option.default':            'Blender по умолчанию (с toggle)',
+  'prefs.keymapPreset.option.defaultNoToggle':    'Blender по умолчанию (без toggle)',
+  'prefs.keymapPreset.option.industryCompatible': 'Industry Compatible',
+  'prefs.keymapPreset.note':                      'Управляет триплетом select-all в сайдбаре каналов F-Curve (A / Alt+A / Ctrl+I). "С toggle" — поведение SS до мая 2026; "без toggle" — байт-в-байт дефолт Blender; "Industry Compatible" — раскладка в стиле Maya на Ctrl+A.',
 };
