@@ -303,6 +303,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { usePreferencesStore } from '../../../store/preferencesStore.js';
+import { useKeyformSelectionStore } from '../../../store/keyformSelectionStore.js';
 import { resolveSelectAllAction } from '../../../anim/keymapPresets.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
@@ -633,6 +634,16 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
   const [selectedHandles, setSelectedHandles] = useState(new Map());
+  // Slice 5.EE — publish keyform selection to cross-editor store so
+  // DopesheetEditor (and future readers) can gate UI on it. FCurveEditor
+  // remains the canonical owner; this is a one-way mirror, not a
+  // transitional shim. Closes Slice 5.W-2 deviation (active-keyform
+  // halo selection precondition). See
+  // [src/store/keyformSelectionStore.js](../../../store/keyformSelectionStore.js).
+  const publishKeyformSelection = useKeyformSelectionStore((s) => s.publishHandles);
+  useEffect(() => {
+    publishKeyformSelection(selectedHandles);
+  }, [selectedHandles, publishKeyformSelection]);
   // Slice 5.I — visibility now persists on `fcurve.hide` (negative of
   // Blender's FCURVE_VISIBLE). The prior local `useState(new Set())`
   // was lost on editor unmount / save-load. See

@@ -59,6 +59,10 @@ import { useMemo, useRef } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import {
+  useKeyformSelectionStore,
+  isKeyformCenterSelected,
+} from '../../../store/keyformSelectionStore.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -114,6 +118,13 @@ export function DopesheetEditor() {
     [action?.fcurves, selection],
   );
 
+  // Slice 5.EE — subscribe to keyform-selection store (published by
+  // FCurveEditor) so the halo can gate on Blender's per-bezt SELECT
+  // bit at `graph_draw.cc:254`. Closes Slice 5.W-2 deviation.
+  // Read at parent (single subscription) and pass the per-row
+  // boolean down — avoids each Row creating its own subscription.
+  const keyformSelectionHandles = useKeyformSelectionStore((s) => s.handles);
+
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
   if (!action) {
@@ -150,6 +161,11 @@ export function DopesheetEditor() {
                   duration={duration}
                   currentTime={currentTime}
                   isActiveChannel={row.fcurveId !== '' && row.fcurveId === activeFCurveId}
+                  isActiveKeyformSelected={isKeyformCenterSelected(
+                    keyformSelectionHandles,
+                    row.fcurveId,
+                    row.activeKfIdx,
+                  )}
                   onSeek={setCurrentTime}
                 />
               ))
@@ -203,7 +219,7 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ row, duration, currentTime, isActiveChannel, onSeek }) {
+function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, onSeek }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -212,12 +228,24 @@ function Row({ row, duration, currentTime, isActiveChannel, onSeek }) {
     [row.keyforms, activeKfIdx],
   );
 
-  // Audit-fix HIGH-2: per-channel gate. Halo only fires when this row's
-  // fcurve is the currently active one (SS-equivalent of FCURVE_ACTIVE
-  // gate at `graph_draw.cc:244`). Until Phase 5 path #11 ships the
-  // persisted `fcurve.active` flag, `pickActiveFCurve(action, selection)`
-  // carries the same semantic via editor-local selection state.
-  const showActiveHalo = isActiveChannel && activeKfIdx >= 0 && activeKfIdx < row.keyforms.length;
+  // Halo gates (3 conditions, all required to draw):
+  //   1. per-channel: this row's fcurve is the currently active one
+  //      (SS-equivalent of FCURVE_ACTIVE gate at `graph_draw.cc:244`).
+  //      Slice 5.W audit-fix HIGH-2 + Slice 5.X persisted `fc.active`.
+  //   2. active-keyform index is in range (Slice 5.W).
+  //   3. **NEW Slice 5.EE — active keyform's center bit is SELECTED**
+  //      (SS-equivalent of `bezt->f2 & SELECT` at `graph_draw.cc:254`).
+  //      The `isActiveKeyformSelected` prop is computed by the parent
+  //      reading from the cross-editor `useKeyformSelectionStore`
+  //      (FCurveEditor publishes; DopesheetEditor consumes). Closes
+  //      Slice 5.W-2 deviation that was deferred because SS keyform
+  //      selection lived only in FCurveEditor's local React state.
+  const showActiveHalo = (
+    isActiveChannel
+    && activeKfIdx >= 0
+    && activeKfIdx < row.keyforms.length
+    && isActiveKeyformSelected
+  );
 
   return (
     <div
