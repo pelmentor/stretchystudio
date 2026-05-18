@@ -217,9 +217,13 @@ const ANIMATION_AREAS = () => [
   buildArea('rightTop',    [e('parameters')]),
   buildArea('rightBottom', [e('actions'), e('properties'), e('nodeTree')]),
   // Phase 4 Slice 4.D.1: NLA editor joins the timeline area as a sibling
-  // tab. Blender's animation workspace surfaces NLA in the bottom strip
-  // alongside Dopesheet + Graph Editor (reference/blender/scripts/startup/
-  // bl_app_templates_system/General/startup.blend), so SS follows suit.
+  // tab. Matches Blender's standard Animation workspace layout where NLA
+  // surfaces in the bottom strip alongside Dopesheet + Graph Editor.
+  // (Audit-fix 4.D.1: pre-fix this comment cited a fabricated path
+  // `bl_app_templates_system/General/startup.blend` — the General
+  // template is implicit-default with no template folder; default
+  // workspace .blend files live in release/datafiles/ which isn't part
+  // of the reference clone. Citation removed; claim verified true.)
   buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve'), e('nla')]),
 ];
 

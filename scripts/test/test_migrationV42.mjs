@@ -446,6 +446,13 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
     '16: strip with combine blendmode fails isNlaStrip (validation enforced)');
   assert(!isNlaStrip({ ...okStrip, extendmode: 'wrap' }),
     '16: strip with unknown extendmode fails isNlaStrip');
+  // Audit-fix Slice 4.D.1 LOW-A4: empty-string id/actionId fails too.
+  // Pre-fix isNlaStrip only checked `typeof === 'string'` which let
+  // empty strings through despite makeNlaStrip rejecting them.
+  assert(!isNlaStrip({ ...okStrip, id: '' }),
+    '16: strip with empty id fails isNlaStrip (LOW-A4 audit-fix)');
+  assert(!isNlaStrip({ ...okStrip, actionId: '' }),
+    '16: strip with empty actionId fails isNlaStrip (LOW-A4 audit-fix)');
 }
 
 // ── 17. getNlaTracks reader — sparse defaults to empty array ───────

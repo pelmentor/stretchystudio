@@ -130,7 +130,16 @@ function TrackRow({ track, minMs, maxMs, pxWidth, isTweakTrack }) {
       )}
       style={{ height: `${ROW_H}px` }}
     >
-      {/* Label column */}
+      {/* Label column.
+          SS DEVIATION (audit-fix MED-F1): Blender's NLA editor uses
+          ICONS for the mute/solo/protect indicators (`ICON_HIDE_ON` /
+          `ICON_SOLO_OFF` / `ICON_UNLOCKED` per Blender
+          `anim_channels_defines.cc:5768-5822`). SS uses single-letter
+          badges (S/M/P/D) for the read-only 4.D.1 render to keep the
+          row chrome compact. Slice 4.D.3 will convert these to
+          clickable toggles — at that point the icon-vs-letter choice
+          gets re-litigated (likely move to Lucide icons matching the
+          rest of the SS UI). Documented deviation, not a bug. */}
       <div
         className={cn(
           'flex items-center gap-1 px-2 border-r border-zinc-800 text-xs',
@@ -227,18 +236,38 @@ function GroupHeader({ group }) {
 }
 
 /**
- * Empty-state placeholder when no Object carries `animData.nlaTracks`.
+ * Empty-state placeholder. Two variants per audit-fix MED-A3:
+ *   - `noAnimData = true`  — there are no animData-bearing Objects at
+ *     all (project is empty or wizard hasn't run)
+ *   - `noAnimData = false` — there ARE Objects with animData but none
+ *     have NLA tracks yet (the user just hasn't added any)
+ *
+ * @param {{ noAnimData: boolean }} props
  */
-function EmptyState() {
+function EmptyState({ noAnimData }) {
   return (
     <div className="flex items-center justify-center h-full text-zinc-500 text-sm p-6">
       <div className="text-center max-w-md">
-        <p className="mb-2">No NLA tracks in this project.</p>
-        <p className="text-xs">
-          NLA tracks let you layer multiple Actions on top of each other
-          with per-layer blend modes (replace / add / subtract / multiply).
-          Track + strip CRUD ships in Slice 4.D.4.
-        </p>
+        {noAnimData ? (
+          <>
+            <p className="mb-2">No animData-bearing Objects in this project.</p>
+            <p className="text-xs">
+              NLA tracks attach to parts, bone groups, and the scene
+              pseudo-Object. Import a PSD or run the wizard to populate
+              the project before adding NLA tracks.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mb-2">No NLA tracks on any Object yet.</p>
+            <p className="text-xs">
+              NLA tracks let you layer multiple Actions on top of each
+              other with per-layer blend modes (replace / add / subtract
+              / multiply). Add tracks via the "+ Track" affordance per
+              Object — shipping in Slice 4.D.4.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -263,15 +292,22 @@ export function NLAEditor() {
     [groups],
   );
 
-  if (visibleGroups.length === 0) {
-    return <EmptyState />;
-  }
-
-  // Timeline pixel width — for 4.D.1 we use a fixed render width
-  // (consumers see the natural overflow). 4.D.2 will introduce
-  // pan/zoom via a width prop computed from container size.
+  // Timeline pixel width. Audit-fix MED-A2 hoisted this above the
+  // early return so 4.D.2's ResizeObserver-driven useState/useRef
+  // can be inserted into the hook block without touching the
+  // early-return boundary. Today the value is a fixed 800px and
+  // consumers see natural overflow; 4.D.2 will compute it from
+  // container size.
   const pxWidth = 800;
   const { minMs, maxMs } = span;
+
+  if (visibleGroups.length === 0) {
+    // Audit-fix MED-A3: distinguish "no animData Objects at all" from
+    // "Objects exist but have no NLA tracks yet". The latter is the
+    // common case after a fresh PSD import; conflating with "no
+    // animData" misleads users into thinking the project is empty.
+    return <EmptyState noAnimData={groups.length === 0} />;
+  }
 
   return (
     <div className="flex flex-col h-full bg-zinc-950 text-zinc-300 overflow-auto">

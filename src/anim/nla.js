@@ -345,7 +345,16 @@ export function isNlaStrip(obj) {
   const s = /** @type {Record<string, unknown>} */ (obj);
   return (
     typeof s.id === 'string'
+    && /** @type {string} */ (s.id).length > 0
     && typeof s.actionId === 'string'
+    // Audit-fix Slice 4.D.1 LOW-A4: match `makeNlaStrip` non-empty
+    // enforcement. Pre-fix a strip with `actionId: ''` passed the
+    // predicate but surfaced as "(no action)" in NLAEditor — a
+    // narrow inconsistency between the constructor gate and the
+    // post-load validator. Only reachable via hand-edited corrupt
+    // JSON (makeNlaStrip throws), but pinning the contract here
+    // keeps the validator authoritative.
+    && /** @type {string} */ (s.actionId).length > 0
     && typeof s.start === 'number'
     && typeof s.end === 'number'
     && typeof s.actstart === 'number'

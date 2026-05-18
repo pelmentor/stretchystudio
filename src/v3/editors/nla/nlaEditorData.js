@@ -256,12 +256,23 @@ export function computeTimelineSpan(groups) {
 
 /**
  * Blender-faithful blendmode → display label map. Surfaces the labels
- * Blender uses in `rna_nla.cc:236-260` (`rna_enum_nla_strip_mode_items`):
+ * Blender uses in `rna_nla.cc:32-61` (`rna_enum_nla_mode_blend_items`):
  *   replace  → "Replace"
  *   add      → "Add"
  *   subtract → "Subtract"
  *   multiply → "Multiply"
  * (combine is deferred per plan §4.B; not in the map.)
+ *
+ * **Citation-correction note (audit-fix Slice 4.D.1)**: pre-audit-fix
+ * this comment cited `rna_nla.cc:236-260` and identifier
+ * `rna_enum_nla_strip_mode_items`. Both were fabricated — line range
+ * 236-260 is inside `rna_NlaStrip_start_frame_set` (unrelated clamp
+ * logic), and the identifier had a transposed word ("strip_mode"
+ * instead of "mode_blend"). The label STRINGS were correct against
+ * the actual enum at 32-61; only the meta-citation was wrong.
+ * Cite-discipline streak (5.P → 3.F/G → 4.A/B/C HOLDS at 5) BROKE on
+ * this slice — caught by fidelity audit before user impact, but the
+ * fab DID land in commit `5385734`.
  *
  * @type {Readonly<Record<string, string>>}
  */
