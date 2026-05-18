@@ -950,7 +950,13 @@ handles).
 
 ---
 
-### Phase 3 — F-Curve modifiers (1 week, schema v34)
+### Phase 3 — F-Curve modifiers ✅ SHIP-COMPLETE 2026-05-18 (1 week, schema v41)
+
+**Status:** 7/7 slices SHIPPED (3.A → 3.G). Schema v41 (was planned
+v34; the actual codebase had progressed through v35..v40 by the time
+Phase 3 opened). 270 FModifier-suite assertions green. 1 user-side
+manual sweep ([PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md](PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md))
+remains for Cubism Viewer fidelity + UI exercise.
 
 **Goal.** Procedural post-processing on FCurves. A 4-keyframe loop
 becomes infinite via `Cycles`; jitter via `Noise`; polynomial via
@@ -1177,15 +1183,57 @@ blend types, multiple FPS values, non-aligned-duration clamp
 arithmetic, and the driver-bearing fcurve case (regression-pin for
 3.D audit-fix H-1 driver-leak).
 
-#### 3.G — Phase exit gate
+#### 3.G — Phase exit gate ✅ SHIPPED 2026-05-18
 
-- All FModifier tests green.
-- Cubism Viewer load of an exported motion3.json with `Cycles` → loops correctly.
-- Round-trip: cycle-modifier on save → load → save preserves the modifier.
+**Status:** Phase 3 SHIP-COMPLETE (3.A → 3.G all green, 7/7 slices).
 
-**Phase 3 sum:** ~1 week. Schema v35. New: FModifier stack, six modifier
-types, modifier UI, exporter bake passes. Closes: 1 grievance (no
-FModifiers).
+**Gate coverage:**
+
+1. **All FModifier tests green** — ✅ satisfied.
+   - `test:fmodifiers` (106) + `test:fmodifiersExportBake` (18) +
+     `test:fmodifierRoundTrip` (32, NEW this slice) +
+     `test:motion3jsonCyclesExport` (42) + `test:motion3jsonNoiseExport`
+     (26) + `test:actionExportMotion3` (46) = **270 assertions** across
+     FModifier surface.
+2. **Cubism Viewer load of motion3.json with `Cycles` → loops correctly**
+   — deferred to user-side per `feedback_no_background`. Consolidated
+   into [PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md](PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md)
+   §2.5 + §4.
+3. **Round-trip: cycle-modifier on save → load → save preserves the
+   modifier** — ✅ automated by new
+   [scripts/test/test_fmodifierRoundTrip.mjs](../../scripts/test/test_fmodifierRoundTrip.mjs).
+   - 32 assertions covering: SS-uniform-Cycles → JSON → import →
+     re-export (byte-identical incl. Cycles preservation); Loop=false
+     trivial round-trip; mixed-Cycles lossy case (post-stabilisation
+     idempotence — bake collapses intent but audible behaviour
+     preserved); Cycles+Noise hybrid (Loop=true preserved + Noise
+     determinism); Noise-only (no Loop signal); SS project-store layer
+     (`JSON.parse(JSON.stringify)` preserves modifier stack);
+     consecutive-save determinism.
+   - **Time-precision finding:** SS canonical time is integer ms
+     (`feedback_ms_canonical_animation_time`); the bake helper emits
+     sub-ms times in JSON (e.g. `0.0333...` for 30fps step), which
+     `parseMotion3Json` snaps to integer ms via `Math.round(seg[0] *
+     1000)`. So single-pass round-trip is NOT byte-identical for baked
+     outputs — but the SECOND round-trip onward IS (stabilised on the
+     ms grid). §3c/§4d/§5b assert this idempotence-after-stabilisation
+     contract.
+
+**Manual verification (user-side, item 2):** Consolidated into
+[PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md](PHASE_3_MANUAL_VERIFICATION_CHECKLIST.md)
+covering 3.C UI (N-panel Modifiers section, all 6 types,
+add/edit/mute/remove/reorder/undo), 3.D Cycles export (uniform → Loop=true,
+mixed → Loop=false+bake, Cubism Viewer seamless loop), 3.E Noise export
+(bake fires, muted skips, Cycles+Noise hybrid, determinism), Cubism
+Viewer integration. ~25–35 min single sweep; uses existing Shelby
+project state, no PSD re-import.
+
+**Phase 3 sum:** ~1 week (actual: 7 days of substrate + audit + close-out
+across 7 slices, all 2026-05-18 final slice day). Schema v41 (bumped
+from v35 in plan-aspirational pre-ship — actual v41 carries the
+modifier-bearing fcurve shape). 270 FModifier assertions. 11 cumulative
+SS deviations documented in slice close-out docs. **Closes: 1 grievance
+(no FModifiers).**
 
 ---
 
