@@ -187,11 +187,22 @@ export function wouldAddModifierChange(action, activeFCurveId, type) {
 }
 
 /**
- * Add a modifier of `type` to the active fcurve's stack. Cycles always
- * goes to index 0; other types append, unless a Cycles modifier exists
- * at index 0 in which case they insert at index 1 (preserving the
- * head-of-stack invariant). The new modifier becomes the EXCLUSIVE
- * active modifier on the stack.
+ * Add a modifier of `type` to the active fcurve's stack:
+ *   - `type === 'cycles'` -> `mods.unshift` (lands at index 0, enforcing
+ *     the head-of-stack invariant at `fmodifier.cc:635`)
+ *   - any other type -> `mods.push` (lands at the tail; Cycles, if
+ *     present at index 0, is never displaced because `push` does not
+ *     touch index 0)
+ *
+ * Active-flag behavior: when the new modifier is the ONLY one on the
+ * stack after the add, it becomes active. Otherwise the prior active
+ * (if any) is preserved unchanged. Mirrors Blender's `add_fmodifier`
+ * single-on-add behavior at `fmodifier.cc:1211-1215`
+ * (`if BLI_listbase_is_single { fcm->flag |= FMODIFIER_FLAG_ACTIVE }`).
+ * Audit-fix 2026-05-18 fidelity MED-8: pre-fix SS always promoted the
+ * new modifier and cleared others, a divergence from Blender that has
+ * been corrected to match Blender's UX (preserve user's active focus
+ * across adds; only the empty-stack case promotes automatically).
  *
  * Caller is responsible for the `wouldAddModifierChange` preflight
  * check before invoking `update()`.
@@ -216,15 +227,15 @@ export function applyAddModifier(action, activeFCurveId, type) {
     // Cycles always at head per `fmodifier.cc:635`.
     mods.unshift(mod);
   } else {
-    // Non-cycles: if a Cycles modifier is at index 0, append AFTER it
-    // (so index 0 stays Cycles); otherwise append to the tail.
+    // Non-cycles: append to tail. Cycles at index 0 (if present) stays
+    // because `push` never touches index 0.
     mods.push(mod);
   }
-  // EXCLUSIVE active: clear any prior active flag; set the new one.
-  for (const m of mods) {
-    if (m && m !== mod && m.active === true) delete m.active;
+  // Active-flag: only set on single-on-add. Matches Blender's
+  // `add_fmodifier:1213-1215`.
+  if (mods.length === 1) {
+    mod.active = true;
   }
-  mod.active = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,12 +258,29 @@ export function wouldRemoveModifierChange(action, activeFCurveId, modifierId) {
 
 /**
  * Remove the modifier with `modifierId` from the active fcurve's stack.
- * If the removed modifier was active, the next surviving modifier (if
- * any) becomes active to preserve the "at most one active" invariant
- * with the convention "after removal, the closest neighbor takes
- * over" -- mirrors Blender's `BKE_fmodifier_remove` behavior at
- * `fmodifier.cc:1167-1189` (it sets the previous-or-next modifier
- * active when removing the current active).
+ * If the removed modifier was active, the previous neighbor (or, when
+ * the head is removed, the new index-0) is promoted to active so the
+ * "at most one active" invariant holds with at least one survivor
+ * active when the stack is non-empty.
+ *
+ * # SS-side UX convention (audit-fix 2026-05-18 fidelity HIGH-1)
+ *
+ * The promote-on-remove behavior is an SS UX convention, NOT a Blender
+ * port. Blender's `remove_fmodifier` at
+ * `reference/blender/source/blender/blenkernel/intern/fmodifier.cc:1289-1327`
+ * only frees the modifier's data and unlinks it from the stack -- it
+ * does NOT touch the ACTIVE flag on any survivor. In Blender, when
+ * the active modifier is removed, the stack ends up with no active
+ * modifier; the next interaction (clicking a header, adding a new
+ * modifier via `add_fmodifier` whose single-on-add path at
+ * `fmodifier.cc:1213-1215` only sets ACTIVE when the stack becomes
+ * single) is what re-establishes an active. SS deliberately chooses
+ * the "auto-promote" UX so the panel doesn't render a sea of
+ * unhighlighted cards after a delete.
+ *
+ * Prior comment fabricated `BKE_fmodifier_remove` (function does not
+ * exist; real name `remove_fmodifier`) at lines `:1167-1189` (real
+ * function lives at `:1289`); corrected to remove the false attribution.
  *
  * @param {{ id: string, fcurves: any[] }} action
  * @param {string} activeFCurveId
@@ -540,6 +568,64 @@ export function applyEditModifierNumber(action, activeFCurveId, modifierId, fiel
 // ---------------------------------------------------------------------------
 
 /**
+ * Predicate: would adding a coefficient actually change the array?
+ * (Always true when the modifier exists -- adding appends 0, which is
+ * always a state change of array length.) Returns false only when the
+ * modifier doesn't exist OR is not a generator.
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @returns {boolean}
+ */
+export function wouldAddGeneratorCoefficientChange(action, activeFCurveId, modifierId) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  return !!(mod && mod.type === 'generator');
+}
+
+/**
+ * Predicate: would removing the last coefficient actually shrink the
+ * array? Returns false when the modifier doesn't exist, is not a
+ * generator, or the coefficients array is already empty.
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @returns {boolean}
+ */
+export function wouldRemoveGeneratorCoefficientChange(action, activeFCurveId, modifierId) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  if (!mod || mod.type !== 'generator') return false;
+  const coefs = mod.data && Array.isArray(mod.data.coefficients) ? mod.data.coefficients : [];
+  return coefs.length > 0;
+}
+
+/**
+ * Predicate: would editing `coefficients[index] = value` actually change
+ * the array slot?
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @param {number} index
+ * @param {number} value
+ * @returns {boolean}
+ */
+export function wouldEditGeneratorCoefficientChange(action, activeFCurveId, modifierId, index, value) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  if (!mod || mod.type !== 'generator') return false;
+  const coefs = mod.data && Array.isArray(mod.data.coefficients) ? mod.data.coefficients : [];
+  if (index < 0 || index >= coefs.length) return false;
+  return coefs[index] !== value;
+}
+
+/**
  * @param {{ id: string, fcurves: any[] }} action
  * @param {string} activeFCurveId
  * @param {string} modifierId
@@ -590,6 +676,64 @@ export function applyRemoveGeneratorCoefficient(action, activeFCurveId, modifier
 // ---------------------------------------------------------------------------
 // Envelope control points
 // ---------------------------------------------------------------------------
+
+/**
+ * Predicate: would adding an envelope control point actually change the
+ * array? (Always true when the envelope modifier exists.)
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @returns {boolean}
+ */
+export function wouldAddEnvelopeControlPointChange(action, activeFCurveId, modifierId) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  return !!(mod && mod.type === 'envelope');
+}
+
+/**
+ * Predicate: would removing the control point at `index` actually
+ * shrink the array? Returns false when modifier missing, not envelope,
+ * or index out-of-bounds.
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @param {number} index
+ * @returns {boolean}
+ */
+export function wouldRemoveEnvelopeControlPointChange(action, activeFCurveId, modifierId, index) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  if (!mod || mod.type !== 'envelope') return false;
+  const pts = mod.data && Array.isArray(mod.data.controlPoints) ? mod.data.controlPoints : [];
+  return index >= 0 && index < pts.length;
+}
+
+/**
+ * Predicate: would editing `controlPoints[index].field = value` actually
+ * change the field?
+ *
+ * @param {{ id: string, fcurves: any[] } | null | undefined} action
+ * @param {string | null | undefined} activeFCurveId
+ * @param {string} modifierId
+ * @param {number} index
+ * @param {'time'|'min'|'max'} field
+ * @param {number} value
+ * @returns {boolean}
+ */
+export function wouldEditEnvelopeControlPointChange(action, activeFCurveId, modifierId, index, field, value) {
+  const ctx = resolveModifiersContext(action, activeFCurveId);
+  if (!ctx) return false;
+  const mod = ctx.modifiers.find((m) => m && m.id === modifierId);
+  if (!mod || mod.type !== 'envelope') return false;
+  const pts = mod.data && Array.isArray(mod.data.controlPoints) ? mod.data.controlPoints : [];
+  if (index < 0 || index >= pts.length) return false;
+  return pts[index][field] !== value;
+}
 
 /**
  * @param {{ id: string, fcurves: any[] }} action

@@ -37,9 +37,15 @@ import {
   applyAddGeneratorCoefficient,
   applyRemoveGeneratorCoefficient,
   applyEditGeneratorCoefficient,
+  wouldAddGeneratorCoefficientChange,
+  wouldRemoveGeneratorCoefficientChange,
+  wouldEditGeneratorCoefficientChange,
   applyAddEnvelopeControlPoint,
   applyRemoveEnvelopeControlPoint,
   applyEditEnvelopeControlPoint,
+  wouldAddEnvelopeControlPointChange,
+  wouldRemoveEnvelopeControlPointChange,
+  wouldEditEnvelopeControlPointChange,
   MODIFIER_TYPE_OPTIONS,
   MODIFIER_TYPE_LABELS,
 } from '../../src/v3/editors/fcurve/fcurveModifiersPanelData.js';
@@ -175,7 +181,9 @@ function fc(action, id) {
   eq(a.fcurves[0].modifiers.length, 1, '13a: 1 modifier added');
   eq(a.fcurves[0].modifiers[0].type, 'noise', '13b: type=noise');
   assert(typeof a.fcurves[0].modifiers[0].id === 'string', '13c: id assigned');
-  eq(a.fcurves[0].modifiers[0].active, true, '13d: new modifier is active');
+  // Single-on-add per Blender's add_fmodifier:1213-1215 — first modifier
+  // becomes active because BLI_listbase_is_single(modifiers) is true.
+  eq(a.fcurves[0].modifiers[0].active, true, '13d: single-on-add → active (matches Blender)');
 }
 
 // ── 14. Add Cycles to empty stack → at index 0 ─────────────────────
@@ -224,16 +232,19 @@ function fc(action, id) {
     '18d: second cycles → false (one-per-fcurve)');
 }
 
-// ── 19. New modifier becomes EXCLUSIVE active (clears prior) ───────
+// ── 19. Second add preserves prior active (matches Blender) ────────
+// Audit-fix 2026-05-18 fidelity MED-8: pre-fix promoted the new
+// modifier to active and cleared prior. Blender's add_fmodifier only
+// sets ACTIVE when BLI_listbase_is_single (i.e. stack has 1 entry
+// after add). SS now matches: prior active survives subsequent adds.
 {
   const a = { id: 'a' }; fc(a, 'fc1');
   applyAddModifier(a, 'fc1', 'noise');
-  const firstId = a.fcurves[0].modifiers[0].id;
   applyAddModifier(a, 'fc1', 'generator');
-  eq(a.fcurves[0].modifiers[0].active, undefined,
-    '19a: prior active flag cleared (sparse-deleted)');
-  eq(a.fcurves[0].modifiers[1].active, true,
-    '19b: new modifier active');
+  eq(a.fcurves[0].modifiers[0].active, true,
+    '19a: prior active (noise) preserved across add');
+  eq(a.fcurves[0].modifiers[1].active, undefined,
+    '19b: newly-added (generator) is NOT auto-promoted (not single)');
 }
 
 // ===========================================================================
@@ -258,19 +269,59 @@ function fc(action, id) {
   eq(a.fcurves[0].modifiers.length, 1, '21: non-existent id → no change');
 }
 
-// ── 22. Remove active promotes neighbor ────────────────────────────
+// ── 22. Remove active (tail) promotes previous neighbor ────────────
 {
   const a = { id: 'a' }; fc(a, 'fc1');
-  applyAddModifier(a, 'fc1', 'noise');    // m0 (active)
-  applyAddModifier(a, 'fc1', 'generator'); // m1 (active, m0 inactive)
-  applyAddModifier(a, 'fc1', 'limits');    // m2 (active, m1 inactive)
-  // Remove the active (m2)
+  applyAddModifier(a, 'fc1', 'noise');     // m0 (active, single-on-add)
+  applyAddModifier(a, 'fc1', 'generator'); // m1 (not auto-promoted)
+  applyAddModifier(a, 'fc1', 'limits');    // m2 (not auto-promoted)
+  // Make m2 the active by explicit click
   const m2Id = a.fcurves[0].modifiers[2].id;
+  applySetActiveModifier(a, 'fc1', m2Id);
+  // Remove the active (m2)
   applyRemoveModifier(a, 'fc1', m2Id);
   // Previous neighbor (m1 = generator) promoted
   eq(a.fcurves[0].modifiers.length, 2, '22a: 2 modifiers remain');
   eq(a.fcurves[0].modifiers[1].type, 'generator', '22b: generator survives');
   eq(a.fcurves[0].modifiers[1].active, true, '22c: previous neighbor promoted');
+}
+
+// ── 22b. Remove active (mid-stack) promotes previous neighbor ──────
+// Audit-fix 2026-05-18 arch HIGH-2: doc said "closest neighbor" but
+// implementation uses Math.max(0, i-1) which is "previous-first"
+// (matches Blender). Test mid-stack case to lock the behavior.
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'cycles');     // m0 (active, single-on-add)
+  applyAddModifier(a, 'fc1', 'noise');      // m1
+  applyAddModifier(a, 'fc1', 'generator');  // m2
+  // Make m1 the active by explicit click
+  const m1Id = a.fcurves[0].modifiers[1].id;
+  applySetActiveModifier(a, 'fc1', m1Id);
+  // Remove m1 (mid-stack active)
+  applyRemoveModifier(a, 'fc1', m1Id);
+  // Previous neighbor (m0 = cycles) promoted, NOT the next (generator)
+  eq(a.fcurves[0].modifiers.length, 2, '22b-1: 2 modifiers remain');
+  eq(a.fcurves[0].modifiers[0].type, 'cycles', '22b-2: cycles still at head');
+  eq(a.fcurves[0].modifiers[0].active, true,
+    '22b-3: cycles promoted (previous-first per Blender pattern)');
+  eq(a.fcurves[0].modifiers[1].active, undefined,
+    '22b-4: generator NOT promoted (next neighbor secondary)');
+}
+
+// ── 22c. Remove active at index 0 falls back to new index 0 ────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'noise');     // m0 (active)
+  applyAddModifier(a, 'fc1', 'generator'); // m1
+  // m0 is still active (single-on-add). Remove it.
+  const m0Id = a.fcurves[0].modifiers[0].id;
+  applyRemoveModifier(a, 'fc1', m0Id);
+  // After splice, generator at index 0. Math.max(0, 0-1) = 0 → promote
+  // the new index-0 (generator).
+  eq(a.fcurves[0].modifiers[0].type, 'generator', '22c-1: generator at 0');
+  eq(a.fcurves[0].modifiers[0].active, true,
+    '22c-2: new index-0 promoted when head is removed');
 }
 
 // ── 23. wouldRemoveModifierChange ──────────────────────────────────
@@ -379,11 +430,15 @@ function fc(action, id) {
 }
 
 // ── 31. setActiveModifier is EXCLUSIVE ─────────────────────────────
+// Post-audit-fix MED-8: add-modifier no longer auto-promotes; manually
+// set each modifier active in turn to ensure prior actives are cleared.
 {
   const a = { id: 'a' }; fc(a, 'fc1');
-  applyAddModifier(a, 'fc1', 'noise');     // m0 active
-  applyAddModifier(a, 'fc1', 'generator'); // m1 active
-  applyAddModifier(a, 'fc1', 'limits');    // m2 active
+  applyAddModifier(a, 'fc1', 'noise');     // m0 active (single-on-add)
+  applyAddModifier(a, 'fc1', 'generator'); // m1 (not auto-promoted)
+  applyAddModifier(a, 'fc1', 'limits');    // m2 (not auto-promoted)
+  const m1Id = a.fcurves[0].modifiers[1].id;
+  applySetActiveModifier(a, 'fc1', m1Id);  // m1 now active
   const m0Id = a.fcurves[0].modifiers[0].id;
   applySetActiveModifier(a, 'fc1', m0Id);
   // Only m0 should be active
@@ -561,6 +616,97 @@ function fc(action, id) {
 }
 
 // ===========================================================================
+// Audit-fix 3.C arch MED-1/2: would*Change predicates for Generator +
+// Envelope ops
+// ===========================================================================
+
+// ── 43b. wouldAddGeneratorCoefficientChange ────────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'generator');
+  const id = a.fcurves[0].modifiers[0].id;
+  eq(wouldAddGeneratorCoefficientChange(a, 'fc1', id), true,
+    '43b-1: generator exists → true');
+  eq(wouldAddGeneratorCoefficientChange(a, 'fc1', 'nope'), false,
+    '43b-2: unknown modifier id → false');
+  // Add a non-generator, verify it returns false for non-generator
+  applyAddModifier(a, 'fc1', 'noise');
+  const noiseId = a.fcurves[0].modifiers[1].id;
+  eq(wouldAddGeneratorCoefficientChange(a, 'fc1', noiseId), false,
+    '43b-3: non-generator modifier → false');
+}
+
+// ── 43c. wouldRemoveGeneratorCoefficientChange ─────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'generator');
+  const id = a.fcurves[0].modifiers[0].id;
+  eq(wouldRemoveGeneratorCoefficientChange(a, 'fc1', id), true,
+    '43c-1: default coefficients [0,1] → can remove');
+  applyRemoveGeneratorCoefficient(a, 'fc1', id);
+  applyRemoveGeneratorCoefficient(a, 'fc1', id);
+  // Now empty
+  eq(wouldRemoveGeneratorCoefficientChange(a, 'fc1', id), false,
+    '43c-2: empty coefficients → cannot remove');
+}
+
+// ── 43d. wouldEditGeneratorCoefficientChange ───────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'generator');
+  const id = a.fcurves[0].modifiers[0].id;
+  // Default is [0, 1]
+  eq(wouldEditGeneratorCoefficientChange(a, 'fc1', id, 0, 0), false,
+    '43d-1: write existing (0) → no change');
+  eq(wouldEditGeneratorCoefficientChange(a, 'fc1', id, 0, 5), true,
+    '43d-2: write different (5) → change');
+  eq(wouldEditGeneratorCoefficientChange(a, 'fc1', id, 99, 5), false,
+    '43d-3: out-of-bounds index → false');
+}
+
+// ── 43e. wouldAddEnvelopeControlPointChange ────────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'envelope');
+  const id = a.fcurves[0].modifiers[0].id;
+  eq(wouldAddEnvelopeControlPointChange(a, 'fc1', id), true,
+    '43e-1: envelope exists → true');
+  eq(wouldAddEnvelopeControlPointChange(a, 'fc1', 'nope'), false,
+    '43e-2: unknown id → false');
+}
+
+// ── 43f. wouldRemoveEnvelopeControlPointChange ─────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'envelope');
+  const id = a.fcurves[0].modifiers[0].id;
+  eq(wouldRemoveEnvelopeControlPointChange(a, 'fc1', id, 0), false,
+    '43f-1: empty controlPoints, index 0 → false');
+  applyAddEnvelopeControlPoint(a, 'fc1', id, 500);
+  eq(wouldRemoveEnvelopeControlPointChange(a, 'fc1', id, 0), true,
+    '43f-2: after add, index 0 valid → true');
+  eq(wouldRemoveEnvelopeControlPointChange(a, 'fc1', id, 5), false,
+    '43f-3: out-of-bounds → false');
+}
+
+// ── 43g. wouldEditEnvelopeControlPointChange ───────────────────────
+{
+  const a = { id: 'a' }; fc(a, 'fc1');
+  applyAddModifier(a, 'fc1', 'envelope');
+  const id = a.fcurves[0].modifiers[0].id;
+  applyAddEnvelopeControlPoint(a, 'fc1', id, 500);
+  // Default at time 500: min=-1, max=1
+  eq(wouldEditEnvelopeControlPointChange(a, 'fc1', id, 0, 'time', 500), false,
+    '43g-1: write same time → no change');
+  eq(wouldEditEnvelopeControlPointChange(a, 'fc1', id, 0, 'time', 700), true,
+    '43g-2: write different time → change');
+  eq(wouldEditEnvelopeControlPointChange(a, 'fc1', id, 0, 'min', -1), false,
+    '43g-3: write same min → no change');
+  eq(wouldEditEnvelopeControlPointChange(a, 'fc1', id, 0, 'min', -2), true,
+    '43g-4: write different min → change');
+}
+
+// ===========================================================================
 // MODIFIER_TYPE_OPTIONS / MODIFIER_TYPE_LABELS
 // ===========================================================================
 
@@ -583,27 +729,29 @@ function fc(action, id) {
 // ===========================================================================
 
 // ── 45. Complete flow: add Cycles + Noise, mute, edit, remove ──────
+// Post-audit-fix MED-8: cycles is single-on-add → active; noise is
+// added second → not auto-promoted. Cycles stays active throughout.
 {
   const a = { id: 'a' }; fc(a, 'fc1');
-  applyAddModifier(a, 'fc1', 'cycles');
-  applyAddModifier(a, 'fc1', 'noise');
+  applyAddModifier(a, 'fc1', 'cycles');  // cycles at 0, active (single)
+  applyAddModifier(a, 'fc1', 'noise');   // noise at 1, NOT auto-promoted
   const cyclesId = a.fcurves[0].modifiers[0].id;
   const noiseId = a.fcurves[0].modifiers[1].id;
+  // Cycles is already active; verify
+  eq(a.fcurves[0].modifiers[0].active, true, '45a: cycles active (single-on-add)');
+  eq(a.fcurves[0].modifiers[1].active, undefined, '45b: noise NOT auto-promoted');
   // Mute noise
   applySetModifierMuted(a, 'fc1', noiseId, true);
   // Edit cycles data
   applyEditModifierData(a, 'fc1', cyclesId, 'afterCycles', 3);
-  // Set cycles active (was noise active after add)
-  applySetActiveModifier(a, 'fc1', cyclesId);
   // Verify state
-  eq(a.fcurves[0].modifiers[0].active, true, '45a: cycles active');
-  eq(a.fcurves[0].modifiers[1].active, undefined, '45b: noise inactive');
   eq(a.fcurves[0].modifiers[1].muted, true, '45c: noise muted');
   eq(a.fcurves[0].modifiers[0].data.afterCycles, 3, '45d: cycles afterCycles=3');
-  // Remove cycles → noise inherits active (only one left + promoted)
+  // Remove cycles → noise promoted to active (only one left, was prior neighbor)
   applyRemoveModifier(a, 'fc1', cyclesId);
   eq(a.fcurves[0].modifiers.length, 1, '45e: 1 modifier remains');
-  eq(a.fcurves[0].modifiers[0].active, true, '45f: noise promoted to active');
+  eq(a.fcurves[0].modifiers[0].active, true,
+    '45f: noise auto-promoted to active when previous head removed');
 }
 
 console.log(`\nfcurveModifiersPanelData: ${passed} passed, ${failed} failed`);

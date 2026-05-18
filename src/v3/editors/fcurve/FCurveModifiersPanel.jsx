@@ -62,9 +62,15 @@ import {
   applyAddGeneratorCoefficient,
   applyRemoveGeneratorCoefficient,
   applyEditGeneratorCoefficient,
+  wouldAddGeneratorCoefficientChange,
+  wouldRemoveGeneratorCoefficientChange,
+  wouldEditGeneratorCoefficientChange,
   applyAddEnvelopeControlPoint,
   applyRemoveEnvelopeControlPoint,
   applyEditEnvelopeControlPoint,
+  wouldAddEnvelopeControlPointChange,
+  wouldRemoveEnvelopeControlPointChange,
+  wouldEditEnvelopeControlPointChange,
 } from './fcurveModifiersPanelData.js';
 
 /**
@@ -172,8 +178,12 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
     });
   }, [activeActionId, activeFCurveId, update]);
 
-  // Coefficient ops (generator)
+  // Coefficient ops (generator). All gated on would*Change predicates
+  // per Rule №1 / undo-discipline (audit-fix 3.C arch MED-1).
   const handleAddCoefficient = useCallback((modifierId) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldAddGeneratorCoefficientChange(liveAction, activeFCurveId, modifierId)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -182,6 +192,9 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
   }, [activeActionId, activeFCurveId, update]);
 
   const handleRemoveCoefficient = useCallback((modifierId) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldRemoveGeneratorCoefficientChange(liveAction, activeFCurveId, modifierId)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -190,6 +203,9 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
   }, [activeActionId, activeFCurveId, update]);
 
   const handleEditCoefficient = useCallback((modifierId, index, value) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditGeneratorCoefficientChange(liveAction, activeFCurveId, modifierId, index, value)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -197,8 +213,12 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
     });
   }, [activeActionId, activeFCurveId, update]);
 
-  // Envelope control point ops
+  // Envelope control point ops. Same gating discipline as coefficients
+  // (audit-fix 3.C arch MED-2).
   const handleAddControlPoint = useCallback((modifierId, time) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldAddEnvelopeControlPointChange(liveAction, activeFCurveId, modifierId)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -207,6 +227,9 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
   }, [activeActionId, activeFCurveId, update]);
 
   const handleRemoveControlPoint = useCallback((modifierId, index) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldRemoveEnvelopeControlPointChange(liveAction, activeFCurveId, modifierId, index)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -215,6 +238,9 @@ export function FCurveModifiersPanel({ action, activeActionId, activeFCurveId })
   }, [activeActionId, activeFCurveId, update]);
 
   const handleEditControlPoint = useCallback((modifierId, index, field, value) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    if (!wouldEditEnvelopeControlPointChange(liveAction, activeFCurveId, modifierId, index, field, value)) return;
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
@@ -448,11 +474,16 @@ function PerTypeEditor({ mod, onEditData, onAddCoefficient, onRemoveCoefficient,
 // Per-type editors
 // ---------------------------------------------------------------------------
 
+// Cycle mode labels match Blender's RNA enum at
+// `reference/blender/source/blender/makesrna/intern/rna_fcurve.cc:1531-1545`.
+// Audit-fix 2026-05-18 fidelity HIGH-2 + HIGH-3: pre-fix had "Repeat"
+// (Blender uses "Repeat Motion") and "Mirror" (Blender uses "Repeat
+// Mirrored"); corrected for label parity.
 const CYCLE_MODES = /** @type {const} */ ([
   { key: 'none', label: 'No Cycles' },
-  { key: 'repeat', label: 'Repeat' },
+  { key: 'repeat', label: 'Repeat Motion' },
   { key: 'repeat_offset', label: 'Repeat with Offset' },
-  { key: 'mirror', label: 'Mirror' },
+  { key: 'mirror', label: 'Repeat Mirrored' },
 ]);
 
 function CyclesEditor({ data, onEditData }) {
@@ -557,13 +588,26 @@ function NoiseEditor({ data, onEditData }) {
           onCommit={(v) => onEditData('roughness', v)}
         />
       </FieldRow>
+      <Hint>
+        SS evaluator uses modern Perlin FBM exclusively. Blender's
+        `use_legacy_noise` toggle (legacy BLI_noise turbulence path)
+        is intentionally omitted -- 3.B evaluator did not port the
+        legacy path.
+      </Hint>
     </>
   );
 }
 
+// Generator mode labels match Blender's RNA enum at
+// `reference/blender/source/blender/makesrna/intern/rna_fcurve.cc:1281-1285`.
+// Audit-fix 2026-05-18 fidelity HIGH-4: pre-fix had "Polynomial" /
+// "Factorised Polynomial"; Blender uses "Expanded Polynomial" /
+// "Factorized Polynomial" (American spelling). The underlying data
+// key stays `polynomial_factorised` (British spelling, established
+// 3.A typedef convention); only the user-facing label flips.
 const GENERATOR_MODES = /** @type {const} */ ([
-  { key: 'polynomial', label: 'Polynomial' },
-  { key: 'polynomial_factorised', label: 'Factorised Polynomial' },
+  { key: 'polynomial', label: 'Expanded Polynomial' },
+  { key: 'polynomial_factorised', label: 'Factorized Polynomial' },
 ]);
 
 function GeneratorEditor({ data, onEditData, onAddCoefficient, onRemoveCoefficient, onEditCoefficient }) {
@@ -617,6 +661,11 @@ function GeneratorEditor({ data, onEditData, onAddCoefficient, onRemoveCoefficie
         {mode === 'polynomial'
           ? 'y = c0 + c1·x + c2·x² + ...'
           : 'y = (c0·x + c1) · (c2·x + c3) · ...'}
+      </Hint>
+      <Hint>
+        Polynomial degree is derived from the coefficient count (Blender
+        surfaces this as the "Order" field; SS derives it implicitly to
+        avoid the order/arraysize sync invariant).
       </Hint>
     </>
   );
@@ -936,6 +985,11 @@ function NumberInput({ value, onCommit, step, disabled = false }) {
   }
 
   const commit = useCallback(() => {
+    // Audit-fix 2026-05-18 arch MED-3: guard on draft non-empty AND
+    // parsed finite. Matches ActiveKeyformPanel convention so the
+    // empty-string display (for missing values) doesn't accidentally
+    // commit a phantom value on blur.
+    if (draft === '') return;
     const parsed = parseFloat(draft);
     if (Number.isFinite(parsed)) onCommit(parsed);
   }, [draft, onCommit]);
@@ -969,7 +1023,10 @@ function NumberInput({ value, onCommit, step, disabled = false }) {
 }
 
 function formatNumber(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '0';
+  // Audit-fix 2026-05-18 arch MED-3: return '' for non-finite (matches
+  // ActiveKeyformPanel convention; pre-fix returned '0' which could
+  // commit a phantom 0 on blur without focus).
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
   // Integer-like numbers display without a decimal; otherwise up to 4
   // significant digits past the decimal (matches ActiveKeyformPanel
   // convention).
