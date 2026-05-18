@@ -2228,15 +2228,22 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
   // Slice 5.KK (Path #49) — plain/Ctrl group-header click dispatcher.
   //
-  // Mirrors Blender's `mouse_anim_channels` ANIMTYPE_GROUP non-children
-  // branches at `anim_channels_edit.cc:4154-4189`:
+  // Mirrors Blender's `click_select_channel_group` non-children branches
+  // at `anim_channels_edit.cc:4154-4189` (function defined `:4120-4221`,
+  // called via the dispatch chain documented in
+  // `applyGroupHeaderSelect`'s JSDoc; audit-fix fidelity MED-1 Slice
+  // 5.KK dual-audit corrected the earlier `mouse_anim_channels`
+  // attribution — those branches live inside
+  // `click_select_channel_group`, not in the per-type dispatcher
+  // itself):
   //
   //   - 'replace' (plain click)  → SELECT_REPLACE (`:4181-4189`)
   //   - 'toggle'  (Ctrl+click)   → SELECT_INVERT  (`:4155-4158`)
   //
-  // Keymap: `blender_default.py:3848-3852`. The 'range' modifier
-  // (Shift+click → SELECT_EXTEND_RANGE at `:4159-4162`) is deferred
-  // to a slice downstream of path #50's AGRP_ACTIVE port — see
+  // Keymap: `blender_default.py:3848-3852` (single-modifier entries).
+  // The 'range' modifier (Shift+click → SELECT_EXTEND_RANGE at
+  // `:4159-4162`, keymap `:3849-3850`) is deferred to a slice
+  // downstream of path #50's AGRP_ACTIVE port — see
   // `applyGroupHeaderSelect` Deviation 4 for the rationale.
   //
   // `skipHistory: true` — channel selection is view state per the
@@ -3648,10 +3655,13 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                 </button>
                 {/* Slice 5.KK (Path #49) — full modifier surface for
                     group-header clicks. Mirrors Blender's
-                    `mouse_anim_channels` ANIMTYPE_GROUP cases at
-                    `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4154-4189`,
-                    dispatched per modifier via `animchannels_mouseclick_invoke`
-                    (`:4615-4670`) and bound at `blender_default.py:3848-3853`:
+                    `click_select_channel_group` non-children branches
+                    at `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4154-4189`
+                    (function defined `:4120-4221`; reached via
+                    `animchannels_mouseclick_invoke` `:4614-4670` →
+                    `mouse_anim_channels` `:4475-4604` → per-type
+                    switch `:4526-4593`) and bound at
+                    `blender_default.py:3848-3854`:
 
                       - **Plain LMB** → SELECT_REPLACE (`:4181-4189`):
                         pre-clear visible-scope fcurves' `selected`,

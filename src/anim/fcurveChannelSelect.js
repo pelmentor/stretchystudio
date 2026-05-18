@@ -992,15 +992,25 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
 
 /**
  * Slice 5.KK (Path #49) — plain/Ctrl group-header click. Closes the
- * SELECT_REPLACE + SELECT_INVERT branches of Blender's `mouse_anim_channels`
- * ANIMTYPE_GROUP case at
- * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4154-4189`,
- * called from `animchannels_mouseclick_invoke`
- * (`:4615-4670`) via the keymap entries at
- * `blender_default.py:3848-3853` (identical mapping in
- * `industry_compatible_data.py` — both presets share these click
+ * SELECT_REPLACE + SELECT_INVERT branches of Blender's
+ * `click_select_channel_group` (defined at
+ * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4120-4221`,
+ * branches dispatched at `:4154-4189`). The dispatch chain is:
+ * `animchannels_mouseclick_invoke` (`:4614-4670`)
+ *   → `mouse_anim_channels` (`:4475-4604`)
+ *   → switches on `ale->type` (`:4526-4593`)
+ *   → `click_select_channel_group` (`:4120`).
+ * Keymap entries at `blender_default.py:3848-3854` (identical mapping
+ * in `industry_compatible_data.py` — both presets share these click
  * bindings; only the dedicated select-all template differs per
  * Slice 5.AA).
+ *
+ * **Audit-fix fidelity MED-1 (Slice 5.KK dual-audit 2026-05-18)**:
+ * earlier draft attributed the branches to `mouse_anim_channels`
+ * directly. The branches actually live inside `click_select_channel_group`;
+ * `mouse_anim_channels` only dispatches to per-type handlers via a
+ * `switch (ale->type)`. Cite chain corrected above so readers
+ * grep-jumping from a cite land at the right function.
  *
  * **Modifier mapping** (keymap-authoritative; see Slice 5.F audit-fix
  * HIGH-B1 for why the keymap, not the operator's RNA read order,
@@ -1014,15 +1024,16 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *     (`:4159-4162` range walker). **Deferred to path #50's
  *     downstream slice** — Blender's `animchannel_select_range`
  *     (`:3984-4025`) requires an active group of matching type
- *     (`ANIM_is_active_channel` at `:3997` walks `AGRP_ACTIVE`);
- *     SS does not yet port AGRP_ACTIVE (see
- *     [src/anim/fcurveGroups.js:17](./fcurveGroups.js)). Faithful
- *     port = no-op until #50 ships AGRP_ACTIVE; we explicitly avoid
- *     a Shift=Ctrl masquerade (which would conflict with Ctrl's
- *     toggle intent — see Deviation 4 below).
+ *     (`ANIM_is_active_channel` at `:3997` walks `AGRP_ACTIVE` for
+ *     ANIMTYPE_GROUP at the `:449` accessor); SS does not yet port
+ *     AGRP_ACTIVE (see [src/anim/fcurveGroups.js:17](./fcurveGroups.js)).
+ *     Faithful port = no-op until #50 ships AGRP_ACTIVE; we
+ *     intentionally diverge from Blender's auto-downgrade (see
+ *     Deviation 4 below) to avoid Shift behaving identically to
+ *     Ctrl until the full range port lands.
  *   - **Shift+Ctrl+LMB → `children_only=true`** → children-only branch
- *     (`:4163-4180`). Shipped in Slice 5.BB as
- *     {@link applyGroupChildrenSelect}.
+ *     (`:4163-4180`, keymap entry `blender_default.py:3853-3854`).
+ *     Shipped in Slice 5.BB as {@link applyGroupChildrenSelect}.
  *
  * # Semantics ported byte-faithfully
  *
@@ -1031,7 +1042,9 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *   1. `ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_CLEAR)` at
  *      `:4183` — iterates the visible channel list
  *      (`anim_channels_for_selection`, see `:523-534`) and routes
- *      each channel through `anim_channels_select_set` (`:678-734`):
+ *      each channel through `anim_channels_select_set`
+ *      (defined `:678-819`; the SS-relevant per-type cases are
+ *      GROUP at `:714-722` and FCURVE at `:723-734`):
  *
  *        - ANIMTYPE_GROUP case at `:714-722`: clears AGRP_SELECTED on
  *          every visible group AND clears AGRP_ACTIVE
@@ -1087,26 +1100,39 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *      Sister deviation to Slice 5.BB MED-3.
  *
  *   2. **No pchan cascade.** Blender's `select_pchan_for_action_group`
- *      (called from both `anim_channels_select_set` ANIMTYPE_GROUP
- *      case at `:717` and the post-branch `:4202-4204` /
- *      `:4214-4216`) selects/deselects the bone whose name matches
- *      the group when the object is an armature. SS has no armature/
- *      pchan model — N/A.
+ *      (called from `anim_channels_select_set` ANIMTYPE_GROUP case
+ *      at `:717`) plus the post-branch `ED_pose_bone_select` calls
+ *      at `:4201-4203` (group-now-selected branch) and `:4214-4216`
+ *      (group-now-deselected branch) select/deselect the bone whose
+ *      name matches the group when the object is an armature. SS
+ *      has no armature/pchan model — N/A. (Audit-fix fidelity LOW-2
+ *      Slice 5.KK: off-by-1 corrected from `:4202-4204`.)
  *
  *   3. **No `OPTYPE_UNDO` snapshot.** Inherited from Slice 5.F/5.K/5.BB
  *      convention — channel selection is view state. Dispatcher
  *      passes `skipHistory:true` in the projectStore `update()` call.
  *
- *   4. **Shift+click on group header is a no-op (not Shift=Ctrl
- *      masquerade).** Faithful port of SELECT_EXTEND_RANGE requires
- *      AGRP_ACTIVE for the walker bound; SS explicitly avoids
- *      auto-downgrading to SELECT_INVERT (which Blender's
- *      `:4517-4522` does for fcurve-type when no active of matching
- *      type exists) because that would make Shift indistinguishable
- *      from Ctrl on group headers, conflicting with Ctrl's
- *      toggle-only intent. The expected UX: Shift on group header
- *      does nothing today; ships with full range semantics when
- *      path #50 lands.
+ *   4. **Shift+click on group header is a no-op — INTENTIONAL
+ *      divergence from Blender's auto-downgrade.** Blender's
+ *      auto-downgrade at `:4517-4522` is type-agnostic: it gates on
+ *      `animchannel_has_active_of_type(ac, eAnim_ChannelType(ale->type))`
+ *      where `ale->type` is the CLICKED channel's type. So for a
+ *      group-header click with no AGRP_ACTIVE present, Blender DOES
+ *      downgrade SELECT_EXTEND_RANGE → SELECT_INVERT and Shift+click
+ *      behaviorally becomes Ctrl+click. SS deviates from this
+ *      auto-downgrade for groups because, until path #50 ports
+ *      AGRP_ACTIVE, every Shift+group-click would always trigger
+ *      the downgrade (no group is ever active), making Shift
+ *      indistinguishable from Ctrl in 100% of cases — a worse UX
+ *      than an explicit no-op. When #50 lands AGRP_ACTIVE, this
+ *      deviation closes automatically: the helper gains a 'range'
+ *      modifier branch whose `canRange` check mirrors Blender's,
+ *      and the downgrade-on-no-active path fires only when no
+ *      active group exists at the moment of the click (rare,
+ *      matching Blender). (Audit-fix fidelity MED-2 Slice 5.KK
+ *      dual-audit 2026-05-18: rationale rewritten — earlier draft
+ *      implied Blender restricts auto-downgrade to fcurve-type,
+ *      which is false.)
  *
  *   5. **macOS Cmd substitutes for Ctrl.** Sister to Slice 5.BB
  *      Deviation 4 and Slice 5.AA metaKey-as-Ctrl deviation. The

@@ -1471,6 +1471,42 @@ function makeActionWithGroups(groups, fcurves) {
   assert(a.groups[0].selected === true, '5.KK toggle: group.selected written');
 }
 
+// Audit-fix arch MED-1 (Slice 5.KK dual-audit 2026-05-18): 'toggle'
+// on group with literal `selected: false` (non-sparse) treated
+// identically to sparse-missing. Defensive against any future write
+// path that produces `selected: false` instead of sparse-deleting.
+{
+  const a = makeActionWithGroups([{ id: 'gA', selected: false }], []);
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', { orderedIds: [] });
+  assert(r.changed === true, '5.KK toggle false→ON: changed');
+  assert(r.groupSelectedAfter === true, '5.KK toggle false→ON: groupSelectedAfter=true');
+  assert(a.groups[0].selected === true, '5.KK toggle false→ON: written to true');
+}
+
+// Audit-fix arch LOW-1 (Slice 5.KK dual-audit 2026-05-18): 'replace'
+// when active fcurve is a child of the clicked group → active is
+// still cleared (Blender does not re-elevate per `:4194-4204` since
+// SS doesn't port AGRP_ACTIVE; the FCURVE-side cascade at `:728-732`
+// still fires through the pre-clear). Sister to Slice 5.BB
+// active-in-group test (covers the cascade, not the no-re-elevation
+// detail — that's intrinsic to the deferred AGRP_ACTIVE port).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }],
+    [{ id: 'fc1', groupId: 'gA', active: true, keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', {
+    orderedIds: ['fc1'], activeFCurveId: 'fc1',
+  });
+  assert(r.clearedActive === true, '5.KK replace active-in-clicked-group: cleared');
+  assert(r.groupSelectedAfter === true, '5.KK replace: group still selected');
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.KK: fc1 active cleared');
+  // fc1.selected was never true — the helper does not auto-select
+  // children (that's children_only's job). The pre-clear loop sees
+  // fc1.selected undefined and does nothing for it.
+  assert(a.fcurves[0].selected === undefined, '5.KK: fc1 not auto-selected (replace ≠ children_only)');
+}
+
 // Preflight matches setter (every-branch parity) ──────────────────
 {
   const scenarios = [
