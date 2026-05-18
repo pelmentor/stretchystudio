@@ -304,7 +304,10 @@ import { useAnimationStore } from '../../../store/animationStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { usePreferencesStore } from '../../../store/preferencesStore.js';
 import { useKeyformSelectionStore } from '../../../store/keyformSelectionStore.js';
-import { resolveSelectAllAction } from '../../../anim/keymapPresets.js';
+import {
+  resolveSelectAllAction,
+  resolveChannelDeleteAction,
+} from '../../../anim/keymapPresets.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
@@ -2565,40 +2568,60 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       setMenu({ kind: 'extrapolation', x: anchor.x, y: anchor.y });
       return;
     }
-    if (e.code === 'Delete' || e.code === 'KeyX') {
-      // Slice 5.N — region-aware delete dispatch.
-      //
-      // Blender's two delete operators:
-      //   - `anim.channels_delete` — sidebar region X/DEL; deletes
-      //     selected FCurves (channel layer; `anim_channels_edit.cc:2739`)
-      //   - keyframe.delete-equivalent — timeline region X/DEL;
-      //     deletes selected keyforms within fcurves (the existing
-      //     `operatorDelete` shipped by Slice 5.C)
-      //
-      // SS reads `regionHoverRef.current` to dispatch to the right
-      // op. The check fires INSIDE the existing X/DEL branch so the
-      // timeline-region default still applies if region routing is
-      // unset (e.g., the editor mounts with focus before any hover).
-      //
-      // Industry-Compatible keymap binds Backspace for channel delete
-      // (`industry_compatible_data.py:2357`) — not wired today. Per
-      // Slice 5.M Deviation 2 precedent, gated on an SS keymap-preset
-      // selector that doesn't exist yet.
-      //
-      // Known limitation (Slice 5.N MED-A2, also affects Slice 5.K's
-      // A/Alt+A/Ctrl+I sidebar branches): `regionHoverRef.current`
-      // only updates on pointer enter/leave. Keyboard-only navigation
-      // (Tab into the FCurveEditor without moving the mouse, then X)
-      // falls through to the timeline-region default. Proper fix
-      // needs focus tracking on the sidebar container — would be the
-      // same lift across all region-aware keys, so deferred to a
-      // dedicated slice rather than expanding 5.N's scope.
-      e.preventDefault();
-      if (regionHoverRef.current === 'sidebar') {
+    // Slice 5.N + 5.II — region-aware delete dispatch.
+    //
+    // Blender's two delete operators:
+    //   - `anim.channels_delete` — sidebar region; deletes selected
+    //     FCurves (channel layer; `anim_channels_edit.cc:2739`).
+    //     Default keymap: X/DEL (`blender_default.py:3873-3874`);
+    //     Industry-compatible: BACKSPACE/DEL
+    //     (`industry_compatible_data.py:2357-2358`).
+    //   - keyframe.delete-equivalent — timeline region X/DEL;
+    //     deletes selected keyforms within fcurves (the existing
+    //     `operatorDelete` shipped by Slice 5.C). DEL is bound in
+    //     Blender (`graph.delete` at `:2050`); SS's X-as-keyform-
+    //     delete is an SS extension that's preset-agnostic.
+    //
+    // Slice 5.II (this slice) closes the Slice 5.N inline TODO
+    // (Industry-Compatible Backspace gap) by routing the
+    // channels-region keypress through `resolveChannelDeleteAction`
+    // (the resolver pattern from Slice 5.AA). The active preset
+    // (`'default'` / `'default_no_toggle'` / `'industry_compatible'`)
+    // governs which key fires the channels delete.
+    //
+    // Known limitation (Slice 5.N MED-A2, also affects Slice 5.K's
+    // A/Alt+A/Ctrl+I sidebar branches): `regionHoverRef.current`
+    // only updates on pointer enter/leave. Keyboard-only navigation
+    // (Tab into the FCurveEditor without moving the mouse, then
+    // delete key) falls through to the timeline-region default.
+    // Proper fix needs focus tracking on the sidebar container —
+    // would be the same lift across all region-aware keys, so
+    // deferred to a dedicated slice.
+    if (regionHoverRef.current === 'sidebar') {
+      const channelDelete = resolveChannelDeleteAction(
+        usePreferencesStore.getState().keymapPreset, e,
+      );
+      if (channelDelete === 'delete') {
+        e.preventDefault();
         applyChannelDeleteOp();
-      } else {
-        operatorDelete();
+        return;
       }
+      // Slice 5.II — block fall-through when the sidebar is hovered
+      // but the pressed key isn't bound in the active preset (e.g. X
+      // in IC, Backspace in default). Per Blender's per-region
+      // keymap dispatch, an unbound key over the channels region is
+      // a no-op — it should NOT fall through to the timeline
+      // (keyform) operator. Without this block, X in IC over sidebar
+      // would silently fire keyform-delete on whatever the timeline
+      // has selected.
+      if (e.code === 'KeyX' || e.code === 'Backspace' || e.code === 'Delete') {
+        return;
+      }
+    }
+    // Timeline region: X or DEL → keyform delete (Slice 5.C).
+    if (e.code === 'Delete' || e.code === 'KeyX') {
+      e.preventDefault();
+      operatorDelete();
       return;
     }
     if (e.code === 'Home') {

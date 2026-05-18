@@ -233,3 +233,60 @@ export function resolveSelectAllAction(preset, e) {
   if (e.code === 'KeyI' && ctrl && !e.altKey && !e.shiftKey) return 'invert';
   return null;
 }
+
+/**
+ * Slice 5.II — resolve a keyboard event to the channels-region
+ * `anim.channels_delete` operator (sidebar X/Backspace/DEL).
+ *
+ * Per-preset divergence (DEL works in BOTH; the extra key differs):
+ *   - `'default'` / `'default_no_toggle'`:
+ *       `blender_default.py:3873-3874` — X or DEL.
+ *   - `'industry_compatible'`:
+ *       `industry_compatible_data.py:2357-2358` — BACKSPACE or DEL.
+ *
+ * Returns `'delete'` when the event matches the active preset's
+ * channel-delete binding, `null` otherwise. Caller (FCurveEditor's
+ * onKeyDown handler) gates on `regionHoverRef.current === 'sidebar'`
+ * because the operator is channels-region only — pressing X over the
+ * timeline does NOT dispatch this; it falls through to the existing
+ * `operatorDelete` keyform-delete path (Slice 5.C).
+ *
+ * Closes a Slice 5.N inline TODO ("Industry-Compatible keymap binds
+ * Backspace for channel delete — not wired today. Per Slice 5.M
+ * Deviation 2 precedent, gated on an SS keymap-preset selector that
+ * doesn't exist yet."). The selector now exists (Slices 5.AA + 5.GG
+ * + 5.HH UI), so the IC binding is wired here.
+ *
+ * macOS Cmd is NOT applicable to this binding family — Blender's
+ * keymap entries for anim.channels_delete carry no `ctrl/meta`
+ * modifiers, so the resolver only matches bare keypresses.
+ *
+ * @param {KeymapPreset | string | null | undefined} preset
+ * @param {EventLikeKeyState} e
+ * @returns {'delete' | null}
+ */
+export function resolveChannelDeleteAction(preset, e) {
+  if (!e || typeof e !== 'object') return null;
+  // No-modifier requirement: Blender's keymap entries carry no
+  // `ctrl/shift/alt/oskey` — reject any modifier permutation.
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+
+  // Delete is bound in BOTH presets — short-circuit common path.
+  if (e.code === 'Delete') return 'delete';
+
+  const p = coerceKeymapPreset(preset);
+
+  if (p === 'industry_compatible') {
+    // IC: BACKSPACE / DEL (`industry_compatible_data.py:2357-2358`)
+    if (e.code === 'Backspace') return 'delete';
+    return null;
+  }
+
+  // p === 'default' OR 'default_no_toggle'.
+  // `'default_no_toggle'` inherits the default channel-delete binding
+  // (only the select-all triplet differs between `'default'` and
+  // `'default_no_toggle'` — Slice 5.GG); both use the same
+  // `blender_default.py:3873-3874` X / DEL pair.
+  if (e.code === 'KeyX') return 'delete';
+  return null;
+}

@@ -21,6 +21,7 @@ import {
   KEYMAP_PRESET_DEFAULT,
   coerceKeymapPreset,
   resolveSelectAllAction,
+  resolveChannelDeleteAction,
 } from '../../src/anim/keymapPresets.js';
 
 let passed = 0;
@@ -169,6 +170,64 @@ function ev(code, modifiers = {}) {
   eq(resolveSelectAllAction('default', ev('KeyB')), null, 'default: B → null');
   eq(resolveSelectAllAction('default', ev('KeyB', { ctrl: true })), null, 'default: Ctrl+B → null');
   eq(resolveSelectAllAction('industry_compatible', ev('KeyB', { ctrl: true })), null, 'IC: Ctrl+B → null');
+}
+
+// ── resolveChannelDeleteAction (Slice 5.II) ──────────────────────
+// Default + default_no_toggle: X / DEL (blender_default.py:3873-3874)
+// Industry-compatible: BACKSPACE / DEL (industry_compatible_data.py:2357-2358)
+{
+  // Delete works in BOTH presets — shared binding
+  eq(resolveChannelDeleteAction('default', ev('Delete')), 'delete', 'default: Delete → delete');
+  eq(resolveChannelDeleteAction('default_no_toggle', ev('Delete')), 'delete', 'no-toggle: Delete → delete');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('Delete')), 'delete', 'IC: Delete → delete');
+}
+{
+  // X binds in default + default_no_toggle, NOT in IC
+  eq(resolveChannelDeleteAction('default', ev('KeyX')), 'delete', 'default: X → delete');
+  eq(resolveChannelDeleteAction('default_no_toggle', ev('KeyX')), 'delete', 'no-toggle: X → delete (inherits default)');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('KeyX')), null, 'IC: X → null (Backspace-only in IC)');
+}
+{
+  // Backspace binds in IC, NOT in default/default_no_toggle
+  eq(resolveChannelDeleteAction('default', ev('Backspace')), null, 'default: Backspace → null');
+  eq(resolveChannelDeleteAction('default_no_toggle', ev('Backspace')), null, 'no-toggle: Backspace → null');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('Backspace')), 'delete', 'IC: Backspace → delete');
+}
+{
+  // Critical differentiator: X vs Backspace between default + IC
+  // (sister-pattern to the select-all 'default' vs 'default_no_toggle'
+  // A-keypress differentiator in Slice 5.GG).
+  eq(resolveChannelDeleteAction('default', ev('KeyX')), 'delete',
+    'differentiator: default X → delete');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('KeyX')), null,
+    'differentiator: IC X → null');
+  eq(resolveChannelDeleteAction('default', ev('Backspace')), null,
+    'differentiator: default Backspace → null');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('Backspace')), 'delete',
+    'differentiator: IC Backspace → delete');
+}
+{
+  // Modifier permutations are all rejected — Blender's keymap entries
+  // for anim.channels_delete carry no modifiers, so any modifier
+  // disqualifies the press.
+  eq(resolveChannelDeleteAction('default', ev('Delete', { ctrl: true })), null, 'default: Ctrl+Delete → null');
+  eq(resolveChannelDeleteAction('default', ev('KeyX', { shift: true })), null, 'default: Shift+X → null');
+  eq(resolveChannelDeleteAction('default', ev('KeyX', { alt: true })), null, 'default: Alt+X → null');
+  eq(resolveChannelDeleteAction('default', ev('KeyX', { meta: true })), null, 'default: Cmd+X → null');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('Backspace', { ctrl: true })), null, 'IC: Ctrl+Backspace → null');
+  eq(resolveChannelDeleteAction('industry_compatible', ev('Backspace', { shift: true })), null, 'IC: Shift+Backspace → null');
+}
+{
+  // Other keys never match
+  eq(resolveChannelDeleteAction('default', ev('KeyA')), null, 'default: A → null');
+  eq(resolveChannelDeleteAction('default', ev('KeyD')), null, 'default: D → null');
+}
+{
+  // Coerce + null guards
+  eq(resolveChannelDeleteAction('bogus', ev('KeyX')), 'delete', 'coerce: unknown preset → default behavior');
+  eq(resolveChannelDeleteAction(null, ev('KeyX')), 'delete', 'null preset coerced to default');
+  eq(resolveChannelDeleteAction('default', null), null, 'null event → null');
+  eq(resolveChannelDeleteAction('default', 'not-an-object'), null, 'string event → null');
 }
 
 // ── final report ───────────────────────────────────────────────────
