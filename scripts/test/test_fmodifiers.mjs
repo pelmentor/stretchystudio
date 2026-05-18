@@ -823,6 +823,115 @@ function approx(a, b, name, eps = 1e-6) {
   approx(evaluateFCurve(fc, 500), 50, '60: empty modifiers → identity');
 }
 
+// ── 3.F gap-fills (added 2026-05-18) ──────────────────────────────────────
+
+// ── 61. Generator degree 0 (constant): single coefficient ──────────────
+{
+  // poly with one coefficient = degree 0 = constant output. Replaces
+  // sampled value when additive=false.
+  const fc = {
+    keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 100 }],
+    modifiers: [{
+      type: 'generator', id: 'g1',
+      data: { mode: 'polynomial', coefficients: [42], additive: false },
+    }],
+  };
+  approx(evaluateFCurve(fc, 500), 42,
+    '61: generator degree-0 constant replaces sampled value');
+  // factorised mode with one coefficient — degree 0 = floor(1/2) = 0 pairs.
+  // No pairs → product stays at initial 1 → multiplied by 0 baseline = 0,
+  // or replaces value with `value * 1 = ... wait, additive=false means
+  // cvalue = generated, so output = 1 (the initial product).
+  // Actually let me re-check: factorised value starts at 1, iterates
+  // PAIRS, never iterates because length<2 → returns 1.
+  const fcFact = {
+    keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 100 }],
+    modifiers: [{
+      type: 'generator', id: 'g2',
+      data: { mode: 'polynomial_factorised', coefficients: [99], additive: false },
+    }],
+  };
+  approx(evaluateFCurve(fcFact, 500), 1,
+    '61a: factorised generator with single unpaired coefficient returns 1 (no pairs iterated)');
+}
+
+// ── 62. Noise frequency response — different `size` produces different output ─
+{
+  // size is the Perlin period in ms. size=10 (high frequency) and
+  // size=1000 (low frequency) over the same time domain produce
+  // distinguishable outputs (the high-frequency noise oscillates more).
+  const fcHigh = {
+    keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 0 }],
+    modifiers: [{ type: 'noise', id: 'n1',
+      data: { size: 10, strength: 1, phase: 1, blendType: 'replace' } }],
+  };
+  const fcLow = {
+    keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 0 }],
+    modifiers: [{ type: 'noise', id: 'n2',
+      data: { size: 1000, strength: 1, phase: 1, blendType: 'replace' } }],
+  };
+  // Sample at 16 positions across 0..1000ms; count how often consecutive
+  // samples have different signs (zero-crossings = oscillation frequency).
+  let highCrossings = 0;
+  let lowCrossings = 0;
+  let prevHigh = evaluateFCurve(fcHigh, 0);
+  let prevLow = evaluateFCurve(fcLow, 0);
+  for (let i = 1; i <= 16; i++) {
+    const t = (i * 1000) / 16;
+    const vh = evaluateFCurve(fcHigh, t);
+    const vl = evaluateFCurve(fcLow, t);
+    if ((vh < 0) !== (prevHigh < 0)) highCrossings++;
+    if ((vl < 0) !== (prevLow < 0)) lowCrossings++;
+    prevHigh = vh;
+    prevLow = vl;
+  }
+  // High-frequency noise should cross zero more often than low-frequency.
+  // We don't pin exact counts (depends on phase + Perlin internals) —
+  // just that "different size ⇒ different observable structure".
+  if (highCrossings === lowCrossings) {
+    failed++;
+    const msg = `62: noise frequency response — size variation produced same crossing count (${highCrossings} both); expected diverging`;
+    failures.push(msg);
+    console.log(`FAIL: ${msg}`);
+  } else {
+    passed++;
+  }
+}
+
+// ── 63. Cycles + Noise + Limits 3-way composition (plan §3.F target) ───
+{
+  // Single fcurve carries Cycles (head) + Noise + Limits. Per the
+  // forward-walk value pass (fmodifier.cc:1568-1569) the order is
+  // Cycles-time → sample → Cycles-value(+cycyofs) → Noise → Limits.
+  // Limits.maxY=0.6 caps the final output regardless of Noise additions.
+  const fc = {
+    keyforms: [{ time: 0, value: 0 }, { time: 100, value: 1 }],
+    modifiers: [
+      { type: 'cycles', id: 'c1', data: { after: 'repeat' } },
+      { type: 'noise', id: 'n1',
+        data: { size: 50, strength: 0.5, phase: 1, blendType: 'add' } },
+      { type: 'limits', id: 'l1',
+        data: { useMaxY: true, maxY: 0.6 } },
+    ],
+  };
+  // Sample at 8 positions across 0..500ms (cycle period=100ms, so 5 cycles).
+  let maxObserved = -Infinity;
+  for (let i = 0; i <= 8; i++) {
+    const t = (i * 500) / 8;
+    const v = evaluateFCurve(fc, t);
+    if (v > maxObserved) maxObserved = v;
+  }
+  // Limits MUST clamp every output to ≤ 0.6.
+  if (maxObserved > 0.6001) {
+    failed++;
+    const msg = `63: 3-way composition — Limits clamp violated (max=${maxObserved.toFixed(4)} > 0.6)`;
+    failures.push(msg);
+    console.log(`FAIL: ${msg}`);
+  } else {
+    passed++;
+  }
+}
+
 console.log(`\nfmodifiers: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');

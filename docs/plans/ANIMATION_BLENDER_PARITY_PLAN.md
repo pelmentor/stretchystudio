@@ -1140,18 +1140,42 @@ evaltime)` → bit-identical output via `perlinFbm2D`. Tests in
 composition, determinism across runs, dual-Noise composition,
 mesh_verts+Noise path).
 
-#### 3.F — Tests
+#### 3.F — Tests — SHIPPED 2026-05-18
 
-| Test | What |
+The plan listed 8 dedicated test files. Implementation strategy: a
+consolidated [test_fmodifiers.mjs](../../scripts/test/test_fmodifiers.mjs)
+(106 assertions after 3.F gap-fills) covers per-type semantics +
+composition for all 6 modifier types in a single eval-substrate file,
+plus a dedicated
+[test_fmodifiers_export_bake.mjs](../../scripts/test/test_fmodifiers_export_bake.mjs)
+(18 assertions) for the byte-identity gate. **Splitting the consolidated
+file into 6 per-type files** (one for each modifier type) would have
+been pure code churn — every assertion would have to be re-grouped, the
+existing 102 substrate tests already cover the plan target table
+substantially, and per Rule №2 (no migration baggage) we don't churn
+working test infrastructure just to match an aspirational file naming.
+
+Coverage mapping (plan target → actual implementation):
+
+| Plan target | Actual coverage |
 |------|------|
-| `test_fmodifiers_cycles.mjs` | repeat / repeat_offset / mirror at various positions |
-| `test_fmodifiers_noise.mjs` | seeded reproducibility + frequency response |
-| `test_fmodifiers_generator.mjs` | polynomial degrees 0..4 |
-| `test_fmodifiers_limits.mjs` | clamp on each axis |
-| `test_fmodifiers_stepped.mjs` | hold-for-N-frames |
-| `test_fmodifiers_envelope.mjs` | min/max envelope control |
-| `test_fmodifiers_stack.mjs` | Cycles + Noise + Limits composition |
-| `test_fmodifiers_export_bake.mjs` | Noise baked at export, byte-identical to a hand-baked motion3 |
+| `test_fmodifiers_cycles.mjs` | test_fmodifiers.mjs §30-36, §51 + test_motion3jsonCyclesExport.mjs (42 asserts) |
+| `test_fmodifiers_noise.mjs` | test_fmodifiers.mjs §7-9, §25-29, §57, §62 (frequency response gap-fill) |
+| `test_fmodifiers_generator.mjs` | test_fmodifiers.mjs §10-15, §53-54, §61 (degree-0 gap-fill) |
+| `test_fmodifiers_limits.mjs` | test_fmodifiers.mjs §16-18, §52 |
+| `test_fmodifiers_stepped.mjs` | test_fmodifiers.mjs §19-21, §38, §55 |
+| `test_fmodifiers_envelope.mjs` | test_fmodifiers.mjs §22-24 |
+| `test_fmodifiers_stack.mjs` | test_fmodifiers.mjs §49 + §63 (3-way Cycles+Noise+Limits gap-fill) |
+| `test_fmodifiers_export_bake.mjs` | **NEW** dedicated file — 18 byte-identity asserts vs hand-bake reference |
+
+The byte-identity gate (`test_fmodifiers_export_bake.mjs`) is the load-
+bearing addition: it verifies `generateMotion3Json`'s bake helper
+produces segment arrays byte-identical to a manually-constructed
+hand-bake using the same FPS cadence + the same `evaluateFCurve`
+pipeline. Covers Noise, Cycles, Cycles+Noise composition, all 4
+blend types, multiple FPS values, non-aligned-duration clamp
+arithmetic, and the driver-bearing fcurve case (regression-pin for
+3.D audit-fix H-1 driver-leak).
 
 #### 3.G — Phase exit gate
 
