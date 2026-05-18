@@ -1237,10 +1237,17 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 
 ---
 
-### Phase 4 — NLA stack (1.5 weeks, schema v35)
+### Phase 4 — NLA stack (1.5 weeks, schema v35-aspirational / actual v42+)
 
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
+
+**Status:** 1/7 slices SHIPPED — Slice 4.A substrate (commits
+`eba15ab` substrate + `410459b` audit-fix) landed 2026-05-18. Schema
+bumped 41 → **42**. Cite-discipline **HOLDS at 3** (3.F → 3.G → 4.A
+clean). See `docs/plans/SESSION_CLOSEOUT_2026_05_18_ANIMATION_PHASE_4_SLICE_A.md`
+for slice ledger. Remaining: 4.B (evaluator) / 4.C (tweak mode) /
+4.D (NLAEditor UI) / 4.E (BakeNLA op) / 4.F (tests) / 4.G (exit gate).
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
@@ -1252,12 +1259,24 @@ and tweak-mode push.
   Phase 4 ships the 4 unambiguous modes; `combine` is documented in
   §2.2 (out of scope) as a deferred follow-up.
 - `ANIM_TWEAK_MODE` flag renamed to **`ADT_NLA_EDIT_ON`** matching
-  Blender DNA_anim_enums.h:553-587 (`eAnimData_Flag`).
-- AnimData backup pointers (`tmpActionId` / `tmpSlotHandle` /
-  `tweakTrackId` / `tweakStripId`) are part of Phase 1's animData
-  shape (now expanded above) — Phase 4 wires them.
+  Blender DNA_anim_enums.h:553-587 (`eAnimData_Flag`). Verified during
+  4.A: bit value is `(1 << 2)` per `DNA_anim_enums.h:559`; load-bearing
+  for Slice 4.C tweak entry/exit.
 
-#### 4.A — Schema v35 (was v36 in v1; renumbered after NodeTree absorption into v33)
+**Plan-claim correction (Slice 4.A 2026-05-18):**
+> Pre-Slice-4.A version of this section claimed: *"AnimData backup
+> pointers (`tmpActionId` / `tmpSlotHandle` / `tweakTrackId` /
+> `tweakStripId`) are part of Phase 1's animData shape (now expanded
+> above) — Phase 4 wires them."* This was **WRONG**. v36's
+> `defaultAnimData()` (`src/store/migrations/v36_action_datablock.js:292-303`)
+> and v37's parallel (`v37_scene_anim_data.js:140-151`) declared 8
+> fields and stopped — the 4 backup-pointer slots were absent.
+> Corrected via v42 migration (sister-update to v36/v37 +
+> `projectStore.js` so fresh-project ↔ migrated-project shapes stay
+> in sync). Per `feedback_check_plan_against_impl_on_consumption`:
+> always verify plan claims against shipped impl before consumption.
+
+#### 4.A — Schema v42 (was v35 aspirational; actual reflects Phase 0-3 schema-bump trail)
 
 ```js
 // node.animData.nlaTracks[]
