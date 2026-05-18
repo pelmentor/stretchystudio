@@ -1242,12 +1242,13 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** 1/7 slices SHIPPED — Slice 4.A substrate (commits
-`eba15ab` substrate + `410459b` audit-fix) landed 2026-05-18. Schema
-bumped 41 → **42**. Cite-discipline **HOLDS at 3** (3.F → 3.G → 4.A
-clean). See `docs/plans/SESSION_CLOSEOUT_2026_05_18_ANIMATION_PHASE_4_SLICE_A.md`
-for slice ledger. Remaining: 4.B (evaluator) / 4.C (tweak mode) /
-4.D (NLAEditor UI) / 4.E (BakeNLA op) / 4.F (tests) / 4.G (exit gate).
+**Status:** **2/7 slices SHIPPED** — Slice 4.A substrate (commits
+`eba15ab` + `410459b`) + Slice 4.B evaluator (commits `d91060d` +
+`8d03d4c`) landed 2026-05-18. Schema bumped 41 → **42**. Cite-discipline
+**HOLDS at 4** (3.F → 3.G → 4.A → 4.B all clean). See close-out docs
+`docs/plans/SESSION_CLOSEOUT_2026_05_18_ANIMATION_PHASE_4_SLICE_A.md`
+and `..._SLICE_B.md`. Remaining: 4.C (tweak mode) / 4.D (NLAEditor UI) /
+4.E (BakeNLA op) / 4.F (tests) / 4.G (exit gate).
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
@@ -1313,7 +1314,7 @@ for slice ledger. Remaining: 4.B (evaluator) / 4.C (tweak mode) /
 }
 ```
 
-#### 4.B — NLA evaluator
+#### 4.B — NLA evaluator (SHIPPED 2026-05-18: `d91060d` + `8d03d4c`)
 
 [src/anim/nla.js]:
 
