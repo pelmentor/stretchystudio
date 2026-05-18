@@ -1242,13 +1242,14 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** **2/7 slices SHIPPED** — Slice 4.A substrate (commits
-`eba15ab` + `410459b`) + Slice 4.B evaluator (commits `d91060d` +
-`8d03d4c`) landed 2026-05-18. Schema bumped 41 → **42**. Cite-discipline
-**HOLDS at 4** (3.F → 3.G → 4.A → 4.B all clean). See close-out docs
-`docs/plans/SESSION_CLOSEOUT_2026_05_18_ANIMATION_PHASE_4_SLICE_A.md`
-and `..._SLICE_B.md`. Remaining: 4.C (tweak mode) / 4.D (NLAEditor UI) /
-4.E (BakeNLA op) / 4.F (tests) / 4.G (exit gate).
+**Status:** **3/7 slices SHIPPED** — Slice 4.A substrate (`eba15ab` +
+`410459b`) + Slice 4.B evaluator (`d91060d` + `8d03d4c`) landed
+2026-05-18; Slice 4.C tweak mode (`f0fd4be` + `3ae4c5e`) landed
+2026-05-19. Schema at **v42**. Cite-discipline **HOLDS at 5**
+(3.F → 3.G → 4.A → 4.B → 4.C all clean). See close-out docs
+`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C}.md`.
+Remaining: 4.D (NLAEditor UI) / 4.E (BakeNLA op) / 4.F (tests) /
+4.G (exit gate).
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
@@ -1350,7 +1351,7 @@ Blend modes match Blender's
   for non-rotation hides intent. Plan to add in a follow-up plan with
   proper coverage.
 
-#### 4.C — Tweak mode
+#### 4.C — Tweak mode (SHIPPED 2026-05-19: `f0fd4be` + `3ae4c5e`)
 
 When the user opens an Action for editing while it's bound to an NLA
 strip, Blender enters "tweak mode": the Action becomes the topmost
