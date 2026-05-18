@@ -1061,7 +1061,7 @@ Per-FCurve modifier list in the Properties panel under a new "FCurve
 Modifiers" section. Add / remove / reorder / mute / expand. Per-modifier
 inline data editor (specific to each type).
 
-#### 3.D — Cycles is special
+#### 3.D — Cycles is special — SHIPPED 2026-05-18
 
 `Cycles` is special because the user can author a 4-keyframe walk and
 have it loop forever. The motion3.json exporter must understand this:
@@ -1074,6 +1074,25 @@ motion3.json.
 If only some FCurves cycle, bake the cycles into explicit keyframes at
 export time (the alternative — emitting a non-loop motion3.json with
 some cycling channels — is not representable in Cubism's format).
+
+**Implementation.** `actionHasUniformLoopingCycles(action)` in
+[src/io/live2d/motion3json.js](../../src/io/live2d/motion3json.js)
+gates `Meta.Loop`; `bakeFCurveModifiers(fcurve, durationMs, fps)`
+samples the full FModifier stack via `evaluateFCurve` at the action
+FPS for the cycling channels when `Loop=false`. The importer companion
+[src/io/live2d/motion3jsonImport.js](../../src/io/live2d/motion3jsonImport.js)'s
+`attachLoopCyclesModifier` synthesises a head-of-stack Cycles modifier
+on every fcurve when `Meta.Loop=true` so the round-trip preserves the
+loop signal. Behaviour change: the legacy hardcoded `Loop=true` is
+removed; actions without any Cycles modifier now export `Loop=false`
+(the idle generator bypasses this path via `buildMotion3`, unaffected).
+Tests in
+[scripts/test/test_motion3jsonCyclesExport.mjs](../../scripts/test/test_motion3jsonCyclesExport.mjs)
+(37 assertions) + extended
+[test_actionExportMotion3.mjs](../../scripts/test/test_actionExportMotion3.mjs)
+§5 (10 new) + updated
+[test_audit_fixes_2026_05_11_phase1_stage1f.mjs](../../scripts/test/test_audit_fixes_2026_05_11_phase1_stage1f.mjs)
+§1 (Slice 3.D semantics replace the Stage 1.F hardcoded-Loop pin).
 
 #### 3.E — Noise is special
 

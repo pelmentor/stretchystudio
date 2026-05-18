@@ -74,11 +74,14 @@ function fileMatches(rel, regex) {
   return regex.test(read(rel));
 }
 
-// ── Gap 1: G-1+D-2 dedup'd HIGH — opts.loop dropped + ACT_CYCLIC deferral ──
+// ── Gap 1: G-1+D-2 dedup'd HIGH — opts.loop dropped; Loop signal pinning ──
 
 {
   // The opts.loop parameter was dropped; the function reads only
-  // parameterMap from opts.
+  // parameterMap from opts. (Still true post-3.D — Slice 3.D shifted
+  // the Loop signal from "hardcoded true" to "driven by Cycles
+  // FModifier", but did NOT re-introduce an opts override per Rule №2:
+  // callable-by-no-one is a Rule №1 anti-pattern.)
   assert(
     fileFlatMatches(
       'src/io/live2d/motion3json.js',
@@ -87,47 +90,62 @@ function fileMatches(rel, regex) {
     '1: motion3json.js destructures only parameterMap from opts (opts.loop dropped)',
   );
 
-  // Module JSDoc carries the ACT_CYCLIC deviation explanation.
+  // Module JSDoc carries the Loop semantics section (was "Blender
+  // deviation" in Stage 1.F; rewritten to "Slice 3.D" header in this
+  // slice — both share the "Loop semantics" prefix).
   assert(
     fileFlatMatches(
       'src/io/live2d/motion3json.js',
-      /Loop semantics.+Blender deviation/i,
+      /Loop semantics/i,
     ),
-    '1a: motion3json.js JSDoc carries Loop semantics deviation header',
-  );
-  assert(
-    fileFlatMatches(
-      'src/io/live2d/motion3json.js',
-      /ACT_CYCLIC[\s\S]{0,100}1\s*<<\s*13/,
-    ),
-    '1b: motion3json.js JSDoc cites ACT_CYCLIC bit value (1 << 13)',
+    '1a: motion3json.js JSDoc carries Loop semantics section header',
   );
 
-  // The Cyclic-toggle UI deferral is documented (Phase 6+).
+  // ACT_CYCLIC bit value (1 << 13) still cited — it remains the
+  // action-level loop bit, still reserved (will OR-compose with the
+  // Cycles signal when the ActionsEditor Cyclic-toggle UI ships).
+  assert(
+    fileFlatMatches(
+      'src/io/live2d/motion3json.js',
+      /v36_action_datablock\.js:325-329/,
+    ),
+    '1b: motion3json.js JSDoc cites ACT_CYCLIC bit location (v36_action_datablock.js:325-329)',
+  );
+
+  // The Cyclic-toggle UI is still cited as the integration point for
+  // ACT_CYCLIC even though Slice 3.D now drives Loop from per-curve
+  // Cycles FModifier directly.
   assert(
     fileFlatMatches(
       'src/io/live2d/motion3json.js',
       /Cyclic.toggle UI/i,
     ),
-    '1c: motion3json.js documents Cyclic-toggle UI as the deferred phase',
+    '1c: motion3json.js documents Cyclic-toggle UI as the ACT_CYCLIC integration point',
   );
 
-  // Behavior: Loop=true regardless of action.flag bit set/unset.
+  // Behavior post-3.D: Loop is FALSE when no fcurve carries a Cycles
+  // modifier, regardless of the ACT_CYCLIC bit (the flag's runtime
+  // wiring is deferred to the Cyclic-toggle UI slice). Loop is TRUE
+  // only when every fcurve has a clean repeat-forever Cycles modifier
+  // (covered by test_actionExportMotion3.mjs §5b).
   const make = (flag) => ({
     id: 'a', name: 'A', fps: 30, duration: 1000, audioTracks: [], flag,
     fcurves: [{
       id: 'param:P', rnaPath: 'objects["__params__"].values["P"]',
       arrayIndex: 0, modifiers: [], extrapolation: 'constant',
-      keyforms: [{ time: 0, value: 0, easing: 'linear', type: 'linear' }],
+      keyforms: [
+        { time: 0, value: 0, easing: 'linear', type: 'linear' },
+        { time: 500, value: 1, easing: 'linear', type: 'linear' },
+      ],
     }],
     meta: {},
   });
   const noCyclic = generateMotion3Json(make(0));
   const cyclic = generateMotion3Json(make(1 << 13));
-  assertEq(noCyclic.Meta.Loop, true,
-    '1d: ACT_CYCLIC=0 → Loop=true (hardcoded default behaviour)');
-  assertEq(cyclic.Meta.Loop, true,
-    '1e: ACT_CYCLIC bit set → Loop=true (deferred integration; behaviour identical today)');
+  assertEq(noCyclic.Meta.Loop, false,
+    '1d: ACT_CYCLIC=0 + no Cycles FModifier → Loop=false (Slice 3.D semantics)');
+  assertEq(cyclic.Meta.Loop, false,
+    '1e: ACT_CYCLIC bit alone → Loop=false (flag wiring deferred to Cyclic-toggle UI)');
 }
 
 // ── Gap 2: D-1 HIGH — BKE_main_namemap_get_unique_name citation ────────────

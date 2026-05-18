@@ -23,31 +23,50 @@
  *
  * Reference: reference/live2d-sample/Hiyori/runtime/motion/hiyori_m01.motion3.json
  *
- * # Loop semantics — Blender deviation (Stage 1.F audit-fix D-2)
+ * # Loop semantics — Slice 3.D (Cycles → IsLoop)
  *
- * Blender's `bAction` carries an `ACT_CYCLIC` flag bit (`(1 << 13)` per
- * `reference/blender/source/blender/makesdna/DNA_action_types.h:385-386`)
- * that signals the Action is intended to loop. Per the bit's doccomment,
- * `ACT_CYCLIC` requires `ACT_FRAME_RANGE` to also be set (the cycle
- * boundaries come from the explicit frame range).
+ * Cubism's `.motion3.json` carries `Meta.Loop: bool` which causes the
+ * runtime to re-evaluate the curve modulo `Meta.Duration`. SS drives
+ * this from the Cycles FModifier per Animation Blender-Parity Plan
+ * §3.D:
  *
- * SS does NOT honor `action.flag & ACT_CYCLIC` today. Live2D motions
- * loop by convention (Hiyori's reference motion3 files all have
- * `Loop: true`); Stage 1.F ships hardcoded `Loop: true` to preserve the
- * existing exporter behavior. The ACT_CYCLIC integration is deferred to
- * Phase 6 (or whichever phase ships a Cyclic-toggle UI in
- * `ActionsEditor`); the field is reserved on the Action shape (see
- * `v36_action_datablock.js:273-281` ACT_CYCLIC bit set) but not yet
- * read here. **No `opts.loop` parameter** — the prior version exposed
- * one but no caller passed it (Rule №2: callable-by-no-one is a Rule
- * №1 anti-pattern). When the Cyclic toggle ships, the contract becomes:
- * `Loop = (action.flag & ACT_CYCLIC) !== 0`, no opts override, and the
- * exporter reads from canonical action state.
+ *   - **All fcurves** in the action carry a non-muted head-of-stack
+ *     `Cycles` modifier with `before='none', after='repeat',
+ *     afterCycles=0` (= cycle the whole curve forward forever from the
+ *     last keyform) → `Loop: true`. The original keyforms ship as-is;
+ *     no bake.
+ *   - **Some** fcurves cycle, **others don't** → `Loop: false`. The
+ *     cycling fcurves are baked into explicit keyforms at the action's
+ *     FPS (via `evaluateFCurve`, which applies every FModifier on the
+ *     fcurve as a side effect). Non-cycling fcurves ship as-is.
+ *   - **No** fcurves cycle → `Loop: false`.
+ *
+ * `action.flag & ACT_CYCLIC` (`v36_action_datablock.js:325-329`) is
+ * still reserved but NOT read here — the bit is the action-level
+ * counterpart to per-curve Cycles (Blender uses both: ACT_CYCLIC for
+ * "Action is intended to loop", Cycles for "extrapolate this curve").
+ * Per plan §3.D the per-curve signal is authoritative for IsLoop; the
+ * ACT_CYCLIC integration ships with the ActionsEditor Cyclic-toggle UI
+ * in a later slice (and will OR-compose with the Cycles signal at that
+ * point: `Loop = ACT_CYCLIC || allFCurvesCycle`).
+ *
+ * # Bake scope — only Cycles in Slice 3.D
+ *
+ * The bake helper `bakeFCurveModifiers` calls `evaluateFCurve`, which
+ * applies the full FModifier stack (Cycles + Noise + Generator + Limits
+ * + Stepped + Envelope). However the **trigger** in this slice is
+ * narrow: bake only when an fcurve has an active Cycles modifier AND
+ * the action isn't uniformly looping. Per plan §3.E, Noise gets its
+ * own unconditional bake trigger in a follow-up slice; until then,
+ * Noise (and other modifiers) on non-Cycles fcurves are silently
+ * dropped from the export. Acceptable for 3.D scope — the alternative
+ * is gold-plating cross-slice and bleeds 3.E's substrate into 3.D.
  *
  * @module io/live2d/motion3json
  */
 
 import { decodeFCurveTarget } from '../../anim/animationFCurve.js';
+import { evaluateFCurve } from '../../anim/fcurve.js';
 import { evaluateBezTripleSegment } from '../../anim/fcurveEval.js';
 import { logger } from '../../lib/logger.js';
 
@@ -61,12 +80,14 @@ import { logger } from '../../lib/logger.js';
  */
 export function generateMotion3Json(action, opts = {}) {
   const { parameterMap = new Map() } = opts;
-  // Loop = true (hardcoded). See module JSDoc "Loop semantics" deviation
-  // — ACT_CYCLIC integration deferred to Cyclic-toggle UI.
-  const loop = true;
-
-  const durationSec = (action.duration ?? 2000) / 1000;
+  const durationMs = action.duration ?? 2000;
+  const durationSec = durationMs / 1000;
   const fps = action.fps ?? 24;
+
+  // 3.D — Cycles → IsLoop. `loop=true` requires a uniform head-of-stack
+  // Cycles modifier on every fcurve; otherwise per-fcurve bake handles
+  // the cycling channels in-place. See module JSDoc "Loop semantics".
+  const loop = actionHasUniformLoopingCycles(action);
 
   const curves = [];
   let totalSegmentCount = 0;
@@ -76,12 +97,21 @@ export function generateMotion3Json(action, opts = {}) {
     const target = decodeFCurveTarget(fcurve);
     if (!target) continue;
 
+    // 3.D — bake Cycles modifier into explicit keyforms when the action
+    // isn't uniformly looping. Bake is a no-op when fcurve has no active
+    // Cycles modifier (other modifier types deferred to 3.E+; see module
+    // JSDoc "Bake scope"). `effectiveFCurve.keyforms` flows downstream
+    // exactly like the original.
+    const effectiveFCurve = (!loop && hasActiveCyclesModifier(fcurve))
+      ? bakeFCurveModifiers(fcurve, durationMs, fps)
+      : fcurve;
+
     // Parameter fcurves — first-class Live2D parameter animation, emitted
     // directly without going through the SS node→param mapping. Used by
     // the idle generator and any AI-driven motion that targets standard
     // Live2D parameters (ParamAngleX, ParamBreath, etc.) by ID.
     if (target.kind === 'param') {
-      const segments = encodeKeyframesToSegments(fcurve.keyforms ?? [], durationSec);
+      const segments = encodeKeyframesToSegments(effectiveFCurve.keyforms ?? [], durationSec);
       if (segments.length === 0) continue;
       const segInfo = countSegmentsAndPoints(segments);
       totalSegmentCount += segInfo.segments;
@@ -95,7 +125,7 @@ export function generateMotion3Json(action, opts = {}) {
       const key = `${target.nodeId}.mesh_verts`;
       if (!parameterMap.has(key)) continue;
       const paramId = parameterMap.get(key);
-      const kfs = fcurve.keyforms;
+      const kfs = effectiveFCurve.keyforms;
       if (!kfs || kfs.length < 2) continue;
 
       // Convert time-based keyforms to index-based segments:
@@ -121,7 +151,7 @@ export function generateMotion3Json(action, opts = {}) {
     if (!mapping) continue;
 
     const { target: live2dTarget, id } = mapping;
-    const segments = encodeKeyframesToSegments(fcurve.keyforms, durationSec);
+    const segments = encodeKeyframesToSegments(effectiveFCurve.keyforms, durationSec);
 
     if (segments.length === 0) continue;
 
@@ -331,6 +361,133 @@ function bakeEasingToLinearSegments(segments, prevKf, kf, prevTimeSec, timeSec) 
     const sampleValue = evaluateBezTripleSegment(prevKf, kf, sampleTimeMs);
     segments.push(0, sampleTimeMs / 1000, sampleValue);
   }
+}
+
+// ── 3.D — Cycles → IsLoop + per-fcurve bake ──────────────────────────────
+
+/**
+ * Returns the first non-muted, non-disabled, non-range-restricted Cycles
+ * modifier on the fcurve, or `null` if absent.
+ *
+ * The "head-of-stack" invariant from Slice 3.C (`fcurveModifiersPanelData.js`
+ * + `fmodifier.cc:635` `BLI_assert(fcm->prev == nullptr)`) means a Cycles
+ * modifier, when present, lives at `modifiers[0]`. So we only check the
+ * first entry — multiple Cycles modifiers cannot exist by construction.
+ *
+ * Range-restricted Cycles modifiers are NOT loop-signal candidates: a
+ * scoped cycle isn't equivalent to Cubism's whole-curve `IsLoop=true`.
+ *
+ * @param {{ modifiers?: Array<object> } | null | undefined} fcurve
+ * @returns {object|null}
+ */
+function getActiveCyclesModifier(fcurve) {
+  const mods = fcurve && Array.isArray(fcurve.modifiers) ? fcurve.modifiers : null;
+  if (!mods || mods.length === 0) return null;
+  const head = mods[0];
+  if (!head || head.type !== 'cycles') return null;
+  if (head.muted === true || head.disabled === true) return null;
+  if (head.useRestrictedRange === true) return null;
+  return head;
+}
+
+/**
+ * True iff fcurve has an active (non-muted, non-restricted) Cycles
+ * modifier — regardless of its before/after configuration. Drives the
+ * per-fcurve bake decision.
+ *
+ * @param {{ modifiers?: Array<object> } | null | undefined} fcurve
+ * @returns {boolean}
+ */
+function hasActiveCyclesModifier(fcurve) {
+  return getActiveCyclesModifier(fcurve) !== null;
+}
+
+/**
+ * True iff EVERY fcurve in the action carries an active Cycles modifier
+ * configured for `before='none', after='repeat', afterCycles=0` —
+ * Cubism's `Meta.Loop=true` equivalent per plan §3.D. An empty fcurve
+ * list returns false (no signal = no loop).
+ *
+ * The exact data shape per `FModCyclesData` in `fmodifiers.js`:
+ *   - `before` sparse-default 'none' → missing or 'none' satisfies
+ *   - `after` MUST be explicit 'repeat' (sparse default 'none' fails)
+ *   - `afterCycles` sparse-default 0 (= infinite) → missing or 0 satisfies
+ *
+ * Non-zero `useInfluence` slider values fail the check — a fractional
+ * cycle isn't a full loop. The cycle-driven IsLoop signal is binary
+ * by Cubism's format definition.
+ *
+ * @param {{ fcurves?: Array<object> } | null | undefined} action
+ * @returns {boolean}
+ */
+function actionHasUniformLoopingCycles(action) {
+  const fcurves = action && Array.isArray(action.fcurves) ? action.fcurves : null;
+  if (!fcurves || fcurves.length === 0) return false;
+  for (const fcurve of fcurves) {
+    const cycles = getActiveCyclesModifier(fcurve);
+    if (!cycles) return false;
+    const data = cycles.data || {};
+    const before = data.before ?? 'none';
+    const after = data.after ?? 'none';
+    const afterCycles = Number.isFinite(data.afterCycles) ? data.afterCycles : 0;
+    if (before !== 'none') return false;
+    if (after !== 'repeat') return false;
+    if (afterCycles !== 0) return false;
+    // useInfluence with influence<1 means fractional blend — not a full loop.
+    if (cycles.useInfluence === true) {
+      const inf = Number.isFinite(cycles.influence) ? cycles.influence : 1;
+      if (inf < 1) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Bake an fcurve's modifier stack into explicit linear keyforms at
+ * `fps` over `[0, durationMs]`. Returns a shallow-cloned fcurve with
+ * baked `keyforms` and `modifiers` stripped — safe to feed into
+ * `encodeKeyframesToSegments` without re-applying modifiers.
+ *
+ * Sampling is uniform at the action's recorded FPS. Each sample becomes
+ * a linear keyform; downstream the segment encoder emits each pair as
+ * a Cubism type-0 (linear) segment. The bake count is
+ * `floor(durationMs / stepMs) + 1` (inclusive endpoints).
+ *
+ * Per `evaluateFCurve` (`fcurve.js:155`), every active modifier on the
+ * fcurve contributes to each sample — Cycles + Noise + Generator +
+ * Limits + Stepped + Envelope. The 3.D trigger gate at the caller
+ * decides which fcurves get baked; the bake itself is type-agnostic.
+ *
+ * @param {object} fcurve - source fcurve (not mutated)
+ * @param {number} durationMs - action duration in milliseconds
+ * @param {number} fps - sample rate (action.fps)
+ * @returns {object} cloned fcurve with baked keyforms + modifiers stripped
+ */
+function bakeFCurveModifiers(fcurve, durationMs, fps) {
+  const stepMs = 1000 / fps;
+  // +1 for the inclusive endpoint at t=durationMs.
+  const sampleCount = Math.max(2, Math.floor(durationMs / stepMs) + 1);
+  const baked = new Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    // Clamp the last sample to exactly durationMs to avoid fp drift past
+    // the action boundary (the runtime engine treats t > duration as
+    // out-of-range; Cubism's loop=false mode holds the last value).
+    const time = (i === sampleCount - 1) ? durationMs : i * stepMs;
+    const value = evaluateFCurve(fcurve, time);
+    baked[i] = {
+      time,
+      value,
+      interpolation: 'linear',
+      handleLeft: { time, value },
+      handleRight: { time, value },
+      handleType: { left: 'vector', right: 'vector' },
+      flag: 0,
+    };
+  }
+  // Strip modifiers — they've been baked in. Preserves every other
+  // field (target encoding, driver, id, etc.) via spread.
+  const { modifiers: _stripped, ...rest } = fcurve;
+  return { ...rest, keyforms: baked };
 }
 
 /**

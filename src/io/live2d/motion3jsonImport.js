@@ -28,6 +28,17 @@
  * `motion3json.js`'s exporter (Slice 2.G) this gives a byte-identical
  * round-trip on all curve types Cubism supports natively.
  *
+ * # Slice 3.D — Loop ↔ Cycles round-trip
+ *
+ * Cubism `Meta.Loop=true` maps to a head-of-stack `Cycles` FModifier on
+ * every imported fcurve with `data.after='repeat'` (sparse-default
+ * `before='none'`, `afterCycles=0`). This is the symmetric pair of
+ * `motion3json.js`'s `actionHasUniformLoopingCycles` exporter gate —
+ * import → re-export preserves the loop intent so a Cubism-authored
+ * loop motion round-trips byte-identically (including `Meta.Loop`).
+ * `Meta.Loop=false` (or missing) imports as zero modifiers; re-export
+ * also yields `Loop=false`.
+ *
  * @module io/live2d/motion3jsonImport
  */
 
@@ -93,6 +104,10 @@ export function parseMotion3Json(jsonText, opts) {
   const fps = numOr(meta.Fps, 24);
   const durationSec = numOr(meta.Duration, 2);
   const durationMs = Math.max(1, Math.round(durationSec * 1000));
+  // Slice 3.D — Loop ↔ Cycles symmetry. Cubism loop intent imports as a
+  // head-of-stack Cycles FModifier on every fcurve so the re-export gate
+  // (`actionHasUniformLoopingCycles` in motion3json.js) sees the signal.
+  const loopIntent = meta.Loop === true;
 
   /** @type {string[]} */
   const warnings = [];
@@ -119,10 +134,16 @@ export function parseMotion3Json(jsonText, opts) {
 
     if (target === 'Parameter') {
       const fc = buildParamFCurve(id, keyforms);
-      if (fc) fcurves.push(fc);
+      if (fc) {
+        if (loopIntent) attachLoopCyclesModifier(fc);
+        fcurves.push(fc);
+      }
     } else if (target === 'PartOpacity') {
       const fc = buildNodeFCurve(id, 'opacity', keyforms);
-      if (fc) fcurves.push(fc);
+      if (fc) {
+        if (loopIntent) attachLoopCyclesModifier(fc);
+        fcurves.push(fc);
+      }
     } else if (target === 'Model') {
       warnings.push(`Curve "${id}": Model-target curves not supported, skipped`);
     } else {
@@ -271,4 +292,22 @@ function decodeSegmentsToKeyframes(segs, warnings, ctx) {
 
 function numOr(v, fallback) {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * Slice 3.D — attach the Cubism-Loop-equivalent Cycles modifier to an
+ * imported fcurve in-place. Matches the exporter's
+ * `actionHasUniformLoopingCycles` gate exactly:
+ *   - head-of-stack (per 3.C `unshift` invariant)
+ *   - `data.after = 'repeat'`
+ *   - sparse defaults for the rest (`before='none'`, `afterCycles=0`)
+ *
+ * @param {object} fcurve - fcurve with `modifiers?` to mutate
+ */
+function attachLoopCyclesModifier(fcurve) {
+  if (!Array.isArray(fcurve.modifiers)) fcurve.modifiers = [];
+  fcurve.modifiers.unshift({
+    type: 'cycles',
+    data: { after: 'repeat' },
+  });
 }

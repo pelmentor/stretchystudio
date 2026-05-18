@@ -110,7 +110,10 @@ function nodeFcurve(nodeId, property, kfs) {
   assertEq(m.Version, 3, '1: Version=3 (Live2D motion3 v3)');
   assert(near(m.Meta.Duration, 1.0), '1a: Duration=1.0s (1000ms / 1000)');
   assertEq(m.Meta.Fps, 30, '1b: Fps=30 from action.fps');
-  assertEq(m.Meta.Loop, true, '1c: Loop default true');
+  // 3.D — no Cycles modifier present → Loop=false (was hardcoded true
+  // pre-3.D; the legacy "Live2D loops by convention" default is
+  // replaced by per-fcurve Cycles signal per plan §3.D).
+  assertEq(m.Meta.Loop, false, '1c: Loop=false when no Cycles modifier on fcurves');
   assertEq(m.Meta.CurveCount, 1, '1d: CurveCount=1');
   assertEq(m.Curves.length, 1, '1e: 1 curve emitted');
   assertEq(m.Curves[0].Target, 'Parameter', '1f: Target=Parameter');
@@ -189,32 +192,116 @@ function nodeFcurve(nodeId, property, kfs) {
     '4b: TotalPointCount sums across curves (3+2)');
 }
 
-// ── 5. Loop = true hardcoded (Stage 1.F audit-fix D-2 deviation) ──────────
+// ── 5. Loop is driven by per-fcurve Cycles modifier (Slice 3.D) ───────────
 
 {
-  // Per `motion3json.js` module JSDoc "Loop semantics — Blender deviation":
-  // SS does NOT honor `action.flag & ACT_CYCLIC` today. Live2D motions loop
-  // by convention; the Cyclic toggle is deferred to a future UI phase.
-  // The prior `opts.loop` parameter was dropped (Rule №2: callable-by-no-one
-  // is a Rule №1 anti-pattern — no production caller ever passed it).
-  const action = makeAction({
-    flag: 0,                                        // ACT_CYCLIC bit NOT set
-    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }])],
+  // Per `motion3json.js` module JSDoc "Loop semantics — Slice 3.D":
+  //   - No Cycles modifier on any fcurve → Loop=false
+  //   - ACT_CYCLIC flag bit currently NOT read (still reserved; will be
+  //     wired in lockstep with the ActionsEditor Cyclic-toggle UI)
+  //   - Uniform Cycles {before='none', after='repeat', afterCycles=0}
+  //     across ALL fcurves → Loop=true; original keyforms emitted as-is
+  //   - Mixed (some cycle, some don't) → Loop=false; cycling fcurves
+  //     baked via `evaluateFCurve`
+  const noCycles = makeAction({
+    flag: 0,
+    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }])],
   });
-  const m = generateMotion3Json(action);
-  assertEq(m.Meta.Loop, true,
-    '5: Loop=true hardcoded (ACT_CYCLIC integration deferred to Cyclic-toggle UI)');
+  assertEq(generateMotion3Json(noCycles).Meta.Loop, false,
+    '5: Loop=false when no Cycles modifier on any fcurve');
 
-  // Even with ACT_CYCLIC bit set, today's Loop is unchanged from the
-  // hardcoded default. When the Cyclic UI ships, this assertion flips to
-  // assert that `flag & ACT_CYCLIC` drives Loop.
-  const cyclic = makeAction({
-    flag: 1 << 13,                                  // ACT_CYCLIC = (1 << 13)
-    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }])],
+  // ACT_CYCLIC bit alone is NOT yet a signal (deferred wiring).
+  const cyclicFlagOnly = makeAction({
+    flag: 1 << 13,
+    fcurves: [paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }])],
   });
-  const m2 = generateMotion3Json(cyclic);
-  assertEq(m2.Meta.Loop, true,
-    '5a: Loop=true regardless of ACT_CYCLIC bit (deferred integration)');
+  assertEq(generateMotion3Json(cyclicFlagOnly).Meta.Loop, false,
+    '5a: Loop=false even with ACT_CYCLIC bit when no Cycles modifier (flag wiring deferred)');
+
+  // Uniform Cycles {before='none', after='repeat', afterCycles=0} on every fcurve → Loop=true.
+  const uniformlyLooping = makeAction({
+    fcurves: [
+      {
+        ...paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+        modifiers: [
+          { type: 'cycles', data: { after: 'repeat', afterCycles: 0 } },
+        ],
+      },
+      {
+        ...paramFcurve('Q', [{ time: 0, value: 0 }, { time: 500, value: 2 }]),
+        modifiers: [
+          { type: 'cycles', data: { after: 'repeat' } }, // sparse afterCycles defaults to 0
+        ],
+      },
+    ],
+  });
+  assertEq(generateMotion3Json(uniformlyLooping).Meta.Loop, true,
+    '5b: Loop=true when every fcurve has spec Cycles modifier');
+
+  // 'repeat_offset' (gradient-offset) does NOT count as a clean loop.
+  const offsetRepeat = makeAction({
+    fcurves: [{
+      ...paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+      modifiers: [{ type: 'cycles', data: { after: 'repeat_offset' } }],
+    }],
+  });
+  assertEq(generateMotion3Json(offsetRepeat).Meta.Loop, false,
+    '5c: Loop=false when after=repeat_offset (gradient offset is not a pure loop)');
+
+  // Non-zero afterCycles → bounded repeat, not infinite loop.
+  const boundedRepeat = makeAction({
+    fcurves: [{
+      ...paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+      modifiers: [{ type: 'cycles', data: { after: 'repeat', afterCycles: 3 } }],
+    }],
+  });
+  assertEq(generateMotion3Json(boundedRepeat).Meta.Loop, false,
+    '5d: Loop=false when afterCycles>0 (bounded repeat, not infinite)');
+
+  // Mixed: one fcurve cycles, another doesn't → Loop=false (cycling one gets baked).
+  const mixed = makeAction({
+    fps: 30, duration: 500,
+    fcurves: [
+      {
+        ...paramFcurve('Looping', [{ time: 0, value: 0 }, { time: 250, value: 1 }]),
+        modifiers: [{ type: 'cycles', data: { after: 'repeat' } }],
+      },
+      paramFcurve('Static', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+    ],
+  });
+  const mixedResult = generateMotion3Json(mixed);
+  assertEq(mixedResult.Meta.Loop, false,
+    '5e: Loop=false when mix of cycling + non-cycling fcurves');
+  // Looping fcurve was baked → its segment count is well above the
+  // pre-bake 1 segment (250ms cycle over 500ms duration at 30fps = ~15+ samples).
+  const loopingCurve = mixedResult.Curves.find((c) => c.Id === 'Looping');
+  assert(loopingCurve && loopingCurve.Segments.length > 5,
+    '5f: cycling fcurve baked into multi-segment curve when Loop=false');
+
+  // Muted Cycles modifier does NOT count.
+  const mutedCycles = makeAction({
+    fcurves: [{
+      ...paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+      modifiers: [{ type: 'cycles', muted: true, data: { after: 'repeat' } }],
+    }],
+  });
+  assertEq(generateMotion3Json(mutedCycles).Meta.Loop, false,
+    '5g: Loop=false when Cycles modifier is muted');
+
+  // Range-restricted Cycles modifier does NOT count (scoped, not whole-curve).
+  const restrictedCycles = makeAction({
+    fcurves: [{
+      ...paramFcurve('P', [{ time: 0, value: 0 }, { time: 500, value: 1 }]),
+      modifiers: [{
+        type: 'cycles',
+        useRestrictedRange: true,
+        sfra: 0, efra: 250,
+        data: { after: 'repeat' },
+      }],
+    }],
+  });
+  assertEq(generateMotion3Json(restrictedCycles).Meta.Loop, false,
+    '5h: Loop=false when Cycles modifier is range-restricted');
 }
 
 // ── 6. Empty action → valid skeleton with zero curves ──────────────────────
