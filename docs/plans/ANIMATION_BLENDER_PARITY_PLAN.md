@@ -1094,13 +1094,31 @@ Tests in
 [test_audit_fixes_2026_05_11_phase1_stage1f.mjs](../../scripts/test/test_audit_fixes_2026_05_11_phase1_stage1f.mjs)
 §1 (Slice 3.D semantics replace the Stage 1.F hardcoded-Loop pin).
 
-#### 3.E — Noise is special
+#### 3.E — Noise is special — SHIPPED 2026-05-18
 
 `Noise` outputs a Perlin field. The seed is derived from
 `(fcurveId, modifierId, time)` so the noise is stable across saves and
 deterministic for byte-fidelity tests. The export pipeline bakes Noise
 modifiers into explicit keyframes at the FPS of the target Action — Cubism
 has no live-noise primitive.
+
+**Implementation.** `hasActiveNoiseModifier(fcurve)` in
+[src/io/live2d/motion3json.js](../../src/io/live2d/motion3json.js)
+scans the modifier stack (Noise is value-only — no head-of-stack
+invariant, unlike Cycles). The bake gate now OR-composes the 3.D
+Cycles trigger with this new Noise trigger; Noise fires
+**unconditionally** (regardless of `Meta.Loop`) per plan §3.E. When a
+fcurve carries both Cycles AND Noise, the Noise trigger still bakes
+that channel even when the action would otherwise satisfy the uniform
+Cycles predicate — Cubism's runtime then loops over the baked
+Cycles+Noise samples (the only semantically coherent mapping; Cubism
+cannot reproduce per-cycle-independent noise). Determinism is
+inherited from `evaluateNoiseValue` in `fmodifiers.js`: same `(data,
+evaltime)` → bit-identical output via `perlinFbm2D`. Tests in
+[scripts/test/test_motion3jsonNoiseExport.mjs](../../scripts/test/test_motion3jsonNoiseExport.mjs)
+(23 assertions: bake-fires, mute/disabled skip, Cycles+Noise
+composition, determinism across runs, dual-Noise composition,
+mesh_verts+Noise path).
 
 #### 3.F — Tests
 

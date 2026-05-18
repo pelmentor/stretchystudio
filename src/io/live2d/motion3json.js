@@ -50,17 +50,42 @@
  * in a later slice (and will OR-compose with the Cycles signal at that
  * point: `Loop = ACT_CYCLIC || allFCurvesCycle`).
  *
- * # Bake scope — only Cycles in Slice 3.D
+ * # Bake scope — Slices 3.D (Cycles) + 3.E (Noise)
  *
  * The bake helper `bakeFCurveModifiers` calls `evaluateFCurve`, which
  * applies the full FModifier stack (Cycles + Noise + Generator + Limits
- * + Stepped + Envelope). However the **trigger** in this slice is
- * narrow: bake only when an fcurve has an active Cycles modifier AND
- * the action isn't uniformly looping. Per plan §3.E, Noise gets its
- * own unconditional bake trigger in a follow-up slice; until then,
- * Noise (and other modifiers) on non-Cycles fcurves are silently
- * dropped from the export. Acceptable for 3.D scope — the alternative
- * is gold-plating cross-slice and bleeds 3.E's substrate into 3.D.
+ * + Stepped + Envelope). The **trigger gate** OR-composes two
+ * independent conditions:
+ *
+ *   - **Cycles bake (3.D)**: fires when the action isn't uniformly
+ *     looping AND the fcurve carries an active head-of-stack Cycles
+ *     modifier. The companion `actionHasUniformLoopingCycles` predicate
+ *     keeps the keyforms as-authored when Loop=true so a Cubism runtime
+ *     loop preserves the user's intent.
+ *
+ *   - **Noise bake (3.E)**: fires UNCONDITIONALLY (regardless of Loop)
+ *     when the fcurve carries any active Noise modifier. Cubism has no
+ *     live-noise primitive — the only way to express a noise-augmented
+ *     curve in motion3.json is to bake it. Noise is value-only and can
+ *     live anywhere in the modifier stack, so detection scans the whole
+ *     list (no head-of-stack invariant).
+ *
+ * When both 3.D and 3.E triggers fire on the same fcurve (Cycles+Noise),
+ * a single bake pass folds both modifiers in. When Loop=true uniformly
+ * but a fcurve has Cycles+Noise, the Noise trigger still bakes that
+ * fcurve while Loop=true is preserved at the action level — the runtime
+ * then loops over the baked Cycles+Noise samples, which is the only
+ * semantically coherent mapping (Cubism can't reproduce per-cycle-
+ * independent noise; a single canonical noise sequence repeating each
+ * loop is the documented Blender→Cubism interpretation).
+ *
+ * Other modifiers (Generator / Limits / Stepped / Envelope) have no
+ * dedicated trigger in 3.D/3.E. Their values still fold into any bake
+ * that DOES fire (because `evaluateFCurve` applies them as a side
+ * effect), but a fcurve carrying only e.g. Limits + nothing else is
+ * NOT baked — its values ship through the keyform encoder unchanged.
+ * The remaining modifier types ship dedicated triggers in 3.F or
+ * follow-up plans as their export-bake semantics get specified.
  *
  * @module io/live2d/motion3json
  */
@@ -97,12 +122,15 @@ export function generateMotion3Json(action, opts = {}) {
     const target = decodeFCurveTarget(fcurve);
     if (!target) continue;
 
-    // 3.D — bake Cycles modifier into explicit keyforms when the action
-    // isn't uniformly looping. Bake is a no-op when fcurve has no active
-    // Cycles modifier (other modifier types deferred to 3.E+; see module
-    // JSDoc "Bake scope"). `effectiveFCurve.keyforms` flows downstream
-    // exactly like the original.
-    const effectiveFCurve = (!loop && hasActiveCyclesModifier(fcurve))
+    // Bake gate — 3.D Cycles + 3.E Noise (see module JSDoc "Bake scope").
+    // OR-composition: a fcurve hits bake if EITHER (a) the action isn't
+    // uniformly looping AND it carries active Cycles, OR (b) it carries
+    // active Noise regardless of Loop. `bakeFCurveModifiers` is
+    // modifier-type-agnostic — every active modifier folds into the
+    // sampled values via `evaluateFCurve`.
+    const shouldBake = hasActiveNoiseModifier(fcurve)
+      || (!loop && hasActiveCyclesModifier(fcurve));
+    const effectiveFCurve = shouldBake
       ? bakeFCurveModifiers(fcurve, durationMs, fps)
       : fcurve;
 
@@ -400,6 +428,38 @@ function getActiveCyclesModifier(fcurve) {
  */
 function hasActiveCyclesModifier(fcurve) {
   return getActiveCyclesModifier(fcurve) !== null;
+}
+
+/**
+ * Slice 3.E — True iff fcurve has ANY active (non-muted, non-disabled)
+ * Noise modifier anywhere in its modifier stack. Drives the
+ * unconditional Noise bake per plan §3.E ("Cubism has no live-noise
+ * primitive").
+ *
+ * Unlike Cycles, Noise is value-only with no head-of-stack invariant —
+ * Blender's evaluator (`fmodifier.cc:1568-1569` forward-walk value
+ * pass) processes Noise wherever it lives in the stack. So this scans
+ * the full list.
+ *
+ * Range-restricted Noise (`useRestrictedRange=true`) STILL triggers
+ * bake: the noise contributes within `[sfra, efra]` and contributes
+ * zero outside, but the bake is the only way to express either half in
+ * Cubism's keyform-only segment encoding. `useInfluence<1` likewise
+ * triggers bake — Cubism has no live-influence-blend primitive either.
+ *
+ * @param {{ modifiers?: Array<object> } | null | undefined} fcurve
+ * @returns {boolean}
+ */
+function hasActiveNoiseModifier(fcurve) {
+  const mods = fcurve && Array.isArray(fcurve.modifiers) ? fcurve.modifiers : null;
+  if (!mods || mods.length === 0) return false;
+  for (let i = 0; i < mods.length; i++) {
+    const m = mods[i];
+    if (!m || m.type !== 'noise') continue;
+    if (m.muted === true || m.disabled === true) continue;
+    return true;
+  }
+  return false;
 }
 
 /**
