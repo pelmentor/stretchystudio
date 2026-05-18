@@ -65,6 +65,11 @@
 import { evaluateDriver } from './driver.js';
 import { evaluateBezTripleSegment } from './fcurveEval.js';
 import { recalcKeyformHandles } from './fcurveHandles.js';
+import {
+  getFCurveModifiers,
+  evaluateTimeModifiers,
+  evaluateValueModifiers,
+} from './fmodifiers.js';
 
 /**
  * @typedef {Object} HandlePoint
@@ -149,8 +154,20 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  */
 export function evaluateFCurve(fcurve, time, evalContext = {}) {
   if (!fcurve) return 0;
-  // Step 1: keyframe-driven base value.
   const keyforms = Array.isArray(fcurve.keyforms) ? fcurve.keyforms : [];
+  const modifiers = getFCurveModifiers(fcurve);
+
+  // Step 1: time-modifying modifier pass.
+  // Reverse-walks the modifier stack (last -> first) per Blender's
+  // `evaluate_time_fmodifiers` at `fmodifier.cc:1490-1548`. Cycles +
+  // Limits + Stepped contribute; Noise + Generator + Envelope are
+  // value-only and skipped. Scratch carries Cycles' `cycyofs` to the
+  // value pass.
+  const { effectiveTime, scratch } = modifiers.length > 0
+    ? evaluateTimeModifiers(modifiers, fcurve, time)
+    : { effectiveTime: time, scratch: null };
+
+  // Step 2: keyframe sample at effectiveTime.
   let baseValue = 0;
   if (keyforms.length === 0) {
     baseValue = 0;
@@ -159,36 +176,47 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
   } else {
     // Find the bracketing keyframes via linear scan (binary search is
     // cheap upgrade later; today's curves are 2-5 keyforms typically).
-    if (time <= keyforms[0].time) {
+    if (effectiveTime <= keyforms[0].time) {
       baseValue = keyforms[0].value;
-    } else if (time >= keyforms[keyforms.length - 1].time) {
+    } else if (effectiveTime >= keyforms[keyforms.length - 1].time) {
       baseValue = keyforms[keyforms.length - 1].value;
     } else {
       for (let i = 0; i < keyforms.length - 1; i++) {
         const a = keyforms[i];
         const b = keyforms[i + 1];
-        if (time >= a.time && time <= b.time) {
+        if (effectiveTime >= a.time && effectiveTime <= b.time) {
           // Slice 2.C: full BezTriple evaluator — bezier (cubic-bezier
           // inversion + value sampling), 10 named easings, plus the
           // legacy linear/constant. Mirrors Blender's
           // `fcurve_eval_keyframes_interpolate` (fcurve.cc:2026).
-          baseValue = evaluateBezTripleSegment(a, b, time);
+          baseValue = evaluateBezTripleSegment(a, b, effectiveTime);
           break;
         }
       }
     }
   }
 
-  // Step 2: driver override.
+  // Step 3: value-modifying modifier pass.
+  // Forward-walks the modifier stack (first -> last) per Blender's
+  // `evaluate_value_fmodifiers` at `fmodifier.cc:1550-1595`.
+  const modifiedValue = modifiers.length > 0
+    ? evaluateValueModifiers(modifiers, fcurve, baseValue, effectiveTime, scratch)
+    : baseValue;
+
+  // Step 4: driver override.
+  // Per Blender's eval order, drivers REPLACE keyframe-based output
+  // entirely; modifier output is the "keyframe-based" half of that
+  // distinction, so the driver wins over the modifier-composed value
+  // when it resolves.
   if (fcurve.driver) {
     try {
       const driverValue = evaluateDriver(fcurve.driver, evalContext);
       if (Number.isFinite(driverValue)) return driverValue;
     } catch {
-      // Driver errors fall back to keyframe value -- Blender's behaviour.
+      // Driver errors fall back to modifier-composed value -- Blender's behaviour.
     }
   }
-  return baseValue;
+  return modifiedValue;
 }
 
 /**

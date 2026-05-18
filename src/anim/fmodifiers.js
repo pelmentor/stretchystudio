@@ -465,3 +465,775 @@ export function getFCurveModifiers(fcurve) {
   if (!fcurve || !Array.isArray(fcurve.modifiers)) return EMPTY_MODIFIERS;
   return fcurve.modifiers;
 }
+
+// ===========================================================================
+// Slice 3.B -- F-Curve modifier evaluator
+//
+// Port of Blender's two-pass evaluator at
+// `reference/blender/source/blender/blenkernel/intern/fmodifier.cc:1490-1595`
+// (`evaluate_time_fmodifiers` + `evaluate_value_fmodifiers`).
+//
+// # Architecture
+//
+// Modifiers split into two roles:
+//
+//   - **time-modifying**: warp `evaltime` BEFORE the keyframe sample.
+//     Walked in REVERSE order (last index --> first index) per
+//     `fmodifier.cc:1515-1517`. Reverse-walk creates a "macro to micro
+//     waterfall" so multiple time warps compose without re-evaluation
+//     cascades.
+//
+//   - **value-modifying**: warp the sampled `cvalue` AFTER the keyframe
+//     sample. Walked in FORWARD order (first --> last) per
+//     `fmodifier.cc:1568-1569`. Standard stack semantics.
+//
+// Per-type dispatch (matches the FModifierTypeInfo `evaluate_modifier_time`
+// + `evaluate_modifier` pointers at `fmodifier.cc:780-794` (Cycles),
+// `:869-883` (Noise), `:234-248` (Generator), `:924-938` (Limits),
+// `:984-1003` (Stepped), `:483-497` (Envelope)):
+//
+//   |   type    | time pass | value pass | storage handoff |
+//   |-----------|-----------|------------|-----------------|
+//   | cycles    |    YES    |    YES     | cycyofs (set in time, added in value) |
+//   | noise     |    --     |    YES     | none |
+//   | generator |    --     |    YES     | none |
+//   | limits    |    YES    |    YES     | none (X clamp in time, Y clamp in value) |
+//   | stepped   |    YES    |    --      | none |
+//   | envelope  |    --     |    YES     | none |
+//
+// # Influence + range gate
+//
+// Port of `eval_fmodifier_influence` at `fmodifier.cc:1443-1488`:
+//   - if `useInfluence` flag set: use `modifier.influence`, else 1.0
+//   - if `useRestrictedRange` flag set AND evaltime outside `[sfra, efra]`:
+//     influence = 0 (modifier has no effect)
+//   - inside `[sfra, sfra+blendin]`: influence *= linear ramp (fade in)
+//   - inside `[efra-blendout, efra]`: influence *= linear ramp (fade out)
+//
+// The final blend matches Blender's
+// `interpf(nval, original, influence) = nval*influence + original*(1-influence)`
+// so influence=1 yields the new value, influence=0 yields the unchanged
+// original (`fmodifier.cc:1540` + `:1590`).
+//
+// # Disabled / Muted gate
+//
+// Per `fmodifier.cc:1533` and `:1582`: a modifier is skipped entirely when
+// either `disabled` (internal eval-failure flag) or `muted` (user toggle)
+// is true.
+//
+// # Cycles placement constraint
+//
+// Blender asserts Cycles modifiers MUST be at the head of the array
+// (`fmodifier.cc:635` `BLI_assert(fcm->prev == nullptr)`) so the reverse
+// time-walk processes them LAST -- after all other time warps have
+// applied. SS doesn't enforce this at the evaluator; 3.C UI is
+// responsible for keeping Cycles at index 0 of the stack.
+//
+// # Noise: not per-FCurve-seeded (deviation from plan §3.E)
+//
+// The plan §3.E claims Noise's seed is `(fcurveId, modifierId, time)`.
+// Blender doesn't seed per-fcurve: the noise is determined ENTIRELY by
+// `(size, phase, offset, depth, lacunarity, roughness, evaltime)` per
+// `fmodifier.cc:843-848`. Two Noise modifiers on different FCurves with
+// the same params produce the same noise pattern -- this matches expected
+// user behavior ("change phase to get a different pattern"). SS port
+// matches Blender; the plan claim is documented as wrong.
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Perlin 2D noise primitive
+//
+// Ken Perlin's "Improved Noise" reference algorithm (SIGGRAPH 2002).
+// Used by `evaluateNoiseValue` as the per-sample noise source; wrapped
+// into a fractal-Brownian-motion summation that mirrors Blender's
+// `noise::perlin_fbm<float2>` at
+// `reference/blender/source/blender/blenlib/intern/noise.cc`.
+//
+// SS deviation from Blender:
+//   - Blender's `perlin_fbm` uses an internal hash-based gradient
+//     scheme (`BLI_noise.hh`).
+//   - SS uses Ken Perlin's permutation-table approach.
+// Both produce deterministic, smooth noise with the same FBM math
+// (octave summation with frequency *= lacunarity and amplitude *=
+// roughness). Sample values won't match Blender bit-for-bit, but the
+// statistical character (mean ~0.5, range ~[0,1], smooth continuity)
+// matches, so 3.E's bake-at-export pipeline can use SS noise without
+// any Blender round-trip dependency.
+// ---------------------------------------------------------------------------
+
+/** Ken Perlin's reference 256-entry permutation table, doubled for wrap-free indexing. */
+const PERLIN_PERM = (() => {
+  const base = [
+    151, 160, 137,  91,  90,  15, 131,  13, 201,  95,  96,  53, 194, 233,   7, 225,
+    140,  36, 103,  30,  69, 142,   8,  99,  37, 240,  21,  10,  23, 190,   6, 148,
+    247, 120, 234,  75,   0,  26, 197,  62,  94, 252, 219, 203, 117,  35,  11,  32,
+     57, 177,  33,  88, 237, 149,  56,  87, 174,  20, 125, 136, 171, 168,  68, 175,
+     74, 165,  71, 134, 139,  48,  27, 166,  77, 146, 158, 231,  83, 111, 229, 122,
+     60, 211, 133, 230, 220, 105,  92,  41,  55,  46, 245,  40, 244, 102, 143,  54,
+     65,  25,  63, 161,   1, 216,  80,  73, 209,  76, 132, 187, 208,  89,  18, 169,
+    200, 196, 135, 130, 116, 188, 159,  86, 164, 100, 109, 198, 173, 186,   3,  64,
+     52, 217, 226, 250, 124, 123,   5, 202,  38, 147, 118, 126, 255,  82,  85, 212,
+    207, 206,  59, 227,  47,  16,  58,  17, 182, 189,  28,  42, 223, 183, 170, 213,
+    119, 248, 152,   2,  44, 154, 163,  70, 221, 153, 101, 155, 167,  43, 172,   9,
+    129,  22,  39, 253,  19,  98, 108, 110,  79, 113, 224, 232, 178, 185, 112, 104,
+    218, 246,  97, 228, 251,  34, 242, 193, 238, 210, 144,  12, 191, 179, 162, 241,
+     81,  51, 145, 235, 249,  14, 239, 107,  49, 192, 214,  31, 181, 199, 106, 157,
+    184,  84, 204, 176, 115, 121,  50,  45, 127,   4, 150, 254, 138, 236, 205,  93,
+    222, 114,  67,  29,  24,  72, 243, 141, 128, 195,  78,  66, 215,  61, 156, 180,
+  ];
+  const doubled = new Uint8Array(512);
+  for (let i = 0; i < 256; i++) doubled[i] = base[i];
+  for (let i = 0; i < 256; i++) doubled[256 + i] = base[i];
+  return doubled;
+})();
+
+/** Quintic smoothstep `6t^5 - 15t^4 + 10t^3` (Perlin 2002). */
+function perlinFade(t) {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+/** Linear interpolation. */
+function perlinLerp(t, a, b) {
+  return a + t * (b - a);
+}
+
+/**
+ * Perlin gradient function for 2D. Selects one of 12 cube-edge gradients
+ * via the low 4 bits of the hash and dot-products with (x, y).
+ *
+ * Reference: Ken Perlin's reference 3D `grad` adapted to 2D by treating
+ * the third axis as zero. Standard JS Perlin port.
+ */
+function perlinGrad(hash, x, y) {
+  const h = hash & 15;
+  const u = h < 8 ? x : y;
+  const v = h < 4 ? y : (h === 12 || h === 14 ? x : 0);
+  return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+}
+
+/**
+ * Ken Perlin's 2D improved noise. Returns a smooth pseudo-random value
+ * in approximately `[-1, +1]` for any (x, y) input. Deterministic across
+ * runs -- same input always produces same output.
+ *
+ * @param {number} x
+ * @param {number} y
+ * @returns {number}
+ */
+export function perlinNoise2D(x, y) {
+  const X = Math.floor(x) & 255;
+  const Y = Math.floor(y) & 255;
+  const xf = x - Math.floor(x);
+  const yf = y - Math.floor(y);
+  const u = perlinFade(xf);
+  const v = perlinFade(yf);
+  const P = PERLIN_PERM;
+  const A = P[X] + Y;
+  const B = P[X + 1] + Y;
+  return perlinLerp(v,
+    perlinLerp(u, perlinGrad(P[A],     xf,     yf),
+                  perlinGrad(P[B],     xf - 1, yf)),
+    perlinLerp(u, perlinGrad(P[A + 1], xf,     yf - 1),
+                  perlinGrad(P[B + 1], xf - 1, yf - 1)));
+}
+
+/**
+ * Fractal Brownian Motion summation of `perlinNoise2D`. Matches Blender's
+ * `noise::perlin_fbm` at `noise.cc` -- octaves are summed with frequency
+ * scaled by `lacunarity` per octave and amplitude scaled by `roughness`
+ * per octave. The result is renormalised to roughly `[0, 1]` (Blender's
+ * `perlin_fbm` with `normalize=true` flag — `fmodifier.cc:848`).
+ *
+ * `depth` is the number of additional octaves on top of the base octave;
+ * `depth = 0` is single-octave Perlin (Blender's default new-modifier
+ * value at `fmodifier.cc:807`).
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {number} depth -- number of additional octaves (0..N)
+ * @param {number} roughness -- amplitude multiplier per octave
+ * @param {number} lacunarity -- frequency multiplier per octave
+ * @returns {number} approximately in [0, 1]
+ */
+export function perlinFbm2D(x, y, depth, roughness, lacunarity) {
+  let value = 0;
+  let amplitude = 1;
+  let maxAmplitude = 0;
+  let freq = 1;
+  const octaves = Math.max(0, Math.floor(depth)) + 1;
+  for (let i = 0; i < octaves; i++) {
+    value += amplitude * perlinNoise2D(x * freq, y * freq);
+    maxAmplitude += amplitude;
+    amplitude *= roughness;
+    freq *= lacunarity;
+  }
+  if (maxAmplitude === 0) return 0.5;
+  // Renormalise from Perlin's ~[-1,+1] to [0,1] (matches Blender's
+  // `normalize=true` flag which divides by total amplitude then
+  // remaps via `(n + 1) * 0.5`).
+  return (value / maxAmplitude + 1) * 0.5;
+}
+
+// ---------------------------------------------------------------------------
+// Per-modifier influence (range + blendin/blendout)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the effective influence of a modifier at `evaltime`. Ports
+ * `eval_fmodifier_influence` at `fmodifier.cc:1443-1488`.
+ *
+ * Returns 0 when the modifier is outside its restricted range (and the
+ * range restriction is active) -- meaning the modifier has no effect.
+ * Returns the modifier's `influence` (or 1.0 when `useInfluence=false`)
+ * scaled by the linear blendin/blendout ramps when inside them.
+ *
+ * @param {FModifier} mod
+ * @param {number} evaltime
+ * @returns {number} 0..1
+ */
+export function computeFModifierInfluence(mod, evaltime) {
+  if (!mod) return 0;
+  const influence = mod.useInfluence === true ? (Number.isFinite(mod.influence) ? mod.influence : 0) : 1;
+  if (mod.useRestrictedRange !== true) return influence;
+  const sfra = Number.isFinite(mod.sfra) ? mod.sfra : 0;
+  const efra = Number.isFinite(mod.efra) ? mod.efra : 0;
+  if (evaltime < sfra || evaltime > efra) return 0;
+  const blendin = Number.isFinite(mod.blendin) ? mod.blendin : 0;
+  const blendout = Number.isFinite(mod.blendout) ? mod.blendout : 0;
+  if (blendin !== 0 && evaltime >= sfra && evaltime <= sfra + blendin) {
+    // Linear fade-in: at evaltime=sfra -> 0; at evaltime=sfra+blendin -> influence.
+    // Matches `fmodifier.cc:1472-1474`: `influence * (evaltime - a) / (b - a)`
+    // with a=sfra, b=sfra+blendin.
+    return influence * (evaltime - sfra) / blendin;
+  }
+  if (blendout !== 0 && evaltime <= efra && evaltime >= efra - blendout) {
+    // Linear fade-out: at evaltime=efra-blendout -> influence; at evaltime=efra -> 0.
+    // Matches `fmodifier.cc:1480-1482`: `influence * (evaltime - a) / (b - a)`
+    // with a=efra, b=efra-blendout. The fraction is NEGATIVE; b-a is also
+    // negative; the ratio is positive and goes from 1 at b to 0 at a.
+    return influence * (evaltime - efra) / (-blendout);
+  }
+  return influence;
+}
+
+/**
+ * Blender's `interpf(a, b, t)` helper: `a*t + b*(1-t)`. Used for the
+ * influence blend at `fmodifier.cc:1540` (time) and `:1590` (value).
+ *
+ * @param {number} a -- new value (modifier output)
+ * @param {number} b -- original value (modifier input)
+ * @param {number} t -- influence 0..1
+ * @returns {number}
+ */
+function interpf(a, b, t) {
+  return a * t + b * (1 - t);
+}
+
+// ---------------------------------------------------------------------------
+// Disabled / muted gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when the modifier should be skipped at eval time. Mirrors
+ * the gate at `fmodifier.cc:1533` and `:1582`:
+ * `(fcm->flag & (FMODIFIER_FLAG_DISABLED | FMODIFIER_FLAG_MUTED)) == 0`.
+ *
+ * @param {FModifier} mod
+ * @returns {boolean}
+ */
+function isModifierSkipped(mod) {
+  if (!mod) return true;
+  if (mod.disabled === true) return true;
+  if (mod.muted === true) return true;
+  return false;
+}
+
+/**
+ * Returns true when the modifier's restricted range excludes evaltime
+ * entirely (early-out before influence calc). Mirrors `fmodifier.cc:1528`
+ * + `:1578`: `if RANGERESTRICT then sfra <= evaltime <= efra`.
+ *
+ * @param {FModifier} mod
+ * @param {number} evaltime
+ * @returns {boolean}
+ */
+function isOutsideRestrictedRange(mod, evaltime) {
+  if (mod.useRestrictedRange !== true) return false;
+  const sfra = Number.isFinite(mod.sfra) ? mod.sfra : 0;
+  const efra = Number.isFinite(mod.efra) ? mod.efra : 0;
+  return evaltime < sfra || evaltime > efra;
+}
+
+// ---------------------------------------------------------------------------
+// Per-type time evaluators
+// ---------------------------------------------------------------------------
+
+/**
+ * Cycles -- time pass. Ports `fcm_cycles_time` at `fmodifier.cc:620-768`.
+ *
+ * Computes the cyclic remapping of `evaltime` based on the FCurve's first
+ * and last keyframe times, and (for the 'repeat_offset' / CYCLIC_OFFSET
+ * mode) writes the per-cycle Y-offset to `scratch.cycyofs` so the value
+ * pass can apply it.
+ *
+ * Returns the new evaltime; if the modifier doesn't apply (in-range,
+ * cycles exhausted, or no keyframes), returns `evaltime` unchanged.
+ *
+ * @param {FModifier} mod
+ * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
+ * @param {number} evaltime
+ * @param {{ cycyofs?: number }} scratch -- mutated in place
+ * @returns {number}
+ */
+export function evaluateCyclesTime(mod, fcurve, evaltime, scratch) {
+  scratch.cycyofs = 0;
+  if (!fcurve || !Array.isArray(fcurve.keyforms) || fcurve.keyforms.length === 0) {
+    return evaltime;
+  }
+  const data = /** @type {FModCyclesData} */ (mod.data || {});
+  const keyforms = fcurve.keyforms;
+  const firstKey = keyforms[0];
+  const lastKey = keyforms[keyforms.length - 1];
+  const firstX = firstKey.time;
+  const firstY = firstKey.value;
+  const lastX = lastKey.time;
+  const lastY = lastKey.value;
+
+  let side = 0;
+  let mode = 'none';
+  let cycles = 0;
+  let ofs = 0;
+  if (evaltime < firstX) {
+    if (data.before && data.before !== 'none') {
+      side = -1;
+      mode = data.before;
+      cycles = Number.isFinite(data.beforeCycles) ? data.beforeCycles : 0;
+      ofs = firstX;
+    }
+  } else if (evaltime > lastX) {
+    if (data.after && data.after !== 'none') {
+      side = 1;
+      mode = data.after;
+      cycles = Number.isFinite(data.afterCycles) ? data.afterCycles : 0;
+      ofs = lastX;
+    }
+  }
+  if (side === 0 || mode === 'none') return evaltime;
+
+  const cycdx = lastX - firstX;
+  const cycdy = lastY - firstY;
+  if (cycdx === 0) return evaltime;
+
+  // Cycle count + remainder. Per `fmodifier.cc:702-704`, `cycle` uses
+  // double precision to avoid the precision drift bug #119360 where
+  // single-precision `cycle` could jump to the next integer while `cyct`
+  // is still behind.
+  const cycle = side * (evaltime - ofs) / cycdx;
+  const cyct = ((evaltime - ofs) % cycdx + cycdx) % cycdx; // JS-safe positive modulo
+
+  if (cycles !== 0 && cycle > cycles) return evaltime;
+
+  let cycyofs = 0;
+  if (mode === 'repeat_offset') {
+    // `fmodifier.cc:719-727`: floor for side<0, ceil for side>0; times cycdy.
+    cycyofs = side < 0 ? Math.floor((evaltime - ofs) / cycdx) : Math.ceil((evaltime - ofs) / cycdx);
+    cycyofs *= cycdy;
+  }
+
+  let newEvaltime;
+  if (cyct === 0) {
+    // At a cycle boundary -- use the appropriate endpoint
+    // (`fmodifier.cc:730-737`).
+    newEvaltime = side === 1 ? lastX : firstX;
+    if (mode === 'mirror' && (Math.floor(cycle) % 2) !== 0) {
+      newEvaltime = side === 1 ? firstX : lastX;
+    }
+  } else if (mode === 'mirror' && (Math.floor(cycle + 1) % 2) !== 0) {
+    // Odd cycle in mirror mode -- play this cycle in reverse
+    // (`fmodifier.cc:739-751`).
+    newEvaltime = side < 0 ? firstX - cyct : lastX - cyct;
+  } else {
+    newEvaltime = firstX + cyct;
+  }
+  if (newEvaltime < firstX) newEvaltime += cycdx;
+
+  scratch.cycyofs = cycyofs;
+  return newEvaltime;
+}
+
+/**
+ * Limits -- time pass. Ports `fcm_limits_time` at `fmodifier.cc:887-905`.
+ *
+ * Clamps `evaltime` to `[minX, maxX]` when the X-axis use flags are set.
+ *
+ * @param {FModifier} mod
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateLimitsTime(mod, evaltime) {
+  const data = /** @type {FModLimitsData} */ (mod.data || {});
+  if (data.useMinX === true && Number.isFinite(data.minX) && evaltime < data.minX) {
+    return data.minX;
+  }
+  if (data.useMaxX === true && Number.isFinite(data.maxX) && evaltime > data.maxX) {
+    return data.maxX;
+  }
+  return evaltime;
+}
+
+/**
+ * Stepped -- time pass. Ports `fcm_stepped_time` at `fmodifier.cc:951-982`.
+ *
+ * Snaps `evaltime` down to the nearest step boundary (`stepSize` ms apart,
+ * offset by `offset` ms). When the optional `useStartTime`/`useEndTime`
+ * gates exclude the eval position, returns the original evaltime
+ * unchanged.
+ *
+ * Note: SS positive-sense `useStartTime`/`useEndTime` semantically equals
+ * Blender's negative-sense `FCM_STEPPED_NO_BEFORE`/`_NO_AFTER` -- see the
+ * typedef block above for the bit-flip rationale.
+ *
+ * @param {FModifier} mod
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateSteppedTime(mod, evaltime) {
+  const data = /** @type {FModSteppedData} */ (mod.data || {});
+  if (data.useStartTime === true && Number.isFinite(data.startTime) && evaltime < data.startTime) {
+    return evaltime;
+  }
+  if (data.useEndTime === true && Number.isFinite(data.endTime) && evaltime > data.endTime) {
+    return evaltime;
+  }
+  const stepSize = Number.isFinite(data.stepSize) && data.stepSize > 0 ? data.stepSize : 2;
+  const offset = Number.isFinite(data.offset) ? data.offset : 0;
+  const snapblock = Math.floor((evaltime - offset) / stepSize);
+  return snapblock * stepSize + offset;
+}
+
+// ---------------------------------------------------------------------------
+// Per-type value evaluators
+// ---------------------------------------------------------------------------
+
+/**
+ * Cycles -- value pass. Ports `fcm_cycles_evaluate` at
+ * `fmodifier.cc:770-778`. Adds the per-cycle Y-offset computed in the
+ * time pass.
+ *
+ * @param {number} cvalue
+ * @param {{ cycyofs?: number }} scratch
+ * @returns {number}
+ */
+export function evaluateCyclesValue(cvalue, scratch) {
+  return cvalue + (Number.isFinite(scratch.cycyofs) ? scratch.cycyofs : 0);
+}
+
+/**
+ * Noise -- value pass. Ports `fcm_noise_evaluate` at `fmodifier.cc:814-867`
+ * (modern Perlin path; legacy BLI_noise turbulence path not ported).
+ *
+ * @param {FModifier} mod
+ * @param {number} cvalue
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateNoiseValue(mod, cvalue, evaltime) {
+  const data = /** @type {FModNoiseData} */ (mod.data || {});
+  const size = Number.isFinite(data.size) ? data.size : 1000;
+  const strength = Number.isFinite(data.strength) ? data.strength : 1;
+  const phase = Number.isFinite(data.phase) ? data.phase : 1;
+  const offset = Number.isFinite(data.offset) ? data.offset : 0;
+  const depth = Number.isFinite(data.depth) ? data.depth : 0;
+  const lacunarity = Number.isFinite(data.lacunarity) ? data.lacunarity : 2;
+  const roughness = Number.isFinite(data.roughness) ? data.roughness : 0.5;
+  const scale = size === 0 ? 0 : 1 / size;
+  // 0.61803398874 is Blender's golden-ratio time offset
+  // (`fmodifier.cc:840`) used to keep t=0 off Perlin's origin.
+  const GOLDEN = 0.61803398874;
+  const x = (evaltime - offset) * scale + GOLDEN;
+  const noise = perlinFbm2D(x, phase, depth, roughness, lacunarity);
+  const blend = data.blendType || 'replace';
+  switch (blend) {
+    case 'add':
+      return cvalue + noise * strength;
+    case 'subtract':
+      return cvalue - noise * strength;
+    case 'multiply':
+      return cvalue * noise * strength;
+    case 'replace':
+    default:
+      // Matches `fmodifier.cc:864`: `*cvalue = *cvalue + (noise - 0.5f) * strength`.
+      // Despite the name "REPLACE", the actual implementation ADDS a
+      // centred noise (subtracting 0.5 brings the mean from ~0.5 to ~0).
+      return cvalue + (noise - 0.5) * strength;
+  }
+}
+
+/**
+ * Generator -- value pass. Ports `fcm_generator_evaluate` at
+ * `fmodifier.cc:157-232`.
+ *
+ * Two modes:
+ *   - `'polynomial'` -- `c0 + c1*x + c2*x^2 + ...`
+ *   - `'polynomial_factorised'` -- `(c0*x + c1) * (c2*x + c3) * ...`
+ *     (each pair `[a, b]` is `a*x + b`; matches `cp[0]*evaltime + cp[1]`
+ *     at `fmodifier.cc:217`)
+ *
+ * The `additive` flag selects between replace (`cvalue = generated`) and
+ * additive (`cvalue += generated`) blend; mirrors
+ * `fmodifier.cc:194-201` + `:221-228`.
+ *
+ * @param {FModifier} mod
+ * @param {number} cvalue
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateGeneratorValue(mod, cvalue, evaltime) {
+  const data = /** @type {FModGeneratorData} */ (mod.data || {});
+  const coefficients = Array.isArray(data.coefficients) ? data.coefficients : [];
+  if (coefficients.length === 0) return cvalue;
+  const mode = data.mode || 'polynomial';
+  let value;
+  if (mode === 'polynomial_factorised') {
+    value = 1;
+    // Iterate pairs; ignore any trailing unpaired coefficient
+    // (matches Blender's `poly_order` cap).
+    for (let i = 0; i + 1 < coefficients.length; i += 2) {
+      value *= coefficients[i] * evaltime + coefficients[i + 1];
+    }
+  } else {
+    // polynomial: sum c[i] * x^i, with powers[0]=1 per `fmodifier.cc:184`.
+    value = 0;
+    let pow = 1;
+    for (let i = 0; i < coefficients.length; i++) {
+      value += coefficients[i] * pow;
+      pow *= evaltime;
+    }
+  }
+  return data.additive === true ? cvalue + value : value;
+}
+
+/**
+ * Limits -- value pass. Ports `fcm_limits_evaluate` at
+ * `fmodifier.cc:907-922`. Clamps `cvalue` to `[minY, maxY]` when the
+ * Y-axis use flags are set.
+ *
+ * @param {FModifier} mod
+ * @param {number} cvalue
+ * @returns {number}
+ */
+export function evaluateLimitsValue(mod, cvalue) {
+  const data = /** @type {FModLimitsData} */ (mod.data || {});
+  let v = cvalue;
+  if (data.useMinY === true && Number.isFinite(data.minY) && v < data.minY) v = data.minY;
+  if (data.useMaxY === true && Number.isFinite(data.maxY) && v > data.maxY) v = data.maxY;
+  return v;
+}
+
+/**
+ * Envelope -- value pass. Ports `fcm_envelope_evaluate` at
+ * `fmodifier.cc:425-481`.
+ *
+ * Linearly interpolates per-time `(min, max)` from the sorted control
+ * points (clamped to first/last outside the range). Then remaps `cvalue`
+ * from the reference range `[referenceValue + defaultMin, referenceValue
+ * + defaultMax]` into the per-time `[min, max]` range:
+ *
+ *   `fac = (cvalue - (referenceValue + defaultMin)) / (defaultMax - defaultMin)`
+ *   `output = min + fac * (max - min)`
+ *
+ * Matches `fmodifier.cc:479-480`.
+ *
+ * @param {FModifier} mod
+ * @param {number} cvalue
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateEnvelopeValue(mod, cvalue, evaltime) {
+  const data = /** @type {FModEnvelopeData} */ (mod.data || {});
+  const points = Array.isArray(data.controlPoints) ? data.controlPoints : [];
+  if (points.length === 0) return cvalue;
+  const referenceValue = Number.isFinite(data.referenceValue) ? data.referenceValue : 0;
+  const defaultMin = Number.isFinite(data.defaultMin) ? data.defaultMin : 0;
+  const defaultMax = Number.isFinite(data.defaultMax) ? data.defaultMax : 0;
+  const span = defaultMax - defaultMin;
+  if (span === 0) return cvalue;
+
+  let min;
+  let max;
+  if (points[0].time >= evaltime) {
+    min = points[0].min;
+    max = points[0].max;
+  } else if (points[points.length - 1].time <= evaltime) {
+    min = points[points.length - 1].min;
+    max = points[points.length - 1].max;
+  } else {
+    min = points[0].min;
+    max = points[0].max;
+    for (let a = 0; a < points.length - 1; a++) {
+      const prev = points[a];
+      const next = points[a + 1];
+      if (prev.time <= evaltime && next.time >= evaltime) {
+        const diff = next.time - prev.time;
+        if (diff === 0) {
+          min = prev.min;
+          max = prev.max;
+        } else {
+          const afac = (evaltime - prev.time) / diff;
+          const bfac = (next.time - evaltime) / diff;
+          min = bfac * prev.min + afac * next.min;
+          max = bfac * prev.max + afac * next.max;
+        }
+        break;
+      }
+    }
+  }
+  const fac = (cvalue - (referenceValue + defaultMin)) / span;
+  return min + fac * (max - min);
+}
+
+// ---------------------------------------------------------------------------
+// Two-pass dispatcher
+// ---------------------------------------------------------------------------
+
+/**
+ * Time-modifying pass. Walks the modifier stack in REVERSE (last index
+ * --> first index) per `fmodifier.cc:1515-1517` and composes each
+ * time-affecting modifier's `effective_time` transformation.
+ *
+ * Cycles + Limits + Stepped contribute; Noise + Generator + Envelope are
+ * value-only and skipped here.
+ *
+ * Returns `{ effectiveTime, scratchByModifierId }`. The scratch map is
+ * keyed by `modifier.id` and carries per-modifier state that the value
+ * pass needs to consume (today only Cycles' `cycyofs`).
+ *
+ * @param {FModifier[]} modifiers
+ * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
+ * @param {number} evaltime
+ * @returns {{ effectiveTime: number, scratch: Map<string, { cycyofs?: number }> }}
+ */
+export function evaluateTimeModifiers(modifiers, fcurve, evaltime) {
+  const scratch = new Map();
+  if (!Array.isArray(modifiers) || modifiers.length === 0) {
+    return { effectiveTime: evaltime, scratch };
+  }
+  let t = evaltime;
+  // REVERSE walk (`fmodifier.cc:1515-1517`): start at last, step via prev.
+  for (let i = modifiers.length - 1; i >= 0; i--) {
+    const mod = modifiers[i];
+    if (!mod || isModifierSkipped(mod)) continue;
+    if (isOutsideRestrictedRange(mod, t)) continue;
+    let nval = t;
+    let touched = false;
+    switch (mod.type) {
+      case 'cycles': {
+        const s = { cycyofs: 0 };
+        nval = evaluateCyclesTime(mod, fcurve, t, s);
+        if (mod.id) scratch.set(mod.id, s);
+        touched = true;
+        break;
+      }
+      case 'limits':
+        nval = evaluateLimitsTime(mod, t);
+        touched = true;
+        break;
+      case 'stepped':
+        nval = evaluateSteppedTime(mod, t);
+        touched = true;
+        break;
+      default:
+        // value-only modifier: no contribution to time pass
+        continue;
+    }
+    if (!touched) continue;
+    const influence = computeFModifierInfluence(mod, t);
+    // `fmodifier.cc:1540`: evaltime = interpf(nval, evaltime, influence)
+    t = interpf(nval, t, influence);
+  }
+  return { effectiveTime: t, scratch };
+}
+
+/**
+ * Value-modifying pass. Walks the modifier stack in FORWARD order
+ * (first --> last) per `fmodifier.cc:1568-1569` and composes each
+ * value-affecting modifier's `effective_value` transformation.
+ *
+ * Cycles + Noise + Generator + Limits + Envelope contribute; Stepped is
+ * time-only and skipped here.
+ *
+ * @param {FModifier[]} modifiers
+ * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
+ * @param {number} cvalue -- sampled keyframe value
+ * @param {number} evaltime
+ * @param {Map<string, { cycyofs?: number }>} scratch -- output from
+ *   `evaluateTimeModifiers`
+ * @returns {number}
+ */
+export function evaluateValueModifiers(modifiers, fcurve, cvalue, evaltime, scratch) {
+  if (!Array.isArray(modifiers) || modifiers.length === 0) return cvalue;
+  let v = cvalue;
+  // FORWARD walk (`fmodifier.cc:1568-1569`).
+  for (let i = 0; i < modifiers.length; i++) {
+    const mod = modifiers[i];
+    if (!mod || isModifierSkipped(mod)) continue;
+    if (isOutsideRestrictedRange(mod, evaltime)) continue;
+    let nval = v;
+    let touched = false;
+    switch (mod.type) {
+      case 'cycles': {
+        const s = (mod.id && scratch && scratch.get(mod.id)) || { cycyofs: 0 };
+        nval = evaluateCyclesValue(v, s);
+        touched = true;
+        break;
+      }
+      case 'noise':
+        nval = evaluateNoiseValue(mod, v, evaltime);
+        touched = true;
+        break;
+      case 'generator':
+        nval = evaluateGeneratorValue(mod, v, evaltime);
+        touched = true;
+        break;
+      case 'limits':
+        nval = evaluateLimitsValue(mod, v);
+        touched = true;
+        break;
+      case 'envelope':
+        nval = evaluateEnvelopeValue(mod, v, evaltime);
+        touched = true;
+        break;
+      default:
+        // time-only modifier (stepped): no contribution to value pass
+        continue;
+    }
+    if (!touched) continue;
+    const influence = computeFModifierInfluence(mod, evaltime);
+    // `fmodifier.cc:1590`: *cvalue = interpf(nval, *cvalue, influence)
+    v = interpf(nval, v, influence);
+  }
+  return v;
+}
+
+/**
+ * Combined two-pass entry point. Computes `effectiveTime` via the
+ * reverse-walk time pass, lets the caller sample keyframes at that time,
+ * then computes `effectiveValue` via the forward-walk value pass.
+ *
+ * Callers that already have the keyframe sampler inline (like
+ * `evaluateFCurve`) should call `evaluateTimeModifiers` +
+ * `evaluateValueModifiers` directly. This helper is for self-contained
+ * eval where the sampler is a plain function `(fcurve, time) => value`.
+ *
+ * @param {FModifier[]} modifiers
+ * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
+ * @param {(fcurve: any, time: number) => number} sampleAt
+ * @param {number} evaltime
+ * @returns {number}
+ */
+export function evaluateFModifierStack(modifiers, fcurve, sampleAt, evaltime) {
+  const { effectiveTime, scratch } = evaluateTimeModifiers(modifiers, fcurve, evaltime);
+  const cvalue = sampleAt(fcurve, effectiveTime);
+  return evaluateValueModifiers(modifiers, fcurve, cvalue, effectiveTime, scratch);
+}
