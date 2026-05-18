@@ -5,8 +5,11 @@
  *
  * Pure mutation helpers for the per-FCurveGroup `active` boolean —
  * Blender's `AGRP_ACTIVE` bit
- * (`reference/blender/source/blender/makesdna/DNA_action_types.h:347` —
- * `AGRP_ACTIVE = (1 << 1)`). Sister to:
+ * (`reference/blender/source/blender/makesdna/DNA_action_types.h:350` —
+ * `AGRP_ACTIVE = (1 << 1)` inside the `eActionGroup_Flag` enum at
+ * `:346-370`; cite corrected per audit-fix fidelity HIGH-1 Slice 5.LL
+ * dual-audit 2026-05-18 — earlier draft cited `:347` which is a
+ * comment line). Sister to:
  *   - Slice 5.V `selected` on groups (group-selection, view state)
  *   - Slice 5.X `active` on fcurves (per-fcurve ACTIVE, sister substrate)
  *
@@ -40,10 +43,12 @@
  * **Set / Clear walk** — `ANIM_set_active_channel` at
  * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:237-339`.
  * EXCLUSIVE flag: clears `AGRP_ACTIVE` on every same-type channel first
- * (per-type switch at `:264-269` for ANIMTYPE_GROUP via
+ * (per-type switch ANIMTYPE_GROUP case at `:264-269` via
  * `ACHANNEL_SET_FLAG(agrp, ACHANNEL_SETFLAG_CLEAR, AGRP_ACTIVE)`), then
- * sets it on the target group (post-clear switch at `:343-348` for
- * ANIMTYPE_GROUP via `agrp->flag |= AGRP_ACTIVE`). The same-type filter
+ * sets it on the target group (post-clear switch ANIMTYPE_GROUP case at
+ * `:344-348` via `agrp->flag |= AGRP_ACTIVE`; audit-fix fidelity LOW-1
+ * Slice 5.LL — earlier cite `:343-348` included the outer `switch`
+ * line at `:343`). The same-type filter
  * at `:255-260` ("only clear the 'active' flag for the channels of the
  * same type") matters in Blender's heterogeneous channel list where
  * groups, fcurves, NLA tracks, etc. coexist. SS's `action.groups[]` is
@@ -79,16 +84,21 @@
  * fcurve-keyed `data-fcurve-id`); group-row box-select coverage is a
  * future extension. Documented as Deviation 4.
  *
- * **Implicit set on auto-elevation** — `mouse_anim_channels`
- * ANIMTYPE_GROUP branch at `:4191-4218` calls `ANIM_set_active_channel`
- * after every selectmode branch (replace, invert, children_only) EXCEPT
- * SELECT_EXTEND_RANGE (the `:4194` `selectmode != SELECT_EXTEND_RANGE`
- * gate). The post-branch elevation flips between elevate-target (when
- * AGRP_SELECTED after the branch) and clear-active (when AGRP_SELECTED
- * is now off after the branch's XOR). This slice ships the
- * `setActiveFCurveGroup` primitive; Slices 5.KK + 5.BB consume it (see
+ * **Implicit set on auto-elevation** — `click_select_channel_group`
+ * (defined `:4120-4221`) post-branch elevation at `:4191-4218` calls
+ * `ANIM_set_active_channel` after every selectmode branch (replace,
+ * invert, children_only) EXCEPT SELECT_EXTEND_RANGE (the `:4194`
+ * `selectmode != SELECT_EXTEND_RANGE` gate). The post-branch
+ * elevation flips between elevate-target (when AGRP_SELECTED after
+ * the branch) and clear-active (when AGRP_SELECTED is now off after
+ * the branch's XOR). This slice ships the `setActiveFCurveGroup`
+ * primitive; Slices 5.KK + 5.BB consume it (see
  * `applyGroupHeaderSelect` + `applyGroupChildrenSelect` post-branch
  * elevation calls landed in the same commit as this substrate).
+ * (Audit-fix fidelity HIGH-2 Slice 5.LL dual-audit 2026-05-18:
+ * function-name attribution corrected from `mouse_anim_channels` —
+ * those line ranges live inside `click_select_channel_group`, with
+ * `mouse_anim_channels` (`:4475`) being the per-type dispatcher.)
  *
  * # Write semantics — view-state-or-data?
  *
@@ -179,7 +189,7 @@ export function getActiveFCurveGroup(action) {
  * Mirrors `ANIM_set_active_channel` at
  * `anim_channels_edit.cc:237-339`. EXCLUSIVE: clears `AGRP_ACTIVE` on
  * every group first (per-type clear at `:264-269`) then re-sets the
- * target via `:343-348` (`agrp->flag |= AGRP_ACTIVE`). At most one
+ * target via `:344-348` (`agrp->flag |= AGRP_ACTIVE`). At most one
  * group in the action ends up active.
  *
  * Sparse-write convention: every other group's `active` field is

@@ -915,14 +915,19 @@ export function applyGroupChildrenSelect(action, groupId, ctx) {
   }
 
   // Step 5 — post-branch active-group elevation. Mirrors Blender's
-  // `mouse_anim_channels` ANIMTYPE_GROUP at `:4194-4204`: after the
-  // children_only branch (selectmode = -1) leaves the group
-  // AGRP_SELECTED, `ANIM_set_active_channel` promotes the group to
-  // AGRP_ACTIVE (`:4194` `selectmode != SELECT_EXTEND_RANGE` gate
-  // passes for `-1`). Slice 5.LL ports this — closes Slice 5.BB
-  // MED-3 deferral. The pre-clear cascade at Step 1b already cleared
-  // `selected` on sibling groups but did NOT clear their `active` bit;
+  // `click_select_channel_group` (defined `:4120-4221`) at
+  // `:4194-4204`: after the children_only branch (selectmode = -1)
+  // leaves the group AGRP_SELECTED at `:4179`,
+  // `ANIM_set_active_channel` promotes the group to AGRP_ACTIVE
+  // (`:4194` `selectmode != SELECT_EXTEND_RANGE` gate passes for
+  // `-1`). Slice 5.LL ports this — closes Slice 5.BB MED-3 deferral.
+  // The pre-clear cascade at Step 1b already cleared `selected` on
+  // sibling groups but did NOT clear their `active` bit;
   // `setActiveFCurveGroup`'s EXCLUSIVE write fixes that here.
+  // (Audit-fix fidelity HIGH-2 Slice 5.LL dual-audit 2026-05-18:
+  // function-name attribution corrected from `mouse_anim_channels`
+  // — `:4194-4204` lives inside `click_select_channel_group`, not
+  // the dispatcher.)
   const groupElevation = setActiveFCurveGroup(action, groupId);
   if (groupElevation.changed) result.changed = true;
 
@@ -1211,13 +1216,16 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
       result.changed = true;
       result.groupSelectedAfter = true;
     }
-    // Post-branch active elevation — Blender's `mouse_anim_channels`
-    // ANIMTYPE_GROUP at `:4194-4218` calls `ANIM_set_active_channel`
-    // gated on `selectmode != SELECT_EXTEND_RANGE` (`:4194`). Selection
+    // Post-branch active elevation — Blender's
+    // `click_select_channel_group` (defined `:4120-4221`) at
+    // `:4194-4218` calls `ANIM_set_active_channel` gated on
+    // `selectmode != SELECT_EXTEND_RANGE` (`:4194`). Selection
     // outcome determines elevation target:
     //   - group ends up AGRP_SELECTED  → elevate (`:4195-4200`)
     //   - group ends up !AGRP_SELECTED → clear active slot (`:4208-4213`)
     // Slice 5.LL ports this via `setActiveFCurveGroup(action, gid|null)`.
+    // (Audit-fix fidelity HIGH-2 Slice 5.LL dual-audit 2026-05-18:
+    // function-name attribution corrected from `mouse_anim_channels`.)
     const elevateTarget = result.groupSelectedAfter ? groupId : null;
     const elevation = setActiveFCurveGroup(action, elevateTarget);
     if (elevation.changed) result.changed = true;

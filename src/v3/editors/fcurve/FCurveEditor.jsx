@@ -3622,13 +3622,27 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
         //   - active                 → bg-accent/60 (strongest)
         //   - selected-non-active    → bg-accent/25 (medium)
         //   - default                → bg-muted/40 (the existing tint)
+        //
+        // Audit-fix arch MED-1 (Slice 5.LL dual-audit 2026-05-18):
+        // backdrop and text-color are computed INDEPENDENTLY (not
+        // co-mingled in one ternary) so the className string never
+        // emits two competing `text-*` classes. Text-color precedence
+        // is muted > active/selected > default — muted wins because
+        // an evaluated-off group should read as dim regardless of
+        // selection state (matches Blender's italic-strikethrough on
+        // muted channels).
         const groupActive = isFCurveGroupActive(group);
         const groupSelected = isFCurveGroupSelected(group);
-        const groupTint = groupActive
-          ? 'bg-accent/60 text-foreground '
+        const groupBackdrop = groupActive
+          ? 'bg-accent/60 '
           : groupSelected
-            ? 'bg-accent/25 text-foreground/90 '
+            ? 'bg-accent/25 '
             : 'bg-muted/40 ';
+        const groupTextColor = groupMuted
+          ? 'text-muted-foreground/70 italic '
+          : (groupActive || groupSelected)
+            ? 'text-foreground '
+            : 'text-muted-foreground ';
         const headerKey = group?.id ?? '__ungrouped__';
         return (
           <div key={headerKey}>
@@ -3636,9 +3650,9 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
               <div
                 className={
                   'flex items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide '
-                  + groupTint
+                  + groupBackdrop
+                  + groupTextColor
                   + 'border-b border-border/60 select-none '
-                  + (groupMuted ? 'text-muted-foreground/70 italic ' : (groupActive || groupSelected) ? '' : 'text-muted-foreground ')
                   + (groupHidden ? 'opacity-60 ' : '')
                 }
               >
