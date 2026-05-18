@@ -364,6 +364,7 @@ import {
   formatActiveFCurveLabel,
 } from './fcurveFooterData.js';
 import { ActiveKeyformPanel } from './ActiveKeyformPanel.jsx';
+import { FCurveModifiersPanel } from './FCurveModifiersPanel.jsx';
 import { DriverBanner } from './DriverBanner.jsx';
 import {
   getEffectiveFps,
@@ -3283,12 +3284,10 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       {/* Slice 5.Q — N-panel (right-side sidebar). Toggled by N key
           on the FCurveEditor wrap div. Width fixed at 256px when
           shown; hidden entirely when closed (no animation — Blender's
-          N-panel toggle is also instant). Future slices can host
-          additional panel sections below ActiveKeyformPanel — the
-          NPanel component is the host for the whole right sidebar.
-          Today only ActiveKeyformPanel mounts; future panels
-          (modifiers, view options, etc.) stack vertically inside the
-          same scrollable column. */}
+          N-panel toggle is also instant). Sections stack vertically
+          inside the scrollable column: Active Keyframe (5.Q+5.R),
+          Modifiers (3.C). Future polish (view options, etc.) stacks
+          here. */}
       {npanelOpen ? (
         <div className="w-64 shrink-0 border-l bg-card overflow-y-auto h-full">
           <ActiveKeyformPanel
@@ -3299,6 +3298,11 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
             handleTypes={HANDLE_TYPES}
             showSeconds={fcurveShowSeconds}
             fps={getEffectiveFps(action, fps)}
+          />
+          <FCurveModifiersPanel
+            action={action}
+            activeActionId={activeActionId}
+            activeFCurveId={activeFCurveId}
           />
         </div>
       ) : null}

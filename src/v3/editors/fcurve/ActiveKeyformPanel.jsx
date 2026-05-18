@@ -72,9 +72,11 @@
  * caused by no fcurves, no active fcurve, or no selected keyform on
  * the active fcurve — Blender splits those into 3 sub-messages
  * (`graph_buttons.cc:594-606`) but only the 3rd (`"No active
- * keyframe"`) actually applies to SS today since SS doesn't have
- * F-Modifiers (`fcu.modifiers`) or sampled points (`fcu.fpt`) yet.
- * Closure ties to Phase 5 queued path #14 (F-Curve modifiers).
+ * keyframe"`) is reachable from SS today. Note: the F-Modifiers
+ * sub-message (`fcu.modifiers` absent) no longer applies post-Phase 3
+ * Slices 3.A+3.B -- SS ships F-Modifiers now; the modifier-stack UI
+ * (`FCurveModifiersPanel`) mounts below this panel in the N-panel
+ * (Phase 3 Slice 3.C). Sampled points (`fcu.fpt`) remain unimplemented.
  *
  * @module v3/editors/fcurve/ActiveKeyformPanel
  */
