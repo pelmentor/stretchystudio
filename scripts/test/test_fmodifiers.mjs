@@ -231,6 +231,23 @@ function approx(a, b, name, eps = 1e-6) {
   eq(evaluateSteppedTime(mod, 150), 110, '20b: 150→110');
 }
 
+// ── 20b. Stepped truncates toward zero (audit-fix 3.B HIGH-1) ──────
+{
+  // Regression for HIGH-1: Math.floor vs C int() truncation. For
+  // (evaltime - offset) negative, floor rounds toward -inf and gives
+  // one step lower than Blender; trunc rounds toward zero and matches.
+  // stepSize=100, offset=500, evaltime=400 → (400-500)/100 = -1.0
+  //   trunc(-1.0) = -1   → snapblock=-1 → -100+500 = 400 (boundary; on step)
+  // stepSize=100, offset=500, evaltime=450 → (450-500)/100 = -0.5
+  //   trunc(-0.5) = 0    → snapblock= 0 → 0+500 = 500 (matches Blender int())
+  //   floor(-0.5) = -1   → snapblock=-1 → -100+500 = 400 (pre-fix bug)
+  const mod = { type: 'stepped', data: { stepSize: 100, offset: 500 } };
+  eq(evaluateSteppedTime(mod, 450), 500,
+    '20b: trunc(-0.5)=0 → snaps UP to offset, not down (Blender C int() semantics)');
+  eq(evaluateSteppedTime(mod, 350), 400,
+    '20c: trunc(-1.5)=-1 → snaps to 400 (matches Blender)');
+}
+
 // ── 21. Stepped useStartTime/useEndTime gates ───────────────────────
 {
   const mod = { type: 'stepped', data: {
@@ -414,7 +431,7 @@ function approx(a, b, name, eps = 1e-6) {
 {
   const r = evaluateTimeModifiers([], null, 500);
   eq(r.effectiveTime, 500, '37: empty modifiers → identity');
-  eq(r.scratch.size, 0, '37b: empty scratch');
+  assert(Array.isArray(r.scratch) && r.scratch.length === 0, '37b: empty scratch array');
 }
 
 // ── 38. evaluateTimeModifiers: stepped warps time ────────────────────
@@ -461,13 +478,147 @@ function approx(a, b, name, eps = 1e-6) {
   eq(r.effectiveTime, 270, '42: outside range → unchanged');
 }
 
+// ── 42b. Range gate uses ORIGINAL evaltime, not warped t ────────────
+{
+  // Regression for HIGH-2: pre-audit-fix, the second modifier's range
+  // gate was tested against the warped time `t`, not the original
+  // `evaltime`. This produced a false-positive gate when modifier 1
+  // warped t into modifier 2's exclusion zone (or vice versa).
+  //
+  // Blender's `evaluate_time_fmodifiers` at `fmodifier.cc:1528-1530`
+  // checks `fcm->sfra <= evaltime && fcm->efra >= evaltime` where
+  // `evaltime` is the original function parameter, never mutated.
+  //
+  // Test composition: stack = [limits(useRestrictedRange,
+  //   sfra=400, efra=600, useMinX, minX=300), stepped(stepSize=100)]
+  // Reverse walk:
+  //   stepped at i=1: range gate (no range restrict) passes;
+  //     stepped warps 550 → 500.
+  //   limits at i=0: range gate against ORIGINAL 550 (in [400,600]) →
+  //     passes; clamps t=500 to minX=300 → ... wait, minX=300 but t=500
+  //     already exceeds it; no clamp. t stays 500.
+  // Pre-fix, the range gate on limits would check t=500 (warped) — still
+  // in [400, 600] — same result. Need a case where the warp pushes t
+  // OUT of the range so the bug manifests.
+  //
+  // Better test: stack = [
+  //   stepped(stepSize=100, offset=0, useRestrictedRange: sfra=200, efra=400),
+  //   stepped(stepSize=50)
+  // ]
+  // Reverse walk: stepped@i=1 warps 250 → 250 (already on boundary).
+  //   stepped@i=0 range gate against original 250 (in [200,400]) → passes;
+  //   stepped@i=0 warps 250 → 200.
+  // Pre-fix would still pass since t=250 also in range. So this test
+  // can't catch the bug.
+  //
+  // Construct a case where the warp pushes t OUTSIDE modifier-2's range:
+  // stack = [
+  //   limits(useRestrictedRange, sfra=600, efra=800, useMinX, minX=700),
+  //   stepped(stepSize=100, offset=0)
+  // ]
+  // Original evaltime = 650:
+  //   Reverse walk: stepped@i=1 warps 650 → 600.
+  //   limits@i=0 range gate:
+  //     Post-fix (audit-fix HIGH-2): check original 650 ∈ [600,800] → in range → apply.
+  //       limits warps t=600 → minX=700 → final t=700.
+  //     Pre-fix: check warped 600 ∈ [600,800] → still in range → also applies.
+  //       (Bug doesn't trigger here either — boundary equal.)
+  //
+  // The bug triggers when the warp pushes t OUT of [sfra, efra]:
+  // Original = 750, sfra=700, efra=800. Stepped warps 750 → 700.
+  // Post-fix: check original 750 ∈ [700,800] → in range → apply limits.
+  // Pre-fix: check warped 700 ∈ [700,800] → also in range → SAME result.
+  //
+  // The simplest case where the bug bites: stepped warps t LEFTWARD
+  // past modifier-2's lower bound. Stepped stepSize=100, offset=0;
+  // limits sfra=600, efra=800. Original = 650; stepped warps to 600.
+  // limits gate against 600: in [600,800] → in range. Original 650 also
+  // in [600,800] → both check pass. Still no bug visible.
+  //
+  // OK final construction:
+  // stack = [
+  //   stepped (NOT range-restricted) — warps t leftward,
+  //   limits(useRestrictedRange, sfra=620, efra=800, useMinX, minX=900)
+  // ]
+  // Original = 650. Reverse walk:
+  //   limits@i=1: range gate (use original 650, in [620,800]) → apply;
+  //               limits warps t=650 → minX=900.
+  //   stepped@i=0: warps 900 → 900 (on boundary at offset=0).
+  // Post-fix: final t = 900.
+  // Pre-fix: range gate against 650 (same as warped here since limits is
+  //   processed first in reverse) → same result.
+  //
+  // The bug requires that modifier-A (later in array, processed earlier
+  // in reverse walk) warps t SUCH THAT modifier-B (earlier in array,
+  // processed later in reverse walk) sees a DIFFERENT range-membership
+  // for t-vs-evaltime:
+  //
+  // stack = [
+  //   limits(useRestrictedRange, sfra=600, efra=800, useMaxX, maxX=750),  // index 0
+  //   limits(useMinX, minX=500)                                            // index 1, NOT range-restricted
+  // ]
+  // Original = 400. Reverse walk:
+  //   limits@i=1: not range-restricted; clamps minX=500 → t=500.
+  //   limits@i=0: range gate -- check ORIGINAL 400, NOT in [600,800] → SKIP.
+  //                Pre-fix: check WARPED 500, NOT in [600,800] → ALSO SKIP.
+  //                Same outcome.
+  //
+  // Try again with stepped warping RIGHTWARD into range:
+  // stack = [
+  //   limits(useRestrictedRange, sfra=600, efra=800, useMaxY irrelevant -- use minX=900),  // index 0
+  //   stepped(stepSize=300, offset=0)                                                       // index 1
+  // ]
+  // Original = 400. Reverse walk:
+  //   stepped@i=1: warps 400 → trunc(400/300)*300 = 1*300 = 300; t=300.
+  //   limits@i=0: range gate against ORIGINAL 400; NOT in [600,800] → SKIP.
+  //                Pre-fix: range gate against WARPED 300; NOT in [600,800] → ALSO SKIP.
+  //                Same.
+  //
+  // Try stepped warping FROM in-range TO out-of-range:
+  // Original = 700. Reverse walk:
+  //   stepped@i=1: warps 700 → 2*300=600; t=600.
+  //   limits@i=0: range gate against ORIGINAL 700 → in [600,800] → APPLY,
+  //                clamp to minX=900; t=900.
+  //                Pre-fix: range gate against WARPED 600 → in [600,800] → ALSO APPLY,
+  //                clamp to minX=900; t=900.
+  //                Same outcome.
+  //
+  // The bug manifests when stepped warps t IN→OUT of range:
+  // Original = 700, stepSize=200, offset=0:
+  //   stepped warps 700 → trunc(700/200)*200 = 3*200 = 600.
+  //   Original 700 ∈ [600, 800]. Warped 600 ∈ [600, 800]. Boundary identical.
+  //
+  // OK, let me construct one that ACTUALLY triggers:
+  // stack = [
+  //   limits(useRestrictedRange, sfra=700, efra=800, useMinY irrelevant -- use minX=900),  // index 0
+  //   stepped(stepSize=200, offset=0)                                                       // index 1
+  // ]
+  // Original = 750. Reverse walk:
+  //   stepped@i=1 warps 750 → 600. t=600.
+  //   limits@i=0 range gate:
+  //     Post-fix: check ORIGINAL 750 ∈ [700,800] → APPLY → t clamped to 900.
+  //     Pre-fix: check WARPED 600 ∈ [700,800]? NO → SKIP → t stays 600.
+  //   So pre-fix returns 600, post-fix returns 900. DIVERGENCE!
+  const mods = [
+    { id: 'l', type: 'limits', useRestrictedRange: true,
+      sfra: 700, efra: 800,
+      data: { useMinX: true, minX: 900 } },
+    { id: 's', type: 'stepped', data: { stepSize: 200, offset: 0 } },
+  ];
+  const r = evaluateTimeModifiers(mods, null, 750);
+  eq(r.effectiveTime, 900,
+    '42b: range gate checks ORIGINAL evaltime (750 in [700,800]) — limits applies despite stepped warp pushing t to 600 (audit-fix 3.B HIGH-2)');
+}
+
 // ── 43. evaluateTimeModifiers: cycles passes cycyofs via scratch ────
 {
   const fc = { keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 100 }] };
   const mods = [{ id: 'c1', type: 'cycles', data: { after: 'repeat_offset', afterCycles: 0 } }];
   const r = evaluateTimeModifiers(mods, fc, 1500);
-  assert(r.scratch.has('c1'), '43a: scratch has cycles entry');
-  approx(r.scratch.get('c1').cycyofs, 100, '43b: cycyofs=100');
+  // Index-keyed scratch (audit-fix 3.B MED-1): scratch[0] for the
+  // cycles modifier at array index 0.
+  assert(Array.isArray(r.scratch) && r.scratch.length === 1, '43a: scratch is length-1 array');
+  approx(r.scratch[0].cycyofs, 100, '43b: scratch[0].cycyofs=100');
 }
 
 // ===========================================================================
@@ -511,10 +662,40 @@ function approx(a, b, name, eps = 1e-6) {
 
 // ── 48. evaluateValueModifiers: cycles reads cycyofs from scratch ───
 {
-  const scratch = new Map([['c1', { cycyofs: 7 }]]);
+  // Index-keyed scratch (audit-fix 3.B MED-1): scratch is an array
+  // indexed by modifier position.
+  const scratch = [{ cycyofs: 7 }];
   const mods = [{ id: 'c1', type: 'cycles', data: {} }];
   approx(evaluateValueModifiers(mods, null, 100, 0, scratch), 107,
-    '48: value pass adds cycyofs from scratch');
+    '48: value pass adds cycyofs from scratch[i]');
+}
+
+// ── 48b. Index-keyed scratch survives missing id (audit-fix 3.B MED-1) ─
+{
+  // Same as above but the cycles modifier has NO id; pre-audit-fix this
+  // would silently drop the cycyofs handoff (id-keyed Map.get(undefined)
+  // returns undefined). Post-fix uses positional indexing so id is
+  // irrelevant.
+  const scratch = [{ cycyofs: 13 }];
+  const mods = [{ type: 'cycles', data: {} }];
+  approx(evaluateValueModifiers(mods, null, 100, 0, scratch), 113,
+    '48b: missing id no longer drops cycyofs (positional storage)');
+}
+
+// ── 48c. evaluateFCurve: cycles with missing id still cascades cycyofs ─
+{
+  // End-to-end regression test for MED-1: cycles repeat_offset without
+  // an id field. Pre-fix this would silently zero out the per-cycle
+  // Y-offset; post-fix it propagates correctly through positional
+  // scratch.
+  const fc = {
+    keyforms: [{ time: 0, value: 0 }, { time: 1000, value: 100 }],
+    // No `id` on the modifier.
+    modifiers: [{ type: 'cycles', data: { after: 'repeat_offset', afterCycles: 0 } }],
+  };
+  // t=1500: time pass maps to 500 + cycyofs=100; sample(500)=50; +100=150
+  approx(evaluateFCurve(fc, 1500), 150,
+    '48c: repeat_offset cycles cascades cycyofs even without id (audit-fix 3.B MED-1)');
 }
 
 // ===========================================================================

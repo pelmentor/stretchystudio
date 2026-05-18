@@ -649,6 +649,19 @@ export function perlinNoise2D(x, y) {
  * `depth = 0` is single-octave Perlin (Blender's default new-modifier
  * value at `fmodifier.cc:807`).
  *
+ * # Deviation: no partial-octave fractional blend
+ *
+ * Blender's `noise.cc:713-718` does an extra partial-octave summation
+ * when `depth` has a fractional remainder:
+ *   `rmd = detail - floor(detail)`
+ *   if `rmd != 0`: blend `sum` and `sum2` (with extra octave) by `rmd`
+ * SS truncates to integer octaves. This is SAFE for the FModifier use
+ * case because `FMod_Noise.depth` is `short` (`DNA_anim_types.h:171`)
+ * and the SS typedef constrains depth to integer values -- the
+ * fractional-octave path can never trigger from FModifier eval.
+ * Documented as a known SS deviation (3.B fidelity audit HIGH-1; sub-
+ * threshold once depth-is-integer constraint is established).
+ *
  * @param {number} x
  * @param {number} y
  * @param {number} depth -- number of additional octaves (0..N)
@@ -908,7 +921,13 @@ export function evaluateSteppedTime(mod, evaltime) {
   }
   const stepSize = Number.isFinite(data.stepSize) && data.stepSize > 0 ? data.stepSize : 2;
   const offset = Number.isFinite(data.offset) ? data.offset : 0;
-  const snapblock = Math.floor((evaltime - offset) / stepSize);
+  // Truncation toward zero (matches Blender's C `int()` cast at
+  // `fmodifier.cc:976`). For `(evaltime - offset) / stepSize` negative
+  // (i.e. evaluating before the offset), `Math.floor` rounds toward
+  // -infinity and produces a snap one step below Blender; `Math.trunc`
+  // rounds toward zero and matches Blender's behavior exactly.
+  // Audit-fix 2026-05-18 (3.B HIGH-1).
+  const snapblock = Math.trunc((evaltime - offset) / stepSize);
   return snapblock * stepSize + offset;
 }
 
@@ -983,6 +1002,19 @@ export function evaluateNoiseValue(mod, cvalue, evaltime) {
  * The `additive` flag selects between replace (`cvalue = generated`) and
  * additive (`cvalue += generated`) blend; mirrors
  * `fmodifier.cc:194-201` + `:221-228`.
+ *
+ * # SS simplification: poly_order is derived
+ *
+ * Blender's `FMod_Generator` carries an explicit `poly_order: int`
+ * (`DNA_anim_types.h:86`) that gates writes at `fmodifier.cc:194` -- if
+ * `poly_order == 0`, the write is skipped and the modifier is a no-op
+ * regardless of coefficients. SS derives polynomial degree from
+ * `coefficients.length` directly (poly mode: degree = length-1;
+ * factorised mode: degree = floor(length/2)). The Blender edge case of
+ * `poly_order = 0 with non-empty coefficients` cannot be expressed in
+ * the SS data model -- documented as an intentional SS simplification
+ * (3.B fidelity audit MED-3). Empty coefficients DO short-circuit to
+ * `cvalue` unchanged, matching Blender's "no write" behavior.
  *
  * @param {FModifier} mod
  * @param {number} cvalue
@@ -1105,33 +1137,53 @@ export function evaluateEnvelopeValue(mod, cvalue, evaltime) {
  * Cycles + Limits + Stepped contribute; Noise + Generator + Envelope are
  * value-only and skipped here.
  *
- * Returns `{ effectiveTime, scratchByModifierId }`. The scratch map is
- * keyed by `modifier.id` and carries per-modifier state that the value
- * pass needs to consume (today only Cycles' `cycyofs`).
+ * Returns `{ effectiveTime, scratch }`. The scratch array is indexed by
+ * modifier array position (positional storage, mirroring Blender's
+ * `POINTER_OFFSET(storage->buffer, fcm_index * size_per_modifier)` at
+ * `fmodifier.cc:1534-1536`) and carries per-modifier state that the
+ * value pass needs to consume (today only Cycles' `cycyofs`).
+ *
+ * # Audit-fix 2026-05-18 (3.B HIGH-2)
+ *
+ * Both gates (loop-level `isOutsideRestrictedRange` and influence
+ * `computeFModifierInfluence`) read the ORIGINAL `evaltime`, not the
+ * running warped `t`. Blender's `evaluate_time_fmodifiers` at
+ * `fmodifier.cc:1528-1530` checks against the function-parameter
+ * `evaltime` (not the mutated accumulator); the influence call at
+ * `:1539` also receives the original. SS port now matches.
+ *
+ * # Audit-fix 2026-05-18 (3.B MED-1)
+ *
+ * Scratch is now an array indexed by modifier position (was a Map keyed
+ * by `mod.id` which silently dropped state when id was missing -- a
+ * Rule №1 crutch). The array shape also better matches Blender's
+ * positional `storage->buffer` indexed by `fcm_index`.
  *
  * @param {FModifier[]} modifiers
  * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
  * @param {number} evaltime
- * @returns {{ effectiveTime: number, scratch: Map<string, { cycyofs?: number }> }}
+ * @returns {{ effectiveTime: number, scratch: ({ cycyofs?: number } | null)[] }}
  */
 export function evaluateTimeModifiers(modifiers, fcurve, evaltime) {
-  const scratch = new Map();
   if (!Array.isArray(modifiers) || modifiers.length === 0) {
-    return { effectiveTime: evaltime, scratch };
+    return { effectiveTime: evaltime, scratch: [] };
   }
+  const scratch = new Array(modifiers.length).fill(null);
   let t = evaltime;
   // REVERSE walk (`fmodifier.cc:1515-1517`): start at last, step via prev.
   for (let i = modifiers.length - 1; i >= 0; i--) {
     const mod = modifiers[i];
     if (!mod || isModifierSkipped(mod)) continue;
-    if (isOutsideRestrictedRange(mod, t)) continue;
+    // Range gate against ORIGINAL evaltime per `fmodifier.cc:1528-1530`,
+    // not against the running warped `t`. Audit-fix 3.B HIGH-2.
+    if (isOutsideRestrictedRange(mod, evaltime)) continue;
     let nval = t;
     let touched = false;
     switch (mod.type) {
       case 'cycles': {
         const s = { cycyofs: 0 };
         nval = evaluateCyclesTime(mod, fcurve, t, s);
-        if (mod.id) scratch.set(mod.id, s);
+        scratch[i] = s;
         touched = true;
         break;
       }
@@ -1148,7 +1200,9 @@ export function evaluateTimeModifiers(modifiers, fcurve, evaltime) {
         continue;
     }
     if (!touched) continue;
-    const influence = computeFModifierInfluence(mod, t);
+    // Influence also reads ORIGINAL evaltime per `fmodifier.cc:1539`.
+    // Audit-fix 3.B HIGH-2.
+    const influence = computeFModifierInfluence(mod, evaltime);
     // `fmodifier.cc:1540`: evaltime = interpf(nval, evaltime, influence)
     t = interpf(nval, t, influence);
   }
@@ -1167,8 +1221,8 @@ export function evaluateTimeModifiers(modifiers, fcurve, evaltime) {
  * @param {{ keyforms?: { time: number, value: number }[] } | null | undefined} fcurve
  * @param {number} cvalue -- sampled keyframe value
  * @param {number} evaltime
- * @param {Map<string, { cycyofs?: number }>} scratch -- output from
- *   `evaluateTimeModifiers`
+ * @param {({ cycyofs?: number } | null)[] | null | undefined} scratch -- output
+ *   from `evaluateTimeModifiers`; indexed by modifier array position
  * @returns {number}
  */
 export function evaluateValueModifiers(modifiers, fcurve, cvalue, evaltime, scratch) {
@@ -1183,7 +1237,7 @@ export function evaluateValueModifiers(modifiers, fcurve, cvalue, evaltime, scra
     let touched = false;
     switch (mod.type) {
       case 'cycles': {
-        const s = (mod.id && scratch && scratch.get(mod.id)) || { cycyofs: 0 };
+        const s = (Array.isArray(scratch) && scratch[i]) || { cycyofs: 0 };
         nval = evaluateCyclesValue(v, s);
         touched = true;
         break;

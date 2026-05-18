@@ -162,7 +162,7 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
   // `evaluate_time_fmodifiers` at `fmodifier.cc:1490-1548`. Cycles +
   // Limits + Stepped contribute; Noise + Generator + Envelope are
   // value-only and skipped. Scratch carries Cycles' `cycyofs` to the
-  // value pass.
+  // value pass; indexed by modifier array position.
   const { effectiveTime, scratch } = modifiers.length > 0
     ? evaluateTimeModifiers(modifiers, fcurve, time)
     : { effectiveTime: time, scratch: null };
