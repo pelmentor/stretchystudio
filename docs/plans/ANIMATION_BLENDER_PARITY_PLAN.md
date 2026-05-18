@@ -1242,14 +1242,16 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** **3/7 slices SHIPPED** — Slice 4.A substrate (`eba15ab` +
-`410459b`) + Slice 4.B evaluator (`d91060d` + `8d03d4c`) landed
-2026-05-18; Slice 4.C tweak mode (`f0fd4be` + `3ae4c5e`) landed
-2026-05-19. Schema at **v42**. Cite-discipline **HOLDS at 5**
-(3.F → 3.G → 4.A → 4.B → 4.C all clean). See close-out docs
-`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C}.md`.
-Remaining: 4.D (NLAEditor UI) / 4.E (BakeNLA op) / 4.F (tests) /
-4.G (exit gate).
+**Status:** **4/7 sub-slices SHIPPED** — 4.A substrate + 4.B evaluator +
+4.C tweak mode + **4.D.1 NLAEditor read-only render** (`5385734` +
+`6f52410` 2026-05-19). Schema at **v42**. Slice 4.D split into 4
+sub-slices given UI scope: 4.D.1 (this) + 4.D.2 (drag) + 4.D.3
+(affordances) + 4.D.4 (ops). **Cite-discipline BROKEN at 5** on
+4.D.1 (2 fab'd Blender citations caught by fidelity audit before user
+impact but DID land in `5385734`; corrected in audit-fix `6f52410`).
+Streak resets to 0 for 4.D.2. See close-out docs
+`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1}.md`.
+Remaining: 4.D.2 + 4.D.3 + 4.D.4 + 4.E + 4.F + 4.G.
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
