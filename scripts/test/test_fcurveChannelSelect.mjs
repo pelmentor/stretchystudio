@@ -1311,10 +1311,13 @@ function makeActionWithGroups(groups, fcurves) {
   );
   assert(r5.changed === false, '5.KK: nonexistent groupId → no change');
 
+  // Slice 5.MM (Path #58): 'range' is now a supported modifier.
+  // No active group → auto-downgrade to 'toggle' (which always
+  // changes a bit). Verify this guard test was updated.
   const r6 = applyGroupHeaderSelect(
     makeActionWithGroups([{ id: 'gA' }], []), 'gA', 'range', { orderedIds: [] },
   );
-  assert(r6.changed === false, '5.KK: unsupported modifier "range" → no change (Shift deferred)');
+  assert(r6.changed === true, '5.MM: range with no active → auto-downgrade to toggle (changes a bit)');
 
   const r7 = applyGroupHeaderSelect(
     makeActionWithGroups([{ id: 'gA' }], []), 'gA', 'bogus', { orderedIds: [] },
@@ -1747,6 +1750,230 @@ function makeActionWithGroups(groups, fcurves) {
   // touched its row.
   assert(a.groups[1].active === undefined, '5.LL EXCLUSIVE: prior active sparse-deleted (global)');
   assert(a.groups[0].active === true, '5.LL EXCLUSIVE: new target carries flag');
+}
+
+// ── Slice 5.MM (Path #58) — Shift+group-click range-select ────────
+// Ports Blender's `animchannel_select_range` walker
+// (`anim_channels_edit.cc:3984-4025`) dispatched via
+// `click_select_channel_group` `:4159-4162` for SELECT_EXTEND_RANGE.
+// Auto-downgrades to 'toggle' when no active group exists (matches
+// Blender's type-agnostic auto-downgrade at `:4517-4522`).
+
+// Happy path — range between active and cursor selects everything
+// in between (inclusive).
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA', active: true },
+      { id: 'gB' },
+      { id: 'gC' },
+      { id: 'gD' },
+      { id: 'gE' },
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gD', 'range', {});
+  assert(r.changed === true, '5.MM range happy: changed');
+  assert(r.groupSelectedAfter === true, '5.MM range: groupSelectedAfter=true');
+  assert(a.groups[0].selected === true, '5.MM range: gA (active bound) selected');
+  assert(a.groups[1].selected === true, '5.MM range: gB inside range selected');
+  assert(a.groups[2].selected === true, '5.MM range: gC inside range selected');
+  assert(a.groups[3].selected === true, '5.MM range: gD (cursor bound) selected');
+  assert(a.groups[4].selected === undefined, '5.MM range: gE outside range NOT selected');
+  // Active group preserved (per Blender :4194 EXTEND_RANGE gate skip).
+  assert(a.groups[0].active === true, '5.MM range: gA active preserved (no post-elevation)');
+}
+
+// Range backwards (cursor before active in array order).
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA' },
+      { id: 'gB' },
+      { id: 'gC', active: true },
+      { id: 'gD' },
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'range', {});
+  assert(r.changed === true, '5.MM range backwards: changed');
+  assert(a.groups[0].selected === true, '5.MM range backwards: gA (cursor, first) selected');
+  assert(a.groups[1].selected === true, '5.MM range backwards: gB inside selected');
+  assert(a.groups[2].selected === true, '5.MM range backwards: gC (active) selected');
+  assert(a.groups[3].selected === undefined, '5.MM range backwards: gD outside NOT selected');
+}
+
+// Single-cell range — clicked group IS the active group.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', active: true }, { id: 'gC' }],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gB', 'range', {});
+  assert(r.changed === true, '5.MM single-cell range: changed');
+  assert(a.groups[0].selected === undefined, '5.MM single-cell: gA NOT selected');
+  assert(a.groups[1].selected === true, '5.MM single-cell: gB selected (sole bound)');
+  assert(a.groups[2].selected === undefined, '5.MM single-cell: gC NOT selected');
+}
+
+// Pre-walk wipes prior selections OUTSIDE the new range.
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA', active: true },
+      { id: 'gB', selected: true }, // pre-selected, will be IN new range
+      { id: 'gC' },
+      { id: 'gD', selected: true }, // pre-selected, OUTSIDE new range
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gB', 'range', {});
+  assert(r.changed === true, '5.MM pre-walk wipe: changed');
+  assert(a.groups[0].selected === true, '5.MM: gA (active bound) selected');
+  assert(a.groups[1].selected === true, '5.MM: gB (cursor bound) selected');
+  assert(a.groups[2].selected === undefined, '5.MM: gC NOT in range, not selected');
+  assert(a.groups[3].selected === undefined, '5.MM: gD pre-selected but outside → wiped');
+}
+
+// Auto-downgrade — no active group → recurses to 'toggle'.
+{
+  const a = makeActionWithGroups([{ id: 'gA' }, { id: 'gB' }], []);
+  const r = applyGroupHeaderSelect(a, 'gA', 'range', {});
+  // Toggle ON: changed=true, gA.selected=true
+  assert(r.changed === true, '5.MM auto-downgrade: changed (toggle ON)');
+  assert(r.groupSelectedAfter === true, '5.MM auto-downgrade: selected');
+  assert(a.groups[0].selected === true, '5.MM auto-downgrade: gA selected via toggle');
+  assert(a.groups[1].selected === undefined, '5.MM auto-downgrade: gB UNTOUCHED');
+  // Toggle ALSO elevates the group to active (via 5.LL post-branch).
+  assert(a.groups[0].active === true, '5.MM auto-downgrade: gA elevated to active (toggle ON behavior)');
+}
+
+// Auto-downgrade on already-selected (toggle OFF behavior).
+{
+  const a = makeActionWithGroups([{ id: 'gA', selected: true }], []);
+  const r = applyGroupHeaderSelect(a, 'gA', 'range', {});
+  // Toggle OFF: gA.selected becomes undefined
+  assert(r.changed === true, '5.MM auto-downgrade toggle OFF: changed');
+  assert(r.groupSelectedAfter === false, '5.MM auto-downgrade toggle OFF: deselected');
+  assert(a.groups[0].selected === undefined, '5.MM auto-downgrade toggle OFF: gA sparse-cleared');
+}
+
+// Active is the clicked group, full range with multiple in-between.
+// Verifies the inner-walker break on isActive && isCursor.
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA' },
+      { id: 'gB', active: true },
+      { id: 'gC' },
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gB', 'range', {});
+  // Single-cell — only gB selected.
+  assert(a.groups[0].selected === undefined, '5.MM clicked===active: gA NOT selected');
+  assert(a.groups[1].selected === true, '5.MM clicked===active: gB selected');
+  assert(a.groups[2].selected === undefined, '5.MM clicked===active: gC NOT selected');
+}
+
+// Range with non-string-id group entries skipped.
+{
+  const a = makeActionWithGroups(
+    [
+      null,
+      { id: 'gA', active: true },
+      { id: 'gB' },
+      undefined,
+      { id: 'gC' },
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gC', 'range', {});
+  assert(r.changed === true, '5.MM null-skip: changed');
+  assert(a.groups[1].selected === true, '5.MM null-skip: gA selected');
+  assert(a.groups[2].selected === true, '5.MM null-skip: gB selected');
+  assert(a.groups[4].selected === true, '5.MM null-skip: gC selected');
+}
+
+// Idempotent re-range — same active + cursor, all in-range already selected.
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA', active: true, selected: true },
+      { id: 'gB', selected: true },
+      { id: 'gC', selected: true },
+      { id: 'gD' },
+    ],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gC', 'range', {});
+  assert(r.changed === false, '5.MM idempotent: no change');
+  assert(r.groupSelectedAfter === true, '5.MM idempotent: still selected');
+}
+
+// Preflight matches setter for 'range'.
+{
+  const scenarios = [
+    // Happy: active + range to be selected → predict true
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA', active: true }, { id: 'gB' }, { id: 'gC' }],
+        [],
+      ),
+      gid: 'gC',
+      mod: 'range',
+    }),
+    // Idempotent: every group in path already selected → predict false
+    () => ({
+      action: makeActionWithGroups(
+        [
+          { id: 'gA', active: true, selected: true },
+          { id: 'gB', selected: true },
+        ],
+        [],
+      ),
+      gid: 'gB',
+      mod: 'range',
+    }),
+    // Auto-downgrade: no active → toggle path → predict true
+    () => ({
+      action: makeActionWithGroups([{ id: 'gA' }, { id: 'gB' }], []),
+      gid: 'gA',
+      mod: 'range',
+    }),
+    // Range with stale outside-of-path selection → predict true (pre-walk wipes)
+    () => ({
+      action: makeActionWithGroups(
+        [
+          { id: 'gA', active: true, selected: true },
+          { id: 'gB', selected: true },
+          { id: 'gC' },
+          { id: 'gD', selected: true }, // outside path — needs wipe
+        ],
+        [],
+      ),
+      gid: 'gB',
+      mod: 'range',
+    }),
+    // Single-cell range that's already correct → predict false
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }, { id: 'gB', active: true, selected: true }],
+        [],
+      ),
+      gid: 'gB',
+      mod: 'range',
+    }),
+  ];
+  for (let i = 0; i < scenarios.length; i++) {
+    const sA = scenarios[i]();
+    const sB = scenarios[i]();
+    const predicted = wouldGroupHeaderSelectChange(sA.action, sA.gid, sA.mod, {});
+    const r = applyGroupHeaderSelect(sB.action, sB.gid, sB.mod, {});
+    const anyMutation = r.changed || r.clearedActive;
+    assert(predicted === anyMutation,
+      `5.MM scenario ${i}: preflight (${predicted}) matches setter (${anyMutation})`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────

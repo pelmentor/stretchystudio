@@ -2241,12 +2241,12 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   //
   //   - 'replace' (plain click)  → SELECT_REPLACE (`:4181-4189`)
   //   - 'toggle'  (Ctrl+click)   → SELECT_INVERT  (`:4155-4158`)
+  //   - 'range'   (Shift+click)  → SELECT_EXTEND_RANGE (`:4159-4162`,
+  //     walker at `:3984-4025`) — shipped Slice 5.MM (Path #58).
+  //     Auto-downgrades to 'toggle' when no AGRP_ACTIVE group exists
+  //     (matches Blender's `:4517-4522` type-agnostic auto-downgrade).
   //
-  // Keymap: `blender_default.py:3848-3852` (single-modifier entries).
-  // The 'range' modifier (Shift+click → SELECT_EXTEND_RANGE at
-  // `:4159-4162`, keymap `:3849-3850`) is deferred to a slice
-  // downstream of path #50's AGRP_ACTIVE port — see
-  // `applyGroupHeaderSelect` Deviation 4 for the rationale.
+  // Keymap: `blender_default.py:3848-3854`.
   //
   // `skipHistory: true` — channel selection is view state per the
   // Slice 5.F/5.K convention. Preflight gates the no-op case so a
@@ -3705,11 +3705,11 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                         XOR clicked group's `selected`; nothing else
                         touched.
                       - **Shift+LMB** → SELECT_EXTEND_RANGE
-                        (`:4159-4162`): DEFERRED. Walker requires
-                        AGRP_ACTIVE (path #50). Slice 5.KK leaves
-                        Shift as no-op rather than auto-downgrading to
-                        Ctrl (which would conflict with Ctrl's toggle
-                        intent — see `applyGroupHeaderSelect` Dev 4).
+                        (`:4159-4162`): shipped Slice 5.MM (Path #58)
+                        via the helper's 'range' modifier. Walks
+                        groups between the active group and the
+                        clicked group; auto-downgrades to 'toggle'
+                        when no group is active.
                       - **Shift+Ctrl+LMB** → `children_only` = -1
                         (`:4163-4180`): shipped in Slice 5.BB.
 
@@ -3738,8 +3738,11 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                       return;
                     }
                     if (e.shiftKey) {
-                      // Shift alone → SELECT_EXTEND_RANGE, deferred.
-                      // Explicit no-op (NOT a Shift=Ctrl masquerade).
+                      // Shift alone → SELECT_EXTEND_RANGE (Slice 5.MM).
+                      // Helper auto-downgrades to 'toggle' when no
+                      // active group exists (matches Blender's
+                      // `:4517-4522` type-agnostic downgrade).
+                      onApplyGroupHeaderSelect(group.id, 'range');
                       return;
                     }
                     if (ctrlOrMeta) {

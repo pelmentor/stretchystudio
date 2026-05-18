@@ -283,7 +283,7 @@
  */
 
 import { clearActiveFCurves } from './fcurveActive.js';
-import { setActiveFCurveGroup } from './fcurveGroupActive.js';
+import { setActiveFCurveGroup, getActiveFCurveGroup } from './fcurveGroupActive.js';
 
 /**
  * Apply a channel-click selection mutation in-place on an action.
@@ -1048,16 +1048,13 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *   - **Ctrl+LMB → `extend=true`** → SELECT_INVERT (the
  *     `:4155-4158` XOR branch).
  *   - **Shift+LMB → `extend_range=true`** → SELECT_EXTEND_RANGE
- *     (`:4159-4162` range walker). **Deferred to path #50's
- *     downstream slice** — Blender's `animchannel_select_range`
- *     (`:3984-4025`) requires an active group of matching type
- *     (`ANIM_is_active_channel` at `:3997` walks `AGRP_ACTIVE` for
- *     ANIMTYPE_GROUP at the `:449` accessor); SS does not yet port
- *     AGRP_ACTIVE (see [src/anim/fcurveGroups.js:17](./fcurveGroups.js)).
- *     Faithful port = no-op until #50 ships AGRP_ACTIVE; we
- *     intentionally diverge from Blender's auto-downgrade (see
- *     Deviation 4 below) to avoid Shift behaving identically to
- *     Ctrl until the full range port lands.
+ *     (`:4159-4162` range walker). **Shipped in Slice 5.MM (Path #58)**
+ *     as the `'range'` modifier — see the per-branch section below.
+ *     Auto-downgrades to `'toggle'` when no active group exists,
+ *     mirroring Blender's `:4517-4522` (which is type-agnostic and
+ *     fires for both fcurve and group clicks). The AGRP_ACTIVE
+ *     substrate from Slice 5.LL (path #50) provides the active bound
+ *     via [`getActiveFCurveGroup`](./fcurveGroupActive.js).
  *   - **Shift+Ctrl+LMB → `children_only=true`** → children-only branch
  *     (`:4163-4180`, keymap entry `blender_default.py:3853-3854`).
  *     Shipped in Slice 5.BB as {@link applyGroupChildrenSelect}.
@@ -1139,27 +1136,16 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *      convention — channel selection is view state. Dispatcher
  *      passes `skipHistory:true` in the projectStore `update()` call.
  *
- *   4. **Shift+click on group header is a no-op — INTENTIONAL
- *      divergence from Blender's auto-downgrade.** Blender's
- *      auto-downgrade at `:4517-4522` is type-agnostic: it gates on
- *      `animchannel_has_active_of_type(ac, eAnim_ChannelType(ale->type))`
- *      where `ale->type` is the CLICKED channel's type. So for a
- *      group-header click with no AGRP_ACTIVE present, Blender DOES
- *      downgrade SELECT_EXTEND_RANGE → SELECT_INVERT and Shift+click
- *      behaviorally becomes Ctrl+click. SS deviates from this
- *      auto-downgrade for groups because, until path #50 ports
- *      AGRP_ACTIVE, every Shift+group-click would always trigger
- *      the downgrade (no group is ever active), making Shift
- *      indistinguishable from Ctrl in 100% of cases — a worse UX
- *      than an explicit no-op. When #50 lands AGRP_ACTIVE, this
- *      deviation closes automatically: the helper gains a 'range'
- *      modifier branch whose `canRange` check mirrors Blender's,
- *      and the downgrade-on-no-active path fires only when no
- *      active group exists at the moment of the click (rare,
- *      matching Blender). (Audit-fix fidelity MED-2 Slice 5.KK
- *      dual-audit 2026-05-18: rationale rewritten — earlier draft
- *      implied Blender restricts auto-downgrade to fcurve-type,
- *      which is false.)
+ *   4. **Shift+click on group header — RESOLVED 2026-05-18 (Slice
+ *      5.MM, Path #58).** Pre-fix, Shift was an explicit no-op for
+ *      groups until AGRP_ACTIVE shipped (path #50). Now that 5.LL
+ *      ships the per-group ACTIVE bit + `getActiveFCurveGroup`
+ *      accessor, the 'range' modifier branch above implements
+ *      Blender's `animchannel_select_range` walker faithfully:
+ *      Shift+group-click selects every group between the active
+ *      group and the clicked group (inclusive). Auto-downgrades to
+ *      'toggle' when no active group exists (matches Blender's
+ *      type-agnostic auto-downgrade at `:4517-4522`).
  *
  *   5. **macOS Cmd substitutes for Ctrl.** Sister to Slice 5.BB
  *      Deviation 4 and Slice 5.AA metaKey-as-Ctrl deviation. The
@@ -1194,13 +1180,131 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
   if (!action || !Array.isArray(action.fcurves)) return result;
   if (typeof groupId !== 'string' || groupId.length === 0) return result;
   if (!Array.isArray(action.groups)) return result;
-  if (modifier !== 'replace' && modifier !== 'toggle') return result;
+  if (modifier !== 'replace' && modifier !== 'toggle' && modifier !== 'range') return result;
 
   let group = null;
   for (const g of action.groups) {
     if (g && g.id === groupId) { group = g; break; }
   }
   if (!group) return result;
+
+  if (modifier === 'range') {
+    // Slice 5.MM (Path #58) — SELECT_EXTEND_RANGE port for groups.
+    // Closes Slice 5.KK Deviation 4 + Slice 5.LL Deviation 1.
+    //
+    // Mirrors Blender's `click_select_channel_group` (defined
+    // `:4120-4221`) at `:4159-4162`:
+    //
+    //   ```cpp
+    //   else if (selectmode == SELECT_EXTEND_RANGE) {
+    //     ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_EXTEND_RANGE);
+    //     animchannel_select_range(ac, ale);
+    //   }
+    //   ```
+    //
+    // Walker at `animchannel_select_range` (`:3984-4025`) iterates the
+    // FILTERED visible channel list (`anim_channels_for_selection`)
+    // matching `cursor_elem->type` — for ANIMTYPE_GROUP cursor, only
+    // other GROUPs are visited (the `:3992` `ale.type != cursor_elem->type`
+    // filter excludes fcurves). Bounds are `is_active_elem`
+    // (`ANIM_is_active_channel(&ale)` at `:3997` — for groups this is
+    // `agrp->flag & AGRP_ACTIVE` at `:447-450`) and `is_cursor_elem`
+    // (`ale.data == cursor_elem->data` at `:3996`).
+    //
+    // **Auto-downgrade** — Blender's `mouse_anim_channels` at
+    // `:4517-4522` is type-agnostic: when no active channel of matching
+    // type exists, SELECT_EXTEND_RANGE downgrades to SELECT_INVERT
+    // (toggle). SS ports this — when `getActiveFCurveGroup(action)`
+    // returns null, we recurse with `'toggle'` so Shift+group-click
+    // still behaves usefully even on a fresh action where no group
+    // has been clicked yet (the very common case: open the editor,
+    // first interaction is Shift+click on a group header).
+    //
+    // **Pre-walk wipe** — Blender's `ANIM_anim_channels_select_set(
+    // ACHANNEL_SETFLAG_EXTEND_RANGE)` at `:4160` deselects every
+    // visible channel via `anim_channels_select_set` (`:678-819`)
+    // ANIMTYPE_GROUP case at `:714-722`. Note that `change_active`
+    // is FALSE for EXTEND_RANGE (`:683`: `change_active = (sel !=
+    // ACHANNEL_SETFLAG_EXTEND_RANGE)`), so the pre-walk does NOT
+    // clear AGRP_ACTIVE — the active group survives the range
+    // operation. SS port: `delete g.selected` on every group; do
+    // NOT touch `g.active`.
+    //
+    // **Post-branch elevation gate** — `:4194` `selectmode !=
+    // SELECT_EXTEND_RANGE` SKIPS the `ANIM_set_active_channel` call
+    // for range, preserving the prior active. SS port: no
+    // `setActiveFCurveGroup` call here (matches Blender — the active
+    // bound stays active).
+    //
+    // **SS scope deviation** — Blender walks the FILTERED visible
+    // channel list; SS walks `action.groups` directly because the
+    // sidebar bucketization shows every group as a header regardless
+    // of expansion state (groups don't carry a "hide group entirely
+    // from sidebar" bit today). If a future slice adds group-level
+    // hide-from-sidebar, the walker scope will need narrowing to
+    // a passed-in `ctx.orderedGroupIds`. Sister to Slice 5.J's
+    // visible-scope handling for fcurves but with no current consumer
+    // for the narrower scope.
+    const active = getActiveFCurveGroup(action);
+    if (!active) {
+      // Auto-downgrade to toggle — recurse with no ctx so the downgrade
+      // is single-level (toggle never re-enters this branch).
+      return applyGroupHeaderSelect(action, groupId, 'toggle');
+    }
+    const activeId = active.id;
+
+    // Compute the inclusive path set FIRST, then apply the net
+    // change. Sister-pattern to Slice 5.BB's "skip-if-in-target-group"
+    // pre-clear optimization: report `changed=true` only when the
+    // net state actually flips, NOT when a transient pre-walk delete
+    // is followed by a walker re-set. Keeps the preflight + setter
+    // change-decision identical (no behavior divergence; functional
+    // equivalent of Blender's "pre-clear then range-add" two-step).
+    const inPath = new Set();
+    let inRange = false;
+    for (const g of action.groups) {
+      if (!g || typeof g.id !== 'string') continue;
+      const isActive = g.id === activeId;
+      const isCursor = g.id === groupId;
+      if (isActive || isCursor) {
+        inPath.add(g.id);
+        inRange = !inRange;
+      } else if (inRange) {
+        inPath.add(g.id);
+      }
+      if (isActive && isCursor) break;
+      // SS perf optimization (NOT a Blender port — sister to Slice 5.J
+      // LOW-B1 deviation): break once both bounds have been hit.
+      // Blender's walker keeps iterating but does nothing useful for
+      // remaining elements; final state is identical.
+      if (!inRange && (isActive || isCursor)) break;
+    }
+
+    // Apply net state: in-path groups end up `selected: true`; all
+    // other groups have `selected` sparse-deleted. Per the
+    // change_active=false rule (`:683`), `active` is NEVER touched.
+    for (const g of action.groups) {
+      if (!g || typeof g.id !== 'string') continue;
+      const wantSelected = inPath.has(g.id);
+      const isSelected = g.selected === true;
+      if (wantSelected && !isSelected) {
+        g.selected = true;
+        result.changed = true;
+      } else if (!wantSelected && isSelected) {
+        delete g.selected;
+        result.changed = true;
+      }
+    }
+
+    // Audit-fix marker: clicked group ends up SELECTED (whether single-
+    // cell range or full range). groupSelectedAfter reflects this.
+    result.groupSelectedAfter = true;
+
+    // No post-branch active elevation — `:4194` `selectmode !=
+    // SELECT_EXTEND_RANGE` gate SKIPS `ANIM_set_active_channel`. The
+    // active group from BEFORE the range op stays active.
+    return result;
+  }
 
   if (modifier === 'toggle') {
     // SELECT_INVERT — `:4155-4158`. XOR the clicked group's SELECTED
@@ -1325,13 +1429,56 @@ export function wouldGroupHeaderSelectChange(action, groupId, modifier, ctx) {
   if (!action || !Array.isArray(action.fcurves)) return false;
   if (typeof groupId !== 'string' || groupId.length === 0) return false;
   if (!Array.isArray(action.groups)) return false;
-  if (modifier !== 'replace' && modifier !== 'toggle') return false;
+  if (modifier !== 'replace' && modifier !== 'toggle' && modifier !== 'range') return false;
 
   let group = null;
   for (const g of action.groups) {
     if (g && g.id === groupId) { group = g; break; }
   }
   if (!group) return false;
+
+  if (modifier === 'range') {
+    // Slice 5.MM — 'range' preflight. Mirrors the setter's auto-
+    // downgrade + pre-walk wipe + range walker so the change-decision
+    // is identical.
+    const active = getActiveFCurveGroup(action);
+    if (!active) {
+      // Auto-downgrade path: preflight predicts via the 'toggle'
+      // branch (which always returns true since XOR flips a bit).
+      return wouldGroupHeaderSelectChange(action, groupId, 'toggle', ctx);
+    }
+    const activeId = active.id;
+
+    // Build the post-walk `selected` set: every group on the inclusive
+    // path between the two bounds. If active === cursor, the path is
+    // a single cell.
+    const inPath = new Set();
+    let inRange = false;
+    for (const g of action.groups) {
+      if (!g || typeof g.id !== 'string') continue;
+      const isActive = g.id === activeId;
+      const isCursor = g.id === groupId;
+      if (isActive || isCursor) {
+        inPath.add(g.id);
+        inRange = !inRange;
+      } else if (inRange) {
+        inPath.add(g.id);
+      }
+      if (isActive && isCursor) break;
+      if (!inRange && (isActive || isCursor)) break;
+    }
+
+    // Predict the net post-walk `selected` state: for each group, the
+    // walker would end with `selected === true` iff in path, else
+    // `selected === undefined` (sparse). Compare against current state.
+    for (const g of action.groups) {
+      if (!g || typeof g.id !== 'string') continue;
+      const wantSelected = inPath.has(g.id);
+      const isSelected = g.selected === true;
+      if (wantSelected !== isSelected) return true;
+    }
+    return false;
+  }
 
   if (modifier === 'toggle') {
     // XOR always changes the SELECTED bit (true → missing,
