@@ -135,13 +135,13 @@ export function parseMotion3Json(jsonText, opts) {
     if (target === 'Parameter') {
       const fc = buildParamFCurve(id, keyforms);
       if (fc) {
-        if (loopIntent) attachLoopCyclesModifier(fc);
+        if (loopIntent) attachLoopCyclesModifier(fc, opts.uid);
         fcurves.push(fc);
       }
     } else if (target === 'PartOpacity') {
       const fc = buildNodeFCurve(id, 'opacity', keyforms);
       if (fc) {
-        if (loopIntent) attachLoopCyclesModifier(fc);
+        if (loopIntent) attachLoopCyclesModifier(fc, opts.uid);
         fcurves.push(fc);
       }
     } else if (target === 'Model') {
@@ -301,12 +301,19 @@ function numOr(v, fallback) {
  *   - head-of-stack (per 3.C `unshift` invariant)
  *   - `data.after = 'repeat'`
  *   - sparse defaults for the rest (`before='none'`, `afterCycles=0`)
+ *   - stable `id` from caller's uid (audit-fix MED-2: missing id leaves
+ *     the 3.C UI panel's modifier-row keys + active-highlight reading
+ *     `undefined` and any future serialisation invariant pointing at
+ *     `modifier.id` silently breaks)
  *
  * @param {object} fcurve - fcurve with `modifiers?` to mutate
+ * @param {() => string} uid - id mint (host's uid generator, same as
+ *   the one used to mint the action id)
  */
-function attachLoopCyclesModifier(fcurve) {
+function attachLoopCyclesModifier(fcurve, uid) {
   if (!Array.isArray(fcurve.modifiers)) fcurve.modifiers = [];
   fcurve.modifiers.unshift({
+    id: uid(),
     type: 'cycles',
     data: { after: 'repeat' },
   });

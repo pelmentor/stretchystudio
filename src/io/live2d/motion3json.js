@@ -413,9 +413,13 @@ function hasActiveCyclesModifier(fcurve) {
  *   - `after` MUST be explicit 'repeat' (sparse default 'none' fails)
  *   - `afterCycles` sparse-default 0 (= infinite) → missing or 0 satisfies
  *
- * Non-zero `useInfluence` slider values fail the check — a fractional
- * cycle isn't a full loop. The cycle-driven IsLoop signal is binary
- * by Cubism's format definition.
+ * `useInfluence=true, influence<1` fails the check — a fractional
+ * cycle blend isn't a full loop. `useInfluence=true, influence===1` is
+ * accepted because the only branches of `eval_fmodifier_influence`
+ * (`fmodifier.cc:1455-1488`) that could drop effective influence below
+ * 1 at the action edges are gated on `useRestrictedRange`, which is
+ * already disqualified by `getActiveCyclesModifier`. The cycle-driven
+ * IsLoop signal is binary by Cubism's format definition.
  *
  * @param {{ fcurves?: Array<object> } | null | undefined} action
  * @returns {boolean}
@@ -445,28 +449,44 @@ function actionHasUniformLoopingCycles(action) {
 /**
  * Bake an fcurve's modifier stack into explicit linear keyforms at
  * `fps` over `[0, durationMs]`. Returns a shallow-cloned fcurve with
- * baked `keyforms` and `modifiers` stripped — safe to feed into
- * `encodeKeyframesToSegments` without re-applying modifiers.
+ * baked `keyforms` and BOTH `modifiers` AND `driver` stripped — safe
+ * to feed into `encodeKeyframesToSegments` without re-applying either
+ * (both have already contributed to the sampled value per
+ * `evaluateFCurve` pipeline at `fcurve.js:155`).
  *
  * Sampling is uniform at the action's recorded FPS. Each sample becomes
  * a linear keyform; downstream the segment encoder emits each pair as
  * a Cubism type-0 (linear) segment. The bake count is
- * `floor(durationMs / stepMs) + 1` (inclusive endpoints).
+ * `floor(durationMs / stepMs) + 1` (inclusive endpoints). Matches
+ * Blender's `GRAPH_OT_bake_curves` per-frame cadence (one sample per
+ * frame in the scene FPS range).
  *
- * Per `evaluateFCurve` (`fcurve.js:155`), every active modifier on the
- * fcurve contributes to each sample — Cycles + Noise + Generator +
- * Limits + Stepped + Envelope. The 3.D trigger gate at the caller
- * decides which fcurves get baked; the bake itself is type-agnostic.
+ * Per `evaluateFCurve`, every active modifier on the fcurve contributes
+ * to each sample — Cycles + Noise + Generator + Limits + Stepped +
+ * Envelope. The 3.D trigger gate at the caller decides which fcurves
+ * get baked; the bake itself is modifier-type-agnostic. In particular
+ * non-loop Cycles modes (`repeat_offset`, `mirror`, and `before` set
+ * to anything but `'none'`) also pass through the gate because
+ * `hasActiveCyclesModifier` is presence-based — the gate semantics is
+ * "if it has Cycles AND Loop=false, bake it" regardless of cycle
+ * mode (gradient-offset, mirrored, and before-extrapolations are all
+ * valid Blender behaviours that must be baked into Cubism's linear
+ * segment encoding).
+ *
+ * Degenerate `durationMs <= 0`: returns the original fcurve unchanged
+ * (a zero-duration action has no time axis to bake along; producing
+ * two coincident keyforms would be a Rule №1 silent-fallback shape).
  *
  * @param {object} fcurve - source fcurve (not mutated)
  * @param {number} durationMs - action duration in milliseconds
  * @param {number} fps - sample rate (action.fps)
- * @returns {object} cloned fcurve with baked keyforms + modifiers stripped
+ * @returns {object} cloned fcurve with baked keyforms + modifiers/driver stripped
  */
 function bakeFCurveModifiers(fcurve, durationMs, fps) {
+  if (!(durationMs > 0)) return fcurve;
   const stepMs = 1000 / fps;
   // +1 for the inclusive endpoint at t=durationMs.
-  const sampleCount = Math.max(2, Math.floor(durationMs / stepMs) + 1);
+  const sampleCount = Math.floor(durationMs / stepMs) + 1;
   const baked = new Array(sampleCount);
   for (let i = 0; i < sampleCount; i++) {
     // Clamp the last sample to exactly durationMs to avoid fp drift past
@@ -484,9 +504,13 @@ function bakeFCurveModifiers(fcurve, durationMs, fps) {
       flag: 0,
     };
   }
-  // Strip modifiers — they've been baked in. Preserves every other
-  // field (target encoding, driver, id, etc.) via spread.
-  const { modifiers: _stripped, ...rest } = fcurve;
+  // Strip BOTH modifiers AND driver — both have been folded into the
+  // baked samples by `evaluateFCurve`. Preserves every other top-level
+  // fcurve field (id, rnaPath, target encoding, color/visible flags,
+  // etc.) via spread. Audit-fix H-1: failing to strip `driver` left a
+  // semantic landmine where downstream calls would re-fire the driver
+  // on top of already-baked values.
+  const { modifiers: _strippedMods, driver: _strippedDriver, ...rest } = fcurve;
   return { ...rest, keyforms: baked };
 }
 

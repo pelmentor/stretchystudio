@@ -382,25 +382,91 @@ function makeAction(props = {}) {
   assertEq(reExported.Meta.Loop, false, '15a: re-export preserves Loop=false');
 }
 
-// ── 16. duration=0 edge case (bake doesn't crash) ────────────────────────
+// ── 16. duration=0 edge case (audit-fix M-1: early-return unchanged) ────
 {
-  // Mixed action with duration=0 + Cycles fcurve → bake fires on the
-  // Cycles fcurve (sibling forces Loop=false). The bake's
-  // `Math.max(2, ...)` floor guards against negative sample counts.
+  // Audit-fix M-1: duration=0 actions early-return the original fcurve
+  // unchanged from bakeFCurveModifiers. The previous shape (Math.max(2,
+  // ...) floor) produced two coincident keyforms at t=0 — a Rule №1
+  // silent-fallback shape. Now: Cycles fcurve survives with its
+  // original keyforms, and the segment encoder produces the natural
+  // 2-keyform encoding (5 floats).
   const m = generateMotion3Json(makeAction({
     duration: 0,
     fcurves: [
       paramFcurve('P',
         [{ time: 0, value: 0 }, { time: 100, value: 1 }],
         [{ type: 'cycles', data: { after: 'repeat' } }]),
-      paramFcurve('Static', [{ time: 0, value: 0 }]),
+      paramFcurve('Static', [{ time: 0, value: 0 }, { time: 100, value: 1 }]),
     ],
   }));
   assertEq(m.Meta.Loop, false,
-    '16: duration=0 mixed action → Loop=false (bake fires on Cycles fcurve)');
+    '16: duration=0 mixed action → Loop=false');
   const pCurve = m.Curves.find((c) => c.Id === 'P');
-  assert(pCurve && Array.isArray(pCurve.Segments),
-    '16a: degenerate duration=0 bake still produces a segment array');
+  // P's original 2 keyforms survive (early-return); 5 floats for 2 kfs.
+  assertEq(pCurve.Segments.length, 5,
+    '16a: duration=0 early-returns original fcurve unchanged (no degenerate bake)');
+}
+
+// ── 17. repeat_offset Cycles fires bake (audit-fix H-2 explicit test) ────
+{
+  // repeat_offset is a valid Blender mode (gradient-offset cycling).
+  // It fails the IsLoop predicate (after must be 'repeat', not
+  // 'repeat_offset'), so Loop=false and the bake gate fires on the
+  // Cycles-present fcurve. The baked samples reflect the
+  // gradient-offset waveform via evaluateFCurve.
+  const m = generateMotion3Json(makeAction({
+    fps: 30, duration: 500,
+    fcurves: [paramFcurve('P',
+      [{ time: 0, value: 0 }, { time: 100, value: 1 }],
+      [{ type: 'cycles', data: { after: 'repeat_offset' } }])],
+  }));
+  assertEq(m.Meta.Loop, false,
+    '17: repeat_offset Cycles → Loop=false (after must be exactly "repeat")');
+  // Bake fires: 30fps × 500ms = ~16 samples → >> 5 floats.
+  assert(m.Curves[0].Segments.length > 5,
+    '17a: repeat_offset Cycles fcurve baked (audit-fix H-2)');
+  // Gradient offset: cycle is 0→1 over 0..100ms with delta_y=1 per
+  // cycle. At t=200ms (cycle 2 complete) value should be ≈2; at
+  // t=350ms (mid cycle 4) value should be ≈3.5.
+  const segs = m.Curves[0].Segments;
+  // Decode segments to find sample near t=0.35s.
+  const samples = [{ t: segs[0], v: segs[1] }];
+  let i = 2;
+  while (i < segs.length) {
+    const type = segs[i++];
+    if (type === 1) { i += 4; samples.push({ t: segs[i], v: segs[i + 1] }); i += 2; }
+    else { samples.push({ t: segs[i], v: segs[i + 1] }); i += 2; }
+  }
+  let bestIdx = -1; let bestDelta = Infinity;
+  for (let k = 0; k < samples.length; k++) {
+    const d = Math.abs(samples[k].t - 0.35);
+    if (d < bestDelta) { bestDelta = d; bestIdx = k; }
+  }
+  assert(samples[bestIdx].v > 2.5,
+    `17b: repeat_offset bake produces gradient-increasing values (got ${samples[bestIdx].v} at t≈0.35s, expected > 2.5)`);
+}
+
+// ── 18. Importer synthesises Cycles modifier with stable id (audit-fix MED-2)
+{
+  // Audit-fix MED-2: the synthesised loop-Cycles modifier must carry a
+  // stable `id` from the host's uid generator, not undefined. 3.C UI
+  // panel keys + future serialisation paths read `modifier.id`.
+  let counter = 0;
+  const original = JSON.stringify({
+    Version: 3,
+    Meta: {
+      Duration: 1.0, Fps: 30.0, Loop: true, AreBeziersRestricted: false,
+      CurveCount: 1, TotalSegmentCount: 1, TotalPointCount: 2,
+      UserDataCount: 0, TotalUserDataSize: 0,
+    },
+    Curves: [{ Target: 'Parameter', Id: 'ParamA', Segments: [0, 0, 0, 1.0, 1.0] }],
+  });
+  const { action } = parseMotion3Json(original, { uid: () => `synth_id_${counter++}` });
+  const synthMod = action.fcurves[0].modifiers[0];
+  assert(typeof synthMod.id === 'string' && synthMod.id.length > 0,
+    '18: synthesised Cycles modifier carries a string id');
+  assert(synthMod.id.startsWith('synth_id_'),
+    `18a: synthesised id is minted via opts.uid (got "${synthMod.id}")`);
 }
 
 console.log(`motion3jsonCyclesExport: ${passed} passed, ${failed} failed`);
