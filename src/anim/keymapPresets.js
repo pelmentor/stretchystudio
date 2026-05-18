@@ -290,3 +290,83 @@ export function resolveChannelDeleteAction(preset, e) {
   if (e.code === 'KeyX') return 'delete';
   return null;
 }
+
+/**
+ * Slice 5.JJ — resolve a keyboard event to the graph-region
+ * `graph.hide` / `graph.reveal` operators (H / Shift+H / Alt+H or
+ * Ctrl+H / Shift+H / Alt+H).
+ *
+ * Per-preset divergence (only the "hide selected" key differs;
+ * Shift+H and Alt+H are shared across all presets):
+ *
+ *   - `'default'` / `'default_no_toggle'`:
+ *       `blender_default.py:1967` → `_template_items_hide_reveal_actions`
+ *       at `:461-466`:
+ *         - H            → hide selected (`graph.hide`, unselected=false)
+ *         - Shift+H      → hide unselected (`graph.hide`, unselected=true)
+ *         - Alt+H        → reveal (`graph.reveal`)
+ *
+ *   - `'industry_compatible'`:
+ *       `industry_compatible_data.py:919-923`:
+ *         - Ctrl+H       → hide selected (`graph.hide`, unselected=false)
+ *         - Shift+H      → hide unselected (`graph.hide`, unselected=true)
+ *         - Alt+H        → reveal (`graph.reveal`)
+ *
+ * Shift+H and Alt+H are IDENTICAL across all 3 presets. The ONLY
+ * divergence is the "hide selected" key: bare H in default, Ctrl+H
+ * in industry-compatible. (Sister-pattern to Slice 5.II's
+ * channel-delete: shared DEL + divergent X/Backspace.)
+ *
+ * Returns one of `'hide_selected'`, `'hide_unselected'`, `'reveal'`,
+ * or `null`. Caller (FCurveEditor's onKeyDown handler) maps these
+ * to `applyHideOp('selected')`, `applyHideOp('unselected')`, and
+ * `applyRevealOp()` respectively (Slice 5.M dispatcher).
+ *
+ * Region routing: Blender's H/Shift+H/Alt+H bind only in the
+ * km_graph_editor (timeline region); `km_animation_channels`
+ * (sidebar) does NOT bind these keys — sidebar visibility is
+ * toggled per-row via W (`anim.channels_setting_toggle`,
+ * `blender_default.py:3876`). SS's existing dispatcher inherits
+ * this convention: the resolver is region-agnostic; the caller
+ * decides whether to gate on `regionHoverRef.current`. Today the
+ * caller does NOT gate (fires regardless of cursor region —
+ * documented at Slice 5.M dispatcher).
+ *
+ * macOS Cmd: per the same web/DOM convention used in
+ * `resolveSelectAllAction` (Slice 5.AA HIGH-A2 audit deviation),
+ * `metaKey` is treated as Ctrl-equivalent. So Cmd+H on macOS in
+ * `'industry_compatible'` preset also resolves to 'hide_selected'.
+ *
+ * @param {KeymapPreset | string | null | undefined} preset
+ * @param {EventLikeKeyState} e
+ * @returns {'hide_selected' | 'hide_unselected' | 'reveal' | null}
+ */
+export function resolveHideRevealAction(preset, e) {
+  if (!e || typeof e !== 'object') return null;
+  if (e.code !== 'KeyH') return null;  // short-circuit non-H presses
+
+  const ctrl = e.ctrlKey || e.metaKey;
+
+  // Shared bindings across all 3 presets — check before per-preset split.
+  // Alt+H → reveal (no ctrl/shift)
+  if (e.altKey && !ctrl && !e.shiftKey) return 'reveal';
+  // Shift+H → hide unselected (no ctrl/alt)
+  if (e.shiftKey && !ctrl && !e.altKey) return 'hide_unselected';
+
+  // Divergent: "hide selected" key combo.
+  const p = coerceKeymapPreset(preset);
+
+  if (p === 'industry_compatible') {
+    // IC: Ctrl+H → hide selected (no shift/alt)
+    if (ctrl && !e.shiftKey && !e.altKey) return 'hide_selected';
+    return null;
+  }
+
+  // p === 'default' OR 'default_no_toggle'.
+  // `'default_no_toggle'` inherits the default hide/reveal bindings
+  // (only the select-all triplet differs between `'default'` and
+  // `'default_no_toggle'` — Slice 5.GG).
+  // Default: bare H → hide selected (no modifiers).
+  if (!ctrl && !e.shiftKey && !e.altKey) return 'hide_selected';
+  return null;
+}

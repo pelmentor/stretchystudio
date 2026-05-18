@@ -22,6 +22,7 @@ import {
   coerceKeymapPreset,
   resolveSelectAllAction,
   resolveChannelDeleteAction,
+  resolveHideRevealAction,
 } from '../../src/anim/keymapPresets.js';
 
 let passed = 0;
@@ -228,6 +229,96 @@ function ev(code, modifiers = {}) {
   eq(resolveChannelDeleteAction(null, ev('KeyX')), 'delete', 'null preset coerced to default');
   eq(resolveChannelDeleteAction('default', null), null, 'null event → null');
   eq(resolveChannelDeleteAction('default', 'not-an-object'), null, 'string event → null');
+}
+
+// ── resolveHideRevealAction (Slice 5.JJ) ─────────────────────────
+// Default + default_no_toggle: H / Shift+H / Alt+H
+//   (blender_default.py:1967 → :461-466 template)
+// Industry-compatible: Ctrl+H / Shift+H / Alt+H
+//   (industry_compatible_data.py:919-923)
+// Shift+H and Alt+H are SHARED across all 3 presets; only "hide
+// selected" key (H vs Ctrl+H) differs.
+
+// Shared: Alt+H → reveal
+{
+  eq(resolveHideRevealAction('default', ev('KeyH', { alt: true })), 'reveal',
+    'shared: default Alt+H → reveal');
+  eq(resolveHideRevealAction('default_no_toggle', ev('KeyH', { alt: true })), 'reveal',
+    'shared: no-toggle Alt+H → reveal');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { alt: true })), 'reveal',
+    'shared: IC Alt+H → reveal');
+}
+
+// Shared: Shift+H → hide unselected
+{
+  eq(resolveHideRevealAction('default', ev('KeyH', { shift: true })), 'hide_unselected',
+    'shared: default Shift+H → hide_unselected');
+  eq(resolveHideRevealAction('default_no_toggle', ev('KeyH', { shift: true })), 'hide_unselected',
+    'shared: no-toggle Shift+H → hide_unselected');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { shift: true })), 'hide_unselected',
+    'shared: IC Shift+H → hide_unselected');
+}
+
+// Divergent: hide_selected — H (default) vs Ctrl+H (IC)
+{
+  eq(resolveHideRevealAction('default', ev('KeyH')), 'hide_selected',
+    'default: H (no modifiers) → hide_selected');
+  eq(resolveHideRevealAction('default_no_toggle', ev('KeyH')), 'hide_selected',
+    'no-toggle: H (no modifiers) → hide_selected (inherits default)');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH')), null,
+    'IC: H (no modifiers) → null (Ctrl+H only in IC)');
+}
+{
+  eq(resolveHideRevealAction('default', ev('KeyH', { ctrl: true })), null,
+    'default: Ctrl+H → null (IC binding)');
+  eq(resolveHideRevealAction('default_no_toggle', ev('KeyH', { ctrl: true })), null,
+    'no-toggle: Ctrl+H → null (IC binding)');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { ctrl: true })), 'hide_selected',
+    'IC: Ctrl+H → hide_selected');
+}
+
+// macOS Cmd treated as Ctrl-equivalent (Slice 5.AA convention)
+{
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { meta: true })), 'hide_selected',
+    'IC: Cmd+H (macOS) → hide_selected');
+}
+
+// Critical differentiator: H vs Ctrl+H between default + IC
+{
+  eq(resolveHideRevealAction('default',          ev('KeyH')), 'hide_selected',
+    'differentiator: default H → hide_selected');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH')), null,
+    'differentiator: IC H → null');
+  eq(resolveHideRevealAction('default',          ev('KeyH', { ctrl: true })), null,
+    'differentiator: default Ctrl+H → null');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { ctrl: true })), 'hide_selected',
+    'differentiator: IC Ctrl+H → hide_selected');
+}
+
+// Invalid modifier combos
+{
+  eq(resolveHideRevealAction('default', ev('KeyH', { ctrl: true, shift: true })), null,
+    'default: Ctrl+Shift+H → null');
+  eq(resolveHideRevealAction('default', ev('KeyH', { alt: true, ctrl: true })), null,
+    'default: Alt+Ctrl+H → null');
+  eq(resolveHideRevealAction('default', ev('KeyH', { alt: true, shift: true })), null,
+    'default: Alt+Shift+H → null');
+  eq(resolveHideRevealAction('industry_compatible', ev('KeyH', { ctrl: true, shift: true })), null,
+    'IC: Ctrl+Shift+H → null');
+}
+
+// Other keys never match
+{
+  eq(resolveHideRevealAction('default', ev('KeyG')), null, 'default: G → null');
+  eq(resolveHideRevealAction('default', ev('KeyA', { alt: true })), null, 'default: Alt+A → null');
+}
+
+// Null/missing event guards
+{
+  eq(resolveHideRevealAction('default', null), null, 'null event → null');
+  eq(resolveHideRevealAction('default', undefined), null, 'undefined event → null');
+  eq(resolveHideRevealAction('default', 'not-an-object'), null, 'string event → null');
+  eq(resolveHideRevealAction('bogus', ev('KeyH')), 'hide_selected', 'unknown preset coerced to default');
 }
 
 // ── final report ───────────────────────────────────────────────────

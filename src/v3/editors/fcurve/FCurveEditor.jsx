@@ -307,6 +307,7 @@ import { useKeyformSelectionStore } from '../../../store/keyformSelectionStore.j
 import {
   resolveSelectAllAction,
   resolveChannelDeleteAction,
+  resolveHideRevealAction,
 } from '../../../anim/keymapPresets.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
@@ -2757,14 +2758,25 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         return;
       }
     }
-    // Slice 5.M — bulk hide/reveal (`graph.hide` + `graph.reveal`).
-    // Keymap at `blender_default.py:1967` →
-    // `_template_items_hide_reveal_actions` at `:461-466`:
+    // Slice 5.M + 5.JJ — bulk hide/reveal (`graph.hide` + `graph.reveal`).
+    // Slice 5.JJ refactor: the 3-branch H/Shift+H/Alt+H ladder is now
+    // a single resolver-driven dispatch via `resolveHideRevealAction`.
+    // The resolver maps to one of 'hide_selected' / 'hide_unselected'
+    // / 'reveal' per the active preset:
     //
-    //   - H        → `graph.hide` with `unselected=False` (`:464`)
-    //   - Shift+H  → `graph.hide` with `unselected=True`  (`:465`)
-    //   - Alt+H    → `graph.reveal` (no props → `select=true` default
-    //                from `graph_ops.cc:418`) (`:463`)
+    //   - 'default' / 'default_no_toggle':
+    //       H        → 'hide_selected'   (blender_default.py via :464)
+    //       Shift+H  → 'hide_unselected' (:465)
+    //       Alt+H    → 'reveal'          (:463)
+    //
+    //   - 'industry_compatible':
+    //       Ctrl+H   → 'hide_selected'   (industry_compatible_data.py:919-920)
+    //       Shift+H  → 'hide_unselected' (:921-922 — shared with default)
+    //       Alt+H    → 'reveal'          (:923 — shared with default)
+    //
+    // The reveal binding (Alt+H) and the hide-unselected binding
+    // (Shift+H) are SHARED across all 3 presets; only "hide selected"
+    // differs (bare H in default, Ctrl+H in IC).
     //
     // These are timeline-region only. Blender's `km_animation_channels`
     // (sidebar) does not bind H/Shift+H/Alt+H — sidebar visibility is
@@ -2773,20 +2785,25 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // on `regionHoverRef.current === 'sidebar'`; it fires regardless
     // of cursor region today. (If SS later mirrors Blender's W →
     // setting_toggle in the sidebar, that's a separate slice.)
-    if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      applyHideOp('selected');
-      return;
-    }
-    if (e.code === 'KeyH' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      applyHideOp('unselected');
-      return;
-    }
-    if (e.code === 'KeyH' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      e.preventDefault();
-      applyRevealOp();
-      return;
+    {
+      const hideReveal = resolveHideRevealAction(
+        usePreferencesStore.getState().keymapPreset, e,
+      );
+      if (hideReveal === 'hide_selected') {
+        e.preventDefault();
+        applyHideOp('selected');
+        return;
+      }
+      if (hideReveal === 'hide_unselected') {
+        e.preventDefault();
+        applyHideOp('unselected');
+        return;
+      }
+      if (hideReveal === 'reveal') {
+        e.preventDefault();
+        applyRevealOp();
+        return;
+      }
     }
     // Slice 5.Q — N key toggles the N-panel (right-side sidebar).
     //
