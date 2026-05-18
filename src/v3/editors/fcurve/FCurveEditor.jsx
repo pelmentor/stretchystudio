@@ -346,6 +346,9 @@ import {
   applyChannelBoxSelect,
   wouldChannelBoxSelectChange,
 } from '../../../anim/fcurveBoxSelect.js';
+import {
+  applyGraphSelectAllChannelCascade,
+} from '../../../anim/graphSelectAllCascade.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import {
   countFCurveChannelStates,
@@ -2176,6 +2179,42 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return decision;
   }, [activeActionId, update, decoded, activeFCurveId]);
 
+  // Slice 5.DD — GRAPH-region select-all channel cascade + active-restore.
+  //
+  // Ports the `do_channels=true` cascade in `deselect_graph_keys`
+  // (`reference/blender/source/blender/editors/space_graph/graph_select.cc:397-413`)
+  // plus the outer active-restore pass in `graphkeys_deselectall_exec`
+  // at `:459-470`. Closes Slice 5.X-4 deviation (no active-restore
+  // pass after bulk select-toggle / deselect-all).
+  //
+  // The caller (graph-region keymap branches below) is responsible for
+  // the keyform-handle-level mutation (`setSelectedHandles(...)`); this
+  // dispatcher handles ONLY the channel-side cascade in a separate
+  // `update()` closure with `skipHistory:true` (channel selection is
+  // view state — Slice 5.F/5.K convention).
+  //
+  // `previouslyActive` is snapshotted INSIDE the update closure (via
+  // `getActiveFCurve(a)?.id`) so it reads the canonical action draft
+  // rather than a stale React-state-captured `activeFCurveId`. This
+  // matches Slice 5.X's pattern where the dispatcher reads from the
+  // immer draft, not the outer closure's captured snapshot.
+  //
+  // NOT wired into the CHANNEL-region (sidebar) keymap branches —
+  // Blender's `ANIM_OT_channels_select_all` at
+  // `anim_channels_edit.cc:3521-3554` is deliberately restore-less
+  // per the channel-region semantic (active is allowed to fade
+  // away on Alt+A). Slice 5.Z's `clearActive` wire-through already
+  // handles the channel-region active-clear correctly.
+  const graphSelectAllOp = useCallback((mode) => {
+    const orderedIds = visible.map((d) => d.fcurve.id);
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      const previouslyActive = getActiveFCurve(a)?.id ?? null;
+      applyGraphSelectAllChannelCascade(a, mode, { orderedIds, previouslyActive });
+    }, { skipHistory: true });
+  }, [activeActionId, update, visible]);
+
   // Hover region setters — Sidebar wires its outer div to these so
   // `regionHoverRef.current` reflects which sub-area the cursor is over
   // when KeyA / Alt+A / Ctrl+I fires. Stable identities keep Sidebar's
@@ -2581,16 +2620,29 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       );
       if (action !== null) {
         e.preventDefault();
+        // Slice 5.DD — `cascadeMode` is the channel-side cascade
+        // intent. For 'toggle' it tracks the keyform-side resolution
+        // (add when nothing selected, clear when something is). All
+        // other modes pass through 1:1.
+        let cascadeMode;
         if (action === 'toggle') {
-          if (selectionRef.current.size > 0) clearSelection();
-          else operatorSelectAll();
+          if (selectionRef.current.size > 0) { clearSelection(); cascadeMode = 'clear'; }
+          else { operatorSelectAll(); cascadeMode = 'add'; }
         } else if (action === 'add') {
           operatorSelectAll();
+          cascadeMode = 'add';
         } else if (action === 'clear') {
           clearSelection();
+          cascadeMode = 'clear';
         } else { // 'invert'
           operatorInvertSelection();
+          cascadeMode = 'invert';
         }
+        // Slice 5.DD — channel cascade + active-restore. See
+        // `graphSelectAllOp` definition for the Blender provenance
+        // (`graphkeys_deselectall_exec:459-470` +
+        // `deselect_graph_keys:397-413`).
+        graphSelectAllOp(cascadeMode);
         return;
       }
     }
@@ -2698,7 +2750,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // closure already includes `activeActionId` + `decoded` + `activeFCurveId`
     // so adding it here covers all live state for the sidebar branch.
     // Slice 5.O: `applyChannelMuteOp` added (mode-keyed dispatcher).
-  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp, applyChannelDeleteOp, applyChannelMuteOp]);
+  }, [modal, menu, fps, view, visible, activeFCurveId, activeActionId, applyChannelSelectAllOp, applyHideOp, applyRevealOp, applyChannelDeleteOp, applyChannelMuteOp, graphSelectAllOp]);
 
   // ── Slice 5.D — driver banner + live value ──────────────────────────
 
