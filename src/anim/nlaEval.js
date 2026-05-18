@@ -62,6 +62,7 @@
 
 import { evaluateFCurve } from './fcurve.js';
 import {
+  NLA_BLEND_MODES,
   NLASTRIP_FLAG,
   NLATRACK_FLAG,
   ADT_FLAG,
@@ -165,6 +166,16 @@ const EMPTY_TRACKS = /** @type {Array<object>} */
  *     `actstart` (Blender :759-764 special case)
  *   - General case: `actstart + fmod(timeMs - start, actlength * scale) / scale`
  *
+ * **USR_TIME override** (audit-fix Slice 4.B MED-F4): If
+ * `strip.flag & NLASTRIP_FLAG.USR_TIME`, look up a per-strip FCurve
+ * with `rnaPath === 'strip_time'`, evaluate it at `timeMs`, and use
+ * THAT as the action-local time directly — bypassing the entire
+ * scale/repeat/reverse pipeline. If `USR_TIME_CYCLIC` is ALSO set,
+ * wrap the result back into `[actstart, actend)` via positive modulo
+ * (Blender `anim_sys.cc:1069-1071`). Centralised here so callers
+ * don't duplicate the lookup; the substrate flag enum has exposed
+ * USR_TIME since 4.A so honoring it is Rule №1-correct.
+ *
  * Returns the action-local time in ms. Caller passes this to
  * `evaluateFCurve(fc, actionLocalMs)`.
  *
@@ -173,6 +184,38 @@ const EMPTY_TRACKS = /** @type {Array<object>} */
  * @returns {number}    -- ms action-local
  */
 export function remapStripTime(strip, timeMs) {
+  const stripFlag = typeof strip.flag === 'number' ? strip.flag : 0;
+
+  const actstart = typeof strip.actstart === 'number' ? strip.actstart : 0;
+  const actend   = typeof strip.actend === 'number' ? strip.actend : 0;
+
+  // USR_TIME override (Blender anim_sys.cc:1059): bypass the
+  // scale/repeat math entirely; per-strip FCurve drives action-local
+  // time directly. USR_TIME_CYCLIC (Blender :1069) wraps the result
+  // back into [actstart, actend) so a steadily-incrementing user
+  // time-fcurve produces a cyclic action play-through.
+  if (stripFlag & NLASTRIP_FLAG.USR_TIME) {
+    const localFcurves = Array.isArray(strip.fcurves) ? strip.fcurves : null;
+    if (localFcurves) {
+      for (const fc of localFcurves) {
+        if (fc && fc.rnaPath === 'strip_time') {
+          let userTime = evaluateFCurve(fc, timeMs);
+          if (stripFlag & NLASTRIP_FLAG.USR_TIME_CYCLIC) {
+            const actlen = Math.max(actend - actstart, 1e-10);
+            userTime = actstart + mod(userTime - actstart, actlen);
+          }
+          return userTime;
+        }
+      }
+    }
+    // USR_TIME set but no strip_time fcurve — fall through to default
+    // scale/repeat path. Mirrors Blender's behavior where the flag-
+    // enabled control was authored but the driving fcurve is missing
+    // (RNA assignment never happens; strip->strip_time keeps prior
+    // value, which for first eval == 0; SS gives the more useful
+    // fallback to scale/repeat instead of silently zeroing).
+  }
+
   let scale = typeof strip.scale === 'number' ? strip.scale : 1;
   if (Math.abs(scale) < 1e-10) scale = 1;
   scale = Math.abs(scale);   // negative scale handled via REVERSE flag
@@ -180,13 +223,10 @@ export function remapStripTime(strip, timeMs) {
   let repeat = typeof strip.repeat === 'number' ? strip.repeat : 1;
   if (Math.abs(repeat) < 1e-10) repeat = 1;
 
-  const actstart = typeof strip.actstart === 'number' ? strip.actstart : 0;
-  const actend   = typeof strip.actend === 'number' ? strip.actend : 0;
   const start    = typeof strip.start === 'number' ? strip.start : 0;
   const end      = typeof strip.end === 'number' ? strip.end : 0;
 
   const actlength = Math.max(actend - actstart, 1e-10);   // BKE_nla_clip_length_get_nonzero
-  const stripFlag = typeof strip.flag === 'number' ? strip.flag : 0;
   const reversed = (stripFlag & NLASTRIP_FLAG.REVERSE) !== 0;
 
   // End-of-strip pin (Blender nla.cc:759-764 / :739-744 reversed)
@@ -353,8 +393,11 @@ function clampStripTime(strip, timeMs) {
 }
 
 /**
- * Apply a single strip's blend operation to the accumulator. Pure --
- * returns a NEW Map (does not mutate `acc`).
+ * Apply a single strip's blend operation to the accumulator. **Mutates
+ * `acc` in place** for performance — `evaluateNla` owns the Map and
+ * re-reads it each iteration; no other caller holds a reference, so
+ * the new-Map-per-strip pattern (pre-audit-fix HIGH-A1) was pure
+ * allocation overhead with no observable purity benefit.
  *
  * For each fcurve in the strip's action, the rnaPath is the key. The
  * blend kernel matches Blender's `nla_blend_value`
@@ -365,11 +408,9 @@ function clampStripTime(strip, timeMs) {
  *   subtract → lower - strip * inf
  *   multiply → inf * (lower * strip) + (1 - inf) * lower
  *
- * If a key is absent from `acc`, the fallback lower-value is the
- * fcurve's evaluated baseline -- which for REPLACE means the strip
- * value wins entirely (lerp(undefined, strip, inf) where undefined
- * defaults to strip's first key value would be wrong; Blender uses
- * the channel's base_snapshot for COMBINE only and 0 for others).
+ * If a key is absent from `acc`, the fallback lower-value is 0
+ * (which for REPLACE means the strip value scales by influence
+ * alone -- the rest-value contribution is 0).
  *
  * **SS deviation**: For the 4 ship-modes, SS uses 0 as the
  * lower-value default. Blender uses the channel's RNA-resolved
@@ -379,25 +420,23 @@ function clampStripTime(strip, timeMs) {
  * rest values if it needs Blender-faithful "blend onto rest" semantics.
  * Documented + tested.
  *
- * @param {Map<string, number>} acc
+ * @param {Map<string, number>} acc — mutated in place
  * @param {Array<object>} fcurves -- the strip's action's fcurves
  * @param {number} actionLocalMs
  * @param {string} blendmode
  * @param {number} influence
- * @returns {Map<string, number>}
+ * @returns {void}
  */
 function blendStripIntoAccumulator(acc, fcurves, actionLocalMs, blendmode, influence) {
   // Blender optimization: influence == 0 → no contribution (anim_sys.cc:1847)
-  if (Math.abs(influence) < 1e-10) return acc;
+  if (Math.abs(influence) < 1e-10) return;
 
-  const next = new Map(acc);
   for (const fc of fcurves) {
     if (!fc || typeof fc.rnaPath !== 'string') continue;
     const stripValue = evaluateFCurve(fc, actionLocalMs);
-    const lowerValue = next.has(fc.rnaPath) ? /** @type {number} */ (next.get(fc.rnaPath)) : 0;
-    next.set(fc.rnaPath, applyBlendMode(lowerValue, stripValue, blendmode, influence));
+    const lowerValue = acc.has(fc.rnaPath) ? /** @type {number} */ (acc.get(fc.rnaPath)) : 0;
+    acc.set(fc.rnaPath, applyBlendMode(lowerValue, stripValue, blendmode, influence));
   }
-  return next;
 }
 
 /**
@@ -450,18 +489,27 @@ export function applyBlendMode(lower, strip, blendmode, influence) {
  */
 export function evaluateNla(animData, timeMs, project) {
   /** @type {Map<string, number>} */
-  let acc = new Map();
+  const acc = new Map();
   if (!animData || typeof animData !== 'object') return acc;
 
-  // Tweak mode: NLA_EVAL_OFF entirely skips evaluation (Blender
-  // ADT_NLA_EVAL_OFF semantic — see DNA_anim_enums.h:557).
+  // NLA_EVAL_OFF entirely skips evaluation (Blender ADT_NLA_EVAL_OFF
+  // semantic — DNA_anim_enums.h:557).
   const adtFlag = typeof animData.flag === 'number' ? animData.flag : 0;
   if (adtFlag & ADT_FLAG.NLA_EVAL_OFF) return acc;
 
+  // Tweak-mode strip-skip router. Audit-fix HIGH-A2: use a strict
+  // `!== null && length > 0` check rather than `if (tweakStripId && ...)`
+  // — raw-deserialized animData (migration output / hand-edited JSON)
+  // could carry `tweakStripId: ''` which would silently bypass the
+  // skip under the old `&&` falsy guard.
   const tweakOn = isTweakModeOn(animData);
-  const tweakStripId = tweakOn
-    ? (/** @type {string|null} */ (animData.tweakStripId ?? null))
-    : null;
+  const rawTweakStripId = animData.tweakStripId;
+  /** @type {string|null} */
+  const tweakStripId = (
+    tweakOn
+    && typeof rawTweakStripId === 'string'
+    && rawTweakStripId.length > 0
+  ) ? rawTweakStripId : null;
 
   const tracks = tracksBottomToTop(getNlaTracks(animData));
   for (const track of tracks) {
@@ -473,19 +521,42 @@ export function evaluateNla(animData, timeMs, project) {
       const stripFlag = typeof strip.flag === 'number' ? strip.flag : 0;
       if (stripFlag & NLASTRIP_FLAG.MUTED) continue;
       // Tweak-mode: skip the strip being live-edited.
-      if (tweakStripId && strip.id === tweakStripId) continue;
+      if (tweakStripId !== null && strip.id === tweakStripId) continue;
       if (!stripActiveAt(strip, timeMs)) continue;
 
+      // Audit-fix MED-A5: SS deviation from Blender's `IS_EQF`
+      // epsilon-equal-zero gate. Blender (`anim_sys.cc:1180`) early-
+      // outs only at exact zero; SS skips ANY non-positive influence
+      // (`<= 0`). The divergence only matters for negative-baseline-
+      // influence inputs which `makeNlaStrip` would never produce
+      // (USR_INFLUENCE path clamps to [0,1] explicitly); the more
+      // aggressive skip is a defense against hand-edited / migration-
+      // corrupt strip data and is the Rule №1-correct safety choice.
       const influence = computeStripInfluence(strip, timeMs);
-      if (influence <= 0) continue;   // Blender anim_sys.cc:1180 zero-influence skip
+      if (influence <= 0) continue;
 
       const stripClampedTime = clampStripTime(strip, timeMs);
       const actionLocalMs = remapStripTime(strip, stripClampedTime);
       const fcurves = getActionFCurves(project, /** @type {string} */ (strip.actionId));
       if (fcurves.length === 0) continue;
 
-      const blendmode = typeof strip.blendmode === 'string' ? strip.blendmode : 'replace';
-      acc = blendStripIntoAccumulator(acc, fcurves, actionLocalMs, blendmode, influence);
+      // Audit-fix MED-A4: Rule №1 — validate blendmode at the entry
+      // point rather than letting `applyBlendMode`'s kernel default-
+      // branch silently degrade unknown values. The kernel keeps its
+      // hot-path-clean structure (Blender `nla_blend_value` itself
+      // has a `default → LERP` fallback at `anim_sys.cc:1866-1872`).
+      // SS rejects malformed inputs at the boundary so the kernel
+      // can stay fast.
+      const blendmode = typeof strip.blendmode === 'string' ? strip.blendmode : null;
+      if (blendmode === null || !NLA_BLEND_MODES.includes(/** @type any */ (blendmode))) {
+        throw new Error(
+          `evaluateNla: strip id=${strip.id} has invalid blendmode `
+          + `'${blendmode}' (expected one of ${NLA_BLEND_MODES.join('|')}; `
+          + `'combine' is deferred per plan §4.B)`
+        );
+      }
+
+      blendStripIntoAccumulator(acc, fcurves, actionLocalMs, blendmode, influence);
     }
   }
   return acc;

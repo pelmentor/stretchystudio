@@ -549,20 +549,235 @@ function makeLinearRampProject(actionId = 'a1', fcurveValue = 100) {
     '23: index ordering: A(idx=0,replace 100) → B(idx=1,add 10) → 110');
 }
 
-// ── 24. evaluateNla: combine blendmode rejected by Phase 4 ─────────
+// ── 24. evaluateNla rejects unknown blendmode (audit-fix MED-A4) ───
 {
-  // The strip constructor throws on 'combine' (Slice 4.A). Defensive:
-  // even if some external code builds a raw strip object with
-  // blendmode='combine', the evaluator should treat it as the default
-  // (replace) per applyBlendMode's default branch — Rule №1 says
-  // don't silently fail, but also don't crash on malformed inputs that
-  // came from outside the constructor. The expectation is that the
-  // validator at construction prevents this from ever reaching eval.
-  // Here we assert applyBlendMode handles it gracefully (falls back
-  // to replace) — NOT that it silently degrades, since the constructor
-  // is the gate.
+  // Rule №1: the evaluator's job is to FAIL LOUD when given malformed
+  // input, not silently degrade. The kernel (applyBlendMode) keeps its
+  // hot-path fallback for Blender parity (Blender's `nla_blend_value`
+  // at anim_sys.cc:1866-1872 has the same default-LERP behavior), but
+  // evaluateNla validates `strip.blendmode` against NLA_BLEND_MODES
+  // at the boundary and throws.
+  const project = makeLinearRampProject('a1', 100);
+  // Construct a raw strip bypassing the makeNlaStrip validation:
+  const badStrip = {
+    id: 's_bad', name: 's_bad', actionId: 'a1',
+    slotHandle: 0, start: 0, end: 1000, actstart: 0, actend: 1000,
+    repeat: 1, scale: 1, blendmode: 'combine', extendmode: 'hold',
+    influence: 1, blendin: 0, blendout: 0, fcurves: [], flag: 0,
+  };
+  const animData = {
+    flag: 0,
+    nlaTracks: [{ id: 't1', name: 'T', strips: [badStrip], flag: 0, index: 0 }],
+  };
+  let threw = false;
+  try { evaluateNla(animData, 500, project); }
+  catch (e) {
+    threw = String(e.message).includes('invalid blendmode')
+      && String(e.message).includes('combine')
+      && String(e.message).includes('s_bad');
+  }
+  assert(threw, '24a: evaluateNla throws on combine blendmode with strip id + bad mode in message');
+
+  // applyBlendMode kernel still tolerates unknown for Blender parity
+  // (it's the validation gate in evaluateNla that's the Rule №1
+  // boundary; the kernel mirrors Blender's nla_blend_value default).
   close(applyBlendMode(5, 10, 'combine', 0.5), 7.5, 1e-9,
-    '24: combine reaching applyBlendMode falls back to replace (constructor is the validation gate)');
+    '24b: applyBlendMode kernel tolerant for Blender-parity (default → LERP per anim_sys.cc:1866)');
+}
+
+// ── 25. tweakStripId='' (empty string) does NOT silently bypass skip
+// (audit-fix HIGH-A2) ──────────────────────────────────────────────
+{
+  // Pre-fix: `if (tweakStripId && strip.id === tweakStripId)` would
+  // FAIL the falsy check for tweakStripId='', leaving the strip
+  // unskipped — silent regression of tweak-mode semantics on raw
+  // deserialized animData. Post-fix: strict string-non-empty check.
+  // Here we use a hand-built animData with empty-string tweakStripId
+  // (which makeNlaStrip would never produce, but raw JSON might).
+  const project = makeLinearRampProject('a1', 100);
+  const strip = {
+    id: '', name: '', actionId: 'a1',
+    slotHandle: 0, start: 0, end: 1000, actstart: 0, actend: 1000,
+    repeat: 1, scale: 1, blendmode: 'replace', extendmode: 'hold',
+    influence: 1, blendin: 0, blendout: 0, fcurves: [], flag: 0,
+  };
+  const animData = {
+    flag: ADT_FLAG.NLA_EDIT_ON,
+    tweakStripId: '',   // raw-deserialized corruption
+    tweakTrackId: 't1',
+    nlaTracks: [{ id: 't1', name: 'T', strips: [strip], flag: 0, index: 0 }],
+  };
+  // Eval should NOT silently bypass — the strip evaluates normally
+  // (since tweakStripId is treated as "no tweak strip" when empty).
+  const acc = evaluateNla(animData, 500, project);
+  // Strip with id='' has its action evaluated like any other strip.
+  close(/** @type number */ (acc.get('paramX')), 50, 1e-9,
+    '25: empty-string tweakStripId treated as "no tweak strip" — strip still evaluates');
+}
+
+// ── 26. Overlapping blendin+blendout pick blendin first (audit-fix
+// HIGH-A3 lock-in: SS matches Blender's two-if-with-early-return) ──
+{
+  // Strip [0, 100], blendin=80, blendout=80 (overlap fully). At t=50:
+  //   blendin condition: 50 <= 0+80 = true → return 50/80 * baseline = 0.625
+  //   (blendout condition would yield (100-50)/80 = 0.625 — same in
+  //   this symmetric case, but asymmetric cases below distinguish)
+  // Blender (anim_sys.cc:1009-1027) uses the same two-if-with-return
+  // structure — blendin wins via early return. Lock this behavior.
+  const stripSym = makeNlaStrip('sym', 'a1', {
+    start: 0, end: 100, actstart: 0, actend: 100,
+    influence: 1.0, blendin: 80, blendout: 80,
+  });
+  close(computeStripInfluence(stripSym, 50), 0.625, 1e-9,
+    '26: symmetric overlap, t=50: blendin wins (returns 50/80=0.625)');
+
+  // Asymmetric: blendin=20, blendout=80, t=30. blendin condition
+  // 30 <= 0+20 = false → falls through. blendout: 30 >= 100-80=20
+  // → true → return (100-30)/80 = 0.875. This is the correct
+  // Blender behavior — once past blendin, blendout dominates.
+  const stripAsym = makeNlaStrip('asym', 'a1', {
+    start: 0, end: 100, actstart: 0, actend: 100,
+    influence: 1.0, blendin: 20, blendout: 80,
+  });
+  close(computeStripInfluence(stripAsym, 30), 0.875, 1e-9,
+    '26: asymmetric overlap, t=30 past blendin: blendout dominates (0.875)');
+
+  // Inside blendin AND inside blendout: blendin (early return) wins.
+  // blendin=60, blendout=60, t=20. blendin: 20 <= 60 → return 20/60 ≈ 0.333.
+  const stripInside = makeNlaStrip('inside', 'a1', {
+    start: 0, end: 100, actstart: 0, actend: 100,
+    influence: 1.0, blendin: 60, blendout: 60,
+  });
+  close(computeStripInfluence(stripInside, 20), 20 / 60, 1e-9,
+    '26: inside both ramps, t=20: blendin returns 20/60 first');
+}
+
+// ── 27. USR_TIME flag drives strip_time directly (audit-fix MED-F4) ─
+{
+  // USR_TIME flag: per-strip FCurve with rnaPath='strip_time' becomes
+  // the action-local time, bypassing scale/repeat/reverse. Blender
+  // anim_sys.cc:1059.
+  const project = makeLinearRampProject('a1', 100);
+  // FCurve says: at t=0 → action_time=200, at t=1000 → action_time=800
+  // (linear ramp from 20% through to 80% of the action).
+  const strip = makeNlaStrip('s_usrtime', 'a1', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1.0,
+    flag: NLASTRIP_FLAG.USR_TIME,
+    fcurves: [{
+      id: 'fc_time', rnaPath: 'strip_time',
+      keyforms: [
+        { time: 0,    value: 200, interpolation: 'linear' },
+        { time: 1000, value: 800, interpolation: 'linear' },
+      ],
+    }],
+  });
+  // remapStripTime at t=500: fcurve(500) = 500 (lerp 200..800 at 50%).
+  close(remapStripTime(strip, 500), 500, 1e-9,
+    '27: USR_TIME: strip_time fcurve drives action-local time');
+  // At t=0, action_time = 200.
+  close(remapStripTime(strip, 0), 200, 1e-9, '27: USR_TIME: t=0 → action_time=200');
+  // At t=1000, action_time = 800.
+  close(remapStripTime(strip, 1000), 800, 1e-9, '27: USR_TIME: t=1000 → action_time=800');
+
+  // USR_TIME_CYCLIC wraps the user-time into [actstart, actend) so
+  // a value past actend wraps back to actstart-relative position.
+  const stripCyclic = makeNlaStrip('s_cyclic', 'a1', {
+    start: 0, end: 1000, actstart: 0, actend: 500, influence: 1.0,
+    flag: NLASTRIP_FLAG.USR_TIME | NLASTRIP_FLAG.USR_TIME_CYCLIC,
+    fcurves: [{
+      id: 'fc_time', rnaPath: 'strip_time',
+      keyforms: [
+        { time: 0,    value: 0,    interpolation: 'linear' },
+        { time: 1000, value: 1500, interpolation: 'linear' },  // exceeds actend
+      ],
+    }],
+  });
+  // At t=500, fcurve(500) = 750. Wrap into [0, 500): 750 % 500 = 250.
+  close(remapStripTime(stripCyclic, 500), 250, 1e-9,
+    '27: USR_TIME_CYCLIC: 750 wraps into [0, 500) → 250');
+}
+
+// ── 28. evaluateNla immutability — input animData + project unchanged
+// (audit-fix MED-A6) ────────────────────────────────────────────────
+{
+  // The module documents evaluateNla as pure. Verify by deep-freezing
+  // the inputs — any mutation attempt would throw in strict mode (and
+  // Node ESM runs strict). A successful run with no throw + identical
+  // post-call JSON proves immutability.
+  const project = makeLinearRampProject('a1', 100);
+  const strip = makeNlaStrip('s_im', 'a1', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 0.5,
+    blendin: 100, blendout: 100,
+  });
+  const animData = {
+    flag: 0,
+    tmpActionId: null, tmpSlotHandle: 0,
+    tweakTrackId: null, tweakStripId: null,
+    nlaTracks: [makeNlaTrack('t_im', 'T', { index: 0, strips: [strip] })],
+  };
+  // Deep freeze
+  function deepFreeze(obj) {
+    if (obj === null || typeof obj !== 'object') return;
+    Object.freeze(obj);
+    for (const k of Object.keys(obj)) deepFreeze(obj[k]);
+  }
+  deepFreeze(animData);
+  deepFreeze(project);
+
+  const animDataBefore = JSON.stringify(animData);
+  const projectBefore = JSON.stringify(project);
+
+  let threw = false;
+  try {
+    evaluateNla(animData, 500, project);
+    evaluateNla(animData, 100, project);   // run twice (different times)
+    evaluateNla(animData, 950, project);
+  } catch (_e) { threw = true; }
+
+  assert(!threw, '28a: evaluateNla does not throw on frozen inputs (no mutation attempts)');
+  eq(JSON.stringify(animData), animDataBefore, '28b: animData unchanged post-call (deep JSON equal)');
+  eq(JSON.stringify(project), projectBefore, '28c: project unchanged post-call');
+}
+
+// ── 29. End-to-end hold_forward past-end clamp+remap (audit-fix LOW-A8) ─
+{
+  // Strip [100, 300], action [0, 200], extendmode='hold_forward'. At
+  // t=500 (past end), strip is active per stripActiveAt (hold_forward),
+  // clampStripTime clamps t to 300 (strip.end), remapStripTime maps
+  // 300 → actend (200) via integer-repeat pin, fcurve(200) is the
+  // action's last keyform value. End-to-end pipeline check.
+  const project = makeLinearRampProject('a1', 100);   // paramX 0→100 over 0→1000ms
+  // Use a project with action [0, 200] so the test is unambiguous:
+  const projectShort = {
+    actions: [{
+      id: 'a_short',
+      fcurves: [{
+        id: 'fc1', rnaPath: 'paramX',
+        keyforms: [
+          { time: 0,   value: 0,  interpolation: 'linear' },
+          { time: 200, value: 80, interpolation: 'linear' },
+        ],
+      }],
+    }],
+  };
+  const strip = makeNlaStrip('s_hf', 'a_short', {
+    start: 100, end: 300, actstart: 0, actend: 200, influence: 1,
+    extendmode: 'hold_forward',
+  });
+  const animData = {
+    flag: 0,
+    nlaTracks: [makeNlaTrack('t1', 'T', { index: 0, strips: [strip] })],
+  };
+  // At t=500: hold_forward → active, clamp to 300, remap to actend=200
+  // (integer-repeat pin), fcurve(200) = 80, replace lerp(0, 80, 1) = 80.
+  const acc = evaluateNla(animData, 500, projectShort);
+  close(/** @type number */ (acc.get('paramX')), 80, 1e-9,
+    '29: hold_forward past-end → clamp to strip.end → fcurve(actend) = 80');
+  // At t=50 (before start): hold_forward does NOT extend backward
+  // → strip skipped, empty map.
+  const accBefore = evaluateNla(animData, 50, projectShort);
+  eq(accBefore.size, 0,
+    '29: hold_forward before start NOT active → empty result');
 }
 
 console.log(`\nnlaEval: ${passed} passed, ${failed} failed`);
