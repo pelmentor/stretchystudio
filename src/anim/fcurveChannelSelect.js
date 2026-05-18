@@ -16,6 +16,16 @@
  *     channels (sidebar X/Delete). Slice 5.N (this slice).
  *   - `wouldChannelDeleteSelectedChange(action)` — read-only preflight
  *     for the dispatcher's no-op gate. Slice 5.N.
+ *   - `applyGroupChildrenSelect(action, groupId, ctx)` — Shift+Ctrl
+ *     children_only branch (Slice 5.BB).
+ *   - `wouldGroupChildrenSelectChange(action, groupId, ctx)` —
+ *     preflight for the children_only branch.
+ *   - `applyGroupHeaderSelect(action, groupId, modifier, ctx)` —
+ *     plain/Ctrl group-header click branches (SELECT_REPLACE +
+ *     SELECT_INVERT). Slice 5.KK (Path #49). Shift branch deferred
+ *     to path #50's slice (depends on AGRP_ACTIVE port).
+ *   - `wouldGroupHeaderSelectChange(action, groupId, modifier, ctx)`
+ *     — preflight for the plain/Ctrl group-header branches.
  *   - `isFCurveSelected(fc)` — read accessor.
  *
  * Pre-Slice 5.F the SS sidebar collapsed channel selection onto the
@@ -971,6 +981,312 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
 
   // Active-clear changes anything? Active in visible scope AND
   // currently carries the flag.
+  if (orderedIds && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
+    for (const fc of action.fcurves) {
+      if (fc && fc.active === true) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Slice 5.KK (Path #49) — plain/Ctrl group-header click. Closes the
+ * SELECT_REPLACE + SELECT_INVERT branches of Blender's `mouse_anim_channels`
+ * ANIMTYPE_GROUP case at
+ * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4154-4189`,
+ * called from `animchannels_mouseclick_invoke`
+ * (`:4615-4670`) via the keymap entries at
+ * `blender_default.py:3848-3853` (identical mapping in
+ * `industry_compatible_data.py` — both presets share these click
+ * bindings; only the dedicated select-all template differs per
+ * Slice 5.AA).
+ *
+ * **Modifier mapping** (keymap-authoritative; see Slice 5.F audit-fix
+ * HIGH-B1 for why the keymap, not the operator's RNA read order,
+ * is the source of truth):
+ *
+ *   - **Plain LMB → `extend=false, extend_range=false`** → SELECT_REPLACE
+ *     (the `else`-branch at `:4181-4189`).
+ *   - **Ctrl+LMB → `extend=true`** → SELECT_INVERT (the
+ *     `:4155-4158` XOR branch).
+ *   - **Shift+LMB → `extend_range=true`** → SELECT_EXTEND_RANGE
+ *     (`:4159-4162` range walker). **Deferred to path #50's
+ *     downstream slice** — Blender's `animchannel_select_range`
+ *     (`:3984-4025`) requires an active group of matching type
+ *     (`ANIM_is_active_channel` at `:3997` walks `AGRP_ACTIVE`);
+ *     SS does not yet port AGRP_ACTIVE (see
+ *     [src/anim/fcurveGroups.js:17](./fcurveGroups.js)). Faithful
+ *     port = no-op until #50 ships AGRP_ACTIVE; we explicitly avoid
+ *     a Shift=Ctrl masquerade (which would conflict with Ctrl's
+ *     toggle intent — see Deviation 4 below).
+ *   - **Shift+Ctrl+LMB → `children_only=true`** → children-only branch
+ *     (`:4163-4180`). Shipped in Slice 5.BB as
+ *     {@link applyGroupChildrenSelect}.
+ *
+ * # Semantics ported byte-faithfully
+ *
+ * **'replace' (SELECT_REPLACE, plain click)** — `:4181-4189`:
+ *
+ *   1. `ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_CLEAR)` at
+ *      `:4183` — iterates the visible channel list
+ *      (`anim_channels_for_selection`, see `:523-534`) and routes
+ *      each channel through `anim_channels_select_set` (`:678-734`):
+ *
+ *        - ANIMTYPE_GROUP case at `:714-722`: clears AGRP_SELECTED on
+ *          every visible group AND clears AGRP_ACTIVE
+ *          (`change_active=true` for CLEAR per `:683`). SS clears
+ *          `group.selected` on every group; AGRP_ACTIVE has no SS
+ *          counterpart (deviation inherited from Slice 5.V).
+ *        - ANIMTYPE_FCURVE case at `:723-734`: clears FCURVE_SELECTED
+ *          on every visible fcurve AND clears FCURVE_ACTIVE on any
+ *          fcurve that ends up `!FCURVE_SELECTED`
+ *          (`change_active=true`). SS clears `fc.selected` on every
+ *          visible-scope fcurve + calls `clearActiveFCurves(action)`
+ *          when the previously-active fcurve was in scope.
+ *
+ *   2. `agrp->flag |= AGRP_SELECTED` at `:4188` — sets the clicked
+ *      group's SELECTED bit. SS writes `group.selected = true`.
+ *
+ *   3. Post-branch `ANIM_set_active_channel(..., ANIMTYPE_GROUP)` at
+ *      `:4194-4204` elevates the clicked group to AGRP_ACTIVE.
+ *      **DEFERRED in SS** — no AGRP_ACTIVE port. When #50 lands,
+ *      this becomes a one-line call to a future
+ *      `setActiveFCurveGroup(action, groupId)` helper.
+ *
+ * **'toggle' (SELECT_INVERT, Ctrl+click)** — `:4155-4158`:
+ *
+ *   1. `agrp->flag ^= AGRP_SELECTED` at `:4157` — XOR the clicked
+ *      group's SELECTED bit. No pre-clear cascade; no other group's
+ *      state is touched; no fcurve's `selected` is touched.
+ *
+ *   2. Post-branch `ANIM_set_active_channel` at `:4194-4218` based
+ *      on whether the group ends up selected: if AGRP_SELECTED is
+ *      now set, the clicked group becomes active; otherwise the
+ *      active-group slot is cleared. **DEFERRED in SS** — same
+ *      AGRP_ACTIVE inheritance.
+ *
+ * # Active-elevation deferral
+ *
+ * The Slice 5.X EXCLUSIVE-active invariant covers `fc.active` (per-
+ * fcurve). There is no parallel `group.active` slot today. Adding
+ * one is scoped to path #50 ("Port AGRP_ACTIVE"); this helper
+ * leaves group-level active elevation as a documented deviation
+ * rather than synthesising a half-port. Per Rule №1, the active
+ * elevation lands together with its consumer (group-header
+ * highlighting + auto-elevated-group surfacing) in one slice — not
+ * staged across two with a no-op slot.
+ *
+ * # SS deviations from Blender
+ *
+ *   1. **AGRP_ACTIVE not ported (replace + toggle both inherit).**
+ *      Blender re-elevates the clicked group to AGRP_ACTIVE after
+ *      SELECT_REPLACE (`:4194-4204`) and toggles the active-group
+ *      slot on SELECT_INVERT (`:4194-4218`). SS has no `group.active`
+ *      field today; the elevation is dropped until path #50 ports it.
+ *      Sister deviation to Slice 5.BB MED-3.
+ *
+ *   2. **No pchan cascade.** Blender's `select_pchan_for_action_group`
+ *      (called from both `anim_channels_select_set` ANIMTYPE_GROUP
+ *      case at `:717` and the post-branch `:4202-4204` /
+ *      `:4214-4216`) selects/deselects the bone whose name matches
+ *      the group when the object is an armature. SS has no armature/
+ *      pchan model — N/A.
+ *
+ *   3. **No `OPTYPE_UNDO` snapshot.** Inherited from Slice 5.F/5.K/5.BB
+ *      convention — channel selection is view state. Dispatcher
+ *      passes `skipHistory:true` in the projectStore `update()` call.
+ *
+ *   4. **Shift+click on group header is a no-op (not Shift=Ctrl
+ *      masquerade).** Faithful port of SELECT_EXTEND_RANGE requires
+ *      AGRP_ACTIVE for the walker bound; SS explicitly avoids
+ *      auto-downgrading to SELECT_INVERT (which Blender's
+ *      `:4517-4522` does for fcurve-type when no active of matching
+ *      type exists) because that would make Shift indistinguishable
+ *      from Ctrl on group headers, conflicting with Ctrl's
+ *      toggle-only intent. The expected UX: Shift on group header
+ *      does nothing today; ships with full range semantics when
+ *      path #50 lands.
+ *
+ *   5. **macOS Cmd substitutes for Ctrl.** Sister to Slice 5.BB
+ *      Deviation 4 and Slice 5.AA metaKey-as-Ctrl deviation. The
+ *      dispatcher accepts `e.ctrlKey || e.metaKey` for the 'toggle'
+ *      branch.
+ *
+ *   6. **Visible-scope pre-clear narrower than Blender's
+ *      `LIST_VISIBLE`.** Sister to Slice 5.BB audit-fix fidelity
+ *      MED-4 and Slice 5.Y MED-1: SS's `orderedIds` is
+ *      `decoded ∩ !isFCurveEffectivelyHidden`. A hidden-but-data-
+ *      loaded fcurve previously selected and not in scope keeps its
+ *      `selected` bit; Blender's broader `LIST_CHANNELS | DATA_VISIBLE`
+ *      filter (`:528` "no list visible, otherwise, we get dangling")
+ *      would have cleared it. Same conflation, deferred to a future
+ *      scope-unification slice.
+ *
+ * @param {object} action — the Action datablock (mutated)
+ * @param {string} groupId — id of the FCurveGroup clicked
+ * @param {'replace'|'toggle'} modifier
+ * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
+ *   — `orderedIds` is the visible-channel scope for the 'replace'
+ *   pre-clear step (NOT consulted for 'toggle'). `activeFCurveId`
+ *   gates the active-fcurve clear cascade decision for 'replace'.
+ * @returns {{
+ *   changed: boolean,
+ *   clearedActive: boolean,
+ *   groupSelectedAfter: boolean,
+ * }}
+ */
+export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
+  const result = { changed: false, clearedActive: false, groupSelectedAfter: false };
+  if (!action || !Array.isArray(action.fcurves)) return result;
+  if (typeof groupId !== 'string' || groupId.length === 0) return result;
+  if (!Array.isArray(action.groups)) return result;
+  if (modifier !== 'replace' && modifier !== 'toggle') return result;
+
+  let group = null;
+  for (const g of action.groups) {
+    if (g && g.id === groupId) { group = g; break; }
+  }
+  if (!group) return result;
+
+  if (modifier === 'toggle') {
+    // SELECT_INVERT — `:4155-4158`. XOR the clicked group's SELECTED
+    // bit; nothing else is touched. Sparse-write convention: set true
+    // or sparse-delete the field on transition to false.
+    if (group.selected === true) {
+      delete group.selected;
+      result.changed = true;
+      result.groupSelectedAfter = false;
+    } else {
+      group.selected = true;
+      result.changed = true;
+      result.groupSelectedAfter = true;
+    }
+    return result;
+  }
+
+  // 'replace' — SELECT_REPLACE, `:4181-4189`.
+  const orderedIds = ctx && Array.isArray(ctx.orderedIds) ? ctx.orderedIds : null;
+  const activeFCurveId = ctx
+    && typeof ctx.activeFCurveId === 'string'
+    && ctx.activeFCurveId.length > 0
+    ? ctx.activeFCurveId
+    : null;
+
+  const byId = new Map();
+  for (const fc of action.fcurves) {
+    if (fc && typeof fc.id === 'string') byId.set(fc.id, fc);
+  }
+
+  // Step 1a — clear `selected` on every visible-scope fcurve.
+  // Routes through Blender's ANIMTYPE_FCURVE case at `:723-734`.
+  if (orderedIds) {
+    for (const id of orderedIds) {
+      const fc = byId.get(id);
+      if (fc && fc.selected === true) {
+        fc.selected = false;
+        result.changed = true;
+      }
+    }
+  }
+
+  // Step 1b — clear `selected` on every OTHER group. Routes through
+  // Blender's ANIMTYPE_GROUP case at `:714-722` (AGRP_SELECTED clear
+  // on every visible group). SS does not narrow this loop to a
+  // visible-group scope because `action.groups` carries no `hidden`
+  // bit today (group hide is per-group `g.hide`, but the loop's
+  // intent is "all groups not the clicked one" — Blender's pre-clear
+  // walks `anim_data` which IS visible-filtered, but in practice
+  // every group is visible-or-collapsed, not "filtered out"; the
+  // walker scope distinction matters for fcurves with unresolvable
+  // rna_paths, not for groups). Sister to Slice 5.BB Step 1b.
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && g.selected === true) {
+      delete g.selected;
+      result.changed = true;
+    }
+  }
+
+  // Step 2 — set clicked group's `selected = true`. Mirrors `:4188`.
+  if (group.selected !== true) {
+    group.selected = true;
+    result.changed = true;
+  }
+  result.groupSelectedAfter = true;
+
+  // Step 3 — active-fcurve clear cascade. Per the ANIMTYPE_FCURVE
+  // case at `:728-732` ("Only erase the ACTIVE flag when
+  // deselecting"), every fcurve that transitions to
+  // !FCURVE_SELECTED with `change_active=true` (always true for
+  // CLEAR per `:683`) also gets FCURVE_ACTIVE cleared. EXCLUSIVE
+  // invariant from Slice 5.X collapses this to "if previously-active
+  // fcurve is in visible scope, clear it".
+  if (orderedIds && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
+    const clearResult = clearActiveFCurves(action);
+    if (clearResult.cleared > 0) result.clearedActive = true;
+  }
+
+  return result;
+}
+
+/**
+ * Read-only preflight for {@link applyGroupHeaderSelect}. Returns
+ * true iff the setter would mutate any of `fc.selected`,
+ * `fc.active`, or `group.selected`. Same undo-budget rationale as
+ * the sister preflights.
+ *
+ * @param {object|null|undefined} action
+ * @param {string} groupId
+ * @param {'replace'|'toggle'} modifier
+ * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
+ * @returns {boolean}
+ */
+export function wouldGroupHeaderSelectChange(action, groupId, modifier, ctx) {
+  if (!action || !Array.isArray(action.fcurves)) return false;
+  if (typeof groupId !== 'string' || groupId.length === 0) return false;
+  if (!Array.isArray(action.groups)) return false;
+  if (modifier !== 'replace' && modifier !== 'toggle') return false;
+
+  let group = null;
+  for (const g of action.groups) {
+    if (g && g.id === groupId) { group = g; break; }
+  }
+  if (!group) return false;
+
+  if (modifier === 'toggle') {
+    // XOR always changes the bit (true → missing, missing/false → true).
+    return true;
+  }
+
+  const orderedIds = ctx && Array.isArray(ctx.orderedIds) ? ctx.orderedIds : null;
+  const activeFCurveId = ctx
+    && typeof ctx.activeFCurveId === 'string'
+    && ctx.activeFCurveId.length > 0
+    ? ctx.activeFCurveId
+    : null;
+
+  const byId = new Map();
+  for (const fc of action.fcurves) {
+    if (fc && typeof fc.id === 'string') byId.set(fc.id, fc);
+  }
+
+  // Step 1a — any visible-scope fcurve currently selected?
+  if (orderedIds) {
+    for (const id of orderedIds) {
+      const fc = byId.get(id);
+      if (fc && fc.selected === true) return true;
+    }
+  }
+
+  // Step 1b — any sibling group with stale `selected: true`?
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && g.selected === true) return true;
+  }
+
+  // Step 2 — clicked group not already selected?
+  if (group.selected !== true) return true;
+
+  // Step 3 — active fcurve in scope and still carrying the flag?
   if (orderedIds && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
     for (const fc of action.fcurves) {
       if (fc && fc.active === true) return true;

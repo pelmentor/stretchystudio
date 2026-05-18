@@ -346,6 +346,8 @@ import {
   isFCurveSelected,
   applyGroupChildrenSelect,
   wouldGroupChildrenSelectChange,
+  applyGroupHeaderSelect,
+  wouldGroupHeaderSelectChange,
 } from '../../../anim/fcurveChannelSelect.js';
 import {
   applyChannelBoxSelect,
@@ -2224,6 +2226,53 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     return decision;
   }, [activeActionId, update, decoded, activeFCurveId]);
 
+  // Slice 5.KK (Path #49) — plain/Ctrl group-header click dispatcher.
+  //
+  // Mirrors Blender's `mouse_anim_channels` ANIMTYPE_GROUP non-children
+  // branches at `anim_channels_edit.cc:4154-4189`:
+  //
+  //   - 'replace' (plain click)  → SELECT_REPLACE (`:4181-4189`)
+  //   - 'toggle'  (Ctrl+click)   → SELECT_INVERT  (`:4155-4158`)
+  //
+  // Keymap: `blender_default.py:3848-3852`. The 'range' modifier
+  // (Shift+click → SELECT_EXTEND_RANGE at `:4159-4162`) is deferred
+  // to a slice downstream of path #50's AGRP_ACTIVE port — see
+  // `applyGroupHeaderSelect` Deviation 4 for the rationale.
+  //
+  // `skipHistory: true` — channel selection is view state per the
+  // Slice 5.F/5.K convention. Preflight gates the no-op case so a
+  // re-click on an already-selected-only group doesn't push a phantom
+  // undo snapshot.
+  //
+  // Active-fcurve clear cascade — Blender's pre-clear at `:4183`
+  // routes through `anim_channels_select_set` ANIMTYPE_FCURVE case
+  // (`:723-734`) clearing FCURVE_ACTIVE on every fcurve that
+  // transitions to !FCURVE_SELECTED. SS's helper handles that for the
+  // 'replace' branch via `clearActiveFCurves(action)` inside the
+  // same `update()` closure (the EXCLUSIVE invariant from Slice 5.X
+  // collapses "every visible deselected fcurve loses active" to "the
+  // single active fcurve, if visible, loses active").
+  const applyGroupHeaderSelectOp = useCallback((groupId, modifier) => {
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    const orderedIds = liveAction
+      ? decoded
+          .filter((d) => !isFCurveEffectivelyHidden(d.fcurve, liveAction))
+          .map((d) => d.fcurve.id)
+      : [];
+    const ctx = { orderedIds, activeFCurveId };
+    if (!wouldGroupHeaderSelectChange(liveAction, groupId, modifier, ctx)) {
+      return { changed: false, clearedActive: false, groupSelectedAfter: false };
+    }
+    let decision = { changed: false, clearedActive: false, groupSelectedAfter: false };
+    update((p) => {
+      const a = getActiveSceneAction(p, activeActionId);
+      if (!a) return;
+      decision = applyGroupHeaderSelect(a, groupId, modifier, ctx);
+    }, { skipHistory: true });
+    return decision;
+  }, [activeActionId, update, decoded, activeFCurveId]);
+
   // Slice 5.DD — GRAPH-region select-all channel cascade + active-restore.
   //
   // Ports the `do_channels=true` cascade in `deselect_graph_keys`
@@ -3082,6 +3131,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         onApplyChannelClick={applyChannelClick}
         onApplyChannelBoxSelect={applyChannelBoxSelectOp}
         onApplyGroupChildrenSelect={applyGroupChildrenSelectOp}
+        onApplyGroupHeaderSelect={applyGroupHeaderSelectOp}
         bGestureArmed={bGestureArmed}
         bGestureArmedRef={bGestureArmedRef}
         onConsumeBGesture={() => setBGestureArmed(false)}
@@ -3238,7 +3288,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onApplyGroupChildrenSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection, bGestureArmed, bGestureArmedRef, onConsumeBGesture }) {
+function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onApplyGroupChildrenSelect, onApplyGroupHeaderSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection, bGestureArmed, bGestureArmedRef, onConsumeBGesture }) {
   // Slice 5.Y — drag-rect box-select state machine. Pointer events on the
   // sidebar wrapper drive a small 3-state FSM (idle → pressed → dragging).
   // On pointerup-after-drag, the hit-test queries every `[data-fcurve-id]`
@@ -3596,22 +3646,37 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                 >
                   {groupMuted ? '\u{1F507}' : '\u{1F50A}'}
                 </button>
-                {/* Slice 5.BB — group name is Shift+Ctrl+click target.
-                    Plain click is intentionally a no-op for this slice
-                    (Blender's `mouse_anim_channels` ANIMTYPE_GROUP branch
-                    at `anim_channels_edit.cc:4154-4189` ALSO handles
-                    SELECT_INVERT (`:4155-4158`), SELECT_EXTEND_RANGE
-                    (`:4159-4162`), and SELECT_REPLACE (`:4181-4189`)
-                    on group headers, but path #35 scoped only the
-                    `children_only` (Shift+Ctrl) variant — plain/Ctrl/
-                    Shift group-header clicks are queued for a future
-                    slice). Audit-fix fidelity MED-1 (Slice 5.BB
-                    fidelity audit 2026-05-17): cite range corrected
-                    from `:4154-4180` (which omits the SELECT_REPLACE
-                    else-branch at `:4181-4189`). */}
+                {/* Slice 5.KK (Path #49) — full modifier surface for
+                    group-header clicks. Mirrors Blender's
+                    `mouse_anim_channels` ANIMTYPE_GROUP cases at
+                    `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:4154-4189`,
+                    dispatched per modifier via `animchannels_mouseclick_invoke`
+                    (`:4615-4670`) and bound at `blender_default.py:3848-3853`:
+
+                      - **Plain LMB** → SELECT_REPLACE (`:4181-4189`):
+                        pre-clear visible-scope fcurves' `selected`,
+                        clear active-fcurve in scope, clear OTHER
+                        groups' `selected`, set clicked group's
+                        `selected = true`.
+                      - **Ctrl+LMB** → SELECT_INVERT (`:4155-4158`):
+                        XOR clicked group's `selected`; nothing else
+                        touched.
+                      - **Shift+LMB** → SELECT_EXTEND_RANGE
+                        (`:4159-4162`): DEFERRED. Walker requires
+                        AGRP_ACTIVE (path #50). Slice 5.KK leaves
+                        Shift as no-op rather than auto-downgrading to
+                        Ctrl (which would conflict with Ctrl's toggle
+                        intent — see `applyGroupHeaderSelect` Dev 4).
+                      - **Shift+Ctrl+LMB** → `children_only` = -1
+                        (`:4163-4180`): shipped in Slice 5.BB.
+
+                    Modifier-precedence ordering matters: Shift+Ctrl
+                    MUST resolve first so the children_only branch
+                    doesn't fall through to either of the single-
+                    modifier branches. */}
                 <span
                   className="truncate flex-1 font-semibold cursor-pointer hover:text-foreground"
-                  title="Shift+Ctrl+click to select all children"
+                  title="Click to select; Ctrl to toggle; Shift+Ctrl to select all children"
                   onClick={(e) => {
                     // Audit-fix LOW-1 (Slice 5.BB arch audit 2026-05-17):
                     // honor `wasDragRef` latch from the Sidebar drag-rect
@@ -3622,8 +3687,25 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
                     // potentially suppressing the next legitimate
                     // keyboard-initiated row click.
                     if (wasDragRef.current) { wasDragRef.current = false; return; }
-                    const isChildrenOnly = (e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey);
-                    if (isChildrenOnly) onApplyGroupChildrenSelect(group.id);
+                    if (e.altKey) return;  // Alt unbound for group headers
+                    const ctrlOrMeta = e.ctrlKey || e.metaKey;
+                    if (e.shiftKey && ctrlOrMeta) {
+                      // Shift+Ctrl → children_only (Slice 5.BB)
+                      onApplyGroupChildrenSelect(group.id);
+                      return;
+                    }
+                    if (e.shiftKey) {
+                      // Shift alone → SELECT_EXTEND_RANGE, deferred.
+                      // Explicit no-op (NOT a Shift=Ctrl masquerade).
+                      return;
+                    }
+                    if (ctrlOrMeta) {
+                      // Ctrl+click → SELECT_INVERT (toggle)
+                      onApplyGroupHeaderSelect(group.id, 'toggle');
+                      return;
+                    }
+                    // Plain click → SELECT_REPLACE
+                    onApplyGroupHeaderSelect(group.id, 'replace');
                   }}
                 >
                   {group.name}

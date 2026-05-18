@@ -28,6 +28,8 @@ import {
   isFCurveSelected,
   applyGroupChildrenSelect,
   wouldGroupChildrenSelectChange,
+  applyGroupHeaderSelect,
+  wouldGroupHeaderSelectChange,
 } from '../../src/anim/fcurveChannelSelect.js';
 import {
   clearActiveFCurves,
@@ -1275,6 +1277,285 @@ function makeActionWithGroups(groups, fcurves) {
     const r = applyGroupChildrenSelect(sB.action, sB.gid, sB.ctx);
     const anyMutation = r.changed || r.clearedActive;
     assert(predicted === anyMutation, `5.BB scenario ${i}: preflight matches setter (changed||clearedActive)`);
+  }
+}
+
+// ── Slice 5.KK (Path #49) — applyGroupHeaderSelect (plain/Ctrl) ────
+// Ports Blender's `mouse_anim_channels` ANIMTYPE_GROUP non-children_only
+// branches at `anim_channels_edit.cc:4154-4189`. Shift branch deferred
+// to path #50's slice (depends on AGRP_ACTIVE).
+
+// Guards ────────────────────────────────────────────────────────
+{
+  const r1 = applyGroupHeaderSelect(null, 'g1', 'replace', { orderedIds: ['fc1'] });
+  assert(r1.changed === false, '5.KK: null action → no change');
+  assert(r1.groupSelectedAfter === false, '5.KK: null action → groupSelectedAfter=false');
+
+  const r2 = applyGroupHeaderSelect({ fcurves: null }, 'g1', 'replace', { orderedIds: ['fc1'] });
+  assert(r2.changed === false, '5.KK: action with null fcurves → no change');
+
+  const r3 = applyGroupHeaderSelect({ fcurves: [], groups: null }, 'g1', 'replace', { orderedIds: [] });
+  assert(r3.changed === false, '5.KK: action with null groups → no change');
+
+  const r4 = applyGroupHeaderSelect(makeActionWithGroups([], []), '', 'replace', { orderedIds: [] });
+  assert(r4.changed === false, '5.KK: empty groupId → no change');
+
+  const r5 = applyGroupHeaderSelect(
+    makeActionWithGroups([{ id: 'gA' }], []), 'nonexistent', 'replace', { orderedIds: [] },
+  );
+  assert(r5.changed === false, '5.KK: nonexistent groupId → no change');
+
+  const r6 = applyGroupHeaderSelect(
+    makeActionWithGroups([{ id: 'gA' }], []), 'gA', 'range', { orderedIds: [] },
+  );
+  assert(r6.changed === false, '5.KK: unsupported modifier "range" → no change (Shift deferred)');
+
+  const r7 = applyGroupHeaderSelect(
+    makeActionWithGroups([{ id: 'gA' }], []), 'gA', 'bogus', { orderedIds: [] },
+  );
+  assert(r7.changed === false, '5.KK: unknown modifier → no change');
+}
+
+// 'replace' happy path — clear all visible fcurves + clear all other
+// groups + set clicked group's selected. Mirrors Blender's :4181-4189.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', name: 'Group A' }, { id: 'gB', name: 'Group B', selected: true }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', groupId: 'gA', selected: true, keyforms: [] },
+      { id: 'fc3', groupId: 'gB', selected: true, keyforms: [] },
+      { id: 'fc4', selected: true, keyforms: [] },  // ungrouped
+    ],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', {
+    orderedIds: ['fc1', 'fc2', 'fc3', 'fc4'],
+  });
+  assert(r.changed === true, '5.KK replace happy: changed=true');
+  assert(r.groupSelectedAfter === true, '5.KK replace happy: groupSelectedAfter=true');
+  assert(a.fcurves[0].selected === undefined, '5.KK replace: fc1 (gA child) still sparse-false (was never set)');
+  assert(a.fcurves[1].selected === false, '5.KK replace: fc2 (gA child) CLEARED (cascade does NOT auto-select children)');
+  assert(a.fcurves[2].selected === false, '5.KK replace: fc3 (gB child) cleared');
+  assert(a.fcurves[3].selected === false, '5.KK replace: fc4 (ungrouped) cleared');
+  assert(a.groups[0].selected === true, '5.KK replace: gA newly selected');
+  assert(a.groups[1].selected === undefined, '5.KK replace: gB sparse-cleared');
+}
+
+// 'replace' active-clear cascade — active in visible scope → cleared.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB' }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, active: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gB', keyforms: [] },
+    ],
+  );
+  const r = applyGroupHeaderSelect(a, 'gB', 'replace', {
+    orderedIds: ['fc1', 'fc2'],
+    activeFCurveId: 'fc1',
+  });
+  assert(r.changed === true, '5.KK replace active-in-scope: changed');
+  assert(r.clearedActive === true, '5.KK replace active-in-scope: clearedActive=true');
+  assert(isFCurveActive(a.fcurves[0]) === false, '5.KK: fc1 active cleared');
+  assert(a.fcurves[0].selected === false, '5.KK: fc1 also deselected (cascade)');
+  assert(a.groups[1].selected === true, '5.KK: gB now selected');
+}
+
+// 'replace' active OUT of visible scope → preserved.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [
+      { id: 'fcHidden', groupId: 'gA', active: true, keyforms: [] },
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+    ],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', {
+    orderedIds: ['fc1'],  // fcHidden out of scope
+    activeFCurveId: 'fcHidden',
+  });
+  assert(r.clearedActive === false, '5.KK replace active-out-of-scope: preserved');
+  assert(isFCurveActive(a.fcurves[0]) === true, '5.KK: fcHidden still active');
+  assert(a.groups[0].selected === true, '5.KK: gA selected anyway');
+}
+
+// 'replace' on already-only-selected group + no fcurves selected
+// → only changed if group not selected yet. Verifies idempotency.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }, { id: 'gB' }],
+    [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', { orderedIds: ['fc1'] });
+  assert(r.changed === false, '5.KK replace idempotent: no change');
+  assert(r.groupSelectedAfter === true, '5.KK replace idempotent: groupSelectedAfter still true');
+}
+
+// 'replace' on empty group (no children) — still flags group selected,
+// still pre-clears other groups + other fcurves.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gEmpty' }, { id: 'gB', selected: true }],
+    [{ id: 'fcOther', groupId: 'gB', selected: true, keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gEmpty', 'replace', {
+    orderedIds: ['fcOther'],
+  });
+  assert(r.changed === true, '5.KK replace empty-group: changed');
+  assert(a.groups[0].selected === true, '5.KK replace empty-group: gEmpty selected');
+  assert(a.groups[1].selected === undefined, '5.KK replace empty-group: gB sparse-cleared');
+  assert(a.fcurves[0].selected === false, '5.KK replace empty-group: fcOther cleared');
+}
+
+// 'replace' with ctx but no orderedIds (degenerate scope) — clears
+// other groups but no fcurve pre-clear runs.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', selected: true }],
+    [{ id: 'fc1', groupId: 'gA', selected: true, keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', {});
+  assert(r.changed === true, '5.KK replace no-orderedIds: changed (group writes)');
+  assert(a.fcurves[0].selected === true, '5.KK replace no-orderedIds: fc1 NOT pre-cleared (no visible scope)');
+  assert(a.groups[1].selected === undefined, '5.KK replace no-orderedIds: gB still cleared (groups always walked)');
+}
+
+// 'toggle' ON — XOR clicked group to selected; nothing else touched.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', selected: true }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gB', selected: true, active: true, keyforms: [] },
+    ],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', {
+    orderedIds: ['fc1', 'fc2'],
+    activeFCurveId: 'fc2',
+  });
+  assert(r.changed === true, '5.KK toggle ON: changed');
+  assert(r.groupSelectedAfter === true, '5.KK toggle ON: groupSelectedAfter=true');
+  assert(r.clearedActive === false, '5.KK toggle: never touches active fcurve');
+  assert(a.groups[0].selected === true, '5.KK toggle ON: gA selected');
+  assert(a.groups[1].selected === true, '5.KK toggle: gB UNTOUCHED');
+  assert(a.fcurves[0].selected === true, '5.KK toggle: fc1 UNTOUCHED');
+  assert(a.fcurves[1].selected === true, '5.KK toggle: fc2 selected UNTOUCHED');
+  assert(isFCurveActive(a.fcurves[1]) === true, '5.KK toggle: fc2 active UNTOUCHED');
+}
+
+// 'toggle' OFF — XOR clicked group to !selected (sparse-delete).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }, { id: 'gB', selected: true }],
+    [{ id: 'fc1', groupId: 'gA', selected: true, keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', {
+    orderedIds: ['fc1'],
+  });
+  assert(r.changed === true, '5.KK toggle OFF: changed');
+  assert(r.groupSelectedAfter === false, '5.KK toggle OFF: groupSelectedAfter=false');
+  assert(a.groups[0].selected === undefined, '5.KK toggle OFF: gA sparse-cleared');
+  assert(a.groups[1].selected === true, '5.KK toggle OFF: gB UNTOUCHED');
+  assert(a.fcurves[0].selected === true, '5.KK toggle OFF: fc1 UNTOUCHED');
+}
+
+// 'toggle' on already-not-selected group (sparse-missing) → ON.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],  // no selected field
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', { orderedIds: [] });
+  assert(r.changed === true, '5.KK toggle missing→ON: changed');
+  assert(r.groupSelectedAfter === true, '5.KK toggle missing→ON: selected=true');
+  assert(a.groups[0].selected === true, '5.KK toggle: group.selected written');
+}
+
+// Preflight matches setter (every-branch parity) ──────────────────
+{
+  const scenarios = [
+    // 'replace' on group with sibling-group selected → predict true
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }, { id: 'gB', selected: true }],
+        [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+      ),
+      gid: 'gA',
+      mod: 'replace',
+      ctx: { orderedIds: ['fc1'] },
+    }),
+    // 'replace' on already-selected-only group + nothing else → predict false
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA', selected: true }],
+        [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+      ),
+      gid: 'gA',
+      mod: 'replace',
+      ctx: { orderedIds: ['fc1'] },
+    }),
+    // 'replace' with active in visible scope → predict true (clears active)
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA', selected: true }],
+        [{ id: 'fc1', groupId: 'gA', active: true, keyforms: [] }],
+      ),
+      gid: 'gA',
+      mod: 'replace',
+      ctx: { orderedIds: ['fc1'], activeFCurveId: 'fc1' },
+    }),
+    // 'toggle' on anything → predict true (always flips a bit)
+    () => ({
+      action: makeActionWithGroups([{ id: 'gA' }], []),
+      gid: 'gA',
+      mod: 'toggle',
+      ctx: { orderedIds: [] },
+    }),
+    () => ({
+      action: makeActionWithGroups([{ id: 'gA', selected: true }], []),
+      gid: 'gA',
+      mod: 'toggle',
+      ctx: { orderedIds: [] },
+    }),
+    // 'replace' with no orderedIds + sibling-clear-only → predict true
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }, { id: 'gB', selected: true }],
+        [],
+      ),
+      gid: 'gA',
+      mod: 'replace',
+      ctx: {},
+    }),
+    // unsupported modifier → predict false
+    () => ({
+      action: makeActionWithGroups([{ id: 'gA' }], []),
+      gid: 'gA',
+      mod: 'range',
+      ctx: { orderedIds: [] },
+    }),
+    // 'replace' on visible-fcurve-only-selected (no group bit on
+    // any group, including the clicked one) → predict true (must
+    // pre-clear the fcurve AND set the clicked group)
+    () => ({
+      action: makeActionWithGroups(
+        [{ id: 'gA' }],
+        [
+          { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
+        ],
+      ),
+      gid: 'gA',
+      mod: 'replace',
+      ctx: { orderedIds: ['fc1'] },
+    }),
+  ];
+  for (let i = 0; i < scenarios.length; i++) {
+    const sA = scenarios[i]();
+    const sB = scenarios[i]();
+    const predicted = wouldGroupHeaderSelectChange(sA.action, sA.gid, sA.mod, sA.ctx);
+    const r = applyGroupHeaderSelect(sB.action, sB.gid, sB.mod, sB.ctx);
+    const anyMutation = r.changed || r.clearedActive;
+    assert(predicted === anyMutation, `5.KK scenario ${i}: preflight matches setter`);
   }
 }
 
