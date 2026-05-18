@@ -133,13 +133,16 @@
  * 2. **ACTIVE writes use `skipHistory: true`** at the dispatcher
  *    (inherited from Slice 5.X / 5.F's view-state UX choice; not a
  *    5.LL-original divergence).
- * 3. **Bulk select-all (Slice 5.K) does NOT clear group actives.**
- *    Currently `applyChannelSelectAll` operates only on `action.fcurves`.
- *    Blender's `anim_channels_select_set` cascade at `:719` clears
- *    AGRP_ACTIVE on every visible group when `change_active=true`.
- *    Closure: when bulk select-all is extended to include groups in
- *    its scope (queued as a future slice; not strictly required by
- *    any consumer today since groups aren't in the select-all loop).
+ * 3. **Bulk select-all group cascade — RESOLVED 2026-05-18 (Slice
+ *    5.NN, Path #59).** Pre-fix, `applyChannelSelectAll` operated
+ *    only on `action.fcurves`. Slice 5.NN extends it with an
+ *    `orderedGroupIds` scope: per-group `selected` cascade (sparse-
+ *    delete on transition to false) + UNCONDITIONAL `active` clear
+ *    (per Blender's `:718-720` `if (change_active) { agrp->flag &=
+ *    ~AGRP_ACTIVE; }` which has no selected-state gate; the
+ *    asymmetry with FCURVE case at `:728-732` is faithfully ported).
+ *    The dispatcher in FCurveEditor now passes `orderedGroupIds =
+ *    a.groups.map(g => g.id)`.
  * 4. **Box-select (Slice 5.Y) does NOT touch group rows.** Sidebar
  *    rows are fcurve-keyed; group-row box-select coverage is a future
  *    extension. Blender's `box_select_anim_channels` clears AGRP_ACTIVE

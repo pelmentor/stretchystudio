@@ -1976,6 +1976,181 @@ function makeActionWithGroups(groups, fcurves) {
   }
 }
 
+// ── Slice 5.NN (Path #59) — group cascade in applyChannelSelectAll ─
+// Closes Slice 5.LL Deviation 3. Ports the ANIMTYPE_GROUP case at
+// `anim_channels_select_set` `:714-722` so bulk select-all cascades
+// `selected` AND `active` on visible groups (unconditional active
+// clear per `:718-720`, differing from FCURVE case which gates the
+// active clear on `!FCURVE_SELECTED`).
+
+// Group-only scope: 'add' selects every visible group.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB' }],
+    [],
+  );
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedGroupIds: ['gA', 'gB'],
+  });
+  assert(r.changed === true, '5.NN group add: changed');
+  assert(r.resultMode === 'add', '5.NN group add: resultMode=add');
+  assert(a.groups[0].selected === true, '5.NN: gA selected');
+  assert(a.groups[1].selected === true, '5.NN: gB selected');
+}
+
+// Group-only 'clear' sparse-deletes selected on every visible group.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true, active: true }, { id: 'gB', selected: true }],
+    [],
+  );
+  const r = applyChannelSelectAll(a, 'clear', {
+    orderedGroupIds: ['gA', 'gB'],
+  });
+  assert(r.changed === true, '5.NN group clear: changed');
+  assert(a.groups[0].selected === undefined, '5.NN group clear: gA sparse-deleted');
+  assert(a.groups[1].selected === undefined, '5.NN group clear: gB sparse-deleted');
+  // Active UNCONDITIONALLY cleared per Blender :718-720 (no gate).
+  assert(a.groups[0].active === undefined, '5.NN group clear: gA active also cleared');
+}
+
+// Group-only 'invert' per-group flip + unconditional active clear.
+{
+  const a = makeActionWithGroups(
+    [
+      { id: 'gA', selected: true, active: true },
+      { id: 'gB' },
+    ],
+    [],
+  );
+  const r = applyChannelSelectAll(a, 'invert', {
+    orderedGroupIds: ['gA', 'gB'],
+  });
+  assert(r.changed === true, '5.NN group invert: changed');
+  assert(a.groups[0].selected === undefined, '5.NN group invert: gA flipped off');
+  assert(a.groups[1].selected === true, '5.NN group invert: gB flipped on');
+  // Active cleared on gA even though gA started active (Blender's
+  // unconditional :718-720 clear runs on every visible group regardless
+  // of post-select state). This differs from FCURVE behavior.
+  assert(a.groups[0].active === undefined, '5.NN group invert: gA active cleared (unconditional)');
+}
+
+// 'add' UNCONDITIONALLY clears active even on newly-selected groups
+// — the asymmetry from FCURVE. (FCURVE 'add' preserves active for
+// the just-selected curve via :728 gate.)
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true, active: true }],
+    [],
+  );
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedGroupIds: ['gA'],
+  });
+  // `selected` doesn't change (already true), but `active` IS cleared.
+  assert(r.changed === true, '5.NN group add active-clear: changed (active deletion only)');
+  assert(a.groups[0].selected === true, '5.NN: gA still selected');
+  assert(a.groups[0].active === undefined,
+    '5.NN: gA active CLEARED even though group ends up selected (Blender unconditional clear)');
+}
+
+// Mixed scope: groups + fcurves both in scope. Toggle resolver scans
+// both; ADD mode sets both; CLEAR mode clears both.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB' }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', groupId: 'gA', keyforms: [] },
+    ],
+  );
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedIds: ['fc1', 'fc2'],
+    orderedGroupIds: ['gA', 'gB'],
+  });
+  assert(r.changed === true, '5.NN mixed add: changed');
+  assert(r.selectedAfter === 2, '5.NN mixed add: selectedAfter counts fcurves only');
+  assert(a.groups[0].selected === true, '5.NN mixed add: gA selected');
+  assert(a.groups[1].selected === true, '5.NN mixed add: gB selected');
+  assert(a.fcurves[0].selected === true, '5.NN mixed add: fc1 selected');
+  assert(a.fcurves[1].selected === true, '5.NN mixed add: fc2 selected');
+}
+
+// Toggle resolver scans groups too — if any group is selected,
+// resolves to CLEAR even when no fcurve is selected.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }],
+    [{ id: 'fc1', keyforms: [] }],  // not selected
+  );
+  const r = applyChannelSelectAll(a, 'toggle', {
+    orderedIds: ['fc1'],
+    orderedGroupIds: ['gA'],
+  });
+  assert(r.changed === true, '5.NN toggle group-only-selected: changed');
+  assert(r.resultMode === 'clear',
+    '5.NN toggle: resolves to clear (group is selected → unified scan)');
+  assert(a.groups[0].selected === undefined, '5.NN: gA cleared');
+}
+
+// Toggle resolver — neither scope selected → resolves to ADD.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }],
+    [{ id: 'fc1', keyforms: [] }],
+  );
+  const r = applyChannelSelectAll(a, 'toggle', {
+    orderedIds: ['fc1'],
+    orderedGroupIds: ['gA'],
+  });
+  assert(r.resultMode === 'add', '5.NN toggle nothing-selected: resolves to add');
+  assert(a.groups[0].selected === true, '5.NN: gA newly selected');
+  assert(a.fcurves[0].selected === true, '5.NN: fc1 newly selected');
+}
+
+// Both scopes empty → no-op.
+{
+  const a = makeActionWithGroups([{ id: 'gA' }], [{ id: 'fc1', keyforms: [] }]);
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedIds: [],
+    orderedGroupIds: [],
+  });
+  assert(r.changed === false, '5.NN both-empty: no-op');
+  assert(r.resultMode === null, '5.NN both-empty: resultMode=null');
+}
+
+// orderedGroupIds with ghost entries (id in list but not in groups)
+// — silently skipped, no crash.
+{
+  const a = makeActionWithGroups([{ id: 'gA' }], []);
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedGroupIds: ['gA', 'ghost', 'phantom'],
+  });
+  assert(r.changed === true, '5.NN group ghost: only-real groups processed');
+  assert(a.groups[0].selected === true, '5.NN group ghost: gA selected');
+}
+
+// Fcurve active preservation through 'add' (Blender :728-732 gate).
+// Group active clearance through 'add' (Blender :718-720, no gate).
+// Verifies the documented asymmetry.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', active: true }],
+    [{ id: 'fc1', active: true, keyforms: [] }],
+  );
+  const r = applyChannelSelectAll(a, 'add', {
+    orderedIds: ['fc1'],
+    orderedGroupIds: ['gA'],
+    activeFCurveId: 'fc1',
+  });
+  assert(r.changed === true, '5.NN asymmetry: changed');
+  // fcurve active PRESERVED (per :728-732 gate — fc1 ends up selected).
+  assert(r.clearActive === false, '5.NN asymmetry: fcurve clearActive=false (preserved)');
+  assert(a.fcurves[0].active === true, '5.NN asymmetry: fc1 active preserved');
+  // group active CLEARED (per :718-720 unconditional).
+  assert(a.groups[0].active === undefined,
+    '5.NN asymmetry: gA active cleared (Blender unconditional group cascade)');
+}
+
 // ─────────────────────────────────────────────────────────────────────
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -2124,8 +2124,19 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
+      // Slice 5.NN (Path #59) — `orderedGroupIds` extends the
+      // operator's scope to include groups, closing Slice 5.LL Dev 3.
+      // SS uses `action.groups.map(g => g.id)` (no visibility filter)
+      // because the sidebar bucketization shows every group header
+      // regardless of expansion state. Sister to Slice 5.MM's walker
+      // scope deviation: if a future slice adds group-level
+      // hide-from-sidebar, this list will need narrowing.
+      const groupIds = Array.isArray(a.groups)
+        ? a.groups.map((g) => (g && typeof g.id === 'string' ? g.id : null)).filter(Boolean)
+        : [];
       decision = applyChannelSelectAll(a, mode, {
         orderedIds: decoded.map((d) => d.fcurve.id),
+        orderedGroupIds: groupIds,
         activeFCurveId,
       });
       if (decision.clearActive) {

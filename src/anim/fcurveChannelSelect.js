@@ -461,16 +461,59 @@ export function applyChannelSelect(action, fcurveId, modifier, ctx) {
  *     visible channel `selected = false`.
  *   - 'invert' — SEL_INVERT / ACHANNEL_SETFLAG_INVERT; per-channel flip.
  *
- * `ctx.orderedIds` is the visible scope (sidebar `decoded.map(d => d.fcurve.id)`).
- * `ctx.activeFCurveId` lets the helper compute `clearActive` per
- * Blender's "Only erase the ACTIVE flag when deselecting" rule
- * (`anim_channels_edit.cc:728-732`). Both are optional but required
- * for meaningful work — an empty/missing `orderedIds` returns a no-op
- * decision.
+ * `ctx.orderedIds` is the visible fcurve scope (sidebar
+ * `decoded.map(d => d.fcurve.id)`). `ctx.orderedGroupIds` is the
+ * visible group scope (sidebar `action.groups.map(g => g.id)` — see
+ * Slice 5.NN below). `ctx.activeFCurveId` lets the helper compute
+ * `clearActive` per Blender's "Only erase the ACTIVE flag when
+ * deselecting" rule (`anim_channels_edit.cc:728-732`). All three are
+ * optional but at least one of the two scopes is required for
+ * meaningful work — an empty/missing pair returns a no-op decision.
+ *
+ * # Slice 5.NN (Path #59) — Group cascade
+ *
+ * Closes Slice 5.LL Deviation 3. Pre-5.NN, the helper operated only
+ * on `action.fcurves` despite Blender's `anim_channels_select_set`
+ * walking BOTH per-type cases (ANIMTYPE_GROUP at `:714-722` AND
+ * ANIMTYPE_FCURVE at `:723-734`) when `ANIM_OT_channels_select_all`
+ * fires. SS port now mirrors the group case:
+ *
+ *   - Toggle resolver scans BOTH `orderedIds` (fcurves) AND
+ *     `orderedGroupIds` (groups). Any selected in either scope →
+ *     resolves to CLEAR; else → ADD. Sister to Blender's
+ *     `anim_channels_selection_flag_for_toggle` which walks the
+ *     unified visible channel list.
+ *
+ *   - Per-group `selected` mutation (sparse-write convention from
+ *     Slice 5.V — `delete g.selected` on transition to false, NOT
+ *     `g.selected = false`; differs from fcurves which use `=false`
+ *     per Slice 5.F).
+ *
+ *   - Per-group `active` clear is UNCONDITIONAL when `change_active`
+ *     would be true (always true for select-all modes — only
+ *     SELECT_EXTEND_RANGE has change_active=false per `:683`, and
+ *     EXTEND_RANGE is not a select-all mode). Mirrors Blender's
+ *     `:718-720` `if (change_active) { agrp->flag &= ~AGRP_ACTIVE; }`
+ *     which has NO selected-state gate — every visible group loses
+ *     its active flag regardless of whether the group ends up
+ *     AGRP_SELECTED.
+ *
+ *     **Key asymmetry with fcurve case at `:728-732`**: Blender's
+ *     FCURVE case gates the FCURVE_ACTIVE clear on
+ *     `!(fcu->flag & FCURVE_SELECTED) && change_active` — i.e.
+ *     fcurves preserve active when they end up selected (the famous
+ *     "select all curves retains the currently active curve"
+ *     comment at `:729-730`). Groups DON'T get the same preservation;
+ *     they lose AGRP_ACTIVE unconditionally. This is Blender's
+ *     existing behavior, ported faithfully.
  *
  * @param {object} action — the Action datablock (mutated)
  * @param {'toggle'|'add'|'clear'|'invert'} mode
- * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
+ * @param {{
+ *   orderedIds?: string[],
+ *   orderedGroupIds?: string[],
+ *   activeFCurveId?: string|null,
+ * }} [ctx]
  * @returns {{
  *   changed: boolean,
  *   clearActive: boolean,
@@ -486,64 +529,124 @@ export function applyChannelSelectAll(action, mode, ctx) {
     return { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
   }
   const orderedIds = ctx && Array.isArray(ctx.orderedIds) ? ctx.orderedIds : null;
+  const orderedGroupIds = ctx && Array.isArray(ctx.orderedGroupIds) ? ctx.orderedGroupIds : null;
   const activeFCurveId = ctx && typeof ctx.activeFCurveId === 'string' && ctx.activeFCurveId.length > 0
     ? ctx.activeFCurveId
     : null;
-  if (!orderedIds || orderedIds.length === 0) {
+  const fcurveScope = orderedIds && orderedIds.length > 0;
+  const groupScope = orderedGroupIds && orderedGroupIds.length > 0;
+  if (!fcurveScope && !groupScope) {
     return { changed: false, clearActive: false, resultMode: null, selectedAfter: 0 };
   }
 
-  // Build the id-keyed map once. The walker skips `id` entries that
-  // are in `orderedIds` but missing from `action.fcurves` (ghosts —
-  // possible when a delete races a render). Matches the defensive
-  // pattern from Slice 5.J's range-select (audit-fix MED-A1).
+  // Build the id-keyed maps once. The walkers skip `id` entries that
+  // are in their ordered-list but missing from the underlying array
+  // (ghosts — possible when a delete races a render). Matches the
+  // defensive pattern from Slice 5.J's range-select (audit-fix MED-A1).
   const byId = new Map();
   for (const fc of action.fcurves) {
     if (fc && typeof fc.id === 'string') byId.set(fc.id, fc);
   }
+  const groupById = new Map();
+  if (Array.isArray(action.groups)) {
+    for (const g of action.groups) {
+      if (g && typeof g.id === 'string') groupById.set(g.id, g);
+    }
+  }
 
   // Toggle resolver — Blender's `anim_channels_selection_flag_for_toggle`
-  // at `anim_channels_edit.cc:536-570`: scan visible channels; resolve
-  // to CLEAR on first selected found, else ADD. Same short-circuit.
+  // at `anim_channels_edit.cc:536-570`: scan visible channels (BOTH
+  // groups AND fcurves in the unified channel list); resolve to CLEAR
+  // on first selected found, else ADD. Same short-circuit.
   /** @type {'add'|'clear'|'invert'} */
   let resolved;
   if (mode === 'toggle') {
     let anySelected = false;
-    for (const id of orderedIds) {
-      const fc = byId.get(id);
-      if (fc && fc.selected === true) { anySelected = true; break; }
+    if (fcurveScope) {
+      for (const id of orderedIds) {
+        const fc = byId.get(id);
+        if (fc && fc.selected === true) { anySelected = true; break; }
+      }
+    }
+    if (!anySelected && groupScope) {
+      for (const id of orderedGroupIds) {
+        const g = groupById.get(id);
+        if (g && g.selected === true) { anySelected = true; break; }
+      }
     }
     resolved = anySelected ? 'clear' : 'add';
   } else {
     resolved = mode;
   }
 
-  // Per-channel mutation. Sparse-field invariant: only write `false`
-  // when transitioning from true (matches `applyChannelSelect` line 210).
+  // Per-fcurve mutation. Sparse-field invariant for fcurves uses
+  // explicit `=false` write (Slice 5.F convention, NOT sparse-delete
+  // — fcurve `selected` writes are higher-frequency and the explicit
+  // boolean keeps grep-driven debugging clean).
   let changed = false;
   let selectedAfter = 0;
-  for (const id of orderedIds) {
-    const fc = byId.get(id);
-    if (!fc) continue;
-    const before = fc.selected === true;
-    let after;
-    if (resolved === 'add') after = true;
-    else if (resolved === 'clear') after = false;
-    else after = !before; // invert
-    if (after !== before) {
-      if (after) fc.selected = true;
-      else fc.selected = false;
-      changed = true;
+  if (fcurveScope) {
+    for (const id of orderedIds) {
+      const fc = byId.get(id);
+      if (!fc) continue;
+      const before = fc.selected === true;
+      let after;
+      if (resolved === 'add') after = true;
+      else if (resolved === 'clear') after = false;
+      else after = !before; // invert
+      if (after !== before) {
+        if (after) fc.selected = true;
+        else fc.selected = false;
+        changed = true;
+      }
+      if (after) selectedAfter++;
     }
-    if (after) selectedAfter++;
   }
 
-  // Active-flag decision — mirror Blender's `if (!(fcu->flag &
+  // Per-group mutation — Slice 5.NN (Path #59). Sister to the fcurve
+  // loop above but using the GROUP sparse-write convention (delete on
+  // transition to false, per Slice 5.V — matches `applyGroupHeaderSelect`
+  // 'toggle' branch). Per Blender's `:714-722` cascade:
+  //
+  //   - `selected` (AGRP_SELECTED) — set/clear/invert per mode.
+  //   - `active` (AGRP_ACTIVE) — UNCONDITIONALLY cleared on every
+  //     visible group when `change_active=true`. Always true for
+  //     select-all modes (only EXTEND_RANGE has change_active=false
+  //     per `:683`, and EXTEND_RANGE is not a select-all mode).
+  //
+  // Note the asymmetry with fcurves: the FCURVE case at `:728-732`
+  // GATES the active-clear on `!FCURVE_SELECTED && change_active`
+  // (preserves the active curve through select-all); the GROUP case
+  // at `:718-720` has NO such gate (every visible group loses
+  // AGRP_ACTIVE on every select-all). Ported faithfully.
+  if (groupScope) {
+    for (const id of orderedGroupIds) {
+      const g = groupById.get(id);
+      if (!g) continue;
+      const before = g.selected === true;
+      let after;
+      if (resolved === 'add') after = true;
+      else if (resolved === 'clear') after = false;
+      else after = !before; // invert
+      if (after !== before) {
+        if (after) g.selected = true;
+        else delete g.selected;  // sparse-delete per Slice 5.V
+        changed = true;
+      }
+      // Unconditional AGRP_ACTIVE clear (sparse-delete) per `:718-720`.
+      if (Object.prototype.hasOwnProperty.call(g, 'active')) {
+        delete g.active;
+        changed = true;
+      }
+    }
+  }
+
+  // Active-fcurve decision — mirror Blender's `if (!(fcu->flag &
   // FCURVE_SELECTED) && change_active)` at `anim_channels_edit.cc:728-732`.
   // Bulk select-all is always `change_active`, so the rule collapses to:
   // "if active is in scope AND ends up deselected, clear it".
   let clearActive = false;
-  if (activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
+  if (fcurveScope && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
     const fc = byId.get(activeFCurveId);
     const activeAfter = fc ? fc.selected === true : false;
     if (!activeAfter) clearActive = true;
