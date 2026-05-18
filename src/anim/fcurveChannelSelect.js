@@ -1100,28 +1100,22 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *   2. Post-branch `ANIM_set_active_channel` at `:4194-4218` based
  *      on whether the group ends up selected: if AGRP_SELECTED is
  *      now set, the clicked group becomes active; otherwise the
- *      active-group slot is cleared. **DEFERRED in SS** — same
- *      AGRP_ACTIVE inheritance.
- *
- * # Active-elevation deferral
- *
- * The Slice 5.X EXCLUSIVE-active invariant covers `fc.active` (per-
- * fcurve). There is no parallel `group.active` slot today. Adding
- * one is scoped to path #50 ("Port AGRP_ACTIVE"); this helper
- * leaves group-level active elevation as a documented deviation
- * rather than synthesising a half-port. Per Rule №1, the active
- * elevation lands together with its consumer (group-header
- * highlighting + auto-elevated-group surfacing) in one slice — not
- * staged across two with a no-op slot.
+ *      active-group slot is cleared. **Shipped Slice 5.LL (path #50)**
+ *      via [setActiveFCurveGroup](./fcurveGroupActive.js). Both
+ *      'replace' Step 4 + 'toggle' branch + 'range' (no-op per
+ *      `:4194` gate) consume this primitive.
  *
  * # SS deviations from Blender
  *
- *   1. **AGRP_ACTIVE not ported (replace + toggle both inherit).**
- *      Blender re-elevates the clicked group to AGRP_ACTIVE after
- *      SELECT_REPLACE (`:4194-4204`) and toggles the active-group
- *      slot on SELECT_INVERT (`:4194-4218`). SS has no `group.active`
- *      field today; the elevation is dropped until path #50 ports it.
- *      Sister deviation to Slice 5.BB MED-3.
+ *   1. **AGRP_ACTIVE elevation — RESOLVED 2026-05-18 (Slice 5.LL).**
+ *      Pre-fix, both 'replace' and 'toggle' branches inherited the
+ *      Slice 5.V deferral (no `group.active` field). Slice 5.LL
+ *      shipped the per-group ACTIVE bit + EXCLUSIVE write helper +
+ *      sidebar 3-tier surfacing. Both branches now elevate the
+ *      clicked group post-mutation; 'range' deliberately skips
+ *      elevation per the `:4194` `selectmode != SELECT_EXTEND_RANGE`
+ *      gate (matches Blender's "range preserves active" rule). Sister
+ *      to Slice 5.BB MED-3 close.
  *
  *   2. **No pchan cascade.** Blender's `select_pchan_for_action_group`
  *      (called from `anim_channels_select_set` ANIMTYPE_GROUP case
@@ -1164,7 +1158,7 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
  *
  * @param {object} action — the Action datablock (mutated)
  * @param {string} groupId — id of the FCurveGroup clicked
- * @param {'replace'|'toggle'} modifier
+ * @param {'replace'|'toggle'|'range'} modifier
  * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
  *   — `orderedIds` is the visible-channel scope for the 'replace'
  *   pre-clear step (NOT consulted for 'toggle'). `activeFCurveId`
@@ -1421,7 +1415,7 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
  *
  * @param {object|null|undefined} action
  * @param {string} groupId
- * @param {'replace'|'toggle'} modifier
+ * @param {'replace'|'toggle'|'range'} modifier
  * @param {{ orderedIds?: string[], activeFCurveId?: string|null }} [ctx]
  * @returns {boolean}
  */
