@@ -53,10 +53,15 @@ function close(a, b, eps, name) {
 }
 
 // Standard fixture: 3-track stack with strips, animData bound to 'baseAct'.
+// Audit-fix HIGH-A1: uses NONZERO slotHandle (7) so save/restore pinning
+// is real. tmpSlotHandle starts at 99 (a sentinel value the post-exit
+// state must NOT carry — proves the clear-to-0 step ran).
+// makeNlaStrip's slotHandle defaults to 0; the tweak strip's slot
+// (5 for sMid1) is also nonzero so the swap-in / swap-out is visible.
 function makeFixture() {
   return {
     actionId: 'baseAct',
-    slotHandle: 0,
+    slotHandle: 7,
     actionInfluence: 1,
     actionBlendmode: 'replace',
     actionExtendmode: 'hold',
@@ -69,6 +74,7 @@ function makeFixture() {
       makeNlaTrack('tMid', 'Upper Body', { index: 1, strips: [
         makeNlaStrip('sMid1', 'walkAct', {
           start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1,
+          slotHandle: 5,
         }),
         makeNlaStrip('sMid2', 'walkAct', {   // shares walkAct → expected TWEAKUSER
           start: 1000, end: 2000, actstart: 0, actend: 1000, influence: 1,
@@ -82,7 +88,7 @@ function makeFixture() {
     ],
     drivers: [],
     flag: 0,
-    tmpActionId: null, tmpSlotHandle: 0,
+    tmpActionId: null, tmpSlotHandle: 99,   // sentinel — must clear to 0 on exit
     tweakTrackId: null, tweakStripId: null,
   };
 }
@@ -96,8 +102,12 @@ function makeFixture() {
   eq(ad.tweakTrackId, 'tMid', '1: tweakTrackId set');
   eq(ad.tweakStripId, 'sMid1', '1: tweakStripId set');
   eq(ad.tmpActionId, 'baseAct', '1: tmpActionId backed up');
-  eq(ad.tmpSlotHandle, 0, '1: tmpSlotHandle backed up');
+  // HIGH-A1: nonzero slotHandle in fixture pins save/restore — 7 must
+  // make it into tmpSlotHandle (not 0 default coincidence).
+  eq(ad.tmpSlotHandle, 7, '1: tmpSlotHandle backed up (=7, HIGH-A1 pinning)');
   eq(ad.actionId, 'walkAct', '1: actionId swapped to tweak strip\'s action');
+  // tweak strip's own slotHandle (5) swapped in.
+  eq(ad.slotHandle, 5, '1: slotHandle swapped to tweak strip\'s slotHandle (=5)');
   // Active track + every track ABOVE (index > activeIdx) DISABLED
   const tBot = ad.nlaTracks.find((t) => t.id === 'tBot');
   const tMid = ad.nlaTracks.find((t) => t.id === 'tMid');
@@ -128,17 +138,28 @@ function makeFixture() {
     '2: strip in upper track NOT tagged (different action)');
 }
 
-// ── 3. enterTweakMode short-circuits when already in tweak mode ────
+// ── 3. enterTweakMode idempotent on SAME strip; REJECTS different
+// strip while already in tweak (audit-fix HIGH-A2 + LOW-F8 JSON pin)
 {
   const ad = makeFixture();
   const ok1 = enterTweakMode(ad, 'tMid', 'sMid1');
-  assert(ok1, '3: first enter succeeds');
-  // Mutate tweakStripId to detect if second enter re-runs
-  ad.tweakStripId = 'should_be_preserved_by_early_return';
-  const ok2 = enterTweakMode(ad, 'tTop', 'sTop1');
-  assert(ok2, '3: second enter returns true (already in tweak)');
-  eq(ad.tweakStripId, 'should_be_preserved_by_early_return',
-    '3: second enter early-returns, does NOT re-tag or re-swap');
+  assert(ok1, '3a: first enter succeeds');
+  const afterFirst = JSON.stringify(ad);
+
+  // Same-strip re-enter is idempotent — return true, no state change
+  const ok2 = enterTweakMode(ad, 'tMid', 'sMid1');
+  assert(ok2, '3b: same-strip re-enter returns true (idempotent)');
+  eq(JSON.stringify(ad), afterFirst,
+    '3b: same-strip re-enter byte-identical (no mutation — LOW-F8 strengthened)');
+
+  // Different-strip enter returns FALSE (audit-fix HIGH-A2). Pre-fix:
+  // Blender's `return true at nla.cc:2365-2367` was silent-success that
+  // masked caller intent. SS surfaces it now since explicit IDs make
+  // the discrepancy detectable.
+  const ok3 = enterTweakMode(ad, 'tTop', 'sTop1');
+  eq(ok3, false, '3c: different-strip enter while in tweak returns FALSE (HIGH-A2)');
+  eq(JSON.stringify(ad), afterFirst,
+    '3c: different-strip rejected — animData byte-identical to first-enter state');
 }
 
 // ── 4. enterTweakMode fails when track/strip missing ───────────────
@@ -189,12 +210,15 @@ function makeFixture() {
 {
   const ad = makeFixture();
   enterTweakMode(ad, 'tMid', 'sMid1');
-  exitTweakMode(ad);
+  exitTweakMode(ad);   // no project passed — length-sync skipped (OK here)
 
   assert(!isTweakModeOn(ad), '7: ADT_NLA_EDIT_ON cleared');
   eq(ad.actionId, 'baseAct', '7: actionId restored from tmpActionId');
+  // HIGH-A1: slotHandle restored to fixture's 7 (not the tweak strip's 5)
+  eq(ad.slotHandle, 7, '7: slotHandle restored from tmpSlotHandle (=7, HIGH-A1)');
   eq(ad.tmpActionId, null, '7: tmpActionId cleared');
-  eq(ad.tmpSlotHandle, 0, '7: tmpSlotHandle cleared');
+  eq(ad.tmpSlotHandle, 0,
+    '7: tmpSlotHandle cleared to 0 (sentinel 99 in fixture overwritten by save+clear)');
   eq(ad.tweakTrackId, null, '7: tweakTrackId cleared');
   eq(ad.tweakStripId, null, '7: tweakStripId cleared');
   // All track DISABLED bits cleared
@@ -243,13 +267,23 @@ function makeFixture() {
 }
 
 // ── 10. Full enter→exit round-trip is shape-preserving ────────────
+// (audit-fix HIGH-A1 strengthened: fixture now uses tmpSlotHandle=99
+// sentinel that exit clears to 0, so the byte-identical claim is
+// relaxed to "all fields restored EXCEPT documented tmpSlotHandle
+// normalization". Normalize the snapshot to compare.)
 {
   const ad = makeFixture();
-  const before = JSON.stringify(ad);
+  // Snapshot but normalize the tmpSlotHandle field (which exit
+  // clears to 0 regardless of the pre-enter sentinel value).
+  const snapshot = JSON.parse(JSON.stringify(ad));
+  snapshot.tmpSlotHandle = 0;
+  const beforeNormalized = JSON.stringify(snapshot);
+
   enterTweakMode(ad, 'tMid', 'sMid1');
   exitTweakMode(ad);
-  eq(JSON.stringify(ad), before,
-    '10: enter→exit byte-identical round-trip (flag bits clean, action restored)');
+
+  eq(JSON.stringify(ad), beforeNormalized,
+    '10: enter→exit shape-preserving (modulo tmpSlotHandle clear-to-0)');
 }
 
 // ── 11. Integration: evaluator skips DISABLED tracks + tweak strip ─
@@ -348,6 +382,217 @@ function makeFixture() {
   const acc = evaluateNla(ad, 500, project);
   close(/** @type number */ (acc.get('paramX')), 1000, 1e-9,
     '12: post-exit normal stack walk: all 3 tracks replace → paramX=1000');
+}
+
+// ── 13. Empty-tracks animData: clear/exit/enter all safe (MED-A4) ─
+{
+  // Simulates a crash-recovery load where ADT_NLA_EDIT_ON is set on
+  // an animData that has no tracks (e.g. tracks were lost in a
+  // partial-write). All three helpers must be safe.
+  const ad = {
+    actionId: 'baseAct', slotHandle: 0,
+    nlaTracks: [],
+    flag: ADT_FLAG.NLA_EDIT_ON,   // tweak-flag set but no tracks
+    tmpActionId: 'restored', tmpSlotHandle: 3,
+    tweakTrackId: 't_gone', tweakStripId: 's_gone',
+  };
+
+  // clearTweakFlags: no throw, clears NLA_EDIT_ON, leaves action +
+  // backup pointers intact (its contract).
+  clearTweakFlags(ad);
+  eq(ad.flag & ADT_FLAG.NLA_EDIT_ON, 0,
+    '13a: clearTweakFlags on empty-tracks clears NLA_EDIT_ON');
+  eq(ad.tmpActionId, 'restored',
+    '13a: clearTweakFlags preserves backup pointers (clearFlags-only contract)');
+
+  // Reset back to tweak-mode-on for the next assertion
+  ad.flag |= ADT_FLAG.NLA_EDIT_ON;
+
+  // exitTweakMode: full restore + clear; no throw despite empty tracks
+  exitTweakMode(ad);
+  eq(ad.flag & ADT_FLAG.NLA_EDIT_ON, 0, '13b: exitTweakMode on empty-tracks clears flag');
+  eq(ad.actionId, 'restored', '13b: exitTweakMode restores actionId from tmpActionId');
+  eq(ad.slotHandle, 3, '13b: exitTweakMode restores slotHandle from tmpSlotHandle');
+  eq(ad.tweakTrackId, null, '13b: tweakTrackId cleared');
+  eq(ad.tweakStripId, null, '13b: tweakStripId cleared');
+
+  // enterTweakMode: requires actual tracks → false
+  eq(enterTweakMode(ad, 't_gone', 's_gone'), false,
+    '13c: enterTweakMode on empty-tracks → false (track not found)');
+}
+
+// ── 14. SYNC_LENGTH bound sync at exit (audit-fix HIGH-F5) ─────────
+{
+  // Setup: a strip with SYNC_LENGTH flag bound to an action. During
+  // tweak, the action's frameEnd changes (user added keyframes past
+  // the original end). On exit, the strip's `end` should re-derive:
+  //   strip.end = strip.start + actlength * scale * repeat
+  // where actlength = action.frameEnd - action.frameStart.
+  const project = {
+    actions: [
+      { id: 'tweakAct', frameStart: 0, frameEnd: 1500,   // was 1000, edited to 1500
+        fcurves: [] },
+      { id: 'baseAct', frameStart: 0, frameEnd: 1000, fcurves: [] },
+    ],
+  };
+  const ad = {
+    actionId: 'tweakAct', slotHandle: 0,   // currently in tweak; tweakAct is the swapped-in action
+    nlaTracks: [
+      {
+        id: 't1', name: 'T', flag: NLATRACK_FLAG.DISABLED, index: 0,
+        strips: [
+          // Tweak strip itself, SYNC_LENGTH flagged
+          {
+            id: 'sTweak', name: 'sTweak', actionId: 'tweakAct',
+            slotHandle: 0, start: 0, end: 1000, actstart: 0, actend: 1000,
+            repeat: 1, scale: 1, blendmode: 'replace', extendmode: 'hold',
+            influence: 1, blendin: 0, blendout: 0, fcurves: [],
+            flag: NLASTRIP_FLAG.SYNC_LENGTH,
+          },
+          // Strip sharing the same action, SYNC_LENGTH flagged
+          {
+            id: 'sShared', name: 'sShared', actionId: 'tweakAct',
+            slotHandle: 0, start: 2000, end: 3000, actstart: 0, actend: 1000,
+            repeat: 2, scale: 1, blendmode: 'replace', extendmode: 'hold',
+            influence: 1, blendin: 0, blendout: 0, fcurves: [],
+            flag: NLASTRIP_FLAG.SYNC_LENGTH,
+          },
+          // Strip sharing the same action, NOT SYNC_LENGTH → unchanged
+          {
+            id: 'sNoSync', name: 'sNoSync', actionId: 'tweakAct',
+            slotHandle: 0, start: 5000, end: 6000, actstart: 0, actend: 1000,
+            repeat: 1, scale: 1, blendmode: 'replace', extendmode: 'hold',
+            influence: 1, blendin: 0, blendout: 0, fcurves: [],
+            flag: 0,
+          },
+          // Strip referencing a different action, SYNC_LENGTH flagged → unchanged
+          {
+            id: 'sOther', name: 'sOther', actionId: 'baseAct',
+            slotHandle: 0, start: 7000, end: 8000, actstart: 0, actend: 1000,
+            repeat: 1, scale: 1, blendmode: 'replace', extendmode: 'hold',
+            influence: 1, blendin: 0, blendout: 0, fcurves: [],
+            flag: NLASTRIP_FLAG.SYNC_LENGTH,
+          },
+        ],
+      },
+    ],
+    flag: ADT_FLAG.NLA_EDIT_ON,
+    tmpActionId: 'baseAct', tmpSlotHandle: 0,
+    tweakTrackId: 't1', tweakStripId: 'sTweak',
+  };
+
+  exitTweakMode(ad, project);
+
+  // sTweak: actlength = 1500, scale=1, repeat=1 → end = 0 + 1500*1*1 = 1500
+  const sTweak = ad.nlaTracks[0].strips[0];
+  close(sTweak.end, 1500, 1e-9,
+    '14: sTweak (SYNC_LENGTH on tweaked action): end re-derived 1000 → 1500');
+
+  // sShared: actlength=1500, scale=1, repeat=2 → end = 2000 + 1500*1*2 = 5000
+  const sShared = ad.nlaTracks[0].strips[1];
+  close(sShared.end, 5000, 1e-9,
+    '14: sShared (SYNC_LENGTH, same action, repeat=2): end 3000 → 5000');
+
+  // sNoSync: no SYNC_LENGTH bit → end unchanged
+  const sNoSync = ad.nlaTracks[0].strips[2];
+  close(sNoSync.end, 6000, 1e-9,
+    '14: sNoSync (no SYNC_LENGTH): end unchanged');
+
+  // sOther: SYNC_LENGTH but action is baseAct, not tweakAct → unchanged
+  const sOther = ad.nlaTracks[0].strips[3];
+  close(sOther.end, 8000, 1e-9,
+    '14: sOther (SYNC_LENGTH but different action): end unchanged');
+}
+
+// ── 15. SYNC_LENGTH skipped when project not passed (defensive) ────
+{
+  // Legacy callers that don't pass project should not crash; they just
+  // get the pre-audit behavior (no sync). Documented as production
+  // callers MUST pass project.
+  const ad = makeFixture();
+  enterTweakMode(ad, 'tMid', 'sMid1');
+  // Mark a strip SYNC_LENGTH
+  const sMid1 = ad.nlaTracks.find((t) => t.id === 'tMid').strips[0];
+  sMid1.flag |= NLASTRIP_FLAG.SYNC_LENGTH;
+  const endBefore = sMid1.end;
+  exitTweakMode(ad);   // no project
+  eq(sMid1.end, endBefore,
+    '15: project omitted → SYNC_LENGTH sync silently skipped (defensive legacy-caller path)');
+}
+
+// ── 16. Consumer-chain composition: evaluateNla underlay + active
+// action layer = tweak strip's contribution on top (audit-fix LOW-F7) ─
+{
+  // Verifies the Slice 4.B/4.C split:
+  //   1. evaluateNla returns only the underlay (skips tweak strip +
+  //      DISABLED tracks)
+  //   2. consumer chain reads animData.actionId (= tweak strip's
+  //      action post-enter) and evaluates IT as the topmost implicit
+  //      layer
+  //   3. The combined output equals "what you'd see in the viewport
+  //      during tweak mode"
+  const project = {
+    actions: [
+      { id: 'baseAct', fcurves: [{ id: 'fc1', rnaPath: 'paramX',
+        keyforms: [{ time: 0, value: 1, interpolation: 'linear' },
+                   { time: 1000, value: 1, interpolation: 'linear' }] }] },
+      { id: 'idleAct', fcurves: [{ id: 'fc1', rnaPath: 'paramX',
+        keyforms: [{ time: 0, value: 10, interpolation: 'linear' },
+                   { time: 1000, value: 10, interpolation: 'linear' }] }] },
+      { id: 'walkAct', fcurves: [{ id: 'fc1', rnaPath: 'paramX',
+        keyforms: [{ time: 0, value: 100, interpolation: 'linear' },
+                   { time: 1000, value: 100, interpolation: 'linear' }] }] },
+      { id: 'talkAct', fcurves: [{ id: 'fc1', rnaPath: 'paramX',
+        keyforms: [{ time: 0, value: 1000, interpolation: 'linear' },
+                   { time: 1000, value: 1000, interpolation: 'linear' }] }] },
+    ],
+  };
+
+  const ad = makeFixture();
+  enterTweakMode(ad, 'tMid', 'sMid1');
+
+  // Step A: evaluator produces underlay (only tBot/idleAct = 10)
+  const underlay = evaluateNla(ad, 500, project);
+  close(/** @type number */ (underlay.get('paramX')), 10, 1e-9,
+    '16a: evaluateNla produces underlay only (paramX=10, walkAct skipped via tweak)');
+
+  // Step B: consumer-chain evaluates animData.actionId as the topmost
+  // implicit layer. After enter, animData.actionId === 'walkAct'.
+  // Composition (REPLACE blend, influence=1):
+  //   combined = lerp(underlay, activeActionResult, 1) = activeActionResult
+  // walkAct paramX = 100. Combined = 100.
+  eq(ad.actionId, 'walkAct',
+    '16b: post-enter, animData.actionId === tweak strip\'s action');
+
+  // Pseudo-consumer-chain composition. The actual composition lives
+  // in Slice 4.G or whatever wires evaluateNla into the live viewport.
+  // Here we just simulate the contract: blend(underlay, evalAction).
+  function evaluateActiveActionAt(actionId, timeMs) {
+    const action = project.actions.find((a) => a.id === actionId);
+    if (!action) return new Map();
+    const out = new Map();
+    for (const fc of action.fcurves) {
+      // Single-keyform-pair lerp; matches the linear ramp fixture.
+      const kfs = fc.keyforms;
+      let v = kfs[kfs.length - 1].value;
+      for (let i = 0; i < kfs.length - 1; i++) {
+        const a = kfs[i], b = kfs[i + 1];
+        if (timeMs >= a.time && timeMs <= b.time) {
+          const t = (timeMs - a.time) / (b.time - a.time);
+          v = a.value * (1 - t) + b.value * t;
+          break;
+        }
+      }
+      out.set(fc.rnaPath, v);
+    }
+    return out;
+  }
+  const topLayer = evaluateActiveActionAt(ad.actionId, 500);
+  // REPLACE composition with influence=1 → pure overwrite
+  const combined = new Map(underlay);
+  for (const [k, v] of topLayer) combined.set(k, v);
+  close(/** @type number */ (combined.get('paramX')), 100, 1e-9,
+    '16c: consumer chain combines underlay + tweak action layer → paramX=100');
 }
 
 console.log(`\nnlaTweakMode: ${passed} passed, ${failed} failed`);

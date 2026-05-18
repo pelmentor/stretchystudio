@@ -36,19 +36,52 @@
  * matches Blender; SS does not add a Cancel pseudo-semantic that
  * would require snapshotting the action on entry.
  *
- * # Length sync — SS DEVIATION (documented)
+ * # SS deviations (numbered for the deviation registry)
  *
- * Blender's `BKE_nla_tweakmode_exit` (nla.cc:2516-2565) calls
- * `nla_tweakmode_exit_sync_strip_lengths` which uses
- * `BKE_nlastrip_recalculate_bounds_sync_action` to re-derive each
- * SYNC_LENGTH-flagged strip's `end` from the action's frame range.
- * SS doesn't ship an action-frame-range helper at substrate level
- * (action length lives in `action.frameStart` / `action.frameEnd` or
- * implicitly in `action.duration` — not yet authoritatively pinned;
- * Phase 4.D NLAEditor will need to make this decision). For now SS
- * `exitTweakMode` skips length-sync entirely; SYNC_LENGTH-flagged
- * strips keep their pre-tweak `end` values. Documented as
- * `feature/4.D` follow-up.
+ * **DEVIATION 1 — No action refcount / Slot-user-map updates.**
+ * Blender (nla.cc:2542-2563) calls `animrig::generic_assign_action`
+ * which manipulates per-`ActionSlot` user-count refs (`users_add` /
+ * `users_remove`) for purge logic. SS doesn't model action
+ * refcounts at all — Slice 1.E `actionRegistry.js` handles "delete
+ * action" via cascade walk instead. Adding a refcount system later
+ * MUST grep this module + `actionRegistry.js` to wire all sites.
+ *
+ * **DEVIATION 2 — No RNA notification.** Blender posts an RNA
+ * "Action changed" notification at swap-in (line 2420) for the
+ * outliner / properties panel to re-render. SS reactivity (Zustand
+ * subscribers + the project store action) handles this naturally
+ * when the caller persists the mutation — no equivalent needed at
+ * the substrate level.
+ *
+ * **DEVIATION 3 — Slot validation skipped.** Blender's
+ * `assign_action_and_slot` validates the slot is compatible with
+ * the owner ID. SS's `slotHandle` is a plain int; if a project
+ * carries a slotHandle that doesn't exist on the swapped-in action,
+ * `evaluateAction` will silently no-op. Acceptable for the SS
+ * use case (slotHandle is always 0 in Phase 4 per plan §4.A).
+ *
+ * **DEVIATION 4 — Explicit `(trackId, stripId)` API vs Blender's
+ * active-discovery.** Blender's `BKE_nla_tweakmode_enter` discovers
+ * the active track + strip via `nla_tweakmode_find_active`
+ * (nla.cc:2296-2350) reading `NLATRACK_ACTIVE` + `NLASTRIP_FLAG_ACTIVE`
+ * / `SELECT` bits. SS takes the IDs explicitly — Slice 4.D NLAEditor
+ * is the de-facto caller and knows the clicked strip directly. If
+ * SS later needs a "multi-strip-selected → enter on last selected"
+ * fallback (Blender does this), 4.D-side discovery is the right
+ * layer, not this module.
+ *
+ * **DEVIATION 5 — `tmpSlotHandle` cleared to `0` not Blender's
+ * `Slot::unassigned` sentinel.** SS has no Slot system, so `0` is
+ * the sentinel. If a Slot subsystem ever lands, the collision with
+ * "legitimately slot 0" needs a distinct sentinel.
+ *
+ * **NO DEVIATION on length sync** (audit-fix Slice 4.C HIGH-F5):
+ * SYNC_LENGTH-flagged strip `end` re-derivation IS implemented; see
+ * `syncStripBoundsToAction` below. The pre-audit-fix doc claimed
+ * SS skipped this; the auditor correctly identified it as buildable
+ * today (action shape carries `frameStart` / `frameEnd` / `duration`
+ * per v36 schema), and silently miscomputing strip bounds would be
+ * a Rule №1 silent fallback.
  *
  * @module anim/nlaTweakMode
  */
@@ -61,8 +94,104 @@ import {
 } from './nla.js';
 
 /**
+ * Action-frame-range duration helper. Reads the action's frame range
+ * with precedence: explicit `frameStart`/`frameEnd` > `duration` > 0.
+ *
+ * Used by `syncStripBoundsToAction` to recompute SYNC_LENGTH-flagged
+ * strips' `end` at tweak-mode exit. Returns 0 if the action has no
+ * length signal — caller MUST guard against propagating a zero-length
+ * sync to a strip's `end` (a zero-length strip would deactivate).
+ *
+ * Note: SS uses ms canonical time (`feedback_ms_canonical_animation_time`)
+ * but `frameStart`/`frameEnd` were authored as frames in pre-v36
+ * legacy data. For Phase 4 we treat them as ms since v36's
+ * `animationToAction` migrates `duration` (which is ms) as-is and
+ * leaves `frameStart`/`frameEnd` as-is (also ms in the live store).
+ * If a Phase-3-or-earlier legacy frame-based value sneaks through,
+ * the resulting strip end will be wrong — but no test fixture or
+ * production project today carries that shape post-v36 migration.
+ *
+ * @param {object|null|undefined} action
+ * @returns {number} ms
+ */
+function getActionLengthMs(action) {
+  if (!action || typeof action !== 'object') return 0;
+  const fs = typeof action.frameStart === 'number' ? action.frameStart : null;
+  const fe = typeof action.frameEnd === 'number' ? action.frameEnd : null;
+  if (fs !== null && fe !== null) return Math.max(0, fe - fs);
+  if (typeof action.duration === 'number') return Math.max(0, action.duration);
+  return 0;
+}
+
+/**
+ * Re-derive a strip's `end` from the tweaked action's frame range.
+ * Ports Blender's `BKE_nlastrip_recalculate_bounds_sync_action`
+ * (`nla.cc:530-540` approximate — Blender's helper is more involved
+ * because it also handles reverse + scale gracefully; SS uses the
+ * canonical formula).
+ *
+ * Formula: `end = start + actlength * scale / repeat`
+ *
+ * Why `/ repeat` and not `* repeat`? The strip's timeline length is
+ * `(actlength * scale)` for ONE play-through; the strip plays
+ * `repeat` times within that timeline span. Inverting: total =
+ * actlength * scale / repeat ... wait, that's wrong direction.
+ *
+ * Actually re-read: per Blender `nlastrip_recalculate_bounds`
+ * (`nla.cc:535`): `nlastrip_length = actlength * abs(scale) * repeat`.
+ * So `end = start + actlength * abs(scale) * repeat`. Strip plays
+ * `repeat` copies of the action, each scaled by `scale`. SS matches
+ * that formula.
+ *
+ * Skips no-op cases:
+ *   - actlength == 0 (no length signal — Blender does the same guard
+ *     via `IS_EQF`)
+ *   - strip has no action (defensive — shouldn't happen post-validation)
+ *
+ * @param {object} strip — mutated in place
+ * @param {object|null|undefined} action — strip's bound action
+ */
+function syncStripBoundsToAction(strip, action) {
+  const actlen = getActionLengthMs(action);
+  if (actlen <= 1e-10) return;   // no length signal — preserve current end
+
+  let scale = typeof strip.scale === 'number' ? strip.scale : 1;
+  if (Math.abs(scale) < 1e-10) scale = 1;
+  scale = Math.abs(scale);
+
+  let repeat = typeof strip.repeat === 'number' ? strip.repeat : 1;
+  if (Math.abs(repeat) < 1e-10) repeat = 1;
+
+  const start = typeof strip.start === 'number' ? strip.start : 0;
+  strip.end = start + actlen * scale * repeat;
+}
+
+/**
+ * Find a project's action by id. Returns the action object or null.
+ *
+ * @param {object|null|undefined} project
+ * @param {string|null|undefined} actionId
+ * @returns {object|null}
+ */
+function findAction(project, actionId) {
+  if (!project || !actionId) return null;
+  const actions = Array.isArray(project.actions) ? project.actions : null;
+  if (!actions) return null;
+  for (const a of actions) {
+    if (a && a.id === actionId) return a;
+  }
+  return null;
+}
+
+/**
  * Find a track + strip pair by id within an animData. Returns
  * `{ track, strip }` or `{ track: null, strip: null }` on miss.
+ *
+ * Stops searching at the first track-id match (strip ids are unique
+ * within their track; a strip only ever belongs to one track per the
+ * NLA shape contract from Slice 4.A). If the trackId matches but the
+ * stripId does not, returns `{ track: t, strip: null }` rather than
+ * continuing to other tracks — caller treats either-null as failure.
  *
  * @param {object} animData
  * @param {string} trackId
@@ -88,11 +217,35 @@ function findTrackAndStrip(animData, trackId, stripId) {
  * Enter NLA tweak mode for the given track + strip.
  *
  * Byte-faithful port of `BKE_nla_tweakmode_enter`
- * (`nla.cc:2352-2456`). Returns `true` on success (also when already
- * in tweak mode — that branch is short-circuit per nla.cc:2365-2367),
- * `false` if the requested track + strip can't be found OR the strip
- * has no `actionId` (Blender treats that as
- * `BLI_assert_unreachable` + return false).
+ * (`nla.cc:2352-2456`). Returns:
+ *   - `true` on successful enter
+ *   - `true` if already in tweak mode AND the requested (trackId,
+ *     stripId) matches the current tweak strip (idempotent re-call)
+ *   - **`false` if already in tweak mode on a DIFFERENT strip**
+ *     (audit-fix Slice 4.C HIGH-A2 — caller must `exitTweakMode`
+ *     first; silently keeping the old tweak strip while the caller
+ *     thinks they entered a new one was a Rule №1 violation. Blender's
+ *     operator layer always paired enter with explicit exit, so the
+ *     `return true` at nla.cc:2365-2367 was never hit on a different
+ *     strip in practice — SS's explicit-IDs API surfaces the gap.)
+ *   - `false` if the requested track + strip can't be found OR the
+ *     strip has no `actionId` (Blender treats that as
+ *     `BLI_assert_unreachable` + return false at nla.cc:2371-2379).
+ *
+ * **Index contract** (audit-fix MED-A3): the DISABLED cascade
+ * disables every track with `t.index > activeTrack.index`. SS
+ * authoritatively stores `index` on the track object (set by the
+ * caller / UI); evaluator + this helper read it. If `index` drifts
+ * from the track's actual position in `animData.nlaTracks[]` (e.g.
+ * UI reorder forgot to re-stamp), the cascade disables the WRONG
+ * tracks. Slice 4.D NLAEditor MUST re-stamp `index` on every reorder.
+ *
+ * **Blender listbase head = BOTTOM layer** (verified
+ * `anim_sys.cc:3448` evaluator iterates `first → next` and blends each
+ * strip on top of the accumulator). SS's `index > activeIdx` maps to
+ * Blender's `activeTrack->next` linked-list walk because SS sorts
+ * tracks bottom-to-top by ascending index in the evaluator
+ * (`nlaEval.js` `tracksBottomToTop`).
  *
  * Side effects on `animData` (all mutating in place — caller controls
  * persistence to the project store):
@@ -114,13 +267,24 @@ function findTrackAndStrip(animData, trackId, stripId) {
  * @param {object} animData       — mutated in place
  * @param {string} trackId
  * @param {string} stripId
- * @returns {boolean} true on success or already-in-tweak; false on miss
+ * @returns {boolean} true on success or idempotent re-enter; false on
+ *   miss OR on different-strip-while-already-in-tweak.
  */
 export function enterTweakMode(animData, trackId, stripId) {
   if (!animData || typeof animData !== 'object') return false;
 
-  // Already in tweak mode → short-circuit success (Blender nla.cc:2365-2367)
-  if (isTweakModeOn(animData)) return true;
+  // Already in tweak mode: idempotent on same (track, strip);
+  // REJECT a request to enter a different strip — audit-fix HIGH-A2.
+  // Blender's call sites always paired with an explicit exit, so this
+  // branch was effectively unreachable in Blender; SS's explicit-IDs
+  // API would otherwise silently retain the old tweak strip while
+  // returning `true`, masking caller intent.
+  if (isTweakModeOn(animData)) {
+    if (animData.tweakTrackId === trackId && animData.tweakStripId === stripId) {
+      return true;
+    }
+    return false;
+  }
 
   const { track: activeTrack, strip: activeStrip } = findTrackAndStrip(
     animData, trackId, stripId);
@@ -230,51 +394,85 @@ export function clearTweakFlags(animData) {
 
 /**
  * Exit NLA tweak mode — restores the pre-tweak active action + clears
- * all tweak-mode runtime state.
+ * all tweak-mode runtime state. **SYNC_LENGTH-flagged strips have
+ * their `end` re-derived from the tweaked action's frame range**
+ * (audit-fix Slice 4.C HIGH-F5).
  *
  * Combines Blender's `BKE_nla_tweakmode_exit` + the internal
- * `nla_tweakmode_exit_nofollowptr` (nla.cc:2492-2565). Differences
- * from Blender:
+ * `nla_tweakmode_exit_nofollowptr` + `nla_tweakmode_exit_sync_strip_lengths`
+ * (nla.cc:2492-2565 + 2463-2486). See module-level "SS deviations"
+ * for what SS skips (refcount, RNA notify, slot validation).
  *
- *   - **No length sync**: Blender re-derives SYNC_LENGTH-flagged
- *     strips' `end` from the (potentially-edited) action's frame
- *     range. SS doesn't have an action-length helper at substrate
- *     level; documented as `feature/4.D` follow-up. SYNC_LENGTH
- *     flag bit is still cleared per nla.cc:2567 semantics.
- *   - **No slot-user-map updates**: Blender maintains a refcount of
- *     which Object IDs use each ActionSlot for purge logic; SS
- *     doesn't have an Action refcount system at all (Slice 1.E
- *     ActionsEditor handles "delete action" via cascade walk).
- *   - **No-op when not in tweak mode**: matches Blender :2509-2511.
+ * **No-op when not in tweak mode** (matches Blender :2509-2511).
  *
  * Side effects on `animData`:
- *   1. `clearTweakFlags` (DISABLED on tracks, TWEAKUSER on strips,
+ *   1. **Length sync first**, BEFORE flag clear: every SYNC_LENGTH-
+ *      flagged strip referencing the tweaked action gets its `end`
+ *      re-derived via `syncStripBoundsToAction`. Order matters: the
+ *      sync needs `animData.actionId` to still point at the tweaked
+ *      action (clearTweakFlags clears NLA_EDIT_ON, not the action
+ *      pointer, but doing sync first keeps the semantic clear).
+ *      Skipped silently if `project` is not provided (defensive for
+ *      legacy callers; production caller chain MUST pass it).
+ *   2. `clearTweakFlags` (DISABLED on tracks, TWEAKUSER on strips,
  *      NLA_EDIT_ON on adt)
- *   2. Restore `animData.actionId` from `tmpActionId`
- *   3. Restore `animData.slotHandle` from `tmpSlotHandle`
- *   4. Clear backup pointers: `tmpActionId = null`,
+ *   3. Restore `animData.actionId` from `tmpActionId`
+ *   4. Restore `animData.slotHandle` from `tmpSlotHandle`
+ *   5. Clear backup pointers: `tmpActionId = null`,
  *      `tmpSlotHandle = 0`
- *   5. Clear runtime pointers: `tweakTrackId = null`,
+ *   6. Clear runtime pointers: `tweakTrackId = null`,
  *      `tweakStripId = null`
  *
- * @param {object|null|undefined} animData — mutated in place
+ * @param {object|null|undefined} animData - mutated in place
+ * @param {object|null} [project] - for SYNC_LENGTH action-lookup; if
+ *   omitted, length-sync is skipped (defensive - production callers
+ *   MUST pass it to honor SYNC_LENGTH semantics)
  */
-export function exitTweakMode(animData) {
+export function exitTweakMode(animData, project = null) {
   if (!animData || typeof animData !== 'object') return;
   if (!isTweakModeOn(animData)) return;
 
+  // Step 1: Length-sync BEFORE clearing flags. Blender does this in
+  // `nla_tweakmode_exit_sync_strip_lengths` (nla.cc:2463-2486): the
+  // active tweak strip + every strip sharing the same action both
+  // get re-bound if SYNC_LENGTH is set. We need `animData.actionId`
+  // to still point at the tweaked action here so we know WHICH action
+  // to re-derive bounds against.
+  if (project) {
+    const tweakedActionId = animData.actionId;
+    const tweakedAction = findAction(project, tweakedActionId);
+    if (tweakedAction) {
+      const tracks = Array.isArray(animData.nlaTracks) ? animData.nlaTracks : null;
+      if (tracks) {
+        for (const t of tracks) {
+          if (!t || !Array.isArray(t.strips)) continue;
+          for (const s of t.strips) {
+            if (!s || typeof s !== 'object') continue;
+            const flag = typeof s.flag === 'number' ? s.flag : 0;
+            if ((flag & NLASTRIP_FLAG.SYNC_LENGTH) !== 0
+                && s.actionId === tweakedActionId) {
+              syncStripBoundsToAction(s, tweakedAction);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Step 2: Clear flag bits (track DISABLED + strip TWEAKUSER + adt
+  // NLA_EDIT_ON).
   clearTweakFlags(animData);
 
-  // Restore action + slot from backup (Blender nla.cc:2496-2501)
+  // Step 3 + 4: Restore action + slot from backup (Blender :2496-2501)
   animData.actionId = animData.tmpActionId ?? null;
   animData.slotHandle = typeof animData.tmpSlotHandle === 'number'
     ? animData.tmpSlotHandle : 0;
 
-  // Clear backup pointers (Blender :2499-2501)
+  // Step 5: Clear backup pointers (Blender :2499-2501)
   animData.tmpActionId = null;
   animData.tmpSlotHandle = 0;
 
-  // Clear runtime tweak pointers (Blender :2503-2504)
+  // Step 6: Clear runtime tweak pointers (Blender :2503-2504)
   animData.tweakTrackId = null;
   animData.tweakStripId = null;
 }
