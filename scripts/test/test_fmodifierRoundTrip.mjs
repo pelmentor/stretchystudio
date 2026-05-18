@@ -266,6 +266,8 @@ function makeUid() {
   const pureOne = exportedOne.Curves.find((c) => c.Id === 'PureCycles');
   assert(hybridOne.Segments.length > 5,
     '4a: Hybrid baked (Noise trigger fires under Loop=true)');
+  // 5 = [t0, v0] header + [type=0 (linear), t1, v1] for a 2-keyform linear segment.
+  // (Encoded per encodeKeyframesToSegments in motion3json.js.)
   assertEq(pureOne.Segments.length, 5,
     '4b: PureCycles ships as-authored under Loop=true (no bake)');
 
@@ -339,9 +341,18 @@ function makeUid() {
   // through the serialiser. This pins the SS-side save/load layer (the
   // companion to the motion3.json layer covered above).
   //
-  // Future-proofing: if a schema bump introduces a class instance on a
-  // modifier (Date / Map / Set / typed-array), JSON.stringify will drop
-  // or mangle it silently. This test surfaces that regression.
+  // Audit-fix MED-2 (2026-05-18): scope of this test is **plain-data
+  // shape preservation under JSON.parse(JSON.stringify)** — it pins
+  // that the SS modifier stack survives a JSON-serialised project
+  // round-trip with field-order and field-value fidelity. What it does
+  // NOT catch: a future schema bump that introduces a class instance
+  // with a custom `toJSON` method (would silently round-trip to a
+  // mangled shape but stringify to the same bytes), a key added by a
+  // post-parse migration that wasn't in the authored modifier, or a
+  // field-order divergence on a runtime that doesn't preserve insertion
+  // order. V8 + modern Node preserves insertion order so the
+  // string-compare is sound today; a property-by-property deep-equal
+  // would be tighter if those concerns become live.
   const originalModifiers = [
     {
       id: 'mod_1',

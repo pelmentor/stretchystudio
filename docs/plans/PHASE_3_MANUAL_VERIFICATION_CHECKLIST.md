@@ -134,11 +134,22 @@ get `Loop = false` and the cycling fcurves bake into explicit keyforms.
 - [ ] Re-export.
 - [ ] Verify `Meta.Loop: false` and all `Segments` arrays are short.
 
-### §2.4 — Round-trip via existing Cubism motion
+### §2.4 — Round-trip via existing Cubism motion (OPTIONAL — requires Loop=true motion3.json on disk)
 
-- [ ] Import an existing Cubism-authored loop motion (e.g. Hiyori's
-  `runtime/motion/hiyori_m01.motion3.json`) via the timeline-bar
-  motion3.json import.
+This step requires any Cubism-authored `.motion3.json` with `Meta.Loop:
+true` available locally. Reference candidates (per
+`reference_blender_source` + `reference_cubism_editor`):
+  - `reference/live2d-sample/Hiyori/runtime/motion/hiyori_m01.motion3.json`
+    if the Live2D sample bundle is on disk
+  - Any motion you've previously exported from Cubism Editor's
+    "Export For Runtime" with the Loop checkbox enabled
+  - Any motion produced by §2.1 above (uniform Cycles → Loop=true)
+    works as its own round-trip seed
+
+If none of the above are accessible, skip §2.4 — the SS-authored
+direction is covered by `test:fmodifierRoundTrip` §1 automatically.
+
+- [ ] Import the motion3.json via the timeline-bar motion3.json import.
 - [ ] In the FCurve editor's N-panel, verify EVERY imported fcurve
   carries a head-of-stack `Cycles` modifier with `after = repeat`.
 - [ ] Re-export the imported motion. Verify `Meta.Loop: true` survives.
