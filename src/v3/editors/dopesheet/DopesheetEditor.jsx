@@ -240,6 +240,17 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
   //      (FCurveEditor publishes; DopesheetEditor consumes). Closes
   //      Slice 5.W-2 deviation that was deferred because SS keyform
   //      selection lived only in FCurveEditor's local React state.
+  //
+  // **Deviation 5.EE-2** (audit-fix MED-1 fidelity 2026-05-18):
+  // Blender's `draw_fcurve_active_vertex` has a 4th gate at
+  // `graph_draw.cc:251` — view-range cull
+  // (`IN_RANGE(bezt->vec[1][0], v2d->cur.xmin - 0.05*width,
+  // v2d->cur.xmax + 0.05*width)`). SS omits it because the dopesheet
+  // row track is row-based DOM (`overflow:hidden` + `left:%`
+  // positioning auto-culls off-screen keyforms via CSS), not a
+  // pixel-renderer that needs explicit view-frustum guards. The
+  // off-track diamond would be invisible regardless of halo state,
+  // so the gate is functionally redundant in SS's render model.
   const showActiveHalo = (
     isActiveChannel
     && activeKfIdx >= 0

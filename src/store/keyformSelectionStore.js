@@ -50,16 +50,30 @@
  *
  * # Blender semantics ported
  *
- * Blender stores per-BezTriple selection as 3 bits (`f1` / `f2` / `f3`
- * for left handle, center, right handle). SS's selectedHandles Map
- * uses `{center, left, right}` triple per entry — semantically
- * equivalent. The halo gate uses `f2 & SELECT` (center bit) which
- * SS reads as `.center === true`.
+ * Blender stores per-BezTriple selection in 3 `eBezTriple_Flag` fields
+ * (`f1` / `f2` / `f3` for left handle, center, right handle —
+ * defined in `reference/blender/source/blender/makesdna/DNA_curve_types.h`).
+ * Each is a bit-mask enum (BEZT_FLAG_SELECT | BEZT_FLAG_TEMP_TAG |
+ * others); the halo gate at `graph_draw.cc:254` reads
+ * `(bezt->f2 & SELECT)` — isolating the SELECT bit only.
+ *
+ * SS collapses each field to a single boolean — equivalent for
+ * halo-gate purposes because SS doesn't model the transient
+ * sub-bits (TEMP_TAG etc.). The Map uses `{center, left, right}`
+ * triple per entry; the halo gate reads `.center === true` which
+ * mirrors Blender's `bezt->f2 & SELECT` semantic. Audit-fix LOW-1
+ * fidelity (Slice 5.EE audit 2026-05-18): refined the "3 bits"
+ * framing — each Blender field is multi-bit, not single-bit; SS's
+ * boolean collapse is correct in the SELECT-bit scope.
  *
  * # Schema and persistence
  *
  * **NOT persisted.** Blender's BezTriple selection bits DO persist
- * across save/load (they're part of the action datablock). SS's
+ * across save/load — they're part of the action datablock, written
+ * via `BKE_fcurve_blend_write_data` at
+ * `reference/blender/source/blender/blenkernel/intern/fcurve.cc:2581-2586`
+ * which serializes the `fcu->bezt` struct-array including
+ * `eBezTriple_Flag f1/f2/f3` (load path at `:2625-2629`). SS's
  * selection has always been ephemeral (cleared on remount). That
  * divergence is unchanged by this slice — closing it would require
  * either lifting the canonical state INTO the action draft (which

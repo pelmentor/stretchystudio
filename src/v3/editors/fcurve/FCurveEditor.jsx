@@ -640,9 +640,24 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // transitional shim. Closes Slice 5.W-2 deviation (active-keyform
   // halo selection precondition). See
   // [src/store/keyformSelectionStore.js](../../../store/keyformSelectionStore.js).
+  //
+  // `publishKeyformSelection` is identity-stable across renders
+  // (Zustand setter defined inside `create()` is closure-stable at
+  // store construction time), so its presence in the effect deps is
+  // a no-op for re-run frequency.
   const publishKeyformSelection = useKeyformSelectionStore((s) => s.publishHandles);
   useEffect(() => {
     publishKeyformSelection(selectedHandles);
+    // Audit-fix HIGH-1 (Slice 5.EE arch audit 2026-05-18): clear the
+    // mirror on FCurveEditor unmount. Without this, DopesheetEditor
+    // (or any other future subscriber) keeps reading the last-published
+    // Map after the FCurveEditor tab closes — leaving stale halos lit
+    // when split-view drops the canonical owner. Publishing a fresh
+    // empty Map triggers the store's identity-different `set()` and
+    // notifies subscribers in lockstep with the unmount.
+    return () => {
+      publishKeyformSelection(new Map());
+    };
   }, [selectedHandles, publishKeyformSelection]);
   // Slice 5.I — visibility now persists on `fcurve.hide` (negative of
   // Blender's FCURVE_VISIBLE). The prior local `useState(new Set())`
