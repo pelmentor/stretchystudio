@@ -975,7 +975,7 @@ becomes infinite via `Cycles`; jitter via `Noise`; polynomial via
   Phase 5). Documenting deferral here so the absence is explicit, not
   an oversight.
 
-#### 3.A — Schema v34 (was v35; renumbered after NodeTree retirement absorbed into v33)
+#### 3.A — Schema v41 (was planned as v34; the actual codebase had progressed through v35/v36/v37/v38/v39/v40 by the time Phase 3 opened, so Slice 3.A landed at v41)
 
 ```js
 // FCurve.modifiers[]

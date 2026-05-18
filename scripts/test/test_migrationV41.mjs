@@ -23,14 +23,14 @@ function eq(a, b, name) {
 
 // ── 1. Direct migrator: empty project → safe no-op ─────────────────
 {
-  const r = migrateFModifiers({});
-  eq(r.fcurvesScanned, 0, '1: empty project fcurvesScanned=0');
+  assert(migrateFModifiers({}) === undefined,
+    '1: empty project returns undefined (no-op marker)');
 }
 
 // ── 2. Direct migrator: null project → safe no-op ──────────────────
 {
-  const r = migrateFModifiers(null);
-  eq(r.fcurvesScanned, 0, '2: null project safe');
+  assert(migrateFModifiers(null) === undefined,
+    '2: null project safe (no throw, no return)');
 }
 
 // ── 3. Direct migrator: project with fcurves leaves them untouched ─
@@ -47,8 +47,7 @@ function eq(a, b, name) {
     ],
   };
   const before = JSON.stringify(project);
-  const r = migrateFModifiers(project);
-  eq(r.fcurvesScanned, 2, '3: scans 2 fcurves');
+  migrateFModifiers(project);
   eq(JSON.stringify(project), before, '3: project unchanged (no-op by design)');
   assert(project.actions[0].fcurves[0].modifiers === undefined,
     '3: fcurve.modifiers stays absent (sparse default)');
@@ -105,15 +104,18 @@ function eq(a, b, name) {
 // ── 6. Action with no fcurves → safe ───────────────────────────────
 {
   const project = { actions: [{ id: 'act1' /* no fcurves */ }] };
-  const r = migrateFModifiers(project);
-  eq(r.fcurvesScanned, 0, '6: action without fcurves scans 0');
+  const before = JSON.stringify(project);
+  migrateFModifiers(project);
+  eq(JSON.stringify(project), before,
+    '6: action without fcurves is a safe no-op');
 }
 
 // ── 7. Missing actions array → safe ────────────────────────────────
 {
   const project = { /* no actions, no nodes */ };
-  const r = migrateFModifiers(project);
-  eq(r.fcurvesScanned, 0, '7: missing actions safe');
+  const before = JSON.stringify(project);
+  migrateFModifiers(project);
+  eq(JSON.stringify(project), before, '7: missing actions safe');
 }
 
 // ── 8. CURRENT_SCHEMA_VERSION sanity ───────────────────────────────
@@ -130,8 +132,9 @@ function eq(a, b, name) {
 
 // ── 9. FMODIFIER_TYPES constant — 6 supported types in expected order ─
 {
-  eq(Array.isArray(FMODIFIER_TYPES) || Object.isFrozen(FMODIFIER_TYPES), true,
-    '9: FMODIFIER_TYPES exported');
+  // Frozen-ness is asserted separately in test 10; here just confirm
+  // it's a real array with the expected length.
+  assert(Array.isArray(FMODIFIER_TYPES), '9: FMODIFIER_TYPES is an array');
   eq(FMODIFIER_TYPES.length, 6, '9: exactly 6 types ship in Phase 3');
   // Order matches Blender's eFModifier_Types enum order
   // (DNA_anim_enums.h:24-39): GENERATOR=1, ENVELOPE=3, CYCLES=4,

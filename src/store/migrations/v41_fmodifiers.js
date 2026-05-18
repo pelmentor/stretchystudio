@@ -4,9 +4,10 @@
  * v41 — Animation Phase 3 Slice 3.A: FCurve.modifiers[] substrate.
  *
  * Introduces the FModifier stack on every FCurve. Mirrors Blender's
- * `FCurve.modifiers: ListBaseT<FModifier>`
- * (`reference/blender/source/blender/makesdna/DNA_anim_types.h:341`
- * onward) — see [src/anim/fmodifiers.js](../../anim/fmodifiers.js) for
+ * `FCurve.modifiers: ListBaseT<FModifier>` at
+ * `reference/blender/source/blender/makesdna/DNA_anim_types.h:353` (the
+ * field; the surrounding `struct FCurve {` opens at `:341`). See
+ * [src/anim/fmodifiers.js](../../anim/fmodifiers.js) for
  * the FModifier typedef + six per-type data shape typedefs
  * (`cycles` / `noise` / `generator` / `limits` / `stepped` / `envelope`).
  *
@@ -47,24 +48,21 @@
  */
 
 /**
- * @param {object} project — mutated in place (no-op for v41 by design)
- * @returns {{ fcurvesScanned: number }} — count returned so the
- *   migration-walker telemetry can log "v41 touched N fcurves" (always 0
- *   in this version; non-zero would indicate a malformed project that
- *   had partially-written modifier data, which we'd want to know about).
+ * No-op marker migration. Walks `project.actions[*].fcurves[*]` only to
+ * preserve the "scanner ran cleanly across the structure" sanity check
+ * that the migration-walker's per-step telemetry implicitly relies on;
+ * no field is read or written.
+ *
+ * @param {object} project -- mutated in place (no-op for v41 by design)
  */
 export function migrateFModifiers(project) {
-  if (!project || typeof project !== 'object') {
-    return { fcurvesScanned: 0 };
-  }
+  if (!project || typeof project !== 'object') return;
   const actions = Array.isArray(project.actions) ? project.actions : [];
-  let fcurvesScanned = 0;
   for (const action of actions) {
     if (!action || !Array.isArray(action.fcurves)) continue;
     for (const fc of action.fcurves) {
       if (!fc) continue;
-      fcurvesScanned++;
+      // intentionally empty -- modifiers field is sparse-absent by default
     }
   }
-  return { fcurvesScanned };
 }

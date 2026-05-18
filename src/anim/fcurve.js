@@ -50,8 +50,14 @@
  * # Other Blender deviations still in flight
  * - Baked sample arrays (`fpt: FPoint[]` for imported motions) — SS
  *   doesn't ship these; every keyform is user-authored or migrated.
- * - Per-FCurve `modifiers: ListBaseT<FModifier>` (cyclic, noise,
- *   generator, envelope) — Phase 3 of the Animation Blender-Parity Plan.
+ *
+ * # Phase 3: FModifier stack (post-v41)
+ *
+ * `FCurve.modifiers?: FModifier[]` shipped in Slice 3.A (schema v41).
+ * Sparse field; missing or empty-array means "no modifiers". Six
+ * modifier types documented in [fmodifiers.js](./fmodifiers.js):
+ * cycles / noise / generator / limits / stepped / envelope. Evaluator
+ * lands in Slice 3.B; UI in 3.C; exporter bake passes in 3.D / 3.E.
  *
  * @module anim/fcurve
  */
@@ -120,8 +126,9 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *   still drive their bound properties at eval time.
  * @property {import('./fmodifiers.js').FModifier[]} [modifiers] -- Phase 3
  *   Slice 3.A (schema v41): per-FCurve FModifier stack. Mirrors Blender's
- *   `FCurve.modifiers: ListBaseT<FModifier>` (`DNA_anim_types.h:341`
- *   onward). Sparse; missing or empty-array means "no modifiers". See
+ *   `FCurve.modifiers: ListBaseT<FModifier>` at `DNA_anim_types.h:353`
+ *   (the field; `struct FCurve {` opens at `:341`). Sparse; missing or
+ *   empty-array means "no modifiers". See
  *   [fmodifiers.js](./fmodifiers.js) for the FModifier typedef +
  *   per-type data shapes. Evaluator lands in Slice 3.B.
  */

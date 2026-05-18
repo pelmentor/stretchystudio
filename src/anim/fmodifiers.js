@@ -69,6 +69,11 @@
  *   'limits'    → FMODIFIER_TYPE_LIMITS    (=8)
  *   'stepped'   → FMODIFIER_TYPE_STEPPED   (=9)
  *
+ * Not mapped: FMODIFIER_TYPE_NULL (=0) is Blender's "no modifier"
+ * sentinel used internally before a real type is assigned; SS represents
+ * absence via missing-or-empty `FCurve.modifiers` directly, so the NULL
+ * type has no SS counterpart.
+ *
  * Deferred: FN_GENERATOR (=2), SMOOTH (=10). Removed in Blender:
  * FILTER (=6, removed in #123906), PYTHON (=7, removed in #123906).
  *
@@ -207,11 +212,33 @@
  * `(fcurveId, modifierId, time)` so noise is stable across saves and
  * byte-fidelity-testable. Slice 3.E owns the implementation.
  *
+ * # Defaults (verified against Blender's `fcm_noise_new_data`)
+ *
+ * Blender's creator at `fmodifier.cc:798-812` sets:
+ *   `size = 1.0` (frames; FPS-dependent in ms — at 24fps ~41.67ms)
+ *   `strength = 1.0`
+ *   `phase = 1.0` (not 0 — keeps t=0 off the Perlin origin)
+ *   `offset = 0.0`
+ *   `depth = 0` (single octave)
+ *   `modification = FCM_NOISE_MODIF_REPLACE`
+ *   `lacunarity = 2.0`
+ *   `roughness = 0.5`
+ *
+ * SS deviates from Blender's `size = 1.0 frames` only — SS uses
+ * `1000ms` as a user-friendly wavelength default. Audit-fix
+ * 2026-05-18: substrate's first-draft `phase = 0` was a SS deviation
+ * unrelated to the ms-unit port; corrected to `1.0` to match Blender.
+ *
  * @typedef {Object} FModNoiseData
  * @property {number} [size] -- wavelength in ms; sparse, default = 1000
+ *   (SS user-friendly default; Blender's creator uses `1.0` frames —
+ *   FPS-dependent in ms; see "Defaults" section above)
  * @property {number} [strength] -- amplitude in value-units; sparse,
- *   default = 1
- * @property {number} [phase] -- time offset in ms; sparse, default = 0
+ *   default = 1 (matches Blender)
+ * @property {number} [phase] -- time offset in ms; sparse, default = 1.0
+ *   (matches Blender `data->phase = 1.0f` at `fmodifier.cc:805` — the
+ *   non-zero default keeps the noise reproducible without all curves
+ *   sampling the same Perlin point at t=0)
  * @property {number} [offset] -- value bias; sparse, default = 0
  * @property {('replace'|'add'|'subtract'|'multiply')} [blendType] --
  *   sparse, default = 'replace'
@@ -234,9 +261,18 @@
  *   'polynomial'             → FCM_GENERATOR_POLYNOMIAL             (=0)
  *   'polynomial_factorised'  → FCM_GENERATOR_POLYNOMIAL_FACTORISED  (=1)
  *
- * `'polynomial'` evaluates as `c0 + c1*x + c2*x^2 + ...`.
+ * `'polynomial'` evaluates as `c0 + c1*x + c2*x^2 + ...`
+ * (matches Blender `value += coefficients[i] * powers[i]` at
+ * `fmodifier.cc:190` where `powers[i] = x^i` and `powers[0] = 1`).
+ *
  * `'polynomial_factorised'` evaluates as
- *   `(c0 + c1*x) * (c2 + c3*x) * (c4 + c5*x) * ...`.
+ *   `(c0*x + c1) * (c2*x + c3) * (c4*x + c5) * ...`
+ * (matches Blender `value *= (cp[0] * evaltime + cp[1])` at
+ * `fmodifier.cc:217`). **Within each pair `[a, b]`, the scale `a` comes
+ * first and the offset `b` comes second** -- i.e. the pair evaluates as
+ * `a*x + b`, NOT `a + b*x`. Audit-fix 2026-05-18: the substrate's first
+ * draft had this within-pair order inverted; corrected so the 3.B
+ * evaluator implements the byte-faithful form.
  *
  * The plan v1 invented an `'expanded'` mode; per the audit-driven scope
  * correction it's renamed to `'polynomial_factorised'` to match Blender.
@@ -255,9 +291,12 @@
  * @property {('polynomial'|'polynomial_factorised')} [mode] -- sparse,
  *   default = 'polynomial'
  * @property {number[]} coefficients -- polynomial coefficients; required
- *   field. For `'polynomial'`: `[c0, c1, c2, ...]`. For
- *   `'polynomial_factorised'`: pairs `[c0, c1, c2, c3, ...]` group as
- *   `(c0 + c1*x) * (c2 + c3*x) * ...` so length should be even
+ *   field. For `'polynomial'`: `[c0, c1, c2, ...]` evaluates as
+ *   `c0 + c1*x + c2*x^2 + ...`. For `'polynomial_factorised'`: pairs
+ *   `[c0, c1, c2, c3, ...]` evaluate as `(c0*x + c1) * (c2*x + c3) *
+ *   ...` so length should be even. **Pair order is scale-first then
+ *   offset** (`[a, b] -> a*x + b`), matching Blender's
+ *   `cp[0]*evaltime + cp[1]` at `fmodifier.cc:217`
  * @property {boolean} [additive] -- Blender FCM_GENERATOR_ADDITIVE bit;
  *   sparse, default = false (generator replaces input value)
  */
@@ -405,8 +444,19 @@ export function isFModifierType(value) {
 }
 
 /**
- * Read the modifier list off an FCurve. Returns `[]` for missing /
- * non-array `modifiers` so callers can iterate unconditionally.
+ * Frozen empty-array singleton returned by `getFCurveModifiers` when
+ * the modifier list is absent. Module-scope so every reader shares one
+ * allocation. Hoisted above its consumer per the Phase 0.D.0
+ * const-before-cache-hit-branch lesson (commit `1671449`).
+ *
+ * @type {FModifier[]}
+ */
+const EMPTY_MODIFIERS = Object.freeze(/** @type {any} */ ([]));
+
+/**
+ * Read the modifier list off an FCurve. Returns the frozen empty-array
+ * singleton for missing / non-array `modifiers` so callers can iterate
+ * unconditionally.
  *
  * @param {{ modifiers?: FModifier[] } | null | undefined} fcurve
  * @returns {FModifier[]}
@@ -415,6 +465,3 @@ export function getFCurveModifiers(fcurve) {
   if (!fcurve || !Array.isArray(fcurve.modifiers)) return EMPTY_MODIFIERS;
   return fcurve.modifiers;
 }
-
-/** @type {FModifier[]} */
-const EMPTY_MODIFIERS = Object.freeze(/** @type {any} */ ([]));
