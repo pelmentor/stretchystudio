@@ -8,9 +8,10 @@
  * helpers in 4.C, NLAEditor UI in 4.D, BakeNLA operator in 4.E.
  *
  * Loose port of Blender's `NlaTrack` and `NlaStrip` structs:
- *   - `reference/blender/source/blender/makesdna/DNA_anim_types.h:440-506`
- *     (NlaStrip)
- *   - `reference/blender/source/blender/makesdna/DNA_anim_types.h:514-538`
+ *   - `reference/blender/source/blender/makesdna/DNA_anim_types.h:425-506`
+ *     (NlaStrip struct opens at line 425; runtime ptr + pad bytes
+ *     extend to 506)
+ *   - `reference/blender/source/blender/makesdna/DNA_anim_types.h:524-538`
  *     (NlaTrack)
  *   - `reference/blender/source/blender/makesdna/DNA_anim_enums.h:373-485`
  *     (`eNlaStrip_Blend_Mode`, `eNlaStrip_Extrapolate_Mode`,
@@ -170,22 +171,41 @@ export const ADT_FLAG = Object.freeze({
 /**
  * Build a fresh NlaStrip.
  *
- * Defaults mirror Blender's `BKE_nlastrip_new` semantics
- * (`reference/blender/source/blender/blenkernel/intern/nla.cc`):
+ * Defaults loosely mirror Blender's `BKE_nlastrip_new`
+ * (`reference/blender/source/blender/blenkernel/intern/nla.cc:494-534`):
  *   - `blendmode = 'replace'` (NLASTRIP_MODE_REPLACE = 0; Blender default)
  *   - `extendmode = 'hold'`   (NLASTRIP_EXTEND_HOLD  = 0; Blender default)
  *   - `influence = 1`         (matches strip-creation default; user-controllable)
  *   - `repeat = 1`, `scale = 1` (identity time mapping)
  *   - `blendin = blendout = 0` (no auto-blend until AUTO_BLENDS flag set)
- *   - `flag = 0`              (clean strip; no MUTED/SELECTED/ACTIVE yet)
  *
- * Required overrides: `id` (caller-supplied uid) and `actionId`
+ * **SS DEVIATION — `flag = 0` not `SELECT|SYNC_LENGTH`** (audit-fix
+ * Slice 4.A): Blender's `BKE_nlastrip_new` (nla.cc:512) seeds
+ * `flag = NLASTRIP_FLAG_SELECT | NLASTRIP_FLAG_SYNC_LENGTH` (plus
+ * `USR_TIME_CYCLIC` for cyclic actions at nla.cc:522). SS defaults
+ * `flag = 0` because:
+ *   1. NLAEditor UI (Slice 4.D) hasn't shipped — a strip "selected on
+ *      creation" is a UI affordance with no surface today.
+ *   2. `SYNC_LENGTH` is a length-auto-derive semantic that requires
+ *      the evaluator (Slice 4.B) to enforce; until then it would be
+ *      a sparse flag with no behavioral consequence.
+ * The deviation can be re-litigated when 4.B + 4.D land; for now,
+ * substrate-level constructors should not write flags whose semantics
+ * aren't yet enforced (Rule №1 — no silent intent).
+ *
+ * **Time fields** (`start` / `end` / `actstart` / `actend`) default
+ * to 0. Blender's nla.cc:540-548 derives them from the action's
+ * `frame_range_of_slot`; SS leaves the derivation to callers because
+ * the substrate module has no project handle to resolve `actionId`
+ * against. Callers MUST set them to the action's frame range before
+ * evaluation. A 0-length strip is a no-op (evaluator skips it).
+ *
+ * Required parameters: `id` (caller-supplied uid) and `actionId`
  * (ref into project.actions[]). The strip is meaningless without an
- * action to reference, so we fail loud on null.
- *
- * Time fields (`start` / `end` / `actstart` / `actend`) default to 0;
- * callers MUST set them to the action's frame range before evaluation.
- * A 0-length strip has no effect (evaluator skips it).
+ * action to reference, so we fail loud on null. **Positional args
+ * always win** — `overrides.id` / `overrides.actionId` cannot clobber
+ * them (audit-fix MED-A2; previously the spread was last and could
+ * silently overwrite validated inputs with empty strings).
  *
  * @param {string} id
  * @param {string} actionId
@@ -201,9 +221,6 @@ export function makeNlaStrip(id, actionId, overrides = {}) {
   }
   /** @type {NlaStrip} */
   const strip = {
-    id,
-    name: overrides.name ?? id,
-    actionId,
     slotHandle: 0,
     start: 0,
     end: 0,
@@ -219,6 +236,12 @@ export function makeNlaStrip(id, actionId, overrides = {}) {
     fcurves: [],
     flag: 0,
     ...overrides,
+    // Positional args MUST win (audit-fix MED-A2): listed last so any
+    // overrides.id / overrides.actionId attempt is silently superseded
+    // by the validated values. `name` defaults to id when not overridden.
+    id,
+    actionId,
+    name: overrides.name ?? id,
   };
   if (!NLA_BLEND_MODES.includes(strip.blendmode)) {
     throw new Error(
@@ -240,10 +263,22 @@ export function makeNlaStrip(id, actionId, overrides = {}) {
  * Defaults:
  *   - `strips = []` (empty until user adds; an empty track is valid but
  *     a no-op at eval time -- skipped by the evaluator's strip loop)
- *   - `flag = 0`  (no MUTED/SOLO/PROTECTED; ACTIVE bit set per-AnimData
- *     elsewhere)
  *   - `index = 0` (caller must set to its position in animData.nlaTracks
  *     before persisting -- evaluator iterates bottom-to-top by index)
+ *
+ * **SS DEVIATION — `flag = 0` not `SELECTED|OVERRIDELIBRARY_LOCAL`**
+ * (audit-fix Slice 4.A): Blender's `BKE_nlatrack_new` (nla.cc:358-367)
+ * seeds `flag = NLATRACK_SELECTED | NLATRACK_OVERRIDELIBRARY_LOCAL`.
+ * SS defaults `flag = 0` because:
+ *   1. NLAEditor UI (Slice 4.D) hasn't shipped — no surface to react
+ *      to `SELECTED` on creation.
+ *   2. `OVERRIDELIBRARY_LOCAL` is library-override semantics SS
+ *      doesn't model (no equivalent of Blender's library-link/override
+ *      system).
+ * Re-litigate when 4.D lands.
+ *
+ * **Positional args win**: `overrides.id` / `overrides.name` cannot
+ * clobber the validated `id` / `name` parameters (audit-fix MED-A2).
  *
  * @param {string} id
  * @param {string} name
@@ -259,12 +294,15 @@ export function makeNlaTrack(id, name, overrides = {}) {
   }
   /** @type {NlaTrack} */
   const track = {
-    id,
-    name,
     strips: [],
     flag: 0,
     index: 0,
     ...overrides,
+    // Positional args MUST win (audit-fix MED-A2): listed last so any
+    // overrides.id / overrides.name attempt is silently superseded by
+    // the validated values.
+    id,
+    name,
   };
   return track;
 }
@@ -326,6 +364,27 @@ export function isNlaStrip(obj) {
 }
 
 /**
+ * Stable empty-array reference for selector-friendly fallback (avoids
+ * the fresh-array-per-call trap documented in
+ * `feedback_filter_in_selector`).
+ *
+ * Declared BEFORE `getNlaTracks` (audit-fix MED-A1) — `const` is in the
+ * temporal dead zone until its line runs at module evaluation. The
+ * current single-consumer (`getNlaTracks`, a function not an IIFE)
+ * resolves the reference lazily so order didn't matter at runtime, but
+ * a future top-level call (e.g. a default-export initializer) would
+ * have thrown `ReferenceError`. Order-of-declaration is the cleaner
+ * invariant.
+ *
+ * Typed via cast because `Object.freeze` returns `readonly NlaTrack[]`
+ * (tsc 5.x) which can't be returned from a function declaring `NlaTrack[]`.
+ * Callers MUST NOT mutate this array directly (the `EMPTY_` prefix is
+ * the contract; `Object.freeze` is the enforcement at runtime).
+ */
+const EMPTY_NLA_TRACKS = /** @type {NlaTrack[]} */
+  (/** @type {unknown} */ (Object.freeze([])));
+
+/**
  * Read the NLA track list from an animData slot defensively.
  *
  * Returns the empty array on missing-or-non-array (sparseness rule —
@@ -343,19 +402,6 @@ export function getNlaTracks(animData) {
   if (!Array.isArray(tracks)) return EMPTY_NLA_TRACKS;
   return /** @type {NlaTrack[]} */ (tracks);
 }
-
-/**
- * Stable empty-array reference for selector-friendly fallback (avoids
- * the fresh-array-per-call trap documented in
- * `feedback_filter_in_selector`).
- *
- * Typed via cast because `Object.freeze` returns `readonly NlaTrack[]`
- * (tsc 5.x) which can't be returned from a function declaring `NlaTrack[]`.
- * Callers MUST NOT mutate this array directly (the `EMPTY_` prefix is
- * the contract; `Object.freeze` is the enforcement at runtime).
- */
-const EMPTY_NLA_TRACKS = /** @type {NlaTrack[]} */
-  (/** @type {unknown} */ (Object.freeze([])));
 
 /**
  * Is this AnimData currently in NLA tweak mode?

@@ -113,8 +113,16 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
       { id: 'p3', type: 'part', animData: 'corrupt' },
     ],
   };
-  const { animDataPatched } = migrateNlaSubstrate(project);
-  eq(animDataPatched, 0, '4: nodes with missing/non-object animData skipped');
+  const { animDataPatched, corruptSkipped } = migrateNlaSubstrate(project);
+  eq(animDataPatched, 0, '4a: nodes with missing/non-object animData skipped');
+  // Audit-fix LOW-A4: corruption visibility hook. All three nodes
+  // declare `type: 'part'` so the carriesAnimData gate passes, but
+  // each one has a corrupt-shape animData (missing / null / string)
+  // — every one hits the corruption branch and gets logged. By v42's
+  // walk position, v36 has already eagerly created animData on every
+  // part, so absence-of-animData on a part IS hand-edited corruption.
+  eq(corruptSkipped, 3,
+    '4b: corruptSkipped = 3 (p1 missing, p2 null, p3 string — all hand-edited corruption)');
 }
 
 // ── 5. Full migrateProject: pre-v42 save bumps to current ──────────
@@ -165,6 +173,37 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   eq(node.animData.tweakStripId, null, '7: scene tweakStripId default null');
 }
 
+// ── 7b. Drift safety: v35→v36 migration produces 12-field animData ─
+{
+  // Audit-fix MED-A3: §7 above only checks v37's makeSceneNode().
+  // A separate failure mode is v36's defaultAnimData() drifting back
+  // to 8 fields — that would be caught by v42's audit but only after
+  // a real user round-trip exposes it, because v42 patches the missing
+  // fields back on. Test the v35→v36 path directly so a regression in
+  // v36 alone (without v42 papering over it) trips the test suite.
+  const v35Project = {
+    schemaVersion: 35,
+    canvas: { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#fff' },
+    textures: [], nodes: [{ id: 'p1', type: 'part' /* no animData yet — v36 creates it */ }],
+    animations: [], parameters: [], physics_groups: [],
+  };
+  migrateProject(v35Project);
+  const node = v35Project.nodes.find((n) => n.id === 'p1');
+  assert(node && node.animData && typeof node.animData === 'object',
+    '7b: v36 migration created animData on the pre-v36 part node');
+  // The 4 backup pointers must be present DIRECTLY from v36's
+  // defaultAnimData() (not patched in by v42). If v36 drifts back to
+  // 8 fields, v42's idempotency guard would silently fill them in and
+  // this test would still pass — so we count fields right after the
+  // v36 step boundary too, by inspecting the actual key set.
+  eq(Object.keys(node.animData).length, 12,
+    '7b: v36-created animData has 12 fields (drift lock-in)');
+  for (const fld of ANIMDATA_BACKUP_FIELDS) {
+    assert(fld in node.animData,
+      `7b: v35→v36 path: animData carries ${fld}`);
+  }
+}
+
 // ── 8. NLA_BLEND_MODES — 4 modes in Blender enum order, frozen ─────
 {
   assert(Array.isArray(NLA_BLEND_MODES), '8: NLA_BLEND_MODES is an array');
@@ -212,6 +251,18 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   eq(NLASTRIP_FLAG.REVERSE,         1 << 11, '10: REVERSE         = (1 << 11)');
   eq(NLASTRIP_FLAG.MUTED,           1 << 12, '10: MUTED           = (1 << 12)');
   assert(Object.isFrozen(NLASTRIP_FLAG), '10: NLASTRIP_FLAG frozen');
+  // Audit-fix MED-F2: lock in the OMITTED bits too. Plan §4.A documents
+  // transform-temps + commented-out Blender bits as intentionally absent
+  // from the SS schema; assert the absence so a future contributor
+  // doesn't silently add them without thinking through whether their
+  // semantics actually port (e.g. INVALID_LOCATION at 1<<28 is a
+  // transform-operator-runtime concern that has no SS equivalent).
+  for (const omitted of ['SELECT_L', 'SELECT_R', 'MIRROR',
+                          'INVALID_LOCATION', 'NO_TIME_MAP',
+                          'TEMP_META', 'EDIT_TOUCHED']) {
+    assert(!(omitted in NLASTRIP_FLAG),
+      `10: NLASTRIP_FLAG.${omitted} intentionally absent (transform-temp or Blender-commented-out)`);
+  }
 }
 
 // ── 11. NLATRACK_FLAG bits match Blender ───────────────────────────
@@ -224,6 +275,11 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   eq(NLATRACK_FLAG.PROTECTED, 1 << 4,  '11: PROTECTED = (1 << 4)');
   eq(NLATRACK_FLAG.DISABLED,  1 << 10, '11: DISABLED  = (1 << 10)');
   assert(Object.isFrozen(NLATRACK_FLAG), '11: NLATRACK_FLAG frozen');
+  // Audit-fix MED-F2: lock in OMITTED bits.
+  for (const omitted of ['TEMPORARILY_ADDED', 'OVERRIDELIBRARY_LOCAL']) {
+    assert(!(omitted in NLATRACK_FLAG),
+      `11: NLATRACK_FLAG.${omitted} intentionally absent (transform-runtime or library-override)`);
+  }
 }
 
 // ── 12. ADT_FLAG bits match Blender ────────────────────────────────
@@ -236,6 +292,20 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   eq(ADT_FLAG.NLA_EDIT_NOMAP,        1 << 3, '12: NLA_EDIT_NOMAP        = (1 << 3)');
   eq(ADT_FLAG.NLA_EVAL_UPPER_TRACKS, 1 << 5, '12: NLA_EVAL_UPPER_TRACKS = (1 << 5)');
   assert(Object.isFrozen(ADT_FLAG), '12: ADT_FLAG frozen');
+  // Audit-fix MED-F2: lock in OMITTED UI bits. ADT_FLAG exposes only
+  // the NLA-evaluator subset; the UI bits (SKEYS_COLLAPSED at 1<<4,
+  // DRIVERS_COLLAPSED at 1<<10, UI_SELECTED at 1<<14, UI_ACTIVE at
+  // 1<<15, CURVES_NOT_VISIBLE at 1<<16, CURVES_ALWAYS_VISIBLE at
+  // 1<<17, UI_EXPANDED at 1<<18) live elsewhere or aren't ported yet.
+  // Adding them silently here would expand the substrate's surface
+  // beyond what the evaluator (4.B) is built to handle.
+  for (const omitted of ['NLA_SKEYS_COLLAPSED', 'DRIVERS_COLLAPSED',
+                          'UI_SELECTED', 'UI_ACTIVE',
+                          'CURVES_NOT_VISIBLE', 'CURVES_ALWAYS_VISIBLE',
+                          'UI_EXPANDED']) {
+    assert(!(omitted in ADT_FLAG),
+      `12: ADT_FLAG.${omitted} intentionally absent (UI bit, not NLA-relevant)`);
+  }
 }
 
 // ── 13. makeNlaStrip — defaults match Blender NlaStrip ─────────────
@@ -301,6 +371,22 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   throws(() => makeNlaStrip('x', ''), 'actionId', '14: empty actionId rejected');
   throws(() => makeNlaStrip(/** @type any */ (null), 'act'), 'id', '14: null id rejected');
   throws(() => makeNlaStrip('x', /** @type any */ (null)), 'actionId', '14: null actionId rejected');
+
+  // Audit-fix MED-A2: positional args win over override-spread. Before
+  // the fix, `overrides.id = ''` (empty string, would have failed
+  // validation if passed positionally) silently overwrote the validated
+  // `id` parameter because the spread was last in the literal.
+  const sClobberAttempt = makeNlaStrip('real_id', 'real_action', {
+    id: 'overridden_via_spread',
+    actionId: 'overridden_via_spread',
+    name: 'Override Name',
+  });
+  eq(sClobberAttempt.id, 'real_id',
+    '14: positional id wins over overrides.id (audit-fix MED-A2)');
+  eq(sClobberAttempt.actionId, 'real_action',
+    '14: positional actionId wins over overrides.actionId (audit-fix MED-A2)');
+  eq(sClobberAttempt.name, 'Override Name',
+    '14: overrides.name still honored (name IS intentionally overridable)');
 }
 
 // ── 15. makeNlaTrack — defaults + override validation ──────────────
@@ -320,6 +406,20 @@ const ANIMDATA_BACKUP_FIELDS = ['tmpActionId', 'tmpSlotHandle', 'tweakTrackId', 
   // Required-field validation
   throws(() => makeNlaTrack('', 'Body'), 'id', '15: empty id rejected');
   throws(() => makeNlaTrack('t3', ''), 'name', '15: empty name rejected');
+
+  // Audit-fix MED-A2: positional args win over override-spread (same
+  // fix as makeNlaStrip §14 above; covers makeNlaTrack here).
+  const tClobberAttempt = makeNlaTrack('real_id', 'real_name', {
+    id: 'overridden',
+    name: 'overridden',
+    index: 5,
+  });
+  eq(tClobberAttempt.id, 'real_id',
+    '15: positional id wins over overrides.id (audit-fix MED-A2)');
+  eq(tClobberAttempt.name, 'real_name',
+    '15: positional name wins over overrides.name (audit-fix MED-A2)');
+  eq(tClobberAttempt.index, 5,
+    '15: other override (index) still honored');
 }
 
 // ── 16. isNlaTrack / isNlaStrip predicates ─────────────────────────

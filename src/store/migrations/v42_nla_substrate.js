@@ -31,7 +31,10 @@
  *
  * # Blender source mirror
  *
- * Blender `AnimData` struct (`reference/blender/source/blender/makesdna/DNA_anim_types.h:697-713`):
+ * Blender `AnimData` backup-pointer fields
+ * (`reference/blender/source/blender/makesdna/DNA_anim_types.h:697-713`
+ * — the tweak-mode/NLA section of the struct; the full AnimData struct
+ * opens at line 664 and closes at line 740):
  *
  *     bAction *tmpact = nullptr;                          // → SS tmpActionId  (string id)
  *     int32_t  tmp_slot_handle = 0;                       // → SS tmpSlotHandle
@@ -89,11 +92,14 @@
  */
 
 import { isSceneNode } from './v37_scene_anim_data.js';
+import { logger } from '../../lib/logger.js';
 
 /**
  * Add the four NLA backup-pointer fields to an animData slot in place.
  *
- * Field meanings (Blender DNA_anim_types.h:694-713):
+ * Field meanings (Blender DNA_anim_types.h:697-713 — backup-pointer
+ * section of the AnimData struct; range reconciled with the doc-block
+ * above per audit-fix LOW-F3):
  *   - `tmpActionId` (was `tmpact: bAction*`) — id of the action that
  *     was bound BEFORE tweak mode entry; restored on tweak-mode exit.
  *     null = not in tweak mode.
@@ -137,14 +143,23 @@ function ensureNlaBackupPointers(animData) {
  * v37 used: 'part' / 'group' object nodes plus the synthetic
  * '__scene__' (type 'scene') node.
  *
+ * Reports back `{ animDataPatched, corruptSkipped }`. The latter is an
+ * audit-fix LOW-A4 visibility hook: nodes that declare an animData-
+ * carrying type but whose `animData` slot is missing or non-object
+ * indicate hand-edited corruption that the consumer (Slice 4.C tweak
+ * mode) cannot recover from. We log a warning per `feedback_in_app_logging`
+ * so the corruption surfaces in the Logs panel instead of silently
+ * propagating into the evaluator.
+ *
  * @param {object} project — mutated in place
- * @returns {{ animDataPatched: number }}
+ * @returns {{ animDataPatched: number, corruptSkipped: number }}
  */
 export function migrateNlaSubstrate(project) {
-  if (!project) return { animDataPatched: 0 };
-  if (!Array.isArray(project.nodes)) return { animDataPatched: 0 };
+  if (!project) return { animDataPatched: 0, corruptSkipped: 0 };
+  if (!Array.isArray(project.nodes)) return { animDataPatched: 0, corruptSkipped: 0 };
 
   let animDataPatched = 0;
+  let corruptSkipped = 0;
   for (const node of project.nodes) {
     if (!node || typeof node !== 'object') continue;
 
@@ -155,10 +170,21 @@ export function migrateNlaSubstrate(project) {
     const carriesAnimData =
       node.type === 'part' || node.type === 'group' || isSceneNode(node);
     if (!carriesAnimData) continue;
-    if (!node.animData || typeof node.animData !== 'object') continue;
+    if (!node.animData || typeof node.animData !== 'object') {
+      // Audit-fix LOW-A4: visibility hook for hand-edited corruption.
+      // Pre-v42 there was no UI path that produced a part/group with
+      // null/missing animData (v36 + v37 both eagerly create), so
+      // hitting this branch means the project file was hand-edited or
+      // came from an external tool. The evaluator (4.C) defends
+      // independently; this warn is the audit trail, not a backstop.
+      corruptSkipped++;
+      logger.warn('migrations',
+        `v42 NLA substrate: node id=${node.id} type=${node.type} has missing/non-object animData — skipping backup-pointer patch (consumer must self-defend)`);
+      continue;
+    }
 
     if (ensureNlaBackupPointers(node.animData)) animDataPatched++;
   }
 
-  return { animDataPatched };
+  return { animDataPatched, corruptSkipped };
 }
