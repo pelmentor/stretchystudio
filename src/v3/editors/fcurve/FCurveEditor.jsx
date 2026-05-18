@@ -634,6 +634,20 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
   const [selectedHandles, setSelectedHandles] = useState(new Map());
+  // Slice 5.FF — B-key arms the channel-list box-select modal. Mirrors
+  // Blender's `WM_gesture_box_invoke` with `wait_for_input=true` at
+  // `reference/blender/source/blender/windowmanager/intern/wm_gesture_ops.cc:171-179`:
+  // when invoked by keyboard (B key, not mouse drag), the modal enters
+  // WM_GESTURE_CROSS_RECT state — crosshair cursor, waits for the
+  // next LMB-click-drag to define the rect. SS port: when `armed`,
+  // the next sidebar pointerdown starts a drag-rect immediately
+  // (bypassing the button-child early-return + the 4px movement
+  // threshold from Slice 5.Y). Ref mirrors the state for the
+  // pointer-event handlers; setter triggers UI re-render for the
+  // crosshair cursor + hint banner. Closes Slice 5.Y-1 deviation.
+  const [bGestureArmed, setBGestureArmed] = useState(false);
+  const bGestureArmedRef = useRef(false);
+  useEffect(() => { bGestureArmedRef.current = bGestureArmed; }, [bGestureArmed]);
   // Slice 5.EE — publish keyform selection to cross-editor store so
   // DopesheetEditor (and future readers) can gate UI on it. FCurveEditor
   // remains the canonical owner; this is a one-way mirror, not a
@@ -2621,6 +2635,25 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         applyChannelSelectAllOp(action);
         return;
       }
+      // Slice 5.FF — B key arms box-select. Bound in Blender at
+      // `blender_default.py:3865`: `("anim.channels_select_box",
+      // {"type": 'B', "value": 'PRESS'}, None)`. Bare B (no modifiers
+      // — Blender's keymap entry passes no `shift/ctrl/alt`).
+      if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        setBGestureArmed(true);
+        return;
+      }
+    }
+    // Slice 5.FF — Escape cancels armed box-select (matches Blender's
+    // `WM_gesture_box_modal` GESTURE_MODAL_CANCEL handling at
+    // `wm_gesture_ops.cc` — Esc returns the modal to OPERATOR_CANCELLED).
+    // Region-agnostic: armed state is a global modal, so any Escape
+    // anywhere in the editor cancels.
+    if (e.key === 'Escape' && bGestureArmedRef.current) {
+      e.preventDefault();
+      setBGestureArmed(false);
+      return;
     }
     // Graph-region keymap parity with `blender_default.py:2010` (=
     // `*_template_items_select_actions(params, "graph.select_all")`).
@@ -3009,6 +3042,9 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         onApplyChannelClick={applyChannelClick}
         onApplyChannelBoxSelect={applyChannelBoxSelectOp}
         onApplyGroupChildrenSelect={applyGroupChildrenSelectOp}
+        bGestureArmed={bGestureArmed}
+        bGestureArmedRef={bGestureArmedRef}
+        onConsumeBGesture={() => setBGestureArmed(false)}
         onClearKeyformSelection={clearSelection}
         onSelectAll={applyChannelSelectAllOp}
         onSidebarEnter={onSidebarEnter}
@@ -3162,7 +3198,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
 
 // ── Sidebar (Slice 5.C+) ─────────────────────────────────────────────
 
-function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onApplyGroupChildrenSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection }) {
+function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute, onToggleGroupMute, onToggleGroupHide, onToggleGroupExpanded, onPickActiveByTarget, onApplyChannelClick, onApplyChannelBoxSelect, onApplyGroupChildrenSelect, onClearKeyformSelection, onSelectAll, onSidebarEnter, onSidebarLeave, selection, bGestureArmed, bGestureArmedRef, onConsumeBGesture }) {
   // Slice 5.Y — drag-rect box-select state machine. Pointer events on the
   // sidebar wrapper drive a small 3-state FSM (idle → pressed → dragging).
   // On pointerup-after-drag, the hit-test queries every `[data-fcurve-id]`
@@ -3218,11 +3254,21 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
     // Only react to primary button. Ignore middle/right (browser context
     // menu, scroll, etc.) and any non-LMB pointer types.
     if (e.button !== 0) return;
-    // Ignore drags that start on an interactive child (button, etc.) —
-    // those have their own click semantics. The check uses `closest`
-    // so nested icons inside the button still count as the button.
-    const t = /** @type {HTMLElement} */ (e.target);
-    if (t && t.closest && t.closest('button, a, input, textarea, select')) return;
+    // Slice 5.FF — armed-mode (B key pressed) bypasses the
+    // button-child early-return. Blender's WM_GESTURE_CROSS_RECT
+    // modal accepts the next LMB-click anywhere as the gesture-start
+    // (`wm_gesture_ops.cc:171-179`). Capture-then-consume the armed
+    // flag here so the modal is one-shot per B press.
+    const armed = !!(bGestureArmedRef && bGestureArmedRef.current);
+    if (!armed) {
+      // Ignore drags that start on an interactive child (button, etc.) —
+      // those have their own click semantics. The check uses `closest`
+      // so nested icons inside the button still count as the button.
+      const t = /** @type {HTMLElement} */ (e.target);
+      if (t && t.closest && t.closest('button, a, input, textarea, select')) return;
+    } else if (typeof onConsumeBGesture === 'function') {
+      onConsumeBGesture();
+    }
     // Capture modifier state at press time. Blender's keymap (`blender_default.py:3866-3871`)
     // dispatches: plain→replace, Shift→extend, Ctrl→deselect. Modifiers are
     // read once at press; later modifier changes mid-drag are ignored to
@@ -3236,10 +3282,24 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
       pointerId: e.pointerId,
       startClientX: e.clientX,
       startClientY: e.clientY,
-      isDragging: false,
+      // Slice 5.FF — armed mode (B key) starts the drag IMMEDIATELY,
+      // skipping the 4px threshold from Slice 5.Y. Blender's
+      // WM_GESTURE_CROSS_RECT modal accepts the first LMB-press as
+      // gesture-start regardless of movement distance.
+      isDragging: armed,
       modifier,
     };
-  }, []);
+    // Slice 5.FF — capture pointer immediately in armed mode so
+    // subsequent move/up route to the Sidebar even if the cursor
+    // exits the container during the gesture. (Non-armed mode
+    // captures lazily on first threshold-exceeding move.)
+    if (armed) {
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* capture optional */ }
+      // Seed the marquee at the press point so the user sees a 0x0
+      // rect that grows on first move (no flash of empty viewport).
+      setDragRect({ x: e.clientX, y: e.clientY, w: 0, h: 0 });
+    }
+  }, [bGestureArmedRef, onConsumeBGesture]);
 
   const onSidebarPointerMove = useCallback((e) => {
     const sess = dragSessionRef.current;
@@ -3380,7 +3440,10 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
   return (
     <div
       ref={containerRef}
-      className="relative border-r border-border bg-card/50 overflow-y-auto flex-shrink-0"
+      className={
+        'relative border-r border-border bg-card/50 overflow-y-auto flex-shrink-0 '
+        + (bGestureArmed ? 'cursor-crosshair' : '')
+      }
       style={{ width: SIDEBAR_W }}
       onPointerEnter={onSidebarEnter}
       onPointerLeave={onSidebarLeave}
@@ -3389,6 +3452,20 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
       onPointerUp={onSidebarPointerUp}
       onPointerCancel={onSidebarPointerCancel}
     >
+      {/* Slice 5.FF — armed-mode hint banner. Mirrors Blender's
+          status-bar text shown during a WM_GESTURE_CROSS_RECT modal
+          (see `wm_gesture_ops.cc:194-...` modal handler). SS surfaces
+          it as a small inline banner at the top of the sidebar so
+          the user knows the next LMB-click-drag will define the
+          rect (and that Escape cancels). */}
+      {bGestureArmed ? (
+        <div
+          className="px-2 py-1 text-[10px] bg-amber-300/20 border-b border-amber-300/40 text-amber-100"
+          aria-live="polite"
+        >
+          Box-select armed — drag to define rect, Esc to cancel
+        </div>
+      ) : null}
       <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border flex items-center justify-between">
         <span>F-Curves ({decoded.length})</span>
         {/* Slice 5.K — bulk channel select-all triplet. Mirrors Blender's
