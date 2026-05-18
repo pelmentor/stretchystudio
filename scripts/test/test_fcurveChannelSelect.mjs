@@ -35,6 +35,10 @@ import {
   clearActiveFCurves,
   isFCurveActive,
 } from '../../src/anim/fcurveActive.js';
+import {
+  isFCurveGroupActive,
+  getActiveFCurveGroup,
+} from '../../src/anim/fcurveGroupActive.js';
 
 let passed = 0;
 let failed = 0;
@@ -1161,10 +1165,12 @@ function makeActionWithGroups(groups, fcurves) {
   assert(a.fcurves[1].selected === true, '5.BB: HIDDEN child also selected (matches Blender agrp->channels)');
 }
 
-// Idempotent re-press → no change
+// Idempotent re-press → no change. Slice 5.LL added post-branch
+// active-group elevation, so "idempotent" now also requires the
+// clicked group to already be the active group.
 {
   const a = makeActionWithGroups(
-    [{ id: 'gA', selected: true }],
+    [{ id: 'gA', selected: true, active: true }],
     [
       { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
       { id: 'fc2', groupId: 'gA', selected: true, keyforms: [] },
@@ -1173,7 +1179,7 @@ function makeActionWithGroups(groups, fcurves) {
   const r = applyGroupChildrenSelect(a, 'gA', {
     orderedIds: ['fc1', 'fc2'],
   });
-  assert(r.changed === false, '5.BB idempotent: no change');
+  assert(r.changed === false, '5.BB idempotent: no change (group already active + selected + children selected)');
   assert(r.selectedCount === 2, '5.BB idempotent: selectedCount still reports the 2 group members');
 }
 
@@ -1379,15 +1385,17 @@ function makeActionWithGroups(groups, fcurves) {
   assert(a.groups[0].selected === true, '5.KK: gA selected anyway');
 }
 
-// 'replace' on already-only-selected group + no fcurves selected
-// → only changed if group not selected yet. Verifies idempotency.
+// 'replace' on already-only-selected + already-active group + no
+// fcurves selected → no change. Slice 5.LL added post-branch
+// elevation, so "idempotent" requires `gA.active === true` AND
+// `gA.selected === true` AND no sibling active state.
 {
   const a = makeActionWithGroups(
-    [{ id: 'gA', selected: true }, { id: 'gB' }],
+    [{ id: 'gA', selected: true, active: true }, { id: 'gB' }],
     [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
   );
   const r = applyGroupHeaderSelect(a, 'gA', 'replace', { orderedIds: ['fc1'] });
-  assert(r.changed === false, '5.KK replace idempotent: no change');
+  assert(r.changed === false, '5.KK replace idempotent: no change (already selected + active)');
   assert(r.groupSelectedAfter === true, '5.KK replace idempotent: groupSelectedAfter still true');
 }
 
@@ -1593,6 +1601,152 @@ function makeActionWithGroups(groups, fcurves) {
     const anyMutation = r.changed || r.clearedActive;
     assert(predicted === anyMutation, `5.KK scenario ${i}: preflight matches setter`);
   }
+}
+
+// ── Slice 5.LL (Path #50) — post-branch AGRP_ACTIVE elevation ─────
+// Verifies that 5.KK's applyGroupHeaderSelect and 5.BB's
+// applyGroupChildrenSelect now elevate the clicked group to
+// AGRP_ACTIVE via setActiveFCurveGroup, mirroring Blender's
+// `mouse_anim_channels` ANIMTYPE_GROUP post-branch `ANIM_set_active_channel`
+// call at `anim_channels_edit.cc:4194-4218`.
+
+// 'replace' elevates clicked group to active (clears prior active group).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', active: true }],  // gB was active
+    [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', { orderedIds: ['fc1'] });
+  assert(r.changed === true, '5.LL replace elevation: changed');
+  assert(isFCurveGroupActive(a.groups[0]) === true, '5.LL replace: gA newly active');
+  assert(isFCurveGroupActive(a.groups[1]) === false, '5.LL replace: gB no longer active (EXCLUSIVE)');
+  assert(getActiveFCurveGroup(a)?.id === 'gA', '5.LL replace: getActiveFCurveGroup returns gA');
+}
+
+// 'toggle' ON → elevates clicked group.
+{
+  const a = makeActionWithGroups([{ id: 'gA' }], []);
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', { orderedIds: [] });
+  assert(r.changed === true, '5.LL toggle ON: changed');
+  assert(r.groupSelectedAfter === true, '5.LL toggle ON: selected');
+  assert(isFCurveGroupActive(a.groups[0]) === true, '5.LL toggle ON: active elevated');
+}
+
+// 'toggle' OFF → clears active slot (group no longer AGRP_SELECTED
+// means the post-branch `:4208-4213` clears the active slot).
+{
+  const a = makeActionWithGroups([{ id: 'gA', selected: true, active: true }], []);
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', { orderedIds: [] });
+  assert(r.changed === true, '5.LL toggle OFF: changed');
+  assert(r.groupSelectedAfter === false, '5.LL toggle OFF: deselected');
+  assert(isFCurveGroupActive(a.groups[0]) === false, '5.LL toggle OFF: active CLEARED');
+  assert(getActiveFCurveGroup(a) === null, '5.LL toggle OFF: no active group');
+}
+
+// 'toggle' OFF on group that wasn't active → still clears the active
+// slot (matches Blender: post-branch always runs `ANIM_set_active_channel`
+// with the group as target, then the elevation switch picks
+// active=null based on `:4206 else` branch).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true }, { id: 'gB', active: true }],
+    [],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'toggle', { orderedIds: [] });
+  assert(r.changed === true, '5.LL toggle OFF foreign-active: changed');
+  assert(isFCurveGroupActive(a.groups[1]) === false,
+    '5.LL toggle OFF: gB active cleared (post-branch runs with active=null)');
+}
+
+// children_only (Slice 5.BB) elevates clicked group to active.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', active: true }],
+    [
+      { id: 'fc1', groupId: 'gA', keyforms: [] },
+      { id: 'fc2', groupId: 'gA', keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', { orderedIds: ['fc1', 'fc2'] });
+  assert(r.changed === true, '5.LL children_only elevation: changed');
+  assert(isFCurveGroupActive(a.groups[0]) === true, '5.LL children_only: gA newly active');
+  assert(isFCurveGroupActive(a.groups[1]) === false, '5.LL children_only: gB no longer active');
+}
+
+// children_only idempotent: re-press → no change (group already
+// selected + children selected + group is active).
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA', selected: true, active: true }],
+    [
+      { id: 'fc1', groupId: 'gA', selected: true, keyforms: [] },
+      { id: 'fc2', groupId: 'gA', selected: true, keyforms: [] },
+    ],
+  );
+  const r = applyGroupChildrenSelect(a, 'gA', { orderedIds: ['fc1', 'fc2'] });
+  assert(r.changed === false, '5.LL children_only idempotent: no change');
+}
+
+// Preflight respects elevation step for 'replace'.
+{
+  // Scenario: everything else identical, only difference is whether
+  // gA.active is already true. Without 5.LL wiring, the preflight
+  // would have returned false in both cases; now it returns true for
+  // the !active case.
+  const a1 = makeActionWithGroups(
+    [{ id: 'gA', selected: true }],  // not active
+    [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+  );
+  assert(
+    wouldGroupHeaderSelectChange(a1, 'gA', 'replace', { orderedIds: ['fc1'] }) === true,
+    '5.LL preflight: replace on not-active group → true (elevation needed)',
+  );
+
+  const a2 = makeActionWithGroups(
+    [{ id: 'gA', selected: true, active: true }],
+    [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+  );
+  assert(
+    wouldGroupHeaderSelectChange(a2, 'gA', 'replace', { orderedIds: ['fc1'] }) === false,
+    '5.LL preflight: replace on already-active group → false',
+  );
+}
+
+// Preflight respects elevation step for children_only.
+{
+  const a1 = makeActionWithGroups(
+    [{ id: 'gA', selected: true }],  // not active
+    [{ id: 'fc1', groupId: 'gA', selected: true, keyforms: [] }],
+  );
+  assert(
+    wouldGroupChildrenSelectChange(a1, 'gA', { orderedIds: ['fc1'] }) === true,
+    '5.LL preflight: children_only on not-active group → true (elevation needed)',
+  );
+
+  const a2 = makeActionWithGroups(
+    [{ id: 'gA', selected: true, active: true }],
+    [{ id: 'fc1', groupId: 'gA', selected: true, keyforms: [] }],
+  );
+  assert(
+    wouldGroupChildrenSelectChange(a2, 'gA', { orderedIds: ['fc1'] }) === false,
+    '5.LL preflight: children_only on already-active group → false',
+  );
+}
+
+// EXCLUSIVE: switching active group via 'replace' clears the prior
+// active's flag even though the prior was NOT in visible scope.
+{
+  const a = makeActionWithGroups(
+    [{ id: 'gA' }, { id: 'gB', active: true }],
+    [{ id: 'fc1', groupId: 'gA', keyforms: [] }],
+  );
+  const r = applyGroupHeaderSelect(a, 'gA', 'replace', { orderedIds: ['fc1'] });
+  assert(r.changed === true, '5.LL EXCLUSIVE: switch');
+  // After: gA is active, gB is not. The EXCLUSIVE invariant is a
+  // global property — gB's active was cleared even though we never
+  // touched its row.
+  assert(a.groups[1].active === undefined, '5.LL EXCLUSIVE: prior active sparse-deleted (global)');
+  assert(a.groups[0].active === true, '5.LL EXCLUSIVE: new target carries flag');
 }
 
 // ─────────────────────────────────────────────────────────────────────

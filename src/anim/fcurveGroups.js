@@ -110,6 +110,10 @@ import { decodeFCurveTarget } from './animationFCurve.js';
  * @property {boolean} [hide] - sub-channels hidden in Graph Editor (negative of AGRP_NOTVISIBLE)
  * @property {boolean} [expanded] - Graph Editor sub-channels visible (AGRP_EXPANDED_G)
  * @property {boolean} [selected] - group is selected (AGRP_SELECTED)
+ * @property {boolean} [active] - last-selected group (AGRP_ACTIVE). Sparse,
+ *   EXCLUSIVE — at most one group per action carries this. Writes go
+ *   through [src/anim/fcurveGroupActive.js](./fcurveGroupActive.js)
+ *   (Slice 5.LL, path #50).
  *
  * @typedef {Object} FCurveLike
  * @property {string} id

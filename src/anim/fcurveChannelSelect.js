@@ -283,6 +283,7 @@
  */
 
 import { clearActiveFCurves } from './fcurveActive.js';
+import { setActiveFCurveGroup } from './fcurveGroupActive.js';
 
 /**
  * Apply a channel-click selection mutation in-place on an action.
@@ -913,6 +914,18 @@ export function applyGroupChildrenSelect(action, groupId, ctx) {
     if (clearResult.cleared > 0) result.clearedActive = true;
   }
 
+  // Step 5 — post-branch active-group elevation. Mirrors Blender's
+  // `mouse_anim_channels` ANIMTYPE_GROUP at `:4194-4204`: after the
+  // children_only branch (selectmode = -1) leaves the group
+  // AGRP_SELECTED, `ANIM_set_active_channel` promotes the group to
+  // AGRP_ACTIVE (`:4194` `selectmode != SELECT_EXTEND_RANGE` gate
+  // passes for `-1`). Slice 5.LL ports this — closes Slice 5.BB
+  // MED-3 deferral. The pre-clear cascade at Step 1b already cleared
+  // `selected` on sibling groups but did NOT clear their `active` bit;
+  // `setActiveFCurveGroup`'s EXCLUSIVE write fixes that here.
+  const groupElevation = setActiveFCurveGroup(action, groupId);
+  if (groupElevation.changed) result.changed = true;
+
   return result;
 }
 
@@ -984,6 +997,15 @@ export function wouldGroupChildrenSelectChange(action, groupId, ctx) {
   if (orderedIds && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
     for (const fc of action.fcurves) {
       if (fc && fc.active === true) return true;
+    }
+  }
+
+  // Step 5 — active-group elevation (Slice 5.LL). Inlined sister-
+  // shape of `wouldSetActiveFCurveGroupChange(action, groupId)`.
+  if (group.active !== true) return true;
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && Object.prototype.hasOwnProperty.call(g, 'active')) {
+      return true;
     }
   }
 
@@ -1177,8 +1199,9 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
 
   if (modifier === 'toggle') {
     // SELECT_INVERT — `:4155-4158`. XOR the clicked group's SELECTED
-    // bit; nothing else is touched. Sparse-write convention: set true
-    // or sparse-delete the field on transition to false.
+    // bit; nothing else is touched at the per-channel level. Sparse-
+    // write convention: set true or sparse-delete the field on
+    // transition to false.
     if (group.selected === true) {
       delete group.selected;
       result.changed = true;
@@ -1188,6 +1211,16 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
       result.changed = true;
       result.groupSelectedAfter = true;
     }
+    // Post-branch active elevation — Blender's `mouse_anim_channels`
+    // ANIMTYPE_GROUP at `:4194-4218` calls `ANIM_set_active_channel`
+    // gated on `selectmode != SELECT_EXTEND_RANGE` (`:4194`). Selection
+    // outcome determines elevation target:
+    //   - group ends up AGRP_SELECTED  → elevate (`:4195-4200`)
+    //   - group ends up !AGRP_SELECTED → clear active slot (`:4208-4213`)
+    // Slice 5.LL ports this via `setActiveFCurveGroup(action, gid|null)`.
+    const elevateTarget = result.groupSelectedAfter ? groupId : null;
+    const elevation = setActiveFCurveGroup(action, elevateTarget);
+    if (elevation.changed) result.changed = true;
     return result;
   }
 
@@ -1252,6 +1285,19 @@ export function applyGroupHeaderSelect(action, groupId, modifier, ctx) {
     if (clearResult.cleared > 0) result.clearedActive = true;
   }
 
+  // Step 4 — post-branch active-group elevation. Mirrors Blender's
+  // `mouse_anim_channels` ANIMTYPE_GROUP at `:4194-4204`: after the
+  // SELECT_REPLACE branch leaves the group AGRP_SELECTED, `ANIM_set_active_channel`
+  // promotes the group to AGRP_ACTIVE (the `:4194` `selectmode !=
+  // SELECT_EXTEND_RANGE` gate passes for REPLACE). Slice 5.LL ports
+  // this via `setActiveFCurveGroup`. The pre-clear cascade at Step 1b
+  // already cleared `selected` on sibling groups but NOT their
+  // `active` bit; `setActiveFCurveGroup`'s EXCLUSIVE write fixes that
+  // (any prior active group's flag is sparse-deleted before this group
+  // gets the flag).
+  const groupElevation = setActiveFCurveGroup(action, groupId);
+  if (groupElevation.changed) result.changed = true;
+
   return result;
 }
 
@@ -1280,7 +1326,10 @@ export function wouldGroupHeaderSelectChange(action, groupId, modifier, ctx) {
   if (!group) return false;
 
   if (modifier === 'toggle') {
-    // XOR always changes the bit (true → missing, missing/false → true).
+    // XOR always changes the SELECTED bit (true → missing,
+    // missing/false → true). The active-group elevation step
+    // (Slice 5.LL) MAY also flip a bit independently, but since
+    // SELECTED already changes the answer is always true.
     return true;
   }
 
@@ -1316,6 +1365,18 @@ export function wouldGroupHeaderSelectChange(action, groupId, modifier, ctx) {
   if (orderedIds && activeFCurveId && orderedIds.indexOf(activeFCurveId) !== -1) {
     for (const fc of action.fcurves) {
       if (fc && fc.active === true) return true;
+    }
+  }
+
+  // Step 4 — active-group elevation (Slice 5.LL). The post-branch
+  // `setActiveFCurveGroup(action, groupId)` mutates iff the clicked
+  // group isn't already the sole active group. Sister-shape to the
+  // `wouldSetActiveFCurveGroupChange` predicate inlined here so the
+  // preflight stays self-contained.
+  if (group.active !== true) return true;
+  for (const g of action.groups) {
+    if (g && g.id !== groupId && Object.prototype.hasOwnProperty.call(g, 'active')) {
+      return true;
     }
   }
 

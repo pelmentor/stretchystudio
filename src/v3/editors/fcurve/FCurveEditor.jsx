@@ -388,6 +388,7 @@ import {
   isFCurveGroupMuted,
   isFCurveGroupHidden,
   isFCurveGroupExpanded,
+  isFCurveGroupSelected,
   isFCurveEffectivelyHidden,
   applyToggleFCurveGroupMute,
   applyToggleFCurveGroupHidden,
@@ -396,6 +397,7 @@ import {
   wouldToggleFCurveGroupHiddenChange,
   wouldToggleFCurveGroupExpandedChange,
 } from '../../../anim/fcurveGroups.js';
+import { isFCurveGroupActive } from '../../../anim/fcurveGroupActive.js';
 import {
   getActiveKeyformIndex,
   setActiveKeyform,
@@ -3611,6 +3613,22 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
         const expanded = group ? isFCurveGroupExpanded(group) : true;
         const groupMuted = isFCurveGroupMuted(group);
         const groupHidden = isFCurveGroupHidden(group);
+        // Slice 5.LL (Path #50) — sidebar surfacing of AGRP_ACTIVE +
+        // AGRP_SELECTED. 3-tier backdrop tint mirrors the per-fcurve
+        // row convention (Slice 5.F audit-fix MED-B2: SS extension —
+        // Blender's `acf_generic_channel_color` is selection-agnostic
+        // backdrop, flips only text color; SS adds backdrop tint so
+        // selection/active state is visible at a glance):
+        //   - active                 → bg-accent/60 (strongest)
+        //   - selected-non-active    → bg-accent/25 (medium)
+        //   - default                → bg-muted/40 (the existing tint)
+        const groupActive = isFCurveGroupActive(group);
+        const groupSelected = isFCurveGroupSelected(group);
+        const groupTint = groupActive
+          ? 'bg-accent/60 text-foreground '
+          : groupSelected
+            ? 'bg-accent/25 text-foreground/90 '
+            : 'bg-muted/40 ';
         const headerKey = group?.id ?? '__ungrouped__';
         return (
           <div key={headerKey}>
@@ -3618,8 +3636,9 @@ function Sidebar({ action, decoded, activeFCurveId, onToggleHidden, onToggleMute
               <div
                 className={
                   'flex items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide '
-                  + 'bg-muted/40 border-b border-border/60 select-none '
-                  + (groupMuted ? 'text-muted-foreground/70 italic ' : 'text-muted-foreground ')
+                  + groupTint
+                  + 'border-b border-border/60 select-none '
+                  + (groupMuted ? 'text-muted-foreground/70 italic ' : (groupActive || groupSelected) ? '' : 'text-muted-foreground ')
                   + (groupHidden ? 'opacity-60 ' : '')
                 }
               >
