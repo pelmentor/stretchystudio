@@ -69,7 +69,7 @@ import { useAnimationStore } from './animationStore.js';
  *    keyframing.
  *
  *
- * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'actions'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview'|'nodeTree')} EditorType
+ * @typedef {('outliner'|'properties'|'viewport'|'parameters'|'timeline'|'actions'|'performance'|'dopesheet'|'fcurve'|'keyformGraph'|'logs'|'livePreview'|'nodeTree'|'nla')} EditorType
  *
  * @typedef {Object} EditorTab
  * @property {string}     id          - stable across re-render
@@ -216,7 +216,11 @@ const ANIMATION_AREAS = () => [
   buildArea('center',      [e('viewport'), e('livePreview')]),
   buildArea('rightTop',    [e('parameters')]),
   buildArea('rightBottom', [e('actions'), e('properties'), e('nodeTree')]),
-  buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve')]),
+  // Phase 4 Slice 4.D.1: NLA editor joins the timeline area as a sibling
+  // tab. Blender's animation workspace surfaces NLA in the bottom strip
+  // alongside Dopesheet + Graph Editor (reference/blender/scripts/startup/
+  // bl_app_templates_system/General/startup.blend), so SS follows suit.
+  buildArea('timeline',    [e('timeline'), e('dopesheet'), e('fcurve'), e('nla')]),
 ];
 
 /**

@@ -57,6 +57,12 @@ const LogsEditor = lazy(() =>
 const NodeTreeArea = lazy(() =>
   import('../editors/nodetree/NodeTreeArea.jsx').then((m) => ({ default: m.NodeTreeArea }))
 );
+// Phase 4 Slice 4.D.1 — NLAEditor surfaces the per-Object NLA stack
+// (tracks of action strips). Read-only render in 4.D.1; drag/CRUD/blend-
+// dropdown/Edit-Action affordances land in 4.D.2-4.D.4.
+const NLAEditor = lazy(() =>
+  import('../editors/nla/NLAEditor.jsx').then((m) => ({ default: m.NLAEditor }))
+);
 
 // F-1 (2026-05-16 UI fidelity sweep) — per-area headers ABOVE the editor
 // body. Mirrors Blender's `*_HT_header` pattern (one header per area
@@ -126,6 +132,7 @@ export const EDITOR_REGISTRY = {
   keyformGraph:{ label: 'Keyform Graph', component: KeyformGraphEditor, header: null },
   logs:        { label: 'Logs',         component: LogsEditor,       header: null },
   nodeTree:    { label: 'Node Tree',    component: NodeTreeArea,     header: NodeTreeHeader },
+  nla:         { label: 'NLA',          component: NLAEditor,        header: null },
 };
 
 /** Stable ordered list for header dropdowns. */
