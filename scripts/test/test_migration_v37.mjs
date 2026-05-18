@@ -281,6 +281,14 @@ function deepEqual(a, b) {
     `nlaTracks: []`,
     `drivers: []`,
     `flag: 0`,
+    // v42 Slice 4.A — NLA tweak-mode backup pointers. Added so a
+    // fresh projectStore.initial-state scene node matches what v42's
+    // migration writes for already-migrated projects (see
+    // src/store/migrations/v42_nla_substrate.js).
+    `tmpActionId: null`,
+    `tmpSlotHandle: 0`,
+    `tweakTrackId: null`,
+    `tweakStripId: null`,
   ];
   for (const literal of checks) {
     assert(storeSrc.includes(literal),
@@ -288,9 +296,10 @@ function deepEqual(a, b) {
   }
   // Also confirm all of those fields are present on makeSceneNode's
   // animData (otherwise this drift test would silently miss new fields).
+  // Bumped 8 → 12 in Phase 4 Slice 4.A (v42 NLA substrate).
   const ad = ref.animData;
-  assert(Object.keys(ad).length === 8,
-    'drift safety: makeSceneNode animData has 8 fields (lock-in for new-field detection)');
+  assert(Object.keys(ad).length === 12,
+    'drift safety: makeSceneNode animData has 12 fields (lock-in for new-field detection)');
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────

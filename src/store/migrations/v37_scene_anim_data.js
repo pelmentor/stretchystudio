@@ -147,6 +147,17 @@ function defaultAnimData() {
     nlaTracks: [],
     drivers: [],
     flag: 0,
+    // v42 — Animation Phase 4 Slice 4.A: NLA tweak-mode backup pointers.
+    // Sister-edit to `v36_action_datablock.js:292-321` (same comment).
+    // Pre-creating these on the synthetic `__scene__` node mirrors the
+    // eager-create policy v37 already uses for the rest of animData
+    // (see D-6 deviation writeup above) — without this the scene node
+    // would diverge from regular Object nodes' shape immediately after
+    // a fresh project starts.
+    tmpActionId: null,
+    tmpSlotHandle: 0,
+    tweakTrackId: null,
+    tweakStripId: null,
   };
 }
 

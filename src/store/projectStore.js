@@ -143,6 +143,13 @@ export const useProjectStore = create((set, get) => {
           nlaTracks: [],
           drivers: [],
           flag: 0,
+          // v42 Slice 4.A — NLA tweak-mode backup pointers. Mirror of
+          // makeSceneNode()'s animData defaults; drift-checked by
+          // scripts/test/test_migration_v37.mjs §"Drift safety".
+          tmpActionId: null,
+          tmpSlotHandle: 0,
+          tweakTrackId: null,
+          tweakStripId: null,
         },
       },
     ],
@@ -1118,6 +1125,13 @@ export const useProjectStore = create((set, get) => {
             nlaTracks: [],
             drivers: [],
             flag: 0,
+            // v42 Slice 4.A — NLA tweak-mode backup pointers. Mirror of
+            // makeSceneNode()'s animData defaults; drift-checked by
+            // scripts/test/test_migration_v37.mjs §"Drift safety".
+            tmpActionId: null,
+            tmpSlotHandle: 0,
+            tweakTrackId: null,
+            tweakStripId: null,
           },
         },
       ];

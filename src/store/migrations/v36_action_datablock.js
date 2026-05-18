@@ -299,6 +299,18 @@ function defaultAnimData() {
     nlaTracks: [],
     drivers: [],
     flag: 0,
+    // v42 — Animation Phase 4 Slice 4.A: NLA tweak-mode backup pointers.
+    // Updated here so freshly-created v36+ projects carry the same shape
+    // v42 writes for migrated ones (`src/store/migrations/v42_nla_substrate.js`).
+    // Blender source: `DNA_anim_types.h:697-713` — `tmpact` /
+    // `tmp_slot_handle` / `act_track` / `actstrip`. SS renames the last
+    // two to `tweakTrackId` / `tweakStripId` to avoid colliding with
+    // the existing `act_blendmode` / `actionInfluence` namespace where
+    // `act` refers to the bound action, not the tweak strip.
+    tmpActionId: null,
+    tmpSlotHandle: 0,
+    tweakTrackId: null,
+    tweakStripId: null,
   };
 }
 

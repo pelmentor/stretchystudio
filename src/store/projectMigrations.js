@@ -101,6 +101,7 @@ import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.
 import { migrateBezTripleKeyforms } from './migrations/v39_beztriple_keyforms.js';
 import { migrateActionGroups } from './migrations/v40_action_groups.js';
 import { migrateFModifiers } from './migrations/v41_fmodifiers.js';
+import { migrateNlaSubstrate } from './migrations/v42_nla_substrate.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -703,6 +704,26 @@ const MIGRATIONS = {
   // See `src/store/migrations/v41_fmodifiers.js` + `src/anim/fmodifiers.js`.
   41: (project) => {
     migrateFModifiers(project);
+    return project;
+  },
+
+  // v42 — Animation Phase 4 Slice 4.A: NLA stack substrate.
+  // Adds the four AnimData backup-pointer fields
+  // (`tmpActionId` / `tmpSlotHandle` / `tweakTrackId` / `tweakStripId`)
+  // required by tweak-mode entry/exit (Slice 4.C — `ADT_NLA_EDIT_ON`
+  // per `reference/blender/source/blender/makesdna/DNA_anim_enums.h:559`).
+  // Plan §4.A's claim that the backup pointers were already part of
+  // Phase 1's animData shape was incorrect — v36/v37 declared 8 fields
+  // and stopped. Wiring them in v42 is the Rule №2-correct fix
+  // (no runtime "ensure" shim).
+  //
+  // The `nlaTracks: []` slot is unchanged from v36/v37; NlaTrack/
+  // NlaStrip constructors + flag enums live in `src/anim/nla.js`
+  // (substrate-only this slice; evaluator ships in Slice 4.B).
+  //
+  // See `src/store/migrations/v42_nla_substrate.js` + `src/anim/nla.js`.
+  42: (project) => {
+    migrateNlaSubstrate(project);
     return project;
   },
 
