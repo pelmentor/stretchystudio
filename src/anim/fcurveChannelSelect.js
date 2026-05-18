@@ -250,6 +250,25 @@
  *     is UI state, not document state per the audit-fix MED-C2
  *     rationale in Slice 5.F.
  *
+ *   - **`change_active=true` cascade on toggle-OFF — RESOLVED
+ *     2026-05-18 (Slice 5.CC).** Pre-fix, `applyChannelSelect`'s
+ *     'toggle' branch (Ctrl+click) flipped `clicked.selected` but
+ *     never cleared `clicked.active` even when the toggled-off
+ *     fcurve was previously the active one. Blender's per-channel
+ *     cascade at `anim_channels_edit.cc:728-732` ("Only erase the
+ *     ACTIVE flag when deselecting") fires on SELECT_INVERT because
+ *     `change_active = (sel != EXTEND_RANGE)` is true (`:683`).
+ *     Slice 5.CC adds the sparse-delete `delete clicked.active`
+ *     when the toggle transitions to !selected — matches Blender's
+ *     per-channel write. Closes Slice 5.X-1 deviation.
+ *
+ *     The other two `applyChannelSelect` modifiers don't need their
+ *     own helper-side cascade: 'replace' relies on the dispatcher's
+ *     `setActiveFCurve(a, clickedId)` EXCLUSIVE write (Slice 5.X)
+ *     which clears every sibling's active in one pass; 'range' uses
+ *     EXTEND_RANGE which has `change_active = false` at `:683`, so
+ *     no cascade fires in Blender either.
+ *
  * @module anim/fcurveChannelSelect
  */
 
@@ -385,6 +404,27 @@ export function applyChannelSelect(action, fcurveId, modifier, ctx) {
   // 'toggle' — SELECT_INVERT per anim_channels_edit.cc:4231-4234.
   // Bound to Ctrl+click in Blender's keymap (`blender_default.py:3851-3852`).
   clicked.selected = !clicked.selected;
+
+  // Slice 5.CC — `change_active=true` cascade on toggle-OFF.
+  // Sister to Blender's `anim_channels_select_set` ANIMTYPE_FCURVE case
+  // at `:728-732` ("Only erase the ACTIVE flag when deselecting"):
+  // when an fcurve transitions to !FCURVE_SELECTED, FCURVE_ACTIVE is
+  // cleared too (gated by `change_active` which is true for the
+  // click-driven SELECT_INVERT path — `:683` defines change_active =
+  // (sel != ACHANNEL_SETFLAG_EXTEND_RANGE); INVERT passes the gate).
+  //
+  // SS port: sparse-delete `clicked.active` when toggling OFF. Only
+  // affects the toggled fcurve — INVERT in Blender xors a SINGLE
+  // channel's selection (`fcu->flag ^= FCURVE_SELECTED` at `:4233`),
+  // and the per-channel cascade fires only on that channel. The other
+  // 'replace' branch handles its active-cascade implicitly through
+  // the dispatcher's `setActiveFCurve(a, fcurveId)` EXCLUSIVE write
+  // (Slice 5.X); 'range' uses EXTEND_RANGE which has change_active=
+  // false, so no cascade. Closes Slice 5.X-1 deviation.
+  if (clicked.selected !== true && clicked.active === true) {
+    delete clicked.active;
+  }
+
   return {
     // Line 4247: elevate active only when newly selected.
     makeActive: clicked.selected === true,

@@ -962,6 +962,73 @@ assert(wouldChannelDeleteSelectedChange({ fcurves: [] }) === false, 'wouldDelete
   assert(isFCurveActive(a.fcurves[0]) === false, '5.Z: dispatcher wire-through clears active');
 }
 
+// ── Slice 5.CC — `change_active=true` cascade on toggle-OFF ───────
+// Closes Slice 5.X-1 deviation. Ports Blender's per-channel cascade
+// at `anim_channels_edit.cc:728-732` ("Only erase the ACTIVE flag
+// when deselecting") for the SELECT_INVERT path (Ctrl+click).
+{
+  // Toggling OFF an active+selected curve sparse-deletes its `active` flag.
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, active: true, keyforms: [] },
+      { id: 'b', keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelect(a, 'a', 'toggle');
+  assert(r.selectedNow === false, '5.CC toggle-OFF: selectedNow=false');
+  assert(r.makeActive === false, '5.CC toggle-OFF: makeActive=false (Blender line 4247 gate)');
+  assert(a.fcurves[0].selected === false, '5.CC: a.selected flipped to false');
+  assert(a.fcurves[0].active === undefined, '5.CC: a.active sparse-deleted (cascade fired)');
+}
+{
+  // Toggling OFF a NON-active curve is a no-op for active (was never set).
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, keyforms: [] },  // selected but NOT active
+      { id: 'b', active: true, keyforms: [] },    // unrelated active curve
+    ],
+  };
+  const r = applyChannelSelect(a, 'a', 'toggle');
+  assert(r.selectedNow === false, '5.CC toggle-OFF non-active: selectedNow=false');
+  assert(a.fcurves[0].selected === false, '5.CC: a.selected flipped to false');
+  assert(a.fcurves[0].active === undefined, '5.CC: a.active still missing (sparse)');
+  assert(a.fcurves[1].active === true, '5.CC: OTHER active fcurve untouched (xor scope is single channel)');
+}
+{
+  // Toggling ON an active=false curve — no cascade. makeActive=true delegates
+  // active-elevation to the dispatcher (Slice 5.X setActiveFCurve EXCLUSIVE).
+  const a = {
+    fcurves: [
+      { id: 'a', keyforms: [] },
+      { id: 'b', active: true, keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelect(a, 'a', 'toggle');
+  assert(r.selectedNow === true, '5.CC toggle-ON: selectedNow=true');
+  assert(r.makeActive === true, '5.CC toggle-ON: makeActive=true (caller will setActiveFCurve)');
+  assert(a.fcurves[0].selected === true, '5.CC: a.selected=true');
+  assert(a.fcurves[0].active === undefined, '5.CC toggle-ON: helper does NOT elevate active (dispatcher job)');
+  assert(a.fcurves[1].active === true, '5.CC: b.active untouched by helper (dispatcher clears via EXCLUSIVE)');
+}
+{
+  // 'replace' branch: helper does NOT cascade active-clear; the dispatcher
+  // calls setActiveFCurve(clickedId) which EXCLUSIVELY clears all siblings.
+  // This test verifies the helper-side behavior is unchanged (no active
+  // cleared by the helper).
+  const a = {
+    fcurves: [
+      { id: 'a', selected: true, active: true, keyforms: [] },
+      { id: 'b', keyforms: [] },
+    ],
+  };
+  const r = applyChannelSelect(a, 'b', 'replace');
+  assert(r.selectedNow === true, '5.CC replace: selectedNow=true');
+  assert(r.makeActive === true, '5.CC replace: makeActive=true');
+  assert(a.fcurves[0].selected === false, '5.CC: a.selected wiped by pre-clear');
+  // The helper LEAVES a.active=true (dispatcher will clear via setActiveFCurve).
+  assert(a.fcurves[0].active === true, '5.CC replace: helper leaves a.active for dispatcher to clear');
+}
+
 // ── Slice 5.BB — applyGroupChildrenSelect (Shift+Ctrl+click) ──────
 // Ports Blender's `selectmode = -1` branch of mouse_anim_channels at
 // `anim_channels_edit.cc:4163-4180`. Semantics:
