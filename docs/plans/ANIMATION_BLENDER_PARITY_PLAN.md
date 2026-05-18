@@ -1096,11 +1096,31 @@ Tests in
 
 #### 3.E — Noise is special — SHIPPED 2026-05-18
 
-`Noise` outputs a Perlin field. The seed is derived from
-`(fcurveId, modifierId, time)` so the noise is stable across saves and
-deterministic for byte-fidelity tests. The export pipeline bakes Noise
-modifiers into explicit keyframes at the FPS of the target Action — Cubism
-has no live-noise primitive.
+`Noise` outputs a Perlin field. Determinism is structural: the field
+is fully determined by
+`(size, phase, offset, depth, lacunarity, roughness, evaltime)` and a
+hardcoded permutation table — matching Blender's
+`fcm_noise_evaluate` at `fmodifier.cc:814-867` which takes exactly the
+same inputs with NO per-fcurve or per-modifier seed. Stable across
+saves, across SS process restarts, and byte-fidelity-testable by
+construction. *(The original plan-draft phrasing
+"`(fcurveId, modifierId, time)`" was aspirational and divergent from
+Blender; corrected here against the shipped implementation in
+`src/anim/fmodifiers.js:528-540`. Audit-fix 3.E HIGH-1.)*
+
+The export pipeline bakes Noise modifiers into explicit keyframes at
+the FPS of the target Action — Cubism has no live-noise primitive.
+
+**SS deviation: Cycles+Noise loop behaviour.** When an action with
+uniform Cycles satisfies `Meta.Loop=true` (3.D) and one fcurve also
+has Noise (3.E forces bake on that channel), Cubism's runtime replays
+the *same* baked noise samples each loop iteration. Blender's live
+behaviour re-evaluates Noise at unwrapped absolute time per iteration,
+so each Cycles iteration shows *different* noise. The bake captures
+one cycle's worth; Cubism's looping replays it identically. **Accepted
+deviation** — Cubism has no live-noise primitive, so the only
+alternative is to bake a multi-cycle sequence (forcing Loop=false and
+losing the runtime-loop efficiency).
 
 **Implementation.** `hasActiveNoiseModifier(fcurve)` in
 [src/io/live2d/motion3json.js](../../src/io/live2d/motion3json.js)

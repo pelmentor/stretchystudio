@@ -227,13 +227,18 @@ function decodeSamples(segs) {
   const s1 = m1.Curves[0].Segments;
   const s2 = m2.Curves[0].Segments;
   assertEq(s1.length, s2.length, '7: phase variation preserves segment count');
-  // Count value mismatches; expect most of them to differ.
+  // Count value mismatches; the principled assertion is "phase=1 and
+  // phase=7 produce ANY distinct samples" (the contract is that phase
+  // is a Perlin axis input; it MUST affect output). Audit-fix LOW-2:
+  // the previous `> 25%` threshold was not derived from the Perlin
+  // size/separation geometry and would break under noise-internal
+  // re-tuning. `> 0` tests the actual property.
   let mismatches = 0;
   for (let i = 0; i < s1.length; i++) {
     if (s1[i] !== s2[i]) mismatches++;
   }
-  assert(mismatches > s1.length / 4,
-    `7a: phase variation produces ≥25% sample changes (got ${mismatches}/${s1.length})`);
+  assert(mismatches > 0,
+    `7a: phase variation produces SOME distinct samples (got ${mismatches}/${s1.length})`);
 }
 
 // ── 8. Multiple Noise modifiers compose in forward walk ─────────────────
@@ -263,9 +268,13 @@ function decodeSamples(segs) {
   const max = Math.max(...values);
   assert(max - min > 0.05,
     `8a: dual-Noise produces non-flat output (range ${(max-min).toFixed(3)} > 0.05)`);
-  // Also confirm composition: the dual-noise sum is BIGGER than a
-  // single-noise output at the same baseline (since both noises ≥0 add
-  // monotonically with blendType='add').
+  // Audit-fix MED-1: prior §8b asserted dualMean > singleMean, which
+  // assumed Perlin output is non-negative in `add` mode. The actual
+  // contract is just that COMPOSITION HAPPENS — values differ from a
+  // single-Noise baseline. We pin "dual-Noise samples differ from
+  // single-Noise samples at some position" (a much weaker but actually
+  // correct property; the previous claim is fragile to Perlin output
+  // range and the FBM normalization in `perlinFbm2D`).
   const singleNoise = generateMotion3Json(makeAction({
     fps: 30, duration: 500,
     fcurves: [paramFcurve('P',
@@ -273,10 +282,13 @@ function decodeSamples(segs) {
       [{ type: 'noise', data: { size: 100, strength: 0.5, phase: 1, blendType: 'add' } }])],
   }));
   const singleSamples = decodeSamples(singleNoise.Curves[0].Segments);
-  const singleMean = singleSamples.reduce((a, s) => a + s.v, 0) / singleSamples.length;
-  const dualMean = values.reduce((a, v) => a + v, 0) / values.length;
-  assert(dualMean > singleMean,
-    `8b: dual-Noise composition mean (${dualMean.toFixed(3)}) > single-Noise mean (${singleMean.toFixed(3)})`);
+  // Counts how many samples differ between dual + single at matching positions.
+  let composeMismatches = 0;
+  for (let k = 0; k < Math.min(samples.length, singleSamples.length); k++) {
+    if (Math.abs(samples[k].v - singleSamples[k].v) > 1e-9) composeMismatches++;
+  }
+  assert(composeMismatches > 0,
+    `8b: dual-Noise composition differs from single-Noise (got ${composeMismatches} mismatched positions)`);
 }
 
 // ── 9. Noise + mesh_verts target also bakes correctly ───────────────────
@@ -310,6 +322,55 @@ function decodeSamples(segs) {
   const m = generateMotion3Json(makeAction({ fcurves: [] }));
   assertEq(m.Curves.length, 0, '10: empty action → 0 curves');
   assertEq(m.Meta.Loop, false, '10a: empty action → Loop=false');
+}
+
+// ── 11. Range-restricted Noise — bake fires + semantic correctness ──────
+{
+  // Audit-fix MED-3: pin the range-restricted Noise semantic outcome.
+  // The detector triggers bake regardless of `useRestrictedRange` (per
+  // motion3json.js JSDoc — bake is the only way to express either
+  // half in Cubism's keyform-only encoding). The bake helper calls
+  // `evaluateFCurve` which respects the range gate in
+  // `evaluateValueModifiers`: outside [sfra, efra] the modifier is a
+  // no-op, so samples in that range carry the keyform baseline
+  // unchanged. Inside the range, Noise contributes.
+  //
+  // Action: 500ms duration, 30fps (~16 samples), flat-zero baseline.
+  // Noise restricted to [100, 400] ms. Outside: samples ≈ 0. Inside:
+  // samples vary.
+  const m = generateMotion3Json(makeAction({
+    fps: 30, duration: 500,
+    fcurves: [paramFcurve('P',
+      [{ time: 0, value: 0 }, { time: 500, value: 0 }], // flat baseline
+      [{
+        type: 'noise',
+        useRestrictedRange: true,
+        sfra: 100, efra: 400,
+        data: { size: 100, strength: 1, phase: 1, blendType: 'replace' },
+      }])],
+  }));
+  assert(m.Curves[0].Segments.length > 20,
+    '11: range-restricted Noise still triggers bake (per JSDoc)');
+  const samples = decodeSamples(m.Curves[0].Segments);
+  // Outside-range samples (t < 0.1s OR t > 0.4s): baseline carried
+  // through ⇒ value ≈ 0.
+  const outsideSamples = samples.filter((s) => s.t < 0.099 || s.t > 0.401);
+  for (const os of outsideSamples) {
+    if (Math.abs(os.v) > 1e-6) {
+      failed++;
+      const msg = `11a: outside-range sample at t=${os.t} carries non-zero value ${os.v} (expected ≈0)`;
+      failures.push(msg);
+      console.error(`FAIL: ${msg}`);
+      break;
+    }
+  }
+  passed++;
+  // Inside-range samples should vary (Noise active).
+  const insideSamples = samples.filter((s) => s.t >= 0.099 && s.t <= 0.401);
+  const insideValues = insideSamples.map((s) => s.v);
+  const insideRange = Math.max(...insideValues) - Math.min(...insideValues);
+  assert(insideRange > 0.01,
+    `11b: inside-range samples vary (Noise active; range=${insideRange.toFixed(4)} > 0.01)`);
 }
 
 console.log(`motion3jsonNoiseExport: ${passed} passed, ${failed} failed`);

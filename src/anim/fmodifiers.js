@@ -208,9 +208,17 @@
  *
  * # Determinism
  *
- * Per the plan §3.E: the Perlin seed is derived from
- * `(fcurveId, modifierId, time)` so noise is stable across saves and
- * byte-fidelity-testable. Slice 3.E owns the implementation.
+ * The Perlin field is fully determined by
+ * `(size, phase, offset, depth, lacunarity, roughness, evaltime)` and
+ * a hardcoded permutation table (no PRNG state, no per-fcurve seed).
+ * This matches Blender's `fcm_noise_evaluate` at
+ * `fmodifier.cc:814-867` and is stable across saves, across process
+ * restarts, and byte-fidelity-testable by construction. The
+ * `motion3jsonNoiseExport.mjs` §6 test pins byte-identical re-export
+ * across two identical action constructions. (The original plan-draft
+ * phrasing about `(fcurveId, modifierId, time)` seeding was
+ * aspirational and divergent from Blender — corrected in plan §3.E
+ * post-3.E ship; audit-fix 3.E HIGH-1.)
  *
  * # Defaults (verified against Blender's `fcm_noise_new_data`)
  *
