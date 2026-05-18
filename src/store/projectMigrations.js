@@ -100,6 +100,7 @@ import { migrateSceneAnimData } from './migrations/v37_scene_anim_data.js';
 import { migrateNodeTreeRetirement } from './migrations/v38_nodetree_retirement.js';
 import { migrateBezTripleKeyforms } from './migrations/v39_beztriple_keyforms.js';
 import { migrateActionGroups } from './migrations/v40_action_groups.js';
+import { migrateFModifiers } from './migrations/v41_fmodifiers.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -685,6 +686,23 @@ const MIGRATIONS = {
   // See `src/store/migrations/v40_action_groups.js`.
   40: (project) => {
     migrateActionGroups(project);
+    return project;
+  },
+
+  // v41 — Animation Phase 3 Slice 3.A: FCurve.modifiers[] substrate.
+  // Introduces the FModifier stack on every FCurve. Mirrors Blender's
+  // `FCurve.modifiers: ListBaseT<FModifier>`
+  // (`reference/blender/source/blender/makesdna/DNA_anim_types.h:341`).
+  // Six modifier types ship: cycles, noise, generator, limits, stepped,
+  // envelope. Field is sparse — every reader treats missing-or-non-array
+  // as the empty list (see `getFCurveModifiers` in src/anim/fmodifiers.js).
+  // Migration is a version-bump marker; no existing FCurve carries data
+  // that needs transformation (per Rule №2 — no migration baggage, the
+  // FModifier substrate is actively being shipped this phase).
+  //
+  // See `src/store/migrations/v41_fmodifiers.js` + `src/anim/fmodifiers.js`.
+  41: (project) => {
+    migrateFModifiers(project);
     return project;
   },
 

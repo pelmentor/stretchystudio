@@ -118,6 +118,12 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *   gate (matches Blender's `is_fcurve_evaluatable` at
  *   `evaluation.cc:95-111` which checks only mute) — hidden curves
  *   still drive their bound properties at eval time.
+ * @property {import('./fmodifiers.js').FModifier[]} [modifiers] -- Phase 3
+ *   Slice 3.A (schema v41): per-FCurve FModifier stack. Mirrors Blender's
+ *   `FCurve.modifiers: ListBaseT<FModifier>` (`DNA_anim_types.h:341`
+ *   onward). Sparse; missing or empty-array means "no modifiers". See
+ *   [fmodifiers.js](./fmodifiers.js) for the FModifier typedef +
+ *   per-type data shapes. Evaluator lands in Slice 3.B.
  */
 
 /**

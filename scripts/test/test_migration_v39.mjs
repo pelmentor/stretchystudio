@@ -25,7 +25,11 @@ function assertEq(actual, expected, name) {
 
 // ── schema version sanity ──────────────────────────────────────────────────
 {
-  assert(CURRENT_SCHEMA_VERSION === 39, 'CURRENT_SCHEMA_VERSION bumped to 39');
+  // v39 introduced the BezTriple keyform shape; later versions stack on
+  // top. Assert that the constant has reached AT LEAST 39 (not pinned,
+  // since the project keeps bumping).
+  assert(CURRENT_SCHEMA_VERSION >= 39,
+    `CURRENT_SCHEMA_VERSION (${CURRENT_SCHEMA_VERSION}) >= 39`);
 }
 
 // ── legacy {time, value} (no easing/type) → linear vector handles ──────────
