@@ -78,12 +78,17 @@ function idsActive(action) {
   eq(idsSelected(a).length, 0, 'clear: none selected');
 }
 
-// ── 'invert' cascade — flips per channel ──────────────────────────
+// ── 'invert' cascade — channel-level identical to 'add' per Blender
+// `:407-408` (audit-fix HIGH-1 2026-05-18). The per-keyform flip is
+// the user's intent at the BezTriple level (caller's
+// setSelectedHandles); the channel-level cascade always sets
+// fc.selected=true regardless of prior state — Blender's else branch
+// fires for both SELECT_ADD and SELECT_INVERT.
 {
   const a = makeAction([fc('a', { selected: true }), fc('b'), fc('c', { selected: true })]);
   const r = applyGraphSelectAllChannelCascade(a, 'invert', { orderedIds: ['a', 'b', 'c'] });
   eq(r.changed, true, 'invert: changed');
-  eq(idsSelected(a).join(','), 'b', 'invert: only b is now selected (a + c flipped off, b flipped on)');
+  eq(idsSelected(a).join(','), 'a,b,c', 'invert: ALL channels selected (Blender :407-408 unconditional set)');
 }
 
 // ── Cascade-clear fc.active on in-scope ───────────────────────────
@@ -215,6 +220,30 @@ function idsActive(action) {
     const r = applyGraphSelectAllChannelCascade(sB.action, sB.mode, sB.ctx);
     eq(predicted, r.changed, `scenario ${i} (${sA.mode}): preflight matches setter`);
   }
+}
+
+// Audit-fix MED-4 (2026-05-18): empty action — all steps no-op.
+{
+  const a = makeAction([]);
+  const r = applyGraphSelectAllChannelCascade(a, 'invert', { orderedIds: ['x'], previouslyActive: 'x' });
+  eq(r.changed, false, 'MED-4 empty fcurves: no change even with invert');
+  eq(r.restoredActive, false, 'MED-4 empty fcurves: restoredActive=false (no fc to restore)');
+}
+
+// Audit-fix MED-4 (2026-05-18): deleted previouslyActive — restore
+// gracefully skips because byId.get(previouslyActive) returns
+// undefined; the `if (fc)` guard at Step 3 prevents a crash and
+// restoredActive stays false (the restore SEMANTIC requires a real
+// fcurve to restore to).
+{
+  const a = makeAction([fc('b', { selected: true })]);
+  const r = applyGraphSelectAllChannelCascade(a, 'clear', {
+    orderedIds: ['deleted', 'b'],
+    previouslyActive: 'deleted',
+  });
+  eq(r.restoredActive, false, 'MED-4 deleted previouslyActive: restore skipped (fc not found)');
+  eq(r.changed, true, 'MED-4 deleted previouslyActive: b.selected cleared');
+  eq(a.fcurves[0].selected, false, 'MED-4: b.selected actually cleared');
 }
 
 // ── Preflight guards ──────────────────────────────────────────────

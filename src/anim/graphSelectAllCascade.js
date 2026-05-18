@@ -25,9 +25,11 @@
  * select-toggle / deselect-all"). Sister to:
  *   - Slice 5.F `applyChannelSelect`  (per-channel click selection)
  *   - Slice 5.K `applyChannelSelectAll` (per-channel bulk; CHANNEL-region,
- *     does NOT have an active-restore — `ANIM_OT_channels_select_all`
+ *     does NOT have an active-restore — `animchannels_selectall_exec`
  *     at `anim_channels_edit.cc:3521-3554` is deliberately
- *     restore-less)
+ *     restore-less, no analog to `:459-470` from
+ *     `graphkeys_deselectall_exec`; operator type defn at
+ *     `anim_channels_edit.cc:3556-3575`)
  *   - Slice 5.X `setActiveFCurve` / `clearActiveFCurves` / `getActiveFCurve`
  *   - Slice 5.Z dispatcher wire-through for CHANNEL-region clearActive
  *
@@ -43,7 +45,8 @@
  *       `ANIM_anim_channels_select_set` → ANIMTYPE_FCURVE case at
  *       `:723-734`)
  *     - DOES clear `fc.active` cascade on deselect (line 728-732,
- *       gated by `change_active = (sel != EXTEND_RANGE)`)
+ *       gated by `change_active = (sel != ACHANNEL_SETFLAG_EXTEND_RANGE)`
+ *       at `:683`)
  *     - Does NOT restore the previously-active. Blender's intent:
  *       channel-region select-all clears active when active gets
  *       deselected. Documented in `ANIM_OT_channels_select_all` —
@@ -81,17 +84,46 @@
  *      wrap is defensive against stale out-of-scope `fc.active` that
  *      shouldn't exist per Slice 5.X invariant.
  *
- *   3. **Stash scope match.** Blender's `get_active_fcurve_channel`
- *      at `:437` only returns the active fcurve if it's visible.
+ *   3. **Stash scope match (with subtle filter-set divergence).**
+ *      Blender's `get_active_fcurve_channel`
+ *      (`reference/blender/source/blender/editors/space_graph/graph_utils.cc:83-89`)
+ *      uses filter `ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FOREDIT |
+ *      ANIMFILTER_ACTIVE | ANIMFILTER_FCURVESONLY` — note the
+ *      ABSENCE of `ANIMFILTER_CURVE_VISIBLE` (which
+ *      `deselect_graph_keys`'s filter at `:363-364` DOES include).
+ *      So an fcurve that is `DATA_VISIBLE` but `!CURVE_VISIBLE`
+ *      (e.g., hidden via the eye-icon toggle on its row but still
+ *      in a visible group) CAN be returned by
+ *      `get_active_fcurve_channel`, and Blender would then re-elevate
+ *      it via `:466` even though it was outside the cascade scope.
+ *
  *      SS's helper requires the caller to pass `previouslyActive`
  *      (typically `getActiveFCurve(action)?.id`) AND gates the
- *      restore on `orderedIds.indexOf(previouslyActive) !== -1`. If
- *      the active was hidden, the restore is skipped — matching
- *      Blender's `ale_active = null` skip path at `:460`.
+ *      restore on `orderedIds.indexOf(previouslyActive) !== -1`.
+ *      `orderedIds` matches `CURVE_VISIBLE` scope (it filters via
+ *      `isFCurveEffectivelyHidden`), so SS's restore is STRICTER
+ *      than Blender's — a hide-toggled-but-active fcurve doesn't
+ *      get restored in SS. Audit-fix LOW-1 fidelity (Slice 5.DD
+ *      2026-05-18) documents this; exact parity would drop the
+ *      `orderedIds` gate (but then restore would re-set selected on
+ *      a row the user explicitly hid, which is its own SS-UX
+ *      regression). Deferred.
  *
  *   4. **No `OPTYPE_UNDO` snapshot.** Inherited from Slice 5.F/5.K
  *      convention. Channel selection (and the keyform-level mirror)
  *      is view state.
+ *
+ * # Toggle resolution scope (audit-fix LOW-2 fidelity 2026-05-18)
+ *
+ * `mode` here is already resolved to `add` / `clear` / `invert` by the
+ * caller — this helper does not see a 'toggle' value. The caller
+ * (FCurveEditor's graph-region keymap branch, near line 2620) walks
+ * `selectionRef.current.size` (the keyform-handle Map, same visible
+ * scope as `orderedIds`) to convert `'toggle'` into `'add'` or
+ * `'clear'`. That matches Blender's pre-walk at
+ * `graph_select.cc:373-383` against `anim_data` (filtered via
+ * `ANIMFILTER_DATA_VISIBLE | ANIMFILTER_CURVE_VISIBLE` at `:363-364`):
+ * both scopes are the same visible-fcurves-with-keyforms set.
  *
  * # No migration
  *
@@ -120,16 +152,23 @@ import { setActiveFCurve } from './fcurveActive.js';
  * @param {'add'|'clear'|'invert'} mode — keyform-side intent:
  *   - 'add'    — bulk select-all (was: SS `operatorSelectAll`).
  *                Cascades `fc.selected = true` on every in-scope
- *                fcurve. Matches Blender's `SELECT_ADD` path at
- *                `:386` + `:408`.
+ *                fcurve. Matches Blender's `SELECT_ADD` falling into
+ *                the else branch at `:408` (`fcu->flag |= FCURVE_SELECTED`).
  *   - 'clear'  — bulk deselect-all (was: SS `clearSelection`).
  *                Cascades `fc.selected = false`. Matches Blender's
- *                `SELECT_SUBTRACT` at `:405`.
- *   - 'invert' — per-fcurve flip (was: SS `operatorInvertSelection`).
- *                Cascades `fc.selected` flipped per channel. Matches
- *                Blender's `SELECT_INVERT` at `:386` + `:407-408`
- *                (where the cascade computes the new state from the
- *                CURRENT fc.selected, not from the per-keyform check).
+ *                `SELECT_SUBTRACT` branch at `:405`.
+ *   - 'invert' — per-keyform flip (was: SS `operatorInvertSelection`).
+ *                Channel-level cascade is IDENTICAL to 'add' (both
+ *                hit the else branch at `:407-408` for unconditional
+ *                FCURVE_SELECTED set). Only the per-keyform selection
+ *                actually inverts (caller's `setSelectedHandles`
+ *                invocation). The channel-level cascade is a
+ *                normalization: Blender ensures the row stays
+ *                "in scope" for further batch operations even after
+ *                an invert. The `sel` value (SELECT_INVERT) is passed
+ *                in by the caller at `graphkeys_deselectall_exec:452`;
+ *                `sel_cb` at `:386` builds the per-bezt callback from
+ *                it for the keyform-level flip.
  * @param {{ orderedIds?: string[], previouslyActive?: string|null }} [ctx]
  *   — `orderedIds` is the visible scope (REQUIRED for any meaningful
  *   work). `previouslyActive` is the fcurve id that was active BEFORE
@@ -142,6 +181,22 @@ import { setActiveFCurve } from './fcurveActive.js';
  *   cascadedSelected: number,
  *   clearedActiveCount: number,
  * }}
+ *   - `changed` — true if any field on any fcurve transitioned.
+ *   - `restoredActive` — true if the restore-pass CODE PATH executed
+ *     (i.e., `previouslyActive` was non-null AND in-scope AND
+ *     resolved to a real fcurve). Does NOT imply that `fc.active`
+ *     or `fc.selected` actually changed — the Step 2 skip
+ *     optimization may have left them intact. Audit-fix LOW-1
+ *     (Slice 5.DD arch audit 2026-05-18): the asymmetry from
+ *     `changed`'s "did something mutate" semantic is intentional;
+ *     `restoredActive` is the "restore guarantee held" signal for
+ *     downstream consumers (matches Slice 5.K's `resultMode` field
+ *     convention — decision describes what was attempted).
+ *   - `cascadedSelected` — number of fcurves whose `fc.selected`
+ *     transitioned in Step 1.
+ *   - `clearedActiveCount` — number of fcurves whose `fc.active`
+ *     was cleared in Step 2 (excludes previouslyActive per the
+ *     skip optimization).
  */
 export function applyGraphSelectAllChannelCascade(action, mode, ctx) {
   const result = {
@@ -172,37 +227,39 @@ export function applyGraphSelectAllChannelCascade(action, mode, ctx) {
   //   if (sel == SELECT_SUBTRACT) fcu->flag &= ~FCURVE_SELECTED;
   //   else                        fcu->flag |= FCURVE_SELECTED;
   //
-  // For INVERT, Blender's `:386` already computed `sel = SELECT_INVERT`
-  // and the per-channel SELECT bit was flipped via `:407-408` based on
-  // the new (post-keyform-invert) state. SS approximates by flipping
-  // `fc.selected` directly here — the keyform-level flip is the
-  // caller's responsibility (setSelectedHandles) and the channel-level
-  // flip is independent of the per-keyform state. This is a SS
-  // deviation from Blender's exact code path; net observable behavior
-  // matches for the typical use case (toggle/select/deselect/invert
-  // bulk ops where keyform and channel selection track together).
+  // The else branch fires for BOTH SELECT_ADD AND SELECT_INVERT — the
+  // channel-level cascade treats INVERT identically to ADD (both
+  // unconditionally set FCURVE_SELECTED). The per-keyform invert is
+  // the user's intent at the BezTriple level (`sel_cb` callback built
+  // at `:386` from `ANIM_editkeyframes_select(SELECT_INVERT)` and
+  // applied per-bezt at `:393-394`); the channel-level cascade is a
+  // normalization that ensures the row stays "in scope" for further
+  // batch operations (you can't have selected keyforms in a
+  // deselected channel — that would be inconsistent state).
+  //
+  // Audit-fix HIGH-1 (Slice 5.DD fidelity audit 2026-05-18): the
+  // earlier draft of this loop flipped `fc.selected` per-channel
+  // for 'invert' mode — that diverged from Blender's unconditional
+  // ADD behavior. The fix matches Blender exactly: 'add' and
+  // 'invert' both set fc.selected=true.
   for (const id of orderedIds) {
     const fc = byId.get(id);
     if (!fc) continue;
-    if (mode === 'add') {
-      if (fc.selected !== true) {
-        fc.selected = true;
-        result.changed = true;
-        result.cascadedSelected++;
-      }
-    } else if (mode === 'clear') {
+    if (mode === 'clear') {
+      // SELECT_SUBTRACT branch at `:405`.
       if (fc.selected === true) {
         fc.selected = false;
         result.changed = true;
         result.cascadedSelected++;
       }
-    } else { // invert
-      const was = fc.selected === true;
-      fc.selected = !was;
-      // sparse-clear false-to-missing? Slice 5.F convention writes
-      // false explicitly when transitioning from true, so we follow.
-      result.changed = true;
-      result.cascadedSelected++;
+    } else {
+      // 'add' OR 'invert' — both hit the else branch at `:407-408`
+      // (unconditional FCURVE_SELECTED set).
+      if (fc.selected !== true) {
+        fc.selected = true;
+        result.changed = true;
+        result.cascadedSelected++;
+      }
     }
   }
 
@@ -285,12 +342,14 @@ export function wouldGraphSelectAllChannelCascadeChange(action, mode, ctx) {
   }
 
   // Step 1 — would cascade flip any `fc.selected`?
+  // 'invert' is identical to 'add' at the channel level per HIGH-1
+  // fix: Blender's else branch at `:407-408` sets fc.selected=true
+  // for both SELECT_ADD and SELECT_INVERT.
   for (const id of orderedIds) {
     const fc = byId.get(id);
     if (!fc) continue;
-    if (mode === 'add' && fc.selected !== true) return true;
+    if ((mode === 'add' || mode === 'invert') && fc.selected !== true) return true;
     if (mode === 'clear' && fc.selected === true) return true;
-    if (mode === 'invert') return true;  // invert always flips at least the field's value
   }
 
   // Step 2 — would cascade clear any `fc.active`?
@@ -315,11 +374,9 @@ export function wouldGraphSelectAllChannelCascadeChange(action, mode, ctx) {
       // Need: did step 2 actually clear something we'd re-set, OR did
       // step 1 transitions leave the previously-active in a state that
       // step 3 mutates?
-      const wasSelected = fc.selected === true;
       let postCascadeSelected;
-      if (mode === 'add') postCascadeSelected = true;
-      else if (mode === 'clear') postCascadeSelected = false;
-      else postCascadeSelected = !wasSelected;  // invert
+      if (mode === 'add' || mode === 'invert') postCascadeSelected = true;
+      else postCascadeSelected = false;  // clear
       // Step 3 sets selected=true regardless of postCascadeSelected.
       // If postCascadeSelected !== true, step 3 mutates.
       if (postCascadeSelected !== true) return true;

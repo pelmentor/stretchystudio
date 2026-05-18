@@ -348,6 +348,7 @@ import {
 } from '../../../anim/fcurveBoxSelect.js';
 import {
   applyGraphSelectAllChannelCascade,
+  wouldGraphSelectAllChannelCascadeChange,
 } from '../../../anim/graphSelectAllCascade.js';
 import { applyKeyformInvertSelection } from '../../../anim/fcurveKeyformSelect.js';
 import {
@@ -2200,13 +2201,41 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // immer draft, not the outer closure's captured snapshot.
   //
   // NOT wired into the CHANNEL-region (sidebar) keymap branches —
-  // Blender's `ANIM_OT_channels_select_all` at
+  // Blender's `animchannels_selectall_exec` at
   // `anim_channels_edit.cc:3521-3554` is deliberately restore-less
-  // per the channel-region semantic (active is allowed to fade
-  // away on Alt+A). Slice 5.Z's `clearActive` wire-through already
-  // handles the channel-region active-clear correctly.
+  // (no analog to `graph_select.cc:459-470` from
+  // `graphkeys_deselectall_exec`; operator type defn at
+  // `anim_channels_edit.cc:3556-3575`) per the channel-region
+  // semantic (active is allowed to fade away on Alt+A). Slice 5.Z's
+  // `clearActive` wire-through already handles the channel-region
+  // active-clear correctly.
+  //
+  // Audit-fix MED-1 (Slice 5.DD arch audit 2026-05-18): preflight-
+  // gated. Calls `useProjectStore.getState()` to read live action +
+  // active state without subscribing to project store (matches
+  // `applyChannelBoxSelectOp` pattern). Skips the `update()` recipe
+  // when no net mutation would occur — avoids phantom render +
+  // preserves preflight contract.
+  //
+  // Audit-fix MED-2 (Slice 5.DD arch audit 2026-05-18): note on
+  // two-update sequencing. The keymap branch fires `setSelectedHandles`
+  // FIRST (React state update) and THEN this dispatcher
+  // (immer-based project store update). `orderedIds` is captured from
+  // `visible` at callback-creation time; `visible` is derived from
+  // `action` (project store), NOT from `selectedHandles`, so the
+  // visible scope can't go stale between the two state updates within
+  // a single event handler. The `previouslyActive` snapshot inside
+  // the immer recipe is the canonical action-draft read (not a
+  // React-state capture), so it's correct regardless of the
+  // setSelectedHandles → update() ordering.
   const graphSelectAllOp = useCallback((mode) => {
     const orderedIds = visible.map((d) => d.fcurve.id);
+    const liveProject = useProjectStore.getState().project;
+    const liveAction = getActiveSceneAction(liveProject, activeActionId);
+    const liveActive = liveAction ? getActiveFCurve(liveAction)?.id ?? null : null;
+    if (!wouldGraphSelectAllChannelCascadeChange(liveAction, mode, { orderedIds, previouslyActive: liveActive })) {
+      return;
+    }
     update((p) => {
       const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
