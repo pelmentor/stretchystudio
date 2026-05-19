@@ -2123,18 +2123,122 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-**Status:** **Slices 7.A + 7.B SHIPPED 2026-05-19** (`2ebefe4` +
-`768d25c` + `5bd0982` + `de91759`). Registry + Insert Keyframe
-kernel complete; no UI yet. Slices remaining: **7.C** (I-key menu
-UI), **7.D** (auto-keyframe set parity), **7.E** (K-key toast +
-rebind preference), **7.F** (test sweep + Phase 7 exit gate).
+**Status:** **Slices 7.A + 7.B + 7.C SHIPPED 2026-05-19** (`2ebefe4` +
+`768d25c` + `5bd0982` + `de91759` + `4643dc3` + `57f2bb2`). Registry +
+Insert Keyframe kernel + I-key menu UI complete. Slices remaining:
+**7.D** (auto-keyframe set parity), **7.E** (K-key toast + rebind
+preference), **7.F** (test sweep + Phase 7 exit gate).
 
 **Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
-REGRESSION** — 7.A (2 HIGH-F) + 7.B (1 HIGH-F) confirmed multi-slice
-fab regression. Memory rules 9 (re-OPEN every cite), 10 (literal-
-source-value for constants), and 11 ("comment says X" promotes X to
-byte-quotation) added across the two slices. 7.C will test whether
-rules 10+11 hold for content-claim fabs.
+REGRESSION** through 7.A (2 HIGH-F) + 7.B (1 HIGH-F), then **STREAK
+RESTARTED at 7.C** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 verified
+cites). Memory rules 9 (re-OPEN every cite), 10 (literal-source-value
+for constants), and 11 ("comment says X" promotes X to byte-
+quotation) — added across 7.A/7.B — held effectively for 7.C.
+
+#### 7.C — `I`-key menu UI ✅ SHIPPED 2026-05-19
+
+**Substrate.** 4 new files (~455 LOC) + 5 modified:
+
+- `src/anim/keyingSetDefault.js` (~85 LOC) — `pickDefaultKeyingSet`
+  pure helper. Picks the highlighted built-in per plan §7.C:
+  BlendShape-mode (with matching shape owner) → `BlendShape`;
+  last-selected bone-role group → `Rotation`; last-selected meshed
+  part → `LocRotScale`; otherwise → `null`. LAST→FIRST selection
+  walk matches SS's "active = most-recently-added" semantic.
+- `src/anim/insertKeyframeResolver.js` (~70 LOC) —
+  `buildLiveResolver(project, paramValues)` closes the **MED-3 trap**
+  from 7.B's audit. Default `evaluateRnaPath` returns
+  `project.parameters[*].default` (STATIC) for `__params__` paths;
+  this wrapper routes `__params__` paths through the live
+  `paramValuesStore.values` snapshot first, falling through to the
+  default for non-__params__ paths AND for missing/NaN/Infinity live
+  values. Regex `^objects\["__params__"\]\.values\["([^"]+)"\]$`
+  matches the emitter at `keyingSets.js:204` byte-for-byte.
+- `src/v3/operators/insertKey.js` (~210 LOC) — registers
+  `insertKey.menu` (bound to `KeyI`; opens KeyingSetMenu popover)
+  and `insertKey.applySet` (forward hook for 7.D auto-key +
+  command-palette; menu dispatches via `execApplyKeyingSet(setId)`
+  directly). Exported `execApplyKeyingSet` runs the full guarded
+  pipeline: setId/project/time validation → `getKeyingSet` pre-
+  validation → `updateProject(draft => applyKeyingSet(draft, ...,
+  {resolveValue: buildLiveResolver(draft, paramValues)}))` → toast
+  with summarised per-channel result counts.
+- `src/v3/shell/KeyingSetMenu.jsx` (~140 LOC) — Radix-free popover
+  mirroring `ApplyMenu` / `SnapMenu` pattern (Esc + outside-click
+  close, fixed-position div, lazy-imported in AppShell). Lists every
+  set via `listKeyingSets(project)` (memoised on `[project]` per
+  `feedback_filter_in_selector`); `•` indicator for active set,
+  bold font for default-picked set.
+- `src/store/editMenuStore.js` — `'keyingSet'` added to discriminated
+  `kind` union + `openKeyingSet({cursor})` method.
+- `src/v3/operators/registry.js` — `registerInsertKeyOperators`
+  invoked at end of `registerBuiltins` (eager-import per sister-slice
+  G-1 lesson — operator dispatcher fires `op.exec(...)` non-await).
+- `src/v3/keymap/default.js` — `KeyI` → `insertKey.menu`.
+- `src/v3/shell/AppShell.jsx` — `KeyingSetMenu` lazy-mounted behind
+  `editMenuKind === 'keyingSet'`.
+
+**Blender cites (re-OPENED per rule 9 + content-verified per rules
+10+11 BEFORE substrate ship; ALL 9 audit-verified clean):**
+
+- `editors/animation/keyframing.cc:509-567` — `insert_key_menu_invoke`
+  (the static menu-invoker function). **Corrected** session-aggregate's
+  pre-existing wrong cite at `:569-580` which pointed at the OT
+  registration `ANIM_OT_keyframe_insert_menu` (registration wires
+  `invoke = insert_key_menu_invoke` at `:580`).
+- `editors/animation/keyframing.cc:545-558` — menu-loop that
+  dispatches per-set items via `layout.op("ANIM_OT_keyframe_insert_by_name", ...)`
+  at `:548`.
+- `editors/animation/keyframing.cc:479-502` — `ANIM_OT_keyframe_insert_by_name`
+  (the by-name operator; non-sticky — exec chain through
+  `keyframe_insert_with_keyingset_exec` at `:463-477` never writes
+  `scene->active_keyingset`). SS's `execApplyKeyingSet` matches this
+  non-sticky semantic.
+- `editors/animation/keyframing.cc:438-461` — `ANIM_OT_keyframe_insert`
+  (Blender's I-key operator; description: "Insert keyframes on the
+  current frame using either the active keying set, or the user
+  preferences if no keying set is active").
+- `editors/animation/keyframing.cc:472` —
+  `keyingset_get_from_op_with_error` call site (mirrored by SS's
+  pre-validation `getKeyingSet` in `execApplyKeyingSet`).
+- `keymap_data/blender_default.py:4561` — I-key Object Mode →
+  `anim.keyframe_insert` (default non-pie path).
+- `keymap_data/blender_default.py:4536` — K-key Object Mode →
+  `anim.keyframe_insert_menu` with `always_prompt=True`.
+- `keymap_data/blender_default.py:4702`, `:4683` — sister bindings in
+  Pose Mode.
+- `_keyingsets_utils.py:42-67` — "closest analog" (paraphrased) for
+  default-set picker; Blender's actual default is the user's
+  `scene.active_keyingset` preference (verified at `keyframing.cc:520`).
+
+**Plan vs Blender semantic divergence (DEV 30):** Blender binds I to
+"use active KS / user-pref fallback" (`:4561`) and K to "always
+menu" (`:4536`). SS plan §7.C/§7.E **inverts**: I → always menu, K →
+legacy "insert all properties" (CanvasViewport.jsx:1457-1633). The
+inversion is plan-faithful because (a) the legacy K-key already keys
+every visible property + (b) a user-facing rebind UI is not yet
+shipped. §7.E will surface a toast + preference for the Blender-
+faithful rebind. Documented inline in `insertKey.js` header.
+
+**Audit sweep #80** (Phase 7 sweep #3):
+
+- **Architecture: 0 HIGH / 0 MED / 1 LOW.** LOW-1 (test gap on
+  operator-wiring layer) closed in audit-fix `57f2bb2` — §5 added
+  (14 asserts) covering null project, empty/null setId, unknown
+  setId, NaN/Infinity time, AllParams happy path (live-resolver
+  17.5/0.7 at currentTime 2000), LocRotScale on selected part.
+- **Blender-fidelity: 0 HIGH-F / 0 MED-F / 0 LOW-F across 9 cites.**
+  **Cite-discipline streak RESTARTED at 7.C** (Phase 7 2-slice
+  regression ends). Rules 9 + 10 + 11 applied effectively for the
+  first time post-introduction.
+
+Post-audit: **69 test asserts** (55 pre-fix; +14 regression). Tests:
+`test:keyingSetMenu` wired into master chain. Sibling tests clean:
+`test:insertKeyframe` (87), `test:keyingSets` (144), `test:v3Operators`
+(125), `test:applyMenuStore` (28), `test:objectModeMenuStore` (22).
+Typecheck clean. Close-out doc at
+`docs/plans/SESSION_CLOSEOUT_2026_05_19_ANIMATION_PHASE_7_SLICE_C.md`.
 
 #### 7.B — Insert Keyframe operator ✅ SHIPPED 2026-05-19
 
