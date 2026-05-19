@@ -1558,16 +1558,23 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E + 6.F.1 + **6.F.2**
-SHIPPED 2026-05-19 (`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` +
-`98b8a2a` + `f82e670` + `872a208` + `a79f431` + `1aaf0b3` + `554be56`
-+ `21416c5` + `1f15410` + `90e8655` + `b1b7a5b`). **Only 6.G exit
-gate remains** (~1hr). 6.F was SPLIT into 6.F.1 (mute) + 6.F.2 (solo)
-at slice-write time after discovering `ACHANNEL_SETTING_SOLO` is
-NLA-tracks-only in Blender per `ED_anim_api.hh:674` — per-FCurve solo
-is an SS-only DAW-convention extension; SHIPPED in 6.F.2 with
-multi-solo semantic + new `fcurve.solo` flag bit + eval-cascade
-extension.
+**Status:** **PHASE 6 SHIP-COMPLETE 2026-05-19.** Slices 6.A + 6.B +
+6.C + 6.D + 6.E + 6.F.1 + 6.F.2 + 6.G all SHIPPED (`cfb82a9` +
+`5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670` + `872a208`
++ `a79f431` + `1aaf0b3` + `554be56` + `21416c5` + `1f15410` +
+`90e8655` + `b1b7a5b` + 6.G commit). 6.F was SPLIT into 6.F.1 (mute)
++ 6.F.2 (solo) at slice-write time after discovering
+`ACHANNEL_SETTING_SOLO` is NLA-tracks-only in Blender per
+`ED_anim_api.hh:674` — per-FCurve solo is an SS-only DAW-convention
+extension; SHIPPED in 6.F.2 with multi-solo semantic + new
+`fcurve.solo` flag bit + eval-cascade extension. **6.G** wired all 8
+Phase 6 test scripts (+ Phase 4.E `test:bakeNla` oversight) into
+master `npm test`, reviewed all 19 SS DEVIATIONs for Rule №2 honesty
+compliance, and authored
+`docs/plans/ANIMATION_PHASE_6_MANUAL_CHECKLIST.md`. **752 asserts
+under Phase 6 gating.** 4 consecutive clean cite slices (6.D + 6.E
++ 6.F.1 + 6.F.2) establish streak-break as durable. **Phase 6
+closes 1 grievance** (Dopesheet read-only).
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1607,6 +1614,58 @@ prose below — coverage map):
   DAW extension (Blender has no per-FCurve solo per `ED_anim_api.hh:674`).
 - 🟡 Channel collapse/expand — deferred to a future polish slice.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.G — Phase exit gate ✅ SHIPPED 2026-05-19
+
+**Status:** Phase 6 SHIP-COMPLETE (6.A → 6.G all green, 8/8 slices).
+
+**Gate coverage:**
+
+1. **All Phase 6 dopesheet tests green** — ✅ satisfied.
+   - `test:dopesheetSelectOps` (60) + `test:dopesheetBoxSelect` (61)
+     + `test:dopesheetGrab` (70) + `test:dopesheetDelDup` (83) +
+     `test:dopesheetClipboard` (107) + `test:dopesheetChannelMute`
+     (56) + `test:dopesheetChannelSolo` (48) + `test:fcurveSolo` (59)
+     = **544 substrate assertions**.
+   - Cross-slice extended suites: `test:dopesheetRows` (75),
+     `test:fcurveGroups` (89), `test:keyformSelectionStore` (25),
+     `test:graphEditOps` (115), `test:fcurveMute` (124) — all green.
+   - **752 total assertions under Phase 6 gating.**
+2. **Master `npm test` wiring** — ✅ satisfied. All 8 Phase 6 scripts
+   added to the master chain (between `test:nlaEditorOps` and
+   `test:fmodifiers`). Also picked up `test:bakeNla` (Phase 4.E
+   substrate that was missed at 4.F — opportunistic catch).
+3. **Cross-slice consistency** — ✅ satisfied. Gate-pattern table
+   verified for all 6 keymap-bound slices (6.B → 6.F.2): window-level
+   keymap + input-skip + grab/box-drag ref suppression + action
+   store-read at fire time + conditional `preventDefault`. Pure-op +
+   immer dispatcher split + `would*Change` predicate exported in all
+   7 substrate slices. No latent inconsistencies.
+4. **SS DEVIATION ledger (19 items)** — ✅ all audit-verified honest
+   per Rule №2. Six "NOT-SHIPPED" deviations each have explicit honest
+   rationale + either a deferred-slice target (6.B.1 / 6.C.1 / 6.F.2
+   — and 6.F.2 was shipped same-session) or a non-applicability proof.
+   No no-op shims, no transition diagnostics. See close-out doc table.
+5. **Documentation completeness** — ✅ every slice has a close-out doc
+   under `docs/plans/SESSION_CLOSEOUT_2026_05_19_ANIMATION_PHASE_6_*.md`;
+   2 cross-slice aggregates (`..._C_AND_D`, `..._E_F1_F2`).
+6. **Manual checklist authored** —
+   `docs/plans/ANIMATION_PHASE_6_MANUAL_CHECKLIST.md` covers user-side
+   end-to-end verification of every shipped slice (~30-40 min sweep).
+   Manual sweep is user-side per `feedback_no_background`; failed
+   items become post-6.G polish slices, NOT 6.G blockers.
+
+**Phase 6 sum:** 7 substrate slices + 1 exit gate, all shipped
+2026-05-19. Schema unchanged at v42. **Cite-discipline arc**:
+5-slice fab streak BROKEN at 6.D; **4 consecutive clean slices
+(6.D + 6.E + 6.F.1 + 6.F.2)** establish streak-break as durable;
+**rule 9 introduced** in `feedback_byte_verify_behavior_cites`
+mid-session ("Re-SOURCE, don't re-QUOTE, when sister modules cover
+the same Blender semantic" — subsumes rule 6 by sidestepping
+inherited-fab failure class). **6.F.2 was the first SS-original
+(non-port) slice under rule 9** — passed honest-framing audit
+cleanly (0 HIGH-F / 0 MED-F / 0 LOW-F across 12+ provenance cites).
+**Closes 1 grievance** (Dopesheet read-only).
 
 #### 6.F.2 — Per-FCurve solo (Ctrl+Alt+M) — SHIPPED 2026-05-19
 
