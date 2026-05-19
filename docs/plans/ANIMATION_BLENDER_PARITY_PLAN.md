@@ -1558,10 +1558,15 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E SHIPPED 2026-05-19
-(`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670`
-+ `872a208` + `a79f431` + `1aaf0b3` + `554be56`). 6.F + 6.G remain
-(~1 day estimated).
+**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E + **6.F.1** SHIPPED
+2026-05-19 (`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a`
++ `f82e670` + `872a208` + `a79f431` + `1aaf0b3` + `554be56` + `21416c5`
++ `1f15410`). 6.F.2 (solo) + 6.G remain (~3hr + ~1 short session
+respectively). 6.F was SPLIT into 6.F.1 (mute) + 6.F.2 (solo) at
+slice-write time after discovering `ACHANNEL_SETTING_SOLO` is
+NLA-tracks-only in Blender per `ED_anim_api.hh:674` — per-FCurve solo
+is an SS-only DAW-convention extension requiring `FCURVE_SOLO` bit +
+eval-cascade rewrite.
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1596,9 +1601,90 @@ prose below — coverage map):
 - ✅ Drag selected ticks in time — shipped 6.C (`98b8a2a` + `f82e670`).
 - ✅ Delete + Duplicate selected ticks — shipped 6.D (`872a208` + `a79f431`).
 - ✅ Copy/paste — shipped 6.E (`1aaf0b3` + `554be56`).
-- 🟡 Per-channel mute/solo — Slice 6.F.
-- 🟡 Channel collapse/expand — Slice 6.F.
+- 🟡 Per-channel mute/solo — Slice 6.F SPLIT: mute shipped 6.F.1
+  (`21416c5` + `1f15410`); solo queued as 6.F.2 (NLA-tracks-only in
+  Blender → SS-only DAW extension).
+- 🟡 Channel collapse/expand — Slice 6.F.2 or later.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.F.1 — Mute hovered/selected channel (M key) — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetChannelMute.js` (~290 LOC):
+decision-tree + dispatcher routing the dopesheet M-keypress to either
+single-curve toggle (hovered) or bulk toggle (selection fallback).
+Three exports:
+
+- `pickMuteTarget(action, hoveredFcurveId)` — pure decision: returns
+  `{ kind: 'hovered' | 'selection' | 'none', fcurveId? }`. Hover wins
+  over selection (DEV 17).
+- `applyDopesheetChannelMute(action, target)` — immer-friendly
+  dispatcher. Routes to `fcurveMute.toggleFCurveMute` (hovered) or
+  `fcurveMute.applyChannelMuteSelected(action, 'toggle')` (selection,
+  scan-first per `anim_channels_edit.cc:2968-2980`).
+- `wouldDopesheetChannelMuteChange(action, target)` — predicate.
+
+Reuses already-shipped Slice 5.O bulk-mute kernel
+(`applyChannelMuteSelected` in `src/anim/fcurveMute.js`) which
+byte-faithfully ports `setflag_anim_channels` at
+`anim_channels_edit.cc:2923-3001`. 6.F.1 adds the DOPESHEET surface
+(5.O wired the FCurveEditor sidebar Shift+W). Tests: 56 asserts in
+`scripts/test/test_dopesheetChannelMute.mjs`.
+
+**UI surface.** DopesheetEditor wires M-key:
+- `hoveredFcurveIdRef = useRef(null)` — ref-based hover tracking
+  (sub-frame writes; useState would 60Hz re-render).
+- Row gets `onPointerEnter` / `onPointerLeave` handlers (callbacks
+  passed as stable-identity props).
+- M-key effect: same gate pattern as 6.C/6.D/6.E — window-level,
+  input-skip, grab/box-drag ref suppression, action store-read at
+  fire time, conditional `preventDefault` only when target resolves.
+- Audit-fix MED-A1: `hoveredFcurveIdRef.current = null` at three
+  commit sites (box-drag commit + grab modal commit + cancel) to
+  avoid stale-hover from pointer-capture suppression of
+  `onPointerLeave`.
+
+**SS DEVIATIONS new this slice:**
+- DEV 16 — Hotkey choice **M** (vs Blender's `Shift+W` at
+  `blender_default.py:3876`). DAW convention (Pro Tools / Logic /
+  Ableton). Plan §6.B operator table specifies M.
+- DEV 17 — Hover-priority target selection (hovered wins over
+  selection; selection is fallback). Approximates Blender's
+  region-scoped Shift+W UX via explicit hover-tracking since SS uses
+  window-level keymap binding.
+- DEV 18 — **Solo (Ctrl+Alt+M) DEFERRED to Slice 6.F.2**. Blender's
+  `ACHANNEL_SETTING_SOLO = 5` at `ED_anim_api.hh:674` is
+  `/** only for NLA Tracks */` (verified character-for-character by
+  Blender-fidelity audit). Per-FCurve solo would be a NEW
+  DAW-convention feature requiring `FCURVE_SOLO` bit +
+  `isFCurveEffectivelyMuted` cascade extension + all 4 eval call
+  sites updated (sister to Slice 5.V's group-mute cascade work).
+  ~3hr separate slice.
+
+**Audit sweep #76.** 0 HIGH-F (streak HOLDS — 3 consecutive clean
+slices) + 0 HIGH-A + 1 MED-A actionable + 1 MED-A observer + 2 LOW-F
+cosmetic; all actionable items fixed in `1f15410` same-day:
+- MED-A1 — Pointer capture during box-drag and grab modal suppresses
+  Row's `onPointerLeave` events; `hoveredFcurveIdRef` stays stale
+  post-commit. Fix: clear at three commit sites.
+- MED-A2 — Row lacks `React.memo`, so `useCallback([], [])` identity-
+  stability has no actual render-savings effect today. Pre-existing,
+  NOT introduced by 6.F.1; flagged for future polish pass.
+- LOW-F1 — cite range `:3090-3140` overshot
+  `ANIM_OT_channels_setting_toggle` body (ends at `:3114`). Tightened.
+- LOW-F2 — cite at `:3138` misattributed (line belongs to sister op
+  `ANIM_OT_channels_editable_toggle`). Re-targeted to
+  `:3100`/`:3113`/`:2907-2911`.
+
+All 3 SS DEVIATIONs (DEV 16-18) confirmed accurate. DEV 18's
+load-bearing "only for NLA Tracks" claim verified character-for-
+character — deferral rationale is bulletproof.
+
+**Cite-discipline arc**: 0 fabs pre-audit, confirmed 0 by Blender-
+fidelity agent post-audit. **Rule 9 held in verification** — 3 lines
+also cited by sister `fcurveMute.js` all match Blender source
+first-hand; no inheritance fabrication detected. **3 consecutive
+clean slices (6.D + 6.E + 6.F.1) establish streak-break as durable
+discipline change.**
 
 #### 6.E — Copy (Ctrl+C) + Paste (Ctrl+V) — SHIPPED 2026-05-19
 
