@@ -134,9 +134,10 @@ export function DopesheetEditor() {
   // time. The actual usage only fires at runtime when `action` is
   // non-null (the early return below blocks render otherwise), but the
   // strict-mode TS check is at-declaration, not at-runtime. `action`
-  // may be null here; default to 1000 in that case (the callback won't
-  // fire because the early return prevents the track area from
-  // mounting + receiving pointer events).
+  // may be null here; default to 1000 in that case — none of the
+  // box-select callbacks (down/move/up) can fire because the early
+  // return prevents the track area from mounting + receiving pointer
+  // events. The default is a defensive value, not a runtime path.
   const duration = Math.max(1, action?.duration ?? 1000);
 
   // Slice 5.EE — subscribe to keyform-selection store. Slice 6.A
@@ -242,18 +243,25 @@ export function DopesheetEditor() {
   // Pointermove during drag — update the rect's current corner. Below
   // threshold, the pointerup commit will treat it as a click (no-op
   // on the box-select side; the tick onClick already ran if applicable).
+  //
+  // Audit-fix Slice 6.B HIGH-A1: callback identity is now stable —
+  // empty dep array, functional `setBoxDrag` reads latest state inside
+  // the updater + short-circuits when no drag is active. Pre-fix the
+  // `[boxDrag]` dep recreated the callback on every drag-move event
+  // (60-120 Hz), triggering pointer-handler prop churn + re-attach
+  // on every frame.
   const handleTrackPointerMove = useCallback(
     /** @param {React.PointerEvent<HTMLDivElement>} e */
     (e) => {
-      if (!boxDrag) return;
       const trackArea = trackAreaRef.current;
       if (!trackArea) return;
       const rect = trackArea.getBoundingClientRect();
       const curX = e.clientX - rect.left;
       const curY = e.clientY - rect.top;
-      setBoxDrag((/** @type {BoxDragState|null} */ prev) => prev ? { ...prev, curX, curY } : prev);
+      setBoxDrag((/** @type {BoxDragState|null} */ prev) =>
+        prev ? { ...prev, curX, curY } : prev);
     },
-    [boxDrag],
+    [],
   );
 
   // Pointerup — commit the box-select (if drag exceeded threshold) or
@@ -315,8 +323,11 @@ export function DopesheetEditor() {
   );
 
   // B-key handler — arms the gesture for the next pointerdown.
-  // Captured at document level so it fires regardless of focus
-  // (DopesheetEditor doesn't take keyboard focus).
+  // Audit-fix Slice 6.B HIGH-A2: split into TWO effects so the
+  // arm-listener (which doesn't read `bArmed`) stays mounted with
+  // an empty dep array, and only the Escape-clear listener
+  // re-registers when bArmed flips. Pre-fix both listeners re-mounted
+  // on every B-press → wasteful churn.
   useEffect(() => {
     /** @param {KeyboardEvent} e */
     const onKeyDown = (e) => {
@@ -327,16 +338,20 @@ export function DopesheetEditor() {
       e.preventDefault();
       setBArmed(true);
     };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Escape clears `bArmed` — only mount the listener while bArmed
+  // is true (no need to listen otherwise).
+  useEffect(() => {
+    if (!bArmed) return;
     /** @param {KeyboardEvent} e */
     const onKeyDownEsc = (e) => {
-      if (e.key === 'Escape' && bArmed) setBArmed(false);
+      if (e.key === 'Escape') setBArmed(false);
     };
-    window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keydown', onKeyDownEsc);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keydown', onKeyDownEsc);
-    };
+    return () => window.removeEventListener('keydown', onKeyDownEsc);
   }, [bArmed]);
 
   if (!action) {

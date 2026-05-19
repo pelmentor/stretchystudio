@@ -13,7 +13,10 @@
  * # Blender semantics ported
  *
  * **Operator** — `ACTION_OT_select_box` defined at
- * `reference/blender/source/blender/editors/space_action/action_select.cc:675-695`:
+ * `reference/blender/source/blender/editors/space_action/action_select.cc:675-703`
+ * (audit-fix Slice 6.B cite correction: pre-fix `:695` was off — the
+ * function closes at line 703 with the `tweak` `PROP_SKIP_SAVE` setup
+ * at lines 700-702):
  *
  *   ot->name = "Box Select";
  *   ot->idname = "ACTION_OT_select_box";
@@ -40,12 +43,23 @@
  *          Y-major → `BORDERSEL_CHANNELS` (all keys in selected rows
  *          regardless of time).
  *   5. Call `box_select_action(&ac, rect, mode, selectmode)` (line 665) —
- *      defined at `action_select.cc:527-598`; walks the visible
+ *      defined at `action_select.cc:527-599` (audit-fix cite correction:
+ *      off-by-1, closing brace at 599 not 598); walks the visible
  *      bAnimListElem and per-element invokes `box_select_elem`
  *      (line 456-525) which dispatches by `ale->type` and ultimately
  *      flips `bezt->f2 & SELECT` via the SS-equivalent of
- *      `select_bezier_add` / `select_bezier_subtract`
- *      (`keyframes_edit.cc:1523` / `:1545`).
+ *      `select_bezier_add` (`keyframes_edit.cc:1523-1543` — audit-fix
+ *      cite correction: pre-fix `:1532` truncated the function body
+ *      mid-conditional, missing the `BEZT_SEL_ALL` else-branch at
+ *      lines 1538-1540) / `select_bezier_subtract`
+ *      (`keyframes_edit.cc:1545`). `box_select_action` calls
+ *      `memset(&sel_data.ked, 0, ...)` at line 563 → `iterflags=0` →
+ *      the `KEYFRAME_ITER_INCL_HANDLES` if-branch at `:1528` is NEVER
+ *      taken in the box-select path; control always falls through to
+ *      `BEZT_SEL_ALL(bezt)` at line 1539. So SS's `FULL_SELECT` write
+ *      (center + left + right all true) is byte-faithful to the
+ *      ACTUAL box-select code path, even though the if-branch above
+ *      it could write only a single handle in other call paths.
  *
  * **Invoke body** — `actkeys_box_select_invoke` at `action_select.cc:603-622`:
  *
@@ -97,11 +111,46 @@
  *
  * # SS deviations
  *
- * **None new this slice.** Inherits SS DEVIATION 1 from Slice 6.A
- * (Ctrl+LMB on a tick = deselect; here, Ctrl+LMB-drag = subtract-
- * from-selection, which is the BLENDER-FAITHFUL behavior — so the
- * drag binding stays in line with Blender while the click binding
- * is the SS deviation. No conflict at the drag layer.)
+ * **2 new this slice** (audit-fix surfaced both as semantic gaps
+ * that needed honest documentation rather than silent acceptance):
+ *
+ * - **DEV 2 (Phase 6)** — INCLUSIVE time-range bounds vs Blender's
+ *   STRICT inequality. `computeBoxHits` accepts a tick when
+ *   `kf.time >= lo && kf.time <= hi`. Blender's `ok_bezier_framerange`
+ *   at `keyframes_edit.cc:559-567` uses `> ked->f1 && < ked->f2`
+ *   (STRICT inequality on BOTH sides — a tick whose time falls
+ *   EXACTLY on a rect boundary is REJECTED in Blender, ACCEPTED in
+ *   SS). The SS choice is the modern UI convention (marquee rect
+ *   boundaries are usually treated as inclusive); the Blender choice
+ *   stems from C floating-point edge-case avoidance. Functional
+ *   divergence is small (touched only by pixel-perfect-aligned ticks)
+ *   but real. Documented as honest deviation; tests assert the
+ *   inclusive behavior. Pre-audit the docstring fabricated a cite
+ *   `action_select.cc:567 BLI_rcti_isect_pt_v` to claim Blender's
+ *   semantic matched SS — that line is actually the closing brace
+ *   of `ok_bezier_framerange` and the function's body uses STRICT
+ *   inequality, not inclusive. Cite-fix applied.
+ *
+ * - **DEV 3 (Phase 6)** — Axis-range mode NOT shipped in 6.B.
+ *   Blender's Alt+B path (`blender_default.py:2664-2665`) sets
+ *   `axis_range=True`; `actkeys_box_select_exec` at lines 645-662
+ *   then picks `ACTKEYS_BORDERSEL_FRAMERANGE` (X-major rect) or
+ *   `ACTKEYS_BORDERSEL_CHANNELS` (Y-major rect). SS ships ALLKEYS
+ *   mode only; Alt+B is unbound. Scope-deferred to a follow-on
+ *   slice (target: 6.B.1 axis-range polish). The `applyBoxSelect`
+ *   substrate doesn't need changes for axis-range — only the JSX
+ *   layer needs to (a) honor Alt+B in the key handler and (b)
+ *   convert the rect into time-only or rows-only hits when in
+ *   FRAMERANGE / CHANNELS mode. Pre-audit the docstring claimed
+ *   "None new this slice" while documenting the deferral — that
+ *   contradiction tripped Rule №2 (a deferral that isn't a numbered
+ *   deviation IS migration baggage in disguise).
+ *
+ * Inherits SS DEVIATION 1 from Slice 6.A (Ctrl+LMB on a tick =
+ * deselect; here, Ctrl+LMB-drag = subtract-from-selection, which IS
+ * BLENDER-FAITHFUL — so the drag binding stays in line with Blender
+ * while the click binding is the SS deviation. No conflict at the
+ * drag layer.)
  *
  * # Cross-references
  *
@@ -114,14 +163,22 @@
  *     (`actkeys_box_select_invoke`)
  *   - `reference/blender/source/blender/editors/space_action/action_select.cc:624-673`
  *     (`actkeys_box_select_exec`)
- *   - `reference/blender/source/blender/editors/space_action/action_select.cc:675-695`
- *     (`ACTION_OT_select_box` operator registration)
- *   - `reference/blender/source/blender/editors/space_action/action_select.cc:527-598`
- *     (`box_select_action` — the in-rect walker)
+ *   - `reference/blender/source/blender/editors/space_action/action_select.cc:675-703`
+ *     (`ACTION_OT_select_box` operator registration; closing brace
+ *     at 703 — audit-fix cite correction from `:695`)
+ *   - `reference/blender/source/blender/editors/space_action/action_select.cc:527-599`
+ *     (`box_select_action` — the in-rect walker; closing brace at
+ *     599 — audit-fix cite correction from `:598`)
  *   - `reference/blender/source/blender/editors/space_action/action_select.cc:441-446`
  *     (`ACTKEYS_BORDERSEL_*` enum — ALLKEYS / FRAMERANGE / CHANNELS)
- *   - `reference/blender/source/blender/editors/animation/keyframes_edit.cc:1523-1532`
- *     (`select_bezier_add` — per-bezt all-3-handles set helper)
+ *   - `reference/blender/source/blender/editors/animation/keyframes_edit.cc:1523-1543`
+ *     (`select_bezier_add` — full function body; audit-fix cite
+ *     correction from `:1532`. Box-select-path always hits the
+ *     `BEZT_SEL_ALL` else-branch at line 1539 because
+ *     `box_select_action` memsets ked → iterflags=0)
+ *   - `reference/blender/source/blender/editors/animation/keyframes_edit.cc:559-567`
+ *     (`ok_bezier_framerange` — Blender's STRICT-inequality time
+ *     test; SS DEVIATION 2 deviates to inclusive)
  *   - `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:2662-2671`
  *     (`km_dopesheet` box_select bindings)
  *
@@ -342,9 +399,15 @@ function handlesEqual(a, b) {
  * already-Y-filtered rows. The caller is responsible for the Y
  * filtering (DOM row geometry → rows whose bounding-box Y intersects
  * the drag rect); this helper walks each row's keyforms and emits one
- * `TickRef` per keyform whose time falls in `[tMin, tMax]` (inclusive
- * on both ends — matches Blender's `BLI_rcti_isect_pt_v` semantic at
- * `action_select.cc:567` which uses inclusive integer-coord bounds).
+ * `TickRef` per keyform whose time falls in `[tMin, tMax]`.
+ *
+ * **INCLUSIVE bounds (SS DEVIATION 2)** — a tick at exactly `tMin`
+ * or exactly `tMax` IS selected. Blender's `ok_bezier_framerange` at
+ * `keyframes_edit.cc:559-567` uses STRICT inequality (`> ked->f1 &&
+ * < ked->f2`) — a tick on the boundary would be REJECTED. SS chose
+ * inclusive for the modern UI convention; documented as honest
+ * deviation. See module docstring DEV 2 for rationale + cite-fix
+ * history.
  *
  * Rows with an empty / missing fcurveId are skipped (synthetic /
  * header rows have no selection identity). Rows with a missing /
