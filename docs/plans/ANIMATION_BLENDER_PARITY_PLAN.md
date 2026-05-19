@@ -2118,27 +2118,81 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 
 ---
 
-### Phase 7 — Insert Keyframe + Keying Sets (3–5 days)
+### Phase 7 — Insert Keyframe + Keying Sets ✅ SHIP-COMPLETE 2026-05-20 (~2 days, no schema bump)
 
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-**Status:** **Slices 7.A + 7.B + 7.C + 7.D SHIPPED 2026-05-19; 7.E
-SHIPPED 2026-05-20** (`2ebefe4` + `768d25c` + `5bd0982` + `de91759` +
-`4643dc3` + `57f2bb2` + `0112b9e` + `26e53ce` + `3022543` + `7cd7e74`
-+ `49a4239` + `fa6b462`). Registry + Insert Keyframe kernel + I-key
-menu UI + auto-key mode parity + K-key first-use toast complete. Slice
-remaining: **7.F** (test sweep + Phase 7 exit gate).
+**Status:** **PHASE 7 SHIP-COMPLETE 2026-05-20.** All 6 slices
+green: 7.A registry + 7.B Insert Keyframe kernel + 7.C I-key menu +
+7.D auto-key mode parity + 7.E K-key first-use toast + 7.F test
+sweep + exit gate. Plan §7.F's 5 prescribed test files are
+subsumed by 5 existing suites (370 asserts total — audit at
+`docs/plans/ANIMATION_PHASE_7_COVERAGE_AUDIT.md`). Phase aggregate
+at `docs/plans/ANIMATION_PHASE_7_AGGREGATE.md`; user-facing
+verification at `docs/plans/ANIMATION_PHASE_7_MANUAL_CHECKLIST.md`.
+
+**Commit chain.** 17 commits: `2ebefe4` + `768d25c` + `3d0b049` +
+`5bd0982` + `de91759` + `577ebdd` + `4494c88` + `4643dc3` + `57f2bb2`
++ `0112b9e` + `26e53ce` + `3022543` + `7cd7e74` + `49a4239` + `fa6b462`
++ `e9ccfba` + `4991662` + this 7.F commit.
 
 **Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
 REGRESSION** through 7.A (2 HIGH-F) + 7.B (1 HIGH-F), then **STREAK
 RESTARTED at 7.C** (0 / 0 / 0 across 9 cites), **EXTENDED to 7.D**
-(0 / 0 / 0 across 9 more cites), and **EXTENDED again to 7.E**
-(0 / 0 / 0 across 3 carry-over cites). Phase 7 cite-discipline now:
-3 slices clean post-regression. Memory rules 9 (re-OPEN every cite),
-10 (literal-source-value for constants), and 11 ("comment says X"
-promotes X to byte-quotation) — added across 7.A/7.B — held for 7.C,
-7.D, and 7.E.
+(0 / 0 / 0 across 9 more cites), **EXTENDED to 7.E** (0 / 0 / 0
+across 3 carry-over cites), and **HELD at 7.F** (no new cites —
+meta-work). Final Phase 7 streak: **4 consecutive clean ships
+post-regression**. Memory rules 9 (re-OPEN every cite), 10
+(literal-source-value for constants), and 11 ("comment says X"
+promotes X to byte-quotation) — added across 7.A/7.B — held for
+7.C, 7.D, 7.E, 7.F.
+
+#### 7.F — Test sweep + Phase 7 exit gate ✅ SHIPPED 2026-05-20
+
+**Substrate.** 0 new code files; 3 new docs + this banner update:
+
+- `docs/plans/ANIMATION_PHASE_7_COVERAGE_AUDIT.md` — per-row
+  subsumption proof that plan §7.F's 5 prescribed test filenames
+  (`test_keyingSet_builtin.mjs`, `test_keyingSet_userDefined.mjs`,
+  `test_insertKeyframe_replace.mjs`,
+  `test_insertKeyframe_onlyNeeded.mjs`,
+  `test_autoKey_keyingSet.mjs`) are subsumed by 5 existing suites
+  at strictly higher coverage breadth. 370 asserts total
+  (144 + 87 + 69 + 48 + 22). Re-verified `npm run test:keyingSets`
+  + `test:insertKeyframe` + `test:keyingSetMenu` +
+  `test:autoKeyDispatch` + `test:kKeyFirstUseToast` all green
+  pre-commit on `master @ 4991662`.
+- `docs/plans/ANIMATION_PHASE_7_MANUAL_CHECKLIST.md` — user-facing
+  20–30 minute end-to-end verification covering §1 keying-set
+  registry surfaces (via I-menu), §2 Insert Keyframe kernel happy
+  paths, §3 I-key menu UI semantics, §4 auto-key mode dropdown +
+  all 3 trigger-site behaviors, §5 K-key first-use toast +
+  `__ssAutoKey` skip, §6 cross-slice gate semantics. Models after
+  `ANIMATION_PHASE_6_MANUAL_CHECKLIST.md` structure.
+- `docs/plans/ANIMATION_PHASE_7_AGGREGATE.md` — phase rollup
+  covering all 6 slices with API surface, sparse-field schema,
+  keybindings, per-slice substrate summary, 12 new DEVIATIONs
+  (20–31), cite-discipline narrative, 5 audit sweeps (#78–#82),
+  4 architectural patterns established, full commit chain, queued
+  polish slices.
+
+**Coverage audit decision.** Zero new test files needed. The 5
+plan-prescribed names are subsumed; the substrate work for 7.F is
+documentation + the exit gate. Per Rule №2, the prescribed names
+are documented as "subsumed under existing names" in the audit so
+a future maintainer searching for the prescribed name lands on the
+pointer to the actual suite.
+
+**No new DEVs.** No new audit sweep (7.F is meta-work; no behavior
+surface to audit).
+
+**Known gaps documented (deferred to §7.G+ polish slices):**
+- K-rebind preference (plan §7.E option (b) — needs legacy K-key
+  fan-out extraction).
+- Param-row auto-key bypass (`ParamRow.jsx` ignores
+  `project.autoKeyMode`).
+- Active-set UI (no menu item for picking active keying set yet).
 
 #### 7.E — K-key first-use toast ✅ SHIPPED 2026-05-20
 
