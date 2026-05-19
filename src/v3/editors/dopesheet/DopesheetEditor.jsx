@@ -356,6 +356,14 @@ export function DopesheetEditor() {
       if (trackArea) {
         try { trackArea.releasePointerCapture(e.pointerId); } catch { /* noop */ }
       }
+      // Audit-fix Slice 6.F.1 MED-A1: pointer capture during box-drag
+      // suppresses Row's onPointerLeave events. `hoveredFcurveIdRef`
+      // can be left pointing at the pre-drag hovered row even after the
+      // pointer has moved well away. Clearing at commit ensures the
+      // next M-key press resolves via the selection-fallback path
+      // (DEV 17) rather than acting on a stale hover. The pointer-enter
+      // re-fires correctly when the pointer next moves over a row.
+      hoveredFcurveIdRef.current = null;
       if (!drag || !trackArea) return;
       const dx = Math.abs(drag.curX - drag.startX);
       const dy = Math.abs(drag.curY - drag.startY);
@@ -809,7 +817,7 @@ export function DopesheetEditor() {
 
   // ── Slice 6.F.1 — Mute hovered/selected channel (M key) ───────────────
   // Ports Blender's `ANIM_OT_channels_setting_toggle` operator at
-  // `anim_channels_edit.cc:3090-3140`, parameterised for
+  // `anim_channels_edit.cc:3090-3114`, parameterised for
   // `ACHANNEL_SETTING_MUTE` (`ED_anim_api.hh:669`). Existing bulk-mute
   // kernel `applyChannelMuteSelected` (Slice 5.O, in `fcurveMute.js`)
   // already byte-faithfully ports `setflag_anim_channels` at
@@ -914,6 +922,12 @@ export function DopesheetEditor() {
       // the window so the suppression contract holds across the
       // commit's synchronous tail.
       grabActiveRef.current = false;
+      // Audit-fix Slice 6.F.1 MED-A1 (sister to box-drag commit fix
+      // in handleTrackPointerUp): grab modal also pointer-captures via
+      // the window-level listeners, suppressing Row's onPointerLeave
+      // for the duration. Clear hoveredFcurveIdRef so post-grab M-key
+      // doesn't act on a stale hover from before the grab started.
+      hoveredFcurveIdRef.current = null;
       setGrabState(null);
       // Audit-fix Slice 6.D HIGH-A2: snapshot handles ONCE and reuse
       // for the no-op check + the applyTimeTranslate input + the
@@ -948,6 +962,10 @@ export function DopesheetEditor() {
       // tail-mutation so the asymmetry isn't load-bearing, but keep
       // both paths symmetric to avoid surprise.
       grabActiveRef.current = false;
+      // Audit-fix Slice 6.F.1 MED-A1: same hoveredFcurveIdRef clear as
+      // commit path — pointer capture during the grab modal suppresses
+      // Row's onPointerLeave events.
+      hoveredFcurveIdRef.current = null;
       setGrabState(null);
     };
     /** @param {MouseEvent} e */

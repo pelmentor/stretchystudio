@@ -14,7 +14,7 @@
  * # What this slice ports
  *
  * Blender's `ANIM_OT_channels_setting_toggle` operator at
- * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:3090-3140`,
+ * `reference/blender/source/blender/editors/animation/anim_channels_edit.cc:3090-3114`,
  * parameterised for `ACHANNEL_SETTING_MUTE` (the per-FCurve mute bit,
  * enum entry at
  * `reference/blender/source/blender/editors/include/ED_anim_api.hh:669`):
@@ -50,12 +50,20 @@
  *     ("anim.channels_setting_enable",  {"type": 'W', "value": 'PRESS', "shift": True, "ctrl": True}, None),
  *     ("anim.channels_setting_disable", {"type": 'W', "value": 'PRESS', "alt": True}, None),
  *
- * The default operator `type` enum at `anim_channels_edit.cc:3138` is
- * `ACHANNEL_SETTING_PROTECT` (NOT mute) — Blender's UI typically
- * dispatches Mute via a context menu / Channels menu pick that sets
- * `type='MUTE'`, not via Shift+W alone. SS Slice 5.O wired Shift+W
- * directly to mute (skipping the type-picker menu — Slice 5.O Deviation
- * 1) because SS only supports `fcurve.mute` today, not `fcurve.protected`.
+ * **Audit-fix Slice 6.F.1 LOW-F2** (cite-precision tightening): the
+ * operator's `type` enum default at `anim_channels_edit.cc:3113` is
+ * `0` (a sentinel — `prop_animchannel_settings_types` at `:2907-2911`
+ * holds `{PROTECT=1, MUTE=2}`, so default-0 matches no item). The
+ * `invoke = WM_menu_invoke` at `:3100` pops the enum picker so the
+ * user selects MUTE or PROTECT at use time. (Prior to audit-fix this
+ * paragraph cited `:3138`, which is the SISTER operator
+ * `ANIM_OT_channels_editable_toggle`'s default — that one DOES default
+ * to `ACHANNEL_SETTING_PROTECT`. Different operator, different default.
+ * Behavioral claim — "Shift+W alone doesn't directly toggle mute" —
+ * is correct; only the supporting cite needed tightening.) SS Slice
+ * 5.O wired Shift+W directly to mute (skipping the type-picker menu —
+ * Slice 5.O Deviation 1) because SS only supports `fcurve.mute` today,
+ * not `fcurve.protected`.
  *
  * Slice 6.F.1 binds **M** in the DOPESHEET (not the sidebar). This
  * hotkey choice does NOT match Blender's `Shift+W` — it matches the
