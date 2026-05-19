@@ -25,7 +25,7 @@ import { create } from 'zustand';
 
 /**
  * @typedef {Object} EditMenuState
- * @property {'merge'|'apply'|'snap'|'mirrorAxis'|'clearParent'|'setOrigin'|'canvasContextMenu'|null} kind
+ * @property {'merge'|'apply'|'snap'|'mirrorAxis'|'clearParent'|'setOrigin'|'canvasContextMenu'|'keyingSet'|null} kind
  * @property {{x:number, y:number}|null} cursor      - client-px (popover anchor)
  * @property {{x:number, y:number}|null} canvasCursor - canvas-px (mergeAtCursor target)
  * @property {(args: {cursor:{x:number,y:number}, canvasCursor?:{x:number,y:number}|null}) => void} openMerge
@@ -35,6 +35,7 @@ import { create } from 'zustand';
  * @property {(args: {cursor:{x:number,y:number}}) => void} openClearParent
  * @property {(args: {cursor:{x:number,y:number}}) => void} openSetOrigin
  * @property {(args: {cursor:{x:number,y:number}}) => void} openCanvasContextMenu
+ * @property {(args: {cursor:{x:number,y:number}}) => void} openKeyingSet
  * @property {() => void} close
  */
 
@@ -57,6 +58,11 @@ export const useEditMenuStore = create((set) => ({
     set({ kind: 'setOrigin', cursor, canvasCursor: null }),
   openCanvasContextMenu: ({ cursor }) =>
     set({ kind: 'canvasContextMenu', cursor, canvasCursor: null }),
+  // Phase 7 Slice 7.C -- I-key keying-set picker. Mirror of openApply
+  // shape (cursor only); the menu's content is driven by
+  // listKeyingSets(project) + pickDefaultKeyingSet at render time.
+  openKeyingSet: ({ cursor }) =>
+    set({ kind: 'keyingSet', cursor, canvasCursor: null }),
   close: () =>
     set({ kind: null, cursor: null, canvasCursor: null }),
 }));

@@ -60,6 +60,10 @@ import * as wpNormalize from './weightPaint/normalize.js';
 // `op.exec(...)` call site).
 import * as poseClear from './pose/clearTransform.js';
 import * as poseMirror from './pose/mirror.js';
+// Animation Phase 7 Slice 7.C -- Insert Keyframe operators (I-key
+// menu + per-set apply). Eager-import per the same async-leak rule
+// as 7.A/B/C above (the dispatcher fires `op.exec(...)` without await).
+import { registerInsertKeyOperators } from './insertKey.js';
 import { duplicate } from './edit/duplicate.js';
 import {
   selectLinkedFromVertex,
@@ -1992,6 +1996,12 @@ function registerBuiltins() {
       }
     },
   });
+
+  // Animation Phase 7 Slice 7.C -- Insert Keyframe (I-key menu +
+  // per-set apply). Delegates registration to insertKey.js so the
+  // wiring lives next to the live-value resolver + applyKeyingSet
+  // call site rather than ballooning this registry file further.
+  registerInsertKeyOperators(registerOperator, lastMousePos);
 }
 
 /** @type {{x:number, y:number}} */

@@ -94,6 +94,9 @@ const SetOriginMenu = lazy(() =>
 const CanvasContextMenu = lazy(() =>
   import('./CanvasContextMenu.jsx').then((m) => ({ default: m.CanvasContextMenu }))
 );
+const KeyingSetMenu = lazy(() =>
+  import('./KeyingSetMenu.jsx').then((m) => ({ default: m.KeyingSetMenu }))
+);
 const CircleSelectOverlay = lazy(() =>
   import('../editors/viewport/overlays/CircleSelectOverlay.jsx').then(
     (m) => ({ default: m.CircleSelectOverlay }),
@@ -151,6 +154,7 @@ export function AppShell() {
           {editMenuKind === 'clearParent' && <ClearParentMenu />}
           {editMenuKind === 'setOrigin' && <SetOriginMenu />}
           {editMenuKind === 'canvasContextMenu' && <CanvasContextMenu />}
+          {editMenuKind === 'keyingSet' && <KeyingSetMenu />}
           {circleSelectActive && <CircleSelectOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing

@@ -356,6 +356,26 @@ export const DEFAULT_KEYMAP = {
   'Meta+KeyC':        'pose.copy',
   'Ctrl+KeyV':        'pose.paste',
   'Meta+KeyV':        'pose.paste',
+
+  // Animation Phase 7 Slice 7.C -- Insert Keyframe menu (`I`).
+  //
+  // Plan §7.C ships I as the always-menu hotkey (every press shows
+  // the KeyingSetMenu popover with the default-picked set
+  // highlighted). The legacy "K = insert all properties" handler at
+  // `CanvasViewport.jsx:1457-1633` stays untouched in 7.C scope per
+  // plan §7.E's K-key migration carve-out.
+  //
+  // Blender chord parity divergence (documented in
+  // `src/v3/operators/insertKey.js`'s header): Blender binds I to
+  // `anim.keyframe_insert` (uses active KS direct; menu only if
+  // none) at `keymap_data/blender_default.py:4561`, and K to
+  // `anim.keyframe_insert_menu` with `always_prompt=True` at `:4536`.
+  // The SS plan inverts this because the legacy K-key already keys
+  // every visible property -- migrating K to "menu only" without a
+  // user-facing rebind UI would break muscle memory for the
+  // animation workflow. Plan §7.E will surface the toast +
+  // preference for the rebind.
+  'KeyI': 'insertKey.menu',
 };
 
 /**
