@@ -2132,21 +2132,28 @@ subsumed by 5 existing suites (370 asserts total — audit at
 at `docs/plans/ANIMATION_PHASE_7_AGGREGATE.md`; user-facing
 verification at `docs/plans/ANIMATION_PHASE_7_MANUAL_CHECKLIST.md`.
 
-**Commit chain.** 17 commits: `2ebefe4` + `768d25c` + `3d0b049` +
+**Commit chain.** 19 commits: `2ebefe4` + `768d25c` + `3d0b049` +
 `5bd0982` + `de91759` + `577ebdd` + `4494c88` + `4643dc3` + `57f2bb2`
 + `0112b9e` + `26e53ce` + `3022543` + `7cd7e74` + `49a4239` + `fa6b462`
-+ `e9ccfba` + `4991662` + this 7.F commit.
++ `e9ccfba` + `4991662` + `71b835b` (7.F substrate) + this 7.F
+audit-fix.
 
 **Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
 REGRESSION** through 7.A (2 HIGH-F) + 7.B (1 HIGH-F), then **STREAK
 RESTARTED at 7.C** (0 / 0 / 0 across 9 cites), **EXTENDED to 7.D**
 (0 / 0 / 0 across 9 more cites), **EXTENDED to 7.E** (0 / 0 / 0
-across 3 carry-over cites), and **HELD at 7.F** (no new cites —
-meta-work). Final Phase 7 streak: **4 consecutive clean ships
-post-regression**. Memory rules 9 (re-OPEN every cite), 10
-(literal-source-value for constants), and 11 ("comment says X"
-promotes X to byte-quotation) — added across 7.A/7.B — held for
-7.C, 7.D, 7.E, 7.F.
+across 3 carry-over cites), then **BROKEN AT 7.F SUBSTRATE** via an
+inherited carry-over fab (the `anim_sys.cc:1473-1490` cite from
+7.A's audit-fix memory was propagated into 3 new doc sites in 7.F's
+substrate without rule-9 re-OPEN — sweep #83-F caught it
+retroactively). 7.F audit-fix re-located the correct cite at
+`animrig/intern/fcurve.cc:149-164` (`replace_bezt_keyframe_ypos`
+with literal comment "*Just change the values when replacing, so as
+to not overwrite handles.*"). Final Phase 7 streak: **3 consecutive
+clean ships** (7.C + 7.D + 7.E). Memory rules 9 (re-OPEN every cite),
+10 (literal-source-value), and 11 ("comment says X" promotes to
+byte-quotation) — generalised in 7.F audit-fix to explicitly cover
+doc-level cite carry-over, not just substrate authoring.
 
 #### 7.F — Test sweep + Phase 7 exit gate ✅ SHIPPED 2026-05-20
 

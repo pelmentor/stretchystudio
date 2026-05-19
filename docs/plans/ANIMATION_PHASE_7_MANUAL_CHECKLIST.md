@@ -432,3 +432,11 @@ behavior is independently green per §0.
   keying set from the I-menu (the registry supports it; the dev
   console can write it; no menu item yet). Tracked as a §7.F+
   polish slice if user wants it.
+- **Toast description label drift** (audit-fix M-1 sweep #83):
+  the K-key toast description says **"All Parameters"** while the
+  I-menu displays the id label **"AllParams"** for the same
+  built-in. Inconsistency is intentional (the description is
+  user-friendly prose; the menu shows raw ids), but a polish slice
+  could align them either by adding a `displayLabel` field to the
+  registry or by changing the registry label to "All Parameters".
+  Tracked as a §7.G+ polish slice.

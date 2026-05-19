@@ -3,8 +3,8 @@
 **Session date:** 2026-05-20.
 **Slice:** 7.F — Coverage audit + manual checklist + Phase 7
 aggregate + plan banner update. **No new code.**
-**Commits:** this commit (substrate-and-close-out in one — meta-work
-slice).
+**Commits:** `71b835b` (substrate-and-close-out — meta-work slice)
++ audit-fix commit (sweep #83 + #83-F findings).
 **Branch:** master.
 **Schema:** v42 (unchanged; Phase 7 ships no schema bumps).
 **Status:** **PHASE 7 SHIP-COMPLETE 6/6 SLICES.**
@@ -74,25 +74,39 @@ Typecheck (`npm run typecheck`) clean.
 
 ---
 
-## Cite-discipline arc — STREAK HELD AT 3 (no new cites)
+## Cite-discipline arc — STREAK BROKEN AT 7.F SUBSTRATE; FIXED IN AUDIT-FIX
 
 | Slice | Pre-audit fabs            | Post-audit | Notes                                      |
 |-------|---------------------------|------------|--------------------------------------------|
-| 7.A   | 2 HIGH-F + 2 MED          | 0          | Streak BROKEN (from Phase 6's 4-clean)     |
-| 7.B   | 1 HIGH-F + 1 MED          | 0          | Multi-slice regression                     |
+| 7.A   | 2 HIGH-F + 2 MED          | 1 HIGH-F leaked retroactively | Streak BROKEN; "post-fix" cite itself fab — discovered in 7.F sweep #83-F |
+| 7.B   | 1 HIGH-F + 1 MED          | 0          | Multi-slice regression; inherited 7.A post-fix unwittingly |
 | 7.C   | 0 / 0 / 0 across 9 cites  | 0          | Streak RESTARTED                           |
 | 7.D   | 0 / 0 / 0 across 9 cites  | 0          | Streak EXTENDED 1 → 2                      |
 | 7.E   | 0 / 0 / 0 across 3 carry  | 0          | Streak EXTENDED 2 → 3                      |
-| **7.F** | **0 cites (meta-work)** | **0**      | **No new cites; streak HELD at 3**         |
+| **7.F substrate** | **0 new cites; inherited 7.A post-fix fab into 3 doc sites without rule-9 re-OPEN** | **1 HIGH-F + 1 MED-F + 1 LOW-F** caught in sweep #83-F | **Streak BROKEN at 7.F substrate** — meta-work still carries rule 9 obligation for inherited cites |
+| **7.F audit-fix** | n/a — fix sweep   | 0          | All 3 fidelity findings fixed; correct cite re-located via grep+walk |
 
-7.F is meta-work — documentation + exit gate + zero new code. The
-coverage-audit doc cites existing test files in the SS repo (not
-Blender source); no Blender-fidelity surface to fabricate.
+**7.F substrate** authored 3 new docs that all inherited the
+`anim_sys.cc:1473-1490` cite from 7.A's audit-fix memory without
+re-OPEN. This violated rule 9 in spirit (no behavior cited from
+prior memory should ship without re-verification). Sweep #83-F
+caught the leak: opening the file at those lines revealed
+`nlaevalchan_get_default_values()` (NLA mix-mode dispatch) — no
+relationship to `replace_keys` or handle preservation.
 
-The plan banner edit + phase aggregate doc cite the prior 5
-substrate slices' commits and the existing test suites — all
-verified pre-commit via direct file open (rule 9 still holds even
-when the cites are internal).
+**7.F audit-fix** re-located the correct cite via
+grep-`HD_FREE`-then-walk-keyframing-call-sites:
+`animrig/intern/fcurve.cc:149-164` — the `replace_bezt_keyframe_ypos`
+function. Literal comment at `:151`: *"Just change the values when
+replacing, so as to not overwrite handles."* This is the
+byte-faithful source for DEV 28 (free bezier handle preservation
+across replace).
+
+**Lesson generalised** to a feedback memory upgrade: rule 9 must
+explicitly cover doc-level cite carry-over, not just substrate
+authoring. Meta-work slices that ship documentation referencing
+inherited cites must re-OPEN each cite before commit, identical to
+substrate cite verification.
 
 ---
 
@@ -110,14 +124,21 @@ Net 7.F: ~890 doc LOC + 0 code LOC + 0 test asserts + 0 new DEVs.
 
 ---
 
-## Commits this slice (1)
+## Commits this slice (2)
 
 ```
-[this commit] docs(plan): Phase 7 Slice 7.F SHIPPED — Test sweep + Phase 7 exit gate (SHIP-COMPLETE 6/6)
+71b835b docs(plan): Phase 7 Slice 7.F SHIPPED — Test sweep + Phase 7 exit gate (SHIP-COMPLETE 6/6)
+[this commit] fix(audit): Phase 7 Slice 7.F audit-fix — 1 HIGH-F + 1 MED-F + 1 LOW-F + 2 HIGH-A + 1 MED-A
 ```
 
-Substrate-and-close-out in one commit — there's no code surface to
-audit-fix, so the slice doesn't need a separate audit-fix commit.
+Substrate ship was scoped as "meta-work, no audit needed", but the
+dual-audit pass per `feedback_dual_audit_after_phase_ship`
+discovered the substrate inherited a fab cite from 7.A's audit-fix
+memory (`anim_sys.cc:1473-1490` propagated into 3 new doc sites
+without rule-9 re-OPEN), plus 2 internal-architecture issues
+(off-by-one commit count; streak counter inconsistency) and 1 MED
+(manual checklist known-gap omission). All 6 findings fixed in the
+audit-fix commit.
 
 ---
 
@@ -162,8 +183,11 @@ sweep + memory audit + per-tick telemetry counters.
   + memory update + this close-out.
 - **Schema:** v42 (unchanged).
 - **Phase 7 progress:** **6/6 SHIP-COMPLETE.** Phase 7 closes here.
-- **Phase 7 commit chain:** 17 commits opened with `2ebefe4`
-  (7.A substrate, 2026-05-19) and closing with this 7.F commit
+- **Phase 7 commit chain:** 19 commits opened with `2ebefe4`
+  (7.A substrate, 2026-05-19) and closing with this 7.F audit-fix
   (2026-05-20).
-- **Cite-discipline:** Phase 7 final streak = 4 consecutive clean
-  ships (7.C + 7.D + 7.E + 7.F). Rules 9 + 10 + 11 durably holding.
+- **Cite-discipline:** Phase 7 final streak = 3 consecutive clean
+  ships (7.C + 7.D + 7.E); 7.F substrate broke it via inherited
+  carry-over fab; 7.F audit-fix resolved it. Rules 9 + 10 + 11
+  durably holding; rule 9 generalised to cover doc-level cite
+  carry-over.

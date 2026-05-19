@@ -77,11 +77,18 @@ and the two session aggregates in
 new test (`scripts/test/test_keyingSets.mjs` 144 asserts after
 fixes).
 
-**Built-in sets registered.** 7 built-ins matching Blender's canonical
-menu order (`keyingsets_builtins.py:647-670`): `Available`,
-`Location`, `Rotation`, `Scaling`, `LocRotScale`, `BlendShape`,
-`AllParams`. `BlendShape` + `AllParams` are SS-original (DEV 24 +
-DEV 25).
+**Built-in sets registered.** 7 built-ins. The 5 ported entries
+preserve the relative order they appear in Blender's
+`keyingsets_builtins.py:647-670` `classes` tuple (Available →
+Location → Rotation → Scaling → LocRotScale; SS skips Blender's
+LocRot / LocRotScaleCProp / LocScale / RotScale / Delta* / Visual*
+/ BendyBones / WholeCharacter[Selected] entries — 18 omitted).
+`BlendShape` + `AllParams` are SS-original (DEV 24 + DEV 25) and
+sit at the tail of the menu.
+
+> Audit-fix LOW-F sweep #83-F (2026-05-20): pre-fix wording
+> "matches Blender canonical menu order" overclaimed — the cite
+> range points to the full 23-entry tuple from which SS subsets.
 
 **DEVIATIONS added.** DEV 20 (Scaling id vs Scale label), DEV 21
 (per-component Scaling for bones), DEV 22 (Euler-only Rotation),
@@ -110,9 +117,12 @@ with `{ resolveValue: (path) => number }` callback (closes the
 live param-values from `paramValuesStore`).
 
 **Flag semantics.** `INSERTKEY_FLAGS` frozen object mirrors Blender's
-bit values at `DNA_anim_enums.h:503-523`: `NOFLAGS=0`,
-`NEEDED=1<<0=1`, `REPLACE=1<<4=16`, `AVAILABLE=1<<10=1024`. Combinable
-via bitwise OR.
+bit values at `DNA_anim_enums.h:501-523`: `NOFLAGS=0` (`:501`),
+`NEEDED=1<<0=1` (`:503`), `REPLACE=1<<4=16` (`:511`),
+`AVAILABLE=1<<10=1024` (`:523`). Combinable via bitwise OR.
+
+> Audit-fix MED-F sweep #83-F (2026-05-20): pre-fix range was
+> `:503-523`, missing the `NOFLAGS=0` line at `:501`.
 
 **Per-channel result statuses.** `created-fcurve`, `inserted`,
 `replaced`, `skipped-needed`, `skipped-replace`, `skipped-available`,
@@ -122,8 +132,18 @@ via bitwise OR.
 DEV 27 (`__params__` paths route to `__scene__`'s action — closes
 "where do project-wide param fcurves live" question), DEV 28 (free
 bezier handle preservation across replace — matches Blender's
-`replace_keys` behavior at `anim_sys.cc:1473-1490`), DEV 29 (REPLACE
-no-fcurve falls through to `skipped-replace` rather than creating).
+`replace_bezt_keyframe_ypos` at `animrig/intern/fcurve.cc:149-164`,
+literal comment at `:151` *"Just change the values when replacing,
+so as to not overwrite handles."*), DEV 29 (REPLACE no-fcurve falls
+through to `skipped-replace` rather than creating).
+
+> Audit-fix HIGH-F sweep #83-F (2026-05-20): pre-fix cite was
+> `anim_sys.cc:1473-1490` (inherited from 7.A's audit-fix without
+> rule-9 re-OPEN). That range is inside
+> `nlaevalchan_get_default_values()` (NLA mix-mode dispatch) —
+> unrelated to replace_keys logic. The retroactive break means the
+> 7.A audit-fix's "post-fix" was itself fab; cite-discipline arc
+> below reflects this correction.
 
 **Audit sweep #79.** 1 HIGH-F + 1 MED + 5 LOW. **Cite-discipline
 regression confirmed multi-slice.** Rules 10 + 11 added (literal-
@@ -316,12 +336,13 @@ All 5 suites wired into the `npm test` master chain at
 
 | Slice | Pre-audit fabs            | Post-audit | Notes                                      |
 |-------|---------------------------|------------|--------------------------------------------|
-| 7.A   | 2 HIGH-F + 2 MED          | 0          | **Streak BROKEN** (from Phase 6's 4-clean) |
-| 7.B   | 1 HIGH-F + 1 MED          | 0          | Multi-slice regression confirmed           |
+| 7.A   | 2 HIGH-F + 2 MED          | 1 HIGH-F leaked retroactively | **Streak BROKEN** (from Phase 6's 4-clean); 7.A audit-fix's "post-fix" cite (`anim_sys.cc:1473-1490`) itself fab — discovered in 7.F audit-fix sweep #83-F |
+| 7.B   | 1 HIGH-F + 1 MED          | 0          | Multi-slice regression confirmed; inherited the 7.A post-fix fab unwittingly |
 | 7.C   | 0 / 0 / 0 across 9 cites  | 0          | **Streak RESTARTED**; rules 10+11 held     |
 | 7.D   | 0 / 0 / 0 across 9 cites  | 0          | **Streak EXTENDED 1 → 2**                  |
 | 7.E   | 0 / 0 / 0 across 3 carry  | 0          | **Streak EXTENDED 2 → 3**                  |
-| 7.F   | 0 cites (meta-work)       | 0          | Documentation only; no new cites           |
+| 7.F (substrate) | 0 new cites; inherited 7.A post-fix fab into 3 doc sites without rule-9 re-OPEN | **1 HIGH-F + 1 MED-F + 1 LOW-F** caught in own audit sweep | **Streak BROKEN at 7.F** — meta-work slices still carry rule 9 obligation to re-OPEN inherited cites |
+| 7.F (audit-fix) | n/a — fix sweep   | 0          | All 3 fidelity findings fixed; correct cite `animrig/intern/fcurve.cc:149-164` re-located via grep + walk |
 
 **Rules added during Phase 7:**
 - **Rule 9** (added during 7.A audit) — Re-OPEN every cite per
@@ -334,8 +355,20 @@ All 5 suites wired into the `npm test` master chain at
   X to byte-quotation. The comment is content; verify the content
   before quoting.
 
-Rules 9 + 10 + 11 held for 7.C, 7.D, 7.E (3 consecutive clean
-ships). Phase 7 cite-discipline regression is now resolved.
+**Rule 9 generalisation owed (from 7.F):** even meta-work slices
+that author no new cites must re-OPEN every inherited cite that
+they propagate into a new document. The 7.F substrate authored 3
+new docs that all inherited the `anim_sys.cc:1473-1490` cite from
+7.A's audit-fix memory without re-OPEN — sweep #83-F caught the
+leak retroactively. Track as a feedback memory upgrade: rule 9
+explicitly covers doc-level cite carry-over, not just substrate
+authoring.
+
+**Final Phase 7 cite-discipline:** 3-clean streak (7.C + 7.D + 7.E)
+post-regression; 7.F substrate broke it via inherited carry-over fab;
+7.F audit-fix resolved it. Net Phase 7: 3 ships clean, 3 ships had
+cite errors (7.A, 7.B, 7.F substrate), all errors fixed in same-day
+audit-fix commits.
 
 ---
 
@@ -387,7 +420,7 @@ All findings fixed in the same-day audit-fix commit per
 
 ---
 
-## Commits this phase (17 total)
+## Commits this phase (18 total)
 
 ```
 2ebefe4 feat(anim): Phase 7 Slice 7.A — Keying Set registry substrate
@@ -407,7 +440,8 @@ de91759 fix(audit): Phase 7 Slice 7.B audit-fix — 2 HIGH + 6 MED + 5 LOW
 fa6b462 fix(audit): Phase 7 Slice 7.E audit-fix — 2 MED + 2 LOW
 e9ccfba docs(plan): Phase 7 Slice 7.E SHIPPED — K-key first-use toast (streak EXTENDED 2→3)
 4991662 docs(plan): Session aggregate 2026-05-20 — Phase 7 Slices 7.C + 7.D + 7.E
-+ this commit (7.F substrate + close-out + this aggregate)
+71b835b docs(plan): Phase 7 Slice 7.F SHIPPED — Test sweep + Phase 7 exit gate (SHIP-COMPLETE 6/6)
+[this commit] fix(audit): Phase 7 Slice 7.F audit-fix — 1 HIGH-F + 1 MED-F + 1 LOW-F + 2 HIGH-A + 1 MED-A
 ```
 
 ---

@@ -118,8 +118,20 @@ Covers both implicit-replace (no flag) and explicit-REPLACE (flag bit)
 paths plus the epsilon-boundary case that a single-purpose test would
 likely have missed. §19's free-handle preservation is the audit-fix
 that validates SS doesn't smash user-authored bezier handles on
-replace — a behavior Blender's `replace_keys` likewise preserves at
-`anim_sys.cc:1473-1490`.
+replace — a behavior Blender preserves at
+`animrig/intern/fcurve.cc:149-164` (`replace_bezt_keyframe_ypos` —
+literal comment at `:151`: *"Just change the values when replacing,
+so as to not overwrite handles."*).
+
+> Audit-fix HIGH-F sweep #83-F (2026-05-20): pre-fix cite was
+> `anim_sys.cc:1473-1490` (inherited from 7.A's audit-fix without
+> re-OPEN per rule 9). That range is inside
+> `nlaevalchan_get_default_values()` (NLA mix-mode dispatch) — no
+> `replace_keys` symbol, no handle logic. Re-located via
+> grep-`HD_FREE`-then-walk-keyframing-call-sites in Slice 7.F audit.
+> The cite-discipline streak narrative through 7.A's audit-fix
+> (sweep #78) was retroactively broken when this slice's audit
+> re-verified the post-fix.
 
 ---
 
