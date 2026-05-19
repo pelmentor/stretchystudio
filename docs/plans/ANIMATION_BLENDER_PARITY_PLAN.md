@@ -1558,15 +1558,16 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E + **6.F.1** SHIPPED
-2026-05-19 (`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a`
-+ `f82e670` + `872a208` + `a79f431` + `1aaf0b3` + `554be56` + `21416c5`
-+ `1f15410`). 6.F.2 (solo) + 6.G remain (~3hr + ~1 short session
-respectively). 6.F was SPLIT into 6.F.1 (mute) + 6.F.2 (solo) at
-slice-write time after discovering `ACHANNEL_SETTING_SOLO` is
+**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E + 6.F.1 + **6.F.2**
+SHIPPED 2026-05-19 (`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` +
+`98b8a2a` + `f82e670` + `872a208` + `a79f431` + `1aaf0b3` + `554be56`
++ `21416c5` + `1f15410` + `90e8655` + `b1b7a5b`). **Only 6.G exit
+gate remains** (~1hr). 6.F was SPLIT into 6.F.1 (mute) + 6.F.2 (solo)
+at slice-write time after discovering `ACHANNEL_SETTING_SOLO` is
 NLA-tracks-only in Blender per `ED_anim_api.hh:674` — per-FCurve solo
-is an SS-only DAW-convention extension requiring `FCURVE_SOLO` bit +
-eval-cascade rewrite.
+is an SS-only DAW-convention extension; SHIPPED in 6.F.2 with
+multi-solo semantic + new `fcurve.solo` flag bit + eval-cascade
+extension.
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1601,11 +1602,86 @@ prose below — coverage map):
 - ✅ Drag selected ticks in time — shipped 6.C (`98b8a2a` + `f82e670`).
 - ✅ Delete + Duplicate selected ticks — shipped 6.D (`872a208` + `a79f431`).
 - ✅ Copy/paste — shipped 6.E (`1aaf0b3` + `554be56`).
-- 🟡 Per-channel mute/solo — Slice 6.F SPLIT: mute shipped 6.F.1
-  (`21416c5` + `1f15410`); solo queued as 6.F.2 (NLA-tracks-only in
-  Blender → SS-only DAW extension).
-- 🟡 Channel collapse/expand — Slice 6.F.2 or later.
+- ✅ Per-channel mute/solo — shipped 6.F.1 mute (`21416c5` +
+  `1f15410`) + 6.F.2 solo (`90e8655` + `b1b7a5b`). 6.F.2 is SS-original
+  DAW extension (Blender has no per-FCurve solo per `ED_anim_api.hh:674`).
+- 🟡 Channel collapse/expand — deferred to a future polish slice.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.F.2 — Per-FCurve solo (Ctrl+Alt+M) — SHIPPED 2026-05-19
+
+**SS-original DAW-convention extension** — NOT a Blender port.
+Blender's `ACHANNEL_SETTING_SOLO = 5` at `ED_anim_api.hh:674` is
+`/** only for NLA Tracks */` (verified character-for-character in
+audit sweeps #76 + #77). Per-FCurve solo has no Blender analog; SS
+adds a new `fcurve.solo` flag bit + multi-solo semantic (Pro Tools /
+Logic / Ableton pattern: any-soloed-plays, rest-silent; solo
+overrides mute).
+
+**Substrate.** Two new modules:
+- New `src/anim/fcurveSolo.js` (~230 LOC): 5 exports mirroring
+  `fcurveMute.js` structural shape (for caller ergonomics, NOT cite
+  inheritance per rule 9): `isFCurveSoloed`, `isAnyFCurveSoloed`
+  (O(N) walk; no caching today), `toggleFCurveSolo`,
+  `applyChannelSoloSelected` (scan-first), `wouldChannelSoloSelectedChange`.
+- New `src/anim/dopesheetChannelSolo.js` (~190 LOC): sister to 6.F.1's
+  `dopesheetChannelMute.js` — `pickSoloTarget`,
+  `applyDopesheetChannelSolo`, `wouldDopesheetChannelSoloChange`.
+
+**Eval cascade extension.** Extended `src/anim/fcurveGroups.js#isFCurveEffectivelyMuted`
+with solo cascade as the highest-priority check:
+- `anySolo && fc.solo` → NOT effectively muted (solo wins over mute + group)
+- `anySolo && !fc.solo` → effectively muted (DAW pattern)
+- `!anySolo` → original mute+group cascade (unchanged; regression-safe)
+
+All 4 eval call sites pick up the new semantic automatically
+(animationFCurve, depgraph/kernels/fcurve, depgraph/kernels/animation,
+animationEngine's computePoseOverrides + computeParamOverrides) —
+sister to Slice 5.V's group-mute cascade integration.
+
+**UI surface.** DopesheetEditor.jsx wires Ctrl+Alt+M:
+- New keymap effect sister to the 6.F.1 M-key effect — same gate
+  pattern (input-skip + grab/box-drag ref suppression + action
+  store-read + conditional preventDefault). Reuses `hoveredFcurveIdRef`
+  from 6.F.1; no new hover infrastructure.
+- Audit-fix HIGH-A: extended `dopesheetRows.js` inline cascade (Slice
+  5.W M4 optimization) with solo branch. Pre-fix the inline DIVERGED
+  silently from `isFCurveEffectivelyMuted` post-6.F.2 — eval correctly
+  silenced non-soloed but UI rendered all rows ungreyed.
+
+**SS DEVIATIONS new this slice:**
+- DEV 19 — Hotkey **Ctrl+Alt+M**. SS-conventional, no Blender analog.
+  Picked to (a) avoid M-key collision with 6.F.1 mute, (b) stay in
+  M-family without stealing S (reserved for snap/scale gestures),
+  (c) plan §6.B specifies it. Explicit acknowledgment in docstring
+  that Pro Tools / Logic / Ableton use plain S.
+
+No schema bump: `fcurve.solo` is sparse boolean (missing = false; same
+pattern as `fcurve.mute` from Slice 5.G). Schema stays at v42.
+
+**Audit sweep #77.** Blender-fidelity audit: 0 HIGH-F / 0 MED-F /
+0 LOW-F — 12/12 provenance cites byte-verified; SS-original framing
+HONEST across 3 docstring layers; DEV 19 ACCURATE. ARCH audit:
+1 HIGH-A + 1 MED-A systemic; both fixed in `b1b7a5b` same-day:
+- HIGH-A — `dopesheetRows.js` inline cascade omitted solo branch
+  (silent UI divergence from eval). Fix: hoist `anySolo` ONCE per
+  row-build, branch inline `isMuted` decision on it.
+- MED-A (systemic) — double-find pattern in hovered dispatcher paths
+  (both dopesheetChannelSolo + dopesheetChannelMute). Latent reference-
+  aliasing risk if helpers refactor to splice-replace. Fix: inline the
+  toggle (`fc.solo = !wasSolo;`) in both dispatchers; dropped now-unused
+  `toggleFCurveSolo` / `toggleFCurveMute` imports.
+
+Tests: 59 + 48 + 9 (extended dopesheetRows) + 12 (extended fcurveGroups)
+= 128 new asserts. All sibling suites green; typecheck clean.
+
+**Cite-discipline arc**: 0 fabs pre-audit, confirmed 0 by Blender-
+fidelity agent post-audit. **4 consecutive clean slices (6.D + 6.E +
+6.F.1 + 6.F.2) post-rule-6 — discipline change confirmed durable.**
+6.F.2 specifically tests the rule-9 / SS-original discipline: the
+substrate was honest about NOT being a Blender port; provenance cites
+all verified; audit findings were on implementation-completeness
+(inline-cascade sync) rather than cite fab.
 
 #### 6.F.1 — Mute hovered/selected channel (M key) — SHIPPED 2026-05-19
 
