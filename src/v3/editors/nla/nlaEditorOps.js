@@ -2,7 +2,8 @@
 
 /**
  * NLAEditor pure-function operations layer — Animation Phase 4 Slices
- * 4.D.2 (drag interactions) + 4.D.3 (affordance toggles + setters).
+ * 4.D.2 (drag interactions) + 4.D.3 (affordance toggles + setters) +
+ * 4.D.4 (CRUD + Push Action Down).
  *
  * Splits each drag/reorder operation into a pure function that takes
  * the current animData + an op input and returns a NEW animData
@@ -63,7 +64,88 @@
  *       on the target, then sets/clears `ADT_FLAG.NLA_SOLO_TRACK` on
  *       the animData based on whether target now has SOLO set.
  *
- * # No-overlap enforcement (SS DEVIATION, documented)
+ * # Operations shipped in 4.D.4
+ *
+ *   - applyAddTrack(animData, name?)
+ *       Creates a new NlaTrack via `makeNlaTrack` and appends to the
+ *       top of the stack (`index = nlaTracks.length`). Default name
+ *       "NlaTrack" with uniqueness suffix when needed. SS deviation
+ *       from Blender's `BKE_nlatrack_new()` default flag = `SELECTED |
+ *       OVERRIDELIBRARY_LOCAL` (per `nla.cc:358-367`) — SS leaves
+ *       `flag = 0` per the Slice 4.A deviation already documented in
+ *       `nla.js`.
+ *
+ *   - applyAddStrip(animData, project, trackId, actionId, startMs?)
+ *       Creates a new NlaStrip via `makeNlaStrip` referencing
+ *       actionId. Derives `actstart`/`actend`/`end` from the action's
+ *       frame range (`project.actions[...].frameStart`/`frameEnd`/
+ *       `duration`). If the action has no length signal, uses
+ *       `MIN_STRIP_MS` (1ms) so the strip is non-empty + the user can
+ *       resize. Honors Blender's overlap rejection
+ *       (`BKE_nlastrips_has_space` per `nla.cc:957-969`) by REFUSING
+ *       to add if it would overlap an existing strip on the same
+ *       track. Refuses if the target track is PROTECTED (per
+ *       `BKE_nlatrack_add_strip` `nla.cc:1361-1379`). Returns
+ *       same-ref animData on rejection; caller introspects via
+ *       `wouldAddStripChange`.
+ *
+ *   - applyRemoveStrip(animData, trackId, stripId)
+ *       Removes strip from track. Refuses if the strip is the current
+ *       `tweakStripId` — Rule №1: caller must `exitTweakMode` first.
+ *       Mirrors Blender's defensive `BKE_nla_tweakmode_exit` call at
+ *       `nla_edit.cc:1297` before deleting an active tweak strip
+ *       (SS shifts the gate from "exit-then-delete" to "refuse-and-
+ *       force-explicit-exit"). Refuses if the parent track is
+ *       PROTECTED.
+ *
+ *   - applyRemoveTrack(animData, trackId)
+ *       Removes track + all its strips. Re-stamps remaining tracks'
+ *       indices to maintain contiguous integers (per Slice 4.C
+ *       audit-fix MED-A3 contract). If the removed track had
+ *       `NLATRACK_FLAG.SOLO` set, also clears
+ *       `ADT_FLAG.NLA_SOLO_TRACK` on the animData (per Blender's
+ *       `nla_tracks.cc:736-738`). Refuses if the track contains the
+ *       current tweak strip OR if the track is PROTECTED.
+ *
+ *   - applyPushActionDown(animData, project)
+ *       Port of `BKE_nla_action_pushdown` (`nla.cc:2248-2294`). If
+ *       `animData.actionId` is null, returns same-ref. Creates a
+ *       strip from the active action via `makeNlaStrip`. Tries last
+ *       track first; creates a new track if the last track rejects
+ *       (no space or no last track), naming the new track after the
+ *       action (per `nla.cc:617` `STRNCPY_UTF8(nlt->name,
+ *       adt->action->id.name + 2)`). Clears `animData.actionId`
+ *       (and `slotHandle`) after successful push. Refuses if in
+ *       tweak mode (Blender's operator's poll function
+ *       `nlaop_poll_tweakmode_off` enforces; SS mirrors at
+ *       substrate per Rule №1).
+ *
+ *       **SS DEVIATION 13 — no act_blendmode/act_influence/
+ *       act_extendmode inheritance.** Blender (`nla.cc:2274-2276`)
+ *       copies these from AnimData to the new strip; SS's animData
+ *       doesn't model these fields (no `act_blendmode` etc on the
+ *       v42 schema), so the strip gets the `makeNlaStrip` defaults
+ *       (blendmode='replace', extendmode='hold', influence=1). A
+ *       future schema bump that adds those AnimData fields MUST
+ *       wire the copy here per Blender behavior.
+ *
+ *       **SS DEVIATION 14 — no USR_INFLUENCE escalation.** Blender
+ *       (`nla.cc:2278-2290`) sets `NLASTRIP_FLAG_USR_INFLUENCE` on
+ *       the pushed-down strip if `act_influence < 1.0f` so the
+ *       sub-1.0 influence survives. SS skips this because SS doesn't
+ *       model `act_influence` (per deviation 13) — the strip lands
+ *       with influence=1 regardless, so the escalation has no
+ *       behavioral basis. Re-litigate when deviation 13 is fixed.
+ *
+ * # No-overlap enforcement on RESIZE/DRAG (SS DEVIATION, documented)
+ *
+ * **Scope clarification (4.D.4 addition):** this deviation applies
+ * to `applyMoveStrip`/`applyResizeStripStart`/`applyResizeStripEnd`
+ * — the drag-time ops. The CREATE-time op `applyAddStrip` DOES honor
+ * Blender's overlap rejection (`BKE_nlastrips_has_space`) per Slice
+ * 4.D.4. The drag-time deviation lets the user produce overlaps
+ * (which are evaluator-valid); the create-time fidelity prevents
+ * accidental zero-effort overlaps at strip insertion.
  *
  * Blender's `nlastrip_fix_resize_overlaps` (nla.cc:1616+) shifts
  * neighbor strips when a resize would cause overlap. SS does NOT
@@ -87,8 +169,10 @@
  * to accurately describe what `evaluateNla` does.
  *
  * The 4.D NLAEditor surfaces overlaps visually; user can manually
- * shift if they want clean separation. Slice 4.D.4 may add opt-in
- * "auto-separate on drop" if user feedback requests it.
+ * shift if they want clean separation. Slice 4.D.4 explicitly chose
+ * NOT to add an "auto-separate on drop" option — Blender doesn't
+ * either, and the user-direct-resolve workflow has worked in the
+ * 4.D.2/4.D.3 manual checklists without ambiguity.
  *
  * @module v3/editors/nla/nlaEditorOps
  */
@@ -99,6 +183,9 @@ import {
   NLASTRIP_FLAG,
   NLATRACK_FLAG,
   ADT_FLAG,
+  makeNlaTrack,
+  makeNlaStrip,
+  isTweakModeOn,
 } from '../../../anim/nla.js';
 
 /**
@@ -672,4 +759,493 @@ export function applyToggleTrackSolo(animData, trackId) {
     : adtFlag & ~ADT_FLAG.NLA_SOLO_TRACK;
 
   return { ...animData, nlaTracks: newTracks, flag: newAdtFlag };
+}
+
+// ===========================================================================
+// Slice 4.D.4 — CRUD + Push Action Down
+// ===========================================================================
+
+/**
+ * Read an action's duration from the project (ms). Reads with precedence
+ * `frameEnd - frameStart` > `duration` > `MIN_STRIP_MS`. Returns at least
+ * `MIN_STRIP_MS` so the created strip is non-empty + user-resizable.
+ *
+ * Per `feedback_ms_canonical_animation_time`: post-v36 the action shape
+ * stores frame fields as ms.
+ *
+ * @param {object|null|undefined} project
+ * @param {string|null|undefined} actionId
+ * @returns {number} ms (>= MIN_STRIP_MS)
+ */
+function readActionDurationMs(project, actionId) {
+  if (!actionId || !project || !Array.isArray(project.actions)) return MIN_STRIP_MS;
+  for (const a of project.actions) {
+    if (!a || a.id !== actionId) continue;
+    const fs = typeof a.frameStart === 'number' ? a.frameStart : null;
+    const fe = typeof a.frameEnd === 'number' ? a.frameEnd : null;
+    if (fs !== null && fe !== null) {
+      const d = Math.max(0, fe - fs);
+      return d > 0 ? d : MIN_STRIP_MS;
+    }
+    if (typeof a.duration === 'number') {
+      return a.duration > 0 ? a.duration : MIN_STRIP_MS;
+    }
+    return MIN_STRIP_MS;
+  }
+  return MIN_STRIP_MS;
+}
+
+/**
+ * Read an action's actstart (frame range start) from the project.
+ * Defaults to 0 if not set.
+ *
+ * @param {object|null|undefined} project
+ * @param {string|null|undefined} actionId
+ * @returns {number} ms
+ */
+function readActionStartMs(project, actionId) {
+  if (!actionId || !project || !Array.isArray(project.actions)) return 0;
+  for (const a of project.actions) {
+    if (!a || a.id !== actionId) continue;
+    return typeof a.frameStart === 'number' ? a.frameStart : 0;
+  }
+  return 0;
+}
+
+/**
+ * Read an action's name from the project. Returns the actionId itself
+ * if the action has no name or doesn't exist (used for fallback track
+ * naming in pushActionDown per Blender's `STRNCPY_UTF8(nlt->name,
+ * adt->action->id.name + 2)` at `nla.cc:617`).
+ *
+ * @param {object|null|undefined} project
+ * @param {string|null|undefined} actionId
+ * @returns {string}
+ */
+function readActionName(project, actionId) {
+  if (!actionId) return '';
+  if (!project || !Array.isArray(project.actions)) return actionId;
+  for (const a of project.actions) {
+    if (!a || a.id !== actionId) continue;
+    return typeof a.name === 'string' && a.name.length > 0 ? a.name : actionId;
+  }
+  return actionId;
+}
+
+/**
+ * Generate a unique track name within the animData's tracks. Probes
+ * `base`, `base.001`, `base.002` ... in Blender style
+ * (`BKE_id_new_name_validate` / `bUniqueName` naming convention with
+ * `.NNN` suffix). Returns the first non-colliding name.
+ *
+ * @param {object[]} existingTracks — `animData.nlaTracks` (may have entries with .name)
+ * @param {string} base
+ * @returns {string}
+ */
+function uniqueTrackName(existingTracks, base) {
+  const used = new Set();
+  if (Array.isArray(existingTracks)) {
+    for (const t of existingTracks) {
+      if (t && typeof t.name === 'string') used.add(t.name);
+    }
+  }
+  if (!used.has(base)) return base;
+  for (let i = 1; i < 10000; i++) {
+    const candidate = `${base}.${String(i).padStart(3, '0')}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  // Fallback if somehow we have 10000+ collisions — append timestamp.
+  return `${base}.${Date.now()}`;
+}
+
+/**
+ * Generate a unique strip id within a track. Strip ids must be unique
+ * within their track per the Slice 4.A id contract. Used by addStrip
+ * + pushActionDown to mint fresh ids that won't collide.
+ *
+ * @param {object[]} existingStrips
+ * @param {string} prefix
+ * @returns {string}
+ */
+function uniqueStripId(existingStrips, prefix) {
+  const used = new Set();
+  if (Array.isArray(existingStrips)) {
+    for (const s of existingStrips) {
+      if (s && typeof s.id === 'string') used.add(s.id);
+    }
+  }
+  for (let i = 0; i < 100000; i++) {
+    const candidate = i === 0 ? prefix : `${prefix}_${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `${prefix}_${Date.now()}`;
+}
+
+/**
+ * Predicate: would adding a track produce a no-op? Always false in
+ * practice (adding a track is never a no-op), provided for API
+ * symmetry with the other `would*Change` predicates.
+ *
+ * @returns {boolean} always true (provided for API symmetry)
+ */
+export function wouldAddTrackChange() {
+  return true;
+}
+
+/**
+ * Add a new empty NlaTrack to the top of the stack. Returns a NEW
+ * animData with the track appended. Default name is "NlaTrack" with
+ * a `.NNN` suffix appended on collision. Index is set to the new
+ * position (current length).
+ *
+ * @param {object} animData
+ * @param {string} [baseName] - defaults to "NlaTrack"
+ * @returns {object} new animData (NEVER same-ref — adding always changes state)
+ */
+export function applyAddTrack(animData, baseName = 'NlaTrack') {
+  if (!animData || typeof animData !== 'object') return animData;
+  const tracksRef = Array.isArray(animData.nlaTracks) ? animData.nlaTracks : [];
+  const name = uniqueTrackName(tracksRef, baseName);
+  const id = uniqueStripId(
+    /** @type {object[]} */ (tracksRef.map((t) => /** @type {object} */ ({ id: t?.id ?? '' }))),
+    'track',
+  );
+  const newTrack = makeNlaTrack(id, name, { index: tracksRef.length });
+  return { ...animData, nlaTracks: [...tracksRef, newTrack] };
+}
+
+/**
+ * Check whether two [start, end] ranges overlap. Closed-interval
+ * comparison — touching endpoints (`a.end === b.start`) are NOT
+ * considered overlapping. Matches Blender's `BKE_nlastrips_has_space`
+ * test convention (`nla.cc:937-955`).
+ *
+ * @param {number} aStart
+ * @param {number} aEnd
+ * @param {number} bStart
+ * @param {number} bEnd
+ * @returns {boolean}
+ */
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  // Two ranges overlap iff start < other_end AND end > other_start
+  return aStart < bEnd && aEnd > bStart;
+}
+
+/**
+ * Find the leftmost free range on a track of at least `durationMs`
+ * starting at or after `minStartMs`. Returns the start position. If
+ * `minStartMs` already has space, returns `minStartMs`; otherwise
+ * scans rightward past existing strips.
+ *
+ * @param {object[]} strips
+ * @param {number} durationMs
+ * @param {number} minStartMs
+ * @returns {number}
+ */
+function findFreeRangeStart(strips, durationMs, minStartMs) {
+  if (!Array.isArray(strips) || strips.length === 0) return Math.max(0, minStartMs);
+  // Sort strips by start so we can scan in order
+  const sorted = strips.slice().sort((a, b) => (a?.start ?? 0) - (b?.start ?? 0));
+  let cursor = Math.max(0, minStartMs);
+  for (const s of sorted) {
+    if (!s) continue;
+    const sStart = typeof s.start === 'number' ? s.start : 0;
+    const sEnd = typeof s.end === 'number' ? s.end : sStart;
+    if (cursor + durationMs <= sStart) {
+      // Free range here
+      return cursor;
+    }
+    if (sEnd > cursor) cursor = sEnd;
+  }
+  return cursor;
+}
+
+/**
+ * Predicate: would adding a strip succeed? Returns false if the track
+ * is PROTECTED OR if the action can't be found in the project OR if
+ * the requested startMs has no room for the action's duration AND no
+ * free range exists rightward (effectively never, since findFreeRangeStart
+ * always returns a position, so this collapses to the PROTECTED +
+ * missing-action checks).
+ *
+ * @param {object} animData
+ * @param {object|null|undefined} project
+ * @param {string} trackId
+ * @param {string} actionId
+ * @returns {boolean}
+ */
+export function wouldAddStripChange(animData, project, trackId, actionId) {
+  if (typeof actionId !== 'string' || actionId.length === 0) return false;
+  const { track } = locateTrack(animData, trackId);
+  if (!track) return false;
+  const trackFlag = typeof track.flag === 'number' ? track.flag : 0;
+  if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return false;
+  if (!project || !Array.isArray(project.actions)) return false;
+  if (!project.actions.some((a) => a && a.id === actionId)) return false;
+  return true;
+}
+
+/**
+ * Add a new NlaStrip to a track, referencing actionId. Derives
+ * `actstart`/`actend`/`end` from the action's frame range. Honors
+ * Blender's `BKE_nlastrips_has_space` overlap rejection: if the
+ * requested `startMs` would overlap an existing strip, auto-scans
+ * rightward past existing strips for the leftmost free range
+ * (matching Blender's "add to last track first, else new track"
+ * fallback behavior at the strip-positioning level).
+ *
+ * Refuses (returns same-ref) if the track is PROTECTED (per
+ * `BKE_nlatrack_add_strip` `nla.cc:1361-1379`) OR if the action
+ * doesn't exist in the project (Rule №1 — no silent fallback to
+ * "create-without-action" since `makeNlaStrip` would throw).
+ *
+ * @param {object} animData
+ * @param {object|null|undefined} project — to resolve action duration + name
+ * @param {string} trackId
+ * @param {string} actionId
+ * @param {number} [minStartMs] - defaults to 0
+ * @returns {object}
+ */
+export function applyAddStrip(animData, project, trackId, actionId, minStartMs = 0) {
+  if (!wouldAddStripChange(animData, project, trackId, actionId)) return animData;
+  const { trackIdx, track } = locateTrack(animData, trackId);
+  if (!track || trackIdx === -1) return animData;
+  const stripsRef = Array.isArray(track.strips) ? track.strips : [];
+
+  const duration = readActionDurationMs(project, actionId);
+  const actstart = readActionStartMs(project, actionId);
+  const startMs = findFreeRangeStart(stripsRef, duration, Math.max(0, minStartMs));
+
+  const stripId = uniqueStripId(stripsRef, `strip_${actionId}`);
+  const stripName = readActionName(project, actionId) || stripId;
+  const newStrip = makeNlaStrip(stripId, actionId, {
+    name: stripName,
+    start: startMs,
+    end: startMs + duration,
+    actstart,
+    actend: actstart + duration,
+  });
+
+  // Insert sorted by start ascending (matches Blender's
+  // BKE_nlastrips_add_strip_unsafe chronological-insertion semantic).
+  const newStrips = [...stripsRef, newStrip].sort((a, b) => (a?.start ?? 0) - (b?.start ?? 0));
+  const newTracks = animData.nlaTracks.slice();
+  newTracks[trackIdx] = { ...track, strips: newStrips };
+  return { ...animData, nlaTracks: newTracks };
+}
+
+/**
+ * Predicate: can the strip be removed? Returns false if the strip is
+ * the current tweak strip OR the parent track is PROTECTED OR the
+ * strip doesn't exist.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @returns {boolean}
+ */
+export function wouldRemoveStripChange(animData, trackId, stripId) {
+  const { track, strip } = (() => {
+    const r = locateStrip(animData, trackId, stripId);
+    return { track: r.track, strip: r.strip };
+  })();
+  if (!strip || !track) return false;
+  const trackFlag = typeof track.flag === 'number' ? track.flag : 0;
+  if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return false;
+  if (animData?.tweakStripId === stripId) return false;
+  return true;
+}
+
+/**
+ * Remove a strip from its track. Refuses (returns same-ref) if:
+ *   - The strip is the current tweak strip (Rule №1 — caller must
+ *     `exitTweakMode` first; mirrors Blender's defensive call at
+ *     `nla_edit.cc:1297`).
+ *   - The parent track is PROTECTED (per `BKE_nlatrack_add_strip`
+ *     PROTECTED gate at `nla.cc:1361-1379` — Blender's track-level
+ *     edit lock applies to remove as well as add).
+ *   - The strip doesn't exist.
+ *
+ * Track is left in place even if it becomes empty (mirrors Blender —
+ * delete-strip doesn't cascade to delete-track).
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @returns {object}
+ */
+export function applyRemoveStrip(animData, trackId, stripId) {
+  if (!wouldRemoveStripChange(animData, trackId, stripId)) return animData;
+  const { trackIdx, stripIdx, track } = locateStrip(animData, trackId, stripId);
+  if (!track || trackIdx === -1 || stripIdx === -1) return animData;
+  const newStrips = track.strips.slice();
+  newStrips.splice(stripIdx, 1);
+  const newTracks = animData.nlaTracks.slice();
+  newTracks[trackIdx] = { ...track, strips: newStrips };
+  return { ...animData, nlaTracks: newTracks };
+}
+
+/**
+ * Predicate: can the track be removed? Returns false if PROTECTED, if
+ * the track contains the current tweak strip, or if it doesn't exist.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {boolean}
+ */
+export function wouldRemoveTrackChange(animData, trackId) {
+  const { track } = locateTrack(animData, trackId);
+  if (!track) return false;
+  const trackFlag = typeof track.flag === 'number' ? track.flag : 0;
+  if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return false;
+  const tweakStripId = animData?.tweakStripId;
+  if (tweakStripId && Array.isArray(track.strips)) {
+    for (const s of track.strips) {
+      if (s && s.id === tweakStripId) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Remove a track + all its strips. Refuses (returns same-ref) if:
+ *   - The track is PROTECTED.
+ *   - The track contains the current tweak strip.
+ *   - The track doesn't exist.
+ *
+ * If the removed track had `NLATRACK_FLAG.SOLO` set, also clears
+ * `ADT_FLAG.NLA_SOLO_TRACK` on the animData per Blender's
+ * `nla_tracks.cc:736-738`. Re-stamps remaining tracks' `index` to
+ * contiguous integers per Slice 4.C audit-fix MED-A3 contract.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {object}
+ */
+export function applyRemoveTrack(animData, trackId) {
+  if (!wouldRemoveTrackChange(animData, trackId)) return animData;
+  const { trackIdx, track } = locateTrack(animData, trackId);
+  if (!track || trackIdx === -1) return animData;
+
+  const tracksRef = animData.nlaTracks;
+  const wasSolo = ((typeof track.flag === 'number' ? track.flag : 0)
+    & NLATRACK_FLAG.SOLO) !== 0;
+
+  // Drop the track, then re-stamp every remaining track's index by
+  // current position in the bottom-to-top sort.
+  const remaining = tracksRef
+    .filter((_, i) => i !== trackIdx)
+    .slice()
+    .sort((a, b) => {
+      const ai = typeof a?.index === 'number' ? a.index : 0;
+      const bi = typeof b?.index === 'number' ? b.index : 0;
+      return ai - bi;
+    })
+    .map((t, i) => ({ ...t, index: i }));
+
+  const adtFlag = typeof animData.flag === 'number' ? animData.flag : 0;
+  const newAdtFlag = wasSolo
+    ? adtFlag & ~ADT_FLAG.NLA_SOLO_TRACK
+    : adtFlag;
+
+  return { ...animData, nlaTracks: remaining, flag: newAdtFlag };
+}
+
+/**
+ * Predicate: would Push Action Down do anything? Returns true iff
+ * `animData.actionId` is set AND animData is not in tweak mode.
+ *
+ * @param {object} animData
+ * @returns {boolean}
+ */
+export function wouldPushActionDownChange(animData) {
+  if (!animData || typeof animData !== 'object') return false;
+  if (isTweakModeOn(animData)) return false;
+  if (typeof animData.actionId !== 'string' || animData.actionId.length === 0) return false;
+  return true;
+}
+
+/**
+ * Push the currently-active action down onto the NLA stack as a new
+ * strip on the top track (or a new track if the top is full).
+ *
+ * Byte-faithful port of `BKE_nla_action_pushdown` (`nla.cc:2248-2294`).
+ * SS deviation: no `act_blendmode`/`act_influence`/`act_extendmode`
+ * inheritance (SS schema doesn't carry those AnimData fields — see
+ * module-level DEVIATION 13 + 14).
+ *
+ * Behavior:
+ *   1. Refuses if not in pushable state (no actionId OR in tweak mode).
+ *      Tweak-mode refusal mirrors Blender's `nlaop_poll_tweakmode_off`
+ *      poll function on the operator.
+ *   2. Creates a strip from the active action via `makeNlaStrip` +
+ *      derives bounds from the action's frame range.
+ *   3. Tries the LAST track (top of stack) first (per Blender
+ *      `nla.cc:608-609`). Adds via the same overlap-respecting
+ *      `applyAddStrip` semantics; if that returns same-ref (rejection
+ *      — track full or PROTECTED), creates a new track named after the
+ *      action (per `nla.cc:617`) and adds there instead.
+ *   4. Clears `animData.actionId` + `slotHandle` after successful push.
+ *
+ * @param {object} animData
+ * @param {object|null|undefined} project — to resolve action duration + name
+ * @returns {object}
+ */
+export function applyPushActionDown(animData, project) {
+  if (!wouldPushActionDownChange(animData)) return animData;
+  const actionId = animData.actionId;
+
+  // Try the LAST (top-of-stack) track first.
+  const tracksRef = Array.isArray(animData.nlaTracks) ? animData.nlaTracks : [];
+  let workingAd = animData;
+  let pushed = false;
+
+  if (tracksRef.length > 0) {
+    // Find the track with the highest index (top of bottom-to-top stack)
+    let topTrack = tracksRef[0];
+    let topIdx = typeof topTrack?.index === 'number' ? topTrack.index : 0;
+    for (const t of tracksRef) {
+      const i = typeof t?.index === 'number' ? t.index : 0;
+      if (i >= topIdx) { topTrack = t; topIdx = i; }
+    }
+    if (topTrack) {
+      const tryAdd = applyAddStrip(workingAd, project, topTrack.id, actionId, 0);
+      if (tryAdd !== workingAd) {
+        workingAd = tryAdd;
+        pushed = true;
+      }
+    }
+  }
+
+  if (!pushed) {
+    // Create a new track named after the action + add the strip there.
+    // Naming: Blender uses `adt->action->id.name + 2` (strips the "AC"
+    // ID prefix). SS uses the action's display name directly via
+    // readActionName.
+    const trackName = readActionName(project, actionId) || 'NlaTrack';
+    const withTrack = applyAddTrack(workingAd, trackName);
+    const newTrack = withTrack.nlaTracks[withTrack.nlaTracks.length - 1];
+    const withStrip = applyAddStrip(withTrack, project, newTrack.id, actionId, 0);
+    if (withStrip !== withTrack) {
+      workingAd = withStrip;
+      pushed = true;
+    }
+    // If the strip-add ALSO failed (action missing from project, or
+    // some other applyAddStrip refusal), DON'T commit the half-baked
+    // state — Rule №1 forbids silent half-success. Return original
+    // animData; caller sees no change + can introspect via
+    // wouldPushActionDownChange (which doesn't gate on action-presence
+    // but DOES gate on tweak-mode + actionId-set).
+  }
+
+  if (!pushed) {
+    return animData;
+  }
+
+  // Clear the active action per Blender nla.cc:2266.
+  return {
+    ...workingAd,
+    actionId: null,
+    slotHandle: 0,
+  };
 }

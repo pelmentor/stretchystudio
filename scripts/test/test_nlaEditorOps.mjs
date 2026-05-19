@@ -22,6 +22,15 @@ import {
   applyToggleTrackMuted,
   applyToggleTrackProtected,
   applyToggleTrackSolo,
+  applyAddTrack,
+  applyAddStrip,
+  wouldAddStripChange,
+  applyRemoveStrip,
+  wouldRemoveStripChange,
+  applyRemoveTrack,
+  wouldRemoveTrackChange,
+  applyPushActionDown,
+  wouldPushActionDownChange,
   pxDeltaToMs,
   pxToMs,
 } from '../../src/v3/editors/nla/nlaEditorOps.js';
@@ -504,6 +513,333 @@ function findStrip(ad, trackId, stripId) {
   // tTop didn't have SOLO → its ref should be preserved (perf-optimization
   // assertion — verifies we didn't shallow-clone unaffected tracks)
   assert(out.nlaTracks[2] === ad.nlaTracks[2], '30e: tTop ref preserved (no SOLO/no target)');
+}
+
+// ===========================================================================
+// Slice 4.D.4 — CRUD + Push Action Down
+// ===========================================================================
+
+// Helper: build a minimal project shape carrying actions for action-lookup
+function mockProject(actions = []) {
+  return { id: 'proj1', actions, nodes: [] };
+}
+
+// ── 31. applyAddTrack happy path + uniqueness ──────────────────────
+{
+  const ad = makeFixture();
+  const out = applyAddTrack(ad);
+  eq(out.nlaTracks.length, 4, '31a: track count +1');
+  eq(out.nlaTracks[3].name, 'NlaTrack', '31b: default name');
+  eq(out.nlaTracks[3].index, 3, '31c: index = nlaTracks.length pre-add');
+  // Original unchanged
+  eq(ad.nlaTracks.length, 3, '31d: original immutable');
+
+  // Second add → unique-suffix
+  const out2 = applyAddTrack(out);
+  eq(out2.nlaTracks.length, 5, '31e: second track added');
+  eq(out2.nlaTracks[4].name, 'NlaTrack.001', '31f: .001 suffix');
+
+  // Custom base name
+  const out3 = applyAddTrack(out2, 'Custom');
+  eq(out3.nlaTracks[5].name, 'Custom', '31g: custom name');
+
+  // Empty animData (no nlaTracks array)
+  const empty = { actionId: null, slotHandle: 0, flag: 0, nlaTracks: [] };
+  const empOut = applyAddTrack(empty);
+  eq(empOut.nlaTracks.length, 1, '31h: empty start → 1 track');
+  eq(empOut.nlaTracks[0].index, 0, '31i: first track index 0');
+}
+
+// ── 32. applyAddStrip happy path + duration derivation ─────────────
+{
+  const ad = makeFixture();
+  const proj = mockProject([
+    { id: 'walkAct', name: 'Walk', frameStart: 0, frameEnd: 1500, duration: 1500 },
+  ]);
+  const out = applyAddStrip(ad, proj, 'tBot', 'walkAct', 0);
+  const track = out.nlaTracks.find((t) => t.id === 'tBot');
+  eq(track.strips.length, 1, '32a: strip added');
+  eq(track.strips[0].actionId, 'walkAct', '32b: actionId set');
+  eq(track.strips[0].start, 0, '32c: start = minStartMs');
+  eq(track.strips[0].end, 1500, '32d: end = start + duration');
+  eq(track.strips[0].actstart, 0, '32e: actstart = action.frameStart');
+  eq(track.strips[0].actend, 1500, '32f: actend = actstart + duration');
+  eq(track.strips[0].name, 'Walk', '32g: name = action display name');
+  // Original unchanged
+  eq(ad.nlaTracks.find((t) => t.id === 'tBot').strips.length, 0,
+    '32h: original empty');
+}
+
+// ── 33. applyAddStrip overlap rejection (auto-positions rightward)
+{
+  const ad = makeFixture();
+  const proj = mockProject([
+    { id: 'walkAct', name: 'Walk', frameStart: 0, frameEnd: 500, duration: 500 },
+  ]);
+  // tMid has strips at 100-600 and 1000-1500. Try adding at 200 (would
+  // overlap s1) — should auto-position to the leftmost free slot.
+  // Gap between s1 (end 600) and s2 (start 1000) is 400 — too small
+  // for duration=500. So the strip must land AFTER s2 ends at 1500.
+  const out = applyAddStrip(ad, proj, 'tMid', 'walkAct', 200);
+  const track = out.nlaTracks.find((t) => t.id === 'tMid');
+  eq(track.strips.length, 3, '33a: strip added (positioned to free range)');
+  const newStrip = track.strips.find((s) => s.id !== 's1' && s.id !== 's2');
+  eq(newStrip.start, 1500, '33b: auto-positioned past s2 (gap=400 < duration=500)');
+  eq(newStrip.end, 2000, '33c: end = 1500 + 500');
+}
+
+// ── 33b. applyAddStrip with sufficient gap auto-positions in the gap
+{
+  const ad = makeFixture();
+  const proj = mockProject([
+    { id: 'shortAct', name: 'Short', frameStart: 0, frameEnd: 300, duration: 300 },
+  ]);
+  // duration=300 DOES fit in the 400-unit gap between s1 (end 600) and s2 (start 1000)
+  const out = applyAddStrip(ad, proj, 'tMid', 'shortAct', 200);
+  const track = out.nlaTracks.find((t) => t.id === 'tMid');
+  const newStrip = track.strips.find((s) => s.id !== 's1' && s.id !== 's2');
+  eq(newStrip.start, 600, '33d: short strip fits in gap right after s1');
+  eq(newStrip.end, 900, '33e: end = 600 + 300, before s2 at 1000');
+}
+
+// ── 34. applyAddStrip refused on PROTECTED track + missing action ──
+{
+  const ad = makeFixture();
+  ad.nlaTracks[0].flag = 0x10;   // NLATRACK_FLAG.PROTECTED
+  const proj = mockProject([{ id: 'walkAct', frameStart: 0, frameEnd: 500 }]);
+  const out = applyAddStrip(ad, proj, 'tBot', 'walkAct', 0);
+  assert(out === ad, '34a: PROTECTED track → same ref');
+  // Missing action
+  const out2 = applyAddStrip(ad, proj, 'tMid', 'missingAct', 0);
+  assert(out2 === ad, '34b: missing action → same ref');
+  // Missing track
+  const out3 = applyAddStrip(ad, proj, 'nonexistent', 'walkAct', 0);
+  assert(out3 === ad, '34c: missing track → same ref');
+  // No project
+  const out4 = applyAddStrip(ad, null, 'tMid', 'walkAct', 0);
+  assert(out4 === ad, '34d: null project → same ref');
+  // Empty action id
+  const out5 = applyAddStrip(ad, proj, 'tMid', '', 0);
+  assert(out5 === ad, '34e: empty actionId → same ref');
+}
+
+// ── 35. wouldAddStripChange predicate ──────────────────────────────
+{
+  const ad = makeFixture();
+  ad.nlaTracks[0].flag = 0x10;   // PROTECTED
+  const proj = mockProject([{ id: 'walkAct', frameStart: 0, frameEnd: 500 }]);
+  assert(wouldAddStripChange(ad, proj, 'tMid', 'walkAct'), '35a: open track + valid action');
+  assert(!wouldAddStripChange(ad, proj, 'tBot', 'walkAct'), '35b: PROTECTED → false');
+  assert(!wouldAddStripChange(ad, proj, 'tMid', 'missing'), '35c: missing action → false');
+  assert(!wouldAddStripChange(ad, proj, 'nonexistent', 'walkAct'), '35d: missing track → false');
+  assert(!wouldAddStripChange(ad, null, 'tMid', 'walkAct'), '35e: null project → false');
+  assert(!wouldAddStripChange(ad, proj, 'tMid', ''), '35f: empty action → false');
+}
+
+// ── 36. applyRemoveStrip happy path + immutability ─────────────────
+{
+  const ad = makeFixture();
+  const out = applyRemoveStrip(ad, 'tMid', 's1');
+  const track = out.nlaTracks.find((t) => t.id === 'tMid');
+  eq(track.strips.length, 1, '36a: strip removed');
+  eq(track.strips[0].id, 's2', '36b: sibling preserved');
+  // Original unchanged
+  eq(ad.nlaTracks.find((t) => t.id === 'tMid').strips.length, 2, '36c: original immutable');
+  // Other tracks untouched
+  assert(out.nlaTracks[0] === ad.nlaTracks[0], '36d: other tracks ref-preserved');
+}
+
+// ── 37. applyRemoveStrip refused on PROTECTED + tweak strip ────────
+{
+  const ad = makeFixture();
+  ad.nlaTracks[1].flag = 0x10;   // tMid PROTECTED
+  const out = applyRemoveStrip(ad, 'tMid', 's1');
+  assert(out === ad, '37a: PROTECTED track → same ref');
+
+  const ad2 = makeFixture();
+  ad2.tweakStripId = 's1';
+  const out2 = applyRemoveStrip(ad2, 'tMid', 's1');
+  assert(out2 === ad2, '37b: tweak strip → same ref');
+
+  // Missing strip
+  const ad3 = makeFixture();
+  const out3 = applyRemoveStrip(ad3, 'tMid', 'nonexistent');
+  assert(out3 === ad3, '37c: missing strip → same ref');
+}
+
+// ── 38. wouldRemoveStripChange predicate ───────────────────────────
+{
+  const ad = makeFixture();
+  assert(wouldRemoveStripChange(ad, 'tMid', 's1'), '38a: open + exists → true');
+  assert(!wouldRemoveStripChange(ad, 'tMid', 'nonexistent'), '38b: missing → false');
+  ad.nlaTracks[1].flag = 0x10;
+  assert(!wouldRemoveStripChange(ad, 'tMid', 's1'), '38c: PROTECTED → false');
+  ad.nlaTracks[1].flag = 0;
+  ad.tweakStripId = 's1';
+  assert(!wouldRemoveStripChange(ad, 'tMid', 's1'), '38d: tweak strip → false');
+}
+
+// ── 39. applyRemoveTrack + index re-stamp + solo flag clear ────────
+{
+  const ad = makeFixture();
+  // Solo tTop first so we can verify the ADT_FLAG.NLA_SOLO_TRACK gets cleared
+  ad.nlaTracks[2].flag = NLATRACK_FLAG.SOLO;
+  ad.flag = ADT_FLAG.NLA_SOLO_TRACK;
+  const out = applyRemoveTrack(ad, 'tTop');
+  eq(out.nlaTracks.length, 2, '39a: track removed');
+  eq(out.nlaTracks[0].index, 0, '39b: index 0 preserved');
+  eq(out.nlaTracks[1].index, 1, '39c: index 1 preserved');
+  eq(out.flag & ADT_FLAG.NLA_SOLO_TRACK, 0, '39d: ADT solo flag cleared (removed track was solo)');
+  // Original unchanged
+  eq(ad.nlaTracks.length, 3, '39e: original immutable');
+
+  // Removing a non-solo track does NOT clear the solo flag
+  const ad2 = makeFixture();
+  ad2.nlaTracks[2].flag = NLATRACK_FLAG.SOLO;
+  ad2.flag = ADT_FLAG.NLA_SOLO_TRACK;
+  const out2 = applyRemoveTrack(ad2, 'tBot');
+  assert((out2.flag & ADT_FLAG.NLA_SOLO_TRACK) !== 0, '39f: ADT solo preserved (removed track wasn\'t solo)');
+}
+
+// ── 40. applyRemoveTrack with drift gets re-stamped contiguous ─────
+{
+  const ad = {
+    actionId: null, slotHandle: 0, flag: 0,
+    tmpActionId: null, tmpSlotHandle: 0, tweakTrackId: null, tweakStripId: null,
+    nlaTracks: [
+      makeNlaTrack('a', 'A', { index: 0 }),
+      makeNlaTrack('b', 'B', { index: 5 }),       // drifted
+      makeNlaTrack('c', 'C', { index: 99 }),      // drifted
+    ],
+  };
+  const out = applyRemoveTrack(ad, 'b');
+  eq(out.nlaTracks.length, 2, '40a: B removed');
+  eq(out.nlaTracks[0].id, 'a', '40b: A first');
+  eq(out.nlaTracks[0].index, 0, '40c: A index 0');
+  eq(out.nlaTracks[1].id, 'c', '40d: C second');
+  eq(out.nlaTracks[1].index, 1, '40e: C index re-stamped 99 → 1');
+}
+
+// ── 41. applyRemoveTrack refused on PROTECTED + tweak strip ────────
+{
+  const ad = makeFixture();
+  ad.nlaTracks[1].flag = 0x10;   // PROTECTED
+  const out = applyRemoveTrack(ad, 'tMid');
+  assert(out === ad, '41a: PROTECTED track → same ref');
+
+  const ad2 = makeFixture();
+  ad2.tweakStripId = 's1';   // s1 lives in tMid
+  const out2 = applyRemoveTrack(ad2, 'tMid');
+  assert(out2 === ad2, '41b: track contains tweak strip → same ref');
+
+  // Removing a different track when tweak strip is elsewhere is fine
+  const out3 = applyRemoveTrack(ad2, 'tBot');
+  assert(out3 !== ad2, '41c: other track removal OK even when tweak is elsewhere');
+}
+
+// ── 42. wouldRemoveTrackChange predicate ───────────────────────────
+{
+  const ad = makeFixture();
+  assert(wouldRemoveTrackChange(ad, 'tBot'), '42a: open + exists → true');
+  assert(!wouldRemoveTrackChange(ad, 'nonexistent'), '42b: missing → false');
+  ad.nlaTracks[0].flag = 0x10;
+  assert(!wouldRemoveTrackChange(ad, 'tBot'), '42c: PROTECTED → false');
+  ad.nlaTracks[0].flag = 0;
+  ad.tweakStripId = 's1';
+  assert(!wouldRemoveTrackChange(ad, 'tMid'), '42d: track contains tweak strip → false');
+}
+
+// ── 43. applyPushActionDown happy path (top track has space) ───────
+{
+  const ad = makeFixture();
+  ad.actionId = 'pushAct';
+  ad.slotHandle = 3;
+  const proj = mockProject([
+    { id: 'pushAct', name: 'PushMe', frameStart: 0, frameEnd: 800, duration: 800 },
+  ]);
+  const out = applyPushActionDown(ad, proj);
+  // actionId cleared
+  eq(out.actionId, null, '43a: actionId cleared');
+  eq(out.slotHandle, 0, '43b: slotHandle cleared');
+  // Top track (tTop, index=2) gets the new strip
+  const topTrack = out.nlaTracks.find((t) => t.id === 'tTop');
+  eq(topTrack.strips.length, 1, '43c: strip on top track');
+  eq(topTrack.strips[0].actionId, 'pushAct', '43d: strip references action');
+  eq(topTrack.strips[0].name, 'PushMe', '43e: strip name = action name');
+  eq(topTrack.strips[0].start, 0, '43f: strip start = 0');
+  eq(topTrack.strips[0].end, 800, '43g: strip end = 800');
+  // Original unchanged
+  eq(ad.actionId, 'pushAct', '43h: original actionId unchanged');
+  eq(ad.nlaTracks.find((t) => t.id === 'tTop').strips.length, 0, '43i: original immutable');
+}
+
+// ── 44. applyPushActionDown creates new track when top is PROTECTED
+{
+  const ad = makeFixture();
+  ad.actionId = 'pushAct';
+  ad.nlaTracks[2].flag = NLATRACK_FLAG.PROTECTED;   // tTop locked
+  const proj = mockProject([
+    { id: 'pushAct', name: 'Push', frameStart: 0, frameEnd: 400 },
+  ]);
+  const out = applyPushActionDown(ad, proj);
+  eq(out.actionId, null, '44a: actionId cleared');
+  // tTop unchanged (no strip added)
+  eq(out.nlaTracks.find((t) => t.id === 'tTop').strips.length, 0,
+    '44b: tTop still empty (was PROTECTED)');
+  // New track created named after the action
+  eq(out.nlaTracks.length, 4, '44c: new track created');
+  const newTrack = out.nlaTracks[3];
+  eq(newTrack.name, 'Push', '44d: new track named after action');
+  eq(newTrack.strips.length, 1, '44e: strip on new track');
+}
+
+// ── 45. applyPushActionDown refused conditions ─────────────────────
+{
+  // No actionId
+  const ad = makeFixture();
+  ad.actionId = null;
+  const out = applyPushActionDown(ad, mockProject([]));
+  assert(out === ad, '45a: null actionId → same ref');
+
+  // In tweak mode
+  const ad2 = makeFixture();
+  ad2.actionId = 'foo';
+  ad2.flag = ADT_FLAG.NLA_EDIT_ON;
+  const out2 = applyPushActionDown(ad2, mockProject([{ id: 'foo' }]));
+  assert(out2 === ad2, '45b: in tweak mode → same ref');
+
+  // wouldPushActionDownChange predicate matches
+  assert(!wouldPushActionDownChange(ad), '45c: predicate: no actionId → false');
+  assert(!wouldPushActionDownChange(ad2), '45d: predicate: in tweak → false');
+  ad2.flag = 0;
+  // Predicate ONLY checks animData state (actionId + tweak flag), NOT
+  // action-presence. The actual op refuses Rule №1-style if both push
+  // attempts fail (action missing from project), returning same-ref.
+  assert(wouldPushActionDownChange(ad2), '45e: predicate: actionId + not in tweak → true');
+
+  // Rule №1 verification (added in the same audit-sweep batch): if the
+  // action isn't actually in the project, applyPushActionDown must
+  // refuse rather than half-commit (clear actionId + create empty
+  // track but no strip).
+  const ad3 = makeFixture();
+  ad3.actionId = 'ghostAct';
+  const out3 = applyPushActionDown(ad3, mockProject([]));
+  assert(out3 === ad3, '45f: action missing from project → same ref (no half-commit)');
+}
+
+// ── 46. applyPushActionDown to empty animData (no tracks) ──────────
+{
+  const ad = {
+    actionId: 'lonely', slotHandle: 0, flag: 0,
+    tmpActionId: null, tmpSlotHandle: 0, tweakTrackId: null, tweakStripId: null,
+    nlaTracks: [],
+  };
+  const proj = mockProject([{ id: 'lonely', name: 'L', frameStart: 0, frameEnd: 200 }]);
+  const out = applyPushActionDown(ad, proj);
+  eq(out.actionId, null, '46a: actionId cleared');
+  eq(out.nlaTracks.length, 1, '46b: new track created');
+  eq(out.nlaTracks[0].name, 'L', '46c: track named after action');
+  eq(out.nlaTracks[0].strips.length, 1, '46d: strip on new track');
 }
 
 console.log(`\nnlaEditorOps: ${passed} passed, ${failed} failed`);

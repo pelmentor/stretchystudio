@@ -2,7 +2,7 @@
 
 /**
  * NLAEditor — Animation Phase 4 Slice 4.D (4.D.1 read-only +
- * 4.D.2 drag interactions + 4.D.3 affordances).
+ * 4.D.2 drag interactions + 4.D.3 affordances + 4.D.4 CRUD).
  *
  * Surfaces the NLA stack (`animData.nlaTracks[]`) for every animData-
  * bearing Object in the project.
@@ -94,10 +94,44 @@
  *     - Disabled = `Ban` (lucide). SS-original; Blender renders the
  *       DISABLED state by graying out the row rather than an icon.
  *
+ * # 4.D.4 — CRUD + Push Action Down (THIS COMMIT)
+ *
+ *   - **"+ Track" button** per group header (creates a new empty
+ *     NlaTrack at the top of the stack via `applyAddTrack`).
+ *
+ *   - **"+ Strip" affordance** per track (action-picker popover):
+ *     opens a small list of project actions; clicking one inserts a
+ *     fresh `NlaStrip` referencing that action via `applyAddStrip`.
+ *     Refuses on PROTECTED tracks (per Blender
+ *     `BKE_nlatrack_add_strip` `nla.cc:1361-1379`). Auto-positions
+ *     leftmost free slot if the track has existing strips (Blender's
+ *     `BKE_nlastrips_has_space` overlap-rejection semantic).
+ *
+ *   - **Push Action Down** button per group header (visible when
+ *     `animData.actionId` is set + not in tweak mode). Calls the
+ *     `applyPushActionDown` port of Blender's `BKE_nla_action_pushdown`
+ *     (`nla.cc:2248-2294`). Tries top track first; creates new track
+ *     named after the action if top is full. Clears `actionId` on
+ *     success.
+ *
+ *   - **Delete affordances** via right-click context menu (track) +
+ *     trash button in the strip-properties footer (strip). Both go
+ *     through the `wouldRemoveXChange` predicate to disable on
+ *     PROTECTED tracks or when the strip/track is in tweak mode
+ *     (substrate refuses; UI gates to avoid no-op click). Track
+ *     delete cascades to strips (per Blender
+ *     `BKE_nlatrack_remove_and_free` `nla.cc:706-744`).
+ *
+ *   - **Local right-click context menus** (NlaContextMenu component
+ *     embedded in this module — does NOT use the global
+ *     `useEditMenuStore` because that's keyed for one-at-a-time
+ *     canvas usage and would conflict with dual-pane NLAEditor
+ *     instances). Track context menu offers Delete + Mute/Solo/
+ *     Protect quick-toggles. Strip context menu offers Delete +
+ *     Edit Action + Mute.
+ *
  * # Deferred to later sub-slices
  *
- *   - 4.D.4: Push Action Down + track/strip CRUD context menus +
- *     "+ Track" / "+ Strip" affordances
  *   - Ruler tick marks (basic ruler shipped 4.D.1)
  *   - Playhead (deferred until scene-time integration)
  *   - blend-in / blend-out ramp sliders (footer panel will gain them
@@ -106,12 +140,22 @@
  *   - USR_INFLUENCE / USR_TIME driven-property surfaces (Blender's
  *     "Animated Influence" sub-panel; SS doesn't model the F-curve
  *     editing chain to that level yet)
+ *   - Transition strips (Blender `NLASTRIP_TYPE_TRANSITION`; SS only
+ *     ships `NLASTRIP_TYPE_CLIP` equivalents in Phase 4)
+ *   - Multi-select strips / box-select (only single-strip selection
+ *     today via click-to-select)
+ *   - Duplicate / split strip operators
+ *   - "Add Track Above Selected" (Blender's `above_sel` param on
+ *     `NLA_OT_tracks_add` `nla_tracks.cc:650`)
  *
  * @module v3/editors/nla/NLAEditor
  */
 
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import { Star, Lock, Unlock, EyeOff, Eye, Ban, Edit2, X } from 'lucide-react';
+import {
+  Star, Lock, Unlock, EyeOff, Eye, Ban, Edit2, X,
+  Plus, Trash2, ArrowDownToLine, MoreVertical,
+} from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import {
   buildNlaEditorRows,
@@ -133,9 +177,20 @@ import {
   applyToggleTrackMuted,
   applyToggleTrackProtected,
   applyToggleTrackSolo,
+  applyAddTrack,
+  applyAddStrip,
+  applyRemoveStrip,
+  applyRemoveTrack,
+  applyPushActionDown,
+  wouldRemoveStripChange,
+  wouldRemoveTrackChange,
+  wouldPushActionDownChange,
+  wouldAddStripChange,
   pxDeltaToMs,
 } from './nlaEditorOps.js';
-import { NLA_BLEND_MODES, NLA_EXTEND_MODES, isTweakModeOn } from '../../../anim/nla.js';
+import {
+  NLA_BLEND_MODES, NLA_EXTEND_MODES, NLATRACK_FLAG, isTweakModeOn,
+} from '../../../anim/nla.js';
 import { enterTweakMode, exitTweakMode } from '../../../anim/nlaTweakMode.js';
 import { cn } from '../../../lib/utils.js';
 
@@ -283,13 +338,14 @@ function StripRect({
         strip.tweakuser && !strip.isTweakStrip && 'border-yellow-600/60 border-dashed',
       )}
       style={{ left: `${left}px`, width: `${width}px` }}
+      data-strip-id={strip.id}
       title={[
         `${strip.name}  (${BLENDMODE_LABELS[strip.blendmode] ?? strip.blendmode})`,
         `action: ${strip.actionName}`,
         `t: ${strip.start.toFixed(0)} → ${strip.end.toFixed(0)} ms`,
         `influence: ${strip.influence.toFixed(2)}`,
         `extendmode: ${strip.extendmode}`,
-        'drag body to move; drag edges to resize',
+        'drag body to move; drag edges to resize; right-click for context menu',
         strip.muted ? '(MUTED)' : null,
         strip.isTweakStrip ? '(TWEAK STRIP)' : null,
         strip.tweakuser ? '(shares tweaked action)' : null,
@@ -377,6 +433,9 @@ function IconToggle({ Icon, active, activeColor, onClick, title }) {
  *   onToggleTrackMuted: () => void,
  *   onToggleTrackSolo: () => void,
  *   onToggleTrackProtected: () => void,
+ *   onAddStripClick: (x: number, y: number) => void,
+ *   onTrackContextMenu: (x: number, y: number) => void,
+ *   onStripContextMenu: (stripId: string, x: number, y: number) => void,
  * }} props
  */
 function TrackRow({
@@ -384,6 +443,7 @@ function TrackRow({
   dragState, onStripDragStart, onTrackDragStart, trackOriginalIndex,
   selectedStripId,
   onToggleTrackMuted, onToggleTrackSolo, onToggleTrackProtected,
+  onAddStripClick, onTrackContextMenu, onStripContextMenu,
 }) {
   // Live preview: this track is being dragged → highlight + offset
   const isBeingTrackDragged = dragState
@@ -433,7 +493,12 @@ function TrackRow({
         )}
         style={{ width: `${LABEL_W}px`, minWidth: `${LABEL_W}px` }}
         onPointerDown={handleTrackPointerDown}
-        title="Drag to reorder track within the stack"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onTrackContextMenu(e.clientX, e.clientY);
+        }}
+        title="Drag to reorder track within the stack; right-click for context menu"
       >
         <span className="text-zinc-500 text-[10px] tabular-nums w-4">
           {track.index}
@@ -476,8 +541,50 @@ function TrackRow({
             <Ban size={12} />
           </span>
         )}
+        {/* 4.D.4 + Strip — opens action-picker popover anchored to the
+            button's bounding rect. Disabled when track is PROTECTED
+            (matches Blender's BKE_nlatrack_add_strip refusal at
+            nla.cc:1361-1379). */}
+        <button
+          type="button"
+          disabled={track.protected_}
+          className={cn(
+            'p-0.5 rounded cursor-pointer',
+            track.protected_
+              ? 'opacity-40 cursor-not-allowed text-zinc-600'
+              : 'text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200',
+          )}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (track.protected_) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            onAddStripClick(rect.right, rect.top);
+          }}
+          title={track.protected_
+            ? 'Track is PROTECTED — unlock to add strips'
+            : 'Add a strip to this track (pick an Action)'}
+        >
+          <Plus size={12} />
+        </button>
       </div>
-      <div className="relative flex-1 overflow-hidden" style={{ width: `${pxWidth}px` }}>
+      <div
+        className="relative flex-1 overflow-hidden"
+        style={{ width: `${pxWidth}px` }}
+        onContextMenu={(e) => {
+          // 4.D.4: if the right-click landed on a strip, surface the
+          // strip context menu; otherwise the right-click is on empty
+          // lane space → no menu (a future sub-slice could add an
+          // "Add strip at cursor" action here).
+          const target = /** @type any */ (e.target);
+          const stripEl = target?.closest?.('[data-strip-id]');
+          if (stripEl) {
+            e.preventDefault();
+            e.stopPropagation();
+            onStripContextMenu(stripEl.dataset.stripId, e.clientX, e.clientY);
+          }
+        }}
+      >
         {track.strips.map((strip) => (
           <StripRect
             key={strip.id}
@@ -498,9 +605,18 @@ function TrackRow({
 }
 
 /**
- * @param {{ group: import('./nlaEditorData.js').NlaObjectGroup, onExitTweak: () => void }} props
+ * @param {{
+ *   group: import('./nlaEditorData.js').NlaObjectGroup,
+ *   animData: object|null,
+ *   onExitTweak: () => void,
+ *   onAddTrack: () => void,
+ *   onPushDown: () => void,
+ *   canPushDown: boolean,
+ * }} props
  */
-function GroupHeader({ group, onExitTweak }) {
+function GroupHeader({ group, animData, onExitTweak, onAddTrack, onPushDown, canPushDown }) {
+  const activeActionName = canPushDown && animData && typeof animData.actionId === 'string'
+    ? animData.actionId : null;
   return (
     <div
       className={cn(
@@ -515,10 +631,37 @@ function GroupHeader({ group, onExitTweak }) {
       <span className="truncate flex-1" title={group.objectName}>
         {group.objectName}
       </span>
+      {/* 4.D.4 Push Action Down — visible whenever group has an active
+          action AND not in tweak mode. Mirrors Blender's NLA_OT_action_pushdown
+          UI surface in the strip properties panel (when an active action
+          is present). */}
+      {canPushDown && (
+        <button
+          type="button"
+          className="ml-2 px-2 py-0.5 rounded bg-sky-800/40 hover:bg-sky-700/60 text-sky-300 text-[10px] uppercase tracking-wider flex items-center gap-1"
+          onClick={onPushDown}
+          title={`Push active action${activeActionName ? ` "${activeActionName}"` : ''} down onto the NLA stack as a new strip (Blender NLA_OT_action_pushdown)`}
+        >
+          <ArrowDownToLine size={10} />
+          Push Down
+        </button>
+      )}
+      {/* 4.D.4 + Track — always visible (no PROTECTED-equivalent at
+          the AnimData level; per-track PROTECTED gates only edit-on-
+          existing-track). */}
+      <button
+        type="button"
+        className="ml-2 px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-[10px] uppercase tracking-wider flex items-center gap-1"
+        onClick={onAddTrack}
+        title="Add a new empty NLA track at the top of the stack"
+      >
+        <Plus size={10} />
+        Track
+      </button>
       {group.tweakModeOn && (
         <>
           <span
-            className="text-yellow-400 text-[10px] uppercase tracking-wider"
+            className="ml-2 text-yellow-400 text-[10px] uppercase tracking-wider"
             title="In NLA tweak mode — editing the tweak strip's action directly"
           >
             TWEAK
@@ -599,11 +742,15 @@ function resolveSelectedStrip(groups, ref) {
  *   onToggleStripMuted: () => void,
  *   onEditAction: () => void,
  *   onClearSelection: () => void,
+ *   onDeleteStrip: () => void,
+ *   deleteDisabled: boolean,
+ *   deleteDisabledReason: string,
  * }} props
  */
 function StripPropertiesPanel({
   resolved, onSetBlendMode, onSetExtendMode, onSetInfluence,
   onToggleStripMuted, onEditAction, onClearSelection,
+  onDeleteStrip, deleteDisabled, deleteDisabledReason,
 }) {
   if (!resolved) {
     return (
@@ -744,6 +891,20 @@ function StripPropertiesPanel({
           <Edit2 size={11} />
           Edit Action
         </button>
+        <button
+          type="button"
+          className={cn(
+            'px-2 py-0.5 rounded text-[11px] flex items-center gap-1',
+            deleteDisabled
+              ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+              : 'bg-red-900/40 hover:bg-red-800/60 text-red-300',
+          )}
+          disabled={deleteDisabled}
+          onClick={deleteDisabled ? undefined : onDeleteStrip}
+          title={deleteDisabled ? deleteDisabledReason : 'Delete this strip'}
+        >
+          <Trash2 size={11} />
+        </button>
       </div>
     </div>
   );
@@ -781,6 +942,185 @@ function EmptyState({ noAnimData }) {
   );
 }
 
+/**
+ * Editor-local right-click context menu. Used for both track and strip
+ * context. Renders a small popover at the cursor; dismisses on outside
+ * click or Escape. SS-original implementation (does NOT use the global
+ * `useEditMenuStore` which is single-instance-only for canvas use).
+ *
+ * @param {{
+ *   menu: { kind: 'track'|'strip', objectId: string, trackId: string, stripId?: string, x: number, y: number } | null,
+ *   onClose: () => void,
+ *   onDelete: () => void,
+ *   onEditAction?: () => void,
+ *   onToggleMuted?: () => void,
+ *   onToggleSolo?: () => void,
+ *   onToggleProtected?: () => void,
+ *   deleteDisabled: boolean,
+ *   deleteDisabledReason: string,
+ * }} props
+ */
+function NlaContextMenu({
+  menu, onClose, onDelete, onEditAction, onToggleMuted, onToggleSolo,
+  onToggleProtected, deleteDisabled, deleteDisabledReason,
+}) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const onPointerDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [menu, onClose]);
+  if (!menu) return null;
+
+  // Clamp inside viewport
+  const W = 200;
+  const H = menu.kind === 'strip' ? 130 : 160;
+  const x = Math.max(4, Math.min(window.innerWidth - W - 4, menu.x + 2));
+  const y = Math.max(4, Math.min(window.innerHeight - H - 4, menu.y + 2));
+
+  const item = (label, Icon, onClick, opts = {}) => (
+    <button
+      type="button"
+      disabled={opts.disabled}
+      className={cn(
+        'w-full text-left text-[12px] px-3 py-1 flex items-center gap-2',
+        opts.disabled
+          ? 'opacity-40 cursor-not-allowed'
+          : 'cursor-pointer hover:bg-zinc-700 hover:text-zinc-100',
+        opts.danger && !opts.disabled && 'text-red-400',
+      )}
+      title={opts.title}
+      onClick={() => { if (!opts.disabled) { onClick(); onClose(); } }}
+    >
+      <Icon size={12} />
+      <span className="flex-1">{label}</span>
+    </button>
+  );
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-[110] rounded-md border border-zinc-700 bg-zinc-900 shadow-lg py-1"
+      style={{ left: x, top: y, width: `${W}px` }}
+      role="menu"
+    >
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 mb-1">
+        {menu.kind === 'track' ? 'Track' : 'Strip'}
+      </div>
+      {menu.kind === 'strip' && onEditAction && item('Edit Action', Edit2, onEditAction)}
+      {menu.kind === 'strip' && onToggleMuted && item('Toggle Mute', EyeOff, onToggleMuted)}
+      {menu.kind === 'track' && onToggleMuted && item('Toggle Mute', EyeOff, onToggleMuted)}
+      {menu.kind === 'track' && onToggleSolo && item('Toggle Solo', Star, onToggleSolo)}
+      {menu.kind === 'track' && onToggleProtected && item('Toggle Protect', Lock, onToggleProtected)}
+      <div className="my-1 h-px bg-zinc-800" />
+      {item('Delete', Trash2, onDelete, {
+        disabled: deleteDisabled,
+        danger: true,
+        title: deleteDisabled ? deleteDisabledReason : undefined,
+      })}
+    </div>
+  );
+}
+
+/**
+ * Action-picker popover used by the "+ Strip" affordance. Renders a
+ * small scrollable list of all project actions; click an entry to
+ * add a strip referencing it to the target track.
+ *
+ * @param {{
+ *   picker: { objectId: string, trackId: string, x: number, y: number } | null,
+ *   project: object|null|undefined,
+ *   onClose: () => void,
+ *   onPick: (actionId: string) => void,
+ * }} props
+ */
+function ActionPickerPopover({ picker, project, onClose, onPick }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!picker) return undefined;
+    const onPointerDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [picker, onClose]);
+  if (!picker) return null;
+
+  const actions = Array.isArray(project?.actions) ? project.actions : [];
+  // Clamp inside viewport
+  const W = 240;
+  const maxH = 320;
+  const x = Math.max(4, Math.min(window.innerWidth - W - 4, picker.x + 2));
+  const y = Math.max(4, Math.min(window.innerHeight - maxH - 4, picker.y + 2));
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-[110] rounded-md border border-zinc-700 bg-zinc-900 shadow-lg py-1 overflow-auto"
+      style={{ left: x, top: y, width: `${W}px`, maxHeight: `${maxH}px` }}
+      role="menu"
+    >
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 mb-1">
+        Add strip — pick an Action
+      </div>
+      {actions.length === 0 ? (
+        <div className="px-3 py-2 text-[11px] text-zinc-500">
+          No Actions in this project. Create one in the Actions editor first.
+        </div>
+      ) : (
+        actions.map((a) => {
+          if (!a || typeof a.id !== 'string') return null;
+          const name = typeof a.name === 'string' && a.name.length > 0 ? a.name : a.id;
+          const duration = typeof a.duration === 'number' ? a.duration
+            : (typeof a.frameStart === 'number' && typeof a.frameEnd === 'number'
+              ? Math.max(0, a.frameEnd - a.frameStart) : null);
+          return (
+            <button
+              key={a.id}
+              type="button"
+              className="w-full text-left text-[12px] px-3 py-1 cursor-pointer hover:bg-zinc-700 hover:text-zinc-100 flex items-center justify-between gap-2"
+              onClick={() => { onPick(a.id); onClose(); }}
+              title={`${name} (${a.id})`}
+            >
+              <span className="truncate">{name}</span>
+              {duration !== null && (
+                <span className="text-[10px] text-zinc-500 tabular-nums">
+                  {duration.toFixed(0)} ms
+                </span>
+              )}
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 export function NLAEditor() {
   const project = useProjectStore((s) => s.project);
   const updateProject = useProjectStore((s) => s.updateProject);
@@ -795,10 +1135,23 @@ export function NLAEditor() {
 
   const groups = useMemo(() => buildNlaEditorRows(project), [project]);
   const span = useMemo(() => computeTimelineSpan(groups), [groups]);
-  const visibleGroups = useMemo(
-    () => groups.filter((g) => g.tracks.length > 0),
-    [groups],
-  );
+  // 4.D.4 — also show groups with 0 tracks so the user can bootstrap
+  // the first track via the GroupHeader +Track button. Pre-4.D.4 we
+  // filtered these out because there was no way to add tracks; now
+  // the empty group is a valid working state.
+  const visibleGroupsWithEmpty = groups;
+
+  // Per-objectId node lookup so the GroupHeader can read animData.actionId
+  // for the Push Down gate without re-traversing project.nodes per render.
+  const nodesById = useMemo(() => {
+    const m = new Map();
+    if (project && Array.isArray(project.nodes)) {
+      for (const n of project.nodes) {
+        if (n && typeof n.id === 'string') m.set(n.id, n);
+      }
+    }
+    return m;
+  }, [project]);
 
   // Editor-local strip selection (NOT persisted in animData). 4.D.3
   // SS DEVIATION: Blender uses NLASTRIP_FLAG.SELECT + NLASTRIP_FLAG.ACTIVE
@@ -811,13 +1164,33 @@ export function NLAEditor() {
     /** @type {{ objectId: string, trackId: string, stripId: string }|null} */ (null),
   );
 
+  // 4.D.4 — local right-click context menu state. Editor-local so two
+  // NLAEditor instances don't fight over `useEditMenuStore` (which is
+  // designed for single-canvas global use).
+  const [contextMenu, setContextMenu] = useState(
+    /** @type {{
+     *   kind: 'track'|'strip',
+     *   objectId: string,
+     *   trackId: string,
+     *   stripId?: string,
+     *   x: number,
+     *   y: number,
+     * } | null} */ (null),
+  );
+
+  // 4.D.4 — open action-picker popover for the +Strip affordance.
+  // Pinned to (objectId, trackId) so we know which track to add to.
+  const [actionPicker, setActionPicker] = useState(
+    /** @type {{ objectId: string, trackId: string, x: number, y: number } | null} */ (null),
+  );
+
   // When the underlying strip gets deleted/renamed by another flow,
   // drop the selection so the footer panel doesn't show stale data.
   // Resolution via resolveSelectedStrip() inside the render below;
   // here we just hold the ref.
   const resolvedSelection = useMemo(
-    () => resolveSelectedStrip(visibleGroups, selectedStripRef),
-    [visibleGroups, selectedStripRef],
+    () => resolveSelectedStrip(visibleGroupsWithEmpty, selectedStripRef),
+    [visibleGroupsWithEmpty, selectedStripRef],
   );
   useEffect(() => {
     if (selectedStripRef && !resolvedSelection) {
@@ -1057,11 +1430,97 @@ export function NLAEditor() {
     });
   }, [updateProject]);
 
+  // ----- Slice 4.D.4 CRUD callbacks -----
+
+  const handleAddTrack = useCallback((objectId) => {
+    makeNodeRecipe(objectId, (ad) => applyAddTrack(ad));
+  }, [makeNodeRecipe]);
+
+  const handleAddStrip = useCallback((objectId, trackId, actionId) => {
+    updateProject((proj) => {
+      const node = proj.nodes.find((n) => n && n.id === objectId);
+      if (!node || !node.animData) return;
+      const newAd = applyAddStrip(node.animData, proj, trackId, actionId, 0);
+      if (newAd !== node.animData) {
+        node.animData = newAd;
+      }
+    });
+  }, [updateProject]);
+
+  const handleRemoveStrip = useCallback((objectId, trackId, stripId) => {
+    makeNodeRecipe(objectId, (ad) => applyRemoveStrip(ad, trackId, stripId));
+    // If we deleted the selected strip, clear the selection so the
+    // footer panel doesn't try to resolve a missing ref (the
+    // selection useEffect catches this anyway, but explicit clear
+    // avoids a one-frame flash of the wrong content).
+    if (selectedStripRef
+        && selectedStripRef.objectId === objectId
+        && selectedStripRef.trackId === trackId
+        && selectedStripRef.stripId === stripId) {
+      setSelectedStripRef(null);
+    }
+  }, [makeNodeRecipe, selectedStripRef]);
+
+  const handleRemoveTrack = useCallback((objectId, trackId) => {
+    makeNodeRecipe(objectId, (ad) => applyRemoveTrack(ad, trackId));
+    // Clear selection if it was on a strip inside this track
+    if (selectedStripRef
+        && selectedStripRef.objectId === objectId
+        && selectedStripRef.trackId === trackId) {
+      setSelectedStripRef(null);
+    }
+  }, [makeNodeRecipe, selectedStripRef]);
+
+  const handlePushActionDown = useCallback((objectId) => {
+    updateProject((proj) => {
+      const node = proj.nodes.find((n) => n && n.id === objectId);
+      if (!node || !node.animData) return;
+      const newAd = applyPushActionDown(node.animData, proj);
+      if (newAd !== node.animData) {
+        node.animData = newAd;
+      }
+    });
+  }, [updateProject]);
+
+  // Strip delete state (for the StripPropertiesPanel footer).
+  const stripDeleteState = useMemo(() => {
+    if (!resolvedSelection) return { canDelete: false, reason: 'No strip selected' };
+    const { group, track, strip } = resolvedSelection;
+    const node = nodesById.get(group.objectId);
+    const ad = node?.animData;
+    const ok = ad && wouldRemoveStripChange(ad, track.id, strip.id);
+    if (ok) return { canDelete: true, reason: '' };
+    if (track.protected_) return { canDelete: false, reason: 'Track is PROTECTED — unlock to delete strips' };
+    if (group.tweakStripId === strip.id) return { canDelete: false, reason: 'Strip is in tweak mode — Exit Tweak first' };
+    return { canDelete: false, reason: 'Cannot delete this strip' };
+  }, [resolvedSelection, nodesById]);
+
+  // Context-menu delete state (for NlaContextMenu).
+  const contextMenuDeleteState = useMemo(() => {
+    if (!contextMenu) return { disabled: false, reason: '' };
+    const node = nodesById.get(contextMenu.objectId);
+    const ad = node?.animData;
+    if (!ad) return { disabled: true, reason: 'No animData' };
+    if (contextMenu.kind === 'track') {
+      if (wouldRemoveTrackChange(ad, contextMenu.trackId)) return { disabled: false, reason: '' };
+      const tracks = Array.isArray(ad.nlaTracks) ? ad.nlaTracks : [];
+      const t = tracks.find((x) => x && x.id === contextMenu.trackId);
+      const trackFlag = typeof t?.flag === 'number' ? t.flag : 0;
+      if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return { disabled: true, reason: 'Track is PROTECTED' };
+      return { disabled: true, reason: 'Track contains the tweak strip — Exit Tweak first' };
+    }
+    if (contextMenu.stripId
+        && wouldRemoveStripChange(ad, contextMenu.trackId, contextMenu.stripId)) {
+      return { disabled: false, reason: '' };
+    }
+    return { disabled: true, reason: 'Cannot delete (PROTECTED or in tweak mode)' };
+  }, [contextMenu, nodesById]);
+
   // All hooks above this line. Early return safe now.
-  if (visibleGroups.length === 0) {
+  if (visibleGroupsWithEmpty.length === 0) {
     return (
       <div ref={setContainerRef} className="h-full">
-        <EmptyState noAnimData={groups.length === 0} />
+        <EmptyState noAnimData={true} />
       </div>
     );
   }
@@ -1111,43 +1570,61 @@ export function NLAEditor() {
           the binding via a small per-track useMemo. The
           useCallback'd handler layer (handleToggleTrackMuted etc) is
           already structured to support that move. */}
-      {visibleGroups.map((group) => (
-        <div key={group.objectId}>
-          <GroupHeader
-            group={group}
-            onExitTweak={() => handleExitTweak(group.objectId)}
-          />
-          {group.tracks.map((track) => (
-            <TrackRow
-              key={track.id}
-              track={track}
-              objectId={group.objectId}
-              minMs={minMs}
-              maxMs={maxMs}
-              pxWidth={pxWidth}
-              isTweakTrack={
-                group.tweakModeOn
-                && group.tweakTrackId !== null
-                && track.id === group.tweakTrackId
-              }
-              dragState={dragState}
-              onStripDragStart={handleStripDragStart}
-              onTrackDragStart={handleTrackDragStart}
-              trackOriginalIndex={track.index}
-              selectedStripId={
-                selectedStripRef
-                  && selectedStripRef.objectId === group.objectId
-                  && selectedStripRef.trackId === track.id
-                  ? selectedStripRef.stripId
-                  : null
-              }
-              onToggleTrackMuted={() => handleToggleTrackMuted(group.objectId, track.id)}
-              onToggleTrackSolo={() => handleToggleTrackSolo(group.objectId, track.id)}
-              onToggleTrackProtected={() => handleToggleTrackProtected(group.objectId, track.id)}
+      {visibleGroupsWithEmpty.map((group) => {
+        const groupNode = nodesById.get(group.objectId);
+        const groupAnimData = groupNode?.animData ?? null;
+        const canPushDown = wouldPushActionDownChange(groupAnimData);
+        return (
+          <div key={group.objectId}>
+            <GroupHeader
+              group={group}
+              animData={groupAnimData}
+              onExitTweak={() => handleExitTweak(group.objectId)}
+              onAddTrack={() => handleAddTrack(group.objectId)}
+              onPushDown={() => handlePushActionDown(group.objectId)}
+              canPushDown={canPushDown}
             />
-          ))}
-        </div>
-      ))}
+            {group.tracks.map((track) => (
+              <TrackRow
+                key={track.id}
+                track={track}
+                objectId={group.objectId}
+                minMs={minMs}
+                maxMs={maxMs}
+                pxWidth={pxWidth}
+                isTweakTrack={
+                  group.tweakModeOn
+                  && group.tweakTrackId !== null
+                  && track.id === group.tweakTrackId
+                }
+                dragState={dragState}
+                onStripDragStart={handleStripDragStart}
+                onTrackDragStart={handleTrackDragStart}
+                trackOriginalIndex={track.index}
+                selectedStripId={
+                  selectedStripRef
+                    && selectedStripRef.objectId === group.objectId
+                    && selectedStripRef.trackId === track.id
+                    ? selectedStripRef.stripId
+                    : null
+                }
+                onToggleTrackMuted={() => handleToggleTrackMuted(group.objectId, track.id)}
+                onToggleTrackSolo={() => handleToggleTrackSolo(group.objectId, track.id)}
+                onToggleTrackProtected={() => handleToggleTrackProtected(group.objectId, track.id)}
+                onAddStripClick={(x, y) => setActionPicker({
+                  objectId: group.objectId, trackId: track.id, x, y,
+                })}
+                onTrackContextMenu={(x, y) => setContextMenu({
+                  kind: 'track', objectId: group.objectId, trackId: track.id, x, y,
+                })}
+                onStripContextMenu={(stripId, x, y) => setContextMenu({
+                  kind: 'strip', objectId: group.objectId, trackId: track.id, stripId, x, y,
+                })}
+              />
+            ))}
+          </div>
+        );
+      })}
       <StripPropertiesPanel
         resolved={resolvedSelection}
         onSetBlendMode={(m) => resolvedSelection && handleSetBlendMode(
@@ -1166,6 +1643,55 @@ export function NLAEditor() {
           resolvedSelection.group.objectId, resolvedSelection.track.id,
           resolvedSelection.strip.id)}
         onClearSelection={() => setSelectedStripRef(null)}
+        onDeleteStrip={() => resolvedSelection && handleRemoveStrip(
+          resolvedSelection.group.objectId, resolvedSelection.track.id,
+          resolvedSelection.strip.id)}
+        deleteDisabled={!stripDeleteState.canDelete}
+        deleteDisabledReason={stripDeleteState.reason}
+      />
+      <NlaContextMenu
+        menu={contextMenu}
+        onClose={() => setContextMenu(null)}
+        onDelete={() => {
+          if (!contextMenu) return;
+          if (contextMenu.kind === 'track') {
+            handleRemoveTrack(contextMenu.objectId, contextMenu.trackId);
+          } else if (contextMenu.stripId) {
+            handleRemoveStrip(contextMenu.objectId, contextMenu.trackId, contextMenu.stripId);
+          }
+        }}
+        onEditAction={contextMenu?.kind === 'strip' && contextMenu.stripId
+          ? () => handleEditAction(contextMenu.objectId, contextMenu.trackId,
+            /** @type string */ (contextMenu.stripId))
+          : undefined}
+        onToggleMuted={contextMenu
+          ? () => {
+              if (contextMenu.kind === 'track') {
+                handleToggleTrackMuted(contextMenu.objectId, contextMenu.trackId);
+              } else if (contextMenu.stripId) {
+                handleToggleStripMuted(contextMenu.objectId, contextMenu.trackId,
+                  contextMenu.stripId);
+              }
+            }
+          : undefined}
+        onToggleSolo={contextMenu?.kind === 'track'
+          ? () => handleToggleTrackSolo(contextMenu.objectId, contextMenu.trackId)
+          : undefined}
+        onToggleProtected={contextMenu?.kind === 'track'
+          ? () => handleToggleTrackProtected(contextMenu.objectId, contextMenu.trackId)
+          : undefined}
+        deleteDisabled={contextMenuDeleteState.disabled}
+        deleteDisabledReason={contextMenuDeleteState.reason}
+      />
+      <ActionPickerPopover
+        picker={actionPicker}
+        project={project}
+        onClose={() => setActionPicker(null)}
+        onPick={(actionId) => {
+          if (!actionPicker) return;
+          handleAddStrip(actionPicker.objectId, actionPicker.trackId, actionId);
+          setActionPicker(null);
+        }}
       />
     </div>
   );
