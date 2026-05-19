@@ -250,6 +250,14 @@ function fixture(entries = []) {
   assert(r1 === h, '16a: replace no-op same-ref');
   const r2 = applyTickSelectDeselect(h, 'fc1', 999);   // tick not present
   assert(r2 === h, '16b: deselect no-op same-ref');
+  // Audit-fix Slice 6.A MED-A3: extend on an absent tick is NOT a
+  // no-op (always adds → outer Map changes). Extend on a present tick
+  // is also NOT a no-op (always removes → outer Map changes). Both
+  // toggle paths always emit a new outer Map. Documented behavior.
+  const r3 = applyTickSelectExtend(h, 'fc1', 99);   // new tick → toggle on
+  assert(r3 !== h, '16c: extend toggle-on always new ref (no no-op)');
+  const r4 = applyTickSelectExtend(h, 'fc1', 5);    // present tick → toggle off
+  assert(r4 !== h, '16d: extend toggle-off always new ref (no no-op)');
 }
 
 // ── 17. All 3 ops emit fresh Map instances (no shared refs) ────────

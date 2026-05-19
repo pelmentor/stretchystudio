@@ -350,23 +350,37 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
               title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActiveHalo ? ' · active' : isSelected ? ' · selected' : ''}`}
               onClick={(e) => {
                 // Slice 6.A — primary click is now SELECT (plain /
-                // shift+extend / ctrl+deselect); double-click falls
-                // back to seek (preserves the prior workflow). Rows
-                // without an fcurveId (synthetic / header rows) keep
-                // the legacy seek-on-click behavior since they have
-                // no selection identity to manipulate.
+                // shift+extend / ctrl+deselect); double-click ALSO
+                // seeks via onDoubleClick below (preserves the prior
+                // seek workflow). Rows without an fcurveId (synthetic
+                // / header rows) keep the legacy seek-on-click behavior
+                // since they have no selection identity to manipulate.
+                //
+                // Audit-fix Slice 6.A HIGH-A2 documentation: a true
+                // double-click fires TWO `onClick` events (detail=1
+                // then detail=2). The detail=1 event runs the select
+                // handler; the detail=2 event would run select AGAIN
+                // (re-replacing with the same single-entry selection,
+                // which is the identity-stable no-op path in
+                // applyTickSelectReplace, so no extra subscriber
+                // re-renders). The onDoubleClick handler then seeks.
+                // Net UX: double-click selects-then-seeks; the select
+                // step is intentional + lossless (clicking a tick
+                // and seeking to its time both make sense).
                 if (row.fcurveId === '') {
                   e.stopPropagation();
                   onSeek(kf.time);
                   return;
                 }
-                if (e.detail === 2) {
-                  // Double-click → seek to tick time
-                  e.stopPropagation();
-                  onSeek(kf.time);
-                  return;
-                }
                 onTickClick(e, row.fcurveId, i);
+              }}
+              onDoubleClick={(e) => {
+                // Detail=2 click triggers this AFTER the second
+                // onClick; seek to tick time. The select is already
+                // done by the prior onClick events; stopPropagation
+                // prevents the parent row's seek-on-empty-click.
+                e.stopPropagation();
+                onSeek(kf.time);
               }}
             />
           );

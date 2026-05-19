@@ -80,6 +80,7 @@
  */
 
 import { create } from 'zustand';
+import { useCallback } from 'react';
 
 const EMPTY_MAP = new Map();
 
@@ -130,33 +131,42 @@ export const useKeyformSelectionStore = create((set) => ({
  *
  * `setHandles` accepts either a Map directly OR an updater function
  * `(prev) => next` (matching `useState`'s functional setter shape).
- * The updater always reads the LATEST published state via
- * `getState()` to avoid stale-closure hazards in event handlers
- * that batch multiple set calls.
+ * The functional form always reads the LATEST published state via
+ * `getState()` to avoid stale-closure hazards in event handlers that
+ * batch multiple set calls.
  *
- * Identity-stable: the returned `setHandles` callback's identity is
- * stable across re-renders so callers can include it in
- * `useCallback` / `useEffect` deps without triggering re-runs.
+ * **Identity-stable** (audit-fix Slice 6.A CRITICAL): the returned
+ * `setHandles` callback is wrapped in `useCallback` with the Zustand
+ * action (itself construction-time stable) as the only dep, so the
+ * callback identity is stable across re-renders. Callers can include
+ * it in `useCallback`/`useEffect` deps without triggering re-runs.
+ * Pre-fix the adapter was a bare inline arrow that returned a fresh
+ * closure each call — invalidating downstream useCallback identities
+ * (handleTickClick in DopesheetEditor) on every render.
  *
  * @returns {[SelectedHandlesMap, (next: SelectedHandlesMap | ((prev: SelectedHandlesMap) => SelectedHandlesMap)) => void]}
  */
 export function useKeyformSelectionState() {
   const handles = useKeyformSelectionStore((s) => s.handles);
   // Zustand actions defined inside `create()` are identity-stable at
-  // construction time, so this getState().setHandles reference is
-  // closure-stable + safe in deps.
-  const setHandles = (
-    /** @type {SelectedHandlesMap | ((prev: SelectedHandlesMap) => SelectedHandlesMap)} */
-    next,
-  ) => {
-    const setter = useKeyformSelectionStore.getState().setHandles;
-    if (typeof next === 'function') {
-      const prev = useKeyformSelectionStore.getState().handles;
-      setter(next(prev));
-    } else {
-      setter(next);
-    }
-  };
+  // construction time, so this selector returns the same ref every
+  // render. The `useCallback` below then has a stable dep → stable
+  // returned setter identity.
+  const storeSetHandles = useKeyformSelectionStore((s) => s.setHandles);
+  const setHandles = useCallback(
+    (
+      /** @type {SelectedHandlesMap | ((prev: SelectedHandlesMap) => SelectedHandlesMap)} */
+      next,
+    ) => {
+      if (typeof next === 'function') {
+        const prev = useKeyformSelectionStore.getState().handles;
+        storeSetHandles(next(prev));
+      } else {
+        storeSetHandles(next);
+      }
+    },
+    [storeSetHandles],
+  );
   return [handles, setHandles];
 }
 
