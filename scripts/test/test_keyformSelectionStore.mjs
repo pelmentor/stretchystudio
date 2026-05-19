@@ -1,11 +1,12 @@
 // Animation Phase 5 Slice 5.EE — tests for
-// src/store/keyformSelectionStore.js (FCurveEditor publish /
-// DopesheetEditor consume mirror store).
+// src/store/keyformSelectionStore.js (originally FCurveEditor publish /
+// DopesheetEditor consume mirror store; Slice 6.A lifted it to a
+// multi-writer canonical state via setHandles + useKeyformSelectionState).
 //
 // Coverage:
 //   - Default state is empty Map
-//   - publishHandles replaces the Map
-//   - publishHandles skips set() when ref-equal (identity-stable)
+//   - setHandles replaces the Map (renamed from publishHandles in 6.A)
+//   - setHandles skips set() when ref-equal (identity-stable)
 //   - isKeyformCenterSelected: null/empty/missing/non-Map guards
 //   - isKeyformCenterSelected: hit/miss on fcurveId + keyformIdx
 //   - isKeyformCenterSelected: gates on `.center === true` only

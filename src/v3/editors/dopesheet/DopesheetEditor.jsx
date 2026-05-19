@@ -290,15 +290,33 @@ export function DopesheetEditor() {
     [],
   );
 
+  // Refs mirrored from frequently-updating values so handleTrackPointerUp
+  // can stay identity-stable. Pre-fix (audit-fix Slice 6.C MED-A1) the
+  // callback re-created on every parent render due to `rows`/`duration`
+  // changes; not as hot as pointerMove (which fires 60-120 Hz during
+  // drag and was fixed in 6.B HIGH-A1) but consistent with that pattern.
+  const rowsRef = useRef(rows);
+  const durationRef = useRef(duration);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+
   // Pointerup — commit the box-select (if drag exceeded threshold) or
   // discard (if it was a click). Commit reads the rect's X-range and
   // the Y-intersected rows, builds hits, calls applyBoxSelect, writes
-  // to the store.
+  // to the store. Identity-stable: reads boxDrag via the functional
+  // setter trick + rows/duration via refs; setKeyformSelectionHandles
+  // is a stable Zustand-action wrapper from useKeyformSelectionState().
   const handleTrackPointerUp = useCallback(
     /** @param {React.PointerEvent<HTMLDivElement>} e */
     (e) => {
-      const drag = boxDrag;
-      setBoxDrag(null);
+      // Snapshot + clear boxDrag atomically via the functional setter
+      // (reads latest state without depending on the closure).
+      /** @type {BoxDragState|null} */
+      let drag = null;
+      setBoxDrag((/** @type {BoxDragState|null} */ prev) => {
+        drag = prev;
+        return null;
+      });
       const trackArea = trackAreaRef.current;
       if (trackArea) {
         try { trackArea.releasePointerCapture(e.pointerId); } catch { /* noop */ }
@@ -311,6 +329,8 @@ export function DopesheetEditor() {
         // (Tick onClick already ran if applicable.)
         return;
       }
+      const curRows = rowsRef.current;
+      const curDuration = durationRef.current;
       // Compute Y-intersected rows via DOM row bounding boxes. Each
       // row's data-row-idx attribute lets us index back into `rows`.
       const trackRect = trackArea.getBoundingClientRect();
@@ -329,7 +349,7 @@ export function DopesheetEditor() {
         const idxStr = el.getAttribute('data-row-idx');
         if (idxStr === null) continue;
         const idx = parseInt(idxStr, 10);
-        const row = rows[idx];
+        const row = curRows[idx];
         if (!row || !row.fcurveId) continue;
         hitRows.push({ fcurveId: row.fcurveId, keyforms: row.keyforms });
       }
@@ -338,14 +358,14 @@ export function DopesheetEditor() {
       // column, so subtract LABEL_W first.
       const tickAreaWidth = Math.max(1, trackRect.width - LABEL_W);
       const xToTime = (/** @type {number} */ x) =>
-        ((x - LABEL_W) / tickAreaWidth) * duration;
+        ((x - LABEL_W) / tickAreaWidth) * curDuration;
       const tMin = xToTime(Math.min(drag.startX, drag.curX));
       const tMax = xToTime(Math.max(drag.startX, drag.curX));
       const hits = computeBoxHits(hitRows, tMin, tMax);
       setKeyformSelectionHandles((prev) =>
         applyBoxSelect(prev, hits, drag.mode));
     },
-    [boxDrag, rows, duration, setKeyformSelectionHandles],
+    [setKeyformSelectionHandles],
   );
 
   // B-key handler — arms the gesture for the next pointerdown.
@@ -381,21 +401,34 @@ export function DopesheetEditor() {
   }, [bArmed]);
 
   // ── Slice 6.C: modal grab (G key) ──────────────────────────────────────
-  // Ports Blender's TRANSFORM_OT_translate in TFM_TIME_TRANSLATE mode
-  // for the SpaceAction (Dopesheet). Reference path:
+  // Ports Blender's dopesheet G binding to TFM_TIME_TRANSLATE mode for
+  // the SpaceAction. Reference path:
   //
-  //   - Keymap: `keymap_data/blender_default.py:2716-2717` binds G to
-  //     `transform.translate` in the dopesheet (verified pre-ship per
-  //     `feedback_byte_verify_behavior_cites` workflow).
+  //   - Keymap: `keymap_data/blender_default.py:2718-2719` binds G in
+  //     the dopesheet to `transform.transform` with
+  //     `properties=[("mode", "TIME_TRANSLATE")]` — the dopesheet uses
+  //     the generic `transform.transform` op with a mode property, NOT
+  //     `transform.translate` (which is the 3D-viewport / graph-editor
+  //     binding at `:384` / `:1143` / `:2069`). Audit-fix Slice 6.C
+  //     HIGH-F1 cite correction: pre-fix this docstring cited
+  //     `:2716-2717` (anim.channels_editable_toggle + channels_select_filter)
+  //     + claimed `transform.translate` — both wrong; the real dispatch
+  //     into TFM_TIME_TRANSLATE is via `transform.transform mode='TIME_TRANSLATE'`
+  //     at `:2718-2719`.
   //   - Operator dispatch: `transform_convert_action.cc:1404-1409` wires
   //     `createTransActionData` / `recalcData_actedit` /
-  //     `special_aftertrans_update__actedit`.
+  //     `special_aftertrans_update__actedit` — the spacetype-dispatch
+  //     to SpaceAction inside `transform.transform`'s mode-router.
   //   - Per-frame flush: `transform_convert.cc:1267-1285`
   //     (`transform_convert_flush_handle2D`) shifts handle X by the same
   //     delta as the center for the bezier-preservation property.
   //   - Post-commit: `transform_convert_action.cc:1203-1295` runs
   //     `posttrans_action_clean` → `BKE_fcurve_merge_duplicate_keys` for
-  //     the selected-wins-on-collision step.
+  //     the selected-keys-AVERAGE + unselected-duplicates-DELETE step
+  //     (fcurve.cc:1801-1916). Audit-fix Slice 6.C HIGH-F2 docstring
+  //     correction: pre-fix this read "selected-wins-on-collision"
+  //     which was incomplete — Blender averages selected values, not
+  //     "wins" them.
   //
   // SS modal state shape:
   //
@@ -510,6 +543,15 @@ export function DopesheetEditor() {
       const cur = grabStateRef.current;
       if (!cur) return;
       const dMs = cur.deltaMs;
+      // Audit-fix Slice 6.C HIGH-A2: eagerly clear the suppression
+      // ref BEFORE setGrabState(null). setGrabState is React-async-
+      // batched; the useEffect mirror that resets grabActiveRef runs
+      // on the NEXT render, so any handler that fires synchronously
+      // between setGrabState and the mirror flip would still see
+      // grabActiveRef.current === true. Setting it false here closes
+      // the window so the suppression contract holds across the
+      // commit's synchronous tail.
+      grabActiveRef.current = false;
       setGrabState(null);
       if (!wouldTimeTranslateChange(
         useKeyformSelectionStore.getState().handles,
@@ -543,6 +585,11 @@ export function DopesheetEditor() {
       }
     };
     const cancel = () => {
+      // Same eager-flip rationale as commit() — close the suppression
+      // window before scheduling the React re-render. Cancel has no
+      // tail-mutation so the asymmetry isn't load-bearing, but keep
+      // both paths symmetric to avoid surprise.
+      grabActiveRef.current = false;
       setGrabState(null);
     };
     /** @param {MouseEvent} e */
@@ -579,12 +626,22 @@ export function DopesheetEditor() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('contextmenu', onContextMenu);
     };
-    // `grabActive` (boolean) is the only intended re-mount trigger;
-    // deltaMs updates DON'T re-mount because we read latest deltaMs via
-    // grabStateRef inside the handlers. startClientX is captured at
-    // grab entry and stable until cancel/commit, so reading from
-    // closure is correct. eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grabState !== null, activeActionId, updateProject]);
+    // Audit-fix Slice 6.C HIGH-A1: removed `activeActionId` +
+    // `updateProject` from the dep array. Pre-fix, if the user changed
+    // the active action MID-GRAB (e.g. via a global hotkey in another
+    // panel), this effect would tear down + re-register the listeners,
+    // and the new commit closure would target the new actionId while
+    // the user was still mid-translate against the OLD action — sending
+    // the in-flight delta to an unrelated action. Now the closure
+    // captures activeActionId at grab-entry time and stays stable
+    // until commit/cancel exits the modal. `updateProject` is a Zustand
+    // action (construction-time stable) so it's also safe to capture
+    // from closure once.
+    // The boolean `grabState !== null` evaluates to the same value
+    // across renders while a grab is in flight, so React's dep-array
+    // identity check correctly avoids re-mounts on every deltaMs tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grabState !== null]);
 
   if (!action) {
     return (

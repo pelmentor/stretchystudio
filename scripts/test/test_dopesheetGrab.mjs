@@ -270,14 +270,12 @@ const HANDLES_ONLY = { center: false, left: true, right: true };
 // ── §17 — merges duplicates after collision ────────────────────────────
 {
   // Keys at 100 / 200. Shift key 0 by +100 → collides with key 1 at 200.
-  // mergeDuplicateTimeKeys: selected wins at lowest cluster idx.
-  // Post-sort: [200 (idx0, originally key1, NOT selected), 200 (idx1,
-  // originally key0, selected)]. Cluster has selected at idx1; selected
-  // becomes new survivor at LOWEST cluster idx (idx 0 in cluster) → the
-  // survivor at idx 0 is the one written with the selected's value/handles.
-  // Actually look at the impl: it averages selected values, writes to
-  // keepIdx = selectedInCluster[0]. Then deletes others. So survivor
-  // count is 1; the merged-away one was the unselected key 1.
+  // mergeDuplicateTimeKeys (graphEditOps.js:669 → Blender parity at
+  // fcurve.cc:1801-1916): selected keys at the same time AVERAGE
+  // their values into the lowest-index survivor; unselected duplicates
+  // get unconditionally deleted. Here only 1 selected key + 1
+  // unselected key, so no averaging happens (1-element average is the
+  // identity); the unselected is deleted; final array has length 1.
   const action = makeAction([
     makeFc('fc1', [makeKf(100, 5), makeKf(200, 10)]),
   ]);
@@ -285,6 +283,8 @@ const HANDLES_ONLY = { center: false, left: true, right: true };
   const r = applyTimeTranslate(action, h, 100);
   eq(action.fcurves[0].keyforms.length, 1, '§17 cluster collapsed to 1');
   eq(action.fcurves[0].keyforms[0].time, 200, '§17 survivor at time 200');
+  eq(action.fcurves[0].keyforms[0].value, 5,
+    '§17 survivor carries SELECTED value (5), not unselected (10)');
   eq(r.changed, true, '§17 reported changed');
 }
 

@@ -658,12 +658,19 @@ export function deleteKeyforms(fcurve, selection) {
  *
  * @param {FCurveLike} fcurve
  * @param {Map<number, SelectionParts>} selection
- * @param {number} [epsMs]  duplicate-time tolerance; default 0.5 ms
- *   matches Blender's `BEZT_BINARYSEARCH_THRESH = 0.00002 s` scaled
- *   to ms — but SS canonical animation time is ms, and Blender's
- *   threshold is far below typical keyform spacing; 0.5 ms (≈ a tenth
- *   of one 60 fps frame) is a UX-friendly tie-collapse window that
- *   matches typical drag-overshoot.
+ * @param {number} [epsMs]  duplicate-time tolerance; default 0.5 ms.
+ *   Blender's equivalent is `BEZT_BINARYSEARCH_THRESH = 0.01f` defined
+ *   at `reference/blender/source/blender/blenkernel/BKE_fcurve.hh:217`
+ *   (units: FRAMES — used against `bezt->vec[1][0]` which holds frame
+ *   numbers; the inline comment notes the historical raise from
+ *   `0.00001`). At 60fps that's 0.167 ms; at 24fps 0.417 ms. SS's
+ *   0.5 ms is ~3× coarser at 60fps but matches typical pointer-drag
+ *   overshoot under integer-ms-quantized time
+ *   (`feedback_ms_canonical_animation_time`). Honest deviation —
+ *   audit-fix Slice 6.C HIGH-F3 cite correction: pre-fix this read
+ *   `BEZT_BINARYSEARCH_THRESH = 0.00002 s` which was a CITE FAB
+ *   (wrong value AND wrong units — Blender's threshold is in frames
+ *   not seconds).
  * @returns {Map<number, number>}
  */
 export function mergeDuplicateTimeKeys(fcurve, selection, epsMs = 0.5) {

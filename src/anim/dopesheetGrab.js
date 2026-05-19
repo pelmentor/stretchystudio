@@ -28,8 +28,8 @@
  *     per pointer-move during the modal. The CRITICAL line is
  *     `transform_convert_flush_handle2D(td, td2d, 0.0f)` at
  *     `transform_convert_action.cc:1030` — `y_fac = 0.0f` means time-
- *     translate is X-only (no value change). It also force-clamps
- *     `td->loc[1] = td->iloc[1]` on the line above so any accidental Y
+ *     translate is X-only (no value change). Two lines above (`:1028`)
+ *     force-clamps `td->loc[1] = td->iloc[1]` so any accidental Y
  *     drift gets snapped back. This is the byte-faithful "constrain Y"
  *     contract that SS mirrors below.
  *
@@ -66,11 +66,22 @@
  *
  *   - `posttrans_action_clean` at `transform_convert_action.cc:1177-1201`
  *     calls `BKE_fcurve_merge_duplicate_keys(fcu, SELECT, false)` per
- *     visible FCurve. SS already ships this primitive as
- *     `mergeDuplicateTimeKeys` in `graphEditOps.js:669-733` (Slice 5.W,
- *     audit-fix HIGH-B3 2026-05-16 — selected key at LOWEST cluster
- *     index wins and overwrites unselected duplicates). 6.C reuses it
- *     verbatim for the post-commit cleanup.
+ *     visible FCurve. The merge primitive at
+ *     `reference/blender/source/blender/blenkernel/intern/fcurve.cc:
+ *     :1801-1916` AVERAGES the values of all selected keys at the
+ *     same frame (`:1859-1862` computes `rk.val / rk.tot_count`;
+ *     `:1887` writes the averaged value into the surviving key).
+ *     Unselected duplicates are unconditionally deleted (`:1902`).
+ *     SS already ships this primitive as `mergeDuplicateTimeKeys` in
+ *     `graphEditOps.js:669-733` (Slice 5.W, audit-fix HIGH-B3
+ *     2026-05-16 — survivor is the LOWEST array-index entry, which
+ *     matches Blender's reverse-walk-keep-last-iter semantic at
+ *     `fcurve.cc:1869-1893`; the averaged value is written to that
+ *     survivor). 6.C reuses it verbatim for the post-commit cleanup.
+ *     (Audit-fix Slice 6.C HIGH-F2 docstring correction: pre-fix the
+ *     description said "selected wins and OVERWRITES unselected" —
+ *     true for the unselected-deletion branch, but incomplete for
+ *     the selected-collision branch which AVERAGES instead.)
  *
  *   - Implicit post-commit step: Blender's BezTriple array is kept
  *     sorted-by-time as an invariant of `BKE_fcurve_merge_duplicate_keys`
@@ -78,6 +89,16 @@
  *     explicitly via `fcurve.keyforms.sort((a,b) => a.time - b.time)`
  *     and runs `recalcKeyformHandles` to re-derive auto/aligned handles
  *     against the new neighbour topology.
+ *
+ *   - **Handle-shift flags**: Blender's `bezt_to_transdata` at
+ *     `transform_convert_action.cc:431` unconditionally sets
+ *     `td->flag |= TD_MOVEHANDLE1 | TD_MOVEHANDLE2` for every dopesheet
+ *     key, so `transform_convert_flush_handle2D`'s `if ((td->flag &
+ *     TD_MOVEHANDLE1) && td2d->h1)` branch always runs for time-translate.
+ *     SS mirrors this by unconditionally shifting both `handleLeft.time`
+ *     and `handleRight.time` for every selected center — no per-key
+ *     flag check needed (audit-fix Slice 6.C LOW-F2 — added the
+ *     `:431` cite to justify the always-shift behavior).
  *
  * # Pure-ops contract (matches dopesheetSelectOps / dopesheetBoxSelect)
  *
@@ -141,12 +162,27 @@
  *   grid. Honest deviation; matches SS's canonical time unit.
  *
  * - **DEV 5** — Snap-to-frame NOT shipped in 6.C; Blender's snap is
- *   `transform_snap_anim_flush_data` at `transform_convert_action.cc:1024`,
+ *   `transform_snap_anim_flush_data` at `transform_convert_action.cc:1023-1025`,
  *   gated on `t->tsnap.flag & SCE_SNAP`. The SS scrubber doesn't yet
  *   surface a snap toggle. Scope-deferred to 6.C.1 polish slice if/when
  *   snap UI ships. Honest deviation per Rule №2 (no migration baggage:
  *   declare deferrals as numbered SS DEVIATIONS, not "TODO later"
  *   comments).
+ *
+ * - **DEV 6** — Merge-duplicate epsilon is `0.5 ms` (SS canonical-time
+ *   default) vs Blender's `BEZT_BINARYSEARCH_THRESH = 0.01f` (frames,
+ *   defined at `reference/blender/source/blender/blenkernel/BKE_fcurve.hh:217`
+ *   — the inline comment notes the historical raise from `0.00001`).
+ *   At 60fps, `0.01f` frames = 0.167 ms; at 24fps = 0.417 ms. SS's
+ *   0.5 ms is ~3× coarser at 60fps, ~1.2× coarser at 24fps. The wider
+ *   window matches typical drag-overshoot in pointer-driven UIs (the
+ *   user rarely lands exactly on a 1ms boundary; SS quantizes to
+ *   integer ms per DEV 4 anyway, so the effective collision window is
+ *   1 ms +/- merge slack). Honest deviation; the prior
+ *   `graphEditOps.js:662-663` docstring claim that Blender's threshold
+ *   was `0.00002 s` was a CITE FAB (real: `0.01f` frames per
+ *   `BKE_fcurve.hh:217`) — audit-fix Slice 6.C HIGH-F3 corrects both
+ *   the threshold cite + this deviation declaration.
  *
  * @module anim/dopesheetGrab
  */
@@ -193,11 +229,14 @@ import { mergeDuplicateTimeKeys } from './graphEditOps.js';
  * K is the number of selected fcurves (typically 1-10), short-circuits
  * on first center=true.
  *
- * Mirrors Blender's `count_fcurve_keys` (`transform_convert_action.cc:
- * `:646-985` create path) implicit pre-check: if `count == 0` after the
- * loop, `createTransActionData` returns early without entering modal
- * mode. SS's modal entry already gates on this — `wouldTimeTranslateChange`
- * is a per-frame guard for the preview math.
+ * Mirrors Blender's `count_fcurve_keys` predicate at
+ * `transform_convert_action.cc:271-303` (the standalone helper) called
+ * from `createTransActionData` (`:646-985` overall) at `:702`. The
+ * `count` accumulator at `:669` totals across all visible FCurves; if
+ * `count == 0` after the loop, `createTransActionData` returns early
+ * without entering modal mode. SS's modal entry already gates on this
+ * — `wouldTimeTranslateChange` is a per-frame guard for the preview
+ * math.
  *
  * @param {SelectedHandlesMap | null | undefined} handles
  * @param {number} deltaMs
