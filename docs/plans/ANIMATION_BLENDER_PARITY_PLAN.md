@@ -1558,9 +1558,10 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B + 6.C + 6.D SHIPPED 2026-05-19 (`cfb82a9`
-+ `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670` +
-`872a208` + `a79f431`). 6.E-6.G remain (~1-2 days estimated).
+**Status:** Slice 6.A + 6.B + 6.C + 6.D + 6.E SHIPPED 2026-05-19
+(`cfb82a9` + `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670`
++ `872a208` + `a79f431` + `1aaf0b3` + `554be56`). 6.F + 6.G remain
+(~1 day estimated).
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1594,10 +1595,103 @@ prose below — coverage map):
 - ✅ Box-select — shipped 6.B (`bdf95a8` + `dff1c99`).
 - ✅ Drag selected ticks in time — shipped 6.C (`98b8a2a` + `f82e670`).
 - ✅ Delete + Duplicate selected ticks — shipped 6.D (`872a208` + `a79f431`).
-- 🟡 Column copy/paste — Slice 6.E.
+- ✅ Copy/paste — shipped 6.E (`1aaf0b3` + `554be56`).
 - 🟡 Per-channel mute/solo — Slice 6.F.
-- 🟡 Channel collapse/expand — Slice 6.E or 6.F.
+- 🟡 Channel collapse/expand — Slice 6.F.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.E — Copy (Ctrl+C) + Paste (Ctrl+V) — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetClipboard.js` (~485 LOC):
+module-level `_clipboard` singleton (analog of Blender's
+`keyframe_copy_buffer = nullptr` at `keyframes_general.cc:1258`) +
+`copyKeyformsToClipboard(action, handles, originTime)` (mirrors
+`copy_animedit_keys` at `:1488-1566` — resets singleton via
+`ANIM_fcurves_copybuf_reset` analog at `:1347-1352`, then deep-copies
+center-selected entries with absolute times + first/last/origin
+metadata matching `KeyframeCopyBuffer` struct at
+`keyframes_general_intern.hh:35-100`) +
+`pasteKeyformsFromClipboard(action, destinationTime)` (immer mutator
+mirroring `paste_animedit_keys_fcurve` at `keyframes_general.cc:
+1925-2006` — CFRA_START offset = `destinationTime - firstTime` per
+`:2139`, MIX merge = same-time replace via `INSERTKEY_OVERWRITE_FULL`
+analog at `:2001`, recalc handles at `:2005`) +
+`handlesFromPasteResult` (converts paste result to all-parts-on
+selection map per `BEZT_SEL_ALL` at `:1998`) + `wouldCopyChange` /
+`wouldPasteChange` predicates + `getClipboard` / `resetClipboard`
+singleton accessors. Tests: 107 asserts in
+`scripts/test/test_dopesheetClipboard.mjs` (32 sections covering
+input-validation throws + copy semantics + clipboard reset + paste
+offset/replace/sort/handle-shift + round-trips + paste-result helper
++ post-audit-fix frozen-wrapper enforcement).
+
+**UI surface.** DopesheetEditor wires Ctrl+C / Ctrl+V:
+- Ctrl+C → if any center-selected, `copyKeyformsToClipboard` (browser
+  text-copy untouched if nothing selected OR if user has a
+  non-collapsed text Range — audit-fix MED-A3).
+- Ctrl+V → if clipboard non-empty AND at least one destination fcurve
+  matches by id, `pasteKeyformsFromClipboard` via `updateProject` +
+  `handlesFromPasteResult` → selection store. New keyforms become the
+  selection (all parts on).
+- Both gated on input/textarea/contenteditable skip + grab/box-drag
+  ref suppression (mounts once, reads store at fire time — same
+  pattern as 6.D HIGH-A1 fix).
+- Action resolved via `useProjectStore.getState().project` at keypress
+  time (avoids action-memo dep churn).
+
+**SS DEVIATIONS new this slice:**
+- DEV 11 — Plan-naming clarification: §6.B's `dopesheet.copyColumn` /
+  `dopesheet.pasteColumn` was conceptual shorthand. Blender's
+  `ACTION_OT_copy` operates on SELECTION, not on a vertical column at
+  playhead. Helpers named for Blender semantics.
+- DEV 12 — fcurve matching by exact id (SS unique-per-action ids) vs
+  Blender's `rna_path + array_index` (+ optional slot handle). SS ids
+  are stable strings; cross-action paste matches by id.
+- DEV 13 — Single paste mode: CFRA_START offset + MIX merge only.
+  Blender exposes 4 offset modes + 4 merge modes via the F6 redo
+  panel; SS has no redo panel, ships defaults from `ACTION_OT_paste`
+  at `action_edit.cc:770/775`. Other modes deferred without no-op
+  stubs (Rule №2 honest).
+- DEV 14 — `Shift+Ctrl+V flipped` variant NOT shipped. SS dopesheet's
+  keyform model has no `pose.bones["..."]` RNA paths; flip-mirror
+  semantic doesn't apply.
+- DEV 15 — Selection-after-paste is GLOBAL replace (vs Blender's
+  per-destination-fcurve deselect-then-select at `:1935-1937` +
+  `:1998`). Under realistic UX where paste targets fcurves that
+  weren't already selected outside the clipboard scope, observable
+  state matches. Honest simplification.
+
+**Audit sweep #75.** 0 HIGH-F (streak-break HOLDS — 6.D was the
+inflection, 6.E confirms) + 0 HIGH-A + 1 MED-A + 1 LOW + 3 LOW-F
+cosmetic; all fixed in `554be56` same-day:
+- MED-A3 — Ctrl+C with non-input text Range selected suppressed OS
+  text copy; now bails out when `window.getSelection()?.type ===
+  'Range'`. Blender has no analog (desktop app, no OS-clipboard
+  contention).
+- LOW-1 — `getClipboard()` returned mutable ref; docstring said "MUST
+  NOT mutate" but no enforcement. Now returns a shallow-frozen wrapper
+  (outer + per-fcurve + entries array all `Object.freeze`'d). Module-
+  internal reads bypass; paste path unaffected.
+- LOW-F1 — `:1989` cite was `if (flip) {` line; the actual
+  `do_curve_mirror_flippping` call is `:1990`. Now `:1989-1991`.
+- LOW-F2 — `:1493` cite was the call site inside `copy_animedit_keys`
+  (defn at `:1347-1352` cited elsewhere); now disambiguated as
+  "(call) / (defn)".
+- LOW-F3 — `BEZT_OK_SELECTED_KEY` paraphrase dropped the
+  `ANIM_editkeyframes_ok` wrap; restored.
+
+All 5 SS DEVIATIONs (DEV 11-15) confirmed accurate by Blender-fidelity
+audit. **Meta-finding promoted to memory rule 9** (`feedback_byte_verify_behavior_cites`):
+"Re-SOURCE, don't re-QUOTE, when sister modules cover the same Blender
+semantic." 6.E did not re-quote ANY specific Blender path/line from
+in-tree sister modules — every cite drawn directly from the reference
+clone. Stronger preventive than rule 6 (defensive re-verification):
+sidesteps the inherited-fab failure class entirely by never depending
+on sister docstrings.
+
+**Cite-discipline arc**: 0 fabs pre-audit, confirmed 0 by Blender-
+fidelity agent post-audit. **2 consecutive clean slices (6.D + 6.E)
+establish streak-break as discipline change.**
 
 #### 6.D — Delete (Del) + Duplicate-move (Shift+D) — SHIPPED 2026-05-19
 
