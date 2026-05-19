@@ -91,6 +91,11 @@ import {
   wouldCopyChange,
   wouldPasteChange,
 } from '../../../anim/dopesheetClipboard.js';
+import {
+  pickMuteTarget,
+  applyDopesheetChannelMute,
+  wouldDopesheetChannelMuteChange,
+} from '../../../anim/dopesheetChannelMute.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -183,6 +188,15 @@ export function DopesheetEditor() {
   // fix), retroactively applied to the G-key effect from 6.C and
   // pre-emptively to the Del/Shift+D effect from 6.D.
   const boxDragActiveRef = useRef(false);
+  // Slice 6.F.1 — track the fcurveId of the currently hovered Row.
+  // Set by Row's onPointerEnter (to row.fcurveId) and cleared by
+  // onPointerLeave (to null). Ref-based: hover changes happen
+  // pointer-frequency (sub-frame) and re-rendering the whole editor
+  // tree per hover would be 60fps churn. The M-key keymap effect
+  // reads this at keypress time via `hoveredFcurveIdRef.current`.
+  // Empty-fcurveId rows (synthetic / header) collapse to no-hover
+  // because `pickMuteTarget` treats empty string as no-hover (DEV 17).
+  const hoveredFcurveIdRef = useRef(/** @type {string | null} */ (null));
   const handleTickClick = useCallback(
     /**
      * @param {MouseEvent | React.MouseEvent} e
@@ -793,6 +807,85 @@ export function DopesheetEditor() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [updateProject, activeActionId]);
 
+  // ── Slice 6.F.1 — Mute hovered/selected channel (M key) ───────────────
+  // Ports Blender's `ANIM_OT_channels_setting_toggle` operator at
+  // `anim_channels_edit.cc:3090-3140`, parameterised for
+  // `ACHANNEL_SETTING_MUTE` (`ED_anim_api.hh:669`). Existing bulk-mute
+  // kernel `applyChannelMuteSelected` (Slice 5.O, in `fcurveMute.js`)
+  // already byte-faithfully ports `setflag_anim_channels` at
+  // `anim_channels_edit.cc:2923-3001`. 6.F.1 wires it to the dopesheet
+  // M-key via a hover-or-selection target dispatcher.
+  //
+  // **SS DEVIATIONs** (numbered cumulative, full text in `dopesheetChannelMute.js`):
+  //   - DEV 16: Hotkey choice **M** (vs Blender's `Shift+W`). DAW
+  //     convention (Pro Tools / Logic / Ableton). Plan §6.B operator
+  //     table specifies M.
+  //   - DEV 17: Hover-priority target (hovered wins over selection;
+  //     selection is the fallback when no hover). Approximates Blender's
+  //     region-scoped Shift+W keymap UX via explicit hover-tracking
+  //     since SS uses window-level keymap binding.
+  //   - DEV 18: Solo (Ctrl+Alt+M) DEFERRED to Slice 6.F.2. Blender's
+  //     `ACHANNEL_SETTING_SOLO = 5` is NLA-tracks-only per
+  //     `ED_anim_api.hh:674` ("only for NLA Tracks"); per-FCurve solo
+  //     would be an SS-only DAW-convention extension requiring a new
+  //     FCURVE_SOLO bit + eval-cascade rewrite (~3hr separate slice).
+  //
+  // Gate pattern (same as 6.C/6.D/6.E):
+  //   - Skip input/textarea/contentEditable.
+  //   - Suppress during grab/box-drag (refs).
+  //   - Skip + LET BROWSER THROUGH if no target resolves (browser's M
+  //     does nothing useful, but staying out of the keydown chain
+  //     keeps the gate honest).
+  //
+  // Action resolution: store-read at fire time, same anti-stale-closure
+  // pattern as 6.D/6.E.
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (e.key !== 'm' && e.key !== 'M') return;
+      // Allow ONLY plain M — no Ctrl/Shift/Alt/Meta. Solo (Ctrl+Alt+M)
+      // is queued as Slice 6.F.2; today the modifier-combos fall
+      // through (browser default does nothing for M-with-modifiers
+      // outside text fields).
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (grabActiveRef.current || boxDragActiveRef.current) return;
+      // Resolve target action at fire time.
+      const proj = useProjectStore.getState().project;
+      const targetAction = proj.actions.find((a) => a.id === activeActionId);
+      if (!targetAction) return;
+      // Pick the target: hovered (priority) or selection (fallback).
+      const target = pickMuteTarget(targetAction, hoveredFcurveIdRef.current);
+      if (!wouldDopesheetChannelMuteChange(targetAction, target)) return;
+      e.preventDefault();
+      updateProject((project) => {
+        const ta = project.actions.find((a) => a.id === activeActionId);
+        if (!ta) return;
+        applyDopesheetChannelMute(ta, target);
+      });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [updateProject, activeActionId]);
+
+  // Slice 6.F.1 — stable hover callbacks for Row to set/clear the
+  // hoveredFcurveIdRef. useCallback empty-deps keeps identity stable
+  // so Row props don't churn per render.
+  const handleRowPointerEnter = useCallback(
+    /** @param {string} fcurveId */
+    (fcurveId) => {
+      // Defensive: empty fcurveId (synthetic / header row) → clear.
+      // pickMuteTarget would collapse it to no-hover anyway, but
+      // clearing here keeps the ref semantically clean.
+      hoveredFcurveIdRef.current = (typeof fcurveId === 'string' && fcurveId !== '') ? fcurveId : null;
+    },
+    [],
+  );
+  const handleRowPointerLeave = useCallback(() => {
+    hoveredFcurveIdRef.current = null;
+  }, []);
+
   // Grab-modal window listeners — mounted ONLY while grabState !== null.
   // Tracks pointer moves to update deltaMs; LMB/Enter commits;
   // RMB/Escape cancels.
@@ -963,6 +1056,8 @@ export function DopesheetEditor() {
                   grabDeltaMs={grabState ? Math.round(grabState.deltaMs) : 0}
                   onTickClick={handleTickClick}
                   onSeek={setCurrentTime}
+                  onRowPointerEnter={handleRowPointerEnter}
+                  onRowPointerLeave={handleRowPointerLeave}
                 />
               ))
             )}
@@ -1060,7 +1155,7 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek }) {
+function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek, onRowPointerEnter, onRowPointerLeave }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -1104,6 +1199,8 @@ function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyf
       className="flex items-center border-b border-border/40 hover:bg-muted/20"
       style={{ height: ROW_H }}
       data-row-idx={rowIdx}
+      onPointerEnter={() => { if (onRowPointerEnter) onRowPointerEnter(row.fcurveId); }}
+      onPointerLeave={() => { if (onRowPointerLeave) onRowPointerLeave(); }}
     >
       <div
         className={
