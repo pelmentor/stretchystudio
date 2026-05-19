@@ -1,8 +1,8 @@
 // @ts-check
 
 /**
- * NLAEditor pure-function operations layer — Animation Phase 4 Slice
- * 4.D.2 (drag interactions data substrate).
+ * NLAEditor pure-function operations layer — Animation Phase 4 Slices
+ * 4.D.2 (drag interactions) + 4.D.3 (affordance toggles + setters).
  *
  * Splits each drag/reorder operation into a pure function that takes
  * the current animData + an op input and returns a NEW animData
@@ -33,6 +33,36 @@
  *       MED-A3 contract: "Slice 4.D NLAEditor MUST re-stamp index
  *       on every reorder" — this is that helper.
  *
+ * # Operations shipped in 4.D.3
+ *
+ *   - applySetStripBlendMode(animData, trackId, stripId, blendmode)
+ *       Validates against NLA_BLEND_MODES; throws on unknown (Rule №1
+ *       — no silent fallback to default).
+ *
+ *   - applySetStripExtendMode(animData, trackId, stripId, extendmode)
+ *       Validates against NLA_EXTEND_MODES; throws on unknown.
+ *
+ *   - applySetStripInfluence(animData, trackId, stripId, influence)
+ *       Clamps to [0, 1] per Blender `rna_nla.cc:1069-1072`
+ *       (`PROP_FACTOR` range 0..1 on `influence`).
+ *
+ *   - applyToggleStripMuted(animData, trackId, stripId)
+ *       XORs `NLASTRIP_FLAG.MUTED`. Per Blender `rna_nla.cc` —
+ *       strip-level mute is a property, not a special-cased toggle.
+ *
+ *   - applyToggleTrackMuted(animData, trackId)
+ *       XORs `NLATRACK_FLAG.MUTED`.
+ *
+ *   - applyToggleTrackProtected(animData, trackId)
+ *       XORs `NLATRACK_FLAG.PROTECTED`.
+ *
+ *   - applyToggleTrackSolo(animData, trackId)
+ *       Byte-faithful port of `BKE_nlatrack_solo_toggle`
+ *       (`nla.cc:1262-1292`): clears `NLATRACK_FLAG.SOLO` on ALL OTHER
+ *       tracks (solo is exclusive — one track at a time), XOR-toggles
+ *       on the target, then sets/clears `ADT_FLAG.NLA_SOLO_TRACK` on
+ *       the animData based on whether target now has SOLO set.
+ *
  * # No-overlap enforcement (SS DEVIATION, documented)
  *
  * Blender's `nlastrip_fix_resize_overlaps` (nla.cc:1616+) shifts
@@ -62,6 +92,14 @@
  *
  * @module v3/editors/nla/nlaEditorOps
  */
+
+import {
+  NLA_BLEND_MODES,
+  NLA_EXTEND_MODES,
+  NLASTRIP_FLAG,
+  NLATRACK_FLAG,
+  ADT_FLAG,
+} from '../../../anim/nla.js';
 
 /**
  * Minimum strip duration (ms). Below this the strip would be a
@@ -333,4 +371,279 @@ export function pxToMs(px, minMs, maxMs, pxWidth) {
   if (pxWidth <= 0) return minMs;
   const span = Math.max(1, maxMs - minMs);
   return minMs + (px / pxWidth) * span;
+}
+
+// ===========================================================================
+// Slice 4.D.3 — affordance setters / togglers
+// ===========================================================================
+
+/**
+ * Locate a track by id within an animData. Returns the index + ref.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {{ trackIdx: number, track: object|null }}
+ */
+function locateTrack(animData, trackId) {
+  const tracks = Array.isArray(animData?.nlaTracks) ? animData.nlaTracks : null;
+  if (!tracks) return { trackIdx: -1, track: null };
+  for (let ti = 0; ti < tracks.length; ti++) {
+    if (tracks[ti] && tracks[ti].id === trackId) {
+      return { trackIdx: ti, track: tracks[ti] };
+    }
+  }
+  return { trackIdx: -1, track: null };
+}
+
+/**
+ * Immutable patch of a single track within animData. Shallow-clones
+ * the tracks array + the touched track only.
+ *
+ * @param {object} animData
+ * @param {number} trackIdx
+ * @param {object} newTrack
+ * @returns {object}
+ */
+function patchTrack(animData, trackIdx, newTrack) {
+  const tracks = animData.nlaTracks.slice();
+  tracks[trackIdx] = newTrack;
+  return { ...animData, nlaTracks: tracks };
+}
+
+/**
+ * Predicate: would the blend-mode change actually mutate anything?
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {string} blendmode
+ * @returns {boolean}
+ */
+export function wouldSetStripBlendModeChange(animData, trackId, stripId, blendmode) {
+  const { strip } = locateStrip(animData, trackId, stripId);
+  if (!strip) return false;
+  if (!NLA_BLEND_MODES.includes(/** @type {any} */ (blendmode))) return false;
+  return strip.blendmode !== blendmode;
+}
+
+/**
+ * Set a strip's blend mode. Throws on unknown mode per Rule №1 — no
+ * silent fallback (validating against `NLA_BLEND_MODES` matches the
+ * substrate-level constructor enforcement in `makeNlaStrip`).
+ *
+ * Cite: `rna_nla.cc:833-838` exposes `blend_type` as an enum backed by
+ * `rna_enum_nla_mode_blend_items` (the 4-mode enum SS ships;
+ * `combine` deferred per Phase 4 plan §4.B).
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {string} blendmode
+ * @returns {object} new animData (same reference if no-op)
+ */
+export function applySetStripBlendMode(animData, trackId, stripId, blendmode) {
+  if (!NLA_BLEND_MODES.includes(/** @type {any} */ (blendmode))) {
+    throw new Error(
+      `applySetStripBlendMode: blendmode '${blendmode}' not in `
+      + `${NLA_BLEND_MODES.join('|')} (combine deferred per plan §4.B)`
+    );
+  }
+  const { trackIdx, stripIdx, strip } = locateStrip(animData, trackId, stripId);
+  if (!strip || trackIdx === -1) return animData;
+  if (strip.blendmode === blendmode) return animData;
+  return patchStrip(animData, trackIdx, stripIdx, { ...strip, blendmode });
+}
+
+/**
+ * Predicate: would the extend-mode change mutate anything?
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {string} extendmode
+ * @returns {boolean}
+ */
+export function wouldSetStripExtendModeChange(animData, trackId, stripId, extendmode) {
+  const { strip } = locateStrip(animData, trackId, stripId);
+  if (!strip) return false;
+  if (!NLA_EXTEND_MODES.includes(/** @type {any} */ (extendmode))) return false;
+  return strip.extendmode !== extendmode;
+}
+
+/**
+ * Set a strip's extend (extrapolation) mode. Throws on unknown mode.
+ *
+ * Cite: `rna_nla.cc:826-831` exposes `extrapolation` as an enum backed
+ * by `rna_enum_nla_mode_extend_items`. SS ships all 3 modes (hold /
+ * hold_forward / nothing) per Slice 4.A.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {string} extendmode
+ * @returns {object}
+ */
+export function applySetStripExtendMode(animData, trackId, stripId, extendmode) {
+  if (!NLA_EXTEND_MODES.includes(/** @type {any} */ (extendmode))) {
+    throw new Error(
+      `applySetStripExtendMode: extendmode '${extendmode}' not in `
+      + `${NLA_EXTEND_MODES.join('|')}`
+    );
+  }
+  const { trackIdx, stripIdx, strip } = locateStrip(animData, trackId, stripId);
+  if (!strip || trackIdx === -1) return animData;
+  if (strip.extendmode === extendmode) return animData;
+  return patchStrip(animData, trackIdx, stripIdx, { ...strip, extendmode });
+}
+
+/**
+ * Predicate: would the influence change mutate anything?
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {number} influence
+ * @returns {boolean}
+ */
+export function wouldSetStripInfluenceChange(animData, trackId, stripId, influence) {
+  const { strip } = locateStrip(animData, trackId, stripId);
+  if (!strip) return false;
+  if (!Number.isFinite(influence)) return false;
+  const clamped = Math.max(0, Math.min(1, influence));
+  return Math.abs(clamped - strip.influence) > 1e-10;
+}
+
+/**
+ * Set a strip's baseline influence value. Clamps to [0, 1] per
+ * Blender `rna_nla.cc:1069-1072` (`PROP_FACTOR`, `range(0, 1)`).
+ *
+ * Note: this writes the BASELINE `influence` field — when
+ * `NLASTRIP_FLAG.USR_INFLUENCE` is set, the evaluator reads from a
+ * local F-Curve instead (per Slice 4.B `computeStripInfluence`); SS
+ * doesn't gate this setter on USR_INFLUENCE because Blender's UI also
+ * lets you set the baseline while USR_INFLUENCE is on (line 550 of
+ * `nla_buttons.cc` gates a DIFFERENT influence slider in the "Animated
+ * Influence" sub-panel; the base slider at line 357 of the AnimData
+ * panel is always live).
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @param {number} influence
+ * @returns {object}
+ */
+export function applySetStripInfluence(animData, trackId, stripId, influence) {
+  if (!Number.isFinite(influence)) return animData;
+  const { trackIdx, stripIdx, strip } = locateStrip(animData, trackId, stripId);
+  if (!strip || trackIdx === -1) return animData;
+  const clamped = Math.max(0, Math.min(1, influence));
+  if (Math.abs(clamped - strip.influence) < 1e-10) return animData;
+  return patchStrip(animData, trackIdx, stripIdx, { ...strip, influence: clamped });
+}
+
+/**
+ * Toggle `NLASTRIP_FLAG.MUTED` on a strip. Returns NEW animData.
+ *
+ * Per Blender `rna_nla.cc` `mute` boolean property — it's a regular
+ * flag toggle, not a cascade like solo.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @param {string} stripId
+ * @returns {object}
+ */
+export function applyToggleStripMuted(animData, trackId, stripId) {
+  const { trackIdx, stripIdx, strip } = locateStrip(animData, trackId, stripId);
+  if (!strip || trackIdx === -1) return animData;
+  const oldFlag = typeof strip.flag === 'number' ? strip.flag : 0;
+  const newFlag = oldFlag ^ NLASTRIP_FLAG.MUTED;
+  return patchStrip(animData, trackIdx, stripIdx, { ...strip, flag: newFlag });
+}
+
+/**
+ * Toggle `NLATRACK_FLAG.MUTED` on a track. Returns NEW animData.
+ *
+ * Per Blender `anim_channels_edit.cc` `ACHANNEL_SETTING_MUTE` toggle —
+ * straight XOR, no cascade.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {object}
+ */
+export function applyToggleTrackMuted(animData, trackId) {
+  const { trackIdx, track } = locateTrack(animData, trackId);
+  if (!track || trackIdx === -1) return animData;
+  const oldFlag = typeof track.flag === 'number' ? track.flag : 0;
+  const newFlag = oldFlag ^ NLATRACK_FLAG.MUTED;
+  return patchTrack(animData, trackIdx, { ...track, flag: newFlag });
+}
+
+/**
+ * Toggle `NLATRACK_FLAG.PROTECTED` on a track. Returns NEW animData.
+ *
+ * Per Blender `ACHANNEL_SETTING_PROTECT` toggle — straight XOR.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {object}
+ */
+export function applyToggleTrackProtected(animData, trackId) {
+  const { trackIdx, track } = locateTrack(animData, trackId);
+  if (!track || trackIdx === -1) return animData;
+  const oldFlag = typeof track.flag === 'number' ? track.flag : 0;
+  const newFlag = oldFlag ^ NLATRACK_FLAG.PROTECTED;
+  return patchTrack(animData, trackIdx, { ...track, flag: newFlag });
+}
+
+/**
+ * Toggle SOLO on a track — byte-faithful port of `BKE_nlatrack_solo_toggle`
+ * (`reference/blender/source/blender/blenkernel/intern/nla.cc:1262-1292`).
+ *
+ * Solo is EXCLUSIVE — at most one track per animData can be soloed
+ * at any time. Behaviour matches Blender exactly:
+ *
+ *   1. Clear `NLATRACK_FLAG.SOLO` on every OTHER track first.
+ *   2. XOR-toggle `NLATRACK_FLAG.SOLO` on the target track.
+ *   3. If target now has SOLO set → set `ADT_FLAG.NLA_SOLO_TRACK` on
+ *      the animData. Otherwise clear it.
+ *
+ * Evaluator (`nlaEval.js` `evaluateNla`) reads `ADT_FLAG.NLA_SOLO_TRACK`
+ * + per-track SOLO bit to decide which tracks contribute — this op
+ * keeps the two in sync.
+ *
+ * @param {object} animData
+ * @param {string} trackId
+ * @returns {object}
+ */
+export function applyToggleTrackSolo(animData, trackId) {
+  const { trackIdx } = locateTrack(animData, trackId);
+  if (trackIdx === -1) return animData;
+  const tracksRef = animData.nlaTracks;
+
+  // Step 1 + 2: walk every track, building a new array. The target
+  // gets XOR-toggle; others get SOLO bit force-cleared.
+  const newTracks = new Array(tracksRef.length);
+  let targetNowSoloed = false;
+  for (let i = 0; i < tracksRef.length; i++) {
+    const t = tracksRef[i];
+    if (!t) { newTracks[i] = t; continue; }
+    const flag = typeof t.flag === 'number' ? t.flag : 0;
+    if (i === trackIdx) {
+      const newFlag = flag ^ NLATRACK_FLAG.SOLO;
+      targetNowSoloed = (newFlag & NLATRACK_FLAG.SOLO) !== 0;
+      newTracks[i] = { ...t, flag: newFlag };
+    } else if ((flag & NLATRACK_FLAG.SOLO) !== 0) {
+      newTracks[i] = { ...t, flag: flag & ~NLATRACK_FLAG.SOLO };
+    } else {
+      newTracks[i] = t;   // no SOLO bit + not target — preserve ref
+    }
+  }
+
+  // Step 3: sync ADT_FLAG.NLA_SOLO_TRACK on the animData.
+  const adtFlag = typeof animData.flag === 'number' ? animData.flag : 0;
+  const newAdtFlag = targetNowSoloed
+    ? adtFlag | ADT_FLAG.NLA_SOLO_TRACK
+    : adtFlag & ~ADT_FLAG.NLA_SOLO_TRACK;
+
+  return { ...animData, nlaTracks: newTracks, flag: newAdtFlag };
 }

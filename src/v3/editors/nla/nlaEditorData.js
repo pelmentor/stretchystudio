@@ -284,6 +284,25 @@ export const BLENDMODE_LABELS = Object.freeze({
 });
 
 /**
+ * Blender-faithful extendmode → display label map. Surfaces the labels
+ * Blender uses in `rna_nla.cc:63-72` (`rna_enum_nla_mode_extend_items`):
+ *   hold         → "Hold"
+ *   hold_forward → "Hold Forward"
+ *   nothing      → "Nothing"
+ *
+ * Order matches Blender's enum array (NOTHING listed first in Blender,
+ * HOLD second, HOLD_FORWARD third). SS lists HOLD first because it's
+ * the default extendmode + the most common UI selection.
+ *
+ * @type {Readonly<Record<string, string>>}
+ */
+export const EXTENDMODE_LABELS = Object.freeze({
+  hold:         'Hold',
+  hold_forward: 'Hold Forward',
+  nothing:      'Nothing',
+});
+
+/**
  * Blendmode → CSS/Tailwind color class. SS-chosen palette for visual
  * distinction on the timeline (not mirrored from Blender — Blender's
  * strip rects are a uniform color in NLAEditor with mode shown as a

@@ -12,10 +12,26 @@ import {
   wouldResizeStripEndChange,
   applyReorderTrack,
   wouldReorderTrackChange,
+  applySetStripBlendMode,
+  wouldSetStripBlendModeChange,
+  applySetStripExtendMode,
+  wouldSetStripExtendModeChange,
+  applySetStripInfluence,
+  wouldSetStripInfluenceChange,
+  applyToggleStripMuted,
+  applyToggleTrackMuted,
+  applyToggleTrackProtected,
+  applyToggleTrackSolo,
   pxDeltaToMs,
   pxToMs,
 } from '../../src/v3/editors/nla/nlaEditorOps.js';
-import { makeNlaStrip, makeNlaTrack } from '../../src/anim/nla.js';
+import {
+  makeNlaStrip,
+  makeNlaTrack,
+  NLASTRIP_FLAG,
+  NLATRACK_FLAG,
+  ADT_FLAG,
+} from '../../src/anim/nla.js';
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -298,6 +314,190 @@ function findStrip(ad, trackId, stripId) {
   eq(pxToMs(100, 50, 1000, 0), 50, '17: pxWidth=0 → minMs');
   // Different span origin
   close(pxToMs(400, 100, 1100, 800), 600, 1e-9, '17: span starts at 100, 400px → 600ms');
+}
+
+// ===========================================================================
+// Slice 4.D.3 — affordance setters / togglers
+// ===========================================================================
+
+// ── 18. applySetStripBlendMode happy path ──────────────────────────
+{
+  const ad = makeFixture();
+  const out = applySetStripBlendMode(ad, 'tMid', 's1', 'add');
+  eq(findStrip(ad, 'tMid', 's1').blendmode, 'replace', '18: original unchanged');
+  eq(findStrip(out, 'tMid', 's1').blendmode, 'add', '18: new mode set');
+  eq(findStrip(out, 'tMid', 's2').blendmode, 'replace', '18: sibling unchanged');
+}
+
+// ── 19. applySetStripBlendMode validates ───────────────────────────
+{
+  const ad = makeFixture();
+  let threw = false;
+  try { applySetStripBlendMode(ad, 'tMid', 's1', 'combine'); } catch { threw = true; }
+  assert(threw, '19: combine throws (deferred per plan §4.B)');
+  threw = false;
+  try { applySetStripBlendMode(ad, 'tMid', 's1', 'bogus'); } catch { threw = true; }
+  assert(threw, '19: unknown mode throws');
+}
+
+// ── 20. applySetStripBlendMode no-op preserves ref ─────────────────
+{
+  const ad = makeFixture();
+  const out = applySetStripBlendMode(ad, 'tMid', 's1', 'replace');
+  assert(out === ad, '20: same mode → same ref');
+  const out2 = applySetStripBlendMode(ad, 'tMid', 'nonexistent', 'add');
+  assert(out2 === ad, '20: missing strip → same ref');
+  const out3 = applySetStripBlendMode(ad, 'nonexistent', 's1', 'add');
+  assert(out3 === ad, '20: missing track → same ref');
+}
+
+// ── 21. wouldSetStripBlendModeChange ───────────────────────────────
+{
+  const ad = makeFixture();
+  assert(wouldSetStripBlendModeChange(ad, 'tMid', 's1', 'add'), '21a: replace→add changes');
+  assert(!wouldSetStripBlendModeChange(ad, 'tMid', 's1', 'replace'), '21b: replace→replace no-op');
+  assert(!wouldSetStripBlendModeChange(ad, 'tMid', 's1', 'bogus'), '21c: invalid mode → no');
+  assert(!wouldSetStripBlendModeChange(ad, 'tMid', 'nonexistent', 'add'), '21d: missing → no');
+}
+
+// ── 22. applySetStripExtendMode happy path + validate ──────────────
+{
+  const ad = makeFixture();
+  const out = applySetStripExtendMode(ad, 'tMid', 's1', 'nothing');
+  eq(findStrip(out, 'tMid', 's1').extendmode, 'nothing', '22a: extendmode set');
+  eq(findStrip(ad, 'tMid', 's1').extendmode, 'hold', '22b: original unchanged');
+  let threw = false;
+  try { applySetStripExtendMode(ad, 'tMid', 's1', 'bogus'); } catch { threw = true; }
+  assert(threw, '22c: unknown extendmode throws');
+  const out2 = applySetStripExtendMode(ad, 'tMid', 's1', 'hold');
+  assert(out2 === ad, '22d: same extendmode → same ref');
+}
+
+// ── 23. wouldSetStripExtendModeChange ──────────────────────────────
+{
+  const ad = makeFixture();
+  assert(wouldSetStripExtendModeChange(ad, 'tMid', 's1', 'nothing'), '23a: hold→nothing changes');
+  assert(!wouldSetStripExtendModeChange(ad, 'tMid', 's1', 'hold'), '23b: hold→hold no-op');
+  assert(!wouldSetStripExtendModeChange(ad, 'tMid', 's1', 'bogus'), '23c: invalid → no');
+}
+
+// ── 24. applySetStripInfluence clamps + happy path ─────────────────
+{
+  const ad = makeFixture();
+  const out = applySetStripInfluence(ad, 'tMid', 's1', 0.5);
+  close(findStrip(out, 'tMid', 's1').influence, 0.5, 1e-10, '24a: 0.5 set');
+  // Original (influence=1 from default) unchanged
+  close(findStrip(ad, 'tMid', 's1').influence, 1, 1e-10, '24b: original unchanged');
+  const out2 = applySetStripInfluence(ad, 'tMid', 's1', 2);
+  close(findStrip(out2, 'tMid', 's1').influence, 1, 1e-10, '24c: clamp >1 to 1');
+  // 2 clamps to 1 which is already current value (default) → no-op same-ref
+  assert(out2 === ad, '24c2: 2 clamps to 1 = current → no-op same ref');
+  const out3 = applySetStripInfluence(ad, 'tMid', 's1', -0.5);
+  close(findStrip(out3, 'tMid', 's1').influence, 0, 1e-10, '24d: clamp <0 to 0');
+  // NaN / Infinity → ignored, same ref
+  const out4 = applySetStripInfluence(ad, 'tMid', 's1', NaN);
+  assert(out4 === ad, '24e: NaN ignored → same ref');
+  const out5 = applySetStripInfluence(ad, 'tMid', 's1', Infinity);
+  assert(out5 === ad, '24f: Infinity ignored → same ref');
+}
+
+// ── 25. wouldSetStripInfluenceChange ───────────────────────────────
+{
+  const ad = makeFixture();
+  assert(wouldSetStripInfluenceChange(ad, 'tMid', 's1', 0.5), '25a: 1→0.5 changes');
+  assert(!wouldSetStripInfluenceChange(ad, 'tMid', 's1', 1), '25b: 1→1 no-op');
+  // 2 clamps to 1 → no change (default influence=1)
+  assert(!wouldSetStripInfluenceChange(ad, 'tMid', 's1', 2), '25c: 2 clamps→1 = current, no change');
+  // NaN/Infinity rejected
+  assert(!wouldSetStripInfluenceChange(ad, 'tMid', 's1', NaN), '25d: NaN → no');
+  assert(!wouldSetStripInfluenceChange(ad, 'tMid', 's1', Infinity), '25e: Infinity → no');
+}
+
+// ── 26. applyToggleStripMuted XOR ──────────────────────────────────
+{
+  const ad = makeFixture();
+  // Initial: flag=0
+  eq(findStrip(ad, 'tMid', 's1').flag & NLASTRIP_FLAG.MUTED, 0, '26a: initially unmuted');
+  const out = applyToggleStripMuted(ad, 'tMid', 's1');
+  assert((findStrip(out, 'tMid', 's1').flag & NLASTRIP_FLAG.MUTED) !== 0, '26b: now muted');
+  // Toggle again unmuted
+  const out2 = applyToggleStripMuted(out, 'tMid', 's1');
+  eq(findStrip(out2, 'tMid', 's1').flag & NLASTRIP_FLAG.MUTED, 0, '26c: toggle clears mute');
+  // Missing strip → same ref
+  const out3 = applyToggleStripMuted(ad, 'tMid', 'nonexistent');
+  assert(out3 === ad, '26d: missing strip → same ref');
+}
+
+// ── 27. applyToggleTrackMuted XOR ──────────────────────────────────
+{
+  const ad = makeFixture();
+  eq(ad.nlaTracks[1].flag & NLATRACK_FLAG.MUTED, 0, '27a: initially unmuted');
+  const out = applyToggleTrackMuted(ad, 'tMid');
+  assert((out.nlaTracks[1].flag & NLATRACK_FLAG.MUTED) !== 0, '27b: now muted');
+  // Original unchanged
+  eq(ad.nlaTracks[1].flag & NLATRACK_FLAG.MUTED, 0, '27c: original unchanged');
+  // Toggle clears
+  const out2 = applyToggleTrackMuted(out, 'tMid');
+  eq(out2.nlaTracks[1].flag & NLATRACK_FLAG.MUTED, 0, '27d: toggle clears');
+}
+
+// ── 28. applyToggleTrackProtected XOR ──────────────────────────────
+{
+  const ad = makeFixture();
+  const out = applyToggleTrackProtected(ad, 'tMid');
+  assert((out.nlaTracks[1].flag & NLATRACK_FLAG.PROTECTED) !== 0, '28a: now protected');
+  const out2 = applyToggleTrackProtected(out, 'tMid');
+  eq(out2.nlaTracks[1].flag & NLATRACK_FLAG.PROTECTED, 0, '28b: toggle clears');
+  const out3 = applyToggleTrackProtected(ad, 'nonexistent');
+  assert(out3 === ad, '28c: missing track → same ref');
+}
+
+// ── 29. applyToggleTrackSolo exclusivity ───────────────────────────
+{
+  // Initial: no track soloed, adt.flag = 0
+  const ad = makeFixture();
+  eq(ad.flag & ADT_FLAG.NLA_SOLO_TRACK, 0, '29a: initially no solo flag on adt');
+  // Solo tMid
+  const out = applyToggleTrackSolo(ad, 'tMid');
+  assert((out.nlaTracks[1].flag & NLATRACK_FLAG.SOLO) !== 0, '29b: tMid now soloed');
+  assert((out.flag & ADT_FLAG.NLA_SOLO_TRACK) !== 0, '29c: adt flag set');
+  // Original unchanged (immutability)
+  eq(ad.nlaTracks[1].flag & NLATRACK_FLAG.SOLO, 0, '29d: original tMid SOLO unchanged');
+  eq(ad.flag & ADT_FLAG.NLA_SOLO_TRACK, 0, '29e: original adt flag unchanged');
+  // Solo tTop → tMid loses SOLO (exclusivity)
+  const out2 = applyToggleTrackSolo(out, 'tTop');
+  eq(out2.nlaTracks[1].flag & NLATRACK_FLAG.SOLO, 0, '29f: tMid SOLO cleared (exclusivity)');
+  assert((out2.nlaTracks[2].flag & NLATRACK_FLAG.SOLO) !== 0, '29g: tTop now soloed');
+  assert((out2.flag & ADT_FLAG.NLA_SOLO_TRACK) !== 0, '29h: adt flag still set');
+  // Toggle tTop again → SOLO cleared everywhere, adt flag cleared
+  const out3 = applyToggleTrackSolo(out2, 'tTop');
+  eq(out3.nlaTracks[2].flag & NLATRACK_FLAG.SOLO, 0, '29i: tTop SOLO cleared');
+  eq(out3.flag & ADT_FLAG.NLA_SOLO_TRACK, 0, '29j: adt flag cleared (no tracks solo)');
+  // Missing track → same ref
+  const out4 = applyToggleTrackSolo(ad, 'nonexistent');
+  assert(out4 === ad, '29k: missing track → same ref');
+}
+
+// ── 30. solo preserves OTHER flag bits on cleared tracks ───────────
+{
+  // Set up: tMid has MUTED set + SOLO set; tTop has PROTECTED set.
+  // Solo'ing tBot should clear SOLO on tMid (its only conflicting bit)
+  // but preserve MUTED + tTop's PROTECTED.
+  const ad = makeFixture();
+  ad.nlaTracks[1].flag = NLATRACK_FLAG.MUTED | NLATRACK_FLAG.SOLO;
+  ad.nlaTracks[2].flag = NLATRACK_FLAG.PROTECTED;
+  ad.flag = ADT_FLAG.NLA_SOLO_TRACK;
+  const out = applyToggleTrackSolo(ad, 'tBot');
+  // tBot now soloed
+  assert((out.nlaTracks[0].flag & NLATRACK_FLAG.SOLO) !== 0, '30a: tBot soloed');
+  // tMid: SOLO cleared but MUTED preserved
+  eq(out.nlaTracks[1].flag & NLATRACK_FLAG.SOLO, 0, '30b: tMid SOLO cleared');
+  assert((out.nlaTracks[1].flag & NLATRACK_FLAG.MUTED) !== 0, '30c: tMid MUTED preserved');
+  // tTop: PROTECTED preserved (never had SOLO, so no change at all)
+  assert((out.nlaTracks[2].flag & NLATRACK_FLAG.PROTECTED) !== 0, '30d: tTop PROTECTED preserved');
+  // tTop didn't have SOLO → its ref should be preserved (perf-optimization
+  // assertion — verifies we didn't shallow-clone unaffected tracks)
+  assert(out.nlaTracks[2] === ad.nlaTracks[2], '30e: tTop ref preserved (no SOLO/no target)');
 }
 
 console.log(`\nnlaEditorOps: ${passed} passed, ${failed} failed`);
