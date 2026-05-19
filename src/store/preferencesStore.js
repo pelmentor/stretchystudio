@@ -41,6 +41,17 @@ const LTM_KEY = 'v3.prefs.lastToolByMode';
  *  NUM_EDIT_FULL flip from `numinput.cc:352-365`); when OFF (Blender
  *  default), the user must press `=` to enter numericMode. */
 const NIA_KEY = 'v3.prefs.useNumericInputAdvanced';
+/** Animation Phase 7 Slice 7.E -- K-key first-use toast suppression.
+ *  When `false` (default), the FIRST K-press in animation mode emits a
+ *  toast pointing the user at the new I-key menu (Phase 7 Slice 7.C):
+ *  "K inserts all properties; use I to choose a keying set." The toast
+ *  flips this flag to `true`, suppressing further toasts across all
+ *  future sessions. Plan §7.E core deliverable; the optional rebind
+ *  preference is deferred to §7.F+.
+ *
+ *  localStorage key chosen to match the `v3.prefs.*` pattern so a
+ *  user clearing the namespace resets all SS preferences uniformly. */
+const K_FIRST_USE_KEY = 'v3.prefs.kKeyFirstUseShown';
 /** Animation Plan Phase 0.D.0 — eval-engine selector. `'classic'`
  *  (default) routes the viewport tick through chainEval's `evalRig`.
  *  `'depgraph'` routes through `evalProjectFrameViaDepgraph` (Phase
@@ -259,6 +270,14 @@ export const usePreferencesStore = create((set, get) => ({
    *  [lib/modal/transformInputReducer.js](../lib/modal/transformInputReducer.js)
    *  module JSDoc "USER_FLAG_NUMINPUT_ADVANCED — CLOSED Slice 5.U". */
   useNumericInputAdvanced: loadBool(NIA_KEY, false),
+
+  /** Animation Phase 7 Slice 7.E -- K-key first-use toast flag.
+   *  `false` until the user presses K in animation mode and the
+   *  CanvasViewport handler (post-guards) emits the "use I to choose
+   *  a keying set" pointer toast; flipping to `true` suppresses the
+   *  toast for all future sessions on this device. Rule №2: pure
+   *  client-side persisted preference, no project schema touch. */
+  kKeyFirstUseShown: loadBool(K_FIRST_USE_KEY, false),
   /** Last-used tool per editMode (`'object' | 'edit' | 'skeleton' |
    *  'blendShape'`). Persisted across sessions so sticky tool choices
    *  (e.g. preferring `add_vertex` over the default `brush` in Edit
@@ -365,6 +384,18 @@ export const usePreferencesStore = create((set, get) => ({
     const next = !!v;
     saveBool(NIA_KEY, next);
     set({ useNumericInputAdvanced: next });
+  },
+
+  /** Animation Phase 7 Slice 7.E -- flip the K-key first-use toast
+   *  flag. Called once by the CanvasViewport K-key handler after the
+   *  first successful keyframe-insertion in animation mode (post-guards,
+   *  pre-recipe). Idempotent: subsequent calls re-save the same value
+   *  to localStorage; cheap enough that the handler doesn't need to
+   *  short-circuit. */
+  setKKeyFirstUseShown(v) {
+    const next = !!v;
+    saveBool(K_FIRST_USE_KEY, next);
+    set({ kKeyFirstUseShown: next });
   },
 
   setProportionalEdit(partial) {

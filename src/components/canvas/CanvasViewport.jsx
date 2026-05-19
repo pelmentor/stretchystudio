@@ -37,6 +37,10 @@ import { getActiveSceneAction } from '@/anim/sceneAction';
 // wiring lands with the depgraph default-flip in Phase 0.D.0.
 import { evaluateProjectDrivers, driverOverridesToParamMap } from '@/anim/driverPass';
 import { runAutoKey } from '@/anim/autoKeyDispatch';
+// Phase 7 Slice 7.E -- K-key first-use toast emitted from the K-key
+// handler below (post-guards, pre-recipe). `toast` is fire-and-forget;
+// suppression is gated by `preferences.kKeyFirstUseShown`.
+import { toast } from '@/hooks/use-toast';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1500,6 +1504,33 @@ export default function CanvasViewport({
       }
       if (extraIds.size > 0) {
         selectedIds = Array.from(new Set([...selectedIds, ...extraIds]));
+      }
+
+      // Animation Phase 7 Slice 7.E -- K-key first-use toast. Pointer
+      // to the new I-key menu shipped in 7.C. Fires AFTER every guard
+      // has passed (preview mode + editable target + animation mode +
+      // actions exist + selection non-empty) so the toast only appears
+      // when K actually performs keyframe-insertion work.
+      //
+      // `e.__ssAutoKey` sentinel: synthetic K events dispatched by
+      // `runAutoKey('all')` (see `src/anim/autoKeyDispatch.js`) carry
+      // this flag so the toast skips the auto-key path -- the user
+      // didn't press K manually, they dragged a bone with auto-key
+      // on. Showing the "Press I to pick a keying set" pointer in
+      // that case would be confusing.
+      //
+      // The prefs flag is sparse-stored as a single boolean in
+      // localStorage (`v3.prefs.kKeyFirstUseShown`). Once true, the
+      // toast suppresses for all future sessions on this device.
+      if (!e.__ssAutoKey) {
+        const prefs = usePreferencesStore.getState();
+        if (!prefs.kKeyFirstUseShown) {
+          toast({
+            title: 'K — Insert all properties',
+            description: 'Press I to pick a specific keying set (Location / Rotation / Active Set / …).',
+          });
+          prefs.setKKeyFirstUseShown(true);
+        }
       }
 
       const currentTimeMs = anim.currentTime;

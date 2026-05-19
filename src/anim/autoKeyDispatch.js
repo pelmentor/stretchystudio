@@ -121,8 +121,21 @@ export function runAutoKey(project) {
     case 'all': {
       // Legacy path -- see module header. Synthetic event routes
       // through the K-key handler at CanvasViewport.jsx:1457-1633.
+      //
+      // Phase 7 Slice 7.E: tag the synthetic event with a sentinel
+      // (`__ssAutoKey`) so the K-key handler can distinguish auto-key
+      // triggered K-presses (user dragged a bone) from manual K-presses
+      // (user pressed K intentionally) and suppress the first-use
+      // pointer toast on the auto-key path. Without the sentinel, a
+      // user with auto-key on would see the "Press I to pick a keying
+      // set" toast after their first bone drag -- confusing because
+      // they did not press K. Sentinel is a non-enumerable property
+      // so it doesn't appear in event-inspection tooling but is
+      // reliable for the handler's `if (e.__ssAutoKey)` gate.
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
+        const ev = new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' });
+        Object.defineProperty(ev, '__ssAutoKey', { value: true, enumerable: false });
+        window.dispatchEvent(ev);
       }
       return { mode: 'all', dispatched: 'synthetic-K-keydown' };
     }
