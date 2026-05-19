@@ -81,10 +81,25 @@
  *       frame range (`project.actions[...].frameStart`/`frameEnd`/
  *       `duration`). If the action has no length signal, uses
  *       `MIN_STRIP_MS` (1ms) so the strip is non-empty + the user can
- *       resize. Honors Blender's overlap rejection
- *       (`BKE_nlastrips_has_space` per `nla.cc:957-969`) by REFUSING
- *       to add if it would overlap an existing strip on the same
- *       track. Refuses if the target track is PROTECTED (per
+ *       resize.
+ *
+ *       **SS DEVIATION 15 — auto-position on overlap** (audit-fix
+ *       Slice 4.D.4 HIGH-A1 + fidelity HIGH-A1). Blender's
+ *       `BKE_nlatrack_add_strip` (`nla.cc:1361-1379`) returns `false`
+ *       when `BKE_nlastrips_has_space` (`nla.cc:860-890`) finds no
+ *       room at the requested start. The CALLER (operator) then
+ *       decides to fall over to a new track. SS's `applyAddStrip`
+ *       silently scans rightward via `findFreeRangeStart` and inserts
+ *       at the first free position that fits the action's duration —
+ *       so the only refusals are (a) PROTECTED track, (b) missing
+ *       action, (c) missing track, (d) empty/missing project.
+ *       Behavioral consequence: a strip ALWAYS lands on the requested
+ *       track (if the track is open + action exists); never fails over
+ *       to a different track at this layer. `applyPushActionDown`'s
+ *       "fall over to new track" fires only on PROTECTED top track,
+ *       not on "top track full".
+ *
+ *       Refuses if the target track is PROTECTED (per
  *       `BKE_nlatrack_add_strip` `nla.cc:1361-1379`). Returns
  *       same-ref animData on rejection; caller introspects via
  *       `wouldAddStripChange`.
@@ -98,27 +113,67 @@
  *       force-explicit-exit"). Refuses if the parent track is
  *       PROTECTED.
  *
+ *       **No transition cascade** (audit-fix Slice 4.D.4 MED-A3):
+ *       Blender's `NLA_OT_delete` (`nla_edit.cc:1300-1307`) also
+ *       removes adjacent `NLASTRIP_TYPE_TRANSITION` strips when
+ *       deleting a normal strip — both prev-transition and
+ *       next-transition are dropped via
+ *       `BKE_nlastrip_remove_and_free`. SS skips this because
+ *       transitions are not modeled in Phase 4 (Slice 4.A schema only
+ *       defines clip strips; transition support is deferred per
+ *       plan §Phase 5).
+ *
  *   - applyRemoveTrack(animData, trackId)
- *       Removes track + all its strips. Re-stamps remaining tracks'
- *       indices to maintain contiguous integers (per Slice 4.C
- *       audit-fix MED-A3 contract). If the removed track had
- *       `NLATRACK_FLAG.SOLO` set, also clears
+ *       Removes track + all its strips. Cascade-deletes strips by
+ *       virtue of array-filter (the track + its `strips[]` array drop
+ *       together). Blender's equivalent is `BKE_nlatrack_remove_and_free`
+ *       (`nla.cc:684-688` — a 3-liner) which delegates to
+ *       `BKE_nlatrack_free` (`nla.cc:109-126`) that iterates `strips`
+ *       and calls `BKE_nlastrip_remove_and_free` per-strip; SS does
+ *       the cascade implicitly (no per-strip cleanup hook needed —
+ *       there's no allocated state beyond plain JSON).
+ *
+ *       Re-stamps remaining tracks' indices to maintain contiguous
+ *       integers (per Slice 4.C audit-fix MED-A3 contract). If the
+ *       removed track had `NLATRACK_FLAG.SOLO` set, also clears
  *       `ADT_FLAG.NLA_SOLO_TRACK` on the animData (per Blender's
  *       `nla_tracks.cc:736-738`). Refuses if the track contains the
  *       current tweak strip OR if the track is PROTECTED.
  *
+ *       **SS DEVIATION 16 — no id-user refcount on action references**
+ *       (audit-fix Slice 4.D.4 fidelity MED-A4). Blender's
+ *       `BKE_nlatrack_remove_and_free(..., do_id_user=true)` decrements
+ *       ID user-counts on each freed strip's referenced action. SS
+ *       doesn't refcount actions — they're plain string-id references
+ *       into `project.actions[]`. Removing a strip never garbage-
+ *       collects an action; unused actions linger until explicitly
+ *       deleted via the Actions editor. Acceptable today (low strip-
+ *       creation churn in production projects); a future bulk-cleanup
+ *       sweep is the right place to add a project-wide unused-action
+ *       reaper.
+ *
  *   - applyPushActionDown(animData, project)
  *       Port of `BKE_nla_action_pushdown` (`nla.cc:2248-2294`). If
  *       `animData.actionId` is null, returns same-ref. Creates a
- *       strip from the active action via `makeNlaStrip`. Tries last
- *       track first; creates a new track if the last track rejects
- *       (no space or no last track), naming the new track after the
- *       action (per `nla.cc:617` `STRNCPY_UTF8(nlt->name,
+ *       strip from the active action via `makeNlaStrip`. Tries top
+ *       track first; if the top track is PROTECTED OR there are no
+ *       tracks at all, creates a new track named after the action
+ *       (per `nla.cc:617` `STRNCPY_UTF8(nlt->name,
  *       adt->action->id.name + 2)`). Clears `animData.actionId`
  *       (and `slotHandle`) after successful push. Refuses if in
  *       tweak mode (Blender's operator's poll function
  *       `nlaop_poll_tweakmode_off` enforces; SS mirrors at
  *       substrate per Rule №1).
+ *
+ *       **Audit-fix Slice 4.D.4 MED-A2**: pre-fix this said "creates
+ *       a new track if the last track rejects (no space or no last
+ *       track)". The "no space" branch is unreachable because
+ *       `applyAddStrip` auto-positions rightward (SS DEVIATION 15
+ *       above) — only PROTECTED top tracks trigger the new-track
+ *       fallback. Updated to reflect actual behavior. (Blender's
+ *       BKE_nlastack_add_strip DOES fall over to new-track on no-
+ *       space because its `BKE_nlatrack_add_strip` strictly rejects;
+ *       SS's port diverges per deviation 15.)
  *
  *       **SS DEVIATION 13 — no act_blendmode/act_influence/
  *       act_extendmode inheritance.** Blender (`nla.cc:2274-2276`)
@@ -139,13 +194,16 @@
  *
  * # No-overlap enforcement on RESIZE/DRAG (SS DEVIATION, documented)
  *
- * **Scope clarification (4.D.4 addition):** this deviation applies
- * to `applyMoveStrip`/`applyResizeStripStart`/`applyResizeStripEnd`
- * — the drag-time ops. The CREATE-time op `applyAddStrip` DOES honor
- * Blender's overlap rejection (`BKE_nlastrips_has_space`) per Slice
- * 4.D.4. The drag-time deviation lets the user produce overlaps
- * (which are evaluator-valid); the create-time fidelity prevents
- * accidental zero-effort overlaps at strip insertion.
+ * **Scope clarification (audit-fix Slice 4.D.4):** this deviation
+ * applies to BOTH `applyMoveStrip`/`applyResizeStripStart`/`applyResizeStripEnd`
+ * (the drag-time ops) AND `applyAddStrip` (the create-time op) —
+ * SEE SS DEVIATION 15 above for the latter. The pre-audit-fix text
+ * here claimed "the CREATE-time op `applyAddStrip` DOES honor
+ * Blender's overlap rejection" — wrong: it auto-positions rightward
+ * instead. The runtime behavior (no rejection at the strip-positioning
+ * level) is the same for drag + create; only the implementation paths
+ * differ (drag clamps; create scans rightward via
+ * `findFreeRangeStart`).
  *
  * Blender's `nlastrip_fix_resize_overlaps` (nla.cc:1616+) shifts
  * neighbor strips when a resize would cause overlap. SS does NOT
@@ -814,9 +872,16 @@ function readActionStartMs(project, actionId) {
 
 /**
  * Read an action's name from the project. Returns the actionId itself
- * if the action has no name or doesn't exist (used for fallback track
- * naming in pushActionDown per Blender's `STRNCPY_UTF8(nlt->name,
- * adt->action->id.name + 2)` at `nla.cc:617`).
+ * if the action has no name or doesn't exist.
+ *
+ * Used for fallback track naming in `applyPushActionDown` to mirror
+ * Blender's `STRNCPY_UTF8(nlt->name, adt->action->id.name + 2)` at
+ * `nla.cc:617`. **Equivalent semantic, not byte-identical** (audit-fix
+ * Slice 4.D.4 LOW-A1): Blender's `id.name + 2` strips the 2-char
+ * ID-block prefix ("AC" for actions) from the underlying ID name; SS
+ * uses `action.name` directly because SS's action shape stores the
+ * display string in `.name` without any prefix to strip (SS has no
+ * ID-block-name concept). Both produce the user-visible action name.
  *
  * @param {object|null|undefined} project
  * @param {string|null|undefined} actionId
@@ -854,8 +919,13 @@ function uniqueTrackName(existingTracks, base) {
     const candidate = `${base}.${String(i).padStart(3, '0')}`;
     if (!used.has(candidate)) return candidate;
   }
-  // Fallback if somehow we have 10000+ collisions — append timestamp.
-  return `${base}.${Date.now()}`;
+  // Audit-fix Slice 4.D.4 L1: throw per Rule №1 rather than silent
+  // Date.now() fallback. 10k tracks with the same base name is a
+  // data-model invariant violation.
+  throw new Error(
+    `uniqueTrackName: 10,000 collision attempts with base '${base}'`
+    + ` — data-model invariant violation`,
+  );
 }
 
 /**
@@ -878,18 +948,14 @@ function uniqueStripId(existingStrips, prefix) {
     const candidate = i === 0 ? prefix : `${prefix}_${i}`;
     if (!used.has(candidate)) return candidate;
   }
-  return `${prefix}_${Date.now()}`;
-}
-
-/**
- * Predicate: would adding a track produce a no-op? Always false in
- * practice (adding a track is never a no-op), provided for API
- * symmetry with the other `would*Change` predicates.
- *
- * @returns {boolean} always true (provided for API symmetry)
- */
-export function wouldAddTrackChange() {
-  return true;
+  // Audit-fix Slice 4.D.4 L1: throw per Rule №1 rather than silent
+  // Date.now() fallback. 100k strips on a single track is already a
+  // data-model invariant violation; surface loudly so the caller
+  // sees the bug instead of inheriting a brittle id.
+  throw new Error(
+    `uniqueStripId: 100,000 collision attempts with prefix '${prefix}'`
+    + ` — data-model invariant violation (single-track strip count)`,
+  );
 }
 
 /**
@@ -897,6 +963,11 @@ export function wouldAddTrackChange() {
  * animData with the track appended. Default name is "NlaTrack" with
  * a `.NNN` suffix appended on collision. Index is set to the new
  * position (current length).
+ *
+ * **No `wouldAddTrackChange` predicate** — adding is never a no-op,
+ * so the +Track UI affordance never disables. The earlier API-
+ * symmetry export was removed in audit-fix Slice 4.D.4 MED-A3 (dead
+ * surface — never imported or tested).
  *
  * @param {object} animData
  * @param {string} [baseName] - defaults to "NlaTrack"
@@ -912,23 +983,6 @@ export function applyAddTrack(animData, baseName = 'NlaTrack') {
   );
   const newTrack = makeNlaTrack(id, name, { index: tracksRef.length });
   return { ...animData, nlaTracks: [...tracksRef, newTrack] };
-}
-
-/**
- * Check whether two [start, end] ranges overlap. Closed-interval
- * comparison — touching endpoints (`a.end === b.start`) are NOT
- * considered overlapping. Matches Blender's `BKE_nlastrips_has_space`
- * test convention (`nla.cc:937-955`).
- *
- * @param {number} aStart
- * @param {number} aEnd
- * @param {number} bStart
- * @param {number} bEnd
- * @returns {boolean}
- */
-function rangesOverlap(aStart, aEnd, bStart, bEnd) {
-  // Two ranges overlap iff start < other_end AND end > other_start
-  return aStart < bEnd && aEnd > bStart;
 }
 
 /**
@@ -1045,10 +1099,7 @@ export function applyAddStrip(animData, project, trackId, actionId, minStartMs =
  * @returns {boolean}
  */
 export function wouldRemoveStripChange(animData, trackId, stripId) {
-  const { track, strip } = (() => {
-    const r = locateStrip(animData, trackId, stripId);
-    return { track: r.track, strip: r.strip };
-  })();
+  const { track, strip } = locateStrip(animData, trackId, stripId);
   if (!strip || !track) return false;
   const trackFlag = typeof track.flag === 'number' ? track.flag : 0;
   if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return false;
@@ -1181,10 +1232,12 @@ export function wouldPushActionDownChange(animData) {
  *   2. Creates a strip from the active action via `makeNlaStrip` +
  *      derives bounds from the action's frame range.
  *   3. Tries the LAST track (top of stack) first (per Blender
- *      `nla.cc:608-609`). Adds via the same overlap-respecting
- *      `applyAddStrip` semantics; if that returns same-ref (rejection
- *      — track full or PROTECTED), creates a new track named after the
- *      action (per `nla.cc:617`) and adds there instead.
+ *      `nla.cc:608-609`). Adds via `applyAddStrip` — which auto-
+ *      positions rightward per SS DEVIATION 15. The only way the
+ *      top-track-try returns same-ref is if the top track is
+ *      PROTECTED (or doesn't exist). On that rejection, creates a
+ *      new track named after the action (per `nla.cc:617`) and adds
+ *      there instead.
  *   4. Clears `animData.actionId` + `slotHandle` after successful push.
  *
  * @param {object} animData

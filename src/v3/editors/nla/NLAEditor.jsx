@@ -120,7 +120,12 @@
  *     PROTECTED tracks or when the strip/track is in tweak mode
  *     (substrate refuses; UI gates to avoid no-op click). Track
  *     delete cascades to strips (per Blender
- *     `BKE_nlatrack_remove_and_free` `nla.cc:706-744`).
+ *     `BKE_nlatrack_remove_and_free` `nla.cc:684-688` + the
+ *     `BKE_nlatrack_free` strip-loop at `nla.cc:109-126` it delegates
+ *     to). Audit-fix Slice 4.D.4 HIGH-A1: pre-fix cite was
+ *     `nla.cc:706-744` which is actually `nlastrip_get_frame_actionclip`
+ *     (unrelated time-mapping helper) — fabricated cite, corrected
+ *     here.
  *
  *   - **Local right-click context menus** (NlaContextMenu component
  *     embedded in this module — does NOT use the global
@@ -911,32 +916,24 @@ function StripPropertiesPanel({
 }
 
 /**
- * @param {{ noAnimData: boolean }} props
+ * Empty-state placeholder. Only fires when there are zero animData-
+ * bearing groups in the project — post-4.D.4, empty groups still
+ * render (with the +Track button to bootstrap their first track), so
+ * the "has nodes but no tracks" branch from earlier sub-slices is
+ * UNREACHABLE and was deleted (audit-fix Slice 4.D.4 HIGH-A2: Rule №2
+ * migration baggage — the deleted branch also carried stale
+ * "shipping in Slice 4.D.4" copy about this very feature).
  */
-function EmptyState({ noAnimData }) {
+function EmptyState() {
   return (
     <div className="flex items-center justify-center h-full text-zinc-500 text-sm p-6">
       <div className="text-center max-w-md">
-        {noAnimData ? (
-          <>
-            <p className="mb-2">No animData-bearing Objects in this project.</p>
-            <p className="text-xs">
-              NLA tracks attach to parts, bone groups, and the scene
-              pseudo-Object. Import a PSD or run the wizard to populate
-              the project before adding NLA tracks.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="mb-2">No NLA tracks on any Object yet.</p>
-            <p className="text-xs">
-              NLA tracks let you layer multiple Actions on top of each
-              other with per-layer blend modes (replace / add / subtract
-              / multiply). Add tracks via the "+ Track" affordance per
-              Object — shipping in Slice 4.D.4.
-            </p>
-          </>
-        )}
+        <p className="mb-2">No animData-bearing Objects in this project.</p>
+        <p className="text-xs">
+          NLA tracks attach to parts, bone groups, and the scene
+          pseudo-Object. Import a PSD or run the wizard to populate
+          the project before adding NLA tracks.
+        </p>
       </div>
     </div>
   );
@@ -1448,28 +1445,49 @@ export function NLAEditor() {
   }, [updateProject]);
 
   const handleRemoveStrip = useCallback((objectId, trackId, stripId) => {
-    makeNodeRecipe(objectId, (ad) => applyRemoveStrip(ad, trackId, stripId));
-    // If we deleted the selected strip, clear the selection so the
-    // footer panel doesn't try to resolve a missing ref (the
-    // selection useEffect catches this anyway, but explicit clear
-    // avoids a one-frame flash of the wrong content).
-    if (selectedStripRef
+    // Audit-fix Slice 4.D.4 MED-A4: gate the selection-clear on
+    // SUBSTRATE SUCCESS, not on the call attempt. If the substrate
+    // refuses (PROTECTED-changed-since-menu-opened, tweak strip,
+    // missing strip), we must NOT clear selection — that would
+    // discard editor state on a no-op. Lift to inline updateProject
+    // so we can observe `ad !== node.animData` after the recipe.
+    let didChange = false;
+    updateProject((proj) => {
+      const node = proj.nodes.find((n) => n && n.id === objectId);
+      if (!node || !node.animData) return;
+      const newAd = applyRemoveStrip(node.animData, trackId, stripId);
+      if (newAd !== node.animData) {
+        node.animData = newAd;
+        didChange = true;
+      }
+    });
+    if (didChange
+        && selectedStripRef
         && selectedStripRef.objectId === objectId
         && selectedStripRef.trackId === trackId
         && selectedStripRef.stripId === stripId) {
       setSelectedStripRef(null);
     }
-  }, [makeNodeRecipe, selectedStripRef]);
+  }, [updateProject, selectedStripRef]);
 
   const handleRemoveTrack = useCallback((objectId, trackId) => {
-    makeNodeRecipe(objectId, (ad) => applyRemoveTrack(ad, trackId));
-    // Clear selection if it was on a strip inside this track
-    if (selectedStripRef
+    let didChange = false;
+    updateProject((proj) => {
+      const node = proj.nodes.find((n) => n && n.id === objectId);
+      if (!node || !node.animData) return;
+      const newAd = applyRemoveTrack(node.animData, trackId);
+      if (newAd !== node.animData) {
+        node.animData = newAd;
+        didChange = true;
+      }
+    });
+    if (didChange
+        && selectedStripRef
         && selectedStripRef.objectId === objectId
         && selectedStripRef.trackId === trackId) {
       setSelectedStripRef(null);
     }
-  }, [makeNodeRecipe, selectedStripRef]);
+  }, [updateProject, selectedStripRef]);
 
   const handlePushActionDown = useCallback((objectId) => {
     updateProject((proj) => {
@@ -1520,7 +1538,7 @@ export function NLAEditor() {
   if (visibleGroupsWithEmpty.length === 0) {
     return (
       <div ref={setContainerRef} className="h-full">
-        <EmptyState noAnimData={true} />
+        <EmptyState />
       </div>
     );
   }
