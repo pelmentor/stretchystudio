@@ -1242,24 +1242,26 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** **Slice 4.D COMPLETE (4/4 sub-slices)** — 4.A substrate +
-4.B evaluator + 4.C tweak mode + 4.D.1 NLAEditor read-only + 4.D.2
-drag interactions + 4.D.3 affordances + **4.D.4 CRUD + Push Action
-Down** (`12f992f` + `09ee4dd` 2026-05-19). Schema at **v42**. Slice
-4.D split into 4 sub-slices: 4.D.1 (read-only) + 4.D.2 (drag) +
-4.D.3 (affordances) + 4.D.4 (CRUD + Push Action Down).
+**Status:** **Slice 4.E SHIPPED 2026-05-19** (`7e4a2a0` + `6ebe3e2`).
+Slices complete: 4.A substrate + 4.B evaluator + 4.C tweak mode +
+4.D.1-4.D.4 NLAEditor (read-only/drag/affordances/CRUD+PushDown) +
+**4.E BakeNLA operator**. Schema at **v42** (no bump for 4.E —
+operator-only).
 **Cite-discipline**: BROKE at 5 on 4.D.1; RESET to 0; HOLDS at 1
-after 4.D.2; HOLDS at 2 after 4.D.3; **BROKE at 2, RESET to 0** after
-4.D.4 (2 fab'd helper-function cites — `nla.cc:706-744` was actually
-`nlastrip_get_frame_actionclip` not `BKE_nlatrack_remove_and_free`;
-`nla.cc:937-955` was `BKE_nlastrips_add_strip_unsafe` not
-`BKE_nlastrips_has_space`; both corrected in `09ee4dd`).
+after 4.D.2; HOLDS at 2 after 4.D.3; BROKE at 2, RESET to 0 after
+4.D.4; **BROKE at 2, RESET to 0** after 4.E (2 fab cites: function
+name `animsys_construct_orig_action_strip` was actually
+`animsys_create_action_track_strip` at `anim_sys.cc:3313`;
+`keyframes_general.cc#clean_fcurve_segments` doesn't exist — bake's
+clean is `bpy_extras/anim_utils.py:657-676` with wrong epsilon AND
+wrong formula. Both corrected; runtime formula corrected from
+max-of-abs/1e-6 to byte-faithful SUM-of-abs/1e-4).
 Lesson recorded: Explore-agent reconnaissance cites need byte-
 verification too, not just the marquee ones spot-checked. See
 close-out docs
-`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1,D2,D3,D4}.md`.
-**Remaining: 4.E (BakeNLA) + 4.F (test parity sweep) + 4.G (phase
-exit gate + manual verification)**.
+`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1,D2,D3,D4,E}.md`.
+**Remaining: 4.F (test parity sweep) + 4.G (phase exit gate + manual
+verification)**.
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
