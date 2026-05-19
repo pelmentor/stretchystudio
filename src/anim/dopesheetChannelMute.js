@@ -185,7 +185,6 @@
 
 import {
   isFCurveMuted,
-  toggleFCurveMute,
   applyChannelMuteSelected,
   wouldChannelMuteSelectedChange,
 } from './fcurveMute.js';
@@ -331,8 +330,15 @@ export function applyDopesheetChannelMute(action, target) {
       // pick and apply). Treat as no-op; caller can re-pick if needed.
       return { changed: false, kind: 'hovered', mode: null };
     }
+    // Audit-fix Slice 6.F.2 MED-A: inline the toggle to eliminate the
+    // double-find pattern (pre-fix called `toggleFCurveMute(action, id)`
+    // which re-walked `action.fcurves` to find the same fc again).
+    // Eliminates the latent risk of `wasMuted` reading the pre-mutation
+    // proxy while the toggle mutates a different reference if the
+    // helper is ever refactored to splice-replace. Applied via 6.F.2
+    // sweep along with the sister fix in dopesheetChannelSolo.js.
     const wasMuted = isFCurveMuted(fc);
-    toggleFCurveMute(action, target.fcurveId);
+    fc.mute = !wasMuted;
     return {
       changed: true,
       kind: 'hovered',

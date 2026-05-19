@@ -71,7 +71,6 @@
 
 import {
   isFCurveSoloed,
-  toggleFCurveSolo,
   applyChannelSoloSelected,
   wouldChannelSoloSelectedChange,
 } from './fcurveSolo.js';
@@ -172,8 +171,15 @@ export function applyDopesheetChannelSolo(action, target) {
     if (!fc) {
       return { changed: false, kind: 'hovered', mode: null };
     }
+    // Audit-fix Slice 6.F.2 MED-A: inline the toggle to eliminate the
+    // double-find pattern (pre-fix called `toggleFCurveSolo(action, id)`
+    // which re-walked `action.fcurves` to find the same fc again).
+    // Eliminates the latent risk of `wasSolo` reading the pre-mutation
+    // proxy while the toggle mutates a different reference if the
+    // helper is ever refactored to splice-replace. Sister fix applies
+    // to dopesheetChannelMute.js (same pattern).
     const wasSolo = isFCurveSoloed(fc);
-    toggleFCurveSolo(action, target.fcurveId);
+    fc.solo = !wasSolo;
     return {
       changed: true,
       kind: 'hovered',

@@ -227,6 +227,23 @@ export function buildDopesheetRows(action, project) {
   const groups = Array.isArray(action.groups) ? action.groups : [];
   const groupById = new Map(groups.map((g) => [g?.id, g]));
 
+  // Audit-fix Slice 6.F.2 HIGH-A: hoist the any-solo predicate before
+  // the per-fcurve loop so the inline mute cascade reflects the solo
+  // semantic. Pre-fix the inline cascade silently DIVERGED from
+  // `isFCurveEffectivelyMuted` post-6.F.2 extension: eval engine
+  // correctly silenced non-soloed fcurves but the dopesheet row
+  // greying didn't reflect it (no visual feedback for solo state).
+  // Decision matrix matches the function:
+  //   anySolo && fc.solo  → NOT effectively muted (solo wins)
+  //   anySolo && !fc.solo → effectively muted (DAW pattern)
+  //   !anySolo            → original mute+group cascade applies
+  // Per-call O(N) walk over fcurves; for typical SS actions (<100
+  // fcurves) sub-millisecond. Hoisted ONCE per row-build, not per fc.
+  let anySolo = false;
+  for (const fc of action.fcurves) {
+    if (fc && fc.solo === true) { anySolo = true; break; }
+  }
+
   /** @type {DopesheetRow[]} */
   const paramRows = [];
   /** @type {DopesheetRow[]} */
@@ -256,9 +273,19 @@ export function buildDopesheetRows(action, project) {
       .map((kf) => ({ time: kf.time, value: kf?.value }))
       .sort((a, b) => a.time - b.time);
 
-    const isMutedPerCurve = fc.mute === true;
-    const isMutedPerGroup = !!(grp && grp.mute === true);
-    const isMuted = isMutedPerCurve || isMutedPerGroup;
+    // Audit-fix Slice 6.F.2 HIGH-A: solo cascade takes priority — when
+    // anySolo, soloed fcurves are NEVER greyed (solo wins over mute +
+    // group); non-soloed are ALWAYS greyed regardless of mute bit. When
+    // !anySolo, fall through to the original mute+group cascade.
+    /** @type {boolean} */
+    let isMuted;
+    if (anySolo) {
+      isMuted = fc.solo !== true;
+    } else {
+      const isMutedPerCurve = fc.mute === true;
+      const isMutedPerGroup = !!(grp && grp.mute === true);
+      isMuted = isMutedPerCurve || isMutedPerGroup;
+    }
     const activeKfIdx = getActiveKeyformIndex(fc);
 
     let key, label, tooltip, kindColor;

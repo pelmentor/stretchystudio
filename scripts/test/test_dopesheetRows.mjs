@@ -194,6 +194,64 @@ function byFcId(rows, id) {
   eq(byFcId(rows, 'fc_n1_z').isMuted, false, 'ungrouped fcurve stays unmuted');
 }
 
+// ── isMuted: SOLO cascade (Slice 6.F.2 audit-fix HIGH-A) ────────────
+// When anySolo → non-soloed rows greyed, soloed rows NOT greyed.
+// When !anySolo → original mute+group cascade applies.
+{
+  // anySolo case: one fc soloed, two non-soloed siblings (including a
+  // muted one) — soloed wins over mute; non-soloed are greyed.
+  const action = makeAction([
+    paramFc('soloP', [{ time: 0, value: 0 }], { solo: true }),
+    paramFc('mutedP', [{ time: 0, value: 0 }], { mute: true }),
+    paramFc('liveP',  [{ time: 0, value: 0 }]),
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(byFcId(rows, 'fc_param_soloP').isMuted,  false,
+     'solo cascade: soloed fc → isMuted=false (solo wins)');
+  eq(byFcId(rows, 'fc_param_mutedP').isMuted, true,
+     'solo cascade: muted non-soloed → isMuted=true (greyed)');
+  eq(byFcId(rows, 'fc_param_liveP').isMuted,  true,
+     'solo cascade: live non-soloed → isMuted=true (greyed)');
+}
+{
+  // Solo overrides per-curve mute on the SAME fcurve
+  const action = makeAction([
+    paramFc('soloMutedP', [{ time: 0, value: 0 }], { solo: true, mute: true }),
+    paramFc('otherP',     [{ time: 0, value: 0 }]),
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(byFcId(rows, 'fc_param_soloMutedP').isMuted, false,
+     'solo cascade: solo overrides per-curve mute on same fc');
+  eq(byFcId(rows, 'fc_param_otherP').isMuted, true,
+     'solo cascade: non-soloed sibling → muted');
+}
+{
+  // Solo overrides group mute
+  const groups = [{ id: 'gMute', name: 'GMute', mute: true }];
+  const action = makeAction([
+    nodeFc('n1', 'x', [{ time: 0, value: 0 }], { groupId: 'gMute', solo: true }),
+    nodeFc('n1', 'y', [{ time: 0, value: 0 }], { groupId: 'gMute' }),
+  ], groups);
+  const project = makeProject({ nodes: [{ id: 'n1', name: 'N1' }] });
+  const rows = buildDopesheetRows(action, project);
+  eq(byFcId(rows, 'fc_n1_x').isMuted, false,
+     'solo cascade: solo overrides group mute on same fc');
+  eq(byFcId(rows, 'fc_n1_y').isMuted, true,
+     'solo cascade: non-soloed group sibling → muted (any solo trumps unmuted-state)');
+}
+{
+  // No solo at all → original cascade applies (regression guard)
+  const action = makeAction([
+    paramFc('mutedP', [{ time: 0, value: 0 }], { mute: true }),
+    paramFc('liveP',  [{ time: 0, value: 0 }]),
+  ]);
+  const rows = buildDopesheetRows(action, makeProject());
+  eq(byFcId(rows, 'fc_param_mutedP').isMuted, true,
+     'no-solo: per-fcurve mute still works (regression guard)');
+  eq(byFcId(rows, 'fc_param_liveP').isMuted, false,
+     'no-solo: unmuted live fc stays unmuted');
+}
+
 // ── hide filter: per-fcurve ─────────────────────────────────────────
 {
   const action = makeAction([
