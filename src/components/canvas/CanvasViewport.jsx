@@ -36,6 +36,7 @@ import { getActiveSceneAction } from '@/anim/sceneAction';
 // scope: only param drivers reach the eval substrate; transform-driver
 // wiring lands with the depgraph default-flip in Phase 0.D.0.
 import { evaluateProjectDrivers, driverOverridesToParamMap } from '@/anim/driverPass';
+import { runAutoKey } from '@/anim/autoKeyDispatch';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1460,7 +1461,13 @@ export default function CanvasViewport({
     if (previewMode) return;
     const handler = (e) => {
       if (e.key !== 'k' && e.key !== 'K') return;
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      // Audit-fix H-1 (Phase 7.D sweep): `e.target?.tagName` — synthetic
+      // events dispatched via `runAutoKey('all')` set `event.target` to
+      // `window`, which has no `tagName`. The pre-fix bare `.tagName`
+      // matched the sister keydown handler at :1393 which already uses
+      // `?.`; 7.D made this path live on every auto-key tick in 'all'
+      // mode, exposing the inconsistency.
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
 
       const ed = editorRef.current;
       const anim = useAnimationStore.getState();
@@ -3323,10 +3330,16 @@ export default function CanvasViewport({
       const wasSculpt = dragRef.current.mode === 'sculpt';
       dragRef.current = null;
       canvas.style.cursor = '';
+      // Audit-fix H-2 (Phase 7.D sweep): canvas-direct drag-end auto-key
+      // was missed in the initial 7.D sweep — SkeletonOverlay + GizmoOverlay
+      // were migrated to runAutoKey but this third trigger site kept the
+      // raw synthetic-K dispatch, silently bypassing the mode dropdown.
+      // Migrating to runAutoKey gives 'activeSet' / 'available' modes
+      // effect on canvas-level drags.
       if (!wasSculpt
           && editorRef.current.autoKeyframe
           && getEditorMode() === 'animation') {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
+        runAutoKey(useProjectStore.getState().project);
       }
     }
   }, []);

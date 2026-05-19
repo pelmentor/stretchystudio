@@ -73,7 +73,13 @@ export const AUTOKEY_MODES = Object.freeze(['all', 'activeSet', 'available']);
 export function getAutoKeyMode(project) {
   const raw = project?.autoKeyMode;
   if (raw === undefined || raw === null) return 'all';
-  if (raw === 'all' || raw === 'activeSet' || raw === 'available') return raw;
+  // Audit-fix M-1 (Phase 7.D sweep): membership check derives from the
+  // exported `AUTOKEY_MODES` tuple rather than a parallel literal list,
+  // so adding a new mode requires updating one source of truth instead
+  // of three (the constant + this guard + runAutoKey's switch).
+  if (AUTOKEY_MODES.includes(/** @type {'all'|'activeSet'|'available'} */ (raw))) {
+    return /** @type {'all'|'activeSet'|'available'} */ (raw);
+  }
   if (typeof console !== 'undefined') {
     console.warn(`[autoKey] unknown autoKeyMode '${raw}' on project; coalescing to 'all'.`);
   }

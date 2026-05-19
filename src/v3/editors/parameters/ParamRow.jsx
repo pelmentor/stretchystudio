@@ -173,6 +173,17 @@ function ParamRowImpl({ param, selected }) {
           // param-targeted FCurve at the current playhead time. The
           // animation tick evaluates these fcurves via
           // `evaluateActionFCurves` and feeds them into chainEval.
+          //
+          // PHASE-7-GAP (Slice 7.D audit-fix M-2): this path bypasses
+          // `runAutoKey` and ignores `project.autoKeyMode`. A user in
+          // `'available'` mode dragging a slider on a parameter with NO
+          // existing fcurve will still create one (the opposite of what
+          // `'available'` means); a user in `'activeSet'` mode will
+          // still key only the touched param (NOT the full active set).
+          // Unifying the param auto-key path with `runAutoKey` is §7.E+
+          // scope; the per-param-write semantic here is intentional for
+          // 7.D's MVP (transform/pose drags get mode-aware dispatch;
+          // param sliders stay on the per-param write that pre-dates 7.D).
           const ed = useEditorStore.getState();
           if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
           const an = useAnimationStore.getState();

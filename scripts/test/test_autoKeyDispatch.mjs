@@ -208,6 +208,11 @@ console.log('\n§5 runAutoKey available mode');
   const { useEditorStore } = await import('../../src/store/editorStore.js');
 
   // §5.1 no existing fcurves → Available emits empty channel list → 0 writes
+  // (Audit-fix L-1 — the deeper "Available set's collector filters to
+  // existing fcurves" semantic is exercised in `test_keyingSets.mjs §5`;
+  // here we verify only that runAutoKey reaches the 'available' branch
+  // AND that the end-to-end mutation is empty as expected when the
+  // project starts with no fcurves.)
   const proj51 = makeProject();
   proj51.autoKeyMode = 'available';
   useProjectStore.setState({ project: proj51 });
@@ -216,8 +221,8 @@ console.log('\n§5 runAutoKey available mode');
 
   resetDispatched();
   const r51 = runAutoKey(useProjectStore.getState().project);
-  eq(r51.mode, 'available', '§5.1 mode=available');
-  eq(r51.dispatched, 'Available', '§5.1 dispatched=Available');
+  eq(r51.mode, 'available', '§5.1 mode=available (switch case entered)');
+  eq(r51.dispatched, 'Available', '§5.1 dispatched=Available (execApplyKeyingSet called)');
   eq(dispatched.length, 0, '§5.1 NO synthetic-K dispatched');
   const partAct51 = useProjectStore.getState().project.actions.find((a) => a.id === 'partAct');
   eq(partAct51.fcurves.length, 0, '§5.1 no existing fcurves → no new fcurves written');

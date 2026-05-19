@@ -196,6 +196,13 @@ function AutoKeyModeDropdown({ disabled, project, update }) {
   const mode = getAutoKeyMode(project);
 
   function setMode(next) {
+    // Audit-fix M-3 (Phase 7.D sweep): `{skipHistory: true}` — auto-key
+    // mode is a UI preference, not animation data. Pushing an undo
+    // snapshot per dropdown selection eats a Ctrl+Z slot that should
+    // undo the last keyframe insertion (and Radix's RadioGroup fires
+    // onValueChange even when the user clicks the currently-selected
+    // item, so a no-op selection would also burn an undo slot pre-fix).
+    // Blender stores autokey_mode in user prefs, never on undo stack.
     update((p) => {
       // Sparse storage — only persist the field when the user picks a
       // non-default value. Rule №2 compliance: project files saved
@@ -205,7 +212,7 @@ function AutoKeyModeDropdown({ disabled, project, update }) {
       } else {
         p.autoKeyMode = next;
       }
-    });
+    }, { skipHistory: true });
   }
 
   return (
