@@ -223,6 +223,7 @@
     "test:dopesheetSelectOps": "node scripts/test/test_dopesheetSelectOps.mjs",
     "test:dopesheetBoxSelect": "node scripts/test/test_dopesheetBoxSelect.mjs",
     "test:dopesheetGrab": "node scripts/test/test_dopesheetGrab.mjs",
+    "test:dopesheetDelDup": "node scripts/test/test_dopesheetDelDup.mjs",
     "test:fmodifiers": "node scripts/test/test_fmodifiers.mjs",
     "test:fmodifiersExportBake": "node scripts/test/test_fmodifiers_export_bake.mjs",
     "test:fmodifierRoundTrip": "node scripts/test/test_fmodifierRoundTrip.mjs",

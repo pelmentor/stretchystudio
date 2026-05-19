@@ -79,6 +79,11 @@ import {
   remapHandlesAfterTranslate,
   wouldTimeTranslateChange,
 } from '../../../anim/dopesheetGrab.js';
+import {
+  applyDeleteKeyforms,
+  applyDuplicateKeyforms,
+  wouldDelDupChange,
+} from '../../../anim/dopesheetDelDup.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -487,10 +492,35 @@ export function DopesheetEditor() {
     return out;
   }, [keyformSelectionHandles]);
 
+  // Slice 6.D — extracted grab-modal entry helper. Called by both G
+  // keypress (Slice 6.C) AND Shift+D (post-duplicate auto-modal,
+  // matching Blender's `ACTION_OT_duplicate_move` macro at
+  // `reference/blender/source/blender/editors/space_action/action_ops.cc:80-89`).
+  // Reads the latest pointer position from `lastPointerXRef` and the
+  // latest duration from `durationRef` so the helper is dep-free
+  // (useCallback with empty deps stays identity-stable across renders).
+  const enterGrabModal = useCallback(() => {
+    const trackArea = trackAreaRef.current;
+    if (!trackArea) return;
+    const rect = trackArea.getBoundingClientRect();
+    const startClientX = (
+      typeof lastPointerXRef.current === 'number'
+        ? rect.left + lastPointerXRef.current
+        : rect.left + rect.width / 2
+    );
+    const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
+    tickAreaScaleRef.current = {
+      tickAreaWidth,
+      duration: durationRef.current,
+    };
+    setGrabState({ startClientX, deltaMs: 0 });
+  }, []);
+
   // G keypress — enter grab mode. Requires at least one center-selected
   // keyform AND a known pointer position over the track area.
   // Mirrors Blender's `count_fcurve_keys` predicate at
-  // `transform_convert_action.cc:692-758` — `createTransActionData`
+  // `transform_convert_action.cc:271-303` (called from `:702` inside
+  // `createTransActionData` `:646-985`) — `createTransActionData`
   // early-returns when count == 0, never entering modal.
   useEffect(() => {
     /** @param {KeyboardEvent} e */
@@ -502,27 +532,107 @@ export function DopesheetEditor() {
       if (grabState || boxDrag) return;
       // No selection → no grab. Match Blender's pre-modal count check.
       if (selectedCenterByFcurve.size === 0) return;
-      const trackArea = trackAreaRef.current;
-      if (!trackArea) return;
-      const rect = trackArea.getBoundingClientRect();
-      // Anchor at lastPointerXRef if known; else center of track area.
-      // Pointer position is tracked via onPointerMove on the track area
-      // (which fires whenever the user moves the cursor over it).
-      const startClientX = (
-        typeof lastPointerXRef.current === 'number'
-          ? rect.left + lastPointerXRef.current
-          : rect.left + rect.width / 2
-      );
       e.preventDefault();
-      // Capture the px-to-ms scale at grab entry; ruler + track area
-      // width are stable during a grab (no resize during a gesture).
-      const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
-      tickAreaScaleRef.current = { tickAreaWidth, duration };
-      setGrabState({ startClientX, deltaMs: 0 });
+      enterGrabModal();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [grabState, boxDrag, selectedCenterByFcurve, duration]);
+  }, [grabState, boxDrag, selectedCenterByFcurve, enterGrabModal]);
+
+  // ── Slice 6.D — Delete (Delete key) + Duplicate (Shift+D) ──────────────
+  // Ports Blender's `ACTION_OT_delete` + `ACTION_OT_duplicate_move`
+  // operators dispatched from the SpaceAction keymap:
+  //
+  //   - `keymap_data/blender_default.py:2703-2704`:
+  //     `("action.delete",         {"type": 'DEL', "value": 'PRESS'}, ...)`
+  //     `("action.duplicate_move", {"type": 'D',   "value": 'PRESS', "shift": True}, None)`
+  //
+  // Delete: `action_edit.cc:1210-1225` → `delete_action_keys` `:1118-1170`
+  //         → `BKE_fcurve_delete_keys_selected` at `fcurve.cc:1757-1784`.
+  // Duplicate-move: `action_ops.cc:80-89` MACRO of `ACTION_OT_duplicate`
+  //         (`action_edit.cc:1097-1110` → `duplicate_action_keys`
+  //         `:1034-1073` → `duplicate_fcurve_keys` at
+  //         `keyframes_general.cc:62-95`) THEN `TRANSFORM_OT_transform
+  //         mode=TFM_TIME_TRANSLATE use_duplicated_keyframes=true` —
+  //         which SS implements as `applyDuplicateKeyforms` +
+  //         `remapHandlesAfterTranslate` + `enterGrabModal()` (the
+  //         6.C grab modal pre-targeted at the just-created duplicates).
+  //
+  // **Confirm dialog deferred** (SS DEVIATION 8): Blender's
+  // `actkeys_delete_invoke` at `action_edit.cc:1194-1208` pops up a
+  // confirmation dialog when `confirm=True`; the dopesheet keymap
+  // binding passes `confirm=False` so the dialog is suppressed there.
+  // SS mirrors the suppressed-confirm dopesheet behavior — Delete
+  // fires immediately, no dialog. Honest per Rule №2 (parity with the
+  // bound keymap, not the operator default).
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      // Skip if user is typing in an input
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // Suppress during grab or box-drag (let the existing modal own
+      // the gesture surface).
+      if (grabState || boxDrag) return;
+      const isDelete = (e.key === 'Delete' || e.key === 'Backspace');
+      const isShiftD = (e.shiftKey && (e.key === 'd' || e.key === 'D'));
+      if (!isDelete && !isShiftD) return;
+      // Both ops require at least one center-selected keyform (matches
+      // Blender's pre-op `delete_action_keys`/`duplicate_action_keys`
+      // returning `false` → `OPERATOR_CANCELLED` when nothing's
+      // selected).
+      const curHandles = useKeyformSelectionStore.getState().handles;
+      if (!wouldDelDupChange(curHandles)) return;
+      e.preventDefault();
+      if (isDelete) {
+        /** @type {import('../../../anim/dopesheetDelDup.js').DelDupRemaps | null} */
+        let capturedRemaps = null;
+        let capturedChanged = false;
+        updateProject((project) => {
+          const targetAction = project.actions.find((a) => a.id === activeActionId);
+          if (!targetAction) return;
+          const r = applyDeleteKeyforms(targetAction, curHandles);
+          capturedRemaps = r.remaps;
+          capturedChanged = r.changed;
+        });
+        if (capturedChanged && capturedRemaps) {
+          useKeyformSelectionStore.getState().setHandles(
+            remapHandlesAfterTranslate(
+              useKeyformSelectionStore.getState().handles,
+              capturedRemaps,
+            ),
+          );
+        }
+      } else {
+        // Shift+D: duplicate + auto-enter grab modal (the
+        // ACTION_OT_duplicate_move macro). Order matters: duplicate
+        // BEFORE entering grab so the grab targets the duplicates.
+        /** @type {import('../../../anim/dopesheetDelDup.js').DelDupRemaps | null} */
+        let capturedRemaps = null;
+        let capturedChanged = false;
+        updateProject((project) => {
+          const targetAction = project.actions.find((a) => a.id === activeActionId);
+          if (!targetAction) return;
+          const r = applyDuplicateKeyforms(targetAction, curHandles);
+          capturedRemaps = r.remaps;
+          capturedChanged = r.changed;
+        });
+        if (capturedChanged && capturedRemaps) {
+          useKeyformSelectionStore.getState().setHandles(
+            remapHandlesAfterTranslate(
+              useKeyformSelectionStore.getState().handles,
+              capturedRemaps,
+            ),
+          );
+          // Auto-enter grab modal with the new selection (now pointing
+          // at the duplicates). Matches Blender's macro chain.
+          enterGrabModal();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [grabState, boxDrag, updateProject, activeActionId, enterGrabModal]);
 
   // Grab-modal window listeners — mounted ONLY while grabState !== null.
   // Tracks pointer moves to update deltaMs; LMB/Enter commits;
