@@ -285,6 +285,95 @@ console.log('\n§4 listKeyingSets order + user-defined append');
   );
 }
 
+// ── §5 execApplyKeyingSet guard sequence (operator-level smoke) ──────
+// Audit-fix LOW-1 (2026-05-19 sweep #80): close the test-coverage gap
+// on the operator wiring layer. The substrate tests cover
+// applyKeyingSet + buildLiveResolver + pickDefaultKeyingSet as pure
+// functions; this section exercises the Zustand-store guard sequence
+// inside execApplyKeyingSet that wraps them. Each guard branch is
+// observable via the project draft NOT being mutated (the function
+// toasts then returns before the updateProject recipe runs).
+console.log('\n§5 execApplyKeyingSet guard sequence');
+{
+  const { execApplyKeyingSet } = await import('../../src/v3/operators/insertKey.js');
+  const { useProjectStore } = await import('../../src/store/projectStore.js');
+  const { useAnimationStore } = await import('../../src/store/animationStore.js');
+  const { useParamValuesStore } = await import('../../src/store/paramValuesStore.js');
+  const { useEditorStore } = await import('../../src/store/editorStore.js');
+
+  function fcurveCount(project) {
+    if (!project || !Array.isArray(project.actions)) return 0;
+    return project.actions.reduce(
+      (acc, a) => acc + (Array.isArray(a.fcurves) ? a.fcurves.length : 0),
+      0,
+    );
+  }
+
+  // §5.1 null project → guard returns before recipe
+  useProjectStore.setState({ project: null, hasUnsavedChanges: false });
+  useAnimationStore.setState({ currentTime: 1000 });
+  useParamValuesStore.setState({ values: {} });
+  useEditorStore.setState({ selection: ['partA'] });
+  execApplyKeyingSet('LocRotScale');
+  ok(useProjectStore.getState().project === null, '§5.1 null project → no mutation (project still null)');
+
+  // §5.2 empty/non-string setId → guard returns before recipe
+  useProjectStore.setState({ project: makeProject() });
+  const before52 = fcurveCount(useProjectStore.getState().project);
+  execApplyKeyingSet('');
+  eq(fcurveCount(useProjectStore.getState().project), before52, '§5.2a empty setId → no fcurves added');
+  execApplyKeyingSet(null);
+  eq(fcurveCount(useProjectStore.getState().project), before52, '§5.2b null setId → no fcurves added');
+
+  // §5.3 unknown setId → getKeyingSet returns null, guard returns
+  useProjectStore.setState({ project: makeProject() });
+  const before53 = fcurveCount(useProjectStore.getState().project);
+  execApplyKeyingSet('NotARealKeyingSet');
+  eq(fcurveCount(useProjectStore.getState().project), before53, '§5.3 unknown setId → no fcurves added');
+
+  // §5.4 non-finite time → guard returns
+  useProjectStore.setState({ project: makeProject() });
+  useAnimationStore.setState({ currentTime: NaN });
+  const before54 = fcurveCount(useProjectStore.getState().project);
+  execApplyKeyingSet('AllParams');
+  eq(fcurveCount(useProjectStore.getState().project), before54, '§5.4a NaN currentTime → no fcurves added');
+  useAnimationStore.setState({ currentTime: Infinity });
+  execApplyKeyingSet('AllParams');
+  eq(fcurveCount(useProjectStore.getState().project), before54, '§5.4b Infinity currentTime → no fcurves added');
+
+  // §5.5 happy path — guards pass, project mutates with live-resolver values
+  useProjectStore.setState({ project: makeProject() });
+  useAnimationStore.setState({ currentTime: 2000 });
+  useParamValuesStore.setState({ values: { ParamAngleZ: 17.5, ParamSmile: 0.7 } });
+  useEditorStore.setState({ selection: [] });
+  execApplyKeyingSet('AllParams');
+  const projAfter = useProjectStore.getState().project;
+  const sceneAct = projAfter.actions.find((a) => a.id === 'sceneAct');
+  const fcAngle = sceneAct.fcurves.find((f) => f.rnaPath.includes('ParamAngleZ'));
+  const fcSmile = sceneAct.fcurves.find((f) => f.rnaPath.includes('ParamSmile'));
+  ok(fcAngle, '§5.5 happy path created ParamAngleZ fcurve');
+  ok(fcSmile, '§5.5 happy path created ParamSmile fcurve');
+  eq(fcAngle.keyforms[0].value, 17.5, '§5.5 ParamAngleZ keyed at live value 17.5');
+  eq(fcSmile.keyforms[0].value, 0.7,  '§5.5 ParamSmile keyed at live value 0.7');
+  eq(fcAngle.keyforms[0].time, 2000,  '§5.5 ParamAngleZ keyed at currentTime 2000');
+
+  // §5.6 LocRotScale on selected part — exercises the selection path
+  useProjectStore.setState({ project: makeProject() });
+  useProjectStore.getState().updateProject((p) => {
+    const n = p.nodes.find((x) => x.id === 'partA');
+    n.transform = { x: 11, y: 22, rotation: 0.3, scaleX: 1, scaleY: 1, opacity: 1 };
+  });
+  useAnimationStore.setState({ currentTime: 500 });
+  useEditorStore.setState({ selection: ['partA'] });
+  execApplyKeyingSet('LocRotScale');
+  const partAct = useProjectStore.getState().project.actions.find((a) => a.id === 'partAct');
+  const fcX = partAct.fcurves.find((f) => f.rnaPath.endsWith('.transform.x'));
+  const fcY = partAct.fcurves.find((f) => f.rnaPath.endsWith('.transform.y'));
+  ok(fcX && fcY, '§5.6 LocRotScale created x/y on selected part');
+  eq(fcX.keyforms[0].value, 11, '§5.6 transform.x keyed at 11');
+  eq(fcY.keyforms[0].value, 22, '§5.6 transform.y keyed at 22');
+}
+
 // ── summary ──────────────────────────────────────────────────────────
 console.log(`\nResults: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
