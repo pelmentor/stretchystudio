@@ -404,6 +404,19 @@ const HANDLES_ONLY = { center: false, left: true, right: true };
   assert(!remapped.has('fc1'), '§27 fc1 dropped from selection (empty after delete)');
 }
 
+// ── §28b — Audit-fix MED-A1: pre-filter handles OOB before delegate ────
+{
+  // OOB-only selection (idx 5 in a 1-key fcurve) should be no-op,
+  // NOT throw the new invariant-violation error. Verifies the
+  // pre-filter at the contract boundary.
+  const action = makeAction([makeFc('fc1', [makeKf(100, 0)])]);
+  const h = makeHandles([['fc1', [[5, ALL]]]]);
+  // Should not throw
+  const r = applyDeleteKeyforms(action, h);
+  eq(r.changed, false, '§28b OOB-only → changed=false (no throw)');
+  eq(r.remaps.size, 0, '§28b OOB-only → empty remaps');
+}
+
 // ── §28 — Round-trip: duplicate then remap re-targets at copies ────────
 {
   const action = makeAction([makeFc('fc1', [

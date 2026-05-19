@@ -272,14 +272,42 @@ export function applyDeleteKeyforms(action, handles) {
     const sub = handles.get(fc.id);
     if (!sub || typeof sub.get !== 'function' || sub.size === 0) continue;
     if (!Array.isArray(fc.keyforms) || fc.keyforms.length === 0) continue;
-    // Snapshot pre-delete length so we can detect "no change" cheaply.
+    // Audit-fix Slice 6.D MED-A1: pre-filter the selection map to ONLY
+    // in-bounds center=true entries before delegating to
+    // `graphEditOps.deleteKeyforms`. Mirrors the OOB-guard already in
+    // `applyDuplicateKeyforms`. Pre-fix, an OOB index in the selection
+    // (e.g. idx 5 in a 1-keyform fcurve) would slip past the
+    // delegate's `toDelete.has(i)` check (since the array loop never
+    // visits index 5) but still produce a non-empty remap of survivor
+    // positions, which previously was silently swallowed by a
+    // "length-unchanged → continue" check. Per Rule №1, no silent
+    // fallback: pre-filter at the contract boundary instead.
+    /** @type {Map<number, import('./graphEditOps.js').SelectionParts>} */
+    const filteredSel = new Map();
+    for (const [kfIdx, parts] of sub.entries()) {
+      if (typeof kfIdx !== 'number' || kfIdx < 0 || kfIdx >= fc.keyforms.length) {
+        continue;
+      }
+      if (parts && parts.center === true) filteredSel.set(kfIdx, parts);
+    }
+    if (filteredSel.size === 0) continue;
+    // Snapshot pre-delete length to invariant-check the delegate.
     const before = fc.keyforms.length;
     // graphEditOps.deleteKeyforms returns the per-fcurve remap and
-    // mutates `fc.keyforms` in place. Empty selection (no center
-    // bits) → empty remap returned, no mutation.
-    const fcRemap = deleteKeyforms(fc, sub);
-    if (fcRemap.size === 0) continue;   // nothing to delete on this fcurve
-    if (fc.keyforms.length === before) continue;   // defensive — shouldn't fire
+    // mutates `fc.keyforms` in place. After our pre-filter, every
+    // entry in `filteredSel` is in-bounds + center=true, so the
+    // delegate is guaranteed to shrink the array.
+    const fcRemap = deleteKeyforms(fc, filteredSel);
+    if (fcRemap.size === 0) continue;   // defensive — shouldn't fire
+    // Rule №1 throw: with the pre-filter in place, length-unchanged
+    // is now a true invariant violation in the delegate.
+    if (fc.keyforms.length === before) {
+      throw new Error(
+        `applyDeleteKeyforms: invariant violated for fc.id=${fc.id} — `
+        + `non-empty remap (${fcRemap.size}) but keyforms array `
+        + `length unchanged (${before})`,
+      );
+    }
     anyChanged = true;
     remaps.set(fc.id, fcRemap);
     // Settle auto/aligned handles against the new neighbour topology.
@@ -316,9 +344,29 @@ export function applyDeleteKeyforms(action, handles) {
  * shifts to point at the DUPLICATES (because the input handles' keys
  * are the originals' indices, replaced by the duplicates' indices).
  * The originals are left in `keyforms[]` but no longer in the
- * selection store — exactly matching Blender's
- * `BEZT_DESEL_ALL(original) + BEZT_SEL_ALL(copy)` pair at
- * `keyframes_general.cc:87-91`.
+ * selection store — mirroring (but not byte-exactly, see SS DEVIATION
+ * 10 below) Blender's `BEZT_DESEL_ALL(original) + BEZT_SEL_ALL(copy)`
+ * pair at `keyframes_general.cc:87-91`.
+ *
+ * **SS DEVIATION 10 (audit-fix Slice 6.D MED-F1)**: Blender's
+ * `BEZT_SEL_ALL(copy)` FORCE-SETS all three selection bits (f1/f2/f3
+ * = left handle / center / right handle) on the duplicate, REGARDLESS
+ * of the original's partial-bit state. SS's `applyDuplicateKeyforms`
+ * carries the original's `HandleParts` (`{center, left, right}`)
+ * verbatim onto the duplicate's new index via `remapHandlesAfterTranslate`.
+ * If the user had a partial selection on the original (e.g. `center=true,
+ * left=true, right=false`), the duplicate inherits the same partial
+ * profile in SS but would be all-bits-on in Blender. Under realistic
+ * SS dopesheet UX (tick-click + box-select both set all three bits in
+ * lockstep — see `dopesheetSelectOps.js` HandleParts payload comment),
+ * `parts.center === true` almost always co-occurs with `parts.left ===
+ * true && parts.right === true`, so the divergence is invisible. But
+ * it's a real semantic difference; honest deviation per Rule №2. To
+ * close the gap, the caller would need to override the duplicate's
+ * HandleParts to `{center: true, left: true, right: true}` post-remap
+ * — declined for 6.D because the existing remap-pipeline shape is
+ * shared with delete + translate which DON'T force-set bits, and
+ * adding a per-op selection-override branch would split the contract.
  *
  * SS-specific detail: Blender's duplicate inserts at position `i+1`
  * (immediately after the original in the same iteration), but SS's
@@ -422,7 +470,10 @@ export function applyDuplicateKeyforms(action, handles) {
     // zero-delta neighbours produce zero-length handles which are
     // benign until the user drags the duplicates apart (which is
     // exactly what the auto-enter grab modal does next, mirroring
-    // Blender's `ACTION_OT_duplicate_move` macro).
+    // Blender's `ACTION_OT_duplicate_move` macro). Blender ALSO has
+    // this transient same-time cluster (the macro chain TFM_TIME_TRANSLATE
+    // step at action_ops.cc:85-87 fires immediately after the duplicate),
+    // so the temporary state is parity, not an SS-only oddity.
     recalcKeyformHandles(fc.keyforms);
   }
   return { remaps, changed: anyChanged };

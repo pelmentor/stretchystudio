@@ -167,6 +167,15 @@ export function DopesheetEditor() {
   // Refs for the grab-mode gates inside the existing handlers. Reading
   // a ref doesn't make the handlers re-create on every render.
   const grabActiveRef = useRef(false);
+  // Audit-fix Slice 6.D HIGH-A1: mirror for boxDrag-active state so
+  // keymap window-listener effects (G-key, Delete/Shift+D) can gate
+  // suppression via a ref instead of depending on the React state in
+  // the effect dep array. Pre-fix the keymap effects re-mounted on
+  // every box-drag-frame (60-120 Hz) because [boxDrag] was in the dep
+  // array. Established pattern from 6.B HIGH-A1 (handleTrackPointerMove
+  // fix), retroactively applied to the G-key effect from 6.C and
+  // pre-emptively to the Del/Shift+D effect from 6.D.
+  const boxDragActiveRef = useRef(false);
   const handleTickClick = useCallback(
     /**
      * @param {MouseEvent | React.MouseEvent} e
@@ -465,6 +474,11 @@ export function DopesheetEditor() {
     grabStateRef.current = grabState;
     grabActiveRef.current = grabState !== null;
   }, [grabState]);
+  // Audit-fix Slice 6.D HIGH-A1: keep boxDragActiveRef in sync so
+  // window-listener effects can read suppression state via ref.
+  useEffect(() => {
+    boxDragActiveRef.current = boxDrag !== null;
+  }, [boxDrag]);
   // Last-pointer X tracker (track-area-local px). Updated on every
   // onPointerMove over the track area; used as the start anchor when
   // G is pressed.
@@ -522,22 +536,31 @@ export function DopesheetEditor() {
   // `transform_convert_action.cc:271-303` (called from `:702` inside
   // `createTransActionData` `:646-985`) — `createTransActionData`
   // early-returns when count == 0, never entering modal.
+  //
+  // Audit-fix Slice 6.D HIGH-A1: gate via grabActiveRef + boxDragActiveRef
+  // (refs, identity-stable) instead of grabState/boxDrag in the dep
+  // array. Pre-fix the effect re-mounted on every grab-frame +
+  // box-drag-frame (60-120 Hz) because [grabState, boxDrag] in deps
+  // forced the keydown listener to detach + re-attach each render.
+  // The count check moves to a getState() read so we drop the
+  // selectedCenterByFcurve dep too — effect now stays mounted once
+  // and reads latest selection at fire time.
   useEffect(() => {
     /** @param {KeyboardEvent} e */
     const onKeyDown = (e) => {
       if (e.key !== 'g' && e.key !== 'G') return;
       const t = /** @type {HTMLElement|null} */ (e.target);
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      // Suppress if already grabbing or in a box-drag.
-      if (grabState || boxDrag) return;
+      if (grabActiveRef.current || boxDragActiveRef.current) return;
       // No selection → no grab. Match Blender's pre-modal count check.
-      if (selectedCenterByFcurve.size === 0) return;
+      // Read latest selection from the store (avoids stale-memo capture).
+      if (!wouldDelDupChange(useKeyformSelectionStore.getState().handles)) return;
       e.preventDefault();
       enterGrabModal();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [grabState, boxDrag, selectedCenterByFcurve, enterGrabModal]);
+  }, [enterGrabModal]);
 
   // ── Slice 6.D — Delete (Delete key) + Duplicate (Shift+D) ──────────────
   // Ports Blender's `ACTION_OT_delete` + `ACTION_OT_duplicate_move`
@@ -565,15 +588,26 @@ export function DopesheetEditor() {
   // SS mirrors the suppressed-confirm dopesheet behavior — Delete
   // fires immediately, no dialog. Honest per Rule №2 (parity with the
   // bound keymap, not the operator default).
+  //
+  // **Backspace alias** (SS DEVIATION 9 — audit-fix Slice 6.D MED-A2):
+  // Blender's keymap binds Delete (`DEL`) only. SS extends to also
+  // accept Backspace because Mac laptops have no physical Delete key
+  // (the key labelled "delete" on Mac keyboards is Backspace). The
+  // input-skip guard above prevents Backspace from triggering inside
+  // text fields. Honest extension per Rule №2.
+  //
+  // Audit-fix Slice 6.D HIGH-A1: gate via grabActiveRef +
+  // boxDragActiveRef instead of grabState/boxDrag in dep array; effect
+  // now stays mounted once.
   useEffect(() => {
     /** @param {KeyboardEvent} e */
     const onKeyDown = (e) => {
       // Skip if user is typing in an input
       const t = /** @type {HTMLElement|null} */ (e.target);
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      // Suppress during grab or box-drag (let the existing modal own
-      // the gesture surface).
-      if (grabState || boxDrag) return;
+      // Suppress during grab or box-drag via refs (let the existing
+      // modal own the gesture surface). Audit-fix HIGH-A1.
+      if (grabActiveRef.current || boxDragActiveRef.current) return;
       const isDelete = (e.key === 'Delete' || e.key === 'Backspace');
       const isShiftD = (e.shiftKey && (e.key === 'd' || e.key === 'D'));
       if (!isDelete && !isShiftD) return;
@@ -596,11 +630,15 @@ export function DopesheetEditor() {
           capturedChanged = r.changed;
         });
         if (capturedChanged && capturedRemaps) {
+          // Audit-fix Slice 6.D HIGH-A2: pass `curHandles` (the
+          // snapshot used to drive the op) to `remapHandlesAfterTranslate`
+          // rather than re-reading via `getState().handles`. The two
+          // can't diverge today since `updateProject` is synchronous
+          // and only mutates `project`, but the symmetry guards against
+          // latent inconsistency if any sync store-reaction is ever
+          // added.
           useKeyformSelectionStore.getState().setHandles(
-            remapHandlesAfterTranslate(
-              useKeyformSelectionStore.getState().handles,
-              capturedRemaps,
-            ),
+            remapHandlesAfterTranslate(curHandles, capturedRemaps),
           );
         }
       } else {
@@ -618,11 +656,9 @@ export function DopesheetEditor() {
           capturedChanged = r.changed;
         });
         if (capturedChanged && capturedRemaps) {
+          // Audit-fix HIGH-A2: same curHandles consistency as above.
           useKeyformSelectionStore.getState().setHandles(
-            remapHandlesAfterTranslate(
-              useKeyformSelectionStore.getState().handles,
-              capturedRemaps,
-            ),
+            remapHandlesAfterTranslate(curHandles, capturedRemaps),
           );
           // Auto-enter grab modal with the new selection (now pointing
           // at the duplicates). Matches Blender's macro chain.
@@ -632,7 +668,7 @@ export function DopesheetEditor() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [grabState, boxDrag, updateProject, activeActionId, enterGrabModal]);
+  }, [updateProject, activeActionId, enterGrabModal]);
 
   // Grab-modal window listeners — mounted ONLY while grabState !== null.
   // Tracks pointer moves to update deltaMs; LMB/Enter commits;
@@ -663,10 +699,13 @@ export function DopesheetEditor() {
       // commit's synchronous tail.
       grabActiveRef.current = false;
       setGrabState(null);
-      if (!wouldTimeTranslateChange(
-        useKeyformSelectionStore.getState().handles,
-        dMs,
-      )) {
+      // Audit-fix Slice 6.D HIGH-A2: snapshot handles ONCE and reuse
+      // for the no-op check + the applyTimeTranslate input + the
+      // remapHandlesAfterTranslate input. Pre-fix re-read .getState()
+      // three times; structurally inconsistent (latent bug if any sync
+      // middleware reaction were ever added).
+      const curHandles = useKeyformSelectionStore.getState().handles;
+      if (!wouldTimeTranslateChange(curHandles, dMs)) {
         return;   // sub-1ms drag or no-op selection — discard
       }
       // Commit via immer recipe. Smuggle the remap out for the
@@ -677,20 +716,13 @@ export function DopesheetEditor() {
       updateProject((project) => {
         const targetAction = project.actions.find((a) => a.id === activeActionId);
         if (!targetAction) return;
-        const r = applyTimeTranslate(
-          targetAction,
-          useKeyformSelectionStore.getState().handles,
-          dMs,
-        );
+        const r = applyTimeTranslate(targetAction, curHandles, dMs);
         capturedRemaps = r.remaps;
         capturedChanged = r.changed;
       });
       if (capturedChanged && capturedRemaps) {
         useKeyformSelectionStore.getState().setHandles(
-          remapHandlesAfterTranslate(
-            useKeyformSelectionStore.getState().handles,
-            capturedRemaps,
-          ),
+          remapHandlesAfterTranslate(curHandles, capturedRemaps),
         );
       }
     };
