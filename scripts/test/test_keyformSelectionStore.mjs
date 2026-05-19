@@ -43,29 +43,31 @@ function setOf(fcurveId, kfIdx, parts) {
   eq(s.handles.size, 0, 'default state: empty Map');
 }
 
-// ── publishHandles replaces the Map ──────────────────────────────
+// ── setHandles replaces the Map ──────────────────────────────────
+// Slice 6.A renamed `publishHandles` → `setHandles` when promoting the
+// store from a one-way mirror to a multi-writer canonical state.
 {
   const store = useKeyformSelectionStore;
   store.getState().__resetForTests();
 
   const next = setOf('fcA', 0, { center: true, left: false, right: false });
-  store.getState().publishHandles(next);
-  eq(store.getState().handles, next, 'publishHandles: Map reference replaced');
-  eq(store.getState().handles.get('fcA')?.get(0)?.center, true, 'publishHandles: data readable');
+  store.getState().setHandles(next);
+  eq(store.getState().handles, next, 'setHandles: Map reference replaced');
+  eq(store.getState().handles.get('fcA')?.get(0)?.center, true, 'setHandles: data readable');
 }
 
-// ── publishHandles skips set() when ref-equal (identity-stable) ──
+// ── setHandles skips set() when ref-equal (identity-stable) ──────
 {
   const store = useKeyformSelectionStore;
   store.getState().__resetForTests();
 
   const same = new Map();
-  store.getState().publishHandles(same);
+  store.getState().setHandles(same);
   let count = 0;
   const unsub = store.subscribe(() => { count++; });
-  store.getState().publishHandles(same);  // same ref → should NOT fire subscribers
+  store.getState().setHandles(same);  // same ref → should NOT fire subscribers
   unsub();
-  eq(count, 0, 'publishHandles: same-ref skip avoids subscriber call');
+  eq(count, 0, 'setHandles: same-ref skip avoids subscriber call');
 }
 
 // ── isKeyformCenterSelected guards ───────────────────────────────
@@ -114,7 +116,7 @@ function setOf(fcurveId, kfIdx, parts) {
 // ── __resetForTests ──────────────────────────────────────────────
 {
   const store = useKeyformSelectionStore;
-  store.getState().publishHandles(setOf('x', 0, { center: true, left: false, right: false }));
+  store.getState().setHandles(setOf('x', 0, { center: true, left: false, right: false }));
   eq(store.getState().handles.size > 0, true, 'pre-reset: store has data');
   store.getState().__resetForTests();
   eq(store.getState().handles.size, 0, '__resetForTests: store back to empty');

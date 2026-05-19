@@ -74,6 +74,11 @@ import {
   applyBoxSelect,
   computeBoxHits,
 } from '../../../anim/dopesheetBoxSelect.js';
+import {
+  applyTimeTranslate,
+  remapHandlesAfterTranslate,
+  wouldTimeTranslateChange,
+} from '../../../anim/dopesheetGrab.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -87,6 +92,7 @@ export function DopesheetEditor() {
   const projectNodes = useProjectStore((s) => s.project.nodes);
   const projectParameters = useProjectStore((s) => s.project.parameters);
   const projectActions = useProjectStore((s) => s.project.actions);
+  const updateProject  = useProjectStore((s) => s.updateProject);
   const activeActionId = useAnimationStore((s) => s.activeActionId);
   const selection = useSelectionStore((s) => s.items);
   const currentTime  = useAnimationStore((s) => s.currentTime);
@@ -153,6 +159,9 @@ export function DopesheetEditor() {
   // playhead to the tick's time (preserves the prior seek workflow).
   // Click-on-row-body (empty timeline area) still seeks per the
   // existing onClick at the row-container.
+  // Refs for the grab-mode gates inside the existing handlers. Reading
+  // a ref doesn't make the handlers re-create on every render.
+  const grabActiveRef = useRef(false);
   const handleTickClick = useCallback(
     /**
      * @param {MouseEvent | React.MouseEvent} e
@@ -160,6 +169,14 @@ export function DopesheetEditor() {
      * @param {number} kfIdx
      */
     (e, fcurveId, kfIdx) => {
+      // Slice 6.C — during a modal grab, the click is the COMMIT gesture
+      // (handled by the window-level mousedown listener). Suppress the
+      // select-handler so the click doesn't accidentally re-select while
+      // committing the translate.
+      if (grabActiveRef.current) {
+        e.stopPropagation();
+        return;
+      }
       e.stopPropagation();
       if (e.shiftKey) {
         setKeyformSelectionHandles((prev) =>
@@ -215,6 +232,11 @@ export function DopesheetEditor() {
   const handleTrackPointerDown = useCallback(
     /** @param {React.PointerEvent<HTMLDivElement>} e */
     (e) => {
+      // Slice 6.C — during a modal grab, the window-level mousedown
+      // listener (capture phase) handles commit/cancel; this handler
+      // should not start a box-select. Suppress here to keep the
+      // grab-handlers as the sole authority during the gesture.
+      if (grabActiveRef.current) return;
       if (e.button !== 0) return;   // LMB only
       const targetEl = /** @type {HTMLElement|null} */ (e.target);
       const onTick = targetEl?.closest('[data-tick="1"]') !== null;
@@ -258,6 +280,10 @@ export function DopesheetEditor() {
       const rect = trackArea.getBoundingClientRect();
       const curX = e.clientX - rect.left;
       const curY = e.clientY - rect.top;
+      // Slice 6.C — track last pointer X for the G-key grab anchor.
+      // Updated on EVERY move (not just during box-drag) so a G press
+      // anywhere over the track area starts the modal from the cursor.
+      lastPointerXRef.current = curX;
       setBoxDrag((/** @type {BoxDragState|null} */ prev) =>
         prev ? { ...prev, curX, curY } : prev);
     },
@@ -354,6 +380,212 @@ export function DopesheetEditor() {
     return () => window.removeEventListener('keydown', onKeyDownEsc);
   }, [bArmed]);
 
+  // ── Slice 6.C: modal grab (G key) ──────────────────────────────────────
+  // Ports Blender's TRANSFORM_OT_translate in TFM_TIME_TRANSLATE mode
+  // for the SpaceAction (Dopesheet). Reference path:
+  //
+  //   - Keymap: `keymap_data/blender_default.py:2716-2717` binds G to
+  //     `transform.translate` in the dopesheet (verified pre-ship per
+  //     `feedback_byte_verify_behavior_cites` workflow).
+  //   - Operator dispatch: `transform_convert_action.cc:1404-1409` wires
+  //     `createTransActionData` / `recalcData_actedit` /
+  //     `special_aftertrans_update__actedit`.
+  //   - Per-frame flush: `transform_convert.cc:1267-1285`
+  //     (`transform_convert_flush_handle2D`) shifts handle X by the same
+  //     delta as the center for the bezier-preservation property.
+  //   - Post-commit: `transform_convert_action.cc:1203-1295` runs
+  //     `posttrans_action_clean` → `BKE_fcurve_merge_duplicate_keys` for
+  //     the selected-wins-on-collision step.
+  //
+  // SS modal state shape:
+  //
+  //   `grabState: { startClientX, deltaMs } | null`
+  //
+  // - G keypress: capture current pointer clientX from `lastPointerXRef`,
+  //   enter grab with deltaMs=0.
+  // - Window mousemove (during grab): compute deltaMs from
+  //   (curClientX - startClientX) * (duration / tickAreaWidth), store
+  //   on grabState.
+  // - LMB or Enter: commit — call updateProject(recipe) with
+  //   applyTimeTranslate; then remapHandlesAfterTranslate to update the
+  //   selection store; exit grab.
+  // - RMB or Escape: cancel — exit grab without mutation. Action is
+  //   untouched (we never mutated during preview), so cancel is free.
+  //
+  // Preview rendering: ghost translucent diamonds at
+  //   `(kf.time + deltaMs) / duration`
+  // for every selected center-keyform. Original ticks stay rendered at
+  // their original positions; the ghost shows the target.
+  /** @typedef {{ startClientX: number, deltaMs: number }} GrabState */
+  /** @type {[GrabState|null, Function]} */
+  const [grabState, setGrabState] = useState(null);
+  // Mirror grabState into a ref so the listeners-mount effect's commit
+  // handler can read latest deltaMs without re-mounting on every move
+  // (listeners re-mount only on grabState null↔object identity flips).
+  const grabStateRef = useRef(grabState);
+  useEffect(() => {
+    grabStateRef.current = grabState;
+    grabActiveRef.current = grabState !== null;
+  }, [grabState]);
+  // Last-pointer X tracker (track-area-local px). Updated on every
+  // onPointerMove over the track area; used as the start anchor when
+  // G is pressed.
+  const lastPointerXRef = useRef(/** @type {number|null} */ (null));
+  // Track-area client-rect width tracker so the window-level mousemove
+  // listener can convert pixels → ms without re-querying the DOM on
+  // every frame. Updated at grab-entry time.
+  const tickAreaScaleRef = useRef({ tickAreaWidth: 1, duration: 1 });
+
+  // Pre-compute set of selected fcurveIds for the ghost overlay — every
+  // Row needs to know whether any of its keyforms are part of the
+  // grab so it can render the ghosts. Cheap O(K) walk over the
+  // selection.
+  const selectedCenterByFcurve = useMemo(() => {
+    /** @type {Map<string, Set<number>>} */
+    const out = new Map();
+    if (!keyformSelectionHandles) return out;
+    for (const [fcId, sub] of keyformSelectionHandles.entries()) {
+      const idxSet = new Set();
+      for (const [kfIdx, parts] of sub.entries()) {
+        if (parts && parts.center === true) idxSet.add(kfIdx);
+      }
+      if (idxSet.size > 0) out.set(fcId, idxSet);
+    }
+    return out;
+  }, [keyformSelectionHandles]);
+
+  // G keypress — enter grab mode. Requires at least one center-selected
+  // keyform AND a known pointer position over the track area.
+  // Mirrors Blender's `count_fcurve_keys` predicate at
+  // `transform_convert_action.cc:692-758` — `createTransActionData`
+  // early-returns when count == 0, never entering modal.
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (e.key !== 'g' && e.key !== 'G') return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // Suppress if already grabbing or in a box-drag.
+      if (grabState || boxDrag) return;
+      // No selection → no grab. Match Blender's pre-modal count check.
+      if (selectedCenterByFcurve.size === 0) return;
+      const trackArea = trackAreaRef.current;
+      if (!trackArea) return;
+      const rect = trackArea.getBoundingClientRect();
+      // Anchor at lastPointerXRef if known; else center of track area.
+      // Pointer position is tracked via onPointerMove on the track area
+      // (which fires whenever the user moves the cursor over it).
+      const startClientX = (
+        typeof lastPointerXRef.current === 'number'
+          ? rect.left + lastPointerXRef.current
+          : rect.left + rect.width / 2
+      );
+      e.preventDefault();
+      // Capture the px-to-ms scale at grab entry; ruler + track area
+      // width are stable during a grab (no resize during a gesture).
+      const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
+      tickAreaScaleRef.current = { tickAreaWidth, duration };
+      setGrabState({ startClientX, deltaMs: 0 });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [grabState, boxDrag, selectedCenterByFcurve, duration]);
+
+  // Grab-modal window listeners — mounted ONLY while grabState !== null.
+  // Tracks pointer moves to update deltaMs; LMB/Enter commits;
+  // RMB/Escape cancels.
+  useEffect(() => {
+    if (!grabState) return;
+    const startClientX = grabState.startClientX;
+    const { tickAreaWidth, duration: durSnap } = tickAreaScaleRef.current;
+    const msPerPx = durSnap / tickAreaWidth;
+
+    /** @param {MouseEvent} e */
+    const onMouseMove = (e) => {
+      const dx = e.clientX - startClientX;
+      const nextDelta = dx * msPerPx;
+      setGrabState((prev) => prev ? { ...prev, deltaMs: nextDelta } : prev);
+    };
+    const commit = () => {
+      const cur = grabStateRef.current;
+      if (!cur) return;
+      const dMs = cur.deltaMs;
+      setGrabState(null);
+      if (!wouldTimeTranslateChange(
+        useKeyformSelectionStore.getState().handles,
+        dMs,
+      )) {
+        return;   // sub-1ms drag or no-op selection — discard
+      }
+      // Commit via immer recipe. Smuggle the remap out for the
+      // separate selection-store update.
+      /** @type {import('../../../anim/dopesheetGrab.js').TranslateRemaps | null} */
+      let capturedRemaps = null;
+      let capturedChanged = false;
+      updateProject((project) => {
+        const targetAction = project.actions.find((a) => a.id === activeActionId);
+        if (!targetAction) return;
+        const r = applyTimeTranslate(
+          targetAction,
+          useKeyformSelectionStore.getState().handles,
+          dMs,
+        );
+        capturedRemaps = r.remaps;
+        capturedChanged = r.changed;
+      });
+      if (capturedChanged && capturedRemaps) {
+        useKeyformSelectionStore.getState().setHandles(
+          remapHandlesAfterTranslate(
+            useKeyformSelectionStore.getState().handles,
+            capturedRemaps,
+          ),
+        );
+      }
+    };
+    const cancel = () => {
+      setGrabState(null);
+    };
+    /** @param {MouseEvent} e */
+    const onMouseDown = (e) => {
+      // Suppress the click that would otherwise fire on Row tick / track.
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.button === 0) commit();
+      else if (e.button === 2) cancel();
+    };
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      else if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'g' || e.key === 'G') {
+        // Re-pressing G during a grab is a no-op in Blender (the
+        // modal already owns the gesture); ignore silently.
+        e.preventDefault();
+      }
+    };
+    /** @param {MouseEvent} e */
+    const onContextMenu = (e) => {
+      // RMB cancel: suppress the browser context menu.
+      e.preventDefault();
+    };
+    // capture-phase mousedown so we beat Row/Track handlers.
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('contextmenu', onContextMenu);
+    };
+    // `grabActive` (boolean) is the only intended re-mount trigger;
+    // deltaMs updates DON'T re-mount because we read latest deltaMs via
+    // grabStateRef inside the handlers. startClientX is captured at
+    // grab entry and stable until cancel/commit, so reading from
+    // closure is correct. eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grabState !== null, activeActionId, updateProject]);
+
   if (!action) {
     return (
       <div className="flex flex-col h-full bg-card overflow-hidden">
@@ -403,6 +635,10 @@ export function DopesheetEditor() {
                     row.activeKfIdx,
                   )}
                   selectionHandles={keyformSelectionHandles}
+                  grabSelectedIdxSet={
+                    grabState ? selectedCenterByFcurve.get(row.fcurveId) ?? null : null
+                  }
+                  grabDeltaMs={grabState ? Math.round(grabState.deltaMs) : 0}
                   onTickClick={handleTickClick}
                   onSeek={setCurrentTime}
                 />
@@ -439,6 +675,18 @@ export function DopesheetEditor() {
                 aria-hidden
               >
                 B: drag to box-select
+              </div>
+            )}
+            {/* Slice 6.C — grab status pill. Mirrors Blender's modal
+                header showing "Dx: NNN" during TFM_TIME_TRANSLATE
+                (transform_mode.cc header callback). Shows live deltaMs
+                + the LMB/Enter/Esc affordance. */}
+            {grabState && (
+              <div
+                className="absolute top-1 right-1 px-1.5 py-0.5 text-[10px] bg-amber-700/85 text-white rounded pointer-events-none tabular-nums"
+                aria-hidden
+              >
+                Grab: {Math.round(grabState.deltaMs) >= 0 ? '+' : ''}{Math.round(grabState.deltaMs)}ms · LMB/Enter commit · RMB/Esc cancel
               </div>
             )}
           </div>
@@ -490,7 +738,7 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, onTickClick, onSeek }) {
+function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -618,6 +866,27 @@ function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyf
                 e.stopPropagation();
                 onSeek(kf.time);
               }}
+            />
+          );
+        })}
+        {/* Slice 6.C — ghost overlay during modal grab. For every
+            center-selected keyform in this row, render a translucent
+            diamond at `kf.time + grabDeltaMs` showing the proposed
+            commit position. Original ticks stay rendered above
+            (z-order via DOM order). Pointer-events-none so clicks
+            still hit the originals (window-level mousedown commits
+            anyway). */}
+        {grabSelectedIdxSet && grabDeltaMs !== 0 && Array.from(grabSelectedIdxSet).map((i) => {
+          const kf = row.keyforms[i];
+          if (!kf) return null;
+          const ghostTime = kf.time + grabDeltaMs;
+          const ghostLeft = (ghostTime / duration) * 100;
+          return (
+            <span
+              key={`ghost-${i}`}
+              className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 pointer-events-none bg-amber-300/50 ring-1 ring-amber-400/70"
+              style={{ left: `calc(${ghostLeft}% - 4px)` }}
+              aria-hidden
             />
           );
         })}
