@@ -55,7 +55,7 @@
  * @module v3/editors/dopesheet/DopesheetEditor
  */
 
-import { useMemo, useRef, useCallback } from 'react';
+import { useMemo, useRef, useCallback, useState, useEffect } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
@@ -70,6 +70,10 @@ import {
   applyTickSelectDeselect,
   isTickSelected,
 } from '../../../anim/dopesheetSelectOps.js';
+import {
+  applyBoxSelect,
+  computeBoxHits,
+} from '../../../anim/dopesheetBoxSelect.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -125,6 +129,16 @@ export function DopesheetEditor() {
     [action?.fcurves, selection],
   );
 
+  // Audit-fix Slice 6.B (TS2448): hoist `duration` above the box-select
+  // useCallback so its closure has a defined binding at hook-declaration
+  // time. The actual usage only fires at runtime when `action` is
+  // non-null (the early return below blocks render otherwise), but the
+  // strict-mode TS check is at-declaration, not at-runtime. `action`
+  // may be null here; default to 1000 in that case (the callback won't
+  // fire because the early return prevents the track area from
+  // mounting + receiving pointer events).
+  const duration = Math.max(1, action?.duration ?? 1000);
+
   // Slice 5.EE — subscribe to keyform-selection store. Slice 6.A
   // promoted DopesheetEditor from READER to WRITER (tick clicks now
   // mutate the shared store via dopesheetSelectOps); the
@@ -162,6 +176,169 @@ export function DopesheetEditor() {
 
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
+  // ── Slice 6.B: box-select state + handlers ─────────────────────────────
+  // Drag state tracks the IN-PROGRESS marquee. `mode` is captured at
+  // pointerdown (modifier-keys at that time decide REPLACE/EXTEND/SUB);
+  // changing modifiers mid-drag doesn't change the mode (matches Blender's
+  // CLICK_DRAG bindings which read modifiers at the gesture START).
+  // `tMinPx` / `tMaxPx` track the rect in TRACK-AREA-LOCAL X pixels;
+  // `yMin` / `yMax` track in TRACK-AREA-LOCAL Y pixels. The track area's
+  // width represents the action's full `duration` linearly.
+  /** @typedef {{
+   *   startX: number, startY: number,
+   *   curX: number, curY: number,
+   *   mode: 'replace'|'extend'|'subtract'
+   * }} BoxDragState */
+  /** @type {[BoxDragState|null, Function]} */
+  const [boxDrag, setBoxDrag] = useState(null);
+  // B-key armed state — set true on B keypress; next pointerdown in
+  // the track area starts a drag-rect (skipping the on-tick guard).
+  // Mirrors FCurveEditor's bGestureArmed pattern from Slice 5.FF.
+  const [bArmed, setBArmed] = useState(false);
+
+  // 4px drag threshold (audit-fix Slice 5.Y precedent for SS — Blender's
+  // WM_event_drag_threshold default is 3px, SS rounds to 4 for the
+  // pointer-event handlers). Below this, treat as click; above as drag.
+  const DRAG_THRESHOLD_PX = 4;
+
+  // Track-area pointerdown handler — disambiguates click vs drag-rect.
+  // Returns early when:
+  //   - target is a tick element (let tick onClick fire — Blender's
+  //     `actkeys_box_select_invoke` returns OPERATOR_PASS_THROUGH when
+  //     the drag started ON a key, per action_select.cc:613-618;
+  //     EXCEPTION: if bArmed, override and start the drag-rect anyway
+  //     so B-key + LMB-on-key still box-selects, matching Blender's
+  //     BKEY path which doesn't have the tweak check.)
+  //   - pointerType is not 'mouse' (touch/pen — keep simple for 6.B;
+  //     Slice 6.C will reconsider for modal grab)
+  const handleTrackPointerDown = useCallback(
+    /** @param {React.PointerEvent<HTMLDivElement>} e */
+    (e) => {
+      if (e.button !== 0) return;   // LMB only
+      const targetEl = /** @type {HTMLElement|null} */ (e.target);
+      const onTick = targetEl?.closest('[data-tick="1"]') !== null;
+      if (onTick && !bArmed) {
+        // Let the tick onClick handle this — don't start drag-rect.
+        return;
+      }
+      const trackArea = trackAreaRef.current;
+      if (!trackArea) return;
+      const rect = trackArea.getBoundingClientRect();
+      const startX = e.clientX - rect.left;
+      const startY = e.clientY - rect.top;
+      /** @type {'replace'|'extend'|'subtract'} */
+      const mode = e.shiftKey ? 'extend'
+        : (e.ctrlKey || e.metaKey) ? 'subtract'
+        : 'replace';
+      setBoxDrag({ startX, startY, curX: startX, curY: startY, mode });
+      setBArmed(false);   // consumed
+      // Capture pointer on the track area so subsequent move/up land
+      // on it even if the cursor leaves the element bounds.
+      try { trackArea.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    },
+    [bArmed],
+  );
+
+  // Pointermove during drag — update the rect's current corner. Below
+  // threshold, the pointerup commit will treat it as a click (no-op
+  // on the box-select side; the tick onClick already ran if applicable).
+  const handleTrackPointerMove = useCallback(
+    /** @param {React.PointerEvent<HTMLDivElement>} e */
+    (e) => {
+      if (!boxDrag) return;
+      const trackArea = trackAreaRef.current;
+      if (!trackArea) return;
+      const rect = trackArea.getBoundingClientRect();
+      const curX = e.clientX - rect.left;
+      const curY = e.clientY - rect.top;
+      setBoxDrag((/** @type {BoxDragState|null} */ prev) => prev ? { ...prev, curX, curY } : prev);
+    },
+    [boxDrag],
+  );
+
+  // Pointerup — commit the box-select (if drag exceeded threshold) or
+  // discard (if it was a click). Commit reads the rect's X-range and
+  // the Y-intersected rows, builds hits, calls applyBoxSelect, writes
+  // to the store.
+  const handleTrackPointerUp = useCallback(
+    /** @param {React.PointerEvent<HTMLDivElement>} e */
+    (e) => {
+      const drag = boxDrag;
+      setBoxDrag(null);
+      const trackArea = trackAreaRef.current;
+      if (trackArea) {
+        try { trackArea.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      }
+      if (!drag || !trackArea) return;
+      const dx = Math.abs(drag.curX - drag.startX);
+      const dy = Math.abs(drag.curY - drag.startY);
+      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX) {
+        // Below threshold → click, not drag. No box-select side effect.
+        // (Tick onClick already ran if applicable.)
+        return;
+      }
+      // Compute Y-intersected rows via DOM row bounding boxes. Each
+      // row's data-row-idx attribute lets us index back into `rows`.
+      const trackRect = trackArea.getBoundingClientRect();
+      const yMinAbs = Math.min(drag.startY, drag.curY) + trackRect.top;
+      const yMaxAbs = Math.max(drag.startY, drag.curY) + trackRect.top;
+      /** @type {Array<{fcurveId: string, keyforms: Array<{time: number}>}>} */
+      const hitRows = [];
+      // Walk the rendered Row elements via querySelectorAll on the
+      // track area — the per-row DOM node carries data-row-idx as a
+      // numeric string into `rows`.
+      const rowEls = trackArea.querySelectorAll('[data-row-idx]');
+      for (const el of rowEls) {
+        const rb = el.getBoundingClientRect();
+        // Y intersect: row's [top, bottom] overlaps [yMinAbs, yMaxAbs]
+        if (rb.bottom < yMinAbs || rb.top > yMaxAbs) continue;
+        const idxStr = el.getAttribute('data-row-idx');
+        if (idxStr === null) continue;
+        const idx = parseInt(idxStr, 10);
+        const row = rows[idx];
+        if (!row || !row.fcurveId) continue;
+        hitRows.push({ fcurveId: row.fcurveId, keyforms: row.keyforms });
+      }
+      // Convert track-area-local X to time. Track area's full width =
+      // `duration` ms. The Row's tick area starts after the LABEL_W
+      // column, so subtract LABEL_W first.
+      const tickAreaWidth = Math.max(1, trackRect.width - LABEL_W);
+      const xToTime = (/** @type {number} */ x) =>
+        ((x - LABEL_W) / tickAreaWidth) * duration;
+      const tMin = xToTime(Math.min(drag.startX, drag.curX));
+      const tMax = xToTime(Math.max(drag.startX, drag.curX));
+      const hits = computeBoxHits(hitRows, tMin, tMax);
+      setKeyformSelectionHandles((prev) =>
+        applyBoxSelect(prev, hits, drag.mode));
+    },
+    [boxDrag, rows, duration, setKeyformSelectionHandles],
+  );
+
+  // B-key handler — arms the gesture for the next pointerdown.
+  // Captured at document level so it fires regardless of focus
+  // (DopesheetEditor doesn't take keyboard focus).
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (e.key !== 'b' && e.key !== 'B') return;
+      // Skip if user is typing in an input
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      setBArmed(true);
+    };
+    /** @param {KeyboardEvent} e */
+    const onKeyDownEsc = (e) => {
+      if (e.key === 'Escape' && bArmed) setBArmed(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDownEsc);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDownEsc);
+    };
+  }, [bArmed]);
+
   if (!action) {
     return (
       <div className="flex flex-col h-full bg-card overflow-hidden">
@@ -172,8 +349,6 @@ export function DopesheetEditor() {
     );
   }
 
-  const duration = Math.max(1, action.duration ?? 1000);
-
   return (
     <div className="flex flex-col h-full bg-card overflow-hidden">
       <div className="flex-1 overflow-auto">
@@ -183,15 +358,26 @@ export function DopesheetEditor() {
             currentTime={currentTime}
             onSeek={(ms) => setCurrentTime(ms)}
           />
-          <div ref={trackAreaRef}>
+          <div
+            ref={trackAreaRef}
+            className={
+              'relative '
+              + (bArmed ? 'cursor-crosshair' : '')
+            }
+            onPointerDown={handleTrackPointerDown}
+            onPointerMove={handleTrackPointerMove}
+            onPointerUp={handleTrackPointerUp}
+            onPointerCancel={handleTrackPointerUp}
+          >
             {rows.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground italic">
                 Action has no fcurves yet — drop into the Timeline + use auto-keyframe.
               </div>
             ) : (
-              rows.map((row) => (
+              rows.map((row, idx) => (
                 <Row
                   key={row.key}
+                  rowIdx={idx}
                   row={row}
                   duration={duration}
                   currentTime={currentTime}
@@ -206,6 +392,39 @@ export function DopesheetEditor() {
                   onSeek={setCurrentTime}
                 />
               ))
+            )}
+            {/* Slice 6.B marquee overlay — rendered only during drag,
+                pointer-events-none so it doesn't interfere with the
+                track area's drag handlers. Color mirrors the FCurveEditor
+                box-select rect (blue tint when 'replace'/'extend', red
+                for 'subtract'). */}
+            {boxDrag && (
+              Math.abs(boxDrag.curX - boxDrag.startX) >= DRAG_THRESHOLD_PX
+              || Math.abs(boxDrag.curY - boxDrag.startY) >= DRAG_THRESHOLD_PX
+            ) && (
+              <div
+                className={
+                  'absolute pointer-events-none border '
+                  + (boxDrag.mode === 'subtract'
+                    ? 'border-red-400/80 bg-red-400/10'
+                    : 'border-sky-400/80 bg-sky-400/10')
+                }
+                style={{
+                  left: Math.min(boxDrag.startX, boxDrag.curX),
+                  top: Math.min(boxDrag.startY, boxDrag.curY),
+                  width: Math.abs(boxDrag.curX - boxDrag.startX),
+                  height: Math.abs(boxDrag.curY - boxDrag.startY),
+                }}
+                aria-hidden
+              />
+            )}
+            {bArmed && !boxDrag && (
+              <div
+                className="absolute top-1 right-1 px-1.5 py-0.5 text-[10px] bg-sky-700/80 text-white rounded pointer-events-none"
+                aria-hidden
+              >
+                B: drag to box-select
+              </div>
             )}
           </div>
         </div>
@@ -256,7 +475,7 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, onTickClick, onSeek }) {
+function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, onTickClick, onSeek }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -299,6 +518,7 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
     <div
       className="flex items-center border-b border-border/40 hover:bg-muted/20"
       style={{ height: ROW_H }}
+      data-row-idx={rowIdx}
     >
       <div
         className={
@@ -338,6 +558,7 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
           return (
             <span
               key={i}
+              data-tick="1"
               className={
                 'absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 cursor-pointer '
                 + (isActiveHalo

@@ -221,6 +221,7 @@
     "test:nlaEditorOps": "node scripts/test/test_nlaEditorOps.mjs",
     "test:bakeNla": "node scripts/test/test_bakeNla.mjs",
     "test:dopesheetSelectOps": "node scripts/test/test_dopesheetSelectOps.mjs",
+    "test:dopesheetBoxSelect": "node scripts/test/test_dopesheetBoxSelect.mjs",
     "test:fmodifiers": "node scripts/test/test_fmodifiers.mjs",
     "test:fmodifiersExportBake": "node scripts/test/test_fmodifiers_export_bake.mjs",
     "test:fmodifierRoundTrip": "node scripts/test/test_fmodifierRoundTrip.mjs",
