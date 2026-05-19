@@ -1558,9 +1558,9 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B SHIPPED 2026-05-19 (`cfb82a9` +
-`5b4cccd` + `bdf95a8` + `dff1c99`). 6.C-6.G remain (~2-3 days
-estimated).
+**Status:** Slice 6.A + 6.B + 6.C SHIPPED 2026-05-19 (`cfb82a9` +
+`5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670`). 6.D-6.G
+remain (~2 days estimated).
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1592,10 +1592,83 @@ prose below — coverage map):
 
 - ✅ Tick selection (click / shift-click) — shipped 6.A.
 - ✅ Box-select — shipped 6.B (`bdf95a8` + `dff1c99`).
-- 🟡 Drag selected ticks in time — Slice 6.C (queued next).
+- ✅ Drag selected ticks in time — shipped 6.C (`98b8a2a` + `f82e670`).
+- 🟡 Delete + Duplicate selected ticks — Slice 6.D.
+- 🟡 Column copy/paste — Slice 6.E.
 - 🟡 Per-channel mute/solo — Slice 6.F.
 - 🟡 Channel collapse/expand — Slice 6.E or 6.F.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.C — Modal grab (G key time-translate) — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetGrab.js`: immer-friendly
+`applyTimeTranslate(action, handles, deltaMs)` mutator + pure
+`remapHandlesAfterTranslate(handles, remaps)` + cheap
+`wouldTimeTranslateChange(handles, deltaMs)` predicate. Mirrors
+Blender's `transform.transform mode='TIME_TRANSLATE'` dispatched
+through `TransConvertType_Action` (`transform_convert_action.cc:
+1404-1409`); handle shift via `transform_convert_flush_handle2D`
+(same X-delta on `handleLeft.time` + `handleRight.time` + center,
+preserves bezier shape — `transform_convert.cc:1267-1285`); post-
+commit `posttrans_action_clean → BKE_fcurve_merge_duplicate_keys`
+which AVERAGES selected values into the lowest-index survivor
+(`fcurve.cc:1801-1916`). Tests: 70 asserts in
+`scripts/test/test_dopesheetGrab.mjs` (27 sections covering pure-op
+semantics + identity-stability + merge-on-collision + remap
+composition + multi-fcurve + integer-ms quantization).
+
+**UI surface.** DopesheetEditor wires G-key modal:
+- G keypress → grab modal entry (gated on center-selected
+  count > 0, mirroring Blender's `count_fcurve_keys` pre-modal check
+  at `transform_convert_action.cc:271-303`).
+- Window mousemove during modal → deltaMs preview (msPerPx captured
+  at grab entry).
+- LMB or Enter → commit via `updateProject(applyTimeTranslate)`
+  + `remapHandlesAfterTranslate` on the selection store.
+- RMB or Escape → cancel (no mutation — preview is overlay-only).
+- Tick clicks + box-select pointerdowns suppressed during grab via
+  `grabActiveRef`.
+- Ghost translucent diamonds render at `kf.time + deltaMs` for every
+  selected center-keyform; status pill shows `Grab: +Nms · LMB/Enter
+  commit · RMB/Esc cancel`.
+
+**SS DEVIATIONS new this slice:**
+- DEV 4 — Time-translate is INTEGER-MS (Math.round on deltaMs).
+  Blender accumulates fractional frames. Matches SS canonical time
+  per `feedback_ms_canonical_animation_time`.
+- DEV 5 — Snap-to-frame NOT shipped; deferred to 6.C.1 polish slice.
+  Honest per Rule №2.
+- DEV 6 — Merge-duplicate epsilon `0.5 ms` vs Blender's `0.01f`
+  frames (`BKE_fcurve.hh:217`). At 60fps ~3× coarser; matches typical
+  pointer-drag overshoot. Audit-fix HIGH-F3 demoted the prior
+  graphEditOps.js fab cite (`0.00002 s`) to this honest deviation.
+
+**Audit sweep #73.** 3 HIGH-F cite fabs (5-slice fab streak —
+4.D.4 / 4.E / 6.A / 6.B / 6.C) + 2 HIGH-A bugs + 1 MED-A + LOW
+polish + 1 new SS DEV; all fixed in `f82e670` same-day:
+- HIGH-F1 — G keymap cite `:2716-2717 transform.translate` was fab;
+  real is `:2718-2719 transform.transform mode='TIME_TRANSLATE'`.
+- HIGH-F2 — Merge semantics misdescribed as "selected wins +
+  OVERWRITES" — actually AVERAGES (fcurve.cc:1859-1862 / 1887).
+- HIGH-F3 — Inherited `BEZT_BINARYSEARCH_THRESH = 0.00002 s` cite
+  from graphEditOps.js was PRE-EXISTING fab; real is `0.01f` frames
+  per BKE_fcurve.hh:217. Fixed at SOURCE + consumer.
+- HIGH-A1 — Listeners-mount effect dep included `activeActionId`;
+  mid-grab actionId change would have sent in-flight delta to
+  unrelated action. Narrowed to `[grabState !== null]`.
+- HIGH-A2 — `setGrabState(null)` is React-async-batched; the
+  useEffect mirror flipping `grabActiveRef.current = false` ran on
+  NEXT render. Synchronous handlers in the commit tail saw stale
+  ref=true. Now eagerly flips at commit/cancel entry.
+- MED-A1 — `handleTrackPointerUp` dep included `[boxDrag, rows,
+  duration]`; identity-stable via rowsRef/durationRef refs +
+  functional setBoxDrag (matches 6.B HIGH-A1 pattern).
+
+Cite-discipline: BROKE at 3 (5-slice streak). Mitigation insight:
+the `[VERIFY]` workflow is insufficient when SOURCE cites in sister
+modules are already fab. Need to RE-VERIFY against Blender even
+when re-quoting from existing in-tree docstrings. Recorded as
+sister to `feedback_check_plan_against_impl_on_consumption`.
 
 #### 6.B — Box-select (B key + LMB-drag) — SHIPPED 2026-05-19
 
