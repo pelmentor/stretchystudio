@@ -1558,9 +1558,9 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A + 6.B + 6.C SHIPPED 2026-05-19 (`cfb82a9` +
-`5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670`). 6.D-6.G
-remain (~2 days estimated).
+**Status:** Slice 6.A + 6.B + 6.C + 6.D SHIPPED 2026-05-19 (`cfb82a9`
++ `5b4cccd` + `bdf95a8` + `dff1c99` + `98b8a2a` + `f82e670` +
+`872a208` + `a79f431`). 6.E-6.G remain (~1-2 days estimated).
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1593,11 +1593,85 @@ prose below — coverage map):
 - ✅ Tick selection (click / shift-click) — shipped 6.A.
 - ✅ Box-select — shipped 6.B (`bdf95a8` + `dff1c99`).
 - ✅ Drag selected ticks in time — shipped 6.C (`98b8a2a` + `f82e670`).
-- 🟡 Delete + Duplicate selected ticks — Slice 6.D.
+- ✅ Delete + Duplicate selected ticks — shipped 6.D (`872a208` + `a79f431`).
 - 🟡 Column copy/paste — Slice 6.E.
 - 🟡 Per-channel mute/solo — Slice 6.F.
 - 🟡 Channel collapse/expand — Slice 6.E or 6.F.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.D — Delete (Del) + Duplicate-move (Shift+D) — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetDelDup.js`: immer-friendly
+`applyDeleteKeyforms(action, handles)` (delegates per-fcurve to
+`graphEditOps.deleteKeyforms` which mirrors Blender's
+`BKE_fcurve_delete_keys_selected` at `fcurve.cc:1757-1784`) + pure
+`applyDuplicateKeyforms(action, handles)` (mirrors Blender's
+`duplicate_fcurve_keys` at `keyframes_general.cc:62-95` — inserts
+deep-copy immediately after each selected, remap re-targets selection
+at duplicates) + `wouldDelDupChange` predicate. Tests: 83 asserts in
+`scripts/test/test_dopesheetDelDup.mjs`.
+
+**UI surface.** DopesheetEditor wires Delete + Shift+D:
+- Del → `applyDeleteKeyforms` via `updateProject` →
+  `remapHandlesAfterTranslate` drops deleted entries from selection
+  store.
+- Shift+D → `applyDuplicateKeyforms` → `remapHandlesAfterTranslate`
+  re-targets selection at duplicates → `enterGrabModal()` auto-enters
+  the 6.C grab modal pre-targeted at the duplicates (Blender's
+  `ACTION_OT_duplicate_move` macro chain at `action_ops.cc:80-89`).
+- Both gated on `wouldDelDupChange` pre-check (matches Blender's
+  `actkeys_*_exec` `OPERATOR_CANCELLED` on empty selection).
+- `enterGrabModal` extracted from G-key effect as a useCallback
+  helper so Shift+D can re-use it.
+
+**SS DEVIATIONS new this slice:**
+- DEV 7 — Empty-fcurve auto-removal NOT shipped. Blender's
+  `BKE_fcurve_is_empty → ED_anim_ale_fcurve_delete` at
+  `action_edit.cc:1154-1157` unhooks empty fcurves; SS keeps them
+  (channel sidebar shows them as empty so user can re-insert without
+  losing channel registration).
+- DEV 8 — Delete confirm dialog suppressed. Blender's
+  `actkeys_delete_invoke` (`action_edit.cc:1194-1208`) gates dialog
+  on RNA `confirm=True`; the dopesheet keymap binding passes
+  `confirm=False` (`blender_default.py:2703`), so SS mirrors the
+  suppressed-confirm dopesheet behavior.
+- DEV 9 — Backspace aliased to Delete. Blender binds only `DEL`; SS
+  also accepts Backspace because Mac laptops have no physical
+  Delete key (the labelled "delete" key IS Backspace). Honest
+  extension. Audit-fix MED-A2 documentation.
+- DEV 10 — Duplicate inherits original's HandleParts profile
+  verbatim instead of Blender's `BEZT_SEL_ALL(copy)` force-all-on at
+  `keyframes_general.cc:91`. Under realistic SS UX (tick-click +
+  box-select set all 3 bits in lockstep), divergence is invisible;
+  partial-bit selections diverge. Audit-fix MED-F1 honest deviation.
+
+**Audit sweep #74.** 0 HIGH-F (5-SLICE FAB STREAK BROKEN!) + 2 HIGH-A
++ 2 MED-A + 1 MED-F + LOW polish; all fixed in `a79f431` same-day:
+- HIGH-A1 — G-key + Del/Shift+D effects had `[grabState, boxDrag]`
+  deps that re-mounted listeners 60-120Hz; switched to refs
+  (`grabActiveRef` + new `boxDragActiveRef`), keymap effects stay
+  mounted once.
+- HIGH-A2 — `getState().handles` re-read 2-3 times in same handler
+  produced inconsistent snapshots; now snapshot ONCE into
+  `curHandles` and reuse for op input + remap input. Same fix
+  applied to 6.C grab commit path.
+- MED-A1 — `applyDeleteKeyforms` had silent-swallow `continue` on
+  "impossible" length-unchanged path; converted to pre-filter at
+  contract boundary + Rule №1 throw on actual violation. Pre-filter
+  catches real pre-existing bug: `deleteKeyforms` builds non-empty
+  survivor-remap even when ALL selection entries are OOB (because it
+  walks the array, not the selection).
+- MED-A2 — Backspace alias undocumented → SS DEV 9.
+- MED-F1 — Duplicate selection-bit divergence undocumented → SS DEV 10.
+
+**Cite-discipline arc**: 0 fabs pre-audit, confirmed 0 by Blender-
+fidelity agent post-audit. **5-slice fab streak (4.D.4 / 4.E / 6.A
+/ 6.B / 6.C) BROKEN.** The new `feedback_byte_verify_behavior_cites`
+rule 6 (re-verify SOURCE cites when re-quoting from sister modules,
+declared after 6.C) worked: pre-draft I re-checked
+`graphEditOps.deleteKeyforms` against Blender's
+`BKE_fcurve_delete_keys_selected` instead of trusting the in-tree
+docstring.
 
 #### 6.C — Modal grab (G key time-translate) — SHIPPED 2026-05-19
 
