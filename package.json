@@ -226,6 +226,8 @@
     "test:dopesheetDelDup": "node scripts/test/test_dopesheetDelDup.mjs",
     "test:dopesheetClipboard": "node scripts/test/test_dopesheetClipboard.mjs",
     "test:dopesheetChannelMute": "node scripts/test/test_dopesheetChannelMute.mjs",
+    "test:dopesheetChannelSolo": "node scripts/test/test_dopesheetChannelSolo.mjs",
+    "test:fcurveSolo": "node scripts/test/test_fcurveSolo.mjs",
     "test:fmodifiers": "node scripts/test/test_fmodifiers.mjs",
     "test:fmodifiersExportBake": "node scripts/test/test_fmodifiers_export_bake.mjs",
     "test:fmodifierRoundTrip": "node scripts/test/test_fmodifierRoundTrip.mjs",

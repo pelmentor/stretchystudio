@@ -101,6 +101,7 @@
  */
 
 import { decodeFCurveTarget } from './animationFCurve.js';
+import { isFCurveSoloed, isAnyFCurveSoloed } from './fcurveSolo.js';
 
 /**
  * @typedef {Object} FCurveGroup
@@ -211,18 +212,46 @@ export function isFCurveGroupSelected(group) {
 // ── Effective-state cascade (eval + sidebar) ───────────────────────────
 
 /**
- * True when the fcurve's per-curve mute OR its parent group's mute is
- * set. Mirrors Blender's `is_fcurve_evaluatable` short-circuit at
- * `reference/blender/source/blender/blenkernel/intern/anim_sys.cc:347-352`
- * — full Blender check is `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)`
- * (line 347) OR `fcu->grp && (fcu->grp->flag & AGRP_MUTED)` (line 350).
- * SS omits the `FCURVE_DISABLED` branch by design (no concept of a
- * "broken" fcurve in the SS data model — see `fcurveMute.js` header).
+ * True when the fcurve is effectively muted considering THREE cascades
+ * (in priority order):
  *
- * Caller passes the action so the group lookup can resolve `fc.groupId`.
- * When `fc.groupId` is undefined / unknown / absent, only the per-fcurve
- * mute applies (ungrouped fcurves never inherit a group mute by
- * construction).
+ *   1. **Solo cascade (Slice 6.F.2)** — when ANY fcurve in the action
+ *      carries `solo === true`, every NON-soloed fcurve is effectively
+ *      muted. Soloed fcurves are NEVER effectively muted regardless of
+ *      their `mute` bit or group mute (solo wins over both).
+ *      SS-original DAW-convention extension — no Blender analog for
+ *      per-FCurve solo. See [fcurveSolo.js](./fcurveSolo.js) module
+ *      header for full provenance + decision matrix.
+ *   2. **Per-fcurve mute** — `fc.mute === true`. Mirrors Blender's
+ *      `is_fcurve_evaluatable` short-circuit at
+ *      `reference/blender/source/blender/blenkernel/intern/anim_sys.cc:347-352`
+ *      — full Blender check is `fcu->flag & (FCURVE_MUTED | FCURVE_DISABLED)`
+ *      (line 347). SS omits the `FCURVE_DISABLED` branch by design (no
+ *      concept of a "broken" fcurve in the SS data model — see
+ *      `fcurveMute.js` header).
+ *   3. **Group mute cascade (Slice 5.V)** — when `fc.groupId` resolves
+ *      to a group with `group.mute === true`. Mirrors Blender's
+ *      `fcu->grp && (fcu->grp->flag & AGRP_MUTED)` (`anim_sys.cc:350`).
+ *
+ * Caller passes the action for both the group lookup (resolving
+ * `fc.groupId`) and the solo predicate (walking `action.fcurves` for
+ * any-solo'd). When `fc.groupId` is undefined / unknown / absent, only
+ * the solo + per-fcurve cascades apply.
+ *
+ * **Solo decision matrix** (when `anySolo`):
+ *
+ *   | this.solo | this.mute | group.mute | effectivelyMuted |
+ *   |-----------|-----------|------------|------------------|
+ *   |     Y     |     -     |     -      |       false      |
+ *   |     N     |     -     |     -      |       true       |
+ *
+ * **Non-solo decision matrix** (when `!anySolo`):
+ *
+ *   | this.mute | group.mute | effectivelyMuted |
+ *   |-----------|------------|------------------|
+ *   |     Y     |     -      |       true       |
+ *   |     -     |     Y      |       true       |
+ *   |     N     |     N      |       false      |
  *
  * @param {FCurveLike|null|undefined} fcurve
  * @param {ActionLike|null|undefined} action
@@ -230,7 +259,15 @@ export function isFCurveGroupSelected(group) {
  */
 export function isFCurveEffectivelyMuted(fcurve, action) {
   if (!fcurve) return false;
+  // Solo cascade (Slice 6.F.2). When any fcurve is solo'd, only solo'd
+  // fcurves evaluate; everything else is effectively muted regardless
+  // of mute bit or group mute. Solo wins over mute (DAW convention).
+  if (isAnyFCurveSoloed(action)) {
+    return !isFCurveSoloed(fcurve);
+  }
+  // Per-fcurve mute (Slice 5.G).
   if (fcurve.mute === true) return true;
+  // Group cascade (Slice 5.V).
   if (!fcurve.groupId) return false;
   return isFCurveGroupMuted(getFCurveGroupById(action, fcurve.groupId));
 }

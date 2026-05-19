@@ -96,6 +96,11 @@ import {
   applyDopesheetChannelMute,
   wouldDopesheetChannelMuteChange,
 } from '../../../anim/dopesheetChannelMute.js';
+import {
+  pickSoloTarget,
+  applyDopesheetChannelSolo,
+  wouldDopesheetChannelSoloChange,
+} from '../../../anim/dopesheetChannelSolo.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -871,6 +876,51 @@ export function DopesheetEditor() {
         const ta = project.actions.find((a) => a.id === activeActionId);
         if (!ta) return;
         applyDopesheetChannelMute(ta, target);
+      });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [updateProject, activeActionId]);
+
+  // ── Slice 6.F.2 — Solo hovered/selected channel (Ctrl+Alt+M) ──────────
+  // SS-original DAW-convention extension (per-FCurve solo). Blender's
+  // ACHANNEL_SETTING_SOLO is NLA-tracks-only per ED_anim_api.hh:674 —
+  // SS extends the concept to per-FCurve with multi-solo semantics
+  // (Pro Tools / Logic / Ableton pattern). See dopesheetChannelSolo.js
+  // module header for full provenance + SS DEVIATION 19 (Ctrl+Alt+M
+  // hotkey choice).
+  //
+  // Eval-side gating happens automatically via the extended
+  // isFCurveEffectivelyMuted cascade in fcurveGroups.js — all 4 eval
+  // call sites (animationFCurve / depgraph kernels x2 / animationEngine)
+  // pick up the new semantic without per-site changes. Sister to
+  // Slice 5.V's group-mute cascade integration.
+  //
+  // Same gate pattern as the M-key effect above (input-skip, grab/
+  // box-drag suppression, conditional preventDefault, store-read
+  // action resolution).
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (e.key !== 'm' && e.key !== 'M') return;
+      // Ctrl+Alt+M only (DEV 19). Any other modifier combo / no
+      // modifier → not solo.
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!e.altKey) return;
+      if (e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (grabActiveRef.current || boxDragActiveRef.current) return;
+      const proj = useProjectStore.getState().project;
+      const targetAction = proj.actions.find((a) => a.id === activeActionId);
+      if (!targetAction) return;
+      const target = pickSoloTarget(targetAction, hoveredFcurveIdRef.current);
+      if (!wouldDopesheetChannelSoloChange(targetAction, target)) return;
+      e.preventDefault();
+      updateProject((project) => {
+        const ta = project.actions.find((a) => a.id === activeActionId);
+        if (!ta) return;
+        applyDopesheetChannelSolo(ta, target);
       });
     };
     window.addEventListener('keydown', onKeyDown);

@@ -104,6 +104,64 @@ function makeAction(groups = [], fcurves = []) {
   eq(isFCurveEffectivelyMuted({ mute: true, groupId: 'g2' }, action), true, 'effMuted: short-circuits on per-curve true before group lookup');
 }
 
+// ── isFCurveEffectivelyMuted — SOLO cascade (Slice 6.F.2) ──────────────
+// When ANY fcurve in the action has solo=true, the cascade flips:
+//   - non-soloed fcurves are effectively muted (regardless of mute/group.mute)
+//   - soloed fcurves are NEVER effectively muted (solo wins over both)
+// When NO fcurve is soloed, the original mute+group cascade applies.
+{
+  // Setup: an action with one soloed fcurve and one non-soloed sibling.
+  // Two groups: g1 (muted) and g2 (unmuted).
+  const groups = [
+    { id: 'g1', name: 'G1', mute: true },
+    { id: 'g2', name: 'G2' },
+  ];
+  const fcSoloOff = { id: 'fcA', mute: false, solo: false };
+  const fcSoloOn  = { id: 'fcB', mute: false, solo: true };
+  const action = makeAction(groups, [fcSoloOff, fcSoloOn]);
+
+  // When anySolo: non-solo'd → muted regardless of mute bit / group
+  eq(isFCurveEffectivelyMuted(fcSoloOff, action), true,
+     'effMuted solo cascade: anySolo + this.solo=false → true');
+  eq(isFCurveEffectivelyMuted(fcSoloOn, action), false,
+     'effMuted solo cascade: anySolo + this.solo=true → false (solo wins)');
+
+  // Solo wins over per-curve mute
+  const fcSoloMuted = { id: 'fcC', mute: true, solo: true };
+  const action2 = makeAction(groups, [fcSoloMuted, fcSoloOff]);
+  eq(isFCurveEffectivelyMuted(fcSoloMuted, action2), false,
+     'effMuted solo cascade: solo overrides per-curve mute');
+
+  // Solo wins over group mute
+  const fcSoloGrouped = { id: 'fcD', mute: false, solo: true, groupId: 'g1' };
+  const action3 = makeAction(groups, [fcSoloGrouped]);
+  eq(isFCurveEffectivelyMuted(fcSoloGrouped, action3), false,
+     'effMuted solo cascade: solo overrides group mute');
+
+  // When no fcurve is soloed: original cascade behavior (mute / group.mute)
+  const fcNoSolo = { id: 'fcE', mute: true };
+  const fcNoSoloUnmuted = { id: 'fcF', mute: false };
+  const action4 = makeAction(groups, [fcNoSolo, fcNoSoloUnmuted]);
+  eq(isFCurveEffectivelyMuted(fcNoSolo, action4), true,
+     'effMuted no-solo: per-curve mute → true (cascade unchanged)');
+  eq(isFCurveEffectivelyMuted(fcNoSoloUnmuted, action4), false,
+     'effMuted no-solo: no mute → false (cascade unchanged)');
+
+  // Non-soloed fcurve in solo'd group cascade — solo from other fcurve
+  // means this one is muted regardless of its own group muteness
+  const fcInUnmutedGroup = { id: 'fcG', groupId: 'g2' };
+  const fcOtherSolo = { id: 'fcH', solo: true };
+  const action5 = makeAction(groups, [fcInUnmutedGroup, fcOtherSolo]);
+  eq(isFCurveEffectivelyMuted(fcInUnmutedGroup, action5), true,
+     'effMuted solo cascade: non-soloed in unmuted group → muted (because sibling solo)');
+
+  // Null/missing action falls through to non-solo cascade (no anySolo possible)
+  eq(isFCurveEffectivelyMuted({ solo: true }, null), false,
+     'effMuted null action: no solo cascade possible → falls through (no per-curve mute → false)');
+  eq(isFCurveEffectivelyMuted({ mute: true, solo: true }, null), true,
+     'effMuted null action: no solo cascade possible → per-curve mute fires');
+}
+
 // ── isFCurveEffectivelyHidden (cascade) ─────────────────────────────
 {
   const action = makeAction(
