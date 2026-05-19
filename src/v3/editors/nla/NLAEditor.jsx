@@ -159,7 +159,7 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import {
   Star, Lock, Unlock, EyeOff, Eye, Ban, Edit2, X,
-  Plus, Trash2, ArrowDownToLine, MoreVertical,
+  Plus, Trash2, ArrowDownToLine, MoreVertical, Combine,
 } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import {
@@ -197,6 +197,7 @@ import {
   NLA_BLEND_MODES, NLA_EXTEND_MODES, NLATRACK_FLAG, isTweakModeOn,
 } from '../../../anim/nla.js';
 import { enterTweakMode, exitTweakMode } from '../../../anim/nlaTweakMode.js';
+import { applyBakeNla, wouldBakeNlaChange } from '../../operators/bakeNla.js';
 import { cn } from '../../../lib/utils.js';
 
 const LABEL_W = 200;             // 160 → 200 to fit clickable icons
@@ -617,9 +618,11 @@ function TrackRow({
  *   onAddTrack: () => void,
  *   onPushDown: () => void,
  *   canPushDown: boolean,
+ *   onBake: () => void,
+ *   canBake: boolean,
  * }} props
  */
-function GroupHeader({ group, animData, onExitTweak, onAddTrack, onPushDown, canPushDown }) {
+function GroupHeader({ group, animData, onExitTweak, onAddTrack, onPushDown, canPushDown, onBake, canBake }) {
   const activeActionName = canPushDown && animData && typeof animData.actionId === 'string'
     ? animData.actionId : null;
   return (
@@ -663,6 +666,23 @@ function GroupHeader({ group, animData, onExitTweak, onAddTrack, onPushDown, can
         <Plus size={10} />
         Track
       </button>
+      {/* 4.E Bake NLA — visible whenever the group has any bake-able
+          content (bound action OR at least one NLA strip). Mirrors
+          Blender's NLA_OT_bake (anim.py:191-336): collapses the
+          composed NLA+bound-action evaluation into a single new Action
+          and reassigns it on the Object. Range comes from the group's
+          own strip span; step = 1000/24ms (1 frame @ 24fps). */}
+      {canBake && (
+        <button
+          type="button"
+          className="ml-2 px-2 py-0.5 rounded bg-emerald-800/40 hover:bg-emerald-700/60 text-emerald-300 text-[10px] uppercase tracking-wider flex items-center gap-1"
+          onClick={onBake}
+          title="Bake the NLA stack + bound action into a single new Action (Blender NLA_OT_bake). Sample step = 1 frame @ 24fps."
+        >
+          <Combine size={10} />
+          Bake
+        </button>
+      )}
       {group.tweakModeOn && (
         <>
           <span
@@ -1500,6 +1520,51 @@ export function NLAEditor() {
     });
   }, [updateProject]);
 
+  // Slice 4.E — BakeNLA. Computes the bake range from the group's own
+  // track span; step is 1000/24 ms (= 1 frame @ 24fps, matching Blender's
+  // default `step=1` on NLA_OT_bake at anim.py:209-213). useCurrentAction
+  // defaults false (Blender default) — creates a new action + reassigns,
+  // less destructive than overwriting the bound action's fcurves.
+  const handleBake = useCallback((objectId) => {
+    updateProject((proj) => {
+      const node = proj.nodes.find((n) => n && n.id === objectId);
+      if (!node || !node.animData) return;
+      // Per-group bake range: walk this object's tracks/strips for the
+      // [min, max] span; fall back to [0, 1000] if the group is purely
+      // bound-action (no NLA strips → action's own frame range would be
+      // the ideal default; bakeNla itself doesn't read action.frameStart
+      // so we walk + default sensibly here).
+      let minMs = 0;
+      let maxMs = 0;
+      const tracks = Array.isArray(node.animData.nlaTracks) ? node.animData.nlaTracks : [];
+      for (const t of tracks) {
+        const strips = Array.isArray(t?.strips) ? t.strips : [];
+        for (const s of strips) {
+          if (typeof s?.start === 'number' && s.start < minMs) minMs = s.start;
+          if (typeof s?.end === 'number' && s.end > maxMs) maxMs = s.end;
+        }
+      }
+      // If bound action only (no NLA strips), default to the action's
+      // own frameStart/frameEnd/duration when present.
+      if (maxMs === 0 && typeof node.animData.actionId === 'string') {
+        const action = (proj.actions ?? []).find((a) => a && a.id === node.animData.actionId);
+        if (action) {
+          if (typeof action.frameStart === 'number') minMs = action.frameStart;
+          if (typeof action.frameEnd === 'number') maxMs = action.frameEnd;
+          else if (typeof action.duration === 'number') maxMs = action.duration;
+        }
+      }
+      if (maxMs <= minMs) maxMs = minMs + 1000;   // Minimum 1s range fallback
+      applyBakeNla(proj, objectId, {
+        frameStartMs: minMs,
+        frameEndMs: maxMs,
+        stepMs: 1000 / 24,
+        useCurrentAction: false,
+        cleanCurves: false,
+      });
+    });
+  }, [updateProject]);
+
   // Strip delete state (for the StripPropertiesPanel footer).
   const stripDeleteState = useMemo(() => {
     if (!resolvedSelection) return { canDelete: false, reason: 'No strip selected' };
@@ -1592,6 +1657,7 @@ export function NLAEditor() {
         const groupNode = nodesById.get(group.objectId);
         const groupAnimData = groupNode?.animData ?? null;
         const canPushDown = wouldPushActionDownChange(groupAnimData);
+        const canBake = wouldBakeNlaChange(groupAnimData);
         return (
           <div key={group.objectId}>
             <GroupHeader
@@ -1601,6 +1667,8 @@ export function NLAEditor() {
               onAddTrack={() => handleAddTrack(group.objectId)}
               onPushDown={() => handlePushActionDown(group.objectId)}
               canPushDown={canPushDown}
+              onBake={() => handleBake(group.objectId)}
+              canBake={canBake}
             />
             {group.tracks.map((track) => (
               <TrackRow
