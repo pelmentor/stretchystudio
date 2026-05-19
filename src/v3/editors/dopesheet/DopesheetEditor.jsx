@@ -84,6 +84,13 @@ import {
   applyDuplicateKeyforms,
   wouldDelDupChange,
 } from '../../../anim/dopesheetDelDup.js';
+import {
+  copyKeyformsToClipboard,
+  pasteKeyformsFromClipboard,
+  handlesFromPasteResult,
+  wouldCopyChange,
+  wouldPasteChange,
+} from '../../../anim/dopesheetClipboard.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -669,6 +676,108 @@ export function DopesheetEditor() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [updateProject, activeActionId, enterGrabModal]);
+
+  // ── Slice 6.E — Copy (Ctrl+C) + Paste (Ctrl+V) ─────────────────────────
+  // Ports Blender's `ACTION_OT_copy` + `ACTION_OT_paste` operators
+  // dispatched from the SpaceAction keymap:
+  //
+  //   - `keymap_data/blender_default.py:2706-2707`:
+  //     `("action.copy",  {"type": 'C', "value": 'PRESS', "ctrl": True}, None)`
+  //     `("action.paste", {"type": 'V', "value": 'PRESS', "ctrl": True}, None)`
+  //
+  // Copy: `action_edit.cc:647-660` (`ACTION_OT_copy`) → `actkeys_copy_exec`
+  //       `:606-645` → `copy_action_keys` `:521-538` → `copy_animedit_keys`
+  //       at `keyframes_general.cc:1488-1566`. Populates the module-level
+  //       singleton at `:1258`.
+  // Paste: `action_edit.cc:746-779` (`ACTION_OT_paste`) → `actkeys_paste_exec`
+  //       `:662-731` → `paste_action_keys` `:540-596` → `paste_animedit_keys`
+  //       at `keyframes_general.cc:2118-...`. Defaults: CFRA_START offset
+  //       (cfra - first_frame), MIX merge (same-time replace via
+  //       INSERTKEY_OVERWRITE_FULL at `:2001`).
+  //
+  // **SS DEVIATION 14** (Shift+Ctrl+V flipped variant): not bound. SS
+  // dopesheet has no bones in its keyform model — flip-mirror semantics
+  // don't apply. See `dopesheetClipboard.js` module header for full rationale.
+  //
+  // Gate pattern (matches 6.C / 6.D):
+  //   - Skip if pointer is inside an input/textarea/contentEditable (the
+  //     browser's native text-copy/paste must win in those contexts).
+  //   - Skip if a grab modal or box-drag is in flight (refs are
+  //     identity-stable per Slice 6.D HIGH-A1).
+  //   - Skip + LET BROWSER THROUGH if there's nothing to copy (Ctrl+C
+  //     with empty selection) or nothing to paste (Ctrl+V with empty
+  //     clipboard or no destination match) — DON'T preventDefault, so
+  //     the user's "copy this log line" Ctrl+C still works in adjacent
+  //     panels even with the dopesheet open.
+  //
+  // Action resolution: read from `useProjectStore.getState().project` at
+  // keypress time rather than capturing the memo'd `action` from render
+  // closure. The memo `action` recomputes on every project mutation, so
+  // putting it in the dep array would re-mount the effect on every change
+  // (same anti-pattern that audit-fix 6.C/6.D HIGH-A1 addressed for
+  // grabState/boxDrag). Reading from store at fire time gives us the
+  // freshest action without dep churn.
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKeyDown = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const isCopy  = (e.key === 'c' || e.key === 'C');
+      const isPaste = (e.key === 'v' || e.key === 'V');
+      if (!isCopy && !isPaste) return;
+      // Skip if user is typing in an input — let browser handle text copy/paste.
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // Suppress during grab or box-drag (same gate as 6.D).
+      if (grabActiveRef.current || boxDragActiveRef.current) return;
+      // Resolve target action at fire time. Effect stays mounted across
+      // project mutations; reading from store avoids stale closure.
+      const proj = useProjectStore.getState().project;
+      const targetAction = proj.actions.find((a) => a.id === activeActionId);
+      if (!targetAction) return;
+      if (isCopy) {
+        const curHandles = useKeyformSelectionStore.getState().handles;
+        // Nothing center-selected → leave Ctrl+C alone (browser default
+        // takes over). Matches Blender's `copy_action_keys` returning
+        // `false` → `OPERATOR_CANCELLED` at `action_edit.cc:638-641`,
+        // except there's no "no keyframes copied" toast in SS yet.
+        if (!wouldCopyChange(curHandles)) return;
+        const curTime = useAnimationStore.getState().currentTime;
+        e.preventDefault();
+        copyKeyformsToClipboard(targetAction, curHandles, curTime);
+      } else {
+        // Clipboard empty or no matching destination → leave Ctrl+V alone.
+        // Matches Blender's two-step early-return in `paste_animedit_keys`
+        // at `keyframes_general.cc:2124-2129` (NOTHING_TO_PASTE +
+        // NOWHERE_TO_PASTE).
+        if (!wouldPasteChange(targetAction)) return;
+        const curTime = useAnimationStore.getState().currentTime;
+        e.preventDefault();
+        /** @type {Map<string, number[]> | null} */
+        let capturedSelections = null;
+        let capturedChanged = false;
+        updateProject((project) => {
+          const ta = project.actions.find((a) => a.id === activeActionId);
+          if (!ta) return;
+          const r = pasteKeyformsFromClipboard(ta, curTime);
+          capturedSelections = r.newSelections;
+          capturedChanged = r.changed;
+        });
+        if (capturedChanged && capturedSelections) {
+          // Replace selection with the pasted entries (all parts on).
+          // Matches Blender's `BEZT_DESEL_ALL` on destination at
+          // `paste_animedit_keys_fcurve:1935-1937` + `BEZT_SEL_ALL` on
+          // inserts at `:1998` — net effect is the new selection IS the
+          // paste result. SS DEV 15 (global selection replace vs Blender's
+          // per-fcurve deselect) — documented in dopesheetClipboard.js.
+          useKeyformSelectionStore.getState().setHandles(
+            handlesFromPasteResult(capturedSelections),
+          );
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [updateProject, activeActionId]);
 
   // Grab-modal window listeners — mounted ONLY while grabState !== null.
   // Tracks pointer moves to update deltaMs; LMB/Enter commits;
