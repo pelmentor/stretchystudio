@@ -1242,11 +1242,13 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** **Slice 4.E SHIPPED 2026-05-19** (`7e4a2a0` + `6ebe3e2`).
-Slices complete: 4.A substrate + 4.B evaluator + 4.C tweak mode +
+**Status:** **Slice 4.F SHIPPED 2026-05-19** (`218c68c`). Slices
+complete: 4.A substrate + 4.B evaluator + 4.C tweak mode +
 4.D.1-4.D.4 NLAEditor (read-only/drag/affordances/CRUD+PushDown) +
-**4.E BakeNLA operator**. Schema at **v42** (no bump for 4.E —
-operator-only).
+4.E BakeNLA operator + **4.F test parity sweep + manual checklists**.
+Schema at **v42** (no bump since 4.A migration). Phase 4 cumulative:
+**735 test asserts**, 22 SS deviations, 70 audit sweeps Phase-4-
+totalled.
 **Cite-discipline**: BROKE at 5 on 4.D.1; RESET to 0; HOLDS at 1
 after 4.D.2; HOLDS at 2 after 4.D.3; BROKE at 2, RESET to 0 after
 4.D.4; **BROKE at 2, RESET to 0** after 4.E (2 fab cites: function
@@ -1260,8 +1262,11 @@ Lesson recorded: Explore-agent reconnaissance cites need byte-
 verification too, not just the marquee ones spot-checked. See
 close-out docs
 `docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1,D2,D3,D4,E}.md`.
-**Remaining: 4.F (test parity sweep) + 4.G (phase exit gate + manual
-verification)**.
+**Remaining: 4.G (phase exit gate)** — GATED on user-side manual
+verification at `docs/plans/ANIMATION_PHASE_3_4_MANUAL_CHECKLISTS.md`
+(covers Phase 3 FModifier UI carryover + Phase 4 §4.G end-to-end
+scenarios). 4.G ships as a docs-only commit when the checklist comes
+back green.
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
