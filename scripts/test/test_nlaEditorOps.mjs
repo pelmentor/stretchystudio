@@ -394,11 +394,17 @@ function findStrip(ad, trackId, stripId) {
   assert(out2 === ad, '24c2: 2 clamps to 1 = current → no-op same ref');
   const out3 = applySetStripInfluence(ad, 'tMid', 's1', -0.5);
   close(findStrip(out3, 'tMid', 's1').influence, 0, 1e-10, '24d: clamp <0 to 0');
-  // NaN / Infinity → ignored, same ref
-  const out4 = applySetStripInfluence(ad, 'tMid', 's1', NaN);
-  assert(out4 === ad, '24e: NaN ignored → same ref');
-  const out5 = applySetStripInfluence(ad, 'tMid', 's1', Infinity);
-  assert(out5 === ad, '24f: Infinity ignored → same ref');
+  // Audit-fix Slice 4.D.3 MED-A1: NaN / Infinity now THROW (Rule №1
+  // contract parity with applySetStripBlendMode/ExtendMode).
+  let threwNaN = false;
+  try { applySetStripInfluence(ad, 'tMid', 's1', NaN); } catch { threwNaN = true; }
+  assert(threwNaN, '24e: NaN throws (audit-fix MED-A1)');
+  let threwInf = false;
+  try { applySetStripInfluence(ad, 'tMid', 's1', Infinity); } catch { threwInf = true; }
+  assert(threwInf, '24f: Infinity throws');
+  let threwNegInf = false;
+  try { applySetStripInfluence(ad, 'tMid', 's1', -Infinity); } catch { threwNegInf = true; }
+  assert(threwNegInf, '24g: -Infinity throws');
 }
 
 // ── 25. wouldSetStripInfluenceChange ───────────────────────────────

@@ -83,6 +83,22 @@
  * per v36 schema), and silently miscomputing strip bounds would be
  * a Rule №1 silent fallback.
  *
+ * **PROTECTED gate** (audit-fix Slice 4.D.3 HIGH-A1): Blender's
+ * NLA_OT_tweakmode_enter operator goes through `nlaop_poll_tweakmode_off`
+ * (`nla_edit.cc:195`) at poll time + `BKE_nla_tweakmode_enter` at
+ * exec time. The editor-layer poll DOES NOT check PROTECTED, but the
+ * NLAEditor channel-edit toggle UI surfaces only allow track-level
+ * operations when the track is NOT protected (via the channel-filter
+ * `do_protected` flag). SS places `enterTweakMode` at the BKE-equivalent
+ * level and previously had no PROTECTED check at any layer. The UI
+ * (NLAEditor.jsx StripPropertiesPanel) gates the button on
+ * `track.protected_`, but per Rule №1 the substrate MUST enforce the
+ * invariant — UI is a hint, not a contract. Adding the gate here so
+ * any caller (test, future automated path, accessibility bypass) gets
+ * a consistent refusal. SS-original: Blender's BKE layer doesn't
+ * gate on PROTECTED either; SS shifts the editor-layer filter into
+ * the substrate to make it bypass-proof.
+ *
  * @module anim/nlaTweakMode
  */
 
@@ -228,6 +244,10 @@ function findTrackAndStrip(animData, trackId, stripId) {
  *     operator layer always paired enter with explicit exit, so the
  *     `return true` at nla.cc:2365-2367 was never hit on a different
  *     strip in practice — SS's explicit-IDs API surfaces the gap.)
+ *   - **`false` if the requested track is PROTECTED** (audit-fix
+ *     Slice 4.D.3 HIGH-A1 — UI-level gate in NLAEditor moved into
+ *     the substrate per Rule №1; see module-level "PROTECTED gate"
+ *     deviation note above).
  *   - `false` if the requested track + strip can't be found OR the
  *     strip has no `actionId` (Blender treats that as
  *     `BLI_assert_unreachable` + return false at nla.cc:2371-2379).
@@ -289,6 +309,17 @@ export function enterTweakMode(animData, trackId, stripId) {
   const { track: activeTrack, strip: activeStrip } = findTrackAndStrip(
     animData, trackId, stripId);
   if (!activeTrack || !activeStrip) return false;
+
+  // Audit-fix Slice 4.D.3 HIGH-A1: refuse PROTECTED tracks at the
+  // substrate. Per Rule №1 the UI gate in NLAEditor's StripPropertiesPanel
+  // is a hint, not a contract — the invariant must live with the
+  // function that owns the semantic. Blender enforces this at the
+  // editor layer; SS folds it into the BKE-equivalent so no caller
+  // path can bypass.
+  const trackFlag = typeof activeTrack.flag === 'number' ? activeTrack.flag : 0;
+  if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) {
+    return false;
+  }
 
   // Blender nla.cc:2371: activeStrip->act must be non-null
   if (typeof activeStrip.actionId !== 'string' || activeStrip.actionId.length === 0) {

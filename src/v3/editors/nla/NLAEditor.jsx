@@ -71,6 +71,16 @@
  *     mode → calls Slice 4.C `exitTweakMode`. Passes `project` so
  *     SYNC_LENGTH-flagged strips get their bounds re-derived.
  *
+ *     **isolate_action deferred** (audit-fix Slice 4.D.3 MED-F2).
+ *     Blender's `NLA_OT_tweakmode_exit` (`nla_edit.cc:293-317`)
+ *     accepts an `isolate_action` boolean (exposed in
+ *     `space_nla.py:281` as `True` for Alt-Tab). When set, exit
+ *     additionally clears `ADT_NLA_SOLO_TRACK`. SS's exitTweakMode
+ *     does NOT take this parameter; the Exit Tweak button is the
+ *     equivalent of Blender's default-arg `isolate_action=False`.
+ *     A future slice that wires keyboard shortcuts can add an
+ *     "Exit + Clear Solo" affordance + thread the param through.
+ *
  *   - **Icon legend (SS DEVIATION from Blender)**:
  *     - Mute = `EyeOff` (lucide). Blender uses `ICON_CHECKBOX_HLT/DEHLT`
  *       per `anim_channels_defines.cc:5822` — a checked-box semantic
@@ -136,9 +146,21 @@ const GROUP_HEADER_H = 28;
 const RESIZE_HANDLE_W = 6;
 const PROPERTIES_PANEL_H = 88;
 // Click-vs-drag threshold (px) — pointerup with movement below this is
-// treated as a click (select), not a drag commit. SS-original (Blender
-// doesn't use a click-vs-drag distinction here — its drag is a modal
-// operator triggered by G/S keys, separate from the click-to-select).
+// treated as a click (select), not a drag commit.
+//
+// **Full SS DEVIATION** (audit-fix Slice 4.D.3 MED-F3): Blender has
+// THREE separate operators where SS has one composite pointerdown:
+//   1. `NLA_OT_click_select` (right-click in default keymap, MOUSE_PRESS):
+//      strip selection. Walks click position to nearest strip + sets
+//      NLASTRIP_FLAG.SELECT / ACTIVE.
+//   2. `NLA_OT_translate` (G key, modal): start drag-translate. Modal
+//      operator with its own pointermove loop.
+//   3. `NLA_OT_transform` (S key, modal): resize.
+// SS unifies them on left-button pointerdown + threshold-gates click
+// vs drag. SS also doesn't write NLASTRIP_FLAG.SELECT to animData —
+// selection is editor-local state (per SS DEVIATION at selection-state
+// useState below). The 4px threshold + left-click select are
+// SS-original UX choices for mouse-first single-pointer flows.
 const CLICK_DRAG_THRESHOLD_PX = 4;
 
 /**
@@ -597,8 +619,22 @@ function StripPropertiesPanel({
   const { group, track, strip } = resolved;
 
   // Edit Action is disabled when (a) track is protected or (b) the
-  // animData is already in tweak mode (the helper rejects different-
-  // strip enter requests per Slice 4.C audit-fix HIGH-A2).
+  // animData is already in tweak mode.
+  //
+  // - The protection gate is SS-ORIGINAL (audit-fix Slice 4.D.3 MED-F1):
+  //   Blender's NLA_OT_tweakmode_enter poll function `nlaop_poll_tweakmode_off`
+  //   (`nla_edit.cc:195`) checks only "is the editor not already in
+  //   tweak mode" — it does NOT poll on track-protected. SS adds the
+  //   gate because the PROTECTED bit is the "edits blocked" contract
+  //   on a track, and entering tweak mode IS an edit-equivalent
+  //   action (it routes subsequent edits into the strip's action).
+  //   This deviation is enforced at TWO layers per Rule №1:
+  //     1. UI affordance disable (here)
+  //     2. Substrate refusal in enterTweakMode (audit-fix HIGH-A1)
+  //
+  // - The tweak-mode gate matches Slice 4.C audit-fix HIGH-A2: the
+  //   helper rejects different-strip enter requests; the UI disables
+  //   to avoid the no-op user click.
   const editActionDisabled = track.protected_ || group.tweakModeOn;
   const editActionTitle = track.protected_
     ? 'Track is PROTECTED — unlock it to enter tweak mode'
@@ -789,6 +825,18 @@ export function NLAEditor() {
     }
   }, [selectedStripRef, resolvedSelection]);
 
+  // Audit-fix Slice 4.D.3 HIGH-A2: reset selection on PROJECT IDENTITY
+  // change. The resolved-selection useEffect above clears when the
+  // strip can't be found, but a freshly-loaded project may have a
+  // strip with the SAME id as the previously-selected one (e.g., both
+  // derived from a shared UUID namespace, or the user re-loaded the
+  // same .stretch file). Without this gate the footer panel would
+  // resolve to a different strip object and silently show stale data.
+  const projectId = project?.id ?? null;
+  useEffect(() => {
+    setSelectedStripRef(null);
+  }, [projectId]);
+
   // ResizeObserver-driven timeline width via CALLBACK REF (audit-fix
   // MED-A6). Callback ref fires on every mount/unmount of the container
   // element — when the empty-state div is replaced with the main
@@ -941,7 +989,14 @@ export function NLAEditor() {
       const node = proj.nodes.find((n) => n && n.id === objectId);
       if (!node || !node.animData) return;
       const newAd = mutator(node.animData);
-      if (newAd && newAd !== node.animData) {
+      // Audit-fix Slice 4.D.3 MED-A2: strict !== match (NOT
+      // truthiness). All current + documented-future ops in
+      // nlaEditorOps.js return either same-ref animData (no-op) or
+      // a new object — never null/undefined/false. A truthiness check
+      // would silently swallow a future op that accidentally returned
+      // falsy (Rule №1: no silent fallbacks). Mirrors the 4.D.2
+      // drag-commit pattern in the pointerup handler.
+      if (newAd !== node.animData) {
         node.animData = newAd;
       }
     });
@@ -1043,6 +1098,19 @@ export function NLAEditor() {
         </div>
       </div>
 
+      {/* Audit-fix Slice 4.D.3 MED-A3: TrackRow / GroupHeader receive
+          INLINE arrow callbacks that bind (objectId, trackId) at the
+          map step. These create fresh function refs per render and so
+          would defeat any React.memo wrap on TrackRow. Acceptable
+          today because TrackRow is NOT memoized — the project's
+          per-frame N-track render is well under the React reconciler's
+          cost-per-element budget. If TrackRow ever gets React.memo
+          (likely when track count routinely exceeds ~50), refactor:
+          either pass (objectId, trackId) as props + have TrackRow
+          call useCallback'd parent handlers with them, or stabilize
+          the binding via a small per-track useMemo. The
+          useCallback'd handler layer (handleToggleTrackMuted etc) is
+          already structured to support that move. */}
       {visibleGroups.map((group) => (
         <div key={group.objectId}>
           <GroupHeader

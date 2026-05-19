@@ -517,23 +517,46 @@ export function wouldSetStripInfluenceChange(animData, trackId, stripId, influen
  * Set a strip's baseline influence value. Clamps to [0, 1] per
  * Blender `rna_nla.cc:1069-1072` (`PROP_FACTOR`, `range(0, 1)`).
  *
+ * **SS DEVIATION — always-editable baseline** (audit-fix Slice 4.D.3
+ * HIGH-F1). Blender's per-strip `influence` slider at `nla_buttons.cc:551`
+ * is gated at `:550` by `layout.enabled_set(use_animated_influence)` —
+ * meaning the Blender UI DISABLES the per-strip baseline slider unless
+ * `NLASTRIP_FLAG.USR_INFLUENCE` is set. SS does NOT gate this setter
+ * on USR_INFLUENCE; the data field is always writable and the UI gate
+ * Blender adds is treated as an affordance, not a data invariant.
+ *
+ * (The pre-audit-fix JSDoc cited `nla_buttons.cc:357` as evidence
+ * Blender has an "always-live baseline slider" — that line is actually
+ * AnimData-level `action_influence` on `&adt_ptr`, NOT the per-strip
+ * `&strip_ptr` `influence`. Two different RNA properties on two
+ * different ID-blocks. The miscitation conflated them; this is the
+ * corrected statement.)
+ *
+ * **Rule №1 contract** (audit-fix Slice 4.D.3 MED-A1): throws on
+ * non-finite inputs (NaN / Infinity) — matches the throw-on-invalid
+ * contract of `applySetStripBlendMode` / `applySetStripExtendMode`.
+ * Pre-audit-fix the setter silently returned same-ref animData on
+ * NaN/Infinity, hiding caller bugs. The wouldChange predicate still
+ * returns `false` on non-finite (a non-throw is appropriate for a
+ * "would this op be a no-op" query).
+ *
  * Note: this writes the BASELINE `influence` field — when
  * `NLASTRIP_FLAG.USR_INFLUENCE` is set, the evaluator reads from a
- * local F-Curve instead (per Slice 4.B `computeStripInfluence`); SS
- * doesn't gate this setter on USR_INFLUENCE because Blender's UI also
- * lets you set the baseline while USR_INFLUENCE is on (line 550 of
- * `nla_buttons.cc` gates a DIFFERENT influence slider in the "Animated
- * Influence" sub-panel; the base slider at line 357 of the AnimData
- * panel is always live).
+ * local F-Curve instead (per Slice 4.B `computeStripInfluence`); the
+ * stored baseline is the F-Curve's initial value.
  *
  * @param {object} animData
  * @param {string} trackId
  * @param {string} stripId
- * @param {number} influence
+ * @param {number} influence — must be a finite number; throws otherwise
  * @returns {object}
  */
 export function applySetStripInfluence(animData, trackId, stripId, influence) {
-  if (!Number.isFinite(influence)) return animData;
+  if (!Number.isFinite(influence)) {
+    throw new Error(
+      `applySetStripInfluence: influence must be a finite number, got ${influence}`
+    );
+  }
   const { trackIdx, stripIdx, strip } = locateStrip(animData, trackId, stripId);
   if (!strip || trackIdx === -1) return animData;
   const clamped = Math.max(0, Math.min(1, influence));
@@ -544,8 +567,11 @@ export function applySetStripInfluence(animData, trackId, stripId, influence) {
 /**
  * Toggle `NLASTRIP_FLAG.MUTED` on a strip. Returns NEW animData.
  *
- * Per Blender `rna_nla.cc` `mute` boolean property — it's a regular
- * flag toggle, not a cascade like solo.
+ * Per Blender `rna_nla.cc:1126-1129` `mute` boolean property bound to
+ * `NLASTRIP_FLAG_MUTED` via `RNA_def_property_boolean_sdna`. It's a
+ * regular flag toggle, not a cascade like solo. The panel checkbox
+ * surface is at `nla_buttons.cc:392` (`row.prop(&strip_ptr, "mute", ...)`
+ * inside `nla_panel_stripname`).
  *
  * @param {object} animData
  * @param {string} trackId

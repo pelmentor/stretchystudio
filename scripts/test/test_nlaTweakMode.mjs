@@ -595,6 +595,44 @@ function makeFixture() {
     '16c: consumer chain combines underlay + tweak action layer → paramX=100');
 }
 
+// ── §17 enterTweakMode refuses PROTECTED tracks (audit-fix 4.D.3 HIGH-A1)
+{
+  // Build a standalone fixture (don't import standardFixture to keep
+  // this self-contained against future fixture refactors).
+  const ad = {
+    actionId: 'baseAct', slotHandle: 0, flag: 0,
+    tmpActionId: null, tmpSlotHandle: 0,
+    tweakTrackId: null, tweakStripId: null,
+    nlaTracks: [
+      makeNlaTrack('tProt', 'Protected', {
+        index: 0,
+        flag: NLATRACK_FLAG.PROTECTED,
+        strips: [makeNlaStrip('sP', 'walkAct', { start: 0, end: 500, actstart: 0, actend: 500 })],
+      }),
+      makeNlaTrack('tOpen', 'Open', {
+        index: 1,
+        strips: [makeNlaStrip('sO', 'walkAct', { start: 0, end: 500, actstart: 0, actend: 500 })],
+      }),
+    ],
+  };
+  // Enter on protected track → false
+  const r1 = enterTweakMode(ad, 'tProt', 'sP');
+  eq(r1, false, '17a: PROTECTED track refused');
+  // animData state unchanged
+  assert(!isTweakModeOn(ad), '17b: not in tweak mode after refusal');
+  eq(ad.tweakTrackId, null, '17c: tweakTrackId still null');
+  eq(ad.tweakStripId, null, '17d: tweakStripId still null');
+  eq(ad.actionId, 'baseAct', '17e: actionId still baseAct (no swap)');
+  // Strip flags untouched (no TWEAKUSER tagging)
+  eq(ad.nlaTracks[0].strips[0].flag, 0, '17f: protected strip flag untouched');
+  eq(ad.nlaTracks[1].strips[0].flag, 0, '17g: sibling strip flag untouched');
+  // Non-protected track still works
+  const r2 = enterTweakMode(ad, 'tOpen', 'sO');
+  eq(r2, true, '17h: non-protected track succeeds');
+  assert(isTweakModeOn(ad), '17i: now in tweak mode');
+  eq(ad.tweakTrackId, 'tOpen', '17j: tweakTrackId set');
+}
+
 console.log(`\nnlaTweakMode: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');
