@@ -1,33 +1,28 @@
 // @ts-check
 
 /**
- * Animation Phase 5 Slice 5.EE — cross-editor keyform-selection
- * publish/subscribe store.
+ * Animation Phase 5 Slice 5.EE — cross-editor keyform-selection store.
  *
- * **Mirror pattern, not a parallel-state store.** The canonical owner
- * of keyform-handle selection state is FCurveEditor's local
- * `useState(selectedHandles)`. This store is a *publish surface*:
- * FCurveEditor pushes the current Map after every selection change;
- * cross-editor consumers (DopesheetEditor halo gate, future Outliner
- * row indicators, etc.) subscribe to read.
+ * **Canonical owner of keyform-handle selection state across editors.**
+ * Both FCurveEditor (sole writer pre-Phase-6) and DopesheetEditor
+ * (writer-since-Phase-6 Slice 6.A) read + write the selection through
+ * this store. Any future editor that needs to read or modify keyform
+ * selection joins on the same store.
  *
- * Why mirror rather than fully lift the state to the store?
+ * # History note
  *
- *   - FCurveEditor's `selectedHandles` has 37+ touch points (drag ops,
- *     modal G/R/S, click/Shift+click/Ctrl+click handlers, A/Alt+A/
- *     Ctrl+I bulk ops, etc.). Lifting all of them to a Zustand setter
- *     is high-risk substrate churn for zero observable benefit at the
- *     FCurveEditor itself.
- *
- *   - The store has ONE writer (FCurveEditor) and N readers
- *     (DopesheetEditor today; possibly more later). One-way data flow
- *     means no two-writer sync hazard.
- *
- *   - Per Rule №2 (no transitional shims): this is NOT a transitional
- *     shim. The publish/subscribe pattern is permanent; "lift state
- *     fully" was never the intended end-state. FCurveEditor remains
- *     the canonical owner because keyform selection is *primarily*
- *     edited there; other editors only ever read it (currently).
+ * Pre-Phase-6 this was a one-way mirror — FCurveEditor's local
+ * `useState(selectedHandles)` was the canonical state, and the store
+ * just `publishHandles`-mirrored it for cross-editor READ. Phase 6
+ * (Dopesheet write-mode) made the Dopesheet a SECOND writer of keyform
+ * selection (tick clicks). Two writers + a one-way mirror is a sync
+ * hazard (last writer to ship clobbers the other's stale local state)
+ * — Rule №1 prohibits silent state desync — so Slice 6.A lifted the
+ * canonical state INTO this store. FCurveEditor now reads + writes
+ * through `useKeyformSelectionState` (the `[handles, setHandles]`
+ * tuple hook) which has the same shape as its prior `useState`. Zero
+ * behavioral change for the FCurveEditor; new write-path for the
+ * Dopesheet.
  *
  * # Why this slice exists
  *
@@ -101,27 +96,69 @@ export const useKeyformSelectionStore = create((set) => ({
   handles: EMPTY_MAP,
 
   /**
-   * FCurveEditor publish entry-point. Replaces the entire selection
-   * Map. Identity-stable: skips the `set()` call if the new Map is
-   * the same reference as the current one (avoids unnecessary
-   * subscriber re-renders when the publishing component re-renders
-   * without selection state changing).
+   * Canonical setter for the keyform-selection Map. Replaces the
+   * entire selection Map. Identity-stable: skips the `set()` call if
+   * the new Map is the same reference as the current one (avoids
+   * unnecessary subscriber re-renders when a writer re-runs without
+   * actual selection state changing).
+   *
+   * Callers should prefer the `useKeyformSelectionState()` hook for
+   * `[handles, setHandles]` ergonomics matching React's useState — see
+   * helper export below.
    *
    * @param {SelectedHandlesMap} next
    */
-  publishHandles(next) {
+  setHandles(next) {
     set((state) => (state.handles === next ? state : { handles: next }));
   },
 
   /**
-   * Test-only reset. Clears the published Map back to the empty
-   * sentinel — useful for unit tests that need a clean slate without
-   * mounting a real FCurveEditor.
+   * Test-only reset. Clears the Map back to the empty sentinel —
+   * useful for unit tests that need a clean slate without mounting
+   * a real editor.
    */
   __resetForTests() {
     set({ handles: EMPTY_MAP });
   },
 }));
+
+/**
+ * useState-shaped hook: `[handles, setHandles]` reading + writing
+ * through `useKeyformSelectionStore`. Drop-in replacement for the
+ * prior `useState(new Map())` pattern in FCurveEditor, with the
+ * added benefit that the state is now shared across editors.
+ *
+ * `setHandles` accepts either a Map directly OR an updater function
+ * `(prev) => next` (matching `useState`'s functional setter shape).
+ * The updater always reads the LATEST published state via
+ * `getState()` to avoid stale-closure hazards in event handlers
+ * that batch multiple set calls.
+ *
+ * Identity-stable: the returned `setHandles` callback's identity is
+ * stable across re-renders so callers can include it in
+ * `useCallback` / `useEffect` deps without triggering re-runs.
+ *
+ * @returns {[SelectedHandlesMap, (next: SelectedHandlesMap | ((prev: SelectedHandlesMap) => SelectedHandlesMap)) => void]}
+ */
+export function useKeyformSelectionState() {
+  const handles = useKeyformSelectionStore((s) => s.handles);
+  // Zustand actions defined inside `create()` are identity-stable at
+  // construction time, so this getState().setHandles reference is
+  // closure-stable + safe in deps.
+  const setHandles = (
+    /** @type {SelectedHandlesMap | ((prev: SelectedHandlesMap) => SelectedHandlesMap)} */
+    next,
+  ) => {
+    const setter = useKeyformSelectionStore.getState().setHandles;
+    if (typeof next === 'function') {
+      const prev = useKeyformSelectionStore.getState().handles;
+      setter(next(prev));
+    } else {
+      setter(next);
+    }
+  };
+  return [handles, setHandles];
+}
 
 /**
  * Read accessor — returns true iff the given fcurve's keyform-index

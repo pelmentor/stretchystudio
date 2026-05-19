@@ -55,14 +55,21 @@
  * @module v3/editors/dopesheet/DopesheetEditor
  */
 
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useCallback } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import {
   useKeyformSelectionStore,
+  useKeyformSelectionState,
   isKeyformCenterSelected,
 } from '../../../store/keyformSelectionStore.js';
+import {
+  applyTickSelectReplace,
+  applyTickSelectExtend,
+  applyTickSelectDeselect,
+  isTickSelected,
+} from '../../../anim/dopesheetSelectOps.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { pickActiveFCurve } from '../../../anim/fcurvePicker.js';
 import { getActiveFCurve } from '../../../anim/fcurveActive.js';
@@ -118,12 +125,40 @@ export function DopesheetEditor() {
     [action?.fcurves, selection],
   );
 
-  // Slice 5.EE — subscribe to keyform-selection store (published by
-  // FCurveEditor) so the halo can gate on Blender's per-bezt SELECT
-  // bit at `graph_draw.cc:254`. Closes Slice 5.W-2 deviation.
-  // Read at parent (single subscription) and pass the per-row
-  // boolean down — avoids each Row creating its own subscription.
-  const keyformSelectionHandles = useKeyformSelectionStore((s) => s.handles);
+  // Slice 5.EE — subscribe to keyform-selection store. Slice 6.A
+  // promoted DopesheetEditor from READER to WRITER (tick clicks now
+  // mutate the shared store via dopesheetSelectOps); the
+  // [handles, setHandles] tuple gives useState-shaped ergonomics on
+  // top of the lifted shared state. The halo gate (Slice 5.EE) still
+  // reads `handles` via the same subscription — no subscriber churn.
+  const [keyformSelectionHandles, setKeyformSelectionHandles] = useKeyformSelectionState();
+
+  // Slice 6.A — tick click handler. Plain LMB replaces; Shift+LMB
+  // extends (toggle); Ctrl+LMB deselects; double-click seeks the
+  // playhead to the tick's time (preserves the prior seek workflow).
+  // Click-on-row-body (empty timeline area) still seeks per the
+  // existing onClick at the row-container.
+  const handleTickClick = useCallback(
+    /**
+     * @param {MouseEvent | React.MouseEvent} e
+     * @param {string} fcurveId
+     * @param {number} kfIdx
+     */
+    (e, fcurveId, kfIdx) => {
+      e.stopPropagation();
+      if (e.shiftKey) {
+        setKeyformSelectionHandles((prev) =>
+          applyTickSelectExtend(prev, fcurveId, kfIdx));
+      } else if (e.ctrlKey || e.metaKey) {
+        setKeyformSelectionHandles((prev) =>
+          applyTickSelectDeselect(prev, fcurveId, kfIdx));
+      } else {
+        setKeyformSelectionHandles((prev) =>
+          applyTickSelectReplace(prev, fcurveId, kfIdx));
+      }
+    },
+    [setKeyformSelectionHandles],
+  );
 
   const trackAreaRef = useRef(/** @type {HTMLDivElement|null} */ (null));
 
@@ -166,6 +201,8 @@ export function DopesheetEditor() {
                     row.fcurveId,
                     row.activeKfIdx,
                   )}
+                  selectionHandles={keyformSelectionHandles}
+                  onTickClick={handleTickClick}
                   onSeek={setCurrentTime}
                 />
               ))
@@ -219,7 +256,7 @@ function Ruler({ duration, currentTime, onSeek }) {
   );
 }
 
-function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, onSeek }) {
+function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, onTickClick, onSeek }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -293,6 +330,11 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
           const left = (kf.time / duration) * 100;
           const isHot = Math.abs(kf.time - currentTime) < 1;
           const isActiveHalo = showActiveHalo && i === activeKfIdx;
+          // Slice 6.A — per-tick selection state. Empty-fcurveId rows
+          // (group headers / row-without-fcurve) never participate in
+          // selection; the predicate short-circuits on empty fcurveId.
+          const isSelected = row.fcurveId !== ''
+            && isTickSelected(selectionHandles, row.fcurveId, i);
           return (
             <span
               key={i}
@@ -300,11 +342,32 @@ function Row({ row, duration, currentTime, isActiveChannel, isActiveKeyformSelec
                 'absolute top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 cursor-pointer '
                 + (isActiveHalo
                   ? 'ring-2 ring-yellow-300/90 bg-amber-300'
-                  : (isHot ? 'bg-primary ring-1 ring-primary/40' : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400'))
+                  : isSelected
+                    ? 'ring-2 ring-orange-400 bg-amber-400'
+                    : (isHot ? 'bg-primary ring-1 ring-primary/40' : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400'))
               }
               style={{ left: `calc(${left}% - 4px)` }}
-              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActiveHalo ? ' · active' : ''}`}
-              onClick={(e) => { e.stopPropagation(); onSeek(kf.time); }}
+              title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActiveHalo ? ' · active' : isSelected ? ' · selected' : ''}`}
+              onClick={(e) => {
+                // Slice 6.A — primary click is now SELECT (plain /
+                // shift+extend / ctrl+deselect); double-click falls
+                // back to seek (preserves the prior workflow). Rows
+                // without an fcurveId (synthetic / header rows) keep
+                // the legacy seek-on-click behavior since they have
+                // no selection identity to manipulate.
+                if (row.fcurveId === '') {
+                  e.stopPropagation();
+                  onSeek(kf.time);
+                  return;
+                }
+                if (e.detail === 2) {
+                  // Double-click → seek to tick time
+                  e.stopPropagation();
+                  onSeek(kf.time);
+                  return;
+                }
+                onTickClick(e, row.fcurveId, i);
+              }}
             />
           );
         })}

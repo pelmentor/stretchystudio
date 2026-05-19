@@ -303,7 +303,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { usePreferencesStore } from '../../../store/preferencesStore.js';
-import { useKeyformSelectionStore } from '../../../store/keyformSelectionStore.js';
+import {
+  useKeyformSelectionStore,
+  useKeyformSelectionState,
+} from '../../../store/keyformSelectionStore.js';
 import {
   resolveSelectAllAction,
   resolveChannelDeleteAction,
@@ -641,8 +644,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   // only `onKeyDown` reads it, on the same render cycle as the keypress.
   const regionHoverRef = useRef('timeline');
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  // Slice 6.A — selectedHandles is now LIFTED into the shared
+  // `keyformSelectionStore`. The hook returns a `[handles, setHandles]`
+  // tuple shaped identically to React's `useState`, so the 22 in-file
+  // `setSelectedHandles(...)` call sites are unchanged. The store is
+  // now the canonical owner; DopesheetEditor (Phase 6 writer) shares
+  // it. The pre-Phase-6 publish-effect-on-unmount has been removed —
+  // the store survives editor unmount in line with React-state
+  // semantics: a fresh FCurveEditor mount will see whatever selection
+  // the surviving editors (Dopesheet) have written.
   /** @type {[Map<string, Map<number, {center:boolean,left:boolean,right:boolean}>>, Function]} */
-  const [selectedHandles, setSelectedHandles] = useState(new Map());
+  const [selectedHandles, setSelectedHandles] = useKeyformSelectionState();
   // Slice 5.FF — B-key arms the channel-list box-select modal. Mirrors
   // Blender's `WM_gesture_box_invoke` with `wait_for_input=true` at
   // `reference/blender/source/blender/windowmanager/intern/wm_gesture_ops.cc:171-179`:
@@ -657,31 +669,15 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
   const [bGestureArmed, setBGestureArmed] = useState(false);
   const bGestureArmedRef = useRef(false);
   useEffect(() => { bGestureArmedRef.current = bGestureArmed; }, [bGestureArmed]);
-  // Slice 5.EE — publish keyform selection to cross-editor store so
-  // DopesheetEditor (and future readers) can gate UI on it. FCurveEditor
-  // remains the canonical owner; this is a one-way mirror, not a
-  // transitional shim. Closes Slice 5.W-2 deviation (active-keyform
-  // halo selection precondition). See
-  // [src/store/keyformSelectionStore.js](../../../store/keyformSelectionStore.js).
-  //
-  // `publishKeyformSelection` is identity-stable across renders
-  // (Zustand setter defined inside `create()` is closure-stable at
-  // store construction time), so its presence in the effect deps is
-  // a no-op for re-run frequency.
-  const publishKeyformSelection = useKeyformSelectionStore((s) => s.publishHandles);
-  useEffect(() => {
-    publishKeyformSelection(selectedHandles);
-    // Audit-fix HIGH-1 (Slice 5.EE arch audit 2026-05-18): clear the
-    // mirror on FCurveEditor unmount. Without this, DopesheetEditor
-    // (or any other future subscriber) keeps reading the last-published
-    // Map after the FCurveEditor tab closes — leaving stale halos lit
-    // when split-view drops the canonical owner. Publishing a fresh
-    // empty Map triggers the store's identity-different `set()` and
-    // notifies subscribers in lockstep with the unmount.
-    return () => {
-      publishKeyformSelection(new Map());
-    };
-  }, [selectedHandles, publishKeyformSelection]);
+  // Slice 6.A — the prior Slice 5.EE publish-effect has been removed
+  // along with the local useState in favor of the lifted shared store
+  // (see selectedHandles declaration above). Every setSelectedHandles
+  // call now writes directly to the store; no separate publish hop is
+  // needed. The unmount-clears-mirror behavior that Slice 5.EE
+  // HIGH-1 added is intentionally NOT preserved — the store now
+  // survives editor unmount the way React state would survive any
+  // single editor unmounting in a split view. A surviving Dopesheet
+  // keeps its selection; a fresh FCurveEditor mount inherits it.
   // Slice 5.I — visibility now persists on `fcurve.hide` (negative of
   // Blender's FCURVE_VISIBLE). The prior local `useState(new Set())`
   // was lost on editor unmount / save-load. See
