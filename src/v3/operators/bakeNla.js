@@ -14,7 +14,9 @@
  * Loose port of Blender's `NLA_OT_bake` operator (`scripts/startup/
  * bl_operators/anim.py:191-336`), which delegates the heavy lifting to
  * `anim_utils.bake_action_objects` → `bake_action_iter` (`scripts/
- * modules/bpy_extras/anim_utils.py:155-249`). SS's substrate is much
+ * modules/bpy_extras/anim_utils.py:155-260` for the bake_action /
+ * bake_action_objects / bake_action_objects_iter trio, and
+ * `:252-678` for `bake_action_iter`). SS's substrate is much
  * smaller than Blender's because:
  *   - SS has no pose bones / armatures / constraints; every animatable
  *     property is addressed by a single rnaPath, so the inner loop is
@@ -27,8 +29,9 @@
  * # Composition order at each sample (mirrors Blender)
  *
  * Blender composes the bound Action as an implicit top-of-stack strip
- * (`anim_sys.cc:3322-3365` — `animsys_construct_orig_action_strip`).
- * The synthetic strip uses:
+ * (`anim_sys.cc:3313-3365` — `animsys_create_action_track_strip`; the
+ * function signature opens at :3313, body fills :3319-3364). The
+ * synthetic strip uses:
  *   - `act_blendmode` / `act_influence` / `act_extendmode` from
  *     AnimData (renamed `actionBlendmode` / `actionInfluence` /
  *     `actionExtendmode` in SS — see `v36_action_datablock.js#defaultAnimData`).
@@ -82,10 +85,22 @@
  *
  * # cleanCurves (Blender's `clean_curves` option)
  *
- * Post-bake pass that removes redundant adjacent-equal keyframes (within
- * an epsilon). Mirrors Blender's `clean_action_keys` step in
- * `anim_utils.py` (the operator end of the `do_clean` path). SS uses
- * the same fixed epsilon `1e-6` that Blender's clean uses.
+ * Post-bake pass that removes redundant adjacent-equal keyframes
+ * (audit-fix Slice 4.E HIGH-F1: cite-corrected). Mirrors Blender's
+ * inline clean loop in `bake_action_iter` at
+ * `bpy_extras/anim_utils.py:657-676` — that loop walks each fcurve's
+ * keyframe_points (skipping endpoints), and drops the midpoint when
+ * `abs(val - val_prev) + abs(val - val_next) < 0.0001` (a SUM-of-abs-
+ * deltas threshold at `1e-4`, NOT the max-of-abs / `1e-6` SS originally
+ * shipped — caught by Blender-fidelity audit). SS now matches both
+ * formula + epsilon byte-faithfully.
+ *
+ * **SS DEVIATION 22** (audit-fix Slice 4.E HIGH-F1): Blender's clean
+ * loop also EXEMPTS keys whose original value (before bake) was in
+ * `fcu_orig_data` — i.e. a hand-authored key with that exact value is
+ * never collapsed even if surrounded by flat samples. SS's bake always
+ * produces FRESH dense samples (no original keys to exempt), so the
+ * exemption path is unreachable + intentionally omitted.
  *
  * # Output FCurve shape
  *
@@ -115,6 +130,33 @@
  *     always linear-interp BezTriples. Blender bake is the same;
  *     called out explicitly to forestall a future "why aren't baked
  *     curves bezier?" audit.
+ *   - **DEV 21 — Always-include-endpoint sample** (audit-fix Slice 4.E
+ *     HIGH-F3): Blender's `bake_action_objects` iterates
+ *     `range(self.frame_start, self.frame_end + 1, self.step)` — a
+ *     standard Python range that stops at the last `start + k*step <=
+ *     end`. For step values that don't divide cleanly into the range,
+ *     this SKIPS the endpoint (e.g. start=0, end=10, step=3 → samples
+ *     `[0, 3, 6, 9]`, no sample at 10). SS clamps the post-overshoot
+ *     sample to `frameEndMs` so the endpoint is ALWAYS sampled. The
+ *     extra clamped sample is off-grid but harmless — linear-interp on
+ *     the baked fcurve produces correct values between 9 and 10. The
+ *     SS choice is user-friendlier ("0..10 means I get a key at 10");
+ *     the deviation is honest + intentional.
+ *   - **DEV 22 — clean loop omits fcu_orig_data exemption**: see
+ *     `cleanCurves` section above.
+ *
+ * # Audit notes (forward-looking, non-deviations)
+ *
+ *   - Blender calls `BKE_nla_clip_length_ensure_nonzero` on the
+ *     synthetic strip (`anim_sys.cc:3340`) so degenerate
+ *     `actstart === actend` actions still yield a 1-frame strip
+ *     window. SS doesn't construct a synthetic strip object, so
+ *     there's nothing to ensure-nonzero in this layer. If
+ *     `readActionFrameRangeMs` ever returns `actstartMs === actendMs`,
+ *     the actionExtendmode 'hold' branch still clamps to the
+ *     boundary (sampleT becomes actstartMs == actendMs); evaluateFCurve
+ *     samples the keyform at that exact time. Behavior is consistent;
+ *     just noted for future audits.
  *
  * # Cross-references
  *
@@ -127,11 +169,16 @@
  *     the project-mutator side wires into
  *   - `reference/blender/scripts/startup/bl_operators/anim.py:191-336`
  *     (NLA_OT_bake operator)
- *   - `reference/blender/scripts/modules/bpy_extras/anim_utils.py:155-249`
- *     (bake_action / bake_action_objects / bake_action_iter)
- *   - `reference/blender/source/blender/blenkernel/intern/anim_sys.cc:3322-3365`
- *     (animsys_construct_orig_action_strip — bound action as implicit
- *     top-of-stack strip)
+ *   - `reference/blender/scripts/modules/bpy_extras/anim_utils.py:155-260`
+ *     (bake_action @ :155 / bake_action_objects @ :186 /
+ *     bake_action_objects_iter @ :215) + `:252-678` (bake_action_iter)
+ *   - `reference/blender/scripts/modules/bpy_extras/anim_utils.py:657-676`
+ *     (the inline `do_clean` loop — `clean_curves` semantics SS
+ *     mirrors with audit-corrected formula + epsilon)
+ *   - `reference/blender/source/blender/blenkernel/intern/anim_sys.cc:3313-3365`
+ *     (`animsys_create_action_track_strip` — bound action as implicit
+ *     top-of-stack strip; audit-fix HIGH-F2 corrected function name
+ *     from a fab'd `animsys_construct_orig_action_strip`)
  *
  * @module v3/operators/bakeNla
  */
@@ -146,14 +193,17 @@ import {
   NLA_BLEND_MODES,
 } from '../../anim/nla.js';
 import { uid } from '../../lib/ids.js';
+import { assignAction } from '../../anim/actionRegistry.js';
 
 /**
  * Numeric epsilon for `cleanCurves` adjacent-equality. Matches Blender's
- * `clean_action_keys` step which uses `1e-6f` (per
- * `reference/blender/source/blender/editors/animation/keyframes_general.cc`
- * `clean_fcurve_segments`).
+ * inline `do_clean` loop at `bpy_extras/anim_utils.py:673` which uses
+ * the literal `0.0001` as its sum-of-abs-deltas threshold. Audit-fix
+ * Slice 4.E HIGH-F1 corrected this from a fab'd `1e-6` cite to
+ * `keyframes_general.cc#clean_fcurve_segments` (a function that does
+ * not exist) — the bake's clean is in Python, not the C editor helper.
  */
-const CLEAN_EPS = 1e-6;
+const CLEAN_EPS = 1e-4;
 
 /**
  * @typedef {Object} BakeNlaOptions
@@ -251,14 +301,18 @@ export function bakeNla(animData, project, options) {
 
   // Bound-action blendmode validation: per Rule №1 + the same boundary-
   // check pattern as `evaluateNla` MED-A4 (`nlaEval.js:550-557`), an
-  // unknown blendmode here is a project-shape bug that must throw, not
-  // silently degrade. Mirrors `nlaEval.js`'s strict check at the entry
-  // point.
+  // unknown blendmode is a project-shape bug that must throw, not
+  // silently degrade. Audit-fix Slice 4.E HIGH-A1: check is UNCONDITIONAL
+  // (was guarded by `boundActionEvaluatable` pre-audit-fix). Project
+  // shape correctness is independent of whether the bound action
+  // happens to be on the hot path THIS sample — a malformed value
+  // surfacing later (e.g. when solo flag clears) would be just as much
+  // a Rule №1 violation.
   const actionBlendmode =
     typeof animData.actionBlendmode === 'string'
       ? animData.actionBlendmode
       : 'replace';
-  if (boundActionEvaluatable
+  if (actionId !== null
       && !NLA_BLEND_MODES.includes(/** @type any */ (actionBlendmode))) {
     throw new Error(
       `bakeNla: animData.actionBlendmode is `
@@ -267,6 +321,18 @@ export function bakeNla(animData, project, options) {
   }
   const actionInfluence =
     typeof animData.actionInfluence === 'number' ? animData.actionInfluence : 1;
+  const actionExtendmode =
+    typeof animData.actionExtendmode === 'string'
+      ? animData.actionExtendmode
+      : 'hold';
+
+  // Bound-action frame range (for actionExtendmode gating per audit-fix
+  // Slice 4.E HIGH-F4 — Blender's synthetic strip carries
+  // `actstart`/`actend` from the action's frame range at
+  // `anim_sys.cc:3335-3338` and honors `act_extendmode` at :3345).
+  const { actstartMs, actendMs } = boundActionEvaluatable
+    ? readActionFrameRangeMs(project, actionId)
+    : { actstartMs: 0, actendMs: 0 };
 
   // rnaPath universe: UNION of bound-action paths + every NLA strip's
   // action's paths. Walked once; the per-sample loop reads from this
@@ -298,21 +364,44 @@ export function bakeNla(animData, project, options) {
     const sampleT = t > frameEndMs ? frameEndMs : t;
     sampleCount++;
 
-    // Step 1: NLA stack contribution.
-    const acc = evaluateNla(animData, sampleT, project);
+    // Step 1: NLA stack contribution. Audit-fix Slice 4.E MED-A2:
+    // copy evaluateNla's Map so we honour `bakeNla`'s documented
+    // purity contract — even if evaluateNla returns a fresh Map today,
+    // a future caching change there would silently corrupt cross-
+    // sample state through our `.set` writes below.
+    const acc = new Map(evaluateNla(animData, sampleT, project));
 
-    // Step 2: bound-action layer on top (when evaluatable).
+    // Step 2: bound-action layer on top (when evaluatable AND active
+    // per actionExtendmode). Audit-fix Slice 4.E HIGH-F4: honour
+    // `actionExtendmode` (anim_sys.cc:3345 carries it onto the
+    // synthetic strip). 'nothing' skips outside [actstart, actend];
+    // 'hold' clamps sampleT to the boundary; 'hold_forward' skips
+    // before actstart, clamps to actend after.
     if (boundActionEvaluatable && boundActionFcurves.length > 0) {
-      for (const fc of boundActionFcurves) {
-        if (!fc || typeof fc.rnaPath !== 'string') continue;
-        const stripValue = evaluateFCurve(fc, sampleT);
-        const lowerValue = acc.has(fc.rnaPath)
-          ? /** @type {number} */ (acc.get(fc.rnaPath))
-          : 0;
-        acc.set(
-          fc.rnaPath,
-          applyBlendMode(lowerValue, stripValue, actionBlendmode, actionInfluence)
-        );
+      let evalT = sampleT;
+      let activeForBoundAction = true;
+      if (actionExtendmode === 'nothing') {
+        if (sampleT < actstartMs || sampleT > actendMs) activeForBoundAction = false;
+      } else if (actionExtendmode === 'hold_forward') {
+        if (sampleT < actstartMs) activeForBoundAction = false;
+        else if (sampleT > actendMs) evalT = actendMs;
+      } else {
+        // 'hold' (Blender default): always active, clamp outside range
+        if (sampleT < actstartMs) evalT = actstartMs;
+        else if (sampleT > actendMs) evalT = actendMs;
+      }
+      if (activeForBoundAction) {
+        for (const fc of boundActionFcurves) {
+          if (!fc || typeof fc.rnaPath !== 'string') continue;
+          const stripValue = evaluateFCurve(fc, evalT);
+          const lowerValue = acc.has(fc.rnaPath)
+            ? /** @type {number} */ (acc.get(fc.rnaPath))
+            : 0;
+          acc.set(
+            fc.rnaPath,
+            applyBlendMode(lowerValue, stripValue, actionBlendmode, actionInfluence)
+          );
+        }
       }
     }
 
@@ -374,6 +463,56 @@ function getActionFCurves(project, actionId) {
 }
 const EMPTY_FCURVES = /** @type {Array<object>} */
   (/** @type {unknown} */ (Object.freeze([])));
+
+/**
+ * Read an action's frame range as `{actstartMs, actendMs}` from the
+ * project. Mirrors Blender's `Action::get_frame_range_of_keys(true)` at
+ * `anim_sys.cc:3335-3338` (the call site that fills the synthetic
+ * action-strip's `actstart`/`actend`). Used by the bound-action
+ * actionExtendmode gating in the sample loop (audit-fix Slice 4.E
+ * HIGH-F4).
+ *
+ * Resolution order:
+ *   - `action.frameStart` + `action.frameEnd` if both numbers
+ *   - `0` + `action.duration` if duration is a positive number
+ *   - Scan all fcurves' keyforms for min/max time
+ *   - `(0, 0)` if all of the above miss
+ *
+ * @param {object} project
+ * @param {string|null|undefined} actionId
+ * @returns {{actstartMs: number, actendMs: number}}
+ */
+function readActionFrameRangeMs(project, actionId) {
+  if (!actionId || !project || !Array.isArray(project.actions)) {
+    return { actstartMs: 0, actendMs: 0 };
+  }
+  for (const a of project.actions) {
+    if (!a || a.id !== actionId) continue;
+    if (typeof a.frameStart === 'number' && typeof a.frameEnd === 'number') {
+      return { actstartMs: a.frameStart, actendMs: a.frameEnd };
+    }
+    if (typeof a.duration === 'number' && a.duration > 0) {
+      return { actstartMs: 0, actendMs: a.duration };
+    }
+    // Scan fcurves
+    let min = Infinity;
+    let max = -Infinity;
+    const fcs = Array.isArray(a.fcurves) ? a.fcurves : [];
+    for (const fc of fcs) {
+      const kfs = Array.isArray(fc?.keyforms) ? fc.keyforms : [];
+      for (const kf of kfs) {
+        if (typeof kf?.time !== 'number') continue;
+        if (kf.time < min) min = kf.time;
+        if (kf.time > max) max = kf.time;
+      }
+    }
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      return { actstartMs: min, actendMs: max };
+    }
+    return { actstartMs: 0, actendMs: 0 };
+  }
+  return { actstartMs: 0, actendMs: 0 };
+}
 
 /**
  * Walk every strip in every track + the bound action; collect the union
@@ -448,10 +587,15 @@ function sampleToKeyform(time, value) {
 }
 
 /**
- * Remove redundant adjacent-equal samples. Mirrors Blender's
- * `clean_action_keys` (`keyframes_general.cc`): a sample is redundant
- * when its value is within `CLEAN_EPS` of BOTH its previous + next
- * sample's value (a flat plateau midpoint — endpoints are always kept).
+ * Remove redundant adjacent-equal samples. Mirrors Blender's inline
+ * clean loop at `bpy_extras/anim_utils.py:657-676` byte-faithfully:
+ * a midpoint is redundant when `abs(val - val_prev) + abs(val - val_next)
+ * < 0.0001` (SUM-of-abs-deltas, NOT max-of-abs). Endpoints are always
+ * kept (Blender's loop walks `1..len-2` of the keyframe_points array).
+ *
+ * Audit-fix Slice 4.E HIGH-F1: formula + epsilon corrected from
+ * SS's pre-audit max-of-abs + `1e-6` (which was ~200× stricter than
+ * Blender + a different shape entirely).
  *
  * @param {Array<{time: number, value: number}>} samples
  * @returns {Array<{time: number, value: number}>}
@@ -464,8 +608,10 @@ function cleanRedundantSamples(samples) {
     const prev = samples[i - 1];
     const cur = samples[i];
     const next = samples[i + 1];
-    if (Math.abs(cur.value - prev.value) < CLEAN_EPS
-        && Math.abs(cur.value - next.value) < CLEAN_EPS) {
+    // Blender anim_utils.py:673 byte-faithful sum-of-abs predicate:
+    //   abs(val - val_prev) + abs(val - val_next) < 0.0001
+    if (Math.abs(cur.value - prev.value) + Math.abs(cur.value - next.value)
+        < CLEAN_EPS) {
       continue;
     }
     out.push(cur);
@@ -533,8 +679,18 @@ export function applyBakeNla(project, objectId, options) {
   let replacedActionId = null;
 
   if (useCurrent && currentActionId !== null) {
-    const actions = Array.isArray(project.actions) ? project.actions : [];
-    const found = actions.find((a) => a && a.id === currentActionId);
+    // Audit-fix Slice 4.E MED-A4: throw (Rule №1) rather than return
+    // null when `project.actions` is not an array. That state indicates
+    // a project-shape bug (the v36 migration always installs the
+    // array), not a legitimate "nothing to overwrite" condition — the
+    // `currentActionId === null` guard above already covers the
+    // "nothing to overwrite" case.
+    if (!Array.isArray(project.actions)) {
+      throw new Error(
+        'applyBakeNla: project.actions must be an array (project-shape bug)'
+      );
+    }
+    const found = project.actions.find((a) => a && a.id === currentActionId);
     if (!found) return null;
     found.fcurves = fcurves;
     found.meta = {
@@ -542,11 +698,23 @@ export function applyBakeNla(project, objectId, options) {
       modifiedAt: null,
       source: 'baked',
     };
+    // Audit-fix Slice 4.E MED-F2: write frameStart/frameEnd/duration so
+    // downstream readers (readActionStartMs/EndMs/DurationMs in
+    // nlaEditorOps.js) don't fall back to scanning fcurves for the
+    // range. The bake's range IS the action's authoritative range.
+    found.frameStart = options.frameStartMs;
+    found.frameEnd = options.frameEndMs;
+    found.duration = options.frameEndMs - options.frameStartMs;
     actionId = currentActionId;
     action = found;
     replacedActionId = currentActionId;
   } else {
-    // Create new action + assign.
+    // Create new action + assign via the registry (audit-fix Slice 4.E
+    // HIGH-F5: route through `assignAction` rather than direct-mutating
+    // `animData.actionId` / `slotHandle`, so any future Blender-fidelity
+    // extension of `assignAction` — `last_slot_identifier`, id-user
+    // refcount per actionRegistry.js D-4/D-11 deviations — is inherited
+    // cleanly instead of having to fix two call sites).
     const newId = uid();
     const baseName =
       typeof options.bakedName === 'string' && options.bakedName.length > 0
@@ -558,6 +726,9 @@ export function applyBakeNla(project, objectId, options) {
       id: newId,
       name,
       fps: 24,
+      frameStart: options.frameStartMs,
+      frameEnd: options.frameEndMs,
+      duration: options.frameEndMs - options.frameStartMs,
       audioTracks: [],
       fcurves,
       flag: 0,
@@ -569,15 +740,23 @@ export function applyBakeNla(project, objectId, options) {
     };
     if (!Array.isArray(project.actions)) project.actions = [];
     project.actions.push(created);
+    // assignAction looks up the action by id — must come AFTER push.
+    // Returns false on miss; here we just pushed it, so true is the
+    // only honest outcome. If it ever returns false, that's a registry
+    // bug worth surfacing.
+    const ok = assignAction(project, objectId, newId);
+    if (!ok) {
+      // Rule №1: rolling back the push keeps the project shape
+      // consistent. The registry returning false here would indicate
+      // a contract regression we want to surface, not silently swallow.
+      project.actions.pop();
+      throw new Error(
+        `applyBakeNla: assignAction unexpectedly failed for objectId=${objectId}`
+      );
+    }
     actionId = newId;
     action = created;
     replacedActionId = currentActionId;
-
-    // Assign to the Object's animData slot, replacing whatever was
-    // there. (slotHandle stays 0 — same as actionRegistry.js#assignAction
-    // default; SS doesn't have a slot table yet per Phase 1 deviation.)
-    animData.actionId = newId;
-    animData.slotHandle = 0;
   }
 
   return {
@@ -621,20 +800,20 @@ function uniqueActionName(project, base) {
 }
 
 /**
- * Predicate: would `applyBakeNla` produce a meaningful result for the
- * given object? Mirrors the `wouldXChange` pattern from
+ * Predicate: would `applyBakeNla` produce a non-empty fcurve set for
+ * the given object? Mirrors the `wouldXChange` pattern from
  * `nlaEditorOps.js` (Slice 4.D.3/4.D.4) so the NLAEditor UI can disable
  * the Bake button when nothing would happen.
  *
- * Returns true when ANY of:
- *   - The Object has a non-empty NLA stack (at least one strip on at
- *     least one track).
- *   - The Object has a bound action (regardless of evaluatability —
- *     bake-of-bound-action is a legitimate "freeze the action with its
- *     post-mod state" workflow).
- *
- * Returns false when both conditions miss (vacuous bake — would
- * produce a zero-fcurve action).
+ * Audit-fix Slice 4.E MED-A1: predicate is now strictly symmetric with
+ * `collectRnaPathUniverse`. Returns true when ANY of:
+ *   - The Object has a bound `actionId` (non-empty string).
+ *   - The Object has at least one NLA strip whose `actionId` is a
+ *     non-empty string (strips with `actionId: null` are valid shells
+ *     but contribute no rnaPath to the universe, so the bake would
+ *     emit zero fcurves on them alone — pre-audit-fix the predicate
+ *     returned true for them, gating the UI Bake button to "on" with
+ *     no meaningful action).
  *
  * @param {object|null|undefined} animData
  * @returns {boolean}
@@ -643,12 +822,20 @@ export function wouldBakeNlaChange(animData) {
   if (!animData || typeof animData !== 'object') return false;
   const hasAction =
     typeof animData.actionId === 'string' && animData.actionId.length > 0;
+  if (hasAction) return true;
   const tracks = Array.isArray(animData.nlaTracks) ? animData.nlaTracks : [];
-  let hasStrip = false;
   for (const track of tracks) {
     if (!track || typeof track !== 'object') continue;
     const strips = Array.isArray(track.strips) ? track.strips : [];
-    if (strips.length > 0) { hasStrip = true; break; }
+    for (const strip of strips) {
+      if (
+        strip
+        && typeof strip.actionId === 'string'
+        && strip.actionId.length > 0
+      ) {
+        return true;
+      }
+    }
   }
-  return hasAction || hasStrip;
+  return false;
 }

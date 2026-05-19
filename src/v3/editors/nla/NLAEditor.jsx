@@ -198,6 +198,7 @@ import {
 } from '../../../anim/nla.js';
 import { enterTweakMode, exitTweakMode } from '../../../anim/nlaTweakMode.js';
 import { applyBakeNla, wouldBakeNlaChange } from '../../operators/bakeNla.js';
+import { logger } from '../../../lib/logger.js';
 import { cn } from '../../../lib/utils.js';
 
 const LABEL_W = 200;             // 160 → 200 to fit clickable icons
@@ -1530,12 +1531,14 @@ export function NLAEditor() {
       const node = proj.nodes.find((n) => n && n.id === objectId);
       if (!node || !node.animData) return;
       // Per-group bake range: walk this object's tracks/strips for the
-      // [min, max] span; fall back to [0, 1000] if the group is purely
-      // bound-action (no NLA strips → action's own frame range would be
-      // the ideal default; bakeNla itself doesn't read action.frameStart
-      // so we walk + default sensibly here).
-      let minMs = 0;
-      let maxMs = 0;
+      // [min, max] span. Audit-fix Slice 4.E HIGH-A3: initialise to
+      // Infinity / -Infinity so a strip span like [500, 1500] correctly
+      // produces frameStart=500 (NOT clamped down to 0). Pre-audit-fix
+      // the `let minMs = 0` init left minMs stuck at 0 whenever the
+      // earliest strip started at t>0, baking unnecessary leading zero
+      // samples and deviating from the user's authored span.
+      let minMs = Infinity;
+      let maxMs = -Infinity;
       const tracks = Array.isArray(node.animData.nlaTracks) ? node.animData.nlaTracks : [];
       for (const t of tracks) {
         const strips = Array.isArray(t?.strips) ? t.strips : [];
@@ -1544,24 +1547,41 @@ export function NLAEditor() {
           if (typeof s?.end === 'number' && s.end > maxMs) maxMs = s.end;
         }
       }
-      // If bound action only (no NLA strips), default to the action's
-      // own frameStart/frameEnd/duration when present.
-      if (maxMs === 0 && typeof node.animData.actionId === 'string') {
+      // If no NLA strips contributed (purely bound-action group), fall
+      // back to the action's own frameStart/frameEnd/duration when set.
+      if (!Number.isFinite(minMs) && typeof node.animData.actionId === 'string') {
         const action = (proj.actions ?? []).find((a) => a && a.id === node.animData.actionId);
         if (action) {
           if (typeof action.frameStart === 'number') minMs = action.frameStart;
           if (typeof action.frameEnd === 'number') maxMs = action.frameEnd;
-          else if (typeof action.duration === 'number') maxMs = action.duration;
+          else if (typeof action.duration === 'number') {
+            minMs = 0;
+            maxMs = action.duration;
+          }
         }
       }
-      if (maxMs <= minMs) maxMs = minMs + 1000;   // Minimum 1s range fallback
-      applyBakeNla(proj, objectId, {
+      if (!Number.isFinite(minMs)) minMs = 0;
+      if (!Number.isFinite(maxMs)) maxMs = minMs + 1000;
+      if (maxMs <= minMs) maxMs = minMs + 1000;
+      const result = applyBakeNla(proj, objectId, {
         frameStartMs: minMs,
         frameEndMs: maxMs,
         stepMs: 1000 / 24,
         useCurrentAction: false,
         cleanCurves: false,
       });
+      // Audit-fix Slice 4.E HIGH-A2: surface null returns via in-app
+      // logging per `feedback_in_app_logging`. applyBakeNla returns null
+      // on 5 distinct failure modes; silent no-op would leave the user
+      // staring at an unchanged UI with no recourse.
+      if (result === null) {
+        logger.warn(
+          'NLAEditor.bake',
+          `applyBakeNla returned null for objectId=${objectId} `
+          + `(range=${minMs}..${maxMs}ms). Likely missing animData / `
+          + `unknown objectId / project shape bug.`
+        );
+      }
     });
   }, [updateProject]);
 

@@ -553,6 +553,183 @@ function makeAnimData(overrides = {}) {
   );
 }
 
+// ── 24. degenerate single-frame range (audit-fix MED-A3) ────────────────
+{
+  const p = makeProject();
+  const ad = makeAnimData({ actionId: 'a1' });
+  const result = bakeNla(ad, p, { frameStartMs: 500, frameEndMs: 500, stepMs: 10 });
+  eq(result.sampleCount, 1, '24a: frameStart=frameEnd → 1 sample');
+  eq(result.fcurves[0].keyforms.length, 1, '24b: 1 keyform');
+  close(result.fcurves[0].keyforms[0].time, 500, 1e-9, '24c: time=500');
+  // At t=500: a1 ramp (0..100 over 0..1000) = 50
+  close(result.fcurves[0].keyforms[0].value, 50, 1e-9, '24d: value=50');
+}
+
+// ── 25. actionExtendmode='nothing' skips bound action outside range ────
+{
+  // Bound action 'a1' has frame range derivable from its fcurve
+  // keyforms (no explicit frameStart/frameEnd) → [0, 1000].
+  // Bake from -500..1500, sample step 500 → samples at -500, 0, 500, 1000, 1500.
+  // With 'nothing': samples at -500, 1500 are outside → contribution=0.
+  // Pre-fix (no extendmode honoring): every sample would evaluate at its own time,
+  // extrapolating outside range.
+  const p = makeProject();
+  const ad = makeAnimData({ actionId: 'a1', actionExtendmode: 'nothing' });
+  const result = bakeNla(ad, p, { frameStartMs: -500, frameEndMs: 1500, stepMs: 500 });
+  const kfs = result.fcurves[0].keyforms;
+  // Samples at -500, 0, 500, 1000, 1500
+  close(kfs[0].value, 0, 1e-9, "25a: t=-500 ('nothing' outside) → 0");
+  close(kfs[1].value, 0, 1e-9, "25b: t=0 (boundary, inclusive) → 0");
+  close(kfs[2].value, 50, 1e-9, "25c: t=500 (inside) → 50");
+  close(kfs[3].value, 100, 1e-9, "25d: t=1000 (boundary, inclusive) → 100");
+  close(kfs[4].value, 0, 1e-9, "25e: t=1500 ('nothing' outside) → 0");
+}
+
+// ── 26. actionExtendmode='hold' clamps sampleT to action's frame range ─
+{
+  // 'hold' (default): outside range, evaluate AT the boundary.
+  // At t=-500 → clamp to 0 → value 0; at t=1500 → clamp to 1000 → value 100.
+  const p = makeProject();
+  const ad = makeAnimData({ actionId: 'a1', actionExtendmode: 'hold' });
+  const result = bakeNla(ad, p, { frameStartMs: -500, frameEndMs: 1500, stepMs: 500 });
+  const kfs = result.fcurves[0].keyforms;
+  close(kfs[0].value, 0, 1e-9, '26a: t=-500 (hold clamps to 0) → 0');
+  close(kfs[4].value, 100, 1e-9, '26b: t=1500 (hold clamps to 1000) → 100');
+}
+
+// ── 27. actionExtendmode='hold_forward' skips before, clamps after ─────
+{
+  const p = makeProject();
+  const ad = makeAnimData({ actionId: 'a1', actionExtendmode: 'hold_forward' });
+  const result = bakeNla(ad, p, { frameStartMs: -500, frameEndMs: 1500, stepMs: 500 });
+  const kfs = result.fcurves[0].keyforms;
+  close(kfs[0].value, 0, 1e-9, "27a: t=-500 ('hold_forward' skips before) → 0");
+  close(kfs[2].value, 50, 1e-9, '27b: t=500 (inside) → 50');
+  close(kfs[4].value, 100, 1e-9, "27c: t=1500 (hold_forward clamps to 1000) → 100");
+}
+
+// ── 28. wouldBakeNlaChange = false when only null-actionId strips ──────
+{
+  // Audit-fix MED-A1: a strip with actionId=null produces no rnaPath
+  // contribution, so the bake would emit zero fcurves. Predicate must
+  // accurately reflect this. (makeNlaStrip throws on null actionId per
+  // its own validation, so we hand-construct a shell strip directly.)
+  const shellStrip = { id: 's2', actionId: null, start: 0, end: 1000, blendmode: 'replace', flag: 0, extendmode: 'hold' };
+  const t2 = makeNlaTrack('tN2', 'T_tN2', { strips: [shellStrip], index: 0 });
+  assert(!wouldBakeNlaChange(makeAnimData({ nlaTracks: [t2] })),
+    '28: strip with actionId=null → predicate false');
+  // Sanity: still true when AT LEAST ONE strip has a real actionId
+  const realStrip = makeNlaStrip('sReal', 'a1', { start: 0, end: 1000, actstart: 0, actend: 1000 });
+  const t3 = makeNlaTrack('tMix', 'T_tMix', { strips: [shellStrip, realStrip], index: 0 });
+  assert(wouldBakeNlaChange(makeAnimData({ nlaTracks: [t3] })),
+    '28b: mixed null + real-actionId strips → predicate true');
+}
+
+// ── 29. bakeNla is pure: doesn't mutate inputs (audit-fix MED-A2) ──────
+{
+  const p = makeProject();
+  const sB = makeNlaStrip('sB', 'a1', { start: 0, end: 1000, actstart: 0, actend: 1000, blendmode: 'replace', influence: 1 });
+  const tB = makeNlaTrack('tB', 'T_tB', { strips: [sB], index: 0 });
+  const ad = makeAnimData({ nlaTracks: [tB], actionId: 'a2' });
+  const beforeAd = JSON.stringify(ad);
+  const beforeP = JSON.stringify(p);
+  bakeNla(ad, p, { frameStartMs: 0, frameEndMs: 1000, stepMs: 100 });
+  eq(JSON.stringify(ad), beforeAd, '29a: animData not mutated');
+  eq(JSON.stringify(p), beforeP, '29b: project not mutated');
+}
+
+// ── 30. invalid actionBlendmode throws EVEN when soloing (audit-fix HIGH-A1) ──
+{
+  // Pre-fix the blendmode validation was guarded by boundActionEvaluatable,
+  // so a project with soloing + bad blendmode would silently swallow the bug.
+  const p = makeProject();
+  const sT = makeNlaStrip('sT', 'a1', { start: 0, end: 1000, actstart: 0, actend: 1000, blendmode: 'replace', influence: 1 });
+  const tT = makeNlaTrack('tT', 'T_tT', { strips: [sT], index: 0, flag: NLATRACK_FLAG.SOLO });
+  const ad = makeAnimData({
+    nlaTracks: [tT],
+    actionId: 'a1',
+    actionBlendmode: 'bogus',
+    flag: ADT_FLAG.NLA_SOLO_TRACK,
+  });
+  throws(
+    () => bakeNla(ad, p, { frameStartMs: 0, frameEndMs: 100, stepMs: 10 }),
+    /actionBlendmode is.*'bogus'/,
+    '30: bad actionBlendmode throws even when soloing (unconditional check)'
+  );
+}
+
+// ── 31. clean uses SUM-of-abs ≥ 1e-4 boundary (audit-fix HIGH-F1) ─────
+{
+  // Direct test of the predicate: a midpoint with abs(cur-prev) + abs(cur-next) = 1e-4
+  // is on the boundary; the strict `<` keeps it (NOT removed). A midpoint with
+  // sum = 8e-5 (< 1e-4) is removed.
+  // Build a project with an action whose fcurve has 3 keyforms at t=0, 500, 1000
+  // with values 0, ~5e-5, 1e-4 → at t=500: sum-of-abs to neighbors = 5e-5 + 5e-5 = 1e-4
+  // → NOT removed (boundary).
+  const p = {
+    actions: [{
+      id: 'aE', name: 'AE',
+      fcurves: [{
+        id: 'fc', rnaPath: 'pZ',
+        keyforms: [
+          { time: 0,    value: 0,      interpolation: 'linear' },
+          { time: 500,  value: 5e-5,   interpolation: 'linear' },
+          { time: 1000, value: 1e-4,   interpolation: 'linear' },
+        ],
+      }],
+    }],
+  };
+  const ad = makeAnimData({ actionId: 'aE' });
+  // Bake at exactly the 3 keyform times so each sample sits on a known value.
+  const cleaned = bakeNla(ad, p, { frameStartMs: 0, frameEndMs: 1000, stepMs: 500, cleanCurves: true });
+  // At sum=1e-4, NOT < 1e-4, so midpoint kept → 3 samples
+  eq(cleaned.fcurves[0].keyforms.length, 3, '31a: sum=1e-4 boundary keeps midpoint (3 samples)');
+
+  // Now a strictly-flat fcurve: midpoint deltas are 0+0=0 < 1e-4 → removed
+  const pFlat = {
+    actions: [{
+      id: 'aF', name: 'AF',
+      fcurves: [{
+        id: 'fc', rnaPath: 'pZ',
+        keyforms: [
+          { time: 0,    value: 7, interpolation: 'linear' },
+          { time: 1000, value: 7, interpolation: 'linear' },
+        ],
+      }],
+    }],
+  };
+  const adFlat = makeAnimData({ actionId: 'aF' });
+  const cleanedFlat = bakeNla(adFlat, pFlat, { frameStartMs: 0, frameEndMs: 1000, stepMs: 100, cleanCurves: true });
+  eq(cleanedFlat.fcurves[0].keyforms.length, 2, '31b: strictly-flat midpoints (sum=0) removed → endpoints only');
+}
+
+// ── 32. applyBakeNla writes frameStart/frameEnd/duration (audit-fix MED-F2) ──
+{
+  const p = makeProject();
+  const obj = p.nodes.find((n) => n.id === 'obj1');
+  obj.animData.actionId = 'a1';
+  const result = applyBakeNla(p, 'obj1', { frameStartMs: 250, frameEndMs: 1750, stepMs: 100 });
+  assert(result, '32: applyBakeNla returned result');
+  eq(result.action.frameStart, 250, '32a: frameStart=250');
+  eq(result.action.frameEnd, 1750, '32b: frameEnd=1750');
+  eq(result.action.duration, 1500, '32c: duration=1500');
+}
+
+// ── 33. applyBakeNla useCurrent=true throws when project.actions missing ───
+{
+  // Audit-fix MED-A4: a project missing actions[] in useCurrent path is a
+  // shape bug, not a "nothing to do" — Rule №1 demands throw.
+  const p = makeProject();
+  const obj = p.nodes.find((n) => n.id === 'obj1');
+  obj.animData.actionId = 'a1';   // claim a binding
+  delete p.actions;                // wipe the array → shape bug
+  throws(
+    () => applyBakeNla(p, 'obj1', { frameStartMs: 0, frameEndMs: 100, stepMs: 10, useCurrentAction: true }),
+    /project\.actions must be an array/,
+    '33: missing project.actions in useCurrent path throws (Rule №1)'
+  );
+}
+
 console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'}: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   process.exit(1);
