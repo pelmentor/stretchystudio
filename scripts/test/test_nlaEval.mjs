@@ -780,6 +780,109 @@ function makeLinearRampProject(actionId = 'a1', fcurveValue = 100) {
     '29: hold_forward before start NOT active → empty result');
 }
 
+// ── 30. Stacked-strip integration: subtract on top of replace (Slice 4.F) ─
+{
+  // Slice 4.F coverage closure: plan §4.F listed
+  // `test_nla_blend_subtract.mjs` as a separate file. §1 already covers
+  // the kernel (single-call value semantics); this section covers the
+  // INTEGRATION path — a subtract strip layered on top of a replace
+  // strip in a real NLA stack. Mirrors §15 (replace+add) structure.
+  // Bottom: REPLACE pX with a1's 0→100 ramp.
+  // Top: SUBTRACT a constant 30 (a2's fcurve).
+  // At t=500: bottom puts 50 into acc; top subtracts 30*1 = 20.
+  const project = makeLinearRampProject('a1', 100);
+  const projectWithSubtract = {
+    actions: [
+      ...project.actions,
+      {
+        id: 'a_const30',
+        fcurves: [{
+          id: 'fc_c30', rnaPath: 'paramX',
+          keyforms: [
+            { time: 0,    value: 30, interpolation: 'linear' },
+            { time: 1000, value: 30, interpolation: 'linear' },
+          ],
+        }],
+      },
+    ],
+  };
+  const bottomStrip = makeNlaStrip('sb', 'a1', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1,
+    blendmode: 'replace',
+  });
+  const topStrip = makeNlaStrip('st', 'a_const30', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1,
+    blendmode: 'subtract',
+  });
+  const animData = {
+    flag: 0,
+    nlaTracks: [
+      makeNlaTrack('t_bot', 'Body', { index: 0, strips: [bottomStrip] }),
+      makeNlaTrack('t_top', 'Face', { index: 1, strips: [topStrip] }),
+    ],
+  };
+  // At t=500: REPLACE(0, 50, 1) = 50; SUBTRACT(50, 30, 1) = 50 - 30 = 20
+  const acc = evaluateNla(animData, 500, projectWithSubtract);
+  close(/** @type number */ (acc.get('paramX')), 20, 1e-9,
+    '30a: replace(50) - 30 = 20 (stacked subtract integration)');
+
+  // With influence 0.5 on top: SUBTRACT(50, 30, 0.5) = 50 - 30*0.5 = 35
+  topStrip.influence = 0.5;
+  const acc2 = evaluateNla(animData, 500, projectWithSubtract);
+  close(/** @type number */ (acc2.get('paramX')), 35, 1e-9,
+    '30b: replace(50) - 30*0.5 = 35 (subtract with partial influence)');
+}
+
+// ── 31. Stacked-strip integration: multiply on top of replace (Slice 4.F) ─
+{
+  // Same closure logic for multiply. Plan §4.F:
+  // multiply kernel: out = inf*(lower*strip) + (1-inf)*lower
+  // Bottom: REPLACE pX with a1's 0→100 ramp; at t=500 → 50.
+  // Top: MULTIPLY by a constant 2 (a3's fcurve), influence 1.
+  // Result: 1*(50*2) + 0*50 = 100.
+  const project = makeLinearRampProject('a1', 100);
+  const projectWithMultiply = {
+    actions: [
+      ...project.actions,
+      {
+        id: 'a_const2',
+        fcurves: [{
+          id: 'fc_c2', rnaPath: 'paramX',
+          keyforms: [
+            { time: 0,    value: 2, interpolation: 'linear' },
+            { time: 1000, value: 2, interpolation: 'linear' },
+          ],
+        }],
+      },
+    ],
+  };
+  const bottomStrip = makeNlaStrip('sb', 'a1', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1,
+    blendmode: 'replace',
+  });
+  const topStrip = makeNlaStrip('st', 'a_const2', {
+    start: 0, end: 1000, actstart: 0, actend: 1000, influence: 1,
+    blendmode: 'multiply',
+  });
+  const animData = {
+    flag: 0,
+    nlaTracks: [
+      makeNlaTrack('t_bot', 'Body', { index: 0, strips: [bottomStrip] }),
+      makeNlaTrack('t_top', 'Face', { index: 1, strips: [topStrip] }),
+    ],
+  };
+  // At t=500: REPLACE → 50; MULTIPLY(50, 2, inf=1) = 1*(50*2) + 0*50 = 100
+  const acc = evaluateNla(animData, 500, projectWithMultiply);
+  close(/** @type number */ (acc.get('paramX')), 100, 1e-9,
+    '31a: replace(50) * 2 = 100 (stacked multiply integration)');
+
+  // Influence 0.5: MULTIPLY(50, 2, 0.5) = 0.5*(50*2) + 0.5*50 = 50 + 25 = 75
+  topStrip.influence = 0.5;
+  const acc2 = evaluateNla(animData, 500, projectWithMultiply);
+  close(/** @type number */ (acc2.get('paramX')), 75, 1e-9,
+    '31b: multiply(50, 2, 0.5) = 75 (partial influence lerps toward identity)');
+}
+
 console.log(`\nnlaEval: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');

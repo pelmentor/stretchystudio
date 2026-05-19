@@ -1410,18 +1410,45 @@ seen.
 
 #### 4.F — Tests
 
-| Test | What |
-|------|------|
-| `test_nla_strip_eval.mjs` | strip time remap (start/end/actstart/actend/repeat/scale) |
-| `test_nla_blend_replace.mjs` | replace mode + influence ramp |
-| `test_nla_blend_add.mjs` | add mode |
-| `test_nla_blend_subtract.mjs` | subtract mode |
-| `test_nla_blend_multiply.mjs` | multiply mode |
-| `test_nla_blend_combine.mjs` | combine on rotation (degenerate to replace) |
-| `test_nla_track_solo.mjs` | solo overrides mute |
-| `test_nla_extend_hold.mjs` | extend mode hold |
-| `test_nla_tweak_mode.mjs` | tweak push → edit → accept |
-| `test_nla_bake.mjs` | bakeNLA produces an Action whose evaluation matches the original NLA stack |
+**Status:** SHIPPED 2026-05-19 — coverage parity sweep complete.
+
+The v2-plan table below is the AS-PLANNED file-per-feature naming
+convention. SS shipped its tests under different filenames + grouped
+by SUBSTRATE-LAYER not by feature, which is the natural shape given
+that several "features" share an evaluator code path. The mapping
+table after this one shows where each plan-row's coverage actually
+lives.
+
+| Plan v2 (notional) | As-shipped — file + sections (asserts) | Status |
+|--------------------|----------------------------------------|--------|
+| `test_nla_strip_eval.mjs` | `test_nlaEval` §3-7 (remapStripTime forward/scale/repeat/reverse/end-pin) + §12 (stripActiveAt extend-mode) + §22 (blendin) + §27 (USR_TIME) | FULL |
+| `test_nla_blend_replace.mjs` | `test_nlaEval` §1 (kernel) + §14 (single replace strip) + §22 (blendin ramp on replace) | FULL |
+| `test_nla_blend_add.mjs` | `test_nlaEval` §1 (kernel) + §15 (two strips replace+add stacked integration) | FULL |
+| `test_nla_blend_subtract.mjs` | `test_nlaEval` §1 (kernel) + §30 (stacked subtract integration — Slice 4.F closure) | FULL |
+| `test_nla_blend_multiply.mjs` | `test_nlaEval` §1 (kernel) + §31 (stacked multiply integration — Slice 4.F closure) | FULL |
+| `test_nla_blend_combine.mjs` | DEFERRED — `combine` mode not shipped in Phase 4 per the audit-driven scope change ("combine" silently degrading to "replace" violates Rule №1). `test_nlaEval` §24 asserts `evaluateNla` THROWS on `blendmode: 'combine'`. | DEFERRED (intentional) |
+| `test_nla_track_solo.mjs` | `test_nlaEval` §18 (solo track wins) + `test_nlaEditorOps` §29 (applyToggleTrackSolo exclusivity) + §30 (preserves OTHER flag bits) | FULL |
+| `test_nla_extend_hold.mjs` | `test_nlaEval` §12 (stripActiveAt extend-mode hold/hold_forward/nothing) + §29 (end-to-end hold_forward past-end clamp+remap) | FULL |
+| `test_nla_tweak_mode.mjs` | `test_nlaTweakMode` (16 sections: enter/exit/clear/SYNC_LENGTH/PROTECTED/empty-animData/consumer-chain composition) | FULL |
+| `test_nla_bake.mjs` | `test_bakeNla` (33 sections, 110 asserts — input validation / composition / extendmode / cleanCurves / round-trip / applyBakeNla mutator paths) | FULL |
+
+**Aggregate test totals at Phase 4 close (post-4.F):**
+
+| File | Asserts |
+|------|---------|
+| `scripts/test/test_nlaEval.mjs` | 90 |
+| `scripts/test/test_nlaTweakMode.mjs` | 85 |
+| `scripts/test/test_nlaEditorOps.mjs` | 209 |
+| `scripts/test/test_nlaEditorData.mjs` | 56 |
+| `scripts/test/test_bakeNla.mjs` | 110 |
+| `scripts/test/test_migrations.mjs` (v42 NLA substrate slice) | 185 |
+| **Phase 4 total** | **735** |
+
+**Coverage closure this slice:** §30 stacked subtract integration
+(`test_nlaEval`) + §31 stacked multiply integration. Both replicate
+the §15 (replace+add) pattern — two-track bottom-replace + top-
+{subtract,multiply} stacks asserting both full-influence (1.0) +
+partial-influence (0.5) kernel composition outcomes.
 
 #### 4.G — Phase exit gate
 
