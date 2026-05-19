@@ -2123,18 +2123,115 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-**Status:** **Slices 7.A + 7.B + 7.C SHIPPED 2026-05-19** (`2ebefe4` +
-`768d25c` + `5bd0982` + `de91759` + `4643dc3` + `57f2bb2`). Registry +
-Insert Keyframe kernel + I-key menu UI complete. Slices remaining:
-**7.D** (auto-keyframe set parity), **7.E** (K-key toast + rebind
-preference), **7.F** (test sweep + Phase 7 exit gate).
+**Status:** **Slices 7.A + 7.B + 7.C + 7.D SHIPPED 2026-05-19**
+(`2ebefe4` + `768d25c` + `5bd0982` + `de91759` + `4643dc3` + `57f2bb2`
++ `0112b9e` + `26e53ce` + `3022543`). Registry + Insert Keyframe kernel
++ I-key menu UI + auto-key mode parity complete. Slices remaining:
+**7.E** (K-key toast + rebind preference), **7.F** (test sweep + Phase
+7 exit gate).
 
 **Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
 REGRESSION** through 7.A (2 HIGH-F) + 7.B (1 HIGH-F), then **STREAK
-RESTARTED at 7.C** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 verified
-cites). Memory rules 9 (re-OPEN every cite), 10 (literal-source-value
-for constants), and 11 ("comment says X" promotes X to byte-
-quotation) — added across 7.A/7.B — held effectively for 7.C.
+RESTARTED at 7.C** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 cites) and
+**EXTENDED to 7.D** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 more cites).
+Phase 7 cite-discipline now: 2 slices clean post-regression. Memory
+rules 9 (re-OPEN every cite), 10 (literal-source-value for constants),
+and 11 ("comment says X" promotes X to byte-quotation) — added across
+7.A/7.B — held for both 7.C and 7.D.
+
+#### 7.D — Auto-key mode parity ✅ SHIPPED 2026-05-19
+
+**Substrate.** 1 new helper + 4 modified UI/trigger sites:
+
+- `src/anim/autoKeyDispatch.js` (~130 LOC) — `runAutoKey(project)` +
+  `getAutoKeyMode` + `pickActiveSetIdForAutoKey` + `AUTOKEY_MODES`
+  frozen tuple. Maps SS's 3-mode enum to Blender's flag-bit dispatch
+  at `keyframing_auto.cc:126-133` (ONLYKEYINGSET branch) /
+  `:139-150` (All path).
+- `src/v3/shell/PlaybackControls.jsx` — new `AutoKeyModeDropdown`
+  sub-component (~70 LOC) with Radix DropdownMenu + RadioGroup;
+  chevron trigger flush-right of the existing AutoKey toggle.
+  Sparse-write semantics: picking `'all'` deletes the field rather
+  than persisting the default string (Rule №2). Mode-change writes
+  use `{skipHistory: true}` (audit-fix M-3 — Blender stores autokey
+  mode in user prefs, never on undo stack).
+- 3 trigger-site refactors:
+  - `src/components/canvas/SkeletonOverlay.jsx:513-516`
+  - `src/components/canvas/GizmoOverlay.jsx:366-369`
+  - `src/components/canvas/CanvasViewport.jsx:3326-3334`
+    (audit-fix H-2 — missed in initial substrate ship; canvas-direct
+    drags were silently bypassing the mode dropdown)
+- `src/components/canvas/CanvasViewport.jsx:1463` — audit-fix H-1:
+  `e.target?.tagName` optional chaining (synthetic-K events set
+  `target` to `window` which has no `tagName`; sister handler at
+  `:1393` was already `?.`).
+
+**Schema.** New SPARSE field `project.autoKeyMode?: 'all' | 'activeSet'
+| 'available'`. No migration; no v42→v43 bump. Read sites coalesce
+`?? 'all'`. Projects saved pre-7.D behave as `'all'` on load.
+
+**Blender cites (re-OPENED per rule 9 + content-verified per rules
+10+11):**
+
+- `keyframing_auto.cc:102-155` — `autokeyframe_object` (unified
+  entry; SS's `runAutoKey` analog).
+- `keyframing_auto.cc:126-133` — `if (is_keying_flag(scene,
+  AUTOKEY_FLAG_ONLYKEYINGSET) && (active_ks))` branch dispatching to
+  `apply_keyingset(... active_ks ...)`. SS's `'activeSet'` mode
+  matches this dispatch shape.
+- `keyframing_auto.cc:139-150` — non-KS "All" path
+  (`insert_keyframes` with full `rna_paths` span). SS's `'all'` mode
+  routes through legacy K-key handler which has analogous full
+  property fan-out.
+- `keyframing_auto.cc:193-258` — `autokeyframe_pose_channel` (sister
+  dispatcher for bones; identical branch structure at `:235`).
+- `DNA_userdef_types.h:278-293` — `eKeying_Flag` enum.
+  `AUTOKEY_FLAG_INSERTAVAILABLE = (1 << 0)` at `:285`;
+  `AUTOKEY_FLAG_ONLYKEYINGSET = (1 << 6)` at `:287`.
+
+**SS DEVIATIONs new this slice (31):**
+
+- DEV 31 — `'available'` mode dispatches to the `'Available'` built-in
+  set (whose collector at `keyingSets.js:226-250` already filters to
+  existing fcurves) rather than setting `INSERTKEY_FLAGS.AVAILABLE`
+  on an unfiltered emit. Semantically equivalent (both produce
+  "key only existing fcurves"); structurally cleaner because the
+  set-based path reuses 7.B's `applyKeyingSet` kernel without a
+  flag-branch in the collector.
+
+**Synthetic K-key dispatch caveat (Rule №1 honest disclosure):** the
+`'all'` mode preserves the pre-existing synthetic
+`KeyboardEvent('keydown',{key:'K'})` dispatch that routes through the
+legacy K-key handler at `CanvasViewport.jsx:1457-1633`. Extracting
+that handler's property fan-out (KEYFRAME_PROPS + mesh_verts + blend-
+shape values + auto-rest-keyform + JS-skinning expansion) into a pure
+helper is §7.E+ scope. 7.D documents the crutch in
+`autoKeyDispatch.js`'s module header rather than silently preserving
+it.
+
+**Param-row gap (audit-fix M-2 documented):** `ParamRow.jsx` auto-key
+path bypasses `runAutoKey` and ignores `project.autoKeyMode`. Param
+slider drags in `'available'` mode will still create new fcurves;
+slider drags in `'activeSet'` mode key only the touched param (NOT
+the full active set). Unifying the param path with mode dispatch is
+§7.E+ scope; inline `PHASE-7-GAP` comment at the write site flags
+this for future maintainers.
+
+**Audit sweep #81** (Phase 7 sweep #4):
+
+- **Architecture: 2 HIGH + 3 MED + 1 LOW.** All fixed in `3022543`:
+  H-1 optional chaining; H-2 third trigger-site migration; M-1
+  `AUTOKEY_MODES.includes` membership check; M-2 ParamRow gap doc;
+  M-3 `skipHistory` on mode setter; L-1 test §5.1 scope comment.
+  L-2 closed automatically by M-1.
+- **Blender-fidelity: 0 HIGH-F / 0 MED-F / 0 LOW-F across 9 cites.**
+  Streak extended 1 → 2 (7.C + 7.D both clean).
+
+Post-audit: **48 test asserts** (unchanged across fix — fixes were
+semantic hardening, not new behavior surface). Sibling tests clean:
+`test:keyingSetMenu` (69), `test:insertKeyframe` (87), `test:keyingSets`
+(144), `test:v3Operators` (125). Typecheck clean. Close-out doc at
+`docs/plans/SESSION_CLOSEOUT_2026_05_19_ANIMATION_PHASE_7_SLICE_D.md`.
 
 #### 7.C — `I`-key menu UI ✅ SHIPPED 2026-05-19
 
