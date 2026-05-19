@@ -30,7 +30,8 @@
  *   - `reference/blender/source/blender/animrig/intern/keyingsets.cc:411-466`
  *     `apply_keyingset(C, sources, ks, mode, cfra)`. Loops over
  *     `ks->paths` and calls `insert_key_to_keying_set_path` per path
- *     (`:459`). Returns total channels keyed (`:464`); SS returns an
+ *     (`:459-:460`). Returns total channels keyed at `:465` (with
+ *     `:464` carrying the BLI_assert); SS returns an
  *     aggregate result with per-channel statuses for UI feedback.
  *   - `reference/blender/source/blender/animrig/intern/keyingsets.cc:294-405`
  *     `insert_key_to_keying_set_path`. Resolves group name (`:312-322`),
@@ -68,12 +69,20 @@
  * # SS DEVIATIONS new this slice (26-29)
  *
  *   - DEV 26 -- VALUE_EPSILON = 1e-4 for INSERTKEY_NEEDED comparison.
- *     Blender `BLI_math_base_inline.c` `compare_ff` default is also
- *     1e-4. Match-for-match.
+ *     Empirical choice. Audit-fix 7.B HIGH-F1: the prior claim that
+ *     this "matched Blender's compare_ff default" was a fab —
+ *     `compare_ff(a, b, max_diff)` at `blenlib/intern/math_base_inline.cc:457-460`
+ *     takes max_diff as a REQUIRED parameter; there is no Blender
+ *     "default" to match. Closest sibling call in animrig is
+ *     `action.cc:762` using `0.001f` (10x looser than SS); SS's 1e-4
+ *     is intentionally tighter so the NEEDED check is conservative
+ *     (a hair of motion is enough to insert a key, matching the
+ *     user's UX expectation).
  *   - DEV 27 -- TIME_EPSILON_MS = 0.5 ms for "is there already a key
- *     at this time?" check. Same value as Slice 6.C DEV 6 merge
- *     epsilon (per SS canonical-ms time discipline; Blender uses
- *     0.01f frames per BKE_fcurve.hh:217).
+ *     at this time?" check. Per SS canonical-ms time discipline;
+ *     same epsilon shipped in Slice 6.C as that slice's DEV 6 (merge-
+ *     duplicate epsilon). Blender uses 0.01f frames per
+ *     `BKE_fcurve.hh:217` `BEZT_BINARYSEARCH_THRESH`.
  *   - DEV 28 -- `__params__` and `__scene__` paths route to the
  *     `__scene__` pseudo-Object's animData.actionId. Blender stores
  *     scene-level fcurves directly on `Scene.animation_data`; SS's
@@ -81,14 +90,15 @@
  *     Object-owned paths route to `node.animData.actionId` as
  *     expected.
  *   - DEV 29 -- `INSERTKEY_REPLACE` SUPPRESSES creation but does NOT
- *     imply `INSERTKEY_AVAILABLE`. Blender's enum comment at
- *     `DNA_anim_enums.h:522` says "AVAILABLE is implied by REPLACE";
- *     SS treats them as orthogonal because the SS error reporting is
- *     more granular per-channel (REPLACE without existing key
- *     produces `skipped-replace`; AVAILABLE without fcurve produces
- *     `skipped-available`). Behavior is equivalent (neither flag
- *     creates new fcurves) but the result-status distinguishes the
- *     skip reason for UI clarity.
+ *     imply `INSERTKEY_AVAILABLE` in SS's result reporting. The
+ *     Blender comment at `DNA_anim_enums.h:522` reads literally:
+ *     "Don't create new F-Curves (implied by #INSERTKEY_REPLACE)."
+ *     i.e. AVAILABLE's no-creation behavior is implied by REPLACE.
+ *     SS treats them as orthogonal in the result enum (REPLACE
+ *     without existing key produces `skipped-replace`; AVAILABLE
+ *     without fcurve produces `skipped-available`). Behavior is
+ *     equivalent (neither flag creates new fcurves) but the
+ *     result-status distinguishes the skip reason for UI clarity.
  *
  * @module anim/insertKeyframe
  */
@@ -200,7 +210,7 @@ function findKeyformAt(keyforms, time) {
  * @param {number} value
  * @param {number} flags
  * @returns {{
- *   status: 'inserted'|'replaced'|'created-fcurve'|'skipped-needed'|'skipped-replace'|'skipped-available'|'skipped-non-finite',
+ *   status: 'inserted'|'replaced'|'created-fcurve'|'skipped-needed'|'skipped-replace'|'skipped-available'|'skipped-invalid-path'|'skipped-no-action'|'skipped-non-finite',
  *   fcurveId?: string,
  *   keyformIndex?: number,
  * }}
@@ -208,19 +218,25 @@ function findKeyformAt(keyforms, time) {
 function insertKeyformAtInAction(action, rnaPath, time, value, flags) {
   if (!Number.isFinite(value)) return { status: 'skipped-non-finite' };
   if (!action || !Array.isArray(action.fcurves)) {
-    // Action shape is malformed; treat as no-fcurve case.
+    // Action shape is malformed. Audit-fix LOW-1: prefer
+    // 'skipped-no-action' over 'skipped-available' when neither
+    // AVAILABLE nor REPLACE is set -- the action itself is the
+    // missing thing, not the fcurve.
     if (flags & INSERTKEY_FLAGS.AVAILABLE) return { status: 'skipped-available' };
     if (flags & INSERTKEY_FLAGS.REPLACE) return { status: 'skipped-replace' };
-    return { status: 'skipped-available' };
+    return { status: 'skipped-no-action' };
   }
   // Find or create fcurve.
   let fc = action.fcurves.find((/** @type {any} */ f) => f?.rnaPath === rnaPath);
   if (!fc) {
     if (flags & INSERTKEY_FLAGS.AVAILABLE) return { status: 'skipped-available' };
     if (flags & INSERTKEY_FLAGS.REPLACE) return { status: 'skipped-replace' };
-    // Create fresh fcurve with single keyform.
+    // Create fresh fcurve with single keyform. Audit-fix HIGH-1:
+    // honest 'skipped-invalid-path' when the rnaPath grammar fails
+    // to decode (vs the pre-fix silent 'skipped-available' which
+    // misclassified the diagnostic + undercounted skippedInvalidPath).
     const fresh = buildFCurveForPath(rnaPath, time, value);
-    if (!fresh) return { status: 'skipped-available' }; // unparseable path
+    if (!fresh) return { status: 'skipped-invalid-path' };
     action.fcurves.push(fresh);
     return { status: 'created-fcurve', fcurveId: fresh.id, keyformIndex: 0 };
   }
@@ -235,14 +251,18 @@ function insertKeyformAtInAction(action, rnaPath, time, value, flags) {
   // Find existing keyform at this time.
   const existingIdx = findKeyformAt(fc.keyforms, time);
   if (existingIdx >= 0) {
-    // Replace value. Preserve handles where possible; auto-handles will
-    // re-derive via recalcKeyformHandles. (We DO replace handles when
-    // the new value diverges; the existing handle vectors target the
-    // old value and would be wrong post-replace.)
+    // Replace value. Audit-fix MED-1: preserve 'free' handles -- the
+    // user authored them deliberately, and recalcKeyformHandles at
+    // fcurveHandles.js:90-102 explicitly skips 'free'. Resetting them
+    // here pre-recalc would permanently destroy the user's offsets.
+    // For auto/aligned/vector handles, recalc re-derives them; we
+    // null the vectors so recalc seeds them at (kf.time, newValue).
     const kf = fc.keyforms[existingIdx];
     kf.value = value;
-    kf.handleLeft = { time: kf.time, value };
-    kf.handleRight = { time: kf.time, value };
+    const lType = kf.handleType?.left ?? 'auto';
+    const rType = kf.handleType?.right ?? 'auto';
+    if (lType !== 'free') kf.handleLeft = { time: kf.time, value };
+    if (rType !== 'free') kf.handleRight = { time: kf.time, value };
     recalcKeyformHandles(fc.keyforms);
     return { status: 'replaced', fcurveId: fc.id, keyformIndex: existingIdx };
   }
@@ -273,16 +293,38 @@ function insertKeyformAtInAction(action, rnaPath, time, value, flags) {
  * Walk a keying set + insert/replace keys per channel at `time`.
  * The caller is inside an immer recipe; project is the draft.
  *
+ * **WARNING -- `__params__` default-resolver trap (audit-fix MED-3):**
+ * The default `resolveValue` calls `evaluateRnaPath(project, path)`.
+ * For a `__params__` path, `evaluateRnaPath` returns
+ * `project.parameters[*].default` -- the STATIC default, NOT the live
+ * value. Programmatic callers and Slice 7.C / 7.D integrators MUST
+ * pass a resolver that reads the live `paramValuesStore` for any
+ * call that includes `__params__` paths (the `AllParams` set, any
+ * user-defined set targeting `objects["__params__"]...`, or
+ * `Available` over the scene action). Calling with the default
+ * resolver on a Live2D-param keying set will silently key the
+ * default value instead of the current live value.
+ *
+ * `count` vs `wouldApplyKeyingSetChange` semantic divergence
+ * (audit-fix MED-2): `count` increments for every `inserted` /
+ * `replaced` / `created-fcurve` status, INCLUDING same-value
+ * replaces (where existing keyform value matches `resolveValue`
+ * within VALUE_EPSILON). That's "channels written to" semantic.
+ * `wouldApplyKeyingSetChange` models "would observable project
+ * state change" and returns false for same-value replaces. Pick
+ * the right predicate for the UI question being asked.
+ *
+ * `__scene__`-absent: if the project has no `__scene__` node entry
+ * (Phase 1 Stage 1.D invariant violation), `__params__` paths emit
+ * `skipped-no-action` rather than throwing -- matches the
+ * defensive style of the rest of the substrate.
+ *
  * @param {object} project -- immer draft
  * @param {string} setId -- keying-set id (built-in or user-defined)
  * @param {string[]} objectIds -- selection scope passed to collectChannels
  * @param {number} time -- canonical ms
  * @param {number} [flags] -- INSERTKEY_FLAGS bitset (default NOFLAGS)
  * @param {{ resolveValue?: (rnaPath: string) => number | undefined }} [options]
- *   -- `resolveValue` is the runtime value resolver. Defaults to
- *      `evaluateRnaPath(project, path)` which works for non-__params__
- *      paths; the UI (7.C) should pass a resolver that reads the live
- *      paramValuesStore for __params__ paths.
  * @returns {{
  *   count: number,
  *   results: Array<{ path: string, status: string, fcurveId?: string, ownerNodeId?: string }>,
@@ -344,6 +386,19 @@ export function applyKeyingSet(project, setId, objectIds, time, flags, options) 
  * Note: this DOES read evaluator state (calls `resolveValue` per
  * channel + evaluates fcurves for the NEEDED check), but performs no
  * mutation -- safe to call outside an immer recipe.
+ *
+ * **WARNING -- React selector trap (audit-fix MED-5):** allocates on
+ * every call (`collectChannels` builds a fresh array; per-channel
+ * `resolveValue` may itself allocate). Do NOT call from a Zustand
+ * selector or React render path without memoization -- same
+ * filter-in-selector trap as `listKeyingSets` per `feedback_filter_in_selector`.
+ * Memoize on `[project, setId, objectIds, time, flags]` at the call
+ * site.
+ *
+ * `count` vs predicate divergence (audit-fix MED-2): this predicate
+ * returns FALSE for same-value replaces (observable project state
+ * unchanged); `applyKeyingSet`'s `count` would return 1 (channel
+ * written). They model different questions; pick correctly.
  *
  * @param {object} project
  * @param {string} setId

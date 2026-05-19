@@ -483,6 +483,119 @@ applyKeyingSet(project17, 'Available', ['partA'], 100, INSERTKEY_FLAGS.NOFLAGS, 
 eq(JSON.stringify(project17), snapshot, '§17 — Available with no existing fcurves → no mutation');
 
 // ─────────────────────────────────────────────────────────────────────
+// Section 18 — Audit-fix HIGH-1 + MED-4: invalid-path status surfaces
+// ─────────────────────────────────────────────────────────────────────
+
+let project18 = makeProject();
+addKeyingSet(project18, {
+  id: 'BadPathSet',
+  paths: [
+    { path: 'badpath', group: 'X' }, // doesn't match either decode regex
+    { path: 'objects["partA"].transform.x', group: 'partA' }, // valid for contrast
+  ],
+});
+const r18 = applyKeyingSet(project18, 'BadPathSet', [], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: () => 5,
+});
+const badResult = r18.results.find((r) => r.path === 'badpath');
+eq(badResult.status, 'skipped-invalid-path', '§18 — HIGH-1: bad rnaPath emits skipped-invalid-path');
+eq(r18.skippedInvalidPath, 1, '§18 — HIGH-1: skippedInvalidPath counter increments');
+const goodResult = r18.results.find((r) => r.path === 'objects["partA"].transform.x');
+eq(goodResult.status, 'created-fcurve', '§18 — HIGH-1: valid path in same set still inserts');
+eq(r18.count, 1, '§18 — HIGH-1: count = 1 (bad path skipped, good path succeeded)');
+
+// ─────────────────────────────────────────────────────────────────────
+// Section 19 — Audit-fix MED-1: 'free' handles preserved on replace
+// ─────────────────────────────────────────────────────────────────────
+
+let project19 = makeProject();
+project19.actions[1].fcurves.push({
+  id: 'partA.transform.x',
+  rnaPath: 'objects["partA"].transform.x',
+  arrayIndex: 0,
+  keyforms: [
+    {
+      time: 100, value: 10,
+      handleLeft: { time: 80, value: 5 },    // user-authored 'free' offset
+      handleRight: { time: 120, value: 15 }, // user-authored 'free' offset
+      handleType: { left: 'free', right: 'free' },
+      interpolation: 'bezier',
+      flag: 0,
+    },
+  ],
+  modifiers: [],
+  extrapolation: 'constant',
+});
+applyKeyingSet(project19, 'Location', ['partA'], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: (path) => path.endsWith('.x') ? 99 : 0,
+});
+const kf19 = project19.actions[1].fcurves[0].keyforms[0];
+eq(kf19.value, 99, '§19 — MED-1: value REPLACED');
+eq(kf19.handleLeft.time, 80, '§19 — MED-1: free handleLeft.time PRESERVED');
+eq(kf19.handleLeft.value, 5, '§19 — MED-1: free handleLeft.value PRESERVED');
+eq(kf19.handleRight.time, 120, '§19 — MED-1: free handleRight.time PRESERVED');
+eq(kf19.handleRight.value, 15, '§19 — MED-1: free handleRight.value PRESERVED');
+
+// Mixed handle type: left=free, right=auto. Replace should preserve left, reset+recalc right.
+let project19b = makeProject();
+project19b.actions[1].fcurves.push({
+  id: 'partA.transform.x',
+  rnaPath: 'objects["partA"].transform.x',
+  arrayIndex: 0,
+  keyforms: [
+    {
+      time: 100, value: 10,
+      handleLeft: { time: 80, value: 5 },     // free, must preserve
+      handleRight: { time: 120, value: 15 },  // auto, will be re-derived
+      handleType: { left: 'free', right: 'auto' },
+      interpolation: 'bezier',
+      flag: 0,
+    },
+    {
+      time: 200, value: 30,
+      handleLeft: { time: 180, value: 25 },
+      handleRight: { time: 220, value: 35 },
+      handleType: { left: 'auto', right: 'auto' },
+      interpolation: 'bezier',
+      flag: 0,
+    },
+  ],
+  modifiers: [],
+  extrapolation: 'constant',
+});
+applyKeyingSet(project19b, 'Location', ['partA'], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: (path) => path.endsWith('.x') ? 99 : 0,
+});
+const kf19b = project19b.actions[1].fcurves[0].keyforms[0];
+eq(kf19b.handleLeft.time, 80, '§19 — MED-1 mixed: free handleLeft preserved');
+eq(kf19b.handleLeft.value, 5, '§19 — MED-1 mixed: free handleLeft value preserved');
+// handleRight was 'auto' → recalculated. We don't assert specific values
+// (depends on recalc algo) but it should differ from 15 (the old anchor).
+ok(kf19b.handleRight !== undefined, '§19 — MED-1 mixed: auto handleRight still present after recalc');
+
+// ─────────────────────────────────────────────────────────────────────
+// Section 20 — Audit-fix LOW-1: malformed-action default status
+// ─────────────────────────────────────────────────────────────────────
+
+let project20 = makeProject();
+// Malform partAct so it has no fcurves array.
+project20.actions[1].fcurves = null;
+const r20 = applyKeyingSet(project20, 'Location', ['partA'], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: () => 5,
+});
+eq(r20.results[0].status, 'skipped-no-action', '§20 — LOW-1: malformed action default → skipped-no-action');
+
+const r20b = applyKeyingSet(project20, 'Location', ['partA'], 100, INSERTKEY_FLAGS.AVAILABLE, {
+  resolveValue: () => 5,
+});
+eq(r20b.results[0].status, 'skipped-available', '§20 — LOW-1: malformed action + AVAILABLE → skipped-available');
+
+const r20c = applyKeyingSet(project20, 'Location', ['partA'], 100, INSERTKEY_FLAGS.REPLACE, {
+  resolveValue: () => 5,
+});
+eq(r20c.results[0].status, 'skipped-replace', '§20 — LOW-1: malformed action + REPLACE → skipped-replace');
+
+// ─────────────────────────────────────────────────────────────────────
 
 console.log(`insertKeyframe: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
