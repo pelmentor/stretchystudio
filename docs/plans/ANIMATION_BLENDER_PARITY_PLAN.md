@@ -2123,21 +2123,87 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-**Status:** **Slices 7.A + 7.B + 7.C + 7.D SHIPPED 2026-05-19**
-(`2ebefe4` + `768d25c` + `5bd0982` + `de91759` + `4643dc3` + `57f2bb2`
-+ `0112b9e` + `26e53ce` + `3022543`). Registry + Insert Keyframe kernel
-+ I-key menu UI + auto-key mode parity complete. Slices remaining:
-**7.E** (K-key toast + rebind preference), **7.F** (test sweep + Phase
-7 exit gate).
+**Status:** **Slices 7.A + 7.B + 7.C + 7.D SHIPPED 2026-05-19; 7.E
+SHIPPED 2026-05-20** (`2ebefe4` + `768d25c` + `5bd0982` + `de91759` +
+`4643dc3` + `57f2bb2` + `0112b9e` + `26e53ce` + `3022543` + `7cd7e74`
++ `49a4239` + `fa6b462`). Registry + Insert Keyframe kernel + I-key
+menu UI + auto-key mode parity + K-key first-use toast complete. Slice
+remaining: **7.F** (test sweep + Phase 7 exit gate).
 
 **Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
 REGRESSION** through 7.A (2 HIGH-F) + 7.B (1 HIGH-F), then **STREAK
-RESTARTED at 7.C** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 cites) and
-**EXTENDED to 7.D** (0 HIGH-F / 0 MED-F / 0 LOW-F across 9 more cites).
-Phase 7 cite-discipline now: 2 slices clean post-regression. Memory
-rules 9 (re-OPEN every cite), 10 (literal-source-value for constants),
-and 11 ("comment says X" promotes X to byte-quotation) — added across
-7.A/7.B — held for both 7.C and 7.D.
+RESTARTED at 7.C** (0 / 0 / 0 across 9 cites), **EXTENDED to 7.D**
+(0 / 0 / 0 across 9 more cites), and **EXTENDED again to 7.E**
+(0 / 0 / 0 across 3 carry-over cites). Phase 7 cite-discipline now:
+3 slices clean post-regression. Memory rules 9 (re-OPEN every cite),
+10 (literal-source-value for constants), and 11 ("comment says X"
+promotes X to byte-quotation) — added across 7.A/7.B — held for 7.C,
+7.D, and 7.E.
+
+#### 7.E — K-key first-use toast ✅ SHIPPED 2026-05-20
+
+**Scope decision: MVP only.** Plan §7.E describes two deliverables:
+(a) a first-use toast on K-press pointing at the new I-key menu, and
+(b) an OPTIONAL rebind preference letting users swap K for "open the
+I-menu". 7.E ships (a) only; (b) is deferred to §7.F+ because
+implementing it requires extracting the 170-line legacy K-key fan-out
+(KEYFRAME_PROPS + mesh_verts + blend-shape values + auto-rest-keyform
++ JS-skinning expansion) into a pure helper. Plan-faithful per the
+"A preference CAN re-bind K" wording.
+
+**Substrate.** 3 modified files + 1 new test suite:
+
+- `src/store/preferencesStore.js` — added sparse boolean pref
+  `kKeyFirstUseShown` (default `false`; persists to localStorage at
+  `v3.prefs.kKeyFirstUseShown`) + `setKKeyFirstUseShown` setter
+  matching the sibling `setMlEnabled` / `setLockObjectModes` /
+  `setUseNumericInputAdvanced` pattern.
+- `src/components/canvas/CanvasViewport.jsx:1505-1535` — emits a
+  toast on the FIRST K-press in animation mode AFTER every guard
+  passes (preview / editable / animation-mode / actions-exist /
+  selection-non-empty) and BEFORE the `updateProject` recipe. The
+  toast title is "K — Insert all properties" and the description
+  points to the I-key menu with real built-in labels (Location /
+  Rotation / All Parameters — audit-fix MED-1 replaced an invalid
+  "Active Set" placeholder).
+- `src/anim/autoKeyDispatch.js:113-130` — `runAutoKey('all')`'s
+  synthetic K event now carries an `__ssAutoKey: true` expando
+  sentinel (plain assignment per audit-fix MED-2 for Safari ≤14
+  compat). The CanvasViewport handler skips the toast when
+  `e.__ssAutoKey` is set so users with auto-key on don't see a
+  pointer toast after dragging a bone (they never pressed K
+  manually).
+- `scripts/test/test_kKeyFirstUseToast.mjs` — 22 asserts in 3
+  sections: §1 preferencesStore roundtrip + persistence + namespace
+  (8); §2 runAutoKey sentinel tag on auto-key dispatch (6); §3
+  sentinel expando + descriptor pin (8).
+
+**SS DEVIATION** — none new this slice. Carries DEV 30 (I/K-key
+inversion from Blender per plan §7.C/§7.E).
+
+**Blender cites (re-OPENED per rule 9 + content-verified per rules
+10+11):** 3 carry-overs from 7.C/7.D, all re-verified clean:
+
+- `keymap_data/blender_default.py:4536` — K-key Object Mode →
+  `anim.keyframe_insert_menu` with `always_prompt=True`.
+- `keymap_data/blender_default.py:4683` — same in Pose Mode.
+- `keymap_data/blender_default.py:4561` — I-key Object Mode →
+  `anim.keyframe_insert` (default non-pie).
+
+**Audit sweep #82** (Phase 7 sweep #5):
+
+- **Architecture: 0 HIGH / 2 MED / 2 LOW.** All fixed in `fa6b462`:
+  MED-1 (real built-in label in toast); MED-2 (plain expando vs
+  defineProperty for Safari compat); LOW-1 (descriptor pin updated
+  for new semantics); LOW-2 (§1.5 exact-key assertion).
+- **Blender-fidelity: 0 HIGH-F / 0 MED-F / 0 LOW-F across 3
+  carry-over cites.** Streak EXTENDED 2 → 3.
+
+Post-audit: **22 test asserts** (was 20 pre-fix; +2 descriptor pin).
+Typecheck clean. Sibling regressions green: `test:autoKeyDispatch`
+(48 — `__ssAutoKey` addition does not break event-presence checks),
+`test:preferencesStore` (62). Close-out doc at
+`docs/plans/SESSION_CLOSEOUT_2026_05_20_ANIMATION_PHASE_7_SLICE_E.md`.
 
 #### 7.D — Auto-key mode parity ✅ SHIPPED 2026-05-19
 
