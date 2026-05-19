@@ -73,14 +73,13 @@ console.log('\n§1 preferencesStore.kKeyFirstUseShown');
   usePreferencesStore.getState().setKKeyFirstUseShown('non-empty-string');
   eq(usePreferencesStore.getState().kKeyFirstUseShown, true, '§1.4 truthy string coerces to true');
 
-  // Re-init test: re-importing the module (already cached) would NOT
-  // re-run loadBool; verifying persistence requires inspecting the
-  // localStorage write directly. The setter already did that in §1.2.
-  // §1.5 confirms the localStorage shape is the same key prefix family
-  // (`v3.prefs.*`) used by every sibling pref.
+  // Audit-fix LOW-2 (sweep #82): assert the EXACT key (not just the
+  // prefix); the pre-fix prefix check was vacuous when only one pref
+  // had been written. The §1.2 setter already populated this exact
+  // key, so we re-verify the key name here as a contract assertion.
   ok(
-    [...storage.keys()].every((k) => k.startsWith('v3.prefs.')),
-    '§1.5 K-pref shares the v3.prefs.* localStorage namespace',
+    storage.has('v3.prefs.kKeyFirstUseShown'),
+    '§1.5 K-pref uses exact localStorage key v3.prefs.kKeyFirstUseShown',
   );
 }
 
@@ -103,26 +102,40 @@ console.log('\n§2 runAutoKey all-mode synthetic K sentinel');
   eq(dispatched[0].__ssAutoKey, true, '§2.3 sparse default carries sentinel');
 }
 
-// ── §3 sentinel non-enumerable + direct-access reliable ──────────────
-console.log('\n§3 sentinel non-enumerable');
+// ── §3 sentinel: expando assignment, descriptor sanity ──────────────
+// Audit-fix MED-2 (sweep #82): the substrate now uses plain expando
+// assignment (`ev.__ssAutoKey = true`) instead of `Object.defineProperty`
+// for Safari ≤14 / embedded-WebView compatibility. This means the
+// sentinel is enumerable + writable + configurable by default — those
+// are acceptable for a synchronously-consumed event sentinel.
+console.log('\n§3 sentinel expando');
 {
   resetDispatched();
   runAutoKey({ autoKeyMode: 'all' });
   const ev = dispatched[0];
 
-  // Non-enumerable: Object.keys / for-in / JSON.stringify exclude it
-  const keys = Object.keys(ev);
-  ok(!keys.includes('__ssAutoKey'), '§3.1 Object.keys excludes __ssAutoKey');
+  // Direct access works (the contract the K-key handler depends on)
+  ok(ev.__ssAutoKey === true, '§3.1 direct .__ssAutoKey access returns true');
+  ok('__ssAutoKey' in ev, '§3.1 `in` operator finds __ssAutoKey');
 
-  // But direct access works
-  ok(ev.__ssAutoKey === true, '§3.2 direct .__ssAutoKey access returns true');
-  ok('__ssAutoKey' in ev, '§3.2 `in` operator finds __ssAutoKey');
-
-  // Property descriptor sanity
+  // Property descriptor — plain assignment yields the default
+  // `writable: true, enumerable: true, configurable: true` shape.
+  // These assertions PIN the contract so a future refactor to
+  // Object.defineProperty would trip the test and require an
+  // explicit decision to change descriptor semantics.
   const desc = Object.getOwnPropertyDescriptor(ev, '__ssAutoKey');
-  ok(desc, '§3.3 descriptor exists');
-  eq(desc.value, true, '§3.3 descriptor.value=true');
-  eq(desc.enumerable, false, '§3.3 descriptor.enumerable=false');
+  ok(desc, '§3.2 descriptor exists');
+  eq(desc.value, true, '§3.2 descriptor.value=true');
+  eq(desc.writable, true, '§3.2 descriptor.writable=true (plain assignment default)');
+  eq(desc.enumerable, true, '§3.2 descriptor.enumerable=true (plain assignment default)');
+  eq(desc.configurable, true, '§3.2 descriptor.configurable=true (plain assignment default)');
+
+  // Sanity: enumerable=true means Object.keys DOES include it. This is
+  // a documented behaviour change vs the pre-audit-fix descriptor; the
+  // sentinel is `__`-prefixed so it's still visually marked as internal
+  // even if it shows in enumeration tooling.
+  const keys = Object.keys(ev);
+  ok(keys.includes('__ssAutoKey'), '§3.3 Object.keys includes __ssAutoKey (expando is enumerable)');
 }
 
 // ── summary ──────────────────────────────────────────────────────────

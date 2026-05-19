@@ -129,12 +129,20 @@ export function runAutoKey(project) {
       // pointer toast on the auto-key path. Without the sentinel, a
       // user with auto-key on would see the "Press I to pick a keying
       // set" toast after their first bone drag -- confusing because
-      // they did not press K. Sentinel is a non-enumerable property
-      // so it doesn't appear in event-inspection tooling but is
-      // reliable for the handler's `if (e.__ssAutoKey)` gate.
+      // they did not press K.
+      //
+      // Audit-fix MED-2 (sweep #82): use plain assignment instead of
+      // `Object.defineProperty`. Older WebKit (Safari ≤14) and some
+      // embedded WebViews treat native DOM event properties as non-
+      // configurable and throw `TypeError: Cannot define property`
+      // when `Object.defineProperty` is called on them. Direct expando
+      // assignment works universally on dispatched-and-consumed-in-
+      // same-tick events. The `__` prefix is the SS-internal naming
+      // convention; no enumeration-tooling concern in practice since
+      // the event is consumed synchronously and never serialized.
       if (typeof window !== 'undefined') {
         const ev = new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' });
-        Object.defineProperty(ev, '__ssAutoKey', { value: true, enumerable: false });
+        /** @type {any} */ (ev).__ssAutoKey = true;
         window.dispatchEvent(ev);
       }
       return { mode: 'all', dispatched: 'synthetic-K-keydown' };

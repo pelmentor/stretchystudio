@@ -1526,8 +1526,13 @@ export default function CanvasViewport({
         const prefs = usePreferencesStore.getState();
         if (!prefs.kKeyFirstUseShown) {
           toast({
+            // Audit-fix MED-1 (sweep #82): "Active Set" was not a built-in
+            // label — the I-menu lists real set names (Location / Rotation
+            // / Scale / Location, Rotation & Scale / Blend Shapes / All
+            // Parameters / Available + any user-defined). Examples use
+            // actual labels so users searching the menu find them.
             title: 'K — Insert all properties',
-            description: 'Press I to pick a specific keying set (Location / Rotation / Active Set / …).',
+            description: 'Press I to pick a specific keying set (Location / Rotation / All Parameters / …).',
           });
           prefs.setKKeyFirstUseShown(true);
         }
