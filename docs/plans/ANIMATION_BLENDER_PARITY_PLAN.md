@@ -1558,8 +1558,9 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-**Status:** Slice 6.A SHIPPED 2026-05-19 (`cfb82a9` + `5b4cccd`).
-6.B-6.G remain (~3 days estimated).
+**Status:** Slice 6.A + 6.B SHIPPED 2026-05-19 (`cfb82a9` +
+`5b4cccd` + `bdf95a8` + `dff1c99`). 6.C-6.G remain (~2-3 days
+estimated).
 
 #### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
 
@@ -1590,11 +1591,31 @@ closure per render. See close-out doc for full audit detail.
 prose below — coverage map):
 
 - ✅ Tick selection (click / shift-click) — shipped 6.A.
-- 🟡 Box-select — Slice 6.B (queued next).
-- 🟡 Drag selected ticks in time — Slice 6.C.
+- ✅ Box-select — shipped 6.B (`bdf95a8` + `dff1c99`).
+- 🟡 Drag selected ticks in time — Slice 6.C (queued next).
 - 🟡 Per-channel mute/solo — Slice 6.F.
 - 🟡 Channel collapse/expand — Slice 6.E or 6.F.
 - 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+#### 6.B — Box-select (B key + LMB-drag) — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetBoxSelect.js`: pure
+`applyBoxSelect` (3 modes — replace/extend/subtract) +
+`computeBoxHits` time-axis walker + `BOX_SELECT_MODES` frozen list.
+Tests: 61 asserts in `scripts/test/test_dopesheetBoxSelect.mjs`.
+
+**UI surface.** DopesheetEditor track-area drag-rect with 4px
+threshold; marquee overlay (blue for replace/extend, red for
+subtract); B-key window listener arms the next pointerdown to
+override the drag-on-tick guard. Modifier mapping: plain LMB-drag →
+replace; Shift+LMB-drag → extend; Ctrl+LMB-drag → subtract.
+
+**SS DEVIATIONS new this slice:**
+- DEV 2 — INCLUSIVE time-range bounds vs Blender's STRICT
+  inequality (`ok_bezier_framerange` at
+  `keyframes_edit.cc:559-567`). Modern UI convention.
+- DEV 3 — Axis-range mode (Alt+B → FRAMERANGE/CHANNELS) NOT
+  shipped in 6.B; scope-deferred to 6.B.1 polish slice.
 
 **v1 prose preserved below** for reference; flip checkmarks as
 each remaining slice ships.
