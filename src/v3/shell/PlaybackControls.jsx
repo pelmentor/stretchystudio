@@ -138,9 +138,34 @@ import {
   SkipForward,
   Music,
   Upload,
+  ChevronDown,
 } from 'lucide-react';
 import { parseMotion3Json } from '../../io/live2d/motion3jsonImport.js';
 import { getActiveSceneAction, getSceneAction } from '../../anim/sceneAction.js';
+import { AUTOKEY_MODES, getAutoKeyMode } from '../../anim/autoKeyDispatch.js';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '../../components/ui/dropdown-menu.jsx';
+
+/** Human-readable labels for the auto-key mode dropdown. */
+const AUTOKEY_MODE_LABELS = Object.freeze({
+  all:        'AutoKey: All Properties',
+  activeSet:  'AutoKey: Active Keying Set',
+  available:  'AutoKey: Available',
+});
+
+/** Per-mode tooltip / description text (shown below the radio item). */
+const AUTOKEY_MODE_DESCRIPTIONS = Object.freeze({
+  all:       'Key every property of the selection (current SS behaviour).',
+  activeSet: 'Key only the active keying set (or LocRotScale if none).',
+  available: 'Key only properties that already have an F-Curve.',
+});
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -149,6 +174,76 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
    TimelineEditor.jsx pre-lift lines 63-81. Only consumer was the
    transport row that now lives here; co-located.
 ────────────────────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────────────────
+   Animation Phase 7 Slice 7.D — Auto-key mode dropdown.
+
+   Sits next to the AutoKey toggle (red disc). Picks one of three modes,
+   stored on `project.autoKeyMode` (sparse; default `'all'`):
+
+     • All Properties    — current SS behaviour (every prop of selection)
+     • Active Keying Set — only the active KS (or LocRotScale if none)
+     • Available         — only properties with existing F-Curves
+
+   Mirrors Blender's `AUTOKEY_FLAG_ONLYKEYINGSET` / `AUTOKEY_FLAG_INSERTAVAILABLE`
+   bits at `DNA_userdef_types.h:278-293` (see `runAutoKey` JSDoc for
+   dispatch mapping).
+
+   The dropdown trigger is intentionally a small chevron-only button so
+   the AutoKey toggle keeps the dominant visual weight — mode picking
+   is a one-off setup gesture, not a per-session interaction.
+────────────────────────────────────────────────────────────────────────── */
+function AutoKeyModeDropdown({ disabled, project, update }) {
+  const mode = getAutoKeyMode(project);
+
+  function setMode(next) {
+    update((p) => {
+      // Sparse storage — only persist the field when the user picks a
+      // non-default value. Rule №2 compliance: project files saved
+      // before 7.D have no `autoKeyMode` field and behave as 'all'.
+      if (next === 'all') {
+        delete p.autoKeyMode;
+      } else {
+        p.autoKeyMode = next;
+      }
+    });
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          title={`Auto-Key mode: ${AUTOKEY_MODE_LABELS[mode]}`}
+          className={cn(
+            'flex items-center justify-center w-4 h-6 rounded-l-none rounded-r text-xs transition-colors -ml-1',
+            'text-muted-foreground hover:text-foreground hover:bg-muted',
+            disabled && 'opacity-30 cursor-not-allowed pointer-events-none',
+          )}
+        >
+          <ChevronDown size={10} strokeWidth={2} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[260px]">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Auto-Key Mode
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuRadioGroup value={mode} onValueChange={setMode}>
+          {AUTOKEY_MODES.map((m) => (
+            <DropdownMenuRadioItem key={m} value={m} className="flex-col items-start gap-0 py-2">
+              <span className="text-[12px] leading-tight">{AUTOKEY_MODE_LABELS[m]}</span>
+              <span className="text-[10px] text-muted-foreground leading-tight mt-0.5">
+                {AUTOKEY_MODE_DESCRIPTIONS[m]}
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function TransportBtn({ onClick, active, title, children, className = '', disabled }) {
   return (
     <button
@@ -477,7 +572,12 @@ export function PlaybackControls() {
       {/* Auto Keyframe — Blender-style red record dot. Off by default
           (BFA-002): the canonical insert path is the K shortcut; this
           toggle opts the user into "any property change writes a key
-          at the playhead", matching Blender's Auto-Keying. */}
+          at the playhead", matching Blender's Auto-Keying.
+
+          Phase 7 Slice 7.D — paired with the AutoKeyModeDropdown
+          immediately to the right. The toggle is the on/off switch;
+          the dropdown picks WHICH mode of auto-key runs. Mode is
+          stored on `project.autoKeyMode` (sparse, default `'all'`). */}
       <TransportBtn
         disabled={!hasAnimation}
         onClick={() => setAutoKeyframe(!autoKeyframe)}
@@ -487,6 +587,8 @@ export function PlaybackControls() {
       >
         <Disc size={14} strokeWidth={2} />
       </TransportBtn>
+
+      <AutoKeyModeDropdown disabled={!hasAnimation} project={proj} update={update} />
 
       {/* Add Audio Track */}
       <TransportBtn

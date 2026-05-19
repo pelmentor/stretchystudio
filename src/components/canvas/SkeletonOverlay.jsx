@@ -25,6 +25,7 @@ import {
 } from '@/renderer/transforms';
 import { computePoseOverrides, applyOverrideToNode } from '@/renderer/animationEngine';
 import { getActiveSceneAction } from '@/anim/sceneAction';
+import { runAutoKey } from '@/anim/autoKeyDispatch';
 import { useToast } from '@/hooks/use-toast';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { sanitisePartName } from '@/lib/partId';
@@ -508,10 +509,13 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     // user explicitly invokes `applyPoseAsRest`. Mirrors Blender Pose
     // Mode → Apply Pose As Rest Pose (Ctrl+A → "Apply Pose as Rest").
 
-    // Auto Keyframe trigger
+    // Auto Keyframe trigger — Phase 7 Slice 7.D — mode-aware dispatch.
+    // `runAutoKey` reads `project.autoKeyMode` (sparse; default 'all')
+    // and either dispatches the legacy synthetic K-key event ('all')
+    // or invokes `applyKeyingSet` directly ('activeSet' / 'available').
     if (drag && (drag.type === 'rotate' || drag.type === 'trackpad')) {
       if (useEditorStore.getState().autoKeyframe && editorModeRef.current === 'animation') {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
+        runAutoKey(useProjectStore.getState().project);
       }
     }
   }, [updateProject]);

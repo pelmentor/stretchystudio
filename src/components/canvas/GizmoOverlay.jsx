@@ -23,6 +23,7 @@ import { computeWorldMatrices, mat3Identity, mat3Inverse } from '@/renderer/tran
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { getMesh } from '@/store/objectDataAccess';
 import { getActiveSceneAction } from '@/anim/sceneAction';
+import { runAutoKey } from '@/anim/autoKeyDispatch';
 
 const MOVE_RADIUS   = 8;
 const ROT_RADIUS    = 6;
@@ -363,8 +364,9 @@ export function GizmoOverlay() {
     endBatch();
     dragRef.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
+    // Phase 7 Slice 7.D — mode-aware auto-key dispatch via runAutoKey.
     if (useEditorStore.getState().autoKeyframe && getEditorMode() === 'animation') {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK' }));
+      runAutoKey(useProjectStore.getState().project);
     }
   }
 
