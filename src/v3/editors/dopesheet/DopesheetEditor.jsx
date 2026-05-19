@@ -741,6 +741,20 @@ export function DopesheetEditor() {
         // `false` → `OPERATOR_CANCELLED` at `action_edit.cc:638-641`,
         // except there's no "no keyframes copied" toast in SS yet.
         if (!wouldCopyChange(curHandles)) return;
+        // Audit-fix Slice 6.E MED-A3: if the user has a NON-COLLAPSED
+        // text selection (e.g. triple-clicked a row label rendered as
+        // plain DOM text — NOT an input/textarea/contenteditable, which
+        // are already filtered above), Ctrl+C should copy the TEXT, not
+        // the keyforms. The user's intent at that moment is "copy this
+        // text" — the keyform selection is an unrelated pre-existing
+        // state. Bail out before preventDefault so the browser handles
+        // it. The reverse case (intentional keyform copy with no text
+        // selected) is the dominant SS UX path; this guard only fires
+        // when text IS selected, so it doesn't degrade the normal flow.
+        // Blender has no analog because it's a desktop app with no
+        // OS-clipboard text-copy contention.
+        const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+        if (sel && sel.type === 'Range') return;
         const curTime = useAnimationStore.getState().currentTime;
         e.preventDefault();
         copyKeyformsToClipboard(targetAction, curHandles, curTime);

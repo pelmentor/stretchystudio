@@ -32,6 +32,8 @@
 //   §28 — Round-trip: copy → resetClipboard → paste no-ops
 //   §29 — handlesFromPasteResult: returns all-parts-on selection map
 //   §30 — handlesFromPasteResult: empty input → empty output
+//   §31 — Audit-fix LOW-1: getClipboard returns frozen wrapper (push throws in strict mode)
+//   §32 — Audit-fix LOW-1: frozen-read doesn't break subsequent paste path
 
 import {
   getClipboard,
@@ -518,6 +520,66 @@ eq(dst28.fcurves[0].keyforms.length, 0, '§28.d destination untouched');
   eq(handlesFromPasteResult(onlyEmpty).size, 0,
      '§30.d fcurve with empty idx array → skipped');
 }
+
+// ── §31 — Audit-fix LOW-1: getClipboard returns frozen wrapper ──────────
+// Pre-fix, getClipboard returned the live `_clipboard` ref; a caller
+// could `.fcurves.push(...)` and silently corrupt subsequent pastes.
+// Post-fix, the outer object + `fcurves` array + each per-fcurve object
+// + each `entries` array are Object.freeze'd. Strict-mode (ESM is
+// strict-by-default) makes the mutation attempts throw TypeErrors.
+freshState();
+copyKeyformsToClipboard(
+  makeAction([makeFc('fc1', [makeKf(100, 1), makeKf(200, 2)])]),
+  makeHandles([['fc1', [[0, ALL_ON], [1, ALL_ON]]]]),
+  0,
+);
+{
+  const buf31 = getClipboard();
+  assert(Object.isFrozen(buf31),               '§31.a outer ClipboardBuffer is frozen');
+  assert(Object.isFrozen(buf31.fcurves),       '§31.b fcurves array is frozen');
+  assert(Object.isFrozen(buf31.fcurves[0]),    '§31.c per-fcurve obj is frozen');
+  assert(Object.isFrozen(buf31.fcurves[0].entries),
+                                               '§31.d entries array is frozen');
+  // Mutation attempts throw in strict mode (.mjs is strict).
+  let threwPush = false;
+  try { buf31.fcurves.push({ fcurveId: 'evil', entries: [] }); }
+  catch (e) { threwPush = e instanceof TypeError; }
+  assert(threwPush, '§31.e fcurves.push throws TypeError in strict mode');
+  let threwAssign = false;
+  try { buf31.firstTime = -999; }
+  catch (e) { threwAssign = e instanceof TypeError; }
+  assert(threwAssign, '§31.f firstTime reassign throws TypeError in strict mode');
+  let threwEntryPush = false;
+  try { buf31.fcurves[0].entries.push(makeKf(999, 9)); }
+  catch (e) { threwEntryPush = e instanceof TypeError; }
+  assert(threwEntryPush, '§31.g entries.push throws TypeError in strict mode');
+}
+
+// ── §32 — Audit-fix LOW-1: frozen-read doesn't break subsequent paste ───
+// The freeze only affects the EXTERNAL view (getClipboard result). The
+// INTERNAL `_clipboard` is left mutable so `pasteKeyformsFromClipboard`
+// can shallow-clone entries per-iteration without needing to unfreeze.
+freshState();
+copyKeyformsToClipboard(
+  makeAction([makeFc('fc1', [makeKf(500, 0.7)])]),
+  makeHandles([['fc1', [[0, ALL_ON]]]]),
+  0,
+);
+// Read once (to make sure the frozen-wrapper-build doesn't disturb state).
+const frozenView = getClipboard();
+assert(Object.isFrozen(frozenView), '§32.a setup: clipboard returns frozen');
+// Now paste — should work normally, since paste reads internal _clipboard
+// directly (not via getClipboard).
+const dst32 = makeAction([makeFc('fc1', [])]);
+const r32 = pasteKeyformsFromClipboard(dst32, 1000);
+eq(r32.changed, true, '§32.b paste still succeeds after frozen-read');
+eq(dst32.fcurves[0].keyforms.length, 1, '§32.c entry inserted');
+eq(dst32.fcurves[0].keyforms[0].time, 1000, '§32.d entry at destinationTime');
+// And again — paste should be idempotent under repeat (clipboard wasn't
+// drained by the read).
+const dst32b = makeAction([makeFc('fc1', [])]);
+pasteKeyformsFromClipboard(dst32b, 2000);
+eq(dst32b.fcurves[0].keyforms[0].time, 2000, '§32.e paste repeatable');
 
 // ── Summary ─────────────────────────────────────────────────────────────
 console.log(`\n${passed} passed, ${failed} failed`);

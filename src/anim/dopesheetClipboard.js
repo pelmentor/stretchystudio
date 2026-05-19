@@ -40,11 +40,13 @@
  *
  *       1. Resets the module-level singleton at
  *          `keyframes_general.cc:1258` (`KeyframeCopyBuffer *keyframe_copy_buffer = nullptr`)
- *          via `ANIM_fcurves_copybuf_reset` at `:1347-1352` (frees the
- *          old buffer; allocates a fresh one).
+ *          via `ANIM_fcurves_copybuf_reset` (defn at `:1347-1352`, called
+ *          from `copy_animedit_keys` at `:1493`) — frees the old buffer;
+ *          allocates a fresh one.
  *       2. Per fcurve: skips if no center-bit-selected bezts
- *          (`ANIM_fcurve_keyframes_loop(..., BEZT_OK_SELECTED_KEY, ...) == 0`
- *          at `:1505-1517` — `BEZT_OK_SELECTED_KEY` checks
+ *          (`ANIM_fcurve_keyframes_loop(..., ANIM_editkeyframes_ok(BEZT_OK_SELECTED_KEY), ...) == 0`
+ *          at `:1505-1517` — `ANIM_editkeyframes_ok` resolves
+ *          `BEZT_OK_SELECTED_KEY` to a per-bezt predicate that checks
  *          `bezt->f2 & SELECT`, the CENTER bit).
  *       3. Allocates a fresh `FCurve` copy with the original's
  *          `rna_path` + `array_index`, appended to a per-slot channelbag.
@@ -161,7 +163,8 @@
  * - **DEV 14** — `flipped` variant NOT shipped: Blender's
  *   `Shift+Ctrl+V` keymap binding at `blender_default.py:2708-2709`
  *   sets `flipped=True`, triggering `do_curve_mirror_flippping` per
- *   bezt at `keyframes_general.cc:1989` + `flip_names` rna-path
+ *   bezt at `keyframes_general.cc:1989-1991` (the `if (flip)` branch
+ *   inside `paste_animedit_keys_fcurve`) + `flip_names` rna-path
  *   surgery at `:1570-1587` (rewrites `pose.bones["Foot.L"]` →
  *   `pose.bones["Foot.R"]`). SS dopesheet has no bones in its keyform
  *   model (bone params are stored as separate flat fcurves keyed by
@@ -358,13 +361,47 @@ export function resetClipboard() {
 /**
  * Read the current clipboard state. Returns `null` if no copy has
  * happened (or if `resetClipboard` was called since the last copy).
- * Returns the live reference; callers MUST NOT mutate. Used by tests
- * + by the predicate `wouldPasteChange` + by future inspector UI.
+ *
+ * **Audit-fix Slice 6.E LOW-1**: returns a SHALLOW-FROZEN view of the
+ * live buffer (outer `ClipboardBuffer` + inner `ClipboardFcurve` objects
+ * + `entries` arrays are `Object.freeze`'d). The frozen view points at
+ * the same `Keyform` objects, so deep mutation of `kf.handleLeft` etc.
+ * would still silently corrupt — but the common footguns (push/sort
+ * the entries array; reassign `firstTime`) are caught at runtime in
+ * strict mode. Pre-fix the docstring said "MUST NOT mutate" but no
+ * enforcement; the freeze upgrades the contract from prayer to invariant
+ * for the structural surface. Module-internal reads (`wouldPasteChange`,
+ * `pasteKeyformsFromClipboard`) reference `_clipboard` directly and
+ * BYPASS this freeze, so the paste path's per-iteration shallow clone
+ * (`cloneKeyform`) still operates on the original mutable Keyform refs
+ * — no perf impact.
  *
  * @returns {ClipboardBuffer | null}
  */
 export function getClipboard() {
-  return _clipboard;
+  if (!_clipboard) return null;
+  // Build a frozen wrapper. Freeze each level of the structural
+  // hierarchy (outer + per-fcurve + entries array). Don't freeze the
+  // Keyform objects themselves — that would also freeze `handleLeft`
+  // etc. recursively across the original module state, defeating the
+  // bypass above.
+  //
+  // TS cast: the `Object.freeze` chain produces a `Readonly<...>` shape
+  // that's structurally compatible with `ClipboardBuffer` for reads but
+  // assignable-incompatible due to the `readonly` marker on the array.
+  // The cast through `unknown` is the standard JSDoc escape — callers
+  // observing the result type as `ClipboardBuffer` get the live read
+  // semantics they expect; runtime freeze enforces the immutability.
+  const frozen = Object.freeze({
+    firstTime:  _clipboard.firstTime,
+    lastTime:   _clipboard.lastTime,
+    originTime: _clipboard.originTime,
+    fcurves: Object.freeze(_clipboard.fcurves.map((cb) => Object.freeze({
+      fcurveId: cb.fcurveId,
+      entries:  Object.freeze(cb.entries.slice()),
+    }))),
+  });
+  return /** @type {ClipboardBuffer} */ (/** @type {unknown} */ (frozen));
 }
 
 /**
@@ -490,9 +527,10 @@ export function copyKeyformsToClipboard(action, handles, originTime) {
   if (!Number.isFinite(originTime)) {
     throw new Error('copyKeyformsToClipboard: originTime must be a finite number');
   }
-  // Reset clipboard FIRST — matches Blender's ANIM_fcurves_copybuf_reset
-  // at `:1493`. Pre-fix, partial population would have leaked from prior
-  // copies if we early-returned mid-loop.
+  // Reset clipboard FIRST — matches Blender's call site at
+  // `copy_animedit_keys:1493` (function defn at `:1347-1352`). Pre-fix,
+  // partial population would have leaked from prior copies if we
+  // early-returned mid-loop.
   resetClipboard();
   if (!handles || typeof handles.get !== 'function' || handles.size === 0) {
     return { changed: false, buffer: null };
