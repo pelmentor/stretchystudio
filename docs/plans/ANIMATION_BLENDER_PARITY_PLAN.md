@@ -1558,7 +1558,46 @@ interactivity. Closes: 1 grievance (no Graph Editor write-mode).
 **Goal.** Make [DopesheetEditor.jsx](../../src/v3/editors/dopesheet/DopesheetEditor.jsx)
 interactive. Multi-track keyframe operations.
 
-#### 6.A — Editor architecture
+**Status:** Slice 6.A SHIPPED 2026-05-19 (`cfb82a9` + `5b4cccd`).
+6.B-6.G remain (~3 days estimated).
+
+#### 6.A — Tick selection + state lift — SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/dopesheetSelectOps.js`: 3 pure ops
+(`applyTickSelectReplace` / `applyTickSelectExtend` /
+`applyTickSelectDeselect`) + `isTickSelected` predicate. Tests:
+60 asserts in `scripts/test/test_dopesheetSelectOps.mjs`.
+
+**Architectural lift.** Slice 5.EE shipped the
+`keyformSelectionStore` as a one-way mirror (FCurveEditor publishes,
+DopesheetEditor reads). Phase 6 making the Dopesheet a writer too
+forced lifting the canonical `selectedHandles` state OUT of
+FCurveEditor's local `useState` INTO the shared store
+(`useKeyformSelectionState()` hook with `[handles, setHandles]`
+useState-shaped API). Drop-in for the 22 in-FCurveEditor call sites;
+zero behavioral change there. The hook is identity-stable post
+audit-fix CRITICAL — the original implementation was leaking a new
+closure per render. See close-out doc for full audit detail.
+
+**UI surface.** DopesheetEditor tick clicks now SELECT:
+- Plain LMB → replace (clear all, select this tick)
+- Shift+LMB → extend (toggle this tick, keep others)
+- Ctrl/Cmd+LMB → deselect (remove this tick; SS DEVIATION 1)
+- Double-click → seek to tick time (separate `onDoubleClick`
+  handler post audit-fix HIGH-A2)
+
+**Status of plan v1 list** (the surface goals stated in v1
+prose below — coverage map):
+
+- ✅ Tick selection (click / shift-click) — shipped 6.A.
+- 🟡 Box-select — Slice 6.B (queued next).
+- 🟡 Drag selected ticks in time — Slice 6.C.
+- 🟡 Per-channel mute/solo — Slice 6.F.
+- 🟡 Channel collapse/expand — Slice 6.E or 6.F.
+- 🟡 Channel filter dropdown — out of scope; defer to a polish slice.
+
+**v1 prose preserved below** for reference; flip checkmarks as
+each remaining slice ships.
 
 Track rows are columns of frame-ticks. Phase 6 adds:
 
