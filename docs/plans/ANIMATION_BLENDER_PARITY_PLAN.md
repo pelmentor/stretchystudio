@@ -2123,7 +2123,151 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-#### 7.A — Keying Set registry
+**Status:** **Slice 7.A SHIPPED 2026-05-19** (`2ebefe4` + audit-fix
+`768d25c`). Substrate only — registry + collect helpers + CRUD; no
+operator, no UI yet. Slices remaining: **7.B** (Insert Keyframe
+operator + Only-Insert-Needed + Replace/Always Add), **7.C** (I-key
+menu UI), **7.D** (auto-keyframe set parity), **7.E** (K-key toast
++ rebind preference), **7.F** (test sweep + Phase 7 exit gate).
+
+**Cite-discipline:** 4-slice clean streak (6.D+6.E+6.F.1+6.F.2)
+**BROKEN at 7.A** — 2 HIGH-F + 1 MED-F + 1 LOW-F fabs caught by
+Blender-fidelity audit, fixed same-day in `768d25c`. Memory rule 9
+tightened (re-OPEN, not just re-source).
+
+#### 7.A — Keying Set registry ✅ SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/keyingSets.js` (~485 LOC):
+
+- `BUILTIN_KEYING_SET_IDS` — frozen tuple, canonical menu order:
+  `['Available', 'Location', 'Rotation', 'Scaling', 'LocRotScale',
+  'BlendShape', 'AllParams']` (5 Blender ports + 2 SS-original;
+  mirrors Blender `keyingsets_builtins.py:647-670` `classes` tuple
+  ordering for the 5 ports).
+- `getKeyingSet(project, id)` — lookup, built-ins first then
+  `project.keyingSets[]`.
+- `listKeyingSets(project)` — stable-ordered: built-ins first then
+  user-defined (insertion-order); shadow attempts on built-in ids
+  rejected at list-time too.
+- `getActiveKeyingSet(project)` + `setActiveKeyingSet(project, id)`.
+  Setter throws Rule №1 on unknown id; null clears.
+- `collectChannels(project, set, objectIds)` — returns
+  `{path, group}[]`; dispatches built-in `.collect` (per-object) OR
+  user-defined static `paths[]`.
+- `addKeyingSet` / `removeKeyingSet` / `cloneKeyingSet` — full CRUD
+  for user-defined sets. All shadow attempts on built-in ids throw.
+  Active pointer auto-clears when its target set is removed.
+
+**Blender cites (re-SOURCED per memory rule 9):**
+
+- `keyingsets_builtins.py:27-34` — 8 ANIM_KS_* canonical idnames.
+- `keyingsets_builtins.py:38-82` — Location/Rotation/Scaling defs.
+- `keyingsets_builtins.py:72-73` — DEV 20: Scaling `bl_idname="Scaling"`
+  (line 72) + `bl_label="Scale"` (line 73).
+- `keyingsets_builtins.py:126-144` — LocRotScale composite, loc/rot/scale
+  emission order at `:140-144`.
+- `keyingsets_builtins.py:348-362` — Available def.
+- `keyingsets_builtins.py:647-670` — `classes` menu-order tuple.
+- `_keyingsets_utils.py:130-162` — RKS_GEN_available.
+- `_keyingsets_utils.py:194-217` — RKS_GEN_location (DEV 21: single
+  vector path `"location"` + array_index; SS emits 2 component paths).
+- `_keyingsets_utils.py:220-245` — RKS_GEN_rotation (DEV 22: mode-
+  dependent quat/axis/euler; SS collapses to single Euler scalar).
+- `_keyingsets_utils.py:248-270` — RKS_GEN_scaling (same DEV 21 split).
+
+**SS DEVIATIONS new this slice (20-25):**
+
+- DEV 20 — Scaling carries `id="Scaling"` + `label="Scale"`
+  (faithful Blender split).
+- DEV 21 — Per-component RNA paths (transform.x / transform.y / etc).
+  Blender uses 3-vector paths + array_index; SS `evaluateRnaPath`
+  has no array_index concept.
+- DEV 22 — Rotation collapsed to single scalar (`transform.rotation`
+  / `pose.rotation`). Blender's mode-dependent
+  euler/quaternion/axis_angle absent — SS is 2D-only Live2D.
+- DEV 23 — User-defined sets at `project.keyingSets[]`. Blender
+  scene-scoped, but SS project IS the scene per Phase 1 Stage 1.D.
+- DEV 24 — `BlendShape` SS-original set (Live2D blend shapes; no
+  Blender analog).
+- DEV 25 — `AllParams` SS-original set (Live2D parameter pool; no
+  Blender analog).
+
+**Schema (sparse boolean idiom — Rule №2):**
+
+- `project.keyingSets?: Array<{id, label, description?, insertNew?,
+  paths: Array<{path, group}>}>` — user-defined sets only. Default `[]`.
+- `project.activeKeyingSetId?: string | null` — default `null`.
+
+No migration. Built-ins live in this module's static registry, NOT
+in the project file.
+
+**Tests:** `test_keyingSets.mjs` ships **131 asserts** across 12
+sections:
+
+1. Built-in registry shape (DEV 20 verified at `keyingsets_builtins.py:72-73`)
+2. Location on non-bone object (per-component DEV 21)
+3. Pose paths on bone (DEV 22 Euler-only collapse)
+4. LocRotScale composite order (Blender `keyingsets_builtins.py:140-144`)
+5. BlendShape SS-original (DEV 24)
+6. AllParams SS-original (DEV 25)
+7. Available fcurve scan + dedup
+8. Active pointer mutator (immer-friendly)
+9. User-defined set CRUD (add/remove with throws on shadow)
+10. cloneKeyingSet from built-in (collect snapshot) + from user (static)
+11. listKeyingSets ordering + shadow-attempt rejection
+12. collectChannels resilience (null project / null set / null objectIds)
+
+Wired into master `npm test`. Sibling suites regression-checked
+(animationEngine 61, animationStore 55, fcurveEval 35,
+actionRegistry 95 — all green). Typecheck clean (em-dashes in JSDoc
+`@property`/`@param` replaced with `--` for TS parser strictness).
+
+**Audit sweep #78** (Phase 7 sweep #1). **Blender-fidelity: 2 HIGH-F
++ 1 MED-F + 1 LOW-F — clean cite streak BROKEN at 7.A** (1 slice in).
+**Architecture: 0 HIGH + 2 MED + 4 LOW.** All findings fixed in
+`768d25c` same-day:
+
+- HIGH-F1 — `keyingsets.cc:355-364 BKE_keyingset_add_path` was a
+  complete fab (real defn at `blenkernel/intern/anim_sys.cc:173`;
+  cited range was `remove_keyingset_button_exec`). Classic "didn't
+  open the file" pattern. Replaced.
+- HIGH-F2 — Orphan `(:157-162)` cite attached visually to
+  `keyingsets_builtins.py` but intent was `_keyingsets_utils.py:131-162`.
+  Now explicit cross-file. Rule 9 was DECLARED in docstring but not
+  APPLIED at this cite (re-quoted from draft, not re-sourced).
+- MED-F — `keyingsets_builtins.py:72-73 carries bl_idname = "Scaling"`
+  was constant-vs-literal mismatch. Line 72 holds the constant
+  `ANIM_KS_SCALING_ID`; literal `"Scaling"` at `:29`. Docstring now
+  documents the split precisely.
+- LOW-F — Range `:27-34` → `:26-34` (includes the upstream "Keep
+  these in sync" comment at line 26).
+- MED-A1 — `availablePaths` group-attribution wrong for shared-
+  action projects (every fcurve attributed to first iterating
+  object). Fix: filter fcurves to those whose `rnaPath` starts with
+  `objects["${oid}"]` — mirrors Blender basePath filter at
+  `_keyingsets_utils.py:157-160`.
+- MED-A2 — `node.name ?? id` returned `''` for empty-string names
+  (nullish-coalesce only trips null/undefined). 11 sites refactored
+  to shared `groupOf(node)` helper using `||`.
+- LOW-A1 — Selector trap JSDoc note on `listKeyingSets`.
+- LOW-A2 — Silent-empty-snapshot JSDoc note on `cloneKeyingSet`.
+- LOW-A3 — Test coverage extended (+13 asserts for MED-A1/MED-A2
+  regression + dedup defence + MED-F clarification).
+
+**Root-cause memory update:** `feedback_byte_verify_behavior_cites`
+rule 9 phrasing tightened — "re-OPEN, not just re-source: every
+cite must come from a same-session file open. Draft notes are stale
+by definition." The "rule 9 declared in docstring" half is necessary
+but insufficient; the mechanical file-open step must be applied to
+EVERY cite, not just marquee ones. The 4-slice Phase 6 streak gave
+a false automaticity sense.
+
+Post-audit: **144 test asserts**, sibling regressions clean
+(animationEngine 61, animationStore 55, fcurveEval 35, actionRegistry
+95). Typecheck clean. Close-out doc at
+`docs/plans/SESSION_CLOSEOUT_2026_05_19_ANIMATION_PHASE_7_SLICE_A.md`.
+
+#### 7.A v1 plan reference (preserved below for slice authors)
 
 [src/anim/keyingSets.js]:
 
