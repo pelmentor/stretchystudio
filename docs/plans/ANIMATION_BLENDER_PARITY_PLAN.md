@@ -1242,17 +1242,20 @@ SS deviations documented in slice close-out docs. **Closes: 1 grievance
 **Goal.** Multi-action composition with blend modes, time remapping,
 and tweak-mode push.
 
-**Status:** **5/7 sub-slices SHIPPED** — 4.A substrate + 4.B evaluator +
-4.C tweak mode + 4.D.1 NLAEditor read-only + **4.D.2 drag interactions**
-(`151cea0` + `35367c2` 2026-05-19). Schema at **v42**. Slice 4.D split
-into 4 sub-slices: 4.D.1 (read-only) + 4.D.2 (drag) + 4.D.3
-(affordances) + 4.D.4 (ops). **Cite-discipline**: BROKE at 5 on 4.D.1
-(2 fab'd citations in `5385734`, corrected in `6f52410`); RESET to 0;
-**HOLDS at 1 post-reset** after 4.D.2 (4 Blender citations verified
-byte-exact; separate HIGH-F1 content-accuracy break fixed in audit-fix
-`35367c2`). See close-out docs
-`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1,D2}.md`.
-Remaining: 4.D.3 + 4.D.4 + 4.E + 4.F + 4.G.
+**Status:** **6/7 sub-slices SHIPPED** — 4.A substrate + 4.B evaluator +
+4.C tweak mode + 4.D.1 NLAEditor read-only + 4.D.2 drag interactions
++ **4.D.3 affordances** (`f551079` + `13f0f12` 2026-05-19). Schema at
+**v42**. Slice 4.D split into 4 sub-slices: 4.D.1 (read-only) +
+4.D.2 (drag) + 4.D.3 (affordances) + 4.D.4 (CRUD + Push Action Down).
+**Cite-discipline**: BROKE at 5 on 4.D.1 (2 fab'd citations in
+`5385734`, corrected in `6f52410`); RESET to 0; **HOLDS at 1
+post-reset** after 4.D.2; **HOLDS at 2 post-reset** after 4.D.3
+(16/17 cites verified byte-exact; 1 corrected `nla_buttons.cc:357`
+mis-id; separate HIGH-F1 content-accuracy break fixed in `13f0f12`
+where pre-fix JSDoc justified an SS deviation as Blender parity).
+See close-out docs
+`docs/plans/SESSION_CLOSEOUT_2026_05_{18,19}_ANIMATION_PHASE_4_SLICE_{A,B,C,D1,D2,D3}.md`.
+Remaining: 4.D.4 + 4.E + 4.F + 4.G.
 
 **Audit-driven changes from v1:**
 - `combine` blend mode is **REMOVED from Phase 4**. The audit caught
