@@ -2123,17 +2123,108 @@ write-mode. Closes: 1 grievance (Dopesheet read-only).
 **Goal.** Blender's `I`-key parity: a menu of keying sets, "Only
 Insert Needed" mode, granular per-channel keying.
 
-**Status:** **Slice 7.A SHIPPED 2026-05-19** (`2ebefe4` + audit-fix
-`768d25c`). Substrate only — registry + collect helpers + CRUD; no
-operator, no UI yet. Slices remaining: **7.B** (Insert Keyframe
-operator + Only-Insert-Needed + Replace/Always Add), **7.C** (I-key
-menu UI), **7.D** (auto-keyframe set parity), **7.E** (K-key toast
-+ rebind preference), **7.F** (test sweep + Phase 7 exit gate).
+**Status:** **Slices 7.A + 7.B SHIPPED 2026-05-19** (`2ebefe4` +
+`768d25c` + `5bd0982` + `de91759`). Registry + Insert Keyframe
+kernel complete; no UI yet. Slices remaining: **7.C** (I-key menu
+UI), **7.D** (auto-keyframe set parity), **7.E** (K-key toast +
+rebind preference), **7.F** (test sweep + Phase 7 exit gate).
 
-**Cite-discipline:** 4-slice clean streak (6.D+6.E+6.F.1+6.F.2)
-**BROKEN at 7.A** — 2 HIGH-F + 1 MED-F + 1 LOW-F fabs caught by
-Blender-fidelity audit, fixed same-day in `768d25c`. Memory rule 9
-tightened (re-OPEN, not just re-source).
+**Cite-discipline:** 4-slice clean streak (Phase 6) **BROKEN +
+REGRESSION** — 7.A (2 HIGH-F) + 7.B (1 HIGH-F) confirmed multi-slice
+fab regression. Memory rules 9 (re-OPEN every cite), 10 (literal-
+source-value for constants), and 11 ("comment says X" promotes X to
+byte-quotation) added across the two slices. 7.C will test whether
+rules 10+11 hold for content-claim fabs.
+
+#### 7.B — Insert Keyframe operator ✅ SHIPPED 2026-05-19
+
+**Substrate.** New `src/anim/insertKeyframe.js` (~410 LOC):
+
+- `INSERTKEY_FLAGS` — frozen subset of Blender's `eInsertKeyFlags`
+  (NOFLAGS, NEEDED, REPLACE, AVAILABLE) with byte-faithful bit
+  positions for forward-compat.
+- `applyKeyingSet(project, setId, objectIds, time, flags, options)`
+  — top-level operator. Walks `collectChannels(set, objectIds)`,
+  resolves owner action per channel via `__params__`/`__scene__`
+  routing (DEV 28), calls per-channel insert/replace kernel. Returns
+  `{count, results, skippedNoAction, skippedInvalidPath}` with a
+  9-status enum for UI feedback.
+- `wouldApplyKeyingSetChange(...)` — pure predicate; no mutation.
+- Internal: `resolveTargetAction`, `buildFCurveForPath`,
+  `findKeyformAt`, `insertKeyformAtInAction`.
+
+**Blender cites (re-OPENED per rule 9 + content-verified per
+rules 10+11 post audit-fix):**
+
+- `DNA_anim_enums.h:500-525` — eInsertKeyFlags enum, bit positions
+  verified literal-for-literal (rule 10 application).
+- `editors/animation/keyframing.cc:177-240` — `insert_key_with_keyingset`.
+- `editors/animation/keyframing.cc:410-426` — `insert_key_exec`.
+- `animrig/intern/keyingsets.cc:411-466` — `apply_keyingset` kernel
+  (returns at `:465`, with `:464` carrying BLI_assert; audit-fix
+  LOW-F1 corrected from `:464` off-by-one).
+- `animrig/intern/keyingsets.cc:294-405` — `insert_key_to_keying_set_path`.
+- `animrig/ANIM_keyingsets.hh:85-89` — ModifyKeyMode enum.
+- `BKE_fcurve.hh:217` — BEZT_BINARYSEARCH_THRESH = 0.01f frames
+  (sister cite from Slice 6.C audit-fix, re-verified).
+- `blenlib/intern/math_base_inline.cc:457-460` — `compare_ff` signature
+  (audit-fix HIGH-F1: prior cite of "compare_ff default = 1e-4" was
+  fab — no Blender default exists; rewritten to honest empirical
+  rationale).
+
+**SS DEVIATIONs new this slice (26-29):**
+
+- DEV 26 — VALUE_EPSILON = 1e-4 for INSERTKEY_NEEDED (empirical;
+  tighter than animrig's only `compare_ff` call at `action.cc:762`
+  which uses `0.001f`). Audit-fix HIGH-F1 corrected rationale.
+- DEV 27 — TIME_EPSILON_MS = 0.5 (SS canonical ms; same as Slice
+  6.C DEV 6; Blender uses 0.01f frames).
+- DEV 28 — `__params__`/`__scene__` routing to `__scene__`'s
+  animData (Blender analog: Scene.animation_data).
+- DEV 29 — REPLACE and AVAILABLE distinguished in result-status
+  reporting for UI clarity (audit-fix MED-F1 re-quoted the literal
+  Blender comment at `DNA_anim_enums.h:522`: "Don't create new
+  F-Curves (implied by #INSERTKEY_REPLACE)").
+
+**Audit sweep #79** (Phase 7 sweep #2). **Blender-fidelity: 1 HIGH-F
++ 1 MED-F + 2 LOW-F.** **Architecture: 1 HIGH + 5 MED + 3 LOW.** All
+findings addressed same-day in `de91759`:
+
+- HIGH-F1 — DEV 26 `compare_ff` default fab (no such default exists).
+  Rule 9 was applied per file-existence; failed per content-claim.
+- HIGH-1 — `buildFCurveForPath` null returned `'skipped-available'`
+  not `'skipped-invalid-path'` (Rule №1 contract violation).
+- MED-1 — Handle reset on replace destroyed user-authored `'free'`
+  handles silently (recalc skips them; pre-fix wipe lost offsets).
+- MED-2/3/5 — JSDoc-level WARNING annotations: predicate/operator
+  semantic divergence (`count` vs would-change); `__params__` default
+  resolver trap (static vs live value); filter-in-selector trap on
+  `wouldApplyKeyingSetChange`.
+- MED-4 — Test coverage for `'skipped-invalid-path'` added.
+- MED-F1 — DEV 29 paraphrased-as-quoted Blender comment text; re-quoted
+  literally.
+- LOW polish — malformed-action default status, `:464` off-by-one,
+  call-site range tightening.
+
+**Memory rule 10 + rule 11 introduced** in
+`feedback_byte_verify_behavior_cites` mid-audit-fix:
+
+- Rule 10 — Cite the LITERAL source value for constants/defaults/
+  thresholds. Rule 9 catches file-doesn't-exist fabs; rule 10 closes
+  the content-claim-fab gap.
+- Rule 11 — "Comment says X" promotes X to byte-quotation. Use
+  "comment implies/notes that" to license paraphrase.
+
+Post-audit: **87 test asserts** (was 72 pre-fix; +15 regression).
+Sibling regressions clean (animationEngine 61, animationStore 55,
+fcurveEval 35, keyingSets 144). Typecheck clean. Close-out doc at
+`docs/plans/SESSION_CLOSEOUT_2026_05_19_ANIMATION_PHASE_7_SLICE_B.md`.
+
+**Cite-discipline regression confirmed multi-slice** (7.A + 7.B both
+shipped with HIGH-F fabs). The 4-slice Phase 6 clean streak is now
+provably a Phase 6 phenomenon, not a durable discipline change.
+Phase 7 author discipline regressed; rules 10+11 specifically target
+the 7.B failure mode for 7.C onwards.
 
 #### 7.A — Keying Set registry ✅ SHIPPED 2026-05-19
 
