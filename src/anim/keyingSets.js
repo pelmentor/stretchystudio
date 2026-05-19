@@ -10,24 +10,27 @@
  *
  * # Blender reference (re-SOURCED per memory rule 9)
  *
- *   - `reference/blender/scripts/startup/keyingsets_builtins.py:27-34`
- *     declares the canonical `bl_idname`s as Python constants and
- *     notes "Keep these in sync with those in ED_keyframing.hh!".
- *     The 8 ANIM_KS_* ids are the load-bearing string keys; SS adopts
- *     5 of them verbatim ("Available", "Location", "Rotation",
- *     "Scaling", "LocRotScale").
+ *   - `reference/blender/scripts/startup/keyingsets_builtins.py:26-34`
+ *     declares the canonical `bl_idname`s as Python constants. Line
+ *     26 carries the upstream "Keep these in sync with those in
+ *     ED_keyframing.hh!" comment (the C constants have since moved
+ *     to `animrig/ANIM_keyingsets.hh:31-36`; SS carries the stale
+ *     comment forward verbatim). Lines 27-34 are the 8 ANIM_KS_*
+ *     string-id constants; SS adopts 5 verbatim ("Available",
+ *     "Location", "Rotation", "Scaling", "LocRotScale").
  *   - `reference/blender/scripts/startup/keyingsets_builtins.py:38-82`
- *     Location/Rotation/Scaling class defs. Note `BUILTIN_KSI_Scaling`
- *     at `:70-82` carries `bl_idname = "Scaling"` (line 72) but
- *     `bl_label = "Scale"` (line 73) — the machine id and UI label
- *     differ. SS DEV 20 documents this carry-over.
+ *     Location/Rotation/Scaling class defs. `BUILTIN_KSI_Scaling`
+ *     at `:70-82` carries `bl_idname = ANIM_KS_SCALING_ID` (line 72;
+ *     the constant resolves to `"Scaling"` per `:29`) and
+ *     `bl_label = "Scale"` (line 73, literal). Machine id and UI
+ *     label differ. SS DEV 20 documents this carry-over.
  *   - `reference/blender/scripts/startup/keyingsets_builtins.py:126-144`
  *     `BUILTIN_KSI_LocRotScale` composes the three single-axis
  *     generators in order (loc/rot/scale per `:140-144`).
  *   - `reference/blender/scripts/startup/keyingsets_builtins.py:348-362`
- *     `BUILTIN_KSI_Available` walks the active action's existing
- *     fcurves and emits one path per fcurve (`:157-162` — the
- *     `RKS_GEN_available` generator).
+ *     `BUILTIN_KSI_Available` definition; the actual scan body lives
+ *     in `_keyingsets_utils.py:131-162` `RKS_GEN_available` (the
+ *     generator that the class binds via `:362`).
  *   - `reference/blender/scripts/startup/keyingsets_builtins.py:647-670`
  *     `classes` tuple sets the menu order. Available first
  *     (`:648`), Location/Rotation/Scaling next (`:649-651`),
@@ -134,18 +137,27 @@ export const BUILTIN_KEYING_SET_IDS = Object.freeze([
 ]);
 
 /** Per-component path emission helpers — Rule №1, no path-string magic at call sites. */
+/**
+ * Resolve a node's group label for fcurve organisation. `||` (not
+ * `??`) so empty-string names fall back to id (audit-fix MED-2).
+ */
+function groupOf(node) {
+  return (node?.name || node?.id) ?? null;
+}
+
 function locationPaths(node) {
   if (!node) return [];
   const id = node.id;
+  const g = groupOf(node);
   if (isBoneGroup(node)) {
     return [
-      { path: `objects["${id}"].pose.x`, group: node.name ?? id },
-      { path: `objects["${id}"].pose.y`, group: node.name ?? id },
+      { path: `objects["${id}"].pose.x`, group: g },
+      { path: `objects["${id}"].pose.y`, group: g },
     ];
   }
   return [
-    { path: `objects["${id}"].transform.x`, group: node.name ?? id },
-    { path: `objects["${id}"].transform.y`, group: node.name ?? id },
+    { path: `objects["${id}"].transform.x`, group: g },
+    { path: `objects["${id}"].transform.y`, group: g },
   ];
 }
 
@@ -153,21 +165,22 @@ function rotationPaths(node) {
   if (!node) return [];
   const id = node.id;
   const base = isBoneGroup(node) ? 'pose.rotation' : 'transform.rotation';
-  return [{ path: `objects["${id}"].${base}`, group: node.name ?? id }];
+  return [{ path: `objects["${id}"].${base}`, group: groupOf(node) }];
 }
 
 function scalingPaths(node) {
   if (!node) return [];
   const id = node.id;
+  const g = groupOf(node);
   if (isBoneGroup(node)) {
     return [
-      { path: `objects["${id}"].pose.scaleX`, group: node.name ?? id },
-      { path: `objects["${id}"].pose.scaleY`, group: node.name ?? id },
+      { path: `objects["${id}"].pose.scaleX`, group: g },
+      { path: `objects["${id}"].pose.scaleY`, group: g },
     ];
   }
   return [
-    { path: `objects["${id}"].transform.scaleX`, group: node.name ?? id },
-    { path: `objects["${id}"].transform.scaleY`, group: node.name ?? id },
+    { path: `objects["${id}"].transform.scaleX`, group: g },
+    { path: `objects["${id}"].transform.scaleY`, group: g },
   ];
 }
 
@@ -176,9 +189,9 @@ function blendShapePaths(node) {
   const values = node.blendShapeValues;
   if (!values || typeof values !== 'object') return [];
   const out = [];
-  const groupName = node.name ?? node.id;
+  const g = groupOf(node);
   for (const sid of Object.keys(values)) {
-    out.push({ path: `objects["${node.id}"].blendShapeValues["${sid}"]`, group: groupName });
+    out.push({ path: `objects["${node.id}"].blendShapeValues["${sid}"]`, group: g });
   }
   return out;
 }
@@ -197,13 +210,18 @@ function allParamsPaths(project) {
 /**
  * "Available" — emit one path per fcurve already living in the
  * active action of each object. Mirrors
- * `_keyingsets_utils.py:130-162` (RKS_GEN_available); SS reads
+ * `_keyingsets_utils.py:131-162` (RKS_GEN_available); SS reads
  * `node.animData.actionId` to locate the action.
  *
- * Per the Blender pattern: paths are emitted with NO scoping mask
- * (i.e. fcurves whose `rnaPath` belongs to OTHER objects are also
- * emitted if they live in the same action). The kernel's job is to
- * iterate selection, the action's job is to enumerate fcurves.
+ * Per the Blender pattern at `_keyingsets_utils.py:157-160`, when
+ * iterating a non-id-block element (e.g. a bone whose `path_from_id()`
+ * is `pose.bones["X"]`), the generator filters fcurves to those whose
+ * `data_path` contains the basePath. SS adapts this for the global-
+ * path model: when iterating object `oid`, only emit fcurves whose
+ * `rnaPath` starts with `objects["${oid}"]`. This makes group
+ * attribution correct when the same action is bound to multiple
+ * objects (audit-fix MED-1; pre-fix every fcurve in a shared action
+ * was attributed to whichever object iterated first).
  */
 function availablePaths(project, objectIds) {
   if (!project || !Array.isArray(project.actions) || !Array.isArray(objectIds)) {
@@ -219,11 +237,13 @@ function availablePaths(project, objectIds) {
     if (!actionId) continue;
     const action = project.actions.find((a) => a?.id === actionId);
     if (!action || !Array.isArray(action.fcurves)) continue;
+    const ownerPrefix = `objects["${oid}"]`;
     for (const fc of action.fcurves) {
       if (!fc?.rnaPath || typeof fc.rnaPath !== 'string') continue;
+      if (!fc.rnaPath.startsWith(ownerPrefix)) continue;
       if (seen.has(fc.rnaPath)) continue;
       seen.add(fc.rnaPath);
-      out.push({ path: fc.rnaPath, group: node.name ?? oid });
+      out.push({ path: fc.rnaPath, group: groupOf(node) });
     }
   }
   return out;
@@ -339,6 +359,13 @@ export function getKeyingSet(project, id) {
  * built-ins in canonical menu order, then user-defined in
  * `project.keyingSets[]` insertion order.
  *
+ * NOTE (audit-fix LOW-2): each call allocates a fresh wrapper array
+ * and fresh per-user-defined-entry objects. Built-in entries are
+ * shared frozen refs from `BUILTIN_DEFS`. Do NOT call this inside a
+ * Zustand selector — fresh-array-per-call trips the
+ * `feedback_filter_in_selector` infinite-loop trap. Wrap in
+ * `useMemo` at the call site, or compute once at I-menu open time.
+ *
  * @param {object|null|undefined} project
  * @returns {KeyingSetDef[]}
  */
@@ -400,8 +427,10 @@ export function setActiveKeyingSet(project, id) {
  *
  * Built-in sets dispatch through their `collect` function; user-defined
  * sets emit their static `paths` (ignoring the selection — Blender's
- * absolute-paths user-defined-set semantic at `keyingsets.cc:355-364`
- * `BKE_keyingset_add_path`).
+ * absolute-paths user-defined-set semantic at `BKE_keyingset_add_path`
+ * defn `blenkernel/intern/anim_sys.cc:173`, call-site
+ * `editors/animation/keyingsets.cc:319` inside
+ * `add_keyingset_button_exec`).
  *
  * @param {object|null|undefined} project
  * @param {KeyingSetDef|null|undefined} set
@@ -482,6 +511,13 @@ export function removeKeyingSet(project, id) {
  * fresh id. Built-in sets are resolved to their current collect output
  * via the supplied `objectIds` (snapshot at clone time — mirrors
  * Blender's "Add Empty Set" + populate-from-selection pattern).
+ *
+ * NOTE (audit-fix LOW-3): if `sourceId` resolves to a built-in and
+ * `objectIds` is `[]` (or omitted), the snapshot is empty and the
+ * resulting user-defined set carries `paths: []`. The substrate does
+ * NOT throw or warn — callers (UI layer in 7.C) should guard against
+ * empty-snapshot clones and surface a toast like Blender's "No
+ * keyable paths found" feedback.
  *
  * @param {object} project  -- immer draft
  * @param {string} sourceId

@@ -46,9 +46,12 @@ for (const id of BUILTIN_KEYING_SET_IDS) {
 }
 
 // DEV 20: Scaling id vs Scale label
+// Blender keyingsets_builtins.py:72 holds `bl_idname = ANIM_KS_SCALING_ID`,
+// the constant defined at :29 as the literal "Scaling". Line 73 holds the
+// literal `bl_label = "Scale"`. Audit-fix MED-F clarification.
 const scaling = getKeyingSet({}, 'Scaling');
-eq(scaling.id, 'Scaling', '§1 — DEV 20: Scaling id matches Blender bl_idname (line 72)');
-eq(scaling.label, 'Scale', '§1 — DEV 20: Scaling label matches Blender bl_label (line 73)');
+eq(scaling.id, 'Scaling', '§1 — DEV 20: id resolves to "Scaling" (constant at keyingsets_builtins.py:29, referenced at :72)');
+eq(scaling.label, 'Scale', '§1 — DEV 20: label is literal "Scale" at keyingsets_builtins.py:73');
 
 // Available has insertNew=false (does NOT create new fcurves)
 const available = getKeyingSet({}, 'Available');
@@ -226,8 +229,12 @@ eq(av1[1].path, 'objects["partA"].transform.y', '§7 — Available[1] from fcurv
 const av2 = collectChannels(projectAvail, getKeyingSet({}, 'Available'), ['partA', 'partB']);
 eq(av2.length, 3, '§7 — Available on partA+partB: 3 fcurves total');
 
-// Dedup across selection (same rnaPath in two actions)
-const projectAvailDedup = {
+// Audit-fix MED-1: shared-action group attribution.
+// Pre-fix: every fcurve in a shared action would be attributed to whichever
+// object iterated FIRST. Post-fix: each object's iteration only emits paths
+// whose rnaPath starts with `objects["<oid>"]` — Blender pattern from
+// `_keyingsets_utils.py:157-160` (basePath filter for non-id-block iterators).
+const projectAvailShared = {
   nodes: [
     { id: 'partA', type: 'part', name: 'PartA', animData: { actionId: 'shared' } },
     { id: 'partB', type: 'part', name: 'PartB', animData: { actionId: 'shared' } },
@@ -235,12 +242,54 @@ const projectAvailDedup = {
   actions: [
     {
       id: 'shared',
-      fcurves: [{ id: 'fc1', rnaPath: 'objects["partA"].transform.x' }],
+      fcurves: [
+        { id: 'fc1', rnaPath: 'objects["partA"].transform.x' },
+        { id: 'fc2', rnaPath: 'objects["partB"].transform.y' },
+      ],
     },
   ],
 };
-const avDedup = collectChannels(projectAvailDedup, getKeyingSet({}, 'Available'), ['partA', 'partB']);
-eq(avDedup.length, 1, '§7 — Available dedups identical rnaPaths across the same action');
+const avShared = collectChannels(projectAvailShared, getKeyingSet({}, 'Available'), ['partA', 'partB']);
+eq(avShared.length, 2, '§7 — Available shared-action: 2 paths (one per owner)');
+const partAEntry = avShared.find((p) => p.path === 'objects["partA"].transform.x');
+const partBEntry = avShared.find((p) => p.path === 'objects["partB"].transform.y');
+ok(partAEntry !== undefined, '§7 — MED-1: partA path emitted');
+ok(partBEntry !== undefined, '§7 — MED-1: partB path emitted');
+eq(partAEntry.group, 'PartA', '§7 — MED-1: partA group correctly attributed (NOT cross-attributed)');
+eq(partBEntry.group, 'PartB', '§7 — MED-1: partB group correctly attributed');
+
+// Defensive dedup: same rnaPath appears twice in the same action (degenerate).
+const projectAvailDegen = {
+  nodes: [{ id: 'partA', type: 'part', name: 'PartA', animData: { actionId: 'dup' } }],
+  actions: [
+    {
+      id: 'dup',
+      fcurves: [
+        { id: 'fc1', rnaPath: 'objects["partA"].transform.x' },
+        { id: 'fc2', rnaPath: 'objects["partA"].transform.x' }, // dup
+      ],
+    },
+  ],
+};
+const avDegen = collectChannels(projectAvailDegen, getKeyingSet({}, 'Available'), ['partA']);
+eq(avDegen.length, 1, '§7 — defensive dedup against same-action duplicate rnaPath');
+
+// Available filters out fcurves whose rnaPath belongs to a different object.
+const projectAvailMixed = {
+  nodes: [{ id: 'partA', type: 'part', name: 'PartA', animData: { actionId: 'mixed' } }],
+  actions: [
+    {
+      id: 'mixed',
+      fcurves: [
+        { id: 'fc1', rnaPath: 'objects["partA"].transform.x' },
+        { id: 'fc2', rnaPath: 'objects["__params__"].values["ParamA"]' }, // global, not partA
+      ],
+    },
+  ],
+};
+const avMixed = collectChannels(projectAvailMixed, getKeyingSet({}, 'Available'), ['partA']);
+eq(avMixed.length, 1, '§7 — Available filters non-owner paths (MED-1)');
+eq(avMixed[0].path, 'objects["partA"].transform.x', '§7 — only the partA-owned path survives');
 
 // Object with no animData → no paths
 const av3 = collectChannels(projectAvail, getKeyingSet({}, 'Available'), ['partC']);
@@ -396,6 +445,40 @@ eq(collectChannels(null, getKeyingSet({}, 'Location'), []), [], '§12 — null p
 eq(collectChannels({}, null, []), [], '§12 — null set → empty');
 eq(collectChannels({}, getKeyingSet({}, 'Location'), null), [], '§12 — null objectIds → empty');
 eq(collectChannels({}, getKeyingSet({}, 'Available'), null), [], '§12 — Available with null objectIds → empty');
+
+// Audit-fix MED-2 regression: empty-string node.name falls back to node.id.
+// Pre-fix: `node.name ?? id` returned '' for `name: ''` (nullish coalescing
+// only trips on null/undefined). Post-fix: `node.name || node.id` trips on
+// falsy, including empty string. Tested on Location, Rotation, Scaling,
+// BlendShape, Available — every site that emits a group label.
+const projectEmptyName = {
+  nodes: [
+    { id: 'noName', type: 'part', name: '' },
+    { id: 'undefName', type: 'part' /* no name field */ },
+  ],
+  parameters: [],
+};
+const locEmpty = collectChannels(projectEmptyName, getKeyingSet({}, 'Location'), ['noName']);
+eq(locEmpty[0].group, 'noName', '§12 — MED-2: empty-string name falls back to id (Location)');
+const locUndef = collectChannels(projectEmptyName, getKeyingSet({}, 'Location'), ['undefName']);
+eq(locUndef[0].group, 'undefName', '§12 — MED-2: undefined name falls back to id');
+const rotEmpty = collectChannels(projectEmptyName, getKeyingSet({}, 'Rotation'), ['noName']);
+eq(rotEmpty[0].group, 'noName', '§12 — MED-2: empty name fallback in Rotation');
+const scaleEmpty = collectChannels(projectEmptyName, getKeyingSet({}, 'Scaling'), ['noName']);
+eq(scaleEmpty[0].group, 'noName', '§12 — MED-2: empty name fallback in Scaling');
+
+const projectAvailEmpty = {
+  nodes: [{ id: 'noName', type: 'part', name: '', animData: { actionId: 'a1' } }],
+  actions: [{ id: 'a1', fcurves: [{ id: 'fc1', rnaPath: 'objects["noName"].opacity' }] }],
+};
+const avEmpty = collectChannels(projectAvailEmpty, getKeyingSet({}, 'Available'), ['noName']);
+eq(avEmpty[0].group, 'noName', '§12 — MED-2: empty name fallback in Available');
+
+const projectBSEmpty = {
+  nodes: [{ id: 'noName', type: 'part', name: '', blendShapeValues: { sh1: 0 } }],
+};
+const bsEmpty = collectChannels(projectBSEmpty, getKeyingSet({}, 'BlendShape'), ['noName']);
+eq(bsEmpty[0].group, 'noName', '§12 — MED-2: empty name fallback in BlendShape');
 
 // User-defined set collect uses static paths
 const projectUserCollect = {};
