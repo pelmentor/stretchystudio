@@ -1007,20 +1007,20 @@ export default function CanvasViewport({
             // null for now — overlay falls back to its own probe path.
             useRigEvalStore.getState().setLiftedGrids(evalOut?.liftedGrids ?? null);
             // BUG-015 instrumentation — once-per-second snapshot of the
-            // ParamBodyAngle{X,Y,Z} values that just went into evalRig +
-            // the resulting top-row vertex displacement on a sentinel
-            // mesh. Helps the user repro "BodyAngle slider doesn't move
-            // anything" by showing: did evalRig see the user's slider
-            // write? did it produce a non-zero output? Throttled so a
-            // continuous param sweep doesn't drown the Logs panel.
+            // ParamBodyAngle{X,Y,Z} values that just went into the
+            // depgraph eval. Helps the user repro "BodyAngle slider
+            // doesn't move anything" by showing: did the eval see the
+            // user's slider write? did it produce a non-zero output?
+            // Throttled so a continuous param sweep doesn't drown the
+            // Logs panel.
             const _now = timestamp;
             if (_now - lastBodyAngleLogTimestampRef.current > 1000) {
               const bz = valuesForEval.ParamBodyAngleZ ?? 0;
               const by = valuesForEval.ParamBodyAngleY ?? 0;
               const bx = valuesForEval.ParamBodyAngleX ?? 0;
               if (bz !== 0 || by !== 0 || bx !== 0) {
-                logger.debug('evalRigBodyAngle',
-                  `evalRig sees BodyAngle X=${bx.toFixed(2)} Y=${by.toFixed(2)} Z=${bz.toFixed(2)}`,
+                logger.debug('depgraphBodyAngle',
+                  `depgraph eval sees BodyAngle X=${bx.toFixed(2)} Y=${by.toFixed(2)} Z=${bz.toFixed(2)}`,
                   {
                     paramBodyAngleX: bx,
                     paramBodyAngleY: by,
@@ -1034,8 +1034,8 @@ export default function CanvasViewport({
           }
           // PP1-008(a) — while the user is mesh-editing a part, skip the
           // rig override for THAT part so their vertex edits are visible
-          // immediately. evalRig walks rigSpec.artMeshes baked at Init Rig
-          // time; once the user moves a vertex those keyforms are stale,
+          // immediately. The eval walks rigSpec.artMeshes baked at Init
+          // Rig time; once the user moves a vertex those keyforms are stale,
           // and the rig override would re-upload the stale verts every
           // frame, hiding the edit. Re-baking the keyforms mid-drag is
           // expensive — the V3 re-rig flow's Refit All (or per-stage
