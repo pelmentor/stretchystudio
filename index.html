@@ -51,6 +51,7 @@
         --border: 214.3 31.8% 91.4%;
         --muted: 210 40% 96.1%;
         --muted-foreground: 215.4 16.3% 46.9%;
+        --primary: 222.2 47.4% 11.2%;
       }
       .dark {
         --background: 222.2 84% 4.9%;
@@ -58,6 +59,7 @@
         --border: 217.2 32.6% 17.5%;
         --muted: 217.2 32.6% 17.5%;
         --muted-foreground: 215 20.2% 65.1%;
+        --primary: 210 40% 98%;
       }
       html, body { margin: 0; height: 100%; }
       body {
@@ -90,6 +92,32 @@
         padding: 2px 6px;
         border: 1px solid hsl(var(--border));
         border-radius: 3px;
+      }
+      /* Indeterminate sweep under the topbar. Honest: we can't know
+         progress through the browser's ESM/chunk fetch, so a feathered
+         highlight sweeps left→right on a loop instead of faking a %. */
+      .ss-bootshell-progress {
+        position: relative;
+        height: 2px;
+        width: 100%;
+        flex-shrink: 0;
+        overflow: hidden;
+      }
+      .ss-bootshell-progress::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 35%;
+        background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.85), transparent);
+        animation: ss-bootshell-sweep 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes ss-bootshell-sweep {
+        from { left: -35%; }
+        to   { left: 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ss-bootshell-progress::before { animation: none; }
       }
       .ss-bootshell-main { flex: 1; display: flex; min-height: 0; }
       .ss-bootshell-side {
@@ -138,6 +166,7 @@
           Stretchy Studio
           <span class="ss-bootshell-version">loading…</span>
         </div>
+        <div class="ss-bootshell-progress"></div>
         <div class="ss-bootshell-main">
           <div class="ss-bootshell-side"></div>
           <div class="ss-bootshell-canvas"></div>
