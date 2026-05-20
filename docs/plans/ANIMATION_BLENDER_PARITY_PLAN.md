@@ -2853,18 +2853,62 @@ node-transform fcurve animation into the depgraph — a separate,
 larger close-out slice, not the "classic opt-out" baggage. Tracked
 as a future close-out item if desired.
 
-#### 7.B — Verify `project.animations[]` reader removal
+#### 7.B — Verify `project.animations[]` reader removal ✅ SHIPPED 2026-05-20
 
 Phase 1 migration deleted the writes; Phase 1.B.1 enumerated and
-migrated all 8 known consumers. Phase 7 grep-verifies no reader paths
-remain (this is a paranoia gate, not new work — anything that grep
-catches here is a Phase 1 bug to fix in retroactive cleanup).
+migrated all 8 known consumers. This grep-verify (commit `fe818c9`)
+confirmed **no live reader of `project.animations[]` remains.** All
+surviving references are legitimate: the v1 + v11 migrations
+(`projectMigrations.js`) and the v36 migration
+(`v36_action_datablock.js`) read the pre-v36 shape during the
+migration walk; the rest are historical comments. Three dead-baggage
+spots that re-created or carried the deleted field with zero consumers
+were removed in the retroactive cleanup: `cmo3/emitContext.js`
+(`ctx.animations` + its typedef — never passed, never read),
+`rig/initRig.js` (an `animations: []` arg `generateCmo3` ignores), and
+`cmo3Import.js` (an `animations: []` on the import shell built at
+`CURRENT_SCHEMA_VERSION`). Byte-fidelity unchanged.
 
-#### 7.C — Deprecate `easing: string` per-segment
+#### 7.C — Deprecate `easing: string` per-segment ✅ RESOLVED-BY-ANALYSIS 2026-05-20 (no removal needed)
 
-Phase 2 migrated to BezTriple but the legacy `easing` field stayed on
-keyforms for round-trip safety. Phase 7 removes the field and the
-parser branches that handled it.
+Original premise: "Phase 2 migrated to BezTriple but the legacy
+`easing` field stayed on keyforms for round-trip safety; Phase 7
+removes the field and the parser branches."
+
+**The premise is inaccurate against the shipped code.** Investigation
+(2026-05-20, acting autonomously per Rule №1):
+
+1. **The stored field is already gone.** The v39 migration
+   (`v39_beztriple_keyforms.js:migrateKeyform`) *replaces* every
+   keyform with a fresh object containing only `{time, value,
+   handleLeft, handleRight, handleType, interpolation, flag}` —
+   `easing`/`type` are dropped, not carried alongside. `makeBezTripleKeyform`
+   likewise never writes `easing` onto a stored keyform. So no
+   persisted or freshly-created keyform carries `easing`.
+
+2. **The remaining `easing` is a proper input-boundary adapter, not
+   baggage.** `makeBezTripleKeyform` (`anim/animationFCurve.js`)
+   accepts EITHER native `interpolation` (pass-through) OR a legacy
+   `easing` string, which it converts via `legacyEasingToInterpolation`.
+   That conversion serves three LIVE input sources that naturally
+   speak easing semantics: motion3 import, the idle-motion generator
+   DSL (`motionLib.js` → `keyframeSequence.js`), and the timeline
+   easing dropdown. The easing string also carries auto-handle
+   shorthand (`'ease-both'` → bezier auto/auto) that native
+   `interpolation`-only input loses (native `'bezier'` defaults to
+   vector/vector handles).
+
+3. **Removing the adapter would be a Rule №1 violation, not a fix.**
+   Forcing motion3-import / idle-DSL / UI callers to pre-compute
+   handle coordinates would scatter the conversion math across
+   callers (a crutch) and lose the shorthand — strictly worse design.
+   The centralized boundary adapter is the proper solution.
+
+**Action: no removal.** CO-C's stored-field goal was achieved at v39;
+the remaining `easing` vocabulary is a clean adapter and stays. (The
+deliberate `legacyEasingToInterpolation` ↔ `legacyToBezTripleShape`
+duplication between runtime + the frozen v39 migration is documented
+and intentional — migrations stay frozen at shipping state.)
 
 #### 7.D — `paramValuesStore.values` audit
 
