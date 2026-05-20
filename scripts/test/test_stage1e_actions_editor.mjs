@@ -215,20 +215,24 @@ assert(
   'ActionsEditor: legacy "Animations (N)" header gone',
 );
 
-// ── 6. Timeline picker rebinds scene when scene is bound ───────────────────
+// ── 6. Action picker rebinds scene when scene is bound ─────────────────────
+// The transport bar (incl. the action picker) was lifted out of TimelineEditor
+// into the global Footer's <PlaybackControls /> in Round 7 (FID-A.2,
+// 2026-05-16). The Stage 1.E scene-rebind behaviour moved with it; grep the
+// new home rather than the now-empty TimelineEditor track-only component.
 
-const TIMELINE_SRC = read('src/v3/editors/timeline/TimelineEditor.jsx');
+const PICKER_SRC = read('src/v3/shell/PlaybackControls.jsx');
 assert(
-  TIMELINE_SRC.includes("if (getSceneAction(proj))"),
-  'TimelineEditor: picker checks scene binding before re-binding',
+  PICKER_SRC.includes("if (getSceneAction(proj))"),
+  'PlaybackControls: picker checks scene binding before re-binding',
 );
 assert(
-  TIMELINE_SRC.includes("assignAction('__scene__'"),
-  'TimelineEditor: picker re-binds __scene__ when scene already bound',
+  PICKER_SRC.includes("assignAction('__scene__'"),
+  'PlaybackControls: picker re-binds __scene__ when scene already bound',
 );
 assert(
-  TIMELINE_SRC.includes('value={animation?.id'),
-  'TimelineEditor: picker value reflects resolved scene-aware action id',
+  PICKER_SRC.includes('value={animation?.id'),
+  'PlaybackControls: picker value reflects resolved scene-aware action id',
 );
 
 // ── 7. Result ──────────────────────────────────────────────────────────────
