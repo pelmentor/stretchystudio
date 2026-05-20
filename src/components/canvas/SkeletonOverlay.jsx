@@ -215,11 +215,16 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       // Capture the rest-world inverse + pivot so the move handler can
       // compute pose.x/y in one matrix-point multiply.
       if (!skeletonEditMode) return;
-      // Slice D — tool-aware: with the Select tool active, pressing a bone
-      // SELECTS it without starting a move drag (Blender's select_box pose
-      // default — transform via G/R/S, box-select via B). Joint Drag (the
-      // current auto-armed default) keeps direct drag-to-pose below.
-      if (useEditorStore.getState().toolMode === 'select') {
+      // Slice D — tool-aware, POSE MODE ONLY: with the Select tool active,
+      // pressing a bone SELECTS it without starting a move drag (Blender's
+      // select_box pose default — transform via G/R/S, box-select via B).
+      // Joint Drag (the other pose tool) keeps direct drag-to-pose below.
+      // Gated on `editMode === 'pose'` so it does NOT intercept the import
+      // wizard's "Adjust Joints" step, which forces skeletonEditMode true
+      // with no editMode and needs the rest-pivot drag to always run
+      // regardless of the persisted tool.
+      if (useEditorStore.getState().editMode === 'pose'
+          && useEditorStore.getState().toolMode === 'select') {
         e.currentTarget.releasePointerCapture(e.pointerId);
         selectBoneInBothStores(nodeId);
         return;
