@@ -190,5 +190,178 @@ function makeBareRuntime() {
   }
 }
 
+// ---------------------------------------------------------------------
+// Test 4: BONE-BAKED part — rotation parent in `runtime.parent` but NOT
+// in `modifiers[]`. Reproduces the handwear/legwear "dislocated to the
+// upper-left corner after Init Rig" bug: the depgraph art-mesh kernel
+// used to walk only `part.modifiers[]`, so the implicit rotation chain
+// was never applied and verts stayed in pivot-relative space (≈ origin).
+// chainEval handles this via its global parent-pointer fallback
+// (chainEval.js:317-400); the depgraph now mirrors it.
+// ---------------------------------------------------------------------
+{
+  const W = 800, H = 600;
+  const verts = quadVerts();                                   // canvas-px
+  const pivotRel = verts.map((v, i) => v - (i % 2 === 0 ? 400 : 300)); // offsets from pivot
+  const project = {
+    canvas: { width: W, height: H },
+    parameters: [],
+    nodes: [
+      { id: 'Rotation_leftArm', type: 'deformer', deformerKind: 'rotation', name: 'Rotation_leftArm',
+        visible: true, parent: null,
+        bindings: [],
+        keyforms: [
+          { keyTuple: [], angle: 0, originX: 400, originY: 300, scale: 1, opacity: 1, reflectX: false, reflectY: false },
+        ],
+        baseAngle: 0, handleLengthOnCanvas: 200, circleRadiusOnCanvas: 100,
+        isLocked: false, useBoneUiTestImpl: false },
+
+      { id: 'handwear', type: 'part', name: 'handwear', visible: true, draw_order: 100,
+        // Bone-baked: the implicit rotation parent lives ONLY in
+        // mesh.runtime.parent — `modifiers` is empty (mirrors what
+        // synthesizeModifierStacks produces for bone-rotation parents).
+        rigParent: 'Rotation_leftArm',
+        modifiers: [],
+        mesh: {
+          uvs: [0, 0,  1, 0,  0, 1,  1, 1],
+          triangles: [0, 1, 2,  1, 3, 2],
+          vertices: verts,
+          runtime: {
+            parent: { type: 'rotation', id: 'Rotation_leftArm' },
+            bindings: [],
+            keyforms: [
+              { keyTuple: [], opacity: 1, vertexPositions: pivotRel },
+            ],
+          },
+        } },
+    ],
+    animations: [], physicsRules: [],
+  };
+  const rigSpec = selectRigSpec(project);
+  const ce = evalRig(rigSpec, {});
+  const dg = evalProjectFrameViaDepgraph(project, {});
+  assert(ce.length === 1 && dg.length === 1, 'bone-baked: 1 frame each');
+  const d = maxDelta(ce[0].vertexPositions, dg[0].vertexPositions);
+  assert(d < 1e-4, `bone-baked: depgraph matches chainEval (delta=${d})`,
+    `chainEval=${Array.from(ce[0].vertexPositions)}, depgraph=${Array.from(dg[0].vertexPositions)}`);
+  // The rotation chain MUST be applied — verts land back at canvas-px
+  // (x[0]≈100), NOT the un-composed pivot-relative value (x[0]≈-300).
+  assert(Math.abs(dg[0].vertexPositions[0] - 100) < 1e-4,
+    `bone-baked: implicit rotation applied (x[0]=${dg[0].vertexPositions[0]}, want 100 not -300)`);
+}
+
+// ---------------------------------------------------------------------
+// Test 5: `liftedGrids` out-param is surfaced for warp deformers.
+// Pins the WarpDeformerOverlay fix — the depgraph composes
+// GRID_LIFT_TO_PARENT for every warp; the runner now exposes those
+// canvas-px grids via the optional `opts.liftedGrids` Map (the classic
+// engine's `evalRig({ out:{liftedGrids} })` replacement).
+// ---------------------------------------------------------------------
+{
+  const W = 800, H = 600;
+  const grid = [300, 200,  500, 200,  300, 400,  500, 400]; // canvas-px CPs
+  const project = {
+    canvas: { width: W, height: H },
+    parameters: [],
+    nodes: [
+      { id: 'RigWarp_face', type: 'deformer', deformerKind: 'warp', name: 'RigWarp_face',
+        visible: true, parent: null, targetPartId: 'face',
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: grid, localFrame: 'canvas-px',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: grid, opacity: 1 }],
+        isLocked: false, isQuadTransform: false },
+
+      { id: 'face', type: 'part', name: 'face', visible: true, draw_order: 100,
+        rigParent: 'RigWarp_face',
+        modifiers: [{ type: 'warp', deformerId: 'RigWarp_face', enabled: true, mode: 7 }],
+        mesh: {
+          uvs: [0, 0,  1, 0,  0, 1,  1, 1],
+          triangles: [0, 1, 2,  1, 3, 2],
+          vertices: quadVerts(),
+          runtime: {
+            parent: { type: 'warp', id: 'RigWarp_face' },
+            bindings: [],
+            keyforms: [{ keyTuple: [], opacity: 1, vertexPositions: quadVerts() }],
+          },
+        } },
+    ],
+    animations: [], physicsRules: [],
+  };
+  const liftedGrids = new Map();
+  const dg = evalProjectFrameViaDepgraph(project, {}, { liftedGrids });
+  assert(dg.length === 1, 'liftedGrids out-param: 1 frame emitted');
+  assert(liftedGrids.has('RigWarp_face'), 'liftedGrids out-param: warp grid surfaced');
+  const lifted = liftedGrids.get('RigWarp_face');
+  assert(lifted && lifted.length === 8,
+    `liftedGrids out-param: 4 canvas-px CPs (got len=${lifted?.length})`);
+  // A canvas-px warp's lifted grid equals its rest CPs.
+  assert(Math.abs(lifted[0] - 300) < 1e-4 && Math.abs(lifted[1] - 200) < 1e-4,
+    `liftedGrids out-param: CP[0] = (300,200) canvas-px (got ${lifted?.[0]},${lifted?.[1]})`);
+  // No map supplied → no throw, frames still emitted.
+  const dg2 = evalProjectFrameViaDepgraph(project, {});
+  assert(dg2.length === 1, 'liftedGrids out-param: omitting the map is safe');
+}
+
+// ---------------------------------------------------------------------
+// Test 6: MODIFIER-DISABLE reprojection parity (gap #1).
+// The part stacks two root-pivoted rotations; the LEAF (RotInner) is
+// disabled, so the effective leaf parent becomes RotRoot. selectRigSpec
+// reprojects the keyforms from RotInner's frame to RotRoot's (offset =
+// RotInnerPivot - RotRootPivot = (100,100)); chainEval consumes the
+// reprojected verts. The depgraph must source the SAME reprojected
+// keyforms (via the rigSpec it's now handed) — otherwise it feeds
+// RotInner-frame verts through RotRoot and the mesh shifts by (100,100).
+// ---------------------------------------------------------------------
+{
+  const W = 800, H = 600;
+  const innerVerts = [10, 10,  20, 10,  10, 20,  20, 20]; // RotInner-frame offsets
+  const mkRot = (id, ox, oy) => ({
+    id, type: 'deformer', deformerKind: 'rotation', name: id, visible: true, parent: null,
+    bindings: [],
+    keyforms: [{ keyTuple: [], angle: 0, originX: ox, originY: oy, scale: 1, opacity: 1, reflectX: false, reflectY: false }],
+    baseAngle: 0, handleLengthOnCanvas: 200, circleRadiusOnCanvas: 100,
+    isLocked: false, useBoneUiTestImpl: false,
+  });
+  const project = {
+    canvas: { width: W, height: H },
+    parameters: [],
+    nodes: [
+      mkRot('RotInner', 500, 400),
+      mkRot('RotRoot', 400, 300),
+      { id: 'face', type: 'part', name: 'face', visible: true, draw_order: 100,
+        rigParent: 'RotInner',
+        modifiers: [
+          { type: 'rotation', deformerId: 'RotInner', enabled: false, mode: 7 }, // leaf DISABLED
+          { type: 'rotation', deformerId: 'RotRoot', enabled: true, mode: 7 },
+        ],
+        mesh: {
+          uvs: [0, 0,  1, 0,  0, 1,  1, 1],
+          triangles: [0, 1, 2,  1, 3, 2],
+          vertices: quadVerts(),
+          runtime: {
+            parent: { type: 'rotation', id: 'RotInner' }, // baked leaf (all-enabled)
+            bindings: [],
+            keyforms: [{ keyTuple: [], opacity: 1, vertexPositions: innerVerts }],
+          },
+        } },
+    ],
+    animations: [], physicsRules: [],
+  };
+  const rigSpec = selectRigSpec(project);
+  const ce = evalRig(rigSpec, {});
+  const dgFixed = evalProjectFrameViaDepgraph(project, {}, { rigSpec });
+  const dgRaw = evalProjectFrameViaDepgraph(project, {}); // no rigSpec → legacy raw-runtime path
+  assert(ce.length === 1 && dgFixed.length === 1, 'modifier-disable: 1 frame each');
+  const dFixed = maxDelta(ce[0].vertexPositions, dgFixed[0].vertexPositions);
+  assert(dFixed < 1e-4, `modifier-disable: depgraph(+rigSpec) matches chainEval (delta=${dFixed})`,
+    `chainEval=${Array.from(ce[0].vertexPositions)}, depgraph=${Array.from(dgFixed[0].vertexPositions)}`);
+  // Proves the fix matters: without the reprojected source the depgraph
+  // diverges by exactly the pivot delta (100,100) → maxAbs = 100.
+  const dRaw = maxDelta(ce[0].vertexPositions, dgRaw[0].vertexPositions);
+  assert(Math.abs(dRaw - 100) < 1e-4,
+    `modifier-disable: legacy raw-runtime path diverges by the reproject offset (delta=${dRaw}, want ~100)`);
+}
+
 console.log(`depgraph_eval_artMesh: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

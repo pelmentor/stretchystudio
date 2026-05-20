@@ -115,6 +115,12 @@ const KERNELS = {
  *   lifetime as `_artMeshByIdCache`. Mirrors the per-frame cache the
  *   renderer rebuilds via `computeBoneWorldMatrices` outside the
  *   depgraph.
+ * @property {Map<string, object>|null} [rigArtMeshById] - optional
+ *   selectRigSpec `artMeshes[]` indexed by part id. When present, the
+ *   ART_MESH_EVAL kernel sources its keyform-blend input (reprojected
+ *   keyforms + bindings) from here instead of raw `mesh.runtime`, so
+ *   modifier-toggle reprojection (selectRigSpec `needsReproject`) is
+ *   honoured. Null → kernel uses `mesh.runtime`.
  */
 
 /**
@@ -135,6 +141,7 @@ export function evalDepGraph(graph, ctxIn) {
     requiredMode: ctxIn.requiredMode,
     physics: ctxIn.physics,
     poseOverrides: ctxIn.poseOverrides ?? new Map(),
+    rigArtMeshById: ctxIn.rigArtMeshById ?? null,
   };
 
   // Reset op state. Skip cyclic relations when computing pending count.

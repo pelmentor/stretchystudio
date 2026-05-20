@@ -58,6 +58,22 @@ import { OperationCode, NodeType } from './types.js';
  * @param {number} [opts.timeMs] - playhead time in milliseconds
  *   (Phase 0.0 canonical unit). Defaults to 0.
  * @param {number} [opts.requiredMode] - modifier mode bitmask
+ * @param {Map<string, Float64Array>} [opts.liftedGrids] - when provided,
+ *   the runner fills it with every warp deformer's canvas-px lifted
+ *   control-point grid (keyed by deformer id), for the WarpDeformerOverlay
+ *   debug visualization. The depgraph already composes these as
+ *   GRID_LIFT_TO_PARENT outputs; this just surfaces them. Replaces the
+ *   classic engine's `evalRig({ out: { liftedGrids } })` path that the
+ *   overlay relied on before the depgraph became the sole viewport engine.
+ * @param {object} [opts.rigSpec] - selectRigSpec output. When provided, the
+ *   ART_MESH_EVAL kernel sources each part's keyform-blend input (bindings +
+ *   keyforms) from the matching `rigSpec.artMeshes[]` entry instead of the
+ *   raw `mesh.runtime`. selectRigSpec reprojects keyform verts into the
+ *   effective leaf-parent frame when a modifier is toggled off
+ *   (`needsReproject`); the raw runtime cache is still in the BAKED leaf
+ *   frame, so without this the chain walk lands toggled-modifier parts in
+ *   the wrong place. For the common (no-toggle) case the rigSpec keyforms
+ *   are identical to runtime, so this is a no-op there.
  * @returns {ArtMeshFrame[]}
  */
 export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
@@ -75,6 +91,7 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
     paramOverrides: overrides,
     action: opts.action ?? null,
     requiredMode: opts.requiredMode,
+    rigArtMeshById: buildRigArtMeshIndex(opts.rigSpec),
   });
   /** @type {ArtMeshFrame[]} */
   const frames = [];
@@ -90,5 +107,34 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
       drawOrder: typeof out.drawOrder === 'number' ? out.drawOrder : (node.draw_order ?? 500),
     });
   }
+  // Surface lifted warp grids for the debug overlay when requested. The
+  // GRID_LIFT_TO_PARENT outputs are keyed `${deformerId}/GEOMETRY/<op>`;
+  // their `.lifted` field is the canvas-px control-point array the overlay
+  // projects directly.
+  if (opts.liftedGrids instanceof Map) {
+    const suffix = `/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
+    for (const [opKey, out] of ctx.outputs) {
+      if (!opKey.endsWith(suffix) || !out?.lifted) continue;
+      const deformerId = opKey.slice(0, opKey.length - suffix.length);
+      opts.liftedGrids.set(deformerId, out.lifted);
+    }
+  }
   return frames;
+}
+
+/**
+ * Index `rigSpec.artMeshes[]` by part id for O(1) lookup in the
+ * ART_MESH_EVAL kernel. Returns null when no rigSpec is supplied (the
+ * kernel then falls back to raw `mesh.runtime`).
+ *
+ * @param {object|undefined} rigSpec
+ * @returns {Map<string, object>|null}
+ */
+function buildRigArtMeshIndex(rigSpec) {
+  if (!rigSpec || !Array.isArray(rigSpec.artMeshes)) return null;
+  const m = new Map();
+  for (const am of rigSpec.artMeshes) {
+    if (am?.id) m.set(am.id, am);
+  }
+  return m;
 }

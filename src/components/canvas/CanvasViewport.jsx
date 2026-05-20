@@ -248,6 +248,7 @@ export default function CanvasViewport({
   const activeBlendShapeId = useEditorStore((s) => s.activeBlendShapeId);
   const brushSize = useEditorStore((s) => s.brushSize);
   const meshSubMode = useEditorStore((s) => s.meshSubMode);
+  const toolMode = useEditorStore((s) => s.toolMode);
   const setViewAction = useEditorStore((s) => s.setView);
   const setSelection = useEditorStore((s) => s.setSelection);
   const setBrush = useEditorStore((s) => s.setBrush);
@@ -264,6 +265,7 @@ export default function CanvasViewport({
     activeBlendShapeId,
     brushSize,
     meshSubMode,
+    toolMode,
     setSelection,
     setView: setViewAction,
   };
@@ -984,17 +986,32 @@ export default function CanvasViewport({
           // run bone post-chain composition (LBS / overlay) inside
           // `kernelArtMeshEval`, so the post-loop pass below no longer
           // double-composes.
-          if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null) {
+          // A cache hit is only valid when it already carries the lifted
+          // grids the overlay needs; otherwise toggling warp grids on for a
+          // static (cache-hit) rig would leave the overlay empty until the
+          // next param change.
+          if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null
+              && (!_wantLifted || cache.liftedGrids)) {
             frames = cache.frames;
+            if (_wantLifted && cache.liftedGrids) {
+              useRigEvalStore.getState().setLiftedGrids(cache.liftedGrids);
+            }
           } else {
             const evalOut = _wantLifted ? { liftedGrids: new Map() } : null;
             // Propagate action + currentTime so the depgraph's
             // ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see the playhead
             // (audit fix G-8). Without these the depgraph would always
             // evaluate at t=0 and its animation kernels would be dead code.
+            // `liftedGrids` (when the overlay is mounted) is filled by the
+            // runner from the depgraph's GRID_LIFT_TO_PARENT outputs.
             frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval, {
               action: activeAction,
               timeMs: anim.currentTime,
+              liftedGrids: evalOut?.liftedGrids,
+              // Source keyform data from the rigSpec so modifier-toggle
+              // reprojection (selectRigSpec `needsReproject`) is honoured —
+              // raw `mesh.runtime` keyforms stay in the baked leaf frame.
+              rigSpec: _rigSpec,
             });
             lastEvalCacheRef.current = {
               rigSpec: _rigSpec, paramValues: valuesForEval, frames,
@@ -1003,8 +1020,9 @@ export default function CanvasViewport({
             // Publish to rigEvalStore so WarpDeformerOverlay sees the
             // current-frame lattice positions for every warp (including
             // nested normalised-0to1 ones, which the Phase 1 overlay
-            // skipped entirely). depgraph branch leaves liftedGrids
-            // null for now — overlay falls back to its own probe path.
+            // skipped entirely) — the depgraph composes these as
+            // GRID_LIFT_TO_PARENT outputs, surfaced via the runner's
+            // `liftedGrids` out-param above.
             useRigEvalStore.getState().setLiftedGrids(evalOut?.liftedGrids ?? null);
             // BUG-015 instrumentation — once-per-second snapshot of the
             // ParamBodyAngle{X,Y,Z} values that just went into the
@@ -1267,9 +1285,12 @@ export default function CanvasViewport({
     if (previewMode) return;
     const handler = (e) => {
       const { editMode, meshSubMode, brushSize } = editorRef.current;
-      // Brush keys [/] adjust radius. Active in Edit Mode (deform sub-mode
-      // OR shape-paint with active blend shape).
+      // Brush keys [/] adjust radius. Active in Edit Mode only when the
+      // Brush tool is armed (deform sub-mode OR shape-paint with active
+      // blend shape) — gated on toolMode so the keys are inert under the
+      // Select tool (default since Slice A).
       const brushActive = editMode === 'edit'
+        && editorRef.current.toolMode === 'brush'
         && (meshSubMode === 'deform' || !!editorRef.current.activeBlendShapeId);
       if (!brushActive) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
@@ -2810,9 +2831,13 @@ export default function CanvasViewport({
     // Update brush circle cursor position (direct DOM, no React re-render)
     if (brushCircleRef.current) {
       const editMode = editorRef.current.editMode;
-      // Brush cursor active in Edit Mode (deform sub-mode OR shape-paint
-      // when an active shape is set). Folded 2026-05-07.
+      // Brush cursor active in Edit Mode ONLY when the Brush tool is armed
+      // (deform sub-mode OR shape-paint when an active shape is set). Folded
+      // 2026-05-07; toolMode gate added 2026-05-20 — after Slice A made
+      // Select the default Edit-Mode tool, the brush radius circle was still
+      // showing under the Select tool because the gate ignored toolMode.
       const inDeformMode = editMode === 'edit'
+        && editorRef.current.toolMode === 'brush'
         && (editorRef.current.meshSubMode === 'deform'
             || !!editorRef.current.activeBlendShapeId);
       if (inDeformMode) {
@@ -3324,7 +3349,8 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: !previewMode && editorState.editMode === 'edit' && editorState.meshSubMode === 'deform' ? 'none' : toolCursor,
+          cursor: !previewMode && editorState.editMode === 'edit' && editorState.toolMode === 'brush'
+            && (editorState.meshSubMode === 'deform' || !!editorState.activeBlendShapeId) ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}

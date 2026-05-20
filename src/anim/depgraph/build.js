@@ -499,6 +499,59 @@ function buildPartModifierRelations(graph, project, opts) {
         }
       }
     }
+    // Implicit deformer parent chain — bone-baked parts (handwear /
+    // legwear) carry a `Rotation_*` / `GroupRotation_*` parent in
+    // `mesh.runtime.parent` that is NOT present in `modifiers[]`.
+    // `kernelArtMeshEval` walks that chain at eval time; without the
+    // matching build edges the part's ART_MESH_EVAL op has no upstream
+    // dependency, lands in the initial ready set, and runs BEFORE the
+    // rotation's MATRIX_BUILD exists — so the kernel finds no matrix and
+    // the chain is never applied (verts stay pivot-relative → the part
+    // renders at the canvas origin). Mirror the warp-chain walk in
+    // `buildDeformerChainRelations`: edge from every ancestor's
+    // MATRIX_BUILD (rotation) / GRID_LIFT_TO_PARENT + KEYFORM_EVAL (warp)
+    // until the first warp ancestor or root. Detection mirrors
+    // selectRigSpec's `cachedRefInModifiers`.
+    if (artMeshOp) {
+      const implicitParent = part.mesh?.runtime?.parent;
+      const implicitParentId = (implicitParent && implicitParent.type !== 'root'
+        && typeof implicitParent.id === 'string' && implicitParent.id.length > 0)
+        ? implicitParent.id
+        : null;
+      const inModifiers = !!implicitParentId
+        && stack.some((m) => m && m.deformerId === implicitParentId);
+      if (implicitParentId && !inModifiers) {
+        let cursorId = implicitParentId;
+        let safety = 32;
+        while (cursorId && safety-- > 0) {
+          const ancestor = project.nodes?.find((n) => n?.id === cursorId);
+          if (!ancestor || ancestor.type !== 'deformer') break;
+          const ancestorIdNode = graph.findIdNode(cursorId, 'deformer');
+          const ancestorGeom = ancestorIdNode?.findComponent(NodeType.GEOMETRY);
+          if (!ancestorGeom) break;
+          if (ancestor.deformerKind === 'warp') {
+            const ancestorLift = ancestorGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
+            if (ancestorLift) {
+              graph.addRelation(ancestorLift, artMeshOp, `implicit parent ${cursorId} lift -> art mesh`);
+            }
+            const ancestorKey = ancestorGeom.findOperation(OperationCode.KEYFORM_EVAL);
+            if (ancestorKey) {
+              graph.addRelation(ancestorKey, artMeshOp, `implicit parent ${cursorId} keyform -> art mesh`);
+            }
+            break; // warp ancestor's lifted grid collapses the chain
+          }
+          if (ancestor.deformerKind === 'rotation') {
+            const ancestorMatrix = ancestorGeom.findOperation(OperationCode.MATRIX_BUILD);
+            if (ancestorMatrix) {
+              graph.addRelation(ancestorMatrix, artMeshOp, `implicit parent ${cursorId} matrix -> art mesh`);
+            }
+            cursorId = typeof ancestor.parent === 'string' ? ancestor.parent : null;
+            continue;
+          }
+          break;
+        }
+      }
+    }
     // Phase 0.D — bone post-chain composition reads bone WORLD matrices
     // built from TRANSFORM_COMPOSE outputs along the bone parent chain.
     // Add an edge from every relevant bone's TRANSFORM_COMPOSE op to
