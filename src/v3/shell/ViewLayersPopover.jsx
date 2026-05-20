@@ -149,15 +149,10 @@ export function ViewLayersPopover() {
     <Popover>
       <PopoverTrigger asChild>
         <Button
-          variant="secondary"
+          variant="ghost"
           size="sm"
-          className="h-8 px-3 gap-1.5
-                     bg-card/85 backdrop-blur-md
-                     border border-border/60 hover:border-primary/40
-                     text-foreground/80 hover:text-foreground hover:bg-card/95
-                     shadow-md hover:shadow-lg hover:shadow-primary/10
-                     transition-all duration-150
-                     font-medium"
+          className="h-6 px-1.5 gap-1 rounded-sm font-normal
+                     text-foreground/80 hover:text-foreground hover:bg-background/60"
           title="View layers"
         >
           <Layers className="h-3.5 w-3.5" />

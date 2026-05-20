@@ -48,7 +48,6 @@ import { ScenePass } from '@/renderer/scenePass';
 // the user actually drops a PSD onto the canvas.
 import { detectCharacterFormat } from '@/io/armatureMeta';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
-import { ViewLayersPopover } from '@/v3/shell/ViewLayersPopover';
 import { useWizardStore } from '@/store/wizardStore';
 import { useCaptureStore } from '@/store/captureStore';
 // Phase A2 (2026-05-09) — PsdImportService is only reached on a PSD
@@ -114,13 +113,6 @@ import { Cursor2DOverlay } from '@/components/canvas/Cursor2DOverlay';
 // `saveProject` / `loadProject` are dynamic-imported inside the save
 // and load handlers — keeps jszip out of the boot bundle.
 import { normalizeVariants } from '@/io/variantNormalizer';
-import { resetPoseDraft, resetToRestPose } from '@/services/PoseService';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { RotateCcw, ChevronDown, Anchor } from 'lucide-react';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Component
@@ -1085,17 +1077,35 @@ export default function CanvasViewport({
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) {
-              // Skip the rig override so the user's live vertex edits show
-              // (the rig keyforms are stale mid-edit). BUT keep the part
-              // flagged rig-driven so scenePass draws it CAMERA-ONLY
-              // (`scenePass.js:231`): the edited `mesh.vertices` are
-              // canvas-px (absolute, same space rig output bakes to), so
-              // applying the part's `worldMatrix` on top — which scenePass
-              // does for NON-rig-driven parts — double-transforms them.
-              // That double-transform is the "phantom": the camera-only
-              // vertex-dot overlay tracked the edit while the
-              // worldMatrix'd mesh detached. Keeping the rig-driven flag
-              // pins both to the same camera-only space.
+              // PP1-008(b) — push the part's LIVE `mesh.vertices` through
+              // the override path so the GL buffer re-uploads EVERY frame.
+              // The rig keyforms are stale mid-edit, so we skip rig output;
+              // but a bare `continue` (no override) left re-upload to
+              // chance — only the drag-direct-upload and the
+              // `meshOverriddenParts` restore branch ever refreshed the
+              // buffer, so a COMMITTED edit didn't reach the GPU until a
+              // mode change forced a fresh upload. That was the "phantom":
+              // the camera-only vertex dots (`VertexSelectionOverlay`,
+              // which draws `mesh.vertices × zoom + pan`) moved live while
+              // the frozen mesh buffer stayed put — and "Tab twice snaps
+              // the mesh to the dots" because re-entering Edit Mode hits
+              // the restore branch on its first frame.
+              //
+              // `mesh.vertices` are canvas-px (.x/.y) — the SAME array the
+              // dots project. Keep the part rig-driven so scenePass draws
+              // it CAMERA-ONLY too (`scenePass.js:231`, no worldMatrix);
+              // mesh and dots then share one source of truth and cannot
+              // diverge. The blend-shape loop below still composes deltas
+              // on top of this base when an active shape is being painted.
+              const _editNode = nodesById.get(f.id);
+              const _editMesh = _editNode ? getMesh(_editNode, projectRef.current) : null;
+              if (_editMesh && Array.isArray(_editMesh.vertices)) {
+                if (!poseOverrides) poseOverrides = new Map();
+                const existing = poseOverrides.get(f.id) ?? {};
+                if (!existing.mesh_verts) {
+                  poseOverrides.set(f.id, { ...existing, mesh_verts: _editMesh.vertices });
+                }
+              }
               rigDrivenParts.add(f.id);
               continue;
             }
@@ -3578,105 +3588,11 @@ export default function CanvasViewport({
       )}
 
 
-      {/* Top-right cluster — Layers picker + Pose menu (Reset Pose +
-          chevron dropdown for Apply Pose As Rest). Single absolute-
-          positioned flex container so siblings can't overlap (was a
-          recurring bug when Layers + Reset Pose had separate absolute
-          anchors). Hidden on Live Preview (read-only).
-
-          Reset Pose mode-dependent behaviour:
-            - Animation mode → `resetPoseDraft()`  (clear draftPose + paramValues; keyframes survive)
-            - Staging mode    → `resetToRestPose()` (above + bone-group poses + skinned mesh verts) */}
-      {!previewMode && project.nodes.length > 0 && (
-        <div className="absolute top-2 right-2 z-10 flex items-stretch gap-1.5">
-          <ViewLayersPopover />
-          <div className="flex items-stretch gap-px">
-          <TooltipProvider delayDuration={400}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="secondary" size="sm"
-                  className="h-8 px-3 gap-1.5 rounded-r-none
-                             bg-card/85 backdrop-blur-md
-                             border border-border/60 hover:border-primary/40
-                             text-foreground/80 hover:text-foreground hover:bg-card/95
-                             shadow-md hover:shadow-lg hover:shadow-primary/10
-                             transition-all duration-150
-                             font-medium"
-                  onClick={() => {
-                    const mode = editorMode;
-                    if (mode === 'animation') resetPoseDraft();
-                    else resetToRestPose();
-                    logger.debug('resetPose', `Reset Pose triggered (mode=${mode})`, {
-                      editorMode: mode,
-                      paramsReset: project?.parameters?.length ?? 0,
-                    });
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  <span className="text-[11px] tracking-wide">Reset Pose</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {editorMode === 'animation'
-                  ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
-                  : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                variant="secondary" size="sm"
-                className="h-8 w-7 px-0 rounded-l-none border-l-0
-                           bg-card/85 backdrop-blur-md
-                           border border-border/60 hover:border-primary/40
-                           text-foreground/80 hover:text-foreground hover:bg-card/95
-                           shadow-md hover:shadow-lg hover:shadow-primary/10
-                           transition-all duration-150"
-                title="Pose menu"
-              >
-                <ChevronDown className="h-3 w-3 opacity-70" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={6} className="w-64 p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  // Apply Pose As Rest — bake current pose into descendant
-                  // mesh rest verts + bone pivots, zero all bone poses.
-                  // Disabled in animation mode (would produce unexpected
-                  // shifts at non-zero playback time).
-                  if (editorMode === 'animation') {
-                    logger.warn('applyPoseAsRest', 'Skipped: animation mode (switch to Default to bake pose)');
-                    return;
-                  }
-                  useProjectStore.getState().applyPoseAsRest();
-                  logger.info('applyPoseAsRest', 'Applied current pose as the new rest pose');
-                }}
-                disabled={editorMode === 'animation'}
-                className={
-                  'flex items-start gap-2 w-full text-left px-2 py-2 rounded text-[11px] ' +
-                  (editorMode === 'animation'
-                    ? 'opacity-40 cursor-not-allowed'
-                    : 'hover:bg-muted/40 cursor-pointer')
-                }
-              >
-                <Anchor className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-70" />
-                <span className="flex-1">
-                  <span className="font-medium block">Apply Pose As Rest</span>
-                  <span className="text-muted-foreground/85 text-[10px] leading-snug block mt-0.5">
-                    {editorMode === 'animation'
-                      ? 'Switch to Default workspace first'
-                      : 'Bakes current pose into mesh rest + bone pivots. Visual unchanged. Drag bones from new neutral.'}
-                  </span>
-                </span>
-              </button>
-            </PopoverContent>
-          </Popover>
-          </div>
-        </div>
-      )}
+      {/* Layers picker + Reset/Apply Pose cluster relocated to the
+          Viewport area header (`v3/headers/ViewportHeader.jsx`
+          PoseControls), matching Blender's VIEW3D_HT_header. It reads
+          editorMode / project / pose actions from the stores directly,
+          so nothing pose-control-related is mounted on the canvas now. */}
 
       {/* GAP-001 — PSD import wizard now mounts at AppShell level
           (`v3/shell/PsdImportWizard.jsx`) and reads `wizardStore`

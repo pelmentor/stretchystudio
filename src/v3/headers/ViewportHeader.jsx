@@ -28,9 +28,16 @@
  */
 
 import { useCallback } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Check, Square, Crosshair, Dot, Target, RotateCcw, Anchor } from 'lucide-react';
 import { makeHeaderOperators } from './headerOperators.js';
 import { ModePill } from '../shell/ModePill.jsx';
+import { ViewLayersPopover } from '../shell/ViewLayersPopover.jsx';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
+import { useUIV3Store, selectEditorMode } from '../../store/uiV3Store.js';
+import { useProjectStore } from '../../store/projectStore.js';
+import { resetPoseDraft, resetToRestPose } from '../../services/PoseService.js';
+import { logger } from '../../lib/logger.js';
+import { TRANSFORM_PIVOT_ITEMS } from '../transformPivot.js';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
@@ -74,6 +81,14 @@ export function ViewportHeader() {
           canvas overlay (UI Blender-parity Slice C). Carries the mode
           dropdown + (in Edit Mode) the proportional-edit toggle. */}
       <ModePill />
+
+      <div className="w-px h-4 bg-border/50 mx-0.5" aria-hidden="true" />
+
+      {/* Transform Pivot Point — Blender's VIEW3D_HT_header pivot
+          dropdown (`space_view3d.py`, `scene.tool_settings.
+          transform_pivot_point`). Controls the rotate/scale pivot for
+          modal G/R/S. */}
+      <PivotPill />
 
       <div className="w-px h-4 bg-border/50 mx-0.5" aria-hidden="true" />
 
@@ -176,7 +191,151 @@ export function ViewportHeader() {
           Delete <kbd className="ml-auto opacity-60">X</kbd>
         </DropdownMenuItem>
       </HeaderMenu>
+
+      {/* Right-aligned cluster — View Layers + Reset/Apply Pose. Relocated
+          from the floating top-right canvas overlay into the header to
+          match Blender's VIEW3D_HT_header (overlay/gizmo popovers sit on
+          the right of the viewport header). */}
+      <PoseControls />
     </div>
+  );
+}
+
+/**
+ * Right-side header cluster: View Layers popover + Reset Pose (mode-aware)
+ * + an Apply-Pose-As-Rest dropdown. Reads `editorMode` / project / pose
+ * actions straight from the stores, so it carries no props and can live
+ * in the header instead of the canvas overlay. Hidden until a project
+ * has nodes (nothing to reset on an empty scene).
+ */
+function PoseControls() {
+  const editorMode = useUIV3Store(selectEditorMode);
+  const nodeCount = useProjectStore((s) => s.project?.nodes?.length ?? 0);
+  if (nodeCount === 0) return null;
+
+  const onResetPose = () => {
+    if (editorMode === 'animation') resetPoseDraft();
+    else resetToRestPose();
+    logger.debug('resetPose', `Reset Pose triggered (mode=${editorMode})`, { editorMode });
+  };
+  const onApplyPoseAsRest = () => {
+    // Bakes the current pose into descendant mesh rest verts + bone
+    // pivots. Disabled in animation mode (would shift geometry at a
+    // non-zero playback time).
+    if (editorMode === 'animation') {
+      logger.warn('applyPoseAsRest', 'Skipped: animation mode (switch to Default to bake pose)');
+      return;
+    }
+    useProjectStore.getState().applyPoseAsRest();
+    logger.info('applyPoseAsRest', 'Applied current pose as the new rest pose');
+  };
+
+  return (
+    <div className="ml-auto flex items-center gap-1">
+      <ViewLayersPopover />
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={onResetPose}
+          title={editorMode === 'animation'
+            ? 'Clear unsaved pose + reset parameters. Keyframes kept.'
+            : 'Reset bones + parameters to rest. Part transforms kept (use Properties → Reset Transform).'}
+          className="h-6 pl-1.5 pr-2 rounded-l-sm flex items-center gap-1
+                     text-foreground/80 hover:text-foreground hover:bg-background/60
+                     focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          <span className="text-[11px] tracking-wide">Reset Pose</span>
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title="Pose menu"
+              className="h-6 px-0.5 rounded-r-sm flex items-center
+                         text-foreground/70 hover:text-foreground hover:bg-background/60
+                         focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+            >
+              <ChevronDown className="h-3 w-3 opacity-70" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[240px]">
+            <DropdownMenuItem
+              disabled={editorMode === 'animation'}
+              onSelect={onApplyPoseAsRest}
+              className="text-[11px] gap-2 items-start"
+            >
+              <Anchor className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-70" />
+              <span className="flex-1">
+                <span className="font-medium block">Apply Pose As Rest</span>
+                <span className="text-muted-foreground/85 text-[10px] leading-snug block mt-0.5">
+                  {editorMode === 'animation'
+                    ? 'Switch to Default workspace first'
+                    : 'Bakes current pose into mesh rest + bone pivots. Visual unchanged. Drag bones from new neutral.'}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+/** lucide stand-ins for Blender's pivot icons (ICON_PIVOT_*). */
+const PIVOT_ICONS = {
+  BOUNDING_BOX_CENTER: Square,
+  CURSOR: Crosshair,
+  MEDIAN_POINT: Dot,
+  ACTIVE_ELEMENT: Target,
+};
+
+/**
+ * Transform Pivot Point pill — icon trigger + dropdown of the supported
+ * pivot modes (`v3/transformPivot.js`). Reads/writes the persisted
+ * `preferencesStore.transformPivot`. The active mode shows its icon on
+ * the trigger and a check in the menu.
+ */
+function PivotPill() {
+  const pivot = usePreferencesStore((s) => s.transformPivot);
+  const setPivot = usePreferencesStore((s) => s.setTransformPivot);
+  const ActiveIcon = PIVOT_ICONS[pivot] ?? Dot;
+  const activeItem = TRANSFORM_PIVOT_ITEMS.find((it) => it.id === pivot);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={`Transform Pivot Point: ${activeItem?.label ?? ''}`}
+          aria-label="Transform Pivot Point"
+          className="px-1 py-0.5 rounded-sm hover:bg-background/60
+                     focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60
+                     flex items-center gap-0.5 text-foreground/80"
+        >
+          <ActiveIcon size={14} />
+          <ChevronDown size={10} className="opacity-50" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[200px]">
+        {TRANSFORM_PIVOT_ITEMS.map((it) => {
+          const Icon = PIVOT_ICONS[it.id] ?? Dot;
+          const checked = it.id === pivot;
+          return (
+            <DropdownMenuItem
+              key={it.id}
+              onSelect={() => setPivot(it.id)}
+              title={it.description}
+              className="text-[11px] gap-2"
+            >
+              <Icon size={13} className="opacity-80" />
+              {it.label}
+              {checked ? <Check size={12} className="ml-auto opacity-80" /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

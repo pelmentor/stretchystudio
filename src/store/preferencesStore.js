@@ -25,6 +25,7 @@
 
 import { create } from 'zustand';
 import { coerceKeymapPreset } from '../anim/keymapPresets.js';
+import { coerceTransformPivot, TRANSFORM_PIVOT_DEFAULT } from '../v3/transformPivot.js';
 
 const ML_KEY = 'v3.prefs.mlEnabled';
 const PE_KEY = 'v3.prefs.proportionalEdit';
@@ -90,6 +91,12 @@ const SNAP_KEY = 'v3.prefs.snap';
  *  bindings to the same module). All 3 presets coerced via the
  *  single `coerceKeymapPreset` helper (Slice 5.AA arch audit-fix MED-2). */
 const KMP_KEY = 'v3.prefs.keymapPreset';
+/** Transform Pivot Point — Blender's `scene.tool_settings.
+ *  transform_pivot_point` (the Viewport header pivot dropdown). One of
+ *  the ids in `v3/transformPivot.js`; default `'MEDIAN_POINT'` matches
+ *  Blender's out-of-box pivot. Persisted because it's a sticky modal
+ *  preference users develop muscle memory around (sister to `snap`). */
+const TP_KEY = 'v3.prefs.transformPivot';
 
 const PE_DEFAULT = Object.freeze({
   enabled:       false,
@@ -336,6 +343,17 @@ export const usePreferencesStore = create((set, get) => ({
     const next = coerceKeymapPreset(v);
     saveJson(KMP_KEY, next);
     set({ keymapPreset: next });
+  },
+
+  /** Transform Pivot Point — see `TP_KEY`. Read by registry.js's
+   *  `beginModalTransform` / `beginVertexModalTransform` to choose the
+   *  rotate/scale pivot. Coerced on init + setter (one place). */
+  transformPivot: coerceTransformPivot(loadJsonScalar(TP_KEY, TRANSFORM_PIVOT_DEFAULT)),
+
+  setTransformPivot(v) {
+    const next = coerceTransformPivot(v);
+    saveJson(TP_KEY, next);
+    set({ transformPivot: next });
   },
 
   /** Toolset Plan Phase 2.A — modal G/R/S snap config. See SNAP_DEFAULT

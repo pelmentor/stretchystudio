@@ -72,6 +72,7 @@ import {
 } from './select/linked.js';
 import { applyTopologyOp } from './edit/applyTopologyOp.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
+import { usePreferencesStore } from '../../store/preferencesStore.js';
 import { discardBatch, endBatch } from '../../store/undoHistory.js';
 import { buildVertexAdjacency } from '../../lib/proportionalEdit.js';
 import { hitTestVertices } from '../../io/hitTest.js';
@@ -660,8 +661,10 @@ function registerBuiltins() {
     const worldMap = computeWorldMatrices(project.nodes);
     /** @type {Map<string, {x:number,y:number,rotation:number,scaleX:number,scaleY:number}>} */
     const original = new Map();
-    let pivotX = 0, pivotY = 0;
-    let count = 0;
+    /** Canvas-space anchor per target (bones → world joint, others →
+     *  world transform.x/y), collected so the pivot mode can pick median
+     *  / bbox / active without a second pass. */
+    const anchors = [];
     for (const id of targetIds) {
       const node = project.nodes.find((n) => n.id === id);
       if (!node) continue;
@@ -672,24 +675,54 @@ function registerBuiltins() {
         scaleX:   readPoseValue(node, 'scaleX'),
         scaleY:   readPoseValue(node, 'scaleY'),
       });
-      // Modal pivot center: for bones, use world-space pivot (where the
-      // joint is on canvas). For non-bones, average their canvas-space
-      // anchor (transform.x/y) — same heuristic the original code used,
-      // just routed through the world matrix so the answer is correct
-      // for nested non-bones too.
+      // Anchor: for bones, the world-space joint (where it sits on
+      // canvas); for non-bones, the world-mapped transform.x/y — routed
+      // through the world matrix so nested non-bones are correct too.
       const wm = worldMap.get(id);
       if (wm) {
         const isBone = node.type === 'group' && !!node.boneRole;
         const px = isBone ? (node.transform?.pivotX ?? 0) : (node.transform?.x ?? 0);
         const py = isBone ? (node.transform?.pivotY ?? 0) : (node.transform?.y ?? 0);
-        pivotX += wm[0] * px + wm[3] * py + wm[6];
-        pivotY += wm[1] * px + wm[4] * py + wm[7];
+        anchors.push({ id, x: wm[0] * px + wm[3] * py + wm[6], y: wm[1] * px + wm[4] * py + wm[7] });
       }
-      count += 1;
     }
     if (original.size === 0) return;
-    pivotX /= count;
-    pivotY /= count;
+
+    // Rotate/scale pivot per the active Transform Pivot Point preference
+    // (`v3/transformPivot.js`). In Object Mode the pivot maps mouse
+    // motion to the rotation angle / scale magnitude (each part still
+    // spins about its own origin — ModalTransformOverlay never orbits
+    // positions), so the modes differ in feel rather than final layout;
+    // the same datum logic is shared with the vertex path for
+    // consistency. Median is the centroid + the fallback for a modeless
+    // datum (cursor unset / no anchors).
+    const pivotMode = usePreferencesStore.getState().transformPivot;
+    let mx = 0, my = 0;
+    for (const a of anchors) { mx += a.x; my += a.y; }
+    const nAnchors = anchors.length || 1;
+    let pivotX = mx / nAnchors, pivotY = my / nAnchors;
+    if (anchors.length > 0) {
+      if (pivotMode === 'BOUNDING_BOX_CENTER') {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const a of anchors) {
+          if (a.x < minX) minX = a.x;
+          if (a.x > maxX) maxX = a.x;
+          if (a.y < minY) minY = a.y;
+          if (a.y > maxY) maxY = a.y;
+        }
+        pivotX = (minX + maxX) / 2;
+        pivotY = (minY + maxY) / 2;
+      } else if (pivotMode === 'CURSOR') {
+        const c = project.cursor;
+        if (c && typeof c.x === 'number') { pivotX = c.x; pivotY = c.y; }
+      } else if (pivotMode === 'ACTIVE_ELEMENT') {
+        // Active = selection head (targetIds[0]); falls back to the first
+        // resolvable anchor when the head had no world matrix.
+        const head = anchors.find((a) => a.id === targetIds[0]) ?? anchors[0];
+        pivotX = head.x;
+        pivotY = head.y;
+      }
+    }
 
     // Open an undo batch so a single Ctrl+Z undoes the whole modal
     // session; ModalTransformOverlay closes the batch on commit /
@@ -745,13 +778,41 @@ function registerBuiltins() {
     /** @type {Map<number, {x:number,y:number,restX:number,restY:number}>} */
     const original = new Map();
     let cx = 0, cy = 0, n = 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const idx of selSet) {
       const v = mesh.vertices[idx];
       if (!v) continue;
       original.set(idx, { x: v.x, y: v.y, restX: v.restX ?? v.x, restY: v.restY ?? v.y });
       cx += v.x; cy += v.y; n += 1;
+      if (v.x < minX) minX = v.x;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.y > maxY) maxY = v.y;
     }
     if (n === 0) return true;
+
+    // Rotate/scale pivot per the active Transform Pivot Point preference
+    // (Blender's VIEW3D_HT_header pivot dropdown — `v3/transformPivot.js`).
+    // Median = centroid of the selected verts (Blender default); bounding
+    // box = AABB centre; cursor = the 2D cursor; active = the active
+    // (last-clicked) vertex. Each falls back to the median when its datum
+    // is absent (cursor unset / active vertex not in this selection). All
+    // points are canvas-px — the same space the verts + cursor live in.
+    const pivotMode = usePreferencesStore.getState().transformPivot;
+    const median = { x: cx / n, y: cy / n };
+    let pivotCanvas = median;
+    if (pivotMode === 'BOUNDING_BOX_CENTER') {
+      pivotCanvas = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    } else if (pivotMode === 'CURSOR') {
+      const c = project.cursor;
+      pivotCanvas = (c && typeof c.x === 'number') ? { x: c.x, y: c.y } : median;
+    } else if (pivotMode === 'ACTIVE_ELEMENT') {
+      const av = editor.activeVertex;
+      const avVert = (av && av.partId === partId && selSet.has(av.vertIndex))
+        ? mesh.vertices[av.vertIndex]
+        : null;
+      pivotCanvas = avVert ? { x: avVert.x, y: avVert.y } : median;
+    }
 
     // One undo entry for the whole modal session; the overlay closes the
     // batch on commit and `discardBatch`-rolls-back on Esc (clean cancel,
@@ -765,7 +826,7 @@ function registerBuiltins() {
       kind,
       partId,
       startMouse: lastMousePos(),
-      pivotCanvas: { x: cx / n, y: cy / n },
+      pivotCanvas,
       original,
       vertIndices: new Set(selSet),
       rollbackOnCancel: true,
