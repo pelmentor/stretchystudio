@@ -276,7 +276,7 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *
  * @typedef {{
  *   time: number,
- *   value: number,
+ *   value: number | Array<{x: number, y: number}>,
  *   handleLeft?: { time: number, value: number },
  *   handleRight?: { time: number, value: number },
  *   handleType?: { left: string, right: string },
@@ -468,7 +468,11 @@ export function wouldPasteChange(action) {
 function cloneKeyform(kf) {
   return {
     time:  kf.time,
-    value: kf.value,
+    // mesh_verts keyforms hold a per-vertex `[{x,y},...]` array; deep-copy
+    // it so the clone never shares the source array reference (a scalar
+    // value copies by value and is unaffected). Same independence the
+    // handle clones below provide.
+    value: Array.isArray(kf.value) ? kf.value.map((v) => ({ x: v.x, y: v.y })) : kf.value,
     handleLeft:  kf.handleLeft  ? { ...kf.handleLeft }  : undefined,
     handleRight: kf.handleRight ? { ...kf.handleRight } : undefined,
     handleType:  kf.handleType  ? { ...kf.handleType }  : undefined,

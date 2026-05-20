@@ -433,6 +433,14 @@ function blendStripIntoAccumulator(acc, fcurves, actionLocalMs, blendmode, influ
 
   for (const fc of fcurves) {
     if (!fc || typeof fc.rnaPath !== 'string') continue;
+    // mesh_verts fcurves carry per-vertex `[{x,y},...]` arrays, not a
+    // scalar — `applyBlendMode`'s arithmetic would yield NaN. The NLA
+    // accumulator is scalar-only (Map<rnaPath, number>); mesh-deform
+    // animation is evaluated separately via `interpolateMeshVerts`, not
+    // through the NLA scalar blend stack. Skip them (mirrors the depgraph
+    // animation kernel's mesh_verts skip). Before mesh_verts keyforms
+    // were storable this loop never received a populated mesh curve.
+    if (fc.rnaPath.endsWith('.mesh_verts')) continue;
     const stripValue = evaluateFCurve(fc, actionLocalMs);
     const lowerValue = acc.has(fc.rnaPath) ? /** @type {number} */ (acc.get(fc.rnaPath)) : 0;
     acc.set(fc.rnaPath, applyBlendMode(lowerValue, stripValue, blendmode, influence));

@@ -163,7 +163,7 @@ import { recalcKeyformHandles } from './fcurveHandles.js';
  *
  * @typedef {{
  *   time: number,
- *   value: number,
+ *   value: number | Array<{x: number, y: number}>,
  *   handleLeft?: { time: number, value: number },
  *   handleRight?: { time: number, value: number },
  *   handleType?: { left: string, right: string },
@@ -297,7 +297,10 @@ export function applyDeleteKeyforms(action, handles) {
     // mutates `fc.keyforms` in place. After our pre-filter, every
     // entry in `filteredSel` is in-bounds + center=true, so the
     // delegate is guaranteed to shrink the array.
-    const fcRemap = deleteKeyforms(fc, filteredSel);
+    // Cast: `deleteKeyforms` types keyform `value` as scalar-only, but our
+    // FCurveLike now allows mesh_verts array values. Deletion is value-
+    // agnostic (it splices by index), so the wider value is irrelevant here.
+    const fcRemap = deleteKeyforms(/** @type {any} */ (fc), filteredSel);
     if (fcRemap.size === 0) continue;   // defensive — shouldn't fire
     // Rule №1 throw: with the pre-filter in place, length-unchanged
     // is now a true invariant violation in the delegate.
@@ -445,7 +448,10 @@ export function applyDuplicateKeyforms(action, handles) {
         // it on one keyform would surprise on the other).
         const dup = {
           time:  kf.time,
-          value: kf.value,
+          // mesh_verts keyforms hold a `[{x,y},...]` array — deep-copy so
+          // the duplicate doesn't share the source array reference
+          // (scalars copy by value).
+          value: Array.isArray(kf.value) ? kf.value.map((v) => ({ x: v.x, y: v.y })) : kf.value,
           handleLeft:  kf.handleLeft  ? { ...kf.handleLeft }  : undefined,
           handleRight: kf.handleRight ? { ...kf.handleRight } : undefined,
           handleType:  kf.handleType  ? { ...kf.handleType }  : undefined,

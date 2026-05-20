@@ -379,7 +379,11 @@ export function calcHandleForKeyform(bezt, prev, next) {
  *     normalises the opposite-side handle type when the user toggles
  *     one side. Not in any code path SS exercises today.
  *
- * @param {BezTriple[]} keyforms
+ * Accepts scalar BezTriples OR mesh_verts keyforms (array-valued); the
+ * latter are skipped (see the guard below), so callers holding the wider
+ * keyform union can pass without a cast.
+ *
+ * @param {Array<{time: number, value: number | Array<{x:number,y:number}>}>} keyforms
  */
 export function recalcKeyformHandles(keyforms) {
   if (!Array.isArray(keyforms) || keyforms.length < 2) {
@@ -397,10 +401,13 @@ export function recalcKeyformHandles(keyforms) {
   // mesh keyforms safe everywhere. interpolateMeshVerts evaluates them
   // with a shared per-segment lerp factor and never reads handles.
   if (typeof keyforms[0]?.value !== 'number') return;
-  for (let i = 0; i < keyforms.length; i++) {
-    const prev = i > 0 ? keyforms[i - 1] : null;
-    const next = i < keyforms.length - 1 ? keyforms[i + 1] : null;
-    calcHandleForKeyform(keyforms[i], prev, next);
+  // Past the guard every keyform is scalar — narrow to BezTriple for the
+  // scalar-only handle calc.
+  const scalar = /** @type {BezTriple[]} */ (/** @type {unknown} */ (keyforms));
+  for (let i = 0; i < scalar.length; i++) {
+    const prev = i > 0 ? scalar[i - 1] : null;
+    const next = i < scalar.length - 1 ? scalar[i + 1] : null;
+    calcHandleForKeyform(scalar[i], prev, next);
   }
 }
 
