@@ -30,7 +30,7 @@
 import { useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { makeHeaderOperators } from './headerOperators.js';
-import { useEditorStore } from '../../store/editorStore.js';
+import { ModePill } from '../shell/ModePill.jsx';
 import * as DropdownImpl from '../../components/ui/dropdown-menu.jsx';
 
 /** @type {Record<string, React.ComponentType<any>>} */
@@ -50,19 +50,7 @@ const {
 // FCurveHeader so a single source defines the dispatch contract.
 const { runOperator, isAvailable } = makeHeaderOperators('viewport');
 
-const MODE_LABELS = {
-  object:     'Object Mode',
-  edit:       'Edit Mode',
-  pose:       'Pose Mode',
-  weightPaint: 'Weight Paint',
-  sculpt:     'Sculpt Mode',
-  blendShape: 'Blend Shape Paint',
-};
-
 export function ViewportHeader() {
-  const editMode = useEditorStore((s) => s.editMode);
-  const modeLabel = MODE_LABELS[editMode] ?? 'Object Mode';
-
   const onFrameSelected = useCallback(() => runOperator('view.frameSelected'), []);
   const onSelectAll     = useCallback(() => runOperator('selection.selectAllToggle'), []);
   const onDeselectAll   = useCallback(() => runOperator('selection.deselectAll'), []);
@@ -81,15 +69,11 @@ export function ViewportHeader() {
       className="border-b border-border bg-muted/20 flex items-center
                  px-1.5 py-1 gap-1 text-[11px] select-none"
     >
-      {/* Mode label (read-only mirror — full mode dropdown still lives
-          on the floating ModePill canvas overlay). */}
-      <div
-        className="px-2 py-0.5 rounded-sm bg-background/40 text-foreground
-                   border border-border/40"
-        title="Active edit mode (change via the canvas Mode pill or Tab keybind)"
-      >
-        {modeLabel}
-      </div>
+      {/* Interactive mode selector — Blender's VIEW3D_HT_header mode
+          picker (`space_view3d.py:847`). Relocated here from the floating
+          canvas overlay (UI Blender-parity Slice C). Carries the mode
+          dropdown + (in Edit Mode) the proportional-edit toggle. */}
+      <ModePill />
 
       <div className="w-px h-4 bg-border/50 mx-0.5" aria-hidden="true" />
 

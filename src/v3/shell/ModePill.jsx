@@ -1,14 +1,18 @@
 // @ts-nocheck
 
 /**
- * ModePill — canvas top-left overlay surfacing the contextual edit
- * mode. Blender's pattern: Object Mode / Edit Mode / Pose Mode /
- * Blend Shape Paint as a dropdown rooted at the active selection.
+ * ModePill — the contextual edit-mode selector. Lives in the Viewport
+ * area HEADER (mounted by `ViewportHeader`), matching Blender's
+ * `VIEW3D_HT_header` mode picker (`space_view3d.py:847`) — NOT a floating
+ * canvas overlay (that was the pre-2026-05-20 placement; relocated to the
+ * header per the UI Blender-parity audit, Slice C). Object Mode / Edit
+ * Mode / Pose Mode / Blend Shape Paint as a dropdown rooted at the active
+ * selection.
  *
- * The pill is the discoverable affordance for edit modes — Tab still
- * works as a keybind, but the user shouldn't have to know that to
- * find the feature. Mounts only on the edit Viewport tab (not Live
- * Preview — modes are meaningless there).
+ * The pill is the discoverable affordance for edit modes — Tab still works
+ * as a keybind, Ctrl+Tab opens this menu. Only the Viewport editor
+ * registers `ViewportHeader`, so the pill is absent from Live Preview
+ * (modes are meaningless there) without an explicit guard.
  *
  * Selection drives which rows are enabled:
  *   - Object Mode      — always available
@@ -221,7 +225,7 @@ export function ModePill() {
   const pick = (fn) => () => { fn(); setModeMenuOpen(false); };
 
   return (
-    <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
+    <div className="flex items-center gap-1">
     <Popover open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
       <PopoverTrigger asChild>
         <Button

@@ -34,7 +34,6 @@ import { VertexSelectionOverlay } from '../editors/viewport/overlays/VertexSelec
 import { BoxSelectOverlay } from '../editors/viewport/overlays/BoxSelectOverlay.jsx';
 import { useCaptureStore } from '../../store/captureStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
-import { ModePill } from './ModePill.jsx';
 import { CanvasToolbar } from './CanvasToolbar.jsx';
 import { ToolSettingsPanel } from './ToolSettingsPanel.jsx';
 
@@ -129,10 +128,9 @@ export function CanvasArea({ mode }) {
           events stay non-interactive (`pointer-events: none`) — the
           overlay's window listeners drive commit / cancel. */}
       {!isPreview && <BoxSelectOverlay />}
-      {/* Mode pill (Blender-style) — top-left canvas overlay.
-          Surfaces the contextual edit mode for the active selection.
-          Edit Viewport only; Live Preview is read-only. */}
-      {!isPreview && <ModePill />}
+      {/* Mode selector relocated to the Viewport area HEADER (ViewportHeader)
+          per UI Blender-parity Slice C — matches Blender's VIEW3D_HT_header
+          mode picker. No longer a floating canvas overlay. */}
       {/* Left toolbar (Blender T-panel) — vertical icon strip below
           the Mode pill. Tool list driven by `editMode`. Edit Viewport
           only; Live Preview is read-only.

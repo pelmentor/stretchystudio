@@ -58,11 +58,22 @@ That is a real interaction refactor needing browser verification →
   exec + the keymap-resolves-all-chords loop already covers the binding
   (+2). **Caveat:** Ctrl+Tab is browser-reserved in a web tab (may not be
   interceptable); works in the desktop app. Pill *visual* unchanged here.
-- **Slice C — pill → Blender-style header dropdown.** Relocate/restyle
-  the `ModePill` overlay to a compact header-style mode dropdown anchored
-  at the viewport top-left (consistent with the existing left-edge
-  toolbar = Blender's T-panel analog). Visual only — **needs user
-  browser verification.**
+- **Slice C — pill → Blender-style header dropdown. ✅ SHIPPED (needs
+  browser verification).** Discovery: SS already renders a real
+  `ViewportHeader` (Blender `VIEW3D_HT_header` analog: View/Select/Object
+  menus) that was showing a *read-only* mode label, with a code comment
+  documenting the intent to lift the interactive selector into it. So the
+  faithful move was a mount relocation, not a rewrite: de-floated
+  `ModePill` (dropped `absolute top-2 left-2 z-10`) and mounted it inside
+  `ViewportHeader` (replacing the read-only label); removed the canvas
+  overlay mount in `CanvasArea`. Single instance ⇒ the Slice-B Ctrl+Tab
+  flag still drives it cleanly; the proportional-edit toggle + shape
+  picker + lock-modes came along untouched. The left-edge `CanvasToolbar`
+  (Blender T-panel) stays on canvas. **NOT browser-verified** — visual
+  placement/sizing of the header pill + the proportional toggle in the
+  header row need the user's eyes; single revertible commit if off.
+  Polish candidate: the trigger's heavy `bg-card/85 backdrop-blur shadow`
+  styling may want lightening for the flat header row.
 - **Slice D — tool-aware pose drag (full Blender match).** Make
   `SkeletonOverlay` respect `toolMode`: Select ⇒ box-select on drag,
   Move/Joint-Drag ⇒ move. Then pose can default to Select like Blender.
