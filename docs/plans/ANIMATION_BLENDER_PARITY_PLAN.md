@@ -2910,13 +2910,48 @@ deliberate `legacyEasingToInterpolation` ↔ `legacyToBezTripleShape`
 duplication between runtime + the frozen v39 migration is documented
 and intentional — migrations stay frozen at shipping state.)
 
-#### 7.D — `paramValuesStore.values` audit
+#### 7.D — `paramValuesStore.values` audit ✅ RESOLVED-BY-ANALYSIS 2026-05-20 (no replacement — premise inaccurate)
 
-Many code paths still read directly from `paramValuesStore.values`,
-bypassing the FCurve evaluator. Phase 7 audits and replaces with
-`evaluateRnaPath(project, 'objects[__params__].values[<paramId>]')`
-calls — except for the bone-mirror sync path, which is the canonical
-exception.
+Original premise: "Many code paths read directly from
+`paramValuesStore.values`, bypassing the FCurve evaluator; replace
+with `evaluateRnaPath(project, 'objects[__params__].values[<id>]')`."
+
+**The premise is inaccurate against the shipped code.** Investigation
+(2026-05-20, acting autonomously per Rule №1):
+
+1. **`evaluateRnaPath` is NOT an FCurve evaluator for params.** For
+   `__params__` paths it resolves through `_paramsView`
+   (`anim/rnaPath.js:172-178`), which returns
+   `project.parameters[*].default` — the **static defaults**. It does
+   not evaluate FCurves at all (it's a pure structural path-walk). Its
+   own docstring: *"drivers / FCurves write through the paramValues
+   store at runtime, not here."* Replacing live `paramValuesStore.values`
+   reads with it would return static defaults everywhere — a
+   catastrophic regression (every param read would ignore both user
+   slider edits AND animation).
+
+2. **`paramValuesStore.values` is already the animation-aware single
+   source of truth.** In animation mode the CanvasViewport tick
+   (`CanvasViewport.jsx:662-685`) runs `computeParamOverrides` (FCurve
+   eval) + driver eval and **writes the results back into
+   `paramValuesStore` via `setMany`**. So a direct read gets the merged
+   effective value (slider state ⊕ FCurve overrides ⊕ driver outputs).
+   This is the designed convergence point, not a bypass.
+
+3. **All extant reads are legitimate live-value reads.** WarpDeformerOverlay,
+   ParameterTab slider, SkeletonOverlay eye-ball, FCurveEditor channel
+   display, and the insertKeyframe resolver (the 7.C fix that
+   *deliberately* reads `paramValuesStore`, NOT `evaluateRnaPath`, to
+   get live values) all want the live merged value. None are export
+   paths (the cmo3/motion3/can3 exporters walk action FCurves directly,
+   never `paramValuesStore`).
+
+**Action: no replacement.** The plan's original idea (`evaluateRnaPath`
+as the param SoT) was superseded by the implemented write-back
+architecture, which is cleaner: one merged store, animation-aware,
+with the bone-mirror sync as its only special case (the
+`skipBoneMirror` flag on `setMany`). CO-D's intent (FCurve eval as
+SoT) is already satisfied via tick write-back.
 
 #### 7.E — Documentation
 
