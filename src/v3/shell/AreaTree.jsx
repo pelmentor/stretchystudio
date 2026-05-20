@@ -41,16 +41,20 @@ const VERTICAL_HANDLE   = 'flex-shrink-0 h-px bg-border hover:h-1 hover:bg-prima
  * Render a side column. When both halves exist, return a vertical
  * PanelGroup; with one half, return that single Area; with none,
  * return null and let the caller skip the column entirely.
+ *
+ * Panels carry stable `id`/`order` props: react-resizable-panels asserts
+ * ("Panel data not found for index N") if it ever sees a panel-count
+ * change on a reused PanelGroup instance without them.
  */
-function renderSideColumn(top, bottom, autoSaveId, topDefault = 65) {
+function renderSideColumn(top, bottom, idBase, topDefault = 65) {
   if (top && bottom) {
     return (
-      <PanelGroup direction="vertical" autoSaveId={autoSaveId}>
-        <Panel defaultSize={topDefault} minSize={20}>
+      <PanelGroup direction="vertical" id={`${idBase}-v`} autoSaveId={`${idBase}-v`}>
+        <Panel id="top" order={1} defaultSize={topDefault} minSize={20}>
           <Area area={top} />
         </Panel>
         <PanelResizeHandle className={VERTICAL_HANDLE} />
-        <Panel defaultSize={100 - topDefault} minSize={15}>
+        <Panel id="bottom" order={2} defaultSize={100 - topDefault} minSize={15}>
           <Area area={bottom} />
         </Panel>
       </PanelGroup>
@@ -74,8 +78,6 @@ export function AreaTree() {
   const rightBottom = byId.rightBottom;
   const timeline    = byId.timeline;
 
-  const wsKey = activeWorkspace;
-
   // Live Preview lives as a tab on `center` (no canvas split). If a
   // `timeline` area is present, the center column splits vertically
   // between center and timeline.
@@ -92,15 +94,20 @@ export function AreaTree() {
   // keeps the centerArea path identical across workspaces.
   const centerArea = center && <Area area={center} />;
 
+  // Stable panel `id`s ("canvas" / "timeline") keep the canvas Panel mounted
+  // when the timeline appears/disappears (layout ↔ animation), preserving
+  // CanvasArea's WebGL2 context (BUG-017). The stable autoSaveId stores the
+  // with-timeline and without-timeline splits separately (v2 keys saved
+  // layouts by panel-id set).
   const centerColumn = (
-    <PanelGroup direction="vertical" autoSaveId={`v3-ws-${wsKey}-c`}>
-      <Panel defaultSize={timeline ? 75 : 100} minSize={20}>
+    <PanelGroup direction="vertical" id="v3-center-v" autoSaveId="v3-center-v">
+      <Panel id="canvas" order={1} defaultSize={timeline ? 75 : 100} minSize={20}>
         {centerArea}
       </Panel>
       {timeline ? (
         <>
           <PanelResizeHandle className={VERTICAL_HANDLE} />
-          <Panel defaultSize={25} minSize={10}>
+          <Panel id="timeline" order={2} defaultSize={25} minSize={10}>
             <Area area={timeline} />
           </Panel>
         </>
@@ -108,62 +115,66 @@ export function AreaTree() {
     </PanelGroup>
   );
 
-  const leftColumn  = renderSideColumn(leftTop,  leftBottom,  `v3-ws-${wsKey}-l`, 65);
-  const rightColumn = renderSideColumn(rightTop, rightBottom, `v3-ws-${wsKey}-r`, 55);
+  const leftColumn  = renderSideColumn(leftTop,  leftBottom,  'v3-left',  65);
+  const rightColumn = renderSideColumn(rightTop, rightBottom, 'v3-right', 55);
 
   const hasLeft  = !!leftColumn;
   const hasRight = !!rightColumn;
 
-  if (hasLeft && hasRight) {
-    return (
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId={`v3-ws-${wsKey}-h6`}
-        className="flex-1 min-h-0"
-      >
-        <Panel defaultSize={20} minSize={12} maxSize={40}>
-          {leftColumn}
-        </Panel>
-        <PanelResizeHandle className={HORIZONTAL_HANDLE} />
-        <Panel defaultSize={60} minSize={30}>
-          {centerColumn}
-        </Panel>
-        <PanelResizeHandle className={HORIZONTAL_HANDLE} />
-        <Panel defaultSize={20} minSize={12} maxSize={40}>
-          {rightColumn}
-        </Panel>
-      </PanelGroup>
-    );
-  }
-
+  // Build the column set, then render panels + handles as a single FLAT,
+  // KEYED list inside ONE persistent horizontal PanelGroup. Two invariants:
+  //  - The group instance + the center Panel (`id="center"`) never remount
+  //    across workspace switches, so CanvasArea's WebGL2 context survives
+  //    (BUG-017) even when left/right columns come and go.
+  //  - Every Panel carries a stable `id`/`order`; react-resizable-panels
+  //    asserts ("Panel data not found for index N") when a reused group's
+  //    panel count changes without them — the crash entering Sculpt (the
+  //    only center+right shape) before this fix.
+  /** @type {Array<{id:string,node:any,defaultSize:number,minSize:number,maxSize?:number}>} */
+  const columns = [];
   if (hasLeft) {
-    return (
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId={`v3-ws-${wsKey}-h2L`}
-        className="flex-1 min-h-0"
-      >
-        <Panel defaultSize={22} minSize={14} maxSize={45}>{leftColumn}</Panel>
-        <PanelResizeHandle className={HORIZONTAL_HANDLE} />
-        <Panel defaultSize={78} minSize={30}>{centerColumn}</Panel>
-      </PanelGroup>
-    );
+    columns.push({ id: 'left', node: leftColumn, defaultSize: hasRight ? 20 : 22, minSize: 12, maxSize: 45 });
   }
-
+  columns.push({
+    id: 'center',
+    node: centerColumn,
+    defaultSize: hasLeft && hasRight ? 60 : (hasLeft || hasRight ? 78 : 100),
+    minSize: 30,
+  });
   if (hasRight) {
-    return (
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId={`v3-ws-${wsKey}-h2R`}
-        className="flex-1 min-h-0"
-      >
-        <Panel defaultSize={78} minSize={30}>{centerColumn}</Panel>
-        <PanelResizeHandle className={HORIZONTAL_HANDLE} />
-        <Panel defaultSize={22} minSize={14} maxSize={45}>{rightColumn}</Panel>
-      </PanelGroup>
-    );
+    columns.push({ id: 'right', node: rightColumn, defaultSize: hasLeft ? 20 : 22, minSize: 12, maxSize: 45 });
   }
 
-  // Center-only fallback.
-  return <div className="flex-1 min-h-0">{centerColumn}</div>;
+  // Flat, individually-keyed children (NOT Fragment-grouped): a handle and
+  // the Panel that follows it must be separate keyed siblings. If a leading
+  // handle were grouped with its Panel in a Fragment, toggling that handle
+  // (e.g. center becomes the first column entering Sculpt) would shift the
+  // Panel's position inside the Fragment and React would remount it —
+  // destroying CanvasArea's WebGL2 context. Keying each element by a stable
+  // role lets React track the center Panel across every column-set change.
+  /** @type {import('react').ReactNode[]} */
+  const children = [];
+  columns.forEach((col, i) => {
+    if (i > 0) {
+      children.push(<PanelResizeHandle key={`handle-${col.id}`} className={HORIZONTAL_HANDLE} />);
+    }
+    children.push(
+      <Panel
+        key={col.id}
+        id={col.id}
+        order={i + 1}
+        defaultSize={col.defaultSize}
+        minSize={col.minSize}
+        maxSize={col.maxSize}
+      >
+        {col.node}
+      </Panel>,
+    );
+  });
+
+  return (
+    <PanelGroup direction="horizontal" id="v3-main-h" autoSaveId="v3-main-h" className="flex-1 min-h-0">
+      {children}
+    </PanelGroup>
+  );
 }
