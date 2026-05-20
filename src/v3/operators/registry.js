@@ -86,7 +86,7 @@ import { clientToCanvasXY } from '../editors/viewport/viewportMath.js';
 // + chainEval + boneOverlayMatrix + boneSkinning) which are already
 // pulled in by CanvasViewport's eager import path — net no new chunks.
 import { applyArmatureModifier } from '../../services/ArmatureModifierService.js';
-import { computeWorldMatrices } from '../../renderer/transforms.js';
+import { computeWorldMatrices, mat3Inverse } from '../../renderer/transforms.js';
 import { readPoseValue } from '../../renderer/animationEngine.js';
 import {
   getMesh,
@@ -753,6 +753,18 @@ function registerBuiltins() {
     }
     if (n === 0) return true;
 
+    // Part's inverse WORLD matrix so the overlay maps canvas-space cursor
+    // deltas into the part's LOCAL vertex space — `mesh.vertices` are
+    // local, and a part with a non-identity transform renders as
+    // `camera × worldMatrix × local` (scenePass.js:230-234). Without this
+    // the modal wrote screen deltas straight onto local verts: the dots
+    // (drawn local) tracked the cursor but the GL mesh moved by
+    // `worldMatrix × delta` — the phantom-duplicate bug. Mirrors the
+    // brush's `iwm` handling (CanvasViewport.jsx:3037). Identity-ish for
+    // most parts → the mapping is a no-op there.
+    const wm = computeWorldMatrices(project.nodes).get(partId) ?? null;
+    const iwm = wm ? mat3Inverse(wm) : null;
+
     // One undo entry for the whole modal session; the overlay closes the
     // batch on commit and `discardBatch`-rolls-back on Esc (clean cancel,
     // no redo/undo pollution — same path the extrude→translate flow uses).
@@ -764,6 +776,7 @@ function registerBuiltins() {
       pivotCanvas: { x: cx / n, y: cy / n },
       original,
       vertIndices: new Set(selSet),
+      iwm,
       rollbackOnCancel: true,
     });
     return true;
