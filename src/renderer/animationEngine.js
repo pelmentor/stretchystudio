@@ -23,7 +23,7 @@
  */
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
-import { decodeFCurveTarget, buildParamFCurve, buildNodeFCurve, makeBezTripleKeyform } from '../anim/animationFCurve.js';
+import { decodeFCurveTarget, makeBezTripleKeyform } from '../anim/animationFCurve.js';
 import { isFCurveEffectivelyMuted } from '../anim/fcurveGroups.js';
 import { recalcKeyformHandles } from '../anim/fcurveHandles.js';
 import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
@@ -535,40 +535,56 @@ export function writeRestValues(node, updates) {
 }
 
 /**
- * Insert/update a parameter keyform at the given time.  Finds the
- * existing param fcurve in `action.fcurves` (by rnaPath decoded
- * paramId), creates one via `buildParamFCurve` if missing, and upserts
- * a keyform at `timeMs`. Mutates the action in place — callers wrap
- * in `updateProject` to snapshot undo.
+ * Auto-key a single parameter from a UI control (the Parameters-panel
+ * slider drag). Faithful port of Blender's UI-button auto-key:
+ * `button_anim_autokey` calls `autokeyframe_property(...,
+ * only_if_property_keyed=true)` (`interface_anim.cc:320`), and
+ * `autokeyframe_property` early-returns when no fcurve exists for the
+ * property (`keyframing_auto.cc:284` — `fcu == nullptr && (... ||
+ * only_if_property_keyed)`).
+ *
+ * So a slider drag only MAINTAINS an existing param fcurve; it never
+ * creates a new one, and it is scoped to the touched param alone —
+ * independent of `project.autoKeyMode` / the active keying set. (Those
+ * govern the viewport transform/pose auto-key path via `runAutoKey`,
+ * not single-property UI edits — Blender routes property buttons
+ * through a separate, deliberately conservative path so tweaking a
+ * value in a panel never silently starts animating it.) The FIRST
+ * keyframe on a param is inserted explicitly through the I-menu →
+ * `AllParams` keying set (whose `insertNew: true` creates the fcurve).
+ *
+ * Mutates the action in place — callers wrap in `updateProject` to
+ * snapshot undo. Returns true when an existing fcurve was updated.
  *
  * @param {Object} action - mutable action object
  * @param {string} paramId
  * @param {number} timeMs
  * @param {number} value
  * @param {string} [easing='ease-both']
+ * @returns {boolean}
  */
-export function setParamKeyframeAt(action, paramId, timeMs, value, easing = 'ease-both') {
-  if (!action || !paramId) return;
-  if (!Array.isArray(action.fcurves)) action.fcurves = [];
-  let fc = action.fcurves.find((f) => {
+export function autoKeyParamProperty(action, paramId, timeMs, value, easing = 'ease-both') {
+  const fc = findParamFCurve(action, paramId);
+  if (!fc) return false;
+  upsertKeyframe(fc.keyforms, timeMs, value, easing);
+  return true;
+}
+
+/**
+ * Find the param-targeted fcurve for `paramId` in an action, or null.
+ * Shared by `autoKeyParamProperty` and its UI call site (which pre-checks
+ * existence before opening an undo-snapshotting `updateProject`, so a
+ * slider drag on an unkeyed param doesn't pollute the undo stack — the
+ * UI-button auto-key path never creates a fcurve; see `autoKeyParamProperty`).
+ *
+ * @param {Object|null|undefined} action
+ * @param {string} paramId
+ * @returns {Object|null}
+ */
+export function findParamFCurve(action, paramId) {
+  if (!action || !paramId || !Array.isArray(action.fcurves)) return null;
+  return action.fcurves.find((f) => {
     const t = decodeFCurveTarget(f);
     return t?.kind === 'param' && t.paramId === paramId;
-  });
-  if (!fc) {
-    fc = buildParamFCurve(paramId, [], { });
-    if (!fc) {
-      // buildParamFCurve refuses an empty keyforms array; construct
-      // the empty fcurve directly so the upsert below can populate it.
-      fc = {
-        id: `param:${paramId}`,
-        rnaPath: `objects["__params__"].values["${paramId}"]`,
-        arrayIndex: 0,
-        keyforms: [],
-        modifiers: [],
-        extrapolation: 'constant',
-      };
-    }
-    action.fcurves.push(fc);
-  }
-  upsertKeyframe(fc.keyforms, timeMs, value, easing);
+  }) || null;
 }

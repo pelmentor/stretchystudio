@@ -22,7 +22,7 @@ import { useEditorStore } from '../../../store/editorStore.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { getEditorMode } from '../../../store/uiV3Store.js';
-import { setParamKeyframeAt } from '../../../renderer/animationEngine.js';
+import { autoKeyParamProperty, findParamFCurve } from '../../../renderer/animationEngine.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
 import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 import { logger } from '../../../lib/logger.js';
@@ -169,31 +169,29 @@ function ParamRowImpl({ param, selected }) {
             logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
           }
           setParamValue(param.id, v);
-          // Auto-keyframe in animation mode: write a keyform on the
-          // param-targeted FCurve at the current playhead time. The
-          // animation tick evaluates these fcurves via
-          // `evaluateActionFCurves` and feeds them into chainEval.
-          //
-          // PHASE-7-GAP (Slice 7.D audit-fix M-2): this path bypasses
-          // `runAutoKey` and ignores `project.autoKeyMode`. A user in
-          // `'available'` mode dragging a slider on a parameter with NO
-          // existing fcurve will still create one (the opposite of what
-          // `'available'` means); a user in `'activeSet'` mode will
-          // still key only the touched param (NOT the full active set).
-          // Unifying the param auto-key path with `runAutoKey` is §7.E+
-          // scope; the per-param-write semantic here is intentional for
-          // 7.D's MVP (transform/pose drags get mode-aware dispatch;
-          // param sliders stay on the per-param write that pre-dates 7.D).
+          // Auto-keyframe in animation mode. This is Blender's UI-button
+          // auto-key path (`button_anim_autokey` → `autokeyframe_property`
+          // with `only_if_property_keyed=true`): a slider drag only
+          // MAINTAINS an existing param fcurve, never creates one, and is
+          // scoped to the touched param alone (NOT routed through
+          // `runAutoKey`/`project.autoKeyMode` — those drive the viewport
+          // transform/pose path). The first keyframe is inserted via the
+          // I-menu → `AllParams` keying set. See `autoKeyParamProperty`.
           const ed = useEditorStore.getState();
           if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
           const an = useAnimationStore.getState();
           const proj = useProjectStore.getState().project;
           // Stage 1.E: scene-bound action wins over UI-store fallback.
           const activeAction = getActiveSceneAction(proj, an.activeActionId);
-          if (!activeAction) return;
+          // Only-if-keyed: skip the undo-snapshotting updateProject when
+          // the param has no fcurve (Blender skips the notifier when
+          // `autokeyframe_property` returns changed==false). onValueChange
+          // fires continuously during a drag, so a no-op here would spam
+          // the undo stack.
+          if (!activeAction || !findParamFCurve(activeAction, param.id)) return;
           useProjectStore.getState().updateProject((p) => {
             const a = p.actions.find((aa) => aa.id === activeAction.id);
-            if (a) setParamKeyframeAt(a, param.id, an.currentTime, v, 'ease-both');
+            if (a) autoKeyParamProperty(a, param.id, an.currentTime, v, 'ease-both');
           });
         }}
       />
