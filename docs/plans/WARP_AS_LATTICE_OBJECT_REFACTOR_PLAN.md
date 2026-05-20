@@ -1,9 +1,9 @@
 # Plan — Warps as first-class Lattice/Grid-Mesh Objects (Blender parity)
 
-**Status:** PLANNED — not started. Massive refactor, scheduled for a
-dedicated session. Written 2026-05-20 at the user's request after the
-edit-mode / rig-discoverability work surfaced how unintuitive the current
-abstract-warp model is.
+**Status:** IN PROGRESS (started 2026-05-20). **Phase 0 DONE** (byte-fidelity
+gate). Design decisions RESOLVED (see below). Next: Phase 1 substrate.
+Massive refactor; written 2026-05-20 after the edit-mode / rig-discoverability
+work surfaced how unintuitive the current abstract-warp model is.
 
 **One-line goal:** make warp deformers **actual editable grid-mesh /
 lattice objects** in the scene, and make the part↔warp relationship an
@@ -133,26 +133,83 @@ grid-object's vertices would reuse the **Edit-Mode mesh editing** +
 
 ---
 
-## Open design decisions (resolve at session start)
+## Design decisions — RESOLVED 2026-05-20
 
-- **New node type vs repurpose.** Add `type:'object', objectKind:'lattice'`
-  (clean Blender mapping) vs extend the existing `deformer/warp` node with
-  mesh geometry. Trade-off: clean model vs migration blast radius.
-- **Targets: warp-declares-pieces vs piece-declares-warp.** Blender is
-  piece-declares (each mesh's Lattice modifier names the lattice). The
-  user said "pieces selected inside the modifier," which could mean the
-  warp object lists its targets. Pick one canonical direction (Blender's
-  piece-declares is the faithful default; a warp-side target list can be a
-  derived convenience view).
-- **Keyforms as shape keys.** Confirm the grid object's per-param
-  deformation maps cleanly onto the existing shape-key / keyform substrate
-  (it should — keyforms already are param-bound vertex-position sets).
-- **Lattice (control grid) vs Mesh Deform (arbitrary cage).** Cubism warps
-  are regular rows×cols grids → Blender **Lattice** is the closest analog.
-  Keep the grid regular (don't open arbitrary-topology cages) to preserve
-  Cubism export.
-- **Migration reversibility / one cmo3 round-trip** to prove no fidelity
-  loss before flipping the default.
+Resolved via a Blender-fidelity agent reading `reference/blender/` (DNA
+structs + `MOD_lattice.cc`). Decisions are now binding for Phase 1+.
+
+1. **New node type, NOT repurpose.** Lattice = a new
+   `{type:'object', objectKind:'lattice'}` node owning geometry
+   (cage verts + row/col edges) + shape-keys; the part↔cage relationship
+   is a *separate, lightweight* per-part modifier entry
+   `{type:'lattice', objectId, strength, vertexGroup?}`.
+   **Blender:** geometry lives in a `Lattice` data-block
+   (`DNA_lattice_types.h:65-78` — `pntsu/pntsv/pntsw`, `BPoint *def`,
+   `Key *key`); the modifier is a tiny separate struct on the *deformed*
+   mesh (`LatticeModifierData = {Object *object; char name[64]; float
+   strength; flag}`, `DNA_modifier_types.h:282-292`). One cage, many
+   modifiers pointing at it. **Risk:** migration blast radius — every
+   `deformerKind:'warp'` reader repoints in lockstep, no dual-read
+   (Rule №2).
+2. **Piece-declares-warp is canonical.** The modifier lives on the
+   deformed part and names the cage (`LatticeModifierData.object`,
+   `DNA_modifier_types.h:285`; `foreach_ID_link` walks only `lmd->object`,
+   `MOD_lattice.cc:66-71`). The `Lattice` struct has **no** target
+   back-reference. A warp-side target list is a DERIVED view only (Outliner
+   / overlay), never stored (a stored second list = Rule №2 violation).
+   **Risk:** parts affected today via *ancestor hierarchy* (e.g. legwear)
+   have NO `modifiers[]` entry — migration must SYNTHESIZE an explicit
+   lattice modifier on every such part or they silently lose their deform.
+3. **Keyforms → KeyBlocks on the cage; keep our param-binding layer.**
+   A lattice carries shape keys (`Lattice.key`, `DNA_lattice_types.h:78`;
+   each `KeyBlock` = full vertex-position array, `DNA_key_types.h`). That
+   matches `keyforms[].positions` exactly (Basis = baseGrid). **Mismatch:**
+   Blender drives a relative shape key by a scalar `curval`
+   (`DNA_key_types.h:80`, 1-D weight via fcurve/driver); our keyforms are
+   bound to a multi-axis **parameter tuple** (`keyTuple`) with cellSelect
+   blending + `opacity`. So: store positions as KeyBlocks, but
+   `bindings`/`keyTuple`/`opacity` stay as explicit object-side metadata —
+   do NOT collapse them into a single `curval`.
+4. **Stay Lattice (regular rows×cols), NOT Mesh Deform.** Lattice is
+   intrinsically a regular grid (`Lattice.pntsu/pntsv/pntsw` are per-axis
+   point counts, no faces); Mesh Deform binds an arbitrary cage mesh
+   (`MeshDeformModifierData`, harmonic-coordinate bind). Cubism
+   `CDeformerSurface` is a regular control grid → Lattice (`pntsu×pntsv`,
+   w=1) is the exact analog. **Risk:** Edit-Mode must HARD-BLOCK topology
+   ops (add/dissolve/subdivide) on cage objects, else the rows×cols
+   invariant the exporter requires breaks.
+5. **One-step lossless migration (no shim, Rule №2).** Each
+   `deformer/warp` node → one lattice-object node (baseGrid → cage verts +
+   row/col edges; gridSize → pntsu/pntsv; keyforms → KeyBlocks; bindings
+   preserved as object metadata). Each affected part → explicit modifier
+   `{type:'lattice', objectId, ...}`. Old node + hierarchy link deleted in
+   the same migration.
+   **Data needing a deliberate home (silent-corruption hazards):**
+   - `localFrame` (`canvas-px` / `normalized-0to1` / `pivot-relative`):
+     Blender has no lift-frame — the deform space comes from the object's
+     transform + `BKE_lattice_deform_coords` (`MOD_lattice.cc:95`). Must be
+     relocated faithfully (object transform OR explicit object metadata),
+     or the bilinear projection space is lost. **This is the #1 migration
+     risk — the Phase-0 oracle catches it only at export, not migration.**
+   - `canvasBbox`: pure derived cache → recompute, do NOT migrate.
+   - `targetPartId` + ancestor link → collapse into per-part modifiers
+     (decision #2); enumerate ALL affected parts in migration.
+   - `bindings`/`keyTuple`/`opacity` → explicit object-side metadata (#3).
+
+## Phase 0 — DONE (2026-05-20)
+
+Byte-fidelity gate built **before** any refactor: a spec-contract oracle
+pinning `selectRigSpec(project).warpDeformers` (the `warpSpecs` the moc3
+emitter + cmo3 `CWarpDeformerSource` consume *unchanged*) + the
+`canvasToInnermostX/Y` body-warp normaliser closures (derived from
+`baseGrid` bbox — the `localFrame` relocation hazard). Self-contained
+synthetic model (2-deep warp chain + 2D keyform grid + all three
+localFrames + per-mesh `targetPartId`/`canvasBbox` + non-default 4×6 grid).
+Since the wire emitters are NOT refactored, identical `warpSpecs` ⟹
+identical bytes by construction. **Gate:** `scripts/test/test_warpExportOracle.mjs`
+(pinned hash `f50b6178`), wired into `npm run test` + `test:warpExportOracle`.
+Phase 1 will rewrite the oracle's project BUILDER to emit grid objects, but
+the EXPECTED_HASH must not change — a changed hash = wire regression → halt.
 
 ## Suggested phasing (next session)
 
