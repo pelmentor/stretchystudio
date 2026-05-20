@@ -2213,15 +2213,29 @@ surface to audit).
   deviation = toggle-to-clear vs Blender's separate `type==0` entry).
   Dual-audit clean (4/4 cites verified byte-for-byte).
 
-**NEW latent bug surfaced by §7.G extraction (NOT introduced — tracked
-for a future slice):** `mesh_verts` keyforms are never stored on K-key
-insertion because `upsertKeyframe` → `makeBezTripleKeyform`
-(`animationFCurve.js:144`) rejects non-numeric values, and a mesh
-keyform value is a vertex array. The legacy handler had the identical
-no-op; 7.G preserves it faithfully and pins it in
-`test_insertAllProperties.mjs §3`. A real fix needs a mesh-aware
-keyform representation (scalar-BezTriple ≠ vertex-array) — out of §7.G
-scope, flagged for a dedicated mesh-keyform slice.
+**~~Latent mesh_verts keyform bug~~ — RESOLVED 2026-05-20 (`001a7b6`
+substrate + `9525b99` audit-fix).** `mesh_verts` keyforms were never
+stored on K-key insertion because `upsertKeyframe` →
+`makeBezTripleKeyform` (`animationFCurve.js:144`) rejects non-numeric
+values (mesh value = vertex array). Fixed by completing the write link
+of an otherwise-built feature (eval `interpolateMeshVerts` + export
+motion3/cmo3 `meshVertsWarp` were already array-ready):
+- `upsertMeshKeyframe` (animationEngine) stores `{time, value:[{x,y}…],
+  interpolation, flag, degenerate handles}` — the exact shape the
+  evaluator + both exporters consume (export-path dual-audit:
+  VERIFIED-COMPATIBLE 3/3).
+- `recalcKeyformHandles` chokepoint guard skips array values (protects
+  every dopesheet/graph/fcurve-editor handle-recompute caller).
+- Graph Editor excludes mesh_verts (no scalar value-axis); they live in
+  the Dopesheet (time domain).
+- Audit-fix: NLA `blendStripIntoAccumulator` now skips `.mesh_verts`
+  (was NaN-ing the scalar accumulator); dopesheet clone/duplicate
+  deep-copy the value array.
+- Tests: `test_insertAllProperties §3` pins write + playback round-trip
+  (t=0/0.5/1) + same-time replace; `test_fcurveHandles` array-safety.
+- **NOT browser/Cubism-verified:** visual mesh-deform playback + the
+  .cmo3/.motion3 export OUTPUT for newly-animated mesh_verts (readers
+  consume the shape, but not re-verified end-to-end in Cubism).
 
 #### 7.E — K-key first-use toast ✅ SHIPPED 2026-05-20
 

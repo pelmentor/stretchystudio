@@ -433,10 +433,13 @@ behavior is independently green per §0.
   picker opens (instead of inserting all properties). Auto-key on a
   bone drag still keys everything (synthetic K is exempt). Disable to
   restore legacy K.
-- **mesh_verts K-key keyframes not stored** (latent, surfaced by 7.G):
-  pressing K does not store a mesh-deform keyform (`upsertKeyframe`
-  rejects the vertex-array value). Pre-existing — not a 7.G regression.
-  Tracked for a dedicated mesh-keyform slice; see plan §7.F gaps.
+- ~~**mesh_verts K-key keyframes not stored**~~ — RESOLVED (`001a7b6` +
+  `9525b99`). K now stores mesh-deform keyforms via `upsertMeshKeyframe`;
+  playback (`interpolateMeshVerts`) + export (motion3/cmo3) consume them.
+  Manual check (NOT yet done — needs browser + Cubism): in a deform-mesh
+  edit, move verts at frame N, press **K**; scrub — the mesh should
+  interpolate from its rest shape (auto base keyform at start) to the
+  deformed shape. Export and confirm the warp animates in Cubism.
 - ~~**Param-row auto-key gap** (§4.8)~~ — RESOLVED in Slice 7.H
   (`1f89d01`). Param-slider auto-key now ports Blender's UI-button
   path (only-if-keyed; never creates a fcurve; scoped to the touched
