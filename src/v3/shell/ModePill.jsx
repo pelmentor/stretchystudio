@@ -27,6 +27,7 @@
  * @module v3/shell/ModePill
  */
 
+import { useEffect } from 'react';
 import { ChevronDown, Box, Pencil, Bone, Sparkles, Circle, Brush, Hand } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.jsx';
 import { Button } from '../../components/ui/button.jsx';
@@ -139,6 +140,17 @@ export function ModePill() {
   // analog. A click on the trigger still toggles via onOpenChange.
   const modeMenuOpen = useUIV3Store((s) => s.modeMenuOpen);
   const setModeMenuOpen = useUIV3Store((s) => s.setModeMenuOpen);
+
+  // The open flag lives in a global store but ModePill only mounts on the
+  // edit Viewport tab. Reset it on (un)mount so a Ctrl+Tab pressed while
+  // the pill was absent (e.g. on the Live Preview tab) can't leave the
+  // flag `true` and auto-pop the menu when the user returns to the
+  // viewport. Runs only on mount/unmount (stable dep), so a Ctrl+Tab
+  // while the pill IS mounted still opens normally. (Slice B audit fix.)
+  useEffect(() => {
+    setModeMenuOpen(false);
+    return () => setModeMenuOpen(false);
+  }, [setModeMenuOpen]);
 
   // Subscribe to selectionStore so the dropdown re-renders when the
   // user picks a different node.
