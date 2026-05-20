@@ -7,20 +7,21 @@ Constraints / DepGraph) into the production hot path.
 
 ## Resume entry point (handoff for next session)
 
-Phase 0 is **5 of 6 sub-phases shipped + the armature-port gate
-closed** (0.0/0.A/0.B/0.C/0.D.0/0.D armature). The remaining gate
-before flipping the default is user-side:
+Phase 0 is **COMPLETE.** All 6 sub-phases shipped + the armature-port
+gate closed (0.0/0.A/0.B/0.C/0.D.0/0.D armature), and the dual-engine
+opt-out itself was **removed in the Phase 7 close-out (2026-05-20)**.
 
-**Manual byte-fidelity sweep.** Toggle `preferencesStore.evalEngine =
-'depgraph'`, load `shelby_neutral_ok.psd` (Western) + `test_image4.psd`
-(anime), verify visually + export `.cmo3` and byte-diff against the
-`'classic'` baseline. Both must produce identical bytes (or
-pixel-equivalent visual output, since the .cmo3 export path doesn't
-currently consume depgraph outputs — see Phase 1.B.1).
-
-Once that passes: change [preferencesStore.js:160](../../src/store/preferencesStore.js#L160)
-default from `'classic'` to `'depgraph'`. Keep the `'classic'`
-opt-out for one release; remove in Phase 7 close-out.
+**Original 0.D flip plan (now superseded).** The plan was: run a
+user-side manual byte-fidelity sweep (toggle `evalEngine='depgraph'`,
+load Shelby + test_image4, byte-diff `.cmo3` exports against the
+`'classic'` baseline), then flip the default and keep `'classic'` for
+one release. The user instead waived the gate on 2026-05-20 ("no
+migration baggage, so remove classic") and the entire `'classic'`
+opt-out was removed wholesale — `evalProjectFrameViaDepgraph` is now
+the sole viewport eval path. The `.cmo3` export pipeline never
+consumed depgraph outputs (it builds from rigSpec/project data, not
+runtime eval frames — see Phase 1.B.1), so export byte-fidelity is
+unaffected by the removal.
 
 After 0.D, **Phase 1 is the next ~1.5-week chunk** — Action datablock
 + NodeTree retirement + 11-consumer migration of `project.animations[]`.
@@ -40,7 +41,7 @@ consumer list, then write `migrations/v33_action_datablock.js`.
 | 0.C | Wire `evaluateConstraints` into pose composition | ✅ SHIPPED (2026-05-10) |
 | 0.D.0 | Wire depgraph into CanvasViewport rAF callback | ✅ SHIPPED (2026-05-10) |
 | 0.D armature | Bone post-chain LBS / overlay inside `kernelArtMeshEval` | ✅ SHIPPED (2026-05-10) |
-| 0.D flip | Flip `evalEngine` default to `depgraph` | ⏳ GATED on manual byte-fidelity sweep |
+| 0.D flip | Flip `evalEngine` default to `depgraph` | ✅ SUPERSEDED 2026-05-20 — the `'classic'` opt-out was removed wholesale in the Phase 7 close-out (user waived the manual byte-fidelity gate per Rule №2); `evalProjectFrameViaDepgraph` is now the sole viewport eval path. |
 
 ## 0.0 — Canonical time unit (SHIPPED)
 

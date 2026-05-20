@@ -15,11 +15,12 @@ import { useEditMenuStore } from '@/store/editMenuStore';
 // gate modes or visualizations (Blender pattern: workspace = layout
 // preset + default editorMode, nothing more). `editor.editMode` and
 // `editor.viewLayers` are read directly.
-import { evalRig } from '@/io/live2d/runtime/evaluator/chainEval';
 // Phase 0.D.0 of Animation Blender-Parity Plan (2026-05-10) — depgraph
-// production wire-in. `evalProjectFrameViaDepgraph` is a drop-in for
-// evalRig that routes every art mesh through the depgraph's
-// ART_MESH_EVAL op. Selected via `preferencesStore.evalEngine`.
+// production wire-in. `evalProjectFrameViaDepgraph` routes every art
+// mesh through the depgraph's ART_MESH_EVAL op (with bone post-chain
+// composition inside the kernel). It is the sole viewport eval path;
+// the legacy chainEval `evalRig` opt-out (`evalEngine: 'classic'`) was
+// removed in the Phase 7 close-out per Rule №2 (no migration baggage).
 import { evalProjectFrameViaDepgraph } from '@/anim/depgraph/evalProjectFrame';
 import {
   createPhysicsState,
@@ -106,14 +107,6 @@ import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
 import { downsampleAlphaMask } from '@/components/canvas/viewport/alphaMask';
-import {
-  computeBoneWorldMatrices,
-  computeBoneParentMap,
-  computeBoneOverlayMatrices,
-  applyOverlayMatrixObj,
-} from '@/renderer/boneOverlayMatrix';
-import { pickBonePostChainComposition } from '@/renderer/bonePostChainComposition';
-import { applyTwoBoneSkinningObj } from '@/renderer/boneSkinning';
 import { retriangulate } from '@/mesh/generate';
 import { createMeshWorkerPool } from '@/mesh/workerPool';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
@@ -703,15 +696,13 @@ export default function CanvasViewport({
       // explicit user authoring. Cheap when there are no drivers
       // (collectDrivers returns []).
       //
-      // Phase 0 scope: only param drivers reach the eval substrate. The
-      // returned map is projected to `paramId → value` via
-      // `driverOverridesToParamMap` and merged into `valuesForEval`.
+      // Phase 0 scope: only param drivers reach the eval substrate via
+      // this merge. The returned map is projected to `paramId → value`
+      // via `driverOverridesToParamMap` and merged into `valuesForEval`.
       // Transform drivers (which would mutate `node.transform.<field>`
-      // per-frame) flow through the depgraph branch below — the
-      // production wire landed in Phase 0.D.0 (2026-05-10) — so when
-      // `evalEngine === 'depgraph'`, transform drivers are picked up
-      // via the depgraph's TRANSFORM_COMPOSE op rather than this
-      // pre-evalRig merge.
+      // per-frame) are picked up by the depgraph's TRANSFORM_COMPOSE op
+      // inside `evalProjectFrameViaDepgraph` below (Phase 0.D.0), not by
+      // this pre-eval param merge.
       const _projForDrivers = projectRef.current;
       const _driverOverrides = evaluateProjectDrivers(_projForDrivers, {
         project: _projForDrivers,
@@ -985,34 +976,26 @@ export default function CanvasViewport({
           // skipping when invisible avoids the per-frame allocation.
           const _wantLifted = !previewModeRef.current
             && (editorRef.current.viewLayers?.warpGrids ?? true);
-          // Phase 0.D.0 — branch on `preferencesStore.evalEngine`.
-          // `'depgraph'` routes through `evalProjectFrameViaDepgraph`
-          // (kernels port `evalArtMeshFrame`); `'classic'` keeps
-          // chainEval's evalRig. Both produce the same `ArtMeshFrame[]`
-          // shape so the rest of the tick is engine-agnostic.
-          // Hoisted above the cache-hit branch — the post-loop bone
-          // composition pass below also reads this to decide whether
-          // to double-compose, and cache-hit frames need the same
-          // gating as cache-miss frames.
-          const _evalEngine = usePreferencesStore.getState().evalEngine;
+          // Production eval — `evalProjectFrameViaDepgraph` (Phase 0.D.0
+          // wire-in + Phase 0.D armature port). The legacy `evalEngine:
+          // 'classic'` opt-out (chainEval `evalRig` viewport path) was
+          // removed in the Phase 7 close-out per Rule №2 (no migration
+          // baggage). The depgraph kernels port `evalArtMeshFrame` and
+          // run bone post-chain composition (LBS / overlay) inside
+          // `kernelArtMeshEval`, so the post-loop pass below no longer
+          // double-composes.
           if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null) {
             frames = cache.frames;
           } else {
             const evalOut = _wantLifted ? { liftedGrids: new Map() } : null;
-            if (_evalEngine === 'depgraph') {
-              // Audit fix (G-8) — propagate action + currentTime so the
-              // depgraph's ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see
-              // the playhead. Without these the depgraph would always
-              // evaluate at t=0 and the depgraph branch's animation
-              // kernels would be dead code (still evaluating, but never
-              // producing keyform-driven values).
-              frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval, {
-                action: activeAction,
-                timeMs: anim.currentTime,
-              });
-            } else {
-              frames = evalRig(_rigSpec, valuesForEval, evalOut ? { out: evalOut } : undefined);
-            }
+            // Propagate action + currentTime so the depgraph's
+            // ANIMATION_TRACK_EVAL / FCURVE_EVAL kernels see the playhead
+            // (audit fix G-8). Without these the depgraph would always
+            // evaluate at t=0 and its animation kernels would be dead code.
+            frames = evalProjectFrameViaDepgraph(projectRef.current, valuesForEval, {
+              action: activeAction,
+              timeMs: anim.currentTime,
+            });
             lastEvalCacheRef.current = {
               rigSpec: _rigSpec, paramValues: valuesForEval, frames,
               liftedGrids: evalOut?.liftedGrids ?? null,
@@ -1064,23 +1047,6 @@ export default function CanvasViewport({
             (_ed_mesh.editMode === 'edit' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
               ? _ed_mesh.selection[0]
               : null;
-          // Per-bone WORLD matrix map (composed through bone-group
-          // ancestors). Skinning looks up by `jointBoneId` so a part
-          // weighted to leftElbow follows leftArm rotations too —
-          // leftElbow's WORLD includes leftArm's pose. Reading the
-          // bone's own pose alone misses ancestor rotations.
-          const boneWorld = computeBoneWorldMatrices(projectRef.current.nodes);
-          // Per-bone PARENT bone id map. Two-bone LBS needs the joint
-          // bone's parent so weight=0 verts follow the parent's rotation
-          // (e.g. rotating leftArm drags the upper-arm vertices weighted
-          // to leftArm even though jointBoneId=leftElbow).
-          const boneParents = computeBoneParentMap(projectRef.current.nodes);
-          // Per-part overlay matrix map for the rigid-follow path
-          // (parts with NO vertex groups + NO Armature modifier whose
-          // nearest ancestor is a bone group). Reuses the boneWorld
-          // map computed above instead of rebuilding it (which is what
-          // the bare `computeBoneOverlayMatrices(nodes)` form does).
-          const boneOverlay = computeBoneOverlayMatrices(projectRef.current.nodes, boneWorld);
           // Map of nodes by id, used for the per-frame `node` lookup
           // below. Replaces a `projectRef.current.nodes.find(...)` per
           // art mesh per frame (~10k linear comparisons on a 100-part
@@ -1109,70 +1075,12 @@ export default function CanvasViewport({
             for (let i = 0; i < verts.length; i++) {
               verts[i] = { x: f.vertexPositions[i * 2], y: f.vertexPositions[i * 2 + 1] };
             }
-            // BONE_ARMATURE_INDEPENDENCE (2026-05-08) + Cubism Adapter
-            // revert (2026-05-09 afternoon) — composition decision is
-            // 3-state, mirroring Blender's two distinct mechanisms:
-            //   1. **LBS** — per-vertex weighted skinning when the part
-            //      has vertex groups + an enabled Armature modifier.
-            //      Mirrors Blender's `pchan_bone_deform`. True skinning
-            //      case (limb blend zones via `computeSkinWeights`).
-            //   2. **Overlay** — uniform world-matrix multiplication
-            //      when the part has NO vertex groups but a bone-group
-            //      ancestor (rigid follow). Mirrors Blender's "child of
-            //      bone, no Armature modifier" semantics.
-            //   3. **None** — Apply Modifier was used (vertex groups
-            //      remain but modifier gone — Blender's `Apply` keeps
-            //      `me->dvert` but ends bone influence) OR no bone
-            //      ancestor at all.
-            //
-            // The composition decision gates deterministically on
-            // (hasWeights, hasModifier, isBoneAncestor). BUG-028's
-            // double-composition (overlay AND LBS-baked rest) can't
-            // recur because LBS and overlay are mutually exclusive
-            // by predicate.
-            //
-            // Both paths read `node.pose.{rotation,x,y,scaleX,scaleY}`.
-            // The bone gesture (SkeletonOverlay) writes pose.rotation;
-            // `ParamRotation_<bone>` slider stays independent — its
-            // effect is already baked into chainEval's frame output via
-            // cellSelect over the param-driven keyforms. So bone-pose
-            // composition runs ON TOP of param-driven deformation.
-            const partMesh = getMesh(node, projectRef.current);
-            // Phase 0.D — when the depgraph engine produced `frames`,
-            // bone post-chain composition (LBS / overlay) already ran
-            // inside `kernelArtMeshEval` against TRANSFORM_COMPOSE
-            // outputs. Re-applying here would double-compose. Classic
-            // engine emits PRE-skin verts and still needs this pass.
-            if (_evalEngine !== 'depgraph') {
-              const composition = pickBonePostChainComposition(node, partMesh);
-              if (composition.kind === 'lbs') {
-                // Two-bone LBS (mirrors Blender pchan_bone_deform): the
-                // joint bone (leftElbow) is the CHILD; its bone-tree parent
-                // (leftArm) is the PARENT. weight=0 → parent.world,
-                // weight=1 → child.world, mid → lerp.
-                const childMatrix = boneWorld.get(composition.jointBoneId);
-                const parentBoneId = composition.parentBoneId
-                  ?? boneParents.get(composition.jointBoneId) ?? null;
-                const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
-                applyTwoBoneSkinningObj(verts, parentMatrix, childMatrix, partMesh.boneWeights);
-              } else if (composition.kind === 'overlay') {
-                // Rigid follow — uniform world-matrix multiplication for
-                // parts that follow a bone via parent-chain transform but
-                // aren't per-vertex skinned. The overlay map only contains
-                // entries for parts whose nearest bone has non-identity
-                // pose; identity-pose bones produce a no-op
-                // `Map.get(node.id) === undefined` and `applyOverlayMatrixObj`
-                // bails on the null-matrix early return.
-                applyOverlayMatrixObj(verts, boneOverlay.get(node.id) ?? null);
-              }
-            }
-            // composition.kind === 'none' → no bone-pose composition.
-            // Two reasons:
-            //   - 'applied': "Apply Modifier" was used. Vertex groups
-            //     persist on the mesh datablock; the modifier-removal
-            //     ends bone influence (Blender semantic). Part renders
-            //     at its baked keyform geometry. Re-bind via
-            //     "Add Modifier → Armature" or re-run Init Rig.
+            // Bone post-chain composition (LBS per-vertex skinning /
+            // rigid overlay / none) runs inside `kernelArtMeshEval`
+            // against TRANSFORM_COMPOSE outputs (Phase 0.D armature
+            // port), so `frames` arrive already post-skin. The legacy
+            // re-skin pass that the classic `evalRig` viewport path
+            // needed was removed in the Phase 7 close-out (Rule №2).
             if (!poseOverrides) poseOverrides = new Map();
             const existing = poseOverrides.get(f.id) ?? {};
             // Don't overwrite an animation/draft override that's already there;

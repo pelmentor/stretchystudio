@@ -20,12 +20,15 @@
  * there, FCURVE_EVAL / DRIVER_EVAL / ANIMATION_TRACK_EVAL / PHYSICS_EVAL
  * may overwrite them inside the eval pass.
  *
- * # When to use this vs `evalRig`
+ * # Relationship to `evalRig`
  *
- * `evalRig` is the legacy chainEval entry point — fast, well-tested,
- * fixed semantics. `evalProjectFrameViaDepgraph` is the depgraph
- * production wire (Phase 0.D.0). They're swap-compatible at the
- * `ArtMeshFrame` boundary; pick by `preferencesStore.evalEngine`.
+ * `evalRig` is the chainEval entry point — still used for the armature
+ * modifier bake (`ArmatureModifierService`) and the depgraph
+ * side-by-side test harness. `evalProjectFrameViaDepgraph` is the sole
+ * VIEWPORT eval path (Phase 0.D.0 wire-in; the `evalEngine: 'classic'`
+ * opt-out that let the viewport tick choose `evalRig` was removed in
+ * the Phase 7 close-out). They remain swap-compatible at the
+ * `ArtMeshFrame` boundary.
  *
  * @module anim/depgraph/evalProjectFrame
  */

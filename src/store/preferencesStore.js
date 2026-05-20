@@ -52,13 +52,6 @@ const NIA_KEY = 'v3.prefs.useNumericInputAdvanced';
  *  localStorage key chosen to match the `v3.prefs.*` pattern so a
  *  user clearing the namespace resets all SS preferences uniformly. */
 const K_FIRST_USE_KEY = 'v3.prefs.kKeyFirstUseShown';
-/** Animation Plan Phase 0.D.0 — eval-engine selector. `'classic'`
- *  (default) routes the viewport tick through chainEval's `evalRig`.
- *  `'depgraph'` routes through `evalProjectFrameViaDepgraph` (Phase
- *  0.D.0 wire-in + Phase 0.D armature port). Default flip from
- *  `'classic'` → `'depgraph'` is gated on the user-side manual byte-
- *  fidelity sweep on Shelby + test_image4 PSDs. */
-const EVAL_KEY = 'v3.prefs.evalEngine';
 /** Toolset Plan Phase 2 — snap config (modal G / R / S). Persisted as
  *  one JSON blob keyed `v3.prefs.snap`. See SNAP_DEFAULT below for
  *  schema; Phase 2.A. */
@@ -236,7 +229,7 @@ function saveJson(key, val) {
 
 /** Read a JSON-encoded scalar (string/number/bool). `loadJson` is
  *  object-shaped and would discard scalars; this helper is for
- *  prefs whose value is a single token (e.g. evalEngine). */
+ *  prefs whose value is a single token (e.g. keymapPreset). */
 function loadJsonScalar(key, fallback) {
   if (typeof localStorage === 'undefined') return fallback;
   try {
@@ -309,20 +302,6 @@ export const usePreferencesStore = create((set, get) => ({
     }
     return loaded;
   })(),
-  /** Animation Plan Phase 0.D.0 evalEngine selector — `'classic' | 'depgraph'`.
-   *  Default `'classic'` (chainEval). `'depgraph'` is fully wired into
-   *  the viewport tick (CanvasViewport → `evalProjectFrameViaDepgraph`)
-   *  with bone post-chain skinning + ART_MESH_EVAL kernel; flipping the
-   *  default to `'depgraph'` is the Phase 0.D exit gate, blocked on a
-   *  user-side manual byte-fidelity sweep against Shelby + test_image4. */
-  evalEngine: (loadJsonScalar(EVAL_KEY, 'classic') === 'depgraph') ? 'depgraph' : 'classic',
-
-  setEvalEngine(v) {
-    const next = v === 'depgraph' ? 'depgraph' : 'classic';
-    saveJson(EVAL_KEY, next);
-    set({ evalEngine: next });
-  },
-
   /** Slice 5.AA — keymap-preset selector. `'default'` (Blender default)
    *  or `'industry_compatible'` (the Maya-style remapping shipped as
    *  Blender's second-default preset). Read by

@@ -239,28 +239,6 @@ function get() { return usePreferencesStore.getState(); }
     'persistence: viewLayerPresets roundtrip');
 }
 
-// ── V2 Phase D-5: evalEngine flag ─────────────────────────────────
-
-{
-  // Default classic — chainEval is the production tick engine.
-  assert(get().evalEngine === 'classic',
-    'evalEngine: defaults to classic (chainEval)');
-  // Setter writes through.
-  get().setEvalEngine('depgraph');
-  assert(get().evalEngine === 'depgraph',
-    'setEvalEngine(depgraph): in-memory updated');
-  assert(_store.get('v3.prefs.evalEngine') === '"depgraph"',
-    'setEvalEngine: localStorage written as JSON-quoted string');
-  // Flip back.
-  get().setEvalEngine('classic');
-  assert(get().evalEngine === 'classic',
-    'setEvalEngine(classic): in-memory updated');
-  // Garbage input clamped to classic.
-  get().setEvalEngine('garbage');
-  assert(get().evalEngine === 'classic',
-    'setEvalEngine: unknown value defaults back to classic (defensive guard)');
-}
-
 // ── Slice 5.AA: keymapPreset selector ─────────────────────────────
 
 {

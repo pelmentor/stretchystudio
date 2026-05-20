@@ -2809,12 +2809,49 @@ operator is now Phase 6.5; the close-out is Phase 7.)
   seconds; that decision is now front-loaded.
 - Net: Phase 7 (close-out) is materially smaller than v1's Phase 8.
 
-#### 7.A — Remove `evalEngine: 'classic'` opt-out
+#### 7.A — Remove `evalEngine: 'classic'` opt-out ✅ SHIPPED 2026-05-20
 
-After Phase 0 flipped the default, Phase 7 removes the legacy code
-path entirely. [src/renderer/animationEngine.js](../../src/renderer/animationEngine.js)
-`computeParamOverrides` / `computePoseOverrides` are deleted; the
-DepGraph is the only path.
+The dual-engine opt-out is removed per Rule №2 (user directive
+2026-05-20: "no migration baggage, so remove classic"). The Phase 0.D
+default-flip gate (user-side manual byte-fidelity sweep) was
+explicitly waived by the user; `evalProjectFrameViaDepgraph` is now
+the sole viewport eval path.
+
+**What was removed:**
+- `preferencesStore.evalEngine` field + `EVAL_KEY` localStorage key +
+  `setEvalEngine` setter.
+- [CanvasViewport.jsx](../../src/components/canvas/CanvasViewport.jsx)
+  per-tick `usePreferencesStore.getState().evalEngine` read + the
+  `evalRig` viewport branch (now unconditional
+  `evalProjectFrameViaDepgraph`) + the dead classic-only bone
+  post-chain re-skin block (LBS / overlay) that the depgraph already
+  performs inside `kernelArtMeshEval` (Phase 0.D armature port). The
+  now-unused `evalRig` + `computeBoneWorldMatrices` /
+  `computeBoneParentMap` / `computeBoneOverlayMatrices` /
+  `applyOverlayMatrixObj` / `pickBonePostChainComposition` /
+  `applyTwoBoneSkinningObj` imports were dropped from CanvasViewport.
+- `test_preferencesStore.mjs` evalEngine assertions.
+
+**Scope correction (vs the original v2 plan text).** The original
+7.A also called for deleting
+[animationEngine.js](../../src/renderer/animationEngine.js)
+`computeParamOverrides` / `computePoseOverrides`. That is **NOT** part
+of "remove classic" — those helpers are the engine-independent
+animation **override layer** (node-transform + `mesh_verts` fcurve
+animation), invoked unconditionally by the CanvasViewport tick
+(`computeParamOverrides` merge into `valuesForEval`;
+`computePoseOverrides` → the renderer's `poseOverrides` map) AND by
+the export-frame capture path
+([captureExportFrame.js](../../src/components/canvas/viewport/captureExportFrame.js)).
+They feed the depgraph path too — `evalProjectFrameViaDepgraph`
+evaluates art-mesh GEOMETRY (param-driven cellSelect) but does not
+emit the node-transform / `mesh_verts` fcurve overrides the renderer
+applies on top. `evalRig` (the function) likewise stays — still used
+by `ArmatureModifierService` (bake) + the side-by-side test harness.
+Deleting the override helpers would require migrating `mesh_verts` +
+node-transform fcurve animation into the depgraph — a separate,
+larger close-out slice, not the "classic opt-out" baggage. Tracked
+as a future close-out item if desired.
 
 #### 7.B — Verify `project.animations[]` reader removal
 
