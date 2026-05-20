@@ -88,11 +88,13 @@ That is a real interaction refactor needing browser verification →
     select-all via A. **Joint Drag stays the auto-armed default**, so
     existing drag-to-pose is UNCHANGED — Select is purely opt-in (zero
     regression).
-  - **Default-flip to Select deferred** until the user verifies the
-    Select-tool feel in-browser; then it's a one-line change
-    (`editorStore` pose default + `LTM_DEFAULT.pose`).
-  - Single revertible commit. Tests: canvasToolbar pose-table assertions
-    updated. The interaction feel is unverified from here.
+  - **Default flipped to Select ✅ (user-verified 2026-05-20).** After the
+    user confirmed the Select-tool feel in-browser ("all good i tested"),
+    flipped the pose default: `editorStore.enterEditMode` pose →
+    `'select'` + `LTM_DEFAULT.pose` → `'select'`. Pose Mode now opens with
+    Select like Blender + Edit Mode; Joint Drag stays opt-in in the
+    toolbar; persisted per-mode tool still overrides. Tests updated
+    (editorStore/preferencesStore/canvasToolbar).
 - **Slice E — workspace→mode coupling. ⏸ RESOLVED-BY-ANALYSIS (not built;
   pending user product decision).** Blender workspaces carry `object_mode`
   (Sculpting→Sculpt, etc.). SS deliberately decoupled this (2026-05-02 —

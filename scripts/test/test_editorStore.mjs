@@ -110,7 +110,7 @@ reset();
   get().enterEditMode('pose');
   assert(get().editMode === 'pose', 'enter skeleton: editMode set');
   assert(get().activeBlendShapeId === null, 'enter skeleton: blendShapeId stays null');
-  assert(get().toolMode === 'joint_drag', 'enter skeleton: toolMode defaults to joint_drag');
+  assert(get().toolMode === 'select', 'enter skeleton: toolMode defaults to select (Blender pose = select_box; Joint Drag opt-in)');
 }
 
 // ── enterEditMode('blendShape', {blendShapeId}) — folded into 'edit' ──
@@ -415,14 +415,15 @@ reset();
   assert(get().toolMode === 'remove_vertex',
     'enterEditMode(edit): restores last-used tool from prefs');
 
-  // Skeleton entry restores joint_drag (default).
+  // Pose entry restores the persisted pose tool (Joint Drag here),
+  // overriding the new 'select' default — persistence wins.
   reset();
   usePreferencesStore.setState({
-    lastToolByMode: { object: 'select', mesh: 'brush', skeleton: 'joint_drag', blendShape: 'brush' },
+    lastToolByMode: { object: 'select', edit: 'select', pose: 'joint_drag', blendShape: 'brush' },
   });
   get().enterEditMode('pose');
   assert(get().toolMode === 'joint_drag',
-    'enterEditMode(skeleton): restores joint_drag');
+    'enterEditMode(pose): persisted Joint Drag overrides the select default');
 
   // Empty / malformed prefs → falls through to canonical defaults.
   // Toolset Phase 0.E flipped Edit Mode's default to `'select'`

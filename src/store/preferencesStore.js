@@ -195,7 +195,7 @@ const LTM_DEFAULT = Object.freeze({
   // `lastToolByMode`, read BEFORE the inline default in `enterEditMode`, so
   // a stale `'brush'` here made fresh installs open Edit Mode in Brush.
   edit:   'select',
-  pose:   'joint_drag',     // SS direct drag-to-pose (DEV: Blender pose = select_box; see UI_MODE_BLENDER_PARITY_PLAN.md)
+  pose:   'select',         // Blender pose default = select_box (Slice D flip); Joint Drag stays available in the toolbar
 });
 
 /** GAP-016 Phase B — `viewLayerPresets` is a dict of user-named

@@ -479,7 +479,11 @@ export const useEditorStore = create((set) => ({
       // because painting IS the primary action for that mode.
       if (kind === 'edit') toolMode = 'select';
       else if (kind === 'weightPaint') toolMode = 'brush';
-      else if (kind === 'pose') toolMode = 'joint_drag';
+      // Pose opens with Select, matching Blender (pose default = select_box):
+      // click a bone, transform via G/R/S, box-select via B. Joint Drag
+      // stays available in the toolbar for direct drag-to-pose. (UI
+      // Blender-parity Slice D default-flip, post user verification.)
+      else if (kind === 'pose') toolMode = 'select';
       else if (kind === 'keyform') toolMode = 'select';
       else if (kind === 'sculpt') toolMode = 'brush';
       else toolMode = 'select';
