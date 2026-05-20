@@ -303,5 +303,18 @@ function reset() {
   assert(getActiveTab({ tabs: [] }) === null, 'getActiveTab(empty tabs) = null');
 }
 
+// ── modeMenuOpen (Ctrl+Tab controlled-open flag) ────────────────────
+
+{
+  assert(useUIV3Store.getState().modeMenuOpen === false, 'modeMenuOpen defaults to false');
+  useUIV3Store.getState().setModeMenuOpen(true);
+  assert(useUIV3Store.getState().modeMenuOpen === true, 'setModeMenuOpen(true) opens');
+  useUIV3Store.getState().setModeMenuOpen(false);
+  assert(useUIV3Store.getState().modeMenuOpen === false, 'setModeMenuOpen(false) closes');
+  useUIV3Store.getState().setModeMenuOpen(1);
+  assert(useUIV3Store.getState().modeMenuOpen === true, 'setModeMenuOpen coerces truthy → true');
+  useUIV3Store.getState().setModeMenuOpen(false);
+}
+
 console.log(`uiV3Store: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

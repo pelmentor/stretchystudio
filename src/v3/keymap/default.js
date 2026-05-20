@@ -127,6 +127,11 @@ export const DEFAULT_KEYMAP = {
   // → exit. BlendShape edit is entered from BlendShapeTab where the
   // user picks which shape to paint.
   'Tab': 'mode.editToggle',
+  // Ctrl+Tab — open the mode menu (Blender's `view3d.object_mode_pie_
+  // or_toggle` analog; SS pops the ModePill menu). NOTE: in a browser tab
+  // Ctrl+Tab is reserved by the browser and may not be interceptable;
+  // works in the desktop app.
+  'Ctrl+Tab': 'mode.menu',
 
   // BVR-007 — N toggles the right-edge tool-settings panel. Blender's
   // canonical "show/hide N-panel" gesture. Bare N (no modifier) so it

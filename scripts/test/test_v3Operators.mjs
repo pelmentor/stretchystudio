@@ -71,6 +71,17 @@ assertThrows(
   assert(useUIV3Store.getState().activeWorkspace === 'layout', 'exec: back to layout');
 }
 
+// ── mode.menu (Ctrl+Tab) opens the ModePill mode menu ───────────────
+
+{
+  useUIV3Store.getState().setModeMenuOpen(false);
+  const op = getOperator('mode.menu');
+  assert(op !== null, 'mode.menu registered');
+  op.exec({ editorType: null });
+  assert(useUIV3Store.getState().modeMenuOpen === true, 'mode.menu exec opens the mode menu');
+  useUIV3Store.getState().setModeMenuOpen(false);
+}
+
 // ── keymap: chord builder ───────────────────────────────────────────
 
 {

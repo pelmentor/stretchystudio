@@ -49,11 +49,15 @@ That is a real interaction refactor needing browser verification →
 - **Slice A — tool-default consistency (done in this commit).** Fix the
   stale `LTM_DEFAULT` `edit:'brush'` → `'select'` so the documented seed
   matches `editorStore`'s actual default. No behavior change.
-- **Slice B — Ctrl+Tab → mode menu.** Bind `Ctrl+Tab` to open the mode
-  selector menu (SS has no pie infra; a popup/dropdown is the honest
-  analog of Blender's `view3d.object_mode_pie_or_toggle`). Keymap +
-  operator + ModePill programmatic-open. Unit-test the keymap/operator
-  wiring; flag the visual.
+- **Slice B — Ctrl+Tab → mode menu. ✅ SHIPPED.** `uiV3Store.modeMenuOpen`
+  + `setModeMenuOpen`; `ModePill` `<Popover>` is now controlled by it (so a
+  keybind can open it; click-toggle + Esc/outside-close preserved). New
+  `mode.menu` operator (registry) flips the flag; keymap `'Ctrl+Tab':
+  'mode.menu'`. Picking a mode row now closes the menu (`pick()` wrapper) —
+  matters for the keyboard flow. Tests: uiV3Store flag (+4), v3Operators
+  exec + the keymap-resolves-all-chords loop already covers the binding
+  (+2). **Caveat:** Ctrl+Tab is browser-reserved in a web tab (may not be
+  interceptable); works in the desktop app. Pill *visual* unchanged here.
 - **Slice C — pill → Blender-style header dropdown.** Relocate/restyle
   the `ModePill` overlay to a compact header-style mode dropdown anchored
   at the viewport top-left (consistent with the existing left-edge

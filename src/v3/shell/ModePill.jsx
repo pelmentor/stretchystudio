@@ -134,6 +134,12 @@ export function ModePill() {
   const editorMode = useUIV3Store(selectEditorMode);
   const sculptBlockedByAnimMode = editorMode === 'animation';
 
+  // Controlled open so Ctrl+Tab (the `mode.menu` operator) can pop the
+  // menu without a click — Blender's `view3d.object_mode_pie_or_toggle`
+  // analog. A click on the trigger still toggles via onOpenChange.
+  const modeMenuOpen = useUIV3Store((s) => s.modeMenuOpen);
+  const setModeMenuOpen = useUIV3Store((s) => s.setModeMenuOpen);
+
   // Subscribe to selectionStore so the dropdown re-renders when the
   // user picks a different node.
   useSelectionStore((s) => s.items);
@@ -197,9 +203,14 @@ export function ModePill() {
   const setProportionalEdit = usePreferencesStore((s) => s.setProportionalEdit);
   const showProportionalToggle = editMode === MODE_EDIT;
 
+  // Picking a mode closes the menu (matches a Blender mode-pie pick;
+  // important now that Ctrl+Tab opens it via keyboard). The lock-modes
+  // toggle is a setting and intentionally keeps the menu open.
+  const pick = (fn) => () => { fn(); setModeMenuOpen(false); };
+
   return (
     <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
-    <Popover>
+    <Popover open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="secondary"
@@ -236,7 +247,7 @@ export function ModePill() {
           icon={Box}
           label="Object Mode"
           checked={!editMode}
-          onSelect={exitEditMode}
+          onSelect={pick(exitEditMode)}
           hint="Select and arrange whole pieces"
         />
         <ModeRow
@@ -254,7 +265,7 @@ export function ModePill() {
                 ? 'Edit bone REST pivots — drag writes node.transform.pivotX/Y'
                 : 'Select a meshed part or bone-role group to enter Edit Mode'
           }
-          onSelect={enterEdit}
+          onSelect={pick(enterEdit)}
         />
         <ModeRow
           icon={Bone}
@@ -266,7 +277,7 @@ export function ModePill() {
               ? 'Pose bones — drag joints / rotate. Writes to node.pose.*. Apply Pose As Rest available.'
               : 'Select a bone-role group to enter Pose Mode'
           }
-          onSelect={enterSkeleton}
+          onSelect={pick(enterSkeleton)}
         />
         <ModeRow
           icon={Brush}
@@ -280,7 +291,7 @@ export function ModePill() {
                 ? 'This mesh has no bone-binding yet (auto-rig sets it on handwear / arm parts; manual binding lands in a follow-up)'
                 : 'Paint per-vertex weights for the active vertex group'
           }
-          onSelect={enterWeightPaint}
+          onSelect={pick(enterWeightPaint)}
         />
         <ModeRow
           icon={Hand}
@@ -294,7 +305,7 @@ export function ModePill() {
                 ? 'Select a meshed part to sculpt'
                 : 'Brush deform — Grab / Smooth / Pinch (Ctrl: Magnify) over mesh vertices'
           }
-          onSelect={enterSculpt}
+          onSelect={pick(enterSculpt)}
         />
 
         {/* Active shape-key picker — Blender pattern: shape painting
@@ -323,7 +334,7 @@ export function ModePill() {
                 icon={Sparkles}
                 label={shape.name}
                 checked={editMode === 'edit' && activeBlendShapeId === shape.id}
-                onSelect={() => enterBlendShape(shape.id)}
+                onSelect={pick(() => enterBlendShape(shape.id))}
                 hint={`Edit Mode + paint deltas onto ${shape.name}`}
               />
             ))}

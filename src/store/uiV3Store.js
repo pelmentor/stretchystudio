@@ -256,6 +256,13 @@ export const useUIV3Store = create((set) => ({
   /** @type {Record<WorkspaceId, WorkspacePreset>} */
   workspaces: initialWorkspaces(),
 
+  /** Controlled-open state for the ModePill mode menu, so a keybind
+   *  (Ctrl+Tab — Blender's `view3d.object_mode_pie_or_toggle` analog) can
+   *  open it without a click. ModePill binds its `<Popover open>` to this. */
+  modeMenuOpen: false,
+  /** @param {boolean} v */
+  setModeMenuOpen: (v) => set({ modeMenuOpen: !!v }),
+
   /** Switch active workspace; per-workspace area state is preserved.
    *
    *  BFA-001 — `editorMode` is now derived from `activeWorkspace` (see

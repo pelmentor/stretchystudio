@@ -698,6 +698,20 @@ function registerBuiltins() {
   // Workspace does NOT gate this (matches Blender — workspace is
   // layout-only). BlendShape edit needs to know which shape, so it's
   // NOT bound here; user enters from BlendShapeTab's Edit button.
+  // Ctrl+Tab — open the mode menu. Blender binds Ctrl+Tab to
+  // `view3d.object_mode_pie_or_toggle` (a mode pie). SS has no pie infra,
+  // so the honest analog is to pop the existing ModePill mode menu (which
+  // lists every mode the active selection supports). Always available —
+  // exec just flips the controlled-open flag; if the pill isn't mounted
+  // (non-viewport tab) the flag is a harmless no-op.
+  registerOperator({
+    id: 'mode.menu',
+    label: 'Mode Menu (Ctrl+Tab)',
+    available: () => true,
+    exec: () => {
+      useUIV3Store.getState().setModeMenuOpen(true);
+    },
+  });
   registerOperator({
     id: 'mode.editToggle',
     label: 'Toggle Edit Mode (Tab)',
