@@ -9,6 +9,7 @@
 import { evalProjectFrameViaDepgraph } from '../../src/anim/depgraph/evalProjectFrame.js';
 import { selectRigSpec } from '../../src/io/live2d/rig/selectRigSpec.js';
 import { evalRig } from '../../src/io/live2d/runtime/evaluator/chainEval.js';
+import { evalWarpKernelCubism } from '../../src/io/live2d/runtime/evaluator/cubismWarpEval.js';
 
 let passed = 0;
 let failed = 0;
@@ -361,6 +362,87 @@ function makeBareRuntime() {
   const dRaw = maxDelta(ce[0].vertexPositions, dgRaw[0].vertexPositions);
   assert(Math.abs(dRaw - 100) < 1e-4,
     `modifier-disable: legacy raw-runtime path diverges by the reproject offset (delta=${dRaw}, want ~100)`);
+}
+
+// ---------------------------------------------------------------------
+// Test 7: per-part LIFTED-GRID composition on a MID-STACK disable (gap #2).
+// A leaf warp sits under two rotations (RotMid, then RotRoot). The part
+// disables the MIDDLE rotation, so its effective chain-above for the leaf
+// warp is [RotRoot] only — chainEval composes the warp's lifted grid
+// through RotRoot, SKIPPING RotMid (`getLiftedGridForChain`). The depgraph
+// used to apply the warp's GLOBAL GRID_LIFT_TO_PARENT, which walks
+// `def.parent` (= RotMid → RotRoot) and therefore folds in the disabled
+// RotMid. The kernel now re-lifts through the explicit enabled chain when
+// an ancestor modifier is disabled.
+// ---------------------------------------------------------------------
+{
+  const W = 800, H = 600;
+  // Leaf warp: 1x1 quad of canvas-px-ish control points.
+  const leafGrid = [200, 150,  400, 150,  200, 350,  400, 350];
+  // Part verts: normalised (u,v) INSIDE the warp cell, so the warp maps
+  // them by interior bilinear (predictable, no far-field extrapolation).
+  const normVerts = [0.25, 0.25,  0.75, 0.25,  0.25, 0.75,  0.75, 0.75];
+  const mkRot = (id, parent, ox, oy, angle) => ({
+    id, type: 'deformer', deformerKind: 'rotation', name: id, visible: true, parent,
+    bindings: [],
+    keyforms: [{ keyTuple: [], angle, originX: ox, originY: oy, scale: 1, opacity: 1, reflectX: false, reflectY: false }],
+    baseAngle: 0, handleLengthOnCanvas: 200, circleRadiusOnCanvas: 100,
+    isLocked: false, useBoneUiTestImpl: false,
+  });
+  const project = {
+    canvas: { width: W, height: H },
+    parameters: [],
+    nodes: [
+      mkRot('RotRoot', null, 400, 300, 0),
+      mkRot('RotMid', 'RotRoot', 300, 250, 45),   // mid-stack, non-identity
+      { id: 'WarpLeaf', type: 'deformer', deformerKind: 'warp', name: 'WarpLeaf',
+        visible: true, parent: 'RotMid', targetPartId: 'face',
+        gridSize: { rows: 1, cols: 1 }, baseGrid: leafGrid, localFrame: 'canvas-px',
+        bindings: [],
+        keyforms: [{ keyTuple: [], positions: leafGrid, opacity: 1 }],
+        isLocked: false, isQuadTransform: true },
+      { id: 'face', type: 'part', name: 'face', visible: true, draw_order: 100,
+        rigParent: 'WarpLeaf',
+        modifiers: [
+          { type: 'warp', deformerId: 'WarpLeaf', enabled: true, mode: 7 },
+          { type: 'rotation', deformerId: 'RotMid', enabled: false, mode: 7 }, // MID disabled
+          { type: 'rotation', deformerId: 'RotRoot', enabled: true, mode: 7 },
+        ],
+        mesh: {
+          uvs: [0, 0,  1, 0,  0, 1,  1, 1],
+          triangles: [0, 1, 2,  1, 3, 2],
+          vertices: normVerts,
+          runtime: {
+            parent: { type: 'warp', id: 'WarpLeaf' }, // leaf unchanged → no keyform reproject
+            bindings: [],
+            keyforms: [{ keyTuple: [], opacity: 1, vertexPositions: normVerts }],
+          },
+        } },
+    ],
+    animations: [], physicsRules: [],
+  };
+  const rigSpec = selectRigSpec(project);
+  const ce = evalRig(rigSpec, {});
+  const liftedGrids = new Map();
+  const dg = evalProjectFrameViaDepgraph(project, {}, { rigSpec, liftedGrids });
+  assert(ce.length === 1 && dg.length === 1, 'mid-stack lift: 1 frame each');
+  const dFixed = maxDelta(ce[0].vertexPositions, dg[0].vertexPositions);
+  assert(dFixed < 1e-4, `mid-stack lift: depgraph matches chainEval (delta=${dFixed})`,
+    `chainEval=${Array.from(ce[0].vertexPositions)}, depgraph=${Array.from(dg[0].vertexPositions)}`);
+
+  // Prove the gap is real: the GLOBAL lifted grid (what the kernel used
+  // before this fix) walks WarpLeaf.parent = RotMid → RotRoot, so it folds
+  // in the disabled RotMid. Apply it to the same source verts and confirm
+  // it diverges from chainEval — i.e. the per-part path is what makes the
+  // depgraph correct, not the global op.
+  const globalLifted = liftedGrids.get('WarpLeaf');
+  assert(globalLifted && globalLifted.length === 8, 'mid-stack lift: global lift surfaced');
+  const buggy = new Float32Array(8);
+  evalWarpKernelCubism(globalLifted, { rows: 1, cols: 1 }, true,
+    Float32Array.from(normVerts), buggy, 4);
+  const dGap = maxDelta(ce[0].vertexPositions, buggy);
+  assert(dGap > 1.0,
+    `mid-stack lift: global lift (folds in disabled RotMid) diverges from chainEval (gap=${dGap})`);
 }
 
 console.log(`depgraph_eval_artMesh: ${passed} passed, ${failed} failed`);

@@ -149,8 +149,39 @@ export function kernelArtMeshEval(op, ctx) {
       if (bufB === null) bufB = new Float32Array(len);
 
       if (mod.type === 'warp') {
-        const liftKey = `${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
-        const lift = ctx.outputs.get(liftKey);
+        // Per-part lifted grid — depgraph analogue of chainEval's
+        // `getLiftedGridForChain` (chainEval.js:721-805). The global
+        // GRID_LIFT_TO_PARENT op composes the warp grid through the
+        // warp's GLOBAL `def.parent` chain; that's correct only when
+        // THIS part's effective (enabled) chain-above matches it. Under
+        // Blender per-part modifier semantics a part can disable a
+        // MID-STACK modifier on a shared deformer, so its effective
+        // chain skips that ancestor — feeding it the global lift would
+        // deform it by a warp/rotation it opted out of. Build the
+        // enabled chain-above; if any ancestor modifier is disabled,
+        // re-lift through the explicit chain instead of the global op.
+        // The common (no-disable) case reuses the precomputed global
+        // lift verbatim, so it's byte-identical and free.
+        const chainAbove = [];
+        let skippedDisabledAbove = false;
+        for (let j = i + 1; j < stack.length; j++) {
+          const up = stack[j];
+          if (!up) continue;
+          if (up.enabled === false) {
+            if (up.type === 'warp' || up.type === 'rotation') skippedDisabledAbove = true;
+            continue;
+          }
+          if (typeof up.deformerId === 'string' && up.deformerId.length > 0) {
+            chainAbove.push({ type: up.type, id: up.deformerId });
+          }
+        }
+        let lift = null;
+        if (!skippedDisabledAbove) {
+          lift = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`);
+        }
+        if (!lift?.lifted) {
+          lift = computePerPartLift(deformerId, chainAbove, ctx);
+        }
         if (lift?.lifted) {
           evalWarpKernelCubism(
             lift.lifted, lift.gridSize, lift.isQuad,
@@ -294,6 +325,91 @@ function walkDeformerParentChain(startId, ctx, bufA, len, tmp) {
     break;
   }
   return bufA;
+}
+
+/**
+ * Compose a warp's lifted (canvas-px) control-point grid through an
+ * EXPLICIT `chainAbove` — the part's enabled modifier chain above this
+ * warp, leaf-first — instead of the warp's global `def.parent` chain.
+ * Depgraph analogue of chainEval's `getLiftedGridForChain`
+ * (chainEval.js:721-805): both walk the per-part chain so a part that
+ * disabled a mid-stack modifier on a shared deformer doesn't get
+ * deformed by the ancestor it opted out of.
+ *
+ * Reads the depgraph's already-computed per-deformer outputs — each
+ * warp's KEYFORM_EVAL grid + each rotation's MATRIX_BUILD matrix — so it
+ * adds no graph nodes. Results are memoised on `ctx` keyed by warp id +
+ * chain signature, so parts sharing the same divergent chain compose
+ * once (mirrors chainEval's `_liftedByChainKey`).
+ *
+ * @param {string} warpId
+ * @param {Array<{type: string, id: string}>} chainAbove - enabled chain
+ *   above this warp, leaf-first (disabled modifiers already removed).
+ * @param {import('../eval.js').EvalContext} ctx
+ * @returns {{lifted: Float64Array, gridSize: {rows:number, cols:number}, isQuad: boolean} | null}
+ */
+function computePerPartLift(warpId, chainAbove, ctx) {
+  let cache = ctx._perPartWarpLiftCache;
+  if (!cache) { cache = new Map(); ctx._perPartWarpLiftCache = cache; }
+  const sig = chainAbove.length === 0
+    ? `${warpId}|`
+    : `${warpId}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+  if (cache.has(sig)) return cache.get(sig);
+
+  const keyState = ctx.outputs.get(`${warpId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);
+  if (!keyState || keyState.kind !== 'warp' || !keyState.grid) {
+    cache.set(sig, null);
+    return null;
+  }
+  const gridSize = keyState.gridSize;
+  const isQuad = keyState.isQuadTransform === true;
+  const nPts = (gridSize.rows + 1) * (gridSize.cols + 1);
+
+  // No chain above → the warp's current-frame grid IS the outermost
+  // frame (matches getLiftedGridForChain's chainAbove.length===0 branch).
+  if (chainAbove.length === 0) {
+    const res = { lifted: Float64Array.from(keyState.grid), gridSize, isQuad };
+    cache.set(sig, res);
+    return res;
+  }
+
+  const positions = new Float64Array(nPts * 2);
+  for (let k = 0; k < nPts * 2; k++) positions[k] = keyState.grid[k];
+  const tmp = /** @type {[number, number]} */ ([0, 0]);
+  for (let s = 0; s < chainAbove.length; s++) {
+    const step = chainAbove[s];
+    if (!step || !step.id) break;
+    if (step.type === 'warp') {
+      // Recurse: lift this step through the rest of the chain, then warp
+      // every current CP through its canvas-px grid (one bilinear per
+      // level — NOT nested bilinear-of-bilinear, which would be quartic).
+      // Output is canvas-px → composition is done, break.
+      const stepLift = computePerPartLift(step.id, chainAbove.slice(s + 1), ctx);
+      if (!stepLift?.lifted) break;
+      const vIn = new Float32Array(nPts * 2);
+      const vOut = new Float32Array(nPts * 2);
+      for (let k = 0; k < nPts * 2; k++) vIn[k] = positions[k];
+      evalWarpKernelCubism(stepLift.lifted, stepLift.gridSize, stepLift.isQuad, vIn, vOut, nPts);
+      for (let k = 0; k < nPts * 2; k++) positions[k] = vOut[k];
+      break;
+    }
+    if (step.type === 'rotation') {
+      const matState = ctx.outputs.get(`${step.id}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
+      if (!matState?.mat) break;
+      const m = matState.mat;
+      for (let p = 0; p < nPts; p++) {
+        applyMat3ToPoint(m, positions[p * 2], positions[p * 2 + 1], tmp);
+        positions[p * 2] = tmp[0];
+        positions[p * 2 + 1] = tmp[1];
+      }
+      if (matState.isCanvasFinal) break;
+      continue;
+    }
+    break; // unknown step type — matches getLiftedGridForChain:797
+  }
+  const res = { lifted: positions, gridSize, isQuad };
+  cache.set(sig, res);
+  return res;
 }
 
 /**

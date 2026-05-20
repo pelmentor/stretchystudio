@@ -115,6 +115,13 @@ const KERNELS = {
  *   lifetime as `_artMeshByIdCache`. Mirrors the per-frame cache the
  *   renderer rebuilds via `computeBoneWorldMatrices` outside the
  *   depgraph.
+ * @property {Map<string, {lifted: Float64Array, gridSize: object, isQuad: boolean}|null>} [_perPartWarpLiftCache] -
+ *   kernel-private per-eval cache of per-part lifted warp grids, keyed by
+ *   `warpId|chainAbove-signature`. Populated lazily by `kernelArtMeshEval`
+ *   when a part disables a mid-stack modifier so its effective chain-above
+ *   diverges from the warp's global `def.parent` chain (the GRID_LIFT_TO_PARENT
+ *   op only composes the global chain). Parts sharing the same divergent
+ *   chain compose once. Mirrors chainEval's `_liftedByChainKey`.
  * @property {Map<string, object>|null} [rigArtMeshById] - optional
  *   selectRigSpec `artMeshes[]` indexed by part id. When present, the
  *   ART_MESH_EVAL kernel sources its keyform-blend input (reprojected
