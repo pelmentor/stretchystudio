@@ -42,6 +42,8 @@ import { runAutoKey } from '@/anim/autoKeyDispatch';
 // handler below (post-guards, pre-recipe). `toast` is fire-and-forget;
 // suppression is gated by `preferences.kKeyFirstUseShown`.
 import { toast } from '@/hooks/use-toast';
+import { useModalVertexTransformStore } from '@/store/modalVertexTransformStore';
+import { useModalTransformStore } from '@/store/modalTransformStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -95,7 +97,7 @@ import {
   computeProportionalWeights,
   nextFalloff,
 } from '@/lib/proportionalEdit';
-import { getBrushById } from '@/lib/sculpt';
+import { getBrushById, smoothTick } from '@/lib/sculpt';
 import { setSceneRef } from '@/lib/sceneRegistry';
 import {
   childBoneRoleFor,
@@ -1298,6 +1300,57 @@ export default function CanvasViewport({
   useEffect(() => { isDirtyRef.current = true; },
     [view, selection, viewLayers, editMode, activeBlendShapeId]);
 
+  /* ── Edit Mode exit → re-derive the rig from the edited base mesh ─────
+       Blender's flow on leaving Edit Mode: the edited cage is written
+       back to the base mesh, the depsgraph is flagged, and the modifier
+       stack RE-EVALUATES on the new base (`ED_object_editmode_exit` →
+       `BKE_mesh_*` → `DEG_id_tag_update`). SS bakes the deformation into
+       `mesh.runtime.keyforms` (parent-deformer-local) at Init Rig, so a
+       rest-cage edit shows live in Edit Mode (PP1-008(b) draws
+       `mesh.vertices`) but Object Mode keeps drawing the stale baked
+       keyforms until they're re-derived. We mirror Blender by re-running
+       the rig refit (the tested keyform-derivation pipeline) when the
+       edited part's rest mesh actually changed — scoped to a real change
+       so merely entering/leaving Edit Mode is free. `refitAll('merge')`
+       preserves pose, params, and `_userAuthored` rig entries.
+
+       This is the proper adaptation of Blender's exit→re-eval (Rule №1):
+       it reuses the pipeline that already projects canvas-px verts into
+       each parent deformer's local frame, rather than hand-rolling that
+       projection here. */
+  const editMeshSnapRef = useRef(/** @type {{partId:string, verts:any}|null} */ (null));
+  useEffect(() => {
+    if (editMode === 'edit') {
+      // Entering: snapshot the active part's vertex-array reference.
+      const partId = editorRef.current.selection?.[0];
+      const node = partId ? projectRef.current.nodes.find((n) => n.id === partId) : null;
+      const m = node ? getMesh(node, projectRef.current) : null;
+      editMeshSnapRef.current = (partId && m && Array.isArray(m.vertices))
+        ? { partId, verts: m.vertices }
+        : null;
+      return;
+    }
+    // Leaving Edit Mode (editMode now null / pose / etc).
+    const snap = editMeshSnapRef.current;
+    editMeshSnapRef.current = null;
+    if (!snap) return;
+    const node = projectRef.current.nodes.find((n) => n.id === snap.partId);
+    const m = node ? getMesh(node, projectRef.current) : null;
+    if (!m) return;
+    // immer replaces the vertices array on any vertex mutation, so a
+    // reference change = the rest cage was edited this session.
+    const meshChanged = m.vertices !== snap.verts;
+    const isRigged = !!(m.runtime && Array.isArray(m.runtime.keyforms) && m.runtime.keyforms.length > 0);
+    if (!meshChanged || !isRigged) return;
+    import('@/services/RigService').then(({ refitAll }) => refitAll({ mode: 'merge' }))
+      .then((r) => {
+        if (r?.ok) logger.info('editMeshRefit', `Rig refit after rest-mesh edit on ${snap.partId}`);
+        else logger.warn('editMeshRefit', `Rig refit after rest-mesh edit failed: ${r?.error ?? 'unknown'}`);
+      })
+      .catch((err) => logger.warn('editMeshRefit', `Rig refit threw: ${err?.message ?? String(err)}`));
+    toast({ description: 'Rig refit to match your mesh edit', duration: 1800 });
+  }, [editMode]);
+
   /* ── PP2-007 — mark dirty when the canvas tab toggles (modeKey flips).
        The shared CanvasViewport instance has a different `view` slot per
        tab; without an explicit dirty flag the rAF tick happily re-uses
@@ -1325,8 +1378,9 @@ export default function CanvasViewport({
       // blend shape) — gated on toolMode so the keys are inert under the
       // Select tool (default since Slice A).
       const brushActive = editMode === 'edit'
-        && editorRef.current.toolMode === 'brush'
-        && (meshSubMode === 'deform' || !!editorRef.current.activeBlendShapeId);
+        && ((editorRef.current.toolMode === 'brush'
+             && (meshSubMode === 'deform' || !!editorRef.current.activeBlendShapeId))
+            || editorRef.current.toolMode === 'smooth');
       if (!brushActive) return;
       if (e.key === '[') setBrush({ brushSize: Math.max(5, brushSize - 5) });
       else if (e.key === ']') setBrush({ brushSize: Math.min(300, brushSize + 5) });
@@ -2180,6 +2234,18 @@ export default function CanvasViewport({
   /* ── Pointer events ──────────────────────────────────────────────────── */
   const onPointerDown = useCallback((e) => {
     const canvas = canvasRef.current;
+    // A modal G/R/S transform (vertex or object) owns the pointer until
+    // it commits/cancels. The modal commits on a window `mousedown`
+    // (capture), which fires AFTER this React `pointerdown` — and a
+    // `mousedown` stopPropagation can't block a `pointerdown` (separate
+    // event stream). So without bailing here, the commit click first runs
+    // a vertex pick / empty-canvas deselect (line ~2615), dropping the
+    // selection through a transform — Blender keeps the selection after
+    // G/R/S. Ignore the pointerdown; let the modal's own handler commit.
+    if (useModalVertexTransformStore.getState().kind !== null
+        || useModalTransformStore.getState().kind !== null) {
+      return;
+    }
     // PP2-007 — read modeKey via ref so the pan/zoom start positions
     // come from the CURRENT canvas tab. This useCallback's deps don't
     // re-create when modeKey flips, so without the ref the pan would
@@ -2457,7 +2523,7 @@ export default function CanvasViewport({
           // to `orig + total_delta * falloff` each tick, NOT
           // incrementally mutated. Live-cursor brushes (Smooth/Pinch)
           // ignore this and read `mesh.vertices` directly.
-          origVerts:      mesh.vertices.map((v) => ({ x: v.x, y: v.y })),
+          origVerts:      selMesh.vertices.map((v) => ({ x: v.x, y: v.y })),
           // UVs don't change during a sculpt stroke (sculpt is
           // position-only). Snapshot once at stroke begin so per-tick
           // GPU upload doesn't allocate a fresh Float32Array each move.
@@ -2648,6 +2714,26 @@ export default function CanvasViewport({
             // at the wrong vertex after the renumber.
             useEditorStore.getState().invalidateVertexSelectionForPart(selNode.id);
           }
+        } else if (toolMode === 'smooth') {
+          // Edit-Mode Smooth brush — Laplacian relax on the rest mesh,
+          // reusing Sculpt's `smoothTick` (lib/sculpt). Cursor-centered
+          // falloff like the deform brush; one Laplacian pass per tick so
+          // holding the stroke accumulates smoothing. Operates on
+          // mesh.vertices (canvas-px) — same space as the deform brush.
+          const adjacency = getOrBuildAdjacency(selMesh.triangles ?? [], selMesh.vertices.length);
+          dragRef.current = {
+            mode:           'editSmooth',
+            partId:         selNode.id,
+            adjacency,
+            iwm,
+            // brushSize is canvas-px; convert to mesh-local (≈ world)
+            // like the deform brush + sculpt stroke do.
+            startSizeLocal: (editorRef.current.brushSize ?? 80) / view.zoom,
+            allUvs:         new Float32Array(selMesh.uvs),
+            firstTick:      true,
+          };
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'crosshair';
         } else {
           // Default select tool in deform mode: brush-based multi-vertex drag
           const { brushSize, brushHardness, meshSubMode } = editorRef.current;
@@ -2915,9 +3001,10 @@ export default function CanvasViewport({
       // Select the default Edit-Mode tool, the brush radius circle was still
       // showing under the Select tool because the gate ignored toolMode.
       const inDeformMode = editMode === 'edit'
-        && editorRef.current.toolMode === 'brush'
-        && (editorRef.current.meshSubMode === 'deform'
-            || !!editorRef.current.activeBlendShapeId);
+        && ((editorRef.current.toolMode === 'brush'
+             && (editorRef.current.meshSubMode === 'deform'
+                 || !!editorRef.current.activeBlendShapeId))
+            || editorRef.current.toolMode === 'smooth');
       if (inDeformMode) {
         const rect = canvas.getBoundingClientRect();
         brushCircleRef.current.setAttribute('cx', e.clientX - rect.left);
@@ -3017,6 +3104,54 @@ export default function CanvasViewport({
     // back from `projectRef.current` after updateProject would be one
     // render behind (projectRef is assigned at render, not at set()),
     // introducing a 1-frame visual lag.
+    if (dragRef.current.mode === 'editSmooth') {
+      // Edit-Mode Smooth brush tick — one Laplacian pass per move,
+      // cursor-centered falloff. Writes BOTH pose (x/y) and rest
+      // (restX/restY) like the modal vertex transform (audit G-1) so the
+      // rig sees the relaxed cage; the edit→Object refit on Tab-out then
+      // re-derives keyforms. One stroke = one undo entry (firstTick).
+      if (editorRef.current.editMode !== 'edit') return;
+      const drag = dragRef.current;
+      const proj = projectRef.current;
+      const node = proj.nodes.find((n) => n.id === drag.partId);
+      const mesh = getMesh(node, proj);
+      if (!node || !mesh) return;
+      const [lx, ly] = worldToLocal(worldX, worldY, drag.iwm);
+      const result = smoothTick({
+        verts:     mesh.vertices,
+        cursor:    { x: lx, y: ly },
+        size:      drag.startSizeLocal,
+        strength:  0.5,
+        falloff:   'smooth',
+        adjacency: drag.adjacency,
+        iterations: 1,
+      });
+      if (result.size === 0) return;
+      const newVerts = mesh.vertices.map((v) => ({ ...v }));
+      for (const [idx, p] of result) {
+        if (idx >= 0 && idx < newVerts.length) {
+          newVerts[idx].x = p.x; newVerts[idx].y = p.y;
+          newVerts[idx].restX = p.x; newVerts[idx].restY = p.y;
+        }
+      }
+      sceneRef.current?.parts.uploadPositions(drag.partId, newVerts, drag.allUvs);
+      isDirtyRef.current = true;
+      const skipHistory = !drag.firstTick;
+      drag.firstTick = false;
+      updateProject((proj2) => {
+        const n2 = proj2.nodes.find((nn) => nn.id === drag.partId);
+        const m2 = getMesh(n2, proj2);
+        if (!m2) return;
+        for (const [idx, p] of result) {
+          if (idx >= 0 && idx < m2.vertices.length) {
+            m2.vertices[idx].x = p.x; m2.vertices[idx].y = p.y;
+            m2.vertices[idx].restX = p.x; m2.vertices[idx].restY = p.y;
+          }
+        }
+      }, { skipHistory });
+      return;
+    }
+
     if (dragRef.current.mode === 'sculpt') {
       // Mode-change abort (audit G-4): if the user Tab'd out of Sculpt
       // mid-stroke, drop any further brush ticks even though the
@@ -3434,8 +3569,10 @@ export default function CanvasViewport({
         ref={canvasRef}
         className="w-full h-full block"
         style={{
-          cursor: !previewMode && editorState.editMode === 'edit' && editorState.toolMode === 'brush'
-            && (editorState.meshSubMode === 'deform' || !!editorState.activeBlendShapeId) ? 'none' : toolCursor,
+          cursor: !previewMode && editorState.editMode === 'edit'
+            && ((editorState.toolMode === 'brush'
+                 && (editorState.meshSubMode === 'deform' || !!editorState.activeBlendShapeId))
+                || editorState.toolMode === 'smooth') ? 'none' : toolCursor,
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}

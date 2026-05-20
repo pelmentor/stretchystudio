@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 
 /**
- * @typedef {('select' | 'cursor' | 'add_vertex' | 'remove_vertex' | 'brush' | 'joint_drag')} ToolModeId
+ * @typedef {('select' | 'cursor' | 'add_vertex' | 'remove_vertex' | 'brush' | 'smooth' | 'joint_drag')} ToolModeId
  *
  * Four button kinds:
  *   - `tool`         — sticky, writes to `editorStore.toolMode`. Mutually
@@ -153,6 +153,14 @@ export const TOOLS_BY_MODE = {
       label: 'Brush',
       icon: Brush,
       hint: 'Multi-vertex deform brush (UV adjust when meshSubMode=adjust)',
+    },
+    {
+      id: 'smooth',
+      kind: 'tool',
+      toolModeId: 'smooth',
+      label: 'Smooth',
+      icon: Waves,
+      hint: 'Relax / smooth the mesh — drag to average each vertex toward its neighbours',
     },
     {
       id: 'add_vertex',
