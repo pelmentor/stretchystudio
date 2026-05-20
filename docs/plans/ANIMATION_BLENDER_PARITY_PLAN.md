@@ -2194,9 +2194,16 @@ pointer to the actual suite.
 **No new DEVs.** No new audit sweep (7.F is meta-work; no behavior
 surface to audit).
 
-**Known gaps documented (deferred to §7.G+ polish slices):**
-- K-rebind preference (plan §7.E option (b) — needs legacy K-key
-  fan-out extraction). STILL OPEN.
+**Known gaps documented (deferred to §7.G+ polish slices) — ALL RESOLVED:**
+- ~~K-rebind preference~~ — RESOLVED in §7.G (`4b42d4e`): the legacy
+  K-key fan-out is extracted to the pure, unit-tested
+  `renderer/insertAllProperties.js`, unblocking the
+  `preferencesStore.kKeyOpensMenu` rebind (manual K → I-menu picker,
+  Blender's `anim.keyframe_insert_menu` always_prompt=True at
+  `keymap_data/blender_default.py:4536`; synthetic auto-key K exempt).
+  Toggle surfaced in PreferencesModal (en/ru). Dual-audit clean
+  (extraction faithful 7/7; 3/3 cites verified, incl. always_prompt
+  forcing the menu at `keyframing.cc:519-524`).
 - ~~Param-row auto-key bypass~~ — RESOLVED in §7.H (`1f89d01`):
   faithful UI-button auto-key (only-if-keyed); see §7.H above.
 - ~~Active-set UI~~ — RESOLVED in §7.I (`dcb7c37`): the I-menu's
@@ -2205,6 +2212,16 @@ surface to audit).
   `ANIM_OT_keying_set_active_set`, `keyingsets.cc:443-454`; SS
   deviation = toggle-to-clear vs Blender's separate `type==0` entry).
   Dual-audit clean (4/4 cites verified byte-for-byte).
+
+**NEW latent bug surfaced by §7.G extraction (NOT introduced — tracked
+for a future slice):** `mesh_verts` keyforms are never stored on K-key
+insertion because `upsertKeyframe` → `makeBezTripleKeyform`
+(`animationFCurve.js:144`) rejects non-numeric values, and a mesh
+keyform value is a vertex array. The legacy handler had the identical
+no-op; 7.G preserves it faithfully and pins it in
+`test_insertAllProperties.mjs §3`. A real fix needs a mesh-aware
+keyform representation (scalar-BezTriple ≠ vertex-array) — out of §7.G
+scope, flagged for a dedicated mesh-keyform slice.
 
 #### 7.E — K-key first-use toast ✅ SHIPPED 2026-05-20
 

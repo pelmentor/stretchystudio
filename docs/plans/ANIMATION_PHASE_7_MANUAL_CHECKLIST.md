@@ -424,10 +424,19 @@ behavior is independently green per §0.
 
 ## Known gaps (intentional, deferred)
 
-- **K-rebind preference** (plan §7.E option (b)): not implemented
-  in 7.E (MVP scope decision). Requires extracting the 170-line
-  legacy K-key fan-out into a pure helper. Tracked as a §7.F+ polish
-  slice.
+- ~~**K-rebind preference** (plan §7.E option (b))~~ — RESOLVED in
+  Slice 7.G (`4b42d4e`). The legacy K-key fan-out was extracted to
+  `renderer/insertAllProperties.js` (now unit-tested), unblocking the
+  `kKeyOpensMenu` preference. Manual check: Preferences →
+  "Keyframing (K)" → enable "K opens the keying-set menu". Then in
+  animation mode, press **K** with something selected — the I-menu
+  picker opens (instead of inserting all properties). Auto-key on a
+  bone drag still keys everything (synthetic K is exempt). Disable to
+  restore legacy K.
+- **mesh_verts K-key keyframes not stored** (latent, surfaced by 7.G):
+  pressing K does not store a mesh-deform keyform (`upsertKeyframe`
+  rejects the vertex-array value). Pre-existing — not a 7.G regression.
+  Tracked for a dedicated mesh-keyform slice; see plan §7.F gaps.
 - ~~**Param-row auto-key gap** (§4.8)~~ — RESOLVED in Slice 7.H
   (`1f89d01`). Param-slider auto-key now ports Blender's UI-button
   path (only-if-keyed; never creates a fcurve; scoped to the touched
