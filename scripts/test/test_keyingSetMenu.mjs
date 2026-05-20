@@ -374,6 +374,52 @@ console.log('\n§5 execApplyKeyingSet guard sequence');
   eq(fcY.keyforms[0].value, 22, '§5.6 transform.y keyed at 22');
 }
 
+// ── §6 execSetActiveKeyingSet (Slice 7.I active-set toggle) ──────────
+// The menu's per-row dot dispatches this operator. Logic-test it through
+// the project store (same harness shape as §5). Mirrors Blender's
+// ANIM_OT_keying_set_active_set; SS deviation = TOGGLE (re-pick clears).
+console.log('\n§6 execSetActiveKeyingSet toggle');
+{
+  const { execSetActiveKeyingSet } = await import('../../src/v3/operators/insertKey.js');
+  const { useProjectStore } = await import('../../src/store/projectStore.js');
+
+  // §6.1 null project → no throw, no mutation
+  useProjectStore.setState({ project: null, hasUnsavedChanges: false });
+  execSetActiveKeyingSet('LocRotScale');
+  ok(useProjectStore.getState().project === null, '§6.1 null project → no mutation');
+
+  // §6.2 empty/garbage setId → guard returns, active stays null
+  useProjectStore.setState({ project: makeProject() });
+  execSetActiveKeyingSet('');
+  eq(useProjectStore.getState().project.activeKeyingSetId, null, '§6.2a empty setId → active unchanged (null)');
+  execSetActiveKeyingSet(null);
+  eq(useProjectStore.getState().project.activeKeyingSetId, null, '§6.2b null setId → active unchanged (null)');
+
+  // §6.3 unknown setId → guard returns, active stays null
+  execSetActiveKeyingSet('NotARealKeyingSet');
+  eq(useProjectStore.getState().project.activeKeyingSetId, null, '§6.3 unknown setId → active unchanged (null)');
+
+  // §6.4 set a valid built-in active
+  execSetActiveKeyingSet('LocRotScale');
+  eq(useProjectStore.getState().project.activeKeyingSetId, 'LocRotScale', '§6.4 sets active to LocRotScale');
+
+  // §6.5 picking a DIFFERENT set switches active (not toggle-off)
+  execSetActiveKeyingSet('AllParams');
+  eq(useProjectStore.getState().project.activeKeyingSetId, 'AllParams', '§6.5 switches active to AllParams');
+
+  // §6.6 re-picking the active set toggles it OFF (SS deviation)
+  execSetActiveKeyingSet('AllParams');
+  eq(useProjectStore.getState().project.activeKeyingSetId, null, '§6.6 re-pick active → cleared to null');
+
+  // §6.7 toggling a user-defined set works through the same path
+  useProjectStore.setState({ project: makeProject() });
+  useProjectStore.getState().updateProject((p) => {
+    p.keyingSets.push({ id: 'CustomTorso', label: 'Custom Torso', paths: [{ path: 'objects["partA"].transform.x' }] });
+  });
+  execSetActiveKeyingSet('CustomTorso');
+  eq(useProjectStore.getState().project.activeKeyingSetId, 'CustomTorso', '§6.7 sets user-defined set active');
+}
+
 // ── summary ──────────────────────────────────────────────────────────
 console.log(`\nResults: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

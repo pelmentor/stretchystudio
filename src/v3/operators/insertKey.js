@@ -73,7 +73,7 @@ import { useParamValuesStore } from '../../store/paramValuesStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { toast } from '../../hooks/use-toast.js';
 import { applyKeyingSet, INSERTKEY_FLAGS } from '../../anim/insertKeyframe.js';
-import { getKeyingSet } from '../../anim/keyingSets.js';
+import { getKeyingSet, setActiveKeyingSet } from '../../anim/keyingSets.js';
 import { buildLiveResolver } from '../../anim/insertKeyframeResolver.js';
 
 /**
@@ -175,6 +175,53 @@ export function execApplyKeyingSet(setId) {
   toast({
     title: `Insert Keyframe -- ${set.label ?? set.id}`,
     description: summariseResult(result),
+  });
+}
+
+/**
+ * Set (or toggle off) the project's active keying set. Mirrors Blender's
+ * `ANIM_OT_keying_set_active_set` (`keyingsets.cc:443-454`, which writes
+ * `scene->active_keyingset` and notifies `ND_KEYINGSET`). Blender exposes
+ * it from the Scene-properties keying-set UIList / a dedicated popup;
+ * SS surfaces it from the existing I-menu's per-row indicator instead
+ * (SS has no keying-set list panel — §7.I).
+ *
+ * DEV: SS TOGGLES (clicking the already-active set clears it to `null`),
+ * whereas Blender's operator only SETS — its `type == 0` enum entry is
+ * the separate clear path (`keyingsets.cc:448-449`). Toggle is the
+ * ergonomic single-affordance for the per-row dot button; clearing is
+ * otherwise unreachable from this surface.
+ *
+ * The active set drives auto-key's `'activeSet'` mode via
+ * `pickActiveSetIdForAutoKey` → `getActiveKeyingSet`.
+ *
+ * @param {string} setId
+ */
+export function execSetActiveKeyingSet(setId) {
+  if (typeof setId !== 'string' || setId.length === 0) {
+    toast({ title: 'Active Keying Set', description: 'no keying set selected' });
+    return;
+  }
+  const projectStore = useProjectStore.getState();
+  const project = projectStore.project;
+  if (!project) {
+    toast({ title: 'Active Keying Set', description: 'no project loaded' });
+    return;
+  }
+  const set = getKeyingSet(project, setId);
+  if (!set) {
+    toast({ title: 'Active Keying Set', description: `unknown keying set: ${setId}` });
+    return;
+  }
+  const wasActive = project.activeKeyingSetId === setId;
+  projectStore.updateProject((draft) => {
+    setActiveKeyingSet(draft, wasActive ? null : setId);
+  });
+  toast({
+    title: 'Active Keying Set',
+    description: wasActive
+      ? `cleared (was ${set.label ?? set.id})`
+      : `${set.label ?? set.id} -- used by auto-key 'Active Set' mode`,
   });
 }
 
