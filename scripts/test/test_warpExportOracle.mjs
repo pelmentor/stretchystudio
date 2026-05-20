@@ -28,6 +28,7 @@
 // Run: node scripts/test/test_warpExportOracle.mjs
 
 import { selectRigSpec } from '../../src/io/live2d/rig/selectRigSpec.js';
+import { migrateLatticeSubstrate } from '../../src/store/migrations/v43_lattice_substrate.js';
 import { fnv1aHashBuffer } from '../byteFidelity/byteFidelityHarness.mjs';
 
 let passed = 0;
@@ -196,7 +197,13 @@ function canonicalize(spec) {
 
 // ── The gate ──────────────────────────────────────────────────────────
 
-const spec = selectRigSpec(buildOracleProject());
+// Exercise the Slice 1.B flip end-to-end: build the OLD warp-deformer-node
+// shape, run the v43 lattice migration, then read it back through
+// selectRigSpec. The hash MUST be unchanged from the pre-flip baseline —
+// proof that the migration + the lattice read path are lossless.
+const oracleProject = buildOracleProject();
+migrateLatticeSubstrate(oracleProject);
+const spec = selectRigSpec(oracleProject);
 
 // Structural sanity (independent of the hash) so a hash mismatch can be
 // triaged: is it a value drift, or did the spec shape collapse entirely?

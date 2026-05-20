@@ -102,6 +102,7 @@ import { migrateBezTripleKeyforms } from './migrations/v39_beztriple_keyforms.js
 import { migrateActionGroups } from './migrations/v40_action_groups.js';
 import { migrateFModifiers } from './migrations/v41_fmodifiers.js';
 import { migrateNlaSubstrate } from './migrations/v42_nla_substrate.js';
+import { migrateLatticeSubstrate } from './migrations/v43_lattice_substrate.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -724,6 +725,22 @@ const MIGRATIONS = {
   // See `src/store/migrations/v42_nla_substrate.js` + `src/anim/nla.js`.
   42: (project) => {
     migrateNlaSubstrate(project);
+    return project;
+  },
+
+  // v43 — Warps as first-class Lattice objects (Slice 1.B flip).
+  // Converts every `{type:'deformer', deformerKind:'warp'}` node into a
+  // grid-mesh OBJECT (`{type:'object', objectKind:'lattice'}`) + a linked
+  // `meshData` cage (the editable rest control points), and rewrites each
+  // affected part's warp modifier `{type:'warp', deformerId, data}` into a
+  // reference `{type:'lattice', objectId}` (the object is the single source
+  // of truth — Blender `LatticeModifierData.object`,
+  // DNA_modifier_types.h:285). Rotation deformers untouched.
+  //
+  // See `src/store/migrations/v43_lattice_substrate.js` +
+  // `docs/plans/WARP_AS_LATTICE_OBJECT_REFACTOR_PLAN.md`.
+  43: (project) => {
+    migrateLatticeSubstrate(project);
     return project;
   },
 

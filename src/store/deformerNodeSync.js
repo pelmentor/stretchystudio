@@ -421,7 +421,24 @@ export function synthesizeModifierStacks(project) {
     while (cur && !seen.has(cur)) {
       seen.add(cur);
       const def = byId.get(cur);
-      if (!def || def.type !== 'deformer') break;
+      if (!def) break;
+      // v43 — a warp is now a lattice cage OBJECT; its modifier REFERENCES
+      // the object via `objectId` (no `data` copy — the object is the
+      // single source of truth, mirroring `LatticeModifierData.object`).
+      if (def.type === 'object' && def.objectKind === 'lattice') {
+        stack.push({
+          type: 'lattice',
+          objectId: def.id,
+          enabled: true,
+          mode: DEFAULT_MIGRATED_MODE,
+          showInEditor: true,
+        });
+        cur = typeof def.parent === 'string' && def.parent.length > 0
+          ? def.parent
+          : null;
+        continue;
+      }
+      if (def.type !== 'deformer') break;
       stack.push({
         type: def.deformerKind ?? 'warp',
         deformerId: def.id,
@@ -560,21 +577,30 @@ export function synthesizeDeformerParents(project) {
     // Phase A) has no deformer node — it shouldn't participate in the
     // rigParent / deformer-parent invariant.
     const deformerStack = stack.filter(
-      (m) => m && (m.type === 'warp' || m.type === 'rotation'),
+      (m) => m && (m.type === 'warp' || m.type === 'rotation' || m.type === 'lattice'),
     );
     if (deformerStack.length === 0) continue;
 
-    const leafId = deformerStack[0]?.deformerId;
+    // v43 — a lattice modifier references its cage object via `objectId`;
+    // warp/rotation modifiers reference a deformer node via `deformerId`.
+    const refId = (m) => (m?.type === 'lattice' ? m?.objectId : m?.deformerId);
+
+    const leafId = refId(deformerStack[0]);
     if (typeof leafId === 'string' && leafId.length > 0) {
       part.rigParent = leafId;
     }
 
     for (let i = 0; i < deformerStack.length - 1; i++) {
-      const curId = deformerStack[i]?.deformerId;
-      const nextId = deformerStack[i + 1]?.deformerId;
+      const curId = refId(deformerStack[i]);
+      const nextId = refId(deformerStack[i + 1]);
       if (typeof curId !== 'string' || typeof nextId !== 'string') continue;
       const def = byId.get(curId);
-      if (!def || def.type !== 'deformer') continue;
+      if (!def) continue;
+      // The chain parent lives on the deformer node (rotation / legacy warp)
+      // or the lattice cage object (v43 warp). Both carry `.parent`.
+      const isChainNode = def.type === 'deformer'
+        || (def.type === 'object' && def.objectKind === 'lattice');
+      if (!isChainNode) continue;
       def.parent = nextId;
     }
   }

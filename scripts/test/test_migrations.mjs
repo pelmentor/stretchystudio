@@ -381,12 +381,14 @@ function assertThrows(fn, name) {
   };
   const p = { schemaVersion: 7, faceParallax: fp };
   migrateProject(p);
-  // v15 lifts the spec into a `type:'deformer'` node, then v16 deletes
-  // the sidetable. Verify the node landed.
+  // v15 lifts the spec into a `type:'deformer'` node, v16 deletes the
+  // sidetable, then v43 converts the warp into a lattice OBJECT. Verify
+  // the node landed in its final (lattice-object) form.
   assert(p.faceParallax === undefined, 'v7→current: faceParallax sidetable deleted by v16');
   const fpNode = (p.nodes ?? []).find((n) => n?.id === 'FaceParallaxWarp');
-  assert(!!fpNode, 'v7→current: faceParallax migrated into deformer node');
-  assertEq(fpNode.type, 'deformer', 'v7→current: deformer node type');
+  assert(!!fpNode, 'v7→current: faceParallax migrated into lattice object');
+  assertEq(fpNode.type, 'object', 'v7→current: FaceParallax → object (v43)');
+  assertEq(fpNode.objectKind, 'lattice', 'v7→current: FaceParallax objectKind lattice (v43)');
 }
 
 {
@@ -493,9 +495,12 @@ function assertThrows(fn, name) {
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v15: schemaVersion bumped');
   const fpNode = p.nodes.find((n) => n.id === 'FaceParallaxWarp');
-  assert(!!fpNode, 'v15: FaceParallax deformer node synthesized');
-  assertEq(fpNode.type, 'deformer', 'v15: FaceParallax node type');
-  assertEq(fpNode.deformerKind, 'warp', 'v15: FaceParallax node deformerKind');
+  assert(!!fpNode, 'v15: FaceParallax node synthesized');
+  // v43 converts the synthesized warp into a lattice object; the warp
+  // metadata (parent, localFrame, bindings, keyforms, gridSize) is
+  // preserved verbatim on the object.
+  assertEq(fpNode.type, 'object', 'v15→v43: FaceParallax node type (object)');
+  assertEq(fpNode.objectKind, 'lattice', 'v15→v43: FaceParallax objectKind (lattice)');
   assertEq(fpNode.parent, 'FaceRotation', 'v15: FaceParallax parent flattened to id');
   assertEq(fpNode.localFrame, 'pivot-relative', 'v15: localFrame preserved');
   assertEq(fpNode.bindings.length, 1, 'v15: FaceParallax binding count');
@@ -542,9 +547,13 @@ function assertThrows(fn, name) {
   };
   const p = { schemaVersion: 14, bodyWarp: bw, nodes: [] };
   migrateProject(p);
-  const ids = p.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
+  // v43 converts the 4 body warps into lattice objects (chain order +
+  // parent links preserved on the objects).
+  const ids = p.nodes
+    .filter((n) => n.type === 'object' && n.objectKind === 'lattice')
+    .map((n) => n.id);
   assertEq(ids, ['BodyZWarp', 'BodyYWarp', 'BreathWarp', 'BodyXWarp'],
-    'v15: bodyWarp chain → 4 deformer nodes in order');
+    'v15→v43: bodyWarp chain → 4 lattice objects in order');
   const bz = p.nodes.find((n) => n.id === 'BodyZWarp');
   assertEq(bz.parent, null, 'v15: BodyZWarp root parent flattened to null');
   const by = p.nodes.find((n) => n.id === 'BodyYWarp');

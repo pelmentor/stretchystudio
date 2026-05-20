@@ -160,7 +160,10 @@ export function getDataKind(node, _project) {
  */
 export function getMesh(node, project) {
   if (!node) return null;
-  if (node.type === 'part') {
+  // `part` carries an art mesh; `object` (objectKind:'lattice', v43) carries
+  // its grid cage. Both resolve geometry via `dataId` → meshData, falling
+  // back to inline `node.mesh`.
+  if (node.type === 'part' || node.type === 'object') {
     if (typeof node.dataId === 'string' && project && Array.isArray(project.nodes)) {
       const data = project.nodes.find((n) => n?.id === node.dataId);
       if (data && data.type === 'meshData') return data;

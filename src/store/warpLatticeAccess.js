@@ -35,17 +35,28 @@
  * @module store/warpLatticeAccess
  */
 
+import { getMeshVertices } from './objectDataAccess.js';
+
 /**
  * Whether `node` is a warp/lattice cage — the deformer whose grid bilinearly
  * warps its descendant art-mesh verts.
  *
- * Slice 1.A: `deformer/warp`. Slice 1.B: also `object/lattice`.
+ * Matches BOTH shapes:
+ *   - `{type:'object', objectKind:'lattice'}` — the persisted shape after
+ *     the v43 flip (Slice 1.B).
+ *   - `{type:'deformer', deformerKind:'warp'}` — the TRANSIENT shape that
+ *     `synthesizeDeformerNodesForExport` still emits (the export adapter
+ *     keeps producing deformer-shaped nodes for the selectRigSpec pipeline),
+ *     plus any auto-rig-seeded warp node not yet flipped (Phase 5). Both are
+ *     live, designed paths — not dead compat. The deformer/warp arm is
+ *     removed in Phase 6 once auto-rig emits lattice objects directly.
  *
  * @param {object|null|undefined} node
  * @returns {boolean}
  */
 export function isWarpLatticeNode(node) {
   if (!node || typeof node !== 'object') return false;
+  if (node.type === 'object' && node.objectKind === 'lattice') return true;
   return node.type === 'deformer' && node.deformerKind === 'warp';
 }
 
@@ -89,12 +100,25 @@ export function isChainDeformerNode(node) {
  * matching the previous `node.baseGrid` contract).
  *
  * @param {object|null|undefined} node
- * @param {object} [_project] - reserved: the Slice 1.B meshData lookup needs
- *   it (a lattice cage mesh lives in `project.nodes` via `dataId`). Callers
- *   pass `project` now so 1.B needn't re-touch every call site.
+ * @param {object} [project] - needed for the lattice-object meshData lookup
+ *   (a lattice cage mesh lives in `project.nodes` via `dataId`).
  * @returns {number[]|Float64Array|undefined}
  */
-export function getWarpRestGrid(node, _project) {
+export function getWarpRestGrid(node, project) {
   if (!node) return undefined;
+  // Lattice object: the rest cage IS the linked meshData's vertices. Flatten
+  // the `{x,y}[]` cage back to the `[x0,y0,x1,y1,...]` control-point array
+  // the eval/export pipeline expects.
+  if (node.type === 'object' && node.objectKind === 'lattice') {
+    const verts = getMeshVertices(node, project);
+    if (!Array.isArray(verts)) return undefined;
+    const flat = new Array(verts.length * 2);
+    for (let i = 0; i < verts.length; i++) {
+      flat[i * 2] = verts[i]?.x ?? 0;
+      flat[i * 2 + 1] = verts[i]?.y ?? 0;
+    }
+    return flat;
+  }
+  // Transient synth node / un-flipped warp node: rest cage is inline.
   return node.baseGrid;
 }

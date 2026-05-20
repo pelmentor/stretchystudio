@@ -50,6 +50,92 @@ import {
   MODIFIER_MODE_REALTIME,
   MODIFIER_MODE_RENDER,
 } from '../../../store/migrations/v21_modifier_mode_flags.js';
+import { getWarpRestGrid } from '../../../store/warpLatticeAccess.js';
+
+/**
+ * The id a modifier references. Lattice modifiers (v43) reference a cage
+ * OBJECT via `objectId`; warp/rotation modifiers reference a deformer node
+ * via `deformerId`.
+ *
+ * @param {object|null|undefined} mod
+ * @returns {string|null}
+ */
+function _modRefId(mod) {
+  if (!mod || typeof mod !== 'object') return null;
+  if (mod.type === 'lattice') {
+    return typeof mod.objectId === 'string' ? mod.objectId : null;
+  }
+  return typeof mod.deformerId === 'string' ? mod.deformerId : null;
+}
+
+/**
+ * Inflate a `{type:'object', objectKind:'lattice'}` cage object into the
+ * transient `{type:'deformer', deformerKind:'warp', ...}` shape the
+ * selectRigSpec / export pipeline consumes. The rest cage (`baseGrid`)
+ * comes from the linked `meshData` (via `getWarpRestGrid`); all other warp
+ * fields are object metadata. Mirrors the field set the v28 data-fold
+ * produced, so `_warpNodeToSpec` sees identical data => identical warpSpecs.
+ *
+ * `parent` is intentionally omitted — the caller sets it from the modifier
+ * stack edge (or the object's own parent in the orphan pass), exactly as
+ * the data-fold path does.
+ *
+ * @param {object} obj - a lattice cage object
+ * @param {object} project - for the cage meshData lookup
+ * @returns {object}
+ */
+function _latticeObjectToSynthNode(obj, project) {
+  const node = {
+    type: 'deformer',
+    deformerKind: 'warp',
+    id: obj.id,
+    name: obj.name ?? obj.id,
+    visible: obj.visible !== false,
+    gridSize: { rows: obj.gridSize?.rows ?? 5, cols: obj.gridSize?.cols ?? 5 },
+    baseGrid: getWarpRestGrid(obj, project),
+    localFrame: obj.localFrame ?? 'canvas-px',
+    bindings: Array.isArray(obj.bindings) ? obj.bindings : [],
+    keyforms: Array.isArray(obj.keyforms) ? obj.keyforms : [],
+    isLocked: obj.isLocked === true,
+    isQuadTransform: obj.isQuadTransform === true,
+  };
+  if (typeof obj.targetPartId === 'string' && obj.targetPartId.length > 0) {
+    node.targetPartId = obj.targetPartId;
+  }
+  if (obj.canvasBbox && typeof obj.canvasBbox === 'object') {
+    node.canvasBbox = obj.canvasBbox;
+  }
+  if (obj._userAuthored === true) node._userAuthored = true;
+  return node;
+}
+
+/**
+ * Build a transient deformer node from a modifier entry, resolving the
+ * lattice-object reference (v43) or the legacy warp/rotation data-fold.
+ * Returns null when the modifier can't yield a deformer (no data / dangling
+ * object ref / armature).
+ *
+ * @param {object} mod
+ * @param {Map<string, object>} nodesById
+ * @param {object} project
+ * @returns {object|null}
+ */
+function _synthFromModifier(mod, nodesById, project) {
+  if (mod.type === 'lattice') {
+    const obj = nodesById.get(mod.objectId);
+    if (!obj || obj.type !== 'object' || obj.objectKind !== 'lattice') return null;
+    return _latticeObjectToSynthNode(obj, project);
+  }
+  if (mod.type !== 'warp' && mod.type !== 'rotation') return null; // e.g. armature
+  const data = mod.data;
+  if (!data || typeof data !== 'object') return null;
+  return {
+    type: 'deformer',
+    deformerKind: mod.type === 'rotation' ? 'rotation' : 'warp',
+    id: mod.deformerId,
+    ...data,
+  };
+}
 
 /** Mode bitmask check — Blender's `BKE_modifier_is_enabled` semantic
  *  (`reference/blender/source/blender/blenkernel/BKE_modifier.hh:480`).
@@ -121,13 +207,30 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
   /** @type {Map<string, string|null>} */
   const parentEdges = new Map();
 
+  // Index every node by id so lattice modifiers (`{type:'lattice',
+  // objectId}`, v43) can resolve their referenced cage object.
+  /** @type {Map<string, object>} */
+  const nodesById = new Map();
+  for (const n of project.nodes) {
+    if (n && typeof n.id === 'string') nodesById.set(n.id, n);
+  }
+
+  // A modifier yields a transient deformer node iff it's enabled in the
+  // required mode AND resolves to data (lattice → cage object; warp/rotation
+  // → `mod.data`). Armature mods + dangling refs yield nothing.
+  const _modYieldsSynth = (m) =>
+    m
+    && _modifierActiveInMode(m, requiredMode)
+    && _synthFromModifier(m, nodesById, project) !== null;
+
   for (const part of project.nodes) {
     if (!part || part.type !== 'part') continue;
     if (!Array.isArray(part.modifiers)) continue;
     const stack = part.modifiers;
     for (let i = 0; i < stack.length; i++) {
       const mod = stack[i];
-      if (!mod || typeof mod.deformerId !== 'string') continue;
+      const refId = _modRefId(mod);
+      if (!refId) continue;
       // Modifier visibility — Blender's `BKE_modifier_is_enabled`
       // (`enabled !== false` AND `(mode & requiredMode) !== 0`). A
       // modifier hidden by either gate is invisible to downstream
@@ -139,18 +242,11 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
       // orphan-fallback pass — harmless because no artMesh's parent
       // will reference it.
       if (!_modifierActiveInMode(mod, requiredMode)) continue;
-      const data = mod.data;
-      // Without modifier.data we can't synthesise — fall back to the
-      // existing deformer node below in the orphan pass.
-      if (!data || typeof data !== 'object') continue;
-      if (!byId.has(mod.deformerId)) {
-        byId.set(mod.deformerId, {
-          type: 'deformer',
-          deformerKind: mod.type === 'rotation' ? 'rotation' : 'warp',
-          id: mod.deformerId,
-          ...data,
-        });
-      }
+      const synthNode = _synthFromModifier(mod, nodesById, project);
+      // Can't synthesise (no data / dangling object ref / armature) —
+      // fall back to the orphan pass for any standalone node.
+      if (!synthNode) continue;
+      if (!byId.has(refId)) byId.set(refId, synthNode);
       // Parent edge — taken from the FIRST stack we see the deformer
       // in (subsequent stacks should agree per `synthesizeModifierStacks`).
       // Walk forward past disabled modifiers so a middle-of-stack
@@ -160,22 +256,15 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
       // filtered stack. Shared deformers (body warps etc.) take
       // their parent edge from any part that has them enabled —
       // consistent with the global authored topology.
-      if (!parentEdges.has(mod.deformerId)) {
+      if (!parentEdges.has(refId)) {
         let nextEnabledId = null;
         for (let j = i + 1; j < stack.length; j++) {
-          const m = stack[j];
-          if (
-            m
-            && _modifierActiveInMode(m, requiredMode)
-            && typeof m.deformerId === 'string'
-            && m.data
-            && typeof m.data === 'object'
-          ) {
-            nextEnabledId = m.deformerId;
+          if (_modYieldsSynth(stack[j])) {
+            nextEnabledId = _modRefId(stack[j]);
             break;
           }
         }
-        parentEdges.set(mod.deformerId, nextEnabledId);
+        parentEdges.set(refId, nextEnabledId);
       }
     }
   }
@@ -188,12 +277,23 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
   const orphanFallbacks = [];
   if (includeOrphans) {
     for (const n of project.nodes) {
-      if (!n || n.type !== 'deformer') continue;
-      if (typeof n.id !== 'string') continue;
+      if (!n || typeof n.id !== 'string') continue;
       if (byId.has(n.id)) continue;
-      // Orphan — copy the node verbatim. Parent stays as authored.
-      const copy = { ...n };
-      byId.set(n.id, copy);
+      // Orphan = a standalone deformer this pass would otherwise miss:
+      //   - rotation deformer / un-flipped legacy warp node → copy verbatim;
+      //   - lattice cage object (v43) → inflate to the transient warp shape.
+      // A lattice cage typically reaches parts via hierarchy ancestry
+      // (e.g. body warps) rather than an explicit per-part modifier, so it
+      // legitimately lands here. Parent stays as authored.
+      let synthNode = null;
+      if (n.type === 'deformer') {
+        synthNode = { ...n };
+      } else if (n.type === 'object' && n.objectKind === 'lattice') {
+        synthNode = _latticeObjectToSynthNode(n, project);
+      } else {
+        continue;
+      }
+      byId.set(n.id, synthNode);
       parentEdges.set(n.id,
         typeof n.parent === 'string' ? n.parent : null);
       // Detect WHY this deformer hit the orphan path: was it referenced
@@ -207,9 +307,11 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
         if (!part || part.type !== 'part') continue;
         if (!Array.isArray(part.modifiers)) continue;
         for (const mod of part.modifiers) {
-          if (mod?.deformerId === n.id) {
+          if (_modRefId(mod) === n.id) {
             referencedAtAll = true;
-            if (!mod.data || typeof mod.data !== 'object') {
+            // Lattice mods carry no `data` by design (object is the source),
+            // so "data-missing" only flags legacy warp/rotation mods.
+            if (mod.type !== 'lattice' && (!mod.data || typeof mod.data !== 'object')) {
               referencedWithoutData = true;
             }
           }
@@ -217,7 +319,7 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
       }
       orphanFallbacks.push({
         id: n.id,
-        deformerKind: n.deformerKind ?? 'unknown',
+        deformerKind: synthNode.deformerKind ?? 'unknown',
         reason: referencedWithoutData
           ? 'modifier-data-missing'   // in stack but .data empty — stale state
           : referencedAtAll
