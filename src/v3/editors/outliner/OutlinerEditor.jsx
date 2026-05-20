@@ -48,6 +48,7 @@ import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
 import { isBoneGroup } from '../../../store/objectDataAccess.js';
+import { isWarpLatticeNode } from '../../../store/warpLatticeAccess.js';
 import { filterOutlinerTree, filterOutlinerTreeByPredicate } from './filters.js';
 import { TreeNode } from './TreeNode.jsx';
 
@@ -319,8 +320,7 @@ export function OutlinerEditor() {
             // PP2-010(b) — rig-mode warp rows surface a per-warp eye
             // toggle. Decorate `visible` from the editorStore map so
             // the row dims/highlights match the lattice overlay state.
-            const isWarpRow =
-              mode === 'rig' && node.type === 'deformer' && node.deformerKind === 'warp';
+            const isWarpRow = mode === 'rig' && isWarpLatticeNode(node);
             const decorated = isWarpRow
               ? { ...node, visible: warpGridVisibility[node.id] !== false }
               : node;

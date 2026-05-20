@@ -30,6 +30,7 @@
 import { useMemo } from 'react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import { isWarpLatticeNode } from '../../../store/warpLatticeAccess.js';
 import { TrendingUp } from 'lucide-react';
 
 const PAD_X = 32;
@@ -173,7 +174,7 @@ function buildView(project, selection) {
   // BFA-006 Phase 6 — rigWarps live as `type:'deformer'` nodes with
   // `targetPartId` set. Find the rigWarp deformer driving this part.
   const spec = (project.nodes ?? []).find(
-    (n) => n?.type === 'deformer' && n.deformerKind === 'warp' && n.targetPartId === partSel.id,
+    (n) => isWarpLatticeNode(n) && n.targetPartId === partSel.id,
   );
   if (!spec) return null;
 
