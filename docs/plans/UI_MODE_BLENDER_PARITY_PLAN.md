@@ -95,8 +95,21 @@ That is a real interaction refactor needing browser verification →
     Select like Blender + Edit Mode; Joint Drag stays opt-in in the
     toolbar; persisted per-mode tool still overrides. Tests updated
     (editorStore/preferencesStore/canvasToolbar).
-- **Slice E — workspace→mode coupling. ⏸ RESOLVED-BY-ANALYSIS (not built;
-  pending user product decision).** Blender workspaces carry `object_mode`
+- **Slice E — workspace→mode coupling. ✅ SHIPPED (user chose to build).**
+  `src/v3/workspaceModeEntry.js` `applyWorkspaceMode(id)`, called by
+  `uiV3Store.setWorkspace` after the switch commits. Maps the unambiguous
+  edit-purpose workspaces (`modeling→edit`, `rigging→pose`,
+  `weightPaint→weightPaint`, `sculpt→sculpt`); **layout/animation stay
+  uncoupled** (no forced Object Mode — avoids yanking you out of a mode
+  when switching to scrub a timeline; Blender's `object_mode` is really
+  remembered-mode, so a fixed map for the edit workspaces is the safe
+  subset). **Selection-gated** via `selectionSupportsMode` (mirrors the Tab
+  operator: mesh for sculpt/edit, armature for pose, weights for weight
+  paint) — if the selection can't enter the target, the current mode is
+  left untouched. Pose entry enables the skeleton overlay. Test:
+  `test_workspaceModeEntry` (21 asserts). NOT browser-verified (the
+  switch-into-mode flow needs a glance), single revertible commit.
+  Original analysis (kept for context) — Blender workspaces carry `object_mode`
   (Sculpting→Sculpt, etc.). SS deliberately decoupled this (2026-05-02 —
   deleted the workspace-policy module) so **mode follows SELECTION, not
   workspace** — a principled, arguably-cleaner model (Blender stores mode

@@ -27,6 +27,7 @@
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore.js';
 import { useAnimationStore } from './animationStore.js';
+import { applyWorkspaceMode } from '../v3/workspaceModeEntry.js';
 
 /**
  * @typedef {('layout'|'modeling'|'rigging'|'weightPaint'|'sculpt'|'animation')} WorkspaceId
@@ -272,18 +273,25 @@ export const useUIV3Store = create((set) => ({
    *  on a staging→animation transition (used as the baseline for keyframe
    *  diffs). Idempotent on no-op transitions because `captureRestPose`
    *  only runs when `prev !== 'animation'` AND `next === 'animation'`. */
-  setWorkspace: (id) => set((state) => {
-    const prevWasAnimation = state.activeWorkspace === 'animation';
-    const nextIsAnimation = id === 'animation';
-    if (!prevWasAnimation && nextIsAnimation) {
-      const project = useProjectStore.getState().project;
-      const captureRestPose = useAnimationStore.getState().captureRestPose;
-      if (project?.nodes && typeof captureRestPose === 'function') {
-        captureRestPose(project.nodes);
+  setWorkspace: (id) => {
+    set((state) => {
+      const prevWasAnimation = state.activeWorkspace === 'animation';
+      const nextIsAnimation = id === 'animation';
+      if (!prevWasAnimation && nextIsAnimation) {
+        const project = useProjectStore.getState().project;
+        const captureRestPose = useAnimationStore.getState().captureRestPose;
+        if (project?.nodes && typeof captureRestPose === 'function') {
+          captureRestPose(project.nodes);
+        }
       }
-    }
-    return { activeWorkspace: id };
-  }),
+      return { activeWorkspace: id };
+    });
+    // Slice E — workspace→mode coupling (Blender). Run AFTER the switch
+    // commits (separate store update, not nested in the set above). Enters
+    // the workspace's canonical edit mode iff the active selection
+    // supports it; no-op for layout/animation.
+    applyWorkspaceMode(id);
+  },
 
   /**
    * Set which tab is active inside an area.
