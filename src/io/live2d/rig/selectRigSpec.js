@@ -151,7 +151,15 @@ function _buildRigSpec(project) {
   // Shelby (27/27 deformers, 0 field diffs, 0 binding/keyform diffs).
   // `includeOrphans: true` (default) preserves orphan deformer nodes
   // until Phase 3.C deletes them from `project.nodes` entirely.
-  const synthesizedDeformers = synthesizeDeformerNodesForExport(project);
+  // `suppressFlare`: selectRigSpec is the per-frame RUNTIME rigSpec source
+  // (the viewport depgraph eval calls it every tick), not just the export
+  // path. The orphan-fallback "will disappear after Phase 3.C" warning is an
+  // export-transition diagnostic; firing it here spams the Logs panel dozens
+  // of times a second during any interaction (each eval re-runs synth with a
+  // fresh immer project ref, defeating the once-per-project dedup). The
+  // orphan-fallback data itself is still emitted — only the noisy flare is
+  // muted on the runtime path.
+  const synthesizedDeformers = synthesizeDeformerNodesForExport(project, { suppressFlare: true });
   // Mirror synth nodes into the index so `_resolveParentRef` lookups
   // reach them (the lookup is by id, not by reference).
   for (const n of synthesizedDeformers) {
