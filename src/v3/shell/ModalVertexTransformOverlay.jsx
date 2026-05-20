@@ -175,18 +175,11 @@ export function ModalVertexTransformOverlay() {
       const pivot = useModalVertexTransformStore.getState().pivotCanvas;
       if (!pivot) return;
       const curAxis = useModalVertexTransformStore.getState().axis;
-      // `pivot` + `original` verts are part-LOCAL; map the cursor from
-      // canvas space into the same LOCAL frame (full inverse-world affine)
-      // so the rotation angle / scale ratio are measured against the local
-      // pivot. Without this, a part with a non-identity transform rotates/
-      // scales its local verts about a mismatched frame and the rendered
-      // mesh (camera × worldMatrix × local) detaches from the dots.
-      const _iwm = useModalVertexTransformStore.getState().iwm;
-      const toLocal = (p) => _iwm
-        ? { x: _iwm[0] * p.x + _iwm[3] * p.y + _iwm[6], y: _iwm[1] * p.x + _iwm[4] * p.y + _iwm[7] }
-        : p;
-      const start = toLocal(clientToCanvasPt(startMouse.x, startMouse.y));
-      const cur = toLocal(clientToCanvasPt(currentX, currentY));
+      // `pivot` (canvas-px centroid) + `original` verts + cursor are all in
+      // the same canvas-px space (edited parts render camera-only), so the
+      // angle / scale ratio are measured directly.
+      const start = clientToCanvasPt(startMouse.x, startMouse.y);
+      const cur = clientToCanvasPt(currentX, currentY);
 
       const tb = parseTyped(useModalVertexTransformStore.getState().typedBuffer);
       const useTyped = Number.isFinite(tb);
@@ -374,17 +367,10 @@ export function ModalVertexTransformOverlay() {
       // invisible to the rig. Matches `merge.js:99-102` and `add_vertex`
       // (`CanvasViewport.jsx:2487`), both of which write rest = pose at
       // creation/edit time.
-      // Map the canvas-space delta into the part's LOCAL vertex space via
-      // the inverse WORLD matrix (linear 2x2 block) — `mesh.vertices` are
-      // local and the GL mesh renders as `camera × worldMatrix × local`,
-      // so writing a raw canvas delta makes the rendered mesh move by
-      // `worldMatrix × delta` while the local-drawn dots move by `delta`
-      // (the phantom). Mirrors the brush (CanvasViewport.jsx:3037).
-      // Identity-ish worldMatrix → ldx/ldy == dxCanvas/dyCanvas (no-op).
-      const _iwm = useModalVertexTransformStore.getState().iwm;
-      const ldx = _iwm ? (_iwm[0] * dxCanvas + _iwm[3] * dyCanvas) : dxCanvas;
-      const ldy = _iwm ? (_iwm[1] * dxCanvas + _iwm[4] * dyCanvas) : dyCanvas;
-
+      // Edited parts render CAMERA-ONLY (rig-driven flag kept during edit,
+      // CanvasViewport PP1-008) and `mesh.vertices` are canvas-px, so the
+      // canvas-space delta applies directly — same space as the cursor and
+      // the vertex-dot overlay.
       const updateProject = useProjectStore.getState().updateProject;
       /** @type {any} */ let postMeshVerts = null;
       updateProject((proj) => {
@@ -397,10 +383,10 @@ export function ModalVertexTransformOverlay() {
           if (!orig) continue;
           if (idx >= 0 && idx < mesh.vertices.length) {
             const v = mesh.vertices[idx];
-            v.x = orig.x + ldx;
-            v.y = orig.y + ldy;
-            v.restX = (orig.restX ?? orig.x) + ldx;
-            v.restY = (orig.restY ?? orig.y) + ldy;
+            v.x = orig.x + dxCanvas;
+            v.y = orig.y + dyCanvas;
+            v.restX = (orig.restX ?? orig.x) + dxCanvas;
+            v.restY = (orig.restY ?? orig.y) + dyCanvas;
           }
         }
         postMeshVerts = mesh.vertices;

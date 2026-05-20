@@ -41,10 +41,11 @@ import {
   Hand,
   Waves,
   ChevronsLeftRight,
+  Crosshair,
 } from 'lucide-react';
 
 /**
- * @typedef {('select' | 'add_vertex' | 'remove_vertex' | 'brush' | 'joint_drag')} ToolModeId
+ * @typedef {('select' | 'cursor' | 'add_vertex' | 'remove_vertex' | 'brush' | 'joint_drag')} ToolModeId
  *
  * Four button kinds:
  *   - `tool`         — sticky, writes to `editorStore.toolMode`. Mutually
@@ -86,6 +87,14 @@ export const TOOLS_BY_MODE = {
       label: 'Select',
       icon: MousePointer2,
       hint: 'Click parts to select; Shift-click to multi-select',
+    },
+    {
+      id: 'cursor',
+      kind: 'tool',
+      toolModeId: 'cursor',
+      label: '2D Cursor',
+      icon: Crosshair,
+      hint: 'Click to place the 2D cursor (Shift+RMB also works in any tool)',
     },
     {
       id: 'transform.translate',
@@ -130,6 +139,14 @@ export const TOOLS_BY_MODE = {
       hint: 'Click vertices to select (Shift toggle, Ctrl shortest path, A select-all)',
     },
     {
+      id: 'cursor',
+      kind: 'tool',
+      toolModeId: 'cursor',
+      label: '2D Cursor',
+      icon: Crosshair,
+      hint: 'Click to place the 2D cursor (Shift+RMB also works in any tool)',
+    },
+    {
       id: 'brush',
       kind: 'tool',
       toolModeId: 'brush',
@@ -172,6 +189,14 @@ export const TOOLS_BY_MODE = {
       label: 'Select',
       icon: MousePointer2,
       hint: 'Click bones to select (B box-select, A select-all); transform with G / R / S',
+    },
+    {
+      id: 'cursor',
+      kind: 'tool',
+      toolModeId: 'cursor',
+      label: '2D Cursor',
+      icon: Crosshair,
+      hint: 'Click to place the 2D cursor (Shift+RMB also works in any tool)',
     },
     {
       id: 'joint_drag',

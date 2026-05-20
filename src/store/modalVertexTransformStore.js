@@ -55,18 +55,12 @@ import { create } from 'zustand';
  * @property {('x'|'y'|null)} axis
  * @property {{x:number, y:number}|null} startMouse
  * @property {{x:number, y:number}|null} pivotCanvas
- * @property {Float32Array|Float64Array|number[]|null} iwm - inverse WORLD matrix of the
- *   edited part (3x3 row-major). Deltas/cursor are in canvas space but
- *   `mesh.vertices` are part-LOCAL; the overlay maps through `iwm` so a
- *   part with a non-identity transform tracks the cursor (mirrors the
- *   brush's `iwm` handling, CanvasViewport.jsx:3037). Identity-ish for
- *   most parts → no-op.
  * @property {Map<number, {x:number, y:number, restX:number, restY:number}>} original
  * @property {Set<number>} vertIndices
  * @property {boolean} committed
  * @property {boolean} rollbackOnCancel
  * @property {string} typedBuffer
- * @property {(args: {kind:'translate'|'rotate'|'scale', partId:string, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<number, {x:number,y:number,restX:number,restY:number}>, vertIndices:Set<number>, iwm?:(Float32Array|Float64Array|number[]|null), rollbackOnCancel?:boolean}) => void} begin
+ * @property {(args: {kind:'translate'|'rotate'|'scale', partId:string, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<number, {x:number,y:number,restX:number,restY:number}>, vertIndices:Set<number>, rollbackOnCancel?:boolean}) => void} begin
  * @property {(axis: ('x'|'y'|null)) => void} setAxis
  * @property {(ch: string) => void} appendTyped
  * @property {() => void} popTyped
@@ -83,16 +77,15 @@ export const useModalVertexTransformStore = create((set) => ({
   axis: null,
   startMouse: null,
   pivotCanvas: null,
-  iwm: null,
   original: new Map(),
   vertIndices: new Set(),
   committed: false,
   rollbackOnCancel: false,
   typedBuffer: '',
 
-  begin: ({ kind, partId, startMouse, pivotCanvas, original, vertIndices, iwm = null, rollbackOnCancel = false }) =>
+  begin: ({ kind, partId, startMouse, pivotCanvas, original, vertIndices, rollbackOnCancel = false }) =>
     set({
-      kind, partId, axis: null, startMouse, pivotCanvas, iwm,
+      kind, partId, axis: null, startMouse, pivotCanvas,
       original, vertIndices,
       committed: false, rollbackOnCancel, typedBuffer: '',
     }),
@@ -122,19 +115,19 @@ export const useModalVertexTransformStore = create((set) => ({
 
   commit: () => set({
     committed: true,
-    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null, iwm: null,
+    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null,
     original: new Map(), vertIndices: new Set(),
     rollbackOnCancel: false, typedBuffer: '',
   }),
   cancel: () => set({
     committed: false,
-    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null, iwm: null,
+    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null,
     original: new Map(), vertIndices: new Set(),
     rollbackOnCancel: false, typedBuffer: '',
   }),
   reset: () => set({
     committed: false,
-    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null, iwm: null,
+    kind: null, partId: null, axis: null, startMouse: null, pivotCanvas: null,
     original: new Map(), vertIndices: new Set(),
     rollbackOnCancel: false, typedBuffer: '',
   }),

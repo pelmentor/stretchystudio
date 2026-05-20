@@ -1084,7 +1084,21 @@ export default function CanvasViewport({
           for (const _n of projectRef.current.nodes) nodesById.set(_n.id, _n);
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
-            if (f.id === _meshEditingPartId) continue;
+            if (f.id === _meshEditingPartId) {
+              // Skip the rig override so the user's live vertex edits show
+              // (the rig keyforms are stale mid-edit). BUT keep the part
+              // flagged rig-driven so scenePass draws it CAMERA-ONLY
+              // (`scenePass.js:231`): the edited `mesh.vertices` are
+              // canvas-px (absolute, same space rig output bakes to), so
+              // applying the part's `worldMatrix` on top — which scenePass
+              // does for NON-rig-driven parts — double-transforms them.
+              // That double-transform is the "phantom": the camera-only
+              // vertex-dot overlay tracked the edit while the
+              // worldMatrix'd mesh detached. Keeping the rig-driven flag
+              // pins both to the same camera-only space.
+              rigDrivenParts.add(f.id);
+              continue;
+            }
             const node = nodesById.get(f.id);
             if (!getMesh(node, projectRef.current)) {
               // Phase -1D: log once per missing partId in dev so the
@@ -2291,6 +2305,18 @@ export default function CanvasViewport({
     // (no part picking, no mesh edit, no skeleton drag, no pivot edit).
     // Only pan/zoom (handled above) and cursor look (handled above) run.
     if (previewModeRef.current) return;
+
+    // Cursor tool — plain LMB places the 2D cursor (Blender's
+    // `builtin.cursor`; the always-on Shift+RMB shortcut also works). Runs
+    // before the mode-specific dispatch so it works in every mode,
+    // including Pose (where the skeleton overlay otherwise claims LMB).
+    if (editorRef.current.toolMode === 'cursor') {
+      const [ccx, ccy] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
+      useProjectStore.getState().setProjectCursor(ccx, ccy);
+      isDirtyRef.current = true;
+      e.preventDefault();
+      return;
+    }
 
     const proj = projectRef.current;
 
