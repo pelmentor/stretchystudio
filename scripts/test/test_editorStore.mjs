@@ -100,7 +100,7 @@ reset();
   get().enterEditMode('edit');
   assert(get().editMode === 'edit', 'enter mesh: editMode set');
   assert(get().activeBlendShapeId === null, 'enter mesh: blendShapeId stays null');
-  assert(get().toolMode === 'brush', 'enter mesh: toolMode defaults to brush');
+  assert(get().toolMode === 'select', 'enter mesh: toolMode defaults to select (Blender Edit Mode opens with Select)');
 }
 
 // ── enterEditMode('skeleton') ─────────────────────────────────────
@@ -125,7 +125,7 @@ reset();
     "enter blendShape (alias): editMode = 'edit' (folded)");
   assert(get().activeBlendShapeId === 'shape-X',
     'enter blendShape (alias): id set');
-  assert(get().toolMode === 'brush', 'enter blendShape: toolMode defaults to brush');
+  assert(get().toolMode === 'select', 'enter blendShape: toolMode defaults to select (folds into Edit Mode)');
 }
 
 // ── enterEditMode('blendShape') without id is a no-op ─────────────
@@ -375,7 +375,7 @@ reset();
 
 {
   reset();
-  // Seed mesh edit; default toolMode = 'brush'.
+  // Seed mesh edit, then overwrite the persisted map below.
   useEditorStore.setState({ editMode: 'edit' });
   // Reset the persisted map to a known shape so we observe a write.
   usePreferencesStore.setState({

@@ -189,8 +189,13 @@ function mergeSnap(saved) {
  *  unknown values fall back to the mode's first sticky tool entry. */
 const LTM_DEFAULT = Object.freeze({
   object: 'select',
-  edit:   'brush',          // Blender's universal Edit Mode (was 'mesh')
-  pose:   'joint_drag',     // Blender's OB_MODE_POSE (was 'skeleton')
+  // Edit Mode opens with Select, matching Blender (Edit/Object first-entry
+  // tool = `builtin.select_box`, `wm_toolsystem.cc:1152`) + the Phase 0.E
+  // intent documented in `editorStore.enterEditMode`. This is the SEED for
+  // `lastToolByMode`, read BEFORE the inline default in `enterEditMode`, so
+  // a stale `'brush'` here made fresh installs open Edit Mode in Brush.
+  edit:   'select',
+  pose:   'joint_drag',     // SS direct drag-to-pose (DEV: Blender pose = select_box; see UI_MODE_BLENDER_PARITY_PLAN.md)
 });
 
 /** GAP-016 Phase B — `viewLayerPresets` is a dict of user-named

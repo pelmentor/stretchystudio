@@ -191,7 +191,7 @@ function get() { return usePreferencesStore.getState(); }
   // taxonomy: object / edit / pose / weightPaint).
   const ltm = get().lastToolByMode;
   assert(ltm && ltm.object === 'select', 'lastToolByMode: object → select default');
-  assert(ltm.edit === 'brush',           'lastToolByMode: edit → brush default');
+  assert(ltm.edit === 'select',          'lastToolByMode: edit → select default (Blender Edit Mode opens with Select)');
   assert(ltm.pose === 'joint_drag',      'lastToolByMode: pose → joint_drag default');
   // 'blendShape' key dropped (Fix 1, folded into Edit Mode);
   // 'skeleton' key renamed to 'pose' (Fix 2, OB_MODE_POSE taxonomy).
