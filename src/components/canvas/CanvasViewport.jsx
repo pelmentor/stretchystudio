@@ -28,8 +28,8 @@ import {
   buildParamSpecs,
 } from '@/io/live2d/runtime/physicsTick';
 import { EyeBlinkDriver, resolveEyeBlinkParamIds } from '@/io/live2d/runtime/eyeBlink';
-import { computePoseOverrides, computeParamOverrides, KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from '@/renderer/animationEngine';
-import { buildNodeFCurve, decodeFCurveTarget, fcurveTargetsNode } from '@/anim/animationFCurve';
+import { computePoseOverrides, computeParamOverrides } from '@/renderer/animationEngine';
+import { insertAllPropertyKeyframes } from '@/renderer/insertAllProperties';
 import { getActiveSceneAction } from '@/anim/sceneAction';
 // Phase 0.B of Animation Blender-Parity Plan (2026-05-09) — driver pass.
 // `evaluateProjectDrivers` walks every `param.driver` (and future
@@ -1393,6 +1393,24 @@ export default function CanvasViewport({
       const actionId = getActiveSceneAction(proj, anim.activeActionId)?.id ?? proj.actions[0]?.id;
       if (!actionId) return;
 
+      // Animation Phase 7 Slice 7.G — K-rebind preference. When the user
+      // opts into Blender's "K always prompts" semantic
+      // (`preferencesStore.kKeyOpensMenu`), a MANUAL K opens the I-menu
+      // keying-set picker instead of running the legacy "insert all
+      // properties" fan-out below. Mirrors Blender's K → `anim.
+      // keyframe_insert_menu` (always_prompt=True) at
+      // `keymap_data/blender_default.py:4536`.
+      //
+      // Synthetic K events from `runAutoKey('all')` carry `__ssAutoKey`
+      // and MUST NOT be re-routed — auto-key's 'all' mode depends on this
+      // handler performing the fan-out, not popping a menu. So the rebind
+      // only fires for genuine user K-presses.
+      if (!e.__ssAutoKey && usePreferencesStore.getState().kKeyOpensMenu) {
+        const c = lastCursorRef.current;
+        useEditMenuStore.getState().openKeyingSet({ cursor: { x: c.clientX, y: c.clientY } });
+        return;
+      }
+
       let selectedIds = ed.selection;
       if (selectedIds.length === 0) return;
 
@@ -1453,124 +1471,20 @@ export default function CanvasViewport({
       const activeActionObj = proj.actions.find(a => a.id === actionId) ?? null;
       const endMs = (anim.endFrame / anim.fps) * 1000;
       const keyframeOverrides = computePoseOverrides(activeActionObj, currentTimeMs, anim.loopKeyframes, endMs);
+      const startMs = (anim.startFrame / anim.fps) * 1000;
 
+      // Slice 7.G — the per-node "insert every property" fan-out now lives
+      // in the pure, unit-tested `insertAllPropertyKeyframes` helper.
       updateProject((p) => {
-        const action = p.actions.find(a => a.id === actionId);
-        if (!action) return;
-        if (!Array.isArray(action.fcurves)) action.fcurves = [];
-
-        for (const nodeId of selectedIds) {
-          const node = p.nodes.find(n => n.id === nodeId);
-          if (!node) continue;
-
-          const startMs = (anim.startFrame / anim.fps) * 1000;
-          const rest = anim.restPose.get(nodeId);
-          const draft = anim.draftPose.get(nodeId);
-          const kfValues = keyframeOverrides.get(nodeId);
-
-          for (const prop of KEYFRAME_PROPS) {
-            // Read value from highest-priority source: draft > current keyform > base transform
-            let value;
-            if (draft && draft[prop] !== undefined) {
-              value = draft[prop];
-            } else if (kfValues && kfValues[prop] !== undefined) {
-              value = kfValues[prop];
-            } else {
-              value = getNodePropertyValue(node, prop);
-            }
-
-            let fc = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === prop);
-            const isNewFCurve = !fc;
-            if (!fc) {
-              fc = buildNodeFCurve(nodeId, prop, []) ?? {
-                id: `${nodeId}.${prop}`,
-                rnaPath: `objects["${nodeId}"].${prop}`,
-                arrayIndex: 0,
-                keyforms: [],
-                modifiers: [],
-                extrapolation: 'constant',
-              };
-              action.fcurves.push(fc);
-            }
-
-            // Auto-insert a rest-pose keyform at startFrame when this is the
-            // first keyform for this fcurve and we're past the start.
-            if (isNewFCurve && currentTimeMs > startMs && rest) {
-              const baseVal = prop === 'opacity' ? (rest.opacity ?? 1)
-                : (rest[prop] ?? (prop === 'scaleX' || prop === 'scaleY' ? 1 : 0));
-              upsertKeyframe(fc.keyforms, startMs, baseVal, 'linear');
-            }
-
-            upsertKeyframe(fc.keyforms, currentTimeMs, value, 'linear');
-          }
-
-          // ── mesh_verts keyform (deform mode) ───────────────────────────
-          // Only create/update if the node actually has a mesh deform in draft,
-          // or if a mesh_verts fcurve already exists. This prevents accidental
-          // mesh_verts keyforms from blocking blend shape animation.
-          const nodeMesh = getMesh(node, p);
-          if (node.type === 'part' && nodeMesh) {
-            const hasMeshDeform = draft?.mesh_verts !== undefined;
-            let meshFC = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === 'mesh_verts');
-
-            if (hasMeshDeform || meshFC) {
-              const meshVerts = draft?.mesh_verts
-                ?? kfValues?.mesh_verts
-                ?? nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
-
-              const isNewMeshFC = !meshFC;
-              if (!meshFC) {
-                meshFC = buildNodeFCurve(nodeId, 'mesh_verts', []) ?? {
-                  id: `${nodeId}.mesh_verts`,
-                  rnaPath: `objects["${nodeId}"].mesh_verts`,
-                  arrayIndex: 0,
-                  keyforms: [],
-                  modifiers: [],
-                  extrapolation: 'constant',
-                };
-                action.fcurves.push(meshFC);
-              }
-
-              // Auto-insert base-mesh keyform at startFrame if this is the first keyform
-              if (isNewMeshFC && currentTimeMs > startMs) {
-                const baseVerts = nodeMesh.vertices.map(v => ({ x: v.x, y: v.y }));
-                upsertKeyframe(meshFC.keyforms, startMs, baseVerts, 'linear');
-              }
-
-              upsertKeyframe(meshFC.keyforms, currentTimeMs, meshVerts, 'linear');
-            }
-          }
-
-          // ── blend shape influence keyforms ───────────────────────────────
-          if (node.type === 'part' && node.blendShapes?.length) {
-            for (const shape of node.blendShapes) {
-              const prop = `blendShape:${shape.id}`;
-              const value = draft?.[prop] ?? kfValues?.[prop] ?? node.blendShapeValues?.[shape.id] ?? 0;
-
-              let fc = action.fcurves.find(f => fcurveTargetsNode(f, nodeId) && decodeFCurveTarget(f)?.property === prop);
-              const isNewFCurve = !fc;
-              if (!fc) {
-                fc = buildNodeFCurve(nodeId, prop, []) ?? {
-                  id: `${nodeId}.${prop}`,
-                  rnaPath: `objects["${nodeId}"].${prop}`,
-                  arrayIndex: 0,
-                  keyforms: [],
-                  modifiers: [],
-                  extrapolation: 'constant',
-                };
-                action.fcurves.push(fc);
-              }
-
-              // Auto-insert rest-pose keyform at startFrame if this is the first keyform
-              if (isNewFCurve && currentTimeMs > startMs && rest) {
-                upsertKeyframe(fc.keyforms, startMs, node.blendShapeValues?.[shape.id] ?? 0, 'linear');
-              }
-
-              upsertKeyframe(fc.keyforms, currentTimeMs, value, 'linear');
-            }
-          }
-
-        }
+        insertAllPropertyKeyframes(p, {
+          actionId,
+          selectedIds,
+          currentTimeMs,
+          startMs,
+          keyframeOverrides,
+          restPose: anim.restPose,
+          draftPose: anim.draftPose,
+        });
       });
 
       // Clear draft for committed nodes so the keyframe value takes over

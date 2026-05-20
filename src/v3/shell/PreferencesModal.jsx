@@ -52,6 +52,9 @@ export function PreferencesModal({ open, onOpenChange }) {
   const setMlEnabled = usePreferencesStore((s) => s.setMlEnabled);
   const useNumericInputAdvanced = usePreferencesStore((s) => s.useNumericInputAdvanced);
   const setUseNumericInputAdvanced = usePreferencesStore((s) => s.setUseNumericInputAdvanced);
+  // Slice 7.G — K-key rebind preference.
+  const kKeyOpensMenu = usePreferencesStore((s) => s.kKeyOpensMenu);
+  const setKKeyOpensMenu = usePreferencesStore((s) => s.setKKeyOpensMenu);
   // Slice 5.HH — keymap-preset selector. Subscribes to the slot
   // shipped by Slice 5.AA + extended to 3 options by Slice 5.GG. The
   // single-coercion-point `setKeymapPreset` from preferencesStore
@@ -101,6 +104,10 @@ export function PreferencesModal({ open, onOpenChange }) {
     input:               useT('prefs.input'),
     inputAdvNumeric:     useT('prefs.input.advancedNumeric'),
     inputAdvNumericNote: useT('prefs.input.advancedNumericNote'),
+    // Slice 7.G — K-key rebind preference.
+    kKey:                useT('prefs.kKey'),
+    kKeyOpenMenu:        useT('prefs.kKey.openMenu'),
+    kKeyOpenMenuNote:    useT('prefs.kKey.openMenuNote'),
     // Slice 5.HH — keymap-preset selector.
     keymapPreset:                useT('prefs.keymapPreset'),
     keymapPresetDefault:         useT('prefs.keymapPreset.option.default'),
@@ -294,6 +301,30 @@ export function PreferencesModal({ open, onOpenChange }) {
                 </span>
                 <span className="text-[10px] text-muted-foreground leading-snug">
                   {labels.inputAdvNumericNote}
+                </span>
+              </span>
+            </label>
+          </Section>
+
+          {/* Slice 7.G — K-key rebind preference. When on, a manual K in
+              animation mode opens the I-menu keying-set picker (Blender's
+              "K always prompts") instead of the legacy insert-all-properties
+              fan-out. Synthetic auto-key K events are exempt. */}
+          <Section label={labels.kKey}>
+            <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={kKeyOpensMenu}
+                onChange={(e) => setKKeyOpensMenu(e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 rounded border border-border"
+              />
+              <span className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Keyboard size={12} className="text-muted-foreground" />
+                  {labels.kKeyOpenMenu}
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-snug">
+                  {labels.kKeyOpenMenuNote}
                 </span>
               </span>
             </label>

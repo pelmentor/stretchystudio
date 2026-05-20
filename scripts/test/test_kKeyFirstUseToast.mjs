@@ -81,6 +81,15 @@ console.log('\n§1 preferencesStore.kKeyFirstUseShown');
     storage.has('v3.prefs.kKeyFirstUseShown'),
     '§1.5 K-pref uses exact localStorage key v3.prefs.kKeyFirstUseShown',
   );
+
+  // §1.6 Slice 7.G — kKeyOpensMenu rebind preference roundtrip.
+  const prefs = usePreferencesStore.getState();
+  eq(prefs.kKeyOpensMenu, false, '§1.6 kKeyOpensMenu default false (legacy fan-out)');
+  prefs.setKKeyOpensMenu(true);
+  eq(usePreferencesStore.getState().kKeyOpensMenu, true, '§1.6 setter flips to true');
+  eq(storage.get('v3.prefs.kKeyOpensMenu'), 'true', '§1.6 persists to exact key');
+  prefs.setKKeyOpensMenu(0);
+  eq(usePreferencesStore.getState().kKeyOpensMenu, false, '§1.6 coerces 0 → false');
 }
 
 // ── §2 runAutoKey('all') tags synthetic K with __ssAutoKey ──────────

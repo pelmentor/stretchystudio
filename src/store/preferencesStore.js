@@ -52,6 +52,13 @@ const NIA_KEY = 'v3.prefs.useNumericInputAdvanced';
  *  localStorage key chosen to match the `v3.prefs.*` pattern so a
  *  user clearing the namespace resets all SS preferences uniformly. */
 const K_FIRST_USE_KEY = 'v3.prefs.kKeyFirstUseShown';
+/** Animation Phase 7 Slice 7.G — K-rebind preference. When `true`, a
+ *  manual K-press in animation mode opens the I-menu keying-set picker
+ *  (Blender's "K always prompts" semantic, `anim.keyframe_insert_menu`
+ *  always_prompt=True) instead of the legacy "insert all properties"
+ *  fan-out. Default `false` (SS legacy K behaviour). Synthetic auto-key
+ *  K events (`__ssAutoKey`) are exempt — they always run the fan-out. */
+const K_OPENS_MENU_KEY = 'v3.prefs.kKeyOpensMenu';
 /** Toolset Plan Phase 2 — snap config (modal G / R / S). Persisted as
  *  one JSON blob keyed `v3.prefs.snap`. See SNAP_DEFAULT below for
  *  schema; Phase 2.A. */
@@ -271,6 +278,10 @@ export const usePreferencesStore = create((set, get) => ({
    *  toast for all future sessions on this device. Rule №2: pure
    *  client-side persisted preference, no project schema touch. */
   kKeyFirstUseShown: loadBool(K_FIRST_USE_KEY, false),
+  /** Animation Phase 7 Slice 7.G — K-rebind preference (see
+   *  `K_OPENS_MENU_KEY`). `false` = legacy fan-out; `true` = K opens
+   *  the I-menu picker. */
+  kKeyOpensMenu: loadBool(K_OPENS_MENU_KEY, false),
   /** Last-used tool per editMode (`'object' | 'edit' | 'skeleton' |
    *  'blendShape'`). Persisted across sessions so sticky tool choices
    *  (e.g. preferring `add_vertex` over the default `brush` in Edit
@@ -375,6 +386,14 @@ export const usePreferencesStore = create((set, get) => ({
     const next = !!v;
     saveBool(K_FIRST_USE_KEY, next);
     set({ kKeyFirstUseShown: next });
+  },
+
+  /** Slice 7.G — toggle the K-rebind preference (legacy fan-out ↔ K
+   *  opens the I-menu picker). Persists to localStorage. */
+  setKKeyOpensMenu(v) {
+    const next = !!v;
+    saveBool(K_OPENS_MENU_KEY, next);
+    set({ kKeyOpensMenu: next });
   },
 
   setProportionalEdit(partial) {

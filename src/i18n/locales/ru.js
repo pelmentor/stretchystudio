@@ -91,4 +91,8 @@ export const RU = {
   'prefs.keymapPreset.option.defaultNoToggle':    'Blender по умолчанию (без toggle)',
   'prefs.keymapPreset.option.industryCompatible': 'Industry Compatible',
   'prefs.keymapPreset.note':                      'Управляет триплетом select-all в сайдбаре каналов F-Curve (A / Alt+A / Ctrl+I). "С toggle" — поведение SS до мая 2026; "без toggle" — байт-в-байт дефолт Blender; "Industry Compatible" — раскладка в стиле Maya на Ctrl+A.',
+  // Slice 7.G — переназначение клавиши K.
+  'prefs.kKey':              'Кадрирование (K)',
+  'prefs.kKey.openMenu':     'K открывает меню наборов ключей',
+  'prefs.kKey.openMenuNote': 'Как в Blender: ручное нажатие K в режиме анимации открывает выбор набора ключей (как меню I), вместо вставки ключей по всем свойствам. Авто-ключ при перетаскивании по-прежнему ключует все свойства.',
 };

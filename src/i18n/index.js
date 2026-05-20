@@ -128,6 +128,10 @@ const EN = {
   'prefs.keymapPreset.option.defaultNoToggle':    'Blender Default (no toggle)',
   'prefs.keymapPreset.option.industryCompatible': 'Industry Compatible',
   'prefs.keymapPreset.note':                      'Controls the channels-region select-all triplet (A / Alt+A / Ctrl+I in the F-Curve sidebar). "Toggle" matches SS\'s pre-2026-05 behavior; "no toggle" is Blender\'s byte-faithful out-of-box default; "Industry Compatible" mirrors Maya-style Ctrl+A bindings.',
+  // Slice 7.G — K-key rebind preference.
+  'prefs.kKey':              'Keyframing (K)',
+  'prefs.kKey.openMenu':     'K opens the keying-set menu',
+  'prefs.kKey.openMenuNote': "Blender-faithful: a manual K in animation mode prompts the keying-set picker (like the I-menu) instead of inserting every property. Auto-key still keys all properties on drag.",
 };
 
 // Eagerly register every shipped non-English locale so a user
