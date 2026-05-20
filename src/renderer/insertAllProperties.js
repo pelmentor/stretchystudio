@@ -30,7 +30,7 @@
  * @module renderer/insertAllProperties
  */
 
-import { KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe } from './animationEngine.js';
+import { KEYFRAME_PROPS, getNodePropertyValue, upsertKeyframe, upsertMeshKeyframe } from './animationEngine.js';
 import { buildNodeFCurve, decodeFCurveTarget } from '../anim/animationFCurve.js';
 import { getMesh } from '../store/objectDataAccess.js';
 
@@ -146,10 +146,10 @@ export function insertAllPropertyKeyframes(draft, ctx) {
         // Auto-insert base-mesh keyform at startFrame if this is the first keyform
         if (isNewMeshFC && currentTimeMs > startMs) {
           const baseVerts = nodeMesh.vertices.map((v) => ({ x: v.x, y: v.y }));
-          upsertKeyframe(meshFC.keyforms, startMs, baseVerts, 'linear');
+          upsertMeshKeyframe(meshFC.keyforms, startMs, baseVerts, 'linear');
         }
 
-        upsertKeyframe(meshFC.keyforms, currentTimeMs, meshVerts, 'linear');
+        upsertMeshKeyframe(meshFC.keyforms, currentTimeMs, meshVerts, 'linear');
       }
     }
 

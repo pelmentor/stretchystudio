@@ -4329,6 +4329,12 @@ function decodeAllFCurves(action, labels) {
   for (const fc of fcurves) {
     const target = decodeFCurveTarget(fc);
     if (!target) continue;
+    // mesh_verts channels carry per-vertex `[{x,y},...]` values — there is
+    // no scalar value-axis to plot or drag in the Graph Editor (Live2D-
+    // specific, no Blender analog). They live in the Dopesheet (time
+    // domain). Excluding them here keeps the value-domain editor scalar-
+    // only and prevents an unplottable sidebar row.
+    if (target.kind === 'node' && target.property === 'mesh_verts') continue;
     let label, tooltip;
     if (target.kind === 'param') {
       label = labels.paramNameById.get(target.paramId) ?? target.paramId;

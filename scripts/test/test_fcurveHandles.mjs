@@ -161,6 +161,28 @@ function near(actual, expected, eps = 1e-4, name) {
   assert(action.fcurves[1].keyforms[1].handleLeft,  'recalcAction: fcurve[1][1] handleLeft set');
 }
 
+// ── array-valued (mesh_verts) keyforms: skipped, never corrupted ────────
+{
+  // mesh_verts keyforms carry [{x,y},...] values — no scalar value-axis,
+  // so recalc must SKIP them (scalar handle math would write NaN). This
+  // is the chokepoint that protects every dopesheet/graph/fcurve-editor
+  // op (they all funnel handle recompute through recalcKeyformHandles).
+  const meshKfs = [
+    { time: 0,   value: [{ x: 0, y: 0 }, { x: 1, y: 1 }], interpolation: 'linear',
+      handleLeft: { time: 0, value: 0 }, handleRight: { time: 0, value: 0 } },
+    { time: 100, value: [{ x: 5, y: 5 }, { x: 6, y: 6 }], interpolation: 'linear',
+      handleLeft: { time: 100, value: 0 }, handleRight: { time: 100, value: 0 } },
+  ];
+  recalcKeyformHandles(meshKfs);
+  // Values untouched (still arrays); handles not corrupted to NaN.
+  assert(Array.isArray(meshKfs[0].value) && meshKfs[0].value[0].x === 0,
+    'mesh recalc: array value left intact');
+  assert(meshKfs[0].handleRight.value === 0 && !Number.isNaN(meshKfs[0].handleRight.value),
+    'mesh recalc: handle value not corrupted (no NaN)');
+  assert(meshKfs[1].handleLeft.value === 0 && !Number.isNaN(meshKfs[1].handleLeft.value),
+    'mesh recalc: neighbour handle not corrupted');
+}
+
 // ── null/malformed: no crash ────────────────────────────────────────────
 {
   calcHandleForKeyform(null, null, null); passed++;

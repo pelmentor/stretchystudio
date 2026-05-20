@@ -11,7 +11,7 @@
 //   §5 guards (missing action / missing node / fcurve reuse)
 
 import { insertAllPropertyKeyframes } from '../../src/renderer/insertAllProperties.js';
-import { KEYFRAME_PROPS } from '../../src/renderer/animationEngine.js';
+import { KEYFRAME_PROPS, computePoseOverrides } from '../../src/renderer/animationEngine.js';
 import { decodeFCurveTarget } from '../../src/anim/animationFCurve.js';
 
 let pass = 0;
@@ -166,17 +166,13 @@ console.log('\n§2 auto rest keyform at startMs');
   ok(keyAt(fx4, 0) && keyAt(fx4, 500) && keyAt(fx4, 800), '§2.4 keyforms at 0/500/800');
 }
 
-// ── §3 mesh_verts gating ─────────────────────────────────────────────
-// IMPORTANT — pins the *gating* (when a mesh_verts fcurve is created),
-// NOT value storage. Pre-existing LATENT BUG surfaced by this extraction:
-// `upsertKeyframe` → `makeBezTripleKeyform` rejects any non-numeric value
-// (animationFCurve.js:144 `typeof input.value !== 'number' → return null`),
-// so mesh_verts (a vertex ARRAY) never produces a stored keyform. The
-// legacy K-key handler had this exact behaviour (same `upsertKeyframe`
-// call); 7.G preserves it faithfully. Fixing it needs a mesh-aware keyform
-// representation — a separate slice, out of §7.G scope. Tests below assert
-// the faithful behaviour (fcurve created/gated; keyforms stay empty).
-console.log('\n§3 mesh_verts gating (+ latent value-storage bug)');
+// ── §3 mesh_verts gating + storage + playback round-trip ─────────────
+// Mesh deform keyframes carry array-shaped values [{x,y},...]. They are
+// stored via `upsertMeshKeyframe` (the scalar `makeBezTripleKeyform` path
+// rejects non-numeric values), and evaluated by `interpolateMeshVerts`
+// inside `computePoseOverrides`. This pins the full write → playback link
+// fixed after §7.G surfaced it as a latent no-op.
+console.log('\n§3 mesh_verts gating + storage + playback');
 {
   const deform = [{ x: 9, y: 9 }, { x: 8, y: 8 }, { x: 7, y: 7 }];
 
@@ -188,8 +184,8 @@ console.log('\n§3 mesh_verts gating (+ latent value-storage bug)');
   });
   ok(!fc(proj.actions[0], 'partA', 'mesh_verts'), '§3.1 no mesh_verts fcurve without deform');
 
-  // §3.2 mesh deform in draft OPENS the gate → mesh_verts fcurve created
-  // (keyforms stay empty — latent bug above).
+  // §3.2 mesh deform in draft → mesh_verts fcurve created AND keyed with
+  // the deform vertex array (the fix).
   const proj2 = makeProject();
   insertAllPropertyKeyframes(proj2, {
     actionId: 'act1', selectedIds: ['partA'], currentTimeMs: 100, startMs: 100,
@@ -198,23 +194,33 @@ console.log('\n§3 mesh_verts gating (+ latent value-storage bug)');
     draftPose: new Map([['partA', { mesh_verts: deform }]]),
   });
   const mfc = fc(proj2.actions[0], 'partA', 'mesh_verts');
-  ok(mfc, '§3.2 deform draft opens the gate → mesh_verts fcurve created');
-  ok(mfc.keyforms.length === 0, '§3.2 LATENT BUG: array value rejected → 0 keyforms stored');
+  ok(mfc, '§3.2 deform draft → mesh_verts fcurve created');
+  eq(keyAt(mfc, 100)?.value, deform, '§3.2 deform verts STORED at currentTimeMs (fix)');
+  eq(keyAt(mfc, 100)?.interpolation, 'linear', '§3.2 mesh keyform interpolation = linear');
 
-  // §3.3 existing mesh_verts fcurve ALSO opens the gate (even with no draft).
+  // §3.3 base-mesh keyform at startMs (first key past start) + current key.
   const proj3 = makeProject();
-  proj3.actions[0].fcurves.push({
-    id: 'partA.mesh_verts', rnaPath: 'objects["partA"].mesh_verts',
-    arrayIndex: 0, keyforms: [{ time: 50, value: 1, handleLeft: { time: 50, value: 1 }, handleRight: { time: 50, value: 1 }, handleType: { left: 'vector', right: 'vector' }, interpolation: 'linear', flag: 0 }],
-    modifiers: [], extrapolation: 'constant',
-  });
   insertAllPropertyKeyframes(proj3, {
     actionId: 'act1', selectedIds: ['partA'], currentTimeMs: 1000, startMs: 0,
-    keyframeOverrides: new Map(), restPose: new Map(), draftPose: new Map(),
+    keyframeOverrides: new Map(),
+    restPose: new Map(),
+    draftPose: new Map([['partA', { mesh_verts: deform }]]),
   });
-  // Existing fcurve is reused (not duplicated); branch runs the upsert path.
-  const meshCurves = proj3.actions[0].fcurves.filter((f) => decodeFCurveTarget(f)?.property === 'mesh_verts');
-  ok(meshCurves.length === 1, '§3.3 existing mesh fcurve reused (branch runs without a draft)');
+  const mfc3 = fc(proj3.actions[0], 'partA', 'mesh_verts');
+  ok(mfc3.keyforms.length === 2, '§3.3 base + current = 2 mesh keyforms stored');
+  eq(keyAt(mfc3, 0)?.value, [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }], '§3.3 base-mesh verts at startMs');
+  eq(keyAt(mfc3, 1000)?.value, deform, '§3.3 deform verts at currentTimeMs');
+
+  // §3.3b playback: computePoseOverrides → interpolateMeshVerts lerps the
+  // two keyforms at the midpoint (t=0.5 → halfway between base and deform).
+  const ovAt500 = computePoseOverrides(proj3.actions[0], 500).get('partA');
+  eq(ovAt500?.mesh_verts, [{ x: 4.5, y: 4.5 }, { x: 4.5, y: 4.5 }, { x: 4.5, y: 3.5 }],
+    '§3.3b interpolateMeshVerts lerps verts at t=0.5');
+  // endpoints exact
+  eq(computePoseOverrides(proj3.actions[0], 0).get('partA')?.mesh_verts,
+    [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }], '§3.3b playback at t=0 = base');
+  eq(computePoseOverrides(proj3.actions[0], 1000).get('partA')?.mesh_verts, deform,
+    '§3.3b playback at t=end = deform');
 
   // §3.4 part without a mesh → never a mesh_verts fcurve even with draft
   const proj4 = makeProject();
@@ -225,6 +231,19 @@ console.log('\n§3 mesh_verts gating (+ latent value-storage bug)');
     draftPose: new Map([['partB', { mesh_verts: deform }]]),
   });
   ok(!fc(proj4.actions[0], 'partB', 'mesh_verts'), '§3.4 no mesh → no mesh_verts fcurve');
+
+  // §3.5 re-key at the same time replaces the vertex value in place.
+  const proj5 = makeProject();
+  const ctx5 = {
+    actionId: 'act1', selectedIds: ['partA'], startMs: 100, currentTimeMs: 100,
+    keyframeOverrides: new Map(), restPose: new Map(),
+  };
+  insertAllPropertyKeyframes(proj5, { ...ctx5, draftPose: new Map([['partA', { mesh_verts: deform }]]) });
+  const deform2 = [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }];
+  insertAllPropertyKeyframes(proj5, { ...ctx5, draftPose: new Map([['partA', { mesh_verts: deform2 }]]) });
+  const mfc5 = fc(proj5.actions[0], 'partA', 'mesh_verts');
+  ok(mfc5.keyforms.length === 1, '§3.5 re-key same time → 1 keyform (replaced)');
+  eq(keyAt(mfc5, 100)?.value, deform2, '§3.5 value replaced in place');
 }
 
 // ── §4 blend-shape influence keyforms ───────────────────────────────

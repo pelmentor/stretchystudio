@@ -334,6 +334,49 @@ export function upsertKeyframe(keyforms, timeMs, value, easing = 'ease-both') {
   recalcKeyformHandles(keyforms);
 }
 
+/**
+ * Upsert a `mesh_verts` keyform — a per-vertex `[{x,y},...]` value rather
+ * than a scalar. The scalar `upsertKeyframe`/`makeBezTripleKeyform` path
+ * rejects non-numeric values (mesh values are arrays), which is why
+ * mesh-deform keyframes were never stored before. This builds the exact
+ * shape `interpolateMeshVerts` consumes: `{time, value, interpolation,
+ * handleType, flag}`. No `recalcKeyformHandles` — mesh keyforms have no
+ * scalar value-axis handles (the eval derives a single per-segment lerp
+ * factor via `evaluateBezTripleParam`, which only reads handles for
+ * `bezier`; mesh keyforms are stored `'linear'`, so handles stay
+ * degenerate and unused).
+ *
+ * @param {Array<*>} keyforms
+ * @param {number} timeMs
+ * @param {Array<{x:number,y:number}>} verts
+ * @param {string} [interpolation='linear']
+ */
+export function upsertMeshKeyframe(keyforms, timeMs, verts, interpolation = 'linear') {
+  if (!Array.isArray(verts)) return;
+  const existing = keyforms.find(k => k.time === timeMs);
+  if (existing) {
+    existing.value = verts;
+    existing.interpolation = interpolation;
+    delete existing.easing;
+    delete existing.type;
+  } else {
+    keyforms.push({
+      time: timeMs,
+      value: verts,
+      // Degenerate scalar handles kept for shape-uniformity with BezTriple
+      // keyforms; `interpolateMeshVerts` never reads them for 'linear'.
+      handleLeft: { time: timeMs, value: 0 },
+      handleRight: { time: timeMs, value: 0 },
+      handleType: { left: 'vector', right: 'vector' },
+      interpolation,
+      flag: 0,
+    });
+    keyforms.sort((a, b) => a.time - b.time);
+  }
+  // NB: intentionally no recalcKeyformHandles — see docstring (it early-
+  // returns on array values anyway, but skipping is clearer).
+}
+
 /** All keyframeable transform properties (in display order) */
 export const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'opacity', 'visible'];
 

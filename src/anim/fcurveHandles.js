@@ -387,6 +387,16 @@ export function recalcKeyformHandles(keyforms) {
     // at fcurve.cc:1156-1160 for the same reason.
     return;
   }
+  // mesh_verts curves carry array-shaped values (per-vertex {x,y}); they
+  // have no scalar value-axis and therefore no BezTriple handles to
+  // compute. `calcHandleForKeyform` does scalar arithmetic on `.value`
+  // (e.g. `prev.value - bezt.value`) which would yield NaN handles on an
+  // array. Skip them here — this is the single chokepoint every handle-
+  // recompute path funnels through (upsertKeyframe + the dopesheet /
+  // graph-edit / fcurve-editor ops), so guarding here keeps array-valued
+  // mesh keyforms safe everywhere. interpolateMeshVerts evaluates them
+  // with a shared per-segment lerp factor and never reads handles.
+  if (typeof keyforms[0]?.value !== 'number') return;
   for (let i = 0; i < keyforms.length; i++) {
     const prev = i > 0 ? keyforms[i - 1] : null;
     const next = i < keyforms.length - 1 ? keyforms[i + 1] : null;
