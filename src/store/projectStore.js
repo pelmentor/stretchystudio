@@ -1469,8 +1469,13 @@ export const useProjectStore = create((set, get) => {
       if (Array.isArray(proj.nodes)) {
         if (harvest?.neckWarpSpec) {
           if (mode === 'merge') {
+            // v43 — the NeckWarp may already be a lattice cage OBJECT (a
+            // migrated project); recognise both shapes so a user-authored
+            // entry isn't silently overwritten on every merge re-rig.
             const prior = proj.nodes.find(
-              (n) => n && n.id === harvest.neckWarpSpec.id && n.type === 'deformer'
+              (n) => n && n.id === harvest.neckWarpSpec.id
+                && (n.type === 'deformer'
+                  || (n.type === 'object' && n.objectKind === 'lattice'))
             );
             if (!prior || prior._userAuthored !== true) {
               peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
@@ -1481,12 +1486,9 @@ export const useProjectStore = create((set, get) => {
         } else if (mode === 'replace') {
           // No NeckWarp this run (faceRig opt-out, or no neck-tagged
           // meshes). Drop any stale entry so children aren't orphaned.
-          for (let i = proj.nodes.length - 1; i >= 0; i--) {
-            const n = proj.nodes[i];
-            if (n?.id === 'NeckWarp' && n.type === 'deformer') {
-              proj.nodes.splice(i, 1);
-            }
-          }
+          // Route through removeDeformerNodesByPredicate so a lattice-object
+          // NeckWarp's cage meshData is cleaned up too (v43).
+          peers.removeDeformerNodesByPredicate(proj.nodes, (n) => n.id === 'NeckWarp');
         }
       }
       // BFA-006 Phase 3 — dual-write rotation deformer nodes from the

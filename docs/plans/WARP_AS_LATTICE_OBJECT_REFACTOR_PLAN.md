@@ -25,8 +25,11 @@ editable blendshapes that params drive?"
 
 ### 1. The modifier sits on the AFFECTED piece, NOT on the lattice
 
-In Blender the **deformed mesh object** owns the modifier; the **lattice
-object** owns only geometry and has no modifier and no target list.
+In Blender the **deformed mesh object** owns the *lattice* modifier; the
+**lattice object** owns only geometry and carries no *lattice* modifier of
+its own and no target list. (Strictly, any Blender object *can* carry a
+modifier stack — the point is the lattice doesn't *need* one for this role:
+it's the cage, not a deformed piece.)
 
 - The Lattice modifier is an entry in the *deformed mesh's* modifier stack
   (`Object.modifiers`, a `ListBase<ModifierData>`). Its struct
@@ -75,6 +78,14 @@ a driver) blends the cage between Basis and the shape.
   of Blender's 1-D `curval` weight (Cubism/SS warps blend over a parameter
   *tuple*, e.g. AngleX×AngleY); Blender has no native N-D keyform grid, so SS
   keeps its own param-binding layer rather than collapsing to a single scalar.
+
+> **One structural difference from Blender (not a bug):** Blender's Basis is
+> itself the *first* KeyBlock (`Key.refkey = key->block.first`), and
+> `Lattice.def` is a transient edit buffer. SS instead stores the Basis as the
+> standalone cage `meshData.vertices` and the keyforms as a separate
+> `keyforms[]` array — i.e. Basis is NOT `keyform[0]`. This matches how SS's
+> eval/export pipeline already treats `baseGrid` + `keyforms` as distinct, and
+> doesn't affect fidelity.
 
 So: **the warp/lattice object owns editable "blendshapes" (the keyforms =
 shape keys; the editable rest cage = Basis), and the bound parameters drive

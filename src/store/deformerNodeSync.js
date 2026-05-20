@@ -195,9 +195,23 @@ export function warpSpecToDeformerNode(stored) {
  */
 export function upsertDeformerNode(nodes, node) {
   if (!Array.isArray(nodes) || !node || !node.id) return;
-  const existing = nodes.findIndex((n) => n && n.id === node.id);
-  if (existing >= 0) {
-    nodes[existing] = node;
+  let idx = nodes.findIndex((n) => n && n.id === node.id);
+  if (idx >= 0) {
+    const prev = nodes[idx];
+    // v43 — replacing a lattice cage OBJECT with a non-lattice node (e.g. a
+    // re-seed writing a legacy `deformer/warp` node at the same id) orphans
+    // the object's cage meshData. Remove the orphaned cage so it doesn't
+    // accumulate as garbage on every re-rig.
+    if (prev && prev.type === 'object' && prev.objectKind === 'lattice'
+        && typeof prev.dataId === 'string'
+        && !(node.type === 'object' && node.dataId === prev.dataId)) {
+      const cageIdx = nodes.findIndex((n) => n && n.id === prev.dataId && n.type === 'meshData');
+      if (cageIdx >= 0) {
+        nodes.splice(cageIdx, 1);
+        idx = nodes.findIndex((n) => n && n.id === node.id); // recompute after splice
+      }
+    }
+    nodes[idx] = node;
   } else {
     nodes.push(node);
   }
@@ -212,11 +226,25 @@ export function upsertDeformerNode(nodes, node) {
  */
 export function removeDeformerNodesByPredicate(nodes, predicate) {
   if (!Array.isArray(nodes)) return;
+  // v43 — a warp may be a legacy `deformer/warp` node OR a lattice cage
+  // OBJECT. Match both, and when a lattice object is dropped also drop its
+  // linked cage meshData (else it leaks as an orphan on re-seed/clear).
+  const droppedCageIds = new Set();
+  for (const n of nodes) {
+    if (n && n.type === 'object' && n.objectKind === 'lattice'
+        && typeof n.dataId === 'string' && predicate(n)) {
+      droppedCageIds.add(n.dataId);
+    }
+  }
   let writeIdx = 0;
   for (let readIdx = 0; readIdx < nodes.length; readIdx++) {
     const n = nodes[readIdx];
-    const drop = n && n.type === 'deformer' && predicate(n);
-    if (!drop) {
+    const isWarpish = n
+      && (n.type === 'deformer'
+        || (n.type === 'object' && n.objectKind === 'lattice'));
+    const dropWarp = isWarpish && predicate(n);
+    const dropCage = n && n.type === 'meshData' && droppedCageIds.has(n.id);
+    if (!dropWarp && !dropCage) {
       if (writeIdx !== readIdx) nodes[writeIdx] = n;
       writeIdx++;
     }
@@ -530,10 +558,11 @@ export function synthesizeModifierStacks(project) {
  *
  * # Contract
  *
- * For every part with a non-empty `modifiers[]`:
- *   - `part.rigParent` = `modifiers[0].deformerId` (the leaf deformer).
+ * For every part with a non-empty `modifiers[]` (the chain ref id is
+ * `modifiers[i].objectId` for v43 lattice modifiers, else `.deformerId`):
+ *   - `part.rigParent` = the leaf modifier's ref id.
  *   - For every consecutive `(modifiers[i], modifiers[i+1])` pair, set
- *     `nodes[modifiers[i].deformerId].parent = modifiers[i+1].deformerId`.
+ *     `nodes[refId(modifiers[i])].parent = refId(modifiers[i+1])`.
  *   - The last modifier's deformer parent is NOT touched — what comes
  *     above the modifier stack (a non-deformer, root, or null) cannot
  *     be derived from the stack alone, so it stays as the project's

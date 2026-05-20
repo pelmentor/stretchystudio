@@ -317,6 +317,7 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
           }
         }
       }
+      const isLatticeObject = n.type === 'object' && n.objectKind === 'lattice';
       orphanFallbacks.push({
         id: n.id,
         deformerKind: synthNode.deformerKind ?? 'unknown',
@@ -324,7 +325,9 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
           ? 'modifier-data-missing'   // in stack but .data empty — stale state
           : referencedAtAll
             ? 'in-stack-with-data'    // shouldn't happen if main pass worked
-            : 'never-in-stack',       // truly orphaned, no part renders it
+            : isLatticeObject
+              ? 'lattice-via-hierarchy' // EXPECTED — body warps reach parts via ancestry, not an explicit modifier (not a stale state)
+              : 'never-in-stack',       // truly orphaned, no part renders it
       });
     }
   }

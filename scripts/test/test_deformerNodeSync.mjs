@@ -516,6 +516,46 @@ function assertEq(actual, expected, name) {
   assertEq(fpNode.keyforms[0].positions, [4, 5, 6], 'round-trip: positions preserved as numbers');
 }
 
+// ── v43 audit-fix: lattice-aware remove/upsert (cage cleanup) ───────
+{
+  // removeDeformerNodesByPredicate must drop a lattice cage OBJECT AND its
+  // linked cage meshData (else the cage leaks as an orphan on re-seed/clear).
+  const nodes = [
+    { id: 'BodyWarpZ', type: 'object', objectKind: 'lattice', dataId: 'BodyWarpZ__cage' },
+    { id: 'BodyWarpZ__cage', type: 'meshData', vertices: [{ x: 0, y: 0 }] },
+    { id: 'FaceRotation', type: 'deformer', deformerKind: 'rotation' },
+    { id: 'keepPart', type: 'part' },
+  ];
+  removeDeformerNodesByPredicate(nodes, (n) => n.id === 'BodyWarpZ');
+  assertEq(nodes.map((n) => n.id), ['FaceRotation', 'keepPart'],
+    'v43: removing a lattice object also removes its cage meshData');
+}
+{
+  // Legacy deformer/warp nodes are still matched (transitional coexistence).
+  const nodes = [
+    { id: 'W', type: 'deformer', deformerKind: 'warp' },
+    { id: 'R', type: 'deformer', deformerKind: 'rotation' },
+  ];
+  removeDeformerNodesByPredicate(nodes, (n) => n.deformerKind === 'rotation');
+  assertEq(nodes.map((n) => n.id), ['W'], 'v43: legacy deformer predicate still works');
+}
+{
+  // upsertDeformerNode replacing a lattice object with a legacy warp node
+  // (a re-seed at the same id) must remove the now-orphaned cage meshData.
+  const nodes = [
+    { id: 'RigWarp_face', type: 'object', objectKind: 'lattice', dataId: 'RigWarp_face__cage' },
+    { id: 'RigWarp_face__cage', type: 'meshData', vertices: [{ x: 1, y: 2 }] },
+  ];
+  upsertDeformerNode(nodes, warpSpecToDeformerNode({
+    id: 'RigWarp_face', name: 'F', parent: { type: 'root', id: null },
+    gridSize: { rows: 5, cols: 5 }, baseGrid: [], bindings: [], keyforms: [],
+  }));
+  const ids = nodes.map((n) => n.id);
+  assert(!ids.includes('RigWarp_face__cage'), 'v43: re-seed over a lattice object removes the orphaned cage');
+  const rw = nodes.find((n) => n.id === 'RigWarp_face');
+  assertEq(rw.type, 'deformer', 'v43: re-seeded node is the fresh deformer/warp node');
+}
+
 // ── Summary ───────────────────────────────────────────────────────
 
 console.log(`deformerNodeSync: ${passed} passed, ${failed} failed`);

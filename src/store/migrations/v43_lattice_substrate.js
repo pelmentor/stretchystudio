@@ -21,7 +21,7 @@
  *          every existing reference — parent links, `targetPartId`,
  *          `part.rigParent`, modifier refs — stays valid).
  *     - a linked cage `{type:'meshData', id:`<id>__cage`, vertices,
- *        gridSize, isLatticecage}` whose `vertices` ARE the rest control
+ *        gridSize, isLatticeCage}` whose `vertices` ARE the rest control
  *        points (`baseGrid` re-shaped to `{x,y}[]`) — the editable cage
  *        (Blender Lattice data-block; the `meshData.vertices` is the
  *        Basis, keyforms are the relative shape-keys).
