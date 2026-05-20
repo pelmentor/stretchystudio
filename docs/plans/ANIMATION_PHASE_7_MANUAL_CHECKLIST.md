@@ -439,15 +439,17 @@ behavior is independently green per §0.
   blocking): when `activeKeyingSetId` is stale, fallback is
   hardcoded to `LocRotScale` (not the user-pref keying mode like
   Blender). Documented in `autoKeyDispatch.js` module header.
-- **Set-active UI**: no UI surface in 7.C–7.E for picking an active
-  keying set from the I-menu (the registry supports it; the dev
-  console can write it; no menu item yet). Tracked as a §7.F+
-  polish slice if user wants it.
-- **Toast description label drift** (audit-fix M-1 sweep #83):
-  the K-key toast description says **"All Parameters"** while the
-  I-menu displays the id label **"AllParams"** for the same
-  built-in. Inconsistency is intentional (the description is
-  user-friendly prose; the menu shows raw ids), but a polish slice
-  could align them either by adding a `displayLabel` field to the
-  registry or by changing the registry label to "All Parameters".
-  Tracked as a §7.G+ polish slice.
+- ~~**Set-active UI**~~ — RESOLVED in Slice 7.I (`dcb7c37`). The
+  I-menu's per-row indicator is now an interactive ●/○ toggle: click
+  the dot to set (or clear) the active keying set without dev-console
+  writes. The menu stays open so you can see the indicator flip and
+  still insert. Manual check: open the I-menu, click a row's ○ → it
+  fills (●) and a toast confirms; the AutoKey "Active Set" mode then
+  keys that set on drag. Click the ● again → clears.
+- ~~**Toast description label drift**~~ — NON-ISSUE on re-inspection
+  (2026-05-20, during §7.I). The premise was stale: `KeyingSetMenu`
+  renders `{set.label ?? set.id}` and the apply toast
+  (`insertKey.js` `execApplyKeyingSet`) uses `set.label ?? set.id` —
+  both surface the human label **"All Parameters"** for the AllParams
+  built-in. The raw id `"AllParams"` is never user-facing, so there is
+  no drift to reconcile. No code change needed.

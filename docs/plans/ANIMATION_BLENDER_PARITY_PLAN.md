@@ -2196,10 +2196,15 @@ surface to audit).
 
 **Known gaps documented (deferred to §7.G+ polish slices):**
 - K-rebind preference (plan §7.E option (b) — needs legacy K-key
-  fan-out extraction).
-- Param-row auto-key bypass (`ParamRow.jsx` ignores
-  `project.autoKeyMode`).
-- Active-set UI (no menu item for picking active keying set yet).
+  fan-out extraction). STILL OPEN.
+- ~~Param-row auto-key bypass~~ — RESOLVED in §7.H (`1f89d01`):
+  faithful UI-button auto-key (only-if-keyed); see §7.H above.
+- ~~Active-set UI~~ — RESOLVED in §7.I (`dcb7c37`): the I-menu's
+  per-row indicator is now an interactive ●/○ toggle dispatching
+  `execSetActiveKeyingSet` (mirrors Blender's
+  `ANIM_OT_keying_set_active_set`, `keyingsets.cc:443-454`; SS
+  deviation = toggle-to-clear vs Blender's separate `type==0` entry).
+  Dual-audit clean (4/4 cites verified byte-for-byte).
 
 #### 7.E — K-key first-use toast ✅ SHIPPED 2026-05-20
 

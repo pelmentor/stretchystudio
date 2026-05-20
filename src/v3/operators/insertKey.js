@@ -213,8 +213,13 @@ export function execSetActiveKeyingSet(setId) {
     toast({ title: 'Active Keying Set', description: `unknown keying set: ${setId}` });
     return;
   }
-  const wasActive = project.activeKeyingSetId === setId;
+  // Decide toggle direction against the DRAFT, not the pre-recipe
+  // snapshot, so the write + the toast both reflect the authoritative
+  // state even if two clicks land in the same tick (Rule №1 -- no
+  // reliance on coincidental sync ordering). Hoist the flag for the toast.
+  let wasActive = false;
   projectStore.updateProject((draft) => {
+    wasActive = draft.activeKeyingSetId === setId;
     setActiveKeyingSet(draft, wasActive ? null : setId);
   });
   toast({
