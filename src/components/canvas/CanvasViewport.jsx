@@ -110,6 +110,7 @@ import { downsampleAlphaMask } from '@/components/canvas/viewport/alphaMask';
 import { retriangulate } from '@/mesh/generate';
 import { createMeshWorkerPool } from '@/mesh/workerPool';
 import { GizmoOverlay } from '@/components/canvas/GizmoOverlay';
+import { Cursor2DOverlay } from '@/components/canvas/Cursor2DOverlay';
 // `saveProject` / `loadProject` are dynamic-imported inside the save
 // and load handlers — keeps jszip out of the boot bundle.
 import { normalizeVariants } from '@/io/variantNormalizer';
@@ -991,6 +992,7 @@ export default function CanvasViewport({
           // static (cache-hit) rig would leave the overlay empty until the
           // next param change.
           if (cache.rigSpec === _rigSpec && cache.paramValues === valuesForEval && cache.frames !== null
+              && cache.poseOverrides === poseOverrides
               && (!_wantLifted || cache.liftedGrids)) {
             frames = cache.frames;
             if (_wantLifted && cache.liftedGrids) {
@@ -1012,10 +1014,15 @@ export default function CanvasViewport({
               // reprojection (selectRigSpec `needsReproject`) is honoured —
               // raw `mesh.runtime` keyforms stay in the baked leaf frame.
               rigSpec: _rigSpec,
+              // Animated bone/part pose (action fcurves + draftPose) →
+              // TRANSFORM_COMPOSE seeds skinning from these, so the mesh
+              // follows the skeleton during playback AND live posing.
+              poseOverrides,
             });
             lastEvalCacheRef.current = {
               rigSpec: _rigSpec, paramValues: valuesForEval, frames,
               liftedGrids: evalOut?.liftedGrids ?? null,
+              poseOverrides,
             };
             // Publish to rigEvalStore so WarpDeformerOverlay sees the
             // current-frame lattice positions for every warp (including
@@ -2636,6 +2643,16 @@ export default function CanvasViewport({
               imageHeight: selNode.imageHeight,
               affected,
               iwm,
+              // Undo batching (mirrors the sculpt-stroke pattern): the
+              // FIRST project-writing tick snapshots the pre-stroke state,
+              // every subsequent tick passes skipHistory. Without this each
+              // per-tick updateProject pushed its own snapshot, flooding the
+              // 50-entry history with sub-pixel micro-steps — so Ctrl+Z
+              // reverted one imperceptible tick AND evicted all real undo
+              // states. One stroke now = one undo entry. The draft-pose
+              // branch (animation mode) never writes the project, so it
+              // doesn't consume firstTick.
+              firstTick: true,
             };
             canvas.setPointerCapture(e.pointerId);
             canvas.style.cursor = 'crosshair';
@@ -3053,6 +3070,10 @@ export default function CanvasViewport({
       sceneRef.current?.parts.uploadPositions(partId, newVerts, allUvs);
       isDirtyRef.current = true;
 
+      // First project-writing tick of the stroke snapshots the pre-stroke
+      // state for undo; the rest skip (one stroke = one undo entry).
+      const skipHistory = !dragRef.current.firstTick;
+
       // Edit Mode + active shape pointer = paint deltas (Blender pattern).
       // Folded 2026-05-07: pre-fold this branched on `editMode === 'blendShape'`.
       if (editorRef.current.editMode === 'edit' && editorRef.current.activeBlendShapeId) {
@@ -3070,12 +3091,14 @@ export default function CanvasViewport({
               dy: ny - m.vertices[index].restY,
             };
           }
-        });
+        }, { skipHistory });
+        dragRef.current.firstTick = false;
         return;
       }
 
       // In animation mode + deform: store to draftPose — don't bake into base mesh.
-      // The user will press K to commit as a keyframe.
+      // The user will press K to commit as a keyframe. No project write, so
+      // this never consumes the stroke's firstTick undo snapshot.
       if (getEditorMode() === 'animation' && meshSubMode === 'deform') {
         animRef.current.setDraftPose(partId, { mesh_verts: newVerts.map(v => ({ x: v.x, y: v.y })) });
         return;
@@ -3096,7 +3119,8 @@ export default function CanvasViewport({
             m.uvs[index * 2 + 1] = ny / (imageHeight ?? 1);
           }
         }
-      });
+      }, { skipHistory });
+      dragRef.current.firstTick = false;
       return;
     }
 
@@ -3391,6 +3415,9 @@ export default function CanvasViewport({
       {/* Transform gizmo SVG overlay — hidden when skeleton is showing AND exists. */}
       {/* GAP-010 — never on the Live Preview surface; preview is read-only. */}
       {!previewMode && (!editorState.viewLayers.skeleton || !project.nodes.some(n => isBoneGroup(n))) && <GizmoOverlay />}
+
+      {/* Blender-style 2D scene cursor (Shift+S target / optional pivot). */}
+      {!previewMode && <Cursor2DOverlay />}
 
       {/* Armature skeleton overlay (staging mode, when rig exists). */}
       {/* GAP-010 — never on the Live Preview surface.

@@ -11,14 +11,14 @@
  *
  * The store is intentionally narrower than its node-level sister:
  *
- *   - Translate ONLY in v1. Blender's E + R/S mid-modal switch (rotate
- *     / scale of the freshly-extruded ring) is Phase 6+ — needs an
- *     anchor / pivot model that only makes sense once a real pivot
- *     mode (median / individual / cursor) lands per-edit-mode.
- *     Audit D-3: Blender's `TRANSFORM_OT_translate` accepts
- *     `TFM_MODAL_ROTATE` / `TFM_MODAL_RESIZE` mid-modal switches (see
- *     `editors/transform/transform.cc:693-742` for the modal-key
- *     dispatcher). Documented as deferred deviation.
+ *   - `translate` / `rotate` / `scale` standalone modals (G / R / S in
+ *     Edit Mode) all supported — kind drives the overlay's per-vertex
+ *     transform around `pivotCanvas` (the selection median). What's
+ *     still NOT supported is Blender's MID-MODAL switch (pressing R or S
+ *     WHILE a translate/extrude modal is live to convert it in place);
+ *     that needs the modal-key dispatcher in
+ *     `editors/transform/transform.cc:693-742` (`TFM_MODAL_ROTATE` /
+ *     `TFM_MODAL_RESIZE`) and is a deferred deviation (audit D-3).
  *   - One part at a time. Multi-part vertex selections aren't a thing
  *     today (editorStore.selectedVertexIndices is per-part); when they
  *     become one, this store generalises to `Map<partId, Set<vertIdx>>`.
@@ -50,7 +50,7 @@ import { create } from 'zustand';
 
 /**
  * @typedef {Object} ModalVertexTransformState
- * @property {('translate')|null} kind
+ * @property {('translate'|'rotate'|'scale')|null} kind
  * @property {string|null} partId
  * @property {('x'|'y'|null)} axis
  * @property {{x:number, y:number}|null} startMouse
@@ -60,7 +60,7 @@ import { create } from 'zustand';
  * @property {boolean} committed
  * @property {boolean} rollbackOnCancel
  * @property {string} typedBuffer
- * @property {(args: {kind:'translate', partId:string, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<number, {x:number,y:number,restX:number,restY:number}>, vertIndices:Set<number>, rollbackOnCancel?:boolean}) => void} begin
+ * @property {(args: {kind:'translate'|'rotate'|'scale', partId:string, startMouse:{x:number,y:number}, pivotCanvas:{x:number,y:number}, original:Map<number, {x:number,y:number,restX:number,restY:number}>, vertIndices:Set<number>, rollbackOnCancel?:boolean}) => void} begin
  * @property {(axis: ('x'|'y'|null)) => void} setAxis
  * @property {(ch: string) => void} appendTyped
  * @property {() => void} popTyped

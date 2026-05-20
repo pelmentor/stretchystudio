@@ -69,6 +69,11 @@ export const DEFAULT_KEYMAP = {
   'Ctrl+KeyE': 'file.export',
   'Meta+KeyE': 'file.export',
 
+  // Timeline play / pause. Bare Space — Blender's `screen.animation_play`
+  // default in the "Blender" keymap preset. Toggles transport from any
+  // editor (the dispatcher skips editable targets).
+  'Space': 'anim.play',
+
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 

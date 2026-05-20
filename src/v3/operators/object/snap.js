@@ -53,10 +53,106 @@
 
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import { useEditorStore } from '../../../store/editorStore.js';
 import { usePreferencesStore } from '../../../store/preferencesStore.js';
 import { computeWorldMatrices, mat3Inverse } from '../../../renderer/transforms.js';
-import { isBoneGroup } from '../../../store/objectDataAccess.js';
+import { isBoneGroup, getMesh } from '../../../store/objectDataAccess.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
+
+/**
+ * Active Edit-Mode vertex selection, or null when not in Edit Mode / no
+ * verts selected. The snap operators branch on this so `Shift+S` works on
+ * VERTICES in Edit Mode (Blender's `view3d_snap.cc` snap ops run on the
+ * edit-mesh selection), not just object origins — fixes "Cursor to
+ * Selected" being permanently greyed-out in Edit Mode.
+ *
+ * @returns {{partId:string, indices:number[], mesh:any, node:any}|null}
+ */
+export function editVertexSelection() {
+  const editor = useEditorStore.getState();
+  if (editor.editMode !== 'edit') return null;
+  const partId = editor.selection?.[0];
+  if (typeof partId !== 'string' || partId.length === 0) return null;
+  const set = editor.selectedVertexIndices?.get(partId);
+  if (!set || set.size === 0) return null;
+  const project = useProjectStore.getState().project;
+  const node = project?.nodes?.find((n) => n?.id === partId);
+  const mesh = node ? getMesh(node, project) : null;
+  if (!mesh || !Array.isArray(mesh.vertices)) return null;
+  return { partId, indices: [...set], mesh, node };
+}
+
+/** Arithmetic mean of an Edit-Mode vertex selection, in canvas (world)
+ *  coords — local verts mapped through the part's world matrix.
+ *  @param {{partId:string, indices:number[], mesh:any}} sel
+ *  @param {any} project
+ *  @returns {{x:number,y:number}|null} */
+export function meanOfEditVertsWorld(sel, project) {
+  const wm = computeWorldMatrices(project.nodes).get(sel.partId);
+  let sx = 0, sy = 0, n = 0;
+  for (const idx of sel.indices) {
+    const v = sel.mesh.vertices[idx];
+    if (!v) continue;
+    const wx = wm ? wm[0] * v.x + wm[3] * v.y + wm[6] : v.x;
+    const wy = wm ? wm[1] * v.x + wm[4] * v.y + wm[7] : v.y;
+    sx += wx; sy += wy; n += 1;
+  }
+  return n === 0 ? null : { x: sx / n, y: sy / n };
+}
+
+/**
+ * Move an Edit-Mode vertex selection to a world point. `collapse` true
+ * places EVERY selected vert at the point (Blender Selection→Cursor with
+ * use_offset=false); false shifts the selection so its median lands on
+ * the point, preserving the shape (use_offset=true). Writes pose AND rest
+ * (edit-mode verts) and re-uploads the mesh. One undo entry.
+ *
+ * @param {{partId:string, indices:number[], mesh:any}} sel
+ * @param {number} targetWX
+ * @param {number} targetWY
+ * @param {boolean} collapse
+ */
+export function snapEditVertsToWorldPoint(sel, targetWX, targetWY, collapse) {
+  const project = useProjectStore.getState().project;
+  const worldMatrices = computeWorldMatrices(project.nodes);
+  const wm = worldMatrices.get(sel.partId);
+  const inv = wm ? mat3Inverse(wm) : null;
+  // World point → part-local.
+  const toLocal = (wx, wy) => inv
+    ? { x: inv[0] * wx + inv[3] * wy + inv[6], y: inv[1] * wx + inv[4] * wy + inv[7] }
+    : { x: wx, y: wy };
+
+  let offLx = 0, offLy = 0;
+  if (!collapse) {
+    const median = meanOfEditVertsWorld(sel, project);
+    if (!median) return;
+    const tgtL = toLocal(targetWX, targetWY);
+    const medL = toLocal(median.x, median.y);
+    offLx = tgtL.x - medL.x;
+    offLy = tgtL.y - medL.y;
+    if (offLx === 0 && offLy === 0) return;
+  }
+  const target = toLocal(targetWX, targetWY);
+
+  beginBatch(project);
+  try {
+    useProjectStore.getState().updateProject((proj) => {
+      const node = proj.nodes.find((n) => n?.id === sel.partId);
+      const mesh = node ? getMesh(node, proj) : null;
+      if (!mesh) return;
+      for (const idx of sel.indices) {
+        const v = mesh.vertices[idx];
+        if (!v) continue;
+        const nx = collapse ? target.x : v.x + offLx;
+        const ny = collapse ? target.y : v.y + offLy;
+        v.x = nx; v.y = ny;
+        v.restX = nx; v.restY = ny;
+      }
+    });
+  } finally {
+    endBatch();
+  }
+}
 
 /**
  * Read the current 3D-cursor (canvas-space). Falls back to canvas
@@ -297,16 +393,21 @@ export function snapSelectionToWorldPointKeepOffset(targetWX, targetWY) {
 
 // ── Selection to ___ ─────────────────────────────────────────────────
 
-/** "Selection to Cursor" — every selected node's origin lands on the cursor. */
+/** "Selection to Cursor" — every selected node's origin (or, in Edit
+ *  Mode, every selected vertex) lands on the cursor. */
 export function snapSelectionToCursor() {
   const cur = readCursor(useProjectStore.getState().project);
+  const editSel = editVertexSelection();
+  if (editSel) { snapEditVertsToWorldPoint(editSel, cur.x, cur.y, true); return; }
   snapSelectionToWorldPoint(cur.x, cur.y);
 }
 
-/** "Selection to Cursor (Keep Offset)" — selection median moves to the cursor;
- *  per-node offsets preserved. */
+/** "Selection to Cursor (Keep Offset)" — selection median moves to the
+ *  cursor; per-node (or per-vertex, in Edit Mode) offsets preserved. */
 export function snapSelectionToCursorKeepOffset() {
   const cur = readCursor(useProjectStore.getState().project);
+  const editSel = editVertexSelection();
+  if (editSel) { snapEditVertsToWorldPoint(editSel, cur.x, cur.y, false); return; }
   snapSelectionToWorldPointKeepOffset(cur.x, cur.y);
 }
 
@@ -375,10 +476,18 @@ export function snapCursorToWorldOrigin() {
   useProjectStore.getState().setProjectCursor(0, 0);
 }
 
-/** "Cursor to Selected" — cursor lands on the median of selected origins.
- *  Matches Blender's `VIEW3D_OT_snap_cursor_to_selected`
- *  (`view3d_view.cc` — uses object median). */
+/** "Cursor to Selected" — cursor lands on the median of selected origins
+ *  (or, in Edit Mode, the median of selected vertices). Matches Blender's
+ *  `VIEW3D_OT_snap_cursor_to_selected` (object median; edit-mesh median in
+ *  Edit Mode). */
 export function snapCursorToSelected() {
+  const editSel = editVertexSelection();
+  if (editSel) {
+    const project = useProjectStore.getState().project;
+    const median = meanOfEditVertsWorld(editSel, project);
+    if (median) useProjectStore.getState().setProjectCursor(median.x, median.y);
+    return;
+  }
   const { nodeIds } = eligibleSelection();
   if (nodeIds.length === 0) return;
   const project = useProjectStore.getState().project;

@@ -31,6 +31,7 @@ import { useHelpModalStore } from '../../store/helpModalStore.js';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useCmo3InspectStore } from '../../store/cmo3InspectStore.js';
 import { useCaptureStore } from '../../store/captureStore.js';
+import { useAnimationStore } from '../../store/animationStore.js';
 import { useNewProjectDialogStore } from '../../store/newProjectDialogStore.js';
 import { useBoxSelectStore } from '../../store/boxSelectStore.js';
 import { useCircleSelectStore } from '../../store/circleSelectStore.js';
@@ -212,6 +213,33 @@ function registerBuiltins() {
           Object.assign(proj, snapshot);
         }, { skipHistory: true });
       });
+    },
+  });
+
+  // Timeline play / pause. Mirrors Blender's `screen.animation_play`
+  // (the default Spacebar action in the "Blender" keymap preset). Bare
+  // Space toggles playback from anywhere — the dispatcher already skips
+  // editable targets, so it won't fire while typing in a field. Selects
+  // the first action as active when one exists but none is active yet, so
+  // the playhead has something to drive; never auto-creates an action
+  // (that's the transport "+"/ensureAnimation flow), so Space stays a
+  // pure transport toggle.
+  registerOperator({
+    id: 'anim.play',
+    label: 'Play Animation',
+    exec: () => {
+      const a = useAnimationStore.getState();
+      if (a.isPlaying) {
+        a.pause();
+        return;
+      }
+      if (!a.activeActionId) {
+        const actions = useProjectStore.getState().project?.actions;
+        if (Array.isArray(actions) && actions.length > 0 && actions[0]?.id) {
+          a.setActiveActionId(actions[0].id);
+        }
+      }
+      a.play();
     },
   });
 
@@ -683,13 +711,72 @@ function registerBuiltins() {
     });
   }
 
+  /**
+   * Edit-Mode vertex G/R/S. In Edit Mode the transform operators act on
+   * the SELECTED VERTICES of the active part (Blender's editmesh G/R/S),
+   * not the part's object transform — so they hand off to the
+   * vertex-level `ModalVertexTransformOverlay` instead of
+   * `beginModalTransform`. Rotate/scale pivot is the median of the
+   * selected verts (Blender's default "Median Point" pivot).
+   *
+   * Returns true when the gesture was consumed (i.e. we ARE in Edit
+   * Mode) — even on a no-op (no verts selected) — so the caller does NOT
+   * fall through to the object-mode transform, which would wrongly move
+   * the whole part. Returns false only outside Edit Mode.
+   *
+   * @param {'translate'|'rotate'|'scale'} kind
+   * @returns {boolean}
+   */
+  function beginVertexModalTransform(kind) {
+    const editor = useEditorStore.getState();
+    if (editor.editMode !== 'edit') return false;
+    const partId = editor.selection?.[0];
+    if (typeof partId !== 'string' || partId.length === 0) return true;
+    const selSet = editor.selectedVertexIndices?.get(partId);
+    if (!selSet || selSet.size === 0) {
+      toast({ description: 'No vertices selected', duration: 1500 });
+      return true;
+    }
+    const project = useProjectStore.getState().project;
+    const node = project?.nodes?.find((n) => n?.id === partId);
+    const mesh = node ? getMesh(node, project) : null;
+    if (!mesh || !Array.isArray(mesh.vertices)) return true;
+
+    /** @type {Map<number, {x:number,y:number,restX:number,restY:number}>} */
+    const original = new Map();
+    let cx = 0, cy = 0, n = 0;
+    for (const idx of selSet) {
+      const v = mesh.vertices[idx];
+      if (!v) continue;
+      original.set(idx, { x: v.x, y: v.y, restX: v.restX ?? v.x, restY: v.restY ?? v.y });
+      cx += v.x; cy += v.y; n += 1;
+    }
+    if (n === 0) return true;
+
+    // One undo entry for the whole modal session; the overlay closes the
+    // batch on commit and `discardBatch`-rolls-back on Esc (clean cancel,
+    // no redo/undo pollution — same path the extrude→translate flow uses).
+    beginBatch(project);
+    useModalVertexTransformStore.getState().begin({
+      kind,
+      partId,
+      startMouse: lastMousePos(),
+      pivotCanvas: { x: cx / n, y: cy / n },
+      original,
+      vertIndices: new Set(selSet),
+      rollbackOnCancel: true,
+    });
+    return true;
+  }
+
   registerOperator({
     id: 'transform.translate',
     label: 'Grab / Move (G)',
-    available: () => useSelectionStore.getState().items.some(
-      (it) => it.type === 'part' || it.type === 'group',
-    ),
-    exec: () => beginModalTransform('translate'),
+    available: () => useEditorStore.getState().editMode === 'edit'
+      || useSelectionStore.getState().items.some(
+        (it) => it.type === 'part' || it.type === 'group',
+      ),
+    exec: () => { if (!beginVertexModalTransform('translate')) beginModalTransform('translate'); },
   });
 
   // Edit mode toggle. Tab — Blender's universal "enter / exit edit
@@ -798,18 +885,20 @@ function registerBuiltins() {
   registerOperator({
     id: 'transform.rotate',
     label: 'Rotate (R)',
-    available: () => useSelectionStore.getState().items.some(
-      (it) => it.type === 'part' || it.type === 'group',
-    ),
-    exec: () => beginModalTransform('rotate'),
+    available: () => useEditorStore.getState().editMode === 'edit'
+      || useSelectionStore.getState().items.some(
+        (it) => it.type === 'part' || it.type === 'group',
+      ),
+    exec: () => { if (!beginVertexModalTransform('rotate')) beginModalTransform('rotate'); },
   });
   registerOperator({
     id: 'transform.scale',
     label: 'Scale (S)',
-    available: () => useSelectionStore.getState().items.some(
-      (it) => it.type === 'part' || it.type === 'group',
-    ),
-    exec: () => beginModalTransform('scale'),
+    available: () => useEditorStore.getState().editMode === 'edit'
+      || useSelectionStore.getState().items.some(
+        (it) => it.type === 'part' || it.type === 'group',
+      ),
+    exec: () => { if (!beginVertexModalTransform('scale')) beginModalTransform('scale'); },
   });
   // Toolset Phase 1.A — `B` chord opens the modal box-select overlay.
   // The overlay (`BoxSelectOverlay`) owns mouse + key handling until
@@ -1603,13 +1692,15 @@ function registerBuiltins() {
   registerOperator({
     id: 'object.snap.selectionToCursor',
     label: 'Selection to Cursor',
-    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0
+      || objectSnap.editVertexSelection() !== null,
     exec: () => objectSnap.snapSelectionToCursor(),
   });
   registerOperator({
     id: 'object.snap.selectionToCursorKeepOffset',
     label: 'Selection to Cursor (Keep Offset)',
-    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0
+      || objectSnap.editVertexSelection() !== null,
     exec: () => objectSnap.snapSelectionToCursorKeepOffset(),
   });
   registerOperator({
@@ -1641,7 +1732,8 @@ function registerBuiltins() {
   registerOperator({
     id: 'object.snap.cursorToSelected',
     label: 'Cursor to Selected',
-    available: () => objectSnap.eligibleSelection().nodeIds.length > 0,
+    available: () => objectSnap.eligibleSelection().nodeIds.length > 0
+      || objectSnap.editVertexSelection() !== null,
     exec: () => objectSnap.snapCursorToSelected(),
   });
   registerOperator({

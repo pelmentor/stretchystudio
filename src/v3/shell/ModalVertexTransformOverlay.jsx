@@ -142,7 +142,123 @@ export function ModalVertexTransformOverlay() {
       return Number.isFinite(n) ? n : NaN;
     }
 
+    /** Client (screen) px → canvas-local coords via the active viewport
+     *  pan/zoom. Same transform the snap path uses; needed by rotate /
+     *  scale to measure the cursor angle / distance relative to the
+     *  selection pivot (which lives in canvas-local coords). */
+    function clientToCanvasPt(clientX, clientY) {
+      const rect = canvasRectRef.current;
+      const ed = useEditorStore.getState();
+      const view = ed.viewByMode?.viewport ?? { zoom: 1, panX: 0, panY: 0 };
+      const zoom = view.zoom || 1;
+      const x = rect ? (clientX - rect.left) / zoom - view.panX / zoom : clientX / zoom;
+      const y = rect ? (clientY - rect.top)  / zoom - view.panY / zoom : clientY / zoom;
+      return { x, y };
+    }
+
+    /**
+     * Rotate / scale the selected verts around the selection pivot
+     * (Blender's Median Point). Mouse angle drives rotation; cursor
+     * distance ratio drives scale. Typed input = degrees (rotate) or
+     * factor (scale). Shift = coarse precision (5° / 0.1 steps). X/Y =
+     * per-axis scale constraint (no effect on rotate).
+     *
+     * NOTE: like the translate path, this assumes the part's object
+     * transform is ≈ identity (SS edit-mode parts are), so canvas-local
+     * pivot math applies directly to mesh-local vertex coords. A part
+     * with a non-identity transform would need the pivot + cursor mapped
+     * through its inverse world matrix first.
+     */
+    function applyRotateScale(kind, currentX, currentY, shift) {
+      // Guard against queued mousemoves after commit/cancel (G-7 sibling).
+      if (useModalVertexTransformStore.getState().kind === null) return;
+      const pivot = useModalVertexTransformStore.getState().pivotCanvas;
+      if (!pivot) return;
+      const curAxis = useModalVertexTransformStore.getState().axis;
+      const start = clientToCanvasPt(startMouse.x, startMouse.y);
+      const cur = clientToCanvasPt(currentX, currentY);
+
+      const tb = parseTyped(useModalVertexTransformStore.getState().typedBuffer);
+      const useTyped = Number.isFinite(tb);
+
+      let cos = 1, sin = 0, sx = 1, sy = 1;
+      if (kind === 'rotate') {
+        let angle;
+        if (useTyped) {
+          angle = (tb * Math.PI) / 180;
+        } else {
+          const a0 = Math.atan2(start.y - pivot.y, start.x - pivot.x);
+          const a1 = Math.atan2(cur.y - pivot.y, cur.x - pivot.x);
+          angle = a1 - a0;
+          if (shift) { const step = (5 * Math.PI) / 180; angle = Math.round(angle / step) * step; }
+        }
+        cos = Math.cos(angle);
+        sin = Math.sin(angle);
+      } else {
+        let factor;
+        if (useTyped) {
+          factor = tb;
+        } else {
+          const d0 = Math.hypot(start.x - pivot.x, start.y - pivot.y) || 1e-6;
+          const d1 = Math.hypot(cur.x - pivot.x, cur.y - pivot.y);
+          factor = d1 / d0;
+          if (shift) factor = Math.round(factor * 10) / 10;
+        }
+        sx = curAxis === 'y' ? 1 : factor;
+        sy = curAxis === 'x' ? 1 : factor;
+      }
+
+      const updateProject = useProjectStore.getState().updateProject;
+      /** @type {any} */ let postMeshVerts = null;
+      updateProject((proj) => {
+        const node = proj.nodes.find((n) => n.id === partId);
+        if (!node) return;
+        const mesh = getMesh(node, proj);
+        if (!mesh) return;
+        for (const idx of vertIndices) {
+          const orig = original.get(idx);
+          if (!orig) continue;
+          if (idx < 0 || idx >= mesh.vertices.length) continue;
+          const v = mesh.vertices[idx];
+          // Pose
+          const px = orig.x - pivot.x;
+          const py = orig.y - pivot.y;
+          // Rest (edit-mode verts: rest ≈ pose, transformed identically
+          // so chainEval / export see the same edit — mirrors the
+          // translate path's pose+rest dual-write, audit G-1).
+          const rpx = (orig.restX ?? orig.x) - pivot.x;
+          const rpy = (orig.restY ?? orig.y) - pivot.y;
+          if (kind === 'rotate') {
+            v.x = pivot.x + px * cos - py * sin;
+            v.y = pivot.y + px * sin + py * cos;
+            v.restX = pivot.x + rpx * cos - rpy * sin;
+            v.restY = pivot.y + rpx * sin + rpy * cos;
+          } else {
+            v.x = pivot.x + px * sx;
+            v.y = pivot.y + py * sy;
+            v.restX = pivot.x + rpx * sx;
+            v.restY = pivot.y + rpy * sy;
+          }
+        }
+        postMeshVerts = mesh.vertices;
+      }, { skipHistory: true });
+
+      const scene = getSceneRef();
+      if (scene && scene.parts && postMeshVerts) {
+        const uvsArr = uvsArrRef.current ?? new Float32Array(0);
+        scene.parts.uploadPositions(partId, postMeshVerts, uvsArr);
+        if (typeof scene._markDirty === 'function') scene._markDirty();
+      }
+    }
+
     function applyDelta(currentX, currentY, shift, ctrl) {
+      // Rotate / scale take a pivot-relative path (mouse angle / distance
+      // ratio), distinct from translate's mouse-delta path.
+      const _kind = useModalVertexTransformStore.getState().kind;
+      if (_kind === 'rotate' || _kind === 'scale') {
+        applyRotateScale(_kind, currentX, currentY, shift);
+        return;
+      }
       // Audit fix G-6 — read axis from the store rather than closing
       // over the prop. Pre-fix the prop was a useEffect dep, so every
       // axis-toggle press re-mounted the listeners + rebuilt the snap
@@ -523,11 +639,18 @@ export function ModalVertexTransformOverlay() {
         {axis ? <span className="text-amber-500">axis: {axis.toUpperCase()}</span> : null}
         {showTyped ? (
           <span className="text-foreground">
-            {typedBuffer}<span className="text-muted-foreground/70">px</span>
+            {typedBuffer}
+            <span className="text-muted-foreground/70">
+              {kind === 'rotate' ? '°' : kind === 'scale' ? '×' : 'px'}
+            </span>
           </span>
         ) : null}
         <span className="text-muted-foreground">
-          Type a value · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = snap
+          {kind === 'rotate'
+            ? 'Type degrees · Click / Enter = confirm · Esc = cancel · Shift = 5° steps'
+            : kind === 'scale'
+              ? 'Type factor · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = 0.1 steps'
+              : 'Type a value · Click / Enter = confirm · Esc = cancel · X/Y = axis · Shift = snap'}
         </span>
       </div>
     </>
