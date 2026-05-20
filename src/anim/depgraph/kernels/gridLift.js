@@ -39,6 +39,11 @@
 
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../../store/warpLatticeAccess.js';
 import { OperationCode, NodeType } from '../types.js';
 
 /**
@@ -51,7 +56,7 @@ export function kernelGridLiftToParent(op, ctx) {
   if (!idNode) return null;
   const deformerId = idNode.idRef;
   const def = ctx.project?.nodes?.find((n) => n?.id === deformerId);
-  if (!def || def.type !== 'deformer' || def.deformerKind !== 'warp') return null;
+  if (!isWarpLatticeNode(def)) return null;
 
   // Read this warp's per-frame keyform state (the un-lifted grid).
   const keyformOp = op.owner.findOperation(OperationCode.KEYFORM_EVAL);
@@ -69,7 +74,7 @@ export function kernelGridLiftToParent(op, ctx) {
   }
   const parentId = def.parent;
   const parentNode = ctx.project?.nodes?.find((n) => n?.id === parentId);
-  if (!parentNode || parentNode.type !== 'deformer') {
+  if (!isChainDeformerNode(parentNode)) {
     // Parent is a part/group — treat as canvas-px passthrough.
     return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
   }
@@ -82,9 +87,9 @@ export function kernelGridLiftToParent(op, ctx) {
   const tmp = [0, 0];
   while (curId && safety-- > 0) {
     const cur = ctx.project?.nodes?.find((n) => n?.id === curId);
-    if (!cur || cur.type !== 'deformer') break;
+    if (!isChainDeformerNode(cur)) break;
 
-    if (cur.deformerKind === 'warp') {
+    if (isWarpLatticeNode(cur)) {
       // Phase 3 — apply parent's lifted-grid bilinear, BREAK.
       const parentLiftOp = findOpForDeformer(ctx, curId, OperationCode.GRID_LIFT_TO_PARENT);
       if (!parentLiftOp) break;
@@ -105,7 +110,7 @@ export function kernelGridLiftToParent(op, ctx) {
       break;
     }
 
-    if (cur.deformerKind === 'rotation') {
+    if (isRotationDeformerNode(cur)) {
       const matrixOp = findOpForDeformer(ctx, curId, OperationCode.MATRIX_BUILD);
       if (!matrixOp) break;
       const matrixState = ctx.outputs.get(matrixOp.name);

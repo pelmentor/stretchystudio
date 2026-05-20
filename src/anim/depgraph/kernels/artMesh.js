@@ -60,6 +60,11 @@ import { cellSelect } from '../../../io/live2d/runtime/evaluator/cellSelect.js';
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
 import { applyBonePostChainSkin } from './bonePostChain.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../../store/warpLatticeAccess.js';
 import { OperationCode, NodeType } from '../types.js';
 
 /**
@@ -281,10 +286,10 @@ function walkDeformerParentChain(startId, ctx, bufA, len, tmp) {
   const nodes = ctx.project?.nodes ?? [];
   while (curId && safety-- > 0) {
     const cur = nodes.find((n) => n?.id === curId);
-    if (!cur || cur.type !== 'deformer') break;
+    if (!isChainDeformerNode(cur)) break;
     if (bufB === null) bufB = new Float32Array(len);
 
-    if (cur.deformerKind === 'warp') {
+    if (isWarpLatticeNode(cur)) {
       const liftKey = `${curId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
       const lift = ctx.outputs.get(liftKey);
       if (lift?.lifted) {
@@ -305,7 +310,7 @@ function walkDeformerParentChain(startId, ctx, bufA, len, tmp) {
       continue;
     }
 
-    if (cur.deformerKind === 'rotation') {
+    if (isRotationDeformerNode(cur)) {
       const matKey = `${curId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
       const matState = ctx.outputs.get(matKey);
       if (matState?.mat) {

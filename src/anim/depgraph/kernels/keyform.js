@@ -32,6 +32,11 @@
  */
 
 import { cellSelect } from '../../../io/live2d/runtime/evaluator/cellSelect.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../../store/warpLatticeAccess.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -44,7 +49,7 @@ export function kernelKeyformEval(op, ctx) {
   const deformerId = idNode.idRef;
   const project = ctx.project;
   const def = project?.nodes?.find((n) => n?.id === deformerId);
-  if (!def || def.type !== 'deformer') return null;
+  if (!isChainDeformerNode(def)) return null;
 
   // Resolve binding-input param values from ctx.paramOverrides (which
   // PARAM_EVAL kernels populated upstream). For the test/no-override
@@ -63,10 +68,10 @@ export function kernelKeyformEval(op, ctx) {
   }
 
   const cell = cellSelect(def.bindings ?? [], paramValues);
-  if (def.deformerKind === 'warp') {
+  if (isWarpLatticeNode(def)) {
     return interpolateWarpState(def, cell);
   }
-  if (def.deformerKind === 'rotation') {
+  if (isRotationDeformerNode(def)) {
     return interpolateRotationState(def, cell);
   }
   return null;

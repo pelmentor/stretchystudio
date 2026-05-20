@@ -39,6 +39,11 @@ import {
   RelationFlag,
 } from './types.js';
 import { decodeFCurveTarget } from '../animationFCurve.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../store/warpLatticeAccess.js';
 
 /** Synthetic IDNode ids for the depgraph's bookkeeping IDs. */
 export const TIME_ID_REF = '__time__';
@@ -97,11 +102,11 @@ export function buildNodes(graph, project, opts) {
   // IDNode with KEYFORM_EVAL + (rotations also) MATRIX_BUILD,
   // GRID_LIFT_TO_PARENT, ROTATION_SETUP_PROBE.
   for (const node of project.nodes ?? []) {
-    if (!node || node.type !== 'deformer') continue;
+    if (!isChainDeformerNode(node)) continue;
     const idNode = graph.addIdNode(node.id, 'deformer');
     const geom = idNode.addComponent(NodeType.GEOMETRY);
     geom.addOperation(OperationCode.KEYFORM_EVAL);
-    if (node.deformerKind === 'rotation') {
+    if (isRotationDeformerNode(node)) {
       geom.addOperation(OperationCode.MATRIX_BUILD);
       geom.addOperation(OperationCode.ROTATION_SETUP_PROBE);
     } else {
@@ -350,7 +355,7 @@ function buildDriverRelations(graph, project, opts) {
 function buildDeformerChainRelations(graph, project, opts) {
   const paramComp = graph.findIdNode(PARAM_ID_REF, 'params')?.findComponent(NodeType.PARAMETERS);
   for (const node of project.nodes ?? []) {
-    if (!node || node.type !== 'deformer') continue;
+    if (!isChainDeformerNode(node)) continue;
     const defId = graph.findIdNode(node.id, 'deformer');
     if (!defId) continue;
     const geom = defId.findComponent(NodeType.GEOMETRY);
@@ -368,7 +373,7 @@ function buildDeformerChainRelations(graph, project, opts) {
     }
 
     // Per-deformer geometry op chaining.
-    if (node.deformerKind === 'rotation') {
+    if (isRotationDeformerNode(node)) {
       const matrixOp = geom.findOperation(OperationCode.MATRIX_BUILD);
       const setupOp = geom.findOperation(OperationCode.ROTATION_SETUP_PROBE);
       if (matrixOp) {
@@ -415,18 +420,18 @@ function buildDeformerChainRelations(graph, project, opts) {
         let safety = 32;
         while (cursorId && safety-- > 0) {
           const ancestor = project.nodes?.find((n) => n?.id === cursorId);
-          if (!ancestor || ancestor.type !== 'deformer') break;
+          if (!isChainDeformerNode(ancestor)) break;
           const ancestorIdNode = graph.findIdNode(cursorId, 'deformer');
           const ancestorGeom = ancestorIdNode?.findComponent(NodeType.GEOMETRY);
           if (!ancestorGeom) break;
-          if (ancestor.deformerKind === 'warp') {
+          if (isWarpLatticeNode(ancestor)) {
             const ancestorLift = ancestorGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
             if (ancestorLift) {
               graph.addRelation(ancestorLift, liftOp, 'parent lift -> child lift');
             }
             break; // warp ancestor's lifted grid collapses the chain
           }
-          if (ancestor.deformerKind === 'rotation') {
+          if (isRotationDeformerNode(ancestor)) {
             const ancestorMatrix = ancestorGeom.findOperation(OperationCode.MATRIX_BUILD);
             if (ancestorMatrix) {
               graph.addRelation(ancestorMatrix, liftOp, 'rotation matrix -> child lift');
@@ -541,11 +546,11 @@ function buildPartModifierRelations(graph, project, opts) {
         let safety = 32;
         while (cursorId && safety-- > 0) {
           const ancestor = project.nodes?.find((n) => n?.id === cursorId);
-          if (!ancestor || ancestor.type !== 'deformer') break;
+          if (!isChainDeformerNode(ancestor)) break;
           const ancestorIdNode = graph.findIdNode(cursorId, 'deformer');
           const ancestorGeom = ancestorIdNode?.findComponent(NodeType.GEOMETRY);
           if (!ancestorGeom) break;
-          if (ancestor.deformerKind === 'warp') {
+          if (isWarpLatticeNode(ancestor)) {
             const ancestorLift = ancestorGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
             if (ancestorLift) {
               graph.addRelation(ancestorLift, artMeshOp, `implicit parent ${cursorId} lift -> art mesh`);
@@ -556,7 +561,7 @@ function buildPartModifierRelations(graph, project, opts) {
             }
             break; // warp ancestor's lifted grid collapses the chain
           }
-          if (ancestor.deformerKind === 'rotation') {
+          if (isRotationDeformerNode(ancestor)) {
             const ancestorMatrix = ancestorGeom.findOperation(OperationCode.MATRIX_BUILD);
             if (ancestorMatrix) {
               graph.addRelation(ancestorMatrix, artMeshOp, `implicit parent ${cursorId} matrix -> art mesh`);

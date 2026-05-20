@@ -26,6 +26,11 @@
  */
 
 import { coerceNumberArray, coerceFloat64Array } from '../../../lib/numberArrayCoerce.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  getWarpRestGrid,
+} from '../../../store/warpLatticeAccess.js';
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_NODE_IDS = Object.freeze(['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp']);
@@ -44,10 +49,8 @@ export function inflateParentRef(parentId, nodeById) {
   if (!parentId) return { type: 'root', id: null };
   const parent = nodeById.get(parentId);
   if (!parent) return { type: 'root', id: null };
-  if (parent.type === 'deformer') {
-    if (parent.deformerKind === 'rotation') return { type: 'rotation', id: parentId };
-    return { type: 'warp', id: parentId };
-  }
+  if (isRotationDeformerNode(parent)) return { type: 'rotation', id: parentId };
+  if (isWarpLatticeNode(parent)) return { type: 'warp', id: parentId };
   if (parent.type === 'part' || parent.type === 'group') {
     return { type: 'part', id: parentId };
   }
@@ -72,7 +75,7 @@ export function nodeToWarpSpec(node, nodeById) {
       rows: node.gridSize?.rows ?? 5,
       cols: node.gridSize?.cols ?? 5,
     },
-    baseGrid: coerceFloat64Array(node.baseGrid, `warpNode[${node.id}].baseGrid`),
+    baseGrid: coerceFloat64Array(getWarpRestGrid(node), `warpNode[${node.id}].baseGrid`),
     localFrame: node.localFrame ?? 'canvas-px',
     bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,
@@ -170,7 +173,7 @@ export function getFaceParallaxNode(project) {
   const byId = indexProjectNodes(project);
   if (!byId) return null;
   const n = byId.get(FACE_PARALLAX_NODE_ID);
-  return n && n.type === 'deformer' && n.deformerKind === 'warp' ? n : null;
+  return isWarpLatticeNode(n) ? n : null;
 }
 
 /**
@@ -188,7 +191,7 @@ export function getBodyWarpChainNodes(project) {
   const out = [];
   for (const id of BODY_WARP_NODE_IDS) {
     const n = byId.get(id);
-    if (n && n.type === 'deformer' && n.deformerKind === 'warp') out.push(n);
+    if (isWarpLatticeNode(n)) out.push(n);
   }
   return out;
 }
@@ -204,7 +207,7 @@ export function getRigWarpNodes(project) {
   const out = new Map();
   if (!Array.isArray(project?.nodes)) return out;
   for (const n of project.nodes) {
-    if (!n || n.type !== 'deformer' || n.deformerKind !== 'warp') continue;
+    if (!isWarpLatticeNode(n)) continue;
     if (typeof n.targetPartId !== 'string' || n.targetPartId.length === 0) continue;
     out.set(n.targetPartId, n);
   }

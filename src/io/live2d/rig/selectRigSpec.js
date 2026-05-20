@@ -46,6 +46,11 @@
 import { resolvePhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../../store/warpLatticeAccess.js';
 import { synthesizeDeformerNodesForExport } from './synthesizeDeformerNodesForExport.js';
 import {
   MODIFIER_MODE_REALTIME,
@@ -594,8 +599,8 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       : null;
     if (targetParentId) {
       const parentNode = nodeById.get(targetParentId);
-      if (parentNode?.type === 'deformer') {
-        parentRef = parentNode.deformerKind === 'rotation'
+      if (isChainDeformerNode(parentNode)) {
+        parentRef = isRotationDeformerNode(parentNode)
           ? { type: 'rotation', id: targetParentId }
           : { type: 'warp', id: targetParentId };
       }
@@ -754,8 +759,8 @@ function _resolveModifierChain(part, nodeById) {
       : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
     if ((mode & LIVE_RENDER_REQUIRED_MODE) === 0) continue;
     const target = nodeById.get(mod.deformerId);
-    if (!target || target.type !== 'deformer') continue;
-    const type = target.deformerKind === 'rotation' ? 'rotation' : 'warp';
+    if (!isChainDeformerNode(target)) continue;
+    const type = isRotationDeformerNode(target) ? 'rotation' : 'warp';
     chain.push({ type, id: mod.deformerId });
   }
   return chain;
@@ -987,10 +992,8 @@ function _resolveParentRef(parentId, nodeById) {
   if (!parentId) return { type: 'root', id: null };
   const parent = nodeById.get(parentId);
   if (!parent) return { type: 'root', id: null };
-  if (parent.type === 'deformer') {
-    if (parent.deformerKind === 'rotation') return { type: 'rotation', id: parentId };
-    return { type: 'warp', id: parentId };
-  }
+  if (isRotationDeformerNode(parent)) return { type: 'rotation', id: parentId };
+  if (isWarpLatticeNode(parent)) return { type: 'warp', id: parentId };
   if (parent.type === 'part' || parent.type === 'group') {
     return { type: 'part', id: parentId };
   }

@@ -211,6 +211,48 @@ identical bytes by construction. **Gate:** `scripts/test/test_warpExportOracle.m
 Phase 1 will rewrite the oracle's project BUILDER to emit grid objects, but
 the EXPECTED_HASH must not change — a changed hash = wire regression → halt.
 
+## REVISED phasing (2026-05-20 — after Phase-1 substrate map)
+
+The original "Phase 1 substrate behind read-paths, Phase 2 eval repoint"
+split is **impossible under Rule №2.** The substrate map found that eval
+reads warps via **two independent paths**, and warp data is **already
+dual-stored**:
+- **selectRigSpec path** (`_warpNodeToSpec`, selectRigSpec.js:904 +
+  `synthesizeDeformerNodesForExport` reading `part.modifiers[].data`) →
+  feeds `WarpDeformerOverlay`, `chainEval`, `moc3writer`, `cmo3writer`.
+- **depgraph-direct path** — `anim/depgraph/build.js` (buildNodes ~99-110 +
+  chain-relation passes) and 4 kernels (`gridLift`, `keyform`, `artMesh`,
+  `rotationSetup`) reach into `project.nodes` and test `deformerKind ===
+  'warp'` DIRECTLY, NOT via selectRigSpec.
+- Data is already in two places: the `deformer/warp` node AND a copy folded
+  into `part.modifiers[].data` (v28 migration).
+
+So the migration + EVERY reader must flip together (no staged-dead
+migration). To keep that atomic flip reviewable + green, decompose into:
+
+- **Slice 1.A — accessor seam (behavior-identical, NO schema change).**
+  Create canonical predicates + cage/keyform getters (Blender precedent:
+  `BKE_lattice`). Route ALL ~15 read sites through them
+  (depgraph build + 4 kernels, selectRigSpec, deformerNodeReaders, the UI
+  branches, modifierTypeInfo). Accessors internally read the CURRENT
+  `deformer/warp` shape → zero behavior change, oracle + full suite green,
+  nothing dead (accessors are live wrappers). This shrinks 1.B's blast
+  radius from ~15 files to ~3.
+- **Slice 1.B — the flip.** v43 migration (warp node → `{type:'object',
+  objectKind:'lattice', dataId}` + `{type:'meshData', vertices=baseGrid,
+  edges=grid}` + per-part `{type:'lattice', objectId}` modifier; synthesize
+  modifiers on ANCESTOR-affected parts; relocate `localFrame`; delete old
+  node + hierarchy link). Update ONLY the accessor internals + the writers
+  (`deformerNodeSync`) + `synthesizeDeformerNodesForExport`. Oracle stays
+  green by construction (identical warpSpecs out). Migration test added.
+
+The cage MUST become a real mesh (`meshData.vertices` + grid edges), not a
+`baseGrid` array — that's the user's core ask (edit grid verts in Edit Mode,
+reuse the exit→refit path). So `baseGrid` reads become `getMeshVertices`
+reads; the seam covers FIELD access, not just the type predicate.
+
+Original phase list (still valid for Phases 3-6):
+
 ## Suggested phasing (next session)
 
 0. **Spec + byte-fidelity gate.** Capture current warp export bytes

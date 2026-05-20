@@ -37,6 +37,11 @@
 
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
+import {
+  isWarpLatticeNode,
+  isRotationDeformerNode,
+  isChainDeformerNode,
+} from '../../../store/warpLatticeAccess.js';
 import { OperationCode, NodeType } from '../types.js';
 
 /**
@@ -49,7 +54,7 @@ export function kernelRotationSetupProbe(op, ctx) {
   if (!idNode) return null;
   const deformerId = idNode.idRef;
   const def = ctx.project?.nodes?.find((n) => n?.id === deformerId);
-  if (!def || def.type !== 'deformer' || def.deformerKind !== 'rotation') return null;
+  if (!isRotationDeformerNode(def)) return null;
 
   // Read this rotation's per-frame keyform state.
   const keyformOp = op.owner.findOperation(OperationCode.KEYFORM_EVAL);
@@ -66,7 +71,7 @@ export function kernelRotationSetupProbe(op, ctx) {
   const parentNode = parentId
     ? ctx.project?.nodes?.find((n) => n?.id === parentId)
     : null;
-  if (!parentNode || parentNode.type !== 'deformer') {
+  if (!isChainDeformerNode(parentNode)) {
     return {
       canvasFinalPivot: [px, py],
       effectiveAngleDeg: angleDeg,
@@ -78,7 +83,7 @@ export function kernelRotationSetupProbe(op, ctx) {
   }
 
   // FD probe at pivot.
-  const isWarpParent = parentNode.deformerKind === 'warp';
+  const isWarpParent = isWarpLatticeNode(parentNode);
   const eps = isWarpParent ? 0.01 : 1.0;
   const tmpC = /** @type {[number, number]} */ ([0, 0]);
   const tmpD = /** @type {[number, number]} */ ([0, 0]);
@@ -138,9 +143,9 @@ function evalChainAtPoint(ctx, startParent, x, y, out) {
   const outBuf = new Float32Array(2);
   const tmp = /** @type {[number, number]} */ ([0, 0]);
   while (cur && safety-- > 0) {
-    if (cur.type !== 'deformer') break;
+    if (!isChainDeformerNode(cur)) break;
 
-    if (cur.deformerKind === 'warp') {
+    if (isWarpLatticeNode(cur)) {
       const liftKey = `${cur.id}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
       const lift = ctx.outputs.get(liftKey);
       if (lift?.lifted) {
@@ -164,7 +169,7 @@ function evalChainAtPoint(ctx, startParent, x, y, out) {
         );
         cx = outBuf[0]; cy = outBuf[1];
       }
-    } else if (cur.deformerKind === 'rotation') {
+    } else if (isRotationDeformerNode(cur)) {
       const matKey = `${cur.id}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
       const matState = ctx.outputs.get(matKey);
       if (matState?.mat) {
