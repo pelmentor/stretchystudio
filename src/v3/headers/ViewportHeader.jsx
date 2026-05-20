@@ -84,14 +84,6 @@ export function ViewportHeader() {
 
       <div className="w-px h-4 bg-border/50 mx-0.5" aria-hidden="true" />
 
-      {/* Transform Pivot Point — Blender's VIEW3D_HT_header pivot
-          dropdown (`space_view3d.py`, `scene.tool_settings.
-          transform_pivot_point`). Controls the rotate/scale pivot for
-          modal G/R/S. */}
-      <PivotPill />
-
-      <div className="w-px h-4 bg-border/50 mx-0.5" aria-hidden="true" />
-
       {/* View menu — Blender's VIEW3D_MT_view */}
       <HeaderMenu label="View">
         <DropdownMenuItem
@@ -191,6 +183,22 @@ export function ViewportHeader() {
           Delete <kbd className="ml-auto opacity-60">X</kbd>
         </DropdownMenuItem>
       </HeaderMenu>
+
+      {/* Flexible spacer — centres the transform-tools cluster in the
+          header, matching Blender's VIEW3D_HT_header where the
+          orientation / pivot / snap / proportional group floats in the
+          middle between the menus and the right-side overlay controls. */}
+      <div className="flex-1" aria-hidden="true" />
+
+      {/* Transform-tools cluster — Blender places the transform
+          orientation / pivot point / snap / proportional-edit controls
+          in the middle of VIEW3D_HT_header (`space_view3d.py`). SS only
+          has the Pivot Point pill so far
+          (`scene.tool_settings.transform_pivot_point`); orientation +
+          snap pills are future additions to this same group. */}
+      <PivotPill />
+
+      <div className="flex-1" aria-hidden="true" />
 
       {/* Right-aligned cluster — View Layers + Reset/Apply Pose. Relocated
           from the floating top-right canvas overlay into the header to
