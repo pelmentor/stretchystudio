@@ -2953,42 +2953,71 @@ with the bone-mirror sync as its only special case (the
 `skipBoneMirror` flag on `setMany`). CO-D's intent (FCurve eval as
 SoT) is already satisfied via tick write-back.
 
-#### 7.E — Documentation
+#### 7.E — Documentation ⏸ DEFERRED-OPTIONAL 2026-05-20 (additive, not baggage)
 
-- Update [docs/V3_WORKSPACES.md](../V3_WORKSPACES.md) animation
-  workspace section.
-- New: docs/ANIMATION_GLOSSARY.md mapping Blender terms ↔ SS terms ↔
-  Cubism Editor terms. Includes the deliberate divergences:
-  - SS RNA path uses `.x` component access; Blender uses `[0]`. Same
-    semantics, different syntax. The glossary documents the choice;
-    `evaluateRnaPath` parses both.
-  - JS-subset expression sandbox vs Python (per §9.A).
-  - `combine` blend mode deferred (per §2.2).
-- New: docs/ANIMATION_AUTHORING_FLOWS.md covering the three primary
-  authoring patterns (action assigned to scene, action assigned to
-  object, NLA blend).
+Original scope: update `docs/V3_WORKSPACES.md` animation section + new
+`docs/ANIMATION_GLOSSARY.md` (Blender↔SS↔Cubism term map) + new
+`docs/ANIMATION_AUTHORING_FLOWS.md`.
 
-#### 7.F — Telemetry
+**Status (2026-05-20, acting autonomously per Rule №1):** deferred.
+This is additive documentation, NOT migration-baggage removal (the
+user's close-out directive was "no migration baggage, so remove
+classic"). Notes:
+- `docs/V3_WORKSPACES.md` **does not exist** — it was referenced by
+  the plan + a memory entry but never created, so there is no
+  animation section to "update." Creating it is net-new work.
+- The glossary + authoring-flows are net-new speculative docs with no
+  current consumer. Per "don't add features/docs beyond what the task
+  requires," generating them to satisfy a plan checkbox would be
+  low-value. Available on request.
 
-Add to [lib/logger.js](../../src/lib/logger.js):
-- Per-tick: count of FCurve evaluations, driver evaluations,
-  constraint evaluations.
-- On Action save: total keyframes per action, average curves per
-  action, presence of FModifiers.
-- On NLA bake: input strip count, output FCurve count, time taken.
+#### 7.F — Telemetry ⏸ DEFERRED-OPTIONAL 2026-05-20 (speculative, no consumer)
 
-#### 7.G — Memory audit
+Original scope: per-tick FCurve/driver/constraint eval counts + Action-save
+keyframe stats + NLA-bake strip counts in `lib/logger.js`.
 
-Update auto-memory entries:
-- Mark the Phase 5 scaffolds memory entry as "Wired in Phase 0 of
-  Animation Blender Parity Plan".
-- Mark the V2 NodeTree memory entry as "Retired in Phase 1 v33
-  migration".
-- Add new memory entries per phase shipped (one-line index entry +
-  topic file).
+**Status (2026-05-20, per Rule №1):** deferred. The per-tick counters
+add overhead + code to the render hot path (the depgraph eval kernels)
+for telemetry with no current consumer or dashboard — speculative
+instrumentation that "don't add features beyond what the task
+requires" counsels against. The event-driven parts (Action save, NLA
+bake) are cheaper but likewise have no consumer. Not baggage removal.
+Available on request if a perf-debugging need arises (the existing
+`logger.time/timeEnd` loading-times instrumentation is the precedent
+to extend).
 
-**Phase 7 sum:** ~3–5 days. No new schema. No new features. Closes:
-the rest of the grievances (5 polish-tier).
+#### 7.G — Memory audit ✅ SHIPPED 2026-05-20
+
+Corrected the stale V2 NodeTree memory entry
+(`project_blender_parity_v2_phase0` index line) to reflect current
+reality:
+- The per-part `RigWarp_*` ~`canvasW/2` divergence (flagged at V2
+  close) was FIXED in anim Phase 0.A (missing build-time relation in
+  `depgraph/build.js`; pinned by `test_depgraphSideBySide_rotationParent`).
+- The render-side flip is DONE — close-out CO-A (`7c0852a`) removed
+  the `evalEngine:'classic'` opt-out; depgraph is the sole viewport
+  eval path.
+- `project.nodeTrees` DATA was retired in the **v38** migration
+  (`v38_nodetree_retirement.js`) — NOT "Phase 1 v33" as this plan
+  section originally stated. The NodeTreeEditor + `src/anim/nodetree/`
+  compilers stay LIVE (derive trees on-the-fly); they are not dead
+  baggage.
+
+(The plan's original "Phase 5 scaffolds → wired in Phase 0" item is
+already covered by the live `feedback_ms_canonical_animation_time` +
+the Phase 0 progress doc; no separate stale entry needed. The "add
+new memory entries per phase" item is satisfied by the existing
+`project_blender_parity_plans_in_flight` index entry maintained
+across every slice.)
+
+**Phase 7 close-out outcome (2026-05-20):** the Rule №2 baggage sweep
+is COMPLETE. CO-A removed the one real piece of baggage (the
+dual-engine `classic` opt-out). CO-B verified `animations[]` reader
+removal + cleaned 3 dead refs. CO-C + CO-D were resolved-by-analysis
+(their premises were superseded by the shipped architecture; the
+literal instructions would have introduced regressions). CO-G
+corrected stale memory. CO-E + CO-F are additive (docs/telemetry),
+deferred-optional, not baggage. No new schema, no new features.
 
 ---
 
