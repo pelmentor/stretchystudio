@@ -1,9 +1,12 @@
 # Plan — Warps as first-class Lattice/Grid-Mesh Objects (Blender parity)
 
-**Status:** IN PROGRESS (started 2026-05-20). **Phase 0 DONE** (byte-fidelity
-gate). Design decisions RESOLVED (see below). Next: Phase 1 substrate.
-Massive refactor; written 2026-05-20 after the edit-mode / rig-discoverability
-work surfaced how unintuitive the current abstract-warp model is.
+**Status:** IN PROGRESS. **Phase 0 DONE** (byte-fidelity gate, `f6cedd7`).
+**Slice 1.A DONE** (classifier seam, `c822b02`+`ee9c741`). **Slice 1.B DONE**
+(`6852deb` — the data-model flip: warps ARE lattice objects now; v43 migration;
+oracle stays `f50b6178` = migrate→select lossless). Next user-facing slice:
+Phase 3 (UI — Outliner/Properties/Edit-Mode for lattice objects). Massive
+refactor; written 2026-05-20 after the edit-mode / rig-discoverability work
+surfaced how unintuitive the abstract-warp model was.
 
 **One-line goal:** make warp deformers **actual editable grid-mesh /
 lattice objects** in the scene, and make the part↔warp relationship an
@@ -11,6 +14,82 @@ lattice objects** in the scene, and make the part↔warp relationship an
 (and declares its targets) — mirroring how Blender's **Lattice modifier**
 (`MOD_lattice`) / **Mesh Deform** (`MeshDeformModifierData`) work, instead
 of the current implicit hierarchy + opaque deformer node.
+
+---
+
+## How Blender ACTUALLY does it (the canonical mechanics) — and SS's mirror
+
+Verified against the Blender clone (`reference/blender/`). This is the
+ground-truth answer to "where do the modifiers sit, and does the cage carry
+editable blendshapes that params drive?"
+
+### 1. The modifier sits on the AFFECTED piece, NOT on the lattice
+
+In Blender the **deformed mesh object** owns the modifier; the **lattice
+object** owns only geometry and has no modifier and no target list.
+
+- The Lattice modifier is an entry in the *deformed mesh's* modifier stack
+  (`Object.modifiers`, a `ListBase<ModifierData>`). Its struct
+  `LatticeModifierData = { ModifierData modifier; Object *object; char
+  name[64]; float strength; ... }` (`DNA_modifier_types.h:282-292`) carries
+  `->object` = a pointer to the lattice object. `MOD_lattice.cc`'s
+  `foreachIDLink` walks ONLY `lmd->object` — the modifier reaches *out* to
+  the cage; the cage never reaches back.
+- The `Lattice` data-block (`DNA_lattice_types.h:55-91`) holds the grid
+  (`pntsu/pntsv/pntsw`, `BPoint *def`) + `Key *key` (shape keys). It has
+  **no** list of "objects I deform." So the relationship is **piece-declares-
+  warp**: each affected mesh picks its cage in its own modifier panel
+  (`MOD_lattice.cc` UI `object` picker). One cage, many pieces pointing at it.
+
+So, answering directly: **the modifiers live on the layer pieces (the things
+being deformed), referencing the warp/lattice object. NOT on the warp
+objects.** The warp objects carry no modifier — they're pure cage geometry +
+shape-keys.
+
+**SS mirror (shipped in 1.B / v43):** each affected `part` gets
+`modifiers[] += {type:'lattice', objectId}` (Blender's `lmd->object`); the
+lattice object (`{type:'object', objectKind:'lattice'}`) holds the cage +
+keyforms and carries no modifier. No target list is stored on the lattice (a
+warp-side "which pieces do I affect?" view is *derived* on demand, never
+persisted — a stored second list would be a dual source of truth).
+
+### 2. The cage HAS editable shape-keys, and params drive their blend
+
+Yes. A Blender Lattice can carry shape keys: `Lattice.key` →
+`Key`/`KeyBlock` (`DNA_key_types.h`). The **Basis** KeyBlock is the rest
+cage; each additional `KeyBlock` is a full deformed-cage vertex set
+(`KeyBlock.data`, `totelem`), relative to the Basis (`KeyBlock.relative`,
+`Key.refkey`). A relative shape key is driven by a scalar weight
+`KeyBlock.curval` (0..1), animated by an fcurve/driver — so a parameter (via
+a driver) blends the cage between Basis and the shape.
+
+**SS mirror (the substrate is in place after 1.B; the editing UI is Phase 3):**
+- The cage's **rest** (= Basis) is the lattice object's linked
+  `meshData.vertices` — a real mesh, editable in Edit Mode (Phase 3 reuses
+  the existing exit→refit path).
+- The cage's **per-parameter deformed shapes** are the object's `keyforms[]`
+  — each keyform is a full control-point set = a KeyBlock.
+- **What drives them:** the object's `bindings[]` (`parameterId` → key
+  positions) + each keyform's `keyTuple`. SS blends keyforms by `cellSelect`
+  over the bound parameter values. This is an **N-dimensional** generalisation
+  of Blender's 1-D `curval` weight (Cubism/SS warps blend over a parameter
+  *tuple*, e.g. AngleX×AngleY); Blender has no native N-D keyform grid, so SS
+  keeps its own param-binding layer rather than collapsing to a single scalar.
+
+So: **the warp/lattice object owns editable "blendshapes" (the keyforms =
+shape keys; the editable rest cage = Basis), and the bound parameters drive
+which blend is active.** Editing a keyform = editing the cage's shape at that
+parameter value. The deformation then flows: param → cage shape-key blend →
+the pieces' lattice modifier → the pieces' vertices bilinearly warped.
+
+### 3. One-line direction summary
+
+- **Modifier** → on the **affected pieces** (layer pieces), referencing the
+  warp object.
+- **Geometry + shape-keys (keyforms)** → on the **warp/lattice object**; it
+  has no modifier of its own.
+- **Parameters** → drive the warp object's shape-key blend; the result
+  deforms the pieces through their lattice modifier.
 
 ---
 
