@@ -2336,13 +2336,28 @@ helper is §7.E+ scope. 7.D documents the crutch in
 `autoKeyDispatch.js`'s module header rather than silently preserving
 it.
 
-**Param-row gap (audit-fix M-2 documented):** `ParamRow.jsx` auto-key
-path bypasses `runAutoKey` and ignores `project.autoKeyMode`. Param
-slider drags in `'available'` mode will still create new fcurves;
-slider drags in `'activeSet'` mode key only the touched param (NOT
-the full active set). Unifying the param path with mode dispatch is
-§7.E+ scope; inline `PHASE-7-GAP` comment at the write site flags
-this for future maintainers.
+**Param-row gap — RESOLVED in Slice 7.H (`1f89d01`).** The original
+plan premise here was wrong: it proposed unifying the param-slider
+auto-key path with `runAutoKey` / `project.autoKeyMode`. But Blender
+does NOT route single-property UI edits through the selection /
+keying-set path. UI buttons go through `button_anim_autokey` →
+`autokeyframe_property(..., only_if_property_keyed=true)`
+(`interface_anim.cc:320` / `keyframing_auto.cc:284`), a separate,
+deliberately conservative path: a slider drag only MAINTAINS an
+existing fcurve and never creates one, scoped to the touched property
+alone (independent of the autokey-mode flags, which only affect the
+viewport transform/pose path via `autokeyframe_object` /
+`autokeyframe_pose_channel`). Routing param sliders through `runAutoKey`
+would have keyed the whole selection / active set — a regression.
+7.H ports the faithful behaviour: `setParamKeyframeAt` →
+`autoKeyParamProperty` (only-if-keyed, returns bool); the call site
+pre-checks `findParamFCurve` on the live action and skips the
+undo-snapshotting `updateProject` when the param is unkeyed (continuous
+`onValueChange` would otherwise spam undo). First keyframe on a param
+is created via the I-menu → `AllParams` keying set (`insertNew:true`).
+Dual-audit clean: architecture 0 issues; Blender-fidelity all 3 cites
+VERIFIED byte-for-byte (line numbers exact). The `PHASE-7-GAP` comment
+at the write site is replaced with the resolved-behaviour cite.
 
 **Audit sweep #81** (Phase 7 sweep #4):
 

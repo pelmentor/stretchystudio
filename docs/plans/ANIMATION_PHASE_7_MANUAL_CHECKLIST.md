@@ -288,17 +288,25 @@ Verify the mode dropdown affects every drag-end site:
 - [ ] **Canvas-direct drag** (drag a part by clicking its body and
   moving). All three should respect the selected mode.
 
-### §4.8 — Param-row gap (KNOWN, NOT YET FIXED)
+### §4.8 — Param-row auto-key (RESOLVED in Slice 7.H `1f89d01`)
 
-- [ ] Set dropdown to **AutoKey: Available**.
-- [ ] In the Parameters panel, drag a parameter slider for a param
-  that has NO existing fcurves.
-- [ ] Verify a NEW fcurve gets created on drag release — this is the
-  audit-noted **PHASE-7-GAP** at `ParamRow.jsx` (param-row write
-  path bypasses `runAutoKey`). Documented behavior, deferred to
-  §7.F+.
-- [ ] Once that gap closes, this item should flip to "no new fcurve
-  created in Available mode" (track as polish slice).
+Param-slider auto-key now matches Blender's UI-button path
+(`button_anim_autokey` → `autokeyframe_property(only_if_property_keyed
+=true)`): a slider drag only MAINTAINS an existing fcurve, never
+creates one — regardless of the AutoKey mode dropdown (that dropdown
+governs only the viewport transform/pose path).
+
+- [ ] Turn **AutoKey ON** (any mode). In the Parameters panel, drag a
+  slider for a param that has NO existing fcurve. Verify **no new
+  fcurve is created** (the live value still updates for immediate
+  feedback; it just isn't keyed).
+- [ ] Insert the first keyframe explicitly: press **I** → choose
+  **All Parameters** keying set (or otherwise create a param fcurve).
+- [ ] With that fcurve now existing and AutoKey still ON, drag the
+  same slider. Verify the existing fcurve gets a keyform updated/added
+  at the playhead (auto-key now maintains it).
+- [ ] Confirm the undo stack is not spammed while dragging an UNKEYED
+  param (no `updateProject` snapshot fires when there's no fcurve).
 
 ---
 
@@ -420,10 +428,13 @@ behavior is independently green per §0.
   in 7.E (MVP scope decision). Requires extracting the 170-line
   legacy K-key fan-out into a pure helper. Tracked as a §7.F+ polish
   slice.
-- **Param-row auto-key gap** (§4.8): `ParamRow.jsx` slider drag
-  bypasses `runAutoKey` and ignores `project.autoKeyMode`. Inline
-  `PHASE-7-GAP` comment at the write site. Tracked as a §7.F+ polish
-  slice.
+- ~~**Param-row auto-key gap** (§4.8)~~ — RESOLVED in Slice 7.H
+  (`1f89d01`). Param-slider auto-key now ports Blender's UI-button
+  path (only-if-keyed; never creates a fcurve; scoped to the touched
+  param). The premise of the original gap (route through `runAutoKey`)
+  was wrong — Blender keeps single-property UI edits OFF the
+  selection/keying-set path. See plan §7.H. `PHASE-7-GAP` comment
+  removed.
 - **`pickActiveSetIdForAutoKey` fallback chain** (audit-noted, not
   blocking): when `activeKeyingSetId` is stale, fallback is
   hardcoded to `LocRotScale` (not the user-pref keying mode like
