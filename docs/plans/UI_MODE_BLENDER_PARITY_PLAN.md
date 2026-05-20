@@ -93,10 +93,29 @@ That is a real interaction refactor needing browser verification →
     (`editorStore` pose default + `LTM_DEFAULT.pose`).
   - Single revertible commit. Tests: canvasToolbar pose-table assertions
     updated. The interaction feel is unverified from here.
-- **Slice E (optional) — workspace→mode coupling.** Blender workspaces
-  carry `object_mode`; activating Sculpt/Weight-Paint workspaces enters
-  that mode. Collides with SS's deliberate "workspaces are layout-only"
-  decision — needs its own analysis. Queued, not committed.
+- **Slice E — workspace→mode coupling. ⏸ RESOLVED-BY-ANALYSIS (not built;
+  pending user product decision).** Blender workspaces carry `object_mode`
+  (Sculpting→Sculpt, etc.). SS deliberately decoupled this (2026-05-02 —
+  deleted the workspace-policy module) so **mode follows SELECTION, not
+  workspace** — a principled, arguably-cleaner model (Blender stores mode
+  redundantly on both object AND workspace). Re-coupling would: (a)
+  re-introduce the deliberately-removed "switching workspace yanks you into
+  another mode" surprise; (b) entangle `setWorkspace` with selection-gated
+  mode-entry; (c) need object-type guards (Sculpt workspace + bone selected
+  = can't sculpt). Same shape as the animation close-out's CO-C/CO-D:
+  literal Blender-matching would undo a deliberate SS choice. So this is a
+  **product decision for the user**, not a blind autonomous build — flagged
+  rather than shipped. If the user wants Blender's coupling, it's a
+  contained follow-up (map modeling→edit / sculpt→sculpt / weightPaint→
+  weightPaint / layout+animation→object, selection-gated, in `setWorkspace`).
+
+### Polish (shipped with Slice E close-out)
+
+- **Header-pill styling** — the ModePill trigger + proportional-edit toggle
+  kept their floating-over-canvas styling (`bg-card/85 backdrop-blur shadow`,
+  `h-8`); flattened to header-appropriate (`h-6`, `bg-background/40`, no blur/
+  heavy shadow) to match the View/Select/Object menu buttons in the header
+  row. Visual — still wants a glance, but matches proven sibling styling.
 
 Each code slice: implement → dual-audit → same-day fix sweep. Visual
 slices (C) + interaction slices (D) explicitly flag that I cannot

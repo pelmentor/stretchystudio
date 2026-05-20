@@ -231,13 +231,16 @@ export function ModePill() {
         <Button
           variant="secondary"
           size="sm"
-          className="h-8 px-3 gap-1.5
-                     bg-card/85 backdrop-blur-md
-                     border border-border/60 hover:border-primary/40
-                     text-foreground/80 hover:text-foreground hover:bg-card/95
-                     shadow-md hover:shadow-lg hover:shadow-primary/10
-                     transition-all duration-150 font-medium"
-          title="Edit mode (Tab)"
+          /* Slice C polish — flat header styling (matches the View/Select/
+             Object menu buttons). The old card/blur/shadow + h-8 were for
+             legibility floating over the canvas; in the solid header row
+             (py-1, text-[11px]) they were oversized + heavy. */
+          className="h-6 px-2 gap-1.5 rounded-sm font-medium
+                     bg-background/40 hover:bg-background/70
+                     border border-border/40 hover:border-border
+                     text-foreground/85 hover:text-foreground
+                     transition-colors"
+          title="Edit mode (Tab — Ctrl+Tab for the menu)"
         >
           <PillIcon className="h-3.5 w-3.5" />
           <span className="text-[11px] tracking-wide">{pillLabel}</span>
@@ -376,11 +379,11 @@ export function ModePill() {
           onClick={() => setProportionalEdit({ enabled: !peEnabled })}
           title="Proportional Edit (O) — drag pulls neighbours along. Shift+O cycles falloff, Alt+O toggles connected-only, F enters radius-adjust mode (scroll OR move cursor to size, click to commit)."
           className={
-            'h-8 w-8 flex items-center justify-center rounded-md ' +
-            'bg-card/85 backdrop-blur-md border shadow-md transition-all duration-150 ' +
+            /* Slice C polish — flat header sizing to match the mode button. */
+            'h-6 w-6 flex items-center justify-center rounded-sm border transition-colors ' +
             (peEnabled
-              ? 'border-primary/50 text-primary hover:border-primary/70 hover:bg-card/95'
-              : 'border-border/60 text-foreground/70 hover:text-foreground hover:border-primary/40 hover:bg-card/95')
+              ? 'border-primary/50 text-primary hover:border-primary/70 hover:bg-background/70'
+              : 'border-border/40 text-foreground/70 hover:text-foreground hover:border-border hover:bg-background/70')
           }
         >
           <Circle className="h-3.5 w-3.5" />
