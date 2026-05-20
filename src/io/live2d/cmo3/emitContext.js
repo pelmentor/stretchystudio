@@ -58,7 +58,6 @@ import { emptyRigSpec } from '../rig/rigSpec.js';
  * @property {Array<any>} meshes
  * @property {Array<any>} groups
  * @property {Array<any>} parameters
- * @property {Array<any>} animations
  * @property {string}   modelName
  * @property {boolean}  generateRig
  * @property {boolean}  rigOnly
@@ -178,7 +177,6 @@ export function createEmitContext(input, configs, hasGenerateRig) {
     meshes: input.meshes,
     groups: input.groups,
     parameters: input.parameters,
-    animations: input.animations,
     modelName: input.modelName,
     generateRig: input.generateRig,
     rigOnly: input.rigOnly,

@@ -568,7 +568,6 @@ export async function initializeRigFromProject(project, images = new Map()) {
     meshes,
     groups,
     parameters: project.parameters ?? [],
-    animations: [],
     modelName: 'init',
     generateRig: true,
     generatePhysics: false,

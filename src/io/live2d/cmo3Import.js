@@ -285,7 +285,6 @@ export async function importCmo3(bytes) {
     nodes,
     parameters,
     physics_groups: [],
-    animations: [],
     maskConfigs,
     physicsRules: [],
     boneConfig: detectedBakedAngles
