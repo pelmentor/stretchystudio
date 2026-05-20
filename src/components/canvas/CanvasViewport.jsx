@@ -194,6 +194,10 @@ export default function CanvasViewport({
   // RMB click still summons the context menu, but a deliberate RMB-drag
   // keeps panning.
   const rmbDraggedRef = useRef(false);
+  // Set true when a Shift+RMB press placed the 2D cursor, so the trailing
+  // `contextmenu` event suppresses the menu (the gesture was a cursor set,
+  // not a context-menu request).
+  const cursorPlacedRef = useRef(false);
   // Phase 5 touch+pen — multi-pointer tracking. activePointersRef holds every
   // pointer currently down (mouse / touch / pen) so we can detect 2-finger
   // pinch. gestureRef is non-null only while a multi-touch gesture is running.
@@ -2050,6 +2054,12 @@ export default function CanvasViewport({
   //   `VIEW3D_MT_<mode>_context_menu` family.
   const onContextMenu = useCallback((e) => {
     e.preventDefault();
+    // Shift+RMB just placed the 2D cursor — swallow the menu it would
+    // otherwise summon.
+    if (cursorPlacedRef.current) {
+      cursorPlacedRef.current = false;
+      return;
+    }
     if (rmbDraggedRef.current) {
       rmbDraggedRef.current = false;
       return;
@@ -2198,6 +2208,21 @@ export default function CanvasViewport({
         zoom0: view.zoom,
       };
       canvas.style.cursor = 'grabbing';
+      return;
+    }
+
+    // Blender 2D-cursor placement — Shift+RMB sets the cursor at the
+    // clicked canvas point. Matches Blender's default `cursor_set_event`
+    // (`blender_default.py:172` — `view3d.cursor3d` on RIGHTMOUSE+shift in
+    // the LMB-select preset). Intercept BEFORE the pan branch (RMB pans)
+    // and flag the trailing contextmenu to suppress its menu. View-only —
+    // never on the read-only Live Preview surface.
+    if (e.button === 2 && e.shiftKey && !previewModeRef.current) {
+      const [cx, cy] = clientToCanvasSpace(canvas, e.clientX, e.clientY, view);
+      useProjectStore.getState().setProjectCursor(cx, cy);
+      cursorPlacedRef.current = true;
+      isDirtyRef.current = true;
+      e.preventDefault();
       return;
     }
 
