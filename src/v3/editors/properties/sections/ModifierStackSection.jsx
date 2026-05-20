@@ -19,9 +19,10 @@
  * @module v3/editors/properties/sections/ModifierStackSection
  */
 
-import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2 } from 'lucide-react';
+import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2, Diamond } from 'lucide-react';
 import { useMemo, useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
+import { useSelectionStore } from '../../../../store/selectionStore.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
   MODIFIER_MODE_REALTIME,
@@ -214,6 +215,24 @@ export function ModifierStackSection({ nodeId }) {
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_EDITMODE)}
               title="Display modifier in Edit Mode"
             />
+            {/* Edit deformation — jump to this deformer's keyform editor.
+                A part carries no param-effect data of its own (it's
+                deformed by parent deformers), so "how does BodyAngleZ
+                move this part" is edited on the deformer. Selecting it
+                switches Properties to its Deformer Keyforms grid (set the
+                bound param to the value, then "Edit keyform" → drag the
+                warp/rotation handles on canvas). Armature rows have no
+                keyform grid (bone pose, not keyforms) so they're skipped. */}
+            {!isArmature && mod.deformerId && (
+              <button
+                type="button"
+                className="w-5 h-5 shrink-0 inline-flex items-center justify-center rounded border border-border bg-transparent hover:bg-muted text-muted-foreground"
+                title="Edit deformation — jump to this deformer's keyform editor"
+                onClick={() => useSelectionStore.getState().select({ type: 'deformer', id: mod.deformerId }, 'replace')}
+              >
+                <Diamond size={11} />
+              </button>
+            )}
             <ModifierRowMenu
               isArmature={isArmature}
               canMoveUp={idx > 0}
