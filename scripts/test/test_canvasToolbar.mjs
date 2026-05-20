@@ -104,12 +104,19 @@ for (const [modeKey, tools] of Object.entries(TOOLS_BY_MODE)) {
     'mesh tools list has no toggle entries (proportionalEdit moved to ModePill)');
 }
 
-// ── Skeleton: only joint_drag is exposed (one tool) ────────────────
+// ── Skeleton: Select + Joint Drag tools + G/R/S operators (Slice D) ──
 
 {
   const sk = TOOLS_BY_MODE.skeleton;
-  assert(sk.length === 1 && sk[0].toolModeId === 'joint_drag',
-    'skeleton: single joint_drag tool');
+  // Select is listed first (Blender pose default is select_box); Joint
+  // Drag remains the auto-armed default for now (opt-in Select).
+  assert(sk[0].toolModeId === 'select', 'skeleton: Select tool listed first');
+  assert(sk.some((t) => t.toolModeId === 'joint_drag'), 'skeleton: Joint Drag still present');
+  const ops = sk.filter((t) => t.kind === 'operator').map((t) => t.operatorId);
+  assert(
+    ['transform.translate', 'transform.rotate', 'transform.scale'].every((id) => ops.includes(id)),
+    'skeleton: G/R/S transform operators present',
+  );
 }
 
 // ── BlendShape: only brush ──────────────────────────────────────────

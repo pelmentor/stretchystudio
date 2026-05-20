@@ -161,13 +161,53 @@ export const TOOLS_BY_MODE = {
   ],
 
   skeleton: [
+    // Slice D — Select is the Blender-faithful pose tool (Blender's pose
+    // default is select_box): click a bone to select, then transform via
+    // G/R/S, box-select via B, select-all via A. Joint Drag (SS-original,
+    // still the auto-armed default for now) keeps direct drag-to-pose.
+    {
+      id: 'select',
+      kind: 'tool',
+      toolModeId: 'select',
+      label: 'Select',
+      icon: MousePointer2,
+      hint: 'Click bones to select (B box-select, A select-all); transform with G / R / S',
+    },
     {
       id: 'joint_drag',
       kind: 'tool',
       toolModeId: 'joint_drag',
       label: 'Joint Drag',
       icon: Bone,
-      hint: 'Drag joints to move bone pivots',
+      hint: 'Drag joints directly to pose bones',
+    },
+    {
+      id: 'transform.translate',
+      kind: 'operator',
+      operatorId: 'transform.translate',
+      label: 'Move',
+      icon: Move,
+      hotkey: 'G',
+      hint: 'Move the selected bone (G)',
+      divider: true,
+    },
+    {
+      id: 'transform.rotate',
+      kind: 'operator',
+      operatorId: 'transform.rotate',
+      label: 'Rotate',
+      icon: RotateCcw,
+      hotkey: 'R',
+      hint: 'Rotate the selected bone (R)',
+    },
+    {
+      id: 'transform.scale',
+      kind: 'operator',
+      operatorId: 'transform.scale',
+      label: 'Scale',
+      icon: Maximize,
+      hotkey: 'S',
+      hint: 'Scale the selected bone (S)',
     },
   ],
 

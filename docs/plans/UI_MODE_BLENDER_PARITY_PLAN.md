@@ -74,10 +74,25 @@ That is a real interaction refactor needing browser verification →
   header row need the user's eyes; single revertible commit if off.
   Polish candidate: the trigger's heavy `bg-card/85 backdrop-blur shadow`
   styling may want lightening for the flat header row.
-- **Slice D — tool-aware pose drag (full Blender match).** Make
-  `SkeletonOverlay` respect `toolMode`: Select ⇒ box-select on drag,
-  Move/Joint-Drag ⇒ move. Then pose can default to Select like Blender.
-  Larger + browser-needed; queued.
+- **Slice D — tool-aware pose interaction. ✅ SHIPPED (opt-in, NOT
+  browser-verified).** Built blind per user direction ("build anyways,
+  fix later"). Scope collapsed once verified that G/R/S modal transform
+  already works on pose bones (`ModalTransformOverlay.jsx:400`) and B
+  opens box-select — so the Select tool needs no new box-select code.
+  - Pose toolbar (`tools.js` skeleton) now: **Select** (first) + Joint
+    Drag + Move/Rotate/Scale (G/R/S operators, reusing the working
+    transform ops).
+  - `SkeletonOverlay` joint pointer-down is tool-aware: `toolMode ===
+    'select'` ⇒ release capture + `selectBoneInBothStores(nodeId)` +
+    return (no move drag); transform via G/R/S, box-select via B,
+    select-all via A. **Joint Drag stays the auto-armed default**, so
+    existing drag-to-pose is UNCHANGED — Select is purely opt-in (zero
+    regression).
+  - **Default-flip to Select deferred** until the user verifies the
+    Select-tool feel in-browser; then it's a one-line change
+    (`editorStore` pose default + `LTM_DEFAULT.pose`).
+  - Single revertible commit. Tests: canvasToolbar pose-table assertions
+    updated. The interaction feel is unverified from here.
 - **Slice E (optional) — workspace→mode coupling.** Blender workspaces
   carry `object_mode`; activating Sculpt/Weight-Paint workspaces enters
   that mode. Collides with SS's deliberate "workspaces are layout-only"
