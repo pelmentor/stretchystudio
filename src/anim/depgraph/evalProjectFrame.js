@@ -65,6 +65,11 @@ import { OperationCode, NodeType } from './types.js';
  *   GRID_LIFT_TO_PARENT outputs; this just surfaces them. Replaces the
  *   classic engine's `evalRig({ out: { liftedGrids } })` path that the
  *   overlay relied on before the depgraph became the sole viewport engine.
+ * @param {Map<string, Record<string, any>>} [opts.poseOverrides] - the
+ *   viewport's `computePoseOverrides` map (action fcurves + draftPose).
+ *   TRANSFORM_COMPOSE seeds each owner's pose from the transform channels
+ *   here so bone/part pose animation drives skinning. Non-transform
+ *   entries (mesh_verts etc.) are ignored. Omit for the static case.
  * @param {object} [opts.rigSpec] - selectRigSpec output. When provided, the
  *   ART_MESH_EVAL kernel sources each part's keyform-blend input (bindings +
  *   keyforms) from the matching `rigSpec.artMeshes[]` entry instead of the
@@ -92,6 +97,7 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
     action: opts.action ?? null,
     requiredMode: opts.requiredMode,
     rigArtMeshById: buildRigArtMeshIndex(opts.rigSpec),
+    poseOverrides: buildPoseOverrideIndex(opts.poseOverrides),
   });
   /** @type {ArtMeshFrame[]} */
   const frames = [];
@@ -120,6 +126,41 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
     }
   }
   return frames;
+}
+
+/**
+ * Convert the viewport's `computePoseOverrides` output —
+ * `Map<nodeId, {property: value}>`, which also carries `mesh_verts` /
+ * `blendShape:*` / `opacity` entries — into the depgraph's
+ * `Map<nodeId, Map<channel, number>>`, keeping ONLY the affine transform
+ * channels (rotation/x/y/scaleX/scaleY). TRANSFORM_COMPOSE seeds the
+ * owner's pose from this so bone/part pose animation reaches skinning.
+ * Non-transform overrides (mesh_verts etc.) are dropped here — the
+ * viewport applies those as post-eval vertex uploads. Returns null when
+ * nothing relevant is present so `evalDepGraph` uses a fresh map (which
+ * ANIMATION_TRACK_EVAL still fills for the standalone test/export path).
+ *
+ * @param {Map<string, Record<string, any>>|undefined} poseOverrides
+ * @returns {Map<string, Map<string, number>>|null}
+ */
+function buildPoseOverrideIndex(poseOverrides) {
+  if (!(poseOverrides instanceof Map) || poseOverrides.size === 0) return null;
+  const channels = ['rotation', 'x', 'y', 'scaleX', 'scaleY'];
+  /** @type {Map<string, Map<string, number>>} */
+  const out = new Map();
+  for (const [nodeId, ov] of poseOverrides) {
+    if (!ov || typeof ov !== 'object') continue;
+    let m = null;
+    for (const ch of channels) {
+      const v = ov[ch];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        if (!m) m = new Map();
+        m.set(ch, v);
+      }
+    }
+    if (m) out.set(nodeId, m);
+  }
+  return out.size > 0 ? out : null;
 }
 
 /**

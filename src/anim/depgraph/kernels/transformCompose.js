@@ -62,8 +62,17 @@ export function kernelTransformCompose(op, ctx) {
   const idNode = op.owner?.owner;
   if (!idNode) return null;
   const ownerId = idNode.idRef;
-  const owner = ctx.project?.nodes?.find((n) => n?.id === ownerId);
-  if (!owner) return null;
+  const ownerRaw = ctx.project?.nodes?.find((n) => n?.id === ownerId);
+  if (!ownerRaw) return null;
+
+  // Apply animated pose overrides (action fcurves + draftPose) as the
+  // owner's pose/transform SEED before constraints run. `ctx.poseOverrides`
+  // is the depgraph mirror of `animationEngine.computePoseOverrides` — the
+  // engine-independent override layer. Without this, bone/part pose
+  // animation never reached skinning (the skeleton overlay moved but the
+  // mesh stayed at rest). Only transform channels are consumed here;
+  // `mesh_verts` / blend-shape / opacity overrides are applied elsewhere.
+  const owner = applyPoseOverrides(ownerRaw, ctx.poseOverrides?.get(ownerId));
 
   // Build a project view that swaps every other object's `transform` /
   // `pose.rotation` for its DEPGRAPH-COMPOSED output, so a constraint
@@ -72,7 +81,9 @@ export function kernelTransformCompose(op, ctx) {
   // each Object resolves its constraints against its targets'
   // already-resolved transforms (the depgraph topology guarantees
   // target-first ordering via the relations we add at build time).
-  const projectView = makeProjectView(ctx, owner);
+  // Self-exclusion in the view keys on the REAL project node (ownerRaw),
+  // not the pose-overlaid clone — the clone isn't in `project.nodes`.
+  const projectView = makeProjectView(ctx, ownerRaw);
 
   const stackLen = Array.isArray(owner.constraints) ? owner.constraints.length : 0;
   const composed = evaluateConstraints(owner, /* seedTransform */ null, projectView);
@@ -87,6 +98,43 @@ export function kernelTransformCompose(op, ctx) {
     },
     ranConstraints: stackLen,
   };
+}
+
+/** Transform channels a pose/transform fcurve (or draftPose) can drive.
+ *  mesh_verts / blendShape:* / opacity / visible are intentionally NOT
+ *  here — they're not part of the composed affine transform. */
+const POSE_CHANNELS = ['rotation', 'x', 'y', 'scaleX', 'scaleY'];
+
+/**
+ * Return a node clone whose pose (bones) or transform (non-bones) carries
+ * the supplied animated channel overrides, as the seed for constraint
+ * evaluation. Absolute values (the fcurve/draftPose value IS the channel
+ * value, matching `animationEngine`'s `effectiveValueForProperty`). When
+ * `ov` is null/empty the original node is returned unchanged (zero cost
+ * for the static / no-animation case).
+ *
+ * @param {object} node
+ * @param {Map<string, number>|undefined} ov - channel → value
+ * @returns {object}
+ */
+function applyPoseOverrides(node, ov) {
+  if (!(ov instanceof Map) || ov.size === 0) return node;
+  let any = false;
+  for (const ch of POSE_CHANNELS) { if (ov.has(ch)) { any = true; break; } }
+  if (!any) return node;
+
+  const isBone = node.type === 'group' && typeof node.boneRole === 'string';
+  if (isBone) {
+    // Mirror `overlayTransform`'s bone branch: spread the canonical flat
+    // pose (`getBonePose` handles v17/v18-flat + v19-channels) then
+    // overwrite the animated channels.
+    const pose = { ...(getBonePose(node) ?? {}) };
+    for (const ch of POSE_CHANNELS) if (ov.has(ch)) pose[ch] = ov.get(ch);
+    return { ...node, pose };
+  }
+  const transform = { ...(node.transform ?? {}) };
+  for (const ch of POSE_CHANNELS) if (ov.has(ch)) transform[ch] = ov.get(ch);
+  return { ...node, transform };
 }
 
 /**

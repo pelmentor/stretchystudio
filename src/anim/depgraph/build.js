@@ -278,9 +278,25 @@ function buildAnimationRelations(graph, project, opts) {
       if (paramOp) {
         graph.addRelation(trackOp, paramOp, 'fcurve -> param');
       }
+    } else if (target.kind === 'node' && target.property !== 'mesh_verts') {
+      // Pose / transform fcurve → the owner's TRANSFORM_COMPOSE, so the
+      // track evaluates BEFORE the transform composes and the animated
+      // pose seeds the constraint stack (→ bone skinning sees it). Before
+      // this, ANIMATION_TRACK_EVAL wrote `ctx.poseOverrides` but nothing
+      // read it — bone/part pose animation moved the skeleton overlay but
+      // never reached the mesh (the long-deferred "Phase D-5" wiring).
+      // `mesh_verts` fcurves are excluded: those don't compose a
+      // transform — the viewport applies them as a post-eval vertex
+      // override (poseOverrides.mesh_verts → GPU upload).
+      const ownerIdNode = graph.findIdNode(target.nodeId, 'part')
+        ?? graph.findIdNode(target.nodeId, 'group');
+      const ownerCompose = ownerIdNode
+        ?.findComponent(NodeType.TRANSFORM)
+        ?.findOperation(OperationCode.TRANSFORM_COMPOSE);
+      if (ownerCompose) {
+        graph.addRelation(trackOp, ownerCompose, 'fcurve -> transform');
+      }
     }
-    // TRANSFORM target — Phase D-3a will wire pose fcurves into
-    // per-part TRANSFORM ops once they exist.
   }
 }
 

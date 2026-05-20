@@ -332,5 +332,113 @@ function bareRuntime(verts) {
   assert(dDiverge > 0.1, `Test 5: depgraph DIVERGES from unclamped (constraint actually applied; delta=${dDiverge.toFixed(4)})`);
 }
 
+// ---------------------------------------------------------------------
+// Test 6: POSE ANIMATION via `poseOverrides` drives skinning.
+// The bone is authored at REST (rotation 0); an animated pose override
+// of 30° must produce the SAME skinned mesh as a statically-posed-30°
+// bone. Pins the fix for "bone animation moved the skeleton but the
+// layers ignored it" — TRANSFORM_COMPOSE now seeds the bone pose from
+// `ctx.poseOverrides` before skinning.
+// ---------------------------------------------------------------------
+{
+  const verts = quadVerts();
+  const mkProject = (rotation) => {
+    const p = {
+      canvas: { width: 800, height: 600 },
+      parameters: [],
+      nodes: [
+        { id: 'torso', type: 'group', boneRole: 'torso',
+          transform: { pivotX: 200, pivotY: 150 },
+          pose: { rotation, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+        { id: 'shirt', type: 'part', name: 'shirt', visible: true, draw_order: 100,
+          parent: 'torso', rigParent: null, modifiers: [],
+          mesh: {
+            uvs: [0, 0, 1, 0, 0, 1, 1, 1],
+            triangles: [0, 1, 2, 1, 3, 2],
+            vertices: verts.slice(),
+            boneWeights: [1, 1, 1, 1],
+            jointBoneId: 'torso',
+            runtime: bareRuntime(verts),
+          } },
+      ],
+      animations: [], physicsRules: [],
+    };
+    synthesizeModifierStacks(p);
+    return p;
+  };
+
+  // Reference: bone STATICALLY posed at 30°, classic + post-skin.
+  const staticProject = mkProject(30);
+  const staticCe = applyClassicPostSkin(staticProject, evalRig(selectRigSpec(staticProject), {}));
+
+  // Subject: bone at REST + a 30° pose OVERRIDE through the depgraph.
+  const restProject = mkProject(0);
+  const dgRest = evalProjectFrameViaDepgraph(restProject, {});
+  const dgAnim = evalProjectFrameViaDepgraph(restProject, {}, {
+    poseOverrides: new Map([['torso', { rotation: 30 }]]),
+  });
+
+  const dMatch = maxDelta(staticCe[0].vertexPositions, dgAnim[0].vertexPositions);
+  assert(dMatch < 1e-4,
+    `Test 6 (pose override drives skinning): animated == static-posed (delta=${dMatch})`,
+    `static=${Array.from(staticCe[0].vertexPositions)}, animated=${Array.from(dgAnim[0].vertexPositions)}`);
+  // Proves the override is load-bearing: rest != animated.
+  const dDiverge = maxDelta(dgRest[0].vertexPositions, dgAnim[0].vertexPositions);
+  assert(dDiverge > 1,
+    `Test 6: override actually moved the mesh off rest (delta=${dDiverge.toFixed(2)})`);
+}
+
+// ---------------------------------------------------------------------
+// Test 7: POSE ANIMATION via an ACTION fcurve drives skinning. No
+// `poseOverrides` passed — the depgraph's ANIMATION_TRACK_EVAL derives
+// the bone pose from the action and the new build relation orders it
+// before TRANSFORM_COMPOSE, so the standalone (test/export) path works
+// too.
+// ---------------------------------------------------------------------
+{
+  const verts = quadVerts();
+  const mkProject = (rotation) => {
+    const p = {
+      canvas: { width: 800, height: 600 },
+      parameters: [],
+      nodes: [
+        { id: 'torso', type: 'group', boneRole: 'torso',
+          transform: { pivotX: 200, pivotY: 150 },
+          pose: { rotation, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+        { id: 'shirt', type: 'part', name: 'shirt', visible: true, draw_order: 100,
+          parent: 'torso', rigParent: null, modifiers: [],
+          mesh: {
+            uvs: [0, 0, 1, 0, 0, 1, 1, 1],
+            triangles: [0, 1, 2, 1, 3, 2],
+            vertices: verts.slice(),
+            boneWeights: [1, 1, 1, 1],
+            jointBoneId: 'torso',
+            runtime: bareRuntime(verts),
+          } },
+      ],
+      animations: [], physicsRules: [],
+    };
+    synthesizeModifierStacks(p);
+    return p;
+  };
+
+  const staticProject = mkProject(30);
+  const staticCe = applyClassicPostSkin(staticProject, evalRig(selectRigSpec(staticProject), {}));
+
+  const restProject = mkProject(0);
+  const action = {
+    id: 'act',
+    fcurves: [
+      { rnaPath: 'objects["torso"].rotation', keyforms: [{ time: 0, value: 30 }] },
+    ],
+  };
+  const dgAction = evalProjectFrameViaDepgraph(restProject, {}, { action, timeMs: 0 });
+
+  const dMatch = maxDelta(staticCe[0].vertexPositions, dgAction[0].vertexPositions);
+  assert(dMatch < 1e-4,
+    `Test 7 (action fcurve drives skinning): action-posed == static-posed (delta=${dMatch})`,
+    `static=${Array.from(staticCe[0].vertexPositions)}, action=${Array.from(dgAction[0].vertexPositions)}`);
+}
+
 console.log(`depgraph_armature: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
