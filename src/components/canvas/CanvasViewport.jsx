@@ -1067,8 +1067,15 @@ export default function CanvasViewport({
           // Other parts stay on rig output as usual; only the selected
           // part being edited drops out.
           const _ed_mesh = editorRef.current;
+          // Force the actively-edited part to render at its REST `mesh.vertices`
+          // (camera-only) in BOTH Edit and Weight-Paint modes. WeightPaintOverlay
+          // (and the brush hit-test) project rest `mesh.vertices`; without this
+          // the GL drew the part POSED (rig output) while the weight dots sat at
+          // rest — the "phantom vertices on the rest pose while the arm is posed"
+          // report. Pinning the part to rest makes mesh + dots share one source.
+          const _isMeshEditMode = _ed_mesh.editMode === 'edit' || _ed_mesh.editMode === 'weightPaint';
           const _meshEditingPartId =
-            (_ed_mesh.editMode === 'edit' && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
+            (_isMeshEditMode && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
               ? _ed_mesh.selection[0]
               : null;
           // Map of nodes by id, used for the per-frame `node` lookup
