@@ -222,5 +222,30 @@ function makeBodyChainProject() {
   assertEq(project.nodes[0].id, '__scene__', 'v19→current: the lone node is __scene__');
 }
 
+// ── User display flags (enabled / mode / showInEditor) survive rebuild ──
+// The stack is re-derived from parent links on every re-rig (seedAllRig),
+// but the eye/camera/✓ toggles live ONLY on the modifier records. A blind
+// rebuild silently reset them, re-enabling modifiers the user disabled.
+{
+  const project = makeBodyChainProject();
+  synthesizeModifierStacks(project);
+  const partA = project.nodes.find((n) => n.id === 'partA');
+  assertEq(partA.modifiers[1].deformerId, 'BodyXWarp', 'flags: stack[1] is BodyXWarp');
+
+  // User disables BodyXWarp's viewport display (mode bit) + ✓ on the leaf.
+  partA.modifiers[1].mode = 2; // RENDER only — REALTIME (eye) cleared
+  partA.modifiers[0].enabled = false; // ✓ off on the leaf RigWarp
+
+  // A re-rig re-derives the stack from parent links.
+  synthesizeModifierStacks(project);
+  const after = project.nodes.find((n) => n.id === 'partA');
+  assertEq(after.modifiers[1].mode, 2,
+    'flags: BodyXWarp eye-off (mode) survives rebuild');
+  assertEq(after.modifiers[0].enabled, false,
+    'flags: RigWarp ✓-off (enabled) survives rebuild');
+  // Untouched entries keep their defaults.
+  assertEq(after.modifiers[2].enabled, true, 'flags: untouched entry stays enabled');
+}
+
 console.log(`modifierStacks: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

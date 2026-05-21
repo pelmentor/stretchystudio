@@ -476,6 +476,31 @@ export function synthesizeModifierStacks(project) {
     if (!part || part.type !== 'part') continue;
     const stack = [];
     const seen = new Set();
+    // Preserve user-set display flags across rebuilds. The stack is
+    // re-derived from parent links on every re-rig / refit (seedAllRig),
+    // but the eye (mode REALTIME) / camera (mode RENDER) / ✓ (enabled)
+    // toggles live ONLY on the modifier records — a blind rebuild would
+    // silently reset them, so a user who disabled a modifier sees it
+    // re-enabled after any re-rig. Index the prior stack by deformer ref
+    // (objectId/deformerId; type-agnostic so a warp→lattice flip keeps the
+    // flag) and carry `enabled`/`mode`/`showInEditor` forward via `_flags`.
+    const priorFlags = new Map();
+    if (Array.isArray(part.modifiers)) {
+      for (const m of part.modifiers) {
+        const rid = m && (m.type === 'lattice' ? m.objectId : m.deformerId);
+        if (typeof rid === 'string' && rid.length > 0) {
+          priorFlags.set(rid, { enabled: m.enabled, mode: m.mode, showInEditor: m.showInEditor });
+        }
+      }
+    }
+    const _flags = (refId) => {
+      const p = priorFlags.get(refId);
+      return {
+        enabled: p && typeof p.enabled === 'boolean' ? p.enabled : true,
+        mode: p && typeof p.mode === 'number' ? p.mode : DEFAULT_MIGRATED_MODE,
+        showInEditor: p && typeof p.showInEditor === 'boolean' ? p.showInEditor : true,
+      };
+    };
     let cur = typeof part.rigParent === 'string' && part.rigParent.length > 0
       ? part.rigParent
       : null;
@@ -510,9 +535,7 @@ export function synthesizeModifierStacks(project) {
         stack.push({
           type: 'lattice',
           objectId: def.id,
-          enabled: true,
-          mode: DEFAULT_MIGRATED_MODE,
-          showInEditor: true,
+          ..._flags(def.id),
         });
         cur = typeof def.parent === 'string' && def.parent.length > 0
           ? def.parent
@@ -523,9 +546,7 @@ export function synthesizeModifierStacks(project) {
       stack.push({
         type: def.deformerKind ?? 'warp',
         deformerId: def.id,
-        enabled: true,
-        mode: DEFAULT_MIGRATED_MODE,
-        showInEditor: true,
+        ..._flags(def.id),
         // BLENDER_DEVIATION_AUDIT Fix 3 Phase 3.A: dual-write the
         // deformer-node state into modifier.data so the per-part stack
         // becomes self-contained. Phase 3.B switches readers to this
@@ -574,9 +595,7 @@ export function synthesizeModifierStacks(project) {
           // store the joint bone id directly; the armature is the
           // bone tree it lives in.
           deformerId: jointBoneId,
-          enabled: true,
-          mode: DEFAULT_MIGRATED_MODE,
-          showInEditor: true,
+          ..._flags(jointBoneId),
           data: {
             jointBoneId,
             jointBoneRole: jointBone.boneRole,
