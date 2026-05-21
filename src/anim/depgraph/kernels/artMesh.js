@@ -180,11 +180,17 @@ export function kernelArtMeshEval(op, ctx) {
             if (up.type === 'warp' || up.type === 'rotation' || up.type === 'lattice') skippedDisabledAbove = true;
             continue;
           }
+          // Only chain-deformer steps participate in the lift composition.
+          // computePerPartLift dispatches on 'warp'/'rotation' only, so map
+          // lattice → 'warp' (a lattice IS a warp); SKIP armature / unknown
+          // types (they aren't part of the warp/rotation lift chain — pushing
+          // them as 'warp' would mis-dispatch and break the lift early).
+          const upChainType = up.type === 'rotation'
+            ? 'rotation'
+            : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
           const upId = modifierRefId(up);
-          if (typeof upId === 'string' && upId.length > 0) {
-            // Normalise `lattice` → `warp` so computePerPartLift's
-            // type dispatch (which knows only 'warp'/'rotation') composes it.
-            chainAbove.push({ type: up.type === 'rotation' ? 'rotation' : 'warp', id: upId });
+          if (upChainType && typeof upId === 'string' && upId.length > 0) {
+            chainAbove.push({ type: upChainType, id: upId });
           }
         }
         let lift = null;

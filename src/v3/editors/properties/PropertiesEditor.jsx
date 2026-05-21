@@ -83,7 +83,10 @@ export function PropertiesEditor() {
     );
   }
 
-  const activeNode = active.type === 'part' || active.type === 'group' || active.type === 'deformer'
+  // v43 — a lattice (warp) object is `type:'object'`; resolve its node so
+  // the header shows the name + a 'warp' type label, not the raw id/'object'.
+  const activeNode = active.type === 'part' || active.type === 'group'
+    || active.type === 'deformer' || active.type === 'object'
     ? (nodes ?? []).find((n) => n?.id === active.id) ?? null
     : null;
   const headerName =
@@ -92,7 +95,9 @@ export function PropertiesEditor() {
       : (activeNode?.name ?? active.id);
   const headerType = active.type === 'deformer' && activeNode?.deformerKind === 'rotation'
     ? 'rotation'
-    : active.type;
+    : active.type === 'object' && activeNode?.objectKind === 'lattice'
+      ? 'warp'
+      : active.type;
 
   const sections = effectiveTab
     ? sectionsForTab(ctx, effectiveTab)

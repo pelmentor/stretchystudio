@@ -68,7 +68,10 @@ export function WarpDeformerOverlay() {
   const activeDeformerId = useSelectionStore((s) => {
     const items = s.items;
     for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i].type === 'deformer') return items[i].id;
+      // v43 — a warp is now a first-class Lattice OBJECT (`type:'object'`);
+      // rotations stay `type:'deformer'`. Both drive the grid overlay
+      // highlight + keyform-edit drag.
+      if (items[i].type === 'deformer' || items[i].type === 'object') return items[i].id;
     }
     return null;
   });
