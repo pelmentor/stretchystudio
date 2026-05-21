@@ -18,11 +18,17 @@ this is the compact-resumption anchor.
 | `dff5405` | **Phase 6** — selectRigSpec per-part modifier chains lattice-correct (`_modifierRefId`); seam doc reconciled (`deformer/warp` arm = retained export interchange, NOT droppable). |
 | `ecf527c` | **Phase 5/6 dual-audit fix** — NeckWarp seeder → lattice; remove/renameParameter cascade + paramReferences orphan-scan lattice-aware. Blender-fidelity audit PASS. |
 
-**As of `ecf527c`: BACKEND COMPLETE.** Persisted/eval/export/auto-rig are fully
-flipped to lattice objects. Oracle `f50b6178` unchanged throughout. Only Phase 3
-UI remains (render/browser-gated). Phase 4 confirmed (no code). Phase 6 reframed:
-the `deformer/warp` shape is the LIVE transient export interchange, not baggage.
-See the plan doc §"Known gaps → Phase 3" + §"Phase 6 — REFRAMED".
+| `69d4e0c` | **Phase 3a** — depgraph/nodetree honor lattice modifiers via canonical `modifierRefId` (build/artMesh/geometry/modifierTypeInfo[+`lattice` entry]/nodetree); `test_depgraph_lattice` (10) pins legacy↔lattice parity + per-part-disable. |
+| `9e6c71d` | **Phase 3b-f** — lattice objects first-class in UI: Outliner row+Grid3x3 icon, selection (`'object'`), Properties deformer sections, Modifier-Stack object-picker, Edit-Mode cage entry + topology guards. |
+| `4a48ace` | **Phase 3 dual-audit fix** — fixed a chainAbove armature-mis-dispatch regression I introduced; WarpDeformerOverlay highlight/drag for `'object'`; PropertiesEditor breadcrumb. |
+
+**As of `4a48ace`: ALL PHASES SHIPPED.** Warps are first-class Lattice objects
+end-to-end (persisted/eval/export/auto-rig/UI). Oracle `f50b6178` unchanged
+throughout. Phase 6 reframed: the `deformer/warp` shape is the LIVE transient
+export interchange, not baggage. **One caveat:** the on-canvas cage-vertex DRAG +
+visual rendering + Properties appearance were NOT browser-verified this session
+(no browser) — structural path open + logic unit-tested; owes an in-browser pass.
+See the plan doc §"Phase 3 — SHIPPED" + §"Phase 6 — REFRAMED".
 
 ## Current state
 

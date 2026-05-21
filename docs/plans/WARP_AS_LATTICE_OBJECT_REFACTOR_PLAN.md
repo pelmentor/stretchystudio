@@ -1,10 +1,14 @@
 # Plan — Warps as first-class Lattice/Grid-Mesh Objects (Blender parity)
 
-**Status (2026-05-21):** BACKEND COMPLETE. The persisted/eval/export/auto-rig
-model is fully flipped — warps ARE first-class Lattice objects everywhere a
-project is stored, evaluated, or exported. Remaining work is the **Phase 3 UI**
-(Outliner/Properties/modifier-picker/Node-Tree/Edit-Mode), which is
-render/browser-verification-gated.
+**Status (2026-05-21):** ALL PHASES SHIPPED. Warps ARE first-class Lattice
+objects end-to-end — persisted, evaluated, exported, auto-rigged, AND surfaced
+in the editor UI (Outliner row + Grid3x3 icon, selectable, Properties
+deformer/keyform sections, Modifier-Stack object-picker + jump, Node Tree,
+Edit-Mode cage entry with rows×cols topology guards). **One caveat:** the
+on-canvas cage-vertex DRAG + visual rendering + Properties-panel appearance
+were NOT browser-verified this session (no browser) — the structural path is
+open and all logic is unit-tested, but the actual interaction needs an
+in-browser pass. See "Phase 3 — SHIPPED" below.
 
 Shipped commits:
 - **Phase 0** (`f6cedd7`) — byte-fidelity gate (oracle `f50b6178`).
@@ -44,28 +48,44 @@ datablock is the lattice). Dropping it would require re-architecting the
 byte-fidelity-critical export path onto lattice objects directly — high risk,
 zero user benefit. Retained-by-design ≠ Rule-№2 baggage.
 
-## Known gaps → Phase 3 render-verification bucket (NOT yet done)
+## Phase 3 — SHIPPED (2026-05-21, `69d4e0c` + `9e6c71d` + `4a48ace`)
 
-These all key on the pre-flip `type:'deformer'` / `mod.deformerId` shape and
-need browser/render verification to fix safely (NOT blind hot-path edits):
-- **Outliner** (`treeBuilder.js:223`) — excludes `type:'object'`, so lattice
-  warps don't appear as rows (cage `meshData` correctly stays hidden).
-  Surfacing them pulls in selection (`selectionStore` SelectableType lacks
-  `'object'`) + Properties routing (`sectionRegistry` gates on `'deformer'`) +
-  modifier object-picker (`ModifierStackSection` renders `mod.deformerId`).
-- **Depgraph per-part modifier-DISABLE for lattice** (`build.js:479,543`,
-  `kernels/artMesh.js:140,152`, `kernels/geometry.js:85`) — lattice mods fail
-  the `mod.deformerId` check, so a part with a lattice warp modifier renders
-  CORRECTLY via the implicit-parent (`mesh.runtime.parent`) chain fallback, but
-  per-part *disable* of a lattice warp isn't honored (falls to the global
-  chain). Fix = a `_modRefId` helper at those sites (mirrors the selectRigSpec
-  Phase-6 fix); gate on a part-vertex parity test, not just lift/matrix.
-- **Node Tree** (`anim/nodetree/build.js:89`) — skips lattice modifiers.
-- **Edit-Mode cage** — `getMesh` already resolves a lattice object's cage; the
-  missing piece is edit-mode ENTRY for `type:'object'` nodes (the payoff:
-  editable blendshapes = editing the cage). Reuse the exit→refit path.
-- **Diagnostics** (`projectStore` load/save logs) — deformer counts undercount
-  (lattice objects aren't `type:'deformer'`); cosmetic.
+All the pre-flip `type:'deformer'` / `mod.deformerId` consumers were made
+lattice-aware. A canonical `modifierRefId(mod)` helper (seam) is the single
+source of truth (objectId for lattice, deformerId else).
+- **Depgraph + Node Tree per-part modifier handling** (`build.js`,
+  `kernels/artMesh.js`, `kernels/geometry.js`, `modifierTypeInfo.js` [+ `lattice`
+  MODIFIER_TYPES entry], `nodetree/build.js`) — all via `modifierRefId`. Warps
+  already rendered (implicit-parent fallback); now per-part modifier-DISABLE is
+  honored for lattice too. `test_depgraph_lattice.mjs` (10) pins legacy↔lattice
+  byte-parity + the disable behaviour.
+- **Outliner** (`treeBuilder.js`, `TreeNode.jsx`) — lattice objects are rows
+  (Grid3x3 icon, `isLattice` flag); cage `meshData` stays hidden. +5 asserts.
+- **Selection** (`selectionStore` SelectableType += `'object'`; `OutlinerEditor`
+  routing) + **Properties** (`sectionRegistry` routes the 3 deformer sections
+  for `type:'object'`; `DeformerInfo/Bindings/Keyforms` use `isChainDeformerNode`)
+  + **Modifier-Stack object-picker** (`ModifierStackSection` shows the cage
+  object name + ◇ jumps to `{type:'object'}`).
+- **Canvas overlay** (`WarpDeformerOverlay`) — selecting a lattice object
+  highlights its grid + arms the keyform-edit drag (`activeDeformerId` now
+  matches `'object'`). PropertiesEditor breadcrumb shows the name + 'warp' label.
+- **Edit-Mode cage** — `getDataKind`→'mesh' for lattice unlocks Edit Mode; the
+  canvas edit-path `selNode` resolution accepts cages (`getMesh` already
+  resolves the cage via `dataId`). **Topology HARD-BLOCKED** on cages
+  (rows×cols invariant): guard in `applyTopologyOp` (subdivide/merge/dissolve/
+  extrude) + the add/remove-vertex tool handlers. Moving control points stays
+  allowed.
+
+**NOT browser-verified this session (no browser):** the actual on-canvas
+cage-vertex DRAG + visual rendering + Properties-panel visual appearance. The
+structural path is open and all logic is unit-tested + typecheck-clean, but a
+real in-browser pass is owed before declaring the UX done.
+
+**Deliberately NOT done (out of scope / consistent with pre-flip):**
+delete/duplicate of a lattice object via the viewport operators (warps-as-
+deformers were never delete/duplicate-able there either; would be a NEW feature
+and must clean the cage meshData if added). Library-save deformer-count log
+undercounts lattice objects (cosmetic).
 
 **One-line goal:** make warp deformers **actual editable grid-mesh /
 lattice objects** in the scene, and make the part↔warp relationship an
