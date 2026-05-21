@@ -28,6 +28,7 @@
  * @property {(mesh: any, updates: any, boneGroups: any) => void} applyWeightStroke
  * @property {(spec: any) => any} rotationSpecToDeformerNode
  * @property {(spec: any) => any} warpSpecToDeformerNode
+ * @property {(nodes: any[], stored: any) => any} upsertWarpAsLattice
  * @property {(nodes: any[], node: any) => void} upsertDeformerNode
  * @property {(nodes: any[]) => void} removeAllRotationDeformerNodes
  * @property {(p: any) => void} synthesizeModifierStacks
@@ -67,6 +68,7 @@ export function loadRigPeers() {
       applyWeightStroke: meshSync.applyWeightStroke,
       rotationSpecToDeformerNode: deformerNodeSync.rotationSpecToDeformerNode,
       warpSpecToDeformerNode: deformerNodeSync.warpSpecToDeformerNode,
+      upsertWarpAsLattice: deformerNodeSync.upsertWarpAsLattice,
       upsertDeformerNode: deformerNodeSync.upsertDeformerNode,
       removeAllRotationDeformerNodes: deformerNodeSync.removeAllRotationDeformerNodes,
       synthesizeModifierStacks: deformerNodeSync.synthesizeModifierStacks,

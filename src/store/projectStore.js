@@ -68,6 +68,21 @@ import { computeWorldMatrices } from '../renderer/transforms.js';
  * Deep clone an object, preserving TypedArrays.
  * Safe for use with Immer draft proxies.
  */
+/**
+ * Whether `n` is a node that hosts parameter `bindings[]` — rotation
+ * deformers (`type:'deformer'`) AND lattice/warp objects (`type:'object',
+ * objectKind:'lattice'`, v43). Param-cascade walks (remove/rename) must
+ * cover both so a deleted/renamed param doesn't leave dangling
+ * `parameterId` refs in lattice warp bindings.
+ *
+ * @param {object|null|undefined} n
+ * @returns {boolean}
+ */
+function _nodeHasParamBindings(n) {
+  if (!n || !Array.isArray(n.bindings)) return false;
+  return n.type === 'deformer' || (n.type === 'object' && n.objectKind === 'lattice');
+}
+
 function deepClone(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
   if (obj instanceof Float32Array) return new Float32Array(obj);
@@ -523,7 +538,8 @@ export const useProjectStore = create((set, get) => {
     const proj = state.project;
     proj.parameters = (proj.parameters ?? []).filter((p) => p?.id !== paramId);
     for (const n of proj.nodes ?? []) {
-      if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
+      // Bindings live on rotation deformers AND lattice (warp) objects (v43).
+      if (!_nodeHasParamBindings(n)) continue;
       n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
     }
     for (const action of proj.actions ?? []) {
@@ -556,7 +572,8 @@ export const useProjectStore = create((set, get) => {
       param.id = newId;
       param._userAuthored = true;
       for (const n of proj.nodes ?? []) {
-        if (n?.type !== 'deformer' || !Array.isArray(n.bindings)) continue;
+        // Bindings live on rotation deformers AND lattice (warp) objects (v43).
+        if (!_nodeHasParamBindings(n)) continue;
         for (const b of n.bindings) {
           if (b?.parameterId === oldId) b.parameterId = newId;
         }
@@ -1478,10 +1495,12 @@ export const useProjectStore = create((set, get) => {
                   || (n.type === 'object' && n.objectKind === 'lattice'))
             );
             if (!prior || prior._userAuthored !== true) {
-              peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
+              // Phase 5 — emit a Blender-Lattice object (+ cage), not a legacy
+              // `deformer/warp` node, so NeckWarp matches every other warp.
+              peers.upsertWarpAsLattice(proj.nodes, harvest.neckWarpSpec);
             }
           } else {
-            peers.upsertDeformerNode(proj.nodes, peers.warpSpecToDeformerNode(harvest.neckWarpSpec));
+            peers.upsertWarpAsLattice(proj.nodes, harvest.neckWarpSpec);
           }
         } else if (mode === 'replace') {
           // No NeckWarp this run (faceRig opt-out, or no neck-tagged

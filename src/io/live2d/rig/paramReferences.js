@@ -72,6 +72,19 @@ function emptyReport() {
   };
 }
 
+/**
+ * Whether `n` hosts parameter `bindings[]` — rotation deformers
+ * (`type:'deformer'`) AND lattice/warp objects (`type:'object',
+ * objectKind:'lattice'`, v43). Orphan/reference scans must cover both.
+ *
+ * @param {object|null|undefined} n
+ * @returns {boolean}
+ */
+function _nodeHostsBindings(n) {
+  if (!n) return false;
+  return n.type === 'deformer' || (n.type === 'object' && n.objectKind === 'lattice');
+}
+
 function pushTotal(report) {
   report.total =
     report.actionFCurves.length +
@@ -118,7 +131,8 @@ export function findReferences(project, paramId) {
   // by the node id (more useful for debugging than the prior
   // sidetable-relative paths since deformer nodes are first-class).
   for (const n of project.nodes ?? []) {
-    if (!n || n.type !== 'deformer') continue;
+    // v43 — bindings live on rotation deformers AND lattice (warp) objects.
+    if (!_nodeHostsBindings(n)) continue;
     const bindings = Array.isArray(n.bindings) ? n.bindings : [];
     bindings.forEach((b, bi) => {
       if (b?.parameterId === paramId) {
@@ -182,8 +196,9 @@ export function findOrphanReferences(project) {
     }
   }
   // BFA-006 Phase 6 — deformer bindings live on nodes now.
+  // v43 — also on lattice (warp) objects.
   for (const n of project.nodes ?? []) {
-    if (!n || n.type !== 'deformer') continue;
+    if (!_nodeHostsBindings(n)) continue;
     for (const b of n.bindings ?? []) {
       if (b?.parameterId) referenced.add(b.parameterId);
     }

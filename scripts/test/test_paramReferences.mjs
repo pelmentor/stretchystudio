@@ -126,6 +126,34 @@ function assert(cond, name) {
   assert(findReferences({}, 123).total === 0, 'non-string paramId → empty');
 }
 
+// ── findReferences: bindings on LATTICE (v43) warp objects ──────────
+{
+  // Post-v43 / Phase 5, warps are `{type:'object', objectKind:'lattice'}`
+  // and carry `bindings` as object-side metadata. The reference + orphan
+  // scans must walk them (else a deleted param leaves dangling refs in
+  // lattice warp bindings).
+  const project = {
+    parameters: [{ id: 'ParamAngleX' }],
+    nodes: [
+      { id: 'FaceParallaxWarp', type: 'object', objectKind: 'lattice', dataId: 'FaceParallaxWarp__cage',
+        bindings: [{ parameterId: 'ParamAngleX' }, { parameterId: 'ParamGhost' }] },
+      { id: 'FaceParallaxWarp__cage', type: 'meshData', vertices: [], isLatticeCage: true },
+      // A rotation deformer stays `type:'deformer'` — must still be scanned.
+      { id: 'FaceRotation', type: 'deformer', deformerKind: 'rotation',
+        bindings: [{ parameterId: 'ParamAngleX' }] },
+    ],
+  };
+  const angleX = findReferences(project, 'ParamAngleX');
+  assert(angleX.bindings.length === 2,
+    `ParamAngleX: 2 binding hits across lattice + rotation (got ${angleX.bindings.length})`);
+  const ghost = findReferences(project, 'ParamGhost');
+  assert(ghost.bindings.length === 1, 'lattice-object binding for ParamGhost found');
+  // Orphan scan: ParamGhost has no matching parameter → orphan via lattice binding.
+  const orphans = findOrphanReferences(project);
+  assert(Object.keys(orphans).includes('ParamGhost'),
+    'orphan scan walks lattice-object bindings (ParamGhost flagged)');
+}
+
 // ── findOrphanReferences ───────────────────────────────────────────
 {
   const project = {
