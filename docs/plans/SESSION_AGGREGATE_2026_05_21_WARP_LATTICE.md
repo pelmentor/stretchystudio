@@ -21,14 +21,36 @@ this is the compact-resumption anchor.
 | `69d4e0c` | **Phase 3a** — depgraph/nodetree honor lattice modifiers via canonical `modifierRefId` (build/artMesh/geometry/modifierTypeInfo[+`lattice` entry]/nodetree); `test_depgraph_lattice` (10) pins legacy↔lattice parity + per-part-disable. |
 | `9e6c71d` | **Phase 3b-f** — lattice objects first-class in UI: Outliner row+Grid3x3 icon, selection (`'object'`), Properties deformer sections, Modifier-Stack object-picker, Edit-Mode cage entry + topology guards. |
 | `4a48ace` | **Phase 3 dual-audit fix** — fixed a chainAbove armature-mis-dispatch regression I introduced; WarpDeformerOverlay highlight/drag for `'object'`; PropertiesEditor breadcrumb. |
+| `2295ef3` | **UI fix** — footer warn/error log pills used ⚠/⛔ emoji (fuzzy color bitmaps on Windows) → crisp lucide `AlertTriangle`/`Ban` vectors. |
+| `b06356e` | **THE legwear fix** — bone-baked parts now show their body-warp Lattice modifiers. `synthesizeModifierStacks` only built from `part.rigParent` (unset for bone-baked parts); their chain lives in `mesh.runtime.parent`. Now falls back to it → legwear stack = `[RigWarp_legwear, BodyXWarp, BodyWarpY, BodyWarpZ, BreathWarp, Armature]`. Modifiers are HONEST + DRIVE eval (bone-baked bypass deactivates; per-part disable works); `synthesizeDeformerParents` writes `rigParent` back for stability. +6 asserts. |
 
-**As of `4a48ace`: ALL PHASES SHIPPED.** Warps are first-class Lattice objects
-end-to-end (persisted/eval/export/auto-rig/UI). Oracle `f50b6178` unchanged
-throughout. Phase 6 reframed: the `deformer/warp` shape is the LIVE transient
-export interchange, not baggage. **One caveat:** the on-canvas cage-vertex DRAG +
-visual rendering + Properties appearance were NOT browser-verified this session
-(no browser) — structural path open + logic unit-tested; owes an in-browser pass.
-See the plan doc §"Phase 3 — SHIPPED" + §"Phase 6 — REFRAMED".
+**ALL PHASES SHIPPED (through `b06356e`).** Warps are first-class Lattice objects
+end-to-end (persisted/eval/export/auto-rig/UI), AND the original motivating bug
+is fixed — a bone-baked part (legwear) now visibly carries the body-warp Lattice
+modifiers that deform it. Oracle `f50b6178` unchanged throughout. Phase 6
+reframed: the `deformer/warp` shape is the LIVE transient export interchange,
+not baggage.
+
+### OPEN — needs an in-browser pass (no browser this session)
+1. **Phase 3 cage editing** — on-canvas cage-vertex DRAG + visual rendering +
+   Properties-panel appearance (structural path open, all logic unit-tested).
+2. **`b06356e` eval-path switch** — making bone-baked stacks honest deactivates
+   the bone-baked bypass for ALL bone-baked parts (bypass → modifier-chain eval).
+   Confirmed eval-equivalent by reasoning + sideBySide/e2e parity, but this path
+   had a "legwear floats during BodyAngleZ" bug historically — **scrub
+   BodyAngleX/Z on the full character and confirm nothing floats/displaces.**
+
+### Architecture assessment (user asked 2026-05-21)
+Verdict: moderately modular, NO big-bang refactor needed. Good Blender-like bones
+(seam accessors, depgraph, store splits, sectionRegistry, granular tests). Pain =
+domain knowledge LEAKED across files (`n.type==='deformer'`/`mod.deformerId`
+inline in ~10+ sites → warps→lattice touched ~25 files), 4 redundant
+chain representations (`rigParent`/`runtime.parent`/`modifiers[]`/deformer
+`.parent`), dual eval engines (selectRigSpec+chainEval vs depgraph), and the
+2600-line `CanvasViewport` god-component. Recommendation: INCREMENTAL
+consolidation as you touch areas — highest-ROI = route every warp/deformer
+predicate through the seam (`warpLatticeAccess`) and delete inline checks.
+See [[warp-as-lattice-object-refactor]] memory + the architecture memory.
 
 ## Current state
 
