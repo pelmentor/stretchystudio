@@ -32,8 +32,7 @@
  */
 
 import {
-  warpSpecToDeformerNode,
-  upsertDeformerNode,
+  upsertWarpAsLattice,
   removeFaceParallaxNode,
   synthesizeModifierStacks,
   synthesizeDeformerParents,
@@ -129,7 +128,7 @@ export function resolveFaceParallax(project) {
   if (!node) return null;
   const byId = indexProjectNodes(project);
   if (!byId) return null;
-  return nodeToWarpSpec(node, byId);
+  return nodeToWarpSpec(node, byId, project);
 }
 
 /**
@@ -161,10 +160,11 @@ export function seedFaceParallax(project, spec, mode = 'replace') {
   }
   const stored = serializeFaceParallaxSpec(spec);
   // BFA-006 Phase 6 — single-write to `project.nodes`. The legacy
-  // `project.faceParallax` sidetable is gone; the deformer node IS
-  // the storage surface.
+  // `project.faceParallax` sidetable is gone; the lattice object IS
+  // the storage surface (Phase 5 — `upsertWarpAsLattice` emits the
+  // Blender-Lattice object + cage, not a legacy `deformer/warp` node).
   if (Array.isArray(project.nodes)) {
-    upsertDeformerNode(project.nodes, warpSpecToDeformerNode(stored));
+    upsertWarpAsLattice(project.nodes, stored);
     // Phase 3 storage flip — face parallax is an ancestor of any
     // face-tagged part's chain; refresh stacks to pick up the change.
     synthesizeModifierStacks(project);

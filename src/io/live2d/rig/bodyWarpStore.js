@@ -35,8 +35,7 @@
 
 import { makeBodyWarpNormalizers } from './bodyWarp.js';
 import {
-  warpSpecToDeformerNode,
-  upsertDeformerNode,
+  upsertWarpAsLattice,
   removeBodyWarpChainNodes,
   synthesizeModifierStacks,
   synthesizeDeformerParents,
@@ -201,7 +200,7 @@ export function resolveBodyWarp(project) {
 
   const byId = indexProjectNodes(project);
   if (!byId) return null;
-  const specs = chainNodes.map((n) => nodeToWarpSpec(n, byId));
+  const specs = chainNodes.map((n) => nodeToWarpSpec(n, byId, project));
   const { canvasToBodyXX, canvasToBodyXY } = makeBodyWarpNormalizers(layout);
   const debug = project.bodyWarpLayout.debug ?? {};
   return {
@@ -255,7 +254,8 @@ export function seedBodyWarpChain(project, chain, mode = 'replace') {
     removeBodyWarpChainNodes(project.nodes);
     for (const spec of stored.specs ?? []) {
       if (!spec) continue;
-      upsertDeformerNode(project.nodes, warpSpecToDeformerNode(spec));
+      // Phase 5 — emit Blender-Lattice objects (+ cage), not legacy nodes.
+      upsertWarpAsLattice(project.nodes, spec);
     }
   }
   project.bodyWarpLayout = {

@@ -189,11 +189,17 @@ function makeChain(withBX) {
   const project = { nodes: [] };
   const stored = seedBodyWarpChain(project, makeChain(true));
   assert(stored != null, 'seed: returns serialized chain');
-  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
-  assert(chainNodes.length === 4, 'seed: 4 chain deformer nodes written');
+  // Phase 5 — chain seeds as lattice OBJECTS (+ cages), not deformer nodes.
+  const isLattice = (n) => n.type === 'object' && n.objectKind === 'lattice';
+  const chainNodes = project.nodes.filter(isLattice);
+  assert(chainNodes.length === 4, 'seed: 4 chain lattice objects written');
   assert(project.bodyWarpLayout != null, 'seed: bodyWarpLayout sidetable populated');
-  assert(Array.isArray(chainNodes[0].baseGrid),
-    'seed: node baseGrid is plain array (JSON-safe)');
+  // The rest cage lives on the linked meshData as `{x,y}[]` vertices
+  // (inherently JSON-safe — no Float64Array).
+  const cage = project.nodes.find((n) => n.id === chainNodes[0].dataId);
+  assert(cage && Array.isArray(cage.vertices)
+    && (cage.vertices.length === 0 || typeof cage.vertices[0]?.x === 'number'),
+    'seed: cage vertices are plain objects (JSON-safe)');
 }
 
 // ── clearBodyWarp ─────────────────────────────────────────────────
@@ -202,8 +208,10 @@ function makeChain(withBX) {
   const project = { nodes: [] };
   seedBodyWarpChain(project, makeChain(true));
   clearBodyWarp(project);
-  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
+  const chainNodes = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice');
   assert(chainNodes.length === 0, 'clear: chain nodes removed');
+  assert(!project.nodes.some((n) => n.type === 'meshData' && n.isLatticeCage),
+    'clear: chain cages removed');
   assert(project.bodyWarpLayout === null, 'clear: bodyWarpLayout nulled');
 }
 

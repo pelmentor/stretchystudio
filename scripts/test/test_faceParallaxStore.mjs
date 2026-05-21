@@ -159,10 +159,14 @@ function makeSpec() {
   const project = { nodes: [] };
   const stored = seedFaceParallax(project, makeSpec());
   const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
-  assert(fpNode != null, 'seed: writes deformer node to project.nodes');
+  assert(fpNode != null, 'seed: writes lattice object to project.nodes');
+  // Phase 5 — seeds a lattice object (+ cage), not a `deformer/warp` node.
+  assert(fpNode.type === 'object' && fpNode.objectKind === 'lattice',
+    'seed: node is a lattice object');
   assert(stored != null, 'seed: returns the JSON-shape spec');
-  assert(Array.isArray(fpNode.baseGrid),
-    'seed: node baseGrid is plain array (JSON-safe)');
+  const fpCage = project.nodes.find((n) => n.id === fpNode.dataId);
+  assert(fpCage && Array.isArray(fpCage.vertices),
+    'seed: cage vertices are plain objects (JSON-safe)');
 
   // Idempotent — re-seed overwrites the node by id.
   const beforeCount = project.nodes.length;

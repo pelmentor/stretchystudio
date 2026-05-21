@@ -69,6 +69,69 @@ function baseGridToCageVertices(baseGrid) {
 }
 
 /**
+ * Convert one `{type:'deformer', deformerKind:'warp'}` node into its
+ * Blender-Lattice replacement: a `{type:'object', objectKind:'lattice'}`
+ * object (id REUSED) + a linked `{type:'meshData', isLatticeCage:true}`
+ * cage whose `vertices` ARE the rest control points.
+ *
+ * This is the CANONICAL warp→lattice shape. Both this migration AND the
+ * runtime auto-rig seeders (Phase 5 — `deformerNodeSync.upsertWarpAsLattice`)
+ * call it, so a freshly-seeded warp is byte-identical to a migrated one
+ * (the Phase-0 oracle `f50b6178` depends on this — a divergence would change
+ * `selectRigSpec().warpDeformers`).
+ *
+ * @param {object} n - a `deformer/warp` node (raw-node shape; `baseGrid`
+ *   may be Float64Array or number[])
+ * @returns {{ lattice: object, cage: object }}
+ */
+export function warpNodeToLatticeNodes(n) {
+  const gridSize = {
+    rows: n.gridSize?.rows ?? 5,
+    cols: n.gridSize?.cols ?? 5,
+  };
+  const cageId = `${n.id}__cage`;
+  const cage = {
+    id: cageId,
+    type: 'meshData',
+    // The rest control points ARE the cage mesh vertices (the Basis).
+    vertices: baseGridToCageVertices(n.baseGrid),
+    // Phase 3 (Edit-Mode cage) builds grid edges/topology from gridSize;
+    // a lattice has no faces (Blender Lattice), so triangles stay empty.
+    uvs: [],
+    triangles: [],
+    edgeIndices: [],
+    isLatticeCage: true,
+    gridSize: { ...gridSize },
+  };
+
+  const lattice = {
+    id: n.id,
+    type: 'object',
+    objectKind: 'lattice',
+    name: n.name ?? n.id,
+    parent: typeof n.parent === 'string' ? n.parent : null,
+    dataId: cageId,
+    visible: n.visible !== false,
+    gridSize,
+    localFrame: n.localFrame ?? 'canvas-px',
+    bindings: Array.isArray(n.bindings) ? n.bindings : [],
+    keyforms: Array.isArray(n.keyforms) ? n.keyforms : [],
+    isLocked: n.isLocked === true,
+    isQuadTransform: n.isQuadTransform === true,
+  };
+  if (typeof n.targetPartId === 'string' && n.targetPartId.length > 0) {
+    lattice.targetPartId = n.targetPartId;
+  }
+  if (n.canvasBbox && typeof n.canvasBbox === 'object') {
+    lattice.canvasBbox = n.canvasBbox;
+  }
+  if (n._userAuthored === true) lattice._userAuthored = true;
+  if (typeof n.rigParent === 'string') lattice.rigParent = n.rigParent;
+
+  return { lattice, cage };
+}
+
+/**
  * @param {object} project - mutated in place; at v42 on entry, v43 on exit
  */
 export function migrateLatticeSubstrate(project) {
@@ -90,49 +153,7 @@ export function migrateLatticeSubstrate(project) {
     if (typeof n.id !== 'string') continue;
     warpIds.add(n.id);
 
-    const gridSize = {
-      rows: n.gridSize?.rows ?? 5,
-      cols: n.gridSize?.cols ?? 5,
-    };
-    const cageId = `${n.id}__cage`;
-    const cage = {
-      id: cageId,
-      type: 'meshData',
-      // The rest control points ARE the cage mesh vertices (the Basis).
-      vertices: baseGridToCageVertices(n.baseGrid),
-      // Phase 3 (Edit-Mode cage) builds grid edges/topology from gridSize;
-      // a lattice has no faces (Blender Lattice), so triangles stay empty.
-      uvs: [],
-      triangles: [],
-      edgeIndices: [],
-      isLatticeCage: true,
-      gridSize: { ...gridSize },
-    };
-
-    const lattice = {
-      id: n.id,
-      type: 'object',
-      objectKind: 'lattice',
-      name: n.name ?? n.id,
-      parent: typeof n.parent === 'string' ? n.parent : null,
-      dataId: cageId,
-      visible: n.visible !== false,
-      gridSize,
-      localFrame: n.localFrame ?? 'canvas-px',
-      bindings: Array.isArray(n.bindings) ? n.bindings : [],
-      keyforms: Array.isArray(n.keyforms) ? n.keyforms : [],
-      isLocked: n.isLocked === true,
-      isQuadTransform: n.isQuadTransform === true,
-    };
-    if (typeof n.targetPartId === 'string' && n.targetPartId.length > 0) {
-      lattice.targetPartId = n.targetPartId;
-    }
-    if (n.canvasBbox && typeof n.canvasBbox === 'object') {
-      lattice.canvasBbox = n.canvasBbox;
-    }
-    if (n._userAuthored === true) lattice._userAuthored = true;
-    if (typeof n.rigParent === 'string') lattice.rigParent = n.rigParent;
-
+    const { lattice, cage } = warpNodeToLatticeNodes(n);
     conversions.push({ index: i, lattice, cage });
   }
 
@@ -168,6 +189,11 @@ export function migrateLatticeSubstrate(project) {
         showInEditor: mod.showInEditor !== false,
       };
       if (next.mode === undefined) delete next.mode;
+      // Preserve the v21 `synthetic` marker (a modifier auto-inserted on an
+      // ancestor-affected part with no explicit stack entry). It drives the
+      // "(synth)" Node-Tree label + the Modifier-Stack synthetic badge, so
+      // dropping it on the warp→lattice flip would silently lose that UI.
+      if (mod.synthetic === true) next.synthetic = true;
       part.modifiers[i] = next;
     }
   }

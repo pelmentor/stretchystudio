@@ -231,16 +231,24 @@ function assertEq(actual, expected, name) {
     isVisible: true, isLocked: false, isQuadTransform: false,
   };
   seedFaceParallax(project, spec);
-  // BFA-006 Phase 6 — single-write to project.nodes; sidetable is gone.
+  // Phase 5 — seeders EMIT Blender-Lattice objects (+ cage), not legacy
+  // `deformer/warp` nodes. The lattice OBJECT reuses the warp id.
   const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
-  assert(!!fpNode, 'seed FP: deformer node written');
-  assertEq(fpNode.type, 'deformer', 'seed FP: node type');
-  assertEq(fpNode.deformerKind, 'warp', 'seed FP: node deformerKind');
+  assert(!!fpNode, 'seed FP: lattice object written');
+  assertEq(fpNode.type, 'object', 'seed FP: node type');
+  assertEq(fpNode.objectKind, 'lattice', 'seed FP: node objectKind');
+  // The cage meshData carries the rest control points as vertices.
+  const fpCage = project.nodes.find((n) => n.id === 'FaceParallaxWarp__cage');
+  assert(!!fpCage && fpCage.type === 'meshData' && fpCage.isLatticeCage === true,
+    'seed FP: cage meshData written');
+  assertEq(fpNode.dataId, 'FaceParallaxWarp__cage', 'seed FP: object links cage');
   assert(project.faceParallax === undefined, 'seed FP: no legacy sidetable write');
 
   clearFaceParallax(project);
   assert(!project.nodes.some((n) => n.id === 'FaceParallaxWarp'),
-    'clear FP: removes deformer node');
+    'clear FP: removes lattice object');
+  assert(!project.nodes.some((n) => n.id === 'FaceParallaxWarp__cage'),
+    'clear FP: removes orphaned cage meshData');
 }
 
 {
@@ -312,26 +320,34 @@ function assertEq(actual, expected, name) {
     debug: { HIP_FRAC: 0.45, FEET_FRAC: 0.75, bodyFracSource: 'defaults', spineCfShifts: [] },
   };
   seedBodyWarpChain(project, chain);
-  const ids = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
+  // Phase 5 — body warp chain seeds as lattice OBJECTS (+ cages).
+  const isLattice = (n) => n.type === 'object' && n.objectKind === 'lattice';
+  const ids = project.nodes.filter(isLattice).map((n) => n.id);
   assertEq(ids, ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'],
     'seed BW: all 4 chain nodes written');
+  assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 4,
+    'seed BW: 4 cage meshData written');
   assert(project.bodyWarpLayout != null, 'seed BW: layout sidetable populated');
 
-  // Re-seed with a 3-spec chain (no BX). Stale BX node should be dropped.
+  // Re-seed with a 3-spec chain (no BX). Stale BX node + cage should be dropped.
   const shorter = {
     specs: chain.specs.slice(0, 3),
     layout: chain.layout,
     debug: chain.debug,
   };
   seedBodyWarpChain(project, shorter);
-  const ids2 = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
+  const ids2 = project.nodes.filter(isLattice).map((n) => n.id);
   assertEq(ids2, ['BodyWarpZ', 'BodyWarpY', 'BreathWarp'],
     'seed BW: shorter chain replaces longer; stale BX dropped');
+  assert(!project.nodes.some((n) => n.id === 'BodyXWarp__cage'),
+    'seed BW: stale BX cage meshData dropped');
 
   clearBodyWarp(project);
   assert(project.bodyWarpLayout === null, 'clear BW: layout sidetable nulled');
-  assertEq(project.nodes.filter((n) => n.type === 'deformer').length, 0,
+  assertEq(project.nodes.filter(isLattice).length, 0,
     'clear BW: drops all chain nodes');
+  assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 0,
+    'clear BW: drops all chain cages');
 }
 
 // ── Dual-write seedRigWarps / clearRigWarps ──────────────────────
@@ -363,21 +379,29 @@ function assertEq(actual, expected, name) {
     }],
   ]);
   seedRigWarps(project, map);
-  const deformers = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id).sort();
+  // Phase 5 — per-mesh rig warps seed as lattice OBJECTS (+ cages).
+  const isLattice = (n) => n.type === 'object' && n.objectKind === 'lattice';
+  const deformers = project.nodes.filter(isLattice).map((n) => n.id).sort();
   assertEq(deformers, ['RigWarp_partA', 'RigWarp_partB'],
     'dual-write RW: both rigWarp nodes written');
   assertEq(partA.rigParent, 'RigWarp_partA', 'dual-write RW: partA.rigParent set');
   assertEq(partB.rigParent, 'RigWarp_partB', 'dual-write RW: partB.rigParent set');
+  assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 2,
+    'dual-write RW: 2 cage meshData written');
 
-  // Re-seed with only partA → partB node and partB.rigParent dropped.
+  // Re-seed with only partA → partB node + cage and partB.rigParent dropped.
   const partAOnly = new Map([['partA', map.get('partA')]]);
   seedRigWarps(project, partAOnly);
-  const after = project.nodes.filter((n) => n.type === 'deformer').map((n) => n.id);
+  const after = project.nodes.filter(isLattice).map((n) => n.id);
   assertEq(after, ['RigWarp_partA'], 'dual-write RW: replace mode drops partB node');
+  assert(!project.nodes.some((n) => n.id === 'RigWarp_partB__cage'),
+    'dual-write RW: replace mode drops partB cage meshData');
 
   clearRigWarps(project);
-  assertEq(project.nodes.filter((n) => n.type === 'deformer').length, 0,
+  assertEq(project.nodes.filter(isLattice).length, 0,
     'clear RW: drops all rigWarp nodes');
+  assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 0,
+    'clear RW: drops all rigWarp cages');
   assertEq(partA.rigParent, null, 'clear RW: nulls partA.rigParent');
   assertEq(partB.rigParent, null, 'clear RW: nulls partB.rigParent');
 }

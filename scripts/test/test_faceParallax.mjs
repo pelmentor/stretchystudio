@@ -336,10 +336,12 @@ function makeFaceBoxes() {
   const { spec } = buildFaceParallaxSpec({ meshes, ...makeFaceBoxes() });
   seedFaceParallax(project, spec);
   const fpNode = project.nodes.find((n) => n.id === 'FaceParallaxWarp');
-  assert(fpNode != null, 'seed created FaceParallaxWarp deformer node');
-  assertEq(fpNode.type, 'deformer', 'node type');
-  assertEq(fpNode.deformerKind, 'warp', 'node deformerKind');
-  assert(Array.isArray(fpNode.baseGrid), 'baseGrid stored as plain array on node');
+  assert(fpNode != null, 'seed created FaceParallaxWarp lattice object');
+  // Phase 5 — seeds a Blender-Lattice object (+ cage), not a `deformer/warp`.
+  assertEq(fpNode.type, 'object', 'node type');
+  assertEq(fpNode.objectKind, 'lattice', 'node objectKind');
+  const fpCage = project.nodes.find((n) => n.id === fpNode.dataId);
+  assert(fpCage && Array.isArray(fpCage.vertices), 'cage vertices stored as plain objects');
   const resolved = resolveFaceParallax(project);
   assert(resolved != null, 'resolve returns spec when populated');
   arraysClose(resolved.baseGrid, spec.baseGrid, 1e-15, 'resolved baseGrid matches seeded');

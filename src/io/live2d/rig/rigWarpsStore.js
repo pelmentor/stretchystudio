@@ -46,8 +46,7 @@
  */
 
 import {
-  warpSpecToDeformerNode,
-  upsertDeformerNode,
+  upsertWarpAsLattice,
   removeRigWarpNodes,
   removeDeformerNodesByPredicate,
   synthesizeModifierStacks,
@@ -215,7 +214,7 @@ export function resolveRigWarps(project) {
   const byId = indexProjectNodes(project);
   if (!byId) return out;
   for (const [partId, node] of nodes) {
-    out.set(partId, nodeToWarpSpec(node, byId));
+    out.set(partId, nodeToWarpSpec(node, byId, project));
   }
   return out;
 }
@@ -258,7 +257,7 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
     if (byId) {
       for (const [partId, priorNode] of priorNodes) {
         if (priorNode._userAuthored === true) {
-          merged[partId] = nodeToWarpSpec(priorNode, byId);
+          merged[partId] = nodeToWarpSpec(priorNode, byId, project);
         }
       }
     }
@@ -278,7 +277,8 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
     }
     for (const spec of Object.values(finalMap)) {
       if (!spec) continue;
-      upsertDeformerNode(project.nodes, warpSpecToDeformerNode(spec));
+      // Phase 5 — emit Blender-Lattice objects (+ cage), not legacy nodes.
+      upsertWarpAsLattice(project.nodes, spec);
     }
     // Sync parts[i].rigParent: every part covered by the map gets
     // pointed at its rigWarp deformer's id.

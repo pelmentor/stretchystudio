@@ -202,9 +202,11 @@ assertEq(DEFAULT_MIGRATED_MODE, MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER,
     'e2e: face stack length = 4 (BodyX → Breath → BodyY → BodyZ chain)');
   assertEq(face.modifiers[0].mode, DEFAULT_MIGRATED_MODE,
     'e2e: face[0] mode = REALTIME|RENDER');
-  assertEq(face.modifiers[0].deformerId, 'BodyXWarp',
+  // v43 — warp modifiers become lattice modifiers that reference the cage
+  // object via `objectId` (not `deformerId`).
+  assertEq(face.modifiers[0].objectId, 'BodyXWarp',
     'e2e: face[0] = BodyXWarp (leaf-first iteration)');
-  assertEq(face.modifiers[3].deformerId, 'BodyWarpZ',
+  assertEq(face.modifiers[3].objectId, 'BodyWarpZ',
     'e2e: face[3] = BodyWarpZ (root last)');
   assert(!face.modifiers[0].synthetic, 'e2e: face[0] NOT marked synthetic');
   assert(Array.isArray(shirt.modifiers) && shirt.modifiers.length === 1,

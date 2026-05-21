@@ -308,7 +308,7 @@ function makeSpec({
   ]);
   seedRigWarps(project, map);
   const rigNodes = project.nodes
-    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string')
     .map((n) => n.targetPartId)
     .sort();
   assertEq(rigNodes, ['A', 'B'], 'seeded both rigWarp nodes (Map)');
@@ -323,7 +323,7 @@ function makeSpec({
   const specs = [makeSpec({ partId: 'X' }), makeSpec({ partId: 'Y' })];
   seedRigWarps(project, specs);
   const rigParts = project.nodes
-    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string')
     .map((n) => n.targetPartId).sort();
   assertEq(rigParts, ['X', 'Y'], 'iterable input keyed by targetPartId');
 }
@@ -334,12 +334,12 @@ function makeSpec({
   const project = { nodes: [] };
   seedRigWarps(project, [makeSpec({ partId: 'A' })]);
   let rigParts = project.nodes
-    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string')
     .map((n) => n.targetPartId);
   assertEq(rigParts, ['A'], 'first seed → A only');
   seedRigWarps(project, [makeSpec({ partId: 'B' })]);
   rigParts = project.nodes
-    .filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string')
+    .filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string')
     .map((n) => n.targetPartId);
   assertEq(rigParts, ['B'], 'second seed replaces');
 }
@@ -349,9 +349,10 @@ function makeSpec({
 {
   const project = { nodes: [] };
   seedRigWarps(project, [makeSpec({ partId: 'A' })]);
-  assert(project.nodes.some((n) => n.type === 'deformer' && n.targetPartId === 'A'), 'seeded');
+  const isLatticeWarp = (n) => n.type === 'object' && n.objectKind === 'lattice' && n.targetPartId;
+  assert(project.nodes.some((n) => isLatticeWarp(n) && n.targetPartId === 'A'), 'seeded');
   clearRigWarps(project);
-  assert(!project.nodes.some((n) => n.type === 'deformer' && n.targetPartId), 'clear: no rigWarp nodes');
+  assert(!project.nodes.some(isLatticeWarp), 'clear: no rigWarp nodes');
   assertEq(resolveRigWarps(project).size, 0, 'resolve after clear: empty');
 }
 

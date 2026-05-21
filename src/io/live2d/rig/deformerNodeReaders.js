@@ -64,9 +64,12 @@ export function inflateParentRef(parentId, nodeById) {
  *
  * @param {object} node
  * @param {Map<string, object>} nodeById
+ * @param {object} [project] - needed to resolve a lattice object's cage
+ *   (`getWarpRestGrid` looks up the linked `meshData` via `dataId`). Omit
+ *   only for legacy `deformer/warp` nodes whose rest cage is inline.
  * @returns {object}
  */
-export function nodeToWarpSpec(node, nodeById) {
+export function nodeToWarpSpec(node, nodeById, project) {
   const spec = {
     id: node.id,
     name: node.name ?? node.id,
@@ -75,7 +78,7 @@ export function nodeToWarpSpec(node, nodeById) {
       rows: node.gridSize?.rows ?? 5,
       cols: node.gridSize?.cols ?? 5,
     },
-    baseGrid: coerceFloat64Array(getWarpRestGrid(node), `warpNode[${node.id}].baseGrid`),
+    baseGrid: coerceFloat64Array(getWarpRestGrid(node, project), `warpNode[${node.id}].baseGrid`),
     localFrame: node.localFrame ?? 'canvas-px',
     bindings: (node.bindings ?? []).map((b, i) => ({
       parameterId: b.parameterId,

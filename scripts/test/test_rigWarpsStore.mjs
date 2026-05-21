@@ -137,7 +137,7 @@ function makeSpec(partId) {
     ['p2', makeSpec('p2')],
   ]);
   seedRigWarps(project, inputMap);
-  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  const rigNodes = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string');
   assert(rigNodes.length === 2, 'seed (Map): both rigWarp nodes written');
   assert(rigNodes.find((n) => n.targetPartId === 'p1'), 'seed (Map): p1 node present');
 }
@@ -147,7 +147,7 @@ function makeSpec(partId) {
 {
   const project = { nodes: [] };
   seedRigWarps(project, [makeSpec('p1'), makeSpec('p2')]);
-  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  const rigNodes = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string');
   assert(rigNodes.length === 2, 'seed (array): both rigWarp nodes');
 }
 
@@ -157,7 +157,7 @@ function makeSpec(partId) {
   const project = { nodes: [] };
   seedRigWarps(project, [makeSpec('p1')]);
   clearRigWarps(project);
-  const rigNodes = project.nodes.filter((n) => n.type === 'deformer' && typeof n.targetPartId === 'string');
+  const rigNodes = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice' && typeof n.targetPartId === 'string');
   assert(rigNodes.length === 0, 'clear: rigWarp nodes removed');
 }
 

@@ -37,6 +37,7 @@
  */
 
 import { DEFAULT_MIGRATED_MODE } from './migrations/v21_modifier_mode_flags.js';
+import { warpNodeToLatticeNodes } from './migrations/v43_lattice_substrate.js';
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
@@ -215,6 +216,38 @@ export function upsertDeformerNode(nodes, node) {
   } else {
     nodes.push(node);
   }
+}
+
+/**
+ * Phase 5 — auto-rig writers EMIT lattice objects.
+ *
+ * Seed a warp as its Blender-Lattice shape: a `{type:'object',
+ * objectKind:'lattice'}` object + a linked `{type:'meshData',
+ * isLatticeCage:true}` cage, instead of the legacy `deformer/warp` node.
+ * This is what the v43 migration produces for already-stored warps; the
+ * runtime seeders (`seedFaceParallax` / `seedBodyWarpChain` /
+ * `seedRigWarps`) call this so a freshly re-rigged project carries the
+ * same lattice substrate — no permanent legacy/lattice mix (Rule №2).
+ *
+ * The stored spec is first normalised through `warpSpecToDeformerNode`
+ * (array coercion, parent flattening, defaults, targetPartId/canvasBbox/
+ * _userAuthored carry-through) and then converted via the canonical
+ * `warpNodeToLatticeNodes` — the same converter the migration uses, so
+ * seeded and migrated lattices are byte-identical (Phase-0 oracle).
+ *
+ * @param {Array<object>} nodes - `project.nodes` (mutated in place)
+ * @param {object} stored - a serialized warp spec (Float64Array → number[])
+ * @returns {object} the lattice OBJECT node that was upserted
+ */
+export function upsertWarpAsLattice(nodes, stored) {
+  const warpNode = warpSpecToDeformerNode(stored);
+  const { lattice, cage } = warpNodeToLatticeNodes(warpNode);
+  // Order matters: upsert the object first (its lattice-aware guard keeps
+  // the cage when replacing a same-dataId object, drops it otherwise),
+  // then upsert the cage so its vertices are refreshed.
+  upsertDeformerNode(nodes, lattice);
+  upsertDeformerNode(nodes, cage);
+  return lattice;
 }
 
 /**

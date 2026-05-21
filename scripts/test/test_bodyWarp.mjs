@@ -288,8 +288,8 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
   const project = { nodes: [] };
   const writeResult = seedBodyWarpChain(project, original);
   assert(writeResult != null, 'seed returns serialized chain');
-  const chainNodes = project.nodes.filter((n) => n.type === 'deformer');
-  assertEq(chainNodes.length, 4, 'seeded chain has 4 deformer nodes');
+  const chainNodes = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice');
+  assertEq(chainNodes.length, 4, 'seeded chain has 4 lattice objects');
   assert(project.bodyWarpLayout != null, 'seeded layout sidetable populated');
   // Resolve should reconstruct.
   const resolved = resolveBodyWarp(project);
@@ -305,10 +305,10 @@ function makeChainCtx({ hasParamBodyAngleX = true } = {}) {
   const original = buildBodyWarpChain(makeChainCtx());
   const project = { nodes: [] };
   seedBodyWarpChain(project, original);
-  const chainBefore = project.nodes.filter((n) => n.type === 'deformer');
+  const chainBefore = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice');
   assert(chainBefore.length === 4, 'seeded');
   clearBodyWarp(project);
-  const chainAfter = project.nodes.filter((n) => n.type === 'deformer');
+  const chainAfter = project.nodes.filter((n) => n.type === 'object' && n.objectKind === 'lattice');
   assert(chainAfter.length === 0, 'clearBodyWarp drops chain nodes');
   assert(project.bodyWarpLayout === null, 'clearBodyWarp clears layout');
   assert(resolveBodyWarp(project) === null, 'resolve after clear: null');
