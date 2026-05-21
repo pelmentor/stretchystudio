@@ -19,7 +19,7 @@
  * @module v3/editors/properties/sections/ModifierStackSection
  */
 
-import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2, Diamond } from 'lucide-react';
+import { Wrench, Eye, Camera, Plus, MoreVertical, Trash2, Diamond } from 'lucide-react';
 import { useMemo, useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
@@ -28,7 +28,6 @@ import { SectionShell } from './SectionShell.jsx';
 import {
   MODIFIER_MODE_REALTIME,
   MODIFIER_MODE_RENDER,
-  MODIFIER_MODE_EDITMODE,
 } from '../../../../store/migrations/v21_modifier_mode_flags.js';
 import { applyArmatureModifier, bindArmatureModifier } from '../../../../services/ArmatureModifierService.js';
 
@@ -203,9 +202,14 @@ export function ModifierStackSection({ nodeId }) {
               Display-mode toggles. Match Blender's modifier panel
               header row (`reference/blender/source/blender/modifiers/intern/MOD_ui_common.cc:417-421`,
               in `modifier_panel_header`):
-                - Eye (RESTRICT_VIEW_OFF) → show_viewport
-                - Camera (RESTRICT_RENDER_OFF) → show_render
-                - Pencil (EDITMODE_HLT) → show_in_editmode
+                - Eye (RESTRICT_VIEW_OFF) → show_viewport (gates depgraph viewport eval)
+                - Camera (RESTRICT_RENDER_OFF) → show_render (gates the export pass)
+              Blender's pencil (EDITMODE_HLT / show_in_editmode) is intentionally
+              NOT shown: it deforms the editable cage, but SS edit/weight modes
+              display the part at REST (mesh.vertices) by design, so there is no
+              deformed edit-cage for it to gate. Re-add it (wired) if/when SS
+              gains a deformed edit-cage. The `MODIFIER_MODE_EDITMODE` bit
+              remains in the data model; it just has no UI toggle.
               Tooltips mirror Blender's `rna_modifier.cc` property strings.
             */}
             <ModeBitIcon
@@ -219,12 +223,6 @@ export function ModifierStackSection({ nodeId }) {
               active={(mode & MODIFIER_MODE_RENDER) !== 0}
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_RENDER)}
               title="Use modifier during render"
-            />
-            <ModeBitIcon
-              icon={<Pencil size={11} />}
-              active={(mode & MODIFIER_MODE_EDITMODE) !== 0}
-              onClick={() => toggleModeBit(idx, MODIFIER_MODE_EDITMODE)}
-              title="Display modifier in Edit mode"
             />
             {/* Edit deformation — jump to this deformer's keyform editor.
                 A part carries no param-effect data of its own (it's
