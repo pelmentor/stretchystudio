@@ -497,6 +497,66 @@ function findById(arr, id) {
     'topwear chain skips disabled BodyXWarp — outer becomes BodyZWarp');
 }
 
+// ---- 9b. modifierChain for LATTICE (v43) modifiers — per-part disable ----
+{
+  // Same scenario as 9a but warps are first-class lattice OBJECTS and the
+  // part modifiers reference them via `objectId` (v43), not `deformerId`.
+  // Proves `_modifierRefId` resolves the chain for lattice mods, incl. the
+  // middle-disable case. Regression guard for the Phase 5/6 substrate.
+  const lattice = (id, parent, baseGrid) => ({
+    id, type: 'object', objectKind: 'lattice', name: id, parent,
+    dataId: `${id}__cage`, visible: true,
+    gridSize: { rows: 1, cols: 1 }, localFrame: 'canvas-px',
+    bindings: [], keyforms: [{ keyTuple: [], positions: new Float64Array(baseGrid) }],
+    isLocked: false, isQuadTransform: false,
+  });
+  const cage = (id, baseGrid) => {
+    const vertices = [];
+    for (let i = 0; i + 1 < baseGrid.length; i += 2) vertices.push({ x: baseGrid[i], y: baseGrid[i + 1] });
+    return { id: `${id}__cage`, type: 'meshData', vertices, uvs: [], triangles: [], edgeIndices: [], isLatticeCage: true, gridSize: { rows: 1, cols: 1 } };
+  };
+  const BZ = [0, 0, 200, 0, 0, 200, 200, 200];
+  const BX = [0, 0, 0.5, 0, 0, 0.5, 0.5, 0.5];
+  const BR = [0, 0, 1, 0, 0, 1, 1, 1];
+  const mkPart = (id, bxEnabled) => ({
+    id, type: 'part', name: id,
+    mesh: {
+      vertices: [{ x: 50, y: 50 }], triangles: [], uvs: [],
+      runtime: {
+        parent: { type: 'warp', id: 'BreathWarp' }, bindings: [],
+        keyforms: [{ keyTuple: [], vertexPositions: [0.5, 0.5], opacity: 1 }],
+      },
+    },
+    modifiers: [
+      { type: 'lattice', objectId: 'BreathWarp' },
+      { type: 'lattice', objectId: 'BodyXWarp', ...(bxEnabled ? {} : { enabled: false }) },
+      { type: 'lattice', objectId: 'BodyZWarp' },
+    ],
+  });
+  const project = {
+    canvas: { width: 400, height: 400 }, parameters: [],
+    nodes: [
+      lattice('BodyZWarp', null, BZ), cage('BodyZWarp', BZ),
+      lattice('BodyXWarp', 'BodyZWarp', BX), cage('BodyXWarp', BX),
+      lattice('BreathWarp', 'BodyXWarp', BR), cage('BreathWarp', BR),
+      mkPart('face', true),       // all 3 active
+      mkPart('topwear', false),   // middle (BodyXWarp) disabled
+    ],
+  };
+  const rigSpec = selectRigSpec(project);
+  const face = rigSpec.artMeshes.find((a) => a.id === 'face');
+  const topwear = rigSpec.artMeshes.find((a) => a.id === 'topwear');
+  assert(Array.isArray(face?.modifierChain) && face.modifierChain.length === 3,
+    'lattice: face has full 3-modifier chain');
+  assert(face.modifierChain[0].id === 'BreathWarp', 'lattice: face chain leaf = BreathWarp');
+  assert(face.modifierChain[2].id === 'BodyZWarp', 'lattice: face chain outer = BodyZWarp');
+  assert(Array.isArray(topwear?.modifierChain) && topwear.modifierChain.length === 2,
+    'lattice: topwear chain skips disabled middle');
+  assert(topwear.modifierChain[0].id === 'BreathWarp', 'lattice: topwear leaf = BreathWarp');
+  assert(topwear.modifierChain[1].id === 'BodyZWarp',
+    'lattice: topwear skips disabled BodyXWarp — outer becomes BodyZWarp');
+}
+
 // ---- 9c. Bone-baked-path bypass: modifierChain suppressed when runtime.parent
 //        points to a deformer not in part.modifiers[] ----
 {

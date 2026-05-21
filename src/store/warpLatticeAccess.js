@@ -42,14 +42,22 @@ import { getMeshVertices } from './objectDataAccess.js';
  * warps its descendant art-mesh verts.
  *
  * Matches BOTH shapes:
- *   - `{type:'object', objectKind:'lattice'}` — the persisted shape after
- *     the v43 flip (Slice 1.B).
- *   - `{type:'deformer', deformerKind:'warp'}` — the TRANSIENT shape that
- *     `synthesizeDeformerNodesForExport` still emits (the export adapter
- *     keeps producing deformer-shaped nodes for the selectRigSpec pipeline),
- *     plus any auto-rig-seeded warp node not yet flipped (Phase 5). Both are
- *     live, designed paths — not dead compat. The deformer/warp arm is
- *     removed in Phase 6 once auto-rig emits lattice objects directly.
+ *   - `{type:'object', objectKind:'lattice'}` — the ONLY PERSISTED shape
+ *     after the v43 flip (Slice 1.B). Both the migration and the auto-rig
+ *     seeders now emit this (Phase 5), so a stored project never carries a
+ *     `deformer/warp` node.
+ *   - `{type:'deformer', deformerKind:'warp'}` — the TRANSIENT interchange
+ *     shape `synthesizeDeformerNodesForExport` inflates each lattice OBJECT
+ *     into so the selectRigSpec → moc3/cmo3 wire emitters keep consuming the
+ *     control-grid form unchanged (Blender analogue: a Lattice evaluates into
+ *     a transient deformation the exporter reads; the persisted datablock is
+ *     the lattice). selectRigSpec overlays these synth nodes into its
+ *     `nodeById` map and resolves parent refs through this predicate, so the
+ *     arm is LIVE export infrastructure — NOT dead transition compat, and NOT
+ *     droppable without re-architecting the byte-fidelity-critical export
+ *     path (`_warpNodeToSpec` + topo-sort) onto lattice objects directly.
+ *     Phase 5 removed the OTHER reason this arm existed (un-flipped auto-rig
+ *     output); the synth-interchange reason is permanent by design.
  *
  * @param {object|null|undefined} node
  * @returns {boolean}

@@ -525,7 +525,7 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       const cachedRefInModifiers = !!(
         cachedParent.id
         && Array.isArray(part.modifiers)
-        && part.modifiers.some((m) => m && m.deformerId === cachedParent.id)
+        && part.modifiers.some((m) => m && _modifierRefId(m) === cachedParent.id)
       );
       const modifierStackComplete = !stackLeaf.hasModifiers
         || !cachedParent.id
@@ -709,6 +709,23 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
  * @param {Map<string, object>} nodeById
  * @returns {{hasModifiers: boolean, allDisabled: boolean, effectiveParent: {type:string,id:string|null}}}
  */
+/**
+ * The chain-node id a modifier references. v43 lattice (warp) modifiers
+ * reference their cage object via `objectId`; rotation modifiers reference
+ * their deformer node via `deformerId`. Armature modifiers (no chain node)
+ * yield null.
+ *
+ * @param {object|null|undefined} mod
+ * @returns {string|null}
+ */
+function _modifierRefId(mod) {
+  if (!mod || typeof mod !== 'object') return null;
+  if (mod.type === 'lattice') {
+    return typeof mod.objectId === 'string' ? mod.objectId : null;
+  }
+  return typeof mod.deformerId === 'string' ? mod.deformerId : null;
+}
+
 function _resolveEffectiveLeafModifier(part, nodeById) {
   const chain = _resolveModifierChain(part, nodeById);
   if (chain === null) {
@@ -752,16 +769,19 @@ function _resolveModifierChain(part, nodeById) {
   /** @type {Array<{type: string, id: string}>} */
   const chain = [];
   for (const mod of part.modifiers) {
-    if (!mod || typeof mod.deformerId !== 'string') continue;
+    // v43 — a warp modifier references its cage object via `objectId`; a
+    // rotation modifier references its deformer node via `deformerId`.
+    const refId = _modifierRefId(mod);
+    if (typeof refId !== 'string') continue;
     if (mod.enabled === false) continue;
     const mode = typeof mod.mode === 'number'
       ? mod.mode
       : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
     if ((mode & LIVE_RENDER_REQUIRED_MODE) === 0) continue;
-    const target = nodeById.get(mod.deformerId);
+    const target = nodeById.get(refId);
     if (!isChainDeformerNode(target)) continue;
     const type = isRotationDeformerNode(target) ? 'rotation' : 'warp';
-    chain.push({ type, id: mod.deformerId });
+    chain.push({ type, id: refId });
   }
   return chain;
 }
