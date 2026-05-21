@@ -479,6 +479,26 @@ export function synthesizeModifierStacks(project) {
     let cur = typeof part.rigParent === 'string' && part.rigParent.length > 0
       ? part.rigParent
       : null;
+    // Bone-baked / body-only parts (e.g. legwear) carry NO `rigParent` but
+    // DO ride a deformer chain cached in `mesh.runtime.parent` — the same
+    // source `selectRigSpec` evaluates them through. Without this fallback
+    // their stack shows only the appended Armature, hiding the body-warp
+    // Lattice modifiers that actually warp their geometry (the original
+    // "legwear has no warp modifier" discoverability gap). Seed the walk
+    // from the runtime parent so the stack is HONEST and drives eval
+    // (Blender: the affected piece declares its Lattice modifier). The
+    // companion `synthesizeDeformerParents` then writes `rigParent` back
+    // from the resulting stack, so subsequent rebuilds are stable.
+    if (!cur) {
+      const rtParentId = part.mesh?.runtime?.parent?.id;
+      if (typeof rtParentId === 'string' && rtParentId.length > 0) {
+        const rtDef = byId.get(rtParentId);
+        if (rtDef && (rtDef.type === 'deformer'
+            || (rtDef.type === 'object' && rtDef.objectKind === 'lattice'))) {
+          cur = rtParentId;
+        }
+      }
+    }
     while (cur && !seen.has(cur)) {
       seen.add(cur);
       const def = byId.get(cur);

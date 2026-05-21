@@ -78,6 +78,42 @@ function makeBodyChainProject() {
   assert(!('modifiers' in partB), 'partB: no modifiers field (no rigParent)');
 }
 
+// ── Bone-baked / body-only part: stack derived from mesh.runtime.parent ──
+// A part with NO rigParent but a deformer chain cached in
+// `mesh.runtime.parent` (e.g. legwear riding the body warp) must honestly
+// surface the body-warp Lattice modifiers (+ Armature), not an empty stack.
+// Uses the v43 lattice-object shape.
+{
+  const project = {
+    nodes: [
+      { id: 'BodyXWarp', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'BodyXWarp__cage' },
+      { id: 'BodyXWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
+      { id: 'RigWarp_legwear', type: 'object', objectKind: 'lattice', parent: 'BodyXWarp',
+        dataId: 'RigWarp_legwear__cage', targetPartId: 'legwear' },
+      { id: 'RigWarp_legwear__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
+      { id: 'leftKnee', type: 'group', boneRole: 'leftKnee', parent: null },
+      { id: 'legwear', type: 'part',
+        // No rigParent — bone-baked; chain leaf cached in runtime.parent.
+        mesh: {
+          vertices: [], jointBoneId: 'leftKnee', boneWeights: [1],
+          runtime: { parent: { type: 'warp', id: 'RigWarp_legwear' }, keyforms: [] },
+        } },
+    ],
+  };
+  synthesizeModifierStacks(project);
+  const legwear = project.nodes.find((n) => n.id === 'legwear');
+  assert(Array.isArray(legwear.modifiers),
+    'legwear: modifiers populated from runtime.parent (no rigParent)');
+  assertEq(legwear.modifiers[0].type, 'lattice', 'legwear[0] is a lattice modifier');
+  assertEq(legwear.modifiers[0].objectId, 'RigWarp_legwear', 'legwear[0] = RigWarp_legwear (leaf)');
+  assertEq(legwear.modifiers[1].type, 'lattice', 'legwear[1] is a lattice modifier');
+  assertEq(legwear.modifiers[1].objectId, 'BodyXWarp',
+    'legwear[1] = BodyXWarp — the body warp is now VISIBLE in the stack');
+  assertEq(legwear.modifiers[legwear.modifiers.length - 1].type, 'armature',
+    'legwear last entry = Armature (bone skin)');
+}
+
 // ── Empty stack drops the field entirely ──
 {
   const project = makeBodyChainProject();
