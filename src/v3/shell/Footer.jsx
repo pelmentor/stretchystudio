@@ -78,6 +78,7 @@
  */
 
 import { useMemo } from 'react';
+import { AlertTriangle, Ban } from 'lucide-react';
 import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
@@ -216,7 +217,9 @@ export function Footer() {
               className="inline-flex items-center gap-1 px-1.5 rounded bg-yellow-500/15 text-yellow-300 tabular-nums"
               title={`${reports.warn} warning${reports.warn === 1 ? '' : 's'} in Logs`}
             >
-              <span aria-hidden>⚠</span>
+              {/* Crisp vector icon — the prior ⚠/⛔ emoji glyphs render as
+                  fuzzy color bitmaps on Windows. */}
+              <AlertTriangle size={11} strokeWidth={2} aria-hidden />
               <span>{reports.warn}</span>
             </span>
           ) : null}
@@ -225,7 +228,7 @@ export function Footer() {
               className="inline-flex items-center gap-1 px-1.5 rounded bg-red-500/15 text-red-300 tabular-nums"
               title={`${reports.error} error${reports.error === 1 ? '' : 's'} in Logs`}
             >
-              <span aria-hidden>⛔</span>
+              <Ban size={11} strokeWidth={2} aria-hidden />
               <span>{reports.error}</span>
             </span>
           ) : null}
