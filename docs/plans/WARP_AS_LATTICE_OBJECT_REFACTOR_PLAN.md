@@ -1,12 +1,71 @@
 # Plan — Warps as first-class Lattice/Grid-Mesh Objects (Blender parity)
 
-**Status:** IN PROGRESS. **Phase 0 DONE** (byte-fidelity gate, `f6cedd7`).
-**Slice 1.A DONE** (classifier seam, `c822b02`+`ee9c741`). **Slice 1.B DONE**
-(`6852deb` — the data-model flip: warps ARE lattice objects now; v43 migration;
-oracle stays `f50b6178` = migrate→select lossless). Next user-facing slice:
-Phase 3 (UI — Outliner/Properties/Edit-Mode for lattice objects). Massive
-refactor; written 2026-05-20 after the edit-mode / rig-discoverability work
-surfaced how unintuitive the abstract-warp model was.
+**Status (2026-05-21):** BACKEND COMPLETE. The persisted/eval/export/auto-rig
+model is fully flipped — warps ARE first-class Lattice objects everywhere a
+project is stored, evaluated, or exported. Remaining work is the **Phase 3 UI**
+(Outliner/Properties/modifier-picker/Node-Tree/Edit-Mode), which is
+render/browser-verification-gated.
+
+Shipped commits:
+- **Phase 0** (`f6cedd7`) — byte-fidelity gate (oracle `f50b6178`).
+- **Slice 1.A** (`c822b02`+`ee9c741`) — classifier seam.
+- **Slice 1.B** (`6852deb`) — the data-model flip: v43 migration; oracle stays
+  `f50b6178` (migrate→select lossless). + Blender-mechanics doc (`5fc7d99`).
+- **1.B dual-audit fix** (`85b4f43`) — lattice-aware re-seed + cage cleanup.
+- **Phase 5** (`541176a`) — auto-rig SEEDERS emit lattice objects (shared
+  `warpNodeToLatticeNodes` converter; `upsertWarpAsLattice`); removes the
+  persisted dual-shape coexistence. Threaded `project` into `nodeToWarpSpec`
+  (fixed a latent cmo3-export break for migrated projects) + preserved the v21
+  `synthetic` marker through the warp→lattice modifier rewrite.
+- **Phase 6** (`dff5405`) — per-part modifier chains made lattice-correct in
+  selectRigSpec (`_modifierRefId`); seam doc reconciled (the `deformer/warp`
+  arm is RETAINED-by-design as the transient export interchange — see below).
+- **Phase 4** — CONFIRMED (no code): export reads warps via the resolvers
+  (now `project`-threaded) + the oracle-pinned `selectRigSpec().warpDeformers`;
+  the per-mesh `mesh_verts` IDW path is separate and untouched.
+- **Phase 5/6 dual-audit fix** (`ecf527c`) — NeckWarp seeder → lattice;
+  param-cascade (remove/rename) + paramReferences orphan-scan made
+  lattice-aware. Blender-fidelity audit PASS (cites byte-verified).
+
+Massive refactor; written 2026-05-20 after the edit-mode / rig-discoverability
+work surfaced how unintuitive the abstract-warp model was.
+
+## Phase 6 — REFRAMED: the `deformer/warp` shape is NOT dead
+
+The original Phase 6 ("drop the `deformer/warp` arm from `isWarpLatticeNode`")
+is **architecturally incorrect** and was NOT done. The export adapter
+(`synthesizeDeformerNodesForExport`) inflates each persisted Lattice object
+into a TRANSIENT `deformer/warp` node so the moc3/cmo3 wire emitters consume
+the control-grid form unchanged (`_warpNodeToSpec`); `selectRigSpec` overlays
+those synth nodes into its `nodeById` and resolves parent refs through the
+seam. So the arm is LIVE export infrastructure, mirroring how Blender's Lattice
+evaluates into a transient deformation the exporter reads (the persisted
+datablock is the lattice). Dropping it would require re-architecting the
+byte-fidelity-critical export path onto lattice objects directly — high risk,
+zero user benefit. Retained-by-design ≠ Rule-№2 baggage.
+
+## Known gaps → Phase 3 render-verification bucket (NOT yet done)
+
+These all key on the pre-flip `type:'deformer'` / `mod.deformerId` shape and
+need browser/render verification to fix safely (NOT blind hot-path edits):
+- **Outliner** (`treeBuilder.js:223`) — excludes `type:'object'`, so lattice
+  warps don't appear as rows (cage `meshData` correctly stays hidden).
+  Surfacing them pulls in selection (`selectionStore` SelectableType lacks
+  `'object'`) + Properties routing (`sectionRegistry` gates on `'deformer'`) +
+  modifier object-picker (`ModifierStackSection` renders `mod.deformerId`).
+- **Depgraph per-part modifier-DISABLE for lattice** (`build.js:479,543`,
+  `kernels/artMesh.js:140,152`, `kernels/geometry.js:85`) — lattice mods fail
+  the `mod.deformerId` check, so a part with a lattice warp modifier renders
+  CORRECTLY via the implicit-parent (`mesh.runtime.parent`) chain fallback, but
+  per-part *disable* of a lattice warp isn't honored (falls to the global
+  chain). Fix = a `_modRefId` helper at those sites (mirrors the selectRigSpec
+  Phase-6 fix); gate on a part-vertex parity test, not just lift/matrix.
+- **Node Tree** (`anim/nodetree/build.js:89`) — skips lattice modifiers.
+- **Edit-Mode cage** — `getMesh` already resolves a lattice object's cage; the
+  missing piece is edit-mode ENTRY for `type:'object'` nodes (the payoff:
+  editable blendshapes = editing the cage). Reuse the exit→refit path.
+- **Diagnostics** (`projectStore` load/save logs) — deformer counts undercount
+  (lattice objects aren't `type:'deformer'`); cosmetic.
 
 **One-line goal:** make warp deformers **actual editable grid-mesh /
 lattice objects** in the scene, and make the part↔warp relationship an

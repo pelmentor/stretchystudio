@@ -14,6 +14,15 @@ this is the compact-resumption anchor.
 | `6852deb` | **Slice 1.B** — THE FLIP. v43 migration: `deformer/warp` node → `{type:'object', objectKind:'lattice'}` (id reused) + `meshData` cage (vertices = baseGrid reshaped) + part modifier `{type:'warp', deformerId, data}` → `{type:'lattice', objectId}` (object is single source of truth). Seam internals + `getMesh` lattice support + synth adapter resolves lattice mods + `synthesizeModifierStacks`/`Parents` lattice-aware. Oracle stays `f50b6178` (migrate→select lossless). |
 | `5fc7d99` | **Docs** — "How Blender ACTUALLY does it": modifier sits on the affected piece (`LatticeModifierData.object`); the lattice object owns cage + shape-keys (keyforms); params drive the shape-key blend. |
 | `85b4f43` | **Dual-audit fix** — re-seed path made lattice-aware (cage cleanup on remove/replace; NeckWarp guard); +3 regression tests. |
+| `541176a` | **Phase 5** — auto-rig SEEDERS emit lattice objects (shared `warpNodeToLatticeNodes` + `upsertWarpAsLattice`); `project` threaded into `nodeToWarpSpec` (fixes latent cmo3-export break for migrated projects); v21 `synthetic` marker preserved through warp→lattice modifier rewrite. |
+| `dff5405` | **Phase 6** — selectRigSpec per-part modifier chains lattice-correct (`_modifierRefId`); seam doc reconciled (`deformer/warp` arm = retained export interchange, NOT droppable). |
+| `ecf527c` | **Phase 5/6 dual-audit fix** — NeckWarp seeder → lattice; remove/renameParameter cascade + paramReferences orphan-scan lattice-aware. Blender-fidelity audit PASS. |
+
+**As of `ecf527c`: BACKEND COMPLETE.** Persisted/eval/export/auto-rig are fully
+flipped to lattice objects. Oracle `f50b6178` unchanged throughout. Only Phase 3
+UI remains (render/browser-gated). Phase 4 confirmed (no code). Phase 6 reframed:
+the `deformer/warp` shape is the LIVE transient export interchange, not baggage.
+See the plan doc §"Known gaps → Phase 3" + §"Phase 6 — REFRAMED".
 
 ## Current state
 
