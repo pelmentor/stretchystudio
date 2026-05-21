@@ -92,6 +92,7 @@ import {
   clearMesh,
   getBoneRole,
 } from '@/store/objectDataAccess';
+import { isLatticeCageObject } from '@/store/warpLatticeAccess';
 import {
   getOrBuildAdjacency,
   computeProportionalWeights,
@@ -2473,7 +2474,7 @@ export default function CanvasViewport({
         && currentSelection.length > 0
         && e.button === 0
         && getEditorMode() !== 'animation') {
-      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
+      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && (isMeshedPart(n, proj) || (isLatticeCageObject(n) && !!getMesh(n, proj))));
       const selMesh = selNode ? getMesh(selNode, proj) : null;
       if (selNode && selMesh) {
         const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
@@ -2549,7 +2550,7 @@ export default function CanvasViewport({
     }
 
     if (meshEditActive && currentSelection.length > 0) {
-      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && isMeshedPart(n, proj));
+      const selNode = effectiveNodes.find(n => n.id === currentSelection[0] && (isMeshedPart(n, proj) || (isLatticeCageObject(n) && !!getMesh(n, proj))));
       const selMesh = selNode ? getMesh(selNode, proj) : null;
       if (selNode && selMesh) {
         const wm = worldMatrices.get(selNode.id) ?? mat3Identity();
@@ -2635,6 +2636,16 @@ export default function CanvasViewport({
             return;
           }
           editorActions.selectVertex(selNode.id, idx, /* additive */ false);
+          return;
+        }
+
+        // v43 — a Lattice (warp) cage has a FIXED rows×cols topology the
+        // Cubism exporter requires; adding/removing control points breaks
+        // it. Block the topology tools on a cage (moving existing control
+        // points via 'select'/drag stays allowed). Mirrors the guard in
+        // applyTopologyOp for subdivide/merge/dissolve/extrude.
+        if ((toolMode === 'add_vertex' || toolMode === 'remove_vertex')
+            && selNode?.type === 'object' && selNode?.objectKind === 'lattice') {
           return;
         }
 

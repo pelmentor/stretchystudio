@@ -174,19 +174,19 @@ export const PROPERTIES_SECTIONS = [
   {
     id: 'deformerInfo',
     label: 'Deformer',
-    isVisible: ({ active }) => active.type === 'deformer',
+    isVisible: ({ active }) => active.type === 'deformer' || active.type === 'object',
     render: ({ active }) => <DeformerInfoSection deformerId={active.id} />,
   },
   {
     id: 'deformerBindings',
     label: 'Bindings',
-    isVisible: ({ active }) => active.type === 'deformer',
+    isVisible: ({ active }) => active.type === 'deformer' || active.type === 'object',
     render: ({ active }) => <DeformerBindingsSection deformerId={active.id} />,
   },
   {
     id: 'deformerKeyforms',
     label: 'Keyforms',
-    isVisible: ({ active }) => active.type === 'deformer',
+    isVisible: ({ active }) => active.type === 'deformer' || active.type === 'object',
     render: ({ active }) => <DeformerKeyformsSection deformerId={active.id} />,
   },
   {

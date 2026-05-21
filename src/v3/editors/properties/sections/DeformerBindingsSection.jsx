@@ -20,6 +20,7 @@
 import { useMemo, useState } from 'react';
 import { Link2, Plus, Trash2 } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
+import { isChainDeformerNode } from '../../../../store/warpLatticeAccess.js';
 import * as SelectImpl from '../../../../components/ui/select.jsx';
 import { SectionShell } from './SectionShell.jsx';
 
@@ -49,7 +50,7 @@ export function DeformerBindingsSection({ deformerId }) {
   const [adding, setAdding] = useState(false);
 
   const node = useMemo(
-    () => (nodes ?? []).find((n) => n?.id === deformerId && n?.type === 'deformer') ?? null,
+    () => (nodes ?? []).find((n) => n?.id === deformerId && isChainDeformerNode(n)) ?? null,
     [nodes, deformerId],
   );
 
@@ -62,7 +63,7 @@ export function DeformerBindingsSection({ deformerId }) {
     if (!param) return;
     const keys = Array.isArray(param.keys) ? param.keys.slice() : [];
     updateProject((proj) => {
-      const def = proj.nodes.find((n) => n?.id === deformerId && n?.type === 'deformer');
+      const def = proj.nodes.find((n) => n?.id === deformerId && isChainDeformerNode(n));
       if (!def) return;
       def.bindings = Array.isArray(def.bindings) ? def.bindings : [];
       if (def.bindings.some((b) => b?.parameterId === paramId)) return;
@@ -74,7 +75,7 @@ export function DeformerBindingsSection({ deformerId }) {
 
   function removeBinding(paramId) {
     updateProject((proj) => {
-      const def = proj.nodes.find((n) => n?.id === deformerId && n?.type === 'deformer');
+      const def = proj.nodes.find((n) => n?.id === deformerId && isChainDeformerNode(n));
       if (!def || !Array.isArray(def.bindings)) return;
       def.bindings = def.bindings.filter((b) => b?.parameterId !== paramId);
       def._userAuthored = true;

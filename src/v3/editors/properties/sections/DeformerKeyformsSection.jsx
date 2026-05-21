@@ -37,6 +37,7 @@ import { Diamond, Pencil, Check, X } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../../store/paramValuesStore.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
+import { isChainDeformerNode } from '../../../../store/warpLatticeAccess.js';
 import { SectionShell } from './SectionShell.jsx';
 import { buildKeyformGridLayout, findKeyform } from './keyformGridLayout.js';
 
@@ -55,7 +56,8 @@ export function DeformerKeyformsSection({ deformerId }) {
   const exitEditMode = useEditorStore((s) => s.exitEditMode);
 
   const node = useMemo(
-    () => (nodes ?? []).find((n) => n?.id === deformerId && n?.type === 'deformer') ?? null,
+    // v43 — a warp is now a lattice OBJECT; rotations stay deformers.
+    () => (nodes ?? []).find((n) => n?.id === deformerId && isChainDeformerNode(n)) ?? null,
     [nodes, deformerId],
   );
 
@@ -115,7 +117,7 @@ export function DeformerKeyformsSection({ deformerId }) {
     const kIdx = keyformEdit.keyformIndex;
     const wasAuthored = keyformEdit.authoredOnEntry === true;
     updateProject((proj) => {
-      const n = proj.nodes.find((nn) => nn?.id === dId && nn?.type === 'deformer');
+      const n = proj.nodes.find((nn) => nn?.id === dId && isChainDeformerNode(nn));
       if (!n || !Array.isArray(n.keyforms)) return;
       // Restore the keyform fields from the snapshot (full replace).
       n.keyforms[kIdx] = snap;

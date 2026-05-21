@@ -99,6 +99,27 @@ assertThrows(
   assert(roots.length === 3, 'explicit hierarchy mode');
 }
 
+// ── v43 — lattice (warp) objects appear; their cage meshData does NOT ──
+{
+  const nodes = [
+    { id: 'face', type: 'part', name: 'face', draw_order: 10 },
+    // A warp is now a first-class Lattice object + linked cage data-block.
+    { id: 'BodyWarp', type: 'object', objectKind: 'lattice', name: 'BodyWarp',
+      parent: null, dataId: 'BodyWarp__cage' },
+    { id: 'BodyWarp__cage', type: 'meshData', isLatticeCage: true,
+      vertices: [{ x: 0, y: 0 }] },
+  ];
+  const roots = buildOutlinerTree(nodes, { mode: 'hierarchy' });
+  const lattice = findOutlinerNode(roots, 'BodyWarp');
+  assert(!!lattice, 'lattice object appears as an Outliner row');
+  assert(lattice.type === 'object', 'lattice row keeps type=object (selection routing)');
+  assert(lattice.isLattice === true, 'lattice row carries isLattice flag (grid icon)');
+  assert(!findOutlinerNode(roots, 'BodyWarp__cage'),
+    'cage meshData does NOT appear as its own Outliner row');
+  // The part stays on top; the lattice clusters at the bottom (sortKey -1).
+  assert(roots[0].id === 'face', 'part sorts above the lattice object');
+}
+
 // ── Rig mode ────────────────────────────────────────────────────────
 
 {

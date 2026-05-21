@@ -18,7 +18,7 @@ import { memo } from 'react';
 import {
   ChevronRight, ChevronDown,
   Folder, Image as ImageIcon, Eye, EyeOff,
-  Box, RotateCw, Bone,
+  Box, RotateCw, Bone, Grid3x3,
 } from 'lucide-react';
 
 const INDENT_PX = 14;
@@ -56,6 +56,7 @@ function TreeNodeImpl({
   const Icon =
     node.isArmature ? Bone
     : node.isBone ? Bone
+    : node.isLattice ? Grid3x3
     : node.type === 'group' ? Folder
     : node.type === 'deformer' ? (node.deformerKind === 'rotation' ? RotateCw : Box)
     : ImageIcon;

@@ -47,7 +47,7 @@ import { isBoneGroup, getBoneRole } from '../../../store/objectDataAccess.js';
  *
  * @typedef {Object} ProjectNodeLike
  * @property {string}              id
- * @property {'part'|'group'|'deformer'}      type
+ * @property {'part'|'group'|'deformer'|'object'}      type
  * @property {string}              name
  * @property {string|null|undefined} parent
  * @property {number=}             draw_order
@@ -55,6 +55,9 @@ import { isBoneGroup, getBoneRole } from '../../../store/objectDataAccess.js';
  * @property {string|null=}        boneRole
  *   When `type === 'group'` and this is set, the group is a skeleton
  *   bone. Used by `'skeleton'` mode to filter to bones-only.
+ * @property {('lattice')=}        objectKind
+ *   When `type === 'object'`, discriminates the object kind. v43 lattice
+ *   (warp) objects are the only kind today.
  * @property {('warp'|'rotation')=} deformerKind
  *   When `type === 'deformer'`, discriminates warp vs rotation. Phase 4
  *   surfaces this via the `isDeformer`/`deformerKind` fields on
@@ -91,13 +94,16 @@ import { isBoneGroup, getBoneRole } from '../../../store/objectDataAccess.js';
  *
  * @typedef {Object} OutlinerNode
  * @property {string}                                                       id
- * @property {('part'|'group'|'deformer'|'artmesh'|'armature')}             type
+ * @property {('part'|'group'|'deformer'|'artmesh'|'armature'|'object')}    type
  * @property {string}                                                       name
  * @property {string|null}                                                  parent
  * @property {OutlinerNode[]}                                               children
  * @property {boolean}                                                      visible
  * @property {number}                                                       sortKey
  * @property {('warp'|'rotation')=}                                         deformerKind
+ * @property {boolean=}                                                     isLattice
+ *   v43 — set on `type:'object', objectKind:'lattice'` rows so TreeNode
+ *   picks the grid (lattice) icon. Type stays `'object'` for selection.
  * @property {boolean=}                                                     isBone
  *   Skeleton-mode rows set this so TreeNode renders a bone icon
  *   instead of the default folder. The underlying node is still a
@@ -220,7 +226,13 @@ function buildHierarchyTree(nodes) {
     // decision of whether SS gains an analogous Scene root. Until
     // then, the scene's animData is reachable only via the
     // Properties-panel AnimData section (Stage 1.E entry-gate item).
-    if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer') continue;
+    // v43 — warps are first-class Lattice OBJECTS (`type:'object',
+    // objectKind:'lattice'`); surface them as rows under their chain parent.
+    // Their cage (`type:'meshData'`) is a data-block, NOT an Outliner row
+    // (Blender shows the Lattice object, not its data-block, in the View
+    // Layer) — it stays excluded by falling through the filter below.
+    const isLatticeObject = n.type === 'object' && n.objectKind === 'lattice';
+    if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer' && !isLatticeObject) continue;
     byId.set(n.id, n);
   }
 
@@ -242,8 +254,10 @@ function buildHierarchyTree(nodes) {
     if (n.type === 'part') return n.draw_order ?? DEFAULT_DRAW_ORDER;
     // Phase 4 — deformer nodes have no draw_order. Pin them below the
     // lowest part draw_order so they cluster at the bottom of the
-    // root list (parts/groups stay on top, matching today's UX).
+    // root list (parts/groups stay on top, matching today's UX). v43 —
+    // lattice (warp) objects cluster with deformers for the same reason.
     if (n.type === 'deformer') return -1;
+    if (n.type === 'object' && n.objectKind === 'lattice') return -1;
     const seen = new Set();
     let max = -Infinity;
     /** @param {ProjectNodeLike} g */
@@ -280,6 +294,9 @@ function buildHierarchyTree(nodes) {
     const isDeformer = n.type === 'deformer';
     const deformerKind = isDeformer && (n.deformerKind === 'rotation' || n.deformerKind === 'warp')
       ? n.deformerKind : undefined;
+    // v43 — lattice (warp) object: flag for the grid icon (TreeNode picks
+    // Grid3x3). Type stays `'object'` so selection routing is type-correct.
+    const isLattice = n.type === 'object' && n.objectKind === 'lattice';
     if (onPath.has(n.id)) {
       return {
         id: n.id, type: n.type, name: n.name,
@@ -290,6 +307,7 @@ function buildHierarchyTree(nodes) {
         ...(isBone ? { isBone: true } : null),
         ...(isDeformer ? { isDeformer: true } : null),
         ...(deformerKind ? { deformerKind } : null),
+        ...(isLattice ? { isLattice: true } : null),
       };
     }
     onPath.add(n.id);
@@ -309,6 +327,7 @@ function buildHierarchyTree(nodes) {
       ...(isBone ? { isBone: true } : null),
       ...(isDeformer ? { isDeformer: true } : null),
       ...(deformerKind ? { deformerKind } : null),
+      ...(isLattice ? { isLattice: true } : null),
     };
   }
 

@@ -132,6 +132,10 @@ export function isDeformer(node) {
 export function getDataKind(node, _project) {
   if (!node) return null;
   if (node.type === 'part') return 'mesh';
+  // v43 — a lattice (warp) OBJECT owns an editable grid cage (its linked
+  // meshData). It's mesh-data-bearing, so Edit Mode applies (the cage verts
+  // are the warp's editable rest grid = Blender's Lattice control points).
+  if (node.type === 'object' && node.objectKind === 'lattice') return 'mesh';
   if (isBoneGroup(node)) return 'armature';
   if (node.type === 'group') return 'empty';
   if (node.type === 'deformer') return 'deformer';

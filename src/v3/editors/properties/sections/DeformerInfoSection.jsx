@@ -13,6 +13,7 @@
 import { useMemo } from 'react';
 import { Box, RotateCw, Lock, Unlock } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
+import { isChainDeformerNode } from '../../../../store/warpLatticeAccess.js';
 import * as SelectImpl from '../../../../components/ui/select.jsx';
 import { SectionShell } from './SectionShell.jsx';
 import { PropertyRow } from '../primitives/PropertyRow.jsx';
@@ -32,7 +33,8 @@ export function DeformerInfoSection({ deformerId }) {
   const updateProject = useProjectStore((s) => s.updateProject);
 
   const node = useMemo(
-    () => (nodes ?? []).find((n) => n?.id === deformerId && n?.type === 'deformer') ?? null,
+    // v43 — a warp is now a lattice OBJECT; rotations stay deformers.
+    () => (nodes ?? []).find((n) => n?.id === deformerId && isChainDeformerNode(n)) ?? null,
     [nodes, deformerId],
   );
 
@@ -149,11 +151,15 @@ function buildParentOptions(nodes, selfId) {
   for (const n of nodes) {
     if (!n || !n.id) continue;
     if (descendants.has(n.id)) continue;
-    if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer') continue;
+    // v43 — a warp parent may be a lattice OBJECT now.
+    const isLattice = n.type === 'object' && n.objectKind === 'lattice';
+    if (n.type !== 'part' && n.type !== 'group' && n.type !== 'deformer' && !isLattice) continue;
     const prefix =
-      n.type === 'deformer'
-        ? (n.deformerKind === 'rotation' ? 'rotation' : 'warp')
-        : n.type;
+      isLattice
+        ? 'warp'
+        : n.type === 'deformer'
+          ? (n.deformerKind === 'rotation' ? 'rotation' : 'warp')
+          : n.type;
     out.push({ id: n.id, label: `${prefix}: ${n.name ?? n.id}` });
   }
   return out;

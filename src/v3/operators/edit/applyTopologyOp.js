@@ -35,6 +35,8 @@
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import { isLatticeCageObject } from '../../../store/warpLatticeAccess.js';
+import { logger } from '../../../lib/logger.js';
 import {
   remapPerVertexArray, averageDeltas, averageNumbers,
 } from '../../../lib/meshTopology.js';
@@ -68,6 +70,16 @@ export function applyTopologyOp(partId, result) {
   const project = projectStore.project;
   const node = project?.nodes?.find((n) => n.id === partId);
   if (!node) return false;
+  // v43 — a Lattice (warp) cage has a FIXED rows×cols topology the Cubism
+  // exporter requires; subdivide/merge/dissolve/extrude would break it.
+  // Editing the cage = MOVING control points only (handled by the vertex
+  // drag path, not here). Hard-block topology ops on cages.
+  if (isLatticeCageObject(node)) {
+    logger.warn('latticeCageTopology',
+      'Topology ops (subdivide/merge/dissolve/extrude) are blocked on a Lattice cage — its rows×cols grid is fixed for export. Move control points instead.',
+      { objectId: partId });
+    return false;
+  }
   const mesh = getMesh(node, project);
   if (!mesh) return false;
 

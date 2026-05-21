@@ -138,8 +138,9 @@ export function OutlinerEditor() {
         if (it.type === 'group') s.add(it.id);
       } else {
         // viewLayer: unified tree carries both project nodes and
-        // deformers, so any selection type can show up here.
-        if (it.type === 'part' || it.type === 'group' || it.type === 'deformer') s.add(it.id);
+        // deformers, so any selection type can show up here. v43 — lattice
+        // (warp) objects are `type:'object'`.
+        if (it.type === 'part' || it.type === 'group' || it.type === 'deformer' || it.type === 'object') s.add(it.id);
       }
     }
     return s;
@@ -148,10 +149,10 @@ export function OutlinerEditor() {
   const activeId = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      if (mode === 'rig' && (it.type === 'deformer' || it.type === 'part')) return it.id;
+      if (mode === 'rig' && (it.type === 'deformer' || it.type === 'part' || it.type === 'object')) return it.id;
       if (mode === 'skeleton' && it.type === 'group') return it.id;
       if (mode === 'viewLayer'
-        && (it.type === 'part' || it.type === 'group' || it.type === 'deformer')) return it.id;
+        && (it.type === 'part' || it.type === 'group' || it.type === 'deformer' || it.type === 'object')) return it.id;
     }
     return null;
   }, [items, mode]);
@@ -197,6 +198,7 @@ export function OutlinerEditor() {
       if (ft === 'part' || ft === 'artmesh') type = 'part';
       else if (ft === 'group') type = 'group';
       else if (ft === 'deformer') type = 'deformer';
+      else if (ft === 'object') type = 'object'; // v43 lattice (warp) object
       select({ type, id }, modifier);
     },
     [filteredRoots, select],

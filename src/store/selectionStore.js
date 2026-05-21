@@ -29,7 +29,12 @@
 import { create } from 'zustand';
 
 /**
- * @typedef {('part'|'group'|'parameter'|'deformer'|'keyframe'|'physicsRule'|'maskConfig'|'variant')} SelectableType
+ * @typedef {('part'|'group'|'object'|'parameter'|'deformer'|'keyframe'|'physicsRule'|'maskConfig'|'variant')} SelectableType
+ *
+ * `'object'` covers v43 first-class Lattice (warp) objects
+ * (`{type:'object', objectKind:'lattice'}`) — selecting one in the Outliner
+ * routes the Properties panel to its deformer/keyform/modifier sections and
+ * enables Edit-Mode on its cage.
  *
  * @typedef {Object} SelectableRef
  * @property {SelectableType} type

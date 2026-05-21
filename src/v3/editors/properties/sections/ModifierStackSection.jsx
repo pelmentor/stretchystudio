@@ -23,6 +23,7 @@ import { Wrench, Eye, Camera, Pencil, Plus, MoreVertical, Trash2, Diamond } from
 import { useMemo, useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
+import { modifierRefId } from '../../../../store/warpLatticeAccess.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
   MODIFIER_MODE_REALTIME,
@@ -149,22 +150,31 @@ export function ModifierStackSection({ nodeId }) {
           : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
         const enabled = mod.enabled !== false;
         const isArmature = mod.type === 'armature';
+        const isLattice = mod.type === 'lattice';
+        // v43 — a lattice modifier references its cage OBJECT via `objectId`;
+        // warp/rotation via `deformerId`. Resolve either via the seam.
+        const refId = modifierRefId(mod);
         // Armature rows display the joint bone role (e.g. "leftElbow")
         // and the parent bone role (e.g. "leftArm" → leftElbow) instead
         // of raw bone GUIDs. Mirrors Blender's modifier panel which
-        // shows the bound armature Object's name.
+        // shows the bound armature Object's name. Lattice rows show the
+        // referenced cage object's name (Blender's `LatticeModifierData.object`).
         const labelText = (() => {
           if (mod.type === 'armature') {
             const j = mod.data?.jointBoneRole ?? 'bone';
             const p = mod.data?.parentBoneRole;
             return p ? `${p} → ${j}` : j;
           }
-          return mod.deformerId ?? '<missing>';
+          if (isLattice) {
+            const obj = refId ? nodes.find((n) => n?.id === refId) : null;
+            return obj?.name ?? refId ?? '<missing>';
+          }
+          return refId ?? '<missing>';
         })();
-        const typeBadge = isArmature ? 'Armature' : (mod.type ?? '—');
+        const typeBadge = isArmature ? 'Armature' : isLattice ? 'Lattice' : (mod.type ?? '—');
         return (
           <div
-            key={`${mod.deformerId ?? 'unk'}-${idx}`}
+            key={`${refId ?? 'unk'}-${idx}`}
             className="flex items-center gap-1 text-xs h-7 px-1 rounded bg-muted/30"
           >
             <button
@@ -178,7 +188,7 @@ export function ModifierStackSection({ nodeId }) {
             <span className={`text-[10px] w-12 shrink-0 uppercase ${isArmature ? 'text-foreground font-semibold' : 'text-muted-foreground'}`}>
               {typeBadge}
             </span>
-            <span className="text-xs flex-1 truncate font-mono" title={mod.deformerId}>
+            <span className="text-xs flex-1 truncate font-mono" title={refId ?? undefined}>
               {labelText}
             </span>
             {mod.synthetic === true && (
@@ -223,12 +233,17 @@ export function ModifierStackSection({ nodeId }) {
                 bound param to the value, then "Edit keyform" → drag the
                 warp/rotation handles on canvas). Armature rows have no
                 keyform grid (bone pose, not keyforms) so they're skipped. */}
-            {!isArmature && mod.deformerId && (
+            {!isArmature && refId && (
               <button
                 type="button"
                 className="w-5 h-5 shrink-0 inline-flex items-center justify-center rounded border border-border bg-transparent hover:bg-muted text-muted-foreground"
-                title="Edit deformation — jump to this deformer's keyform editor"
-                onClick={() => useSelectionStore.getState().select({ type: 'deformer', id: mod.deformerId }, 'replace')}
+                title={isLattice
+                  ? 'Edit deformation — jump to this Lattice object (cage + keyforms)'
+                  : "Edit deformation — jump to this deformer's keyform editor"}
+                // v43 — a lattice modifier targets a first-class OBJECT
+                // (select as 'object'); warp/rotation target a deformer node.
+                onClick={() => useSelectionStore.getState().select(
+                  { type: isLattice ? 'object' : 'deformer', id: refId }, 'replace')}
               >
                 <Diamond size={11} />
               </button>
