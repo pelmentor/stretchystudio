@@ -122,6 +122,14 @@ const KERNELS = {
  *   diverges from the warp's global `def.parent` chain (the GRID_LIFT_TO_PARENT
  *   op only composes the global chain). Parts sharing the same divergent
  *   chain compose once. Mirrors chainEval's `_liftedByChainKey`.
+ * @property {Map<string, {mat: Float64Array, isCanvasFinal: boolean}|null>} [_perPartRotMatCache] -
+ *   kernel-private per-eval cache of per-part canvas-final ROTATION matrices,
+ *   keyed by `rotationId|chainAbove-signature`. The rotation analogue of
+ *   `_perPartWarpLiftCache`: populated by `computePerPartRotationCanvasFinal`
+ *   when a part disables an ancestor so the leaf rotation's pivot must be
+ *   re-probed through the effective chain instead of the global
+ *   ROTATION_SETUP_PROBE / MATRIX_BUILD (which bake the global `def.parent`
+ *   chain). Parts sharing the same divergent chain compose once.
  * @property {Map<string, object>|null} [rigArtMeshById] - optional
  *   selectRigSpec `artMeshes[]` indexed by part id. When present, the
  *   ART_MESH_EVAL kernel sources its keyform-blend input (reprojected

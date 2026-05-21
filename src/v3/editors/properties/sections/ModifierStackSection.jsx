@@ -201,11 +201,12 @@ export function ModifierStackSection({ nodeId }) {
             )}
             {/*
               Display-mode toggles. Match Blender's modifier panel
-              icons (`reference/blender/scripts/startup/bl_ui/properties_data_modifier.py`):
-                - Eye (RESTRICT_VIEW_OFF) → show in viewport
-                - Camera (RESTRICT_RENDER_OFF) → use during render
-                - Pencil (EDITMODE_HLT) → display in Edit Mode
-              Tooltips mirror Blender's exact strings.
+              header row (`reference/blender/source/blender/modifiers/intern/MOD_ui_common.cc:417-421`,
+              in `modifier_panel_header`):
+                - Eye (RESTRICT_VIEW_OFF) → show_viewport
+                - Camera (RESTRICT_RENDER_OFF) → show_render
+                - Pencil (EDITMODE_HLT) → show_in_editmode
+              Tooltips mirror Blender's `rna_modifier.cc` property strings.
             */}
             <ModeBitIcon
               icon={<Eye size={11} />}
@@ -223,7 +224,7 @@ export function ModifierStackSection({ nodeId }) {
               icon={<Pencil size={11} />}
               active={(mode & MODIFIER_MODE_EDITMODE) !== 0}
               onClick={() => toggleModeBit(idx, MODIFIER_MODE_EDITMODE)}
-              title="Display modifier in Edit Mode"
+              title="Display modifier in Edit mode"
             />
             {/* Edit deformation — jump to this deformer's keyform editor.
                 A part carries no param-effect data of its own (it's

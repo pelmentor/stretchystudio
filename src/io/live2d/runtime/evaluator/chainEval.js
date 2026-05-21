@@ -291,13 +291,20 @@ export function evalArtMeshFrame(meshSpec, rigSpec, paramValues, cache, deformer
           read, write, len >> 1,
         );
       } else if (state.kind === 'rotation') {
-        const m = state.mat;
+        // Per-part rotation matrix — recomposed through THIS part's
+        // effective chain-above when it disabled an ancestor (else the
+        // global Setup, which bakes the disabled ancestor into the
+        // canvas-final pivot, would still apply it). Divergence-gated:
+        // the all-enabled chain reuses the global `state` verbatim.
+        const rotMat = cache.getRotationMatForChain(stepSpec, chain.slice(i + 1));
+        const m = (rotMat && rotMat.mat) ? rotMat.mat : state.mat;
+        const rotCanvasFinal = (rotMat && rotMat.mat) ? rotMat.isCanvasFinal : state.isCanvasFinal;
         for (let v = 0; v < len; v += 2) {
           applyMat3ToPoint(m, read[v], read[v + 1], tmp0);
           write[v] = tmp0[0];
           write[v + 1] = tmp0[1];
         }
-        if (state.isCanvasFinal) {
+        if (rotCanvasFinal) {
           bufA = bufB;
           bufB = read;
           break;
@@ -541,6 +548,19 @@ export class DeformerStateCache {
     this._rotationSetupById = new Map();
     /** @type {Set<string>} — Setup recursion guard (rotation chains under rotations) */
     this._setupInFlight = new Set();
+    /**
+     * Per-part chain rotation-Setup cache — the rotation analogue of
+     * `_liftedByChainKey`. Keyed by `rotationId|chainAbove-signature`.
+     * Populated by `getRotationSetupForChain` when a part's effective
+     * (enabled) chain above a rotation DIVERGES from the rotation's global
+     * `def.parent` chain (i.e. it disabled an ancestor) — `getRotationSetup`
+     * bakes the global chain, so a disabled ancestor warp/rotation would
+     * still appear in the rotation's canvas-final pivot. Same divergence-
+     * gated pattern as the warp lift: the all-enabled chain reuses the
+     * global Setup verbatim, so byte output is unchanged.
+     * @type {Map<string, {canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean, opacity:number}|null>}
+     */
+    this._rotationSetupByChainKey = new Map();
   }
 
   /**
@@ -785,15 +805,19 @@ export class DeformerStateCache {
         for (let i = 0; i < nPts * 2; i++) positions[i] = vertsOut[i];
         break;
       } else if (stepRef.type === 'rotation') {
-        const stepState = this.getState(stepSpec);
-        if (!stepState || stepState.kind !== 'rotation') break;
-        const m = stepState.mat;
+        // Per-part rotation matrix — recomposed through the rest of THIS
+        // chain when an ancestor is disabled (the global Setup bakes the
+        // rotation's global parents). Divergence-gated → all-enabled
+        // reuses the global matrix verbatim.
+        const rotMat = this.getRotationMatForChain(stepSpec, chainAbove.slice(stepIdx + 1));
+        if (!rotMat || !rotMat.mat) break;
+        const m = rotMat.mat;
         for (let i = 0; i < nPts; i++) {
           applyMat3ToPoint(m, positions[i * 2], positions[i * 2 + 1], tmp);
           positions[i * 2] = tmp[0];
           positions[i * 2 + 1] = tmp[1];
         }
-        if (stepState.isCanvasFinal) break;
+        if (rotMat.isCanvasFinal) break;
       } else {
         break;
       }
@@ -1010,6 +1034,190 @@ export class DeformerStateCache {
     } finally {
       this._setupInFlight.delete(spec.id);
     }
+  }
+
+  /**
+   * Does a rotation's effective per-part `chainAbove` exactly match its
+   * GLOBAL `def.parent` chain (the chain `getRotationSetup` /
+   * `getLiftedGrid` compose through)? When true, the global Setup is
+   * correct and reused verbatim (byte-identical). When false, the part
+   * disabled an ancestor and the rotation's pivot must be re-probed
+   * through the reduced chain (`getRotationSetupForChain`).
+   *
+   * @param {{parent?: {type:string, id:string|null}|null}} spec
+   * @param {Array<{type:string, id:string}>} chainAbove - leaf-first
+   * @returns {boolean}
+   */
+  _rotationChainAboveMatchesGlobal(spec, chainAbove) {
+    let cur = spec?.parent ?? null;
+    let idx = 0;
+    let safety = 32;
+    while (cur && cur.type !== 'root' && safety-- > 0) {
+      if (!cur.id) break;
+      if (cur.type === 'warp' || cur.type === 'rotation') {
+        const ca = chainAbove[idx];
+        if (!ca || ca.id !== cur.id || ca.type !== cur.type) return false;
+        idx++;
+      }
+      const sp = this._specById.get(cur.id);
+      if (!sp) break;
+      cur = sp.parent;
+    }
+    return idx === chainAbove.length;
+  }
+
+  /**
+   * Per-part chain variant of `getRotationSetup`. Re-probes the rotation's
+   * authored pivot through an EXPLICIT `chainAbove` (the part's enabled
+   * chain above the rotation) instead of the global `def.parent` pointers,
+   * so an ancestor the part disabled is genuinely excluded. Mirrors
+   * `getRotationSetup` exactly (same FD-probe ε, degenerate -Y fallback,
+   * `π/2 - atan2` wraparound, `effectiveAngle = angle - probedAngle`).
+   * Cache keyed by rotation id + chain signature, mirroring
+   * `getLiftedGridForChain`.
+   *
+   * @param {import('../../rig/rigSpec.js').RotationDeformerSpec} spec
+   * @param {{angleDeg:number, originX:number, originY:number, scale?:number, reflectX?:boolean, reflectY?:boolean, opacity?:number}} r
+   * @param {Array<{type:string, id:string}>} chainAbove - leaf-first
+   * @returns {{canvasFinalPivot:[number,number], effectiveAngleDeg:number, scale:number, reflectX:boolean, reflectY:boolean, opacity:number}|null}
+   */
+  getRotationSetupForChain(spec, r, chainAbove) {
+    if (!spec?.id || !r) return null;
+    const key = chainAbove.length === 0
+      ? `${spec.id}|`
+      : `${spec.id}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+    if (this._rotationSetupByChainKey.has(key)) return this._rotationSetupByChainKey.get(key);
+
+    // No enabled ancestors → authored pivot is canvas-px (mirrors the
+    // root-parented branch of getRotationSetup).
+    if (chainAbove.length === 0) {
+      const setup = {
+        canvasFinalPivot: [r.originX ?? 0, r.originY ?? 0],
+        effectiveAngleDeg: r.angleDeg ?? 0,
+        scale: r.scale ?? 1,
+        reflectX: !!r.reflectX,
+        reflectY: !!r.reflectY,
+        opacity: r.opacity ?? 1,
+      };
+      this._rotationSetupByChainKey.set(key, setup);
+      return setup;
+    }
+
+    const eps = chainAbove[0].type === 'warp' ? 0.01 : 1.0;
+    const px = r.originX ?? 0;
+    const py = r.originY ?? 0;
+    const tmpC = [0, 0];
+    const tmpD = [0, 0];
+    this.evalChainAtPointForChain(chainAbove, px, py, tmpC);
+    const cx = tmpC[0];
+    const cy = tmpC[1];
+    this.evalChainAtPointForChain(chainAbove, px, py + eps, tmpD);
+    let dx = tmpD[0] - cx;
+    let dy = tmpD[1] - cy;
+    if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+      this.evalChainAtPointForChain(chainAbove, px, py - eps, tmpD);
+      dx = -(tmpD[0] - cx);
+      dy = -(tmpD[1] - cy);
+    }
+    let probedRad;
+    if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+      probedRad = 0;
+    } else {
+      probedRad = Math.PI / 2 - Math.atan2(dy, dx);
+      while (probedRad > Math.PI) probedRad -= 2 * Math.PI;
+      while (probedRad <= -Math.PI) probedRad += 2 * Math.PI;
+    }
+    const setup = {
+      canvasFinalPivot: [cx, cy],
+      effectiveAngleDeg: (r.angleDeg ?? 0) - probedRad * 180 / Math.PI,
+      scale: r.scale ?? 1,
+      reflectX: !!r.reflectX,
+      reflectY: !!r.reflectY,
+      opacity: r.opacity ?? 1,
+    };
+    this._rotationSetupByChainKey.set(key, setup);
+    return setup;
+  }
+
+  /**
+   * Resolve a rotation's matrix for a part's effective `chainAbove`.
+   * Divergence-gated: when `chainAbove` matches the rotation's global
+   * parent chain (the common all-enabled case), returns the global
+   * `getState` result verbatim (byte-identical — oracle/parity safe);
+   * otherwise recomposes a canvas-final matrix per-part. Only the
+   * `cubism-setup` kernel collapses the chain canvas-final, so the
+   * legacy kernel falls through to the global matrix.
+   *
+   * @param {import('../../rig/rigSpec.js').RotationDeformerSpec} spec
+   * @param {Array<{type:string, id:string}>} chainAbove - leaf-first
+   * @returns {{kind:'rotation', mat: Float64Array, isCanvasFinal?: boolean}|null}
+   */
+  getRotationMatForChain(spec, chainAbove) {
+    if (this._kernel !== 'cubism-setup'
+        || this._rotationChainAboveMatchesGlobal(spec, chainAbove)) {
+      return this.getState(spec);
+    }
+    const cell = cellSelect(spec.bindings ?? [], this._paramValues);
+    const r = evalRotation(spec, cell);
+    if (!r) return this.getState(spec);
+    const setup = this.getRotationSetupForChain(spec, r, chainAbove);
+    if (!setup) return this.getState(spec);
+    return {
+      kind: 'rotation',
+      mat: buildRotationMat3CanvasFinal(setup, null),
+      isCanvasFinal: true,
+    };
+  }
+
+  /**
+   * Per-part chain variant of `evalChainAtPoint`. Walks an explicit
+   * `chainAbove` (leaf-first) recomposing each ancestor per-part — warp
+   * steps via `getLiftedGridForChain`, rotation steps via
+   * `getRotationMatForChain` — instead of the global `def.parent` chain.
+   * The leaf-first first step, composed through the rest, is canvas-final,
+   * so one application lands the point in canvas-px.
+   *
+   * @param {Array<{type:string, id:string}>} chainAbove - leaf-first
+   * @param {number} x
+   * @param {number} y
+   * @param {number[]} [out]
+   * @returns {[number, number]}
+   */
+  evalChainAtPointForChain(chainAbove, x, y, out) {
+    const tmp = out ?? [0, 0];
+    if (!chainAbove || chainAbove.length === 0) { tmp[0] = x; tmp[1] = y; return tmp; }
+    const step = chainAbove[0];
+    const rest = chainAbove.slice(1);
+    const stepSpec = step?.id ? this._specById.get(step.id) : null;
+    if (!stepSpec) { tmp[0] = x; tmp[1] = y; return tmp; }
+    const inBuf = this._pool ? this._pool.acquireFloat32('chainPointForChain:inBuf', 2) : new Float32Array(2);
+    const outBuf = this._pool ? this._pool.acquireFloat32('chainPointForChain:outBuf', 2) : new Float32Array(2);
+    if (step.type === 'warp') {
+      const lifted = this.getLiftedGridForChain(stepSpec, rest);
+      if (lifted) {
+        inBuf[0] = x; inBuf[1] = y;
+        evalWarpKernelCubism(lifted, stepSpec.gridSize, stepSpec.isQuadTransform === true, inBuf, outBuf, 1);
+        tmp[0] = outBuf[0]; tmp[1] = outBuf[1];
+        return tmp; // lifted grid IS canvas-px
+      }
+      const state = this.getState(stepSpec);
+      if (state?.grid) {
+        inBuf[0] = x; inBuf[1] = y;
+        evalWarpKernelCubism(state.grid, state.gridSize, state.isQuadTransform === true, inBuf, outBuf, 1);
+        return this.evalChainAtPointForChain(rest, outBuf[0], outBuf[1], tmp);
+      }
+      return this.evalChainAtPointForChain(rest, x, y, tmp);
+    }
+    if (step.type === 'rotation') {
+      const rotMat = this.getRotationMatForChain(stepSpec, rest);
+      if (rotMat?.mat) {
+        applyMat3ToPoint(rotMat.mat, x, y, tmp);
+        if (rotMat.isCanvasFinal) return tmp;
+        return this.evalChainAtPointForChain(rest, tmp[0], tmp[1], tmp);
+      }
+      return this.evalChainAtPointForChain(rest, x, y, tmp);
+    }
+    return this.evalChainAtPointForChain(rest, x, y, tmp);
   }
 
   getState(spec) {

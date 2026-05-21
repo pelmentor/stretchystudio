@@ -17,6 +17,7 @@
 import { buildDepGraph } from '../../src/anim/depgraph/build.js';
 import { evalDepGraph } from '../../src/anim/depgraph/eval.js';
 import { migrateLatticeSubstrate } from '../../src/store/migrations/v43_lattice_substrate.js';
+import { MODIFIER_MODE_RENDER } from '../../src/anim/modifierTypeInfo.js';
 
 let passed = 0;
 let failed = 0;
@@ -127,6 +128,32 @@ function makeLegacyProject(warpEnabled = true) {
   const d = evalPartOutputs(disabled);
   assert(JSON.stringify(e.artMesh) !== JSON.stringify(d.artMesh),
     'disabling the lattice modifier yields different deformed output (honored, not skipped)');
+}
+
+// ---- 3. EYE TOGGLE (mode bit): viewport display off ⇒ not applied ----
+// The Properties eye icon toggles `mode & MODE_REALTIME`, NOT `enabled`.
+// Viewport/Live-Preview eval defaults to requiredMode=MODE_REALTIME, so a
+// modifier whose mode has the REALTIME bit cleared (eye off) must be
+// skipped in the artMesh deform path — the "disabled warps still warped in
+// Live Preview" bug (2026-05-21). Setting mode = MODE_RENDER alone clears
+// the viewport bit while keeping it enabled for export.
+{
+  const eyeOn = clone(makeLegacyProject(true));
+  migrateLatticeSubstrate(eyeOn);
+  const eyeOff = clone(makeLegacyProject(true));
+  migrateLatticeSubstrate(eyeOff);
+  const offMod = eyeOff.nodes.find((n) => n.id === 'p').modifiers[0];
+  offMod.mode = MODIFIER_MODE_RENDER; // viewport (REALTIME) bit cleared
+  assert(offMod.enabled !== false, 'eye-off: modifier still enabled (only mode changed)');
+
+  const on = evalPartOutputs(eyeOn);
+  const off = evalPartOutputs(eyeOff);
+  // Viewport-off ⇒ the warp does not deform the part: verts stay at the
+  // undeformed keyform source [25,25,75,75].
+  assert(JSON.stringify(off.artMesh) === JSON.stringify([25, 25, 75, 75]),
+    `eye-off: viewport eval skips the warp (verts undeformed) (got ${JSON.stringify(off.artMesh)})`);
+  assert(JSON.stringify(on.artMesh) !== JSON.stringify(off.artMesh),
+    'eye-off: differs from eye-on (the eye icon is honored in artMesh eval)');
 }
 
 console.log(`depgraph_lattice: ${passed} passed, ${failed} failed`);

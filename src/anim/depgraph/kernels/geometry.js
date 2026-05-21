@@ -19,7 +19,7 @@
  * `part.modifiers[]` is leaf-first per `synthesizeModifierStacks` —
  * `[innermost, ..., outermost]`. The Blender modifier stack convention
  * is also leaf-first applies first
- * (`reference/blender/source/blender/blenkernel/intern/DerivedMesh.cc`'s
+ * (`reference/blender/source/blender/blenkernel/intern/mesh_data_update.cc`'s
  * `mesh_calc_modifiers` walks `md = next` from the head). Pinned in
  * `test_modifierIterationOrder.mjs`.
  *

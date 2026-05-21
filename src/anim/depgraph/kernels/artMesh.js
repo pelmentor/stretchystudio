@@ -66,6 +66,8 @@ import {
   isChainDeformerNode,
   modifierRefId,
 } from '../../../store/warpLatticeAccess.js';
+import { isModifierEnabled, MODIFIER_MODE_REALTIME } from '../../modifierTypeInfo.js';
+import { buildCanvasFinalMat3 } from './matrix.js';
 import { OperationCode, NodeType } from '../types.js';
 
 /**
@@ -119,6 +121,12 @@ export function kernelArtMeshEval(op, ctx) {
   const tmp = /** @type {[number, number]} */ ([0, 0]);
 
   const stack = Array.isArray(part.modifiers) ? part.modifiers : [];
+  // Per-modifier display gate. The eye icon toggles `mode & MODE_REALTIME`
+  // (viewport display); the ✓/× button toggles `enabled`. `isModifierEnabled`
+  // honours BOTH — viewport eval defaults to MODE_REALTIME (export supplies
+  // MODE_RENDER via ctx.requiredMode). Mirrors `kernels/geometry.js`; a raw
+  // `enabled === false` check would silently ignore the eye toggle.
+  const requiredMode = ctx.requiredMode ?? MODIFIER_MODE_REALTIME;
 
   // Bone-baked parts (handwear / legwear) carry their implicit
   // `Rotation_*` / `GroupRotation_*` parent in `mesh.runtime.parent`, NOT
@@ -149,7 +157,7 @@ export function kernelArtMeshEval(op, ctx) {
     let bufB = null;
     for (let i = 0; i < stack.length; i++) {
       const mod = stack[i];
-      if (!mod || mod.enabled === false) continue;
+      if (!mod || !isModifierEnabled(mod, requiredMode)) continue;
       // v43 — lattice (warp) modifiers reference the cage object via
       // `objectId`; rotation via `deformerId`. The depgraph deformer node
       // is keyed by that id either way.
@@ -157,42 +165,42 @@ export function kernelArtMeshEval(op, ctx) {
       if (typeof deformerId !== 'string' || deformerId.length === 0) continue;
       if (bufB === null) bufB = new Float32Array(len);
 
-      if (mod.type === 'warp' || mod.type === 'lattice') {
-        // Per-part lifted grid — depgraph analogue of chainEval's
-        // `getLiftedGridForChain` (chainEval.js:721-805). The global
-        // GRID_LIFT_TO_PARENT op composes the warp grid through the
-        // warp's GLOBAL `def.parent` chain; that's correct only when
-        // THIS part's effective (enabled) chain-above matches it. Under
-        // Blender per-part modifier semantics a part can disable a
-        // MID-STACK modifier on a shared deformer, so its effective
-        // chain skips that ancestor — feeding it the global lift would
-        // deform it by a warp/rotation it opted out of. Build the
-        // enabled chain-above; if any ancestor modifier is disabled,
-        // re-lift through the explicit chain instead of the global op.
-        // The common (no-disable) case reuses the precomputed global
-        // lift verbatim, so it's byte-identical and free.
-        const chainAbove = [];
-        let skippedDisabledAbove = false;
-        for (let j = i + 1; j < stack.length; j++) {
-          const up = stack[j];
-          if (!up) continue;
-          if (up.enabled === false) {
-            if (up.type === 'warp' || up.type === 'rotation' || up.type === 'lattice') skippedDisabledAbove = true;
-            continue;
-          }
-          // Only chain-deformer steps participate in the lift composition.
-          // computePerPartLift dispatches on 'warp'/'rotation' only, so map
-          // lattice → 'warp' (a lattice IS a warp); SKIP armature / unknown
-          // types (they aren't part of the warp/rotation lift chain — pushing
-          // them as 'warp' would mis-dispatch and break the lift early).
-          const upChainType = up.type === 'rotation'
-            ? 'rotation'
-            : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
-          const upId = modifierRefId(up);
-          if (upChainType && typeof upId === 'string' && upId.length > 0) {
-            chainAbove.push({ type: upChainType, id: upId });
-          }
+      // Build this modifier's EFFECTIVE (enabled) chain-above, leaf-first.
+      // Both the warp lift and the rotation canvas-final probe compose
+      // through it. The global GRID_LIFT_TO_PARENT / MATRIX_BUILD ops
+      // compose through the deformer's GLOBAL `def.parent` chain — correct
+      // only when THIS part's effective chain-above matches it. Under
+      // Blender per-part modifier semantics a part can disable a MID-STACK
+      // modifier on a shared deformer (e.g. a body warp), so its effective
+      // chain skips that ancestor; feeding it the global op would deform it
+      // by a warp/rotation it opted out of. When any ancestor is disabled
+      // (`skippedDisabledAbove`) we recompose through the explicit chain;
+      // the common no-disable case reuses the precomputed global op
+      // verbatim, so it's byte-identical and free (oracle/parity untouched).
+      const chainAbove = [];
+      let skippedDisabledAbove = false;
+      for (let j = i + 1; j < stack.length; j++) {
+        const up = stack[j];
+        if (!up) continue;
+        if (!isModifierEnabled(up, requiredMode)) {
+          if (up.type === 'warp' || up.type === 'rotation' || up.type === 'lattice') skippedDisabledAbove = true;
+          continue;
         }
+        // Only chain-deformer steps participate in the composition.
+        // computePerPartLift / computePerPartRotationCanvasFinal dispatch on
+        // 'warp'/'rotation' only, so map lattice → 'warp' (a lattice IS a
+        // warp); SKIP armature / unknown types (not part of the warp/rotation
+        // chain — pushing them would mis-dispatch and break the chain early).
+        const upChainType = up.type === 'rotation'
+          ? 'rotation'
+          : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
+        const upId = modifierRefId(up);
+        if (upChainType && typeof upId === 'string' && upId.length > 0) {
+          chainAbove.push({ type: upChainType, id: upId });
+        }
+      }
+
+      if (mod.type === 'warp' || mod.type === 'lattice') {
         let lift = null;
         if (!skippedDisabledAbove) {
           lift = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`);
@@ -221,8 +229,22 @@ export function kernelArtMeshEval(op, ctx) {
           const swap = bufA; bufA = bufB; bufB = swap;
         }
       } else if (mod.type === 'rotation') {
-        const matKey = `${deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
-        const matState = ctx.outputs.get(matKey);
+        // Global MATRIX_BUILD bakes the rotation's canvas-final pivot
+        // through its GLOBAL parent chain (the Setup probe walks
+        // `def.parent`). When an ancestor is disabled for THIS part, that
+        // global matrix still carries the disabled warp/rotation — so
+        // disabling e.g. the body Breath warp on a bone-baked part whose
+        // leaf is a GroupRotation has no effect (the rotation collapses the
+        // chain via `isCanvasFinal`). Recompose the canvas-final matrix
+        // through the part's effective chain instead. No-disable → reuse the
+        // global op (byte-identical fast path).
+        let matState = null;
+        if (!skippedDisabledAbove) {
+          matState = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
+        }
+        if (!matState?.mat) {
+          matState = computePerPartRotationCanvasFinal(deformerId, chainAbove, ctx);
+        }
         if (!matState?.mat) continue;
         const m = matState.mat;
         for (let v = 0; v < len; v += 2) {
@@ -412,7 +434,10 @@ function computePerPartLift(warpId, chainAbove, ctx) {
       break;
     }
     if (step.type === 'rotation') {
-      const matState = ctx.outputs.get(`${step.id}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
+      // Recompose this rotation's canvas-final matrix through the REST of
+      // the per-part chain — the global MATRIX_BUILD bakes the rotation's
+      // GLOBAL parents, which may include ancestors this part disabled.
+      const matState = computePerPartRotationCanvasFinal(step.id, chainAbove.slice(s + 1), ctx);
       if (!matState?.mat) break;
       const m = matState.mat;
       for (let p = 0; p < nPts; p++) {
@@ -426,6 +451,141 @@ function computePerPartLift(warpId, chainAbove, ctx) {
     break; // unknown step type — matches getLiftedGridForChain:797
   }
   const res = { lifted: positions, gridSize, isQuad };
+  cache.set(sig, res);
+  return res;
+}
+
+/**
+ * Walk a single point through a part's EFFECTIVE (enabled) `chainAbove`,
+ * leaf-first, recomposing each ancestor per-part (never reading a global
+ * canvas-final output). The leaf-first first step, composed through the
+ * rest, is itself canvas-final, so one application lands the point in
+ * canvas-px. Depgraph analogue of chainEval's `evalChainAtPoint`
+ * (chainEval.js:605-648), but over the explicit per-part chain instead of
+ * the deformer's global `def.parent` pointers.
+ *
+ * @param {Array<{type:string, id:string}>} chainAbove - enabled, leaf-first
+ * @param {number} x
+ * @param {number} y
+ * @param {import('../eval.js').EvalContext} ctx
+ * @param {[number,number]} out - written with [canvasX, canvasY]
+ */
+function perPartChainPoint(chainAbove, x, y, ctx, out) {
+  if (!chainAbove || chainAbove.length === 0) { out[0] = x; out[1] = y; return; }
+  const step = chainAbove[0];
+  const rest = chainAbove.slice(1);
+  const inBuf = new Float32Array(2);
+  const outBuf = new Float32Array(2);
+  if (step.type === 'warp') {
+    const lift = computePerPartLift(step.id, rest, ctx);
+    if (lift?.lifted) {
+      inBuf[0] = x; inBuf[1] = y;
+      evalWarpKernelCubism(lift.lifted, lift.gridSize, lift.isQuad, inBuf, outBuf, 1);
+      out[0] = outBuf[0]; out[1] = outBuf[1];
+      return; // lifted grid IS canvas-px
+    }
+    // Fallback: unlifted current-frame grid, then continue through rest.
+    const keyState = ctx.outputs.get(`${step.id}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);
+    if (keyState?.grid) {
+      inBuf[0] = x; inBuf[1] = y;
+      evalWarpKernelCubism(keyState.grid, keyState.gridSize, keyState.isQuadTransform === true, inBuf, outBuf, 1);
+      perPartChainPoint(rest, outBuf[0], outBuf[1], ctx, out);
+      return;
+    }
+    perPartChainPoint(rest, x, y, ctx, out);
+    return;
+  }
+  if (step.type === 'rotation') {
+    const matState = computePerPartRotationCanvasFinal(step.id, rest, ctx);
+    if (matState?.mat) {
+      const tmp = /** @type {[number,number]} */ ([0, 0]);
+      applyMat3ToPoint(matState.mat, x, y, tmp);
+      if (matState.isCanvasFinal) { out[0] = tmp[0]; out[1] = tmp[1]; return; }
+      perPartChainPoint(rest, tmp[0], tmp[1], ctx, out);
+      return;
+    }
+    perPartChainPoint(rest, x, y, ctx, out);
+    return;
+  }
+  perPartChainPoint(rest, x, y, ctx, out);
+}
+
+/**
+ * Recompute a rotation deformer's canvas-final matrix by FD-probing its
+ * authored pivot through the part's EFFECTIVE (enabled) `chainAbove`,
+ * recomposing every ancestor per-part. Depgraph analogue of
+ * `kernelRotationSetupProbe` (rotationSetup.js:52-124) but over the
+ * explicit per-part chain rather than the global `def.parent` pointers —
+ * so a mid-stack ancestor the part disabled is genuinely excluded from
+ * this rotation's pivot. Mirrors the FD-probe ε (warp parent → 0.01,
+ * rotation parent → 1.0) + the degenerate -Y fallback exactly.
+ *
+ * Memoised on `ctx` keyed by rotation id + chain signature, mirroring
+ * `computePerPartLift`. Recursion always shortens `chainAbove`, so no
+ * same-signature re-entry.
+ *
+ * @param {string} rotationId
+ * @param {Array<{type:string, id:string}>} chainAbove - enabled, leaf-first
+ * @param {import('../eval.js').EvalContext} ctx
+ * @returns {{mat: Float64Array, isCanvasFinal: boolean}|null}
+ */
+function computePerPartRotationCanvasFinal(rotationId, chainAbove, ctx) {
+  let cache = ctx._perPartRotMatCache;
+  if (!cache) { cache = new Map(); ctx._perPartRotMatCache = cache; }
+  const sig = chainAbove.length === 0
+    ? `${rotationId}|`
+    : `${rotationId}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+  if (cache.has(sig)) return cache.get(sig);
+
+  const key = ctx.outputs.get(`${rotationId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);
+  if (!key || key.kind !== 'rotation') { cache.set(sig, null); return null; }
+  const angleDeg = (key.angle ?? 0) + (key.baseAngle ?? 0);
+  const px = key.originX ?? 0;
+  const py = key.originY ?? 0;
+  const setupBase = {
+    scale: key.scale ?? 1,
+    reflectX: !!key.reflectX,
+    reflectY: !!key.reflectY,
+    opacity: key.opacity ?? 1,
+  };
+
+  // No enabled ancestors → authored pivot is already canvas-px (mirrors
+  // the root-parented branch of kernelRotationSetupProbe).
+  if (chainAbove.length === 0) {
+    const res = buildCanvasFinalMat3({
+      ...setupBase, canvasFinalPivot: [px, py], effectiveAngleDeg: angleDeg,
+    });
+    cache.set(sig, res);
+    return res;
+  }
+
+  // FD probe at the pivot through the per-part chain. ε mirrors the
+  // immediate-parent-type choice in kernelRotationSetupProbe:87.
+  const eps = chainAbove[0].type === 'warp' ? 0.01 : 1.0;
+  const c = /** @type {[number,number]} */ ([0, 0]);
+  const d = /** @type {[number,number]} */ ([0, 0]);
+  perPartChainPoint(chainAbove, px, py, ctx, c);
+  perPartChainPoint(chainAbove, px, py + eps, ctx, d);
+  let dx = d[0] - c[0];
+  let dy = d[1] - c[1];
+  if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+    perPartChainPoint(chainAbove, px, py - eps, ctx, d);
+    dx = -(d[0] - c[0]);
+    dy = -(d[1] - c[1]);
+  }
+  let probedRad;
+  if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) {
+    probedRad = 0;
+  } else {
+    probedRad = Math.PI / 2 - Math.atan2(dy, dx);
+    while (probedRad > Math.PI) probedRad -= 2 * Math.PI;
+    while (probedRad <= -Math.PI) probedRad += 2 * Math.PI;
+  }
+  const res = buildCanvasFinalMat3({
+    ...setupBase,
+    canvasFinalPivot: [c[0], c[1]],
+    effectiveAngleDeg: angleDeg - probedRad * 180 / Math.PI,
+  });
   cache.set(sig, res);
   return res;
 }

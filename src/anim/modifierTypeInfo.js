@@ -10,17 +10,23 @@
  *
  * # Mode-flag enablement
  *
- * `isModifierEnabled(modifier, requiredMode)` mirrors
- * `BKE_modifier_is_enabled` (`BKE_modifier.hh:480`). The `requiredMode`
- * is the eval context's mode bitmask:
+ * `isModifierEnabled(modifier, requiredMode)` plays the role of Blender's
+ * `BKE_modifier_is_enabled` (declared `BKE_modifier.hh:480`, defined
+ * `blenkernel/intern/modifier.cc`). The `requiredMode` is the eval
+ * context's mode bitmask:
  *
  *   - viewport tick: `MODE_REALTIME`
  *   - export bake:   `MODE_RENDER`
  *   - mesh edit:     `MODE_EDITMODE`
  *
  * A modifier is enabled iff `(modifier.mode & requiredMode) !== 0`
- * AND `modifier.enabled !== false`. Audit Gap C is pinned by the
- * `MODE_RENDER`-only test in `test_modifierTypeInfo.mjs`.
+ * AND `modifier.enabled !== false`. NOTE the bit test is ANY-bit
+ * (`& !== 0`), whereas Blender uses ALL-bits (`(md->mode & required) ==
+ * required`). The two AGREE for every caller here because all required
+ * masks are single-bit (REALTIME or RENDER or EDITMODE, never combined);
+ * if a multi-bit mask is ever passed, switch to `=== requiredMode` to
+ * stay faithful. Audit Gap C is pinned by the `MODE_RENDER`-only test in
+ * `test_modifierTypeInfo.mjs`.
  *
  * # Phase D-3b deformer kinds
  *

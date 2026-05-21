@@ -66,8 +66,9 @@ export function kernelMatrixBuild(op, ctx) {
  * the keyform angle MINUS parent's local rotation at the pivot.
  *
  * @param {{canvasFinalPivot: [number, number], effectiveAngleDeg: number, scale: number, reflectX: boolean, reflectY: boolean, opacity: number}} setup
+ * @returns {{kind: 'rotation', mat: Float64Array, pivot: [number, number], scale: number, opacity: number, isCanvasFinal: boolean}}
  */
-function buildCanvasFinalMat3(setup) {
+export function buildCanvasFinalMat3(setup) {
   const theta = (setup.effectiveAngleDeg ?? 0) * Math.PI / 180;
   const c = Math.cos(theta);
   const s = Math.sin(theta);

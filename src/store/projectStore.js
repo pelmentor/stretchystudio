@@ -1586,6 +1586,26 @@ export const useProjectStore = create((set, get) => {
       // returning `kind: 'overlay'`). This matches Blender's split:
       // vertex groups + Armature modifier for true skinning,
       // parent-chain transform for rigid follow.
+      // Schema v29 — persist `rigSpec.artMeshes` runtime data (bindings
+      // + keyforms + parent) into `project.nodes[i].mesh.runtime` so
+      // `selectRigSpec(project)` produces an art-mesh tree equivalent
+      // to `generateCmo3.result.rigSpec.artMeshes` post save+load and
+      // post auto-fill. Without this, bone-baked handwear keyforms +
+      // eye-closure curves + neck-corner offsets + variant fades all
+      // silently disappear from the live preview.
+      //
+      // ORDER: this MUST run before `synthesizeModifierStacks` below.
+      // Bone-baked parts (legwear etc.) carry no `rigParent`; their
+      // deformer chain is only discoverable via `mesh.runtime.parent`,
+      // which `persistArtMeshRuntime` writes from the harvest. The
+      // stack synthesis reads that field to surface the body-warp
+      // Lattice modifiers (the "legwear has no warp modifier" gap). On
+      // a fresh Init Rig the field doesn't exist until written here, so
+      // synthesising the stacks first left bone-baked parts showing
+      // only their Armature modifier.
+      if (harvest?.rigSpec) {
+        peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
+      }
       // Phase 3 storage flip — re-derive each part's modifier stack
       // after the full seed pass. The seedXxx fns each run synthesize
       // individually, but NeckWarp + rotation deformer upserts happen
@@ -1599,16 +1619,6 @@ export const useProjectStore = create((set, get) => {
       // any future caller can mutate stacks alone and trust the mirror
       // to stay consistent. See `synthesizeDeformerParents` doc header.
       peers.synthesizeDeformerParents(proj);
-      // Schema v29 — persist `rigSpec.artMeshes` runtime data (bindings
-      // + keyforms + parent) into `project.nodes[i].mesh.runtime` so
-      // `selectRigSpec(project)` produces an art-mesh tree equivalent
-      // to `generateCmo3.result.rigSpec.artMeshes` post save+load and
-      // post auto-fill. Without this, bone-baked handwear keyforms +
-      // eye-closure curves + neck-corner offsets + variant fades all
-      // silently disappear from the live preview.
-      if (harvest?.rigSpec) {
-        peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
-      }
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.
       // ISO timestamp; readable in logs / debug if needed.
