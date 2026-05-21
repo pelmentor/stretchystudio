@@ -64,6 +64,7 @@ import {
   isWarpLatticeNode,
   isRotationDeformerNode,
   isChainDeformerNode,
+  modifierRefId,
 } from '../../../store/warpLatticeAccess.js';
 import { OperationCode, NodeType } from '../types.js';
 
@@ -137,7 +138,7 @@ export function kernelArtMeshEval(op, ctx) {
     ? implicitParent.id
     : null;
   const implicitInModifiers = !!implicitParentId
-    && stack.some((m) => m && m.deformerId === implicitParentId);
+    && stack.some((m) => m && modifierRefId(m) === implicitParentId);
 
   if (implicitParentId && !implicitInModifiers) {
     // Bone-baked fallback — walk the implicit deformer parent chain
@@ -149,11 +150,14 @@ export function kernelArtMeshEval(op, ctx) {
     for (let i = 0; i < stack.length; i++) {
       const mod = stack[i];
       if (!mod || mod.enabled === false) continue;
-      const deformerId = mod.deformerId;
+      // v43 — lattice (warp) modifiers reference the cage object via
+      // `objectId`; rotation via `deformerId`. The depgraph deformer node
+      // is keyed by that id either way.
+      const deformerId = modifierRefId(mod);
       if (typeof deformerId !== 'string' || deformerId.length === 0) continue;
       if (bufB === null) bufB = new Float32Array(len);
 
-      if (mod.type === 'warp') {
+      if (mod.type === 'warp' || mod.type === 'lattice') {
         // Per-part lifted grid — depgraph analogue of chainEval's
         // `getLiftedGridForChain` (chainEval.js:721-805). The global
         // GRID_LIFT_TO_PARENT op composes the warp grid through the
@@ -173,11 +177,14 @@ export function kernelArtMeshEval(op, ctx) {
           const up = stack[j];
           if (!up) continue;
           if (up.enabled === false) {
-            if (up.type === 'warp' || up.type === 'rotation') skippedDisabledAbove = true;
+            if (up.type === 'warp' || up.type === 'rotation' || up.type === 'lattice') skippedDisabledAbove = true;
             continue;
           }
-          if (typeof up.deformerId === 'string' && up.deformerId.length > 0) {
-            chainAbove.push({ type: up.type, id: up.deformerId });
+          const upId = modifierRefId(up);
+          if (typeof upId === 'string' && upId.length > 0) {
+            // Normalise `lattice` → `warp` so computePerPartLift's
+            // type dispatch (which knows only 'warp'/'rotation') composes it.
+            chainAbove.push({ type: up.type === 'rotation' ? 'rotation' : 'warp', id: upId });
           }
         }
         let lift = null;

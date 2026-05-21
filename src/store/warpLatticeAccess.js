@@ -69,6 +69,20 @@ export function isWarpLatticeNode(node) {
 }
 
 /**
+ * Whether `node` is a v43 first-class Lattice (warp) OBJECT specifically
+ * (not the legacy `deformer/warp` transient shape). Its cage has a FIXED
+ * rows×cols topology the Cubism exporter requires, so Edit-Mode topology
+ * ops (add/remove/subdivide/dissolve vertex) must be HARD-BLOCKED on it —
+ * only moving existing control points is allowed.
+ *
+ * @param {object|null|undefined} node
+ * @returns {boolean}
+ */
+export function isLatticeCageObject(node) {
+  return !!node && node.type === 'object' && node.objectKind === 'lattice';
+}
+
+/**
  * Whether `node` is a rotation deformer. Unchanged by the lattice refactor
  * (rotations stay `deformer/rotation`); seamed here only so the chain-walk
  * predicates that discriminate warp-vs-rotation read from one place.
@@ -93,6 +107,28 @@ export function isRotationDeformerNode(node) {
  */
 export function isChainDeformerNode(node) {
   return isWarpLatticeNode(node) || isRotationDeformerNode(node);
+}
+
+/**
+ * The chain-node id a part modifier references. v43 lattice (warp)
+ * modifiers reference their cage object via `objectId`; warp/rotation
+ * modifiers reference a deformer node via `deformerId`. Armature modifiers
+ * (no chain node) and malformed entries yield null.
+ *
+ * Single source of truth so every consumer (selectRigSpec, the export
+ * adapter, the depgraph relation/eval passes, the node tree) resolves a
+ * modifier's target the same way — a `mod.deformerId`-only read silently
+ * skips lattice modifiers (the Phase-5/6 class of bug).
+ *
+ * @param {object|null|undefined} mod
+ * @returns {string|null}
+ */
+export function modifierRefId(mod) {
+  if (!mod || typeof mod !== 'object') return null;
+  if (mod.type === 'lattice') {
+    return typeof mod.objectId === 'string' ? mod.objectId : null;
+  }
+  return typeof mod.deformerId === 'string' ? mod.deformerId : null;
 }
 
 /**

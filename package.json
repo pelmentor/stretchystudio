@@ -292,6 +292,7 @@
     "test:auditFixes20260510": "node scripts/test/test_audit_fixes_2026_05_10.mjs",
     "test:depgraphSideBySide": "node scripts/test/test_depgraphSideBySide.mjs",
     "test:depgraphSideBySideRotationParent": "node scripts/test/test_depgraphSideBySide_rotationParent.mjs",
+    "test:depgraphLattice": "node scripts/test/test_depgraph_lattice.mjs",
     "test:nodetreeShape": "node scripts/test/test_nodetree_shape.mjs",
     "test:nodetreeEval": "node scripts/test/test_nodetree_eval.mjs",
     "test:nodetreeRetirement": "node scripts/test/test_nodetree_retirement.mjs",

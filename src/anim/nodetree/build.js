@@ -50,6 +50,7 @@ import {
   addLinkToTree,
   NodeTreeType,
 } from './types.js';
+import { modifierRefId } from '../../store/warpLatticeAccess.js';
 
 /**
  * Build a RigTree datablock for a single part. Returns the tree.
@@ -86,7 +87,10 @@ export function buildRigTreeForPart(part) {
   let xPos = 200;
   for (let i = 0; i < stack.length; i++) {
     const mod = stack[i];
-    if (!mod || typeof mod.deformerId !== 'string') continue;
+    // v43 — a warp modifier references its cage object via `objectId`
+    // (`type:'lattice'`); rotation via `deformerId`. Resolve either.
+    const refId = modifierRefId(mod);
+    if (typeof refId !== 'string') continue;
     const typeId = mod.type === 'rotation' ? 'RotationModifier' : 'WarpModifier';
     const nodeId = `${part.id}__mod_${i}`;
     addNodeToTree(tree, {
@@ -95,7 +99,7 @@ export function buildRigTreeForPart(part) {
       inputs:  [{ identifier: 'positions', name: 'Positions', type: 'mesh', inOut: 'input'  }],
       outputs: [{ identifier: 'positions', name: 'Positions', type: 'mesh', inOut: 'output' }],
       storage: {
-        deformerId: mod.deformerId,
+        deformerId: refId,
         enabled: mod.enabled !== false,
         mode: typeof mod.mode === 'number' ? mod.mode : undefined,
         showInEditor: mod.showInEditor !== false,

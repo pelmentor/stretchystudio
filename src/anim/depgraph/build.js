@@ -43,6 +43,7 @@ import {
   isWarpLatticeNode,
   isRotationDeformerNode,
   isChainDeformerNode,
+  modifierRefId,
 } from '../../store/warpLatticeAccess.js';
 
 /** Synthetic IDNode ids for the depgraph's bookkeeping IDs. */
@@ -476,8 +477,11 @@ function buildPartModifierRelations(graph, project, opts) {
     if (!evalOp && !artMeshOp) continue;
     const stack = Array.isArray(part.modifiers) ? part.modifiers : [];
     for (const mod of stack) {
-      if (!mod?.deformerId || mod.enabled === false) continue;
-      const defId = graph.findIdNode(mod.deformerId, 'deformer');
+      // v43 — a warp modifier references its cage object via `objectId`; a
+      // rotation modifier references its deformer node via `deformerId`.
+      const refId = modifierRefId(mod);
+      if (!refId || mod.enabled === false) continue;
+      const defId = graph.findIdNode(refId, 'deformer');
       const defGeom = defId?.findComponent(NodeType.GEOMETRY);
       if (!defGeom) continue;
       const defOp = mod.type === 'rotation'
@@ -485,10 +489,10 @@ function buildPartModifierRelations(graph, project, opts) {
         : defGeom.findOperation(OperationCode.GRID_LIFT_TO_PARENT);
       if (defOp) {
         if (evalOp) {
-          graph.addRelation(defOp, evalOp, `modifier ${mod.deformerId} -> part`);
+          graph.addRelation(defOp, evalOp, `modifier ${refId} -> part`);
         }
         if (artMeshOp) {
-          graph.addRelation(defOp, artMeshOp, `modifier ${mod.deformerId} -> art mesh`);
+          graph.addRelation(defOp, artMeshOp, `modifier ${refId} -> art mesh`);
         }
       }
       // Phase 0.D.0 — ART_MESH_EVAL also reads KEYFORM_EVAL when the
@@ -497,7 +501,7 @@ function buildPartModifierRelations(graph, project, opts) {
       if (artMeshOp) {
         const keyOp = defGeom.findOperation(OperationCode.KEYFORM_EVAL);
         if (keyOp) {
-          graph.addRelation(keyOp, artMeshOp, `modifier ${mod.deformerId} keyform -> art mesh`);
+          graph.addRelation(keyOp, artMeshOp, `modifier ${refId} keyform -> art mesh`);
         }
       }
     }
@@ -540,7 +544,7 @@ function buildPartModifierRelations(graph, project, opts) {
         ? implicitParent.id
         : null;
       const inModifiers = !!implicitParentId
-        && stack.some((m) => m && m.deformerId === implicitParentId);
+        && stack.some((m) => m && modifierRefId(m) === implicitParentId);
       if (implicitParentId && !inModifiers) {
         let cursorId = implicitParentId;
         let safety = 32;

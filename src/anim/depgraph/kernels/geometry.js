@@ -39,6 +39,7 @@ import {
   MODIFIER_MODE_REALTIME,
 } from '../../modifierTypeInfo.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import { modifierRefId } from '../../../store/warpLatticeAccess.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -71,27 +72,30 @@ export function kernelGeometryEvalDeformed(op, ctx) {
 
   let collapsed = false;
   for (const mod of stack) {
+    // v43 — a warp modifier references its cage object via `objectId`;
+    // rotation via `deformerId`. Resolve either via the seam.
+    const refId = modifierRefId(mod);
     if (collapsed) {
       // Canvas-final modifier already collapsed the chain — remaining
       // modifiers are encoded in the lifted state we just applied.
       // Trace them as skipped-by-collapse so the diagnostic surfaces
       // why iteration stopped.
       modifierTrace.push({
-        deformerId: mod?.deformerId ?? '<unknown>',
+        deformerId: refId ?? '<unknown>',
         applied: false, reason: 'collapsed-by-canvas-final',
       });
       continue;
     }
-    if (!mod?.deformerId) {
+    if (!refId) {
       modifierTrace.push({
-        deformerId: mod?.deformerId ?? '<unknown>',
-        applied: false, reason: 'missing deformerId',
+        deformerId: '<unknown>',
+        applied: false, reason: 'missing deformer ref',
       });
       continue;
     }
     if (!isModifierEnabled(mod, requiredMode)) {
       modifierTrace.push({
-        deformerId: mod.deformerId,
+        deformerId: refId,
         applied: false, reason: 'mode-gated',
       });
       continue;
@@ -99,7 +103,7 @@ export function kernelGeometryEvalDeformed(op, ctx) {
     const typeInfo = MODIFIER_TYPES[mod.type];
     if (!typeInfo) {
       modifierTrace.push({
-        deformerId: mod.deformerId,
+        deformerId: refId,
         applied: false, reason: `unknown type ${mod.type}`,
       });
       continue;
@@ -109,7 +113,7 @@ export function kernelGeometryEvalDeformed(op, ctx) {
     positions = nextPos;
     collapsed = isCanvasFinal === true;
     modifierTrace.push({
-      deformerId: mod.deformerId,
+      deformerId: refId,
       applied: true, reason: collapsed ? 'ok-canvas-final' : 'ok',
     });
   }

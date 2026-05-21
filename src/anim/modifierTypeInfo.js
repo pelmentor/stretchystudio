@@ -51,6 +51,7 @@ import {
 } from '../store/migrations/v21_modifier_mode_flags.js';
 import { evalWarpKernelCubism } from '../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../io/live2d/runtime/evaluator/rotationEval.js';
+import { modifierRefId } from '../store/warpLatticeAccess.js';
 import { OperationCode, NodeType } from './depgraph/types.js';
 
 /**
@@ -100,7 +101,11 @@ export function isModifierEnabled(modifier, requiredMode) {
  * @type {ModifierTypeInfo['deformVerts']}
  */
 function warpDeformVerts(modifier, ctx, _mesh, positions) {
-  const liftKey = `${modifier.deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
+  // v43 — a warp modifier is `{type:'lattice', objectId}`; the depgraph
+  // deformer node is keyed by that object id. `deformerId` (legacy) still
+  // resolves for any un-flipped/transient warp modifier.
+  const refId = modifierRefId(modifier);
+  const liftKey = `${refId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
   const lift = ctx.outputs?.get(liftKey);
   const nVerts = positions.length / 2;
   const out = new Float32Array(positions.length);
@@ -112,7 +117,7 @@ function warpDeformVerts(modifier, ctx, _mesh, positions) {
     return { positions: out, isCanvasFinal: true };
   }
   // Fallback: unlifted KEYFORM_EVAL grid (broken chain).
-  const keyKey = `${modifier.deformerId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`;
+  const keyKey = `${refId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`;
   const keyState = ctx.outputs?.get(keyKey);
   if (keyState?.grid) {
     evalWarpKernelCubism(
@@ -133,7 +138,7 @@ function warpDeformVerts(modifier, ctx, _mesh, positions) {
  * @type {ModifierTypeInfo['deformVerts']}
  */
 function rotationDeformVerts(modifier, ctx, _mesh, positions) {
-  const matKey = `${modifier.deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
+  const matKey = `${modifierRefId(modifier)}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
   const matState = ctx.outputs?.get(matKey);
   if (!matState?.mat) {
     return { positions, isCanvasFinal: false };
@@ -158,6 +163,13 @@ function rotationDeformVerts(modifier, ctx, _mesh, positions) {
 export const MODIFIER_TYPES = {
   warp: {
     name: 'Warp',
+    deformVerts: warpDeformVerts,
+  },
+  // v43 — a warp deformer is now a first-class Lattice object; the part's
+  // modifier is `{type:'lattice', objectId}`. Same bilinear-FFD deform as a
+  // legacy warp (the cage IS the control grid), so it aliases warpDeformVerts.
+  lattice: {
+    name: 'Lattice',
     deformVerts: warpDeformVerts,
   },
   rotation: {
