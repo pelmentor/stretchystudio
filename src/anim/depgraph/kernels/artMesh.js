@@ -65,6 +65,7 @@ import {
   isRotationDeformerNode,
   isChainDeformerNode,
   modifierRefId,
+  getWarpRestGrid,
 } from '../../../store/warpLatticeAccess.js';
 import { isModifierEnabled, MODIFIER_MODE_REALTIME } from '../../modifierTypeInfo.js';
 import { buildCanvasFinalMat3 } from './matrix.js';
@@ -177,32 +178,41 @@ export function kernelArtMeshEval(op, ctx) {
       // (`skippedDisabledAbove`) we recompose through the explicit chain;
       // the common no-disable case reuses the precomputed global op
       // verbatim, so it's byte-identical and free (oracle/parity untouched).
+      // A DISABLED warp is composed at its REST grid (Blender pass-through:
+      // the modifier contributes its rest mapping, removing only the
+      // param-driven deformation, NOT the spatial frame). Excluding it
+      // instead collapses the frame and flings the part off-canvas. Disabled
+      // rotations are still excluded (rotation-rest is a separate case);
+      // both set `hasDisabledAbove` to take the per-part recompose path.
       const chainAbove = [];
-      let skippedDisabledAbove = false;
+      let hasDisabledAbove = false;
       for (let j = i + 1; j < stack.length; j++) {
         const up = stack[j];
         if (!up) continue;
-        if (!isModifierEnabled(up, requiredMode)) {
-          if (up.type === 'warp' || up.type === 'rotation' || up.type === 'lattice') skippedDisabledAbove = true;
-          continue;
-        }
+        const upEnabled = isModifierEnabled(up, requiredMode);
         // Only chain-deformer steps participate in the composition.
         // computePerPartLift / computePerPartRotationCanvasFinal dispatch on
-        // 'warp'/'rotation' only, so map lattice → 'warp' (a lattice IS a
-        // warp); SKIP armature / unknown types (not part of the warp/rotation
-        // chain — pushing them would mis-dispatch and break the chain early).
+        // 'warp'/'rotation'; map lattice → 'warp' (a lattice IS a warp);
+        // SKIP armature / unknown types (not part of the warp/rotation chain).
         const upChainType = up.type === 'rotation'
           ? 'rotation'
           : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
+        if (!upChainType) continue;
+        if (!upEnabled) {
+          hasDisabledAbove = true;
+          // Disabled rotation: excluded (rest-rotation not yet supported).
+          if (upChainType === 'rotation') continue;
+        }
         const upId = modifierRefId(up);
-        if (upChainType && typeof upId === 'string' && upId.length > 0) {
-          chainAbove.push({ type: upChainType, id: upId });
+        if (typeof upId === 'string' && upId.length > 0) {
+          // `enabled` only meaningful for warp steps (disabled→rest grid).
+          chainAbove.push({ type: upChainType, id: upId, enabled: upChainType === 'warp' ? upEnabled : true });
         }
       }
 
       if (mod.type === 'warp' || mod.type === 'lattice') {
         let lift = null;
-        if (!skippedDisabledAbove) {
+        if (!hasDisabledAbove) {
           lift = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`);
         }
         if (!lift?.lifted) {
@@ -239,7 +249,7 @@ export function kernelArtMeshEval(op, ctx) {
         // through the part's effective chain instead. No-disable → reuse the
         // global op (byte-identical fast path).
         let matState = null;
-        if (!skippedDisabledAbove) {
+        if (!hasDisabledAbove) {
           matState = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
         }
         if (!matState?.mat) {
@@ -383,17 +393,18 @@ function walkDeformerParentChain(startId, ctx, bufA, len, tmp) {
  * once (mirrors chainEval's `_liftedByChainKey`).
  *
  * @param {string} warpId
- * @param {Array<{type: string, id: string}>} chainAbove - enabled chain
- *   above this warp, leaf-first (disabled modifiers already removed).
+ * @param {Array<{type: string, id: string, enabled?: boolean}>} chainAbove -
+ *   chain above this warp, leaf-first. A warp step with `enabled === false`
+ *   composes at its REST grid (frame-preserving pass-through).
  * @param {import('../eval.js').EvalContext} ctx
+ * @param {boolean} [enabled=true] - whether THIS warp is enabled; disabled →
+ *   compose at its rest grid instead of the current keyform grid.
  * @returns {{lifted: Float64Array, gridSize: {rows:number, cols:number}, isQuad: boolean} | null}
  */
-function computePerPartLift(warpId, chainAbove, ctx) {
+function computePerPartLift(warpId, chainAbove, ctx, enabled = true) {
   let cache = ctx._perPartWarpLiftCache;
   if (!cache) { cache = new Map(); ctx._perPartWarpLiftCache = cache; }
-  const sig = chainAbove.length === 0
-    ? `${warpId}|`
-    : `${warpId}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+  const sig = `${warpId}:${enabled ? 1 : 0}|${chainAbove.map((c) => `${c.type}:${c.id}:${c.enabled === false ? 0 : 1}`).join('>')}`;
   if (cache.has(sig)) return cache.get(sig);
 
   const keyState = ctx.outputs.get(`${warpId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);
@@ -404,17 +415,21 @@ function computePerPartLift(warpId, chainAbove, ctx) {
   const gridSize = keyState.gridSize;
   const isQuad = keyState.isQuadTransform === true;
   const nPts = (gridSize.rows + 1) * (gridSize.cols + 1);
+  // Disabled warp → compose at its REST grid (baseGrid / lattice rest cage),
+  // so it contributes its frame mapping but no param-driven deformation.
+  // gridSize/isQuad still come from KEYFORM_EVAL (topology is invariant).
+  const baseGrid = enabled ? keyState.grid : (restGridFor(warpId, ctx) ?? keyState.grid);
 
-  // No chain above → the warp's current-frame grid IS the outermost
-  // frame (matches getLiftedGridForChain's chainAbove.length===0 branch).
+  // No chain above → this warp's grid IS the outermost frame (matches
+  // getLiftedGridForChain's chainAbove.length===0 branch).
   if (chainAbove.length === 0) {
-    const res = { lifted: Float64Array.from(keyState.grid), gridSize, isQuad };
+    const res = { lifted: Float64Array.from(baseGrid), gridSize, isQuad };
     cache.set(sig, res);
     return res;
   }
 
   const positions = new Float64Array(nPts * 2);
-  for (let k = 0; k < nPts * 2; k++) positions[k] = keyState.grid[k];
+  for (let k = 0; k < nPts * 2; k++) positions[k] = baseGrid[k];
   const tmp = /** @type {[number, number]} */ ([0, 0]);
   for (let s = 0; s < chainAbove.length; s++) {
     const step = chainAbove[s];
@@ -424,7 +439,7 @@ function computePerPartLift(warpId, chainAbove, ctx) {
       // every current CP through its canvas-px grid (one bilinear per
       // level — NOT nested bilinear-of-bilinear, which would be quartic).
       // Output is canvas-px → composition is done, break.
-      const stepLift = computePerPartLift(step.id, chainAbove.slice(s + 1), ctx);
+      const stepLift = computePerPartLift(step.id, chainAbove.slice(s + 1), ctx, step.enabled !== false);
       if (!stepLift?.lifted) break;
       const vIn = new Float32Array(nPts * 2);
       const vOut = new Float32Array(nPts * 2);
@@ -456,6 +471,28 @@ function computePerPartLift(warpId, chainAbove, ctx) {
 }
 
 /**
+ * Rest control grid for a warp/lattice deformer (its `baseGrid` / lattice
+ * rest cage) as a flat Float64Array, via the `getWarpRestGrid` seam. Used to
+ * compose a DISABLED warp at rest — it contributes its frame mapping but no
+ * param-driven deformation (Blender modifier pass-through). Memoised on ctx;
+ * the rest grid is invariant across a single eval.
+ *
+ * @param {string} deformerId
+ * @param {import('../eval.js').EvalContext} ctx
+ * @returns {Float64Array|null}
+ */
+function restGridFor(deformerId, ctx) {
+  let cache = ctx._restGridCache;
+  if (!cache) { cache = new Map(); ctx._restGridCache = cache; }
+  if (cache.has(deformerId)) return cache.get(deformerId);
+  const node = ctx.project?.nodes?.find((n) => n?.id === deformerId);
+  const rest = node ? getWarpRestGrid(node, ctx.project) : undefined;
+  const out = Array.isArray(rest) && rest.length > 0 ? Float64Array.from(rest) : null;
+  cache.set(deformerId, out);
+  return out;
+}
+
+/**
  * Walk a single point through a part's EFFECTIVE (enabled) `chainAbove`,
  * leaf-first, recomposing each ancestor per-part (never reading a global
  * canvas-final output). The leaf-first first step, composed through the
@@ -464,7 +501,7 @@ function computePerPartLift(warpId, chainAbove, ctx) {
  * (chainEval.js:605-648), but over the explicit per-part chain instead of
  * the deformer's global `def.parent` pointers.
  *
- * @param {Array<{type:string, id:string}>} chainAbove - enabled, leaf-first
+ * @param {Array<{type:string, id:string, enabled?:boolean}>} chainAbove - leaf-first
  * @param {number} x
  * @param {number} y
  * @param {import('../eval.js').EvalContext} ctx
@@ -477,18 +514,21 @@ function perPartChainPoint(chainAbove, x, y, ctx, out) {
   const inBuf = new Float32Array(2);
   const outBuf = new Float32Array(2);
   if (step.type === 'warp') {
-    const lift = computePerPartLift(step.id, rest, ctx);
+    const stepEnabled = step.enabled !== false;
+    const lift = computePerPartLift(step.id, rest, ctx, stepEnabled);
     if (lift?.lifted) {
       inBuf[0] = x; inBuf[1] = y;
       evalWarpKernelCubism(lift.lifted, lift.gridSize, lift.isQuad, inBuf, outBuf, 1);
       out[0] = outBuf[0]; out[1] = outBuf[1];
       return; // lifted grid IS canvas-px
     }
-    // Fallback: unlifted current-frame grid, then continue through rest.
+    // Fallback: unlifted grid (rest grid if this step is disabled), then
+    // continue through the rest of the chain.
     const keyState = ctx.outputs.get(`${step.id}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);
-    if (keyState?.grid) {
+    const fallbackGrid = stepEnabled ? keyState?.grid : (restGridFor(step.id, ctx) ?? keyState?.grid);
+    if (keyState?.grid && fallbackGrid) {
       inBuf[0] = x; inBuf[1] = y;
-      evalWarpKernelCubism(keyState.grid, keyState.gridSize, keyState.isQuadTransform === true, inBuf, outBuf, 1);
+      evalWarpKernelCubism(fallbackGrid, keyState.gridSize, keyState.isQuadTransform === true, inBuf, outBuf, 1);
       perPartChainPoint(rest, outBuf[0], outBuf[1], ctx, out);
       return;
     }
@@ -525,16 +565,14 @@ function perPartChainPoint(chainAbove, x, y, ctx, out) {
  * same-signature re-entry.
  *
  * @param {string} rotationId
- * @param {Array<{type:string, id:string}>} chainAbove - enabled, leaf-first
+ * @param {Array<{type:string, id:string, enabled?:boolean}>} chainAbove - leaf-first
  * @param {import('../eval.js').EvalContext} ctx
  * @returns {{mat: Float64Array, isCanvasFinal: boolean}|null}
  */
 function computePerPartRotationCanvasFinal(rotationId, chainAbove, ctx) {
   let cache = ctx._perPartRotMatCache;
   if (!cache) { cache = new Map(); ctx._perPartRotMatCache = cache; }
-  const sig = chainAbove.length === 0
-    ? `${rotationId}|`
-    : `${rotationId}|${chainAbove.map((c) => `${c.type}:${c.id}`).join('>')}`;
+  const sig = `${rotationId}|${chainAbove.map((c) => `${c.type}:${c.id}:${c.enabled === false ? 0 : 1}`).join('>')}`;
   if (cache.has(sig)) return cache.get(sig);
 
   const key = ctx.outputs.get(`${rotationId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`);

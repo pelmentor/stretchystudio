@@ -46,6 +46,9 @@ function makeProject() {
     nodes: [
       { id: 'W', type: 'deformer', deformerKind: 'warp', parent: null,
         gridSize: { rows: 1, cols: 1 },
+        // Rest grid (identity, == the P=0 keyform). A DISABLED warp composes
+        // at this rest grid (frame-preserving pass-through), not excluded.
+        baseGrid: [0, 0, 100, 0, 0, 100, 100, 100],
         bindings: [{ parameterId: 'P', keys: [0, 1] }],
         keyforms: [
           { keyTuple: [0], positions: [0, 0, 100, 0, 0, 100, 100, 100], opacity: 1 },
@@ -102,9 +105,11 @@ function evalPartVerts(project, pValue) {
     `enabled P=1: pivot ≈ (100,50) (got ${JSON.stringify(at1)})`);
 }
 
-// ---- 2. Warp eye DISABLED: the rotation no longer follows ParamX ----
-// This is the fix: the leaf rotation's canvas-final matrix is recomputed
-// through the part's effective chain (W excluded), so ParamX has no effect.
+// ---- 2. Warp eye DISABLED: REST-semantics (held at rest, NOT flung) ----
+// The fix: a disabled warp composes at its REST grid (baseGrid), so it
+// contributes its frame mapping but no param deformation. The part holds at
+// its rest position — it must NOT fly off-canvas (the reported bug, which the
+// old "exclude the warp" semantics caused by collapsing the pivot frame).
 {
   const proj = makeProject();
   const wMod = proj.nodes.find((n) => n.id === 'p').modifiers[1];
@@ -114,25 +119,33 @@ function evalPartVerts(project, pValue) {
   const at0 = evalPartVerts(proj, 0);
   const at1 = evalPartVerts(proj, 1);
   assert(JSON.stringify(at0) === JSON.stringify(at1),
-    `disabled: ParamX no longer moves the part — Breath effect removed (at0=${JSON.stringify(at0)} at1=${JSON.stringify(at1)})`);
+    `disabled: ParamX no longer moves the part (at0=${JSON.stringify(at0)} at1=${JSON.stringify(at1)})`);
 
-  // And it must DIFFER from the enabled result at P=1 (proves the warp's
-  // contribution was actually removed, not merely frozen at the enabled value).
+  // REST equivalence: disabling W ≡ W frozen at its rest param. With W at
+  // rest the pivot is the warp-centre (50,50) — the part stays put, NOT at
+  // the origin/off-canvas. Pinned against W enabled with ParamX at rest (0).
+  const enabledAtRest = evalPartVerts(makeProject(), 0);
+  assert(JSON.stringify(at1) === JSON.stringify(enabledAtRest),
+    `disabled ≡ W-at-rest (held in place, not flung) (disabled=${JSON.stringify(at1)} restRef=${JSON.stringify(enabledAtRest)})`);
+  assert(Math.abs(at1[0] - 50) < 0.5 && Math.abs(at1[1] - 50) < 0.5,
+    `disabled: part at rest pivot ≈ (50,50), NOT flung off-canvas (got ${JSON.stringify(at1)})`);
+
+  // And it must differ from the enabled result at P=1 (the deformation IS removed).
   const enabledAt1 = evalPartVerts(makeProject(), 1);
   assert(JSON.stringify(at1) !== JSON.stringify(enabledAt1),
-    `disabled vs enabled at P=1 differ (warp contribution excluded) (disabled=${JSON.stringify(at1)} enabled=${JSON.stringify(enabledAt1)})`);
+    `disabled vs enabled at P=1 differ (deformation removed) (disabled=${JSON.stringify(at1)} enabled=${JSON.stringify(enabledAt1)})`);
 }
 
-// ---- 3. ✓/× enabled=false path also excludes the warp (DEPGRAPH only) ----
-// SCOPE: this pins the DEPGRAPH (viewport / Live Preview) engine. The eye
-// toggle (MODE_REALTIME) is viewport-only, so the depgraph fix fully covers
-// it. The ✓/× `enabled` flag, however, ALSO affects the EXPORT path
-// (chainEval/selectRigSpec) — and chainEval was NOT changed this session: its
-// per-part `modifierChain` walk uses per-part lift for warp steps but the
-// GLOBAL rotation matrix for rotation steps (chainEval.js:293-304), so a
-// rotation-leaf part whose ancestor warp is enabled=false will still bake the
-// warp into its pivot on EXPORT. That export-side gap is NOT pinned here. See
-// the chainEval rotation-leaf gap noted in the session close-out.
+// ---- 3. ✓/× enabled=false → same REST-semantics as the eye bit ----
+// The ✓/× `enabled` flag and the eye (mode) bit both go through
+// isModifierEnabled, so disabling either holds the part at rest (not flung).
+// SCOPE: the eye bit is viewport-only (depgraph). The ✓/× `enabled` flag also
+// affects the EXPORT engine (chainEval/selectRigSpec), which uses EXCLUDE
+// semantics for disabled warps (matching the cmo3 export, which structurally
+// drops disabled modifiers via synthesizeDeformerNodesForExport). So viewport
+// (rest) and export (exclude) intentionally differ for a disabled warp — the
+// viewport favours nice authoring (no jump); export mirrors the dropped
+// structure. The export side is covered by test_chainEval_perPartRotationDisable.
 {
   const proj = makeProject();
   proj.nodes.find((n) => n.id === 'p').modifiers[1].enabled = false;

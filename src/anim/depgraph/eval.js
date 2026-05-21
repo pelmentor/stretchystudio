@@ -130,6 +130,11 @@ const KERNELS = {
  *   re-probed through the effective chain instead of the global
  *   ROTATION_SETUP_PROBE / MATRIX_BUILD (which bake the global `def.parent`
  *   chain). Parts sharing the same divergent chain compose once.
+ * @property {Map<string, Float64Array|null>} [_restGridCache] -
+ *   kernel-private per-eval cache of warp/lattice REST control grids (via
+ *   `getWarpRestGrid`), keyed by deformer id. Used to compose a DISABLED warp
+ *   at rest (frame-preserving pass-through) instead of excluding it (which
+ *   collapses the part's frame and flings it off-canvas).
  * @property {Map<string, object>|null} [rigArtMeshById] - optional
  *   selectRigSpec `artMeshes[]` indexed by part id. When present, the
  *   ART_MESH_EVAL kernel sources its keyform-blend input (reprojected

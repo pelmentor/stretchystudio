@@ -84,8 +84,13 @@ const CHAIN_NO_WARP = [{ type: 'rotation', id: 'R' }]; // W excluded (disabled)
 }
 
 // ---- 2. Warp excluded from chain: rotation no longer follows ParamX ----
-// This is the fix: the leaf rotation's canvas-final matrix is recomputed
-// through the part's effective chain (W excluded), so ParamX has no effect.
+// chainEval (EXPORT engine) uses EXCLUDE semantics for a disabled warp — the
+// modifierChain selectRigSpec hands it omits the warp, matching the cmo3
+// export which structurally drops disabled modifiers. (The VIEWPORT/depgraph
+// engine uses REST semantics instead — disabled warp held at rest, no jump —
+// because that's better for authoring; see test_depgraph_perPartRotationDisable.
+// The two intentionally differ for a disabled warp.) The leaf rotation's
+// canvas-final matrix is recomputed through the effective (W-excluded) chain.
 {
   const at0 = evalPartVerts(CHAIN_NO_WARP, 0);
   const at1 = evalPartVerts(CHAIN_NO_WARP, 1);
