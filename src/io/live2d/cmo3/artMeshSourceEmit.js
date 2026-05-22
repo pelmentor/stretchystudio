@@ -62,6 +62,7 @@ import { sanitisePartName } from '../../../lib/partId.js';
 import { computeClosedVertsForMesh } from './eyeClosureApply.js';
 import { resolveMaskPairings } from './maskResolve.js';
 import { EYE_PART_TAGS } from './eyeTags.js';
+import { bakeBoneRotationLBS } from '../rig/bakeBoneRotation.js';
 
 /**
  * Emit one CArtMeshSource per mesh and populate `rigCollector.artMeshes`.
@@ -443,46 +444,14 @@ export function emitArtMeshSources(ctx, opts) {
         pivotLocalY = dfOrigin ? (pivotCanvasY - dfOrigin.y) : pivotCanvasY;
       }
 
-      const computeBakedPositions = (angleDeg) => {
-        // FULL-BLENDER (2026-05-22): bake Blender LINEAR-BLEND SKINNING, so
-        // the exported keyforms reproduce the viewport's live LBS
-        // (`applyTwoBoneSkinning`, boneSkinning.js) → viewport == export.
-        // Rotate each vertex by the FULL bone angle around the pivot, then
-        // LERP from rest by the vertex weight: `v = rest + (rotated - rest)*w`
-        // (the LBS chord). At w=0 → rest, w=1 → fully rotated, 0<w<1 → chord.
-        //
-        // Previously baked an ARC (`rotate by angle×weight`) — volume-
-        // preserving but NOT Blender's LBS, and divergent from the live skin
-        // at intermediate weights (the double-apply this refactor removes).
-        //
-        // COORD-SPACE CAVEAT (unverified, blind ship): the lerp is in the
-        // keyform's local frame (warp-local 0..1 under a rigWarp, else
-        // deformer-px). The viewport LBS lerps in canvas-px. For affine
-        // (deformer-px) parents the two match; under a non-identity warp the
-        // bilinear chain does NOT commute with the lerp, so viewport==export
-        // is only approximate for warp-parented bone-baked parts. Verify
-        // in-browser; if it diverges visibly, the fix is to LBS in one shared
-        // space (move the viewport skin pre-chain, or bake by sampling the
-        // post-chain LBS through the inverse warp).
-        const rad = angleDeg * Math.PI / 180; // FULL angle (weight via lerp)
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-        const positions = new Array(verts.length);
-        for (let i = 0; i < numVerts; i++) {
-          const localX = verts[i * 2];
-          const localY = verts[i * 2 + 1];
-          const w = weights[i] ?? 0;
-          // Scale radial offset to canvas pixels → rotate full angle → unscale.
-          const dx = (localX - pivotLocalX) * scaleX;
-          const dy = (localY - pivotLocalY) * scaleY;
-          const fullX = pivotLocalX + (dx * cos - dy * sin) / scaleX;
-          const fullY = pivotLocalY + (dx * sin + dy * cos) / scaleY;
-          // LBS chord: lerp rest → fully-rotated by weight.
-          positions[i * 2]     = localX + (fullX - localX) * w;
-          positions[i * 2 + 1] = localY + (fullY - localY) * w;
-        }
-        return positions;
-      };
+      // FULL-BLENDER (2026-05-22): bake Blender LINEAR-BLEND SKINNING via the
+      // shared `bakeBoneRotationLBS` helper — the SAME implementation any live
+      // re-bake uses, and proven (test_bakeBoneRotation.mjs) to equal the
+      // viewport's `applyTwoBoneSkinning` at the rest grid, so viewport ==
+      // export. (Previously baked an arc: rotate by angle×weight — volume-
+      // preserving but NOT Blender's LBS, divergent from the live skin.)
+      const computeBakedPositions = (angleDeg) =>
+        bakeBoneRotationLBS(verts, numVerts, weights, pivotLocalX, pivotLocalY, scaleX, scaleY, angleDeg);
 
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: String(BAKED_ANGLES.length) });
       const _bonePm = boneParamGuids.get(jointBoneId);
