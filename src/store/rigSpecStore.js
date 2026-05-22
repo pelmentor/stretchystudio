@@ -165,10 +165,14 @@ function _isComplete(rigSpec, project) {
  * `setMany` fan out to `bone.pose.rotation`, and `syncFromProject` can
  * reconcile after direct bone mutations.
  *
- * Includes only the per-bone rotation params (paramSpec.js section 5 —
- * limb bones with skinning data). Per-group rotation params (section 6 —
- * front_hair, top_wear etc.) drive non-skeletal rotation deformers and
- * have no bone counterpart; left out of the registry intentionally.
+ * Skinning-based: any bone with a weighted part (jointBoneId + boneWeights)
+ * and a matching `ParamRotation_<sanitisedName>` param is included. Per-bone
+ * limb rotations (paramSpec.js section 5) qualify. RULE №4: once a group
+ * rotation is migrated to a `groupRotation_<g>` BONE (groupRotationToBone.js)
+ * its parts are skinned to it, so it AUTOMATICALLY joins the registry here —
+ * `ParamRotation_<group>` then mirrors to the bone's `pose.rotation` with no
+ * extra wiring. (Pre-RULE-№4 these were non-skeletal rotation deformers with
+ * no bone counterpart and were excluded; the migration makes them bones.)
  */
 function _buildBoneMirrorEntries(project) {
   const nodes = project?.nodes ?? [];
