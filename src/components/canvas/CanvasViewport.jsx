@@ -7,6 +7,7 @@ import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useRigEvalStore } from '@/store/rigEvalStore';
+import { MODIFIER_MODE_EDITMODE } from '@/store/migrations/v21_modifier_mode_flags';
 import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store';
 import { useSelectionStore } from '@/store/selectionStore';
 import { useBoxSelectStore } from '@/store/boxSelectStore';
@@ -1067,23 +1068,37 @@ export default function CanvasViewport({
           // Other parts stay on rig output as usual; only the selected
           // part being edited drops out.
           const _ed_mesh = editorRef.current;
-          // Force the actively-edited part to render at its REST `mesh.vertices`
-          // (camera-only) in BOTH Edit and Weight-Paint modes. WeightPaintOverlay
-          // (and the brush hit-test) project rest `mesh.vertices`; without this
-          // the GL drew the part POSED (rig output) while the weight dots sat at
-          // rest — the "phantom vertices on the rest pose while the arm is posed"
-          // report. Pinning the part to rest makes mesh + dots share one source.
-          const _isMeshEditMode = _ed_mesh.editMode === 'edit' || _ed_mesh.editMode === 'weightPaint';
-          const _meshEditingPartId =
-            (_isMeshEditMode && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
-              ? _ed_mesh.selection[0]
-              : null;
           // Map of nodes by id, used for the per-frame `node` lookup
           // below. Replaces a `projectRef.current.nodes.find(...)` per
           // art mesh per frame (~10k linear comparisons on a 100-part
           // rig); single Map.get is O(1).
           const nodesById = new Map();
           for (const _n of projectRef.current.nodes) nodesById.set(_n.id, _n);
+          // Force the actively-edited part to render at its REST `mesh.vertices`
+          // (camera-only) in BOTH Edit and Weight-Paint modes. WeightPaintOverlay
+          // (and the brush hit-test) project rest `mesh.vertices`; without this
+          // the GL drew the part POSED (rig output) while the weight dots sat at
+          // rest — the "phantom vertices on the rest pose while the arm is posed"
+          // report. Pinning the part to rest makes mesh + dots share one source.
+          //
+          // EXCEPTION — Blender's "Show in Edit Mode" (MODE_EDITMODE / pencil):
+          // when a modifier on the edited part has that bit set, the part is
+          // shown DEFORMED while editing (rig-driven), not rest-pinned. The
+          // rest-position vertex/weight handles over the deformed mesh ARE the
+          // Blender edit-not-on-cage behavior (handles edit the original verts;
+          // the displayed result is post-modifier). Default (bit off, the
+          // DEFAULT_MIGRATED_MODE) keeps the clean rest-pin.
+          const _isMeshEditMode = _ed_mesh.editMode === 'edit' || _ed_mesh.editMode === 'weightPaint';
+          const _editSelId =
+            (_isMeshEditMode && Array.isArray(_ed_mesh.selection) && _ed_mesh.selection.length > 0)
+              ? _ed_mesh.selection[0]
+              : null;
+          const _editSelNode = _editSelId ? nodesById.get(_editSelId) : null;
+          const _showDeformedInEdit = Array.isArray(_editSelNode?.modifiers)
+            && _editSelNode.modifiers.some(
+              (m) => m && ((typeof m.mode === 'number' ? m.mode : 0) & MODIFIER_MODE_EDITMODE) !== 0,
+            );
+          const _meshEditingPartId = (_editSelId && !_showDeformedInEdit) ? _editSelId : null;
           for (const f of frames) {
             assertPartId(f.id, 'evalRig frame.id');
             if (f.id === _meshEditingPartId) {
