@@ -51,6 +51,7 @@ import {
   MODIFIER_MODE_RENDER,
 } from '../../../store/migrations/v21_modifier_mode_flags.js';
 import { getWarpRestGrid } from '../../../store/warpLatticeAccess.js';
+import { synthesizeGroupRotationDeformers } from './synthesizeGroupRotationDeformers.js';
 
 /**
  * The id a modifier references. Lattice modifiers (v43) reference a cage
@@ -267,6 +268,19 @@ export function synthesizeDeformerNodesForExport(project, opts = {}) {
         parentEdges.set(refId, nextEnabledId);
       }
     }
+  }
+
+  // RULE №4 — group-rotation BONES (the Blender authoring model) re-inflate
+  // here into transient Cubism `deformer/rotation` nodes (the export/eval
+  // adapter). INERT until the model holds `groupRotation_*` bone nodes
+  // (post-migration): `synthesizeGroupRotationDeformers` returns [] otherwise,
+  // so pre-flip projects are byte-unchanged. byId.has guard: during the
+  // migration window a surviving legacy rotation-deformer node wins; once the
+  // migration deletes it, the synth fills the same id.
+  for (const rotNode of synthesizeGroupRotationDeformers(project)) {
+    if (!rotNode || typeof rotNode.id !== 'string' || byId.has(rotNode.id)) continue;
+    byId.set(rotNode.id, rotNode);
+    parentEdges.set(rotNode.id, typeof rotNode.parent === 'string' ? rotNode.parent : null);
   }
 
   // Pre-Phase-3.C orphan pass: emit any deformer node that nobody

@@ -8,6 +8,7 @@
 
 import { isGroupRotationBoneNode } from '../../src/store/warpLatticeAccess.js';
 import { synthesizeGroupRotationDeformers } from '../../src/io/live2d/rig/synthesizeGroupRotationDeformers.js';
+import { synthesizeDeformerNodesForExport } from '../../src/io/live2d/rig/synthesizeDeformerNodesForExport.js';
 import { buildGroupRotationSpec } from '../../src/io/live2d/rig/rotationDeformers.js';
 import { rotationSpecToDeformerNode } from '../../src/store/deformerNodeSync.js';
 
@@ -77,6 +78,36 @@ function assertEq(a, b, name) {
 {
   const project = { nodes: [{ id: 'leftElbow', type: 'group', boneRole: 'leftElbow' }] };
   assertEq(synthesizeGroupRotationDeformers(project).length, 0, 'C: non-groupRotation bones produce nothing');
+}
+
+// ── D: synthesizeDeformerNodesForExport emits the deformer from a bone ──
+// (the export/chainEval adapter — proves Slice C is wired into the pipeline)
+{
+  const project = {
+    nodes: [
+      { id: 'grp', type: 'group', boneRole: 'groupRotation_grp', name: 'grp',
+        parent: null, transform: { pivotX: 400, pivotY: 300 } },
+    ],
+  };
+  const synth = synthesizeDeformerNodesForExport(project, { suppressFlare: true });
+  const rot = synth.find((n) => n.id === 'GroupRotation_grp');
+  assert(!!rot, 'D: export adapter emits GroupRotation_grp from the bone');
+  assertEq(rot?.deformerKind, 'rotation', 'D: emitted node is a rotation deformer');
+  assertEq(rot?.keyforms?.[1]?.originX, 400, 'D: pivot carried into the synthesised keyforms');
+}
+
+// ── D: inert when no group-rotation bones (pre-migration byte-stability) ──
+{
+  const project = {
+    nodes: [
+      { id: 'BodyXWarp', type: 'object', objectKind: 'lattice', parent: null, dataId: 'BodyXWarp__cage' },
+      { id: 'BodyXWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [], gridSize: { rows: 1, cols: 1 } },
+      { id: 'leftElbow', type: 'group', boneRole: 'leftElbow' },
+    ],
+  };
+  const synth = synthesizeDeformerNodesForExport(project, { suppressFlare: true });
+  assert(!synth.some((n) => typeof n.id === 'string' && n.id.startsWith('GroupRotation_')),
+    'D: no group-rotation bones → no synthesised rotation deformers (inert)');
 }
 
 console.log(`groupRotationBoneModel: ${passed} passed, ${failed} failed`);
