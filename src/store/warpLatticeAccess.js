@@ -95,6 +95,27 @@ export function isRotationDeformerNode(node) {
   return node.type === 'deformer' && node.deformerKind === 'rotation';
 }
 
+/** Prefix marking a group node that IS a group-rotation armature bone. */
+export const GROUP_ROTATION_BONE_ROLE_PREFIX = 'groupRotation_';
+
+/**
+ * Whether `node` is a group-rotation deformer expressed as an armature BONE
+ * (RULE №4 — Blender > Cubism: a Cubism RotationDeformer is, in Blender, a
+ * bone that rotates a weighted group around its head/pivot). Such a node is a
+ * `{type:'group'}` carrying `boneRole: 'groupRotation_<id>'` + a pivot in
+ * `transform.pivotX/Y`. The Cubism `GroupRotation_<id>` rotation deformer is
+ * re-synthesised from this at export/eval time by `synthesizeGroupRotationDeformers`.
+ *
+ * @param {object|null|undefined} node
+ * @returns {boolean}
+ */
+export function isGroupRotationBoneNode(node) {
+  return !!node && typeof node === 'object'
+    && node.type === 'group'
+    && typeof node.boneRole === 'string'
+    && node.boneRole.startsWith(GROUP_ROTATION_BONE_ROLE_PREFIX);
+}
+
 /**
  * Whether `node` participates in the deformer/modifier chain as either a
  * warp/lattice cage or a rotation deformer. Replaces the inline
