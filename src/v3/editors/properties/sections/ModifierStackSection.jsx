@@ -145,6 +145,21 @@ export function ModifierStackSection({ nodeId }) {
         </div>
       )}
       {stack.map((mod, idx) => {
+        // FULL-BLENDER (2026-05-22): Blender has NO rotation-deformer
+        // modifier — group rotation is a bone/empty transform, not a
+        // modifier. SS's Cubism `GroupRotation_*`/`*Rotation` deformers are
+        // surfaced in `part.modifiers[]` only because the stack is derived
+        // from the Cubism deformer chain; don't DISPLAY them as modifiers.
+        // The modifier stack now shows only Blender-real modifiers (Lattice +
+        // Armature). The rotation deformers still exist + evaluate + export
+        // (eval untouched) and remain editable via the Node Tree / Outliner.
+        // `idx` stays the real `part.modifiers[]` index so the toggle/reorder
+        // handlers below operate on the correct entries.
+        // NOTE: this is the DISPLAY layer. Removing rotation entries from the
+        // model (`synthesizeModifierStacks`) is the deeper fix but requires
+        // unifying eval to walk `def.parent` for rotation steps (else every
+        // rotation-deformed part breaks) — a verified follow-up.
+        if (mod.type === 'rotation') return null;
         const mode = typeof mod.mode === 'number'
           ? mod.mode
           : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
