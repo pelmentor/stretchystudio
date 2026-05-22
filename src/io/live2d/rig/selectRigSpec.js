@@ -536,12 +536,43 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       const needsReproject = modifierStackComplete
         && !_parentRefsEqual(cachedParent, effectiveParent);
 
-      const bindings = Array.isArray(runtime.bindings) ? runtime.bindings.map((b, i) => ({
+      // FULL-BLENDER bone deformation (2026-05-22) — bone-baked parts
+      // (handwear/legwear riding a bone) historically baked the bone
+      // rotation into per-`ParamRotation_<bone>` keyforms (an arc:
+      // rotate-by-angle×weight), which then DOUBLE-applied with the live
+      // Armature-modifier LBS. Blender deforms a bone-weighted mesh purely
+      // via LIVE linear-blend skinning from the FK pose — no parameter, no
+      // baked keyforms. So for the viewport we collapse such parts to a
+      // single REST keyform and drop the `ParamRotation_<bone>` binding;
+      // `applyBonePostChainSkin` (LBS, driven by `bone.pose.rotation`, which
+      // the ParamRotation slider still mirrors) then owns the deformation —
+      // making weight edits LIVE and removing the double-apply. Only the
+      // pure bone-baked case (every binding is a ParamRotation_*) is
+      // collapsed; mixed-binding parts are left untouched.
+      // NOTE: the Cubism EXPORT bake is unchanged by this — it still emits
+      // its keyforms independently (a follow-up slice re-bakes export as LBS
+      // so viewport == export). This slice is viewport-only + reversible.
+      const _meshForBake = part.mesh ?? null;
+      const _boneBaked = !!(_meshForBake
+        && typeof _meshForBake.jointBoneId === 'string' && _meshForBake.jointBoneId.length > 0
+        && Array.isArray(_meshForBake.boneWeights) && _meshForBake.boneWeights.length > 0);
+      const _rtBindings = Array.isArray(runtime.bindings) ? runtime.bindings : [];
+      const _liveSkinBoneBaked = _boneBaked
+        && _rtBindings.length > 0
+        && _rtBindings.every((b) => typeof b?.parameterId === 'string' && b.parameterId.startsWith('ParamRotation_'));
+
+      const bindings = _liveSkinBoneBaked ? [] : (Array.isArray(runtime.bindings) ? runtime.bindings.map((b, i) => ({
         parameterId: b.parameterId,
         keys: coerceNumberArray(b.keys, `selectRigSpec.artMesh[${part.id}].runtime.bindings[${i}].keys`),
         interpolation: b.interpolation ?? 'LINEAR',
-      })) : [];
-      const keyforms = runtime.keyforms.map((k, i) => {
+      })) : []);
+      // Live-skin bone-baked parts: keep only the rest keyform (keyTuple all
+      // zero ⇒ ParamRotation=0 ⇒ the undeformed verts). LBS deforms it live.
+      const _sourceKeyforms = _liveSkinBoneBaked
+        ? [runtime.keyforms.find((k) => Array.isArray(k.keyTuple) && k.keyTuple.every((v) => v === 0))
+            ?? runtime.keyforms[0]]
+        : runtime.keyforms;
+      const keyforms = _sourceKeyforms.map((k, i) => {
         const cachedVerts = coerceFloat32Array(
           k.vertexPositions,
           `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].vertexPositions`,

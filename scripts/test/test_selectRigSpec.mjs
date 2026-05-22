@@ -441,6 +441,79 @@ function assertEq(actual, expected, name) {
   assert(a === b, 'getRigSpec: same memoized instance as selectRigSpec');
 }
 
+// ── Full-Blender: bone-baked parts collapse to rest + live LBS ───
+// A bone-baked part (jointBoneId + boneWeights) whose runtime carries the
+// per-`ParamRotation_<bone>` baked-rotation keyforms is collapsed to a
+// SINGLE rest keyform with NO binding — the Armature modifier's live LBS
+// (driven by bone.pose, which the slider mirrors) then owns the rotation.
+// This removes the bake↔LBS double-apply and makes weight edits live.
+{
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [{ id: 'ParamRotation_rightElbow', default: 0 }],
+    nodes: [
+      { id: 'rightElbow', type: 'group', boneRole: 'rightElbow', parent: null },
+      {
+        id: 'handwear', type: 'part', name: 'handwear',
+        mesh: {
+          vertices: [10, 0, 20, 0], triangles: [], uvs: [0, 0, 1, 1],
+          jointBoneId: 'rightElbow', boneWeights: [1, 0.5],
+          runtime: {
+            parent: { type: 'root', id: null },
+            bindings: [{ parameterId: 'ParamRotation_rightElbow', keys: [-90, 0, 90] }],
+            keyforms: [
+              { keyTuple: [-90], vertexPositions: [5, -5, 12, -8], opacity: 1 },
+              { keyTuple: [0],   vertexPositions: [10, 0, 20, 0],  opacity: 1 },
+              { keyTuple: [90],  vertexPositions: [5, 5, 12, 8],   opacity: 1 },
+            ],
+          },
+        },
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'handwear');
+  assert(!!am, 'bone-baked: artMesh produced');
+  assertEq(am.bindings, [], 'bone-baked: ParamRotation binding dropped (LBS owns rotation)');
+  assertEq(am.keyforms.length, 1, 'bone-baked: collapsed to a single rest keyform');
+  assertEq(Array.from(am.keyforms[0].vertexPositions), [10, 0, 20, 0],
+    'bone-baked: the kept keyform is the rest (keyTuple [0]) verts');
+}
+
+// A bone-baked part with a NON-rotation binding mixed in is NOT collapsed
+// (only the pure ParamRotation case is safe to hand to live LBS).
+{
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [{ id: 'ParamRotation_rightElbow', default: 0 }, { id: 'ParamEyeLOpen', default: 1 }],
+    nodes: [
+      { id: 'rightElbow', type: 'group', boneRole: 'rightElbow', parent: null },
+      {
+        id: 'mixed', type: 'part', name: 'mixed',
+        mesh: {
+          vertices: [10, 0, 20, 0], triangles: [], uvs: [0, 0, 1, 1],
+          jointBoneId: 'rightElbow', boneWeights: [1, 1],
+          runtime: {
+            parent: { type: 'root', id: null },
+            bindings: [
+              { parameterId: 'ParamRotation_rightElbow', keys: [0, 90] },
+              { parameterId: 'ParamEyeLOpen', keys: [0, 1] },
+            ],
+            keyforms: [
+              { keyTuple: [0, 0], vertexPositions: [10, 0, 20, 0], opacity: 1 },
+              { keyTuple: [90, 1], vertexPositions: [5, 5, 12, 8], opacity: 1 },
+            ],
+          },
+        },
+      },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'mixed');
+  assertEq(am.bindings.length, 2, 'mixed-binding bone-baked: NOT collapsed (bindings kept)');
+  assertEq(am.keyforms.length, 2, 'mixed-binding bone-baked: keyforms kept');
+}
+
 // ── Summary ──────────────────────────────────────────────────────
 
 console.log(`selectRigSpec: ${passed} passed, ${failed} failed`);
