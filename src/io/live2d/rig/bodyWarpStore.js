@@ -283,7 +283,8 @@ export function clearBodyWarp(project) {
   if (Array.isArray(project.nodes)) {
     removeBodyWarpChainNodes(project.nodes);
     // Phase 3 storage flip — chain ancestors gone, every part's stack
-    // truncates to whatever's left from rigParent down.
+    // truncates to whatever's left from `modifiers[0]` down (the
+    // canonical leaf hint post-M1 RULE-№4).
     synthesizeModifierStacks(project);
     synthesizeDeformerParents(project);
   }

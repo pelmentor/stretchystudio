@@ -371,32 +371,14 @@ function assertEq(actual, expected, name) {
     'artMesh: rigParent-less part falls back to innermost body warp');
 }
 
-{
-  // artMesh with rotation parent: verts become canvas-relative-to-pivot.
-  const project = {
-    canvas: { width: 800, height: 600 }, parameters: [],
-    nodes: [
-      {
-        id: 'HeadRotation', type: 'deformer', deformerKind: 'rotation',
-        name: 'HR', parent: null, visible: true,
-        bindings: [],
-        keyforms: [{ keyTuple: [], angle: 0, originX: 400, originY: 200, scale: 1, opacity: 1 }],
-      },
-      {
-        id: 'partFace', type: 'part', name: 'face',
-        rigParent: 'HeadRotation',
-        mesh: { vertices: [400, 200, 500, 300], triangles: [], uvs: [0,0,1,1] },
-      },
-    ],
-  };
-  const spec = selectRigSpec(project);
-  const am = spec.artMeshes[0];
-  assertEq(am.parent, { type: 'rotation', id: 'HeadRotation' }, 'artMesh: rotation parent');
-  const local = Array.from(am.keyforms[0].vertexPositions);
-  // (400,200) - pivot(400,200) = (0,0)
-  // (500,300) - pivot(400,200) = (100,100)
-  assertEq(local, [0, 0, 100, 100], 'artMesh: rotation parent → pivot-relative offsets');
-}
+// (Test removed in M4 RULE-№4, 2026-05-23.) The pre-rig fallback's
+// rotation-parent branch was exercised here by setting `partFace.rigParent
+// = 'HeadRotation'`. Post-M4 the pre-rig fallback no longer reads
+// `rigParent`; the only fallback path is `innermostBodyWarpId`, which
+// always points at a body warp (never a rotation deformer). The
+// rotation branch in the pre-rig fallback was deleted along with this
+// test. Rotation parents still surface for parts via the runtime-cache
+// fast path (which reads `modifiers[0]` post-M3.1).
 
 {
   // Chained warp: BodyWarpZ (canvas-px root) → BodyXWarp (normalised under BZ).

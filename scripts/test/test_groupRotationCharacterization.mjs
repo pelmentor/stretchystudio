@@ -52,13 +52,18 @@ function makeProject() {
         baseAngle: 0, handleLengthOnCanvas: 200, circleRadiusOnCanvas: 100,
         isLocked: false, useBoneUiTestImpl: false },
       { id: 'face', type: 'part', name: 'face', visible: true, draw_order: 100,
-        rigParent: 'GroupRotation_grp',
+        // Post-M4 (RULE-№4, 2026-05-23): authoring writes the leaf into
+        // modifiers[0]; rigParent + runtime.parent are retired (v48 + v47
+        // strip them on load).
+        modifiers: [
+          { type: 'rotation', deformerId: 'GroupRotation_grp', enabled: true,
+            mode: 7, showInEditor: true },
+        ],
         mesh: {
           uvs: [0, 0, 1, 0, 0, 1, 1, 1],
           triangles: [0, 1, 2, 1, 3, 2],
           vertices: localVerts.slice(),
           runtime: {
-            parent: { type: 'rotation', id: 'GroupRotation_grp' },
             bindings: [],
             keyforms: [{ keyTuple: [], opacity: 1, vertexPositions: localVerts.slice() }],
           },

@@ -282,14 +282,13 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
       upsertWarpAsLattice(project.nodes, spec);
     }
     // M1 (RULE-№4 modifier-stack flip, 2026-05-23): write the leaf modifier
-    // entry directly into `part.modifiers[0]`. `part.rigParent` is now
-    // purely DERIVED by `synthesizeDeformerParents` below — this seam is
-    // the authoring source-of-truth, mirroring Blender's `Object.modifiers`
-    // as the per-Object stack the user authors against. Pre-M1 this site
-    // wrote `partNode.rigParent = spec.id` and let `synthesizeModifierStacks`
-    // walk up from there; flipping the write surface lets the synth use
-    // `modifiers[0]` as the canonical leaf hint and demotes `rigParent` to
-    // a derived mirror (full retirement deferred to slice M4).
+    // entry directly into `part.modifiers[0]`. This seam is the authoring
+    // source-of-truth, mirroring Blender's `Object.modifiers` as the
+    // per-Object stack the user authors against. Pre-M1 this site wrote
+    // `partNode.rigParent = spec.id` and let `synthesizeModifierStacks`
+    // walk up from there; M4 (2026-05-23) completed the retirement —
+    // `rigParent` is no longer persisted (v48 strips it), and the synth
+    // uses `modifiers[0]` as the sole authoring leaf signal.
     for (const [partId, spec] of Object.entries(finalMap)) {
       if (!spec || typeof spec.id !== 'string') continue;
       const partNode = project.nodes.find((n) => n && n.id === partId && n.type === 'part');
@@ -334,16 +333,18 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
     // the full per-part stack.
     synthesizeModifierStacks(project);
     // Mirror the canonical stack back onto the legacy parent-link shape
-    // (`deformer.parent` + `part.rigParent`) so export consumers + the
-    // migration-bootstrap fallback stay consistent.
+    // (`deformer.parent`) so cmo3writer's chain walk stays consistent.
+    // (Post-M4 RULE-№4, 2026-05-23, the `part.rigParent` mirror is
+    // retired; this function maintains only the deformer-side chain
+    // pointers.)
     synthesizeDeformerParents(project);
   }
   return finalMap;
 }
 
 /**
- * Drop all rigWarp deformer nodes from `project.nodes` and clear
- * any `parts[i].rigParent` pointers that referenced them. Used to
+ * Drop all rigWarp deformer nodes from `project.nodes` and the
+ * matching `modifiers[0]` leaf entry on every covered part. Used to
  * revert to the heuristic path (e.g., after PSD reimport invalidates
  * stored per-vertex deltas).
  *
@@ -356,9 +357,9 @@ export function clearRigWarps(project) {
     // `part.modifiers[]`. Dropping the field is the authoritative "no rig
     // warp" signal — the synth's leaf-resolution then either derives the
     // body-warp chain seed via `findInnermostBodyWarpId` (bone-baked path,
-    // post-M3.2) or produces an empty stack, and `synthesizeDeformerParents`
-    // clears the now-stale `part.rigParent` mirror downstream. Pre-M1 this
-    // site nulled `n.rigParent` directly.
+    // post-M3.2) or produces an empty stack. Pre-M1 this site nulled
+    // `n.rigParent` directly; post-M4 (2026-05-23) the field is retired
+    // entirely (v48 strips it from persisted saves).
     //
     // Audit-fix HIGH (2026-05-23): bone-baked parts carry an Armature
     // modifier whose user flags (enabled / mode / showInEditor) live ONLY

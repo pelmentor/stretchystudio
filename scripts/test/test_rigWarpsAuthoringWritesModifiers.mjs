@@ -115,27 +115,30 @@ function makeProject(partIds) {
     'C2: stack[4] is BodyZWarp (chain root)');
 }
 
-// ── Contract 3: rigParent mirror is written by inverse synth, not authoring ──
+// ── Contract 3: rigParent is NOT written by authoring or inverse synth (M4) ──
 {
   const project = makeProject(['p1']);
   seedRigWarps(project, [makeSpec('p1')]);
   const p1 = project.nodes.find((n) => n.id === 'p1');
-  // After seedRigWarps completes the synth pair, rigParent IS populated as
-  // the derived mirror — but that write came from synthesizeDeformerParents
-  // reading modifiers[0], not from the seed loop. The mirror points at the
-  // leaf modifier's ref id.
-  assertEq(p1.rigParent, 'RigWarp_p1',
-    'C3: rigParent mirror set by inverse synth to leaf id');
+  // Post-M4 (RULE-№4, 2026-05-23): `rigParent` is no longer mirrored on
+  // authoring writes nor by the inverse synth. The field is retired
+  // (v48 strips it from persisted saves); the seed loop must not invent
+  // a value.
+  assert(!('rigParent' in p1) || p1.rigParent == null,
+    'C3 (M4): rigParent NOT written by authoring or inverse synth (field retired)');
 }
 
-// ── Contract 4: clearRigWarps deletes modifiers, inverse synth nulls rigParent ──
+// ── Contract 4: clearRigWarps deletes modifiers; rigParent stays untouched ──
 {
   const project = makeProject(['p1', 'p2']);
   seedRigWarps(project, [makeSpec('p1'), makeSpec('p2')]);
 
   const p1Before = project.nodes.find((n) => n.id === 'p1');
   assert(Array.isArray(p1Before.modifiers), 'C4 setup: modifiers populated post-seed');
-  assertEq(p1Before.rigParent, 'RigWarp_p1', 'C4 setup: rigParent mirror set post-seed');
+  // Pre-existing rigParent values on the fixture (if any) survive — the
+  // inverse synth no longer nulls them out (M4). v48 strips them on load.
+  // Simulate a legacy rigParent left over from a pre-M4 save.
+  p1Before.rigParent = 'STALE_LEGACY_VALUE';
 
   clearRigWarps(project);
 
@@ -143,12 +146,13 @@ function makeProject(partIds) {
   const p2After = project.nodes.find((n) => n.id === 'p2');
   assert(!('modifiers' in p1After),
     'C4: clearRigWarps removed p1.modifiers field');
-  assertEq(p1After.rigParent, null,
-    'C4: inverse synth cleared p1.rigParent mirror after modifiers gone');
+  // M4 (RULE-№4, 2026-05-23): clearRigWarps + inverse synth no longer
+  // touch rigParent — v48 migration is the single sweep that strips it
+  // from persisted saves. Legacy values pass through unchanged.
+  assertEq(p1After.rigParent, 'STALE_LEGACY_VALUE',
+    'C4 (M4): stale rigParent untouched by clearRigWarps + inverse synth');
   assert(!('modifiers' in p2After),
     'C4: clearRigWarps removed p2.modifiers field');
-  assertEq(p2After.rigParent, null,
-    'C4: inverse synth cleared p2.rigParent mirror');
 }
 
 // ── Contract 5: user-set ancestor flags survive a re-seed ──
@@ -174,12 +178,10 @@ function makeProject(partIds) {
     'C5: BodyXWarp eye-off (mode=RENDER-only) survives re-seed via priorFlags carry');
 }
 
-// ── Contract 6: rigParent IS never written by the authoring writer directly ──
-// Synthetic check — pin that `seedRigWarps` doesn't bypass the synth and
-// write rigParent itself. We verify by removing the body-warp chain (so
-// the chain walk produces an empty stack post-leaf) — pre-M1 the seed
-// loop would still set rigParent to spec.id; post-M1 the inverse synth
-// only writes rigParent when the chain produces a real leaf.
+// ── Contract 6: leaf-only stack — modifiers populated, rigParent NOT (M4) ──
+// Verify by removing the body-warp chain (so the chain walk produces an
+// empty stack post-leaf): the seed loop still pins modifiers[0] but
+// (post-M4) does NOT mirror the leaf id into rigParent.
 {
   const project = { nodes: [
     // No body warp chain: leaf has no parent to walk.
@@ -191,13 +193,13 @@ function makeProject(partIds) {
   };
   seedRigWarps(project, [specWithoutChain]);
   const p1 = project.nodes.find((n) => n.id === 'p1');
-  // Leaf still gets pinned into modifiers[0] + the upserted lattice
-  // object exists; the synth produces a 1-entry stack and inverse synth
-  // sets rigParent = leaf id (the only modifier in the stack).
+  // Leaf gets pinned into modifiers[0] + the upserted lattice object
+  // exists; the synth produces a 1-entry stack. M4: rigParent is NOT
+  // written.
   assertEq(p1.modifiers.length, 1, 'C6: 1-entry stack when leaf has no chain parent');
   assertEq(p1.modifiers[0].objectId, 'RigWarp_p1', 'C6: leaf is the rigWarp spec');
-  assertEq(p1.rigParent, 'RigWarp_p1',
-    'C6: rigParent mirror reflects the single leaf modifier');
+  assert(!('rigParent' in p1) || p1.rigParent == null,
+    'C6 (M4): rigParent NOT mirrored (field retired)');
 }
 
 // ── Audit-fix MED (2026-05-23): same-id re-rig preserves leaf user flags ──

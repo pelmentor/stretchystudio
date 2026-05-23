@@ -104,8 +104,11 @@ const project = {
       visible: true,
     },
     neckNode,
-    // A part with NeckWarp as its rigParent (chain leaf)
-    { id: 'partA', type: 'part', name: 'neck part', rigParent: 'NeckWarp' },
+    // A part with NeckWarp as its chain leaf (post-M4: authoring
+    // writes the leaf into modifiers[0], not rigParent).
+    { id: 'partA', type: 'part', name: 'neck part', modifiers: [
+      { type: 'warp', deformerId: 'NeckWarp', enabled: true, mode: 7, showInEditor: true },
+    ] },
   ],
 };
 

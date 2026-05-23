@@ -86,11 +86,16 @@ function snapParents(project) {
         targetPartId: 'face',
         gridSize: { rows: 5, cols: 5 },
       }),
-      // Parts.
-      { id: 'face', type: 'part', rigParent: 'RigWarp_face',
-        mesh: { vertices: [], uvs: [], triangles: [] } },
-      { id: 'shirt', type: 'part', rigParent: 'BodyXWarp',
-        mesh: { vertices: [], uvs: [], triangles: [] } },
+      // Parts. Post-M4: authoring writes the leaf into modifiers[0]
+      // (was: rigParent — retired with the field).
+      { id: 'face', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'RigWarp_face', enabled: true,
+          mode: 7, showInEditor: true },
+      ], mesh: { vertices: [], uvs: [], triangles: [] } },
+      { id: 'shirt', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'BodyXWarp', enabled: true,
+          mode: 7, showInEditor: true },
+      ], mesh: { vertices: [], uvs: [], triangles: [] } },
     ],
   };
 
@@ -108,15 +113,15 @@ function snapParents(project) {
   assertEq(shirt.modifiers[0].deformerId, 'BodyXWarp',
     'forward: shirt leaf = BodyXWarp');
 
-  // Snapshot, then corrupt parent links, then run inverse synth, then
-  // verify they are identical to the snapshot.
-  const before = snapParents(project);
+  // Corrupt deformer parent links + part rigParents, then run inverse
+  // synth. Post-M4 (RULE-№4, 2026-05-23) the inverse synth maintains
+  // only the deformer-side chain links — `part.rigParent` is no longer
+  // touched (v48 strips it on load).
   for (const n of project.nodes) {
     if (n.type === 'deformer') n.parent = 'CORRUPTED';
     if (n.type === 'part') n.rigParent = 'CORRUPTED';
   }
   synthesizeDeformerParents(project);
-  const after = snapParents(project);
 
   // BodyWarpZ is the root last-modifier in both stacks; its parent IS
   // NOT restored by inverse synth (last-mod parent intentionally not
@@ -135,11 +140,12 @@ function snapParents(project) {
     'inverse synth: BodyX.parent restored');
   assertEq(project.nodes.find((n) => n.id === 'RigWarp_face').parent, 'BodyXWarp',
     'inverse synth: RigWarp.parent restored');
-  // Both part rigParents restored from their stacks' leaf entries.
-  assertEq(project.nodes.find((n) => n.id === 'face').rigParent, 'RigWarp_face',
-    'inverse synth: face.rigParent restored');
-  assertEq(project.nodes.find((n) => n.id === 'shirt').rigParent, 'BodyXWarp',
-    'inverse synth: shirt.rigParent restored');
+  // M4: rigParent corruption is NOT auto-healed — the inverse synth
+  // doesn't touch it; v48 strips it on load.
+  assertEq(project.nodes.find((n) => n.id === 'face').rigParent, 'CORRUPTED',
+    'inverse synth (M4): face.rigParent left untouched by inverse synth');
+  assertEq(project.nodes.find((n) => n.id === 'shirt').rigParent, 'CORRUPTED',
+    'inverse synth (M4): shirt.rigParent left untouched by inverse synth');
 }
 
 // ---- Idempotency: forward → inverse → forward → no churn ----
@@ -153,7 +159,9 @@ function snapParents(project) {
       warpSpecToDeformerNode({
         id: 'B', name: 'B', parent: { type: 'warp', id: 'A' }, gridSize: { rows: 5, cols: 5 },
       }),
-      { id: 'p', type: 'part', rigParent: 'B' },
+      { id: 'p', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'B', enabled: true, mode: 7, showInEditor: true },
+      ] },
     ],
   };
   synthesizeModifierStacks(project);

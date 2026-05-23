@@ -1411,18 +1411,20 @@ export const useProjectStore = create((set, get) => {
    * `targetPartId` is in the incoming map.
    *
    * BFA-006 Phase 6 — formerly wrote `project.rigWarps[partId]`;
-   * that sidetable was deleted by migration v16. Each part's
-   * `rigParent` field also gets pointed at the deformer's id so the
-   * runtime selector (`selectRigSpec`) resolves the per-part chain
-   * without walking rigSpec.
+   * that sidetable was deleted by migration v16. Each part's leaf
+   * modifier entry (`modifiers[0]`) is written so the runtime selector
+   * (`selectRigSpec`) resolves the per-part chain without walking
+   * rigSpec. (Pre-M4 RULE-№4 this site also wrote `part.rigParent` as
+   * a Cubism-shaped mirror; the field is now derived-only and v48
+   * strips it from persisted saves.)
    */
   seedRigWarps:               async (...args) => projectMutator((await loadSeedModule()).seedRigWarps)(...args),
 
   /**
    * Remove all rigWarp deformer nodes (those with `targetPartId`)
-   * from `project.nodes` and clear every part's `rigParent` pointer.
-   * Use after PSD reimport invalidates stored per-vertex deltas or
-   * any binding-axis change.
+   * from `project.nodes` and clear every part's leaf modifier entry
+   * (`modifiers[0]`). Use after PSD reimport invalidates stored
+   * per-vertex deltas or any binding-axis change.
    */
   clearRigWarps:              async (...args) => projectMutator((await loadSeedModule()).clearRigWarps)(...args),
 
@@ -1645,11 +1647,11 @@ export const useProjectStore = create((set, get) => {
       // and BEFORE the stack synthesis below so the bone-bound parts
       // surface an Armature modifier (not a stale `rotation` entry) and
       // the rotation deformer nodes are gone. Post-M3.3 (2026-05-23) the
-      // migration no longer reads `mesh.runtime.parent`; driven parts
-      // are discovered via `rigParent === def.id` OR `part.parent ===
-      // groupName` (the topology signal that subsumes the retired runtime
-      // cache for the nested-rotation case). Validated end-to-end (nested
-      // + warp-parented multi-rotation) by
+      // migration no longer reads `mesh.runtime.parent`; post-M4
+      // (2026-05-23) it no longer reads `rigParent` either. Driven parts
+      // are discovered via the topology signal `part.parent === groupName`
+      // alone (it subsumes the two retired alternatives). Validated
+      // end-to-end (nested + warp-parented multi-rotation) by
       // `test_groupRotationMigrationRealRig`.
       peers.migrateGroupRotationDeformersToBones(proj);
       // Phase 3 storage flip — re-derive each part's modifier stack
@@ -1659,11 +1661,13 @@ export const useProjectStore = create((set, get) => {
       // visible at synthesize time. Re-run once at the end so every
       // part's `Object.modifiers[]` reflects the final tree shape.
       peers.synthesizeModifierStacks(proj);
-      // V2 Phase 0.3 — modifier stacks are now canonical; parent-link
-      // shape (`deformer.parent` + `part.rigParent`) is a derived mirror
-      // for cmo3writer. Run inverse synth after every forward synth so
-      // any future caller can mutate stacks alone and trust the mirror
-      // to stay consistent. See `synthesizeDeformerParents` doc header.
+      // V2 Phase 0.3 — modifier stacks are now canonical; the
+      // export-facing `deformer.parent` chain links are a derived
+      // mirror for cmo3writer (the `part.rigParent` mirror was retired
+      // in M4 RULE-№4, 2026-05-23). Run inverse synth after every
+      // forward synth so any future caller can mutate stacks alone
+      // and trust the mirror to stay consistent. See
+      // `synthesizeDeformerParents` doc header.
       peers.synthesizeDeformerParents(proj);
       // Hole I-8: explicit completion marker beats heuristic-detection
       // of partially-seeded state in exporter's resolveAllKeyformSpecs.

@@ -68,10 +68,10 @@ import { logger } from '../../../lib/logger.js';
 /**
  * Once-per-process Set of `<partId>|<reason>` keys for diagnostic
  * dedup. Pre-rig fallback's silent-passthrough branches log once
- * per (part, reason) so a stale `rigParent` gets surfaced exactly
- * once per session — chainEval re-runs every frame and an unbounded
- * stream would flood the Logs panel. Lives at module scope so the
- * dedup persists across re-renders.
+ * per (part, reason) so an orphan body-warp (missing rest state)
+ * gets surfaced exactly once per session — chainEval re-runs every
+ * frame and an unbounded stream would flood the Logs panel. Lives
+ * at module scope so the dedup persists across re-renders.
  */
 const _selectRigSpecWarnedKeys = new Set();
 function _warnOncePerPart(key, fn) {
@@ -229,9 +229,11 @@ function _buildRigSpec(project) {
 
   // Build artMeshes from project parts. Each part with mesh data
   // becomes an ArtMeshSpec carrying a single rest keyform with verts
-  // in parent-deformer-local frame. Phase 3+: parent comes from
-  // `partNode.rigParent` (Phase 1 set it for parts with rigWarps);
-  // fallback to `innermostBodyWarpId` for body-driven parts.
+  // in parent-deformer-local frame. Post-M4 (RULE-№4, 2026-05-23):
+  // the runtime-cache fast path resolves parent from `modifiers[0]`
+  // (M3.1); the pre-rig fallback for projects without `mesh.runtime`
+  // populated derives the parent from `innermostBodyWarpId` (M4 —
+  // the `partNode.rigParent` source was retired with the field).
   const artMeshes = _buildArtMeshes({
     project,
     nodeById,
@@ -464,12 +466,13 @@ function _computeRotationCanvasPivotAtRest(rotation, warpRest, rotationRest) {
 /**
  * For each part with mesh data, build an `ArtMeshSpec`. Single rest
  * keyform; vertex positions in parent-deformer-local frame. Parent
- * resolution:
- *   - `partNode.rigParent` set (Phase 1 wrote it for rigWarps-covered
- *     parts) → use it as the deformer parent.
- *   - Unset → fall back to `innermostBodyWarpId` (matches today's
- *     heuristic-path semantic where uncovered parts ride the body
- *     chain).
+ * resolution priority (M4 RULE-№4, 2026-05-23):
+ *   - Runtime-cache fast path (the part has `mesh.runtime`): parent
+ *     derives from `modifiers[0]` with lattice → 'warp' normalisation
+ *     (M3.1). Armature-only stacks fall through to root.
+ *   - Pre-rig fallback (no `mesh.runtime`): fall back to
+ *     `innermostBodyWarpId` (matches the body-rig default for parts
+ *     that haven't been Init-Rigged yet).
  *   - Innermost body warp also unset → root-parent (canvas-px verts
  *     pass through).
  */
@@ -645,10 +648,15 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
     // Pre-rig fallback — synthesise a single canvas-px rest keyform
     // with zero bindings. Used only by projects that haven't run Init
     // Rig yet (no `mesh.runtime` populated).
+    //
+    // M4 (RULE-№4, 2026-05-23): the prior `part.rigParent` branch was
+    // retired. `rigParent` is now a derived-only field (v48 strips it
+    // from persisted saves); the body-warp `innermostBodyWarpId` is the
+    // canonical pre-rig default for parts without `mesh.runtime`, which
+    // matches what Init Rig itself writes for body-driven parts.
     let parentRef = { type: 'root', id: null };
     const targetParentId =
-      part.rigParent && nodeById.has(part.rigParent) ? part.rigParent
-      : innermostBodyWarpId && nodeById.has(innermostBodyWarpId) ? innermostBodyWarpId
+      innermostBodyWarpId && nodeById.has(innermostBodyWarpId) ? innermostBodyWarpId
       : null;
     if (targetParentId) {
       const parentNode = nodeById.get(targetParentId);
@@ -677,35 +685,19 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
           localVerts[v + 1] = (flatVerts[v + 1] - minY) / dh;
         }
       } else {
-        // Stale rigParent — points at a warp deformer that no longer
-        // has a rest state (deformer was removed, or rigParent was
-        // never re-synthed after a structural edit). Falling through
-        // to verbatim canvas-px values is wrong for downstream
+        // Body warp lacks a rest state (deformer was removed, or
+        // synth hasn't re-derived after a structural edit). Falling
+        // through to verbatim canvas-px values is wrong for downstream
         // bilinear extrapolation but won't crash; surface for triage.
+        // (Pre-M4 RULE-№4 this branch fired for stale `rigParent`
+        // values too; M4 retired that read so the only source for
+        // `parentRef.id` here is `innermostBodyWarpId`.)
         for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
         _warnOncePerPart(`${part.id}|warpRestMissing`, () => {
           logger.warn(
             'selectRigSpecPreRigFallbackOrphanWarp',
-            `pre-rig fallback for "${part.name ?? part.id}" — rigParent points at warp ${parentRef.id} but no rest state (stale rigParent or removed deformer)`,
+            `pre-rig fallback for "${part.name ?? part.id}" — body warp ${parentRef.id} has no rest state`,
             { partId: part.id, partName: part.name, warpId: parentRef.id },
-          );
-        });
-      }
-    } else if (parentRef.type === 'rotation') {
-      const restState = rotationRestById.get(parentRef.id);
-      if (restState) {
-        const px = restState.pivot.x, py = restState.pivot.y;
-        for (let v = 0; v < flatVerts.length; v += 2) {
-          localVerts[v]     = flatVerts[v]     - px;
-          localVerts[v + 1] = flatVerts[v + 1] - py;
-        }
-      } else {
-        for (let v = 0; v < flatVerts.length; v++) localVerts[v] = flatVerts[v];
-        _warnOncePerPart(`${part.id}|rotationRestMissing`, () => {
-          logger.warn(
-            'selectRigSpecPreRigFallbackOrphanRotation',
-            `pre-rig fallback for "${part.name ?? part.id}" — rigParent points at rotation deformer ${parentRef.id} but no rest state`,
-            { partId: part.id, partName: part.name, rotationId: parentRef.id },
           );
         });
       }

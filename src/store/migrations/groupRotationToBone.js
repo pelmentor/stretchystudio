@@ -53,28 +53,18 @@ export function migrateGroupRotationDeformersToBones(project) {
   const restKeyform = (def) =>
     (def.keyforms ?? []).find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? def.keyforms?.[0] ?? null;
 
-  // Parts driven directly by this rotation deformer. Three signals are
-  // OR'd because the real rig pipeline populates them inconsistently:
-  //   1. `rigParent === def.id` — pre-v44 deformer-model rigging puts
-  //      the rotation deformer id here for parts riding the rotation
-  //      directly (no body warp between them). The classic case.
-  //   2. `part.parent === groupName` (where `def.id ===
-  //      'GroupRotation_'+groupName`) — the topology signal that
-  //      survives even when `rigParent` was assigned to a body-warp
-  //      ancestor (the common case for parts under nested rotations,
-  //      where the chain leaf written into rigParent is the outer warp,
-  //      not the inner rotation). Grounded by
-  //      test_groupRotationMigrationRealRig.
-  //
-  // The prior `|| p.mesh?.runtime?.parent?.id === def.id` branch was
-  // retired in M3.3 — it was a Cubism-shaped runtime cache that the
-  // topology-direct signal (#2) above subsumes for every case the
-  // real pipeline produces.
+  // Parts driven directly by this rotation deformer — topology signal:
+  // a part is driven by `GroupRotation_<g>` iff its tree-parent is the
+  // group `<g>`. Pre-v44 saves always place parts as direct children of
+  // their owning group (the rig pipeline never moves them); the topology
+  // signal subsumes the two retired alternatives (`rigParent === def.id`
+  // retired in M4 with the field itself; `mesh.runtime.parent.id ===
+  // def.id` retired in M3.3 with the cache field). Grounded by
+  // test_groupRotationMigrationRealRig.
   const partsOf = (def) => {
     const groupName = def.id.slice(GROUP_ROTATION_PREFIX.length);
     return project.nodes.filter(
-      (p) => p && p.type === 'part'
-        && (p.rigParent === def.id || p.parent === groupName),
+      (p) => p && p.type === 'part' && p.parent === groupName,
     );
   };
 
@@ -170,9 +160,9 @@ export function migrateGroupRotationDeformersToBones(project) {
           (m) => !(m && m.type === 'rotation' && m.deformerId === def.id),
         );
       }
-      // rigParent pointed at the rotation deformer; clear it (the bone owns
-      // this part now via boneWeights/jointBoneId).
-      if (p.rigParent === def.id) p.rigParent = null;
+      // M4 (RULE-№4, 2026-05-23): the prior `rigParent = null` cleanup
+      // is retired — `rigParent` is no longer persisted (v48 strips it
+      // post-v44; the field has no live readers post-M4).
     }
 
     removed.add(def.id);

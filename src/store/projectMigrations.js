@@ -107,6 +107,7 @@ import { migrateGroupRotationToBoneViaReseed } from './migrations/v44_group_rota
 import { migrateBoneBakedArtMeshAdapterViaReseed } from './migrations/v45_bone_baked_art_mesh_adapter.js';
 import { migrateVariantRoleAliasRetirement } from './migrations/v46_variant_role_alias_retirement.js';
 import { migrateRuntimeParentStrip } from './migrations/v47_runtime_parent_strip.js';
+import { migrateRigParentStrip } from './migrations/v48_rig_parent_strip.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -418,7 +419,35 @@ const MIGRATIONS = {
   // Lossless and idempotent — derives from `part.rigParent` + deformer
   // parent links, replaces any prior `part.modifiers` value, drops the
   // field entirely when the stack would be empty (sparse JSON).
+  //
+  // # M4 (RULE-№4, 2026-05-23) bootstrap
+  //
+  // Post-M4 `synthesizeModifierStacks` no longer reads `part.rigParent` —
+  // the field is retired (v48 strips it). Pre-v20 saves carry only
+  // `rigParent` and no `modifiers[]`, so v20 must seed `modifiers[0]`
+  // directly from `rigParent` before calling the synth, otherwise the
+  // synth would produce empty stacks. The seeding mirrors the leaf-
+  // derivation that synth used to do for the rigParent fallback:
+  // determine modifier type from the deformer node's `deformerKind`.
   20: (project) => {
+    if (Array.isArray(project.nodes)) {
+      const byId = new Map();
+      for (const n of project.nodes) {
+        if (n && typeof n.id === 'string') byId.set(n.id, n);
+      }
+      for (const node of project.nodes) {
+        if (!node || node.type !== 'part') continue;
+        if (Array.isArray(node.modifiers) && node.modifiers.length > 0) continue;
+        if (typeof node.rigParent !== 'string' || node.rigParent.length === 0) continue;
+        const leaf = byId.get(node.rigParent);
+        // At v20 (pre-v43 lattice substrate), every chain leaf is a
+        // `type: 'deformer'` node. `deformerKind` is either 'warp' or
+        // 'rotation'.
+        if (!leaf || leaf.type !== 'deformer') continue;
+        const kind = leaf.deformerKind === 'rotation' ? 'rotation' : 'warp';
+        node.modifiers = [{ type: kind, deformerId: node.rigParent }];
+      }
+    }
     synthesizeModifierStacks(project);
     return project;
   },
@@ -815,6 +844,24 @@ const MIGRATIONS = {
   // entry in `docs/plans/RULE_4_MODIFIER_STACK_FLIP_SESSION_2026_05_23_PART2.md`.
   47: (project) => {
     migrateRuntimeParentStrip(project);
+    return project;
+  },
+
+  // v48 — RULE №4 Slice M4 cleanup: strip the dead `part.rigParent`
+  // pointer. The Cubism-shaped chain-leaf field was the last
+  // 3-way-drift surface in the modifier-stack flip plan (along with
+  // `mesh.runtime.parent`, retired by v47, and `node.variantRole`,
+  // retired by v46). M4 retired every live reader (`synthesizeModifierStacks`
+  // and `selectRigSpec` pre-rig fallback) and every live writer
+  // (`synthesizeDeformerParents` + v44 runtime migration's `rigParent =
+  // null` cleanup). v48 sweeps the field from persisted saves: parts AND
+  // lattice object nodes (v43 migration copied the field onto the latter
+  // as harmless orphan data).
+  //
+  // See `src/store/migrations/v48_rig_parent_strip.js` and the M4
+  // session entry.
+  48: (project) => {
+    migrateRigParentStrip(project);
     return project;
   },
 

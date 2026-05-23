@@ -35,8 +35,8 @@ function assertEq(actual, expected, name) {
 
 function makeBodyChainProject() {
   // BodyZ → BodyY → Breath → BodyX → RigWarp_partA chain. Part-A is
-  // pointed at the leaf via rigParent. Part-B has no rigParent (no
-  // rigWarp coverage).
+  // pointed at the leaf via `modifiers[0]` (M1+M4 RULE-№4: authoring
+  // source-of-truth). Part-B has no per-part rigWarp.
   return {
     nodes: [
       // Body warp chain: parent links climb from leaf to root.
@@ -46,8 +46,12 @@ function makeBodyChainProject() {
       { id: 'BodyXWarp',  type: 'deformer', deformerKind: 'warp', parent: 'BreathWarp' },
       // Per-part rigWarp.
       { id: 'RigWarp_partA', type: 'deformer', deformerKind: 'warp', parent: 'BodyXWarp', targetPartId: 'partA' },
-      // Parts.
-      { id: 'partA', type: 'part', rigParent: 'RigWarp_partA' },
+      // Parts. Post-M4: authoring writes the leaf into modifiers[0]
+      // (was: rigParent). Synth walks deformer.parent up from there.
+      { id: 'partA', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'RigWarp_partA', enabled: true,
+          mode: 7, showInEditor: true },
+      ] },
       { id: 'partB', type: 'part' },
       // Non-deformer nodes the walker should ignore.
       { id: 'group-folder', type: 'group' },
@@ -78,7 +82,7 @@ function makeBodyChainProject() {
     assertEq(m.enabled, true, 'partA: every modifier enabled');
   }
 
-  assert(!('modifiers' in partB), 'partB: no modifiers field (no rigParent)');
+  assert(!('modifiers' in partB), 'partB: no modifiers field (no per-part rigWarp)');
 }
 
 // ── Bone-baked / body-only part: stack derived via M3.2 helper ──
@@ -157,7 +161,9 @@ function makeBodyChainProject() {
     nodes: [
       { id: 'A', type: 'deformer', deformerKind: 'warp', parent: 'B' },
       { id: 'B', type: 'deformer', deformerKind: 'warp', parent: 'A' },
-      { id: 'p', type: 'part', rigParent: 'A' },
+      { id: 'p', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'A', enabled: true, mode: 7, showInEditor: true },
+      ] },
     ],
   };
   synthesizeModifierStacks(project);
@@ -165,7 +171,7 @@ function makeBodyChainProject() {
   // Walk halts as soon as we revisit any id. Both A and B are reachable
   // before the cycle is detected.
   assertEq(part.modifiers.length, 2, 'cycle: walker terminates after seeing both nodes');
-  assertEq(part.modifiers[0].deformerId, 'A', 'cycle: first entry is rigParent (A)');
+  assertEq(part.modifiers[0].deformerId, 'A', 'cycle: first entry is the leaf from modifiers[0] (A)');
   assertEq(part.modifiers[1].deformerId, 'B', 'cycle: second entry is parent (B)');
 }
 
@@ -175,7 +181,9 @@ function makeBodyChainProject() {
     nodes: [
       { id: 'group-X', type: 'group' },
       { id: 'WarpY', type: 'deformer', deformerKind: 'warp', parent: 'group-X' },
-      { id: 'p', type: 'part', rigParent: 'WarpY' },
+      { id: 'p', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'WarpY', enabled: true, mode: 7, showInEditor: true },
+      ] },
     ],
   };
   synthesizeModifierStacks(project);
@@ -191,7 +199,10 @@ function makeBodyChainProject() {
     nodes: [
       { id: 'FaceRotation', type: 'deformer', deformerKind: 'rotation', parent: null },
       { id: 'FaceParallaxWarp', type: 'deformer', deformerKind: 'warp', parent: 'FaceRotation' },
-      { id: 'p', type: 'part', rigParent: 'FaceParallaxWarp' },
+      { id: 'p', type: 'part', modifiers: [
+        { type: 'warp', deformerId: 'FaceParallaxWarp', enabled: true,
+          mode: 7, showInEditor: true },
+      ] },
     ],
   };
   synthesizeModifierStacks(project);
@@ -211,18 +222,37 @@ function makeBodyChainProject() {
 }
 
 // ── v20 migration produces stacks for all eligible parts ──
+// Post-M4 (RULE-№4, 2026-05-23): pre-v20 saves carry only `rigParent`
+// (no modifiers[]); v20's inlined bootstrap seeds modifiers[0] from
+// rigParent before calling the synth. This test fixtures partA with
+// rigParent ONLY (no modifiers) to verify the bootstrap fires.
 {
   const project = {
     schemaVersion: 19,
     canvas: { width: 800, height: 600 },
-    nodes: makeBodyChainProject().nodes.slice(),
+    nodes: [
+      { id: 'BodyZWarp',  type: 'deformer', deformerKind: 'warp', parent: null },
+      { id: 'BodyYWarp',  type: 'deformer', deformerKind: 'warp', parent: 'BodyZWarp' },
+      { id: 'BreathWarp', type: 'deformer', deformerKind: 'warp', parent: 'BodyYWarp' },
+      { id: 'BodyXWarp',  type: 'deformer', deformerKind: 'warp', parent: 'BreathWarp' },
+      { id: 'RigWarp_partA', type: 'deformer', deformerKind: 'warp', parent: 'BodyXWarp', targetPartId: 'partA' },
+      // Pre-v20 shape: rigParent only, no modifiers[].
+      { id: 'partA', type: 'part', rigParent: 'RigWarp_partA' },
+    ],
   };
   migrateProject(project);
   assertEq(project.schemaVersion, CURRENT_SCHEMA_VERSION,
     'v20: schemaVersion bumped');
   const partA = project.nodes.find((n) => n.id === 'partA');
-  assert(Array.isArray(partA.modifiers), 'v20: partA modifiers populated by migration');
-  assertEq(partA.modifiers.length, 5, 'v20: partA stack length');
+  assert(Array.isArray(partA.modifiers),
+    'v20 bootstrap: partA modifiers populated from pre-v20 rigParent seed');
+  // v43 converted the warp deformers to lattice objects (chain order +
+  // parent links preserved); v20's seed is later reshaped through v43,
+  // so the chain length is preserved but the modifier types switch.
+  assertEq(partA.modifiers.length, 5, 'v20→v43 chain: stack length 5');
+  // v48 stripped rigParent at the end of the walk.
+  assert(!('rigParent' in partA),
+    'v48: partA.rigParent stripped post-walk');
 }
 
 // ── Empty project: v20 migration is a no-op (scene node is added by v37) ──
@@ -261,44 +291,27 @@ function makeBodyChainProject() {
   assertEq(after.modifiers[2].enabled, true, 'flags: untouched entry stays enabled');
 }
 
-// ── M1 (RULE-№4 modifier-stack flip, 2026-05-23): modifiers[0] is the
-// authoring source-of-truth; rigParent is a migration-bootstrap fallback ──
+// ── M1+M4 (RULE-№4 modifier-stack flip, 2026-05-23): modifiers[0] is the
+// SOLE authoring source-of-truth post-M4; rigParent is no longer read ──
 {
-  // Authoring writes go to `part.modifiers[0]`. The synth must read the
-  // leaf from there even when rigParent points at a DIFFERENT id.
+  // Authoring writes go to `part.modifiers[0]`. Stale `rigParent` (left
+  // over on a pre-M4 fixture before v48 strips it) is IGNORED — the
+  // synth derives the leaf from modifiers[0] only.
   const project = makeBodyChainProject();
   const partA = project.nodes.find((n) => n.id === 'partA');
   partA.modifiers = [{ type: 'warp', deformerId: 'RigWarp_partA', enabled: true }];
-  partA.rigParent = 'BodyXWarp';  // stale / divergent — modifiers[0] must win.
+  partA.rigParent = 'BodyXWarp';  // stale / divergent — synth must ignore it.
   synthesizeModifierStacks(project);
   assertEq(partA.modifiers.length, 5,
-    'M1: modifiers[0] wins over divergent rigParent — full 5-entry stack walked from leaf');
+    'M4: synth reads only modifiers[0]; stale rigParent ignored');
   assertEq(partA.modifiers[0].deformerId, 'RigWarp_partA',
-    'M1: leaf preserved from modifiers[0], not rigParent');
+    'M4: leaf preserved from modifiers[0], rigParent never consulted');
 }
 
 {
-  // Pure modifiers[0]-only authoring: NO rigParent at all. Synth picks up
-  // the leaf from modifiers[0] and walks the deformer chain.
-  const project = makeBodyChainProject();
-  const partA = project.nodes.find((n) => n.id === 'partA');
-  partA.rigParent = undefined;
-  partA.modifiers = [{
-    type: 'warp', deformerId: 'RigWarp_partA',
-    enabled: true, mode: 3, showInEditor: true,
-  }];
-  synthesizeModifierStacks(project);
-  assertEq(partA.modifiers.length, 5,
-    'M1: modifiers[0] alone (no rigParent) seeds the chain walk');
-  assertEq(partA.modifiers[0].deformerId, 'RigWarp_partA',
-    'M1: leaf from modifiers[0]');
-  assertEq(partA.modifiers[4].deformerId, 'BodyZWarp',
-    'M1: chain walks to BodyZWarp root');
-}
-
-{
-  // Empty modifiers stack must clear stale rigParent via inverse synth —
-  // M1 invariant that lets `clearRigWarps` rely on `delete n.modifiers`.
+  // Post-M4 inverse synth maintains ONLY `deformer.parent` chain links —
+  // it no longer touches `part.rigParent`. Stale rigParent values pass
+  // through unchanged (v48 strips them on next load).
   const project = {
     nodes: [
       { id: 'Stale', type: 'deformer', deformerKind: 'warp', parent: null },
@@ -307,12 +320,12 @@ function makeBodyChainProject() {
   };
   synthesizeDeformerParents(project);
   const p = project.nodes.find((n) => n.id === 'p');
-  assert(p.rigParent === null,
-    'M1 inverse: empty/missing modifiers clears stale rigParent mirror');
+  assertEq(p.rigParent, 'Stale',
+    'M4 inverse: empty modifiers stack is a no-op — rigParent untouched (v48 strips later)');
 }
 
 {
-  // Armature-only stack (no deformer leaf) also clears stale rigParent.
+  // Armature-only stack — same: inverse synth no-ops, rigParent untouched.
   const project = {
     nodes: [
       { id: 'leftArm', type: 'group', boneRole: 'leftArm' },
@@ -328,8 +341,8 @@ function makeBodyChainProject() {
   };
   synthesizeDeformerParents(project);
   const p = project.nodes.find((n) => n.id === 'p');
-  assert(p.rigParent === null,
-    'M1 inverse: armature-only stack clears stale rigParent mirror');
+  assertEq(p.rigParent, 'WarpZombie',
+    'M4 inverse: armature-only stack is a no-op — rigParent untouched');
 }
 
 console.log(`modifierStacks: ${passed} passed, ${failed} failed`);

@@ -384,12 +384,16 @@ function assertEq(actual, expected, name) {
   const deformers = project.nodes.filter(isLattice).map((n) => n.id).sort();
   assertEq(deformers, ['RigWarp_partA', 'RigWarp_partB'],
     'dual-write RW: both rigWarp nodes written');
-  assertEq(partA.rigParent, 'RigWarp_partA', 'dual-write RW: partA.rigParent set');
-  assertEq(partB.rigParent, 'RigWarp_partB', 'dual-write RW: partB.rigParent set');
+  // M4 (RULE-№4, 2026-05-23): seed loop writes `modifiers[0]`, not
+  // `rigParent` — verify each part got its leaf modifier.
+  assertEq(partA.modifiers?.[0]?.objectId, 'RigWarp_partA',
+    'dual-write RW (M4): partA.modifiers[0] is the RigWarp_partA lattice');
+  assertEq(partB.modifiers?.[0]?.objectId, 'RigWarp_partB',
+    'dual-write RW (M4): partB.modifiers[0] is the RigWarp_partB lattice');
   assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 2,
     'dual-write RW: 2 cage meshData written');
 
-  // Re-seed with only partA → partB node + cage and partB.rigParent dropped.
+  // Re-seed with only partA → partB node + cage dropped from project.
   const partAOnly = new Map([['partA', map.get('partA')]]);
   seedRigWarps(project, partAOnly);
   const after = project.nodes.filter(isLattice).map((n) => n.id);
@@ -402,8 +406,11 @@ function assertEq(actual, expected, name) {
     'clear RW: drops all rigWarp nodes');
   assertEq(project.nodes.filter((n) => n.type === 'meshData' && n.isLatticeCage).length, 0,
     'clear RW: drops all rigWarp cages');
-  assertEq(partA.rigParent, null, 'clear RW: nulls partA.rigParent');
-  assertEq(partB.rigParent, null, 'clear RW: nulls partB.rigParent');
+  // M4: clearRigWarps removes modifiers; rigParent is retired (v48 strips).
+  assert(!('modifiers' in partA) || partA.modifiers.length === 0,
+    'clear RW (M4): partA.modifiers gone');
+  assert(!('modifiers' in partB) || partB.modifiers.length === 0,
+    'clear RW (M4): partB.modifiers gone');
 }
 
 // ── rotationSpecToDeformerNode + removeAllRotationDeformerNodes ───

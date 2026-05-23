@@ -67,7 +67,9 @@ function assert(cond, name) {
       { id: 'WarpA', type: 'deformer', deformerKind: 'warp', parent: null },
       {
         id: 'handwear-l', type: 'part', name: 'handwear-l', parent: 'leftArm',
-        rigParent: 'WarpA',
+        modifiers: [
+          { type: 'warp', deformerId: 'WarpA', enabled: true, mode: 7, showInEditor: true },
+        ],
         mesh: {
           vertices: [{ x: 100, y: 0 }],
           boneWeights: [1],
@@ -93,7 +95,10 @@ function assert(cond, name) {
       { id: 'torso', type: 'group', boneRole: 'torso', transform: { pivotX: 0, pivotY: 0 }, pose: {} },
       { id: 'WarpT', type: 'deformer', deformerKind: 'warp', parent: null },
       {
-        id: 'topwear', type: 'part', parent: 'torso', rigParent: 'WarpT',
+        id: 'topwear', type: 'part', parent: 'torso',
+        modifiers: [
+          { type: 'warp', deformerId: 'WarpT', enabled: true, mode: 7, showInEditor: true },
+        ],
         mesh: { vertices: [{ x: 0, y: 0 }] }, // NO boneWeights / jointBoneId
       },
     ],
@@ -148,12 +153,13 @@ function assert(cond, name) {
   assert(!part.modifiers || part.modifiers.length === 0, 'Test 5: non-bone jointBoneId → no armature emitted');
 }
 
-// ── Test 6: synthesizeDeformerParents skips armature entry ─
+// ── Test 6: synthesizeDeformerParents armature-only stack — no-op (M4) ─
 
 {
-  // Armature-only stack: rigParent should NOT get overwritten to the
-  // bone id (that would break export). The inverse synth must filter
-  // to deformer-typed entries when deriving rigParent.
+  // M4 (RULE-№4, 2026-05-23): the inverse synth no longer writes
+  // `rigParent` (the field is retired; v48 strips it on load). For an
+  // armature-only stack, the function is effectively a no-op — any
+  // pre-existing rigParent value passes through unchanged.
   const project = {
     nodes: [
       { id: 'leftArm', type: 'group', boneRole: 'leftArm', transform: { pivotX: 0, pivotY: 0 }, pose: {} },
@@ -170,10 +176,11 @@ function assert(cond, name) {
   };
   synthesizeDeformerParents(project);
   const part = project.nodes.find((n) => n.id === 'p');
-  assert(part.rigParent === null, 'Test 6: armature-only stack does NOT set rigParent to bone id');
+  // M4: rigParent untouched (was null, stays null).
+  assert(part.rigParent === null, 'Test 6 (M4): armature-only stack — rigParent untouched');
 }
 
-// ── Test 7: synthesizeDeformerParents picks deformer leaf even when armature is in the stack ─
+// ── Test 7: synthesizeDeformerParents maintains deformer chain even with armature in the stack ─
 
 {
   const project = {
@@ -184,7 +191,6 @@ function assert(cond, name) {
       { id: 'WarpB', type: 'deformer', deformerKind: 'warp', parent: null },
       {
         id: 'p', type: 'part', parent: 'leftArm',
-        rigParent: undefined,
         modifiers: [
           { type: 'warp', deformerId: 'WarpA', enabled: true, mode: 3, data: {} },
           { type: 'warp', deformerId: 'WarpB', enabled: true, mode: 3, data: {} },
@@ -197,7 +203,11 @@ function assert(cond, name) {
   synthesizeDeformerParents(project);
   const part = project.nodes.find((n) => n.id === 'p');
   const warpA = project.nodes.find((n) => n.id === 'WarpA');
-  assert(part.rigParent === 'WarpA', 'Test 7: rigParent points at the deformer leaf (WarpA)');
+  // M4: rigParent is NOT written.
+  assert(!('rigParent' in part) || part.rigParent == null,
+    'Test 7 (M4): inverse synth does not write rigParent (field retired)');
+  // The deformer chain link IS still maintained — that's still the
+  // function's purpose for the cmo3 export pipeline.
   assert(warpA.parent === 'WarpB', 'Test 7: deformer parent chain reflects the warp ordering');
 }
 
@@ -211,19 +221,19 @@ function assert(cond, name) {
       { id: 'WarpA', type: 'deformer', deformerKind: 'warp', parent: 'WarpB' },
       { id: 'WarpB', type: 'deformer', deformerKind: 'warp', parent: null },
       {
-        id: 'p', type: 'part', parent: 'leftArm', rigParent: 'WarpA',
+        id: 'p', type: 'part', parent: 'leftArm',
+        modifiers: [
+          { type: 'warp', deformerId: 'WarpA', enabled: true, mode: 7, showInEditor: true },
+        ],
         mesh: { vertices: [{ x: 0, y: 0 }], boneWeights: [1], jointBoneId: 'leftElbow' },
       },
     ],
   };
   synthesizeModifierStacks(project);
-  const beforeRigParent = project.nodes.find((n) => n.id === 'p').rigParent;
   const beforeWarpAParent = project.nodes.find((n) => n.id === 'WarpA').parent;
   // Mutate to simulate post-load shape, then synthesize back.
   synthesizeDeformerParents(project);
-  const afterRigParent = project.nodes.find((n) => n.id === 'p').rigParent;
   const afterWarpAParent = project.nodes.find((n) => n.id === 'WarpA').parent;
-  assert(beforeRigParent === afterRigParent, 'Test 8: rigParent unchanged after round-trip');
   assert(beforeWarpAParent === afterWarpAParent, 'Test 8: deformer parent chain unchanged after round-trip');
 }
 

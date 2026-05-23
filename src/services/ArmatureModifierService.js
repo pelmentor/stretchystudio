@@ -156,21 +156,23 @@ export function applyArmatureModifier(partId) {
   // rebuild." But the pre-rig fallback (`selectRigSpec.js:563-638`)
   // was designed for fresh-import projects whose `mesh.vertices` are
   // in REST canvas-px. After Apply, mesh.vertices is in POSED
-  // canvas-px (LBS bake output). The fallback reads `part.rigParent`
-  // (still pointing at a body warp from synthesizeDeformerParents
-  // pre-Apply) and frame-converts the verts into the warp's
-  // [0..1] normalised space using the warp's REST bbox — but the
-  // posed verts can lie far outside the rest bbox, producing
-  // localVerts well above 1.0 or below 0. chainEval bilinearly
-  // extrapolates outside the warp grid and the part renders far
-  // off-canvas — the user's reported "arm disappeared" symptom.
+  // canvas-px (LBS bake output). At the time, the fallback read
+  // `part.rigParent` (still pointing at a body warp from
+  // synthesizeDeformerParents pre-Apply) and frame-converted the verts
+  // into the warp's [0..1] normalised space using the warp's REST
+  // bbox — but the posed verts can lie far outside the rest bbox,
+  // producing localVerts well above 1.0 or below 0. chainEval
+  // bilinearly extrapolates outside the warp grid and the part
+  // renders far off-canvas — the user's reported "arm disappeared"
+  // symptom. (Post-M4 RULE-№4, 2026-05-23, the fallback no longer
+  // reads `rigParent` — it falls back to `innermostBodyWarpId` only —
+  // but the structural concern is the same: posed verts must NOT be
+  // run through any warp normalisation.)
   //
-  // The structurally correct fix: write a runtime entry that
-  // declares parent=root + a single rest keyform with the baked
-  // canvas-px verts verbatim. selectRigSpec's runtime-cache fast
-  // path then sees parent=root (no warp normalization), keyform
-  // vertices in canvas-px, and chainEval emits them directly to
-  // the renderer. Per-bone-angle keyforms (the 5-keyform multi-
+  // The structurally correct fix: write a runtime entry containing
+  // a single rest keyform with the baked canvas-px verts verbatim.
+  // selectRigSpec's runtime-cache fast path emits them directly to
+  // the renderer with no frame conversion. Per-bone-angle keyforms (the 5-keyform multi-
   // angle cache) are intentionally collapsed to 1: Apply means
   // "this part is no longer skinned"; slider effects on this
   // part should stop, exactly mirroring Blender's

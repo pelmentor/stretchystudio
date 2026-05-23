@@ -298,6 +298,112 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v48 — `part.rigParent` strip (RULE №4 Slice M4 cleanup).
+  // Sweeps the field from part nodes AND from lattice object nodes
+  // (the v43 migration copied the field onto the latter as harmless
+  // orphan data).
+
+  // Case 1: part with rigParent pointing at a deformer — strip it.
+  const p1 = { schemaVersion: 47, nodes: [
+    { id: 'face', type: 'part', rigParent: 'RigWarp_face', mesh: {
+      vertices: [{ x: 0, y: 0 }],
+    } },
+  ] };
+  migrateProject(p1);
+  assert(!('rigParent' in p1.nodes[0]),
+    'v48 case 1: part.rigParent stripped');
+
+  // Case 2: part with rigParent === null (legacy clearRigWarps shape) —
+  // also stripped so the JSON is fully clean.
+  const p2 = { schemaVersion: 47, nodes: [
+    { id: 'face', type: 'part', rigParent: null, mesh: {} },
+  ] };
+  migrateProject(p2);
+  assert(!('rigParent' in p2.nodes[0]),
+    'v48 case 2: null rigParent stripped (no zombie field left behind)');
+
+  // Case 3: part without rigParent (already post-M4 shape) — no-op.
+  const p3 = { schemaVersion: 47, nodes: [
+    { id: 'face', type: 'part', mesh: {} },
+  ] };
+  migrateProject(p3);
+  assert(!('rigParent' in p3.nodes[0]),
+    'v48 case 3: post-M4 shape — no-op survives');
+
+  // Case 4: lattice object node with rigParent (copied by v43 from
+  // the legacy warp deformer) — stripped too.
+  const p4 = { schemaVersion: 47, nodes: [
+    { id: 'BodyXWarp', type: 'object', objectKind: 'lattice',
+      rigParent: 'BodyXWarp__legacy', dataId: 'BodyXWarp__cage' },
+  ] };
+  migrateProject(p4);
+  assert(!('rigParent' in p4.nodes[0]),
+    'v48 case 4: lattice object node rigParent stripped (v43 orphan cleanup)');
+
+  // Case 5: non-part, non-lattice node with rigParent (contrived) —
+  // sweep is part-or-lattice-only.
+  const p5 = { schemaVersion: 47, nodes: [
+    { id: 'leftArm', type: 'group', rigParent: 'ignored', boneRole: 'leftArm' },
+  ] };
+  migrateProject(p5);
+  assertEq(p5.nodes[0].rigParent, 'ignored',
+    'v48 case 5: sweep skips non-part / non-lattice nodes (group rigParent untouched)');
+
+  // Case 6: idempotence.
+  const p6 = { schemaVersion: 47, nodes: [
+    { id: 'face', type: 'part', rigParent: 'X', mesh: {} },
+    { id: 'BodyXWarp', type: 'object', objectKind: 'lattice', rigParent: 'Y' },
+  ] };
+  migrateProject(p6);
+  const after6_1 = JSON.stringify(p6);
+  migrateProject(p6);
+  const after6_2 = JSON.stringify(p6);
+  assertEq(after6_1, after6_2, 'v48 idempotent: re-running is a no-op');
+}
+
+{
+  // v20 bootstrap (M4 RULE-№4) — pre-v20 saves carry only `rigParent`
+  // and no `modifiers[]`; v20 must seed `modifiers[0]` from rigParent
+  // so the synth (which no longer reads rigParent post-M4) walks the
+  // chain. Without this bootstrap, pre-v20 saves would walk forward to
+  // empty modifier stacks, breaking eval. End-to-end test: feed a
+  // pre-v20 project to migrateProject and assert modifiers[] is
+  // populated on the rigged part, AND rigParent is stripped post-v48.
+  const p = {
+    schemaVersion: 19,
+    canvas: { width: 800, height: 600 },
+    parameters: [],
+    nodes: [
+      // Rotation deformer (chosen because it survives the v43 lattice
+      // substrate conversion unchanged; warp deformers get reshaped by
+      // v43 into lattice objects with id-stable references, which
+      // makes the post-walk shape harder to pin without reproducing
+      // v43's logic in the test).
+      { id: 'GroupRotation_neck', type: 'deformer', deformerKind: 'rotation',
+        parent: null,
+        keyforms: [{ keyTuple: [0], originX: 100, originY: 100 }] },
+      { id: 'neck', type: 'part', rigParent: 'GroupRotation_neck',
+        parent: 'neck',
+        mesh: { vertices: [{ x: 100, y: 100 }] } },
+      // Bone group for v44 — neck is a sibling of GroupRotation_neck so
+      // v44 doesn't convert it (no matching group node named 'neck').
+    ],
+  };
+  migrateProject(p);
+  const neck = p.nodes.find((n) => n.id === 'neck');
+  // Post-walk: v20 bootstrap seeded modifiers[0]; v48 stripped rigParent.
+  assert(!('rigParent' in neck),
+    'v20→v48 chain: neck.rigParent stripped post-walk');
+  assert(Array.isArray(neck.modifiers) && neck.modifiers.length > 0,
+    'v20 bootstrap: neck.modifiers[] populated from pre-v20 rigParent seed');
+  // The leaf entry must reference the original deformer id (rotation
+  // wasn't reshaped by any later migration in this fixture's path).
+  const leaf = neck.modifiers[0];
+  assert(leaf?.deformerId === 'GroupRotation_neck' || leaf?.objectId === 'GroupRotation_neck',
+    `v20 bootstrap: neck.modifiers[0] references GroupRotation_neck (got ${JSON.stringify(leaf)})`);
+}
+
+{
   // v14: rigStageLastRunAt defaults to {} when missing.
   const p = { schemaVersion: 13 };
   migrateProject(p);
@@ -760,8 +866,21 @@ function assertThrows(fn, name) {
   assert(!!rwNode, 'v15: rigWarp deformer node synthesized');
   assertEq(rwNode.targetPartId, 'partA', 'v15: targetPartId preserved');
   assertEq(rwNode.canvasBbox, { minX: 10, minY: 20, W: 100, H: 200 }, 'v15: canvasBbox preserved');
-  assertEq(partA.rigParent, 'RigWarp_partA', 'v15: parts[partA].rigParent points at deformer node id');
+  // M4 RULE-№4 (2026-05-23): v48 strips `rigParent` at the end of the
+  // walk, but the v20 bootstrap seeds `modifiers[0]` from rigParent
+  // first, then v43 reshapes warp leaves into lattice modifiers
+  // referencing the lattice object id (which v43 preserves as
+  // `RigWarp_partA`'s id). So partA ends up with a lattice modifier
+  // at the same id.
+  assert(!('rigParent' in partA), 'v15+v48: partA.rigParent stripped post-walk');
+  assert(Array.isArray(partA.modifiers) && partA.modifiers.length > 0,
+    'v15→v20 bootstrap: partA.modifiers[] populated from rigWarps sidetable');
+  const partALeafRef = partA.modifiers[0]?.objectId ?? partA.modifiers[0]?.deformerId;
+  assertEq(partALeafRef, 'RigWarp_partA',
+    'v15→v20→v43 chain: partA.modifiers[0] references RigWarp_partA (warp leaf, possibly lattice-converted)');
   assert(partB.rigParent === undefined, 'v15: parts[partB].rigParent untouched (no rigWarp entry)');
+  assert(!Array.isArray(partB.modifiers) || partB.modifiers.length === 0,
+    'v15: partB has no modifiers seeded (no rigWarp entry → no leaf)');
   // BFA-006 Phase 6 — v16 chains after v15 and deletes the sidetable.
   assert(p.rigWarps === undefined, 'v15+v16: rigWarps sidetable deleted');
 }
