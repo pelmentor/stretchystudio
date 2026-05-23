@@ -181,6 +181,24 @@ export function resolveEyeClosure(project) {
  * Accepts either Maps (the cmo3writer in-memory shape) or plain
  * iterables of `[key, curve]` pairs.
  *
+ * # Variant suffix lifecycle (RULE №2 + RULE №4)
+ *
+ * `seedEyeClosure` performs a full REPLACE of `project.eyeClosureParabolas`
+ * (not a merge) when at least one parabola is produced — so on every
+ * Init Rig the stored variant map exactly mirrors the variant meshes
+ * that are CURRENTLY present in the project. Stale entries from a
+ * removed variant (e.g. user deleted an `eyewhite-l.smile` mesh) are
+ * dropped on the next Init Rig + persist cycle. Between deletion and
+ * the next Init Rig the stale key sits in storage but doesn't
+ * influence emission (the cmo3writer prepass only consumes a parabola
+ * if there's an active variant mesh at that suffix).
+ *
+ * Pre-existing variant-suffix gap (not introduced by Slice 2): there
+ * is no reference-counting or `deleteNode` hook that prunes stale
+ * variant parabolas eagerly. The audit (2026-05-23 Blender-fidelity
+ * HIGH-5) tracked this as a follow-up — see
+ * [[rule4-leak2-eye-closure-parabola-substrate-shipped]] in memory.
+ *
  * @param {object} project - mutated
  * @param {Map<string, EyeClosureParabola> | Iterable<[string, EyeClosureParabola]> | null | undefined} baseParabolaPerSide
  * @param {Map<string, EyeClosureParabola> | Iterable<[string, EyeClosureParabola]> | null | undefined} variantParabolaPerSideAndSuffix

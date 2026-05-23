@@ -190,6 +190,15 @@ assert(Number.isFinite(curveL?.xMid) && Number.isFinite(curveL?.xScale),
   'parabola has xMid/xScale canvas-space normalisation');
 assert(typeof curveL?.sourceTag === 'string',
   'parabola carries sourceTag diagnostic');
+// Discriminator hardening (Slice 2 audit-fix LOW-2): pin the
+// guaranteed fresh-fit value so Contract 4's mutation check can't
+// accidentally pass even if the stored path were broken (a geometry
+// change producing a == 999 from a fresh fit would otherwise make
+// Contract 4's discriminator vacuous). The fixture's eyewhite-l
+// geometry deterministically fits a == -10 — change this assert in
+// lockstep with the fixture geometry.
+assert(curveL.a !== 999,
+  'discriminator hardening: fresh-fit l.a !== 999 (so Contract 4 mutated-to-999 truly discriminates)');
 
 // ── Contract 2: seedEyeClosure persists to project.eyeClosureParabolas ──────
 

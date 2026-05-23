@@ -23,6 +23,7 @@ import { sanitisePartName } from '../../lib/partId.js';
 import { resolveBoneConfig } from './rig/boneConfig.js';
 import { resolveVariantFadeRules } from './rig/variantFadeRules.js';
 import { resolveEyeClosureConfig } from './rig/eyeClosureConfig.js';
+import { resolveEyeClosure } from './rig/eyeClosure.js';
 import { resolveRotationDeformerConfig } from './rig/rotationDeformerConfig.js';
 import { resolveAutoRigConfig } from './rig/autoRigConfig.js';
 import { resolveFaceParallax } from './rig/faceParallaxStore.js';
@@ -161,6 +162,12 @@ export async function exportLive2D(project, images, opts = {}) {
   const maskConfigs = resolveMaskConfigs(project);
   const variantFadeRulesResolved = resolveVariantFadeRules(project);
   const eyeClosureConfigResolved = resolveEyeClosureConfig(project);
+  // RULE №4 Slice 2 audit-fix (MED-1): pass stored eye-closure
+  // parabolas so the cmo3writer prepass consumes them instead of
+  // re-fitting fresh. The rigOnly path here builds the rigSpec that
+  // feeds runtime moc3 emission, so a stale re-fit would diverge from
+  // the seedAllRig-persisted source-of-truth.
+  const eyeClosureResolved = resolveEyeClosure(project);
   try {
     const rigResult = await logger.timed('export', 'live2d:generateRigOnlyCmo3',
       () => generateCmo3({
@@ -179,6 +186,7 @@ export async function exportLive2D(project, images, opts = {}) {
         bakedKeyformAngles: boneConfigResolved.bakedKeyformAngles,
         variantFadeRules: variantFadeRulesResolved,
         eyeClosureConfig: eyeClosureConfigResolved,
+        eyeClosure: eyeClosureResolved,
         rotationDeformerConfig: rotationDeformerConfigResolved,
         autoRigConfig: autoRigConfigResolved,
         faceParallaxSpec: faceParallaxSpecResolved,
@@ -581,6 +589,10 @@ export async function exportLive2DProject(project, images, opts = {}) {
       bakedKeyformAngles: resolveBoneConfig(project).bakedKeyformAngles,
       variantFadeRules: resolveVariantFadeRules(project),
       eyeClosureConfig: resolveEyeClosureConfig(project),
+      // RULE №4 Slice 2 audit-fix (MED-1): pass stored parabolas to
+      // skip the re-fit on full export. seedAllRig persists Init-Rig
+      // fits to `project.eyeClosureParabolas`; export rounds-trips.
+      eyeClosure: resolveEyeClosure(project),
       rotationDeformerConfig: resolveRotationDeformerConfig(project),
       autoRigConfig: resolveAutoRigConfig(project),
       faceParallaxSpec: faceParallaxSpecResolved,

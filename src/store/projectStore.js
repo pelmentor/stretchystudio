@@ -1160,6 +1160,13 @@ export const useProjectStore = create((set, get) => {
       state.project.boneConfig = null;
       state.project.variantFadeRules = null;
       state.project.eyeClosureConfig = null;
+      // RULE №4 Slice 2 audit-fix (MED-2): clear persisted parabolas
+      // on reset so the next character's first Init Rig starts from a
+      // clean slate. Without this the previous character's `l`/`r`
+      // parabola survives `resetProject` (Immer mutates in place) and
+      // gets consumed by any pre-Init-Rig export for the new project.
+      // Lazy-init semantics: undefined means "fit fresh next time".
+      state.project.eyeClosureParabolas = undefined;
       state.project.rotationDeformerConfig = null;
       state.project.autoRigConfig = null;
       // BFA-006 Phase 6 — legacy sidetables deleted; deformer nodes

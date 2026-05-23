@@ -584,6 +584,16 @@ export async function initializeRigFromProject(project, images = new Map()) {
     faceParallaxSpec: null,
     bodyWarpChain: null,
     rigWarps: null,
+    // RULE №4 Slice 2 audit-fix (MED-1 nuance): Init Rig is the
+    // canonical re-fit moment for `project.eyeClosureParabolas` —
+    // pass null (default) so `eyeClosureFit.js` runs fresh. The
+    // resulting parabolas surface via `rigCollector.eyeClosureParabolas`
+    // and `seedAllRig` mirrors them to `project.eyeClosureParabolas`
+    // via `peers.seedEyeClosure`. Exporter (`exporter.js`) is the
+    // ROUND-TRIP consumer; only it passes the stored data back in.
+    // Adding `eyeClosure: resolveEyeClosure(project)` here would echo
+    // stored data into the harvest and silently turn re-Init-Rig into
+    // a no-op for eye-closure.
   }));
 
   const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
