@@ -23,11 +23,25 @@ function assertEq(actual, expected, name) {
 }
 
 // ── Default-mode: writes runtime data to matching parts ─────────────
+//
+// Fixture choice: `neck` exercises the live `ParamAngleX[-30, 0, 30]`
+// 3-keyform shape that `meshLayerKeyform.js` (`hasNeckCornerShapekeys`
+// branch) produces for cornering-tagged neck meshes — proves the
+// 3-keyform + Float32Array → plain-Array copy path. `face` exercises
+// the 1-keyform-on-empty-binding default + opacity + drawOrder.
+//
+// Both shapes are real outputs of the live emitter as of 2026-05-23.
+// The fixture previously used a `handwear-l` part with a
+// `ParamRotation_<bone>` 3-keyform shape — that shape was retired by
+// RULE №4 Slice 1 (the bone-baked art-mesh adapter, commit 2fe8750):
+// post-Slice-1 the emitter pushes a single `ParamOpacity[1.0]` rest
+// keyform for bone-baked parts and bone LBS owns the deformation.
+// Audit-fixed here so the fixture documents a live contract.
 
 {
   const project = {
     nodes: [
-      { id: 'handwear-l', type: 'part', mesh: { vertices: [{ x: 0, y: 0 }] } },
+      { id: 'neck',       type: 'part', mesh: { vertices: [{ x: 0, y: 0 }] } },
       { id: 'face',       type: 'part', mesh: { vertices: [{ x: 1, y: 1 }] } },
       { id: 'no-mesh',    type: 'part' },          // no mesh → skipped
       { id: 'BodyXWarp',  type: 'deformer' },     // not a part → skipped
@@ -36,10 +50,10 @@ function assertEq(actual, expected, name) {
   const rigSpec = {
     artMeshes: [
       {
-        id: 'handwear-l',
-        parent: { type: 'rotation', id: 'GroupRotation_leftArm' },
+        id: 'neck',
+        parent: { type: 'rotation', id: 'GroupRotation_neck' },
         bindings: [{
-          parameterId: 'ParamRotation_leftElbow',
+          parameterId: 'ParamAngleX',
           keys: new Float32Array([-30, 0, 30]),
           interpolation: 'LINEAR',
         }],
@@ -61,26 +75,26 @@ function assertEq(actual, expected, name) {
   };
   persistArtMeshRuntime(project, rigSpec);
 
-  const handwear = project.nodes[0];
-  assert(!!handwear.mesh.runtime, 'handwear has runtime');
-  assertEq(handwear.mesh.runtime.parent,
-    { type: 'rotation', id: 'GroupRotation_leftArm' },
-    'handwear runtime.parent');
-  assert(Array.isArray(handwear.mesh.runtime.bindings), 'handwear bindings is Array');
-  assertEq(handwear.mesh.runtime.bindings[0].parameterId,
-    'ParamRotation_leftElbow', 'handwear binding paramId');
-  assertEq(handwear.mesh.runtime.bindings[0].keys, [-30, 0, 30],
-    'handwear binding.keys coerced from Float32Array');
-  assert(Array.isArray(handwear.mesh.runtime.bindings[0].keys),
-    'handwear binding.keys is plain Array (not typed)');
-  assertEq(handwear.mesh.runtime.keyforms.length, 3, 'handwear has 3 keyforms');
-  assertEq(handwear.mesh.runtime.keyforms[0].vertexPositions, [10, 11],
-    'handwear keyform[0].positions coerced from Float32Array');
-  assert(Array.isArray(handwear.mesh.runtime.keyforms[0].vertexPositions),
-    'handwear vertexPositions is plain Array');
-  assertEq(handwear.mesh.runtime.keyforms[0].keyTuple, [-30],
-    'handwear keyform[0].keyTuple');
-  assertEq(handwear.mesh.runtime.keyforms[0].opacity, 1, 'opacity preserved');
+  const neck = project.nodes[0];
+  assert(!!neck.mesh.runtime, 'neck has runtime');
+  assertEq(neck.mesh.runtime.parent,
+    { type: 'rotation', id: 'GroupRotation_neck' },
+    'neck runtime.parent');
+  assert(Array.isArray(neck.mesh.runtime.bindings), 'neck bindings is Array');
+  assertEq(neck.mesh.runtime.bindings[0].parameterId,
+    'ParamAngleX', 'neck binding paramId');
+  assertEq(neck.mesh.runtime.bindings[0].keys, [-30, 0, 30],
+    'neck binding.keys coerced from Float32Array');
+  assert(Array.isArray(neck.mesh.runtime.bindings[0].keys),
+    'neck binding.keys is plain Array (not typed)');
+  assertEq(neck.mesh.runtime.keyforms.length, 3, 'neck has 3 keyforms');
+  assertEq(neck.mesh.runtime.keyforms[0].vertexPositions, [10, 11],
+    'neck keyform[0].positions coerced from Float32Array');
+  assert(Array.isArray(neck.mesh.runtime.keyforms[0].vertexPositions),
+    'neck vertexPositions is plain Array');
+  assertEq(neck.mesh.runtime.keyforms[0].keyTuple, [-30],
+    'neck keyform[0].keyTuple');
+  assertEq(neck.mesh.runtime.keyforms[0].opacity, 1, 'opacity preserved');
 
   const face = project.nodes[1];
   assertEq(face.mesh.runtime.parent, { type: 'warp', id: 'RigWarp_face' },
