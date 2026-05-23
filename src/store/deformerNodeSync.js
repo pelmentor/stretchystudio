@@ -384,7 +384,7 @@ export function synthesizeDeformerNodesFromSidetables(project) {
  *      derive the body-warp chain seed via `findInnermostBodyWarpId`
  *      (`warpLatticeAccess`) — pure topology walk over `project.nodes`.
  *      The prior `mesh.runtime.parent.id` read is retired; the runtime
- *      cache field stays persisted until M3.3 + v48 migration.
+ *      cache field is fully retired in M3.3 (v47 migration, 2026-05-23).
  *   4. Pre-v44 deformer-model parts (M3.2): when the part rides a
  *      `GroupRotation_<groupName>` rotation deformer via its project-tree
  *      group ancestor, derive that as the seed by walking `part.parent`.
@@ -562,9 +562,9 @@ export function synthesizeModifierStacks(project) {
     // `warpLatticeAccess`, also used by `selectRigSpec._deriveInnermostBodyClosures`),
     // which is pure derivation from `project.nodes`. No cache field
     // required; matches the post-Init-Rig `am.parent = innermostBodyWarpId`
-    // semantic that bone-baked parts have always had. The previous
-    // `runtime.parent` read is retired here; the field stays persisted
-    // until M3.3 + v48 migration.
+    // semantic that bone-baked parts have always had. M3.3 (2026-05-23)
+    // completed the retirement: the writer was dropped and v47 strips the
+    // persisted field on load.
     // Bone-baked parts (those with boneWeights set) ride the body-warp
     // chain — find its innermost lattice via the shared helper.
     // Production post-v44 covers this: legwear/handwear/charm/etc. get

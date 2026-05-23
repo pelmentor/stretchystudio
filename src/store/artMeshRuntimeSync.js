@@ -2,7 +2,7 @@
 
 /**
  * Persistence helper — write `rigSpec.artMeshes[i]` runtime fields
- * (`bindings + keyforms + parent`) into `project.nodes[i].mesh.runtime`.
+ * (`bindings + keyforms`) into `project.nodes[i].mesh.runtime`.
  *
  * # Why
  *

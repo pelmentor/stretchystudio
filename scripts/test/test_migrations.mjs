@@ -264,9 +264,11 @@ function assertThrows(fn, name) {
   assert(p3.nodes[0].mesh.runtime === undefined,
     'v47 case 3: part without runtime — no runtime invented');
 
-  // Case 4: non-part node with mesh.runtime.parent — left alone.
-  // (Only `type === 'part'` is swept; defensive against shape bugs in
-  // other node types having stray runtime caches.)
+  // Case 4: the migration only walks `type === 'part'`. In production,
+  // non-part nodes never carried `mesh.runtime.parent` (only parts did).
+  // This fixture is contrived (a deformer node with a stray runtime
+  // cache) to pin the migration's narrow scope — if the sweep ever
+  // widens to all nodes, this assertion will catch it.
   const p4 = { schemaVersion: 46, nodes: [
     { id: 'BodyXWarp', type: 'deformer', mesh: {
       runtime: { parent: { type: 'root', id: null } },
@@ -274,7 +276,7 @@ function assertThrows(fn, name) {
   ] };
   migrateProject(p4);
   assertEq(p4.nodes[0].mesh.runtime.parent, { type: 'root', id: null },
-    'v47 case 4: non-part nodes left untouched (only part nodes are swept)');
+    'v47 case 4: sweep is part-only (contrived non-part fixture untouched)');
 
   // Case 5: idempotence — re-running after the walk leaves the project
   // unchanged.
