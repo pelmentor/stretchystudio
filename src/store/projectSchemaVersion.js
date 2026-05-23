@@ -14,4 +14,4 @@
  * @module store/projectSchemaVersion
  */
 
-export const CURRENT_SCHEMA_VERSION = 44;
+export const CURRENT_SCHEMA_VERSION = 45;

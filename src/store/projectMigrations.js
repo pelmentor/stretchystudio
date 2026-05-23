@@ -104,6 +104,7 @@ import { migrateFModifiers } from './migrations/v41_fmodifiers.js';
 import { migrateNlaSubstrate } from './migrations/v42_nla_substrate.js';
 import { migrateLatticeSubstrate } from './migrations/v43_lattice_substrate.js';
 import { migrateGroupRotationToBoneViaReseed } from './migrations/v44_group_rotation_to_bone.js';
+import { migrateBoneBakedArtMeshAdapterViaReseed } from './migrations/v45_bone_baked_art_mesh_adapter.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -759,6 +760,25 @@ const MIGRATIONS = {
   // `docs/plans/ROTATION_DEFORMER_TO_BONE_REFACTOR.md`.
   44: (project) => {
     migrateGroupRotationToBoneViaReseed(project);
+    return project;
+  },
+
+  // v45 — RULE №4 follow-up Leak #1: bone-baked art-mesh keyform adapter.
+  // Pre-v45 projects persist per-`ParamRotation_<bone>` baked keyforms in
+  // `part.mesh.runtime.keyforms[]`; Slice 1B (2026-05-23) moved that
+  // collapse upstream into `artMeshSourceEmit` so the rigCollector pushes a
+  // single rest keyform on ParamOpacity[1.0] for bone-baked parts. Slice 1C
+  // removed the `_liveSkinBoneBaked` shim from `selectRigSpec` — to keep
+  // that removal safe for existing projects v45 forces re-Init Rig
+  // (mirrors v29 + v44) so `seedAllRig` rebuilds `mesh.runtime` from the
+  // new emitter output.
+  //
+  // See `src/store/migrations/v45_bone_baked_art_mesh_adapter.js`,
+  // `src/io/live2d/cmo3/artMeshSourceEmit.js` (`pm.hasBakedKeyforms`
+  // branch), and `docs/plans/CUBISM_ADAPTER_PATTERN.md` (the broader
+  // emitter-as-adapter pattern this slice instantiates).
+  45: (project) => {
+    migrateBoneBakedArtMeshAdapterViaReseed(project);
     return project;
   },
 

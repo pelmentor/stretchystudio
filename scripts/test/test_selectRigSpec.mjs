@@ -441,12 +441,23 @@ function assertEq(actual, expected, name) {
   assert(a === b, 'getRigSpec: same memoized instance as selectRigSpec');
 }
 
-// ── Full-Blender: bone-baked parts collapse to rest + live LBS ───
-// A bone-baked part (jointBoneId + boneWeights) whose runtime carries the
-// per-`ParamRotation_<bone>` baked-rotation keyforms is collapsed to a
-// SINGLE rest keyform with NO binding — the Armature modifier's live LBS
-// (driven by bone.pose, which the slider mirrors) then owns the rotation.
-// This removes the bake↔LBS double-apply and makes weight edits live.
+// ── selectRigSpec is a faithful pass-through of mesh.runtime ──────
+//
+// Pre-Slice-1C (RULE №4 follow-up Leak #1, 2026-05-23) selectRigSpec
+// carried a `_liveSkinBoneBaked` shim that collapsed bone-baked parts'
+// per-`ParamRotation_<bone>` keyforms down to a single rest keyform at
+// READ time. That collapse now lives at the SOURCE — `artMeshSourceEmit`
+// (`pm.hasBakedKeyforms` branch) pushes 1 rest keyform on
+// ParamOpacity[1.0] for bone-baked parts; the bone post-chain LBS owns
+// the deformation. The v45 migration forces re-Init Rig for legacy
+// projects so their `mesh.runtime` ends up in the clean shape too.
+//
+// This block pins the new contract: selectRigSpec is now a faithful
+// passthrough of whatever shape `mesh.runtime` holds — no implicit
+// per-part collapse, no special-casing on bone-baked-ness, no binding-
+// kind filter. Any prior collapse logic in selectRigSpec would be
+// migration baggage (RULE №2) now that the emitter is the source of
+// truth for the bone-baked shape.
 {
   const project = {
     canvas: { width: 800, height: 600 },
@@ -460,11 +471,12 @@ function assertEq(actual, expected, name) {
           jointBoneId: 'rightElbow', boneWeights: [1, 0.5],
           runtime: {
             parent: { type: 'root', id: null },
-            bindings: [{ parameterId: 'ParamRotation_rightElbow', keys: [-90, 0, 90] }],
+            // Simulate a v45-migrated project's mesh.runtime — the
+            // emitter's new bone-baked shape (1 rest kf on
+            // ParamOpacity[1.0]).
+            bindings: [{ parameterId: 'ParamOpacity', keys: [1.0], interpolation: 'LINEAR' }],
             keyforms: [
-              { keyTuple: [-90], vertexPositions: [5, -5, 12, -8], opacity: 1 },
-              { keyTuple: [0],   vertexPositions: [10, 0, 20, 0],  opacity: 1 },
-              { keyTuple: [90],  vertexPositions: [5, 5, 12, 8],   opacity: 1 },
+              { keyTuple: [1.0], vertexPositions: [10, 0, 20, 0], opacity: 1 },
             ],
           },
         },
@@ -473,15 +485,24 @@ function assertEq(actual, expected, name) {
   };
   const spec = selectRigSpec(project);
   const am = spec.artMeshes.find((m) => m.id === 'handwear');
-  assert(!!am, 'bone-baked: artMesh produced');
-  assertEq(am.bindings, [], 'bone-baked: ParamRotation binding dropped (LBS owns rotation)');
-  assertEq(am.keyforms.length, 1, 'bone-baked: collapsed to a single rest keyform');
+  assert(!!am, 'bone-baked passthrough: artMesh produced');
+  assertEq(am.bindings.length, 1, 'bone-baked passthrough: 1 binding from runtime preserved');
+  assertEq(am.bindings[0].parameterId, 'ParamOpacity',
+    'bone-baked passthrough: ParamOpacity binding from runtime preserved');
+  assertEq(am.keyforms.length, 1, 'bone-baked passthrough: single rest keyform preserved');
   assertEq(Array.from(am.keyforms[0].vertexPositions), [10, 0, 20, 0],
-    'bone-baked: the kept keyform is the rest (keyTuple [0]) verts');
+    'bone-baked passthrough: rest verts preserved verbatim');
 }
 
-// A bone-baked part with a NON-rotation binding mixed in is NOT collapsed
-// (only the pure ParamRotation case is safe to hand to live LBS).
+// Pre-v45 shape passthrough — if a project's mesh.runtime still carries
+// the old N-keyform ParamRotation_<bone> bake (e.g. test scaffolding that
+// hand-builds the runtime instead of running through generateCmo3),
+// selectRigSpec returns it verbatim. The v45 migration is the contract
+// that ensures live projects don't sit in this shape post-load; if
+// something else feeds selectRigSpec stale data, the depgraph will
+// double-apply (rotate via blendKeyforms AND via post-chain LBS) — that's
+// a bug in the caller, not in selectRigSpec. Pinned here so a future
+// "defensive shim" re-grow is caught immediately.
 {
   const project = {
     canvas: { width: 800, height: 600 },
@@ -510,8 +531,10 @@ function assertEq(actual, expected, name) {
   };
   const spec = selectRigSpec(project);
   const am = spec.artMeshes.find((m) => m.id === 'mixed');
-  assertEq(am.bindings.length, 2, 'mixed-binding bone-baked: NOT collapsed (bindings kept)');
-  assertEq(am.keyforms.length, 2, 'mixed-binding bone-baked: keyforms kept');
+  assertEq(am.bindings.length, 2,
+    'multi-binding passthrough: bindings preserved verbatim from mesh.runtime');
+  assertEq(am.keyforms.length, 2,
+    'multi-binding passthrough: keyforms preserved verbatim from mesh.runtime');
 }
 
 // ── Summary ──────────────────────────────────────────────────────

@@ -119,23 +119,39 @@ function assertThrows(fn, name) {
 {
   // v44 ALSO clears lastInitRigCompletedAt (GroupRotation→bone re-rule):
   // a pre-v44 project (here at v29) crossing into v44 forces a re-Init Rig
-  // so `seedAllRig` runs the bone conversion. The clear is correct, not a
-  // regression — same contract as v29.
+  // so `seedAllRig` runs the bone conversion. v45 (bone-baked art-mesh
+  // adapter) does the SAME — when crossing v44→v45 the timestamp is
+  // cleared again so `seedAllRig` rebuilds `mesh.runtime` from the new
+  // emitter output. Either way the field ends up null for any pre-v45
+  // project. The clear is correct, not a regression — same contract as v29.
   const ts = '2026-05-08T12:00:00.000Z';
   const p = { schemaVersion: 29, lastInitRigCompletedAt: ts };
   migrateProject(p);
   assertEq(p.lastInitRigCompletedAt, null,
-    'v44: pre-v44 timestamps cleared so re-Init Rig runs the GroupRotation→bone conversion');
+    'v44/v45: pre-v45 timestamps cleared so re-Init Rig runs both the GroupRotation→bone and bone-baked-art-mesh adapter conversions');
 }
 
 {
-  // Post-v44: timestamps preserved (both the v29 and v44 clears only fire
-  // once, when crossing their boundary).
+  // v44→v45 crossing in isolation: a project already at v44 (post-
+  // GroupRotation→bone migration) crossing into v45 has its timestamp
+  // cleared by v45's force-re-rig. Pins the per-version contract so a
+  // future Rule №2 retirement of v44 doesn't accidentally drop v45's
+  // own clear.
+  const ts = '2026-05-22T12:00:00.000Z';
+  const p = { schemaVersion: 44, lastInitRigCompletedAt: ts };
+  migrateProject(p);
+  assertEq(p.lastInitRigCompletedAt, null,
+    'v45: v44→v45 crossing clears timestamps so re-Init Rig runs the bone-baked-art-mesh adapter conversion');
+}
+
+{
+  // Post-v45: timestamps preserved (the v29, v44, and v45 clears only
+  // fire once, when crossing their boundary).
   const ts = '2026-05-22T12:00:00.000Z';
   const p = { schemaVersion: CURRENT_SCHEMA_VERSION, lastInitRigCompletedAt: ts };
   migrateProject(p);
   assertEq(p.lastInitRigCompletedAt, ts,
-    'v44 idempotent: already-current timestamps preserved');
+    'v45 idempotent: already-current timestamps preserved');
 }
 
 {

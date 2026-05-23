@@ -419,17 +419,36 @@ export function emitArtMeshSources(ctx, opts) {
     };
 
     if (pm.hasBakedKeyforms) {
-      // Keyforms to prevent interpolation shrinkage
-      // Compute baked vertex positions by rotating each vertex around the elbow pivot
-      // by angle × boneWeight. Positions match `verts` coord space — that's
+      // Two-track emit (RULE №4): the cmo3 XML track keeps the Cubism
+      // adapter shape (N CArtMeshForm entries per BAKED_ANGLE for
+      // ParamRotation_<bone> interpolation), while the rigCollector
+      // track gets the Blender-faithful shape (1 rest keyform on
+      // ParamOpacity[1.0] — bone LBS owns the deformation via
+      // `applyBonePostChainSkin` / `applyTwoBoneSkinning`). The
+      // previous selectRigSpec `_liveSkinBoneBaked` shim used to
+      // collapse the rigCollector output post-persist; we do it at
+      // the source so `mesh.runtime` is clean from the writer and
+      // the depgraph build doesn't register spurious
+      // ParamRotation_<bone> → artMesh dep edges. See
+      // `docs/plans/CUBISM_ADAPTER_PATTERN.md` for the full pattern
+      // (same shape as GroupRotation deformer → bone, Slice C/D).
+      //
+      // # XML track — Cubism adapter
+      //
+      // Keyform vertex positions match `verts` coord space — that's
       // warp-local 0..1 when mesh is under a rigWarp (RIG_WARP_OVERRIDE_BAKED
       // case for handwear), otherwise deformer-local pixels. The pivot must
-      // live in the SAME space or rotation math explodes.
-      //
-      // Anisotropy matters in warp-local 0..1: x and y scales differ per mesh
+      // live in the SAME space or rotation math explodes. Anisotropy matters
+      // in warp-local 0..1: x and y scales differ per mesh
       // (rwBox.gridW vs rwBox.gridH). A degree of rotation should look
       // visually like a degree → pre-scale the radial vector by pxPerX/pxPerY
       // (body→canvas units per mesh), rotate, unscale.
+      //
+      // FULL-BLENDER (2026-05-22): bake Blender LINEAR-BLEND SKINNING via the
+      // shared `bakeBoneRotationLBS` helper — the SAME implementation any live
+      // re-bake uses, and proven (test_bakeBoneRotation.mjs) to equal the
+      // viewport's `applyTwoBoneSkinning` at the rest grid, so viewport ==
+      // export.
       const weights = pm.boneWeights;
       const pivotCanvasX = pm.jointPivotX ?? 0;
       const pivotCanvasY = pm.jointPivotY ?? 0;
@@ -443,42 +462,34 @@ export function emitArtMeshSources(ctx, opts) {
         pivotLocalX = dfOrigin ? (pivotCanvasX - dfOrigin.x) : pivotCanvasX;
         pivotLocalY = dfOrigin ? (pivotCanvasY - dfOrigin.y) : pivotCanvasY;
       }
-
-      // FULL-BLENDER (2026-05-22): bake Blender LINEAR-BLEND SKINNING via the
-      // shared `bakeBoneRotationLBS` helper — the SAME implementation any live
-      // re-bake uses, and proven (test_bakeBoneRotation.mjs) to equal the
-      // viewport's `applyTwoBoneSkinning` at the rest grid, so viewport ==
-      // export. (Previously baked an arc: rotate by angle×weight — volume-
-      // preserving but NOT Blender's LBS, divergent from the live skin.)
       const computeBakedPositions = (angleDeg) =>
         bakeBoneRotationLBS(verts, numVerts, weights, pivotLocalX, pivotLocalY, scaleX, scaleY, angleDeg);
 
       const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: String(BAKED_ANGLES.length) });
-      const _bonePm = boneParamGuids.get(jointBoneId);
-      if (_bonePm) {
-        artBindings.push({
-          parameterId: _bonePm.paramId,
-          keys: BAKED_ANGLES.slice(),
-          interpolation: 'LINEAR',
-        });
-      }
       for (let i = 0; i < BAKED_ANGLES.length; i++) {
         const ang = BAKED_ANGLES[i];
         const pidForm = pm.bakedFormGuids[i];
         const positions = (ang === 0) ? verts : computeBakedPositions(ang);
         emitArtMeshForm(kfList, pidForm, positions);
-        if (_bonePm) {
-          // rigSpec parent fell back to root (no rotation-deformer
-          // ancestor) → re-encode pivot-relative verts back to canvas-px
-          // for chainEval via `toRigFrame` (no-op when artParent is a
-          // rotation deformer).
-          artKeyforms.push({
-            keyTuple: [ang],
-            vertexPositions: new Float32Array(toRigFrame(positions)),
-            opacity: 1.0,
-          });
-        }
       }
+
+      // # rigCollector track — Blender-faithful
+      //
+      // Single rest keyform on ParamOpacity[1.0] — same shape the
+      // `else` default branch below uses for any "no special
+      // interpolation needed" mesh. Bone deformation runs entirely
+      // through the post-chain LBS skin pass (CanvasViewport's
+      // `applyTwoBoneSkinning`, depgraph's bone post-chain), driven
+      // by `bone.pose.rotation`. `toRigFrame` re-encodes rest verts to
+      // canvas-px when artParent fell back to root (bone-baked-no-
+      // deformer fallback); no-op when artParent is a rotation or
+      // warp deformer (verts already in the parent's local frame).
+      artBindings.push({ parameterId: 'ParamOpacity', keys: [1.0], interpolation: 'LINEAR' });
+      artKeyforms.push({
+        keyTuple: [1.0],
+        vertexPositions: new Float32Array(toRigFrame(verts)),
+        opacity: 1.0,
+      });
     } else if (pm.hasEyelidClosure || pm.hasEyeVariantCompound) {
       // Eye closure — shared geometry computation for standalone closure
       // and compound 2D grid. `pm.myClosureCurve` is base's parabola for
