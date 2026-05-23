@@ -37,6 +37,7 @@
  * @property {(p: any) => any} findOrphanReferences
  * @property {(p: any) => any} findBindingSchemaDrift
  * @property {(p: any) => any} migrateProject
+ * @property {(p: any) => void} migrateGroupRotationDeformersToBones
  */
 
 /** @type {Promise<RigPeers> | null} */
@@ -58,9 +59,10 @@ export function loadRigPeers() {
       import('../io/live2d/rig/paramReferences.js'),
       import('../io/live2d/rig/paramSchemaDrift.js'),
       import('./projectMigrations.js'),
+      import('./migrations/groupRotationToBone.js'),
     ]).then(([
       meshSignature, meshSync, deformerNodeSync, artMeshRuntimeSync,
-      paramReferences, paramSchemaDrift, migrations,
+      paramReferences, paramSchemaDrift, migrations, groupRotationToBone,
     ]) => ({
       computeProjectSignatures: meshSignature.computeProjectSignatures,
       ensureWeightGroups: meshSync.ensureWeightGroups,
@@ -77,6 +79,7 @@ export function loadRigPeers() {
       findOrphanReferences: paramReferences.findOrphanReferences,
       findBindingSchemaDrift: paramSchemaDrift.findBindingSchemaDrift,
       migrateProject: migrations.migrateProject,
+      migrateGroupRotationDeformersToBones: groupRotationToBone.migrateGroupRotationDeformersToBones,
     })).catch((err) => {
       _rigPeersPromise = null;
       throw err;

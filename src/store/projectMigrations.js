@@ -103,6 +103,7 @@ import { migrateActionGroups } from './migrations/v40_action_groups.js';
 import { migrateFModifiers } from './migrations/v41_fmodifiers.js';
 import { migrateNlaSubstrate } from './migrations/v42_nla_substrate.js';
 import { migrateLatticeSubstrate } from './migrations/v43_lattice_substrate.js';
+import { migrateGroupRotationToBoneViaReseed } from './migrations/v44_group_rotation_to_bone.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -741,6 +742,23 @@ const MIGRATIONS = {
   // `docs/plans/WARP_AS_LATTICE_OBJECT_REFACTOR_PLAN.md`.
   43: (project) => {
     migrateLatticeSubstrate(project);
+    return project;
+  },
+
+  // v44 — RULE №4: GroupRotation deformer → armature bone. Converts every
+  // persisted `{type:'deformer', deformerKind:'rotation', id:'GroupRotation_<g>'}`
+  // into the Blender authoring model (the group becomes a bone; its driven
+  // parts bind weight-1 to the bone and the bone LBS owns the rotation; the
+  // Cubism deformer re-synthesises at export). Forces an Init Rig re-run
+  // (clears `lastInitRigCompletedAt`, mirroring v29) so the conversion runs
+  // on `seedAllRig`'s canonical live-shape path rather than duplicating the
+  // v18 Object/ObjectData mesh resolution here.
+  //
+  // See `src/store/migrations/v44_group_rotation_to_bone.js`,
+  // `src/store/migrations/groupRotationToBone.js`, and
+  // `docs/plans/ROTATION_DEFORMER_TO_BONE_REFACTOR.md`.
+  44: (project) => {
+    migrateGroupRotationToBoneViaReseed(project);
     return project;
   },
 

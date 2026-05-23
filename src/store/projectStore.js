@@ -1606,6 +1606,19 @@ export const useProjectStore = create((set, get) => {
       if (harvest?.rigSpec) {
         peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
       }
+      // RULE №4 — GroupRotation deformer → armature bone. A Cubism
+      // GroupRotation is, in Blender, the group acting as a bone that
+      // rotates its weighted meshes around its head (the pivot); the
+      // Cubism deformer is a downstream export adapter
+      // (`synthesizeGroupRotationDeformers`), not the authoring model.
+      // Runs AFTER `persistArtMeshRuntime` because it derives each part's
+      // bone head from `mesh.vertices − pivot-relative runtime keyform`
+      // (and finds the driven parts via `runtime.parent`), and BEFORE the
+      // stack synthesis below so the bone-bound parts surface an Armature
+      // modifier (not a stale `rotation` entry) and the rotation deformer
+      // nodes are gone. Validated end-to-end (nested + warp-parented
+      // multi-rotation) by `test_groupRotationMigrationRealRig`.
+      peers.migrateGroupRotationDeformersToBones(proj);
       // Phase 3 storage flip — re-derive each part's modifier stack
       // after the full seed pass. The seedXxx fns each run synthesize
       // individually, but NeckWarp + rotation deformer upserts happen

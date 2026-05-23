@@ -117,13 +117,25 @@ function assertThrows(fn, name) {
 }
 
 {
-  // v29-or-later: existing lastInitRigCompletedAt preserved (idempotent
-  // — the migration only fires once when crossing v28 → v29).
+  // v44 ALSO clears lastInitRigCompletedAt (GroupRotation→bone re-rule):
+  // a pre-v44 project (here at v29) crossing into v44 forces a re-Init Rig
+  // so `seedAllRig` runs the bone conversion. The clear is correct, not a
+  // regression — same contract as v29.
   const ts = '2026-05-08T12:00:00.000Z';
   const p = { schemaVersion: 29, lastInitRigCompletedAt: ts };
   migrateProject(p);
+  assertEq(p.lastInitRigCompletedAt, null,
+    'v44: pre-v44 timestamps cleared so re-Init Rig runs the GroupRotation→bone conversion');
+}
+
+{
+  // Post-v44: timestamps preserved (both the v29 and v44 clears only fire
+  // once, when crossing their boundary).
+  const ts = '2026-05-22T12:00:00.000Z';
+  const p = { schemaVersion: CURRENT_SCHEMA_VERSION, lastInitRigCompletedAt: ts };
+  migrateProject(p);
   assertEq(p.lastInitRigCompletedAt, ts,
-    'v29 idempotent: post-v29 timestamps preserved');
+    'v44 idempotent: already-current timestamps preserved');
 }
 
 {

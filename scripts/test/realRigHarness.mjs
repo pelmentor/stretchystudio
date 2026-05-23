@@ -17,6 +17,9 @@
 
 import { generateCmo3 } from '../../src/io/live2d/cmo3writer.js';
 import { evalRig } from '../../src/io/live2d/runtime/evaluator/chainEval.js';
+import { rotationSpecToDeformerNode, upsertDeformerNode, synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
+import { persistArtMeshRuntime } from '../../src/store/artMeshRuntimeSync.js';
+import { seedBodyWarpChain } from '../../src/io/live2d/rig/bodyWarpStore.js';
 
 // Minimal valid 1x1 transparent PNG — cmo3writer requires `pngData` per mesh
 // even under rigOnly (the layer-keyform pass runs before the rig short-circuit).
@@ -103,4 +106,59 @@ export function artMeshOf(rigSpec, partId) {
 /** rotation deformer entry by id, or null. */
 export function rotationOf(rigSpec, id) {
   return (rigSpec.rotationDeformers ?? []).find((r) => r.id === id) ?? null;
+}
+
+/**
+ * The harness's `rigSpec → project.nodes` seed step — the missing inverse of
+ * `harvestRealRig`. Mirrors the deformer-model peer sequence inside
+ * `projectStore.seedAllRig` (rotation-deformer-node upsert →
+ * `persistArtMeshRuntime` → `synthesizeModifierStacks`) so a refactor that
+ * mutates `project.nodes` (e.g. the GroupRotation→bone migration) can be
+ * validated on the REAL pipeline's rig structure — real pivot-relative
+ * keyform frames, real nested/warp parent chains — instead of a hand-authored
+ * fixture whose frame might not match.
+ *
+ * Takes the SOURCE project (its `group` + `part` skeleton, with canvas-px
+ * `mesh.vertices`) and the harvested `rigSpec`, and returns a deformer-model
+ * project: rotation deformer nodes present, each part's `mesh.runtime`
+ * populated (pivot-relative keyforms + parent ref), modifier stacks
+ * synthesised, `ParamRotation_<g>` params registered. Eval it via the depgraph
+ * to get the deformer-model baseline; migrate it to get the bone model.
+ *
+ * @param {object} sourceProject - the `{canvas, nodes:[group|part...]}` input
+ * @param {object} rigSpec - output of `harvestRealRig(sourceProject)`
+ * @returns {object} a fresh deformer-model project (source is not mutated)
+ */
+export function seedRigSpecToNodes(sourceProject, rigSpec) {
+  const proj = JSON.parse(JSON.stringify(sourceProject));
+  // Register the auto-seeded rig params (ParamRotation_<g>, body angles, …) so
+  // the depgraph can drive the rotation bindings.
+  if (Array.isArray(rigSpec?.parameters)) {
+    const have = new Set((proj.parameters ?? []).map((p) => p?.id));
+    proj.parameters = [
+      ...(proj.parameters ?? []),
+      ...rigSpec.parameters.filter((p) => p?.id && !have.has(p.id)).map((p) => ({ ...p })),
+    ];
+  }
+  // Body warp chain as Lattice objects (the rotations are warp-parented by
+  // default; without these the rotation pivots can't map warp-local→canvas and
+  // the eval collapses to pivot-relative). Seed BEFORE the rotations so the
+  // warp ancestors exist when stacks synthesise.
+  if (rigSpec?.bodyWarpChain?.specs?.length) {
+    seedBodyWarpChain(proj, rigSpec.bodyWarpChain, 'replace');
+  }
+  // Rotation deformer nodes (seedAllRig's BFA-006 Phase 3 dual-write).
+  for (const spec of rigSpec?.rotationDeformers ?? []) {
+    if (spec?.id) upsertDeformerNode(proj.nodes, rotationSpecToDeformerNode(spec));
+  }
+  // Persist artMesh runtime (bindings + pivot-relative keyforms + parent ref).
+  persistArtMeshRuntime(proj, rigSpec, 'replace');
+  // Pin each part's canvas-px rest verts from the real artMesh `verticesCanvas`
+  // (the bone-head derivation `vertices − keyform` relies on this frame).
+  for (const am of rigSpec?.artMeshes ?? []) {
+    const part = proj.nodes.find((n) => n.id === am.id && n.type === 'part');
+    if (part?.mesh && am.verticesCanvas) part.mesh.vertices = Array.from(am.verticesCanvas);
+  }
+  synthesizeModifierStacks(proj);
+  return proj;
 }

@@ -47,34 +47,59 @@ export function migrateGroupRotationDeformersToBones(project) {
   );
   if (rotDefs.length === 0) return;
 
-  /** Resolve the rotation's chain parent into a runtime parent ref. */
-  const resolveParentRef = (def) => {
-    const pid = typeof def.parent === 'string' ? def.parent : null;
-    if (!pid) return { type: 'root', id: null };
-    const p = byId.get(pid);
-    if (p && p.type === 'object' && p.objectKind === 'lattice') return { type: 'warp', id: pid };
-    if (p && p.type === 'deformer' && p.deformerKind === 'warp') return { type: 'warp', id: pid };
-    return { type: 'root', id: null };
-  };
+  /**
+   * Resolve a group-rotation part's runtime parent. Per RULE №4 the bone head
+   * is FIXED in canvas space, so the part's geometry is owned end-to-end by the
+   * bone LBS: runtime parent = ROOT.
+   *
+   * Why NOT the body-warp ancestor: in the deformer model the rotation is
+   * canvas-final, which BREAKS the modifier-chain walk before the body warp is
+   * reached — the warp never lattice-deforms the part's geometry; it only moves
+   * the rotation PIVOT (the "warp-MOVED pivot"). RULE №4 intentionally drops
+   * that pivot motion (the bone head is fixed; it coincides with the warp-moved
+   * pivot only at warp rest). So re-parenting to the warp would ADD a
+   * deformation the deformer model never applied. Bones are root-parented and
+   * carry no body-warp lattice in their stack.
+   */
+  const resolveParentRef = () => ({ type: 'root', id: null });
 
-  const removed = new Set();
-  for (const def of rotDefs) {
-    const groupId = def.id.slice(GROUP_ROTATION_PREFIX.length);
-    const group = byId.get(groupId);
-    if (!group || group.type !== 'group') continue;
+  /** The rotation deformer's rest (keyTuple 0) keyform. */
+  const restKeyform = (def) =>
+    (def.keyforms ?? []).find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? def.keyforms?.[0] ?? null;
 
-    const parts = project.nodes.filter(
-      (p) => p && p.type === 'part'
-        && (p.rigParent === def.id || p.mesh?.runtime?.parent?.id === def.id),
-    );
+  /** Parts driven directly by this rotation deformer. */
+  const partsOf = (def) => project.nodes.filter(
+    (p) => p && p.type === 'part'
+      && (p.rigParent === def.id || p.mesh?.runtime?.parent?.id === def.id),
+  );
 
-    // Bone head = canvas-final rest pivot = mesh.vertices − pivot-relative keyform.
+  /**
+   * Bone head = the rotation's CANVAS-FINAL rest pivot. Derivation, in order:
+   *  1. A directly-driven part: `mesh.vertices − pivot-relative keyform` (the
+   *     part's canvas-px verts minus its pivot-relative rest keyform = the
+   *     pivot the part rotates around). Grounded by test_groupRotationRealRig.
+   *  2. No direct part (a container rotation holding only sub-rotations): a
+   *     child rotation's pivot minus the child's authored origin. A
+   *     rotation-parented deformer expresses its origin as a CANVAS-PX offset
+   *     from its parent's pivot, so `childPivot − childOrigin = thisPivot`.
+   *     Recurse so a chain of containers resolves bottom-up. (The authored
+   *     `originX/Y` on a warp-parented container is warp-LOCAL — unusable
+   *     directly; the child-rotation route recovers canvas-final without any
+   *     warp math.)
+   *  3. Root-parented leaf with neither: the authored `originX/Y`, which is
+   *     already canvas-px for a root parent.
+   */
+  const pivotCache = new Map();
+  const deriveCanvasPivot = (def, guard = 0) => {
+    if (pivotCache.has(def.id)) return pivotCache.get(def.id);
+    if (guard > 256) return null;
+    pivotCache.set(def.id, null); // cycle guard
+
     let head = null;
-    for (const p of parts) {
+    for (const p of partsOf(def)) {
       const verts = p.mesh?.vertices;
-      const rt = p.mesh?.runtime;
-      const kf = Array.isArray(rt?.keyforms)
-        ? (rt.keyforms.find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? rt.keyforms[0])
+      const kf = Array.isArray(p.mesh?.runtime?.keyforms)
+        ? (p.mesh.runtime.keyforms.find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? p.mesh.runtime.keyforms[0])
         : null;
       const kfv = kf?.vertexPositions;
       if (Array.isArray(verts) && verts.length >= 2 && Array.isArray(kfv) && kfv.length >= 2) {
@@ -83,10 +108,29 @@ export function migrateGroupRotationDeformersToBones(project) {
       }
     }
     if (!head) {
-      // No part to derive from → root-parented authored pivot.
-      const rk = (def.keyforms ?? []).find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? def.keyforms?.[0];
+      const childRot = rotDefs.find((d) => d.parent === def.id);
+      if (childRot) {
+        const childPivot = deriveCanvasPivot(childRot, guard + 1);
+        const ck = restKeyform(childRot);
+        if (childPivot && ck) head = { x: childPivot.x - (ck.originX ?? 0), y: childPivot.y - (ck.originY ?? 0) };
+      }
+    }
+    if (!head) {
+      const rk = restKeyform(def);
       head = { x: rk?.originX ?? 0, y: rk?.originY ?? 0 };
     }
+    pivotCache.set(def.id, head);
+    return head;
+  };
+
+  const removed = new Set();
+  for (const def of rotDefs) {
+    const groupId = def.id.slice(GROUP_ROTATION_PREFIX.length);
+    const group = byId.get(groupId);
+    if (!group || group.type !== 'group') continue;
+
+    const parts = partsOf(def);
+    const head = deriveCanvasPivot(def);
 
     // Group → bone.
     group.boneRole = `groupRotation_${groupId}`;
@@ -99,7 +143,7 @@ export function migrateGroupRotationDeformersToBones(project) {
       group.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
     }
 
-    const parentRef = resolveParentRef(def);
+    const parentRef = resolveParentRef();
     for (const p of parts) {
       const verts = p.mesh?.vertices;
       if (!Array.isArray(verts)) continue;
