@@ -30,6 +30,7 @@ import { VERSION_PIS, IMPORT_PIS } from './cmo3/constants.js';
 import { FACE_PARALLAX_TAGS, NECK_WARP_TAGS } from './cmo3/rigWarpTags.js';
 import { fitParabolaFromLowerEdge } from './cmo3/eyeClosureFit.js';
 import { evalClosureCurve } from './cmo3/eyeClosureApply.js';
+import { resolveEyeClosure } from './rig/eyeClosure.js';
 import { setupGlobalSharedObjects, lookupStandardParamPids } from './cmo3/globalSetup.js';
 import { emitModelImageGroup } from './cmo3/modelImageGroup.js';
 import { packCmo3 } from './cmo3/caffPack.js';
@@ -166,6 +167,21 @@ export async function generateCmo3(input) {
     // mismatch) fall through to the inline shiftFn path. See
     // `rig/rigWarpsStore.js` resolveRigWarps.
     rigWarps = null,
+    // Pre-resolved eye-closure parabolas (RULE №4 follow-up Slice 2,
+    // 2026-05-23). `{baseParabolaPerSide: Map<'l'|'r', curve>,
+    // variantParabolaPerSideAndSuffix: Map<'<side>|<suffix>', curve>}`.
+    // When a side's parabola is present, the prepass uses it verbatim
+    // instead of re-fitting (`fitParabolaFromLowerEdge`); misses fall
+    // through to fresh-fit on a per-side / per-(side,suffix) basis.
+    // Caller resolves via `rig/eyeClosure.js::resolveEyeClosure`. After
+    // the prepass the maps (stored + freshly fit) are attached to
+    // `rigCollector.eyeClosureParabolas` so the seedAllRig persist step
+    // can mirror them back to `project.eyeClosureParabolas` (substrate
+    // write-back). The named-distinct field avoids collision with the
+    // pre-existing `rigCollector.eyeClosure` per-part closed-vert MAP
+    // (consumed by `moc3/meshBindingPlan.js` for moc3 keyform emission
+    // — the bake output, vs this slice's source-of-bake field).
+    eyeClosure = null,
   } = input;
 
   // Resolve Stage 5 configs to flat constants used inline below.
@@ -411,7 +427,15 @@ export async function generateCmo3(input) {
   const EYE_CLOSURE_LASH_STRIP_FRAC = _EYE_CLOSURE_LASH_STRIP_FRAC;
   const EYE_CLOSURE_BIN_COUNT       = _EYE_CLOSURE_BIN_COUNT;  // X-uniform bins for lower-edge extraction
   // Per-side parabola fit: {a, b, c, xMid, xScale} in CANVAS space. Evaluates to y.
-  const eyewhiteCurvePerSide = new Map();
+  // Substrate read (RULE №4 Slice 2, 2026-05-23): seed from pre-resolved
+  // `eyeClosure` input when the caller passed one. Missing keys fall
+  // through to fresh fits in the loops below; the populated map gets
+  // attached to `rigCollector.eyeClosureParabolas` at the end of the
+  // prepass so seedAllRig can mirror it back to
+  // `project.eyeClosureParabolas`. Init Rig is the canonical re-fit
+  // moment; pure export rounds-trips stored data.
+  const _storedEyeClosure = eyeClosure ?? null;
+  const eyewhiteCurvePerSide = new Map(_storedEyeClosure?.baseParabolaPerSide ?? []);
   const eyelashMeshBboxPerSide = new Map(); // still needed for lash-strip compression
   // P11 (Apr 2026): eye-region union bbox per side.
   // When eyewhite/iris extends below eyelash (anime big-iris topology), the
@@ -454,9 +478,15 @@ export async function generateCmo3(input) {
       if (bb) eyelashMeshBboxPerSide.set(side, bb);
     }
     if (!sourceMesh) continue;
-    const curve = await fitParabolaFromLowerEdge(sourceMesh, sourceTag, { binCount: EYE_CLOSURE_BIN_COUNT });
-    if (!curve) continue;
-    eyewhiteCurvePerSide.set(side, curve);
+    // Substrate read (Slice 2): skip the fit when a stored parabola
+    // already covers this side (e.g. seedAllRig populated the cache on
+    // a prior Init Rig). Falls through to fresh fit when missing.
+    let curve = eyewhiteCurvePerSide.get(side) ?? null;
+    if (!curve) {
+      curve = await fitParabolaFromLowerEdge(sourceMesh, sourceTag, { binCount: EYE_CLOSURE_BIN_COUNT });
+      if (!curve) continue;
+      eyewhiteCurvePerSide.set(side, curve);
+    }
     // Union bbox across eyelash + eyewhite + iris for this side (P11) — base-side only
     let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity;
     for (const m of meshes) {
@@ -481,7 +511,8 @@ export async function generateCmo3(input) {
   // the same group share this curve as their closure target (structural:
   // all eye parts within a variant group must collapse to the same line).
   // Base's `eyewhiteCurvePerSide` is NEVER used for variants.
-  const variantEyewhiteCurvePerSideAndSuffix = new Map(); // `${side}|${suffix}` → curve
+  // Substrate read (Slice 2): same per-(side,suffix) cache pattern.
+  const variantEyewhiteCurvePerSideAndSuffix = new Map(_storedEyeClosure?.variantParabolaPerSideAndSuffix ?? []); // `${side}|${suffix}` → curve
   // Variant lash bbox is computed per-mesh inside the CArtMeshForm branch
   // (bboxFromVertsY on the variant's own verts) — no map needed.
   for (const side of ['l', 'r']) {
@@ -515,8 +546,13 @@ export async function generateCmo3(input) {
         if (variantSource) variantSourceTag = 'eyelash-fallback';
       }
       if (!variantSource) continue;
+      // Substrate read (Slice 2): skip the fit when a stored variant
+      // parabola already covers this (side, suffix). Falls through to
+      // fresh fit otherwise.
+      const variantKey = `${side}|${suffix}`;
+      if (variantEyewhiteCurvePerSideAndSuffix.has(variantKey)) continue;
       const vCurve = await fitParabolaFromLowerEdge(variantSource, variantSourceTag, { binCount: EYE_CLOSURE_BIN_COUNT });
-      if (vCurve) variantEyewhiteCurvePerSideAndSuffix.set(`${side}|${suffix}`, vCurve);
+      if (vCurve) variantEyewhiteCurvePerSideAndSuffix.set(variantKey, vCurve);
     }
   }
   // evalClosureCurve / evalBandY / computeClosedCanvasVerts /
@@ -560,6 +596,26 @@ export async function generateCmo3(input) {
       } : null,
     };
   }
+
+  // Substrate write-back (RULE №4 Slice 2): expose the resolved
+  // parabola maps so the seedAllRig persist step can mirror them to
+  // `project.eyeClosureParabolas` via `seedEyeClosure(project, base,
+  // variant)`. The maps reflect a UNION of stored data (if the caller
+  // passed `eyeClosure`) and freshly fit data — re-persisting both
+  // keeps the store coherent after a structural edit added a new
+  // variant.
+  //
+  // NOTE on naming: `rigCollector.eyeClosure` (separate field, set
+  // INSIDE `emitAllMeshLayersAndKeyforms` below) is the per-part
+  // closed-vert MAP consumed by `moc3/meshBindingPlan.js` for moc3
+  // keyform emission. That's the BAKE output; this new field
+  // (`eyeClosureParabolas`) is the SOURCE data the bake was computed
+  // from. Distinct fields, distinct shapes (object vs Map), distinct
+  // semantic layers.
+  rigCollector.eyeClosureParabolas = {
+    baseParabolaPerSide: eyewhiteCurvePerSide,
+    variantParabolaPerSideAndSuffix: variantEyewhiteCurvePerSideAndSuffix,
+  };
 
   emitAllMeshLayersAndKeyforms(ctx, {
     pidLi, pidLg,

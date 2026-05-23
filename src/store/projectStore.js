@@ -1605,6 +1605,16 @@ export const useProjectStore = create((set, get) => {
       // only their Armature modifier.
       if (harvest?.rigSpec) {
         peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
+        // RULE №4 follow-up Slice 2 (2026-05-23) — mirror the eye-
+        // closure parabola fit into `project.eyeClosureParabolas` so
+        // pure-export reads it back instead of re-fitting. Init Rig is
+        // the canonical re-fit moment; the cmo3writer prepass uses the
+        // stored data via `resolveEyeClosure(project)`. See
+        // `src/io/live2d/rig/eyeClosure.js` (RULE-№4 Leak #2 substrate).
+        const ec = harvest.rigSpec.eyeClosureParabolas;
+        if (ec) {
+          peers.seedEyeClosure(proj, ec.baseParabolaPerSide, ec.variantParabolaPerSideAndSuffix);
+        }
       }
       // RULE №4 — GroupRotation deformer → armature bone. A Cubism
       // GroupRotation is, in Blender, the group acting as a bone that

@@ -38,6 +38,8 @@
  * @property {(p: any) => any} findBindingSchemaDrift
  * @property {(p: any) => any} migrateProject
  * @property {(p: any) => void} migrateGroupRotationDeformersToBones
+ * @property {(p: any, base: any, variant: any) => void} seedEyeClosure
+ * @property {(p: any) => {baseParabolaPerSide: Map<string, any>, variantParabolaPerSideAndSuffix: Map<string, any>}} resolveEyeClosure
  */
 
 /** @type {Promise<RigPeers> | null} */
@@ -60,9 +62,11 @@ export function loadRigPeers() {
       import('../io/live2d/rig/paramSchemaDrift.js'),
       import('./projectMigrations.js'),
       import('./migrations/groupRotationToBone.js'),
+      import('../io/live2d/rig/eyeClosure.js'),
     ]).then(([
       meshSignature, meshSync, deformerNodeSync, artMeshRuntimeSync,
       paramReferences, paramSchemaDrift, migrations, groupRotationToBone,
+      eyeClosure,
     ]) => ({
       computeProjectSignatures: meshSignature.computeProjectSignatures,
       ensureWeightGroups: meshSync.ensureWeightGroups,
@@ -80,6 +84,8 @@ export function loadRigPeers() {
       findBindingSchemaDrift: paramSchemaDrift.findBindingSchemaDrift,
       migrateProject: migrations.migrateProject,
       migrateGroupRotationDeformersToBones: groupRotationToBone.migrateGroupRotationDeformersToBones,
+      seedEyeClosure: eyeClosure.seedEyeClosure,
+      resolveEyeClosure: eyeClosure.resolveEyeClosure,
     })).catch((err) => {
       _rigPeersPromise = null;
       throw err;
