@@ -170,8 +170,8 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
     // CFormGuids. No sharing: variant's closure geometry uses the
     // variant's OWN parabola fit (`variantEyewhiteCurvePerSideAndSuffix`),
     // never base's. Variant lash bbox comes from variant's own verts.
-    const isVariant = !!m.variantRole;
-    const variantSuffixForMesh = m.variantSuffix ?? m.variantRole ?? null;
+    const isVariant = !!m.variantSuffix;
+    const variantSuffixForMesh = m.variantSuffix ?? null;
 
     // Closure side is now set for BOTH base and variant eye meshes
     // (previously variants were carved out with `!isVariant`).
@@ -582,7 +582,6 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
       tieSup, hasBakedKeyforms, hasEyelidClosure, closureSide,
       hasNeckCornerShapekeys,
       hasEmotionVariantOnly, hasBaseFadeOnly,
-      variantRole: m.variantRole ?? null,
       vertices: m.vertices,
       triangles: m.triangles,
       uvs: m.uvs,

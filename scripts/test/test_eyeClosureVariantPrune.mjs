@@ -215,24 +215,12 @@ function buildProjectWithVariants(variantParts) {
     'Contract 6: pruneOrphanedVariantParabolas is idempotent');
 }
 
-// ── Contract 7: variantRole alias counts as a reference ─────────────
-// `node.variantRole` is the older field name (pre-2026-04-26); some
-// PSD-imported projects + tests still set it. The prune needs to
-// treat variantRole === suffix the same as variantSuffix (mirrors
-// the cmo3writer prepass at `cmo3writer.js:~491-500` which OR's
-// them together).
-
-{
-  const project = buildProjectWithVariants([
-    { id: 'eyewhite-l.smile', type: 'part', name: 'eyewhite-l.smile',
-      tag: 'eyewhite-l', variantOf: 'eyewhite-l',
-      // Uses variantRole, NOT variantSuffix.
-      variantRole: 'smile' },
-  ]);
-  pruneOrphanedVariantParabolas(project);
-  assert('l|smile' in project.eyeClosureParabolas.variantParabolaPerSideAndSuffix,
-    'Contract 7: variantRole references the suffix → parabola kept');
-}
+// Contract 7 RETIRED (Slice 4 / v46, 2026-05-23): the `variantRole`
+// alias was retired by `v46_variant_role_alias_retirement.js` —
+// `variantSuffix` is now the canonical and only suffix field. The
+// pre-Slice-4 contract that pinned variantRole back-compat is gone
+// because no live project node carries variantRole post-v46.
+// Kept as a tombstone so future readers don't re-add it.
 
 console.log(`\neyeClosureVariantPrune: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

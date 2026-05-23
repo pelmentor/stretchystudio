@@ -114,7 +114,6 @@ export async function exportLive2D(project, images, opts = {}) {
       return {
         tag: matchTag(n.name ?? ''),
         variantSuffix: n.variantSuffix ?? null,
-        variantRole: n.variantRole ?? null,
         jointBoneId: m?.jointBoneId ?? null,
         boneWeights: m?.boneWeights ?? null,
       };
@@ -531,8 +530,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
     meshes.push({
       name: meshName,
       tag: matchTag(meshName),
-      variantRole: variantSuffix,    // kept for compat; same value as variantSuffix
-      variantSuffix,                 // new canonical field
+      variantSuffix,
       variantOf: part.variantOf ?? null,
       partId: part.id,
       parentGroupId: part.parent ?? null,
@@ -883,7 +881,6 @@ export async function buildMeshesForRig(project, images) {
     meshes.push({
       name: meshName,
       tag,
-      variantRole: variantSuffix,
       variantSuffix,
       variantOf: part.variantOf ?? null,
       partId: part.id,

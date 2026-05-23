@@ -48,16 +48,16 @@ function makeFixture() {
     ...groups,
     {
       id: 'm_face', type: 'part', visible: true, mesh: { vertices: [], uvs: [], triangles: [] },
-      variantSuffix: null, variantRole: null,
+      variantSuffix: null,
     },
     {
       id: 'm_face_smile', type: 'part', visible: true, mesh: { vertices: [], uvs: [], triangles: [] },
-      variantSuffix: 'smile', variantRole: null,
+      variantSuffix: 'smile',
     },
     {
       id: 'm_arm', type: 'part', visible: true,
       mesh: { vertices: [], uvs: [], triangles: [], jointBoneId: 'g_arm', boneWeights: [[1, 0]] },
-      variantSuffix: null, variantRole: null,
+      variantSuffix: null,
     },
   ];
 
@@ -71,7 +71,6 @@ function generatorPathSpec(project) {
     baseParameters: [],
     meshes: meshes.map(n => ({
       variantSuffix: n.variantSuffix,
-      variantRole: n.variantRole,
       jointBoneId: n.mesh?.jointBoneId,
       boneWeights: n.mesh?.boneWeights,
     })),
@@ -133,12 +132,12 @@ function generatorPathSpec(project) {
 
   const meshesWithExtraVariant = [
     ...project.nodes.filter(n => n.type === 'part').map(n => ({
-      variantSuffix: n.variantSuffix, variantRole: n.variantRole,
+      variantSuffix: n.variantSuffix,
       jointBoneId: n.mesh?.jointBoneId, boneWeights: n.mesh?.boneWeights,
     })),
     // A NEW variant the seeded list doesn't know about. Native path
     // ignores meshes entirely, so this would-be ParamSad is NOT added.
-    { variantSuffix: 'sad', variantRole: null, jointBoneId: null, boneWeights: null },
+    { variantSuffix: 'sad', jointBoneId: null, boneWeights: null },
   ];
   const nativeSpec = buildParameterSpec({
     baseParameters: project.parameters,

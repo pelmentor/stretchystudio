@@ -85,7 +85,6 @@ function toGeneratorInput(project) {
     boneWeights: n.mesh.boneWeights,
     visible: n.visible !== false,
     variantSuffix: n.variantSuffix ?? null,
-    variantRole: n.variantRole ?? null,
     pngData: PNG_1x1, // forces mesh-bin-max fallback (1×1 PNG has no contour)
   }));
   const groups = project.nodes.filter((n) => n.type === 'group').map((g) => ({

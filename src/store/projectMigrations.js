@@ -105,6 +105,7 @@ import { migrateNlaSubstrate } from './migrations/v42_nla_substrate.js';
 import { migrateLatticeSubstrate } from './migrations/v43_lattice_substrate.js';
 import { migrateGroupRotationToBoneViaReseed } from './migrations/v44_group_rotation_to_bone.js';
 import { migrateBoneBakedArtMeshAdapterViaReseed } from './migrations/v45_bone_baked_art_mesh_adapter.js';
+import { migrateVariantRoleAliasRetirement } from './migrations/v46_variant_role_alias_retirement.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -779,6 +780,23 @@ const MIGRATIONS = {
   // emitter-as-adapter pattern this slice instantiates).
   45: (project) => {
     migrateBoneBakedArtMeshAdapterViaReseed(project);
+    return project;
+  },
+
+  // v46 — RULE №2 cleanup: retire the `node.variantRole` field alias.
+  // The original variant-suffix field was renamed to `variantSuffix`
+  // (2026-04-26 variantNormalizer), but every reader carried a
+  // defensive `variantSuffix ?? variantRole` fallback so legacy
+  // saves kept working. v46 consolidates: promote any `variantRole`-
+  // only node to `variantSuffix`, then drop the alias. Post-v46
+  // every reader can drop the fallback.
+  //
+  // See `src/store/migrations/v46_variant_role_alias_retirement.js`
+  // and the RULE-№4 audit Blender-fidelity MED-3 finding
+  // ([[rule4-slice3-variant-parabola-prune-shipped]]) that pinned
+  // the deprecation as follow-up work.
+  46: (project) => {
+    migrateVariantRoleAliasRetirement(project);
     return project;
   },
 

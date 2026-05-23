@@ -74,7 +74,6 @@ function meshNode(id, name, tag, opts = {}) {
       boneWeights: opts.boneWeights,
     },
     variantSuffix: opts.variantSuffix ?? null,
-    variantRole: opts.variantRole ?? null,
   };
 }
 function groupNode(id, name, opts = {}) {
@@ -145,7 +144,6 @@ function computeOutputs(project) {
       return {
         tag: n.tag,
         variantSuffix: n.variantSuffix,
-        variantRole: n.variantRole,
         jointBoneId: m?.jointBoneId,
         boneWeights: m?.boneWeights,
       };

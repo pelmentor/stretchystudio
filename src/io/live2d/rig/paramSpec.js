@@ -102,7 +102,7 @@ export const BAKED_BONE_ANGLES = [-90, -45, 0, 45, 90];
  *       authoritative.
  *   Items with a partial shape (no `role`, no `decimalPlaces`) are still
  *   accepted in the empty-array fallback — defaults are filled.
- * @property {Array<{variantSuffix?:string|null, variantRole?:string|null, jointBoneId?:string|null, boneWeights?:any}>} [meshes]
+ * @property {Array<{variantSuffix?:string|null, jointBoneId?:string|null, boneWeights?:any}>} [meshes]
  *   Visible art meshes from the project. Used to discover variant suffixes (smile/sad/...) and
  *   bone-driven meshes that need a `ParamRotation_<bone>`. Ignored on the native rig path.
  * @property {Array<{id:string, name?:string}>} [groups]
@@ -229,7 +229,7 @@ export function buildParameterSpec(input = {}) {
   // A used suffix `.smile` → ParamSmile (default 0, 0..1, decimal 1).
   const usedVariantSuffixes = new Set();
   for (const m of meshes) {
-    const suffix = m?.variantSuffix ?? m?.variantRole;
+    const suffix = m?.variantSuffix;
     if (suffix) usedVariantSuffixes.add(suffix);
   }
   for (const suffix of usedVariantSuffixes) {
@@ -412,7 +412,6 @@ export function seedParameters(project, mode = 'replace') {
       return {
         tag: n.tag ?? matchTag(n.name ?? ''),
         variantSuffix: n.variantSuffix ?? null,
-        variantRole: n.variantRole ?? null,
         jointBoneId: m?.jointBoneId ?? null,
         boneWeights: m?.boneWeights ?? null,
       };

@@ -126,7 +126,6 @@ function buildSectionData(input) {
   const meshesForSpec = meshParts.map((n) => ({
     tag: matchTag(n.name ?? ''),
     variantSuffix: n.variantSuffix ?? null,
-    variantRole: n.variantRole ?? null,
     jointBoneId: n.mesh?.jointBoneId ?? null,
     boneWeights: n.mesh?.boneWeights ?? null,
   }));

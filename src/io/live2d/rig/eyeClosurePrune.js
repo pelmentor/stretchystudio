@@ -43,13 +43,13 @@
  *
  * # Orphaned-suffix detection
  *
- * A suffix is orphaned iff NO remaining part node carries either
- * `variantSuffix === <suffix>` OR `variantRole === <suffix>` (the
- * older alias kept by the cmo3writer prepass — see
- * `io/live2d/cmo3writer.js` variant-suffix discovery loop). Both
- * sides of the orphaned suffix (`l|<suffix>` AND `r|<suffix>`)
- * are pruned — the suffix is the lookup key, the side is
- * granularity-only.
+ * A suffix is orphaned iff NO remaining part node carries
+ * `variantSuffix === <suffix>`. Both sides of the orphaned suffix
+ * (`l|<suffix>` AND `r|<suffix>`) are pruned — the suffix is the
+ * lookup key, the side is granularity-only.
+ *
+ * v46 (RULE №2 cleanup) consolidated the older `variantRole` field
+ * into `variantSuffix`; this helper reads only the canonical name.
  *
  * `baseParabolaPerSide` is NEVER touched here — it represents the
  * base eye geometry per side, orthogonal to variants.
@@ -65,18 +65,14 @@ export function pruneOrphanedVariantParabolas(project) {
   const variantMap = stored.variantParabolaPerSideAndSuffix;
   if (!variantMap || typeof variantMap !== 'object') return;
 
-  // Active-suffix set = union of (variantSuffix, variantRole) across
-  // every part node. variantRole is the pre-2026-04-26 alias kept by
-  // the cmo3writer for back-compat.
+  // Active-suffix set = `variantSuffix` across every part node.
+  // v46 (RULE №2) retired the older `variantRole` alias.
   const activeSuffixes = new Set();
   const nodes = Array.isArray(project.nodes) ? project.nodes : [];
   for (const n of nodes) {
     if (!n || n.type !== 'part') continue;
     if (typeof n.variantSuffix === 'string' && n.variantSuffix.length > 0) {
       activeSuffixes.add(n.variantSuffix);
-    }
-    if (typeof n.variantRole === 'string' && n.variantRole.length > 0) {
-      activeSuffixes.add(n.variantRole);
     }
   }
 

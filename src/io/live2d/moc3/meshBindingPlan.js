@@ -90,7 +90,7 @@ export function buildMeshBindingPlan(opts) {
   const variantSuffixesByBasePartId = new Map();
   for (const p of meshParts) {
     if (!p.variantOf) continue;
-    const sfx = p.variantSuffix ?? p.variantRole ?? null;
+    const sfx = p.variantSuffix ?? null;
     if (!sfx) continue;
     const list = variantSuffixesByBasePartId.get(p.variantOf) ?? [];
     if (!list.includes(sfx)) list.push(sfx);

@@ -53,7 +53,6 @@ export function toGeneratorInput(project) {
     boneWeights: n.mesh.boneWeights,
     visible: n.visible !== false,
     variantSuffix: n.variantSuffix ?? null,
-    variantRole: n.variantRole ?? null,
     pngData: PNG_1x1,
   }));
   const groups = project.nodes.filter((n) => n.type === 'group').map((g) => ({

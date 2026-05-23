@@ -408,7 +408,7 @@ export async function generateCmo3(input) {
   const variantSuffixesByBasePartId = new Map(); // basePartId → [suffixes]
   for (const m of meshes) {
     if (!m.variantOf) continue;
-    const suffix = m.variantSuffix ?? m.variantRole;
+    const suffix = m.variantSuffix;
     if (!suffix) continue;
     const list = variantSuffixesByBasePartId.get(m.variantOf) ?? [];
     if (!list.includes(suffix)) list.push(suffix);
@@ -519,7 +519,7 @@ export async function generateCmo3(input) {
     const suffixesForSide = new Set();
     for (const m of meshes) {
       if (!m.variantOf || m.tag !== `eyewhite-${side}`) continue;
-      const sfx = m.variantSuffix ?? m.variantRole;
+      const sfx = m.variantSuffix;
       if (sfx) suffixesForSide.add(sfx);
     }
     // Also check if there's a variant lash/iris that exists WITHOUT a variant eyewhite
@@ -527,20 +527,20 @@ export async function generateCmo3(input) {
     for (const m of meshes) {
       if (!m.variantOf || m.vertices == null) continue;
       if (m.tag !== `eyelash-${side}` && m.tag !== `irides-${side}`) continue;
-      const sfx = m.variantSuffix ?? m.variantRole;
+      const sfx = m.variantSuffix;
       if (sfx) suffixesForSide.add(sfx);
     }
     for (const suffix of suffixesForSide) {
       let variantSource = meshes.find(m =>
         m.variantOf && m.tag === `eyewhite-${side}`
-        && (m.variantSuffix ?? m.variantRole) === suffix
+        && m.variantSuffix === suffix
         && m.vertices && m.vertices.length >= 6
       ) ?? null;
       let variantSourceTag = variantSource ? 'eyewhite' : null;
       if (!variantSource) {
         variantSource = meshes.find(m =>
           m.variantOf && m.tag === `eyelash-${side}`
-          && (m.variantSuffix ?? m.variantRole) === suffix
+          && m.variantSuffix === suffix
           && m.vertices && m.vertices.length >= 6
         ) ?? null;
         if (variantSource) variantSourceTag = 'eyelash-fallback';

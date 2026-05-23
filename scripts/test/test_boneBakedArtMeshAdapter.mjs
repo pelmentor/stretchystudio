@@ -76,7 +76,6 @@ function toGeneratorInput(project) {
     jointPivotY: n.mesh.jointPivotY,
     visible: n.visible !== false,
     variantSuffix: n.variantSuffix ?? null,
-    variantRole: n.variantRole ?? null,
     pngData: PNG_1x1,
   }));
   const groups = project.nodes.filter((n) => n.type === 'group').map((g) => ({

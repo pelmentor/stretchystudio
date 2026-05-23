@@ -77,7 +77,7 @@ export function buildMaskConfigsFromProject(project) {
     const tag = matchTag(node.name || node.id);
     if (!tag) continue;
     meshTagCache.set(node.id, tag);
-    const sfx = node.variantSuffix ?? node.variantRole ?? null;
+    const sfx = node.variantSuffix ?? null;
     if (sfx) {
       const key = `${tag}|${sfx}`;
       if (!variantPidByTagAndSuffix.has(key)) {
@@ -95,7 +95,7 @@ export function buildMaskConfigsFromProject(project) {
     const maskTag = CLIP_RULES[tag];
     if (!maskTag) continue;
 
-    const sfx = node.variantSuffix ?? node.variantRole ?? null;
+    const sfx = node.variantSuffix ?? null;
     let maskMeshId = null;
     if (sfx) {
       maskMeshId =

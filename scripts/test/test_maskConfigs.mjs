@@ -46,7 +46,6 @@ function meshNode(id, name, opts = {}) {
     visible: opts.visible ?? true,
     mesh: opts.mesh ?? { vertices: [], uvs: [], triangles: [] },
     variantSuffix: opts.variantSuffix ?? null,
-    variantRole: opts.variantRole ?? null,
   };
 }
 

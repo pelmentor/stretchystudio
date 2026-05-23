@@ -691,7 +691,7 @@ export function emitArtMeshSources(ctx, opts) {
         verticesCanvas: new Float32Array(canvasVerts),
         triangles: new Uint16Array(tris),
         uvs: new Float32Array(uvs),
-        variantSuffix: meshes[pm.mi].variantSuffix ?? meshes[pm.mi].variantRole ?? null,
+        variantSuffix: meshes[pm.mi].variantSuffix ?? null,
         textureId: pm.partId,
         bindings: artBindings,
         keyforms: artKeyforms,

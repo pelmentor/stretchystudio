@@ -96,7 +96,7 @@ export function resolveMaskPairings(opts) {
     const mesh = meshes[pmEntry.mi];
     const tag = mesh.tag;
     if (!tag) continue;
-    const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
+    const sfx = mesh.variantSuffix ?? null;
     if (sfx) {
       const key = `${tag}|${sfx}`;
       if (!variantPidByTagAndSuffix.has(key)) {
@@ -115,7 +115,7 @@ export function resolveMaskPairings(opts) {
     if (!tag) continue;
     const maskTag = CLIP_RULES[tag];
     if (!maskTag) continue;
-    const sfx = mesh.variantSuffix ?? mesh.variantRole ?? null;
+    const sfx = mesh.variantSuffix ?? null;
     const pid = sfx
       ? (variantPidByTagAndSuffix.get(`${maskTag}|${sfx}`) ?? basePidByTag.get(maskTag) ?? null)
       : (basePidByTag.get(maskTag) ?? null);

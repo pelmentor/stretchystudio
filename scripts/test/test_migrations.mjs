@@ -155,6 +155,62 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v46 — `node.variantRole` field-name retirement (RULE №2 cleanup).
+  // Promote variantRole → variantSuffix when canonical is missing;
+  // drop variantRole regardless.
+
+  // Case 1: variantSuffix-only — unchanged.
+  const p1 = { schemaVersion: 45, nodes: [
+    { id: 'face.smile', type: 'part', variantSuffix: 'smile' },
+  ] };
+  migrateProject(p1);
+  assertEq(p1.nodes[0].variantSuffix, 'smile', 'v46 case 1: variantSuffix preserved');
+  assertEq(p1.nodes[0].variantRole, undefined, 'v46 case 1: no variantRole left behind');
+
+  // Case 2: both set (same value) — drop variantRole, keep variantSuffix.
+  const p2 = { schemaVersion: 45, nodes: [
+    { id: 'face.smile', type: 'part', variantSuffix: 'smile', variantRole: 'smile' },
+  ] };
+  migrateProject(p2);
+  assertEq(p2.nodes[0].variantSuffix, 'smile', 'v46 case 2: variantSuffix kept');
+  assertEq(p2.nodes[0].variantRole, undefined, 'v46 case 2: variantRole dropped');
+  assert(!('variantRole' in p2.nodes[0]),
+    'v46 case 2: variantRole field removed (not just set to undefined)');
+
+  // Case 3: variantRole only — promote to variantSuffix, drop alias.
+  const p3 = { schemaVersion: 45, nodes: [
+    { id: 'face.smile', type: 'part', variantRole: 'smile' },
+  ] };
+  migrateProject(p3);
+  assertEq(p3.nodes[0].variantSuffix, 'smile',
+    'v46 case 3: variantRole promoted to variantSuffix');
+  assert(!('variantRole' in p3.nodes[0]),
+    'v46 case 3: variantRole field removed');
+
+  // Case 4: non-variant parts left untouched.
+  const p4 = { schemaVersion: 45, nodes: [
+    { id: 'face', type: 'part' },
+    { id: 'BodyXWarp', type: 'deformer', variantRole: 'this-should-be-ignored-non-part' },
+  ] };
+  migrateProject(p4);
+  assertEq(p4.nodes[0].variantSuffix, undefined,
+    'v46 case 4: non-variant part untouched');
+  assertEq(p4.nodes[1].variantRole, 'this-should-be-ignored-non-part',
+    'v46 case 4: non-part nodes left untouched (only part nodes are swept)');
+
+  // Case 5: idempotence — running v46 a second time is a no-op.
+  const p5 = { schemaVersion: 45, nodes: [
+    { id: 'face.smile', type: 'part', variantRole: 'smile' },
+  ] };
+  migrateProject(p5);
+  const after1 = JSON.stringify(p5);
+  // Re-migrating a current-version project (no-op walk).
+  migrateProject(p5);
+  const after2 = JSON.stringify(p5);
+  assertEq(after1, after2, 'v46 idempotent: re-running is a no-op');
+}
+
+{
   // v14: rigStageLastRunAt defaults to {} when missing.
   const p = { schemaVersion: 13 };
   migrateProject(p);
