@@ -633,6 +633,156 @@ function assertEq(actual, expected, name) {
     'M3.1: armature-only emits modifierChain=[] (M2.2 contract preserved)');
 }
 
+// ── Modifier-toggle reproject — abort path (RULE-№4 follow-on,
+//   2026-05-23). When `_hasRestState` is false on either side of a
+//   would-be reproject (broken project: a parent deformer with no
+//   keyforms / broken parent chain), the toggle is treated as no-op
+//   for that part — parent stays cached, modifierChain emits the FULL
+//   pre-toggle stack (via `_resolveFullModifierChain`), verts pass
+//   through unchanged. Mirrors Blender's `BKE_modifier_is_enabled`
+//   idiom for broken modifier targets (MOD_lattice.cc:55-58 /
+//   MOD_armature.cc:64-74: invalid target → modifier treated as
+//   always-disabled). Pre-fix the path called `_reprojectKeyformVerts`
+//   which silently passed verts through, with downstream chain
+//   interpreting them as in the effective parent's frame — producing
+//   geometry drift the user couldn't trace to their toggle.
+{
+  // Case (a) — cached side missing rest state.
+  // Project: part has modifiers [WarpA (disabled), WarpB (enabled)].
+  // WarpA has NO keyforms → no rest state → `_hasRestState(WarpA)` = false.
+  // WarpB has a valid keyform → rest state computed.
+  // cachedParent (modifiers[0]) = WarpA; effectiveParent (first enabled) = WarpB.
+  // wouldReproject = true; canReproject = false (cached side missing).
+  // → abort: parent = WarpA, modifierChain = [WarpA, WarpB] (full chain), verts unchanged.
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [],
+    nodes: [
+      // WarpA — NO keyforms (broken rest state). Modifiers[0] for the part.
+      { id: 'WarpA_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpA_obj__cage', visible: true, name: 'WarpA',
+        bindings: [], keyforms: [], // ← empty → _liftWarpToCanvasAtRest returns null
+        canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 } },
+      { id: 'WarpA_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [0, 0, 100, 0, 0, 100, 100, 100] },
+      // WarpB — valid keyform, rest state present.
+      { id: 'WarpB_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpB_obj__cage', visible: true, name: 'WarpB',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [200, 200, 300, 200, 200, 300, 300, 300], opacity: 1 }],
+        canvasBbox: { minX: 200, minY: 200, W: 100, H: 100 } },
+      { id: 'WarpB_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 200, y: 200 }, { x: 300, y: 200 }, { x: 200, y: 300 }, { x: 300, y: 300 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [200, 200, 300, 200, 200, 300, 300, 300] },
+      // Part: modifiers = [WarpA disabled, WarpB enabled]. cached=WarpA, effective=WarpB.
+      { id: 'cheek', type: 'part', visible: true,
+        modifiers: [
+          { type: 'lattice', objectId: 'WarpA_obj', enabled: false, mode: 3,
+            showInEditor: true },
+          { type: 'lattice', objectId: 'WarpB_obj', enabled: true, mode: 3,
+            showInEditor: true },
+        ],
+        mesh: {
+          vertices: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+          uvs: [], triangles: [],
+          runtime: {
+            parent: { type: 'warp', id: 'WarpA_obj' },
+            bindings: [],
+            keyforms: [{ keyTuple: [], vertexPositions: [50, 60, 70, 80], opacity: 1 }],
+          },
+        } },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'cheek');
+  assert(!!am, 'reproject-abort cached-missing: artMesh built');
+  // ABORT: parent stays cached (WarpA), NOT the live effective (WarpB).
+  assert(am.parent?.type === 'warp' && am.parent?.id === 'WarpA_obj',
+    'reproject-abort cached-missing: parent stays cachedParent (WarpA), not live effective (WarpB)');
+  // modifierChain = FULL pre-toggle stack: [WarpA, WarpB] (ignoring enabled filter).
+  // Critical regression-pin against emitting null — null would make chainEval walk
+  // the natural global parent chain from WarpA, which DIVERGES from the modifier
+  // stack for parts whose stack reorders against natural topology.
+  assert(Array.isArray(am.modifierChain) && am.modifierChain.length === 2,
+    'reproject-abort cached-missing: modifierChain is the FULL pre-toggle stack (2 entries, not null)');
+  assertEq(am.modifierChain[0]?.id, 'WarpA_obj',
+    'reproject-abort cached-missing: chain[0] = WarpA (cached leaf, pre-toggle)');
+  assertEq(am.modifierChain[1]?.id, 'WarpB_obj',
+    'reproject-abort cached-missing: chain[1] = WarpB (next entry, pre-toggle)');
+  // Verts pass through verbatim — the cachedVerts ARE in cachedParent's frame.
+  assertEq(Array.from(am.keyforms[0].vertexPositions), [50, 60, 70, 80],
+    'reproject-abort cached-missing: verts pass through unchanged (no math attempted)');
+}
+
+{
+  // Case (b) — effective side missing rest state.
+  // Project: part has modifiers [WarpA (disabled), WarpB (enabled)].
+  // WarpA has a valid keyform → rest state computed.
+  // WarpB has NO keyforms → no rest state → `_hasRestState(WarpB)` = false.
+  // cachedParent = WarpA; effectiveParent = WarpB. wouldReproject = true.
+  // canReproject = (cachedRest && liveRest) = (true && false) = false.
+  // → abort: parent = WarpA, modifierChain = [WarpA, WarpB] (full chain), verts unchanged.
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [],
+    nodes: [
+      // WarpA — valid rest state. modifiers[0] for the part (cached).
+      { id: 'WarpA_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpA_obj__cage', visible: true, name: 'WarpA',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [0, 0, 100, 0, 0, 100, 100, 100], opacity: 1 }],
+        canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 } },
+      { id: 'WarpA_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [0, 0, 100, 0, 0, 100, 100, 100] },
+      // WarpB — NO keyforms (broken rest state). First-enabled modifier.
+      { id: 'WarpB_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpB_obj__cage', visible: true, name: 'WarpB',
+        bindings: [], keyforms: [],
+        canvasBbox: { minX: 200, minY: 200, W: 100, H: 100 } },
+      { id: 'WarpB_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 200, y: 200 }, { x: 300, y: 200 }, { x: 200, y: 300 }, { x: 300, y: 300 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [200, 200, 300, 200, 200, 300, 300, 300] },
+      { id: 'cheek', type: 'part', visible: true,
+        modifiers: [
+          { type: 'lattice', objectId: 'WarpA_obj', enabled: false, mode: 3,
+            showInEditor: true },
+          { type: 'lattice', objectId: 'WarpB_obj', enabled: true, mode: 3,
+            showInEditor: true },
+        ],
+        mesh: {
+          vertices: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+          uvs: [], triangles: [],
+          runtime: {
+            parent: { type: 'warp', id: 'WarpA_obj' },
+            bindings: [],
+            keyforms: [{ keyTuple: [], vertexPositions: [11, 22, 33, 44], opacity: 1 }],
+          },
+        } },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'cheek');
+  assert(!!am, 'reproject-abort effective-missing: artMesh built');
+  assert(am.parent?.type === 'warp' && am.parent?.id === 'WarpA_obj',
+    'reproject-abort effective-missing: parent stays cachedParent (WarpA)');
+  assert(Array.isArray(am.modifierChain) && am.modifierChain.length === 2,
+    'reproject-abort effective-missing: modifierChain is the FULL pre-toggle stack');
+  assertEq(Array.from(am.keyforms[0].vertexPositions), [11, 22, 33, 44],
+    'reproject-abort effective-missing: verts pass through unchanged');
+}
+
 // ── Summary ──────────────────────────────────────────────────────
 
 console.log(`selectRigSpec: ${passed} passed, ${failed} failed`);

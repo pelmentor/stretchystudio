@@ -573,37 +573,78 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       // is now emitted ONLY for parts with no `modifiers[]` at all
       // (`stackLeaf.hasModifiers === false`) — meaning "no per-part rig;
       // chainEval uses the cached parent verbatim".
-      const effectiveParent = stackLeaf.hasModifiers
+      const liveEffectiveParent = stackLeaf.hasModifiers
         ? stackLeaf.effectiveParent
         : cachedParent;
-      const needsReproject = !_parentRefsEqual(cachedParent, effectiveParent);
+      const liveChain = stackLeaf.hasModifiers ? stackLeaf.chain : null;
+      const wouldReproject = !_parentRefsEqual(cachedParent, liveEffectiveParent);
 
-      // Observability for the modifier-toggle silent reprojection path
-      // (RULE-№4 audit 2026-05-23, follow-on). Disabling a modifier shifts
-      // `effectiveParent` away from the cached `cachedParent`, which forces
-      // a per-keyform re-projection of vertex positions between the two
-      // parents' rest frames (`_reprojectKeyformVerts` below). The math
-      // path is correct for well-formed warp rest states, but a missing /
-      // malformed rest state silently passes verts through verbatim
-      // (see _reprojectKeyformVerts), producing a geometry shift the user
-      // can't trace back to their modifier toggle. Log once per
-      // (part, fromParent→toParent) so the Logs panel surfaces the cause
-      // without flooding (chainEval runs every frame).
-      if (needsReproject) {
-        const fromId = cachedParent.id ?? 'root';
-        const toId = effectiveParent.id ?? 'root';
-        _warnOncePerPart(`${part.id}|reproject|${fromId}->${toId}`, () => {
-          logger.info(
-            'selectRigSpecModifierToggleReproject',
-            `modifier toggle on "${part.name ?? part.id}" — keyforms re-projected from ${cachedParent.type}:${fromId} → ${effectiveParent.type}:${toId} (cached at Init Rig; live stack diverged via per-part modifier disable)`,
-            {
-              partId: part.id,
-              partName: part.name,
-              cachedParent,
-              effectiveParent,
+      // Modifier-toggle reproject decision (RULE-№4 audit 2026-05-23
+      // follow-on). When a modifier-disable shifts `effectiveParent` away
+      // from `cachedParent`, the cached vertex positions need re-projecting
+      // between the two rest frames. Two outcomes:
+      //   (a) Both sides have rest state → honor the toggle (reproject).
+      //   (b) Either side has no rest state (broken project: a parent
+      //       deformer with no keyforms / broken parent chain) → math
+      //       undefined. Match Blender's `BKE_modifier_is_enabled` idiom
+      //       for broken modifier targets (`MOD_lattice.cc:55-58`,
+      //       `MOD_armature.cc:64-74`): treat the disable as a no-op for
+      //       this part. Emit with `cachedParent` AND the FULL pre-toggle
+      //       chain (via `_resolveFullModifierChain` — ignores `enabled`
+      //       filter), so chainEval walks the same chain the cached
+      //       vertex positions were baked against. Emitting `null` would
+      //       have chainEval walk the natural-topology global parent
+      //       pointer, which DIVERGES from the modifier stack for parts
+      //       whose stack reorders against natural topology (a stronger
+      //       Blender-style decoupling — see `_resolveModifierChain`
+      //       docstring). Warn so the user knows the toggle didn't take
+      //       effect AND why; the silent passthrough this replaces put
+      //       verts in the wrong frame downstream.
+      let effectiveParent = liveEffectiveParent;
+      let emittedChain = liveChain;
+      let needsReproject = wouldReproject;
+      if (wouldReproject) {
+        const cachedRest = _hasRestState(cachedParent, warpRestById, rotationRestById);
+        const liveRest = _hasRestState(liveEffectiveParent, warpRestById, rotationRestById);
+        if (cachedRest && liveRest) {
+          const fromId = cachedParent.id ?? 'root';
+          const toId = liveEffectiveParent.id ?? 'root';
+          _warnOncePerPart(`${part.id}|reproject|${fromId}->${toId}`, () => {
+            logger.info(
+              'selectRigSpecModifierToggleReproject',
+              `modifier toggle on "${part.name ?? part.id}" — keyforms re-projected from ${cachedParent.type}:${fromId} → ${liveEffectiveParent.type}:${toId} (cached at Init Rig; live stack diverged via per-part modifier disable)`,
+              {
+                partId: part.id,
+                partName: part.name,
+                cachedParent,
+                effectiveParent: liveEffectiveParent,
+              },
+            );
+          });
+        } else {
+          const missingSide = cachedRest ? 'effective' : 'cached';
+          const missingRef = cachedRest ? liveEffectiveParent : cachedParent;
+          _warnOncePerPart(
+            `${part.id}|reprojectAborted|${missingSide}|${missingRef.type}:${missingRef.id ?? 'root'}`,
+            () => {
+              logger.warn(
+                'selectRigSpecModifierToggleAborted',
+                `modifier toggle on "${part.name ?? part.id}" ignored — ${missingSide} parent ${missingRef.type}:${missingRef.id ?? 'root'} has no rest state (broken project data); part stays bound to cached parent`,
+                {
+                  partId: part.id,
+                  partName: part.name,
+                  missingSide,
+                  missingParent: missingRef,
+                  cachedParent,
+                  liveEffectiveParent,
+                },
+              );
             },
           );
-        });
+          effectiveParent = cachedParent;
+          emittedChain = _resolveFullModifierChain(part, nodeById);
+          needsReproject = false;
+        }
       }
 
       // FULL-BLENDER bone deformation: bone-baked parts (handwear/legwear
@@ -633,7 +674,6 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
           ? _reprojectKeyformVerts(
               cachedVerts, cachedParent, effectiveParent,
               warpRestById, rotationRestById,
-              { id: part.id, name: part.name },
             )
           : cachedVerts;
         return /** @type {object} */ ({
@@ -662,7 +702,7 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         // (it's not a chain-deformer), so the emitted chain is `[]` and
         // chainEval early-returns while the renderer's bone post-chain
         // (`applyTwoBoneSkinning`) handles LBS.
-        modifierChain: stackLeaf.hasModifiers ? stackLeaf.chain : null,
+        modifierChain: emittedChain,
         verticesCanvas: new Float32Array(flatVerts),
         triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
         uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
@@ -840,6 +880,29 @@ function _resolveEffectiveLeafModifier(part, nodeById) {
  * @returns {Array<{type: string, id: string}>|null}
  */
 function _resolveModifierChain(part, nodeById) {
+  return _resolveModifierChainInternal(part, nodeById, /* includeDisabled */ false);
+}
+
+/**
+ * Resolve the FULL per-part chain ignoring the `enabled` + mode-bitmask
+ * filter. Used by the modifier-toggle reproject-abort path in
+ * `_buildArtMeshes`: when the math for the live (filtered) chain is
+ * undefined, fall back to emitting the chain as if the user hadn't
+ * toggled anything — so chainEval walks the same chain the cached
+ * vertex positions were baked against. Preserves correct chain
+ * semantics for stacks that diverge from the deformer-graph natural
+ * topology (e.g. `[WarpA, BreathWarp, BodyXWarp]` where WarpA's
+ * natural parent is BodyWarp, not BreathWarp).
+ *
+ * @param {object} part
+ * @param {Map<string, object>} nodeById
+ * @returns {Array<{type: string, id: string}>|null}
+ */
+function _resolveFullModifierChain(part, nodeById) {
+  return _resolveModifierChainInternal(part, nodeById, /* includeDisabled */ true);
+}
+
+function _resolveModifierChainInternal(part, nodeById, includeDisabled) {
   if (!part || !Array.isArray(part.modifiers) || part.modifiers.length === 0) {
     return null;
   }
@@ -850,11 +913,13 @@ function _resolveModifierChain(part, nodeById) {
     // rotation modifier references its deformer node via `deformerId`.
     const refId = _modifierRefId(mod);
     if (typeof refId !== 'string') continue;
-    if (mod.enabled === false) continue;
-    const mode = typeof mod.mode === 'number'
-      ? mod.mode
-      : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
-    if ((mode & LIVE_RENDER_REQUIRED_MODE) === 0) continue;
+    if (!includeDisabled) {
+      if (mod.enabled === false) continue;
+      const mode = typeof mod.mode === 'number'
+        ? mod.mode
+        : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
+      if ((mode & LIVE_RENDER_REQUIRED_MODE) === 0) continue;
+    }
     const target = nodeById.get(refId);
     if (!isChainDeformerNode(target)) continue;
     const type = isRotationDeformerNode(target) ? 'rotation' : 'warp';
@@ -890,52 +955,31 @@ function _parentRefsEqual(a, b) {
  *   - warp parent       → 0..1 normalised over the parent's REST canvas bbox
  *   - rotation parent   → canvas-px offsets from the parent's pivot
  *
- * Falls back to passing the buffer through unchanged when either side's
- * rest state is unavailable (defensive — the chain renders with
- * mild geometric drift rather than throwing).
+ * Caller MUST verify both `fromParent` and `toParent` have rest state
+ * (`_hasRestState`) before invoking. The Blender-`is_disabled` analogue
+ * lives at the caller — when rest state is missing, the toggle gets
+ * treated as no-op for that part instead of attempting an undefined
+ * re-projection. See `_buildArtMeshes`' reproject decision block.
  *
  * @param {Float32Array | ArrayLike<number>} verts
  * @param {{type:string,id:string|null}} fromParent
  * @param {{type:string,id:string|null}} toParent
  * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
  * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
- * @param {{id?:string, name?:string}} [partRefForDiag] - optional part
- *   identity for once-per-part diagnostic logging when the silent-
- *   passthrough path fires (RULE-№4 audit follow-on, 2026-05-23).
  * @returns {Float32Array}
  */
-function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotationRestById, partRefForDiag) {
+function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotationRestById) {
   const fromCtx = _buildFrameCtx(fromParent, warpRestById, rotationRestById);
   const toCtx = _buildFrameCtx(toParent, warpRestById, rotationRestById);
   if (fromCtx === null || toCtx === null) {
-    // One side has no rest state — defensive passthrough produces
-    // verts in the WRONG frame for chainEval downstream (the cached-
-    // frame local values pass through unchanged into what chainEval
-    // treats as the effective-frame local values, producing a silent
-    // geometry shift the user can't trace back to their modifier
-    // toggle). Surface once per (part, fromParent, toParent, side)
-    // so the Logs panel exposes the missing rest state.
-    if (partRefForDiag && typeof partRefForDiag.id === 'string') {
-      const missing = fromCtx === null ? 'cached' : 'effective';
-      const missingRef = fromCtx === null ? fromParent : toParent;
-      _warnOncePerPart(
-        `${partRefForDiag.id}|reprojectPassthrough|${missing}|${missingRef.type}:${missingRef.id ?? 'root'}`,
-        () => {
-          logger.warn(
-            'selectRigSpecReprojectSilentPassthrough',
-            `keyform reprojection on "${partRefForDiag.name ?? partRefForDiag.id}" silently passed verts through — ${missing} parent ${missingRef.type}:${missingRef.id ?? 'root'} has no rest state; downstream geometry will be in the wrong frame`,
-            {
-              partId: partRefForDiag.id,
-              partName: partRefForDiag.name,
-              missingSide: missing,
-              missingParent: missingRef,
-              fromParent,
-              toParent,
-            },
-          );
-        },
-      );
-    }
+    // Invariant violation: caller failed to gate on `_hasRestState`.
+    // Surface loudly (this path used to silently passthrough verts in
+    // the wrong frame, producing geometry drift the user couldn't trace).
+    logger.error(
+      'selectRigSpecReprojectInvariantViolation',
+      'reprojectKeyformVerts called without verified rest state — caller must gate on _hasRestState',
+      { fromParent, toParent, fromCtxNull: fromCtx === null, toCtxNull: toCtx === null },
+    );
     const out = new Float32Array(verts.length);
     for (let i = 0; i < verts.length; i++) out[i] = verts[i];
     return out;
@@ -984,6 +1028,24 @@ function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotat
  * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
  * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
  */
+/**
+ * True iff `_buildFrameCtx(parent, ...)` would return non-null.
+ * Caller-side probe so `_buildArtMeshes` can branch BEFORE attempting
+ * a reproject — when this returns false, the modifier-toggle reproject
+ * gets aborted and the toggle is treated as no-op for that part
+ * (Blender `BKE_modifier_is_enabled` idiom for broken targets).
+ *
+ * @param {{type:string,id:string|null}|null|undefined} parent
+ * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
+ * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
+ */
+function _hasRestState(parent, warpRestById, rotationRestById) {
+  if (!parent || parent.type === 'root' || !parent.id) return true;
+  if (parent.type === 'warp') return !!warpRestById.get(parent.id)?.bbox;
+  if (parent.type === 'rotation') return !!rotationRestById.get(parent.id)?.pivot;
+  return true;
+}
+
 function _buildFrameCtx(parent, warpRestById, rotationRestById) {
   if (!parent || parent.type === 'root' || !parent.id) {
     return { kind: 'canvas' };
