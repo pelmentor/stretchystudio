@@ -52,6 +52,7 @@ import {
   synthesizeModifierStacks,
   synthesizeDeformerParents,
 } from '../../../store/deformerNodeSync.js';
+import { DEFAULT_MIGRATED_MODE } from '../../../store/migrations/v21_modifier_mode_flags.js';
 import { coerceNumberArray } from '../../../lib/numberArrayCoerce.js';
 import {
   getRigWarpNodes,
@@ -280,17 +281,39 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
       // Phase 5 — emit Blender-Lattice objects (+ cage), not legacy nodes.
       upsertWarpAsLattice(project.nodes, spec);
     }
-    // Sync parts[i].rigParent: every part covered by the map gets
-    // pointed at its rigWarp deformer's id.
+    // M1 (RULE-№4 modifier-stack flip, 2026-05-23): write the leaf modifier
+    // entry directly into `part.modifiers[0]`. `part.rigParent` is now
+    // purely DERIVED by `synthesizeDeformerParents` below — this seam is
+    // the authoring source-of-truth, mirroring Blender's `Object.modifiers`
+    // as the per-Object stack the user authors against. Pre-M1 this site
+    // wrote `partNode.rigParent = spec.id` and let `synthesizeModifierStacks`
+    // walk up from there; flipping the write surface lets the synth use
+    // `modifiers[0]` as the canonical leaf hint and demotes `rigParent` to
+    // a derived mirror (full retirement deferred to slice M4).
     for (const [partId, spec] of Object.entries(finalMap)) {
       if (!spec || typeof spec.id !== 'string') continue;
       const partNode = project.nodes.find((n) => n && n.id === partId && n.type === 'part');
-      if (partNode) partNode.rigParent = spec.id;
+      if (!partNode) continue;
+      const leafEntry = {
+        type: 'lattice',
+        objectId: spec.id,
+        enabled: true,
+        mode: DEFAULT_MIGRATED_MODE,
+        showInEditor: true,
+      };
+      if (!Array.isArray(partNode.modifiers)) partNode.modifiers = [];
+      // Replace just the leaf — preserve modifiers[1..] so the synth's
+      // priorFlags carry-forward keeps user enable/mode toggles on
+      // ancestor chain modifiers (BodyXWarp, BreathWarp, etc.) across
+      // the re-rig.
+      partNode.modifiers[0] = leafEntry;
     }
-    // Phase 3 storage flip — derive each part's modifier stack from
-    // the freshly-updated rigParent + deformer tree.
+    // Walk up `def.parent` from each part's pinned leaf to materialise
+    // the full per-part stack.
     synthesizeModifierStacks(project);
-    // V2 Phase 0.3 — modifier stacks are canonical; mirror to parent links.
+    // Mirror the canonical stack back onto the legacy parent-link shape
+    // (`deformer.parent` + `part.rigParent`) so export consumers + the
+    // migration-bootstrap fallback stay consistent.
     synthesizeDeformerParents(project);
   }
   return finalMap;
@@ -307,14 +330,17 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
 export function clearRigWarps(project) {
   if (Array.isArray(project.nodes)) {
     removeRigWarpNodes(project.nodes);
+    // M1 (RULE-№4 modifier-stack flip, 2026-05-23): authoring writes go to
+    // `part.modifiers[]`. Dropping the field is the authoritative "no rig
+    // warp" signal — the synth's leaf-resolution then either falls back to
+    // `mesh.runtime.parent` (bone-baked path) or produces an empty stack,
+    // and `synthesizeDeformerParents` clears the now-stale `part.rigParent`
+    // mirror downstream. Pre-M1 this site nulled `n.rigParent` directly.
     for (const n of project.nodes) {
-      if (n && n.type === 'part' && n.rigParent !== undefined) {
-        n.rigParent = null;
+      if (n && n.type === 'part' && Array.isArray(n.modifiers)) {
+        delete n.modifiers;
       }
     }
-    // Phase 3 storage flip — modifier stacks reflect the (now-empty)
-    // rigParent state. With rigParent cleared everywhere, every part's
-    // stack drops to empty and the field is removed.
     synthesizeModifierStacks(project);
     synthesizeDeformerParents(project);
   }

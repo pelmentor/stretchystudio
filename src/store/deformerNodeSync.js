@@ -363,22 +363,27 @@ export function synthesizeDeformerNodesFromSidetables(project) {
 }
 
 /**
- * Phase 3 storage flip — derive each part's `Object.modifiers[]` stack
- * from the existing deformer-node tree. Pure derivation: reads only
- * `project.nodes` (deformer parent links + part.rigParent), writes to
- * `part.modifiers`.
+ * Per-part `Object.modifiers[]` stack synth. Walks the deformer chain
+ * upward from a leaf identifier and materialises the full leaf-to-root
+ * stack on the part, mirroring Blender's per-Object `Object.modifiers`
+ * ListBase shape.
  *
- * V2 Phase 0.3 update — modifier stacks are now CANONICAL; parent-link
- * shape (`deformer.parent` + `part.rigParent`) is a derived mirror.
- * `synthesizeModifierStacks` is called wherever the parent-link shape
- * has been freshly mutated (today's seed pipeline still mutates parent
- * links first because the harvest produces parent-keyed specs); the
- * companion `synthesizeDeformerParents` mirrors back. Future callers
- * should mutate stacks directly and trust the inverse synth to
- * maintain the parent-link mirror.
+ * Leaf-resolution priority (M1 RULE-№4 modifier-stack flip, 2026-05-23):
+ *   1. `part.modifiers[0]?.{objectId|deformerId}` — the AUTHORING source.
+ *      Writers like `rigWarpsStore.seedRigWarps` populate this directly.
+ *   2. `part.rigParent` — legacy / v15-migration bootstrap source. Kept
+ *      as a fallback so projects saved before the M1 flip still load.
+ *      Slice M4 retires this read entirely.
+ *   3. `part.mesh.runtime.parent.id` — bone-baked fallback (no leaf in
+ *      either persisted surface; chain is cached at Init Rig time so the
+ *      stack honestly surfaces the body-warp modifiers riding above).
  *
- * The Blender modifier stack is a per-Object ordered list. SS today
- * encodes the equivalent via implicit chain traversal: a part's
+ * V2 Phase 0.3 (still in force) — modifier stacks are CANONICAL; the
+ * legacy parent-link shape (`deformer.parent` + `part.rigParent`) is a
+ * derived mirror maintained by the companion `synthesizeDeformerParents`.
+ *
+ * The Blender modifier stack is a per-Object ordered list. SS originally
+ * encoded the equivalent via implicit chain traversal: a part's
  * `rigParent` points at the leaf deformer, which carries `parent` up to
  * the next deformer, up to root. Walking that chain in leaf-to-root
  * order yields the part's modifier stack.
@@ -501,19 +506,29 @@ export function synthesizeModifierStacks(project) {
         showInEditor: p && typeof p.showInEditor === 'boolean' ? p.showInEditor : true,
       };
     };
-    let cur = typeof part.rigParent === 'string' && part.rigParent.length > 0
-      ? part.rigParent
-      : null;
-    // Bone-baked / body-only parts (e.g. legwear) carry NO `rigParent` but
-    // DO ride a deformer chain cached in `mesh.runtime.parent` — the same
-    // source `selectRigSpec` evaluates them through. Without this fallback
-    // their stack shows only the appended Armature, hiding the body-warp
-    // Lattice modifiers that actually warp their geometry (the original
-    // "legwear has no warp modifier" discoverability gap). Seed the walk
-    // from the runtime parent so the stack is HONEST and drives eval
-    // (Blender: the affected piece declares its Lattice modifier). The
-    // companion `synthesizeDeformerParents` then writes `rigParent` back
-    // from the resulting stack, so subsequent rebuilds are stable.
+    // M1 (RULE-№4 modifier-stack flip): authoring sources WRITE the leaf
+    // into `part.modifiers[0]`. The legacy seam (v15 sidetables migration
+    // helper + previously-saved projects) writes `part.rigParent` instead;
+    // honour it as a fallback so migrated saves keep round-tripping.
+    // Future slice M4 retires `rigParent` as a runtime read entirely.
+    let cur = null;
+    if (Array.isArray(part.modifiers) && part.modifiers.length > 0) {
+      const m0 = part.modifiers[0];
+      const leafId = m0 && (m0.type === 'lattice' ? m0.objectId : m0.deformerId);
+      if (typeof leafId === 'string' && leafId.length > 0) cur = leafId;
+    }
+    if (!cur && typeof part.rigParent === 'string' && part.rigParent.length > 0) {
+      cur = part.rigParent;
+    }
+    // Bone-baked / body-only parts (e.g. legwear) carry NO leaf in either
+    // surface but DO ride a deformer chain cached in `mesh.runtime.parent`
+    // — the same source `selectRigSpec` evaluates them through. Without
+    // this fallback their stack shows only the appended Armature, hiding
+    // the body-warp Lattice modifiers that actually warp their geometry
+    // (the original "legwear has no warp modifier" discoverability gap).
+    // Seed the walk from the runtime parent so the stack is HONEST and
+    // drives eval (Blender: the affected piece declares its Lattice
+    // modifier). Slice M2 promotes this into the persisted stack.
     if (!cur) {
       const rtParentId = part.mesh?.runtime?.parent?.id;
       if (typeof rtParentId === 'string' && rtParentId.length > 0) {
@@ -671,7 +686,17 @@ export function synthesizeDeformerParents(project) {
   for (const part of project.nodes) {
     if (!part || part.type !== 'part') continue;
     const stack = Array.isArray(part.modifiers) ? part.modifiers : null;
-    if (!stack || stack.length === 0) continue;
+    // M1 (RULE-№4 modifier-stack flip): true inverse — an empty / missing
+    // modifier stack means "no per-part rig". Clear `rigParent` so the
+    // mirror matches; otherwise `clearRigWarps` would leave stale leaf
+    // pointers around for the v15-fallback path in `synthesizeModifierStacks`
+    // to pick up next round.
+    if (!stack || stack.length === 0) {
+      if (typeof part.rigParent === 'string' && part.rigParent.length > 0) {
+        part.rigParent = null;
+      }
+      continue;
+    }
 
     // Filter to deformer-backed entries (`type: 'warp' | 'rotation'`).
     // The Armature modifier (`type: 'armature'`, BONE_ARMATURE_INDEPENDENCE
@@ -680,7 +705,14 @@ export function synthesizeDeformerParents(project) {
     const deformerStack = stack.filter(
       (m) => m && (m.type === 'warp' || m.type === 'rotation' || m.type === 'lattice'),
     );
-    if (deformerStack.length === 0) continue;
+    if (deformerStack.length === 0) {
+      // Armature-only stack: no deformer leaf to write. Clear any stale
+      // rigParent so the mirror doesn't point at a now-absent deformer.
+      if (typeof part.rigParent === 'string' && part.rigParent.length > 0) {
+        part.rigParent = null;
+      }
+      continue;
+    }
 
     // v43 — a lattice modifier references its cage object via `objectId`;
     // warp/rotation modifiers reference a deformer node via `deformerId`.
