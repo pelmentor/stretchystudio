@@ -145,21 +145,22 @@ export function ModifierStackSection({ nodeId }) {
         </div>
       )}
       {stack.map((mod, idx) => {
-        // FULL-BLENDER (2026-05-22): Blender has NO rotation-deformer
-        // modifier — group rotation is a bone/empty transform, not a
-        // modifier. SS's Cubism `GroupRotation_*`/`*Rotation` deformers are
-        // surfaced in `part.modifiers[]` only because the stack is derived
-        // from the Cubism deformer chain; don't DISPLAY them as modifiers.
-        // The modifier stack now shows only Blender-real modifiers (Lattice +
-        // Armature). The rotation deformers still exist + evaluate + export
-        // (eval untouched) and remain editable via the Node Tree / Outliner.
-        // `idx` stays the real `part.modifiers[]` index so the toggle/reorder
-        // handlers below operate on the correct entries.
-        // NOTE: this is the DISPLAY layer. Removing rotation entries from the
-        // model (`synthesizeModifierStacks`) is the deeper fix but requires
-        // unifying eval to walk `def.parent` for rotation steps (else every
-        // rotation-deformed part breaks) — a verified follow-up.
-        if (mod.type === 'rotation') return null;
+        // M5 (RULE-№4, 2026-05-23): the rotation-display filter was retired.
+        // Post-RULE-№4 v44 migration (`migrations/groupRotationToBone.js`)
+        // removes every `GroupRotation_*` deformer node from `project.nodes`
+        // BEFORE `synthesizeModifierStacks` runs in seedAllRig
+        // (`projectStore.js:1646` migrate → 1653 synth), so the synth's
+        // chain-walk never encounters a rotation deformer and no
+        // `mod.type === 'rotation'` entry is ever emitted into
+        // `part.modifiers[]` for any project that has completed Init Rig.
+        // The `GroupRotation` export adapter
+        // (`synthesizeGroupRotationDeformers.js`) is transient-only — it
+        // produces rotation nodes for the export pipeline but never mutates
+        // `project.nodes`. The previous silent filter (`if (mod.type ===
+        // 'rotation') return null`) was dead code; deleted along with its
+        // explanatory comment block. If a degenerate pre-v44 fixture ever
+        // surfaces a rotation entry, `typeBadge` below will display it
+        // honestly instead of hiding it.
         const mode = typeof mod.mode === 'number'
           ? mod.mode
           : (MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER);
