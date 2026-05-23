@@ -153,7 +153,8 @@ export function applyArmatureModifier(partId) {
   //
   // 2026-05-09 (later same day): the prior version of this code
   // deleted `mesh.runtime` to "let `selectRigSpec`'s pre-rig fallback
-  // rebuild." But the pre-rig fallback (`selectRigSpec.js:563-638`)
+  // rebuild." But the pre-rig fallback (`selectRigSpec._buildArtMeshes`,
+  // the post-runtime branch — search "Pre-rig fallback" in the file)
   // was designed for fresh-import projects whose `mesh.vertices` are
   // in REST canvas-px. After Apply, mesh.vertices is in POSED
   // canvas-px (LBS bake output). At the time, the fallback read

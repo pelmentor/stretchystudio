@@ -1030,8 +1030,10 @@ export const useProjectStore = create((set, get) => {
     // 2026-05-09 (afternoon): an earlier version of this code did a
     // linear-only in-place bake (`vp[i] = m0*x + m3*y`) which assumed
     // keyforms were in joint-bone-pivot-relative frame — they're
-    // actually in PARENT-DEFORMER-LOCAL frame
-    // (`selectRigSpec.js:580-613`). Linear-only is correct only when
+    // actually in PARENT-DEFORMER-LOCAL frame (see
+    // `selectRigSpec._buildArtMeshes` frame-conversion logic — the
+    // warp/rotation/canvas branches under "Frame-convert canvas-px
+    // verts → parent-deformer-local"). Linear-only is correct only when
     // the parent deformer's pivot coincides with the joint bone's
     // pivot (limb case). For non-limb rigid-intent parts (handwear,
     // face-region under a non-coincident parent), the formula rotated
