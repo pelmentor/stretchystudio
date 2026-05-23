@@ -511,34 +511,24 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       // local frame to the effective parent's, so chainEval's chain
       // walk lands the geometry in the right space.
       const stackLeaf = _resolveEffectiveLeafModifier(part, nodeById);
-      // Bone-baked-path bypass — bone-baked parts (legwear etc.) carry
-      // an Armature modifier in `part.modifiers[]` whose `deformerId`
-      // points at the bone GROUP node (post-RULE-№4 v44 migration). The
-      // bone group is NOT a chain-deformer node (`isChainDeformerNode`
-      // returns false for `type:'group'`), so `_resolveModifierChain`
-      // skips it and produces an empty warp/rotation chain. We surface
-      // `modifierChain: null` for those parts so chainEval early-returns
-      // and the renderer's bone post-chain (`applyTwoBoneSkinning`)
-      // handles LBS. Detection: `cachedParent.id` (the bone group)
-      // exists but isn't referenced by any warp/rotation entry in
-      // `part.modifiers[]` — only the Armature entry covers it, and
-      // Armature is intentionally excluded from the chain.
-      // M2.1 (2026-05-23): the matching depgraph kernel fallback
-      // (`walkDeformerParentChain`) was retired; the bone transform now
-      // comes from `applyBonePostChainSkin` exclusively.
-      const cachedRefInModifiers = !!(
-        cachedParent.id
-        && Array.isArray(part.modifiers)
-        && part.modifiers.some((m) => m && _modifierRefId(m) === cachedParent.id)
-      );
-      const modifierStackComplete = !stackLeaf.hasModifiers
-        || !cachedParent.id
-        || cachedRefInModifiers;
-      const effectiveParent = (stackLeaf.hasModifiers && modifierStackComplete)
+      // M2.2 (RULE-№4, 2026-05-23): the `cachedRefInModifiers` /
+      // `modifierStackComplete` gate that used to suppress the chain when
+      // `runtime.parent.id` wasn't referenced by any `modifiers[]` entry
+      // is retired. The gate was needed pre-RULE-№4 because bone-baked
+      // parts' rotation chain lived only in `runtime.parent`. Post-RULE-№4
+      // (v44 migration mandatory; v45+) the chain is always in
+      // `modifiers[]`: rigWarp parts carry the lattice leaf, bone-baked
+      // parts carry an Armature modifier whose `deformerId` matches the
+      // bone group `cachedParent.id` (so the gate was always true). M2.1
+      // already retired the matching depgraph kernel fallback; the gate
+      // is the selectRigSpec twin of that dead code. `modifierChain: null`
+      // is now emitted ONLY for parts with no `modifiers[]` at all
+      // (`stackLeaf.hasModifiers === false`) — meaning "no per-part rig;
+      // chainEval uses the cached parent verbatim".
+      const effectiveParent = stackLeaf.hasModifiers
         ? stackLeaf.effectiveParent
         : cachedParent;
-      const needsReproject = modifierStackComplete
-        && !_parentRefsEqual(cachedParent, effectiveParent);
+      const needsReproject = !_parentRefsEqual(cachedParent, effectiveParent);
 
       // FULL-BLENDER bone deformation: bone-baked parts (handwear/legwear
       // riding a bone) are deformed live by `applyBonePostChainSkin` /
@@ -585,15 +575,14 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         // pointer (which can't express divergent per-part chains for
         // shared deformers).
         //
-        // Suppressed (= null) for parts whose only chain-relevant entry
-        // is an Armature modifier — the bone group isn't a chain-deformer
-        // node, so the warp/rotation chain is empty. chainEval's early-
-        // return + the renderer's bone post-chain pass own the geometry
-        // for those parts (post-RULE-№4 + M2.1: no implicit-parent walk
-        // anywhere; bone transform = `applyTwoBoneSkinning` only).
-        modifierChain: (stackLeaf.hasModifiers && modifierStackComplete)
-          ? stackLeaf.chain
-          : null,
+        // Suppressed (= null) for parts with no `modifiers[]` at all —
+        // chainEval treats null as "no per-part chain; use the cached
+        // parent verbatim". Bone-baked parts always have at least an
+        // Armature entry; `_resolveModifierChain` filters Armature out
+        // (it's not a chain-deformer), so the emitted chain is `[]` and
+        // chainEval early-returns while the renderer's bone post-chain
+        // (`applyTwoBoneSkinning`) handles LBS.
+        modifierChain: stackLeaf.hasModifiers ? stackLeaf.chain : null,
         verticesCanvas: new Float32Array(flatVerts),
         triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
         uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),

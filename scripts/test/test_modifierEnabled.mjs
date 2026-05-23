@@ -557,15 +557,19 @@ function findById(arr, id) {
     'lattice: topwear skips disabled BodyXWarp — outer becomes BodyZWarp');
 }
 
-// ---- 9c. Bone-baked-path bypass: modifierChain suppressed when runtime.parent
-//        points to a deformer not in part.modifiers[] ----
+// ---- 9c. Pre-RULE-№4 fixture no longer auto-bypassed (M2.2 pin) ----
 {
-  // Simulates a bone-baked part (legwear): runtime.parent points to a
-  // GroupRotation deformer that's NOT in part.modifiers[] (v21
-  // synthesizeModifierStacks only inserts body-warp synthetics, not
-  // bone rotations). The modifier stack is incomplete — chainEval
-  // must fall back to the global parent-pointer walk to render the
-  // bone-baked offset correctly.
+  // Pre-RULE-№4 shape: runtime.parent points to a GroupRotation deformer
+  // that is NOT in modifiers[]. Pre-M2.2 the selector emitted
+  // `modifierChain: null` + `parent = cachedParent` so chainEval would
+  // do a global parent-pointer walk (the "bone-baked-path bypass").
+  //
+  // M2.2 (2026-05-23, RULE-№4): bypass retired. Post-v44 migration is
+  // mandatory + emits Armature modifiers in modifiers[]; the
+  // `cachedRefInModifiers` / `modifierStackComplete` gate is dead for
+  // any loaded project. Synthetic pre-RULE-№4 fixtures like this one
+  // now emit the actual modifier stack's chain + leaf (BodyXWarp), not
+  // the cached rotation. Production projects never reach this state.
   const project = {
     canvas: { width: 1280, height: 1280 },
     parameters: [],
@@ -579,8 +583,8 @@ function findById(arr, id) {
         keyforms: [{ keyTuple: [], positions: new Float64Array([0, 0, 200, 0, 0, 200, 200, 200]) }],
         bindings: [],
       },
-      // Bone rotation — exists in project.nodes but NOT referenced by
-      // any part's modifier stack (gets emitted via orphan fallback).
+      // Pre-RULE-№4 rotation deformer (would have been converted to a bone
+      // by v44 migration on any real load).
       {
         id: 'GroupRotation_leftLeg', type: 'deformer', deformerKind: 'rotation',
         name: 'GroupRotation_leftLeg', parent: 'BodyXWarp',
@@ -588,8 +592,6 @@ function findById(arr, id) {
         keyforms: [{ keyTuple: [], angle: 0, originX: 100, originY: 100, scale: 1 }],
         bindings: [],
       },
-      // Bone-baked legwear — runtime.parent = GroupRotation; modifiers
-      // list contains only body warps (not the bone rotation).
       {
         id: 'legwear-l', type: 'part', name: 'legwear-l',
         mesh: {
@@ -603,7 +605,6 @@ function findById(arr, id) {
           },
         },
         modifiers: [
-          // v21 synthesised body-warp entry; bone rotation is absent.
           { type: 'warp', deformerId: 'BodyXWarp',
             data: { name: 'BodyXWarp', gridSize: { rows: 1, cols: 1 },
               baseGrid: new Float64Array([0, 0, 200, 0, 0, 200, 200, 200]),
@@ -615,15 +616,62 @@ function findById(arr, id) {
   };
   const rigSpec = selectRigSpec(project);
   const am = rigSpec.artMeshes.find((a) => a.id === 'legwear-l');
-  assert(!!am, 'bone-baked artMesh built');
-  // modifierChain MUST be null so chainEval falls back to the global
-  // parent-pointer walk and includes the bone rotation in the chain.
-  assert(am?.modifierChain === null,
-    'bone-baked part: modifierChain suppressed (legacy walk preserves bone rotation)');
-  // Parent stays at the cached runtime.parent (the bone rotation), NOT
-  // overridden to the modifier stack's leaf.
-  assert(am?.parent?.type === 'rotation' && am?.parent?.id === 'GroupRotation_leftLeg',
-    'bone-baked part: artMesh.parent stays at runtime.parent (GroupRotation)');
+  assert(!!am, 'M2.2 pin: pre-RULE-№4 fixture still builds an artMesh');
+  // modifierChain is the actual stack now — BodyXWarp, NOT null.
+  assert(Array.isArray(am?.modifierChain) && am.modifierChain.length === 1
+    && am.modifierChain[0].id === 'BodyXWarp',
+    'M2.2 pin: pre-RULE-№4 fixture emits the actual stack (BodyXWarp), not null');
+  // Parent comes from the modifier stack's leaf, not the cached rotation.
+  assert(am?.parent?.type === 'warp' && am?.parent?.id === 'BodyXWarp',
+    'M2.2 pin: parent reflects the modifier stack leaf (BodyXWarp), not cached rotation');
+}
+
+// ---- 9c.post-M2.2: post-RULE-№4 bone-baked shape emits empty chain ----
+{
+  // Post-RULE-№4 bone-baked legwear: bone group as project parent,
+  // Armature modifier whose deformerId points at the bone group.
+  // `_resolveModifierChain` filters out Armature (not a chain-deformer),
+  // producing an empty chain. `modifierChain: []` signals chainEval to
+  // early-return; the renderer's bone post-chain handles LBS.
+  const project = {
+    canvas: { width: 1280, height: 1280 },
+    parameters: [],
+    nodes: [
+      { id: 'leftKnee', type: 'group', boneRole: 'leftKnee',
+        transform: { x: 0, y: 0, rotation: 0, scale: 1, pivotX: 0, pivotY: 0 },
+        pose: { rotation: 0 } },
+      {
+        id: 'legwear-l', type: 'part', name: 'legwear-l',
+        parent: 'leftKnee',
+        modifiers: [
+          { type: 'armature', deformerId: 'leftKnee', enabled: true, mode: 3,
+            showInEditor: true,
+            data: { jointBoneId: 'leftKnee', parentBoneId: null } },
+        ],
+        mesh: {
+          vertices: [{ x: 50, y: 50 }],
+          triangles: [], uvs: [],
+          jointBoneId: 'leftKnee',
+          boneWeights: [[1, 0]],
+          runtime: {
+            parent: { type: 'part', id: 'leftKnee' },
+            bindings: [],
+            keyforms: [{ keyTuple: [], vertexPositions: [50, 50], opacity: 1 }],
+          },
+        },
+      },
+    ],
+  };
+  const rigSpec = selectRigSpec(project);
+  const am = rigSpec.artMeshes.find((a) => a.id === 'legwear-l');
+  assert(!!am, 'post-RULE-№4 bone-baked: artMesh built');
+  // Armature is filtered out of the warp/rotation chain → empty array.
+  assert(Array.isArray(am?.modifierChain) && am.modifierChain.length === 0,
+    'post-RULE-№4 bone-baked: modifierChain is empty array (Armature filtered)');
+  // effectiveParent comes from the empty chain → root (matches the
+  // synthesizer's allDisabled=true return shape).
+  assert(am?.parent?.type === 'root' && am?.parent?.id === null,
+    'post-RULE-№4 bone-baked: parent = root (empty chain has no leaf)');
 }
 
 // ---- 9b. modifierChain: empty array when all disabled, null when no stack ----
