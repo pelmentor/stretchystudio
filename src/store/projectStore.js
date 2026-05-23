@@ -1067,6 +1067,11 @@ export const useProjectStore = create((set, get) => {
         flat[i * 2]     = verts[i].x;
         flat[i * 2 + 1] = verts[i].y;
       }
+      // M3.3 (RULE-№4, 2026-05-23): `runtime.parent` is no longer
+      // persisted — the chain leaf is derived from `part.modifiers[0]`
+      // (selectRigSpec) and project topology (synthesizeModifierStacks
+      // via `findInnermostBodyWarpId`). v47 migration strips the field
+      // from any pre-M3.3 save on load.
       meshN.runtime = {
         bindings: [],
         keyforms: [{
@@ -1074,7 +1079,6 @@ export const useProjectStore = create((set, get) => {
           vertexPositions: flat,
           opacity: 1,
         }],
-        parent: { type: 'root', id: null },
       };
       bakedAnything = true;
     }
@@ -1610,14 +1614,14 @@ export const useProjectStore = create((set, get) => {
       // silently disappear from the live preview.
       //
       // ORDER: this MUST run before `migrateGroupRotationDeformersToBones`
-      // below, which discovers driven parts via `runtime.parent` (see
-      // `groupRotationToBone.js:73`). Post-M3.2 (2026-05-23) the modifier
-      // stack synth at line 1653 derives the bone-baked chain seed via
-      // `findInnermostBodyWarpId` over `project.nodes` topology — no
-      // longer reads `runtime.parent` — so this persistArtMeshRuntime →
-      // synth ordering is now load-bearing only for the migration in
-      // between (which is the remaining `runtime.parent` reader; M3.3 +
-      // v48 will retire it together with the field itself).
+      // below, which derives each rotation deformer's CANVAS-FINAL bone
+      // head from `mesh.vertices − mesh.runtime.keyforms[0].vertexPositions`
+      // (see `groupRotationToBone.js` → `deriveCanvasPivot`). Without the
+      // runtime cache populated first, the migration falls back to the
+      // authored origin (warp-local for warp-parented rotations, wrong
+      // canvas-final value). Post-M3.3 (2026-05-23) the ordering is
+      // load-bearing for `runtime.keyforms` only — `runtime.parent` is
+      // retired (no writer, no live reader; v47 strips the field on load).
       if (harvest?.rigSpec) {
         peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
         // RULE №4 follow-up Slice 2 (2026-05-23) — mirror the eye-
@@ -1637,12 +1641,16 @@ export const useProjectStore = create((set, get) => {
       // Cubism deformer is a downstream export adapter
       // (`synthesizeGroupRotationDeformers`), not the authoring model.
       // Runs AFTER `persistArtMeshRuntime` because it derives each part's
-      // bone head from `mesh.vertices − pivot-relative runtime keyform`
-      // (and finds the driven parts via `runtime.parent`), and BEFORE the
-      // stack synthesis below so the bone-bound parts surface an Armature
-      // modifier (not a stale `rotation` entry) and the rotation deformer
-      // nodes are gone. Validated end-to-end (nested + warp-parented
-      // multi-rotation) by `test_groupRotationMigrationRealRig`.
+      // bone head from `mesh.vertices − pivot-relative runtime keyform`,
+      // and BEFORE the stack synthesis below so the bone-bound parts
+      // surface an Armature modifier (not a stale `rotation` entry) and
+      // the rotation deformer nodes are gone. Post-M3.3 (2026-05-23) the
+      // migration no longer reads `mesh.runtime.parent`; driven parts
+      // are discovered via `rigParent === def.id` OR `part.parent ===
+      // groupName` (the topology signal that subsumes the retired runtime
+      // cache for the nested-rotation case). Validated end-to-end (nested
+      // + warp-parented multi-rotation) by
+      // `test_groupRotationMigrationRealRig`.
       peers.migrateGroupRotationDeformersToBones(proj);
       // Phase 3 storage flip — re-derive each part's modifier stack
       // after the full seed pass. The seedXxx fns each run synthesize

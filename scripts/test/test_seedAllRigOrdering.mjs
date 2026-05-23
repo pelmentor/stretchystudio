@@ -1,17 +1,26 @@
-// Regression guard for the fresh-Init-Rig ordering bug (2026-05-21).
+// Regression guard for the post-RULE-№4 seedAllRig peer-call ordering.
 //
-// `projectStore.seedAllRig` must run `persistArtMeshRuntime` BEFORE
-// `synthesizeModifierStacks`. Bone-baked parts (legwear etc.) carry no
-// `rigParent`; their deformer chain is only discoverable via
-// `mesh.runtime.parent`, which `persistArtMeshRuntime` writes from the
-// harvest. If the stacks are synthesised first, that field doesn't exist
-// yet and the part surfaces only its Armature modifier — the "legwear has
-// no warp/lattice modifier" discoverability gap the user hit on a fresh
-// PSD import + Init Rig.
+// History: the original 2026-05-21 contract REQUIRED `persistArtMeshRuntime`
+// to run BEFORE `synthesizeModifierStacks` because bone-baked parts (legwear
+// etc.) carried NO `rigParent` — their chain leaf was discoverable only via
+// `mesh.runtime.parent` (a Cubism-shaped runtime cache). If the stacks were
+// synthesised first, that field wasn't populated yet and the part surfaced
+// only its Armature modifier — the "legwear has no warp/lattice modifier"
+// discoverability gap a user hit on a fresh PSD import + Init Rig.
 //
-// This test replicates the seedAllRig peer-call sequence with the real
-// functions (no zustand store) and pins both the correct order (chain
-// visible) and the buggy order (chain hidden) so a future reorder fails.
+// Post-M3.2 (RULE-№4, 2026-05-23) the synth derives the chain leaf from
+// project topology via `findInnermostBodyWarpId` — a pure walk over
+// `project.nodes` that does NOT consult `mesh.runtime.parent`. Post-M3.3
+// the cache field is RETIRED entirely (no writer, v47 strips on load).
+//
+// So this test now pins the M3.3 invariant: BOTH orderings produce the
+// same chain because the chain derivation is order-independent. The
+// `persistArtMeshRuntime` → synth ordering in `seedAllRig` is still
+// load-bearing for a DIFFERENT reason: `migrateGroupRotationDeformersToBones`
+// (which runs between them) needs `mesh.runtime.keyforms` for its
+// canvas-final pivot derivation — see `groupRotationToBone.js` →
+// `deriveCanvasPivot` — and that ordering is asserted by
+// `test_groupRotationMigrationRealRig.mjs`.
 //
 // Run: node scripts/test/test_seedAllRigOrdering.mjs
 
@@ -33,8 +42,9 @@ function assertEq(actual, expected, name) {
 }
 
 // A bone-baked legwear part rides BodyXWarp (a v43 lattice object) but has
-// NO rigParent — exactly the shelby/anime-girl shape. The harvest reports
-// its parent so persistArtMeshRuntime can cache it on mesh.runtime.parent.
+// NO rigParent — exactly the shelby/anime-girl shape. Post-M3.3 the harvest
+// no longer needs to cache the part's parent because the chain derives from
+// topology in synthesizeModifierStacks.
 function makeProject() {
   return {
     nodes: [
@@ -49,6 +59,10 @@ function makeProject() {
 }
 
 // The harvest's rigSpec — legwear's art mesh declares BodyXWarp as parent.
+// Note: the `parent` field on the rigSpec art mesh is NOT persisted into
+// `mesh.runtime` anymore (M3.3); persistArtMeshRuntime drops it. The synth's
+// chain derivation comes from `findInnermostBodyWarpId(warpNodes, ...)`,
+// which finds `BodyXWarp` by topology (deepest 'BodyName' warp).
 const harvestRigSpec = {
   artMeshes: [
     { id: 'legwear', bindings: [], keyforms: [],
@@ -56,35 +70,35 @@ const harvestRigSpec = {
   ],
 };
 
-// ── Correct order: persist runtime FIRST, then synthesise stacks ──
+function expectChain(legwear, label) {
+  assert(Array.isArray(legwear.modifiers), `${label}: legwear has a modifier stack`);
+  assertEq(legwear.modifiers[0].type, 'lattice',
+    `${label}: stack[0] is the BodyXWarp lattice modifier (VISIBLE to the user)`);
+  assertEq(legwear.modifiers[0].objectId, 'BodyXWarp',
+    `${label}: stack[0].objectId = BodyXWarp`);
+  assertEq(legwear.modifiers[legwear.modifiers.length - 1].type, 'armature',
+    `${label}: Armature appended last`);
+}
+
+// ── Order A: persist runtime FIRST, then synthesise stacks ──
 {
   const project = makeProject();
   persistArtMeshRuntime(project, harvestRigSpec, 'replace');
   synthesizeModifierStacks(project);
   const legwear = project.nodes.find((n) => n.id === 'legwear');
-
-  assert(Array.isArray(legwear.modifiers), 'correct-order: legwear has a modifier stack');
-  assertEq(legwear.modifiers[0].type, 'lattice',
-    'correct-order: stack[0] is the BodyXWarp lattice modifier (VISIBLE to the user)');
-  assertEq(legwear.modifiers[0].objectId, 'BodyXWarp',
-    'correct-order: stack[0].objectId = BodyXWarp');
-  assertEq(legwear.modifiers[legwear.modifiers.length - 1].type, 'armature',
-    'correct-order: Armature appended last');
+  expectChain(legwear, 'persist-then-synth');
 }
 
-// ── Buggy order (regression pin): synthesise BEFORE persisting runtime ──
-// Documents WHY the order matters: with no runtime.parent yet, the
-// bone-baked fallback finds nothing and only the Armature shows. If a
-// future edit makes this order produce the lattice modifier too, great —
-// but today it must not, proving persist-first is load-bearing.
+// ── Order B: synth FIRST, then persist runtime ──
+// Post-M3.2 this produces the same chain as order A because synth derives
+// via topology, not from `mesh.runtime.parent`. Post-M3.3 there is no
+// `runtime.parent` field at all — the question is moot.
 {
   const project = makeProject();
-  synthesizeModifierStacks(project); // runtime.parent not written yet
+  synthesizeModifierStacks(project);
+  persistArtMeshRuntime(project, harvestRigSpec, 'replace');
   const legwear = project.nodes.find((n) => n.id === 'legwear');
-  assertEq(legwear.modifiers.length, 1,
-    'buggy-order: only the Armature modifier (the bug the reorder fixes)');
-  assertEq(legwear.modifiers[0].type, 'armature',
-    'buggy-order: lone entry is Armature — body warp hidden');
+  expectChain(legwear, 'synth-then-persist (M3.3 — order-independent)');
 }
 
 console.log(`seedAllRigOrdering: ${passed} passed, ${failed} failed`);

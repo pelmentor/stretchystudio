@@ -112,8 +112,10 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
   // Step 1b replaced runtime with minimal canvas-px entry.
   assert(after.mesh.runtime !== undefined && after.mesh.runtime !== null,
     'Test 1: post-bake runtime present (minimal canvas-px replacement)');
-  assert(after.mesh.runtime.parent && after.mesh.runtime.parent.type === 'root',
-    `Test 1: runtime.parent.type === 'root' (got ${after.mesh.runtime.parent?.type})`);
+  // M3.3 (RULE-№4, 2026-05-23): `runtime.parent` is no longer written;
+  // chain leaf derives from `part.modifiers[0]` + project topology.
+  assert(!('parent' in after.mesh.runtime),
+    'Test 1: M3.3 — minimal canvas-px runtime has no `parent` field');
   assert(Array.isArray(after.mesh.runtime.keyforms) && after.mesh.runtime.keyforms.length === 1,
     `Test 1: runtime has 1 keyform (got ${after.mesh.runtime.keyforms?.length})`);
   const kf = after.mesh.runtime.keyforms[0];
@@ -143,10 +145,10 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
     `Test 2: post-Apply mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
   assert(approx(after.mesh.vertices[0].y, 100),
     `Test 2: post-Apply mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
-  // Minimal runtime present (parent: root, single keyform canvas-px).
-  assert(after.mesh.runtime && after.mesh.runtime.parent
-    && after.mesh.runtime.parent.type === 'root',
-    `Test 2: runtime.parent.type === 'root' (got ${after.mesh.runtime?.parent?.type})`);
+  // Minimal runtime present (single keyform canvas-px). M3.3: no
+  // `parent` sub-field — chain leaf derives from `part.modifiers[0]`.
+  assert(after.mesh.runtime && !('parent' in after.mesh.runtime),
+    'Test 2: M3.3 — minimal runtime has no `parent` field');
   assert(Array.isArray(after.mesh.runtime.keyforms)
     && after.mesh.runtime.keyforms.length === 1,
     `Test 2: 1 keyform in minimal runtime (got ${after.mesh.runtime?.keyforms?.length})`);
@@ -180,8 +182,9 @@ function setupBoneBakedHandwear({ poseDeg = 90 } = {}) {
     `Test 3: post-Apply+PoseAsRest mesh.vertices[0].x ≈ 0 (got ${after.mesh.vertices[0].x})`);
   assert(approx(after.mesh.vertices[0].y, 100),
     `Test 3: post-Apply+PoseAsRest mesh.vertices[0].y ≈ 100 (got ${after.mesh.vertices[0].y})`);
-  assert(after.mesh.runtime && after.mesh.runtime.parent.type === 'root',
-    'Test 3: minimal runtime preserved through applyPoseAsRest (modifier already gone)');
+  // M3.3: minimal runtime preserved through applyPoseAsRest; no `parent`.
+  assert(after.mesh.runtime && !('parent' in after.mesh.runtime),
+    'Test 3: M3.3 — minimal runtime preserved through applyPoseAsRest (no `parent` field)');
   // Bones zeroed.
   const leftArm = useProjectStore.getState().project.nodes.find((n) => n.id === 'leftArm');
   assert(leftArm.pose.rotation === 0, 'Test 3: leftArm.pose.rotation zeroed by applyPoseAsRest');

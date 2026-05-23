@@ -28,9 +28,16 @@
  *   part.mesh.runtime = {
  *     bindings: [{ parameterId, keys, interpolation }, ...],
  *     keyforms: [{ keyTuple, vertexPositions, opacity }, ...],
- *     parent:   { type: 'warp'|'rotation'|'part'|'root', id: string|null },
  *   }
  *   ```
+ *
+ * The `runtime.parent` cache (was: `{type, id}` pointer to the part's
+ * modifier-chain leaf) was retired in RULE-№4 Slice M3.3 (2026-05-23).
+ * Live-runtime readers were removed in M3.1 (`selectRigSpec`) and M3.2
+ * (`synthesizeModifierStacks` derives the leaf from project topology via
+ * `findInnermostBodyWarpId`). M3.3 dropped the last reader (the v44
+ * migration's redundant OR-branch) and this writer, and registered v47
+ * to strip the field from persisted projects on load.
  *
  * `vertexPositions` are stored as plain `Array<number>` (JSON-friendly).
  * The runtime evaluator (`chainEval` → `evalArtMesh`) accepts either
@@ -118,22 +125,6 @@ function _serialiseKeyforms(keyforms) {
 }
 
 /**
- * Walk a parent ref (RigSpec `{type, id}`) and produce a JSON-friendly
- * copy. Defensive against missing fields.
- *
- * @param {{type?:string, id?:string|null}|null|undefined} parent
- * @returns {{type:string, id:string|null}}
- */
-function _serialiseParent(parent) {
-  if (!parent || typeof parent !== 'object') {
-    return { type: 'root', id: null };
-  }
-  const t = typeof parent.type === 'string' ? parent.type : 'root';
-  const id = typeof parent.id === 'string' ? parent.id : null;
-  return { type: t, id };
-}
-
-/**
  * Persist `rigSpec.artMeshes` runtime data into `project.nodes`.
  * Mutates `project` in place.
  *
@@ -167,7 +158,6 @@ export function persistArtMeshRuntime(project, rigSpec, mode = 'replace') {
       node.mesh.runtime = {
         bindings: _serialiseBindings(am.bindings),
         keyforms: _serialiseKeyforms(am.keyforms),
-        parent: _serialiseParent(am.parent),
       };
     } else if (mode === 'replace') {
       // Part has no matching artMesh — clear stale runtime so it

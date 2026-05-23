@@ -77,9 +77,14 @@ function assertEq(actual, expected, name) {
 
   const neck = project.nodes[0];
   assert(!!neck.mesh.runtime, 'neck has runtime');
-  assertEq(neck.mesh.runtime.parent,
-    { type: 'rotation', id: 'GroupRotation_neck' },
-    'neck runtime.parent');
+  // RULE №4 Slice M3.3: persistArtMeshRuntime no longer writes
+  // `runtime.parent`. The Cubism-shaped leaf cache was retired; the
+  // chain leaf is derived from project topology by
+  // `synthesizeModifierStacks` (via `findInnermostBodyWarpId`) and from
+  // `part.modifiers[0]` by `selectRigSpec`. v47 migration strips the
+  // field from any persisted save on load.
+  assert(!('parent' in neck.mesh.runtime),
+    'M3.3 — neck runtime has no `parent` field');
   assert(Array.isArray(neck.mesh.runtime.bindings), 'neck bindings is Array');
   assertEq(neck.mesh.runtime.bindings[0].parameterId,
     'ParamAngleX', 'neck binding paramId');
@@ -97,8 +102,8 @@ function assertEq(actual, expected, name) {
   assertEq(neck.mesh.runtime.keyforms[0].opacity, 1, 'opacity preserved');
 
   const face = project.nodes[1];
-  assertEq(face.mesh.runtime.parent, { type: 'warp', id: 'RigWarp_face' },
-    'face runtime.parent');
+  assert(!('parent' in face.mesh.runtime),
+    'M3.3 — face runtime has no `parent` field');
   assertEq(face.mesh.runtime.keyforms[0].drawOrder, 7,
     'drawOrder preserved when present');
   assertEq(face.mesh.runtime.keyforms[0].opacity, 0.5, 'partial opacity preserved');
@@ -137,8 +142,10 @@ function assertEq(actual, expected, name) {
   };
   persistArtMeshRuntime(project, rigSpec, 'replace');
   const A = project.nodes[0];
-  assertEq(A.mesh.runtime.parent, { type: 'warp', id: 'BodyXWarp' },
-    'replace mode: A.runtime overwritten with fresh data');
+  // M3.3 — replace overwrites with fresh data that omits `parent`,
+  // even though the stale entry had one.
+  assert(!('parent' in A.mesh.runtime),
+    'replace mode: M3.3 — replaced runtime has no `parent` field even when prior shape had one');
   assertEq(A.mesh.runtime.keyforms[0].vertexPositions, [5, 6],
     'replace mode: stale positions replaced');
   assertEq(A.mesh.runtime.bindings.length, 0,
@@ -222,7 +229,8 @@ function assertEq(actual, expected, name) {
   const json = JSON.stringify(project);
   const reloaded = JSON.parse(json);
   const r = reloaded.nodes[0].mesh.runtime;
-  assertEq(r.parent, { type: 'rotation', id: 'X' }, 'JSON round-trip parent');
+  assert(!('parent' in r),
+    'JSON round-trip — M3.3: persisted runtime has no `parent` field');
   assertEq(r.bindings[0].keys, [1, 2], 'JSON round-trip binding.keys');
   assertEq(r.keyforms[0].keyTuple, [1], 'JSON round-trip keyTuple');
   assertEq(r.keyforms[0].vertexPositions, [3, 4],

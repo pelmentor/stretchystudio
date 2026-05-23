@@ -195,6 +195,11 @@ export function applyArmatureModifier(partId) {
       if (idx >= 0) target.modifiers.splice(idx, 1);
       if (target.modifiers.length === 0) delete target.modifiers;
     }
+    // M3.3 (RULE-№4, 2026-05-23): `runtime.parent` is no longer
+    // persisted — the chain leaf is derived from `part.modifiers[0]`
+    // (selectRigSpec) and project topology (synthesizeModifierStacks
+    // via `findInnermostBodyWarpId`). v47 migration strips the field
+    // from any pre-M3.3 save on load.
     target.mesh.runtime = {
       bindings: [],
       keyforms: [{
@@ -202,7 +207,6 @@ export function applyArmatureModifier(partId) {
         vertexPositions: Array.from(flatBaked),
         opacity: 1,
       }],
-      parent: { type: 'root', id: null },
     };
     // Vertex group data (`mesh.boneWeights` + `mesh.jointBoneId`)
     // STAYS on the mesh datablock — same as Blender. Apply Modifier

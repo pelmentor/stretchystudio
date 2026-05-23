@@ -211,6 +211,91 @@ function assertThrows(fn, name) {
 }
 
 {
+  // v47 — `mesh.runtime.parent` strip (RULE №4 Slice M3.3 cleanup).
+  // Walks every part and deletes the `parent` sub-field from
+  // `mesh.runtime`. The rest of `mesh.runtime` (`bindings`, `keyforms`)
+  // is preserved — those fields are still actively read by selectRigSpec
+  // and chainEval.
+
+  // Case 1: part with runtime.parent present (the common pre-M3.3 shape).
+  // Strip the field, keep bindings + keyforms intact.
+  const p1 = { schemaVersion: 46, nodes: [
+    { id: 'face', type: 'part', mesh: {
+      vertices: [{ x: 0, y: 0 }],
+      runtime: {
+        bindings: [{ parameterId: 'ParamAngleX', keys: [0], interpolation: 'LINEAR' }],
+        keyforms: [{ keyTuple: [], vertexPositions: [1, 2], opacity: 1 }],
+        parent: { type: 'warp', id: 'BodyXWarp' },
+      },
+    } },
+  ] };
+  migrateProject(p1);
+  assert(!('parent' in p1.nodes[0].mesh.runtime),
+    'v47 case 1: runtime.parent stripped');
+  assertEq(p1.nodes[0].mesh.runtime.bindings.length, 1,
+    'v47 case 1: runtime.bindings preserved');
+  assertEq(p1.nodes[0].mesh.runtime.keyforms.length, 1,
+    'v47 case 1: runtime.keyforms preserved');
+  assertEq(p1.nodes[0].mesh.runtime.keyforms[0].vertexPositions, [1, 2],
+    'v47 case 1: vertexPositions verbatim');
+
+  // Case 2: part with mesh.runtime but no parent (already M3.3-shaped) —
+  // strip is a no-op.
+  const p2 = { schemaVersion: 46, nodes: [
+    { id: 'face', type: 'part', mesh: {
+      vertices: [{ x: 0, y: 0 }],
+      runtime: {
+        bindings: [],
+        keyforms: [{ keyTuple: [], vertexPositions: [3, 4], opacity: 1 }],
+      },
+    } },
+  ] };
+  migrateProject(p2);
+  assert(!('parent' in p2.nodes[0].mesh.runtime),
+    'v47 case 2: runtime never had parent — no-op survives');
+  assertEq(p2.nodes[0].mesh.runtime.keyforms[0].vertexPositions, [3, 4],
+    'v47 case 2: vertexPositions unchanged');
+
+  // Case 3: part with mesh but no runtime — no-op, no crash.
+  const p3 = { schemaVersion: 46, nodes: [
+    { id: 'face', type: 'part', mesh: { vertices: [{ x: 0, y: 0 }] } },
+  ] };
+  migrateProject(p3);
+  assert(p3.nodes[0].mesh.runtime === undefined,
+    'v47 case 3: part without runtime — no runtime invented');
+
+  // Case 4: non-part node with mesh.runtime.parent — left alone.
+  // (Only `type === 'part'` is swept; defensive against shape bugs in
+  // other node types having stray runtime caches.)
+  const p4 = { schemaVersion: 46, nodes: [
+    { id: 'BodyXWarp', type: 'deformer', mesh: {
+      runtime: { parent: { type: 'root', id: null } },
+    } },
+  ] };
+  migrateProject(p4);
+  assertEq(p4.nodes[0].mesh.runtime.parent, { type: 'root', id: null },
+    'v47 case 4: non-part nodes left untouched (only part nodes are swept)');
+
+  // Case 5: idempotence — re-running after the walk leaves the project
+  // unchanged.
+  const p5 = { schemaVersion: 46, nodes: [
+    { id: 'face', type: 'part', mesh: {
+      vertices: [{ x: 0, y: 0 }],
+      runtime: {
+        bindings: [],
+        keyforms: [{ keyTuple: [], vertexPositions: [5, 6], opacity: 1 }],
+        parent: { type: 'root', id: null },
+      },
+    } },
+  ] };
+  migrateProject(p5);
+  const after1 = JSON.stringify(p5);
+  migrateProject(p5);
+  const after2 = JSON.stringify(p5);
+  assertEq(after1, after2, 'v47 idempotent: re-running is a no-op');
+}
+
+{
   // v14: rigStageLastRunAt defaults to {} when missing.
   const p = { schemaVersion: 13 };
   migrateProject(p);

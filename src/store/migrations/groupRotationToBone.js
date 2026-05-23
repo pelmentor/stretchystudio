@@ -23,10 +23,12 @@
  * canvas-final REST pivot — what the part actually rotates around, = the bone
  * head — is `mesh.vertices[i] − runtime.keyform[0].vertexPositions[i]` (a
  * constant; the part's canvas-px verts minus its pivot-relative keyform). The
- * warp chain ABOVE the rotation is preserved as the part's runtime parent, so
- * body warps still deform the mesh before the bone rotates it. (Per RULE №4,
- * the bone head is FIXED — Blender — vs Cubism's warp-MOVED pivot; they
- * coincide at warp-rest and intentionally diverge under a deformed warp.)
+ * warp chain ABOVE the rotation is no longer written into `runtime.parent`
+ * (M3.3 retired that cache); the leaf is derived from project topology by
+ * `synthesizeModifierStacks` via `findInnermostBodyWarpId` so body warps
+ * still deform the mesh before the bone rotates it. (Per RULE №4, the bone
+ * head is FIXED — Blender — vs Cubism's warp-MOVED pivot; they coincide at
+ * warp-rest and intentionally diverge under a deformed warp.)
  *
  * @module store/migrations/groupRotationToBone
  */
@@ -47,31 +49,34 @@ export function migrateGroupRotationDeformersToBones(project) {
   );
   if (rotDefs.length === 0) return;
 
-  /**
-   * Resolve a group-rotation part's runtime parent. Per RULE №4 the bone head
-   * is FIXED in canvas space, so the part's geometry is owned end-to-end by the
-   * bone LBS: runtime parent = ROOT.
-   *
-   * Why NOT the body-warp ancestor: in the deformer model the rotation is
-   * canvas-final, which BREAKS the modifier-chain walk before the body warp is
-   * reached — the warp never lattice-deforms the part's geometry; it only moves
-   * the rotation PIVOT (the "warp-MOVED pivot"). RULE №4 intentionally drops
-   * that pivot motion (the bone head is fixed; it coincides with the warp-moved
-   * pivot only at warp rest). So re-parenting to the warp would ADD a
-   * deformation the deformer model never applied. Bones are root-parented and
-   * carry no body-warp lattice in their stack.
-   */
-  const resolveParentRef = () => ({ type: 'root', id: null });
-
   /** The rotation deformer's rest (keyTuple 0) keyform. */
   const restKeyform = (def) =>
     (def.keyforms ?? []).find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? def.keyforms?.[0] ?? null;
 
-  /** Parts driven directly by this rotation deformer. */
-  const partsOf = (def) => project.nodes.filter(
-    (p) => p && p.type === 'part'
-      && (p.rigParent === def.id || p.mesh?.runtime?.parent?.id === def.id),
-  );
+  // Parts driven directly by this rotation deformer. Three signals are
+  // OR'd because the real rig pipeline populates them inconsistently:
+  //   1. `rigParent === def.id` — pre-v44 deformer-model rigging puts
+  //      the rotation deformer id here for parts riding the rotation
+  //      directly (no body warp between them). The classic case.
+  //   2. `part.parent === groupName` (where `def.id ===
+  //      'GroupRotation_'+groupName`) — the topology signal that
+  //      survives even when `rigParent` was assigned to a body-warp
+  //      ancestor (the common case for parts under nested rotations,
+  //      where the chain leaf written into rigParent is the outer warp,
+  //      not the inner rotation). Grounded by
+  //      test_groupRotationMigrationRealRig.
+  //
+  // The prior `|| p.mesh?.runtime?.parent?.id === def.id` branch was
+  // retired in M3.3 — it was a Cubism-shaped runtime cache that the
+  // topology-direct signal (#2) above subsumes for every case the
+  // real pipeline produces.
+  const partsOf = (def) => {
+    const groupName = def.id.slice(GROUP_ROTATION_PREFIX.length);
+    return project.nodes.filter(
+      (p) => p && p.type === 'part'
+        && (p.rigParent === def.id || p.parent === groupName),
+    );
+  };
 
   /**
    * Bone head = the rotation's CANVAS-FINAL rest pivot. Derivation, in order:
@@ -143,7 +148,6 @@ export function migrateGroupRotationDeformersToBones(project) {
       group.pose = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
     }
 
-    const parentRef = resolveParentRef();
     for (const p of parts) {
       const verts = p.mesh?.vertices;
       if (!Array.isArray(verts)) continue;
@@ -152,13 +156,14 @@ export function migrateGroupRotationDeformersToBones(project) {
       p.mesh.jointBoneId = groupId;
       const rt = p.mesh.runtime;
       if (rt && typeof rt === 'object') {
-        // Drop the ParamRotation binding (bone LBS owns the rotation now);
-        // collapse to a single CANVAS-PX rest keyform; keep the warp chain
-        // above as the runtime parent so body warps still deform the mesh.
+        // Drop the ParamRotation binding (bone LBS owns the rotation now)
+        // and collapse to a single CANVAS-PX rest keyform. The runtime-parent
+        // pointer is no longer written (retired in M3.3 — bone-baked parts
+        // derive their leaf from project topology via
+        // `findInnermostBodyWarpId` in `synthesizeModifierStacks`).
         rt.bindings = (Array.isArray(rt.bindings) ? rt.bindings : [])
           .filter((b) => typeof b?.parameterId === 'string' && !b.parameterId.startsWith('ParamRotation_'));
         rt.keyforms = [{ keyTuple: [], opacity: 1, vertexPositions: verts.slice() }];
-        rt.parent = parentRef;
       }
       if (Array.isArray(p.modifiers)) {
         p.modifiers = p.modifiers.filter(

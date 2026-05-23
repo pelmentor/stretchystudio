@@ -106,6 +106,7 @@ import { migrateLatticeSubstrate } from './migrations/v43_lattice_substrate.js';
 import { migrateGroupRotationToBoneViaReseed } from './migrations/v44_group_rotation_to_bone.js';
 import { migrateBoneBakedArtMeshAdapterViaReseed } from './migrations/v45_bone_baked_art_mesh_adapter.js';
 import { migrateVariantRoleAliasRetirement } from './migrations/v46_variant_role_alias_retirement.js';
+import { migrateRuntimeParentStrip } from './migrations/v47_runtime_parent_strip.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -797,6 +798,23 @@ const MIGRATIONS = {
   // the deprecation as follow-up work.
   46: (project) => {
     migrateVariantRoleAliasRetirement(project);
+    return project;
+  },
+
+  // v47 — RULE №4 Slice M3.3 cleanup: strip the dead `mesh.runtime.parent`
+  // cache. The Cubism-shaped `{type, id}` pointer to the part's modifier-
+  // chain leaf was the 3-way drift hazard at the heart of the audit's #2
+  // open item. The modifier-stack flip plan retired the field's live-runtime
+  // readers across M1/M2.1/M2.2/M3.1/M3.2/M5, and M3.3 dropped the last
+  // reader (v44 migration's redundant OR-branch) + the writer
+  // (persistArtMeshRuntime + v44 migration's `rt.parent` assignment). v47
+  // walks every part and removes the now-stale sub-field from persisted
+  // saves; `mesh.runtime` itself (`bindings` + `keyforms`) survives.
+  //
+  // See `src/store/migrations/v47_runtime_parent_strip.js` and the M3.3
+  // entry in `docs/plans/RULE_4_MODIFIER_STACK_FLIP_SESSION_2026_05_23_PART2.md`.
+  47: (project) => {
+    migrateRuntimeParentStrip(project);
     return project;
   },
 
