@@ -651,6 +651,8 @@ function AudioTrackRow({
    Imports use the `@/` Vite alias same as upstream. Exported as
    `TimelineEditor` (was `TimelinePanel`) so the v3 editorRegistry
    mapping continues to work without renames.
+
+   Audit-fix D-7 Stage 1.E — the action picker / new / import / unlink cluster in `PlaybackControls.jsx` (lifted from this file in Round 7, FID-A.2) parallels Blender's `template_action` UI helper, which wraps the same animated-id-rebind affordance in a single layout primitive. See `scripts/startup/bl_ui/space_dopesheet.py:313` (`_draw_action_selector` classmethod) which calls `row.template_action(animated_id, new="action.new", unlink="action.unlink")` to render the picker for the Dope-Sheet's active animated id. SS's split (picker in PlaybackControls, keyframe surface here) keeps the timeline panel focused on keyframe editing while the transport row owns the action selector — same separation of concerns Blender achieves by putting `template_action` in the header row.
 ────────────────────────────────────────────────────────────────────────── */
 export function TimelineEditor() {
   const anim = useAnimationStore();
