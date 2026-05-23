@@ -96,8 +96,8 @@ export function kernelArtMeshEval(op, ctx) {
   // frame when a modifier is disabled (`needsReproject`), while the raw
   // `mesh.runtime` cache is still in the baked leaf frame. For the common
   // (no-toggle) case the two are identical, so this is a no-op there. The
-  // chain topology (`part.modifiers` / `runtime.parent`) is still read from
-  // the project below — only the keyform DATA comes from the rigSpec.
+  // chain topology (`part.modifiers`) is still read from the project below
+  // — only the keyform DATA comes from the rigSpec.
   const rigMesh = ctx.rigArtMeshById?.get(partId) ?? null;
   const bindings = Array.isArray(rigMesh?.bindings)
     ? rigMesh.bindings

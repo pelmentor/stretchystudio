@@ -537,6 +537,120 @@ function assertEq(actual, expected, name) {
     'multi-binding passthrough: keyforms preserved verbatim from mesh.runtime');
 }
 
+// ── M3.1 (RULE-№4, 2026-05-23): cachedParent derives from modifiers[0],
+//   not mesh.runtime.parent. The runtime.parent field is no longer
+//   consulted by selectRigSpec; the field stays persisted (no schema
+//   bump) but selectRigSpec ignores it entirely. ──────────────────
+{
+  // Warp-rigged part: modifiers[0] = lattice WarpA. runtime.parent set
+  // to a DIFFERENT but valid lattice (WarpB). If selectRigSpec were
+  // still reading runtime.parent, cachedParent would be WarpB and
+  // effectiveParent (from modifiers[0]) would be WarpA → reproject
+  // would fire from WarpB-frame to WarpA-frame, producing non-passthrough
+  // verts. Post-M3.1 derivation gives cachedParent = WarpA (= effective),
+  // no reproject fires, verts pass through unchanged. This fixture
+  // produces distinguishable output for the M3.1-honored vs M3.1-reverted
+  // paths (vs the earlier stale-nonexistent-id variant which both paths
+  // collapsed to defensive passthrough).
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [],
+    nodes: [
+      // Lattice WarpA — the actual leaf for the part.
+      { id: 'WarpA_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpA_obj__cage', visible: true, name: 'WarpA',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [], opacity: 1 }],
+        canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 } },
+      { id: 'WarpA_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [0, 0, 100, 0, 0, 100, 100, 100] },
+      // Lattice WarpB — exists for the stale runtime.parent to point at.
+      { id: 'WarpB_obj', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'WarpB_obj__cage', visible: true, name: 'WarpB',
+        bindings: [], keyforms: [{ keyTuple: [], positions: [], opacity: 1 }],
+        canvasBbox: { minX: 200, minY: 200, W: 100, H: 100 } },
+      { id: 'WarpB_obj__cage', type: 'meshData', isLatticeCage: true,
+        vertices: [
+          { x: 200, y: 200 }, { x: 300, y: 200 }, { x: 200, y: 300 }, { x: 300, y: 300 },
+        ],
+        gridSize: { rows: 1, cols: 1 },
+        baseGrid: [200, 200, 300, 200, 200, 300, 300, 300] },
+      // Part: modifiers[0] = WarpA. runtime.parent = STALE WarpB.
+      { id: 'face', type: 'part', visible: true,
+        modifiers: [
+          { type: 'lattice', objectId: 'WarpA_obj', enabled: true, mode: 3,
+            showInEditor: true },
+        ],
+        mesh: {
+          vertices: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+          uvs: [], triangles: [],
+          runtime: {
+            parent: { type: 'warp', id: 'WarpB_obj' }, // STALE — different from modifiers[0]
+            bindings: [],
+            keyforms: [{ keyTuple: [], vertexPositions: [10, 20, 30, 40], opacity: 1 }],
+          },
+        } },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'face');
+  assert(!!am, 'M3.1: artMesh built with stale runtime.parent');
+  // Lattice modifier maps to 'warp' type in the chain (mirrors
+  // _resolveModifierChain's normalization).
+  assert(am.parent?.type === 'warp' && am.parent?.id === 'WarpA_obj',
+    'M3.1: parent derives from modifiers[0].objectId (WarpA), not runtime.parent (WarpB)');
+  // Critical regression-pin: if runtime.parent were still read, cachedParent
+  // = WarpB and effectiveParent = WarpA would differ → reproject would fire
+  // through both warps' valid rest frames, producing transformed
+  // (non-passthrough) verts. Verts MUST equal the keyform input unchanged.
+  assertEq(Array.from(am.keyforms[0].vertexPositions), [10, 20, 30, 40],
+    'M3.1: verts pass through unchanged (proves runtime.parent NOT read — reproject would have fired with valid WarpB→WarpA frames)');
+}
+
+{
+  // Armature-only stack (bone-baked part): modifiers[0] is armature,
+  // the armature-skip in cachedParent derivation falls through to root.
+  const project = {
+    canvas: { width: 800, height: 600 },
+    parameters: [],
+    nodes: [
+      { id: 'leftKnee', type: 'group', boneRole: 'leftKnee',
+        transform: { x: 0, y: 0, rotation: 0, scale: 1, pivotX: 0, pivotY: 0 },
+        pose: { rotation: 0 } },
+      { id: 'legwear', type: 'part', visible: true, parent: 'leftKnee',
+        modifiers: [
+          { type: 'armature', deformerId: 'leftKnee', enabled: true, mode: 3,
+            showInEditor: true,
+            data: { jointBoneId: 'leftKnee', parentBoneId: null } },
+        ],
+        mesh: {
+          vertices: [{ x: 5, y: 5 }],
+          uvs: [], triangles: [],
+          jointBoneId: 'leftKnee', boneWeights: [[1, 0]],
+          runtime: {
+            // STALE: pretend runtime.parent was never updated.
+            parent: { type: 'rotation', id: 'STALE_ROTATION' },
+            bindings: [],
+            keyforms: [{ keyTuple: [], vertexPositions: [5, 5], opacity: 1 }],
+          },
+        } },
+    ],
+  };
+  const spec = selectRigSpec(project);
+  const am = spec.artMeshes.find((m) => m.id === 'legwear');
+  assert(!!am, 'M3.1: bone-baked artMesh built with stale runtime.parent');
+  // Armature is filtered → cachedParent skip → root; effectiveParent also
+  // root (armature-only stack → empty chain). Match → no reproject.
+  assert(am.parent?.type === 'root' && am.parent?.id === null,
+    'M3.1: armature-only stack → parent=root (cachedParent derivation skips armature)');
+  // modifierChain is [] because Armature filters out of warp/rotation chain.
+  assert(Array.isArray(am.modifierChain) && am.modifierChain.length === 0,
+    'M3.1: armature-only emits modifierChain=[] (M2.2 contract preserved)');
+}
+
 // ── Summary ──────────────────────────────────────────────────────
 
 console.log(`selectRigSpec: ${passed} passed, ${failed} failed`);

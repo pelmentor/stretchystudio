@@ -530,11 +530,14 @@ export function synthesizeModifierStacks(project) {
       cur = part.rigParent;
     }
     // Bone-baked / body-only parts (e.g. legwear) carry NO leaf in either
-    // surface but DO ride a deformer chain cached in `mesh.runtime.parent`
-    // — the same source `selectRigSpec` evaluates them through. Without
-    // this fallback their stack shows only the appended Armature, hiding
-    // the body-warp Lattice modifiers that actually warp their geometry
-    // (the original "legwear has no warp modifier" discoverability gap).
+    // surface but DO ride a deformer chain cached in `mesh.runtime.parent`.
+    // This fallback fires in the `clearRigWarps` → synth pipeline for
+    // bone-baked parts whose stripped stack is armature-only: without it
+    // the stack would show only the appended Armature, hiding the
+    // body-warp Lattice modifiers that actually warp their geometry (the
+    // original "legwear has no warp modifier" discoverability gap).
+    // Post-M3.1, `selectRigSpec` no longer reads `runtime.parent` — only
+    // this synth path + the v44 migration do.
     // Seed the walk from the runtime parent so the stack is HONEST and
     // drives eval (Blender: the affected piece declares its Lattice
     // modifier). Slice M2 promotes this into the persisted stack.

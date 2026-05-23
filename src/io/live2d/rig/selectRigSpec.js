@@ -497,8 +497,52 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
     // side.
     const runtime = partMesh.runtime;
     if (runtime && Array.isArray(runtime.keyforms) && runtime.keyforms.length > 0) {
-      const cachedParent = (runtime.parent && typeof runtime.parent === 'object')
-        ? { type: runtime.parent.type ?? 'root', id: runtime.parent.id ?? null }
+      // M3.1 (RULE-№4, 2026-05-23): derive `cachedParent` from
+      // `modifiers[0]` instead of reading `mesh.runtime.parent`.
+      //
+      // The runtime cache's `parent` field was historically the source
+      // for "what frame are the persisted keyform verts in?" — needed
+      // for the reproject path when modifiers get toggled off. Post-M1,
+      // `modifiers[0]` is the canonical authoring source-of-truth for
+      // the leaf modifier; the runtime cache's `parent` field is a
+      // derived mirror that `persistArtMeshRuntime` writes from
+      // `effectiveParent` at Init Rig time.
+      //
+      // For warp-rigged parts: `modifiers[0]` is a lattice with
+      // `objectId` matching what `persistArtMeshRuntime` would have
+      // written. For bone-baked parts (armature-only stack): no leaf,
+      // cachedParent = root (matches the serialized `am.parent =
+      // {type:'root', id:null}` from `_buildArtMeshes`' allDisabled
+      // path). For pre-Init-Rig parts: outer guard at line 499 already
+      // excludes them. Either way, derivation produces identical
+      // values to the runtime.parent read it replaces.
+      //
+      // Type normalization mirrors `_resolveModifierChain` (lines ~798-803):
+      // lattice modifier → 'warp' type in the rigSpec (lattice IS a warp
+      // for chain-walking purposes); rotation stays 'rotation'. This
+      // matches what `persistArtMeshRuntime` wrote into `runtime.parent`
+      // pre-M3.1, so values are byte-identical at steady state.
+      //
+      // Path forward to M3.2/M3.3: with this read gone, runtime.parent
+      // is unused by selectRigSpec; the synthesizeModifierStacks
+      // fallback (deformerNodeSync.js bone-baked path) + the
+      // groupRotationToBone migration are the remaining readers.
+      const m0 = Array.isArray(part.modifiers) && part.modifiers.length > 0
+        ? part.modifiers[0]
+        : null;
+      let m0LeafType = null;
+      let m0LeafId = null;
+      if (m0 && m0.type !== 'armature') {
+        if (m0.type === 'lattice') {
+          m0LeafType = 'warp';
+          m0LeafId = typeof m0.objectId === 'string' ? m0.objectId : null;
+        } else if (m0.type === 'rotation' || m0.type === 'warp') {
+          m0LeafType = m0.type;
+          m0LeafId = typeof m0.deformerId === 'string' ? m0.deformerId : null;
+        }
+      }
+      const cachedParent = (m0LeafType && typeof m0LeafId === 'string' && m0LeafId.length > 0)
+        ? { type: m0LeafType, id: m0LeafId }
         : { type: 'root', id: null };
 
       // Modifier-toggle live read (Blender's `BKE_modifier_is_enabled`).
