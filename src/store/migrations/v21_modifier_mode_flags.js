@@ -47,6 +47,12 @@
  * @module store/migrations/v21_modifier_mode_flags
  */
 
+import {
+  isWarpLatticeNode,
+  isChainDeformerNode,
+  findInnermostBodyWarpId as sharedFindInnermostBodyWarpId,
+} from '../warpLatticeAccess.js';
+
 export const MODIFIER_MODE_REALTIME = 1 << 0;
 export const MODIFIER_MODE_RENDER   = 1 << 1;
 export const MODIFIER_MODE_EDITMODE = 1 << 2;
@@ -55,41 +61,29 @@ export const MODIFIER_MODE_ONCAGE   = 1 << 3;
 /** Default mode bitmask for v21-migrated modifier records. */
 export const DEFAULT_MIGRATED_MODE = MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER;
 
-/** Body-warp deformer ids — chain leaf candidates. */
-const BODY_WARP_IDS = new Set(['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp']);
-
 /**
- * Find the innermost body-warp deformer id (the chain leaf — the
- * body-warp deformer that has no body-warp child). Returns null if no
- * body-warp chain exists on the project.
+ * Find the innermost body-warp id (chain leaf) — thin wrapper over the
+ * shared helper in `warpLatticeAccess.js`. The shared helper handles
+ * BOTH chain-shape eras (`{type:'deformer', deformerKind:'warp'}`
+ * pre-v43 + `{type:'object', objectKind:'lattice'}` post-v43) via
+ * `isWarpLatticeNode`, so this wrapper works correctly whether the
+ * migration is invoked at v21 (pre-v43) or after the lattice substrate
+ * flip (e.g., when a test or dev call uses a post-v43 fixture).
  *
- * Lighter-weight mirror of `_deriveInnermostBodyClosures` in
- * `selectRigSpec.js` — this version skips the canvas-px closures
- * (which need warp-rest evaluation) because the migration only needs
- * the id, not the closures.
+ * Pre-M4 follow-on (2026-05-23): the private body-warp-ids-only
+ * implementation here had a latent bug — it filtered on
+ * `n.type === 'deformer'`, which silently misses post-v43 lattice
+ * objects. Re-pointed to the shared helper that the M3.2 +
+ * `selectRigSpec._deriveInnermostBodyClosures` already use.
  *
  * @param {object} project
  * @returns {string|null}
  */
 export function findInnermostBodyWarpId(project) {
   if (!project || !Array.isArray(project.nodes)) return null;
-  const bodyWarpNodes = project.nodes.filter(
-    (n) => n && n.type === 'deformer' && BODY_WARP_IDS.has(n.id),
-  );
-  if (bodyWarpNodes.length === 0) return null;
-  /** @type {Map<string, number>} */
-  const childCount = new Map();
-  for (const n of bodyWarpNodes) childCount.set(n.id, 0);
-  for (const n of project.nodes) {
-    if (!n) continue;
-    if (typeof n.parent === 'string' && BODY_WARP_IDS.has(n.parent)) {
-      childCount.set(n.parent, (childCount.get(n.parent) ?? 0) + 1);
-    }
-  }
-  for (const n of bodyWarpNodes) {
-    if ((childCount.get(n.id) ?? 0) === 0) return n.id;
-  }
-  return null;
+  const warpNodes = project.nodes.filter(isWarpLatticeNode);
+  const allDeformerNodes = project.nodes.filter(isChainDeformerNode);
+  return sharedFindInnermostBodyWarpId(warpNodes, allDeformerNodes);
 }
 
 /**

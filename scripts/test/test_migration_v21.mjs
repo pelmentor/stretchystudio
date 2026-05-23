@@ -139,6 +139,27 @@ assertEq(DEFAULT_MIGRATED_MODE, MODIFIER_MODE_REALTIME | MODIFIER_MODE_RENDER,
     'no chain: empty stack stays empty (no synthetic insert)');
 }
 
+// ----- Post-v43 lattice-object body chain works (regression for the
+//       v21-private-helper-only filter bug — `findInnermostBodyWarpId`
+//       used to filter on `n.type === 'deformer'` which silently
+//       missed post-v43 lattice objects). Re-pointed to the shared
+//       helper in `warpLatticeAccess.js` (2026-05-23 M4 follow-on). -----
+
+{
+  const project = {
+    nodes: [
+      // Post-v43 body warp chain: lattice objects, not deformer nodes.
+      { id: 'BodyWarpZ',  type: 'object', objectKind: 'lattice', parent: null },
+      { id: 'BodyWarpY',  type: 'object', objectKind: 'lattice', parent: 'BodyWarpZ' },
+      { id: 'BreathWarp', type: 'object', objectKind: 'lattice', parent: 'BodyWarpY' },
+      { id: 'BodyXWarp',  type: 'object', objectKind: 'lattice', parent: 'BreathWarp' },
+      { id: 'shirt', type: 'part' },
+    ],
+  };
+  assertEq(findInnermostBodyWarpId(project), 'BodyXWarp',
+    'post-v43 lattice-object chain: shared helper finds the innermost body warp (was the private-helper bug)');
+}
+
 // ----- Non-empty stack ignores synthetic insert path -----
 
 {
