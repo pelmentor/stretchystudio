@@ -40,7 +40,7 @@
 //
 // Run: node scripts/test/test_eyeClosureVariantPrune.mjs
 
-import { pruneOrphanedVariantParabolas } from '../../src/io/live2d/rig/eyeClosure.js';
+import { pruneOrphanedVariantParabolas } from '../../src/io/live2d/rig/eyeClosurePrune.js';
 
 let passed = 0;
 let failed = 0;
@@ -183,11 +183,20 @@ function buildProjectWithVariants(variantParts) {
   assert(!!proj2.eyeClosureParabolas.baseParabolaPerSide.l,
     'Contract 5b: base kept on empty-variant project');
 
-  // Null project / non-object — must not crash.
-  pruneOrphanedVariantParabolas(null);
-  pruneOrphanedVariantParabolas(undefined);
-  pruneOrphanedVariantParabolas('not-a-project');
-  passed += 3;
+  // Null project / non-object — must not crash. Slice-3 audit-fix
+  // LOW-3 (2026-05-23): per-arm try/catch + named assert so a throw
+  // in one arm registers as a named test failure instead of a process
+  // crash that hides the other arms' results.
+  const noThrow = (fn, name) => {
+    try { fn(); assert(true, name); }
+    catch (err) { assert(false, `${name} — threw: ${err?.message ?? err}`); }
+  };
+  noThrow(() => pruneOrphanedVariantParabolas(null),
+    'Contract 5c: pruneOrphanedVariantParabolas(null) does not throw');
+  noThrow(() => pruneOrphanedVariantParabolas(undefined),
+    'Contract 5d: pruneOrphanedVariantParabolas(undefined) does not throw');
+  noThrow(() => pruneOrphanedVariantParabolas('not-a-project'),
+    'Contract 5e: pruneOrphanedVariantParabolas("not-a-project") does not throw');
 }
 
 // ── Contract 6: idempotence ─────────────────────────────────────────

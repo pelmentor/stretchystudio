@@ -7,7 +7,14 @@ import { useParamValuesStore } from './paramValuesStore.js';
 // migration modules onto the eager path. `migrateProject` itself is
 // loaded via `loadRigPeers` only on `loadProject`.
 import { CURRENT_SCHEMA_VERSION } from './projectSchemaVersion.js';
-import { pruneOrphanedVariantParabolas } from '../io/live2d/rig/eyeClosure.js';
+// RULE №4 Slice 3 audit-fix HIGH-1 (2026-05-23): import from the
+// tiny `eyeClosurePrune.js` module — NOT from `eyeClosure.js` (which
+// stays behind the `loadRigPeers()` lazy bridge for
+// resolveEyeClosure/seedEyeClosure). Direct top-level import of
+// `eyeClosure.js` here caused a dual-import: eager (via this
+// projectStore) + lazy (via peers). The split file keeps the boot
+// path light AND lets deleteNode call the prune synchronously.
+import { pruneOrphanedVariantParabolas } from '../io/live2d/rig/eyeClosurePrune.js';
 // Phase A2 — seed modules + rig-peer modules dynamically loaded on
 // first action call. See `projectStoreSeeds.js` + `projectStoreRigPeers.js`.
 // All production paths reaching these (seedAllRig / loadProject /
