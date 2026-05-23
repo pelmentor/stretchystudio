@@ -81,38 +81,49 @@ function makeBodyChainProject() {
   assert(!('modifiers' in partB), 'partB: no modifiers field (no rigParent)');
 }
 
-// ── Bone-baked / body-only part: stack derived from mesh.runtime.parent ──
-// A part with NO rigParent but a deformer chain cached in
-// `mesh.runtime.parent` (e.g. legwear riding the body warp) must honestly
-// surface the body-warp Lattice modifiers (+ Armature), not an empty stack.
-// Uses the v43 lattice-object shape.
+// ── Bone-baked / body-only part: stack derived via M3.2 helper ──
+// A bone-baked part with NO rigParent, NO modifiers leaf (only the
+// armature appended), and the body-warp chain present in project.nodes
+// must honestly surface the body-warp Lattice modifiers (+ Armature)
+// rather than just the armature. Post-M3.2 (2026-05-23): seed comes
+// from `findInnermostBodyWarpId` (pure derivation from project.nodes),
+// not from a `mesh.runtime.parent` runtime cache field.
+//
+// Pre-M3.2 this test had a per-part `RigWarp_legwear` lattice that the
+// runtime.parent fallback walked from — but post-M1, any per-part
+// RigWarp would be in `modifiers[0]`, so the runtime.parent fallback
+// path could ONLY ever fire for parts riding the body warp directly
+// (no per-part lattice). Rewritten to that canonical post-RULE-№4 shape.
 {
   const project = {
     nodes: [
-      { id: 'BodyXWarp', type: 'object', objectKind: 'lattice', parent: null,
+      { id: 'BodyZWarp', type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'BodyZWarp__cage' },
+      { id: 'BodyZWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
+      { id: 'BodyXWarp', type: 'object', objectKind: 'lattice', parent: 'BodyZWarp',
         dataId: 'BodyXWarp__cage' },
       { id: 'BodyXWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
-      { id: 'RigWarp_legwear', type: 'object', objectKind: 'lattice', parent: 'BodyXWarp',
-        dataId: 'RigWarp_legwear__cage', targetPartId: 'legwear' },
-      { id: 'RigWarp_legwear__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
       { id: 'leftKnee', type: 'group', boneRole: 'leftKnee', parent: null },
       { id: 'legwear', type: 'part',
-        // No rigParent — bone-baked; chain leaf cached in runtime.parent.
+        // Bone-baked: no rigParent + no modifiers leaf. The synth's
+        // body-warp fallback fires (gated on boneWeights+jointBoneId)
+        // and derives the chain seed from findInnermostBodyWarpId.
         mesh: {
           vertices: [], jointBoneId: 'leftKnee', boneWeights: [1],
-          runtime: { parent: { type: 'warp', id: 'RigWarp_legwear' }, keyforms: [] },
+          runtime: { keyforms: [] }, // NO runtime.parent — M3.2 doesn't need it
         } },
     ],
   };
   synthesizeModifierStacks(project);
   const legwear = project.nodes.find((n) => n.id === 'legwear');
   assert(Array.isArray(legwear.modifiers),
-    'legwear: modifiers populated from runtime.parent (no rigParent)');
+    'legwear: modifiers populated via M3.2 helper (no runtime.parent needed)');
   assertEq(legwear.modifiers[0].type, 'lattice', 'legwear[0] is a lattice modifier');
-  assertEq(legwear.modifiers[0].objectId, 'RigWarp_legwear', 'legwear[0] = RigWarp_legwear (leaf)');
-  assertEq(legwear.modifiers[1].type, 'lattice', 'legwear[1] is a lattice modifier');
-  assertEq(legwear.modifiers[1].objectId, 'BodyXWarp',
-    'legwear[1] = BodyXWarp — the body warp is now VISIBLE in the stack');
+  assertEq(legwear.modifiers[0].objectId, 'BodyXWarp',
+    'legwear[0] = BodyXWarp (innermost body warp via findInnermostBodyWarpId)');
+  assertEq(legwear.modifiers[1].type, 'lattice', 'legwear[1] is the next chain lattice');
+  assertEq(legwear.modifiers[1].objectId, 'BodyZWarp',
+    'legwear[1] = BodyZWarp (chain root, walked via def.parent)');
   assertEq(legwear.modifiers[legwear.modifiers.length - 1].type, 'armature',
     'legwear last entry = Armature (bone skin)');
 }

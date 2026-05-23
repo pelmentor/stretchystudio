@@ -39,6 +39,11 @@
 import { DEFAULT_MIGRATED_MODE } from './migrations/v21_modifier_mode_flags.js';
 import { warpNodeToLatticeNodes } from './migrations/v43_lattice_substrate.js';
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
+import {
+  findInnermostBodyWarpId,
+  isWarpLatticeNode,
+  isChainDeformerNode,
+} from './warpLatticeAccess.js';
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'];
@@ -374,9 +379,17 @@ export function synthesizeDeformerNodesFromSidetables(project) {
  *   2. `part.rigParent` — legacy / v15-migration bootstrap source. Kept
  *      as a fallback so projects saved before the M1 flip still load.
  *      Slice M4 retires this read entirely.
- *   3. `part.mesh.runtime.parent.id` — bone-baked fallback (no leaf in
- *      either persisted surface; chain is cached at Init Rig time so the
- *      stack honestly surfaces the body-warp modifiers riding above).
+ *   3. Bone-baked parts (M3.2, 2026-05-23): when `mesh.boneWeights` +
+ *      `jointBoneId` are set and no leaf is in either persisted surface,
+ *      derive the body-warp chain seed via `findInnermostBodyWarpId`
+ *      (`warpLatticeAccess`) — pure topology walk over `project.nodes`.
+ *      The prior `mesh.runtime.parent.id` read is retired; the runtime
+ *      cache field stays persisted until M3.3 + v48 migration.
+ *   4. Pre-v44 deformer-model parts (M3.2): when the part rides a
+ *      `GroupRotation_<groupName>` rotation deformer via its project-tree
+ *      group ancestor, derive that as the seed by walking `part.parent`.
+ *      Production never reaches this branch post-v44 migration; it
+ *      exists for the test harness that exercises the pre-migration state.
  *
  * V2 Phase 0.3 (still in force) — modifier stacks are CANONICAL; the
  * legacy parent-link shape (`deformer.parent` + `part.rigParent`) is a
@@ -473,11 +486,18 @@ function _packModifierData(def) {
 export function synthesizeModifierStacks(project) {
   if (!project) return;
   if (!Array.isArray(project.nodes)) return;
+  const nodesArr = project.nodes;
   const byId = new Map();
-  for (const n of project.nodes) {
+  for (const n of nodesArr) {
     if (n?.id) byId.set(n.id, n);
   }
-  for (const part of project.nodes) {
+  // M3.2 bone-baked fallback seed — lazy-computed once per call (shared
+  // across parts since the body-warp chain leaf is project-global, not
+  // per-part). `undefined` = not yet computed; `null` = computed, no
+  // body warp leaf exists; `string` = the leaf id.
+  /** @type {string | null | undefined} */
+  let _innermostBodyWarpIdCache;
+  for (const part of nodesArr) {
     if (!part || part.type !== 'part') continue;
     const stack = [];
     const seen = new Set();
@@ -530,25 +550,65 @@ export function synthesizeModifierStacks(project) {
       cur = part.rigParent;
     }
     // Bone-baked / body-only parts (e.g. legwear) carry NO leaf in either
-    // surface but DO ride a deformer chain cached in `mesh.runtime.parent`.
-    // This fallback fires in the `clearRigWarps` → synth pipeline for
-    // bone-baked parts whose stripped stack is armature-only: without it
-    // the stack would show only the appended Armature, hiding the
-    // body-warp Lattice modifiers that actually warp their geometry (the
-    // original "legwear has no warp modifier" discoverability gap).
-    // Post-M3.1, `selectRigSpec` no longer reads `runtime.parent` — only
-    // this synth path + the v44 migration do.
-    // Seed the walk from the runtime parent so the stack is HONEST and
-    // drives eval (Blender: the affected piece declares its Lattice
-    // modifier). Slice M2 promotes this into the persisted stack.
+    // surface (no leaf modifier post-clearRigWarps strip, no rigParent
+    // because warp-seeding never set one). Without this fallback their
+    // stack would show only the appended Armature, hiding the body-warp
+    // Lattice modifiers that actually warp their geometry (the original
+    // "legwear has no warp modifier" discoverability gap).
+    //
+    // M3.2 (RULE-№4, 2026-05-23): the chain seed used to come from
+    // `mesh.runtime.parent.id` — a Cubism-shaped runtime cache. Now it
+    // derives from `findInnermostBodyWarpId` (shared helper in
+    // `warpLatticeAccess`, also used by `selectRigSpec._deriveInnermostBodyClosures`),
+    // which is pure derivation from `project.nodes`. No cache field
+    // required; matches the post-Init-Rig `am.parent = innermostBodyWarpId`
+    // semantic that bone-baked parts have always had. The previous
+    // `runtime.parent` read is retired here; the field stays persisted
+    // until M3.3 + v48 migration.
+    // Bone-baked parts (those with boneWeights set) ride the body-warp
+    // chain — find its innermost lattice via the shared helper.
+    // Production post-v44 covers this: legwear/handwear/charm/etc. get
+    // boneWeights from the v44 migration when their ancestor group was
+    // converted to a bone.
+    const partIsBoneBaked = Array.isArray(part.mesh?.boneWeights)
+      && part.mesh.boneWeights.length > 0
+      && typeof part.mesh?.jointBoneId === 'string';
+    if (!cur && partIsBoneBaked) {
+      if (_innermostBodyWarpIdCache === undefined) {
+        _innermostBodyWarpIdCache = findInnermostBodyWarpId(
+          nodesArr.filter(isWarpLatticeNode),
+          nodesArr.filter(isChainDeformerNode),
+        );
+      }
+      if (typeof _innermostBodyWarpIdCache === 'string' && _innermostBodyWarpIdCache.length > 0) {
+        cur = _innermostBodyWarpIdCache;
+      }
+    }
+    // Pre-v44 deformer-model parts (not bone-baked yet — the v44
+    // migration hasn't run, or this is a test harness that exercises
+    // the pre-migration state) may carry a `GroupRotation_<name>`
+    // deformer as their effective ancestor via the project tree.
+    // Walk up part.parent through non-bone groups; if a `GroupRotation_<name>`
+    // rotation deformer exists in project.nodes for that group, use it
+    // as the chain seed. Production never reaches this branch post-v44
+    // (migration removes all such deformers AND adds boneWeights to
+    // their dependent parts, sending them down the bone-baked branch).
+    // Replaces the prior `runtime.parent`-read fallback for this case.
     if (!cur) {
-      const rtParentId = part.mesh?.runtime?.parent?.id;
-      if (typeof rtParentId === 'string' && rtParentId.length > 0) {
-        const rtDef = byId.get(rtParentId);
-        if (rtDef && (rtDef.type === 'deformer'
-            || (rtDef.type === 'object' && rtDef.objectKind === 'lattice'))) {
-          cur = rtParentId;
+      let ancestorId = part.parent;
+      let safety = 32;
+      while (typeof ancestorId === 'string' && ancestorId.length > 0 && safety-- > 0) {
+        const ancestor = byId.get(ancestorId);
+        if (!ancestor || ancestor.type !== 'group') break;
+        // Stop at bone groups — they're handled by the armature append.
+        if (ancestor.boneRole) break;
+        const rotationId = `GroupRotation_${ancestor.name}`;
+        const rotation = byId.get(rotationId);
+        if (rotation && rotation.type === 'deformer' && rotation.deformerKind === 'rotation') {
+          cur = rotationId;
+          break;
         }
+        ancestorId = ancestor.parent;
       }
     }
     while (cur && !seen.has(cur)) {

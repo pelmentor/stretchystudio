@@ -1609,15 +1609,15 @@ export const useProjectStore = create((set, get) => {
       // eye-closure curves + neck-corner offsets + variant fades all
       // silently disappear from the live preview.
       //
-      // ORDER: this MUST run before `synthesizeModifierStacks` below.
-      // Bone-baked parts (legwear etc.) carry no `rigParent`; their
-      // deformer chain is only discoverable via `mesh.runtime.parent`,
-      // which `persistArtMeshRuntime` writes from the harvest. The
-      // stack synthesis reads that field to surface the body-warp
-      // Lattice modifiers (the "legwear has no warp modifier" gap). On
-      // a fresh Init Rig the field doesn't exist until written here, so
-      // synthesising the stacks first left bone-baked parts showing
-      // only their Armature modifier.
+      // ORDER: this MUST run before `migrateGroupRotationDeformersToBones`
+      // below, which discovers driven parts via `runtime.parent` (see
+      // `groupRotationToBone.js:73`). Post-M3.2 (2026-05-23) the modifier
+      // stack synth at line 1653 derives the bone-baked chain seed via
+      // `findInnermostBodyWarpId` over `project.nodes` topology — no
+      // longer reads `runtime.parent` — so this persistArtMeshRuntime →
+      // synth ordering is now load-bearing only for the migration in
+      // between (which is the remaining `runtime.parent` reader; M3.3 +
+      // v48 will retire it together with the field itself).
       if (harvest?.rigSpec) {
         peers.persistArtMeshRuntime(proj, harvest.rigSpec, mode);
         // RULE №4 follow-up Slice 2 (2026-05-23) — mirror the eye-

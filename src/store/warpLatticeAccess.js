@@ -169,6 +169,87 @@ export function modifierRefId(mod) {
  *   (a lattice cage mesh lives in `project.nodes` via `dataId`).
  * @returns {number[]|Float64Array|undefined}
  */
+/**
+ * Find the innermost (deepest, leaf-most) body-warp lattice id from a set
+ * of warp/lattice nodes — the "deepest warp parent that has ≥2 children"
+ * heuristic, with a fallback to the deepest BodyX/Y/Z/Breath name by
+ * chain depth (handles flat linear body-warp chains where no node has
+ * ≥2 children).
+ *
+ * Mirrors the original derivation in `_deriveInnermostBodyClosures`
+ * (`selectRigSpec.js`), extracted to this seam so the synth and the
+ * RigSpec selector share one implementation. The CLOSURES that
+ * `_deriveInnermostBodyClosures` also produces (`canvasToInnermostX/Y`)
+ * are NOT extracted because they need warp REST-state from the lift
+ * pipeline; only the leaf-id portion is pure topology.
+ *
+ * Used by:
+ *   - `synthesizeModifierStacks` (M3.2): bone-baked fallback's chain
+ *     seed when modifiers[0] is armature-only — replaces the prior
+ *     `mesh.runtime.parent.id` read.
+ *   - `selectRigSpec._deriveInnermostBodyClosures` (production path —
+ *     the helper is the topology-walk half of that function).
+ *
+ * @param {Array<object>} warpNodes - lattice/warp nodes (already filtered)
+ * @param {Array<object>} allDeformerNodes - all chain-deformer nodes
+ *   (warp + rotation) for accurate child-count of the chain hubs
+ * @returns {string|null}
+ */
+export function findInnermostBodyWarpId(warpNodes, allDeformerNodes) {
+  if (!Array.isArray(warpNodes) || warpNodes.length === 0) return null;
+  // Build child count per warp id, counting BOTH warp + rotation children
+  // (matches the chain-hub semantic — a warp is a "hub" if it has any
+  // chain descendants, not just lattice descendants).
+  /** @type {Map<string, number>} */
+  const childCount = new Map();
+  if (Array.isArray(allDeformerNodes)) {
+    for (const d of allDeformerNodes) {
+      if (d?.parent) childCount.set(d.parent, (childCount.get(d.parent) ?? 0) + 1);
+    }
+  }
+  const byId = new Map(warpNodes.map((w) => [w.id, w]));
+  /** @type {Map<string, string[]>} */
+  const childrenById = new Map();
+  for (const w of warpNodes) {
+    if (!w?.parent || !byId.has(w.parent)) continue;
+    if (!childrenById.has(w.parent)) childrenById.set(w.parent, []);
+    childrenById.get(w.parent).push(w.id);
+  }
+  const roots = warpNodes.filter((w) => !w?.parent || !byId.has(w.parent));
+
+  let best = null;
+  let bestDepth = -1;
+  function dfs(id, depth) {
+    if ((childCount.get(id) ?? 0) >= 2 && depth > bestDepth) {
+      bestDepth = depth;
+      best = id;
+    }
+    const children = childrenById.get(id) ?? [];
+    for (const c of children) dfs(c, depth + 1);
+  }
+  for (const r of roots) dfs(r.id, 0);
+
+  // Fallback: pick the deepest BodyX/Y/Z/Breath name by chain depth even
+  // without ≥2 children. Handles flat linear chains where no warp acts
+  // as a hub.
+  if (!best) {
+    let depthBest = -1;
+    function depthDfs(id, depth) {
+      if (!byId.has(id)) return;
+      const isBodyName = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'].includes(id);
+      if (isBodyName && depth > depthBest) {
+        depthBest = depth;
+        best = id;
+      }
+      const children = childrenById.get(id) ?? [];
+      for (const c of children) depthDfs(c, depth + 1);
+    }
+    for (const r of roots) depthDfs(r.id, 0);
+  }
+
+  return best;
+}
+
 export function getWarpRestGrid(node, project) {
   if (!node) return undefined;
   // Lattice object: the rest cage IS the linked meshData's vertices. Flatten

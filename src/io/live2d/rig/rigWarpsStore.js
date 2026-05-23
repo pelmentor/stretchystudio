@@ -354,10 +354,11 @@ export function clearRigWarps(project) {
     removeRigWarpNodes(project.nodes);
     // M1 (RULE-№4 modifier-stack flip, 2026-05-23): authoring writes go to
     // `part.modifiers[]`. Dropping the field is the authoritative "no rig
-    // warp" signal — the synth's leaf-resolution then either falls back to
-    // `mesh.runtime.parent` (bone-baked path) or produces an empty stack,
-    // and `synthesizeDeformerParents` clears the now-stale `part.rigParent`
-    // mirror downstream. Pre-M1 this site nulled `n.rigParent` directly.
+    // warp" signal — the synth's leaf-resolution then either derives the
+    // body-warp chain seed via `findInnermostBodyWarpId` (bone-baked path,
+    // post-M3.2) or produces an empty stack, and `synthesizeDeformerParents`
+    // clears the now-stale `part.rigParent` mirror downstream. Pre-M1 this
+    // site nulled `n.rigParent` directly.
     //
     // Audit-fix HIGH (2026-05-23): bone-baked parts carry an Armature
     // modifier whose user flags (enabled / mode / showInEditor) live ONLY
@@ -365,7 +366,8 @@ export function clearRigWarps(project) {
     // them. Preserve armature entries so `synthesizeModifierStacks`'
     // priorFlags map can carry the user's armature flags into the rebuilt
     // stack. The synth's leaf-resolution explicitly skips a leading
-    // armature entry so the warp chain is re-derived from `runtime.parent`.
+    // armature entry so the warp chain is re-derived from the
+    // `findInnermostBodyWarpId` helper (post-M3.2; was: runtime.parent).
     for (const n of project.nodes) {
       if (n && n.type === 'part' && Array.isArray(n.modifiers)) {
         const armatureEntries = n.modifiers.filter((m) => m && m.type === 'armature');

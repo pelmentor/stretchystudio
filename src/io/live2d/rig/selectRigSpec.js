@@ -50,6 +50,7 @@ import {
   isWarpLatticeNode,
   isRotationDeformerNode,
   isChainDeformerNode,
+  findInnermostBodyWarpId,
 } from '../../../store/warpLatticeAccess.js';
 import { synthesizeDeformerNodesForExport } from './synthesizeDeformerNodesForExport.js';
 import {
@@ -1083,57 +1084,12 @@ function _resolveParentRef(parentId, nodeById) {
  * walk if no chain hub is present.
  */
 function _deriveInnermostBodyClosures(warpNodes, allDeformerNodes, warpRestById) {
-  if (warpNodes.length === 0) {
-    return { innermostBodyWarpId: null, canvasToInnermostX: null, canvasToInnermostY: null };
-  }
-  // Build child count per warp id (count both warp + rotation children
-  // — same as buildRigSpecFromCmo3).
-  /** @type {Map<string, number>} */
-  const childCount = new Map();
-  for (const d of allDeformerNodes) {
-    if (d.parent) childCount.set(d.parent, (childCount.get(d.parent) ?? 0) + 1);
-  }
-  const byId = new Map(warpNodes.map((w) => [w.id, w]));
-  /** @type {Map<string, string[]>} */
-  const childrenById = new Map();
-  for (const w of warpNodes) {
-    if (!w.parent || !byId.has(w.parent)) continue;
-    if (!childrenById.has(w.parent)) childrenById.set(w.parent, []);
-    childrenById.get(w.parent).push(w.id);
-  }
-  const roots = warpNodes.filter((w) => !w.parent || !byId.has(w.parent));
-
-  let best = null;
-  let bestDepth = -1;
-  function dfs(id, depth) {
-    if ((childCount.get(id) ?? 0) >= 2 && depth > bestDepth) {
-      bestDepth = depth;
-      best = id;
-    }
-    const children = childrenById.get(id) ?? [];
-    for (const c of children) dfs(c, depth + 1);
-  }
-  for (const r of roots) dfs(r.id, 0);
-
-  // Fallback: pick the deepest BodyXWarp / BodyYWarp / BodyZWarp /
-  // BreathWarp by chain depth, even without ≥2 children. This handles
-  // the Phase-1 sidetable case where the chain is a flat linear path.
-  if (!best) {
-    let depthBest = -1;
-    function depthDfs(id, depth) {
-      const w = byId.get(id);
-      if (!w) return;
-      const isBodyName = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'].includes(id);
-      if (isBodyName && depth > depthBest) {
-        depthBest = depth;
-        best = id;
-      }
-      const children = childrenById.get(id) ?? [];
-      for (const c of children) depthDfs(c, depth + 1);
-    }
-    for (const r of roots) depthDfs(r.id, 0);
-  }
-
+  // M3.2 (RULE-№4, 2026-05-23): the topology walk that picks the deepest
+  // body-warp leaf moved to `store/warpLatticeAccess.findInnermostBodyWarpId`
+  // so the synth's bone-baked fallback shares ONE implementation with
+  // this selector. The CLOSURES (`canvasToInnermostX/Y`) stay here
+  // because they need `warpRestById` from the rest-lift pipeline.
+  const best = findInnermostBodyWarpId(warpNodes, allDeformerNodes);
   if (!best) {
     return { innermostBodyWarpId: null, canvasToInnermostX: null, canvasToInnermostY: null };
   }
