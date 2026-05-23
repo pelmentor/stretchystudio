@@ -7,6 +7,7 @@ import { useParamValuesStore } from './paramValuesStore.js';
 // migration modules onto the eager path. `migrateProject` itself is
 // loaded via `loadRigPeers` only on `loadProject`.
 import { CURRENT_SCHEMA_VERSION } from './projectSchemaVersion.js';
+import { pruneOrphanedVariantParabolas } from '../io/live2d/rig/eyeClosure.js';
 // Phase A2 — seed modules + rig-peer modules dynamically loaded on
 // first action call. See `projectStoreSeeds.js` + `projectStoreRigPeers.js`.
 // All production paths reaching these (seedAllRig / loadProject /
@@ -1907,11 +1908,20 @@ export const useProjectStore = create((set, get) => {
         });
       }
 
+      // RULE №4 Slice 3 (2026-05-23) — eagerly drop orphaned variant
+      // parabolas from `project.eyeClosureParabolas`. Closes the
+      // Blender-fidelity HIGH-5 reference-counting gap exposed by
+      // Slice 2: pre-Slice-3 a deleted variant's stored parabola sat
+      // in the variant map until the next Init Rig's full REPLACE.
+      // Now the variant map mirrors the live suffix population
+      // moment-to-moment.
+      pruneOrphanedVariantParabolas(proj);
+
       // Re-normalize draw_order for remaining parts to ensure no gaps (optional but clean)
       const remainingParts = proj.nodes
         .filter(n => n.type === 'part')
         .sort((a, b) => a.draw_order - b.draw_order);
-      
+
       remainingParts.forEach((p, i) => {
         p.draw_order = i;
       });
