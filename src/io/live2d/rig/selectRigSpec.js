@@ -578,6 +578,34 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         : cachedParent;
       const needsReproject = !_parentRefsEqual(cachedParent, effectiveParent);
 
+      // Observability for the modifier-toggle silent reprojection path
+      // (RULE-№4 audit 2026-05-23, follow-on). Disabling a modifier shifts
+      // `effectiveParent` away from the cached `cachedParent`, which forces
+      // a per-keyform re-projection of vertex positions between the two
+      // parents' rest frames (`_reprojectKeyformVerts` below). The math
+      // path is correct for well-formed warp rest states, but a missing /
+      // malformed rest state silently passes verts through verbatim
+      // (see _reprojectKeyformVerts), producing a geometry shift the user
+      // can't trace back to their modifier toggle. Log once per
+      // (part, fromParent→toParent) so the Logs panel surfaces the cause
+      // without flooding (chainEval runs every frame).
+      if (needsReproject) {
+        const fromId = cachedParent.id ?? 'root';
+        const toId = effectiveParent.id ?? 'root';
+        _warnOncePerPart(`${part.id}|reproject|${fromId}->${toId}`, () => {
+          logger.info(
+            'selectRigSpecModifierToggleReproject',
+            `modifier toggle on "${part.name ?? part.id}" — keyforms re-projected from ${cachedParent.type}:${fromId} → ${effectiveParent.type}:${toId} (cached at Init Rig; live stack diverged via per-part modifier disable)`,
+            {
+              partId: part.id,
+              partName: part.name,
+              cachedParent,
+              effectiveParent,
+            },
+          );
+        });
+      }
+
       // FULL-BLENDER bone deformation: bone-baked parts (handwear/legwear
       // riding a bone) are deformed live by `applyBonePostChainSkin` /
       // `applyTwoBoneSkinning`, driven by `bone.pose.rotation`. The
@@ -602,7 +630,11 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
           `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].vertexPositions`,
         );
         const vertexPositions = needsReproject
-          ? _reprojectKeyformVerts(cachedVerts, cachedParent, effectiveParent, warpRestById, rotationRestById)
+          ? _reprojectKeyformVerts(
+              cachedVerts, cachedParent, effectiveParent,
+              warpRestById, rotationRestById,
+              { id: part.id, name: part.name },
+            )
           : cachedVerts;
         return /** @type {object} */ ({
           keyTuple: coerceNumberArray(k.keyTuple, `selectRigSpec.artMesh[${part.id}].runtime.keyforms[${i}].keyTuple`),
@@ -867,13 +899,43 @@ function _parentRefsEqual(a, b) {
  * @param {{type:string,id:string|null}} toParent
  * @param {Map<string, {bbox:{minX:number,minY:number,maxX:number,maxY:number}}>} warpRestById
  * @param {Map<string, {pivot:{x:number,y:number}}>} rotationRestById
+ * @param {{id?:string, name?:string}} [partRefForDiag] - optional part
+ *   identity for once-per-part diagnostic logging when the silent-
+ *   passthrough path fires (RULE-№4 audit follow-on, 2026-05-23).
  * @returns {Float32Array}
  */
-function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotationRestById) {
+function _reprojectKeyformVerts(verts, fromParent, toParent, warpRestById, rotationRestById, partRefForDiag) {
   const fromCtx = _buildFrameCtx(fromParent, warpRestById, rotationRestById);
   const toCtx = _buildFrameCtx(toParent, warpRestById, rotationRestById);
   if (fromCtx === null || toCtx === null) {
-    // One side has no rest state — defensive passthrough.
+    // One side has no rest state — defensive passthrough produces
+    // verts in the WRONG frame for chainEval downstream (the cached-
+    // frame local values pass through unchanged into what chainEval
+    // treats as the effective-frame local values, producing a silent
+    // geometry shift the user can't trace back to their modifier
+    // toggle). Surface once per (part, fromParent, toParent, side)
+    // so the Logs panel exposes the missing rest state.
+    if (partRefForDiag && typeof partRefForDiag.id === 'string') {
+      const missing = fromCtx === null ? 'cached' : 'effective';
+      const missingRef = fromCtx === null ? fromParent : toParent;
+      _warnOncePerPart(
+        `${partRefForDiag.id}|reprojectPassthrough|${missing}|${missingRef.type}:${missingRef.id ?? 'root'}`,
+        () => {
+          logger.warn(
+            'selectRigSpecReprojectSilentPassthrough',
+            `keyform reprojection on "${partRefForDiag.name ?? partRefForDiag.id}" silently passed verts through — ${missing} parent ${missingRef.type}:${missingRef.id ?? 'root'} has no rest state; downstream geometry will be in the wrong frame`,
+            {
+              partId: partRefForDiag.id,
+              partName: partRefForDiag.name,
+              missingSide: missing,
+              missingParent: missingRef,
+              fromParent,
+              toParent,
+            },
+          );
+        },
+      );
+    }
     const out = new Float32Array(verts.length);
     for (let i = 0; i < verts.length; i++) out[i] = verts[i];
     return out;
