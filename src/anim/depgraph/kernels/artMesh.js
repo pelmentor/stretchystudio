@@ -61,9 +61,6 @@ import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubis
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
 import { applyBonePostChainSkin } from './bonePostChain.js';
 import {
-  isWarpLatticeNode,
-  isRotationDeformerNode,
-  isChainDeformerNode,
   modifierRefId,
   getWarpRestGrid,
 } from '../../../store/warpLatticeAccess.js';
@@ -129,148 +126,130 @@ export function kernelArtMeshEval(op, ctx) {
   // `enabled === false` check would silently ignore the eye toggle.
   const requiredMode = ctx.requiredMode ?? MODIFIER_MODE_REALTIME;
 
-  // Bone-baked parts (handwear / legwear) carry their implicit
-  // `Rotation_*` / `GroupRotation_*` parent in `mesh.runtime.parent`, NOT
-  // in `part.modifiers[]` — v21 `synthesizeModifierStacks` only inserts
-  // body-warp synthetics, not bone rotations. `selectRigSpec` sets
-  // `modifierChain: null` for those parts (selectRigSpec.js:501-564) and
-  // chainEval falls back to the GLOBAL parent-pointer walk
-  // (chainEval.js:317-400). The depgraph kernel must do the same: walking
-  // only `part.modifiers[]` skips the rotation chain entirely, leaving the
-  // verts in pivot-relative space — they render at the canvas origin
-  // (upper-left). Detection mirrors selectRigSpec's `cachedRefInModifiers`:
-  // an implicit deformer parent that no modifier entry references means the
-  // stack is incomplete, so the global walk owns the whole chain.
-  const implicitParent = part.mesh?.runtime?.parent;
-  const implicitParentId = (implicitParent && implicitParent.type !== 'root'
-    && typeof implicitParent.id === 'string' && implicitParent.id.length > 0)
-    ? implicitParent.id
-    : null;
-  const implicitInModifiers = !!implicitParentId
-    && stack.some((m) => m && modifierRefId(m) === implicitParentId);
+  // M2.1 (RULE-№4, 2026-05-23): the implicit-parent fallback that walked
+  // `mesh.runtime.parent` for pre-RULE-№4 rotation-deformer-shaped chains
+  // is retired. Post-RULE-№4 (v44 migration `migrations/groupRotationToBone.js`),
+  // bone-baked parts' `runtime.parent` is `{type:'part', id:<boneGroupId>}`
+  // and the bone transform comes from the always-last Armature modifier
+  // entry the synth appends to every bone-weighted part's stack (handled
+  // by `applyBonePostChainSkin` below). The fallback was dead code for any
+  // migrated project; `walkDeformerParentChain` + the matching `build.js`
+  // implicit-parent dep-edges are removed together.
+  let bufB = null;
+  for (let i = 0; i < stack.length; i++) {
+    const mod = stack[i];
+    if (!mod || !isModifierEnabled(mod, requiredMode)) continue;
+    // v43 — lattice (warp) modifiers reference the cage object via
+    // `objectId`; rotation via `deformerId`. The depgraph deformer node
+    // is keyed by that id either way.
+    const deformerId = modifierRefId(mod);
+    if (typeof deformerId !== 'string' || deformerId.length === 0) continue;
+    if (bufB === null) bufB = new Float32Array(len);
 
-  if (implicitParentId && !implicitInModifiers) {
-    // Bone-baked fallback — walk the implicit deformer parent chain
-    // (`def.parent` pointers) applying each ancestor's lifted-grid /
-    // canvas-final matrix, exactly as `gridLift.js` walks for warp CPs.
-    bufA = walkDeformerParentChain(implicitParentId, ctx, bufA, len, tmp);
-  } else {
-    let bufB = null;
-    for (let i = 0; i < stack.length; i++) {
-      const mod = stack[i];
-      if (!mod || !isModifierEnabled(mod, requiredMode)) continue;
-      // v43 — lattice (warp) modifiers reference the cage object via
-      // `objectId`; rotation via `deformerId`. The depgraph deformer node
-      // is keyed by that id either way.
-      const deformerId = modifierRefId(mod);
-      if (typeof deformerId !== 'string' || deformerId.length === 0) continue;
-      if (bufB === null) bufB = new Float32Array(len);
-
-      // Build this modifier's EFFECTIVE (enabled) chain-above, leaf-first.
-      // Both the warp lift and the rotation canvas-final probe compose
-      // through it. The global GRID_LIFT_TO_PARENT / MATRIX_BUILD ops
-      // compose through the deformer's GLOBAL `def.parent` chain — correct
-      // only when THIS part's effective chain-above matches it. Under
-      // Blender per-part modifier semantics a part can disable a MID-STACK
-      // modifier on a shared deformer (e.g. a body warp), so its effective
-      // chain skips that ancestor; feeding it the global op would deform it
-      // by a warp/rotation it opted out of. When any ancestor is disabled
-      // (`skippedDisabledAbove`) we recompose through the explicit chain;
-      // the common no-disable case reuses the precomputed global op
-      // verbatim, so it's byte-identical and free (oracle/parity untouched).
-      // A DISABLED warp is composed at its REST grid (Blender pass-through:
-      // the modifier contributes its rest mapping, removing only the
-      // param-driven deformation, NOT the spatial frame). Excluding it
-      // instead collapses the frame and flings the part off-canvas. Disabled
-      // rotations are still excluded (rotation-rest is a separate case);
-      // both set `hasDisabledAbove` to take the per-part recompose path.
-      const chainAbove = [];
-      let hasDisabledAbove = false;
-      for (let j = i + 1; j < stack.length; j++) {
-        const up = stack[j];
-        if (!up) continue;
-        const upEnabled = isModifierEnabled(up, requiredMode);
-        // Only chain-deformer steps participate in the composition.
-        // computePerPartLift / computePerPartRotationCanvasFinal dispatch on
-        // 'warp'/'rotation'; map lattice → 'warp' (a lattice IS a warp);
-        // SKIP armature / unknown types (not part of the warp/rotation chain).
-        const upChainType = up.type === 'rotation'
-          ? 'rotation'
-          : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
-        if (!upChainType) continue;
-        if (!upEnabled) {
-          hasDisabledAbove = true;
-          // Disabled rotation: excluded (rest-rotation not yet supported).
-          if (upChainType === 'rotation') continue;
-        }
-        const upId = modifierRefId(up);
-        if (typeof upId === 'string' && upId.length > 0) {
-          // `enabled` only meaningful for warp steps (disabled→rest grid).
-          chainAbove.push({ type: upChainType, id: upId, enabled: upChainType === 'warp' ? upEnabled : true });
-        }
+    // Build this modifier's EFFECTIVE (enabled) chain-above, leaf-first.
+    // Both the warp lift and the rotation canvas-final probe compose
+    // through it. The global GRID_LIFT_TO_PARENT / MATRIX_BUILD ops
+    // compose through the deformer's GLOBAL `def.parent` chain — correct
+    // only when THIS part's effective chain-above matches it. Under
+    // Blender per-part modifier semantics a part can disable a MID-STACK
+    // modifier on a shared deformer (e.g. a body warp), so its effective
+    // chain skips that ancestor; feeding it the global op would deform it
+    // by a warp/rotation it opted out of. When any ancestor is disabled
+    // (`skippedDisabledAbove`) we recompose through the explicit chain;
+    // the common no-disable case reuses the precomputed global op
+    // verbatim, so it's byte-identical and free (oracle/parity untouched).
+    // A DISABLED warp is composed at its REST grid (Blender pass-through:
+    // the modifier contributes its rest mapping, removing only the
+    // param-driven deformation, NOT the spatial frame). Excluding it
+    // instead collapses the frame and flings the part off-canvas. Disabled
+    // rotations are still excluded (rotation-rest is a separate case);
+    // both set `hasDisabledAbove` to take the per-part recompose path.
+    const chainAbove = [];
+    let hasDisabledAbove = false;
+    for (let j = i + 1; j < stack.length; j++) {
+      const up = stack[j];
+      if (!up) continue;
+      const upEnabled = isModifierEnabled(up, requiredMode);
+      // Only chain-deformer steps participate in the composition.
+      // computePerPartLift / computePerPartRotationCanvasFinal dispatch on
+      // 'warp'/'rotation'; map lattice → 'warp' (a lattice IS a warp);
+      // SKIP armature / unknown types (not part of the warp/rotation chain).
+      const upChainType = up.type === 'rotation'
+        ? 'rotation'
+        : (up.type === 'warp' || up.type === 'lattice') ? 'warp' : null;
+      if (!upChainType) continue;
+      if (!upEnabled) {
+        hasDisabledAbove = true;
+        // Disabled rotation: excluded (rest-rotation not yet supported).
+        if (upChainType === 'rotation') continue;
       }
-
-      if (mod.type === 'warp' || mod.type === 'lattice') {
-        let lift = null;
-        if (!hasDisabledAbove) {
-          lift = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`);
-        }
-        if (!lift?.lifted) {
-          lift = computePerPartLift(deformerId, chainAbove, ctx);
-        }
-        if (lift?.lifted) {
-          evalWarpKernelCubism(
-            lift.lifted, lift.gridSize, lift.isQuad,
-            bufA, bufB, len >> 1,
-          );
-          const swap = bufA; bufA = bufB; bufB = swap;
-          // Lifted grid output IS canvas-px; chain collapses.
-          break;
-        }
-        // Fallback: unlifted current-frame grid (broken chain).
-        const keyKey = `${deformerId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`;
-        const keyState = ctx.outputs.get(keyKey);
-        if (keyState?.grid) {
-          evalWarpKernelCubism(
-            keyState.grid, keyState.gridSize,
-            keyState.isQuadTransform === true,
-            bufA, bufB, len >> 1,
-          );
-          const swap = bufA; bufA = bufB; bufB = swap;
-        }
-      } else if (mod.type === 'rotation') {
-        // Global MATRIX_BUILD bakes the rotation's canvas-final pivot
-        // through its GLOBAL parent chain (the Setup probe walks
-        // `def.parent`). When an ancestor is disabled for THIS part, that
-        // global matrix still carries the disabled warp/rotation — so
-        // disabling e.g. the body Breath warp on a bone-baked part whose
-        // leaf is a GroupRotation has no effect (the rotation collapses the
-        // chain via `isCanvasFinal`). Recompose the canvas-final matrix
-        // through the part's effective chain instead. No-disable → reuse the
-        // global op (byte-identical fast path).
-        let matState = null;
-        if (!hasDisabledAbove) {
-          matState = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
-        }
-        if (!matState?.mat) {
-          matState = computePerPartRotationCanvasFinal(deformerId, chainAbove, ctx);
-        }
-        if (!matState?.mat) continue;
-        const m = matState.mat;
-        for (let v = 0; v < len; v += 2) {
-          applyMat3ToPoint(m, bufA[v], bufA[v + 1], tmp);
-          bufB[v] = tmp[0];
-          bufB[v + 1] = tmp[1];
-        }
-        const swap = bufA; bufA = bufB; bufB = swap;
-        if (matState.isCanvasFinal) break;
+      const upId = modifierRefId(up);
+      if (typeof upId === 'string' && upId.length > 0) {
+        // `enabled` only meaningful for warp steps (disabled→rest grid).
+        chainAbove.push({ type: upChainType, id: upId, enabled: upChainType === 'warp' ? upEnabled : true });
       }
-      // Armature modifiers fall through here intentionally. Bone
-      // skinning runs as a single post-chain pass below — once per part,
-      // using the joint + parent bone WORLD matrices composed from
-      // TRANSFORM_COMPOSE outputs. Mirrors the renderer's three-state
-      // composition (`renderer/bonePostChainComposition.js`).
     }
+
+    if (mod.type === 'warp' || mod.type === 'lattice') {
+      let lift = null;
+      if (!hasDisabledAbove) {
+        lift = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`);
+      }
+      if (!lift?.lifted) {
+        lift = computePerPartLift(deformerId, chainAbove, ctx);
+      }
+      if (lift?.lifted) {
+        evalWarpKernelCubism(
+          lift.lifted, lift.gridSize, lift.isQuad,
+          bufA, bufB, len >> 1,
+        );
+        const swap = bufA; bufA = bufB; bufB = swap;
+        // Lifted grid output IS canvas-px; chain collapses.
+        break;
+      }
+      // Fallback: unlifted current-frame grid (broken chain).
+      const keyKey = `${deformerId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`;
+      const keyState = ctx.outputs.get(keyKey);
+      if (keyState?.grid) {
+        evalWarpKernelCubism(
+          keyState.grid, keyState.gridSize,
+          keyState.isQuadTransform === true,
+          bufA, bufB, len >> 1,
+        );
+        const swap = bufA; bufA = bufB; bufB = swap;
+      }
+    } else if (mod.type === 'rotation') {
+      // Global MATRIX_BUILD bakes the rotation's canvas-final pivot
+      // through its GLOBAL parent chain (the Setup probe walks
+      // `def.parent`). When an ancestor is disabled for THIS part, that
+      // global matrix still carries the disabled warp/rotation — so
+      // disabling e.g. the body Breath warp on a bone-baked part whose
+      // leaf is a GroupRotation has no effect (the rotation collapses the
+      // chain via `isCanvasFinal`). Recompose the canvas-final matrix
+      // through the part's effective chain instead. No-disable → reuse the
+      // global op (byte-identical fast path).
+      let matState = null;
+      if (!hasDisabledAbove) {
+        matState = ctx.outputs.get(`${deformerId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`);
+      }
+      if (!matState?.mat) {
+        matState = computePerPartRotationCanvasFinal(deformerId, chainAbove, ctx);
+      }
+      if (!matState?.mat) continue;
+      const m = matState.mat;
+      for (let v = 0; v < len; v += 2) {
+        applyMat3ToPoint(m, bufA[v], bufA[v + 1], tmp);
+        bufB[v] = tmp[0];
+        bufB[v + 1] = tmp[1];
+      }
+      const swap = bufA; bufA = bufB; bufB = swap;
+      if (matState.isCanvasFinal) break;
+    }
+    // Armature modifiers fall through here intentionally. Bone
+    // skinning runs as a single post-chain pass below — once per part,
+    // using the joint + parent bone WORLD matrices composed from
+    // TRANSFORM_COMPOSE outputs. Mirrors the renderer's three-state
+    // composition (`renderer/bonePostChainComposition.js`).
   }
 
   // Phase 0.D — bone post-chain composition. Caches per-eval bone
@@ -300,81 +279,6 @@ export function kernelArtMeshEval(op, ctx) {
     opacity: meshState.opacity,
     drawOrder: meshState.drawOrder,
   };
-}
-
-/**
- * Walk a part's IMPLICIT deformer parent chain (via `def.parent`
- * pointers) applying each ancestor's transform, returning the final
- * canvas-px vertex buffer. Used for bone-baked parts whose chain is not
- * captured by `part.modifiers[]`.
- *
- * Mirrors `gridLift.js`'s parent walk and `chainEval.js:317-400`'s
- * legacy fallback:
- *   - warp ancestor → bilinear through its GRID_LIFT_TO_PARENT (canvas-px,
- *     pre-composed through every ancestor); break.
- *   - warp ancestor with no lifted grid → unlifted KEYFORM_EVAL grid;
- *     continue walking (broken-chain best effort).
- *   - rotation ancestor → apply MATRIX_BUILD; break if canvas-final, else
- *     continue to `def.parent`.
- *
- * @param {string} startId - implicit parent deformer id (`runtime.parent.id`)
- * @param {import('../eval.js').EvalContext} ctx
- * @param {Float32Array} bufA - keyform-blended source verts (mutated/swapped)
- * @param {number} len - flat vertex-coordinate count (2 × vertexCount)
- * @param {[number, number]} tmp - reusable scratch point
- * @returns {Float32Array} final canvas-px vertex buffer
- */
-function walkDeformerParentChain(startId, ctx, bufA, len, tmp) {
-  let bufB = null;
-  let curId = startId;
-  let safety = 32; // hard guard against cycle bugs (matches chainEval)
-  const nodes = ctx.project?.nodes ?? [];
-  while (curId && safety-- > 0) {
-    const cur = nodes.find((n) => n?.id === curId);
-    if (!isChainDeformerNode(cur)) break;
-    if (bufB === null) bufB = new Float32Array(len);
-
-    if (isWarpLatticeNode(cur)) {
-      const liftKey = `${curId}/${NodeType.GEOMETRY}/${OperationCode.GRID_LIFT_TO_PARENT}`;
-      const lift = ctx.outputs.get(liftKey);
-      if (lift?.lifted) {
-        evalWarpKernelCubism(lift.lifted, lift.gridSize, lift.isQuad, bufA, bufB, len >> 1);
-        const swap = bufA; bufA = bufB; bufB = swap;
-        break; // lifted grid IS canvas-px; chain collapses
-      }
-      const keyKey = `${curId}/${NodeType.GEOMETRY}/${OperationCode.KEYFORM_EVAL}`;
-      const keyState = ctx.outputs.get(keyKey);
-      if (keyState?.grid) {
-        evalWarpKernelCubism(
-          keyState.grid, keyState.gridSize, keyState.isQuadTransform === true,
-          bufA, bufB, len >> 1,
-        );
-        const swap = bufA; bufA = bufB; bufB = swap;
-      }
-      curId = typeof cur.parent === 'string' ? cur.parent : null;
-      continue;
-    }
-
-    if (isRotationDeformerNode(cur)) {
-      const matKey = `${curId}/${NodeType.GEOMETRY}/${OperationCode.MATRIX_BUILD}`;
-      const matState = ctx.outputs.get(matKey);
-      if (matState?.mat) {
-        const m = matState.mat;
-        for (let v = 0; v < len; v += 2) {
-          applyMat3ToPoint(m, bufA[v], bufA[v + 1], tmp);
-          bufB[v] = tmp[0];
-          bufB[v + 1] = tmp[1];
-        }
-        const swap = bufA; bufA = bufB; bufB = swap;
-        if (matState.isCanvasFinal) break;
-      }
-      curId = typeof cur.parent === 'string' ? cur.parent : null;
-      continue;
-    }
-
-    break;
-  }
-  return bufA;
 }
 
 /**

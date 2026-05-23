@@ -192,13 +192,95 @@ function makeBareRuntime() {
 }
 
 // ---------------------------------------------------------------------
-// Test 4: BONE-BAKED part — rotation parent in `runtime.parent` but NOT
-// in `modifiers[]`. Reproduces the handwear/legwear "dislocated to the
-// upper-left corner after Init Rig" bug: the depgraph art-mesh kernel
-// used to walk only `part.modifiers[]`, so the implicit rotation chain
-// was never applied and verts stayed in pivot-relative space (≈ origin).
-// chainEval handles this via its global parent-pointer fallback
-// (chainEval.js:317-400); the depgraph now mirrors it.
+// Test 4: BONE-BAKED part — post-RULE-№4 bone-group/armature shape.
+//
+// Pre-M2.1 this test used a pre-RULE-№4 fixture (rotation deformer in
+// `runtime.parent`, empty modifiers[]) that exercised the depgraph's
+// `walkDeformerParentChain` fallback. Post-M2.1 that fallback is deleted
+// — bone-baked parts now carry an explicit Armature modifier the synth
+// appends to every bone-weighted part's stack (v44 migration converted
+// the legacy rotation deformers; `synthesizeModifierStacks` emits the
+// armature entry; `applyBonePostChainSkin` handles the transform).
+//
+// The fixture mirrors what `synthesizeModifierStacks` would produce for
+// a real bone-baked part: bone-group parent in `runtime.parent`, an
+// Armature modifier as the tail of `modifiers[]`. Verifies the depgraph
+// eval matches chainEval and the bone transform actually fires (verts
+// land at canvas-px under the bone's WORLD matrix, not at the part's
+// rest position).
+// ---------------------------------------------------------------------
+{
+  const W = 800, H = 600;
+  const verts = quadVerts(); // canvas-px rest positions (centred at 400,300 with half-extents 100/100)
+  const project = {
+    canvas: { width: W, height: H },
+    parameters: [],
+    nodes: [
+      // Bone group at canvas (400, 300) — same pivot as the legacy
+      // rotation deformer this test previously used.
+      { id: 'leftElbow', type: 'group', boneRole: 'leftElbow',
+        transform: { x: 400, y: 300, rotation: 0, scale: 1, pivotX: 400, pivotY: 300 },
+        pose: { rotation: 0 } },
+
+      { id: 'handwear', type: 'part', name: 'handwear', visible: true, draw_order: 100,
+        parent: 'leftElbow',
+        modifiers: [
+          // Armature modifier — the canonical post-RULE-№4 shape for a
+          // bone-baked part. `applyBonePostChainSkin` reads jointBoneId
+          // from the modifier's data block.
+          { type: 'armature', deformerId: 'leftElbow', enabled: true, mode: 3,
+            showInEditor: true,
+            data: {
+              jointBoneId: 'leftElbow',
+              jointBoneRole: 'leftElbow',
+              parentBoneId: null,
+              parentBoneRole: null,
+              deformFlag: 1,
+              vertexGroupName: '',
+            } },
+        ],
+        mesh: {
+          uvs: [0, 0,  1, 0,  0, 1,  1, 1],
+          triangles: [0, 1, 2,  1, 3, 2],
+          vertices: verts,
+          jointBoneId: 'leftElbow',
+          boneWeights: [[1, 0], [1, 0], [1, 0], [1, 0]], // 100% weight on leftElbow
+          runtime: {
+            parent: { type: 'part', id: 'leftElbow' },
+            bindings: [],
+            keyforms: [
+              { keyTuple: [], opacity: 1, vertexPositions: verts },
+            ],
+          },
+        } },
+    ],
+    animations: [], physicsRules: [],
+  };
+  const rigSpec = selectRigSpec(project);
+  const ce = evalRig(rigSpec, {});
+  const dg = evalProjectFrameViaDepgraph(project, {});
+  assert(ce.length === 1 && dg.length === 1, 'bone-baked: 1 frame each');
+  const d = maxDelta(ce[0].vertexPositions, dg[0].vertexPositions);
+  assert(d < 1e-4, `bone-baked: depgraph matches chainEval (delta=${d})`,
+    `chainEval=${Array.from(ce[0].vertexPositions)}, depgraph=${Array.from(dg[0].vertexPositions)}`);
+  // With pose.rotation=0 the bone's WORLD matrix is identity around the
+  // pivot, so verts land at their canvas-px rest positions.
+  assert(Math.abs(dg[0].vertexPositions[0] - 100) < 1e-4,
+    `bone-baked: armature path resolved (x[0]=${dg[0].vertexPositions[0]}, want 100)`);
+}
+
+// ---------------------------------------------------------------------
+// Test 4b (M2.1 pin, 2026-05-23): pre-RULE-№4 rotation-deformer fixture
+// shape no longer gets the implicit-parent walk treatment.
+//
+// Before M2.1 a part with `runtime.parent.type === 'rotation'` and empty
+// `modifiers[]` would have its verts brought from pivot-relative to
+// canvas-px via `walkDeformerParentChain`. After M2.1 that fallback is
+// gone — such a fixture WILL produce pivot-relative verts because no
+// modifier entry covers the rotation. Production projects can never hit
+// this shape (v44 migration is mandatory on load), but the test pins
+// the deletion contract so a future regression bringing the fallback
+// back would fail loudly.
 // ---------------------------------------------------------------------
 {
   const W = 800, H = 600;
@@ -218,9 +300,6 @@ function makeBareRuntime() {
         isLocked: false, useBoneUiTestImpl: false },
 
       { id: 'handwear', type: 'part', name: 'handwear', visible: true, draw_order: 100,
-        // Bone-baked: the implicit rotation parent lives ONLY in
-        // mesh.runtime.parent — `modifiers` is empty (mirrors what
-        // synthesizeModifierStacks produces for bone-rotation parents).
         rigParent: 'Rotation_leftArm',
         modifiers: [],
         mesh: {
@@ -238,17 +317,12 @@ function makeBareRuntime() {
     ],
     animations: [], physicsRules: [],
   };
-  const rigSpec = selectRigSpec(project);
-  const ce = evalRig(rigSpec, {});
   const dg = evalProjectFrameViaDepgraph(project, {});
-  assert(ce.length === 1 && dg.length === 1, 'bone-baked: 1 frame each');
-  const d = maxDelta(ce[0].vertexPositions, dg[0].vertexPositions);
-  assert(d < 1e-4, `bone-baked: depgraph matches chainEval (delta=${d})`,
-    `chainEval=${Array.from(ce[0].vertexPositions)}, depgraph=${Array.from(dg[0].vertexPositions)}`);
-  // The rotation chain MUST be applied — verts land back at canvas-px
-  // (x[0]≈100), NOT the un-composed pivot-relative value (x[0]≈-300).
-  assert(Math.abs(dg[0].vertexPositions[0] - 100) < 1e-4,
-    `bone-baked: implicit rotation applied (x[0]=${dg[0].vertexPositions[0]}, want 100 not -300)`);
+  assert(dg.length === 1, 'M2.1 pin: pre-RULE-№4 fixture still produces a frame');
+  // Without the implicit-parent walk, verts stay at the pivot-relative
+  // value from runtime.keyforms — x[0] ≈ -300 (was -300 + 400 = 100 pre-M2.1).
+  assert(Math.abs(dg[0].vertexPositions[0] - (-300)) < 1e-4,
+    `M2.1 pin: implicit-parent fallback retired (x[0]=${dg[0].vertexPositions[0]}, want -300 not 100)`);
 }
 
 // ---------------------------------------------------------------------

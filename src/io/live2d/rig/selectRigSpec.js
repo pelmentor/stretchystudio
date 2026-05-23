@@ -511,17 +511,21 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       // local frame to the effective parent's, so chainEval's chain
       // walk lands the geometry in the right space.
       const stackLeaf = _resolveEffectiveLeafModifier(part, nodeById);
-      // Bone-baked-path bypass — bone-baked parts (legwear etc.) have
-      // an IMPLICIT `GroupRotation_<bone>` parent stored in
-      // `runtime.parent` but NOT in `part.modifiers[]` (v21
-      // `synthesizeModifierStacks` only inserts body-warp synthetics,
-      // not bone rotations). For those parts the modifier stack is
-      // incomplete — chainEval has to fall back to the legacy global
-      // parent-pointer walk to land the geometry correctly. Detection:
-      // if `runtime.parent.id` exists but isn't referenced by any
-      // entry in `part.modifiers[]`, the stack doesn't represent the
-      // full chain. Modifier toggles still work for parts whose stack
-      // IS complete (regular parts with rigWarps).
+      // Bone-baked-path bypass — bone-baked parts (legwear etc.) carry
+      // an Armature modifier in `part.modifiers[]` whose `deformerId`
+      // points at the bone GROUP node (post-RULE-№4 v44 migration). The
+      // bone group is NOT a chain-deformer node (`isChainDeformerNode`
+      // returns false for `type:'group'`), so `_resolveModifierChain`
+      // skips it and produces an empty warp/rotation chain. We surface
+      // `modifierChain: null` for those parts so chainEval early-returns
+      // and the renderer's bone post-chain (`applyTwoBoneSkinning`)
+      // handles LBS. Detection: `cachedParent.id` (the bone group)
+      // exists but isn't referenced by any warp/rotation entry in
+      // `part.modifiers[]` — only the Armature entry covers it, and
+      // Armature is intentionally excluded from the chain.
+      // M2.1 (2026-05-23): the matching depgraph kernel fallback
+      // (`walkDeformerParentChain`) was retired; the bone transform now
+      // comes from `applyBonePostChainSkin` exclusively.
       const cachedRefInModifiers = !!(
         cachedParent.id
         && Array.isArray(part.modifiers)
@@ -581,10 +585,12 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         // pointer (which can't express divergent per-part chains for
         // shared deformers).
         //
-        // Suppressed (= null) for parts whose modifier stack is
-        // incomplete (bone-baked: cachedParent isn't in modifiers[]) —
-        // chainEval falls back to the global parent-pointer walk for
-        // those, preserving legacy correctness.
+        // Suppressed (= null) for parts whose only chain-relevant entry
+        // is an Armature modifier — the bone group isn't a chain-deformer
+        // node, so the warp/rotation chain is empty. chainEval's early-
+        // return + the renderer's bone post-chain pass own the geometry
+        // for those parts (post-RULE-№4 + M2.1: no implicit-parent walk
+        // anywhere; bone transform = `applyTwoBoneSkinning` only).
         modifierChain: (stackLeaf.hasModifiers && modifierStackComplete)
           ? stackLeaf.chain
           : null,
