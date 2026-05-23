@@ -13,12 +13,13 @@
  * item; the modifier-stack flip plan retired the field across six
  * shipped slices (M1/M2.1/M2.2/M3.1/M3.2/M5).
  *
- * v47 is the final cleanup: after Slice M3.3 dropped the last reader
+ * v47 is the cleanup: after Slice M3.3 dropped the last reader
  * (the v44 migration's redundant `|| p.mesh?.runtime?.parent?.id ===
- * def.id` OR-branch, made redundant by `p.rigParent === def.id` on
- * pre-v44 saves) AND the writer (`persistArtMeshRuntime` and the v44
- * migration's `rt.parent = parentRef` line), v47 walks every part and
- * deletes the `parent` sub-field from `mesh.runtime`. The rest of
+ * def.id` OR-branch — superseded by the topology signal `p.parent ===
+ * groupName`, which Slice M4 promoted to the sole `partsOf` arm) AND
+ * the writer (`persistArtMeshRuntime` and the v44 migration's
+ * `rt.parent = parentRef` line), v47 walks every part and deletes
+ * the `parent` sub-field from `mesh.runtime`. The rest of
  * `mesh.runtime` (`bindings`, `keyforms`) is untouched — those are
  * still actively read by selectRigSpec + chainEval.
  *

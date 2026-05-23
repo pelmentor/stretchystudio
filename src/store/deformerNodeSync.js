@@ -355,8 +355,10 @@ export function synthesizeDeformerNodesFromSidetables(project) {
     }
   }
 
-  // 3. Per-mesh rigWarps. Also write `parts[partId].rigParent` so the
-  //    Phase 2 selector can resolve parent without walking rigSpec.
+  // 3. Per-mesh rigWarps. Also write `parts[partId].rigParent` — this
+  //    seed is consumed only by the v20 migration's inlined bootstrap
+  //    (rigParent → modifiers[0]) before v48 strips the field. Live
+  //    runtime code post-M4 (RULE-№4, 2026-05-23) no longer reads it.
   if (project.rigWarps && typeof project.rigWarps === 'object') {
     for (const [partId, spec] of Object.entries(project.rigWarps)) {
       if (!spec || typeof spec !== 'object') continue;

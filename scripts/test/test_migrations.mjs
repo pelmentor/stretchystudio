@@ -385,8 +385,12 @@ function assertThrows(fn, name) {
       { id: 'neck', type: 'part', rigParent: 'GroupRotation_neck',
         parent: 'neck',
         mesh: { vertices: [{ x: 100, y: 100 }] } },
-      // Bone group for v44 — neck is a sibling of GroupRotation_neck so
-      // v44 doesn't convert it (no matching group node named 'neck').
+      // v44 (groupRotationToBone) skips this rotation deformer because
+      // `byId.get('neck')` returns the part node above (type:'part'),
+      // which fails v44's `group.type !== 'group'` gate (see
+      // `migrations/groupRotationToBone.js`). So the rotation modifier
+      // seeded into `neck.modifiers[0]` by the v20 bootstrap survives
+      // through v48 and is what this test pins.
     ],
   };
   migrateProject(p);
