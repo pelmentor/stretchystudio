@@ -273,7 +273,21 @@ export function WarpDeformerOverlay() {
             if (i2 + 1 >= kf.positions.length) return;
             kf.positions[i2]     = local[0];
             kf.positions[i2 + 1] = local[1];
+            // Keyform-level marker — used by the keyform editor's
+            // cancel-rollback path to know whether to strip the marker
+            // (DeformerKeyformsSection.jsx:127).
             kf._userAuthored = true;
+            // Node-level promotion — the re-rig merge readers
+            // (rigWarpsStore.js / faceParallaxStore.js / bodyWarpStore.js /
+            // projectStore.js rotation-merge) gate preservation on
+            // `node._userAuthored`. Without this promotion, a user's
+            // keyform drag survived in-session but got wiped on the next
+            // Init Rig in 'replace' mode (RULE-№4 audit 2026-05-23 — the
+            // `_userAuthored` flag gap). Auto-locking the deformer on
+            // first keyform drag matches user intent ("I edited this,
+            // don't refit it"); explicit unlock via DeformerInfoSection's
+            // lock button stays available.
+            n._userAuthored = true;
           });
         }
 

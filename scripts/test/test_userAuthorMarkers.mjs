@@ -463,6 +463,79 @@ function makeBodyWarpChain() {
   assert(p2Node._userAuthored !== true, 'rigWarps merge: p2 not marked');
 }
 
+// --- Keyform-drag shape survives merge re-rig (RULE-№4 follow-on,
+//     2026-05-23) ---
+//
+// When the user drags a keyform vertex in the canvas overlay
+// (WarpDeformerOverlay.jsx) or a pivot/handle in the rotation overlay
+// (RotationDeformerOverlay.jsx), BOTH the keyform-level
+// `_userAuthored` (for the keyform editor's cancel-rollback) AND the
+// node-level `_userAuthored` (for the re-rig merge readers) must be
+// set. Pre-fix only the keyform-level flag was written, so the user's
+// hand-edited keyforms got wiped on the next refit in 'merge' mode
+// (and on every 'replace' Init Rig — which is intentional, but the
+// merge gap was the audit-flagged bug).
+//
+// This test pins the post-fix invariant by simulating the post-drag
+// shape (both flags set on a prior node) and asserting the merge
+// preserves the user's keyform positions verbatim.
+
+{
+  const auto = new Map();
+  auto.set('p1', {
+    id: 'w1', name: 'AutoFit', targetPartId: 'p1',
+    parent: { type: 'warp', id: 'BodyXWarp' },
+    canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 },
+    gridSize: { rows: 2, cols: 2 },
+    baseGrid: new Float64Array([0,0, 1,0, 0,1, 1,1, 0,0, 1,0, 0,1, 1,1, 0,0]),
+    localFrame: 'normalized-0to1',
+    bindings: [],
+    // Auto-seeded keyform would have these positions.
+    keyforms: [{ keyTuple: [0], positions: new Float64Array(18), opacity: 1 }],
+    isVisible: true, isLocked: false, isQuadTransform: false,
+  });
+  // Prior project node: user dragged a keyform vertex. Both
+  // node-level AND keyform-level _userAuthored set — matches the
+  // post-fix overlay write pattern.
+  const userEditedPositions = new Float64Array([
+    7, 7,   0.5, 0,   0, 0.5,   1, 1,   0, 0,   1, 0,   0, 1,   1, 1,   0, 0,
+  ]);
+  const project = {
+    nodes: [{
+      id: 'w1', type: 'deformer', deformerKind: 'warp',
+      targetPartId: 'p1',
+      _userAuthored: true, // ← node-level, set by overlay drag (THIS test)
+      parent: 'BodyXWarp',
+      gridSize: { rows: 2, cols: 2 },
+      baseGrid: new Float64Array([0,0, 1,0, 0,1, 1,1, 0,0, 1,0, 0,1, 1,1, 0,0]),
+      bindings: [],
+      keyforms: [{
+        keyTuple: [0],
+        positions: userEditedPositions,
+        opacity: 1,
+        _userAuthored: true, // ← keyform-level, also set by overlay drag
+      }],
+    }],
+  };
+  seedRigWarps(project, auto, 'merge');
+  const node = project.nodes.find((n) => n.targetPartId === 'p1');
+  assert(node && node._userAuthored === true,
+    'overlay-drag shape: node._userAuthored preserved across merge re-rig');
+  assert(node && Array.isArray(node.keyforms) && node.keyforms.length === 1,
+    'overlay-drag shape: single keyform preserved');
+  // User-dragged positions must survive verbatim (NOT be replaced by
+  // the auto-seeded zero-grid).
+  const positions = node.keyforms[0]?.positions;
+  assert(Array.isArray(positions) || ArrayBuffer.isView(positions),
+    'overlay-drag shape: keyform positions preserved');
+  assert(positions?.[0] === 7 && positions?.[1] === 7,
+    `overlay-drag shape: user-dragged vertex 0 preserved (got ${positions?.[0]}, ${positions?.[1]})`);
+  // (Per-keyform `_userAuthored` is intentionally NOT pinned here —
+  // it's used by the keyform editor's in-flight cancel-rollback state
+  // only and may or may not survive the spec round-trip; the user-
+  // observable invariant is the position preservation above.)
+}
+
 // --- Summary ---
 
 console.log(`userAuthorMarkers: ${passed} passed, ${failed} failed`);

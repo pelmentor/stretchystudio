@@ -137,7 +137,18 @@ export function RotationDeformerOverlay() {
         // baseAngle (matches how the overlay's display angle is read).
         kf.angle = ang - (rot.baseAngle ?? 0);
       }
+      // Keyform-level marker — used by the keyform editor's cancel-rollback
+      // path (DeformerKeyformsSection.jsx:127) to know whether to strip the
+      // marker.
       kf._userAuthored = true;
+      // Node-level promotion — re-rig merge readers
+      // (projectStore.js rotation-merge etc.) gate preservation on
+      // `node._userAuthored`. Without this promotion, the user's pivot /
+      // handle drag survived in-session but got wiped on the next Init
+      // Rig in 'replace' mode (RULE-№4 audit 2026-05-23 — the
+      // `_userAuthored` flag gap). Auto-locking on first drag matches
+      // user intent; explicit unlock stays available via the lock button.
+      n._userAuthored = true;
     });
   }
 
