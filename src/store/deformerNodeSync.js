@@ -511,11 +511,20 @@ export function synthesizeModifierStacks(project) {
     // helper + previously-saved projects) writes `part.rigParent` instead;
     // honour it as a fallback so migrated saves keep round-tripping.
     // Future slice M4 retires `rigParent` as a runtime read entirely.
+    //
+    // An ARMATURE entry at modifiers[0] is NOT a deformer leaf — armature
+    // is the always-last bone-skin pass, never the chain root. When
+    // `clearRigWarps` strips warp leaves it leaves armature-only stacks
+    // behind (so the user's armature flags survive via priorFlags); the
+    // synth must skip past that entry and fall through to the legacy /
+    // runtime fallbacks so the body-warp chain can be re-derived.
     let cur = null;
     if (Array.isArray(part.modifiers) && part.modifiers.length > 0) {
       const m0 = part.modifiers[0];
-      const leafId = m0 && (m0.type === 'lattice' ? m0.objectId : m0.deformerId);
-      if (typeof leafId === 'string' && leafId.length > 0) cur = leafId;
+      if (m0 && m0.type !== 'armature') {
+        const leafId = m0.type === 'lattice' ? m0.objectId : m0.deformerId;
+        if (typeof leafId === 'string' && leafId.length > 0) cur = leafId;
+      }
     }
     if (!cur && typeof part.rigParent === 'string' && part.rigParent.length > 0) {
       cur = part.rigParent;

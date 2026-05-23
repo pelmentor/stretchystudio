@@ -200,5 +200,117 @@ function makeProject(partIds) {
     'C6: rigParent mirror reflects the single leaf modifier');
 }
 
+// ── Audit-fix MED (2026-05-23): same-id re-rig preserves leaf user flags ──
+// On a re-rig where the rigWarp's spec.id is stable (the common case —
+// the same part being re-fitted), the user's leaf flag-state
+// (enabled / mode / showInEditor) lives ONLY on the prior modifiers[0]
+// record. The writer must carry these forward; otherwise the user's
+// "disabled this rigWarp" or "eye-off this rigWarp" toggles silently
+// reset to defaults on every re-fit.
+{
+  const project = makeProject(['p1']);
+  seedRigWarps(project, [makeSpec('p1')]);
+  const p1 = project.nodes.find((n) => n.id === 'p1');
+
+  // User toggles eye-off (REALTIME bit cleared) AND ✓-off (enabled=false)
+  // on the leaf rigWarp.
+  p1.modifiers[0].mode = 2; // RENDER only
+  p1.modifiers[0].enabled = false;
+  p1.modifiers[0].showInEditor = false;
+
+  // Re-seed with the same spec id (typical Init Rig refit).
+  seedRigWarps(project, [makeSpec('p1')]);
+  const p1After = project.nodes.find((n) => n.id === 'p1');
+  assertEq(p1After.modifiers[0].mode, 2,
+    'audit-fix MED: same-id re-rig preserves leaf mode (RENDER-only)');
+  assertEq(p1After.modifiers[0].enabled, false,
+    'audit-fix MED: same-id re-rig preserves leaf enabled=false');
+  assertEq(p1After.modifiers[0].showInEditor, false,
+    'audit-fix MED: same-id re-rig preserves leaf showInEditor=false');
+}
+
+// ── Audit-fix HIGH (2026-05-23): clearRigWarps preserves Armature flags ──
+// Bone-baked parts carry an Armature modifier whose flags
+// (enabled/mode/showInEditor) live only on the modifier record. A blind
+// `delete n.modifiers` would wipe them. The fix: preserve armature
+// entries through clearRigWarps so synthesizeModifierStacks' priorFlags
+// carry-forward keeps the user state.
+{
+  // Bone-baked legwear: no rigWarp, just an Armature modifier riding the
+  // body warp chain via runtime.parent.
+  const project = {
+    nodes: [
+      { id: 'BodyZWarp',  type: 'deformer', deformerKind: 'warp', parent: null },
+      { id: 'BodyXWarp',  type: 'deformer', deformerKind: 'warp', parent: 'BodyZWarp' },
+      { id: 'leftKnee', type: 'group', boneRole: 'leftKnee', parent: null,
+        transform: { pivotX: 0, pivotY: 0 }, pose: {} },
+      { id: 'legwear', type: 'part',
+        modifiers: [
+          // Armature modifier the user has tweaked (eye-off via mode bit).
+          { type: 'armature', deformerId: 'leftKnee', enabled: true, mode: 2,
+            showInEditor: false,
+            data: { jointBoneId: 'leftKnee', parentBoneId: null } },
+        ],
+        mesh: {
+          vertices: [{ x: 0, y: 0 }], boneWeights: [1], jointBoneId: 'leftKnee',
+          runtime: { parent: { type: 'warp', id: 'BodyXWarp' }, keyforms: [] },
+        } },
+    ],
+  };
+  clearRigWarps(project);
+  const legwear = project.nodes.find((n) => n.id === 'legwear');
+  assert(Array.isArray(legwear.modifiers),
+    'audit-fix HIGH: clearRigWarps preserves modifiers field on bone-baked part');
+  const armature = legwear.modifiers.find((m) => m.type === 'armature');
+  assert(armature, 'audit-fix HIGH: armature modifier survived clearRigWarps');
+  assertEq(armature.mode, 2,
+    'audit-fix HIGH: user armature mode (RENDER-only) preserved');
+  assertEq(armature.showInEditor, false,
+    'audit-fix HIGH: user armature showInEditor=false preserved');
+}
+
+// ── Audit-fix follow-up: armature-only stack falls through to runtime.parent ──
+// After clearRigWarps strips warp leaves on a bone-baked part, the synth
+// must skip past the leading armature entry and fall through to the
+// runtime.parent fallback so the body-warp chain is re-derived.
+{
+  // Bone-baked part with armature-only modifiers (post-clearRigWarps shape).
+  // runtime.parent points at BodyXWarp lattice — the synth should rebuild
+  // the stack from there + re-append Armature on top.
+  const project = {
+    nodes: [
+      { id: 'BodyZWarp',  type: 'object', objectKind: 'lattice', parent: null,
+        dataId: 'BodyZWarp__cage' },
+      { id: 'BodyZWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
+      { id: 'BodyXWarp',  type: 'object', objectKind: 'lattice', parent: 'BodyZWarp',
+        dataId: 'BodyXWarp__cage' },
+      { id: 'BodyXWarp__cage', type: 'meshData', isLatticeCage: true, vertices: [] },
+      { id: 'leftKnee', type: 'group', boneRole: 'leftKnee', parent: null,
+        transform: { pivotX: 0, pivotY: 0 }, pose: {} },
+      { id: 'legwear', type: 'part',
+        modifiers: [
+          { type: 'armature', deformerId: 'leftKnee', enabled: true, mode: 3,
+            showInEditor: true,
+            data: { jointBoneId: 'leftKnee', parentBoneId: null } },
+        ],
+        mesh: {
+          vertices: [{ x: 0, y: 0 }], boneWeights: [1], jointBoneId: 'leftKnee',
+          runtime: { parent: { type: 'warp', id: 'BodyXWarp' }, keyforms: [] },
+        } },
+    ],
+  };
+  // Import the synth directly so we can verify the leaf-resolution skip.
+  const { synthesizeModifierStacks } = await import('../../src/store/deformerNodeSync.js');
+  synthesizeModifierStacks(project);
+  const legwear = project.nodes.find((n) => n.id === 'legwear');
+  assert(legwear.modifiers.length >= 2,
+    'audit-fix follow-up: synth re-derived body-warp chain past armature-only modifiers[0]');
+  const types = legwear.modifiers.map((m) => m.type);
+  assert(types.includes('lattice'),
+    'audit-fix follow-up: lattice chain re-emerged from runtime.parent fallback');
+  assertEq(legwear.modifiers[legwear.modifiers.length - 1].type, 'armature',
+    'audit-fix follow-up: armature still appended last');
+}
+
 console.log(`rigWarpsAuthoringWritesModifiers: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

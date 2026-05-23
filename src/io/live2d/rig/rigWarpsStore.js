@@ -294,12 +294,34 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
       if (!spec || typeof spec.id !== 'string') continue;
       const partNode = project.nodes.find((n) => n && n.id === partId && n.type === 'part');
       if (!partNode) continue;
+      // Audit-fix MED (2026-05-23): on a same-id re-rig (spec.id stable
+      // across re-runs of Init Rig — the common case for a project that
+      // re-fits its own rigWarps), the user's leaf flags (eye-off / ✓-off
+      // on the rigWarp) live ONLY on the prior `modifiers[0]` record. A
+      // blind overwrite resets them to defaults BEFORE
+      // `synthesizeModifierStacks` builds its priorFlags map, so the
+      // synth's carry-forward sees the just-written defaults rather than
+      // the user state. Capture the prior leaf flags here when the
+      // outgoing leaf matches the incoming spec id, then thread them onto
+      // the new entry. Same-shaped logic as `_flags` in the synth, but
+      // pulled ahead to the write site.
+      let priorEnabled = true;
+      let priorMode = DEFAULT_MIGRATED_MODE;
+      let priorShowInEditor = true;
+      if (Array.isArray(partNode.modifiers) && partNode.modifiers.length > 0) {
+        const prior = partNode.modifiers[0];
+        if (prior && prior.type === 'lattice' && prior.objectId === spec.id) {
+          if (typeof prior.enabled === 'boolean') priorEnabled = prior.enabled;
+          if (typeof prior.mode === 'number') priorMode = prior.mode;
+          if (typeof prior.showInEditor === 'boolean') priorShowInEditor = prior.showInEditor;
+        }
+      }
       const leafEntry = {
         type: 'lattice',
         objectId: spec.id,
-        enabled: true,
-        mode: DEFAULT_MIGRATED_MODE,
-        showInEditor: true,
+        enabled: priorEnabled,
+        mode: priorMode,
+        showInEditor: priorShowInEditor,
       };
       if (!Array.isArray(partNode.modifiers)) partNode.modifiers = [];
       // Replace just the leaf — preserve modifiers[1..] so the synth's
@@ -336,9 +358,22 @@ export function clearRigWarps(project) {
     // `mesh.runtime.parent` (bone-baked path) or produces an empty stack,
     // and `synthesizeDeformerParents` clears the now-stale `part.rigParent`
     // mirror downstream. Pre-M1 this site nulled `n.rigParent` directly.
+    //
+    // Audit-fix HIGH (2026-05-23): bone-baked parts carry an Armature
+    // modifier whose user flags (enabled / mode / showInEditor) live ONLY
+    // on the modifier record — a blind `delete n.modifiers` would wipe
+    // them. Preserve armature entries so `synthesizeModifierStacks`'
+    // priorFlags map can carry the user's armature flags into the rebuilt
+    // stack. The synth's leaf-resolution explicitly skips a leading
+    // armature entry so the warp chain is re-derived from `runtime.parent`.
     for (const n of project.nodes) {
       if (n && n.type === 'part' && Array.isArray(n.modifiers)) {
-        delete n.modifiers;
+        const armatureEntries = n.modifiers.filter((m) => m && m.type === 'armature');
+        if (armatureEntries.length > 0) {
+          n.modifiers = armatureEntries;
+        } else {
+          delete n.modifiers;
+        }
       }
     }
     synthesizeModifierStacks(project);
