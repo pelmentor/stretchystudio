@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Shared XML builder for Live2D .cmo3 and .can3 generators.
  *
@@ -7,22 +9,37 @@
  * @module io/live2d/xmlbuilder
  */
 
+/**
+ * @typedef {{tag: string, attrs: Record<string, any>, children: any[], text?: string}} XmlNode
+ */
+
 export function uuid() {
   return crypto.randomUUID();
 }
 
 export class XmlBuilder {
   constructor() {
+    /** @type {XmlNode[]} */
     this._shared = [];
     this._nextId = 0;
   }
 
-  /** Create an element (not shared). */
+  /**
+   * Create an element (not shared).
+   * @param {string} tag
+   * @param {Record<string, any>} [attrs]
+   * @returns {XmlNode}
+   */
   el(tag, attrs = {}) {
     return { tag, attrs: { ...attrs }, children: [] };
   }
 
-  /** Allocate a shared object — gets xs.id and xs.idx. */
+  /**
+   * Allocate a shared object — gets xs.id and xs.idx.
+   * @param {string} tag
+   * @param {Record<string, any>} [attrs]
+   * @returns {[XmlNode, string]}
+   */
   shared(tag, attrs = {}) {
     const xid = `#${this._nextId++}`;
     const node = {
@@ -34,19 +51,38 @@ export class XmlBuilder {
     return [node, xid];
   }
 
-  /** Reference to a shared object. */
+  /**
+   * Reference to a shared object.
+   * @param {string} tag
+   * @param {string} xid
+   * @param {Record<string, any>} [attrs]
+   * @returns {XmlNode}
+   */
   ref(tag, xid, attrs = {}) {
     return { tag, attrs: { ...attrs, 'xs.ref': xid }, children: [] };
   }
 
-  /** Append child element to parent; return child. */
+  /**
+   * Append child element to parent; return child.
+   * @param {XmlNode} parent
+   * @param {string} tag
+   * @param {Record<string, any>} [attrs]
+   * @returns {XmlNode}
+   */
   sub(parent, tag, attrs = {}) {
     const child = this.el(tag, attrs);
     parent.children.push(child);
     return child;
   }
 
-  /** Append a reference as child. */
+  /**
+   * Append a reference as child.
+   * @param {XmlNode} parent
+   * @param {string} tag
+   * @param {string} xid
+   * @param {Record<string, any>} [attrs]
+   * @returns {XmlNode}
+   */
   subRef(parent, tag, xid, attrs = {}) {
     const child = this.ref(tag, xid, attrs);
     parent.children.push(child);
