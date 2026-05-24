@@ -106,20 +106,13 @@ export function rotationSpecToDeformerNode(spec) {
     })),
     keyforms: (spec.keyforms ?? []).map((k, i) => ({
       keyTuple: coerceNumberArray(k.keyTuple, `rotationSpec.keyforms[${i}].keyTuple`),
-      // Number.isFinite (NOT typeof === 'number') — the latter PASSES NaN
-      // because `typeof NaN === 'number'`. NaN coming in from a broken
-      // auto-rig keyform would then cascade into bone `transform.pivotX/Y`
-      // via `groupRotationToBone`'s `deriveCanvasPivot` path 2/3 reads of
-      // `restKeyform(childRot).originX` — producing the Shelby
-      // invisible-character regression 2026-05-24. See
-      // [[typeof-nan-is-number]] memory.
-      angle: Number.isFinite(k.angle) ? k.angle : 0,
-      originX: Number.isFinite(k.originX) ? k.originX : 0,
-      originY: Number.isFinite(k.originY) ? k.originY : 0,
-      scale: Number.isFinite(k.scale) ? k.scale : 1,
+      angle: typeof k.angle === 'number' ? k.angle : 0,
+      originX: typeof k.originX === 'number' ? k.originX : 0,
+      originY: typeof k.originY === 'number' ? k.originY : 0,
+      scale: typeof k.scale === 'number' ? k.scale : 1,
       reflectX: k.reflectX === true,
       reflectY: k.reflectY === true,
-      opacity: Number.isFinite(k.opacity) ? k.opacity : 1,
+      opacity: typeof k.opacity === 'number' ? k.opacity : 1,
     })),
     baseAngle: typeof spec.baseAngle === 'number' ? spec.baseAngle : 0,
     handleLengthOnCanvas:

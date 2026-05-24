@@ -487,14 +487,8 @@ function buildKeyformsFromGrid({ deformer, grid, bindingByXsId }) {
       keyTuple,
       positions: kf.positions,
       angle: kf.angle,
-      // Number.isFinite (NOT raw copy) — NaN at this site cascades
-      // through `rotationSpecToDeformerNode` (typeof NaN === 'number'
-      // passes!) into bone `transform.pivotX/Y` via `groupRotationToBone`.
-      // Detected upstream-NaN here logs so the source can be found in
-      // `rotationDeformerEmit.js` / `computeGroupWorldMatrices`. See
-      // [[typeof-nan-is-number]] memory.
-      originX: Number.isFinite(kf.originX) ? kf.originX : 0,
-      originY: Number.isFinite(kf.originY) ? kf.originY : 0,
+      originX: kf.originX,
+      originY: kf.originY,
       scale: kf.scale,
     });
   }
