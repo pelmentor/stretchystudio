@@ -4,6 +4,7 @@ import { uuid } from '../xmlbuilder.js';
 import { sanitisePartName } from '../../../lib/partId.js';
 import { computeGroupWorldMatrices } from './groupWorldMatrices.js';
 import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * Section 3b — CRotationDeformerSource emission per group.
@@ -236,6 +237,30 @@ export function emitRotationDeformers(x, opts) {
     const parentWorldOrigin = g.parent && deformerWorldOrigins.has(g.parent)
       ? deformerWorldOrigins.get(g.parent)
       : { x: 0, y: 0 };
+    // Diagnostic: find the upstream NaN source for the Shelby
+    // invisible-character regression 2026-05-24. If `worldOrigin.x` or
+    // `parentWorldOrigin.x` is non-finite, the resulting `originX` is
+    // NaN, which cascades through the rotation deformer keyforms into
+    // bone `transform.pivotX/Y`. Log the offending group + origin
+    // values + parent so the source can be traced upstream into
+    // `computeGroupWorldMatrices`.
+    if (!Number.isFinite(worldOrigin?.x) || !Number.isFinite(worldOrigin?.y)
+        || !Number.isFinite(parentWorldOrigin?.x) || !Number.isFinite(parentWorldOrigin?.y)) {
+      logger.error(
+        'rotationDeformerEmitNaNOrigin',
+        `group "${g.id}" rotation deformer about to emit NaN origin — worldOrigin=(${worldOrigin?.x}, ${worldOrigin?.y}), parentWorldOrigin=(${parentWorldOrigin?.x}, ${parentWorldOrigin?.y}); upstream computeGroupWorldMatrices producing bad value`,
+        {
+          groupId: g.id,
+          groupName: g.name,
+          groupParent: g.parent,
+          worldOriginX: worldOrigin?.x,
+          worldOriginY: worldOrigin?.y,
+          parentWorldOriginX: parentWorldOrigin?.x,
+          parentWorldOriginY: parentWorldOrigin?.y,
+          groupTransform: g.transform,
+        },
+      );
+    }
     const originX = worldOrigin.x - parentWorldOrigin.x;
     const originY = worldOrigin.y - parentWorldOrigin.y;
 
