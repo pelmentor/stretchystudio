@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * Mesh keyform positions + deformer sections + warp/rotation keyforms
@@ -59,6 +59,28 @@
 
 /**
  * @param {Object} opts
+ * @param {Array<object>} opts.meshParts                - rig parts with mesh data, leaf-first.
+ * @param {Object} opts.meshBindingPlan                 - per-mesh keyform tuple plan + bindings.
+ * @param {Array<object>} opts.meshInfos                - per-mesh emit info (counts, indices).
+ * @param {Object} opts.rigSpec                         - selectRigSpec output (canvas + lifters).
+ * @param {Array<object>} opts.warpSpecs                - WarpDeformerSpec entries (topo order).
+ * @param {Array<object>} opts.rotationSpecs            - RotationDeformerSpec entries.
+ * @param {Array<object>} opts.allDeformerSpecs         - unified deformer list (warp+rotation, topo).
+ * @param {Array<string>} opts.allDeformerKinds         - parallel kinds: 'warp' | 'rotation'.
+ * @param {Array<number>} opts.allDeformerSrcIndices    - back-index into warpSpecs/rotationSpecs.
+ * @param {Map<string, number>} opts.deformerIdToIndex  - deformer id → unified index lookup.
+ * @param {Map<string, number>} opts.deformerBandIndex  - per-deformer band index for keyforms.
+ * @param {number} opts.meshDefaultDeformerIdx          - default parent deformer idx (-1 if none).
+ * @param {Array<object>} opts.groups                   - bone-group nodes for pivot resolution.
+ * @param {number} opts.canvasW                         - canvas width in px.
+ * @param {number} opts.canvasH                         - canvas height in px.
+ * @returns {object} Flat record of the populated arrays/maps for the
+ *   caller (`moc3writer.js`) to dispatch into the unified sections Map +
+ *   counts array. Includes mesh kf flatten arrays, umbrella deformer.*
+ *   arrays, warp + rotation kf arrays, combined `allKeyformPositions`,
+ *   and pre-computed `rigWarpByPartId` for the mesh→deformer reparent
+ *   step. See the `return { ... }` block at end of function for the
+ *   exact shape.
  */
 export function emitKeyformAndDeformerSections(opts) {
   const {
