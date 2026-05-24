@@ -38,6 +38,7 @@ import {
   setBonePose,
   setBonePoseField,
 } from '@/store/objectDataAccess';
+import { logger } from '@/lib/logger';
 
 // Colour palette
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
@@ -553,6 +554,28 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     const wm = worldMap.get(node.id) ?? mat3Identity();
     const wx = wm[0] * node.transform.pivotX + wm[3] * node.transform.pivotY + wm[6];
     const wy = wm[1] * node.transform.pivotX + wm[4] * node.transform.pivotY + wm[7];
+    // Diagnostic: surface the NaN source for the Shelby invisible-character
+    // regression 2026-05-24. Dedup per bone via _NaN_logged_ flag so the
+    // 60Hz render loop doesn't flood the Logs panel.
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      if (!node.__nanLogged) {
+        node.__nanLogged = true;
+        const wmFinite = wm.every(v => Number.isFinite(v));
+        logger.error(
+          'skeletonOverlayNaNPivot',
+          `bone "${node.id}" (role=${node.boneRole ?? '<none>'}) produced NaN screen-pos (wx=${wx}, wy=${wy})`,
+          {
+            nodeId: node.id,
+            boneRole: node.boneRole,
+            parent: node.parent,
+            transform: node.transform,
+            pose: node.pose,
+            worldMatrixFinite: wmFinite,
+            worldMatrix: wmFinite ? null : Array.from(wm),
+          },
+        );
+      }
+    }
     return [wx * zoom + panX, wy * zoom + panY];
   }
 
