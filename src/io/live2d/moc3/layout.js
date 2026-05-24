@@ -82,6 +82,8 @@ export const ELEM = {
  * Each entry: [name, elemType, countIdx, alignment]
  *
  * Source: [py-moc3] _core.py lines 319–466
+ *
+ * @type {Array<[string, {size:number,write:string}, number, number]>}
  */
 export const SECTION_LAYOUT = [
   // Parts (count_idx=0)

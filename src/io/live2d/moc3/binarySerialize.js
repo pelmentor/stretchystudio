@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * Binary serialization pipeline for the .moc3 generator.
