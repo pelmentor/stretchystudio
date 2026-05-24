@@ -21,6 +21,7 @@
 import { extractVariant } from './psdOrganizer.js';
 import { logger } from '../lib/logger.js';
 import { getMesh } from '../store/objectDataAccess.js';
+import { pruneOrphanedVariantParabolas } from './live2d/rig/eyeClosurePrune.js';
 
 /**
  * @typedef {Object} VariantPairing
@@ -202,6 +203,19 @@ export function normalizeVariants(project) {
       bySuffix,
     });
   }
+
+  // RULE-№4 Slice-3 audit follow-on (2026-05-24). normalizeVariants can
+  // DROP a part's `variantSuffix` at lines ~110 / ~118 above — when the
+  // name no longer matches a variant pattern, or when the base part is
+  // missing. If that drop was the last reference to a suffix AND a
+  // prior Init Rig had populated parabola entries for it, the entry in
+  // `project.eyeClosureParabolas.variantParabolaPerSideAndSuffix`
+  // becomes orphaned. `deleteNode` already prunes; this site closes
+  // the matching prune for the variantNormalizer mutation path
+  // (relevant on PSD re-import / wizard rig rewrite after Init Rig).
+  // Pure + idempotent + safe on missing field; mirrors the deleteNode
+  // call site in `projectStore.js`.
+  pruneOrphanedVariantParabolas(project);
 
   return { pairings, orphans };
 }
