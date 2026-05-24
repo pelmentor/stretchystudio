@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * Per-mesh layer + keyform emission for the .cmo3 generator.
@@ -46,9 +46,9 @@ import { computeClosedCanvasVerts } from './eyeClosureApply.js';
  * @property {Map<string, any>} variantParamPidBySuffix
  * @property {Map<string, string[]>} variantSuffixesByBasePartId
  * @property {Set<string>} backdropTagsSet
- * @property {string|number|undefined} pidParamEyeLOpenEarly
- * @property {string|number|undefined} pidParamEyeROpenEarly
- * @property {string|number|undefined} pidParamAngleXEarly
+ * @property {string|undefined} pidParamEyeLOpenEarly
+ * @property {string|undefined} pidParamEyeROpenEarly
+ * @property {string|undefined} pidParamAngleXEarly
  * @property {Map<string, any>} eyewhiteCurvePerSide
  * @property {Map<string, any>} variantEyewhiteCurvePerSideAndSuffix
  * @property {Map<string, {minY: number, maxY: number, H: number}>} eyelashMeshBboxPerSide

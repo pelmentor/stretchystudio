@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * CArtMeshSource per-mesh emit (Section 4) for the .cmo3 generator.
@@ -313,14 +313,17 @@ export function emitArtMeshSources(ctx, opts) {
     // Positions written here mirror the deformer-local positions emitted
     // to XML (warp-local 0..1 if rwBox, else pivot-relative px if dfOrigin,
     // else canvas px).
+    /** @type {import('../rig/rigSpec.js').KeyformBindingSpec[]} */
     const artBindings = [];
     const artKeyforms = [];
+    /** @type {import('../rig/rigSpec.js').LocalFrame} */
     let artLocalFrame = rwBox ? 'normalized-0to1'
       : (dfOrigin ? 'pivot-relative' : 'canvas-px');
     // The rig-warp emission block sanitises the mesh name to derive its
     // CDeformerId — match the same transform here so artMesh.parent.id
     // resolves into rigSpec.warpDeformers via lookup.
     const _artSanitizedName = sanitisePartName(pm.meshName || pm.partId);
+    /** @type {import('../rig/rigSpec.js').RigSpecParent} */
     let artParent;
     // Tracks whether the artParent fell back to root despite a non-null
     // dfOrigin (the part's vertex frame is pivot-relative-px from a

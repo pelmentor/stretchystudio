@@ -227,6 +227,10 @@
  * @property {string[]} [maskMeshIds]      - Other art mesh ids that mask this one.
  * @property {boolean} [isVisible=true]
  * @property {number}  [drawOrder]
+ * @property {LocalFrame} [localFrame]      - Frame the `vertexPositions` are
+ *                                            in (mirrors `WarpDeformerSpec.localFrame`
+ *                                            convention; populated by
+ *                                            cmo3/artMeshSourceEmit).
  */
 
 // ---------------------------------------------------------------------------
@@ -281,6 +285,10 @@
  *                                            existing `rigDebugLog` shape so
  *                                            cmo3writer can keep emitting it
  *                                            without behaviour change.
+ * @property {Map<string, {closureSide: 'l'|'r', isVariant: boolean, variantSuffix: string|null, closedCanvasVerts: number[]}>} [eyeClosure]
+ *   Per-mesh eye-closure data populated by `cmo3/meshLayerKeyform`
+ *   when generating eye-closure keyforms; consumed by moc3writer to
+ *   emit blink keyforms. Optional — lazy-init at first eye mesh.
  */
 
 // ---------------------------------------------------------------------------

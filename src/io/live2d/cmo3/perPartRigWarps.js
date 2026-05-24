@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * Per-part rig warp deformer emit (Section 3c) for the .cmo3 generator.
@@ -394,6 +394,7 @@ export function emitPerPartRigWarps(ctx, opts) {
     // SAME data the XML emission below produces, just in normalised form.
     // Parent will be resolved at re-parenting time (face → FaceParallax,
     // neck → NeckWarp, default → BodyXWarp).
+    /** @type {import('../rig/rigSpec.js').WarpDeformerSpec & {targetPartId: string, canvasBbox: {minX:number,minY:number,W:number,H:number}}} */
     const rigWarpSpec = {
       id: `RigWarp_${sanitizedName}`,
       name: `${pm.meshName} Warp`,
