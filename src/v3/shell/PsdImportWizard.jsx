@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * v3 GAP-001 — PSD import wizard, AppShell-level chrome.

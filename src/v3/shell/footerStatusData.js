@@ -181,7 +181,7 @@ function modalKindLabel(kind) {
  *
  * @param {{
  *   modal?:       {kind: ModalKind, axis: AxisLock, typedBuffer?: string, numericMode?: boolean, liveDelta?: LiveDelta},
- *   vertexModal?: {kind: ('translate'|null), axis: AxisLock, typedBuffer?: string},
+ *   vertexModal?: {kind: ModalKind, axis: AxisLock, typedBuffer?: string},
  *   editMode?:    string|null,
  *   dataKind?:    string|null,
  * }} input
