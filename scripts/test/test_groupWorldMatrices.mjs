@@ -142,5 +142,43 @@ function approx(a, b, eps = 1e-3) { return Math.abs(a - b) < eps; }
     'pivot=0 + mesh present → bbox centre (NOT canvas centre)');
 }
 
+// ── Regression 2026-05-24: descendant meshes ALL have zero vertices ───
+// Bug repro: Shelby PSD had arm/elbow bone groups whose descendant parts
+// existed but had `vertices: []` — the bbox loop never executed, leaving
+// minX=Infinity / maxX=-Infinity, and `(Infinity + -Infinity) / 2 = NaN`
+// cascaded into the rotation deformer's originX/Y, then into bone
+// `transform.pivotX/Y` via `groupRotationToBone`, then into SkeletonOverlay
+// SVG attributes (invisible character + NaN console flood).
+//
+// Pin: descMeshes with empty vertices arrays → canvas centre fallback,
+// NOT NaN. Same outcome as descMeshes.length === 0.
+
+{
+  const groups = [{ id: 'armEmpty', parent: null, transform: {} }];
+  const meshes = [
+    { partId: 'handwear-l', parentGroupId: 'armEmpty', vertices: [] },
+    { partId: 'handwear-r', parentGroupId: 'armEmpty', vertices: [] },
+  ];
+  const out = computeGroupWorldMatrices(groups, meshes, 1280, 1280);
+  const o = out.deformerWorldOrigins.get('armEmpty');
+  assert(Number.isFinite(o.x) && Number.isFinite(o.y),
+    'all-empty descMeshes → finite origin (NOT NaN)');
+  assert(approx(o.x, 640) && approx(o.y, 640),
+    'all-empty descMeshes → canvas centre (1280/2 = 640)');
+}
+
+// Mixed: some descMeshes empty, others have verts → use the non-empty bbox.
+{
+  const groups = [{ id: 'g', parent: null, transform: {} }];
+  const meshes = [
+    { partId: 'empty-part',  parentGroupId: 'g', vertices: [] },
+    { partId: 'real-part',   parentGroupId: 'g', vertices: [100, 200, 300, 400] },
+  ];
+  const out = computeGroupWorldMatrices(groups, meshes, 1280, 1280);
+  const o = out.deformerWorldOrigins.get('g');
+  assert(approx(o.x, 200) && approx(o.y, 300),
+    'mixed empty + real descMeshes → bbox of real (NOT NaN, NOT canvas centre)');
+}
+
 console.log(`groupWorldMatrices: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

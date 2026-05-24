@@ -1,6 +1,7 @@
 // @ts-check
 
 import { makeLocalMatrix, mat3Mul } from '../../../renderer/transforms.js';
+import { logger } from '../../../lib/logger.js';
 
 /**
  * Group world-matrix + deformer-origin computation, lifted out of
@@ -21,7 +22,15 @@ import { makeLocalMatrix, mat3Mul } from '../../../renderer/transforms.js';
  *      explicit anchor was authored — fall back to the bounding box
  *      centre of the group's descendant meshes (so the rotation/warp
  *      origin sits inside the visible body of the part). If the
- *      descendant set is empty, fall back to canvas centre.
+ *      descendant set is empty *OR every descendant mesh has zero
+ *      vertices* (degenerate case the bbox loop cannot bound), fall
+ *      back to canvas centre. Both empty forms mean the same thing —
+ *      no usable geometry to anchor against; without this dual guard
+ *      `(Infinity + -Infinity) / 2 = NaN` cascades into the rotation
+ *      deformer's `originX/Y`, then into bone `transform.pivotX/Y`
+ *      via `groupRotationToBone`, then into SkeletonOverlay's SVG
+ *      attributes (invisible character — observed on Shelby PSD
+ *      2026-05-24).
  *
  * Pure: same inputs always produce the same outputs, no I/O. The
  * caller plugs the resulting maps into deformer emission below.
@@ -48,7 +57,7 @@ import { makeLocalMatrix, mat3Mul } from '../../../renderer/transforms.js';
  */
 
 /**
- * @typedef {{ parentGroupId?: string|null, vertices: number[] }} MeshLike
+ * @typedef {{ partId?: string, parentGroupId?: string|null, vertices: number[] }} MeshLike
  */
 
 /**
@@ -108,17 +117,28 @@ export function computeGroupWorldMatrices(groups, meshes, canvasW, canvasH) {
       }
     }
     const descMeshes = meshes.filter(m => m.parentGroupId && descendantIds.has(m.parentGroupId));
-    if (descMeshes.length > 0) {
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const gm of descMeshes) {
-        for (let vi = 0; vi < gm.vertices.length; vi += 2) {
-          const vx = gm.vertices[vi], vy = gm.vertices[vi + 1];
-          if (vx < minX) minX = vx; if (vy < minY) minY = vy;
-          if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy;
-        }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const gm of descMeshes) {
+      for (let vi = 0; vi < gm.vertices.length; vi += 2) {
+        const vx = gm.vertices[vi], vy = gm.vertices[vi + 1];
+        if (vx < minX) minX = vx; if (vy < minY) minY = vy;
+        if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy;
       }
+    }
+    if (Number.isFinite(minX) && Number.isFinite(maxX)) {
       deformerWorldOrigins.set(g.id, { x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
     } else {
+      // descMeshes is either empty OR contains only zero-vertex meshes
+      // (both yield no usable bbox — see header docstring for the NaN
+      // cascade this guard prevents). Fall back to canvas centre, the
+      // same default the empty-descendant arm uses.
+      if (descMeshes.length > 0) {
+        logger.warn(
+          'computeGroupWorldMatricesEmptyBbox',
+          `group "${g.id}" has ${descMeshes.length} descendant mesh(es) but all have zero vertices — using canvas centre as deformer origin (was NaN-cascading into rotation deformer pivots; investigate why mesh.vertices is empty for these parts)`,
+          { groupId: g.id, descMeshCount: descMeshes.length, descMeshIds: descMeshes.map(m => m.partId ?? null) },
+        );
+      }
       deformerWorldOrigins.set(g.id, { x: canvasW / 2, y: canvasH / 2 });
     }
   }
