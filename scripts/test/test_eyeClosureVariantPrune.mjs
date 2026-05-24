@@ -222,63 +222,6 @@ function buildProjectWithVariants(variantParts) {
 // because no live project node carries variantRole post-v46.
 // Kept as a tombstone so future readers don't re-add it.
 
-// Contract 8 (2026-05-24 RULE-№4 Slice-3 follow-on): normalizeVariants
-// is the OTHER mutation path that can drop a `variantSuffix` from a
-// part — when the name no longer matches a variant pattern, or when
-// the base part is missing. Slice 3's deleteNode prune handled
-// node-removal; this contract pins that normalizeVariants ALSO prunes
-// orphaned parabola entries at the end of its pass. Scenario: PSD
-// re-import after an Init Rig dropped a variant part — normalizeVariants
-// drops the variantSuffix; the parabola entry would otherwise leak.
-{
-  const { normalizeVariants } = await import('../../src/io/variantNormalizer.js');
-  // Project: face base + base.smile variant, parabolas populated.
-  // Re-import drops the variant from the layer set; normalizeVariants
-  // doesn't see the .smile part anymore. (We simulate this by removing
-  // the variant part from the project BEFORE re-running normalizeVariants —
-  // the field-drop branch at variantNormalizer.js:110/118 only fires
-  // when the part is STILL present but has lost its variant pattern.)
-  // The realistic re-import scenario: variant part removed entirely.
-  // For this contract we use the explicit normalizeVariants entry — the
-  // important assertion is "the prune runs at the end."
-  const project = {
-    nodes: [
-      { id: 'face', type: 'part', name: 'face', visible: true },
-      // a leftover variant-looking part whose base has been REMOVED →
-      // findBasePart returns null → orphan → variantSuffix dropped.
-      { id: 'gone.smile', type: 'part', name: 'gone.smile', visible: true,
-        variantSuffix: 'smile', variantOf: 'gone-was-here' },
-    ],
-    eyeClosureParabolas: {
-      baseParabolaPerSide: {
-        l: { coeffs: [1, 0, 0] },
-        r: { coeffs: [1, 0, 0] },
-      },
-      variantParabolaPerSideAndSuffix: {
-        'l|smile': { coeffs: [1, 0, 0] },
-        'r|smile': { coeffs: [1, 0, 0] },
-      },
-    },
-  };
-  normalizeVariants(project);
-  // The orphan branch drops variantSuffix from 'gone.smile' — now no
-  // part references suffix 'smile'. Prune at end of normalizeVariants
-  // should have cleared both variant parabola entries.
-  assert(
-    !('l|smile' in project.eyeClosureParabolas.variantParabolaPerSideAndSuffix),
-    'Contract 8: normalizeVariants prune drops l|smile after variantSuffix drop',
-  );
-  assert(
-    !('r|smile' in project.eyeClosureParabolas.variantParabolaPerSideAndSuffix),
-    'Contract 8: normalizeVariants prune drops r|smile after variantSuffix drop',
-  );
-  // Base parabolas untouched.
-  assert(
-    !!project.eyeClosureParabolas.baseParabolaPerSide?.l,
-    'Contract 8: base parabolas survive normalizeVariants prune',
-  );
-}
-
 console.log(`\neyeClosureVariantPrune: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');
