@@ -40,6 +40,10 @@ import {
 } from '@/store/objectDataAccess';
 import { logger } from '@/lib/logger';
 
+// Module-level dedup for the NaN-pivot diagnostic. Set, not a node-property
+// flag — project.nodes is frozen by immer's Object.preventExtensions.
+const _skeletonNaNLogged = new Set();
+
 // Colour palette
 const COLOUR_NORMAL = '#ef4444';      // red — not in edit mode
 const COLOUR_EDIT   = '#facc15';      // yellow — edit mode ready to drag
@@ -555,11 +559,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
     const wx = wm[0] * node.transform.pivotX + wm[3] * node.transform.pivotY + wm[6];
     const wy = wm[1] * node.transform.pivotX + wm[4] * node.transform.pivotY + wm[7];
     // Diagnostic: surface the NaN source for the Shelby invisible-character
-    // regression 2026-05-24. Dedup per bone via _NaN_logged_ flag so the
-    // 60Hz render loop doesn't flood the Logs panel.
+    // regression 2026-05-24. Module-level dedup Set (NOT a node-prop flag
+    // because immer freezes project.nodes with Object.preventExtensions).
     if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
-      if (!node.__nanLogged) {
-        node.__nanLogged = true;
+      if (!_skeletonNaNLogged.has(node.id)) {
+        _skeletonNaNLogged.add(node.id);
         const wmFinite = wm.every(v => Number.isFinite(v));
         logger.error(
           'skeletonOverlayNaNPivot',
@@ -568,8 +572,11 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
             nodeId: node.id,
             boneRole: node.boneRole,
             parent: node.parent,
-            transform: node.transform,
-            pose: node.pose,
+            transformPivotX: node.transform?.pivotX,
+            transformPivotY: node.transform?.pivotY,
+            transformX: node.transform?.x,
+            transformY: node.transform?.y,
+            transformRotation: node.transform?.rotation,
             worldMatrixFinite: wmFinite,
             worldMatrix: wmFinite ? null : Array.from(wm),
           },
