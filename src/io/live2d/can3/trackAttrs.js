@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 /**
  * CMvEffect_VisualDefault track-attribute factories.
  *

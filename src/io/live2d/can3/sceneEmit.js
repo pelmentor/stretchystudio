@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 /**
  * Per-scene CSceneSource emission for .can3.
  *

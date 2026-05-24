@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 /**
  * .can3 finalize: CResourceManager + shared CAnimation + main.xml + CAFF.
  *

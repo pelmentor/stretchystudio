@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 /**
  * Bezier-keyframe CMutableSequence emitter for .can3 animation tracks.
  *
