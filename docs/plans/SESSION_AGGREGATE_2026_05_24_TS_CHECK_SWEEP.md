@@ -2,6 +2,8 @@
 
 Compact-resumption anchor for the autonomous post-compact session that:
 - Shipped one remaining RULE-№4 follow-on (modifier-toggle reproject-abort)
+  — **later REVERTED 2026-05-24 (`675912b`)** after user reported Init-Rig
+  invisible-parts regression on Shelby. See [[revert-reproject-abort-2026-05-24]].
 - Reverted a speculative defensive commit per RULE №1 + saved the lesson
 - Drove the **@ts-check sweep across `src/io/live2d/` (42 files) +
   9 v3/shell JSX components** to fully type-check the Live2D emit
@@ -14,7 +16,7 @@ Continues from `RULE_4_MODIFIER_STACK_FLIP_SESSION_2026_05_23_PART3.md`
 
 | # | Commit(s) | Slice | LOC | Notes |
 |---|-----------|-------|-----|-------|
-| 1 | `1ada7b2` | **Modifier-toggle reproject-abort** — `_buildArtMeshes` aborts reproject when rest state missing on either side; emits cachedParent + FULL pre-toggle chain via new `_resolveFullModifierChain`. Mirrors Blender `BKE_modifier_is_enabled` idiom for broken modifier targets (cite-verified per BYTE-VERIFY rule 9). | +280 / -68 | dual-audit caught HIGH-1 (chain emission needed full stack, not null) + MED-1 (test gap on effective-missing branch); both folded pre-commit |
+| 1 | `1ada7b2` → **REVERTED** `675912b` | **Modifier-toggle reproject-abort** — `_buildArtMeshes` aborts reproject when rest state missing on either side; emits cachedParent + FULL pre-toggle chain via new `_resolveFullModifierChain`. Mirrors Blender `BKE_modifier_is_enabled` idiom for broken modifier targets (cite-verified per BYTE-VERIFY rule 9). | +280 / -68 (then -280 / +68 on revert) | dual-audit caught HIGH-1 (chain emission needed full stack, not null) + MED-1 (test gap on effective-missing branch); both folded pre-commit. **REVERTED next day (2026-05-24)** — user reported post-Init-Rig invisible body/arms/legs on Shelby. Abort path fired spuriously on fresh Init Rig when `warpRestById` was missing a deformer; full pre-toggle chain (incl. disabled) sent chainEval through degenerate geometry. Pre-1ada7b2 silent-passthrough produces drift but keeps parts visible (RULE №1: visible > invisible). New memory: [[revert-reproject-abort-2026-05-24]]. |
 | 2 | `106f527` | Stale-cite refresh — 2 cross-file `selectRigSpec.js:<range>` cites went stale across M3.1/M3.2/M3.3/M4 + the reproject-abort fix. Replaced with search-anchor cites. | +6 / -3 | comment-only |
 | 3 | `578540e` → **REVERTED** `0687179` | variantNormalizer prune extension — extended Slice 3's `pruneOrphanedVariantParabolas` call to `normalizeVariants`. Blender-fidelity audit caught: all 3 callers run BEFORE seedAllRig populates parabolas → dead code in all current paths. Honest revert per RULE №1. | -71 (revert) | new lesson memory: [[verify-mutation-path-before-prune]] |
 | 4 | `200f805` | `@ts-check` on `moc3/keyformAndDeformerSections.js` — first file in the sweep; +14-prop JSDoc on the opts shape; caught + fixed wrong `@returns` type the moment tsc started checking. | +23 / -1 | byte-fidelity intact (23/23) |
@@ -160,7 +162,7 @@ Per Pelmentor-as-agent triage (called twice this session):
 | Leak #3 variant fade | ⏸ Needs UX scope (fade-curve UI design) |
 | Leak #4 neck cornering | ⏸ Skip — confirmed low payoff per audit |
 | Easing-field deep retirement | ⏸ Skip — resolved-by-analysis stands (would regress per RULE №1) |
-| Modifier-toggle math fix | ✅ Shipped this session (`1ada7b2`) |
+| Modifier-toggle math fix | ⏹ `1ada7b2` shipped then **REVERTED** `675912b` (2026-05-24) — re-fix needs fresh-Init-Rig fixture coverage |
 | variantNormalizer prune | ⏹ Reverted — dead code per the new lesson |
 | 6 v3/shell JSX @ts-nocheck holdouts | ⏸ Need narrower shadcn typing (Button, Select, ContextMenu) + local component prop optional markers (PlaybackControls' `active`/`max`, ToolSettingsPanel's `unit`) |
 | Switch typing quirk | ⏸ Radix `ComponentPropsWithoutRef` evaluates oddly even with the standard pattern; needs investigation |
@@ -194,9 +196,12 @@ clean as of session close. Full test suite green. Typecheck clean.
 
 - 12 Claude-authored substrate commits (mechanical refactor / new
   migrations / observability / fixture updates / audit-fix close-outs /
-  type-check sweeps): `1ada7b2`, `106f527`, `0687179` (revert),
-  `200f805`, `82962ab`, `6ad7ffa`, `cb39d87`, `0c73b30`, `8e8e814`,
-  `b970ef8`, `24ae93f`, `bde9df5`.
+  type-check sweeps): `1ada7b2` (later REVERTED `675912b`), `106f527`,
+  `0687179` (revert), `200f805`, `82962ab`, `6ad7ffa`, `cb39d87`,
+  `0c73b30`, `8e8e814`, `b970ef8`, `24ae93f`, `bde9df5`.
+- 1 Claude-authored revert (Day 2, 2026-05-24): `675912b` reverts
+  `1ada7b2` after user reported Init-Rig invisible-parts regression.
+  Per RULE №5 alternation (last commit `5c512e9` was Pelmentor).
 - 1 Pelmentor-authored commit (THIS session-aggregate doc — user-
   steered session via repeated "Go" / "ask agents like they're me"
   + scope decisions on what to ship next post-RULE-№4-closeout).
