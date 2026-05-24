@@ -43,6 +43,7 @@ import { logger } from '../../../lib/logger.js';
  *   pivotX?: number,
  *   pivotY?: number,
  *   x?: number, y?: number,
+ *   rotation?: number,
  *   rotationDeg?: number,
  *   scaleX?: number, scaleY?: number,
  * }} GroupTransform
@@ -51,6 +52,7 @@ import { logger } from '../../../lib/logger.js';
 /**
  * @typedef {{
  *   id: string,
+ *   name?: string,
  *   parent?: string|null,
  *   transform?: GroupTransform,
  * }} GroupLike
@@ -100,6 +102,30 @@ export function computeGroupWorldMatrices(groups, meshes, canvasW, canvasH) {
 
     const hasPivot = px !== 0 || py !== 0;
     if (hasPivot) {
+      // Diagnostic for Shelby invisible-bones regression 2026-05-24:
+      // surface the upstream NaN source. Real fix lives wherever the
+      // NaN ENTERS — this log just names which group + which field
+      // is NaN so the actual writer can be identified.
+      if (!Number.isFinite(worldPivotX) || !Number.isFinite(worldPivotY)) {
+        logger.error(
+          'computeGroupWorldMatricesNaNPivot',
+          `group "${g.id}" (${g.name ?? '?'}) pivot path produced NaN — t.pivotX=${t.pivotX}, t.pivotY=${t.pivotY}, wm[0]=${wm[0]}, wm[3]=${wm[3]}, wm[6]=${wm[6]}`,
+          {
+            groupId: g.id,
+            groupName: g.name,
+            groupParent: g.parent,
+            transformPivotX: t.pivotX,
+            transformPivotY: t.pivotY,
+            transformX: t.x,
+            transformY: t.y,
+            transformRotation: t.rotation,
+            transformScaleX: t.scaleX,
+            transformScaleY: t.scaleY,
+            wmAllFinite: wm.every(v => Number.isFinite(v)),
+            wm: Array.from(wm),
+          },
+        );
+      }
       deformerWorldOrigins.set(g.id, { x: worldPivotX, y: worldPivotY });
       continue;
     }
