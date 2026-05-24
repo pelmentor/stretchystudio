@@ -29,7 +29,7 @@ import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
  * @param {Object} ctx
  * @param {string} ctx.pidParamAngleZ
  * @param {Object|null} ctx.neckUnionBbox - { minX, minY, W, H }
- * @param {string|number} ctx.pidBodyXGuid
+ * @param {string} ctx.pidBodyXGuid
  * @param {string|null} ctx.neckGroupId
  * @param {Map} ctx.groupDeformerGuids
  * @param {Map} ctx.deformerWorldOrigins
@@ -109,7 +109,7 @@ export function emitNeckWarp(x, ctx) {
  * @param {string} ctx.pidParamAngleZ
  * @param {number} ctx.facePivotCx
  * @param {number} ctx.facePivotCy
- * @param {string|number} ctx.pidBodyXGuid
+ * @param {string} ctx.pidBodyXGuid
  * @param {string|null} ctx.headGroupId
  * @param {Map} ctx.groupDeformerGuids
  * @param {Map} ctx.deformerWorldOrigins

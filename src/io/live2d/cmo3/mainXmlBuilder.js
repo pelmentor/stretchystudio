@@ -66,7 +66,7 @@ export function buildMainXml(x, opts) {
   const paramsByCategory = new Map();
   for (const cd of CATEGORY_DEFS) paramsByCategory.set(cd.key, []);
   for (const pd of paramDefs) paramsByCategory.get(pd.category).push(pd);
-  /** @type {Array<{ key: string, name: string, idstr: string, pidGuid?: string|number, pidId?: string|number }>} */
+  /** @type {Array<{ key: string, name: string, idstr: string, pidGuid?: string, pidId?: string }>} */
   const activeCategories = CATEGORY_DEFS
     .filter(cd => paramsByCategory.get(cd.key).length > 0)
     .map(cd => ({ key: cd.key, name: cd.name, idstr: cd.idstr }));

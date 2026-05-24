@@ -41,8 +41,8 @@ import { computeClosedCanvasVerts } from './eyeClosureApply.js';
 
 /**
  * @typedef {Object} MeshLayerPrepass
- * @property {string|number} pidLi             - Shared CLayeredImage pid.
- * @property {string|number} pidLg             - Shared CLayerGroup pid.
+ * @property {string} pidLi             - Shared CLayeredImage pid.
+ * @property {string} pidLg             - Shared CLayerGroup pid.
  * @property {Map<string, any>} variantParamPidBySuffix
  * @property {Map<string, string[]>} variantSuffixesByBasePartId
  * @property {Set<string>} backdropTagsSet

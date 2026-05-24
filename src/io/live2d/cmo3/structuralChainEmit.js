@@ -109,7 +109,7 @@ export function emitStructuralChainAndReparent(x, opts) {
   // (AngleX × AngleY) → per-face-part rig warps.
   // Coord-space contract: rotation parents expose pivot-relative
   // pixel offsets (NOT 0..1), so FaceParallax grid uses canvas - pivot.
-  /** @type {Map<string, string|number>} */
+  /** @type {Map<string, string>} */
   const faceParallaxGuids = new Map();
   if (pidParamAngleZ && facePivotCx !== null && faceUnionBbox && pidBodyXGuid) {
     const pidFaceRotGuid = emitFaceRotation(x, {

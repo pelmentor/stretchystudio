@@ -78,7 +78,7 @@ import { bakeBoneRotationLBS } from '../rig/bakeBoneRotation.js';
  * @param {Map<string, Array<[number, number]>>} opts.eyelashBandCanvas
  * @param {Map<string, number>} opts.eyelashShiftCanvas
  * @param {(verts: number[]) => {minY: number, maxY: number, H: number}|null} opts.bboxFromVertsY
- * @returns {{ meshSrcIds: Array<string|number> }}
+ * @returns {{ meshSrcIds: Array<string> }}
  */
 export function emitArtMeshSources(ctx, opts) {
   const {

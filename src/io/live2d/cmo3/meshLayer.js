@@ -34,7 +34,7 @@
  * @param {Object} opts.filterDefs               { pidFdefSel, pidFdefFlt }.
  * @param {Object} opts.filterValueIds           Eight pids (pidFvid*).
  * @param {Object} opts.filterValues             Nine pids (pidFv*).
- * @returns {{ pidFset: string|number }}
+ * @returns {{ pidFset: string }}
  */
 export function emitMeshFilterGraph(x, opts) {
   const { mi, filterDefs, filterValueIds, filterValues } = opts;
@@ -148,12 +148,12 @@ export function emitMeshFilterGraph(x, opts) {
  * @param {Object} opts
  * @param {Object} opts.layerGroup           CLayerGroup element (already shared).
  * @param {Object} opts.layeredImg           CLayeredImage element (already shared).
- * @param {string|number} opts.pidLg
- * @param {string|number} opts.pidLi
- * @param {string|number} opts.pidLiGuid
- * @param {string|number} opts.pidBlend
+ * @param {string} opts.pidLg
+ * @param {string} opts.pidLi
+ * @param {string} opts.pidLiGuid
+ * @param {string} opts.pidBlend
  * @param {Function} opts.uuid               UUID generator (writer's `uuid` from xmlbuilder).
- * @param {Array<{pidLayer: string|number}>} opts.layerRefs
+ * @param {Array<{pidLayer: string}>} opts.layerRefs
  * @param {number} opts.canvasW
  * @param {number} opts.canvasH
  */
@@ -210,11 +210,11 @@ export function fillLayerGroupAndImage(x, opts) {
  * @param {Object} x
  * @param {Object} opts
  * @param {string} opts.meshName
- * @param {string|number} opts.pidImg          CImageResource pid.
- * @param {string|number} opts.pidTexGuid      GTextureGuid pid.
- * @param {string|number} opts.pidExtTex       CExtensionGuid pid for the extension.
- * @param {string|number} opts.pidMiGuid       CModelImageGuid pid.
- * @returns {{ pidTex2d: string|number, pidTie: string|number, pidTimi: string|number, tieSup: Object }}
+ * @param {string} opts.pidImg          CImageResource pid.
+ * @param {string} opts.pidTexGuid      GTextureGuid pid.
+ * @param {string} opts.pidExtTex       CExtensionGuid pid for the extension.
+ * @param {string} opts.pidMiGuid       CModelImageGuid pid.
+ * @returns {{ pidTex2d: string, pidTie: string, pidTimi: string, tieSup: Object }}
  */
 export function emitMeshTexture(x, opts) {
   const { meshName, pidImg, pidTexGuid, pidExtTex, pidMiGuid } = opts;

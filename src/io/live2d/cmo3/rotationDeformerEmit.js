@@ -51,10 +51,10 @@ import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
  *   neckGroupId: string|undefined,
  *   groupWorldMatrices: Map<string, Float32Array>,
  *   deformerWorldOrigins: Map<string, {x:number,y:number}>,
- *   groupDeformerGuids: Map<string, string|number>,
+ *   groupDeformerGuids: Map<string, string>,
  *   rotDeformerTargetNodes: Map<string, Object>,
  *   rotDeformerOriginNodes: Map<string, Object>,
- *   allDeformerSources: Array<{pid:string|number, tag:string}>,
+ *   allDeformerSources: Array<{pid:string, tag:string}>,
  *   deformerParamMap: Map<string, Object>,
  * }}
  */
@@ -87,13 +87,13 @@ export function emitRotationDeformers(x, opts) {
     computeGroupWorldMatrices(groups, meshes, canvasW, canvasH);
 
   // ── Allocations ──
-  /** @type {Map<string, string|number>} */
+  /** @type {Map<string, string>} */
   const groupDeformerGuids = new Map();
   /** @type {Map<string, Object>} */
   const rotDeformerTargetNodes = new Map();
   /** @type {Map<string, Object>} */
   const rotDeformerOriginNodes = new Map();
-  /** @type {Array<{pid:string|number, tag:string}>} */
+  /** @type {Array<{pid:string, tag:string}>} */
   const allDeformerSources = [];
   /** @type {Map<string, Object>} */
   const deformerParamMap = new Map();

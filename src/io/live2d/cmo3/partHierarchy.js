@@ -30,7 +30,7 @@ import { sanitisePartName } from '../../../lib/partId.js';
  */
 
 /**
- * @typedef {{ node: Object, pid: string|number, childGuidsNode: Object }} PartSourceRecord
+ * @typedef {{ node: Object, pid: string, childGuidsNode: Object }} PartSourceRecord
  */
 
 /**
@@ -42,9 +42,9 @@ import { sanitisePartName } from '../../../lib/partId.js';
  * @param {Object} x
  * @param {string} partName
  * @param {string} partIdStr
- * @param {string|number} partGuidPid
- * @param {string|number|null} parentGuidPid
- * @param {string|number} pidDeformerNull
+ * @param {string} partGuidPid
+ * @param {string|null} parentGuidPid
+ * @param {string} pidDeformerNull
  * @returns {PartSourceRecord}
  */
 export function makePartSource(x, partName, partIdStr, partGuidPid, parentGuidPid, pidDeformerNull) {
@@ -105,10 +105,10 @@ export function makePartSource(x, partName, partIdStr, partGuidPid, parentGuidPi
  * @param {Object} opts
  * @param {Array<{id:string, name?:string, parent?:string|null}>} opts.groups
  * @param {Array<{parentGroupId?:string|null}>} opts.meshes
- * @param {Array<{pidDrawable:string|number}>} opts.perMesh
- * @param {string|number} opts.pidPartGuid    Root part's CPartGuid pid.
- * @param {Map<string, string|number>} opts.groupPartGuids
- * @param {string|number} opts.pidDeformerNull
+ * @param {Array<{pidDrawable:string}>} opts.perMesh
+ * @param {string} opts.pidPartGuid    Root part's CPartGuid pid.
+ * @param {Map<string, string>} opts.groupPartGuids
+ * @param {string} opts.pidDeformerNull
  * @returns {{
  *   rootPart: PartSourceRecord,
  *   allPartSources: PartSourceRecord[],
@@ -142,7 +142,7 @@ export function buildPartHierarchy(x, opts) {
   }
 
   // Fill _childGuids — Root Part children = top-level groups + orphan meshes
-  /** @type {Array<{type:string, pid:string|number}>} */
+  /** @type {Array<{type:string, pid:string}>} */
   const rootChildren = [];
   for (const g of groups) {
     if (!g.parent || !groupPartGuids.has(g.parent)) {

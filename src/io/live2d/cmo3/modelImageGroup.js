@@ -16,11 +16,11 @@
 
 /**
  * @typedef {Object} ModelImageMeshEntry
- * @property {string|number} pidMiGuid    CModelImageGuid pid for this mesh.
+ * @property {string} pidMiGuid    CModelImageGuid pid for this mesh.
  * @property {string} meshName            Display name (also goes into LayerInputData).
- * @property {string|number} pidFset      ModelImageFilterSet pid.
- * @property {string|number} pidLayer     CLayer pid.
- * @property {string|number} pidImg       CImageResource pid.
+ * @property {string} pidFset      ModelImageFilterSet pid.
+ * @property {string} pidLayer     CLayer pid.
+ * @property {string} pidImg       CImageResource pid.
  */
 
 /**
@@ -31,13 +31,13 @@
  * @param {Object} x                          XmlBuilder.
  * @param {Object} opts
  * @param {ModelImageMeshEntry[]} opts.perMesh
- * @param {string|number} opts.pidLiGuid       Shared CLayeredImageGuid.
- * @param {string|number} opts.pidFvidMiGuid   Filter-value-id "mi_currentImageGuid".
- * @param {string|number} opts.pidFvidMiLayer  Filter-value-id "mi_input_layerInputData".
+ * @param {string} opts.pidLiGuid       Shared CLayeredImageGuid.
+ * @param {string} opts.pidFvidMiGuid   Filter-value-id "mi_currentImageGuid".
+ * @param {string} opts.pidFvidMiLayer  Filter-value-id "mi_input_layerInputData".
  * @param {number} opts.canvasW
  * @param {number} opts.canvasH
  * @param {string} [opts.groupName='stretchy_export']
- * @returns {{ pidImgGrp: string|number }}
+ * @returns {{ pidImgGrp: string }}
  */
 export function emitModelImageGroup(x, opts) {
   const {

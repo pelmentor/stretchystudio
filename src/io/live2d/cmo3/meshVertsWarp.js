@@ -143,16 +143,16 @@ function buildMeshVertsMap(actions) {
  * @param {Array} opts.meshes
  * @param {Array} opts.perMesh
  * @param {Map<string, {x:number, y:number}>} opts.deformerWorldOrigins
- * @param {Map<string, string|number>} opts.groupDeformerGuids
- * @param {Map<string, string|number>} opts.groupPartGuids
+ * @param {Map<string, string>} opts.groupDeformerGuids
+ * @param {Map<string, string>} opts.groupPartGuids
  * @param {Map<string, {childGuidsNode:Object}>} opts.groupParts
  * @param {{childGuidsNode:Object}} opts.rootPart
- * @param {Array<{pid:string|number, tag:string}>} opts.allDeformerSources
+ * @param {Array<{pid:string, tag:string}>} opts.allDeformerSources
  * @param {Array} opts.paramDefs
  * @param {Map<string, Object>} opts.deformerParamMap
- * @param {string|number} opts.pidPartGuid
- * @param {string|number} opts.pidDeformerRoot
- * @returns {{ meshWarpDeformerGuids: Map<string, string|number> }}
+ * @param {string} opts.pidPartGuid
+ * @param {string} opts.pidDeformerRoot
+ * @returns {{ meshWarpDeformerGuids: Map<string, string> }}
  */
 export function emitMeshVertsWarpDeformers(x, opts) {
   const {

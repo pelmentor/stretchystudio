@@ -39,7 +39,7 @@ import { buildParameterSpec } from '../rig/paramSpec.js';
 
 /**
  * @typedef {Object} ParamDef
- * @property {string|number} pid       Per-CParameterGuid pid.
+ * @property {string} pid       Per-CParameterGuid pid.
  * @property {string} id               ParamX / ParamRotation_arm / ...
  * @property {string} name             Display name.
  * @property {number} min
@@ -49,7 +49,7 @@ import { buildParameterSpec } from '../rig/paramSpec.js';
  * @property {number} decimalPlaces
  * @property {string} role             'opacity' | 'standard' | 'bone' | …
  * @property {string} [category]       Filled by paramCategories pass.
- * @property {string|number} [pidId]   Filled by section 6 (CParameterId).
+ * @property {string} [pidId]   Filled by section 6 (CParameterId).
  */
 
 /**
@@ -61,25 +61,25 @@ import { buildParameterSpec } from '../rig/paramSpec.js';
 
 /**
  * @typedef {Object} GlobalSharedSetup
- * @property {string|number} pidParamGroupGuid
- * @property {string|number} pidModelGuid
- * @property {string|number} pidPartGuid
+ * @property {string} pidParamGroupGuid
+ * @property {string} pidModelGuid
+ * @property {string} pidPartGuid
  * @property {Object} blendNormal             XML element ref for CBlend_Normal.
- * @property {string|number} pidBlend
- * @property {string|number} pidDeformerRoot
- * @property {string|number} pidDeformerNull
+ * @property {string} pidBlend
+ * @property {string} pidDeformerRoot
+ * @property {string} pidDeformerNull
  * @property {Object} coordType                XML element ref for CoordType.
- * @property {string|number} pidCoord
+ * @property {string} pidCoord
  * @property {ParamDef[]} paramDefs            Mutable.
  * @property {Object[]} paramSpecs             Read-only.
- * @property {string|number} pidParamOpacity
+ * @property {string} pidParamOpacity
  * @property {number[]} bakedAngles
  * @property {number} bakedAngleMin
  * @property {number} bakedAngleMax
- * @property {Map<string, {pidParam: string|number, paramId: string}>} boneParamGuids
- * @property {Map<string, string|number>} groupPartGuids
- * @property {string|number} pidFdefSel
- * @property {string|number} pidFdefFlt
+ * @property {Map<string, {pidParam: string, paramId: string}>} boneParamGuids
+ * @property {Map<string, string>} groupPartGuids
+ * @property {string} pidFdefSel
+ * @property {string} pidFdefFlt
  * @property {Object} filterValueIds           ilfOutput / miLayer / ilfInput / miGuid / ilfGuid / miOutImg / miOutXfm / ilfInLayer.
  * @property {Object} filterValues             pidFvSel / pidFvImp / pidFvImpSel / pidFvCurGuid / pidFvSelGuid / pidFvOutImg / pidFvOutImgRes / pidFvOutXfm / pidFvOutXfm2.
  */
@@ -263,7 +263,7 @@ export function setupGlobalSharedObjects(x, opts) {
  * callers downstream guard with `?` chaining or `if (pid)` so missing
  * params (e.g. ParamBust on non-female rigs) cleanly skip emission.
  *
- * @param {Array<{id:string, pid:string|number}>} paramDefs
+ * @param {Array<{id:string, pid:string}>} paramDefs
  * @returns {Record<string, string|number|undefined>}
  */
 export function lookupStandardParamPids(paramDefs) {

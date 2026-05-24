@@ -30,12 +30,12 @@ import { emitSingleParamKfGrid, emitStructuralWarp } from './deformerEmit.js';
  * @param {Object} x
  * @param {Object} opts
  * @param {{specs: Array}} opts.bodyChain
- * @param {Array<{id:string, pid:string|number}>} opts.paramDefs
+ * @param {Array<{id:string, pid:string}>} opts.paramDefs
  * @param {Array} opts.rigCollectorWarpDeformers   Mutated — push specs here.
- * @param {string|number} opts.pidDeformerRoot
- * @param {string|number} opts.pidCoord
+ * @param {string} opts.pidDeformerRoot
+ * @param {string} opts.pidCoord
  * @param {Object} opts.emitCtx                    {allDeformerSources, pidPartGuid, rootPart}.
- * @returns {{ pidBreathGuid: string|number|null, pidBodyXGuid: string|number|null }}
+ * @returns {{ pidBreathGuid: string|null, pidBodyXGuid: string|null }}
  */
 export function emitBodyWarpChain(x, opts) {
   const {

@@ -50,21 +50,21 @@ const CLIP_RULES = {
  * @param {Array} opts.meshes
  * @param {Array<{maskedMeshId:string, maskMeshIds:string[]}>} [opts.maskConfigs]
  * @returns {{
- *   maskPidByMaskedPartId: Map<string, string|number>,
+ *   maskPidByMaskedPartId: Map<string, string>,
  *   maskMeshIdsByPartId: Map<string, string[]>,
- *   pidByPartId: Map<string, string|number>,
+ *   pidByPartId: Map<string, string>,
  * }}
  */
 export function resolveMaskPairings(opts) {
   const { perMesh, meshes, maskConfigs = [] } = opts;
 
-  /** @type {Map<string, string|number>} */
+  /** @type {Map<string, string>} */
   const pidByPartId = new Map();
   for (const pmEntry of perMesh) {
     pidByPartId.set(meshes[pmEntry.mi].partId, pmEntry.pidDrawable);
   }
 
-  /** @type {Map<string, string|number>} */
+  /** @type {Map<string, string>} */
   const maskPidByMaskedPartId = new Map();
   /** @type {Map<string, string[]>} */
   const maskMeshIdsByPartId = new Map();
