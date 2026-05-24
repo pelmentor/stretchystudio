@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * Eye-closure context pre-pass for the .cmo3 generator.
@@ -52,8 +52,8 @@ import { logger } from '../../../lib/logger.js';
  * @param {(cy: number) => number} opts.canvasToBodyXY
  * @param {any} opts.rigDebugLog
  * @returns {{
- *   eyeContexts: Array<{tag: string, isEyewhite: boolean, curvePoints: Array<[number, number]>, bboxCenterX: number, bboxCenterY: number}>,
- *   findEyeCtx: (tag: string, bboxCx: number, bboxCy: number) => any,
+ *   eyeContexts: Array<{tag: any, isEyewhite: boolean, curvePoints: number[][], bboxCenterX: number, bboxCenterY: number}>,
+ *   findEyeCtx: (tag: any, bboxCx: number, bboxCy: number) => any,
  * }}
  */
 export function buildEyeContexts(opts) {

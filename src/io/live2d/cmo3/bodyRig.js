@@ -29,7 +29,7 @@ import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
  * @param {Object} ctx
  * @param {string} ctx.pidParamAngleZ
  * @param {Object|null} ctx.neckUnionBbox - { minX, minY, W, H }
- * @param {string} ctx.pidBodyXGuid
+ * @param {string|number} ctx.pidBodyXGuid
  * @param {string|null} ctx.neckGroupId
  * @param {Map} ctx.groupDeformerGuids
  * @param {Map} ctx.deformerWorldOrigins
@@ -39,6 +39,10 @@ import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
  * @param {Object|null} ctx.rigDebugLog
  * @param {Object} ctx.emitCtx - shared ctx for emitStructuralWarp
  *   ({ allDeformerSources, pidPartGuid, rootPart })
+ * @param {Object} [ctx.autoRigNeckWarp] - opt-in auto-rig tunables
+ * @param {Object} [ctx.rigCollector] - parallel rigSpec accumulator
+ *   ({ warpDeformers: any[], rotationDeformers: any[] }); when present,
+ *   spec is pushed for the depgraph / moc3 binary translator.
  * @returns {string|null} pidNeckWarpGuid
  */
 export function emitNeckWarp(x, ctx) {
@@ -105,7 +109,7 @@ export function emitNeckWarp(x, ctx) {
  * @param {string} ctx.pidParamAngleZ
  * @param {number} ctx.facePivotCx
  * @param {number} ctx.facePivotCy
- * @param {string} ctx.pidBodyXGuid
+ * @param {string|number} ctx.pidBodyXGuid
  * @param {string|null} ctx.headGroupId
  * @param {Map} ctx.groupDeformerGuids
  * @param {Map} ctx.deformerWorldOrigins
@@ -115,6 +119,11 @@ export function emitNeckWarp(x, ctx) {
  * @param {string} ctx.pidPartGuid
  * @param {string} ctx.pidCoord
  * @param {Object} ctx.rootPart
+ * @param {Object} [ctx.rigCollector] - parallel rigSpec accumulator
+ *   ({ warpDeformers: any[], rotationDeformers: any[] }); when present,
+ *   spec is pushed for the depgraph / moc3 binary translator.
+ * @param {Array<number>} [ctx.faceRotationParamKeys] - default [-30, 0, 30]
+ * @param {Array<number>} [ctx.faceRotationAngles] - default [-10, 0, 10]
  * @returns {string} pidFaceRotGuid
  */
 export function emitFaceRotation(x, ctx) {

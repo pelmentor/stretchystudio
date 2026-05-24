@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { emitBodyWarpChain } from './bodyChainEmit.js';
 import { emitNeckWarp, emitFaceRotation } from './bodyRig.js';
