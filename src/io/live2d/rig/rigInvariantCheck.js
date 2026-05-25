@@ -172,13 +172,16 @@ export function runRigInvariantChecks(project) {
       violate('I-1', n.id, n.name, `part has mesh (${vCount} verts) but modifiers[] is empty or missing → renderer will render at canvas origin`);
     } else {
       // I-2: each modifier reference resolves
+      // Field mapping (verified against ArmatureModifierService.js:315 +
+      // synthesizeModifierStacks): the armature modifier uses `deformerId`
+      // (set to the joint bone id), NOT `boneId`/`armatureId`. Treat the
+      // armature and non-lattice modifier refs uniformly.
       for (let i = 0; i < n.modifiers.length; i++) {
         const m = n.modifiers[i];
         if (!m) continue;
         let refId = null;
         let refField = null;
         if (m.type === 'lattice') { refId = m.objectId; refField = 'objectId'; }
-        else if (m.type === 'armature') { refId = m.boneId ?? m.armatureId ?? null; refField = 'boneId/armatureId'; }
         else { refId = m.deformerId ?? null; refField = 'deformerId'; }
         if (typeof refId !== 'string' || refId.length === 0) {
           violate('I-2', n.id, n.name, `modifiers[${i}].type=${m.type} has empty ${refField}`);
@@ -236,18 +239,24 @@ export function runRigInvariantChecks(project) {
       violate('I-3', n.id, n.name, `lattice.parent="${n.parent}" does not resolve to any node`);
     }
 
-    // I-4: lattice cage shape
+    // I-4: lattice cage shape.
+    // `gridSize.{rows,cols}` is the number of CELLS, not points (verified
+    // against [v43_lattice_substrate.js](../../../store/migrations/v43_lattice_substrate.js)
+    // where the cage receives baseGrid points laid out as a `(rows+1)`
+    // by `(cols+1)` grid of control points). So expected cage vertices
+    // = `(rows+1) × (cols+1)`.
     if (typeof n.dataId === 'string' && n.dataId.length > 0) {
       const cage = byId.get(n.dataId);
       if (!cage) {
         violate('I-4', n.id, n.name, `lattice.dataId="${n.dataId}" does not resolve to any cage node`);
       } else {
-        const expectedVerts = (n.gridSize?.rows ?? 0) * (n.gridSize?.cols ?? 0);
-        const cageVerts = Array.isArray(cage.vertices) ? cage.vertices.length : (cage.vertices?.length ?? 0);
+        const rows = n.gridSize?.rows ?? 0;
+        const cols = n.gridSize?.cols ?? 0;
+        const expectedVerts = (rows > 0 && cols > 0) ? (rows + 1) * (cols + 1) : 0;
         // Cage vertices may be stored as flat `[x0, y0, ...]` (length 2N) OR object array (length N).
         const cageVertCount = vertexCountOf(cage.vertices);
         if (expectedVerts > 0 && cageVertCount > 0 && cageVertCount !== expectedVerts) {
-          violate('I-4', n.id, n.name, `lattice.gridSize=${n.gridSize?.rows}×${n.gridSize?.cols} expects ${expectedVerts} cage verts; cage="${cage.id}" has ${cageVertCount}`);
+          violate('I-4', n.id, n.name, `lattice.gridSize=${rows}×${cols} cells expects ${expectedVerts} cage points (${rows + 1}×${cols + 1}); cage="${cage.id}" has ${cageVertCount}`);
         }
       }
     }
