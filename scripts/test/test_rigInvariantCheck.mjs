@@ -280,6 +280,29 @@ logger.info = () => {};
     `byInvariant=${JSON.stringify(r.byInvariant)}`);
 }
 
+// ── I-8/I-9: eval-time finiteness + extent reasonableness ─────────────
+// We can't easily fabricate a depgraph-evaluable project in a test
+// without a heavy fixture, but we CAN verify the eval-path swallows
+// errors gracefully when depgraph throws on minimal input — the
+// invariant check must degrade to "skipped" rather than block Init Rig.
+{
+  // Malformed project (no parameters, no canvas) — depgraph should
+  // either return [] or throw. Either way, the framework must not crash
+  // and must report `ok=true` (no violations) for the structural set.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      // A bare bone with no parts — depgraph may produce 0 frames.
+      { id: 'bone1', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 500, pivotY: 500 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  // Structural checks pass; eval-time skipped or 0 frames — neither is a violation.
+  assert(r.ok, 'I-8/I-9 graceful degradation: minimal project does not crash framework',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
 // ── degenerate input: null project / empty nodes ──────────────────────
 {
   const r1 = runRigInvariantChecks(null);

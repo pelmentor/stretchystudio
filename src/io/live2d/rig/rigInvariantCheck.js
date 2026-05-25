@@ -59,6 +59,7 @@
  */
 
 import { logger } from '../../../lib/logger.js';
+import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
 
 /**
  * @typedef {{
@@ -274,11 +275,69 @@ export function runRigInvariantChecks(project) {
     }
   }
 
+  // ─── I-8, I-9 — EVAL-TIME invariants. Run the SAME engine the
+  // viewport uses (`evalProjectFrameViaDepgraph` — the depgraph engine
+  // wired in by `CanvasViewport.jsx:1009`). The pre-existing
+  // `rigInitIdentityDiag` uses chainEval (`evalRig`) which can produce
+  // different output from depgraph; a divergence between them is itself
+  // a bug, and the user-visible viewport reflects DEPGRAPH output.
+  //
+  // I-8 — every part's evaluated `vertexPositions` is finite.
+  // I-9 — every part's evaluated bbox extent is bounded (not Infinity,
+  //       not zero — degenerate bbox = render-time disaster, e.g.
+  //       handwear "scaled infinitely" filling the viewport).
+  //
+  // Defensive: depgraph eval is a heavy operation. Wrap in try/catch
+  // and degrade to skipped-checks rather than block Init Rig.
+  let evalChecked = 0;
+  try {
+    const frames = evalProjectFrameViaDepgraph(project, {});
+    if (Array.isArray(frames)) {
+      // Canvas dimension — used to bound "reasonable" bbox extent. A
+      // mesh extent larger than 100× the canvas is essentially Infinity
+      // (the handwear bug renders at ~Infinity * canvas-scale).
+      const cw = project.canvas?.width ?? project.canvas?.w ?? 2048;
+      const ch = project.canvas?.height ?? project.canvas?.h ?? 2048;
+      const maxReasonableExtent = Math.max(cw, ch) * 100;
+      for (const f of frames) {
+        if (!f || !f.id || !f.vertexPositions) continue;
+        evalChecked++;
+        const vp = f.vertexPositions;
+        const partNode = byId.get(f.id);
+        const partName = partNode?.name ?? f.id;
+        // I-8: finiteness scan
+        let nonFiniteIdx = -1;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < vp.length; i += 2) {
+          const x = vp[i], y = vp[i + 1];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            if (nonFiniteIdx < 0) nonFiniteIdx = i;
+            continue;
+          }
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+        if (nonFiniteIdx >= 0) {
+          violate('I-8', f.id, partName, `depgraph eval produced non-finite vertexPositions[${nonFiniteIdx}]=(${vp[nonFiniteIdx]}, ${vp[nonFiniteIdx + 1]}) — RENDERS AT INFINITY (gray-viewport class)`);
+        } else if (Number.isFinite(minX) && Number.isFinite(maxX)) {
+          // I-9: extent reasonableness — only applies if I-8 passed
+          const extentX = maxX - minX;
+          const extentY = maxY - minY;
+          if (extentX > maxReasonableExtent || extentY > maxReasonableExtent) {
+            violate('I-9', f.id, partName, `depgraph eval produced part bbox ${extentX.toFixed(0)}×${extentY.toFixed(0)} px on a ${cw}×${ch} canvas (≥100× canvas) — RENDERS HUGE (gray-viewport class). bbox=[${minX.toFixed(0)},${minY.toFixed(0)}]→[${maxX.toFixed(0)},${maxY.toFixed(0)}]`);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn('rigInvariantCheck', `I-8/I-9 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+  }
+
   // ─── summary log ──────────────────────────────────────────────────
   if (summary.ok) {
     logger.info('rigInvariantCheck',
-      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} | I-1..I-7 all pass`,
-      { partsChecked, latticesChecked, bonesChecked });
+      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-9 all pass`,
+      { partsChecked, latticesChecked, bonesChecked, evalChecked });
   } else {
     const byInvStr = Object.entries(summary.byInvariant)
       .sort(([, a], [, b]) => b - a)

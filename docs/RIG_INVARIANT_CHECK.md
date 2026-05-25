@@ -48,6 +48,8 @@ string is the only reliable surface for paste-back diagnostics).
 | **I-5** | Every `mesh.runtime.keyforms[i].vertexPositions` is a `Float32Array` (or numeric array) of length `2 × vertexCount`, all entries finite | Caught the **handwear "scaled infinitely" regression** (2026-05-25): an object-array `[{x,y},...]` written into the flat-array field, propagating `{x,y}` objects into bone-LBS arithmetic → ±Infinity vertex positions → handwear fills viewport |
 | **I-6** | If `mesh.jointBoneId` is set, `mesh.boneWeights.length === vertexCount` (regardless of `mesh.vertices` shape) | Sister of I-5: same shape-mismatch class on the bone-skin side |
 | **I-7** | Every node with `boneRole` has finite `transform.pivotX/Y` | The **Shelby bone-NaN cascade** (2026-05-25): `deriveCanvasPivot` returning `NaN` for object-shape verts → SkeletonOverlay NaN flood |
+| **I-8** | Every depgraph-evaluated frame's `vertexPositions` contains only finite numbers | The "gray viewport" class — bone-LBS or warp eval produced ±Infinity verts → mesh fills entire viewport. Runs `evalProjectFrameViaDepgraph` (the SAME engine `CanvasViewport.jsx:1009` uses). |
+| **I-9** | Every depgraph-evaluated frame's bbox extent is ≤ `100 × max(canvasWidth, canvasHeight)` | Sister of I-8 — catches "rendered huge but not actually Infinity" cases (a part scaled by 50× would silently render as a giant gray rectangle). Threshold of 100× is deliberately loose; tighter thresholds are project-specific. |
 
 ## Output format
 
@@ -78,6 +80,8 @@ offender + the specific failing field values.
 | I-5 (vertexPositions shape) | The dual-`mesh.vertices`-shape footgun ([[mesh-vertices-dual-shape]]). Object-array verts copied into a flat-array field. Catalog of known write sites: `groupRotationToBone.js`. |
 | I-6 (boneWeights count mismatch) | Same shape-mismatch class as I-5, on the skinning side. |
 | I-7 (NaN bone pivot) | `deriveCanvasPivot` returned `NaN`. See [[typeof-nan-is-number]] + [[shelby-invisible-bones-fix-2026-05-25]]. |
+| I-8 (eval Infinity) | The depgraph's bone-LBS / warp eval produced non-finite output. Check bone matrices (`makeBoneLocalMatrix`, `mat3MulInto` chain), skin weights, parent matrix lookups. The bug is at RENDER time, NOT in `project.nodes` — structural checks I-1..I-7 will pass. |
+| I-9 (eval huge bbox) | Same family as I-8 but the inputs were technically finite. Look for a bone matrix with very large scale (e.g. a chain where one matrix's scale multiplied through the chain accumulates), an unbounded warp grid, or a `(0,0) → far-away-point` translation that was meant to be a pivot offset. |
 
 ## How to add a new invariant
 
@@ -97,12 +101,19 @@ property of `project.nodes` that should always hold post-Init-Rig":
    [`test_rigInvariantCheck.mjs`](../scripts/test/test_rigInvariantCheck.mjs).
 5. Run `npm run test:rigInvariantCheck` and `npm run typecheck`.
 
-**Design rule.** Each invariant is *purely structural* — no eval,
-no rendering, no transforms. The check runs on `project.nodes`
-fields directly. If a bug requires running the depgraph evaluator
-to detect (e.g., "part X renders outside its parent warp's lifted
-bbox"), that belongs in a sister framework that runs *after*
-`evalRig`, not in this module. See "Future work" below.
+**Design rule.** Invariants I-1..I-7 are *purely structural* — they
+read `project.nodes` fields directly with no eval/render/transform.
+Invariants I-8 and I-9 are *eval-time* — they run
+`evalProjectFrameViaDepgraph` (the same engine the viewport uses)
+once and inspect its output. Eval-time checks catch the bug class
+where `project.nodes` looks correct but the renderer still produces
+±Infinity (handwear at-infinity 2026-05-25). Defensively wrapped in
+try/catch — eval throwing degrades to skipped checks rather than
+blocking Init Rig.
+
+When adding a new invariant: classify it as **structural** (cheap,
+runs always) or **eval-time** (one extra evalRig, runs only once at
+end-of-Init-Rig) and place it in the corresponding section.
 
 ## Field-name reference
 
@@ -144,16 +155,13 @@ user-facing diagnostic mileage was lost on them.
 Things this module deliberately does NOT check (yet) — each could
 be a sibling framework:
 
-- **Eval-time invariants.** Run `evalRig` once and assert that
-  each part's mesh bbox center is inside its declared parent
-  warp's lifted bbox. Catches "face mesh rendered at canvas origin
-  even though everything in `project.nodes` looks fine."
-  Belongs in `rigEvalInvariantCheck.js`, runs alongside the
-  existing `rigInitIdentityDiag`.
 - **Render-vs-eval consistency.** Probe both the depgraph and the
   chain evaluator with the same params and assert they produce
-  identical outputs at a handful of probe points. Catches
-  pipeline-divergence bugs where one renderer reads stale state.
+  identical outputs at a handful of probe points. The existing
+  `rigInitIdentityDiag` measures chainEval output; I-8/I-9 measure
+  depgraph output. A future check would assert they agree, catching
+  the engine-drift class (the original
+  `evalProjectFrameViaDepgraph`-vs-`evalRig` cutover bugs).
 - **Re-rig idempotency.** Save the rigSpec, re-run Init Rig, diff —
   any drift is a non-idempotent stage.
 - **PSD-source vs rendered position cross-check.** Store the
