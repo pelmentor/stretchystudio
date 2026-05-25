@@ -672,8 +672,13 @@ export async function initializeRigFromProject(project, images = new Map()) {
       // Top 10 by delta — keeps the log readable on large rigs.
       offenders.sort((a, b) => b.maxDelta - a.maxDelta);
       const disabledNote = disabled.length > 0 ? ` (subsystems off: ${disabled.join(', ')})` : '';
+      // Inline offender list into message string per inline-diagnostic-fields rule
+      // (user's console paste collapses Object payload to `[object Object]`).
+      const top10Str = offenders.slice(0, 10)
+        .map((o) => `${o.name}=${o.maxDelta.toFixed(1)}px`)
+        .join(', ');
       logger.info('rigInitIdentityDiag',
-        `Init Rig rest-divergence${disabledNote}: max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px`,
+        `Init Rig rest-divergence${disabledNote}: max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px${offenders.length > 0 ? ` | top: ${top10Str}` : ''}`,
         {
           disabledSubsystems: disabled.length > 0 ? disabled : undefined,
           maxOverallPx: Math.round(maxOverall * 100) / 100,

@@ -191,8 +191,16 @@ export function migrateGroupRotationDeformersToBones(project) {
 
     for (const p of parts) {
       const verts = p.mesh?.vertices;
-      if (!Array.isArray(verts)) continue;
-      const n = verts.length >> 1;
+      if (!Array.isArray(verts) || verts.length === 0) continue;
+      // `mesh.vertices` is dual-shape — discriminate (see deriveCanvasPivot
+      // above + [[mesh-vertices-dual-shape]]). Write sites must match the
+      // canonical `vertexPositions` shape (flat Float32Array) regardless
+      // of which input shape was provided, otherwise the renderer reads
+      // `{x,y}` objects as numbers and produces NaN/Infinity vertices.
+      // (Shelby handwear "scaled infinitely" regression 2026-05-25.)
+      const v0 = verts[0];
+      const isObjectShape = typeof v0 === 'object' && v0 !== null;
+      const n = isObjectShape ? verts.length : (verts.length >> 1);
       p.mesh.boneWeights = new Array(n).fill(1);
       p.mesh.jointBoneId = groupId;
       const rt = p.mesh.runtime;
@@ -204,7 +212,17 @@ export function migrateGroupRotationDeformersToBones(project) {
         // `findInnermostBodyWarpId` in `synthesizeModifierStacks`).
         rt.bindings = (Array.isArray(rt.bindings) ? rt.bindings : [])
           .filter((b) => typeof b?.parameterId === 'string' && !b.parameterId.startsWith('ParamRotation_'));
-        rt.keyforms = [{ keyTuple: [], opacity: 1, vertexPositions: verts.slice() }];
+        const flatVerts = new Float32Array(n * 2);
+        if (isObjectShape) {
+          for (let i = 0; i < n; i++) {
+            const vi = verts[i];
+            flatVerts[i * 2]     = vi.restX ?? vi.x;
+            flatVerts[i * 2 + 1] = vi.restY ?? vi.y;
+          }
+        } else {
+          for (let i = 0; i < n * 2; i++) flatVerts[i] = verts[i];
+        }
+        rt.keyforms = [{ keyTuple: [], opacity: 1, vertexPositions: flatVerts }];
       }
       if (Array.isArray(p.modifiers)) {
         p.modifiers = p.modifiers.filter(

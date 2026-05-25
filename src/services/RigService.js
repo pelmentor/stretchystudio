@@ -30,6 +30,7 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 // writers + exporter graph) only loads when a user actually triggers
 // initializeRig / runStage / refitAll.
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
+import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
 import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
@@ -280,6 +281,14 @@ export async function initializeRig() {
     // Persist all rig outputs into projectStore.
     // Phase A2 — seedAllRig is async (lazy-loads the seed module).
     await useProjectStore.getState().seedAllRig(harvest);
+
+    // Structural-invariant pass on the post-seed project state
+    // ([[invariant-checks-over-user-repro]] 2026-05-25). Catches bug
+    // classes from logs alone — empty modifier stacks, dangling
+    // modifier refs, shape-mismatched vertexPositions, non-finite
+    // bone pivots, etc. Logs ONE error per violation with the
+    // smoking-gun fields inlined into the message string.
+    runRigInvariantChecks(useProjectStore.getState().project);
 
     // Cache the rigSpec for the live evaluator. Bypass buildRigSpec()
     // because it would re-run the harvest a second time. Also attach

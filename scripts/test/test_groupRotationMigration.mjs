@@ -186,5 +186,87 @@ assert(maxDelta(bone30, base30) < 0.05,
     `pivotX=${grp.transform.pivotX}`);
 }
 
+// Write-site shape discrimination: post-migration runtime.keyforms[0].vertexPositions
+// MUST be a flat numeric array regardless of input shape. Pre-fix the writer
+// did `verts.slice()` which propagated `[{x,y},...]` objects into
+// vertexPositions, causing the renderer's bone LBS to compute
+// `matrix * {x:500,y:400}` = NaN/Infinity → handwear "scaled infinitely"
+// regression on Shelby 2026-05-25.
+{
+  const project = {
+    canvas: { width: 1024, height: 1024, x: 0, y: 0 },
+    parameters: [{ id: 'ParamRotation_grp', name: 'ParamRotation_grp', defaultValue: 0, minValue: -30, maxValue: 30 }],
+    nodes: [
+      { id: 'grp', name: 'grp', type: 'group', parent: null,
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+      { id: 'charm', name: 'charm', type: 'part', parent: 'grp',
+        mesh: {
+          vertices: [
+            { x: 500, y: 400, restX: 500, restY: 400 },
+            { x: 600, y: 400, restX: 600, restY: 400 },
+            { x: 600, y: 520, restX: 600, restY: 520 },
+            { x: 500, y: 520, restX: 500, restY: 520 },
+          ],
+          triangles: [[0, 1, 2], [0, 2, 3]],
+          uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+          runtime: {
+            keyforms: [{ keyTuple: [0], opacity: 1, vertexPositions: [-50, -60, 50, -60, 50, 60, -50, 60] }],
+            bindings: [],
+          },
+        } },
+      { id: 'GroupRotation_grp', type: 'deformer', deformerKind: 'rotation', parent: null,
+        keyforms: [{ keyTuple: [0], originX: 550, originY: 460, angle: 0, scale: 1 }] },
+    ],
+  };
+  migrateGroupRotationDeformersToBones(project);
+  const charm = project.nodes.find((n) => n.id === 'charm');
+  const vp = charm.mesh.runtime.keyforms[0].vertexPositions;
+  assert(vp instanceof Float32Array,
+    'object-shape input: runtime.keyforms[0].vertexPositions is Float32Array (NOT object array)',
+    `actual: ${vp?.constructor?.name ?? typeof vp}`);
+  assert(vp && vp.length === 8,
+    'object-shape input: vertexPositions has 2N numbers (4 verts × 2 = 8)',
+    `length=${vp?.length}`);
+  assert(vp && vp.every((n) => Number.isFinite(n)),
+    'object-shape input: vertexPositions contains only finite numbers',
+    `vp=[${Array.from(vp ?? []).join(',')}]`);
+  assert(charm.mesh.boneWeights?.length === 4,
+    'object-shape input: boneWeights length === vertex count (NOT half)',
+    `length=${charm.mesh.boneWeights?.length}`);
+}
+
+// Same write-site check for FLAT input shape (regression-protect existing path).
+{
+  const project = {
+    canvas: { width: 1024, height: 1024, x: 0, y: 0 },
+    parameters: [{ id: 'ParamRotation_grp', name: 'ParamRotation_grp', defaultValue: 0, minValue: -30, maxValue: 30 }],
+    nodes: [
+      { id: 'grp', name: 'grp', type: 'group', parent: null,
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+      { id: 'charm', name: 'charm', type: 'part', parent: 'grp',
+        mesh: {
+          vertices: [500, 400, 600, 400, 600, 520, 500, 520],
+          triangles: [[0, 1, 2], [0, 2, 3]],
+          uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+          runtime: {
+            keyforms: [{ keyTuple: [0], opacity: 1, vertexPositions: [-50, -60, 50, -60, 50, 60, -50, 60] }],
+            bindings: [],
+          },
+        } },
+      { id: 'GroupRotation_grp', type: 'deformer', deformerKind: 'rotation', parent: null,
+        keyforms: [{ keyTuple: [0], originX: 550, originY: 460, angle: 0, scale: 1 }] },
+    ],
+  };
+  migrateGroupRotationDeformersToBones(project);
+  const charm = project.nodes.find((n) => n.id === 'charm');
+  const vp = charm.mesh.runtime.keyforms[0].vertexPositions;
+  assert(vp instanceof Float32Array && vp.length === 8,
+    'flat-shape input: vertexPositions still Float32Array length 8',
+    `actual: ${vp?.constructor?.name} len=${vp?.length}`);
+  assert(charm.mesh.boneWeights?.length === 4,
+    'flat-shape input: boneWeights length === vertex count',
+    `length=${charm.mesh.boneWeights?.length}`);
+}
+
 console.log(`groupRotationMigration: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
