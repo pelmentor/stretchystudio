@@ -109,5 +109,82 @@ assert(maxDelta(bone30, base30) < 0.05,
   `bone model @30 == deformer @30 — MIGRATION PRESERVES EVAL (maxDelta=${maxDelta(bone30, base30).toFixed(4)})`,
   `bone=${bone30?.map((v) => v.toFixed(2))} deformer=${base30?.map((v) => v.toFixed(2))}`);
 
+// ── 4. Regression 2026-05-25: object-shape mesh.vertices ──────────────
+// Real PSD-imported parts carry `mesh.vertices` as object array
+// `[{x, y, restX?, restY?}, ...]` (per exporter.js line 493) — not
+// flat number arrays. Pre-fix the migration read `verts[0]` uniformly
+// as a number, producing `object - number = NaN` for the object shape,
+// cascading NaN into bone `transform.pivotX/Y` and the SkeletonOverlay
+// SVG flood (Shelby invisible-character regression).
+{
+  const project = {
+    canvas: { width: 1024, height: 1024, x: 0, y: 0 },
+    parameters: [{ id: 'ParamRotation_grp', name: 'ParamRotation_grp', defaultValue: 0, minValue: -30, maxValue: 30 }],
+    nodes: [
+      { id: 'grp', name: 'grp', type: 'group', parent: null,
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+      { id: 'charm', name: 'charm', type: 'part', parent: 'grp',
+        mesh: {
+          // Object-shape vertices — the canonical PSD-import shape.
+          vertices: [
+            { x: 500, y: 400, restX: 500, restY: 400 },
+            { x: 600, y: 400, restX: 600, restY: 400 },
+            { x: 600, y: 520, restX: 600, restY: 520 },
+            { x: 500, y: 520, restX: 500, restY: 520 },
+          ],
+          triangles: [[0, 1, 2], [0, 2, 3]],
+          uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+          runtime: {
+            keyforms: [{ keyTuple: [0], opacity: 1,
+              // Pivot-relative canvas-px (vertex − canvas pivot 550,460).
+              vertexPositions: [-50, -60, 50, -60, 50, 60, -50, 60] }],
+            bindings: [{ parameterId: 'ParamRotation_grp', keys: [0], interpolation: 'LINEAR' }],
+          },
+        } },
+      { id: 'GroupRotation_grp', type: 'deformer', deformerKind: 'rotation', parent: null,
+        keyforms: [{ keyTuple: [0], originX: 550, originY: 460, angle: 0, scale: 1 }] },
+    ],
+  };
+  migrateGroupRotationDeformersToBones(project);
+  const grp = project.nodes.find((n) => n.id === 'grp');
+  assert(Number.isFinite(grp.transform.pivotX) && Number.isFinite(grp.transform.pivotY),
+    'object-shape verts → finite bone pivot (NOT NaN)',
+    `pivotX=${grp.transform.pivotX} pivotY=${grp.transform.pivotY}`);
+  assert(Math.abs(grp.transform.pivotX - 550) < 1e-6 && Math.abs(grp.transform.pivotY - 460) < 1e-6,
+    'object-shape verts: bone head = canvas-final rest pivot (550,460)',
+    `pivotX=${grp.transform.pivotX} pivotY=${grp.transform.pivotY}`);
+}
+
+// restX/restY override x/y when present (post-pose-bake)
+{
+  const project = {
+    canvas: { width: 1024, height: 1024, x: 0, y: 0 },
+    parameters: [{ id: 'ParamRotation_grp', name: 'ParamRotation_grp', defaultValue: 0, minValue: -30, maxValue: 30 }],
+    nodes: [
+      { id: 'grp', name: 'grp', type: 'group', parent: null,
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+      { id: 'charm', name: 'charm', type: 'part', parent: 'grp',
+        mesh: {
+          vertices: [
+            // x/y are POSED (post-rotation); restX/restY are the un-baked rest
+            { x: 999, y: 999, restX: 500, restY: 400 },
+          ],
+          triangles: [], uvs: [],
+          runtime: {
+            keyforms: [{ keyTuple: [0], opacity: 1, vertexPositions: [-50, -60] }],
+            bindings: [],
+          },
+        } },
+      { id: 'GroupRotation_grp', type: 'deformer', deformerKind: 'rotation', parent: null,
+        keyforms: [{ keyTuple: [0], originX: 550, originY: 460, angle: 0, scale: 1 }] },
+    ],
+  };
+  migrateGroupRotationDeformersToBones(project);
+  const grp = project.nodes.find((n) => n.id === 'grp');
+  assert(Math.abs(grp.transform.pivotX - 550) < 1e-6,
+    'object-shape: restX preferred over x (550 not 1049)',
+    `pivotX=${grp.transform.pivotX}`);
+}
+
 console.log(`groupRotationMigration: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

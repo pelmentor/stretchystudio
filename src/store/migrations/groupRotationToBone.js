@@ -94,13 +94,46 @@ export function migrateGroupRotationDeformersToBones(project) {
 
     let head = null;
     for (const p of partsOf(def)) {
+      // `mesh.vertices` has TWO canonical shapes in this codebase:
+      //   (a) object array `[{x, y, restX?, restY?}, ...]` — the
+      //       runtime/PSD-import shape (see `exporter.js` line 493:
+      //       `v.restX ?? v.x`). `restX/restY` carry the un-baked rest
+      //       position when a pose has been committed; fall back to
+      //       `x/y` otherwise.
+      //   (b) flat number array `[x0, y0, x1, y1, ...]` — the
+      //       test-fixture + some-synthesis-path shape.
+      // `mesh.runtime.keyforms[i].vertexPositions` is ALWAYS the flat
+      // shape (per `selectRigSpec._buildArtMeshes` writes
+      // `Float32Array(flatVerts)`; `persistArtMeshRuntime` copies).
+      // The pre-2026-05-25 code treated `verts[0]` uniformly as a
+      // number — fine for shape (b), but for shape (a) it picked up
+      // the whole `{x, y, ...}` object → `object - number = NaN`,
+      // cascading into bone `transform.pivotX/Y` and the
+      // SkeletonOverlay NaN flood (Shelby invisible-character
+      // regression 2026-05-25). Discriminate the shape and read
+      // accordingly. The math (canvas vertex − pivot-relative keyform
+      // = canvas pivot) is identical for both shapes once read.
       const verts = p.mesh?.vertices;
       const kf = Array.isArray(p.mesh?.runtime?.keyforms)
         ? (p.mesh.runtime.keyforms.find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? p.mesh.runtime.keyforms[0])
         : null;
       const kfv = kf?.vertexPositions;
-      if (Array.isArray(verts) && verts.length >= 2 && Array.isArray(kfv) && kfv.length >= 2) {
-        head = { x: verts[0] - kfv[0], y: verts[1] - kfv[1] };
+      if (!Array.isArray(verts) || !Array.isArray(kfv) || kfv.length < 2) continue;
+      let vx, vy;
+      const v0 = verts[0];
+      if (typeof v0 === 'object' && v0 !== null) {
+        // Shape (a) — object array.
+        vx = v0.restX ?? v0.x;
+        vy = v0.restY ?? v0.y;
+      } else if (typeof v0 === 'number' && verts.length >= 2 && typeof verts[1] === 'number') {
+        // Shape (b) — flat number array.
+        vx = v0;
+        vy = verts[1];
+      } else {
+        continue;
+      }
+      if (typeof vx === 'number' && typeof vy === 'number') {
+        head = { x: vx - kfv[0], y: vy - kfv[1] };
         break;
       }
     }
