@@ -50,6 +50,8 @@ string is the only reliable surface for paste-back diagnostics).
 | **I-7** | Every node with `boneRole` has finite `transform.pivotX/Y` | The **Shelby bone-NaN cascade** (2026-05-25): `deriveCanvasPivot` returning `NaN` for object-shape verts → SkeletonOverlay NaN flood |
 | **I-8** | Every depgraph-evaluated frame's `vertexPositions` contains only finite numbers | The "gray viewport" class — bone-LBS or warp eval produced ±Infinity verts → mesh fills entire viewport. Runs `evalProjectFrameViaDepgraph` (the SAME engine `CanvasViewport.jsx:1009` uses). |
 | **I-9** | Every depgraph-evaluated frame's bbox extent is ≤ `100 × max(canvasWidth, canvasHeight)` | Sister of I-8 — catches "rendered huge but not actually Infinity" cases (a part scaled by 50× would silently render as a giant gray rectangle). Threshold of 100× is deliberately loose; tighter thresholds are project-specific. |
+| **I-10** | Every bone's `transform.scaleX/Y` AND `pose.scaleX/Y` is in `[0.01, 100]` | The upstream of I-9. A bone with `scaleX=1000` propagates multiplicatively through the chain. Named the offending bone before depgraph even runs, so you don't need to read 19 frame bboxes to find which bone polluted them. |
+| **I-11** | Every lattice cage vertex coordinate is within `100 × max(canvasWidth, canvasHeight)` | The other upstream of I-9. A lattice with cage vertices at canvas-px ≈ 1,000,000 will translate every mesh through it to that position. Body-warp chain naturally extends 0.1× past canvas edges; 100× is the corruption threshold. |
 
 ## Output format
 
@@ -81,7 +83,9 @@ offender + the specific failing field values.
 | I-6 (boneWeights count mismatch) | Same shape-mismatch class as I-5, on the skinning side. |
 | I-7 (NaN bone pivot) | `deriveCanvasPivot` returned `NaN`. See [[typeof-nan-is-number]] + [[shelby-invisible-bones-fix-2026-05-25]]. |
 | I-8 (eval Infinity) | The depgraph's bone-LBS / warp eval produced non-finite output. Check bone matrices (`makeBoneLocalMatrix`, `mat3MulInto` chain), skin weights, parent matrix lookups. The bug is at RENDER time, NOT in `project.nodes` — structural checks I-1..I-7 will pass. |
-| I-9 (eval huge bbox) | Same family as I-8 but the inputs were technically finite. Look for a bone matrix with very large scale (e.g. a chain where one matrix's scale multiplied through the chain accumulates), an unbounded warp grid, or a `(0,0) → far-away-point` translation that was meant to be a pivot offset. |
+| I-9 (eval huge bbox) | Same family as I-8 but the inputs were technically finite. Look for a bone matrix with very large scale (e.g. a chain where one matrix's scale multiplied through the chain accumulates), an unbounded warp grid, or a `(0,0) → far-away-point` translation that was meant to be a pivot offset. **If I-9 fires without I-10 or I-11 also firing, the scale comes from a depgraph eval-only path (e.g. constraint chain accumulation) — instrument the kernel.** |
+| I-10 (bone scale out of range) | A migration / seeder / fcurve baked a scale outside ~1.0 into the bone's transform or pose. Check recent seeders + the Init Rig flow. |
+| I-11 (cage extent extreme) | A lattice cage was built with vertices in screen-space, world-space, or some other frame that's not canvas-px. Look at the cage's `baseGrid` source. |
 
 ## How to add a new invariant
 

@@ -263,7 +263,14 @@ export function runRigInvariantChecks(project) {
     }
   }
 
-  // ─── I-7 — bone pivot finiteness ──────────────────────────────────
+  // ─── I-7, I-10 — bone transform sanity ────────────────────────────
+  // I-7: pivot must be finite (catches NaN cascade — Shelby 2026-05-25).
+  // I-10: scale must be in [0.01, 100]. A scale outside this range is
+  //       almost certainly corruption — Blender's UI defaults bones to
+  //       1.0 and animation typically stays in [0.1, 10]. A scale of
+  //       1000 propagates multiplicatively up the bone chain (root
+  //       1000× × torso 1× × arm 1× = 1000× at the elbow) and produces
+  //       the "RENDERS HUGE" handwear class (caught by I-9 2026-05-25).
   let bonesChecked = 0;
   for (const n of nodes) {
     if (!n || !n.boneRole) continue;
@@ -272,6 +279,58 @@ export function runRigInvariantChecks(project) {
     const py = n.transform?.pivotY;
     if (typeof px !== 'number' || !Number.isFinite(px) || typeof py !== 'number' || !Number.isFinite(py)) {
       violate('I-7', n.id, n.name, `bone role="${n.boneRole}" has non-finite pivot (pivotX=${px} pivotY=${py})`);
+    }
+    const sx = n.transform?.scaleX;
+    const sy = n.transform?.scaleY;
+    if (typeof sx === 'number' && Number.isFinite(sx) && (sx < 0.01 || sx > 100)) {
+      violate('I-10', n.id, n.name, `bone role="${n.boneRole}" has out-of-range transform.scaleX=${sx} (expected ~1; range [0.01, 100])`);
+    }
+    if (typeof sy === 'number' && Number.isFinite(sy) && (sy < 0.01 || sy > 100)) {
+      violate('I-10', n.id, n.name, `bone role="${n.boneRole}" has out-of-range transform.scaleY=${sy} (expected ~1; range [0.01, 100])`);
+    }
+    // I-10b: pose scale (if present, also must be in range)
+    const psx = n.pose?.scaleX;
+    const psy = n.pose?.scaleY;
+    if (typeof psx === 'number' && Number.isFinite(psx) && (psx < 0.01 || psx > 100)) {
+      violate('I-10', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.scaleX=${psx} (expected ~1; range [0.01, 100])`);
+    }
+    if (typeof psy === 'number' && Number.isFinite(psy) && (psy < 0.01 || psy > 100)) {
+      violate('I-10', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.scaleY=${psy} (expected ~1; range [0.01, 100])`);
+    }
+  }
+
+  // ─── I-11 — lattice cage vertex range sanity ──────────────────────
+  // Every lattice's cage vertices must lie within a "reasonable"
+  // canvas-px range — extreme values (e.g. 100× the canvas) indicate
+  // a polluted cage. The body-warp chain DOES go beyond canvas edges
+  // (e.g. BodyWarpZ y:[-179, 1970] on a 1792-canvas — 0.1× over). The
+  // 100× threshold catches catastrophic pollution without false
+  // positives on legitimate over-extents.
+  const cw11 = project.canvas?.width ?? project.canvas?.w ?? 2048;
+  const ch11 = project.canvas?.height ?? project.canvas?.h ?? 2048;
+  const cageMaxAbs = 100 * Math.max(cw11, ch11);
+  for (const n of nodes) {
+    if (!n || !n.isLatticeCage) continue;
+    const verts = n.vertices;
+    if (!Array.isArray(verts) || verts.length === 0) continue;
+    let badIdx = -1;
+    let badVal = 0;
+    const v0 = verts[0];
+    const isObjShape = typeof v0 === 'object' && v0 !== null;
+    if (isObjShape) {
+      for (let i = 0; i < verts.length; i++) {
+        const v = verts[i];
+        const x = v?.x, y = v?.y;
+        if (typeof x === 'number' && Math.abs(x) > cageMaxAbs) { badIdx = i; badVal = x; break; }
+        if (typeof y === 'number' && Math.abs(y) > cageMaxAbs) { badIdx = i; badVal = y; break; }
+      }
+    } else {
+      for (let i = 0; i < verts.length; i++) {
+        if (typeof verts[i] === 'number' && Math.abs(verts[i]) > cageMaxAbs) { badIdx = i; badVal = verts[i]; break; }
+      }
+    }
+    if (badIdx >= 0) {
+      violate('I-11', n.id, n.name, `lattice cage vertex[${badIdx}]=${badVal.toFixed(0)} exceeds ${cageMaxAbs} (100× canvas max ${Math.max(cw11, ch11)}) — cage is polluted`);
     }
   }
 
@@ -336,7 +395,7 @@ export function runRigInvariantChecks(project) {
   // ─── summary log ──────────────────────────────────────────────────
   if (summary.ok) {
     logger.info('rigInvariantCheck',
-      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-9 all pass`,
+      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-11 all pass`,
       { partsChecked, latticesChecked, bonesChecked, evalChecked });
   } else {
     const byInvStr = Object.entries(summary.byInvariant)

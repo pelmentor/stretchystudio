@@ -280,6 +280,55 @@ logger.info = () => {};
     `byInvariant=${JSON.stringify(r.byInvariant)}`);
 }
 
+// ── I-10: bone scale out of range ─────────────────────────────────────
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'spine', boneRole: 'spine',
+        transform: { pivotX: 500, pivotY: 500, scaleX: 1000, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-10'] ?? 0) > 0,
+    'I-10 fail: bone transform.scaleX=1000 triggers I-10',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'spine', boneRole: 'spine',
+        transform: { pivotX: 500, pivotY: 500, scaleX: 1, scaleY: 1 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 500, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-10'] ?? 0) > 0,
+    'I-10 fail: bone pose.scaleX=500 triggers I-10',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+
+// ── I-11: lattice cage extent extreme ─────────────────────────────────
+{
+  // Cage with vertex at (1,000,000, 500) on a 1000-canvas — > 100×.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'lat1', type: 'object', objectKind: 'lattice', name: 'L1',
+        gridSize: { rows: 2, cols: 2 }, dataId: 'cage1', parent: null },
+      { id: 'cage1', type: 'meshData', isLatticeCage: true,
+        vertices: [{ x: 1000000, y: 500 }, { x: 1000000, y: 500 }, { x: 1000000, y: 500 },
+                   { x: 1000000, y: 500 }, { x: 1000000, y: 500 }, { x: 1000000, y: 500 },
+                   { x: 1000000, y: 500 }, { x: 1000000, y: 500 }, { x: 1000000, y: 500 }] },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-11'] ?? 0) > 0,
+    'I-11 fail: cage vertex >100× canvas triggers I-11',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+
 // ── I-8/I-9: eval-time finiteness + extent reasonableness ─────────────
 // We can't easily fabricate a depgraph-evaluable project in a test
 // without a heavy fixture, but we CAN verify the eval-path swallows
