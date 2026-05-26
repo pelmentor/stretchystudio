@@ -6,7 +6,7 @@ the viewport or read off values from the Properties panel.
 
 **Source**: [`src/io/live2d/rig/rigInvariantCheck.js`](../src/io/live2d/rig/rigInvariantCheck.js)
 **Wired into**: [`RigService.initializeRig`](../src/services/RigService.js) — runs immediately after `seedAllRig` writes its output into `project.nodes`, before the rigSpec cache write.
-**Tests**: `npm run test:rigInvariantCheck` (27 cases as of 2026-05-26).
+**Tests**: `npm run test:rigInvariantCheck` (33 cases as of 2026-05-26).
 
 ## Why this exists
 
@@ -54,6 +54,8 @@ string is the only reliable surface for paste-back diagnostics).
 | **I-11** | Every lattice cage vertex coordinate is within `100 × max(canvasWidth, canvasHeight)` | The other upstream of I-9. A lattice with cage vertices at canvas-px ≈ 1,000,000 will translate every mesh through it to that position. Body-warp chain naturally extends 0.1× past canvas edges; 100× is the corruption threshold. |
 | **I-12** | Every bone's `pose.x/y` (and the v19 channels-shape `pose.channels[id].x/y` equivalent) is within `10 × max(canvasWidth, canvasHeight)` | Pose translation feeds `composed.x = pivotX + pose.x` (`anim/constraints.js:171`) which feeds the world-matrix translation via `composedTransformToBonePose` (`kernels/bonePostChain.js:84`). A `pose.x` of 800K → every skinned vertex offset by 800K → RENDERS HUGE. Catches the upstream of I-9 when scale (I-10) and pivot finiteness (I-7) both pass — the exact 2026-05-26 handwear case. |
 | **I-13** | Every bone's `transform.pivotX/Y` is within `10 × max(canvasWidth, canvasHeight)` (additional to I-7's finiteness check) | I-7 catches NaN; I-13 catches finite-but-huge pivot (e.g. 800K). Combined with any non-identity rotation the `T(pivot) × R × S × T(-pivot)` algebra's cross-axis term doesn't cancel, so the resulting world-matrix translation is similarly huge. Sister of I-12: together they bracket every input to the bone world-matrix translation channel. |
+| **I-14** | Every bone's STATIC-composed world matrix translation (`m[6], m[7]`) is within `10 × max(canvasWidth, canvasHeight)` — runs `computeWorldMatrices`, the same pre-constraint algebra Blender's depsgraph uses | Catches stored-data pollution that COMBINES pivot + pose + parent chain in ways the per-field invariants (I-7/I-10/I-12/I-13) don't see in isolation: a non-zero `transform.rotation` × non-zero `transform.pivot` cross-term, a non-zero `transform.x/y`, or a parent chain that accumulates per-bone offsets into a huge total. **If I-14 PASSES but I-9 still fires, the bug enters via depgraph dynamic eval, NOT stored data — see I-15.** |
+| **I-15** | Every bone's `ctx.outputs.get(<boneId>/TRANSFORM/TRANSFORM_COMPOSE).transform.x/y` is within `10 × max(canvasWidth, canvasHeight)` — runs the depgraph end-to-end and reads each bone's constraint-composed output | Catches constraint-solver pollution, fcurve unit-mismatch, or any depgraph-internal composition producing huge values even when stored data (I-1..I-14) is clean. **Pairs with I-14: I-14 = static pre-constraint, I-15 = post-constraint depgraph. A fire on I-15 without I-14 narrows the source to constraint eval / animated pose override / driver path.** |
 
 ## Output format
 
@@ -90,6 +92,8 @@ offender + the specific failing field values.
 | I-11 (cage extent extreme) | A lattice cage was built with vertices in screen-space, world-space, or some other frame that's not canvas-px. Look at the cage's `baseGrid` source. |
 | I-12 (bone pose translation huge) | A pose channel got polluted: a draftPose write, a constraint solver write-back, a v19-channels migration that misread the source frame, an fcurve baked in a wrong-scale unit. The fix is to find the writer of `node.pose.x/y` (or `node.pose.channels[id].x/y`) for the named bone. |
 | I-13 (bone pivot huge) | A seeder wrote a pivot in the wrong frame. Look for `transform.pivotX/Y` writers — `rootBoneInit.js`, `armatureFromBones.js`, the v3 bone-init flow, or whatever the `boneRole` named bone goes through. Cross-reference the `rigInit` log's seed events — anomalous pivot values often appear there minutes before I-13 fires. |
+| I-14 (static composed world huge) | A combination of stored fields the per-field checks don't see together. Look at the named bone's full transform (`transform.rotation` × `transform.pivot` cross-axis term, `transform.x/y` offsets, parent-chain accumulation). If multiple bones in a chain all show small-but-non-zero values, the chain accumulation is the culprit. |
+| I-15 (depgraph composed huge, I-14 clean) | Constraint solver pollution, fcurve unit mismatch (e.g. radians-vs-degrees), driver chain producing huge value, or animation pose override delivering the wrong value. Check the named bone's `constraints[]` (`reference/blender/source/blender/blenkernel/intern/constraint.cc` for evaluator semantics) and any fcurves driving its pose channels. |
 
 ## How to add a new invariant
 

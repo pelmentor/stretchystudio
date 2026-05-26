@@ -1,6 +1,6 @@
 // Tests for the rigInvariantCheck framework.
 //
-// Coverage philosophy: each invariant (I-1 through I-13) gets a positive
+// Coverage philosophy: each invariant (I-1 through I-15) gets a positive
 // fixture (clean project, ok=true) and a negative fixture (violated,
 // ok=false) so a regression that flips a check's polarity is caught.
 //
@@ -440,6 +440,97 @@ logger.info = () => {};
   };
   const r = runRigInvariantChecks(project);
   assert(r.ok, 'I-13 clean: bone pivot at (1300, 400) on 1792 canvas is ok',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-14: static composed bone world matrix translation ──────────────
+{
+  // transform.x=800000 → static world matrix translation [6] = 800000 →
+  // > 10 × 1000 (canvas) threshold → I-14 fires.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500, x: 800000, y: 0 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-14'] ?? 0) > 0,
+    'I-14 fail: bone transform.x=800000 produces huge static world matrix translation',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // Clean: bone with rest-only transform produces identity-modulo-pivot
+  // local matrix → world translation = 0.
+  const project = {
+    canvas: { width: 1792, height: 1792 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 897, pivotY: 1292 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-14 clean: bone at canvas-center rest produces clean world matrix',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+{
+  // Parent-chain accumulation: 4 bones each with transform.x=3000 stacked
+  // → root world.tx=3000, child1=6000, child2=9000, child3=12000 → I-14
+  // fires on child3 (12000 > 10000). Tests that I-14 catches
+  // CHAIN-ACCUMULATED pollution not visible per-bone.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'b0', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 500, pivotY: 500, x: 3000, y: 0 } },
+      { id: 'b1', type: 'group', name: 'arm', boneRole: 'arm', parent: 'b0',
+        transform: { pivotX: 500, pivotY: 500, x: 3000, y: 0 } },
+      { id: 'b2', type: 'group', name: 'forearm', boneRole: 'forearm', parent: 'b1',
+        transform: { pivotX: 500, pivotY: 500, x: 3000, y: 0 } },
+      { id: 'b3', type: 'group', name: 'hand', boneRole: 'hand', parent: 'b2',
+        transform: { pivotX: 500, pivotY: 500, x: 3000, y: 0 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-14'] ?? 0) > 0,
+    'I-14 fail: 4-bone chain each with transform.x=3000 accumulates to 12000 > 10K canvas',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+
+// ── I-15: depgraph TRANSFORM_COMPOSE bone output magnitude ────────────
+{
+  // pose.x=800000 → depgraph TRANSFORM_COMPOSE for the bone yields
+  // composed.x = pivotX + pose.x = 800500 → > 10 × 1000 (canvas) →
+  // I-15 fires (alongside I-12, which catches the stored pose pollution).
+  // The test asserts I-15 fires regardless of whether I-12 also fires —
+  // I-15 is the depgraph-side mirror of I-12, and both are useful
+  // diagnostically.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { rotation: 0, x: 800000, y: 0, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-15'] ?? 0) > 0,
+    'I-15 fail: bone pose.x=800000 produces TRANSFORM_COMPOSE.x=800500 > 10K canvas',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // Clean: stored data is fine → depgraph compose produces composed.x =
+  // pivotX = 500 (well under 10K). I-15 must NOT fire.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-15 clean: bone at rest produces small composed transform',
     `violations: ${JSON.stringify(r.violations)}`);
 }
 

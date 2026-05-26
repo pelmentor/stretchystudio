@@ -68,6 +68,32 @@
  *         of I-12 — together they bracket every input to the bone
  *         world-matrix translation channel.
  *
+ *   I-14 — STATIC bone world matrix translation magnitude. Runs
+ *         `computeWorldMatrices` (the same algebra Blender's depsgraph
+ *         and our chainEval use pre-constraints) and asserts each
+ *         bone's resulting WORLD matrix translation (`m[6], m[7]`) is
+ *         within `10 × max(canvas)`. Catches stored-data pollution
+ *         that combines pivot + pose + parent chain in ways the
+ *         per-field invariants (I-7/I-10/I-12/I-13) don't see in
+ *         isolation — e.g. a non-zero `transform.rotation` combined
+ *         with a non-zero `transform.pivot` produces a non-cancelling
+ *         translation term, or a parent chain that accumulates small
+ *         per-bone offsets into a huge total. If I-14 PASSES but I-9
+ *         still fires, the pollution enters via depgraph
+ *         constraint/fcurve eval (I-15's domain), not stored data.
+ *
+ *   I-15 — Depgraph TRANSFORM_COMPOSE output magnitude (bones only).
+ *         After running the depgraph eval, every bone's
+ *         `ctx.outputs.get(<boneId>/TRANSFORM/TRANSFORM_COMPOSE).transform`
+ *         must have `|x|, |y| ≤ 10 × max(canvas)`. Catches
+ *         constraint-solver pollution, fcurve unit-mismatch, or any
+ *         depgraph-internal composition that produces huge values
+ *         even when stored data (I-1..I-14) is all clean. Pairs with
+ *         I-14: I-14 = static pre-constraint check, I-15 = post-
+ *         constraint depgraph check. A fire on I-15 without I-14
+ *         narrows the source to the constraint eval / animated pose
+ *         override path.
+ *
  * Returns a summary object so callers can also assert programmatically
  * (used by the framework's own unit tests).
  *
@@ -75,7 +101,10 @@
  */
 
 import { logger } from '../../../lib/logger.js';
-import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
+import { buildDepGraph } from '../../../anim/depgraph/build.js';
+import { evalDepGraph } from '../../../anim/depgraph/eval.js';
+import { OperationCode, NodeType } from '../../../anim/depgraph/types.js';
+import { computeWorldMatrices } from '../../../renderer/transforms.js';
 
 /**
  * @typedef {{
@@ -412,37 +441,79 @@ export function runRigInvariantChecks(project) {
     }
   }
 
-  // ─── I-8, I-9 — EVAL-TIME invariants. Run the SAME engine the
-  // viewport uses (`evalProjectFrameViaDepgraph` — the depgraph engine
-  // wired in by `CanvasViewport.jsx:1009`). The pre-existing
-  // `rigInitIdentityDiag` uses chainEval (`evalRig`) which can produce
-  // different output from depgraph; a divergence between them is itself
-  // a bug, and the user-visible viewport reflects DEPGRAPH output.
+  // ─── I-14 — STATIC bone WORLD matrix translation magnitude ────────
+  // `computeWorldMatrices` walks every node and composes the bone
+  // local matrices into world matrices using the SAME `makeBoneLocalMatrix`
+  // algebra the renderer uses (`renderer/transforms.js:142`). This is the
+  // pre-constraint composition — no fcurves, no constraint solver, no
+  // animation overrides. If a bone's resulting world matrix translation
+  // is huge here, the bug is in the STORED data (some combination of
+  // transform.x/y, transform.rotation, transform.pivot, pose channels,
+  // or parent chain). If this passes but I-9 still fires, the bug is
+  // strictly in depgraph dynamic eval (I-15's domain).
+  let worldMatrixChecked = 0;
+  try {
+    const worldMap = computeWorldMatrices(nodes);
+    for (const [nodeId, m] of worldMap) {
+      const node = byId.get(nodeId);
+      if (!node || !node.boneRole) continue;
+      worldMatrixChecked++;
+      if (!m || m.length !== 9) continue;
+      const tx = m[6], ty = m[7];
+      if (Number.isFinite(tx) && Math.abs(tx) > maxBoneCoord) {
+        violate('I-14', nodeId, node.name,
+          `bone role="${node.boneRole}" STATIC-composed world matrix |translation.x|=${Math.abs(tx).toFixed(0)} > ${maxBoneCoord} (10× canvas). world.translation=(${tx.toFixed(1)}, ${ty.toFixed(1)}), m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Stored-data composition is broken (transform.rotation×pivot interaction, transform.x/y, or parent-chain accumulation)`);
+      } else if (Number.isFinite(ty) && Math.abs(ty) > maxBoneCoord) {
+        violate('I-14', nodeId, node.name,
+          `bone role="${node.boneRole}" STATIC-composed world matrix |translation.y|=${Math.abs(ty).toFixed(0)} > ${maxBoneCoord} (10× canvas). world.translation=(${tx.toFixed(1)}, ${ty.toFixed(1)}), m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Stored-data composition is broken (transform.rotation×pivot interaction, transform.x/y, or parent-chain accumulation)`);
+      }
+    }
+  } catch (err) {
+    logger.warn('rigInvariantCheck', `I-14 skipped — computeWorldMatrices threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+  }
+
+  // ─── I-8, I-9, I-15 — EVAL-TIME invariants. Drive `buildDepGraph` +
+  // `evalDepGraph` directly (the same primitives `evalProjectFrameViaDepgraph`
+  // wraps for production) so we have access to `ctx.outputs` for both
+  // ART_MESH_EVAL frames (I-8/I-9) AND TRANSFORM_COMPOSE bone outputs
+  // (I-15). Math is identical to production — the framework calls the
+  // same engine the viewport ticks.
   //
-  // I-8 — every part's evaluated `vertexPositions` is finite.
-  // I-9 — every part's evaluated bbox extent is bounded (not Infinity,
-  //       not zero — degenerate bbox = render-time disaster, e.g.
-  //       handwear "scaled infinitely" filling the viewport).
+  // I-8  — every part's evaluated `vertexPositions` is finite.
+  // I-9  — every part's evaluated bbox extent is bounded (≤ 100× canvas).
+  // I-15 — every bone's TRANSFORM_COMPOSE output `transform.x/y` magnitude
+  //        is within 10× canvas. Catches constraint-solver pollution,
+  //        fcurve unit mismatch, or any depgraph-internal composition
+  //        producing huge values when stored data (I-1..I-14) is clean.
   //
   // Defensive: depgraph eval is a heavy operation. Wrap in try/catch
   // and degrade to skipped-checks rather than block Init Rig.
   let evalChecked = 0;
+  let composeChecked = 0;
   try {
-    const frames = evalProjectFrameViaDepgraph(project, {});
-    if (Array.isArray(frames)) {
-      // Canvas dimension — used to bound "reasonable" bbox extent. A
-      // mesh extent larger than 100× the canvas is essentially Infinity
-      // (the handwear bug renders at ~Infinity * canvas-scale).
-      const cw = project.canvas?.width ?? project.canvas?.w ?? 2048;
-      const ch = project.canvas?.height ?? project.canvas?.h ?? 2048;
-      const maxReasonableExtent = Math.max(cw, ch) * 100;
-      for (const f of frames) {
-        if (!f || !f.id || !f.vertexPositions) continue;
+    const graph = buildDepGraph(project, {});
+    const ctx = evalDepGraph(graph, {
+      project,
+      timeMs: 0,
+      paramOverrides: new Map(),
+      action: null,
+    });
+    // Canvas dimension — used to bound "reasonable" bbox extent. A
+    // mesh extent larger than 100× the canvas is essentially Infinity
+    // (the handwear bug renders at ~Infinity * canvas-scale).
+    const cw = project.canvas?.width ?? project.canvas?.w ?? 2048;
+    const ch = project.canvas?.height ?? project.canvas?.h ?? 2048;
+    const maxReasonableExtent = Math.max(cw, ch) * 100;
+    const artMeshSuffix = `/${NodeType.GEOMETRY}/${OperationCode.ART_MESH_EVAL}`;
+    const composeSuffix = `/${NodeType.TRANSFORM}/${OperationCode.TRANSFORM_COMPOSE}`;
+    for (const [opKey, out] of ctx.outputs) {
+      // I-8/I-9: ART_MESH_EVAL outputs ────────────────────────────────
+      if (opKey.endsWith(artMeshSuffix) && out?.vertexPositions) {
+        const partId = opKey.slice(0, opKey.length - artMeshSuffix.length);
         evalChecked++;
-        const vp = f.vertexPositions;
-        const partNode = byId.get(f.id);
-        const partName = partNode?.name ?? f.id;
-        // I-8: finiteness scan
+        const vp = out.vertexPositions;
+        const partNode = byId.get(partId);
+        const partName = partNode?.name ?? partId;
         let nonFiniteIdx = -1;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (let i = 0; i < vp.length; i += 2) {
@@ -455,26 +526,41 @@ export function runRigInvariantChecks(project) {
           if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
         if (nonFiniteIdx >= 0) {
-          violate('I-8', f.id, partName, `depgraph eval produced non-finite vertexPositions[${nonFiniteIdx}]=(${vp[nonFiniteIdx]}, ${vp[nonFiniteIdx + 1]}) — RENDERS AT INFINITY (gray-viewport class)`);
+          violate('I-8', partId, partName, `depgraph eval produced non-finite vertexPositions[${nonFiniteIdx}]=(${vp[nonFiniteIdx]}, ${vp[nonFiniteIdx + 1]}) — RENDERS AT INFINITY (gray-viewport class)`);
         } else if (Number.isFinite(minX) && Number.isFinite(maxX)) {
-          // I-9: extent reasonableness — only applies if I-8 passed
           const extentX = maxX - minX;
           const extentY = maxY - minY;
           if (extentX > maxReasonableExtent || extentY > maxReasonableExtent) {
-            violate('I-9', f.id, partName, `depgraph eval produced part bbox ${extentX.toFixed(0)}×${extentY.toFixed(0)} px on a ${cw}×${ch} canvas (≥100× canvas) — RENDERS HUGE (gray-viewport class). bbox=[${minX.toFixed(0)},${minY.toFixed(0)}]→[${maxX.toFixed(0)},${maxY.toFixed(0)}]`);
+            violate('I-9', partId, partName, `depgraph eval produced part bbox ${extentX.toFixed(0)}×${extentY.toFixed(0)} px on a ${cw}×${ch} canvas (≥100× canvas) — RENDERS HUGE (gray-viewport class). bbox=[${minX.toFixed(0)},${minY.toFixed(0)}]→[${maxX.toFixed(0)},${maxY.toFixed(0)}]`);
           }
+        }
+        continue;
+      }
+      // I-15: TRANSFORM_COMPOSE outputs (bones only) ──────────────────
+      if (opKey.endsWith(composeSuffix) && out?.transform) {
+        const ownerId = opKey.slice(0, opKey.length - composeSuffix.length);
+        const owner = byId.get(ownerId);
+        if (!owner || !owner.boneRole) continue;
+        composeChecked++;
+        const t = out.transform;
+        if (typeof t.x === 'number' && Number.isFinite(t.x) && Math.abs(t.x) > maxBoneCoord) {
+          violate('I-15', ownerId, owner.name,
+            `bone role="${owner.boneRole}" TRANSFORM_COMPOSE output |x|=${Math.abs(t.x).toFixed(0)} > ${maxBoneCoord} (10× canvas). composed=(${t.x.toFixed(1)},${t.y.toFixed(1)},rot=${(t.rotation ?? 0).toFixed(2)},scale=${(t.scaleX ?? 1).toFixed(2)}×${(t.scaleY ?? 1).toFixed(2)}), ranConstraints=${out.ranConstraints ?? 0}. Constraint/fcurve/dynamic-eval polluted the composed transform`);
+        } else if (typeof t.y === 'number' && Number.isFinite(t.y) && Math.abs(t.y) > maxBoneCoord) {
+          violate('I-15', ownerId, owner.name,
+            `bone role="${owner.boneRole}" TRANSFORM_COMPOSE output |y|=${Math.abs(t.y).toFixed(0)} > ${maxBoneCoord} (10× canvas). composed=(${t.x.toFixed(1)},${t.y.toFixed(1)},rot=${(t.rotation ?? 0).toFixed(2)},scale=${(t.scaleX ?? 1).toFixed(2)}×${(t.scaleY ?? 1).toFixed(2)}), ranConstraints=${out.ranConstraints ?? 0}. Constraint/fcurve/dynamic-eval polluted the composed transform`);
         }
       }
     }
   } catch (err) {
-    logger.warn('rigInvariantCheck', `I-8/I-9 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+    logger.warn('rigInvariantCheck', `I-8/I-9/I-15 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
   }
 
   // ─── summary log ──────────────────────────────────────────────────
   if (summary.ok) {
     logger.info('rigInvariantCheck',
-      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-13 all pass`,
-      { partsChecked, latticesChecked, bonesChecked, evalChecked });
+      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} worldMatrices=${worldMatrixChecked} evalFrames=${evalChecked} composedBones=${composeChecked} | I-1..I-15 all pass`,
+      { partsChecked, latticesChecked, bonesChecked, worldMatrixChecked, evalChecked, composeChecked });
   } else {
     const byInvStr = Object.entries(summary.byInvariant)
       .sort(([, a], [, b]) => b - a)
