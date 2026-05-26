@@ -6,7 +6,7 @@ the viewport or read off values from the Properties panel.
 
 **Source**: [`src/io/live2d/rig/rigInvariantCheck.js`](../src/io/live2d/rig/rigInvariantCheck.js)
 **Wired into**: [`RigService.initializeRig`](../src/services/RigService.js) — runs immediately after `seedAllRig` writes its output into `project.nodes`, before the rigSpec cache write.
-**Tests**: `npm run test:rigInvariantCheck` (16 cases as of 2026-05-25).
+**Tests**: `npm run test:rigInvariantCheck` (27 cases as of 2026-05-26).
 
 ## Why this exists
 
@@ -52,12 +52,14 @@ string is the only reliable surface for paste-back diagnostics).
 | **I-9** | Every depgraph-evaluated frame's bbox extent is ≤ `100 × max(canvasWidth, canvasHeight)` | Sister of I-8 — catches "rendered huge but not actually Infinity" cases (a part scaled by 50× would silently render as a giant gray rectangle). Threshold of 100× is deliberately loose; tighter thresholds are project-specific. |
 | **I-10** | Every bone's `transform.scaleX/Y` AND `pose.scaleX/Y` is in `[0.01, 100]` | The upstream of I-9. A bone with `scaleX=1000` propagates multiplicatively through the chain. Named the offending bone before depgraph even runs, so you don't need to read 19 frame bboxes to find which bone polluted them. |
 | **I-11** | Every lattice cage vertex coordinate is within `100 × max(canvasWidth, canvasHeight)` | The other upstream of I-9. A lattice with cage vertices at canvas-px ≈ 1,000,000 will translate every mesh through it to that position. Body-warp chain naturally extends 0.1× past canvas edges; 100× is the corruption threshold. |
+| **I-12** | Every bone's `pose.x/y` (and the v19 channels-shape `pose.channels[id].x/y` equivalent) is within `10 × max(canvasWidth, canvasHeight)` | Pose translation feeds `composed.x = pivotX + pose.x` (`anim/constraints.js:171`) which feeds the world-matrix translation via `composedTransformToBonePose` (`kernels/bonePostChain.js:84`). A `pose.x` of 800K → every skinned vertex offset by 800K → RENDERS HUGE. Catches the upstream of I-9 when scale (I-10) and pivot finiteness (I-7) both pass — the exact 2026-05-26 handwear case. |
+| **I-13** | Every bone's `transform.pivotX/Y` is within `10 × max(canvasWidth, canvasHeight)` (additional to I-7's finiteness check) | I-7 catches NaN; I-13 catches finite-but-huge pivot (e.g. 800K). Combined with any non-identity rotation the `T(pivot) × R × S × T(-pivot)` algebra's cross-axis term doesn't cancel, so the resulting world-matrix translation is similarly huge. Sister of I-12: together they bracket every input to the bone world-matrix translation channel. |
 
 ## Output format
 
 **Clean rig:**
 ```
-INFO  rigInvariantCheck — OK | parts=19 lattices=23 bones=12 | I-1..I-7 all pass
+INFO  rigInvariantCheck — OK | parts=19 lattices=23 bones=12 evalFrames=19 | I-1..I-13 all pass
 ```
 
 **Violations:**
@@ -86,6 +88,8 @@ offender + the specific failing field values.
 | I-9 (eval huge bbox) | Same family as I-8 but the inputs were technically finite. Look for a bone matrix with very large scale (e.g. a chain where one matrix's scale multiplied through the chain accumulates), an unbounded warp grid, or a `(0,0) → far-away-point` translation that was meant to be a pivot offset. **If I-9 fires without I-10 or I-11 also firing, the scale comes from a depgraph eval-only path (e.g. constraint chain accumulation) — instrument the kernel.** |
 | I-10 (bone scale out of range) | A migration / seeder / fcurve baked a scale outside ~1.0 into the bone's transform or pose. Check recent seeders + the Init Rig flow. |
 | I-11 (cage extent extreme) | A lattice cage was built with vertices in screen-space, world-space, or some other frame that's not canvas-px. Look at the cage's `baseGrid` source. |
+| I-12 (bone pose translation huge) | A pose channel got polluted: a draftPose write, a constraint solver write-back, a v19-channels migration that misread the source frame, an fcurve baked in a wrong-scale unit. The fix is to find the writer of `node.pose.x/y` (or `node.pose.channels[id].x/y`) for the named bone. |
+| I-13 (bone pivot huge) | A seeder wrote a pivot in the wrong frame. Look for `transform.pivotX/Y` writers — `rootBoneInit.js`, `armatureFromBones.js`, the v3 bone-init flow, or whatever the `boneRole` named bone goes through. Cross-reference the `rigInit` log's seed events — anomalous pivot values often appear there minutes before I-13 fires. |
 
 ## How to add a new invariant
 
@@ -149,6 +153,7 @@ Lattice + cage relationship:
 |------|-----|---------------------|
 | 2026-05-25 | Handwear vertices at ±Infinity (object-array verts in flat field) | I-5 (would have fired pre-fix; commit `23d785a` ships the framework AFTER the fix) |
 | 2026-05-25 | First framework run found 14 I-2 + 23 I-4 violations on Shelby PSD post-Init-Rig | Both were FRAMEWORK BUGS surfaced by the framework itself — `armature` modifier uses `deformerId` not `boneId`; `gridSize` counts cells not points. Both fixed in the same commit that added the framework. |
+| 2026-05-26 | Shelby handwear-l/r bbox 173K × 1.26M px on 1792 canvas (only I-9 fired; I-10/I-11 both passed) | Motivated I-12/I-13 — the structural inputs to the bone world-matrix translation channel (`pose.x/y` and `transform.pivotX/Y` magnitude) weren't checked, so the corruption slipped past I-10 (scale-only) and I-7 (pivot-finiteness-only). Re-run after I-12/I-13 will name the polluted bone field. |
 
 The framework is self-validating in the sense that its first
 production run uncovered its own incorrect assumptions before any

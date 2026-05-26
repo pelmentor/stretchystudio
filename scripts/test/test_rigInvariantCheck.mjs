@@ -1,6 +1,6 @@
 // Tests for the rigInvariantCheck framework.
 //
-// Coverage philosophy: each invariant (I-1 through I-7) gets a positive
+// Coverage philosophy: each invariant (I-1 through I-13) gets a positive
 // fixture (clean project, ok=true) and a negative fixture (violated,
 // ok=false) so a regression that flips a check's polarity is caught.
 //
@@ -327,6 +327,120 @@ logger.info = () => {};
   assert(!r.ok && (r.byInvariant['I-11'] ?? 0) > 0,
     'I-11 fail: cage vertex >100× canvas triggers I-11',
     `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+
+// ── I-12: bone pose translation magnitude ─────────────────────────────
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { rotation: 0, x: 800000, y: 0, scaleX: 1, scaleY: 1 } }, // 800K > 10×1000=10K
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-12'] ?? 0) > 0,
+    'I-12 fail: bone pose.x=800000 on 1000px canvas triggers I-12',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { rotation: 0, x: 5, y: 12000, scaleX: 1, scaleY: 1 } }, // 12K > 10K
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-12'] ?? 0) > 0,
+    'I-12 fail: bone pose.y=12000 on 1000px canvas triggers I-12',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // v19 channels-shape pose with huge translation must also trigger I-12.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { channels: { bone1: { rotation: 0, x: 500000, y: 0, scaleX: 1, scaleY: 1 } } } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-12'] ?? 0) > 0,
+    'I-12 fail: v19 pose.channels[id].x=500000 on 1000px canvas triggers I-12',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // Clean: pose translation within reasonable bounds.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500 },
+        pose: { rotation: 0, x: 50, y: -30, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-12 clean: bone pose.x=50 / pose.y=-30 is ok',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-13: bone pivot magnitude (finite but huge) ──────────────────────
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 800000, pivotY: 500 } }, // 800K > 10K
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-13'] ?? 0) > 0,
+    'I-13 fail: bone transform.pivotX=800000 on 1000px canvas triggers I-13',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 1500000 } }, // 1.5M > 10K
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-13'] ?? 0) > 0,
+    'I-13 fail: bone transform.pivotY=1500000 on 1000px canvas triggers I-13',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // I-7 fires on NaN pivot but I-13 must NOT fire (defensive split).
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: NaN, pivotY: 500 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-7'] ?? 0) > 0 && (r.byInvariant['I-13'] ?? 0) === 0,
+    'I-13 clean on NaN pivot: I-7 fires but I-13 does not double-report',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  // Clean: pivot well within canvas.
+  const project = {
+    canvas: { width: 1792, height: 1792 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 1300, pivotY: 400 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-13 clean: bone pivot at (1300, 400) on 1792 canvas is ok',
+    `violations: ${JSON.stringify(r.violations)}`);
 }
 
 // ── I-8/I-9: eval-time finiteness + extent reasonableness ─────────────

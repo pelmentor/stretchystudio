@@ -52,6 +52,22 @@
  *         `transform.pivotX/Y` as finite numbers. Catches the
  *         bone-NaN cascade class ([[shelby-invisible-bones-fix-2026-05-25]]).
  *
+ *   I-12 — Bone pose translation magnitude. `pose.x/y` (and the v19
+ *         channels-shape equivalent) must be within `10 × max(canvas)`.
+ *         Pose translation feeds `composed.x = pivotX + pose.x` which
+ *         feeds the world-matrix translation; a pose.x of 800K → every
+ *         skinned vertex offset by 800K → RENDERS HUGE. Catches the
+ *         upstream of I-9 when scale (I-10) and pivot finiteness (I-7)
+ *         both pass.
+ *
+ *   I-13 — Bone pivot magnitude. `transform.pivotX/Y` must be within
+ *         `10 × max(canvas)`. I-7 catches NaN; this catches finite-but-
+ *         huge pivots (e.g. 800K). Combined with any non-identity
+ *         rotation the cross-axis term doesn't cancel out, so the
+ *         resulting world-matrix translation is similarly huge. Sister
+ *         of I-12 — together they bracket every input to the bone
+ *         world-matrix translation channel.
+ *
  * Returns a summary object so callers can also assert programmatically
  * (used by the framework's own unit tests).
  *
@@ -263,14 +279,37 @@ export function runRigInvariantChecks(project) {
     }
   }
 
-  // ─── I-7, I-10 — bone transform sanity ────────────────────────────
-  // I-7: pivot must be finite (catches NaN cascade — Shelby 2026-05-25).
+  // ─── I-7, I-10, I-12, I-13 — bone transform sanity ────────────────
+  // I-7:  pivot must be finite (catches NaN cascade — Shelby 2026-05-25).
   // I-10: scale must be in [0.01, 100]. A scale outside this range is
   //       almost certainly corruption — Blender's UI defaults bones to
   //       1.0 and animation typically stays in [0.1, 10]. A scale of
   //       1000 propagates multiplicatively up the bone chain (root
   //       1000× × torso 1× × arm 1× = 1000× at the elbow) and produces
   //       the "RENDERS HUGE" handwear class (caught by I-9 2026-05-25).
+  // I-12: pose translation magnitude — `pose.x/y` is the additive
+  //       canvas-px offset on the bone joint. `effectiveTransform`
+  //       (`anim/constraints.js:171`) returns `composed.x = pivotX +
+  //       pose.x` for a bone; that value rides into
+  //       `composedTransformToBonePose` (`kernels/bonePostChain.js:84`)
+  //       and feeds `makeBoneLocalMatrix`'s translation channel. A
+  //       pose.x of 800K → world-matrix translation 800K → every
+  //       skinned vertex offset by 800K. Threshold 10× canvas — animation
+  //       pose offsets rarely exceed a few hundred px; anything beyond
+  //       10× canvas is catastrophic pollution.
+  // I-13: bone pivot magnitude — `transform.pivotX/Y` is the bone's
+  //       canvas-px joint position. I-7 only catches NaN; a finite-but-
+  //       huge pivot (e.g. 800K) combined with any non-identity
+  //       rotation produces world-matrix translation of similar
+  //       magnitude via the T(pivot) × R × S × T(-pivot) algebra (the
+  //       cross-axis term doesn't cancel when R≠0). Catches the
+  //       upstream of I-9 when scale and pose are clean (the exact
+  //       situation as the 2026-05-26 handwear bbox where I-10/I-11
+  //       both pass but the eval still emits 700K-px coordinates).
+  //       Same 10× canvas threshold as I-12.
+  const cwBone = project.canvas?.width ?? project.canvas?.w ?? 2048;
+  const chBone = project.canvas?.height ?? project.canvas?.h ?? 2048;
+  const maxBoneCoord = 10 * Math.max(cwBone, chBone);
   let bonesChecked = 0;
   for (const n of nodes) {
     if (!n || !n.boneRole) continue;
@@ -279,6 +318,18 @@ export function runRigInvariantChecks(project) {
     const py = n.transform?.pivotY;
     if (typeof px !== 'number' || !Number.isFinite(px) || typeof py !== 'number' || !Number.isFinite(py)) {
       violate('I-7', n.id, n.name, `bone role="${n.boneRole}" has non-finite pivot (pivotX=${px} pivotY=${py})`);
+    } else {
+      // I-13: pivot magnitude (only when pivot is finite — NaN already
+      // raised I-7 above; running the magnitude check on NaN would emit
+      // a spurious second violation since `NaN > maxBoneCoord` is false
+      // and `Math.abs(NaN) > maxBoneCoord` is also false, but defensive
+      // code stays clearer.)
+      if (Math.abs(px) > maxBoneCoord) {
+        violate('I-13', n.id, n.name, `bone role="${n.boneRole}" has out-of-range transform.pivotX=${px} (|x| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)}) — feeds world matrix translation`);
+      }
+      if (Math.abs(py) > maxBoneCoord) {
+        violate('I-13', n.id, n.name, `bone role="${n.boneRole}" has out-of-range transform.pivotY=${py} (|y| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)}) — feeds world matrix translation`);
+      }
     }
     const sx = n.transform?.scaleX;
     const sy = n.transform?.scaleY;
@@ -296,6 +347,33 @@ export function runRigInvariantChecks(project) {
     }
     if (typeof psy === 'number' && Number.isFinite(psy) && (psy < 0.01 || psy > 100)) {
       violate('I-10', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.scaleY=${psy} (expected ~1; range [0.01, 100])`);
+    }
+    // I-12: pose translation magnitude (additive canvas-px offset)
+    const ptx = n.pose?.x;
+    const pty = n.pose?.y;
+    if (typeof ptx === 'number' && Number.isFinite(ptx) && Math.abs(ptx) > maxBoneCoord) {
+      violate('I-12', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.x=${ptx} (|x| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)}) — feeds composed.x via pivot+pose addition`);
+    }
+    if (typeof pty === 'number' && Number.isFinite(pty) && Math.abs(pty) > maxBoneCoord) {
+      violate('I-12', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.y=${pty} (|y| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)}) — feeds composed.y via pivot+pose addition`);
+    }
+    // I-12b: v19+ channels-shape pose — read the inner channel directly
+    // (mirrors `getBonePose`'s channels-shape branch in
+    // `objectDataAccess.js:370-373`) so this invariant catches both
+    // shapes. Skipped when the flat shape above already had the field.
+    const chPose = n.pose && typeof n.pose === 'object' && !Array.isArray(n.pose)
+      && n.pose.channels && typeof n.pose.channels === 'object' && !Array.isArray(n.pose.channels)
+      ? n.pose.channels[n.id]
+      : null;
+    if (chPose && typeof chPose === 'object') {
+      const cptx = chPose.x;
+      const cpty = chPose.y;
+      if (typeof cptx === 'number' && Number.isFinite(cptx) && Math.abs(cptx) > maxBoneCoord) {
+        violate('I-12', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.channels[id].x=${cptx} (|x| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)})`);
+      }
+      if (typeof cpty === 'number' && Number.isFinite(cpty) && Math.abs(cpty) > maxBoneCoord) {
+        violate('I-12', n.id, n.name, `bone role="${n.boneRole}" has out-of-range pose.channels[id].y=${cpty} (|y| > ${maxBoneCoord} = 10× canvas max ${Math.max(cwBone, chBone)})`);
+      }
     }
   }
 
@@ -395,7 +473,7 @@ export function runRigInvariantChecks(project) {
   // ─── summary log ──────────────────────────────────────────────────
   if (summary.ok) {
     logger.info('rigInvariantCheck',
-      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-11 all pass`,
+      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} evalFrames=${evalChecked} | I-1..I-13 all pass`,
       { partsChecked, latticesChecked, bonesChecked, evalChecked });
   } else {
     const byInvStr = Object.entries(summary.byInvariant)
