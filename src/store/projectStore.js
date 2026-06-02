@@ -1926,6 +1926,17 @@ export const useProjectStore = create((set, get) => {
 
       collectRecursive(nodeId);
 
+      // MEM-01 — revoke `blob:` URLs for the textures we are about to
+      // drop. Pre-fix only resetProject/loadProject called
+      // disposeProjectResources; deleteNode leaked one blob URL per
+      // PSD-imported part for the rest of the session (and the undo
+      // snapshot pinned the blob further — see MEM-03 follow-up).
+      for (const t of proj.textures) {
+        if (idsToDelete.has(t.id) && typeof t.source === 'string' && t.source.startsWith('blob:')) {
+          try { URL.revokeObjectURL(t.source); } catch { /* already revoked */ }
+        }
+      }
+
       // Remove nodes
       proj.nodes = proj.nodes.filter(n => !idsToDelete.has(n.id));
 
