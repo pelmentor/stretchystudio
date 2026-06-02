@@ -153,22 +153,13 @@ function assertEq(actual, expected, name) {
   };
   const graph = buildDepGraph(project, {});
   const ctx = evalDepGraph(graph, { project, timeMs: 0 });
-  // Issue: the driver kernel calls evaluateDriver which calls
-  // resolveVariables → evaluateRnaPath (project, ...) → reads from
-  // project.parameters[i].default. To make the cascade work the
-  // PARAM_EVAL writes back via paramOverrides; evaluateRnaPath
-  // would need to consult those. evaluateRnaPath today reads from
-  // project.parameters[i].default. So a chained driver Z = Y * 5 will
-  // see Y's default (0), NOT Y's driver result (12).
-  //
-  // This is a known limitation today (driver cascades through
-  // overrides aren't wired). For Phase D-2 the test PINS the current
-  // behaviour: Z = 0 * 5 = 0 (Y's default). Phase D-3 / D-4 patches
-  // this when paramOverrides feeds back into the rnaPath resolver.
+  // DRIVER-PARAMS-VIEW-STALE-DEFAULTS (2026-06-02 R3) — paramOverrides
+  // now feed back into evaluateRnaPath's `__params__` view, so the
+  // cascade works as expected: X=3 → Y=X*4=12 → Z=Y*5=60.
   let foundZ = false;
   for (const [name, value] of ctx.outputs) {
     if (name.includes('/PARAM_EVAL:Z')) {
-      assertNear(value, 0, 1e-9, 'PARAM_EVAL:Z = 0 (cascade limitation pinned)');
+      assertNear(value, 60, 1e-9, 'PARAM_EVAL:Z = Y * 5 = 12 * 5 = 60 (driver cascade)');
       foundZ = true;
     }
   }
