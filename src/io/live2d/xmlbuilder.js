@@ -111,6 +111,15 @@ export class XmlBuilder {
   _nodeToXml(node) {
     const parts = [`<${node.tag}`];
     for (const [k, v] of Object.entries(node.attrs)) {
+      // WRT-2 — per RULE-№1 + [[typeof-nan-is-number]]: NaN / Infinity
+      // would serialise as literal "NaN" / "Infinity" / "-Infinity" via
+      // String(v), which the Cubism Editor XML loader rejects (recovered
+      // status — see [[blank-load-ask-for-log]]) or silently substitutes
+      // 0. Surface the bad emitter site loudly instead. Mirror of the F6
+      // guard in moc3/binaryWriter.js writeF32.
+      if (typeof v === 'number' && !Number.isFinite(v)) {
+        throw new Error(`XmlBuilder: non-finite attribute value at <${node.tag}>/@${k} = ${v}`);
+      }
       parts.push(` ${this._escAttrName(k)}="${this._escXml(String(v))}"`);
     }
     if (node.children.length === 0 && node.text == null) {
@@ -119,6 +128,10 @@ export class XmlBuilder {
     }
     parts.push('>');
     if (node.text != null) {
+      // WRT-2 — same guard on text content.
+      if (typeof node.text === 'number' && !Number.isFinite(node.text)) {
+        throw new Error(`XmlBuilder: non-finite text content at <${node.tag}> = ${node.text}`);
+      }
       parts.push(this._escXml(String(node.text)));
     }
     for (const child of node.children) {

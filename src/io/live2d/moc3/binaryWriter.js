@@ -28,10 +28,31 @@ export class BinaryWriter {
 
   get pos() { return this._buf.length; }
 
-  writeU8(v)  { this._buf.push(v & 0xFF); }
-  writeI16(v) { const b = new ArrayBuffer(2); new DataView(b).setInt16(0, v, true); this._pushBytes(b); }
-  writeI32(v) { const b = new ArrayBuffer(4); new DataView(b).setInt32(0, v, true); this._pushBytes(b); }
-  writeU32(v) { const b = new ArrayBuffer(4); new DataView(b).setUint32(0, v, true); this._pushBytes(b); }
+  /**
+   * WRT-1 — per RULE-№1 + [[typeof-nan-is-number]]: NaN / Infinity in
+   * the integer-typed bucket silently coerces to 0 via ECMAScript
+   * ToInt32 / ToUint32. A bad emitter that ships NaN into
+   * art_mesh.parent_part_indices / texture_indices /
+   * deformer.parent_deformer_indices / keyform_position offsets re-parents
+   * to root part / first texture / first deformer — the moc3 still loads
+   * cleanly, the rendering is silently wrong. Mirror the F6 guard.
+   */
+  writeU8(v)  {
+    if (!Number.isFinite(v)) throw new Error(`BinaryWriter.writeU8: non-finite value at pos=${this._buf.length} (got ${v})`);
+    this._buf.push(v & 0xFF);
+  }
+  writeI16(v) {
+    if (!Number.isFinite(v)) throw new Error(`BinaryWriter.writeI16: non-finite value at pos=${this._buf.length} (got ${v})`);
+    const b = new ArrayBuffer(2); new DataView(b).setInt16(0, v, true); this._pushBytes(b);
+  }
+  writeI32(v) {
+    if (!Number.isFinite(v)) throw new Error(`BinaryWriter.writeI32: non-finite value at pos=${this._buf.length} (got ${v})`);
+    const b = new ArrayBuffer(4); new DataView(b).setInt32(0, v, true); this._pushBytes(b);
+  }
+  writeU32(v) {
+    if (!Number.isFinite(v)) throw new Error(`BinaryWriter.writeU32: non-finite value at pos=${this._buf.length} (got ${v})`);
+    const b = new ArrayBuffer(4); new DataView(b).setUint32(0, v, true); this._pushBytes(b);
+  }
   /**
    * F6 — per RULE-№1 + [[typeof-nan-is-number]]: NaN / Infinity at the
    * writer means an upstream emitter dropped a non-finite value into the
