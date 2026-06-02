@@ -173,6 +173,7 @@ export function evalDepGraph(graph, ctxIn) {
     physics: ctxIn.physics,
     poseOverrides: ctxIn.poseOverrides ?? new Map(),
     rigArtMeshById: ctxIn.rigArtMeshById ?? null,
+    artMeshBboxTrace: ctxIn.artMeshBboxTrace,
   };
 
   // Reset op state. Skip cyclic relations when computing pending count.
