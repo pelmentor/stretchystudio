@@ -1,6 +1,6 @@
 // Tests for the rigInvariantCheck framework.
 //
-// Coverage philosophy: each invariant (I-1 through I-18) gets a positive
+// Coverage philosophy: each invariant (I-1 through I-19) gets a positive
 // fixture (clean project, ok=true) and a negative fixture (violated,
 // ok=false) so a regression that flips a check's polarity is caught.
 //
@@ -662,6 +662,59 @@ logger.info = () => {};
   };
   const r = runRigInvariantChecks(project);
   assert(r.ok, 'I-18 clean: canvas-px vertices pass I-18',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-19: eval-time bone WORLD matrix (chain product) magnitude ──────
+{
+  // 3-bone chain, each pose.scaleX = 5. Per-bone composed scale = 5
+  // (passes I-10 + I-17 each < 100). Stored transform.scaleX = 1
+  // (passes I-10). STATIC composeWorldMatrices uses the same
+  // makeBoneLocalMatrix algebra and produces m[0] = 5^3 = 125 for the
+  // leaf — so I-16 ALSO fires on the static side. The interesting
+  // assertion is that I-19 ALSO catches it via the EVAL path
+  // (resolveBoneWorldFromCtx), confirming the dual coverage: stored
+  // algebra (I-16) vs depgraph eval algebra (I-19). The handwear bug-03
+  // failure mode is when I-16 stays CLEAN but I-19 fires — only
+  // exercisable with constraint-induced compose drift that diverges
+  // from stored. A pure-pose chain fires both.
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'boneA', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 5, scaleY: 1 },
+        parent: null },
+      { id: 'boneB', type: 'group', name: 'mid', boneRole: 'leftElbow',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 5, scaleY: 1 },
+        parent: 'boneA' },
+      { id: 'boneC', type: 'group', name: 'leaf', boneRole: 'leftWrist',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 5, scaleY: 1 },
+        parent: 'boneB' },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-19'] ?? 0) > 0,
+    'I-19 fail: 3-bone pose.scaleX=5 chain produces eval world m[0]=125 > 100',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+  // I-17 must NOT fire — per-bone composed scale is 5 (well under 100).
+  assert((r.byInvariant['I-17'] ?? 0) === 0,
+    'I-19 isolation: per-bone composed scale passes I-17; only chain product fires I-19',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-19 clean: single bone at rest produces identity eval world matrix',
     `violations: ${JSON.stringify(r.violations)}`);
 }
 

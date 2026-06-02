@@ -121,6 +121,21 @@
  *         object-indices through a flat-array slot, or upstream
  *         transform-bake producing out-of-canvas coords).
  *
+ *   I-19 — EVAL-TIME bone WORLD matrix magnitude (chain product). The
+ *         matrix `applyBonePostChainSkin` actually multiplies into the
+ *         vertex buffer — built by `resolveBoneWorldFromCtx` walking
+ *         the parent chain at eval time using composed-pose-derived
+ *         locals. I-14/I-16 measure static composition (stored
+ *         transform algebra). I-15/I-17 measure per-bone composed
+ *         transform. Neither catches the chain product: per-bone
+ *         composed scale ≤ 100 (I-17 passes) can compound to `100^N`
+ *         over an N-depth chain. Five bones at scale 4 each → chain
+ *         product 1024 → 800× handwear-bbox class. Checks both
+ *         translation (m[6]/m[7]) and scale/shear (m[0]/m[4]/m[1]/m[3])
+ *         on the eval-time world matrix using the SAME function the
+ *         bone-skin kernel calls, so the matrix we inspect IS the
+ *         matrix applied to vertices.
+ *
  * Returns a summary object so callers can also assert programmatically
  * (used by the framework's own unit tests).
  *
@@ -132,6 +147,7 @@ import { buildDepGraph } from '../../../anim/depgraph/build.js';
 import { evalDepGraph } from '../../../anim/depgraph/eval.js';
 import { OperationCode, NodeType } from '../../../anim/depgraph/types.js';
 import { computeWorldMatrices } from '../../../renderer/transforms.js';
+import { resolveBoneWorldFromCtx } from '../../../anim/depgraph/kernels/bonePostChain.js';
 
 /**
  * @typedef {{
@@ -645,6 +661,70 @@ export function runRigInvariantChecks(project) {
     }
   } catch (err) {
     logger.warn('rigInvariantCheck', `I-8/I-9/I-15 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+  }
+
+  // ─── I-19 — EVAL-TIME bone WORLD matrix magnitude (chain product) ──
+  // I-14/I-16 measure STATIC `computeWorldMatrices` (stored transform
+  // algebra, no constraint/fcurve). I-15/I-17 measure the per-bone
+  // TRANSFORM_COMPOSE output. NEITHER measures the eval-time WORLD
+  // matrix that `applyBonePostChainSkin` actually consumes — that's
+  // built by `resolveBoneWorldFromCtx` walking the parent chain at
+  // eval time, using composed-pose-derived locals. Per-bone composed
+  // pose is bounded by I-17 (scale ≤ 100), but the CHAIN PRODUCT can
+  // multiply: `100^N` for a depth-N chain. Five bones at composed
+  // scale 4 each individually pass I-17 (4 < 100), but the chain
+  // product is `4^5 = 1024` — handwear bbox 800× class.
+  //
+  // Runs the SAME `resolveBoneWorldFromCtx` function the bone-skin
+  // kernel uses in production, so the matrix we inspect IS the matrix
+  // applied to vertices. Same dual-check as I-14/I-16: translation +
+  // scale + shear magnitudes.
+  let evalWorldChecked = 0;
+  try {
+    const graph = buildDepGraph(project, {});
+    const ctx = evalDepGraph(graph, {
+      project,
+      timeMs: 0,
+      paramOverrides: new Map(),
+      action: null,
+    });
+    const cw19 = project.canvas?.width ?? project.canvas?.w ?? 2048;
+    const ch19 = project.canvas?.height ?? project.canvas?.h ?? 2048;
+    const maxBoneCoord19 = 10 * Math.max(cw19, ch19);
+    const matCompThreshold19 = 100;
+    const cache19 = new Map();
+    for (const n of nodes) {
+      if (!n || !n.boneRole) continue;
+      evalWorldChecked++;
+      let m;
+      try {
+        m = resolveBoneWorldFromCtx(n.id, ctx, byId, cache19);
+      } catch (err) {
+        logger.warn('rigInvariantCheck', `I-19 resolveBoneWorldFromCtx threw for bone "${n.name ?? n.id}": ${/** @type {any} */ (err)?.message ?? String(err)}`);
+        continue;
+      }
+      if (!m || m.length !== 9) continue;
+      const tx = m[6], ty = m[7];
+      if (Number.isFinite(tx) && Math.abs(tx) > maxBoneCoord19) {
+        violate('I-19', n.id, n.name,
+          `bone role="${n.boneRole}" EVAL-TIME (resolveBoneWorldFromCtx) world matrix |translation.x|=${Math.abs(tx).toFixed(0)} > ${maxBoneCoord19} (10× canvas). world=(${tx.toFixed(1)},${ty.toFixed(1)}), m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Chain-composed eval-time matrix blows up where stored algebra (I-14) was clean — constraint solver / pose offset / parent chain multiplied composed-pose locals into a huge product`);
+      } else if (Number.isFinite(ty) && Math.abs(ty) > maxBoneCoord19) {
+        violate('I-19', n.id, n.name,
+          `bone role="${n.boneRole}" EVAL-TIME (resolveBoneWorldFromCtx) world matrix |translation.y|=${Math.abs(ty).toFixed(0)} > ${maxBoneCoord19} (10× canvas). world=(${tx.toFixed(1)},${ty.toFixed(1)}), m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Chain-composed eval-time matrix blows up where stored algebra (I-14) was clean — constraint solver / pose offset / parent chain multiplied composed-pose locals into a huge product`);
+      }
+      const checkComp19 = (label, val) => {
+        if (Number.isFinite(val) && Math.abs(val) > matCompThreshold19) {
+          violate('I-19', n.id, n.name,
+            `bone role="${n.boneRole}" EVAL-TIME (resolveBoneWorldFromCtx) world matrix ${label}=${val.toFixed(2)} > ${matCompThreshold19} (chain product). m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Per-bone I-17 passes (each composed scale ≤ 100) but chain product blew up — the EXACT matrix bone-LBS applies to handwear/vertex skinning. Multiplies every input vertex by this scale before adding translation — RENDERS HUGE`);
+        }
+      };
+      checkComp19('m[0]=scaleX', m[0]);
+      checkComp19('m[4]=scaleY', m[4]);
+      checkComp19('m[1]=shearXY', m[1]);
+      checkComp19('m[3]=shearYX', m[3]);
+    }
+  } catch (err) {
+    logger.warn('rigInvariantCheck', `I-19 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
   }
 
   // ─── summary log ──────────────────────────────────────────────────
