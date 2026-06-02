@@ -26,6 +26,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 
 // Audit fix D-3 — Blender's `VIEW3D_MT_snap_pie`
 // (`reference/blender/scripts/startup/bl_ui/space_view3d.py:6181-6203`)
@@ -91,7 +92,7 @@ export function SnapMenu() {
       return;
     }
     if (op?.exec) {
-      try { op.exec(ctx); } catch (err) { console.error('[SnapMenu]', err); }
+      try { op.exec(ctx); } catch (err) { reportOpFailure('SnapMenu', err, { opId: itemId }); }
     }
     close();
   }

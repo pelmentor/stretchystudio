@@ -25,6 +25,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 
 // Audit fix D-3 — order matches Blender's `MESH_MT_merge` (At First, At
 // Last, At Center, At Cursor, Collapse, By Distance).
@@ -92,7 +93,7 @@ export function MergeMenu() {
       return;
     }
     if (op?.exec) {
-      try { op.exec(ctx); } catch (err) { console.error('[MergeMenu]', err); }
+      try { op.exec(ctx); } catch (err) { reportOpFailure('MergeMenu', err, { opId: itemId }); }
     }
     close();
   }

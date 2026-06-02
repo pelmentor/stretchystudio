@@ -37,6 +37,7 @@ import { useAssetHotReloadStore } from '../../store/assetHotReloadStore.js';
 import { logger } from '../../lib/logger.js';
 import { undoCount, redoCount } from '../../store/undoHistory.js';
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 import { isSupported as hotReloadSupported, pickFolderAndWatch } from '../../io/assetHotReload.js';
 import { CanvasPropertiesPopover } from './CanvasPropertiesPopover.jsx';
 import { FileMenu } from './FileMenu.jsx';
@@ -98,7 +99,7 @@ export function Topbar() {
     try {
       op.exec({ editorType: null });
     } catch (err) {
-      if (typeof console !== 'undefined') console.error(`[op ${id}] failed:`, err);
+      reportOpFailure('Topbar', err, { opId: id });
     }
   }
 

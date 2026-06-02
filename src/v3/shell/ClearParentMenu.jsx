@@ -27,6 +27,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { clearParent } from '../operators/object/parent.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 
 const ITEMS = [
   { mode: 'clear',           label: 'Clear Parent' },
@@ -66,7 +67,7 @@ export function ClearParentMenu() {
 
   function commit(mode) {
     try { clearParent(mode); }
-    catch (err) { console.error('[ClearParentMenu]', err); }
+    catch (err) { reportOpFailure('ClearParentMenu', err, { opId: `clearParent:${mode}` }); }
     close();
   }
 

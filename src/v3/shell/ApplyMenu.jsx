@@ -64,6 +64,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 
 const MENU_ITEMS = [
   { id: 'apply.poseAsRest',       label: 'Pose As Rest' },
@@ -108,7 +109,7 @@ export function ApplyMenu() {
       return;
     }
     if (op?.exec) {
-      try { op.exec(ctx); } catch (err) { console.error('[ApplyMenu]', err); }
+      try { op.exec(ctx); } catch (err) { reportOpFailure('ApplyMenu', err, { opId: itemId }); }
     }
     close();
   }

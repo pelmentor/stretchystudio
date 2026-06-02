@@ -24,6 +24,7 @@
 
 import { useMemo } from 'react';
 import { listOperators, getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 import { useCommandPaletteStore } from '../../store/commandPaletteStore.js';
 import { DEFAULT_KEYMAP } from '../keymap/default.js';
 import { useT } from '../../i18n/index.js';
@@ -111,7 +112,7 @@ export function CommandPalette() {
     try {
       op.exec({ editorType: null });
     } catch (err) {
-      console.error(`[op ${opId}] failed via palette`, err);
+      reportOpFailure('CommandPalette', err, { opId });
     }
   }
 

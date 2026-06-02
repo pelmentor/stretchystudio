@@ -65,6 +65,7 @@ const {
   DropdownMenuPortal,
 } = Dd;
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useLibraryDialogStore } from '../../store/libraryDialogStore.js';
 import { listSavedProjects } from '../../services/PersistenceService.js';
@@ -80,7 +81,7 @@ function runOp(id) {
   if (!op) return;
   if (op.available && !op.available({ editorType: null })) return;
   try { op.exec({ editorType: null }); }
-  catch (err) { if (typeof console !== 'undefined') console.error(`[op ${id}] failed:`, err); }
+  catch (err) { reportOpFailure('FileMenu', err, { opId: id }); }
 }
 
 function isOpAvailable(id) {

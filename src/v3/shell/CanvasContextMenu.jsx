@@ -44,6 +44,7 @@ import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { getOperator } from '../operators/registry.js';
+import { reportOpFailure } from '../operators/reportOpFailure.js';
 import { getDataKind } from '../../store/objectDataAccess.js';
 import { pickItemSet } from './canvasContextMenuItems.js';
 
@@ -120,7 +121,7 @@ export function CanvasContextMenu() {
       close();
       return;
     }
-    try { op.exec(ctx); } catch (err) { console.error('[CanvasContextMenu]', err); }
+    try { op.exec(ctx); } catch (err) { reportOpFailure('CanvasContextMenu', err, { opId: itemId }); }
     close();
   }
 
