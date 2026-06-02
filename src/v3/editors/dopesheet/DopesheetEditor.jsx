@@ -609,7 +609,12 @@ export function DopesheetEditor() {
       // No selection → no grab. Match Blender's pre-modal count check.
       // Read latest selection from the store (avoids stale-memo capture).
       if (!wouldDelDupChange(useKeyformSelectionStore.getState().handles)) return;
+      // B-3 (R4) — also stopPropagation so the global keymap dispatcher
+      // doesn't ALSO fire transform.translate on the same chord. Window
+      // listeners fire in registration order; the dispatcher mounts in
+      // AppShell (early) so it runs first unless we explicitly halt.
       e.preventDefault();
+      e.stopPropagation();
       enterGrabModal();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -671,7 +676,9 @@ export function DopesheetEditor() {
       // selected).
       const curHandles = useKeyformSelectionStore.getState().handles;
       if (!wouldDelDupChange(curHandles)) return;
+      // B-3 — see G handler above.
       e.preventDefault();
+      e.stopPropagation();
       if (isDelete) {
         /** @type {import('../../../anim/dopesheetDelDup.js').DelDupRemaps | null} */
         let capturedRemaps = null;

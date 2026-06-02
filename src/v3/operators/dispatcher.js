@@ -19,6 +19,7 @@
 
 import { DEFAULT_KEYMAP, chordOf } from '../keymap/default.js';
 import { getOperator } from './registry.js';
+import { reportOpFailure } from './reportOpFailure.js';
 
 /**
  * Returns true when the event came from a typing context where
@@ -60,9 +61,12 @@ export function mountOperatorDispatcher() {
     try {
       op.exec({ editorType: null });
     } catch (err) {
-      // Don't let an operator error kill the whole app - log + swallow.
-      // Real telemetry comes in Phase 0G.
-      console.error(`[operator ${opId}] exec failed`, err);
+      // B-1 (R4) — mirror the R1 menu-invoker fix. Pre-fix
+      // chord-fired operator throws (stale selection, null projectStore,
+      // missing meshData) were console-only — invisible to prod users
+      // who don't open DevTools. reportOpFailure routes through
+      // logger.error + toast so the user sees the failure.
+      reportOpFailure('keymap', err, { opId });
     }
   }
 
