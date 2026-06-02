@@ -19,7 +19,7 @@
  * The D-1 build pass emits one ANIMATION_TRACK_EVAL op per fcurve,
  * tagged with the fcurve's rnaPath. The kernel looks up the fcurve
  * via exact rnaPath match on `ctx.action.fcurves[]`, calls
- * `interpolateTrack` at `ctx.timeMs`, and writes:
+ * `evaluateFCurve` at `ctx.timeMs`, and writes:
  *
  *   - param target → `ctx.paramOverrides.set(paramId, value)`.
  *     PARAM_EVAL kernel downstream picks this up.
@@ -27,10 +27,22 @@
  *     where `ctx.poseOverrides` is `Map<nodeId, Map<property, value>>`.
  *     Phase D-5+ wires part TRANSFORM ops to read these.
  *
+ * # Eval path
+ *
+ * Pre-fix the kernel called `interpolateTrack` (raw bezier sampler)
+ * directly; FCurve Modifiers + Drivers were silently bypassed during
+ * full-action playback even though substrate, evaluator, and UI panels
+ * were all wired (rule-4-03 + rule-4-04 audit findings). Post-fix the
+ * kernel calls `evaluateFCurve`, the canonical curve→value reducer
+ * that runs the time-modifier pass, samples keyforms, runs the
+ * value-modifier pass, then applies the driver override per Blender's
+ * eval order (`reference/blender/source/blender/animrig/intern/evaluation.cc:95-111`,
+ * `fmodifier.cc:1490-1595`).
+ *
  * @module anim/depgraph/kernels/animation
  */
 
-import { interpolateTrack } from '../../../renderer/animationEngine.js';
+import { evaluateFCurve } from '../../fcurve.js';
 import { decodeFCurveTarget } from '../../animationFCurve.js';
 import { isFCurveEffectivelyMuted } from '../../fcurveGroups.js';
 
@@ -65,10 +77,18 @@ export function kernelAnimationTrackEval(op, ctx) {
   // ignores undefined.
   if (target.kind === 'node' && target.property === 'mesh_verts') return undefined;
 
-  // post-v36 keyforms carry `{time(ms), value, easing, type}`.
-  // `interpolateTrack` consumes the array directly (ms-native, matches
-  // ctx.timeMs's canonical unit).
-  const value = interpolateTrack(fc.keyforms ?? [], ctx.timeMs ?? 0, false, 0);
+  // rule-4-03 + rule-4-04 fix: evaluate via `evaluateFCurve` (not the
+  // raw `interpolateTrack`) so FCurve Modifiers (Cycles / Noise /
+  // Generator / Limits / Stepped / Envelope) and Drivers contribute to
+  // the value, matching what the FCurve UI + non-action eval paths
+  // already do. Pre-fix the kernel called `interpolateTrack` directly,
+  // which only sampled bezier keyforms — modifiers + drivers were silently
+  // dropped during full-action playback even though the substrate
+  // (`anim/fmodifiers.js`, `anim/driver.js`), evaluator
+  // (`evaluateFCurve`), and UI panels were all wired. Blender parity:
+  // `evaluateFCurve` is the canonical curve→value reduction across all
+  // eval contexts.
+  const value = evaluateFCurve(fc, ctx.timeMs ?? 0, { project: ctx.project });
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 
   if (target.kind === 'param') {
