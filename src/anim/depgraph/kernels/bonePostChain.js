@@ -32,25 +32,8 @@ import { makeBoneLocalMatrix, mat3Identity, mat3MulInto } from '../../../rendere
 import { applyTwoBoneSkinning, applyWeightedSkinning, isIdentityMatrix } from '../../../renderer/boneSkinning.js';
 import { applyOverlayMatrixFlat } from '../../../renderer/boneOverlayMatrix.js';
 import { pickBonePostChainComposition } from '../../../renderer/bonePostChainComposition.js';
+import { finiteOr } from '../../../lib/finiteOr.js';
 import { OperationCode, NodeType } from '../types.js';
-
-/**
- * Return `v` if it's a finite number, else `fallback`. The depgraph
- * pose/composed/pivot channels must produce a finite matrix even when
- * upstream data is poisoned — per `feedback_typeof_nan_is_number`,
- * `?? 0` passes NaN through (NaN is not nullish), and a NaN matrix
- * cascades into invisible/huge geometry (the Shelby invisible-bones
- * failure class, commit `94ae9f5`). The rigInvariantCheck framework
- * (I-7 / I-12..I-15) loud-detects the upstream NaN at Init Rig time;
- * this kernel's job is to keep the viewport finite during eval.
- *
- * @param {unknown} v
- * @param {number} fallback
- * @returns {number}
- */
-function finiteOr(v, fallback) {
-  return Number.isFinite(v) ? /** @type {number} */ (v) : fallback;
-}
 
 /**
  * Walk the project to find the part's nearest bone-group ancestor.

@@ -38,6 +38,7 @@
  */
 
 import { OperationCode, NodeType } from '../types.js';
+import { finiteOr } from '../../../lib/finiteOr.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -69,13 +70,14 @@ export function kernelMatrixBuild(op, ctx) {
  * @returns {{kind: 'rotation', mat: Float64Array, pivot: [number, number], scale: number, opacity: number, isCanvasFinal: boolean}}
  */
 export function buildCanvasFinalMat3(setup) {
-  const theta = (setup.effectiveAngleDeg ?? 0) * Math.PI / 180;
+  const scale = finiteOr(setup.scale, 1);
+  const theta = finiteOr(setup.effectiveAngleDeg, 0) * Math.PI / 180;
   const c = Math.cos(theta);
   const s = Math.sin(theta);
-  const sx = (setup.scale ?? 1) * (setup.reflectX ? -1 : 1);
-  const sy = (setup.scale ?? 1) * (setup.reflectY ? -1 : 1);
-  const tx = setup.canvasFinalPivot[0];
-  const ty = setup.canvasFinalPivot[1];
+  const sx = scale * (setup.reflectX ? -1 : 1);
+  const sy = scale * (setup.reflectY ? -1 : 1);
+  const tx = finiteOr(setup.canvasFinalPivot[0], 0);
+  const ty = finiteOr(setup.canvasFinalPivot[1], 0);
   // Row-major (matches applyMat3ToPoint):
   //   | a -b tx |
   //   | d  e ty |
@@ -88,8 +90,8 @@ export function buildCanvasFinalMat3(setup) {
     kind: 'rotation',
     mat,
     pivot: [tx, ty],
-    scale: setup.scale ?? 1,
-    opacity: setup.opacity ?? 1,
+    scale,
+    opacity: finiteOr(setup.opacity, 1),
     isCanvasFinal: true,
   };
 }
@@ -107,13 +109,14 @@ export function buildCanvasFinalMat3(setup) {
  * @returns {{kind: 'rotation', mat: Float64Array, pivot: [number, number], scale: number, opacity: number, isCanvasFinal: boolean}}
  */
 function buildLocalMat3(state) {
-  const theta = ((state.angle ?? 0) + (state.baseAngle ?? 0)) * Math.PI / 180;
+  const scale = finiteOr(state.scale, 1);
+  const theta = (finiteOr(state.angle, 0) + finiteOr(state.baseAngle, 0)) * Math.PI / 180;
   const c = Math.cos(theta);
   const s = Math.sin(theta);
-  const sx = (state.scale ?? 1) * (state.reflectX ? -1 : 1);
-  const sy = (state.scale ?? 1) * (state.reflectY ? -1 : 1);
-  const tx = state.originX ?? 0;
-  const ty = state.originY ?? 0;
+  const sx = scale * (state.reflectX ? -1 : 1);
+  const sy = scale * (state.reflectY ? -1 : 1);
+  const tx = finiteOr(state.originX, 0);
+  const ty = finiteOr(state.originY, 0);
   const mat = new Float64Array(9);
   mat[0] = c * sx;  mat[1] = -s * sy; mat[2] = tx;
   mat[3] = s * sx;  mat[4] =  c * sy; mat[5] = ty;
@@ -122,8 +125,8 @@ function buildLocalMat3(state) {
     kind: 'rotation',
     mat,
     pivot: [tx, ty],
-    scale: state.scale ?? 1,
-    opacity: state.opacity ?? 1,
+    scale,
+    opacity: finiteOr(state.opacity, 1),
     isCanvasFinal: false,
   };
 }
