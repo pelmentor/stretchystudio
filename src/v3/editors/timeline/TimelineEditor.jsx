@@ -778,6 +778,17 @@ export function TimelineEditor() {
     anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
   }, [proj.actions, animation]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── ANIM-1 — clear local selection state on action switch ─────────── */
+  // Pre-fix `selectedKeyframes` (Set of opaque "rowKey:timeMs" ids) was
+  // never pruned across action change; Delete/Copy/Paste walked the
+  // NEW action's fcurves with stale ids that could collide on identical
+  // (param, timeMs) keys, wiping the wrong keys silently.
+  useEffect(() => {
+    setSelectedKeyframes(new Set());
+    setSelectionBox(null);
+    setClipboard(null);
+  }, [anim.activeActionId, animation?.id]);
+
   // Audio sync hook
   useAudioSync(animation, anim);
 
@@ -1064,7 +1075,7 @@ export function TimelineEditor() {
       const fc = animation.fcurves.find(f => fcurveTargetsParam(f, paramId));
       const kf = fc?.keyforms.find(k => k.time === timeMs);
       if (!kf) return;
-      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.interpolation ?? 'linear' });
+      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.interpolation ?? 'linear', sourceActionId: anim.activeActionId });
       return;
     }
     const nodeId = rowKey.slice('node:'.length);
@@ -1080,12 +1091,23 @@ export function TimelineEditor() {
       }
     }
     if (Object.keys(props).length > 0) {
-      setClipboard({ kind: 'node', properties: props, easing });
+      setClipboard({ kind: 'node', properties: props, easing, sourceActionId: anim.activeActionId, sourceNodeIds: [...sel] });
     }
   }, [animation]);
 
   const pasteKeyframes = useCallback(() => {
     if (!clipboard || !animation) return;
+    // ANIM-5 — refuse cross-action paste with a toast. Pre-fix the
+    // clipboard captured only the payload; pasting after switching
+    // active actions silently keyed into the wrong action.
+    if (clipboard.sourceActionId && clipboard.sourceActionId !== anim.activeActionId) {
+      toast({
+        variant: 'destructive',
+        title: 'Cross-action paste blocked',
+        description: 'Copied keyform belongs to a different action. Switch back or copy fresh in this action.',
+      });
+      return;
+    }
 
     update((p) => {
       const a = getActiveSceneAction(p, anim.activeActionId);
@@ -1172,7 +1194,16 @@ export function TimelineEditor() {
   useEffect(() => {
     const handleKeyDown = (e) => {
       const target = e.target;
+      // ANIM-11 — also gate on contentEditable elements + active text
+      // selection so Ctrl+C/V/Z in a future rich-text panel or editable
+      // SVG <text> doesn't get hijacked by the timeline. Mirror of
+      // DopesheetEditor's pattern.
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      if (target.isContentEditable) return;
+      try {
+        const sel = window.getSelection?.();
+        if (sel && sel.type === 'Range' && !sel.isCollapsed) return;
+      } catch { /* defensive */ }
 
       if (e.key === 'Backspace' || e.key === 'Delete') {
         deleteSelectedKeyframes();

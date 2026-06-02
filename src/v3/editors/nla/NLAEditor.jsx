@@ -976,11 +976,14 @@ function EmptyState() {
  *   onToggleProtected?: () => void,
  *   deleteDisabled: boolean,
  *   deleteDisabledReason: string,
+ *   editActionDisabled?: boolean,
+ *   editActionDisabledReason?: string,
  * }} props
  */
 function NlaContextMenu({
   menu, onClose, onDelete, onEditAction, onToggleMuted, onToggleSolo,
   onToggleProtected, deleteDisabled, deleteDisabledReason,
+  editActionDisabled, editActionDisabledReason,
 }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -1039,7 +1042,14 @@ function NlaContextMenu({
       <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 mb-1">
         {menu.kind === 'track' ? 'Track' : 'Strip'}
       </div>
-      {menu.kind === 'strip' && onEditAction && item('Edit Action', Edit2, onEditAction)}
+      {/* ANIM-3 — gate Edit Action on protected/tweak-mode like the
+         StripPropertiesPanel button does. Pre-fix the item rendered
+         enabled regardless and the substrate (`enterTweakMode`)
+         refused silently with no user feedback. */}
+      {menu.kind === 'strip' && onEditAction && item('Edit Action', Edit2, onEditAction, {
+        disabled: editActionDisabled,
+        title: editActionDisabled ? editActionDisabledReason : undefined,
+      })}
       {menu.kind === 'strip' && onToggleMuted && item('Toggle Mute', EyeOff, onToggleMuted)}
       {menu.kind === 'track' && onToggleMuted && item('Toggle Mute', EyeOff, onToggleMuted)}
       {menu.kind === 'track' && onToggleSolo && item('Toggle Solo', Star, onToggleSolo)}
@@ -1619,6 +1629,22 @@ export function NLAEditor() {
     return { disabled: true, reason: 'Cannot delete (PROTECTED or in tweak mode)' };
   }, [contextMenu, nodesById]);
 
+  // ANIM-3 — mirror StripPropertiesPanel's editActionDisabled gate for
+  // the context-menu Edit Action. Pre-fix the menu rendered unconditionally
+  // and the substrate `enterTweakMode` refused silently.
+  const contextMenuEditActionState = useMemo(() => {
+    if (!contextMenu || contextMenu.kind !== 'strip') return { disabled: false, reason: '' };
+    const node = nodesById.get(contextMenu.objectId);
+    const ad = node?.animData;
+    if (!ad) return { disabled: true, reason: 'No animData' };
+    const tracks = Array.isArray(ad.nlaTracks) ? ad.nlaTracks : [];
+    const t = tracks.find((x) => x && x.id === contextMenu.trackId);
+    const trackFlag = typeof t?.flag === 'number' ? t.flag : 0;
+    if ((trackFlag & NLATRACK_FLAG.PROTECTED) !== 0) return { disabled: true, reason: 'Track is PROTECTED' };
+    if (ad.tweakStripId) return { disabled: true, reason: 'Already in tweak mode — Exit Tweak first' };
+    return { disabled: false, reason: '' };
+  }, [contextMenu, nodesById]);
+
   // All hooks above this line. Early return safe now.
   if (visibleGroupsWithEmpty.length === 0) {
     return (
@@ -1788,6 +1814,8 @@ export function NLAEditor() {
           : undefined}
         deleteDisabled={contextMenuDeleteState.disabled}
         deleteDisabledReason={contextMenuDeleteState.reason}
+        editActionDisabled={contextMenuEditActionState.disabled}
+        editActionDisabledReason={contextMenuEditActionState.reason}
       />
       <ActionPickerPopover
         picker={actionPicker}

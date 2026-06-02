@@ -94,15 +94,24 @@ export const useAnimationStore = create((set, get) => ({
   setLoop:       (loop)  => set({ loop }),
   setLoopKeyframes: (loop) => set({ loopKeyframes: loop }),
 
-  setStartFrame: (f) => set((s) => ({
-    startFrame: Math.max(0, Math.round(f)),
-    // Clamp current time if needed
-    currentTime: Math.max((Math.max(0, Math.round(f)) / s.fps) * 1000, s.currentTime),
-  })),
+  // ANIM-4 — guard against NaN/Infinity + enforce start < end. Pre-fix
+  // setStartFrame let NaN through (Math.round(NaN) === NaN, then
+  // Math.max(0, NaN) === NaN — both undocumented edge cases) and had no
+  // upper bound; sister setEndFrame enforced end > start but start
+  // could freely overrun end, deadlocking playback with start > end.
+  setStartFrame: (f) => set((s) => {
+    if (!Number.isFinite(f)) return s;
+    const nf = Math.max(0, Math.min(s.endFrame - 1, Math.round(f)));
+    return {
+      startFrame: nf,
+      currentTime: Math.max((nf / s.fps) * 1000, s.currentTime),
+    };
+  }),
 
-  setEndFrame: (f) => set((s) => ({
-    endFrame: Math.max(s.startFrame + 1, Math.round(f)),
-  })),
+  setEndFrame: (f) => set((s) => {
+    if (!Number.isFinite(f)) return s;
+    return { endFrame: Math.max(s.startFrame + 1, Math.round(f)) };
+  }),
 
   // ── Draft pose actions ────────────────────────────────────────────────────
 

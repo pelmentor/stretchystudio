@@ -176,6 +176,26 @@ export function DopesheetEditor() {
   // reads `handles` via the same subscription — no subscriber churn.
   const [keyformSelectionHandles, setKeyformSelectionHandles] = useKeyformSelectionState();
 
+  // ANIM-2 — prune stale fcurveId entries on action switch. Pre-fix
+  // FCurveEditor had this prune at line 788 but DopesheetEditor (often
+  // the only visible animation editor) did not, so handles persisted
+  // across action change; wouldDelDupChange / wouldTimeTranslateChange
+  // walked stale ids that could resolve to live fcurves in the new
+  // action and silently mutate them.
+  useEffect(() => {
+    setKeyformSelectionHandles((prev) => {
+      const liveIds = new Set((action?.fcurves ?? []).map(f => f.id));
+      let mutated = false;
+      const next = new Map();
+      for (const [fcId, hSet] of prev) {
+        if (liveIds.has(fcId)) next.set(fcId, hSet);
+        else mutated = true;
+      }
+      return mutated ? next : prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeActionId, action?.id]);
+
   // Slice 6.A — tick click handler. Plain LMB replaces; Shift+LMB
   // extends (toggle); Ctrl+LMB deselects; double-click seeks the
   // playhead to the tick's time (preserves the prior seek workflow).
@@ -1069,7 +1089,7 @@ export function DopesheetEditor() {
     // `updateProject` from the dep array. Pre-fix, if the user changed
     // the active action MID-GRAB (e.g. via a global hotkey in another
     // panel), this effect would tear down + re-register the listeners,
-    // and the new commit closure would target the new actionId while
+    // and the new commit closure would target the new activeActionId while
     // the user was still mid-translate against the OLD action — sending
     // the in-flight delta to an unrelated action. Now the closure
     // captures activeActionId at grab-entry time and stays stable
