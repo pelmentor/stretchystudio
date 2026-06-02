@@ -124,11 +124,23 @@ function resolveVariables(variables, evalContext) {
   for (const v of variables) {
     if (!v?.name || !v?.target?.rnaPath) continue;
     if (!project) {
-      out[v.name] = 0;
+      // Missing project context = can't resolve any RNA path. Per the
+      // module contract (see header lines 22-24, 137-139) invalid input
+      // must produce NaN so the FCurve falls back to its keyframe value;
+      // silently substituting 0 contaminates `sum`/`avg`/`min`/`max`
+      // reducers with a spurious finite number. RULE-№1.
+      out[v.name] = NaN;
       continue;
     }
     const value = evaluateRnaPath(project, v.target.rnaPath);
-    out[v.name] = typeof value === 'number' ? value : Number(value) || 0;
+    // Coerce to number (preserves "1.5" → 1.5 for numeric-string RNA
+    // hits), then require finiteness. `?? 0` and `Number(x) || 0` both
+    // mask NaN / unparseable values as a silent 0 — RULE-№1 violation
+    // and a documented footgun (`feedback_typeof_nan_is_number`). NaN
+    // here is the intended "loud" signal: the FCurve falls back to its
+    // keyframe value rather than averaging in a fake 0.
+    const num = typeof value === 'number' ? value : Number(value);
+    out[v.name] = Number.isFinite(num) ? num : NaN;
   }
   return out;
 }
