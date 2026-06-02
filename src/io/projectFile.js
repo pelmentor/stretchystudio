@@ -264,10 +264,22 @@ export async function loadProject(file, opts = {}) {
 
   // Restore mesh typed data. Field defaults (blendShapes, blendShapeValues,
   // audioTracks) are now handled by migrateProject above.
+  //
+  // MIG-V18-UV-FLOAT32-MISSING — post-v18 splits part.mesh into a sibling
+  // `{type:'meshData'}` node and deletes `part.mesh`. The original loop
+  // only checked `node.mesh`, so EVERY meshData.uvs stayed as plain
+  // `number[]` after load. Downstream consumers that branch on
+  // `instanceof Float32Array` to take the fast path silently fell back to
+  // slow paths or wrong typed-view sizes. Also covers v43 lattice cages
+  // (`type:'meshData' isLatticeCage:true`) whose uvs/vertices are equally
+  // affected.
   for (const node of project.nodes) {
     if (node.mesh) {
-      node.mesh.uvs = new Float32Array(node.mesh.uvs);
+      if (Array.isArray(node.mesh.uvs)) node.mesh.uvs = new Float32Array(node.mesh.uvs);
       // edgeIndices stays as Array — partRenderer handles both Array and Set
+    }
+    if (node.type === 'meshData') {
+      if (Array.isArray(node.uvs)) node.uvs = new Float32Array(node.uvs);
     }
   }
 

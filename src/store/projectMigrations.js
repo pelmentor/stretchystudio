@@ -1150,7 +1150,23 @@ const MIGRATIONS = {
  *         doesn't recognise.
  */
 export function migrateProject(project) {
-  const fromVersion = project.schemaVersion ?? 0;
+  // MIG-NAN-SCHEMA-VERSION — per [[typeof-nan-is-number]]: `??` only
+  // coalesces null/undefined, so a corrupted save with
+  // `schemaVersion: NaN` (or string / boolean) slipped through with the
+  // raw value. NaN-comparisons all return false, so the future-version
+  // guard, the equal-version short-circuit, and the walker loop bound
+  // all evaluated false — ZERO migrations applied, project left with
+  // schemaVersion=NaN. Per RULE-№1: surface as a loud throw, not silent
+  // treat-as-v0 (silent v0 would re-run every migration on top of
+  // already-migrated data, corrupting it).
+  const rawVersion = project.schemaVersion;
+  if (rawVersion !== undefined && rawVersion !== null && !Number.isFinite(rawVersion)) {
+    throw new Error(
+      `Project schemaVersion is non-finite (${String(rawVersion)}). ` +
+      `Refusing to migrate — the file is corrupted.`
+    );
+  }
+  const fromVersion = rawVersion ?? 0;
 
   if (fromVersion > CURRENT_SCHEMA_VERSION) {
     throw new Error(
