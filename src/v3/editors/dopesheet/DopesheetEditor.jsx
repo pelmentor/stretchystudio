@@ -1028,6 +1028,19 @@ export function DopesheetEditor() {
     };
     /** @param {KeyboardEvent} e */
     const onKeyDown = (e) => {
+      // F4 — swallow undo/redo during a grab. Pre-fix the global keymap
+      // dispatched Ctrl+Z → app.undo, reverting project state to the
+      // pre-grab snapshot while grabStateRef + curHandles continued to
+      // reference the now-stale action shape. Subsequent mousemoves
+      // wrote against the old keyform ids — desynchronizing the modal
+      // permanently. Mirror ModalTransformOverlay's catch-all pattern.
+      const isUndo = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z');
+      const isRedo = (e.ctrlKey || e.metaKey) && !e.altKey && ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')));
+      if (isUndo || isRedo) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
       else if (e.key === 'Enter') { e.preventDefault(); commit(); }
       else if (e.key === 'g' || e.key === 'G') {

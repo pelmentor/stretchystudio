@@ -1,6 +1,26 @@
 import { create } from 'zustand';
 import { usePreferencesStore } from './preferencesStore.js';
 import { useProjectStore } from './projectStore.js';
+import { useModalTransformStore } from './modalTransformStore.js';
+import { useModalVertexTransformStore } from './modalVertexTransformStore.js';
+
+/**
+ * F1 / F2 — cancel any active modal G/R/S overlay. Called from
+ * `exitEditMode` and from project lifecycle (load/reset). Both modal
+ * stores expose `cancel()` that restores pre-modal verts when the
+ * overlay was constructed with `rollbackOnCancel:true`.
+ */
+function cancelActiveModals() {
+  try {
+    const mt = useModalTransformStore.getState();
+    if (mt?.kind != null) mt.cancel?.();
+  } catch { /* defensive — never block a mode switch on a modal teardown */ }
+  try {
+    const mvt = useModalVertexTransformStore.getState();
+    if (mvt?.kind != null) mvt.cancel?.();
+  } catch { /* */ }
+}
+export { cancelActiveModals };
 
 // Editor state (UI state, selection, view transform, drag state)
 export const useEditorStore = create((set) => ({
@@ -527,25 +547,34 @@ export const useEditorStore = create((set) => ({
   /** Exit any contextual edit mode back to object mode. Idempotent.
    *  Does NOT restore keyform from snapshot — that's `cancelKeyformEdit`'s
    *  job. Calling `exitEditMode` while in keyform mode commits whatever
-   *  the user has dragged so far (Apply semantics). */
-  exitEditMode: () => set((state) => {
-    // Phase 2b storage flip — clear the active object's stored mode
-    // so the per-object record matches "this object is in Object Mode".
-    const activeId = state.selection[0];
-    if (activeId) {
-      useProjectStore.getState().setActiveObjectMode(activeId, null);
-    }
-    return {
-      editMode: null,
-      activeBlendShapeId: null,
-      keyformEdit: null,
-      toolMode: 'select',
-      // Toolset Phase 0.F — leaving Edit Mode for Object Mode drops the
-      // vertex selection set (Blender semantics).
-      selectedVertexIndices: new Map(),
-      activeVertex: null,
-    };
-  }),
+   *  the user has dragged so far (Apply semantics).
+   *
+   *  F1 — also cancels any active modal G/R/S overlay. Pre-fix Tab or
+   *  any mode-switch button mid-modal left the modal store alive: its
+   *  window-level mousemove / mousedown / keydown listeners stayed
+   *  bound, the HUD kept rendering, and pointer events kept mutating
+   *  verts in the new mode. */
+  exitEditMode: () => {
+    cancelActiveModals();
+    set((state) => {
+      // Phase 2b storage flip — clear the active object's stored mode
+      // so the per-object record matches "this object is in Object Mode".
+      const activeId = state.selection[0];
+      if (activeId) {
+        useProjectStore.getState().setActiveObjectMode(activeId, null);
+      }
+      return {
+        editMode: null,
+        activeBlendShapeId: null,
+        keyformEdit: null,
+        toolMode: 'select',
+        // Toolset Phase 0.F — leaving Edit Mode for Object Mode drops the
+        // vertex selection set (Blender semantics).
+        selectedVertexIndices: new Map(),
+        activeVertex: null,
+      };
+    });
+  },
 
   setMeshSubMode:       (mode)     => set({ meshSubMode: mode, toolMode: 'brush' }),
   setBrush:             (partial)  => set((s) => ({ brushSize: s.brushSize, brushHardness: s.brushHardness, ...partial })),

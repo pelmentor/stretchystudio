@@ -48,7 +48,7 @@ import { useAnimationStore } from './animationStore.js';
 // `cleanupOnNodeDelete` runs, both editorStore and selectionStore have
 // finished module init; ES module bindings resolve to their final
 // exports even when the import statement evaluates during a cycle.
-import { useEditorStore } from './editorStore.js';
+import { useEditorStore, cancelActiveModals } from './editorStore.js';
 import { useSelectionStore } from './selectionStore.js';
 
 /**
@@ -1197,6 +1197,13 @@ export const useProjectStore = create((set, get) => {
 
   /** Reset project to empty state */
   resetProject: () => {
+    // F2 — cancel any active modal G/R/S overlay BEFORE we swap project
+    // state out from under it. Pre-fix the modal's `original` Map
+    // referenced nodes from the old project; subsequent mousemoves
+    // wrote through `updateProject((proj) => proj.nodes.find(...))` and
+    // the find returned undefined for every entry — silent no-op while
+    // the HUD kept advertising deltas.
+    cancelActiveModals();
     disposeProjectResources(useProjectStore.getState().project);
     clearHistory();
     // CROSS-4 — drop paramValuesStore so stale param ids from the prior
@@ -1278,6 +1285,9 @@ export const useProjectStore = create((set, get) => {
 
   /** Load a deserialized project from file */
   loadProject: async (projectData) => {
+    // F2 — cancel any active modal G/R/S overlay before swapping
+    // project state. See resetProject for full reasoning.
+    cancelActiveModals();
     disposeProjectResources(useProjectStore.getState().project);
     // CROSS-4 — drop paramValuesStore so stale param ids from the prior
     // project don't survive the swap. See resetProject for the same
