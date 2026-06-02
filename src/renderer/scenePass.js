@@ -82,17 +82,18 @@ export class ScenePass {
    * @param {boolean} [opts.skipResize=false]
    * @param {boolean} [opts.exportMode=false]
    * @param {Set<string>|null} [opts.rigDrivenParts=null]
-   *   v2 R6 / v3 -1B: parts whose mesh_verts came from `evalRig` are
-   *   already in canvas-px (absolute) — chainEval composes the entire
-   *   parent chain to root, with the rotation→warp boundary scale fix
-   *   from chainEval.js (Phase 1E commit `c07751b`) producing canonical
-   *   canvas-px output. For those parts, applying the per-part
-   *   `worldMatrix` on top would double-transform.
+   *   v2 R6 / v3 -1B: parts whose mesh_verts came from the depgraph
+   *   evaluator are already in canvas-px (absolute) — the kernel chain
+   *   composes the entire parent chain to root, with the rotation→warp
+   *   boundary scale fix originally added in chainEval.js (Phase 1E
+   *   commit `c07751b`, since ported into the depgraph kernels;
+   *   `[[chainEval-retirement-2026-05-26]]`). For those parts, applying
+   *   the per-part `worldMatrix` on top would double-transform.
    *
    *   Specifically: when the user drags a SkeletonOverlay rotation arc,
    *   the same gesture writes BOTH `node.transform.rotation` AND the
-   *   bone rotation parameter. evalRig's chain applies the rotation via
-   *   the deformer; `worldMatrix` would apply it again via the
+   *   bone rotation parameter. The depgraph chain applies the rotation
+   *   via the deformer; `worldMatrix` would apply it again via the
    *   transform. Skip-worldMatrix for rig-driven parts prevents the
    *   double rotation.
    *
@@ -104,7 +105,7 @@ export class ScenePass {
    *   PP2-008 — canonical `ParamOpacity` global multiplier. Multiplied
    *   into every part's effective opacity at draw time. Default 1
    *   (no-op). Mesh keyform bindings emit `ParamOpacity[1.0]` as a
-   *   single-keyform default, so chainEval can't drive global opacity
+   *   single-keyform default, so the depgraph can't drive global opacity
    *   that way; this uniform multiplier is the canonical Live2D path.
    */
   draw(project, editor, isDark = true, poseOverrides = null, { skipResize = false, exportMode = false, rigDrivenParts = null, globalOpacity = 1 } = {}) {

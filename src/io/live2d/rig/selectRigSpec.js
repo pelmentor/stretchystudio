@@ -6,8 +6,10 @@
  * loaded from cmo3) to produce a `RigSpec`. After Phase 1, warp
  * deformers persist as `type:'deformer', deformerKind:'warp'` entries
  * in `project.nodes`. This selector reads those nodes and produces the
- * same `RigSpec` shape `chainEval` expects — synchronously, with no
- * `await`.
+ * same `RigSpec` shape the depgraph evaluator
+ * (`evalProjectFrameViaDepgraph`) expects — synchronously, with no
+ * `await`. (Pre-`146b716` the consumer was the now-retired `chainEval`
+ * engine; see `[[chainEval-retirement-2026-05-26]]`.)
  *
  * **Phase 2 scope (this file).** Reads what's already in `project.nodes`
  * and `project.parameters` / `project.canvas`:
@@ -69,7 +71,7 @@ import { logger } from '../../../lib/logger.js';
  * Once-per-process Set of `<partId>|<reason>` keys for diagnostic
  * dedup. Pre-rig fallback's silent-passthrough branches log once
  * per (part, reason) so an orphan body-warp (missing rest state)
- * gets surfaced exactly once per session — chainEval re-runs every
+ * gets surfaced exactly once per session — the depgraph re-runs every
  * frame and an unbounded stream would flood the Logs panel. Lives
  * at module scope so the dedup persists across re-renders.
  */
@@ -82,13 +84,13 @@ function _warnOncePerPart(key, fn) {
 
 /** Live-render eval context — Blender's MODE_REALTIME for the
  *  viewport / Live Preview tick. The `selectRigSpec` selector feeds
- *  `chainEval` for the live render path; export bakes go through
- *  `generateCmo3` instead and don't read this constant. */
+ *  the depgraph evaluator for the live render path; export bakes go
+ *  through `generateCmo3` instead and don't read this constant. */
 const LIVE_RENDER_REQUIRED_MODE = MODIFIER_MODE_REALTIME;
 
 /** Reusable frozen empty arrays so the selector returns the same
  * objects across calls when a section has no data. Lets shallow-equal
- * subscribers (chainEval's `buildDeformerIndex`) skip rebuilds. */
+ * subscribers skip rebuilds. */
 const EMPTY_PARTS = Object.freeze([]);
 const EMPTY_DEFORMERS = Object.freeze([]);
 const EMPTY_ARTMESHES = Object.freeze([]);
@@ -264,7 +266,7 @@ function _buildRigSpec(project) {
  * Kahn topo sort over `node.parent` (the project-tree parent ids
  * Phase 1 wrote). Parents emit before children. Cycles fall through
  * to the tail (best-effort; a malformed rig surfaces as identity in
- * `chainEval` rather than an exception).
+ * the depgraph evaluator rather than an exception).
  *
  * @param {Array<object>} nodes
  * @returns {Array<object>}

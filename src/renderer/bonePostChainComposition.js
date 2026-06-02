@@ -3,8 +3,10 @@
 /**
  * Bone post-chain composition decision helper.
  *
- * After `chainEval` produces canvas-space art-mesh verts, the renderer
- * has THREE composition paths to apply on top:
+ * After the depgraph produces canvas-space art-mesh verts (the eval
+ * path post-`146b716`; `chainEval` was retired 2026-05-26 — see
+ * `[[chainEval-retirement-2026-05-26]]`), the renderer has THREE
+ * composition paths to apply on top:
  *
  *   1. **Two-bone LBS** (Armature modifier path) — per-vertex weighted
  *      skinning via `applyTwoBoneSkinningObj`. Applies when the part
@@ -22,9 +24,9 @@
  *      bone via parent-chain transform, no per-vertex variation. The
  *      Cubism analogue: child of `GroupRotation_<bone>` rotation
  *      deformer, but bone-pose rotation isn't carried by the
- *      deformer chain (chainEval reads slider params, not bone
+ *      deformer chain (depgraph kernels read slider params, not bone
  *      pose), so the renderer applies the bone's world matrix
- *      uniformly post-chainEval.
+ *      uniformly post-depgraph.
  *
  *   3. **None** — the part has been Apply-Modified (vertex groups
  *      remain but the modifier is gone — Blender's `Apply` semantics)
@@ -80,7 +82,7 @@ const MODE_REALTIME_BIT = 1;
  */
 
 /**
- * Pick which post-chainEval composition to apply for a part. Pure
+ * Pick which post-depgraph composition to apply for a part. Pure
  * function over `node` + its inflated mesh — no rAF / WebGL dependency
  * so the decision is fully unit-testable.
  *

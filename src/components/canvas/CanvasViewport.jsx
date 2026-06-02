@@ -1678,7 +1678,7 @@ export default function CanvasViewport({
             if (jointBone && newMesh) {
               newMesh.boneWeights = computeSkinWeights(vertices, parentGroup, jointBone);
               newMesh.jointBoneId = jointBone.id;
-              console.log(`[Skinning] ${node.name} → ${childRole} (${vertices.length} verts)`);
+              logger.info('skinning', `${node.name} → ${childRole} (${vertices.length} verts)`, { nodeId: node.id, childRole, vertCount: vertices.length });
             }
           }
 
