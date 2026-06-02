@@ -38,10 +38,7 @@ import { useProjectStore } from '../store/projectStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { evalProjectFrameViaDepgraph } from '../anim/depgraph/evalProjectFrame.js';
-import {
-  computeBoneWorldMatrices,
-  computeBoneParentMap,
-} from '../renderer/boneOverlayMatrix.js';
+import { computeBoneParentMap } from '../renderer/boneOverlayMatrix.js';
 import { applyTwoBoneSkinningObj } from '../renderer/boneSkinning.js';
 import { logger } from '../lib/logger.js';
 
@@ -102,9 +99,23 @@ export function applyArmatureModifier(partId) {
   // frame and toggled-off modifiers land verts wrong).
   const rigSpec = selectRigSpec(project);
   const paramValues = useParamValuesStore.getState().values ?? {};
+  // rule-4-05 fix: always invoke the depgraph eval (even with a null
+  // rigSpec — bone TRANSFORM_COMPOSE outputs come from project.nodes
+  // regardless of rigSpec) so we can populate constraint-aware bone
+  // WORLD matrices. Pre-fix this used
+  // `computeBoneWorldMatrices(project.nodes)` from boneOverlayMatrix.js
+  // which reads `node.pose` directly, silently bypassing
+  // COPY_ROTATION / TRACK_TO / LIMIT_ROTATION constraints — so Apply
+  // disagreed with the viewport whenever the rig had bone constraints.
+  /** @type {Map<string, Float32Array>} */
+  const boneWorld = new Map();
+  const hasRigSpec = rigSpec && Array.isArray(rigSpec.artMeshes) && rigSpec.artMeshes.length > 0;
+  const frames = evalProjectFrameViaDepgraph(project, paramValues, {
+    rigSpec: hasRigSpec ? rigSpec : undefined,
+    outBoneWorldMatrices: boneWorld,
+  });
   let baseVerts;
-  if (rigSpec && Array.isArray(rigSpec.artMeshes) && rigSpec.artMeshes.length > 0) {
-    const frames = evalProjectFrameViaDepgraph(project, paramValues, { rigSpec });
+  if (hasRigSpec) {
     const frame = frames.find((f) => f.id === partId) ?? null;
     if (frame && Array.isArray(frame.vertexPositions) && frame.vertexPositions.length === restVerts.length * 2) {
       baseVerts = new Array(restVerts.length);
@@ -124,15 +135,17 @@ export function applyArmatureModifier(partId) {
     baseVerts = restVerts.map((v) => ({ x: v.x, y: v.y }));
   }
 
-  // Two-bone LBS using the current bone WORLD matrices. Same math
-  // the viewport runs every frame in `CanvasViewport.jsx` so the bake
-  // is byte-identical to what the user sees. Applies for both
-  // rigid-intent (all-1.0 weights) and true-skinning parts: in the
-  // rigid case the LBS reduces to a uniform rotation of every vert
-  // by the joint bone's world matrix, which equals the visual at
-  // current pose — exactly what we want to bake into mesh.vertices
-  // so the post-Apply rest IS the previously-posed geometry.
-  const boneWorld = computeBoneWorldMatrices(project.nodes);
+  // Two-bone LBS using the constraint-aware bone WORLD matrices the
+  // depgraph eval populated above. Same math the viewport runs every
+  // frame in `CanvasViewport.jsx` so the bake is byte-identical to what
+  // the user sees. Applies for both rigid-intent (all-1.0 weights) and
+  // true-skinning parts: in the rigid case the LBS reduces to a uniform
+  // rotation of every vert by the joint bone's world matrix, which
+  // equals the visual at current pose — exactly what we want to bake
+  // into mesh.vertices so the post-Apply rest IS the previously-posed
+  // geometry. When the project has no rig spec the depgraph eval was
+  // skipped and `boneWorld` is empty; that's the unrigged-mesh path and
+  // LBS below short-circuits with null matrices.
   const boneParents = computeBoneParentMap(project.nodes);
   const childMatrix = boneWorld.get(jointBoneId) ?? null;
   const parentBoneId = armature.data?.parentBoneId ?? boneParents.get(jointBoneId) ?? null;

@@ -36,6 +36,8 @@
 import { buildDepGraph } from './build.js';
 import { evalDepGraph } from './eval.js';
 import { OperationCode, NodeType } from './types.js';
+import { resolveBoneWorldFromCtx } from './kernels/bonePostChain.js';
+import { isBoneGroup } from '../../store/objectDataAccess.js';
 
 /**
  * @typedef {object} ArtMeshFrame
@@ -79,6 +81,14 @@ import { OperationCode, NodeType } from './types.js';
  *   frame, so without this the chain walk lands toggled-modifier parts in
  *   the wrong place. For the common (no-toggle) case the rigSpec keyforms
  *   are identical to runtime, so this is a no-op there.
+ * @param {Map<string, Float32Array>} [opts.outBoneWorldMatrices] - when
+ *   provided, the runner fills it with each bone's WORLD matrix derived
+ *   from the depgraph's TRANSFORM_COMPOSE outputs (constraint-aware,
+ *   keyed by bone id). This is the constraint-aware sibling of
+ *   `renderer/boneOverlayMatrix.js#computeBoneWorldMatrices`, which
+ *   reads `node.pose` directly and silently bypasses COPY_ROTATION /
+ *   TRACK_TO / LIMIT_ROTATION constraints. `ArmatureModifierService`
+ *   consumes this so Apply respects constraints (rule-4-05 fix).
  * @returns {ArtMeshFrame[]}
  */
 export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
@@ -123,6 +133,27 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
       if (!opKey.endsWith(suffix) || !out?.lifted) continue;
       const deformerId = opKey.slice(0, opKey.length - suffix.length);
       opts.liftedGrids.set(deformerId, out.lifted);
+    }
+  }
+  // Surface bone WORLD matrices derived from depgraph TRANSFORM_COMPOSE
+  // outputs (constraint-aware) for callers that bake or skin against the
+  // current bone pose. Mirrors `liftedGrids` shape — caller passes a Map,
+  // we populate. This is the constraint-aware sibling of
+  // `renderer/boneOverlayMatrix.js#computeBoneWorldMatrices`, which reads
+  // `node.pose` directly and therefore SKIPS the COPY_ROTATION /
+  // TRACK_TO / LIMIT_ROTATION constraint stack. `ArmatureModifierService`
+  // is the production consumer (rule-4-05 fix); Apply now respects
+  // constraints, matching what the viewport renders.
+  if (opts.outBoneWorldMatrices instanceof Map) {
+    const nodes = project?.nodes ?? [];
+    /** @type {Map<string, object>} */
+    const byId = new Map();
+    for (const n of nodes) if (n?.id) byId.set(n.id, n);
+    const cache = new Map();
+    for (const n of nodes) {
+      if (!isBoneGroup(n)) continue;
+      const world = resolveBoneWorldFromCtx(n.id, ctx, byId, cache);
+      opts.outBoneWorldMatrices.set(n.id, world);
     }
   }
   return frames;
