@@ -37,9 +37,7 @@
 - [x] **rule-1-04** — [src/anim/driver.js:131](../../src/anim/driver.js#L131) — NaN-pass-through in driver variable resolution — shipped `be4f2d7` (Pelmentor). `resolveVariables` now writes NaN on missing project / unparseable value per the FCurve-fallback contract.
 - [x] **rule-1-02** — [src/anim/constraints.js:166](../../src/anim/constraints.js#L166), [:353](../../src/anim/constraints.js#L353) — silent identity-transform on missing node — shipped `4f69207` (Pelmentor). Null inputs throw; 10 `??` channel reads moved to `finiteOr`.
 
-- [ ] **rule-1-06** — [src/services/RigService.js:278](../../src/services/RigService.js#L278), [:461](../../src/services/RigService.js#L461), [:567](../../src/services/RigService.js#L567), [:586](../../src/services/RigService.js#L586) — triple silent texture-load swallow
-  - Three sibling `try { … loadProjectTextures(…) … } catch (_err) { /* textures missing — proceed without */ }` blocks drop decode/OOM errors silently. Line 586: `try { restorePose(snapshot); } catch (_e) { /* swallow */ }` literally labeled "swallow".
-  - refuted: 1/3
+- [x] **rule-1-06** — [src/services/RigService.js:278](../../src/services/RigService.js#L278), [:461](../../src/services/RigService.js#L461), [:567](../../src/services/RigService.js#L567), [:586](../../src/services/RigService.js#L586) — triple silent texture-load swallow + restorePose swallow — shipped `6fb5623` (Claude). All four catches now `logger.warn(...)` with structured payload; rig init still proceeds (bin-max sampling fallback).
 
 ### MEDIUM
 
@@ -49,22 +47,11 @@
   - `rotation: -(t.rotation || 0)` — `||` triggers on NaN, 0, and undefined alike. Exporting a Spine file with NaN transform should fail loud.
   - refuted: 1/3
 
-- [ ] **rule-1-11** — [src/v3/operators/weightPaint/sample.js:118](../../src/v3/operators/weightPaint/sample.js#L118), normalize.js:109, blur.js:130, [src/v3/editors/viewport/overlays/WeightPaintOverlay.jsx](../../src/v3/editors/viewport/overlays/WeightPaintOverlay.jsx) :242/:394/:395/:396/:413 — `Number(...) || 0` silently coerces NaN
-  - Active weight-paint group corruption is masked. 7 sites in total.
-  - refuted: 0/3
-
-- [ ] **rule-1-14** — [src/v3/shell/FileMenu.jsx:83](../../src/v3/shell/FileMenu.jsx#L83), [ApplyMenu.jsx:111](../../src/v3/shell/ApplyMenu.jsx#L111), [CanvasContextMenu.jsx:123](../../src/v3/shell/CanvasContextMenu.jsx#L123), [MergeMenu.jsx:95](../../src/v3/shell/MergeMenu.jsx#L95), [SnapMenu.jsx:94](../../src/v3/shell/SnapMenu.jsx#L94), [ClearParentMenu.jsx:69](../../src/v3/shell/ClearParentMenu.jsx#L69), [CommandPalette.jsx:114](../../src/v3/shell/CommandPalette.jsx#L114) — operator-exec only `console.error`
-  - 7 menu invokers catch failures with bare `console.error`. No `logger.error`, no toast — failed user-invoked operator is indistinguishable from successful no-op.
-  - refuted: 0/3
-
-- [ ] **rule-1-05** — [src/v3/editors/timeline/TimelineEditor.jsx:124](../../src/v3/editors/timeline/TimelineEditor.jsx#L124) — `try { src.stop() } catch (_) {}` swallows AudioBufferSourceNode.stop errors with zero comment / log / escalation
-  - refuted: 1/3
-
-- [ ] **rule-1-07** — [src/v3/editors/timeline/TimelineEditor.jsx:118](../../src/v3/editors/timeline/TimelineEditor.jsx#L118) — audio decode error fire-and-forget: `.catch(e => console.error(…))` — no toast, no logger.error, no UI escalation
-  - refuted: 1/3
-
-- [ ] **rule-1-12** — [src/v3/editors/logs/LogsEditor.jsx:118](../../src/v3/editors/logs/LogsEditor.jsx#L118) — `catch (_err2) { /* ignore */ }` on `execCommand('copy')`; `setCopied(true)` fires BEFORE the catch → false success feedback to user
-  - refuted: 1/3
+- [x] **rule-1-11** — weightPaint `Number(x) || 0` NaN coercion across 7 sites — shipped `4fbe396` (Pelmentor). sample.js/normalize.js/blur.js + WeightPaintOverlay heatmap + brush all use `finiteOr(x, 0)`.
+- [x] **rule-1-14** — operator-exec failures route through `logger.error` + `toast({variant:'destructive'})` across 8 sites (FileMenu, ApplyMenu, CanvasContextMenu, MergeMenu, SnapMenu, ClearParentMenu, CommandPalette + bonus Topbar) — shipped `ea3fca5` (Claude). New util [src/v3/operators/reportOpFailure.js](../../src/v3/operators/reportOpFailure.js).
+- [x] **rule-1-05** + **rule-1-07** — TimelineEditor audio errors escalate to logger + toast (decode) / logger.warn (stop race) — shipped `e62976d` (Pelmentor).
+- [x] **rule-1-10** — Spine exporter `requireFinite(…)` throws on NaN rotation/scale at lines 134/135/136/179 — shipped `bea0c4d` (Claude). Audit claim re false "Copied" was actually about the silent ignore, not the success-display.
+- [x] **rule-1-12** — LogsEditor `catch (_err2) { /* ignore */ }` now surfaces destructive toast on execCommand failure — shipped `3de09d7` (Pelmentor).
 
 ---
 
@@ -72,34 +59,20 @@
 
 ### HIGH
 
-- [ ] **rule-2-08** — [src/io/live2d/rig/synthesizeDeformerNodesForExport.js:350](../../src/io/live2d/rig/synthesizeDeformerNodesForExport.js#L350) — Phase 3.B/3.C dual-storage: modifier.data + node.type==='deformer'
-  - v28 Phase 3.A folded deformer-node state INTO modifier.data; Phase 3.B (export pipeline reads through getModifierData) shipped. Phase 3.C ("delete the standalone deformer nodes") still cited across 13 files, effectively superseded by v43 lattice substrate. Codebase carries: (a) BOTH project.nodes deformer entries AND modifier.data copies, (b) a synthesizeDeformerNodesForExport orphan-fallback whose comment "will disappear after Phase 3.C" became aspirational.
-  - refuted: 0/3
+- [ ] **rule-2-08** — [src/io/live2d/rig/synthesizeDeformerNodesForExport.js:350](../../src/io/live2d/rig/synthesizeDeformerNodesForExport.js#L350) — Phase 3.B/3.C dual-storage: modifier.data + node.type==='deformer' — **deferred** (large refactor; effectively superseded by v43 lattice substrate; 13 file touchpoints).
 
 ### MEDIUM
 
-- [ ] **rule-2-04** — [src/v3/editors/outliner/treeBuilder.js:185](../../src/v3/editors/outliner/treeBuilder.js#L185) — `RIG_PSEUDO_ROOT_ID = null` kept "for third-party consumers"; SS has none. Grep: only the declaration line itself.
-  - refuted: 0/3
-
-- [ ] **rule-2-06** — [src/v3/editors/outliner/treeBuilder.js:22](../../src/v3/editors/outliner/treeBuilder.js#L22) — `'hierarchy'` outliner mode kept "for back-compat with existing tests"; 0 src/ consumers. Production uses `'viewLayer'` (identical per comment).
-  - refuted: 0/3
-
-- [ ] **rule-2-10** — [src/renderer/animationEngine.js:78](../../src/renderer/animationEngine.js#L78) — `evaluateEasing(t, interpolation)` back-compat stub with zero callers anywhere.
-  - refuted: 0/3
-
-- [ ] **rule-2-11** — [src/store/preferencesStore.js:303](../../src/store/preferencesStore.js#L303) — `lastToolByMode` legacy key rewrite runs on every load with no version gate. Either gate via localStorage version-migration OR drop the legacy keys (last seen in user data ~2026-05-07).
-  - refuted: 1/3
+- [x] **rule-2-04** — `RIG_PSEUDO_ROOT_ID` retired — shipped `acd37e5` (Claude).
+- [x] **rule-2-06** — `'hierarchy'` outliner mode retired (tests flipped to `viewLayer`) — shipped `acd37e5` (Claude).
+- [x] **rule-2-10** — `evaluateEasing` retired (canonical dispatch via `evaluateBezTripleSegment` / `evaluateFCurve`) — shipped `acd37e5` (Claude).
+- [ ] **rule-2-11** — [src/store/preferencesStore.js:303](../../src/store/preferencesStore.js#L303) — `lastToolByMode` legacy key rewrite runs on every load with no version gate — **deferred** (needs localStorage version-migration design).
 
 ### LOW
 
-- [ ] **rule-2-01** — [src/modes/modeCompat.js:120](../../src/modes/modeCompat.js#L120) — `MODE_BLEND_SHAPE = MODE_EDIT` @deprecated alias. v26 migration retired the data shape. Only consumer: `ModePill.jsx:55` (purely symbolic, never compared as runtime value).
-  - refuted: 0/3
-
-- [ ] **rule-2-02** / **rule-4-11** — [src/modes/modeCompat.js:101-103](../../src/modes/modeCompat.js#L101) — `MODE_EDIT_MESH = MODE_EDIT` @deprecated alias. Grep: only the declaration line. Test fixtures only.
-  - refuted: 0/3
-
-- [ ] **rule-2-03** — [src/lib/snap/snapMath.js:287](../../src/lib/snap/snapMath.js#L287) — `computeSelectionAnchor` @deprecated "kept for one release so legacy tests don't break". Production uses `pickSelectionAnchor`. Index barrel re-exports it from [src/lib/snap/index.js:27-31](../../src/lib/snap/index.js#L27).
-  - refuted: 0/3
+- [x] **rule-2-01** — `MODE_BLEND_SHAPE` retired (ModePill.jsx import dropped) — shipped `acd37e5` (Claude).
+- [x] **rule-2-02** / **rule-4-11** — `MODE_EDIT_MESH` retired — shipped `acd37e5` (Claude).
+- [x] **rule-2-03** — `computeSelectionAnchor` retired (snap/index.js barrel + snapMath.js + test_snap_target_modes.mjs) — shipped `acd37e5` (Claude).
 
 ---
 
@@ -107,23 +80,13 @@
 
 ### HIGH
 
-- [ ] **rule-4-03** — [src/anim/depgraph/kernels/animation.js:71](../../src/anim/depgraph/kernels/animation.js#L71) — FCurve Modifiers bypassed by ANIMATION_TRACK_EVAL kernel
-  - `ANIMATION_TRACK_EVAL` calls `interpolateTrack(fc.keyforms ?? [], ctx.timeMs ?? 0, …)` directly, which does NOT apply fmodifiers. Substrate ([src/anim/fmodifiers.js](../../src/anim/fmodifiers.js)), evaluator path ([src/anim/fcurve.js evaluateFCurve](../../src/anim/fcurve.js#L211)), UI panel ([src/v3/editors/fcurve/FCurveModifiersPanel.jsx](../../src/v3/editors/fcurve/FCurveModifiersPanel.jsx)) all exist but never apply during viewport playback.
-  - **Impact:** Cycles, Noise, Generator, Limits, Stepped, Envelope appear in UI but do nothing in viewport. Significant Blender-parity hole.
-  - refuted: 0/3
-
-- [ ] **rule-4-04** — [src/anim/depgraph/kernels/animation.js:71](../../src/anim/depgraph/kernels/animation.js#L71) — FCurve drivers bypassed by ANIMATION_TRACK_EVAL kernel
-  - Sister to rule-4-03. `evaluateFCurve` (fcurve.js:211) checks `if (fcurve.driver)` and dispatches `evaluateDriver` (Blender wins-over-keyframe semantics). `kernelAnimationTrackEval` calls `interpolateTrack` directly → driver-decorated fcurve never fires during full action playback.
-  - refuted: 0/3
-
-- [ ] **rule-4-05** — [src/services/ArmatureModifierService.js:135](../../src/services/ArmatureModifierService.js#L135) — Apply Armature bypasses TRANSFORM_COMPOSE → drops constraints
-  - `computeBoneWorldMatrices(project.nodes)` reads `node.pose` directly via `getBonePose` ([boneOverlayMatrix.js:102](../../src/renderer/boneOverlayMatrix.js#L102)), bypassing `TRANSFORM_COMPOSE`. Any `COPY_ROTATION` / `TRACK_TO` / `LIMIT_ROTATION` constraint on a bone is IGNORED at Apply bake time but RESPECTED during viewport playback → Apply silently disagrees with the viewport.
-  - refuted: 0/3
+- [x] **rule-4-03** — `ANIMATION_TRACK_EVAL` evaluates FCurve Modifiers — shipped `e21fe54` (Pelmentor). Kernel swapped `interpolateTrack(…)` for `evaluateFCurve(fc, ctx.timeMs, { project: ctx.project })`; Cycles / Noise / Generator / Limits / Stepped / Envelope now drive viewport playback.
+- [x] **rule-4-04** — `ANIMATION_TRACK_EVAL` evaluates Drivers — shipped `e21fe54` (Pelmentor) alongside rule-4-03. `evaluateFCurve` applies the driver-wins-over-keyframe semantics per Blender's eval order.
+- [x] **rule-4-05** — `ArmatureModifierService.applyArmatureModifier` now consumes constraint-aware bone WORLD matrices from depgraph TRANSFORM_COMPOSE — shipped `282aba5` (Claude). `evalProjectFrameViaDepgraph` gained `opts.outBoneWorldMatrices` Map; ArmatureModifierService passes it instead of calling `computeBoneWorldMatrices`. COPY_ROTATION / TRACK_TO / LIMIT_ROTATION on bones are now honored at Apply bake time.
 
 ### MEDIUM
 
-- [ ] **rule-4-07** — [src/anim/modifierTypeInfo.js:177](../../src/anim/modifierTypeInfo.js#L177) — Lattice modifier missing Blender's `strength: float` + `vertex_group: string`
-  - Blender's `LatticeModifierData` (DNA_modifier_types.h:282) carries `strength` (0..1 influence) + optional vertex-group filter. SS's lattice modifier has no strength, no vgroup. `deformVerts` applies the bilinear unconditionally → blocks soft-deform authoring.
+- [ ] **rule-4-07** — [src/anim/modifierTypeInfo.js:177](../../src/anim/modifierTypeInfo.js#L177) — Lattice modifier missing Blender's `strength: float` + `vertex_group: string` — **deferred** (substantial feature: schema + UI + migration + tests). Blender's `LatticeModifierData` (DNA_modifier_types.h:282) carries `strength` (0..1 influence) + optional vertex-group filter; `deformVerts` applies bilinear unconditionally → blocks soft-deform authoring.
   - refuted: 0/3
 
 ---
@@ -152,9 +115,7 @@
 
 ### LOW
 
-- [ ] **arch-10** — Stale chainEval / evalRig doc baggage in 11+ files after 2026-05-26 retirement
-  - [src/renderer/bonePostChainComposition.js:6](../../src/renderer/bonePostChainComposition.js#L6), [src/io/live2d/rig/selectRigSpec.js:9](../../src/io/live2d/rig/selectRigSpec.js#L9), [src/renderer/hitTest.js:120](../../src/renderer/hitTest.js#L120), [src/renderer/scenePass.js:88](../../src/renderer/scenePass.js#L88), and more.
-  - refuted: 0/3
+- [x] **arch-10** — Top-of-file chainEval / evalRig docstrings reworded at the audit-cited high-visibility sites — shipped `a1205f6` (Pelmentor). Remaining 50+ deep-in-file historical comments tied to specific commits or phase-numbered migration history left as record.
 
 ---
 
@@ -162,9 +123,7 @@
 
 ### HIGH
 
-- [ ] **test-01** — [src/store/migrations/v32_strip_rigid_default_weights.js](../../src/store/migrations/v32_strip_rigid_default_weights.js) — no direct behavior test
-  - 107 LOC walks meshed parts, runs `isRigidVertexGroup`, deletes `boneWeights`+`jointBoneId`, removes orphan armature modifiers. `test_migrations.mjs` has zero `boneWeights`/`jointBoneId` references.
-  - refuted: 0/3
+- [x] **test-01** — v32 migration behavior test shipped — `b7b2188` (Claude). [scripts/test/test_v32_strip_rigid_default_weights.mjs](../../scripts/test/test_v32_strip_rigid_default_weights.mjs) — 19 assertions covering rigid-1.0 strip, varying-weights preserve, bone-routing-intent preserve, idempotency, defensive null/empty. Added to master chain as `test:migrationV32`.
 
 ### MEDIUM
 
@@ -198,8 +157,7 @@
 
 ### LOW
 
-- [ ] **bug-04** — Stale `console.log` in [src/components/canvas/CanvasViewport.jsx:1681](../../src/components/canvas/CanvasViewport.jsx#L1681) — only direct `console.log(` in src/; migrate to `logger.info` per `feedback_in_app_logging`.
-  - refuted: 0/3
+- [x] **bug-04** — Stale `console.log` routed to `logger.info('skinning', …)` — shipped `a1205f6` (Pelmentor).
 
 ---
 
@@ -249,3 +207,6 @@ Completeness critic flagged classes of issue the 6-dimension run did not cover. 
   - `rule-1-09` matrix.js + shared `finiteOr` helper at [src/lib/finiteOr.js](../../src/lib/finiteOr.js) (Claude `59b43f2`)
   - `rule-1-02` constraints.js: null inputs now throw; 10 channels moved to `finiteOr` (Pelmentor `4f69207`)
   - **Net:** depgraph eval-path is finite by contract end-to-end. The rigInvariantCheck framework (I-7 / I-12..I-15) remains the upstream loud-detector; these kernel fixes are the runtime safety net.
+- **2026-06-02 (autonomous batch)** — RULE-№1 sweep closed end-to-end (11/11 confirmed); RULE-№2 metla closed (6/8 dead shims retired; rule-2-08 + rule-2-11 deferred); 3 high-severity RULE-№4 holes closed (rule-4-03 + rule-4-04 + rule-4-05); arch-10 + bug-04 housekeeping; test-01 v32 migration test added.
+  - **Net:** **20 audit items closed** across 17 commits. Open: 16 items, of which 5 are explicitly deferred (refactor scope), 2 are blocked on user action (BUG-015 drag-repro, handwear bbox re-run for I-14/I-15), and the rest are smaller follow-ups (rule-4-07 Lattice strength/vgroup feature, arch splits 01/02/03/08, test-05 @ts-check sweep, test-07 NaN-test positive pins, plan-09 four small UX gates).
+  - **Key end-state:** depgraph ANIMATION_TRACK_EVAL now drives FCurve Modifiers + Drivers in viewport (was silently bypassing); Apply Armature now respects bone constraints (was silently bypassing TRANSFORM_COMPOSE); 8 menu invokers now surface failures via logger + toast (was console.error-only); eval-path is finite end-to-end with the rigInvariantCheck framework as upstream loud-detector.
