@@ -147,7 +147,9 @@ function resolveVariables(variables, evalContext) {
       out[v.name] = NaN;
       continue;
     }
-    const value = evaluateRnaPath(project, v.target.rnaPath);
+    // DRIVER-PARAMS-VIEW-STALE-DEFAULTS — thread the full evalContext
+    // so __params__ lookups overlay paramOverrides on parameter defaults.
+    const value = evaluateRnaPath(project, v.target.rnaPath, evalContext);
     // Coerce to number (preserves "1.5" → 1.5 for numeric-string RNA
     // hits), then require finiteness. `?? 0` and `Number(x) || 0` both
     // mask NaN / unparseable values as a silent 0 — RULE-№1 violation

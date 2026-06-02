@@ -156,23 +156,39 @@ export function parseRnaPath(path) {
  * @param {string} id
  * @returns {object|null}
  */
-function resolveObjectId(project, id) {
+function resolveObjectId(project, id, evalContext) {
   if (id === '__armature__') return getArmature(project);
   if (id === '__params__') {
-    return _paramsView(project);
+    return _paramsView(project, evalContext);
   }
   return (project.nodes ?? []).find((n) => n?.id === id) ?? null;
 }
 
 /**
  * Build a `{ values: {paramId: number} }` view from `project.parameters`.
- * Read-only at the helper level -- drivers / FCurves write through the
- * paramValues store at runtime, not here.
+ *
+ * DRIVER-PARAMS-VIEW-STALE-DEFAULTS — pre-fix the view only carried
+ * `p.default` for each param. Every driver whose variable pointed at
+ * another parameter via `objects["__params__"].values["X"]` therefore
+ * read X's DEFAULT, not its current animated / driven / slider value,
+ * silently breaking driver chains that read parameter values.
+ *
+ * Now the live `evalContext.paramOverrides` (Map<paramId, number>)
+ * overlays the defaults: any override slot wins, missing keys fall
+ * through to `p.default`. Callers that don't thread the context (legacy
+ * paths) get the defaults — same as before.
  */
-function _paramsView(project) {
+function _paramsView(project, evalContext) {
+  /** @type {Map<string, number> | null} */
+  const overrides = evalContext?.paramOverrides instanceof Map
+    ? evalContext.paramOverrides
+    : null;
   const out = {};
   for (const p of project?.parameters ?? []) {
-    if (p?.id) out[p.id] = p.default ?? 0;
+    if (!p?.id) continue;
+    out[p.id] = overrides?.has(p.id)
+      ? /** @type {number} */ (overrides.get(p.id))
+      : (p.default ?? 0);
   }
   return { values: out };
 }
@@ -181,11 +197,17 @@ function _paramsView(project) {
  * Walk a parsed path against `project` and return the value at the
  * leaf, or `undefined` if any segment misses.
  *
+ * DRIVER-PARAMS-VIEW-STALE-DEFAULTS — `evalContext.paramOverrides`
+ * (Map<paramId, number>) overlays the `__params__.values` view when
+ * present. Without it, `objects["__params__"].values["X"]` returns
+ * X's default — not its current animated / driven / slider value.
+ *
  * @param {object} project
  * @param {string} path
+ * @param {{paramOverrides?: Map<string, number>}} [evalContext]
  * @returns {*}
  */
-export function evaluateRnaPath(project, path) {
+export function evaluateRnaPath(project, path, evalContext) {
   const segs = parseRnaPath(path);
   if (!segs || segs.length < 2) return undefined;
   // First segment must be `objects`; second segment is the id.
@@ -194,7 +216,7 @@ export function evaluateRnaPath(project, path) {
   if (first.kind !== 'field' || first.value !== 'objects') return undefined;
   if (second.kind !== 'index' && second.kind !== 'key') return undefined;
   const objectId = String(second.value);
-  let cur = resolveObjectId(project, objectId);
+  let cur = resolveObjectId(project, objectId, evalContext);
   if (!cur) return undefined;
 
   // Special-case: `mesh` field on a part -- route through `getMesh`

@@ -34,7 +34,13 @@ export function kernelDriverEval(op, ctx) {
   if (!targetId) return NaN;
   const param = ctx.project?.parameters?.find((p) => p?.id === targetId);
   if (!param?.driver) return NaN;
-  const value = evaluateDriver(param.driver, { project: ctx.project });
+  // DRIVER-PARAMS-VIEW-STALE-DEFAULTS — pass the live paramOverrides so
+  // driver variables targeting `objects["__params__"].values["X"]` read
+  // X's current animated / driven / slider value instead of its default.
+  const value = evaluateDriver(param.driver, {
+    project: ctx.project,
+    paramOverrides: ctx.paramOverrides,
+  });
   if (typeof value === 'number' && Number.isFinite(value)) {
     ctx.paramOverrides?.set(targetId, value);
     return value;
