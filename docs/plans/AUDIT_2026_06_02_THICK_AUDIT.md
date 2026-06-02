@@ -33,19 +33,9 @@
 
 ### HIGH
 
-- [ ] **rule-1-08** — [src/anim/depgraph/kernels/bonePostChain.js:141](../../src/anim/depgraph/kernels/bonePostChain.js#L141) — NaN-pass-through in bonePostChain pose-channel reads
-  - `pose?.rotation ?? 0`, `pose?.x ?? 0`, `pose?.scaleX ?? 1` — `??` only triggers on null/undefined, so a NaN-poisoned pose channel flows through into `makeBoneLocalMatrix` producing NaN matrices.
-  - Same failure mode as Shelby invisible-bones (commit `94ae9f5`, memory `shelby_invisible_bones_fix_2026_05_25`), but at the eval site. Use `Number.isFinite(v) ? v : 0` per `feedback_typeof_nan_is_number`.
-  - refuted: 1/3
-
-- [ ] **rule-1-04** — [src/anim/driver.js:131](../../src/anim/driver.js#L131) — NaN-pass-through in driver variable resolution
-  - `typeof value === 'number' ? value : Number(value) || 0` — first branch passes NaN through (typeof NaN === 'number'); second silently masks `Number(undefined)=NaN`, `Number({})=NaN`, `Number('')=0` into a silent 0. Also line 127 silently defaults to 0 when project is missing.
-  - Per [src/anim/driver.js:22-24,137-139](../../src/anim/driver.js#L22) the file's own contract is "invalid → NaN → FCurve falls back to keyframe value". Lines 127/131 violate that.
-  - refuted: 0/3
-
-- [ ] **rule-1-02** — [src/anim/constraints.js:166](../../src/anim/constraints.js#L166), [:353](../../src/anim/constraints.js#L353) — silent identity-transform on missing node
-  - `effectiveTransform()` and `evaluateConstraints()` return identity `{x:0,y:0,rotation:0,scaleX:1,scaleY:1}` when owner/node is null. Constraint owner being null is a graph wiring bug — should fail loud. Plus 5 × `?? 0/?? 1` on lines 171-184 leak NaN.
-  - refuted: 1/3
+- [x] **rule-1-08** — [src/anim/depgraph/kernels/bonePostChain.js:141](../../src/anim/depgraph/kernels/bonePostChain.js#L141) — NaN-pass-through in bonePostChain pose-channel reads — shipped `17028c8` (Claude) + refactored to shared `finiteOr` in `59b43f2`
+- [x] **rule-1-04** — [src/anim/driver.js:131](../../src/anim/driver.js#L131) — NaN-pass-through in driver variable resolution — shipped `be4f2d7` (Pelmentor). `resolveVariables` now writes NaN on missing project / unparseable value per the FCurve-fallback contract.
+- [x] **rule-1-02** — [src/anim/constraints.js:166](../../src/anim/constraints.js#L166), [:353](../../src/anim/constraints.js#L353) — silent identity-transform on missing node — shipped `4f69207` (Pelmentor). Null inputs throw; 10 `??` channel reads moved to `finiteOr`.
 
 - [ ] **rule-1-06** — [src/services/RigService.js:278](../../src/services/RigService.js#L278), [:461](../../src/services/RigService.js#L461), [:567](../../src/services/RigService.js#L567), [:586](../../src/services/RigService.js#L586) — triple silent texture-load swallow
   - Three sibling `try { … loadProjectTextures(…) … } catch (_err) { /* textures missing — proceed without */ }` blocks drop decode/OOM errors silently. Line 586: `try { restorePose(snapshot); } catch (_e) { /* swallow */ }` literally labeled "swallow".
@@ -53,9 +43,7 @@
 
 ### MEDIUM
 
-- [ ] **rule-1-09** — [src/anim/depgraph/kernels/matrix.js:72](../../src/anim/depgraph/kernels/matrix.js#L72), [:110-116](../../src/anim/depgraph/kernels/matrix.js#L110) — NaN-pass-through in canvas-final matrix builder
-  - `(setup.effectiveAngleDeg ?? 0)`, `(setup.scale ?? 1)` — NaN slips through `??`, producing NaN matrix entries that cascade through compose.
-  - refuted: 1/3
+- [x] **rule-1-09** — [src/anim/depgraph/kernels/matrix.js:72](../../src/anim/depgraph/kernels/matrix.js#L72), [:110-116](../../src/anim/depgraph/kernels/matrix.js#L110) — NaN-pass-through in canvas-final matrix builder — shipped `59b43f2` (Claude). `buildCanvasFinalMat3` + `buildLocalMat3` use `finiteOr` for all 12 numeric reads (angle, scale, opacity, pivot, origin). Shared helper introduced at [src/lib/finiteOr.js](../../src/lib/finiteOr.js).
 
 - [ ] **rule-1-10** — [src/io/exportSpine.js:134](../../src/io/exportSpine.js#L134), [:179](../../src/io/exportSpine.js#L179) — Spine exporter `|| 0` on rotation drops NaN to identity
   - `rotation: -(t.rotation || 0)` — `||` triggers on NaN, 0, and undefined alike. Exporting a Spine file with NaN transform should fail loud.
@@ -254,4 +242,10 @@ Completeness critic flagged classes of issue the 6-dimension run did not cover. 
 
 ## Decision log
 
-- **2026-06-02** — workflow shipped, 36/72 findings confirmed. Tracking doc opens. First fix target: `rule-1-08` (bonePostChain NaN) as smallest delta to highest-impact RULE-№1 class (same family as the Shelby invisible-bones source fix).
+- **2026-06-02** — workflow shipped, 36/72 findings confirmed. Tracking doc opens.
+- **2026-06-02** — eval-path NaN-safety sweep: 4 fixes shipped end-to-end.
+  - `rule-1-08` bonePostChain (Claude `17028c8`)
+  - `rule-1-04` driver.js (Pelmentor `be4f2d7`)
+  - `rule-1-09` matrix.js + shared `finiteOr` helper at [src/lib/finiteOr.js](../../src/lib/finiteOr.js) (Claude `59b43f2`)
+  - `rule-1-02` constraints.js: null inputs now throw; 10 channels moved to `finiteOr` (Pelmentor `4f69207`)
+  - **Net:** depgraph eval-path is finite by contract end-to-end. The rigInvariantCheck framework (I-7 / I-12..I-15) remains the upstream loud-detector; these kernel fixes are the runtime safety net.
