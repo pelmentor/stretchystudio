@@ -73,6 +73,10 @@ export function kernelRotationSetupProbe(op, ctx) {
     ? ctx.project?.nodes?.find((n) => n?.id === parentId)
     : null;
   if (!isChainDeformerNode(parentNode)) {
+    if (def?.id === 'FaceRotation' || def?.name === 'Face Rotation') {
+      logger.info('rotationSetupProbe',
+        `${def.id} EARLY-RETURN: parentId="${parentId}" parentNode=${parentNode ? 'exists but not chain deformer' : 'NULL/missing in project.nodes'} → canvasFinalPivot=(${px.toFixed(2)},${py.toFixed(2)}) [carried from state.originX/Y in pre-probe frame, likely UV or pivot-relative]`);
+    }
     return {
       canvasFinalPivot: [px, py],
       effectiveAngleDeg: angleDeg,
