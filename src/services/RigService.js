@@ -56,6 +56,14 @@ function _harvestPipeline() {
         initializeRigFromProject: initRigMod.initializeRigFromProject,
         loadProjectTextures: imageHelpersMod.loadProjectTextures,
       };
+    }).catch((err) => {
+      // WORKER-007 — reset on rejection so a retry can re-attempt the
+      // dynamic import. Without this, a single network blip during the
+      // first Init Rig would stick a rejected promise in the memo cell
+      // and every subsequent call would await the same rejection
+      // forever. Mirror of projectStoreSeeds._seedsPromise reset.
+      _harvestPipelinePromise = null;
+      throw err;
     });
   }
   return _harvestPipelinePromise;

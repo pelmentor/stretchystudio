@@ -176,7 +176,12 @@ export function PsdImportWizard() {
       if (step === 'reorder') {
         PsdImportService.applyRig(groupDefs, assignments, meshAllParts);
       } else {
-        PsdImportService.finalize(groupDefs, assignments, meshAllParts);
+        // WORKER-002 — finalize is async (awaits the worker-pool
+        // composite). Without await, a rejection from the pool escapes
+        // this try/catch entirely as an unhandled promise rejection while
+        // setRigLoading(false) fires synchronously, leaving the wizard
+        // in a half-committed state.
+        await PsdImportService.finalize(groupDefs, assignments, meshAllParts);
       }
     } catch (err) {
       console.error('[Manual Rig]', err);
@@ -210,7 +215,8 @@ export function PsdImportWizard() {
       if (step === 'reorder' || step === 'dwpose' || step === 'adjust') {
         PsdImportService.applyRig(groupDefs, assignments, meshAllParts);
       } else {
-        PsdImportService.finalize(groupDefs, assignments, meshAllParts);
+        // WORKER-002 — see handleRigManually.
+        await PsdImportService.finalize(groupDefs, assignments, meshAllParts);
       }
     } catch (err) {
       console.error('[AutoRig]', err);

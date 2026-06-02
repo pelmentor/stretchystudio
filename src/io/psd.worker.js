@@ -24,7 +24,13 @@ initializeCanvas(
 
 self.onmessage = (e) => {
   const { buffer } = e.data || {};
-  if (!buffer) return;
+  if (!buffer) {
+    // WORKER-004 — silent return would leave the main-thread Promise
+    // hanging forever (src/io/psd.js resolves only on onmessage). Reply
+    // so the awaiter rejects loudly.
+    self.postMessage({ ok: false, error: 'PSD worker: missing buffer in message payload' });
+    return;
+  }
   try {
     const psd = readPsd(buffer, { skipLayerImageData: false, useImageData: true });
 
