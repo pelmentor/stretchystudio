@@ -275,7 +275,13 @@ export async function initializeRig() {
     let images = new Map();
     try {
       images = await loadProjectTextures(project);
-    } catch (_err) { /* textures missing — proceed without */ }
+    } catch (err) {
+      // Texture load can fail from genuinely-missing PNGs (legitimate,
+      // expected) OR decode errors / OOM (real problems). Don't silently
+      // swallow per RULE-№1 — log so the failure is visible in the Logs
+      // panel; rig init still proceeds (bin-max sampling fallback).
+      logger.warn('rigInit', `loadProjectTextures failed — falling back to mesh bin-max sampling: ${/** @type {any} */ (err)?.message ?? err}`, { err: String(err) });
+    }
     const harvest = await memoInitializeRigFromProject(project, images);
 
     // Persist all rig outputs into projectStore.
@@ -458,7 +464,9 @@ export async function runStage(stage, opts = {}) {
         const { loadProjectTextures } = await _harvestPipeline();
         let images = new Map();
         try { images = await loadProjectTextures(project); }
-        catch (_err) { /* textures missing → fall back to mesh bin-max */ }
+        catch (err) {
+          logger.warn('rigStageRun', `loadProjectTextures failed for stage ${stage} — falling back to bin-max: ${/** @type {any} */ (err)?.message ?? err}`, { stage, err: String(err) });
+        }
         const harvest = await memoInitializeRigFromProject(project, images);
         const action = STAGE_TO_ACTION[stage];
         const store = useProjectStore.getState();
@@ -564,7 +572,9 @@ export async function refitAll(opts = {}) {
     const { loadProjectTextures } = await _harvestPipeline();
     let images = new Map();
     try { images = await loadProjectTextures(project); }
-    catch (_err) { /* textures missing — proceed without */ }
+    catch (err) {
+      logger.warn('rigStageRun', `loadProjectTextures failed during refitAll — falling back to bin-max: ${/** @type {any} */ (err)?.message ?? err}`, { err: String(err) });
+    }
     const harvest = await memoInitializeRigFromProject(project, images);
     await useProjectStore.getState().seedAllRig(harvest, mode);
 
@@ -582,8 +592,12 @@ export async function refitAll(opts = {}) {
     logger.timeEnd('rigStageRun', 'refitAll', { mode }, `refitAll (${mode})`);
     return { ok: true };
   } catch (err) {
-    // Best-effort restore even on failure.
-    try { restorePose(snapshot); } catch (_e) { /* swallow */ }
+    // Best-effort restore even on failure — we're already in the error
+    // path, so a restore failure must not mask the original error, but
+    // it MUST be visible per RULE-№1.
+    try { restorePose(snapshot); } catch (restoreErr) {
+      logger.warn('rigStageRun', `refitAll restorePose failed during error recovery: ${/** @type {any} */ (restoreErr)?.message ?? restoreErr}`, { restoreErr: String(restoreErr) });
+    }
     const error = /** @type {any} */ (err)?.message ?? String(err);
     const ms = logger.timeEnd('rigStageRun', 'refitAll', { mode, error });
     logger.warn('rigStageRun', `refitAll (${mode}) FAILED after ${ms ?? '?'}ms: ${error}`, { mode, error });
