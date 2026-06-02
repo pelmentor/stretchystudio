@@ -4,6 +4,8 @@ import { useProjectStore } from '@/store/projectStore';
 import { useEditorStore } from '@/store/editorStore';
 import { beginBatch, endBatch } from '@/store/undoHistory';
 import { cn } from '@/lib/utils';
+import { logger } from '@/lib/logger';
+import { toast } from '@/hooks/use-toast';
 import { Copy, Clipboard, Trash2, Music, X, Settings } from 'lucide-react';
 import {
   buildParamFCurve,
@@ -115,13 +117,34 @@ function useAudioSync(animation, animStore) {
         .then(r => r.arrayBuffer())
         .then(ab => ctx.decodeAudioData(ab))
         .then(buf => { buffersRef.current.set(track.id, buf); })
-        .catch(e => console.error(`Audio decode error (${track.id}):`, e));
+        .catch(e => {
+          // Audio decode failure means the user's motion has a missing
+          // or broken audio track — they need to know. Per RULE-№1 +
+          // feedback_in_app_logging: log AND toast.
+          const message = /** @type {any} */ (e)?.message ?? String(e);
+          logger.error('timeline', `audio decode failed for track ${track.id}: ${message}`, { trackId: track.id, sourceUrl: track.sourceUrl, err: String(e) });
+          toast({
+            variant: 'destructive',
+            title: 'Audio track failed to load',
+            description: `${track.id}: ${message}`,
+          });
+        });
     }
   }, [trackSourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 2. Stop helper ─────────────────────────────────────────────────────
   const stopAll = useCallback(() => {
-    sourcesRef.current.forEach(src => { try { src.stop(); } catch (_) {} });
+    sourcesRef.current.forEach(src => {
+      try { src.stop(); } catch (err) {
+        // AudioBufferSourceNode.stop on an already-stopped source
+        // throws InvalidStateError. That's expected in our usage (a
+        // toggle-while-stopping race) and recovery is "do nothing",
+        // but per RULE-№1 the failure must be observable rather than
+        // silently swallowed. Logger only — no toast for an expected
+        // race condition.
+        logger.warn('timeline', `AudioBufferSourceNode.stop failed (likely double-stop): ${/** @type {any} */ (err)?.message ?? err}`, { err: String(err) });
+      }
+    });
     sourcesRef.current.clear();
   }, []);
 
