@@ -98,6 +98,34 @@ function useAudioSync(animation, animStore) {
   animationRef.current   = animation;
   currentTimeRef.current = animStore.currentTime;
 
+  // MEM-02 — mount-once cleanup. Pre-fix each TimelineEditor unmount
+  // leaked one AudioContext (browsers cap at ~6 concurrent before
+  // suspending new ones). Closing the context releases its real-time
+  // audio thread + WebAudio graph.
+  useEffect(() => () => {
+    const ctx = audioCtxRef.current;
+    if (ctx && ctx.state !== 'closed') {
+      ctx.close().catch(err => {
+        logger.warn('timeline', `AudioContext.close failed: ${err?.message ?? err}`, { err: String(err) });
+      });
+    }
+    buffersRef.current.clear();
+    sourcesRef.current.clear();
+    audioCtxRef.current = null;
+  }, []);
+
+  // MEM-02 follow-up — prune buffersRef entries for tracks that have been
+  // removed from the animation. Without this the Map only grows; deleted
+  // tracks pin their AudioBuffers (often multi-MB decoded PCM) for the
+  // editor's lifetime.
+  useEffect(() => {
+    const liveIds = new Set((animation?.audioTracks ?? []).map(t => t.id));
+    for (const id of buffersRef.current.keys()) {
+      if (!liveIds.has(id)) buffersRef.current.delete(id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animation?.audioTracks?.length, animation?.id]);
+
   // ── 1. Decode buffers when new tracks with audio appear ───────────────
   //    Stable dep: track IDs + sourceUrls joined — avoids object identity churn
   const trackSourceKey = (animation?.audioTracks ?? [])
@@ -412,6 +440,12 @@ function AudioTrackRow({
 
   const handleUpload = async (file) => {
     const url = URL.createObjectURL(file);
+    // MEM-11 — close the decode-only AudioContext after use. Pre-fix
+    // each audio-track import leaked one AudioContext (separately from
+    // the playback context in MEM-02). Chrome caps total live contexts
+    // at ~6; after that the next `new AudioContext()` throws
+    // InvalidStateError. try/finally guarantees close even on decode
+    // error.
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     try {
       const response = await fetch(url);
@@ -436,8 +470,18 @@ function AudioTrackRow({
         }
       });
     } catch (err) {
-      console.error('Failed to decode audio:', err);
+      logger.error('timeline', `Failed to decode audio: ${err?.message ?? err}`, {
+        file: file.name,
+        err: String(err),
+      });
+      toast({ variant: 'destructive', title: 'Audio decode failed', description: String(err?.message ?? err) });
       URL.revokeObjectURL(url);
+    } finally {
+      if (ctx.state !== 'closed') {
+        ctx.close().catch(err => {
+          logger.warn('timeline', `decode-only AudioContext.close failed: ${err?.message ?? err}`, { err: String(err) });
+        });
+      }
     }
   };
 
