@@ -141,7 +141,12 @@ export function applyTopologyOp(partId, result) {
     const m = getMesh(n, proj);
     if (!m) return;
     m.vertices = result.vertices;
-    m.uvs = Array.from(result.uvs);
+    // MESH-010 — preserve the Float32Array shape that subdivide / merge
+    // return. Pre-fix Array.from collapsed it to plain JS Array which
+    // broke fast-path consumers that branch on `instanceof Float32Array`
+    // (GPU upload paths, snap math, eyedropper). Float32Array is
+    // immer-safe.
+    m.uvs = result.uvs;
     m.triangles = result.triangles;
     m.edgeIndices = result.edgeIndices;
     if (remappedShapeDeltas && Array.isArray(n.blendShapes)) {

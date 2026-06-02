@@ -101,7 +101,12 @@ export function normalizeAllWeights() {
   let zeroSumVerts = 0;
   for (let i = 0; i < vertexCount; i++) {
     const s = sums[i];
-    if (!Number.isFinite(s) || s <= 0) {
+    // MESH-011 — also treat near-zero / subnormal sums as zero. Pre-fix
+    // `s > 0` accepted denormals like 1e-300; dividing by that exploded
+    // each weight to ~1e300, sending arbitrarily-large skin weights to
+    // the GPU. The Math.abs(s-1)<1e-6 short-circuit below already treats
+    // <1e-6 as "no work to do" — apply the same floor to the reject gate.
+    if (!Number.isFinite(s) || s <= 1e-6) {
       zeroSumVerts++;
       continue;
     }

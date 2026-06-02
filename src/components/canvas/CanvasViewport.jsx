@@ -3404,14 +3404,26 @@ export default function CanvasViewport({
       // captures the right baseline.
       const skipHistory = !drag.firstTick;
       drag.firstTick = false;
+      // MESH-002 — write rest position alongside live position in
+      // Edit Mode (the rest-editing context). Pre-fix sculpt strokes
+      // only updated {x,y}; pose evaluation re-skinned from unchanged
+      // restX/restY, immediately undoing the sculpt visually on the
+      // next param change. Object-shape vertices carry restX/restY;
+      // flat-shape (test fixtures) doesn't have them — skip there.
+      const writeRest = editorRef.current.editMode === 'edit';
       updateProject((proj2) => {
         const n2 = proj2.nodes.find((nn) => nn.id === drag.partId);
         const m2 = getMesh(n2, proj2);
         if (!m2) return;
         for (const [idx, p] of tickResult) {
           if (idx >= 0 && idx < m2.vertices.length) {
-            m2.vertices[idx].x = p.x;
-            m2.vertices[idx].y = p.y;
+            const v = m2.vertices[idx];
+            v.x = p.x;
+            v.y = p.y;
+            if (writeRest && typeof v === 'object' && 'restX' in v) {
+              v.restX = p.x;
+              v.restY = p.y;
+            }
           }
         }
       }, { skipHistory });
