@@ -99,20 +99,29 @@
 import { getBonePose, isBoneGroup } from '../store/objectDataAccess.js';
 import { finiteOr } from '../lib/finiteOr.js';
 
-const TWO_PI = Math.PI * 2;
+// F1-rotation-units (R4) — project-wide `rotation` is in DEGREES
+// (makeLocalMatrix at renderer/transforms.js:98 does `* Math.PI / 180`;
+// GizmoOverlay/ModalTransform also degrees; bakeBoneRotation documented
+// as degrees). The constraint kernel previously treated values as
+// radians via `wrapPi` + raw `Math.atan2`, producing 360x-off results
+// when the renderer multiplied by PI/180 again. Switch the wrap +
+// clamp + lerp helpers to operate in degrees, and convert atan2 from
+// radians to degrees at the TRACK_TO site.
+const FULL_TURN_DEG = 360;
+const HALF_TURN_DEG = 180;
 
 /**
- * Wrap an angle to the canonical (-PI, PI] range. Used as the
- * 2D analogue of Blender's `clamp_angle` (constraint.cc:1828) which
- * treats angles as living on a continuous loop.
+ * Wrap an angle (degrees) to the canonical (-180, 180] range. 2D
+ * analogue of Blender's `clamp_angle` (constraint.cc:1828) which treats
+ * angles as living on a continuous loop.
  *
- * @param {number} a
- * @returns {number}
+ * @param {number} a — degrees
+ * @returns {number} — degrees in (-180, 180]
  */
 function wrapPi(a) {
-  let x = a % TWO_PI;
-  if (x > Math.PI) x -= TWO_PI;
-  else if (x <= -Math.PI) x += TWO_PI;
+  let x = a % FULL_TURN_DEG;
+  if (x > HALF_TURN_DEG) x -= FULL_TURN_DEG;
+  else if (x <= -HALF_TURN_DEG) x += FULL_TURN_DEG;
   return x;
 }
 
@@ -276,7 +285,10 @@ function evalTrackTo(con, ownerTransform, targetTransform) {
   const dx = targetTransform.x - ownerTransform.x;
   const dy = targetTransform.y - ownerTransform.y;
   if (dx === 0 && dy === 0) return out;
-  out.rotation = wrapPi(Math.atan2(dy, dx));
+  // F1-rotation-units — atan2 returns radians; project-wide rotation
+  // is degrees. Convert before wrap so downstream consumers (makeLocalMatrix
+  // which deg→rad via PI/180) see the correct angle.
+  out.rotation = wrapPi(Math.atan2(dy, dx) * (180 / Math.PI));
   return out;
 }
 

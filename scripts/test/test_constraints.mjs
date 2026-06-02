@@ -135,16 +135,20 @@ function makeProject(targetTransform) {
   assertNear(out.rotation, -1.0, 1e-9, 'COPY_ROTATION invert: target sign flipped');
 }
 
-// ── COPY_ROTATION: result wraps to (-PI, PI] ──
+// ── COPY_ROTATION: result wraps to (-180, 180] (degrees) ──
+// F1-rotation-units (R4) — constraint kernel now operates in degrees
+// (project-wide convention; pre-fix it operated in radians and the
+// renderer's deg→rad conversion at makeLocalMatrix applied PI/180
+// twice — 360x off).
 {
-  const project = makeProject({ rotation: Math.PI - 0.1 });
+  const project = makeProject({ rotation: 175 });
   const con = {
     id: 'cn1', type: 'COPY_ROTATION', name: 'CR',
     payload: { targetId: 'target', mixMode: 'add' },
   };
-  const out = evaluateConstraint(con, { ...id(), rotation: Math.PI - 0.1 }, project);
-  // owner + target = 2*PI - 0.2, wrap → -0.2
-  assertNear(out.rotation, -0.2, 1e-9, 'COPY_ROTATION add: wraps result into (-PI,PI]');
+  const out = evaluateConstraint(con, { ...id(), rotation: 175 }, project);
+  // owner + target = 350, wrap to (-180, 180] → -10
+  assertNear(out.rotation, -10, 1e-9, 'COPY_ROTATION add: wraps result into (-180,180] degrees');
 }
 
 // ── LIMIT_ROTATION: clamp into [min, max] ──
@@ -200,10 +204,11 @@ function makeProject(targetTransform) {
   const out = evaluateConstraint(con, { ...id(), rotation: 1.5 }, project);
   assertNear(out.rotation, 0, 1e-9, 'TRACK_TO: target on +X → rotation 0');
 
-  // Target straight along +Y → rotation = +PI/2.
+  // Target straight along +Y → rotation = 90° (degrees).
+  // F1-rotation-units (R4): atan2 result converted to degrees.
   const projectY = makeProject({ x: 0, y: 10 });
   const outY = evaluateConstraint(con, id(), projectY);
-  assertNear(outY.rotation, Math.PI / 2, 1e-9, 'TRACK_TO: target on +Y → rotation PI/2');
+  assertNear(outY.rotation, 90, 1e-9, 'TRACK_TO: target on +Y → rotation 90°');
 }
 
 // ── TRACK_TO: target at owner position is no-op ──
