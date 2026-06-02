@@ -3,17 +3,18 @@
 /**
  * Service-worker registration + update-toast wiring.
  *
- * Phase A2 PWA (2026-05-09). vite-plugin-pwa's virtual entry
- * `virtual:pwa-register/react` exposes `useRegisterSW`, a hook that
- * returns the update flag + a callback to flush the new SW. We wrap
- * it in a tiny floating toast so the user can opt into updates
- * (registerType: 'prompt' in vite.config.js).
+ * Phase A2 PWA (2026-05-09). vite-plugin-pwa exposes two virtual
+ * entries: `virtual:pwa-register` (callback form) and
+ * `virtual:pwa-register/react` (hook form, `useRegisterSW`). We use the
+ * CALLBACK form because the SW glue then stays out of the React
+ * reconciliation path; the update flag is wrapped in our own React
+ * state inside this component (BUILD-009 docstring fix).
  *
- * Why prompt and not auto-update: a long-running session can be
- * mid-wizard / mid-export when a deploy lands. Auto-update would
- * swap assets out from under in-flight code paths and produce
- * spectacular crashes. Prompt lets the user finish their work,
- * accept the update, and reload cleanly.
+ * registerType: 'prompt' in vite.config.js (not auto-update): a
+ * long-running session can be mid-wizard / mid-export when a deploy
+ * lands. Auto-update would swap assets out from under in-flight code
+ * paths and produce spectacular crashes. Prompt lets the user finish
+ * their work, accept the update, and reload cleanly.
  *
  * @module lib/swRegister
  */
