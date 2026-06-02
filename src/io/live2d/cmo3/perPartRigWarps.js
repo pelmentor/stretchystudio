@@ -110,7 +110,7 @@ export function emitPerPartRigWarps(ctx, opts) {
   // mesh takes when its RigWarp goes missing post-Init-Rig. Filtered logging
   // would have to know the tag spelling (`'front hair'` vs `'front_hair'`
   // vs something else); unfiltered is noisy but unambiguous.
-  let skipped_noTag = 0, skipped_alreadyEmitted = 0, skipped_baked = 0, emitted = 0;
+  let skipped_noTag = 0, skipped_alreadyEmitted = 0, emitted = 0;
 
   for (const pm of perMesh) {
     const m = meshes[pm.mi];
@@ -130,14 +130,23 @@ export function emitPerPartRigWarps(ctx, opts) {
       });
       continue;
     }
-    if (pm.hasBakedKeyforms) {
-      skipped_baked += 1;
-      logger.debug('perPartRigWarps.skip', `pm.hasBakedKeyforms — bone-baked path`, {
-        partId: m.partId, meshName: pm.meshName, tag: m.tag,
-        jointBoneId: m.jointBoneId ?? null,
-      });
-      continue;
-    }
+    // Bug-03 closure (2026-06-02, rigInvariantCheck I-20 trace named the
+    // source): bone-baked parts (handwear) previously skipped rigwarp
+    // emission because per-param keyform variation isn't needed (bone
+    // overlay handles deformation). The skip was over-aggressive: the
+    // rigwarp ALSO serves as a per-part FRAME NORMALIZER — it gives the
+    // part's keyforms a UV [0,1] storage frame (artMeshSourceEmit.js:177
+    // `if (rwBox)` branch) and provides a leaf-cage matching the part's
+    // spatial extent. Without it, bone-baked keyforms are stored in
+    // canvas-px and fed to a body-warp leaf (e.g. BodyXWarp) whose
+    // cubismWarpEval expects UV [0,1] input — corner-zone extrapolation
+    // produced 800x bbox blowup (handwear-l/r 173k×1.26M on 1792
+    // canvas). Emit the rigwarp anyway; the `else` branch at line ~332
+    // produces a single-rest keyform on ParamOpacity[1.0] when no
+    // body-angle binding exists for the tag (handwear has none), so the
+    // emitted rigwarp is an identity frame-normalizer. Bone overlay
+    // still applies post-chain via the always-appended Armature
+    // modifier — bone-driven deformation unchanged.
     emitted += 1;
     logger.debug('perPartRigWarps.emit', `RigWarp_${m.partId}`, {
       partId: m.partId, meshName: pm.meshName, tag: m.tag,
@@ -503,8 +512,8 @@ export function emitPerPartRigWarps(ctx, opts) {
   // BUG-018 — summary line so the user can see at a glance whether the
   // expected emit count matches reality. `skipped_noTag` is the most likely
   // culprit for missing RigWarp_front_hair (mesh.tag not 'front hair').
-  logger.info('perPartRigWarps', `done: ${emitted} emitted, ${skipped_noTag} skip(noTag), ${skipped_alreadyEmitted} skip(alreadyEmitted), ${skipped_baked} skip(baked)`, {
-    emitted, skipped_noTag, skipped_alreadyEmitted, skipped_baked,
+  logger.info('perPartRigWarps', `done: ${emitted} emitted, ${skipped_noTag} skip(noTag), ${skipped_alreadyEmitted} skip(alreadyEmitted)`, {
+    emitted, skipped_noTag, skipped_alreadyEmitted,
     totalMeshes: perMesh.length,
   });
 }
