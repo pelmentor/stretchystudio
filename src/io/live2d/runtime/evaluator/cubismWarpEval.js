@@ -386,33 +386,46 @@ export function evalWarpKernelCubism(grid, gridSize, isQuadTransform, vertsIn, v
       farFieldXY(cache, uAnchor, vEdge, extrVEdgeX);
       farFieldXY(cache, uEdge, vEdge, extrBothX);
 
-      // Build virtual cell — TL is (smaller u, smaller v), etc.
-      // Map the 4 logical positions ((uAnchor, vAnchor), (uEdge, vAnchor),
-      // (uAnchor, vEdge), (uEdge, vEdge)) into TL/TR/BL/BR based on signs.
-      const positions = [
-        { x: cornerX, y: cornerY, u: uAnchor, v: vAnchor },
-        { x: extrUEdgeX[0], y: extrUEdgeX[1], u: uEdge, v: vAnchor },
-        { x: extrVEdgeX[0], y: extrVEdgeX[1], u: uAnchor, v: vEdge },
-        { x: extrBothX[0], y: extrBothX[1], u: uEdge, v: vEdge },
-      ];
-
-      // Find which has min(u,v) → TL, max(u),min(v) → TR, etc.
-      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
-      for (const p of positions) {
-        if (p.u < minU) minU = p.u;
-        if (p.u > maxU) maxU = p.u;
-        if (p.v < minV) minV = p.v;
-        if (p.v > maxV) maxV = p.v;
-      }
-      const find = (uu, vv) => positions.find(p => p.u === uu && p.v === vv);
-      const TL = find(minU, minV);
-      const TR = find(maxU, minV);
-      const BL = find(minU, maxV);
-      const BR = find(maxU, maxV);
-      tlx = TL.x; tly = TL.y;
-      trx = TR.x; try_ = TR.y;
-      blx = BL.x; bly = BL.y;
-      brx = BR.x; bry = BR.y;
+      // CUBISM-PORT-008 (R4) — direct sign-based mapping instead of
+      // building a 4-entry array + 4 find() scans per OOB vertex. The
+      // 4 corners have known TL/TR/BL/BR slots once we sort by
+      // (uClass, vClass) sign. Saves 4 object literals + 4 array scans
+      // per OOB-corner vertex; visible on hand/foot meshes composed
+      // over wide body-warps.
+      //
+      // uAnchor / vAnchor are the inner anchor edge (corner-toward-center),
+      // uEdge / vEdge are the outer near-corner edge. Sign of uClass
+      // tells whether uAnchor is the LEFT (u<uEdge) or RIGHT (u>uEdge)
+      // corner; same for v.
+      const uMinIsAnchor = uAnchor < uEdge;
+      const vMinIsAnchor = vAnchor < vEdge;
+      const minU = uMinIsAnchor ? uAnchor : uEdge;
+      const maxU = uMinIsAnchor ? uEdge   : uAnchor;
+      const minV = vMinIsAnchor ? vAnchor : vEdge;
+      const maxV = vMinIsAnchor ? vEdge   : vAnchor;
+      // Map each (u,v) slot to its computed XY. uAnchor pairs with cornerX/Y
+      // and uEdge pairs with the extrU side; same for v.
+      // (anchor, anchor) = corner; (edge, anchor) = extrU; (anchor, edge) = extrV; (edge, edge) = extrBoth.
+      const TLx = (uMinIsAnchor ? (vMinIsAnchor ? cornerX     : extrVEdgeX[0])
+                                : (vMinIsAnchor ? extrUEdgeX[0] : extrBothX[0]));
+      const TLy = (uMinIsAnchor ? (vMinIsAnchor ? cornerY     : extrVEdgeX[1])
+                                : (vMinIsAnchor ? extrUEdgeX[1] : extrBothX[1]));
+      const TRx = (!uMinIsAnchor ? (vMinIsAnchor ? cornerX     : extrVEdgeX[0])
+                                 : (vMinIsAnchor ? extrUEdgeX[0] : extrBothX[0]));
+      const TRy = (!uMinIsAnchor ? (vMinIsAnchor ? cornerY     : extrVEdgeX[1])
+                                 : (vMinIsAnchor ? extrUEdgeX[1] : extrBothX[1]));
+      const BLx = (uMinIsAnchor ? (!vMinIsAnchor ? cornerX     : extrVEdgeX[0])
+                                : (!vMinIsAnchor ? extrUEdgeX[0] : extrBothX[0]));
+      const BLy = (uMinIsAnchor ? (!vMinIsAnchor ? cornerY     : extrVEdgeX[1])
+                                : (!vMinIsAnchor ? extrUEdgeX[1] : extrBothX[1]));
+      const BRx = (!uMinIsAnchor ? (!vMinIsAnchor ? cornerX     : extrVEdgeX[0])
+                                 : (!vMinIsAnchor ? extrUEdgeX[0] : extrBothX[0]));
+      const BRy = (!uMinIsAnchor ? (!vMinIsAnchor ? cornerY     : extrVEdgeX[1])
+                                 : (!vMinIsAnchor ? extrUEdgeX[1] : extrBothX[1]));
+      tlx = TLx; tly = TLy;
+      trx = TRx; try_ = TRy;
+      blx = BLx; bly = BLy;
+      brx = BRx; bry = BRy;
       du = (u - minU) / (maxU - minU);
       dv = (v - minV) / (maxV - minV);
     }

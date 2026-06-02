@@ -135,12 +135,21 @@ export function kernelRotationSetupProbe(op, ctx) {
  * @param {number} y
  * @param {[number, number]} out
  */
+// CUBISM-PORT-007 (R4) — hoist the per-call Float32Array(2) scratch
+// buffers to module scope. Pre-fix every evalChainAtPoint call (twice
+// per rotation deformer per frame for the FD probe, plus once more on
+// the degenerate branch) allocated two fresh 2-element typed arrays;
+// 30 rotation deformers × 60Hz = ~3600 allocations/second purely for
+// 2-byte scratch. Kernels run single-threaded per tick so the shared
+// buffers are safe.
+const _inBuf = new Float32Array(2);
+const _outBuf = new Float32Array(2);
 function evalChainAtPoint(ctx, startParent, x, y, out) {
   let cx = x, cy = y;
   let cur = startParent;
   let safety = 32;
-  const inBuf = new Float32Array(2);
-  const outBuf = new Float32Array(2);
+  const inBuf = _inBuf;
+  const outBuf = _outBuf;
   const tmp = /** @type {[number, number]} */ ([0, 0]);
   while (cur && safety-- > 0) {
     if (!isChainDeformerNode(cur)) break;
