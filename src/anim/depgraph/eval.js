@@ -142,6 +142,16 @@ const KERNELS = {
  *   keyforms + bindings) from here instead of raw `mesh.runtime`, so
  *   modifier-toggle reprojection (selectRigSpec `needsReproject`) is
  *   honoured. Null → kernel uses `mesh.runtime`.
+ * @property {Set<string>} [artMeshBboxTrace] - I-20 (rigInvariantCheck)
+ *   opt-in: when populated, `kernelArtMeshEval` captures per-step bbox
+ *   for parts whose id is in the set. Used by the framework to re-eval
+ *   I-9 offenders with tracing on, so the offending modifier step gets
+ *   named in the violation log. Diagnostic-only — leave undefined for
+ *   production eval.
+ * @property {Map<string, Array<{label:string, minX:number, minY:number, maxX:number, maxY:number}>>} [artMeshBboxTraceResults] -
+ *   I-20 trace output; populated by `kernelArtMeshEval` when
+ *   `artMeshBboxTrace` is set. Each entry is the per-step bbox trace
+ *   for the matching part.
  */
 
 /**

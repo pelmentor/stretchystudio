@@ -136,6 +136,18 @@
  *         bone-skin kernel calls, so the matrix we inspect IS the
  *         matrix applied to vertices.
  *
+ *   I-20 — Per-step ART_MESH_EVAL bbox trace for I-9 offenders.
+ *         Diagnostic-only: when I-9 fires on a part, re-eval the
+ *         depgraph with `ctx.artMeshBboxTrace = Set([partId])` and
+ *         `kernelArtMeshEval` captures bbox(bufA) BEFORE the modifier
+ *         loop + AFTER each modifier step + AFTER bone-skin. The
+ *         per-step bbox lines tell us EXACTLY which modifier blows up
+ *         the part's verts. Pinpoints chain-composition bugs that
+ *         I-14..I-19 can't catch — e.g. a warp-lift kernel producing
+ *         corrupt output, an unexpected modifier in the stack, or a
+ *         vertex-frame mismatch at the keyform-blend boundary. Only
+ *         runs when I-9 already fired; no overhead on clean rigs.
+ *
  * Returns a summary object so callers can also assert programmatically
  * (used by the framework's own unit tests).
  *
@@ -661,6 +673,53 @@ export function runRigInvariantChecks(project) {
     }
   } catch (err) {
     logger.warn('rigInvariantCheck', `I-8/I-9/I-15 skipped — depgraph eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+  }
+
+  // ─── I-20 — per-step ART_MESH_EVAL bbox trace for I-9 offenders ───
+  // When I-9 fires on a part, the chain composition is opaque — we know
+  // the FINAL bbox is huge but not WHICH MODIFIER in the stack produced
+  // the blowup. I-20 re-runs depgraph eval with `ctx.artMeshBboxTrace`
+  // populated for every I-9 offender, then the artMesh kernel captures
+  // bbox(bufA) before the loop + after each modifier step + after bone
+  // skin. We log per-step bbox so the offending step is named.
+  //
+  // Doubles eval cost when triggered, but only fires after I-9 already
+  // detected breakage — diagnostic-only path, never on a clean rig.
+  // The trace itself is opt-in inside kernelArtMeshEval — no overhead
+  // on the steady-state hot path.
+  const i9Offenders = summary.violations
+    .filter((v) => v.invariant === 'I-9')
+    .map((v) => v.id);
+  if (i9Offenders.length > 0) {
+    try {
+      const traceSet = new Set(i9Offenders);
+      const graph2 = buildDepGraph(project, {});
+      const ctx2 = evalDepGraph(graph2, {
+        project,
+        timeMs: 0,
+        paramOverrides: new Map(),
+        action: null,
+        artMeshBboxTrace: traceSet,
+      });
+      const results = ctx2.artMeshBboxTraceResults;
+      if (results instanceof Map) {
+        for (const partId of i9Offenders) {
+          const trace = results.get(partId);
+          if (!Array.isArray(trace) || trace.length === 0) continue;
+          const partNode = byId.get(partId);
+          const partName = partNode?.name ?? partId;
+          for (let s = 0; s < trace.length; s++) {
+            const step = trace[s];
+            const ex = Number.isFinite(step.minX) ? step.maxX - step.minX : NaN;
+            const ey = Number.isFinite(step.minY) ? step.maxY - step.minY : NaN;
+            violate('I-20', partId, partName,
+              `step[${s}] "${step.label}" — bbox ${Number.isFinite(ex) ? ex.toFixed(0) : 'NaN'}×${Number.isFinite(ey) ? ey.toFixed(0) : 'NaN'}, range=[${Number.isFinite(step.minX) ? step.minX.toFixed(0) : 'NaN'},${Number.isFinite(step.minY) ? step.minY.toFixed(0) : 'NaN'}]→[${Number.isFinite(step.maxX) ? step.maxX.toFixed(0) : 'NaN'},${Number.isFinite(step.maxY) ? step.maxY.toFixed(0) : 'NaN'}]`);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn('rigInvariantCheck', `I-20 trace skipped — re-eval threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
+    }
   }
 
   // ─── I-19 — EVAL-TIME bone WORLD matrix magnitude (chain product) ──

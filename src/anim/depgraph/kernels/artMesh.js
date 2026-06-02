@@ -118,6 +118,27 @@ export function kernelArtMeshEval(op, ctx) {
   let bufA = meshState.vertexPositions;
   const tmp = /** @type {[number, number]} */ ([0, 0]);
 
+  // I-20 (rigInvariantCheck) opt-in per-step bbox trace: when the part's
+  // id is in ctx.artMeshBboxTrace, capture bbox(bufA) before the loop and
+  // after each modifier step plus the final bone-skin step. Allows the
+  // framework to pinpoint WHICH step blows up a part's verts when I-9
+  // fires (chain composition mystery). No allocations on the hot path
+  // when the flag isn't set.
+  const traceEnabled = ctx.artMeshBboxTrace instanceof Set && ctx.artMeshBboxTrace.has(partId);
+  /** @type {Array<{label:string, minX:number, minY:number, maxX:number, maxY:number}>|null} */
+  const trace = traceEnabled ? [] : null;
+  const captureBbox = (label) => {
+    if (!trace) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < len; i += 2) {
+      const x = bufA[i], y = bufA[i + 1];
+      if (Number.isFinite(x)) { if (x < minX) minX = x; if (x > maxX) maxX = x; }
+      if (Number.isFinite(y)) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    trace.push({ label, minX, minY, maxX, maxY });
+  };
+  captureBbox('post-keyform-blend');
+
   const stack = Array.isArray(part.modifiers) ? part.modifiers : [];
   // Per-modifier display gate. The eye icon toggles `mode & MODE_REALTIME`
   // (viewport display); the ✓/× button toggles `enabled`. `isModifierEnabled`
@@ -204,6 +225,7 @@ export function kernelArtMeshEval(op, ctx) {
           bufA, bufB, len >> 1,
         );
         const swap = bufA; bufA = bufB; bufB = swap;
+        captureBbox(`mod[${i}] warp-lifted (deformerId=${deformerId})`);
         // Lifted grid output IS canvas-px; chain collapses.
         break;
       }
@@ -217,6 +239,7 @@ export function kernelArtMeshEval(op, ctx) {
           bufA, bufB, len >> 1,
         );
         const swap = bufA; bufA = bufB; bufB = swap;
+        captureBbox(`mod[${i}] warp-unlifted (deformerId=${deformerId})`);
       }
     } else if (mod.type === 'rotation') {
       // Global MATRIX_BUILD bakes the rotation's canvas-final pivot
@@ -243,6 +266,7 @@ export function kernelArtMeshEval(op, ctx) {
         bufB[v + 1] = tmp[1];
       }
       const swap = bufA; bufA = bufB; bufB = swap;
+      captureBbox(`mod[${i}] rotation (deformerId=${deformerId}, isCanvasFinal=${!!matState.isCanvasFinal})`);
       if (matState.isCanvasFinal) break;
     }
     // Armature modifiers fall through here intentionally. Bone
@@ -272,6 +296,12 @@ export function kernelArtMeshEval(op, ctx) {
     ctx._artMeshBoneWorldCache = boneWorldCache;
   }
   applyBonePostChainSkin(part, part.mesh ?? null, bufA, ctx, byId, boneWorldCache);
+  captureBbox('post-applyBonePostChainSkin');
+
+  if (trace) {
+    if (!ctx.artMeshBboxTraceResults) ctx.artMeshBboxTraceResults = new Map();
+    ctx.artMeshBboxTraceResults.set(partId, trace);
+  }
 
   return {
     id: partId,
