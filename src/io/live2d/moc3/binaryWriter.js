@@ -32,7 +32,20 @@ export class BinaryWriter {
   writeI16(v) { const b = new ArrayBuffer(2); new DataView(b).setInt16(0, v, true); this._pushBytes(b); }
   writeI32(v) { const b = new ArrayBuffer(4); new DataView(b).setInt32(0, v, true); this._pushBytes(b); }
   writeU32(v) { const b = new ArrayBuffer(4); new DataView(b).setUint32(0, v, true); this._pushBytes(b); }
-  writeF32(v) { const b = new ArrayBuffer(4); new DataView(b).setFloat32(0, v, true); this._pushBytes(b); }
+  /**
+   * F6 — per RULE-№1 + [[typeof-nan-is-number]]: NaN / Infinity at the
+   * writer means an upstream emitter dropped a non-finite value into the
+   * .moc3 vertex / keyform stream. Cubism would accept the bytes and
+   * render collapsed-to-origin geometry — exactly the 2026-05-25 Shelby
+   * invisible-bones class. Surface the bad emitter site loudly instead
+   * of corrupting the export.
+   */
+  writeF32(v) {
+    if (!Number.isFinite(v)) {
+      throw new Error(`BinaryWriter.writeF32: non-finite value at pos=${this._buf.length} (got ${v})`);
+    }
+    const b = new ArrayBuffer(4); new DataView(b).setFloat32(0, v, true); this._pushBytes(b);
+  }
 
   writeI32Array(vals)  { for (const v of vals) this.writeI32(v); }
   writeU32Array(vals)  { for (const v of vals) this.writeU32(v); }
