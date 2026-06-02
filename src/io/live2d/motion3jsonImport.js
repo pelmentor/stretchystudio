@@ -102,8 +102,25 @@ export function parseMotion3Json(jsonText, opts) {
 
   const meta = doc.Meta ?? {};
   const fps = numOr(meta.Fps, 24);
-  const durationSec = numOr(meta.Duration, 2);
-  const durationMs = Math.max(1, Math.round(durationSec * 1000));
+  // L2D-JSON-09 — pre-fix `Math.max(1, Math.round(durationSec * 1000))`
+  // silently clamped 0 / negative / NaN durations to 1ms, leaving every
+  // keyform clipped past the end of the action. Reject negative; warn
+  // on missing/non-finite/0; if recoverable, infer from the largest
+  // decoded keyform time below.
+  const rawDuration = meta.Duration;
+  if (Number.isFinite(rawDuration) && rawDuration < 0) {
+    throw new Error(`motion3.json: negative Meta.Duration (${rawDuration}) — refusing to import`);
+  }
+  const haveValidDuration = Number.isFinite(rawDuration) && rawDuration > 0;
+  if (!haveValidDuration) {
+    // Defer durationMs computation until after we've decoded keyforms;
+    // infer from largest keyform.time below.
+  }
+  /** @type {string[]} */
+  const _earlyWarnings = [];
+  if (!haveValidDuration) {
+    _earlyWarnings.push(`Meta.Duration missing or ≤0 (got ${String(rawDuration)}) — inferring from keyform times`);
+  }
   // Slice 3.D — Loop ↔ Cycles symmetry. Cubism loop intent imports as a
   // head-of-stack Cycles FModifier on every fcurve so the re-export gate
   // (`actionHasUniformLoopingCycles` in motion3json.js) sees the signal.
@@ -150,6 +167,27 @@ export function parseMotion3Json(jsonText, opts) {
       warnings.push(`Curve "${id}": unknown Target "${target}", skipped`);
     }
   }
+
+  // L2D-JSON-09 — finalize durationMs. If Meta.Duration was usable, use
+  // it; otherwise infer from the largest decoded keyform time across all
+  // accepted fcurves, then round up to a whole second (matches Cubism
+  // Editor's behaviour of stretching the loop to a tidy boundary).
+  let durationMs;
+  if (haveValidDuration) {
+    durationMs = Math.round(rawDuration * 1000);
+  } else {
+    let maxKeyformTime = 0;
+    for (const fc of fcurves) {
+      for (const k of (fc.keyforms ?? [])) {
+        if (Number.isFinite(k.time) && k.time > maxKeyformTime) maxKeyformTime = k.time;
+      }
+    }
+    durationMs = Math.max(1000, Math.ceil(maxKeyformTime / 1000) * 1000);
+    _earlyWarnings.push(`inferred durationMs=${durationMs} from max keyform time ${maxKeyformTime}`);
+  }
+  // Prepend the deferred Duration warnings so they show first in the
+  // caller's diagnostic.
+  warnings.unshift(..._earlyWarnings);
 
   const action = {
     id: opts.uid(),

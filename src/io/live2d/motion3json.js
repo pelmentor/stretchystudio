@@ -105,9 +105,20 @@ import { logger } from '../../lib/logger.js';
  */
 export function generateMotion3Json(action, opts = {}) {
   const { parameterMap = new Map() } = opts;
-  const durationMs = action.duration ?? 2000;
+  // L2D-JSON-08 — per RULE-№1: an action missing duration/fps is an
+  // invariant violation (post-v36 every action carries both via
+  // buildAction). Silent 2000ms/24fps substitution would mask the source
+  // bug AND write a 2-second Loop boundary into Meta, mangling
+  // playback for a 30-second action.
+  if (!Number.isFinite(action?.duration)) {
+    throw new Error(`generateMotion3Json: action "${action?.id}" missing finite duration (got ${String(action?.duration)})`);
+  }
+  if (!Number.isFinite(action?.fps)) {
+    throw new Error(`generateMotion3Json: action "${action?.id}" missing finite fps (got ${String(action?.fps)})`);
+  }
+  const durationMs = action.duration;
   const durationSec = durationMs / 1000;
-  const fps = action.fps ?? 24;
+  const fps = action.fps;
 
   // 3.D — Cycles → IsLoop. `loop=true` requires a uniform head-of-stack
   // Cycles modifier on every fcurve; otherwise per-fcurve bake handles
