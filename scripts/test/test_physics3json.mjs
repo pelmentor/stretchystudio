@@ -103,15 +103,18 @@ function makeRule(overrides = {}) {
   }
   passed++;
 
-  // Unknown type defaults to 'Angle'
+  // L2D-JSON-03 (2026-06-02 R3) — unknown Input.type is now DROPPED with
+  // a logger.warn instead of silently coerced to 'Angle' (which would
+  // drive the wrong physical channel). The single-input rule below ends
+  // up with zero valid inputs and is therefore dropped entirely.
   const r = generatePhysics3Json({
     paramDefs: [{ id: 'ParamAngleZ' }, { id: 'ParamHairFront' }],
     rules: [makeRule({
       inputs: [{ paramId: 'ParamAngleZ', weight: 50, type: 'BANANA' }],
     })],
   });
-  assert(r.PhysicsSettings[0].Input[0].Type === 'Angle',
-    'type: unknown → Angle default');
+  assert(r.PhysicsSettings.length === 0,
+    'L2D-JSON-03: rule with only unknown input type is dropped');
 }
 
 // ── Reflect (isReverse) ───────────────────────────────────────────
