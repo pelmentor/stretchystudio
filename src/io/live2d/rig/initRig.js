@@ -44,7 +44,7 @@ import { resolveAutoRigConfig } from './autoRigConfig.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
 import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
-import { evalRig } from '../runtime/evaluator/chainEval.js';
+import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
 import { getBoneRole } from '../../../store/objectDataAccess.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
@@ -640,16 +640,26 @@ export async function initializeRigFromProject(project, images = new Map()) {
 
   // PP2-005b — identity-divergence diagnostic. The user's complaint is
   // that some parts visibly shift after Init Rig (hair sways/tilts
-  // under no params, eyes drop, etc). Run evalRig once at default
-  // params and compare each rig-driven art mesh's output vs its
-  // `verticesCanvas` source. Anything > 1px is real divergence.
-  // Logged per-part so the next user repro names the offender.
-  // Originally gated on disabled subsystems; now runs unconditionally
-  // so any visible rest-pose shift surfaces in the Logs panel without
-  // having to toggle a subsystem first.
+  // under no params, eyes drop, etc). Run the depgraph (sole viewport
+  // engine since Phase 7 close-out) once at default params and compare
+  // each rig-driven art mesh's output vs its `verticesCanvas` source.
+  // Anything > 1px is real divergence. Logged per-part so the next user
+  // repro names the offender. Originally gated on disabled subsystems;
+  // now runs unconditionally so any visible rest-pose shift surfaces in
+  // the Logs panel without having to toggle a subsystem first.
+  //
+  // Engine port 2026-05-26: was `evalRig(rs, {})` (chainEval), now
+  // `evalProjectFrameViaDepgraph(project, {}, { rigSpec: rs })`. chainEval
+  // is retained ONLY for the `scripts/cubism_oracle/*.mjs` byte-fidelity
+  // harness; production code paths (Init Rig, Apply Armature, viewport
+  // tick) consume depgraph output exclusively per RULE-№2 (no migration
+  // baggage in production). The `rigSpec` option is REQUIRED so
+  // selectRigSpec's modifier-toggle reprojection fires; without it the
+  // raw `mesh.runtime` cache is in the baked leaf frame and toggled-off
+  // modifiers land verts in the wrong space.
   if (rs && Array.isArray(rs.artMeshes) && rs.artMeshes.length > 0) {
     try {
-      const frames = evalRig(rs, {});
+      const frames = evalProjectFrameViaDepgraph(project, {}, { rigSpec: rs });
       const meshById = new Map(rs.artMeshes.map((m) => [m.id, m]));
       /** @type {Array<{partId:string, name:string, maxDelta:number}>} */
       const offenders = [];

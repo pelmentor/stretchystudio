@@ -10,13 +10,13 @@
  * (`reference/blender/source/blender/modifiers/intern/MOD_armature.cc:115`).
  *
  * **Semantics.** Apply takes whatever the viewport currently shows for
- * the part — i.e. the full eval pipeline output: chainEval(rig,
- * paramValues) producing canvas-px verts, then two-bone LBS on top
- * — and writes the result into `mesh.vertices`. The Armature modifier
- * entry is then removed from `node.modifiers[]`. After Apply, the
- * part is no longer skinned to the armature; its rest geometry IS
- * the previously-deformed geometry. Mirrors Blender's behaviour: the
- * Armature modifier dropdown → Apply bakes the deformation
+ * the part — i.e. the full eval pipeline output: depgraph
+ * (`evalProjectFrameViaDepgraph`) producing canvas-px verts, then
+ * two-bone LBS on top — and writes the result into `mesh.vertices`.
+ * The Armature modifier entry is then removed from `node.modifiers[]`.
+ * After Apply, the part is no longer skinned to the armature; its rest
+ * geometry IS the previously-deformed geometry. Mirrors Blender's
+ * behaviour: the Armature modifier dropdown → Apply bakes the deformation
  * permanently and removes the modifier.
  *
  * **Composes with the SS workflow.** Typical sequence (from the user's
@@ -37,7 +37,7 @@
 import { useProjectStore } from '../store/projectStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
-import { evalRig } from '../io/live2d/runtime/evaluator/chainEval.js';
+import { evalProjectFrameViaDepgraph } from '../anim/depgraph/evalProjectFrame.js';
 import {
   computeBoneWorldMatrices,
   computeBoneParentMap,
@@ -84,16 +84,27 @@ export function applyArmatureModifier(partId) {
     return { baked: false, vertCount: 0, reason: 'missing-or-short-boneWeights' };
   }
 
-  // Run a one-shot evalRig with current paramValues so the bake
+  // Run a one-shot depgraph eval with current paramValues so the bake
   // captures any baked-keyform deformation under
   // `ParamRotation_<bone>` etc. — not just the rest geometry. For
-  // the common case (slider at 0) chainEval's output equals the rest
+  // the common case (slider at 0) depgraph's output equals the rest
   // verts and the bake reduces to LBS-of-rest.
+  //
+  // Engine port 2026-05-26: was `evalRig(rigSpec, paramValues)`
+  // (chainEval); now `evalProjectFrameViaDepgraph` (the sole viewport
+  // engine since Phase 7 close-out). chainEval is retained only for the
+  // `scripts/cubism_oracle/*.mjs` byte-fidelity harness; production
+  // Apply-Armature must consume depgraph output so the bake matches
+  // what the user sees in the viewport (Blender's `modifier_apply_obdata`
+  // semantics: Apply takes what the viewport shows). The `rigSpec`
+  // option is REQUIRED so selectRigSpec's modifier-toggle reprojection
+  // fires (otherwise depgraph reads raw `mesh.runtime` in baked leaf
+  // frame and toggled-off modifiers land verts wrong).
   const rigSpec = selectRigSpec(project);
   const paramValues = useParamValuesStore.getState().values ?? {};
   let baseVerts;
   if (rigSpec && Array.isArray(rigSpec.artMeshes) && rigSpec.artMeshes.length > 0) {
-    const frames = evalRig(rigSpec, paramValues);
+    const frames = evalProjectFrameViaDepgraph(project, paramValues, { rigSpec });
     const frame = frames.find((f) => f.id === partId) ?? null;
     if (frame && Array.isArray(frame.vertexPositions) && frame.vertexPositions.length === restVerts.length * 2) {
       baseVerts = new Array(restVerts.length);

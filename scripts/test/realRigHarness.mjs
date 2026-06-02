@@ -16,7 +16,6 @@
 // `frames` here and they're grounded in real-pipeline coordinates.
 
 import { generateCmo3 } from '../../src/io/live2d/cmo3writer.js';
-import { evalRig } from '../../src/io/live2d/runtime/evaluator/chainEval.js';
 import { rotationSpecToDeformerNode, upsertDeformerNode, synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
 import { persistArtMeshRuntime } from '../../src/store/artMeshRuntimeSync.js';
 import { seedBodyWarpChain } from '../../src/io/live2d/rig/bodyWarpStore.js';
@@ -85,16 +84,6 @@ export function toGeneratorInput(project) {
 export async function harvestRealRig(project) {
   const result = await generateCmo3(toGeneratorInput(project));
   return result.rigSpec;
-}
-
-/**
- * Evaluate a real rigSpec via chainEval (the export/runtime engine).
- * @param {object} rigSpec
- * @param {Object<string, number>} [params]
- * @returns {Array<{id:string, vertexPositions:Float32Array}>}
- */
-export function evalRigSpec(rigSpec, params = {}) {
-  return evalRig(rigSpec, params);
 }
 
 /** artMesh entry for a part id, or null. */

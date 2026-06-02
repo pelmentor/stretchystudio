@@ -70,7 +70,7 @@
  *
  *   I-14 — STATIC bone world matrix translation magnitude. Runs
  *         `computeWorldMatrices` (the same algebra Blender's depsgraph
- *         and our chainEval use pre-constraints) and asserts each
+ *         uses pre-constraints) and asserts each
  *         bone's resulting WORLD matrix translation (`m[6], m[7]`) is
  *         within `10 × max(canvas)`. Catches stored-data pollution
  *         that combines pivot + pose + parent chain in ways the

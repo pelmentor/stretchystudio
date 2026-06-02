@@ -26,16 +26,15 @@ const chain = pkg.scripts?.test ?? '';
 const planDoc = readFileSync(join(repoRoot, 'docs/plans/TOOLSET_BLENDER_PARITY_PLAN.md'), 'utf8');
 const closeoutDoc = readFileSync(join(repoRoot, 'docs/plans/SESSION_CLOSEOUT_2026_05_11_PHASE7D.md'), 'utf8');
 
-// ── G-1: typedArrayPool + spatialHash wired into npm test chain ─────────────
+// ── G-1: spatialHash wired into npm test chain ─────────────
+// (G-1a/G-1c originally pinned `test:typedArrayPool` to run right after
+// `test:chainEval`; both tests were retired 2026-05-26 alongside the
+// chainEval engine itself — see [[chainEval-retirement-2026-05-26]] /
+// `scripts/test/realRigHarness.mjs`'s docstring. Only the spatialHash
+// insertion-point assertion survives.)
 {
-  assert(/npm run test:typedArrayPool\b/.test(chain),
-    'G-1a: chain invokes test:typedArrayPool');
   assert(/npm run test:spatialHash\b/.test(chain),
     'G-1b: chain invokes test:spatialHash');
-  // Insertion-point sanity: typedArrayPool right after chainEval; spatialHash
-  // right after meshSample.
-  assert(chain.includes('test:chainEval && npm run test:typedArrayPool'),
-    'G-1c: typedArrayPool inserted right after chainEval');
   assert(chain.includes('test:meshSample && npm run test:spatialHash'),
     'G-1d: spatialHash inserted right after meshSample');
 }

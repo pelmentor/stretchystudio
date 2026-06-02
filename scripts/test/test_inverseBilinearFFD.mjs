@@ -12,8 +12,47 @@
 //
 // Run: node scripts/test/test_inverseBilinearFFD.mjs
 
-import { bilinearFFD } from '../../src/io/live2d/runtime/evaluator/warpEval.js';
 import { inverseBilinearFFD, inverseBilinearCell } from '../../src/io/live2d/runtime/evaluator/inverseBilinearFFD.js';
+
+/**
+ * Plain bilinear FFD — inlined here after `warpEval.js` was retired
+ * with the rest of the chainEval engine (2026-05-26). Used ONLY as
+ * the forward operation against which `inverseBilinearFFD` is
+ * cross-validated. Production code uses `cubismWarpEval.evalWarpKernelCubism`
+ * for actual warp evaluation (matches Cubism's triangle-split semantics
+ * when `isQuadTransform=false`).
+ *
+ * @param {Float64Array} grid - flat `(cols+1)*(rows+1)*2` control points
+ * @param {{rows: number, cols: number}} gridSize
+ * @param {number} u - normalized [0..1]
+ * @param {number} v - normalized [0..1]
+ * @returns {[number, number]} canvas-px output point
+ */
+function bilinearFFD(grid, gridSize, u, v) {
+  const cols = gridSize.cols;
+  const rows = gridSize.rows;
+  let cu = Math.floor(u * cols);
+  let cv = Math.floor(v * rows);
+  if (cu >= cols) cu = cols - 1;
+  if (cv >= rows) cv = rows - 1;
+  if (cu < 0) cu = 0;
+  if (cv < 0) cv = 0;
+  const fu = u * cols - cu;
+  const fv = v * rows - cv;
+  const stride = cols + 1;
+  const i00 = (cv * stride + cu) * 2;
+  const i10 = (cv * stride + cu + 1) * 2;
+  const i01 = ((cv + 1) * stride + cu) * 2;
+  const i11 = ((cv + 1) * stride + cu + 1) * 2;
+  const w00 = (1 - fu) * (1 - fv);
+  const w10 = fu * (1 - fv);
+  const w01 = (1 - fu) * fv;
+  const w11 = fu * fv;
+  return [
+    w00 * grid[i00] + w10 * grid[i10] + w01 * grid[i01] + w11 * grid[i11],
+    w00 * grid[i00 + 1] + w10 * grid[i10 + 1] + w01 * grid[i01 + 1] + w11 * grid[i11 + 1],
+  ];
+}
 
 let passed = 0;
 let failed = 0;
