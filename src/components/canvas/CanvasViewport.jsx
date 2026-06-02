@@ -469,6 +469,19 @@ export default function CanvasViewport({
         if (!isUploaded || sourceChanged) {
           const sourceToUpload = texEntry.source;
           const img = new Image();
+          // MEM-05 — poison the retry by recording the source as
+          // attempted; without this, a failed decode would re-fire on
+          // every project mutation (deps include project.nodes +
+          // versionControl.textureVersion) since lastUploadedSourcesRef
+          // never advances.
+          img.onerror = (err) => {
+            logger.warn('viewportGL', `texture decode failed for ${node.id}`, {
+              partId: node.id,
+              source: sourceToUpload,
+              err: String(err),
+            });
+            lastUploadedSourcesRef.current.set(node.id, sourceToUpload);
+          };
           img.onload = () => {
             // Check if node still exists and still lacks texture or source changed (concurrency)
             if (sceneRef.current?.parts) {
@@ -1703,7 +1716,16 @@ export default function CanvasViewport({
       // auto-meshed (at wizard finalize → autoMeshAllParts).
       imageDataMapRef.current.delete(partId);
     }).catch((err) => {
-      console.error('[MeshWorker]', err);
+      // WORKER-003 — surface the worker failure via logger.error so it
+      // lands in the in-app Logs panel; clear the stale seq entry so
+      // a retry path is consistent. Pre-fix a bare console.error left
+      // the part with its old mesh silently + accumulating stale seqs
+      // in meshDispatchSeqRef every session.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error('meshWorker', `mesh worker failed for ${partId}: ${errMsg}`, {
+        partId, err: errMsg,
+      });
+      meshDispatchSeqRef.current.delete(partId);
     });
   }, [updateProject]);
 
@@ -1717,6 +1739,14 @@ export default function CanvasViewport({
     if (!tex) return;
 
     const img = new Image();
+    img.onerror = (err) => {
+      // WORKER-006 — surface the failure so a missing/corrupt PNG does
+      // not look like a successful no-op (remeshPart never updates the
+      // mesh otherwise).
+      logger.error('remeshPart', `texture decode failed for ${partId}`, {
+        partId, source: tex.source, err: String(err),
+      });
+    };
     img.onload = () => {
       const off = document.createElement('canvas');
       off.width = img.width; off.height = img.height;
@@ -1758,6 +1788,14 @@ export default function CanvasViewport({
   const importPng = useCallback((file) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
+    img.onerror = (err) => {
+      // WORKER-006 — surface the decode failure and revoke the blob
+      // URL so a corrupt PNG does not leak a blob for the session.
+      logger.error('importPng', `PNG decode failed: ${file.name}`, {
+        file: file.name, err: String(err),
+      });
+      URL.revokeObjectURL(url);
+    };
     img.onload = () => {
       const partId = uid();
       const off = document.createElement('canvas');
@@ -1943,6 +1981,13 @@ export default function CanvasViewport({
     for (const c of composited) {
       const partId = partIds[c.layerIndex];
       const img2 = new Image();
+      img2.onerror = (err) => {
+        // WORKER-006 — psdImport worst case: failing composited PNG
+        // would otherwise leave the GPU mesh unset with no log.
+        logger.error('psdImport', `composited PNG decode failed for ${partId}`, {
+          partId, err: String(err),
+        });
+      };
       img2.onload = () => {
         const scene = sceneRef.current;
         if (scene) {
@@ -1986,17 +2031,25 @@ export default function CanvasViewport({
 
   /* ── Save/Load project ────────────────────────────────────────────────── */
   const handleSave = useCallback(async () => {
+    let url = null;
     try {
       const { saveProject } = await import('@/io/projectFile');
       const blob = await saveProject(projectRef.current);
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'project.stretch';
       a.click();
-      URL.revokeObjectURL(url);
+      // MEM-09 — synchronous revoke after a.click() can race the download
+      // on slow systems (Chrome can abort because the URL is gone before
+      // the browser captures the bytes). Match the 1.5s delay used by
+      // ExportModal.jsx + SaveModal.jsx.
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* */ } }, 1500);
     } catch (err) {
-      console.error('Failed to save project:', err);
+      // Defensive: if saveProject threw after createObjectURL but
+      // before click(), still revoke so the blob does not leak.
+      if (url) { try { URL.revokeObjectURL(url); } catch { /* */ } }
+      logger.error('saveProject', `Failed to save project: ${err?.message ?? err}`, { err: String(err) });
     }
   }, []);
 

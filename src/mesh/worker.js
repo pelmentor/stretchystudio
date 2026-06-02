@@ -29,6 +29,11 @@ self.onmessage = function (e) {
     }, [result.uvs.buffer]); // Transfer the Float32Array buffer
 
   } catch (err) {
-    self.postMessage({ ok: false, error: err.message });
+    // WORKER-008 — `err.message` is undefined for non-Error throws
+    // (some triangulation libs throw arrays/strings). Match
+    // psd.worker.js / psdFinalize.worker.js safer pattern so the pool
+    // rejects with a real message instead of `undefined ?? fallback`.
+    const message = err && err.message ? err.message : String(err);
+    self.postMessage({ ok: false, error: message, stack: err && err.stack ? err.stack : undefined });
   }
 };
