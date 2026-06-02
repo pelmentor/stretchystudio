@@ -355,6 +355,14 @@ function buildDriverRelations(graph, project, opts) {
  */
 function buildDeformerChainRelations(graph, project, opts) {
   const paramComp = graph.findIdNode(PARAM_ID_REF, 'params')?.findComponent(NodeType.PARAMETERS);
+  // DEPGRAPH-BUILD-03 — index once. Pre-fix the ancestor-walk Array.find
+  // ran per-deformer × chain-depth, an O(N×N×D) build cost on every
+  // depgraph rebuild. With graph build now memoized this matters less,
+  // but cmo3 import / project mutation still rebuilds — keep the index.
+  const nodesById = new Map();
+  for (const n of project.nodes ?? []) {
+    if (n?.id) nodesById.set(n.id, n);
+  }
   for (const node of project.nodes ?? []) {
     if (!isChainDeformerNode(node)) continue;
     const defId = graph.findIdNode(node.id, 'deformer');
@@ -420,7 +428,7 @@ function buildDeformerChainRelations(graph, project, opts) {
         let cursorId = typeof node.parent === 'string' ? node.parent : null;
         let safety = 32;
         while (cursorId && safety-- > 0) {
-          const ancestor = project.nodes?.find((n) => n?.id === cursorId);
+          const ancestor = nodesById.get(cursorId);
           if (!isChainDeformerNode(ancestor)) break;
           const ancestorIdNode = graph.findIdNode(cursorId, 'deformer');
           const ancestorGeom = ancestorIdNode?.findComponent(NodeType.GEOMETRY);
@@ -468,6 +476,12 @@ function buildDeformerChainRelations(graph, project, opts) {
  * geometry component's GEOMETRY_EVAL.
  */
 function buildPartModifierRelations(graph, project, opts) {
+  // DEPGRAPH-BUILD-03 — index once. Used by the addBoneAndAncestors walk
+  // below; pre-fix it scanned project.nodes per part × chain-depth.
+  const nodesById = new Map();
+  for (const n of project.nodes ?? []) {
+    if (n?.id) nodesById.set(n.id, n);
+  }
   for (const part of project.nodes ?? []) {
     if (!part || part.type !== 'part') continue;
     const partId = graph.findIdNode(part.id, 'part');
@@ -557,7 +571,7 @@ function buildPartModifierRelations(graph, project, opts) {
         let safety = 32;
         while (cur && safety-- > 0) {
           if (seenBoneIds.has(cur)) break;
-          const node = project.nodes?.find((n) => n?.id === cur);
+          const node = nodesById.get(cur);
           if (!node) break;
           if (node.type !== 'group' || !node.boneRole) {
             // Walk up through visual folders without recording them.
