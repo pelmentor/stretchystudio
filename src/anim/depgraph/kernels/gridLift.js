@@ -58,12 +58,6 @@ export function kernelGridLiftToParent(op, ctx) {
   const deformerId = idNode.idRef;
   const def = ctx.project?.nodes?.find((n) => n?.id === deformerId);
   if (!isWarpLatticeNode(def)) return null;
-  // BUG-04 diagnostic 2026-06-02: surface lifted bbox for body warps + face
-  // warps so the next user re-run reveals whether the lifted grids are in
-  // expected canvas-px range. Wrapped to fire once at the END (after the
-  // bbox is computed), so logging the return value is the right place.
-  const _diagId = def?.id;
-  const _shouldLogBbox = _diagId === 'BodyXWarp' || _diagId === 'FaceParallaxWarp' || _diagId === 'BreathWarp' || _diagId === 'BodyWarpZ';
 
   // Read this warp's per-frame keyform state (the un-lifted grid).
   const keyformOp = op.owner.findOperation(OperationCode.KEYFORM_EVAL);
@@ -77,7 +71,7 @@ export function kernelGridLiftToParent(op, ctx) {
 
   // Root / non-deformer parent: grid is already canvas-px (warp.localFrame === 'canvas-px').
   if (!def.parent || typeof def.parent !== 'string') {
-    return makeLiftedResultWithDiag(grid, gridSize, state.isQuadTransform === true, _diagId, _shouldLogBbox);
+    return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
   }
   const parentId = def.parent;
   const parentNode = ctx.project?.nodes?.find((n) => n?.id === parentId);
@@ -94,11 +88,11 @@ export function kernelGridLiftToParent(op, ctx) {
   if (parentNode == null) {
     logger.error('gridLift',
       `warp "${def.id ?? '?'}" references parent id="${parentId}" but no node with that id exists in project.nodes — dangling reference, likely an orphaned/dropped deformer. Returning un-lifted grid; result will be in this warp's deformer-local frame, NOT canvas-px. Fix the orphan-prune step so parents of warp/rotation nodes are preserved`);
-    return makeLiftedResultWithDiag(grid, gridSize, state.isQuadTransform === true, _diagId, _shouldLogBbox);
+    return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
   }
   if (!isChainDeformerNode(parentNode)) {
     // Parent is a part/group — treat as canvas-px passthrough.
-    return makeLiftedResultWithDiag(grid, gridSize, state.isQuadTransform === true, _diagId, _shouldLogBbox);
+    return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
   }
 
   // Walk parent chain.
@@ -152,7 +146,7 @@ export function kernelGridLiftToParent(op, ctx) {
     break;
   }
 
-  return makeLiftedResultWithDiag(positions, gridSize, state.isQuadTransform === true, _diagId, _shouldLogBbox);
+  return makeLiftedResult(positions, gridSize, state.isQuadTransform === true);
 }
 
 /**
@@ -160,15 +154,6 @@ export function kernelGridLiftToParent(op, ctx) {
  * @param {{rows: number, cols: number}} gridSize
  * @param {boolean} isQuad
  */
-function makeLiftedResultWithDiag(positions, gridSize, isQuad, deformerId, shouldLog) {
-  const r = makeLiftedResult(positions, gridSize, isQuad);
-  if (shouldLog) {
-    logger.info('gridLift',
-      `${deformerId} lifted bbox: x=[${r.bbox.minX.toFixed(1)},${r.bbox.maxX.toFixed(1)}] (w=${(r.bbox.maxX - r.bbox.minX).toFixed(1)}) y=[${r.bbox.minY.toFixed(1)},${r.bbox.maxY.toFixed(1)}] (h=${(r.bbox.maxY - r.bbox.minY).toFixed(1)})`);
-  }
-  return r;
-}
-
 function makeLiftedResult(positions, gridSize, isQuad) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (let i = 0; i < positions.length; i += 2) {

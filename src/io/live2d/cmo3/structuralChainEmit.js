@@ -114,7 +114,6 @@ export function emitStructuralChainAndReparent(x, opts) {
   if (pidParamAngleZ && facePivotCx !== null && faceUnionBbox && pidBodyXGuid) {
     const pidFaceRotGuid = emitFaceRotation(x, {
       pidParamAngleZ, facePivotCx, facePivotCy, pidBodyXGuid,
-      headGroupId, groupDeformerGuids, deformerWorldOrigins,
       canvasToBodyXX, canvasToBodyXY,
       allDeformerSources, pidPartGuid, pidCoord, rootPart,
       rigCollector,

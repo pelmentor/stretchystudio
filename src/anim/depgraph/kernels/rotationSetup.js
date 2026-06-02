@@ -35,7 +35,6 @@
  * @module anim/depgraph/kernels/rotationSetup
  */
 
-import { logger } from '../../../lib/logger.js';
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
 import {
@@ -73,10 +72,6 @@ export function kernelRotationSetupProbe(op, ctx) {
     ? ctx.project?.nodes?.find((n) => n?.id === parentId)
     : null;
   if (!isChainDeformerNode(parentNode)) {
-    if (def?.id === 'FaceRotation' || def?.name === 'Face Rotation') {
-      logger.info('rotationSetupProbe',
-        `${def.id} EARLY-RETURN: parentId="${parentId}" parentNode=${parentNode ? 'exists but not chain deformer' : 'NULL/missing in project.nodes'} → canvasFinalPivot=(${px.toFixed(2)},${py.toFixed(2)}) [carried from state.originX/Y in pre-probe frame, likely UV or pivot-relative]`);
-    }
     return {
       canvasFinalPivot: [px, py],
       effectiveAngleDeg: angleDeg,
@@ -96,17 +91,6 @@ export function kernelRotationSetupProbe(op, ctx) {
   evalChainAtPoint(ctx, parentNode, px, py, tmpC);
   const cx = tmpC[0];
   const cy = tmpC[1];
-  // BUG-04 diagnostic 2026-06-02: I-21 fires on 13 face-region parts even
-  // after walking warp parent chains in pruneOrphanRotationDeformers; this
-  // log surfaces the probe's input pivot + canvasFinalPivot so the next
-  // user re-run reveals what canvasFinalPivot ends up being for
-  // FaceRotation (expected ~894×384 canvas-px; observed face drift suggests
-  // ~240k). One log per rotation deformer per Init Rig eval is cheap;
-  // surfacing names + numbers > another investigation cycle.
-  if (def?.id === 'FaceRotation' || def?.name === 'Face Rotation') {
-    logger.info('rotationSetupProbe',
-      `${def.id} probe: pivotIn=(${px.toFixed(2)},${py.toFixed(2)}) parentId="${parentId}" parentType=${isWarpParent ? 'warp' : 'rotation'} → canvasFinalPivot=(${cx.toFixed(2)},${cy.toFixed(2)})`);
-  }
   evalChainAtPoint(ctx, parentNode, px, py + eps, tmpD);
   let dx = tmpD[0] - cx;
   let dy = tmpD[1] - cy;

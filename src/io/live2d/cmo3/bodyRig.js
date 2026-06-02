@@ -110,9 +110,6 @@ export function emitNeckWarp(x, ctx) {
  * @param {number} ctx.facePivotCx
  * @param {number} ctx.facePivotCy
  * @param {string} ctx.pidBodyXGuid
- * @param {string|null} ctx.headGroupId
- * @param {Map} ctx.groupDeformerGuids
- * @param {Map} ctx.deformerWorldOrigins
  * @param {(cx:number)=>number} ctx.canvasToBodyXX
  * @param {(cy:number)=>number} ctx.canvasToBodyXY
  * @param {Array} ctx.allDeformerSources
@@ -129,7 +126,6 @@ export function emitNeckWarp(x, ctx) {
 export function emitFaceRotation(x, ctx) {
   const {
     pidParamAngleZ, facePivotCx, facePivotCy, pidBodyXGuid,
-    headGroupId, groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     allDeformerSources, pidPartGuid, pidCoord, rootPart,
     // Stage 8: paramKeys + angles for face rotation. Default mirrors
@@ -140,14 +136,35 @@ export function emitFaceRotation(x, ctx) {
 
   // ── Face Rotation (CRotationDeformerSource) ──
   // Build the spec via shared rig builder; XML emission uses the spec data.
-  const headGroupRotPid = headGroupId && groupDeformerGuids.get(headGroupId);
-  const headGroupPivot = headGroupId && deformerWorldOrigins.get(headGroupId);
+  //
+  // BUG-04 closure 2026-06-02 (rigInvariantCheck I-21 named source):
+  // FaceRotation.parent must resolve to a node that EXISTS in SS project.nodes.
+  // Pre-fix: when `headGroupRotPid` was truthy (head group had a
+  // groupDeformerGuid emitted somewhere upstream), this set parent to
+  // `GroupRotation_<headGroupId>` — but per the 2026-05-23 RotationDeformer→bone
+  // refactor + RULE-№4 meta (SS IS Blender; Cubism = addon), GroupRotation
+  // deformers no longer reify as nodes in SS project.nodes — the head group
+  // is now a BONE (group with boneRole), not a deformer. So FaceRotation's
+  // parent ref pointed at a dangling id, ROTATION_SETUP_PROBE early-returned
+  // with `canvasFinalPivot = [px, py]` (pivot-relative-px offset, NOT
+  // canvas-px), and FaceParallax's lifted grid stayed in pivot-relative
+  // frame — producing 250k-px drift on 13 face-region parts at rest pose.
+  //
+  // Fix: parent FaceRotation at `BodyXWarp` (always exists as a warp node)
+  // and encode its pivot in BodyXWarp UV via `canvasToBodyXX/Y`. The
+  // chain walker then probes BodyXWarp at the UV pivot → output canvas-px
+  // ≈ facePivot. Matrix translation becomes canvas-px facePivot. Lifted
+  // FaceParallax frame correctly converts to canvas-px. Per RULE-№4
+  // (Blender > Cubism fidelity), accept any cmo3 byte divergence for
+  // models that previously had a real GroupRotation parent (Hiyori-class
+  // reference rigs predating the bone-baked refactor). SS-runtime eval
+  // correctness trumps Cubism Viewer byte-identity per the meta-principle.
   const { spec: faceRotSpec } = buildFaceRotationSpec({
     facePivotCanvasX: facePivotCx,
     facePivotCanvasY: facePivotCy,
-    parentType: headGroupRotPid ? 'rotation' : 'warp',
-    parentDeformerId: headGroupRotPid ? `GroupRotation_${headGroupId}` : 'BodyXWarp',
-    parentPivotCanvas: headGroupRotPid ? headGroupPivot : null,
+    parentType: 'warp',
+    parentDeformerId: 'BodyXWarp',
+    parentPivotCanvas: null,
     canvasToBodyXX, canvasToBodyXY,
     paramKeys: faceRotationParamKeys,
     angles:    faceRotationAngles,
@@ -181,8 +198,9 @@ export function emitFaceRotation(x, ctx) {
   x.sub(frAcpcs, 'null', { 'xs.n': 'internalColor_indirect_argb' });
   x.subRef(frAcdfs, 'CDeformerGuid', pidFaceRotGuid, { 'xs.n': 'guid' });
   x.sub(frAcdfs, 'CDeformerId', { 'xs.n': 'id', idstr: 'FaceRotation' });
-  const frTarget = headGroupRotPid || pidBodyXGuid;
-  x.subRef(frAcdfs, 'CDeformerGuid', frTarget, { 'xs.n': 'targetDeformerGuid' });
+  // BUG-04: cmo3 XML target matches the spec parent (BodyXWarp) — unified
+  // SS-runtime + Cubism-export shape per RULE-№4 meta-principle.
+  x.subRef(frAcdfs, 'CDeformerGuid', pidBodyXGuid, { 'xs.n': 'targetDeformerGuid' });
   x.sub(faceRotDf, 'b', { 'xs.n': 'useBoneUi_testImpl' }).text = 'true';
 
   const frKfsList = x.sub(faceRotDf, 'carray_list', {
