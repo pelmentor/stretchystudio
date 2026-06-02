@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, ChevronRight, ChevronDown, Copy, Check } from 'lucide-react';
 import { useLogsStore } from '../../../store/logsStore.js';
+import { toast } from '../../../hooks/use-toast.js';
 
 /** @typedef {import('../../../store/logsStore.js').LogEntry} LogEntry */
 
@@ -115,7 +116,17 @@ function Toolbar({ entries, onClear }) {
         setCopied(true);
         if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
         copyTimeoutRef.current = setTimeout(() => setCopied(false), 1200);
-      } catch (_err2) { /* ignore */ }
+      } catch (err2) {
+        // Both `navigator.clipboard.writeText` AND the
+        // `execCommand('copy')` fallback failed. Per RULE-№1 a failed
+        // user-invoked copy must NOT be silently swallowed — the user
+        // is otherwise left thinking the copy succeeded.
+        toast({
+          variant: 'destructive',
+          title: 'Copy failed',
+          description: /** @type {any} */ (err2)?.message ?? String(err2),
+        });
+      }
     }
   }
 
