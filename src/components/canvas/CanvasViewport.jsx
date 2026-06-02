@@ -154,6 +154,10 @@ export default function CanvasViewport({
   // just a stale one with the post-op IBO. Signature comparison catches
   // every divergence via `meshSignature(mesh) === lastUploaded`.
   const lastUploadedMeshSigRef = useRef(new Map()); // Map<partId, MeshSignature>
+  // PERF-4 — typed-array cache for mesh UV uploads. Keyed by the source
+  // m.uvs array identity (WeakMap can't key on plain Arrays, so use a
+  // plain Map; GC pressure is bounded by mesh count, not by frames).
+  const uvTypedCacheRef = useRef(new Map());
   // Phase 7.A audit fix G-2 — `meshSignature` hashes vertex COUNT + tri count
   // + UV hash but not vertex XY positions, so an in-place positional shift
   // (e.g. `applySetOrigin` rewriting `mesh.vertices` to compensate for a
@@ -1255,6 +1259,20 @@ export default function CanvasViewport({
         // sees the LBS-deformed limb (BUG-026, 2026-05-08).
         const finalVerts = lastFinalVertsRef.current;
         finalVerts.clear();
+        // PERF-4 — cache the typed-array UV view per source-array identity.
+        // Pre-fix every override frame allocated a fresh Float32Array
+        // (uvLength*4 bytes × overridden parts × 60Hz). UVs are static for
+        // the mesh; reuse the cache until the source array changes.
+        const uvCache = uvTypedCacheRef.current;
+        const toTypedUVs = (uvs) => {
+          if (uvs instanceof Float32Array) return uvs;
+          let cached = uvCache.get(uvs);
+          if (!cached || cached.length !== uvs.length) {
+            cached = new Float32Array(uvs);
+            uvCache.set(uvs, cached);
+          }
+          return cached;
+        };
         if (poseOverrides) {
           for (const [nodeId, ov] of poseOverrides) {
             if (!ov.mesh_verts) continue;
@@ -1263,7 +1281,7 @@ export default function CanvasViewport({
             const node = projectRef.current.nodes.find(n => n.id === nodeId);
             const m = getMesh(node, projectRef.current);
             if (m) {
-              sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(m.uvs));
+              sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, toTypedUVs(m.uvs));
             }
           }
         }
@@ -1273,7 +1291,7 @@ export default function CanvasViewport({
             const node = projectRef.current.nodes.find(n => n.id === nodeId);
             const m = getMesh(node, projectRef.current);
             if (m) {
-              sceneRef.current.parts.uploadPositions(nodeId, m.vertices, new Float32Array(m.uvs));
+              sceneRef.current.parts.uploadPositions(nodeId, m.vertices, toTypedUVs(m.uvs));
             }
           }
         }
