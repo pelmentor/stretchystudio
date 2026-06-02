@@ -1,6 +1,6 @@
 // Tests for the rigInvariantCheck framework.
 //
-// Coverage philosophy: each invariant (I-1 through I-19) gets a positive
+// Coverage philosophy: each invariant (I-1 through I-21) gets a positive
 // fixture (clean project, ok=true) and a negative fixture (violated,
 // ok=false) so a regression that flips a check's polarity is caught.
 //

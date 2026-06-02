@@ -136,6 +136,18 @@
  *         bone-skin kernel calls, so the matrix we inspect IS the
  *         matrix applied to vertices.
  *
+ *   I-21 — Part eval bbox CENTER drift from authored mesh.vertices
+ *         center at REST POSE. I-9 catches part bbox EXTENT
+ *         (RENDERS HUGE). I-21 catches part bbox POSITION shifted
+ *         from the authored center (RENDERS-IN-WRONG-PLACE class —
+ *         the "head flies into the corner" bug 2026-06-02 where
+ *         face/hair/eyes all appear at canvas origin while bbox
+ *         extent stayed normal). At rest pose the modifier chain
+ *         should be identity for warp-driven parts → eval bbox
+ *         center must match authored mesh.vertices bbox center.
+ *         Threshold: 0.25 × max(canvas dim) — already "a quarter
+ *         canvas away" = corner class.
+ *
  *   I-20 — Per-step ART_MESH_EVAL bbox trace for I-9 offenders.
  *         Diagnostic-only: when I-9 fires on a part, re-eval the
  *         depgraph with `ctx.artMeshBboxTrace = Set([partId])` and
@@ -160,6 +172,7 @@ import { evalDepGraph } from '../../../anim/depgraph/eval.js';
 import { OperationCode, NodeType } from '../../../anim/depgraph/types.js';
 import { computeWorldMatrices } from '../../../renderer/transforms.js';
 import { resolveBoneWorldFromCtx } from '../../../anim/depgraph/kernels/bonePostChain.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {{
@@ -635,6 +648,59 @@ export function runRigInvariantChecks(project) {
           if (extentX > maxReasonableExtent || extentY > maxReasonableExtent) {
             violate('I-9', partId, partName, `depgraph eval produced part bbox ${extentX.toFixed(0)}×${extentY.toFixed(0)} px on a ${cw}×${ch} canvas (≥100× canvas) — RENDERS HUGE (gray-viewport class). bbox=[${minX.toFixed(0)},${minY.toFixed(0)}]→[${maxX.toFixed(0)},${maxY.toFixed(0)}]`);
           }
+          // I-21: eval bbox CENTER drift from authored rest center. I-9
+          // catches part bbox EXTENT (RENDERS HUGE class). I-21 catches
+          // part bbox POSITION shifted from authored at REST POSE
+          // (RENDERS-IN-WRONG-PLACE class — head "flies into the corner"
+          // bug 2026-06-02 where face/hair/eyes all appear at canvas
+          // origin while bbox extent is still small/normal). At rest
+          // pose (params at default), modifier chain SHOULD be identity
+          // for face/body-warp parts → eval bbox center MUST match
+          // authored mesh.vertices bbox center within a few px. A drift
+          // of `0.25 × canvas dim` flags a part displaced by a quarter
+          // canvas — already "the corner" class.
+          const partMesh = partNode ? getMesh(partNode, project) : null;
+          const restVerts = partMesh?.vertices;
+          if (Array.isArray(restVerts) && restVerts.length > 0) {
+            let rMinX = Infinity, rMinY = Infinity, rMaxX = -Infinity, rMaxY = -Infinity;
+            const r0 = restVerts[0];
+            if (typeof r0 === 'object' && r0 !== null) {
+              for (let i = 0; i < restVerts.length; i++) {
+                const rv = restVerts[i];
+                const rx = rv?.x, ry = rv?.y;
+                if (typeof rx === 'number' && Number.isFinite(rx)) {
+                  if (rx < rMinX) rMinX = rx; if (rx > rMaxX) rMaxX = rx;
+                }
+                if (typeof ry === 'number' && Number.isFinite(ry)) {
+                  if (ry < rMinY) rMinY = ry; if (ry > rMaxY) rMaxY = ry;
+                }
+              }
+            } else if (typeof r0 === 'number') {
+              for (let i = 0; i < restVerts.length; i += 2) {
+                const rx = restVerts[i], ry = restVerts[i + 1];
+                if (typeof rx === 'number' && Number.isFinite(rx)) {
+                  if (rx < rMinX) rMinX = rx; if (rx > rMaxX) rMaxX = rx;
+                }
+                if (typeof ry === 'number' && Number.isFinite(ry)) {
+                  if (ry < rMinY) rMinY = ry; if (ry > rMaxY) rMaxY = ry;
+                }
+              }
+            }
+            if (Number.isFinite(rMinX) && Number.isFinite(rMaxX)) {
+              const evalCx = (minX + maxX) / 2;
+              const evalCy = (minY + maxY) / 2;
+              const restCx = (rMinX + rMaxX) / 2;
+              const restCy = (rMinY + rMaxY) / 2;
+              const driftX = evalCx - restCx;
+              const driftY = evalCy - restCy;
+              const driftMag = Math.hypot(driftX, driftY);
+              const driftThreshold = 0.25 * Math.max(cw, ch);
+              if (driftMag > driftThreshold) {
+                violate('I-21', partId, partName,
+                  `depgraph eval bbox center=(${evalCx.toFixed(0)},${evalCy.toFixed(0)}) drifted ${driftMag.toFixed(0)}px from authored mesh.vertices center=(${restCx.toFixed(0)},${restCy.toFixed(0)}) at REST POSE — RENDERS-IN-WRONG-PLACE class. Threshold ${driftThreshold.toFixed(0)}px (0.25× canvas ${cw}×${ch}). drift=(${driftX.toFixed(0)},${driftY.toFixed(0)}). At rest pose the modifier chain should be identity; this part's chain is producing non-identity translation. Likely cause: a body/face warp's lifted grid is not at rest, OR a parent transform applies non-zero pose at default`);
+              }
+            }
+          }
         }
         continue;
       }
@@ -789,8 +855,8 @@ export function runRigInvariantChecks(project) {
   // ─── summary log ──────────────────────────────────────────────────
   if (summary.ok) {
     logger.info('rigInvariantCheck',
-      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} worldMatrices=${worldMatrixChecked} evalFrames=${evalChecked} composedBones=${composeChecked} | I-1..I-15 all pass`,
-      { partsChecked, latticesChecked, bonesChecked, worldMatrixChecked, evalChecked, composeChecked });
+      `OK | parts=${partsChecked} lattices=${latticesChecked} bones=${bonesChecked} worldMatrices=${worldMatrixChecked} evalFrames=${evalChecked} composedBones=${composeChecked} evalWorld=${evalWorldChecked} | I-1..I-20 all pass`,
+      { partsChecked, latticesChecked, bonesChecked, worldMatrixChecked, evalChecked, composeChecked, evalWorldChecked });
   } else {
     const byInvStr = Object.entries(summary.byInvariant)
       .sort(([, a], [, b]) => b - a)
