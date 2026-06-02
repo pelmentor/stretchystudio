@@ -97,6 +97,7 @@
  */
 
 import { getBonePose, isBoneGroup } from '../store/objectDataAccess.js';
+import { finiteOr } from '../lib/finiteOr.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -159,28 +160,40 @@ function lerpAngle(a, b, t) {
  * separate from pose offsets; constraints operate on the EFFECTIVE
  * transform (rest + pose). For non-bones, just `node.transform`.
  *
+ * Contract: `node` MUST be non-null. The only production caller path
+ * (`transformCompose.js:65-89`) early-returns when the owner can't be
+ * resolved, and the in-file caller at line 302 explicitly null-guards
+ * via `targetNode ? effectiveTransform(targetNode) : null`. A null
+ * passed here indicates a graph wiring bug — fail loud per RULE-№1
+ * rather than silently returning identity (which propagates the bad
+ * reference downstream as a finite-looking but wrong transform).
+ *
+ * Numeric channel reads use `finiteOr` instead of `??` so a NaN-poisoned
+ * upstream produces a finite identity-equivalent result rather than
+ * cascading into NaN matrices (`feedback_typeof_nan_is_number`).
+ *
  * @param {object} node
  * @returns {{ x: number, y: number, rotation: number, scaleX: number, scaleY: number }}
  */
 function effectiveTransform(node) {
-  if (!node) return { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  if (!node) throw new TypeError('effectiveTransform: node is required (caller must null-guard)');
   const t = node.transform ?? {};
   if (isBoneGroup(node)) {
     const pose = getBonePose(node) ?? { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 };
     return {
-      x:        (t.pivotX ?? 0) + (pose.x ?? 0),
-      y:        (t.pivotY ?? 0) + (pose.y ?? 0),
-      rotation: pose.rotation ?? 0,
-      scaleX:   pose.scaleX ?? 1,
-      scaleY:   pose.scaleY ?? 1,
+      x:        finiteOr(t.pivotX, 0) + finiteOr(pose.x, 0),
+      y:        finiteOr(t.pivotY, 0) + finiteOr(pose.y, 0),
+      rotation: finiteOr(pose.rotation, 0),
+      scaleX:   finiteOr(pose.scaleX, 1),
+      scaleY:   finiteOr(pose.scaleY, 1),
     };
   }
   return {
-    x:        t.x ?? 0,
-    y:        t.y ?? 0,
-    rotation: t.rotation ?? 0,
-    scaleX:   t.scaleX ?? 1,
-    scaleY:   t.scaleY ?? 1,
+    x:        finiteOr(t.x, 0),
+    y:        finiteOr(t.y, 0),
+    rotation: finiteOr(t.rotation, 0),
+    scaleX:   finiteOr(t.scaleX, 1),
+    scaleY:   finiteOr(t.scaleY, 1),
   };
 }
 
@@ -350,7 +363,11 @@ export function evaluateConstraint(con, ownerTransform, project) {
  * @returns {{x:number, y:number, rotation:number, scaleX:number, scaleY:number}}
  */
 export function evaluateConstraints(owner, seedTransform, project) {
-  if (!owner) return seedTransform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  // Contract: `owner` MUST be non-null. The production caller
+  // (`transformCompose.js:65-89`) early-returns when the owner can't be
+  // resolved; tests pass real nodes. A null here is a graph wiring bug
+  // — fail loud per RULE-№1 rather than silently identity-fallback.
+  if (!owner) throw new TypeError('evaluateConstraints: owner is required (caller must null-guard)');
   const stack = Array.isArray(owner.constraints) ? owner.constraints : [];
   let cur = seedTransform ?? effectiveTransform(owner);
   for (const con of stack) {
