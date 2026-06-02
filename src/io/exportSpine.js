@@ -9,6 +9,29 @@ import { getMesh } from '../store/objectDataAccess.js';
 import { decodeFCurveTarget } from '../anim/animationFCurve.js';
 
 /**
+ * Require a finite number for a Spine-exported field. `value == null`
+ * (legitimately absent) returns `fallbackForAbsent` so the export uses
+ * the identity value. Any other non-finite input (NaN / Infinity /
+ * string / object) throws — per RULE-№1, exporting NaN to disk is a
+ * silent corruption and the user must see the failure.
+ *
+ * `|| 0` and `?? 0` both mask NaN (NaN is falsy; NaN is a real number
+ * so `??` doesn't trigger) — the documented anti-pattern in
+ * `feedback_typeof_nan_is_number`.
+ *
+ * @param {unknown} value
+ * @param {string} fieldName
+ * @param {string} nodeName
+ * @param {number} fallbackForAbsent — used when value is null/undefined
+ * @returns {number}
+ */
+function requireFinite(value, fieldName, nodeName, fallbackForAbsent) {
+  if (value == null) return fallbackForAbsent;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new RangeError(`Spine export: ${nodeName}.${fieldName} is not finite (got ${String(value)}). Fix the source data and re-export.`);
+}
+
+/**
  * Main entry point for Spine export.
  * Returns a ZIP blob containing the skeleton.json and images.
  */
@@ -131,9 +154,9 @@ function buildSpineJson(project) {
         parent: parentName,
         x: pos.x,
         y: pos.y,
-        rotation: -(t.rotation || 0),   // SS CW → Spine CCW
-        scaleX: t.scaleX ?? 1,
-        scaleY: t.scaleY ?? 1,
+        rotation: -requireFinite(t.rotation, 'rotation', group.name, 0),   // SS CW → Spine CCW
+        scaleX: requireFinite(t.scaleX, 'scaleX', group.name, 1),
+        scaleY: requireFinite(t.scaleY, 'scaleY', group.name, 1),
       });
       processedBones.add(sanitizeName(group.name));
       return false;
@@ -176,7 +199,7 @@ function buildSpineJson(project) {
       name: sanitizeName(part.name),
       x: pos.x,
       y: pos.y,
-      rotation: -(t.rotation || 0),
+      rotation: -requireFinite(t.rotation, 'rotation', part.name, 0),
       width: part.imageWidth ?? canvasW,
       height: part.imageHeight ?? canvasH,
     };
