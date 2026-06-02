@@ -238,9 +238,13 @@ export async function loadProject(file, opts = {}) {
   const images = new Map();
   await Promise.all(project.textures.map(async (tex) => {
     if (!tex.source) return;
+    // SEC-006 / PERF-8 — track the blob URL locally so we can revoke it
+    // when the Image decode rejects. Pre-fix the rejected branch logged
+    // and continued, leaking one blob URL per corrupt texture.
+    let blobUrl = null;
     try {
       const pngBlob = await zip.file(tex.source).async('blob');
-      const blobUrl = URL.createObjectURL(pngBlob);
+      blobUrl = URL.createObjectURL(pngBlob);
 
       await new Promise((resolve, reject) => {
         const img = new Image();
@@ -251,6 +255,7 @@ export async function loadProject(file, opts = {}) {
 
       tex.source = blobUrl;
     } catch (err) {
+      if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch { /* already revoked */ } }
       if (strict) throw new Error(`loadProject(strict): texture ${tex.id} load failed: ${err?.message ?? err}`);
       console.error(`Failed to load texture ${tex.id}:`, err);
     }

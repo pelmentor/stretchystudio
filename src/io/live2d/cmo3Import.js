@@ -122,6 +122,14 @@ export async function importCmo3(bytes) {
   // referenced by multiple parts when the original PSD shared a texture;
   // sharing the Blob URL avoids redundant decode work in the texture
   // upload path.
+  //
+  // PERF-2 + SEC-004 — pre-fix EVERY .png in the archive was unconditionally
+  // converted to a blob URL up-front; only those matched to a part via
+  // `textureRef` ended up in `textures[]`. Orphan PNGs (renamed, leftover
+  // from SS editing, mismatched filePath) leaked one blob URL per archive
+  // entry per import. We now still pre-create them (the part loop below
+  // is order-dependent on the lookup map) but track which URLs are
+  // promoted and revoke the rest at the bottom of this function.
   /** @type {Map<string, string>} */
   const pngBlobUrls = new Map();
   for (const f of archive.files) {
@@ -130,6 +138,8 @@ export async function importCmo3(bytes) {
     const blob = new Blob([f.content.slice()], { type: 'image/png' });
     pngBlobUrls.set(f.path, URL.createObjectURL(blob));
   }
+  /** @type {Set<string>} */
+  const promotedBlobUrls = new Set();
 
   // Group ID assignment runs before parts so we can resolve part→group
   // parent links via the CPartGuid intermediary.
@@ -179,6 +189,7 @@ export async function importCmo3(bytes) {
     }
     if (textureSource) {
       textures.push({ id: nodeId, source: textureSource });
+      promotedBlobUrls.add(textureSource);
     }
 
     nodes.push({
@@ -306,6 +317,14 @@ export async function importCmo3(bytes) {
     // re-runs of init rig use authored data without re-parsing the cmo3.
     _cmo3Scene: scene,
   };
+
+  // PERF-2 + SEC-004 — revoke orphan blob URLs (created above but never
+  // referenced by a part's `textureRef`). Without this, every cmo3 import
+  // leaks one blob URL per orphan PNG until document unload.
+  for (const url of pngBlobUrls.values()) {
+    if (promotedBlobUrls.has(url)) continue;
+    try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+  }
 
   return {
     project,
