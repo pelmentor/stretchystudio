@@ -123,11 +123,18 @@ function interpolateRotationState(def, cell) {
   if (keyforms.length === 0) return null;
   let angle = 0, originX = 0, originY = 0, scale = 0, opacity = 0;
   let reflectX = false, reflectY = false;
+  // CUBISM-PORT-004 — track the actually-contributing weight so we can
+  // renormalize when sparse cross-product keyforms drop corners. Pre-fix
+  // a missing keyform silently dropped its weight, leaving partial sums
+  // (e.g. weights sum to 0.5 instead of 1.0) — the scale accumulator
+  // collapsed to half of authored, and the rotation visibly shrank.
+  let totalW = 0;
   for (let i = 0; i < cell.indices.length; i++) {
     const w = cell.weights[i];
     if (w === 0) continue;
     const kf = keyforms[cell.indices[i]];
     if (!kf) continue;
+    totalW   += w;
     angle    += w * (typeof kf.angle    === 'number' ? kf.angle    : 0);
     originX  += w * (typeof kf.originX  === 'number' ? kf.originX  : 0);
     originY  += w * (typeof kf.originY  === 'number' ? kf.originY  : 0);
@@ -135,6 +142,18 @@ function interpolateRotationState(def, cell) {
     opacity  += w * (typeof kf.opacity  === 'number' ? kf.opacity  : 1);
     if (kf.reflectX === true) reflectX = true;
     if (kf.reflectY === true) reflectY = true;
+  }
+  if (totalW === 0) return null;
+  // Renormalize when sparse keyforms partial-summed below 1.0. Mirrors
+  // the defensive branch in `rotationEval.js` (`if (totalW === 0)`)
+  // but extends it to the partial-sum case Cubism's reference handles
+  // implicitly via padded keyform arrays.
+  if (totalW < 1 - 1e-9) {
+    angle   /= totalW;
+    originX /= totalW;
+    originY /= totalW;
+    scale   /= totalW;
+    opacity /= totalW;
   }
   return {
     kind: 'rotation',
