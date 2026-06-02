@@ -44,6 +44,72 @@ import {
   cloneAction as registryCloneAction,
 } from '../anim/actionRegistry.js';
 import { useAnimationStore } from './animationStore.js';
+// CROSS-1 — circular import via live ES module binding. By the time
+// `cleanupOnNodeDelete` runs, both editorStore and selectionStore have
+// finished module init; ES module bindings resolve to their final
+// exports even when the import statement evaluates during a cycle.
+import { useEditorStore } from './editorStore.js';
+import { useSelectionStore } from './selectionStore.js';
+
+/**
+ * CROSS-1 — single chokepoint for cross-store cleanup after a node
+ * deletion. Pre-fix every operator was responsible for remembering to
+ * clean each downstream store; the contract decayed and several stores
+ * (editorStore.selection, vertex selection map, animation pose maps,
+ * useSelectionStore.items, etc.) ended up holding dangling node ids.
+ *
+ * @param {Set<string>} idsToDelete
+ */
+function cleanupOnNodeDelete(idsToDelete) {
+  if (!idsToDelete || idsToDelete.size === 0) return;
+  // Editor store fan-out.
+  const editor = useEditorStore?.getState?.();
+  if (editor) {
+    if (Array.isArray(editor.selection) && editor.selection.some(id => idsToDelete.has(id))) {
+      editor.setSelection?.(editor.selection.filter(id => !idsToDelete.has(id)));
+    }
+    if (editor.activeVertex && idsToDelete.has(editor.activeVertex.partId)) {
+      editor.setActiveVertex?.(null);
+    }
+    if (editor.activeBlendShapeId && idsToDelete.has(editor.activeBlendShapeId)) {
+      editor.setActiveBlendShape?.(null);
+    }
+    if (editor.keyformEdit && idsToDelete.has(editor.keyformEdit.deformerId)) {
+      editor.exitKeyformEdit?.();
+    }
+    if (editor.expandedGroups instanceof Set) {
+      let mutated = false;
+      const next = new Set();
+      for (const id of editor.expandedGroups) {
+        if (idsToDelete.has(id)) { mutated = true; continue; }
+        next.add(id);
+      }
+      if (mutated) editor.setExpandedGroups?.(Array.from(next));
+    }
+    if (editor.selectedVertexIndices instanceof Map) {
+      for (const id of idsToDelete) {
+        if (editor.selectedVertexIndices.has(id)) {
+          editor.invalidateVertexSelectionForPart?.(id);
+        }
+      }
+    }
+  }
+  // Selection store fan-out.
+  const selection = useSelectionStore?.getState?.();
+  if (selection && Array.isArray(selection.items) && selection.items.some(it => idsToDelete.has(it?.id))) {
+    selection.setItems?.(selection.items.filter(it => !idsToDelete.has(it?.id)));
+  }
+  // Animation store fan-out — pose maps keyed by nodeId.
+  const animation = useAnimationStore?.getState?.();
+  if (animation) {
+    if (animation.draftPose instanceof Map) {
+      for (const id of idsToDelete) animation.draftPose.delete(id);
+    }
+    if (animation.restPose instanceof Map) {
+      for (const id of idsToDelete) animation.restPose.delete(id);
+    }
+  }
+}
 
 /**
  * Revoke every `blob:` URL the project owns — texture sources +
@@ -1133,6 +1199,12 @@ export const useProjectStore = create((set, get) => {
   resetProject: () => {
     disposeProjectResources(useProjectStore.getState().project);
     clearHistory();
+    // CROSS-4 — drop paramValuesStore so stale param ids from the prior
+    // project don't survive the swap. Pre-fix loaded project's
+    // ParamRotation_<bone> values from project A persisted in `values{}`
+    // after loading B; the bone-mirror fanned them out onto B's bones if
+    // the keys collided.
+    useParamValuesStore.getState().reset();
     return set(produce((state) => {
       state.project.canvas   = { width: 800, height: 600, x: 0, y: 0, bgEnabled: false, bgColor: '#ffffff' };
       state.project.textures = [];
@@ -1207,6 +1279,10 @@ export const useProjectStore = create((set, get) => {
   /** Load a deserialized project from file */
   loadProject: async (projectData) => {
     disposeProjectResources(useProjectStore.getState().project);
+    // CROSS-4 — drop paramValuesStore so stale param ids from the prior
+    // project don't survive the swap. See resetProject for the same
+    // reasoning.
+    useParamValuesStore.getState().reset();
     // Phase A2 — `migrateProject` + `findBindingSchemaDrift` come from
     // the lazy rig-peers loader. Project loads happen on user gesture
     // (file pick / drag-drop), so awaiting the import is mechanical.
@@ -1908,23 +1984,31 @@ export const useProjectStore = create((set, get) => {
    * Recursively delete a node and all its children.
    * Also cleans up animation tracks.
    */
-  deleteNode: (nodeId) => set((state) => {
+  deleteNode: (nodeId) => {
+    const state = useProjectStore.getState();
     if (!isBatching()) pushSnapshot(state.project);
 
-    return produce(state, (draft) => {
-      draft.hasUnsavedChanges = true;
-      const proj = draft.project;
-      const idsToDelete = new Set();
-
-      function collectRecursive(id) {
+    // Collect ids BEFORE the produce so we can fan out cross-store
+    // cleanup after set returns (calling other Zustand stores inside an
+    // immer produce is fine in practice but the CROSS-9 race class is
+    // safer to avoid).
+    const idsToDelete = new Set();
+    {
+      const proj = state.project;
+      const stack = [nodeId];
+      while (stack.length > 0) {
+        const id = stack.pop();
+        if (idsToDelete.has(id)) continue;
         idsToDelete.add(id);
-        const children = proj.nodes.filter(n => n.parent === id);
-        for (const child of children) {
-          collectRecursive(child.id);
+        for (const n of proj.nodes) {
+          if (n.parent === id) stack.push(n.id);
         }
       }
+    }
 
-      collectRecursive(nodeId);
+    set((s) => produce(s, (draft) => {
+      draft.hasUnsavedChanges = true;
+      const proj = draft.project;
 
       // MEM-01 — revoke `blob:` URLs for the textures we are about to
       // drop. Pre-fix only resetProject/loadProject called
@@ -1973,7 +2057,19 @@ export const useProjectStore = create((set, get) => {
 
       draft.versionControl.transformVersion++;
       draft.versionControl.geometryVersion++;
-    });
-  }),
+    }));
+
+    // CROSS-1 — fan-out cross-store cleanup. Pre-fix every operator was
+    // responsible for remembering this; that contract decayed and many
+    // sites (Footer.activeHead, NodeTreeArea selectionHead, vertex
+    // selection map, animation pose maps) ended up with dangling node
+    // ids after a single deleteNode.
+    try {
+      cleanupOnNodeDelete(idsToDelete);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('projectStore', `deleteNode cross-store fan-out failed: ${msg}`, { err: msg });
+    }
+  },
   };
 });
