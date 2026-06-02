@@ -14,7 +14,6 @@
 import {
   pickSelectionAnchor,
   enumerateSelectionAnchorVerts,
-  computeSelectionAnchor,
 } from '../../src/lib/snap/snapMath.js';
 
 let passed = 0;
@@ -218,16 +217,8 @@ const verts = [
     'unknown selection ref → empty');
 }
 
-// ─── Legacy computeSelectionAnchor (deprecated, but still exported) ──
-
-{
-  // Legacy 'closest' returns cursor verbatim
-  const r = computeSelectionAnchor(verts, 'closest', { cursor: { x: 5, y: 6 } });
-  assert(r.x === 5 && r.y === 6, 'legacy: closest = cursor');
-  // Legacy 'active' returns activeVert
-  const r2 = computeSelectionAnchor(verts, 'active', { activeVert: { x: 99, y: 88 }, cursor: { x: 0, y: 0 } });
-  assert(r2.x === 99 && r2.y === 88, 'legacy: active returns activeVert');
-}
+// Legacy `computeSelectionAnchor` retired 2026-06-02 (RULE-№2 sweep).
+// All callers were already migrated to `pickSelectionAnchor`.
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

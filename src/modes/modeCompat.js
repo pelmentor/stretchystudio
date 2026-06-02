@@ -98,9 +98,6 @@ export const MODE_OBJECT = null;
  *  now `'edit'` (was `'mesh'`). The v25 schema migration rewrites
  *  stored editMode values. */
 export const MODE_EDIT = 'edit';
-/** @deprecated Use MODE_EDIT. Kept as a value-identical alias for any
- *  call-sites that haven't migrated yet. */
-export const MODE_EDIT_MESH = MODE_EDIT;
 
 /** Blender's `OB_MODE_POSE`. Bone pose drag / rotation; writes to
  *  `node.pose.*`. Renamed from legacy `'skeleton'` 2026-05-07
@@ -110,14 +107,6 @@ export const MODE_POSE = 'pose';
 
 /** Weight Paint — per-vertex bone-weight brush. */
 export const MODE_WEIGHT_PAINT = 'weightPaint';
-
-/** @deprecated 2026-05-07 — Blender doesn't have a separate Blend Shape
- *  mode; shape-key painting lives INSIDE Edit Mode + an active-shape
- *  pointer (`editorStore.activeBlendShapeId`). The constant remains as
- *  a compile-time alias for `MODE_EDIT` so legacy call-sites don't
- *  break, but new code should NOT use it. v26 migration rewrites
- *  stored `'blendShape'` editMode values to `'edit'`. */
-export const MODE_BLEND_SHAPE = MODE_EDIT;
 
 /** Sculpt — high-density mesh sculpt brushes (unimplemented). */
 export const MODE_SCULPT = 'sculpt';

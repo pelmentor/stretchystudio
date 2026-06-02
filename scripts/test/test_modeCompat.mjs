@@ -12,10 +12,8 @@ import {
   modesForDataKind,
   MODE_OBJECT,
   MODE_EDIT,
-  MODE_EDIT_MESH,  // legacy alias for MODE_EDIT
   MODE_POSE,
   MODE_WEIGHT_PAINT,
-  MODE_BLEND_SHAPE,
   MODE_SCULPT,
   MODE_VERTEX_PAINT,
   MODE_TEXTURE_PAINT,
@@ -43,18 +41,14 @@ function assertEq(actual, expected, name) {
   assert(MODE_OBJECT === null, 'MODE_OBJECT is null (the "no edit mode" sentinel)');
   assert(MODE_EDIT === 'edit',
     'MODE_EDIT = "edit" — Blender universal OB_MODE_EDIT (renamed from "mesh" 2026-05-07)');
-  assert(MODE_EDIT_MESH === MODE_EDIT,
-    'MODE_EDIT_MESH legacy alias === MODE_EDIT');
   // Fix 2 (BLENDER_DEVIATION_AUDIT): MODE_POSE renamed from legacy
   // 'skeleton' to 'pose' to match Blender's OB_MODE_POSE.
   assert(MODE_POSE === 'pose',
     "MODE_POSE = 'pose' — Blender OB_MODE_POSE (renamed from 'skeleton' 2026-05-07)");
   assert(MODE_WEIGHT_PAINT === 'weightPaint', 'MODE_WEIGHT_PAINT slot value');
-  // Folded 2026-05-07 (BLENDER_DEVIATION_AUDIT Fix 1): MODE_BLEND_SHAPE
-  // is now a deprecated alias for MODE_EDIT. Shape-key painting lives
-  // inside Edit Mode + activeBlendShapeId pointer (Blender pattern).
-  assert(MODE_BLEND_SHAPE === MODE_EDIT,
-    'MODE_BLEND_SHAPE legacy alias === MODE_EDIT (folded 2026-05-07)');
+  // MODE_EDIT_MESH + MODE_BLEND_SHAPE legacy aliases retired 2026-06-02
+  // (RULE-№2 audit sweep). Shape-key painting lives inside Edit Mode +
+  // activeBlendShapeId pointer (Blender pattern, folded 2026-05-07).
 }
 
 // ── modeCompatTest: Object Mode is universal ──
@@ -68,9 +62,8 @@ function assertEq(actual, expected, name) {
 
 // ── Mesh data-kind allows mesh-edit + paint modes ──
 {
-  assert(modeCompatTest('mesh', MODE_EDIT_MESH), 'mesh: Edit Mode legal');
+  assert(modeCompatTest('mesh', MODE_EDIT), 'mesh: Edit Mode legal');
   assert(modeCompatTest('mesh', MODE_WEIGHT_PAINT), 'mesh: Weight Paint legal');
-  assert(modeCompatTest('mesh', MODE_BLEND_SHAPE), 'mesh: Blend Shape legal');
   assert(modeCompatTest('mesh', MODE_SCULPT), 'mesh: Sculpt legal (table-only, unimpl)');
   assert(modeCompatTest('mesh', MODE_VERTEX_PAINT), 'mesh: Vertex Paint legal (table-only)');
   assert(modeCompatTest('mesh', MODE_TEXTURE_PAINT), 'mesh: Texture Paint legal (table-only)');
@@ -91,16 +84,12 @@ function assertEq(actual, expected, name) {
   assert(modeCompatTest('armature', MODE_POSE), 'armature: Pose Mode legal');
   assert(!modeCompatTest('armature', MODE_WEIGHT_PAINT), 'armature: Weight Paint REJECTED');
   assert(!modeCompatTest('armature', MODE_SCULPT), 'armature: Sculpt REJECTED');
-  // MODE_BLEND_SHAPE is now an alias for MODE_EDIT — armature compat
-  // accepts it because it accepts MODE_EDIT. The old "blend shape on
-  // armature is illegal" assertion was load-bearing only when the
-  // values were distinct. Folded 2026-05-07.
 }
 
 // ── Empty data-kind allows Object Mode only ──
 {
   assert(modeCompatTest('empty', MODE_OBJECT), 'empty: Object Mode legal');
-  for (const m of [MODE_EDIT_MESH, MODE_POSE, MODE_WEIGHT_PAINT, MODE_BLEND_SHAPE]) {
+  for (const m of [MODE_EDIT, MODE_POSE, MODE_WEIGHT_PAINT]) {
     assert(!modeCompatTest('empty', m), `empty: ${m} REJECTED`);
   }
 }
@@ -108,7 +97,7 @@ function assertEq(actual, expected, name) {
 // ── Deformer data-kind allows Object Mode only ──
 {
   assert(modeCompatTest('deformer', MODE_OBJECT), 'deformer: Object Mode legal');
-  for (const m of [MODE_EDIT_MESH, MODE_POSE, MODE_WEIGHT_PAINT, MODE_BLEND_SHAPE]) {
+  for (const m of [MODE_EDIT, MODE_POSE, MODE_WEIGHT_PAINT]) {
     assert(!modeCompatTest('deformer', m), `deformer: ${m} REJECTED`);
   }
 }
@@ -117,14 +106,14 @@ function assertEq(actual, expected, name) {
 {
   assert(modeCompatTest(null, MODE_OBJECT), 'null dataKind: Object Mode legal');
   assert(modeCompatTest('xyzzy', MODE_OBJECT), 'unknown dataKind: Object Mode legal');
-  assert(!modeCompatTest('xyzzy', MODE_EDIT_MESH), 'unknown dataKind: edit modes rejected');
-  assert(!modeCompatTest(null, MODE_EDIT_MESH), 'null dataKind: edit modes rejected');
+  assert(!modeCompatTest('xyzzy', MODE_EDIT), 'unknown dataKind: edit modes rejected');
+  assert(!modeCompatTest(null, MODE_EDIT), 'null dataKind: edit modes rejected');
 }
 
 // ── modesForDataKind ──
 {
   const meshModes = modesForDataKind('mesh');
-  assert(meshModes.includes(MODE_EDIT_MESH), 'modesForDataKind(mesh) includes Edit Mode');
+  assert(meshModes.includes(MODE_EDIT), 'modesForDataKind(mesh) includes Edit Mode');
   assert(meshModes.includes(MODE_WEIGHT_PAINT), 'modesForDataKind(mesh) includes Weight Paint');
   assert(!meshModes.includes(MODE_POSE), 'modesForDataKind(mesh) excludes Pose');
 
@@ -174,7 +163,7 @@ function assertEq(actual, expected, name) {
 
   // Folder selected → only Object Mode.
   assert(modeCompatTest(getDataKind(folder), MODE_OBJECT), 'folder → Object Mode only');
-  assert(!modeCompatTest(getDataKind(folder), MODE_EDIT_MESH), 'folder → Edit greys out');
+  assert(!modeCompatTest(getDataKind(folder), MODE_EDIT), 'folder → Edit greys out');
   assert(!modeCompatTest(getDataKind(folder), MODE_POSE), 'folder → Pose greys out');
 }
 

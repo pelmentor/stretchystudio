@@ -93,10 +93,10 @@ assertThrows(
   'unknown mode throws',
 );
 
-// Explicit hierarchy works
+// Explicit viewLayer (legacy 'hierarchy' alias retired 2026-06-02 RULE-№2 sweep — viewLayer is the unified hierarchy)
 {
-  const roots = buildOutlinerTree(fixtureNodes(), { mode: 'hierarchy' });
-  assert(roots.length === 3, 'explicit hierarchy mode');
+  const roots = buildOutlinerTree(fixtureNodes(), { mode: 'viewLayer' });
+  assert(roots.length === 3, 'explicit viewLayer mode');
 }
 
 // ── v43 — lattice (warp) objects appear; their cage meshData does NOT ──
@@ -109,7 +109,7 @@ assertThrows(
     { id: 'BodyWarp__cage', type: 'meshData', isLatticeCage: true,
       vertices: [{ x: 0, y: 0 }] },
   ];
-  const roots = buildOutlinerTree(nodes, { mode: 'hierarchy' });
+  const roots = buildOutlinerTree(nodes, { mode: 'viewLayer' });
   const lattice = findOutlinerNode(roots, 'BodyWarp');
   assert(!!lattice, 'lattice object appears as an Outliner row');
   assert(lattice.type === 'object', 'lattice row keeps type=object (selection routing)');
@@ -387,21 +387,20 @@ assertThrows(
   assert(a[0] !== b[0], 'idempotent: deep different references');
 }
 
-// ── Hierarchy mode flags bones with isBone ─────────────────────────
+// ── View Layer mode flags bones with isBone ─────────────────────────
 
 {
   // Bones (boneRole-tagged groups) get the isBone discriminator in
-  // hierarchy mode too — not just skeleton mode. The unified
-  // viewLayer tree relies on this so the bone icon shows inline.
+  // viewLayer mode (the unified hierarchy) so the bone icon shows inline.
   const nodes = [
     { id: 'g-body', type: 'group', name: 'body', parent: null }, // non-bone
     { id: 'b-head', type: 'group', name: 'head', parent: 'g-body', boneRole: 'head' },
   ];
-  const tree = buildOutlinerTree(nodes, { mode: 'hierarchy' });
+  const tree = buildOutlinerTree(nodes, { mode: 'viewLayer' });
   const body = tree[0];
-  assert(body.isBone !== true, 'hierarchy: non-bone group has no isBone flag');
+  assert(body.isBone !== true, 'viewLayer: non-bone group has no isBone flag');
   const head = body.children[0];
-  assert(head.isBone === true, 'hierarchy: bone group flagged isBone');
+  assert(head.isBone === true, 'viewLayer: bone group flagged isBone');
 }
 
 // ── View Layer mode — unified hierarchy with deformers inline (Phase 4) ─

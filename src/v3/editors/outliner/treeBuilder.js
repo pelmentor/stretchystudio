@@ -19,9 +19,6 @@
  *                     `isBone` flag, deformers an `isDeformer` /
  *                     `deformerKind` flag so TreeNode picks the right
  *                     icon. Default — Blender's "one tree, expand to drill".
- *   - `'hierarchy'` — legacy alias: just project.nodes. Identical to
- *                     `viewLayer` after Phase 4 (kept for back-compat
- *                     with existing tests).
  *   - `'rig'`       — rigSpec deformer tree only (warps + rotations)
  *                     with art meshes shown under their parent deformer.
  *   - `'skeleton'`  — armature-only filter: only `boneRole`-tagged
@@ -157,8 +154,6 @@ export function buildOutlinerTree(input, opts = {}) {
       const rigSpec = composite?.rigSpec ?? null;
       return buildViewLayerTree(nodes, rigSpec);
     }
-    case 'hierarchy':
-      return buildHierarchyTree(/** @type {ProjectNodeLike[]} */ (input));
     case 'rig':
       return buildRigTree(/** @type {RigSpecLike} */ (input));
     case 'skeleton':
@@ -170,19 +165,6 @@ export function buildOutlinerTree(input, opts = {}) {
       throw new Error(`buildOutlinerTree: unknown mode '${mode}'`);
   }
 }
-
-/**
- * Deprecated. Pre-Phase-4 export of the synthetic "Rig" pseudo-root id;
- * `buildViewLayerTree` no longer composes a rig branch since deformer
- * nodes now live in `project.nodes` directly (BFA-006 Phase 1+3).
- *
- * Kept exported (set to `null`) so any third-party / scratch consumer
- * that imported it keeps loading; check should be `id !== RIG_PSEUDO_ROOT_ID`
- * which now always evaluates true. Remove in a future release.
- *
- * @deprecated since BFA-006 Phase 4 — no longer used.
- */
-export const RIG_PSEUDO_ROOT_ID = null;
 
 /**
  * BFA-006 Phase 4 — viewLayer is the unified hierarchy. Deformer

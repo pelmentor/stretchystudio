@@ -61,41 +61,6 @@ export function evaluateCubicBezier(x, cx1, cy1, cx2, cy2) {
 }
 
 /**
- * Evaluate the parametric easing shape for a v39 BezTriple keyform.
- *
- * Slice 2.A renamed the field (`easing` → `interpolation`). Slice 2.C
- * replaces the local impl with the canonical
- * [fcurveEval.js](../anim/fcurveEval.js)#evaluateBezTripleParam — same
- * impl used by `evaluateFCurve`. This stub is preserved as a back-compat
- * surface for any callers that still pass a raw `t ∈ [0,1]` + an
- * interpolation enum (no segment context). It synthesizes a degenerate
- * 0→1 / 0→1 segment to reuse the canonical evaluator.
- *
- * @param {number} t                            -- 0..1 segment parameter
- * @param {string|undefined} interpolation      -- 'constant'|'linear'|'bezier'|<named easings>
- * @returns {number}
- */
-export function evaluateEasing(t, interpolation) {
-  if (interpolation === 'linear' || !interpolation) return t;
-  if (interpolation === 'constant') return 0;
-  // Synthesize a degenerate (time:0..1, value:0..1) segment so the
-  // canonical evaluator can dispatch on `interpolation` per Blender's
-  // BEZT_IPO_* table, including bezier (with default handle positions)
-  // and the 10 named easings.
-  const prev = {
-    time: 0, value: 0,
-    handleLeft: { time: 0, value: 0 }, handleRight: { time: 1 / 3, value: 0 },
-    handleType: { left: 'auto', right: 'auto' }, interpolation,
-  };
-  const next = {
-    time: 1, value: 1,
-    handleLeft: { time: 2 / 3, value: 1 }, handleRight: { time: 1, value: 1 },
-    handleType: { left: 'auto', right: 'auto' }, interpolation: 'linear',
-  };
-  return evaluateBezTripleSegment(prev, next, t);
-}
-
-/**
  * Interpolate a single fcurve's keyforms at the given time (ms).
  * Returns undefined if no keyforms. Operates directly on the
  * `{time, value, easing, type}` array (post-v36 keyform shape) — the

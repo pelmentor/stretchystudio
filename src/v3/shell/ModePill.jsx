@@ -52,7 +52,6 @@ import {
   MODE_EDIT,
   MODE_POSE,
   MODE_WEIGHT_PAINT,
-  MODE_BLEND_SHAPE,
   MODE_SCULPT,
 } from '../../modes/modeCompat.js';
 
