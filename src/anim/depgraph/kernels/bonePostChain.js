@@ -35,6 +35,24 @@ import { pickBonePostChainComposition } from '../../../renderer/bonePostChainCom
 import { OperationCode, NodeType } from '../types.js';
 
 /**
+ * Return `v` if it's a finite number, else `fallback`. The depgraph
+ * pose/composed/pivot channels must produce a finite matrix even when
+ * upstream data is poisoned — per `feedback_typeof_nan_is_number`,
+ * `?? 0` passes NaN through (NaN is not nullish), and a NaN matrix
+ * cascades into invisible/huge geometry (the Shelby invisible-bones
+ * failure class, commit `94ae9f5`). The rigInvariantCheck framework
+ * (I-7 / I-12..I-15) loud-detects the upstream NaN at Init Rig time;
+ * this kernel's job is to keep the viewport finite during eval.
+ *
+ * @param {unknown} v
+ * @param {number} fallback
+ * @returns {number}
+ */
+function finiteOr(v, fallback) {
+  return Number.isFinite(v) ? /** @type {number} */ (v) : fallback;
+}
+
+/**
  * Walk the project to find the part's nearest bone-group ancestor.
  * Mirrors `computeBoneOverlayMatrices`'s per-part walk
  * ([boneOverlayMatrix.js:209-219](../../../renderer/boneOverlayMatrix.js)).
@@ -82,14 +100,14 @@ function readComposedTransform(ctx, ownerId) {
  * @returns {{rotation:number, x:number, y:number, scaleX:number, scaleY:number}}
  */
 function composedTransformToBonePose(bone, composed) {
-  const px = bone?.transform?.pivotX ?? 0;
-  const py = bone?.transform?.pivotY ?? 0;
+  const px = finiteOr(bone?.transform?.pivotX, 0);
+  const py = finiteOr(bone?.transform?.pivotY, 0);
   return {
-    rotation: composed.rotation ?? 0,
-    x: (composed.x ?? 0) - px,
-    y: (composed.y ?? 0) - py,
-    scaleX: composed.scaleX ?? 1,
-    scaleY: composed.scaleY ?? 1,
+    rotation: finiteOr(composed.rotation, 0),
+    x: finiteOr(composed.x, 0) - px,
+    y: finiteOr(composed.y, 0) - py,
+    scaleX: finiteOr(composed.scaleX, 1),
+    scaleY: finiteOr(composed.scaleY, 1),
   };
 }
 
@@ -138,19 +156,19 @@ export function resolveBoneWorldFromCtx(boneId, ctx, byId, cache) {
   // shapes both yield the canonical flat `{rotation, x, y, scaleX,
   // scaleY}` contract `makeBoneLocalMatrix` expects.
   const pose = composed ? composedTransformToBonePose(bone, composed) : getBonePose(bone);
-  const r = pose?.rotation ?? 0;
-  const px = pose?.x ?? 0;
-  const py = pose?.y ?? 0;
-  const sx = pose?.scaleX ?? 1;
-  const sy = pose?.scaleY ?? 1;
+  const r = finiteOr(pose?.rotation, 0);
+  const px = finiteOr(pose?.x, 0);
+  const py = finiteOr(pose?.y, 0);
+  const sx = finiteOr(pose?.scaleX, 1);
+  const sy = finiteOr(pose?.scaleY, 1);
   let local;
   if (r === 0 && px === 0 && py === 0 && sx === 1 && sy === 1) {
     local = mat3Identity();
   } else {
     local = makeBoneLocalMatrix({
-      pivotX: bone.transform?.pivotX ?? 0,
-      pivotY: bone.transform?.pivotY ?? 0,
-    }, pose);
+      pivotX: finiteOr(bone.transform?.pivotX, 0),
+      pivotY: finiteOr(bone.transform?.pivotY, 0),
+    }, { rotation: r, x: px, y: py, scaleX: sx, scaleY: sy });
   }
 
   // Walk to nearest bone-group ancestor; non-bone groups (visual
