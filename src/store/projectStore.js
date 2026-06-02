@@ -1188,6 +1188,12 @@ export const useProjectStore = create((set, get) => {
       // above already clears them. The body warp's layout sidetable:
       state.project.bodyWarpLayout = null;
       state.project.rigStageLastRunAt = {};
+      // F1 — fresh project resets cursor to canvas centre, matching the
+      // v33 migration seed.
+      state.project.cursor = {
+        x: (state.project.canvas?.width ?? 800) / 2,
+        y: (state.project.canvas?.height ?? 600) / 2,
+      };
       state.versionControl.geometryVersion++;
       state.versionControl.transformVersion++;
       state.versionControl.textureVersion++;
@@ -1285,6 +1291,13 @@ export const useProjectStore = create((set, get) => {
       // heuristic when the marker is missing.
       state.project.lastInitRigCompletedAt = projectData.lastInitRigCompletedAt ?? null;
       state.project.rigStageLastRunAt = projectData.rigStageLastRunAt ?? {};
+      // F1 — restore 2D cursor (canvas-space). Falls back to canvas centre
+      // when absent (legacy save before saveProject persisted the field).
+      {
+        const cw = projectData.canvas?.width ?? 800;
+        const ch = projectData.canvas?.height ?? 600;
+        state.project.cursor = projectData.cursor ?? { x: cw / 2, y: ch / 2 };
+      }
       // Phase 1G — disk-loaded projects start unlinked from any library
       // record. The library-load operator sets `currentLibraryId` itself
       // after this call so a "save" goes back to the correct record.

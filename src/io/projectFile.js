@@ -159,6 +159,11 @@ export async function saveProject(project, opts = {}) {
     // V3 Re-Rig Phase 1: per-stage refit telemetry (Record<stage, ISO ts>).
     // Empty {} means no per-stage refit has run yet.
     rigStageLastRunAt: project.rigStageLastRunAt ?? {},
+    // Schema v33 — 2D cursor in canvas-space. Previously dropped from the
+    // serialized JSON so every save→load round-trip silently reset it to
+    // the canvas-centre default seeded by the v33 migration. See
+    // docs/plans/AUDIT_2026_06_02_R2_MISSING_MODALITIES.md item F1.
+    cursor: project.cursor ?? null,
   };
 
   // The .stretch wrapper is gzipped by JSZip; the pretty-printed
