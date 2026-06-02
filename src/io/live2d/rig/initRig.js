@@ -392,11 +392,26 @@ export function pruneOrphanRotationDeformers(rigSpec) {
   };
 
   for (const m of meshes) walkChain(m?.parent);
-
-  // Rotation IDs whose parent chain is reachable from a mesh ARE alive.
-  // Rotation IDs that are themselves an ancestor of an art mesh ARE alive
-  // (covered by walkChain above). What's NOT alive: rotations that no
-  // art mesh chain visits.
+  // BUG-04 closure 2026-06-02 (rigInvariantCheck I-21 named source):
+  // ALSO walk WARP parent chains. A rotation deformer can be reachable
+  // ONLY via a warp's parent link when art meshes parent at the warp
+  // (not directly at the rotation) — e.g. FaceParallax is parented at
+  // FaceRotation, face-region art meshes parent at RigWarp_face which
+  // is supposed to re-parent to FaceParallax but the re-parenting can
+  // miss in some setups (handwear/bone-baked bug-03 fix path 2026-06-02).
+  // With mesh-only walks, FaceRotation was marked orphan and dropped;
+  // FaceParallax's lifted-grid eval then fell into gridLift's silent
+  // fallback (treating pivot-relative coords as canvas-px), producing
+  // 250k-px drift on 13 face-region parts. Walking WARP parents fixes
+  // the reachability gap.
+  //
+  // NOTE: do NOT walk rotation parent chains. That would let orphan
+  // rotations (Rotation_bothLegs → Rotation_root chain) keep their
+  // own ancestor alive — defeats the prune purpose. Warps don't have
+  // this problem because every warp on the rigSpec is either parented
+  // at root (BodyXWarp) or downstream of a kept warp (RigWarp_<part>,
+  // FaceParallax), so walking their parents only marks legit ancestors.
+  for (const w of warps) walkChain(w?.parent);
   const droppedRotationIds = [];
   const keptRotations = [];
   for (const r of rotations) {

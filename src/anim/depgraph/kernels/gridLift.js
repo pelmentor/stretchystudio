@@ -37,6 +37,7 @@
  * @module anim/depgraph/kernels/gridLift
  */
 
+import { logger } from '../../../lib/logger.js';
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
 import {
@@ -74,6 +75,21 @@ export function kernelGridLiftToParent(op, ctx) {
   }
   const parentId = def.parent;
   const parentNode = ctx.project?.nodes?.find((n) => n?.id === parentId);
+  // BUG-04 closure 2026-06-02: distinguish dangling parent reference from
+  // legitimate part/group parent. Pre-fix the `!isChainDeformerNode`
+  // branch silently treated BOTH as "canvas-px passthrough" — when the
+  // parent ID pointed at a DROPPED rotation deformer (FaceRotation orphan
+  // in Shelby bug-04), the warp's deformer-local grid (pivot-relative
+  // canvas-px in FaceParallax's case) was passed through AS-IF it were
+  // canvas-px, producing 250k-px output drift for face-region parts.
+  // A null parentNode + non-empty parentId IS a structural bug; surface
+  // it via logger.error (per [[no-crutches-rule-one]]) so the operator
+  // sees the dangling reference instead of a silent corruption.
+  if (parentNode == null) {
+    logger.error('gridLift',
+      `warp "${def.id ?? '?'}" references parent id="${parentId}" but no node with that id exists in project.nodes — dangling reference, likely an orphaned/dropped deformer. Returning un-lifted grid; result will be in this warp's deformer-local frame, NOT canvas-px. Fix the orphan-prune step so parents of warp/rotation nodes are preserved`);
+    return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
+  }
   if (!isChainDeformerNode(parentNode)) {
     // Parent is a part/group — treat as canvas-px passthrough.
     return makeLiftedResult(grid, gridSize, state.isQuadTransform === true);
