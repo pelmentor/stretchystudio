@@ -215,21 +215,32 @@ export async function duplicateProject(id) {
     const blobStore = tx.objectStore(BLOB_STORE);
     const metaReq = metaStore.get(id);
     const blobReq = blobStore.get(id);
-    tx.oncomplete = () => {
-      // Resolve happens inside the meta-get success below; this is
-      // the nominal completion path. If we got here without a put,
-      // the resolve was already issued.
-    };
-    metaReq.onsuccess = () => {
-      const meta = metaReq.result;
-      const blobRec = blobReq.result;
-      if (!meta) return reject(new Error('Project not found'));
-      const newId = newProjectId();
-      const newMeta = { ...meta, id: newId, name: `${meta.name} (Copy)`, updatedAt: Date.now() };
+    // F5 + PERSIST-01 — wait for BOTH reads to settle before issuing
+    // any put. Pre-fix `metaReq.onsuccess` read `blobReq.result` even
+    // though IndexedDB only guarantees `blobReq` has fired its own
+    // onsuccess once its read completes; on slow systems metaReq.onsuccess
+    // could land before blobReq finished, leaving the duplicated record
+    // without its blob. Plus the dead `tx.oncomplete` no-op at the top
+    // was overwritten from inside the meta callback only on the success
+    // path — error paths would still trip the no-op and leak the
+    // Promise.
+    let metaResult; let metaReady = false;
+    let blobResult; let blobReady = false;
+    let newId = null;
+    const maybeWrite = () => {
+      if (!metaReady || !blobReady) return;
+      if (!metaResult) { reject(new Error('Project not found')); return; }
+      newId = newProjectId();
+      const newMeta = { ...metaResult, id: newId, name: `${metaResult.name} (Copy)`, updatedAt: Date.now() };
       metaStore.put(newMeta);
-      if (blobRec?.blob) blobStore.put({ id: newId, blob: blobRec.blob });
-      tx.oncomplete = () => resolve(newId);
+      if (blobResult?.blob) blobStore.put({ id: newId, blob: blobResult.blob });
     };
+    metaReq.onsuccess = () => { metaResult = metaReq.result; metaReady = true; maybeWrite(); };
+    metaReq.onerror = () => reject(metaReq.error);
+    blobReq.onsuccess = () => { blobResult = blobReq.result; blobReady = true; maybeWrite(); };
+    blobReq.onerror = () => reject(blobReq.error);
+    tx.oncomplete = () => { if (newId) resolve(newId); };
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('duplicateProject: transaction aborted'));
   });
 }
