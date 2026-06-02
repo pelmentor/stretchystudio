@@ -40,6 +40,42 @@ import { resolveBoneWorldFromCtx } from './kernels/bonePostChain.js';
 import { isBoneGroup } from '../../store/objectDataAccess.js';
 
 /**
+ * PERF-1 + DEPGRAPH-FRAME-01 — memoize buildDepGraph by (project, action)
+ * identity. Pre-fix the full graph was rebuilt on every viewport tick
+ * (CanvasViewport.jsx rAF), running two O(N nodes) passes + DFS cycle
+ * detection at 60Hz — the dominant viewport cost during playback on
+ * Hiyori-class projects.
+ *
+ * Cache shape. WeakMap<project, Map<actionKey, graph>>. Immer guarantees
+ * a new `project` reference whenever any descendant of `state.project`
+ * changes; the inner map keys on action identity (or 'none') so changing
+ * the active action invalidates only that entry without holding stale
+ * graphs alive for dead projects (WeakMap drops the outer slot when the
+ * old project ref is GC'd).
+ *
+ * Param/time/pose live in the eval ctx, not the build pass — they
+ * already do not invalidate the build.
+ *
+ * @type {WeakMap<object, Map<object|string, ReturnType<typeof buildDepGraph>>>}
+ */
+const _graphCache = new WeakMap();
+
+function _getCachedGraph(project, action) {
+  let bucket = _graphCache.get(project);
+  if (!bucket) {
+    bucket = new Map();
+    _graphCache.set(project, bucket);
+  }
+  const key = action ?? 'none';
+  let graph = bucket.get(key);
+  if (!graph) {
+    graph = buildDepGraph(project, action ? { action } : {});
+    bucket.set(key, graph);
+  }
+  return graph;
+}
+
+/**
  * @typedef {object} ArtMeshFrame
  * @property {string} id
  * @property {Float32Array} vertexPositions
@@ -92,7 +128,7 @@ import { isBoneGroup } from '../../store/objectDataAccess.js';
  * @returns {ArtMeshFrame[]}
  */
 export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
-  const graph = buildDepGraph(project, opts.action ? { action: opts.action } : {});
+  const graph = _getCachedGraph(project, opts.action ?? null);
   const overrides = new Map();
   if (paramValues && typeof paramValues === 'object') {
     for (const k of Object.keys(paramValues)) {
