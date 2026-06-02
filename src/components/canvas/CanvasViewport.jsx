@@ -654,6 +654,62 @@ export default function CanvasViewport({
       glRenderer: gl.getParameter(gl.RENDERER),
     });
 
+    // GL-03 — WebGL context loss handlers. Pre-fix a driver reset
+    // (Windows TDR, tab backgrounded too long on mobile, Chrome per-tab
+    // GPU eviction under memory pressure) invalidated every cached
+    // VAO / VBO / IBO / texture in PartRenderer._parts; subsequent
+    // draws emitted INVALID_OPERATION with no recovery path. Now we
+    // halt the rAF on loss and re-init the scene + clear upload caches
+    // on restored so the sync useEffect repopulates from project state.
+    const onContextLost = (e) => {
+      e.preventDefault();
+      logger.warn('viewportGL', 'WebGL2 context lost — halting rAF until restore', {});
+      cancelAnimationFrame(rafRef.current);
+    };
+    const onContextRestored = () => {
+      logger.warn('viewportGL', 'WebGL2 context restored — rebuilding scene', {});
+      try {
+        sceneRef.current?.destroy?.();
+      } catch { /* may already be lost */ }
+      try {
+        sceneRef.current = new ScenePass(gl);
+      } catch (err) {
+        logger.error('viewportGL', `ScenePass re-init after restore failed: ${err?.message ?? err}`, { err: String(err) });
+        return;
+      }
+      setSceneRef({
+        parts:       sceneRef.current.parts,
+        _markDirty:  () => { isDirtyRef.current = true; },
+        _recordMeshUpload: (partId, sig) => {
+          lastUploadedMeshSigRef.current.set(partId, sig);
+        },
+      });
+      // Force the sync effect to re-upload everything from project state.
+      lastUploadedSourcesRef.current.clear();
+      lastUploadedMeshSigRef.current.clear();
+      lastUploadedGeomVersionRef.current.clear();
+      uvTypedCacheRef.current.clear();
+      isDirtyRef.current = true;
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('webglcontextrestored', onContextRestored);
+
+    // GL-04 — tab-hidden visibility reset. Browsers suspend rAF when
+    // hidden; `lastPhysicsTimestampRef` retained the LAST timestamp from
+    // before the tab hid, so on resume `(timestamp - lastTs)/1000` was
+    // the entire wall-clock pause. The internal clamps capped the step
+    // at 0.5s but a 0.5s pendulum step is still a multi-frame jump
+    // producing a visible whip. Zero the timestamp on hide so the first
+    // post-resume frame's dt math short-circuits to 0.
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        lastPhysicsTimestampRef.current = 0;
+        eyeBlinkRef.current?.reset?.();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     const tick = (timestamp) => {
       // Advance animation playback and mark dirty if time moved
       const moved = animRef.current.tick(timestamp);
@@ -1333,6 +1389,9 @@ export default function CanvasViewport({
         scene: !!sceneRef.current,
       });
       cancelAnimationFrame(rafRef.current);
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       // Tear down the mesh worker pool. Without this, terminated
       // CanvasViewport mounts (workspace switch, tab swap) would leave
       // their POOL_SIZE workers running indefinitely with their full
@@ -1344,6 +1403,14 @@ export default function CanvasViewport({
       meshDispatchSeqRef.current.clear();
       sceneRef.current?.destroy();
       sceneRef.current = null;
+      // GL-06 — clear upload-cache refs so a fresh GL context (next
+      // mount) doesn't read stale partId→sig entries from a prior
+      // session. Pre-fix imageDataMapRef was cleared but the upload-cache
+      // trio + uv typed cache persisted.
+      lastUploadedSourcesRef.current.clear();
+      lastUploadedMeshSigRef.current.clear();
+      lastUploadedGeomVersionRef.current.clear();
+      uvTypedCacheRef.current.clear();
       // Phase 4 — clear the global scene registry so a stale `parts`
       // pointer doesn't survive the WebGL context teardown.
       setSceneRef(null);
@@ -2089,6 +2156,13 @@ export default function CanvasViewport({
 
       // Rebuild imageDataMapRef from loaded textures
       imageDataMapRef.current.clear();
+      // GL-06 — same as handleReset: drop the upload-cache trio + uv
+      // typed cache so the post-load sync effect re-uploads every part
+      // from project state instead of skipping on stale sig matches.
+      lastUploadedSourcesRef.current.clear();
+      lastUploadedMeshSigRef.current.clear();
+      lastUploadedGeomVersionRef.current.clear();
+      uvTypedCacheRef.current.clear();
       for (const [partId, img] of images) {
         const off = document.createElement('canvas');
         off.width = img.width;
@@ -3580,6 +3654,14 @@ export default function CanvasViewport({
 
     // 3. Clear local cache
     imageDataMapRef.current.clear();
+    // GL-06 — pre-fix the upload-cache trio + uv typed cache pinned
+    // entries for deleted partIds across the reset, plus on partId
+    // re-use a freshly-uploaded GL resource may have been skipped
+    // because the cache claimed it was already current.
+    lastUploadedSourcesRef.current.clear();
+    lastUploadedMeshSigRef.current.clear();
+    lastUploadedGeomVersionRef.current.clear();
+    uvTypedCacheRef.current.clear();
 
     // 4. Reset editor state
     useAnimationStore.getState().resetPlayback?.();

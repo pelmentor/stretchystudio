@@ -55,8 +55,14 @@ export class PartRenderer {
       vertexData[i * 4 + 3] = uvs[i * 2 + 1];
     }
 
-    // Flat index array
-    const indexData = new Uint16Array(triangles.length * 3);
+    // GL-07 — Uint32 IBO for >65535 vert meshes. Pre-fix hardcoded
+    // Uint16Array silently truncated above 65535, producing wrap-around
+    // indices and visually scrambled triangulation. WebGL2 supports
+    // UNSIGNED_INT IBO natively (no extension needed). Pick the width
+    // by vertex count and remember it on the state struct so the draw
+    // call uses the matching gl.UNSIGNED_INT/_SHORT.
+    const IndexCtor = n > 65535 ? Uint32Array : Uint16Array;
+    const indexData = new IndexCtor(triangles.length * 3);
     for (let i = 0; i < triangles.length; i++) {
       indexData[i * 3]     = triangles[i][0];
       indexData[i * 3 + 1] = triangles[i][1];
@@ -69,23 +75,29 @@ export class PartRenderer {
     // wireframe pass draws each line once. Without this, drawing
     // triangle indices as gl.LINES produces incoherent segments
     // (sequential pairs of triangle indices have no edge meaning).
+    //
+    // GL-07 — `lo * 65536 + hi` is a 32-bit dedupe key valid only for
+    // n ≤ 65535. Widen the key to a multiplied range that fits inside
+    // safe-integer space for any n our meshes ever reach (n ≤ 2^25 is
+    // safe at JS Number precision).
     /** @type {Set<number>} */
     const seenEdges = new Set();
     /** @type {number[]} */
     const wireData = [];
+    const wireKeyMul = n > 65535 ? (1 << 25) : 65536;
     for (let i = 0; i < triangles.length; i++) {
       const [a, b, c] = triangles[i];
       const pairs = [[a, b], [b, c], [c, a]];
       for (const [p, q] of pairs) {
         const lo = Math.min(p, q);
         const hi = Math.max(p, q);
-        const key = lo * 65536 + hi;  // fits in 32-bit int for n ≤ 65535
+        const key = lo * wireKeyMul + hi;
         if (seenEdges.has(key)) continue;
         seenEdges.add(key);
         wireData.push(p, q);
       }
     }
-    const wireIndexData = new Uint16Array(wireData);
+    const wireIndexData = new IndexCtor(wireData);
 
     // Reuse or create GPU state
     let state = this._parts.get(partId);
@@ -114,6 +126,10 @@ export class PartRenderer {
     state.indexCount = indexData.length;
     state.wireIndexCount = wireIndexData.length;
     state.vertCount  = n;
+    // GL-07 — record GL element type so the draw calls match the IBO
+    // width. Draw sites read state.indexType (defaults to UNSIGNED_SHORT
+    // on legacy state structs).
+    state.indexType = n > 65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
 
     // Bind VAO and upload buffers
     gl.bindVertexArray(state.vao);
@@ -134,7 +150,7 @@ export class PartRenderer {
 
     // Edge indices (boundary loop — different from wireframe)
     if (mesh.edgeIndices) {
-      const edgeData = new Uint16Array(mesh.edgeIndices);
+      const edgeData = new IndexCtor(mesh.edgeIndices);
       state.edgeIndexCount = edgeData.length;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.edgeIbo);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edgeData, gl.STATIC_DRAW);
@@ -197,11 +213,21 @@ export class PartRenderer {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    // GL-08 — match min-filter to the mipmap chain. Pre-fix we set
+    // LINEAR (base-level only) AND called generateMipmap; the whole
+    // pyramid was allocated + populated but never sampled (~33% wasted
+    // VRAM per texture + wasted generateMipmap CPU/GPU time). Switching
+    // to LINEAR_MIPMAP_LINEAR uses the chain for sharper zoom-out and
+    // matches the cost we were already paying.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
     gl.generateMipmap(gl.TEXTURE_2D);
+    // GL-08 follow-up — unbind so accidental reliance on a stray
+    // binding from a prior uploadTexture call surfaces as a draw-time
+    // error instead of silently sampling a different texture.
+    gl.bindTexture(gl.TEXTURE_2D, null);
 
     state.texture = tex;
   }
@@ -248,7 +274,7 @@ export class PartRenderer {
     gl.uniform1i(uTexture, 0);
 
     gl.bindVertexArray(state.vao);
-    gl.drawElements(gl.TRIANGLES, state.indexCount, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.TRIANGLES, state.indexCount, state.indexType ?? gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
   }
 
@@ -275,7 +301,7 @@ export class PartRenderer {
     // we restore it before unbinding so subsequent draws on this VAO
     // see the right element buffer.
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.wireIbo);
-    gl.drawElements(gl.LINES, state.wireIndexCount, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.LINES, state.wireIndexCount, state.indexType ?? gl.UNSIGNED_SHORT, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.ibo);
     gl.bindVertexArray(null);
   }
@@ -297,7 +323,7 @@ export class PartRenderer {
 
     gl.bindVertexArray(state.vao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.edgeIbo);
-    gl.drawElements(gl.LINE_LOOP, state.edgeIndexCount, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.LINE_LOOP, state.edgeIndexCount, state.indexType ?? gl.UNSIGNED_SHORT, 0);
     // Restore triangle IBO
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.ibo);
     gl.bindVertexArray(null);
