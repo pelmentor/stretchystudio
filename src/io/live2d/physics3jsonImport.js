@@ -37,6 +37,11 @@ const INPUT_TYPE_REVERSE = {
  * @property {Array<object>} rules    — physicsRules[] in resolved shape
  * @property {string[]}      warnings — non-fatal issues (unknown input types,
  *                                       missing fields filled with defaults).
+ * @property {{gravity:{x:number,y:number}, wind:{x:number,y:number}} | null} [effectiveForces]
+ *   Parsed from `Meta.EffectiveForces` when present. Callers SHOULD persist
+ *   on the project so the writer can round-trip; absent → null, writer
+ *   falls back to Cubism canonical (gravity 0/-1, wind 0/0).
+ *   See L2D-JSON-02.
  */
 
 /**
@@ -119,10 +124,23 @@ export function parsePhysics3Json(jsonText) {
           warnings.push(`${id}.Output[${j}]: missing Destination.Id, skipped`);
           continue;
         }
+        // L2D-JSON-07 — warn on missing VertexIndex instead of silently
+        // collapsing to joint 1 (multi-joint chains usually want the tip).
+        if (!Number.isFinite(out.VertexIndex)) {
+          warnings.push(`${id}.Output[${j}]: missing VertexIndex, defaulting to 1`);
+        }
+        // L2D-JSON-01 — preserve per-output Weight and Type so the
+        // writer can round-trip them. Default Weight=100 + Type='Angle'
+        // matches the Cubism Editor canonical when the field is omitted.
+        const outputType = typeof out.Type === 'string' && (out.Type === 'Angle' || out.Type === 'X' || out.Type === 'Y')
+          ? out.Type
+          : 'Angle';
         outputs.push({
           paramId,
           vertexIndex: numOr(out.VertexIndex, 1) | 0,
           scale: numOr(out.Scale, 0),
+          weight: numOr(out.Weight, 100),
+          outputType,
           isReverse: !!out.Reflect,
         });
       }
@@ -175,7 +193,19 @@ export function parsePhysics3Json(jsonText) {
     }));
   }
 
-  return { rules, warnings };
+  // L2D-JSON-02 — parse Meta.EffectiveForces so the caller can persist
+  // it and round-trip via generatePhysics3Json({ effectiveForces }).
+  /** @type {{gravity:{x:number,y:number}, wind:{x:number,y:number}} | null} */
+  let effectiveForces = null;
+  const ef = doc?.Meta?.EffectiveForces;
+  if (ef && typeof ef === 'object') {
+    effectiveForces = {
+      gravity: { x: numOr(ef?.Gravity?.X, 0), y: numOr(ef?.Gravity?.Y, -1) },
+      wind:    { x: numOr(ef?.Wind?.X, 0),    y: numOr(ef?.Wind?.Y, 0)    },
+    };
+  }
+
+  return { rules, warnings, effectiveForces };
 }
 
 function numOr(v, fallback) {
