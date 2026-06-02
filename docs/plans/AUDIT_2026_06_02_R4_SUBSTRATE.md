@@ -4,69 +4,83 @@ Fourth-round Workflow over byte-fidelity binary writers + Cubism kernels + anim 
 
 **Workflow run `wf_42f51bc7-f49`** — 205 agents, ~10M tokens, 33 min.
 
-**66 raw findings → 24 confirmed / 42 refuted** via 3-lens default-refuted verify (64% pruning — strictest round yet, critic was tough on byte-fidelity claims).
+**66 raw findings → 24 confirmed / 42 refuted** via 3-lens default-refuted verify (64% pruning — strictest round yet).
 
 ## Severity distribution
 
-- HIGH (16): WRT-1, WRT-2, CUBISM-PORT-001, CUBISM-PORT-004, ANIM-1, ANIM-2, ANIM-3, ANIM-4, MESH-002, F1-rotation-units, A-1, A-2, A-4, A-5, B-1, B-2
-- MEDIUM (3), LOW (5)
+- HIGH (16), MEDIUM (3), LOW (5)
 
-## Confirmed findings — punch list
+## Confirmed findings
 
 ### moc3-cmo3-writers (2)
 
-- [ ] **WRT-1** `binaryWriter.js:33` writeI32/writeI16/writeU8 silently coerce NaN to 0. **HIGH** (mirror F6 to integer bucket)
-- [ ] **WRT-2** `xmlbuilder.js:114` XmlBuilder serializes NaN/Infinity attribute values as literal strings. **HIGH** (cmo3 round-trip)
+- [x] **WRT-1** `binaryWriter.js:33` writeI32/writeI16/writeU8 silently coerce NaN to 0. **HIGH** — `19798a6`
+- [x] **WRT-2** `xmlbuilder.js:114` XmlBuilder serializes NaN/Infinity as literal strings. **HIGH** — `19798a6`
 
 ### cubism-kernels (4)
 
-- [ ] **CUBISM-PORT-001** `scenePass.js:245` Overlapping mask meshes alias on shared 8-bit stencil. **HIGH** — DEFERRED (needs Cubism-style bit-packed channel masking shader; substantial refactor)
-- [ ] **CUBISM-PORT-004** `kernels/keyform.js:134` Rotation keyform interpolation silently shrinks scale when any keyform missing. **HIGH**
-- [ ] **CUBISM-PORT-007** `kernels/rotationSetup.js:142` Per-evalChainAtPoint Float32Array allocations per rotation per frame. **LOW** (perf)
-- [ ] **CUBISM-PORT-008** `cubismWarpEval.js:407` Corner-zone find rebuilds 4-element array per OOB vertex. **MEDIUM** (perf)
+- [ ] **CUBISM-PORT-001** `scenePass.js:245` Overlapping mask meshes alias on shared 8-bit stencil. **HIGH** — DEFERRED (needs Cubism bit-packed channel masking shader; substantial refactor)
+- [x] **CUBISM-PORT-004** `kernels/keyform.js:134` Rotation keyform interp silently shrinks scale on missing keyform. **HIGH** — `d803df4`
+- [x] **CUBISM-PORT-007** `kernels/rotationSetup.js:142` Per-call Float32Array allocations. **LOW** — `3ed2e92`
+- [x] **CUBISM-PORT-008** `cubismWarpEval.js:407` Corner-zone find rebuilds 4-elem array per OOB vertex. **MEDIUM** — `3ed2e92`
 
 ### anim-editors (6)
 
-- [ ] **ANIM-1** `TimelineEditor.jsx:734` selectedKeyframes Set never cleared on action change. **HIGH**
-- [ ] **ANIM-2** `keyformSelectionStore.js:95` Global store retains stale fcurveId entries across action switch. **HIGH**
-- [ ] **ANIM-3** `NLAEditor.jsx:1042` Strip context menu 'Edit Action' ignores PROTECTED + tweak-mode gates. **HIGH**
-- [ ] **ANIM-4** `animationStore.js:97` setStartFrame doesn't clamp vs endFrame, lets NaN/Infinity through. **HIGH**
-- [ ] **ANIM-5** `TimelineEditor.jsx:736` Clipboard does not record source action. **MEDIUM**
-- [ ] **ANIM-11** `TimelineEditor.jsx:1180` Keydown handler doesn't gate on contentEditable / range selection. **LOW**
+- [x] **ANIM-1** `TimelineEditor.jsx:734` selectedKeyframes never cleared on action change. **HIGH** — `8958142`
+- [x] **ANIM-2** `keyformSelectionStore.js:95` Global store stale fcurveIds across action switch. **HIGH** — `8958142`
+- [x] **ANIM-3** `NLAEditor.jsx:1042` Strip context Edit Action ignores PROTECTED + tweak gates. **HIGH** — `8958142`
+- [x] **ANIM-4** `animationStore.js:97` setStartFrame no NaN guard, no end-frame clamp. **HIGH** — `8958142`
+- [x] **ANIM-5** `TimelineEditor.jsx:736` Clipboard doesn't record source action. **MEDIUM** — `8958142`
+- [x] **ANIM-11** `TimelineEditor.jsx:1180` Keydown handler doesn't gate contentEditable. **LOW** — `8958142`
 
 ### mesh-edit-kernels (3)
 
-- [ ] **MESH-002** `lib/sculpt/grab.js:69` grabTick writes only {x,y} — restX/restY never updated. **HIGH**
-- [ ] **MESH-010** `applyTopologyOp.js:144` Array.from(uvs) converts Float32Array to plain Array. **LOW**
-- [ ] **MESH-011** `normalize.js:113` normalizeAllWeights divides by sum without subnormal floor. **LOW**
+- [x] **MESH-002** `lib/sculpt/grab.js:69` grabTick writes only {x,y} — restX/restY never updated. **HIGH** — `587a5f1`
+- [x] **MESH-010** `applyTopologyOp.js:144` Array.from(uvs) collapses Float32Array. **LOW** — `587a5f1`
+- [x] **MESH-011** `normalize.js:113` Divides by sum without subnormal floor. **LOW** — `587a5f1`
 
 ### bone-skinning-constraints (2)
 
-- [ ] **F1-rotation-units-mismatch** `constraints.js:230` TRACK_TO / LIMIT_ROTATION treat rotation as radians, renderer reads as degrees. **HIGH**
-- [ ] **F9-copy-rotation-wrap** `constraints.js:249` evalCopyRotation wrapPi causes ±360° flip across frames. **LOW** — DEFERRED (needs broader constraint math unwrap policy)
+- [x] **F1-rotation-units-mismatch** `constraints.js:230` Constraints operate in radians, project in degrees. **HIGH** — `5aedfd9`
+- [ ] **F9-copy-rotation-wrap** `constraints.js:249` evalCopyRotation wrapPi causes ±360° flip. **LOW** — DEFERRED (needs broader unwrap policy across motion3 export + drivers)
 
 ### migration-chain-keymap (7)
 
-- [ ] **A-1** `artMeshRuntimeSync.js:155` persistArtMeshRuntime silent no-op post-v18 (reads node.mesh). **HIGH**
-- [ ] **A-2** `groupRotationToBone.js:193` v44 GroupRotation→bone skips every part post-v18. **HIGH**
-- [ ] **A-4** `v47_runtime_parent_strip.js:58` v47 strip no-op on post-v18 (reads node.mesh?.runtime). **HIGH**
-- [ ] **A-5** `projectFile.js:111` Save path doesn't convert meshData uvs Float32Array → number[]. **HIGH**
-- [ ] **B-1** `dispatcher.js:62` Keymap dispatcher swallows operator exceptions (R1 only fixed menu invokers). **HIGH**
-- [ ] **B-2** `registry.js:336` selection.selectAllToggle reads node.mesh.vertices — always 0 post-v18. **HIGH**
-- [ ] **B-3** `DopesheetEditor.jsx:584` G/Delete/Shift+D handlers don't stopPropagation. **MEDIUM**
+- [x] **A-1** `artMeshRuntimeSync.js:155` persistArtMeshRuntime silent no-op post-v18. **HIGH** — `79b5bdc`
+- [x] **A-2** `groupRotationToBone.js:193` v44 migration skips every part post-v18. **HIGH** — `79b5bdc`
+- [x] **A-4** `v47_runtime_parent_strip.js:58` v47 strip no-op post-v18. **HIGH** — `79b5bdc`
+- [x] **A-5** `projectFile.js:111` Save doesn't convert meshData uvs Float32Array. **HIGH** — `79b5bdc`
+- [x] **B-1** `dispatcher.js:62` Keymap swallows operator exceptions. **HIGH** — `f1eab4a`
+- [x] **B-2** `registry.js:336` selection.selectAllToggle reads node.mesh.vertices. **HIGH** — `79b5bdc`
+- [x] **B-3** `DopesheetEditor.jsx:584` G/Delete/Shift+D don't stopPropagation. **MEDIUM** — `f1eab4a`
+
+## Deferred (2 items)
+
+- **CUBISM-PORT-001** mask stencil overlap — needs Cubism-style bit-packed channel masking shader (matches `CubismClippingManager_WebGL`). Substantial shader + state-management rework; separate session.
+- **F9-copy-rotation-wrap** — drop wrapPi from evalCopyRotation to preserve unwrapped value across frames. Touches drivers, fcurve interp, motion3 diff export. Needs broader unwrap policy.
+
+## Shipped commits this round (chronological)
+
+| # | Commit | Author | Items |
+|---|--------|--------|-------|
+| 1 | `509ce66` | Claude | tracking doc |
+| 2 | `19798a6` | pelmentor | WRT-1 + WRT-2 |
+| 3 | `79b5bdc` | Claude | v18 cascade A-1/-2/-4/-5 + B-2 |
+| 4 | `d803df4` | pelmentor | CUBISM-PORT-004 |
+| 5 | `8958142` | Claude | ANIM-1..-5/-11 |
+| 6 | `587a5f1` | pelmentor | MESH-002/-010/-011 |
+| 7 | `f1eab4a` | Claude | B-1 + B-3 |
+| 8 | `5aedfd9` | pelmentor | F1-rotation-units |
+| 9 | `3ed2e92` | Claude | CUBISM-PORT-007/-008 |
+
+**Closed: 22 / 24 confirmed findings.** 2 deferred.
 
 ## Critic — missed categories (next round)
 
-After 4 rounds: PSD ingestion pipeline, can3 + JSON sibling writers (motion3/physics3/cdi3/model3 still partial), Cubism physics tick, caffPacker/Unpacker XML escape + zip-entry encoding, cmo3 import synthesis pipeline, Service layer (RigService, PoseService, ImportService, ExportService, etc.).
+After 4 rounds: PSD ingestion pipeline + worker pool, can3 + JSON sibling writers (motion3/physics3/cdi3/model3 still partial post-R3), Cubism physics tick, caffPacker/Unpacker XML escape, cmo3 import synthesis pipeline, Service layer (RigService/PoseService/ImportService/ExportService/dwposeService).
 
-## Strategy
+## Resume hint
 
-Last commit Pelmentor `1ffc4ea` → next Claude (this doc). Then batch:
-1. WRT-1 + WRT-2 (mirror F6 to integers + XML)
-2. v18-cascade A-1/-2/-4/-5/B-2 (all silent-noops from same root cause)
-3. CUBISM-PORT-004 + CUBISM-PORT-007/-008 (correctness + perf)
-4. ANIM batch (1+2 prune, 3 gate, 4 clamp, 5 clipboard, 11 contentEditable)
-5. MESH batch (002 restX/Y, 010+011 hygiene)
-6. F1 rotation units
-7. B-1 + B-3 dispatcher
-8. Close-out
+Last commit Claude `3ed2e92` → next pelmentor (close-out).
+
+Next round candidates: byte-fidelity service layer + cmo3 import synthesis (highest critic-flagged yield), or PSD ingestion pipeline.
