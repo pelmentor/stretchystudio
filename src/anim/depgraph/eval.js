@@ -33,6 +33,7 @@
  * @module anim/depgraph/eval
  */
 
+import { logger } from '../../lib/logger.js';
 import { OperationCode, OperationNode, RelationFlag } from './types.js';
 import { kernelTimeTick }    from './kernels/time.js';
 import { kernelParamEval }   from './kernels/param.js';
@@ -187,6 +188,8 @@ export function evalDepGraph(graph, ctxIn) {
   }
 
   let evaluatedCount = 0;
+  /** @type {Set<string>} */
+  const failedOpcodes = new Set();
   while (ready.length > 0) {
     const op = ready.shift();
     if (!op) break;
@@ -195,8 +198,20 @@ export function evalDepGraph(graph, ctxIn) {
     if (kernel) {
       try {
         result = kernel(op, ctx);
-      } catch {
-        // Kernel error → store NaN/undefined; downstream may fall back.
+      } catch (e) {
+        // Per RULE-№1: do not silently swallow. Surface to in-app Logs panel
+        // so the failing op is named. Dedupe per opcode-per-eval so a
+        // per-frame failing kernel does not flood the ring buffer.
+        const opcodeName = String(op.opcode);
+        if (!failedOpcodes.has(opcodeName)) {
+          failedOpcodes.add(opcodeName);
+          const errMsg = /** @type {any} */ (e)?.message ?? String(e);
+          logger.error(
+            'depgraph',
+            `kernel ${opcodeName} (op="${op.name}") threw: ${errMsg}`,
+            { opcode: opcodeName, opName: op.name, err: String(e) }
+          );
+        }
         result = undefined;
       }
     }
