@@ -50,8 +50,13 @@ export function createPsdFinalizeWorkerPool() {
     worker.postMessage(job.payload);
   }
 
-  for (let i = 0; i < POOL_SIZE; i++) {
-    const w = new Worker(new URL('./psdFinalize.worker.js', import.meta.url), { type: 'module' });
+  /**
+   * @param {Worker} w
+   * WORKER-001 — bind the same handlers to a newly-spawned replacement
+   * after a fatal `onerror`. Reusing a worker that fired `onerror` left
+   * subsequent queued jobs hanging forever (the dead worker never replied).
+   */
+  function bindHandlers(w) {
     w.onmessage = (e) => {
       const job = /** @type {any} */ (w)._currentJob;
       /** @type {any} */ (w)._currentJob = null;
@@ -64,8 +69,26 @@ export function createPsdFinalizeWorkerPool() {
       const job = /** @type {any} */ (w)._currentJob;
       /** @type {any} */ (w)._currentJob = null;
       if (job) job.reject(err);
-      processNext(w);
+      // Worker is in undefined state — terminate, drop from pool, and
+      // spawn a replacement so the pool keeps its capacity. Without this
+      // the next enqueue starves the queue (idle.pop() returns nothing,
+      // queue grows unbounded, every Promise hangs forever).
+      try { w.terminate(); } catch { /* already gone */ }
+      const wIdx = workers.indexOf(w);
+      if (wIdx >= 0) workers.splice(wIdx, 1);
+      const iIdx = idle.indexOf(w);
+      if (iIdx >= 0) idle.splice(iIdx, 1);
+      if (destroyed) return;
+      const replacement = new Worker(new URL('./psdFinalize.worker.js', import.meta.url), { type: 'module' });
+      bindHandlers(replacement);
+      workers.push(replacement);
+      processNext(replacement);
     };
+  }
+
+  for (let i = 0; i < POOL_SIZE; i++) {
+    const w = new Worker(new URL('./psdFinalize.worker.js', import.meta.url), { type: 'module' });
+    bindHandlers(w);
     workers.push(w);
     idle.push(w);
   }
