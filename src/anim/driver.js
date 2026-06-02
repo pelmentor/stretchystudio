@@ -97,6 +97,19 @@ const SAFE_GLOBALS = Object.freeze({
  *   - keywords: `function`, `return`, `var`, `let`, `const`, `new`,
  *     `class`, `import`, `export`, `eval`
  *
+ * SEC-005 — extended reject list. The `new Function` sandbox below
+ * has no scope chain access (no `this`/`window`), but several tokens
+ * still allow escape paths:
+ *   - `Function`: `Function('return process')()` materialises a global.
+ *   - `constructor`: every value's `.constructor.constructor` IS Function.
+ *   - `arguments`: leaks the caller's argument vector.
+ *   - `prototype` / `__proto__`: walks prototype chains to native code.
+ *   - Backticks (template strings): `${alert(1)}` interpolation.
+ *   - Unicode escapes (`function`): bypasses literal-keyword scan.
+ * Token-list rejection is still a crutch — a real parser whitelist
+ * (acorn in expression mode) is the proper fix per RULE-№1; this
+ * widens the deny list as the immediate defence.
+ *
  * @param {string} expr
  * @returns {boolean}
  */
@@ -104,8 +117,10 @@ function isSafeExpression(expr) {
   if (typeof expr !== 'string') return false;
   if (/[[\]]/.test(expr)) return false;
   if (/=(?!=)/.test(expr)) return false; // bare = (assignment), not ==
-  if (/\b(function|return|var|let|const|new|class|import|export|eval|this|window|document|globalThis)\b/.test(expr)) return false;
+  if (/\b(function|return|var|let|const|new|class|import|export|eval|this|window|document|globalThis|Function|constructor|arguments|prototype|__proto__)\b/.test(expr)) return false;
   if (/(?<![A-Za-z0-9_])\.(?![0-9])/.test(expr)) return false; // dot but not as decimal
+  if (/[`]/.test(expr)) return false; // template literals
+  if (/\\u/.test(expr)) return false; // unicode escapes (smuggle keywords)
   return true;
 }
 

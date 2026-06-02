@@ -36,44 +36,51 @@ self.onmessage = (e) => {
 
     /** @type {Array<any>} */
     const layers = [];
-    function walk(children) {
-      if (!children) return;
-      for (const layer of children) {
-        if (layer.children) {
-          walk(layer.children);
-          continue;
-        }
-        if (!layer.imageData && !layer.canvas) continue;
-
-        const left   = layer.left   ?? 0;
-        const top    = layer.top    ?? 0;
-        const right  = layer.right  ?? psd.width;
-        const bottom = layer.bottom ?? psd.height;
-        const w = right  - left;
-        const h = bottom - top;
-        if (w <= 0 || h <= 0) continue;
-
-        // With `useImageData: true` ag-psd attaches imageData directly
-        // (canvas-free path so this code runs identically inside a
-        // worker, where `document.createElement('canvas')` isn't
-        // available).
-        const imageData = layer.imageData;
-        if (!imageData) continue;
-
-        layers.push({
-          name:      layer.name || `Layer ${layers.length + 1}`,
-          x:         left,
-          y:         top,
-          width:     w,
-          height:    h,
-          imageData,
-          blendMode: layer.blendMode ?? 'normal',
-          opacity:   layer.opacity !== undefined ? layer.opacity : 1,
-          visible:   !layer.hidden,
-        });
+    // SEC-007 — iterative DFS instead of recursion. Recursive walk would
+    // throw RangeError on a maliciously-deep PSD group chain (or a deeply
+    // nested but legitimate file). Queue-based traversal preserves the
+    // pre-order semantics the layers.reverse() at the end relies on.
+    const stack = Array.isArray(psd.children) ? [...psd.children] : [];
+    // Process in document order via a manual index walk; treat children
+    // arrays as splice-in inserts to preserve ag-psd's expected order.
+    let i = 0;
+    while (i < stack.length) {
+      const layer = stack[i++];
+      if (!layer) continue;
+      if (layer.children) {
+        // Insert children at current position so they are visited next.
+        stack.splice(i, 0, ...layer.children);
+        continue;
       }
+      if (!layer.imageData && !layer.canvas) continue;
+
+      const left   = layer.left   ?? 0;
+      const top    = layer.top    ?? 0;
+      const right  = layer.right  ?? psd.width;
+      const bottom = layer.bottom ?? psd.height;
+      const w = right  - left;
+      const h = bottom - top;
+      if (w <= 0 || h <= 0) continue;
+
+      // With `useImageData: true` ag-psd attaches imageData directly
+      // (canvas-free path so this code runs identically inside a
+      // worker, where `document.createElement('canvas')` isn't
+      // available).
+      const imageData = layer.imageData;
+      if (!imageData) continue;
+
+      layers.push({
+        name:      layer.name || `Layer ${layers.length + 1}`,
+        x:         left,
+        y:         top,
+        width:     w,
+        height:    h,
+        imageData,
+        blendMode: layer.blendMode ?? 'normal',
+        opacity:   layer.opacity !== undefined ? layer.opacity : 1,
+        visible:   !layer.hidden,
+      });
     }
-    walk(psd.children);
     layers.reverse();
 
     self.postMessage({ ok: true, width: psd.width, height: psd.height, layers });
