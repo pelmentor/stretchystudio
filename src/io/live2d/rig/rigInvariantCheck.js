@@ -94,6 +94,33 @@
  *         narrows the source to the constraint eval / animated pose
  *         override path.
  *
+ *   I-16 — STATIC bone world matrix NON-TRANSLATION magnitude. I-14
+ *         catches huge m[6]/m[7] (translation column). I-16 catches
+ *         huge m[0]/m[4] (scale) and m[1]/m[3] (shear) — the matrix
+ *         components fed into the linear part of bone-skinning
+ *         `px = m[0]·x + m[3]·y + m[6]`. A scale of 1000 multiplies
+ *         every vertex x by 1000 before translation; rendering is
+ *         identically huge to a 1000-px translation. Threshold 100
+ *         (same as I-10's per-bone stored-scale ceiling). Together
+ *         with I-14: stored-data composition produces a clean matrix
+ *         iff BOTH I-14 AND I-16 pass.
+ *
+ *   I-17 — Depgraph TRANSFORM_COMPOSE scale magnitude (bones only).
+ *         Sister of I-16 on the eval-time path. `|t.scaleX|, |t.scaleY|
+ *         ≤ 100`. Catches eval-time scale blowup: constraint solver
+ *         amplification, animated scale fcurve unit mismatch, or
+ *         compose-cascade. Pairs with I-15 the same way I-16 pairs
+ *         with I-14.
+ *
+ *   I-18 — Keyform vertexPositions MAGNITUDE. I-5 catches NaN; I-18
+ *         catches huge-but-finite values. Each vertex coordinate must
+ *         lie within `±10 × max(canvas)`. Catches rest geometry that
+ *         enters the ART_MESH_EVAL pipeline already huge (bake step
+ *         reading wrong `mesh.vertices` shape per
+ *         [[mesh-vertices-dual-shape]], PSD ingest writing
+ *         object-indices through a flat-array slot, or upstream
+ *         transform-bake producing out-of-canvas coords).
+ *
  * Returns a summary object so callers can also assert programmatically
  * (used by the framework's own unit tests).
  *
@@ -238,7 +265,18 @@ export function runRigInvariantChecks(project) {
     }
 
     // I-5: keyform vertexPositions shape + finiteness
+    // I-18: keyform vertexPositions MAGNITUDE — every (x,y) within
+    //       10× canvas. Catches huge-but-finite rest geometry that
+    //       slipped into a keyform (bone-bake reading the wrong
+    //       `mesh.vertices` shape, a PSD layer with corrupted
+    //       coordinates, or transform-baked keyforms that fall outside
+    //       canvas-px range). I-5 catches NaN; I-18 catches finite-
+    //       but-out-of-range — together they bracket the
+    //       vertexPositions sanity that feeds ART_MESH_EVAL.
     const keyforms = mesh?.runtime?.keyforms;
+    const canvasW5 = project.canvas?.width ?? project.canvas?.w ?? 2048;
+    const canvasH5 = project.canvas?.height ?? project.canvas?.h ?? 2048;
+    const vertMaxAbs = 10 * Math.max(canvasW5, canvasH5);
     if (Array.isArray(keyforms)) {
       for (let ki = 0; ki < keyforms.length; ki++) {
         const kf = keyforms[ki];
@@ -252,13 +290,27 @@ export function runRigInvariantChecks(project) {
           violate('I-5', n.id, n.name, `keyforms[${ki}].vertexPositions.length=${vec.length} but expected ${vCount * 2} (vertexCount=${vCount} × 2)`);
         }
         let nonFiniteIdx = -1;
+        let outOfRangeIdx = -1;
+        let outOfRangeVal = 0;
         for (let i = 0; i < vec.length; i++) {
           const v = vec.get(i);
-          if (typeof v !== 'number' || !Number.isFinite(v)) { nonFiniteIdx = i; break; }
+          if (typeof v !== 'number' || !Number.isFinite(v)) {
+            if (nonFiniteIdx < 0) nonFiniteIdx = i;
+            continue;
+          }
+          if (outOfRangeIdx < 0 && Math.abs(v) > vertMaxAbs) {
+            outOfRangeIdx = i;
+            outOfRangeVal = v;
+          }
         }
         if (nonFiniteIdx >= 0) {
           const sample = vec.get(nonFiniteIdx);
           violate('I-5', n.id, n.name, `keyforms[${ki}].vertexPositions[${nonFiniteIdx}] is non-finite (value=${sample === null ? 'null' : typeof sample === 'object' ? JSON.stringify(sample) : String(sample)})`);
+        }
+        if (outOfRangeIdx >= 0) {
+          const axis = outOfRangeIdx % 2 === 0 ? 'x' : 'y';
+          const vertIdx = outOfRangeIdx >> 1;
+          violate('I-18', n.id, n.name, `keyforms[${ki}].vertexPositions[${outOfRangeIdx}] (${axis} of vertex ${vertIdx})=${outOfRangeVal.toFixed(0)} exceeds ±${vertMaxAbs} (10× canvas ${canvasW5}×${canvasH5}) — rest geometry already huge BEFORE bone-skin / warp eval. Likely source: bone-bake or PSD ingest read the wrong vertices shape and wrote object-array indices through a flat-array slot`);
         }
       }
     }
@@ -467,6 +519,28 @@ export function runRigInvariantChecks(project) {
         violate('I-14', nodeId, node.name,
           `bone role="${node.boneRole}" STATIC-composed world matrix |translation.y|=${Math.abs(ty).toFixed(0)} > ${maxBoneCoord} (10× canvas). world.translation=(${tx.toFixed(1)}, ${ty.toFixed(1)}), m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Stored-data composition is broken (transform.rotation×pivot interaction, transform.x/y, or parent-chain accumulation)`);
       }
+      // I-16: STATIC composed world matrix NON-TRANSLATION magnitude
+      // (scale m[0]/m[4] + shear m[1]/m[3]). I-14 above only catches
+      // huge translation in m[6]/m[7] — but matrix-vector mult
+      // `px = m[0]·x + m[3]·y + m[6]` blows up equally if scale OR shear
+      // is huge with finite translation. Bone-baked skinning
+      // (`renderer/boneSkinning.js:248-250`) is exactly this matmul, so
+      // a huge m[0] turns canvas-px x=900 into 900× m[0] before
+      // adding translation — exactly the handwear-bbox 170K×1.27M
+      // class (bug-03 2026-05-25/06-02). Threshold 100 = same ceiling
+      // I-10 enforces per-bone individually; product of a chain of
+      // I-10-clean bones can still exceed 100 (100^N composition).
+      const matCompThreshold = 100;
+      const checkComp = (label, val) => {
+        if (Number.isFinite(val) && Math.abs(val) > matCompThreshold) {
+          violate('I-16', nodeId, node.name,
+            `bone role="${node.boneRole}" STATIC-composed world matrix ${label}=${val.toFixed(2)} > ${matCompThreshold} (Blender-clean rigs stay near 1; scale/shear blowup from parent-chain composition). m=[${m[0].toFixed(2)},${m[1].toFixed(2)},${m[3].toFixed(2)},${m[4].toFixed(2)},${tx.toFixed(1)},${ty.toFixed(1)}]. Bone-skinning math (px=m[0]·x+m[3]·y+m[6]) blows up at this magnitude — RENDERS HUGE for any part skinned to this bone`);
+        }
+      };
+      checkComp('m[0]=scaleX', m[0]);
+      checkComp('m[4]=scaleY', m[4]);
+      checkComp('m[1]=shearXY', m[1]);
+      checkComp('m[3]=shearYX', m[3]);
     }
   } catch (err) {
     logger.warn('rigInvariantCheck', `I-14 skipped — computeWorldMatrices threw: ${/** @type {any} */ (err)?.message ?? String(err)}`);
@@ -549,6 +623,23 @@ export function runRigInvariantChecks(project) {
         } else if (typeof t.y === 'number' && Number.isFinite(t.y) && Math.abs(t.y) > maxBoneCoord) {
           violate('I-15', ownerId, owner.name,
             `bone role="${owner.boneRole}" TRANSFORM_COMPOSE output |y|=${Math.abs(t.y).toFixed(0)} > ${maxBoneCoord} (10× canvas). composed=(${t.x.toFixed(1)},${t.y.toFixed(1)},rot=${(t.rotation ?? 0).toFixed(2)},scale=${(t.scaleX ?? 1).toFixed(2)}×${(t.scaleY ?? 1).toFixed(2)}), ranConstraints=${out.ranConstraints ?? 0}. Constraint/fcurve/dynamic-eval polluted the composed transform`);
+        }
+        // I-17: TRANSFORM_COMPOSE scale magnitude. I-15 above only
+        // checks translation (`t.x`/`t.y`) — but the composed transform
+        // FEEDS the world matrix via `composedTransformToBonePose`
+        // → `makeBoneLocalMatrix`, where `scaleX`/`scaleY` populate
+        // m[0]/m[4]. A scale of 1000 from eval (constraint solver
+        // amplification, fcurve unit mismatch, depgraph cascade) lands
+        // in the matrix and blows up bone-skinning identically to I-16
+        // but on the runtime path. Same threshold (100) as I-16 / I-10.
+        const scaleThreshold = 100;
+        if (typeof t.scaleX === 'number' && Number.isFinite(t.scaleX) && Math.abs(t.scaleX) > scaleThreshold) {
+          violate('I-17', ownerId, owner.name,
+            `bone role="${owner.boneRole}" TRANSFORM_COMPOSE output |scaleX|=${Math.abs(t.scaleX).toFixed(2)} > ${scaleThreshold} (Blender-clean rigs stay near 1). composed=(${(t.x ?? 0).toFixed(1)},${(t.y ?? 0).toFixed(1)},rot=${(t.rotation ?? 0).toFixed(2)},scale=${t.scaleX.toFixed(2)}×${(t.scaleY ?? 1).toFixed(2)}), ranConstraints=${out.ranConstraints ?? 0}. Eval-time scale blowup — any part skinned to this bone RENDERS HUGE`);
+        }
+        if (typeof t.scaleY === 'number' && Number.isFinite(t.scaleY) && Math.abs(t.scaleY) > scaleThreshold) {
+          violate('I-17', ownerId, owner.name,
+            `bone role="${owner.boneRole}" TRANSFORM_COMPOSE output |scaleY|=${Math.abs(t.scaleY).toFixed(2)} > ${scaleThreshold} (Blender-clean rigs stay near 1). composed=(${(t.x ?? 0).toFixed(1)},${(t.y ?? 0).toFixed(1)},rot=${(t.rotation ?? 0).toFixed(2)},scale=${(t.scaleX ?? 1).toFixed(2)}×${t.scaleY.toFixed(2)}), ranConstraints=${out.ranConstraints ?? 0}. Eval-time scale blowup — any part skinned to this bone RENDERS HUGE`);
         }
       }
     }

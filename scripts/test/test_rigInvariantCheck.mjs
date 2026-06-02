@@ -1,6 +1,6 @@
 // Tests for the rigInvariantCheck framework.
 //
-// Coverage philosophy: each invariant (I-1 through I-15) gets a positive
+// Coverage philosophy: each invariant (I-1 through I-18) gets a positive
 // fixture (clean project, ok=true) and a negative fixture (violated,
 // ok=false) so a regression that flips a check's polarity is caught.
 //
@@ -531,6 +531,137 @@ logger.info = () => {};
   };
   const r = runRigInvariantChecks(project);
   assert(r.ok, 'I-15 clean: bone at rest produces small composed transform',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-16: static composed world matrix scale/shear magnitude ──────────
+{
+  // 2-bone chain, each stored scaleX=15. Each bone individually passes
+  // I-10 (15 < 100). Composed world matrix m[0] on the CHILD = 15 × 15
+  // = 225, > 100 → I-16 fires on the child. Demonstrates that chain
+  // accumulation blows up post-composition even when stored data is
+  // clean per-bone — the exact hole the handwear bug-03 slipped through
+  // (I-10 + I-14 both passed; m[0] was huge from chain product).
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'boneA', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 15, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+        parent: null },
+      { id: 'boneB', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 15, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 },
+        parent: 'boneA' },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-16'] ?? 0) > 0,
+    'I-16 fail: 2-bone scaleX=15 chain produces composed m[0]=225 > 100',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+  // I-10 must NOT fire — each bone's stored scaleX is 15, within [0.01, 100]
+  assert((r.byInvariant['I-10'] ?? 0) === 0,
+    'I-16 isolation: per-bone stored scale passes I-10; only chain-composed fires I-16',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'root', boneRole: 'root',
+        transform: { pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-16 clean: single bone at rest produces identity world matrix',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-17: depgraph TRANSFORM_COMPOSE scale magnitude ──────────────────
+{
+  // pose.scaleX=200 → TRANSFORM_COMPOSE outputs scaleX≈200 → > 100 → I-17.
+  // I-10 ALSO fires (pose.scaleX > 100): both stored-data and eval-time
+  // flag the same bug, giving two pointers to the same root cause. The
+  // test asserts I-17 specifically fires (I-10 firing alongside is fine).
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 200, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-17'] ?? 0) > 0,
+    'I-17 fail: pose.scaleX=200 produces TRANSFORM_COMPOSE.scaleX=200 > 100',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'bone1', type: 'group', name: 'hand', boneRole: 'leftHand',
+        transform: { pivotX: 500, pivotY: 500, scaleX: 1, scaleY: 1, rotation: 0 },
+        pose: { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1 } },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-17 clean: bone with unit pose scale passes I-17',
+    `violations: ${JSON.stringify(r.violations)}`);
+}
+
+// ── I-18: keyform vertexPositions magnitude ───────────────────────────
+{
+  // canvas 1000×1000 → I-18 threshold = 10 × 1000 = 10000. A vertex of
+  // 50000 exceeds threshold but IS finite → I-18 fires, I-5 does not.
+  // (Cage shape requires a self-consistent lattice + meshData pair to
+  // avoid I-2/I-4 noise — copied from the I-1 clean fixture.)
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'lat1', type: 'object', objectKind: 'lattice', name: 'L1',
+        gridSize: { rows: 2, cols: 2 }, dataId: 'cage1', parent: null },
+      { id: 'cage1', type: 'meshData', isLatticeCage: true,
+        vertices: [{ x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 1, y: 0 },
+                   { x: 0, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 1, y: 0.5 },
+                   { x: 0, y: 1 }, { x: 0.5, y: 1 }, { x: 1, y: 1 }] },
+      { id: 'p1', type: 'part', name: 'handwear',
+        mesh: {
+          vertices: [{ x: 100, y: 100 }, { x: 200, y: 200 }],
+          runtime: { keyforms: [{ vertexPositions: [100, 100, 50000, 200] }] },
+        },
+        modifiers: [{ type: 'lattice', objectId: 'lat1' }] },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(!r.ok && (r.byInvariant['I-18'] ?? 0) > 0,
+    'I-18 fail: vertex of 50000 on canvas 1000×1000 exceeds 10× threshold',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+  assert((r.byInvariant['I-5'] ?? 0) === 0,
+    'I-18 isolation: finite-but-huge vertex does NOT trigger I-5',
+    `byInvariant=${JSON.stringify(r.byInvariant)}`);
+}
+{
+  const project = {
+    canvas: { width: 1000, height: 1000 },
+    nodes: [
+      { id: 'lat1', type: 'object', objectKind: 'lattice', name: 'L1',
+        gridSize: { rows: 2, cols: 2 }, dataId: 'cage1', parent: null },
+      { id: 'cage1', type: 'meshData', isLatticeCage: true,
+        vertices: [{ x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 1, y: 0 },
+                   { x: 0, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 1, y: 0.5 },
+                   { x: 0, y: 1 }, { x: 0.5, y: 1 }, { x: 1, y: 1 }] },
+      { id: 'p1', type: 'part', name: 'handwear',
+        mesh: {
+          vertices: [{ x: 100, y: 100 }, { x: 200, y: 200 }],
+          runtime: { keyforms: [{ vertexPositions: [100, 100, 200, 200] }] },
+        },
+        modifiers: [{ type: 'lattice', objectId: 'lat1' }] },
+    ],
+  };
+  const r = runRigInvariantChecks(project);
+  assert(r.ok, 'I-18 clean: canvas-px vertices pass I-18',
     `violations: ${JSON.stringify(r.violations)}`);
 }
 
