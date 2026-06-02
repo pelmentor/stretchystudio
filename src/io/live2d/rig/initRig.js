@@ -650,7 +650,14 @@ export async function initializeRigFromProject(project, images = new Map()) {
     disabledSubsystems: disabled.length > 0 ? disabled : undefined,
     optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
     droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
+    droppedOrphanRotationIds: pruned.droppedRotationIds.length > 0 ? pruned.droppedRotationIds : undefined,
     droppedOrphanParams: pruned.droppedParamIds.length || undefined,
+    droppedOrphanParamIds: pruned.droppedParamIds.length > 0 ? pruned.droppedParamIds : undefined,
+    keptRotationIds: rs?.rotationDeformers?.map(/** @param {any} r */ (r) => r?.id).filter(Boolean) ?? undefined,
+    warpsThatTargetRotations: rs?.warpDeformers
+      ?.filter(/** @param {any} w */ (w) => w?.parent?.type === 'rotation')
+      .map(/** @param {any} w */ (w) => `${w.id}->${w.parent.id}`)
+      ?? undefined,
   }, 'Init Rig harvest complete');
 
   // PP2-005b — identity-divergence diagnostic. The user's complaint is
