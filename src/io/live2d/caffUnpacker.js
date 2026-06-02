@@ -110,6 +110,17 @@ class CaffReader {
 
   /** @param {number} length @param {number} [key] */
   readBytes(length, key = 0) {
+    // SEC-001 — bound the requested length against the buffer so a
+    // malicious .cmo3 cannot request a multi-GB allocation via a crafted
+    // varint length. Symmetric to the per-entry guard in `unpackCaff`.
+    if (!Number.isFinite(length) || length < 0) {
+      throw new Error(`caffUnpacker.readBytes: invalid length ${length}`);
+    }
+    if (this._pos + length > this._buf.byteLength) {
+      throw new Error(
+        `caffUnpacker.readBytes: would read past buffer (pos=${this._pos} + len=${length} > ${this._buf.byteLength})`,
+      );
+    }
     const out = new Uint8Array(length);
     if ((key & 0xFF) === 0) {
       out.set(this._buf.subarray(this._pos, this._pos + length));
@@ -276,6 +287,7 @@ export async function unpackCaff(buf) {
 
   /** @type {{path:string, tag:string, startPos:number, storedLen:number, obfuscated:boolean, compress:number}[]} */
   const entries = [];
+  const bufLen = u8.byteLength;
   for (let i = 0; i < fileCount; i++) {
     const path = r.readString(key);
     const tag = r.readString(key);
@@ -284,6 +296,16 @@ export async function unpackCaff(buf) {
     const obfuscated = r.readBool(key);
     const compress = r.readByte(key);
     r.skip(8);
+    // SEC-001 — validate per-entry offset+length lie inside the buffer
+    // before we ever seek/read. A crafted entry that points past EOF or
+    // claims a multi-GB stored length would OOM the tab; rejecting at the
+    // table-read stage keeps the failure recoverable + named.
+    if (!Number.isFinite(startPos) || startPos < 0 || startPos > bufLen) {
+      throw new Error(`caffUnpacker: entry ${i} startPos out of range (${startPos} vs buffer ${bufLen})`);
+    }
+    if (!Number.isFinite(storedLen) || storedLen < 0 || startPos + storedLen > bufLen) {
+      throw new Error(`caffUnpacker: entry ${i} extent out of range (startPos=${startPos} + storedLen=${storedLen} > ${bufLen})`);
+    }
     entries.push({ path, tag, startPos, storedLen, obfuscated, compress });
   }
 
