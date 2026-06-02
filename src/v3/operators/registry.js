@@ -333,7 +333,11 @@ function registerBuiltins() {
         // Vertex count is the mesh's authored rest array length — what
         // every Edit-Mode op dispatches against. Avoid pulling chainEval
         // here; the rest mesh is the canonical edit-mode target.
-        const vertCount = Array.isArray(node.mesh?.vertices) ? node.mesh.vertices.length : 0;
+        // B-2 (R4) — use getMesh so post-v18 parts (geometry on a
+        // sibling meshData node) get the right vertex count. Pre-fix
+        // KeyA in Edit Mode was a silent no-op on every part.
+        const mesh = getMesh(node, project);
+        const vertCount = Array.isArray(mesh?.vertices) ? mesh.vertices.length : 0;
         if (vertCount === 0) return;
         const cur = editor.selectedVertexIndices.get(activePartId);
         if (cur && cur.size > 0) {

@@ -1,6 +1,7 @@
 // @ts-check
 
 import { logger } from '../../lib/logger.js';
+import { getMesh } from '../objectDataAccess.js';
 
 /**
  * RULE №4 — convert Cubism GroupRotation deformer nodes into armature BONES.
@@ -190,7 +191,13 @@ export function migrateGroupRotationDeformersToBones(project) {
     }
 
     for (const p of parts) {
-      const verts = p.mesh?.vertices;
+      // A-2 (R4) — read mesh via getMesh so post-v18 parts (geometry on
+      // a sibling meshData node referenced by node.dataId) are not
+      // silently skipped. Pre-fix the migration was a complete no-op
+      // for every part on every project after v18 — bone weights never
+      // got written and ParamRotation bindings never got dropped.
+      const meshN = getMesh(p, project);
+      const verts = meshN?.vertices;
       if (!Array.isArray(verts) || verts.length === 0) continue;
       // `mesh.vertices` is dual-shape — discriminate (see deriveCanvasPivot
       // above + [[mesh-vertices-dual-shape]]). Write sites must match the
@@ -201,9 +208,9 @@ export function migrateGroupRotationDeformersToBones(project) {
       const v0 = verts[0];
       const isObjectShape = typeof v0 === 'object' && v0 !== null;
       const n = isObjectShape ? verts.length : (verts.length >> 1);
-      p.mesh.boneWeights = new Array(n).fill(1);
-      p.mesh.jointBoneId = groupId;
-      const rt = p.mesh.runtime;
+      meshN.boneWeights = new Array(n).fill(1);
+      meshN.jointBoneId = groupId;
+      const rt = meshN.runtime;
       if (rt && typeof rt === 'object') {
         // Drop the ParamRotation binding (bone LBS owns the rotation now)
         // and collapse to a single CANVAS-PX rest keyform. The runtime-parent

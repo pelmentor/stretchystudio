@@ -63,6 +63,8 @@
  * @module store/artMeshRuntimeSync
  */
 
+import { getMesh } from './objectDataAccess.js';
+
 /**
  * Coerce a typed-array or plain-array into a JSON-friendly plain
  * `Array<number>`. Used at write time to convert `Float32Array`
@@ -135,6 +137,13 @@ function _serialiseKeyforms(keyforms) {
  * Mode `'merge'` (per-stage refit) — same as replace today; will gain
  * `_userAuthored` preservation when an art-mesh-keyform UI ships.
  *
+ * A-1 (R4) — read mesh via `getMesh(node, project)` so post-v18 parts
+ * (which delete `node.mesh` and route geometry through a sibling
+ * `{type:'meshData', id: node.dataId}` node) actually receive the
+ * runtime write. Pre-fix the function was a silent no-op for every part
+ * post-v18 because the `if (!node.mesh) continue` guard skipped them
+ * all — exactly the failure mode this file's header warns about.
+ *
  * @param {object} project - mutated in place
  * @param {{artMeshes?: Array<object>}} rigSpec
  * @param {'replace'|'merge'} [mode='replace']
@@ -152,17 +161,18 @@ export function persistArtMeshRuntime(project, rigSpec, mode = 'replace') {
 
   for (const node of project.nodes) {
     if (!node || node.type !== 'part') continue;
-    if (!node.mesh || typeof node.mesh !== 'object') continue;
+    const mesh = getMesh(node, project);
+    if (!mesh || typeof mesh !== 'object') continue;
     const am = byId.get(node.id);
     if (am) {
-      node.mesh.runtime = {
+      mesh.runtime = {
         bindings: _serialiseBindings(am.bindings),
         keyforms: _serialiseKeyforms(am.keyforms),
       };
     } else if (mode === 'replace') {
       // Part has no matching artMesh — clear stale runtime so it
       // doesn't lie about the current rig shape.
-      if (node.mesh.runtime) delete node.mesh.runtime;
+      if (mesh.runtime) delete mesh.runtime;
     }
   }
 }

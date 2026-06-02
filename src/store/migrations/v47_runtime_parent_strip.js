@@ -47,6 +47,8 @@
  * @module store/migrations/v47_runtime_parent_strip
  */
 
+import { getMesh } from '../objectDataAccess.js';
+
 /**
  * @param {object} project
  * @returns {object}
@@ -55,7 +57,13 @@ export function migrateRuntimeParentStrip(project) {
   if (!project || !Array.isArray(project.nodes)) return project;
   for (const node of project.nodes) {
     if (!node || node.type !== 'part') continue;
-    const rt = node.mesh?.runtime;
+    // A-4 (R4) — read mesh via getMesh so post-v18 parts (geometry
+    // routed through a sibling meshData node) actually get the strip.
+    // Pre-fix `node.mesh?.runtime` was undefined for every post-v18
+    // part and v47 silently did nothing — the field it was supposed to
+    // retire stayed in saves.
+    const mesh = getMesh(node, project);
+    const rt = mesh?.runtime;
     if (rt && typeof rt === 'object' && 'parent' in rt) {
       delete rt.parent;
     }

@@ -105,7 +105,12 @@ export async function saveProject(project, opts = {}) {
   await Promise.all(audioFetches);
   logger.timeEnd('projectSave', 'serialize:audio', { count: audioFetches.length });
 
-  // Serialize nodes: convert non-JSON types
+  // Serialize nodes: convert non-JSON types.
+  // A-5 (R4) — pre-fix only `n.mesh` was normalised, but v18 splits a
+  // part into a `part` + `{type:'meshData'}` pair with the geometry on
+  // the sibling. The Float32Array uvs on a meshData node serialised as
+  // `{"0": v0, ...}` (Object, not Array), and on reload Array.isArray
+  // returned false so the load loop never typed-arrayed it back.
   const serializedNodes = project.nodes.map(node => {
     const n = { ...node };
     if (n.mesh) {
@@ -119,6 +124,12 @@ export async function saveProject(project, opts = {}) {
         ...(n.mesh.boneWeights ? { boneWeights: Array.from(n.mesh.boneWeights) } : {}),
         ...(n.mesh.jointBoneId ? { jointBoneId: n.mesh.jointBoneId } : {}),
       };
+    } else if (n.type === 'meshData') {
+      // Convert any TypedArray fields on a meshData node to plain Array
+      // so JSON.stringify produces an Array literal (post-v18 nodes).
+      if (n.uvs && !Array.isArray(n.uvs)) n.uvs = Array.from(n.uvs);
+      if (n.edgeIndices && !Array.isArray(n.edgeIndices)) n.edgeIndices = Array.from(n.edgeIndices);
+      if (n.boneWeights && !Array.isArray(n.boneWeights)) n.boneWeights = Array.from(n.boneWeights);
     }
     return n;
   });
