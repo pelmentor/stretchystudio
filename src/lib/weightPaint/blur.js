@@ -1,5 +1,7 @@
 // @ts-check
 
+import { finiteOr } from '../finiteOr.js';
+
 /**
  * Toolset Plan Phase 7.B.2 — Blur brush math (audit-fix D-1: face-loop port).
  *
@@ -127,7 +129,9 @@ export function computeBlurUpdates({ currentWeights, triangles, affected, streng
     const k = loops[i];
     if (k === 0) continue;  // orphan vertex — no incident face
     const target = sums[i] / k;
-    const cur = Number(currentWeights[i]) || 0;
+    // `Number(x) || 0` masks NaN as 0; use `finiteOr` for explicit
+    // non-finite handling (RULE-№1).
+    const cur = finiteOr(currentWeights[i], 0);
     const t = Math.max(0, Math.min(1, fall * strength));
     let next = cur + (target - cur) * t;
     if (next < 0) next = 0;

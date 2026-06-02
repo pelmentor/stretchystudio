@@ -38,6 +38,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
+import { finiteOr } from '../../../lib/finiteOr.js';
 
 /**
  * Normalize all weight groups on the active part. Returns a count of
@@ -106,7 +107,9 @@ export function normalizeAllWeights() {
     }
     if (Math.abs(s - 1) < 1e-6) continue;  // already normalised
     for (const name of groupNames) {
-      const w = Number(next[name][i]) || 0;
+      // `Number(x) || 0` masks NaN as 0; use `finiteOr` for explicit
+      // non-finite handling (RULE-№1).
+      const w = finiteOr(next[name][i], 0);
       next[name][i] = w / s;
     }
     normalized++;

@@ -56,6 +56,7 @@ import { getMesh } from '../../../../store/objectDataAccess.js';
 import { computeBlurUpdates } from '../../../../lib/weightPaint/index.js';
 import { buildVertexAdjacency } from '../../../../lib/proportionalEdit.js';
 import { buildMirrorVertexMap } from '../../../operators/weightPaint/mirror.js';
+import { finiteOr } from '../../../../lib/finiteOr.js';
 
 export function WeightPaintOverlay() {
   const editMode = useEditorStore((s) => s.editMode);
@@ -239,7 +240,7 @@ export function WeightPaintOverlay() {
       const t = Number.isFinite(target) ? Math.max(0, Math.min(1, target)) : 1;
       updates = [];
       for (const a of affected) {
-        const cur = Number(weightArr[a.vertexIndex]) || 0;
+        const cur = finiteOr(weightArr[a.vertexIndex], 0);
         const next = cur + (t - cur) * brushStrength * a.falloff;
         updates.push({ vertexIndex: a.vertexIndex, weight: next });
       }
@@ -391,9 +392,9 @@ const HeatmapLayer = memo(/** @param {any} props */ function HeatmapLayer(props)
     if (a == null || b == null || c == null) continue;
     const pa = projected[a]; const pb = projected[b]; const pc = projected[c];
     if (!pa || !pb || !pc) continue;
-    const wa = Number(weightArr[a]) || 0;
-    const wb = Number(weightArr[b]) || 0;
-    const wc = Number(weightArr[c]) || 0;
+    const wa = finiteOr(weightArr[a], 0);
+    const wb = finiteOr(weightArr[b], 0);
+    const wc = finiteOr(weightArr[c], 0);
     const meanW = (wa + wb + wc) / 3;
     const fill = `#${colorForWeight(meanW).toString(16).padStart(6, '0')}`;
     polys.push(
@@ -410,7 +411,7 @@ const HeatmapLayer = memo(/** @param {any} props */ function HeatmapLayer(props)
   const dots = [];
   for (let i = 0; i < projected.length; i++) {
     const p = projected[i];
-    const w = Number(weightArr[i]) || 0;
+    const w = finiteOr(weightArr[i], 0);
     const fill = `#${colorForWeight(w).toString(16).padStart(6, '0')}`;
     dots.push(
       <circle

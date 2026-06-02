@@ -46,6 +46,7 @@
 import { useEditorStore } from '../../../store/editorStore.js';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import { finiteOr } from '../../../lib/finiteOr.js';
 
 /**
  * Sample the weight at the cursor and write to `editorStore.brushWeight`.
@@ -115,7 +116,9 @@ export function sampleWeightAt({ clientX, clientY, rect, threshold }) {
   if (bestIdx < 0) {
     return { sampled: false, weight: null, vertexIndex: null };
   }
-  const sampled = Number(w[bestIdx]) || 0;
+  // `Number(x) || 0` masks NaN as 0 (RULE-№1, `feedback_typeof_nan_is_number`);
+  // `finiteOr` makes the non-finite fallback explicit.
+  const sampled = finiteOr(w[bestIdx], 0);
   const clamped = Math.max(0, Math.min(1, sampled));
   useEditorStore.getState().setBrushWeight(clamped);
   return { sampled: true, weight: clamped, vertexIndex: bestIdx };
