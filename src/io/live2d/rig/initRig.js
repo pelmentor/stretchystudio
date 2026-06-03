@@ -44,7 +44,6 @@ import { resolveAutoRigConfig } from './autoRigConfig.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { logger } from '../../../lib/logger.js';
 import { buildRigSpecFromCmo3 } from './buildRigSpecFromCmo3.js';
-import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
 import { getBoneRole } from '../../../store/objectDataAccess.js';
 
 const FACE_PARALLAX_WARP_ID = 'FaceParallaxWarp';
@@ -660,71 +659,13 @@ export async function initializeRigFromProject(project, images = new Map()) {
       ?? undefined,
   }, 'Init Rig harvest complete');
 
-  // PP2-005b — identity-divergence diagnostic. The user's complaint is
-  // that some parts visibly shift after Init Rig (hair sways/tilts
-  // under no params, eyes drop, etc). Run the depgraph (sole viewport
-  // engine since Phase 7 close-out) once at default params and compare
-  // each rig-driven art mesh's output vs its `verticesCanvas` source.
-  // Anything > 1px is real divergence. Logged per-part so the next user
-  // repro names the offender. Originally gated on disabled subsystems;
-  // now runs unconditionally so any visible rest-pose shift surfaces in
-  // the Logs panel without having to toggle a subsystem first.
-  //
-  // Engine port 2026-05-26: was `evalRig(rs, {})` (chainEval), now
-  // `evalProjectFrameViaDepgraph(project, {}, { rigSpec: rs })`. chainEval
-  // is retained ONLY for the `scripts/cubism_oracle/*.mjs` byte-fidelity
-  // harness; production code paths (Init Rig, Apply Armature, viewport
-  // tick) consume depgraph output exclusively per RULE-№2 (no migration
-  // baggage in production). The `rigSpec` option is REQUIRED so
-  // selectRigSpec's modifier-toggle reprojection fires; without it the
-  // raw `mesh.runtime` cache is in the baked leaf frame and toggled-off
-  // modifiers land verts in the wrong space.
-  if (rs && Array.isArray(rs.artMeshes) && rs.artMeshes.length > 0) {
-    try {
-      const frames = evalProjectFrameViaDepgraph(project, {}, { rigSpec: rs });
-      const meshById = new Map(rs.artMeshes.map((m) => [m.id, m]));
-      /** @type {Array<{partId:string, name:string, maxDelta:number}>} */
-      const offenders = [];
-      let maxOverall = 0;
-      for (const f of frames) {
-        const meshSpec = meshById.get(f.id);
-        const source = meshSpec?.verticesCanvas;
-        if (!source || !f.vertexPositions) continue;
-        const len = Math.min(source.length, f.vertexPositions.length);
-        let partMax = 0;
-        for (let i = 0; i < len; i++) {
-          const d = Math.abs(source[i] - f.vertexPositions[i]);
-          if (d > partMax) partMax = d;
-        }
-        if (partMax > maxOverall) maxOverall = partMax;
-        if (partMax > 1.0) {
-          offenders.push({ partId: f.id, name: meshSpec?.name ?? f.id, maxDelta: partMax });
-        }
-      }
-      // Top 10 by delta — keeps the log readable on large rigs.
-      offenders.sort((a, b) => b.maxDelta - a.maxDelta);
-      const disabledNote = disabled.length > 0 ? ` (subsystems off: ${disabled.join(', ')})` : '';
-      // Inline offender list into message string per inline-diagnostic-fields rule
-      // (user's console paste collapses Object payload to `[object Object]`).
-      const top10Str = offenders.slice(0, 10)
-        .map((o) => `${o.name}=${o.maxDelta.toFixed(1)}px`)
-        .join(', ');
-      logger.info('rigInitIdentityDiag',
-        `Init Rig rest-divergence${disabledNote}: max ${maxOverall.toFixed(2)} px across ${frames.length} parts; ${offenders.length} offenders > 1 px${offenders.length > 0 ? ` | top: ${top10Str}` : ''}`,
-        {
-          disabledSubsystems: disabled.length > 0 ? disabled : undefined,
-          maxOverallPx: Math.round(maxOverall * 100) / 100,
-          partCount: frames.length,
-          offenderCount: offenders.length,
-          top10Offenders: offenders.slice(0, 10).map((o) => ({
-            partId: o.partId, name: o.name, maxDeltaPx: Math.round(o.maxDelta * 100) / 100,
-          })),
-        });
-    } catch (err) {
-      // Non-fatal; instrumentation only.
-      logger.warn('rigInitIdentityDiag', 'identity-divergence probe threw', { error: err?.message ?? String(err) });
-    }
-  }
+  // PP2-005b identity-divergence diagnostic moved to
+  // `RigService.initializeRig` (post-seedAllRig) as of 2026-06-03 — see
+  // `rig/rigInitIdentityDiag.js`. The probe needs `project.nodes[]` to
+  // carry the seeded modifier stacks before `evalProjectFrameViaDepgraph`
+  // can produce non-empty frames; running it here (before seedAllRig)
+  // silently emitted `partCount: 0` every Init Rig regardless of any
+  // actual divergence.
 
   return {
     faceParallaxSpec,

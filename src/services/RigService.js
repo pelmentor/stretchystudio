@@ -31,6 +31,8 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 // initializeRig / runStage / refitAll.
 import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
+import { runRigInitIdentityDiag } from '../io/live2d/rig/rigInitIdentityDiag.js';
+import { resolveAutoRigConfig } from '../io/live2d/rig/autoRigConfig.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
 import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
@@ -302,7 +304,20 @@ export async function initializeRig() {
     // modifier refs, shape-mismatched vertexPositions, non-finite
     // bone pivots, etc. Logs ONE error per violation with the
     // smoking-gun fields inlined into the message string.
-    runRigInvariantChecks(useProjectStore.getState().project);
+    const postSeedProjectForDiag = useProjectStore.getState().project;
+    runRigInvariantChecks(postSeedProjectForDiag);
+
+    // Per-vertex rest-divergence probe (sister of I-21, finer threshold).
+    // Lifted out of `harvestRigSpec` 2026-06-03 — pre-fix it ran before
+    // `seedAllRig` populated `project.nodes[]` with modifier stacks, so
+    // `evalProjectFrameViaDepgraph` produced 0 frames and the log
+    // silently said `partCount: 0` every Init Rig. Now reads the post-
+    // seed project; offenders surface with their per-vertex delta.
+    const subsystems = resolveAutoRigConfig(postSeedProjectForDiag).subsystems ?? null;
+    const disabledSubsystems = subsystems
+      ? Object.entries(subsystems).filter(([, v]) => v === false).map(([k]) => k)
+      : [];
+    runRigInitIdentityDiag(postSeedProjectForDiag, harvest.rigSpec, { disabledSubsystems });
 
     // Cache the rigSpec for the live evaluator. Bypass buildRigSpec()
     // because it would re-run the harvest a second time. Also attach
@@ -585,6 +600,21 @@ export async function refitAll(opts = {}) {
     }
     const harvest = await memoInitializeRigFromProject(project, images);
     await useProjectStore.getState().seedAllRig(harvest, mode);
+
+    // Post-seed diagnostics — parity with `initializeRig`. Pre-fix the
+    // identity diag lived inside `harvestRigSpec` so it covered both
+    // entry points; lifting it out to a post-seed function means we
+    // call it from BOTH paths explicitly. RULE-№2: no silent coverage
+    // drop on the refitAll branch.
+    const postSeedProjectRefit = useProjectStore.getState().project;
+    runRigInvariantChecks(postSeedProjectRefit);
+    const subsystemsRefit = resolveAutoRigConfig(postSeedProjectRefit).subsystems ?? null;
+    const disabledSubsystemsRefit = subsystemsRefit
+      ? Object.entries(subsystemsRefit).filter(([, v]) => v === false).map(([k]) => k)
+      : [];
+    runRigInitIdentityDiag(postSeedProjectRefit, harvest.rigSpec, {
+      disabledSubsystems: disabledSubsystemsRefit,
+    });
 
     // Stamp every stage as run.
     const isoNow = new Date().toISOString();
