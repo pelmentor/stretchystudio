@@ -40,10 +40,44 @@ let _batchDepth = 0;
  *  -redo behaviour did at `beginBatch` time). Null when no batch is open. */
 /** @type {SnapshotEntry[]|null} */ let _redoStackBeforeBatch = null;
 
+/**
+ * @typedef {(evicted: SnapshotEntry, liveSnapshots: SnapshotEntry[], liveRedoStack: SnapshotEntry[]) => void} OnEvictCallback
+ */
+/** @type {OnEvictCallback|null} */
+let _onEvictCallback = null;
+
+/**
+ * Register a callback fired when a snapshot is evicted from `_snapshots`
+ * (drops off the tail of a MAX_HISTORY-bounded stack) or wiped by
+ * `clearHistory`. Used by `projectStore` to revoke `blob:` texture URLs
+ * that the evicted snapshot was the LAST holder of — so undo correctness
+ * stays load-bearing (eager revocation in `deleteNode` would orphan the
+ * snapshot's texture references) AND the per-session blob leak stays
+ * bounded.
+ *
+ * Callback receives:
+ *  - `evicted`: the snapshot about to drop. Its `project` reference is
+ *    valid for the synchronous duration of the call.
+ *  - `liveSnapshots`: the post-eviction `_snapshots` array, for
+ *    "is this URL still referenced?" walks.
+ *  - `liveRedoStack`: the current `_redoStack`, same purpose.
+ *
+ * Pass `null` to clear.
+ *
+ * @param {OnEvictCallback|null} cb
+ */
+export function setOnEvictCallback(cb) {
+  _onEvictCallback = (typeof cb === 'function') ? cb : null;
+}
+
 /** Drop the oldest snapshots when count exceeds MAX_HISTORY. */
 function _evict() {
   while (_snapshots.length > MAX_HISTORY) {
-    _snapshots.shift();
+    const evicted = _snapshots.shift();
+    if (evicted && _onEvictCallback) {
+      try { _onEvictCallback(evicted, _snapshots, _redoStack); }
+      catch { /* swallow — eviction must not throw, no-undo-on-failure */ }
+    }
   }
 }
 
@@ -57,9 +91,20 @@ function _evict() {
 export function pushSnapshot(project) {
   _snapshots.push({ project });
   _evict();
-  // A new edit invalidates the redo stack.
+  // A new edit invalidates the redo stack. Fire the eviction callback
+  // for every dropped redo entry so blob-URL refcounts can settle (the
+  // callback walks live state to decide whether to revoke).
   if (_redoStack.length > 0) {
-    _redoStack = [];
+    if (_onEvictCallback) {
+      const dropped = _redoStack;
+      _redoStack = [];
+      for (const entry of dropped) {
+        try { _onEvictCallback(entry, _snapshots, _redoStack); }
+        catch { /* swallow */ }
+      }
+    } else {
+      _redoStack = [];
+    }
   }
 }
 
@@ -137,8 +182,21 @@ export function isBatching() {
   return _batchDepth > 0;
 }
 
-/** Clear history — call on project load/reset so stale history doesn't leak. */
+/** Clear history — call on project load/reset so stale history doesn't leak.
+ *  Fires the eviction callback for every snapshot so blob-URL refcounts
+ *  drain to zero (the live `disposeProjectResources` at load/reset picks
+ *  up the live half; the snapshots are the other half). Every callback
+ *  receives `[]` for `liveSnapshots` and `liveRedoStack` because the
+ *  whole history is about to be wiped — no snapshot remains to reference
+ *  any URL. */
 export function clearHistory() {
+  if (_onEvictCallback) {
+    const all = [..._snapshots, ..._redoStack];
+    for (const entry of all) {
+      try { _onEvictCallback(entry, [], []); }
+      catch { /* swallow — eviction must not throw */ }
+    }
+  }
   _snapshots  = [];
   _redoStack  = [];
   _batchDepth = 0;

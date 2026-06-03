@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { pushSnapshot, isBatching, clearHistory } from './undoHistory.js';
+import { pushSnapshot, isBatching, clearHistory, setOnEvictCallback } from './undoHistory.js';
 import { useParamValuesStore } from './paramValuesStore.js';
 // Phase A2 (2026-05-09) — `CURRENT_SCHEMA_VERSION` lives in a tiny
 // side-effect-free file so reading the constant doesn't drag the 11
@@ -135,6 +135,83 @@ function disposeProjectResources(project) {
     for (const track of action.audioTracks ?? []) revoke(track?.sourceUrl);
   }
 }
+
+/**
+ * Collect every `blob:` URL referenced by a project snapshot's textures
+ * and audio tracks. Mirrors `disposeProjectResources`'s walk so the
+ * eviction-time revoker doesn't drift if either side adds a new resource
+ * surface.
+ *
+ * @param {any} project
+ * @returns {Set<string>}
+ */
+function _collectBlobUrls(project) {
+  /** @type {Set<string>} */
+  const urls = new Set();
+  if (!project) return urls;
+  const add = (u) => {
+    if (typeof u === 'string' && u.startsWith('blob:')) urls.add(u);
+  };
+  for (const tex of project.textures ?? []) add(tex?.source);
+  for (const action of project.actions ?? []) {
+    for (const track of action.audioTracks ?? []) add(track?.sourceUrl);
+  }
+  return urls;
+}
+
+/**
+ * Undo-history eviction handler. Bug-07 closure (2026-06-03): pre-fix
+ * `deleteNode` revoked deleted textures' blob URLs EAGERLY, which broke
+ * undo of layer deletion — the snapshot still referenced the now-dead
+ * URL, the texture sync useEffect failed to decode it, the restored
+ * layer rendered as a transparent rectangle. The user observed this as
+ * "undo doesn't work."
+ *
+ * Fix: leave URLs alive at delete time so the snapshot's reference is
+ * load-bearing; revoke ONLY when the snapshot evicts (drops off the
+ * tail of MAX_HISTORY=50) AND no other live state references the URL.
+ *
+ * Live state checks:
+ *   - The current `useProjectStore` project (Ctrl+Z could have restored
+ *     the URL to the live project after the snapshot evicted in some
+ *     subtle interleaving — defensive).
+ *   - All remaining snapshots in `_snapshots`.
+ *   - All entries in `_redoStack`.
+ *
+ * If any of the three references the URL, do NOT revoke — another path
+ * still depends on it.
+ *
+ * @type {import('./undoHistory.js').OnEvictCallback}
+ */
+function _onUndoSnapshotEvict(evicted, liveSnapshots, liveRedoStack) {
+  const evictedUrls = _collectBlobUrls(evicted?.project);
+  if (evictedUrls.size === 0) return;
+  const liveProj = useProjectStore.getState().project;
+  const liveUrls = _collectBlobUrls(liveProj);
+  for (const url of evictedUrls) {
+    if (liveUrls.has(url)) continue;
+    let referencedElsewhere = false;
+    for (const snap of liveSnapshots) {
+      if (_collectBlobUrls(snap?.project).has(url)) {
+        referencedElsewhere = true;
+        break;
+      }
+    }
+    if (!referencedElsewhere) {
+      for (const snap of liveRedoStack) {
+        if (_collectBlobUrls(snap?.project).has(url)) {
+          referencedElsewhere = true;
+          break;
+        }
+      }
+    }
+    if (referencedElsewhere) continue;
+    try { URL.revokeObjectURL(url); }
+    catch { /* defensive */ }
+  }
+}
+
+setOnEvictCallback(_onUndoSnapshotEvict);
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 import { computeWorldMatrices } from '../renderer/transforms.js';
 
@@ -336,19 +413,20 @@ export const useProjectStore = create((set, get) => {
   setHasUnsavedChanges: (val) => set({ hasUnsavedChanges: val }),
 
   /** Create a new empty group node */
-  createGroup: (name) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    state.project.nodes.push({
-      id:        uid(),
-      type:      'group',
-      name:      name ?? 'Group',
-      parent:    null,
-      transform: DEFAULT_TRANSFORM(),
-      visible:   true,
-      opacity:   1,
+  createGroup: (name) => {
+    useProjectStore.getState().updateProject((proj, vc) => {
+      proj.nodes.push({
+        id:        uid(),
+        type:      'group',
+        name:      name ?? 'Group',
+        parent:    null,
+        transform: DEFAULT_TRANSFORM(),
+        visible:   true,
+        opacity:   1,
+      });
+      vc.transformVersion++;
     });
-    state.versionControl.transformVersion++;
-  })),
+  },
 
   /**
    * Reparent a node to a new parent (or to root if newParentId is null).
@@ -416,32 +494,33 @@ export const useProjectStore = create((set, get) => {
    * `useAnimationStore.activeActionId` when the deleted id matches —
    * audit-fix G-3 closing the cross-store dangling-pointer gap.
    */
-  createAction: (name) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const id = uid();
-    state.project.actions.push({
-      id,
-      name:        name ?? `Action ${state.project.actions.length + 1}`,
-      duration:    2000,
-      fps:         24,
-      fcurves:     [],
-      audioTracks: [],
-      flag:        0,
-      meta:        { createdAt: null, modifiedAt: null, source: 'authored' },
+  createAction: (name) => {
+    useProjectStore.getState().updateProject((proj) => {
+      const id = uid();
+      proj.actions.push({
+        id,
+        name:        name ?? `Action ${proj.actions.length + 1}`,
+        duration:    2000,
+        fps:         24,
+        fcurves:     [],
+        audioTracks: [],
+        flag:        0,
+        meta:        { createdAt: null, modifiedAt: null, source: 'authored' },
+      });
     });
-  })),
+  },
 
-  renameAction: (id, newName) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const action = state.project.actions.find(a => a.id === id);
-    if (action) action.name = newName;
-  })),
+  renameAction: (id, newName) => {
+    useProjectStore.getState().updateProject((proj) => {
+      const action = proj.actions.find(a => a.id === id);
+      if (action) action.name = newName;
+    });
+  },
 
   deleteAction: (id) => {
-    set(produce((state) => {
-      state.hasUnsavedChanges = true;
-      registryDeleteAction(state.project, id);
-    }));
+    useProjectStore.getState().updateProject((proj) => {
+      registryDeleteAction(proj, id);
+    });
     // Audit-fix G-3: reset the UI store's active action when it
     // pointed at the deleted id. Without this, every consumer of
     // activeActionId (~10 surfaces — Timeline, Dopesheet, FCurve
@@ -492,33 +571,35 @@ export const useProjectStore = create((set, get) => {
   },
 
   /** Create a new blend shape on a part node */
-  createBlendShape: (nodeId, name) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find(n => n.id === nodeId);
-    const mesh = getMesh(node, state.project);
-    if (!mesh) return;
-    const id = uid();
-    const deltas = mesh.vertices.map(() => ({ dx: 0, dy: 0 }));
-    if (!node.blendShapes) node.blendShapes = [];
-    if (!node.blendShapeValues) node.blendShapeValues = {};
-    node.blendShapes.push({ id, name: name ?? 'Key', deltas });
-    node.blendShapeValues[id] = 0;
-    state.versionControl.geometryVersion++;
-  })),
+  createBlendShape: (nodeId, name) => {
+    useProjectStore.getState().updateProject((proj, vc) => {
+      const node = proj.nodes.find(n => n.id === nodeId);
+      const mesh = getMesh(node, proj);
+      if (!mesh) return;
+      const id = uid();
+      const deltas = mesh.vertices.map(() => ({ dx: 0, dy: 0 }));
+      if (!node.blendShapes) node.blendShapes = [];
+      if (!node.blendShapeValues) node.blendShapeValues = {};
+      node.blendShapes.push({ id, name: name ?? 'Key', deltas });
+      node.blendShapeValues[id] = 0;
+      vc.geometryVersion++;
+    });
+  },
 
   /** Delete a blend shape from a part node */
-  deleteBlendShape: (nodeId, shapeId) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find(n => n.id === nodeId);
-    if (!node) return;
-    if (node.blendShapes) {
-      node.blendShapes = node.blendShapes.filter(s => s.id !== shapeId);
-    }
-    if (node.blendShapeValues) {
-      delete node.blendShapeValues[shapeId];
-    }
-    state.versionControl.geometryVersion++;
-  })),
+  deleteBlendShape: (nodeId, shapeId) => {
+    useProjectStore.getState().updateProject((proj, vc) => {
+      const node = proj.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      if (node.blendShapes) {
+        node.blendShapes = node.blendShapes.filter(s => s.id !== shapeId);
+      }
+      if (node.blendShapeValues) {
+        delete node.blendShapeValues[shapeId];
+      }
+      vc.geometryVersion++;
+    });
+  },
 
   /** Set the influence value of a blend shape in staging mode */
   setBlendShapeValue: (nodeId, shapeId, value) => set(produce((state) => {
@@ -574,14 +655,13 @@ export const useProjectStore = create((set, get) => {
     if (!spec || typeof spec.id !== 'string' || spec.id.length === 0) return false;
     const params = get().project?.parameters ?? [];
     if (params.some((p) => p?.id === spec.id)) return false;
-    set(produce((state) => {
-      state.hasUnsavedChanges = true;
+    useProjectStore.getState().updateProject((proj) => {
       const min = typeof spec.min === 'number' ? spec.min : 0;
       const max = typeof spec.max === 'number' ? spec.max : 1;
       const def = typeof spec.default === 'number' ? spec.default : Math.min(Math.max(0, min), max);
       const keys = coerceNumberArray(spec.keys, `addParameter[${spec.id}].keys`);
-      state.project.parameters = state.project.parameters ?? [];
-      state.project.parameters.push({
+      proj.parameters = proj.parameters ?? [];
+      proj.parameters.push({
         id:   spec.id,
         name: spec.name ?? spec.id,
         role: spec.role ?? 'custom',
@@ -593,7 +673,7 @@ export const useProjectStore = create((set, get) => {
         _userAuthored: true,
         _userAuthoredKeys: keys.slice(),
       });
-    }));
+    });
     return true;
   },
 
@@ -607,24 +687,24 @@ export const useProjectStore = create((set, get) => {
    * and Init Rig regenerates them on the next pass. (See V4 plan §4
    * Risks — keyform editor track owns the live collapse.)
    */
-  removeParameter: (paramId) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const proj = state.project;
-    proj.parameters = (proj.parameters ?? []).filter((p) => p?.id !== paramId);
-    for (const n of proj.nodes ?? []) {
-      // Bindings live on rotation deformers AND lattice (warp) objects (v43).
-      if (!_nodeHasParamBindings(n)) continue;
-      n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
-    }
-    for (const action of proj.actions ?? []) {
-      if (!Array.isArray(action?.fcurves)) continue;
-      action.fcurves = action.fcurves.filter((fc) => !fcurveTargetsParam(fc, paramId));
-    }
-    for (const rule of proj.physicsRules ?? []) {
-      if (!Array.isArray(rule?.inputs)) continue;
-      rule.inputs = rule.inputs.filter((inp) => inp?.paramId !== paramId);
-    }
-  })),
+  removeParameter: (paramId) => {
+    useProjectStore.getState().updateProject((proj) => {
+      proj.parameters = (proj.parameters ?? []).filter((p) => p?.id !== paramId);
+      for (const n of proj.nodes ?? []) {
+        // Bindings live on rotation deformers AND lattice (warp) objects (v43).
+        if (!_nodeHasParamBindings(n)) continue;
+        n.bindings = n.bindings.filter((b) => b?.parameterId !== paramId);
+      }
+      for (const action of proj.actions ?? []) {
+        if (!Array.isArray(action?.fcurves)) continue;
+        action.fcurves = action.fcurves.filter((fc) => !fcurveTargetsParam(fc, paramId));
+      }
+      for (const rule of proj.physicsRules ?? []) {
+        if (!Array.isArray(rule?.inputs)) continue;
+        rule.inputs = rule.inputs.filter((inp) => inp?.paramId !== paramId);
+      }
+    });
+  },
 
   /**
    * Rename a parameter id. Cascades the rename through deformer
@@ -638,9 +718,7 @@ export const useProjectStore = create((set, get) => {
     if (oldId === newId) return true;
     const params = get().project?.parameters ?? [];
     if (params.some((p) => p?.id === newId)) return false;
-    set(produce((state) => {
-      state.hasUnsavedChanges = true;
-      const proj = state.project;
+    useProjectStore.getState().updateProject((proj) => {
       const param = (proj.parameters ?? []).find((p) => p?.id === oldId);
       if (!param) return;
       param.id = newId;
@@ -662,7 +740,7 @@ export const useProjectStore = create((set, get) => {
           if (inp?.paramId === oldId) inp.paramId = newId;
         }
       }
-    }));
+    });
     return true;
   },
 
@@ -2020,16 +2098,22 @@ export const useProjectStore = create((set, get) => {
       draft.hasUnsavedChanges = true;
       const proj = draft.project;
 
-      // MEM-01 — revoke `blob:` URLs for the textures we are about to
-      // drop. Pre-fix only resetProject/loadProject called
-      // disposeProjectResources; deleteNode leaked one blob URL per
-      // PSD-imported part for the rest of the session (and the undo
-      // snapshot pinned the blob further — see MEM-03 follow-up).
-      for (const t of proj.textures) {
-        if (idsToDelete.has(t.id) && typeof t.source === 'string' && t.source.startsWith('blob:')) {
-          try { URL.revokeObjectURL(t.source); } catch { /* already revoked */ }
-        }
-      }
+      // Bug-07 closure 2026-06-03 — the previous MEM-01 fix revoked
+      // deleted-texture blob URLs HERE (eagerly, before mutation), which
+      // broke undo of layer deletion: the snapshot taken at line 1999
+      // still referenced the dead URL, the texture-sync useEffect at
+      // `CanvasViewport.jsx:466` failed to decode it, and the restored
+      // layer rendered as a transparent rectangle — the user observed
+      // this as "undo doesn't work." Eager revocation is moved to
+      // `_onUndoSnapshotEvict` (file top) which fires when a snapshot
+      // drops off the tail of MAX_HISTORY=50 AND no other live state
+      // references the URL. Undo correctness wins; blob URLs stay alive
+      // while ANY snapshot needs them, then revoke on eviction. Worst-
+      // case session memory growth is bounded by MAX_HISTORY × per-
+      // delete blob count (PSD layers ≈ 100-500KB each; 50 × 500KB =
+      // 25MB tail, released on project close via
+      // `disposeProjectResources` at the resetProject/loadProject
+      // paths).
 
       // Remove nodes
       proj.nodes = proj.nodes.filter(n => !idsToDelete.has(n.id));
