@@ -41,7 +41,7 @@ string is the only reliable surface for paste-back diagnostics).
 
 | ID | Invariant | Catches |
 |----|-----------|---------|
-| **I-1** | Every `type:'part'` node with a non-empty mesh has at least one entry in `modifiers[]` | Empty modifier stack → renderer falls back to root frame → part renders at canvas origin (face-displacement class) |
+| **I-1** | Every `type:'part'` node with a non-empty mesh **and `visible !== false`** has at least one entry in `modifiers[]` | Empty modifier stack → renderer falls back to root frame → part renders at canvas origin (face-displacement class). Hidden parts (e.g. `variantNormalizer` marks variants `visible:false` so the fade ramps them in on `Param<Suffix>`) are skipped because the renderer skips them too — invariants check what WILL render. |
 | **I-2** | Every `modifiers[i]`'s reference (`objectId` for `type:'lattice'`, `deformerId` otherwise) resolves to a node in `project.nodes` | Dangling refs → `synthesizeModifierStacks` walk breaks at that link |
 | **I-3** | Every `objectKind:'lattice'` node's `parent` (if non-null) resolves to a node | The v43-flatten regression class — parent string lost in conversion → renderer reads null parent |
 | **I-4** | Each lattice's `dataId` points at a cage whose `vertices.length === (rows+1) × (cols+1)` | Cage shape mismatches lattice `gridSize` |

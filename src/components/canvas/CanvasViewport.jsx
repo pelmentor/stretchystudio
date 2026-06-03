@@ -930,13 +930,7 @@ export default function CanvasViewport({
         lastPhysicsTimestampRef.current = timestamp;
 
         if (Object.keys(updates).length > 0) {
-          // Live preview tick (physics + breath/look): write to values
-          // map only; skipBoneMirror so per-frame physics output doesn't
-          // mutate projectStore each frame and force every node-subscriber
-          // to re-render. Mesh deformation comes from chainEval reading
-          // the values map; bone visual handle stays at its authored
-          // pose, which is the right thing for runtime physics (it's
-          // not user authoring).
+          // Live preview tick (physics + breath/look) writes to values map.
           //
           // Filter out keys whose value is bit-identical to (or sub-
           // perceptibly close to) the current store value. Without this
@@ -947,6 +941,20 @@ export default function CanvasViewport({
           // valuesForEval object identity, so unconditional setMany
           // forced a fresh object every frame and made the cache hit
           // path unreachable.
+          //
+          // Bone-mirror: `setMany` (no opts) fans bone-mirror params
+          // (`ParamRotation_<bone>`) out to `bone.pose.rotation`. Pre-
+          // 2026-06-03 this was `{ skipBoneMirror: true }` "for perf" —
+          // but the depgraph reads `bone.pose.rotation` (not the param
+          // value) for skinned bones, so skipping the mirror disconnected
+          // physics outputs from arm-bone rotation. Hair physics still
+          // worked because `ParamHairFront/Back` aren't bone-mirror —
+          // their warp deformers read the param directly. Arm physics
+          // (`ParamRotation_leftElbow/rightElbow`) require the bone fan-
+          // out. Non-bone-mirror keys (breath, blink, look) never enter
+          // the fan-out loop so the perf cost is per bone-mirror key
+          // only, and only when its value actually changes (post-epsilon
+          // gate).
           const PARAM_DELTA_EPSILON = 1e-4;
           const realUpdates = {};
           let realCount = 0;
@@ -958,7 +966,7 @@ export default function CanvasViewport({
             }
           }
           if (realCount > 0) {
-            useParamValuesStore.getState().setMany(realUpdates, { skipBoneMirror: true });
+            useParamValuesStore.getState().setMany(realUpdates);
             // R12: advance the ref synchronously to match the
             // just-written store state. React's re-render commit
             // hasn't fired yet within this rAF tick, so the existing

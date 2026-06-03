@@ -280,6 +280,16 @@ export function runRigInvariantChecks(project) {
     const mesh = n.mesh;
     const vCount = vertexCountOf(mesh?.vertices);
     if (vCount === 0) continue; // no mesh — skip (legitimate for some part types)
+    // Skip parts the renderer will skip outright. `variantNormalizer.js`
+    // sets `visible:false` on every detected variant so it stays hidden
+    // at rest pose (the variant fade ramps it back in on Param<Suffix>).
+    // Those variants legitimately have no rigwarp + no modifier stack
+    // because the rig pipeline filters them out at `buildMeshesForRig`
+    // (`exporter.js:823`) — render-path filters do the same downstream.
+    // Without this skip, every variant fires I-1 with "renders at canvas
+    // origin" which is wrong: the renderer never reaches them, hidden
+    // means hidden. Invariants check WHAT WILL BE RENDERED.
+    if (n.visible === false) continue;
 
     // I-1: at least one modifier
     if (!Array.isArray(n.modifiers) || n.modifiers.length === 0) {
