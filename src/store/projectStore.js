@@ -531,15 +531,17 @@ export const useProjectStore = create((set, get) => {
     }
   },
 
-  assignAction: (objectId, actionId, slot = 0) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    registryAssignAction(state.project, objectId, actionId, slot);
-  })),
+  assignAction: (objectId, actionId, slot = 0) => {
+    useProjectStore.getState().updateProject((proj) => {
+      registryAssignAction(proj, objectId, actionId, slot);
+    });
+  },
 
-  unassignAction: (objectId) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    registryUnassignAction(state.project, objectId);
-  })),
+  unassignAction: (objectId) => {
+    useProjectStore.getState().updateProject((proj) => {
+      registryUnassignAction(proj, objectId);
+    });
+  },
 
   /**
    * Clone an action via the registry; returns the FULL cloned action
@@ -555,17 +557,16 @@ export const useProjectStore = create((set, get) => {
    * after the `produce` callback completes.
    */
   cloneAction: (actionId, newName) => {
-    /** @type {object|null} */
+    /** @type {string|null} */
     let createdId = null;
-    set(produce((state) => {
-      state.hasUnsavedChanges = true;
-      const clone = registryCloneAction(state.project, actionId, newName);
+    useProjectStore.getState().updateProject((proj) => {
+      const clone = registryCloneAction(proj, actionId, newName);
       createdId = clone ? clone.id : null;
-    }));
+    });
     if (createdId === null) return null;
     // Re-resolve the post-finalised entry from the freshly-set state
     // so the returned reference is NOT the immer draft (which is
-    // revoked after `produce` returns).
+    // revoked after `updateProject` returns).
     const finalActions = get().project.actions ?? [];
     return finalActions.find((a) => a && a.id === createdId) ?? null;
   },
@@ -602,26 +603,28 @@ export const useProjectStore = create((set, get) => {
   },
 
   /** Set the influence value of a blend shape in staging mode */
-  setBlendShapeValue: (nodeId, shapeId, value) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find(n => n.id === nodeId);
-    if (node && node.blendShapeValues) {
-      node.blendShapeValues[shapeId] = Math.max(0, Math.min(1, value));
-      state.versionControl.geometryVersion++;
-    }
-  })),
+  setBlendShapeValue: (nodeId, shapeId, value) => {
+    useProjectStore.getState().updateProject((proj, vc) => {
+      const node = proj.nodes.find(n => n.id === nodeId);
+      if (node && node.blendShapeValues) {
+        node.blendShapeValues[shapeId] = Math.max(0, Math.min(1, value));
+        vc.geometryVersion++;
+      }
+    });
+  },
 
   /** Update the deltas of a blend shape (used by edit mode brush) */
-  updateBlendShapeDeltas: (nodeId, shapeId, deltas) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const node = state.project.nodes.find(n => n.id === nodeId);
-    if (!node) return;
-    const shape = node.blendShapes?.find(s => s.id === shapeId);
-    if (shape) {
-      shape.deltas = deltas;
-      state.versionControl.geometryVersion++;
-    }
-  })),
+  updateBlendShapeDeltas: (nodeId, shapeId, deltas) => {
+    useProjectStore.getState().updateProject((proj, vc) => {
+      const node = proj.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      const shape = node.blendShapes?.find(s => s.id === shapeId);
+      if (shape) {
+        shape.deltas = deltas;
+        vc.geometryVersion++;
+      }
+    });
+  },
 
   // ── Parameter CRUD (V4 Phase 2 — Param editor polish) ────────────
   // All actions write through the immer recipe so they're undoable.
@@ -750,19 +753,20 @@ export const useProjectStore = create((set, get) => {
    * `_userAuthored: true` on first patch. No cascade — just field
    * edits.
    */
-  patchParameter: (paramId, partial) => set(produce((state) => {
+  patchParameter: (paramId, partial) => {
     if (!partial || typeof partial !== 'object') return;
-    state.hasUnsavedChanges = true;
-    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
-    if (!param) return;
-    if (typeof partial.name === 'string')          param.name = partial.name;
-    if (typeof partial.role === 'string')          param.role = partial.role;
-    if (typeof partial.min === 'number')           param.min = partial.min;
-    if (typeof partial.max === 'number')           param.max = partial.max;
-    if (typeof partial.default === 'number')       param.default = partial.default;
-    if (typeof partial.decimalPlaces === 'number') param.decimalPlaces = partial.decimalPlaces;
-    param._userAuthored = true;
-  })),
+    useProjectStore.getState().updateProject((proj) => {
+      const param = (proj.parameters ?? []).find((p) => p?.id === paramId);
+      if (!param) return;
+      if (typeof partial.name === 'string')          param.name = partial.name;
+      if (typeof partial.role === 'string')          param.role = partial.role;
+      if (typeof partial.min === 'number')           param.min = partial.min;
+      if (typeof partial.max === 'number')           param.max = partial.max;
+      if (typeof partial.default === 'number')       param.default = partial.default;
+      if (typeof partial.decimalPlaces === 'number') param.decimalPlaces = partial.decimalPlaces;
+      param._userAuthored = true;
+    });
+  },
 
   /**
    * Add a breakpoint key value to a parameter. Idempotent
@@ -770,26 +774,27 @@ export const useProjectStore = create((set, get) => {
    * value in `_userAuthoredKeys` so Init Rig 'merge' preserves it.
    * Does NOT expand existing deformer keyforms — Track 3 owns that.
    */
-  addParamKey: (paramId, value) => set(produce((state) => {
+  addParamKey: (paramId, value) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return;
-    state.hasUnsavedChanges = true;
-    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
-    if (!param) return;
-    const EPS = 1e-6;
-    const keys = coerceNumberArray(param.keys, `addParamKey[${paramId}].param.keys`);
-    if (!keys.some((k) => Math.abs(k - value) < EPS)) {
-      keys.push(value);
-      keys.sort((a, b) => a - b);
-      param.keys = keys;
-    }
-    const userKeys = coerceNumberArray(param._userAuthoredKeys, `addParamKey[${paramId}].param._userAuthoredKeys`);
-    if (!userKeys.some((k) => Math.abs(k - value) < EPS)) {
-      userKeys.push(value);
-      userKeys.sort((a, b) => a - b);
-      param._userAuthoredKeys = userKeys;
-    }
-    param._userAuthored = true;
-  })),
+    useProjectStore.getState().updateProject((proj) => {
+      const param = (proj.parameters ?? []).find((p) => p?.id === paramId);
+      if (!param) return;
+      const EPS = 1e-6;
+      const keys = coerceNumberArray(param.keys, `addParamKey[${paramId}].param.keys`);
+      if (!keys.some((k) => Math.abs(k - value) < EPS)) {
+        keys.push(value);
+        keys.sort((a, b) => a - b);
+        param.keys = keys;
+      }
+      const userKeys = coerceNumberArray(param._userAuthoredKeys, `addParamKey[${paramId}].param._userAuthoredKeys`);
+      if (!userKeys.some((k) => Math.abs(k - value) < EPS)) {
+        userKeys.push(value);
+        userKeys.sort((a, b) => a - b);
+        param._userAuthoredKeys = userKeys;
+      }
+      param._userAuthored = true;
+    });
+  },
 
   /**
    * Remove a breakpoint key value from a parameter. Removes from both
@@ -797,33 +802,35 @@ export const useProjectStore = create((set, get) => {
    * collapse existing deformer keyforms — they stay until the next
    * Init Rig pass regenerates the keyform list.
    */
-  removeParamKey: (paramId, value) => set(produce((state) => {
+  removeParamKey: (paramId, value) => {
     if (typeof value !== 'number') return;
-    state.hasUnsavedChanges = true;
-    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
-    if (!param) return;
-    const EPS = 1e-6;
-    if (Array.isArray(param.keys)) {
-      param.keys = param.keys.filter((k) => Math.abs(k - value) >= EPS);
-    }
-    if (Array.isArray(param._userAuthoredKeys)) {
-      param._userAuthoredKeys = param._userAuthoredKeys.filter((k) => Math.abs(k - value) >= EPS);
-    }
-    param._userAuthored = true;
-  })),
+    useProjectStore.getState().updateProject((proj) => {
+      const param = (proj.parameters ?? []).find((p) => p?.id === paramId);
+      if (!param) return;
+      const EPS = 1e-6;
+      if (Array.isArray(param.keys)) {
+        param.keys = param.keys.filter((k) => Math.abs(k - value) >= EPS);
+      }
+      if (Array.isArray(param._userAuthoredKeys)) {
+        param._userAuthoredKeys = param._userAuthoredKeys.filter((k) => Math.abs(k - value) >= EPS);
+      }
+      param._userAuthored = true;
+    });
+  },
 
   /**
    * Toggle the `_userAuthored` lock flag on a parameter. When set,
    * Init Rig 'merge' mode preserves the parameter verbatim (range,
    * default, keys, role unchanged). 'replace' mode still clobbers.
    */
-  setParameterUserAuthored: (paramId, on) => set(produce((state) => {
-    state.hasUnsavedChanges = true;
-    const param = (state.project.parameters ?? []).find((p) => p?.id === paramId);
-    if (!param) return;
-    if (on) param._userAuthored = true;
-    else delete param._userAuthored;
-  })),
+  setParameterUserAuthored: (paramId, on) => {
+    useProjectStore.getState().updateProject((proj) => {
+      const param = (proj.parameters ?? []).find((p) => p?.id === paramId);
+      if (!param) return;
+      if (on) param._userAuthored = true;
+      else delete param._userAuthored;
+    });
+  },
 
   // ── Weight paint (V4 Phase 4b) ────────────────────────────────────
   // All actions write through immer so they're undoable. They migrate

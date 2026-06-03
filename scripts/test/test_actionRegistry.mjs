@@ -488,8 +488,12 @@ function makeProject() {
   const src = readFileSync(join(repoRoot, 'src/store/projectStore.js'), 'utf8');
   assert(src.includes("from '../anim/actionRegistry.js'"),
     'projectStore: imports actionRegistry');
-  assert(/registryDeleteAction\(state\.project, id\)/.test(src),
-    'projectStore.deleteAction: delegates to registryDeleteAction(state.project, id)');
+  // Match either the pre-2026-06-03 `state.project` shape or the post-
+  // migration `proj` shape (registry call moved inside
+  // `updateProject((proj) => ...)` for undo capture — see
+  // [[undo-via-updateProject]]).
+  assert(/registryDeleteAction\((?:state\.project|proj), id\)/.test(src),
+    'projectStore.deleteAction: delegates to registryDeleteAction(<project>, id)');
 }
 
 // ── D-9 closure (Stage 1.D introduces __scene__) ──────────────────────────
