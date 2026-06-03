@@ -930,7 +930,20 @@ export default function CanvasViewport({
         lastPhysicsTimestampRef.current = timestamp;
 
         if (Object.keys(updates).length > 0) {
-          // Live preview tick (physics + breath/look) writes to values map.
+          // Live preview tick (physics + breath/look): write to values
+          // map only; skipBoneMirror so per-frame physics output doesn't
+          // mutate projectStore each frame. Mutating projectStore from
+          // here triggers `rigSpecStore`'s subscriber (`rigSpecStore.js:265`)
+          // which calls `selectRigSpec(newProject)` and writes a fresh
+          // rigSpec object. CanvasViewport's per-frame check
+          // `physicsRigSpecRef.current !== _rigSpecForPhysics` (line 884)
+          // would then see the new rigSpec identity every frame and
+          // recreate `cubismPhysicsKernel` state — wiping the pendulum
+          // velocity for EVERY rule (arms, hair, clothing, breath).
+          // Bone-mirror physics outputs reach `bone.pose.rotation` via
+          // the live `poseOverrides` Map injected into evalProjectFrame
+          // below — that's the Blender-driver-overlay path the depgraph
+          // already understands, no projectStore mutation needed.
           //
           // Filter out keys whose value is bit-identical to (or sub-
           // perceptibly close to) the current store value. Without this
@@ -941,20 +954,6 @@ export default function CanvasViewport({
           // valuesForEval object identity, so unconditional setMany
           // forced a fresh object every frame and made the cache hit
           // path unreachable.
-          //
-          // Bone-mirror: `setMany` (no opts) fans bone-mirror params
-          // (`ParamRotation_<bone>`) out to `bone.pose.rotation`. Pre-
-          // 2026-06-03 this was `{ skipBoneMirror: true }` "for perf" —
-          // but the depgraph reads `bone.pose.rotation` (not the param
-          // value) for skinned bones, so skipping the mirror disconnected
-          // physics outputs from arm-bone rotation. Hair physics still
-          // worked because `ParamHairFront/Back` aren't bone-mirror —
-          // their warp deformers read the param directly. Arm physics
-          // (`ParamRotation_leftElbow/rightElbow`) require the bone fan-
-          // out. Non-bone-mirror keys (breath, blink, look) never enter
-          // the fan-out loop so the perf cost is per bone-mirror key
-          // only, and only when its value actually changes (post-epsilon
-          // gate).
           const PARAM_DELTA_EPSILON = 1e-4;
           const realUpdates = {};
           let realCount = 0;
@@ -966,7 +965,7 @@ export default function CanvasViewport({
             }
           }
           if (realCount > 0) {
-            useParamValuesStore.getState().setMany(realUpdates);
+            useParamValuesStore.getState().setMany(realUpdates, { skipBoneMirror: true });
             // R12: advance the ref synchronously to match the
             // just-written store state. React's re-render commit
             // hasn't fired yet within this rAF tick, so the existing
@@ -1022,6 +1021,40 @@ export default function CanvasViewport({
             // Don't clobber transform overrides already set by animation mode above
             const existing = poseOverrides.get(nodeId) ?? {};
             if (!existing.mesh_verts) poseOverrides.set(nodeId, { ...existing, mesh_verts: draft.mesh_verts });
+          }
+        }
+
+        // Live-preview bone-mirror overlay (2026-06-03 bug-06 fix). Every
+        // bone-mirror param (`ParamRotation_<bone>`) gets injected as a
+        // `{rotation: paramValue}` pose override so the depgraph's
+        // TRANSFORM_COMPOSE seeds the bone's pose from the live param
+        // value WITHOUT mutating `bone.pose.rotation` in projectStore.
+        //
+        // Mutating projectStore from a per-frame driver would re-fire
+        // `rigSpecStore.js:265`'s subscriber, regenerate the rigSpec
+        // object identity, and reset `cubismPhysicsKernel` state via
+        // the identity check at line 884 — every rule's pendulum
+        // velocity would zero out each frame, producing the saturate-
+        // to-min/max jitter pattern. The driver-overlay path is the
+        // Blender-native equivalent: `bone.pose.rotation` is the user's
+        // authored channel; live runtime drivers (physics, anim
+        // playback) ride on top via the override Map. See
+        // [[physics-bone-mirror-overlay]].
+        //
+        // Animation mode (above) wins on the same bone: if the action
+        // already set a `rotation` override, we skip — keyframe authoring
+        // is more explicit than live physics overlay.
+        if (previewModeRef.current) {
+          const _boneMirror = useParamValuesStore.getState().boneMirror?.byParam;
+          if (_boneMirror && _boneMirror.size > 0) {
+            for (const [paramId, boneId] of _boneMirror) {
+              const v = valuesForEval[paramId];
+              if (typeof v !== 'number' || !Number.isFinite(v) || v === 0) continue;
+              if (!poseOverrides) poseOverrides = new Map();
+              const existing = poseOverrides.get(boneId);
+              if (existing && typeof existing === 'object' && 'rotation' in existing) continue;
+              poseOverrides.set(boneId, { ...(existing ?? {}), rotation: v });
+            }
           }
         }
 
