@@ -38,7 +38,7 @@ import { getMesh } from '../../../store/objectDataAccess.js';
 import { isLatticeCageObject } from '../../../store/warpLatticeAccess.js';
 import { logger } from '../../../lib/logger.js';
 import {
-  remapPerVertexArray, averageDeltas, averageNumbers,
+  remapPerVertexArray, averageDeltas, averageNumbers, remapKeyformVertices,
 } from '../../../lib/meshTopology.js';
 import { getSceneRef } from '../../../lib/sceneRegistry.js';
 import { meshSignature } from '../../../io/meshSignature.js';
@@ -156,14 +156,33 @@ export function applyTopologyOp(partId, result) {
     }
     if (remappedWeightGroups) m.weightGroups = remappedWeightGroups;
     if (remappedBoneWeights)  m.boneWeights  = remappedBoneWeights;
-    // Audit fix G-1 — `mesh.runtime.keyforms[i].vertexPositions` is
-    // positionally-indexed at the OLD vertex count. After topology
-    // change it stays at `2 * N_old`; `artMeshEval` reads that length
-    // as authoritative `len` and emits wrong-sized buffers (or filters
-    // out the keyform entirely). The runtime is rebuilt by the next
-    // Init Rig pass — clearing here matches the existing pattern at
-    // `ArmatureModifierService.js:155` and `artMeshRuntimeSync.js:175`.
-    if (m.runtime) delete m.runtime;
+    // 2026-06-04 — remap `mesh.runtime.keyforms[i].vertexPositions` in
+    // place using the same vertexSources / vertexWeights the blendShape
+    // delta remap consumes above. Pre-fix (R4 G-1) the runtime was
+    // deleted wholesale, which left `kernelArtMeshEval` returning null
+    // for the part (`!runtime` early-return) — live preview froze /
+    // disappeared until the user manually re-ran Init Rig. Now the
+    // surgical remap keeps keyform-driven warp/bone deformation working
+    // immediately post-edit; the stale-rig banner still fires because
+    // the mesh signature genuinely diverges from the last Init Rig pass,
+    // but the user no longer sees the part vanish.
+    //
+    // bindings are param-keyed descriptors and don't depend on vertex
+    // count — left untouched. `m.runtime` shape is `{bindings, keyforms}`
+    // (set by `persistArtMeshRuntime`).
+    if (m.runtime && Array.isArray(m.runtime.keyforms)) {
+      const newCount = result.vertices.length;
+      for (const kf of m.runtime.keyforms) {
+        if (kf && kf.vertexPositions instanceof Float32Array) {
+          kf.vertexPositions = remapKeyformVertices(
+            kf.vertexPositions,
+            result.vertexSources,
+            newCount,
+            vw,
+          );
+        }
+      }
+    }
   });
 
   // GPU re-upload — match the existing add_vertex / remove_vertex paths

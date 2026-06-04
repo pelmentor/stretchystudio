@@ -425,8 +425,9 @@ function registerBuiltins() {
         if (sel && sel.size > 0) {
           const project = useProjectStore.getState().project;
           const node = project?.nodes?.find((n) => n.id === partId);
-          if (!node?.mesh) return;
-          const result = deleteVertices(node.mesh, sel);
+          const mesh = getMesh(node, project);
+          if (!mesh) return;
+          const result = deleteVertices(mesh, sel);
           if (!result) return;
           applyTopologyOp(partId, result);
           return;
@@ -1081,7 +1082,14 @@ function registerBuiltins() {
   // gate; the dispatch logic differs per mode (centroid / cursor /
   // active vert / threshold / connected component).
 
-  /** Returns the meshed-part id we should operate on, or null. */
+  /** Returns the meshed-part id we should operate on, or null.
+   *  Reads geometry via `getMesh(node, project)` so post-v18 parts
+   *  (geometry on a sibling `meshData` node via `node.dataId`, not
+   *  inline `node.mesh`) resolve. Pre-fix (R4 cascade miss 2026-06-04)
+   *  every Edit-Mode topology operator silently no-op'd on v18 projects
+   *  because the `!node.mesh` check was true for every post-migration
+   *  part — Delete / X / M / K / E / Ctrl+X / L all dropped to no-ops
+   *  the moment the user loaded a saved project. */
   function activeEditPart() {
     const editor = useEditorStore.getState();
     if (editor.editMode !== 'edit') return null;
@@ -1089,7 +1097,8 @@ function registerBuiltins() {
     if (typeof partId !== 'string' || partId.length === 0) return null;
     const project = useProjectStore.getState().project;
     const node = project?.nodes?.find((n) => n.id === partId);
-    if (!node || node.type !== 'part' || !node.mesh) return null;
+    if (!node || node.type !== 'part') return null;
+    if (!getMesh(node, project)) return null;
     return partId;
   }
 
@@ -1139,10 +1148,11 @@ function registerBuiltins() {
     if (!partId) return;
     const project = useProjectStore.getState().project;
     const node = project.nodes.find((n) => n.id === partId);
-    if (!node?.mesh) return;
+    const mesh = getMesh(node, project);
+    if (!mesh) return;
     const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
     if (!sel || sel.size === 0) return;
-    const result = variantFn(node.mesh, sel);
+    const result = variantFn(mesh, sel);
     if (!result) return;
     applyTopologyOp(partId, result);
   }
@@ -1232,12 +1242,13 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const adj = buildVertexAdjacency(
-        node.mesh.triangles.flat(),
-        node.mesh.vertices.length,
+        mesh.triangles.flat(),
+        mesh.vertices.length,
       );
-      runMergeVariant((mesh, sel) => mergeCollapse(mesh, sel, adj));
+      runMergeVariant((m, sel) => mergeCollapse(m, sel, adj));
     },
   });
 
@@ -1252,10 +1263,11 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size === 0) return;
-      const result = dissolveVertices(node.mesh, sel);
+      const result = dissolveVertices(mesh, sel);
       if (!result) {
         toast({
           title: 'Cannot dissolve',
@@ -1281,10 +1293,11 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size === 0) return;
-      const result = deleteVertices(node.mesh, sel);
+      const result = deleteVertices(mesh, sel);
       if (!result) {
         toast({
           title: 'Cannot delete vertices',
@@ -1325,11 +1338,12 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size !== 2) return;
       const [a, b] = sel.values();
-      const result = cutMeshAlongLine(node.mesh, a, b);
+      const result = cutMeshAlongLine(mesh, a, b);
       if (!result) {
         toast({
           title: 'Cannot knife',
@@ -1355,11 +1369,12 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size === 0) return;
       const { cuts, smoothness } = useSubdivideStore.getState();
-      const result = subdivide(node.mesh, sel, { cuts, smoothness });
+      const result = subdivide(mesh, sel, { cuts, smoothness });
       if (!result) {
         toast({
           title: 'Nothing to subdivide',
@@ -1385,7 +1400,8 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size === 0) return;
       // Diagnose first so we toast cleanly instead of silently no-opping
@@ -1398,7 +1414,7 @@ function registerBuiltins() {
       // but Live2D meshes are triangle-only so wire-edges are
       // unusable downstream — this is a Live2D data-model
       // limitation, NOT an SS bug. Reword to make that explicit.
-      const boundaryCount = countSelectedBoundary(node.mesh, sel);
+      const boundaryCount = countSelectedBoundary(mesh, sel);
       if (boundaryCount === 0) {
         toast({
           title: 'Interior-vert extrude not supported',
@@ -1406,7 +1422,7 @@ function registerBuiltins() {
         });
         return;
       }
-      const result = extrude(node.mesh, sel);
+      const result = extrude(mesh, sel);
       if (!result) return;
       // Open a batch so the topology change + the modal drag collapse
       // to ONE undo entry. discardBatch on cancel rolls back BOTH in
@@ -1433,7 +1449,7 @@ function registerBuiltins() {
       // original Map handles per-frame delta math).
       const newProject = useProjectStore.getState().project;
       const newNode = newProject.nodes.find((n) => n.id === partId);
-      const newMesh = newNode?.mesh;
+      const newMesh = getMesh(newNode, newProject);
       if (!newMesh) {
         // Same defensive close as above — between applyTopologyOp and
         // here, the part could in theory vanish. Discard the batch.
@@ -1515,13 +1531,14 @@ function registerBuiltins() {
     if (!partId) return;
     const project = useProjectStore.getState().project;
     const node = project.nodes.find((n) => n.id === partId);
-    if (!node?.mesh) return;
+    const mesh = getMesh(node, project);
+    if (!mesh) return;
     const canvasCursor = clientToCanvas(lastMousePos());
     if (!canvasCursor) return;
     const view = useEditorStore.getState().viewByMode?.viewport;
     const zoom = view?.zoom ?? 1;
     const threshold = 16 / zoom;
-    const seedIdx = hitTestVertices(node.mesh.vertices, canvasCursor.x, canvasCursor.y, threshold);
+    const seedIdx = hitTestVertices(mesh.vertices, canvasCursor.x, canvasCursor.y, threshold);
     if (seedIdx < 0) {
       toast({
         title: 'No vertex under cursor',
@@ -1531,7 +1548,7 @@ function registerBuiltins() {
       });
       return;
     }
-    const linked = selectLinkedFromVertex(node.mesh, seedIdx);
+    const linked = selectLinkedFromVertex(mesh, seedIdx);
     if (!linked || linked.size === 0) return;
     const editor = useEditorStore.getState();
     if (deselect) {
@@ -1581,10 +1598,11 @@ function registerBuiltins() {
       if (!partId) return;
       const project = useProjectStore.getState().project;
       const node = project.nodes.find((n) => n.id === partId);
-      if (!node?.mesh) return;
+      const mesh = getMesh(node, project);
+      if (!mesh) return;
       const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
       if (!sel || sel.size === 0) return;
-      const expanded = selectLinkedExpandSelection(node.mesh, sel);
+      const expanded = selectLinkedExpandSelection(mesh, sel);
       if (!expanded) return;
       useEditorStore.getState().setVertexSelectionForPart(partId, expanded);
     },
@@ -1639,10 +1657,11 @@ function registerBuiltins() {
         if (!partId) return;
         const project = useProjectStore.getState().project;
         const node = project.nodes.find((n) => n.id === partId);
-        if (!node?.mesh) return;
+        const mesh = getMesh(node, project);
+        if (!mesh) return;
         const sel = editor.selectedVertexIndices.get(partId);
         if (!sel || sel.size === 0) return;
-        const result = duplicate(node.mesh, sel);
+        const result = duplicate(mesh, sel);
         if (!result) return;
         beginBatch(project);
         const ok = applyTopologyOp(partId, result);
@@ -1655,7 +1674,7 @@ function registerBuiltins() {
         // translates them away.
         const newProject = useProjectStore.getState().project;
         const newNode = newProject.nodes.find((n) => n.id === partId);
-        const newMesh = newNode?.mesh;
+        const newMesh = getMesh(newNode, newProject);
         if (!newMesh) {
           discardBatch(() => {});
           return;

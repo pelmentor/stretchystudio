@@ -67,6 +67,7 @@ import {
 import { isModifierEnabled, MODIFIER_MODE_REALTIME } from '../../modifierTypeInfo.js';
 import { buildCanvasFinalMat3 } from './matrix.js';
 import { OperationCode, NodeType } from '../types.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * @typedef {object} ArtMeshEvalResult
@@ -88,7 +89,14 @@ export function kernelArtMeshEval(op, ctx) {
   const part = ctx.project?.nodes?.find((n) => n?.id === partId && n.type === 'part');
   if (!part) return null;
 
-  const runtime = part.mesh?.runtime;
+  // v18 (Object/ObjectData split) routes geometry through `node.dataId`
+  // → sibling `meshData` node; `part.mesh` is undefined after the split.
+  // Pre-fix (R4 cascade miss 2026-06-04) this read silently returned null
+  // for every post-v18 part — depgraph eval skipped them entirely. The
+  // signature-validation banner still fired (`StaleRigBanner` walks
+  // signatures via getMesh), but the live preview rendered no parts.
+  const mesh = getMesh(part, ctx.project);
+  const runtime = mesh?.runtime;
   if (!runtime) return null;
   // Keyform-blend source: prefer the selectRigSpec art mesh when one was
   // handed in (production), so modifier-toggle REPROJECTION is honoured —
@@ -295,7 +303,10 @@ export function kernelArtMeshEval(op, ctx) {
     boneWorldCache = new Map();
     ctx._artMeshBoneWorldCache = boneWorldCache;
   }
-  applyBonePostChainSkin(part, part.mesh ?? null, bufA, ctx, byId, boneWorldCache);
+  // v18: hand the resolved mesh in so bone-weight skinning sees boneWeights /
+  // jointBoneId on the linked meshData node. `mesh` was resolved once at the
+  // top via getMesh; reuse the same reference.
+  applyBonePostChainSkin(part, mesh ?? null, bufA, ctx, byId, boneWorldCache);
   captureBbox('post-applyBonePostChainSkin');
 
   if (trace) {

@@ -45,6 +45,7 @@ import {
   isChainDeformerNode,
   modifierRefId,
 } from '../../store/warpLatticeAccess.js';
+import { getMesh } from '../../store/objectDataAccess.js';
 
 /** Synthetic IDNode ids for the depgraph's bookkeeping IDs. */
 export const TIME_ID_REF = '__time__';
@@ -523,11 +524,19 @@ function buildPartModifierRelations(graph, project, opts) {
     // mesh's own bindings (cellSelect on runtime.bindings). Adding a
     // blanket edge from the param component would create one
     // dependency per param; cheaper to gate by `runtime.bindings[].parameterId`.
+    //
+    // v18 (Object/ObjectData split) routes runtime onto the linked
+    // `meshData` node — resolve via getMesh. Pre-fix this read was
+    // silently empty for every post-v18 part, so the depgraph never
+    // wired param→art-mesh edges and slider/animation drives didn't
+    // reach the kernel (signature banner still fired because that
+    // walker uses getMesh, but the eval path was broken).
     if (artMeshOp) {
       const paramIdNode = graph.findIdNode(PARAM_ID_REF, 'params');
       const paramComp = paramIdNode?.findComponent(NodeType.PARAMETERS);
-      const meshBindings = Array.isArray(part.mesh?.runtime?.bindings)
-        ? part.mesh.runtime.bindings : [];
+      const partMesh = getMesh(part, project);
+      const meshBindings = Array.isArray(partMesh?.runtime?.bindings)
+        ? partMesh.runtime.bindings : [];
       const seenParamIds = new Set();
       for (const b of meshBindings) {
         if (!b?.parameterId || seenParamIds.has(b.parameterId)) continue;

@@ -207,6 +207,68 @@ export function remapPerVertexArray(oldArr, vertexSources, newCount, combine, ve
 }
 
 /**
+ * Remap an interleaved `[x0, y0, x1, y1, ...]` Float32Array of vertex
+ * positions across a topology change. Same survivor / sources / weight
+ * semantics as `remapPerVertexArray` — single-source surviving verts
+ * copy through unchanged, new midpoints / merged centres average their
+ * source positions (weighted when `vertexWeights` is supplied; uniform
+ * mean otherwise).
+ *
+ * Used by `applyTopologyOp` to migrate `mesh.runtime.keyforms[].vertexPositions`
+ * across delete / merge / dissolve / subdivide / knife / extrude without
+ * clearing the runtime. Pre-fix the runtime was discarded wholesale (Audit
+ * fix R4 G-1 comment in `applyTopologyOp.js`), which froze live preview
+ * (kernelArtMeshEval returns null when `mesh.runtime` is missing) until
+ * the user manually re-ran Init Rig. Bone-baked + warp keyforms author
+ * absolute vertex positions, so the remap is the same algebra as for
+ * blendShape deltas — only the storage shape (interleaved Float32Array
+ * vs `{dx,dy}[]`) differs.
+ *
+ * Out-of-range source indices (length mismatch between the keyform and
+ * the pre-op mesh) coerce to 0 rather than NaN — guards against partially
+ * corrupt runtime caches the topology op shouldn't have to repair.
+ *
+ * @param {Float32Array|ArrayLike<number>} oldF32
+ * @param {Map<number, number[]>} vertexSources
+ * @param {number} newCount
+ * @param {Map<number, number[]>} [vertexWeights]
+ * @returns {Float32Array}
+ */
+export function remapKeyformVertices(oldF32, vertexSources, newCount, vertexWeights = null) {
+  const out = new Float32Array(newCount * 2);
+  const oldLen = oldF32 ? oldF32.length : 0;
+  for (let i = 0; i < newCount; i++) {
+    const sources = vertexSources.get(i) ?? [i];
+    if (sources.length === 1) {
+      const old = sources[0];
+      const baseIdx = old * 2;
+      out[i * 2]     = baseIdx + 1 < oldLen ? (oldF32[baseIdx]     ?? 0) : 0;
+      out[i * 2 + 1] = baseIdx + 1 < oldLen ? (oldF32[baseIdx + 1] ?? 0) : 0;
+      continue;
+    }
+    const weightsRaw = vertexWeights ? vertexWeights.get(i) : null;
+    let sx = 0, sy = 0, totW = 0;
+    for (let k = 0; k < sources.length; k++) {
+      const old = sources[k];
+      const baseIdx = old * 2;
+      if (baseIdx + 1 >= oldLen) continue;
+      const vx = oldF32[baseIdx];
+      const vy = oldF32[baseIdx + 1];
+      if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
+      const w = weightsRaw ? (weightsRaw[k] ?? 1) : 1;
+      sx += vx * w;
+      sy += vy * w;
+      totW += w;
+    }
+    if (totW > 0) {
+      out[i * 2]     = sx / totW;
+      out[i * 2 + 1] = sy / totW;
+    }
+  }
+  return out;
+}
+
+/**
  * Average reducer for `{dx, dy}` blendShape delta entries. Skips
  * `null` entries so a merged vert dragged by some shapes but not
  * others doesn't get its delta yanked toward zero by null neighbours.

@@ -277,7 +277,11 @@ export function runRigInvariantChecks(project) {
   for (const n of nodes) {
     if (!n || n.type !== 'part') continue;
     partsChecked++;
-    const mesh = n.mesh;
+    // v18-aware mesh resolution — `n.mesh` is undefined for post-split
+    // parts (geometry on a sibling `meshData` node). Pre-fix every
+    // post-v18 part fell through to `vCount === 0` and the per-part
+    // invariants (I-1/-2/-5/-6) were silently never checked.
+    const mesh = getMesh(n, project);
     const vCount = vertexCountOf(mesh?.vertices);
     if (vCount === 0) continue; // no mesh — skip (legitimate for some part types)
     // Skip parts the renderer will skip outright (user-explicit hide via
