@@ -123,23 +123,41 @@ export function normalizeVariants(project) {
     pairings.push({ variant: node, base, suffix: variant });
   }
 
-  // ── 2. Reparent + hide variants ──────────────────────────────────────────
+  // ── 2. Reparent + fade-out variants ──────────────────────────────────────
   // Variants are driven by `Param<Suffix>` opacity fade (0 → 1 on the
   // suffix param, see `feedback_variant_plateau_ramp` memory). At rest
   // pose (param=0) the variant should be invisible. The PSD's per-layer
   // visibility flag tells us nothing useful — artists routinely paint
   // variants visible while sketching the base, and the auto-rig should
-  // own the variant's display state. Force `visible = false` so the
-  // post-import scene shows the base alone, and the fade param drives
-  // the variant in.
+  // own the variant's display state.
+  //
+  // bug-08 closure 2026-06-04: pre-fix this set `variant.visible = false`,
+  // which made variants invisible at rest but ALSO filtered them out of
+  // every `n.visible !== false` rig pipeline gate (`buildMeshesForRig`,
+  // exporter, etc.). No rig entry → no `rigSpec.artMeshes` row → no
+  // depgraph ART_MESH_EVAL chain → no opacity blend ever fired. The fade
+  // ramp was authored in `artMeshSourceEmit` but nothing consumed it at
+  // runtime because the variant was filtered out before the synth could
+  // run.
+  //
+  // Post-fix: keep `visible = true` and set `opacity = 0` so the variant
+  // enters every filter as a visible-but-transparent part. The cmo3 emit
+  // path's `hasEmotionVariantOnly` branch synthesizes the 2-keyform
+  // opacity fade (0 → 1 on `Param<Suffix>`); depgraph blends it; renderer
+  // reads the depgraph-driven opacity via `applyOverrideToNode` (which
+  // already routes `poseOverrides.opacity` into the effective node).
+  //
+  // v49 migration flips existing `visible:false` variants to
+  // `visible:true, opacity:0`.
   for (const { variant, base, suffix } of pairings) {
     const wasVisible = variant.visible !== false;
     const wasReparented = (variant.parent ?? null) !== (base.parent ?? null);
     if (wasReparented) {
       variant.parent = base.parent ?? null;
     }
-    variant.visible = false;
-    logger.info('variantNorm', `Layer "${variant.name}" got hidden automatically, considered a variant`, {
+    variant.visible = true;
+    variant.opacity = 0;
+    logger.info('variantNorm', `Layer "${variant.name}" got opacity-faded automatically, considered a variant`, {
       base: base.name,
       suffix,
       reparented: wasReparented,

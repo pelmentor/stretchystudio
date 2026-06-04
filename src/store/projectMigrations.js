@@ -108,6 +108,7 @@ import { migrateBoneBakedArtMeshAdapterViaReseed } from './migrations/v45_bone_b
 import { migrateVariantRoleAliasRetirement } from './migrations/v46_variant_role_alias_retirement.js';
 import { migrateRuntimeParentStrip } from './migrations/v47_runtime_parent_strip.js';
 import { migrateRigParentStrip } from './migrations/v48_rig_parent_strip.js';
+import { migrateVariantVisibleToOpacity } from './migrations/v49_variant_visible_to_opacity.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -862,6 +863,21 @@ const MIGRATIONS = {
   // session entry.
   48: (project) => {
     migrateRigParentStrip(project);
+    return project;
+  },
+
+  // v49 — bug-08 closure: variant `visible: false` → `opacity: 0`.
+  //
+  // Pre-v49 `variantNormalizer` set `variant.visible = false` on every
+  // detected variant part, which made variants invisible at rest BUT
+  // ALSO filtered them out of every `n.visible !== false` rig pipeline
+  // gate — so the depgraph never produced an ART_MESH_EVAL chain for
+  // them and the cmo3 emit's variant fade ramp couldn't be blended at
+  // runtime. v49 flips the schema so variants enter the rig pipeline
+  // (`visible: true, opacity: 0`); the existing emit + blend chain then
+  // works end-to-end. See `src/store/migrations/v49_variant_visible_to_opacity.js`.
+  49: (project) => {
+    migrateVariantVisibleToOpacity(project);
     return project;
   },
 
