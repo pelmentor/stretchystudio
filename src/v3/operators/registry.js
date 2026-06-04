@@ -884,17 +884,44 @@ function registerBuiltins() {
   // Workspace does NOT gate this (matches Blender — workspace is
   // layout-only). BlendShape edit needs to know which shape, so it's
   // NOT bound here; user enters from BlendShapeTab's Edit button.
-  // Ctrl+Tab — open the mode menu. Blender binds Ctrl+Tab to
-  // `view3d.object_mode_pie_or_toggle` (a mode pie). SS has no pie infra,
-  // so the honest analog is to pop the existing ModePill mode menu (which
-  // lists every mode the active selection supports). Always available —
-  // exec just flips the controlled-open flag; if the pill isn't mounted
-  // (non-viewport tab) the flag is a harmless no-op.
+  //
+  // Ctrl+Tab — Blender pattern: when the active selection is an
+  // armature, toggle Pose Mode (matches `OBJECT_OT_mode_set` with
+  // mode='POSE'). Otherwise pop the ModePill mode menu so the user can
+  // pick a mode for any other selection type. Always available —
+  // exec self-routes by selection.
   registerOperator({
     id: 'mode.menu',
-    label: 'Mode Menu (Ctrl+Tab)',
+    label: 'Pose Mode / Mode Menu (Ctrl+Tab)',
     available: () => true,
     exec: () => {
+      // Armature-direct path — Ctrl+Tab on an armature/bone selection
+      // toggles Pose Mode directly (Blender muscle memory). If already
+      // in Pose Mode on this armature, exit back to Object Mode; if in
+      // a different edit mode (e.g. mesh edit), still switch to Pose;
+      // otherwise enter Pose.
+      const ed = useEditorStore.getState();
+      const active = useSelectionStore.getState().getActive();
+      if (active) {
+        const project = useProjectStore.getState().project;
+        const node = project?.nodes?.find((n) => n.id === active.id);
+        if (node) {
+          const dataKind = getDataKind(node, project);
+          if (dataKind === 'armature' && modeCompatTest(dataKind, MODE_POSE)) {
+            if (ed.editMode === MODE_POSE) {
+              ed.exitEditMode();
+              return;
+            }
+            if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
+            useEditorStore.getState().setSelection([active.id]);
+            ed.enterEditMode(MODE_POSE);
+            return;
+          }
+        }
+      }
+      // Fallback for non-armature selections — pop the ModePill mode
+      // menu so the user can still pick a mode. If the pill isn't
+      // mounted (non-viewport tab) the flag is a harmless no-op.
       useUIV3Store.getState().setModeMenuOpen(true);
     },
   });
