@@ -25,12 +25,12 @@
  * (identical to overlay path). Weight 0.0 → no rotation (vertex stays
  * at rest position). Mid-values produce the natural bend at the joint.
  *
- * **Composition with chainEval.** chainEval emits canvas-space verts
- * including any `ParamRotation_<bone>` rotation already encoded via
- * baked keyforms (cellSelect picks the keyform geometry for the
- * current param value). Skinning runs ON TOP of those verts: the
- * bone gesture's `pose.rotation` produces an additional rotation
- * matrix, and skinning rotates the chainEval output by it. If the
+ * **Composition with the depgraph art-mesh kernel.** The kernel emits
+ * canvas-space verts including any `ParamRotation_<bone>` rotation
+ * already encoded via baked keyforms (cellSelect picks the keyform
+ * geometry for the current param value). Skinning runs ON TOP of those
+ * verts: the bone gesture's `pose.rotation` produces an additional
+ * rotation matrix, and skinning rotates the kernel output by it. If the
  * user has both the slider non-zero AND the bone non-zero, the two
  * compose user-additively (Blender's shape-key + armature stacking).
  *

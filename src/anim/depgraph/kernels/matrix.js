@@ -16,8 +16,9 @@
  *     matrix from KEYFORM_EVAL output's `{angle, originX, originY}`.
  *     The chain walker continues iterating.
  *
- * Mirrors the matrix construction in `chainEval.js` rotation branch.
- * The Cubism Setup form lands at `chainEval.js:687-779`.
+ * Matrix construction mirrors the rotation branch of the retired
+ * chainEval engine (`146b716`, 2026-05-26). The Cubism Setup form is
+ * the depgraph port of that engine's `getRotationSetup` helper.
  *
  * # Input
  *

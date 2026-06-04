@@ -193,8 +193,9 @@ export function resetSynthFlare() {
  *   - `MODIFIER_MODE_EDITMODE`            — eval while in mesh edit mode
  *
  * The default is `REALTIME` because the live render path
- * (`selectRigSpec` → `chainEval`) is the dominant caller; export
- * pipelines that need RENDER semantics pass the flag explicitly.
+ * (`selectRigSpec` → `evalProjectFrameViaDepgraph`) is the dominant
+ * caller; export pipelines that need RENDER semantics pass the flag
+ * explicitly.
  */
 export function synthesizeDeformerNodesForExport(project, opts = {}) {
   if (!project || !Array.isArray(project.nodes)) return [];

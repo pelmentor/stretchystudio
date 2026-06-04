@@ -33,13 +33,12 @@
  * - `warp` — bilinear FFD via `evalWarpKernelCubism`. Reads the leaf
  *   warp's GRID_LIFT_TO_PARENT (canvas-px lifted grid) from
  *   `ctx.outputs`; one bilinear lookup gives canvas-final positions
- *   and the iterator breaks (matches `chainEval.evalArtMeshFrame`'s
- *   Phase 3 collapse). Falls back to the per-frame KEYFORM_EVAL grid
- *   if the lift is unavailable (broken chain), continuing iteration.
+ *   and the iterator breaks (the Phase 3 chain-collapse step). Falls
+ *   back to the per-frame KEYFORM_EVAL grid if the lift is unavailable
+ *   (broken chain), continuing iteration.
  * - `rotation` — affine via the rotation's MATRIX_BUILD matrix.
- *   Canvas-final matrices (Cubism Setup port from chainEval.js's
- *   `getRotationSetup`) collapse the chain (`isCanvasFinal: true`);
- *   local matrices continue iterating.
+ *   Canvas-final matrices (the Cubism Setup port) collapse the chain
+ *   (`isCanvasFinal: true`); local matrices continue iterating.
  *
  * # Return shape
  *

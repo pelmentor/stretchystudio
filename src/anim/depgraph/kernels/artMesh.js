@@ -3,11 +3,11 @@
 /**
  * ART_MESH_EVAL kernel.
  *
- * Phase 0.D.0 of the Animation Blender-Parity Plan. Ports
- * `chainEval.evalArtMeshFrame` (`src/io/live2d/runtime/evaluator/chainEval.js:212`)
- * into a depgraph operation so the production rAF callback can route
- * through `evalDepGraph` and produce evalRig-shape output without ever
- * touching the chainEval evaluator.
+ * Phase 0.D.0 of the Animation Blender-Parity Plan. Originally ported
+ * from the retired chainEval engine (`146b716`, 2026-05-26 retirement
+ * commit, -9338/+90 LOC). Today this is the production art-mesh eval
+ * path — the chainEval evaluator no longer exists; the depgraph kernel
+ * IS the engine.
  *
  * # Pipeline
  *
@@ -16,7 +16,7 @@
  *    that map upstream).
  * 2. Blend the selected `runtime.keyforms[].vertexPositions` with cell
  *    weights. Output the keyform-blended source verts + opacity +
- *    drawOrder (sticky-from-heaviest, matching chainEval).
+ *    drawOrder (sticky-from-heaviest semantics).
  * 3. Walk the part's `modifiers[]` chain leaf-first. For each modifier:
  *      - `type:'warp'`     → bilinear-warp through that warp's
  *        GRID_LIFT_TO_PARENT output (canvas-px). Canvas-final → break.
@@ -41,8 +41,8 @@
  *    walks the bone parent chain reading TRANSFORM_COMPOSE outputs.
  *    The renderer's post-loop skips skinning when the depgraph engine
  *    is selected so this pass owns the work end-to-end.
- * 5. Output `{id, vertexPositions, opacity, drawOrder}` matching the
- *    `ArtMeshFrame` shape in [chainEval.js].
+ * 5. Output `{id, vertexPositions, opacity, drawOrder}` — the
+ *    canonical `ArtMeshFrame` shape.
  *
  * # Where this differs from `kernelGeometryEvalDeformed`
  *
@@ -326,16 +326,16 @@ export function kernelArtMeshEval(op, ctx) {
  * Compose a warp's lifted (canvas-px) control-point grid through an
  * EXPLICIT `chainAbove` — the part's enabled modifier chain above this
  * warp, leaf-first — instead of the warp's global `def.parent` chain.
- * Depgraph analogue of chainEval's `getLiftedGridForChain`
- * (chainEval.js:721-805): both walk the per-part chain so a part that
- * disabled a mid-stack modifier on a shared deformer doesn't get
- * deformed by the ancestor it opted out of.
+ * Walks the per-part chain so a part that disabled a mid-stack modifier
+ * on a shared deformer doesn't get deformed by the ancestor it opted out
+ * of. (Pre-`146b716` this duplicated chainEval's `getLiftedGridForChain`;
+ * both modules walked the same chain logic.)
  *
  * Reads the depgraph's already-computed per-deformer outputs — each
  * warp's KEYFORM_EVAL grid + each rotation's MATRIX_BUILD matrix — so it
  * adds no graph nodes. Results are memoised on `ctx` keyed by warp id +
  * chain signature, so parts sharing the same divergent chain compose
- * once (mirrors chainEval's `_liftedByChainKey`).
+ * once (per-chain memoisation).
  *
  * @param {string} warpId
  * @param {Array<{type: string, id: string, enabled?: boolean}>} chainAbove -
@@ -442,9 +442,9 @@ function restGridFor(deformerId, ctx) {
  * leaf-first, recomposing each ancestor per-part (never reading a global
  * canvas-final output). The leaf-first first step, composed through the
  * rest, is itself canvas-final, so one application lands the point in
- * canvas-px. Depgraph analogue of chainEval's `evalChainAtPoint`
- * (chainEval.js:605-648), but over the explicit per-part chain instead of
- * the deformer's global `def.parent` pointers.
+ * canvas-px. Walks the EXPLICIT per-part chain instead of the deformer's
+ * global `def.parent` pointers — divergent per-part disables resolve
+ * correctly.
  *
  * @param {Array<{type:string, id:string, enabled?:boolean}>} chainAbove - leaf-first
  * @param {number} x

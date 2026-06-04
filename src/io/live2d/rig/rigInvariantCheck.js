@@ -414,7 +414,11 @@ export function runRigInvariantChecks(project) {
     // by `(cols+1)` grid of control points). So expected cage vertices
     // = `(rows+1) × (cols+1)`.
     if (typeof n.dataId === 'string' && n.dataId.length > 0) {
-      const cage = byId.get(n.dataId);
+      // Route through getMesh so the cage lookup goes through the same
+      // resolver the rest of the codebase uses. A lattice object's
+      // dataId points at a meshData-shaped cage node (set up by v43
+      // migration); getMesh on an object kind returns it.
+      const cage = getMesh(n, project);
       if (!cage) {
         violate('I-4', n.id, n.name, `lattice.dataId="${n.dataId}" does not resolve to any cage node`);
       } else {

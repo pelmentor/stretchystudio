@@ -656,8 +656,7 @@ const MIGRATIONS = {
   //     then no actionId is auto-bound.
   //
   // `project.animations` deleted (Rule №2 — no migration baggage).
-  // `project.nodeTrees` retirement deferred to a follow-up commit so
-  // the rewire vs. retirement diffs stay separable.
+  // `project.nodeTrees` retirement happens in the v38 migration below.
   //
   // See `src/store/migrations/v36_action_datablock.js`.
   36: (project) => {
@@ -1106,9 +1105,11 @@ const MIGRATIONS = {
   // change (Skeleton Edit Mode) from a pose drag.
   //
   // v17 adds `node.pose = { rotation, x, y, scaleX, scaleY }` for
-  // every bone-group node. `node.transform.{rotation, x, y, scaleX,
-  // scaleY}` is RESERVED (kept at identity) — only `pivotX/pivotY`
-  // remains meaningful on bone-group transforms post-v17.
+  // every bone-group node. The new `pose` slot owns the live pose;
+  // `node.transform` continues to hold REST values (including
+  // `transform.rotation`, which was unlocked 2026-05-06 (`d5ff2eb`)
+  // — the original "RESERVED at identity" constraint was lifted when
+  // Apply Pose As Rest started writing arbitrary rest rotations).
   //
   // Legacy `transform.{rotation, x, y, scaleX, scaleY}` values
   // (non-default, written by pre-v17 SkeletonOverlay drags) migrate
