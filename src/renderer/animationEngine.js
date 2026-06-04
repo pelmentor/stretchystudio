@@ -117,7 +117,32 @@ export function interpolateTrack(keyframes, timeMs, loopKeyframes = false, endMs
 /**
  * Interpolate an array of {x,y} vertex positions between two keyframes.
  * Both keyframe values must have the same vertex count.
+ *
+ * Pre-2026-06-04 this function silently fell back to `{x: vA.x, y: vA.y}`
+ * (the A-side position, un-interpolated) when the B keyframe was missing
+ * the corresponding vertex — producing visibly wrong geometry at any
+ * t > 0 if the keyforms' vertex counts diverged. Now throws a typed
+ * error: the docstring's same-count invariant is contractual, and a
+ * silent half-lerp masks an upstream corruption (topology op that
+ * forgot to remap keyforms, manual project edit, etc.) the user needs
+ * to see. The throw bubbles up to the animation tick, where the editor
+ * lifecycle converts uncaught errors into a paused state + toast.
+ *
+ * @param {string} ctxLabel  short context tag for the error message
+ *   ('mesh-verts loop' / 'mesh-verts inner') so the throw points at the
+ *   right call site.
  */
+function _assertSameVertCount(kA, kB, ctxLabel) {
+  if (!Array.isArray(kA?.value) || !Array.isArray(kB?.value)) return;
+  if (kA.value.length === kB.value.length) return;
+  throw new Error(
+    `[animationEngine] ${ctxLabel}: keyform vertex-count mismatch — ` +
+    `A@${kA.time ?? '?'}ms has ${kA.value.length} verts, ` +
+    `B@${kB.time ?? '?'}ms has ${kB.value.length} verts. ` +
+    `Re-Init Rig (or run Apply Armature again) to rebuild keyforms after the upstream topology change.`,
+  );
+}
+
 function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 0) {
   if (!keyframes || keyframes.length === 0) return undefined;
   if (timeMs <= keyframes[0].time) return keyframes[0].value;
@@ -127,6 +152,7 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
       const kLast = keyframes[keyframes.length - 1];
       const kFirst = keyframes[0];
       const virtualNext = { ...kFirst, time: endMs, value: 0 };
+      _assertSameVertCount(kLast, kFirst, 'mesh-verts loop');
       // Mesh-vert keyforms hold {x,y} arrays for `value`. Use the
       // canonical evaluator to derive the parametric `te ∈ [0,1]` from
       // the segment shape (named easings + bezier all decompose to a
@@ -135,7 +161,6 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
       const te = evaluateBezTripleParam(kLast, virtualNext, timeMs);
       return kLast.value.map((vA, i) => {
         const vB = kFirst.value[i];
-        if (!vB) return { x: vA.x, y: vA.y };
         return { x: vA.x + (vB.x - vA.x) * te, y: vA.y + (vB.y - vA.y) * te };
       });
     }
@@ -152,11 +177,11 @@ function interpolateMeshVerts(keyframes, timeMs, loopKeyframes = false, endMs = 
 
   const kA = keyframes[lo];
   const kB = keyframes[lo + 1];
+  _assertSameVertCount(kA, kB, 'mesh-verts inner');
   const te = evaluateBezTripleParam(kA, kB, timeMs);
 
   return kA.value.map((vA, i) => {
     const vB = kB.value[i];
-    if (!vB) return { x: vA.x, y: vA.y };
     return { x: vA.x + (vB.x - vA.x) * te, y: vA.y + (vB.y - vA.y) * te };
   });
 }
