@@ -39,6 +39,7 @@ import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
 import { dissolveVertices } from './edit/dissolve.js';
+import { deleteVertices } from './edit/deleteVerts.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
 // Phase 7.A — Object Mode tools (Snap / Mirror / Parent / Set Origin).
@@ -389,19 +390,47 @@ function registerBuiltins() {
     },
   });
 
-  // Delete the active selection. Only operates on project nodes
-  // (parts + groups); deformer / parameter delete needs Phase 2 / 5
-  // editor support to keep references coherent. After delete,
-  // selection clears so the empty Properties pane signals the action
-  // succeeded.
+  // Delete the active selection. Polymorphic by mode (Blender's X
+  // pattern — same chord, different operator per workspace mode):
+  //
+  //   - Edit Mode with vertex selection → drop verts + incident tris
+  //     via `deleteVertices` topology op (routes through `applyTopologyOp`
+  //     so the rig-refit-on-exit toast fires same as other topology
+  //     ops). Standalone `edit.deleteVerts` op below is the same
+  //     payload exposed for the command palette + menus.
+  //   - Object Mode with part/group selection → delete those nodes
+  //     via `useProjectStore.deleteNode`. Selection clears so the empty
+  //     Properties pane signals the action succeeded.
+  //
+  // Deformer / parameter delete is still out-of-scope (needs Phase 2 / 5
+  // editor support to keep references coherent).
   registerOperator({
     id: 'selection.delete',
     label: 'Delete Selection',
     available: () => {
+      // Edit Mode vertex path takes priority over Object Mode node path.
+      const partId = activeEditPart();
+      if (partId) {
+        const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+        if (sel && sel.size > 0) return true;
+      }
       const items = useSelectionStore.getState().items;
       return items.some((it) => it.type === 'part' || it.type === 'group');
     },
     exec: () => {
+      const partId = activeEditPart();
+      if (partId) {
+        const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+        if (sel && sel.size > 0) {
+          const project = useProjectStore.getState().project;
+          const node = project?.nodes?.find((n) => n.id === partId);
+          if (!node?.mesh) return;
+          const result = deleteVertices(node.mesh, sel);
+          if (!result) return;
+          applyTopologyOp(partId, result);
+          return;
+        }
+      }
       const items = useSelectionStore.getState().items;
       const targetIds = items
         .filter((it) => it.type === 'part' || it.type === 'group')
@@ -1194,6 +1223,35 @@ function registerBuiltins() {
         toast({
           title: 'Cannot dissolve',
           description: 'Selection would leave fewer than 3 vertices, or no triangles to refill.',
+        });
+        return;
+      }
+      applyTopologyOp(partId, result);
+    },
+  });
+
+  // Delete Vertices — Blender's `MESH_OT_delete` (type='VERTS') branch
+  // of the X-menu. Drops verts + every triangle incident to any of them
+  // and leaves holes. Bare X / Delete / Backspace route here in Edit
+  // Mode via `selection.delete`'s polymorphic dispatch; this standalone
+  // op is exposed for the command palette + future X-menu UI.
+  registerOperator({
+    id: 'edit.deleteVerts',
+    label: 'Delete Vertices (X)',
+    available: () => topologyAvailable(1),
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size === 0) return;
+      const result = deleteVertices(node.mesh, sel);
+      if (!result) {
+        toast({
+          title: 'Cannot delete vertices',
+          description: 'Selection would leave fewer than 3 vertices, or every triangle is incident to a deletion.',
         });
         return;
       }

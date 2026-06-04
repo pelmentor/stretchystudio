@@ -162,6 +162,17 @@ export const DEFAULT_KEYMAP = {
   'Ctrl+KeyX':  'edit.dissolveVerts',
   'Meta+KeyX':  'edit.dissolveVerts',
 
+  // Bare `KeyX` — Blender's vertex/edge/face delete. SS is vertex-only
+  // today so X always fires `edit.deleteVerts` (drops verts + incident
+  // tris, leaves holes). `Delete` and `Backspace` go through
+  // `selection.delete` which is polymorphic by mode (Edit Mode →
+  // verts via `deleteVertices`, Object Mode → parts/groups). Keep `X`
+  // as a fast dedicated chord even though the polymorphic Delete also
+  // covers it — matches Blender muscle memory and lets a future
+  // vertex / edge / face select-mode dispatch wrap THIS binding without
+  // perturbing the polymorphic node-delete path.
+  'KeyX':       'edit.deleteVerts',
+
   // Toolset Phase 5 — Extrude. `E` chord on selected boundary verts:
   // duplicates them, bridges with quad strips, hands off to Modal G in
   // vertex mode (drag the new strip, click to commit, Esc to roll back
