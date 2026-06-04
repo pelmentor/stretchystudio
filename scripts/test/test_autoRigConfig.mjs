@@ -459,38 +459,43 @@ function assertClose(actual, expected, eps, name) {
 }
 
 // --- buildNeckWarpSpec consumes autoRigNeckWarp ---
+//
+// Pre-2026-06-04 this block tested under `parentType: 'rotation'`
+// because the pivot-relative-pixel branch produced absolute spans
+// that were easy to read. After the rotation branch was retired
+// (bug-04 sibling fix), all parents are BodyXWarp 0..1; the
+// span-in-0..1 = 1.0 for the synthetic identity normalisers below,
+// so the shift comparison still cleanly verifies tiltFrac × span.
 
 {
   const neckUnionBbox = { minX: 0, minY: 0, W: 100, H: 50 };
+  // Identity normalisers — `canvasToBodyXX(x) = x/100`, `canvasToBodyXY(y) = y/50`
+  // map the bbox [0..100] × [0..50] onto [0..1] × [0..1]. spanX = 1.
   const defaultSpec = buildNeckWarpSpec({
     neckUnionBbox,
-    parentType: 'rotation',
-    parentDeformerId: 'GroupRotation_neck',
-    parentPivotCanvas: { x: 50, y: 25 },
-    canvasToBodyXX: () => 0,
-    canvasToBodyXY: () => 0,
+    canvasToBodyXX: (x) => x / 100,
+    canvasToBodyXY: (y) => y / 50,
   });
-  // Top row at +30 keyform shifts by NECK_TILT_FRAC * spanX = 0.08 * 100 = 8.
-  // First grid pos is (-50, -25) in pivot-relative; +8 in X = -42.
   const topRowFirstX_default = defaultSpec.spec.keyforms[2].positions[0]; // [+30] keyform, first vertex X
   const topRowFirstX_zero    = defaultSpec.spec.keyforms[1].positions[0]; // [0]   keyform, first vertex X
-  assertClose(topRowFirstX_default - topRowFirstX_zero, 8, 1e-6, 'neckWarp default tiltFrac=0.08 → 8px shift');
+  assertClose(
+    topRowFirstX_default - topRowFirstX_zero,
+    defaultSpec.debug.NECK_TILT_FRAC, 1e-6,
+    'neckWarp default tiltFrac × spanX(=1.0)',
+  );
 
   const customSpec = buildNeckWarpSpec({
     neckUnionBbox,
-    parentType: 'rotation',
-    parentDeformerId: 'GroupRotation_neck',
-    parentPivotCanvas: { x: 50, y: 25 },
-    canvasToBodyXX: () => 0,
-    canvasToBodyXY: () => 0,
+    canvasToBodyXX: (x) => x / 100,
+    canvasToBodyXY: (y) => y / 50,
     autoRigNeckWarp: { tiltFrac: 0.16 },
   });
   const topRowFirstX_custom_p30 = customSpec.spec.keyforms[2].positions[0];
   const topRowFirstX_custom_z0  = customSpec.spec.keyforms[1].positions[0];
   assertClose(
     topRowFirstX_custom_p30 - topRowFirstX_custom_z0,
-    16, 1e-6,
-    'neckWarp custom tiltFrac=0.16 → 16px shift (2× default)'
+    0.16, 1e-6,
+    'neckWarp custom tiltFrac=0.16 × spanX(=1.0)',
   );
   assertEq(customSpec.debug.NECK_TILT_FRAC, 0.16, 'debug NECK_TILT_FRAC reflects custom config');
 }

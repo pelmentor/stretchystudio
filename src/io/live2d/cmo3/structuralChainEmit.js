@@ -64,7 +64,7 @@ export function emitStructuralChainAndReparent(x, opts) {
     pidParamBodyAngleZ, pidParamBodyAngleY, pidParamBreath,
     pidParamAngleX, pidParamAngleY, pidParamAngleZ,
     neckUnionBbox, faceUnionBbox, faceMeshBbox, facePivotCx, facePivotCy,
-    headGroupId, neckGroupId, groupMap,
+    groupMap,
     groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     rotFaceParamKeys, rotFaceAngles,
@@ -95,9 +95,12 @@ export function emitStructuralChainAndReparent(x, opts) {
 
   // ── 3d.1 Neck Warp (Session 20) ──
   // Chain: Body X → NeckWarp → neck/neckwear rig warps → neck meshes.
+  // BUG-04 sibling 2026-06-04: NeckWarp parents at BodyXWarp universally;
+  // see `bodyRig.emitNeckWarp` header for the dropped `groupDeformerGuids`
+  // conditional that would have produced a dangling `GroupRotation_<id>`
+  // rigSpec parent ref post-RULE-№4.
   const pidNeckWarpGuid = emitNeckWarp(x, {
     pidParamAngleZ, neckUnionBbox, pidBodyXGuid,
-    neckGroupId, groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     pidCoord, rigDebugLog, emitCtx,
     rigCollector,

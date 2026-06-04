@@ -3,8 +3,9 @@
 // buildNeckWarpSpec - the neck-bend warp that follows ParamAngleZ.
 // Locking in: 5x5 grid topology (6x6 ctrl points), shoulders-pinned
 // gradient (sin(π·(1-rf)/2) is 1 at top row, 0 at bottom),
-// pivot-relative-vs-normalised parent handling, autoRigNeckWarp
-// fallback to defaults.
+// BodyXWarp-normalised parent (always; rotation-parent path retired
+// 2026-06-04 alongside bug-04 sibling), autoRigNeckWarp fallback
+// to defaults.
 //
 // Run: node scripts/test/test_warpDeformers.mjs
 
@@ -19,24 +20,17 @@ function assert(cond, name) {
   console.error(`FAIL: ${name}`);
 }
 
-function assertThrows(fn, name) {
-  try { fn(); failed++; console.error(`FAIL: ${name} (no throw)`); }
-  catch { passed++; }
-}
-
 function near(a, b, eps = 1e-9) {
   return Math.abs(a - b) <= eps;
 }
 
 const NECK_BBOX = { minX: 100, minY: 200, W: 200, H: 100 };
 
-// ── Under WARP parent (normalised 0..1) ──────────────────────────
+// ── Under BodyXWarp parent (normalised 0..1, universal) ─────────
 
 {
   const { spec, debug } = buildNeckWarpSpec({
     neckUnionBbox: NECK_BBOX,
-    parentType: 'warp',
-    parentDeformerId: 'BodyXWarp',
     canvasToBodyXX: (x) => (x - 100) / 200,  // map [100,300] → [0,1]
     canvasToBodyXY: (y) => (y - 200) / 100,  // map [200,300] → [0,1]
   });
@@ -98,55 +92,12 @@ const NECK_BBOX = { minX: 100, minY: 200, W: 200, H: 100 };
   assert(debug.gridCols === 6 && debug.gridRows === 6, 'warp: debug grid dims');
 }
 
-// ── Under ROTATION parent (pivot-relative, pixel) ────────────────
-
-{
-  const { spec, debug } = buildNeckWarpSpec({
-    neckUnionBbox: NECK_BBOX,
-    parentType: 'rotation',
-    parentDeformerId: 'GroupRotation_neck',
-    parentPivotCanvas: { x: 200, y: 250 },
-    canvasToBodyXX: () => 0,  // unused
-    canvasToBodyXY: () => 0,
-  });
-
-  assert(spec.parent.type === 'rotation', 'rot parent: parent type');
-  assert(spec.localFrame === 'pivot-relative', 'rot parent: localFrame');
-
-  // Base grid at top-left (canvas 100, 200): pivot-relative is (-100, -50)
-  assert(spec.baseGrid[0] === -100, 'rot: top-left X = canvas - pivot');
-  assert(spec.baseGrid[1] === -50, 'rot: top-left Y = canvas - pivot');
-
-  // spanX in pixels (W=200), so shift magnitude is in pixels at +30
-  // top-left X shifts by sign(+1) * tiltFrac * gradient(top row=1) * spanX(200)
-  const restTopX = spec.keyforms[1].positions[0];
-  const plusTopX = spec.keyforms[2].positions[0];
-  const shift = plusTopX - restTopX;
-  assert(shift > 0, 'rot: top row shifts + at +30');
-  // The shift should equal NECK_TILT_FRAC * 200
-  assert(near(shift, debug.NECK_TILT_FRAC * 200), 'rot: shift = tiltFrac * spanX');
-
-  assert(debug.parentDeformer === 'GroupRotation_neck', 'rot: debug parent name');
-}
-
-// ── Validation: rotation parent without pivot canvas throws ──────
-
-assertThrows(() => buildNeckWarpSpec({
-  neckUnionBbox: NECK_BBOX,
-  parentType: 'rotation',
-  parentDeformerId: 'X',
-  canvasToBodyXX: () => 0,
-  canvasToBodyXY: () => 0,
-}), 'validation: rotation parent without pivotCanvas throws');
-
 // ── autoRigNeckWarp default fallback ─────────────────────────────
 
 {
   // Without supplying autoRigNeckWarp, defaults are used
   const { debug } = buildNeckWarpSpec({
     neckUnionBbox: NECK_BBOX,
-    parentType: 'warp',
-    parentDeformerId: 'X',
     canvasToBodyXX: (x) => x / 800,
     canvasToBodyXY: (y) => y / 600,
   });
@@ -158,8 +109,6 @@ assertThrows(() => buildNeckWarpSpec({
   // Custom autoRigNeckWarp.tiltFrac is honoured
   const { debug } = buildNeckWarpSpec({
     neckUnionBbox: NECK_BBOX,
-    parentType: 'warp',
-    parentDeformerId: 'X',
     canvasToBodyXX: (x) => x / 800,
     canvasToBodyXY: (y) => y / 600,
     autoRigNeckWarp: { tiltFrac: 0.42 },

@@ -36,8 +36,7 @@ import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
  * `groupWorldMatrices`, `deformerWorldOrigins`, `groupDeformerGuids`,
  * `rotDeformerTargetNodes` (XML nodes for re-parenting),
  * `rotDeformerOriginNodes` (per-keyform CRotationDeformerForm refs +
- * world coords for origin conversion), `headGroupId`/`neckGroupId`
- * for structural chain integration.
+ * world coords for origin conversion).
  *
  * @module io/live2d/cmo3/rotationDeformerEmit
  */
@@ -47,8 +46,6 @@ import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
  * @param {Object} opts
  * @returns {{
  *   groupMap: Map<string, Object>,
- *   headGroupId: string|undefined,
- *   neckGroupId: string|undefined,
  *   groupWorldMatrices: Map<string, Float32Array>,
  *   deformerWorldOrigins: Map<string, {x:number,y:number}>,
  *   groupDeformerGuids: Map<string, string>,
@@ -72,16 +69,6 @@ export function emitRotationDeformers(x, opts) {
 
   // ── World-space pivots ──
   const groupMap = new Map(groups.map(g => [g.id, g]));
-
-  // Head + neck for structural chain integration
-  const headGroupId = groups.find(g =>
-    g.boneRole === 'head' || g.boneRole === 'face' ||
-    (g.name && (g.name.toLowerCase() === 'head' || g.name.toLowerCase() === 'face'))
-  )?.id;
-  const neckGroupId = groups.find(g =>
-    g.boneRole === 'neck' ||
-    (g.name && g.name.toLowerCase() === 'neck')
-  )?.id;
 
   const { groupWorldMatrices, deformerWorldOrigins } =
     computeGroupWorldMatrices(groups, meshes, canvasW, canvasH);
@@ -298,7 +285,6 @@ export function emitRotationDeformers(x, opts) {
 
   return {
     groupMap,
-    headGroupId, neckGroupId,
     groupWorldMatrices, deformerWorldOrigins,
     groupDeformerGuids,
     rotDeformerTargetNodes, rotDeformerOriginNodes,

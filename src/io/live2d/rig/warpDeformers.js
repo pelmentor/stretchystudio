@@ -20,29 +20,28 @@ import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
  * (ParamAngleZ). Bottom row pins at shoulders, top row shifts horizontally
  * at ±30° to follow the head.
  *
- * Chain integration: when the neck group has its own rotation deformer
- * (via the deferred `ParamRotation_<groupName>` pass), this warp parents
- * to that rotation deformer and works in pivot-relative coordinates.
- * Otherwise it parents to Body X Warp and uses normalized 0..1.
+ * Chain integration: NeckWarp parents at BodyXWarp universally and works
+ * in BodyXWarp-local 0..1 coordinates.
+ *
+ * # Why the rotation-parent branch is gone (2026-06-04, bug-04 sibling)
+ *
+ * Pre-fix this builder accepted `parentType: 'rotation'` and produced
+ * `parent.id = GroupRotation_<neckGroupId>` for callers whose neck group
+ * had a rotation deformer. But per the 2026-05-23 RotationDeformer→bone
+ * refactor + RULE-№4 meta (SS IS Blender; Cubism = addon),
+ * `GroupRotation_*` no longer reifies as a node in `project.nodes` — same
+ * latent dangling-ref bug that wrecked FaceRotation in bug-04 (`0ed9f5c`).
+ * Mirror bug-04's universal-BodyXWarp fix per RULE-№2 (no migration
+ * baggage on dead code paths).
  *
  * @param {Object} input
  * @param {{minX:number, minY:number, W:number, H:number}} input.neckUnionBbox
  *   Bounding box of all meshes tagged 'neck' / 'neck-l' / 'neck-r' in
  *   canvas px. Caller computes via `bodyAnalyzer` or NECK_WARP_TAGS scan.
- * @param {('rotation'|'warp')} input.parentType
- *   `'rotation'` if the neck group has a rotation deformer (parent =
- *   GroupRotation_neck). `'warp'` if parenting under Body X Warp.
- * @param {string} input.parentDeformerId
- *   RigSpec id of the parent deformer.
- * @param {{x:number, y:number}|null} input.parentPivotCanvas
- *   Required when `parentType === 'rotation'`: the parent's pivot point
- *   in canvas coordinates. Used to convert grid points to pivot-relative.
  * @param {(cx:number)=>number} input.canvasToBodyXX
- *   Canvas → Body X Warp local-X normaliser. Required when
- *   `parentType === 'warp'`.
+ *   Canvas → Body X Warp local-X normaliser.
  * @param {(cy:number)=>number} input.canvasToBodyXY
- *   Canvas → Body X Warp local-Y normaliser. Required when
- *   `parentType === 'warp'`.
+ *   Canvas → Body X Warp local-Y normaliser.
  * @param {import('./autoRigConfig.js').AutoRigNeckWarp} [input.autoRigNeckWarp]
  *   Tunable defaults from `project.autoRigConfig.neckWarp`. Falls back
  *   to `DEFAULT_AUTO_RIG_CONFIG.neckWarp` when omitted.
@@ -57,8 +56,7 @@ import { DEFAULT_AUTO_RIG_CONFIG } from './autoRigConfig.js';
  */
 export function buildNeckWarpSpec(input) {
   const {
-    neckUnionBbox, parentType, parentDeformerId,
-    parentPivotCanvas = null,
+    neckUnionBbox,
     canvasToBodyXX, canvasToBodyXY,
     autoRigNeckWarp = DEFAULT_AUTO_RIG_CONFIG.neckWarp,
   } = input;
@@ -70,37 +68,20 @@ export function buildNeckWarpSpec(input) {
   const gH = rows + 1;
   const gridPts = gW * gH;
 
-  const isUnderRotation = parentType === 'rotation';
-
-  // Rest grid: pixel offsets from rotation pivot if under a rotation
-  // deformer; normalised 0..1 if under a structural warp (Body X).
+  // Rest grid: normalised 0..1 in BodyXWarp-local space.
   const baseGrid = new Float64Array(gridPts * 2);
   for (let r = 0; r < gH; r++) {
     for (let c = 0; c < gW; c++) {
       const idx = (r * gW + c) * 2;
       const cx = neckUnionBbox.minX + c * neckUnionBbox.W / cols;
       const cy = neckUnionBbox.minY + r * neckUnionBbox.H / rows;
-      if (isUnderRotation) {
-        if (!parentPivotCanvas) {
-          throw new Error(
-            "[buildNeckWarpSpec] parentType='rotation' requires parentPivotCanvas",
-          );
-        }
-        baseGrid[idx]     = cx - parentPivotCanvas.x;
-        baseGrid[idx + 1] = cy - parentPivotCanvas.y;
-      } else {
-        baseGrid[idx]     = canvasToBodyXX(cx);
-        baseGrid[idx + 1] = canvasToBodyXY(cy);
-      }
+      baseGrid[idx]     = canvasToBodyXX(cx);
+      baseGrid[idx + 1] = canvasToBodyXY(cy);
     }
   }
 
-  // Span used to scale the keyform shift. Pixel-span when under rotation
-  // (pivot-relative positions are in pixels); width-of-grid when under a
-  // warp (positions are 0..1).
-  const spanX = isUnderRotation
-    ? neckUnionBbox.W
-    : baseGrid[(gW - 1) * 2] - baseGrid[0];
+  // Span used to scale the keyform shift — width-of-grid in 0..1 space.
+  const spanX = baseGrid[(gW - 1) * 2] - baseGrid[0];
 
   // 3 keyforms on ParamAngleZ at -30/0/+30. At ±30 the top row shifts in X
   // by NECK_TILT_FRAC * spanX. Row gradient sin(π·(1 - rf) / 2) is 1 at
@@ -127,13 +108,10 @@ export function buildNeckWarpSpec(input) {
   const spec = {
     id: 'NeckWarp',
     name: 'Neck Warp',
-    parent: {
-      type: parentType, // 'rotation' | 'warp'
-      id: parentDeformerId,
-    },
+    parent: { type: 'warp', id: 'BodyXWarp' },
     gridSize: { rows, cols },
     baseGrid,
-    localFrame: isUnderRotation ? 'pivot-relative' : 'normalized-0to1',
+    localFrame: 'normalized-0to1',
     bindings: [{
       parameterId: 'ParamAngleZ',
       keys,
@@ -155,8 +133,8 @@ export function buildNeckWarpSpec(input) {
     gridRows: gH,
     spanX,
     maxShiftX: NECK_TILT_FRAC * spanX,
-    parentDeformer: isUnderRotation ? 'GroupRotation_neck' : 'Body X Warp',
-    note: `top row shift at ParamAngleZ = +30 in ${isUnderRotation ? 'pixel' : '0..1'} space`,
+    parentDeformer: 'Body X Warp',
+    note: 'top row shift at ParamAngleZ = +30 in 0..1 space',
   };
 
   return { spec, debug };

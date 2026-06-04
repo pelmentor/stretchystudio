@@ -673,7 +673,7 @@ export async function generateCmo3(input) {
     skipRoles: _ROT_SKIP_ROLES,
   });
   const {
-    groupMap, headGroupId, neckGroupId,
+    groupMap,
     groupWorldMatrices, deformerWorldOrigins,
     groupDeformerGuids,
     rotDeformerTargetNodes, rotDeformerOriginNodes,
@@ -1054,7 +1054,7 @@ export async function generateCmo3(input) {
     pidParamBodyAngleZ, pidParamBodyAngleY, pidParamBreath,
     pidParamAngleX, pidParamAngleY, pidParamAngleZ,
     neckUnionBbox, faceUnionBbox, faceMeshBbox, facePivotCx, facePivotCy,
-    headGroupId, neckGroupId, groupMap,
+    groupMap,
     groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     rotFaceParamKeys: _ROT_FACE_PARAM_KEYS, rotFaceAngles: _ROT_FACE_ANGLES,

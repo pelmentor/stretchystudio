@@ -25,14 +25,23 @@ import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
  * Returns `pidNeckWarpGuid` (to be used as a reparenting target for per-part
  * neck rig warps), or `null` if preconditions fail.
  *
+ * BUG-04 sibling closure 2026-06-04: NeckWarp parents at BodyXWarp
+ * universally. Pre-fix the emitter consulted `groupDeformerGuids` for the
+ * neck group and routed through `GroupRotation_<neckGroupId>` when found.
+ * Per the 2026-05-23 RotationDeformer→bone refactor, `GroupRotation_*` no
+ * longer reifies as a node in `project.nodes`, so any caller whose neck
+ * group lacked `boneRole === 'neck'` (bypassing the
+ * `SKIP_ROTATION_ROLES` filter in `rotationDeformerEmit.js`) would
+ * have produced a dangling rigSpec parent ref — the same root cause as
+ * bug-04 (`0ed9f5c` FaceRotation closure). Shelby's auto-rig sets
+ * `boneRole === 'neck'` so the conditional was dead in practice, but any
+ * user-authored neck group or future codepath could surface it.
+ *
  * @param {XmlBuilder} x
  * @param {Object} ctx
  * @param {string} ctx.pidParamAngleZ
  * @param {Object|null} ctx.neckUnionBbox - { minX, minY, W, H }
  * @param {string} ctx.pidBodyXGuid
- * @param {string|null} ctx.neckGroupId
- * @param {Map} ctx.groupDeformerGuids
- * @param {Map} ctx.deformerWorldOrigins
  * @param {(cx:number)=>number} ctx.canvasToBodyXX
  * @param {(cy:number)=>number} ctx.canvasToBodyXY
  * @param {string} ctx.pidCoord
@@ -48,7 +57,6 @@ import { buildFaceRotationSpec } from '../rig/rotationDeformers.js';
 export function emitNeckWarp(x, ctx) {
   const {
     pidParamAngleZ, neckUnionBbox, pidBodyXGuid,
-    neckGroupId, groupDeformerGuids, deformerWorldOrigins,
     canvasToBodyXX, canvasToBodyXY,
     pidCoord, rigDebugLog, emitCtx,
     autoRigNeckWarp,
@@ -56,22 +64,10 @@ export function emitNeckWarp(x, ctx) {
 
   if (!(pidParamAngleZ && neckUnionBbox && pidBodyXGuid)) return null;
 
-  // ── Structural chain integration ──
-  // When the neck group has its own rotation deformer (pre-emitted in the
-  // group-rotation pass), the warp parents to it and works in pivot-relative
-  // pixels. Otherwise it parents to the Body X Warp in normalised 0..1 space.
-  const neckGroupRotPid = neckGroupId && groupDeformerGuids.get(neckGroupId);
-  const neckGroupPivot = neckGroupId && deformerWorldOrigins.get(neckGroupId);
-
   // Build the data spec via the shared rig builder. moc3writer will consume
   // the same builder once the binary translator lands.
   const { spec, debug } = buildNeckWarpSpec({
     neckUnionBbox,
-    parentType: neckGroupRotPid ? 'rotation' : 'warp',
-    // The id is unused on the cmo3 side (we use the XML pid). Pass a stable
-    // string so the spec is internally consistent for future moc3 lookup.
-    parentDeformerId: neckGroupRotPid ? `GroupRotation_${neckGroupId}` : 'BodyXWarp',
-    parentPivotCanvas: neckGroupRotPid ? neckGroupPivot : null,
     canvasToBodyXX, canvasToBodyXY,
     autoRigNeckWarp,
   });
@@ -86,11 +82,10 @@ export function emitNeckWarp(x, ctx) {
     x, pidParamAngleZ, angleZBinding.keys, 'ParamAngleZ_Neck',
   );
   const gridPositions = spec.keyforms.map(kf => kf.positions);
-  const nwTarget = neckGroupRotPid || pidBodyXGuid;
   emitStructuralWarp(
     x, emitCtx,
     spec.name, spec.id, spec.gridSize.cols, spec.gridSize.rows,
-    pidNwGuid, nwTarget, pidNwKfg, pidCoord, nwFormGuids, gridPositions,
+    pidNwGuid, pidBodyXGuid, pidNwKfg, pidCoord, nwFormGuids, gridPositions,
   );
 
   return pidNwGuid;
