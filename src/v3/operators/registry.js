@@ -40,6 +40,7 @@ import { useSubdivideStore } from '../../store/subdivideStore.js';
 import { mergeAtCenter, mergeAtCursor, mergeAtFirst, mergeAtLast, mergeByDistance, mergeCollapse } from './edit/merge.js';
 import { dissolveVertices } from './edit/dissolve.js';
 import { deleteVertices } from './edit/deleteVerts.js';
+import { cutMeshAlongLine } from './edit/knife.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
 // Phase 7.A — Object Mode tools (Snap / Mirror / Parent / Set Origin).
@@ -1252,6 +1253,51 @@ function registerBuiltins() {
         toast({
           title: 'Cannot delete vertices',
           description: 'Selection would leave fewer than 3 vertices, or every triangle is incident to a deletion.',
+        });
+        return;
+      }
+      applyTopologyOp(partId, result);
+    },
+  });
+
+  // Knife — straight-line cut between two selected vertices. Every
+  // triangle the cut line crosses is subdivided; new verts are
+  // allocated at each edge intersection (UVs linearly interpolated;
+  // adjacent triangles share the intersection vert so the mesh doesn't
+  // tear). v1 requires the user to pre-select exactly 2 verts; the
+  // interactive click-A-then-click-B modal is a follow-up slice
+  // (mirrors how Merge — At Cursor pre-shipped the variant before the
+  // popover UI).
+  //
+  // Blender chord parity: `KeyK` = `MESH_OT_knife_tool` (interactive
+  // modal in Blender — `editmesh_knife.cc`). SS v1 fires the direct
+  // cut on the current 2-vert selection because we don't have the
+  // BVH-snapped modal preview yet.
+  registerOperator({
+    id: 'edit.knife',
+    label: 'Knife (K)',
+    available: () => {
+      if (!topologyAvailable(2)) return false;
+      const partId = activeEditPart();
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      // v1 requires EXACTLY 2 verts — the cut is one straight segment.
+      // Multi-segment paths come later.
+      return !!sel && sel.size === 2;
+    },
+    exec: () => {
+      const partId = activeEditPart();
+      if (!partId) return;
+      const project = useProjectStore.getState().project;
+      const node = project.nodes.find((n) => n.id === partId);
+      if (!node?.mesh) return;
+      const sel = useEditorStore.getState().selectedVertexIndices.get(partId);
+      if (!sel || sel.size !== 2) return;
+      const [a, b] = sel.values();
+      const result = cutMeshAlongLine(node.mesh, a, b);
+      if (!result) {
+        toast({
+          title: 'Cannot knife',
+          description: 'The cut line does not cross any interior triangles (vertices may already be edge-adjacent).',
         });
         return;
       }

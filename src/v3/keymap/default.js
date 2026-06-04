@@ -173,6 +173,13 @@ export const DEFAULT_KEYMAP = {
   // perturbing the polymorphic node-delete path.
   'KeyX':       'edit.deleteVerts',
 
+  // Bare `KeyK` — Blender's `MESH_OT_knife_tool` chord. v1 cuts a
+  // straight line between the two selected vertices (the operator's
+  // `available()` gate requires exactly 2 verts selected). The
+  // interactive click-A-then-click-B modal preview Blender ships with
+  // is a follow-up — until then the user selects 2 verts and presses K.
+  'KeyK':       'edit.knife',
+
   // Toolset Phase 5 — Extrude. `E` chord on selected boundary verts:
   // duplicates them, bridges with quad strips, hands off to Modal G in
   // vertex mode (drag the new strip, click to commit, Esc to roll back

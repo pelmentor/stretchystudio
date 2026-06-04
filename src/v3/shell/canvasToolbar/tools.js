@@ -42,6 +42,7 @@ import {
   Waves,
   ChevronsLeftRight,
   Crosshair,
+  Scissors,
 } from 'lucide-react';
 
 /**
@@ -178,6 +179,23 @@ export const TOOLS_BY_MODE = {
       label: 'Remove Vertex',
       icon: MinusCircle,
       hint: 'Click to remove the nearest vertex',
+    },
+    // Knife — `kind: 'operator'` (momentary, NOT a sticky tool mode)
+    // because v1 cuts between the two pre-selected vertices in a single
+    // click instead of running a click-A-then-click-B modal. Hotkey K
+    // mirrors Blender's `MESH_OT_knife_tool` chord. Blender's modal
+    // overlay (BVH snap + real-time preview + multi-segment paths) is
+    // a follow-up; until then the operator is gated to a 2-vertex
+    // selection by `available()`.
+    {
+      id: 'edit.knife',
+      kind: 'operator',
+      operatorId: 'edit.knife',
+      label: 'Knife',
+      icon: Scissors,
+      hotkey: 'K',
+      hint: 'Cut a straight line between the two selected vertices (K)',
+      divider: true,
     },
     // PP1-008(c) — Proportional-edit toggle relocated to ModePill (right
     // of the edit-mode picker), matching Blender's header layout where
