@@ -65,6 +65,7 @@ import { useSelectionStore } from '../../../store/selectionStore.js';
 import { makeLocalMatrix } from '../../../renderer/transforms.js';
 import { beginBatch, endBatch } from '../../../store/undoHistory.js';
 import { readCursor } from './snap.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
  * Shape-agnostic vertex iterator. Mesh.vertices in SS is one of:
@@ -225,7 +226,12 @@ export function applySetOrigin(nodeId, newGizmoParentSpace) {
   if (node.type !== 'part') return { ok: false, reason: 'not a part' };
   if (!node.transform) return { ok: false, reason: 'no transform' };
   if (node.parent) return { ok: false, reason: 'has parent' };
-  const verts = node.mesh?.vertices;
+  // v18: route through getMesh so post-split parts (geometry on a
+  // sibling meshData node via node.dataId) resolve. Pre-fix this read
+  // returned undefined for every post-v18 part — Set Origin reported
+  // `reason:'no mesh'` for working geometry on any loaded project.
+  const partMesh = getMesh(node, project);
+  const verts = partMesh?.vertices;
   if (!Array.isArray(verts) || verts.length === 0) {
     return { ok: false, reason: 'no mesh' };
   }
@@ -247,9 +253,11 @@ export function applySetOrigin(nodeId, newGizmoParentSpace) {
 
   useProjectStore.getState().updateProject((proj, vc) => {
     const target = proj.nodes.find((n) => n?.id === nodeId);
-    if (!target?.transform || !target?.mesh?.vertices) return;
+    if (!target?.transform) return;
+    const targetMesh = getMesh(target, proj);
+    if (!Array.isArray(targetMesh?.vertices)) return;
     // Shift mesh vertices to compensate for the gizmo move.
-    const acc = vertexAccessor(target.mesh.vertices);
+    const acc = vertexAccessor(targetMesh.vertices);
     if (acc) {
       for (let i = 0; i < acc.count; i++) {
         const v = acc.get(i);
@@ -292,7 +300,7 @@ export function setOriginForSelection(mode) {
       const node = project.nodes.find((n) => n?.id === it.id);
       if (!node || node.type !== 'part') { skipped++; continue; }
       if (node.parent) { skipped++; continue; }
-      const mesh = node.mesh;
+      const mesh = getMesh(node, project);
       if (!mesh) { skipped++; continue; }
 
       let target;

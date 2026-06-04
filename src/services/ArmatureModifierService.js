@@ -41,6 +41,7 @@ import { evalProjectFrameViaDepgraph } from '../anim/depgraph/evalProjectFrame.j
 import { computeBoneParentMap } from '../renderer/boneOverlayMatrix.js';
 import { applyTwoBoneSkinningObj } from '../renderer/boneSkinning.js';
 import { logger } from '../lib/logger.js';
+import { getMesh } from '../store/objectDataAccess.js';
 
 /**
  * Apply the Armature modifier on a part: bake the current visible
@@ -66,7 +67,12 @@ export function applyArmatureModifier(partId) {
   if (armatureIdx < 0) {
     return { baked: false, vertCount: 0, reason: 'no-armature-modifier' };
   }
-  const mesh = part.mesh ?? null;
+  // v18 (Object/ObjectData split): geometry lives on a sibling `meshData`
+  // node via `node.dataId`. Pre-fix this read returned null for every
+  // post-v18 part, so Apply Armature reported `reason:'no-mesh-vertices'`
+  // even when the part DID have a meshData node — Apply was silently
+  // broken on any loaded project past schemaVersion 18.
+  const mesh = getMesh(part, project);
   const restVerts = Array.isArray(mesh?.vertices) ? mesh.vertices : null;
   if (!restVerts || restVerts.length === 0) {
     return { baked: false, vertCount: 0, reason: 'no-mesh-vertices' };
@@ -207,12 +213,28 @@ export function applyArmatureModifier(partId) {
     flatBaked[i * 2]     = baseVerts[i].x;
     flatBaked[i * 2 + 1] = baseVerts[i].y;
   }
+  // Track whether the immer recipe actually wrote — pre-fix the callback
+  // could silently no-op on v18 / vertex-count-mismatch / lost-target paths
+  // while the outer return still reported `{baked:true}`. Caller saw success,
+  // mesh stayed pre-bake, downstream "applied" state was a lie.
+  let bakeOk = false;
+  /** @type {string|null} */
+  let bakeFailReason = null;
   projectState.updateProject((proj) => {
     const target = proj.nodes.find((n) => n.id === partId);
-    if (!target || target.type !== 'part' || !target.mesh) return;
-    if (!Array.isArray(target.mesh.vertices)) return;
-    const verts = target.mesh.vertices;
-    if (verts.length !== baseVerts.length) return;
+    if (!target || target.type !== 'part') {
+      bakeFailReason = 'target-not-a-part-mid-update'; return;
+    }
+    // v18: route through getMesh so the meshData sibling node is reached.
+    const targetMesh = getMesh(target, proj);
+    if (!targetMesh || !Array.isArray(targetMesh.vertices)) {
+      bakeFailReason = 'target-mesh-missing-mid-update'; return;
+    }
+    const verts = targetMesh.vertices;
+    if (verts.length !== baseVerts.length) {
+      bakeFailReason = `vert-count-mismatch (${verts.length} vs ${baseVerts.length})`;
+      return;
+    }
     for (let i = 0; i < verts.length; i++) {
       verts[i].x = baseVerts[i].x;
       verts[i].y = baseVerts[i].y;
@@ -227,7 +249,7 @@ export function applyArmatureModifier(partId) {
     // (selectRigSpec) and project topology (synthesizeModifierStacks
     // via `findInnermostBodyWarpId`). v47 migration strips the field
     // from any pre-M3.3 save on load.
-    target.mesh.runtime = {
+    targetMesh.runtime = {
       bindings: [],
       keyforms: [{
         keyTuple: [],
@@ -243,7 +265,17 @@ export function applyArmatureModifier(partId) {
     // Render-loop skinning is gated on the modifier's presence
     // (CanvasViewport: armatureMod check), not on boneWeights — so
     // there's no double-apply concern.
+    bakeOk = true;
   });
+
+  if (!bakeOk) {
+    logger.error(
+      'armatureModifierApply',
+      `Apply Armature FAILED on "${part.name ?? partId}" — ${bakeFailReason ?? 'unknown reason'}`,
+      { partId, partName: part.name, reason: bakeFailReason },
+    );
+    return { baked: false, vertCount: 0, reason: bakeFailReason ?? 'callback-aborted' };
+  }
 
   logger.info(
     'armatureModifierApply',
@@ -298,7 +330,9 @@ export function bindArmatureModifier(partId) {
   if (stack.some((m) => m?.type === 'armature')) {
     return { bound: false, reason: 'already-bound' };
   }
-  const mesh = part.mesh ?? null;
+  // v18: route through getMesh so post-Apply re-bind can find the
+  // jointBoneId stored on the meshData sibling node.
+  const mesh = getMesh(part, project);
 
   // Resolve jointBoneId: prefer `mesh.jointBoneId` (post-Apply re-bind
   // path), fall back to nearest bone-group ancestor (fresh-bind path).
@@ -328,9 +362,14 @@ export function bindArmatureModifier(partId) {
   }
   const parentBoneId = parent?.id ?? null;
 
+  let bindOk = false;
+  /** @type {string|null} */
+  let bindFailReason = null;
   projectState.updateProject((proj) => {
     const target = proj.nodes.find((n) => n.id === partId);
-    if (!target || target.type !== 'part') return;
+    if (!target || target.type !== 'part') {
+      bindFailReason = 'target-not-a-part-mid-update'; return;
+    }
     if (!Array.isArray(target.modifiers)) target.modifiers = [];
     // Place AFTER any existing deformer chain (same convention as
     // `synthesizeModifierStacks`). Mirrors Blender's "Add Modifier"
@@ -352,7 +391,17 @@ export function bindArmatureModifier(partId) {
         vertexGroupName: '',
       },
     });
+    bindOk = true;
   });
+
+  if (!bindOk) {
+    logger.error(
+      'armatureModifierBind',
+      `Bind Armature FAILED on "${part.name ?? partId}" — ${bindFailReason ?? 'unknown reason'}`,
+      { partId, partName: part.name, reason: bindFailReason },
+    );
+    return { bound: false, reason: bindFailReason ?? 'callback-aborted' };
+  }
 
   logger.info(
     'armatureModifierBind',

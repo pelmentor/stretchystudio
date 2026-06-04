@@ -30,6 +30,8 @@
  * @module lib/snap/snapMath
  */
 
+import { getMesh } from '../../store/objectDataAccess.js';
+
 /** Phase 2.B — snap a 2D delta to grid increments along each axis. */
 export function snapDeltaToGrid(delta, increment) {
   if (!delta) return { x: 0, y: 0 };
@@ -209,7 +211,8 @@ export function enumerateSelectionAnchorVerts(project, selection, editorState) {
   if (isEdit && editorState?.activeVertex?.partId) {
     const partId = editorState.activeVertex.partId;
     const node = project.nodes.find((n) => n?.id === partId);
-    const verts = node?.mesh?.vertices;
+    // v18: getMesh resolves the sibling meshData node for post-split parts.
+    const verts = getMesh(node, project)?.vertices;
     const sel = editorState?.selectedVertexIndices?.get?.(partId);
     if (Array.isArray(verts) && sel && sel.size > 0) {
       const av = editorState.activeVertex.vertIndex;
@@ -251,8 +254,13 @@ export function enumerateSelectionAnchorVerts(project, selection, editorState) {
     }
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    if (Array.isArray(node?.mesh?.vertices) && node.mesh.vertices.length > 0) {
-      for (const v of node.mesh.vertices) {
+    // v18: resolve mesh via getMesh so the AABB anchor uses real geometry
+    // on post-split parts. Pre-fix v18 parts always fell through to the
+    // imageBounds / transform.x-y branch — snap anchors used canvas-bound
+    // PSD frame instead of the actual mesh AABB.
+    const nodeMesh = getMesh(node, project);
+    if (Array.isArray(nodeMesh?.vertices) && nodeMesh.vertices.length > 0) {
+      for (const v of nodeMesh.vertices) {
         if (!v || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
         if (v.x < minX) minX = v.x;
         if (v.x > maxX) maxX = v.x;

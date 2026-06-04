@@ -114,9 +114,14 @@ export function migrateGroupRotationDeformersToBones(project) {
       // regression 2026-05-25). Discriminate the shape and read
       // accordingly. The math (canvas vertex − pivot-relative keyform
       // = canvas pivot) is identical for both shapes once read.
-      const verts = p.mesh?.vertices;
-      const kf = Array.isArray(p.mesh?.runtime?.keyforms)
-        ? (p.mesh.runtime.keyforms.find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? p.mesh.runtime.keyforms[0])
+      // v18: route through getMesh so the meshData sibling is reached.
+      // Pre-fix this helper read p.mesh directly and fell through to the
+      // childRot / restKeyform fallbacks for every post-v18 part — pivots
+      // could land on the wrong canvas position on pre-v44 loads.
+      const meshP = getMesh(p, project);
+      const verts = meshP?.vertices;
+      const kf = Array.isArray(meshP?.runtime?.keyforms)
+        ? (meshP.runtime.keyforms.find((k) => (k.keyTuple?.[0] ?? 0) === 0) ?? meshP.runtime.keyforms[0])
         : null;
       const kfv = kf?.vertexPositions;
       if (!Array.isArray(verts) || !Array.isArray(kfv) || kfv.length < 2) continue;
@@ -175,13 +180,16 @@ export function migrateGroupRotationDeformersToBones(project) {
     // deriveCanvasPivot produced NaN.
     if (!Number.isFinite(head.x) || !Number.isFinite(head.y)) {
       const firstPart = parts[0] ?? null;
-      const firstKf = firstPart?.mesh?.runtime?.keyforms?.[0] ?? null;
+      // v18: resolve diagnostics through getMesh so the NaN-pivot log
+      // surfaces real vert/keyform data instead of N/A on post-split parts.
+      const firstPartMesh = getMesh(firstPart, project);
+      const firstKf = firstPartMesh?.runtime?.keyforms?.[0] ?? null;
       const childRot = rotDefs.find((d) => d.parent === def.id) ?? null;
       const rk = restKeyform(def);
       const parentGroup = byId.get(group.parent);
       logger.error(
         'groupRotationToBoneNaNPivot',
-        `BONE-NaN bone=${groupId} def=${def.id} groupParent=${group.parent ?? 'null'} parentType=${parentGroup?.type ?? '?'} parentRole=${parentGroup?.boneRole ?? '?'} | parts=${parts.length} firstPartId=${firstPart?.id ?? '?'} firstPartVertCount=${Array.isArray(firstPart?.mesh?.vertices) ? firstPart.mesh.vertices.length : 'N/A'} firstPartVert0=[${Array.isArray(firstPart?.mesh?.vertices) ? `${firstPart.mesh.vertices[0]},${firstPart.mesh.vertices[1]}` : 'N/A'}] firstKfV0=[${Array.isArray(firstKf?.vertexPositions) ? `${firstKf.vertexPositions[0]},${firstKf.vertexPositions[1]}` : 'N/A'}] | childRot=${childRot?.id ?? 'NONE'} | restKf.originX=${rk?.originX} restKf.originY=${rk?.originY} restKf.keyforms#=${(def.keyforms ?? []).length}`,
+        `BONE-NaN bone=${groupId} def=${def.id} groupParent=${group.parent ?? 'null'} parentType=${parentGroup?.type ?? '?'} parentRole=${parentGroup?.boneRole ?? '?'} | parts=${parts.length} firstPartId=${firstPart?.id ?? '?'} firstPartVertCount=${Array.isArray(firstPartMesh?.vertices) ? firstPartMesh.vertices.length : 'N/A'} firstPartVert0=[${Array.isArray(firstPartMesh?.vertices) ? `${firstPartMesh.vertices[0]},${firstPartMesh.vertices[1]}` : 'N/A'}] firstKfV0=[${Array.isArray(firstKf?.vertexPositions) ? `${firstKf.vertexPositions[0]},${firstKf.vertexPositions[1]}` : 'N/A'}] | childRot=${childRot?.id ?? 'NONE'} | restKf.originX=${rk?.originX} restKf.originY=${rk?.originY} restKf.keyforms#=${(def.keyforms ?? []).length}`,
       );
     }
     group.transform.pivotX = head.x;

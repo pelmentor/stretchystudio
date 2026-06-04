@@ -44,6 +44,7 @@ import {
   isWarpLatticeNode,
   isChainDeformerNode,
 } from './warpLatticeAccess.js';
+import { getMesh } from './objectDataAccess.js';
 
 const FACE_PARALLAX_NODE_ID = 'FaceParallaxWarp';
 const BODY_WARP_IDS = ['BodyWarpZ', 'BodyWarpY', 'BreathWarp', 'BodyXWarp'];
@@ -580,9 +581,17 @@ export function synthesizeModifierStacks(project) {
     // Production post-v44 covers this: legwear/handwear/charm/etc. get
     // boneWeights from the v44 migration when their ancestor group was
     // converted to a bone.
-    const partIsBoneBaked = Array.isArray(part.mesh?.boneWeights)
-      && part.mesh.boneWeights.length > 0
-      && typeof part.mesh?.jointBoneId === 'string';
+    // v18: route mesh access through getMesh so post-split parts
+    // (geometry on a sibling meshData node) are detected as bone-baked.
+    // Pre-fix this read returned undefined for every v18 part, so the
+    // chain-seed fallback never fired — bone-baked legwear / handwear /
+    // charm parts saw stacks containing only the Armature modifier, with
+    // the body-warp Lattice modifiers that actually deform them omitted
+    // (the original "legwear has no warp modifier" discoverability gap).
+    const partMeshA = getMesh(part, project);
+    const partIsBoneBaked = Array.isArray(partMeshA?.boneWeights)
+      && partMeshA.boneWeights.length > 0
+      && typeof partMeshA?.jointBoneId === 'string';
     if (!cur && partIsBoneBaked) {
       if (_innermostBodyWarpIdCache === undefined) {
         _innermostBodyWarpIdCache = findInnermostBodyWarpId(
@@ -671,7 +680,11 @@ export function synthesizeModifierStacks(project) {
     // keep the chain-leaf-derivation logic (which skips armature
     // entries in `modifiers[0]`) pointing at the deformer leaf, not
     // at the bone.
-    const mesh = part.mesh ?? null;
+    // v18: route through getMesh so the Armature modifier append fires
+    // for v18 parts whose boneWeights live on the meshData sibling node.
+    // Pre-fix every bone-baked v18 part would have a stack WITHOUT the
+    // Armature entry — the LBS post-chain skin pass wouldn't run.
+    const mesh = getMesh(part, project);
     const jointBoneId = typeof mesh?.jointBoneId === 'string' && mesh.jointBoneId.length > 0
       ? mesh.jointBoneId : null;
     const boneWeights = Array.isArray(mesh?.boneWeights) ? mesh.boneWeights : null;

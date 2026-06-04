@@ -24,6 +24,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
 import { modifierRefId } from '../../../../store/warpLatticeAccess.js';
+import { getMesh } from '../../../../store/objectDataAccess.js';
 import { SectionShell } from './SectionShell.jsx';
 import {
   MODIFIER_MODE_REALTIME,
@@ -69,9 +70,14 @@ export function ModifierStackSection({ nodeId }) {
     }
     return cur ?? null;
   })();
-  const meshJointBoneId = typeof node.mesh?.jointBoneId === 'string' && node.mesh.jointBoneId.length > 0
-    ? node.mesh.jointBoneId : null;
-  const meshBoneWeights = Array.isArray(node.mesh?.boneWeights) ? node.mesh.boneWeights : null;
+  // v18: route through getMesh so the meshData sibling node's
+  // jointBoneId / boneWeights drive the UI for post-split parts. Pre-fix
+  // the Modifier Stack pane showed "no jointBoneId / no boneWeights" for
+  // every v18-rigged part — the Apply / Bind buttons greyed out wrong.
+  const nodeMesh = getMesh(node, project);
+  const meshJointBoneId = typeof nodeMesh?.jointBoneId === 'string' && nodeMesh.jointBoneId.length > 0
+    ? nodeMesh.jointBoneId : null;
+  const meshBoneWeights = Array.isArray(nodeMesh?.boneWeights) ? nodeMesh.boneWeights : null;
   const canBindArmature = !!nearestBoneAncestor
     && !stack.some((m) => m?.type === 'armature');
 

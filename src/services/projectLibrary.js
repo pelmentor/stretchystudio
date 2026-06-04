@@ -31,6 +31,7 @@ import {
   serializeProject,
 } from './PersistenceService.js';
 import { logger } from '../lib/logger.js';
+import { getMesh } from '../store/objectDataAccess.js';
 
 /**
  * Load a library record into the project store and re-anchor the
@@ -100,11 +101,16 @@ export async function saveLibraryRecord(idToUse, nameToUse) {
   const _nodes = Array.isArray(project?.nodes) ? project.nodes : [];
   const partsArr = _nodes.filter((n) => n?.type === 'part');
   const deformersArr = _nodes.filter((n) => n?.type === 'deformer');
-  const partsWithRuntime = partsArr.filter((p) =>
-    p?.mesh?.runtime && Array.isArray(p.mesh.runtime.keyforms)
-  );
+  // v18: route through getMesh so post-split parts (geometry on the
+  // sibling meshData node) are counted. Pre-fix this telemetry showed
+  // 0 / 0 for every loaded project past schemaVersion 18 even when the
+  // rig was healthy — the post-save sanity check was a silent lie.
+  const partsWithRuntime = partsArr.filter((p) => {
+    const m = getMesh(p, project);
+    return m?.runtime && Array.isArray(m.runtime.keyforms);
+  });
   const partsWithBakedKeyforms = partsArr.filter((p) => {
-    const kfs = p?.mesh?.runtime?.keyforms;
+    const kfs = getMesh(p, project)?.runtime?.keyforms;
     return Array.isArray(kfs) && kfs.length > 1;
   });
   try {
