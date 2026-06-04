@@ -251,7 +251,13 @@ export async function importCmo3(bytes) {
   for (const part of scene.parts) {
     if (!part.clipMaskRefs.length) continue;
     const maskedNodeId = part.xsId ? partGuidToNodeId.get(part.xsId) : null;
-    if (!maskedNodeId) continue;
+    if (!maskedNodeId) {
+      // Authored mask binding can't reach a node — silent skip would
+      // drop the user's masking config on import. Mirror the per-mask
+      // warn pattern below so the user sees what was lost.
+      warnings.push(`mask: part ${part.drawableIdStr ?? '?'} (${part.name ?? '?'}) has ${part.clipMaskRefs.length} clip mask(s) but its xsId="${part.xsId ?? '(none)'}" doesn't resolve to any project node — mask binding dropped`);
+      continue;
+    }
     /** @type {string[]} */
     const maskNodeIds = [];
     for (const ref of part.clipMaskRefs) {
