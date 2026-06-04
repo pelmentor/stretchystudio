@@ -674,7 +674,7 @@ export async function generateCmo3(input) {
   });
   const {
     groupMap,
-    groupWorldMatrices, deformerWorldOrigins,
+    deformerWorldOrigins,
     groupDeformerGuids,
     rotDeformerTargetNodes, rotDeformerOriginNodes,
     allDeformerSources, deformerParamMap,

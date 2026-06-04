@@ -132,7 +132,6 @@ import { emptyRigSpec } from '../rig/rigSpec.js';
  *
  * Section 3a–3c: rotation deformers + per-mesh warps + rig warp tag bindings.
  * @property {Map<string, any>} [groupMap]
- * @property {Map<string, any>} [groupWorldMatrices]
  * @property {Map<string, {originX: number, originY: number}>} [deformerWorldOrigins]
  * @property {Map<string, string>} [groupDeformerGuids]
  * @property {Array<any>} [rotDeformerTargetNodes]

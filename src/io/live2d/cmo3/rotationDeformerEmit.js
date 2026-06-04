@@ -33,7 +33,7 @@ import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
  *     pivot conversion when re-parenting the chain.
  *
  * Returns the mutable maps + lookups downstream sections need:
- * `groupWorldMatrices`, `deformerWorldOrigins`, `groupDeformerGuids`,
+ * `deformerWorldOrigins`, `groupDeformerGuids`,
  * `rotDeformerTargetNodes` (XML nodes for re-parenting),
  * `rotDeformerOriginNodes` (per-keyform CRotationDeformerForm refs +
  * world coords for origin conversion).
@@ -46,7 +46,6 @@ import { buildGroupRotationSpec } from '../rig/rotationDeformers.js';
  * @param {Object} opts
  * @returns {{
  *   groupMap: Map<string, Object>,
- *   groupWorldMatrices: Map<string, Float32Array>,
  *   deformerWorldOrigins: Map<string, {x:number,y:number}>,
  *   groupDeformerGuids: Map<string, string>,
  *   rotDeformerTargetNodes: Map<string, Object>,
@@ -70,7 +69,12 @@ export function emitRotationDeformers(x, opts) {
   // ── World-space pivots ──
   const groupMap = new Map(groups.map(g => [g.id, g]));
 
-  const { groupWorldMatrices, deformerWorldOrigins } =
+  // `computeGroupWorldMatrices` returns both `groupWorldMatrices` (per-group
+  // 4×4 transform cache) and `deformerWorldOrigins` (the canvas-px pivot
+  // dictionary the rest of the pipeline reads). We only consume the latter
+  // here — the matrices Map is the function's internal memoization that
+  // happens to be returned at the source-module boundary for test access.
+  const { deformerWorldOrigins } =
     computeGroupWorldMatrices(groups, meshes, canvasW, canvasH);
 
   // ── Allocations ──
@@ -285,7 +289,7 @@ export function emitRotationDeformers(x, opts) {
 
   return {
     groupMap,
-    groupWorldMatrices, deformerWorldOrigins,
+    deformerWorldOrigins,
     groupDeformerGuids,
     rotDeformerTargetNodes, rotDeformerOriginNodes,
     allDeformerSources, deformerParamMap,
