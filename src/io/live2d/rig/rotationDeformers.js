@@ -10,18 +10,24 @@
  * the chin in canvas space; the rotation magnitude defaults to ±10° even
  * when the param is pushed to its full ±30 range (mirrors Hiyori).
  *
- * Chain integration: when the head group has its own rotation deformer
- * (from the deferred ParamRotation_<groupName> pass), face-rotation parents
- * to that and works in pivot-relative pixels. Otherwise it parents to the
- * Body X Warp in normalised 0..1.
+ * Chain integration: FaceRotation parents at BodyXWarp universally and
+ * works in BodyXWarp-local 0..1 coordinates.
+ *
+ * # Why the rotation-parent branch is gone (2026-06-04 follow-up to bug-04)
+ *
+ * Pre-fix this builder accepted `parentType: 'rotation'` and produced
+ * `parent.id = GroupRotation_<headGroupId>` for callers whose head group
+ * had a rotation deformer. But per the 2026-05-23 RotationDeformer→bone
+ * refactor + RULE-№4 meta (SS IS Blender; Cubism = addon),
+ * `GroupRotation_*` no longer reifies as a node in `project.nodes` — the
+ * head group is now a BONE. Bug-04 (`0ed9f5c`) fixed the call site
+ * (`emitFaceRotation` always passes `parentType: 'warp'`); this commit
+ * retires the dead builder branch per RULE-№2 (no migration baggage),
+ * sibling to the NeckWarp closure (`ed3094f`).
  *
  * @param {Object} input
  * @param {number} input.facePivotCanvasX
  * @param {number} input.facePivotCanvasY
- * @param {('rotation'|'warp')} input.parentType
- * @param {string} input.parentDeformerId
- * @param {{x:number, y:number}|null} input.parentPivotCanvas
- *   Required when parentType==='rotation'.
  * @param {(cx:number)=>number} input.canvasToBodyXX
  * @param {(cy:number)=>number} input.canvasToBodyXY
  * @param {number[]} [input.paramKeys] - Stage 8: ParamAngleZ keys (default [-30,0,30])
@@ -32,8 +38,6 @@
 export function buildFaceRotationSpec(input) {
   const {
     facePivotCanvasX, facePivotCanvasY,
-    parentType, parentDeformerId,
-    parentPivotCanvas = null,
     canvasToBodyXX, canvasToBodyXY,
     paramKeys = [-30, 0, 30],
     angles    = [-10, 0, 10],
@@ -46,25 +50,14 @@ export function buildFaceRotationSpec(input) {
     );
   }
 
-  const isUnderRotation = parentType === 'rotation';
-  if (isUnderRotation && !parentPivotCanvas) {
-    throw new Error(
-      "[buildFaceRotationSpec] parentType='rotation' requires parentPivotCanvas",
-    );
-  }
-
-  const pivotX = isUnderRotation
-    ? facePivotCanvasX - parentPivotCanvas.x
-    : canvasToBodyXX(facePivotCanvasX);
-  const pivotY = isUnderRotation
-    ? facePivotCanvasY - parentPivotCanvas.y
-    : canvasToBodyXY(facePivotCanvasY);
+  const pivotX = canvasToBodyXX(facePivotCanvasX);
+  const pivotY = canvasToBodyXY(facePivotCanvasY);
 
   /** @type {import('./rigSpec.js').RotationDeformerSpec} */
   const spec = {
     id: 'FaceRotation',
     name: 'Face Rotation',
-    parent: { type: parentType, id: parentDeformerId },
+    parent: { type: 'warp', id: 'BodyXWarp' },
     bindings: [{
       parameterId: 'ParamAngleZ',
       keys: paramKeys,

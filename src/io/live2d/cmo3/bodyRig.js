@@ -133,33 +133,13 @@ export function emitFaceRotation(x, ctx) {
   // Build the spec via shared rig builder; XML emission uses the spec data.
   //
   // BUG-04 closure 2026-06-02 (rigInvariantCheck I-21 named source):
-  // FaceRotation.parent must resolve to a node that EXISTS in SS project.nodes.
-  // Pre-fix: when `headGroupRotPid` was truthy (head group had a
-  // groupDeformerGuid emitted somewhere upstream), this set parent to
-  // `GroupRotation_<headGroupId>` — but per the 2026-05-23 RotationDeformer→bone
-  // refactor + RULE-№4 meta (SS IS Blender; Cubism = addon), GroupRotation
-  // deformers no longer reify as nodes in SS project.nodes — the head group
-  // is now a BONE (group with boneRole), not a deformer. So FaceRotation's
-  // parent ref pointed at a dangling id, ROTATION_SETUP_PROBE early-returned
-  // with `canvasFinalPivot = [px, py]` (pivot-relative-px offset, NOT
-  // canvas-px), and FaceParallax's lifted grid stayed in pivot-relative
-  // frame — producing 250k-px drift on 13 face-region parts at rest pose.
-  //
-  // Fix: parent FaceRotation at `BodyXWarp` (always exists as a warp node)
-  // and encode its pivot in BodyXWarp UV via `canvasToBodyXX/Y`. The
-  // chain walker then probes BodyXWarp at the UV pivot → output canvas-px
-  // ≈ facePivot. Matrix translation becomes canvas-px facePivot. Lifted
-  // FaceParallax frame correctly converts to canvas-px. Per RULE-№4
-  // (Blender > Cubism fidelity), accept any cmo3 byte divergence for
-  // models that previously had a real GroupRotation parent (Hiyori-class
-  // reference rigs predating the bone-baked refactor). SS-runtime eval
-  // correctness trumps Cubism Viewer byte-identity per the meta-principle.
+  // FaceRotation parents at BodyXWarp universally — see
+  // `buildFaceRotationSpec` header for the dangling-ref reasoning. The
+  // builder's rotation-parent branch itself was retired 2026-06-04 in
+  // the bug-04 sibling sweep (NeckWarp closure `ed3094f` + this).
   const { spec: faceRotSpec } = buildFaceRotationSpec({
     facePivotCanvasX: facePivotCx,
     facePivotCanvasY: facePivotCy,
-    parentType: 'warp',
-    parentDeformerId: 'BodyXWarp',
-    parentPivotCanvas: null,
     canvasToBodyXX, canvasToBodyXY,
     paramKeys: faceRotationParamKeys,
     angles:    faceRotationAngles,

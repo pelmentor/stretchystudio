@@ -26,14 +26,12 @@ function assertThrows(fn, name) {
   catch { passed++; }
 }
 
-// ── buildFaceRotationSpec: warp-parented (default chain) ─────────
+// ── buildFaceRotationSpec: BodyXWarp-parented (universal post-2026-06-04) ─
 
 {
   const { spec } = buildFaceRotationSpec({
     facePivotCanvasX: 400,
     facePivotCanvasY: 300,
-    parentType: 'warp',
-    parentDeformerId: 'BodyXWarp',
     canvasToBodyXX: (x) => x / 800,  // simulate warp-normalise
     canvasToBodyXY: (y) => y / 600,
   });
@@ -47,7 +45,7 @@ function assertThrows(fn, name) {
   assert(JSON.stringify(spec.bindings[0].keys) === '[-30,0,30]',
     'face spec: default keys');
   assert(spec.keyforms.length === 3, 'face spec: 3 keyforms');
-  // Pivot under warp parent is normalised
+  // Pivot under BodyXWarp parent is BodyXWarp-UV 0..1
   assert(spec.keyforms[0].originX === 0.5, 'face spec: pivot X normalised (400/800)');
   assert(spec.keyforms[0].originY === 0.5, 'face spec: pivot Y normalised (300/600)');
   // Default angles ±10° per Hiyori
@@ -56,42 +54,12 @@ function assertThrows(fn, name) {
   assert(spec.keyforms[2].angle === 10, 'face spec: +30 → +10°');
 }
 
-// ── buildFaceRotationSpec: rotation-parented (under head rotation) ─
-
-{
-  const { spec } = buildFaceRotationSpec({
-    facePivotCanvasX: 400,
-    facePivotCanvasY: 300,
-    parentType: 'rotation',
-    parentDeformerId: 'GroupRotation_head',
-    parentPivotCanvas: { x: 350, y: 250 },
-    canvasToBodyXX: () => 0,  // unused under rotation
-    canvasToBodyXY: () => 0,
-  });
-
-  assert(spec.parent.type === 'rotation', 'face/rot: parent type rotation');
-  // Pivot under rotation is canvas-px offset from parent pivot
-  assert(spec.keyforms[0].originX === 50, 'face/rot: pivot offset X (400-350)');
-  assert(spec.keyforms[0].originY === 50, 'face/rot: pivot offset Y (300-250)');
-}
-
 // ── buildFaceRotationSpec: validation ────────────────────────────
 
 {
-  // Missing parentPivotCanvas under rotation → throws
-  assertThrows(() => buildFaceRotationSpec({
-    facePivotCanvasX: 0, facePivotCanvasY: 0,
-    parentType: 'rotation',
-    parentDeformerId: 'X',
-    canvasToBodyXX: () => 0,
-    canvasToBodyXY: () => 0,
-  }), 'face: rotation parent without pivotCanvas throws');
-
   // Mismatched paramKeys / angles lengths
   assertThrows(() => buildFaceRotationSpec({
     facePivotCanvasX: 0, facePivotCanvasY: 0,
-    parentType: 'warp',
-    parentDeformerId: 'X',
     canvasToBodyXX: () => 0,
     canvasToBodyXY: () => 0,
     paramKeys: [-30, 0],
@@ -104,8 +72,6 @@ function assertThrows(fn, name) {
 {
   const { spec } = buildFaceRotationSpec({
     facePivotCanvasX: 0, facePivotCanvasY: 0,
-    parentType: 'warp',
-    parentDeformerId: 'X',
     canvasToBodyXX: () => 0,
     canvasToBodyXY: () => 0,
     paramKeys: [-45, 0, 45],
@@ -172,7 +138,6 @@ assertThrows(() => buildGroupRotationSpec({
   const specs = [
     buildFaceRotationSpec({
       facePivotCanvasX: 0, facePivotCanvasY: 0,
-      parentType: 'warp', parentDeformerId: 'X',
       canvasToBodyXX: () => 0, canvasToBodyXY: () => 0,
     }).spec,
     buildGroupRotationSpec({
